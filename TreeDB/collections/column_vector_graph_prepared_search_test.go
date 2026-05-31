@@ -1,0 +1,225 @@
+package collections
+
+import (
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+)
+
+func TestColumnVectorGraphPreparedSearchSelectedAndEquivalent2045(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("combined prepared graph-search view requires mmap_direct test support")
+	}
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0, 0}},
+		{id: "doc-b", vector: []float32{0.7, 0.3, 0, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1, 0}},
+		{id: "doc-e", vector: []float32{0, 0, 0, 1}},
+		{id: "doc-f", vector: []float32{0.4, 0.1, 0.5, 0}},
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 4, 4, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.preparedSearch == nil || !reader.preparedSearch.ready() {
+		t.Fatalf("preparedSearch=%v ready=%v want combined prepared view selected", reader.preparedSearch != nil, reader.preparedSearch != nil && reader.preparedSearch.ready())
+	}
+	query := []float32{1, 0, 0, 0}
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 3, EfSearch: len(rows)}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 3))
+	assertColumnVectorGraphPreparedSearchStats2045(t, stats, len(got))
+	if readerStats := reader.Stats(); readerStats.Rows != 0 || readerStats.RowFetches != 0 || readerStats.RowsFetched != 0 || readerStats.PhysicalBytesRead != 0 {
+		t.Fatalf("reader stats=%+v want no graph-row reader residency or reads", readerStats)
+	}
+}
+
+func TestColumnVectorGraphPreparedSearchPublicDocumentsReopen2045(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("combined prepared graph-search view requires mmap_direct test support")
+	}
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0, 0}},
+		{id: "doc-b", vector: []float32{0.8, 0.2, 0, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1, 0}},
+	}
+	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 4, 3, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	query := []float32{1, 0, 0, 0}
+	before, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), IncludeDocuments: true, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex before reopen: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, before, def.Name, 2)
+	assertVectorIndexSearchResultsV4(t, before.Results, exactColumnGraphTopKForTest(t, rows, query, 2), true)
+	assertColumnVectorGraphPreparedPublicStats2045(t, before.Stats, len(before.Results))
+	assertVectorIndexSearchDocumentDIDV4(t, before.Results[0].Document, string(before.Results[0].ID))
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	after, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), IncludeDocuments: true, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex after reopen: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, after, def.Name, 2)
+	assertVectorIndexSearchResultsV4(t, after.Results, exactColumnGraphTopKForTest(t, rows, query, 2), true)
+	assertColumnVectorGraphPreparedPublicStats2045(t, after.Stats, len(after.Results))
+	if len(after.Results) != len(before.Results) {
+		t.Fatalf("reopen results len=%d want %d", len(after.Results), len(before.Results))
+	}
+	for i := range after.Results {
+		if string(after.Results[i].ID) != string(before.Results[i].ID) || after.Results[i].Ordinal != before.Results[i].Ordinal || string(after.Results[i].Document) != string(before.Results[i].Document) {
+			t.Fatalf("result[%d] after=%+v before=%+v", i, after.Results[i], before.Results[i])
+		}
+	}
+}
+
+func TestColumnVectorGraphPreparedSearchStaleStateFailsClosed2045(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("combined prepared graph-search view requires mmap_direct test support")
+	}
+	rows := columnGraphRebuildSyntheticRowsV2A(12, 6)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 6, 4, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.preparedSearch == nil {
+		t.Fatal("preparedSearch is nil")
+	}
+	if err := reader.documentIDSource.Close(); err != nil {
+		t.Fatalf("close document ID source: %v", err)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	_, _, err = reader.SearchCosine(rows[0].vector, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: len(rows)}, &scratch)
+	if err == nil || !strings.Contains(err.Error(), "combined prepared graph-search view is stale") {
+		t.Fatalf("SearchCosine err=%v want stale combined prepared fail-closed", err)
+	}
+}
+
+func TestColumnVectorGraphPreparedSearchParallelScratchSafety2045(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("combined prepared graph-search view requires mmap_direct test support")
+	}
+	rows := columnGraphRebuildSyntheticRowsV2A(96, 16)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 16, 8, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.preparedSearch == nil || !reader.preparedSearch.ready() {
+		t.Fatalf("preparedSearch=%v ready=%v want shared immutable combined prepared view", reader.preparedSearch != nil, reader.preparedSearch != nil && reader.preparedSearch.ready())
+	}
+	const workers = 4
+	query := append([]float32(nil), rows[11].vector...)
+	baseline, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 8, EfSearch: 64}, &columnVectorGraphNativeSearchScratch{})
+	if err != nil {
+		t.Fatalf("baseline SearchCosine: %v", err)
+	}
+	baseline = cloneColumnVectorGraphPreparedResults2045(baseline)
+	var wg sync.WaitGroup
+	errs := make(chan string, workers)
+	for worker := 0; worker < workers; worker++ {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var scratch columnVectorGraphNativeSearchScratch
+			for i := 0; i < 25; i++ {
+				got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 8, EfSearch: 64}, &scratch)
+				if err != nil {
+					errs <- fmt.Sprintf("worker %d iteration %d SearchCosine: %v", worker, i, err)
+					return
+				}
+				if mismatch := columnGraphNativeSearchResultsMismatchV3(got, baseline); mismatch != "" {
+					errs <- fmt.Sprintf("worker %d iteration %d: %s", worker, i, mismatch)
+					return
+				}
+				if stats.PreparedGraphSearchViews != 1 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.ResultIDGraphFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
+					errs <- fmt.Sprintf("worker %d iteration %d stats=%+v want combined prepared without fallback", worker, i, stats)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func assertColumnVectorGraphPreparedSearchStats2045(tb testing.TB, stats columnVectorGraphNativeSearchStats, results int) {
+	tb.Helper()
+	if stats.PreparedGraphSearchViews != 1 || stats.GraphRowFallbacks != 0 {
+		tb.Fatalf("stats=%+v want one combined prepared view and zero graph-row fallback", stats)
+	}
+	if stats.TypedColumnFallbacks != 0 || stats.NormSourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencySourceFallbacks != 0 || stats.ResultIDGraphFallbacks != 0 {
+		tb.Fatalf("stats=%+v want zero compatibility/source fallbacks", stats)
+	}
+	if stats.PreparedScoreCalls == 0 || stats.PreparedScoreCalls != stats.CandidateFetches || stats.VectorPreparedDirectViews != stats.CandidateFetches || stats.NormPreparedDirectViews != stats.CandidateFetches {
+		tb.Fatalf("stats=%+v want prepared scoring to cover all candidate fetches", stats)
+	}
+	if stats.AdjacencyPreparedCSRMmapDirectViews == 0 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyTypedListScratchDecodes != 0 {
+		tb.Fatalf("stats=%+v want prepared CSR adjacency only", stats)
+	}
+	if stats.ResultFetches != uint64(results) || stats.ResultIDPreparedBytesViews != 1 || stats.ResultIDTypedBytesState != uint64(results) || stats.RowRefStatePreparedViews != 1 || stats.RowRefStateResultRefs != uint64(results) {
+		tb.Fatalf("stats=%+v want prepared result IDs/row refs for %d results", stats, results)
+	}
+}
+
+func assertColumnVectorGraphPreparedPublicStats2045(tb testing.TB, stats VectorIndexSearchStats, results int) {
+	tb.Helper()
+	if stats.PreparedGraphSearchViews != 1 || stats.GraphRowFallbacks != 0 || stats.GraphRows != 0 || stats.RowFetches != 0 || stats.RowsFetched != 0 {
+		tb.Fatalf("stats=%+v want combined prepared public search without graph rows", stats)
+	}
+	if stats.TypedColumnFallbacks != 0 || stats.NormSourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencySourceFallbacks != 0 || stats.ResultIDGraphFallbacks != 0 || stats.RowRefVectorSourceLegacyGraphIDs != 0 {
+		tb.Fatalf("stats=%+v want zero public compatibility/source fallbacks", stats)
+	}
+	if stats.ResultIDPreparedBytesViews != 1 || stats.ResultIDTypedBytesState != uint64(results) || stats.RowRefStatePreparedViews != 1 || stats.RowRefStateResultRefs != uint64(results) {
+		tb.Fatalf("stats=%+v want prepared result IDs and row refs for %d results", stats, results)
+	}
+}
+
+func cloneColumnVectorGraphPreparedResults2045(in []columnVectorGraphNativeSearchResult) []columnVectorGraphNativeSearchResult {
+	out := make([]columnVectorGraphNativeSearchResult, len(in))
+	for i, result := range in {
+		out[i] = result
+		out[i].ID = append([]byte(nil), result.ID...)
+	}
+	return out
+}

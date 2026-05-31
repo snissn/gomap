@@ -2,13 +2,11 @@
 
 Status: pre-alpha benchmark contract. This document owns the stable labels and
 reporting boundaries for comparing legacy/direct graph-row search, current
-TVIS/base typed-column search, and future fully prepared typed-column graph
-search. #2038 admits prepared adjacency CSR counters, and #2040 admits
-prepared base-vector and inverse-norm scoring counters on the current typed-column
-rows; remaining prepared side-channel work is owned by #2041 with routing by
-#2045. This matrix must not treat the skipped `prepared_typed_column_placeholder`
-rows as full prepared-path performance evidence until those rows stop being
-placeholders.
+TVIS/base typed-column search, and the #2045 combined prepared typed-column graph
+search. #2038 admits prepared adjacency CSR counters, #2040 admits prepared
+base-vector and inverse-norm scoring counters, #2041 admits row-ref and
+document-ID side-channel counters, and #2045 reports combined prepared routing
+with `prepared_graph_search_views/search` and `graph_row_fallbacks/search`.
 
 ## Command
 
@@ -41,11 +39,12 @@ Modes:
   physical graph rows where the fixture can still publish them. Healthy current
   promotion evidence must not rely on this mode.
 - `current_tvis_base_typed_column`: current source path using TVIS/vector-index
-  typed-column state and base typed-column vectors; after #2040, healthy
-  `mmap_direct` base-vector and inverse-norm scoring is reported through
-  prepared direct-view counters on these rows.
-- `prepared_typed_column_placeholder`: future prepared-view path. These rows are
-  skipped with a message naming #2041/#2045 and are not performance data.
+  typed-column state and base typed-column vectors. After #2045, healthy
+  current-format readers route through the combined prepared view and report
+  `prepared_graph_search_views/search=1`.
+- `combined_prepared_typed_column`: explicit #2045 evidence rows for the same
+  healthy current-format combined prepared route. These rows are supported and
+  must show zero graph-row/source fallback counters.
 
 Boundaries:
 
@@ -73,14 +72,14 @@ Fixtures:
 | --- | --- | --- | --- | --- |
 | `legacy_direct_graph_row` | `setup_open_prepare` | serial | `serving1024` | Supported control row. |
 | `current_tvis_base_typed_column` | `setup_open_prepare` | serial | `serving1024` | Supported current row. |
-| `prepared_typed_column_placeholder` | `setup_open_prepare` | serial | `serving1024` | Skipped placeholder; not performance data. |
+| `combined_prepared_typed_column` | `setup_open_prepare` | serial | `serving1024` | Supported #2045 combined prepared setup/open row. |
 | `legacy_direct_graph_row` | `graph_only` | serial/parallel | `production8192` | Supported control rows where explicit graph rows are published by the fixture. |
 | `current_tvis_base_typed_column` | `graph_only` | serial/parallel | `production8192` | Supported current rows; #2040 vector/norm prepared counters should cover healthy scoring when mmap direct views are available. |
-| `prepared_typed_column_placeholder` | `graph_only` | serial/parallel | `production8192` | Skipped placeholders for remaining prepared side-channel/routing work; not performance data. |
+| `combined_prepared_typed_column` | `graph_only` | serial/parallel | `production8192` | Supported #2045 combined prepared graph-only rows. |
 | `current_tvis_base_typed_column` | `result_id` | serial/parallel | `serving1024` | Supported current rows. |
-| `prepared_typed_column_placeholder` | `result_id` | serial/parallel | `serving1024` | Skipped placeholders; not performance data. |
+| `combined_prepared_typed_column` | `result_id` | serial/parallel | `serving1024` | Supported #2045 combined prepared result-ID rows. |
 | `current_tvis_base_typed_column` | `document_materialization` | serial/parallel | `serving1024` | Supported current rows. |
-| `prepared_typed_column_placeholder` | `document_materialization` | serial/parallel | `serving1024` | Skipped placeholders; not performance data. |
+| `combined_prepared_typed_column` | `document_materialization` | serial/parallel | `serving1024` | Supported #2045 combined prepared document-materialization rows. |
 
 Legacy/direct graph-row result-ID and document-materialization rows are omitted
 unless a future fixture can expose that path without silently using the current
@@ -105,6 +104,7 @@ must also carry the relevant domain/source counters:
   `norm_heap_copy_typed_view/search`, `norm_scratch_decodes/search`,
   `norm_prepared_direct/search`, `norm_source_fallbacks/search`,
   `prepared_score_calls/search`, `score_float64_fallbacks/search`,
+  `prepared_graph_search_views/search`, `graph_row_fallbacks/search`,
   `adjacency_prepared_csr_mmap_direct/search`,
   `adjacency_prepared_csr_direct_views/search`,
   `adjacency_typed_list_mmap_direct/search`,
@@ -125,15 +125,17 @@ must also carry the relevant domain/source counters:
 
 Healthy current-format evidence must keep graph-row/fallback counters at zero
 where those counters apply: `graph_rows=0` for current typed-column graph-only
-rows, `typed_column_vector_fallbacks/search=0`,
+rows, `prepared_graph_search_views/search=1`, `graph_row_fallbacks/search=0`,
+`typed_column_vector_fallbacks/search=0`,
 `row_ref_vector_source_legacy_graph_ids/search=0`,
 `result_id_graph_fallbacks/search=0`, `adjacency_legacy_fallbacks/search=0`, and
 `adjacency_source_fallbacks/search=0`.
 
 ## Interpretation rules
 
-- A skipped `prepared_typed_column_placeholder` row is a contract placeholder,
-  not a win, loss, or throughput number.
+- `combined_prepared_typed_column` rows are #2045 prepared-routing evidence;
+  they are comparable only to rows with identical boundary/concurrency/fixture
+  labels.
 - Compare only rows with identical `boundary`, `concurrency`, and `fixture`
   labels unless the report explicitly explains why a boundary change is the
   measurement target.

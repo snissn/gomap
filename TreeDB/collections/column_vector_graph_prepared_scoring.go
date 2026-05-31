@@ -142,28 +142,55 @@ func (v columnVectorGraphPreparedVectorView) identityMapping() bool {
 }
 
 func (v columnVectorGraphPreparedVectorView) vectorForOrdinal(ordinal int) ([]float32, typeddecode.Reason, bool) {
-	if !v.ready() || ordinal < 0 || ordinal >= v.rows {
-		return nil, typeddecode.ReasonRowCountMismatch, false
+	part, row, ok := v.locationForOrdinal(ordinal)
+	if !ok {
+		if !v.ready() || ordinal < 0 || ordinal >= v.rows {
+			return nil, typeddecode.ReasonRowCountMismatch, false
+		}
+		return nil, typeddecode.ReasonStaleHandle, false
+	}
+	start := row * v.dims
+	return part.values[start : start+v.dims], "", true
+}
+
+func (v columnVectorGraphPreparedVectorView) locationForOrdinal(ordinal int) (*columnVectorGraphTypedColumnVectorPart, int, bool) {
+	if !v.ready() || ordinal < 0 || ordinal >= v.rows || v.dims <= 0 {
+		return nil, 0, false
 	}
 	if v.singlePart != nil {
-		if v.singlePart.handle == nil || v.singlePart.handle.Released() {
-			return nil, typeddecode.ReasonStaleHandle, false
+		part := v.singlePart
+		if part.handle == nil || part.handle.Released() {
+			return nil, 0, false
 		}
 		row := ordinal
 		if v.rowIndexByOrdinal != nil {
 			row = int(v.rowIndexByOrdinal[ordinal])
 		}
 		start := row * v.dims
-		return v.values[start : start+v.dims], "", true
+		end := start + v.dims
+		if row < 0 || row >= part.rows || start < 0 || end < start || end > len(part.values) {
+			return nil, 0, false
+		}
+		return part, row, true
+	}
+	if ordinal >= len(v.partIndexByOrdinal) || ordinal >= len(v.rowIndexByOrdinal) {
+		return nil, 0, false
 	}
 	partIndex := int(v.partIndexByOrdinal[ordinal])
+	if partIndex < 0 || partIndex >= len(v.parts) {
+		return nil, 0, false
+	}
 	part := v.parts[partIndex]
 	if part == nil || part.handle == nil || part.handle.Released() {
-		return nil, typeddecode.ReasonStaleHandle, false
+		return nil, 0, false
 	}
 	row := int(v.rowIndexByOrdinal[ordinal])
 	start := row * v.dims
-	return part.values[start : start+v.dims], "", true
+	end := start + v.dims
+	if row < 0 || row >= part.rows || start < 0 || end < start || end > len(part.values) {
+		return nil, 0, false
+	}
+	return part, row, true
 }
 
 func (v columnVectorGraphPreparedNormView) ready() bool {

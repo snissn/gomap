@@ -11,11 +11,11 @@ before adding, changing, or promoting graph-search typed-column state roles. The
 reusable #2046 direct-view certifier substrate lives in
 `TreeDB/internal/typeddecode`. The #2037 benchmark truth-matrix labels and
 command contract live in `typed-column-graph-search-benchmark-matrix.md`. This
-table records #2038-admitted adjacency prepared CSR views and #2040-admitted
-base-vector and inverse-norm prepared scoring views, but does not implement the
-remaining side-channel prepared views (#2041), graph-search routing (#2045),
-hot-loop telemetry reduction (#2042), or benchmark truth-matrix collection
-(#2037).
+table records #2038-admitted adjacency prepared CSR views, #2040-admitted
+base-vector and inverse-norm prepared scoring views, #2041-admitted row-ref and
+document-ID side-channel views, and #2045 combined prepared graph-search routing.
+Hot-loop telemetry reduction (#2042) and benchmark truth-matrix collection
+(#2037) remain separate work.
 
 ## Admission status vocabulary
 
@@ -52,8 +52,28 @@ and MUST fail closed, stay non-default, or remain compatibility-only.
 - Healthy evidence must show no silent graph-row fallback: `graph_rows=0`,
   `adjacency_legacy_fallbacks/search=0`, `adjacency_source_fallbacks/search=0`,
   `typed_column_vector_fallbacks/search=0`,
-  `row_ref_vector_source_legacy_graph_ids=0`, and
-  `result_id_graph_fallbacks=0` where those counters apply.
+  `row_ref_vector_source_legacy_graph_ids=0`,
+  `result_id_graph_fallbacks=0`, `graph_row_fallbacks/search=0`, and
+  `prepared_graph_search_views/search=1` where those counters apply.
+
+## #2045 combined prepared routing
+
+A healthy current-format `column_graph` searcher is admitted to the optimized
+path only when all admitted state rows below are simultaneously certified for one
+immutable manifest identity: base vectors, HNSW adjacency, inverse norms, row
+refs, and document IDs. Reader/searcher open builds one combined prepared
+runtime view and the HNSW traversal consumes that view directly. If any required
+state is missing, stale, corrupt, below `mmap_direct`, or not certifiable, the
+current-format open/search path fails closed or uses an explicitly labeled
+compatibility path; it must not silently dispatch back to graph-row selectors in
+the healthy loop.
+
+#2045 evidence counters:
+
+- `prepared_graph_search_views/search=1` for healthy current-format searches;
+- `graph_row_fallbacks/search=0`, plus the role-specific fallback counters below
+  remaining zero;
+- `graph_rows=0` for current-format graph-only/result/document rows.
 
 ## Current graph-search optimized-state readiness table
 
