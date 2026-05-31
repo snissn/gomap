@@ -16,7 +16,6 @@ import (
 
 	"github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
-	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
@@ -55,18 +54,11 @@ func main() {
 		}()
 	}
 
-	database, err := db.Open(opts)
+	database, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		log.Fatalf("Failed to open TreeDB: %v", err)
 	}
-	defer database.Close()
-
-	leafLog, err := db.NewStandaloneLeafPageLog(*dataDir, db.StandaloneLeafPageLogOptions{})
-	if err != nil {
-		log.Fatalf("Failed to open TreeDB leaf-page log: %v", err)
-	}
-	defer leafLog.Close()
-	database.SetLeafPageLog(leafLog)
+	defer func() { _ = cleanup() }()
 
 	manager := collections.NewCollectionManager(database)
 	server := nativewire.NewServer(nativewire.ServerOptions{
@@ -88,7 +80,11 @@ func main() {
 	defer stop()
 
 	err = server.Serve(ctx, ln)
+	closeErr := server.Close()
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		log.Fatalf("Server error: %v", err)
+	}
+	if closeErr != nil {
+		log.Fatalf("Server close error: %v", closeErr)
 	}
 }

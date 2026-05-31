@@ -107,6 +107,7 @@ type Server struct {
 
 	closed              atomic.Bool
 	connMu              sync.Mutex
+	connWG              sync.WaitGroup
 	conns               map[net.Conn]struct{}
 	listeners           map[net.Listener]struct{}
 	locals              map[*localEndpoint]struct{}
@@ -374,6 +375,7 @@ func (s *Server) Close() error {
 	for _, local := range locals {
 		_ = local.close()
 	}
+	s.connWG.Wait()
 	return nil
 }
 
@@ -465,6 +467,7 @@ func (s *Server) registerConn(conn net.Conn) bool {
 		s.conns = make(map[net.Conn]struct{})
 	}
 	s.conns[conn] = struct{}{}
+	s.connWG.Add(1)
 	s.counters.inc("connections.opened_total")
 	return true
 }
@@ -476,6 +479,7 @@ func (s *Server) unregisterConn(conn net.Conn) {
 	s.connMu.Lock()
 	delete(s.conns, conn)
 	s.connMu.Unlock()
+	s.connWG.Done()
 	s.counters.inc("connections.closed_total")
 }
 
