@@ -7,6 +7,30 @@ import (
 	"time"
 )
 
+type JSONBenchCompressionReportRow struct {
+	CodecLayoutLabel            string        `json:"codec_layout_label"`
+	CompressionPolicyLabel      string        `json:"compression_policy_label"`
+	RequestedCompression        string        `json:"requested_compression"`
+	ActualCompression           string        `json:"actual_compression"`
+	SupportState                string        `json:"support_state"`
+	SupportReason               string        `json:"support_reason,omitempty"`
+	CompressedBytes             int           `json:"compressed_bytes"`
+	CompressedBytesSource       string        `json:"compressed_bytes_source"`
+	RawBytes                    int           `json:"raw_bytes"`
+	RawBytesSource              string        `json:"raw_bytes_source"`
+	DecompressedBytes           int           `json:"decompressed_bytes"`
+	DecompressedBytesSource     string        `json:"decompressed_bytes_source"`
+	CompressionRatio            float64       `json:"compression_ratio"`
+	CompressionRatioSource      string        `json:"compression_ratio_source"`
+	CompressionDuration         time.Duration `json:"compression_duration"`
+	CompressionDurationSource   string        `json:"compression_duration_source"`
+	DecompressionDuration       time.Duration `json:"decompression_duration"`
+	DecompressionDurationSource string        `json:"decompression_duration_source"`
+	BenchmarkBPerOp             uint64        `json:"benchmark_b_per_op"`
+	BenchmarkAllocsPerOp        uint64        `json:"benchmark_allocs_per_op"`
+	BenchmarkAllocationSource   string        `json:"benchmark_allocation_source"`
+}
+
 type ColumnCodecSummary struct {
 	Column               string
 	Rows                 int
@@ -17,6 +41,7 @@ type ColumnCodecSummary struct {
 	ValueBytes           int
 	EncodedRawBytes      int
 	StoredBytes          int
+	CompressionRow       JSONBenchCompressionReportRow
 	EncodeDuration       time.Duration
 	DecodeDuration       time.Duration
 	RangeScanDuration    time.Duration
@@ -41,6 +66,7 @@ func SummarizeJSONBenchDataset(ds JSONBenchDataset, rowsPerGranule int, configs 
 				ValueBytes:           len(values) * 8,
 			}
 			encoded := make([]EncodedGranule, 0, (len(values)+rowsPerGranule-1)/rowsPerGranule)
+			var compressionNanos int64
 			start := time.Now()
 			for startRow := 0; startRow < len(values); startRow += rowsPerGranule {
 				end := startRow + rowsPerGranule
@@ -55,6 +81,7 @@ func SummarizeJSONBenchDataset(ds JSONBenchDataset, rowsPerGranule int, configs 
 				summary.EncodedRawBytes += g.RawBytes
 				summary.StoredBytes += g.StoredBytes
 				summary.ActualCompressionMix[g.Compression]++
+				compressionNanos += g.CodecReport.CompressionNanos
 			}
 			summary.EncodeDuration = time.Since(start)
 			summary.Granules = len(encoded)
@@ -78,10 +105,54 @@ func SummarizeJSONBenchDataset(ds JSONBenchDataset, rowsPerGranule int, configs 
 				summary.RangeScanMatches += count
 			}
 			summary.RangeScanDuration = time.Since(start)
+			summary.CompressionRow = jsonBenchCompressionReportRowFromSummary(summary, time.Duration(compressionNanos))
 			out = append(out, summary)
 		}
 	}
 	return out, nil
+}
+
+func jsonBenchCompressionReportRowFromSummary(summary ColumnCodecSummary, compressionDuration time.Duration) JSONBenchCompressionReportRow {
+	return JSONBenchCompressionReportRow{
+		CodecLayoutLabel:            jsonBenchCodecLayoutLabel(summary.Encoding),
+		CompressionPolicyLabel:      jsonBenchCompressionPolicyLabel(summary.RequestedCompression),
+		RequestedCompression:        summary.RequestedCompression.String(),
+		ActualCompression:           formatCompressionMix(summary.ActualCompressionMix),
+		SupportState:                "supported",
+		CompressedBytes:             summary.StoredBytes,
+		CompressedBytesSource:       "encoded_granule_stored_bytes",
+		RawBytes:                    summary.EncodedRawBytes,
+		RawBytesSource:              "encoded_granule_raw_bytes",
+		DecompressedBytes:           summary.EncodedRawBytes,
+		DecompressedBytesSource:     "encoded_granule_raw_bytes",
+		CompressionRatio:            jsonBenchCompressionRatio(summary.StoredBytes, summary.EncodedRawBytes),
+		CompressionRatioSource:      "compressed_bytes/decompressed_bytes",
+		CompressionDuration:         compressionDuration,
+		CompressionDurationSource:   "typedcolumn_codec_report_compression_nanos",
+		DecompressionDuration:       summary.DecodeDuration,
+		DecompressionDurationSource: "summarize_jsonbench_dataset_decode_wall_clock",
+		BenchmarkBPerOp:             0,
+		BenchmarkAllocsPerOp:        0,
+		BenchmarkAllocationSource:   "not_measured_by_summary; use go test -bench BenchmarkJSONBenchLocalColumns -benchmem for B/op and allocs/op",
+	}
+}
+
+func jsonBenchCodecLayoutLabel(encoding Encoding) string {
+	return "int64_granule/" + encoding.String()
+}
+
+func jsonBenchCompressionPolicyLabel(compression Compression) string {
+	if compression == CompressionNone {
+		return "compression_off"
+	}
+	return "requested_" + compression.String()
+}
+
+func jsonBenchCompressionRatio(compressedBytes, rawBytes int) float64 {
+	if rawBytes <= 0 {
+		return 0
+	}
+	return float64(compressedBytes) / float64(rawBytes)
 }
 
 func DefaultJSONBenchConfigs() []Config {
@@ -107,18 +178,31 @@ func FormatColumnCodecSummary(s ColumnCodecSummary) string {
 	if s.EncodedRawBytes > 0 {
 		ratioEncoded = float64(s.StoredBytes) / float64(s.EncodedRawBytes)
 	}
-	return fmt.Sprintf("%s\trows=%d\tgranules=%d\tencoding=%s\trequested=%s\tactual=%s\tvalue_bytes=%d\tencoded_raw_bytes=%d\tstored_bytes=%d\tratio_vs_values=%.6f\tratio_vs_encoded=%.6f\tencode=%s\tdecode=%s\trange_scan=%s\trange_matches=%d",
+	return fmt.Sprintf("%s\trows=%d\tgranules=%d\tcodec_layout=%s\tcompression_policy=%s\tencoding=%s\trequested=%s\tactual=%s\tcompressed_bytes=%d\tdecompressed_bytes=%d\traw_bytes=%d\tvalue_bytes=%d\tencoded_raw_bytes=%d\tstored_bytes=%d\tratio=%.6f\tratio_vs_values=%.6f\tratio_vs_encoded=%.6f\tcompression_duration=%s\tcompression_duration_source=%s\tdecompression_duration=%s\tdecompression_duration_source=%s\tB/op=%d\tallocs/op=%d\tallocation_source=%s\tencode=%s\tdecode=%s\trange_scan=%s\trange_matches=%d",
 		s.Column,
 		s.Rows,
 		s.Granules,
+		s.CompressionRow.CodecLayoutLabel,
+		s.CompressionRow.CompressionPolicyLabel,
 		s.Encoding,
 		s.RequestedCompression,
 		formatCompressionMix(s.ActualCompressionMix),
+		s.CompressionRow.CompressedBytes,
+		s.CompressionRow.DecompressedBytes,
+		s.CompressionRow.RawBytes,
 		s.ValueBytes,
 		s.EncodedRawBytes,
 		s.StoredBytes,
+		s.CompressionRow.CompressionRatio,
 		ratioValues,
 		ratioEncoded,
+		s.CompressionRow.CompressionDuration,
+		s.CompressionRow.CompressionDurationSource,
+		s.CompressionRow.DecompressionDuration,
+		s.CompressionRow.DecompressionDurationSource,
+		s.CompressionRow.BenchmarkBPerOp,
+		s.CompressionRow.BenchmarkAllocsPerOp,
+		s.CompressionRow.BenchmarkAllocationSource,
 		s.EncodeDuration,
 		s.DecodeDuration,
 		s.RangeScanDuration,
