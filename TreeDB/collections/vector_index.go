@@ -568,6 +568,18 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if len(c.registeredVectorIndexes()) == 0 {
+		commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
+		c.catalogMu.RLock()
+		catalogHasNoVectorIndexes := c.catalog != nil &&
+			c.catalogCommitSeq == commitSeq &&
+			c.catalogSystemRoot == systemRoot &&
+			len(c.catalog.meta.VectorIndexes) == 0
+		c.catalogMu.RUnlock()
+		if catalogHasNoVectorIndexes {
+			return nil, nil
+		}
+	}
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		return nil, nil
 	}

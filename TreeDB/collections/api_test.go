@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -896,7 +897,7 @@ func TestCollectionFastJSONMaintenanceVacuumUsesValueLogLeaves(t *testing.T) {
 		Name: "bluesky",
 		Options: CollectionOptions{
 			DocumentFormat:        DocumentFormatJSON,
-			DataRootStoragePolicy: RootStorageFast,
+			DataRootStoragePolicy: RootStorageCompressed,
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -5033,6 +5034,45 @@ func TestCollectionInsertRetryRetriesWrappedConcurrentMutation(t *testing.T) {
 	}
 	if len(result) != 1 || !bytes.Equal(result[0], []byte("u1")) {
 		t.Fatalf("result=%q want [u1]", result)
+	}
+}
+
+func TestCollectionInsertRetryRetriesWrappedTransientEOF(t *testing.T) {
+	attempts := 0
+	result, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		switch attempts {
+		case 1:
+			return nil, fmt.Errorf("collections: load catalog \"users\" meta: %w", io.EOF)
+		case 2:
+			return nil, fmt.Errorf("collections: load catalog \"users\" root \"users/primary\": %w", io.ErrUnexpectedEOF)
+		default:
+			return [][]byte{[]byte("u1")}, nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("retryInsertBatchMutation err=%v want nil", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts=%d want 3", attempts)
+	}
+	if len(result) != 1 || !bytes.Equal(result[0], []byte("u1")) {
+		t.Fatalf("result=%q want [u1]", result)
+	}
+}
+
+func TestCollectionInsertRetryDoesNotRetryNonCatalogEOF(t *testing.T) {
+	attempts := 0
+	wantErr := fmt.Errorf("document decode: %w", io.EOF)
+	_, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		return nil, wantErr
+	})
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("retryInsertBatchMutation err=%v want EOF", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want 1", attempts)
 	}
 }
 

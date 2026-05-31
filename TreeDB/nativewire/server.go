@@ -3,8 +3,11 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -14,6 +17,44 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
+
+var debugLogger *log.Logger
+var slowRequestThreshold time.Duration
+
+func init() {
+	if raw := os.Getenv("TREEDB_NATIVE_SLOW_REQUEST"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil {
+			slowRequestThreshold = d
+		}
+	}
+	path := os.Getenv("TREEDB_NATIVE_DEBUG_LOG")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "DEBUG: Failed to open log file: %v\n", err)
+	} else {
+		debugLogger = log.New(f, "DEBUG: ", log.LstdFlags)
+	}
+}
+
+func debugLoggingEnabled() bool {
+	return debugLogger != nil
+}
+
+func logDebug(format string, v ...interface{}) {
+	if debugLoggingEnabled() {
+		debugLogger.Printf(format, v...)
+	}
+}
+
+func logSlowRequest(command string, requestID uint64, dispatch, total time.Duration, err error) {
+	if slowRequestThreshold <= 0 || total < slowRequestThreshold {
+		return
+	}
+	log.Printf("nativewire slow request command=%s request_id=%d dispatch=%s total=%s err=%v", command, requestID, dispatch, total, err)
+}
 
 const (
 	defaultMaxInFlight                   = 1024
@@ -66,6 +107,7 @@ type Server struct {
 
 	closed              atomic.Bool
 	connMu              sync.Mutex
+	connWG              sync.WaitGroup
 	conns               map[net.Conn]struct{}
 	listeners           map[net.Listener]struct{}
 	locals              map[*localEndpoint]struct{}
@@ -333,11 +375,13 @@ func (s *Server) Close() error {
 	for _, local := range locals {
 		_ = local.close()
 	}
+	s.connWG.Wait()
 	return nil
 }
 
 // ServeConn serves native-wire frames on conn until shutdown, goaway, or error.
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
+	logDebug("New connection")
 	if s == nil || conn == nil {
 		return ErrServerClosed
 	}
@@ -352,6 +396,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 }
 
 func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
+	logDebug("serveRegisteredConn")
 	defer s.unregisterConn(conn)
 	defer conn.Close()
 
@@ -422,6 +467,7 @@ func (s *Server) registerConn(conn net.Conn) bool {
 		s.conns = make(map[net.Conn]struct{})
 	}
 	s.conns[conn] = struct{}{}
+	s.connWG.Add(1)
 	s.counters.inc("connections.opened_total")
 	return true
 }
@@ -433,6 +479,7 @@ func (s *Server) unregisterConn(conn net.Conn) {
 	s.connMu.Lock()
 	delete(s.conns, conn)
 	s.connMu.Unlock()
+	s.connWG.Done()
 	s.counters.inc("connections.closed_total")
 }
 
@@ -533,6 +580,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 }
 
 func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
+	if debugLoggingEnabled() {
+		logDebug("handleRequest: bodyLen=%d", len(body))
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -548,6 +598,17 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 
 	s.counters.incRequestsStarted()
 	start := time.Now()
+	dispatchStart := start
+	var dispatchDone time.Time
+	commandName := "decode"
+	var requestErr error
+	defer func() {
+		end := time.Now()
+		if dispatchDone.IsZero() {
+			dispatchDone = end
+		}
+		logSlowRequest(commandName, header.RequestID, dispatchDone.Sub(dispatchStart), end.Sub(start), requestErr)
+	}()
 	var sections []iwire.Section
 	var err error
 	if state != nil {
@@ -567,6 +628,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		return nil
 	}
 	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
+		commandName = "insert_batch_fast"
 		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
 		if err != nil {
 			s.counters.addDispatchNanos(uint64(time.Since(start).Nanoseconds()))
@@ -575,8 +637,10 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			return s.writeError(w, header, err)
 		}
 		responseBody, err := s.handleInsertBatchFastBody(req, state.responseScratch())
-		s.counters.addDispatchNanos(uint64(time.Since(start).Nanoseconds()))
+		dispatchDone = time.Now()
+		s.counters.addDispatchNanos(uint64(dispatchDone.Sub(start).Nanoseconds()))
 		if err != nil {
+			requestErr = err
 			s.counters.incRequestsFailed()
 			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
 			return s.writeError(w, header, err)
@@ -585,7 +649,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		if state != nil {
 			state.responseBody = responseBody[:0]
 		}
-		return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
+		requestErr = s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
+		return requestErr
 	} else if err != nil {
 		s.counters.incRequestsFailed()
 		return s.writeError(w, header, err)
@@ -600,6 +665,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		s.counters.incRequestsFailed()
 		return s.writeError(w, header, err)
 	}
+	commandName = cmd.Schema.Name
 	s.counters.incCommandRequest(cmd.Header.ID, cmd.Schema.Name)
 	var responseSections []iwire.Section
 	var responseBody []byte
@@ -654,8 +720,10 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	default:
 		err = protocolError(iwire.ErrUnsupportedFeature, "command %s is not implemented", cmd.Schema.Name)
 	}
-	s.counters.addDispatchNanos(uint64(time.Since(start).Nanoseconds()))
+	dispatchDone = time.Now()
+	s.counters.addDispatchNanos(uint64(dispatchDone.Sub(start).Nanoseconds()))
 	if err != nil {
+		requestErr = err
 		s.counters.incRequestsFailed()
 		s.counters.incCommandError(cmd.Header.ID, cmd.Schema.Name)
 		return s.writeError(w, header, err)
@@ -673,7 +741,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	if state != nil {
 		state.responseBody = responseBody[:0]
 	}
-	return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
+	requestErr = s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
+	return requestErr
 }
 
 func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState) error {
@@ -730,6 +799,7 @@ func appendGoawayBody(dst []byte, lastAcceptedRequestID uint64) ([]byte, error) 
 
 func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error {
 	code := errorCodeFor(err)
+	logDebug("writeError: code=%d err=%v", code, err)
 	if code == 0 {
 		code = iwire.ErrInternal
 	}
