@@ -151,6 +151,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	DenseGroupCountUsed                 bool
 	DenseGroupHourCountUsed             bool
 	DenseInt64SpanUsed                  bool
+	TimeOrderTopKUsed                   bool
 	DecodedPayloadBytes                 uint64
 	FallbackReads                       int
 	RowMaterializations                 int
@@ -1337,6 +1338,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.DenseGroupCountUsed = left.DenseGroupCountUsed || right.DenseGroupCountUsed
 	left.DenseGroupHourCountUsed = left.DenseGroupHourCountUsed || right.DenseGroupHourCountUsed
 	left.DenseInt64SpanUsed = left.DenseInt64SpanUsed || right.DenseInt64SpanUsed
+	left.TimeOrderTopKUsed = left.TimeOrderTopKUsed || right.TimeOrderTopKUsed
 	left.DecodedPayloadBytes += right.DecodedPayloadBytes
 	left.PhysicalBytesScanned += right.PhysicalBytesScanned
 	left.DecodedMetadataBytes += right.DecodedMetadataBytes

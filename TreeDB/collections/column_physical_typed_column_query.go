@@ -23,6 +23,7 @@ type columnTypedColumnPhysicalQueryPlan struct {
 	DenseGroupCount      bool
 	DenseGroupHourCount  bool
 	DenseInt64Span       bool
+	TimeOrderTopK        bool
 }
 
 type columnTypedColumnDenseGroupCountPart struct {
@@ -74,6 +75,7 @@ type columnTypedColumnPhysicalQueryPart struct {
 	DenseGroupCount           *columnTypedColumnDenseGroupCountPart
 	DenseGroupHourCount       *columnTypedColumnDenseGroupHourCountPart
 	DenseInt64Span            *columnTypedColumnDenseInt64SpanPart
+	TimeOrderTopK             *columnTypedColumnTimeOrderTopKPart
 }
 
 type columnTypedColumnPhysicalQueryRunner struct {
@@ -100,6 +102,9 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	denseSpanValues           map[string]columnPhysicalQuerySpan
 	denseLocalSpans           []columnPhysicalQuerySpan
 	denseLocalSpanSeen        []bool
+	timeOrderMinValues        map[string]int64
+	timeOrderHeap             columnTypedColumnTimeOrderTopKHeap
+	timeOrderTopKScratch      []ColumnPhysicalQueryGroup
 	resultGroups              []ColumnPhysicalQueryGroup
 }
 
@@ -192,6 +197,8 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 			part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 		case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
 			part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+		case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
+			part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 		default:
 			part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 		}
@@ -308,6 +315,7 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 	plan.DenseGroupCount = columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req)
 	plan.DenseGroupHourCount = columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req)
 	plan.DenseInt64Span = columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req)
+	plan.TimeOrderTopK = columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req) && columnTypedColumnPhysicalQuerySortKeyCanUseTimeOrderTopK(sortKey, req)
 	plan.Fields = fields
 	plan.Selected = selected
 	plan.PredicateSpecs = predicateSpecs
@@ -558,6 +566,9 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if columnTypedColumnPhysicalQueryUseTimeOrderTopK(r.plan, req) {
+		return r.runTimeOrderTopK(view, req)
+	}
 	if columnTypedColumnPhysicalQueryUseDenseGroupCount(r.plan, req) {
 		return r.runDenseGroupCount(view, req)
 	}
@@ -634,6 +645,257 @@ func columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req ColumnPhysicalQ
 
 func columnTypedColumnPhysicalQueryUseDenseInt64Span(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
 	return plan.DenseInt64Span && columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req)
+}
+
+func columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req ColumnPhysicalQueryRequest) bool {
+	return req.Kind == ColumnPhysicalQueryGroupMinInt64 && req.GroupColumn != "" && req.ValueColumn != "" && req.AggregateMetadataName == "" && req.DistinctColumn == "" && req.TopK > 0 && req.TopKOrder == ColumnPhysicalQueryTopKInt64Asc
+}
+
+func columnTypedColumnPhysicalQuerySortKeyCanUseTimeOrderTopK(sortKey []ColumnSortKey, req ColumnPhysicalQueryRequest) bool {
+	if len(sortKey) == 0 || req.ValueColumn == "" {
+		return false
+	}
+	first := sortKey[0]
+	return first.Column == req.ValueColumn && first.Direction == ColumnSortAscending
+}
+
+func columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
+	return plan.TimeOrderTopK && columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req)
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runTimeOrderTopK(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	if r.timeOrderMinValues == nil {
+		r.timeOrderMinValues = make(map[string]int64, req.TopK+1)
+	} else {
+		clear(r.timeOrderMinValues)
+	}
+	r.timeOrderHeap.items = r.timeOrderHeap.items[:0]
+	iterators := make([]columnTypedColumnTimeOrderTopKIterator, 0, len(r.parts))
+	for partIdx := range r.parts {
+		part := r.parts[partIdx].TimeOrderTopK
+		if part == nil {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.TimeOrderTopKUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: time-order topK missing prepared part %d", partIdx)
+		}
+		iterator, err := newColumnTypedColumnTimeOrderTopKIterator(partIdx, part)
+		if err != nil {
+			rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+			diag := r.timeOrderTopKDiagnostics(view, req, rowsScanned, matchedRows, matchedRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		iterators = append(iterators, iterator)
+		if !iterator.done {
+			r.timeOrderHeap.push(len(iterators)-1, iterators)
+		}
+	}
+
+	haveKth := false
+	kthTime := int64(0)
+	for r.timeOrderHeap.len() != 0 {
+		iteratorIdx := r.timeOrderHeap.peek()
+		if haveKth && iterators[iteratorIdx].currentTime > kthTime {
+			break
+		}
+		iteratorIdx = r.timeOrderHeap.pop(iterators)
+		iterator := &iterators[iteratorIdx]
+		group, matched, err := iterator.evaluateCurrent(len(r.plan.PredicateSpecs) != 0)
+		if err != nil {
+			rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+			reduceRows := matchedRows
+			if len(r.plan.PredicateSpecs) == 0 {
+				reduceRows = rowsScanned
+			}
+			diag := r.timeOrderTopKDiagnostics(view, req, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		if matched {
+			if !(req.SkipEmptyGroupKey && group == "") {
+				if _, exists := r.timeOrderMinValues[group]; !exists {
+					r.timeOrderMinValues[group] = iterator.currentTime
+					var ok bool
+					kthTime, ok, r.timeOrderTopKScratch = columnTypedColumnTimeOrderTopKKthTime(r.timeOrderMinValues, req, r.timeOrderTopKScratch)
+					haveKth = ok
+				}
+			}
+		}
+		if err := iterator.advance(); err != nil {
+			rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+			reduceRows := matchedRows
+			if len(r.plan.PredicateSpecs) == 0 {
+				reduceRows = rowsScanned
+			}
+			diag := r.timeOrderTopKDiagnostics(view, req, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		if !iterator.done {
+			r.timeOrderHeap.push(iteratorIdx, iterators)
+		}
+	}
+
+	groups := r.resultGroups[:0]
+	for key, value := range r.timeOrderMinValues {
+		groups = append(groups, ColumnPhysicalQueryGroup{Key: key, Int64: value})
+	}
+	r.resultGroups = groups
+	rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+	reduceRows := matchedRows
+	if len(r.plan.PredicateSpecs) == 0 {
+		reduceRows = rowsScanned
+	}
+	diag := r.timeOrderTopKDiagnostics(view, req, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	return result, nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) timeOrderTopKDiagnostics(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks int, decodedBytes uint64, scanNanos int64) ColumnPhysicalQueryDiagnostics {
+	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, scanNanos)
+	diag.TimeOrderTopKUsed = true
+	diag.DecodedGranules = decodedGranules
+	diag.DecodedBlocks = decodedBlocks
+	diag.DirectReduceBlocks = decodedBlocks
+	diag.DecodedPayloadBytes = decodedBytes
+	if diag.ScheduledGranules >= decodedGranules {
+		diag.SkippedGranules = diag.ScheduledGranules - decodedGranules
+	} else {
+		diag.SkippedGranules = 0
+	}
+	return diag
+}
+
+type columnTypedColumnTimeOrderTopKIterator struct {
+	partIndex           int
+	part                *columnTypedColumnTimeOrderTopKPart
+	granule             int
+	rowInGranule        int
+	currentTime         int64
+	done                bool
+	rowsScanned         int
+	matchedRows         int
+	decodedGranules     int
+	decodedBlocks       int
+	decodedPayloadBytes uint64
+}
+
+func newColumnTypedColumnTimeOrderTopKIterator(partIndex int, part *columnTypedColumnTimeOrderTopKPart) (columnTypedColumnTimeOrderTopKIterator, error) {
+	part.resetTimeOrderTopKScan()
+	currentTime, ok, err := part.firstTimeOrderTopKTime()
+	if err != nil {
+		return columnTypedColumnTimeOrderTopKIterator{}, err
+	}
+	return columnTypedColumnTimeOrderTopKIterator{partIndex: partIndex, part: part, currentTime: currentTime, done: !ok}, nil
+}
+
+func (it *columnTypedColumnTimeOrderTopKIterator) evaluateCurrent(countMatchedRows bool) (string, bool, error) {
+	group, matched, decoded, blocks, decodedBytes, err := it.part.evaluateTimeOrderTopKRow(it.granule, it.rowInGranule)
+	if err != nil {
+		return "", false, err
+	}
+	it.rowsScanned++
+	if matched && countMatchedRows {
+		it.matchedRows++
+	}
+	if decoded {
+		it.decodedGranules++
+		it.decodedBlocks += blocks
+		it.decodedPayloadBytes += decodedBytes
+	}
+	return group, matched, nil
+}
+
+func (it *columnTypedColumnTimeOrderTopKIterator) advance() error {
+	granule, rowInGranule, currentTime, done, err := it.part.nextTimeOrderTopKPosition(it.granule, it.rowInGranule)
+	if err != nil {
+		return err
+	}
+	it.granule = granule
+	it.rowInGranule = rowInGranule
+	it.currentTime = currentTime
+	it.done = done
+	return nil
+}
+
+type columnTypedColumnTimeOrderTopKHeap struct {
+	items []int
+}
+
+func (h *columnTypedColumnTimeOrderTopKHeap) len() int { return len(h.items) }
+
+func (h *columnTypedColumnTimeOrderTopKHeap) peek() int { return h.items[0] }
+
+func (h *columnTypedColumnTimeOrderTopKHeap) push(iteratorIdx int, iterators []columnTypedColumnTimeOrderTopKIterator) {
+	h.items = append(h.items, iteratorIdx)
+	for idx := len(h.items) - 1; idx > 0; {
+		parent := (idx - 1) / 2
+		if !columnTypedColumnTimeOrderTopKIteratorLess(iterators[h.items[idx]], iterators[h.items[parent]]) {
+			break
+		}
+		h.items[idx], h.items[parent] = h.items[parent], h.items[idx]
+		idx = parent
+	}
+}
+
+func (h *columnTypedColumnTimeOrderTopKHeap) pop(iterators []columnTypedColumnTimeOrderTopKIterator) int {
+	out := h.items[0]
+	last := h.items[len(h.items)-1]
+	h.items = h.items[:len(h.items)-1]
+	if len(h.items) == 0 {
+		return out
+	}
+	h.items[0] = last
+	for idx := 0; ; {
+		left := idx*2 + 1
+		if left >= len(h.items) {
+			break
+		}
+		smallest := left
+		right := left + 1
+		if right < len(h.items) && columnTypedColumnTimeOrderTopKIteratorLess(iterators[h.items[right]], iterators[h.items[left]]) {
+			smallest = right
+		}
+		if !columnTypedColumnTimeOrderTopKIteratorLess(iterators[h.items[smallest]], iterators[h.items[idx]]) {
+			break
+		}
+		h.items[idx], h.items[smallest] = h.items[smallest], h.items[idx]
+		idx = smallest
+	}
+	return out
+}
+
+func columnTypedColumnTimeOrderTopKIteratorLess(left, right columnTypedColumnTimeOrderTopKIterator) bool {
+	if left.currentTime != right.currentTime {
+		return left.currentTime < right.currentTime
+	}
+	return left.partIndex < right.partIndex
+}
+
+func columnTypedColumnTimeOrderTopKIteratorTotals(iterators []columnTypedColumnTimeOrderTopKIterator) (int, int, int, int, uint64) {
+	rowsScanned := 0
+	matchedRows := 0
+	decodedGranules := 0
+	decodedBlocks := 0
+	decodedBytes := uint64(0)
+	for _, iterator := range iterators {
+		rowsScanned += iterator.rowsScanned
+		matchedRows += iterator.matchedRows
+		decodedGranules += iterator.decodedGranules
+		decodedBlocks += iterator.decodedBlocks
+		decodedBytes += iterator.decodedPayloadBytes
+	}
+	return rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes
+}
+
+func columnTypedColumnTimeOrderTopKKthTime(mins map[string]int64, req ColumnPhysicalQueryRequest, scratch []ColumnPhysicalQueryGroup) (int64, bool, []ColumnPhysicalQueryGroup) {
+	scratch = scratch[:0]
+	for key, value := range mins {
+		insertColumnPhysicalTopKGroup(&scratch, ColumnPhysicalQueryGroup{Key: key, Int64: value}, req.TopK, req.TopKOrder)
+	}
+	if len(scratch) < req.TopK {
+		return 0, false, scratch
+	}
+	return scratch[len(scratch)-1].Int64, true, scratch
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCount(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {

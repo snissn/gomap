@@ -982,6 +982,457 @@ func densePredicateFromDictionaryCodes(codes []uint32, dictionaryByCode map[int6
 	return columnTypedColumnDensePredicatePart{Codes: codes, Allowed: allowed}, nil
 }
 
+type columnTypedColumnTimeOrderCodeColumn struct {
+	PartColumn       typedcolumn.ColumnPartColumn
+	Cardinality      int
+	DictionaryByCode map[int64]string
+}
+
+type columnTypedColumnTimeOrderPredicateColumn struct {
+	CodeColumn    columnTypedColumnTimeOrderCodeColumn
+	Allowed       []uint64
+	RejectsAll    bool
+	UsesGroupCode bool
+}
+
+type columnTypedColumnTimeOrderTopKPart struct {
+	Rows           int
+	Granules       []typedcolumn.GranuleDescriptor
+	Marks          []typedcolumn.SortKeyMark
+	ValueColumn    typedcolumn.ColumnPartColumn
+	Group          columnTypedColumnTimeOrderCodeColumn
+	Predicates     []columnTypedColumnTimeOrderPredicateColumn
+	decodedGranule int
+	timeValues     []int64
+	groupCodes     []uint32
+	predicateCodes [][]uint32
+}
+
+// decodeTypedColumnPhysicalQueryTimeOrderTopKPart prepares the q4a
+// typed-column section fast path. It keeps the encoded per-granule payloads and
+// validates time_us sort-key marks, then the query runner decodes group and
+// predicate code granules only until the Top-K time threshold is closed.
+func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
+	// Unlike the dense q1/q3/q5 decoders, the time-order runner keeps encoded
+	// granule payloads and decodes only the prefix needed by Top-K. The physical
+	// query prepare loop reuses its read scratch between parts, so take ownership
+	// before parsing to keep prepared/direct payload references stable.
+	raw = append([]byte(nil), raw...)
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: plan.Fields, SchemaVersion: uint32(schemaHash)}, image)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	summary := typedColumnAdapterImageSummary{PartID: image.PartID, Rows: image.Rows, Sections: len(image.Sections), SectionBytes: typedColumnPhysicalQueryImageSectionBytes(image), SortKey: columnSortKeysFromTypedColumnSortKeys(adapterPart.Part.Descriptor.SortKey)}
+	if summary.PartID != typedRef.Ref.PartID || summary.Rows != typedRef.Rows {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d manifest_rows=%d", summary.PartID, typedRef.Ref.PartID, summary.Rows, typedRef.Rows)
+	}
+	if physical.Rows != 0 && summary.Rows != physical.Rows {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part rows=%d do not match physical rows=%d", summary.Rows, physical.Rows)
+	}
+	if err := validateTypedColumnPhysicalQuerySortMetadata(plan.SortKey, typedRef.SortKey, summary.SortKey); err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+
+	groupColumn, groupPartColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, "time-order topK group")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	valueColumn, ok, err := typedColumnInt64PredicateAdapterColumn(plan.Fields, plan.ValueColumn)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	if !ok {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: time-order topK value column %q is not owned by typed_column_part", plan.ValueColumn)
+	}
+	for _, candidate := range adapterPart.Columns {
+		if candidate.Definition.Name == valueColumn.Definition.Name {
+			valueColumn = candidate
+			break
+		}
+	}
+	if valueColumn.Field.Nullable || valueColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: time-order topK value column %q is not a non-null int64", ErrColumnQueryPlanUnsupported, plan.ValueColumn)
+	}
+	valuePartColumn, ok := adapterPart.Part.Columns[valueColumn.Definition.Name]
+	if !ok {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: time-order topK missing value column %q", valueColumn.Definition.Name)
+	}
+	if valuePartColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: time-order topK value column %q type=%s", ErrColumnQueryPlanUnsupported, plan.ValueColumn, valuePartColumn.Definition.Type)
+	}
+	if err := validateTypedColumnTimeOrderTopKMarks(adapterPart.Part, valueColumn.Definition.Name); err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+
+	group := columnTypedColumnTimeOrderCodeColumn{PartColumn: groupPartColumn, Cardinality: cardinality, DictionaryByCode: groupColumn.ReverseDictionary}
+	predicates := make([]columnTypedColumnTimeOrderPredicateColumn, 0, len(plan.PredicateSpecs))
+	for _, spec := range plan.PredicateSpecs {
+		if spec.column == plan.GroupColumn {
+			allowed, rejectsAll, err := timeOrderTopKAllowedCodes(groupColumn, cardinality, spec)
+			if err != nil {
+				return columnTypedColumnPhysicalQueryPart{}, err
+			}
+			predicates = append(predicates, columnTypedColumnTimeOrderPredicateColumn{CodeColumn: group, Allowed: allowed, RejectsAll: rejectsAll, UsesGroupCode: true})
+			continue
+		}
+		predicateColumn, predicatePartColumn, predicateCardinality, err := typedColumnDenseStringCodeColumn(adapterPart, plan.Fields, spec.column, "time-order topK predicate")
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		allowed, rejectsAll, err := timeOrderTopKAllowedCodes(predicateColumn, predicateCardinality, spec)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		predicates = append(predicates, columnTypedColumnTimeOrderPredicateColumn{
+			CodeColumn: columnTypedColumnTimeOrderCodeColumn{PartColumn: predicatePartColumn, Cardinality: predicateCardinality, DictionaryByCode: predicateColumn.ReverseDictionary},
+			Allowed:    allowed,
+			RejectsAll: rejectsAll,
+		})
+	}
+
+	return columnTypedColumnPhysicalQueryPart{
+		Ref:                 typedRef,
+		PhysicalRef:         physical,
+		Rows:                summary.Rows,
+		Bytes:               int64(len(raw)),
+		Sections:            summary.Sections,
+		SectionBytes:        summary.SectionBytes,
+		GranulesConsidered:  len(adapterPart.Part.Descriptor.Granules),
+		SortKeyMarkChecks:   len(adapterPart.Part.Marks),
+		DecodedPayloadBytes: 0,
+		TimeOrderTopK: &columnTypedColumnTimeOrderTopKPart{
+			Rows:           summary.Rows,
+			Granules:       append([]typedcolumn.GranuleDescriptor(nil), adapterPart.Part.Descriptor.Granules...),
+			Marks:          append([]typedcolumn.SortKeyMark(nil), adapterPart.Part.Marks...),
+			ValueColumn:    valuePartColumn,
+			Group:          group,
+			Predicates:     predicates,
+			decodedGranule: -1,
+		},
+	}, nil
+}
+
+func validateTypedColumnTimeOrderTopKMarks(part *typedcolumn.ColumnPart, valueColumn string) error {
+	if part == nil {
+		return errors.New("collections: time-order topK nil typed-column part")
+	}
+	if part.Descriptor.RowCount == 0 {
+		if len(part.Descriptor.Granules) != 0 || len(part.Marks) != 0 {
+			return fmt.Errorf("collections: time-order topK empty part has granules=%d marks=%d", len(part.Descriptor.Granules), len(part.Marks))
+		}
+		return nil
+	}
+	if len(part.Marks) == 0 {
+		return fmt.Errorf("%w: time-order topK requires sort-key marks", ErrColumnQueryPlanUnsupported)
+	}
+	if len(part.Marks) != len(part.Descriptor.Granules) {
+		return fmt.Errorf("collections: time-order topK marks=%d granules=%d", len(part.Marks), len(part.Descriptor.Granules))
+	}
+	seenRows := 0
+	prevSet := false
+	prev := int64(0)
+	for idx, granule := range part.Descriptor.Granules {
+		mark := part.Marks[idx]
+		if granule.Ordinal != idx || granule.MarkOrdinal != idx || mark.Rows != granule.RowCount {
+			return fmt.Errorf("collections: time-order topK stale mark at granule %d", idx)
+		}
+		if granule.FirstRow != seenRows {
+			return fmt.Errorf("collections: time-order topK non-contiguous granule %d first_row=%d want %d", idx, granule.FirstRow, seenRows)
+		}
+		if len(mark.Columns) == 0 || mark.Columns[0] != valueColumn {
+			return fmt.Errorf("collections: time-order topK mark %d first column=%v want %q", idx, mark.Columns, valueColumn)
+		}
+		if len(mark.Prefixes) == 0 || len(mark.Prefixes[0].Lower.Values) == 0 {
+			return fmt.Errorf("collections: time-order topK mark %d missing lower time bound", idx)
+		}
+		value := mark.Prefixes[0].Lower.Values[0]
+		if prevSet && value < prev {
+			return fmt.Errorf("collections: time-order topK sort key out of order at granule %d", idx)
+		}
+		prev = value
+		prevSet = true
+		seenRows += granule.RowCount
+	}
+	if seenRows != part.Descriptor.RowCount {
+		return fmt.Errorf("collections: time-order topK granule rows=%d want part rows=%d", seenRows, part.Descriptor.RowCount)
+	}
+	return nil
+}
+
+func timeOrderTopKAllowedCodes(column typedColumnAdapterColumn, cardinality int, spec columnPhysicalQueryPredicateSpec) ([]uint64, bool, error) {
+	allowed := make([]uint64, (cardinality+63)/64)
+	matchedLiterals := 0
+	for _, value := range spec.values {
+		code, ok := column.Dictionary[value]
+		if !ok {
+			continue
+		}
+		if code < 0 || uint64(code) >= uint64(cardinality) {
+			return nil, false, fmt.Errorf("collections: time-order topK predicate dictionary code %d outside cardinality %d for column %q", code, cardinality, column.Definition.Name)
+		}
+		idx := int(code)
+		allowed[idx/64] |= uint64(1) << uint(idx%64)
+		matchedLiterals++
+	}
+	return allowed, matchedLiterals == 0, nil
+}
+
+func (p *columnTypedColumnTimeOrderTopKPart) resetTimeOrderTopKScan() {
+	p.decodedGranule = -1
+	p.timeValues = p.timeValues[:0]
+	p.groupCodes = p.groupCodes[:0]
+	if cap(p.predicateCodes) < len(p.Predicates) {
+		p.predicateCodes = make([][]uint32, len(p.Predicates))
+	} else {
+		p.predicateCodes = p.predicateCodes[:len(p.Predicates)]
+		for idx := range p.predicateCodes {
+			p.predicateCodes[idx] = p.predicateCodes[idx][:0]
+		}
+	}
+}
+
+func (p *columnTypedColumnTimeOrderTopKPart) firstTimeOrderTopKTime() (int64, bool, error) {
+	if p == nil {
+		return 0, false, errors.New("collections: nil time-order topK part")
+	}
+	if p.Rows == 0 {
+		return 0, false, nil
+	}
+	timeValue, err := p.timeOrderTopKTimeAt(0, 0)
+	return timeValue, true, err
+}
+
+func (p *columnTypedColumnTimeOrderTopKPart) nextTimeOrderTopKPosition(granuleIdx, rowInGranule int) (int, int, int64, bool, error) {
+	if granuleIdx < 0 || granuleIdx >= len(p.Granules) {
+		return 0, 0, 0, true, fmt.Errorf("collections: time-order topK granule %d outside %d", granuleIdx, len(p.Granules))
+	}
+	rowInGranule++
+	for granuleIdx < len(p.Granules) && rowInGranule >= p.Granules[granuleIdx].RowCount {
+		granuleIdx++
+		rowInGranule = 0
+	}
+	if granuleIdx >= len(p.Granules) {
+		return 0, 0, 0, true, nil
+	}
+	timeValue, err := p.timeOrderTopKTimeAt(granuleIdx, rowInGranule)
+	return granuleIdx, rowInGranule, timeValue, false, err
+}
+
+func (p *columnTypedColumnTimeOrderTopKPart) timeOrderTopKTimeAt(granuleIdx, rowInGranule int) (int64, error) {
+	if p.decodedGranule == granuleIdx {
+		if rowInGranule < 0 || rowInGranule >= len(p.timeValues) {
+			return 0, fmt.Errorf("collections: time-order topK row_in_granule=%d outside decoded time rows=%d", rowInGranule, len(p.timeValues))
+		}
+		return p.timeValues[rowInGranule], nil
+	}
+	if rowInGranule != 0 {
+		return 0, fmt.Errorf("collections: time-order topK cannot read row %d in undecoded granule %d", rowInGranule, granuleIdx)
+	}
+	if granuleIdx < 0 || granuleIdx >= len(p.Marks) {
+		return 0, fmt.Errorf("collections: time-order topK mark %d outside %d", granuleIdx, len(p.Marks))
+	}
+	mark := p.Marks[granuleIdx]
+	if len(mark.Prefixes) == 0 || len(mark.Prefixes[0].Lower.Values) == 0 {
+		return 0, fmt.Errorf("collections: time-order topK mark %d missing lower time bound", granuleIdx)
+	}
+	return mark.Prefixes[0].Lower.Values[0], nil
+}
+
+func (p *columnTypedColumnTimeOrderTopKPart) evaluateTimeOrderTopKRow(granuleIdx, rowInGranule int) (string, bool, bool, int, uint64, error) {
+	decoded, blocks, decodedBytes, err := p.ensureTimeOrderTopKGranuleDecoded(granuleIdx)
+	if err != nil {
+		return "", false, decoded, blocks, decodedBytes, err
+	}
+	for predIdx, predicate := range p.Predicates {
+		if predicate.RejectsAll {
+			return "", false, decoded, blocks, decodedBytes, nil
+		}
+		codes := p.predicateCodes[predIdx]
+		if rowInGranule < 0 || rowInGranule >= len(codes) {
+			return "", false, decoded, blocks, decodedBytes, fmt.Errorf("collections: time-order topK predicate row=%d outside decoded rows=%d", rowInGranule, len(codes))
+		}
+		code := codes[rowInGranule]
+		word := int(code / 64)
+		bit := uint(code % 64)
+		if word >= len(predicate.Allowed) || (predicate.Allowed[word]&(uint64(1)<<bit)) == 0 {
+			return "", false, decoded, blocks, decodedBytes, nil
+		}
+	}
+	if rowInGranule < 0 || rowInGranule >= len(p.groupCodes) {
+		return "", false, decoded, blocks, decodedBytes, fmt.Errorf("collections: time-order topK group row=%d outside decoded rows=%d", rowInGranule, len(p.groupCodes))
+	}
+	groupCode := p.groupCodes[rowInGranule]
+	if uint64(groupCode) >= uint64(p.Group.Cardinality) {
+		return "", false, decoded, blocks, decodedBytes, fmt.Errorf("collections: time-order topK group code=%d outside cardinality=%d", groupCode, p.Group.Cardinality)
+	}
+	group, ok := p.Group.DictionaryByCode[int64(groupCode)]
+	if !ok {
+		return "", false, decoded, blocks, decodedBytes, fmt.Errorf("collections: time-order topK dictionary missing group code %d", groupCode)
+	}
+	return group, true, decoded, blocks, decodedBytes, nil
+}
+
+func (p *columnTypedColumnTimeOrderTopKPart) ensureTimeOrderTopKGranuleDecoded(granuleIdx int) (bool, int, uint64, error) {
+	if p.decodedGranule == granuleIdx {
+		return false, 0, 0, nil
+	}
+	if granuleIdx < 0 || granuleIdx >= len(p.Granules) {
+		return false, 0, 0, fmt.Errorf("collections: time-order topK granule %d outside %d", granuleIdx, len(p.Granules))
+	}
+	granule := p.Granules[granuleIdx]
+	blocks := 0
+	decodedBytes := uint64(0)
+	var err error
+	p.timeValues, decodedBytes, blocks, err = decodeTypedColumnInt64ValuesForRowRange(p.ValueColumn, granule.FirstRow, granule.RowCount, "time-order topK value", p.timeValues)
+	if err != nil {
+		return true, blocks, decodedBytes, err
+	}
+	if len(p.timeValues) != 0 {
+		markLower, err := p.timeOrderTopKTimeAt(granuleIdx, 0)
+		if err != nil {
+			return true, blocks, decodedBytes, err
+		}
+		if p.timeValues[0] != markLower {
+			return true, blocks, decodedBytes, fmt.Errorf("collections: time-order topK granule %d first time=%d mark lower=%d", granuleIdx, p.timeValues[0], markLower)
+		}
+		for row := 1; row < len(p.timeValues); row++ {
+			if p.timeValues[row] < p.timeValues[row-1] {
+				return true, blocks, decodedBytes, fmt.Errorf("collections: time-order topK granule %d time values out of order at row %d", granuleIdx, row)
+			}
+		}
+	}
+	var groupBytes uint64
+	var groupBlocks int
+	p.groupCodes, groupBytes, groupBlocks, err = decodeTypedColumnUint32CodesForRowRange(p.Group.PartColumn, p.Group.Cardinality, granule.FirstRow, granule.RowCount, "time-order topK group", p.groupCodes)
+	decodedBytes += groupBytes
+	blocks += groupBlocks
+	if err != nil {
+		return true, blocks, decodedBytes, err
+	}
+	for idx, predicate := range p.Predicates {
+		if predicate.UsesGroupCode {
+			p.predicateCodes[idx] = p.groupCodes
+			continue
+		}
+		var predicateBytes uint64
+		var predicateBlocks int
+		p.predicateCodes[idx], predicateBytes, predicateBlocks, err = decodeTypedColumnUint32CodesForRowRange(predicate.CodeColumn.PartColumn, predicate.CodeColumn.Cardinality, granule.FirstRow, granule.RowCount, "time-order topK predicate", p.predicateCodes[idx])
+		decodedBytes += predicateBytes
+		blocks += predicateBlocks
+		if err != nil {
+			return true, blocks, decodedBytes, err
+		}
+	}
+	p.decodedGranule = granuleIdx
+	return true, blocks, decodedBytes, nil
+}
+
+func decodeTypedColumnInt64ValuesForRowRange(partColumn typedcolumn.ColumnPartColumn, firstRow, rowCount int, role string, dst []int64) ([]int64, uint64, int, error) {
+	if rowCount < 0 || firstRow < 0 {
+		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s invalid row range first=%d rows=%d", role, firstRow, rowCount)
+	}
+	if rowCount == 0 {
+		return dst[:0], 0, 0, nil
+	}
+	limit := firstRow + rowCount
+	out := dst[:0]
+	if cap(out) < rowCount {
+		out = make([]int64, 0, rowCount)
+	}
+	var scratch []int64
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	blocks := 0
+	for blockIdx, block := range partColumn.Blocks {
+		blockFirst := block.Descriptor.FirstRow
+		blockLimit := blockFirst + block.Descriptor.RowCount
+		if blockLimit <= firstRow {
+			continue
+		}
+		if blockFirst >= limit {
+			break
+		}
+		g := block.Granule
+		decoded, err := reader.DecodeInt64Into(scratch[:0], g)
+		if err != nil {
+			return nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s block %d: %w", role, blockIdx, err)
+		}
+		if len(decoded) != block.Descriptor.RowCount {
+			return nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s block %d decoded rows=%d want %d", role, blockIdx, len(decoded), block.Descriptor.RowCount)
+		}
+		start := max(firstRow, blockFirst)
+		end := min(limit, blockLimit)
+		out = append(out, decoded[start-blockFirst:end-blockFirst]...)
+		scratch = decoded
+		decodedBytes += uint64(g.RawBytes)
+		blocks++
+	}
+	if len(out) != rowCount {
+		return nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want range rows=%d", role, len(out), rowCount)
+	}
+	return out, decodedBytes, blocks, nil
+}
+
+func decodeTypedColumnUint32CodesForRowRange(partColumn typedcolumn.ColumnPartColumn, cardinality, firstRow, rowCount int, role string, dst []uint32) ([]uint32, uint64, int, error) {
+	if rowCount < 0 || firstRow < 0 {
+		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s invalid row range first=%d rows=%d", role, firstRow, rowCount)
+	}
+	if rowCount == 0 {
+		return dst[:0], 0, 0, nil
+	}
+	limit := firstRow + rowCount
+	out := dst[:0]
+	if cap(out) < rowCount {
+		out = make([]uint32, 0, rowCount)
+	}
+	var scratch []uint32
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	blocks := 0
+	for blockIdx, block := range partColumn.Blocks {
+		blockFirst := block.Descriptor.FirstRow
+		blockLimit := blockFirst + block.Descriptor.RowCount
+		if blockLimit <= firstRow {
+			continue
+		}
+		if blockFirst >= limit {
+			break
+		}
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s block %d min/max [%d,%d] outside cardinality %d", role, blockIdx, g.Min, g.Max, cardinality)
+			}
+		}
+		decoded, err := reader.DecodeUint32CodesInto(scratch[:0], g)
+		if err != nil {
+			return nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s block %d: %w", role, blockIdx, err)
+		}
+		if len(decoded) != block.Descriptor.RowCount {
+			return nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want %d", role, len(decoded), block.Descriptor.RowCount)
+		}
+		start := max(firstRow, blockFirst)
+		end := min(limit, blockLimit)
+		for _, code := range decoded[start-blockFirst : end-blockFirst] {
+			if uint64(code) >= uint64(cardinality) {
+				return nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s code=%d outside cardinality=%d", role, code, cardinality)
+			}
+			out = append(out, code)
+		}
+		scratch = decoded
+		decodedBytes += uint64(g.RawBytes)
+		blocks++
+	}
+	if len(out) != rowCount {
+		return nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want range rows=%d", role, len(out), rowCount)
+	}
+	return out, decodedBytes, blocks, nil
+}
+
 // decodeTypedColumnPhysicalQueryDenseInt64SpanPart prepares the q5 typed-column
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.
