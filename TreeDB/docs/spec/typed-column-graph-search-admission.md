@@ -9,9 +9,11 @@ and the #2036 prepared runtime-view contract in
 This document owns the repo-level readiness table that descendants must update
 before adding, changing, or promoting graph-search typed-column state roles. The
 reusable #2046 direct-view certifier substrate lives in
-`TreeDB/internal/typeddecode`, but this table does not implement type-specific
-prepared views (#2038/#2040/#2041), graph-search routing (#2045), hot-loop
-telemetry reduction (#2042), or benchmark truth-matrix collection (#2037).
+`TreeDB/internal/typeddecode`. The #2037 benchmark truth-matrix labels and
+command contract live in `typed-column-graph-search-benchmark-matrix.md`. This
+table does not implement type-specific prepared views (#2038/#2040/#2041),
+graph-search routing (#2045), hot-loop telemetry reduction (#2042), or benchmark
+truth-matrix collection (#2037).
 
 ## Admission status vocabulary
 

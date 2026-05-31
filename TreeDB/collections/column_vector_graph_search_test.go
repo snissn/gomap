@@ -18,15 +18,16 @@ import (
 const columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 = 8
 
 type columnVectorGraphNativeSearchBenchShapeV3 struct {
-	rows                int
-	dims                int
-	m                   int
-	topK                int
-	efSearch            int
-	queryOrdinal        int
-	directPhysicalAsset bool
-	typedColumnVector   bool
-	scoreBatchMode      columnVectorGraphScoreBatchMode
+	rows                      int
+	dims                      int
+	m                         int
+	topK                      int
+	efSearch                  int
+	queryOrdinal              int
+	directPhysicalAsset       bool
+	typedColumnVector         bool
+	omitResultMaterialization bool
+	scoreBatchMode            columnVectorGraphScoreBatchMode
 }
 
 func TestColumnVectorGraphAdjacencySourceStatsSkipEmptyNoopV3(t *testing.T) {
@@ -845,7 +846,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 	}
 	defer reader.Close()
 	var scratch columnVectorGraphNativeSearchScratch
-	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, ScoreBatchMode: shape.scoreBatchMode}
+	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, ScoreBatchMode: shape.scoreBatchMode, OmitResultMaterialization: shape.omitResultMaterialization}
 	if _, _, err := reader.SearchCosine(query, opts, &scratch); err != nil {
 		b.Fatalf("warm SearchCosine: %v", err)
 	}
@@ -931,6 +932,14 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.TypedColumnActiveHandles = stats.TypedColumnActiveHandles
 		searchStats.TypedColumnDeniedResources = stats.TypedColumnDeniedResources
 		searchStats.TypedColumnFallbacks += stats.TypedColumnFallbacks
+		searchStats.RowRefVectorSourceState += stats.RowRefVectorSourceState
+		searchStats.RowRefVectorSourceLegacyGraphIDs += stats.RowRefVectorSourceLegacyGraphIDs
+		searchStats.RowRefStateResultRefs += stats.RowRefStateResultRefs
+		searchStats.RowRefStateSourceUnavailable += stats.RowRefStateSourceUnavailable
+		searchStats.RowRefStateSourceFallbacks += stats.RowRefStateSourceFallbacks
+		searchStats.ResultIDTypedBytesState += stats.ResultIDTypedBytesState
+		searchStats.ResultIDGraphFallbacks += stats.ResultIDGraphFallbacks
+		searchStats.ResultIDStateValidationFailures += stats.ResultIDStateValidationFailures
 	}
 	b.StopTimer()
 	stats := reader.Stats()
@@ -986,7 +995,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	previousGOMAXPROCS := runtime.GOMAXPROCS(workers)
 	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
 	benchWorkers := make([]*searchWorker, workers)
-	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, ScoreBatchMode: shape.scoreBatchMode}
+	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, ScoreBatchMode: shape.scoreBatchMode, OmitResultMaterialization: shape.omitResultMaterialization}
 	for i := range benchWorkers {
 		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 		if err != nil {
@@ -1079,6 +1088,14 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalTypedColumnActiveHandles atomic.Int64
 	var totalTypedColumnDeniedResources atomic.Uint64
 	var totalTypedColumnFallbacks atomic.Uint64
+	var totalRowRefVectorSourceState atomic.Uint64
+	var totalRowRefVectorSourceLegacyGraphIDs atomic.Uint64
+	var totalRowRefStateResultRefs atomic.Uint64
+	var totalRowRefStateSourceUnavailable atomic.Uint64
+	var totalRowRefStateSourceFallbacks atomic.Uint64
+	var totalResultIDTypedBytesState atomic.Uint64
+	var totalResultIDGraphFallbacks atomic.Uint64
+	var totalResultIDStateValidationFailures atomic.Uint64
 	var nextWorker atomic.Uint64
 	b.SetParallelism(1) // Keep one prewarmed reader/scratch per RunParallel worker.
 	b.ReportAllocs()
@@ -1177,6 +1194,14 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.TypedColumnActiveHandles = stats.TypedColumnActiveHandles
 			localStats.TypedColumnDeniedResources = stats.TypedColumnDeniedResources
 			localStats.TypedColumnFallbacks += stats.TypedColumnFallbacks
+			localStats.RowRefVectorSourceState += stats.RowRefVectorSourceState
+			localStats.RowRefVectorSourceLegacyGraphIDs += stats.RowRefVectorSourceLegacyGraphIDs
+			localStats.RowRefStateResultRefs += stats.RowRefStateResultRefs
+			localStats.RowRefStateSourceUnavailable += stats.RowRefStateSourceUnavailable
+			localStats.RowRefStateSourceFallbacks += stats.RowRefStateSourceFallbacks
+			localStats.ResultIDTypedBytesState += stats.ResultIDTypedBytesState
+			localStats.ResultIDGraphFallbacks += stats.ResultIDGraphFallbacks
+			localStats.ResultIDStateValidationFailures += stats.ResultIDStateValidationFailures
 		}
 		sink.Add(localSink)
 		totalCandidateRows.Add(localStats.CandidateRows)
@@ -1251,6 +1276,14 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalTypedColumnActiveHandles.Add(localStats.TypedColumnActiveHandles)
 		totalTypedColumnDeniedResources.Add(localStats.TypedColumnDeniedResources)
 		totalTypedColumnFallbacks.Add(localStats.TypedColumnFallbacks)
+		totalRowRefVectorSourceState.Add(localStats.RowRefVectorSourceState)
+		totalRowRefVectorSourceLegacyGraphIDs.Add(localStats.RowRefVectorSourceLegacyGraphIDs)
+		totalRowRefStateResultRefs.Add(localStats.RowRefStateResultRefs)
+		totalRowRefStateSourceUnavailable.Add(localStats.RowRefStateSourceUnavailable)
+		totalRowRefStateSourceFallbacks.Add(localStats.RowRefStateSourceFallbacks)
+		totalResultIDTypedBytesState.Add(localStats.ResultIDTypedBytesState)
+		totalResultIDGraphFallbacks.Add(localStats.ResultIDGraphFallbacks)
+		totalResultIDStateValidationFailures.Add(localStats.ResultIDStateValidationFailures)
 	})
 	b.StopTimer()
 	reportColumnGraphNativeSearchBenchShapeMetricsV3(b, shape)
@@ -1331,6 +1364,14 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		TypedColumnActiveHandles:             totalTypedColumnActiveHandles.Load(),
 		TypedColumnDeniedResources:           totalTypedColumnDeniedResources.Load(),
 		TypedColumnFallbacks:                 totalTypedColumnFallbacks.Load(),
+		RowRefVectorSourceState:              totalRowRefVectorSourceState.Load(),
+		RowRefVectorSourceLegacyGraphIDs:     totalRowRefVectorSourceLegacyGraphIDs.Load(),
+		RowRefStateResultRefs:                totalRowRefStateResultRefs.Load(),
+		RowRefStateSourceUnavailable:         totalRowRefStateSourceUnavailable.Load(),
+		RowRefStateSourceFallbacks:           totalRowRefStateSourceFallbacks.Load(),
+		ResultIDTypedBytesState:              totalResultIDTypedBytesState.Load(),
+		ResultIDGraphFallbacks:               totalResultIDGraphFallbacks.Load(),
+		ResultIDStateValidationFailures:      totalResultIDStateValidationFailures.Load(),
 	})
 }
 
@@ -1343,6 +1384,9 @@ func reportColumnGraphNativeSearchBenchShapeMetricsV3(b *testing.B, shape column
 	b.ReportMetric(float64(shape.efSearch), "ef_search")
 	if shape.typedColumnVector {
 		b.ReportMetric(1, "typed_column_vector")
+	}
+	if shape.omitResultMaterialization {
+		b.ReportMetric(1, "graph_only_no_result_materialization")
 	}
 	if shape.scoreBatchMode != columnVectorGraphScoreBatchModeDefault {
 		if shape.scoreBatchMode.indexedEnabled() {
@@ -1406,6 +1450,7 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencyState19
 		_ = d.Close()
 		tb.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
 	}
+	identity := ColumnManifestIdentity{Generation: generation, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
 	graph := columnVectorGraphManifestSnapshot{
 		IndexName:              def.Name,
 		Field:                  def.Field,
@@ -1416,14 +1461,15 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencyState19
 		EfConstruction:         def.EfConstruction,
 		EfSearch:               def.EfSearch,
 		BaseManifestGeneration: generation,
+		BaseManifestChecksum:   identity.Checksum,
 		BaseSchemaHash:         baseCfg.SchemaHash,
 		GraphSchemaHash:        graphCfg.SchemaHash,
 		RowCount:               prepared.RowCount,
 		AssetRef:               prepared.Ref,
 		AssetBytes:             prepared.Bytes,
 	}
-	identity := ColumnManifestIdentity{Generation: generation, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
 	records, manifestIdentity := testColumnGraphManifestRecordsFromSnapshot1920(tb, *baseCfg, graph, identity)
+	graph = graphManifestFromRecords1918(tb, records, def)
 	stateRows := columnVectorGraphStateRowsForTest1987(rows, graph.RowCount, def.Dimensions, columnVectorGraphExpectedAdjacencyLayerCountFromAssetRows1989(tb, rows))
 	records, manifestIdentity = appendCompleteVectorIndexStateForGraphTest1987(tb, d, "docs", *baseCfg, def, graph, records, manifestIdentity, columnVectorIndexStateChecksumInput1986(*baseCfg), stateRows)
 	meta := CollectionMeta{
@@ -1566,6 +1612,9 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	if n <= 0 {
 		return
 	}
+	if elapsed := b.Elapsed(); elapsed > 0 {
+		b.ReportMetric(float64(n)/elapsed.Seconds(), "ops/sec")
+	}
 	b.ReportMetric(float64(stats.Rows), "graph_rows")
 	b.ReportMetric(float64(stats.Granules), "graph_granules")
 	b.ReportMetric(float64(searchStats.CandidateRows)/float64(n), "candidate_rows/search")
@@ -1648,6 +1697,14 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 		b.ReportMetric(1, "typed_column_vector_source_fallback")
 	}
 	b.ReportMetric(float64(searchStats.TypedColumnFallbacks)/float64(n), "typed_column_vector_fallbacks/search")
+	b.ReportMetric(float64(searchStats.RowRefVectorSourceState)/float64(n), "row_ref_vector_source_state/search")
+	b.ReportMetric(float64(searchStats.RowRefVectorSourceLegacyGraphIDs)/float64(n), "row_ref_vector_source_legacy_graph_ids/search")
+	b.ReportMetric(float64(searchStats.RowRefStateResultRefs)/float64(n), "row_ref_state_result_refs/search")
+	b.ReportMetric(float64(searchStats.RowRefStateSourceUnavailable)/float64(n), "row_ref_state_source_unavailable/search")
+	b.ReportMetric(float64(searchStats.RowRefStateSourceFallbacks)/float64(n), "row_ref_state_source_fallbacks/search")
+	b.ReportMetric(float64(searchStats.ResultIDTypedBytesState)/float64(n), "result_id_typed_bytes_state/search")
+	b.ReportMetric(float64(searchStats.ResultIDGraphFallbacks)/float64(n), "result_id_graph_fallbacks/search")
+	b.ReportMetric(float64(searchStats.ResultIDStateValidationFailures)/float64(n), "result_id_state_validation_failures/search")
 	b.ReportMetric(float64(searchStats.TypedColumnMappedBytes), "mapped_B")
 	b.ReportMetric(float64(searchStats.TypedColumnHeapCopyBytes), "heap_copy_B")
 	b.ReportMetric(float64(searchStats.TypedColumnDecodedBytes), "decoded_derived_B")
@@ -1655,6 +1712,13 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.TypedColumnDeniedResources), "denied_resources")
 	b.ReportMetric(float64(searchStats.ExpansionFetches)/float64(n), "expansion_fetches/search")
 	b.ReportMetric(float64(searchStats.ResultFetches)/float64(n), "result_fetches/search")
+	// Lower-level native search never materializes documents; keep these zero
+	// labels present so graph-only truth-matrix rows have the same report columns
+	// as public result/document boundary rows.
+	b.ReportMetric(0, "docs_fetched/search")
+	b.ReportMetric(0, "doc_fetch_ns/search")
+	b.ReportMetric(0, "doc_row_ref_state_fetches/search")
+	b.ReportMetric(0, "doc_row_ref_lookup_fallbacks/search")
 	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.CacheHits, baseStats.CacheHits))/float64(n), "cache_hits/search")
 	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.CacheMisses, baseStats.CacheMisses))/float64(n), "cache_misses/search")
 	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.DecodedBlocks, baseStats.DecodedBlocks))/float64(n), "decoded_blocks/search")
@@ -1681,10 +1745,22 @@ func deltaColumnGraphNativeBenchBytesV3(current, base int64) int64 {
 }
 
 func addColumnPhysicalRowReaderStatsV3(left, right columnPhysicalRowReaderStats) columnPhysicalRowReaderStats {
-	left.Rows += right.Rows
-	left.Granules += right.Granules
-	left.OpenGranulesRead += right.OpenGranulesRead
-	left.OpenPhysicalBytesRead += right.OpenPhysicalBytesRead
+	// Rows/granules and open bytes describe one bound graph asset/reader shape.
+	// Parallel benchmarks open one reader per worker, but reporting worker-summed
+	// graph_rows makes the fixture look larger than it is. Keep absolute shape
+	// counters at the per-reader maximum and sum only mutable search counters.
+	if right.Rows > left.Rows {
+		left.Rows = right.Rows
+	}
+	if right.Granules > left.Granules {
+		left.Granules = right.Granules
+	}
+	if right.OpenGranulesRead > left.OpenGranulesRead {
+		left.OpenGranulesRead = right.OpenGranulesRead
+	}
+	if right.OpenPhysicalBytesRead > left.OpenPhysicalBytesRead {
+		left.OpenPhysicalBytesRead = right.OpenPhysicalBytesRead
+	}
 	left.OpenSegmentCacheHits += right.OpenSegmentCacheHits
 	left.OpenSegmentCacheMisses += right.OpenSegmentCacheMisses
 	left.RowFetches += right.RowFetches

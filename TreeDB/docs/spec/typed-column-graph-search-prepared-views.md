@@ -8,12 +8,14 @@ It consumes the tier vocabulary and generic type matrix in
 `generic_only`, or `unsupported/experimental` tiers.
 
 The #2044 readiness/admission table and docs-lint enforcement live in
-`typed-column-graph-search-admission.md`. This document does not implement
-runtime graph-search admission enforcement (#2044), type-specific prepared views
-(#2038/#2040/#2041), graph-search routing, or the benchmark truth matrix
-(#2037). The reusable #2046 primitive certifier substrate lives in
-`TreeDB/internal/typeddecode` and remains a prerequisite, not row-admission
-evidence by itself.
+`typed-column-graph-search-admission.md`; the #2037 benchmark truth-matrix labels
+and command contract live in `typed-column-graph-search-benchmark-matrix.md`.
+This document does not implement runtime graph-search admission enforcement
+(#2044), type-specific prepared views (#2038/#2040/#2041), graph-search routing,
+or the benchmark truth matrix (#2037). The reusable #2046 primitive certifier
+substrate lives in `TreeDB/internal/typeddecode` and remains a prerequisite, not
+row-admission evidence by itself. This document defines the contract those
+issues must satisfy.
 
 ## Scope and ownership
 

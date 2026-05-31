@@ -73,6 +73,8 @@ type VectorIndexSearchResult struct {
 // counters are per-search deltas unless the field starts with Open; Open*
 // counters describe the bound reader setup performed before Search.
 type VectorIndexSearchStats struct {
+	// GraphRows is the number of legacy physical graph rows resident in the bound reader. Healthy current typed-column search reports zero.
+	GraphRows uint64 `json:"graph_rows,omitempty"`
 	// CandidateRows is the candidate row domain after any internal row-selection/visibility composition.
 	CandidateRows uint64 `json:"candidate_rows,omitempty"`
 	// Candidates is the number of candidate nodes scored by graph search.
@@ -854,6 +856,8 @@ func (s *VectorIndexSearcher) Close() error {
 // absolute values from the bound reader.
 func columnPhysicalRowReaderStatsDelta(before, after columnPhysicalRowReaderStats) columnPhysicalRowReaderStats {
 	return columnPhysicalRowReaderStats{
+		Rows:                  after.Rows,
+		Granules:              after.Granules,
 		OpenGranulesRead:      after.OpenGranulesRead,
 		OpenPhysicalBytesRead: after.OpenPhysicalBytesRead,
 		RowFetches:            deltaUint64(before.RowFetches, after.RowFetches),
@@ -884,6 +888,7 @@ func deltaInt64(before, after int64) int64 {
 
 func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearchStats, readerStats columnPhysicalRowReaderStats) VectorIndexSearchStats {
 	return VectorIndexSearchStats{
+		GraphRows:                            uint64(readerStats.Rows),
 		CandidateRows:                        searchStats.CandidateRows,
 		Candidates:                           searchStats.Candidates,
 		Edges:                                searchStats.Edges,

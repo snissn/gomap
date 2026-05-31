@@ -76,8 +76,8 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	if got.Stats.AdjacencyTypedListMmapDirectViews+got.Stats.AdjacencyTypedListHeapCopyTypedViews+got.Stats.AdjacencyTypedListScratchDecodes == 0 || got.Stats.AdjacencyLegacyFallbacks != 0 {
 		t.Fatalf("stats=%+v want public search to expose typed-list adjacency and no legacy fallback on healthy state", got.Stats)
 	}
-	if got.Stats.RowFetches != 0 || got.Stats.BatchFetches != 0 || got.Stats.RowsFetched != 0 || got.Stats.PhysicalBytesRead != 0 || got.Stats.OpenPhysicalBytesRead != 0 {
-		t.Fatalf("stats=%+v want zero graph row payload reads on healthy current-format search", got.Stats)
+	if got.Stats.GraphRows != 0 || got.Stats.RowFetches != 0 || got.Stats.BatchFetches != 0 || got.Stats.RowsFetched != 0 || got.Stats.PhysicalBytesRead != 0 || got.Stats.OpenPhysicalBytesRead != 0 {
+		t.Fatalf("stats=%+v want zero graph row payload residency/reads on healthy current-format search", got.Stats)
 	}
 	if got.Stats.TypedColumnFallbacks != 0 || got.Stats.RowRefVectorSourceLegacyGraphIDs != 0 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.NormSourceFallbacks != 0 {
 		t.Fatalf("stats=%+v want TVIS/base typed-column sources without graph row fallback", got.Stats)
@@ -2013,6 +2013,7 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6(b *testing.B
 	}
 	readerStats := statsSearcher.reader.Stats()
 	stats := VectorIndexSearchStats{
+		GraphRows:             uint64(readerStats.Rows),
 		OpenGranulesRead:      uint64(readerStats.OpenGranulesRead),
 		OpenPhysicalBytesRead: readerStats.OpenPhysicalBytesRead,
 		MaxResidentBytes:      readerStats.MaxResidentBytes,
@@ -2044,9 +2045,13 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	if n <= 0 {
 		return
 	}
+	if elapsed := b.Elapsed(); elapsed > 0 {
+		b.ReportMetric(float64(n)/elapsed.Seconds(), "ops/sec")
+	}
 	// Callers pass one representative search/setup sample captured outside the
 	// timer; these labels are intentionally per-search or per-open, not averaged
 	// over b.N. Keep aggregation out of the hot benchmark loop.
+	b.ReportMetric(float64(stats.GraphRows), "graph_rows")
 	b.ReportMetric(float64(stats.CandidateRows), "candidate_rows/search")
 	b.ReportMetric(float64(stats.Candidates), "candidates/search")
 	b.ReportMetric(float64(stats.Edges), "edges/search")
@@ -2132,6 +2137,8 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.RowRefVectorSourceState), "row_ref_vector_source_state/search")
 	b.ReportMetric(float64(stats.RowRefVectorSourceLegacyGraphIDs), "row_ref_vector_source_legacy_graph_ids/search")
 	b.ReportMetric(float64(stats.RowRefStateResultRefs), "row_ref_state_result_refs/search")
+	b.ReportMetric(float64(stats.RowRefStateSourceUnavailable), "row_ref_state_source_unavailable/search")
+	b.ReportMetric(float64(stats.RowRefStateSourceFallbacks), "row_ref_state_source_fallbacks/search")
 	b.ReportMetric(float64(stats.ResultIDTypedBytesState), "result_id_typed_bytes_state/search")
 	b.ReportMetric(float64(stats.ResultIDGraphFallbacks), "result_id_graph_fallbacks/search")
 	b.ReportMetric(float64(stats.ResultIDStateValidationFailures), "result_id_state_validation_failures/search")

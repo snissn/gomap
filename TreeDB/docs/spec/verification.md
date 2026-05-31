@@ -866,6 +866,27 @@ Coverage:
   combined routing remains owned by #2045; this section enforces the documented
   admission gate and fail-closed readiness fields.
 
+## 12.9 Graph-Search Benchmark Truth Matrix
+
+Invariant:
+- Benchmark rows that compare graph-search source paths must carry stable labels
+  for mode, timing boundary, concurrency, and fixture so legacy/direct graph-row
+  controls, current TVIS/base typed-column rows, and future prepared typed-column
+  rows are not confused.
+- Prepared typed-column rows remain explicit skipped placeholders until
+  #2038/#2040/#2041/#2045 implement and route them; skipped placeholder rows are
+  not performance evidence.
+- Supported rows report `ns/op`, `ops/sec`, `B/op`, `allocs/op`, graph rows,
+  candidates/search, edges/search, result/document counters, and direct/fallback
+  typed-column source counters.
+
+Coverage:
+- Policy owner: `TreeDB/docs/spec/typed-column-graph-search-benchmark-matrix.md`.
+- Code/test owner: `TreeDB/collections/vector_graph_search_truth_matrix_2037_test.go`.
+  `TestVectorGraphSearchTruthMatrixRows2037` freezes row labels and placeholder
+  semantics; `TestVectorGraphSearchTruthMatrixMetricContract2037` freezes the
+  required report-counter vocabulary.
+
 ## 13. Native Wire Protocol
 
 Invariant:

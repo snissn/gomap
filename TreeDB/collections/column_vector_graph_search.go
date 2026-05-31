@@ -69,6 +69,12 @@ type columnVectorGraphNativeSearchOptions struct {
 
 	ScoreBatchMode columnVectorGraphScoreBatchMode
 
+	// OmitResultMaterialization is an internal benchmark/profiling hook for the
+	// graph-only boundary. It preserves traversal/scoring/top-k work but skips
+	// final result-ID and row-ref materialization; public search paths must leave
+	// this false so returned IDs and row refs are populated and counted.
+	OmitResultMaterialization bool
+
 	// CandidateRows is an optional pre-composed row-domain filter over graph
 	// ordinals. It is intentionally internal until public metadata predicate
 	// planning is designed; callers that set it should compose predicate and
@@ -618,6 +624,18 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 
 	if len(scratch.top) == 0 {
+		return scratch.results, stats, nil
+	}
+	if opts.OmitResultMaterialization {
+		stats.BlockViewHits = plan.hits
+		stats.BlockViewMisses = plan.misses
+		stats.BlockViewBuilds = plan.builds
+		for _, candidate := range scratch.top {
+			scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{
+				Ordinal: candidate.ordinal,
+				Score:   candidate.score,
+			})
+		}
 		return scratch.results, stats, nil
 	}
 	if err := r.fetchTopSearchResults(plan, singleBlockView, scratch, &stats); err != nil {

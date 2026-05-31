@@ -135,7 +135,20 @@ GOWORK=off go test ./TreeDB/collections \
   -count=1
 ```
 
-Focused benchmark matrix:
+Focused #2037 truth matrix for source/boundary comparisons:
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphSearchTruthMatrix2037$' \
+  -benchmem \
+  -benchtime=500ms \
+  -count=5
+```
+
+The stable row labels and prepared typed-column placeholders are defined in
+[`typed-column-graph-search-benchmark-matrix.md`](typed-column-graph-search-benchmark-matrix.md).
+Use the legacy/canonical benchmark set when comparing with older artifacts:
 
 ```sh
 GOWORK=off go test ./TreeDB/collections \
@@ -163,7 +176,7 @@ The expected categories are:
 
 Report and compare:
 
-- searches/s or ns/op,
+- `ops/sec` and `ns/op`,
 - `B/op` and `allocs/op`,
 - candidate_rows/search, candidates/search, edges/search, visited_nodes/search, and visited_edges/search,
 - vector_B/search and adjacency_B/search,

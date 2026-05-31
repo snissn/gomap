@@ -112,6 +112,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/typed-column-graph-search-admission.md`
   - issue #2044 optimized-state readiness/admission table and docs-lint gate for
     current-format graph-search typed-column state roles.
+- `TreeDB/docs/spec/typed-column-graph-search-benchmark-matrix.md`
+  - issue #2037 benchmark truth-matrix labels, timing boundaries, placeholder
+    prepared rows, and required graph-search report counters.
 
 ## Target Gates (Normative Target, Not Current Behavior)
 
