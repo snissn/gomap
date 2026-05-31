@@ -220,6 +220,62 @@ func TestMutationSingleReplaceBatchSemantics(t *testing.T) {
 	}
 }
 
+func TestMutationSingleReplaceBatchSharesMetadataReadLock(t *testing.T) {
+	client, server, _, _ := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"before"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	server.metadataMu.RLock()
+	locked := true
+	unlock := func() {
+		if locked {
+			server.metadataMu.RUnlock()
+			locked = false
+		}
+	}
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		matched, modified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+			[][]byte{[]byte("u1")},
+			[][]byte{[]byte(`{"name":"after"}`)},
+			AckVisible,
+		)
+		if err == nil && (matched != 1 || modified != 1) {
+			err = errors.New("unexpected replace counts")
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReplaceBatch: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		unlock()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("ReplaceBatch blocked behind metadata read lock")
+	}
+}
+
 func TestMutationConcurrentSingleReplaceBatch(t *testing.T) {
 	client, server, mgr, _ := serveCollectionPipeWithServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
