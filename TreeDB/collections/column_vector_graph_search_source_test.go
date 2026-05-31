@@ -32,6 +32,13 @@ func TestColumnVectorGraphSearchSourceConstructionHealthyTypedColumn1968(t *test
 	if plan.scoreSource.normKind != columnVectorGraphSearchNormSourceInvNormByOrdinal || len(plan.scoreSource.invNormByOrdinal) != len(rows) {
 		t.Fatalf("norm source kind=%s values=%d want inv_norm_by_ordinal rows=%d", plan.scoreSource.normKind, len(plan.scoreSource.invNormByOrdinal), len(rows))
 	}
+	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		if !plan.scoreSource.preparedVector.ready() || !plan.scoreSource.preparedNorm.ready() {
+			t.Fatalf("prepared vector ready=%v prepared norm ready=%v want open-time prepared vector/norm views", plan.scoreSource.preparedVector.ready(), plan.scoreSource.preparedNorm.ready())
+		}
+	} else if plan.scoreSource.preparedVector.ready() || plan.scoreSource.preparedNorm.ready() {
+		t.Fatalf("prepared vector ready=%v norm ready=%v want no mmap_direct prepared views on unsupported platform", plan.scoreSource.preparedVector.ready(), plan.scoreSource.preparedNorm.ready())
+	}
 	if len(plan.ordinalRefs) != 0 || !plan.singleOrdinalRange || !plan.ordinalRefsReady {
 		t.Fatalf("ordinal map refs=%d single=%v ready=%v want single-range prebound map", len(plan.ordinalRefs), plan.singleOrdinalRange, plan.ordinalRefsReady)
 	}
@@ -133,8 +140,139 @@ func TestColumnVectorGraphSearchSourceScoresMatchLegacyContiguousAndScattered196
 				if sourceStats.NormSourceCounters().MmapDirectViews+sourceStats.NormSourceCounters().HeapCopyTypedViews+sourceStats.NormSourceCounters().ScratchDecodes != 1 {
 					t.Fatalf("source stats=%+v want one norm source outcome", sourceStats)
 				}
+				if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+					if sourceStats.PreparedScoreCalls != 1 || sourceStats.VectorPreparedDirectViews != 1 || sourceStats.NormPreparedDirectViews != 1 {
+						t.Fatalf("source stats=%+v want prepared vector/norm score path", sourceStats)
+					}
+					if sourceStats.VectorPreparedIdentityMappings+sourceStats.VectorPreparedRowRefMappings != 1 || sourceStats.ScoreFloat64Fallbacks != 0 {
+						t.Fatalf("source stats=%+v want one prepared mapping mode without rare float64 fallback", sourceStats)
+					}
+				}
 			}
 		})
+	}
+}
+
+func TestColumnVectorGraphPreparedScoringIdentityMapping2040(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("mmap direct prepared views are platform-dependent")
+	}
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 4, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.typedVectorSource == nil {
+		t.Fatal("typed vector source is nil")
+	}
+	if len(reader.typedVectorSource.parts) != 1 {
+		t.Skipf("identity fast-path fixture needs one typed-column part, got %d", len(reader.typedVectorSource.parts))
+	}
+	part := reader.typedVectorSource.parts[0]
+	for ordinal := range reader.typedVectorSource.locations {
+		reader.typedVectorSource.locations[ordinal].part = part
+		reader.typedVectorSource.locations[ordinal].rowIndex = ordinal
+	}
+	prepared, reason, description, ok := prepareColumnVectorGraphPreparedVectorView(reader.typedVectorSource, len(rows), def.Dimensions)
+	if !ok {
+		t.Fatalf("prepare identity vector view reason=%s description=%q", reason, description)
+	}
+	if !prepared.identityMapping() || prepared.rowIndexByOrdinal != nil {
+		t.Fatalf("prepared identity=%v rowIndexByOrdinal nil=%v want identity fast path", prepared.identityMapping(), prepared.rowIndexByOrdinal == nil)
+	}
+	reader.typedVectorSource.prepared = prepared
+
+	query := []float32{0, 1, 0, 0}
+	plan, scratch, queryInvNorm := prepareColumnVectorGraphScoreSourceTestPlan1968(t, reader, query)
+	var stats columnVectorGraphNativeSearchStats
+	got, err := plan.scoreSource.scoreOrdinal(plan, nil, query, queryInvNorm, 1, scratch, &stats)
+	if err != nil {
+		t.Fatalf("score identity ordinal: %v", err)
+	}
+	want, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, 1, rows[1].vector, 1)
+	if err != nil {
+		t.Fatalf("want score: %v", err)
+	}
+	if got != want {
+		t.Fatalf("identity score=%g want %g", got, want)
+	}
+	if stats.VectorPreparedIdentityMappings != 1 || stats.VectorPreparedRowRefMappings != 0 || stats.PreparedScoreCalls != 1 {
+		t.Fatalf("stats=%+v want identity prepared scoring", stats)
+	}
+}
+
+func TestColumnVectorGraphPreparedScoringRowRefMapping2040(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("mmap direct prepared views are platform-dependent")
+	}
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 4, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.typedVectorSource == nil || reader.invNormSource == nil {
+		t.Fatalf("typed vector source=%v inv_norm source=%v want active prepared scoring inputs", reader.typedVectorSource != nil, reader.invNormSource != nil)
+	}
+
+	mapping := []int{2, 0, 3, 1}
+	for ordinal, rowIndex := range mapping {
+		reader.typedVectorSource.locations[ordinal].rowIndex = rowIndex
+	}
+	prepared, reason, description, ok := prepareColumnVectorGraphPreparedVectorView(reader.typedVectorSource, len(rows), def.Dimensions)
+	if !ok {
+		t.Fatalf("prepare row-ref mapped vector view reason=%s description=%q", reason, description)
+	}
+	if prepared.identityMapping() || prepared.rowIndexByOrdinal == nil {
+		t.Fatalf("prepared identity=%v rowIndexByOrdinal nil=%v want explicit ordinal-to-row mapping", prepared.identityMapping(), prepared.rowIndexByOrdinal == nil)
+	}
+	reader.typedVectorSource.prepared = prepared
+
+	query := []float32{1, 0, 0, 0}
+	plan, scratch, queryInvNorm := prepareColumnVectorGraphScoreSourceTestPlan1968(t, reader, query)
+	if !plan.scoreSource.preparedVector.ready() || plan.scoreSource.preparedVector.identityMapping() {
+		t.Fatalf("score source prepared ready=%v identity=%v want row-ref mapped prepared view", plan.scoreSource.preparedVector.ready(), plan.scoreSource.preparedVector.identityMapping())
+	}
+	for ordinal, rowIndex := range mapping {
+		var stats columnVectorGraphNativeSearchStats
+		got, err := plan.scoreSource.scoreOrdinal(plan, nil, query, queryInvNorm, ordinal, scratch, &stats)
+		if err != nil {
+			t.Fatalf("score ordinal %d: %v", ordinal, err)
+		}
+		want, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, rows[rowIndex].vector, 1)
+		if err != nil {
+			t.Fatalf("want score ordinal %d row %d: %v", ordinal, rowIndex, err)
+		}
+		if got != want {
+			t.Fatalf("ordinal %d row %d score=%g want %g", ordinal, rowIndex, got, want)
+		}
+		if stats.PreparedScoreCalls != 1 || stats.VectorPreparedDirectViews != 1 || stats.NormPreparedDirectViews != 1 {
+			t.Fatalf("stats=%+v want prepared scoring counters", stats)
+		}
+		if stats.VectorPreparedRowRefMappings != 1 || stats.VectorPreparedIdentityMappings != 0 {
+			t.Fatalf("stats=%+v want row-ref prepared mapping counter", stats)
+		}
 	}
 }
 
@@ -205,6 +343,29 @@ func TestColumnVectorGraphSearchSourcePolicyMatchesLegacy1968(t *testing.T) {
 		fallbackPlan.reader = &fallbackReader
 		if err := fallbackPlan.scoreSource.prepare(&fallbackPlan); err == nil || !strings.Contains(err.Error(), "search requires vector-index inverse-norm state") {
 			t.Fatalf("prepare fallback source err=%v want fail-closed missing inverse-norm state", err)
+		}
+	})
+
+	t.Run("stale_prebound_vector_state_fallback", func(t *testing.T) {
+		staleReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+		if err != nil {
+			t.Fatalf("open stale reader: %v", err)
+		}
+		defer func() { _ = staleReader.Close() }()
+		stalePlan, staleScratch, queryInvNorm := prepareColumnVectorGraphScoreSourceTestPlan1968(t, staleReader, rows[1].vector)
+		if stalePlan.scoreSource.vectorKind != columnVectorGraphSearchVectorSourceTypedColumn || stalePlan.scoreSource.typedVectorSource == nil {
+			t.Fatalf("stale test source vector=%s typedVectorSource=%v want prebound typed vector state", stalePlan.scoreSource.vectorKind, stalePlan.scoreSource.typedVectorSource != nil)
+		}
+		if err := staleReader.typedVectorSource.Close(); err != nil {
+			t.Fatalf("close typed vector source: %v", err)
+		}
+		var stats columnVectorGraphNativeSearchStats
+		_, err = stalePlan.scoreSource.scoreOrdinal(stalePlan, nil, rows[1].vector, queryInvNorm, 1, staleScratch, &stats)
+		if err == nil || !strings.Contains(err.Error(), "vector graph-row fallback unavailable") {
+			t.Fatalf("stale source score err=%v want fail-closed missing graph fallback", err)
+		}
+		if stats.TypedColumnFallbacks != 1 || stats.VectorStaleHandles != 1 || stats.VectorMmapDirectViews+stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes != 0 || stats.VectorPreparedDirectViews != 0 {
+			t.Fatalf("stats=%+v want stale vector fallback counters without graph row read", stats)
 		}
 	})
 
