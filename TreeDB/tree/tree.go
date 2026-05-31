@@ -987,6 +987,14 @@ func (t *Tree) HasPrefixesWithStats(prefixes [][]byte) ([]bool, ProbeFallbackSta
 	if len(prefixes) == 0 {
 		return out, stats, nil
 	}
+	if len(prefixes) == 1 {
+		found, err := t.hasPrefix(prefixes[0])
+		if err != nil {
+			return nil, stats, err
+		}
+		out[0] = found
+		return out, stats, nil
+	}
 
 	type prefixProbeRef struct {
 		prefix []byte
@@ -1043,4 +1051,29 @@ func (t *Tree) HasPrefixesWithStats(prefixes [][]byte) ([]bool, ProbeFallbackSta
 		return nil, stats, err
 	}
 	return out, stats, nil
+}
+
+func (t *Tree) hasPrefix(prefix []byte) (bool, error) {
+	it := t.IteratorWithOptions(prefix, nil, IteratorOptions{Mode: IteratorModeKeysOnly})
+	defer func() { _ = it.Close() }()
+	for {
+		if !it.Valid() {
+			if err := it.Error(); err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+		curr := it.UnsafeKey()
+		if compareTreeKey(curr, prefix) < 0 {
+			it.Seek(prefix)
+			continue
+		}
+		if !bytes.HasPrefix(curr, prefix) {
+			return false, it.Error()
+		}
+		if !it.IsDeleted() {
+			return true, it.Error()
+		}
+		it.Next()
+	}
 }
