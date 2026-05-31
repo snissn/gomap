@@ -40,8 +40,8 @@ func (s *Server) handleInsertBatchBody(state *connState, sections []iwire.Sectio
 }
 
 func (s *Server) handleInsertBatchFastBody(req insertBatchFastRequest, dst []byte) ([]byte, error) {
-	s.metadataMu.Lock()
-	defer s.metadataMu.Unlock()
+	s.metadataMu.RLock()
+	defer s.metadataMu.RUnlock()
 	if err := s.checkCatalogGuard(req.sections); err != nil {
 		return nil, err
 	}
@@ -75,8 +75,8 @@ func (s *Server) insertBatch(state *connState, sections []iwire.Section) ([][]by
 	if err := managerRequired(s.collections); err != nil {
 		return nil, 0, 0, false, err
 	}
-	s.metadataMu.Lock()
-	defer s.metadataMu.Unlock()
+	s.metadataMu.RLock()
+	defer s.metadataMu.RUnlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, 0, 0, false, err
 	}

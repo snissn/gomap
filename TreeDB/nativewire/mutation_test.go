@@ -276,6 +276,67 @@ func TestMutationSingleReplaceBatchSharesMetadataReadLock(t *testing.T) {
 	}
 }
 
+func TestMutationInsertBatchSharesMetadataReadLock(t *testing.T) {
+	client, server, mgr, _ := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	server.metadataMu.RLock()
+	locked := true
+	unlock := func() {
+		if locked {
+			server.metadataMu.RUnlock()
+			locked = false
+		}
+	}
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		ids, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+			[][]byte{[]byte("u1")},
+			[][]byte{[]byte(`{"name":"Ada"}`)},
+			AckVisible,
+		)
+		if err == nil && (len(ids) != 1 || string(ids[0]) != "u1") {
+			err = errors.New("unexpected insert IDs")
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("InsertBatch: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		unlock()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("InsertBatch blocked behind metadata read lock")
+	}
+
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Contains(doc, []byte(`"Ada"`)) {
+		t.Fatalf("u1 doc=%s", doc)
+	}
+}
+
 func TestMutationConcurrentSingleReplaceBatch(t *testing.T) {
 	client, server, mgr, _ := serveCollectionPipeWithServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
