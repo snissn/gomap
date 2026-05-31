@@ -130,7 +130,8 @@ build-treedb:
 
 
 build-native-server:
-	go build -o ./bin/treedb-native-server ./cmd/treedb-native-server/main.go
+	mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/treedb-native-server ./cmd/treedb-native-server/main.go
 
 build-mongo-gateway:
 	mkdir -p $(BIN_DIR)

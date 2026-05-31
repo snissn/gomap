@@ -274,8 +274,7 @@ func backendCollectionDataRootStoragePolicy(db *backenddb.DB, policy RootStorage
 	if err != nil {
 		return base, err
 	}
-	// Only override Default policy, do not override Fast policy
-	if policy == RootStorageDefault && db != nil && db.HasValueLogAppender() {
+	if (policy == RootStorageDefault || policy == RootStorageFast) && db != nil && db.HasValueLogAppender() {
 		return backenddb.OrderedRootStorageValueLogLeaves, nil
 	}
 	return base, nil
