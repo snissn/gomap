@@ -498,7 +498,18 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 	}
 }
 
-func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow) (ColumnPublishPreparedAssets, error) {
+func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow) (_ ColumnPublishPreparedAssets, retErr error) {
+	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
+	defer func() {
+		if retErr != nil && len(cleanupAssets) != 0 {
+			if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), cleanupAssets); cleanupErr != nil {
+				retErr = errors.Join(retErr, cleanupErr)
+			}
+		}
+	}()
+	trackCleanupAsset := func(ref ColumnAssetRef) {
+		cleanupAssets = append(cleanupAssets, ColumnPreparedAsset{Ref: ref})
+	}
 	generation := uint64(1)
 	if hookInput.CurrentManifest != nil {
 		generation = hookInput.CurrentManifest.Generation + 1
@@ -527,6 +538,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	if err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
+	trackCleanupAsset(ref)
 	if err := validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAssetConfig, generation, columnPhysicalRowAssetPartID, len(encoded)); err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
@@ -558,6 +570,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			trackCleanupAsset(typedColumnRef)
 			if typedColumnRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || typedColumnRef.Kind != ColumnAssetKindTCS1TypedColumnPart ||
 				typedColumnRef.Generation != generation || typedColumnRef.PartID != typedColumnPartAssetPartID || typedColumnRef.Length != int64(len(typedColumnImage)) {
 				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid typed-column part asset ref %+v", typedColumnRef)
@@ -592,6 +605,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			trackCleanupAsset(metadataRef)
 			if metadataRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || metadataRef.Kind != ColumnAssetKindTCS1AggregateMetadata ||
 				metadataRef.Generation != generation || metadataRef.PartID != typedColumnPartAssetPartID || metadataRef.Length != int64(len(encodedMetadata)) {
 				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid typed-column aggregate metadata asset ref %+v", metadataRef)
@@ -618,6 +632,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			trackCleanupAsset(dictionaryRef)
 			if dictionaryRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || dictionaryRef.Kind != ColumnAssetKindTCS1DictionaryCodes ||
 				dictionaryRef.Generation != generation || dictionaryRef.PartID != columnPhysicalRowAssetPartID || dictionaryRef.Length != int64(len(encodedDictionary)) {
 				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid dictionary codes asset ref %+v", dictionaryRef)
@@ -644,6 +659,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			trackCleanupAsset(valuesRef)
 			if valuesRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || valuesRef.Kind != ColumnAssetKindTCS1Int64Values ||
 				valuesRef.Generation != generation || valuesRef.PartID != columnPhysicalRowAssetPartID || valuesRef.Length != int64(len(encodedValues)) {
 				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid int64 values asset ref %+v", valuesRef)
@@ -673,6 +689,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			trackCleanupAsset(metadataRef)
 			if metadataRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || metadataRef.Kind != ColumnAssetKindTCS1AggregateMetadata ||
 				metadataRef.Generation != generation || metadataRef.PartID != columnPhysicalRowAssetPartID || metadataRef.Length != int64(len(encodedMetadata)) {
 				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid aggregate metadata asset ref %+v", metadataRef)
@@ -687,6 +704,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			})
 		}
 	}
+	cleanupAssets = nil
 	return prepared, nil
 }
 

@@ -374,6 +374,18 @@ func cloneColumnDeclaredValuesInto(out []columnDeclaredValue, values []columnDec
 	}
 	for i := range values {
 		out[i] = values[i]
+		if values[i].Float32Vector != nil {
+			out[i].Float32Vector = append([]float32(nil), values[i].Float32Vector...)
+		}
+		if values[i].Uint32List != nil {
+			out[i].Uint32List = append([]uint32(nil), values[i].Uint32List...)
+		}
+		if values[i].AdjacencyList != nil {
+			out[i].AdjacencyList = append([]uint32(nil), values[i].AdjacencyList...)
+		}
+		if values[i].Bytes != nil {
+			out[i].Bytes = append([]byte(nil), values[i].Bytes...)
+		}
 		if values[i].StringBytes != nil {
 			out[i].String = string(values[i].StringBytes)
 			out[i].StringBytes = nil
