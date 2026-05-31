@@ -5041,6 +5041,14 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 			wantUnlock:              false,
 		},
 		{
+			name:                    "template-v1-buffered-indexed-memtables-direct-accumulator",
+			documentFormat:          DocumentFormatTemplateV1,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    true,
+			keepDirectPlanningLock:  true,
+			wantUnlock:              false,
+		},
+		{
 			name:           "template-v1",
 			documentFormat: DocumentFormatTemplateV1,
 			wantUnlock:     false,
@@ -5071,10 +5079,28 @@ func TestCollectionIndexedInsertAccumulatorThresholds(t *testing.T) {
 	if shouldUseDirectBufferedInsertAccumulators(DefaultIndexedWriteMemtableAccumulatorBatchDocuments + 1) {
 		t.Fatal("large insert should keep frozen-run path")
 	}
-	if !shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(1) {
-		t.Fatal("single-document accumulator insert should keep planning lock")
+	if !shouldKeepDirectBufferedInsertPlanningLocked(collectionOptions{documentFormat: DocumentFormatJSON}, 1, 0) {
+		t.Fatal("single-document JSON accumulator insert should stay locked when uncontended")
 	}
-	if shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(2) {
+	if !shouldKeepDirectBufferedInsertPlanningLocked(collectionOptions{documentFormat: DocumentFormatDefault}, 1, 0) {
+		t.Fatal("single-document default accumulator insert should stay locked when uncontended")
+	}
+	if !shouldKeepDirectBufferedInsertPlanningLocked(collectionOptions{documentFormat: DocumentFormatBSON}, 1, 0) {
+		t.Fatal("single-document BSON accumulator insert should stay locked when uncontended")
+	}
+	if shouldKeepDirectBufferedInsertPlanningLocked(collectionOptions{documentFormat: DocumentFormatJSON}, 1, indexedInsertPlanningUnlockMinWait) {
+		t.Fatal("single-document JSON accumulator insert should unlock planning after contention")
+	}
+	if shouldKeepDirectBufferedInsertPlanningLocked(collectionOptions{documentFormat: DocumentFormatDefault}, 1, indexedInsertPlanningUnlockMinWait) {
+		t.Fatal("single-document default accumulator insert should unlock planning after contention")
+	}
+	if shouldKeepDirectBufferedInsertPlanningLocked(collectionOptions{documentFormat: DocumentFormatBSON}, 1, indexedInsertPlanningUnlockMinWait) {
+		t.Fatal("single-document BSON accumulator insert should unlock planning after contention")
+	}
+	if !shouldKeepDirectBufferedInsertPlanningLocked(collectionOptions{documentFormat: DocumentFormatTemplateV1}, 1, indexedInsertPlanningUnlockMinWait) {
+		t.Fatal("single-document template-v1 accumulator insert should keep planning lock")
+	}
+	if shouldKeepDirectBufferedInsertPlanningLocked(collectionOptions{documentFormat: DocumentFormatTemplateV1}, 2, indexedInsertPlanningUnlockMinWait) {
 		t.Fatal("multi-document accumulator insert should release planning lock")
 	}
 }
@@ -9159,7 +9185,7 @@ func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *test
 
 	mutationLocked := false
 	var unlockMutation collectionMutationUnlock
-	pin, currentCatalog, _, _, err := col.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, nil, catalog, meta, rootNames, baseRootIDs, plan)
+	pin, currentCatalog, _, _, err := col.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, nil, catalog, meta, rootNames, baseRootIDs, false, 0, 0, plan)
 	if err != nil {
 		t.Fatalf("validate disjoint root drift: %v", err)
 	}
