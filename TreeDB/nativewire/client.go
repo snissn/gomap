@@ -233,10 +233,17 @@ func (c *Client) interruptDeadlineOnContextCancel(ctx context.Context) func() {
 	if c == nil || c.conn == nil || ctx == nil || ctx.Done() == nil {
 		return func() {}
 	}
+	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
+		defer close(done)
 		_ = c.conn.SetDeadline(time.Now())
 	})
-	return func() { _ = stop() }
+	return func() {
+		if stop() {
+			close(done)
+		}
+		<-done
+	}
 }
 
 func (c *Client) errorOrCanceledOnWire(ctx context.Context, onWire bool, err error) error {
