@@ -361,12 +361,14 @@ func cloneBatchDocumentIDs(ids [][]byte) ([][]byte, error) {
 
 func (p insertBatchPlanner) planSingleDirectBufferedInsertWithPreflight(resultID, preparedDocument []byte, runtimes []indexRuntime, persistIndexState bool, templateRecords []templateV1Record, templateLearned []templateV1LearnedTemplate, preflight insertBatchPreflight, stats CollectionInsertStats) (*insertBatchPlan, error) {
 	primaryKeys := [][]byte{resultID}
+	phaseStart := time.Now()
 	if err := preflight.checkDocumentConflictKeys(primaryKeys); err != nil {
 		return nil, err
 	}
+	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
 
 	item := insertBatchItem{id: resultID, document: preparedDocument}
-	phaseStart := time.Now()
+	phaseStart = time.Now()
 	allUniqueProbeRuns, uniqueProbeRuns, err := p.singleItemIndexStateAndUniqueProbeRuns(&item, runtimes, preflight)
 	stats.IndexStateExtraction = time.Since(phaseStart)
 	if err != nil {

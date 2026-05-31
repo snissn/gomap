@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -872,6 +873,33 @@ func TestInsertBatchPlanner_SingleDirectBufferedInsertPlanPreservesIndexedSemant
 	}
 }
 
+func TestInsertBatchPlanner_SingleDirectBufferedInsertPlanRecordsDocumentPreflightStats(t *testing.T) {
+	planner := insertBatchPlanner{
+		collection:          "users",
+		buildPrimaryVal:     clonePrimaryDocument,
+		directBufferedRuns:  true,
+		cachedIndexRuntimes: nil,
+	}
+	probe := &delayedRootSnapshotProbe{delay: 2 * time.Millisecond}
+	plan, err := planner.planInsertBatchWithPreflight(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"ada"}`)},
+		insertBatchPreflight{
+			snapshot:      probe,
+			primaryRootID: 9,
+		},
+	)
+	if err != nil {
+		t.Fatalf("plan insert batch: %v", err)
+	}
+	if probe.hasAnySortedCalls != 1 {
+		t.Fatalf("HasAnySortedAtRoot calls=%d want 1", probe.hasAnySortedCalls)
+	}
+	if got := plan.stats.DuplicateDocumentPreflight; got < probe.delay {
+		t.Fatalf("DuplicateDocumentPreflight=%s want at least %s", got, probe.delay)
+	}
+}
+
 func TestInsertBatchPreflightCheckUniqueConflictsSkipsMissingRoots(t *testing.T) {
 	probe := &recordingRootSnapshotProbe{}
 	preflight := insertBatchPreflight{
@@ -1250,6 +1278,16 @@ type recordingRootSnapshotProbe struct {
 	lastHasPrefixesRootID   uint64
 	lastHasAnySortedKeys    [][]byte
 	lastHasPrefixesPrefixes [][]byte
+}
+
+type delayedRootSnapshotProbe struct {
+	recordingRootSnapshotProbe
+	delay time.Duration
+}
+
+func (p *delayedRootSnapshotProbe) HasAnySortedAtRoot(rootID uint64, keys [][]byte) (bool, error) {
+	time.Sleep(p.delay)
+	return p.recordingRootSnapshotProbe.HasAnySortedAtRoot(rootID, keys)
 }
 
 func (p *recordingRootSnapshotProbe) HasAnySortedAtRoot(rootID uint64, keys [][]byte) (bool, error) {
