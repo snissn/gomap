@@ -8732,10 +8732,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	skipInitialNoIndexFlush := false
 	commandWALActive := c.commandWALActive(commandWALIntent)
-	if !commandWALActive && trustedValidBSON && c.canBufferNoIndexInsertBatchAck() && len(c.meta.Indexes) == 0 {
-		if isBSONDocumentFormat(c.meta.Options.DocumentFormat) {
-			skipInitialNoIndexFlush = true
-		}
+	if !commandWALActive &&
+		c.canBufferNoIndexInsertBatchAck() &&
+		len(c.meta.Indexes) == 0 &&
+		canBufferNoIndexInsertBatchFormat(c.meta.Options.DocumentFormat, trustedValidBSON) {
+		skipInitialNoIndexFlush = true
 	}
 	if !skipInitialNoIndexFlush {
 		if err := c.flushBufferedNoIndex(); err != nil {
@@ -8809,7 +8810,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 	plannerOptions.learnTemplateIDs = templateEncoder != nil
 	plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
-	if skipInitialNoIndexFlush && (len(meta.Indexes) != 0 || normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON) {
+	if skipInitialNoIndexFlush &&
+		(len(meta.Indexes) != 0 || !canBufferNoIndexInsertBatchFormat(plannerOptions.documentFormat, trustedValidBSON)) {
 		catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndex)
 		if err != nil {
 			return nil, err
@@ -8889,7 +8891,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 		}
 	}
-	if !commandWALActive && len(meta.Indexes) == 0 && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatBSON && trustedValidBSON && c.canBufferNoIndexInsertBatchAck() {
+	if !commandWALActive &&
+		len(meta.Indexes) == 0 &&
+		c.canBufferNoIndexInsertBatchAck() &&
+		canBufferNoIndexInsertBatchFormat(plannerOptions.documentFormat, trustedValidBSON) {
 		if resultIDs, buffered, err := c.bufferNoIndexInsertBatch(c.writeDomain, catalog, snap, plannerOptions, ids, documents); buffered {
 			closePlanningSnapshot()
 			return resultIDs, err
@@ -9155,6 +9160,17 @@ func (c *Collection) reloadInsertBatchPlanningSnapshot(
 
 func shouldUseDirectBufferedInsertAccumulators(documentCount int) bool {
 	return documentCount > 0 && documentCount <= DefaultIndexedWriteMemtableAccumulatorBatchDocuments
+}
+
+func canBufferNoIndexInsertBatchFormat(format DocumentFormat, trustedValidBSON bool) bool {
+	switch normalizedDocumentFormat(format) {
+	case DocumentFormatJSON:
+		return true
+	case DocumentFormatBSON:
+		return trustedValidBSON
+	default:
+		return false
+	}
 }
 
 func shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(documentCount int) bool {
