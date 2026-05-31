@@ -89,6 +89,8 @@ type columnVectorGraphAdjacencySourceCounterSnapshot struct {
 	AdjacencyMmapDirectViews             uint64
 	AdjacencyHeapCopyTypedViews          uint64
 	AdjacencyScratchDecodes              uint64
+	AdjacencyPreparedCSRDirectViews      uint64
+	AdjacencyPreparedCSRMmapDirectViews  uint64
 	AdjacencyTypedListDirectViews        uint64
 	AdjacencyTypedListMmapDirectViews    uint64
 	AdjacencyTypedListHeapCopyTypedViews uint64
@@ -106,6 +108,11 @@ func (c *columnVectorGraphAdjacencySourceCounterSnapshot) addOutcome(adjacencyLe
 		c.AdjacencyMmapDirectViews++
 	case columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView:
 		c.AdjacencyHeapCopyTypedViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect:
+		c.AdjacencyDirectViews++
+		c.AdjacencyMmapDirectViews++
+		c.AdjacencyPreparedCSRDirectViews++
+		c.AdjacencyPreparedCSRMmapDirectViews++
 	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect:
 		c.AdjacencyDirectViews++
 		c.AdjacencyMmapDirectViews++
@@ -153,6 +160,8 @@ type columnVectorGraphNativeSearchStats struct {
 	AdjacencyDirectViews                 uint64
 	AdjacencyMmapDirectViews             uint64
 	AdjacencyHeapCopyTypedViews          uint64
+	AdjacencyPreparedCSRDirectViews      uint64
+	AdjacencyPreparedCSRMmapDirectViews  uint64
 	AdjacencyTypedListDirectViews        uint64
 	AdjacencyTypedListMmapDirectViews    uint64
 	AdjacencyTypedListHeapCopyTypedViews uint64
@@ -1117,6 +1126,8 @@ func recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats *columnVec
 	stats.AdjacencyMmapDirectViews += counters.AdjacencyMmapDirectViews
 	stats.AdjacencyHeapCopyTypedViews += counters.AdjacencyHeapCopyTypedViews
 	stats.AdjacencyScratchDecodes += counters.AdjacencyScratchDecodes
+	stats.AdjacencyPreparedCSRDirectViews += counters.AdjacencyPreparedCSRDirectViews
+	stats.AdjacencyPreparedCSRMmapDirectViews += counters.AdjacencyPreparedCSRMmapDirectViews
 	stats.AdjacencyTypedListDirectViews += counters.AdjacencyTypedListDirectViews
 	stats.AdjacencyTypedListMmapDirectViews += counters.AdjacencyTypedListMmapDirectViews
 	stats.AdjacencyTypedListHeapCopyTypedViews += counters.AdjacencyTypedListHeapCopyTypedViews

@@ -230,7 +230,11 @@ type VectorIndexSearchStats struct {
 	AdjacencyMmapDirectViews uint64 `json:"adjacency_mmap_direct,omitempty"`
 	// AdjacencyHeapCopyTypedViews is the per-search count of adjacency payloads served from typed heap-copy fallback views.
 	AdjacencyHeapCopyTypedViews uint64 `json:"adjacency_heap_copy_typed_view,omitempty"`
-	// AdjacencyTypedListDirectViews is the per-search count of vector-index state uint32_list adjacency payloads served from direct typed-list views.
+	// AdjacencyPreparedCSRDirectViews is the per-search count of HNSW adjacency neighbor slices served from prepared CSR direct views.
+	AdjacencyPreparedCSRDirectViews uint64 `json:"adjacency_prepared_csr_direct_views,omitempty"`
+	// AdjacencyPreparedCSRMmapDirectViews is the per-search count of HNSW adjacency neighbor slices served from prepared CSR mmap direct views.
+	AdjacencyPreparedCSRMmapDirectViews uint64 `json:"adjacency_prepared_csr_mmap_direct,omitempty"`
+	// AdjacencyTypedListDirectViews is the per-search count of vector-index state uint32_list adjacency payloads served from generic direct typed-list views.
 	AdjacencyTypedListDirectViews uint64 `json:"adjacency_typed_list_direct_views,omitempty"`
 	// AdjacencyTypedListMmapDirectViews is the per-search count of vector-index state uint32_list adjacency payloads served from mmap direct views.
 	AdjacencyTypedListMmapDirectViews uint64 `json:"adjacency_typed_list_mmap_direct,omitempty"`
@@ -933,6 +937,8 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		AdjacencyDirectViews:                 searchStats.AdjacencyDirectViews,
 		AdjacencyMmapDirectViews:             searchStats.AdjacencyMmapDirectViews,
 		AdjacencyHeapCopyTypedViews:          searchStats.AdjacencyHeapCopyTypedViews,
+		AdjacencyPreparedCSRDirectViews:      searchStats.AdjacencyPreparedCSRDirectViews,
+		AdjacencyPreparedCSRMmapDirectViews:  searchStats.AdjacencyPreparedCSRMmapDirectViews,
 		AdjacencyTypedListDirectViews:        searchStats.AdjacencyTypedListDirectViews,
 		AdjacencyTypedListMmapDirectViews:    searchStats.AdjacencyTypedListMmapDirectViews,
 		AdjacencyTypedListHeapCopyTypedViews: searchStats.AdjacencyTypedListHeapCopyTypedViews,

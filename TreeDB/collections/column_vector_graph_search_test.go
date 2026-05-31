@@ -891,6 +891,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.AdjacencyDirectViews += stats.AdjacencyDirectViews
 		searchStats.AdjacencyMmapDirectViews += stats.AdjacencyMmapDirectViews
 		searchStats.AdjacencyHeapCopyTypedViews += stats.AdjacencyHeapCopyTypedViews
+		searchStats.AdjacencyPreparedCSRDirectViews += stats.AdjacencyPreparedCSRDirectViews
+		searchStats.AdjacencyPreparedCSRMmapDirectViews += stats.AdjacencyPreparedCSRMmapDirectViews
 		searchStats.AdjacencyTypedListDirectViews += stats.AdjacencyTypedListDirectViews
 		searchStats.AdjacencyTypedListMmapDirectViews += stats.AdjacencyTypedListMmapDirectViews
 		searchStats.AdjacencyTypedListHeapCopyTypedViews += stats.AdjacencyTypedListHeapCopyTypedViews
@@ -1050,6 +1052,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalAdjacencyDirectViews atomic.Uint64
 	var totalAdjacencyMmapDirectViews atomic.Uint64
 	var totalAdjacencyHeapCopyTypedViews atomic.Uint64
+	var totalAdjacencyPreparedCSRDirectViews atomic.Uint64
+	var totalAdjacencyPreparedCSRMmapDirectViews atomic.Uint64
 	var totalAdjacencyTypedListDirectViews atomic.Uint64
 	var totalAdjacencyTypedListMmapDirectViews atomic.Uint64
 	var totalAdjacencyTypedListHeapCopyTypedViews atomic.Uint64
@@ -1159,6 +1163,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.AdjacencyDirectViews += stats.AdjacencyDirectViews
 			localStats.AdjacencyMmapDirectViews += stats.AdjacencyMmapDirectViews
 			localStats.AdjacencyHeapCopyTypedViews += stats.AdjacencyHeapCopyTypedViews
+			localStats.AdjacencyPreparedCSRDirectViews += stats.AdjacencyPreparedCSRDirectViews
+			localStats.AdjacencyPreparedCSRMmapDirectViews += stats.AdjacencyPreparedCSRMmapDirectViews
 			localStats.AdjacencyTypedListDirectViews += stats.AdjacencyTypedListDirectViews
 			localStats.AdjacencyTypedListMmapDirectViews += stats.AdjacencyTypedListMmapDirectViews
 			localStats.AdjacencyTypedListHeapCopyTypedViews += stats.AdjacencyTypedListHeapCopyTypedViews
@@ -1244,6 +1250,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalAdjacencyDirectViews.Add(localStats.AdjacencyDirectViews)
 		totalAdjacencyMmapDirectViews.Add(localStats.AdjacencyMmapDirectViews)
 		totalAdjacencyHeapCopyTypedViews.Add(localStats.AdjacencyHeapCopyTypedViews)
+		totalAdjacencyPreparedCSRDirectViews.Add(localStats.AdjacencyPreparedCSRDirectViews)
+		totalAdjacencyPreparedCSRMmapDirectViews.Add(localStats.AdjacencyPreparedCSRMmapDirectViews)
 		totalAdjacencyTypedListDirectViews.Add(localStats.AdjacencyTypedListDirectViews)
 		totalAdjacencyTypedListMmapDirectViews.Add(localStats.AdjacencyTypedListMmapDirectViews)
 		totalAdjacencyTypedListHeapCopyTypedViews.Add(localStats.AdjacencyTypedListHeapCopyTypedViews)
@@ -1335,6 +1343,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		AdjacencyDirectViews:                 totalAdjacencyDirectViews.Load(),
 		AdjacencyMmapDirectViews:             totalAdjacencyMmapDirectViews.Load(),
 		AdjacencyHeapCopyTypedViews:          totalAdjacencyHeapCopyTypedViews.Load(),
+		AdjacencyPreparedCSRDirectViews:      totalAdjacencyPreparedCSRDirectViews.Load(),
+		AdjacencyPreparedCSRMmapDirectViews:  totalAdjacencyPreparedCSRMmapDirectViews.Load(),
 		AdjacencyTypedListDirectViews:        totalAdjacencyTypedListDirectViews.Load(),
 		AdjacencyTypedListMmapDirectViews:    totalAdjacencyTypedListMmapDirectViews.Load(),
 		AdjacencyTypedListHeapCopyTypedViews: totalAdjacencyTypedListHeapCopyTypedViews.Load(),
@@ -1662,6 +1672,8 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.AdjacencyDirectViews)/float64(n), "adjacency_direct_views/search")
 	b.ReportMetric(float64(searchStats.AdjacencyMmapDirectViews)/float64(n), "adjacency_mmap_direct/search")
 	b.ReportMetric(float64(searchStats.AdjacencyHeapCopyTypedViews)/float64(n), "adjacency_heap_copy_typed_view/search")
+	b.ReportMetric(float64(searchStats.AdjacencyPreparedCSRDirectViews)/float64(n), "adjacency_prepared_csr_direct_views/search")
+	b.ReportMetric(float64(searchStats.AdjacencyPreparedCSRMmapDirectViews)/float64(n), "adjacency_prepared_csr_mmap_direct/search")
 	b.ReportMetric(float64(searchStats.AdjacencyTypedListDirectViews)/float64(n), "adjacency_typed_list_direct_views/search")
 	b.ReportMetric(float64(searchStats.AdjacencyTypedListMmapDirectViews)/float64(n), "adjacency_typed_list_mmap_direct/search")
 	b.ReportMetric(float64(searchStats.AdjacencyTypedListHeapCopyTypedViews)/float64(n), "adjacency_typed_list_heap_copy_typed_view/search")

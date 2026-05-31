@@ -115,6 +115,8 @@ func vectorGraphSearchTruthMatrixRequiredMetricLabels2037() []string {
 		"norm_heap_copy_typed_view/search",
 		"norm_scratch_decodes/search",
 		"norm_source_fallbacks/search",
+		"adjacency_prepared_csr_mmap_direct/search",
+		"adjacency_prepared_csr_direct_views/search",
 		"adjacency_typed_list_mmap_direct/search",
 		"adjacency_typed_list_heap_copy_typed_view/search",
 		"adjacency_typed_list_scratch_decodes/search",
@@ -196,6 +198,7 @@ func TestVectorGraphSearchTruthMatrixMetricContract2037(t *testing.T) {
 		"row_ref_state_source_fallbacks/search",
 		"vector_mmap_direct/search",
 		"norm_mmap_direct/search",
+		"adjacency_prepared_csr_mmap_direct/search",
 		"adjacency_typed_list_mmap_direct/search",
 		"typed_column_vector_fallbacks/search",
 	} {
