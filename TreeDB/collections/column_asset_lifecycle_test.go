@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
@@ -13,7 +14,7 @@ func TestColumnAssetLifecycleReportInventoriesRootsAndStaysReportOnly1954(t *tes
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	col := openColumnStoreCollectionM10B(t, d)
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
 
 	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
 		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"ignored"}`),
@@ -90,7 +91,7 @@ func TestColumnAssetLifecycleReportExplicitPinSetScaffold1954(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	col := openColumnStoreCollectionM10B(t, d)
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
 
 	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -156,16 +157,20 @@ func TestColumnAssetLifecycleReportMappedResourceUnconvertibleIncomplete1954(t *
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	col := openColumnStoreCollectionM10B(t, d)
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
 
 	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	cfg := col.Meta().Options.ColumnStore
+	manifestRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(manifestRefs) == 0 {
+		t.Fatal("manifest refs empty, test requires physical column assets")
+	}
+	namespace := manifestRefs[0].Namespace
 	mgr := mappedresource.NewManager()
 	key := mappedresource.Key{
 		Class:      mappedresource.ClassTypedColumnAsset,
-		Namespace:  cfg.AssetManager.Namespace,
+		Namespace:  namespace,
 		Kind:       "unexpected_section_only_kind",
 		Generation: 1,
 		PartID:     1,
@@ -174,7 +179,7 @@ func TestColumnAssetLifecycleReportMappedResourceUnconvertibleIncomplete1954(t *
 		Length:     4,
 		Checksum:   7,
 	}
-	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "lifecycle-unconvertible-pin-1954", Namespace: cfg.AssetManager.Namespace, Collection: "events", Generation: 1}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "lifecycle-unconvertible-pin-1954", Namespace: namespace, Collection: "events", Generation: 1}
 	handle, err := mgr.AcquireBytes(key, scope, mappedresource.SourceHeapCopy, []byte("pin!"), mappedresource.AcquireOptions{Reason: "lifecycle-unconvertible-pin", ResourceRoot: d.ColumnAssetRootDir()})
 	if err != nil {
 		t.Fatalf("AcquireBytes: %v", err)
@@ -202,7 +207,7 @@ func TestColumnAssetLifecycleReportSnapshotFenceFailsClosed1954(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	col := openColumnStoreCollectionM10B(t, d)
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
 	oldSnap := d.AcquireSnapshot()
 	if oldSnap == nil {
 		t.Fatal("AcquireSnapshot returned nil")
@@ -228,7 +233,7 @@ func TestColumnAssetLifecycleReportByteAccountingUsesIntervalUnion1954(t *testin
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	col := openColumnStoreCollectionM10B(t, d)
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
 
 	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -256,6 +261,15 @@ func TestColumnAssetLifecycleReportByteAccountingUsesIntervalUnion1954(t *testin
 	if got, sum := report.Reachability.Segments.BytesReclaimable, first.Length+second.Length; got != wantUnion || got >= sum {
 		t.Fatalf("reclaimable bytes=%d want interval union=%d and less than double-counted sum=%d", got, wantUnion, sum)
 	}
+}
+
+func openColumnAssetLifecycleTestCollection1954(t testing.TB, d *backenddb.DB) *Collection {
+	t.Helper()
+	col, err := NewCollectionManager(d).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return col
 }
 
 func columnAssetLifecycleReasonsContain(reasons []ColumnAssetLifecycleIncompleteReason, want ColumnAssetLifecycleIncompleteReason) bool {
