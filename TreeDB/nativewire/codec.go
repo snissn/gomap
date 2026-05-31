@@ -228,6 +228,23 @@ func readString(src []byte, off *int) (string, error) {
 	return out, nil
 }
 
+func readStringBytes(src []byte, off *int) ([]byte, error) {
+	if off == nil || *off > len(src) {
+		return nil, protocolError(iwire.ErrMalformedFrame, "invalid string offset")
+	}
+	n, read, err := readUvarint(src[*off:])
+	if err != nil {
+		return nil, err
+	}
+	*off += read
+	if n > uint64(len(src)-*off) {
+		return nil, protocolError(iwire.ErrMalformedFrame, "string length exceeds remaining payload")
+	}
+	out := src[*off : *off+int(n)]
+	*off += int(n)
+	return out, nil
+}
+
 func appendStringMap(dst []byte, values map[string]string) []byte {
 	keys := make([]string, 0, len(values))
 	for key := range values {

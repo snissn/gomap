@@ -336,6 +336,15 @@ type responseMetaCount struct {
 	value int
 }
 
+type responseMetaFields struct {
+	count1            int
+	hasCount1         bool
+	count2            int
+	hasCount2         bool
+	catalogVersion    uint64
+	hasCatalogVersion bool
+}
+
 func ackMeta(policy AckPolicy) iwire.Section {
 	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendAckMetaPayload(nil, policy)}
 }
@@ -421,35 +430,149 @@ func responseMetaMap(sections []iwire.Section) (map[string]string, error) {
 }
 
 func responseCount(sections []iwire.Section, key string) (int, error) {
-	values, err := responseMetaMap(sections)
+	fields, err := responseMetaFieldsFromSections(sections, key, "")
 	if err != nil {
 		return 0, err
 	}
-	value, ok := values[key]
-	if !ok {
+	if !fields.hasCount1 {
 		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta missing %s", key)
 	}
-	n, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
-	}
-	return n, nil
+	return fields.count1, nil
 }
 
 func responseCatalogVersion(sections []iwire.Section) (uint64, bool, error) {
-	values, err := responseMetaMap(sections)
+	fields, err := responseMetaFieldsFromSections(sections, "", "")
 	if err != nil {
 		return 0, false, err
 	}
-	value, ok := values["catalog_version"]
-	if !ok {
-		return 0, false, nil
-	}
-	version, err := strconv.ParseUint(value, 10, 64)
+	return fields.catalogVersion, fields.hasCatalogVersion, nil
+}
+
+func responseMetaFieldsFromSections(sections []iwire.Section, countKey1, countKey2 string) (responseMetaFields, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionResponseMeta)
 	if err != nil {
-		return 0, true, protocolError(iwire.ErrMalformedFrame, "response_meta catalog_version is not a uint64")
+		return responseMetaFields{}, err
 	}
-	return version, true, nil
+	if !ok {
+		return responseMetaFields{}, protocolError(iwire.ErrMalformedFrame, "missing response_meta")
+	}
+	return decodeResponseMetaFields(raw, countKey1, countKey2)
+}
+
+func decodeResponseMetaFields(src []byte, countKey1, countKey2 string) (responseMetaFields, error) {
+	count, off, err := readUvarint(src)
+	if err != nil {
+		return responseMetaFields{}, err
+	}
+	if count > uint64(maxInt) {
+		return responseMetaFields{}, protocolError(iwire.ErrResourceExhausted, "string map count exceeds int capacity")
+	}
+	if count > maxStringMapEntries {
+		return responseMetaFields{}, protocolError(iwire.ErrResourceExhausted, "string map count %d exceeds limit %d", count, maxStringMapEntries)
+	}
+	var fields responseMetaFields
+	for i := uint64(0); i < count; i++ {
+		key, err := readStringBytes(src, &off)
+		if err != nil {
+			return responseMetaFields{}, err
+		}
+		value, err := readStringBytes(src, &off)
+		if err != nil {
+			return responseMetaFields{}, err
+		}
+		switch {
+		case bytesEqualString(key, "catalog_version"):
+			version, err := parseResponseMetaUint(value, "catalog_version")
+			if err != nil {
+				return responseMetaFields{}, err
+			}
+			fields.catalogVersion = version
+			fields.hasCatalogVersion = true
+		case countKey1 != "" && bytesEqualString(key, countKey1):
+			n, err := parseResponseMetaInt(value, countKey1)
+			if err != nil {
+				return responseMetaFields{}, err
+			}
+			fields.count1 = n
+			fields.hasCount1 = true
+		case countKey2 != "" && bytesEqualString(key, countKey2):
+			n, err := parseResponseMetaInt(value, countKey2)
+			if err != nil {
+				return responseMetaFields{}, err
+			}
+			fields.count2 = n
+			fields.hasCount2 = true
+		}
+	}
+	if off != len(src) {
+		return responseMetaFields{}, protocolError(iwire.ErrMalformedFrame, "string map has %d trailing bytes", len(src)-off)
+	}
+	return fields, nil
+}
+
+func parseResponseMetaUint(src []byte, key string) (uint64, error) {
+	if len(src) == 0 {
+		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not a uint64", key)
+	}
+	var value uint64
+	for _, c := range src {
+		if c < '0' || c > '9' {
+			return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not a uint64", key)
+		}
+		digit := uint64(c - '0')
+		if value > (^uint64(0)-digit)/10 {
+			return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not a uint64", key)
+		}
+		value = value*10 + digit
+	}
+	return value, nil
+}
+
+func parseResponseMetaInt(src []byte, key string) (int, error) {
+	if len(src) == 0 {
+		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
+	}
+	negative := src[0] == '-'
+	if negative {
+		src = src[1:]
+		if len(src) == 0 {
+			return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
+		}
+	}
+	limit := uint64(maxInt)
+	if negative {
+		limit++
+	}
+	var value uint64
+	for _, c := range src {
+		if c < '0' || c > '9' {
+			return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
+		}
+		digit := uint64(c - '0')
+		if value > (limit-digit)/10 {
+			return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
+		}
+		value = value*10 + digit
+	}
+	if negative {
+		if value == limit {
+			return -maxInt - 1, nil
+		}
+		return -int(value), nil
+	}
+	return int(value), nil
+}
+
+func bytesEqualString(b []byte, s string) bool {
+	if len(b) != len(s) {
+		return false
+	}
+	for i := range b {
+		if b[i] != s[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func updateBatchItems(ids, docs [][]byte) []collections.UpdateBatchItem {
