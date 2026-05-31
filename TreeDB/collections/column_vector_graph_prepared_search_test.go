@@ -45,6 +45,53 @@ func TestColumnVectorGraphPreparedSearchSelectedAndEquivalent2045(t *testing.T) 
 	}
 }
 
+func TestColumnVectorGraphPreparedSearchMinimalStats2042(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("combined prepared graph-search view requires mmap_direct test support")
+	}
+	rows := columnGraphRebuildSyntheticRowsV2A(48, 12)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 12, 6, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.preparedSearch == nil || !reader.preparedSearch.ready() {
+		t.Fatalf("preparedSearch=%v ready=%v want combined prepared view selected", reader.preparedSearch != nil, reader.preparedSearch != nil && reader.preparedSearch.ready())
+	}
+	query := append([]float32(nil), rows[7].vector...)
+	var fullScratch columnVectorGraphNativeSearchScratch
+	fullResults, fullStats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 6, EfSearch: 32, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &fullScratch)
+	if err != nil {
+		t.Fatalf("full SearchCosine: %v", err)
+	}
+	var minimalScratch columnVectorGraphNativeSearchScratch
+	minimalResults, minimalStats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 6, EfSearch: 32, StatsMode: columnVectorGraphNativeSearchStatsModeMinimal}, &minimalScratch)
+	if err != nil {
+		t.Fatalf("minimal SearchCosine: %v", err)
+	}
+	if mismatch := columnGraphNativeSearchResultsMismatchV3(minimalResults, fullResults); mismatch != "" {
+		t.Fatal(mismatch)
+	}
+	assertColumnVectorGraphPreparedSearchStats2045(t, fullStats, len(fullResults))
+	assertColumnVectorGraphPreparedMinimalStats2042(t, minimalStats, fullStats, len(minimalResults))
+
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	publicMinimal, err := searcher.Search(VectorIndexSearcherSearchOptions{Query: query, TopK: 6, EfSearch: 32, StatsMode: VectorIndexSearchStatsModeMinimal})
+	if err != nil {
+		t.Fatalf("public minimal Search: %v", err)
+	}
+	assertColumnVectorGraphPreparedPublicMinimalStats2042(t, publicMinimal.Stats, len(publicMinimal.Results))
+}
+
 func TestColumnVectorGraphPreparedSearchPublicDocumentsReopen2045(t *testing.T) {
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 		t.Skip("combined prepared graph-search view requires mmap_direct test support")
@@ -119,7 +166,7 @@ func TestColumnVectorGraphPreparedSearchNonMmapCompatibility2045(t *testing.T) {
 	}
 	query := append([]float32(nil), rows[5].vector...)
 	var scratch columnVectorGraphNativeSearchScratch
-	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: len(rows)}, &scratch)
+	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: len(rows), StatsMode: columnVectorGraphNativeSearchStatsModeMinimal}, &scratch)
 	if err != nil {
 		t.Fatalf("SearchCosine: %v", err)
 	}
@@ -246,6 +293,41 @@ func assertColumnVectorGraphPreparedPublicStats2045(tb testing.TB, stats VectorI
 	}
 	if stats.ResultIDPreparedBytesViews != 1 || stats.ResultIDTypedBytesState != uint64(results) || stats.RowRefStatePreparedViews != 1 || stats.RowRefStateResultRefs != uint64(results) {
 		tb.Fatalf("stats=%+v want prepared result IDs and row refs for %d results", stats, results)
+	}
+}
+
+func assertColumnVectorGraphPreparedMinimalStats2042(tb testing.TB, stats, full columnVectorGraphNativeSearchStats, results int) {
+	tb.Helper()
+	if stats.PreparedGraphSearchViews != 1 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.ResultIDGraphFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
+		tb.Fatalf("minimal stats=%+v want prepared path with zero graph-row/source fallback", stats)
+	}
+	if stats.CandidateRows != full.CandidateRows || stats.Candidates != full.Candidates || stats.Edges != full.Edges || stats.VisitedEdges != full.VisitedEdges {
+		tb.Fatalf("minimal stats=%+v full=%+v want same production traversal counters", stats, full)
+	}
+	if stats.PreparedScoreCalls == 0 || stats.PreparedScoreCalls != stats.CandidateFetches || stats.VectorPreparedDirectViews != stats.CandidateFetches || stats.NormPreparedDirectViews != stats.CandidateFetches {
+		tb.Fatalf("minimal stats=%+v want prepared score/direct counters", stats)
+	}
+	if stats.AdjacencyPreparedCSRMmapDirectViews == 0 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyTypedListScratchDecodes != 0 {
+		tb.Fatalf("minimal stats=%+v want prepared CSR adjacency counters only", stats)
+	}
+	if stats.ResultFetches != uint64(results) || stats.ResultIDPreparedBytesViews != 1 || stats.ResultIDTypedBytesState != uint64(results) || stats.RowRefStatePreparedViews != 1 || stats.RowRefStateResultRefs != uint64(results) {
+		tb.Fatalf("minimal stats=%+v want prepared result IDs/row refs for %d results", stats, results)
+	}
+}
+
+func assertColumnVectorGraphPreparedPublicMinimalStats2042(tb testing.TB, stats VectorIndexSearchStats, results int) {
+	tb.Helper()
+	if stats.PreparedGraphSearchViews != 1 || stats.GraphRowFallbacks != 0 || stats.GraphRows != 0 || stats.RowFetches != 0 || stats.RowsFetched != 0 {
+		tb.Fatalf("public minimal stats=%+v want combined prepared public search without graph rows", stats)
+	}
+	if stats.TypedColumnFallbacks != 0 || stats.NormSourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencySourceFallbacks != 0 || stats.ResultIDGraphFallbacks != 0 || stats.RowRefVectorSourceLegacyGraphIDs != 0 {
+		tb.Fatalf("public minimal stats=%+v want zero public compatibility/source fallbacks", stats)
+	}
+	if stats.Candidates == 0 || stats.CandidateFetches == 0 || stats.PreparedScoreCalls != stats.CandidateFetches || stats.VectorPreparedDirectViews != stats.CandidateFetches || stats.NormPreparedDirectViews != stats.CandidateFetches {
+		tb.Fatalf("public minimal stats=%+v want production and prepared score counters", stats)
+	}
+	if stats.ResultIDPreparedBytesViews != 1 || stats.ResultIDTypedBytesState != uint64(results) || stats.RowRefStatePreparedViews != 1 || stats.RowRefStateResultRefs != uint64(results) {
+		tb.Fatalf("public minimal stats=%+v want prepared result IDs and row refs for %d results", stats, results)
 	}
 }
 
