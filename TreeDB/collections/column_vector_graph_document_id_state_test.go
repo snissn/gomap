@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -125,7 +126,7 @@ func assertSearchResultIDsMatchGraphRows2013(t *testing.T, results []VectorIndex
 	}
 }
 
-func TestColumnVectorGraphDocumentIDStateMissingAssetFallsBackAndCounts2013(t *testing.T) {
+func TestColumnVectorGraphDocumentIDStateMissingAssetFailsClosed2013(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0, 1, 0}},
@@ -145,18 +146,15 @@ func TestColumnVectorGraphDocumentIDStateMissingAssetFallsBackAndCounts2013(t *t
 	removeTypedColumnAssetPayload1755(t, d, col, asset.Ref)
 
 	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 2, EfSearch: 3})
-	if err != nil {
-		t.Fatalf("SearchVectorIndex: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "missing required vector-index document-id state source") {
+		t.Fatalf("SearchVectorIndex err=%v response=%+v want fail-closed missing document-id state", err, got)
 	}
-	if len(got.Results) != 2 {
-		t.Fatalf("results=%d want 2", len(got.Results))
-	}
-	if got.Stats.ResultIDTypedBytesState != 0 || got.Stats.ResultIDGraphFallbacks != uint64(len(got.Results)) || got.Stats.ResultIDStateValidationFailures != 1 {
-		t.Fatalf("stats=%+v want missing document-id asset validation failure and graph fallback", got.Stats)
+	if got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDTypedBytesState != 0 {
+		t.Fatalf("stats=%+v want no graph row result-id fallback", got.Stats)
 	}
 }
 
-func TestColumnVectorGraphDocumentIDStateCorruptFallsBackAndCounts2013(t *testing.T) {
+func TestColumnVectorGraphDocumentIDStateCorruptFailsClosed2013(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0, 1, 0}},
@@ -176,14 +174,11 @@ func TestColumnVectorGraphDocumentIDStateCorruptFallsBackAndCounts2013(t *testin
 	corruptTypedColumnAssetPayload1755(t, d, asset.Ref)
 
 	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 2, EfSearch: 3})
-	if err != nil {
-		t.Fatalf("SearchVectorIndex: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "missing required vector-index document-id state source") {
+		t.Fatalf("SearchVectorIndex err=%v response=%+v want fail-closed corrupt document-id state", err, got)
 	}
-	if len(got.Results) != 2 {
-		t.Fatalf("results=%d want 2", len(got.Results))
-	}
-	if got.Stats.ResultIDTypedBytesState != 0 || got.Stats.ResultIDGraphFallbacks != uint64(len(got.Results)) || got.Stats.ResultIDStateValidationFailures != 1 {
-		t.Fatalf("stats=%+v want corrupt document-id state validation failure and graph fallback", got.Stats)
+	if got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDTypedBytesState != 0 {
+		t.Fatalf("stats=%+v want no graph row result-id fallback", got.Stats)
 	}
 }
 

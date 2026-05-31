@@ -18,9 +18,10 @@ var ErrVectorIndexSearchUnavailable = errors.New("collections: vector index sear
 type VectorIndexSearchPath string
 
 const (
-	// VectorIndexSearchPathColumnGraphNativeReader searches the persisted
-	// column_graph asset through the physical column row reader. It does not
-	// build or query a decoded in-memory ColumnVectorGraph.
+	// VectorIndexSearchPathColumnGraphNativeReader searches persisted column_graph
+	// state through the native reader. Current healthy indexes use TVIS/base
+	// typed-column sources; legacy physical graph rows are compatibility fallback
+	// only. It does not build or query a decoded in-memory ColumnVectorGraph.
 	VectorIndexSearchPathColumnGraphNativeReader VectorIndexSearchPath = "column_graph_native_reader"
 )
 
@@ -237,9 +238,9 @@ type VectorIndexSearchStats struct {
 	AdjacencyTypedListScratchDecodes uint64 `json:"adjacency_typed_list_scratch_decodes,omitempty"`
 	// AdjacencyLegacyFallbacks counts row-image graph adjacency fallback/quarantine reads.
 	AdjacencyLegacyFallbacks uint64 `json:"adjacency_legacy_fallbacks,omitempty"`
-	// AdjacencySourceUnavailable reports that this searcher had no usable certified adjacency source and used row-asset fallback.
+	// AdjacencySourceUnavailable reports that this searcher had no usable certified adjacency source.
 	AdjacencySourceUnavailable uint64 `json:"adjacency_source_unavailable,omitempty"`
-	// AdjacencySourceFallbacks reports searches or observations that fell back from certified adjacency sources to row assets.
+	// AdjacencySourceFallbacks reports searches or observations that fell back from certified adjacency sources to legacy rows or fail-closed fallback handling.
 	AdjacencySourceFallbacks uint64 `json:"adjacency_source_fallbacks,omitempty"`
 	// AdjacencyCertificationFailures counts adjacency source certification, shape, or validation failures.
 	AdjacencyCertificationFailures uint64 `json:"adjacency_certification_failures,omitempty"`
@@ -263,7 +264,7 @@ type VectorIndexSearchStats struct {
 	NormScratchDecodes uint64 `json:"norm_scratch_decodes,omitempty"`
 	// NormSourceUnavailable reports that this searcher had no usable inverse-norm state source and used graph-row fallback.
 	NormSourceUnavailable uint64 `json:"norm_source_unavailable,omitempty"`
-	// NormSourceFallbacks reports searches or observations that fell back from inverse-norm state to graph rows.
+	// NormSourceFallbacks reports searches or observations that fell back from inverse-norm state to legacy rows or fail-closed fallback handling.
 	NormSourceFallbacks uint64 `json:"norm_source_fallbacks,omitempty"`
 	// NormValidationFailures counts inverse-norm state source certification, shape, or validation failures.
 	NormValidationFailures uint64 `json:"norm_validation_failures,omitempty"`

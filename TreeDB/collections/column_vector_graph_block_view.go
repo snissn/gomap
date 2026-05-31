@@ -55,7 +55,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 		return nil, errNilColumnVectorGraphPhysicalRowReader
 	}
 	physicalReader, err := reader.rowReader()
-	if err != nil {
+	if err != nil && columnVectorGraphManifestHasPhysicalAsset(reader.graph) {
 		return nil, err
 	}
 	plan := &s.searchPlan
@@ -74,8 +74,13 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 	plan.hits = 0
 	plan.misses = 0
 	plan.builds = 0
-	if err := plan.prepareOrdinalRefs(); err != nil {
-		return nil, err
+	if physicalReader != nil {
+		if err := plan.prepareOrdinalRefs(); err != nil {
+			return nil, err
+		}
+	} else {
+		plan.ordinalRefsReady = true
+		plan.singleOrdinalRange = true
 	}
 	if err := plan.scoreSource.prepare(plan); err != nil {
 		return nil, err
@@ -100,7 +105,7 @@ func newColumnVectorGraphSearchPlan(reader *columnVectorGraphPhysicalRowReader) 
 		return nil, errNilColumnVectorGraphPhysicalRowReader
 	}
 	physicalReader, err := reader.rowReader()
-	if err != nil {
+	if err != nil && columnVectorGraphManifestHasPhysicalAsset(reader.graph) {
 		return nil, err
 	}
 	return &columnVectorGraphSearchPlan{reader: reader, physicalReader: physicalReader}, nil

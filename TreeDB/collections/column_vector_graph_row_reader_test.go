@@ -11,31 +11,14 @@ import (
 )
 
 func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testing.T) {
-	rows := []columnGraphRebuildInputRowV2A{
-		{id: "doc-a", vector: []float32{1, 0, 0}},
-		{id: "doc-b", vector: []float32{0, 1, 0}},
-		{id: "doc-c", vector: []float32{0, 0, 1}},
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{2, 0}},
+		{ID: []byte("doc-c"), Vector: []float32{0, 0, 1}, InvNorm: 1, Adjacency: []uint32{1}},
 	}
-	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
-	status, err := col.RebuildVectorIndex(def.Name)
-	if err != nil {
-		t.Fatalf("RebuildVectorIndex: %v", err)
-	}
-	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
-	if err := d.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
-	if err != nil {
-		t.Fatalf("reopen db: %v", err)
-	}
-	defer func() { _ = reopened.Close() }()
-	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
-	if err != nil {
-		t.Fatalf("OpenCollection: %v", err)
-	}
-	reader, err := reopenedCol.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
@@ -43,7 +26,6 @@ func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testi
 	if got, want := reader.RowCount(), len(rows); got != want {
 		t.Fatalf("RowCount=%d want %d", got, want)
 	}
-	wantGraph := columnGraphRebuildNativeGraphLayoutV2A(t, def, rows)
 	scratch := columnPhysicalRowReaderScratch{
 		Values:        make([]columnDeclaredValue, 0, 3),
 		Float32Values: make([]float32, 0, def.Dimensions),
@@ -53,8 +35,7 @@ func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testi
 	if err != nil {
 		t.Fatalf("FetchRow(1): %v", err)
 	}
-	wantInput := columnGraphRebuildInputByIDV2B(t, rows, wantGraph.ids[1])
-	assertColumnVectorGraphPhysicalRowV2B(t, row, wantGraph.ids[1], 1, 1, wantInput.vector, 1, wantGraph.adjacency[1])
+	assertColumnVectorGraphPhysicalRowV2B(t, row, "doc-b", 1, 1, rows[1].Vector, 1, rows[1].Adjacency)
 
 	var batchIDs []string
 	if err := reader.FetchBatch([]int{2, 0}, &scratch, func(row columnVectorGraphPhysicalRow) error {
@@ -63,7 +44,7 @@ func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testi
 	}); err != nil {
 		t.Fatalf("FetchBatch: %v", err)
 	}
-	if got, want := strings.Join(batchIDs, ","), strings.Join([]string{wantGraph.ids[2], wantGraph.ids[0]}, ","); got != want {
+	if got, want := strings.Join(batchIDs, ","), strings.Join([]string{"doc-c", "doc-a"}, ","); got != want {
 		t.Fatalf("batch IDs=%q want %q", got, want)
 	}
 	stats := reader.Stats()
@@ -83,14 +64,25 @@ func columnGraphRebuildInputByIDV2B(tb testing.TB, rows []columnGraphRebuildInpu
 	return columnGraphRebuildInputRowV2A{}
 }
 
-func TestColumnVectorGraphPhysicalRowReaderOpensEmptyPublishedGraphV2B(t *testing.T) {
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, nil)
-	defer func() { _ = d.Close() }()
-	status, err := col.RebuildVectorIndex(def.Name)
-	if err != nil {
-		t.Fatalf("RebuildVectorIndex empty collection: %v", err)
+func columnVectorGraphAssetRowsFromSyntheticV2B(rows []columnGraphRebuildInputRowV2A) []columnVectorGraphAssetRow {
+	out := make([]columnVectorGraphAssetRow, len(rows))
+	for i, row := range rows {
+		invNorm, err := columnVectorGraphInvNorm(row.vector)
+		if err != nil {
+			panic(err)
+		}
+		var adjacency []uint32
+		if len(rows) > 1 {
+			adjacency = []uint32{uint32((i + 1) % len(rows))}
+		}
+		out[i] = columnVectorGraphAssetRow{ID: []byte(row.id), Vector: append([]float32(nil), row.vector...), InvNorm: invNorm, Adjacency: adjacency}
 	}
-	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	return out
+}
+
+func TestColumnVectorGraphPhysicalRowReaderOpensEmptyPublishedGraphV2B(t *testing.T) {
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, nil)
+	defer func() { _ = d.Close() }()
 
 	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if err != nil {
@@ -394,18 +386,13 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsNonRecoveryAuthoritativeManife
 }
 
 func TestColumnVectorGraphPhysicalRowReaderWarmScratchHotFetchZeroAllocsV2B(t *testing.T) {
-	rows := []columnGraphRebuildInputRowV2A{
-		{id: "doc-a", vector: []float32{1, 0, 0}},
-		{id: "doc-b", vector: []float32{0, 1, 0}},
-		{id: "doc-c", vector: []float32{0, 0, 1}},
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{2, 0}},
+		{ID: []byte("doc-c"), Vector: []float32{0, 0, 1}, InvNorm: 1, Adjacency: []uint32{1}},
 	}
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
 	defer func() { _ = d.Close() }()
-	status, err := col.RebuildVectorIndex(def.Name)
-	if err != nil {
-		t.Fatalf("RebuildVectorIndex: %v", err)
-	}
-	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
 	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
@@ -445,14 +432,9 @@ func BenchmarkColumnVectorGraphPhysicalRowReaderFetchV2B(b *testing.B) {
 		dims = 128
 		m    = 16
 	)
-	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, dims, m, input)
+	input := columnVectorGraphAssetRowsFromSyntheticV2B(columnGraphRebuildSyntheticRowsV2A(rows, dims))
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(b, dims, m, input)
 	defer func() { _ = d.Close() }()
-	status, err := col.RebuildVectorIndex(def.Name)
-	if err != nil {
-		b.Fatalf("RebuildVectorIndex: %v", err)
-	}
-	assertColumnGraphRebuildLoadedStatusV2A(b, status, def.Name)
 	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if err != nil {
 		b.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)

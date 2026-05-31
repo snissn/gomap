@@ -48,21 +48,14 @@ func TestColumnVectorGraphTypedColumnVectorReaderParity1782(t *testing.T) {
 	if reader.typedVectorSource == nil || reader.typedVectorFallbackReason != "" {
 		t.Fatalf("typed vector source=%v fallback=%q want active typed_column_part source", reader.typedVectorSource != nil, reader.typedVectorFallbackReason)
 	}
-	if reader.graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
-		t.Fatalf("graph asset kind=%q want derived physical graph asset kind %q", reader.graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
+	if columnVectorGraphManifestHasPhysicalAsset(reader.graph) {
+		t.Fatalf("graph manifest has physical row asset %+v; healthy typed-column search should use TVIS/base state", reader.graph.AssetRef)
 	}
 	assertColumnGraphTypedColumnAdjacencyDeferred1782(t, col, def.Name)
 
 	var scratch columnPhysicalRowReaderScratch
-	for ordinal := 0; ordinal < reader.RowCount(); ordinal++ {
-		row, err := reader.FetchRow(ordinal, &scratch)
-		if err != nil {
-			t.Fatalf("FetchRow(%d): %v", ordinal, err)
-		}
-		input := columnGraphRebuildInputByIDV2B(t, rows, string(row.ID))
-		if !float32SlicesEqual1782(row.Vector, input.vector) {
-			t.Fatalf("row %d id=%q vector=%v want typed-column vector %v", ordinal, row.ID, row.Vector, input.vector)
-		}
+	if _, err := reader.FetchRow(0, &scratch); err == nil || !errors.Is(err, errNilColumnVectorGraphPhysicalRowReader) {
+		t.Fatalf("FetchRow healthy current-format err=%v want no physical graph row reader", err)
 	}
 
 	query := []float32{0, 0.2, 1}
@@ -231,23 +224,12 @@ func TestColumnVectorGraphTypedColumnVectorCorruptPartFallsBack1782(t *testing.T
 	corruptFirstTypedColumnPartForVectorTest1782(t, col)
 
 	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
-	if err != nil {
-		t.Fatalf("openColumnVectorGraphPhysicalRowReader with corrupt typed_column_part should fall back to graph asset: %v", err)
+	if err == nil {
+		_ = reader.Close()
+		t.Fatal("openColumnVectorGraphPhysicalRowReader with corrupt typed_column_part succeeded; want fail-closed without graph row fallback")
 	}
-	defer func() { _ = reader.Close() }()
-	if reader.typedVectorSource != nil || reader.typedVectorFallbackReason == "" {
-		t.Fatalf("typed source active=%v fallback=%q want fallback reason after corrupt typed_column_part", reader.typedVectorSource != nil, reader.typedVectorFallbackReason)
-	}
-
-	query := []float32{0, 0, 1}
-	var scratch columnVectorGraphNativeSearchScratch
-	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: len(rows)}, &scratch)
-	if err != nil {
-		t.Fatalf("SearchCosine fallback: %v", err)
-	}
-	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 2))
-	if stats.TypedColumnFallbacks != 1 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 {
-		t.Fatalf("stats=%+v want typed-column source fallback to graph row vector scratch decodes", stats)
+	if !strings.Contains(err.Error(), "missing required base typed-column vector source") {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want fail-closed typed-column source error", err)
 	}
 }
 
@@ -270,22 +252,12 @@ func TestColumnVectorGraphTypedColumnVectorNonColumnPartOwnerUsesGraphVectors178
 		}
 	})
 	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
-	if err != nil {
-		t.Fatalf("openColumnVectorGraphPhysicalRowReader non-column-part owner: %v", err)
+	if err == nil {
+		_ = reader.Close()
+		t.Fatal("openColumnVectorGraphPhysicalRowReader non-column-part owner succeeded; want fail-closed without graph row fallback")
 	}
-	defer func() { _ = reader.Close() }()
-	if reader.typedVectorSource != nil || reader.typedVectorFallbackReason != "" {
-		t.Fatalf("typed source active=%v fallback=%q want ordinary graph-vector path for non-column-part owner", reader.typedVectorSource != nil, reader.typedVectorFallbackReason)
-	}
-	query := []float32{0, 0, 1}
-	var scratch columnVectorGraphNativeSearchScratch
-	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: len(rows)}, &scratch)
-	if err != nil {
-		t.Fatalf("SearchCosine non-column-part owner: %v", err)
-	}
-	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 2))
-	if stats.TypedColumnFallbacks != 0 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 || stats.VectorCertificationFailures != 0 {
-		t.Fatalf("stats=%+v want ordinary graph row vector scratch decodes", stats)
+	if !strings.Contains(err.Error(), "missing required base typed-column vector source") {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want missing typed-column source", err)
 	}
 }
 
@@ -972,8 +944,8 @@ func assertColumnGraphTypedColumnAdjacencyDeferred1782(tb testing.TB, col *Colle
 	if err != nil {
 		tb.Fatalf("decode graph manifest: %v", err)
 	}
-	if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
-		tb.Fatalf("graph asset kind=%q want derived tcs1_part_image asset, not authoritative adjacency typed-column storage", graph.AssetRef.Kind)
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		tb.Fatalf("graph manifest has physical row asset %+v; adjacency must be TVIS state, not graph row storage", graph.AssetRef)
 	}
 	cfg := catalog.meta.Options.ColumnStore
 	if cfg == nil {

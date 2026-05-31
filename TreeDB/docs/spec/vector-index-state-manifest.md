@@ -24,9 +24,11 @@ checksum includes the state record for durability, while the state record's
 `base_manifest_checksum` is computed over the authoritative base collection
 manifest records with vector-index derived records excluded.
 
-Current legacy `column_graph` records may still exist so old pre-alpha graph
-assets can be searched or rebuilt through compatibility paths. New derived
-state should be described here and should reference generic typed-column assets.
+Current rebuilt `column_graph` records are control records tied to TVIS state;
+new healthy rebuilds do not publish a physical graph row payload. Legacy
+pre-alpha records with graph row assets may still be searched or rebuilt through
+explicit compatibility paths. New derived state should be described here and
+should reference generic typed-column assets.
 
 ## Record identity
 
@@ -75,7 +77,8 @@ layer. Row-ref state uses multiple `row_refs` assets distinguished by asset id
 (for generation, part id, row index, and applied command LSN). Document-ID state
 uses one `document_ids` asset with one opaque byte value per graph ordinal.
 Legacy graph row ID bytes remain compatibility or quarantine fallback records
-until graph-row payload retirement work removes or shrinks them.
+only for old physical graph row assets; current healthy rebuilds return IDs from
+TVIS `document_ids` bytes state.
 
 ## Validation and fail-closed behavior
 
@@ -93,6 +96,6 @@ Opening/status validation must reject:
 - missing, out-of-bounds, or corrupt referenced assets.
 
 Old `column_graph` graph records without a `TVIS` state record are legacy
-compatibility. They may still be used by current fallback readers, but new
-vector-index derived assets should not be added to the graph-record trailer
-format.
+compatibility. They may still be used by explicit fallback readers, but new
+healthy rebuilds must rely on TVIS/base typed-column state and must not add new
+vector-index derived assets to the graph-record trailer format.

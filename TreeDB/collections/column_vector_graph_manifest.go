@@ -101,6 +101,18 @@ type columnVectorGraphPreparedPhysicalAsset struct {
 	RowCount     int
 }
 
+func columnVectorGraphManifestHasPhysicalAsset(snapshot columnVectorGraphManifestSnapshot) bool {
+	return snapshot.AssetBytes != 0 ||
+		snapshot.AssetRef.Kind != "" ||
+		snapshot.AssetRef.Namespace != "" ||
+		snapshot.AssetRef.Generation != 0 ||
+		snapshot.AssetRef.PartID != 0 ||
+		snapshot.AssetRef.FileID != 0 ||
+		snapshot.AssetRef.Offset != 0 ||
+		snapshot.AssetRef.Length != 0 ||
+		snapshot.AssetRef.Checksum != 0
+}
+
 func columnVectorGraphManifestRecordKey(indexName string) []byte {
 	key := make([]byte, len(columnManifestVectorGraphRecordPrefix)+len(indexName))
 	copy(key, columnManifestVectorGraphRecordPrefix)
@@ -548,8 +560,14 @@ func validateColumnVectorGraphManifestSnapshotCore(snapshot columnVectorGraphMan
 	if snapshot.RowCount < 0 {
 		return errors.New("collections: column vector graph manifest row count must be non-negative")
 	}
+	if !columnVectorGraphManifestHasPhysicalAsset(snapshot) {
+		return nil
+	}
 	if err := validateColumnAssetRefForPlan(snapshot.AssetRef); err != nil {
 		return err
+	}
+	if snapshot.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
+		return fmt.Errorf("collections: column vector graph manifest asset kind=%q want %q", snapshot.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
 	}
 	if snapshot.AssetBytes <= 0 {
 		return errors.New("collections: column vector graph manifest asset bytes must be positive")
@@ -645,9 +663,10 @@ func columnVectorGraphPhysicalColumnStoreConfig(collection string, base ColumnSt
 	if base.AssetManager == nil {
 		return ColumnStoreConfig{}, errors.New("collections: column vector graph physical config requires base asset manager")
 	}
-	// The physical graph row asset keeps adjacency in the legacy adjacency_list
-	// row-image format for compatibility/fallback only. Primary HNSW adjacency
-	// storage is published separately as vector-index state uint32_list assets.
+	// Legacy physical graph row assets kept adjacency in the adjacency_list
+	// row-image format for compatibility/fallback only. Current rebuilds publish
+	// HNSW adjacency through vector-index state uint32_list assets and do not need
+	// this physical graph config for healthy search.
 	cfg, err := normalizeColumnStoreConfig(collection, &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
@@ -926,11 +945,13 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return status, nil
 	}
-	if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
-		status.State = VectorIndexStateColumnGraphUnavailable
-		status.Reason = VectorIndexReasonColumnGraphCorrupt
-		status.RebuildNeeded = true
-		return columnGraphVectorIndexStatusError(status, err)
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
+			status.State = VectorIndexStateColumnGraphUnavailable
+			status.Reason = VectorIndexReasonColumnGraphCorrupt
+			status.RebuildNeeded = true
+			return columnGraphVectorIndexStatusError(status, err)
+		}
 	}
 	if loadedState == nil {
 		status.State = VectorIndexStateColumnGraphRebuildNeeded
@@ -938,10 +959,29 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return status, nil
 	}
-	// Certified adjacency sources are optional accelerators. Keep loaded-status
-	// gating tied to the base graph asset; search opens and validates sources
-	// independently and falls back to row assets when they are absent, corrupt,
-	// stale, incomplete, or non-certified.
+	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 {
+		if _, ok := findColumnVectorGraphInvNormStateAsset(*loadedState); !ok {
+			status.State = VectorIndexStateColumnGraphRebuildNeeded
+			status.Reason = VectorIndexReasonColumnGraphAssetMismatch
+			status.RebuildNeeded = true
+			return status, nil
+		}
+		if !columnVectorGraphRowRefStatePresent(*loadedState) || !columnVectorGraphDocumentIDStatePresent(*loadedState) {
+			status.State = VectorIndexStateColumnGraphRebuildNeeded
+			status.Reason = VectorIndexReasonColumnGraphAssetMismatch
+			status.RebuildNeeded = true
+			return status, nil
+		}
+		if _, _, typedVectorOwner, err := columnVectorGraphTypedColumnVectorField(*cfg, graph.Field, graph.Dimensions); err != nil || !typedVectorOwner {
+			status.State = VectorIndexStateColumnGraphRebuildNeeded
+			status.Reason = VectorIndexReasonColumnGraphAssetMismatch
+			status.RebuildNeeded = true
+			return status, nil
+		}
+	}
+	// Healthy loaded status is gated by TVIS/base typed-column state. A remaining
+	// graph row asset, when present, is compatibility storage and is not required
+	// for current-format search.
 	bytesDisk := columnVectorGraphStorageBytesWithState(graph, *loadedState)
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
@@ -1030,9 +1070,13 @@ func columnVectorGraphDefinitionParametersMatch(graph *columnVectorGraphManifest
 }
 
 func columnVectorGraphAssetParametersMatch(graph *columnVectorGraphManifestSnapshot, cfg *ColumnStoreConfig, graphCfg *ColumnStoreConfig) bool {
-	return graph.BaseSchemaHash == cfg.SchemaHash &&
-		graph.GraphSchemaHash == graphCfg.SchemaHash &&
-		graph.AssetRef.Kind == ColumnAssetKindTCS1PartImage &&
+	if graph.BaseSchemaHash != cfg.SchemaHash || graph.GraphSchemaHash != graphCfg.SchemaHash {
+		return false
+	}
+	if !columnVectorGraphManifestHasPhysicalAsset(*graph) {
+		return true
+	}
+	return graph.AssetRef.Kind == ColumnAssetKindTCS1PartImage &&
 		graph.AssetRef.Namespace == graphCfg.AssetManager.Namespace &&
 		graph.AssetRef.Generation == graph.BaseManifestGeneration
 }
@@ -1086,22 +1130,25 @@ func columnVectorGraphAssetRefsFromManifestRecordsForReachability(records []colu
 }
 
 func columnVectorGraphManifestAssetRefsForScan(graph columnVectorGraphManifestSnapshot, activeGeneration uint64, expectedNamespace string) ([]ColumnAssetRef, error) {
-	if graph.AssetRef.Generation > activeGeneration {
-		return nil, fmt.Errorf("collections: column vector graph asset generation=%d is newer than active manifest generation=%d", graph.AssetRef.Generation, activeGeneration)
+	refs := make([]ColumnAssetRef, 0, 1+len(graph.AdjacencyLayerSources))
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		if graph.AssetRef.Generation > activeGeneration {
+			return nil, fmt.Errorf("collections: column vector graph asset generation=%d is newer than active manifest generation=%d", graph.AssetRef.Generation, activeGeneration)
+		}
+		if graph.BaseManifestGeneration != graph.AssetRef.Generation {
+			return nil, fmt.Errorf("collections: column vector graph base manifest generation=%d does not match asset generation=%d", graph.BaseManifestGeneration, graph.AssetRef.Generation)
+		}
+		if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
+			return nil, fmt.Errorf("collections: column vector graph asset kind=%q want %q", graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
+		}
+		if graph.AssetRef.Namespace != expectedNamespace {
+			return nil, fmt.Errorf("collections: column vector graph asset namespace=%q want %q", graph.AssetRef.Namespace, expectedNamespace)
+		}
+		if err := validateColumnAssetRefForPlan(graph.AssetRef); err != nil {
+			return nil, err
+		}
+		refs = append(refs, graph.AssetRef)
 	}
-	if graph.BaseManifestGeneration != graph.AssetRef.Generation {
-		return nil, fmt.Errorf("collections: column vector graph base manifest generation=%d does not match asset generation=%d", graph.BaseManifestGeneration, graph.AssetRef.Generation)
-	}
-	if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
-		return nil, fmt.Errorf("collections: column vector graph asset kind=%q want %q", graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
-	}
-	if graph.AssetRef.Namespace != expectedNamespace {
-		return nil, fmt.Errorf("collections: column vector graph asset namespace=%q want %q", graph.AssetRef.Namespace, expectedNamespace)
-	}
-	if err := validateColumnAssetRefForPlan(graph.AssetRef); err != nil {
-		return nil, err
-	}
-	refs := []ColumnAssetRef{graph.AssetRef}
 	if len(graph.AdjacencyLayerSources) > 0 {
 		for _, source := range graph.AdjacencyLayerSources {
 			if columnVectorGraphAdjacencySourceRefEligibleForScan(graph, source, activeGeneration, expectedNamespace) {

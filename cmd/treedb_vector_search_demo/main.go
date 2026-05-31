@@ -568,6 +568,7 @@ func columnGraphDemoColumnStoreConfig(dims int) *collections.ColumnStoreConfig {
 			{
 				Name:       "embedding",
 				Path:       "embedding",
+				Owner:      collections.TypedStorageOwnerColumnPart,
 				ValueType:  collections.ColumnStoreValueFloat32Vector,
 				VectorDims: dims,
 			},

@@ -203,29 +203,13 @@ func TestColumnVectorGraphBlockViewRejectsMalformedRowsV1(t *testing.T) {
 }
 
 func TestColumnVectorGraphBlockViewInvNormStateSourceAndLegacyFallbackV1(t *testing.T) {
-	rows := []columnGraphRebuildInputRowV2A{
-		{id: "doc-a", vector: []float32{3, 4, 0}},
-		{id: "doc-b", vector: []float32{0, 2, 0}},
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{3, 4, 0}, InvNorm: 0.2, Adjacency: []uint32{1}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 2, 0}, InvNorm: 0.5, Adjacency: []uint32{0}},
 	}
-	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
-	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
-		_ = d.Close()
-		t.Fatalf("RebuildVectorIndex: %v", err)
-	}
-	if err := d.Checkpoint(); err != nil {
-		_ = d.Close()
-		t.Fatalf("Checkpoint: %v", err)
-	}
-	if err := d.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	reopened := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = reopened.Close() }()
-	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
-	if err != nil {
-		t.Fatalf("OpenCollection reopen: %v", err)
-	}
-	reader, err := reopenedCol.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
@@ -242,7 +226,7 @@ func TestColumnVectorGraphBlockViewInvNormStateSourceAndLegacyFallbackV1(t *test
 	if err != nil {
 		t.Fatalf("blockViewForOrdinal: %v", err)
 	}
-	want, err := columnVectorGraphInvNorm(rows[targetOrdinal].vector)
+	want, err := columnVectorGraphInvNorm(rows[targetOrdinal].Vector)
 	if err != nil {
 		t.Fatalf("columnVectorGraphInvNorm: %v", err)
 	}

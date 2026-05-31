@@ -424,12 +424,17 @@ func columnVectorGraphNativeScratchCapOversized(capacity, target int) bool {
 	return capacity > target*2+columnVectorGraphNativeScratchOversizeSlack
 }
 
-// SearchCosine traverses the persisted column graph through the physical row
-// reader. It fetches only graph rows: document materialization stays outside
-// this kernel. Returned results and result IDs alias scratch-owned buffers and
-// must be copied before the next SearchCosine call with the same scratch.
+// SearchCosine traverses the persisted column graph through bound TVIS/base
+// typed-column sources. Legacy graph rows are read only through explicit
+// compatibility fallback when a physical row asset is present. Document
+// materialization stays outside this kernel. Returned results and result IDs
+// alias scratch-owned buffers and must be copied before the next SearchCosine
+// call with the same scratch.
 func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) (results []columnVectorGraphNativeSearchResult, stats columnVectorGraphNativeSearchStats, err error) {
-	if r == nil || r.reader == nil {
+	if r == nil {
+		return nil, columnVectorGraphNativeSearchStats{}, errNilColumnVectorGraphPhysicalRowReader
+	}
+	if r.reader == nil && columnVectorGraphManifestHasPhysicalAsset(r.graph) {
 		return nil, columnVectorGraphNativeSearchStats{}, errNilColumnVectorGraphPhysicalRowReader
 	}
 	if len(query) != r.def.Dimensions {
@@ -502,7 +507,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	plan.scoreBatchMode = opts.ScoreBatchMode
 	var singleBlockView *columnVectorGraphBlockView
-	if plan.physicalReader != nil && len(plan.physicalReader.ranges) == 1 {
+	if plan.physicalReader != nil && len(plan.physicalReader.ranges) == 1 && (plan.scoreSource.vectorKind == columnVectorGraphSearchVectorSourceGraphRows || plan.scoreSource.normKind == columnVectorGraphSearchNormSourceGraphRows) {
 		singleBlockView, err = plan.blockViewForAssetOrdinal(0)
 		if err != nil {
 			return nil, stats, err
@@ -776,6 +781,9 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 			if r.documentIDStateFallbackReason != "" {
 				resultIDStateValidationFailure = true
 			}
+			if plan == nil || plan.physicalReader == nil {
+				return fmt.Errorf("collections: column_graph %q result-id graph-row fallback unavailable for ordinal=%d", r.def.Name, ordinal)
+			}
 			view := singleBlockView
 			rowIndex := ordinal
 			if view == nil {
@@ -888,6 +896,9 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGrap
 }
 
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if plan == nil || plan.physicalReader == nil {
+		return 0, fmt.Errorf("collections: column_graph %q graph-row score fallback unavailable", r.def.Name)
+	}
 	view := singleBlockView
 	rowIndex := ordinal
 	if view == nil {
@@ -1153,6 +1164,9 @@ func (r *columnVectorGraphPhysicalRowReader) rawCandidateAdjacency(plan *columnV
 }
 
 func (r *columnVectorGraphPhysicalRowReader) rawCandidateAdjacencyWithDirectView(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch) ([]uint32, bool, error) {
+	if plan == nil || plan.physicalReader == nil {
+		return nil, false, fmt.Errorf("collections: column_graph %q adjacency graph-row fallback unavailable", r.def.Name)
+	}
 	view := singleBlockView
 	rowIndex := ordinal
 	if view == nil {
