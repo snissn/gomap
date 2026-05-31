@@ -82,8 +82,9 @@ type columnAssetLifecyclePinSetRecord struct {
 
 var columnAssetLifecycleProcessPins = struct {
 	sync.Mutex
-	nextID uint64
-	pins   map[uint64]columnAssetLifecyclePinSetRecord
+	nextID        uint64
+	pins          map[uint64]columnAssetLifecyclePinSetRecord
+	registeredDBs map[*backenddb.DB]bool
 }{}
 
 // ID returns the manager-local process lease identifier.
@@ -165,14 +166,7 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		bytes = addColumnAssetReachabilityBytes(bytes, positiveColumnAssetReachabilityLength(ref.Length))
 	}
 	scope := columnAssetLifecyclePinScope{db: c.db, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c, refs)}
-	columnAssetLifecycleProcessPins.Lock()
-	columnAssetLifecycleProcessPins.nextID++
-	id := columnAssetLifecycleProcessPins.nextID
-	if columnAssetLifecycleProcessPins.pins == nil {
-		columnAssetLifecycleProcessPins.pins = make(map[uint64]columnAssetLifecyclePinSetRecord)
-	}
 	record := columnAssetLifecyclePinSetRecord{
-		ID:         id,
 		Scope:      scope,
 		Collection: scope.collection,
 		Namespace:  scope.namespace,
@@ -182,8 +176,10 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		Refs:       append([]ColumnAssetRef(nil), refs...),
 		Bytes:      bytes,
 	}
-	columnAssetLifecycleProcessPins.pins[id] = record
-	columnAssetLifecycleProcessPins.Unlock()
+	id, err := columnAssetLifecycleRegisterProcessPin(record)
+	if err != nil {
+		return nil, err
+	}
 	return &ColumnAssetLifecyclePinSet{
 		scope:  scope,
 		id:     id,
@@ -192,6 +188,68 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		reason: opts.Reason,
 		refs:   append([]ColumnAssetRef(nil), refs...),
 	}, nil
+}
+
+func columnAssetLifecycleRegisterProcessPin(record columnAssetLifecyclePinSetRecord) (uint64, error) {
+	if record.Scope.db == nil {
+		return 0, errCollectionDBNil
+	}
+	for {
+		columnAssetLifecycleProcessPins.Lock()
+		if columnAssetLifecycleProcessPins.registeredDBs != nil && columnAssetLifecycleProcessPins.registeredDBs[record.Scope.db] {
+			id := columnAssetLifecycleStoreProcessPinLocked(record)
+			columnAssetLifecycleProcessPins.Unlock()
+			return id, nil
+		}
+		columnAssetLifecycleProcessPins.Unlock()
+
+		registeredDB := record.Scope.db
+		_, ok := registeredDB.RegisterCloseHookIfOpenAfter(func() bool {
+			columnAssetLifecycleProcessPins.Lock()
+			defer columnAssetLifecycleProcessPins.Unlock()
+			if columnAssetLifecycleProcessPins.registeredDBs == nil {
+				columnAssetLifecycleProcessPins.registeredDBs = make(map[*backenddb.DB]bool)
+			}
+			if columnAssetLifecycleProcessPins.registeredDBs[registeredDB] {
+				return false
+			}
+			columnAssetLifecycleProcessPins.registeredDBs[registeredDB] = true
+			return true
+		}, func() error {
+			columnAssetLifecycleReleaseProcessPinsForDB(registeredDB)
+			return nil
+		})
+		if !ok {
+			return 0, errors.New("collections: column asset lifecycle pin set requires an open backend DB")
+		}
+	}
+}
+
+func columnAssetLifecycleStoreProcessPinLocked(record columnAssetLifecyclePinSetRecord) uint64 {
+	columnAssetLifecycleProcessPins.nextID++
+	record.ID = columnAssetLifecycleProcessPins.nextID
+	record.Refs = append([]ColumnAssetRef(nil), record.Refs...)
+	if columnAssetLifecycleProcessPins.pins == nil {
+		columnAssetLifecycleProcessPins.pins = make(map[uint64]columnAssetLifecyclePinSetRecord)
+	}
+	columnAssetLifecycleProcessPins.pins[record.ID] = record
+	return record.ID
+}
+
+func columnAssetLifecycleReleaseProcessPinsForDB(db *backenddb.DB) {
+	if db == nil {
+		return
+	}
+	columnAssetLifecycleProcessPins.Lock()
+	defer columnAssetLifecycleProcessPins.Unlock()
+	for id, record := range columnAssetLifecycleProcessPins.pins {
+		if record.Scope.db == db {
+			delete(columnAssetLifecycleProcessPins.pins, id)
+		}
+	}
+	if columnAssetLifecycleProcessPins.registeredDBs != nil {
+		delete(columnAssetLifecycleProcessPins.registeredDBs, db)
+	}
 }
 
 func validateColumnAssetLifecyclePinSource(source ColumnAssetLifecyclePinSource) error {

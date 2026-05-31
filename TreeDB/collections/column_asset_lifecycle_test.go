@@ -254,6 +254,41 @@ func TestColumnAssetLifecycleReportPinSetSharedAcrossManagers1954(t *testing.T) 
 	}
 }
 
+func TestColumnAssetLifecyclePinSetReleasedOnDBClose1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 2, 99)
+	pin, err := col.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{
+		Source: ColumnAssetLifecyclePinSourcePreparedQuery,
+		Owner:  "prepared-runner-db-close",
+		Refs:   []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("AcquireColumnAssetLifecyclePinSet: %v", err)
+	}
+	if pin.ID() == 0 {
+		t.Fatalf("pin id is zero")
+	}
+	if err := d.RunCloseHooks(); err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	columnAssetLifecycleProcessPins.Lock()
+	defer columnAssetLifecycleProcessPins.Unlock()
+	for _, record := range columnAssetLifecycleProcessPins.pins {
+		if record.Scope.db == d {
+			t.Fatalf("pin record for closed DB leaked: %+v", record)
+		}
+	}
+	if columnAssetLifecycleProcessPins.registeredDBs[d] {
+		t.Fatalf("closed DB remained registered for lifecycle pin cleanup")
+	}
+}
+
 func TestColumnAssetLifecycleReportMappedResourceUnconvertibleIncomplete1954(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
