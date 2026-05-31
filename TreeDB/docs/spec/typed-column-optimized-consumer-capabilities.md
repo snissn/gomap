@@ -1,6 +1,6 @@
 # Typed-Column Optimized-Consumer Capability Matrix (#2047)
 
-Status: pre-alpha column-store contract for optimized consumers. TreeDB typed-column
+Status: pre-alpha typed-column contract for optimized consumers. TreeDB typed-column
 on-disk formats, reader APIs, counters, and graph-search prepared views may still
 change. This document classifies the current logical/physical typed-column pairs
 by their highest committed optimized-consumer tier; it does not implement the
@@ -39,7 +39,7 @@ pointers must not be described as transient or WAL-like storage.
 - Reusable direct-view certification and helper API work belongs to #2046. Rows
   marked `mmap_direct` define the contract #2046 should certify; this PR does
   not add new certifier implementation.
-- Adding a new `ColumnStoreValueType`, `typedcolumn.ColumnType`, or
+- Adding a new collection logical value type, `typedcolumn.ColumnType`, or
   `typedcolumn.Encoding` must update this document and the docs-lint coverage in
   `TreeDB/docs/column_store_capability_matrix_test.go` before merge.
 
@@ -67,7 +67,7 @@ pointers must not be described as transient or WAL-like storage.
 
 The parent #2035 prepared-view work treats the following roles as the current
 format. #2044 owns enforcement, but descendants should use this table as the
-stable generic column-store contract.
+stable generic typed-column contract.
 
 | Graph-search state | Logical/encoding | Required tier for healthy path | Prepared runtime shape | Timing boundary and counters |
 | --- | --- | --- | --- | --- |
@@ -85,7 +85,7 @@ showing why the weaker tier is acceptable.
 
 ## Existing Low-Level Encoding Coverage
 
-This matrix intentionally mentions every current `ColumnStoreValueType`,
+This matrix intentionally mentions every current collection logical value type,
 `typedcolumn.ColumnType`, and `typedcolumn.Encoding` so docs lint fails when new
 typed-column storage surfaces are added without an optimized-consumer decision.
 Current logical value types covered: `bool`, `int64`, `float32`, `double`,

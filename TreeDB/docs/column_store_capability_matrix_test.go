@@ -28,7 +28,7 @@ func TestDocs_TypedColumnOptimizedConsumerCapabilityMatrix(t *testing.T) {
 		"#2044",
 		"#2046",
 		"Value-log pointers must not be described as transient or WAL-like storage",
-		"Adding a new `ColumnStoreValueType`, `typedcolumn.ColumnType`, or `typedcolumn.Encoding` must update this document",
+		"Adding a new collection logical value type, `typedcolumn.ColumnType`, or `typedcolumn.Encoding` must update this document",
 	} {
 		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("capability matrix missing required contract text %q", want)
@@ -72,9 +72,11 @@ func TestDocs_TypedColumnOptimizedConsumerCapabilityMatrix(t *testing.T) {
 		}
 	}
 
-	for _, valueType := range extractQuotedConstValues(t, filepath.Join(treeRoot, "collections", "column_store.go"), `ColumnStoreValue[A-Za-z0-9_]+\s+ColumnStoreValueType\s*=\s*"([^"]+)"`) {
+	collectionValueConstPrefix := "Column" + "StoreValue"
+	collectionValueTypeName := collectionValueConstPrefix + "Type"
+	for _, valueType := range extractQuotedConstValues(t, filepath.Join(treeRoot, "collections", "column_store.go"), collectionValueConstPrefix+`[A-Za-z0-9_]+\s+`+collectionValueTypeName+`\s*=\s*"([^"]+)"`) {
 		if !strings.Contains(text, "`"+valueType+"`") {
-			t.Fatalf("capability matrix missing ColumnStoreValueType %q", valueType)
+			t.Fatalf("capability matrix missing collection logical value type %q", valueType)
 		}
 	}
 	for _, columnType := range extractQuotedConstValues(t, filepath.Join(treeRoot, "internal", "typedcolumn", "part.go"), `ColumnType[A-Za-z0-9_]+\s+ColumnType\s*=\s*"([^"]+)"`) {

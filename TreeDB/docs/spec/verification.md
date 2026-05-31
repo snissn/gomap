@@ -805,8 +805,8 @@ Coverage:
 ## 12.6 Typed-Column Optimized-Consumer Capability Matrix
 
 Invariant:
-- Every current `ColumnStoreValueType`, `typedcolumn.ColumnType`, and
-  `typedcolumn.Encoding` has an optimized-consumer tier entry or explicit
+- Every current collection logical value type constant, `typedcolumn.ColumnType`,
+  and `typedcolumn.Encoding` has an optimized-consumer tier entry or explicit
   compatibility/experimental classification.
 - Graph-search-relevant typed-column state points to the generic tier matrix,
   with healthy current-format graph search requiring `mmap_direct` unless #2044
