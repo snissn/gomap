@@ -333,6 +333,9 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 		PreparedQueryRefs:                     refs.preparedQuery,
 		PinnedRefs:                            refs.pinned,
 	})
+	if err != nil {
+		return ColumnAssetLifecycleReport{}, err
+	}
 	pinSummary := summarizeColumnAssetLifecyclePins(pins)
 	fence := c.columnAssetLifecycleSnapshotFence(plan.PlanCommitSeq)
 	report := ColumnAssetLifecycleReport{
@@ -358,7 +361,7 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 	if len(report.IncompleteReasons) != 0 {
 		report.Complete = false
 	}
-	return report, err
+	return report, nil
 }
 
 type columnAssetLifecycleReachabilityRefSets struct {
