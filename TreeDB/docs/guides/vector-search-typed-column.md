@@ -205,12 +205,14 @@ Report both `ns/op` and the explicit `ops/sec` metric emitted by the benchmark
 helpers. For parallel benchmarks, `ops/sec` is the aggregate operation rate
 implied by Go's parallel `ns/op` measurement. Always include `B/op`,
 `allocs/op`, and the direct/fallback counters
-(`adjacency_typed_list_mmap_direct/search`,
+(`adjacency_prepared_csr_mmap_direct/search`,
+`adjacency_typed_list_mmap_direct/search`,
 `adjacency_typed_list_scratch_decodes/search`, `norm_mmap_direct/search`,
 `norm_scratch_decodes/search`, `vector_mmap_direct/search`, and
 `vector_scratch_decodes/search`). Legacy aliases such as
 `adjacency_mmap_direct/search` remain compatibility telemetry, not the primary
-healthy-path adjacency proof.
+healthy-path adjacency proof; generic typed-list counters are fallback evidence
+once prepared CSR adjacency is active.
 
 | Tier alias | Canonical benchmark | Boundary |
 | --- | --- | --- |
