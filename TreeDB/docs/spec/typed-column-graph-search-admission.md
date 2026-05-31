@@ -85,9 +85,11 @@ wall-time matrix still has net throughput gaps, and the legacy/current rows are
 not apples-to-apples storage-path evidence because they visit 612 versus 3340
 edges/search (about 5.5x). Therefore this table is an admission/readiness
 promotion, not an unconditional claim that #2035 beat the legacy control. The
-focused #2043 adjacency-source benchmark adds a narrower finding: with topology
-and visited edges held constant, prepared CSR adjacency is zero-allocation and
-slightly faster than forced graph-row adjacency fallback in the local run.
+focused #2043 adjacency-access microbenchmark adds a narrower finding: with
+ordinals and edge count held constant and without running `SearchCosine`,
+prepared CSR adjacency access is zero-allocation and faster than graph-row
+compatibility adjacency decode in the local run, so adjacency access is not the
+cause of the 5.5x visited-edge mismatch.
 
 | State role | Logical / physical type | Prepared runtime shape | Admission status | #2043 evidence |
 | --- | --- | --- | --- | --- |

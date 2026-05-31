@@ -842,179 +842,237 @@ func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnStatsMode2042(b *tes
 	}
 }
 
-func TestColumnVectorGraphSearchAdjacencySourceApplesToApples2043(t *testing.T) {
+func TestColumnVectorGraphAdjacencyAccessApplesToApples2043(t *testing.T) {
 	if !columnVectorGraphLayer0AdjacencyMmapExpectedOnPlatform1919() {
-		t.Skip("adjacency source apples-to-apples evidence requires mmap_direct prepared CSR support")
+		t.Skip("adjacency access apples-to-apples evidence requires mmap_direct prepared CSR support")
 	}
-	shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
-	shape.omitResultMaterialization = true
-	closeFn, col, def, query := openColumnVectorGraphNativeSearchBenchFixtureV3(t, shape)
+	closeFn, reader, ordinals := openColumnVectorGraphAdjacencyAccessFixture2043(t)
 	defer closeFn()
-	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, OmitResultMaterialization: true}
-
-	preparedReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	plan, err := newColumnVectorGraphSearchPlan(reader)
 	if err != nil {
-		t.Fatalf("open prepared reader: %v", err)
+		t.Fatalf("newColumnVectorGraphSearchPlan: %v", err)
 	}
-	defer preparedReader.Close()
-	if err := validateColumnVectorGraphPreparedSearchAdjacency(preparedReader.adjacencyLayerSources, preparedReader.RowCount()); err != nil {
-		t.Fatalf("prepared adjacency source: %v", err)
-	}
-	var preparedScratch columnVectorGraphNativeSearchScratch
-	preparedResults, preparedStats, err := preparedReader.SearchCosine(query, opts, &preparedScratch)
+	var scratch columnVectorGraphNativeSearchScratch
+	var preparedStats, graphRowStats columnVectorGraphAdjacencyAccessMicroStats2043
+	preparedSum, err := columnVectorGraphPreparedCSRAdjacencyAccessOnce2043(reader, ordinals, &preparedStats)
 	if err != nil {
-		t.Fatalf("prepared SearchCosine: %v", err)
+		t.Fatalf("prepared CSR adjacency access: %v", err)
 	}
-
-	fallbackReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	graphRowSum, err := columnVectorGraphGraphRowAdjacencyAccessOnce2043(reader, plan, ordinals, &scratch, &graphRowStats)
 	if err != nil {
-		t.Fatalf("open fallback reader: %v", err)
+		t.Fatalf("graph-row adjacency access: %v", err)
 	}
-	defer fallbackReader.Close()
-	disableColumnVectorGraphAdjacencyDirectSourcesForTest(t, fallbackReader)
-	var fallbackScratch columnVectorGraphNativeSearchScratch
-	fallbackResults, fallbackStats, err := fallbackReader.SearchCosine(query, opts, &fallbackScratch)
-	if err != nil {
-		t.Fatalf("fallback SearchCosine: %v", err)
+	if preparedStats.Expansions != graphRowStats.Expansions || preparedStats.Edges != graphRowStats.Edges || preparedStats.AdjacencyBytesRead != graphRowStats.AdjacencyBytesRead || preparedSum != graphRowSum {
+		t.Fatalf("prepared stats=%+v checksum=%d graph-row stats=%+v checksum=%d want identical topology/ordinals/edges", preparedStats, preparedSum, graphRowStats, graphRowSum)
 	}
-
-	if mismatch := columnGraphNativeSearchResultsMismatchV3(preparedResults, fallbackResults); mismatch != "" {
-		t.Fatalf("prepared vs fallback results mismatch: %s", mismatch)
+	if preparedStats.Expansions != uint64(len(ordinals)) || preparedStats.Edges == 0 {
+		t.Fatalf("prepared stats=%+v ordinals=%d want non-zero fixed expansion set", preparedStats, len(ordinals))
 	}
-	for _, cmp := range []struct {
-		name string
-		got  uint64
-		want uint64
-	}{
-		{name: "candidate_rows", got: preparedStats.CandidateRows, want: fallbackStats.CandidateRows},
-		{name: "candidates", got: preparedStats.Candidates, want: fallbackStats.Candidates},
-		{name: "edges", got: preparedStats.Edges, want: fallbackStats.Edges},
-		{name: "visited_edges", got: preparedStats.VisitedEdges, want: fallbackStats.VisitedEdges},
-	} {
-		if cmp.got != cmp.want {
-			t.Fatalf("%s prepared=%d fallback=%d want apples-to-apples match", cmp.name, cmp.got, cmp.want)
-		}
+	if preparedStats.PreparedCSRMmapDirectViews != preparedStats.Expansions || preparedStats.ScratchDecodes != 0 || preparedStats.LegacyGraphRowDecodes != 0 {
+		t.Fatalf("prepared stats=%+v want prepared CSR mmap/direct only", preparedStats)
 	}
-	if preparedStats.AdjacencyPreparedCSRMmapDirectViews == 0 || preparedStats.AdjacencyScratchDecodes != 0 || preparedStats.AdjacencyLegacyFallbacks != 0 {
-		t.Fatalf("prepared stats=%+v want prepared CSR mmap direct adjacency without scratch/legacy fallback", preparedStats)
-	}
-	if fallbackStats.AdjacencyPreparedCSRMmapDirectViews != 0 || fallbackStats.AdjacencyScratchDecodes == 0 || fallbackStats.AdjacencyLegacyFallbacks == 0 {
-		t.Fatalf("fallback stats=%+v want graph-row adjacency scratch/legacy fallback and no prepared CSR", fallbackStats)
+	if graphRowStats.PreparedCSRMmapDirectViews != 0 || graphRowStats.LegacyGraphRowDecodes != graphRowStats.Expansions || graphRowStats.ScratchDecodes != graphRowStats.Expansions {
+		t.Fatalf("graph-row stats=%+v want graph-row compatibility scratch decodes only", graphRowStats)
 	}
 }
 
-func BenchmarkColumnVectorGraphSearchAdjacencySourceApplesToApples2043(b *testing.B) {
+func BenchmarkColumnVectorGraphAdjacencyAccessApplesToApples2043(b *testing.B) {
 	if !columnVectorGraphLayer0AdjacencyMmapExpectedOnPlatform1919() {
-		b.Skip("adjacency source apples-to-apples evidence requires mmap_direct prepared CSR support")
+		b.Skip("adjacency access apples-to-apples evidence requires mmap_direct prepared CSR support")
 	}
 	for _, tc := range []struct {
-		name                  string
-		forceGraphRowFallback bool
+		name  string
+		graph bool
 	}{
 		{name: "state_prepared_csr_adjacency"},
-		{name: "graph_row_adjacency_fallback", forceGraphRowFallback: true},
+		{name: "graph_row_adjacency_decode", graph: true},
 	} {
 		tc := tc
 		b.Run(tc.name, func(b *testing.B) {
-			benchmarkColumnVectorGraphSearchAdjacencySourceApplesToApples2043(b, tc.forceGraphRowFallback)
+			benchmarkColumnVectorGraphAdjacencyAccessApplesToApples2043(b, tc.graph)
 		})
 	}
 }
 
-func benchmarkColumnVectorGraphSearchAdjacencySourceApplesToApples2043(b *testing.B, forceGraphRowFallback bool) {
+type columnVectorGraphAdjacencyAccessMicroStats2043 struct {
+	Expansions                 uint64
+	Edges                      uint64
+	AdjacencyBytesRead         uint64
+	PreparedCSRDirectViews     uint64
+	PreparedCSRMmapDirectViews uint64
+	LegacyGraphRowDecodes      uint64
+	ScratchDecodes             uint64
+	DirectViews                uint64
+	SourceFallbacks            uint64
+}
+
+func benchmarkColumnVectorGraphAdjacencyAccessApplesToApples2043(b *testing.B, graphRow bool) {
 	b.Helper()
-	shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
-	shape.omitResultMaterialization = true
-	closeFn, col, def, query := openColumnVectorGraphNativeSearchBenchFixtureV3(b, shape)
+	closeFn, reader, ordinals := openColumnVectorGraphAdjacencyAccessFixture2043(b)
 	defer closeFn()
-	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	plan, err := newColumnVectorGraphSearchPlan(reader)
 	if err != nil {
-		b.Fatalf("open reader: %v", err)
+		b.Fatalf("newColumnVectorGraphSearchPlan: %v", err)
 	}
-	defer reader.Close()
-	if forceGraphRowFallback {
-		disableColumnVectorGraphAdjacencyDirectSourcesForTest(b, reader)
-	} else if err := validateColumnVectorGraphPreparedSearchAdjacency(reader.adjacencyLayerSources, reader.RowCount()); err != nil {
-		b.Fatalf("prepared adjacency source: %v", err)
-	}
-	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, OmitResultMaterialization: true}
 	var scratch columnVectorGraphNativeSearchScratch
-	if _, stats, err := reader.SearchCosine(query, opts, &scratch); err != nil {
-		b.Fatalf("warm SearchCosine: %v", err)
-	} else {
-		assertColumnVectorGraphSearchAdjacencySourceApplesStats2043(b, stats, forceGraphRowFallback)
+	var warmStats columnVectorGraphAdjacencyAccessMicroStats2043
+	if graphRow {
+		if _, err := columnVectorGraphGraphRowAdjacencyAccessOnce2043(reader, plan, ordinals, &scratch, &warmStats); err != nil {
+			b.Fatalf("warm graph-row adjacency access: %v", err)
+		}
+	} else if _, err := columnVectorGraphPreparedCSRAdjacencyAccessOnce2043(reader, ordinals, &warmStats); err != nil {
+		b.Fatalf("warm prepared CSR adjacency access: %v", err)
 	}
-	baseStats := reader.Stats()
-	var searchStats columnVectorGraphNativeSearchStats
+	assertColumnVectorGraphAdjacencyAccessMicroStats2043(b, warmStats, uint64(len(ordinals)), graphRow)
+
+	var stats columnVectorGraphAdjacencyAccessMicroStats2043
+	var checksum uint64
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		got, stats, err := reader.SearchCosine(query, opts, &scratch)
+		var sum uint64
+		var err error
+		if graphRow {
+			sum, err = columnVectorGraphGraphRowAdjacencyAccessOnce2043(reader, plan, ordinals, &scratch, &stats)
+		} else {
+			sum, err = columnVectorGraphPreparedCSRAdjacencyAccessOnce2043(reader, ordinals, &stats)
+		}
 		if err != nil {
-			b.Fatalf("SearchCosine: %v", err)
+			b.Fatalf("adjacency access: %v", err)
 		}
-		if len(got) == 0 {
-			b.Fatalf("SearchCosine returned no results")
-		}
-		columnPhysicalScanBenchSum += int64(got[0].Ordinal)
-		searchStats.CandidateRows += stats.CandidateRows
-		searchStats.Candidates += stats.Candidates
-		searchStats.Edges += stats.Edges
-		searchStats.VisitedNodes += stats.VisitedNodes
-		searchStats.VisitedEdges += stats.VisitedEdges
-		searchStats.AdjacencyBytesRead += stats.AdjacencyBytesRead
-		searchStats.AdjacencyExpansions += stats.AdjacencyExpansions
-		searchStats.AdjacencyScratchDecodes += stats.AdjacencyScratchDecodes
-		searchStats.AdjacencyDirectViews += stats.AdjacencyDirectViews
-		searchStats.AdjacencyMmapDirectViews += stats.AdjacencyMmapDirectViews
-		searchStats.AdjacencyPreparedCSRDirectViews += stats.AdjacencyPreparedCSRDirectViews
-		searchStats.AdjacencyPreparedCSRMmapDirectViews += stats.AdjacencyPreparedCSRMmapDirectViews
-		searchStats.AdjacencyLegacyFallbacks += stats.AdjacencyLegacyFallbacks
-		searchStats.AdjacencySourceFallbacks += stats.AdjacencySourceFallbacks
-		searchStats.PreparedGraphSearchViews += stats.PreparedGraphSearchViews
-		searchStats.GraphRowFallbacks += stats.GraphRowFallbacks
+		checksum += sum
 	}
 	b.StopTimer()
-	assertColumnVectorGraphSearchAdjacencySourceAggregateStats2043(b, searchStats, b.N, forceGraphRowFallback)
-	reportColumnVectorGraphSearchAdjacencySourceApplesMetrics2043(b, shape, b.N, baseStats, reader.Stats(), searchStats, forceGraphRowFallback)
+	columnPhysicalScanBenchSum += int64(checksum & uint64(math.MaxInt64))
+	assertColumnVectorGraphAdjacencyAccessMicroStats2043(b, stats, uint64(len(ordinals))*uint64(max(b.N, 1)), graphRow)
+	reportColumnVectorGraphAdjacencyAccessMicroMetrics2043(b, b.N, len(ordinals), stats, graphRow)
 }
 
-func assertColumnVectorGraphSearchAdjacencySourceApplesStats2043(tb testing.TB, stats columnVectorGraphNativeSearchStats, forceGraphRowFallback bool) {
+func openColumnVectorGraphAdjacencyAccessFixture2043(tb testing.TB) (func(), *columnVectorGraphPhysicalRowReader, []int) {
 	tb.Helper()
-	if stats.Candidates == 0 || stats.VisitedEdges == 0 {
-		tb.Fatalf("stats=%+v want non-zero candidates and visited edges", stats)
+	shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
+	shape.omitResultMaterialization = true
+	closeFixture, col, def, _ := openColumnVectorGraphNativeSearchBenchFixtureV3(tb, shape)
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		closeFixture()
+		tb.Fatalf("open reader: %v", err)
 	}
-	if forceGraphRowFallback {
-		if stats.AdjacencyPreparedCSRMmapDirectViews != 0 || stats.AdjacencyScratchDecodes == 0 || stats.AdjacencyLegacyFallbacks == 0 {
-			tb.Fatalf("fallback stats=%+v want graph-row adjacency scratch/legacy fallback and no prepared CSR", stats)
+	closeFn := func() {
+		_ = reader.Close()
+		closeFixture()
+	}
+	if err := validateColumnVectorGraphPreparedSearchAdjacency(reader.adjacencyLayerSources, reader.RowCount()); err != nil {
+		closeFn()
+		tb.Fatalf("prepared adjacency source: %v", err)
+	}
+	ordinals := columnVectorGraphAdjacencyAccessOrdinals2043(reader.RowCount())
+	if len(ordinals) == 0 {
+		closeFn()
+		tb.Fatalf("no adjacency access ordinals for rows=%d", reader.RowCount())
+	}
+	return closeFn, reader, ordinals
+}
+
+func columnVectorGraphAdjacencyAccessOrdinals2043(rows int) []int {
+	if rows <= 0 {
+		return nil
+	}
+	count := 128
+	if rows < count {
+		count = rows
+	}
+	ordinals := make([]int, count)
+	for i := range ordinals {
+		ordinals[i] = (rows/2 + i*61) % rows
+	}
+	return ordinals
+}
+
+func columnVectorGraphPreparedCSRAdjacencyAccessOnce2043(reader *columnVectorGraphPhysicalRowReader, ordinals []int, stats *columnVectorGraphAdjacencyAccessMicroStats2043) (uint64, error) {
+	if reader == nil || reader.adjacencyLayerSources == nil {
+		return 0, fmt.Errorf("prepared CSR adjacency source unavailable")
+	}
+	var checksum uint64
+	for _, ordinal := range ordinals {
+		neighbors, outcome, reason, ok := reader.adjacencyLayerSources.Neighbors(0, ordinal)
+		if !ok || reason != "" {
+			return 0, fmt.Errorf("prepared CSR adjacency ordinal=%d ok=%t reason=%s", ordinal, ok, reason)
+		}
+		if outcome != columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect {
+			return 0, fmt.Errorf("prepared CSR adjacency ordinal=%d outcome=%s want prepared_csr_mmap_direct", ordinal, outcome)
+		}
+		if stats != nil {
+			stats.Expansions++
+			stats.Edges += uint64(len(neighbors))
+			stats.AdjacencyBytesRead += uint64(len(neighbors)) * 4
+			stats.PreparedCSRDirectViews++
+			stats.PreparedCSRMmapDirectViews++
+			stats.DirectViews++
+		}
+		checksum = columnVectorGraphAdjacencyAccessChecksum2043(checksum, ordinal, neighbors)
+	}
+	return checksum, nil
+}
+
+func columnVectorGraphGraphRowAdjacencyAccessOnce2043(reader *columnVectorGraphPhysicalRowReader, plan *columnVectorGraphSearchPlan, ordinals []int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphAdjacencyAccessMicroStats2043) (uint64, error) {
+	if reader == nil || plan == nil || plan.physicalReader == nil {
+		return 0, fmt.Errorf("graph-row adjacency source unavailable")
+	}
+	if scratch == nil {
+		return 0, errColumnVectorGraphNativeSearchScratchRequired
+	}
+	var checksum uint64
+	for _, ordinal := range ordinals {
+		adjacency, direct, err := reader.rawCandidateAdjacencyWithDirectView(plan, nil, ordinal, scratch)
+		if err != nil {
+			return 0, err
+		}
+		neighbors, err := columnVectorGraphAdjacencyLayer(adjacency, 0)
+		if err != nil {
+			return 0, fmt.Errorf("graph-row adjacency ordinal=%d layer 0: %w", ordinal, err)
+		}
+		if stats != nil {
+			stats.Expansions++
+			stats.Edges += uint64(len(neighbors))
+			stats.AdjacencyBytesRead += uint64(len(adjacency)) * 4
+			stats.LegacyGraphRowDecodes++
+			if direct {
+				stats.DirectViews++
+			} else if len(adjacency) > 0 {
+				stats.ScratchDecodes++
+			}
+		}
+		checksum = columnVectorGraphAdjacencyAccessChecksum2043(checksum, ordinal, neighbors)
+	}
+	return checksum, nil
+}
+
+func columnVectorGraphAdjacencyAccessChecksum2043(seed uint64, ordinal int, neighbors []uint32) uint64 {
+	sum := seed + uint64(ordinal+1)*1315423911 + uint64(len(neighbors))*2654435761
+	for i, neighbor := range neighbors {
+		sum ^= (uint64(neighbor) + 1) * uint64(i+1) * 1099511628211
+	}
+	return sum
+}
+
+func assertColumnVectorGraphAdjacencyAccessMicroStats2043(tb testing.TB, stats columnVectorGraphAdjacencyAccessMicroStats2043, wantExpansions uint64, graphRow bool) {
+	tb.Helper()
+	if stats.Expansions != wantExpansions || stats.Edges == 0 || stats.AdjacencyBytesRead == 0 {
+		tb.Fatalf("adjacency access stats=%+v want expansions=%d and non-zero edges/bytes", stats, wantExpansions)
+	}
+	if graphRow {
+		if stats.PreparedCSRMmapDirectViews != 0 || stats.LegacyGraphRowDecodes != stats.Expansions || stats.ScratchDecodes != stats.Expansions || stats.SourceFallbacks != 0 {
+			tb.Fatalf("graph-row adjacency stats=%+v want scratch-decoded graph-row access only", stats)
 		}
 		return
 	}
-	if stats.AdjacencyPreparedCSRMmapDirectViews == 0 || stats.AdjacencyScratchDecodes != 0 || stats.AdjacencyLegacyFallbacks != 0 {
-		tb.Fatalf("prepared stats=%+v want prepared CSR mmap direct adjacency without scratch/legacy fallback", stats)
+	if stats.PreparedCSRMmapDirectViews != stats.Expansions || stats.PreparedCSRDirectViews != stats.Expansions || stats.DirectViews != stats.Expansions || stats.LegacyGraphRowDecodes != 0 || stats.ScratchDecodes != 0 || stats.SourceFallbacks != 0 {
+		tb.Fatalf("prepared CSR adjacency stats=%+v want prepared CSR mmap/direct access only", stats)
 	}
 }
 
-func assertColumnVectorGraphSearchAdjacencySourceAggregateStats2043(tb testing.TB, stats columnVectorGraphNativeSearchStats, n int, forceGraphRowFallback bool) {
-	tb.Helper()
-	if n <= 0 {
-		return
-	}
-	if stats.Candidates == 0 || stats.VisitedEdges == 0 {
-		tb.Fatalf("stats=%+v want non-zero aggregate candidates and visited edges", stats)
-	}
-	if forceGraphRowFallback {
-		if stats.AdjacencyPreparedCSRMmapDirectViews != 0 || stats.AdjacencyScratchDecodes == 0 || stats.AdjacencyLegacyFallbacks == 0 {
-			tb.Fatalf("fallback aggregate stats=%+v want graph-row adjacency scratch/legacy fallback and no prepared CSR", stats)
-		}
-		return
-	}
-	if stats.AdjacencyPreparedCSRMmapDirectViews == 0 || stats.AdjacencyScratchDecodes != 0 || stats.AdjacencyLegacyFallbacks != 0 {
-		tb.Fatalf("prepared aggregate stats=%+v want prepared CSR mmap direct adjacency without scratch/legacy fallback", stats)
-	}
-}
-
-func reportColumnVectorGraphSearchAdjacencySourceApplesMetrics2043(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3, n int, baseStats, stats columnPhysicalRowReaderStats, searchStats columnVectorGraphNativeSearchStats, forceGraphRowFallback bool) {
+func reportColumnVectorGraphAdjacencyAccessMicroMetrics2043(b *testing.B, n int, ordinalCount int, stats columnVectorGraphAdjacencyAccessMicroStats2043, graphRow bool) {
 	b.Helper()
 	if n <= 0 {
 		return
@@ -1022,36 +1080,25 @@ func reportColumnVectorGraphSearchAdjacencySourceApplesMetrics2043(b *testing.B,
 	if elapsed := b.Elapsed(); elapsed > 0 {
 		b.ReportMetric(float64(n)/elapsed.Seconds(), "ops/sec")
 	}
-	b.ReportMetric(2043, "adjacency_apples_to_apples_issue")
-	if forceGraphRowFallback {
-		b.ReportMetric(1, "adjacency_source_graph_row_fallback")
+	b.ReportMetric(2043, "adjacency_micro_issue")
+	if graphRow {
+		b.ReportMetric(1, "adjacency_source_graph_row_decode")
 	} else {
 		b.ReportMetric(1, "adjacency_source_state_prepared_csr")
 	}
-	b.ReportMetric(float64(shape.rows), "rows")
-	b.ReportMetric(float64(shape.dims), "dims")
-	b.ReportMetric(float64(shape.m), "degree")
-	b.ReportMetric(float64(shape.topK), "top_k")
-	b.ReportMetric(float64(shape.efSearch), "ef_search")
-	b.ReportMetric(1, "graph_only_no_result_materialization")
-	b.ReportMetric(float64(stats.Rows), "graph_rows")
-	b.ReportMetric(float64(searchStats.CandidateRows)/float64(n), "candidate_rows/search")
-	b.ReportMetric(float64(searchStats.Candidates)/float64(n), "candidates/search")
-	b.ReportMetric(float64(searchStats.Edges)/float64(n), "edges/search")
-	b.ReportMetric(float64(searchStats.VisitedNodes)/float64(n), "visited_nodes/search")
-	b.ReportMetric(float64(searchStats.VisitedEdges)/float64(n), "visited_edges/search")
-	b.ReportMetric(float64(searchStats.AdjacencyBytesRead)/float64(n), "adjacency_B/search")
-	b.ReportMetric(float64(searchStats.AdjacencyExpansions)/float64(n), "adjacency_expansions/search")
-	b.ReportMetric(float64(searchStats.AdjacencyDirectViews)/float64(n), "adjacency_direct_views/search")
-	b.ReportMetric(float64(searchStats.AdjacencyMmapDirectViews)/float64(n), "adjacency_mmap_direct/search")
-	b.ReportMetric(float64(searchStats.AdjacencyPreparedCSRDirectViews)/float64(n), "adjacency_prepared_csr_direct_views/search")
-	b.ReportMetric(float64(searchStats.AdjacencyPreparedCSRMmapDirectViews)/float64(n), "adjacency_prepared_csr_mmap_direct/search")
-	b.ReportMetric(float64(searchStats.AdjacencyScratchDecodes)/float64(n), "adjacency_scratch_decodes/search")
-	b.ReportMetric(float64(searchStats.AdjacencyLegacyFallbacks)/float64(n), "adjacency_legacy_fallbacks/search")
-	b.ReportMetric(float64(searchStats.AdjacencySourceFallbacks)/float64(n), "adjacency_source_fallbacks/search")
-	b.ReportMetric(float64(searchStats.PreparedGraphSearchViews)/float64(n), "prepared_graph_search_views/search")
-	b.ReportMetric(float64(searchStats.GraphRowFallbacks)/float64(n), "graph_row_fallbacks/search")
-	b.ReportMetric(float64(deltaColumnGraphNativeBenchBytesV3(stats.PhysicalBytesRead, baseStats.PhysicalBytesRead))/float64(n), "physical_B/search")
+	b.ReportMetric(float64(ordinalCount), "ordinals/op")
+	b.ReportMetric(float64(stats.Expansions)/float64(n), "adjacency_expansions/op")
+	b.ReportMetric(float64(stats.Edges)/float64(n), "edges/op")
+	if stats.Expansions > 0 {
+		b.ReportMetric(float64(stats.Edges)/float64(stats.Expansions), "edges/expansion")
+	}
+	b.ReportMetric(float64(stats.AdjacencyBytesRead)/float64(n), "adjacency_B/op")
+	b.ReportMetric(float64(stats.PreparedCSRDirectViews)/float64(n), "adjacency_prepared_csr_direct_views/op")
+	b.ReportMetric(float64(stats.PreparedCSRMmapDirectViews)/float64(n), "adjacency_prepared_csr_mmap_direct/op")
+	b.ReportMetric(float64(stats.LegacyGraphRowDecodes)/float64(n), "adjacency_legacy_graph_row_decodes/op")
+	b.ReportMetric(float64(stats.ScratchDecodes)/float64(n), "adjacency_scratch_decodes/op")
+	b.ReportMetric(float64(stats.DirectViews)/float64(n), "adjacency_direct_views/op")
+	b.ReportMetric(float64(stats.SourceFallbacks)/float64(n), "adjacency_source_fallbacks/op")
 }
 
 func BenchmarkColumnVectorGraphNativeSearchCosineParallelTypedColumnMinimalStats2042(b *testing.B) {

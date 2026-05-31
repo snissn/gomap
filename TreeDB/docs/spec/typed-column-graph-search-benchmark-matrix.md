@@ -190,35 +190,37 @@ current-format and combined-prepared rows rebuild HNSW state and visit 3340
 edges/search. Keep those rows as admission/fallback telemetry, not as proof that
 prepared CSR adjacency is slower than graph-row adjacency.
 
-### #2043 adjacency-source apples-to-apples evidence
+### #2043 adjacency-access microbenchmark evidence
 
-A focused permanent benchmark holds the fixture, query, traversal settings,
-result-materialization boundary, candidate count, and visited-edge count fixed,
-then varies only adjacency source selection: vector-index-state prepared CSR
-mmap/direct adjacency versus forced graph-row adjacency fallback. This uses the
-same synthetic physical-asset/ring topology on both sides, so both rows report
-128 candidates/search and 612 visited_edges/search.
+A focused permanent microbenchmark times adjacency lookup/expansion only. It uses
+the same physical-asset plus vector-index-state fixture for both rows, fixes the
+same 128 graph ordinals, and reads the same 2048 layer-0 edges/op. The prepared
+row calls vector-index-state prepared CSR `Neighbors(layer, ordinal)` directly;
+the graph-row compatibility row calls the raw graph-row adjacency accessor and
+extracts layer 0. The benchmark does not call `SearchCosine` and does not execute
+scoring, frontier/top-k, result materialization, or prepared vector/norm paths.
 
 ```sh
-OUT=/tmp/gomap_2043_adjacency_apples_20260531_115817
+OUT=/tmp/gomap_2043_adjacency_micro_20260531_122457
 GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^BenchmarkColumnVectorGraphSearchAdjacencySourceApplesToApples2043' \
-  -benchmem -benchtime=1s -count=5 | tee "$OUT/adjacency_apples_to_apples_2043_bench.txt"
+  -bench '^BenchmarkColumnVectorGraphAdjacencyAccessApplesToApples2043' \
+  -benchmem -benchtime=1s -count=5 | tee "$OUT/adjacency_access_apples_to_apples_2043_bench.txt"
 ```
 
-| Row | ns/op median | ops/sec median | B/op | allocs/op | candidates/search | visited_edges/search | Adjacency-source counters |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `state_prepared_csr_adjacency` | 8.109 µs | 123,317 | 0 | 0 | 128 | 612 | `prepared_csr_mmap_direct=40`, `scratch_decodes=0`, `legacy_fallbacks=0`, `source_fallbacks=0` |
-| `graph_row_adjacency_fallback` | 8.533 µs | 117,198 | 0 | 0 | 128 | 612 | `prepared_csr_mmap_direct=0`, `scratch_decodes=40`, `legacy_fallbacks=40`, `source_fallbacks=1` |
+| Row | ns/op median | ops/sec median | B/op | allocs/op | expansions/op | edges/op | edges/expansion | Adjacency-access counters |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `state_prepared_csr_adjacency` | 1.252 µs | 798,843 | 0 | 0 | 128 | 2048 | 16 | `prepared_csr_mmap_direct=128`, `direct_views=128`, `scratch_decodes=0`, `legacy_graph_row_decodes=0`, `source_fallbacks=0` |
+| `graph_row_adjacency_decode` | 3.331 µs | 300,205 | 0 | 0 | 128 | 2048 | 16 | `prepared_csr_mmap_direct=0`, `direct_views=0`, `scratch_decodes=128`, `legacy_graph_row_decodes=128`, `source_fallbacks=0` |
 
-Interpretation: when topology/visited edges are held constant, prepared CSR
-adjacency is slightly faster than graph-row adjacency fallback in this local run
-(~5% lower median ns/op) and remains zero-allocation. This closes the specific
-adjacency storage-path concern without changing traversal/scoring semantics or
-implementing #1980/#1977. The larger full truth-matrix wall-time gap remains a
-separate topology/search-work comparison, not an adjacency-source throughput
-claim.
+Interpretation: when topology, ordinals, and edge count are held constant for
+adjacency access alone, prepared CSR adjacency is faster than graph-row adjacency
+decode in this local run and remains zero-allocation. This narrower evidence
+shows prepared CSR adjacency access is not the cause of the truth-matrix 5.5x
+visited-edge mismatch. It is not an end-to-end search benchmark and must not be
+used as a full `SearchCosine` throughput claim. The larger full truth-matrix
+wall-time gap remains a separate topology/search-work comparison for #1979 and
+follow-up optimization work.
 
 ### #2043 profile and allocation evidence
 
