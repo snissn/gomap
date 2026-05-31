@@ -168,126 +168,9 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	if field.Owner != TypedStorageOwnerColumnPart {
 		return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q owner=%q want %q", field.Path, field.Owner, TypedStorageOwnerColumnPart)
 	}
-	mapping, err := typedColumnAdapterMappingForValueType(field.ValueType)
+	def, err := typedColumnProductionDefinitionForField(field)
 	if err != nil {
 		return typedColumnAdapterColumn{}, err
-	}
-	if field.FixedWidthEncoding != "" {
-		switch field.ValueType {
-		case ColumnStoreValueInt64:
-			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported int64 fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.FixedWidthEncoding)
-			}
-			if field.Nullable {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable int64 raw fixed-width encoding is unsupported", errTypedColumnAdapterUnsupportedType)
-			}
-			mapping.Encoding = typedcolumn.EncodingRawInt64
-		case ColumnStoreValueFloat32:
-			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported float32 fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.FixedWidthEncoding)
-			}
-			if field.Nullable {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable float32 raw fixed-width encoding is unsupported", errTypedColumnAdapterUnsupportedType)
-			}
-			mapping.ColumnType = typedcolumn.ColumnTypeFloat32
-			mapping.Encoding = typedcolumn.EncodingRawFloat32
-		case ColumnStoreValueDouble:
-			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported double fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.FixedWidthEncoding)
-			}
-			if field.Nullable {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable double raw fixed-width encoding is unsupported", errTypedColumnAdapterUnsupportedType)
-			}
-			mapping.ColumnType = typedcolumn.ColumnTypeFloat64
-			mapping.Encoding = typedcolumn.EncodingRawFloat64
-		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
-			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported %s fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.ValueType, field.FixedWidthEncoding)
-			}
-		default:
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: fixed_width_encoding is unsupported for value_type=%s", errTypedColumnAdapterUnsupportedType, field.ValueType)
-		}
-	}
-	if field.Nullable {
-		switch field.ValueType {
-		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
-			mapping.Encoding = typedcolumn.EncodingNullableInt64
-		case ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes, ColumnStoreValueAdjacencyList:
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable %s typed-column fields are not supported", errTypedColumnAdapterUnsupportedType, field.ValueType)
-		default:
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable %s", errTypedColumnAdapterUnsupportedType, field.ValueType)
-		}
-	}
-	name := field.Name
-	if name == "" {
-		name = field.Path
-	}
-	if name == "" {
-		return typedColumnAdapterColumn{}, errors.New("collections: typed-column adapter field requires name or path")
-	}
-	if name == typedColumnAdapterPrimaryIDColumn || field.Path == typedColumnAdapterPrimaryIDColumn {
-		return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q uses reserved primary-id column %q", field.Path, typedColumnAdapterPrimaryIDColumn)
-	}
-	if name == typedColumnAdapterMetadataDictionary || field.Path == typedColumnAdapterMetadataDictionary {
-		return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q uses reserved metadata dictionary %q", field.Path, typedColumnAdapterMetadataDictionary)
-	}
-	def := typedcolumn.ColumnDefinition{
-		Name:           name,
-		Type:           mapping.ColumnType,
-		Encoding:       mapping.Encoding,
-		Compression:    typedcolumn.CompressionNone,
-		CompressionSet: true,
-		StatsDisabled:  field.ValueType != ColumnStoreValueInt64,
-	}
-	switch field.ValueType {
-	case ColumnStoreValueFloat32Vector:
-		if field.VectorDims <= 0 {
-			return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q float32_vector requires positive vector_dims", field.Path)
-		}
-		def.FixedWidthElements = field.VectorDims
-	case ColumnStoreValueUint32List:
-		if field.AdjacencyDegree != 0 {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: uint32_list adjacency_degree=%d must be zero", errTypedColumnAdapterUnsupportedType, field.AdjacencyDegree)
-		}
-		if field.AdjacencyLayout != "" {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: uint32_list must not set adjacency_layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyLayout)
-		}
-		if field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: uint32_list fixed_width_encoding is unsupported", errTypedColumnAdapterUnsupportedType)
-		}
-		def.Encoding = typedcolumn.EncodingRawUint32OffsetsList
-		def.FixedWidthElements = 0
-	case ColumnStoreValueBytes:
-		if field.AdjacencyDegree != 0 {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: bytes adjacency_degree=%d must be zero", errTypedColumnAdapterUnsupportedType, field.AdjacencyDegree)
-		}
-		if field.AdjacencyLayout != "" {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: bytes must not set adjacency_layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyLayout)
-		}
-		if field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: bytes fixed_width_encoding is unsupported", errTypedColumnAdapterUnsupportedType)
-		}
-		def.Encoding = typedcolumn.EncodingRawBytesOffsets
-		def.FixedWidthElements = 0
-	case ColumnStoreValueAdjacencyList:
-		switch field.AdjacencyLayout {
-		case ColumnAdjacencyListLayoutUint32OffsetsList:
-			if field.AdjacencyDegree != 0 {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: adjacency_list adjacency_degree=%d must be zero for adjacency_layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyDegree, field.AdjacencyLayout)
-			}
-			if field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {
-				return typedColumnAdapterColumn{}, fmt.Errorf("%w: adjacency_list fixed_width_encoding is unsupported for adjacency_layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyLayout)
-			}
-			def.Encoding = typedcolumn.EncodingRawUint32OffsetsList
-			def.FixedWidthElements = 0
-		case ColumnAdjacencyListLayoutFixedDense:
-			if field.AdjacencyDegree <= 0 {
-				return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q adjacency_list requires positive adjacency_degree", field.Path)
-			}
-			def.FixedWidthElements = field.AdjacencyDegree
-		default:
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported adjacency_list layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyLayout)
-		}
 	}
 	return typedColumnAdapterColumn{Field: field, Definition: def, FixedWidthEncoding: field.FixedWidthEncoding}, nil
 }
@@ -715,8 +598,8 @@ func validateTypedColumnAdapterInt64AggregateImage(part *typedcolumn.ColumnPart,
 	if !ok {
 		return fmt.Errorf("collections: typed-column int64 aggregate image missing primary-id column %q", typedColumnAdapterPrimaryIDColumn)
 	}
-	if primary.Definition.Type != typedcolumn.ColumnTypeInt64 || primary.Definition.Encoding != typedcolumn.EncodingRawInt64 || primary.Definition.Compression != typedcolumn.CompressionNone {
-		return fmt.Errorf("collections: typed-column int64 aggregate image primary-id column %q type=%s encoding=%s compression=%s want type=%s encoding=%s compression=%s", typedColumnAdapterPrimaryIDColumn, primary.Definition.Type, primary.Definition.Encoding, primary.Definition.Compression, typedcolumn.ColumnTypeInt64, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone)
+	if err := validateTypedColumnProductionPrimaryColumnLayout(primary); err != nil {
+		return fmt.Errorf("collections: typed-column int64 aggregate image primary-id validation failed: %w", err)
 	}
 	got, ok := part.Columns[adapterColumn.Definition.Name]
 	if !ok {
@@ -724,6 +607,9 @@ func validateTypedColumnAdapterInt64AggregateImage(part *typedcolumn.ColumnPart,
 	}
 	if got.Definition.Type != adapterColumn.Definition.Type || got.Definition.Encoding != adapterColumn.Definition.Encoding || got.Definition.Compression != adapterColumn.Definition.Compression || got.Definition.FixedWidthElements != adapterColumn.Definition.FixedWidthElements {
 		return fmt.Errorf("collections: typed-column int64 aggregate image column %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", adapterColumn.Definition.Name, got.Definition.Type, got.Definition.Encoding, got.Definition.Compression, got.Definition.FixedWidthElements, adapterColumn.Definition.Type, adapterColumn.Definition.Encoding, adapterColumn.Definition.Compression, adapterColumn.Definition.FixedWidthElements)
+	}
+	if err := validateTypedColumnProductionPartColumnLayout(adapterColumn.Field, got); err != nil {
+		return fmt.Errorf("collections: typed-column int64 aggregate image column %q layout validation failed: %w", adapterColumn.Definition.Name, err)
 	}
 	return nil
 }
@@ -772,8 +658,8 @@ func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns
 	if !ok {
 		return fmt.Errorf("collections: typed-column adapter image missing primary-id column %q", typedColumnAdapterPrimaryIDColumn)
 	}
-	if primary.Definition.Type != typedcolumn.ColumnTypeInt64 || primary.Definition.Encoding != typedcolumn.EncodingRawInt64 {
-		return fmt.Errorf("collections: typed-column adapter image primary-id column %q type/encoding mismatch", typedColumnAdapterPrimaryIDColumn)
+	if err := validateTypedColumnProductionPrimaryColumnLayout(primary); err != nil {
+		return fmt.Errorf("collections: typed-column adapter image primary-id validation failed: %w", err)
 	}
 	expected := make(map[string]struct{}, len(columns)+1)
 	expected[typedColumnAdapterPrimaryIDColumn] = struct{}{}
@@ -795,6 +681,9 @@ func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns
 		}
 		if got.Definition.Type != column.Definition.Type || got.Definition.Encoding != column.Definition.Encoding || got.Definition.Compression != column.Definition.Compression || got.Definition.FixedWidthElements != column.Definition.FixedWidthElements {
 			return fmt.Errorf("collections: typed-column adapter image column %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", column.Definition.Name, got.Definition.Type, got.Definition.Encoding, got.Definition.Compression, got.Definition.FixedWidthElements, column.Definition.Type, column.Definition.Encoding, column.Definition.Compression, column.Definition.FixedWidthElements)
+		}
+		if err := validateTypedColumnProductionPartColumnLayout(column.Field, got); err != nil {
+			return fmt.Errorf("collections: typed-column adapter image column %q layout validation failed: %w", column.Definition.Name, err)
 		}
 	}
 	return nil

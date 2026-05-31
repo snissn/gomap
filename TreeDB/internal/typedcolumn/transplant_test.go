@@ -383,6 +383,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
 	allowedImports := map[string]struct{}{
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go")): {},
+		// #1952 is the scoped production codec/layout capability guard used by
+		// the adapter and prepared-state seams without adding a new data plane.
+		filepath.Clean(filepath.Join(collectionsDir, "typed_column_capability.go")): {},
 		// #1837 is the scoped prepared typed-column scan/session state seam
 		// shared by concrete collection hot paths.
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_prepared_state.go")): {},
