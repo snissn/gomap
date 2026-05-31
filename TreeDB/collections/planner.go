@@ -1022,7 +1022,10 @@ func (p insertBatchPlanner) buildSingleDirectBufferedInsertPlan(plan *insertBatc
 			plan.stats.IndexStateRunBuild = time.Since(phaseStart)
 		}
 		phaseStart = time.Now()
-		secondaryPlans, secondaryBytes := p.singleDirectBufferedSecondaryRootPlans(item, runtimes, &plan.stats.CollectionInsertStats)
+		secondaryPlans, secondaryBytes, err := p.singleDirectBufferedSecondaryRootPlans(item, runtimes, &plan.stats.CollectionInsertStats)
+		if err != nil {
+			return err
+		}
 		direct.secondaryRootPlans = secondaryPlans
 		direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, secondaryBytes)
 		for _, secondaryPlan := range secondaryPlans {
@@ -1218,9 +1221,9 @@ func (p insertBatchPlanner) directBufferedSecondaryRootPlans(items []insertBatch
 	return plans, stagedBytes, nil
 }
 
-func (p insertBatchPlanner) singleDirectBufferedSecondaryRootPlans(item *insertBatchItem, runtimes []indexRuntime, stats *CollectionInsertStats) ([]directBufferedSecondaryRootPlan, int64) {
+func (p insertBatchPlanner) singleDirectBufferedSecondaryRootPlans(item *insertBatchItem, runtimes []indexRuntime, stats *CollectionInsertStats) ([]directBufferedSecondaryRootPlan, int64, error) {
 	if item == nil || len(runtimes) == 0 {
-		return nil, 0
+		return nil, 0, nil
 	}
 	plans := make([]directBufferedSecondaryRootPlan, 0, len(runtimes))
 	var stagedBytes int64
@@ -1230,6 +1233,9 @@ func (p insertBatchPlanner) singleDirectBufferedSecondaryRootPlans(item *insertB
 		entryCount := len(values)
 		keyBytes := 0
 		for _, encoded := range values {
+			if len(encoded) > 65535 {
+				return nil, 0, errors.New("collections: index key too large")
+			}
 			keyBytes += len(encoded) + len(item.id)
 		}
 		runStats := CollectionSecondaryRunStats{
@@ -1262,7 +1268,11 @@ func (p insertBatchPlanner) singleDirectBufferedSecondaryRootPlans(item *insertB
 		}
 		for i, encoded := range values {
 			var key []byte
-			secondaryPlan.arena, key, _ = appendIndexEntryKey(secondaryPlan.arena, encoded, item.id)
+			var err error
+			secondaryPlan.arena, key, err = appendIndexEntryKey(secondaryPlan.arena, encoded, item.id)
+			if err != nil {
+				return nil, 0, err
+			}
 			secondaryPlan.entries[i] = directBufferedSecondaryRootEntry{key: key}
 		}
 		runStats.Build = time.Since(runStart)
@@ -1275,7 +1285,7 @@ func (p insertBatchPlanner) singleDirectBufferedSecondaryRootPlans(item *insertB
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(keyBytes))
 		plans = append(plans, secondaryPlan)
 	}
-	return plans, stagedBytes
+	return plans, stagedBytes, nil
 }
 
 func directBufferedUniqueValueRootPlans(runs []collectionUniqueProbeRun, runtimes []indexRuntime) []directBufferedUniqueValueRootPlan {

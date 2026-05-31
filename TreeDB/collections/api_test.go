@@ -3137,6 +3137,28 @@ func TestCollectionInsertBatchSingleDirectBufferedBSONRejectsPendingUniqueConfli
 	}
 }
 
+func TestCollectionInsertBatchSingleDirectBufferedBSONRejectsOversizedSecondaryKey(t *testing.T) {
+	_, col := newSingleDirectBufferedBSONUsersCollection(t)
+
+	_, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "email", Value: "ada@example.com"},
+			{Key: "city", Value: strings.Repeat("x", 70000)},
+		})},
+	)
+	if err == nil || !strings.Contains(err.Error(), "index key too large") {
+		t.Fatalf("oversized secondary key err=%v want index key too large", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u1=%q want no staged document after oversized secondary key", got)
+	}
+}
+
 func TestCollectionInsertBatchSingleDirectBufferedTemplateV1StagesExpectedRoots(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
