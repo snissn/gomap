@@ -273,8 +273,7 @@ func backendCollectionDataRootStoragePolicy(db *backenddb.DB, policy RootStorage
 	if err != nil {
 		return base, err
 	}
-	// Only override Default policy, do not override Fast policy
-	if policy == RootStorageDefault && db != nil && db.HasValueLogAppender() {
+	if (policy == RootStorageDefault || policy == RootStorageFast) && db != nil && db.HasValueLogAppender() {
 		return backenddb.OrderedRootStorageValueLogLeaves, nil
 	}
 	return base, nil
@@ -2702,7 +2701,6 @@ func (unlock collectionMutationUnlock) Unlock() {
 // process-crash recoverable under WAL-on modes and is not an fsync guarantee
 // unless composed with a sync-capable barrier.
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
-	fmt.Printf("DEBUG: CreateCollection: meta.Name=%s DataRoot=%s IndexState=%s\n", meta.Name, meta.Options.DataRootStoragePolicy, meta.Options.IndexStateStoragePolicy)
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}

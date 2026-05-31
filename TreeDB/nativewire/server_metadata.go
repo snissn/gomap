@@ -26,13 +26,15 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	if err != nil {
 		return nil, err
 	}
-	// Enforce required storage policy
-	meta.Options.DataRootStoragePolicy = collections.RootStorageFast
-	meta.Options.IndexStateStoragePolicy = collections.RootStorageFast
-
 	meta, err = normalizeClientCollectionMeta(meta)
 	if err != nil {
 		return nil, err
+	}
+	// Enforce required storage policy for nativewire-created collections.
+	meta.Options.DataRootStoragePolicy = collections.RootStorageFast
+	meta.Options.IndexStateStoragePolicy = collections.RootStorageFast
+	for i := range meta.Indexes {
+		meta.Indexes[i].StoragePolicy = collections.RootStorageFast
 	}
 
 	logDebug("handleCreateCollection: creating collection with dataPolicy=%s indexPolicy=%s", meta.Options.DataRootStoragePolicy, meta.Options.IndexStateStoragePolicy)
@@ -85,6 +87,7 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err := normalizeClientIndexDefinition(def); err != nil {
 		return nil, err
 	}
+	def.StoragePolicy = collections.RootStorageFast
 	collection, err := s.collections.OpenCollection(name)
 	if err != nil {
 		return nil, metadataWrap(err)

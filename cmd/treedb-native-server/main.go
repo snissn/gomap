@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -87,7 +88,7 @@ func main() {
 	defer stop()
 
 	err = server.Serve(ctx, ln)
-	if err != nil {
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		log.Fatalf("Server error: %v", err)
 	}
 }

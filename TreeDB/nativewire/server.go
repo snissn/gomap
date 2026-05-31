@@ -39,8 +39,12 @@ func init() {
 	}
 }
 
+func debugLoggingEnabled() bool {
+	return debugLogger != nil
+}
+
 func logDebug(format string, v ...interface{}) {
-	if debugLogger != nil {
+	if debugLoggingEnabled() {
 		debugLogger.Printf(format, v...)
 	}
 }
@@ -572,7 +576,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 }
 
 func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
-	logDebug("handleRequest: bodyLen=%d", len(body))
+	if debugLoggingEnabled() {
+		logDebug("handleRequest: bodyLen=%d", len(body))
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
