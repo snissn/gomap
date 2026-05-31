@@ -153,7 +153,7 @@ func extractTypedColumnEncodingNames(t *testing.T, path string) []string {
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	text := string(data)
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	start := strings.Index(text, "func (e Encoding) String() string")
 	if start < 0 {
 		t.Fatalf("Encoding.String not found in %s", path)
