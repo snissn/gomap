@@ -371,6 +371,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 	queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 	for _, q := range report.Queries {
+		assertColumnStoreCompressionAttributionM1952(t, q.Name, q.CompressionAttribution, true)
 		if q.PlanLabel != columnStorePathRowStoreBaseline {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
 		}
@@ -411,6 +412,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if got, want := queryMetrics["q5_metadata"].RawHash, queryMetrics["q5"].RawHash; got != want {
 		t.Fatalf("q5_metadata raw hash=%016x want q5 hash=%016x", got, want)
 	}
+	assertColumnStoreCodecLayoutCoverageM1952(t, report)
 	assertColumnStoreParityCoverageM11A(t, report.Parity)
 	for name, parity := range report.Parity {
 		if !parity.Pass {
@@ -453,6 +455,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if !strings.Contains(string(data), `"command_wal_bytes_before_checkpoint"`) {
 		t.Fatalf("column store JSON missing before-checkpoint command WAL label:\n%s", data)
 	}
+	for _, want := range []string{`"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("column store JSON missing reporting field %s:\n%s", want, data)
+		}
+	}
 	if !strings.Contains(string(data), `"column_asset_bytes"`) ||
 		!strings.Contains(string(data), `"column_asset_store_bytes"`) ||
 		!strings.Contains(string(data), `"ordinary_value_vlog_bytes"`) ||
@@ -469,6 +476,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 	if !strings.Contains(string(columnMarkdown), "command_wal_bytes_before_checkpoint") {
 		t.Fatalf("column store markdown missing before-checkpoint command WAL label:\n%s", columnMarkdown)
+	}
+	for _, want := range []string{"## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+		if !strings.Contains(string(columnMarkdown), want) {
+			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
+		}
 	}
 	if !strings.Contains(string(columnMarkdown), "column_asset_bytes") ||
 		!strings.Contains(string(columnMarkdown), "column_asset_store_bytes") ||
@@ -909,6 +921,55 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 		"line1 line2\\|pipe &lt;b&gt;&amp;bad&lt;/b&gt;",
 		"| `q_empty_interpretation` | `serial_column_scan` | (empty) |",
 		"| `-` | `-` | - |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
+	}
+}
+
+func TestColumnStoreSuiteMarkdownRendersCodecLayoutUnsupportedRowsM1952(t *testing.T) {
+	report := columnStoreSuiteReport{
+		Suite:                 "column_store",
+		Profile:               "durable",
+		Fixture:               "synthetic",
+		ForcedPath:            columnStorePathSerialColumnScan,
+		CompressionMatrixNote: "future unsupported rows remain reportable without enabling runtime support",
+		Queries: []columnStoreQueryMetric{{
+			Name:                   columnStoreQueryQ1,
+			PlanLabel:              columnStorePathSerialColumnScan,
+			CompressionAttribution: columnStoreQueryCompressionAttribution(columnStorePathSerialColumnScan, string(collections.ColumnPhysicalQueryStorageSourceTypedColumnPartSection), string(collections.ColumnPhysicalQueryFallbackNone), 128),
+		}},
+		CodecLayouts: []columnStoreCodecLayoutMetric{{
+			columnStoreCompressionAttribution: columnStoreCompressionAttribution{
+				CodecLayoutLabel:            "future_layout/zstd_dict",
+				CompressionPolicyLabel:      "alternative_zstd_dict",
+				RequestedCompression:        "zstd_dict",
+				ActualCompression:           "none",
+				SupportState:                "unsupported",
+				SupportReason:               "zstd_dict runtime support is intentionally not widened in slice 1",
+				CompressedBytesSource:       "not_available_unsupported",
+				RawBytesSource:              "not_available_unsupported",
+				DecompressedBytesSource:     "not_available_unsupported",
+				CompressionRatioSource:      "not_available_unsupported",
+				CompressionDurationSource:   "not_available_unsupported",
+				DecompressionDurationSource: "not_available_unsupported",
+				BenchmarkAllocationSource:   "not_available_unsupported",
+			},
+			Rows:    1024,
+			Columns: 3,
+		}},
+	}
+
+	md := renderColumnStoreSuiteMarkdown(report)
+	for _, want := range []string{
+		"## Query Compression And Allocation Attribution",
+		"## Codec/Layout Matrix",
+		"future_layout/zstd_dict",
+		"alternative_zstd_dict",
+		"unsupported: zstd_dict runtime support is intentionally not widened in slice 1",
+		"B/op",
+		"allocs/op",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
@@ -2519,6 +2580,65 @@ func assertColumnStoreQueryMetricCoverageM11A(t testing.TB, queries []columnStor
 		t.Fatalf("query metrics include unexpected names: %+v", byName)
 	}
 	return byName
+}
+
+func assertColumnStoreCodecLayoutCoverageM1952(t testing.TB, report columnStoreSuiteReport) {
+	t.Helper()
+	if report.CompressionMatrixNote == "" {
+		t.Fatal("missing compression matrix note")
+	}
+	if len(report.CodecLayouts) != 2 {
+		t.Fatalf("codec layout rows=%d want compression_off and current_default_none", len(report.CodecLayouts))
+	}
+	seen := make(map[string]bool, len(report.CodecLayouts))
+	for _, row := range report.CodecLayouts {
+		assertColumnStoreCompressionAttributionM1952(t, "codec_layout", row.columnStoreCompressionAttribution, false)
+		if row.Rows != report.Rows || row.Columns == 0 {
+			t.Fatalf("codec layout row dimensions rows/columns=(%d,%d) want rows=%d and columns>0: %+v", row.Rows, row.Columns, report.Rows, row)
+		}
+		seen[row.CompressionPolicyLabel] = true
+	}
+	for _, want := range []string{columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+		if !seen[want] {
+			t.Fatalf("missing codec layout policy %q in %+v", want, report.CodecLayouts)
+		}
+	}
+}
+
+func assertColumnStoreCompressionAttributionM1952(t testing.TB, label string, attr columnStoreCompressionAttribution, queryRow bool) {
+	t.Helper()
+	if attr.CodecLayoutLabel == "" || attr.CompressionPolicyLabel == "" || attr.RequestedCompression != columnStoreCompressionNoneLabel || attr.ActualCompression != columnStoreCompressionNoneLabel || attr.SupportState == "" {
+		t.Fatalf("%s compression labels=%+v", label, attr)
+	}
+	if !queryRow && (attr.CodecLayoutLabel != columnStoreCodecLayoutCurrent || attr.SupportState != columnStoreCompressionSupportSupported) {
+		t.Fatalf("%s codec layout row labels=%+v", label, attr)
+	}
+	if queryRow {
+		switch attr.SupportState {
+		case columnStoreCompressionSupportSupported:
+			if attr.CodecLayoutLabel != columnStoreCodecLayoutCurrent || attr.CompressionPolicyLabel != columnStoreCompressionPolicyDefault {
+				t.Fatalf("%s supported query attribution=%+v", label, attr)
+			}
+		case columnStoreCompressionSupportNotApplicable, columnStoreCompressionSupportFallback:
+			if strings.Contains(attr.CodecLayoutLabel, columnStoreCodecLayoutCurrent) || attr.CompressionPolicyLabel == columnStoreCompressionPolicyDefault {
+				t.Fatalf("%s non-column/fallback query attribution mislabels current codec layout: %+v", label, attr)
+			}
+		default:
+			t.Fatalf("%s unexpected query support state=%q attribution=%+v", label, attr.SupportState, attr)
+		}
+	}
+	if attr.CompressedBytes <= 0 || attr.RawBytes <= 0 || attr.DecompressedBytes <= 0 || attr.CompressionRatio <= 0 {
+		t.Fatalf("%s compression byte attribution=%+v", label, attr)
+	}
+	if attr.CompressedBytesSource == "" || attr.RawBytesSource == "" || attr.DecompressedBytesSource == "" || attr.CompressionRatioSource == "" {
+		t.Fatalf("%s compression byte sources=%+v", label, attr)
+	}
+	if attr.CompressionDurationSource == "" || attr.DecompressionDurationSource == "" {
+		t.Fatalf("%s compression duration sources=%+v", label, attr)
+	}
+	if attr.BenchmarkBPerOp != 0 || attr.BenchmarkAllocsPerOp != 0 || attr.BenchmarkAllocationSource == "" {
+		t.Fatalf("%s allocation attribution=%+v", label, attr)
+	}
 }
 
 func TestColumnStoreQueryNamesReturnsDefensiveCopyM11A(t *testing.T) {

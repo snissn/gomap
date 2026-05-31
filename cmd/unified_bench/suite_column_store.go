@@ -45,6 +45,14 @@ const (
 	columnStoreSuiteQ5AggregateMin     = "q5_did_time_span_min"
 	columnStoreSuiteQ5AggregateMax     = "q5_did_time_span_max"
 	columnStoreSuiteMaxInt64DecimalLen = 20 // len("-9223372036854775808")
+
+	columnStoreCodecLayoutCurrent              = "current_column_store_physical_layout"
+	columnStoreCompressionPolicyOff            = "compression_off"
+	columnStoreCompressionPolicyDefault        = "current_default_none"
+	columnStoreCompressionSupportSupported     = "supported"
+	columnStoreCompressionSupportNotApplicable = "not_applicable"
+	columnStoreCompressionSupportFallback      = "fallback"
+	columnStoreCompressionNoneLabel            = "none"
 )
 
 type columnStoreSuitePathAlias struct {
@@ -116,32 +124,34 @@ type columnStoreSuiteOptions struct {
 }
 
 type columnStoreSuiteReport struct {
-	GeneratedAt              string                       `json:"generated_at"`
-	Suite                    string                       `json:"suite"`
-	Profile                  string                       `json:"profile"`
-	Fixture                  string                       `json:"fixture"`
-	DataDir                  string                       `json:"data_dir,omitempty"`
-	PathLabel                string                       `json:"path_label,omitempty"`
-	ForcedPath               string                       `json:"forced_path"`
-	QueryNames               []string                     `json:"query_names"`
-	Rows                     int                          `json:"rows"`
-	BatchSize                int                          `json:"batch_size"`
-	Seed                     int64                        `json:"seed"`
-	CacheLabel               string                       `json:"cache_label"`
-	AcceptedForcedPaths      []string                     `json:"accepted_forced_paths"`
-	FailClosedForcedPaths    []string                     `json:"fail_closed_forced_paths"`
-	Stages                   []columnStoreStageMetric     `json:"stages"`
-	Queries                  []columnStoreQueryMetric     `json:"queries"`
-	Parity                   map[string]columnStoreParity `json:"parity"`
-	ByteAccounting           columnStoreByteAccounting    `json:"byte_accounting"`
-	Manifest                 columnStoreManifestMetric    `json:"manifest"`
-	Artifacts                columnStoreArtifactPaths     `json:"artifacts,omitempty"`
-	ProductionScope          string                       `json:"production_scope"`
-	PhysicalColumnQuery      string                       `json:"physical_column_query"`
-	ColumnAssetReadIntegrity string                       `json:"column_asset_read_integrity"`
-	BenchmarkOnlyRelaxed     bool                         `json:"benchmark_only_relaxed"`
-	StageSeparatedBoundary   string                       `json:"stage_separated_boundary"`
-	ProfileFinalizeError     string                       `json:"profile_finalize_error,omitempty"`
+	GeneratedAt              string                         `json:"generated_at"`
+	Suite                    string                         `json:"suite"`
+	Profile                  string                         `json:"profile"`
+	Fixture                  string                         `json:"fixture"`
+	DataDir                  string                         `json:"data_dir,omitempty"`
+	PathLabel                string                         `json:"path_label,omitempty"`
+	ForcedPath               string                         `json:"forced_path"`
+	QueryNames               []string                       `json:"query_names"`
+	Rows                     int                            `json:"rows"`
+	BatchSize                int                            `json:"batch_size"`
+	Seed                     int64                          `json:"seed"`
+	CacheLabel               string                         `json:"cache_label"`
+	AcceptedForcedPaths      []string                       `json:"accepted_forced_paths"`
+	FailClosedForcedPaths    []string                       `json:"fail_closed_forced_paths"`
+	Stages                   []columnStoreStageMetric       `json:"stages"`
+	Queries                  []columnStoreQueryMetric       `json:"queries"`
+	Parity                   map[string]columnStoreParity   `json:"parity"`
+	ByteAccounting           columnStoreByteAccounting      `json:"byte_accounting"`
+	CodecLayouts             []columnStoreCodecLayoutMetric `json:"codec_layouts"`
+	CompressionMatrixNote    string                         `json:"compression_matrix_note"`
+	Manifest                 columnStoreManifestMetric      `json:"manifest"`
+	Artifacts                columnStoreArtifactPaths       `json:"artifacts,omitempty"`
+	ProductionScope          string                         `json:"production_scope"`
+	PhysicalColumnQuery      string                         `json:"physical_column_query"`
+	ColumnAssetReadIntegrity string                         `json:"column_asset_read_integrity"`
+	BenchmarkOnlyRelaxed     bool                           `json:"benchmark_only_relaxed"`
+	StageSeparatedBoundary   string                         `json:"stage_separated_boundary"`
+	ProfileFinalizeError     string                         `json:"profile_finalize_error,omitempty"`
 }
 
 type columnStoreStageMetric struct {
@@ -154,47 +164,78 @@ type columnStoreStageMetric struct {
 }
 
 type columnStoreQueryMetric struct {
-	Name                     string  `json:"name"`
-	PlanLabel                string  `json:"plan_label"`
-	AliasOf                  string  `json:"alias_of,omitempty"`
-	ImplementationNote       string  `json:"implementation_note,omitempty"`
-	ThroughputInterpretation string  `json:"throughput_interpretation,omitempty"`
-	StorageSource            string  `json:"storage_source"`
-	FallbackReason           string  `json:"fallback_reason"`
-	ManifestRootName         string  `json:"manifest_root_name,omitempty"`
-	ManifestRoot             uint64  `json:"manifest_root,omitempty"`
-	ManifestGeneration       uint64  `json:"manifest_generation,omitempty"`
-	ActiveManifestChecksum   uint64  `json:"active_manifest_checksum,omitempty"`
-	DurationMS               float64 `json:"duration_ms"`
-	Rows                     int     `json:"rows"`
-	RowsProcessed            int     `json:"rows_processed"`
-	RowsProcessedKnown       bool    `json:"rows_processed_known"`
-	RowsPerSecond            float64 `json:"rows_per_second"`
-	MiBPerSecond             float64 `json:"mib_per_second"`
-	NsPerRow                 float64 `json:"ns_per_row"`
-	BytesRead                int64   `json:"bytes_read"`
-	RowMaterializations      int     `json:"row_materializations"`
-	ResultCount              int     `json:"result_count"`
-	RawHash                  uint64  `json:"raw_hash"`
-	ProductionHash           uint64  `json:"production_hash"`
-	MetadataHits             int     `json:"metadata_hits"`
-	DictionaryCodeHits       int     `json:"dictionary_code_hits"`
-	Int64ValueHits           int     `json:"int64_value_hits"`
-	SkippedGranules          int     `json:"skipped_granules"`
-	ScheduledGranules        int     `json:"scheduled_granules"`
-	WorkerCount              int     `json:"worker_count"`
-	PlannerDurationMS        float64 `json:"planner_duration_ms"`
-	ScanDurationMS           float64 `json:"scan_duration_ms"`
-	ReduceDurationMS         float64 `json:"reduce_duration_ms"`
-	AdapterDurationMS        float64 `json:"adapter_duration_ms"`
-	ParityHashDurationMS     float64 `json:"parity_hash_duration_ms"`
-	PlannerCandidates        int     `json:"planner_candidates"`
-	PlannerReason            string  `json:"planner_reason,omitempty"`
-	SegmentFileCacheHits     uint64  `json:"segment_file_cache_hits"`
-	SegmentFileCacheMisses   uint64  `json:"segment_file_cache_misses"`
-	CacheLabel               string  `json:"cache_label"`
+	Name                     string                            `json:"name"`
+	PlanLabel                string                            `json:"plan_label"`
+	AliasOf                  string                            `json:"alias_of,omitempty"`
+	ImplementationNote       string                            `json:"implementation_note,omitempty"`
+	ThroughputInterpretation string                            `json:"throughput_interpretation,omitempty"`
+	StorageSource            string                            `json:"storage_source"`
+	FallbackReason           string                            `json:"fallback_reason"`
+	ManifestRootName         string                            `json:"manifest_root_name,omitempty"`
+	ManifestRoot             uint64                            `json:"manifest_root,omitempty"`
+	ManifestGeneration       uint64                            `json:"manifest_generation,omitempty"`
+	ActiveManifestChecksum   uint64                            `json:"active_manifest_checksum,omitempty"`
+	DurationMS               float64                           `json:"duration_ms"`
+	Rows                     int                               `json:"rows"`
+	RowsProcessed            int                               `json:"rows_processed"`
+	RowsProcessedKnown       bool                              `json:"rows_processed_known"`
+	RowsPerSecond            float64                           `json:"rows_per_second"`
+	MiBPerSecond             float64                           `json:"mib_per_second"`
+	NsPerRow                 float64                           `json:"ns_per_row"`
+	BytesRead                int64                             `json:"bytes_read"`
+	RowMaterializations      int                               `json:"row_materializations"`
+	ResultCount              int                               `json:"result_count"`
+	RawHash                  uint64                            `json:"raw_hash"`
+	ProductionHash           uint64                            `json:"production_hash"`
+	MetadataHits             int                               `json:"metadata_hits"`
+	DictionaryCodeHits       int                               `json:"dictionary_code_hits"`
+	Int64ValueHits           int                               `json:"int64_value_hits"`
+	SkippedGranules          int                               `json:"skipped_granules"`
+	ScheduledGranules        int                               `json:"scheduled_granules"`
+	WorkerCount              int                               `json:"worker_count"`
+	PlannerDurationMS        float64                           `json:"planner_duration_ms"`
+	ScanDurationMS           float64                           `json:"scan_duration_ms"`
+	ReduceDurationMS         float64                           `json:"reduce_duration_ms"`
+	AdapterDurationMS        float64                           `json:"adapter_duration_ms"`
+	ParityHashDurationMS     float64                           `json:"parity_hash_duration_ms"`
+	PlannerCandidates        int                               `json:"planner_candidates"`
+	PlannerReason            string                            `json:"planner_reason,omitempty"`
+	SegmentFileCacheHits     uint64                            `json:"segment_file_cache_hits"`
+	SegmentFileCacheMisses   uint64                            `json:"segment_file_cache_misses"`
+	CacheLabel               string                            `json:"cache_label"`
+	CompressionAttribution   columnStoreCompressionAttribution `json:"compression_attribution"`
 
 	duration time.Duration
+}
+
+type columnStoreCompressionAttribution struct {
+	CodecLayoutLabel            string  `json:"codec_layout_label"`
+	CompressionPolicyLabel      string  `json:"compression_policy_label"`
+	RequestedCompression        string  `json:"requested_compression"`
+	ActualCompression           string  `json:"actual_compression"`
+	SupportState                string  `json:"support_state"`
+	SupportReason               string  `json:"support_reason,omitempty"`
+	CompressedBytes             int64   `json:"compressed_bytes"`
+	CompressedBytesSource       string  `json:"compressed_bytes_source"`
+	RawBytes                    int64   `json:"raw_bytes"`
+	RawBytesSource              string  `json:"raw_bytes_source"`
+	DecompressedBytes           int64   `json:"decompressed_bytes"`
+	DecompressedBytesSource     string  `json:"decompressed_bytes_source"`
+	CompressionRatio            float64 `json:"compression_ratio"`
+	CompressionRatioSource      string  `json:"compression_ratio_source"`
+	CompressionDurationMS       float64 `json:"compression_duration_ms"`
+	CompressionDurationSource   string  `json:"compression_duration_source"`
+	DecompressionDurationMS     float64 `json:"decompression_duration_ms"`
+	DecompressionDurationSource string  `json:"decompression_duration_source"`
+	BenchmarkBPerOp             float64 `json:"benchmark_b_per_op"`
+	BenchmarkAllocsPerOp        float64 `json:"benchmark_allocs_per_op"`
+	BenchmarkAllocationSource   string  `json:"benchmark_allocation_source"`
+}
+
+type columnStoreCodecLayoutMetric struct {
+	columnStoreCompressionAttribution
+	Rows    int `json:"rows"`
+	Columns int `json:"columns"`
 }
 
 type columnStoreParity struct {
@@ -504,6 +545,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", fmt.Errorf("column_store: retained-payload byte accounting: %w", err)
 	}
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
+	codecLayouts := columnStoreBaselineCodecLayoutMetrics(rows, len(columnStoreSuiteConfigForPath(forcedPath).Columns), columnAssetBytes)
 	report := columnStoreSuiteReport{
 		GeneratedAt:           time.Now().UTC().Format(time.RFC3339),
 		Suite:                 "column_store",
@@ -537,6 +579,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			DBTotalBytes:                    totalBytes,
 			DBTotalFiles:                    totalFiles,
 		},
+		CodecLayouts:          codecLayouts,
+		CompressionMatrixNote: "Baseline reporting only: current_default_none is intentionally equivalent to compression_off until a later #1952 slice adds opt-in alternatives; unsupported future rows must use support_state/support_reason instead of widening runtime support here.",
 		Manifest: columnStoreManifestMetric{
 			ActiveGeneration:                manifestIdentity.ManifestGeneration,
 			ActiveChecksum:                  manifestIdentity.ManifestChecksum,
@@ -1244,6 +1288,12 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			SegmentFileCacheHits:   exec.SegmentFileCacheHits,
 			SegmentFileCacheMisses: exec.SegmentFileCacheMisses,
 			CacheLabel:             "reopened_warm_process",
+			CompressionAttribution: columnStoreQueryCompressionAttribution(
+				planLabel,
+				storageSource,
+				fallbackReason,
+				exec.BytesRead,
+			),
 		}
 		queries = append(queries, metric)
 	}
@@ -2153,6 +2203,138 @@ func columnStoreSuiteManifestControlUsage(root string) (int64, []string, error) 
 	return total, missing, nil
 }
 
+func columnStoreBaselineCodecLayoutMetrics(rows, columns int, physicalBytes int64) []columnStoreCodecLayoutMetric {
+	return []columnStoreCodecLayoutMetric{
+		{
+			columnStoreCompressionAttribution: columnStoreSuiteCompressionAttribution(
+				columnStoreCompressionPolicyOff,
+				physicalBytes,
+			),
+			Rows:    rows,
+			Columns: columns,
+		},
+		{
+			columnStoreCompressionAttribution: columnStoreSuiteCompressionAttribution(
+				columnStoreCompressionPolicyDefault,
+				physicalBytes,
+			),
+			Rows:    rows,
+			Columns: columns,
+		},
+	}
+}
+
+func columnStoreSuiteCompressionAttribution(policyLabel string, physicalBytes int64) columnStoreCompressionAttribution {
+	return columnStoreCompressionAttribution{
+		CodecLayoutLabel:            columnStoreCodecLayoutCurrent,
+		CompressionPolicyLabel:      policyLabel,
+		RequestedCompression:        columnStoreCompressionNoneLabel,
+		ActualCompression:           columnStoreCompressionNoneLabel,
+		SupportState:                columnStoreCompressionSupportSupported,
+		CompressedBytes:             physicalBytes,
+		CompressedBytesSource:       "filesystem_column_asset_store_bytes_after_checkpoint",
+		RawBytes:                    physicalBytes,
+		RawBytesSource:              "current_default_none_uncompressed_physical_column_asset_bytes_proxy",
+		DecompressedBytes:           physicalBytes,
+		DecompressedBytesSource:     "current_default_none_no_decompression_physical_column_asset_bytes_proxy",
+		CompressionRatio:            columnStoreCompressionRatio(physicalBytes, physicalBytes),
+		CompressionRatioSource:      "current_default_none_no_compression_physical_bytes_proxy",
+		CompressionDurationMS:       0,
+		CompressionDurationSource:   "not_measured_current_default_none_reporting_placeholder",
+		DecompressionDurationMS:     0,
+		DecompressionDurationSource: "not_measured_current_default_none_no_decompression_reporting_placeholder",
+		BenchmarkBPerOp:             0,
+		BenchmarkAllocsPerOp:        0,
+		BenchmarkAllocationSource:   columnStoreBenchmarkAllocationSource(),
+	}
+}
+
+func columnStoreQueryCompressionAttribution(planLabel, storageSource, fallbackReason string, bytes int64) columnStoreCompressionAttribution {
+	layoutLabel := columnStoreCodecLayoutCurrent
+	policyLabel := columnStoreCompressionPolicyDefault
+	supportState := columnStoreCompressionSupportSupported
+	supportReason := ""
+	bytesSource := "query_physical_bytes_scanned"
+	rawSource := "current_default_none_uncompressed_query_physical_bytes"
+	decompressedSource := "current_default_none_no_decompression_query_physical_bytes"
+	ratioSource := "compressed_bytes/raw_bytes_current_default_none"
+	compressionDurationSource := "not_measured_query_phase_current_default_none_reporting_placeholder"
+	decompressionDurationSource := "not_separated_from_physical_scan_current_default_none_reporting_placeholder"
+
+	switch planLabel {
+	case columnStorePathRowStoreBaseline:
+		layoutLabel = "row_store_baseline_no_column_codec"
+		policyLabel = "not_applicable_row_store"
+		supportState = columnStoreCompressionSupportNotApplicable
+		bytesSource = "row_store_document_bytes_read"
+		rawSource = "row_store_document_bytes_read_not_column_codec_raw_bytes"
+		decompressedSource = "row_store_no_column_codec_decompression"
+		ratioSource = "not_applicable_row_store_no_column_codec"
+		compressionDurationSource = "not_applicable_row_store_no_column_codec"
+		decompressionDurationSource = "not_applicable_row_store_no_column_codec"
+	case columnStorePathBTreeIndexBaseline:
+		layoutLabel = "b_tree_index_baseline_no_column_codec"
+		policyLabel = "not_applicable_b_tree_index"
+		supportState = columnStoreCompressionSupportNotApplicable
+		bytesSource = "b_tree_index_document_bytes_read"
+		rawSource = "b_tree_index_document_bytes_read_not_column_codec_raw_bytes"
+		decompressedSource = "b_tree_index_no_column_codec_decompression"
+		ratioSource = "not_applicable_b_tree_index_no_column_codec"
+		compressionDurationSource = "not_applicable_b_tree_index_no_column_codec"
+		decompressionDurationSource = "not_applicable_b_tree_index_no_column_codec"
+	default:
+		if storageSource == string(collections.ColumnPhysicalQueryStorageSourceRowScan) || storageSource == string(collections.ColumnPhysicalQueryStorageSourceFallback) || fallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+			layoutLabel = planLabel + "_fallback_" + storageSource
+			policyLabel = "not_applicable_fallback"
+			supportState = columnStoreCompressionSupportFallback
+			supportReason = fallbackReason
+			bytesSource = "fallback_bytes_read"
+			rawSource = "fallback_bytes_read_not_column_codec_raw_bytes"
+			decompressedSource = "fallback_no_column_codec_decompression"
+			ratioSource = "not_applicable_fallback_no_column_codec"
+			compressionDurationSource = "not_applicable_fallback_no_column_codec"
+			decompressionDurationSource = "not_applicable_fallback_no_column_codec"
+		}
+	}
+	if strings.TrimSpace(supportReason) == "" && supportState == columnStoreCompressionSupportFallback {
+		supportReason = "fallback path did not report a reason"
+	}
+	return columnStoreCompressionAttribution{
+		CodecLayoutLabel:            layoutLabel,
+		CompressionPolicyLabel:      policyLabel,
+		RequestedCompression:        columnStoreCompressionNoneLabel,
+		ActualCompression:           columnStoreCompressionNoneLabel,
+		SupportState:                supportState,
+		SupportReason:               supportReason,
+		CompressedBytes:             bytes,
+		CompressedBytesSource:       bytesSource,
+		RawBytes:                    bytes,
+		RawBytesSource:              rawSource,
+		DecompressedBytes:           bytes,
+		DecompressedBytesSource:     decompressedSource,
+		CompressionRatio:            columnStoreCompressionRatio(bytes, bytes),
+		CompressionRatioSource:      ratioSource,
+		CompressionDurationMS:       0,
+		CompressionDurationSource:   compressionDurationSource,
+		DecompressionDurationMS:     0,
+		DecompressionDurationSource: decompressionDurationSource,
+		BenchmarkBPerOp:             0,
+		BenchmarkAllocsPerOp:        0,
+		BenchmarkAllocationSource:   columnStoreBenchmarkAllocationSource(),
+	}
+}
+
+func columnStoreCompressionRatio(compressedBytes, rawBytes int64) float64 {
+	if rawBytes <= 0 {
+		return 0
+	}
+	return float64(compressedBytes) / float64(rawBytes)
+}
+
+func columnStoreBenchmarkAllocationSource() string {
+	return "not_measured_by_unified_bench_custom_runner; use Go -benchmem output and TreeDB/collections direct-query allocation guard tests for B/op and allocs/op"
+}
+
 func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	var sb strings.Builder
 	sb.WriteString("# unified_bench suite: column_store\n\n")
@@ -2171,6 +2353,9 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	}
 	sb.WriteString(fmt.Sprintf("- scope: %s\n", report.ProductionScope))
 	sb.WriteString(fmt.Sprintf("- physical column query: %s\n", report.PhysicalColumnQuery))
+	if report.CompressionMatrixNote != "" {
+		sb.WriteString(fmt.Sprintf("- compression matrix note: %s\n", report.CompressionMatrixNote))
+	}
 	if report.ProfileFinalizeError != "" {
 		sb.WriteString(fmt.Sprintf("- profile finalize error: `%s`\n", report.ProfileFinalizeError))
 	}
@@ -2212,6 +2397,9 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
+
+	renderColumnStoreQueryCompressionAttributionMarkdown(&sb, report)
+	renderColumnStoreCodecLayoutMarkdown(&sb, report)
 
 	sb.WriteString("## Throughput Interpretation\n\n")
 	sb.WriteString("| query | plan | interpretation |\n")
@@ -2276,6 +2464,70 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		columnStoreWriteArtifactLine(&sb, "mutex delta profile", report.Artifacts.MutexDeltaProfile)
 	}
 	return sb.String()
+}
+
+func renderColumnStoreQueryCompressionAttributionMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {
+	sb.WriteString("## Query Compression And Allocation Attribution\n\n")
+	sb.WriteString("| query | codec/layout | compression policy | compressed bytes | raw bytes | decompressed bytes | ratio | compression ms | compression source | decompression ms | decompression source | B/op | allocs/op | allocation source |\n")
+	sb.WriteString("|---|---|---|---:|---:|---:|---:|---:|---|---:|---|---:|---:|---|\n")
+	for _, q := range report.Queries {
+		a := q.CompressionAttribution
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %d | %d | %d | %.6f | %.3f | %s | %.3f | %s | %.3f | %.3f | %s |\n",
+			markdownCodeTableText(q.Name),
+			markdownCodeTableText(a.CodecLayoutLabel),
+			markdownCodeTableText(a.CompressionPolicyLabel),
+			a.CompressedBytes,
+			a.RawBytes,
+			a.DecompressedBytes,
+			a.CompressionRatio,
+			a.CompressionDurationMS,
+			markdownTableText(a.CompressionDurationSource),
+			a.DecompressionDurationMS,
+			markdownTableText(a.DecompressionDurationSource),
+			a.BenchmarkBPerOp,
+			a.BenchmarkAllocsPerOp,
+			markdownTableText(a.BenchmarkAllocationSource),
+		))
+	}
+	sb.WriteString("\n")
+}
+
+func renderColumnStoreCodecLayoutMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {
+	sb.WriteString("## Codec/Layout Matrix\n\n")
+	if report.CompressionMatrixNote != "" {
+		sb.WriteString(report.CompressionMatrixNote)
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("| codec/layout | compression policy | support | requested | actual | rows | columns | compressed bytes | raw bytes | decompressed bytes | ratio | compression ms | compression source | decompression ms | decompression source | B/op | allocs/op | allocation source |\n")
+	sb.WriteString("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---|---:|---:|---|\n")
+	for _, row := range report.CodecLayouts {
+		a := row.columnStoreCompressionAttribution
+		support := a.SupportState
+		if a.SupportReason != "" {
+			support += ": " + a.SupportReason
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %d | %d | %d | %d | %d | %.6f | %.3f | %s | %.3f | %s | %.3f | %.3f | %s |\n",
+			markdownCodeTableText(a.CodecLayoutLabel),
+			markdownCodeTableText(a.CompressionPolicyLabel),
+			markdownTableText(support),
+			markdownCodeTableText(a.RequestedCompression),
+			markdownCodeTableText(a.ActualCompression),
+			row.Rows,
+			row.Columns,
+			a.CompressedBytes,
+			a.RawBytes,
+			a.DecompressedBytes,
+			a.CompressionRatio,
+			a.CompressionDurationMS,
+			markdownTableText(a.CompressionDurationSource),
+			a.DecompressionDurationMS,
+			markdownTableText(a.DecompressionDurationSource),
+			a.BenchmarkBPerOp,
+			a.BenchmarkAllocsPerOp,
+			markdownTableText(a.BenchmarkAllocationSource),
+		))
+	}
+	sb.WriteString("\n")
 }
 
 func columnStoreWriteArtifactLine(sb *strings.Builder, label, path string) {
