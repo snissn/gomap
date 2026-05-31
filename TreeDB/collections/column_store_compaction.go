@@ -376,6 +376,7 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 		remove     bool
 	}
 	targets := make(map[string]*cleanupTarget)
+	var cleanupErrs []error
 	for _, asset := range assets {
 		ref := asset.Ref
 		if ref.Namespace == "" || ref.FileID == 0 {
@@ -407,7 +408,8 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 			if os.IsNotExist(err) {
 				continue
 			}
-			return err
+			cleanupErrs = append(cleanupErrs, err)
+			continue
 		}
 		if info.Size() != target.maxEnd {
 			// Another writer appended to the shared segment after these assets were
@@ -417,16 +419,18 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 		}
 		if target.remove {
 			if err := os.Remove(target.path); err != nil && !os.IsNotExist(err) {
-				return err
+				cleanupErrs = append(cleanupErrs, err)
+				continue
 			}
 		} else if err := os.Truncate(target.path, target.truncateTo); err != nil && !os.IsNotExist(err) {
-			return err
+			cleanupErrs = append(cleanupErrs, err)
+			continue
 		}
 		if err := syncColumnAssetDir(filepath.Dir(target.path)); err != nil {
-			return err
+			cleanupErrs = append(cleanupErrs, err)
 		}
 	}
-	return nil
+	return errors.Join(cleanupErrs...)
 }
 
 func (c *Collection) columnStoreCompactionRootDescriptorPreflight(state columnStoreCompactionState, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
