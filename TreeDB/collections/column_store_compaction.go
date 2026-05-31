@@ -125,6 +125,9 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	if err != nil {
 		return stats, err
 	}
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
 	stats.AssetsPublished = len(prepared.Assets)
 	stats.AggregateMetadataPublished = columnStoreCompactionAggregateMetadataAssets(prepared.Assets)
 	stats.PublishedRefs = columnStoreCompactionPreparedRefs(prepared.Assets)
@@ -149,6 +152,9 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	}
 	policy, err := columnStoreCompactionManifestRootStoragePolicy(state)
 	if err != nil {
+		return stats, err
+	}
+	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
 	identityRecord := encodeColumnManifestIdentityRecordArray(manifest.Identity)
@@ -346,7 +352,7 @@ func columnStoreCompactionUpdatedMeta(base CollectionMeta, identity ColumnManife
 
 func columnStoreCompactionManifestRootStoragePolicy(state columnStoreCompactionState) (backenddb.OrderedRootStoragePolicy, error) {
 	if state.cfg.ManifestRoot == nil {
-		return backenddb.OrderedRootStorageDefault, errors.New("collections: column store compaction requires manifest root descriptor")
+		return backenddb.OrderedRootStorageDefault, nil
 	}
 	return backendRootStoragePolicy(state.cfg.ManifestRoot.StoragePolicy)
 }

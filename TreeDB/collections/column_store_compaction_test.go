@@ -15,6 +15,7 @@ import (
 func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
 	dir, d, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, typedColumnQ2ClickHouseSortKey1950(), batches)
+	defer func() { closeFn() }()
 	events := flattenColumnPhysicalEvents1950(batches)
 	latest := latestEventMap1953(events)
 
@@ -105,7 +106,6 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	assertColumnStoreCompactionRefsReclaimable1953(t, col, oldRefs)
 
 	_, col, closeFn = checkpointAndReopenTypedColumnLatestVisibleFixture1953(t, dir, d, closeFn)
-	defer closeFn()
 	reopened, err := col.RunColumnPhysicalQuery(req)
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q2 after compaction reopen): %v", err)
@@ -121,6 +121,7 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 func TestColumnStoreCompactRebuildsAggregateMetadata1953(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ5DenseBatchA1950(), columnPhysicalQ5DenseBatchB1950()}
 	dir, d, col, closeFn := openColumnStoreCompactionFixture1953(t, predicateAggregateMetadataConfig1951(), batches)
+	defer func() { closeFn() }()
 	events := flattenColumnPhysicalEvents1950(batches)
 	latest := latestEventMap1953(events)
 
@@ -199,7 +200,6 @@ func TestColumnStoreCompactRebuildsAggregateMetadata1953(t *testing.T) {
 	assertColumnStoreCompactionRefsReclaimable1953(t, col, oldMetadataRefs)
 
 	_, col, closeFn = checkpointAndReopenTypedColumnLatestVisibleFixture1953(t, dir, d, closeFn)
-	defer closeFn()
 	reopened, err := col.RunColumnPhysicalQuery(metadataReq)
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery metadata after compaction reopen: %v", err)
@@ -272,6 +272,7 @@ func TestColumnStoreCompactPostCompactionWritesAdvanceFromCompactedManifest1953(
 		{ID: "b", TimeUS: 200, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.like", Did: "did:b"},
 	}}
 	dir, d, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, nil, batches)
+	defer func() { closeFn() }()
 	events := flattenColumnPhysicalEvents1950(batches)
 	latest := latestEventMap1953(events)
 
@@ -328,7 +329,6 @@ func TestColumnStoreCompactPostCompactionWritesAdvanceFromCompactedManifest1953(
 	}
 
 	_, col, closeFn = checkpointAndReopenTypedColumnLatestVisibleFixture1953(t, dir, d, closeFn)
-	defer closeFn()
 	reopened, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"})
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery post-compaction writes reopen: %v", err)
@@ -395,6 +395,7 @@ func TestColumnStoreCompactAllRowsDeletedPublishesEmptyInsertOnlyManifest1953(t 
 		{ID: "b", TimeUS: 200, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:b"},
 	}}
 	dir, d, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, nil, batches)
+	defer func() { closeFn() }()
 
 	deleteTypedColumnEvent1953(t, col, "a")
 	deleteTypedColumnEvent1953(t, col, "b")
@@ -425,7 +426,6 @@ func TestColumnStoreCompactAllRowsDeletedPublishesEmptyInsertOnlyManifest1953(t 
 	}
 
 	_, col, closeFn = checkpointAndReopenTypedColumnLatestVisibleFixture1953(t, dir, d, closeFn)
-	defer closeFn()
 	reopened, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"})
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery all deleted reopen: %v", err)
@@ -655,6 +655,9 @@ func assertColumnStoreCompactionManifestOnlyGeneration1953(tb testing.TB, record
 	}
 	if wantAggregateMetadata && aggregateRecords == 0 {
 		tb.Fatal("compacted manifest has no aggregate metadata records")
+	}
+	if !wantAggregateMetadata && aggregateRecords != 0 {
+		tb.Fatalf("compacted manifest has %d aggregate metadata records, want none", aggregateRecords)
 	}
 }
 
