@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -800,22 +801,20 @@ func initialCatalogVersion(db *backenddb.DB) uint64 {
 	return state.CommitSeq
 }
 
-func (s *Server) backendCommitSeq() uint64 {
-	if s == nil || s.backend == nil {
-		return 0
+func (s *Server) catalogMetadataFingerprint() ([]byte, bool) {
+	if s == nil || s.collections == nil {
+		return nil, false
 	}
-	state := s.backend.State()
-	if state == nil {
-		return 0
+	metas, err := s.collections.ListCollections()
+	if err != nil {
+		return nil, false
 	}
-	return state.CommitSeq
+	return encodeCollectionMetaVector(metas), true
 }
 
-func (s *Server) bumpCatalogVersionIfBackendAdvanced(before uint64) {
-	if s == nil || s.backend == nil {
-		return
-	}
-	if after := s.backendCommitSeq(); after != before {
+func (s *Server) bumpCatalogVersionIfCatalogMetadataChanged(before []byte, beforeOK bool) {
+	after, afterOK := s.catalogMetadataFingerprint()
+	if !beforeOK || !afterOK || !bytes.Equal(before, after) {
 		s.catalogVersion.Add(1)
 	}
 }

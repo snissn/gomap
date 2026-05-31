@@ -853,6 +853,40 @@ func TestMutationCatalogGuardAllowsPriorDataCommitVersion(t *testing.T) {
 	}
 }
 
+func TestCatalogMetadataVersionIgnoresDataRootChanges(t *testing.T) {
+	client, server, _, db := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	beforeCatalog, beforeOK := server.catalogMetadataFingerprint()
+	if !beforeOK {
+		t.Fatalf("catalogMetadataFingerprint before data mutation failed")
+	}
+	beforeCommit := catalogVersion(t, db)
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	afterCommit := catalogVersion(t, db)
+	if afterCommit <= beforeCommit {
+		t.Fatalf("backend commit seq did not advance after data mutation: before=%d after=%d", beforeCommit, afterCommit)
+	}
+
+	server.bumpCatalogVersionIfCatalogMetadataChanged(beforeCatalog, beforeOK)
+	if after := clientCatalogVersion(t, client, ctx); after != version {
+		t.Fatalf("data root change bumped catalog version from %d to %d", version, after)
+	}
+}
+
 func TestMutationCatalogGuardRejectsPriorVersionAfterMetadataChange(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

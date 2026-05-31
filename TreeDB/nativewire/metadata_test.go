@@ -18,6 +18,17 @@ func serveCollectionPipe(t *testing.T) (*Client, *collections.CollectionManager,
 
 func serveCollectionPipeWithOptions(t *testing.T, opts ServerOptions) (*Client, *collections.CollectionManager, *backenddb.DB) {
 	t.Helper()
+	client, _, mgr, db := serveCollectionPipeWithServerAndOptions(t, opts)
+	return client, mgr, db
+}
+
+func serveCollectionPipeWithServer(t *testing.T) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
+	return serveCollectionPipeWithServerAndOptions(t, ServerOptions{})
+}
+
+func serveCollectionPipeWithServerAndOptions(t *testing.T, opts ServerOptions) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -28,7 +39,7 @@ func serveCollectionPipeWithOptions(t *testing.T, opts ServerOptions) (*Client, 
 	server := NewServer(opts)
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
-	return client, mgr, db
+	return client, server, mgr, db
 }
 
 func serveCommandWALCollectionPipe(t *testing.T) (*Client, *collections.CollectionManager, *backenddb.DB) {
