@@ -108,6 +108,37 @@ func TestColumnVectorGraphDocumentIDStateMissingFallsBack2013(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphDocumentIDStateMissingAssetFallsBackAndCounts2013(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	asset, found, err := findColumnVectorGraphDocumentIDStateAsset(state)
+	if err != nil || !found {
+		t.Fatalf("document-id state asset found=%t err=%v", found, err)
+	}
+	removeTypedColumnAssetPayload1755(t, d, col, asset.Ref)
+
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 2, EfSearch: 3})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex: %v", err)
+	}
+	if len(got.Results) != 2 {
+		t.Fatalf("results=%d want 2", len(got.Results))
+	}
+	if got.Stats.ResultIDTypedBytesState != 0 || got.Stats.ResultIDGraphFallbacks != uint64(len(got.Results)) || got.Stats.ResultIDStateValidationFailures != 1 {
+		t.Fatalf("stats=%+v want missing document-id asset validation failure and graph fallback", got.Stats)
+	}
+}
+
 func TestColumnVectorGraphDocumentIDStateCorruptFallsBackAndCounts2013(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

@@ -94,5 +94,5 @@ This closeout does not claim complete topology debt elimination. The following r
   available.
 
 Historical `result_id_graph_fallbacks/search` evidence in this closeout predates
-#2010/#2013. Healthy post-#2013 searches should report typed bytes document-ID
-state and zero graph-row ID fallback when state is present.
+issues #2010 and #2013. Healthy post-#2013 searches should report typed bytes
+document-ID state and zero graph-row ID fallback when state is present.

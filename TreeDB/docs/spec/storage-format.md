@@ -633,9 +633,11 @@ vector-index state. #1984 defines `uint32_list` semantics in
 primitive implementation, and #1986/#1988 own vector-index state/search
 consumption.
 
-The `column_graph` manifest keeps the row graph asset ref for compatibility,
-opaque returned IDs, and controlled fallback. The legacy all-layer source
-metadata is an optional compatibility manifest trailer with magic `TCGL` and
+The `column_graph` manifest keeps the row graph asset ref for compatibility and
+controlled fallback. Exact returned document IDs live in vector-index
+`document_ids` state when that state validates; legacy graph row ID bytes are
+fallback only. The legacy all-layer source metadata is an optional compatibility
+manifest trailer with magic `TCGL` and
 version `1`: it records `layer_count`,
 `source_count`, and then one `TCGA` v1 source record per layer in ascending layer
 order. Each source
@@ -658,8 +660,9 @@ index identity, row count, base manifest identity, expected adjacency layer
 count, and typed-column asset refs by logical type plus physical encoding. Its
 asset roles include adjacency (`uint32_list` over
 `raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
-optional normalized vectors (`float32_vector` over `raw_float32_vector`), and
-row references (`int64` over `raw_int64`). The active manifest checksum includes
+optional normalized vectors (`float32_vector` over `raw_float32_vector`), row
+references (`int64` over `raw_int64`), and exact returned document IDs (`bytes`
+over `raw_bytes_offsets`). The active manifest checksum includes
 the control record, but the record's base checksum excludes vector-index derived
 records so stale-state checks compare against authoritative collection data. See
 `vector-index-state-manifest.md` and `vector-index-row-ref-state-1993.md` for
@@ -1049,8 +1052,8 @@ logical rebuild request only; it does not carry vector graph bytes, physical roo
 deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
 collection vector-index rebuild path for the named index. For explicit
 `column_graph` indexes, that path rebuilds the legacy row graph asset for
-compatibility/opaque result IDs, publishes inverse norms, HNSW adjacency, and
-base row references as vector-index state assets, and records vector-index
+compatibility, publishes inverse norms, HNSW adjacency, base row references, and
+returned document IDs as vector-index state assets, and records vector-index
 control identity in the `TVIS` state record. Old adjacency-source refs are
 `#1989-quarantined` compatibility. Current graph manifests may still contain row
 graph refs and legacy layer-source trailer refs for compatibility; new
