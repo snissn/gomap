@@ -211,6 +211,7 @@ type ColumnPhysicalQueryRunner struct {
 	dictHour     *columnDictionaryHourCountRunner
 	typedColumn  *columnTypedColumnPhysicalQueryRunner
 	metadata     *columnAggregateMetadataRunner
+	lifecyclePin *ColumnAssetLifecyclePinSet
 	closed       bool
 }
 
@@ -466,6 +467,15 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 			return nil, fmt.Errorf("%w: physical predicates require supported dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
 		}
 	}
+	lifecyclePin, err := c.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{
+		Source: ColumnAssetLifecyclePinSourcePreparedQuery,
+		Owner:  "column_physical_query_runner",
+		Reason: fmt.Sprintf("prepared physical query kind=%s", req.Kind),
+		Refs:   columnPhysicalScanSnapshotViewAssetRefs(view),
+	})
+	if err != nil {
+		return nil, errors.Join(err, readCache.close())
+	}
 	release = false
 	return &ColumnPhysicalQueryRunner{
 		collection:   c,
@@ -481,11 +491,12 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		dictHour:     dictHour,
 		typedColumn:  typedColumn,
 		metadata:     metadata,
+		lifecyclePin: lifecyclePin,
 	}, nil
 }
 
-// Close releases the pinned snapshot and typed column asset readers owned by
-// the prepared physical query runner.
+// Close releases the pinned snapshot, lifecycle pin set, and typed column asset
+// readers owned by the prepared physical query runner.
 func (r *ColumnPhysicalQueryRunner) Close() error {
 	if r == nil || r.closed {
 		return nil
@@ -493,7 +504,11 @@ func (r *ColumnPhysicalQueryRunner) Close() error {
 	r.closed = true
 	var closeErr error
 	if err := r.readCache.close(); err != nil {
-		closeErr = err
+		closeErr = errors.Join(closeErr, err)
+	}
+	if r.lifecyclePin != nil {
+		closeErr = errors.Join(closeErr, r.lifecyclePin.Close())
+		r.lifecyclePin = nil
 	}
 	if r.closeView != nil {
 		r.closeView()

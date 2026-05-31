@@ -418,6 +418,138 @@ func TestColumnAssetLifecycleReportExplicitPinSetScaffold1954(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalPreparedQueryLifecyclePinsSnapshotRefs1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":10,"kind":"like","did":"did:a"}`),
+		[]byte(`{"time_us":20,"kind":"post","did":"did:b"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	runner, err := col.PrepareColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupMinInt64,
+		GroupColumn: "did",
+		ValueColumn: "time_us",
+	})
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	refs := columnPhysicalScanSnapshotViewAssetRefs(runner.view)
+	if len(refs) == 0 {
+		t.Fatalf("prepared runner snapshot refs empty")
+	}
+	if runner.lifecyclePin == nil || runner.lifecyclePin.ID() == 0 || runner.lifecyclePin.Source() != ColumnAssetLifecyclePinSourcePreparedQuery {
+		t.Fatalf("prepared runner lifecycle pin=%+v", runner.lifecyclePin)
+	}
+	if pinRefs := runner.lifecyclePin.Refs(); !slices.Equal(pinRefs, refs) {
+		t.Fatalf("pin refs=%+v want snapshot refs=%+v", pinRefs, refs)
+	}
+	if result, err := runner.Run(); err != nil || len(result.Groups) == 0 {
+		t.Fatalf("prepared runner Run result=%+v err=%v", result, err)
+	}
+
+	report, err := col.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetLifecycle with open prepared runner: %v", err)
+	}
+	if report.PinSets.OpenSessions != 1 || report.PinSets.Refs != len(refs) {
+		t.Fatalf("pin summary=%+v want one prepared runner with %d refs", report.PinSets, len(refs))
+	}
+	if report.Roots.LifecyclePinSets != 1 || report.Roots.LifecyclePinnedRefs != len(refs) || report.Roots.PreparedQueryRefs != len(refs) || report.Reachability.Sources.PreparedQueryRefs != len(refs) {
+		t.Fatalf("prepared root counts=%+v sources=%+v want %d prepared-query refs", report.Roots, report.Reachability.Sources, len(refs))
+	}
+	for _, ref := range refs {
+		entry, ok := columnAssetLifecycleFindEntry(report.Reachability.Entries, ref)
+		if !ok {
+			t.Fatalf("missing prepared runner ref entry: %+v", ref)
+		}
+		if entry.Status != ColumnAssetReachabilityProtected || !slices.Contains(entry.Sources, ColumnAssetReachabilitySourcePreparedQuery) {
+			t.Fatalf("prepared runner entry=%+v want protected prepared_query", entry)
+		}
+	}
+
+	if err := runner.Close(); err != nil {
+		t.Fatalf("runner close: %v", err)
+	}
+	if err := runner.Close(); err != nil {
+		t.Fatalf("runner close second call: %v", err)
+	}
+	if runner.lifecyclePin != nil {
+		t.Fatalf("runner retained lifecycle pin after Close")
+	}
+	afterClose, err := col.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetLifecycle after prepared runner close: %v", err)
+	}
+	if afterClose.PinSets.OpenSessions != 0 || afterClose.PinSets.Refs != 0 || afterClose.Roots.PreparedQueryRefs != 0 || afterClose.Reachability.Sources.PreparedQueryRefs != 0 {
+		t.Fatalf("prepared pin still reported after Close: pins=%+v roots=%+v sources=%+v", afterClose.PinSets, afterClose.Roots, afterClose.Reachability.Sources)
+	}
+	for _, ref := range refs {
+		entry, ok := columnAssetLifecycleFindEntry(afterClose.Reachability.Entries, ref)
+		if !ok {
+			t.Fatalf("missing prepared runner ref entry after Close: %+v", ref)
+		}
+		if slices.Contains(entry.Sources, ColumnAssetReachabilitySourcePreparedQuery) {
+			t.Fatalf("entry retained prepared_query after Close: %+v", entry)
+		}
+	}
+}
+
+func TestColumnPhysicalPreparedQueryLifecyclePinReleasedOnDBClose1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnAssetLifecycleTestCollection1954(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	runner, err := col.PrepareColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	pinID := uint64(0)
+	if runner.lifecyclePin != nil {
+		pinID = runner.lifecyclePin.ID()
+	}
+	if pinID == 0 {
+		t.Fatalf("prepared runner lifecycle pin id is zero")
+	}
+	dbID := columnAssetLifecycleProcessDBID(d)
+	if dbID == 0 {
+		t.Fatalf("lifecycle pin DB id is zero")
+	}
+	if err := d.RunCloseHooks(); err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	columnAssetLifecycleProcessPins.Lock()
+	if _, ok := columnAssetLifecycleProcessPins.pins[pinID]; ok {
+		columnAssetLifecycleProcessPins.Unlock()
+		t.Fatalf("prepared runner pin record for closed DB leaked under id %d", pinID)
+	}
+	for _, record := range columnAssetLifecycleProcessPins.pins {
+		if record.Scope.dbID == dbID {
+			columnAssetLifecycleProcessPins.Unlock()
+			t.Fatalf("prepared runner pin record for closed DB leaked: %+v", record)
+		}
+	}
+	if _, ok := columnAssetLifecycleProcessPins.dbIDs[d]; ok {
+		columnAssetLifecycleProcessPins.Unlock()
+		t.Fatalf("closed DB remained registered for prepared runner lifecycle pin cleanup")
+	}
+	columnAssetLifecycleProcessPins.Unlock()
+	if err := runner.Close(); err != nil {
+		t.Fatalf("runner close after DB close hook cleanup: %v", err)
+	}
+}
+
 func TestColumnAssetLifecycleReportPinSetSharedAcrossHandles1954(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
