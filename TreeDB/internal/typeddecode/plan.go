@@ -60,6 +60,11 @@ const (
 	ReasonDictionarySemanticsMissing Reason = "dictionary_semantics_missing"
 	ReasonMaterializationRequired    Reason = "materialization_required"
 	ReasonValidationFailed           Reason = "validation_failed"
+	ReasonOwnerMismatch              Reason = "owner_mismatch"
+	ReasonRoleMismatch               Reason = "role_mismatch"
+	ReasonColumnMismatch             Reason = "column_mismatch"
+	ReasonTypeEncodingMismatch       Reason = "type_encoding_mismatch"
+	ReasonResourceMismatch           Reason = "resource_mismatch"
 )
 
 // Status describes the outcome of planning or validating a fast-decode path.
@@ -184,6 +189,11 @@ func ReasonVocabulary() []Reason {
 		ReasonDictionarySemanticsMissing,
 		ReasonMaterializationRequired,
 		ReasonValidationFailed,
+		ReasonOwnerMismatch,
+		ReasonRoleMismatch,
+		ReasonColumnMismatch,
+		ReasonTypeEncodingMismatch,
+		ReasonResourceMismatch,
 	}
 }
 
