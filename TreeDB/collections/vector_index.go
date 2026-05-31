@@ -175,8 +175,6 @@ type VectorIndexSearchOptions struct {
 	DocumentFetchOptions DocumentFetchOptions
 	// MaxDecodedBlocks bounds the physical column row reader cache for column_graph search.
 	MaxDecodedBlocks int
-	// scoreBatchMode is an internal exact-order indexed-scoring test/benchmark hook.
-	scoreBatchMode columnVectorGraphScoreBatchMode
 }
 
 // VectorIndexTrace reports how one vector-index search was executed.
@@ -567,6 +565,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
+	}
+	if len(c.meta.VectorIndexes) == 0 && len(c.registeredVectorIndexes()) == 0 {
+		return nil, nil
 	}
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		return nil, nil
