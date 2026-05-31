@@ -8638,9 +8638,14 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 }
 
 func isRetriableCollectionMutationError(err error) bool {
-	return errors.Is(err, ErrConcurrentMutation) ||
-		errors.Is(err, io.EOF) ||
-		errors.Is(err, io.ErrUnexpectedEOF)
+	return errors.Is(err, ErrConcurrentMutation) || isRetriableCollectionCatalogReadEOF(err)
+}
+
+func isRetriableCollectionCatalogReadEOF(err error) bool {
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+	return strings.Contains(err.Error(), "collections: load catalog")
 }
 
 func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent) ([][]byte, error) {
