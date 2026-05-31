@@ -41,6 +41,7 @@ type columnVectorGraphSearchPlan struct {
 	ordinalRefsReady   bool
 	singleOrdinalRange bool
 	scoreSource        columnVectorGraphSearchSource
+	preparedSearch     *columnVectorGraphPreparedSearchView
 	scoreBatchMode     columnVectorGraphScoreBatchMode
 	hits               uint64
 	misses             uint64
@@ -48,6 +49,14 @@ type columnVectorGraphSearchPlan struct {
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
+	return s.prepareSearchPlanInternal(reader, false)
+}
+
+func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlanForNativeSearch(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
+	return s.prepareSearchPlanInternal(reader, true)
+}
+
+func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlanInternal(reader *columnVectorGraphPhysicalRowReader, useCombinedPrepared bool) (*columnVectorGraphSearchPlan, error) {
 	if s == nil {
 		return nil, errColumnVectorGraphNativeSearchScratchRequired
 	}
@@ -71,6 +80,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 		plan.singleOrdinalRange = false
 	}
 	plan.physicalReader = physicalReader
+	plan.preparedSearch = nil
 	plan.hits = 0
 	plan.misses = 0
 	plan.builds = 0
@@ -81,6 +91,14 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 	} else {
 		plan.ordinalRefsReady = true
 		plan.singleOrdinalRange = true
+	}
+	if useCombinedPrepared && reader.preparedSearch != nil {
+		if err := reader.preparedSearch.validateLive(); err != nil {
+			return nil, fmt.Errorf("collections: column_graph %q combined prepared graph-search view is stale: %w", reader.def.Name, err)
+		}
+		plan.preparedSearch = reader.preparedSearch
+		plan.scoreSource.reset()
+		return plan, nil
 	}
 	if err := plan.scoreSource.prepare(plan); err != nil {
 		return nil, err

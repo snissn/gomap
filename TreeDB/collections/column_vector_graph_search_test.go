@@ -951,6 +951,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.ResultIDTypedBytesState += stats.ResultIDTypedBytesState
 		searchStats.ResultIDGraphFallbacks += stats.ResultIDGraphFallbacks
 		searchStats.ResultIDStateValidationFailures += stats.ResultIDStateValidationFailures
+		searchStats.PreparedGraphSearchViews += stats.PreparedGraphSearchViews
+		searchStats.GraphRowFallbacks += stats.GraphRowFallbacks
 	}
 	b.StopTimer()
 	stats := reader.Stats()
@@ -1118,6 +1120,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalResultIDTypedBytesState atomic.Uint64
 	var totalResultIDGraphFallbacks atomic.Uint64
 	var totalResultIDStateValidationFailures atomic.Uint64
+	var totalPreparedGraphSearchViews atomic.Uint64
+	var totalGraphRowFallbacks atomic.Uint64
 	var nextWorker atomic.Uint64
 	b.SetParallelism(1) // Keep one prewarmed reader/scratch per RunParallel worker.
 	b.ReportAllocs()
@@ -1235,6 +1239,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.ResultIDTypedBytesState += stats.ResultIDTypedBytesState
 			localStats.ResultIDGraphFallbacks += stats.ResultIDGraphFallbacks
 			localStats.ResultIDStateValidationFailures += stats.ResultIDStateValidationFailures
+			localStats.PreparedGraphSearchViews += stats.PreparedGraphSearchViews
+			localStats.GraphRowFallbacks += stats.GraphRowFallbacks
 		}
 		sink.Add(localSink)
 		totalCandidateRows.Add(localStats.CandidateRows)
@@ -1328,6 +1334,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalResultIDTypedBytesState.Add(localStats.ResultIDTypedBytesState)
 		totalResultIDGraphFallbacks.Add(localStats.ResultIDGraphFallbacks)
 		totalResultIDStateValidationFailures.Add(localStats.ResultIDStateValidationFailures)
+		totalPreparedGraphSearchViews.Add(localStats.PreparedGraphSearchViews)
+		totalGraphRowFallbacks.Add(localStats.GraphRowFallbacks)
 	})
 	b.StopTimer()
 	reportColumnGraphNativeSearchBenchShapeMetricsV3(b, shape)
@@ -1427,6 +1435,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		ResultIDTypedBytesState:              totalResultIDTypedBytesState.Load(),
 		ResultIDGraphFallbacks:               totalResultIDGraphFallbacks.Load(),
 		ResultIDStateValidationFailures:      totalResultIDStateValidationFailures.Load(),
+		PreparedGraphSearchViews:             totalPreparedGraphSearchViews.Load(),
+		GraphRowFallbacks:                    totalGraphRowFallbacks.Load(),
 	})
 }
 
@@ -1771,6 +1781,8 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.ResultIDTypedBytesState)/float64(n), "result_id_typed_bytes_state/search")
 	b.ReportMetric(float64(searchStats.ResultIDGraphFallbacks)/float64(n), "result_id_graph_fallbacks/search")
 	b.ReportMetric(float64(searchStats.ResultIDStateValidationFailures)/float64(n), "result_id_state_validation_failures/search")
+	b.ReportMetric(float64(searchStats.PreparedGraphSearchViews)/float64(n), "prepared_graph_search_views/search")
+	b.ReportMetric(float64(searchStats.GraphRowFallbacks)/float64(n), "graph_row_fallbacks/search")
 	b.ReportMetric(float64(searchStats.TypedColumnMappedBytes), "mapped_B")
 	b.ReportMetric(float64(searchStats.TypedColumnHeapCopyBytes), "heap_copy_B")
 	b.ReportMetric(float64(searchStats.TypedColumnDecodedBytes), "decoded_derived_B")

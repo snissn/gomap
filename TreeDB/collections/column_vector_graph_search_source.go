@@ -433,6 +433,7 @@ func (s *columnVectorGraphSearchSource) vectorForOrdinal(view *columnVectorGraph
 	scratch.scoreScratch.Float32Values = vectorScratch
 	if stats != nil {
 		stats.VectorScratchDecodes++
+		stats.GraphRowFallbacks++
 	}
 	return vector, nil
 }
@@ -456,6 +457,9 @@ func (s *columnVectorGraphSearchSource) invNormForOrdinal(view *columnVectorGrap
 	}
 	if view == nil {
 		return 0, fmt.Errorf("collections: column_graph %q inverse-norm graph-row fallback unavailable for ordinal=%d", s.reader.def.Name, ordinal)
+	}
+	if stats != nil {
+		stats.GraphRowFallbacks++
 	}
 	return view.legacyInvNorm(rowIndex)
 }

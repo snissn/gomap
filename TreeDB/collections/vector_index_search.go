@@ -336,6 +336,10 @@ type VectorIndexSearchStats struct {
 	ResultIDGraphFallbacks uint64 `json:"result_id_graph_fallbacks,omitempty"`
 	// ResultIDStateValidationFailures counts searches that fell back because present document-ID state failed validation.
 	ResultIDStateValidationFailures uint64 `json:"result_id_state_validation_failures,omitempty"`
+	// PreparedGraphSearchViews reports searches routed through the combined open-time prepared typed-column graph-search view.
+	PreparedGraphSearchViews uint64 `json:"prepared_graph_search_views,omitempty"`
+	// GraphRowFallbacks aggregates compatibility graph-row reads/fallbacks observed during vector/norm/adjacency/result materialization.
+	GraphRowFallbacks uint64 `json:"graph_row_fallbacks,omitempty"`
 	// DocumentRowRefStateFetches counts post-top-k document fetches served with vector-index row-ref state.
 	DocumentRowRefStateFetches uint64 `json:"document_row_ref_state_fetches,omitempty"`
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
@@ -1002,5 +1006,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		ResultIDTypedBytesState:              searchStats.ResultIDTypedBytesState,
 		ResultIDGraphFallbacks:               searchStats.ResultIDGraphFallbacks,
 		ResultIDStateValidationFailures:      searchStats.ResultIDStateValidationFailures,
+		PreparedGraphSearchViews:             searchStats.PreparedGraphSearchViews,
+		GraphRowFallbacks:                    searchStats.GraphRowFallbacks,
 	}
 }

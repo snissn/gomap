@@ -56,6 +56,7 @@ type columnVectorGraphPhysicalRowReader struct {
 	rowRefStateFallbackReason           typeddecode.Reason
 	documentIDSource                    *columnVectorGraphDocumentIDStateSource
 	documentIDStateFallbackReason       typeddecode.Reason
+	preparedSearch                      *columnVectorGraphPreparedSearchView
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
 	layer0AdjacencySource               *columnVectorGraphLayer0AdjacencyDirectSource
 	layer0AdjacencySourceUnavailable    bool
@@ -231,6 +232,10 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 				return nil, fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %s: %w", def.Name, graphReader.typedVectorFallbackReason, errColumnVectorGraphManifestMismatch)
 			}
 			return nil, fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+		}
+		if prepareErr := maybePrepareColumnVectorGraphPreparedSearchView(graphReader); prepareErr != nil {
+			_ = graphReader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q combined prepared graph-search view: %w: %w", def.Name, prepareErr, errColumnVectorGraphManifestMismatch)
 		}
 	}
 	return graphReader, nil
@@ -421,6 +426,7 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 		}
 		r.documentIDSource = nil
 	}
+	r.preparedSearch = nil
 	if r.adjacencyLayerSources != nil {
 		if err := r.adjacencyLayerSources.Close(); closeErr == nil && err != nil {
 			closeErr = err
