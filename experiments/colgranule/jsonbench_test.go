@@ -53,6 +53,25 @@ func TestSummarizeJSONBenchDatasetSample(t *testing.T) {
 	if summaries[0].Rows != ds.Rows {
 		t.Fatalf("summary rows=%d want %d", summaries[0].Rows, ds.Rows)
 	}
+	row := summaries[0].CompressionRow
+	if row.CodecLayoutLabel == "" || row.CompressionPolicyLabel == "" || row.RequestedCompression == "" || row.ActualCompression == "" {
+		t.Fatalf("summary compression row missing labels: %+v", row)
+	}
+	if row.CompressedBytes == 0 || row.RawBytes == 0 || row.DecompressedBytes == 0 || row.CompressionRatio <= 0 {
+		t.Fatalf("summary compression row missing byte attribution: %+v", row)
+	}
+	if row.CompressionDurationSource == "" || row.DecompressionDurationSource == "" {
+		t.Fatalf("summary compression row missing duration sources: %+v", row)
+	}
+	if row.BenchmarkAllocationSource == "" {
+		t.Fatalf("summary compression row missing B/op allocs source: %+v", row)
+	}
+	formatted := FormatColumnCodecSummary(summaries[0])
+	for _, want := range []string{"codec_layout=", "compression_policy=", "compressed_bytes=", "decompressed_bytes=", "raw_bytes=", "ratio=", "compression_duration_source=", "decompression_duration_source=", "B/op=", "allocs/op="} {
+		if !strings.Contains(formatted, want) {
+			t.Fatalf("formatted summary missing %q: %s", want, formatted)
+		}
+	}
 }
 
 func TestRunJSONBenchQueriesSample(t *testing.T) {
@@ -299,6 +318,23 @@ func TestRunJSONBenchPartBuildReports(t *testing.T) {
 		}
 		if len(report.Accounting.CompressionDetail) == 0 {
 			t.Fatalf("missing compression detail: %+v", report.Accounting)
+		}
+		if len(report.CompressionRows) == 0 {
+			t.Fatalf("missing compression report rows: %+v", report)
+		}
+		for _, row := range report.CompressionRows {
+			if row.CodecLayoutLabel == "" || row.CompressionPolicyLabel == "" || row.RequestedCompression == "" || row.ActualCompression == "" || row.SupportState == "" {
+				t.Fatalf("build compression row missing labels: %+v", row)
+			}
+			if row.CompressedBytes == 0 || row.RawBytes == 0 || row.DecompressedBytes == 0 || row.CompressionRatio <= 0 {
+				t.Fatalf("build compression row missing byte attribution: %+v", row)
+			}
+			if row.CompressionDurationSource == "" || row.DecompressionDurationSource == "" {
+				t.Fatalf("build compression row missing duration sources: %+v", row)
+			}
+			if row.BenchmarkAllocationSource == "" {
+				t.Fatalf("build compression row missing B/op/allocs source: %+v", row)
+			}
 		}
 	}
 }

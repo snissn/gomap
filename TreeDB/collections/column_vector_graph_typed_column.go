@@ -54,6 +54,7 @@ type columnVectorGraphTypedColumnVectorSource struct {
 	parts     []*columnVectorGraphTypedColumnVectorPart
 	manager   *mappedresource.Manager
 
+	prepared            columnVectorGraphPreparedVectorView
 	decodedDerivedBytes uint64
 	mappedBytes         uint64
 	heapCopyBytes       uint64
@@ -241,6 +242,9 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row_index=%d outside typed_column_part rows=%d", graph.IndexName, locations[ordinal].rowIndex, part.rows)
 		}
 		locations[ordinal].part = part
+	}
+	if prepared, _, _, ok := prepareColumnVectorGraphPreparedVectorView(source, graph.RowCount, graph.Dimensions); ok {
+		source.prepared = prepared
 	}
 	source.captureResourceStats()
 	success = true
@@ -441,7 +445,7 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 		return nil, 0, err
 	}
 	sectionChecksum := page.Checksum(sectionBytes)
-	values, handle, outcome, fallbackReason, err := c.acquireColumnVectorGraphTypedColumnDenseVectorValues(collection, typedRef.Ref, image.Version, section, certColumn, sectionChecksum, typedRef.Rows, adapterColumn.Definition.FixedWidthElements, manager)
+	values, handle, outcome, fallbackReason, err := c.acquireColumnVectorGraphTypedColumnDenseVectorValues(collection, typedRef.Ref, image.Version, section, certColumn, sectionChecksum, typedRef.Rows, adapterColumn.Definition.FixedWidthElements, field, manager)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -562,7 +566,7 @@ func columnVectorGraphTypedColumnDenseByteLen(rows, dims int) (int, error) {
 	return elements * 4, nil
 }
 
-func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, sectionChecksum uint32, rows, dims int, manager *mappedresource.Manager) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
+func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, sectionChecksum uint32, rows, dims int, field TypedStorageField, manager *mappedresource.Manager) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
 	if manager == nil {
 		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", errors.New("nil mappedresource manager")
 	}
@@ -603,20 +607,48 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 	}
 	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
 	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: int64(ref.Offset), HasAssetOffset: true}
-	return columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager, handle, directReq, rows, dims)
+	graphReq := typeddecode.GraphFloat32VectorDirectViewRequest{
+		Expectation: typeddecode.GraphDirectViewExpectation{
+			ExpectedOwner:  string(TypedStorageOwnerColumnPart),
+			ActualOwner:    string(field.Owner),
+			ExpectedRole:   columnVectorGraphPreparedVectorRoleBaseVectors,
+			ActualRole:     columnVectorGraphPreparedVectorRoleBaseVectors,
+			Column:         certColumn.Name,
+			Rows:           rows,
+			AssetOffset:    int64(ref.Offset),
+			HasAssetOffset: true,
+		},
+		Dims:          dims,
+		Certification: certColumn,
+		Section:       section,
+		ExpectedKey:   key,
+		Handle:        handle,
+		Manager:       manager,
+	}
+	return columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager, handle, directReq, rows, dims, graphReq)
 }
 
-func columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager *mappedresource.Manager, handle *mappedresource.Handle, directReq typeddecode.DirectViewColumnRequest, rows, dims int) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
+func columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager *mappedresource.Manager, handle *mappedresource.Handle, directReq typeddecode.DirectViewColumnRequest, rows, dims int, graphReqs ...typeddecode.GraphFloat32VectorDirectViewRequest) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
 	expectedElements, err := typedColumnAdapterDenseElements(rows, dims)
 	if err != nil {
 		releaseErr := handle.Release()
 		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", errors.Join(err, releaseErr)
 	}
-	values, viewStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: true})
-	if viewStatus.Direct() {
-		return values, handle, columnVectorGraphTypedColumnVectorOutcomeMmapDirect, "", nil
+	var viewStatus typeddecode.Status
+	if len(graphReqs) > 0 {
+		view, status := typeddecode.CertifyGraphFloat32VectorDirectView(graphReqs[0])
+		viewStatus = status
+		if viewStatus.Direct() {
+			return view.Values, view.Handle, columnVectorGraphTypedColumnVectorOutcomeMmapDirect, "", nil
+		}
+	} else {
+		values, status := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: true})
+		viewStatus = status
+		if viewStatus.Direct() {
+			return values, handle, columnVectorGraphTypedColumnVectorOutcomeMmapDirect, "", nil
+		}
 	}
-	firstErr := fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String())
+	firstErr := fmt.Errorf("float32 dense vector graph direct-view certification: %s", viewStatus.String())
 	fallbackReason := viewStatus.Reason
 	if viewStatus.Reason == typeddecode.ReasonHandleSourceUnsupported {
 		heapValues, heapStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: false})
@@ -758,6 +790,7 @@ func (s *columnVectorGraphTypedColumnVectorSource) Close() error {
 		part.fallbackReason = ""
 		part.rows = 0
 	}
+	s.prepared = columnVectorGraphPreparedVectorView{}
 	for i := range s.locations {
 		s.locations[i].part = nil
 		s.locations[i].generation = 0

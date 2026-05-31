@@ -7,24 +7,25 @@ import (
 )
 
 type JSONBenchPartBuildReport struct {
-	Layout               JSONBenchColumnPartLayout   `json:"layout"`
-	Rows                 int                         `json:"rows"`
-	RowsPerGranule       int                         `json:"rows_per_granule"`
-	Columns              int                         `json:"columns"`
-	Attempts             []JSONBenchPartBuildAttempt `json:"attempts"`
-	Best                 JSONBenchPartBuildAttempt   `json:"best"`
-	Accounting           ColumnPartByteAccounting    `json:"accounting"`
-	RawJSONBytes         int64                       `json:"raw_json_bytes"`
-	DictionaryBytes      int                         `json:"dictionary_bytes"`
-	RowsPerSecond        float64                     `json:"rows_per_second"`
-	EncodedMiBPerSecond  float64                     `json:"encoded_mib_per_second"`
-	StoredMiBPerSecond   float64                     `json:"stored_mib_per_second"`
-	NanosPerRow          float64                     `json:"nanos_per_row"`
-	AllocatedBytesPerOp  uint64                      `json:"allocated_bytes_per_op"`
-	AllocsPerOp          uint64                      `json:"allocs_per_op"`
-	AllocatedBytesPerRow float64                     `json:"allocated_bytes_per_row"`
-	TemporaryBytes       uint64                      `json:"temporary_bytes_estimate"`
-	TemporaryBytesPerRow float64                     `json:"temporary_bytes_per_row"`
+	Layout               JSONBenchColumnPartLayout       `json:"layout"`
+	Rows                 int                             `json:"rows"`
+	RowsPerGranule       int                             `json:"rows_per_granule"`
+	Columns              int                             `json:"columns"`
+	Attempts             []JSONBenchPartBuildAttempt     `json:"attempts"`
+	Best                 JSONBenchPartBuildAttempt       `json:"best"`
+	Accounting           ColumnPartByteAccounting        `json:"accounting"`
+	CompressionRows      []JSONBenchCompressionReportRow `json:"compression_rows"`
+	RawJSONBytes         int64                           `json:"raw_json_bytes"`
+	DictionaryBytes      int                             `json:"dictionary_bytes"`
+	RowsPerSecond        float64                         `json:"rows_per_second"`
+	EncodedMiBPerSecond  float64                         `json:"encoded_mib_per_second"`
+	StoredMiBPerSecond   float64                         `json:"stored_mib_per_second"`
+	NanosPerRow          float64                         `json:"nanos_per_row"`
+	AllocatedBytesPerOp  uint64                          `json:"allocated_bytes_per_op"`
+	AllocsPerOp          uint64                          `json:"allocs_per_op"`
+	AllocatedBytesPerRow float64                         `json:"allocated_bytes_per_row"`
+	TemporaryBytes       uint64                          `json:"temporary_bytes_estimate"`
+	TemporaryBytesPerRow float64                         `json:"temporary_bytes_per_row"`
 }
 
 type JSONBenchPartBuildAttempt struct {
@@ -82,6 +83,7 @@ func runJSONBenchPartBuildReport(ds JSONBenchDataset, rowsPerGranule int, attemp
 	}
 	report.DictionaryBytes = report.Accounting.DictionaryBytes
 	report.fillDerivedMetrics()
+	report.CompressionRows = jsonBenchPartBuildCompressionRows(report)
 	return report, nil
 }
 
@@ -142,6 +144,35 @@ func (r *JSONBenchPartBuildReport) fillDerivedMetrics() {
 		r.AllocatedBytesPerRow = float64(r.Best.AllocatedBytes) / float64(r.Rows)
 		r.TemporaryBytesPerRow = float64(r.Best.TemporaryBytes) / float64(r.Rows)
 	}
+}
+
+func jsonBenchPartBuildCompressionRows(report JSONBenchPartBuildReport) []JSONBenchCompressionReportRow {
+	rows := make([]JSONBenchCompressionReportRow, 0, len(report.Accounting.CompressionDetail))
+	for _, detail := range report.Accounting.CompressionDetail {
+		rows = append(rows, JSONBenchCompressionReportRow{
+			CodecLayoutLabel:            string(report.Layout) + "/" + detail.Column + "/" + detail.Encoding.String(),
+			CompressionPolicyLabel:      jsonBenchCompressionPolicyLabel(detail.RequestedCompression),
+			RequestedCompression:        detail.RequestedCompression.String(),
+			ActualCompression:           detail.ActualCompression.String(),
+			SupportState:                "supported",
+			CompressedBytes:             detail.StoredBytes,
+			CompressedBytesSource:       "column_part_byte_accounting.compression_detail.stored_bytes",
+			RawBytes:                    detail.EncodedRawBytes,
+			RawBytesSource:              "column_part_byte_accounting.compression_detail.encoded_raw_bytes",
+			DecompressedBytes:           detail.EncodedRawBytes,
+			DecompressedBytesSource:     "column_part_byte_accounting.compression_detail.encoded_raw_bytes",
+			CompressionRatio:            jsonBenchCompressionRatio(detail.StoredBytes, detail.EncodedRawBytes),
+			CompressionRatioSource:      "compressed_bytes/decompressed_bytes",
+			CompressionDuration:         time.Duration(detail.CompressionNanos),
+			CompressionDurationSource:   "typedcolumn_codec_report_compression_nanos",
+			DecompressionDuration:       0,
+			DecompressionDurationSource: "not_measured_by_part_build_report",
+			BenchmarkBPerOp:             report.AllocatedBytesPerOp,
+			BenchmarkAllocsPerOp:        report.AllocsPerOp,
+			BenchmarkAllocationSource:   "runtime_memstats_best_part_build_attempt_whole_operation",
+		})
+	}
+	return rows
 }
 
 func JSONBenchRawDocumentBytes(ds JSONBenchDataset) int64 {

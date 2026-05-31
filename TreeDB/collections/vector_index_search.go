@@ -103,6 +103,10 @@ type VectorIndexSearchStats struct {
 	ScoreBatchOptimizedCalls uint64 `json:"score_batch_optimized,omitempty"`
 	// ScoreBatchScalarFallbackCalls counts score calls completed through scalar/fallback execution.
 	ScoreBatchScalarFallbackCalls uint64 `json:"score_batch_fallback,omitempty"`
+	// PreparedScoreCalls counts candidate scores produced by the prepared vector/norm scoring view.
+	PreparedScoreCalls uint64 `json:"prepared_score_calls,omitempty"`
+	// ScoreFloat64Fallbacks counts rare dot-product retries using float64 after a non-finite float32 dot.
+	ScoreFloat64Fallbacks uint64 `json:"score_float64_fallbacks,omitempty"`
 	// ExpansionFetches is the per-search count of adjacency row fetches for expanded nodes.
 	ExpansionFetches uint64 `json:"expansion_fetches,omitempty"`
 	// ResultFetches is the per-search count of vector row fetches for final results.
@@ -216,6 +220,12 @@ type VectorIndexSearchStats struct {
 	VectorHeapCopyTypedViews uint64 `json:"vector_heap_copy_typed_view,omitempty"`
 	// VectorScratchDecodes is the per-search count of candidate vectors served from scratch/fallback decoded vectors.
 	VectorScratchDecodes uint64 `json:"vector_scratch_decodes,omitempty"`
+	// VectorPreparedDirectViews counts candidate vectors served through the #2040 prepared direct scoring view.
+	VectorPreparedDirectViews uint64 `json:"vector_prepared_direct,omitempty"`
+	// VectorPreparedIdentityMappings counts prepared vector reads where graph ordinal equals base vector row index.
+	VectorPreparedIdentityMappings uint64 `json:"vector_prepared_identity_mapping,omitempty"`
+	// VectorPreparedRowRefMappings counts prepared vector reads using an ordinal-to-base-row map.
+	VectorPreparedRowRefMappings uint64 `json:"vector_prepared_row_ref_mapping,omitempty"`
 	// VectorCertificationFailures counts reason-specific vector source failures that are treated as certification/fail-closed fallbacks.
 	VectorCertificationFailures uint64 `json:"vector_certification_failures,omitempty"`
 	// VectorAbsoluteOffsetUnaligned counts typed-column vector fallback observations caused by absolute storage offset misalignment.
@@ -268,6 +278,8 @@ type VectorIndexSearchStats struct {
 	NormHeapCopyTypedViews uint64 `json:"norm_heap_copy_typed_view,omitempty"`
 	// NormScratchDecodes is the per-search count of inverse norms served from scratch/fallback decoded state.
 	NormScratchDecodes uint64 `json:"norm_scratch_decodes,omitempty"`
+	// NormPreparedDirectViews counts inverse norms served through the #2040 prepared direct scoring view.
+	NormPreparedDirectViews uint64 `json:"norm_prepared_direct,omitempty"`
 	// NormSourceUnavailable reports that this searcher had no usable inverse-norm state source and used graph-row fallback.
 	NormSourceUnavailable uint64 `json:"norm_source_unavailable,omitempty"`
 	// NormSourceFallbacks reports searches or observations that fell back from inverse-norm state to legacy rows or fail-closed fallback handling.
@@ -913,6 +925,8 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		ScoreBatchMaxTileSize:                searchStats.ScoreBatchMaxTileSize,
 		ScoreBatchOptimizedCalls:             searchStats.ScoreBatchOptimizedCalls,
 		ScoreBatchScalarFallbackCalls:        searchStats.ScoreBatchScalarFallbackCalls,
+		PreparedScoreCalls:                   searchStats.PreparedScoreCalls,
+		ScoreFloat64Fallbacks:                searchStats.ScoreFloat64Fallbacks,
 		ExpansionFetches:                     searchStats.ExpansionFetches,
 		ResultFetches:                        searchStats.ResultFetches,
 		RowFetches:                           readerStats.RowFetches,
@@ -930,6 +944,9 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		VectorMmapDirectViews:                searchStats.VectorMmapDirectViews,
 		VectorHeapCopyTypedViews:             searchStats.VectorHeapCopyTypedViews,
 		VectorScratchDecodes:                 searchStats.VectorScratchDecodes,
+		VectorPreparedDirectViews:            searchStats.VectorPreparedDirectViews,
+		VectorPreparedIdentityMappings:       searchStats.VectorPreparedIdentityMappings,
+		VectorPreparedRowRefMappings:         searchStats.VectorPreparedRowRefMappings,
 		VectorCertificationFailures:          searchStats.VectorCertificationFailures,
 		VectorAbsoluteOffsetUnaligned:        searchStats.VectorAbsoluteOffsetUnaligned,
 		VectorActualPointerUnaligned:         searchStats.VectorActualPointerUnaligned,
@@ -956,6 +973,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		NormMmapDirectViews:                  searchStats.NormMmapDirectViews,
 		NormHeapCopyTypedViews:               searchStats.NormHeapCopyTypedViews,
 		NormScratchDecodes:                   searchStats.NormScratchDecodes,
+		NormPreparedDirectViews:              searchStats.NormPreparedDirectViews,
 		NormSourceUnavailable:                searchStats.NormSourceUnavailable,
 		NormSourceFallbacks:                  searchStats.NormSourceFallbacks,
 		NormValidationFailures:               searchStats.NormValidationFailures,

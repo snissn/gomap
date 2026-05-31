@@ -883,6 +883,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		}
 		searchStats.ScoreBatchOptimizedCalls += stats.ScoreBatchOptimizedCalls
 		searchStats.ScoreBatchScalarFallbackCalls += stats.ScoreBatchScalarFallbackCalls
+		searchStats.PreparedScoreCalls += stats.PreparedScoreCalls
+		searchStats.ScoreFloat64Fallbacks += stats.ScoreFloat64Fallbacks
 		searchStats.BlockViewHits += stats.BlockViewHits
 		searchStats.BlockViewMisses += stats.BlockViewMisses
 		searchStats.BlockViewBuilds += stats.BlockViewBuilds
@@ -909,6 +911,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.NormMmapDirectViews += stats.NormMmapDirectViews
 		searchStats.NormHeapCopyTypedViews += stats.NormHeapCopyTypedViews
 		searchStats.NormScratchDecodes += stats.NormScratchDecodes
+		searchStats.NormPreparedDirectViews += stats.NormPreparedDirectViews
 		searchStats.NormSourceUnavailable += stats.NormSourceUnavailable
 		searchStats.NormSourceFallbacks += stats.NormSourceFallbacks
 		searchStats.NormValidationFailures += stats.NormValidationFailures
@@ -924,6 +927,9 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.VectorMmapDirectViews += stats.VectorMmapDirectViews
 		searchStats.VectorHeapCopyTypedViews += stats.VectorHeapCopyTypedViews
 		searchStats.VectorScratchDecodes += stats.VectorScratchDecodes
+		searchStats.VectorPreparedDirectViews += stats.VectorPreparedDirectViews
+		searchStats.VectorPreparedIdentityMappings += stats.VectorPreparedIdentityMappings
+		searchStats.VectorPreparedRowRefMappings += stats.VectorPreparedRowRefMappings
 		searchStats.VectorCertificationFailures += stats.VectorCertificationFailures
 		searchStats.VectorAbsoluteOffsetUnaligned += stats.VectorAbsoluteOffsetUnaligned
 		searchStats.VectorActualPointerUnaligned += stats.VectorActualPointerUnaligned
@@ -1044,6 +1050,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalScoreBatchMaxTileSize atomic.Uint64
 	var totalScoreBatchOptimizedCalls atomic.Uint64
 	var totalScoreBatchScalarFallbackCalls atomic.Uint64
+	var totalPreparedScoreCalls atomic.Uint64
+	var totalScoreFloat64Fallbacks atomic.Uint64
 	var totalBlockViewHits atomic.Uint64
 	var totalBlockViewMisses atomic.Uint64
 	var totalBlockViewBuilds atomic.Uint64
@@ -1070,6 +1078,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalNormMmapDirectViews atomic.Uint64
 	var totalNormHeapCopyTypedViews atomic.Uint64
 	var totalNormScratchDecodes atomic.Uint64
+	var totalNormPreparedDirectViews atomic.Uint64
 	var totalNormSourceUnavailable atomic.Uint64
 	var totalNormSourceFallbacks atomic.Uint64
 	var totalNormValidationFailures atomic.Uint64
@@ -1085,6 +1094,9 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalVectorMmapDirectViews atomic.Uint64
 	var totalVectorHeapCopyTypedViews atomic.Uint64
 	var totalVectorScratchDecodes atomic.Uint64
+	var totalVectorPreparedDirectViews atomic.Uint64
+	var totalVectorPreparedIdentityMappings atomic.Uint64
+	var totalVectorPreparedRowRefMappings atomic.Uint64
 	var totalVectorCertificationFailures atomic.Uint64
 	var totalVectorAbsoluteOffsetUnaligned atomic.Uint64
 	var totalVectorActualPointerUnaligned atomic.Uint64
@@ -1155,6 +1167,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			}
 			localStats.ScoreBatchOptimizedCalls += stats.ScoreBatchOptimizedCalls
 			localStats.ScoreBatchScalarFallbackCalls += stats.ScoreBatchScalarFallbackCalls
+			localStats.PreparedScoreCalls += stats.PreparedScoreCalls
+			localStats.ScoreFloat64Fallbacks += stats.ScoreFloat64Fallbacks
 			localStats.BlockViewHits += stats.BlockViewHits
 			localStats.BlockViewMisses += stats.BlockViewMisses
 			localStats.BlockViewBuilds += stats.BlockViewBuilds
@@ -1181,6 +1195,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.NormMmapDirectViews += stats.NormMmapDirectViews
 			localStats.NormHeapCopyTypedViews += stats.NormHeapCopyTypedViews
 			localStats.NormScratchDecodes += stats.NormScratchDecodes
+			localStats.NormPreparedDirectViews += stats.NormPreparedDirectViews
 			localStats.NormSourceUnavailable += stats.NormSourceUnavailable
 			localStats.NormSourceFallbacks += stats.NormSourceFallbacks
 			localStats.NormValidationFailures += stats.NormValidationFailures
@@ -1196,6 +1211,9 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.VectorMmapDirectViews += stats.VectorMmapDirectViews
 			localStats.VectorHeapCopyTypedViews += stats.VectorHeapCopyTypedViews
 			localStats.VectorScratchDecodes += stats.VectorScratchDecodes
+			localStats.VectorPreparedDirectViews += stats.VectorPreparedDirectViews
+			localStats.VectorPreparedIdentityMappings += stats.VectorPreparedIdentityMappings
+			localStats.VectorPreparedRowRefMappings += stats.VectorPreparedRowRefMappings
 			localStats.VectorCertificationFailures += stats.VectorCertificationFailures
 			localStats.VectorAbsoluteOffsetUnaligned += stats.VectorAbsoluteOffsetUnaligned
 			localStats.VectorActualPointerUnaligned += stats.VectorActualPointerUnaligned
@@ -1242,6 +1260,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		}
 		totalScoreBatchOptimizedCalls.Add(localStats.ScoreBatchOptimizedCalls)
 		totalScoreBatchScalarFallbackCalls.Add(localStats.ScoreBatchScalarFallbackCalls)
+		totalPreparedScoreCalls.Add(localStats.PreparedScoreCalls)
+		totalScoreFloat64Fallbacks.Add(localStats.ScoreFloat64Fallbacks)
 		totalBlockViewHits.Add(localStats.BlockViewHits)
 		totalBlockViewMisses.Add(localStats.BlockViewMisses)
 		totalBlockViewBuilds.Add(localStats.BlockViewBuilds)
@@ -1268,6 +1288,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalNormMmapDirectViews.Add(localStats.NormMmapDirectViews)
 		totalNormHeapCopyTypedViews.Add(localStats.NormHeapCopyTypedViews)
 		totalNormScratchDecodes.Add(localStats.NormScratchDecodes)
+		totalNormPreparedDirectViews.Add(localStats.NormPreparedDirectViews)
 		totalNormSourceUnavailable.Add(localStats.NormSourceUnavailable)
 		totalNormSourceFallbacks.Add(localStats.NormSourceFallbacks)
 		totalNormValidationFailures.Add(localStats.NormValidationFailures)
@@ -1283,6 +1304,9 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalVectorMmapDirectViews.Add(localStats.VectorMmapDirectViews)
 		totalVectorHeapCopyTypedViews.Add(localStats.VectorHeapCopyTypedViews)
 		totalVectorScratchDecodes.Add(localStats.VectorScratchDecodes)
+		totalVectorPreparedDirectViews.Add(localStats.VectorPreparedDirectViews)
+		totalVectorPreparedIdentityMappings.Add(localStats.VectorPreparedIdentityMappings)
+		totalVectorPreparedRowRefMappings.Add(localStats.VectorPreparedRowRefMappings)
 		totalVectorCertificationFailures.Add(localStats.VectorCertificationFailures)
 		totalVectorAbsoluteOffsetUnaligned.Add(localStats.VectorAbsoluteOffsetUnaligned)
 		totalVectorActualPointerUnaligned.Add(localStats.VectorActualPointerUnaligned)
@@ -1335,6 +1359,8 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		ScoreBatchMaxTileSize:                totalScoreBatchMaxTileSize.Load(),
 		ScoreBatchOptimizedCalls:             totalScoreBatchOptimizedCalls.Load(),
 		ScoreBatchScalarFallbackCalls:        totalScoreBatchScalarFallbackCalls.Load(),
+		PreparedScoreCalls:                   totalPreparedScoreCalls.Load(),
+		ScoreFloat64Fallbacks:                totalScoreFloat64Fallbacks.Load(),
 		BlockViewHits:                        totalBlockViewHits.Load(),
 		BlockViewMisses:                      totalBlockViewMisses.Load(),
 		BlockViewBuilds:                      totalBlockViewBuilds.Load(),
@@ -1361,6 +1387,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		NormMmapDirectViews:                  totalNormMmapDirectViews.Load(),
 		NormHeapCopyTypedViews:               totalNormHeapCopyTypedViews.Load(),
 		NormScratchDecodes:                   totalNormScratchDecodes.Load(),
+		NormPreparedDirectViews:              totalNormPreparedDirectViews.Load(),
 		NormSourceUnavailable:                totalNormSourceUnavailable.Load(),
 		NormSourceFallbacks:                  totalNormSourceFallbacks.Load(),
 		NormValidationFailures:               totalNormValidationFailures.Load(),
@@ -1376,6 +1403,9 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		VectorMmapDirectViews:                totalVectorMmapDirectViews.Load(),
 		VectorHeapCopyTypedViews:             totalVectorHeapCopyTypedViews.Load(),
 		VectorScratchDecodes:                 totalVectorScratchDecodes.Load(),
+		VectorPreparedDirectViews:            totalVectorPreparedDirectViews.Load(),
+		VectorPreparedIdentityMappings:       totalVectorPreparedIdentityMappings.Load(),
+		VectorPreparedRowRefMappings:         totalVectorPreparedRowRefMappings.Load(),
 		VectorCertificationFailures:          totalVectorCertificationFailures.Load(),
 		VectorAbsoluteOffsetUnaligned:        totalVectorAbsoluteOffsetUnaligned.Load(),
 		VectorActualPointerUnaligned:         totalVectorActualPointerUnaligned.Load(),
@@ -1661,6 +1691,8 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.ScoreBatchMaxTileSize), "score_batch_max_tile_size")
 	b.ReportMetric(float64(searchStats.ScoreBatchOptimizedCalls)/float64(n), "score_batch_optimized/search")
 	b.ReportMetric(float64(searchStats.ScoreBatchScalarFallbackCalls)/float64(n), "score_batch_fallback/search")
+	b.ReportMetric(float64(searchStats.PreparedScoreCalls)/float64(n), "prepared_score_calls/search")
+	b.ReportMetric(float64(searchStats.ScoreFloat64Fallbacks)/float64(n), "score_float64_fallbacks/search")
 	if searchStats.ScoreBatchCalls > 0 {
 		b.ReportMetric(float64(searchStats.ScoreBatchCandidates)/float64(searchStats.ScoreBatchCalls), "score_batch_avg_tile_size")
 	}
@@ -1691,6 +1723,7 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.NormHeapCopyTypedViews)/float64(n), "norm_heap_copy_typed_view/search")
 	b.ReportMetric(float64(searchStats.NormScratchDecodes)/float64(n), "norm_scratch_decode/search")
 	b.ReportMetric(float64(searchStats.NormScratchDecodes)/float64(n), "norm_scratch_decodes/search")
+	b.ReportMetric(float64(searchStats.NormPreparedDirectViews)/float64(n), "norm_prepared_direct/search")
 	b.ReportMetric(float64(searchStats.NormSourceUnavailable)/float64(n), "norm_source_unavailable/search")
 	b.ReportMetric(float64(searchStats.NormSourceFallbacks)/float64(n), "norm_source_fallbacks/search")
 	b.ReportMetric(float64(searchStats.NormValidationFailures)/float64(n), "norm_validation_failures/search")
@@ -1707,6 +1740,9 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.VectorHeapCopyTypedViews)/float64(n), "vector_heap_copy_typed_view/search")
 	b.ReportMetric(float64(searchStats.VectorScratchDecodes)/float64(n), "vector_scratch_decode/search")
 	b.ReportMetric(float64(searchStats.VectorScratchDecodes)/float64(n), "vector_scratch_decodes/search")
+	b.ReportMetric(float64(searchStats.VectorPreparedDirectViews)/float64(n), "vector_prepared_direct/search")
+	b.ReportMetric(float64(searchStats.VectorPreparedIdentityMappings)/float64(n), "vector_prepared_identity_mapping/search")
+	b.ReportMetric(float64(searchStats.VectorPreparedRowRefMappings)/float64(n), "vector_prepared_row_ref_mapping/search")
 	b.ReportMetric(float64(searchStats.VectorCertificationFailures)/float64(n), "vector_certification_failures/search")
 	b.ReportMetric(float64(searchStats.VectorAbsoluteOffsetUnaligned)/float64(n), "vector_absolute_offset_unaligned/search")
 	b.ReportMetric(float64(searchStats.VectorActualPointerUnaligned)/float64(n), "vector_actual_pointer_unaligned/search")

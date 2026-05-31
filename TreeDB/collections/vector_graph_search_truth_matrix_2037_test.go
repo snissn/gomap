@@ -37,7 +37,7 @@ const (
 	vectorGraphSearchTruthMatrixFixtureProduction81922037 vectorGraphSearchTruthMatrixFixture2037 = "production8192"
 )
 
-const vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037 = "prepared typed-column graph-search path is a #2037 placeholder until #2038/#2040/#2041/#2045 add prepared views and routing; skipped row is not performance data"
+const vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037 = "full prepared typed-column graph-search path is a #2037 placeholder until #2041/#2045 add remaining prepared side-channel views and routing; skipped row is not performance data"
 
 type vectorGraphSearchTruthMatrixRow2037 struct {
 	Mode               vectorGraphSearchTruthMatrixMode2037
@@ -110,11 +110,17 @@ func vectorGraphSearchTruthMatrixRequiredMetricLabels2037() []string {
 		"vector_mmap_direct/search",
 		"vector_heap_copy_typed_view/search",
 		"vector_scratch_decodes/search",
+		"vector_prepared_direct/search",
+		"vector_prepared_identity_mapping/search",
+		"vector_prepared_row_ref_mapping/search",
 		"typed_column_vector_fallbacks/search",
 		"norm_mmap_direct/search",
 		"norm_heap_copy_typed_view/search",
 		"norm_scratch_decodes/search",
+		"norm_prepared_direct/search",
 		"norm_source_fallbacks/search",
+		"prepared_score_calls/search",
+		"score_float64_fallbacks/search",
 		"adjacency_prepared_csr_mmap_direct/search",
 		"adjacency_prepared_csr_direct_views/search",
 		"adjacency_typed_list_mmap_direct/search",
@@ -162,7 +168,7 @@ func TestVectorGraphSearchTruthMatrixRows2037(t *testing.T) {
 			t.Fatalf("row %q missing canonical benchmark", row.Name())
 		}
 		if row.Mode == vectorGraphSearchTruthMatrixModePreparedPlaceholder2037 {
-			if row.Supported() || !strings.Contains(row.UnsupportedReason, "not performance data") || !strings.Contains(row.UnsupportedReason, "#2038") {
+			if row.Supported() || !strings.Contains(row.UnsupportedReason, "not performance data") || !strings.Contains(row.UnsupportedReason, "#2041") {
 				t.Fatalf("prepared placeholder row %q reason=%q", row.Name(), row.UnsupportedReason)
 			}
 		} else if !row.Supported() {
@@ -197,7 +203,9 @@ func TestVectorGraphSearchTruthMatrixMetricContract2037(t *testing.T) {
 		"row_ref_state_prepared_views/search",
 		"row_ref_state_source_fallbacks/search",
 		"vector_mmap_direct/search",
+		"vector_prepared_direct/search",
 		"norm_mmap_direct/search",
+		"norm_prepared_direct/search",
 		"adjacency_prepared_csr_mmap_direct/search",
 		"adjacency_typed_list_mmap_direct/search",
 		"typed_column_vector_fallbacks/search",
