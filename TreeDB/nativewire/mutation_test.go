@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"strconv"
 	"sync"
@@ -1251,6 +1252,35 @@ func TestMutationCatalogVersionCacheClearsAfterMismatch(t *testing.T) {
 	}
 }
 
+func TestMutationMissingResponseCountsClearCatalogVersionCache(t *testing.T) {
+	client := &Client{}
+	replaceSections := []iwire.Section{{
+		ID: iwire.SectionResponseMeta,
+		Bytes: appendAckMetaPayloadVersion(nil, AckVisible, 42, true,
+			responseMetaCount{key: "matched_count", value: 1},
+		),
+	}}
+	client.catalogVersionPlusOne.Store(99)
+	if _, _, err := client.replaceBatchCountsFromResponse(replaceSections); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("replace count validation err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+	if got := client.catalogVersionPlusOne.Load(); got != 0 {
+		t.Fatalf("replace catalogVersionPlusOne=%d want cleared", got)
+	}
+
+	deleteSections := []iwire.Section{{
+		ID:    iwire.SectionResponseMeta,
+		Bytes: appendAckMetaPayloadVersion(nil, AckVisible, 42, true),
+	}}
+	client.catalogVersionPlusOne.Store(99)
+	if _, err := client.deleteBatchCountFromResponse(deleteSections); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("delete count validation err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+	if got := client.catalogVersionPlusOne.Load(); got != 0 {
+		t.Fatalf("delete catalogVersionPlusOne=%d want cleared", got)
+	}
+}
+
 func TestResponseCountRequiresKey(t *testing.T) {
 	_, err := responseCount([]iwire.Section{ackMeta(AckVisible)}, "deleted_count")
 	if nativeCodeOf(err) != iwire.ErrMalformedFrame {
@@ -1266,6 +1296,62 @@ func TestResponseCountRejectsMalformedInteger(t *testing.T) {
 	if nativeCodeOf(err) != iwire.ErrMalformedFrame {
 		t.Fatalf("responseCount err=%v code=%d want malformed", err, nativeCodeOf(err))
 	}
+}
+
+func TestResponseMetaFieldsScansCountsAndCatalogVersion(t *testing.T) {
+	payload := appendAckMetaPayloadVersion(nil, AckVisible, 42, true,
+		responseMetaCount{key: "matched_count", value: 3},
+		responseMetaCount{key: "modified_count", value: 2},
+	)
+	fields, err := decodeResponseMetaFields(payload, "matched_count", "modified_count")
+	if err != nil {
+		t.Fatalf("decodeResponseMetaFields: %v", err)
+	}
+	if !fields.hasCatalogVersion || fields.catalogVersion != 42 {
+		t.Fatalf("catalog version=%d has=%v want 42/true", fields.catalogVersion, fields.hasCatalogVersion)
+	}
+	if !fields.hasCount1 || fields.count1 != 3 {
+		t.Fatalf("matched count=%d has=%v want 3/true", fields.count1, fields.hasCount1)
+	}
+	if !fields.hasCount2 || fields.count2 != 2 {
+		t.Fatalf("modified count=%d has=%v want 2/true", fields.count2, fields.hasCount2)
+	}
+}
+
+func TestResponseMetaFieldsPreservesLastDuplicateValue(t *testing.T) {
+	payload := responseMetaPayloadForTest(
+		"catalog_version", "41",
+		"matched_count", "1",
+		"catalog_version", "42",
+		"matched_count", "3",
+	)
+	fields, err := decodeResponseMetaFields(payload, "matched_count", "")
+	if err != nil {
+		t.Fatalf("decodeResponseMetaFields: %v", err)
+	}
+	if !fields.hasCatalogVersion || fields.catalogVersion != 42 {
+		t.Fatalf("catalog version=%d has=%v want 42/true", fields.catalogVersion, fields.hasCatalogVersion)
+	}
+	if !fields.hasCount1 || fields.count1 != 3 {
+		t.Fatalf("matched count=%d has=%v want 3/true", fields.count1, fields.hasCount1)
+	}
+}
+
+func TestResponseMetaFieldsRejectsTrailingBytes(t *testing.T) {
+	payload := append(appendAckMetaPayload(nil, AckVisible), 0)
+	if _, err := decodeResponseMetaFields(payload, "", ""); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeResponseMetaFields err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+}
+
+func responseMetaPayloadForTest(pairs ...string) []byte {
+	var dst []byte
+	dst = binary.AppendUvarint(dst, uint64(len(pairs)/2))
+	for i := 0; i+1 < len(pairs); i += 2 {
+		dst = appendString(dst, pairs[i])
+		dst = appendString(dst, pairs[i+1])
+	}
+	return dst
 }
 
 func assertDocumentMissing(t *testing.T, mgr *collections.CollectionManager, collectionName, id string) {

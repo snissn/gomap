@@ -226,6 +226,14 @@ func (c *Client) updateCatalogVersionFromMutationResponse(sections []iwire.Secti
 	c.catalogVersionPlusOne.Store(version + 1)
 }
 
+func (c *Client) updateCatalogVersionFromResponseMetaFields(fields responseMetaFields) {
+	if !fields.hasCatalogVersion || fields.catalogVersion == ^uint64(0) {
+		c.catalogVersionPlusOne.Store(0)
+		return
+	}
+	c.catalogVersionPlusOne.Store(fields.catalogVersion + 1)
+}
+
 func (c *Client) clearCatalogVersionAfterOpaqueMutation() {
 	c.catalogVersionPlusOne.Store(0)
 }
@@ -235,19 +243,11 @@ func catalogVersionFromResponseMeta(sections []iwire.Section) (uint64, bool, err
 	if err != nil || !ok {
 		return 0, ok, err
 	}
-	values, err := decodeStringMap(raw)
+	fields, err := decodeResponseMetaFields(raw, "", "")
 	if err != nil {
 		return 0, false, err
 	}
-	rawVersion, ok := values["catalog_version"]
-	if !ok {
-		return 0, false, nil
-	}
-	version, err := strconv.ParseUint(rawVersion, 10, 64)
-	if err != nil {
-		return 0, true, protocolError(iwire.ErrMalformedFrame, "invalid catalog_version %q", rawVersion)
-	}
-	return version, true, nil
+	return fields.catalogVersion, fields.hasCatalogVersion, nil
 }
 
 func metadataGuardOptionsFromContext(ctx context.Context) metadataGuardOptions {
