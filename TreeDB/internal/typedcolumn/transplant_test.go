@@ -383,6 +383,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
 	allowedImports := map[string]struct{}{
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go")): {},
+		// #1952 is the scoped production codec/layout capability guard used by
+		// the adapter and prepared-state seams without adding a new data plane.
+		filepath.Clean(filepath.Join(collectionsDir, "typed_column_capability.go")): {},
 		// #1837 is the scoped prepared typed-column scan/session state seam
 		// shared by concrete collection hot paths.
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_prepared_state.go")): {},
@@ -414,6 +417,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #2013 is the scoped production vector graph writer/reader that publishes
 		// and consumes raw_bytes_offsets document-ID state through typed-column assets.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_document_id_state.go")): {},
+		// #2041 is the scoped production vector graph prepared-view helper that
+		// certifies row-ref and document-ID side-channel typed-column sections.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_prepared_state.go")): {},
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},
@@ -440,7 +446,7 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			if _, ok := allowedImports[filepath.Clean(path)]; ok {
 				continue
 			}
-			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state)", path)
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views)", path)
 		}
 		return nil
 	})

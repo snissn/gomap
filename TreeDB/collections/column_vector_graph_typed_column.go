@@ -148,14 +148,14 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 	usedGenerations := make(map[uint64]struct{})
 	locationSource := columnVectorGraphTypedColumnVectorLocationSourceUnknown
 	if reader.rowRefSource != nil {
-		rowRefs, ok := reader.rowRefSource.rowRefs()
-		if !ok {
+		if !reader.rowRefSource.preparedViewActive() {
 			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row-ref state unavailable", graph.IndexName)
 		}
-		if len(rowRefs) != graph.RowCount {
-			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row refs=%d want row_count=%d", graph.IndexName, len(rowRefs), graph.RowCount)
-		}
-		for ordinal, ref := range rowRefs {
+		for ordinal := 0; ordinal < graph.RowCount; ordinal++ {
+			ref, ok := reader.rowRefSource.rowRefForOrdinal(ordinal)
+			if !ok {
+				return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row-ref ordinal=%d unavailable", graph.IndexName, ordinal)
+			}
 			if _, ok := typedRefs[ref.Generation]; !ok {
 				return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing typed_column_part for row-ref generation=%d", graph.IndexName, ref.Generation)
 			}

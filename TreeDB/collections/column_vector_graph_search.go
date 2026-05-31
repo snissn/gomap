@@ -211,9 +211,12 @@ type columnVectorGraphNativeSearchStats struct {
 	TypedColumnFallbacks                 uint64
 	RowRefVectorSourceState              uint64
 	RowRefVectorSourceLegacyGraphIDs     uint64
+	RowRefStatePreparedViews             uint64
+	RowRefStateMmapDirectFields          uint64
 	RowRefStateResultRefs                uint64
 	RowRefStateSourceUnavailable         uint64
 	RowRefStateSourceFallbacks           uint64
+	ResultIDPreparedBytesViews           uint64
 	ResultIDTypedBytesState              uint64
 	ResultIDGraphFallbacks               uint64
 	ResultIDStateValidationFailures      uint64
@@ -517,6 +520,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		r.populateTypedColumnVectorSearchStats(&stats)
 		r.populateInvNormStateSearchStats(&stats)
 		r.populateRowRefStateSearchStats(&stats)
+		r.populateDocumentIDStateSearchStats(&stats)
 		r.populateLayer0AdjacencySourceSearchStats(&stats)
 		if plan != nil {
 			plan.scoreSource.populateConstructionStats(&stats)
