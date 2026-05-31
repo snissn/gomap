@@ -60,12 +60,13 @@ const (
 type ColumnPhysicalQueryFallbackReason string
 
 const (
-	ColumnPhysicalQueryFallbackNone                         ColumnPhysicalQueryFallbackReason = "none"
-	ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported ColumnPhysicalQueryFallbackReason = "direct_asset_reduce_unsupported"
-	ColumnPhysicalQueryFallbackAggregateMetadataUnsupported ColumnPhysicalQueryFallbackReason = "aggregate_metadata_unsupported"
-	ColumnPhysicalQueryFallbackMutationVisibilityOverlay    ColumnPhysicalQueryFallbackReason = "mutation_visibility_overlay"
-	ColumnPhysicalQueryFallbackDocumentRootRowScan          ColumnPhysicalQueryFallbackReason = "document_root_row_scan"
-	ColumnPhysicalQueryFallbackMixed                        ColumnPhysicalQueryFallbackReason = "mixed"
+	ColumnPhysicalQueryFallbackNone                          ColumnPhysicalQueryFallbackReason = "none"
+	ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported  ColumnPhysicalQueryFallbackReason = "direct_asset_reduce_unsupported"
+	ColumnPhysicalQueryFallbackAggregateMetadataUnsupported  ColumnPhysicalQueryFallbackReason = "aggregate_metadata_unsupported"
+	ColumnPhysicalQueryFallbackMutationVisibilityOverlay     ColumnPhysicalQueryFallbackReason = "mutation_visibility_overlay"
+	ColumnPhysicalQueryFallbackMutationVisibilityUnsupported ColumnPhysicalQueryFallbackReason = "mutation_visibility_unsupported"
+	ColumnPhysicalQueryFallbackDocumentRootRowScan           ColumnPhysicalQueryFallbackReason = "document_root_row_scan"
+	ColumnPhysicalQueryFallbackMixed                         ColumnPhysicalQueryFallbackReason = "mixed"
 )
 
 const (
@@ -298,12 +299,24 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		if req.AggregateMetadataName != "" {
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
-		if columnPhysicalQueryHasPredicates(req) {
-			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require insert-only manifest", ErrColumnQueryPlanUnsupported)
-		}
 		cfg, err := c.columnPhysicalQueryColumnStoreConfig()
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, err
+		}
+		if columnPhysicalQueryHasPredicates(req) {
+			if columnTypedColumnPhysicalQueryTouchesTypedColumnPart(cfg, req) {
+				view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
+				if closeView != nil {
+					defer closeView()
+				}
+				if err != nil {
+					return ColumnPhysicalQueryResult{}, err
+				}
+				if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
+					return result, err
+				}
+			}
+			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
 		return c.runColumnPhysicalQueryWithVisibility(cfg, req)
 	}
@@ -319,6 +332,9 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
 		if columnPhysicalQueryHasPredicates(req) {
+			if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
+				return result, err
+			}
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
 		return c.runColumnPhysicalQueryWithVisibility(view.Config, req)

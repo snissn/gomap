@@ -1,7 +1,9 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -41,6 +43,42 @@ func TestTypedColumnQ2SortedGroupedDistinctStreaming1950(t *testing.T) {
 	}
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "prepared", prepared, rowHash, wantCounts)
 	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "prepared", prepared.Diagnostics, len(events), matchedRows, true)
+}
+
+func TestTypedColumnQ2MutationVisibilityFailsClosedC1(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, typedColumnQ2ClickHouseSortKey1950(), batches)
+	defer closeFn()
+
+	req := typedColumnQ2Request1950()
+	insertOnly, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("insert-only RunColumnPhysicalQuery(q2): %v", err)
+	}
+	if insertOnly.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || !insertOnly.Diagnostics.SortedGroupedDistinctUsed || insertOnly.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		t.Fatalf("insert-only diagnostics=%+v want optimized typed-column q2 path", insertOnly.Diagnostics)
+	}
+
+	_, modified, err := col.Update([]byte("a-post-shared"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":1800000000000040,"kind":"commit","operation":"create","collection":"app.bsky.feed.like","did":"did:shared"}`), true, nil
+	})
+	if err != nil || !modified {
+		t.Fatalf("Update modified=%t err=%v", modified, err)
+	}
+
+	result, err := col.RunColumnPhysicalQuery(req)
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "typed-column") || !strings.Contains(err.Error(), "mutation visibility") {
+		t.Fatalf("mutation q2 err=%v diagnostics=%+v want explicit typed-column mutation-visibility failure", err, result.Diagnostics)
+	}
+	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackMutationVisibilityUnsupported {
+		t.Fatalf("mutation q2 diagnostics=%+v want typed-column mutation-visibility unsupported route", result.Diagnostics)
+	}
+	if result.Diagnostics.MutationParts == 0 || result.Diagnostics.VisibilityRows == 0 || result.Diagnostics.DocumentMaterializations != 0 || result.Diagnostics.RowMaterializations != 0 {
+		t.Fatalf("mutation q2 diagnostics=%+v want latest-visible physical state without document fallback", result.Diagnostics)
+	}
+	if _, err := col.PrepareColumnPhysicalQuery(req); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "insert-only") {
+		t.Fatalf("prepared mutation q2 err=%v want fail-closed prepared insert-only guard", err)
+	}
 }
 
 func TestTypedColumnQ2SortedGroupedDistinctFallback1950(t *testing.T) {

@@ -116,6 +116,9 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view co
 		return ColumnPhysicalQueryResult{}, candidate, err
 	}
 	start := time.Now()
+	if view.MutationParts != 0 {
+		return runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view, req, start)
+	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		result := ColumnPhysicalQueryResult{}
@@ -133,6 +136,50 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view co
 	result, err := runner.run(view, req)
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, true, err
+}
+
+func runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, start time.Time) (ColumnPhysicalQueryResult, bool, error) {
+	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
+	diag.WorkerCount = 1
+	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
+	result := ColumnPhysicalQueryResult{Diagnostics: diag}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
+	predicateDiagnostics := newColumnPhysicalQueryPredicateDiagnosticPlan(req)
+	applyColumnPhysicalQueryPredicateDiagnostics(&result.Diagnostics, predicateDiagnostics, 0, 0)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
+	}
+	defer func() { _ = readCache.close() }()
+	refsByGeneration, err := typedColumnPhysicalQueryRefsByGeneration(view)
+	if err != nil {
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
+	}
+	if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
+	}
+	var visibilityDiag TypedColumnInt64PredicateScanDiagnostics
+	state, err := buildTypedColumnLatestVisibilityState(view, &readCache, &visibilityDiag)
+	result.Diagnostics.PhysicalBytesScanned += visibilityDiag.PhysicalBytesScanned
+	result.Diagnostics.SegmentFileCacheHits = visibilityDiag.SegmentFileCacheHits
+	result.Diagnostics.SegmentFileCacheMisses = visibilityDiag.SegmentFileCacheMisses
+	if state != nil {
+		result.Diagnostics.RowsScanned = state.CandidateRows
+		result.Diagnostics.DeletedRows = state.DeletedRows
+		result.Diagnostics.VisibilityRows = state.VisibleRows
+	}
+	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+	result.Diagnostics.VisibilityNanos = result.Diagnostics.ScanNanos
+	if err != nil {
+		return result, true, err
+	}
+	if typedColumnRefsHaveSortKey(refsByGeneration) {
+		return result, true, typedColumnSortedMutationVisibilityUnsupported("typed-column part physical query")
+	}
+	return result, true, fmt.Errorf("%w: typed-column part physical query with mutation visibility is deferred to multipart reducers", ErrColumnQueryPlanUnsupported)
 }
 
 func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache) (*columnTypedColumnPhysicalQueryRunner, bool, error) {
