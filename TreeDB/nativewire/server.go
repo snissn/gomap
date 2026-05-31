@@ -149,13 +149,16 @@ type connState struct {
 	handleCols  map[CollectionHandle]*collections.Collection
 	collections map[string]*collections.Collection
 
-	readBody       []byte
-	writeBody      []byte
-	responseBody   []byte
-	sections       []iwire.Section
-	commandScratch iwire.CommandScratch
-	idsScratch     [][]byte
-	docsScratch    [][]byte
+	readBody        []byte
+	writeBody       []byte
+	responseBody    []byte
+	sections        []iwire.Section
+	commandScratch  iwire.CommandScratch
+	idsScratch      [][]byte
+	docsScratch     [][]byte
+	getManyLengths  []int
+	getManyPresence []byte
+	getManyPayload  []byte
 }
 
 func (s *connState) addCollectionHandle(name string, collection *collections.Collection, handleLimit, cacheLimit int) (CollectionHandle, error) {
