@@ -248,9 +248,6 @@ func TestColumnAssetLifecycleReportByteAccountingUsesIntervalUnion1954(t *testin
 	second.Offset += candidate.Length / 4
 	second.Length = candidate.Length / 2
 	wantUnion := candidate.Length/2 + candidate.Length/4
-	if candidate.Length%4 != 0 {
-		wantUnion = second.Offset + second.Length - candidate.Offset
-	}
 
 	report, err := col.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
 		CandidateRefs: []ColumnAssetRef{first, second},
