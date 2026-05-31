@@ -98,7 +98,7 @@ func findGraphSearchPreparedViewRow(doc, state string) string {
 		if len(cells) < 8 {
 			continue
 		}
-		if strings.Contains(cells[0], state) {
+		if strings.TrimSpace(cells[0]) == state {
 			return line
 		}
 	}
