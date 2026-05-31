@@ -106,6 +106,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - user-facing quickstart, benchmark matrix, demo, and caveats for explicit
     `column_graph` vector indexes that search through the native physical column
     row reader.
+- `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
+  - issue #2036 role-specific prepared runtime-view and admission policy for
+    current-format typed-column graph search.
 
 ## Target Gates (Normative Target, Not Current Behavior)
 
@@ -200,6 +203,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #2047 optimized-consumer capability tier matrix for every current
     typed-column logical/physical pair, including graph-search admission baseline
     links for #2044 and direct-view certifier scope links for #2046.
+- `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
+  - issue #2036 role-specific prepared runtime-view matrix, hot-loop boundaries,
+    graph-row fallback prohibition, future type admission gate, and #2037/#2044
+    evidence requirements for typed-column graph search.
 - `TreeDB/docs/spec/typed-column-direct-view-alignment.md`
   - issue #1893 aligned fixed-width direct-view safety contract, all-type/storage
     owner classification, absolute-offset alignment rule, fallback/deferred
@@ -269,7 +276,8 @@ typed-column maintenance behavior is recorded in
 `typed-asset-maintenance-1788.md`, typed-column schema/version evolution
 policy is owned by `typed-column-schema-evolution.md`, optimized-consumer tier
 classification is owned by `typed-column-optimized-consumer-capabilities.md`,
-#1886 direct-view closeout evidence is owned by
+graph-search prepared runtime-view admission is owned by
+`typed-column-graph-search-prepared-views.md`, #1886 direct-view closeout evidence is owned by
 `typed-column-direct-view-closeout-1899.md`, and `uint32_list` adjacency
 quarantine/audit ownership is recorded in
 `typed-column-uint32-list-adjacency-quarantine.md`; first-class

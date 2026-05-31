@@ -13,7 +13,9 @@ matrix and deferral closeout is recorded in
 `typed-column-direct-view-closeout-1899.md`. The generic optimized-consumer tier
 matrix in `typed-column-optimized-consumer-capabilities.md` now owns the
 cross-type `mmap_direct`/fallback classification that graph-search admission
-(#2044) and reusable direct-view certifiers (#2046) consume.
+(#2044) and reusable direct-view certifiers (#2046) consume; the role-specific
+graph-search prepared-view policy is in
+`typed-column-graph-search-prepared-views.md`.
 
 ## Scope and non-goals
 
