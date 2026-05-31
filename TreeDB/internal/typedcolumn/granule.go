@@ -238,7 +238,7 @@ func (r *GranuleReader) int64Cursor(g EncodedGranule) (int64Cursor, error) {
 		}
 	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
 	default:
-		return int64Cursor{}, fmt.Errorf("typedcolumn: unsupported encoding %d", g.Encoding)
+		return int64Cursor{}, fmt.Errorf("typedcolumn: unsupported encoding %s", g.Encoding)
 	}
 	return cursor, nil
 }
@@ -355,7 +355,7 @@ func (r *GranuleReader) CountSumInt64(g EncodedGranule) (int, int64, error) {
 			return 0, 0, errors.New("typedcolumn: trailing double-delta bytes")
 		}
 	default:
-		return 0, 0, fmt.Errorf("typedcolumn: unsupported encoding %d", g.Encoding)
+		return 0, 0, fmt.Errorf("typedcolumn: unsupported encoding %s", g.Encoding)
 	}
 	return g.Rows, sum, nil
 }
@@ -443,7 +443,7 @@ func decodeInt64Payload(dst []int64, raw []byte, g EncodedGranule) ([]int64, err
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("typedcolumn: unsupported encoding %d", g.Encoding)
+		return nil, fmt.Errorf("typedcolumn: unsupported encoding %s", g.Encoding)
 	}
 	return out, nil
 }
@@ -539,7 +539,7 @@ func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, 
 		}
 		return dst, nil
 	default:
-		return nil, fmt.Errorf("typedcolumn: unsupported encoding %d", encoding)
+		return nil, fmt.Errorf("typedcolumn: unsupported encoding %s", encoding)
 	}
 }
 
@@ -679,7 +679,7 @@ func (c *int64Cursor) Next() (int64, error) {
 		c.prev = v
 		return v, nil
 	default:
-		return 0, fmt.Errorf("typedcolumn: unsupported encoding %d", c.encoding)
+		return 0, fmt.Errorf("typedcolumn: unsupported encoding %s", c.encoding)
 	}
 }
 
