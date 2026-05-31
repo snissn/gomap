@@ -515,6 +515,18 @@ func requireEncodedIndexOrder(t *testing.T, valueType IndexValueType, values ...
 	}
 }
 
+func stringSliceEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 	scalarRuntime := []indexRuntime{{
 		def:  indexDefinition{name: "email", field: "email", valueType: IndexValueString},
@@ -782,6 +794,81 @@ func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *te
 	}
 	if noRootProbe.hasPrefixesCalls != 0 {
 		t.Fatalf("HasPrefixesAtRoot calls without persisted roots=%d want 0", noRootProbe.hasPrefixesCalls)
+	}
+}
+
+func TestInsertBatchPlanner_SingleDirectBufferedInsertPlanPreservesIndexedSemantics(t *testing.T) {
+	planner := insertBatchPlanner{
+		collection: "users",
+		indexes: []indexDefinition{
+			{name: "email", field: "email", valueType: IndexValueString, unique: true},
+			{name: "city", field: "city", valueType: IndexValueString, multiKey: true},
+		},
+		buildPrimaryVal:    clonePrimaryDocument,
+		directBufferedRuns: true,
+	}
+
+	plan, err := planner.planInsertBatchWithPreflight(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":["hnl","hnl","iad"]}`)},
+		insertBatchPreflight{
+			snapshot: &recordingRootSnapshotProbe{},
+			uniqueIndexRootIDs: map[string]uint64{
+				"email": 77,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("plan insert batch: %v", err)
+	}
+	if got := len(plan.runs); got != 0 {
+		t.Fatalf("runs len=%d want 0 for direct-buffered plan", got)
+	}
+	if plan.directBufferedInsert == nil {
+		t.Fatal("missing direct-buffered insert plan")
+	}
+	direct := plan.directBufferedInsert
+	if got, want := direct.rootNames, []string{"users/primary", "users/index-state", "users/index/email", "users/index/city"}; !stringSliceEqual(got, want) {
+		t.Fatalf("root names=%v want %v", got, want)
+	}
+	if got, want := len(direct.primaryEntries), 1; got != want {
+		t.Fatalf("primary entries=%d want %d", got, want)
+	}
+	if got, want := string(direct.primaryEntries[0].key), "u1"; got != want {
+		t.Fatalf("primary key=%q want %q", got, want)
+	}
+	if got, want := string(direct.primaryEntries[0].value), `{"email":"ada@example.com","city":["hnl","hnl","iad"]}`; got != want {
+		t.Fatalf("primary value=%q want %q", got, want)
+	}
+	if got, want := len(direct.indexStateEntries), 1; got != want {
+		t.Fatalf("index-state entries=%d want %d", got, want)
+	}
+	if len(direct.indexStateEntries[0].value) == 0 {
+		t.Fatal("index-state entry is empty")
+	}
+	if got, want := len(direct.secondaryRootPlans), 2; got != want {
+		t.Fatalf("secondary root plans=%d want %d", got, want)
+	}
+	if got, want := len(direct.secondaryRootPlans[0].entries), 1; got != want {
+		t.Fatalf("email secondary entries=%d want %d", got, want)
+	}
+	if got, want := len(direct.secondaryRootPlans[1].entries), 2; got != want {
+		t.Fatalf("city secondary entries=%d want %d", got, want)
+	}
+	if got, want := len(plan.allUniqueProbeRuns), 1; got != want {
+		t.Fatalf("all unique probe runs=%d want %d", got, want)
+	}
+	if got, want := len(plan.allUniqueProbeRuns[0].prefixes), 1; got != want {
+		t.Fatalf("all unique probe prefixes=%d want %d", got, want)
+	}
+	if got, want := len(plan.uniqueProbeRuns), 1; got != want {
+		t.Fatalf("preflight unique probe runs=%d want %d", got, want)
+	}
+	if got, want := len(direct.uniqueValueRootPlans), 1; got != want {
+		t.Fatalf("unique value root plans=%d want %d", got, want)
+	}
+	if got, want := len(direct.uniqueValueRootPlans[0].prefixes), 1; got != want {
+		t.Fatalf("unique value root prefixes=%d want %d", got, want)
 	}
 }
 
