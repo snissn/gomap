@@ -111,7 +111,7 @@ func insertIndexedPlanningTestDocumentWithMutationWait(t *testing.T, col *Collec
 	unlockMutation := col.lockMutation()
 	unlockMutation.wait = wait
 	mutationLocked := true
-	return col.insertBatchOnceWithLockState(ids, docs, trustedValidBSON, nil, nil, &unlockMutation, &mutationLocked)
+	return col.insertBatchOnceWithLockState(ids, docs, trustedValidBSON, nil, nil, insertBatchExecutionOptions{returnResultIDs: true}, &unlockMutation, &mutationLocked)
 }
 
 func TestCollectionIndexedInsertBatchSingleDocumentPlanningUnlockByFormat(t *testing.T) {
