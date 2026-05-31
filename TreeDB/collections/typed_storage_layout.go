@@ -243,6 +243,18 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_degree: only adjacency_list fields may set adjacency_degree", name)
 				}
 			}
+			if valueType == ColumnStoreValueBytes {
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				if field.Nullable {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q nullable bytes is unsupported", name)
+				}
+				if field.AdjacencyDegree != 0 {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_degree: only adjacency_list fields may set adjacency_degree", name)
+				}
+			}
 			if valueType == ColumnStoreValueAdjacencyList {
 				if field.AdjacencyDegree < 0 {
 					name := field.Name
@@ -547,6 +559,13 @@ func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
 			}
 			if field.AdjacencyDegree != 0 {
 				return fmt.Errorf("%w: uint32_list field %q requires adjacency_degree=0", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+		case ColumnStoreValueBytes:
+			if field.Nullable {
+				return fmt.Errorf("%w: nullable bytes field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+			if field.AdjacencyDegree != 0 {
+				return fmt.Errorf("%w: bytes field %q requires adjacency_degree=0", ErrTypedStorageColumnPartUnsupported, field.Path)
 			}
 		case ColumnStoreValueAdjacencyList:
 			if field.Nullable {

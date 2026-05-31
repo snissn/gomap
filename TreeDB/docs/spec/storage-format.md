@@ -514,10 +514,14 @@ Typed-column part descriptor column type codes are currently:
 | 6 | `float32` | Native raw little-endian IEEE-754 scalar. |
 | 7 | `float64` | Native raw little-endian IEEE-754 scalar. |
 | 8 | `uint32_list` | Generic non-null offsets/value list primitive added by #1985. |
+| 9 | `bytes` | Generic non-null opaque byte payload primitive added by #2010. |
 
 `uint32_list` descriptors must use `raw_uint32_offsets_list` encoding,
-`fixed_width_elements=0`, and uncompressed split offsets/value sections. Readers
-must fail closed on unknown type codes rather than guessing a payload shape.
+`fixed_width_elements=0`, and uncompressed split offsets/value sections. `bytes`
+descriptors must use `raw_bytes_offsets`, `fixed_width_elements=0`, and
+uncompressed split offsets/value sections whose values bytes are exact opaque
+payload bytes rather than text. Readers must fail closed on unknown type codes
+rather than guessing a payload shape.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
@@ -612,7 +616,11 @@ from those global sections. The offsets-list mechanics validate exact offsets
 count, `offsets[0] == 0`, monotonic offsets, final offset equal to the value
 count, exact offsets/value byte lengths, Go `int` range before slicing,
 little-endian identity, and separate section metadata/checksums for offsets
-(8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
+(8-byte elements) and values (4-byte elements). The `bytes` / `raw_bytes_offsets`
+primitive uses the same `uint64` sentinel offsets shape, but its values section is
+an arbitrary byte stream; final offset is a byte length, empty byte slices are
+equal adjacent offsets, and NUL/non-UTF-8 bytes are preserved without string
+semantics. #1915 adds the safe writer and
 fallback reader into owned Go slices; #1916 adds certified direct-view readers
 for paired offsets/value handles, and #1917 wires that variable adjacency reader
 through typed-column adapters. #1918 recorded durable `column_graph` layer-0
@@ -660,14 +668,16 @@ validation and fail-closed rules.
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
 non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
-fixed-dimension `raw_float32_vector`, and explicit `raw_uint32_offsets_list`
-typed-column payload sections as `DirectViewCertified`; the adapter-internal
+fixed-dimension `raw_float32_vector`, explicit `raw_uint32_offsets_list`, and
+explicit `raw_bytes_offsets` typed-column payload sections as
+`DirectViewCertified`; the adapter-internal
 `__treedb_primary_id` row-locator column is not a declared-value direct-view
 certification target. The contract records section/block offsets, lengths,
 checksums, element size, endian, length multiple, row count, fixed elements per
-row, and null/default exclusion. For `raw_uint32_offsets_list`, the contract
-records global offsets/value section identity and leaves generic per-block
-combined payload offsets empty because the two sections are discontiguous. Image
+row, and null/default exclusion. For `raw_uint32_offsets_list` and
+`raw_bytes_offsets`, the contract records global offsets/value section identity
+and leaves generic per-block combined payload offsets empty because the two
+sections are discontiguous. Image
 padding bytes are deterministic zero bytes
 and are included in serialized-image byte accounting. When a typed-column-part
 asset contains an active direct-view-certified candidate, the column asset segment

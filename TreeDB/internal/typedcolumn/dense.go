@@ -101,6 +101,38 @@ func (b *ColumnPartBuilder) gatherUint32OffsetsList(source RawUint32OffsetsList,
 	return RawUint32OffsetsList{Rows: rows, Offsets: b.u32offset, Values: b.u32dense}, nil
 }
 
+func (b *ColumnPartBuilder) gatherBytesOffsets(source RawBytesOffsets, start int, end int) (RawBytesOffsets, error) {
+	if err := ValidateRawBytesOffsetsShape(source.Rows, source.Offsets, uint64(len(source.Values))); err != nil {
+		return RawBytesOffsets{}, err
+	}
+	rows := end - start
+	b.bytesOff = resizeFixedWidthValues(b.bytesOff[:0], rows+1)
+	b.bytesOff[0] = 0
+	b.bytesData = b.bytesData[:0]
+	for row := start; row < end; row++ {
+		sourceRow := b.order[row]
+		if sourceRow < 0 || sourceRow >= source.Rows {
+			return RawBytesOffsets{}, fmt.Errorf("typedcolumn: bytes source row %d outside rows=%d", sourceRow, source.Rows)
+		}
+		begin := source.Offsets[sourceRow]
+		finish := source.Offsets[sourceRow+1]
+		if begin > maxHostIntUint64() || finish > maxHostIntUint64() {
+			return RawBytesOffsets{}, fmt.Errorf("typedcolumn: bytes row %d offset outside host int", sourceRow)
+		}
+		if finish < begin {
+			return RawBytesOffsets{}, fmt.Errorf("typedcolumn: bytes row %d non-monotonic offsets", sourceRow)
+		}
+		beginInt := int(begin)
+		finishInt := int(finish)
+		if beginInt > len(source.Values) || finishInt > len(source.Values) {
+			return RawBytesOffsets{}, fmt.Errorf("typedcolumn: bytes row %d values range [%d,%d) outside values=%d", sourceRow, begin, finish, len(source.Values))
+		}
+		b.bytesData = append(b.bytesData, source.Values[beginInt:finishInt]...)
+		b.bytesOff[row-start+1] = uint64(len(b.bytesData))
+	}
+	return RawBytesOffsets{Rows: rows, Offsets: b.bytesOff, Values: b.bytesData}, nil
+}
+
 func (b *GranuleBuilder) BuildFloat32Vector(values []float32, rows int, elementsPerRow int) (EncodedGranule, error) {
 	if b.cfg.Encoding != 0 && b.cfg.Encoding != EncodingRawFloat32Vector {
 		return EncodedGranule{}, fmt.Errorf("typedcolumn: float32_vector encoding=%s want %s", b.cfg.Encoding, EncodingRawFloat32Vector)
@@ -341,6 +373,17 @@ func (p *ColumnPart) Uint32OffsetsListColumn(name string, offsetsDst []uint64, v
 	return uint32OffsetsListColumnInto(offsetsDst, valuesDst, p.Descriptor.RowCount, column)
 }
 
+func (p *ColumnPart) BytesColumn(name string, offsetsDst []uint64, valuesDst []byte) (BytesColumn, error) {
+	column, ok := p.Columns[name]
+	if !ok {
+		return BytesColumn{}, fmt.Errorf("typedcolumn: missing column %s", name)
+	}
+	if column.Definition.Type != ColumnTypeBytes || column.Definition.Encoding != EncodingRawBytesOffsets {
+		return BytesColumn{}, fmt.Errorf("typedcolumn: column %s type/encoding=(%s,%s) is not bytes/raw_bytes_offsets", name, column.Definition.Type, column.Definition.Encoding)
+	}
+	return bytesColumnInto(offsetsDst, valuesDst, p.Descriptor.RowCount, column)
+}
+
 func denseFloat32ColumnInto(dst []float32, rows int, column ColumnPartColumn) ([]float32, error) {
 	elements, err := checkedMulInt(rows, column.Definition.FixedWidthElements, "float32_vector column elements")
 	if err != nil {
@@ -455,6 +498,50 @@ func uint32OffsetsListColumnInto(offsetsDst []uint64, valuesDst []uint32, rows i
 		return RawUint32OffsetsList{}, err
 	}
 	return RawUint32OffsetsList{Rows: rows, Offsets: outOffsets, Values: outValues}, nil
+}
+
+func bytesColumnInto(offsetsDst []uint64, valuesDst []byte, rows int, column ColumnPartColumn) (RawBytesOffsets, error) {
+	outOffsets := offsetsDst[:0]
+	if cap(outOffsets) < rows+1 {
+		outOffsets = make([]uint64, rows+1)
+	} else {
+		outOffsets = outOffsets[:rows+1]
+	}
+	for i := range outOffsets {
+		outOffsets[i] = 0
+	}
+	outValues := valuesDst[:0]
+	var reader GranuleReader
+	var offsetsScratch []uint64
+	var valuesScratch []byte
+	for _, block := range column.Blocks {
+		decoded, err := reader.DecodeBytesInto(offsetsScratch[:0], valuesScratch[:0], block.Granule)
+		if err != nil {
+			return RawBytesOffsets{}, err
+		}
+		if decoded.Rows != block.Descriptor.RowCount || len(decoded.Offsets) != block.Descriptor.RowCount+1 {
+			return RawBytesOffsets{}, fmt.Errorf("typedcolumn: bytes block rows=%d decoded rows=%d offsets=%d", block.Descriptor.RowCount, decoded.Rows, len(decoded.Offsets))
+		}
+		first := block.Descriptor.FirstRow
+		if first < 0 || first > rows-decoded.Rows {
+			return RawBytesOffsets{}, fmt.Errorf("typedcolumn: bytes block first_row=%d rows=%d outside column rows=%d", first, decoded.Rows, rows)
+		}
+		base := uint64(len(outValues))
+		if base > maxHostIntUint64() {
+			return RawBytesOffsets{}, fmt.Errorf("typedcolumn: bytes values exceed host int")
+		}
+		outValues = append(outValues, decoded.Values...)
+		offsetsScratch = decoded.Offsets
+		valuesScratch = decoded.Values
+		for i := 0; i < decoded.Rows; i++ {
+			outOffsets[first+i] = base + decoded.Offsets[i]
+		}
+		outOffsets[first+decoded.Rows] = uint64(len(outValues))
+	}
+	if err := ValidateRawBytesOffsetsShape(rows, outOffsets, uint64(len(outValues))); err != nil {
+		return RawBytesOffsets{}, err
+	}
+	return RawBytesOffsets{Rows: rows, Offsets: outOffsets, Values: outValues}, nil
 }
 
 func ensureFloat32Len(dst []float32, n int) []float32 {

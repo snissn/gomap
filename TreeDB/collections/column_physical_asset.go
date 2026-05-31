@@ -46,6 +46,7 @@ type columnDeclaredValue struct {
 	Float32Vector []float32
 	Uint32List    []uint32
 	AdjacencyList []uint32
+	Bytes         []byte
 	// StringBytes is used by physical scan/query hot paths as an asset-buffer
 	// view valid only for the current scan callback / pinned prepared runner
 	// view. Copy before retaining beyond that lifetime. String remains the
@@ -222,6 +223,12 @@ func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (co
 			return columnDeclaredValue{}, err
 		}
 		value.Uint32List = values
+	case ColumnStoreValueBytes:
+		values, err := convertJSONBytes(raw)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Bytes = values
 	case ColumnStoreValueAdjacencyList:
 		values, err := convertJSONUint32List(raw, "adjacency_list")
 		if err != nil {
@@ -287,6 +294,29 @@ func convertJSONUint32List(raw any, label string) ([]uint32, error) {
 			return nil, fmt.Errorf("%s[%d]=%d outside uint32 range", label, i, v)
 		}
 		out[i] = uint32(v)
+	}
+	return out, nil
+}
+
+func convertJSONBytes(raw any) ([]byte, error) {
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("expected bytes array got %T", raw)
+	}
+	out := make([]byte, len(values))
+	for i, rawValue := range values {
+		n, ok := rawValue.(json.Number)
+		if !ok {
+			return nil, fmt.Errorf("bytes[%d] expected integer got %T", i, rawValue)
+		}
+		v, err := n.Int64()
+		if err != nil {
+			return nil, fmt.Errorf("bytes[%d]: %w", i, err)
+		}
+		if v < 0 || v > 255 {
+			return nil, fmt.Errorf("bytes[%d]=%d outside byte range", i, v)
+		}
+		out[i] = byte(v)
 	}
 	return out, nil
 }
@@ -700,6 +730,10 @@ func validateColumnDeclaredPhysicalValueShape(col ColumnStoreColumn, value colum
 	case ColumnStoreValueUint32List:
 		if !value.Present || value.Null {
 			return fmt.Errorf("uint32_list is non-null in v1")
+		}
+	case ColumnStoreValueBytes:
+		if !value.Present || value.Null {
+			return fmt.Errorf("bytes is non-null in v1")
 		}
 	case ColumnStoreValueAdjacencyList:
 		if col.AdjacencyDegree > 0 && len(value.AdjacencyList) != col.AdjacencyDegree {

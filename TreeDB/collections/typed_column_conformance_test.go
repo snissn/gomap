@@ -130,6 +130,35 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			},
 		},
 		{
+			name:     "uint32_list",
+			field:    semanticField("tags", ColumnStoreValueUint32List),
+			logical:  columnsemantics.LogicalUint32List,
+			physical: typedcolumn.ColumnTypeUint32List,
+			encoding: typedcolumn.EncodingRawUint32OffsetsList,
+			checks: []capabilityCheck{
+				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpCountNonNull, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpUint32ListDirectPayload, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpEquality, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonUint32ListScalarOperationUnsupported},
+				{op: columnsemantics.OpAdjacencyDirectPayload, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonOperationUnsupported},
+			},
+		},
+		{
+			name:     "bytes",
+			field:    semanticField("opaque", ColumnStoreValueBytes),
+			logical:  columnsemantics.LogicalBytes,
+			physical: typedcolumn.ColumnTypeBytes,
+			encoding: typedcolumn.EncodingRawBytesOffsets,
+			checks: []capabilityCheck{
+				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpCountNonNull, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpBytesDirectPayload, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpEquality, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonBytesScalarOperationUnsupported},
+				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonBytesScalarOperationUnsupported},
+				{op: columnsemantics.OpVectorDirectPayload, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonOperationUnsupported},
+			},
+		},
+		{
 			name:     "adjacency_list_dense_compatibility",
 			field:    semanticAdjacencyField("neighbors"),
 			logical:  columnsemantics.LogicalAdjacencyList,
@@ -197,7 +226,7 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			}
 		})
 	}
-	for _, valueType := range []ColumnStoreValueType{ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList} {
+	for _, valueType := range []ColumnStoreValueType{ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes, ColumnStoreValueAdjacencyList} {
 		if !seen[valueType] {
 			t.Fatalf("value type %s missing from semantic conformance matrix", valueType)
 		}
