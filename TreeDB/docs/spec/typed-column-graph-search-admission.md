@@ -7,10 +7,12 @@ and the #2036 prepared runtime-view contract in
 `typed-column-graph-search-prepared-views.md`.
 
 This document owns the repo-level readiness table that descendants must update
-before adding, changing, or promoting graph-search typed-column state roles. It
-does not implement reusable direct-view certifier APIs (#2046), type-specific
-prepared views (#2038/#2040/#2041), graph-search routing (#2045), hot-loop
-telemetry reduction (#2042), or benchmark truth-matrix collection (#2037).
+before adding, changing, or promoting graph-search typed-column state roles. The
+#2037 benchmark truth-matrix labels and command contract live in
+`typed-column-graph-search-benchmark-matrix.md`. This document does not implement
+reusable direct-view certifier APIs (#2046), type-specific prepared views
+(#2038/#2040/#2041), graph-search routing (#2045), hot-loop telemetry reduction
+(#2042), or benchmark truth-matrix collection (#2037).
 
 ## Admission status vocabulary
 

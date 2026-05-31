@@ -8,11 +8,12 @@ It consumes the tier vocabulary and generic type matrix in
 `generic_only`, or `unsupported/experimental` tiers.
 
 The #2044 readiness/admission table and docs-lint enforcement live in
-`typed-column-graph-search-admission.md`. This document does not implement
-runtime graph-search admission enforcement (#2044), reusable direct-view
-certifiers (#2046), type-specific prepared views (#2038/#2040/#2041), or the
-benchmark truth matrix (#2037). It defines the contract those issues must
-satisfy.
+`typed-column-graph-search-admission.md`; the #2037 benchmark truth-matrix labels
+and command contract live in `typed-column-graph-search-benchmark-matrix.md`.
+This document does not implement runtime graph-search admission enforcement
+(#2044), reusable direct-view certifiers (#2046), type-specific prepared views
+(#2038/#2040/#2041), or the benchmark truth matrix (#2037). It defines the
+contract those issues must satisfy.
 
 ## Scope and ownership
 

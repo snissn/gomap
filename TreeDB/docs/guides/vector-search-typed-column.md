@@ -201,9 +201,9 @@ GOMAXPROCS=8 go test ./TreeDB/collections \
   -count=5
 ```
 
-Report both `ns/op` and `ops/sec`; compute `ops/sec` as `1e9 / ns/op` from the
-Go benchmark output. For parallel benchmarks, this is the aggregate operation
-rate implied by Go's parallel `ns/op` measurement. Always include `B/op`,
+Report both `ns/op` and the explicit `ops/sec` metric emitted by the benchmark
+helpers. For parallel benchmarks, `ops/sec` is the aggregate operation rate
+implied by Go's parallel `ns/op` measurement. Always include `B/op`,
 `allocs/op`, and the direct/fallback counters
 (`adjacency_typed_list_mmap_direct/search`,
 `adjacency_typed_list_scratch_decodes/search`, `norm_mmap_direct/search`,
@@ -228,8 +228,23 @@ buffer lifetime contract. `VectorIndexSearcher.SearchWithBuffer` rejects
 A `VectorIndexSearchBuffer` is not concurrency-safe, and returned `Results`/`ID`
 slices are valid only until the same buffer is reused or reset.
 
-The broader legacy/canonical matrix remains useful when you also need one-shot
-open/setup or document materialization:
+Use the #2037 truth matrix when comparing legacy/direct graph-row controls,
+current TVIS/base typed-column sources, and future prepared typed-column rows
+with stable labels:
+
+```sh
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphSearchTruthMatrix2037$' \
+  -benchmem \
+  -benchtime=500ms \
+  -count=5
+```
+
+The truth-matrix row labels and skipped prepared placeholders are specified in
+[`typed-column-graph-search-benchmark-matrix.md`](../spec/typed-column-graph-search-benchmark-matrix.md).
+The broader legacy/canonical matrix remains useful when comparing with older
+artifacts or when you also need one-shot open/setup names:
 
 ```sh
 go test ./TreeDB/collections \
@@ -240,7 +255,7 @@ go test ./TreeDB/collections \
   -count=5
 ```
 
-Read the benchmark names before comparing numbers:
+Read the benchmark names and row labels before comparing numbers:
 
 | Benchmark category | What is timed |
 | --- | --- |
