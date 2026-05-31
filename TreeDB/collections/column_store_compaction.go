@@ -115,7 +115,7 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	if visibilityDiag.MutationParts == 0 && state.cfg.PhysicalMutationParts == 0 {
 		return stats, nil
 	}
-	stats.SupersededRefs = columnStoreCompactionRefsFromManifestRecords(state.records)
+	supersededRefs := columnStoreCompactionRefsFromManifestRecords(state.records)
 	if state.cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 {
 		return stats, errors.New("collections: column store compaction requires recovery-authoritative AppliedCommandLSN")
 	}
@@ -190,6 +190,7 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	stats.AssetsPublished = len(prepared.Assets)
 	stats.AggregateMetadataPublished = columnStoreCompactionAggregateMetadataAssets(prepared.Assets)
 	stats.PublishedRefs = columnStoreCompactionPreparedRefs(prepared.Assets)
+	stats.SupersededRefs = supersededRefs
 	stats.Compacted = true
 	stats.ManifestRoot = rootIDs[0]
 	stats.SystemRoot = newSystemRoot
