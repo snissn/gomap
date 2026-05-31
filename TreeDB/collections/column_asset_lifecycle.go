@@ -49,26 +49,27 @@ type ColumnAssetLifecyclePinSetOptions struct {
 // ColumnAssetLifecyclePinSet is a process-local lease over a caller-supplied set
 // of column asset refs. Close releases the lease from lifecycle reports.
 type ColumnAssetLifecyclePinSet struct {
-	mu         sync.Mutex
-	collection *Collection
-	id         uint64
-	source     ColumnAssetLifecyclePinSource
-	owner      string
-	reason     string
-	refs       []ColumnAssetRef
-	closed     bool
+	mu      sync.Mutex
+	manager *CollectionManager
+	id      uint64
+	source  ColumnAssetLifecyclePinSource
+	owner   string
+	reason  string
+	refs    []ColumnAssetRef
+	closed  bool
 }
 
 type columnAssetLifecyclePinSetRecord struct {
-	ID     uint64
-	Source ColumnAssetLifecyclePinSource
-	Owner  string
-	Reason string
-	Refs   []ColumnAssetRef
-	Bytes  int64
+	ID         uint64
+	Collection string
+	Source     ColumnAssetLifecyclePinSource
+	Owner      string
+	Reason     string
+	Refs       []ColumnAssetRef
+	Bytes      int64
 }
 
-// ID returns the collection-local process lease identifier.
+// ID returns the manager-local process lease identifier.
 func (p *ColumnAssetLifecyclePinSet) ID() uint64 {
 	if p == nil {
 		return 0
@@ -109,18 +110,18 @@ func (p *ColumnAssetLifecyclePinSet) Close() error {
 		return nil
 	}
 	p.closed = true
-	collection := p.collection
+	manager := p.manager
 	id := p.id
-	p.collection = nil
+	p.manager = nil
 	p.mu.Unlock()
-	if collection == nil {
+	if manager == nil {
 		return nil
 	}
-	collection.columnLifecycleMu.Lock()
-	if collection.columnLifecyclePins != nil {
-		delete(collection.columnLifecyclePins, id)
+	manager.columnLifecycleMu.Lock()
+	if manager.columnLifecyclePins != nil {
+		delete(manager.columnLifecyclePins, id)
 	}
-	collection.columnLifecycleMu.Unlock()
+	manager.columnLifecycleMu.Unlock()
 	return nil
 }
 
@@ -132,6 +133,9 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
+	}
+	if c.manager == nil {
+		return nil, errors.New("collections: column asset lifecycle pin set requires collection manager")
 	}
 	if err := validateColumnAssetLifecyclePinSource(opts.Source); err != nil {
 		return nil, err
@@ -147,29 +151,31 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		}
 		bytes = addColumnAssetReachabilityBytes(bytes, positiveColumnAssetReachabilityLength(ref.Length))
 	}
-	c.columnLifecycleMu.Lock()
-	defer c.columnLifecycleMu.Unlock()
-	c.columnLifecycleNextPinID++
-	id := c.columnLifecycleNextPinID
-	if c.columnLifecyclePins == nil {
-		c.columnLifecyclePins = make(map[uint64]columnAssetLifecyclePinSetRecord)
+	manager := c.manager
+	manager.columnLifecycleMu.Lock()
+	defer manager.columnLifecycleMu.Unlock()
+	manager.columnLifecycleNextPinID++
+	id := manager.columnLifecycleNextPinID
+	if manager.columnLifecyclePins == nil {
+		manager.columnLifecyclePins = make(map[uint64]columnAssetLifecyclePinSetRecord)
 	}
 	record := columnAssetLifecyclePinSetRecord{
-		ID:     id,
-		Source: opts.Source,
-		Owner:  opts.Owner,
-		Reason: opts.Reason,
-		Refs:   refs,
-		Bytes:  bytes,
+		ID:         id,
+		Collection: c.meta.Name,
+		Source:     opts.Source,
+		Owner:      opts.Owner,
+		Reason:     opts.Reason,
+		Refs:       refs,
+		Bytes:      bytes,
 	}
-	c.columnLifecyclePins[id] = record
+	manager.columnLifecyclePins[id] = record
 	return &ColumnAssetLifecyclePinSet{
-		collection: c,
-		id:         id,
-		source:     opts.Source,
-		owner:      opts.Owner,
-		reason:     opts.Reason,
-		refs:       append([]ColumnAssetRef(nil), refs...),
+		manager: manager,
+		id:      id,
+		source:  opts.Source,
+		owner:   opts.Owner,
+		reason:  opts.Reason,
+		refs:    append([]ColumnAssetRef(nil), refs...),
 	}, nil
 }
 
@@ -396,16 +402,20 @@ func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins
 }
 
 func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecyclePinSetRecord {
-	if c == nil {
+	if c == nil || c.manager == nil {
 		return nil
 	}
-	c.columnLifecycleMu.Lock()
-	defer c.columnLifecycleMu.Unlock()
-	if len(c.columnLifecyclePins) == 0 {
+	collectionName := c.meta.Name
+	c.manager.columnLifecycleMu.Lock()
+	defer c.manager.columnLifecycleMu.Unlock()
+	if len(c.manager.columnLifecyclePins) == 0 {
 		return nil
 	}
-	out := make([]columnAssetLifecyclePinSetRecord, 0, len(c.columnLifecyclePins))
-	for _, record := range c.columnLifecyclePins {
+	out := make([]columnAssetLifecyclePinSetRecord, 0, len(c.manager.columnLifecyclePins))
+	for _, record := range c.manager.columnLifecyclePins {
+		if record.Collection != collectionName {
+			continue
+		}
 		record.Refs = append([]ColumnAssetRef(nil), record.Refs...)
 		out = append(out, record)
 	}

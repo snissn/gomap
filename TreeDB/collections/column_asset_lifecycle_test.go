@@ -91,7 +91,11 @@ func TestColumnAssetLifecycleReportExplicitPinSetScaffold1954(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	col := openColumnAssetLifecycleTestCollection1954(t, d)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
 
 	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -110,7 +114,11 @@ func TestColumnAssetLifecycleReportExplicitPinSetScaffold1954(t *testing.T) {
 		t.Fatalf("unexpected pin id/source/refs: id=%d source=%q refs=%+v", pin.ID(), pin.Source(), pin.Refs())
 	}
 
-	report, err := col.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
+	sibling, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection sibling: %v", err)
+	}
+	report, err := sibling.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
 		Detailed:      true,
 		CandidateRefs: []ColumnAssetRef{candidate},
 	})
@@ -134,7 +142,7 @@ func TestColumnAssetLifecycleReportExplicitPinSetScaffold1954(t *testing.T) {
 	if err := pin.Close(); err != nil {
 		t.Fatalf("pin close: %v", err)
 	}
-	afterClose, err := col.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
+	afterClose, err := sibling.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
 		Detailed:      true,
 		CandidateRefs: []ColumnAssetRef{candidate},
 	})
@@ -150,6 +158,52 @@ func TestColumnAssetLifecycleReportExplicitPinSetScaffold1954(t *testing.T) {
 	}
 	if entry.Status != ColumnAssetReachabilityReclaimable || slices.Contains(entry.Sources, ColumnAssetReachabilitySourcePreparedQuery) {
 		t.Fatalf("after close entry=%+v want reclaimable without prepared_query", entry)
+	}
+}
+
+func TestColumnAssetLifecycleReportPinSetSharedAcrossHandles1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection owner: %v", err)
+	}
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 2, 99)
+	pin, err := col.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{
+		Source: ColumnAssetLifecyclePinSourcePreparedQuery,
+		Owner:  "prepared-runner-owner-handle",
+		Refs:   []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("AcquireColumnAssetLifecyclePinSet: %v", err)
+	}
+	defer func() { _ = pin.Close() }()
+
+	maintenance, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection maintenance: %v", err)
+	}
+	report, err := maintenance.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetLifecycle from sibling handle: %v", err)
+	}
+	if report.PreparedPins.OpenSessions != 1 || report.Roots.PreparedQueryRefs != 1 || report.Reachability.Sources.PreparedQueryRefs != 1 {
+		t.Fatalf("sibling handle missed lifecycle pin: pins=%+v roots=%+v sources=%+v", report.PreparedPins, report.Roots, report.Reachability.Sources)
+	}
+	entry, ok := columnAssetLifecycleFindEntry(report.Reachability.Entries, candidate)
+	if !ok {
+		t.Fatalf("missing candidate entry")
+	}
+	if entry.Status != ColumnAssetReachabilityProtected || !slices.Contains(entry.Sources, ColumnAssetReachabilitySourcePreparedQuery) {
+		t.Fatalf("sibling handle entry=%+v want protected prepared_query", entry)
 	}
 }
 

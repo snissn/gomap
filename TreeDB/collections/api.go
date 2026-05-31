@@ -329,6 +329,9 @@ type CollectionManager struct {
 	domains                  map[string]*collectionWriteDomain
 	collectionsMu            sync.RWMutex
 	collections              map[*Collection]struct{}
+	columnLifecycleMu        sync.Mutex
+	columnLifecycleNextPinID uint64
+	columnLifecyclePins      map[uint64]columnAssetLifecyclePinSetRecord
 }
 
 type collectionManagerOptions struct {
@@ -351,10 +354,6 @@ type Collection struct {
 	vectorIndexLoadMu sync.Mutex
 	vectorIndexesMu   sync.RWMutex
 	vectorIndexes     map[string]*VectorIndex
-
-	columnLifecycleMu        sync.Mutex
-	columnLifecycleNextPinID uint64
-	columnLifecyclePins      map[uint64]columnAssetLifecyclePinSetRecord
 }
 
 type CollectionRootOverlayCompactionStats struct {
