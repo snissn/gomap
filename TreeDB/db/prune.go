@@ -158,7 +158,7 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 			return freedPages, nil
 		}
 		currentSeq := state.CommitSeq
-		minPinned := idx.registry.MinPinnedSeq()
+		minPinned := db.MinPinnedSnapshotCommitSeq()
 
 		remaining := maxPages
 		if maxPages > 0 {

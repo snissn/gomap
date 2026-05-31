@@ -31,6 +31,7 @@ type valueWriter interface {
 	AppendFrame(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, error)
 	SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool)
 	RotateTo(path string, fileID uint32) error
+	RotateToWithSync(path string, fileID uint32, syncCurrent bool) error
 	Size() int64
 	Flush() error
 	Sync() error

@@ -22079,7 +22079,7 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 
 	if l.vlog != nil {
 		oldSize := l.vlog.Size()
-		if err := l.vlog.RotateTo(path, fileID); err != nil {
+		if err := l.vlog.RotateToWithSync(path, fileID, !db.relaxedSync); err != nil {
 			return err
 		}
 		l.vlogRotateTotal.Add(1)
