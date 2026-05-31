@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,6 +149,150 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	}
 	if stats := db.Stats(); len(stats) == 0 {
 		t.Fatalf("empty backend stats after checkpoint")
+	}
+}
+
+func TestMutationSingleReplaceBatchSemantics(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name:    "users",
+		Indexes: []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"Ada"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	matched, modified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"Ada Lovelace"}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceBatch existing: %v", err)
+	}
+	if matched != 1 || modified != 1 {
+		t.Fatalf("existing matched=%d modified=%d want 1/1", matched, modified)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Contains(doc, []byte(`"Ada Lovelace"`)) {
+		t.Fatalf("u1 doc=%s", doc)
+	}
+
+	matched, modified, err = client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"Ada Lovelace"}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceBatch identical: %v", err)
+	}
+	if matched != 1 || modified != 0 {
+		t.Fatalf("identical matched=%d modified=%d want 1/0", matched, modified)
+	}
+
+	matched, modified, err = client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("missing")},
+		[][]byte{[]byte(`{"email":"missing@example.com","name":"Missing"}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceBatch missing: %v", err)
+	}
+	if matched != 0 || modified != 0 {
+		t.Fatalf("missing matched=%d modified=%d want 0/0", matched, modified)
+	}
+}
+
+func TestMutationConcurrentSingleReplaceBatch(t *testing.T) {
+	client, server, mgr, _ := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name:    "users",
+		Indexes: []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	const workers = 32
+	ids := make([][]byte, workers)
+	docs := make([][]byte, workers)
+	for i := range ids {
+		n := strconv.Itoa(i)
+		ids[i] = []byte("u" + n)
+		docs[i] = []byte(`{"email":"u` + n + `@example.com","name":"before"}`)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, ids, docs, AckVisible); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := range ids {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, cleanup, err := NewInProcessClient(ctx, server)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer func() { _ = cleanup() }()
+			n := strconv.Itoa(i)
+			matched, modified, err := c.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+				[][]byte{[]byte("u" + n)},
+				[][]byte{[]byte(`{"email":"u` + n + `@example.com","name":"after` + n + `"}`)},
+				AckVisible,
+			)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if matched != 1 || modified != 1 {
+				errCh <- errors.New("unexpected replace counts")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent ReplaceBatch: %v", err)
+		}
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	for i := range ids {
+		doc, err := col.Get(ids[i])
+		if err != nil {
+			t.Fatalf("Get %s: %v", ids[i], err)
+		}
+		want := []byte(`"name":"after` + strconv.Itoa(i) + `"`)
+		if !bytes.Contains(doc, want) {
+			t.Fatalf("%s doc=%s want %s", ids[i], doc, want)
+		}
 	}
 }
 
