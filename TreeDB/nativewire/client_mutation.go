@@ -81,7 +81,6 @@ func (c *Client) insertBatchNoResult(ctx context.Context, collection string, han
 		c.clearCatalogVersionOnMismatch(err)
 		return err
 	}
-	c.clearCatalogVersionAfterOpaqueMutation()
 	return nil
 }
 
