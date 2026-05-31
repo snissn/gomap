@@ -53,6 +53,8 @@ type columnVectorGraphPhysicalRowReader struct {
 	rowRefSource                        *columnVectorGraphRowRefStateSource
 	rowRefStateUnavailable              bool
 	rowRefStateFallbackReason           typeddecode.Reason
+	documentIDSource                    *columnVectorGraphDocumentIDStateSource
+	documentIDStateFallbackReason       typeddecode.Reason
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
 	layer0AdjacencySource               *columnVectorGraphLayer0AdjacencyDirectSource
 	layer0AdjacencySourceUnavailable    bool
@@ -181,6 +183,17 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			graphReader.rowRefSource = source
 		} else {
 			graphReader.rowRefStateUnavailable = true
+		}
+		if columnVectorGraphDocumentIDStatePresent(state) {
+			source, fallbackReason, sourceErr := c.openColumnVectorGraphDocumentIDStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+			if sourceErr != nil {
+				graphReader.documentIDStateFallbackReason = fallbackReason
+				if graphReader.documentIDStateFallbackReason == "" {
+					graphReader.documentIDStateFallbackReason = typeddecode.ReasonValidationFailed
+				}
+			} else {
+				graphReader.documentIDSource = source
+			}
 		}
 		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(*baseCfg, graph.Field, graph.Dimensions); ownerErr != nil {
 			graphReader.typedVectorFallbackReason = ownerErr.Error()
@@ -370,6 +383,12 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 			closeErr = err
 		}
 		r.rowRefSource = nil
+	}
+	if r.documentIDSource != nil {
+		if err := r.documentIDSource.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.documentIDSource = nil
 	}
 	if r.adjacencyLayerSources != nil {
 		if err := r.adjacencyLayerSources.Close(); closeErr == nil && err != nil {

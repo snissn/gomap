@@ -173,7 +173,7 @@ func TestDocs_VectorIndexStateWordingDoesNotRecanonicalizeGraphRows(t *testing.T
 		t.Fatalf("read vector search guide: %v", err)
 	}
 	guideText := string(guide)
-	for _, want := range []string{"vector-index state `row_refs` assets", "Returned opaque document IDs", "graph row ID bytes, compatibility only"} {
+	for _, want := range []string{"vector-index state `row_refs` assets", "Returned opaque document IDs", "vector-index state `document_ids` asset"} {
 		if !strings.Contains(guideText, want) {
 			t.Fatalf("vector search guide missing current row-ref wording %q", want)
 		}
