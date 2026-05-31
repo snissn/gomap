@@ -271,20 +271,28 @@ func TestColumnAssetLifecyclePinSetReleasedOnDBClose1954(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireColumnAssetLifecyclePinSet: %v", err)
 	}
-	if pin.ID() == 0 {
+	pinID := pin.ID()
+	if pinID == 0 {
 		t.Fatalf("pin id is zero")
+	}
+	dbID := columnAssetLifecycleProcessDBID(d)
+	if dbID == 0 {
+		t.Fatalf("lifecycle pin DB id is zero")
 	}
 	if err := d.RunCloseHooks(); err != nil {
 		t.Fatalf("RunCloseHooks: %v", err)
 	}
 	columnAssetLifecycleProcessPins.Lock()
 	defer columnAssetLifecycleProcessPins.Unlock()
+	if _, ok := columnAssetLifecycleProcessPins.pins[pinID]; ok {
+		t.Fatalf("pin record for closed DB leaked under id %d", pinID)
+	}
 	for _, record := range columnAssetLifecycleProcessPins.pins {
-		if record.Scope.db == d {
+		if record.Scope.dbID == dbID {
 			t.Fatalf("pin record for closed DB leaked: %+v", record)
 		}
 	}
-	if columnAssetLifecycleProcessPins.registeredDBs[d] {
+	if _, ok := columnAssetLifecycleProcessPins.dbIDs[d]; ok {
 		t.Fatalf("closed DB remained registered for lifecycle pin cleanup")
 	}
 }

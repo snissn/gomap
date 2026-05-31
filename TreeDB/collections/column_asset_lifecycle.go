@@ -53,7 +53,6 @@ type ColumnAssetLifecyclePinSetOptions struct {
 // of column asset refs. Close releases the lease from lifecycle reports.
 type ColumnAssetLifecyclePinSet struct {
 	mu     sync.Mutex
-	scope  columnAssetLifecyclePinScope
 	id     uint64
 	source ColumnAssetLifecyclePinSource
 	owner  string
@@ -63,7 +62,7 @@ type ColumnAssetLifecyclePinSet struct {
 }
 
 type columnAssetLifecyclePinScope struct {
-	db         *backenddb.DB
+	dbID       uint64
 	collection string
 	namespace  string
 }
@@ -82,12 +81,13 @@ type columnAssetLifecyclePinSetRecord struct {
 
 var columnAssetLifecycleProcessPins = struct {
 	sync.Mutex
-	nextID        uint64
-	pins          map[uint64]columnAssetLifecyclePinSetRecord
-	registeredDBs map[*backenddb.DB]bool
+	nextID   uint64
+	nextDBID uint64
+	pins     map[uint64]columnAssetLifecyclePinSetRecord
+	dbIDs    map[*backenddb.DB]uint64
 }{}
 
-// ID returns the manager-local process lease identifier.
+// ID returns the process-local lease identifier.
 func (p *ColumnAssetLifecyclePinSet) ID() uint64 {
 	if p == nil {
 		return 0
@@ -158,14 +158,18 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		return nil, errors.New("collections: column asset lifecycle pin set owner is required")
 	}
 	refs := append([]ColumnAssetRef(nil), opts.Refs...)
+	collectionNamespace := columnAssetLifecycleNamespace(c, nil)
 	var bytes int64
 	for _, ref := range refs {
 		if err := validateColumnAssetRefForPlan(ref); err != nil {
 			return nil, fmt.Errorf("collections: column asset lifecycle pin set ref: %w", err)
 		}
+		if collectionNamespace != "" && ref.Namespace != "" && ref.Namespace != collectionNamespace {
+			return nil, fmt.Errorf("collections: column asset lifecycle pin set ref namespace %q does not match collection namespace %q", ref.Namespace, collectionNamespace)
+		}
 		bytes = addColumnAssetReachabilityBytes(bytes, positiveColumnAssetReachabilityLength(ref.Length))
 	}
-	scope := columnAssetLifecyclePinScope{db: c.db, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c, refs)}
+	scope := columnAssetLifecyclePinScope{collection: c.meta.Name, namespace: collectionNamespace}
 	record := columnAssetLifecyclePinSetRecord{
 		Scope:      scope,
 		Collection: scope.collection,
@@ -176,12 +180,11 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		Refs:       append([]ColumnAssetRef(nil), refs...),
 		Bytes:      bytes,
 	}
-	id, err := columnAssetLifecycleRegisterProcessPin(record)
+	id, err := columnAssetLifecycleRegisterProcessPin(c.db, record)
 	if err != nil {
 		return nil, err
 	}
 	return &ColumnAssetLifecyclePinSet{
-		scope:  scope,
 		id:     id,
 		source: opts.Source,
 		owner:  opts.Owner,
@@ -190,33 +193,38 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 	}, nil
 }
 
-func columnAssetLifecycleRegisterProcessPin(record columnAssetLifecyclePinSetRecord) (uint64, error) {
-	if record.Scope.db == nil {
+func columnAssetLifecycleRegisterProcessPin(db *backenddb.DB, record columnAssetLifecyclePinSetRecord) (uint64, error) {
+	if db == nil {
 		return 0, errCollectionDBNil
 	}
 	for {
 		columnAssetLifecycleProcessPins.Lock()
-		if columnAssetLifecycleProcessPins.registeredDBs != nil && columnAssetLifecycleProcessPins.registeredDBs[record.Scope.db] {
+		if dbID, ok := columnAssetLifecycleProcessPins.dbIDs[db]; ok {
+			record.Scope.dbID = dbID
 			id := columnAssetLifecycleStoreProcessPinLocked(record)
 			columnAssetLifecycleProcessPins.Unlock()
 			return id, nil
 		}
 		columnAssetLifecycleProcessPins.Unlock()
 
-		registeredDB := record.Scope.db
+		registeredDB := db
+		var registeredDBID uint64
 		_, ok := registeredDB.RegisterCloseHookIfOpenAfter(func() bool {
 			columnAssetLifecycleProcessPins.Lock()
 			defer columnAssetLifecycleProcessPins.Unlock()
-			if columnAssetLifecycleProcessPins.registeredDBs == nil {
-				columnAssetLifecycleProcessPins.registeredDBs = make(map[*backenddb.DB]bool)
+			if columnAssetLifecycleProcessPins.dbIDs == nil {
+				columnAssetLifecycleProcessPins.dbIDs = make(map[*backenddb.DB]uint64)
 			}
-			if columnAssetLifecycleProcessPins.registeredDBs[registeredDB] {
+			if existingDBID, ok := columnAssetLifecycleProcessPins.dbIDs[registeredDB]; ok {
+				registeredDBID = existingDBID
 				return false
 			}
-			columnAssetLifecycleProcessPins.registeredDBs[registeredDB] = true
+			columnAssetLifecycleProcessPins.nextDBID++
+			registeredDBID = columnAssetLifecycleProcessPins.nextDBID
+			columnAssetLifecycleProcessPins.dbIDs[registeredDB] = registeredDBID
 			return true
 		}, func() error {
-			columnAssetLifecycleReleaseProcessPinsForDB(registeredDB)
+			columnAssetLifecycleReleaseProcessPinsForDB(registeredDB, registeredDBID)
 			return nil
 		})
 		if !ok {
@@ -236,19 +244,28 @@ func columnAssetLifecycleStoreProcessPinLocked(record columnAssetLifecyclePinSet
 	return record.ID
 }
 
-func columnAssetLifecycleReleaseProcessPinsForDB(db *backenddb.DB) {
+func columnAssetLifecycleProcessDBID(db *backenddb.DB) uint64 {
 	if db == nil {
+		return 0
+	}
+	columnAssetLifecycleProcessPins.Lock()
+	defer columnAssetLifecycleProcessPins.Unlock()
+	return columnAssetLifecycleProcessPins.dbIDs[db]
+}
+
+func columnAssetLifecycleReleaseProcessPinsForDB(db *backenddb.DB, dbID uint64) {
+	if db == nil || dbID == 0 {
 		return
 	}
 	columnAssetLifecycleProcessPins.Lock()
 	defer columnAssetLifecycleProcessPins.Unlock()
 	for id, record := range columnAssetLifecycleProcessPins.pins {
-		if record.Scope.db == db {
+		if record.Scope.dbID == dbID {
 			delete(columnAssetLifecycleProcessPins.pins, id)
 		}
 	}
-	if columnAssetLifecycleProcessPins.registeredDBs != nil {
-		delete(columnAssetLifecycleProcessPins.registeredDBs, db)
+	if columnAssetLifecycleProcessPins.dbIDs != nil && columnAssetLifecycleProcessPins.dbIDs[db] == dbID {
+		delete(columnAssetLifecycleProcessPins.dbIDs, db)
 	}
 }
 
@@ -492,7 +509,11 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecycle
 	if c == nil || c.db == nil {
 		return nil
 	}
-	scope := columnAssetLifecyclePinScope{db: c.db, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c, nil)}
+	dbID := columnAssetLifecycleProcessDBID(c.db)
+	if dbID == 0 {
+		return nil
+	}
+	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c, nil)}
 	columnAssetLifecycleProcessPins.Lock()
 	defer columnAssetLifecycleProcessPins.Unlock()
 	if len(columnAssetLifecycleProcessPins.pins) == 0 {
