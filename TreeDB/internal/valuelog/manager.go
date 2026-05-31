@@ -1180,6 +1180,7 @@ type Manager struct {
 	templateDefCache           *templateDefCache
 	groupedFrameCacheEntries   int
 	groupedFrameCacheMaxRaw    int
+	currentWritableMmap        atomic.Bool
 	currentWritableReadBarrier atomic.Value
 }
 
@@ -1201,6 +1202,15 @@ func (m *Manager) SetDisableReadChecksum(disable bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.disableReadChecksum = disable
+}
+
+// SetCurrentWritableMmapEnabled enables persistent read-only mmap views for
+// current writable value-log segments owned by this manager.
+func (m *Manager) SetCurrentWritableMmapEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.currentWritableMmap.Store(enabled)
 }
 
 // SetCurrentWritableReadBarrier installs an optional callback that is invoked

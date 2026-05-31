@@ -706,6 +706,7 @@ func Open(opts Options) (*DB, error) {
 		ValueLogRewriteTriggerChurnPerSec:        opts.ValueLog.Generational.RewriteTriggerChurnPerSec,
 		ValueLogRewriteMinSegmentAge:             opts.ValueLog.Generational.RewriteMinSegmentAge,
 		ForceValueLogPointers:                    opts.ValueLog.ForcePointers,
+		ValueLogCurrentWritableMmap:              opts.ValueLog.CurrentWritableMmap,
 		ValueLogDictTrain:                        opts.ValueLog.DictTrain,
 		ValueLogDictMaxK:                         opts.ValueLog.DictMaxK,
 		ValueLogDictClassMode:                    uint8(opts.ValueLog.DictClassMode),
