@@ -720,6 +720,9 @@ func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		t.Fatalf("insert large JSON batch: %v", err)
 	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush large JSON batch: %v", err)
+	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -2764,6 +2767,101 @@ func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 	}
 	if !bytes.Equal(got, wantU2) {
 		t.Fatalf("reopened BSON doc=%v want %v", got, wantU2)
+	}
+}
+
+func TestCollectionInsertBatchBuffersNoIndexJSONBeforeFlush(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(d.Close)
+	defer func() { _ = closeDB() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	firstDocs := [][]byte{
+		[]byte(`{"name":"ada"}`),
+		[]byte(`{"name":"grace"}`),
+	}
+	secondDocs := [][]byte{
+		[]byte(`{"name":"katherine"}`),
+	}
+	wantU1 := bytes.Clone(firstDocs[0])
+	wantU2 := bytes.Clone(firstDocs[1])
+	wantU3 := bytes.Clone(secondDocs[0])
+	insertedIDs, err := writer.InsertBatch([][]byte{[]byte("u1"), []byte("u2")}, firstDocs)
+	if err != nil {
+		t.Fatalf("first insert batch: %v", err)
+	}
+	if len(insertedIDs) != 2 || !bytes.Equal(insertedIDs[0], []byte("u1")) || !bytes.Equal(insertedIDs[1], []byte("u2")) {
+		t.Fatalf("inserted ids=%q want [u1 u2]", insertedIDs)
+	}
+	insertedIDs, err = writer.InsertBatch([][]byte{[]byte("u3")}, secondDocs)
+	if err != nil {
+		t.Fatalf("second insert batch: %v", err)
+	}
+	if len(insertedIDs) != 1 || !bytes.Equal(insertedIDs[0], []byte("u3")) {
+		t.Fatalf("second inserted ids=%q want [u3]", insertedIDs)
+	}
+	firstDocs[0][len(firstDocs[0])-2] = 'x'
+	secondDocs[0][len(secondDocs[0])-2] = 'x'
+	insertedIDs[0][0] = 'x'
+	if writer.writeDomain == nil {
+		t.Fatal("missing write domain")
+	}
+	if writer.writeDomain.count != 3 || writer.writeDomain.table == nil || writer.writeDomain.table.Len() != 3 {
+		t.Fatalf("write domain count=%d table=%v want three pending rows", writer.writeDomain.count, writer.writeDomain.table)
+	}
+	got, err := reader.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("reader get buffered JSON doc: %v", err)
+	}
+	if !bytes.Equal(got, wantU1) {
+		t.Fatalf("buffered JSON doc=%v want %v", got, wantU1)
+	}
+	got, err = reader.Get([]byte("u3"))
+	if err != nil {
+		t.Fatalf("reader get second buffered JSON doc: %v", err)
+	}
+	if !bytes.Equal(got, wantU3) {
+		t.Fatalf("second buffered JSON doc=%v want %v", got, wantU3)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := writer.writeDomain.count; got != 0 {
+		t.Fatalf("pending docs after flush=%d want 0", got)
+	}
+	if err := closeDB(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err = reopenedCol.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, wantU2) {
+		t.Fatalf("reopened JSON doc=%v want %v", got, wantU2)
 	}
 }
 
