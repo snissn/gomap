@@ -82,10 +82,12 @@ TVIS `document_ids` bytes state.
 
 The optimized-consumer capability tier for each logical/encoding pair is owned by
 `typed-column-optimized-consumer-capabilities.md`. Healthy graph-search admission
-(#2044) should treat these TVIS roles as graph-search consumers of that matrix:
-base vectors, adjacency, inverse norms, row refs, and document IDs require
-`mmap_direct` unless a role-specific PR admits a weaker tier with benchmark and
-memory evidence.
+is enforced by the #2044 readiness table in
+`typed-column-graph-search-admission.md`: base vectors, adjacency, inverse norms,
+row refs, and document IDs require `mmap_direct` unless a role-specific PR admits
+a weaker tier with benchmark and memory evidence. The role-specific prepared
+runtime shape, hot-loop boundary, fallback policy, and future type admission gate
+are owned by `typed-column-graph-search-prepared-views.md`.
 
 ## Validation and fail-closed behavior
 

@@ -19,6 +19,15 @@ TreeDB column assets through the physical column row reader.
 
 The native-reader path must not materialize a full decoded `ColumnVectorGraph` copy as its search substrate.
 
+The role-specific prepared runtime-view policy for current-format typed-column
+graph search is owned by
+[`typed-column-graph-search-prepared-views.md`](typed-column-graph-search-prepared-views.md).
+The #2044 readiness/admission table is owned by
+[`typed-column-graph-search-admission.md`](typed-column-graph-search-admission.md).
+Healthy search must use the documented prepared/direct state for vectors,
+adjacency, inverse norms, row refs, and document IDs; legacy graph-row payloads
+are compatibility inputs only and must not be counted as healthy-path evidence.
+
 ## Quickstart
 
 Declare a collection with JSON documents, physical column storage for the vector
