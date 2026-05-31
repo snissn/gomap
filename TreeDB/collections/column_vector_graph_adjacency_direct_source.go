@@ -24,6 +24,7 @@ const (
 	columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect
 	columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView
 	columnVectorGraphLayer0AdjacencySourceOutcomeScratchDecode
+	columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect
 	columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect
 	columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView
 	columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode
@@ -37,6 +38,8 @@ func (o columnVectorGraphLayer0AdjacencySourceOutcome) String() string {
 		return "heap_copy_typed_view"
 	case columnVectorGraphLayer0AdjacencySourceOutcomeScratchDecode:
 		return "scratch_decode"
+	case columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect:
+		return "prepared_csr_mmap_direct"
 	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect:
 		return "typed_list_mmap_direct"
 	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView:
@@ -280,6 +283,25 @@ func columnVectorGraphLayer0AdjacencyDirectSourceFromHandles(manager *mappedreso
 
 func columnVectorGraphTypedListAdjacencyDirectSourceFromHandles(manager *mappedresource.Manager, layer int, rows int, valuesCount int, directReq typeddecode.Uint32OffsetsListDirectViewRequest, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
 	return columnVectorGraphAdjacencyDirectSourceFromHandles(manager, layer, rows, valuesCount, directReq, offsetsHandle, valuesHandle, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode, true, "vector-index state adjacency")
+}
+
+func columnVectorGraphPreparedCSRAdjacencyDirectSourceFromHandles(manager *mappedresource.Manager, layer int, rows int, valuesCount int, req typeddecode.GraphUint32ListDirectViewRequest, fallbackReq typeddecode.Uint32OffsetsListDirectViewRequest, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
+	view, status := typeddecode.CertifyGraphUint32ListDirectView(req)
+	if status.Direct() {
+		if len(view.Values) != valuesCount {
+			releaseErr := view.Close()
+			return nil, typeddecode.ReasonValuesLengthMismatch, errors.Join(fmt.Errorf("collections: vector-index state prepared CSR adjacency layer %d values=%d want %d", layer, len(view.Values), valuesCount), releaseErr)
+		}
+		return &columnVectorGraphLayer0AdjacencyDirectSource{layer: layer, rows: rows, offsets: view.Offsets, values: view.Values, outcome: columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect, manager: manager, offsetsHandle: view.OffsetsHandle, valuesHandle: view.ValuesHandle}, "", nil
+	}
+	if columnVectorGraphPreparedCSRAdjacencyFallbackAllowed(status) {
+		return columnVectorGraphTypedListAdjacencyDirectSourceFromHandles(manager, layer, rows, valuesCount, fallbackReq, offsetsHandle, valuesHandle)
+	}
+	return nil, status.Reason, fmt.Errorf("collections: vector-index state prepared CSR adjacency layer %d certification: %s", layer, status.String())
+}
+
+func columnVectorGraphPreparedCSRAdjacencyFallbackAllowed(status typeddecode.Status) bool {
+	return status.Reason == typeddecode.ReasonHandleSourceUnsupported
 }
 
 func columnVectorGraphAdjacencyDirectSourceFromHandles(manager *mappedresource.Manager, layer int, rows int, valuesCount int, directReq typeddecode.Uint32OffsetsListDirectViewRequest, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, mmapOutcome, heapOutcome, scratchOutcome columnVectorGraphLayer0AdjacencySourceOutcome, allowScratch bool, label string) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
