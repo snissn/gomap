@@ -555,7 +555,19 @@ func loadColumnStoreCompactionManifestView1953(tb testing.TB, d *backenddb.DB, c
 	if err != nil {
 		tb.Fatalf("loadColumnManifestSnapshotViewForScanFromRoot: %v", err)
 	}
-	return columnStoreCompactionManifestView1953{cfg: cfg, manifest: manifest, records: records, mutationParts: mutationParts, rootID: rootID}
+	return columnStoreCompactionManifestView1953{cfg: cfg, manifest: cloneColumnStoreCompactionManifestSnapshot1953(manifest), records: cloneColumnManifestRecords(records), mutationParts: mutationParts, rootID: rootID}
+}
+
+func cloneColumnStoreCompactionManifestSnapshot1953(manifest columnManifestSnapshot) columnManifestSnapshot {
+	clone := manifest
+	clone.Parts = append([]columnManifestPartSnapshot(nil), manifest.Parts...)
+	for i := range clone.Parts {
+		clone.Parts[i].SortKey = cloneColumnSortKeys(manifest.Parts[i].SortKey)
+	}
+	clone.AggregateMetadata = append([]columnManifestAggregateMetadataSnapshot(nil), manifest.AggregateMetadata...)
+	clone.DictionaryCodes = append([]columnManifestDictionaryCodesSnapshot(nil), manifest.DictionaryCodes...)
+	clone.Int64Values = append([]columnManifestInt64ValuesSnapshot(nil), manifest.Int64Values...)
+	return clone
 }
 
 func columnStoreCompactionRefsFromRecordsForTest1953(tb testing.TB, records []columnManifestRecord) []ColumnAssetRef {

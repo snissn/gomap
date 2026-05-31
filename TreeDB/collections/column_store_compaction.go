@@ -403,8 +403,11 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 		}
 	}
 	for _, target := range targets {
+		lock := columnAssetSegmentWriteLock(target.path)
+		lock.Lock()
 		info, err := os.Stat(target.path)
 		if err != nil {
+			lock.Unlock()
 			if os.IsNotExist(err) {
 				continue
 			}
@@ -412,6 +415,7 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 			continue
 		}
 		if info.Size() != target.maxEnd {
+			lock.Unlock()
 			// Another writer appended to the shared segment after these assets were
 			// prepared. Leave the orphaned bytes for reachability/GC rather than
 			// truncating potentially live refs from the winning manifest.
@@ -420,12 +424,15 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 		if target.remove {
 			if err := os.Remove(target.path); err != nil && !os.IsNotExist(err) {
 				cleanupErrs = append(cleanupErrs, err)
+				lock.Unlock()
 				continue
 			}
 		} else if err := os.Truncate(target.path, target.truncateTo); err != nil && !os.IsNotExist(err) {
 			cleanupErrs = append(cleanupErrs, err)
+			lock.Unlock()
 			continue
 		}
+		lock.Unlock()
 		if err := syncColumnAssetDir(filepath.Dir(target.path)); err != nil {
 			cleanupErrs = append(cleanupErrs, err)
 		}
