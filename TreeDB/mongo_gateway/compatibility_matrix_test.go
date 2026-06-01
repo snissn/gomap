@@ -292,6 +292,38 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 		},
 		{
 			category: "metadata",
+			feature:  "listDatabases",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 130, bson.D{
+					{Key: "listDatabases", Value: int32(1)},
+					{Key: "nameOnly", Value: true},
+					{Key: "filter", Value: bson.D{{Key: "name", Value: "app"}}},
+					{Key: "$db", Value: "admin"},
+				})
+				assertOK(t, resp)
+				databases, ok := resp.Lookup("databases").ArrayOK()
+				if !ok {
+					t.Fatalf("databases missing or non-array in %s", resp)
+				}
+				values, err := databases.Values()
+				if err != nil {
+					t.Fatalf("databases values: %v", err)
+				}
+				if len(values) != 1 {
+					t.Fatalf("databases len=%d want 1", len(values))
+				}
+				doc, ok := values[0].DocumentOK()
+				if !ok {
+					t.Fatalf("databases[0] is not a document")
+				}
+				if got, ok := doc.Lookup("name").StringValueOK(); !ok || got != "app" {
+					t.Fatalf("database name=%q ok=%v want app", got, ok)
+				}
+			},
+		},
+		{
+			category: "metadata",
 			feature:  "create collection",
 			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {

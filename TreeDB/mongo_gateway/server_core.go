@@ -464,7 +464,7 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 		return false
 	}
 	switch name {
-	case "buildInfo", "connectionStatus", "endSessions", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+	case "buildInfo", "connectionStatus", "endSessions", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listDatabases", "listIndexes", "ping":
 		return true
 	default:
 		return false
@@ -663,6 +663,8 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 		return s.deleteResponse(command, sequences)
 	case "listCollections":
 		return s.listCollectionsResponse(command)
+	case "listDatabases":
+		return s.listDatabasesResponse(command)
 	case "createIndexes":
 		return s.createIndexesResponse(command)
 	case "listIndexes":
@@ -676,7 +678,7 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 
 func commandRejectsTransactionMarkers(name string) bool {
 	switch name {
-	case "create", "createIndexes", "delete", "dropIndexes", "find", "getMore", "insert", "killCursors", "listCollections", "listIndexes", "update":
+	case "create", "createIndexes", "delete", "dropIndexes", "find", "getMore", "insert", "killCursors", "listCollections", "listDatabases", "listIndexes", "update":
 		return true
 	default:
 		return false

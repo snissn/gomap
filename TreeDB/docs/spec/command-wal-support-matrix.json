@@ -36,6 +36,7 @@
     {"surface":"mongo_gateway","entry_point":"insert","command":"CollectionInsertBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"update","command":"CollectionUpdateBatchByID","status":"WAL-supported","first_pr":"PR5","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"delete","command":"CollectionDeleteBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestMongoCompatibilityMatrix"]},
+    {"surface":"mongo_gateway","entry_point":"listDatabases","command":"metadata read","status":"WAL-supported","first_pr":"PR2111","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"createIndexes (auto-create collection)","command":"CatalogCreateCollection","status":"WAL-supported","first_pr":"PR6","tests":["TestCollectionCommandWALCreateCollectionPublishesAppliedLSN"]},
     {"surface":"mongo_gateway","entry_point":"createIndexes (existing collection)","command":"future catalog index create","status":"WAL-rejected","public_error":"MongoCommandError(BadValue)","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
     {"surface":"mongo_gateway","entry_point":"dropIndexes","command":"future catalog index drop","status":"WAL-rejected","public_error":"MongoCommandError(BadValue)","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
