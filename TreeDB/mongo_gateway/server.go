@@ -39,6 +39,10 @@ type cliConfig struct {
 	updateCoalescingBatch    int
 	updateCoalescingBatchSet bool
 	updateCoalescingIdleTTL  time.Duration
+	insertCoalescingDelay    time.Duration
+	insertCoalescingBatch    int
+	insertCoalescingBatchSet bool
+	insertCoalescingIdleTTL  time.Duration
 }
 
 func main() {
@@ -105,6 +109,8 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 		indexRootStorage:        rootStorageFlagValue(collections.RootStorageDefault),
 		updateCoalescingBatch:   256,
 		updateCoalescingIdleTTL: 30 * time.Second,
+		insertCoalescingBatch:   256,
+		insertCoalescingIdleTTL: 30 * time.Second,
 	}
 	fs := flag.NewFlagSet("treedb-mongo-gateway", flag.ContinueOnError)
 	fs.SetOutput(flagSetOutput(args, stderr))
@@ -123,12 +129,18 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.DurationVar(&cfg.updateCoalescingDelay, "update-coalescing-delay", cfg.updateCoalescingDelay, "maximum delay for same-collection update coalescing; 0 coalesces only queued work, negative disables")
 	fs.IntVar(&cfg.updateCoalescingBatch, "update-coalescing-batch", cfg.updateCoalescingBatch, "maximum same-collection updates in one coalesced batch")
 	fs.DurationVar(&cfg.updateCoalescingIdleTTL, "update-coalescing-idle-ttl", cfg.updateCoalescingIdleTTL, "idle TTL for update coalescers; 0 uses gateway default, negative disables idle removal")
+	fs.DurationVar(&cfg.insertCoalescingDelay, "insert-coalescing-delay", cfg.insertCoalescingDelay, "maximum delay for same-collection single-document BSON insert coalescing; 0 coalesces only queued work, negative disables")
+	fs.IntVar(&cfg.insertCoalescingBatch, "insert-coalescing-batch", cfg.insertCoalescingBatch, "maximum same-collection single-document BSON inserts in one coalesced batch")
+	fs.DurationVar(&cfg.insertCoalescingIdleTTL, "insert-coalescing-idle-ttl", cfg.insertCoalescingIdleTTL, "idle TTL for insert coalescers; 0 uses gateway default, negative disables idle removal")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "update-coalescing-batch" {
 			cfg.updateCoalescingBatchSet = true
+		}
+		if f.Name == "insert-coalescing-batch" {
+			cfg.insertCoalescingBatchSet = true
 		}
 	})
 	if cfg.dir == "" {
@@ -148,6 +160,9 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	}
 	if cfg.updateCoalescingBatch < 0 {
 		return cfg, errors.New("-update-coalescing-batch must be >= 0")
+	}
+	if cfg.insertCoalescingBatch < 0 {
+		return cfg, errors.New("-insert-coalescing-batch must be >= 0")
 	}
 	return cfg, nil
 }
@@ -169,6 +184,10 @@ func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
 	if cfg.updateCoalescingBatchSet {
 		coalescingBatch = cfg.updateCoalescingBatch
 	}
+	insertCoalescingBatch := 0
+	if cfg.insertCoalescingBatchSet {
+		insertCoalescingBatch = cfg.insertCoalescingBatch
+	}
 	return mongogateway.StandaloneOptions{
 		Dir:     cfg.dir,
 		Profile: treedb.Profile(cfg.profile),
@@ -187,6 +206,10 @@ func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
 		UpdateCoalescingMaxBatchSet: cfg.updateCoalescingBatchSet,
 		UpdateCoalescingMaxBatch:    coalescingBatch,
 		UpdateCoalescingIdleTTL:     cfg.updateCoalescingIdleTTL,
+		InsertCoalescingMaxDelay:    cfg.insertCoalescingDelay,
+		InsertCoalescingMaxBatchSet: cfg.insertCoalescingBatchSet,
+		InsertCoalescingMaxBatch:    insertCoalescingBatch,
+		InsertCoalescingIdleTTL:     cfg.insertCoalescingIdleTTL,
 	}
 }
 

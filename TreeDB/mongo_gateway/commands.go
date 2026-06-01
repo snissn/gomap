@@ -89,21 +89,29 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 		}
 	}
 	if format == collections.DocumentFormatBSON {
-		_, err = col.InsertBatchValidatedBSON(ids, stored)
+		if len(ids) == 1 {
+			err = s.runMongoInsertCoalesced(name, col, ids[0], stored[0])
+		} else {
+			_, err = col.InsertBatchValidatedBSON(ids, stored)
+		}
 	} else {
 		_, err = col.InsertBatch(ids, stored)
 	}
 	if err != nil {
-		code, codeName := commandCodeBadValue, "BadValue"
-		if collections.IsDuplicateKeyError(err) {
-			code, codeName = commandCodeDuplicateKey, "DuplicateKey"
-		}
-		return commandError(code, codeName, err.Error())
+		return mongoInsertCommandError(err)
 	}
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "n", Value: int32(len(documents))},
 	})
+}
+
+func mongoInsertCommandError(err error) (wire.Document, error) {
+	code, codeName := commandCodeBadValue, "BadValue"
+	if collections.IsDuplicateKeyError(err) {
+		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+	}
+	return commandError(code, codeName, err.Error())
 }
 
 func prepareInsertDocuments(documents []wire.Document, format collections.DocumentFormat) ([][]byte, [][]byte, error) {
@@ -118,6 +126,392 @@ func prepareInsertDocuments(documents []wire.Document, format collections.Docume
 		stored[i] = encoded
 	}
 	return ids, stored, nil
+}
+
+type mongoInsertCoalescer struct {
+	maxDelay  time.Duration
+	maxBatch  int
+	idleTTL   time.Duration
+	requests  chan mongoInsertCoalescerRequest
+	stoppedCh chan struct{}
+	done      chan struct{}
+	server    *Server
+	name      string
+
+	mu        sync.RWMutex
+	stopped   bool
+	enqueueMu sync.Mutex
+}
+
+type mongoInsertCoalescerRequest struct {
+	col    *collections.Collection
+	id     []byte
+	stored []byte
+	done   chan mongoInsertCoalescerResult
+}
+
+type mongoInsertCoalescerResult struct {
+	err error
+}
+
+func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collection, id, stored []byte) error {
+	if col == nil {
+		return runMongoInsertOne(col, id, stored)
+	}
+	coalescer := s.mongoInsertCoalescer(name)
+	if coalescer == nil {
+		return runMongoInsertOne(col, id, stored)
+	}
+	done := make(chan mongoInsertCoalescerResult, 1)
+	// The handler waits for completion before returning, so request-body-backed
+	// BSON remains live while the worker builds and applies the coalesced batch.
+	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, done: done}) {
+		return runMongoInsertOne(col, id, stored)
+	}
+	return coalescer.waitForInsertResult(done).err
+}
+
+func runMongoInsertOne(col *collections.Collection, id, stored []byte) error {
+	if col == nil {
+		return errCollectionMissingForInsert()
+	}
+	_, err := col.InsertBatchValidatedBSON([][]byte{id}, [][]byte{stored})
+	return err
+}
+
+func errCollectionMissingForInsert() error {
+	return errors.New("Mongo gateway insert collection handle is not configured")
+}
+
+func (c *mongoInsertCoalescer) waitForInsertResult(done chan mongoInsertCoalescerResult) mongoInsertCoalescerResult {
+	select {
+	case result := <-done:
+		return result
+	default:
+	}
+	if c == nil || c.done == nil {
+		return <-done
+	}
+	select {
+	case result := <-done:
+		return result
+	case <-c.done:
+		select {
+		case result := <-done:
+			return result
+		default:
+			return mongoInsertCoalescerResult{err: errors.New("mongo gateway insert coalescer stopped before completing request")}
+		}
+	}
+}
+
+func (s *Server) mongoInsertCoalescer(name string) *mongoInsertCoalescer {
+	if s == nil || s.InsertCoalescingMaxBatch <= 1 || s.InsertCoalescingMaxDelay < 0 {
+		return nil
+	}
+	maxBatch := clampInsertCoalescingMaxBatch(s.InsertCoalescingMaxBatch)
+	if maxBatch <= 1 {
+		return nil
+	}
+	maxDelay := s.InsertCoalescingMaxDelay
+	idleTTL := s.InsertCoalescingIdleTTL
+	if idleTTL == 0 {
+		idleTTL = defaultInsertCoalescingIdleTTL
+	}
+	s.insertMu.Lock()
+	defer s.insertMu.Unlock()
+	if s.closed.Load() {
+		return nil
+	}
+	if s.insertCoalescers == nil {
+		s.insertCoalescers = make(map[string]*mongoInsertCoalescer)
+	}
+	if coalescer := s.insertCoalescers[name]; coalescer != nil {
+		return coalescer
+	}
+	coalescer := &mongoInsertCoalescer{
+		maxDelay:  maxDelay,
+		maxBatch:  maxBatch,
+		idleTTL:   idleTTL,
+		requests:  make(chan mongoInsertCoalescerRequest, maxBatch*4),
+		stoppedCh: make(chan struct{}),
+		done:      make(chan struct{}),
+		server:    s,
+		name:      name,
+	}
+	s.insertCoalescers[name] = coalescer
+	go coalescer.run()
+	return coalescer
+}
+
+func clampInsertCoalescingMaxBatch(maxBatch int) int {
+	if maxBatch > maxInsertCoalescingBatch {
+		return maxInsertCoalescingBatch
+	}
+	return maxBatch
+}
+
+func (c *mongoInsertCoalescer) enqueue(req mongoInsertCoalescerRequest) bool {
+	if c == nil {
+		return false
+	}
+	for {
+		c.enqueueMu.Lock()
+		c.mu.RLock()
+		if c.stopped || c.requests == nil {
+			c.mu.RUnlock()
+			c.enqueueMu.Unlock()
+			return false
+		}
+		requests := c.requests
+		stoppedCh := c.stoppedCh
+		select {
+		case requests <- req:
+			c.mu.RUnlock()
+			c.enqueueMu.Unlock()
+			return true
+		default:
+		}
+		c.mu.RUnlock()
+		c.enqueueMu.Unlock()
+
+		select {
+		case <-stoppedCh:
+			return false
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func (c *mongoInsertCoalescer) stop() {
+	if c == nil {
+		return
+	}
+	_ = c.closeRequests()
+	if c.done != nil {
+		<-c.done
+	}
+}
+
+func (c *mongoInsertCoalescer) closeRequests() bool {
+	c.enqueueMu.Lock()
+	defer c.enqueueMu.Unlock()
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return false
+	}
+	if c.stoppedCh == nil {
+		c.stoppedCh = make(chan struct{})
+	}
+	c.stopped = true
+	close(c.stoppedCh)
+	close(c.requests)
+	c.mu.Unlock()
+	return true
+}
+
+func (c *mongoInsertCoalescer) retireIdle() bool {
+	if c == nil {
+		return false
+	}
+	stopped := false
+	if c.server != nil {
+		c.server.insertMu.Lock()
+		if c.server.insertCoalescers != nil && c.server.insertCoalescers[c.name] == c {
+			stopped = c.closeRequests()
+			delete(c.server.insertCoalescers, c.name)
+		}
+		c.server.insertMu.Unlock()
+	} else {
+		stopped = c.closeRequests()
+	}
+	if !stopped {
+		if c.isStopped() {
+			c.drainRequestsDirect()
+			return true
+		}
+		return false
+	}
+	c.drainRequestsDirect()
+	return true
+}
+
+func (c *mongoInsertCoalescer) isStopped() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.stopped
+}
+
+func (c *mongoInsertCoalescer) markStopped() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.stopped = true
+	c.mu.Unlock()
+}
+
+func (c *mongoInsertCoalescer) drainRequestsDirect() {
+	for req := range c.requests {
+		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOne(req.col, req.id, req.stored)}
+	}
+}
+
+func (c *mongoInsertCoalescer) run() {
+	defer func() {
+		c.markStopped()
+		if c.done != nil {
+			close(c.done)
+		}
+	}()
+	var idle <-chan time.Time
+	var timer *time.Timer
+	if c.idleTTL > 0 {
+		timer = time.NewTimer(c.idleTTL)
+		idle = timer.C
+		defer timer.Stop()
+	}
+	resetIdle := func() {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(c.idleTTL)
+	}
+	for {
+		select {
+		case first, ok := <-c.requests:
+			if !ok {
+				return
+			}
+			c.runBatchStartingWith(first)
+			resetIdle()
+		case <-idle:
+			if c.retireIdle() {
+				return
+			}
+			resetIdle()
+		case <-c.stoppedCh:
+			c.drainRequestsDirect()
+			return
+		}
+	}
+}
+
+func (c *mongoInsertCoalescer) runBatchStartingWith(first mongoInsertCoalescerRequest) {
+	batch := []mongoInsertCoalescerRequest{first}
+	if c.maxDelay > 0 {
+		timer := time.NewTimer(c.maxDelay)
+	collect:
+		for len(batch) < c.maxBatch {
+			select {
+			case req, ok := <-c.requests:
+				if !ok {
+					break collect
+				}
+				batch = append(batch, req)
+			case <-timer.C:
+				break collect
+			case <-c.stoppedCh:
+				break collect
+			}
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+	for len(batch) < c.maxBatch {
+		select {
+		case req, ok := <-c.requests:
+			if !ok {
+				goto drained
+			}
+			batch = append(batch, req)
+		case <-c.stoppedCh:
+			goto drained
+		default:
+			goto drained
+		}
+	}
+drained:
+	c.runBatch(batch)
+}
+
+func (c *mongoInsertCoalescer) runBatch(batch []mongoInsertCoalescerRequest) {
+	if len(batch) == 0 {
+		return
+	}
+	if len(batch) == 1 ||
+		mongoInsertCoalescerHasDuplicateKeys(batch) ||
+		!mongoInsertCoalescerUsesSingleCollection(batch) {
+		runMongoInsertCoalescerSequential(batch)
+		return
+	}
+	ids := make([][]byte, len(batch))
+	stored := make([][]byte, len(batch))
+	for i, req := range batch {
+		ids[i] = req.id
+		stored[i] = req.stored
+	}
+	_, err := batch[0].col.InsertBatchValidatedBSON(ids, stored)
+	if err != nil {
+		if collections.IsDuplicateKeyError(err) && !errors.Is(err, collections.ErrCommitAmbiguous) {
+			runMongoInsertCoalescerSequential(batch)
+			return
+		}
+		completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{err: err})
+		return
+	}
+	completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{})
+}
+
+func completeMongoInsertCoalescerBatch(batch []mongoInsertCoalescerRequest, result mongoInsertCoalescerResult) {
+	for _, req := range batch {
+		req.done <- result
+	}
+}
+
+func mongoInsertCoalescerHasDuplicateKeys(batch []mongoInsertCoalescerRequest) bool {
+	seen := make(map[string]struct{}, len(batch))
+	for _, req := range batch {
+		key := string(req.id)
+		if _, ok := seen[key]; ok {
+			return true
+		}
+		seen[key] = struct{}{}
+	}
+	return false
+}
+
+func mongoInsertCoalescerUsesSingleCollection(batch []mongoInsertCoalescerRequest) bool {
+	if len(batch) == 0 {
+		return true
+	}
+	col := batch[0].col
+	if col == nil {
+		return false
+	}
+	for _, req := range batch[1:] {
+		if !col.SameCachedCatalog(req.col) {
+			return false
+		}
+	}
+	return true
+}
+
+func runMongoInsertCoalescerSequential(batch []mongoInsertCoalescerRequest) {
+	for _, req := range batch {
+		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOne(req.col, req.id, req.stored)}
+	}
 }
 
 type rawCursorDocumentsResponse struct {
