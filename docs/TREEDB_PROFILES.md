@@ -29,7 +29,7 @@ collection, Mongo gateway, or benchmark guidance.
 | Surface | Accepted profile names | Legacy-name behavior |
 | --- | --- | --- |
 | Public CLI/env parsers using `ParsePublicProfile` | `command_wal_durable`, `command_wal_relaxed`, `bench` | Reject with an error that names the allowed public profiles. |
-| Programmatic `OptionsFor` / `ApplyProfile` | Public profiles plus explicit legacy constants used by low-level tests and forensic compatibility work | Unknown profile tokens panic instead of silently selecting bare default options. |
+| Programmatic `OptionsFor` / `ApplyProfile` | Public profiles plus normalized legacy/internal profile tokens used by low-level tests and forensic compatibility work | Unknown profile tokens panic instead of silently selecting bare default options; legacy/internal aliases are not public CLI/env names. |
 | Unified-bench `-profile` | Cross-DB presets: `balanced`, `durable`, `fast`, `wal_on_fast` | These are benchmark-runner presets, not TreeDB server profile names. TreeDB-specific command-WAL coverage uses explicit TreeDB DB variants and knobs. |
 | Historical docs and benchmark reports | Recorded historical labels | Allowed only as historical evidence, not current setup guidance. |
 
