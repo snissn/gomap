@@ -225,6 +225,10 @@ type columnStoreQueryMetric struct {
 	ReduceDurationMS         float64                           `json:"reduce_duration_ms"`
 	AdapterDurationMS        float64                           `json:"adapter_duration_ms"`
 	ParityHashDurationMS     float64                           `json:"parity_hash_duration_ms"`
+	RowsScanned              int                               `json:"rows_scanned"`
+	RowsMatched              int                               `json:"rows_matched"`
+	ReduceRows               int                               `json:"reduce_rows"`
+	DecodedGranules          int                               `json:"decoded_granules"`
 	PlannerCandidates        int                               `json:"planner_candidates"`
 	PlannerReason            string                            `json:"planner_reason,omitempty"`
 	SegmentFileCacheHits     uint64                            `json:"segment_file_cache_hits"`
@@ -1529,6 +1533,10 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			ReduceDurationMS:       durationMS(exec.ReduceDuration),
 			AdapterDurationMS:      durationMS(exec.AdapterDuration),
 			ParityHashDurationMS:   durationMS(parityHashElapsed),
+			RowsScanned:            exec.RowsScanned,
+			RowsMatched:            exec.RowsMatched,
+			ReduceRows:             exec.ReduceRows,
+			DecodedGranules:        exec.DecodedGranules,
 			PlannerCandidates:      plan.Diagnostics.CandidatePlans,
 			PlannerReason:          plan.Diagnostics.Reason,
 			SegmentFileCacheHits:   exec.SegmentFileCacheHits,
@@ -2180,15 +2188,16 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.ManifestGeneration = q.ManifestGeneration
 	cell.ActiveManifestChecksum = q.ActiveManifestChecksum
 	cell.PlannerDurationMS = q.PlannerDurationMS
-	cell.HotRunDurationMS = q.DurationMS
+	cell.HotRunDurationMS = q.ScanDurationMS + q.ReduceDurationMS + q.AdapterDurationMS
 	cell.ScanDurationMS = q.ScanDurationMS
 	cell.ReduceDurationMS = q.ReduceDurationMS
 	cell.ResultShapeDurationMS = q.AdapterDurationMS
 	cell.ParityHashDurationMS = q.ParityHashDurationMS
 	cell.MetadataHits = q.MetadataHits
-	cell.RowsScanned = q.RowsProcessed
-	cell.RowsMatched = q.RowsProcessed
-	cell.ReduceRows = q.RowsProcessed
+	cell.RowsScanned = q.RowsScanned
+	cell.RowsMatched = q.RowsMatched
+	cell.ReduceRows = q.ReduceRows
+	cell.DecodedGranules = q.DecodedGranules
 	cell.SkippedGranules = q.SkippedGranules
 	cell.ScheduledGranules = q.ScheduledGranules
 	cell.CompatibilityStatus = "available"

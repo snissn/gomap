@@ -1884,6 +1884,50 @@ func TestColumnStoreSuiteRejectsOraclePathLabelM11B(t *testing.T) {
 	}
 }
 
+func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *testing.T) {
+	q := columnStoreQueryMetric{
+		Name:               "q4a",
+		PlanLabel:          columnStorePathSerialColumnScan,
+		StorageSource:      string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
+		FallbackReason:     string(collections.ColumnPhysicalQueryFallbackNone),
+		Rows:               7,
+		RowsProcessed:      5,
+		RowsProcessedKnown: true,
+		ResultCount:        2,
+		RawHash:            11,
+		ProductionHash:     11,
+		ScanDurationMS:     1.5,
+		ReduceDurationMS:   2.5,
+		AdapterDurationMS:  0.75,
+		RowsScanned:        13,
+		RowsMatched:        3,
+		ReduceRows:         2,
+		DecodedGranules:    4,
+		CompressionAttribution: columnStoreCompressionAttribution{
+			CompressionPolicyLabel: "default",
+			RequestedCompression:   "snappy",
+			ActualCompression:      "snappy",
+		},
+	}
+
+	cell := columnStoreJSONBenchCellFromQueryMetric(q, &collections.ColumnStoreConfig{}, 0)
+	if got, want := cell.HotRunDurationMS, 4.75; got != want {
+		t.Fatalf("hot_run_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.RowsScanned, q.RowsScanned; got != want {
+		t.Fatalf("rows_scanned=%d want %d", got, want)
+	}
+	if got, want := cell.RowsMatched, q.RowsMatched; got != want {
+		t.Fatalf("rows_matched=%d want %d", got, want)
+	}
+	if got, want := cell.ReduceRows, q.ReduceRows; got != want {
+		t.Fatalf("reduce_rows=%d want %d", got, want)
+	}
+	if got, want := cell.DecodedGranules, q.DecodedGranules; got != want {
+		t.Fatalf("decoded_granules=%d want %d", got, want)
+	}
+}
+
 func TestColumnStoreSuiteRejectsInvalidKeysAndBatchSizeM11A(t *testing.T) {
 	tests := []struct {
 		name    string
