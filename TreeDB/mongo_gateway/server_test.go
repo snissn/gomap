@@ -3607,6 +3607,22 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 		t.Fatalf("_id include projection=%v want only _id", firstBatch[0])
 	}
 
+	missingProjected := serveCommand(t, server, 2371, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: bson.NewObjectID()}}},
+		{Key: "projection", Value: bson.D{{Key: "name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}},
+		{Key: "limit", Value: int32(1)},
+		{Key: "singleBatch", Value: true},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch = cursorFirstBatch(t, missingProjected)
+	if len(firstBatch) != 0 {
+		t.Fatalf("missing projected primary find firstBatch len=%d want 0", len(firstBatch))
+	}
+	if cursorID := cursorIDFromResponse(t, missingProjected); cursorID != 0 {
+		t.Fatalf("missing projected primary find cursor id=%d want 0", cursorID)
+	}
+
 	id4 := bson.NewObjectID()
 	id5 := bson.NewObjectID()
 	assertOK(t, serveCommand(t, server, 238, bson.D{
@@ -3891,6 +3907,36 @@ func TestServerFindBatchSizeZeroKeepsCursorEmpty(t *testing.T) {
 	name, ok := nextBatch[0].Lookup("name").StringValueOK()
 	if !ok || name != "ada" {
 		t.Fatalf("nextBatch[0].name=%q ok=%v want ada", name, ok)
+	}
+
+	projectedFindResponse := serveCommand(t, server, 2431, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "projection", Value: bson.D{{Key: "name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}},
+		{Key: "batchSize", Value: int32(0)},
+		{Key: "$db", Value: "app"},
+	})
+	if firstBatch := cursorFirstBatch(t, projectedFindResponse); len(firstBatch) != 0 {
+		t.Fatalf("projected primary firstBatch len=%d want 0", len(firstBatch))
+	}
+	projectedCursorID := cursorIDFromResponse(t, projectedFindResponse)
+	if projectedCursorID == 0 {
+		t.Fatal("projected primary cursor id=0 want open cursor")
+	}
+	projectedGetMore := serveCommand(t, server, 2432, bson.D{
+		{Key: "getMore", Value: projectedCursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	projectedNextBatch := cursorNextBatch(t, projectedGetMore)
+	if len(projectedNextBatch) != 1 {
+		t.Fatalf("projected primary nextBatch len=%d want 1", len(projectedNextBatch))
+	}
+	if got, ok := projectedNextBatch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("projected primary nextBatch name=%q ok=%v want ada", got, ok)
+	}
+	if !projectedNextBatch[0].Lookup("_id").IsZero() {
+		t.Fatalf("projected primary nextBatch unexpectedly includes _id: %v", projectedNextBatch[0])
 	}
 }
 
@@ -5386,6 +5432,53 @@ func TestFindPlanHasDirectCandidateRequiresUsableRangeIndex(t *testing.T) {
 		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, "10")}},
 	}) {
 		t.Fatal("wrong-type int64 range should use direct empty-candidate mode")
+	}
+}
+
+func TestSimplePrimaryEqualityFindValue(t *testing.T) {
+	value := mustRawValue(t, "user1")
+	got, ok := simplePrimaryEqualityFindValue(findPlan{
+		predicates: []findPredicate{{field: "_id", op: findPredicateEq, values: []bson.RawValue{value}}},
+		projection: compiledProjection{present: true},
+		limit:      1,
+	})
+	if !ok || got.Type != value.Type || !bytes.Equal(got.Value, value.Value) {
+		t.Fatalf("simple primary value ok=%v got=%v want %v", ok, got, value)
+	}
+	if _, ok := simplePrimaryEqualityFindValue(findPlan{
+		predicates: []findPredicate{{field: "_id", op: findPredicateEq, values: []bson.RawValue{value}}},
+		sort:       findSort{field: "name"},
+		limit:      1,
+	}); ok {
+		t.Fatal("sorted primary find should not use simple path")
+	}
+	if _, ok := simplePrimaryEqualityFindValue(findPlan{
+		predicates: []findPredicate{{field: "_id", op: findPredicateEq, values: []bson.RawValue{value}}},
+		skip:       1,
+		limit:      1,
+	}); ok {
+		t.Fatal("skipped primary find should not use simple path")
+	}
+	if _, ok := simplePrimaryEqualityFindValue(findPlan{
+		predicates: []findPredicate{{field: "_id", op: findPredicateEq, values: []bson.RawValue{value}}},
+		limit:      2,
+	}); ok {
+		t.Fatal("multi-limit primary find should not use simple path")
+	}
+	if _, ok := simplePrimaryEqualityFindValue(findPlan{
+		predicates: []findPredicate{{field: "_id", op: findPredicateIn, values: []bson.RawValue{value}}},
+		limit:      1,
+	}); ok {
+		t.Fatal("$in primary find should not use simple path")
+	}
+	if _, ok := simplePrimaryEqualityFindValue(findPlan{
+		predicates: []findPredicate{
+			{field: "_id", op: findPredicateEq, values: []bson.RawValue{value}},
+			{field: "field0", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, []byte("v"))}},
+		},
+		limit: 1,
+	}); ok {
+		t.Fatal("compound predicate primary find should not use simple path")
 	}
 }
 
