@@ -1654,6 +1654,10 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocum
 }
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithStatsModeV4(b, includeDocuments, fetchOptions, VectorIndexSearchStatsModeDefault)
+}
+
+func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithStatsModeV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions, statsMode VectorIndexSearchStatsMode) {
 	b.Helper()
 	const (
 		rows     = 1024
@@ -1683,6 +1687,7 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *tes
 		EfSearch:             efSearch,
 		IncludeDocuments:     includeDocuments,
 		DocumentFetchOptions: fetchOptions,
+		StatsMode:            statsMode,
 	}
 	if _, err := searcher.Search(opts); err != nil {
 		b.Fatalf("warm Search: %v", err)
@@ -1786,6 +1791,10 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelW
 }
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithStatsModeV4(b, includeDocuments, fetchOptions, VectorIndexSearchStatsModeDefault)
+}
+
+func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithStatsModeV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions, statsMode VectorIndexSearchStatsMode) {
 	b.Helper()
 	const (
 		rows     = 1024
@@ -1816,6 +1825,7 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV
 		EfSearch:             efSearch,
 		IncludeDocuments:     includeDocuments,
 		DocumentFetchOptions: fetchOptions,
+		StatsMode:            statsMode,
 	}
 	type preparedWorker struct {
 		searcher *VectorIndexSearcher
