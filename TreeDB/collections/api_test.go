@@ -3053,6 +3053,8 @@ func TestCollectionInsertBatchBridge_ValidatedBSONReturnedIDsAreOwned(t *testing
 
 func TestCollectionInsertBatchSingleDirectBufferedBSONStats(t *testing.T) {
 	_, col := newSingleDirectBufferedBSONUsersCollection(t)
+	indexDefs := singleDirectBufferedUserIndexes()
+	wantIndexes := len(indexDefs)
 
 	if _, err := col.InsertBatchValidatedBSON(
 		[][]byte{[]byte("u1")},
@@ -3065,20 +3067,20 @@ func TestCollectionInsertBatchSingleDirectBufferedBSONStats(t *testing.T) {
 	}
 
 	stats := col.LastInsertStats()
-	if stats.Documents != 1 || stats.Indexes != 2 {
-		t.Fatalf("stats documents/indexes=%d/%d want 1/2", stats.Documents, stats.Indexes)
+	if stats.Documents != 1 || stats.Indexes != wantIndexes {
+		t.Fatalf("stats documents/indexes=%d/%d want 1/%d", stats.Documents, stats.Indexes, wantIndexes)
 	}
 	if stats.BufferedIndexedBatches != 1 || stats.BufferedIndexedBypassBatches != 0 {
 		t.Fatalf("buffered stats batches=%d bypass=%d want 1/0", stats.BufferedIndexedBatches, stats.BufferedIndexedBypassBatches)
 	}
-	if stats.Runs != 3 {
-		t.Fatalf("runs=%d want primary,email,city roots", stats.Runs)
+	if wantRuns := 1 + wantIndexes; stats.Runs != wantRuns {
+		t.Fatalf("runs=%d want %d primary plus secondary roots", stats.Runs, wantRuns)
 	}
-	if stats.SecondaryEntries != 2 || stats.SecondarySortedRuns != 2 || stats.SecondaryUnsortedRuns != 0 {
-		t.Fatalf("secondary stats entries=%d sorted=%d unsorted=%d want 2/2/0", stats.SecondaryEntries, stats.SecondarySortedRuns, stats.SecondaryUnsortedRuns)
+	if stats.SecondaryEntries != wantIndexes || stats.SecondarySortedRuns != wantIndexes || stats.SecondaryUnsortedRuns != 0 {
+		t.Fatalf("secondary stats entries=%d sorted=%d unsorted=%d want %d/%d/0", stats.SecondaryEntries, stats.SecondarySortedRuns, stats.SecondaryUnsortedRuns, wantIndexes, wantIndexes)
 	}
-	if len(stats.SecondaryRuns) != 2 {
-		t.Fatalf("secondary run stats=%d want 2", len(stats.SecondaryRuns))
+	if len(stats.SecondaryRuns) != wantIndexes {
+		t.Fatalf("secondary run stats=%d want %d", len(stats.SecondaryRuns), wantIndexes)
 	}
 	for _, run := range stats.SecondaryRuns {
 		if run.Entries != 1 || !run.AlreadySorted {
@@ -3169,13 +3171,11 @@ func TestCollectionInsertBatchSingleDirectBufferedTemplateV1StagesExpectedRoots(
 	mgr := NewCollectionManager(d)
 	opts := bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests()
 	opts.DocumentFormat = DocumentFormatTemplateV1
+	indexDefs := singleDirectBufferedUserIndexes()
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
 		Options: opts,
-		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
-			{Name: "city", Field: "city", ValueType: IndexValueString},
-		},
+		Indexes: indexDefs,
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -3191,35 +3191,35 @@ func TestCollectionInsertBatchSingleDirectBufferedTemplateV1StagesExpectedRoots(
 		t.Fatalf("insert single template-v1 document: %v", err)
 	}
 	stats := col.LastInsertStats()
-	if stats.Documents != 1 || stats.Indexes != 2 || stats.Runs != 4 {
-		t.Fatalf("stats documents/indexes/runs=%d/%d/%d want 1/2/4", stats.Documents, stats.Indexes, stats.Runs)
+	wantIndexes := len(indexDefs)
+	wantRuns := 2 + wantIndexes
+	if stats.Documents != 1 || stats.Indexes != wantIndexes || stats.Runs != wantRuns {
+		t.Fatalf("stats documents/indexes/runs=%d/%d/%d want 1/%d/%d", stats.Documents, stats.Indexes, stats.Runs, wantIndexes, wantRuns)
 	}
-	if stats.SecondaryEntries != 2 || stats.SecondarySortedRuns != 2 || stats.SecondaryUnsortedRuns != 0 {
-		t.Fatalf("secondary stats entries=%d sorted=%d unsorted=%d want 2/2/0", stats.SecondaryEntries, stats.SecondarySortedRuns, stats.SecondaryUnsortedRuns)
+	if stats.SecondaryEntries != wantIndexes || stats.SecondarySortedRuns != wantIndexes || stats.SecondaryUnsortedRuns != 0 {
+		t.Fatalf("secondary stats entries=%d sorted=%d unsorted=%d want %d/%d/0", stats.SecondaryEntries, stats.SecondarySortedRuns, stats.SecondaryUnsortedRuns, wantIndexes, wantIndexes)
 	}
 
 	expectedRoots := []string{
 		collectionTemplateRootName("users"),
 		collectionPrimaryRootName("users"),
-		collectionSecondaryRootName("users", "email"),
-		collectionSecondaryRootName("users", "city"),
+	}
+	for _, indexDef := range indexDefs {
+		expectedRoots = append(expectedRoots, collectionSecondaryRootName("users", indexDef.Name))
 	}
 	col.writeDomain.mu.RLock()
+	defer col.writeDomain.mu.RUnlock()
 	for _, rootName := range expectedRoots {
 		if got := len(col.writeDomain.rootRuns[rootName]); got != 1 {
-			col.writeDomain.mu.RUnlock()
 			t.Fatalf("pending root %q runs=%d want 1", rootName, got)
 		}
 	}
 	if got := len(col.writeDomain.uniqueValueRuns["email"]); got != 1 {
-		col.writeDomain.mu.RUnlock()
 		t.Fatalf("pending email unique runs=%d want 1", got)
 	}
 	if got := col.writeDomain.count; got != 1 {
-		col.writeDomain.mu.RUnlock()
 		t.Fatalf("pending count=%d want 1", got)
 	}
-	col.writeDomain.mu.RUnlock()
 }
 
 func TestCollectionNativewireInsertBatchNoResultIDsUpdatesVectorIndex(t *testing.T) {
@@ -3268,6 +3268,13 @@ func TestCollectionNativewireInsertBatchNoResultIDsUpdatesVectorIndex(t *testing
 	}
 }
 
+func singleDirectBufferedUserIndexes() []IndexDefinition {
+	return []IndexDefinition{
+		{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		{Name: "city", Field: "city", ValueType: IndexValueString},
+	}
+}
+
 func newSingleDirectBufferedBSONUsersCollection(t *testing.T) (*backenddb.DB, *Collection) {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
@@ -3282,10 +3289,7 @@ func newSingleDirectBufferedBSONUsersCollection(t *testing.T) (*backenddb.DB, *C
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
 		Options: opts,
-		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
-			{Name: "city", Field: "city", ValueType: IndexValueString},
-		},
+		Indexes: singleDirectBufferedUserIndexes(),
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}

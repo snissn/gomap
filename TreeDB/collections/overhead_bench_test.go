@@ -264,7 +264,7 @@ func BenchmarkCollectionOverheadPlanDirectBufferedIndexedSingle(b *testing.B) {
 		if err != nil {
 			b.Fatalf("plan direct-buffered indexed batch: %v", err)
 		}
-		_ = plan
+		resetCollectionRunTables(plan.runs)
 	}
 }
 
@@ -280,7 +280,7 @@ func BenchmarkCollectionOverheadPlanDirectBufferedIndexedTemplateV1Single(b *tes
 		if err != nil {
 			b.Fatalf("plan direct-buffered template-v1 batch: %v", err)
 		}
-		_ = plan
+		resetCollectionRunTables(plan.runs)
 	}
 }
 

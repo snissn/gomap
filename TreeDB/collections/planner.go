@@ -1029,7 +1029,11 @@ func (p insertBatchPlanner) buildSingleDirectBufferedInsertPlan(plan *insertBatc
 		direct.secondaryRootPlans = secondaryPlans
 		direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, secondaryBytes)
 		for _, secondaryPlan := range secondaryPlans {
-			direct.addRoot(secondaryPlan.rootName, runtimes[secondaryPlan.runtimeIdx].def.storagePolicy)
+			runtimeIdx := secondaryPlan.runtimeIdx
+			if runtimeIdx < 0 || runtimeIdx >= len(runtimes) {
+				return fmt.Errorf("collections: invalid direct buffered secondary runtime index %d", runtimeIdx)
+			}
+			direct.addRoot(secondaryPlan.rootName, runtimes[runtimeIdx].def.storagePolicy)
 		}
 		direct.uniqueValueRootPlans = directBufferedUniqueValueRootPlans(plan.allUniqueProbeRuns, runtimes)
 		for _, uniquePlan := range direct.uniqueValueRootPlans {
