@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -683,27 +684,79 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 				projection = append(projection, bson.E{Key: "field" + strconv.Itoa(field), Value: true})
 			}
 
-			errCh := make(chan error, docs)
+			type insertError struct {
+				index int
+				err   error
+			}
+			errCh := make(chan insertError, 1)
 			workCh := make(chan int)
+			var insertWG sync.WaitGroup
+			sendInsertErr := func(i int, err error) {
+				if err == nil {
+					return
+				}
+				select {
+				case errCh <- insertError{index: i, err: err}:
+				default:
+				}
+				opCancel()
+			}
 			for worker := 0; worker < workers; worker++ {
+				insertWG.Add(1)
 				go func() {
-					for i := range workCh {
-						_, err := coll.InsertOne(opCtx, ycsbValues(i))
-						errCh <- err
+					defer insertWG.Done()
+					for {
+						select {
+						case <-opCtx.Done():
+							return
+						case i, ok := <-workCh:
+							if !ok {
+								return
+							}
+							_, err := coll.InsertOne(opCtx, ycsbValues(i))
+							sendInsertErr(i, err)
+						}
 					}
 				}()
 			}
-			for i := 0; i < docs; i++ {
-				workCh <- i
-			}
-			close(workCh)
-			for i := 0; i < docs; i++ {
-				if err := <-errCh; err != nil {
+			go func() {
+				defer close(workCh)
+				for i := 0; i < docs; i++ {
+					select {
+					case <-opCtx.Done():
+						return
+					case workCh <- i:
+					}
+				}
+			}()
+			insertDone := make(chan struct{})
+			go func() {
+				insertWG.Wait()
+				close(insertDone)
+			}()
+			select {
+			case insertErr := <-errCh:
+				_ = client.Disconnect(context.Background())
+				cancel()
+				_ = ln.Close()
+				_ = standalone.Close()
+				t.Fatalf("insert %d: %v", insertErr.index, insertErr.err)
+			case <-insertDone:
+				select {
+				case insertErr := <-errCh:
 					_ = client.Disconnect(context.Background())
 					cancel()
 					_ = ln.Close()
 					_ = standalone.Close()
-					t.Fatalf("insert %d: %v", i, err)
+					t.Fatalf("insert %d: %v", insertErr.index, insertErr.err)
+				default:
+				}
+				if err := opCtx.Err(); err != nil {
+					_ = client.Disconnect(context.Background())
+					cancel()
+					_ = ln.Close()
+					_ = standalone.Close()
+					t.Fatalf("insert workers stopped: %v", err)
 				}
 			}
 
