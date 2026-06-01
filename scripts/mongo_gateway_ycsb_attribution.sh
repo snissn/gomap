@@ -13,7 +13,13 @@ INSERT_PRODUCERS="${INSERT_PRODUCERS:-16}"
 MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-16}"
 MONGO_MIN_POOL_SIZE="${MONGO_MIN_POOL_SIZE:-0}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-16}"
-INDEXES_LIST="${INDEXES_LIST:-0 1}"
+DOCUMENT_SHAPE="${DOCUMENT_SHAPE:-gateway}"
+POINT_READ_PROJECTION="${POINT_READ_PROJECTION:-full}"
+if [[ "$DOCUMENT_SHAPE" == "ycsb" ]]; then
+  INDEXES_LIST="${INDEXES_LIST:-0}"
+else
+  INDEXES_LIST="${INDEXES_LIST:-0 1}"
+fi
 CLIENT_MODES="${CLIENT_MODES:-driver raw-wire-tcp native-wire-tcp direct}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-ycsb_attr}"
 COLLECTION="${COLLECTION:-usertable}"
@@ -57,6 +63,7 @@ Environment overrides:
   OUT_DIR, DOCUMENTS, BATCH_SIZE, INSERT_PRODUCERS,
   INDEXES_LIST, CLIENT_MODES, DATABASE_PREFIX, COLLECTION, TIMEOUT,
   TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_MAINTENANCE, TREEDB_READ_STATE,
+  DOCUMENT_SHAPE, POINT_READ_PROJECTION,
   MONGO_MAX_POOL_SIZE, MONGO_MIN_POOL_SIZE, MONGO_MAX_CONNECTING,
   PREBUILD_DOCUMENTS,
   READS, RANGE_READS, UPDATES, DELETES,
@@ -136,6 +143,8 @@ insert_producers=$INSERT_PRODUCERS
 mongo_max_pool_size=$MONGO_MAX_POOL_SIZE
 mongo_min_pool_size=$MONGO_MIN_POOL_SIZE
 mongo_max_connecting=$MONGO_MAX_CONNECTING
+document_shape=$DOCUMENT_SHAPE
+point_read_projection=$POINT_READ_PROJECTION
 indexes_list=$INDEXES_LIST
 client_modes=$CLIENT_MODES
 treedb_profile=$TREEDB_PROFILE
@@ -177,6 +186,8 @@ for indexes in "${indexes_values[@]}"; do
       -mongo-max-pool-size "$MONGO_MAX_POOL_SIZE"
       -mongo-min-pool-size "$MONGO_MIN_POOL_SIZE"
       -mongo-max-connecting "$MONGO_MAX_CONNECTING"
+      -document-shape "$DOCUMENT_SHAPE"
+      -point-read-projection "$POINT_READ_PROJECTION"
       -secondary-indexes "$indexes"
       -client-mode "$mode"
       -treedb-profile "$TREEDB_PROFILE"
@@ -236,28 +247,30 @@ out = pathlib.Path(sys.argv[1])
 rows = []
 for result_path in sorted(out.glob("index_*/*/result.json")):
     data = json.loads(result_path.read_text())
-    phase = next((p for p in data.get("phases", []) if p.get("name") == "load_insert_many"), None)
-    if phase is None:
-        continue
-    latency = phase.get("latency_micros") or {}
-    rows.append({
-        "indexes": data.get("secondary_indexes"),
-        "mode": data.get("client_mode"),
-        "ops": phase.get("ops_per_sec", 0.0),
-        "sampled_ns": phase.get("sampled_ns_per_op", 0.0),
-        "driver_mean_us": phase.get("driver_mean_latency_us", 0.0),
-        "p50": latency.get("p50", 0.0),
-        "p95": latency.get("p95", 0.0),
-        "p99": latency.get("p99", 0.0),
-        "producers": phase.get("effective_producers", ""),
-        "profile_dir": data.get("profile_dir", ""),
-        "result": str(result_path.relative_to(out)),
-    })
+    for phase in data.get("phases", []):
+        if phase.get("operations", 0) <= 0:
+            continue
+        latency = phase.get("latency_micros") or {}
+        rows.append({
+            "indexes": data.get("secondary_indexes"),
+            "mode": data.get("client_mode"),
+            "phase": phase.get("name", ""),
+            "ops": phase.get("ops_per_sec", 0.0),
+            "sampled_ns": phase.get("sampled_ns_per_op", 0.0),
+            "driver_mean_us": phase.get("driver_mean_latency_us", 0.0),
+            "p50": latency.get("p50", 0.0),
+            "p95": latency.get("p95", 0.0),
+            "p99": latency.get("p99", 0.0),
+            "producers": phase.get("effective_producers", ""),
+            "profile_dir": data.get("profile_dir", ""),
+            "result": str(result_path.relative_to(out)),
+        })
 
 headers = [
     "secondary_indexes",
     "client_mode",
-    "load_ops_per_sec",
+    "phase",
+    "ops_per_sec",
     "sampled_ns_per_op",
     "driver_mean_us",
     "p50_us",
@@ -279,6 +292,7 @@ with (out / "summary.tsv").open("w", encoding="utf-8") as f:
         values = [
             row["indexes"],
             row["mode"],
+            row["phase"],
             row["ops"],
             row["sampled_ns"],
             row["driver_mean_us"],
@@ -297,11 +311,11 @@ with (out / "summary.md").open("w", encoding="utf-8") as f:
     f.write("```text\n")
     f.write(config)
     f.write("```\n\n")
-    f.write("| secondary indexes | client mode | load ops/sec | sampled ns/op | driver mean us | p50 us | p95 us | p99 us | producers | result |\n")
-    f.write("| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+    f.write("| secondary indexes | client mode | phase | ops/sec | sampled ns/op | driver mean us | p50 us | p95 us | p99 us | producers | result |\n")
+    f.write("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
     for row in rows:
         f.write(
-            "| {indexes} | {mode} | {ops:.1f} | {sampled_ns:.1f} | {driver_mean_us:.1f} | {p50:.1f} | {p95:.1f} | {p99:.1f} | {producers} | `{result}` |\n".format(**row)
+            "| {indexes} | {mode} | {phase} | {ops:.1f} | {sampled_ns:.1f} | {driver_mean_us:.1f} | {p50:.1f} | {p95:.1f} | {p99:.1f} | {producers} | `{result}` |\n".format(**row)
         )
     profile_tops = sorted(out.glob("index_*/*/profiles/*_top.txt"))
     if profile_tops:

@@ -51,7 +51,7 @@ func (c *Collection) newCollectionInsertCommandWALIntent(docs []commitlog.Collec
 	if err != nil {
 		return nil, err
 	}
-	return c.db.NewCommandWALIntent(
+	return c.db.NewTrustedCommandWALIntent(
 		commitlog.CommandKindCollectionInsertBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionInsertBatchByIDV1,
@@ -70,7 +70,7 @@ func (c *Collection) newCollectionDeleteCommandWALIntent(ids [][]byte, replay *b
 	if err != nil {
 		return nil, err
 	}
-	return c.db.NewCommandWALIntent(
+	return c.db.NewTrustedCommandWALIntent(
 		commitlog.CommandKindCollectionDeleteBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
@@ -89,7 +89,7 @@ func (c *Collection) newCollectionUpdateCommandWALIntent(docs []commitlog.Collec
 	if err != nil {
 		return nil, err
 	}
-	return c.db.NewCommandWALIntent(
+	return c.db.NewTrustedCommandWALIntent(
 		commitlog.CommandKindCollectionUpdateBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
@@ -203,6 +203,22 @@ func collectionDocumentsFromBatchInput(ids, documents [][]byte) ([]commitlog.Col
 func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName string) ([]commitlog.CollectionDocument, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("collections: missing insert plan for command wal")
+	}
+	if direct := plan.directBufferedInsert; direct != nil && direct.primaryRootName == primaryRootName {
+		if len(direct.primaryEntries) != len(plan.resultIDs) {
+			return nil, fmt.Errorf("collections: insert plan primary document count mismatch for command wal")
+		}
+		docs := make([]commitlog.CollectionDocument, 0, len(direct.primaryEntries))
+		for _, entry := range direct.primaryEntries {
+			if entry.flags&node.FlagTombstone != 0 {
+				return nil, fmt.Errorf("collections: insert plan tombstoned primary document for command wal")
+			}
+			docs = append(docs, commitlog.CollectionDocument{
+				ID:       entry.key,
+				Document: entry.value,
+			})
+		}
+		return docs, nil
 	}
 	for _, run := range plan.runs {
 		if run.name != primaryRootName {

@@ -261,6 +261,26 @@ func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
 	}
 }
 
+func TestEncodeCollectionInsertBatchByIDPayloadSortedAndUnsortedMatch(t *testing.T) {
+	sorted, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
+		{ID: []byte("u1"), Document: []byte(`{"name":"Ada"}`)},
+		{ID: []byte("u2"), Document: []byte(`{"name":"Grace"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload sorted: %v", err)
+	}
+	unsorted, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
+		{ID: []byte("u2"), Document: []byte(`{"name":"Grace"}`)},
+		{ID: []byte("u1"), Document: []byte(`{"name":"Ada"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload unsorted: %v", err)
+	}
+	if !bytes.Equal(sorted, unsorted) {
+		t.Fatalf("sorted and unsorted payloads differ\nsorted   %x\nunsorted %x", sorted, unsorted)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CollectionDeleteBatchByID(t *testing.T) {
 	payload, err := EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("u2"), []byte("u1")})
 	if err != nil {
@@ -765,6 +785,53 @@ func TestWriterAppendRawKVBatchPayloadCommandDirect(t *testing.T) {
 	}
 	if !bytes.Equal(env.Payload, payload) {
 		t.Fatalf("payload mismatch\ngot  %x\nwant %x", env.Payload, payload)
+	}
+}
+
+func TestWriterAppendCommandPayloadDirectTrustedCollectionInsert(t *testing.T) {
+	payload, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
+		{ID: []byte("user-001"), Document: []byte(`{"_id":"user-001","field0":"value0"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 4096})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	if err := w.AppendCommandPayloadDirectTrusted(7, 3, CommandKindCollectionInsertBatchByID, CommandScopeCollection, PayloadFormatCollectionInsertBatchByIDV1, payload); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendCommandPayloadDirectTrusted: %v", err)
+	}
+	if got := len(w.commandBuf); got == 0 {
+		_ = w.Close()
+		t.Fatal("trusted collection command frame was not buffered")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	r, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	if env.LSN != 7 || env.BaseAppliedLSN != 3 || env.Kind != CommandKindCollectionInsertBatchByID || env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 {
+		t.Fatalf("decoded command identity mismatch: %+v", env)
+	}
+	if !bytes.Equal(env.Payload, payload) {
+		t.Fatalf("payload mismatch\ngot  %x\nwant %x", env.Payload, payload)
+	}
+	decoded, err := DecodeCollectionInsertBatchByIDPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	if decoded.Collection != "users" || len(decoded.Documents) != 1 || string(decoded.Documents[0].ID) != "user-001" {
+		t.Fatalf("decoded collection payload mismatch: %+v", decoded)
 	}
 }
 

@@ -1997,7 +1997,7 @@ func canonicalCollectionDocuments(docs []CollectionDocument) ([]CollectionDocume
 	if commandFrameIntExceedsUint32(len(docs)) {
 		return nil, ErrRecordTooLarge
 	}
-	ordered := make([]CollectionDocument, len(docs))
+	needsSort := false
 	for i := range docs {
 		doc := docs[i]
 		if len(doc.ID) == 0 || doc.ID == nil || doc.Document == nil {
@@ -2006,8 +2006,15 @@ func canonicalCollectionDocuments(docs []CollectionDocument) ([]CollectionDocume
 		if commandFrameIntExceedsUint32(len(doc.ID)) {
 			return nil, ErrRecordTooLarge
 		}
-		ordered[i] = doc
+		if i > 0 && bytes.Compare(docs[i-1].ID, doc.ID) >= 0 {
+			needsSort = true
+		}
 	}
+	if !needsSort {
+		return docs, nil
+	}
+	ordered := make([]CollectionDocument, len(docs))
+	copy(ordered, docs)
 	sort.Slice(ordered, func(i, j int) bool {
 		return bytes.Compare(ordered[i].ID, ordered[j].ID) < 0
 	})
@@ -2021,7 +2028,7 @@ func canonicalCollectionIDs(ids [][]byte) ([][]byte, error) {
 	if commandFrameIntExceedsUint32(len(ids)) {
 		return nil, ErrRecordTooLarge
 	}
-	ordered := make([][]byte, len(ids))
+	needsSort := false
 	for i := range ids {
 		if len(ids[i]) == 0 || ids[i] == nil {
 			return nil, ErrCorrupt
@@ -2029,8 +2036,15 @@ func canonicalCollectionIDs(ids [][]byte) ([][]byte, error) {
 		if commandFrameIntExceedsUint32(len(ids[i])) {
 			return nil, ErrRecordTooLarge
 		}
-		ordered[i] = ids[i]
+		if i > 0 && bytes.Compare(ids[i-1], ids[i]) >= 0 {
+			needsSort = true
+		}
 	}
+	if !needsSort {
+		return ids, nil
+	}
+	ordered := make([][]byte, len(ids))
+	copy(ordered, ids)
 	sort.Slice(ordered, func(i, j int) bool {
 		return bytes.Compare(ordered[i], ordered[j]) < 0
 	})

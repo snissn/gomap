@@ -30,3 +30,51 @@ func BenchmarkCommandJournalAllocateAndAppendRawKVBatch(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkCommandJournalAppendCollectionInsertPayload(b *testing.B) {
+	payload, err := EncodeCollectionInsertBatchByIDPayload("usertable", []CollectionDocument{
+		{
+			ID:       []byte("user000000000000"),
+			Document: []byte(`{"_id":"user000000000000","field0":"value0","field1":"value1","field2":"value2","field3":"value3","field4":"value4","field5":"value5","field6":"value6","field7":"value7","field8":"value8","field9":"value9"}`),
+		},
+	})
+	if err != nil {
+		b.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	env := CommandEnvelope{
+		Kind:          CommandKindCollectionInsertBatchByID,
+		Scope:         CommandScopeCollection,
+		PayloadFormat: PayloadFormatCollectionInsertBatchByIDV1,
+		Payload:       payload,
+	}
+	b.Run("generic", func(b *testing.B) {
+		j, err := OpenCommandJournal(b.TempDir(), CommandJournalOptions{})
+		if err != nil {
+			b.Fatalf("OpenCommandJournal: %v", err)
+		}
+		b.Cleanup(func() { _ = j.Close() })
+		b.ReportAllocs()
+		b.SetBytes(int64(len(payload)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if _, err := j.AppendCommand(env); err != nil {
+				b.Fatalf("AppendCommand: %v", err)
+			}
+		}
+	})
+	b.Run("trusted", func(b *testing.B) {
+		j, err := OpenCommandJournal(b.TempDir(), CommandJournalOptions{})
+		if err != nil {
+			b.Fatalf("OpenCommandJournal: %v", err)
+		}
+		b.Cleanup(func() { _ = j.Close() })
+		b.ReportAllocs()
+		b.SetBytes(int64(len(payload)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if _, err := j.AppendCommandPayloadTrusted(CommandKindCollectionInsertBatchByID, CommandScopeCollection, PayloadFormatCollectionInsertBatchByIDV1, 0, payload); err != nil {
+				b.Fatalf("AppendCommandPayloadTrusted: %v", err)
+			}
+		}
+	})
+}

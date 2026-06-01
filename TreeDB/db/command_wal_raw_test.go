@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,6 +24,59 @@ func TestCommandWALIntentZeroValueLSNSentinelsM10C(t *testing.T) {
 	}
 	if got, replay := zero.ReplayAssignedLSN(); got != 0 || replay {
 		t.Fatalf("zero ReplayAssignedLSN=(%d,%t), want (0,false)", got, replay)
+	}
+}
+
+func TestTrustedCommandWALIntentAppendsCanonicalCollectionPayload(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{
+		{ID: []byte("user-001"), Document: []byte(`{"_id":"user-001"}`)},
+	})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	intent, err := d.NewTrustedCommandWALIntent(
+		commitlog.CommandKindCollectionInsertBatchByID,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+		payload,
+	)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("NewTrustedCommandWALIntent: %v", err)
+	}
+	lsn, err := d.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	if lsn == 0 || intent.AssignedLSN() != lsn {
+		_ = d.Close()
+		t.Fatalf("trusted intent lsn=%d assigned=%d, want non-zero match", lsn, intent.AssignedLSN())
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	if env.LSN != lsn || env.Kind != commitlog.CommandKindCollectionInsertBatchByID || env.Scope != commitlog.CommandScopeCollection || env.PayloadFormat != commitlog.PayloadFormatCollectionInsertBatchByIDV1 {
+		t.Fatalf("decoded trusted command identity mismatch: %+v", env)
+	}
+	if _, err := commitlog.DecodeCollectionInsertBatchByIDPayload(env.Payload); err != nil {
+		t.Fatalf("DecodeCollectionInsertBatchByIDPayload: %v", err)
 	}
 }
 
