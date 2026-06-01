@@ -3806,6 +3806,27 @@ func (c *Collection) canBufferCommandWALNoIndexInsertBatch(meta CollectionMeta, 
 	}
 }
 
+func (c *Collection) canBufferCommandWALIndexedInsertBatch(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent, documentCount int) bool {
+	if c == nil || c.db == nil || c.writeDomain == nil || commandWALIntent != nil || documentCount <= 0 {
+		return false
+	}
+	if !c.db.CommandWALEnabled() || c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed {
+		return false
+	}
+	if len(meta.VectorIndexes) != 0 || columnStoreWriteEnabled(meta) {
+		return false
+	}
+	if !c.shouldBufferIndexedInsertBatch(meta, documentCount) {
+		return false
+	}
+	switch normalizedDocumentFormat(format) {
+	case DocumentFormatJSON, DocumentFormatBSON:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Collection) canBufferDirectUpdateAck() bool {
 	if c == nil || c.db == nil || c.writeDomain == nil {
 		return false
@@ -9133,8 +9154,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 	}
 	commandWALNoIndexBufferedMode := c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
-	indexedMemtablesEnabled := (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode
-	bufferIndexedInserts := (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALNoIndexBufferedMode
+	commandWALIndexedBufferedMode := c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+	commandWALBufferedMode := commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
+	indexedMemtablesEnabled := (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALBufferedMode
+	bufferIndexedInserts := (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
 		closePlanningSnapshot()
 		if err := c.flushBufferedWrites(); err != nil {
@@ -9181,8 +9204,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 		plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		commandWALNoIndexBufferedMode = c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
-		indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode
-		bufferIndexedInserts = (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALNoIndexBufferedMode
+		commandWALIndexedBufferedMode = c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+		commandWALBufferedMode = commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
+		indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALBufferedMode
+		bufferIndexedInserts = (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	}
 	if bufferIndexedInserts {
 		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
@@ -9203,8 +9228,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 				c.meta = meta
 				plannerOptions.learnTemplateIDs = templateEncoder != nil
 				plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
-				indexedMemtablesEnabled = !commandWALActive && c.shouldBufferIndexedInserts(meta)
-				bufferIndexedInserts = !commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))
+				commandWALNoIndexBufferedMode = c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+				commandWALIndexedBufferedMode = c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+				commandWALBufferedMode = commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
+				indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALBufferedMode
+				bufferIndexedInserts = (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 			}
 		}
 	}
@@ -9297,7 +9325,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return nil, err
 		}
 		var bufferedCommandWALIntent *backenddb.CommandWALIntent
-		if commandWALNoIndexBufferedMode {
+		if commandWALBufferedMode {
 			docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
 			if err != nil {
 				closePlanningSnapshot()

@@ -119,6 +119,80 @@ func TestCollectionCommandWALInsertByIDStagesAppliedLSNUntilFlush(t *testing.T) 
 	}
 }
 
+func TestCollectionCommandWALIndexedInsertBatchStagesAppliedLSNUntilFlush(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "email", Value: "ada@example.com"},
+		{Key: "city", Value: "hnl"},
+	})
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("InsertBatchValidatedBSON: %v", err)
+	}
+	got, found, err := col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("buffered GetInto: %v", err)
+	}
+	if !found {
+		t.Fatal("buffered GetInto found=false")
+	}
+	if gotEmail := bson.Raw(got).Lookup("email").StringValue(); gotEmail != "ada@example.com" {
+		t.Fatalf("buffered email=%q, want ada@example.com", gotEmail)
+	}
+	assertCollectionIndexIDs(t, col, "email", "ada@example.com", "u1")
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after staged indexed insert=%d, want 0 before flush", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionInsertBatchByID {
+		t.Fatalf("command WAL frames=%+v, want one collection insert frame before flush", frames)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after flush=%d, want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	got, found, err = reopened.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("reopen GetInto: %v", err)
+	}
+	if !found {
+		t.Fatal("reopen GetInto found=false")
+	}
+	if gotCity := bson.Raw(got).Lookup("city").StringValue(); gotCity != "hnl" {
+		t.Fatalf("reopen city=%q, want hnl", gotCity)
+	}
+	assertCollectionIndexIDs(t, reopened, "email", "ada@example.com", "u1")
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
