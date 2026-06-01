@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 
@@ -206,44 +205,16 @@ func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName st
 		return nil, fmt.Errorf("collections: missing insert plan for command wal")
 	}
 	if direct := plan.directBufferedInsert; direct != nil && direct.primaryRootName == primaryRootName {
-		docs := make([]commitlog.CollectionDocument, 0, len(plan.resultIDs))
-		if len(plan.resultIDs) <= 8 {
-			for _, id := range plan.resultIDs {
-				found := false
-				for _, entry := range direct.primaryEntries {
-					if !bytes.Equal(entry.key, id) {
-						continue
-					}
-					if entry.flags&node.FlagTombstone != 0 {
-						return nil, fmt.Errorf("collections: insert plan tombstoned primary document for command wal")
-					}
-					docs = append(docs, commitlog.CollectionDocument{
-						ID:       id,
-						Document: entry.value,
-					})
-					found = true
-					break
-				}
-				if !found {
-					return nil, fmt.Errorf("collections: insert plan missing primary document for command wal")
-				}
-			}
-			return docs, nil
+		if len(direct.primaryEntries) != len(plan.resultIDs) {
+			return nil, fmt.Errorf("collections: insert plan primary document count mismatch for command wal")
 		}
-		primaryByID := make(map[string]directBufferedRootEntry, len(direct.primaryEntries))
+		docs := make([]commitlog.CollectionDocument, 0, len(direct.primaryEntries))
 		for _, entry := range direct.primaryEntries {
-			primaryByID[string(entry.key)] = entry
-		}
-		for _, id := range plan.resultIDs {
-			entry, found := primaryByID[string(id)]
-			if !found {
-				return nil, fmt.Errorf("collections: insert plan missing primary document for command wal")
-			}
 			if entry.flags&node.FlagTombstone != 0 {
 				return nil, fmt.Errorf("collections: insert plan tombstoned primary document for command wal")
 			}
 			docs = append(docs, commitlog.CollectionDocument{
-				ID:       id,
+				ID:       entry.key,
 				Document: entry.value,
 			})
 		}

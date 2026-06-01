@@ -238,7 +238,7 @@ func applyInsertBatchCombinerRequestsDirect(t *testing.T, server *Server, col *c
 		id, doc := build(i)
 		items[i] = &nativewireInsertBatchCombineItem{
 			req:  insertBatchCombinerFastRequest(t, col, id, doc),
-			done: make(chan struct{}),
+			done: make(chan nativewireInsertBatchCombineResult, 1),
 		}
 	}
 
@@ -247,11 +247,11 @@ func applyInsertBatchCombinerRequestsDirect(t *testing.T, server *Server, col *c
 	errs := make([]error, requests)
 	for i, item := range items {
 		select {
-		case <-item.done:
+		case result := <-item.done:
+			errs[i] = result.err
 		default:
 			t.Fatalf("combined item %d was not completed", i)
 		}
-		errs[i] = item.result.err
 	}
 	return errs
 }
