@@ -88,6 +88,152 @@ func TestPublicCommandWALRawKVWritesUseTypedFrames(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALRawKVMethodMatrix(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	if err := db.Set([]byte("set"), []byte("before-delete")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := db.SetSync([]byte("set-sync"), []byte("before-delete")); err != nil {
+		_ = db.Close()
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := db.Delete([]byte("set")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := db.DeleteSync([]byte("set-sync")); err != nil {
+		_ = db.Close()
+		t.Fatalf("DeleteSync: %v", err)
+	}
+	b := db.NewBatch()
+	if err := b.Set([]byte("batch-write"), []byte("visible-after-reopen")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	syncBatch := db.NewBatchWithSize(128)
+	if err := syncBatch.Set([]byte("batch-sync"), []byte("visible-after-sync-reopen")); err != nil {
+		_ = syncBatch.Close()
+		_ = db.Close()
+		t.Fatalf("sync batch Set: %v", err)
+	}
+	if err := syncBatch.WriteSync(); err != nil {
+		_ = syncBatch.Close()
+		_ = db.Close()
+		t.Fatalf("sync batch WriteSync: %v", err)
+	}
+	if err := syncBatch.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("sync batch Close: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{
+		Dir:                 dir,
+		CommandWALStatsScan: true,
+	})
+	if err != nil {
+		t.Fatalf("reopen command WAL from format: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	if got := reopen.Stats()["treedb.write_path.mode"]; got != "command_wal_cached" {
+		t.Fatalf("reopen write_path.mode=%q, want command_wal_cached", got)
+	}
+	for _, key := range []string{"set", "set-sync"} {
+		has, err := reopen.Has([]byte(key))
+		if err != nil {
+			t.Fatalf("Has(%s): %v", key, err)
+		}
+		if has {
+			t.Fatalf("%s exists after command-WAL delete", key)
+		}
+	}
+	for key, want := range map[string]string{
+		"batch-write": "visible-after-reopen",
+		"batch-sync":  "visible-after-sync-reopen",
+	} {
+		got, err := reopen.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("Get(%s): %v", key, err)
+		}
+		if string(got) != want {
+			t.Fatalf("Get(%s)=%q, want %q", key, got, want)
+		}
+	}
+	if got := reopen.backend.State().AppliedCommandLSN; got < 6 {
+		t.Fatalf("AppliedCommandLSN=%d, want at least 6", got)
+	}
+}
+
+func TestPublicCommandWALRejectsUnsupportedCachedRawMutations(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.Set([]byte("keep"), []byte("original")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	updateCalled := false
+	if err := db.Update([]byte("keep"), func(old []byte) (UpdateResult, error) {
+		updateCalled = true
+		return SetUpdate([]byte("updated")), nil
+	}); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("Update err=%v, want ErrCommandWALRejected", err)
+	}
+	if updateCalled {
+		t.Fatal("Update callback ran after command-WAL rejection")
+	}
+	updateSyncCalled := false
+	if err := db.UpdateSync([]byte("keep"), func(old []byte) (UpdateResult, error) {
+		updateSyncCalled = true
+		return DeleteUpdate(), nil
+	}); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("UpdateSync err=%v, want ErrCommandWALRejected", err)
+	}
+	if updateSyncCalled {
+		t.Fatal("UpdateSync callback ran after command-WAL rejection")
+	}
+	if err := db.DeleteRange([]byte("a"), []byte("z")); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("DeleteRange err=%v, want ErrCommandWALRejected", err)
+	}
+
+	got, err := db.Get([]byte("keep"))
+	if err != nil {
+		t.Fatalf("Get(keep): %v", err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("Get(keep)=%q, want original", got)
+	}
+}
+
 func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {
 	t.Helper()
 	stats := db.Stats()
