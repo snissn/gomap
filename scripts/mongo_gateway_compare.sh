@@ -47,10 +47,10 @@ DATABASE_PREFIX="${DATABASE_PREFIX:-mongo_gateway_compare}"
 COLLECTION="${COLLECTION:-docs}"
 TIMEOUT="${TIMEOUT:-20m}"
 TITLE="${TITLE:-Mongo Gateway Benchmark Comparison}"
-# Transitional indexed benchmark baseline: default INDEXES_LIST includes
-# secondary indexes, and command WAL rejects catalog index mutation until
-# catalog index commands land.
-TREEDB_PROFILE="${TREEDB_PROFILE:-legacy_wal_relaxed_fast}"
+# Indexed benchmark baseline: default INDEXES_LIST includes secondary indexes.
+# Use command_wal_relaxed for command-WAL coverage once indexed catalog command
+# support is enabled for this workload; bench is the explicit no-WAL ceiling.
+TREEDB_PROFILE="${TREEDB_PROFILE:-bench}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-template-v1}"
 TREEDB_DOCUMENT_FORMATS="${TREEDB_DOCUMENT_FORMATS:-$TREEDB_DOCUMENT_FORMAT}"
 TREEDB_CLIENT_MODE="${TREEDB_CLIENT_MODE:-driver}"
@@ -132,7 +132,7 @@ Options:
                         Space-separated MongoDB client modes. Example:
                         "driver driver-find-raw driver-command driver-command-raw driver-unack".
   --timeout DURATION    Per-run benchmark timeout. Default: 20m.
-  --treedb-profile NAME TreeDB profile. Default: legacy_wal_relaxed_fast.
+  --treedb-profile NAME TreeDB profile. Default: bench.
   --treedb-document-format FORMAT
                         Single TreeDB document format.
   --treedb-document-formats LIST

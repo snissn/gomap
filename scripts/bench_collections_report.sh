@@ -8,9 +8,7 @@ OUT_DIR="${OUT_DIR:-$(mktemp -d /tmp/gomap_collections_report_XXXXXX)}"
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertProvidedID|CollectionInsertBatchProvidedID|CollectionGetByID|CollectionGetByIDParallel|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionCreateIndexBackfillExistingDocs|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)}"
 COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-}"
-# Legacy collection benchmark engine name retained until #2148 migrates the
-# harness to command-WAL/bench vocabulary.
-BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-production_wal_on_fast}"
+BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-command_wal_relaxed}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 DOCUMENT_FORMAT="${TREEDB_COLLECTION_DOCUMENT_FORMAT:-json}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
@@ -199,12 +197,10 @@ cat >"$OUT_DIR/README.md" <<EOF
 - benchmark count: \`$COUNT\`
 - go test tags: \`${GO_TEST_TAGS:-none}\`
 $ARTIFACT_LINES
-- legacy backend-direct override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct scripts/bench_collections_report.sh\`
-- legacy backend-direct fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast scripts/bench_collections_report.sh\`
-- legacy backend-direct WAL-on-fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_wal_on_fast scripts/bench_collections_report.sh\`
-- legacy production fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=production_fast scripts/bench_collections_report.sh\`
-- legacy production WAL-on-fast override: \`TREEDB_COLLECTION_BENCH_ENGINE=production_wal_on_fast scripts/bench_collections_report.sh\`
-- legacy backend-direct fast/control override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct_fast TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
+- command-WAL relaxed override: \`TREEDB_COLLECTION_BENCH_ENGINE=command_wal_relaxed scripts/bench_collections_report.sh\`
+- command-WAL durable override: \`TREEDB_COLLECTION_BENCH_ENGINE=command_wal_durable scripts/bench_collections_report.sh\`
+- benchmark-only no-WAL ceiling override: \`TREEDB_COLLECTION_BENCH_ENGINE=bench scripts/bench_collections_report.sh\`
+- benchmark-only no-WAL storage-control override: \`TREEDB_COLLECTION_BENCH_ENGINE=bench TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - data-root pager-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
 - pager chunk size override: \`TREEDB_COLLECTION_CHUNK_SIZE=65536 scripts/bench_collections_report.sh\`

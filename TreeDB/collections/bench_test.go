@@ -55,48 +55,43 @@ func benchmarkTreeDBProfile(b *testing.B) treedb.Profile {
 }
 
 func collectionBenchProfileForEngine(raw string) (treedb.Profile, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "production_wal_on_fast", "backend_direct_wal_on_fast", "wal_on_fast":
-		return treedb.ProfileWALOnFast, true
-	case "production_fast", "backend_direct_fast", "backend_direct", "cached", "fast":
-		return treedb.ProfileFast, true
-	case "durable":
-		return treedb.ProfileDurable, true
-	case "bench":
-		return treedb.ProfileBench, true
-	default:
-		return treedb.ProfileWALOnFast, false
-	}
+	return treedb.ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
 }
 
-func TestCollectionBenchProfileForEngineDefaultsToWALOnFast(t *testing.T) {
+func TestCollectionBenchProfileForEngineDefaultsToCommandWALRelaxed(t *testing.T) {
 	got, ok := collectionBenchProfileForEngine("")
 	if !ok {
 		t.Fatal("empty collection bench engine was rejected")
 	}
-	if got != treedb.ProfileWALOnFast {
-		t.Fatalf("default collection bench profile=%q want %q", got, treedb.ProfileWALOnFast)
+	if got != treedb.ProfileCommandWALRelaxed {
+		t.Fatalf("default collection bench profile=%q want %q", got, treedb.ProfileCommandWALRelaxed)
 	}
 }
 
-func TestCollectionBenchProfileForEngineKeepsExplicitFast(t *testing.T) {
-	got, ok := collectionBenchProfileForEngine("production_fast")
-	if !ok {
-		t.Fatal("production_fast collection bench engine was rejected")
-	}
-	if got != treedb.ProfileFast {
-		t.Fatalf("production_fast collection bench profile=%q want %q", got, treedb.ProfileFast)
-	}
-}
-
-func TestCollectionBenchProfileForEngineKeepsExplicitWALOnFastAliases(t *testing.T) {
-	for _, raw := range []string{"production_wal_on_fast", "backend_direct_wal_on_fast", "wal_on_fast"} {
-		got, ok := collectionBenchProfileForEngine(raw)
+func TestCollectionBenchProfileForEngineAcceptsPublicProfiles(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want treedb.Profile
+	}{
+		{raw: "bench", want: treedb.ProfileBench},
+		{raw: "command_wal_relaxed", want: treedb.ProfileCommandWALRelaxed},
+		{raw: "command-wal-durable", want: treedb.ProfileCommandWALDurable},
+	} {
+		got, ok := collectionBenchProfileForEngine(tc.raw)
 		if !ok {
-			t.Fatalf("%q collection bench engine was rejected", raw)
+			t.Fatalf("%q collection bench engine was rejected", tc.raw)
 		}
-		if got != treedb.ProfileWALOnFast {
-			t.Fatalf("%q collection bench profile=%q want %q", raw, got, treedb.ProfileWALOnFast)
+		if got != tc.want {
+			t.Fatalf("%q collection bench profile=%q want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestCollectionBenchProfileForEngineRejectsDeprecatedNames(t *testing.T) {
+	for _, raw := range []string{"production_fast", "production_wal_on_fast", "backend_direct_fast", "backend_direct_wal_on_fast", "fast", "wal_on_fast", "durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+		got, ok := collectionBenchProfileForEngine(raw)
+		if ok {
+			t.Fatalf("deprecated collection bench engine %q parsed as %q", raw, got)
 		}
 	}
 }

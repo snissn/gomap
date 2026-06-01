@@ -93,13 +93,21 @@ func BenchmarkNativewireYCSBLoadServerPrecomputed(b *testing.B) {
 
 func TestYCSBBenchTreeDBProfileFromEnv(t *testing.T) {
 	t.Setenv(ycsbBenchProfileEnv, "")
-	if got := ycsbBenchTreeDBProfile(t); got != treedb.ProfileFast {
-		t.Fatalf("default profile=%q want %q", got, treedb.ProfileFast)
+	if got := ycsbBenchTreeDBProfile(t); got != treedb.ProfileCommandWALRelaxed {
+		t.Fatalf("default profile=%q want %q", got, treedb.ProfileCommandWALRelaxed)
 	}
 
 	t.Setenv(ycsbBenchProfileEnv, string(treedb.ProfileCommandWALRelaxed))
 	if got := ycsbBenchTreeDBProfile(t); got != treedb.ProfileCommandWALRelaxed {
 		t.Fatalf("env profile=%q want %q", got, treedb.ProfileCommandWALRelaxed)
+	}
+}
+
+func TestYCSBBenchTreeDBProfileRejectsDeprecatedPublicNames(t *testing.T) {
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+		if got, ok := parseYCSBBenchTreeDBProfile(raw); ok {
+			t.Fatalf("deprecated profile %q parsed as %q", raw, got)
+		}
 	}
 }
 
@@ -498,14 +506,15 @@ func ycsbBenchTreeDBProfile(tb testing.TB) treedb.Profile {
 	tb.Helper()
 
 	raw := strings.TrimSpace(os.Getenv(ycsbBenchProfileEnv))
-	if raw == "" {
-		return treedb.ProfileFast
-	}
-	profile, ok := treedb.NormalizeProfile(treedb.Profile(raw))
+	profile, ok := parseYCSBBenchTreeDBProfile(raw)
 	if !ok {
 		tb.Fatalf("unknown %s %q", ycsbBenchProfileEnv, raw)
 	}
 	return profile
+}
+
+func parseYCSBBenchTreeDBProfile(raw string) (treedb.Profile, bool) {
+	return treedb.ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
 }
 
 func newYCSBBenchClient(tb testing.TB, ctx context.Context, env *ycsbBenchEnv, transport string) (*Client, func() error) {
