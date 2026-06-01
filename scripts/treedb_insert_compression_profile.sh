@@ -11,9 +11,7 @@ INDEXES_REGEX="${INDEXES_REGEX:-0|1|2}"
 BENCH_REGEX="${BENCH_REGEX:-^BenchmarkCollectionShapeInsertBatch$/^indexes_(${INDEXES_REGEX})$}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-50000}"
 DOCUMENT_FORMAT="${TREEDB_COLLECTION_DOCUMENT_FORMAT:-template-v1}"
-# Legacy collection benchmark engine name retained until #2148 migrates the
-# harness to command-WAL/bench vocabulary.
-BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-production_wal_on_fast}"
+BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-bench}"
 PATH_LABEL="${TREEDB_COLLECTION_PATH_LABEL:-native-fastpath}"
 RUN_COMPRESSION_OFF="${RUN_COMPRESSION_OFF:-true}"
 RUN_TIMED_CPU="${RUN_TIMED_CPU:-false}"

@@ -57,28 +57,28 @@ is_true() {
 case "$MATRIX" in
   production)
     MATRIX_ROWS=(
-      "production_fast_data_vlog_index_leaf production_fast true false"
-      "production_fast_data_vlog_index_vlog production_fast true true"
-      "production_wal_on_fast_data_vlog_index_leaf production_wal_on_fast true false"
-      "production_wal_on_fast_data_vlog_index_vlog production_wal_on_fast true true"
+      "command_wal_relaxed_data_vlog_index_leaf command_wal_relaxed true false"
+      "command_wal_relaxed_data_vlog_index_vlog command_wal_relaxed true true"
+      "bench_data_vlog_index_leaf bench true false"
+      "bench_data_vlog_index_vlog bench true true"
     )
     ;;
   full)
     MATRIX_ROWS=(
-      "production_fast_data_leaf_index_leaf production_fast false false"
-      "production_fast_data_leaf_index_vlog production_fast false true"
-      "production_fast_data_vlog_index_leaf production_fast true false"
-      "production_fast_data_vlog_index_vlog production_fast true true"
-      "production_wal_on_fast_data_leaf_index_leaf production_wal_on_fast false false"
-      "production_wal_on_fast_data_leaf_index_vlog production_wal_on_fast false true"
-      "production_wal_on_fast_data_vlog_index_leaf production_wal_on_fast true false"
-      "production_wal_on_fast_data_vlog_index_vlog production_wal_on_fast true true"
+      "command_wal_relaxed_data_leaf_index_leaf command_wal_relaxed false false"
+      "command_wal_relaxed_data_leaf_index_vlog command_wal_relaxed false true"
+      "command_wal_relaxed_data_vlog_index_leaf command_wal_relaxed true false"
+      "command_wal_relaxed_data_vlog_index_vlog command_wal_relaxed true true"
+      "bench_data_leaf_index_leaf bench false false"
+      "bench_data_leaf_index_vlog bench false true"
+      "bench_data_vlog_index_leaf bench true false"
+      "bench_data_vlog_index_vlog bench true true"
     )
     ;;
   quick)
     MATRIX_ROWS=(
-      "production_fast_data_vlog_index_leaf production_fast true false"
-      "production_fast_data_vlog_index_vlog production_fast true true"
+      "command_wal_relaxed_data_vlog_index_leaf command_wal_relaxed true false"
+      "command_wal_relaxed_data_vlog_index_vlog command_wal_relaxed true true"
     )
     ;;
   sqlite)
@@ -405,7 +405,7 @@ cat >>"$SUMMARY_MD" <<'EOF'
 
 ## Intended 768 Use
 
-The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `production_fast` and `production_wal_on_fast` engines are legacy benchmark-engine labels retained until #2148 migrates the harness to command-WAL/bench vocabulary; they keep the cached no-WAL and WAL-on fast paths visible without changing the collection storage policy.
+The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `command_wal_relaxed` cells exercise the current command-WAL collection profile, while `bench` cells provide the explicit benchmark-only no-WAL ceiling without changing the collection storage policy.
 
 The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost. Checkpointed rows report `insert_ns/doc` and `sync_ns/doc`, and the user-story TSV renders those as insert/sync milliseconds per batch.
 

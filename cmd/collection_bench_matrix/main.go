@@ -140,7 +140,7 @@ func parseFlags(args []string) (config, error) {
 		benchtime:              "100000x",
 		count:                  1,
 		batchSize:              16000,
-		engine:                 "production_wal_on_fast",
+		engine:                 "command_wal_relaxed",
 		treeBenchmarkPattern:   defaultTreeBenchmarkPattern,
 		sqliteBenchmarkPattern: defaultSQLiteBenchmarkPattern,
 		reportVLogRewrite:      true,

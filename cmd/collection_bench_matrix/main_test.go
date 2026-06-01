@@ -26,17 +26,17 @@ func TestBuildMatrixCellsDefaults(t *testing.T) {
 		names[cell.Name] = cell
 	}
 	for _, want := range []string{
-		"treedb_production_wal_on_fast_json_data_vlog_index_pager",
-		"treedb_production_wal_on_fast_json_data_vlog_index_vlog",
-		"treedb_production_wal_on_fast_template_v1_data_vlog_index_pager",
-		"treedb_production_wal_on_fast_template_v1_data_vlog_index_vlog",
+		"treedb_command_wal_relaxed_json_data_vlog_index_pager",
+		"treedb_command_wal_relaxed_json_data_vlog_index_vlog",
+		"treedb_command_wal_relaxed_template_v1_data_vlog_index_pager",
+		"treedb_command_wal_relaxed_template_v1_data_vlog_index_vlog",
 		"sqlite_wal_normal",
 	} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("missing default cell %q in %#v", want, cells)
 		}
 	}
-	tree := names["treedb_production_wal_on_fast_template_v1_data_vlog_index_vlog"]
+	tree := names["treedb_command_wal_relaxed_template_v1_data_vlog_index_vlog"]
 	if tree.ExecutionPath != "native-fastpath" {
 		t.Fatalf("tree execution path=%q", tree.ExecutionPath)
 	}
@@ -323,7 +323,7 @@ func TestWriteMatrixIndex(t *testing.T) {
 	cells := []matrixCell{
 		{
 			Name:                   "treedb_json",
-			Engine:                 "production_fast",
+			Engine:                 "bench",
 			DocumentFormat:         "json",
 			DataOuterLeavesInVLog:  "true",
 			IndexOuterLeavesInVLog: "false",
@@ -345,7 +345,7 @@ func TestWriteMatrixIndex(t *testing.T) {
 	if !strings.Contains(got, "cell\tengine\tdocument_format\tdata_outer_leaves_in_vlog\tindex_outer_leaves_in_vlog\tpager_chunk_size\tpager_sync_concurrency\treport_md\treport_json") {
 		t.Fatalf("missing header:\n%s", got)
 	}
-	if !strings.Contains(got, "treedb_json\tproduction_fast\tjson\ttrue\tfalse\tprofile/default\tprofile/default\t") {
+	if !strings.Contains(got, "treedb_json\tbench\tjson\ttrue\tfalse\tprofile/default\tprofile/default\t") {
 		t.Fatalf("missing row:\n%s", got)
 	}
 	if strings.Contains(got, dir) {
@@ -365,7 +365,7 @@ func TestWriteRunREADMERecordsBashCommandAndArgv(t *testing.T) {
 	cells := []matrixCell{
 		{
 			Name:                   "cell_a",
-			Engine:                 "production_fast",
+			Engine:                 "bench",
 			DocumentFormat:         "json",
 			DataOuterLeavesInVLog:  "true",
 			IndexOuterLeavesInVLog: "true",
@@ -397,7 +397,7 @@ func TestWriteRunREADMEEscapesInlineMetadata(t *testing.T) {
 	cells := []matrixCell{
 		{
 			Name:                   "cell_a",
-			Engine:                 "production_fast",
+			Engine:                 "bench",
 			DocumentFormat:         "json",
 			DataOuterLeavesInVLog:  "true",
 			IndexOuterLeavesInVLog: "true",
