@@ -54,6 +54,21 @@ const (
 	columnStoreCompressionSupportFallback      = "fallback"
 	columnStoreCompressionSupportUnsupported   = "unsupported"
 	columnStoreCompressionNoneLabel            = "none"
+
+	columnStoreJSONBenchCellRowScan                = "row-scan"
+	columnStoreJSONBenchCellColumnDirect           = "column-direct"
+	columnStoreJSONBenchCellColumnPrepared         = "column-prepared"
+	columnStoreJSONBenchCellColumnDirectMetadata   = "column-direct-metadata"
+	columnStoreJSONBenchCellColumnPreparedMetadata = "column-prepared-metadata"
+	columnStoreJSONBenchScanPathData               = "data_scan"
+	columnStoreJSONBenchScanPathMetadata           = "metadata"
+	columnStoreJSONBenchModeRowScan                = "row_scan"
+	columnStoreJSONBenchModeDirect                 = "direct"
+	columnStoreJSONBenchModePrepared               = "prepared"
+	columnStoreJSONBenchMutationInsertOnlyReopen   = "insert_only_checkpoint_reopen"
+	columnStoreJSONBenchSyntheticFixtureCaveat     = "in-repo synthetic JSONBench-shaped fixture; not an external full-data JSONBench run"
+	columnStoreJSONBenchFullDataCaveat             = "not a full-data retained-JSON parity cell; full retained JSON plus reconstruction parity is tracked by #2117"
+	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local and not an apples-to-apples ClickHouse comparison until #2118 fields are available"
 )
 
 type columnStoreSuitePathAlias struct {
@@ -148,6 +163,7 @@ type columnStoreSuiteReport struct {
 	FailClosedForcedPaths    []string                       `json:"fail_closed_forced_paths"`
 	Stages                   []columnStoreStageMetric       `json:"stages"`
 	Queries                  []columnStoreQueryMetric       `json:"queries"`
+	JSONBenchCells           []columnStoreJSONBenchCell     `json:"jsonbench_cells"`
 	Parity                   map[string]columnStoreParity   `json:"parity"`
 	ByteAccounting           columnStoreByteAccounting      `json:"byte_accounting"`
 	CodecLayouts             []columnStoreCodecLayoutMetric `json:"codec_layouts"`
@@ -156,6 +172,9 @@ type columnStoreSuiteReport struct {
 	Artifacts                columnStoreArtifactPaths       `json:"artifacts,omitempty"`
 	ProductionScope          string                         `json:"production_scope"`
 	PhysicalColumnQuery      string                         `json:"physical_column_query"`
+	ExternalJSONBenchStatus  string                         `json:"external_jsonbench_status"`
+	ReportCaveats            []string                       `json:"report_caveats"`
+	ColgranuleReuseMap       []columnStoreColgranuleReuse   `json:"colgranule_reuse_map"`
 	ColumnAssetReadIntegrity string                         `json:"column_asset_read_integrity"`
 	BenchmarkOnlyRelaxed     bool                           `json:"benchmark_only_relaxed"`
 	StageSeparatedBoundary   string                         `json:"stage_separated_boundary"`
@@ -216,6 +235,76 @@ type columnStoreQueryMetric struct {
 	duration time.Duration
 }
 
+type columnStoreJSONBenchCell struct {
+	CellLabel                   string                            `json:"cell_label"`
+	Query                       string                            `json:"query"`
+	AliasOf                     string                            `json:"alias_of,omitempty"`
+	SortLayout                  string                            `json:"sort_layout"`
+	SortKey                     []string                          `json:"sort_key"`
+	PlanLabel                   string                            `json:"plan_label"`
+	StorageSource               string                            `json:"storage_source"`
+	FallbackReason              string                            `json:"fallback_reason"`
+	ExecutionMode               string                            `json:"execution_mode"`
+	MetadataDataScanPath        string                            `json:"metadata_data_scan_path"`
+	CompressionMode             string                            `json:"compression_mode"`
+	RequestedCompression        string                            `json:"requested_compression"`
+	ActualCompression           string                            `json:"actual_compression"`
+	MutationMode                string                            `json:"mutation_mode"`
+	RetainedPayloadPolicy       string                            `json:"retained_payload_policy"`
+	RetainedPayloadBytes        int64                             `json:"retained_payload_bytes"`
+	TypedStorageOwner           string                            `json:"typed_storage_owner"`
+	TypedStorageOwnerColumns    []columnStoreTypedOwnerColumn     `json:"typed_storage_owner_columns"`
+	RowCount                    int                               `json:"row_count"`
+	RowsProcessed               int                               `json:"rows_processed"`
+	RowsProcessedKnown          bool                              `json:"rows_processed_known"`
+	BytesRead                   int64                             `json:"bytes_read"`
+	ResultCount                 int                               `json:"result_count"`
+	RawHash                     uint64                            `json:"raw_hash"`
+	ResultHash                  uint64                            `json:"result_hash"`
+	ParityWithRowScan           bool                              `json:"parity_with_row_scan"`
+	ManifestRootName            string                            `json:"manifest_root_name,omitempty"`
+	ManifestRoot                uint64                            `json:"manifest_root,omitempty"`
+	ManifestGeneration          uint64                            `json:"manifest_generation,omitempty"`
+	ActiveManifestChecksum      uint64                            `json:"active_manifest_checksum,omitempty"`
+	PlannerDurationMS           float64                           `json:"planner_duration_ms"`
+	PreparedSetupDurationMS     float64                           `json:"prepared_setup_duration_ms,omitempty"`
+	HotRunDurationMS            float64                           `json:"hot_run_duration_ms,omitempty"`
+	ScanDurationMS              float64                           `json:"scan_duration_ms"`
+	ReduceDurationMS            float64                           `json:"reduce_duration_ms"`
+	ResultShapeDurationMS       float64                           `json:"result_shape_duration_ms"`
+	ParityHashDurationMS        float64                           `json:"parity_hash_duration_ms"`
+	MetadataHits                int                               `json:"metadata_hits"`
+	RowsScanned                 int                               `json:"rows_scanned"`
+	RowsMatched                 int                               `json:"rows_matched"`
+	ReduceRows                  int                               `json:"reduce_rows"`
+	DecodedGranules             int                               `json:"decoded_granules"`
+	SkippedGranules             int                               `json:"skipped_granules"`
+	ScheduledGranules           int                               `json:"scheduled_granules"`
+	PredicateMode               string                            `json:"predicate_mode"`
+	RealPredicates              bool                              `json:"real_predicates"`
+	RetainedPayloadPolicyCaveat string                            `json:"retained_payload_policy_caveat"`
+	ReconstructionStatus        string                            `json:"reconstruction_status"`
+	FullDataCell                bool                              `json:"full_data_cell"`
+	FullDataCaveat              string                            `json:"full_data_caveat"`
+	StorageAccountingCaveat     string                            `json:"storage_accounting_caveat"`
+	CompatibilityStatus         string                            `json:"compatibility_status"`
+	CompatibilityStatusReason   string                            `json:"compatibility_status_reason,omitempty"`
+	CompressionAttribution      columnStoreCompressionAttribution `json:"compression_attribution"`
+}
+
+type columnStoreTypedOwnerColumn struct {
+	Name  string `json:"name"`
+	Owner string `json:"owner"`
+}
+
+type columnStoreColgranuleReuse struct {
+	Source           string `json:"source"`
+	ProductionTarget string `json:"production_target"`
+	Decision         string `json:"decision"`
+	DivergenceReason string `json:"divergence_reason,omitempty"`
+	Evidence         string `json:"evidence"`
+}
+
 type columnStoreCompressionAttribution struct {
 	CodecLayoutLabel            string  `json:"codec_layout_label"`
 	CompressionPolicyLabel      string  `json:"compression_policy_label"`
@@ -264,6 +353,15 @@ type columnStoreQueryExecution struct {
 	ActiveManifestChecksum uint64
 	RowsProcessed          int
 	RowsProcessedKnown     bool
+	RowsScanned            int
+	RowsMatched            int
+	ReduceRows             int
+	DecodedGranules        int
+	DecodedBlocks          int
+	DecodedPayloadBytes    uint64
+	MappedBytes            uint64
+	HeapCopyBytes          uint64
+	PredicateCount         int
 	BytesRead              int64
 	RowMaterializations    int
 	ResultCount            int
@@ -275,9 +373,12 @@ type columnStoreQueryExecution struct {
 	WorkerCount            int
 	SegmentFileCacheHits   uint64
 	SegmentFileCacheMisses uint64
+	SetupDuration          time.Duration
+	HotRunDuration         time.Duration
 	ScanDuration           time.Duration
 	ReduceDuration         time.Duration
 	AdapterDuration        time.Duration
+	ResultShapeDuration    time.Duration
 	// Set when ProductionHashKnown is true. Fallback line-hash timing is
 	// measured at the call site because it is derived from Lines, not execution.
 	ParityHashDuration time.Duration
@@ -553,10 +654,21 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if columnAssetBytes == 0 {
 		columnAssetBytesNote = "M12A expected isolated physical column assets; zero bytes means no column assets were published"
 	}
-	retainedPayloadBytes, retainedPayloadBytesNote, err := columnStoreSuiteRetainedPayloadAccounting(fixtureEvents, columnStoreSuiteConfigForPath(forcedPath), forcedPath)
+	cfgForPath := columnStoreSuiteConfigForPath(forcedPath)
+	retainedPayloadBytes, retainedPayloadBytesNote, err := columnStoreSuiteRetainedPayloadAccounting(fixtureEvents, cfgForPath, forcedPath)
 	if err != nil {
 		return "", fmt.Errorf("column_store: retained-payload byte accounting: %w", err)
 	}
+	// Build direct/prepared JSONBench report cells after query CPU/alloc/block/
+	// mutex/trace capture has been finalized. These rows are a separately timed
+	// report phase and must not contaminate the measured column_store query-phase
+	// profiles or BenchmarkColumnStoreSuite* query-loop benchmarks.
+	start = time.Now()
+	jsonbenchCells, err := buildColumnStoreJSONBenchCells(collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames, queries, cfgForPath, retainedPayloadBytes)
+	if err != nil {
+		return "", err
+	}
+	stages = append(stages, columnStoreStage("jsonbench_cell_report", start, rows*len(queryNames), 0))
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
 	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{ReadIntegrity: assetReadIntegrity})
 	codecLayouts := columnStoreCodecLayoutMetrics(rows, len(columnStoreSuiteConfigForPath(forcedPath).Columns), columnAssetBytes, physicalAccounting)
@@ -580,6 +692,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		FailClosedForcedPaths: cloneStringSlice(columnStoreSuiteFailClosedForcedPaths),
 		Stages:                stages,
 		Queries:               queries,
+		JSONBenchCells:        jsonbenchCells,
 		Parity:                parity,
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
@@ -611,6 +724,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		},
 		ProductionScope:          "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M14B planner-routed physical query execution",
 		PhysicalColumnQuery:      "M14B routes forced serial and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable for q4b and q5_metadata through typed aggregate metadata assets and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
+		ExternalJSONBenchStatus:  "gomap-only synthetic report cells are implemented here; external snissn/JSONBench column-direct/column-prepared cells require separate coordination",
+		ReportCaveats:            columnStoreReportCaveats(),
+		ColgranuleReuseMap:       columnStoreColgranuleReuseMap(),
 		ColumnAssetReadIntegrity: string(assetReadIntegrity),
 		BenchmarkOnlyRelaxed:     columnStoreSuiteAssetReadIntegrityBenchmarkRelaxed(assetReadIntegrity),
 		StageSeparatedBoundary:   "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, physical scan/reducer execution, row/B-tree reduce, and parity hash stages are timed separately for the forced execution label; M14B direct physical reducers are fused into scan timing unless visibility reconstruction reports a separate reduce phase",
@@ -1620,6 +1736,15 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		ActiveManifestChecksum: diag.ActiveManifestChecksum,
 		RowsProcessed:          diag.ReduceRows,
 		RowsProcessedKnown:     true,
+		RowsScanned:            diag.RowsScanned,
+		RowsMatched:            diag.RowsMatched,
+		ReduceRows:             diag.ReduceRows,
+		DecodedGranules:        diag.DecodedGranules,
+		DecodedBlocks:          diag.DecodedBlocks,
+		DecodedPayloadBytes:    diag.DecodedPayloadBytes,
+		MappedBytes:            diag.MappedBytes,
+		HeapCopyBytes:          diag.HeapCopyBytes,
+		PredicateCount:         diag.PredicateCount,
 		BytesRead:              diag.PhysicalBytesScanned,
 		RowMaterializations:    diag.RowMaterializations,
 		ResultCount:            resultCount,
@@ -1631,8 +1756,95 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		WorkerCount:            workers,
 		SegmentFileCacheHits:   diag.SegmentFileCacheHits,
 		SegmentFileCacheMisses: diag.SegmentFileCacheMisses,
+		HotRunDuration:         elapsed,
 		ScanDuration:           scanDuration,
 		ReduceDuration:         reduceDuration,
+		AdapterDuration:        time.Duration(diag.ResultShapeNanos),
+		ResultShapeDuration:    time.Duration(diag.ResultShapeNanos),
+		ParityHashDuration:     parityHashElapsed,
+	}, nil
+}
+
+func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collection, queryName string, planKind collections.ColumnQueryPlanKind, assetReadIntegrity collections.ColumnAssetReadIntegrity) (columnStoreQueryExecution, error) {
+	req, err := columnStoreSuitePhysicalQueryRequest(queryName)
+	if err != nil {
+		return columnStoreQueryExecution{}, err
+	}
+	if planKind == collections.ColumnQueryPlanAggregateMetadata {
+		req.AggregateMetadataName = columnStoreSuiteAggregateMetadataName(queryName)
+	} else {
+		req.AggregateMetadataName = ""
+	}
+	req.ColumnAssetReadIntegrity = assetReadIntegrity
+	setupStart := time.Now()
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	setupElapsed := time.Since(setupStart)
+	if err != nil {
+		return columnStoreQueryExecution{SetupDuration: setupElapsed}, fmt.Errorf("column_store: prepare physical query %s via %s: %w", queryName, planKind, err)
+	}
+	defer runner.Close()
+	runStart := time.Now()
+	result, err := runner.Run()
+	hotRunElapsed := time.Since(runStart)
+	if err != nil {
+		return columnStoreQueryExecution{SetupDuration: setupElapsed, HotRunDuration: hotRunElapsed}, fmt.Errorf("column_store: prepared physical query %s via %s: %w", queryName, planKind, err)
+	}
+	parityHashStart := time.Now()
+	productionHash, resultCount, err := columnStoreSuiteHashPhysicalQueryGroups(columnStoreQueryHashLineName(queryName), queryName, result.Groups)
+	parityHashElapsed := time.Since(parityHashStart)
+	if err != nil {
+		return columnStoreQueryExecution{SetupDuration: setupElapsed, HotRunDuration: hotRunElapsed}, fmt.Errorf("column_store: prepared physical query %s via %s parity hash: %w", queryName, planKind, err)
+	}
+	diag := result.Diagnostics
+	workers := diag.WorkerCount
+	if workers <= 0 {
+		workers = 1
+	}
+	scanDuration := hotRunElapsed
+	if diag.ScanNanos > 0 {
+		scanDuration = time.Duration(diag.ScanNanos)
+	}
+	reduceDuration := time.Duration(0)
+	if diag.ReduceNanos > 0 {
+		reduceDuration = time.Duration(diag.ReduceNanos)
+	}
+	return columnStoreQueryExecution{
+		ProductionHash:         productionHash,
+		ProductionHashKnown:    true,
+		StorageSource:          string(diag.StorageSource),
+		FallbackReason:         string(diag.FallbackReason),
+		ManifestRootName:       diag.ManifestRootName,
+		ManifestRoot:           diag.ManifestRoot,
+		ManifestGeneration:     diag.ManifestGeneration,
+		ActiveManifestChecksum: diag.ActiveManifestChecksum,
+		RowsProcessed:          diag.ReduceRows,
+		RowsProcessedKnown:     true,
+		RowsScanned:            diag.RowsScanned,
+		RowsMatched:            diag.RowsMatched,
+		ReduceRows:             diag.ReduceRows,
+		DecodedGranules:        diag.DecodedGranules,
+		DecodedBlocks:          diag.DecodedBlocks,
+		DecodedPayloadBytes:    diag.DecodedPayloadBytes,
+		MappedBytes:            diag.MappedBytes,
+		HeapCopyBytes:          diag.HeapCopyBytes,
+		PredicateCount:         diag.PredicateCount,
+		BytesRead:              diag.PhysicalBytesScanned,
+		RowMaterializations:    diag.RowMaterializations,
+		ResultCount:            resultCount,
+		MetadataHits:           diag.MetadataHits,
+		DictionaryCodeHits:     diag.DictionaryCodeHits,
+		Int64ValueHits:         diag.Int64ValueHits,
+		SkippedGranules:        diag.SkippedGranules,
+		ScheduledGranules:      diag.ScheduledGranules,
+		WorkerCount:            workers,
+		SegmentFileCacheHits:   diag.SegmentFileCacheHits,
+		SegmentFileCacheMisses: diag.SegmentFileCacheMisses,
+		SetupDuration:          setupElapsed,
+		HotRunDuration:         hotRunElapsed,
+		ScanDuration:           scanDuration,
+		ReduceDuration:         reduceDuration,
+		AdapterDuration:        time.Duration(diag.ResultShapeNanos),
+		ResultShapeDuration:    time.Duration(diag.ResultShapeNanos),
 		ParityHashDuration:     parityHashElapsed,
 	}, nil
 }
@@ -1899,6 +2111,392 @@ func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collectio
 		return nil, errors.New("column_store: retained-payload transform requires column-store config")
 	}
 	return collections.ColumnRetainedPayloadFromJSONDocument(*cfg, document)
+}
+
+func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int, rawHashes map[string]uint64, forcedPath string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string, queries []columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) ([]columnStoreJSONBenchCell, error) {
+	byQuery := make(map[string]columnStoreQueryMetric, len(queries))
+	for _, q := range queries {
+		byQuery[q.Name] = q
+	}
+	cells := make([]columnStoreJSONBenchCell, 0, len(queryNames)*2)
+	for _, name := range queryNames {
+		q, ok := byQuery[name]
+		if !ok {
+			return nil, fmt.Errorf("column_store: missing query metric for JSONBench cell %s", name)
+		}
+		cells = append(cells, columnStoreJSONBenchCellFromQueryMetric(q, cfg, retainedPayloadBytes))
+		preparedKind, ok := columnStorePreparedCellPlanKind(q.PlanLabel)
+		if !ok {
+			continue
+		}
+		exec, err := executeColumnStoreSuitePreparedPhysicalQuery(collection, name, preparedKind, assetReadIntegrity)
+		if err != nil {
+			cells = append(cells, columnStoreJSONBenchUnavailablePreparedCell(name, q, cfg, retainedPayloadBytes, err))
+			continue
+		}
+		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHashes[name], q, exec, preparedKind, cfg, retainedPayloadBytes)
+		cells = append(cells, cell)
+	}
+	return cells, nil
+}
+
+func columnStorePreparedCellPlanKind(planLabel string) (collections.ColumnQueryPlanKind, bool) {
+	switch planLabel {
+	case columnStorePathSerialColumnScan:
+		return collections.ColumnQueryPlanSerialColumnScan, true
+	case columnStorePathAggregateMetadata:
+		return collections.ColumnQueryPlanAggregateMetadata, true
+	default:
+		return "", false
+	}
+}
+
+func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) columnStoreJSONBenchCell {
+	cell := columnStoreBaseJSONBenchCell(q.Name, q.PlanLabel, cfg, retainedPayloadBytes)
+	if q.PlanLabel == columnStorePathRowStoreBaseline || q.PlanLabel == columnStorePathBTreeIndexBaseline {
+		cell.CellLabel = columnStoreJSONBenchCellRowScan
+		cell.ExecutionMode = columnStoreJSONBenchModeRowScan
+	} else {
+		cell.ExecutionMode = columnStoreJSONBenchModeDirect
+		cell.CellLabel = columnStoreJSONBenchActualCellLabel(q.PlanLabel, cell.ExecutionMode, q.StorageSource, q.MetadataHits)
+	}
+	cell.AliasOf = q.AliasOf
+	cell.StorageSource = q.StorageSource
+	cell.FallbackReason = q.FallbackReason
+	cell.MetadataDataScanPath = columnStoreJSONBenchActualScanPath(q.PlanLabel, q.StorageSource, q.MetadataHits)
+	cell.CompressionMode = q.CompressionAttribution.CompressionPolicyLabel
+	cell.RequestedCompression = q.CompressionAttribution.RequestedCompression
+	cell.ActualCompression = q.CompressionAttribution.ActualCompression
+	cell.RowCount = q.Rows
+	cell.RowsProcessed = q.RowsProcessed
+	cell.RowsProcessedKnown = q.RowsProcessedKnown
+	cell.BytesRead = q.BytesRead
+	cell.ResultCount = q.ResultCount
+	cell.RawHash = q.RawHash
+	cell.ResultHash = q.ProductionHash
+	cell.ParityWithRowScan = q.RawHash == q.ProductionHash
+	cell.ManifestRootName = q.ManifestRootName
+	cell.ManifestRoot = q.ManifestRoot
+	cell.ManifestGeneration = q.ManifestGeneration
+	cell.ActiveManifestChecksum = q.ActiveManifestChecksum
+	cell.PlannerDurationMS = q.PlannerDurationMS
+	cell.HotRunDurationMS = q.DurationMS
+	cell.ScanDurationMS = q.ScanDurationMS
+	cell.ReduceDurationMS = q.ReduceDurationMS
+	cell.ResultShapeDurationMS = q.AdapterDurationMS
+	cell.ParityHashDurationMS = q.ParityHashDurationMS
+	cell.MetadataHits = q.MetadataHits
+	cell.RowsScanned = q.RowsProcessed
+	cell.RowsMatched = q.RowsProcessed
+	cell.ReduceRows = q.RowsProcessed
+	cell.SkippedGranules = q.SkippedGranules
+	cell.ScheduledGranules = q.ScheduledGranules
+	cell.CompatibilityStatus = "available"
+	cell.CompressionAttribution = q.CompressionAttribution
+	return cell
+}
+
+func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, direct columnStoreQueryMetric, exec columnStoreQueryExecution, planKind collections.ColumnQueryPlanKind, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) columnStoreJSONBenchCell {
+	planLabel := string(planKind)
+	cell := columnStoreBaseJSONBenchCell(name, planLabel, cfg, retainedPayloadBytes)
+	cell.ExecutionMode = columnStoreJSONBenchModePrepared
+	cell.AliasOf = columnStoreQueryAliasOf(name, planLabel)
+	cell.StorageSource = exec.StorageSource
+	if cell.StorageSource == "" {
+		cell.StorageSource = direct.StorageSource
+	}
+	cell.FallbackReason = exec.FallbackReason
+	if cell.FallbackReason == "" {
+		cell.FallbackReason = string(collections.ColumnPhysicalQueryFallbackNone)
+	}
+	cell.CellLabel = columnStoreJSONBenchActualCellLabel(planLabel, cell.ExecutionMode, cell.StorageSource, exec.MetadataHits)
+	cell.MetadataDataScanPath = columnStoreJSONBenchActualScanPath(planLabel, cell.StorageSource, exec.MetadataHits)
+	cell.CompressionAttribution = columnStoreQueryCompressionAttribution(planLabel, cell.StorageSource, cell.FallbackReason, exec.BytesRead)
+	cell.CompressionMode = cell.CompressionAttribution.CompressionPolicyLabel
+	cell.RequestedCompression = cell.CompressionAttribution.RequestedCompression
+	cell.ActualCompression = cell.CompressionAttribution.ActualCompression
+	cell.RowCount = direct.Rows
+	cell.RowsProcessed = exec.RowsProcessed
+	cell.RowsProcessedKnown = exec.RowsProcessedKnown
+	cell.BytesRead = exec.BytesRead
+	cell.ResultCount = exec.ResultCount
+	cell.RawHash = rawHash
+	cell.ResultHash = exec.ProductionHash
+	cell.ParityWithRowScan = rawHash == exec.ProductionHash
+	cell.ManifestRootName = exec.ManifestRootName
+	if cell.ManifestRootName == "" {
+		cell.ManifestRootName = direct.ManifestRootName
+	}
+	cell.ManifestRoot = exec.ManifestRoot
+	if cell.ManifestRoot == 0 {
+		cell.ManifestRoot = direct.ManifestRoot
+	}
+	cell.ManifestGeneration = exec.ManifestGeneration
+	if cell.ManifestGeneration == 0 {
+		cell.ManifestGeneration = direct.ManifestGeneration
+	}
+	cell.ActiveManifestChecksum = exec.ActiveManifestChecksum
+	if cell.ActiveManifestChecksum == 0 {
+		cell.ActiveManifestChecksum = direct.ActiveManifestChecksum
+	}
+	cell.PreparedSetupDurationMS = durationMS(exec.SetupDuration)
+	cell.HotRunDurationMS = durationMS(exec.HotRunDuration)
+	cell.ScanDurationMS = durationMS(exec.ScanDuration)
+	cell.ReduceDurationMS = durationMS(exec.ReduceDuration)
+	cell.ResultShapeDurationMS = durationMS(exec.ResultShapeDuration)
+	cell.ParityHashDurationMS = durationMS(exec.ParityHashDuration)
+	cell.MetadataHits = exec.MetadataHits
+	cell.RowsScanned = exec.RowsScanned
+	cell.RowsMatched = exec.RowsMatched
+	cell.ReduceRows = exec.ReduceRows
+	cell.DecodedGranules = exec.DecodedGranules
+	cell.SkippedGranules = exec.SkippedGranules
+	cell.ScheduledGranules = exec.ScheduledGranules
+	cell.CompatibilityStatus = "available"
+	return cell
+}
+
+func columnStoreJSONBenchUnavailablePreparedCell(name string, direct columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64, err error) columnStoreJSONBenchCell {
+	planLabel := direct.PlanLabel
+	cell := columnStoreBaseJSONBenchCell(name, planLabel, cfg, retainedPayloadBytes)
+	cell.CellLabel = columnStoreJSONBenchCellLabel(planLabel, columnStoreJSONBenchModePrepared)
+	cell.ExecutionMode = columnStoreJSONBenchModePrepared
+	cell.AliasOf = direct.AliasOf
+	cell.StorageSource = direct.StorageSource
+	cell.FallbackReason = direct.FallbackReason
+	cell.MetadataDataScanPath = columnStoreJSONBenchScanPathForPlan(planLabel)
+	cell.RowCount = direct.Rows
+	cell.RawHash = direct.RawHash
+	cell.ResultHash = direct.ProductionHash
+	cell.ParityWithRowScan = false
+	cell.ManifestRootName = direct.ManifestRootName
+	cell.ManifestRoot = direct.ManifestRoot
+	cell.ManifestGeneration = direct.ManifestGeneration
+	cell.ActiveManifestChecksum = direct.ActiveManifestChecksum
+	cell.CompressionAttribution = direct.CompressionAttribution
+	cell.CompressionMode = direct.CompressionAttribution.CompressionPolicyLabel
+	cell.RequestedCompression = direct.CompressionAttribution.RequestedCompression
+	cell.ActualCompression = direct.CompressionAttribution.ActualCompression
+	cell.CompatibilityStatus = "unavailable"
+	cell.CompatibilityStatusReason = err.Error()
+	return cell
+}
+
+func columnStoreBaseJSONBenchCell(query, planLabel string, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) columnStoreJSONBenchCell {
+	return columnStoreJSONBenchCell{
+		Query:                       query,
+		SortLayout:                  columnStoreSortLayoutLabel(cfg),
+		SortKey:                     columnStoreSortKeyLabels(cfg),
+		PlanLabel:                   planLabel,
+		MutationMode:                columnStoreJSONBenchMutationInsertOnlyReopen,
+		RetainedPayloadPolicy:       columnStoreRetainedPayloadPolicyLabel(cfg),
+		RetainedPayloadBytes:        retainedPayloadBytes,
+		TypedStorageOwner:           columnStoreTypedStorageOwnerSummary(cfg),
+		TypedStorageOwnerColumns:    columnStoreTypedStorageOwnerColumns(cfg),
+		PredicateMode:               columnStorePredicateModeLabel(query),
+		RealPredicates:              columnStoreQueryUsesRealPredicates(query),
+		RetainedPayloadPolicyCaveat: columnStoreRetainedPayloadCaveat(cfg),
+		ReconstructionStatus:        columnStoreReconstructionStatus(cfg),
+		FullDataCell:                false,
+		FullDataCaveat:              columnStoreJSONBenchFullDataCaveat,
+		StorageAccountingCaveat:     columnStoreJSONBenchStorageCaveat,
+	}
+}
+
+func columnStoreJSONBenchCellLabel(planLabel, executionMode string) string {
+	if executionMode == columnStoreJSONBenchModePrepared {
+		if planLabel == columnStorePathAggregateMetadata {
+			return columnStoreJSONBenchCellColumnPreparedMetadata
+		}
+		return columnStoreJSONBenchCellColumnPrepared
+	}
+	if planLabel == columnStorePathRowStoreBaseline || planLabel == columnStorePathBTreeIndexBaseline {
+		return columnStoreJSONBenchCellRowScan
+	}
+	if planLabel == columnStorePathAggregateMetadata {
+		return columnStoreJSONBenchCellColumnDirectMetadata
+	}
+	return columnStoreJSONBenchCellColumnDirect
+}
+
+func columnStoreJSONBenchActualCellLabel(planLabel, executionMode, storageSource string, metadataHits int) string {
+	if columnStoreJSONBenchActualScanPath(planLabel, storageSource, metadataHits) == columnStoreJSONBenchScanPathMetadata {
+		if executionMode == columnStoreJSONBenchModePrepared {
+			return columnStoreJSONBenchCellColumnPreparedMetadata
+		}
+		return columnStoreJSONBenchCellColumnDirectMetadata
+	}
+	if executionMode == columnStoreJSONBenchModePrepared {
+		return columnStoreJSONBenchCellColumnPrepared
+	}
+	return columnStoreJSONBenchCellLabel(planLabel, executionMode)
+}
+
+func columnStoreJSONBenchActualScanPath(planLabel, storageSource string, metadataHits int) string {
+	if planLabel == columnStorePathAggregateMetadata && storageSource == string(collections.ColumnPhysicalQueryStorageSourceAggregateMetadata) && metadataHits > 0 {
+		return columnStoreJSONBenchScanPathMetadata
+	}
+	return columnStoreJSONBenchScanPathData
+}
+
+func columnStoreJSONBenchScanPathForPlan(planLabel string) string {
+	if planLabel == columnStorePathAggregateMetadata {
+		return columnStoreJSONBenchScanPathMetadata
+	}
+	return columnStoreJSONBenchScanPathData
+}
+
+func columnStoreSortKeyLabels(cfg *collections.ColumnStoreConfig) []string {
+	if cfg == nil || len(cfg.SortKey) == 0 {
+		return []string{"__treedb_primary_id"}
+	}
+	out := make([]string, 0, len(cfg.SortKey))
+	for _, key := range cfg.SortKey {
+		if key.Column == "" {
+			continue
+		}
+		out = append(out, key.Column)
+	}
+	if len(out) == 0 {
+		return []string{"__treedb_primary_id"}
+	}
+	return out
+}
+
+func columnStoreSortLayoutLabel(cfg *collections.ColumnStoreConfig) string {
+	keys := columnStoreSortKeyLabels(cfg)
+	if len(keys) == 1 && keys[0] == "__treedb_primary_id" {
+		return "typed-column-primary-id-control"
+	}
+	allTyped := columnStoreSortKeyAllTypedColumnOwned(cfg, keys)
+	joined := strings.Join(keys, ",")
+	if joined == "time_us" {
+		if allTyped {
+			return "typed-column-time"
+		}
+		return "declared-time_us-row-asset-compatibility"
+	}
+	if joined == "kind,operation,collection,did,time_us" {
+		if allTyped {
+			return "typed-column-filter-user-time"
+		}
+		return "declared-filter-user-time-mixed-owner-compatibility"
+	}
+	if allTyped {
+		return "typed-column-sortkey(" + joined + ")"
+	}
+	return "declared-sortkey-mixed-owner(" + joined + ")"
+}
+
+func columnStoreSortKeyAllTypedColumnOwned(cfg *collections.ColumnStoreConfig, keys []string) bool {
+	if cfg == nil || len(keys) == 0 {
+		return false
+	}
+	owners := make(map[string]collections.TypedStorageFieldOwner, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		owners[col.Name] = columnStoreColumnOwnerLabelValue(col)
+	}
+	for _, key := range keys {
+		if owners[key] != collections.TypedStorageOwnerColumnPart {
+			return false
+		}
+	}
+	return true
+}
+
+func columnStoreRetainedPayloadPolicyLabel(cfg *collections.ColumnStoreConfig) string {
+	if cfg == nil || cfg.RetainedPayload == "" {
+		return string(collections.ColumnRetainedPayloadFull)
+	}
+	return string(cfg.RetainedPayload)
+}
+
+func columnStoreRetainedPayloadCaveat(cfg *collections.ColumnStoreConfig) string {
+	switch columnStoreRetainedPayloadPolicyLabel(cfg) {
+	case string(collections.ColumnRetainedPayloadFull):
+		return "full source document retained for this gomap synthetic cell"
+	case string(collections.ColumnRetainedPayloadNonColumn):
+		return "declared columns are stripped into column assets; retained payload is query-shaped and not a full-data JSONBench row"
+	case string(collections.ColumnRetainedPayloadNone):
+		return "no source JSON payload retained; attribution-only query-shaped cell"
+	default:
+		return columnStoreJSONBenchSyntheticFixtureCaveat
+	}
+}
+
+func columnStoreReconstructionStatus(cfg *collections.ColumnStoreConfig) string {
+	if cfg == nil || cfg.Reconstruction == "" {
+		return "not_configured"
+	}
+	return fmt.Sprintf("configured_%s; full JSONBench retained-document reconstruction parity is tracked by #2117", cfg.Reconstruction)
+}
+
+func columnStoreColumnOwnerLabelValue(col collections.ColumnStoreColumn) collections.TypedStorageFieldOwner {
+	if col.Owner == "" {
+		return collections.TypedStorageOwnerRowAsset
+	}
+	return col.Owner
+}
+
+func columnStoreTypedStorageOwnerColumns(cfg *collections.ColumnStoreConfig) []columnStoreTypedOwnerColumn {
+	if cfg == nil {
+		return nil
+	}
+	out := make([]columnStoreTypedOwnerColumn, 0, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		out = append(out, columnStoreTypedOwnerColumn{Name: col.Name, Owner: string(columnStoreColumnOwnerLabelValue(col))})
+	}
+	return out
+}
+
+func columnStoreTypedStorageOwnerSummary(cfg *collections.ColumnStoreConfig) string {
+	owners := columnStoreTypedStorageOwnerColumns(cfg)
+	if len(owners) == 0 {
+		return "unknown"
+	}
+	first := owners[0].Owner
+	for _, owner := range owners[1:] {
+		if owner.Owner != first {
+			return "mixed"
+		}
+	}
+	return first
+}
+
+func columnStorePredicateModeLabel(query string) string {
+	switch query {
+	case columnStoreQueryQ2, columnStoreQueryQ3, columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+		return "synthetic_projection_fixture_no_jsonbench_kind_operation_collection_predicates; TreeDB/collections parity tests cover real predicate q1-q5 semantics"
+	default:
+		return "predicate_free"
+	}
+}
+
+func columnStoreQueryUsesRealPredicates(query string) bool {
+	// The unified_bench synthetic fixture currently validates production query
+	// modes and result hashes, not the external JSONBench predicate-bearing input
+	// shape. TreeDB/collections parity tests cover real predicate q1-q5 semantics.
+	return false
+}
+
+func columnStoreReportCaveats() []string {
+	return []string{
+		columnStoreJSONBenchSyntheticFixtureCaveat,
+		columnStoreJSONBenchFullDataCaveat,
+		columnStoreJSONBenchStorageCaveat,
+		"external snissn/JSONBench column-direct/column-prepared cells are a coordination item outside this gomap-only PR",
+		"current production default compression remains none; zstd/zstd_dict rows are unsupported/deferred report rows only",
+	}
+}
+
+func columnStoreColgranuleReuseMap() []columnStoreColgranuleReuse {
+	return []columnStoreColgranuleReuse{
+		{Source: "experiments/colgranule/jsonbench_split_document.go", ProductionTarget: "TreeDB/collections ColumnRetainedPayloadFromJSONDocument plus cmd/unified_bench synthetic fixture", Decision: "adapted", DivergenceReason: "gomap suite uses generated synthetic documents instead of external JSONBench input", Evidence: "retained_payload_bytes, retained_payload_policy, and full_data_caveat are reported per cell"},
+		{Source: "experiments/colgranule/jsonbench_part_queries.go", ProductionTarget: "TreeDB/collections RunColumnPhysicalQuery/PrepareColumnPhysicalQuery and cmd/unified_bench query matrix", Decision: "adapted", DivergenceReason: "production APIs own direct/prepared execution; experiments remain reference only", Evidence: "jsonbench_cells record direct/prepared mode, scan path, storage source, hashes, rows, and timing fields"},
+		{Source: "experiments/colgranule/jsonbench_report.go", ProductionTarget: "cmd/unified_bench/column_store_results.{json,md,html}", Decision: "adapted", DivergenceReason: "unified_bench keeps native TreeDB artifact names and benchprof integration", Evidence: "report shape tests require query, sort layout, source, mode, compression, mutation, owner, row count, and caveat labels"},
+		{Source: "experiments/colgranule/jsonbench_part_build_report.go", ProductionTarget: "cmd/unified_bench byte_accounting and codec_layouts", Decision: "adapted", DivergenceReason: "#2118 owns final apples-to-apples full storage accounting", Evidence: "storage_accounting_caveat, column_asset_bytes, retained_payload_bytes, codec_layouts, and compression_attribution remain machine-readable"},
+		{Source: "experiments/colgranule/part_accounting.go and part_image.go", ProductionTarget: "TreeDB/collections ColumnStorePhysicalAccounting plus codec/layout matrix", Decision: "ported", DivergenceReason: "production accounting comes from persisted column assets and typed_column_part details", Evidence: "typed_column_part codec rows and unsupported zstd rows surface when accounting is available"},
+	}
 }
 
 var columnStoreQueryNameList = [...]string{
@@ -2566,6 +3164,15 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	if report.CompressionMatrixNote != "" {
 		sb.WriteString(fmt.Sprintf("- compression matrix note: %s\n", report.CompressionMatrixNote))
 	}
+	if report.ExternalJSONBenchStatus != "" {
+		sb.WriteString(fmt.Sprintf("- external JSONBench status: %s\n", report.ExternalJSONBenchStatus))
+	}
+	if len(report.ReportCaveats) != 0 {
+		sb.WriteString("- report caveats:\n")
+		for _, caveat := range report.ReportCaveats {
+			sb.WriteString(fmt.Sprintf("  - %s\n", caveat))
+		}
+	}
 	if report.ProfileFinalizeError != "" {
 		sb.WriteString(fmt.Sprintf("- profile finalize error: `%s`\n", report.ProfileFinalizeError))
 	}
@@ -2578,6 +3185,9 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		sb.WriteString(fmt.Sprintf("| `%s` | %.3f | %.3f | %.3f | %d |\n", st.Name, st.DurationMS, st.RowsPerSecond, st.MiBPerSecond, st.Bytes))
 	}
 	sb.WriteString("\n")
+
+	renderColumnStoreJSONBenchCellsMarkdown(&sb, report)
+	renderColumnStoreColgranuleReuseMarkdown(&sb, report)
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
 	sb.WriteString("| query | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
@@ -2674,6 +3284,66 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		columnStoreWriteArtifactLine(&sb, "mutex delta profile", report.Artifacts.MutexDeltaProfile)
 	}
 	return sb.String()
+}
+
+func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {
+	sb.WriteString("## Production JSONBench Synthetic Cells\n\n")
+	if len(report.JSONBenchCells) == 0 {
+		sb.WriteString("No JSONBench synthetic cells were recorded.\n\n")
+		return
+	}
+	sb.WriteString("| cell | query | sort layout | storage source | mode | metadata/data path | compression | mutation | retained payload | typed owner | rows | rows processed | bytes read | result hash | parity | full-data caveat | reconstruction | status |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|\n")
+	for _, cell := range report.JSONBenchCells {
+		parity := "pass"
+		if !cell.ParityWithRowScan {
+			parity = "FAIL"
+		}
+		status := cell.CompatibilityStatus
+		if cell.CompatibilityStatusReason != "" {
+			status += ": " + cell.CompatibilityStatusReason
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %d | %d | %d | %016x | %s | %s | %s | %s |\n",
+			markdownCodeTableText(cell.CellLabel),
+			markdownCodeTableText(cell.Query),
+			markdownCodeTableText(cell.SortLayout),
+			markdownCodeTableText(cell.StorageSource),
+			markdownCodeTableText(cell.ExecutionMode),
+			markdownCodeTableText(cell.MetadataDataScanPath),
+			markdownCodeTableText(cell.CompressionMode),
+			markdownCodeTableText(cell.MutationMode),
+			markdownCodeTableText(cell.RetainedPayloadPolicy),
+			markdownCodeTableText(cell.TypedStorageOwner),
+			cell.RowCount,
+			cell.RowsProcessed,
+			cell.BytesRead,
+			cell.ResultHash,
+			parity,
+			markdownTableText(cell.FullDataCaveat),
+			markdownTableText(cell.ReconstructionStatus),
+			markdownTableText(status),
+		))
+	}
+	sb.WriteString("\n")
+}
+
+func renderColumnStoreColgranuleReuseMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {
+	if len(report.ColgranuleReuseMap) == 0 {
+		return
+	}
+	sb.WriteString("## Colgranule Reuse Map\n\n")
+	sb.WriteString("| colgranule source | production target | decision | divergence | evidence |\n")
+	sb.WriteString("|---|---|---|---|---|\n")
+	for _, row := range report.ColgranuleReuseMap {
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
+			markdownTableText(row.Source),
+			markdownTableText(row.ProductionTarget),
+			markdownCodeTableText(row.Decision),
+			markdownTableText(row.DivergenceReason),
+			markdownTableText(row.Evidence),
+		))
+	}
+	sb.WriteString("\n")
 }
 
 func renderColumnStoreQueryCompressionAttributionMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {

@@ -332,6 +332,21 @@ The suite writes:
 - `insights.md`, `insights.json`, `insights.html`
 - configured runtime profiles, including `cpu_column_store_treedb_column_store.pprof`, `allocs_column_store_treedb_column_store.pprof`, `checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof`, `block.pprof`, `mutex.pprof`, `trace.out`, and the query-phase delta `block_column_store_treedb_column_store.pprof` / `mutex_column_store_treedb_column_store.pprof` when those profile classes produce non-empty deltas
 
+`column_store_results.json` includes a `jsonbench_cells` matrix for the in-repo
+synthetic JSONBench-shaped fixture. Each cell records the external-facing label
+(`row-scan`, `column-direct`, `column-prepared`, `column-direct-metadata`, or
+`column-prepared-metadata` when the mode exists), query name, sort layout,
+storage source, direct/prepared mode, metadata-vs-data path, compression mode,
+mutation mode, retained-payload policy, typed storage owner, row count, result
+hash, and reconstruction/full-data caveats. Prepared cells are collected in a
+separate `jsonbench_cell_report` stage after query-phase profiles finish, so the
+query CPU/allocation profiles and `BenchmarkColumnStoreSuite*` query-loop
+benchmarks remain scoped to the original measured query loop. These rows are
+gomap-local smoke coverage; external `snissn/JSONBench` cells remain a separate
+coordination item. Until #2117 and #2118 land, the report must keep full-data
+retained-JSON and apples-to-apples storage-accounting caveats visible and must
+not be used as a headline ClickHouse full-data comparison.
+
 PR descriptions for column-store milestones should paste the command, row count,
 profile, forced path, q1-q5/q5_metadata rows/sec, MiB/sec, ns/row,
 planner time, scan time, reduce time, worker count, scheduled/skipped granules,
