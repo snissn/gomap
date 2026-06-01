@@ -920,6 +920,9 @@ func typedColumnSortedGroupedDistinctDictionaryValuesByCode(column typedColumnAd
 	if err := validateTypedColumnAdapterStringDictionary(column, column.Definition.Cardinality, column.Dictionary); err != nil {
 		return nil, err
 	}
+	if uint64(int(column.Definition.Cardinality)) != uint64(column.Definition.Cardinality) {
+		return nil, fmt.Errorf("collections: sorted grouped-distinct dictionary cardinality=%d exceeds host int for column %q", column.Definition.Cardinality, column.Definition.Name)
+	}
 	valuesByCode := make([]string, int(column.Definition.Cardinality))
 	for value, code := range column.Dictionary {
 		valuesByCode[code] = value
