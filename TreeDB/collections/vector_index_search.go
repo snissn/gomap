@@ -371,6 +371,64 @@ type VectorIndexSearchStats struct {
 	PreparedGraphSearchViews uint64 `json:"prepared_graph_search_views,omitempty"`
 	// GraphRowFallbacks aggregates compatibility graph-row reads/fallbacks observed during vector/norm/adjacency/result materialization.
 	GraphRowFallbacks uint64 `json:"graph_row_fallbacks,omitempty"`
+
+	// BenchmarkDebugSearches reports searches collected with benchmark_debug graph-control-flow instrumentation.
+	BenchmarkDebugSearches uint64 `json:"benchmark_debug_searches,omitempty"`
+	// NeighborTiles counts expanded adjacency neighbor tiles.
+	NeighborTiles uint64 `json:"neighbor_tiles,omitempty"`
+	// NeighborTileNeighbors sums neighbor counts across expanded adjacency tiles.
+	NeighborTileNeighbors uint64 `json:"neighbor_tile_neighbors,omitempty"`
+	// NeighborTileMaxSize is the largest expanded adjacency tile.
+	NeighborTileMaxSize    uint64 `json:"neighbor_tile_max_size,omitempty"`
+	NeighborTileSize0      uint64 `json:"neighbor_tile_size_0,omitempty"`
+	NeighborTileSize1      uint64 `json:"neighbor_tile_size_1,omitempty"`
+	NeighborTileSize2To4   uint64 `json:"neighbor_tile_size_2_4,omitempty"`
+	NeighborTileSize5To8   uint64 `json:"neighbor_tile_size_5_8,omitempty"`
+	NeighborTileSize9To16  uint64 `json:"neighbor_tile_size_9_16,omitempty"`
+	NeighborTileSize17Plus uint64 `json:"neighbor_tile_size_17_plus,omitempty"`
+	// ScoreBatchSingletons counts singleton scoring batches in benchmark_debug mode.
+	ScoreBatchSingletons uint64 `json:"score_batch_singletons,omitempty"`
+	ScoreBatchSize2To4   uint64 `json:"score_batch_size_2_4,omitempty"`
+	ScoreBatchSize5To8   uint64 `json:"score_batch_size_5_8,omitempty"`
+	ScoreBatchSize9To16  uint64 `json:"score_batch_size_9_16,omitempty"`
+	ScoreBatchSize17Plus uint64 `json:"score_batch_size_17_plus,omitempty"`
+	// ScoredNeighbors counts graph neighbors that reached scoring; skipped neighbors partition filter and already-visited skips.
+	ScoredNeighbors                       uint64 `json:"scored_neighbors,omitempty"`
+	SkippedNeighbors                      uint64 `json:"skipped_neighbors,omitempty"`
+	AlreadyVisitedSkips                   uint64 `json:"already_visited_skips,omitempty"`
+	FilterSkips                           uint64 `json:"filter_skips,omitempty"`
+	UpperLayerScores                      uint64 `json:"upper_layer_scores,omitempty"`
+	UpperLayerEntryScores                 uint64 `json:"upper_layer_entry_scores,omitempty"`
+	UpperLayerNeighborScores              uint64 `json:"upper_layer_neighbor_scores,omitempty"`
+	UpperLayerEdgeVisits                  uint64 `json:"upper_layer_edge_visits,omitempty"`
+	UpperLayerScoredNeighbors             uint64 `json:"upper_layer_scored_neighbors,omitempty"`
+	UpperLayerFilterSkips                 uint64 `json:"upper_layer_filter_skips,omitempty"`
+	Layer0Scores                          uint64 `json:"layer0_scores,omitempty"`
+	Layer0SeedScores                      uint64 `json:"layer0_seed_scores,omitempty"`
+	Layer0NeighborScores                  uint64 `json:"layer0_neighbor_scores,omitempty"`
+	Layer0EdgeVisits                      uint64 `json:"layer0_edge_visits,omitempty"`
+	Layer0ScoredNeighbors                 uint64 `json:"layer0_scored_neighbors,omitempty"`
+	Layer0AlreadyVisitedSkips             uint64 `json:"layer0_already_visited_skips,omitempty"`
+	Layer0FilterSkips                     uint64 `json:"layer0_filter_skips,omitempty"`
+	FrontierPushes                        uint64 `json:"frontier_pushes,omitempty"`
+	FrontierPops                          uint64 `json:"frontier_pops,omitempty"`
+	FrontierPopMisses                     uint64 `json:"frontier_pop_misses,omitempty"`
+	FrontierSiftUpSteps                   uint64 `json:"frontier_sift_up_steps,omitempty"`
+	FrontierSiftDownSteps                 uint64 `json:"frontier_sift_down_steps,omitempty"`
+	TopKInsertAttempts                    uint64 `json:"top_k_insert_attempts,omitempty"`
+	TopKInsertSuccesses                   uint64 `json:"top_k_insert_successes,omitempty"`
+	TopKInsertRejections                  uint64 `json:"top_k_insert_rejections,omitempty"`
+	TopKShiftSteps                        uint64 `json:"top_k_shift_steps,omitempty"`
+	VisitedMarkChecks                     uint64 `json:"visited_mark_checks,omitempty"`
+	VisitedMarkHits                       uint64 `json:"visited_mark_hits,omitempty"`
+	VisitedMarkMisses                     uint64 `json:"visited_mark_misses,omitempty"`
+	ExactModeSearches                     uint64 `json:"exact_mode_searches,omitempty"`
+	ExactCandidateOrderObservations       uint64 `json:"exact_candidate_order_observations,omitempty"`
+	ExactCandidateOrderTransitions        uint64 `json:"exact_candidate_order_transitions,omitempty"`
+	ExactCandidateOrderAdjacentForward    uint64 `json:"exact_candidate_order_adjacent_forward,omitempty"`
+	ExactCandidateOrderNonAdjacentForward uint64 `json:"exact_candidate_order_non_adjacent_forward,omitempty"`
+	ExactCandidateOrderBackwardJumps      uint64 `json:"exact_candidate_order_backward_jumps,omitempty"`
+	ExactCandidateOrderMaxForwardRun      uint64 `json:"exact_candidate_order_max_forward_run,omitempty"`
 	// DocumentRowRefStateFetches counts post-top-k document fetches served with vector-index row-ref state.
 	DocumentRowRefStateFetches uint64 `json:"document_row_ref_state_fetches,omitempty"`
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
@@ -956,99 +1014,150 @@ func deltaInt64(before, after int64) int64 {
 
 func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearchStats, readerStats columnPhysicalRowReaderStats) VectorIndexSearchStats {
 	return VectorIndexSearchStats{
-		GraphRows:                            uint64(readerStats.Rows),
-		CandidateRows:                        searchStats.CandidateRows,
-		Candidates:                           searchStats.Candidates,
-		Edges:                                searchStats.Edges,
-		VisitedNodes:                         searchStats.VisitedNodes,
-		VisitedEdges:                         searchStats.VisitedEdges,
-		VectorBytesRead:                      searchStats.VectorBytesRead,
-		NormBytesRead:                        searchStats.NormBytesRead,
-		AdjacencyBytesRead:                   searchStats.AdjacencyBytesRead,
-		CandidateFetches:                     searchStats.CandidateFetches,
-		ScoreBatchCalls:                      searchStats.ScoreBatchCalls,
-		ScoreBatchCandidates:                 searchStats.ScoreBatchCandidates,
-		ScoreBatchMaxTileSize:                searchStats.ScoreBatchMaxTileSize,
-		ScoreBatchOptimizedCalls:             searchStats.ScoreBatchOptimizedCalls,
-		ScoreBatchScalarFallbackCalls:        searchStats.ScoreBatchScalarFallbackCalls,
-		PreparedScoreCalls:                   searchStats.PreparedScoreCalls,
-		ScoreFloat64Fallbacks:                searchStats.ScoreFloat64Fallbacks,
-		ExpansionFetches:                     searchStats.ExpansionFetches,
-		ResultFetches:                        searchStats.ResultFetches,
-		RowFetches:                           readerStats.RowFetches,
-		BatchFetches:                         readerStats.BatchFetches,
-		RowsFetched:                          readerStats.RowsFetched,
-		CacheHits:                            readerStats.CacheHits,
-		CacheMisses:                          readerStats.CacheMisses,
-		DecodedBlocks:                        readerStats.DecodedBlocks,
-		GranulesTouched:                      readerStats.GranulesTouched,
-		PhysicalBytesRead:                    readerStats.PhysicalBytesRead,
-		MaxResidentBytes:                     readerStats.MaxResidentBytes,
-		OpenGranulesRead:                     uint64(readerStats.OpenGranulesRead),
-		OpenPhysicalBytesRead:                readerStats.OpenPhysicalBytesRead,
-		VectorDirectViews:                    searchStats.VectorDirectViews,
-		VectorMmapDirectViews:                searchStats.VectorMmapDirectViews,
-		VectorHeapCopyTypedViews:             searchStats.VectorHeapCopyTypedViews,
-		VectorScratchDecodes:                 searchStats.VectorScratchDecodes,
-		VectorPreparedDirectViews:            searchStats.VectorPreparedDirectViews,
-		VectorPreparedIdentityMappings:       searchStats.VectorPreparedIdentityMappings,
-		VectorPreparedRowRefMappings:         searchStats.VectorPreparedRowRefMappings,
-		VectorCertificationFailures:          searchStats.VectorCertificationFailures,
-		VectorAbsoluteOffsetUnaligned:        searchStats.VectorAbsoluteOffsetUnaligned,
-		VectorActualPointerUnaligned:         searchStats.VectorActualPointerUnaligned,
-		VectorStaleHandles:                   searchStats.VectorStaleHandles,
-		AdjacencyDirectViews:                 searchStats.AdjacencyDirectViews,
-		AdjacencyMmapDirectViews:             searchStats.AdjacencyMmapDirectViews,
-		AdjacencyHeapCopyTypedViews:          searchStats.AdjacencyHeapCopyTypedViews,
-		AdjacencyPreparedCSRDirectViews:      searchStats.AdjacencyPreparedCSRDirectViews,
-		AdjacencyPreparedCSRMmapDirectViews:  searchStats.AdjacencyPreparedCSRMmapDirectViews,
-		AdjacencyTypedListDirectViews:        searchStats.AdjacencyTypedListDirectViews,
-		AdjacencyTypedListMmapDirectViews:    searchStats.AdjacencyTypedListMmapDirectViews,
-		AdjacencyTypedListHeapCopyTypedViews: searchStats.AdjacencyTypedListHeapCopyTypedViews,
-		AdjacencyTypedListScratchDecodes:     searchStats.AdjacencyTypedListScratchDecodes,
-		AdjacencyLegacyFallbacks:             searchStats.AdjacencyLegacyFallbacks,
-		AdjacencySourceUnavailable:           searchStats.AdjacencySourceUnavailable,
-		AdjacencySourceFallbacks:             searchStats.AdjacencySourceFallbacks,
-		AdjacencyCertificationFailures:       searchStats.AdjacencyCertificationFailures,
-		AdjacencyValidationFailures:          searchStats.AdjacencyValidationFailures,
-		AdjacencyAbsoluteOffsetUnaligned:     searchStats.AdjacencyAbsoluteOffsetUnaligned,
-		AdjacencyActualPointerUnaligned:      searchStats.AdjacencyActualPointerUnaligned,
-		AdjacencyStaleHandles:                searchStats.AdjacencyStaleHandles,
-		AdjacencyScratchDecodes:              searchStats.AdjacencyScratchDecodes,
-		NormDirectViews:                      searchStats.NormDirectViews,
-		NormMmapDirectViews:                  searchStats.NormMmapDirectViews,
-		NormHeapCopyTypedViews:               searchStats.NormHeapCopyTypedViews,
-		NormScratchDecodes:                   searchStats.NormScratchDecodes,
-		NormPreparedDirectViews:              searchStats.NormPreparedDirectViews,
-		NormSourceUnavailable:                searchStats.NormSourceUnavailable,
-		NormSourceFallbacks:                  searchStats.NormSourceFallbacks,
-		NormValidationFailures:               searchStats.NormValidationFailures,
-		NormAbsoluteOffsetUnaligned:          searchStats.NormAbsoluteOffsetUnaligned,
-		NormActualPointerUnaligned:           searchStats.NormActualPointerUnaligned,
-		NormStaleHandles:                     searchStats.NormStaleHandles,
-		NormMappedBytes:                      searchStats.NormMappedBytes,
-		NormHeapCopyBytes:                    searchStats.NormHeapCopyBytes,
-		NormDecodedBytes:                     searchStats.NormDecodedBytes,
-		NormActiveHandles:                    searchStats.NormActiveHandles,
-		NormDeniedResources:                  searchStats.NormDeniedResources,
-		TypedColumnMappedBytes:               searchStats.TypedColumnMappedBytes,
-		TypedColumnHeapCopyBytes:             searchStats.TypedColumnHeapCopyBytes,
-		TypedColumnDecodedBytes:              searchStats.TypedColumnDecodedBytes,
-		TypedColumnActiveHandles:             searchStats.TypedColumnActiveHandles,
-		TypedColumnDeniedResources:           searchStats.TypedColumnDeniedResources,
-		TypedColumnFallbacks:                 searchStats.TypedColumnFallbacks,
-		RowRefVectorSourceState:              searchStats.RowRefVectorSourceState,
-		RowRefVectorSourceLegacyGraphIDs:     searchStats.RowRefVectorSourceLegacyGraphIDs,
-		RowRefStatePreparedViews:             searchStats.RowRefStatePreparedViews,
-		RowRefStateMmapDirectFields:          searchStats.RowRefStateMmapDirectFields,
-		RowRefStateResultRefs:                searchStats.RowRefStateResultRefs,
-		RowRefStateSourceUnavailable:         searchStats.RowRefStateSourceUnavailable,
-		RowRefStateSourceFallbacks:           searchStats.RowRefStateSourceFallbacks,
-		ResultIDPreparedBytesViews:           searchStats.ResultIDPreparedBytesViews,
-		ResultIDTypedBytesState:              searchStats.ResultIDTypedBytesState,
-		ResultIDGraphFallbacks:               searchStats.ResultIDGraphFallbacks,
-		ResultIDStateValidationFailures:      searchStats.ResultIDStateValidationFailures,
-		PreparedGraphSearchViews:             searchStats.PreparedGraphSearchViews,
-		GraphRowFallbacks:                    searchStats.GraphRowFallbacks,
+		GraphRows:                             uint64(readerStats.Rows),
+		CandidateRows:                         searchStats.CandidateRows,
+		Candidates:                            searchStats.Candidates,
+		Edges:                                 searchStats.Edges,
+		VisitedNodes:                          searchStats.VisitedNodes,
+		VisitedEdges:                          searchStats.VisitedEdges,
+		VectorBytesRead:                       searchStats.VectorBytesRead,
+		NormBytesRead:                         searchStats.NormBytesRead,
+		AdjacencyBytesRead:                    searchStats.AdjacencyBytesRead,
+		CandidateFetches:                      searchStats.CandidateFetches,
+		ScoreBatchCalls:                       searchStats.ScoreBatchCalls,
+		ScoreBatchCandidates:                  searchStats.ScoreBatchCandidates,
+		ScoreBatchMaxTileSize:                 searchStats.ScoreBatchMaxTileSize,
+		ScoreBatchOptimizedCalls:              searchStats.ScoreBatchOptimizedCalls,
+		ScoreBatchScalarFallbackCalls:         searchStats.ScoreBatchScalarFallbackCalls,
+		PreparedScoreCalls:                    searchStats.PreparedScoreCalls,
+		ScoreFloat64Fallbacks:                 searchStats.ScoreFloat64Fallbacks,
+		ExpansionFetches:                      searchStats.ExpansionFetches,
+		ResultFetches:                         searchStats.ResultFetches,
+		RowFetches:                            readerStats.RowFetches,
+		BatchFetches:                          readerStats.BatchFetches,
+		RowsFetched:                           readerStats.RowsFetched,
+		CacheHits:                             readerStats.CacheHits,
+		CacheMisses:                           readerStats.CacheMisses,
+		DecodedBlocks:                         readerStats.DecodedBlocks,
+		GranulesTouched:                       readerStats.GranulesTouched,
+		PhysicalBytesRead:                     readerStats.PhysicalBytesRead,
+		MaxResidentBytes:                      readerStats.MaxResidentBytes,
+		OpenGranulesRead:                      uint64(readerStats.OpenGranulesRead),
+		OpenPhysicalBytesRead:                 readerStats.OpenPhysicalBytesRead,
+		VectorDirectViews:                     searchStats.VectorDirectViews,
+		VectorMmapDirectViews:                 searchStats.VectorMmapDirectViews,
+		VectorHeapCopyTypedViews:              searchStats.VectorHeapCopyTypedViews,
+		VectorScratchDecodes:                  searchStats.VectorScratchDecodes,
+		VectorPreparedDirectViews:             searchStats.VectorPreparedDirectViews,
+		VectorPreparedIdentityMappings:        searchStats.VectorPreparedIdentityMappings,
+		VectorPreparedRowRefMappings:          searchStats.VectorPreparedRowRefMappings,
+		VectorCertificationFailures:           searchStats.VectorCertificationFailures,
+		VectorAbsoluteOffsetUnaligned:         searchStats.VectorAbsoluteOffsetUnaligned,
+		VectorActualPointerUnaligned:          searchStats.VectorActualPointerUnaligned,
+		VectorStaleHandles:                    searchStats.VectorStaleHandles,
+		AdjacencyDirectViews:                  searchStats.AdjacencyDirectViews,
+		AdjacencyMmapDirectViews:              searchStats.AdjacencyMmapDirectViews,
+		AdjacencyHeapCopyTypedViews:           searchStats.AdjacencyHeapCopyTypedViews,
+		AdjacencyPreparedCSRDirectViews:       searchStats.AdjacencyPreparedCSRDirectViews,
+		AdjacencyPreparedCSRMmapDirectViews:   searchStats.AdjacencyPreparedCSRMmapDirectViews,
+		AdjacencyTypedListDirectViews:         searchStats.AdjacencyTypedListDirectViews,
+		AdjacencyTypedListMmapDirectViews:     searchStats.AdjacencyTypedListMmapDirectViews,
+		AdjacencyTypedListHeapCopyTypedViews:  searchStats.AdjacencyTypedListHeapCopyTypedViews,
+		AdjacencyTypedListScratchDecodes:      searchStats.AdjacencyTypedListScratchDecodes,
+		AdjacencyLegacyFallbacks:              searchStats.AdjacencyLegacyFallbacks,
+		AdjacencySourceUnavailable:            searchStats.AdjacencySourceUnavailable,
+		AdjacencySourceFallbacks:              searchStats.AdjacencySourceFallbacks,
+		AdjacencyCertificationFailures:        searchStats.AdjacencyCertificationFailures,
+		AdjacencyValidationFailures:           searchStats.AdjacencyValidationFailures,
+		AdjacencyAbsoluteOffsetUnaligned:      searchStats.AdjacencyAbsoluteOffsetUnaligned,
+		AdjacencyActualPointerUnaligned:       searchStats.AdjacencyActualPointerUnaligned,
+		AdjacencyStaleHandles:                 searchStats.AdjacencyStaleHandles,
+		AdjacencyScratchDecodes:               searchStats.AdjacencyScratchDecodes,
+		NormDirectViews:                       searchStats.NormDirectViews,
+		NormMmapDirectViews:                   searchStats.NormMmapDirectViews,
+		NormHeapCopyTypedViews:                searchStats.NormHeapCopyTypedViews,
+		NormScratchDecodes:                    searchStats.NormScratchDecodes,
+		NormPreparedDirectViews:               searchStats.NormPreparedDirectViews,
+		NormSourceUnavailable:                 searchStats.NormSourceUnavailable,
+		NormSourceFallbacks:                   searchStats.NormSourceFallbacks,
+		NormValidationFailures:                searchStats.NormValidationFailures,
+		NormAbsoluteOffsetUnaligned:           searchStats.NormAbsoluteOffsetUnaligned,
+		NormActualPointerUnaligned:            searchStats.NormActualPointerUnaligned,
+		NormStaleHandles:                      searchStats.NormStaleHandles,
+		NormMappedBytes:                       searchStats.NormMappedBytes,
+		NormHeapCopyBytes:                     searchStats.NormHeapCopyBytes,
+		NormDecodedBytes:                      searchStats.NormDecodedBytes,
+		NormActiveHandles:                     searchStats.NormActiveHandles,
+		NormDeniedResources:                   searchStats.NormDeniedResources,
+		TypedColumnMappedBytes:                searchStats.TypedColumnMappedBytes,
+		TypedColumnHeapCopyBytes:              searchStats.TypedColumnHeapCopyBytes,
+		TypedColumnDecodedBytes:               searchStats.TypedColumnDecodedBytes,
+		TypedColumnActiveHandles:              searchStats.TypedColumnActiveHandles,
+		TypedColumnDeniedResources:            searchStats.TypedColumnDeniedResources,
+		TypedColumnFallbacks:                  searchStats.TypedColumnFallbacks,
+		RowRefVectorSourceState:               searchStats.RowRefVectorSourceState,
+		RowRefVectorSourceLegacyGraphIDs:      searchStats.RowRefVectorSourceLegacyGraphIDs,
+		RowRefStatePreparedViews:              searchStats.RowRefStatePreparedViews,
+		RowRefStateMmapDirectFields:           searchStats.RowRefStateMmapDirectFields,
+		RowRefStateResultRefs:                 searchStats.RowRefStateResultRefs,
+		RowRefStateSourceUnavailable:          searchStats.RowRefStateSourceUnavailable,
+		RowRefStateSourceFallbacks:            searchStats.RowRefStateSourceFallbacks,
+		ResultIDPreparedBytesViews:            searchStats.ResultIDPreparedBytesViews,
+		ResultIDTypedBytesState:               searchStats.ResultIDTypedBytesState,
+		ResultIDGraphFallbacks:                searchStats.ResultIDGraphFallbacks,
+		ResultIDStateValidationFailures:       searchStats.ResultIDStateValidationFailures,
+		PreparedGraphSearchViews:              searchStats.PreparedGraphSearchViews,
+		GraphRowFallbacks:                     searchStats.GraphRowFallbacks,
+		BenchmarkDebugSearches:                searchStats.BenchmarkDebugSearches,
+		NeighborTiles:                         searchStats.NeighborTiles,
+		NeighborTileNeighbors:                 searchStats.NeighborTileNeighbors,
+		NeighborTileMaxSize:                   searchStats.NeighborTileMaxSize,
+		NeighborTileSize0:                     searchStats.NeighborTileSize0,
+		NeighborTileSize1:                     searchStats.NeighborTileSize1,
+		NeighborTileSize2To4:                  searchStats.NeighborTileSize2To4,
+		NeighborTileSize5To8:                  searchStats.NeighborTileSize5To8,
+		NeighborTileSize9To16:                 searchStats.NeighborTileSize9To16,
+		NeighborTileSize17Plus:                searchStats.NeighborTileSize17Plus,
+		ScoreBatchSingletons:                  searchStats.ScoreBatchSingletons,
+		ScoreBatchSize2To4:                    searchStats.ScoreBatchSize2To4,
+		ScoreBatchSize5To8:                    searchStats.ScoreBatchSize5To8,
+		ScoreBatchSize9To16:                   searchStats.ScoreBatchSize9To16,
+		ScoreBatchSize17Plus:                  searchStats.ScoreBatchSize17Plus,
+		ScoredNeighbors:                       searchStats.ScoredNeighbors,
+		SkippedNeighbors:                      searchStats.SkippedNeighbors,
+		AlreadyVisitedSkips:                   searchStats.AlreadyVisitedSkips,
+		FilterSkips:                           searchStats.FilterSkips,
+		UpperLayerScores:                      searchStats.UpperLayerScores,
+		UpperLayerEntryScores:                 searchStats.UpperLayerEntryScores,
+		UpperLayerNeighborScores:              searchStats.UpperLayerNeighborScores,
+		UpperLayerEdgeVisits:                  searchStats.UpperLayerEdgeVisits,
+		UpperLayerScoredNeighbors:             searchStats.UpperLayerScoredNeighbors,
+		UpperLayerFilterSkips:                 searchStats.UpperLayerFilterSkips,
+		Layer0Scores:                          searchStats.Layer0Scores,
+		Layer0SeedScores:                      searchStats.Layer0SeedScores,
+		Layer0NeighborScores:                  searchStats.Layer0NeighborScores,
+		Layer0EdgeVisits:                      searchStats.Layer0EdgeVisits,
+		Layer0ScoredNeighbors:                 searchStats.Layer0ScoredNeighbors,
+		Layer0AlreadyVisitedSkips:             searchStats.Layer0AlreadyVisitedSkips,
+		Layer0FilterSkips:                     searchStats.Layer0FilterSkips,
+		FrontierPushes:                        searchStats.FrontierPushes,
+		FrontierPops:                          searchStats.FrontierPops,
+		FrontierPopMisses:                     searchStats.FrontierPopMisses,
+		FrontierSiftUpSteps:                   searchStats.FrontierSiftUpSteps,
+		FrontierSiftDownSteps:                 searchStats.FrontierSiftDownSteps,
+		TopKInsertAttempts:                    searchStats.TopKInsertAttempts,
+		TopKInsertSuccesses:                   searchStats.TopKInsertSuccesses,
+		TopKInsertRejections:                  searchStats.TopKInsertRejections,
+		TopKShiftSteps:                        searchStats.TopKShiftSteps,
+		VisitedMarkChecks:                     searchStats.VisitedMarkChecks,
+		VisitedMarkHits:                       searchStats.VisitedMarkHits,
+		VisitedMarkMisses:                     searchStats.VisitedMarkMisses,
+		ExactModeSearches:                     searchStats.ExactModeSearches,
+		ExactCandidateOrderObservations:       searchStats.ExactCandidateOrderObservations,
+		ExactCandidateOrderTransitions:        searchStats.ExactCandidateOrderTransitions,
+		ExactCandidateOrderAdjacentForward:    searchStats.ExactCandidateOrderAdjacentForward,
+		ExactCandidateOrderNonAdjacentForward: searchStats.ExactCandidateOrderNonAdjacentForward,
+		ExactCandidateOrderBackwardJumps:      searchStats.ExactCandidateOrderBackwardJumps,
+		ExactCandidateOrderMaxForwardRun:      searchStats.ExactCandidateOrderMaxForwardRun,
 	}
 }

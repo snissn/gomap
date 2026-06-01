@@ -187,6 +187,13 @@ Report and compare:
 - open_granules/op and open_physical_B/op for setup/one-shot paths,
 - docs_fetched/search only for materializing public API benchmarks.
 
+When `StatsMode=benchmark_debug` is selected for #1979 evidence, also report
+neighbor tile histograms, score-batch histograms, scored/skipped neighbor
+buckets, already-visited skips, upper-layer versus layer-0 scores/edges,
+frontier/top-k operation counts, visited-mark hits/misses, and exact-mode
+candidate-order summaries. These counters are opt-in diagnostics and must not be
+used to claim a default hot-path optimization by themselves.
+
 ## Block Planner Follow-On
 
 The next native search optimization is planned in

@@ -1244,6 +1244,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.ResultIDStateValidationFailures += stats.ResultIDStateValidationFailures
 		searchStats.PreparedGraphSearchViews += stats.PreparedGraphSearchViews
 		searchStats.GraphRowFallbacks += stats.GraphRowFallbacks
+		addColumnVectorGraphNativeSearchDebugStats1979(&searchStats, stats)
 	}
 	b.StopTimer()
 	stats := reader.Stats()
@@ -2005,6 +2006,7 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	if searchStats.ScoreBatchCalls > 0 {
 		b.ReportMetric(float64(searchStats.ScoreBatchCandidates)/float64(searchStats.ScoreBatchCalls), "score_batch_avg_tile_size")
 	}
+	reportColumnVectorGraphNativeSearchDebugMetrics1979(b, n, searchStats)
 	b.ReportMetric(float64(searchStats.BlockViewHits)/float64(n), "block_view_hits/search")
 	b.ReportMetric(float64(searchStats.BlockViewMisses)/float64(n), "block_view_misses/search")
 	b.ReportMetric(float64(searchStats.BlockViewBuilds)/float64(n), "block_view_builds/search")

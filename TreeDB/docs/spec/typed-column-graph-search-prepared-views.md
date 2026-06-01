@@ -40,10 +40,13 @@ is not an unconditional wall-time win over the old legacy graph-row direct
 control and does not close #2035 as fully performance-satisfied: the final matrix
 still shows net throughput gaps, and the legacy/current graph-only rows also
 expose a topology/search-work mismatch (`612` versus `3340` visited_edges/search,
-about 5.5x). #1979 owns the follow-up instrumentation needed to explain that
-work delta; #1980 remains a profile-backed frontier/top-k follow-up if future
-apples-to-apples profiles justify it; #1977 normalized-vector payloads remain
-deferred.
+about 5.5x). #1979 now adds opt-in benchmark-debug control-flow counters on the
+#2091 topology-parity fixture: the bounded equal-topology row visits 612 edges
+mostly through already-visited layer-0 skips, while exact mode visits 100748
+edges/search by scoring all 8192 candidates. #1980 remains a profile-backed
+frontier/top-k or already-visited follow-up if future apples-to-apples profiles
+justify it; exact-mode gathered scoring should be a separate narrow ticket;
+#1977 normalized-vector payloads remain deferred.
 
 Normative boundaries:
 

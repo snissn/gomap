@@ -58,6 +58,14 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		"current_prepared_typed_column",
 		"both paths visit exactly 612 edges/search",
 		"not yet throughput-superior",
+		"BenchmarkColumnVectorGraphSearchBatchability1979",
+		"StatsMode=benchmark_debug",
+		"neighbor_tile_avg_size=16",
+		"score_batch_singletons",
+		"already_visited_skips",
+		"top_k_insert_rejections",
+		"exact_order_observations=8192",
+		"keep #2035 open as not performance-satisfied",
 	}
 	for _, needle := range required {
 		if !strings.Contains(text, needle) {
