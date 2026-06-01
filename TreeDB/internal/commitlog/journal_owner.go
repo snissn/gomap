@@ -639,6 +639,49 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	return lsn, nil
 }
 
+// AppendCommandPayloadTrusted appends a caller-validated canonical command
+// payload. It validates only command identity and frame size; callers must use
+// this only for payloads built by the matching commitlog encoder.
+func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope CommandScope, format PayloadFormat, baseAppliedLSN uint64, payload []byte) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := validateCommandEnvelopeIdentity(CommandEnvelope{
+		LSN:           1,
+		Kind:          kind,
+		Scope:         scope,
+		PayloadFormat: format,
+	}); err != nil {
+		return 0, err
+	}
+	size, err := commandFrameEncodedSizeFromLengths(len(payload), 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	lsn, err := j.reserveLSNLocked()
+	if err != nil {
+		return 0, err
+	}
+	if err := j.writer.AppendCommandPayloadDirectTrusted(lsn, baseAppliedLSN, kind, scope, format, payload); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
+		}
+		return 0, err
+	}
+	return lsn, nil
+}
+
 // AppendRawKVBatchPayloadCommandTrustedAndFlush appends a caller-validated
 // RawKVBatch payload and flushes/syncs the writer while holding the journal
 // lock. If the append succeeds but the flush fails, the allocated LSN is

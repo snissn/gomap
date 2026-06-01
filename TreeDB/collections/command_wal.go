@@ -52,7 +52,7 @@ func (c *Collection) newCollectionInsertCommandWALIntent(docs []commitlog.Collec
 	if err != nil {
 		return nil, err
 	}
-	return c.db.NewCommandWALIntent(
+	return c.db.NewTrustedCommandWALIntent(
 		commitlog.CommandKindCollectionInsertBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionInsertBatchByIDV1,
@@ -71,7 +71,7 @@ func (c *Collection) newCollectionDeleteCommandWALIntent(ids [][]byte, replay *b
 	if err != nil {
 		return nil, err
 	}
-	return c.db.NewCommandWALIntent(
+	return c.db.NewTrustedCommandWALIntent(
 		commitlog.CommandKindCollectionDeleteBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
@@ -90,7 +90,7 @@ func (c *Collection) newCollectionUpdateCommandWALIntent(docs []commitlog.Collec
 	if err != nil {
 		return nil, err
 	}
-	return c.db.NewCommandWALIntent(
+	return c.db.NewTrustedCommandWALIntent(
 		commitlog.CommandKindCollectionUpdateBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
