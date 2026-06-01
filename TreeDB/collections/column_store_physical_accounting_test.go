@@ -147,7 +147,11 @@ func TestPhysicalAccountingRejectsTypedPartManifestMismatch2118(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare snapshot view: %v", err)
 	}
-	defer closeView()
+	defer func() {
+		if closeView != nil {
+			closeView()
+		}
+	}()
 	if len(view.TypedColumnPartRefs) != 1 {
 		t.Fatalf("typed part refs=%d want 1", len(view.TypedColumnPartRefs))
 	}
@@ -164,13 +168,18 @@ func TestPhysicalAccountingRejectsTypedPartManifestMismatch2118(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read typed part asset: %v", err)
 	}
-	copiedRef, err := writeColumnAssetToManagerSegment(view.ColumnAssetRootDir, view.FullConfig, raw, base.Ref.Kind, base.Ref.Generation, base.Ref.PartID+1000, base.Ref.FileID)
+	cfg := view.FullConfig
+	closeView()
+	closeView = nil
+
+	copyRoot := t.TempDir()
+	copiedRef, err := writeColumnAssetToManagerSegment(copyRoot, cfg, raw, base.Ref.Kind, base.Ref.Generation, base.Ref.PartID+1000, base.Ref.FileID)
 	if err != nil {
 		t.Fatalf("write copied typed part asset: %v", err)
 	}
 	partIDMismatch := base
 	partIDMismatch.Ref = copiedRef
-	_, err = columnStoreTypedColumnPartAccountingFromRef(view.ColumnAssetRootDir, partIDMismatch, ColumnStorePhysicalAccountingOptions{})
+	_, err = columnStoreTypedColumnPartAccountingFromRef(copyRoot, partIDMismatch, ColumnStorePhysicalAccountingOptions{})
 	if err == nil || !strings.Contains(err.Error(), "image part_id") {
 		t.Fatalf("part_id mismatch error=%v, want image part_id mismatch", err)
 	}
