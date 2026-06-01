@@ -280,14 +280,11 @@ func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation,
 	if err != nil {
 		return nil, 0, err
 	}
-	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{
-		Collection:    "",
-		Namespace:     cfg.AssetManager.Namespace,
-		SchemaVersion: uint32(cfg.SchemaHash),
-		PartID:        partID,
-		Fields:        fields,
-		SortKey:       sortKey,
-	}, adapterRows)
+	adapterOpts, err := typedColumnPublicationAdapterOptionsFromConfig(cfg, partID, fields, sortKey)
+	if err != nil {
+		return nil, 0, err
+	}
+	part, err := buildTypedColumnAdapterPart(adapterOpts, adapterRows)
 	if err != nil {
 		return nil, 0, err
 	}

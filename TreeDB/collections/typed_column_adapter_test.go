@@ -2256,7 +2256,7 @@ func TestTypedColumnAdapterPrepareInt64AggregateValidationFailsClosed(t *testing
 	}, typedColumnAdapterPrimaryIDColumn, 2)
 	selectedEncodingMismatch := typedColumnAdapterBuildCustomInt64AggregateImage(t, []typedcolumn.ColumnDefinition{
 		{Name: typedColumnAdapterPrimaryIDColumn, Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true},
-		{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+		{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingNullableInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true},
 	}, typedColumnAdapterPrimaryIDColumn, 2)
 	fields := []TypedStorageField{field}
 	for _, tc := range []struct {
@@ -2275,7 +2275,7 @@ func TestTypedColumnAdapterPrepareInt64AggregateValidationFailsClosed(t *testing
 		{name: "column_schema_mismatch", raw: stringImage.Bytes, refPartID: stringImage.PartID, typedRows: stringImage.Rows, physicalRows: stringImage.Rows, schemaHash: uint64(stringPart.Part.Descriptor.SchemaVersion), wantErr: "schema mismatch"},
 		{name: "missing_primary_column", raw: missingPrimary.Bytes, refPartID: missingPrimary.PartID, typedRows: missingPrimary.Rows, physicalRows: missingPrimary.Rows, schemaHash: uint64(missingPrimary.PartID), wantErr: "missing primary-id column"},
 		{name: "primary_column_encoding_mismatch", raw: primaryEncodingMismatch.Bytes, refPartID: primaryEncodingMismatch.PartID, typedRows: primaryEncodingMismatch.Rows, physicalRows: primaryEncodingMismatch.Rows, schemaHash: uint64(primaryEncodingMismatch.PartID), wantErr: "primary-id column"},
-		{name: "selected_column_encoding_mismatch", raw: selectedEncodingMismatch.Bytes, refPartID: selectedEncodingMismatch.PartID, typedRows: selectedEncodingMismatch.Rows, physicalRows: selectedEncodingMismatch.Rows, schemaHash: uint64(selectedEncodingMismatch.PartID), wantErr: "schema mismatch"},
+		{name: "selected_column_encoding_mismatch", raw: selectedEncodingMismatch.Bytes, refPartID: selectedEncodingMismatch.PartID, typedRows: selectedEncodingMismatch.Rows, physicalRows: selectedEncodingMismatch.Rows, schemaHash: uint64(selectedEncodingMismatch.PartID), wantErr: "encoding=nullable_int64"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, _, err := typedColumnAdapterPrepareInt64PredicateAggregatePart(fields, tc.raw, tc.refPartID, tc.typedRows, tc.physicalRows, tc.schemaHash, "count")

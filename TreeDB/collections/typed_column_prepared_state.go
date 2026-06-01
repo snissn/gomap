@@ -221,24 +221,28 @@ func typedColumnDescribePreparedColumn(req typedColumnPreparedColumnRequest, spa
 	if err != nil {
 		return typedColumnPreparedColumnPlan{}, err
 	}
+	return typedColumnDescribePreparedColumnWithDefinition(req, span, adapterColumn.Definition)
+}
+
+func typedColumnDescribePreparedColumnWithDefinition(req typedColumnPreparedColumnRequest, span typedcolumn.RowSpan, def typedcolumn.ColumnDefinition) (typedColumnPreparedColumnPlan, error) {
 	logical, ok := typedColumnPreparedLogicalTypeForValueType(req.Field.ValueType)
 	if !ok {
 		capability := columnsemantics.Unsupported(req.Operation, columnsemantics.ReasonUnknownLogicalType, fmt.Sprintf("logical_type=%q", req.Field.ValueType))
-		return typedColumnPreparedColumnPlan{Field: req.Field, Definition: adapterColumn.Definition, Capability: capability}, nil
+		return typedColumnPreparedColumnPlan{Field: req.Field, Definition: def, Capability: capability}, nil
 	}
 	capability := columnsemantics.CapabilityFor(columnsemantics.Descriptor{
 		Logical:  logical,
-		Physical: adapterColumn.Definition.Type,
-		Encoding: adapterColumn.Definition.Encoding,
+		Physical: def.Type,
+		Encoding: def.Encoding,
 		Nullable: req.Field.Nullable,
 	}, req.Operation)
-	layout := typedColumnLayoutCapabilitiesForAdapterColumn(adapterColumn)
+	layout := typedColumnLayoutCapabilitiesForAdapterColumn(typedColumnAdapterColumn{Field: req.Field, Definition: def})
 	layoutCapability := layout.SupportsSemanticOperation(req.Operation)
 	plan := typedColumnPreparedColumnPlan{
 		Field:            req.Field,
 		Logical:          logical,
 		Operation:        req.Operation,
-		Definition:       adapterColumn.Definition,
+		Definition:       def,
 		Capability:       capability,
 		Layout:           layout,
 		LayoutCapability: layoutCapability,
@@ -249,7 +253,7 @@ func typedColumnDescribePreparedColumn(req typedColumnPreparedColumnRequest, spa
 	if !layoutCapability.Supported() {
 		return plan, nil
 	}
-	deps, err := typedColumnPreparedDependenciesForRequest(req, adapterColumn.Definition, span)
+	deps, err := typedColumnPreparedDependenciesForRequest(req, def, span)
 	if err != nil {
 		return typedColumnPreparedColumnPlan{}, err
 	}
@@ -502,11 +506,27 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 		if !ok {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state missing column %q", plan.Definition.Name)
 		}
-		if err := typedColumnPreparedValidateColumnDefinition(plan.Definition, column.Definition); err != nil {
+		if err := typedColumnPreparedValidateColumnDefinition(plan.Field, plan.Definition, column.Definition); err != nil {
 			return nil, diag, err
 		}
 		if err := validateTypedColumnProductionPartColumnLayout(plan.Field, column); err != nil {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q layout validation failed: %w", plan.Definition.Name, err)
+		}
+		if column.Definition.Encoding != plan.Definition.Encoding || column.Definition.Compression != plan.Definition.Compression {
+			plan, err = typedColumnDescribePreparedColumnWithDefinition(request, span, column.Definition)
+			if err != nil {
+				return nil, diag, err
+			}
+			if !plan.Capability.Supported() {
+				diag.Fallback = true
+				diag.FallbackReason = plan.Capability.Error()
+				return part, diag, nil
+			}
+			if !plan.LayoutCapability.Supported() {
+				diag.Fallback = true
+				diag.FallbackReason = "layout capability " + plan.LayoutCapability.Error()
+				return part, diag, nil
+			}
 		}
 		section, ok := typedColumnAdapterColumnDataSection(image, plan.Definition.Name)
 		if !ok {
@@ -535,11 +555,8 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 	return part, diag, nil
 }
 
-func typedColumnPreparedValidateColumnDefinition(want typedcolumn.ColumnDefinition, got typedcolumn.ColumnDefinition) error {
-	if got.Name != want.Name || got.Type != want.Type || got.Encoding != want.Encoding || got.Compression != want.Compression || got.FixedWidthElements != want.FixedWidthElements {
-		return fmt.Errorf("collections: typed-column prepared state column %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", want.Name, got.Type, got.Encoding, got.Compression, got.FixedWidthElements, want.Type, want.Encoding, want.Compression, want.FixedWidthElements)
-	}
-	return nil
+func typedColumnPreparedValidateColumnDefinition(field TypedStorageField, want typedcolumn.ColumnDefinition, got typedcolumn.ColumnDefinition) error {
+	return typedColumnAdapterValidateStoredDefinition(field, want, got, "typed-column prepared state column")
 }
 
 func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, column typedcolumn.ColumnPartColumn, section typedcolumn.ColumnPartImageSection, certification typedcolumn.ColumnPartLayoutContractColumn, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedColumnState, typedColumnPreparedStateDiagnostics, error) {

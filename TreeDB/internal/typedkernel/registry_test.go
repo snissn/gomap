@@ -252,10 +252,10 @@ func TestDispatchSemanticAndLayoutGates(t *testing.T) {
 			wantErr: "semantic capability",
 		},
 		{
-			name:    "compressed int64 sum fails layout gate",
+			name:    "zstd int64 sum fails layout gate",
 			op:      typedkernel.OpSum,
 			sem:     int64Semantic(false, typedcolumn.EncodingRawInt64),
-			layout:  int64Layout(false, typedcolumn.EncodingRawInt64, typedcolumn.CompressionSnappy),
+			layout:  int64Layout(false, typedcolumn.EncodingRawInt64, typedcolumn.CompressionZSTD),
 			wantErr: "layout capability",
 		},
 		{

@@ -121,8 +121,53 @@ type ColumnStoreTypedColumnPartByteAccounting struct {
 	LocatorBytes               int64                                         `json:"locator_bytes,omitempty"`
 	TotalStoredBytes           int64                                         `json:"total_stored_bytes,omitempty"`
 	BytesPerRow                float64                                       `json:"bytes_per_row,omitempty"`
+	LogicalValueBytes          int64                                         `json:"logical_value_bytes,omitempty"`
+	EncodedRawBytes            int64                                         `json:"encoded_raw_bytes,omitempty"`
+	CodecBlocks                int                                           `json:"codec_blocks,omitempty"`
+	CompressionNanos           int64                                         `json:"compression_nanos,omitempty"`
+	ColumnsDetail              []ColumnStoreTypedColumnColumnAccounting      `json:"columns_detail,omitempty"`
+	CompressionDetail          []ColumnStoreTypedColumnCompressionAccounting `json:"compression_detail,omitempty"`
 	SerializedSections         []ColumnStoreTypedColumnPartSectionAccounting `json:"serialized_sections,omitempty"`
 	columnNames                []string                                      `json:"-"`
+}
+
+// ColumnStoreTypedColumnColumnAccounting reports one declared typed-column
+// payload's codec/storage contribution for benchmark/storage reports.
+type ColumnStoreTypedColumnColumnAccounting struct {
+	Column               string         `json:"column"`
+	Type                 string         `json:"type"`
+	Rows                 int            `json:"rows"`
+	Blocks               int            `json:"blocks"`
+	LogicalValueBytes    int64          `json:"logical_value_bytes"`
+	EncodedRawBytes      int64          `json:"encoded_raw_bytes"`
+	StoredBytes          int64          `json:"stored_bytes"`
+	Encoding             string         `json:"encoding"`
+	RequestedCompression string         `json:"requested_compression"`
+	ActualCompressionMix map[string]int `json:"actual_compression_mix,omitempty"`
+	CompressionAttempted int            `json:"compression_attempted"`
+	CompressionKept      int            `json:"compression_kept"`
+	CompressionRejected  int            `json:"compression_rejected"`
+	FallbackReasons      map[string]int `json:"fallback_reasons,omitempty"`
+	CompressionNanos     int64          `json:"compression_nanos"`
+}
+
+// ColumnStoreTypedColumnCompressionAccounting reports requested-vs-actual
+// compression admission and bytes for one column/substream/codec bucket.
+type ColumnStoreTypedColumnCompressionAccounting struct {
+	Column                 string  `json:"column"`
+	Substream              string  `json:"substream"`
+	Encoding               string  `json:"encoding"`
+	RequestedCompression   string  `json:"requested_compression"`
+	ActualCompression      string  `json:"actual_compression"`
+	Blocks                 int     `json:"blocks"`
+	CompressionAttempted   int     `json:"compression_attempted"`
+	CompressionKept        int     `json:"compression_kept"`
+	CompressionRejected    int     `json:"compression_rejected"`
+	FallbackReason         string  `json:"fallback_reason,omitempty"`
+	EncodedRawBytes        int64   `json:"encoded_raw_bytes"`
+	StoredBytes            int64   `json:"stored_bytes"`
+	CompressionNanos       int64   `json:"compression_nanos"`
+	StoredToEncodedRawRate float64 `json:"stored_to_encoded_raw_rate"`
 }
 
 // ColumnStoreTypedColumnPartSectionAccounting reports one serialized section in
@@ -278,6 +323,10 @@ func columnStoreTypedColumnPartAccountingFromRef(rootDir string, asset columnMan
 	if image.Rows != asset.Rows {
 		return ColumnStoreTypedColumnPartAccounting{}, fmt.Errorf("collections: typed-column part image rows=%d does not match asset rows=%d", image.Rows, asset.Rows)
 	}
+	imageAccounting, err := columnStoreTypedColumnPartImageAccounting(image, opts.DetailedSections)
+	if err != nil {
+		return ColumnStoreTypedColumnPartAccounting{}, err
+	}
 	return ColumnStoreTypedColumnPartAccounting{
 		Asset: ColumnStorePhysicalAssetAccounting{
 			Ref:    columnStorePhysicalAssetRefAccounting(asset.Ref),
@@ -286,11 +335,11 @@ func columnStoreTypedColumnPartAccountingFromRef(rootDir string, asset columnMan
 			Role:   asset.Role,
 			Reason: asset.Reason,
 		},
-		Image: columnStoreTypedColumnPartImageAccounting(image, opts.DetailedSections),
+		Image: imageAccounting,
 	}, nil
 }
 
-func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage, detailed bool) ColumnStoreTypedColumnPartByteAccounting {
+func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage, detailed bool) (ColumnStoreTypedColumnPartByteAccounting, error) {
 	columnNames := columnStoreTypedColumnPartImageColumnNames(image)
 	out := ColumnStoreTypedColumnPartByteAccounting{
 		Rows:                       image.Rows,
@@ -316,6 +365,58 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 	if out.Rows > 0 {
 		out.BytesPerRow = float64(out.TotalStoredBytes) / float64(out.Rows)
 	}
+	part, err := typedcolumn.ColumnPartFromImageWithOptions(image, typedcolumn.ColumnPartImageReadOptions{
+		IncludeRowLocators:       false,
+		ValidateRowLocators:      false,
+		IncludeAggregateMetadata: false,
+		IncludeColumnStats:       false,
+		IncludePruningMetadata:   false,
+	})
+	if err != nil {
+		return ColumnStoreTypedColumnPartByteAccounting{}, err
+	}
+	accounting := part.ByteAccountingFromImage(image)
+	out.LogicalValueBytes = int64(accounting.LogicalValueBytes)
+	out.EncodedRawBytes = int64(accounting.EncodedRawBytes)
+	out.CodecBlocks = accounting.CodecBlocks
+	for _, detail := range accounting.ColumnsDetail {
+		out.ColumnsDetail = append(out.ColumnsDetail, ColumnStoreTypedColumnColumnAccounting{
+			Column:               detail.Column,
+			Type:                 string(detail.Type),
+			Rows:                 detail.Rows,
+			Blocks:               detail.Blocks,
+			LogicalValueBytes:    int64(detail.LogicalValueBytes),
+			EncodedRawBytes:      int64(detail.EncodedRawBytes),
+			StoredBytes:          int64(detail.StoredBytes),
+			Encoding:             detail.Encoding.String(),
+			RequestedCompression: detail.RequestedCompression.String(),
+			ActualCompressionMix: detail.ActualCompressionMix,
+			CompressionAttempted: detail.CompressionAttempted,
+			CompressionKept:      detail.CompressionKept,
+			CompressionRejected:  detail.CompressionRejected,
+			FallbackReasons:      detail.FallbackReasons,
+			CompressionNanos:     detail.CompressionNanos,
+		})
+		out.CompressionNanos = addColumnStorePhysicalAccountingBytes(out.CompressionNanos, detail.CompressionNanos)
+	}
+	for _, detail := range accounting.CompressionDetail {
+		out.CompressionDetail = append(out.CompressionDetail, ColumnStoreTypedColumnCompressionAccounting{
+			Column:                 detail.Column,
+			Substream:              detail.Substream,
+			Encoding:               detail.Encoding.String(),
+			RequestedCompression:   detail.RequestedCompression.String(),
+			ActualCompression:      detail.ActualCompression.String(),
+			Blocks:                 detail.Blocks,
+			CompressionAttempted:   detail.CompressionAttempted,
+			CompressionKept:        detail.CompressionKept,
+			CompressionRejected:    detail.CompressionRejected,
+			FallbackReason:         detail.FallbackReason,
+			EncodedRawBytes:        int64(detail.EncodedRawBytes),
+			StoredBytes:            int64(detail.StoredBytes),
+			CompressionNanos:       detail.CompressionNanos,
+			StoredToEncodedRawRate: detail.StoredToEncodedRawRate,
+		})
+	}
 	if detailed {
 		sections := image.SectionByteAccounting()
 		out.SerializedSections = make([]ColumnStoreTypedColumnPartSectionAccounting, 0, len(sections))
@@ -329,7 +430,7 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 			})
 		}
 	}
-	return out
+	return out, nil
 }
 
 func columnStoreTypedColumnPartImageColumnNames(image typedcolumn.ColumnPartImage) []string {
@@ -361,6 +462,10 @@ func addColumnStoreTypedColumnPartByteAccounting(dst *ColumnStoreTypedColumnPart
 	dst.Rows = addColumnStorePhysicalAccountingRows(dst.Rows, src.Rows)
 	addColumnStoreTypedColumnPartByteAccountingColumns(dst, src)
 	dst.SerializedImageBytes = addColumnStorePhysicalAccountingBytes(dst.SerializedImageBytes, src.SerializedImageBytes)
+	dst.LogicalValueBytes = addColumnStorePhysicalAccountingBytes(dst.LogicalValueBytes, src.LogicalValueBytes)
+	dst.EncodedRawBytes = addColumnStorePhysicalAccountingBytes(dst.EncodedRawBytes, src.EncodedRawBytes)
+	dst.CodecBlocks += src.CodecBlocks
+	dst.CompressionNanos = addColumnStorePhysicalAccountingBytes(dst.CompressionNanos, src.CompressionNanos)
 	dst.SerializedManifestBytes = addColumnStorePhysicalAccountingBytes(dst.SerializedManifestBytes, src.SerializedManifestBytes)
 	dst.SerializedPaddingBytes = addColumnStorePhysicalAccountingBytes(dst.SerializedPaddingBytes, src.SerializedPaddingBytes)
 	dst.DeclaredColumnBytes = addColumnStorePhysicalAccountingBytes(dst.DeclaredColumnBytes, src.DeclaredColumnBytes)

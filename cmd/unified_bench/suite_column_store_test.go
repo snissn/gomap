@@ -2426,6 +2426,89 @@ func TestColumnStoreSuiteConfigUsesExplicitAggregateMetadataNamesM11A(t *testing
 	}
 }
 
+func TestColumnStoreSuiteTypedBenchmarkFlagsPublishTypedColumnPartOwnersM1952(t *testing.T) {
+	withColumnStoreTypedBenchmarkPolicyFlags(t, "snappy", "raw_int64", 16)
+	cfg := columnStoreSuiteConfig()
+	if got, want := cfg.ProfileSupport, collections.ColumnStoreProfileBenchmarkRelaxed; got != want {
+		t.Fatalf("profile_support=%q want %q", got, want)
+	}
+	for _, col := range cfg.Columns {
+		if col.Owner != collections.TypedStorageOwnerColumnPart {
+			t.Fatalf("column %q owner=%q want %q", col.Name, col.Owner, collections.TypedStorageOwnerColumnPart)
+		}
+	}
+}
+
+func TestRunColumnStoreSuiteTypedCompressionSurfacesTypedColumnPartCodecRowsM1952(t *testing.T) {
+	withColumnStoreTypedBenchmarkPolicyFlags(t, "snappy", "raw_int64", 16)
+	dir := t.TempDir()
+	cfg := BenchConfig{Keys: 64, BatchSize: 16, DBsArg: "treedb", Profile: "durable", Progress: false, SeedUsed: 1}
+	_, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+		ProfileDir:    dir,
+		ExecutionPath: "native-fastpath",
+		ForcedPath:    columnStorePathSerialColumnScan,
+		QueryNames:    []string{columnStoreQueryQ1},
+	})
+	if err != nil {
+		t.Fatalf("runColumnStoreSuite typed compression: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
+	if err != nil {
+		t.Fatalf("read column_store_results.json: %v", err)
+	}
+	var report columnStoreSuiteReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("unmarshal column_store_results.json: %v", err)
+	}
+	found := false
+	for _, row := range report.CodecLayouts {
+		attr := row.columnStoreCompressionAttribution
+		if !strings.HasPrefix(attr.CodecLayoutLabel, "typed_column_part/") || attr.CompressionPolicyLabel != "requested_snappy" {
+			continue
+		}
+		found = true
+		if attr.RequestedCompression != "snappy" || attr.SupportState != columnStoreCompressionSupportSupported {
+			t.Fatalf("typed codec row attribution=%+v want requested snappy supported", attr)
+		}
+		if attr.CompressedBytes <= 0 || attr.RawBytes <= 0 || attr.DecompressedBytes <= 0 || attr.CompressionRatio <= 0 {
+			t.Fatalf("typed codec row missing bytes: %+v", attr)
+		}
+		if attr.CompressedBytesSource != "typed_column_part_byte_accounting.compression_detail.stored_bytes" || attr.RawBytesSource != "typed_column_part_byte_accounting.compression_detail.encoded_raw_bytes" {
+			t.Fatalf("typed codec row sources=%+v", attr)
+		}
+	}
+	if !found {
+		t.Fatalf("missing requested_snappy typed_column_part codec row in %+v", report.CodecLayouts)
+	}
+}
+
+func withColumnStoreTypedBenchmarkPolicyFlags(t *testing.T, compression, int64Encoding string, rowsPerGranule int) {
+	t.Helper()
+	prevCompression := *columnStoreSuiteTypedCompressionArg
+	prevInt64Encoding := *columnStoreSuiteTypedInt64EncodingArg
+	prevRowsPerGranule := *columnStoreSuiteTypedRowsPerGranuleArg
+	prevAdaptive := *columnStoreSuiteTypedAdaptiveArg
+	prevAdaptiveTargetBytes := *columnStoreSuiteTypedAdaptiveTargetBytesArg
+	prevAdaptiveMinRows := *columnStoreSuiteTypedAdaptiveMinRowsArg
+	prevAdaptiveMaxRows := *columnStoreSuiteTypedAdaptiveMaxRowsArg
+	*columnStoreSuiteTypedCompressionArg = compression
+	*columnStoreSuiteTypedInt64EncodingArg = int64Encoding
+	*columnStoreSuiteTypedRowsPerGranuleArg = rowsPerGranule
+	*columnStoreSuiteTypedAdaptiveArg = false
+	*columnStoreSuiteTypedAdaptiveTargetBytesArg = 0
+	*columnStoreSuiteTypedAdaptiveMinRowsArg = 0
+	*columnStoreSuiteTypedAdaptiveMaxRowsArg = 0
+	t.Cleanup(func() {
+		*columnStoreSuiteTypedCompressionArg = prevCompression
+		*columnStoreSuiteTypedInt64EncodingArg = prevInt64Encoding
+		*columnStoreSuiteTypedRowsPerGranuleArg = prevRowsPerGranule
+		*columnStoreSuiteTypedAdaptiveArg = prevAdaptive
+		*columnStoreSuiteTypedAdaptiveTargetBytesArg = prevAdaptiveTargetBytes
+		*columnStoreSuiteTypedAdaptiveMinRowsArg = prevAdaptiveMinRows
+		*columnStoreSuiteTypedAdaptiveMaxRowsArg = prevAdaptiveMaxRows
+	})
+}
+
 func TestColumnStoreSuiteAggregateMetadataRequestUsesRegisteredNameM11B(t *testing.T) {
 	cfg := columnStoreSuiteConfig()
 	registered := make(map[string]bool, len(cfg.AggregateMetadata))
@@ -2612,31 +2695,54 @@ func assertColumnStoreCodecLayoutCoverageM1952(t testing.TB, report columnStoreS
 	if report.CompressionMatrixNote == "" {
 		t.Fatal("missing compression matrix note")
 	}
-	if len(report.CodecLayouts) != 2 {
-		t.Fatalf("codec layout rows=%d want compression_off and current_default_none", len(report.CodecLayouts))
+	if len(report.CodecLayouts) < 4 {
+		t.Fatalf("codec layout rows=%d want compression_off, current_default_none, zstd unsupported, zstd_dict unsupported", len(report.CodecLayouts))
 	}
-	seen := make(map[string]bool, len(report.CodecLayouts))
+	seen := make(map[string]string, len(report.CodecLayouts))
 	for _, row := range report.CodecLayouts {
 		assertColumnStoreCompressionAttributionM1952(t, "codec_layout", row.columnStoreCompressionAttribution, false)
 		if row.Rows != report.Rows || row.Columns == 0 {
 			t.Fatalf("codec layout row dimensions rows/columns=(%d,%d) want rows=%d and columns>0: %+v", row.Rows, row.Columns, report.Rows, row)
 		}
-		seen[row.CompressionPolicyLabel] = true
+		seen[row.CompressionPolicyLabel] = row.SupportState
 	}
 	for _, want := range []string{columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
-		if !seen[want] {
-			t.Fatalf("missing codec layout policy %q in %+v", want, report.CodecLayouts)
+		if seen[want] != columnStoreCompressionSupportSupported {
+			t.Fatalf("missing supported codec layout policy %q in %+v", want, report.CodecLayouts)
+		}
+	}
+	for _, want := range []string{"requested_zstd", "requested_zstd_dict"} {
+		if seen[want] != columnStoreCompressionSupportUnsupported {
+			t.Fatalf("missing unsupported codec layout policy %q in %+v", want, report.CodecLayouts)
 		}
 	}
 }
 
 func assertColumnStoreCompressionAttributionM1952(t testing.TB, label string, attr columnStoreCompressionAttribution, queryRow bool) {
 	t.Helper()
-	if attr.CodecLayoutLabel == "" || attr.CompressionPolicyLabel == "" || attr.RequestedCompression != columnStoreCompressionNoneLabel || attr.ActualCompression != columnStoreCompressionNoneLabel || attr.SupportState == "" {
+	if attr.CodecLayoutLabel == "" || attr.CompressionPolicyLabel == "" || attr.RequestedCompression == "" || attr.ActualCompression == "" || attr.SupportState == "" {
 		t.Fatalf("%s compression labels=%+v", label, attr)
 	}
-	if !queryRow && (attr.CodecLayoutLabel != columnStoreCodecLayoutCurrent || attr.SupportState != columnStoreCompressionSupportSupported) {
-		t.Fatalf("%s codec layout row labels=%+v", label, attr)
+	if queryRow && (attr.RequestedCompression != columnStoreCompressionNoneLabel || attr.ActualCompression != columnStoreCompressionNoneLabel) {
+		t.Fatalf("%s query compression labels=%+v want requested/actual none", label, attr)
+	}
+	if !queryRow {
+		switch attr.SupportState {
+		case columnStoreCompressionSupportSupported:
+			if attr.CodecLayoutLabel != columnStoreCodecLayoutCurrent {
+				t.Fatalf("%s supported codec layout row labels=%+v", label, attr)
+			}
+		case columnStoreCompressionSupportUnsupported:
+			if attr.SupportReason == "" || attr.CompressedBytes != 0 || attr.RawBytes != 0 || attr.DecompressedBytes != 0 || attr.CompressionRatio != 0 {
+				t.Fatalf("%s unsupported codec layout row attribution=%+v", label, attr)
+			}
+			if attr.CompressedBytesSource == "" || attr.RawBytesSource == "" || attr.DecompressedBytesSource == "" || attr.CompressionRatioSource == "" || attr.CompressionDurationSource == "" || attr.DecompressionDurationSource == "" || attr.BenchmarkAllocationSource == "" {
+				t.Fatalf("%s unsupported codec layout row sources=%+v", label, attr)
+			}
+			return
+		default:
+			t.Fatalf("%s unexpected codec layout support state=%q attribution=%+v", label, attr.SupportState, attr)
+		}
 	}
 	if queryRow {
 		switch attr.SupportState {
