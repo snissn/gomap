@@ -53,7 +53,7 @@ func TestCollectionCommandWALBSONYCSBPointLookupAfterLoad(t *testing.T) {
 		}
 	}
 
-	samples := []int{0, 1, 2, 10, 100, 999, 1_000, 5_000, 9_999, 10_000, 20_000, 29_999}
+	samples := []int{0, 1, 2, 10, 100, 999, 1_000, 5_000, 9_999, 10_000, 20_000, docCount - 1}
 	for _, i := range samples {
 		got, found, err := col.GetInto(ids[i], nil)
 		if err != nil {
@@ -108,7 +108,7 @@ func TestCollectionCommandWALBSONYCSBPointLookupAfterLoad(t *testing.T) {
 func ycsbHash64(value uint64) uint64 {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], value)
-	h := fnv.New64()
+	h := fnv.New64a()
 	_, _ = h.Write(b[:])
 	return h.Sum64()
 }
