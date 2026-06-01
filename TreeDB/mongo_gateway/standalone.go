@@ -42,6 +42,12 @@ type StandaloneOptions struct {
 	UpdateCoalescingMaxBatchSet bool
 	UpdateCoalescingMaxBatch    int
 	UpdateCoalescingIdleTTL     time.Duration
+	InsertCoalescingMaxDelay    time.Duration
+	// InsertCoalescingMaxBatchSet distinguishes an unset zero value from an
+	// explicit zero, which disables insert coalescing.
+	InsertCoalescingMaxBatchSet bool
+	InsertCoalescingMaxBatch    int
+	InsertCoalescingIdleTTL     time.Duration
 }
 
 // StandaloneServer owns the TreeDB backend, collection manager, and MongoDB
@@ -109,6 +115,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	if opts.UpdateCoalescingMaxBatch < 0 {
 		return opts, errors.New("mongo gateway standalone: UpdateCoalescingMaxBatch must be >= 0")
 	}
+	if opts.InsertCoalescingMaxBatch < 0 {
+		return opts, errors.New("mongo gateway standalone: InsertCoalescingMaxBatch must be >= 0")
+	}
 
 	return opts, nil
 }
@@ -147,6 +156,11 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 		server.UpdateCoalescingMaxBatch = normalized.UpdateCoalescingMaxBatch
 	}
 	server.UpdateCoalescingIdleTTL = normalized.UpdateCoalescingIdleTTL
+	server.InsertCoalescingMaxDelay = normalized.InsertCoalescingMaxDelay
+	if normalized.InsertCoalescingMaxBatchSet || normalized.InsertCoalescingMaxBatch > 0 {
+		server.InsertCoalescingMaxBatch = normalized.InsertCoalescingMaxBatch
+	}
+	server.InsertCoalescingIdleTTL = normalized.InsertCoalescingIdleTTL
 
 	return &StandaloneServer{
 		Options:     normalized,

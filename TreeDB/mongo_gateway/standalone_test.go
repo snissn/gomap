@@ -123,6 +123,11 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 			opts: StandaloneOptions{Dir: t.TempDir(), UpdateCoalescingMaxBatch: -1},
 			want: "UpdateCoalescingMaxBatch must be >= 0",
 		},
+		{
+			name: "bad insert coalescing max batch",
+			opts: StandaloneOptions{Dir: t.TempDir(), InsertCoalescingMaxBatch: -1},
+			want: "InsertCoalescingMaxBatch must be >= 0",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -627,6 +632,9 @@ func TestOpenStandaloneServerPreservesDefaultUpdateCoalescingBatch(t *testing.T)
 	if standalone.Server.UpdateCoalescingMaxBatch != defaultUpdateCoalescingBatch {
 		t.Fatalf("UpdateCoalescingMaxBatch=%d want default %d", standalone.Server.UpdateCoalescingMaxBatch, defaultUpdateCoalescingBatch)
 	}
+	if standalone.Server.InsertCoalescingMaxBatch != defaultInsertCoalescingBatch {
+		t.Fatalf("InsertCoalescingMaxBatch=%d want default %d", standalone.Server.InsertCoalescingMaxBatch, defaultInsertCoalescingBatch)
+	}
 }
 
 func TestOpenStandaloneServerAppliesExplicitZeroUpdateCoalescingBatch(t *testing.T) {
@@ -634,6 +642,8 @@ func TestOpenStandaloneServerAppliesExplicitZeroUpdateCoalescingBatch(t *testing
 		Dir:                         t.TempDir(),
 		UpdateCoalescingMaxBatchSet: true,
 		UpdateCoalescingMaxBatch:    0,
+		InsertCoalescingMaxBatchSet: true,
+		InsertCoalescingMaxBatch:    0,
 	})
 	if err != nil {
 		t.Fatalf("OpenStandaloneServer: %v", err)
@@ -642,6 +652,9 @@ func TestOpenStandaloneServerAppliesExplicitZeroUpdateCoalescingBatch(t *testing
 
 	if standalone.Server.UpdateCoalescingMaxBatch != 0 {
 		t.Fatalf("UpdateCoalescingMaxBatch=%d want explicit zero", standalone.Server.UpdateCoalescingMaxBatch)
+	}
+	if standalone.Server.InsertCoalescingMaxBatch != 0 {
+		t.Fatalf("InsertCoalescingMaxBatch=%d want explicit zero", standalone.Server.InsertCoalescingMaxBatch)
 	}
 }
 

@@ -40,6 +40,10 @@ const (
 	defaultUpdateCoalescingBatch   = 256
 	maxUpdateCoalescingBatch       = 4096
 	defaultUpdateCoalescingIdleTTL = 30 * time.Second
+	defaultInsertCoalescingDelay   = 0
+	defaultInsertCoalescingBatch   = 256
+	maxInsertCoalescingBatch       = 4096
+	defaultInsertCoalescingIdleTTL = 30 * time.Second
 	maxRetainedWireReadBuffer      = 1 << 20
 	maxRetainedWireWriteBuffer     = 1 << 20
 	defaultWireReadBufferSize      = 32 * 1024
@@ -63,7 +67,17 @@ type Server struct {
 	UpdateCoalescingMaxBatch int
 	// UpdateCoalescingIdleTTL removes an idle per-collection coalescer after this
 	// duration. Zero uses the default; negative disables idle removal.
-	UpdateCoalescingIdleTTL   time.Duration
+	UpdateCoalescingIdleTTL time.Duration
+	// InsertCoalescingMaxDelay waits for additional same-collection single-document
+	// BSON insert commands before publishing a batch. Zero means only coalesce
+	// already-queued work; negative disables coalescing.
+	InsertCoalescingMaxDelay time.Duration
+	// InsertCoalescingMaxBatch caps one coalesced same-collection insert publish.
+	// Values above maxInsertCoalescingBatch are clamped.
+	InsertCoalescingMaxBatch int
+	// InsertCoalescingIdleTTL removes an idle per-collection coalescer after this
+	// duration. Zero uses the default; negative disables idle removal.
+	InsertCoalescingIdleTTL   time.Duration
 	Collections               *collections.CollectionManager
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
@@ -81,6 +95,8 @@ type Server struct {
 	lastCursorReap   time.Time
 	updateMu         sync.Mutex
 	updateCoalescers map[string]*mongoUpdateCoalescer
+	insertMu         sync.Mutex
+	insertCoalescers map[string]*mongoInsertCoalescer
 	closed           atomic.Bool
 }
 
@@ -99,6 +115,9 @@ func NewServer() *Server {
 		UpdateCoalescingMaxDelay: defaultUpdateCoalescingDelay,
 		UpdateCoalescingMaxBatch: defaultUpdateCoalescingBatch,
 		UpdateCoalescingIdleTTL:  defaultUpdateCoalescingIdleTTL,
+		InsertCoalescingMaxDelay: defaultInsertCoalescingDelay,
+		InsertCoalescingMaxBatch: defaultInsertCoalescingBatch,
+		InsertCoalescingIdleTTL:  defaultInsertCoalescingIdleTTL,
 	}
 	s.nextResponseID.Store(0)
 	return s
@@ -112,6 +131,7 @@ func (s *Server) Close() error {
 	s.closeActiveListeners()
 	s.closeActiveConns()
 	s.closeUpdateCoalescers()
+	s.closeInsertCoalescers()
 	s.cursorMu.Lock()
 	s.cursors = nil
 	s.cursorCount.Store(0)
@@ -127,6 +147,19 @@ func (s *Server) closeUpdateCoalescers() {
 	coalescers := s.updateCoalescers
 	s.updateCoalescers = nil
 	s.updateMu.Unlock()
+	for _, coalescer := range coalescers {
+		coalescer.stop()
+	}
+}
+
+func (s *Server) closeInsertCoalescers() {
+	if s == nil {
+		return
+	}
+	s.insertMu.Lock()
+	coalescers := s.insertCoalescers
+	s.insertCoalescers = nil
+	s.insertMu.Unlock()
 	for _, coalescer := range coalescers {
 		coalescer.stop()
 	}

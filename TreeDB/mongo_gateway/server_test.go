@@ -1359,6 +1359,275 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testin
 	}
 }
 
+func TestServerInsertCoalescesConcurrentDistinctIDs(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	server.InsertCoalescingMaxDelay = 5 * time.Second
+	server.InsertCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 22520, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	before := server.Collections.StatsSnapshot()
+	start := make(chan struct{})
+	responses := make(chan commandResult, 2)
+	var wg sync.WaitGroup
+	for i, id := range []string{"u1", "u2"} {
+		i, id := i, id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			doc, err := serveCommandResult(server, int32(22521+i), bson.D{
+				{Key: "insert", Value: "users"},
+				{Key: "documents", Value: bson.A{bson.D{
+					{Key: "_id", Value: id},
+					{Key: "email", Value: fmt.Sprintf("%s@example.com", id)},
+				}}},
+				{Key: "$db", Value: "app"},
+			})
+			responses <- commandResult{doc: doc, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(responses)
+	for response := range responses {
+		if response.err != nil {
+			t.Fatalf("ServeOneWithOwner: %v", response.err)
+		}
+		assertOK(t, response.doc)
+		assertInt32(t, response.doc, "n", 1)
+	}
+	after := server.Collections.StatsSnapshot()
+	if got := after.IndexedStageBatches - before.IndexedStageBatches; got != 1 {
+		t.Fatalf("indexed stage batches delta=%d want 1", got)
+	}
+	if got := after.IndexedStageDocs - before.IndexedStageDocs; got != 2 {
+		t.Fatalf("indexed stage docs delta=%d want 2", got)
+	}
+
+	for i, id := range []string{"u1", "u2"} {
+		findResponse := serveCommand(t, server, int32(22523+i), bson.D{
+			{Key: "find", Value: "users"},
+			{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "$db", Value: "app"},
+		})
+		firstBatch := cursorFirstBatch(t, findResponse)
+		if len(firstBatch) != 1 {
+			t.Fatalf("%s firstBatch len=%d want 1", id, len(firstBatch))
+		}
+	}
+}
+
+func TestMongoInsertCoalescerDuplicateIDsFallBackToOrderedSingles(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "app.users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	id1, doc1, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(1)}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("prepare doc1: %v", err)
+	}
+	id2, doc2, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(2)}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("prepare doc2: %v", err)
+	}
+
+	done1 := make(chan mongoInsertCoalescerResult, 1)
+	done2 := make(chan mongoInsertCoalescerResult, 1)
+	(&mongoInsertCoalescer{}).runBatch([]mongoInsertCoalescerRequest{
+		{col: col, id: id1, stored: doc1, done: done1},
+		{col: col, id: id2, stored: doc2, done: done2},
+	})
+	first := <-done1
+	second := <-done2
+	if first.err != nil {
+		t.Fatalf("first insert err=%v", first.err)
+	}
+	if !collections.IsDuplicateKeyError(second.err) {
+		t.Fatalf("second insert err=%v want duplicate key", second.err)
+	}
+}
+
+func TestMongoInsertCoalescerUniqueIndexErrorFallsBackToOrderedSingles(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 22530, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 22531, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u0"}, {Key: "email", Value: "a@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	duplicateID, duplicateDoc, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("prepare duplicate doc: %v", err)
+	}
+	validID, validDoc, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("prepare valid doc: %v", err)
+	}
+
+	doneDuplicate := make(chan mongoInsertCoalescerResult, 1)
+	doneValid := make(chan mongoInsertCoalescerResult, 1)
+	(&mongoInsertCoalescer{}).runBatch([]mongoInsertCoalescerRequest{
+		{col: col, id: duplicateID, stored: duplicateDoc, done: doneDuplicate},
+		{col: col, id: validID, stored: validDoc, done: doneValid},
+	})
+	duplicateResult := <-doneDuplicate
+	validResult := <-doneValid
+	if !collections.IsDuplicateKeyError(duplicateResult.err) {
+		t.Fatalf("duplicate err=%v want duplicate key", duplicateResult.err)
+	}
+	if validResult.err != nil {
+		t.Fatalf("valid err=%v", validResult.err)
+	}
+
+	findResponse := serveCommand(t, server, 22532, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u2"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("u2 firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotEmail, ok := firstBatch[0].Lookup("email").StringValueOK()
+	if !ok || gotEmail != "b@example.com" {
+		t.Fatalf("u2 email=%q ok=%v want b@example.com", gotEmail, ok)
+	}
+}
+
+func TestServerInsertCoalescedSkipsCoalescerForNonBSONAndMultiDocument(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatJSON,
+	}
+	server.InsertCoalescingMaxDelay = 5 * time.Second
+	server.InsertCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 22540, bson.D{
+		{Key: "insert", Value: "json_users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(1)}}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 22541, bson.D{
+		{Key: "insert", Value: "bson_users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(1)}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(2)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	server.insertMu.Lock()
+	coalescers := len(server.insertCoalescers)
+	server.insertMu.Unlock()
+	if coalescers != 0 {
+		t.Fatalf("created %d insert coalescers for non-BSON or multi-document insert", coalescers)
+	}
+}
+
+func TestServerCloseStopsInsertCoalescers(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoInsertCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	coalescer.mu.RLock()
+	stopped := coalescer.stopped
+	coalescer.mu.RUnlock()
+	if !stopped {
+		t.Fatal("coalescer was not stopped")
+	}
+	select {
+	case <-coalescer.done:
+	default:
+		t.Fatal("Close returned before insert coalescer worker exited")
+	}
+	if got := server.mongoInsertCoalescer("app.users"); got != nil {
+		t.Fatal("closed server created a new insert coalescer")
+	}
+}
+
+func TestMongoInsertCoalescerClampsConfiguredMaxBatch(t *testing.T) {
+	server := NewServer()
+	server.InsertCoalescingMaxBatch = maxInsertCoalescingBatch + 1
+	coalescer := server.mongoInsertCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	defer func() { _ = server.Close() }()
+	if coalescer.maxBatch != maxInsertCoalescingBatch {
+		t.Fatalf("maxBatch=%d want %d", coalescer.maxBatch, maxInsertCoalescingBatch)
+	}
+	if got, want := cap(coalescer.requests), maxInsertCoalescingBatch*4; got != want {
+		t.Fatalf("request queue cap=%d want %d", got, want)
+	}
+}
+
 func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
