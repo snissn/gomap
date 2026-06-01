@@ -39,6 +39,30 @@ func TestRegisterCloseHookAfterRunCloseHooksIsIgnored(t *testing.T) {
 	}
 }
 
+func TestRegisterCloseHookBeforeRunsBeforeOrdinaryHooks(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	var order []string
+	d.RegisterCloseHook(func() error {
+		order = append(order, "ordinary")
+		return nil
+	})
+	d.RegisterCloseHookBefore(func() error {
+		order = append(order, "before")
+		return nil
+	})
+	if err := d.RunCloseHooks(); err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	if len(order) != 2 || order[0] != "before" || order[1] != "ordinary" {
+		t.Fatalf("close hook order=%v, want [before ordinary]", order)
+	}
+}
+
 func TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

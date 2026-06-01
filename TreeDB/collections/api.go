@@ -1216,7 +1216,7 @@ func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions)
 		manager.commandWALCoordinator = collectionCommandWALCoordinatorForDB(database)
 		if opts.registerBackendHooks {
 			manager.commandWALRawUnregister = database.RegisterCommandWALRawPublishBarrier(manager.flushPendingCommandWALBeforeRawPublish)
-			manager.closeUnregister = database.RegisterCloseHook(manager.closeForBackend)
+			manager.closeUnregister = database.RegisterCloseHookBefore(manager.closeForBackend)
 		}
 	}
 	return manager
