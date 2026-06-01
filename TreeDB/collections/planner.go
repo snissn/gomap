@@ -662,6 +662,7 @@ func (p insertBatchPlanner) singleItemIndexStateAndUniqueProbeRuns(item *insertB
 	}
 	encoder := indexEncodeArena{
 		buf:       make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes))),
+		states:    make([][][]byte, 0, len(runtimes)),
 		valueRefs: make([][]byte, 0, len(runtimes)),
 	}
 	state, err := orderedIndexStateForDocumentWithArena(item.document, runtimes, p.options, &encoder)
@@ -1296,12 +1297,24 @@ func directBufferedUniqueValueRootPlans(runs []collectionUniqueProbeRun, runtime
 	if len(runs) == 0 || len(runtimes) == 0 {
 		return nil
 	}
+	var valueTypes map[string]IndexValueType
+	if len(runs) > 2 && len(runtimes) > 2 {
+		valueTypes = make(map[string]IndexValueType, len(runtimes))
+		for _, runtime := range runtimes {
+			if runtime.def.unique {
+				valueTypes[runtime.def.name] = runtime.def.valueType
+			}
+		}
+	}
 	plans := make([]directBufferedUniqueValueRootPlan, 0, len(runs))
 	for _, run := range runs {
 		if len(run.prefixes) == 0 {
 			continue
 		}
-		valueType, ok := uniqueIndexValueTypeForName(runtimes, run.indexName)
+		valueType, ok := valueTypes[run.indexName]
+		if valueTypes == nil {
+			valueType, ok = uniqueIndexValueTypeForName(runtimes, run.indexName)
+		}
 		if !ok {
 			continue
 		}
