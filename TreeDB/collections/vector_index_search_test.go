@@ -2085,7 +2085,7 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	if stats.ScoreBatchCalls > 0 {
 		b.ReportMetric(float64(stats.ScoreBatchCandidates)/float64(stats.ScoreBatchCalls), "score_batch_avg_tile_size")
 	}
-	if stats.BenchmarkDebugSearches > 0 || stats.ExactModeSearches > 0 {
+	if stats.BenchmarkDebugSearches > 0 {
 		reportVectorIndexSearchBenchmarkDebugMetrics2105(b, stats)
 	}
 	b.ReportMetric(float64(stats.ExpansionFetches), "expansion_fetches/search")

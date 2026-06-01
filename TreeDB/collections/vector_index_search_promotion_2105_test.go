@@ -396,9 +396,11 @@ func reportVectorIndexSearchBenchmarkDebugMetrics2105(b *testing.B, stats Vector
 	b.ReportMetric(float64(stats.NeighborTiles), "neighbor_tiles/search")
 	b.ReportMetric(float64(stats.NeighborTileNeighbors), "neighbor_tile_neighbors/search")
 	b.ReportMetric(float64(stats.NeighborTileMaxSize), "neighbor_tile_max_size")
+	neighborTileAvg := 0.0
 	if stats.NeighborTiles > 0 {
-		b.ReportMetric(float64(stats.NeighborTileNeighbors)/float64(stats.NeighborTiles), "neighbor_tile_avg_size")
+		neighborTileAvg = float64(stats.NeighborTileNeighbors) / float64(stats.NeighborTiles)
 	}
+	b.ReportMetric(neighborTileAvg, "neighbor_tile_avg_size")
 	b.ReportMetric(float64(stats.NeighborTileSize0), "neighbor_tile_size_0/search")
 	b.ReportMetric(float64(stats.NeighborTileSize1), "neighbor_tile_size_1/search")
 	b.ReportMetric(float64(stats.NeighborTileSize2To4), "neighbor_tile_size_2_4/search")

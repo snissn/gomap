@@ -547,8 +547,8 @@ Decision for #2103 (promotion matrix):
 ## #2105 public VectorIndexSearcher promotion matrix
 
 `BenchmarkVectorIndexSearcherSearchPromotion2105` is the public-search follow-up
-to the #2103 internal `SearchCosine` promotion matrix. It uses the deterministic
-#2091 production topology-parity fixture (`rows=8192`, `dims=128`, degree 16,
+to the #2103 internal `SearchCosine` promotion matrix. It uses the deterministic #2091
+production topology-parity fixture (`rows=8192`, `dims=128`, degree 16,
 `topK=10`, bounded `efSearch=128`, exact `efSearch=8192`,
 `query_ordinal=4096`) and times an already-opened public
 `VectorIndexSearcher.Search` handle. Setup/open/rebuild are outside the timed
@@ -646,7 +646,7 @@ Exact public result-ID rows (`efSearch=8192`, setup/open/rebuild excluded):
 | `current_prepared_typed_column` | `scalar` | 1.084 ms | 922.9 | 816 | 2 | same exact work | scalar: `score_batch_calls=8192`, singleton hist `8192`, exact obs/back `8192/5977` | prepared path, all source/result fallbacks `0` |
 | `current_prepared_typed_column` | `indexed` | 929.601 µs | 1,076 | 816 | 2 | same exact work | indexed/gathered: `score_batch_calls=1797`, hist `364/502/930/1`, exact obs/back `8192/5977` | prepared path, all source/result fallbacks `0` |
 
-#2105 decision: recommend closing #2035 as performance-satisfied. On the public
+Decision for #2105: recommend closing #2035 as performance-satisfied. On the public
 larger topology-parity matrix, prepared `default` is faster than the valid
 legacy/direct public result-ID controls in bounded and exact rows, tracks the
 explicit indexed/gathered counter shape, remains equivalent to scalar/indexed
