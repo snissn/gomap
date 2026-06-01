@@ -14431,24 +14431,29 @@ func TestCollectionUpdateBSONSetBatchReadsNoIndexBufferedInsertWithoutFlush(t *t
 		t.Fatalf("open collection: %v", err)
 	}
 	before := d.State()
-	if _, err := col.InsertBatchValidatedBSON(
-		[][]byte{[]byte("u1"), []byte("u2")},
-		[][]byte{
-			mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}}),
-			mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}}),
-		},
-	); err != nil {
+	ids := [][]byte{[]byte("u1"), []byte("u2")}
+	docs := [][]byte{
+		mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}}),
+		mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}}),
+	}
+	wantBuffered := len(ids)
+	if wantBuffered != len(docs) {
+		t.Fatalf("test fixture ids=%d docs=%d", len(ids), len(docs))
+	}
+	if _, err := col.InsertBatchValidatedBSON(ids, docs); err != nil {
 		t.Fatalf("insert buffered BSON documents: %v", err)
 	}
 	col.writeDomain.mu.RLock()
 	bufferedCount := col.writeDomain.count
+	bufferedBytes := col.writeDomain.bufferedBytes
+	mutableBytes := col.writeDomain.mutableBytes
 	tableLen := 0
 	if col.writeDomain.table != nil {
 		tableLen = col.writeDomain.table.Len()
 	}
 	col.writeDomain.mu.RUnlock()
-	if bufferedCount != 2 || tableLen != 2 {
-		t.Fatalf("buffered count=%d tableLen=%d want 2/2", bufferedCount, tableLen)
+	if bufferedCount != wantBuffered || tableLen != wantBuffered {
+		t.Fatalf("buffered count=%d tableLen=%d want %d/%d", bufferedCount, tableLen, wantBuffered, wantBuffered)
 	}
 
 	results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{{
@@ -14480,9 +14485,17 @@ func TestCollectionUpdateBSONSetBatchReadsNoIndexBufferedInsertWithoutFlush(t *t
 	}
 	col.writeDomain.mu.RLock()
 	bufferedCount = col.writeDomain.count
+	bufferedBytesAfterUpdate := col.writeDomain.bufferedBytes
+	mutableBytesAfterUpdate := col.writeDomain.mutableBytes
 	col.writeDomain.mu.RUnlock()
-	if bufferedCount != 2 {
-		t.Fatalf("after update buffered count=%d want 2", bufferedCount)
+	if bufferedCount != wantBuffered {
+		t.Fatalf("after update buffered count=%d want %d", bufferedCount, wantBuffered)
+	}
+	if bufferedBytesAfterUpdate != bufferedBytes {
+		t.Fatalf("after same-size update bufferedBytes=%d want %d", bufferedBytesAfterUpdate, bufferedBytes)
+	}
+	if mutableBytesAfterUpdate != mutableBytes {
+		t.Fatalf("after same-size update mutableBytes=%d want %d", mutableBytesAfterUpdate, mutableBytes)
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush buffered insert+update: %v", err)

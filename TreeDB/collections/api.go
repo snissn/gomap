@@ -15841,9 +15841,18 @@ func (c *Collection) stageDirectNoIndexTableUpdateLocked(domain *collectionWrite
 		domain.storagePolicy = policy
 	}
 	newEntries := 0
+	var stagedByteDelta int64
 	for _, entry := range direct.primaryEntries {
-		if _, _, _, found := domain.table.GetEntry(entry.key); !found {
+		entryBytes := int64(len(entry.key) + len(entry.value))
+		oldValue, _, _, found := domain.table.GetEntry(entry.key)
+		if !found {
 			newEntries++
+			stagedByteDelta = saturatingAddNonNegativeInt64(stagedByteDelta, entryBytes)
+		} else {
+			oldBytes := int64(len(entry.key) + len(oldValue))
+			if entryBytes > oldBytes {
+				stagedByteDelta = saturatingAddNonNegativeInt64(stagedByteDelta, entryBytes-oldBytes)
+			}
 		}
 		domain.table.SetEntry(entry.key, entry.value, page.ValuePtr{}, entry.flags)
 	}
@@ -15856,9 +15865,9 @@ func (c *Collection) stageDirectNoIndexTableUpdateLocked(domain *collectionWrite
 		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
 	}
 	domain.count = saturatingAddNonNegativeInt(domain.count, newEntries)
-	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedByteDelta)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
-	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedByteDelta)
 	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
 	domain.notePrimaryWriteEntriesLocked(direct.primaryEntries, domain.writeGeneration)
