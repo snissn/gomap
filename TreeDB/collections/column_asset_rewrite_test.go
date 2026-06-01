@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -985,6 +986,38 @@ func TestColumnAssetRewriteRecognizesBackendPreApplyFailureM15C(t *testing.T) {
 	ambiguousErr := backenddb.ErrRecoveryRequired
 	if columnAssetRewritePublishFailedBeforeApply(ambiguousErr) {
 		t.Fatalf("columnAssetRewritePublishFailedBeforeApply(%v)=true, want false", ambiguousErr)
+	}
+}
+
+func TestColumnAssetRewriteRegistersAmbiguousPublishQuarantine1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	copied := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 96, []byte("ambiguous-publish-copied-segment"))
+	if err := col.columnAssetRewriteRegisterAmbiguousPublishQuarantine([]ColumnAssetRef{copied}, errors.New("ambiguous publish test")); err != nil {
+		t.Fatalf("columnAssetRewriteRegisterAmbiguousPublishQuarantine: %v", err)
+	}
+	report, err := col.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{copied},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetLifecycle: %v", err)
+	}
+	if report.Quarantine.OpenRecords != 1 || report.Quarantine.Refs != 1 || report.Roots.QuarantineRefs != 1 || report.Reachability.Sources.QuarantineRefs != 1 {
+		t.Fatalf("quarantine report=%+v roots=%+v sources=%+v", report.Quarantine, report.Roots, report.Reachability.Sources)
+	}
+	if !columnAssetLifecycleRegistrySourcesContain(report.Quarantine.Sources, "ambiguous_publish", 1, copied.Length, 0, 0) {
+		t.Fatalf("quarantine sources=%+v missing ambiguous_publish", report.Quarantine.Sources)
+	}
+	entry, ok := columnAssetLifecycleFindEntry(report.Reachability.Entries, copied)
+	if !ok || entry.Status != ColumnAssetReachabilityProtected || !slices.Contains(entry.Sources, ColumnAssetReachabilitySourceQuarantine) {
+		t.Fatalf("ambiguous publish entry=%+v ok=%t", entry, ok)
 	}
 }
 
