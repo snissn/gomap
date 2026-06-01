@@ -97,6 +97,63 @@ func TestTypedColumnQ2SortedGroupedDistinctFallback1950(t *testing.T) {
 	}
 }
 
+func TestTypedColumnQ2SortedGroupedDistinctLocalDictionariesAndEmptyValues1950(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2LocalDictBatchA1950(), typedColumnQ2LocalDictBatchB1950()}
+	events := flattenColumnPhysicalEvents1950(batches)
+	d, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, typedColumnQ2ClickHouseSortKey1950(), batches)
+	defer closeFn()
+
+	codesByGeneration := typedColumnQ1DictionaryCodeByGeneration1950(t, d, col, "did", "did:m")
+	if len(codesByGeneration) < 2 {
+		t.Fatalf("did:m dictionary codes by generation=%v want at least two", codesByGeneration)
+	}
+	seenCodes := make(map[int64]struct{}, len(codesByGeneration))
+	for _, code := range codesByGeneration {
+		seenCodes[code] = struct{}{}
+	}
+	if len(seenCodes) < 2 {
+		t.Fatalf("did:m local dictionary codes=%v want differing local dictionary orders", codesByGeneration)
+	}
+
+	result, err := col.RunColumnPhysicalQuery(typedColumnQ2Request1950())
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(q2 local dictionaries): %v", err)
+	}
+	rowHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchReferenceLinesP0("q2", events))
+	want := columnPhysicalJSONBenchQ2ReferenceCountsP0(events)
+	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "local dictionaries", result, rowHash, want)
+	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "local dictionaries", result.Diagnostics, len(events), columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", events), true)
+	got := columnPhysicalJSONBenchQ2CountsP0(result.Groups)
+	if got["app.z"].Count != 4 || got["app.z"].Distinct != 2 {
+		t.Fatalf("app.z counts=%+v want duplicate did:m counted once across different local dictionaries", got["app.z"])
+	}
+	if got[""].Count != 1 || got[""].Distinct != 1 {
+		t.Fatalf("empty event counts=%+v want real empty group value", got[""])
+	}
+	if got["app.emptydid"].Count != 2 || got["app.emptydid"].Distinct != 1 {
+		t.Fatalf("empty did counts=%+v want empty distinct value counted once", got["app.emptydid"])
+	}
+}
+
+func TestTypedColumnQ2SortedGroupedDistinctPrefixMismatchFallback1950(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
+	events := flattenColumnPhysicalEvents1950(batches)
+	mismatchSortKey := []ColumnSortKey{{Column: "kind"}, {Column: "collection"}, {Column: "operation"}, {Column: "did"}, {Column: "time_us"}}
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, mismatchSortKey, batches)
+	defer closeFn()
+
+	result, err := col.RunColumnPhysicalQuery(typedColumnQ2Request1950())
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(q2 prefix mismatch): %v", err)
+	}
+	rowHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchReferenceLinesP0("q2", events))
+	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "prefix mismatch", result, rowHash, columnPhysicalJSONBenchQ2ReferenceCountsP0(events))
+	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "prefix mismatch", result.Diagnostics, len(events), columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", events), false)
+	if result.Diagnostics.SortedGroupedDistinctFallbackReason != columnSortedGroupedDistinctFallbackSortKeyLayout {
+		t.Fatalf("prefix mismatch diagnostics=%+v want sort-key-layout fallback", result.Diagnostics)
+	}
+}
+
 func BenchmarkTypedColumnQ2SortedGroupedDistinct1950(b *testing.B) {
 	events := typedColumnQ2BenchmarkEvents1950(65_536)
 	cases := []struct {
@@ -202,6 +259,30 @@ func typedColumnQ2SortedBatchB1950() []columnPhysicalJSONBenchParityEventP0 {
 		{ID: "b-like-shared", TimeUS: base + 33, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.like", Did: "did:shared"},
 		{ID: "b-repost", TimeUS: base + 34, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.repost", Did: "did:repost"},
 		{ID: "b-graph", TimeUS: base + 35, Kind: "commit", Operation: "create", Collection: "app.bsky.graph.follow", Did: "did:graph"},
+	}
+}
+
+func typedColumnQ2LocalDictBatchA1950() []columnPhysicalJSONBenchParityEventP0 {
+	const base = int64(1_810_000_000_000_000)
+	return []columnPhysicalJSONBenchParityEventP0{
+		{ID: "a-z-m-1", TimeUS: base + 1, Kind: "commit", Operation: "create", Collection: "app.z", Did: "did:m"},
+		{ID: "a-z-m-2", TimeUS: base + 2, Kind: "commit", Operation: "create", Collection: "app.z", Did: "did:m"},
+		{ID: "a-a-x", TimeUS: base + 3, Kind: "commit", Operation: "create", Collection: "app.a", Did: "did:x"},
+		{ID: "a-empty-event", TimeUS: base + 4, Kind: "commit", Operation: "create", Collection: "", Did: "did:empty-event"},
+		{ID: "a-kind-guard", TimeUS: base + 5, Kind: "identity", Operation: "create", Collection: "app.z", Did: "did:guard"},
+	}
+}
+
+func typedColumnQ2LocalDictBatchB1950() []columnPhysicalJSONBenchParityEventP0 {
+	const base = int64(1_810_000_000_000_000)
+	return []columnPhysicalJSONBenchParityEventP0{
+		{ID: "b-z-m", TimeUS: base + 6, Kind: "commit", Operation: "create", Collection: "app.z", Did: "did:m"},
+		{ID: "b-z-n", TimeUS: base + 7, Kind: "commit", Operation: "create", Collection: "app.z", Did: "did:n"},
+		{ID: "b-a-x", TimeUS: base + 8, Kind: "commit", Operation: "create", Collection: "app.a", Did: "did:x"},
+		{ID: "b-empty-did-1", TimeUS: base + 9, Kind: "commit", Operation: "create", Collection: "app.emptydid", Did: ""},
+		{ID: "b-empty-did-2", TimeUS: base + 10, Kind: "commit", Operation: "create", Collection: "app.emptydid", Did: ""},
+		{ID: "b-op-guard", TimeUS: base + 11, Kind: "commit", Operation: "delete", Collection: "app.z", Did: "did:a"},
+		{ID: "b-kind-guard", TimeUS: base + 12, Kind: "identity", Operation: "create", Collection: "app.z", Did: "did:b"},
 	}
 }
 
