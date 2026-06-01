@@ -75,6 +75,13 @@ func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("driver insert one: %v", err)
 	}
+	names, err := client.ListDatabaseNames(opCtx, bson.D{{Key: "name", Value: "app"}})
+	if err != nil {
+		t.Fatalf("driver list database names: %v", err)
+	}
+	if len(names) != 1 || names[0] != "app" {
+		t.Fatalf("driver list database names=%v want [app]", names)
+	}
 
 	var got bson.M
 	if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}).Decode(&got); err != nil {

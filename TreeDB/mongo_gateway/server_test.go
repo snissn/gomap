@@ -789,6 +789,54 @@ func TestPrepareInsertDocumentBSONAllowsNativeUnindexedTypes(t *testing.T) {
 	}
 }
 
+func TestServerUpdateBSONSetAllowsNativeBinaryValues(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+
+	assertOK(t, serveCommand(t, server, 22540, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: "binary-set"},
+			{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{1}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	updateResponse := serveCommand(t, server, 22541, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "binary-set"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+				{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{2, 3, 4}}},
+			}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, updateResponse)
+	assertInt32(t, updateResponse, "n", 1)
+	assertInt32(t, updateResponse, "nModified", 1)
+
+	findResponse := serveCommand(t, server, 22542, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "binary-set"}}},
+		{Key: "$db", Value: "app"},
+	})
+	batch := cursorFirstBatch(t, findResponse)
+	if len(batch) != 1 {
+		t.Fatalf("batch len=%d want 1", len(batch))
+	}
+	subtype, payload := batch[0].Lookup("payload").Binary()
+	if subtype != 0x00 || !bytes.Equal(payload, []byte{2, 3, 4}) {
+		t.Fatalf("payload subtype/data=%#x/%v want 0/[2 3 4]", subtype, payload)
+	}
+}
+
 func TestServerUpdateTemplateV1RefreshesMaterializerBetweenStatements(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
