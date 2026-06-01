@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +69,23 @@ func TestColumnStorePhysicalAccountingReportsTypedColumnSections2118(t *testing.
 	if sectionBytes != part.Image.TotalStoredBytes {
 		t.Fatalf("section bytes=%d want total stored bytes %d", sectionBytes, part.Image.TotalStoredBytes)
 	}
+	categoryBytes := part.Image.SerializedManifestBytes +
+		part.Image.SerializedPaddingBytes +
+		part.Image.DeclaredColumnBytes +
+		part.Image.DeclaredColumnOffsetsBytes +
+		part.Image.DeclaredColumnValuesBytes +
+		part.Image.DictionaryBytes +
+		part.Image.MarkBytes +
+		part.Image.SortKeyMetadataBytes +
+		part.Image.AggregateMetadataBytes +
+		part.Image.ColumnStatsBytes +
+		part.Image.PruningMetadataBytes +
+		part.Image.DescriptorBytes +
+		part.Image.LayoutContractBytes +
+		part.Image.LocatorBytes
+	if categoryBytes != part.Image.TotalStoredBytes {
+		t.Fatalf("category bytes=%d want total stored bytes %d", categoryBytes, part.Image.TotalStoredBytes)
+	}
 
 	if got, want := accounting.Totals.TypedColumnPartBytes, typedRefs[0].Length; got != want {
 		t.Fatalf("typed column part total=%d want %d", got, want)
@@ -80,6 +98,23 @@ func TestColumnStorePhysicalAccountingReportsTypedColumnSections2118(t *testing.
 	}
 	if !columnStorePhysicalAccountingHasKind(accounting.AssetKinds, ColumnAssetKindTCS1TypedColumnPart, typedRefs[0].Length) {
 		t.Fatalf("asset kind totals missing typed-column part: %+v", accounting.AssetKinds)
+	}
+	totalCategoryBytes := accounting.Totals.TypedColumnSections.SerializedManifestBytes +
+		accounting.Totals.TypedColumnSections.SerializedPaddingBytes +
+		accounting.Totals.TypedColumnSections.DeclaredColumnBytes +
+		accounting.Totals.TypedColumnSections.DeclaredColumnOffsetsBytes +
+		accounting.Totals.TypedColumnSections.DeclaredColumnValuesBytes +
+		accounting.Totals.TypedColumnSections.DictionaryBytes +
+		accounting.Totals.TypedColumnSections.MarkBytes +
+		accounting.Totals.TypedColumnSections.SortKeyMetadataBytes +
+		accounting.Totals.TypedColumnSections.AggregateMetadataBytes +
+		accounting.Totals.TypedColumnSections.ColumnStatsBytes +
+		accounting.Totals.TypedColumnSections.PruningMetadataBytes +
+		accounting.Totals.TypedColumnSections.DescriptorBytes +
+		accounting.Totals.TypedColumnSections.LayoutContractBytes +
+		accounting.Totals.TypedColumnSections.LocatorBytes
+	if totalCategoryBytes != accounting.Totals.TypedColumnSections.TotalStoredBytes {
+		t.Fatalf("total category bytes=%d want total stored bytes %d", totalCategoryBytes, accounting.Totals.TypedColumnSections.TotalStoredBytes)
 	}
 }
 
@@ -100,6 +135,44 @@ func TestColumnStorePhysicalAccountingOmitDetailedSections2118(t *testing.T) {
 	}
 	if accounting.TypedColumnParts[0].Image.TotalStoredBytes == 0 || accounting.Totals.TypedColumnSections.TotalStoredBytes == 0 {
 		t.Fatalf("compact section totals missing: part=%+v totals=%+v", accounting.TypedColumnParts[0].Image, accounting.Totals.TypedColumnSections)
+	}
+}
+
+func TestPhysicalAccountingRejectsTypedPartManifestMismatch2118(t *testing.T) {
+	events := columnPhysicalJSONBenchParityEventsP0()
+	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
+	defer closeFn()
+
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars(context.Background(), columnManifestScanAllSidecars())
+	if err != nil {
+		t.Fatalf("prepare snapshot view: %v", err)
+	}
+	defer closeView()
+	if len(view.TypedColumnPartRefs) != 1 {
+		t.Fatalf("typed part refs=%d want 1", len(view.TypedColumnPartRefs))
+	}
+	base := view.TypedColumnPartRefs[0]
+
+	rowsMismatch := base
+	rowsMismatch.Rows++
+	_, err = columnStoreTypedColumnPartAccountingFromRef(view.ColumnAssetRootDir, rowsMismatch, ColumnStorePhysicalAccountingOptions{})
+	if err == nil || !strings.Contains(err.Error(), "image rows") {
+		t.Fatalf("rows mismatch error=%v, want image rows mismatch", err)
+	}
+
+	raw, err := readColumnPhysicalAssetFromManager(view.ColumnAssetRootDir, base.Ref)
+	if err != nil {
+		t.Fatalf("read typed part asset: %v", err)
+	}
+	copiedRef, err := writeColumnAssetToManagerSegment(view.ColumnAssetRootDir, view.FullConfig, raw, base.Ref.Kind, base.Ref.Generation, base.Ref.PartID+1000, base.Ref.FileID)
+	if err != nil {
+		t.Fatalf("write copied typed part asset: %v", err)
+	}
+	partIDMismatch := base
+	partIDMismatch.Ref = copiedRef
+	_, err = columnStoreTypedColumnPartAccountingFromRef(view.ColumnAssetRootDir, partIDMismatch, ColumnStorePhysicalAccountingOptions{})
+	if err == nil || !strings.Contains(err.Error(), "image part_id") {
+		t.Fatalf("part_id mismatch error=%v, want image part_id mismatch", err)
 	}
 }
 

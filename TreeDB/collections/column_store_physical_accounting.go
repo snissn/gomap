@@ -197,6 +197,9 @@ func (c *Collection) ColumnStorePhysicalAccounting(ctx context.Context, opts Col
 		addKind(asset.Ref, asset.Rows, &out.Totals.RowAssetBytes)
 	}
 	for _, asset := range view.TypedColumnPartRefs {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		addKind(asset.Ref, asset.Rows, &out.Totals.TypedColumnPartBytes)
 		part, err := columnStoreTypedColumnPartAccountingFromRef(view.ColumnAssetRootDir, asset, opts)
 		if err != nil {
@@ -250,6 +253,12 @@ func columnStoreTypedColumnPartAccountingFromRef(rootDir string, asset columnMan
 	if int64(image.TotalBytes()) != positiveColumnStorePhysicalAccountingBytes(asset.Ref.Length) {
 		return ColumnStoreTypedColumnPartAccounting{}, fmt.Errorf("collections: typed-column part image bytes=%d does not match asset ref length=%d", image.TotalBytes(), asset.Ref.Length)
 	}
+	if image.PartID != asset.Ref.PartID {
+		return ColumnStoreTypedColumnPartAccounting{}, fmt.Errorf("collections: typed-column part image part_id=%d does not match asset ref part_id=%d", image.PartID, asset.Ref.PartID)
+	}
+	if image.Rows != asset.Rows {
+		return ColumnStoreTypedColumnPartAccounting{}, fmt.Errorf("collections: typed-column part image rows=%d does not match asset rows=%d", image.Rows, asset.Rows)
+	}
 	return ColumnStoreTypedColumnPartAccounting{
 		Asset: ColumnStorePhysicalAssetAccounting{
 			Ref:    columnStorePhysicalAssetRefAccounting(asset.Ref),
@@ -281,7 +290,7 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 		LayoutContractBytes:        int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryLayoutContract)),
 		LocatorBytes:               int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryLocators)),
 	}
-	out.DeclaredColumnBytes = int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryDeclaredColumns)) + out.DeclaredColumnOffsetsBytes + out.DeclaredColumnValuesBytes
+	out.DeclaredColumnBytes = int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryDeclaredColumns))
 	out.TotalStoredBytes = out.SerializedImageBytes
 	if out.Rows > 0 {
 		out.BytesPerRow = float64(out.TotalStoredBytes) / float64(out.Rows)
