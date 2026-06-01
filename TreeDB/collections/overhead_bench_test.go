@@ -252,6 +252,38 @@ func BenchmarkCollectionOverheadPlanIndexedTemplateV1(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionOverheadPlanDirectBufferedIndexedSingle(b *testing.B) {
+	ids, docs := overheadBenchDocumentBatch(1, true)
+	planner := overheadBenchIndexedPlanner()
+	planner.buildPrimaryVal = clonePrimaryDocument
+	planner.directBufferedRuns = true
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		plan, err := planner.planInsertBatch(ids, docs)
+		if err != nil {
+			b.Fatalf("plan direct-buffered indexed batch: %v", err)
+		}
+		resetCollectionRunTables(plan.runs)
+	}
+}
+
+func BenchmarkCollectionOverheadPlanDirectBufferedIndexedTemplateV1Single(b *testing.B) {
+	ids, docs := overheadBenchTemplateDocumentBatch(b, 1, true)
+	planner := overheadBenchTemplateIndexedPlanner()
+	planner.buildPrimaryVal = clonePrimaryDocument
+	planner.directBufferedRuns = true
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		plan, err := planner.planInsertBatch(ids, docs)
+		if err != nil {
+			b.Fatalf("plan direct-buffered template-v1 batch: %v", err)
+		}
+		resetCollectionRunTables(plan.runs)
+	}
+}
+
 func BenchmarkCollectionOverheadIndexStateJSONExtraction(b *testing.B) {
 	batchSize := overheadBenchBatchSize(b)
 	_, docs := overheadBenchDocumentBatch(batchSize, true)
