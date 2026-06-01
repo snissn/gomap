@@ -457,7 +457,8 @@ type VectorIndexSearchResponse struct {
 
 // VectorIndexSearchBuffer is caller-owned reusable response storage for
 // VectorIndexSearcher.SearchWithBuffer. It is intended for steady-state
-// no-document searches that need to avoid per-call response allocation.
+// no-document searches that need to avoid per-call response allocation. Reuse a
+// warmed buffer to keep result-ID searches allocation-free.
 //
 // A VectorIndexSearchBuffer is not safe for concurrent use. Do not reuse or
 // reset the same buffer while any caller still needs a response previously
@@ -477,6 +478,11 @@ func (b *VectorIndexSearchBuffer) Reset() {
 	if b == nil {
 		return
 	}
+	clear(b.results)
+	b.resetView()
+}
+
+func (b *VectorIndexSearchBuffer) resetView() {
 	b.results = b.results[:0]
 	b.idBytes = b.idBytes[:0]
 }
@@ -820,9 +826,11 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	if buffer == nil {
 		return VectorIndexSearchResponse{}, errors.New("collections: nil vector index search buffer")
 	}
-	buffer.Reset()
+	previousResults := buffer.results
+	buffer.resetView()
 	var response VectorIndexSearchResponse
 	if s == nil || s.reader == nil || s.collection == nil {
+		clear(previousResults)
 		return response, errors.New("collections: nil vector index searcher")
 	}
 	response.IndexName = s.indexName
@@ -830,19 +838,24 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	response.Path = s.path
 	response.Status = s.status
 	if s.closed {
+		clear(previousResults)
 		return response, errors.New("collections: vector index searcher is closed")
 	}
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
+		clear(previousResults)
 		return response, err
 	}
 	if opts.IncludeDocuments {
+		clear(previousResults)
 		return response, errors.New("collections: vector index SearchWithBuffer does not support IncludeDocuments")
 	}
 	if documentFetchOptionsHasProjection(opts.DocumentFetchOptions) {
+		clear(previousResults)
 		return response, errors.New("collections: vector index document projection requires IncludeDocuments")
 	}
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
 	if err != nil {
+		clear(previousResults)
 		return response, err
 	}
 	readerStatsBefore := s.readerLast
@@ -857,20 +870,27 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
 	if err != nil {
+		clear(previousResults)
 		return response, err
 	}
 	if len(results) == 0 {
+		clear(previousResults)
 		return response, nil
 	}
 	idByteCount, err := vectorIndexSearchResultIDBytes(results)
 	if err != nil {
+		clear(previousResults)
 		return response, err
 	}
 	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, len(results))
 	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
+	if len(previousResults) > len(results) {
+		clear(previousResults[len(results):])
+	}
 	idOffset := 0
 	for i, result := range results {
 		if len(result.ID) > len(buffer.idBytes)-idOffset {
+			clear(previousResults)
 			buffer.Reset()
 			return response, errors.New("collections: vector index search result id byte accounting mismatch")
 		}

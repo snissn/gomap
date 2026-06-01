@@ -580,6 +580,68 @@ func TestOpenVectorIndexSearcherReusesNativeReaderV4(t *testing.T) {
 	}
 }
 
+func TestVectorIndexSearcherSearchWithBufferResultEquivalenceAndZeroAllocs2124(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{0.7, 0.3, 0}},
+		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	ownedSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher owned: %v", err)
+	}
+	defer func() { _ = ownedSearcher.Close() }()
+	bufferedSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher buffered: %v", err)
+	}
+	defer func() { _ = bufferedSearcher.Close() }()
+
+	opts := VectorIndexSearcherSearchOptions{Query: []float32{0.6, 0.4, 0}, TopK: 3, EfSearch: len(rows)}
+	owned, err := ownedSearcher.Search(opts)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, owned, def.Name, opts.TopK)
+
+	var buffer VectorIndexSearchBuffer
+	buffered, err := bufferedSearcher.SearchWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, buffered, def.Name, opts.TopK)
+	assertVectorIndexSearchResponsesEquivalentNoDocs2124(t, buffered, owned)
+	assertVectorIndexSearchResultIDStatsContract2124(t, buffered.Stats, owned.Stats)
+
+	if _, err := bufferedSearcher.SearchWithBuffer(opts, &buffer); err != nil {
+		t.Fatalf("warm SearchWithBuffer for allocation check: %v", err)
+	}
+	var sink int
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, err := bufferedSearcher.SearchWithBuffer(opts, &buffer)
+		if err != nil {
+			panic(err)
+		}
+		if len(got.Results) != opts.TopK {
+			panic("unexpected SearchWithBuffer result count")
+		}
+		sink += len(got.Results) + got.Results[0].Ordinal
+	})
+	if allocs != 0 {
+		t.Fatalf("SearchWithBuffer steady-state allocs=%v want 0", allocs)
+	}
+	if sink == 0 {
+		t.Fatal("allocation check did not consume results")
+	}
+}
+
 func TestVectorIndexSearcherSearchWithBufferReuseGrowShrinkNoStaleIDs1961(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-long-a", vector: []float32{1, 0, 0}},
@@ -614,6 +676,12 @@ func TestVectorIndexSearcherSearchWithBufferReuseGrowShrinkNoStaleIDs1961(t *tes
 		}
 	}
 
+	if len(buffer.results) != 3 {
+		t.Fatalf("test setup buffer results=%d want 3 before shrink", len(buffer.results))
+	}
+	buffer.results[1].Document = []byte("stale-document")
+	buffer.results[2].Score = 99
+
 	shrinkOpts := VectorIndexSearcherSearchOptions{Query: []float32{0, 1, 0}, TopK: 1, EfSearch: len(rows)}
 	shrunk, err := searcher.SearchWithBuffer(shrinkOpts, &buffer)
 	if err != nil {
@@ -627,6 +695,12 @@ func TestVectorIndexSearcherSearchWithBufferReuseGrowShrinkNoStaleIDs1961(t *tes
 	if cap(shrunk.Results[0].ID) != len(shrunk.Results[0].ID) {
 		t.Fatalf("shrunk id len/cap=%d/%d want cap isolated", len(shrunk.Results[0].ID), cap(shrunk.Results[0].ID))
 	}
+	allResults := buffer.results[:cap(buffer.results)]
+	for i := len(buffer.results); i < 3 && i < len(allResults); i++ {
+		if allResults[i].ID != nil || allResults[i].Ordinal != 0 || allResults[i].Score != 0 || allResults[i].Document != nil {
+			t.Fatalf("shrunk stale tail result[%d]=%+v want cleared", i, allResults[i])
+		}
+	}
 
 	regrown, err := searcher.SearchWithBuffer(growOpts, &buffer)
 	if err != nil {
@@ -634,6 +708,48 @@ func TestVectorIndexSearcherSearchWithBufferReuseGrowShrinkNoStaleIDs1961(t *tes
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, regrown, def.Name, 3)
 	assertVectorIndexSearchResultsV4(t, regrown.Results, exactColumnGraphTopKForTest(t, rows, growOpts.Query, growOpts.TopK), false)
+}
+
+func TestVectorIndexSearcherSearchWithBufferOversizedReuseClearsCurrentView2124(t *testing.T) {
+	rows := columnGraphRebuildSyntheticRowsV2A(24, 3)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+
+	var buffer VectorIndexSearchBuffer
+	wideOpts := VectorIndexSearcherSearchOptions{Query: rows[0].vector, TopK: len(rows), EfSearch: len(rows)}
+	wide, err := searcher.SearchWithBuffer(wideOpts, &buffer)
+	if err != nil {
+		t.Fatalf("wide SearchWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, wide, def.Name, len(rows))
+	if cap(buffer.results) <= 1*2+columnVectorGraphNativeScratchOversizeSlack {
+		t.Fatalf("test setup cap=%d want oversized for shrink-to-one path", cap(buffer.results))
+	}
+	for i := 1; i < len(buffer.results); i++ {
+		buffer.results[i].Document = []byte("stale-document")
+		buffer.results[i].Score = 99
+	}
+
+	shrinkOpts := VectorIndexSearcherSearchOptions{Query: rows[1].vector, TopK: 1, EfSearch: len(rows)}
+	shrunk, err := searcher.SearchWithBuffer(shrinkOpts, &buffer)
+	if err != nil {
+		t.Fatalf("shrink SearchWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, shrunk, def.Name, 1)
+	if cap(shrunk.Results) != 1 || cap(buffer.results) != 1 {
+		t.Fatalf("shrunk result cap response=%d buffer=%d want new exact backing for oversized reuse", cap(shrunk.Results), cap(buffer.results))
+	}
+	if shrunk.Results[0].Document != nil || shrunk.Results[0].Score == 99 {
+		t.Fatalf("shrunk current result retained stale state: %+v", shrunk.Results[0])
+	}
 }
 
 func TestVectorIndexSearcherSearchWithBufferDoesNotMutateSearchResponse1961(t *testing.T) {
@@ -1310,6 +1426,62 @@ func assertVectorIndexSearchResultsV4(tb testing.TB, got []VectorIndexSearchResu
 		if wantDocs && len(got[i].Document) == 0 {
 			tb.Fatalf("result[%d] missing materialized document", i)
 		}
+	}
+}
+
+func assertVectorIndexSearchResponsesEquivalentNoDocs2124(tb testing.TB, got, want VectorIndexSearchResponse) {
+	tb.Helper()
+	if got.IndexName != want.IndexName || got.Strategy != want.Strategy || got.Path != want.Path || got.Status != want.Status {
+		tb.Fatalf("response metadata got=%+v status=%+v want=%+v status=%+v", got, got.Status, want, want.Status)
+	}
+	if len(got.Results) != len(want.Results) {
+		tb.Fatalf("results=%d want %d", len(got.Results), len(want.Results))
+	}
+	for i := range want.Results {
+		if !bytes.Equal(got.Results[i].ID, want.Results[i].ID) || got.Results[i].Ordinal != want.Results[i].Ordinal || math.Abs(got.Results[i].Score-want.Results[i].Score) > 1e-6 {
+			tb.Fatalf("result[%d]=%+v want %+v", i, got.Results[i], want.Results[i])
+		}
+		if len(got.Results[i].Document) != 0 {
+			tb.Fatalf("result[%d] document len=%d want no-document reusable response", i, len(got.Results[i].Document))
+		}
+	}
+}
+
+func assertVectorIndexSearchResultIDStatsContract2124(tb testing.TB, got, want VectorIndexSearchStats) {
+	tb.Helper()
+	checks := []struct {
+		name string
+		got  uint64
+		want uint64
+	}{
+		{name: "candidate_rows", got: got.CandidateRows, want: want.CandidateRows},
+		{name: "candidates", got: got.Candidates, want: want.Candidates},
+		{name: "edges", got: got.Edges, want: want.Edges},
+		{name: "visited_nodes", got: got.VisitedNodes, want: want.VisitedNodes},
+		{name: "visited_edges", got: got.VisitedEdges, want: want.VisitedEdges},
+		{name: "vector_bytes_read", got: got.VectorBytesRead, want: want.VectorBytesRead},
+		{name: "norm_bytes_read", got: got.NormBytesRead, want: want.NormBytesRead},
+		{name: "adjacency_bytes_read", got: got.AdjacencyBytesRead, want: want.AdjacencyBytesRead},
+		{name: "candidate_fetches", got: got.CandidateFetches, want: want.CandidateFetches},
+		{name: "expansion_fetches", got: got.ExpansionFetches, want: want.ExpansionFetches},
+		{name: "result_fetches", got: got.ResultFetches, want: want.ResultFetches},
+		{name: "prepared_graph_search_views", got: got.PreparedGraphSearchViews, want: want.PreparedGraphSearchViews},
+		{name: "result_id_typed_bytes_state", got: got.ResultIDTypedBytesState, want: want.ResultIDTypedBytesState},
+		{name: "result_id_graph_fallbacks", got: got.ResultIDGraphFallbacks, want: want.ResultIDGraphFallbacks},
+		{name: "row_ref_state_result_refs", got: got.RowRefStateResultRefs, want: want.RowRefStateResultRefs},
+		{name: "graph_row_fallbacks", got: got.GraphRowFallbacks, want: want.GraphRowFallbacks},
+		{name: "typed_column_fallbacks", got: got.TypedColumnFallbacks, want: want.TypedColumnFallbacks},
+		{name: "vector_scratch_decodes", got: got.VectorScratchDecodes, want: want.VectorScratchDecodes},
+		{name: "norm_scratch_decodes", got: got.NormScratchDecodes, want: want.NormScratchDecodes},
+		{name: "adjacency_scratch_decodes", got: got.AdjacencyScratchDecodes, want: want.AdjacencyScratchDecodes},
+	}
+	for _, check := range checks {
+		if check.got != check.want {
+			tb.Fatalf("stats %s=%d want %d; got=%+v wantStats=%+v", check.name, check.got, check.want, got, want)
+		}
+	}
+	if got.GraphRows != 0 || got.PreparedGraphSearchViews != 1 || got.ResultIDGraphFallbacks != 0 || got.GraphRowFallbacks != 0 || got.VectorScratchDecodes != 0 || got.NormScratchDecodes != 0 || got.AdjacencyScratchDecodes != 0 || got.TypedColumnFallbacks != 0 {
+		tb.Fatalf("stats=%+v want healthy prepared result-ID path without graph-row/scratch fallbacks", got)
 	}
 }
 
