@@ -2276,7 +2276,7 @@ func columnStoreJSONBenchUnavailablePreparedCell(name string, direct columnStore
 	cell.MetadataDataScanPath = columnStoreJSONBenchScanPathForPlan(planLabel)
 	cell.RowCount = direct.Rows
 	cell.RawHash = direct.RawHash
-	cell.ResultHash = direct.ProductionHash
+	cell.ResultHash = 0
 	cell.ParityWithRowScan = false
 	cell.ManifestRootName = direct.ManifestRootName
 	cell.ManifestRoot = direct.ManifestRoot

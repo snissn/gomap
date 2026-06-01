@@ -1928,6 +1928,35 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 }
 
+func TestColumnStoreJSONBenchUnavailablePreparedCellDoesNotClaimPreparedHash1955(t *testing.T) {
+	direct := columnStoreQueryMetric{
+		Name:           columnStoreQueryQ4B,
+		PlanLabel:      columnStorePathAggregateMetadata,
+		AliasOf:        columnStoreQueryAliasOf(columnStoreQueryQ4B, columnStorePathAggregateMetadata),
+		StorageSource:  string(collections.ColumnPhysicalQueryStorageSourceAggregateMetadata),
+		FallbackReason: string(collections.ColumnPhysicalQueryFallbackNone),
+		Rows:           9,
+		RawHash:        0x1111,
+		ProductionHash: 0x1111,
+		CompressionAttribution: columnStoreCompressionAttribution{
+			CompressionPolicyLabel: columnStoreCompressionPolicyDefault,
+			RequestedCompression:   columnStoreCompressionNoneLabel,
+			ActualCompression:      columnStoreCompressionNoneLabel,
+		},
+	}
+
+	cell := columnStoreJSONBenchUnavailablePreparedCell(columnStoreQueryQ4B, direct, &collections.ColumnStoreConfig{}, 0, errors.New("prepare unavailable"))
+	if cell.CompatibilityStatus != "unavailable" || !strings.Contains(cell.CompatibilityStatusReason, "prepare unavailable") {
+		t.Fatalf("unexpected unavailable status: %+v", cell)
+	}
+	if cell.RawHash != direct.RawHash {
+		t.Fatalf("raw_hash=%016x want %016x", cell.RawHash, direct.RawHash)
+	}
+	if cell.ResultHash != 0 || cell.ParityWithRowScan {
+		t.Fatalf("unavailable prepared cell must not claim prepared result hash/parity: %+v", cell)
+	}
+}
+
 func TestColumnStoreSuiteRejectsInvalidKeysAndBatchSizeM11A(t *testing.T) {
 	tests := []struct {
 		name    string
