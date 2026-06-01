@@ -16,7 +16,7 @@ OUT=/tmp/collection-matrix-$(date +%s)
 
 The current matrix engine names are legacy benchmark-harness labels. The default
 `production_wal_on_fast` engine is retained only until the harness migration in
-#2148. Current TreeDB server/profile guidance should use `command_wal_durable`,
+issue `#2148`. Current TreeDB server/profile guidance should use `command_wal_durable`,
 `command_wal_relaxed`, or explicit benchmark-only `bench`; use old engine names
 only when reproducing historical collection-matrix results.
 
