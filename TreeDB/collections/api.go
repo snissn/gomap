@@ -190,6 +190,17 @@ func commandWALBufferedUpdateCommitAmbiguous(err error) error {
 	return &CommitAmbiguousError{Operation: "command WAL buffered update", Err: err}
 }
 
+func commandWALBufferedInsertCommitAmbiguous(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ambiguous *CommitAmbiguousError
+	if errors.As(err, &ambiguous) {
+		return err
+	}
+	return &CommitAmbiguousError{Operation: "command WAL buffered insert", Err: err}
+}
+
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
 // non-empty and unique within the batch. Update receives the current stored
 // document bytes and returns the replacement document bytes in the same format
@@ -1205,7 +1216,7 @@ func newCollectionManager(database *backenddb.DB, opts collectionManagerOptions)
 		manager.commandWALCoordinator = collectionCommandWALCoordinatorForDB(database)
 		if opts.registerBackendHooks {
 			manager.commandWALRawUnregister = database.RegisterCommandWALRawPublishBarrier(manager.flushPendingCommandWALBeforeRawPublish)
-			manager.closeUnregister = database.RegisterCloseHook(manager.closeForBackend)
+			manager.closeUnregister = database.RegisterCloseHookBefore(manager.closeForBackend)
 		}
 	}
 	return manager
@@ -3763,9 +3774,11 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		}
 	}
 	domain.storagePolicy = plannerOptions.dataStoragePolicy
-	domain.table.SetEntry(id, document, page.ValuePtr{}, node.FlagInline)
-	domain.count++
 	resultID := bytes.Clone(id)
+	domain.table.SetEntry(resultID, document, page.ValuePtr{}, node.FlagInline)
+	domain.count++
+	domain.writeGeneration++
+	domain.notePrimaryWriteKeysLocked([][]byte{resultID}, domain.writeGeneration)
 	domain.mu.Unlock()
 	return resultID, nil
 }
@@ -3775,6 +3788,51 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 		c.db != nil &&
 		c.writeDomain != nil &&
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+}
+
+func (c *Collection) canBufferCommandWALNoIndexInsertBatch(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent, documentCount int) bool {
+	if c == nil || c.db == nil || c.writeDomain == nil || commandWALIntent != nil || documentCount <= 0 {
+		return false
+	}
+	if !c.db.CommandWALEnabled() || c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed {
+		return false
+	}
+	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || columnStoreWriteEnabled(meta) {
+		return false
+	}
+	switch normalizedDocumentFormat(format) {
+	case DocumentFormatJSON, DocumentFormatBSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Collection) canUseCommandWALIndexedInsertBuffer(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent) bool {
+	if c == nil || c.db == nil || c.writeDomain == nil || commandWALIntent != nil {
+		return false
+	}
+	if !c.db.CommandWALEnabled() || c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed {
+		return false
+	}
+	if len(meta.VectorIndexes) != 0 || columnStoreWriteEnabled(meta) {
+		return false
+	}
+	if !c.shouldBufferIndexedInserts(meta) {
+		return false
+	}
+	switch normalizedDocumentFormat(format) {
+	case DocumentFormatJSON, DocumentFormatBSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Collection) canBufferCommandWALIndexedInsertBatch(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent, documentCount int) bool {
+	return documentCount > 0 &&
+		c.canUseCommandWALIndexedInsertBuffer(meta, format, commandWALIntent) &&
+		c.shouldBufferIndexedInsertBatch(meta, documentCount)
 }
 
 func (c *Collection) canBufferDirectUpdateAck() bool {
@@ -3911,6 +3969,8 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		domain.table.SetEntry(entry.id, entry.document, page.ValuePtr{}, node.FlagInline)
 	}
 	domain.count += len(entries)
+	domain.writeGeneration++
+	domain.notePrimaryWriteKeysLocked(resultIDs, domain.writeGeneration)
 	c.setLastInsertStats(CollectionInsertStats{
 		Documents: len(entries),
 		Indexes:   0,
@@ -4229,6 +4289,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.primaryRoot = rootIDs[0]
 	domain.table = newCollectionRunTable(0)
 	domain.count = 0
+	domain.bufferedBytes = 0
 	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -4298,17 +4359,38 @@ func isDefaultIndexedWriteMemtableMaxDocuments(opts CollectionOptions) bool {
 		opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 }
 
-func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan) (time.Duration, error) {
+func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan, commandWALStageIntent *backenddb.CommandWALIntent) (elapsed time.Duration, err error) {
 	domain := c.writeDomain
 	if domain == nil {
 		return 0, errors.New("collections: missing write domain")
 	}
+	commandWALStageAppended := false
+	appendCommandWALBeforeStage := func() (uint64, error) {
+		if commandWALStageIntent == nil {
+			return 0, nil
+		}
+		if c.db == nil {
+			return 0, errCollectionDBNil
+		}
+		lsn, appendErr := c.db.AppendCommandWALIntent(commandWALStageIntent, false)
+		if appendErr != nil {
+			return 0, appendErr
+		}
+		commandWALStageAppended = lsn != 0
+		return lsn, nil
+	}
+	defer func() {
+		if err != nil && commandWALStageAppended && c.db != nil {
+			c.db.MarkCommandWALIntentRecoveryRequired(commandWALStageIntent)
+			err = commandWALBufferedInsertCommitAmbiguous(err)
+		}
+	}()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if catalog == nil {
 		return 0, errCollectionNotFound
 	}
-	if len(catalog.meta.Indexes) == 0 {
+	if len(catalog.meta.Indexes) == 0 && commandWALStageIntent == nil {
 		return 0, errors.New("collections: indexed write buffer requires an indexed schema")
 	}
 	if domain.count > 0 {
@@ -4352,8 +4434,12 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 	}
 	ensureBufferedPrimaryRunIndexLocked(domain, len(plan.primaryKeys))
+	commandWALLSN, err := appendCommandWALBeforeStage()
+	if err != nil {
+		return 0, err
+	}
 	if plan.directBufferedInsert != nil {
-		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan)
+		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, commandWALLSN)
 	}
 	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(catalog.meta.Options)
 	freezeMutableIndexedRunMapsLocked(domain)
@@ -4436,6 +4522,11 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.notePrimaryWriteKeysLocked(plan.resultIDs, domain.writeGeneration)
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
+	if commandWALLSN != 0 {
+		if err := domain.recordPendingCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
+			return 0, commandWALBufferedInsertCommitAmbiguous(err)
+		}
+	}
 	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options)
 	if err != nil {
 		if autoFlushEnabled {
@@ -4456,7 +4547,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	return 0, nil
 }
 
-func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan) (time.Duration, error) {
+func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan, commandWALLSN uint64) (time.Duration, error) {
 	direct := plan.directBufferedInsert
 	if direct == nil {
 		return 0, nil
@@ -4639,6 +4730,11 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	}
 	domain.observeIndexedStage(len(plan.resultIDs), direct.stagedBytes, actualRootRuns)
 	c.meta = catalog.meta
+	if commandWALLSN != 0 {
+		if err := domain.recordPendingCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
+			return 0, commandWALBufferedInsertCommitAmbiguous(err)
+		}
+	}
 
 	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options)
 	if err != nil {
@@ -6612,6 +6708,10 @@ func hasPendingIndexedPrimaryOverlay(domain *collectionWriteDomain) bool {
 	return domain != nil &&
 		(hasIndexedFlushUnitPrimaryOverlay(domain.indexedFlushUnits) ||
 			hasIndexedFlushUnitPrimaryOverlay(domain.indexedPublishingUnits))
+}
+
+func hasBufferedNoIndexTableWritesLocked(domain *collectionWriteDomain) bool {
+	return domain != nil && domain.table != nil && domain.table.Len() > 0
 }
 
 func hasBufferedIndexedPendingWrites(domain *collectionWriteDomain) bool {
@@ -8945,7 +9045,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
 	pinCommitSeq := snapshotCommitSeq(pin)
 	pinSystemRoot := snapshotSystemRoot(pin)
-	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan)
+	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, nil)
 	_ = pin.Close()
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
@@ -8982,6 +9082,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	skipInitialNoIndexFlush := false
 	commandWALActive := c.commandWALActive(commandWALIntent)
+	commandWALNoIndexBufferCandidate := c.canBufferCommandWALNoIndexInsertBatch(c.meta, c.meta.Options.DocumentFormat, commandWALIntent, len(documents))
 	if !commandWALActive &&
 		c.canBufferNoIndexInsertBatchAck() &&
 		len(c.meta.Indexes) == 0 &&
@@ -8993,7 +9094,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return nil, err
 		}
 	}
-	if c.hasBufferedNoIndexBSONRootRuns() {
+	if c.hasBufferedNoIndexBSONRootRuns() && !commandWALNoIndexBufferCandidate {
 		if err := c.flushBufferedWrites(); err != nil {
 			return nil, err
 		}
@@ -9067,8 +9168,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return nil, err
 		}
 	}
-	indexedMemtablesEnabled := !commandWALActive && c.shouldBufferIndexedInserts(meta)
-	bufferIndexedInserts := !commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))
+	commandWALNoIndexBufferedMode := c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+	commandWALIndexedBufferEnabled := c.canUseCommandWALIndexedInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
+	commandWALIndexedBufferedMode := c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+	commandWALBufferedMode := commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
+	indexedMemtablesEnabled := (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode || commandWALIndexedBufferEnabled
+	bufferIndexedInserts := (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
 		closePlanningSnapshot()
 		if err := c.flushBufferedWrites(); err != nil {
@@ -9114,8 +9219,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 		plannerOptions.learnTemplateIDs = templateEncoder != nil
 		plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
-		indexedMemtablesEnabled = !commandWALActive && c.shouldBufferIndexedInserts(meta)
-		bufferIndexedInserts = !commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))
+		commandWALNoIndexBufferedMode = c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+		commandWALIndexedBufferEnabled = c.canUseCommandWALIndexedInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
+		commandWALIndexedBufferedMode = c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+		commandWALBufferedMode = commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
+		indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode || commandWALIndexedBufferEnabled
+		bufferIndexedInserts = (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	}
 	if bufferIndexedInserts {
 		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
@@ -9136,8 +9245,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 				c.meta = meta
 				plannerOptions.learnTemplateIDs = templateEncoder != nil
 				plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
-				indexedMemtablesEnabled = !commandWALActive && c.shouldBufferIndexedInserts(meta)
-				bufferIndexedInserts = !commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))
+				commandWALNoIndexBufferedMode = c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+				commandWALIndexedBufferEnabled = c.canUseCommandWALIndexedInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
+				commandWALIndexedBufferedMode = c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
+				commandWALBufferedMode = commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
+				indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode || commandWALIndexedBufferEnabled
+				bufferIndexedInserts = (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 			}
 		}
 	}
@@ -9158,7 +9271,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 	if len(meta.Indexes) == 0 {
-		if plannerOptions.documentFormat == DocumentFormatJSON {
+		if plannerOptions.documentFormat == DocumentFormatJSON && !commandWALNoIndexBufferedMode {
 			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents, commandWALIntent, execOpts)
 		}
 	}
@@ -9229,12 +9342,47 @@ func (c *Collection) insertBatchOnceWithLockState(
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
+		var bufferedCommandWALIntent *backenddb.CommandWALIntent
+		if commandWALBufferedMode {
+			docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
+			if err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
+			bufferedCommandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
+			if err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
+		}
+		var unlockCommandWALRawStage func()
+		if bufferedCommandWALIntent != nil && c.db != nil {
+			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
+			defer unlockCommandWALRawStage()
+			if err := c.drainCommandWALStageCoordinatorBeforeMutation(); err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
+		}
 		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, plan)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
-		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan)
+		var unlockCommandWALStage func()
+		if bufferedCommandWALIntent != nil {
+			unlockCommandWALStage, err = c.lockCommandWALStageCoordinator()
+			if err != nil {
+				_ = pin.Close()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
+			defer unlockCommandWALStage()
+		}
+		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan, bufferedCommandWALIntent)
 		_ = pin.Close()
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
@@ -13957,7 +14105,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 
 func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMode, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
 	commandWALBufferedMode := c.commandWALActive(commandWALIntent) && commandWALIntent == nil && mode != updateBatchModeAny
-	if (!c.commandWALActive(commandWALIntent) || commandWALBufferedMode) && (c.shouldPlanUpdateBatchWithBufferedWrites(mode) || commandWALBufferedMode) {
+	if (!c.commandWALActive(commandWALIntent) || commandWALBufferedMode) && (c.shouldPlanUpdateBatchWithBufferedWrites(mode, items) || commandWALBufferedMode) {
 		useBufferedRead := true
 		bufferedReadReplans := 0
 		for {
@@ -14252,7 +14400,24 @@ func (c *Collection) withMutationLock(fn func() error) error {
 	return fn()
 }
 
-func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMode) bool {
+func updateBatchCanStageDirectNoIndexTableUpdate(c *Collection, domain *collectionWriteDomain, mode updateBatchMode, items []updateBatchItem) bool {
+	if c == nil || domain == nil || mode != updateBatchModeNoSecondaryUniqueIndexChanges {
+		return false
+	}
+	if !c.canBufferDirectUpdateAck() || !updateBatchItemsAllHaveBSONSet(items) {
+		return false
+	}
+	meta := c.meta
+	if domain.loaded {
+		meta = domain.meta
+	}
+	if len(meta.Indexes) != 0 || columnStoreNeedsRetainedPayloadTransform(meta) {
+		return false
+	}
+	return isBSONDocumentFormat(normalizedDocumentFormat(meta.Options.DocumentFormat))
+}
+
+func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMode, items []updateBatchItem) bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
@@ -14262,11 +14427,20 @@ func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMod
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	return domain.count > 0 && hasBufferedIndexedPendingWrites(domain)
+	if domain.count == 0 {
+		return false
+	}
+	if hasBufferedIndexedPendingWrites(domain) {
+		return true
+	}
+	if hasBufferedNoIndexTableWritesLocked(domain) {
+		return updateBatchCanStageDirectNoIndexTableUpdate(c, domain, mode, items)
+	}
+	return hasBufferedPrimaryWritesLocked(domain, c.meta.Name)
 }
 
 func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64) bool {
-	if domain == nil || domain.count == 0 || !hasBufferedIndexedPendingWrites(domain) {
+	if domain == nil || domain.count == 0 || !hasBufferedPrimaryWritesLocked(domain, meta.Name) {
 		return false
 	}
 	if !domain.loaded || domain.catalog == nil {
@@ -14468,6 +14642,31 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 	return entries, buffer, nil
 }
 
+func fillUpdateBatchBufferedPrimaryEntriesFromTable(entries []updateBatchBufferedEntry, buffer *updateBatchBufferedEntryBuffer, table memtable.Table, items []updateBatchItem, missing int) int {
+	if table == nil || missing <= 0 {
+		return missing
+	}
+	for i, item := range items {
+		if entries[i].found {
+			continue
+		}
+		value, _, flags, found := table.GetEntry(item.DocumentID)
+		if !found {
+			continue
+		}
+		entries[i] = updateBatchBufferedEntry{
+			value: buffer.copyValue(value),
+			flags: flags,
+			found: true,
+		}
+		missing--
+		if missing <= 0 {
+			break
+		}
+	}
+	return missing
+}
+
 func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDomain, collectionName string, items []updateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
 	entries, buffer := getUpdateBatchBufferedEntries(len(items))
 	if domain == nil || len(items) == 0 {
@@ -14545,10 +14744,12 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 			}
 			missing--
 		}
+		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
 		return entries, buffer, nil
 	}
 	runs := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(collectionName))
 	if len(runs) == 0 {
+		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
 		return entries, buffer, nil
 	}
 	if len(runs) <= 1 || len(runs)*len(items) <= updateBatchBufferedPrimaryDirectProbeLimit {
@@ -14564,6 +14765,7 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 				}
 			}
 		}
+		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
 		return entries, buffer, nil
 	}
 	targets := make(map[string]int, missing)
@@ -14598,6 +14800,7 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 		}
 		_ = it.Close()
 	}
+	fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, len(targets))
 	return entries, buffer, nil
 }
 
@@ -14662,7 +14865,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			writeGeneration: domain.writeGeneration,
 		}, templateRuns, false, false, false, nil
 	}
-	if domain.count > 0 && hasBufferedIndexedPendingWrites(domain) {
+	if domain.count > 0 && hasBufferedPrimaryWritesLocked(domain, meta.Name) {
 		return updateBatchBufferedRead{}, nil, true, false, false, nil
 	}
 	if updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot) {
@@ -15615,6 +15818,71 @@ func (c *Collection) stageDirectPrimaryOverlayLocked(domain *collectionWriteDoma
 	return true, nil
 }
 
+func (c *Collection) stageDirectNoIndexTableUpdateLocked(domain *collectionWriteDomain, plan *updateBatchPlan, modifiedCount int) (bool, error) {
+	if c == nil || domain == nil || plan == nil || plan.directBufferedUpdate == nil {
+		return false, nil
+	}
+	direct := plan.directBufferedUpdate
+	if len(plan.meta.Indexes) != 0 ||
+		len(direct.templateEntries) != 0 ||
+		len(direct.secondaryRootPlans) != 0 ||
+		!hasBufferedNoIndexTableWritesLocked(domain) ||
+		hasBufferedIndexedPendingWrites(domain) {
+		return false, nil
+	}
+	if direct.primaryRootName == "" || direct.primaryRootName != collectionPrimaryRootName(plan.meta.Name) {
+		return false, nil
+	}
+	baseRoot, ok := plan.baseRootIDs[direct.primaryRootName]
+	if !ok {
+		return false, fmt.Errorf("collections: UpdateBatch collection %q direct no-index table update missing base root for %q", plan.meta.Name, direct.primaryRootName)
+	}
+	if domain.primaryRoot != baseRoot {
+		return false, errConcurrentRootModification(plan.meta.Name, direct.primaryRootName)
+	}
+	policy, ok := directUpdatePrimaryRootPolicy(plan, direct.primaryRootName)
+	if ok {
+		domain.storagePolicy = policy
+	}
+	newEntries := 0
+	var stagedByteDelta int64
+	for _, entry := range direct.primaryEntries {
+		entryBytes := int64(len(entry.key) + len(entry.value))
+		oldValue, _, _, found := domain.table.GetEntry(entry.key)
+		if !found {
+			newEntries++
+			stagedByteDelta = saturatingAddNonNegativeInt64(stagedByteDelta, entryBytes)
+		} else {
+			oldBytes := int64(len(entry.key) + len(oldValue))
+			if entryBytes > oldBytes {
+				stagedByteDelta = saturatingAddNonNegativeInt64(stagedByteDelta, entryBytes-oldBytes)
+			}
+		}
+		domain.table.SetEntry(entry.key, entry.value, page.ValuePtr{}, entry.flags)
+	}
+	domain.loaded = true
+	domain.meta = plan.meta
+	domain.catalog = plan.catalog
+	domain.baseCommitSeq = plan.baseCommitSeq
+	domain.baseSystemRoot = plan.baseSystemRoot
+	if plan.catalog != nil {
+		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
+	}
+	domain.count = saturatingAddNonNegativeInt(domain.count, newEntries)
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedByteDelta)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedByteDelta)
+	domain.indexedDeletesOnly = false
+	domain.writeGeneration++
+	domain.notePrimaryWriteEntriesLocked(direct.primaryEntries, domain.writeGeneration)
+	if modifiedCount > 0 {
+		domain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, false, collectionRootDeltaPlanStats{})
+	}
+	c.meta = plan.meta
+	plan.stats.BufferedBatches = 1
+	return true, nil
+}
+
 func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (buffered bool, err error) {
 	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.primaryEntries) == 0 {
 		return false, nil
@@ -15808,6 +16076,14 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	if err := appendCommandWALBeforeStage(); err != nil {
 		return false, err
+	}
+	if primaryOnlyDirectUpdate && commandWALStageIntent == nil && hasBufferedNoIndexTableWritesLocked(domain) && !hasBufferedIndexedPendingWrites(domain) {
+		tableAppendStart := updateBatchStatsNow(detailedStats)
+		buffered, err := c.stageDirectNoIndexTableUpdateLocked(domain, plan, modifiedCount)
+		tableAppendDuration := updateBatchStatsSince(detailedStats, tableAppendStart)
+		plan.stats.BufferStagePrimaryAppend += tableAppendDuration
+		plan.stats.BufferStageRootAppend += tableAppendDuration
+		return buffered, err
 	}
 	if canStageDirectPrimaryOverlay(plan, direct, primaryOnlyDirectUpdate, shouldAutoFlushAfterAdding || overlayWouldFlush) {
 		overlayAppendStart := updateBatchStatsNow(detailedStats)
@@ -17888,6 +18164,9 @@ func hasBufferedPrimaryRootRuns(domain *collectionWriteDomain, fallbackCollectio
 }
 
 func hasBufferedPrimaryWritesLocked(domain *collectionWriteDomain, fallbackCollectionName string) bool {
+	if hasBufferedNoIndexTableWritesLocked(domain) {
+		return true
+	}
 	if hasBufferedPrimaryOverlay(domain) {
 		return true
 	}

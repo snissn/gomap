@@ -378,7 +378,7 @@ PR3 implementation evidence:
 
 PR 4: collection insert/delete by explicit ID:
 
-- `TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN`;
+- `TestCollectionCommandWALInsertBatchByIDStagesAppliedLSNUntilFlush`;
 - `TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame`;
 - `TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument`;
 - `TestCollectionCommandWALInsertBatchByIDReplayAdvancesEmptyFrame`;

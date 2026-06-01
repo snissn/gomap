@@ -160,7 +160,10 @@ type DB struct {
 	bgErrMu      sync.Mutex
 	bgErr        error
 	closeHooksMu sync.Mutex
-	closeHooks   []func() error
+	// closeHooksBefore run before ordinary closeHooks. Use this for hooks that
+	// must drain buffered writes before lower-level resource cleanup hooks run.
+	closeHooksBefore []func() error
+	closeHooks       []func() error
 	// closeHooksClosed is set when close hook draining begins. Close hooks run
 	// while writes are still available, so registrations after that point would
 	// otherwise be silently lost.
@@ -1685,6 +1688,33 @@ func (db *DB) RegisterCloseHook(hook func() error) func() {
 	return unregister
 }
 
+// RegisterCloseHookBefore registers a callback that runs before ordinary close
+// hooks. It is intended for high-level owners that must flush buffered state
+// while lower-level resources registered during DB open are still available.
+func (db *DB) RegisterCloseHookBefore(hook func() error) func() {
+	if db == nil || hook == nil {
+		return func() {}
+	}
+	db.closeHooksMu.Lock()
+	defer db.closeHooksMu.Unlock()
+	if !db.acceptingCloseHooksLocked() {
+		return func() {}
+	}
+	idx := len(db.closeHooksBefore)
+	db.closeHooksBefore = append(db.closeHooksBefore, hook)
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.closeHooksMu.Lock()
+			if idx >= 0 && idx < len(db.closeHooksBefore) && db.closeHooksBefore[idx] != nil {
+				db.closeHooksBefore[idx] = nil
+			}
+			db.closeHooksMu.Unlock()
+		})
+	}
+}
+
 // RegisterCloseHookIfOpen is like RegisterCloseHook, but also reports whether
 // the hook was retained. Callers that attach external state to the hook can use
 // this to avoid leaks when registration races DB close.
@@ -1738,12 +1768,23 @@ func (db *DB) RunCloseHooks() error {
 		return nil
 	}
 	db.closeHooksClosed = true
+	hooksBefore := append([]func() error(nil), db.closeHooksBefore...)
+	clear(db.closeHooksBefore)
+	db.closeHooksBefore = nil
 	hooks := append([]func() error(nil), db.closeHooks...)
 	clear(db.closeHooks)
 	db.closeHooks = nil
 	db.closeHooksMu.Unlock()
 
 	var errs []error
+	for _, hook := range hooksBefore {
+		if hook == nil {
+			continue
+		}
+		if err := hook(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	for _, hook := range hooks {
 		if hook == nil {
 			continue

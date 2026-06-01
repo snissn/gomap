@@ -614,6 +614,30 @@ func TestParseConfigValidation(t *testing.T) {
 	if !cfg.MongoCompact {
 		t.Fatalf("expected -mongo-compact to be enabled: %+v", cfg)
 	}
+	ycsbReadCfg, err := parseConfig([]string{
+		"-document-shape", "ycsb",
+		"-point-read-projection", "ycsb",
+		"-secondary-indexes", "0",
+		"-range-reads", "0",
+	})
+	if err != nil {
+		t.Fatalf("parse YCSB read config: %v", err)
+	}
+	if ycsbReadCfg.DocumentShape != documentShapeYCSB || ycsbReadCfg.PointReadProjection != pointReadProjectionYCSB {
+		t.Fatalf("unexpected YCSB read config: %+v", ycsbReadCfg)
+	}
+	if _, err := parseConfig([]string{"-point-read-projection", "ycsb"}); err == nil {
+		t.Fatal("YCSB point-read projection accepted without YCSB document shape")
+	}
+	if _, err := parseConfig([]string{"-document-shape", "ycsb", "-secondary-indexes", "0"}); err == nil {
+		t.Fatal("YCSB document shape accepted with default range reads")
+	}
+	if _, err := parseConfig([]string{"-document-shape", "bad"}); err == nil {
+		t.Fatal("bad document-shape accepted")
+	}
+	if _, err := parseConfig([]string{"-point-read-projection", "bad"}); err == nil {
+		t.Fatal("bad point-read-projection accepted")
+	}
 	sweepCfg, err := parseConfig([]string{
 		"-concurrent-reader-sweep", "1,2 4",
 		"-concurrent-reads", "30",
@@ -909,7 +933,7 @@ func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
 		mustTestBSON(t, bson.D{{Key: "_id", Value: "a"}, {Key: "email", Value: "a@example.test"}}),
 		mustTestBSON(t, bson.D{{Key: "_id", Value: "b"}, {Key: "email", Value: "b@example.test"}}),
 	}
-	command, err := rawInsertCommand("docs", 0, len(docs), nil, docs)
+	command, err := rawInsertCommand("docs", 0, len(docs), documentShapeGateway, nil, docs)
 	if err != nil {
 		t.Fatalf("rawInsertCommand: %v", err)
 	}
@@ -928,6 +952,39 @@ func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
 		if !bytes.Equal(out.Documents[i], docs[i]) {
 			t.Fatalf("document %d mismatch: got %v want %v", i, out.Documents[i], docs[i])
 		}
+	}
+}
+
+func TestRawFindIDCommandBuildsYCSBProjection(t *testing.T) {
+	command, err := appendRawFindIDCommand(nil, "ycsb", "usertable", "user1", pointReadProjectionYCSB)
+	if err != nil {
+		t.Fatalf("appendRawFindIDCommand: %v", err)
+	}
+	if got, ok := command.Lookup("find").StringValueOK(); !ok || got != "usertable" {
+		t.Fatalf("find=%q ok=%t", got, ok)
+	}
+	filter, ok := command.Lookup("filter").DocumentOK()
+	if !ok {
+		t.Fatalf("filter missing in %v", command)
+	}
+	if got, ok := filter.Lookup("_id").StringValueOK(); !ok || got != "user1" {
+		t.Fatalf("filter _id=%q ok=%t", got, ok)
+	}
+	projection, ok := command.Lookup("projection").DocumentOK()
+	if !ok {
+		t.Fatalf("projection missing in %v", command)
+	}
+	if got, ok := projection.Lookup("_id").BooleanOK(); !ok || got {
+		t.Fatalf("projection _id=%t ok=%t want false", got, ok)
+	}
+	for field := 0; field < benchmarkYCSBFieldCount; field++ {
+		name := benchmarkYCSBFieldName(field)
+		if got, ok := projection.Lookup(name).BooleanOK(); !ok || !got {
+			t.Fatalf("projection %s=%t ok=%t want true", name, got, ok)
+		}
+	}
+	if got, ok := command.Lookup("singleBatch").BooleanOK(); !ok || !got {
+		t.Fatalf("singleBatch=%t ok=%t want true", got, ok)
 	}
 }
 
@@ -1974,7 +2031,7 @@ func TestEffectiveLoadProducersCapsAtBatchCount(t *testing.T) {
 }
 
 func TestLoadVisibilitySentinelIDsUseBatchBoundaries(t *testing.T) {
-	got := loadVisibilitySentinelIDs(10, 4)
+	got := loadVisibilitySentinelIDs(documentShapeGateway, 10, 4)
 	want := []string{benchmarkID(3), benchmarkID(7), benchmarkID(9)}
 	if len(got) != len(want) {
 		t.Fatalf("len(sentinels)=%d want %d: %v", len(got), len(want), got)
@@ -2515,7 +2572,7 @@ func TestRangePhaseNameDistinguishesScanAndIndexedRuns(t *testing.T) {
 }
 
 func TestDirectBenchmarkDocumentKeyUsesGatewayEncoding(t *testing.T) {
-	key, id, err := directBenchmarkDocumentKey(7)
+	key, id, err := directBenchmarkDocumentKey(documentShapeGateway, 7)
 	if err != nil {
 		t.Fatalf("directBenchmarkDocumentKey: %v", err)
 	}
@@ -2831,7 +2888,7 @@ func TestEqualNativeWireBenchmarkCollectionOptionsComparesBehaviorFields(t *test
 
 func TestBenchmarkBSONRawReturnsPrebuiltRawWithoutClone(t *testing.T) {
 	raw := mustTestBSON(t, bson.D{{Key: "_id", Value: "u1"}})
-	got, err := benchmarkBSONRaw(0, nil, []bson.Raw{raw})
+	got, err := benchmarkBSONRaw(0, documentShapeGateway, nil, []bson.Raw{raw})
 	if err != nil {
 		t.Fatalf("benchmarkBSONRaw: %v", err)
 	}
@@ -2878,7 +2935,7 @@ func TestNativeWirePrebuildStoredDocumentsFeedsLoadBatch(t *testing.T) {
 }
 
 func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
-	rawJSON, err := nativeWireStoredDocument(collections.DocumentFormatJSON, 7, nil, nil, nil)
+	rawJSON, err := nativeWireStoredDocument(collections.DocumentFormatJSON, documentShapeGateway, 7, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("nativeWireStoredDocument JSON: %v", err)
 	}
@@ -2904,11 +2961,11 @@ func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	rawTemplate, err := nativeWireStoredDocument(collections.DocumentFormatTemplateV1, 7, nil, nil, nil)
+	rawTemplate, err := nativeWireStoredDocument(collections.DocumentFormatTemplateV1, documentShapeGateway, 7, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("nativeWireStoredDocument template-v1: %v", err)
 	}
-	primaryID := nativeWireMongoPrimaryID(7)
+	primaryID := nativeWireMongoPrimaryID(documentShapeGateway, 7)
 	if _, err := col.InsertBatch([][]byte{primaryID}, [][]byte{rawTemplate}); err != nil {
 		t.Fatalf("InsertBatch template-v1: %v", err)
 	}
