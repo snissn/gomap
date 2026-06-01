@@ -57,6 +57,7 @@ block drifts from the executable matrix rows.
 | crud | updateOne $set by _id | supported subset |
 | crud | delete by _id | supported subset |
 | metadata | listCollections | supported subset |
+| metadata | listDatabases | supported subset |
 | metadata | create collection | supported subset |
 | session | logical session handshake and endSessions | supported subset |
 | metadata | createIndexes, listIndexes, and dropIndexes | supported subset |

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -465,12 +466,13 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 }
 
 type mongoUpdateItem struct {
-	index         int
-	key           []byte
-	updateDoc     wire.Document
-	setFields     map[string]struct{}
-	bsonSetFields []collections.BSONSetField
-	setFieldsOK   bool
+	index           int
+	key             []byte
+	updateDoc       wire.Document
+	setFields       map[string]struct{}
+	bsonSetFields   []collections.BSONSetField
+	setFieldsOK     bool
+	bsonSetFieldsOK bool
 }
 
 type mongoUpdateParseError struct {
@@ -511,7 +513,19 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
 	setFields, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
-	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc, setFields: setFields, bsonSetFields: bsonSetFields, setFieldsOK: setFieldsOK}, nil
+	bsonSetFields, bsonSetFieldNames, bsonSetFieldsOK := mongoBSONSetUpdateFields(updateDoc)
+	if !setFieldsOK && bsonSetFieldsOK {
+		setFields = bsonSetFieldNames
+	}
+	return mongoUpdateItem{
+		index:           index,
+		key:             key,
+		updateDoc:       updateDoc,
+		setFields:       setFields,
+		bsonSetFields:   bsonSetFields,
+		setFieldsOK:     setFieldsOK,
+		bsonSetFieldsOK: bsonSetFieldsOK,
+	}, nil
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {
@@ -1113,7 +1127,7 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 		return false
 	}
 	for _, update := range updates {
-		if !update.setFieldsOK {
+		if !update.bsonSetFieldsOK {
 			return false
 		}
 	}
@@ -1121,7 +1135,7 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 }
 
 func mongoUpdateCanUseBSONSet(col *collections.Collection, update mongoUpdateItem) bool {
-	return col != nil && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.setFieldsOK
+	return col != nil && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK
 }
 
 func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collections.DocumentFormat {
@@ -1136,14 +1150,22 @@ func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collection
 }
 
 func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
-	if !update.setFieldsOK {
+	format := meta.Options.DocumentFormat
+	if format == collections.DocumentFormatDefault {
+		format = collections.DocumentFormatJSON
+	}
+	if format == collections.DocumentFormatBSON {
+		if !update.bsonSetFieldsOK {
+			return false
+		}
+	} else if !update.setFieldsOK {
 		return false
 	}
 	return !mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta, update)
 }
 
 func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
-	if !update.setFieldsOK {
+	if update.setFields == nil {
 		return true
 	}
 	for _, idx := range meta.Indexes {
@@ -1184,6 +1206,35 @@ func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, []colle
 		})
 	}
 	return out, fields, true
+}
+
+func mongoBSONSetUpdateFields(updateDoc wire.Document) ([]collections.BSONSetField, map[string]struct{}, bool) {
+	updateElements, err := bson.Raw(updateDoc).Elements()
+	if err != nil || len(updateElements) != 1 {
+		return nil, nil, false
+	}
+	operator, err := updateElements[0].KeyErr()
+	if err != nil || operator != "$set" {
+		return nil, nil, false
+	}
+	setDoc, ok := updateElements[0].Value().DocumentOK()
+	if !ok {
+		return nil, nil, false
+	}
+	sets, order, err := parseBSONSetDocument(setDoc)
+	if err != nil {
+		return nil, nil, false
+	}
+	fields := make([]collections.BSONSetField, 0, len(order))
+	fieldNames := make(map[string]struct{}, len(order))
+	for _, field := range order {
+		fieldNames[field] = struct{}{}
+		fields = append(fields, collections.BSONSetField{
+			Key:   field,
+			Value: sets[field],
+		})
+	}
+	return fields, fieldNames, true
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
@@ -1289,6 +1340,56 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 		firstBatch = append(firstBatch, mongoCollectionDocument(collectionName, nameOnly))
 	}
 	return marshalCursorResponse(db, "$cmd.listCollections", firstBatch)
+}
+
+func (s *Server) listDatabasesResponse(command wire.Document) (wire.Document, error) {
+	if s.Collections == nil {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	filter, err := commandOptionalDocument(command, "filter")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	nameFilter, err := databaseNameFilter(filter)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+
+	metas, err := s.Collections.ListCollections()
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	names := make(map[string]struct{})
+	for _, meta := range metas {
+		db, _, ok := strings.Cut(meta.Name, ".")
+		if !ok || db == "" {
+			continue
+		}
+		if nameFilter != "" && db != nameFilter {
+			continue
+		}
+		names[db] = struct{}{}
+	}
+	ordered := make([]string, 0, len(names))
+	for name := range names {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+
+	databases := make(bson.A, 0, len(ordered))
+	for _, name := range ordered {
+		databases = append(databases, bson.D{
+			{Key: "name", Value: name},
+			{Key: "sizeOnDisk", Value: int64(0)},
+			{Key: "empty", Value: false},
+		})
+	}
+	return marshalDocument(bson.D{
+		{Key: "ok", Value: 1.0},
+		{Key: "databases", Value: databases},
+		{Key: "totalSize", Value: int64(0)},
+		{Key: "totalSizeMb", Value: int64(0)},
+	})
 }
 
 func (s *Server) createCollectionResponse(command wire.Document) (wire.Document, error) {
@@ -2551,6 +2652,37 @@ func collectionNameFilter(filter wire.Document) (string, error) {
 	return name, nil
 }
 
+func databaseNameFilter(filter wire.Document) (string, error) {
+	if filter == nil {
+		return "", nil
+	}
+	elements, err := bson.Raw(filter).Elements()
+	if err != nil {
+		return "", err
+	}
+	if len(elements) == 0 {
+		return "", nil
+	}
+	if len(elements) != 1 {
+		return "", errors.New("Mongo gateway listDatabases filter currently supports name equality only")
+	}
+	key, err := elements[0].KeyErr()
+	if err != nil {
+		return "", err
+	}
+	if key != "name" {
+		return "", errors.New("Mongo gateway listDatabases filter currently supports name equality only")
+	}
+	name, ok := elements[0].Value().StringValueOK()
+	if !ok {
+		return "", errors.New("Mongo gateway listDatabases name filter must be a string")
+	}
+	if err := validateMongoDatabaseName(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 func commandDocumentArray(doc wire.Document, key string) ([]wire.Document, error) {
 	value := bson.Raw(doc).Lookup(key)
 	if value.IsZero() {
@@ -3328,6 +3460,19 @@ func dropIndexNames(command wire.Document) ([]string, bool, error) {
 }
 
 func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) {
+	return parseSetDocumentWithValueValidator(doc, validateSupportedValue)
+}
+
+func parseBSONSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) {
+	return parseSetDocumentWithValueValidator(doc, func(path string, value bson.RawValue) error {
+		if err := value.Validate(); err != nil {
+			return fmt.Errorf("Mongo document field %q is not a valid BSON value: %w", path, err)
+		}
+		return nil
+	})
+}
+
+func parseSetDocumentWithValueValidator(doc bson.Raw, validateValue func(string, bson.RawValue) error) (map[string]bson.RawValue, []string, error) {
 	elements, err := doc.Elements()
 	if err != nil {
 		return nil, nil, err
@@ -3344,7 +3489,7 @@ func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) 
 			return nil, nil, err
 		}
 		value := elem.Value()
-		if err := validateSupportedValue(key, value); err != nil {
+		if err := validateValue(key, value); err != nil {
 			return nil, nil, err
 		}
 		if _, ok := seen[key]; !ok {
