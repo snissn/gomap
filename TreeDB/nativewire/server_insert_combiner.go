@@ -60,7 +60,7 @@ func (c *nativewireInsertBatchCombiner) run(s *Server, req insertBatchFastReques
 	c.mu.Unlock()
 
 	if leader {
-		c.drain(s, req.collectionName, lane)
+		go c.drain(s, req.collectionName, lane)
 	}
 	<-item.done
 	return item.result, true
