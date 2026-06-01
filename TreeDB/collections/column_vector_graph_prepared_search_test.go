@@ -235,6 +235,38 @@ func TestColumnVectorGraphPreparedSearchStaleStateFailsClosed2045(t *testing.T) 
 	}
 }
 
+func TestColumnVectorGraphPreparedSearchSinglePartRowMapFailsClosed2127(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("combined prepared graph-search view requires mmap_direct test support")
+	}
+	rows := columnGraphRebuildSyntheticRowsV2A(16, 6)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 6, 4, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.preparedSearch == nil || reader.preparedSearch.vector.singlePart == nil {
+		t.Fatalf("preparedSearch=%v singlePart=%v want single-part prepared view", reader.preparedSearch != nil, reader.preparedSearch != nil && reader.preparedSearch.vector.singlePart != nil)
+	}
+	rowIndexByOrdinal := make([]uint32, len(rows)-1)
+	for ordinal := range rowIndexByOrdinal {
+		rowIndexByOrdinal[ordinal] = uint32(ordinal)
+	}
+	reader.preparedSearch.vector.rowIndexByOrdinal = rowIndexByOrdinal
+	reader.preparedSearch.vectorIdentityMapping = false
+
+	var scratch columnVectorGraphNativeSearchScratch
+	_, _, err = reader.SearchCosine(rows[0].vector, columnVectorGraphNativeSearchOptions{TopK: 4, EfSearch: len(rows)}, &scratch)
+	if err == nil || !strings.Contains(err.Error(), "combined prepared graph-search view is stale") || !strings.Contains(err.Error(), "row map") {
+		t.Fatalf("SearchCosine err=%v want fail-closed stale prepared single-part row map", err)
+	}
+}
+
 func TestColumnVectorGraphPreparedSearchParallelScratchSafety2045(t *testing.T) {
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 		t.Skip("combined prepared graph-search view requires mmap_direct test support")
