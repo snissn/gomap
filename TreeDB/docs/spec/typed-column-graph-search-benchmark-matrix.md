@@ -317,7 +317,7 @@ both graph-only and result-ID searches, and asserts equivalent results plus equa
 search-work counters (`candidate_rows/search`, `candidates/search`,
 `edges/search`, `visited_edges/search`, `visited_nodes/search`, score-batch
 candidate counts, fetch counts, and adjacency prepared-CSR counters). After
-#2103, these historical topology-parity rows explicitly pin scalar scoring so
+After #2103, these historical topology-parity rows explicitly pin scalar scoring so
 the gate continues to isolate topology/search-work parity rather than the
 prepared indexed-scoring default.
 
@@ -394,7 +394,7 @@ Run context: macOS 26.2, Apple M3, 8 logical CPUs, 16 GiB memory,
 | `exact` (`ef_search=8192`) | `scalar` | 1.091 ms | 916.7 | 0 | 0 | `candidates=8192`, `visited_nodes=8192`, `visited_edges=100748`, `edges_per_visited_node=12.30` | `neighbor_tiles=6297`, `neighbor_tile_avg_size=16`, `score_batch_calls=8192`, `score_batch_singletons=8192`, `scored_neighbors=8191`, `already_visited_skips=92557`, `frontier_pushes=8192`, `frontier_pops=6297`, `top_k_rejections=8132`, `exact_order_observations=8192`, `exact_order_backward_jumps=5977` |
 | `exact` (`ef_search=8192`) | `indexed` | 1.277 ms | 782.9 | 0 | 0 | `candidates=8192`, `visited_nodes=8192`, `visited_edges=100748`, `edges_per_visited_node=12.30` | `neighbor_tiles=6297`, `neighbor_tile_avg_size=16`, `score_batch_calls=1797`, `score_batch_singletons=364`, `score_batch_size_2_4=502`, `score_batch_size_5_8=930`, `score_batch_size_9_16=1`, `already_visited_skips=92557`, `frontier_pushes=8192`, `top_k_rejections=8132`, `exact_order_observations=8192`, `exact_order_backward_jumps=5977` |
 
-#1979 interpretation:
+Interpretation of #1979 historical evidence:
 
 - The equal-topology #2091 fixture's `ef_search=128` row explains its 612
   visited edges as layer-0 expansion work over 39 degree-16 neighbor tiles. The
@@ -421,7 +421,7 @@ Run context: macOS 26.2, Apple M3, 8 logical CPUs, 16 GiB memory,
   indexed-scoring ticket should expect graph-order/gathered batches rather than
   long contiguous row runs.
 
-#1979 follow-up recommendation: keep #2035 open as not performance-satisfied.
+Historical #1979 follow-up recommendation: keep #2035 open as not performance-satisfied.
 Use this #1979 evidence to prioritize #1980 frontier/top-k and already-visited
 handling for control-flow overhead, and use a separate narrow indexed-scoring
 ticket if exact-mode gathered score batching becomes a goal. #1977
@@ -430,7 +430,7 @@ and is not implemented here.
 
 ## #2098 exact-mode gathered scoring evaluation
 
-#2098 optimized the opt-in prepared typed-column indexed scoring path for the
+The later #2098 work optimized the opt-in prepared typed-column indexed scoring path for the
 common single-part base-vector view. On fallback-only batch backends, the
 indexed path now avoids repeated ordinal-location passes and the extra
 `DotFloat32Indexed` wrapper validation while preserving the same gathered score
@@ -456,16 +456,16 @@ Median rows on macOS/Apple M3, `go version go1.25.5 darwin/arm64`:
 | `exact` (`ef_search=8192`) | `scalar` | 1,086,851 | 1,148,337 | 0 | 0 | unchanged scalar singleton scoring: `score_batch_calls=8192`, `visited_edges=100748`, `exact_order_observations=8192` |
 | `exact` (`ef_search=8192`) | `indexed` | 1,238,033 | 963,815 | 0 | 0 | same exact work and fallback-free sources; `score_batch_calls=1797`, `score_batch_fallback=1797`, `score_batch_max_tile_size=16`, `exact_order_backward_jumps=5977` |
 
-#2098 interpretation: exact-mode gathered/indexed scoring is now a measured win
+Interpretation of #2098: exact-mode gathered/indexed scoring is now a measured win
 for the prepared single-part benchmark hook and remains exactly equivalent to
 scalar/default results in focused fixed-fixture tests, including tie-order
 coverage. #2103 owns the follow-up promotion matrix and default-gating decision.
-#1981 wavefront traversal and #1977 normalized-vector storage remain separate
+The #1981 wavefront traversal and #1977 normalized-vector storage remain separate
 evidence-gated follow-ups.
 
 ## #2103 prepared indexed-scoring promotion matrix
 
-#2103 promotes prepared indexed/gathered scoring as the **default only for the
+The #2103 work promotes prepared indexed/gathered scoring as the **default only for the
 eligible prepared typed-column path**. The runtime gate resolves
 `ScoreBatchMode=default` to indexed only when native search has a healthy
 combined prepared graph-search view with a single-part prepared vector view and
@@ -478,7 +478,7 @@ The default change is intentionally narrow. It does not change HNSW traversal,
 frontier behavior, candidate order/tie behavior, `ef_search`, `topK`, fixture
 topology, result ordering, public result IDs, or persistent formats. The #2091
 topology-parity benchmark remains scalar-pinned as a search-work parity control;
-#2103 adds `BenchmarkColumnVectorGraphSearchPromotion2103` for the
+The #2103 work adds `BenchmarkColumnVectorGraphSearchPromotion2103` for the
 `default`/`scalar`/`indexed` comparison.
 
 Commands used for local #2103 evidence on `0e114572f10e43377e7e07f055af1905ca5e7d16`
@@ -526,7 +526,7 @@ Median rows from the post-#2098/#2103 matrix:
 | #2103 `result_id` current prepared scalar | 10,259 | 97,471 | 0 | 0 | `visited_edges=612`, `result_fetches=10` | scalar: `score_batch_singletons=128`, max tile `1` | `graph_rows=0`, source/result fallbacks `0` |
 | #2103 `result_id` current prepared indexed | 7,768 | 128,732 | 0 | 0 | `visited_edges=612`, `result_fetches=10` | indexed: `score_batch_calls=25`, singleton/2-4/5-8/9-16 = `4/8/12/1`, max tile `16` | `graph_rows=0`, source/result fallbacks `0` |
 
-#2103 decision:
+Decision for #2103 (promotion matrix):
 
 - Enable the indexed/gathered scorer as the default for eligible prepared
   typed-column search only. In the bounded promotion rows, the prepared default
