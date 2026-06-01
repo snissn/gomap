@@ -149,6 +149,31 @@ func ParseProfile(raw string, fallback Profile) (Profile, bool) {
 	return NormalizeProfile(Profile(raw))
 }
 
+// ParsePublicProfile parses the public server/profile vocabulary. Empty input
+// returns fallback only when fallback is also a public profile. Deprecated
+// compatibility names such as fast, wal_on_fast, durable, legacy_wal_* and
+// no_wal_fast are intentionally rejected here.
+func ParsePublicProfile(raw string, fallback Profile) (Profile, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return NormalizePublicProfile(fallback)
+	}
+	return NormalizePublicProfile(Profile(raw))
+}
+
+// NormalizePublicProfile normalizes supported public profile names and aliases.
+func NormalizePublicProfile(profile Profile) (Profile, bool) {
+	switch normalizeProfileToken(string(profile)) {
+	case string(ProfileCommandWALDurable):
+		return ProfileCommandWALDurable, true
+	case string(ProfileCommandWALRelaxed):
+		return ProfileCommandWALRelaxed, true
+	case string(ProfileBench):
+		return ProfileBench, true
+	default:
+		return "", false
+	}
+}
+
 // NormalizeProfile normalizes supported profile names and aliases to their
 // public Profile constants.
 func NormalizeProfile(profile Profile) (Profile, bool) {

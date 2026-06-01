@@ -162,6 +162,55 @@ func TestParseProfile_ExplicitNamesAndAliases(t *testing.T) {
 	}
 }
 
+func TestParsePublicProfile_AllowedNamesAndAliases(t *testing.T) {
+	tests := []struct {
+		raw      string
+		fallback Profile
+		want     Profile
+	}{
+		{raw: "", fallback: ProfileCommandWALDurable, want: ProfileCommandWALDurable},
+		{raw: "", fallback: ProfileCommandWALRelaxed, want: ProfileCommandWALRelaxed},
+		{raw: "", fallback: ProfileBench, want: ProfileBench},
+		{raw: " COMMAND-WAL-DURABLE ", want: ProfileCommandWALDurable},
+		{raw: "command_wal_relaxed", want: ProfileCommandWALRelaxed},
+		{raw: "bench", want: ProfileBench},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw+"/"+string(tt.fallback), func(t *testing.T) {
+			got, ok := ParsePublicProfile(tt.raw, tt.fallback)
+			if !ok {
+				t.Fatalf("ParsePublicProfile(%q, %q) rejected, want %q", tt.raw, tt.fallback, tt.want)
+			}
+			if got != tt.want {
+				t.Fatalf("profile=%q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParsePublicProfile_RejectsDeprecatedAndUnknownNames(t *testing.T) {
+	rejected := []string{
+		"fast",
+		"wal_on_fast",
+		"walonfast",
+		"durable",
+		"legacy_wal_durable",
+		"legacy_wal_relaxed_fast",
+		"no_wal_fast",
+		"raw",
+	}
+	for _, raw := range rejected {
+		t.Run(raw, func(t *testing.T) {
+			if got, ok := ParsePublicProfile(raw, ProfileCommandWALRelaxed); ok {
+				t.Fatalf("ParsePublicProfile(%q) = %q, want rejection", raw, got)
+			}
+		})
+	}
+	if got, ok := ParsePublicProfile("", ProfileFast); ok {
+		t.Fatalf("ParsePublicProfile empty fallback ProfileFast = %q, want rejection", got)
+	}
+}
+
 func TestApplyProfile_CommandWALDurableSetsCommandWALAndFastDurablePolicy(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileCommandWALDurable)

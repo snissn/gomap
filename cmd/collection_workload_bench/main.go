@@ -370,9 +370,9 @@ func parsePositiveOrZeroInts(raw, label string) ([]int, error) {
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	profile, ok := treedb.ParseProfile(raw, treedb.ProfileBench)
+	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench)
 	if !ok {
-		return "", fmt.Errorf("unknown treedb-profile %q", raw)
+		return "", fmt.Errorf("unsupported -treedb-profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 	}
 	return profile, nil
 }

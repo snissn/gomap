@@ -3,6 +3,7 @@ package kvstoreadapter
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -34,15 +35,58 @@ func TestParseProfileUsesStandardNames(t *testing.T) {
 	}
 }
 
+func TestParsePublicProfileUsesPublicNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		raw      string
+		fallback treedb.Profile
+		want     treedb.Profile
+	}{
+		{raw: "", fallback: "", want: treedb.ProfileCommandWALRelaxed},
+		{raw: "", fallback: treedb.ProfileCommandWALDurable, want: treedb.ProfileCommandWALDurable},
+		{raw: "command-wal-durable", fallback: treedb.ProfileCommandWALRelaxed, want: treedb.ProfileCommandWALDurable},
+		{raw: "command_wal_relaxed", fallback: treedb.ProfileCommandWALDurable, want: treedb.ProfileCommandWALRelaxed},
+		{raw: "bench", fallback: treedb.ProfileCommandWALRelaxed, want: treedb.ProfileBench},
+	}
+	for _, tc := range cases {
+		got, err := ParsePublicProfile(tc.raw, tc.fallback)
+		if err != nil {
+			t.Fatalf("ParsePublicProfile(%q, %q): %v", tc.raw, tc.fallback, err)
+		}
+		if got != tc.want {
+			t.Fatalf("ParsePublicProfile(%q, %q) = %q, want %q", tc.raw, tc.fallback, got, tc.want)
+		}
+	}
+}
+
+func TestParsePublicProfileRejectsDeprecatedAndUnknownNames(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"fast", "walonfast", "durable", "legacy_wal_relaxed_fast", "no_wal_fast", "unknown"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
+			if err == nil {
+				t.Fatal("ParsePublicProfile succeeded, want error")
+			}
+		})
+	}
+	if _, err := ParsePublicProfile("", treedb.ProfileFast); err == nil {
+		t.Fatal("ParsePublicProfile accepted deprecated fallback, want error")
+	} else if !strings.Contains(err.Error(), "fallback profile") {
+		t.Fatalf("ParsePublicProfile deprecated fallback err=%v, want fallback profile context", err)
+	}
+}
+
 func TestResolveOptionsAppliesDefaultsAndEnvOverrides(t *testing.T) {
-	t.Setenv(EnvOpenProfile, "fast")
+	t.Setenv(EnvOpenProfile, "command_wal_relaxed")
 	t.Setenv(EnvKeepRecent, "7")
 	t.Setenv(EnvMemtableMode, "skiplist")
 
 	opts, path, err := ResolveOptions(OpenConfig{
 		ParentDir:                   t.TempDir(),
 		Name:                        "application",
-		DefaultProfile:              treedb.ProfileDurable,
+		DefaultProfile:              treedb.ProfileCommandWALDurable,
 		DefaultKeepRecent:           1,
 		DefaultAdaptiveMemtableBase: "hash_sorted",
 	})
@@ -52,8 +96,11 @@ func TestResolveOptionsAppliesDefaultsAndEnvOverrides(t *testing.T) {
 	if path != filepath.Join(opts.Dir) {
 		t.Fatalf("path %q != opts.Dir %q", path, opts.Dir)
 	}
-	if opts.Durability != treedb.DurabilityWALOffRelaxed {
-		t.Fatalf("Durability = %v, want fast WAL-off relaxed", opts.Durability)
+	if !opts.CommandWAL {
+		t.Fatal("CommandWAL=false, want command WAL profile")
+	}
+	if opts.Durability != treedb.DurabilityWALOnRelaxed {
+		t.Fatalf("Durability = %v, want command WAL relaxed durability", opts.Durability)
 	}
 	if opts.KeepRecent != 7 {
 		t.Fatalf("KeepRecent = %d, want 7", opts.KeepRecent)
@@ -87,7 +134,7 @@ func TestResolveOptionsAppliesAdaptiveMemtableFallback(t *testing.T) {
 	opts, _, err := ResolveOptions(OpenConfig{
 		ParentDir:                   t.TempDir(),
 		Name:                        "application",
-		DefaultProfile:              treedb.ProfileWALOnFast,
+		DefaultProfile:              treedb.ProfileCommandWALRelaxed,
 		DefaultKeepRecent:           1,
 		DefaultAdaptiveMemtableBase: "hash_sorted",
 	})
@@ -108,7 +155,7 @@ func TestResolveOptionsNormalizesDefaultMemtableMode(t *testing.T) {
 	opts, _, err := ResolveOptions(OpenConfig{
 		ParentDir:           t.TempDir(),
 		Name:                "application",
-		DefaultProfile:      treedb.ProfileWALOnFast,
+		DefaultProfile:      treedb.ProfileCommandWALRelaxed,
 		DefaultMemtableMode: "SkipList",
 	})
 	if err != nil {
@@ -124,9 +171,19 @@ func TestResolveOptionsRejectsInvalidKeepRecent(t *testing.T) {
 	if _, _, err := ResolveOptions(OpenConfig{
 		ParentDir:      t.TempDir(),
 		Name:           "application",
-		DefaultProfile: treedb.ProfileWALOnFast,
+		DefaultProfile: treedb.ProfileCommandWALRelaxed,
 	}); err == nil {
 		t.Fatal("expected invalid keep recent error")
+	}
+}
+
+func TestResolveOptionsRejectsDeprecatedProfileEnv(t *testing.T) {
+	t.Setenv(EnvOpenProfile, "fast")
+	if _, _, err := ResolveOptions(OpenConfig{
+		ParentDir: t.TempDir(),
+		Name:      "application",
+	}); err == nil {
+		t.Fatal("expected deprecated profile env error")
 	}
 }
 
@@ -137,28 +194,28 @@ func TestResolveOptionsRejectsInvalidPathInputs(t *testing.T) {
 		{
 			ParentDir:      "",
 			Name:           "application",
-			DefaultProfile: treedb.ProfileWALOnFast,
+			DefaultProfile: treedb.ProfileCommandWALRelaxed,
 		},
 		{
 			ParentDir:      t.TempDir(),
 			Name:           "",
-			DefaultProfile: treedb.ProfileWALOnFast,
+			DefaultProfile: treedb.ProfileCommandWALRelaxed,
 		},
 		{
 			ParentDir:      t.TempDir(),
 			Name:           "bad/name",
-			DefaultProfile: treedb.ProfileWALOnFast,
+			DefaultProfile: treedb.ProfileCommandWALRelaxed,
 		},
 		{
 			ParentDir:      t.TempDir(),
 			Name:           `bad\name`,
-			DefaultProfile: treedb.ProfileWALOnFast,
+			DefaultProfile: treedb.ProfileCommandWALRelaxed,
 		},
 		{
 			ParentDir:      t.TempDir(),
 			Name:           "application",
 			DBFileSuffix:   "../bad",
-			DefaultProfile: treedb.ProfileWALOnFast,
+			DefaultProfile: treedb.ProfileCommandWALRelaxed,
 		},
 	}
 	for _, cfg := range cases {
@@ -176,7 +233,7 @@ func TestResolveOptionsIsSideEffectFreeOnError(t *testing.T) {
 	if _, _, err := ResolveOptions(OpenConfig{
 		ParentDir:      parentDir,
 		Name:           "application",
-		DefaultProfile: treedb.ProfileWALOnFast,
+		DefaultProfile: treedb.ProfileCommandWALRelaxed,
 	}); err == nil {
 		t.Fatal("expected invalid keep recent error")
 	}
@@ -193,7 +250,7 @@ func TestOpenReturnsDBAndNamedAdapter(t *testing.T) {
 		ParentDir:         parentDir,
 		Name:              "application",
 		AdapterName:       "TreeDB Test",
-		DefaultProfile:    treedb.ProfileFast,
+		DefaultProfile:    treedb.ProfileCommandWALRelaxed,
 		DefaultKeepRecent: 1,
 	})
 	if err != nil {

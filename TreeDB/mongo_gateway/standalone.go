@@ -336,9 +336,9 @@ func (s *StandaloneServer) Close() error {
 }
 
 func normalizeStandaloneProfile(profile treedb.Profile) (treedb.Profile, error) {
-	normalized, ok := treedb.ParseProfile(string(profile), treedb.ProfileCommandWALDurable)
+	normalized, ok := treedb.ParsePublicProfile(string(profile), treedb.ProfileCommandWALDurable)
 	if !ok {
-		return "", fmt.Errorf("mongo gateway standalone: unsupported TreeDB profile %q", profile)
+		return "", fmt.Errorf("mongo gateway standalone: unsupported TreeDB profile %q; allowed: %s", profile, treedb.ProfileFlagHelp)
 	}
 	return normalized, nil
 }
