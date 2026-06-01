@@ -257,26 +257,32 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		} else {
 			caps.DirectView = DirectViewCapability{Eligible: false, Reason: rawInt64NonInt64DirectViewReason(desc), Endian: EndianLittle, WidthBytes: 8, AlignmentBytes: 8, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 		}
-		if desc.Logical == columnsemantics.LogicalInt64 && desc.Physical == typedcolumn.ColumnTypeInt64 && desc.Compression == typedcolumn.CompressionNone && !caps.Wrappers.Nullable {
-			caps.Reducers.Int64FixedWidthRaw = true
+		if desc.Logical == columnsemantics.LogicalInt64 && desc.Physical == typedcolumn.ColumnTypeInt64 && !caps.Wrappers.Nullable {
 			caps.Reducers.Int64NumericAggregate = true
-			caps.Stats.MinMax = true
-			caps.Stats.Sum = true
-			caps.Pruning.OrderedMinMax = true
-			caps.Pruning.ValueRows = true
+			if desc.Compression == typedcolumn.CompressionNone {
+				caps.Reducers.Int64FixedWidthRaw = true
+				caps.Stats.MinMax = true
+				caps.Stats.Sum = true
+				caps.Pruning.OrderedMinMax = true
+				caps.Pruning.ValueRows = true
+			} else {
+				caps.Reducers.Int64Streaming = true
+			}
 		}
 	case typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint:
 		caps.Layout.Kind = LayoutVariableWidth
 		caps.Layout.VariableWidth = true
 		caps.Layout.Endian = EndianCodecDefined
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonVariableWidthNoDirectView, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare"}
-		if desc.Logical == columnsemantics.LogicalInt64 && desc.Physical == typedcolumn.ColumnTypeInt64 && desc.Compression == typedcolumn.CompressionNone && !caps.Wrappers.Nullable {
+		if desc.Logical == columnsemantics.LogicalInt64 && desc.Physical == typedcolumn.ColumnTypeInt64 && !caps.Wrappers.Nullable {
 			caps.Reducers.Int64Streaming = true
 			caps.Reducers.Int64NumericAggregate = true
-			caps.Stats.MinMax = true
-			caps.Stats.Sum = true
-			caps.Pruning.OrderedMinMax = true
-			caps.Pruning.ValueRows = true
+			if desc.Compression == typedcolumn.CompressionNone {
+				caps.Stats.MinMax = true
+				caps.Stats.Sum = true
+				caps.Pruning.OrderedMinMax = true
+				caps.Pruning.ValueRows = true
+			}
 		}
 	case typedcolumn.EncodingNullableInt64:
 		caps.Layout.Kind = LayoutWrapper
@@ -464,9 +470,9 @@ func (c Capabilities) Supports(op Operation) Capability {
 	}
 	if c.Descriptor.Compression != typedcolumn.CompressionNone {
 		switch op {
-		case OpDirectView:
+		case OpDirectView, OpVectorDirectView, OpUint32ListDirectView, OpBytesDirectView, OpAdjacencyDirectView:
 			return Unsupported(op, ReasonCompressedDirectView, fmt.Sprintf("compression=%s", c.Descriptor.Compression))
-		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpScalarNumericAggregate:
+		case OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats:
 			return Unsupported(op, ReasonUnsupportedCompression, fmt.Sprintf("compression=%s", c.Descriptor.Compression))
 		}
 	}
@@ -761,9 +767,7 @@ func (c Capabilities) validateDescriptor(op Operation) Capability {
 		return Unsupported(op, ReasonUnsupportedEncoding, fmt.Sprintf("encoding=%s", desc.Encoding))
 	}
 	switch desc.Compression {
-	case typedcolumn.CompressionNone:
-	case typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4:
-		return Unsupported(op, ReasonUnsupportedCompression, fmt.Sprintf("compression=%s", desc.Compression))
+	case typedcolumn.CompressionNone, typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4:
 	default:
 		return Unsupported(op, ReasonUnsupportedCompression, fmt.Sprintf("compression=%s", desc.Compression))
 	}
@@ -856,6 +860,9 @@ func (c Capabilities) validateGranuleLengths(g typedcolumn.EncodedGranule) error
 	if c.Layout.FixedWidth && (c.Layout.ElementWidthBytes <= 0 || c.Layout.ElementsPerRow <= 0) {
 		return fmt.Errorf("columnlayout: invalid fixed-width contract width=%d elements_per_row=%d: %s", c.Layout.ElementWidthBytes, c.Layout.ElementsPerRow, ReasonFixedWidthElementsRequired)
 	}
+	if c.Descriptor.Compression != typedcolumn.CompressionNone && g.StoredBytes <= 0 && g.Rows > 0 {
+		return fmt.Errorf("columnlayout: compressed payload stored bytes=%d: %s", g.StoredBytes, ReasonRawLengthRowCountMismatch)
+	}
 	if g.Rows == 0 {
 		if g.RawBytes != 0 || g.StoredBytes != 0 {
 			return fmt.Errorf("columnlayout: zero-row payload raw=%d stored=%d want 0: %s", g.RawBytes, g.StoredBytes, ReasonRawLengthRowCountMismatch)
@@ -876,8 +883,11 @@ func (c Capabilities) validateGranuleLengths(g typedcolumn.EncodedGranule) error
 	if err != nil {
 		return err
 	}
-	if g.RawBytes != want || g.StoredBytes != want {
-		return fmt.Errorf("columnlayout: raw/stored bytes raw=%d stored=%d want rows=%d*elements=%d*width=%d=%d: %s", g.RawBytes, g.StoredBytes, g.Rows, c.Layout.ElementsPerRow, c.Layout.ElementWidthBytes, want, ReasonRawLengthRowCountMismatch)
+	if g.RawBytes != want {
+		return fmt.Errorf("columnlayout: raw bytes raw=%d want rows=%d*elements=%d*width=%d=%d: %s", g.RawBytes, g.Rows, c.Layout.ElementsPerRow, c.Layout.ElementWidthBytes, want, ReasonRawLengthRowCountMismatch)
+	}
+	if c.Descriptor.Compression == typedcolumn.CompressionNone && g.StoredBytes != want {
+		return fmt.Errorf("columnlayout: stored bytes raw=%d stored=%d want rows=%d*elements=%d*width=%d=%d: %s", g.RawBytes, g.StoredBytes, g.Rows, c.Layout.ElementsPerRow, c.Layout.ElementWidthBytes, want, ReasonRawLengthRowCountMismatch)
 	}
 	return nil
 }

@@ -82,6 +82,25 @@ type ColumnPartCompressionByteAccounting struct {
 	StoredToEncodedRawRate float64     `json:"stored_to_encoded_raw_rate"`
 }
 
+func columnPartBlockCompressionReport(requested Compression, block ColumnBlock) CodecReport {
+	report := block.Granule.CodecReport
+	if report.CompressionAttempted || requested == CompressionNone {
+		return report
+	}
+	report.Encoding = block.Descriptor.Encoding
+	report.RequestedCompression = requested
+	report.ActualCompression = block.Descriptor.Compression
+	report.RawBytes = block.Descriptor.RawBytes
+	report.StoredBytes = block.Descriptor.StoredBytes
+	report.CompressionAttempted = true
+	if block.Descriptor.Compression != CompressionNone {
+		report.CompressionKept = true
+	} else {
+		report.CompressionFallbackReason = "not_smaller"
+	}
+	return report
+}
+
 func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 	if p == nil {
 		return ColumnPartByteAccounting{}
@@ -107,7 +126,7 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 			FallbackReasons:      make(map[string]int),
 		}
 		for _, block := range column.Blocks {
-			report := block.Granule.CodecReport
+			report := columnPartBlockCompressionReport(column.Definition.Compression, block)
 			out.CodecBlocks++
 			valueBytes := logicalColumnValueBytes(column.Definition, block.Descriptor.RowCount)
 			if column.Definition.Encoding == EncodingRawUint32OffsetsList {

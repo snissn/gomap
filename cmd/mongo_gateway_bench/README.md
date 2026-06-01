@@ -111,12 +111,12 @@ producer. JSON output includes `effective_producers` and `producer_results` for
 the load phase plus `mongo_pool_stats_after_load` and `mongo_pool_stats_final`
 when the official driver pool is involved.
 
-The TreeDB benchmark target defaults remain a transitional legacy indexed
-benchmark baseline because the default cell creates secondary indexes, and
-command WAL currently rejects collection catalog index mutation until catalog
-index commands are supported:
+The TreeDB benchmark target defaults to the explicit benchmark-only no-WAL
+ceiling because the default cell creates secondary indexes. Use
+`command_wal_relaxed` for command-WAL coverage once collection catalog index
+commands are supported for this workload:
 
-- `-treedb-profile legacy_wal_relaxed_fast`
+- `-treedb-profile bench`
 - `-treedb-document-format template-v1`
 - `-treedb-data-root-storage compressed`
 - `-treedb-index-state-root-storage compressed`
@@ -604,9 +604,9 @@ scripts/mongo_gateway_scaling_bench.sh \
   --concurrent-reads 80000
 ```
 
-The default sweep is TreeDB-only, using the legacy WAL relaxed-fast profile,
-native BSON collection storage, `driver-command-raw`, prebuilt BSON documents,
-and no final maintenance so the measured phases focus on concurrency. Add
+The default sweep is TreeDB-only, using the `bench` profile, native BSON
+collection storage, `driver-command-raw`, prebuilt BSON documents, and no final
+maintenance so the measured phases focus on concurrency. Add
 `--include-mongo --mongo-uri mongodb://127.0.0.1:27017` to run matching cells
 against an existing MongoDB server. The bundle contains `report.md`,
 `summary.tsv`, `matrix.tsv`, raw JSON, and a README that records the kept

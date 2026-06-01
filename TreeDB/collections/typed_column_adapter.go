@@ -61,13 +61,18 @@ type typedColumnAdapterColumn struct {
 }
 
 type typedColumnAdapterOptions struct {
-	Collection     string
-	Namespace      string
-	SchemaVersion  uint32
-	PartID         uint64
-	RowsPerGranule int
-	Fields         []TypedStorageField
-	SortKey        []ColumnSortKey
+	Collection            string
+	Namespace             string
+	SchemaVersion         uint32
+	PartID                uint64
+	RowsPerGranule        int
+	DefaultCompression    typedcolumn.Compression
+	DefaultCompressionSet bool
+	Int64Encoding         typedcolumn.Encoding
+	Int64EncodingSet      bool
+	AdaptiveMarkSizing    typedcolumn.ColumnAdaptiveMarkSizing
+	Fields                []TypedStorageField
+	SortKey               []ColumnSortKey
 }
 
 type typedColumnAdapterRow struct {
@@ -175,13 +180,72 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	return typedColumnAdapterColumn{Field: field, Definition: def, FixedWidthEncoding: field.FixedWidthEncoding}, nil
 }
 
+func typedColumnAdapterMapFieldWithOptions(field TypedStorageField, opts typedColumnAdapterOptions) (typedColumnAdapterColumn, error) {
+	column, err := typedColumnAdapterMapField(field)
+	if err != nil {
+		return typedColumnAdapterColumn{}, err
+	}
+	if !typedColumnAdapterDefinitionOptionsActive(opts) {
+		return column, nil
+	}
+	def := column.Definition
+	if err := applyTypedColumnAdapterDefinitionOptions(field, &def, opts); err != nil {
+		return typedColumnAdapterColumn{}, err
+	}
+	column.Definition = def
+	return column, nil
+}
+
+func typedColumnAdapterDefinitionOptionsActive(opts typedColumnAdapterOptions) bool {
+	return opts.Int64EncodingSet || opts.DefaultCompressionSet
+}
+
+func applyTypedColumnAdapterDefinitionOptions(field TypedStorageField, def *typedcolumn.ColumnDefinition, opts typedColumnAdapterOptions) error {
+	if def == nil {
+		return errors.New("collections: typed-column adapter nil definition")
+	}
+	if opts.Int64EncodingSet && field.ValueType == ColumnStoreValueInt64 {
+		if field.Nullable || field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+			return fmt.Errorf("%w: int64 encoding override %s is only supported for non-null default-encoding int64 fields, got field %q value_type=%s nullable=%v fixed_width_encoding=%q", errTypedColumnProductionLayoutUnsupported, opts.Int64Encoding, field.Path, field.ValueType, field.Nullable, field.FixedWidthEncoding)
+		}
+		switch opts.Int64Encoding {
+		case typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint:
+			def.Encoding = opts.Int64Encoding
+		default:
+			return fmt.Errorf("%w: unsupported int64 encoding override %s", errTypedColumnProductionLayoutUnsupported, opts.Int64Encoding)
+		}
+	}
+	if opts.DefaultCompressionSet {
+		def.Compression = opts.DefaultCompression
+		def.CompressionSet = true
+	}
+	return validateTypedColumnProductionDefinition(field, *def)
+}
+
 func typedColumnAdapterColumnsForFields(fields []TypedStorageField) ([]typedColumnAdapterColumn, error) {
+	return typedColumnAdapterColumnsForFieldsMapped(fields, nil)
+}
+
+func typedColumnAdapterColumnsForFieldsWithOptions(fields []TypedStorageField, opts typedColumnAdapterOptions) ([]typedColumnAdapterColumn, error) {
+	if !typedColumnAdapterDefinitionOptionsActive(opts) {
+		return typedColumnAdapterColumnsForFields(fields)
+	}
+	return typedColumnAdapterColumnsForFieldsMapped(fields, &opts)
+}
+
+func typedColumnAdapterColumnsForFieldsMapped(fields []TypedStorageField, opts *typedColumnAdapterOptions) ([]typedColumnAdapterColumn, error) {
 	columns := make([]typedColumnAdapterColumn, 0, len(fields))
 	seenColumns := map[string]struct{}{typedColumnAdapterPrimaryIDColumn: {}}
 	seenNames := make(map[string]string, len(fields))
 	seenPaths := make(map[string]string, len(fields))
 	for _, field := range fields {
-		column, err := typedColumnAdapterMapField(field)
+		var column typedColumnAdapterColumn
+		var err error
+		if opts != nil {
+			column, err = typedColumnAdapterMapFieldWithOptions(field, *opts)
+		} else {
+			column, err = typedColumnAdapterMapField(field)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -334,7 +398,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 	if opts.PartID == 0 {
 		opts.PartID = 1
 	}
-	columns, err := typedColumnAdapterColumnsForFields(opts.Fields)
+	columns, err := typedColumnAdapterColumnsForFieldsWithOptions(opts.Fields, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +567,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 			Columns: []string{typedColumnAdapterPrimaryIDColumn},
 		},
 		SortKey:     typedcolumn.SortKey{Columns: sortKey},
-		PartPolicy:  typedcolumn.ColumnPartPolicy{RowsPerGranule: rowsPerGranule},
+		PartPolicy:  typedcolumn.ColumnPartPolicy{RowsPerGranule: rowsPerGranule, AdaptiveMarkSizing: opts.AdaptiveMarkSizing},
 		Compression: typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
 	}
 	part, err := typedcolumn.BuildColumnPart(opts.PartID, partOpts, batch)
@@ -584,6 +648,9 @@ func typedColumnAdapterInt64AggregatePartFromImage(opts typedColumnAdapterOption
 	if err := validateTypedColumnAdapterInt64AggregateImage(part, adapterColumn, opts.SchemaVersion); err != nil {
 		return nil, err
 	}
+	if got, ok := part.Columns[adapterColumn.Definition.Name]; ok {
+		adapterColumn.Definition = got.Definition
+	}
 	return &typedColumnAdapterPart{Options: opts, Columns: []typedColumnAdapterColumn{adapterColumn}, Part: part}, nil
 }
 
@@ -605,8 +672,8 @@ func validateTypedColumnAdapterInt64AggregateImage(part *typedcolumn.ColumnPart,
 	if !ok {
 		return fmt.Errorf("collections: typed-column int64 aggregate image missing column %q", adapterColumn.Definition.Name)
 	}
-	if got.Definition.Type != adapterColumn.Definition.Type || got.Definition.Encoding != adapterColumn.Definition.Encoding || got.Definition.Compression != adapterColumn.Definition.Compression || got.Definition.FixedWidthElements != adapterColumn.Definition.FixedWidthElements {
-		return fmt.Errorf("collections: typed-column int64 aggregate image column %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", adapterColumn.Definition.Name, got.Definition.Type, got.Definition.Encoding, got.Definition.Compression, got.Definition.FixedWidthElements, adapterColumn.Definition.Type, adapterColumn.Definition.Encoding, adapterColumn.Definition.Compression, adapterColumn.Definition.FixedWidthElements)
+	if err := typedColumnAdapterValidateStoredDefinition(adapterColumn.Field, adapterColumn.Definition, got.Definition, "typed-column int64 aggregate image column"); err != nil {
+		return err
 	}
 	if err := validateTypedColumnProductionPartColumnLayout(adapterColumn.Field, got); err != nil {
 		return fmt.Errorf("collections: typed-column int64 aggregate image column %q layout validation failed: %w", adapterColumn.Definition.Name, err)
@@ -615,13 +682,14 @@ func validateTypedColumnAdapterInt64AggregateImage(part *typedcolumn.ColumnPart,
 }
 
 func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage, part *typedcolumn.ColumnPart) (*typedColumnAdapterPart, error) {
-	columns, err := typedColumnAdapterColumnsForFields(opts.Fields)
+	columns, err := typedColumnAdapterColumnsForFieldsWithOptions(opts.Fields, opts)
 	if err != nil {
 		return nil, err
 	}
 	if err := validateTypedColumnAdapterImageSchema(part, columns, opts.SchemaVersion); err != nil {
 		return nil, err
 	}
+	applyTypedColumnAdapterStoredDefinitions(columns, part)
 	dictionaries, err := image.Dictionaries()
 	if err != nil {
 		return nil, err
@@ -645,6 +713,33 @@ func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, imag
 		}
 	}
 	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: dictionaries}, nil
+}
+
+func applyTypedColumnAdapterStoredDefinitions(columns []typedColumnAdapterColumn, part *typedcolumn.ColumnPart) {
+	if part == nil {
+		return
+	}
+	for i := range columns {
+		got, ok := part.Columns[columns[i].Definition.Name]
+		if !ok {
+			continue
+		}
+		columns[i].Definition = got.Definition
+	}
+}
+
+func typedColumnAdapterValidateStoredDefinition(field TypedStorageField, want typedcolumn.ColumnDefinition, got typedcolumn.ColumnDefinition, context string) error {
+	if got.Name != want.Name || got.Type != want.Type || got.FixedWidthElements != want.FixedWidthElements || (typedColumnAdapterRequiresExactStoredEncoding(field) && got.Encoding != want.Encoding) {
+		return fmt.Errorf("collections: %s %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", context, want.Name, got.Type, got.Encoding, got.Compression, got.FixedWidthElements, want.Type, want.Encoding, want.Compression, want.FixedWidthElements)
+	}
+	return nil
+}
+
+func typedColumnAdapterRequiresExactStoredEncoding(field TypedStorageField) bool {
+	if field.ValueType == ColumnStoreValueInt64 && !field.Nullable && field.FixedWidthEncoding == ColumnFixedWidthEncodingDefault {
+		return false
+	}
+	return true
 }
 
 func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns []typedColumnAdapterColumn, schemaVersion uint32) error {
@@ -679,8 +774,8 @@ func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns
 		if !ok {
 			return fmt.Errorf("collections: typed-column adapter image missing column %q", column.Definition.Name)
 		}
-		if got.Definition.Type != column.Definition.Type || got.Definition.Encoding != column.Definition.Encoding || got.Definition.Compression != column.Definition.Compression || got.Definition.FixedWidthElements != column.Definition.FixedWidthElements {
-			return fmt.Errorf("collections: typed-column adapter image column %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", column.Definition.Name, got.Definition.Type, got.Definition.Encoding, got.Definition.Compression, got.Definition.FixedWidthElements, column.Definition.Type, column.Definition.Encoding, column.Definition.Compression, column.Definition.FixedWidthElements)
+		if err := typedColumnAdapterValidateStoredDefinition(column.Field, column.Definition, got.Definition, "typed-column adapter image column"); err != nil {
+			return err
 		}
 		if err := validateTypedColumnProductionPartColumnLayout(column.Field, got); err != nil {
 			return fmt.Errorf("collections: typed-column adapter image column %q layout validation failed: %w", column.Definition.Name, err)
@@ -3244,6 +3339,9 @@ func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageF
 	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
 	}
+	if len(adapterPart.Columns) == 1 {
+		adapterColumn = adapterPart.Columns[0]
+	}
 	return adapterPart, adapterColumn, image.ManifestBytes, nil
 }
 
@@ -3373,6 +3471,9 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 	}
 	if part.Descriptor.SchemaVersion != uint32(schemaHash) {
 		return nil, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", part.Descriptor.SchemaVersion, uint32(schemaHash))
+	}
+	if got, ok := part.Columns[adapterColumn.Definition.Name]; ok {
+		adapterColumn.Definition = got.Definition
 	}
 	if err := validateTypedColumnAdapterInt64AggregateTargetedSections(image, part); err != nil {
 		return nil, err
@@ -3575,6 +3676,12 @@ func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw
 	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
 	}
+	for _, candidate := range adapterPart.Columns {
+		if candidate.Definition.Name == adapterColumn.Definition.Name {
+			adapterColumn = candidate
+			break
+		}
+	}
 	return adapterPart, adapterColumn, image.ManifestBytes, nil
 }
 
@@ -3613,6 +3720,12 @@ func typedColumnAdapterPrepareStringPredicateScanPart(fields []TypedStorageField
 	}
 	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
 		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
+	}
+	for _, candidate := range adapterPart.Columns {
+		if candidate.Definition.Name == adapterColumn.Definition.Name {
+			adapterColumn = candidate
+			break
+		}
 	}
 	partColumn, ok := adapterPart.Part.Columns[adapterColumn.Definition.Name]
 	if !ok {

@@ -269,9 +269,6 @@ func Int64ReducerPlan(layout columnlayout.Capabilities, cert typedcolumn.ColumnP
 		if !cert.StreamingCertified {
 			return Plan{Path: PathUnsupported, Reason: ReasonNotWriterCertified, Message: "int64 streaming layout is not writer-certified"}
 		}
-		if cert.Compression != typedcolumn.CompressionNone {
-			return Plan{Path: PathUnsupported, Reason: ReasonCompressed, Message: fmt.Sprintf("compression=%s", cert.Compression)}
-		}
 		if cert.NullMaskPresent || cert.DefaultMaskPresent || cert.NullCount != 0 || cert.DefaultCount != 0 {
 			return Plan{Path: PathUnsupported, Reason: ReasonNullableWrapper, Message: "null/default masks must be applied outside scalar int64 reducer"}
 		}
