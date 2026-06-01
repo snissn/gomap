@@ -2134,6 +2134,8 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6(b *testing.B
 func reportVectorIndexSearchStatsModeBenchMetric2126(b *testing.B, mode VectorIndexSearchStatsMode) {
 	b.Helper()
 	switch mode {
+	case VectorIndexSearchStatsModeDefault:
+		b.ReportMetric(1, "stats_mode_full_diagnostics")
 	case VectorIndexSearchStatsModeMinimal:
 		b.ReportMetric(1, "stats_mode_minimal")
 	case VectorIndexSearchStatsModeProduction:

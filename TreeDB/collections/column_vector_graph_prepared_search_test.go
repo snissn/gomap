@@ -81,13 +81,18 @@ func TestColumnVectorGraphPreparedSearchMinimalStats2042(t *testing.T) {
 	assertColumnVectorGraphFullDiagnosticsStats2126(t, fullStats)
 	assertColumnVectorGraphPreparedMinimalStats2042(t, minimalStats, fullStats, len(minimalResults))
 
+	var debugReferenceScratch columnVectorGraphNativeSearchScratch
+	debugReferenceResults, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 6, EfSearch: len(rows), StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &debugReferenceScratch)
+	if err != nil {
+		t.Fatalf("benchmark-debug reference SearchCosine: %v", err)
+	}
 	var debugScratch columnVectorGraphNativeSearchScratch
 	debugResults, debugStats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 6, EfSearch: len(rows), StatsMode: columnVectorGraphNativeSearchStatsModeBenchmarkDebug}, &debugScratch)
 	if err != nil {
 		t.Fatalf("benchmark-debug SearchCosine: %v", err)
 	}
-	if len(debugResults) != 6 {
-		t.Fatalf("benchmark-debug results=%d want 6", len(debugResults))
+	if mismatch := columnGraphNativeSearchResultsMismatchV3(debugResults, debugReferenceResults); mismatch != "" {
+		t.Fatalf("benchmark-debug %s", mismatch)
 	}
 	assertColumnVectorGraphBenchmarkDebugStats2126(t, debugStats)
 
@@ -104,6 +109,9 @@ func TestColumnVectorGraphPreparedSearchMinimalStats2042(t *testing.T) {
 	publicProduction, err := searcher.Search(VectorIndexSearcherSearchOptions{Query: query, TopK: 6, EfSearch: 32, StatsMode: VectorIndexSearchStatsModeProduction})
 	if err != nil {
 		t.Fatalf("public production Search: %v", err)
+	}
+	if mismatch := vectorIndexSearchResultsMismatch1969(publicProduction.Results, publicMinimal.Results); mismatch != "" {
+		t.Fatalf("public production %s", mismatch)
 	}
 	assertColumnVectorGraphPreparedPublicMinimalStats2042(t, publicProduction.Stats, len(publicProduction.Results))
 }
