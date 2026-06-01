@@ -26,14 +26,16 @@ const (
 )
 
 // VectorIndexSearchStatsMode selects how much vector graph-search telemetry is
-// collected. The zero value preserves full diagnostics for compatibility; use
-// VectorIndexSearchStatsModeMinimal on steady-state production searches that
-// only need required production/admission counters.
+// collected. The zero value preserves full diagnostics for compatibility.
+// Production/minimal mode is the steady-state low-overhead mode: it keeps
+// source-health, admission, result, and fallback counters while avoiding
+// per-edge/per-candidate diagnostic counters on the healthy prepared path.
 type VectorIndexSearchStatsMode string
 
 const (
 	VectorIndexSearchStatsModeDefault         VectorIndexSearchStatsMode = ""
 	VectorIndexSearchStatsModeMinimal         VectorIndexSearchStatsMode = "minimal"
+	VectorIndexSearchStatsModeProduction      VectorIndexSearchStatsMode = "production"
 	VectorIndexSearchStatsModeFullDiagnostics VectorIndexSearchStatsMode = "full_diagnostics"
 	VectorIndexSearchStatsModeBenchmarkDebug  VectorIndexSearchStatsMode = "benchmark_debug"
 )
@@ -42,7 +44,7 @@ func columnVectorGraphNativeSearchStatsModeFromPublic(mode VectorIndexSearchStat
 	switch mode {
 	case VectorIndexSearchStatsModeDefault, VectorIndexSearchStatsModeFullDiagnostics:
 		return columnVectorGraphNativeSearchStatsModeFullDiagnostics, nil
-	case VectorIndexSearchStatsModeMinimal:
+	case VectorIndexSearchStatsModeMinimal, VectorIndexSearchStatsModeProduction:
 		return columnVectorGraphNativeSearchStatsModeMinimal, nil
 	case VectorIndexSearchStatsModeBenchmarkDebug:
 		return columnVectorGraphNativeSearchStatsModeBenchmarkDebug, nil
@@ -77,9 +79,9 @@ type VectorIndexSearcherSearchOptions struct {
 	// It is used only when IncludeDocuments is true; the zero value returns full documents.
 	DocumentFetchOptions DocumentFetchOptions
 	// StatsMode selects graph-search telemetry detail. The zero value preserves
-	// full diagnostics; minimal mode avoids per-candidate/per-edge diagnostic
-	// source accounting on the healthy combined prepared path while still
-	// reporting fallback/admission counters.
+	// full diagnostics; production/minimal mode avoids per-candidate/per-edge
+	// diagnostic accounting on the healthy combined prepared path while still
+	// reporting source-health, fallback, admission, and result counters.
 	StatsMode VectorIndexSearchStatsMode
 	// scoreBatchMode is an internal test/benchmark hook for exact-order indexed
 	// HNSW scoring. The public zero value follows the runtime default scoring
