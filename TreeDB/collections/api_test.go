@@ -3051,6 +3051,177 @@ func TestCollectionInsertBatchBridge_ValidatedBSONReturnedIDsAreOwned(t *testing
 	}
 }
 
+func TestCollectionInsertBatchSingleDirectBufferedBSONStats(t *testing.T) {
+	_, col := newSingleDirectBufferedBSONUsersCollection(t)
+	indexDefs := singleDirectBufferedUserIndexes()
+	wantIndexes := len(indexDefs)
+
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "email", Value: "ada@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert single direct-buffered bson: %v", err)
+	}
+
+	stats := col.LastInsertStats()
+	if stats.Documents != 1 || stats.Indexes != wantIndexes {
+		t.Fatalf("stats documents/indexes=%d/%d want 1/%d", stats.Documents, stats.Indexes, wantIndexes)
+	}
+	if stats.BufferedIndexedBatches != 1 || stats.BufferedIndexedBypassBatches != 0 {
+		t.Fatalf("buffered stats batches=%d bypass=%d want 1/0", stats.BufferedIndexedBatches, stats.BufferedIndexedBypassBatches)
+	}
+	if wantRuns := 1 + wantIndexes; stats.Runs != wantRuns {
+		t.Fatalf("runs=%d want %d primary plus secondary roots", stats.Runs, wantRuns)
+	}
+	if stats.SecondaryEntries != wantIndexes || stats.SecondarySortedRuns != wantIndexes || stats.SecondaryUnsortedRuns != 0 {
+		t.Fatalf("secondary stats entries=%d sorted=%d unsorted=%d want %d/%d/0", stats.SecondaryEntries, stats.SecondarySortedRuns, stats.SecondaryUnsortedRuns, wantIndexes, wantIndexes)
+	}
+	if len(stats.SecondaryRuns) != wantIndexes {
+		t.Fatalf("secondary run stats=%d want %d", len(stats.SecondaryRuns), wantIndexes)
+	}
+	for _, run := range stats.SecondaryRuns {
+		if run.Entries != 1 || !run.AlreadySorted {
+			t.Fatalf("secondary run %+v want one already-sorted entry", run)
+		}
+	}
+}
+
+func TestCollectionInsertBatchSingleDirectBufferedBSONRejectsPendingDocumentID(t *testing.T) {
+	_, col := newSingleDirectBufferedBSONUsersCollection(t)
+
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "ada@example.com"}, {Key: "city", Value: "hnl"}})},
+	); err != nil {
+		t.Fatalf("insert pending document: %v", err)
+	}
+	_, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "grace@example.com"}, {Key: "city", Value: "sea"}})},
+	)
+	if !errors.Is(err, ErrDocumentExists) {
+		t.Fatalf("duplicate pending document id err=%v want ErrDocumentExists", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if gotCity := bson.Raw(got).Lookup("city").StringValue(); gotCity != "hnl" {
+		t.Fatalf("u1 city=%q want original pending document", gotCity)
+	}
+}
+
+func TestCollectionInsertBatchSingleDirectBufferedBSONRejectsPendingUniqueConflict(t *testing.T) {
+	_, col := newSingleDirectBufferedBSONUsersCollection(t)
+
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "ada@example.com"}, {Key: "city", Value: "hnl"}})},
+	); err != nil {
+		t.Fatalf("insert pending unique document: %v", err)
+	}
+	_, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u2")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "email", Value: "ada@example.com"}, {Key: "city", Value: "sea"}})},
+	)
+	if !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate pending unique err=%v want ErrUniqueIndexConflict", err)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u2=%q want no staged document after unique conflict", got)
+	}
+}
+
+func TestCollectionInsertBatchSingleDirectBufferedBSONRejectsOversizedSecondaryKey(t *testing.T) {
+	_, col := newSingleDirectBufferedBSONUsersCollection(t)
+
+	_, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "email", Value: "ada@example.com"},
+			{Key: "city", Value: strings.Repeat("x", 70000)},
+		})},
+	)
+	if err == nil || !strings.Contains(err.Error(), "index key too large") {
+		t.Fatalf("oversized secondary key err=%v want index key too large", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u1=%q want no staged document after oversized secondary key", got)
+	}
+}
+
+func TestCollectionInsertBatchSingleDirectBufferedTemplateV1StagesExpectedRoots(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	mgr := NewCollectionManager(d)
+	opts := bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests()
+	opts.DocumentFormat = DocumentFormatTemplateV1
+	indexDefs := singleDirectBufferedUserIndexes()
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: opts,
+		Indexes: indexDefs,
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustTemplateV1Document(t, []string{"email", "city"}, []any{"ada@example.com", "hnl"})},
+	); err != nil {
+		t.Fatalf("insert single template-v1 document: %v", err)
+	}
+	stats := col.LastInsertStats()
+	wantIndexes := len(indexDefs)
+	wantRuns := 2 + wantIndexes
+	if stats.Documents != 1 || stats.Indexes != wantIndexes || stats.Runs != wantRuns {
+		t.Fatalf("stats documents/indexes/runs=%d/%d/%d want 1/%d/%d", stats.Documents, stats.Indexes, stats.Runs, wantIndexes, wantRuns)
+	}
+	if stats.SecondaryEntries != wantIndexes || stats.SecondarySortedRuns != wantIndexes || stats.SecondaryUnsortedRuns != 0 {
+		t.Fatalf("secondary stats entries=%d sorted=%d unsorted=%d want %d/%d/0", stats.SecondaryEntries, stats.SecondarySortedRuns, stats.SecondaryUnsortedRuns, wantIndexes, wantIndexes)
+	}
+
+	expectedRoots := []string{
+		collectionTemplateRootName("users"),
+		collectionPrimaryRootName("users"),
+	}
+	for _, indexDef := range indexDefs {
+		expectedRoots = append(expectedRoots, collectionSecondaryRootName("users", indexDef.Name))
+	}
+	col.writeDomain.mu.RLock()
+	defer col.writeDomain.mu.RUnlock()
+	for _, rootName := range expectedRoots {
+		if got := len(col.writeDomain.rootRuns[rootName]); got != 1 {
+			t.Fatalf("pending root %q runs=%d want 1", rootName, got)
+		}
+	}
+	if got := len(col.writeDomain.uniqueValueRuns["email"]); got != 1 {
+		t.Fatalf("pending email unique runs=%d want 1", got)
+	}
+	if got := col.writeDomain.count; got != 1 {
+		t.Fatalf("pending count=%d want 1", got)
+	}
+}
+
 func TestCollectionNativewireInsertBatchNoResultIDsUpdatesVectorIndex(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3095,6 +3266,38 @@ func TestCollectionNativewireInsertBatchNoResultIDsUpdatesVectorIndex(t *testing
 	if got, err := col.Get([]byte("z")); err != nil || got != nil {
 		t.Fatalf("mutated request id lookup got=%q err=%v want missing", got, err)
 	}
+}
+
+func singleDirectBufferedUserIndexes() []IndexDefinition {
+	return []IndexDefinition{
+		{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		{Name: "city", Field: "city", ValueType: IndexValueString},
+	}
+}
+
+func newSingleDirectBufferedBSONUsersCollection(t *testing.T) (*backenddb.DB, *Collection) {
+	t.Helper()
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	mgr := NewCollectionManager(d)
+	opts := bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests()
+	opts.DocumentFormat = DocumentFormatBSON
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: opts,
+		Indexes: singleDirectBufferedUserIndexes(),
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	return d, col
 }
 
 func TestCollectionSingleInsertBufferedNoIndexReadsBeforeFlush(t *testing.T) {
