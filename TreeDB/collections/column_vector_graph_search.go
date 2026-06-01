@@ -1519,9 +1519,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 	if preparedMinimal != nil {
 		preparedMinimal.recordPreparedScores(1, true)
 	}
-	if visitedCandidates != nil {
-		(*visitedCandidates)++
-	}
+	(*visitedCandidates)++
 	candidate := columnVectorGraphSearchCandidate{
 		ordinal: ordinal,
 		score:   score,
@@ -1552,9 +1550,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 		preparedMinimal.recordPreparedScores(len(ordinals), len(ordinals) <= 1)
 	}
 	for i, ordinal := range ordinals {
-		if visitedCandidates != nil {
-			(*visitedCandidates)++
-		}
+		(*visitedCandidates)++
 		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: scores[i]}
 		if debugCounters != nil {
 			scratch.insertTopDebug(topK, candidate, debugCounters)
