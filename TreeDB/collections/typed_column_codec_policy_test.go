@@ -1,0 +1,217 @@
+package collections
+
+import (
+	"errors"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+)
+
+func TestTypedColumnAdapterOptInCompressionRoundTrip1952(t *testing.T) {
+	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
+		t.Run(compression.String(), func(t *testing.T) {
+			fields := []TypedStorageField{
+				typedColumnAdapterField("count", ColumnStoreValueInt64),
+				typedColumnAdapterField("flag", ColumnStoreValueBool),
+				typedColumnAdapterField("kind", ColumnStoreValueString),
+				typedColumnAdapterNullableField("maybe_count", ColumnStoreValueInt64),
+			}
+			rows := make([]typedColumnAdapterRow, 512)
+			for i := range rows {
+				rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{
+					"count":       {Type: ColumnStoreValueInt64, Present: true, Int64: 42},
+					"flag":        {Type: ColumnStoreValueBool, Present: true, Bool: i%8 == 0},
+					"kind":        {Type: ColumnStoreValueString, Present: true, String: "commit"},
+					"maybe_count": {Type: ColumnStoreValueInt64, Present: i%5 != 0, Null: i%5 == 0, Int64: 42},
+				}}
+			}
+			part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 512, Fields: fields, DefaultCompression: compression, DefaultCompressionSet: true}, rows)
+			if err != nil {
+				t.Fatalf("build compressed part: %v", err)
+			}
+			primary := part.Part.Columns[typedColumnAdapterPrimaryIDColumn]
+			if primary.Definition.Compression != typedcolumn.CompressionNone {
+				t.Fatalf("primary compression=%s want none", primary.Definition.Compression)
+			}
+			kept := 0
+			for _, column := range part.Columns {
+				got := part.Part.Columns[column.Definition.Name]
+				if got.Definition.Compression != compression {
+					t.Fatalf("column %s requested compression=%s want %s", column.Definition.Name, got.Definition.Compression, compression)
+				}
+				for _, block := range got.Blocks {
+					if block.Descriptor.Compression == compression {
+						kept++
+					}
+				}
+			}
+			if kept == 0 {
+				t.Fatalf("no block kept requested compression %s", compression)
+			}
+			image, err := part.buildImage()
+			if err != nil {
+				t.Fatalf("buildImage: %v", err)
+			}
+			parsed, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{Fields: fields}, image)
+			if err != nil {
+				t.Fatalf("parse compressed image with default reader policy: %v", err)
+			}
+			for _, field := range fields {
+				values, err := parsed.scanColumnValues(field.Name)
+				if err != nil {
+					t.Fatalf("scan %s: %v", field.Name, err)
+				}
+				if len(values) != len(rows) {
+					t.Fatalf("scan %s rows=%d want %d", field.Name, len(values), len(rows))
+				}
+			}
+			accounting := part.Part.ByteAccountingFromImage(image)
+			if len(accounting.CompressionDetail) == 0 {
+				t.Fatalf("missing compression detail")
+			}
+			foundRequested := false
+			for _, detail := range accounting.CompressionDetail {
+				if detail.RequestedCompression == compression {
+					foundRequested = true
+				}
+			}
+			if !foundRequested {
+				t.Fatalf("compression detail did not include requested %s: %+v", compression, accounting.CompressionDetail)
+			}
+		})
+	}
+}
+
+func TestTypedColumnBenchmarkPolicyCompressedDirectAggregate1952(t *testing.T) {
+	for _, compression := range []string{"snappy", "lz4"} {
+		t.Run(compression, func(t *testing.T) {
+			t.Setenv(typedColumnBenchmarkCompressionEnv, compression)
+			t.Setenv(typedColumnBenchmarkInt64EncodingEnv, "raw_int64")
+			d := openTypedColumnInt64ScanDB(t)
+			defer func() { _ = d.Close() }()
+			cfg := testColumnStoreConfig(nil)
+			cfg.Columns = []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart}}
+			cfg.SortKey = nil
+			cfg.AggregateMetadata = nil
+			cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			col, err := mgr.OpenCollection("events")
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+			values := make([]int64, 1024)
+			for i := range values {
+				values[i] = 7
+			}
+			insertTypedColumnInt64ScanRows(t, col, values)
+
+			// Readers must trust the persisted descriptor rather than requiring the
+			// benchmark env vars that were active at publication time.
+			t.Setenv(typedColumnBenchmarkCompressionEnv, "")
+			t.Setenv(typedColumnBenchmarkInt64EncodingEnv, "")
+			result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll})
+			if err != nil {
+				t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+			}
+			if result.Count != int64(len(values)) || result.Sum != int64(len(values))*7 || result.Diagnostics.Fallback {
+				t.Fatalf("aggregate result=%+v want compressed decode-on-scan without fallback", result)
+			}
+			accounting, err := col.ColumnStorePhysicalAccounting(nil, ColumnStorePhysicalAccountingOptions{ReadIntegrity: ColumnAssetReadIntegrityVerify})
+			if err != nil {
+				t.Fatalf("ColumnStorePhysicalAccounting: %v", err)
+			}
+			found := false
+			for _, part := range accounting.TypedColumnParts {
+				for _, detail := range part.Image.CompressionDetail {
+					if detail.Column != "time_us" || detail.RequestedCompression != compression {
+						continue
+					}
+					found = true
+					if detail.ActualCompression != compression || detail.StoredBytes <= 0 || detail.EncodedRawBytes <= 0 || detail.StoredBytes >= detail.EncodedRawBytes || detail.CompressionKept == 0 {
+						t.Fatalf("compression detail=%+v want kept %s smaller than raw", detail, compression)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("missing %s compression detail in %+v", compression, accounting.TypedColumnParts)
+			}
+		})
+	}
+}
+
+func TestTypedColumnAdapterOptInCompressionRejectsZSTD1952(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	_, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 8, Fields: []TypedStorageField{field}, DefaultCompression: typedcolumn.CompressionZSTD, DefaultCompressionSet: true}, []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 1}}}})
+	if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "unsupported compression zstd") {
+		t.Fatalf("err=%v want explicit zstd rejection", err)
+	}
+}
+
+func TestTypedColumnAdapterAdaptiveRowsPerGranule1952(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	rows := make([]typedColumnAdapterRow, 100)
+	for i := range rows {
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}}}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{
+		PartID:         1952,
+		RowsPerGranule: 100,
+		Fields:         []TypedStorageField{field},
+		AdaptiveMarkSizing: typedcolumn.ColumnAdaptiveMarkSizing{
+			Enabled:     true,
+			TargetBytes: 64,
+			MinRows:     4,
+			MaxRows:     16,
+		},
+	}, rows)
+	if err != nil {
+		t.Fatalf("build adaptive part: %v", err)
+	}
+	if got := part.Part.Options.PartPolicy.RowsPerGranule; got <= 0 || got > 16 {
+		t.Fatalf("adaptive rows_per_granule=%d want <=16", got)
+	}
+	if granules := len(part.Part.Descriptor.Granules); granules <= 1 {
+		t.Fatalf("granules=%d want adaptive split", granules)
+	}
+}
+
+func TestTypedColumnBenchmarkPolicyEnvRequiresBenchmarkProfile1952(t *testing.T) {
+	t.Setenv(typedColumnBenchmarkCompressionEnv, "snappy")
+	cfg := ColumnStoreConfig{ProfileSupport: ColumnStoreProfileDurableOnly}
+	var opts typedColumnAdapterOptions
+	if err := applyTypedColumnBenchmarkPolicyFromEnv(cfg, &opts); err == nil || !strings.Contains(err.Error(), string(ColumnStoreProfileBenchmarkRelaxed)) {
+		t.Fatalf("err=%v want profile support requirement", err)
+	}
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	if err := applyTypedColumnBenchmarkPolicyFromEnv(cfg, &opts); err != nil {
+		t.Fatalf("benchmark relaxed policy: %v", err)
+	}
+	if !opts.DefaultCompressionSet || opts.DefaultCompression != typedcolumn.CompressionSnappy {
+		t.Fatalf("opts=%+v want snappy", opts)
+	}
+}
+
+func TestTypedColumnBenchmarkPolicyEnvRejectsZSTD1952(t *testing.T) {
+	t.Setenv(typedColumnBenchmarkCompressionEnv, "zstd")
+	var opts typedColumnAdapterOptions
+	if err := applyTypedColumnBenchmarkPolicyFromEnv(ColumnStoreConfig{ProfileSupport: ColumnStoreProfileBenchmarkRelaxed}, &opts); !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "unsupported compression zstd") {
+		t.Fatalf("err=%v want zstd rejection", err)
+	}
+}
+
+func TestTypedColumnBenchmarkPolicyEnvEmptyDoesNotRequireProfile1952(t *testing.T) {
+	for _, name := range []string{typedColumnBenchmarkCompressionEnv, typedColumnBenchmarkInt64EncodingEnv, typedColumnBenchmarkRowsPerGranuleEnv, typedColumnBenchmarkAdaptiveEnabledEnv, typedColumnBenchmarkAdaptiveTargetBytesEnv, typedColumnBenchmarkAdaptiveMinRowsEnv, typedColumnBenchmarkAdaptiveMaxRowsEnv} {
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+	}
+	var opts typedColumnAdapterOptions
+	if err := applyTypedColumnBenchmarkPolicyFromEnv(ColumnStoreConfig{}, &opts); err != nil {
+		t.Fatalf("empty env policy: %v", err)
+	}
+}

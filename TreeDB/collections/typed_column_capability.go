@@ -163,81 +163,77 @@ func validateTypedColumnProductionDefinition(field TypedStorageField, def typedc
 	if def.CodecBlockRows < 0 {
 		return fmt.Errorf("%w: invalid codec block rows %d for field %q", errTypedColumnProductionLayoutUnsupported, def.CodecBlockRows, field.Path)
 	}
+	var err error
 	switch field.ValueType {
 	case ColumnStoreValueBool:
-		if err := validateTypedColumnProductionBoolDefinition(field, def); err != nil {
-			return err
-		}
+		err = validateTypedColumnProductionBoolDefinition(field, def)
 	case ColumnStoreValueInt64:
-		if err := validateTypedColumnProductionInt64Definition(field, def); err != nil {
-			return err
-		}
+		err = validateTypedColumnProductionInt64Definition(field, def)
 	case ColumnStoreValueFloat32:
 		if field.FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian && !field.Nullable {
-			return requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeFloat32, typedcolumn.EncodingRawFloat32)
+			err = requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeFloat32, typedcolumn.EncodingRawFloat32)
+		} else {
+			err = validateTypedColumnProductionInt64CarrierDefinition(field, def, typedcolumn.ColumnTypeInt64)
 		}
-		return validateTypedColumnProductionInt64CarrierDefinition(field, def, typedcolumn.ColumnTypeInt64)
 	case ColumnStoreValueDouble:
 		if field.FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian && !field.Nullable {
-			return requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeFloat64, typedcolumn.EncodingRawFloat64)
+			err = requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeFloat64, typedcolumn.EncodingRawFloat64)
+		} else {
+			err = validateTypedColumnProductionInt64CarrierDefinition(field, def, typedcolumn.ColumnTypeInt64)
 		}
-		return validateTypedColumnProductionInt64CarrierDefinition(field, def, typedcolumn.ColumnTypeInt64)
 	case ColumnStoreValueString:
-		return validateTypedColumnProductionStringDefinition(field, def)
+		err = validateTypedColumnProductionStringDefinition(field, def)
 	case ColumnStoreValueFloat32Vector:
 		if field.Nullable {
-			return fmt.Errorf("%w: nullable float32_vector field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
-		}
-		if err := requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.EncodingRawFloat32Vector); err != nil {
-			return err
-		}
-		if def.FixedWidthElements <= 0 {
-			return fmt.Errorf("%w: float32_vector field %q requires positive fixed_width_elements", errTypedColumnProductionLayoutUnsupported, field.Path)
+			err = fmt.Errorf("%w: nullable float32_vector field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
+		} else if e := requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.EncodingRawFloat32Vector); e != nil {
+			err = e
+		} else if def.FixedWidthElements <= 0 {
+			err = fmt.Errorf("%w: float32_vector field %q requires positive fixed_width_elements", errTypedColumnProductionLayoutUnsupported, field.Path)
 		}
 	case ColumnStoreValueUint32List:
 		if field.Nullable {
-			return fmt.Errorf("%w: nullable uint32_list field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
-		}
-		if err := requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeUint32List, typedcolumn.EncodingRawUint32OffsetsList); err != nil {
-			return err
-		}
-		if def.FixedWidthElements != 0 {
-			return fmt.Errorf("%w: uint32_list field %q requires fixed_width_elements=0", errTypedColumnProductionLayoutUnsupported, field.Path)
+			err = fmt.Errorf("%w: nullable uint32_list field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
+		} else if e := requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeUint32List, typedcolumn.EncodingRawUint32OffsetsList); e != nil {
+			err = e
+		} else if def.FixedWidthElements != 0 {
+			err = fmt.Errorf("%w: uint32_list field %q requires fixed_width_elements=0", errTypedColumnProductionLayoutUnsupported, field.Path)
 		}
 	case ColumnStoreValueBytes:
 		if field.Nullable {
-			return fmt.Errorf("%w: nullable bytes field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
-		}
-		if err := requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeBytes, typedcolumn.EncodingRawBytesOffsets); err != nil {
-			return err
-		}
-		if def.FixedWidthElements != 0 {
-			return fmt.Errorf("%w: bytes field %q requires fixed_width_elements=0", errTypedColumnProductionLayoutUnsupported, field.Path)
+			err = fmt.Errorf("%w: nullable bytes field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
+		} else if e := requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeBytes, typedcolumn.EncodingRawBytesOffsets); e != nil {
+			err = e
+		} else if def.FixedWidthElements != 0 {
+			err = fmt.Errorf("%w: bytes field %q requires fixed_width_elements=0", errTypedColumnProductionLayoutUnsupported, field.Path)
 		}
 	case ColumnStoreValueAdjacencyList:
 		if field.Nullable {
-			return fmt.Errorf("%w: nullable adjacency_list field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
-		}
-		wantEncoding := typedcolumn.EncodingRawUint32Dense
-		wantElementsPositive := true
-		if field.AdjacencyLayout == ColumnAdjacencyListLayoutUint32OffsetsList {
-			wantEncoding = typedcolumn.EncodingRawUint32OffsetsList
-			wantElementsPositive = false
-		}
-		if err := requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeAdjacencyList, wantEncoding); err != nil {
-			return err
-		}
-		if wantElementsPositive {
-			if def.FixedWidthElements <= 0 {
-				return fmt.Errorf("%w: adjacency_list field %q requires positive fixed_width_elements", errTypedColumnProductionLayoutUnsupported, field.Path)
+			err = fmt.Errorf("%w: nullable adjacency_list field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
+		} else {
+			wantEncoding := typedcolumn.EncodingRawUint32Dense
+			wantElementsPositive := true
+			if field.AdjacencyLayout == ColumnAdjacencyListLayoutUint32OffsetsList {
+				wantEncoding = typedcolumn.EncodingRawUint32OffsetsList
+				wantElementsPositive = false
 			}
-		} else if def.FixedWidthElements != 0 {
-			return fmt.Errorf("%w: adjacency_list field %q offsets-list requires fixed_width_elements=0", errTypedColumnProductionLayoutUnsupported, field.Path)
+			if e := requireTypedColumnProductionTypeEncoding(field, def, typedcolumn.ColumnTypeAdjacencyList, wantEncoding); e != nil {
+				err = e
+			} else if wantElementsPositive {
+				if def.FixedWidthElements <= 0 {
+					err = fmt.Errorf("%w: adjacency_list field %q requires positive fixed_width_elements", errTypedColumnProductionLayoutUnsupported, field.Path)
+				}
+			} else if def.FixedWidthElements != 0 {
+				err = fmt.Errorf("%w: adjacency_list field %q offsets-list requires fixed_width_elements=0", errTypedColumnProductionLayoutUnsupported, field.Path)
+			}
 		}
 	default:
-		return fmt.Errorf("%w: unsupported value_type %q for field %q", errTypedColumnProductionLayoutUnsupported, field.ValueType, field.Path)
+		err = fmt.Errorf("%w: unsupported value_type %q for field %q", errTypedColumnProductionLayoutUnsupported, field.ValueType, field.Path)
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	return validateTypedColumnProductionCompressionForField(field, def)
 }
 
 func validateTypedColumnProductionBoolDefinition(field TypedStorageField, def typedcolumn.ColumnDefinition) error {
@@ -324,14 +320,27 @@ func typedColumnProductionEncodingMismatch(field TypedStorageField, def typedcol
 
 func validateTypedColumnProductionCompression(compression typedcolumn.Compression) error {
 	switch compression {
-	case typedcolumn.CompressionNone:
+	case typedcolumn.CompressionNone, typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4:
 		return nil
-	case typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4:
-		return fmt.Errorf("%w: compression %s is not enabled for production typed-column layouts", errTypedColumnProductionLayoutUnsupported, compression)
 	case typedcolumn.CompressionZSTD, typedcolumn.CompressionZSTDDict:
 		return fmt.Errorf("%w: unsupported compression %s", errTypedColumnProductionLayoutUnsupported, compression)
 	default:
 		return fmt.Errorf("%w: unknown compression %s", errTypedColumnProductionLayoutUnsupported, compression)
+	}
+}
+
+func validateTypedColumnProductionCompressionForField(field TypedStorageField, def typedcolumn.ColumnDefinition) error {
+	if def.Compression == typedcolumn.CompressionNone {
+		return nil
+	}
+	if err := validateTypedColumnProductionCompression(def.Compression); err != nil {
+		return err
+	}
+	switch field.ValueType {
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueString:
+		return nil
+	default:
+		return fmt.Errorf("%w: compression %s is unsupported for field %q value_type=%s", errTypedColumnProductionLayoutUnsupported, def.Compression, field.Path, field.ValueType)
 	}
 }
 
@@ -359,17 +368,20 @@ func validateTypedColumnProductionPartColumnLayout(field TypedStorageField, colu
 	if err := validateTypedColumnProductionDefinition(field, column.Definition); err != nil {
 		return err
 	}
-	return validateTypedColumnProductionBlocks(field.Path, column.Definition.Encoding, column.Blocks)
+	return validateTypedColumnProductionBlocks(field.Path, column.Definition.Encoding, column.Definition.Compression, column.Blocks)
 }
 
 func validateTypedColumnProductionPrimaryColumnLayout(column typedcolumn.ColumnPartColumn) error {
 	if column.Definition.Name != typedColumnAdapterPrimaryIDColumn || column.Definition.Type != typedcolumn.ColumnTypeInt64 || column.Definition.Encoding != typedcolumn.EncodingRawInt64 || column.Definition.Compression != typedcolumn.CompressionNone {
 		return fmt.Errorf("%w: primary-id column %q type=%s encoding=%s compression=%s want type=%s encoding=%s compression=%s", errTypedColumnProductionLayoutUnsupported, column.Definition.Name, column.Definition.Type, column.Definition.Encoding, column.Definition.Compression, typedcolumn.ColumnTypeInt64, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone)
 	}
-	return validateTypedColumnProductionBlocks(typedColumnAdapterPrimaryIDColumn, typedcolumn.EncodingRawInt64, column.Blocks)
+	return validateTypedColumnProductionBlocks(typedColumnAdapterPrimaryIDColumn, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone, column.Blocks)
 }
 
-func validateTypedColumnProductionBlocks(label string, wantEncoding typedcolumn.Encoding, blocks []typedcolumn.ColumnBlock) error {
+func validateTypedColumnProductionBlocks(label string, wantEncoding typedcolumn.Encoding, requestedCompression typedcolumn.Compression, blocks []typedcolumn.ColumnBlock) error {
+	if err := validateTypedColumnProductionCompression(requestedCompression); err != nil {
+		return err
+	}
 	for i, block := range blocks {
 		if block.Descriptor.Encoding != wantEncoding {
 			return fmt.Errorf("%w: field %q block %d descriptor encoding=%s want %s", errTypedColumnProductionLayoutUnsupported, label, i, block.Descriptor.Encoding, wantEncoding)
@@ -377,18 +389,34 @@ func validateTypedColumnProductionBlocks(label string, wantEncoding typedcolumn.
 		if block.Granule.Encoding != wantEncoding {
 			return fmt.Errorf("%w: field %q block %d granule encoding=%s want %s", errTypedColumnProductionLayoutUnsupported, label, i, block.Granule.Encoding, wantEncoding)
 		}
-		if block.Descriptor.Compression != typedcolumn.CompressionNone {
-			return fmt.Errorf("%w: field %q block %d descriptor compression=%s want %s", errTypedColumnProductionLayoutUnsupported, label, i, block.Descriptor.Compression, typedcolumn.CompressionNone)
+		if err := validateTypedColumnProductionActualCompression(label, i, requestedCompression, block.Descriptor.Compression, block.Descriptor.StoredBytes, block.Descriptor.RawBytes, "descriptor"); err != nil {
+			return err
 		}
-		if block.Granule.Compression != typedcolumn.CompressionNone {
-			return fmt.Errorf("%w: field %q block %d granule compression=%s want %s", errTypedColumnProductionLayoutUnsupported, label, i, block.Granule.Compression, typedcolumn.CompressionNone)
+		if block.Descriptor.Compression != block.Granule.Compression {
+			return fmt.Errorf("%w: field %q block %d descriptor/granule compression mismatch %s/%s", errTypedColumnProductionLayoutUnsupported, label, i, block.Descriptor.Compression, block.Granule.Compression)
 		}
-		if block.Descriptor.StoredBytes != block.Descriptor.RawBytes {
-			return fmt.Errorf("%w: field %q block %d uncompressed descriptor stored_bytes=%d raw_bytes=%d", errTypedColumnProductionLayoutUnsupported, label, i, block.Descriptor.StoredBytes, block.Descriptor.RawBytes)
+		if err := validateTypedColumnProductionActualCompression(label, i, requestedCompression, block.Granule.Compression, block.Granule.StoredBytes, block.Granule.RawBytes, "granule"); err != nil {
+			return err
 		}
-		if block.Granule.StoredBytes != block.Granule.RawBytes {
-			return fmt.Errorf("%w: field %q block %d uncompressed granule stored_bytes=%d raw_bytes=%d", errTypedColumnProductionLayoutUnsupported, label, i, block.Granule.StoredBytes, block.Granule.RawBytes)
+	}
+	return nil
+}
+
+func validateTypedColumnProductionActualCompression(label string, blockIndex int, requestedCompression, actualCompression typedcolumn.Compression, storedBytes, rawBytes int, source string) error {
+	if err := validateTypedColumnProductionCompression(actualCompression); err != nil {
+		return err
+	}
+	if actualCompression != typedcolumn.CompressionNone && actualCompression != requestedCompression {
+		return fmt.Errorf("%w: field %q block %d %s compression=%s not admitted by requested compression=%s", errTypedColumnProductionLayoutUnsupported, label, blockIndex, source, actualCompression, requestedCompression)
+	}
+	if actualCompression == typedcolumn.CompressionNone {
+		if storedBytes != rawBytes {
+			return fmt.Errorf("%w: field %q block %d uncompressed %s stored_bytes=%d raw_bytes=%d", errTypedColumnProductionLayoutUnsupported, label, blockIndex, source, storedBytes, rawBytes)
 		}
+		return nil
+	}
+	if storedBytes <= 0 || rawBytes <= 0 || storedBytes >= rawBytes {
+		return fmt.Errorf("%w: field %q block %d compressed %s stored_bytes=%d raw_bytes=%d did not satisfy keep-if-smaller", errTypedColumnProductionLayoutUnsupported, label, blockIndex, source, storedBytes, rawBytes)
 	}
 	return nil
 }

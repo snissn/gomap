@@ -68,13 +68,31 @@ func TestTypedColumnProductionCapabilityRejectsUnsupportedCodecCompression(t *te
 		t.Fatalf("base definition: %v", err)
 	}
 
+	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
+		t.Run("scalar-supported-"+compression.String(), func(t *testing.T) {
+			def := base
+			def.Compression = compression
+			if err := validateTypedColumnProductionDefinition(field, def); err != nil {
+				t.Fatalf("validate %s: %v", compression, err)
+			}
+		})
+	}
+
+	vectorField := TypedStorageField{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3}
+	vectorDef, err := typedColumnProductionDefinitionForField(vectorField)
+	if err != nil {
+		t.Fatalf("vector definition: %v", err)
+	}
+	vectorDef.Compression = typedcolumn.CompressionSnappy
+	if err := validateTypedColumnProductionDefinition(vectorField, vectorDef); !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "compression snappy is unsupported") {
+		t.Fatalf("vector compression err=%v want unsupported", err)
+	}
+
 	compressionCases := []struct {
 		name        string
 		compression typedcolumn.Compression
 		want        string
 	}{
-		{name: "snappy-not-enabled", compression: typedcolumn.CompressionSnappy, want: "not enabled"},
-		{name: "lz4-not-enabled", compression: typedcolumn.CompressionLZ4, want: "not enabled"},
 		{name: "zstd-unsupported", compression: typedcolumn.CompressionZSTD, want: "unsupported compression zstd"},
 		{name: "zstd-dict-unsupported", compression: typedcolumn.CompressionZSTDDict, want: "unsupported compression zstd_dict"},
 		{name: "unknown", compression: typedcolumn.Compression(250), want: "unknown compression compression_250"},
@@ -148,7 +166,7 @@ func TestTypedColumnProductionCapabilityRejectsNullableUnsupportedTypes(t *testi
 	}
 }
 
-func TestTypedColumnProductionCapabilityRejectsCompressedReadLayouts(t *testing.T) {
+func TestTypedColumnProductionCapabilityValidatesCompressedReadLayouts(t *testing.T) {
 	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 	newPart := func(t *testing.T) *typedColumnAdapterPart {
 		t.Helper()
@@ -164,7 +182,7 @@ func TestTypedColumnProductionCapabilityRejectsCompressedReadLayouts(t *testing.
 		col.Blocks[0].Descriptor.Compression = typedcolumn.CompressionSnappy
 		part.Part.Columns[field.Name] = col
 		err := validateTypedColumnAdapterImageSchema(part.Part, part.Columns, uint32(part.Part.Descriptor.SchemaVersion))
-		if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "descriptor compression=snappy want none") {
+		if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "compression=snappy not admitted by requested compression=none") {
 			t.Fatalf("err=%v want compressed declared block rejection", err)
 		}
 	})
@@ -175,8 +193,22 @@ func TestTypedColumnProductionCapabilityRejectsCompressedReadLayouts(t *testing.
 		col.Blocks[0].Granule.Compression = typedcolumn.CompressionLZ4
 		part.Part.Columns[field.Name] = col
 		err := validateTypedColumnAdapterImageSchema(part.Part, part.Columns, uint32(part.Part.Descriptor.SchemaVersion))
-		if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "granule compression=lz4 want none") {
+		if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "descriptor/granule compression mismatch") {
 			t.Fatalf("err=%v want compressed granule rejection", err)
+		}
+	})
+
+	t.Run("declared requested compressed blocks", func(t *testing.T) {
+		rows := make([]typedColumnAdapterRow, 256)
+		for i := range rows {
+			rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{field.Path: {Type: ColumnStoreValueInt64, Present: true, Int64: 7}}}
+		}
+		part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 52, RowsPerGranule: 256, Fields: []TypedStorageField{field}, DefaultCompression: typedcolumn.CompressionSnappy, DefaultCompressionSet: true}, rows)
+		if err != nil {
+			t.Fatalf("build compressed part: %v", err)
+		}
+		if err := validateTypedColumnAdapterImageSchema(part.Part, part.Columns, uint32(part.Part.Descriptor.SchemaVersion)); err != nil {
+			t.Fatalf("validate compressed layout: %v", err)
 		}
 	})
 
