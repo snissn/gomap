@@ -274,6 +274,14 @@ func (w *benchmarkFrameSink) Write(p []byte) (int, error) {
 
 func benchmarkDispatchRequest(tb testing.TB, server *Server, state *connState, sink *benchmarkFrameSink, body []byte) []byte {
 	tb.Helper()
+	response, err := benchmarkDispatchRequestError(server, state, sink, body)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return response
+}
+
+func benchmarkDispatchRequestError(server *Server, state *connState, sink *benchmarkFrameSink, body []byte) ([]byte, error) {
 	sink.frame = sink.frame[:0]
 	header := iwire.Header{
 		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
@@ -281,26 +289,26 @@ func benchmarkDispatchRequest(tb testing.TB, server *Server, state *connState, s
 		RequestID: 1,
 	}
 	if err := server.handleFrame(context.Background(), sink, state, header, body); err != nil {
-		tb.Fatalf("handleFrame: %v", err)
+		return nil, fmt.Errorf("handleFrame: %w", err)
 	}
 	if len(sink.frame) < int(iwire.FrameHeaderLenV1) {
-		tb.Fatalf("response frame too short: %d", len(sink.frame))
+		return nil, fmt.Errorf("response frame too short: %d", len(sink.frame))
 	}
 	responseHeader, err := iwire.DecodeHeader(sink.frame[:iwire.FrameHeaderLenV1], server.limits)
 	if err != nil {
-		tb.Fatalf("decode response header: %v", err)
+		return nil, fmt.Errorf("decode response header: %w", err)
 	}
 	if responseHeader.Type == iwire.FrameError {
-		tb.Fatalf("server returned error frame: %v", decodeWireError(sink.frame[iwire.FrameHeaderLenV1:], server.limits))
+		return nil, fmt.Errorf("server returned error frame: %w", decodeWireError(sink.frame[iwire.FrameHeaderLenV1:], server.limits))
 	}
 	if responseHeader.Type != iwire.FrameResponse {
-		tb.Fatalf("response type=%d want %d", responseHeader.Type, iwire.FrameResponse)
+		return nil, fmt.Errorf("response type=%d want %d", responseHeader.Type, iwire.FrameResponse)
 	}
 	response := sink.frame[iwire.FrameHeaderLenV1:]
 	if uint64(len(response)) != responseHeader.BodyLen {
-		tb.Fatalf("response body len=%d want %d", len(response), responseHeader.BodyLen)
+		return nil, fmt.Errorf("response body len=%d want %d", len(response), responseHeader.BodyLen)
 	}
-	return response
+	return response, nil
 }
 
 func benchmarkAddCollectionHandle(tb testing.TB, state *connState, server *Server, name string, col *collections.Collection) CollectionHandle {

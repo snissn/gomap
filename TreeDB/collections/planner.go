@@ -672,7 +672,9 @@ func (p insertBatchPlanner) singleItemIndexStateAndUniqueProbeRuns(item *insertB
 	item.state = state
 
 	uniqueRunCount := 0
+	preflightRunCount := 0
 	prefixBytes := 0
+	hasUniquePreflight := preflight.snapshot != nil && len(preflight.uniqueIndexRootIDs) != 0
 	for runtimeIdx, runtime := range runtimes {
 		if !runtime.def.unique {
 			continue
@@ -682,6 +684,9 @@ func (p insertBatchPlanner) singleItemIndexStateAndUniqueProbeRuns(item *insertB
 			continue
 		}
 		uniqueRunCount++
+		if hasUniquePreflight && preflight.uniqueIndexRootIDs[runtime.def.name] != 0 {
+			preflightRunCount++
+		}
 		for _, value := range values {
 			prefixBytes += len(value)
 		}
@@ -691,7 +696,10 @@ func (p insertBatchPlanner) singleItemIndexStateAndUniqueProbeRuns(item *insertB
 	}
 
 	allRuns := make([]collectionUniqueProbeRun, 0, uniqueRunCount)
-	preflightRuns := make([]collectionUniqueProbeRun, 0, uniqueRunCount)
+	var preflightRuns []collectionUniqueProbeRun
+	if preflightRunCount > 0 && preflightRunCount < uniqueRunCount {
+		preflightRuns = make([]collectionUniqueProbeRun, 0, preflightRunCount)
+	}
 	prefixArena := make([]byte, 0, prefixBytes)
 	for runtimeIdx, runtime := range runtimes {
 		if !runtime.def.unique {
@@ -714,9 +722,12 @@ func (p insertBatchPlanner) singleItemIndexStateAndUniqueProbeRuns(item *insertB
 			run.prefixes = append(run.prefixes, prefix)
 		}
 		allRuns = append(allRuns, run)
-		if preflight.snapshot != nil && preflight.uniqueIndexRootIDs[runtime.def.name] != 0 {
+		if preflightRuns != nil && hasUniquePreflight && preflight.uniqueIndexRootIDs[runtime.def.name] != 0 {
 			preflightRuns = append(preflightRuns, run)
 		}
+	}
+	if preflightRunCount == uniqueRunCount {
+		preflightRuns = allRuns
 	}
 	return allRuns, preflightRuns, nil
 }
