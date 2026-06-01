@@ -1480,8 +1480,11 @@ func assertVectorIndexSearchResultIDStatsContract2124(tb testing.TB, got, want V
 			tb.Fatalf("stats %s=%d want %d; got=%+v wantStats=%+v", check.name, check.got, check.want, got, want)
 		}
 	}
-	if got.GraphRows != 0 || got.PreparedGraphSearchViews != 1 || got.ResultIDGraphFallbacks != 0 || got.GraphRowFallbacks != 0 || got.VectorScratchDecodes != 0 || got.NormScratchDecodes != 0 || got.AdjacencyScratchDecodes != 0 || got.TypedColumnFallbacks != 0 {
-		tb.Fatalf("stats=%+v want healthy prepared result-ID path without graph-row/scratch fallbacks", got)
+	if got.GraphRows != 0 || got.ResultIDGraphFallbacks != 0 || got.GraphRowFallbacks != 0 || got.VectorScratchDecodes != 0 || got.NormScratchDecodes != 0 || got.AdjacencyScratchDecodes != 0 || got.TypedColumnFallbacks != 0 {
+		tb.Fatalf("stats=%+v want healthy typed-column result-ID path without graph-row/scratch fallbacks", got)
+	}
+	if got.ResultIDTypedBytesState == 0 || got.ResultIDPreparedBytesViews == 0 || got.RowRefVectorSourceState == 0 {
+		tb.Fatalf("stats=%+v want typed-column result-ID and row-ref state", got)
 	}
 }
 
