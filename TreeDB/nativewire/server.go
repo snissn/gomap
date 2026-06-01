@@ -334,11 +334,11 @@ func NewServer(opts ServerOptions) *Server {
 		maxMetadataIdempotencyEntries = defaultMaxMetadataIdempotencyEntries
 	}
 	insertBatchCombineMaxBatch := opts.InsertBatchCombineMaxBatch
-	if insertBatchCombineMaxBatch == 0 {
+	if insertBatchCombineMaxBatch <= 0 {
 		insertBatchCombineMaxBatch = defaultInsertBatchCombineMaxBatch
 	}
 	insertBatchCombineDrainYields := opts.InsertBatchCombineDrainYields
-	if insertBatchCombineDrainYields == 0 {
+	if insertBatchCombineDrainYields <= 0 {
 		insertBatchCombineDrainYields = defaultInsertBatchCombineDrainYields
 	}
 	server := &Server{
@@ -941,6 +941,10 @@ func (s *Server) Stats() map[string]string {
 		"cursors.opened_total",
 		"cursors.closed_total",
 		"cursors.timeouts_total",
+		"insert_batch_combiner.batches_total",
+		"insert_batch_combiner.requests_total",
+		"insert_batch_combiner.single_requests_total",
+		"insert_batch_combiner.fallback_requests_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"
 	}

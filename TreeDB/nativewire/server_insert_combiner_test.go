@@ -124,6 +124,34 @@ func TestInsertBatchCombinerSkipsIncompatibleRequests(t *testing.T) {
 	}
 }
 
+func TestInsertBatchCombinerStatsStartAtZero(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	stats := server.Stats()
+	for _, key := range []string{
+		"insert_batch_combiner.batches_total",
+		"insert_batch_combiner.requests_total",
+		"insert_batch_combiner.single_requests_total",
+		"insert_batch_combiner.fallback_requests_total",
+	} {
+		if got := stats[nativeStatsPrefix+key]; got != "0" {
+			t.Fatalf("Stats()[%q]=%q want 0", nativeStatsPrefix+key, got)
+		}
+	}
+}
+
+func TestInsertBatchCombinerNonPositiveOptionsUseDefaults(t *testing.T) {
+	server := NewServer(ServerOptions{
+		InsertBatchCombineMaxBatch:    -1,
+		InsertBatchCombineDrainYields: -1,
+	})
+	if server.insertBatchCombineMaxBatch != defaultInsertBatchCombineMaxBatch {
+		t.Fatalf("max batch=%d want default %d", server.insertBatchCombineMaxBatch, defaultInsertBatchCombineMaxBatch)
+	}
+	if server.insertBatchCombineDrainYields != defaultInsertBatchCombineDrainYields {
+		t.Fatalf("drain yields=%d want default %d", server.insertBatchCombineDrainYields, defaultInsertBatchCombineDrainYields)
+	}
+}
+
 func newInsertBatchCombinerTestServer(t *testing.T) (*Server, *collections.Collection, func()) {
 	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
