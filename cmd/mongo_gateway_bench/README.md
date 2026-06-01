@@ -306,6 +306,40 @@ The bundle contains:
 The first checked-in bundle is
 `docs/benchmarks/mongo_gateway_compare_2026-04-29/`.
 
+## YCSB Attribution Harness
+
+Use `scripts/mongo_gateway_ycsb_attribution.sh` for the focused TreeDB Mongo
+gateway YCSB load shape. It keeps the workload close to `go-ycsb mongodb`
+load: BSON documents, batch size 1, 16 insert producers, `fast` TreeDB profile,
+no post-load maintenance, and 0/1 secondary-index rows. The matrix separates
+the official MongoDB Go driver path from raw Mongo wire over TCP, nativewire
+over TCP, and direct collection insertion.
+
+```sh
+PROFILE=true scripts/mongo_gateway_ycsb_attribution.sh
+```
+
+The bundle contains:
+
+- `summary.md` and `summary.tsv`: per-client load throughput, sampled ns/op,
+  latency percentiles, producer count, and raw result paths.
+- `index_<n>/<client_mode>/result.json`: unmodified
+  `mongo_gateway_bench -format json` output for each cell.
+- `index_<n>/<client_mode>/profiles/`: per-phase pprof artifacts and
+  `*_top.txt` CPU summaries when `PROFILE=true` and the cell matches
+  `PROFILE_MODES`/`PROFILE_INDEXES`.
+
+Useful focused overrides:
+
+- `DOCUMENTS=1000 CLIENT_MODES="driver direct" INDEXES_LIST=0` for a smoke run.
+- `CLIENT_MODES="driver raw-wire-tcp native-wire-tcp direct"` to reproduce the
+  standard attribution rows.
+- `PROFILE=true PROFILE_MODES="driver raw-wire-tcp"` to capture gateway and raw
+  wire CPU evidence without profiling every cell.
+- `READS`, `UPDATES`, `CONCURRENT_READERS`, and `CONCURRENT_WRITERS` can enable
+  additional run-style phases, but exact YCSB run semantics should still be
+  measured with `go-ycsb mongodb`.
+
 To regenerate only the report from an existing bundle:
 
 ```sh
