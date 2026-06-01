@@ -1654,6 +1654,10 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocum
 }
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithStatsModeV4(b, includeDocuments, fetchOptions, VectorIndexSearchStatsModeDefault)
+}
+
+func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithStatsModeV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions, statsMode VectorIndexSearchStatsMode) {
 	b.Helper()
 	const (
 		rows     = 1024
@@ -1683,6 +1687,7 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *tes
 		EfSearch:             efSearch,
 		IncludeDocuments:     includeDocuments,
 		DocumentFetchOptions: fetchOptions,
+		StatsMode:            statsMode,
 	}
 	if _, err := searcher.Search(opts); err != nil {
 		b.Fatalf("warm Search: %v", err)
@@ -1786,6 +1791,10 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelW
 }
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithStatsModeV4(b, includeDocuments, fetchOptions, VectorIndexSearchStatsModeDefault)
+}
+
+func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithStatsModeV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions, statsMode VectorIndexSearchStatsMode) {
 	b.Helper()
 	const (
 		rows     = 1024
@@ -1816,6 +1825,7 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV
 		EfSearch:             efSearch,
 		IncludeDocuments:     includeDocuments,
 		DocumentFetchOptions: fetchOptions,
+		StatsMode:            statsMode,
 	}
 	type preparedWorker struct {
 		searcher *VectorIndexSearcher
@@ -2084,6 +2094,9 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.ScoreFloat64Fallbacks), "score_float64_fallbacks/search")
 	if stats.ScoreBatchCalls > 0 {
 		b.ReportMetric(float64(stats.ScoreBatchCandidates)/float64(stats.ScoreBatchCalls), "score_batch_avg_tile_size")
+	}
+	if stats.BenchmarkDebugSearches > 0 {
+		reportVectorIndexSearchBenchmarkDebugMetrics2105(b, stats)
 	}
 	b.ReportMetric(float64(stats.ExpansionFetches), "expansion_fetches/search")
 	b.ReportMetric(float64(stats.ResultFetches), "result_fetches/search")

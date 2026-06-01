@@ -82,7 +82,9 @@ type VectorIndexSearcherSearchOptions struct {
 	// reporting fallback/admission counters.
 	StatsMode VectorIndexSearchStatsMode
 	// scoreBatchMode is an internal test/benchmark hook for exact-order indexed
-	// HNSW scoring. The public zero value follows the default scalar gate.
+	// HNSW scoring. The public zero value follows the runtime default scoring
+	// gate: eligible prepared views may use indexed/gathered scoring; legacy,
+	// non-prepared, and fallback routes remain scalar.
 	scoreBatchMode columnVectorGraphScoreBatchMode
 }
 
