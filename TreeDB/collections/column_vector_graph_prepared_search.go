@@ -173,6 +173,10 @@ func (v *columnVectorGraphPreparedSearchView) ready() bool {
 	return v != nil && v.rows >= 0 && v.dims > 0 && v.vector.ready() && v.norm.ready() && v.adjacency != nil && v.rowRefs != nil && v.documentIDs != nil
 }
 
+func (v *columnVectorGraphPreparedSearchView) indexedScoringDefaultEligible() bool {
+	return v != nil && v.ready() && v.vector.singlePart != nil && v.norm.ready()
+}
+
 func (v *columnVectorGraphPreparedSearchView) validateLive() error {
 	if v == nil {
 		return errors.New("nil prepared graph-search view")

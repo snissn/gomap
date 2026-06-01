@@ -28,6 +28,16 @@ Healthy search must use the documented prepared/direct state for vectors,
 adjacency, inverse norms, row refs, and document IDs; legacy graph-row payloads
 are compatibility inputs only and must not be counted as healthy-path evidence.
 
+Default scoring policy after #2103: when callers leave the internal score-batch
+mode at `default`, eligible prepared typed-column graph search uses
+prepared gathered/indexed scoring. Eligibility is deliberately narrow: the
+combined prepared graph-search view must be healthy, with a single-part prepared
+vector view and ready inverse norms. Explicit scalar remains available for parity
+tests and diagnostics, and legacy graph-row/direct or non-prepared fallback
+routes keep default scalar scoring. This policy does not change traversal
+semantics, frontier behavior, candidate order/tie behavior, `ef_search`, `topK`,
+result ordering, or persistent formats.
+
 ## Quickstart
 
 Declare a collection with JSON documents, physical column storage for the vector

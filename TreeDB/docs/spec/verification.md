@@ -895,6 +895,11 @@ Invariant:
   frontier/top-k operation counts, visited-mark hits/misses, exact-mode candidate
   order summaries, `ns/op`, `ops/sec`, `B/op`, and `allocs/op` without changing
   traversal semantics or fixture topology.
+- The #2103 promotion gate must prove that default gathered/indexed scoring is
+  selected only for healthy eligible prepared typed-column search, that explicit
+  scalar/default/indexed prepared results match, and that legacy graph-row/direct
+  or non-prepared fallback routes keep default scalar scoring and existing
+  fallback/source counters.
 
 Coverage:
 - Policy owner: `TreeDB/docs/spec/typed-column-graph-search-benchmark-matrix.md`.
@@ -913,6 +918,12 @@ Coverage:
     counter reconciliation, skip buckets, layer work, frontier/top-k counts, and
     exact-mode candidate-order summaries; `BenchmarkColumnVectorGraphSearchBatchability1979`
     emits the opt-in batchability/control-flow rows.
+  - `TreeDB/collections/column_vector_graph_promotion_2103_test.go`:
+    `TestColumnVectorGraphPreparedDefaultIndexedScoring2103`,
+    `TestColumnVectorGraphNonPreparedDefaultScoringRemainsScalar2103`, and
+    `TestColumnVectorGraphLegacyDefaultScoringRemainsScalar2103` freeze the
+    default-gating decision; `BenchmarkColumnVectorGraphSearchPromotion2103`
+    emits the default/scalar/indexed promotion rows.
 
 ## 13. Native Wire Protocol
 
