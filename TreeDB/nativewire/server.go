@@ -67,6 +67,8 @@ const (
 	defaultCursorBatchSize               = 101
 	defaultCursorIdleTimeout             = 10 * time.Minute
 	defaultMaxMetadataIdempotencyEntries = 1024
+	defaultInsertBatchCombineMaxBatch    = 256
+	defaultInsertBatchCombineDrainYields = 2
 )
 
 // ServerOptions configures a native-wire server.
@@ -83,6 +85,8 @@ type ServerOptions struct {
 	CursorIdleTimeout             time.Duration
 	DefaultAckPolicy              iwire.AckPolicy
 	MaxMetadataIdempotencyEntries int
+	InsertBatchCombineMaxBatch    int
+	InsertBatchCombineDrainYields int
 	Collections                   *collections.CollectionManager
 	Backend                       *backenddb.DB
 }
@@ -101,10 +105,13 @@ type Server struct {
 	cursorIdleTimeout             time.Duration
 	defaultAckPolicy              iwire.AckPolicy
 	maxMetadataIdempotencyEntries int
+	insertBatchCombineMaxBatch    int
+	insertBatchCombineDrainYields int
 	registry                      *iwire.Registry
 	collections                   *collections.CollectionManager
 	backend                       *backenddb.DB
 	catalogVersion                atomic.Uint64
+	insertBatchCombiner           nativewireInsertBatchCombiner
 
 	closed              atomic.Bool
 	connMu              sync.Mutex
@@ -326,6 +333,14 @@ func NewServer(opts ServerOptions) *Server {
 	if maxMetadataIdempotencyEntries == 0 {
 		maxMetadataIdempotencyEntries = defaultMaxMetadataIdempotencyEntries
 	}
+	insertBatchCombineMaxBatch := opts.InsertBatchCombineMaxBatch
+	if insertBatchCombineMaxBatch <= 0 {
+		insertBatchCombineMaxBatch = defaultInsertBatchCombineMaxBatch
+	}
+	insertBatchCombineDrainYields := opts.InsertBatchCombineDrainYields
+	if insertBatchCombineDrainYields <= 0 {
+		insertBatchCombineDrainYields = defaultInsertBatchCombineDrainYields
+	}
 	server := &Server{
 		limits:                        limits,
 		maxInFlight:                   maxInFlight,
@@ -339,6 +354,8 @@ func NewServer(opts ServerOptions) *Server {
 		cursorIdleTimeout:             cursorIdleTimeout,
 		defaultAckPolicy:              defaultAck,
 		maxMetadataIdempotencyEntries: maxMetadataIdempotencyEntries,
+		insertBatchCombineMaxBatch:    insertBatchCombineMaxBatch,
+		insertBatchCombineDrainYields: insertBatchCombineDrainYields,
 		registry:                      iwire.MustV1Registry(),
 		collections:                   opts.Collections,
 		backend:                       opts.Backend,
@@ -924,6 +941,10 @@ func (s *Server) Stats() map[string]string {
 		"cursors.opened_total",
 		"cursors.closed_total",
 		"cursors.timeouts_total",
+		"insert_batch_combiner.batches_total",
+		"insert_batch_combiner.requests_total",
+		"insert_batch_combiner.single_requests_total",
+		"insert_batch_combiner.fallback_requests_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"
 	}
