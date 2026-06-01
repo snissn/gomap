@@ -260,11 +260,13 @@ is not the source of that mismatch. #1979 adds opt-in benchmark-debug
 batchability/control-flow counters on the #2091 topology-parity fixture: the
 bounded `ef_search=128` row's 612 visited edges are mostly already-visited
 layer-0 skips over degree-16 neighbor tiles, while exact mode scores all 8192
-candidates and visits 100748 edges/search. Use #1980 for frontier/top-k or
-already-visited optimization if future profiles continue to justify it, use a
-separate narrow indexed-scoring ticket if exact-mode gathered score batching is
-desired, and keep #1977 normalized vectors deferred until a prototype beats raw
-vectors plus inverse norms including storage/rebuild cost.
+candidates and visits 100748 edges/search. #2098 adds an opt-in prepared
+single-part indexed-scoring fast path with scalar/default result-equivalence
+coverage, but indexed scoring remains non-default until broader #2035 promotion
+evidence justifies a runtime change. Use #1980 for frontier/top-k or
+already-visited optimization if future profiles continue to justify it, and keep
+#1977 normalized vectors deferred until a prototype beats raw vectors plus
+inverse norms including storage/rebuild cost.
 
 The broader legacy/canonical matrix remains useful when comparing with older
 artifacts or when you also need one-shot open/setup names:
