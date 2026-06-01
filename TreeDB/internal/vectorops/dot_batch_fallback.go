@@ -1,8 +1,12 @@
+//go:build !arm64 || purego
+
 package vectorops
 
 var dotFloat32BatchImplementation = "per_row_" + DotFloat32Implementation()
 
 const dotFloat32BatchOptimizedAvailable = false
+
+func dotFloat32IndexedOptimizedEligible(rows, dims int) bool { return false }
 
 // DotFloat32Indexed writes dot products for row-major base rows selected by
 // rowIDs using the per-row DotFloat32 fallback. It writes min(len(dst), len(rowIDs))

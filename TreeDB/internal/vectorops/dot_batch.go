@@ -29,6 +29,14 @@ func DotFloat32BatchImplementation() string { return dotFloat32BatchImplementati
 // uses SIMD; callers must inspect DotFloat32BatchStatus.Optimized.
 func DotFloat32BatchOptimizedAvailable() bool { return dotFloat32BatchOptimizedAvailable }
 
+// DotFloat32IndexedOptimizedEligible reports whether this build's indexed-row
+// backend is expected to use optimized execution for a valid rows/dims shape.
+// Callers must still inspect DotFloat32BatchStatus because invalid shapes are
+// rejected before backend selection.
+func DotFloat32IndexedOptimizedEligible(rows, dims int) bool {
+	return dotFloat32IndexedOptimizedEligible(rows, dims)
+}
+
 func dotFloat32BatchStatus(rows int, optimized bool) DotFloat32BatchStatus {
 	return DotFloat32BatchStatus{
 		Rows:      rows,

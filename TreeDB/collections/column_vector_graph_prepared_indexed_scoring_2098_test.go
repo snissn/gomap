@@ -21,6 +21,7 @@ func TestColumnVectorGraphPreparedExactIndexedScoringEquivalence2098(t *testing.
 	if indexedStats.ScoreBatchMaxTileSize < 2 || indexedStats.ScoreBatchCalls >= scalarStats.ScoreBatchCalls {
 		t.Fatalf("indexed stats=%+v scalar stats=%+v want exact prepared indexed scoring to preserve work while grouping score batches", indexedStats, scalarStats)
 	}
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(t, indexedStats.ScoreBatchOptimizedCalls, indexedStats.ScoreBatchScalarFallbackCalls, int(indexedStats.ScoreBatchMaxTileSize), shape.dims)
 }
 
 func TestColumnVectorGraphPreparedExactIndexedScoringTieOrder2098(t *testing.T) {
@@ -52,6 +53,9 @@ func TestColumnVectorGraphPreparedExactIndexedScoringTieOrder2098(t *testing.T) 
 	assertColumnVectorGraphPreparedExactIndexedWorkStatsEqual2098(t, scalarStats, indexedStats)
 	if indexedStats.ScoreBatchMaxTileSize < 2 {
 		t.Fatalf("indexed stats=%+v want tie fixture to exercise gathered score batch", indexedStats)
+	}
+	if indexedStats.ScoreBatchOptimizedCalls != 0 || indexedStats.ScoreBatchScalarFallbackCalls == 0 {
+		t.Fatalf("indexed stats=%+v want tiny-dims prepared indexed batch to use observable scalar fallback", indexedStats)
 	}
 }
 
