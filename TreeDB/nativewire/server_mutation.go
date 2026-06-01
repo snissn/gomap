@@ -10,6 +10,7 @@ import (
 )
 
 type insertBatchFastRequest struct {
+	collectionName   string
 	collection       *collections.Collection
 	sections         []iwire.Section
 	format           collections.DocumentFormat
@@ -44,6 +45,12 @@ func (s *Server) handleInsertBatchFastBody(req insertBatchFastRequest, dst []byt
 	defer s.metadataMu.RUnlock()
 	if err := s.checkCatalogGuard(req.sections); err != nil {
 		return nil, err
+	}
+	if result, combined := s.insertBatchCombiner.run(s, req); combined {
+		if result.err != nil {
+			return nil, result.err
+		}
+		return appendInsertBatchResponseBody(dst, nil, len(req.ids), result.actualAck, result.catalogVersion, result.hasCatalogVersion, false, req.includeMeta)
 	}
 	resultIDs, insertedCount, actualAck, catalogVersion, hasCatalogVersion, err := s.insertBatchDecoded(req.collection, req.format, req.ids, req.docs, req.ack, req.includeResultIDs)
 	if err != nil {
@@ -228,7 +235,7 @@ func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire
 	if !seen.has(iwire.SectionExpectedCatalogVersion) {
 		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionExpectedCatalogVersion)
 	}
-	_, collection, err := s.openCollectionRawRef(state, rawCollection)
+	collectionName, collection, err := s.openCollectionRawRef(state, rawCollection)
 	if err != nil {
 		return insertBatchFastRequest{}, true, err
 	}
@@ -276,6 +283,7 @@ func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire
 		return insertBatchFastRequest{}, true, err
 	}
 	return insertBatchFastRequest{
+		collectionName:   collectionName,
 		collection:       collection,
 		sections:         sections,
 		format:           format,

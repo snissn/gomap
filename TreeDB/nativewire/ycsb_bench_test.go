@@ -231,6 +231,7 @@ func benchmarkNativewireYCSBLoadServerPrecomputed(b *testing.B, format ycsbLoadF
 		b.Fatalf("encode sample: %v", err)
 	}
 	beforeStats := env.server.collections.StatsSnapshot()
+	beforeNativeCounters := env.server.counters.snapshot()
 	b.ReportAllocs()
 	b.SetBytes(int64(len(sample)))
 	b.ResetTimer()
@@ -289,6 +290,7 @@ func benchmarkNativewireYCSBLoadServerPrecomputed(b *testing.B, format ycsbLoadF
 	b.ReportMetric(float64(len(sample)), "document_bytes")
 	b.ReportMetric(float64(ycsbBenchClients), "clients")
 	reportYCSBCollectionStatsDelta(b, beforeStats, afterStats, b.N)
+	reportYCSBNativeCounterDelta(b, beforeNativeCounters, env.server.counters.snapshot(), b.N)
 }
 
 type ycsbPrecomputedNativewireWorker struct {
@@ -341,6 +343,20 @@ func reportYCSBCollectionStatsDelta(b *testing.B, before, after collections.Coll
 	reportUint64("indexed_stage_root_runs/op", uint64Delta(after.IndexedStageRootRuns, before.IndexedStageRootRuns))
 	reportUint64("validation_preflight_reused/op", uint64Delta(after.InsertValidationPreflightReused, before.InsertValidationPreflightReused))
 	reportUint64("validation_preflight_rechecked/op", uint64Delta(after.InsertValidationPreflightRechecked, before.InsertValidationPreflightRechecked))
+}
+
+func reportYCSBNativeCounterDelta(b *testing.B, before, after map[string]uint64, ops int) {
+	b.Helper()
+	if ops <= 0 {
+		return
+	}
+	report := func(metricName, counterName string) {
+		b.ReportMetric(float64(uint64Delta(after[counterName], before[counterName]))/float64(ops), metricName)
+	}
+	report("combiner_batches/op", "insert_batch_combiner.batches_total")
+	report("combiner_requests/op", "insert_batch_combiner.requests_total")
+	report("combiner_single_requests/op", "insert_batch_combiner.single_requests_total")
+	report("combiner_fallback_requests/op", "insert_batch_combiner.fallback_requests_total")
 }
 
 func uint64Delta(after, before uint64) uint64 {
