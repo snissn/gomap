@@ -2661,7 +2661,7 @@ func benchmarkTreeDBGatewayRunRawCommandLoad(b *testing.B, format collections.Do
 			}
 			rawDocs[i] = raw
 		}
-		command, err := rawInsertCommand(cfg.Collection, 0, count, nil, rawDocs)
+		command, err := rawInsertCommand(cfg.Collection, 0, count, documentShapeGateway, nil, rawDocs)
 		if err != nil {
 			b.Fatalf("build raw insert command: %v", err)
 		}
