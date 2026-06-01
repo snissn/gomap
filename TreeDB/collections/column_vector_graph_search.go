@@ -19,6 +19,10 @@ const columnVectorGraphNativeScratchOversizeSlack = 16
 // Larger result sets switch to sort.Slice so result ordering does not go O(k^2).
 const columnVectorGraphNativeResultOrderInsertionSortLimit = 32
 
+// Frontier traversal uses a max-heap ordered by score/ordinal. A modest fanout
+// lowers sift depth while preserving the same total comparator and pop order.
+const columnVectorGraphNativeFrontierHeapFanout = 4
+
 var (
 	errColumnVectorGraphNativeSearchScratchRequired            = errors.New("collections: column_graph native search requires caller-owned scratch")
 	errColumnVectorGraphNativeSearchQueryDimensionMismatch     = errors.New("collections: column_graph native search query dimension mismatch")
@@ -330,17 +334,11 @@ type columnVectorGraphNativeSearchLoopCounters struct {
 }
 
 func (c *columnVectorGraphNativeSearchLoopCounters) recordEdge() {
-	if c == nil {
-		return
-	}
 	c.Edges++
 	c.VisitedEdges++
 }
 
 func (c *columnVectorGraphNativeSearchLoopCounters) recordCandidate() {
-	if c == nil {
-		return
-	}
 	c.Candidates++
 }
 
@@ -965,8 +963,12 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	var loopCounters columnVectorGraphNativeSearchLoopCounters
 	var preparedMinimalCounters *columnVectorGraphPreparedMinimalSearchCounters
 	var debugCounters *columnVectorGraphNativeSearchDebugCounters
+	var debugStats *columnVectorGraphNativeSearchStats
 	if statsMode == columnVectorGraphNativeSearchStatsModeBenchmarkDebug {
 		debugCounters = newColumnVectorGraphNativeSearchDebugCounters(&stats, candidateLimit == uint64(candidateRowCount))
+		if debugCounters != nil {
+			debugStats = debugCounters.stats
+		}
 	}
 	defer func() {
 		loopCounters.publish(&stats)
@@ -1066,22 +1068,26 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 					neighbor := adjacency[i]
 					i++
 					loopCounters.recordEdge()
-					if debugCounters != nil {
-						debugCounters.recordLayer0Edge()
+					if debugStats != nil {
+						debugStats.Layer0EdgeVisits++
 					}
 					if uint64(neighbor) >= uint64(rowCount) {
 						return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, neighborIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 					}
 					neighborOrdinal := int(neighbor)
 					if visitMarks[neighborOrdinal] == visitEpoch {
-						if debugCounters != nil {
-							debugCounters.recordVisitedMark(true)
-							debugCounters.recordAlreadyVisitedSkip()
+						if debugStats != nil {
+							debugStats.VisitedMarkChecks++
+							debugStats.VisitedMarkHits++
+							debugStats.AlreadyVisitedSkips++
+							debugStats.SkippedNeighbors++
+							debugStats.Layer0AlreadyVisitedSkips++
 						}
 						continue
 					}
-					if debugCounters != nil {
-						debugCounters.recordVisitedMark(false)
+					if debugStats != nil {
+						debugStats.VisitedMarkChecks++
+						debugStats.VisitedMarkMisses++
 					}
 					if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
 						if debugCounters != nil {
@@ -1107,22 +1113,26 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				break
 			}
 			loopCounters.recordEdge()
-			if debugCounters != nil {
-				debugCounters.recordLayer0Edge()
+			if debugStats != nil {
+				debugStats.Layer0EdgeVisits++
 			}
 			if uint64(neighbor) >= uint64(rowCount) {
 				return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
 			neighborOrdinal := int(neighbor)
 			if visitMarks[neighborOrdinal] == visitEpoch {
-				if debugCounters != nil {
-					debugCounters.recordVisitedMark(true)
-					debugCounters.recordAlreadyVisitedSkip()
+				if debugStats != nil {
+					debugStats.VisitedMarkChecks++
+					debugStats.VisitedMarkHits++
+					debugStats.AlreadyVisitedSkips++
+					debugStats.SkippedNeighbors++
+					debugStats.Layer0AlreadyVisitedSkips++
 				}
 				continue
 			}
-			if debugCounters != nil {
-				debugCounters.recordVisitedMark(false)
+			if debugStats != nil {
+				debugStats.VisitedMarkChecks++
+				debugStats.VisitedMarkMisses++
 			}
 			if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
 				if debugCounters != nil {
@@ -1890,14 +1900,14 @@ func (s *columnVectorGraphNativeSearchScratch) markVisited(ordinal int) bool {
 }
 
 func (s *columnVectorGraphNativeSearchScratch) pushFrontier(candidate columnVectorGraphSearchCandidate) {
-	s.frontier = append(s.frontier, candidate)
-	s.frontierSiftUp(len(s.frontier) - 1)
+	s.frontier = append(s.frontier, columnVectorGraphSearchCandidate{})
+	s.frontierSiftUp(len(s.frontier)-1, candidate)
 }
 
 func (s *columnVectorGraphNativeSearchScratch) pushFrontierDebug(candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
 	debugCounters.stats.FrontierPushes++
-	s.frontier = append(s.frontier, candidate)
-	s.frontierSiftUpDebug(len(s.frontier)-1, debugCounters)
+	s.frontier = append(s.frontier, columnVectorGraphSearchCandidate{})
+	s.frontierSiftUpDebug(len(s.frontier)-1, candidate, debugCounters)
 }
 
 func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphSearchCandidate, bool) {
@@ -1909,8 +1919,7 @@ func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphS
 	last := s.frontier[lastIdx]
 	s.frontier = s.frontier[:lastIdx]
 	if len(s.frontier) > 0 {
-		s.frontier[0] = last
-		s.frontierSiftDown(0)
+		s.frontierSiftDown(0, last)
 	}
 	return best, true
 }
@@ -1926,70 +1935,101 @@ func (s *columnVectorGraphNativeSearchScratch) popFrontierDebug(debugCounters *c
 	last := s.frontier[lastIdx]
 	s.frontier = s.frontier[:lastIdx]
 	if len(s.frontier) > 0 {
-		s.frontier[0] = last
-		s.frontierSiftDownDebug(0, debugCounters)
+		s.frontierSiftDownDebug(0, last, debugCounters)
 	}
 	return best, true
 }
 
-func (s *columnVectorGraphNativeSearchScratch) frontierSiftUp(idx int) {
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftUp(idx int, candidate columnVectorGraphSearchCandidate) {
+	frontier := s.frontier
 	for idx > 0 {
-		parent := (idx - 1) / 2
-		if !columnVectorGraphSearchCandidateBetter(s.frontier[idx], s.frontier[parent]) {
-			return
+		parent := (idx - 1) / columnVectorGraphNativeFrontierHeapFanout
+		parentCandidate := frontier[parent]
+		if !columnVectorGraphSearchCandidateBetter(candidate, parentCandidate) {
+			break
 		}
-		s.frontier[idx], s.frontier[parent] = s.frontier[parent], s.frontier[idx]
+		frontier[idx] = parentCandidate
 		idx = parent
 	}
+	frontier[idx] = candidate
 }
 
-func (s *columnVectorGraphNativeSearchScratch) frontierSiftUpDebug(idx int, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftUpDebug(idx int, candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+	frontier := s.frontier
+	var steps uint64
 	for idx > 0 {
-		parent := (idx - 1) / 2
-		if !columnVectorGraphSearchCandidateBetter(s.frontier[idx], s.frontier[parent]) {
-			return
+		parent := (idx - 1) / columnVectorGraphNativeFrontierHeapFanout
+		parentCandidate := frontier[parent]
+		if !columnVectorGraphSearchCandidateBetter(candidate, parentCandidate) {
+			break
 		}
-		debugCounters.stats.FrontierSiftUpSteps++
-		s.frontier[idx], s.frontier[parent] = s.frontier[parent], s.frontier[idx]
+		steps++
+		frontier[idx] = parentCandidate
 		idx = parent
 	}
+	frontier[idx] = candidate
+	debugCounters.stats.FrontierSiftUpSteps += steps
 }
 
-func (s *columnVectorGraphNativeSearchScratch) frontierSiftDown(idx int) {
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftDown(idx int, candidate columnVectorGraphSearchCandidate) {
+	frontier := s.frontier
+	n := len(frontier)
 	for {
-		left := idx*2 + 1
-		if left >= len(s.frontier) {
-			return
+		firstChild := idx*columnVectorGraphNativeFrontierHeapFanout + 1
+		if firstChild >= n {
+			break
 		}
-		child := left
-		if right := left + 1; right < len(s.frontier) && columnVectorGraphSearchCandidateBetter(s.frontier[right], s.frontier[left]) {
-			child = right
+		child := firstChild
+		childCandidate := frontier[firstChild]
+		lastChild := firstChild + columnVectorGraphNativeFrontierHeapFanout
+		if lastChild > n {
+			lastChild = n
 		}
-		if !columnVectorGraphSearchCandidateBetter(s.frontier[child], s.frontier[idx]) {
-			return
+		for next := firstChild + 1; next < lastChild; next++ {
+			if columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
+				child = next
+				childCandidate = frontier[next]
+			}
 		}
-		s.frontier[idx], s.frontier[child] = s.frontier[child], s.frontier[idx]
+		if !columnVectorGraphSearchCandidateBetter(childCandidate, candidate) {
+			break
+		}
+		frontier[idx] = childCandidate
 		idx = child
 	}
+	frontier[idx] = candidate
 }
 
-func (s *columnVectorGraphNativeSearchScratch) frontierSiftDownDebug(idx int, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftDownDebug(idx int, candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+	frontier := s.frontier
+	n := len(frontier)
+	var steps uint64
 	for {
-		left := idx*2 + 1
-		if left >= len(s.frontier) {
-			return
+		firstChild := idx*columnVectorGraphNativeFrontierHeapFanout + 1
+		if firstChild >= n {
+			break
 		}
-		child := left
-		if right := left + 1; right < len(s.frontier) && columnVectorGraphSearchCandidateBetter(s.frontier[right], s.frontier[left]) {
-			child = right
+		child := firstChild
+		childCandidate := frontier[firstChild]
+		lastChild := firstChild + columnVectorGraphNativeFrontierHeapFanout
+		if lastChild > n {
+			lastChild = n
 		}
-		if !columnVectorGraphSearchCandidateBetter(s.frontier[child], s.frontier[idx]) {
-			return
+		for next := firstChild + 1; next < lastChild; next++ {
+			if columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
+				child = next
+				childCandidate = frontier[next]
+			}
 		}
-		debugCounters.stats.FrontierSiftDownSteps++
-		s.frontier[idx], s.frontier[child] = s.frontier[child], s.frontier[idx]
+		if !columnVectorGraphSearchCandidateBetter(childCandidate, candidate) {
+			break
+		}
+		steps++
+		frontier[idx] = childCandidate
 		idx = child
 	}
+	frontier[idx] = candidate
+	debugCounters.stats.FrontierSiftDownSteps += steps
 }
 
 func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate columnVectorGraphSearchCandidate) {
