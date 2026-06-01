@@ -174,7 +174,7 @@ func (v *columnVectorGraphPreparedSearchView) ready() bool {
 }
 
 func (v *columnVectorGraphPreparedSearchView) indexedScoringDefaultEligible() bool {
-	return v != nil && v.ready() && v.vector.singlePart != nil && v.norm.ready()
+	return v != nil && v.ready() && v.vector.singlePart != nil
 }
 
 func (v *columnVectorGraphPreparedSearchView) validateLive() error {
