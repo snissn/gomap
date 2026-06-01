@@ -16,6 +16,7 @@ func TestParseProfileUsesStandardNames(t *testing.T) {
 		fallback treedb.Profile
 		want     treedb.Profile
 	}{
+		{raw: "", fallback: "", want: treedb.ProfileCommandWALRelaxed},
 		{raw: "", fallback: treedb.ProfileWALOnFast, want: treedb.ProfileWALOnFast},
 		{raw: "fast", fallback: treedb.ProfileDurable, want: treedb.ProfileFast},
 		{raw: "walonfast", fallback: treedb.ProfileDurable, want: treedb.ProfileWALOnFast},
@@ -59,6 +60,24 @@ func TestResolveOptionsAppliesDefaultsAndEnvOverrides(t *testing.T) {
 	}
 	if opts.MemtableMode != "skiplist" {
 		t.Fatalf("MemtableMode = %q, want skiplist", opts.MemtableMode)
+	}
+}
+
+func TestResolveOptionsDefaultsToCommandWALRelaxedProfile(t *testing.T) {
+	t.Parallel()
+
+	opts, _, err := ResolveOptions(OpenConfig{
+		ParentDir: t.TempDir(),
+		Name:      "application",
+	})
+	if err != nil {
+		t.Fatalf("ResolveOptions error: %v", err)
+	}
+	if !opts.CommandWAL {
+		t.Fatal("CommandWAL=false, want default command WAL profile")
+	}
+	if opts.Durability != treedb.DurabilityWALOnRelaxed {
+		t.Fatalf("Durability = %v, want command WAL relaxed durability", opts.Durability)
 	}
 }
 

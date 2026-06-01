@@ -6,7 +6,7 @@ SRC=${1:?usage: leafgen_cached_dwell_validate.sh <application.db> [output-dir]}
 OUT=${2:-/tmp/leafgen_cached_dwell_validate_$(date +%Y%m%d%H%M%S)}
 DST="$OUT/application.db"
 TREEMAP=(go run ./TreeDB/cmd/treemap)
-PROFILE=${TREEDB_PROFILE:-fast}
+PROFILE=${TREEDB_PROFILE:-bench}
 DWELL_SECONDS=${LEAFGEN_DWELL_SECONDS:-180}
 SAMPLE_INTERVAL_SECONDS=${LEAFGEN_SAMPLE_INTERVAL_SECONDS:-15}
 PACK_ENABLED=${TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE:-1}
@@ -139,7 +139,7 @@ type sample struct {
 func main() {
     var (
         dbDir         = flag.String("db", "", "application.db directory")
-        profile       = flag.String("profile", string(treedb.ProfileFast), "TreeDB profile")
+        profile       = flag.String("profile", string(treedb.ProfileBench), "TreeDB profile")
         dwellSeconds  = flag.Int("dwell-seconds", 180, "how long to keep the DB open")
         sampleSeconds = flag.Int("sample-interval-seconds", 15, "sample interval")
         emitFullStats = flag.Bool("full-stats", false, "embed the full Stats map into each sample")

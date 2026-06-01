@@ -29,17 +29,26 @@ Use profiles rather than raw flags when possible:
 ```go
 opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./db") // command WAL + durable sync
 opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, "./db") // command WAL + relaxed sync
-opts := treedb.OptionsFor(treedb.ProfileLegacyWALDurable, "./db") // legacy/raw WAL + durable sync
-opts := treedb.OptionsFor(treedb.ProfileNoWALFast, "./db") // WAL off (unsafe)
+opts := treedb.OptionsFor(treedb.ProfileBench, "./db") // no WAL; benchmark-only ceiling
 ```
 
 Equivalent option-level knobs:
 
 - **Command WAL + durable sync**: `CommandWAL = true`, `Durability = DurabilityDurable`.
 - **Command WAL + relaxed sync**: `CommandWAL = true`, `Durability = DurabilityWALOnRelaxed`.
-- **Legacy/raw WAL + durable sync**: `CommandWAL = false`, `Durability = DurabilityDurable`.
-- **Legacy/raw WAL + relaxed sync**: `CommandWAL = false`, `Durability = DurabilityWALOnRelaxed`.
-- **WAL off (unsafe)**: `Durability = DurabilityWALOffRelaxed`.
+- **No WAL benchmark ceiling**: `Durability = DurabilityWALOffRelaxed`.
+
+Legacy/raw WAL option bundles are still present for compatibility and low-level
+tests during the command-WAL transition, but current server, collection,
+Mongo gateway, and YCSB guidance should use `command_wal_durable`,
+`command_wal_relaxed`, or benchmark-only `bench`.
+
+Raw TreeDB command-WAL support currently covers point and batch key/value
+writes: `Set`, `SetSync`, `Delete`, `DeleteSync`, `Batch.Write`, and
+`Batch.WriteSync` are represented as typed `RawKVBatch` command frames. Raw
+public operations that cannot be replayed as typed commands yet fail closed
+under command WAL; today that includes callback-based `Update`, `UpdateSync`,
+and range `DeleteRange`.
 
 ## Migration (old → new)
 

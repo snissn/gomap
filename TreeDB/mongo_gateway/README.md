@@ -9,7 +9,7 @@ The standalone server can be run directly from this directory-level entrypoint:
 GOWORK=off go run ./TreeDB/mongo_gateway/server.go \
   -addr 127.0.0.1:27017 \
   -dir /tmp/treedb-mongo-gateway \
-  -profile durable \
+  -profile command_wal_durable \
   -document-format bson
 ```
 
@@ -28,7 +28,7 @@ Useful Makefile overrides:
 ```sh
 MONGO_GATEWAY_ADDR=127.0.0.1:27018 \
 MONGO_GATEWAY_DIR=/tmp/treedb-mongo-gateway-dev \
-MONGO_GATEWAY_PROFILE=fast \
+MONGO_GATEWAY_PROFILE=command_wal_durable \
 make run-mongo-gateway
 ```
 

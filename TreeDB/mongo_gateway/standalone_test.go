@@ -30,8 +30,8 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NormalizeStandaloneOptions defaults: %v", err)
 	}
-	if opts.Profile != treedb.ProfileLegacyWALDurable {
-		t.Fatalf("profile=%q want %q", opts.Profile, treedb.ProfileLegacyWALDurable)
+	if opts.Profile != treedb.ProfileCommandWALDurable {
+		t.Fatalf("profile=%q want %q", opts.Profile, treedb.ProfileCommandWALDurable)
 	}
 	if opts.DefaultCollectionOptions.DocumentFormat != collections.DocumentFormatBSON {
 		t.Fatalf("document format=%q want bson", opts.DefaultCollectionOptions.DocumentFormat)

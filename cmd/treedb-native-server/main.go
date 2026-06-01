@@ -22,7 +22,7 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7100", "TCP address to listen on")
 	dataDir := flag.String("dir", "/tmp/treedb-native-server", "TreeDB data directory")
-	profile := flag.String("profile", "fast", "TreeDB profile: fast, wal_on_fast, bench, durable, command_wal_durable")
+	profile := flag.String("profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp)
 	pprofAddr := flag.String("pprof", "", "optional net/http/pprof listen address, e.g. 127.0.0.1:6060")
 	blockProfileRate := flag.Int("block-profile-rate", 0, "runtime.SetBlockProfileRate value for pprof diagnostics (0=disabled, 1=all blocking events)")
 	mutexProfileFraction := flag.Int("mutex-profile-fraction", 0, "runtime.SetMutexProfileFraction value for pprof diagnostics (0=disabled, 1=all mutex contention)")

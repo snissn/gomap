@@ -102,7 +102,7 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	cfg := cliConfig{
 		addr:                    mongogateway.DefaultStandaloneAddr,
 		dir:                     defaultDirFromEnv(),
-		profile:                 string(treedb.ProfileLegacyWALDurable),
+		profile:                 string(treedb.ProfileCommandWALDurable),
 		documentFormat:          string(mongogateway.DefaultStandaloneDocumentFormat),
 		dataRootStorage:         rootStorageFlagValue(collections.RootStorageDefault),
 		indexStateStorage:       rootStorageFlagValue(collections.RootStorageDefault),

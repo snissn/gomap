@@ -23,6 +23,9 @@ make benchprof
 
 Example:
 
+This example uses unified-bench's legacy `fast` benchmark-runner preset for a
+no-WAL profiling ceiling; it is not a TreeDB server profile recommendation.
+
 ```bash
 mkdir -p /tmp/scan-profiles
 

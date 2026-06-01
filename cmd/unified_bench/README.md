@@ -61,8 +61,9 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-profile` benchmark profile preset (see `cmd/unified_bench/profiles.go`):
   - `balanced` (default)
   - `durable` (strict durability)
-  - `fast` (max throughput; TreeDB mirrors `treedb.ProfileFast`, including Celestia-aligned auto/snappy/balanced value-log compression; unsafe)
-  - `wal_on_fast` (TreeDB mirrors `treedb.ProfileWALOnFast`, including the same compression defaults with WAL on; unsafe)
+  - `fast` (benchmark-runner no-sync preset; TreeDB currently maps this to a legacy no-WAL compatibility bundle with the Celestia-aligned auto/snappy/balanced value-log compression defaults; unsafe)
+  - `wal_on_fast` (benchmark-runner relaxed-WAL preset; TreeDB currently maps this to a legacy compatibility bundle with the same compression defaults; unsafe)
+  - These names are unified-bench presets shared across database adapters, not the public TreeDB server profile vocabulary. Public TreeDB servers should use `command_wal_durable`, `command_wal_relaxed`, or explicit benchmark-only `bench`.
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb`
   - Hidden TreeDB variants can be selected explicitly, including
     `treedb_public_command_wal` (alias `treedb_cached_command_wal`) for the
@@ -179,7 +180,9 @@ Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
 
 ## Standard Profile Workflow (`benchprof`)
 
-Use `-profile-dir` so all profiles and ops outputs are captured in one place:
+Use `-profile-dir` so all profiles and ops outputs are captured in one place.
+This example uses unified-bench's legacy `fast` benchmark-runner preset for a
+no-WAL profiling ceiling; it is not a TreeDB server profile recommendation:
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
