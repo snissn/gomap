@@ -706,6 +706,230 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 	return typedcolumn.BuildColumnPartImage(p.Part, typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary, LayoutLogicalTypes: logicalTypes})
 }
 
+func decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, includePhysicalRows bool) (columnTypedColumnPhysicalQueryPart, error) {
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: plan.Fields, SchemaVersion: uint32(schemaHash)}, image)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	summary := typedColumnAdapterImageSummary{PartID: image.PartID, Rows: image.Rows, Sections: len(image.Sections), SectionBytes: typedColumnPhysicalQueryImageSectionBytes(image), SortKey: columnSortKeysFromTypedColumnSortKeys(adapterPart.Part.Descriptor.SortKey)}
+	if summary.PartID != typedRef.Ref.PartID || summary.Rows != typedRef.Rows {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d manifest_rows=%d", summary.PartID, typedRef.Ref.PartID, summary.Rows, typedRef.Rows)
+	}
+	if physical.Rows != 0 && summary.Rows != physical.Rows {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part rows=%d do not match physical rows=%d", summary.Rows, physical.Rows)
+	}
+	if err := validateTypedColumnPhysicalQuerySortMetadata(plan.SortKey, typedRef.SortKey, summary.SortKey); err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	pruned, err := plan.SortKeyPrefix.prunePartRows(adapterPart)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	selectedRows := pruned.Rows
+	if pruned.AllRows {
+		selectedRows = nil
+	} else if selectedRows == nil {
+		selectedRows = []int{}
+	}
+	selectedRowCount := len(selectedRows)
+	if selectedRows == nil {
+		selectedRowCount = summary.Rows
+	}
+
+	projection, err := typedColumnSortedGroupedDistinctProjection(adapterPart, plan)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	scan, err := typedColumnScanSortedGroupedDistinctColumns(adapterPart, projection, selectedRows)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+
+	group, err := typedColumnSortedGroupedDistinctCodeColumn(adapterPart, scan, plan.GroupColumn, selectedRowCount)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	distinct, err := typedColumnSortedGroupedDistinctCodeColumn(adapterPart, scan, plan.DistinctColumn, selectedRowCount)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	predicates := make([]columnTypedColumnSortedGroupedDistinctPredicate, len(plan.PredicateSpecs))
+	for i, spec := range plan.PredicateSpecs {
+		predicate, err := typedColumnSortedGroupedDistinctPredicate(adapterPart, scan, spec, selectedRowCount)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		predicates[i] = predicate
+	}
+
+	physicalRowIndexes := []int(nil)
+	if includePhysicalRows {
+		var primaryDiag columnTypedColumnPhysicalRowIndexDiagnostics
+		physicalRowIndexes, primaryDiag, err = typedColumnPhysicalQueryPhysicalRows(adapterPart, selectedRows, selectedRowCount)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		if primaryDiag.GranulesDecoded > scan.Diagnostics.GranulesDecoded {
+			scan.Diagnostics.GranulesDecoded = primaryDiag.GranulesDecoded
+		}
+		scan.Diagnostics.BlocksDecoded += primaryDiag.BlocksDecoded
+		scan.Diagnostics.BytesDecoded += primaryDiag.BytesDecoded
+	}
+
+	return columnTypedColumnPhysicalQueryPart{
+		Ref:                       typedRef,
+		PhysicalRef:               physical,
+		RowIndexes:                selectedRows,
+		PhysicalRowIndexes:        physicalRowIndexes,
+		Rows:                      summary.Rows,
+		Bytes:                     int64(len(raw)),
+		Sections:                  summary.Sections,
+		SectionBytes:              summary.SectionBytes,
+		GranulesConsidered:        pruned.Considered,
+		GranulesDecoded:           scan.Diagnostics.GranulesDecoded,
+		GranulesSkipped:           pruned.Skips,
+		DecodedBlocks:             scan.Diagnostics.BlocksDecoded,
+		DecodedPayloadBytes:       uint64(scan.Diagnostics.BytesDecoded),
+		SortKeyMarkChecks:         pruned.Checks,
+		SortKeyMarkMatches:        pruned.Matches,
+		SortKeyMarkSkips:          pruned.Skips,
+		SortKeyMarkFallbackReason: pruned.FallbackReason,
+		SortedGroupedDistinct: &columnTypedColumnSortedGroupedDistinctPart{
+			Rows:         selectedRowCount,
+			RowIndexes:   selectedRows,
+			PhysicalRows: physicalRowIndexes,
+			Group:        group,
+			Distinct:     distinct,
+			Predicates:   predicates,
+		},
+	}, nil
+}
+
+func typedColumnSortedGroupedDistinctProjection(part *typedColumnAdapterPart, plan columnTypedColumnPhysicalQueryPlan) ([]string, error) {
+	seen := make(map[string]struct{}, 2+len(plan.PredicateSpecs))
+	projection := make([]string, 0, 2+len(plan.PredicateSpecs))
+	add := func(name string) error {
+		column, ok := part.columnByName(name)
+		if !ok {
+			return fmt.Errorf("collections: sorted grouped-distinct missing typed-column column %q", name)
+		}
+		if _, exists := seen[column.Definition.Name]; exists {
+			return nil
+		}
+		seen[column.Definition.Name] = struct{}{}
+		projection = append(projection, column.Definition.Name)
+		return nil
+	}
+	if err := add(plan.GroupColumn); err != nil {
+		return nil, err
+	}
+	if err := add(plan.DistinctColumn); err != nil {
+		return nil, err
+	}
+	for _, spec := range plan.PredicateSpecs {
+		if err := add(spec.column); err != nil {
+			return nil, err
+		}
+	}
+	return projection, nil
+}
+
+func typedColumnScanSortedGroupedDistinctColumns(part *typedColumnAdapterPart, projection []string, selectedRows []int) (typedcolumn.ProjectedScanResult, error) {
+	if selectedRows != nil && len(selectedRows) == 0 {
+		columns := make(map[string][]int64, len(projection))
+		for _, name := range projection {
+			columns[name] = []int64{}
+		}
+		return typedcolumn.ProjectedScanResult{Columns: columns, Diagnostics: typedcolumn.PartScanDiagnostics{RowsScanned: 0, ColumnsProjected: len(projection), GranulesConsidered: len(part.Part.Descriptor.Granules)}}, nil
+	}
+	if selectedRows == nil {
+		return part.Part.NewScanner().ScanProjected(projection)
+	}
+	return part.Part.NewScanner().ScanProjectedRows(projection, selectedRows)
+}
+
+func typedColumnSortedGroupedDistinctCodeColumn(part *typedColumnAdapterPart, scan typedcolumn.ProjectedScanResult, columnName string, rows int) (columnTypedColumnSortedGroupedDistinctCodeColumn, error) {
+	column, valuesByCode, codes, err := typedColumnSortedGroupedDistinctScannedColumn(part, scan, columnName, rows)
+	if err != nil {
+		return columnTypedColumnSortedGroupedDistinctCodeColumn{}, err
+	}
+	if column.Field.ValueType != ColumnStoreValueString || column.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || column.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
+		return columnTypedColumnSortedGroupedDistinctCodeColumn{}, fmt.Errorf("%w: sorted grouped-distinct column %q is not a non-null dictionary string", ErrColumnQueryPlanUnsupported, columnName)
+	}
+	return columnTypedColumnSortedGroupedDistinctCodeColumn{Codes: codes, Dictionary: valuesByCode}, nil
+}
+
+func typedColumnSortedGroupedDistinctPredicate(part *typedColumnAdapterPart, scan typedcolumn.ProjectedScanResult, spec columnPhysicalQueryPredicateSpec, rows int) (columnTypedColumnSortedGroupedDistinctPredicate, error) {
+	column, valuesByCode, codes, err := typedColumnSortedGroupedDistinctScannedColumn(part, scan, spec.column, rows)
+	if err != nil {
+		return columnTypedColumnSortedGroupedDistinctPredicate{}, err
+	}
+	allowed := make([]uint64, (len(valuesByCode)+63)/64)
+	matched := 0
+	for _, value := range spec.values {
+		code, ok := column.Dictionary[value]
+		if !ok {
+			continue
+		}
+		word := int(code / 64)
+		bit := uint(code % 64)
+		mask := uint64(1) << bit
+		if allowed[word]&mask == 0 {
+			allowed[word] |= mask
+			matched++
+		}
+	}
+	return columnTypedColumnSortedGroupedDistinctPredicate{Codes: codes, Allowed: allowed, RejectsAll: matched == 0}, nil
+}
+
+func typedColumnSortedGroupedDistinctScannedColumn(part *typedColumnAdapterPart, scan typedcolumn.ProjectedScanResult, columnName string, rows int) (typedColumnAdapterColumn, []string, []int64, error) {
+	column, ok := part.columnByName(columnName)
+	if !ok {
+		return typedColumnAdapterColumn{}, nil, nil, fmt.Errorf("collections: sorted grouped-distinct missing typed-column column %q", columnName)
+	}
+	if column.Field.Nullable {
+		return typedColumnAdapterColumn{}, nil, nil, fmt.Errorf("%w: sorted grouped-distinct column %q is nullable", ErrColumnQueryPlanUnsupported, columnName)
+	}
+	if column.Field.ValueType != ColumnStoreValueString || column.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || column.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
+		return typedColumnAdapterColumn{}, nil, nil, fmt.Errorf("%w: sorted grouped-distinct column %q is not a dictionary string", ErrColumnQueryPlanUnsupported, columnName)
+	}
+	valuesByCode, err := typedColumnSortedGroupedDistinctDictionaryValuesByCode(column)
+	if err != nil {
+		return typedColumnAdapterColumn{}, nil, nil, err
+	}
+	codes, ok := scan.Columns[column.Definition.Name]
+	if !ok {
+		return typedColumnAdapterColumn{}, nil, nil, fmt.Errorf("collections: sorted grouped-distinct scan missing column %q", column.Definition.Name)
+	}
+	if len(codes) != rows {
+		return typedColumnAdapterColumn{}, nil, nil, fmt.Errorf("collections: sorted grouped-distinct column %q rows=%d want %d", columnName, len(codes), rows)
+	}
+	for row, code := range codes {
+		if code < 0 || code >= int64(len(valuesByCode)) {
+			return typedColumnAdapterColumn{}, nil, nil, fmt.Errorf("collections: sorted grouped-distinct column %q row=%d code=%d outside cardinality=%d", columnName, row, code, len(valuesByCode))
+		}
+	}
+	return column, valuesByCode, codes, nil
+}
+
+func typedColumnSortedGroupedDistinctDictionaryValuesByCode(column typedColumnAdapterColumn) ([]string, error) {
+	if err := validateTypedColumnAdapterStringDictionary(column, column.Definition.Cardinality, column.Dictionary); err != nil {
+		return nil, err
+	}
+	if uint64(int(column.Definition.Cardinality)) != uint64(column.Definition.Cardinality) {
+		return nil, fmt.Errorf("collections: sorted grouped-distinct dictionary cardinality=%d exceeds host int for column %q", column.Definition.Cardinality, column.Definition.Name)
+	}
+	valuesByCode := make([]string, int(column.Definition.Cardinality))
+	for value, code := range column.Dictionary {
+		valuesByCode[code] = value
+	}
+	return valuesByCode, nil
+}
+
 // decodeTypedColumnPhysicalQueryDenseGroupCountPart prepares the q1 typed-column
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.

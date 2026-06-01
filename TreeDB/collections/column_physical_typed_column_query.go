@@ -54,6 +54,26 @@ type columnTypedColumnDenseInt64SpanPart struct {
 	Predicates       []columnTypedColumnDensePredicatePart
 }
 
+type columnTypedColumnSortedGroupedDistinctCodeColumn struct {
+	Codes      []int64
+	Dictionary []string
+}
+
+type columnTypedColumnSortedGroupedDistinctPredicate struct {
+	Codes      []int64
+	Allowed    []uint64
+	RejectsAll bool
+}
+
+type columnTypedColumnSortedGroupedDistinctPart struct {
+	Rows         int
+	RowIndexes   []int
+	PhysicalRows []int
+	Group        columnTypedColumnSortedGroupedDistinctCodeColumn
+	Distinct     columnTypedColumnSortedGroupedDistinctCodeColumn
+	Predicates   []columnTypedColumnSortedGroupedDistinctPredicate
+}
+
 type columnTypedColumnPhysicalQueryPart struct {
 	Ref                       columnManifestAssetRefForScan
 	PhysicalRef               columnManifestAssetRefForScan
@@ -76,6 +96,7 @@ type columnTypedColumnPhysicalQueryPart struct {
 	DenseGroupCount           *columnTypedColumnDenseGroupCountPart
 	DenseGroupHourCount       *columnTypedColumnDenseGroupHourCountPart
 	DenseInt64Span            *columnTypedColumnDenseInt64SpanPart
+	SortedGroupedDistinct     *columnTypedColumnSortedGroupedDistinctPart
 	TimeOrderTopK             *columnTypedColumnTimeOrderTopKPart
 }
 
@@ -393,6 +414,8 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 			part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 		case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
 			part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
+		case columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req):
+			part, err = decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
 		default:
 			part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
 		}
@@ -2156,6 +2179,7 @@ type columnTypedColumnSortedGroupedDistinctIterator struct {
 	rowIndexes       []int
 	physicalRows     []int
 	visibility       *typedColumnLatestPhysicalPart
+	codePart         *columnTypedColumnSortedGroupedDistinctPart
 	groupValues      []columnDeclaredValue
 	distinctValues   []columnDeclaredValue
 	predicateSpecs   []columnPhysicalQueryPredicateSpec
@@ -2168,6 +2192,16 @@ type columnTypedColumnSortedGroupedDistinctIterator struct {
 }
 
 func newColumnTypedColumnSortedGroupedDistinctIterator(part *columnTypedColumnPhysicalQueryPart, plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, partIndex int, visibility *typedColumnLatestPhysicalPart) (*columnTypedColumnSortedGroupedDistinctIterator, error) {
+	if part.SortedGroupedDistinct != nil {
+		return &columnTypedColumnSortedGroupedDistinctIterator{
+			partIndex:    partIndex,
+			rows:         part.SortedGroupedDistinct.Rows,
+			rowIndexes:   part.SortedGroupedDistinct.RowIndexes,
+			physicalRows: part.SortedGroupedDistinct.PhysicalRows,
+			visibility:   visibility,
+			codePart:     part.SortedGroupedDistinct,
+		}, nil
+	}
 	partRows := len(part.RowIndexes)
 	if part.RowIndexes == nil {
 		partRows = part.Rows
@@ -2202,6 +2236,9 @@ func newColumnTypedColumnSortedGroupedDistinctIterator(part *columnTypedColumnPh
 }
 
 func (it *columnTypedColumnSortedGroupedDistinctIterator) advance() error {
+	if it.codePart != nil {
+		return it.advanceCodes()
+	}
 	// These slices come from typed-column adapter decoding, which materializes
 	// owned String values (not physical-row StringBytes views). Keep the hot loop
 	// on direct string header comparisons and avoid per-row map lookups or string
@@ -2237,6 +2274,60 @@ func (it *columnTypedColumnSortedGroupedDistinctIterator) advance() error {
 		}
 		it.currentGroup = it.groupValues[rowIdx].String
 		it.currentDistinct = it.distinctValues[rowIdx].String
+		return nil
+	}
+	it.done = true
+	it.currentGroup = ""
+	it.currentDistinct = ""
+	return nil
+}
+
+func (it *columnTypedColumnSortedGroupedDistinctIterator) advanceCodes() error {
+	for it.row < it.rows {
+		rowIdx := it.row
+		it.row++
+		it.rowsScanned++
+		if it.visibility != nil {
+			physicalRow := rowIdx
+			if it.physicalRows != nil {
+				physicalRow = it.physicalRows[rowIdx]
+			} else if it.rowIndexes != nil {
+				physicalRow = it.rowIndexes[rowIdx]
+			}
+			if !it.visibility.rowVisible(physicalRow) {
+				continue
+			}
+		}
+		matched := true
+		for _, predicate := range it.codePart.Predicates {
+			if predicate.RejectsAll || rowIdx < 0 || rowIdx >= len(predicate.Codes) {
+				matched = false
+				break
+			}
+			code := predicate.Codes[rowIdx]
+			word := int(code / 64)
+			bit := uint(code % 64)
+			if word < 0 || word >= len(predicate.Allowed) || (predicate.Allowed[word]&(uint64(1)<<bit)) == 0 {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if len(it.codePart.Predicates) != 0 {
+			it.matchedRows++
+		}
+		groupCode := it.codePart.Group.Codes[rowIdx]
+		distinctCode := it.codePart.Distinct.Codes[rowIdx]
+		if groupCode < 0 || groupCode >= int64(len(it.codePart.Group.Dictionary)) {
+			return fmt.Errorf("collections: sorted grouped-distinct group code=%d outside cardinality=%d", groupCode, len(it.codePart.Group.Dictionary))
+		}
+		if distinctCode < 0 || distinctCode >= int64(len(it.codePart.Distinct.Dictionary)) {
+			return fmt.Errorf("collections: sorted grouped-distinct distinct code=%d outside cardinality=%d", distinctCode, len(it.codePart.Distinct.Dictionary))
+		}
+		it.currentGroup = it.codePart.Group.Dictionary[groupCode]
+		it.currentDistinct = it.codePart.Distinct.Dictionary[distinctCode]
 		return nil
 	}
 	it.done = true
