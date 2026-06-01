@@ -98,6 +98,38 @@ func TestDotFloat32StridedParity(t *testing.T) {
 	}
 }
 
+func TestDotFloat32IndexedOptimizedStatusAndTinyFallback(t *testing.T) {
+	t.Parallel()
+
+	base := dotBatchTestBase(4, 64, 64)
+	query := dotBatchTestVector(64, 43)
+	rowIDs := []uint32{0, 1, 2, 3}
+	dst := make([]float32, len(rowIDs))
+	status := DotFloat32Indexed(dst, base, query, rowIDs, 64)
+	if status.Invalid || status.Rows != len(rowIDs) {
+		t.Fatalf("status=%+v want valid rows=%d", status, len(rowIDs))
+	}
+	if DotFloat32IndexedOptimizedEligible(len(rowIDs), 64) {
+		if !status.Optimized || status.Fallback {
+			t.Fatalf("status=%+v want optimized indexed backend", status)
+		}
+	} else if status.Optimized || !status.Fallback {
+		t.Fatalf("status=%+v want platform fallback", status)
+	}
+
+	tinyDst := make([]float32, len(rowIDs))
+	tinyStatus := DotFloat32Indexed(tinyDst, base, query[:16], rowIDs, 16)
+	if tinyStatus.Invalid || tinyStatus.Rows != len(rowIDs) || tinyStatus.Optimized || !tinyStatus.Fallback {
+		t.Fatalf("tiny status=%+v want scalar fallback", tinyStatus)
+	}
+
+	singleDst := make([]float32, 1)
+	singleStatus := DotFloat32Indexed(singleDst, base, query, rowIDs[:1], 64)
+	if singleStatus.Invalid || singleStatus.Rows != 1 || singleStatus.Optimized || !singleStatus.Fallback {
+		t.Fatalf("single-row status=%+v want scalar fallback", singleStatus)
+	}
+}
+
 func TestDotFloat32BatchMinRows(t *testing.T) {
 	t.Parallel()
 

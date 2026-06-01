@@ -312,8 +312,8 @@ func assertVectorIndexSearchPromotionLegacyStats2105(tb testing.TB, stats Vector
 
 func assertVectorIndexSearchDefaultIndexedScoreBatches2105(tb testing.TB, defaultStats, indexedStats, scalarStats VectorIndexSearchStats) {
 	tb.Helper()
-	if defaultStats.ScoreBatchCalls != indexedStats.ScoreBatchCalls || defaultStats.ScoreBatchCandidates != indexedStats.ScoreBatchCandidates || defaultStats.ScoreBatchMaxTileSize != indexedStats.ScoreBatchMaxTileSize {
-		tb.Fatalf("default stats=%+v indexed stats=%+v want default to select indexed prepared score batching", defaultStats, indexedStats)
+	if defaultStats.ScoreBatchCalls != indexedStats.ScoreBatchCalls || defaultStats.ScoreBatchCandidates != indexedStats.ScoreBatchCandidates || defaultStats.ScoreBatchMaxTileSize != indexedStats.ScoreBatchMaxTileSize || defaultStats.ScoreBatchOptimizedCalls != indexedStats.ScoreBatchOptimizedCalls || defaultStats.ScoreBatchScalarFallbackCalls != indexedStats.ScoreBatchScalarFallbackCalls {
+		tb.Fatalf("default stats=%+v indexed stats=%+v want default to select identical indexed prepared score batching", defaultStats, indexedStats)
 	}
 	if defaultStats.ScoreBatchCalls >= scalarStats.ScoreBatchCalls || defaultStats.ScoreBatchMaxTileSize < 2 {
 		tb.Fatalf("default stats=%+v scalar stats=%+v want default indexed grouping", defaultStats, scalarStats)
@@ -324,6 +324,7 @@ func assertVectorIndexSearchDefaultIndexedScoreBatches2105(tb testing.TB, defaul
 	if defaultStats.GraphRowFallbacks != 0 || defaultStats.TypedColumnFallbacks != 0 || defaultStats.VectorScratchDecodes != 0 || defaultStats.NormScratchDecodes != 0 || defaultStats.AdjacencySourceFallbacks != 0 || defaultStats.ResultIDGraphFallbacks != 0 {
 		tb.Fatalf("default stats=%+v want healthy prepared path without graph-row/source fallback", defaultStats)
 	}
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, defaultStats.ScoreBatchOptimizedCalls, defaultStats.ScoreBatchScalarFallbackCalls)
 }
 
 func assertVectorIndexSearchScalarScoreBatches2105(tb testing.TB, stats VectorIndexSearchStats) {
@@ -339,6 +340,7 @@ func assertVectorIndexSearchPromotionScoreStats2105(tb testing.TB, mode columnVe
 		if stats.ScoreBatchCalls >= stats.ScoreBatchCandidates || stats.ScoreBatchMaxTileSize < 2 {
 			tb.Fatalf("mode=%s score=%s stats=%+v want grouped prepared indexed score batches", mode, scoreName, stats)
 		}
+		assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, stats.ScoreBatchOptimizedCalls, stats.ScoreBatchScalarFallbackCalls)
 		return
 	}
 	assertVectorIndexSearchScalarScoreBatches2105(tb, stats)

@@ -571,6 +571,7 @@ type columnVectorGraphPreparedMinimalSearchCounters struct {
 	ScoreBatchCalls                     uint64
 	ScoreBatchCandidates                uint64
 	ScoreBatchMaxTileSize               uint64
+	ScoreBatchOptimizedCalls            uint64
 	ScoreBatchScalarFallbackCalls       uint64
 	PreparedScoreCalls                  uint64
 	AdjacencyBytesRead                  uint64
@@ -589,7 +590,7 @@ func newColumnVectorGraphPreparedMinimalSearchCounters(view *columnVectorGraphPr
 	return &columnVectorGraphPreparedMinimalSearchCounters{dims: view.dims, vectorIdentityMapping: view.vectorIdentityMapping}
 }
 
-func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(count int, scalarFallback bool) {
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(count int, optimized bool, scalarFallback bool) {
 	if c == nil || count <= 0 {
 		return
 	}
@@ -600,6 +601,9 @@ func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(co
 	c.ScoreBatchCandidates += count64
 	if count64 > c.ScoreBatchMaxTileSize {
 		c.ScoreBatchMaxTileSize = count64
+	}
+	if optimized {
+		c.ScoreBatchOptimizedCalls++
 	}
 	if scalarFallback {
 		c.ScoreBatchScalarFallbackCalls++
@@ -642,6 +646,7 @@ func (c *columnVectorGraphPreparedMinimalSearchCounters) publish(stats *columnVe
 	if c.ScoreBatchMaxTileSize > stats.ScoreBatchMaxTileSize {
 		stats.ScoreBatchMaxTileSize = c.ScoreBatchMaxTileSize
 	}
+	stats.ScoreBatchOptimizedCalls += c.ScoreBatchOptimizedCalls
 	stats.ScoreBatchScalarFallbackCalls += c.ScoreBatchScalarFallbackCalls
 	stats.PreparedScoreCalls += c.PreparedScoreCalls
 	stats.VisitedNodes += c.PreparedScoreCalls
@@ -1250,7 +1255,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 		debugCounters.recordScore(columnVectorGraphNativeSearchScoreContextUpperEntry, best)
 	}
 	if preparedMinimal != nil {
-		preparedMinimal.recordPreparedScores(1, true)
+		preparedMinimal.recordPreparedScores(1, false, true)
 	}
 	changed := true
 	for changed {
@@ -1291,7 +1296,8 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 				debugCounters.recordScores(columnVectorGraphNativeSearchScoreContextUpperNeighbor, tile)
 			}
 			if preparedMinimal != nil {
-				preparedMinimal.recordPreparedScores(len(tile), len(tile) <= 1)
+				optimized := plan.preparedSearch.indexedScoreBatchOptimizedEligible(len(tile))
+				preparedMinimal.recordPreparedScores(len(tile), optimized, !optimized)
 			}
 			for i, neighborOrdinal := range tile {
 				score := scores[i]
@@ -1326,7 +1332,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 				debugCounters.recordScore(columnVectorGraphNativeSearchScoreContextUpperNeighbor, neighborOrdinal)
 			}
 			if preparedMinimal != nil {
-				preparedMinimal.recordPreparedScores(1, true)
+				preparedMinimal.recordPreparedScores(1, false, true)
 			}
 			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
 				best = neighborOrdinal
@@ -1505,7 +1511,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		debugCounters.recordScore(scoreContext, ordinal)
 	}
 	if preparedMinimal != nil {
-		preparedMinimal.recordPreparedScores(1, true)
+		preparedMinimal.recordPreparedScores(1, false, true)
 	}
 	loopCounters.recordCandidate()
 	candidate := columnVectorGraphSearchCandidate{
@@ -1535,7 +1541,8 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 		debugCounters.recordScores(scoreContext, ordinals)
 	}
 	if preparedMinimal != nil {
-		preparedMinimal.recordPreparedScores(len(ordinals), len(ordinals) <= 1)
+		optimized := plan != nil && plan.scoreBatchMode.indexedEnabled() && plan.preparedSearch != nil && plan.preparedSearch.indexedScoreBatchOptimizedEligible(len(ordinals))
+		preparedMinimal.recordPreparedScores(len(ordinals), optimized, !optimized)
 	}
 	for i, ordinal := range ordinals {
 		loopCounters.recordCandidate()

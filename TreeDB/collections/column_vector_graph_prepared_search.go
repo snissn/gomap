@@ -177,6 +177,10 @@ func (v *columnVectorGraphPreparedSearchView) indexedScoringDefaultEligible() bo
 	return v != nil && v.ready() && v.vector.singlePart != nil
 }
 
+func (v *columnVectorGraphPreparedSearchView) indexedScoreBatchOptimizedEligible(count int) bool {
+	return v != nil && v.ready() && v.vector.singlePart != nil && vectorops.DotFloat32IndexedOptimizedEligible(count, v.dims)
+}
+
 func (v *columnVectorGraphPreparedSearchView) validateLive() error {
 	if v == nil {
 		return errors.New("nil prepared graph-search view")

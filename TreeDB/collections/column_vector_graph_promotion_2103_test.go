@@ -1,6 +1,10 @@
 package collections
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
+)
 
 func TestColumnVectorGraphPreparedDefaultIndexedScoring2103(t *testing.T) {
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
@@ -207,8 +211,8 @@ func searchColumnVectorGraphScoreMode2103(tb testing.TB, reader *columnVectorGra
 
 func assertColumnVectorGraphDefaultIndexedScoreBatches2103(tb testing.TB, defaultStats, indexedStats, scalarStats columnVectorGraphNativeSearchStats) {
 	tb.Helper()
-	if defaultStats.ScoreBatchCalls != indexedStats.ScoreBatchCalls || defaultStats.ScoreBatchCandidates != indexedStats.ScoreBatchCandidates || defaultStats.ScoreBatchMaxTileSize != indexedStats.ScoreBatchMaxTileSize {
-		tb.Fatalf("default stats=%+v indexed stats=%+v want default to select indexed prepared score batching", defaultStats, indexedStats)
+	if defaultStats.ScoreBatchCalls != indexedStats.ScoreBatchCalls || defaultStats.ScoreBatchCandidates != indexedStats.ScoreBatchCandidates || defaultStats.ScoreBatchMaxTileSize != indexedStats.ScoreBatchMaxTileSize || defaultStats.ScoreBatchOptimizedCalls != indexedStats.ScoreBatchOptimizedCalls || defaultStats.ScoreBatchScalarFallbackCalls != indexedStats.ScoreBatchScalarFallbackCalls {
+		tb.Fatalf("default stats=%+v indexed stats=%+v want default to select identical indexed prepared score batching", defaultStats, indexedStats)
 	}
 	if defaultStats.ScoreBatchCalls >= scalarStats.ScoreBatchCalls || defaultStats.ScoreBatchMaxTileSize < 2 {
 		tb.Fatalf("default stats=%+v scalar stats=%+v want default indexed grouping", defaultStats, scalarStats)
@@ -218,6 +222,20 @@ func assertColumnVectorGraphDefaultIndexedScoreBatches2103(tb testing.TB, defaul
 	}
 	if defaultStats.GraphRowFallbacks != 0 || defaultStats.TypedColumnFallbacks != 0 || defaultStats.VectorScratchDecodes != 0 || defaultStats.NormScratchDecodes != 0 || defaultStats.AdjacencySourceFallbacks != 0 || defaultStats.ResultIDGraphFallbacks != 0 {
 		tb.Fatalf("default stats=%+v want healthy prepared path without graph-row/source fallback", defaultStats)
+	}
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, defaultStats.ScoreBatchOptimizedCalls, defaultStats.ScoreBatchScalarFallbackCalls)
+}
+
+func assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb testing.TB, optimizedCalls, fallbackCalls uint64) {
+	tb.Helper()
+	if vectorops.DotFloat32BatchOptimizedAvailable() {
+		if optimizedCalls == 0 {
+			tb.Fatalf("optimized indexed backend available but optimized score batches=0 fallback=%d", fallbackCalls)
+		}
+		return
+	}
+	if optimizedCalls != 0 || fallbackCalls == 0 {
+		tb.Fatalf("optimized indexed backend unavailable: optimized=%d fallback=%d want fallback-only counters", optimizedCalls, fallbackCalls)
 	}
 }
 
@@ -234,6 +252,7 @@ func assertColumnVectorGraphSearchPromotionScoreStats2103(tb testing.TB, mode co
 		if stats.ScoreBatchCalls >= stats.ScoreBatchCandidates || stats.ScoreBatchMaxTileSize < 2 {
 			tb.Fatalf("mode=%s score=%s stats=%+v want grouped prepared indexed score batches", mode, scoreName, stats)
 		}
+		assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, stats.ScoreBatchOptimizedCalls, stats.ScoreBatchScalarFallbackCalls)
 		return
 	}
 	assertColumnVectorGraphScalarScoreBatches2103(tb, stats)
