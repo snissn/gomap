@@ -272,6 +272,60 @@ func TestPhysicalAccountingCountsGraphDuplicateTypedPartBytes2118(t *testing.T) 
 	}
 }
 
+func TestColumnStorePhysicalAssetRefAccountingJSONIncludesZeroIdentityFields2118(t *testing.T) {
+	encoded, err := json.Marshal(ColumnStorePhysicalAssetRefAccounting{
+		Kind: ColumnAssetKindTCS1TypedColumnPart,
+	})
+	if err != nil {
+		t.Fatalf("Marshal asset ref accounting: %v", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal asset ref accounting: %v", err)
+	}
+	for _, field := range []string{"generation", "part_id", "file_id", "offset", "length", "checksum"} {
+		raw, ok := decoded[field]
+		if !ok {
+			t.Fatalf("json=%s missing explicit zero identity field %q", encoded, field)
+		}
+		if string(raw) != "0" {
+			t.Fatalf("json=%s field %q=%s want 0", encoded, field, raw)
+		}
+	}
+}
+
+func TestColumnStoreTypedColumnPartByteAccountingAggregatesDistinctColumns2118(t *testing.T) {
+	var total ColumnStoreTypedColumnPartByteAccounting
+	addColumnStoreTypedColumnPartByteAccounting(&total, ColumnStoreTypedColumnPartByteAccounting{
+		Rows:             2,
+		Columns:          2,
+		TotalStoredBytes: 20,
+		columnNames:      []string{"id", "value"},
+	})
+	addColumnStoreTypedColumnPartByteAccounting(&total, ColumnStoreTypedColumnPartByteAccounting{
+		Rows:             3,
+		Columns:          2,
+		TotalStoredBytes: 30,
+		columnNames:      []string{"id", "kind"},
+	})
+
+	if got, want := total.Columns, 3; got != want {
+		t.Fatalf("columns=%d want distinct union %d: %+v", got, want, total)
+	}
+	if got, want := strings.Join(total.columnNames, ","), "id,kind,value"; got != want {
+		t.Fatalf("column names=%q want %q", got, want)
+	}
+	if got, want := total.Rows, 5; got != want {
+		t.Fatalf("rows=%d want %d", got, want)
+	}
+	if got, want := total.TotalStoredBytes, int64(50); got != want {
+		t.Fatalf("total stored bytes=%d want %d", got, want)
+	}
+	if got, want := total.BytesPerRow, 10.0; got != want {
+		t.Fatalf("bytes_per_row=%f want %f", got, want)
+	}
+}
+
 func BenchmarkColumnStorePhysicalAccounting2118(b *testing.B) {
 	events := columnPhysicalQ3DenseBenchmarkEvents1950(4096)
 	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(b, events)

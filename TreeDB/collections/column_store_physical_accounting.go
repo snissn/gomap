@@ -72,12 +72,12 @@ type ColumnStorePhysicalAssetKindAccounting struct {
 type ColumnStorePhysicalAssetRefAccounting struct {
 	Kind       ColumnAssetKind `json:"kind"`
 	Namespace  string          `json:"namespace,omitempty"`
-	Generation uint64          `json:"generation,omitempty"`
-	PartID     uint64          `json:"part_id,omitempty"`
-	FileID     uint32          `json:"file_id,omitempty"`
-	Offset     int64           `json:"offset,omitempty"`
-	Length     int64           `json:"length,omitempty"`
-	Checksum   uint32          `json:"checksum,omitempty"`
+	Generation uint64          `json:"generation"`
+	PartID     uint64          `json:"part_id"`
+	FileID     uint32          `json:"file_id"`
+	Offset     int64           `json:"offset"`
+	Length     int64           `json:"length"`
+	Checksum   uint32          `json:"checksum"`
 }
 
 // ColumnStorePhysicalAssetAccounting describes one active manifest asset.
@@ -122,6 +122,7 @@ type ColumnStoreTypedColumnPartByteAccounting struct {
 	TotalStoredBytes           int64                                         `json:"total_stored_bytes,omitempty"`
 	BytesPerRow                float64                                       `json:"bytes_per_row,omitempty"`
 	SerializedSections         []ColumnStoreTypedColumnPartSectionAccounting `json:"serialized_sections,omitempty"`
+	columnNames                []string                                      `json:"-"`
 }
 
 // ColumnStoreTypedColumnPartSectionAccounting reports one serialized section in
@@ -290,9 +291,10 @@ func columnStoreTypedColumnPartAccountingFromRef(rootDir string, asset columnMan
 }
 
 func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage, detailed bool) ColumnStoreTypedColumnPartByteAccounting {
+	columnNames := columnStoreTypedColumnPartImageColumnNames(image)
 	out := ColumnStoreTypedColumnPartByteAccounting{
 		Rows:                       image.Rows,
-		Columns:                    columnStoreTypedColumnPartImageColumns(image),
+		Columns:                    len(columnNames),
 		SerializedImageBytes:       int64(image.TotalBytes()),
 		SerializedManifestBytes:    int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryManifest)),
 		SerializedPaddingBytes:     int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryPadding)),
@@ -307,6 +309,7 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 		DescriptorBytes:            int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryDescriptor)),
 		LayoutContractBytes:        int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryLayoutContract)),
 		LocatorBytes:               int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryLocators)),
+		columnNames:                columnNames,
 	}
 	out.DeclaredColumnBytes = int64(image.CategoryBytes(typedcolumn.ColumnPartImageCategoryDeclaredColumns))
 	out.TotalStoredBytes = out.SerializedImageBytes
@@ -329,9 +332,9 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 	return out
 }
 
-func columnStoreTypedColumnPartImageColumns(image typedcolumn.ColumnPartImage) int {
+func columnStoreTypedColumnPartImageColumnNames(image typedcolumn.ColumnPartImage) []string {
 	if len(image.Sections) == 0 {
-		return 0
+		return nil
 	}
 	columns := make(map[string]struct{})
 	for _, section := range image.Sections {
@@ -340,7 +343,15 @@ func columnStoreTypedColumnPartImageColumns(image typedcolumn.ColumnPartImage) i
 		}
 		columns[section.Column] = struct{}{}
 	}
-	return len(columns)
+	if len(columns) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(columns))
+	for column := range columns {
+		out = append(out, column)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func addColumnStoreTypedColumnPartByteAccounting(dst *ColumnStoreTypedColumnPartByteAccounting, src ColumnStoreTypedColumnPartByteAccounting) {
@@ -348,9 +359,7 @@ func addColumnStoreTypedColumnPartByteAccounting(dst *ColumnStoreTypedColumnPart
 		return
 	}
 	dst.Rows = addColumnStorePhysicalAccountingRows(dst.Rows, src.Rows)
-	if src.Columns > dst.Columns {
-		dst.Columns = src.Columns
-	}
+	addColumnStoreTypedColumnPartByteAccountingColumns(dst, src)
 	dst.SerializedImageBytes = addColumnStorePhysicalAccountingBytes(dst.SerializedImageBytes, src.SerializedImageBytes)
 	dst.SerializedManifestBytes = addColumnStorePhysicalAccountingBytes(dst.SerializedManifestBytes, src.SerializedManifestBytes)
 	dst.SerializedPaddingBytes = addColumnStorePhysicalAccountingBytes(dst.SerializedPaddingBytes, src.SerializedPaddingBytes)
@@ -370,6 +379,42 @@ func addColumnStoreTypedColumnPartByteAccounting(dst *ColumnStoreTypedColumnPart
 	if dst.Rows > 0 {
 		dst.BytesPerRow = float64(dst.TotalStoredBytes) / float64(dst.Rows)
 	}
+}
+
+func addColumnStoreTypedColumnPartByteAccountingColumns(dst *ColumnStoreTypedColumnPartByteAccounting, src ColumnStoreTypedColumnPartByteAccounting) {
+	if dst == nil {
+		return
+	}
+	if len(src.columnNames) == 0 {
+		if src.Columns > dst.Columns {
+			dst.Columns = src.Columns
+		}
+		return
+	}
+	if len(dst.columnNames) == 0 && dst.Columns == 0 {
+		dst.columnNames = append(dst.columnNames[:0], src.columnNames...)
+		dst.Columns = len(dst.columnNames)
+		return
+	}
+	if len(dst.columnNames) == 0 && dst.Columns > 0 {
+		if src.Columns > dst.Columns {
+			dst.Columns = src.Columns
+		}
+		return
+	}
+	seen := make(map[string]struct{}, len(dst.columnNames)+len(src.columnNames))
+	for _, column := range dst.columnNames {
+		seen[column] = struct{}{}
+	}
+	for _, column := range src.columnNames {
+		seen[column] = struct{}{}
+	}
+	dst.columnNames = dst.columnNames[:0]
+	for column := range seen {
+		dst.columnNames = append(dst.columnNames, column)
+	}
+	sort.Strings(dst.columnNames)
+	dst.Columns = len(dst.columnNames)
 }
 
 func columnStorePhysicalAccountingKindTotals(kinds map[ColumnAssetKind]*ColumnStorePhysicalAssetKindAccounting) []ColumnStorePhysicalAssetKindAccounting {
