@@ -104,7 +104,7 @@ func TestYCSBBenchTreeDBProfileFromEnv(t *testing.T) {
 }
 
 func TestYCSBBenchTreeDBProfileRejectsDeprecatedPublicNames(t *testing.T) {
-	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+	for _, raw := range []string{"fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
 		if got, ok := parseYCSBBenchTreeDBProfile(raw); ok {
 			t.Fatalf("deprecated profile %q parsed as %q", raw, got)
 		}

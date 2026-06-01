@@ -88,7 +88,7 @@ func TestCollectionBenchProfileForEngineAcceptsPublicProfiles(t *testing.T) {
 }
 
 func TestCollectionBenchProfileForEngineRejectsDeprecatedNames(t *testing.T) {
-	for _, raw := range []string{"production_fast", "production_wal_on_fast", "backend_direct_fast", "backend_direct_wal_on_fast", "fast", "wal_on_fast", "durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+	for _, raw := range []string{"production_fast", "production_wal_on_fast", "backend_direct_fast", "backend_direct_wal_on_fast", "fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
 		got, ok := collectionBenchProfileForEngine(raw)
 		if ok {
 			t.Fatalf("deprecated collection bench engine %q parsed as %q", raw, got)
