@@ -75,6 +75,21 @@ func TestParseProfileRejectsDeprecatedProfileNames(t *testing.T) {
 	}
 }
 
+func TestBackendOptionsLeafSegmentTargetRestoresGenerationPolicy(t *testing.T) {
+	cfg := config{
+		Dir:                    t.TempDir(),
+		Profile:                treedb.ProfileBench,
+		LeafSegmentTargetBytes: 32 << 10,
+	}
+	opts := backendOptions(cfg, false)
+	if got := opts.ValueLog.Generational.Policy; got != treedb.ValueLogGenerationHotWarmCold {
+		t.Fatalf("generation policy=%v want hot/warm/cold", got)
+	}
+	if got := opts.ValueLog.Generational.LeafSegmentTargetBytes; got != cfg.LeafSegmentTargetBytes {
+		t.Fatalf("leaf target bytes=%d want %d", got, cfg.LeafSegmentTargetBytes)
+	}
+}
+
 func TestParseConfigPartialBufferedIndexedThresholdKeepsRootRunDefault(t *testing.T) {
 	cfg, err := parseConfig([]string{"-buffered-indexed-write-max-docs", "1234"}, io.Discard)
 	if err != nil {
