@@ -20,9 +20,8 @@ type nativewireInsertBatchCombineLane struct {
 }
 
 type nativewireInsertBatchCombineItem struct {
-	req    insertBatchFastRequest
-	done   chan struct{}
-	result nativewireInsertBatchCombineResult
+	req  insertBatchFastRequest
+	done chan nativewireInsertBatchCombineResult
 }
 
 type nativewireInsertBatchCombineResult struct {
@@ -38,10 +37,7 @@ func (c *nativewireInsertBatchCombiner) run(s *Server, req insertBatchFastReques
 	if !canCombineInsertBatchFastRequest(s, req) {
 		return nativewireInsertBatchCombineResult{}, false
 	}
-	item := &nativewireInsertBatchCombineItem{
-		req:  req,
-		done: make(chan struct{}),
-	}
+	item := acquireInsertBatchCombineItem(req)
 
 	c.mu.Lock()
 	if c.lanes == nil {
@@ -62,8 +58,9 @@ func (c *nativewireInsertBatchCombiner) run(s *Server, req insertBatchFastReques
 	if leader {
 		go c.drain(s, req.collectionName, lane)
 	}
-	<-item.done
-	return item.result, true
+	result := <-item.done
+	releaseInsertBatchCombineItem(item)
+	return result, true
 }
 
 func canCombineInsertBatchFastRequest(s *Server, req insertBatchFastRequest) bool {
@@ -90,9 +87,11 @@ func canCombineInsertBatchFastRequest(s *Server, req insertBatchFastRequest) boo
 
 func (c *nativewireInsertBatchCombiner) drain(s *Server, collectionName string, lane *nativewireInsertBatchCombineLane) {
 	yieldInsertBatchCombiner(s)
+	var batchScratch []*nativewireInsertBatchCombineItem
 	for {
 		c.mu.Lock()
-		batch := popInsertBatchCombineItems(lane, s.insertBatchCombineMaxBatch)
+		batchScratch = popInsertBatchCombineItems(lane, s.insertBatchCombineMaxBatch, batchScratch[:0])
+		batch := batchScratch
 		if len(batch) == 0 {
 			lane.draining = false
 			delete(c.lanes, collectionName)
@@ -102,18 +101,20 @@ func (c *nativewireInsertBatchCombiner) drain(s *Server, collectionName string, 
 		c.mu.Unlock()
 
 		applyInsertBatchCombineItems(s, batch)
+		clear(batch)
+		batchScratch = batch[:0]
 		yieldInsertBatchCombiner(s)
 	}
 }
 
-func popInsertBatchCombineItems(lane *nativewireInsertBatchCombineLane, max int) []*nativewireInsertBatchCombineItem {
+func popInsertBatchCombineItems(lane *nativewireInsertBatchCombineLane, max int, dst []*nativewireInsertBatchCombineItem) []*nativewireInsertBatchCombineItem {
 	if lane == nil || len(lane.queue) == 0 {
 		return nil
 	}
 	if max <= 0 || max > len(lane.queue) {
 		max = len(lane.queue)
 	}
-	out := append([]*nativewireInsertBatchCombineItem(nil), lane.queue[:max]...)
+	out := append(dst[:0], lane.queue[:max]...)
 	copy(lane.queue, lane.queue[max:])
 	clear(lane.queue[len(lane.queue)-max:])
 	lane.queue = lane.queue[:len(lane.queue)-max]
@@ -142,8 +143,17 @@ func applyInsertBatchCombineItems(s *Server, batch []*nativewireInsertBatchCombi
 		return
 	}
 
-	ids := make([][]byte, len(batch))
-	docs := make([][]byte, len(batch))
+	var idScratch [64][]byte
+	var docScratch [64][]byte
+	ids := idScratch[:]
+	docs := docScratch[:]
+	if len(batch) > len(idScratch) {
+		ids = make([][]byte, len(batch))
+		docs = make([][]byte, len(batch))
+	} else {
+		ids = ids[:len(batch)]
+		docs = docs[:len(batch)]
+	}
 	for i, item := range batch {
 		ids[i] = item.req.ids[0]
 		docs[i] = item.req.docs[0]
@@ -187,6 +197,30 @@ func applySingleInsertBatchCombineItem(s *Server, item *nativewireInsertBatchCom
 }
 
 func finishInsertBatchCombineItem(item *nativewireInsertBatchCombineItem, result nativewireInsertBatchCombineResult) {
-	item.result = result
-	close(item.done)
+	item.done <- result
+}
+
+var nativewireInsertBatchCombineItemPool sync.Pool
+
+func acquireInsertBatchCombineItem(req insertBatchFastRequest) *nativewireInsertBatchCombineItem {
+	if pooled := nativewireInsertBatchCombineItemPool.Get(); pooled != nil {
+		item := pooled.(*nativewireInsertBatchCombineItem)
+		item.req = req
+		if item.done == nil {
+			item.done = make(chan nativewireInsertBatchCombineResult, 1)
+		}
+		return item
+	}
+	return &nativewireInsertBatchCombineItem{
+		req:  req,
+		done: make(chan nativewireInsertBatchCombineResult, 1),
+	}
+}
+
+func releaseInsertBatchCombineItem(item *nativewireInsertBatchCombineItem) {
+	if item == nil {
+		return
+	}
+	item.req = insertBatchFastRequest{}
+	nativewireInsertBatchCombineItemPool.Put(item)
 }

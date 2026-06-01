@@ -34,6 +34,7 @@ const (
 	ycsbBenchFields     = 10
 	ycsbBenchFieldLen   = 100
 
+	ycsbBenchProfileEnv                = "TREEDB_NATIVEWIRE_YCSB_PROFILE"
 	ycsbTimedCPUProfilePathEnv         = "TREEDB_NATIVEWIRE_YCSB_TIMED_CPU_PROFILE_PATH"
 	maxYCSBPrecomputedRequests         = 500_000
 	maxProfiledYCSBPrecomputedRequests = 1_000_000
@@ -88,6 +89,18 @@ func BenchmarkNativewireYCSBLoadServerPrecomputed(b *testing.B) {
 	b.Run("inproc/"+tc.name, func(b *testing.B) {
 		benchmarkNativewireYCSBLoadServerPrecomputed(b, tc)
 	})
+}
+
+func TestYCSBBenchTreeDBProfileFromEnv(t *testing.T) {
+	t.Setenv(ycsbBenchProfileEnv, "")
+	if got := ycsbBenchTreeDBProfile(t); got != treedb.ProfileFast {
+		t.Fatalf("default profile=%q want %q", got, treedb.ProfileFast)
+	}
+
+	t.Setenv(ycsbBenchProfileEnv, string(treedb.ProfileCommandWALRelaxed))
+	if got := ycsbBenchTreeDBProfile(t); got != treedb.ProfileCommandWALRelaxed {
+		t.Fatalf("env profile=%q want %q", got, treedb.ProfileCommandWALRelaxed)
+	}
 }
 
 type ycsbLoadFormat struct {
@@ -417,7 +430,7 @@ func requireSafeYCSBPrecomputedRequests(b *testing.B) {
 
 func newYCSBBenchEnv(tb testing.TB, format collections.DocumentFormat, tcp bool) *ycsbBenchEnv {
 	tb.Helper()
-	opts := treedb.OptionsFor(treedb.ProfileFast, tb.TempDir())
+	opts := treedb.OptionsFor(ycsbBenchTreeDBProfile(tb), tb.TempDir())
 	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		tb.Fatalf("OpenBackendWithCachedLeafLog: %v", err)
@@ -479,6 +492,20 @@ func newYCSBBenchEnv(tb testing.TB, format collections.DocumentFormat, tcp bool)
 		return err
 	}
 	return env
+}
+
+func ycsbBenchTreeDBProfile(tb testing.TB) treedb.Profile {
+	tb.Helper()
+
+	raw := strings.TrimSpace(os.Getenv(ycsbBenchProfileEnv))
+	if raw == "" {
+		return treedb.ProfileFast
+	}
+	profile, ok := treedb.NormalizeProfile(treedb.Profile(raw))
+	if !ok {
+		tb.Fatalf("unknown %s %q", ycsbBenchProfileEnv, raw)
+	}
+	return profile
 }
 
 func newYCSBBenchClient(tb testing.TB, ctx context.Context, env *ycsbBenchEnv, transport string) (*Client, func() error) {

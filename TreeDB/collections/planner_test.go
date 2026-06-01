@@ -923,6 +923,29 @@ func TestInsertBatchPreflightCheckUniqueConflictsSkipsMissingRoots(t *testing.T)
 	}
 }
 
+func TestCollectionDocumentsFromDirectInsertPlanUsesPrimaryOrder(t *testing.T) {
+	plan := &insertBatchPlan{
+		resultIDs: [][]byte{[]byte("u2"), []byte("u1")},
+		directBufferedInsert: &directBufferedInsertPlan{
+			primaryRootName: collectionPrimaryRootName("users"),
+			primaryEntries: []directBufferedRootEntry{
+				{key: []byte("u1"), value: []byte(`{"name":"Ada"}`), flags: node.FlagInline},
+				{key: []byte("u2"), value: []byte(`{"name":"Grace"}`), flags: node.FlagInline},
+			},
+		},
+	}
+	docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName("users"))
+	if err != nil {
+		t.Fatalf("collectionDocumentsFromInsertPlan: %v", err)
+	}
+	if got, want := len(docs), 2; got != want {
+		t.Fatalf("docs=%d want %d", got, want)
+	}
+	if string(docs[0].ID) != "u1" || string(docs[1].ID) != "u2" {
+		t.Fatalf("doc order=%q,%q want primary order u1,u2", docs[0].ID, docs[1].ID)
+	}
+}
+
 func TestInsertBatchPlanCheckPersistedConflictsRejectsMissingInputs(t *testing.T) {
 	tests := []struct {
 		name    string
