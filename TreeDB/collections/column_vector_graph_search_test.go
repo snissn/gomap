@@ -51,6 +51,96 @@ func TestColumnVectorGraphAdjacencySourceStatsSkipEmptyNoopV3(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphNativeSearchFrontierHeapOrder1980(t *testing.T) {
+	candidates := []columnVectorGraphSearchCandidate{
+		{ordinal: 7, score: 0.70},
+		{ordinal: 3, score: 0.70},
+		{ordinal: 11, score: -0.10},
+		{ordinal: 1, score: 0.95},
+		{ordinal: 9, score: 0.20},
+		{ordinal: 5, score: 0.95},
+		{ordinal: 4, score: 0.20},
+		{ordinal: 2, score: -0.10},
+	}
+	want := make([]columnVectorGraphSearchCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		want = insertColumnGraphTopForTest(want, len(candidates), candidate)
+	}
+
+	var scratch columnVectorGraphNativeSearchScratch
+	for _, candidate := range candidates {
+		scratch.pushFrontier(candidate)
+	}
+	assertColumnVectorGraphFrontierPopOrder1980(t, &scratch, want)
+
+	var interleavedScratch columnVectorGraphNativeSearchScratch
+	interleavedWant := make([]columnVectorGraphSearchCandidate, 0, len(candidates))
+	for i, candidate := range candidates {
+		interleavedScratch.pushFrontier(candidate)
+		interleavedWant = insertColumnGraphTopForTest(interleavedWant, len(candidates), candidate)
+		if i%3 == 2 {
+			got, ok := interleavedScratch.popFrontier()
+			if !ok {
+				t.Fatalf("interleaved frontier pop after push %d missing", i)
+			}
+			if got != interleavedWant[0] {
+				t.Fatalf("interleaved frontier pop after push %d=%+v want %+v", i, got, interleavedWant[0])
+			}
+			interleavedWant = interleavedWant[1:]
+		}
+	}
+	assertColumnVectorGraphFrontierPopOrder1980(t, &interleavedScratch, interleavedWant)
+
+	var debugScratch columnVectorGraphNativeSearchScratch
+	var stats columnVectorGraphNativeSearchStats
+	debugCounters := &columnVectorGraphNativeSearchDebugCounters{stats: &stats}
+	for _, candidate := range candidates {
+		debugScratch.pushFrontierDebug(candidate, debugCounters)
+	}
+	if stats.FrontierPushes != uint64(len(candidates)) {
+		t.Fatalf("debug frontier pushes=%d want %d", stats.FrontierPushes, len(candidates))
+	}
+	assertColumnVectorGraphFrontierPopOrderDebug1980(t, &debugScratch, debugCounters, want)
+	if stats.FrontierPops != uint64(len(candidates)) || stats.FrontierPopMisses != 1 {
+		t.Fatalf("debug frontier pop stats=%+v want pops=%d misses=1", stats, len(candidates))
+	}
+	if stats.FrontierSiftUpSteps == 0 || stats.FrontierSiftDownSteps == 0 {
+		t.Fatalf("debug frontier sift stats=%+v want non-zero up/down steps", stats)
+	}
+}
+
+func assertColumnVectorGraphFrontierPopOrder1980(t *testing.T, scratch *columnVectorGraphNativeSearchScratch, want []columnVectorGraphSearchCandidate) {
+	t.Helper()
+	for i, wantCandidate := range want {
+		got, ok := scratch.popFrontier()
+		if !ok {
+			t.Fatalf("frontier pop[%d] missing want %+v", i, wantCandidate)
+		}
+		if got != wantCandidate {
+			t.Fatalf("frontier pop[%d]=%+v want %+v", i, got, wantCandidate)
+		}
+	}
+	if got, ok := scratch.popFrontier(); ok {
+		t.Fatalf("frontier pop after drain=%+v, want empty", got)
+	}
+}
+
+func assertColumnVectorGraphFrontierPopOrderDebug1980(t *testing.T, scratch *columnVectorGraphNativeSearchScratch, debugCounters *columnVectorGraphNativeSearchDebugCounters, want []columnVectorGraphSearchCandidate) {
+	t.Helper()
+	for i, wantCandidate := range want {
+		got, ok := scratch.popFrontierDebug(debugCounters)
+		if !ok {
+			t.Fatalf("debug frontier pop[%d] missing want %+v", i, wantCandidate)
+		}
+		if got != wantCandidate {
+			t.Fatalf("debug frontier pop[%d]=%+v want %+v", i, got, wantCandidate)
+		}
+	}
+	if got, ok := scratch.popFrontierDebug(debugCounters); ok {
+		t.Fatalf("debug frontier pop after drain=%+v, want empty", got)
+	}
+}
+
 func columnVectorGraphNativeSearchSmallBenchShapeV3() columnVectorGraphNativeSearchBenchShapeV3 {
 	return columnVectorGraphNativeSearchBenchShapeV3{
 		rows:         1024,
