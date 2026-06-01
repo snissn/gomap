@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -606,6 +607,173 @@ func TestStandaloneServerOfficialDriverCRUDAndReopen(t *testing.T) {
 	name, ok := raw.Lookup("name").StringValueOK()
 	if !ok || name != "ada" {
 		t.Fatalf("stored name=%q ok=%v want ada", name, ok)
+	}
+}
+
+func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) {
+	profiles := []treedb.Profile{
+		treedb.ProfileCommandWALRelaxed,
+		treedb.ProfileCommandWALDurable,
+	}
+	for _, profile := range profiles {
+		t.Run(string(profile), func(t *testing.T) {
+			standalone, err := OpenStandaloneServer(StandaloneOptions{
+				Dir:     t.TempDir(),
+				Profile: profile,
+				DefaultCollectionOptions: collections.CollectionOptions{
+					DocumentFormat: collections.DocumentFormatBSON,
+				},
+			})
+			if err != nil {
+				t.Fatalf("OpenStandaloneServer: %v", err)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				_ = standalone.Close()
+				t.Fatalf("listen: %v", err)
+			}
+			serveErr := make(chan error, 1)
+			go func() {
+				serveErr <- standalone.Serve(ctx, ln)
+			}()
+
+			client, err := mongo.Connect(options.Client().
+				ApplyURI("mongodb://" + ln.Addr().String()).
+				SetDirect(true).
+				SetServerSelectionTimeout(time.Second))
+			if err != nil {
+				cancel()
+				_ = ln.Close()
+				_ = standalone.Close()
+				t.Fatalf("mongo connect: %v", err)
+			}
+
+			opCtx, opCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer opCancel()
+			if err := client.Ping(opCtx, nil); err != nil {
+				_ = client.Disconnect(context.Background())
+				cancel()
+				_ = ln.Close()
+				_ = standalone.Close()
+				t.Fatalf("driver ping: %v", err)
+			}
+
+			coll := client.Database("ycsb").Collection("usertable")
+			const docs = 2048
+			const workers = 16
+			ycsbValues := func(i int) bson.D {
+				values := make(bson.D, 0, 11)
+				values = append(values, bson.E{Key: "_id", Value: "user" + strconv.Itoa(i)})
+				for field := 0; field < 10; field++ {
+					values = append(values, bson.E{Key: "field" + strconv.Itoa(field), Value: []byte("value" + strconv.Itoa(i) + "-" + strconv.Itoa(field))})
+				}
+				return values
+			}
+			ycsbUpdate := func(i int) bson.D {
+				values := make(bson.D, 0, 10)
+				for field := 0; field < 10; field++ {
+					values = append(values, bson.E{Key: "field" + strconv.Itoa(field), Value: []byte("updated" + strconv.Itoa(i) + "-" + strconv.Itoa(field))})
+				}
+				return values
+			}
+			projection := bson.D{{Key: "_id", Value: false}}
+			for field := 0; field < 10; field++ {
+				projection = append(projection, bson.E{Key: "field" + strconv.Itoa(field), Value: true})
+			}
+
+			errCh := make(chan error, docs)
+			workCh := make(chan int)
+			for worker := 0; worker < workers; worker++ {
+				go func() {
+					for i := range workCh {
+						_, err := coll.InsertOne(opCtx, ycsbValues(i))
+						errCh <- err
+					}
+				}()
+			}
+			for i := 0; i < docs; i++ {
+				workCh <- i
+			}
+			close(workCh)
+			for i := 0; i < docs; i++ {
+				if err := <-errCh; err != nil {
+					_ = client.Disconnect(context.Background())
+					cancel()
+					_ = ln.Close()
+					_ = standalone.Close()
+					t.Fatalf("insert %d: %v", i, err)
+				}
+			}
+
+			for i := 0; i < docs; i++ {
+				id := "user" + strconv.Itoa(i)
+				var got map[string][]byte
+				if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}, options.FindOne().SetProjection(projection)).Decode(&got); err != nil {
+					_ = client.Disconnect(context.Background())
+					cancel()
+					_ = ln.Close()
+					_ = standalone.Close()
+					t.Fatalf("find after insert %s: %v", id, err)
+				}
+				result, err := coll.UpdateOne(opCtx,
+					bson.D{{Key: "_id", Value: id}},
+					bson.D{{Key: "$set", Value: ycsbUpdate(i)}},
+				)
+				if err != nil {
+					_ = client.Disconnect(context.Background())
+					cancel()
+					_ = ln.Close()
+					_ = standalone.Close()
+					t.Fatalf("update %s: %v", id, err)
+				}
+				if result.MatchedCount != 1 || result.ModifiedCount != 1 {
+					_ = client.Disconnect(context.Background())
+					cancel()
+					_ = ln.Close()
+					_ = standalone.Close()
+					t.Fatalf("update %s matched=%d modified=%d, want 1/1", id, result.MatchedCount, result.ModifiedCount)
+				}
+				got = nil
+				if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}, options.FindOne().SetProjection(projection)).Decode(&got); err != nil {
+					_ = client.Disconnect(context.Background())
+					cancel()
+					_ = ln.Close()
+					_ = standalone.Close()
+					t.Fatalf("find after update %s: %v", id, err)
+				}
+				if string(got["field0"]) != "updated"+strconv.Itoa(i)+"-0" {
+					_ = client.Disconnect(context.Background())
+					cancel()
+					_ = ln.Close()
+					_ = standalone.Close()
+					t.Fatalf("find after update %s field0=%q want updated", id, got["field0"])
+				}
+			}
+
+			if err := client.Disconnect(context.Background()); err != nil {
+				cancel()
+				_ = ln.Close()
+				_ = standalone.Close()
+				t.Fatalf("disconnect: %v", err)
+			}
+			cancel()
+			_ = ln.Close()
+			select {
+			case err := <-serveErr:
+				if err != nil {
+					_ = standalone.Close()
+					t.Fatalf("Serve returned error: %v", err)
+				}
+			case <-time.After(standaloneShutdownTimeout):
+				_ = standalone.Close()
+				t.Fatal("Serve did not stop")
+			}
+			if err := standalone.Close(); err != nil {
+				t.Fatalf("standalone close: %v", err)
+			}
+		})
 	}
 }
 

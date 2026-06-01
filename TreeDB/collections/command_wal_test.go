@@ -16,7 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN(t *testing.T) {
+func TestCollectionCommandWALInsertBatchByIDStagesAppliedLSNUntilFlush(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
@@ -35,8 +35,20 @@ func TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
 	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	assertCollectionDocument(t, col, "u2", `{"name":"Grace"}`)
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after staged insert=%d, want 0 before flush", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionInsertBatchByID {
+		t.Fatalf("command WAL frames=%+v, want one collection insert frame before flush", frames)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 	if got := d.State().AppliedCommandLSN; got != 1 {
-		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+		t.Fatalf("AppliedCommandLSN after flush=%d, want 1", got)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -55,7 +67,7 @@ func TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN(t *testing.T) {
 	}
 }
 
-func TestCollectionCommandWALInsertByIDPublishesAppliedLSN(t *testing.T) {
+func TestCollectionCommandWALInsertByIDStagesAppliedLSNUntilFlush(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
@@ -73,14 +85,23 @@ func TestCollectionCommandWALInsertByIDPublishesAppliedLSN(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("Insert: %v", err)
 	}
-	if got := d.State().AppliedCommandLSN; got != 1 {
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	if got := d.State().AppliedCommandLSN; got != 0 {
 		_ = d.Close()
-		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+		t.Fatalf("AppliedCommandLSN after staged insert=%d, want 0 before flush", got)
 	}
 	frames := collectionCommandWALFrames(t, dir)
 	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionInsertBatchByID {
 		_ = d.Close()
-		t.Fatalf("command WAL frames=%+v, want one collection insert frame", frames)
+		t.Fatalf("command WAL frames=%+v, want one collection insert frame before flush", frames)
+	}
+	if err := col.Flush(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN after flush=%d, want 1", got)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -1499,8 +1520,11 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexInterleavedCollectionsDrainOwne
 	if _, err := b.Insert([]byte("b1"), mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "nyc"}})); err != nil {
 		t.Fatalf("Insert b1: %v", err)
 	}
-	if got := d.State().AppliedCommandLSN; got != 2 {
-		t.Fatalf("AppliedCommandLSN after setup=%d, want 2", got)
+	if _, err := b.Get([]byte("b1")); err != nil {
+		t.Fatalf("Get staged b1: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after staged b insert=%d, want 1", got)
 	}
 	if _, _, err := a.UpdateBSONSet([]byte("a1"), []BSONSetField{{
 		Key:   "city",
