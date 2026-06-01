@@ -359,6 +359,70 @@ visited-edge/control flow under parity before assigning any remaining optimized
 implementation to #1980 frontier/top-k or #1977 normalized-vector
 storage/scoring.
 
+## #1979 HNSW batchability/control-flow instrumentation
+
+`BenchmarkColumnVectorGraphSearchBatchability1979` reuses the #2091 production
+fixture and runs the current prepared typed-column graph-only path with
+`StatsMode=benchmark_debug`. The benchmark is evidence/instrumentation only: it
+does not change traversal semantics, fixture topology, default scoring mode, or
+persistent formats. Rows report the normal `ns/op`, `ops/sec`, `B/op`, and
+`allocs/op` columns plus stable control-flow counters for neighbor tile sizes,
+score-batch histograms, scored-versus-skipped neighbors, visited-mark
+hits/misses, frontier/top-k operations, layer work, and exact-mode candidate
+order summaries.
+
+Command used for the local #1979 evidence run:
+
+```sh
+OUT=/tmp/gomap_1979_batchability_final_20260531_140228
+GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphSearchBatchability1979$' \
+  -benchmem -benchtime=500ms -count=3 | tee "$OUT/batchability_1979_bench.txt"
+```
+
+Run context: macOS 26.2, Apple M3, 8 logical CPUs, 16 GiB memory,
+`go version go1.25.5 darwin/arm64`. Median rows from the three-count run:
+
+| Search mode | Score mode | ns/op | ops/sec | B/op | allocs/op | Work counters | Batchability/control-flow counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| `ef_search=128` | `scalar` | 9.846 µs | 101,561 | 0 | 0 | `candidates=128`, `visited_nodes=128`, `visited_edges=612`, `edges_per_visited_node=4.781` | `neighbor_tiles=39`, `neighbor_tile_avg_size=16`, `score_batch_calls=128`, `score_batch_singletons=128`, `scored_neighbors=127`, `already_visited_skips=485`, `frontier_pushes=128`, `frontier_pops=39`, `top_k_insert_attempts=128`, `top_k_insert_successes=22`, `top_k_insert_rejections=106` |
+| `ef_search=128` | `indexed` | 12.232 µs | 81,751 | 0 | 0 | `candidates=128`, `visited_nodes=128`, `visited_edges=612`, `edges_per_visited_node=4.781` | `neighbor_tiles=39`, `neighbor_tile_avg_size=16`, `score_batch_calls=25`, `score_batch_singletons=4`, `score_batch_size_2_4=8`, `score_batch_size_5_8=12`, `score_batch_size_9_16=1`, `already_visited_skips=485`, `frontier_pushes=128`, `top_k_rejections=106` |
+| `exact` (`ef_search=8192`) | `scalar` | 1.091 ms | 916.7 | 0 | 0 | `candidates=8192`, `visited_nodes=8192`, `visited_edges=100748`, `edges_per_visited_node=12.30` | `neighbor_tiles=6297`, `neighbor_tile_avg_size=16`, `score_batch_calls=8192`, `score_batch_singletons=8192`, `scored_neighbors=8191`, `already_visited_skips=92557`, `frontier_pushes=8192`, `frontier_pops=6297`, `top_k_rejections=8132`, `exact_order_observations=8192`, `exact_order_backward_jumps=5977` |
+| `exact` (`ef_search=8192`) | `indexed` | 1.277 ms | 782.9 | 0 | 0 | `candidates=8192`, `visited_nodes=8192`, `visited_edges=100748`, `edges_per_visited_node=12.30` | `neighbor_tiles=6297`, `neighbor_tile_avg_size=16`, `score_batch_calls=1797`, `score_batch_singletons=364`, `score_batch_size_2_4=502`, `score_batch_size_5_8=930`, `score_batch_size_9_16=1`, `already_visited_skips=92557`, `frontier_pushes=8192`, `top_k_rejections=8132`, `exact_order_observations=8192`, `exact_order_backward_jumps=5977` |
+
+#1979 interpretation:
+
+- The equal-topology #2091 fixture's `ef_search=128` row explains its 612
+  visited edges as layer-0 expansion work over 39 degree-16 neighbor tiles. The
+  high skip bucket is already-visited neighbors (`485/search`), not metadata
+  filtering (`filter_skips=0`) and not a storage-source fallback
+  (`graph_row_fallbacks=0`, `adjacency_source_fallbacks=0`).
+- The exact row is intentionally much more search work: it scores all 8192
+  candidates and visits 100748 edges/search. That high visited-edge count is
+  topology/frontier revisitation (`92557 already_visited_skips/search`) plus the
+  expected exact traversal budget, not typed-column adjacency overhead.
+- Natural neighbor tiles are full degree-16 tiles in this fixture
+  (`neighbor_tile_avg_size=16`). The scalar default still performs singleton
+  scoring (`score_batch_singletons == score_batch_calls`), so batchability exists
+  in the traversal but is not consumed by the default scoring path.
+- The indexed diagnostic row demonstrates available score grouping without
+  changing result order or default runtime behavior: exact-mode score calls drop
+  from 8192 singleton calls to 1797 calls, mostly size 2-8 tiles. It is not a
+  promotion claim because this row runs under debug instrumentation and the
+  existing indexed scoring hook is not enabled by default.
+- Exact candidate order is not mostly sequential (`5977 backward jumps` versus
+  `2199 adjacent-forward transitions` in the exact row), so a renewed exact-mode
+  indexed-scoring ticket should expect graph-order/gathered batches rather than
+  long contiguous row runs.
+
+Follow-up recommendation: keep #2035 open as not performance-satisfied. Use this
+#1979 evidence to prioritize #1980 frontier/top-k and already-visited handling
+for control-flow overhead, and use a separate narrow indexed-scoring ticket if
+exact-mode gathered score batching becomes a goal. #1977 normalized-vector
+storage remains a separate scoring/storage-format follow-up and is not
+implemented here.
+
 ## Interpretation rules
 
 - `combined_prepared_typed_column` rows are #2045 prepared-routing evidence;

@@ -256,11 +256,15 @@ the closeout run kept graph-only search zero-allocation and fallback-free, but
 the legacy control visits 612 edges/search while current prepared rows visit 3340
 edges/search (about 5.5x). The #2043 focused adjacency-access microbenchmark is
 not an end-to-end search benchmark; it only shows prepared CSR adjacency access
-is not the source of that mismatch. Use #1979 to explain search
-work/batchability and add any exact-topology follow-up benchmark, #1980 for
-frontier/top-k optimization if future profiles continue to justify it, and keep
-#1977 normalized vectors deferred until a prototype beats raw vectors plus
-inverse norms including storage/rebuild cost.
+is not the source of that mismatch. #1979 adds opt-in benchmark-debug
+batchability/control-flow counters on the #2091 topology-parity fixture: the
+bounded `ef_search=128` row's 612 visited edges are mostly already-visited
+layer-0 skips over degree-16 neighbor tiles, while exact mode scores all 8192
+candidates and visits 100748 edges/search. Use #1980 for frontier/top-k or
+already-visited optimization if future profiles continue to justify it, use a
+separate narrow indexed-scoring ticket if exact-mode gathered score batching is
+desired, and keep #1977 normalized vectors deferred until a prototype beats raw
+vectors plus inverse norms including storage/rebuild cost.
 
 The broader legacy/canonical matrix remains useful when comparing with older
 artifacts or when you also need one-shot open/setup names:

@@ -889,6 +889,12 @@ Invariant:
   current prepared typed-column reader; parity tests must assert equal
   search-work counters and equivalent results before the benchmark evidence is
   used for #2035 promotion decisions.
+- The #1979 batchability benchmark must be opt-in (`benchmark_debug`) and must
+  report neighbor tile distribution, score-batch histograms, scored-versus-skipped
+  neighbors, already-visited skips, layer-0 versus upper-layer work,
+  frontier/top-k operation counts, visited-mark hits/misses, exact-mode candidate
+  order summaries, `ns/op`, `ops/sec`, `B/op`, and `allocs/op` without changing
+  traversal semantics or fixture topology.
 
 Coverage:
 - Policy owner: `TreeDB/docs/spec/typed-column-graph-search-benchmark-matrix.md`.
@@ -902,6 +908,11 @@ Coverage:
     topology/search-work/result parity gate, and
     `BenchmarkColumnVectorGraphSearchTopologyParity2091` emits the equal-work
     graph-only and result-ID rows.
+  - `TreeDB/collections/column_vector_graph_batchability_1979_test.go`:
+    `TestColumnVectorGraphNativeSearchBenchmarkDebugCounters1979` checks #1979
+    counter reconciliation, skip buckets, layer work, frontier/top-k counts, and
+    exact-mode candidate-order summaries; `BenchmarkColumnVectorGraphSearchBatchability1979`
+    emits the opt-in batchability/control-flow rows.
 
 ## 13. Native Wire Protocol
 

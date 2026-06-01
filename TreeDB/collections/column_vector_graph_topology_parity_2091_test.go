@@ -523,6 +523,7 @@ func addColumnVectorGraphSearchTopologyParityStats2091(dst *columnVectorGraphNat
 	dst.ResultIDStateValidationFailures += src.ResultIDStateValidationFailures
 	dst.PreparedGraphSearchViews += src.PreparedGraphSearchViews
 	dst.GraphRowFallbacks += src.GraphRowFallbacks
+	addColumnVectorGraphNativeSearchDebugStats1979(dst, src)
 	dst.TypedColumnMappedBytes = src.TypedColumnMappedBytes
 	dst.TypedColumnHeapCopyBytes = src.TypedColumnHeapCopyBytes
 	dst.TypedColumnDecodedBytes = src.TypedColumnDecodedBytes
@@ -571,6 +572,7 @@ func reportColumnVectorGraphSearchTopologyParityMetrics2091(b *testing.B, shape 
 	b.ReportMetric(float64(searchStats.ScoreBatchScalarFallbackCalls)/denom, "score_batch_fallback/search")
 	b.ReportMetric(float64(searchStats.PreparedScoreCalls)/denom, "prepared_score_calls/search")
 	b.ReportMetric(float64(searchStats.ScoreFloat64Fallbacks)/denom, "score_float64_fallbacks/search")
+	reportColumnVectorGraphNativeSearchDebugMetrics1979(b, n, searchStats)
 	b.ReportMetric(float64(searchStats.VectorDirectViews)/denom, "vector_direct_views/search")
 	b.ReportMetric(float64(searchStats.VectorMmapDirectViews)/denom, "vector_mmap_direct/search")
 	b.ReportMetric(float64(searchStats.VectorHeapCopyTypedViews)/denom, "vector_heap_copy_typed_view/search")
