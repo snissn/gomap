@@ -83,6 +83,15 @@ func TestColumnAssetLifecycleReportInventoriesRootsAndStaysReportOnly1954(t *tes
 	if report.Reachability.Sources.CandidateRefs != 2 || report.Reachability.Sources.PendingRefs != 1 || report.Reachability.Sources.PreparedRefs != 1 {
 		t.Fatalf("reachability sources=%+v", report.Reachability.Sources)
 	}
+	if report.Bytes.ManifestCatalogBytes == 0 || report.Reachability.ManifestCatalogBytes != report.Bytes.ManifestCatalogBytes {
+		t.Fatalf("manifest/catalog byte accounting missing: bytes=%+v reachability=%d", report.Bytes, report.Reachability.ManifestCatalogBytes)
+	}
+	if report.Bytes.ReferencedAssetBytes != report.Reachability.Refs.BytesTotal || report.Bytes.LiveBytes != report.Reachability.Sources.ActiveManifestBytes || report.Bytes.ProtectedBytes != report.Reachability.Refs.BytesProtected {
+		t.Fatalf("asset byte classes=%+v refs=%+v sources=%+v", report.Bytes, report.Reachability.Refs, report.Reachability.Sources)
+	}
+	if report.Bytes.StaleBytes != candidate.Length+superseded.Length || report.Bytes.PendingPublishBytes != pending.Length || report.Bytes.PreparedAssetBytes != prepared.Length || report.Bytes.RewriteDebtBytes != report.Reachability.RewriteDebtBytes {
+		t.Fatalf("unexpected lifecycle byte classes=%+v", report.Bytes)
+	}
 	if afterInfo, err := os.Stat(candidatePath); err != nil {
 		t.Fatalf("stat candidate segment after report: %v", err)
 	} else if afterInfo.Size() != beforeInfo.Size() {

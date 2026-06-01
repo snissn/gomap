@@ -57,6 +57,7 @@ type columnManifestSnapshot struct {
 	CommandBytes       int64
 	RowRemainderBytes  int64
 	ColumnPayloadBytes int64
+	ManifestBytes      int64
 	Parts              []columnManifestPartSnapshot
 	AggregateMetadata  []columnManifestAggregateMetadataSnapshot
 	DictionaryCodes    []columnManifestDictionaryCodesSnapshot
