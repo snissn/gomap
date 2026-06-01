@@ -1945,9 +1945,17 @@ func TestColumnStoreJSONBenchUnavailablePreparedCellDoesNotClaimPreparedHash1955
 		},
 	}
 
-	cell := columnStoreJSONBenchUnavailablePreparedCell(columnStoreQueryQ4B, direct, &collections.ColumnStoreConfig{}, 0, errors.New("prepare unavailable"))
+	exec := columnStoreQueryExecution{
+		StorageSource:  string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
+		FallbackReason: string(collections.ColumnPhysicalQueryFallbackAggregateMetadataUnsupported),
+		SetupDuration:  3 * time.Millisecond,
+	}
+	cell := columnStoreJSONBenchUnavailablePreparedCell(columnStoreQueryQ4B, direct, exec, &collections.ColumnStoreConfig{}, 0, errors.New("prepare unavailable"))
 	if cell.CompatibilityStatus != "unavailable" || !strings.Contains(cell.CompatibilityStatusReason, "prepare unavailable") {
 		t.Fatalf("unexpected unavailable status: %+v", cell)
+	}
+	if cell.StorageSource != exec.StorageSource || cell.FallbackReason != exec.FallbackReason || cell.MetadataDataScanPath != columnStoreJSONBenchScanPathData || cell.PreparedSetupDurationMS <= 0 {
+		t.Fatalf("unavailable prepared cell did not preserve actual fallback diagnostics: %+v", cell)
 	}
 	if cell.RawHash != direct.RawHash {
 		t.Fatalf("raw_hash=%016x want %016x", cell.RawHash, direct.RawHash)

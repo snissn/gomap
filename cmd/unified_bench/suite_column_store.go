@@ -2139,7 +2139,7 @@ func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int
 		}
 		exec, err := executeColumnStoreSuitePreparedPhysicalQuery(collection, name, preparedKind, assetReadIntegrity)
 		if err != nil {
-			cells = append(cells, columnStoreJSONBenchUnavailablePreparedCell(name, q, cfg, retainedPayloadBytes, err))
+			cells = append(cells, columnStoreJSONBenchUnavailablePreparedCell(name, q, exec, cfg, retainedPayloadBytes, err))
 			continue
 		}
 		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHashes[name], q, exec, preparedKind, cfg, retainedPayloadBytes)
@@ -2265,15 +2265,27 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	return cell
 }
 
-func columnStoreJSONBenchUnavailablePreparedCell(name string, direct columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64, err error) columnStoreJSONBenchCell {
+func columnStoreJSONBenchUnavailablePreparedCell(name string, direct columnStoreQueryMetric, exec columnStoreQueryExecution, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64, err error) columnStoreJSONBenchCell {
 	planLabel := direct.PlanLabel
 	cell := columnStoreBaseJSONBenchCell(name, planLabel, cfg, retainedPayloadBytes)
-	cell.CellLabel = columnStoreJSONBenchCellLabel(planLabel, columnStoreJSONBenchModePrepared)
 	cell.ExecutionMode = columnStoreJSONBenchModePrepared
 	cell.AliasOf = direct.AliasOf
-	cell.StorageSource = direct.StorageSource
-	cell.FallbackReason = direct.FallbackReason
-	cell.MetadataDataScanPath = columnStoreJSONBenchScanPathForPlan(planLabel)
+	cell.StorageSource = exec.StorageSource
+	if cell.StorageSource == "" {
+		cell.StorageSource = direct.StorageSource
+	}
+	cell.FallbackReason = exec.FallbackReason
+	if cell.FallbackReason == "" {
+		cell.FallbackReason = direct.FallbackReason
+	}
+	metadataHits := exec.MetadataHits
+	if metadataHits == 0 {
+		metadataHits = direct.MetadataHits
+	}
+	cell.CellLabel = columnStoreJSONBenchActualCellLabel(planLabel, cell.ExecutionMode, cell.StorageSource, metadataHits)
+	cell.MetadataDataScanPath = columnStoreJSONBenchActualScanPath(planLabel, cell.StorageSource, metadataHits)
+	cell.PreparedSetupDurationMS = durationMS(exec.SetupDuration)
+	cell.HotRunDurationMS = durationMS(exec.HotRunDuration)
 	cell.RowCount = direct.Rows
 	cell.RawHash = direct.RawHash
 	cell.ResultHash = 0
