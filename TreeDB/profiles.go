@@ -239,13 +239,13 @@ func OptionsFor(profile Profile, dir string) Options {
 // ApplyProfile panics for unknown profiles so misspelled programmatic profile
 // tokens cannot silently select bare default options.
 func ApplyProfile(opts *Options, profile Profile) {
-	if opts == nil {
-		return
-	}
-
 	normalized, ok := NormalizeProfile(profile)
 	if !ok {
 		panic(fmt.Sprintf("treedb: unsupported profile %q", profile))
+	}
+
+	if opts == nil {
+		return
 	}
 
 	switch normalized {

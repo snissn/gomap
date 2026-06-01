@@ -31,6 +31,15 @@ func TestApplyProfile_UnknownProfilePanics(t *testing.T) {
 	ApplyProfile(&opts, Profile("not_a_profile"))
 }
 
+func TestApplyProfile_UnknownProfilePanicsWithNilOptions(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("ApplyProfile accepted unknown profile with nil options, want panic")
+		}
+	}()
+	ApplyProfile(nil, Profile("not_a_profile"))
+}
+
 func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileFast)
