@@ -359,6 +359,9 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexed(plan *columnV
 	if v == nil || !v.ready() || len(query) != v.dims || len(ordinals) == 0 || scratch == nil {
 		return dst, false, nil
 	}
+	if got, ok, err := v.scoreOrdinalsIndexedSinglePart(plan, query, queryInvNorm, ordinals, dst, scratch, stats); ok || err != nil {
+		return got, ok, err
+	}
 	if cap(dst) < len(ordinals) {
 		dst = make([]float64, len(ordinals))
 	} else {
@@ -444,11 +447,119 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexed(plan *columnV
 		stats.ScoreBatchOptimizedCalls += optimizedCalls
 		stats.ScoreBatchScalarFallbackCalls += scalarFallbackCalls
 		v.recordScoreStats(stats, plan, len(ordinals))
-		for _, ordinal := range ordinals {
-			v.recordMappingStats(stats, ordinal)
-		}
+		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, true, nil
+}
+
+func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(plan *columnVectorGraphSearchPlan, query []float32, queryInvNorm float32, ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, bool, error) {
+	if v == nil || !v.ready() || v.vector.singlePart == nil || len(query) != v.dims || len(ordinals) == 0 || scratch == nil {
+		return dst, false, nil
+	}
+	part := v.vector.singlePart
+	if part == nil || part.handle == nil || part.handle.Released() || part.rows < 0 || v.dims <= 0 || part.rows > maxCollectionInt/v.dims || len(part.values) != part.rows*v.dims {
+		return dst, false, nil
+	}
+	if cap(dst) < len(ordinals) {
+		dst = make([]float64, len(ordinals))
+	} else {
+		dst = dst[:len(ordinals)]
+	}
+	rowIndexByOrdinal := v.vector.rowIndexByOrdinal
+	if !vectorops.DotFloat32BatchOptimizedAvailable() {
+		for i, ordinal := range ordinals {
+			row, ok := v.singlePartRowForOrdinal(ordinal, rowIndexByOrdinal, part)
+			if !ok || ordinal >= len(v.norm.values) {
+				return dst, false, nil
+			}
+			start := row * v.dims
+			vector := part.values[start : start+v.dims]
+			score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, float64(vectorDotProductFloat32(query, vector)), vector, stats)
+			if err != nil {
+				return dst, true, err
+			}
+			dst[i] = score
+		}
+		if stats != nil {
+			recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
+			v.recordScoreStats(stats, plan, len(ordinals))
+			v.recordMappingStatsCount(stats, len(ordinals))
+		}
+		return dst, true, nil
+	}
+
+	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(ordinals))
+	rowIDs := scratch.scoreTileRowIDs[:len(ordinals)]
+	for i, ordinal := range ordinals {
+		row, ok := v.singlePartRowForOrdinal(ordinal, rowIndexByOrdinal, part)
+		if !ok || ordinal >= len(v.norm.values) || uint64(row) > uint64(^uint32(0)) {
+			return dst, false, nil
+		}
+		rowIDs[i] = uint32(row)
+	}
+	scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(ordinals))
+	dots := scratch.scoreTileDots[:len(ordinals)]
+	status := vectorops.DotFloat32Indexed(dots, part.values, query, rowIDs, v.dims)
+	if status.Invalid || status.Rows != len(ordinals) {
+		return dst, false, nil
+	}
+	for i, ordinal := range ordinals {
+		row := int(rowIDs[i])
+		start := row * v.dims
+		vector := part.values[start : start+v.dims]
+		score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, float64(dots[i]), vector, stats)
+		if err != nil {
+			return dst, true, err
+		}
+		dst[i] = score
+	}
+	if stats != nil {
+		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, false)
+		if status.Optimized {
+			stats.ScoreBatchOptimizedCalls++
+		} else {
+			stats.ScoreBatchScalarFallbackCalls++
+		}
+		v.recordScoreStats(stats, plan, len(ordinals))
+		v.recordMappingStatsCount(stats, len(ordinals))
+	}
+	return dst, true, nil
+}
+
+func (v *columnVectorGraphPreparedSearchView) singlePartRowForOrdinal(ordinal int, rowIndexByOrdinal []uint32, part *columnVectorGraphTypedColumnVectorPart) (int, bool) {
+	if v == nil || part == nil || ordinal < 0 || ordinal >= v.rows {
+		return 0, false
+	}
+	row := ordinal
+	if rowIndexByOrdinal != nil {
+		if ordinal >= len(rowIndexByOrdinal) {
+			return 0, false
+		}
+		row = int(rowIndexByOrdinal[ordinal])
+	}
+	if row < 0 || row >= part.rows {
+		return 0, false
+	}
+	start := row * v.dims
+	end := start + v.dims
+	if start < 0 || end < start || end > len(part.values) {
+		return 0, false
+	}
+	return row, true
+}
+
+func (v *columnVectorGraphPreparedSearchView) scorePreparedDot(query []float32, queryInvNorm float32, ordinal int, dot float64, vector []float32, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if math.IsInf(dot, 0) || math.IsNaN(dot) {
+		if stats != nil {
+			stats.ScoreFloat64Fallbacks++
+		}
+		dot = columnVectorGraphNativeDotProductFloat64(query, vector)
+	}
+	score := dot * float64(queryInvNorm) * float64(v.norm.values[ordinal])
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d cosine score is not finite", ordinal)
+	}
+	return score, nil
 }
 
 func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVectorGraphNativeSearchStats, plan *columnVectorGraphSearchPlan, count int) {
@@ -482,6 +593,17 @@ func (v *columnVectorGraphPreparedSearchView) recordMappingStats(stats *columnVe
 		return
 	}
 	stats.VectorPreparedRowRefMappings++
+}
+
+func (v *columnVectorGraphPreparedSearchView) recordMappingStatsCount(stats *columnVectorGraphNativeSearchStats, count int) {
+	if stats == nil || count <= 0 {
+		return
+	}
+	if v.vectorIdentityMapping {
+		stats.VectorPreparedIdentityMappings += uint64(count)
+		return
+	}
+	stats.VectorPreparedRowRefMappings += uint64(count)
 }
 
 func (v *columnVectorGraphPreparedSearchView) maxAdjacencyLayerForOrdinal(ordinal int) (int, columnVectorGraphAdjacencySourceCounterSnapshot, error) {

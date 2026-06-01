@@ -416,12 +416,48 @@ Run context: macOS 26.2, Apple M3, 8 logical CPUs, 16 GiB memory,
   indexed-scoring ticket should expect graph-order/gathered batches rather than
   long contiguous row runs.
 
-Follow-up recommendation: keep #2035 open as not performance-satisfied. Use this
-#1979 evidence to prioritize #1980 frontier/top-k and already-visited handling
-for control-flow overhead, and use a separate narrow indexed-scoring ticket if
-exact-mode gathered score batching becomes a goal. #1977 normalized-vector
-storage remains a separate scoring/storage-format follow-up and is not
-implemented here.
+#1979 follow-up recommendation: keep #2035 open as not performance-satisfied.
+Use this #1979 evidence to prioritize #1980 frontier/top-k and already-visited
+handling for control-flow overhead, and use a separate narrow indexed-scoring
+ticket if exact-mode gathered score batching becomes a goal. #1977
+normalized-vector storage remains a separate scoring/storage-format follow-up
+and is not implemented here.
+
+## #2098 exact-mode gathered scoring evaluation
+
+#2098 optimized the opt-in prepared typed-column indexed scoring path for the
+common single-part base-vector view. On fallback-only batch backends, the
+indexed path now avoids repeated ordinal-location passes and the extra
+`DotFloat32Indexed` wrapper validation while preserving the same gathered score
+batch counters. This does not change default scoring mode, traversal/frontier
+semantics, `ef_search`, `topK`, fixture topology, result ordering, or persistent
+formats.
+
+Command used for the local before/after #2098 evidence run:
+
+```sh
+GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphSearchBatchability1979/(ef_search_128|exact)/score=(scalar|indexed)$' \
+  -benchmem -benchtime=1s -count=3
+```
+
+Median rows on macOS/Apple M3, `go version go1.25.5 darwin/arm64`:
+
+| Search mode | Score mode | Before #2098 ns/op | After #2098 ns/op | B/op | allocs/op | Counter summary |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `ef_search=128` | `scalar` | 9,275 | 9,279 | 0 | 0 | unchanged scalar singleton scoring: `score_batch_calls=128`, `score_batch_singletons=128`, `visited_edges=612` |
+| `ef_search=128` | `indexed` | 11,775 | 7,033 | 0 | 0 | same work and fallback-free sources; `score_batch_calls=25`, `score_batch_fallback=25`, `score_batch_max_tile_size=16`, `visited_edges=612` |
+| `exact` (`ef_search=8192`) | `scalar` | 1,086,851 | 1,148,337 | 0 | 0 | unchanged scalar singleton scoring: `score_batch_calls=8192`, `visited_edges=100748`, `exact_order_observations=8192` |
+| `exact` (`ef_search=8192`) | `indexed` | 1,238,033 | 963,815 | 0 | 0 | same exact work and fallback-free sources; `score_batch_calls=1797`, `score_batch_fallback=1797`, `score_batch_max_tile_size=16`, `exact_order_backward_jumps=5977` |
+
+#2098 interpretation: exact-mode gathered/indexed scoring is now a measured win
+for the prepared single-part benchmark hook and remains exactly equivalent to
+scalar/default results in focused fixed-fixture tests, including tie-order
+coverage. Keep indexed scoring non-default until #2035 promotion work runs the
+broader truth-matrix/public-search matrix and decides whether a runtime default
+change is warranted. #1981 wavefront traversal and #1977 normalized-vector
+storage remain separate evidence-gated follow-ups.
 
 ## Interpretation rules
 
