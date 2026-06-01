@@ -14567,6 +14567,71 @@ func TestCollectionUpdateBSONSetBatchFlushesStaleNoIndexBufferedInsert(t *testin
 	}
 }
 
+func TestCollectionUpdateBatchGenericFlushesNoIndexBufferedInsertBeforeCallback(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create users collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open users collection: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})},
+	); err != nil {
+		t.Fatalf("insert buffered BSON document: %v", err)
+	}
+
+	var callbackCalls atomic.Int32
+	setCity := setBSONField("city", "sea")
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			callbackCalls.Add(1)
+			return setCity(current)
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want batched", batched, results)
+	}
+	if got := callbackCalls.Load(); got != 1 {
+		t.Fatalf("callback calls=%d want 1", got)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq+2 {
+		t.Fatalf("generic update advanced commit seq by %d, want buffered flush plus update publish", after.CommitSeq-before.CommitSeq)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated BSON document: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+}
+
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBuffersStaleNonOverlappingPrimaryOnlyDirectPlan(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),

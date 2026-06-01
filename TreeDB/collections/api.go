@@ -14101,7 +14101,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 
 func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMode, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
 	commandWALBufferedMode := c.commandWALActive(commandWALIntent) && commandWALIntent == nil && mode != updateBatchModeAny
-	if (!c.commandWALActive(commandWALIntent) || commandWALBufferedMode) && (c.shouldPlanUpdateBatchWithBufferedWrites(mode) || commandWALBufferedMode) {
+	if (!c.commandWALActive(commandWALIntent) || commandWALBufferedMode) && (c.shouldPlanUpdateBatchWithBufferedWrites(mode, items) || commandWALBufferedMode) {
 		useBufferedRead := true
 		bufferedReadReplans := 0
 		for {
@@ -14396,7 +14396,24 @@ func (c *Collection) withMutationLock(fn func() error) error {
 	return fn()
 }
 
-func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMode) bool {
+func updateBatchCanStageDirectNoIndexTableUpdate(c *Collection, domain *collectionWriteDomain, mode updateBatchMode, items []updateBatchItem) bool {
+	if c == nil || domain == nil || mode != updateBatchModeNoSecondaryUniqueIndexChanges {
+		return false
+	}
+	if !c.canBufferDirectUpdateAck() || !updateBatchItemsAllHaveBSONSet(items) {
+		return false
+	}
+	meta := c.meta
+	if domain.loaded {
+		meta = domain.meta
+	}
+	if len(meta.Indexes) != 0 || columnStoreNeedsRetainedPayloadTransform(meta) {
+		return false
+	}
+	return isBSONDocumentFormat(normalizedDocumentFormat(meta.Options.DocumentFormat))
+}
+
+func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMode, items []updateBatchItem) bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
@@ -14406,7 +14423,16 @@ func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMod
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	return domain.count > 0 && hasBufferedPrimaryWritesLocked(domain, c.meta.Name)
+	if domain.count == 0 {
+		return false
+	}
+	if hasBufferedIndexedPendingWrites(domain) {
+		return true
+	}
+	if hasBufferedNoIndexTableWritesLocked(domain) {
+		return updateBatchCanStageDirectNoIndexTableUpdate(c, domain, mode, items)
+	}
+	return hasBufferedPrimaryWritesLocked(domain, c.meta.Name)
 }
 
 func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64) bool {
