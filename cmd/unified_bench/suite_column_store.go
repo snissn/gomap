@@ -1725,14 +1725,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	if workers <= 0 {
 		workers = 1
 	}
-	scanDuration := elapsed
-	if diag.ScanNanos > 0 {
-		scanDuration = time.Duration(diag.ScanNanos)
-	}
-	reduceDuration := time.Duration(0)
-	if diag.ReduceNanos > 0 {
-		reduceDuration = time.Duration(diag.ReduceNanos)
-	}
+	scanDuration, reduceDuration, resultShapeDuration := columnStorePhaseDurations(elapsed, diag)
 	return columnStoreQueryExecution{
 		ProductionHash:         productionHash,
 		ProductionHashKnown:    true,
@@ -1767,10 +1760,26 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		HotRunDuration:         elapsed,
 		ScanDuration:           scanDuration,
 		ReduceDuration:         reduceDuration,
-		AdapterDuration:        time.Duration(diag.ResultShapeNanos),
-		ResultShapeDuration:    time.Duration(diag.ResultShapeNanos),
+		AdapterDuration:        resultShapeDuration,
+		ResultShapeDuration:    resultShapeDuration,
 		ParityHashDuration:     parityHashElapsed,
 	}, nil
+}
+
+func columnStorePhaseDurations(total time.Duration, diag collections.ColumnPhysicalQueryDiagnostics) (time.Duration, time.Duration, time.Duration) {
+	reduceDuration := time.Duration(0)
+	if diag.ReduceNanos > 0 {
+		reduceDuration = time.Duration(diag.ReduceNanos)
+	}
+	resultShapeDuration := time.Duration(0)
+	if diag.ResultShapeNanos > 0 {
+		resultShapeDuration = time.Duration(diag.ResultShapeNanos)
+	}
+	scanDuration := total - reduceDuration - resultShapeDuration
+	if scanDuration < 0 {
+		scanDuration = 0
+	}
+	return scanDuration, reduceDuration, resultShapeDuration
 }
 
 func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collection, queryName string, planKind collections.ColumnQueryPlanKind, assetReadIntegrity collections.ColumnAssetReadIntegrity) (columnStoreQueryExecution, error) {
@@ -1808,14 +1817,7 @@ func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collec
 	if workers <= 0 {
 		workers = 1
 	}
-	scanDuration := hotRunElapsed
-	if diag.ScanNanos > 0 {
-		scanDuration = time.Duration(diag.ScanNanos)
-	}
-	reduceDuration := time.Duration(0)
-	if diag.ReduceNanos > 0 {
-		reduceDuration = time.Duration(diag.ReduceNanos)
-	}
+	scanDuration, reduceDuration, resultShapeDuration := columnStorePhaseDurations(hotRunElapsed, diag)
 	return columnStoreQueryExecution{
 		ProductionHash:         productionHash,
 		ProductionHashKnown:    true,
@@ -1851,8 +1853,8 @@ func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collec
 		HotRunDuration:         hotRunElapsed,
 		ScanDuration:           scanDuration,
 		ReduceDuration:         reduceDuration,
-		AdapterDuration:        time.Duration(diag.ResultShapeNanos),
-		ResultShapeDuration:    time.Duration(diag.ResultShapeNanos),
+		AdapterDuration:        resultShapeDuration,
+		ResultShapeDuration:    resultShapeDuration,
 		ParityHashDuration:     parityHashElapsed,
 	}, nil
 }

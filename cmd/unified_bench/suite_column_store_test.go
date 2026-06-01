@@ -1928,6 +1928,35 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 }
 
+func TestColumnStorePhaseDurationsUsesMeasuredHotRun1955(t *testing.T) {
+	diag := collections.ColumnPhysicalQueryDiagnostics{
+		ScanNanos:        int64(9 * time.Millisecond),
+		ReduceNanos:      int64(2 * time.Millisecond),
+		ResultShapeNanos: int64(3 * time.Millisecond),
+	}
+	scan, reduce, resultShape := columnStorePhaseDurations(10*time.Millisecond, diag)
+	if got, want := scan, 5*time.Millisecond; got != want {
+		t.Fatalf("scan duration=%v want %v", got, want)
+	}
+	if got, want := reduce, 2*time.Millisecond; got != want {
+		t.Fatalf("reduce duration=%v want %v", got, want)
+	}
+	if got, want := resultShape, 3*time.Millisecond; got != want {
+		t.Fatalf("result shape duration=%v want %v", got, want)
+	}
+
+	scan, reduce, resultShape = columnStorePhaseDurations(4*time.Millisecond, diag)
+	if scan != 0 {
+		t.Fatalf("scan duration must clamp at zero when subphases exceed total: %v", scan)
+	}
+	if got, want := reduce, 2*time.Millisecond; got != want {
+		t.Fatalf("reduce duration=%v want %v", got, want)
+	}
+	if got, want := resultShape, 3*time.Millisecond; got != want {
+		t.Fatalf("result shape duration=%v want %v", got, want)
+	}
+}
+
 func TestColumnStoreJSONBenchUnavailablePreparedCellDoesNotClaimPreparedHash1955(t *testing.T) {
 	direct := columnStoreQueryMetric{
 		Name:           columnStoreQueryQ4B,
