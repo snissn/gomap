@@ -8,7 +8,9 @@ OUT_DIR="${OUT_DIR:-$(mktemp -d /tmp/gomap_collections_report_XXXXXX)}"
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertProvidedID|CollectionInsertBatchProvidedID|CollectionGetByID|CollectionGetByIDParallel|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionCreateIndexBackfillExistingDocs|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)}"
 COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-}"
-BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-command_wal_relaxed}"
+# The default regex includes create-index backfill DDL coverage, which the
+# public command-WAL collection path does not support yet.
+BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-bench}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 DOCUMENT_FORMAT="${TREEDB_COLLECTION_DOCUMENT_FORMAT:-json}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
@@ -197,9 +199,9 @@ cat >"$OUT_DIR/README.md" <<EOF
 - benchmark count: \`$COUNT\`
 - go test tags: \`${GO_TEST_TAGS:-none}\`
 $ARTIFACT_LINES
-- command-WAL relaxed override: \`TREEDB_COLLECTION_BENCH_ENGINE=command_wal_relaxed scripts/bench_collections_report.sh\`
-- command-WAL durable override: \`TREEDB_COLLECTION_BENCH_ENGINE=command_wal_durable scripts/bench_collections_report.sh\`
-- benchmark-only no-WAL ceiling override: \`TREEDB_COLLECTION_BENCH_ENGINE=bench scripts/bench_collections_report.sh\`
+- benchmark-only no-WAL default: \`TREEDB_COLLECTION_BENCH_ENGINE=bench scripts/bench_collections_report.sh\`
+- command-WAL relaxed override: \`TREEDB_COLLECTION_BENCH_ENGINE=command_wal_relaxed BENCH_REGEX='Benchmark(CollectionInsertProvidedID|CollectionInsertBatchProvidedID|CollectionGetByID|CollectionGetByIDParallel|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)' scripts/bench_collections_report.sh\`
+- command-WAL durable override: \`TREEDB_COLLECTION_BENCH_ENGINE=command_wal_durable BENCH_REGEX='Benchmark(CollectionInsertProvidedID|CollectionInsertBatchProvidedID|CollectionGetByID|CollectionGetByIDParallel|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)' scripts/bench_collections_report.sh\`
 - benchmark-only no-WAL storage-control override: \`TREEDB_COLLECTION_BENCH_ENGINE=bench TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - data-root pager-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`

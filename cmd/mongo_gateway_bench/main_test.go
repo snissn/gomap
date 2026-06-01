@@ -2610,7 +2610,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		Database:                               "bench",
 		Collection:                             "docs",
 		Documents:                              1,
-		TreeDBProfile:                          string(treedb.ProfileBench),
+		TreeDBProfile:                          string(treedb.ProfileCommandWALRelaxed),
 		TreeDBCommandWAL:                       true,
 		TreeDBDocumentFormat:                   "bson",
 		TreeDBDataRootStorage:                  "compressed",
