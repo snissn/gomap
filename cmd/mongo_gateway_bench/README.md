@@ -321,8 +321,9 @@ PROFILE=true scripts/mongo_gateway_ycsb_attribution.sh
 
 The bundle contains:
 
-- `summary.md` and `summary.tsv`: per-client load throughput, sampled ns/op,
-  latency percentiles, producer count, and raw result paths.
+- `summary.md` and `summary.tsv`: per-client throughput for every enabled
+  phase, sampled ns/op, latency percentiles, producer count, and raw result
+  paths.
 - `index_<n>/<client_mode>/result.json`: unmodified
   `mongo_gateway_bench -format json` output for each cell.
 - `index_<n>/<client_mode>/profiles/`: per-phase pprof artifacts and
@@ -334,6 +335,12 @@ Useful focused overrides:
 - `DOCUMENTS=1000 CLIENT_MODES="driver direct" INDEXES_LIST=0` for a smoke run.
 - `CLIENT_MODES="driver raw-wire-tcp native-wire-tcp direct"` to reproduce the
   standard attribution rows.
+- `DOCUMENT_SHAPE=ycsb POINT_READ_PROJECTION=ycsb INDEXES_LIST=0
+  CLIENT_MODES="driver raw-wire-tcp direct" CONCURRENT_READERS=16
+  CONCURRENT_READS=100000 READS=0 RANGE_READS=0` to attribute the exact
+  `go-ycsb mongodb` point-read shape: `_id` lookup, projection of
+  `field0` through `field9`, `_id` excluded, and decode into
+  `map[string][]byte` on the driver path.
 - `PROFILE=true PROFILE_MODES="driver raw-wire-tcp"` to capture gateway and raw
   wire CPU evidence without profiling every cell.
 - `READS`, `UPDATES`, `CONCURRENT_READERS`, and `CONCURRENT_WRITERS` can enable
