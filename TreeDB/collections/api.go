@@ -4285,6 +4285,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.primaryRoot = rootIDs[0]
 	domain.table = newCollectionRunTable(0)
 	domain.count = 0
+	domain.bufferedBytes = 0
 	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -6703,6 +6704,10 @@ func hasPendingIndexedPrimaryOverlay(domain *collectionWriteDomain) bool {
 	return domain != nil &&
 		(hasIndexedFlushUnitPrimaryOverlay(domain.indexedFlushUnits) ||
 			hasIndexedFlushUnitPrimaryOverlay(domain.indexedPublishingUnits))
+}
+
+func hasBufferedNoIndexTableWritesLocked(domain *collectionWriteDomain) bool {
+	return domain != nil && domain.table != nil && domain.table.Len() > 0
 }
 
 func hasBufferedIndexedPendingWrites(domain *collectionWriteDomain) bool {
@@ -14401,11 +14406,11 @@ func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMod
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	return domain.count > 0 && hasBufferedIndexedPendingWrites(domain)
+	return domain.count > 0 && hasBufferedPrimaryWritesLocked(domain, c.meta.Name)
 }
 
 func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64) bool {
-	if domain == nil || domain.count == 0 || !hasBufferedIndexedPendingWrites(domain) {
+	if domain == nil || domain.count == 0 || !hasBufferedPrimaryWritesLocked(domain, meta.Name) {
 		return false
 	}
 	if !domain.loaded || domain.catalog == nil {
@@ -14607,6 +14612,31 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 	return entries, buffer, nil
 }
 
+func fillUpdateBatchBufferedPrimaryEntriesFromTable(entries []updateBatchBufferedEntry, buffer *updateBatchBufferedEntryBuffer, table memtable.Table, items []updateBatchItem, missing int) int {
+	if table == nil || missing <= 0 {
+		return missing
+	}
+	for i, item := range items {
+		if entries[i].found {
+			continue
+		}
+		value, _, flags, found := table.GetEntry(item.DocumentID)
+		if !found {
+			continue
+		}
+		entries[i] = updateBatchBufferedEntry{
+			value: buffer.copyValue(value),
+			flags: flags,
+			found: true,
+		}
+		missing--
+		if missing <= 0 {
+			break
+		}
+	}
+	return missing
+}
+
 func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDomain, collectionName string, items []updateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
 	entries, buffer := getUpdateBatchBufferedEntries(len(items))
 	if domain == nil || len(items) == 0 {
@@ -14684,10 +14714,12 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 			}
 			missing--
 		}
+		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
 		return entries, buffer, nil
 	}
 	runs := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(collectionName))
 	if len(runs) == 0 {
+		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
 		return entries, buffer, nil
 	}
 	if len(runs) <= 1 || len(runs)*len(items) <= updateBatchBufferedPrimaryDirectProbeLimit {
@@ -14703,6 +14735,7 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 				}
 			}
 		}
+		fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, missing)
 		return entries, buffer, nil
 	}
 	targets := make(map[string]int, missing)
@@ -14737,6 +14770,7 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 		}
 		_ = it.Close()
 	}
+	fillUpdateBatchBufferedPrimaryEntriesFromTable(entries, buffer, domain.table, items, len(targets))
 	return entries, buffer, nil
 }
 
@@ -14801,7 +14835,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			writeGeneration: domain.writeGeneration,
 		}, templateRuns, false, false, false, nil
 	}
-	if domain.count > 0 && hasBufferedIndexedPendingWrites(domain) {
+	if domain.count > 0 && hasBufferedPrimaryWritesLocked(domain, meta.Name) {
 		return updateBatchBufferedRead{}, nil, true, false, false, nil
 	}
 	if updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot) {
@@ -15754,6 +15788,62 @@ func (c *Collection) stageDirectPrimaryOverlayLocked(domain *collectionWriteDoma
 	return true, nil
 }
 
+func (c *Collection) stageDirectNoIndexTableUpdateLocked(domain *collectionWriteDomain, plan *updateBatchPlan, modifiedCount int) (bool, error) {
+	if c == nil || domain == nil || plan == nil || plan.directBufferedUpdate == nil {
+		return false, nil
+	}
+	direct := plan.directBufferedUpdate
+	if len(plan.meta.Indexes) != 0 ||
+		len(direct.templateEntries) != 0 ||
+		len(direct.secondaryRootPlans) != 0 ||
+		!hasBufferedNoIndexTableWritesLocked(domain) ||
+		hasBufferedIndexedPendingWrites(domain) {
+		return false, nil
+	}
+	if direct.primaryRootName == "" || direct.primaryRootName != collectionPrimaryRootName(plan.meta.Name) {
+		return false, nil
+	}
+	baseRoot, ok := plan.baseRootIDs[direct.primaryRootName]
+	if !ok {
+		return false, fmt.Errorf("collections: UpdateBatch collection %q direct no-index table update missing base root for %q", plan.meta.Name, direct.primaryRootName)
+	}
+	if domain.primaryRoot != baseRoot {
+		return false, errConcurrentRootModification(plan.meta.Name, direct.primaryRootName)
+	}
+	policy, ok := directUpdatePrimaryRootPolicy(plan, direct.primaryRootName)
+	if ok {
+		domain.storagePolicy = policy
+	}
+	newEntries := 0
+	for _, entry := range direct.primaryEntries {
+		if _, _, _, found := domain.table.GetEntry(entry.key); !found {
+			newEntries++
+		}
+		domain.table.SetEntry(entry.key, entry.value, page.ValuePtr{}, entry.flags)
+	}
+	domain.loaded = true
+	domain.meta = plan.meta
+	domain.catalog = plan.catalog
+	domain.baseCommitSeq = plan.baseCommitSeq
+	domain.baseSystemRoot = plan.baseSystemRoot
+	if plan.catalog != nil {
+		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
+	}
+	domain.count = saturatingAddNonNegativeInt(domain.count, newEntries)
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
+	domain.indexedDeletesOnly = false
+	domain.writeGeneration++
+	domain.notePrimaryWriteEntriesLocked(direct.primaryEntries, domain.writeGeneration)
+	if modifiedCount > 0 {
+		domain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, false, collectionRootDeltaPlanStats{})
+	}
+	c.meta = plan.meta
+	plan.stats.BufferedBatches = 1
+	return true, nil
+}
+
 func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (buffered bool, err error) {
 	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.primaryEntries) == 0 {
 		return false, nil
@@ -15947,6 +16037,14 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	if err := appendCommandWALBeforeStage(); err != nil {
 		return false, err
+	}
+	if primaryOnlyDirectUpdate && commandWALStageIntent == nil && hasBufferedNoIndexTableWritesLocked(domain) && !hasBufferedIndexedPendingWrites(domain) {
+		tableAppendStart := updateBatchStatsNow(detailedStats)
+		buffered, err := c.stageDirectNoIndexTableUpdateLocked(domain, plan, modifiedCount)
+		tableAppendDuration := updateBatchStatsSince(detailedStats, tableAppendStart)
+		plan.stats.BufferStagePrimaryAppend += tableAppendDuration
+		plan.stats.BufferStageRootAppend += tableAppendDuration
+		return buffered, err
 	}
 	if canStageDirectPrimaryOverlay(plan, direct, primaryOnlyDirectUpdate, shouldAutoFlushAfterAdding || overlayWouldFlush) {
 		overlayAppendStart := updateBatchStatsNow(detailedStats)
@@ -18027,6 +18125,9 @@ func hasBufferedPrimaryRootRuns(domain *collectionWriteDomain, fallbackCollectio
 }
 
 func hasBufferedPrimaryWritesLocked(domain *collectionWriteDomain, fallbackCollectionName string) bool {
+	if hasBufferedNoIndexTableWritesLocked(domain) {
+		return true
+	}
 	if hasBufferedPrimaryOverlay(domain) {
 		return true
 	}

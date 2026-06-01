@@ -14407,6 +14407,166 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStalePrimary
 	}
 }
 
+func TestCollectionUpdateBSONSetBatchReadsNoIndexBufferedInsertWithoutFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}}),
+		},
+	); err != nil {
+		t.Fatalf("insert buffered BSON documents: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	bufferedCount := col.writeDomain.count
+	tableLen := 0
+	if col.writeDomain.table != nil {
+		tableLen = col.writeDomain.table.Len()
+	}
+	col.writeDomain.mu.RUnlock()
+	if bufferedCount != 2 || tableLen != 2 {
+		t.Fatalf("buffered count=%d tableLen=%d want 2/2", bufferedCount, tableLen)
+	}
+
+	results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Fields: []BSONSetField{{
+			Key:   "city",
+			Value: mustBSONRawValue(t, "sea"),
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want batched", batched, results)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered insert+update advanced commit seq by %d, want 0", afterUpdate.CommitSeq-before.CommitSeq)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated buffered BSON document: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+	col.writeDomain.mu.RLock()
+	bufferedCount = col.writeDomain.count
+	col.writeDomain.mu.RUnlock()
+	if bufferedCount != 2 {
+		t.Fatalf("after update buffered count=%d want 2", bufferedCount)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered insert+update: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+	doc, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flushed BSON document: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("flushed city=%q want sea", got)
+	}
+}
+
+func TestCollectionUpdateBSONSetBatchFlushesStaleNoIndexBufferedInsert(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create users collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open users collection: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})},
+	); err != nil {
+		t.Fatalf("insert buffered BSON document: %v", err)
+	}
+	beforeSchemaChange := d.State()
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "audit"}); err != nil {
+		t.Fatalf("create audit collection: %v", err)
+	}
+	afterSchemaChange := d.State()
+	if afterSchemaChange.SystemRootPageID == beforeSchemaChange.SystemRootPageID {
+		t.Fatalf("schema change did not advance system root: before=%d after=%d", beforeSchemaChange.SystemRootPageID, afterSchemaChange.SystemRootPageID)
+	}
+
+	results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Fields: []BSONSetField{{
+			Key:   "city",
+			Value: mustBSONRawValue(t, "sea"),
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want batched", batched, results)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row from flushed buffered insert", results)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq == afterSchemaChange.CommitSeq {
+		t.Fatalf("stale buffered insert was not flushed before update: commit seq stayed %d", afterUpdate.CommitSeq)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated BSON document: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+}
+
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBuffersStaleNonOverlappingPrimaryOnlyDirectPlan(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),
