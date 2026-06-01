@@ -1136,8 +1136,8 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse defaults: %v", err)
 	}
-	if cfg.TreeDBProfile != treedb.ProfileLegacyWALRelaxedFast {
-		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileLegacyWALRelaxedFast)
+	if cfg.TreeDBProfile != treedb.ProfileBench {
+		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileBench)
 	}
 	if cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=true want false by default")
@@ -1174,6 +1174,26 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	}
 	if cfg.InsertProducers != 1 {
 		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
+	}
+}
+
+func TestParseTreeDBProfileRejectsDeprecatedPublicNames(t *testing.T) {
+	if got, err := parseTreeDBProfile("command-wal-durable"); err != nil || got != treedb.ProfileCommandWALDurable {
+		t.Fatalf("parseTreeDBProfile command WAL durable = %q err=%v", got, err)
+	}
+	if got, err := parseTreeDBProfile(""); err != nil || got != treedb.ProfileBench {
+		t.Fatalf("parseTreeDBProfile empty = %q err=%v", got, err)
+	}
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := parseTreeDBProfile(raw)
+			if err == nil {
+				t.Fatal("parseTreeDBProfile succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+				t.Fatalf("error=%v, want profile help", err)
+			}
+		})
 	}
 }
 
@@ -1270,6 +1290,9 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if !cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=false want true")
 	}
+	if cfg.TreeDBProfile != treedb.ProfileCommandWALRelaxed {
+		t.Fatalf("TreeDBProfile=%q want command_wal_relaxed when -treedb-command-wal is supplied without -treedb-profile", cfg.TreeDBProfile)
+	}
 	if _, err := parseConfig([]string{"-target", "mongo", "-treedb-command-wal"}); err == nil || !strings.Contains(err.Error(), "treedb-command-wal is only supported with -target treedb") {
 		t.Fatalf("parse mongo command WAL error=%v, want target error", err)
 	}
@@ -1282,8 +1305,8 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-maintenance", treeDBMaintenanceNone}); err != nil {
 		t.Fatalf("parse command WAL none maintenance: %v", err)
 	}
-	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(treedb.ProfileDurable)}); err != nil {
-		t.Fatalf("parse durable command WAL config: %v", err)
+	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(treedb.ProfileDurable)}); err == nil || !strings.Contains(err.Error(), "allowed: "+treedb.ProfileFlagHelp) {
+		t.Fatalf("parse deprecated command WAL profile error=%v, want strict profile error", err)
 	}
 	cfg, err = parseConfig([]string{"-target", "treedb", "-treedb-profile", string(treedb.ProfileCommandWALDurable)})
 	if err != nil {
@@ -1292,7 +1315,7 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if !cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=false for command_wal_durable profile")
 	}
-	for _, profile := range []treedb.Profile{treedb.ProfileFast, treedb.ProfileNoWALFast, treedb.ProfileBench} {
+	for _, profile := range []treedb.Profile{treedb.ProfileBench} {
 		_, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(profile)})
 		if err == nil || !strings.Contains(err.Error(), "treedb-command-wal requires a WAL-on treedb-profile") {
 			t.Fatalf("parse command WAL profile %q error=%v, want WAL-on profile error", profile, err)
@@ -1637,20 +1660,12 @@ func TestProfileRecorderSkipsDisabledBlockAndMutexProfiles(t *testing.T) {
 	}
 }
 
-func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
+func TestTreeDBProfileSmokeBench(t *testing.T) {
 	if testing.Short() {
 		t.Skip("profile smoke benchmark skipped in short mode")
 	}
-	fast := runTreeDBProfileSmoke(t, treedb.ProfileFast)
-	walOnFast := runTreeDBProfileSmoke(t, treedb.ProfileWALOnFast)
-	ratio := fast / walOnFast
-	if ratio < 1 {
-		ratio = 1 / ratio
-	}
-	t.Logf("fast load_insert_many ops/sec=%.1f wal_on_fast ops/sec=%.1f max ratio=%.2fx", fast, walOnFast, ratio)
-	if ratio > 4.0 {
-		t.Fatalf("fast and wal_on_fast write smoke diverged by %.2fx; fast=%.1f wal_on_fast=%.1f", ratio, fast, walOnFast)
-	}
+	ops := runTreeDBProfileSmoke(t, treedb.ProfileBench)
+	t.Logf("bench load_insert_many ops/sec=%.1f", ops)
 }
 
 func TestTreeDBClientModeSmoke(t *testing.T) {

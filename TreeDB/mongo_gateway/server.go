@@ -146,6 +146,11 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	if cfg.dir == "" {
 		return cfg, errors.New("TreeDB root directory -dir is required")
 	}
+	profile, ok := treedb.ParsePublicProfile(cfg.profile, treedb.ProfileCommandWALDurable)
+	if !ok {
+		return cfg, fmt.Errorf("unsupported TreeDB profile %q; allowed: %s", cfg.profile, treedb.ProfileFlagHelp)
+	}
+	cfg.profile = string(profile)
 	if cfg.maxFindScanDocuments < 0 {
 		return cfg, errors.New("-max-find-scan-documents must be >= 0")
 	}

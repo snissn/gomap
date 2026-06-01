@@ -64,16 +64,16 @@ type Opened struct {
 	KV      *treedbadapter.DB
 }
 
-// ParseProfile parses the common downstream profile vocabulary and falls back
-// to fallback for empty or unknown values.
-func ParseProfile(raw string, fallback treedb.Profile) treedb.Profile {
+// ParseProfile parses the public downstream profile vocabulary. Empty input
+// falls back to fallback, but the fallback must also be a public profile.
+func ParseProfile(raw string, fallback treedb.Profile) (treedb.Profile, error) {
 	if fallback == "" {
 		fallback = treedb.ProfileCommandWALRelaxed
 	}
-	if profile, ok := treedb.ParseProfile(raw, fallback); ok {
-		return profile
+	if profile, ok := treedb.ParsePublicProfile(raw, fallback); ok {
+		return profile, nil
 	}
-	return fallback
+	return "", fmt.Errorf("unsupported TreeDB profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 }
 
 // ResolveOptions converts downstream wrapper defaults and standard TREEDB_*
@@ -104,7 +104,11 @@ func ResolveOptions(cfg OpenConfig) (treedb.Options, string, error) {
 	if profileEnvKey == "" {
 		profileEnvKey = EnvOpenProfile
 	}
-	profile := ParseProfile(os.Getenv(profileEnvKey), cfg.DefaultProfile)
+	rawProfile := os.Getenv(profileEnvKey)
+	profile, err := ParseProfile(rawProfile, cfg.DefaultProfile)
+	if err != nil {
+		return treedb.Options{}, "", fmt.Errorf("invalid %s=%q: %w", profileEnvKey, rawProfile, err)
+	}
 	opts := treedb.OptionsFor(profile, dbPath)
 
 	keepRecentEnvKey := cfg.KeepRecentEnvKey

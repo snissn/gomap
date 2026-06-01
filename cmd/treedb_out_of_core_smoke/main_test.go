@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func TestValidateSmokeRunRequiresShapeLabel(t *testing.T) {
@@ -26,6 +28,26 @@ func TestValidateSmokeRunRequiresShapeLabel(t *testing.T) {
 	}
 	if hasCheck(checks, "error", "invalid_shape_label") {
 		t.Fatalf("empty shape should not also report invalid_shape_label: %#v", checks)
+	}
+}
+
+func TestParseProfileRejectsDeprecatedProfileNames(t *testing.T) {
+	if got, err := parseProfile("bench"); err != nil || got != treedb.ProfileBench {
+		t.Fatalf("parseProfile bench = %q err=%v", got, err)
+	}
+	if got, err := parseProfile("production_wal_on_fast"); err != nil || got != treedb.ProfileLegacyWALRelaxedFast {
+		t.Fatalf("parseProfile production_wal_on_fast = %q err=%v", got, err)
+	}
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := parseProfile(raw)
+			if err == nil {
+				t.Fatal("parseProfile succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+				t.Fatalf("error=%v, want profile help", err)
+			}
+		})
 	}
 }
 

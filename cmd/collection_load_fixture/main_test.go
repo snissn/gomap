@@ -58,6 +58,26 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	}
 }
 
+func TestParseProfileRejectsDeprecatedProfileNames(t *testing.T) {
+	if got, err := parseProfile("command-wal-relaxed"); err != nil || got != treedb.ProfileCommandWALRelaxed {
+		t.Fatalf("parseProfile command WAL relaxed = %q err=%v", got, err)
+	}
+	if got, err := parseProfile("production_fast"); err != nil || got != treedb.ProfileNoWALFast {
+		t.Fatalf("parseProfile production_fast = %q err=%v", got, err)
+	}
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := parseProfile(raw)
+			if err == nil {
+				t.Fatal("parseProfile succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+				t.Fatalf("error=%v, want profile help", err)
+			}
+		})
+	}
+}
+
 func TestParseConfigPartialBufferedIndexedThresholdKeepsRootRunDefault(t *testing.T) {
 	cfg, err := parseConfig([]string{"-buffered-indexed-write-max-docs", "1234"}, io.Discard)
 	if err != nil {

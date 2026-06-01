@@ -402,9 +402,9 @@ func parseVectorIndexStrategy(raw string) (collections.VectorIndexStrategy, erro
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	profile, ok := treedb.ParseProfile(raw, treedb.ProfileBench)
+	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench)
 	if !ok {
-		return "", fmt.Errorf("unsupported -profile %q", raw)
+		return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 	}
 	return profile, nil
 }
