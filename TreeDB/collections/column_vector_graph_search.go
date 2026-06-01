@@ -1026,7 +1026,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	nextSeed := 0
 	for loopCounters.Candidates < candidateLimit {
-		candidate, ok := scratch.popFrontier(debugCounters)
+		var candidate columnVectorGraphSearchCandidate
+		var ok bool
+		if debugCounters != nil {
+			candidate, ok = scratch.popFrontierDebug(debugCounters)
+		} else {
+			candidate, ok = scratch.popFrontier()
+		}
 		if !ok {
 			seed, ok := columnVectorGraphNextCandidateSeed(nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
 			if !ok {
@@ -1460,8 +1466,13 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		ordinal: ordinal,
 		score:   score,
 	}
-	scratch.insertTop(topK, candidate, debugCounters)
-	scratch.pushFrontier(candidate, debugCounters)
+	if debugCounters != nil {
+		scratch.insertTopDebug(topK, candidate, debugCounters)
+		scratch.pushFrontierDebug(candidate, debugCounters)
+	} else {
+		scratch.insertTop(topK, candidate)
+		scratch.pushFrontier(candidate)
+	}
 	return nil
 }
 
@@ -1481,8 +1492,13 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 	for i, ordinal := range ordinals {
 		loopCounters.recordCandidate()
 		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: scores[i]}
-		scratch.insertTop(topK, candidate, debugCounters)
-		scratch.pushFrontier(candidate, debugCounters)
+		if debugCounters != nil {
+			scratch.insertTopDebug(topK, candidate, debugCounters)
+			scratch.pushFrontierDebug(candidate, debugCounters)
+		} else {
+			scratch.insertTop(topK, candidate)
+			scratch.pushFrontier(candidate)
+		}
 	}
 	return nil
 }
@@ -1833,23 +1849,20 @@ func (s *columnVectorGraphNativeSearchScratch) markVisited(ordinal int) bool {
 	return true
 }
 
-func (s *columnVectorGraphNativeSearchScratch) pushFrontier(candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
-	if debugCounters != nil && debugCounters.stats != nil {
-		debugCounters.stats.FrontierPushes++
-	}
+func (s *columnVectorGraphNativeSearchScratch) pushFrontier(candidate columnVectorGraphSearchCandidate) {
 	s.frontier = append(s.frontier, candidate)
-	s.frontierSiftUp(len(s.frontier)-1, debugCounters)
+	s.frontierSiftUp(len(s.frontier) - 1)
 }
 
-func (s *columnVectorGraphNativeSearchScratch) popFrontier(debugCounters *columnVectorGraphNativeSearchDebugCounters) (columnVectorGraphSearchCandidate, bool) {
+func (s *columnVectorGraphNativeSearchScratch) pushFrontierDebug(candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+	debugCounters.stats.FrontierPushes++
+	s.frontier = append(s.frontier, candidate)
+	s.frontierSiftUpDebug(len(s.frontier)-1, debugCounters)
+}
+
+func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphSearchCandidate, bool) {
 	if len(s.frontier) == 0 {
-		if debugCounters != nil && debugCounters.stats != nil {
-			debugCounters.stats.FrontierPopMisses++
-		}
 		return columnVectorGraphSearchCandidate{}, false
-	}
-	if debugCounters != nil && debugCounters.stats != nil {
-		debugCounters.stats.FrontierPops++
 	}
 	lastIdx := len(s.frontier) - 1
 	best := s.frontier[0]
@@ -1857,26 +1870,52 @@ func (s *columnVectorGraphNativeSearchScratch) popFrontier(debugCounters *column
 	s.frontier = s.frontier[:lastIdx]
 	if len(s.frontier) > 0 {
 		s.frontier[0] = last
-		s.frontierSiftDown(0, debugCounters)
+		s.frontierSiftDown(0)
 	}
 	return best, true
 }
 
-func (s *columnVectorGraphNativeSearchScratch) frontierSiftUp(idx int, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+func (s *columnVectorGraphNativeSearchScratch) popFrontierDebug(debugCounters *columnVectorGraphNativeSearchDebugCounters) (columnVectorGraphSearchCandidate, bool) {
+	if len(s.frontier) == 0 {
+		debugCounters.stats.FrontierPopMisses++
+		return columnVectorGraphSearchCandidate{}, false
+	}
+	debugCounters.stats.FrontierPops++
+	lastIdx := len(s.frontier) - 1
+	best := s.frontier[0]
+	last := s.frontier[lastIdx]
+	s.frontier = s.frontier[:lastIdx]
+	if len(s.frontier) > 0 {
+		s.frontier[0] = last
+		s.frontierSiftDownDebug(0, debugCounters)
+	}
+	return best, true
+}
+
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftUp(idx int) {
 	for idx > 0 {
 		parent := (idx - 1) / 2
 		if !columnVectorGraphSearchCandidateBetter(s.frontier[idx], s.frontier[parent]) {
 			return
-		}
-		if debugCounters != nil && debugCounters.stats != nil {
-			debugCounters.stats.FrontierSiftUpSteps++
 		}
 		s.frontier[idx], s.frontier[parent] = s.frontier[parent], s.frontier[idx]
 		idx = parent
 	}
 }
 
-func (s *columnVectorGraphNativeSearchScratch) frontierSiftDown(idx int, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftUpDebug(idx int, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+	for idx > 0 {
+		parent := (idx - 1) / 2
+		if !columnVectorGraphSearchCandidateBetter(s.frontier[idx], s.frontier[parent]) {
+			return
+		}
+		debugCounters.stats.FrontierSiftUpSteps++
+		s.frontier[idx], s.frontier[parent] = s.frontier[parent], s.frontier[idx]
+		idx = parent
+	}
+}
+
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftDown(idx int) {
 	for {
 		left := idx*2 + 1
 		if left >= len(s.frontier) {
@@ -1889,22 +1928,32 @@ func (s *columnVectorGraphNativeSearchScratch) frontierSiftDown(idx int, debugCo
 		if !columnVectorGraphSearchCandidateBetter(s.frontier[child], s.frontier[idx]) {
 			return
 		}
-		if debugCounters != nil && debugCounters.stats != nil {
-			debugCounters.stats.FrontierSiftDownSteps++
-		}
 		s.frontier[idx], s.frontier[child] = s.frontier[child], s.frontier[idx]
 		idx = child
 	}
 }
 
-func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
-	if debugCounters != nil && debugCounters.stats != nil {
-		debugCounters.stats.TopKInsertAttempts++
-	}
-	if limit <= 0 {
-		if debugCounters != nil && debugCounters.stats != nil {
-			debugCounters.stats.TopKInsertRejections++
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftDownDebug(idx int, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+	for {
+		left := idx*2 + 1
+		if left >= len(s.frontier) {
+			return
 		}
+		child := left
+		if right := left + 1; right < len(s.frontier) && columnVectorGraphSearchCandidateBetter(s.frontier[right], s.frontier[left]) {
+			child = right
+		}
+		if !columnVectorGraphSearchCandidateBetter(s.frontier[child], s.frontier[idx]) {
+			return
+		}
+		debugCounters.stats.FrontierSiftDownSteps++
+		s.frontier[idx], s.frontier[child] = s.frontier[child], s.frontier[idx]
+		idx = child
+	}
+}
+
+func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate columnVectorGraphSearchCandidate) {
+	if limit <= 0 {
 		return
 	}
 	pos := len(s.top)
@@ -1912,19 +1961,35 @@ func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate co
 		pos--
 	}
 	if pos >= limit {
-		if debugCounters != nil && debugCounters.stats != nil {
-			debugCounters.stats.TopKInsertRejections++
-		}
 		return
 	}
-	if debugCounters != nil && debugCounters.stats != nil {
-		debugCounters.stats.TopKInsertSuccesses++
-		shiftSteps := len(s.top) - pos
-		if len(s.top) >= limit && shiftSteps > 0 {
-			shiftSteps--
-		}
-		debugCounters.stats.TopKShiftSteps += uint64(shiftSteps)
+	if len(s.top) < limit {
+		s.top = append(s.top, columnVectorGraphSearchCandidate{})
 	}
+	copy(s.top[pos+1:], s.top[pos:len(s.top)-1])
+	s.top[pos] = candidate
+}
+
+func (s *columnVectorGraphNativeSearchScratch) insertTopDebug(limit int, candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+	debugCounters.stats.TopKInsertAttempts++
+	if limit <= 0 {
+		debugCounters.stats.TopKInsertRejections++
+		return
+	}
+	pos := len(s.top)
+	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, s.top[pos-1]) {
+		pos--
+	}
+	if pos >= limit {
+		debugCounters.stats.TopKInsertRejections++
+		return
+	}
+	debugCounters.stats.TopKInsertSuccesses++
+	shiftSteps := len(s.top) - pos
+	if len(s.top) >= limit && shiftSteps > 0 {
+		shiftSteps--
+	}
+	debugCounters.stats.TopKShiftSteps += uint64(shiftSteps)
 	if len(s.top) < limit {
 		s.top = append(s.top, columnVectorGraphSearchCandidate{})
 	}
