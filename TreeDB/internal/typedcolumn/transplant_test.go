@@ -426,6 +426,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1949 is the scoped production typed-column SortKey mark-pruning planner
 		// that consumes validated section marks without publishing a new data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "column_physical_sortkey_pruning.go")): {},
+		// #2118 is the scoped production physical-accounting reporter that
+		// reads validated typed-column part images for byte accounting only.
+		filepath.Clean(filepath.Join(collectionsDir, "column_store_physical_accounting.go")): {},
 	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -446,7 +449,7 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			if _, ok := allowedImports[filepath.Clean(path)]; ok {
 				continue
 			}
-			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views)", path)
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views, #2118 physical accounting)", path)
 		}
 		return nil
 	})
