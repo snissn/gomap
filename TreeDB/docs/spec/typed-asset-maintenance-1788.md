@@ -1,7 +1,9 @@
 # Typed Asset Maintenance Contract (#1788)
 
 Status: implementation note for issue #1788, the post-#1744/#1758 row+column
-copy-on-write maintenance pass.
+copy-on-write maintenance pass. The #1954 typed-column lifecycle reuse/state
+mapping and JSONBench report contract are documented in
+[`typed-column-lifecycle-1954.md`](typed-column-lifecycle-1954.md).
 
 TreeDB typed assets are immutable copy-on-write assets stored under the
 compatibility `column_assets` manager. Maintenance operates on asset refs and
@@ -19,7 +21,9 @@ Typed asset reachability includes all refs exposed by the column manifest view:
 - vector-index state refs recorded in `TVIS` vector-index state records;
 - legacy vector graph derived refs recorded in vector-graph manifest records;
 - explicit maintenance candidates;
-- pending-publish, prepared, and snapshot-pinned refs supplied by callers;
+- pending-publish, prepared, prepared-query, quarantine, and snapshot-pinned
+  refs supplied by callers or the shared lifecycle registry;
+- logical quarantine segment records;
 - active process-local `mappedresource` pins converted from typed-row and
   typed-column resource keys.
 
@@ -66,8 +70,9 @@ identity: kind, namespace, generation, part id, length, and checksum are
 unchanged while file id and offset may change.
 
 Maintenance never deletes or rewrites bytes protected by active handles,
-snapshots, pending/prepared state, or uncertain protection state. Releasing the
-handle or snapshot permits a later plan to classify the segment normally.
+snapshots, pending/prepared/prepared-query state, quarantine records, or
+uncertain protection state. Releasing the handle, snapshot, or lifecycle lease
+permits a later plan to classify the segment normally.
 
 ## Non-goals and boundaries
 
