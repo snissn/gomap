@@ -27,6 +27,8 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.Runs += src.Runs
 	dst.BufferedIndexedBatches += src.BufferedIndexedBatches
 	dst.BufferedIndexedBypassBatches += src.BufferedIndexedBypassBatches
+	dst.ValidationPreflightReused += src.ValidationPreflightReused
+	dst.ValidationPreflightRechecked += src.ValidationPreflightRechecked
 	dst.PrepareDocuments += src.PrepareDocuments
 	dst.IndexStateExtraction += src.IndexStateExtraction
 	dst.DuplicateDocumentPreflight += src.DuplicateDocumentPreflight
@@ -76,6 +78,12 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 		}
 		if stats.BufferedIndexedBypassBatches > 0 {
 			b.ReportMetric(float64(stats.BufferedIndexedBypassBatches), "buffered_indexed_bypass_batches")
+		}
+		if stats.ValidationPreflightReused > 0 {
+			b.ReportMetric(float64(stats.ValidationPreflightReused)/float64(batches), "validation_preflight_reused/batch")
+		}
+		if stats.ValidationPreflightRechecked > 0 {
+			b.ReportMetric(float64(stats.ValidationPreflightRechecked)/float64(batches), "validation_preflight_rechecked/batch")
 		}
 	}
 }

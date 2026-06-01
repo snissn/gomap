@@ -2128,6 +2128,8 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 		"treedb.collections.write_domain.overlay.active_indexed_flush_units",
 		"treedb.collections.write_domain.overlay.visible_depth",
 		"treedb.collections.write_domain.indexed_stage.batches_total",
+		"treedb.collections.write_domain.insert.validation_preflight_reused_total",
+		"treedb.collections.write_domain.insert.validation_preflight_rechecked_total",
 		"treedb.collections.write_domain.indexed_async_flush.scheduled_total",
 		"treedb.collections.write_domain.indexed_async_flush.wait_ns_total",
 		"treedb.collections.write_domain.mutation_lock.calls_total",
@@ -9388,7 +9390,16 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 		runs:        []collectionRootRun{{name: rootName}},
 	}
 	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
-	staleRootIDs := map[string]uint64{rootName: baseRootIDs[rootName] + 1}
+	baseRoot, ok := insertBatchBaseRootID(rootNames, baseRootIDs, rootName)
+	if !ok {
+		t.Fatalf("base root for %q not found", rootName)
+	}
+	staleRootIDs := append([]uint64(nil), baseRootIDs...)
+	for i, name := range rootNames {
+		if name == rootName {
+			staleRootIDs[i] = baseRoot + 1
+		}
+	}
 	validation := insertBatchValidationContext{
 		meta:        catalog.meta,
 		rootNames:   rootNames,
@@ -9403,7 +9414,7 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 	} else if !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
 		t.Fatalf("root mismatch err=%v missing collection/root context", err)
 	}
-	validation.baseRootIDs = map[string]uint64{}
+	validation.baseRootIDs = nil
 	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
 		if current != nil {
 			_ = current.Close()
@@ -9478,7 +9489,10 @@ func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *test
 	}
 	defer resetCollectionRunTables(plan.runs)
 	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
-	oldPrimaryRoot := baseRootIDs[collectionPrimaryRootName("users")]
+	oldPrimaryRoot, ok := insertBatchBaseRootID(rootNames, baseRootIDs, collectionPrimaryRootName("users"))
+	if !ok {
+		t.Fatal("planned insert missing primary root base id")
+	}
 
 	if _, err := col.InsertBatch([][]byte{[]byte("u3")}, [][]byte{[]byte(`{"city":"c"}`)}); err != nil {
 		t.Fatalf("insert disjoint concurrent row: %v", err)
@@ -9496,7 +9510,7 @@ func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *test
 	if currentPrimaryRoot == oldPrimaryRoot {
 		t.Fatal("test did not create primary root drift")
 	}
-	if got := baseRootIDs[collectionPrimaryRootName("users")]; got != currentPrimaryRoot {
+	if got, ok := insertBatchBaseRootID(rootNames, baseRootIDs, collectionPrimaryRootName("users")); !ok || got != currentPrimaryRoot {
 		t.Fatalf("rebased primary root=%d want %d", got, currentPrimaryRoot)
 	}
 }

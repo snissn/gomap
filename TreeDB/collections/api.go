@@ -426,6 +426,8 @@ type CollectionInsertStats struct {
 	Runs                         int
 	BufferedIndexedBatches       int
 	BufferedIndexedBypassBatches int
+	ValidationPreflightReused    int
+	ValidationPreflightRechecked int
 	PrepareDocuments             time.Duration
 	IndexStateExtraction         time.Duration
 	// DuplicateDocumentPreflight includes duplicate-ID detection and
@@ -603,80 +605,82 @@ func collectionUpdateCombineBucketIndex(value int) int {
 // append timings, and UpdateBatchBufferLockHold encloses other buffer-stage
 // work done while holding the write-domain mutex.
 type CollectionManagerStats struct {
-	Domains                        int
-	PendingDocuments               int
-	PendingBytes                   int64
-	PendingRootRuns                int
-	PendingIndexedFlushUnits       int
-	OverlayMutableDocuments        int
-	OverlayQueuedIndexedFlushUnits int
-	OverlayActiveIndexedFlushUnits int
-	OverlayVisibleDepth            int
-	IndexedAsyncFlushRunning       int
-	MutationLockCalls              uint64
-	MutationLockWait               time.Duration
-	MutationLockHold               time.Duration
-	IndexedStageBatches            uint64
-	IndexedStageDocs               uint64
-	IndexedStageBytes              uint64
-	IndexedStageRootRuns           uint64
-	IndexedAutoFlushes             uint64
-	IndexedAsyncFlushScheduled     uint64
-	IndexedAsyncFlushBackpressure  uint64
-	IndexedAsyncFlushWait          time.Duration
-	IndexedAsyncFlushErrors        uint64
-	IndexedFlushCalls              uint64
-	IndexedFlushErrors             uint64
-	IndexedFlushForcedDrains       uint64
-	IndexedFlushUnits              uint64
-	IndexedFlushDocs               uint64
-	IndexedFlushBytes              uint64
-	IndexedFlushRootRuns           uint64
-	IndexedFlushRoots              uint64
-	IndexedFlushDuration           time.Duration
-	IndexedFlushMaterialize        time.Duration
-	IndexedFlushPublish            time.Duration
-	RootDeltaPlanPrimaryRoots      uint64
-	RootDeltaPlanTemplateRoots     uint64
-	RootDeltaPlanIndexStateRoots   uint64
-	RootDeltaPlanSecondaryRoots    uint64
-	RootDeltaPlanEntries           uint64
-	RootDeltaPlanKeyBytes          uint64
-	RootDeltaPlanValueBytes        uint64
-	RootDeltaPlanTombstones        uint64
-	PrimaryOnlyUpdateCalls         uint64
-	PrimaryOnlyMatched             uint64
-	PrimaryOnlyModified            uint64
-	PrimaryOnlyBufferedCalls       uint64
-	PrimaryOnlyRootPublishes       uint64
-	PrimaryOnlyRootDeltaEntries    uint64
-	PrimaryOnlyRootDeltaKeyBytes   uint64
-	PrimaryOnlyRootDeltaValueBytes uint64
-	PrimaryOnlyCoalescedDocs       uint64
-	UpdateCombineRequests          uint64
-	UpdateCombineBatches           uint64
-	UpdateCombineBatchedRequests   uint64
-	UpdateCombineFallbackRequests  uint64
-	UpdateCombineQueueDepthMax     uint64
-	UpdateCombineInlineRequests    uint64
-	UpdateCombineEnqueue           time.Duration
-	UpdateCombineWait              time.Duration
-	UpdateCombineQueueWait         time.Duration
-	UpdateCombineDrain             time.Duration
-	UpdateCombineRun               time.Duration
-	UpdateCombineResultDelivery    time.Duration
-	UpdateCombineQueueDepthBuckets [CollectionUpdateCombineBucketCount]uint64
-	UpdateCombineBatchSizeBuckets  [CollectionUpdateCombineBucketCount]uint64
-	UpdateBatchCalls               uint64
-	UpdateBatchItems               uint64
-	UpdateBatchMatched             uint64
-	UpdateBatchModified            uint64
-	UpdateBatchRuns                uint64
-	UpdateBatchBufferedBatches     uint64
-	UpdateBatchCurrentRead         time.Duration
-	UpdateBatchCallback            time.Duration
-	UpdateBatchStructuredApply     time.Duration
-	UpdateBatchPrepareDocuments    time.Duration
+	Domains                            int
+	PendingDocuments                   int
+	PendingBytes                       int64
+	PendingRootRuns                    int
+	PendingIndexedFlushUnits           int
+	OverlayMutableDocuments            int
+	OverlayQueuedIndexedFlushUnits     int
+	OverlayActiveIndexedFlushUnits     int
+	OverlayVisibleDepth                int
+	IndexedAsyncFlushRunning           int
+	MutationLockCalls                  uint64
+	MutationLockWait                   time.Duration
+	MutationLockHold                   time.Duration
+	IndexedStageBatches                uint64
+	IndexedStageDocs                   uint64
+	IndexedStageBytes                  uint64
+	IndexedStageRootRuns               uint64
+	InsertValidationPreflightReused    uint64
+	InsertValidationPreflightRechecked uint64
+	IndexedAutoFlushes                 uint64
+	IndexedAsyncFlushScheduled         uint64
+	IndexedAsyncFlushBackpressure      uint64
+	IndexedAsyncFlushWait              time.Duration
+	IndexedAsyncFlushErrors            uint64
+	IndexedFlushCalls                  uint64
+	IndexedFlushErrors                 uint64
+	IndexedFlushForcedDrains           uint64
+	IndexedFlushUnits                  uint64
+	IndexedFlushDocs                   uint64
+	IndexedFlushBytes                  uint64
+	IndexedFlushRootRuns               uint64
+	IndexedFlushRoots                  uint64
+	IndexedFlushDuration               time.Duration
+	IndexedFlushMaterialize            time.Duration
+	IndexedFlushPublish                time.Duration
+	RootDeltaPlanPrimaryRoots          uint64
+	RootDeltaPlanTemplateRoots         uint64
+	RootDeltaPlanIndexStateRoots       uint64
+	RootDeltaPlanSecondaryRoots        uint64
+	RootDeltaPlanEntries               uint64
+	RootDeltaPlanKeyBytes              uint64
+	RootDeltaPlanValueBytes            uint64
+	RootDeltaPlanTombstones            uint64
+	PrimaryOnlyUpdateCalls             uint64
+	PrimaryOnlyMatched                 uint64
+	PrimaryOnlyModified                uint64
+	PrimaryOnlyBufferedCalls           uint64
+	PrimaryOnlyRootPublishes           uint64
+	PrimaryOnlyRootDeltaEntries        uint64
+	PrimaryOnlyRootDeltaKeyBytes       uint64
+	PrimaryOnlyRootDeltaValueBytes     uint64
+	PrimaryOnlyCoalescedDocs           uint64
+	UpdateCombineRequests              uint64
+	UpdateCombineBatches               uint64
+	UpdateCombineBatchedRequests       uint64
+	UpdateCombineFallbackRequests      uint64
+	UpdateCombineQueueDepthMax         uint64
+	UpdateCombineInlineRequests        uint64
+	UpdateCombineEnqueue               time.Duration
+	UpdateCombineWait                  time.Duration
+	UpdateCombineQueueWait             time.Duration
+	UpdateCombineDrain                 time.Duration
+	UpdateCombineRun                   time.Duration
+	UpdateCombineResultDelivery        time.Duration
+	UpdateCombineQueueDepthBuckets     [CollectionUpdateCombineBucketCount]uint64
+	UpdateCombineBatchSizeBuckets      [CollectionUpdateCombineBucketCount]uint64
+	UpdateBatchCalls                   uint64
+	UpdateBatchItems                   uint64
+	UpdateBatchMatched                 uint64
+	UpdateBatchModified                uint64
+	UpdateBatchRuns                    uint64
+	UpdateBatchBufferedBatches         uint64
+	UpdateBatchCurrentRead             time.Duration
+	UpdateBatchCallback                time.Duration
+	UpdateBatchStructuredApply         time.Duration
+	UpdateBatchPrepareDocuments        time.Duration
 	// UpdateBatchIndexStateExtract includes UpdateBatchOldIndexStateExtract
 	// and UpdateBatchNewIndexStateExtract; do not add all three together.
 	UpdateBatchIndexStateExtract    time.Duration
@@ -1080,6 +1084,8 @@ type collectionWriteDomain struct {
 	indexedStageDocs                   atomic.Uint64
 	indexedStageBytes                  atomic.Uint64
 	indexedStageRootRuns               atomic.Uint64
+	insertValidationPreflightReused    atomic.Uint64
+	insertValidationPreflightRechecked atomic.Uint64
 	indexedAutoFlushes                 atomic.Uint64
 	indexedAsyncFlushScheduled         atomic.Uint64
 	indexedAsyncFlushBackpressure      atomic.Uint64
@@ -1271,8 +1277,15 @@ func (c *Collection) setLastInsertStats(stats CollectionInsertStats) {
 	if c == nil {
 		return
 	}
+	c.setLastInsertStatsOwned(cloneCollectionInsertStats(stats))
+}
+
+func (c *Collection) setLastInsertStatsOwned(stats CollectionInsertStats) {
+	if c == nil {
+		return
+	}
 	c.insertStatsMu.Lock()
-	c.lastInsertStats = cloneCollectionInsertStats(stats)
+	c.lastInsertStats = stats
 	c.insertStatsMu.Unlock()
 }
 
@@ -1390,6 +1403,8 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_stage.docs_total"] = fmt.Sprintf("%d", stats.IndexedStageDocs)
 	out["treedb.collections.write_domain.indexed_stage.bytes_total"] = fmt.Sprintf("%d", stats.IndexedStageBytes)
 	out["treedb.collections.write_domain.indexed_stage.root_runs_total"] = fmt.Sprintf("%d", stats.IndexedStageRootRuns)
+	out["treedb.collections.write_domain.insert.validation_preflight_reused_total"] = fmt.Sprintf("%d", stats.InsertValidationPreflightReused)
+	out["treedb.collections.write_domain.insert.validation_preflight_rechecked_total"] = fmt.Sprintf("%d", stats.InsertValidationPreflightRechecked)
 	out["treedb.collections.write_domain.indexed_stage.auto_flushes_total"] = fmt.Sprintf("%d", stats.IndexedAutoFlushes)
 	out["treedb.collections.write_domain.indexed_async_flush.scheduled_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushScheduled)
 	out["treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushBackpressure)
@@ -1686,6 +1701,8 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedStageDocs += other.IndexedStageDocs
 	s.IndexedStageBytes += other.IndexedStageBytes
 	s.IndexedStageRootRuns += other.IndexedStageRootRuns
+	s.InsertValidationPreflightReused += other.InsertValidationPreflightReused
+	s.InsertValidationPreflightRechecked += other.InsertValidationPreflightRechecked
 	s.IndexedAutoFlushes += other.IndexedAutoFlushes
 	s.IndexedAsyncFlushScheduled += other.IndexedAsyncFlushScheduled
 	s.IndexedAsyncFlushBackpressure += other.IndexedAsyncFlushBackpressure
@@ -1825,6 +1842,8 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedStageDocs = domain.indexedStageDocs.Load()
 	stats.IndexedStageBytes = domain.indexedStageBytes.Load()
 	stats.IndexedStageRootRuns = domain.indexedStageRootRuns.Load()
+	stats.InsertValidationPreflightReused = domain.insertValidationPreflightReused.Load()
+	stats.InsertValidationPreflightRechecked = domain.insertValidationPreflightRechecked.Load()
 	stats.IndexedAutoFlushes = domain.indexedAutoFlushes.Load()
 	stats.IndexedAsyncFlushScheduled = domain.indexedAsyncFlushScheduled.Load()
 	stats.IndexedAsyncFlushBackpressure = domain.indexedAsyncFlushBackpressure.Load()
@@ -1985,6 +2004,17 @@ func (domain *collectionWriteDomain) observeMutationLock(wait, hold time.Duratio
 	domain.mutationLockCalls.Add(1)
 	domain.mutationLockWaitTotalNs.Add(durationToAtomicNs(wait))
 	domain.mutationLockHoldTotalNs.Add(durationToAtomicNs(hold))
+}
+
+func (domain *collectionWriteDomain) observeInsertValidationPreflight(rechecked bool) {
+	if domain == nil {
+		return
+	}
+	if rechecked {
+		domain.insertValidationPreflightRechecked.Add(1)
+		return
+	}
+	domain.insertValidationPreflightReused.Add(1)
 }
 
 func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpdateStats) {
@@ -4477,7 +4507,21 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	}
 	defer freezePreAppendTables()
 
-	rootTables := make(map[string]memtable.Table, len(direct.rootNames))
+	var rootTablesScratch [8]memtable.Table
+	rootTables := rootTablesScratch[:0]
+	if len(direct.rootNames) > len(rootTablesScratch) {
+		rootTables = make([]memtable.Table, len(direct.rootNames))
+	} else {
+		rootTables = rootTablesScratch[:len(direct.rootNames)]
+	}
+	rootTable := func(rootName string) memtable.Table {
+		for i, existing := range direct.rootNames {
+			if existing == rootName {
+				return rootTables[i]
+			}
+		}
+		return nil
+	}
 	actualRootRuns := 0
 	for i, rootName := range direct.rootNames {
 		baseRoot := catalog.rootID(rootName)
@@ -4492,13 +4536,13 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 		if table == nil {
 			return 0, fmt.Errorf("collections: InsertBatch collection %q failed to allocate direct root accumulator for %q", catalog.meta.Name, rootName)
 		}
-		rootTables[rootName] = table
+		rootTables[i] = table
 		if created {
 			actualRootRuns = saturatingAddNonNegativeInt(actualRootRuns, 1)
 		}
 	}
 	if len(direct.templateEntries) > 0 {
-		templateTable := rootTables[direct.templateRootName]
+		templateTable := rootTable(direct.templateRootName)
 		if templateTable == nil {
 			return 0, fmt.Errorf("collections: InsertBatch collection %q missing direct template root accumulator for %q", catalog.meta.Name, direct.templateRootName)
 		}
@@ -4511,7 +4555,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 		}
 	}
 	if len(direct.indexStateEntries) > 0 {
-		indexStateTable := rootTables[direct.indexStateRootName]
+		indexStateTable := rootTable(direct.indexStateRootName)
 		if indexStateTable == nil {
 			return 0, fmt.Errorf("collections: InsertBatch collection %q missing direct index-state root accumulator for %q", catalog.meta.Name, direct.indexStateRootName)
 		}
@@ -4523,7 +4567,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 			return 0, err
 		}
 	}
-	primaryTable := rootTables[direct.primaryRootName]
+	primaryTable := rootTable(direct.primaryRootName)
 	if primaryTable == nil {
 		return 0, fmt.Errorf("collections: InsertBatch collection %q missing direct primary root accumulator for %q", catalog.meta.Name, direct.primaryRootName)
 	}
@@ -4542,7 +4586,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 		addBufferedPrimaryRunIndexKeys(domain.primaryRunIndex, plan.primaryKeys, primaryTable)
 	}
 	for _, secondaryPlan := range direct.secondaryRootPlans {
-		table := rootTables[secondaryPlan.rootName]
+		table := rootTable(secondaryPlan.rootName)
 		if table == nil {
 			continue
 		}
@@ -8861,7 +8905,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	plan.stats.BufferedIndexedBatches = 1
 	if !insertBatchPlanHasRootWork(plan) {
 		closePlanningSnapshot()
-		c.setLastInsertStats(plan.stats.CollectionInsertStats)
+		c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
 		return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil, true
 	}
 	resultIDs, err := cloneInsertBatchResultIDs(plan.resultIDs, execOpts)
@@ -8908,7 +8952,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 		return nil, err, true
 	}
 	plan.stats.Publish += bufferFlushElapsed
-	c.setLastInsertStats(plan.stats.CollectionInsertStats)
+	c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
 	return resultIDs, nil, true
 }
 
@@ -9172,7 +9216,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	if !insertBatchPlanHasRootWork(plan) {
 		closePlanningSnapshot()
 		templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
-		c.setLastInsertStats(plan.stats.CollectionInsertStats)
+		c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
 		return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil
 	}
 
@@ -9198,7 +9242,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		plan.stats.Publish += bufferFlushElapsed
 		templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
-		c.setLastInsertStats(plan.stats.CollectionInsertStats)
+		c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
 		return resultIDs, nil
 	}
 	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
@@ -9265,15 +9309,19 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		resetCollectionRunTables(plan.runs)
 	}()
-	for _, run := range plan.runs {
+	for i, run := range plan.runs {
 		iter := run.table.NewIterator(nil, nil)
 		iterators = append(iterators, iter)
+		if i >= len(baseRootIDs) {
+			return nil, fmt.Errorf("collections: insert plan missing base root id collection=%q root=%q", meta.Name, run.name)
+		}
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
-			BaseRoot:      baseRootIDs[run.name],
+			BaseRoot:      baseRootIDs[i],
 			Iter:          iter,
 			StoragePolicy: run.storagePolicy,
 		})
 	}
+	baseRootIDMap := insertBatchBaseRootIDMap(rootNames, baseRootIDs)
 
 	publishStart := time.Now()
 	var newSystemRoot uint64
@@ -9288,7 +9336,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 				baseCommitSeq:    baseCommitSeq,
 				baseSystemRoot:   baseSystemRoot,
 				rootNames:        cloneColumnPublishRootNames(rootNames),
-				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDMap),
 				commandWALIntent: commandWALIntent,
 				operation:        ColumnPublishOperationInsert,
 				documents:        columnWriteDocumentsFromCommitLog(commandWALDocuments),
@@ -9301,7 +9349,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		publishRootNames = rootNames
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
 			})
 			return err
 		})
@@ -9309,7 +9357,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		publishMeta = meta
 		publishRootNames = rootNames
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
 		})
 	}
 	plan.stats.Publish = time.Since(publishStart)
@@ -9324,7 +9372,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
-	c.setLastInsertStats(plan.stats.CollectionInsertStats)
+	c.setLastInsertStatsOwned(plan.stats.CollectionInsertStats)
 	return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil
 }
 
@@ -9479,26 +9527,26 @@ func templateV1PlanningSnapshotNeedsRefresh(domain *collectionWriteDomain, snap 
 	return collectionWriteDomainSnapshotStale(domain, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
 }
 
-func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collectionCatalog) ([]string, map[string]uint64) {
+func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collectionCatalog) ([]string, []uint64) {
 	if plan == nil {
 		return nil, nil
 	}
 	if direct := plan.directBufferedInsert; direct != nil && len(direct.rootNames) > 0 {
 		rootNames := direct.rootNames
-		baseRootIDs := make(map[string]uint64, len(rootNames))
-		for _, rootName := range rootNames {
+		baseRootIDs := make([]uint64, len(rootNames))
+		for i, rootName := range rootNames {
 			if catalog != nil {
-				baseRootIDs[rootName] = catalog.rootID(rootName)
+				baseRootIDs[i] = catalog.rootID(rootName)
 			}
 		}
 		return rootNames, baseRootIDs
 	}
 	rootNames := make([]string, len(plan.runs))
-	baseRootIDs := make(map[string]uint64, len(plan.runs))
+	baseRootIDs := make([]uint64, len(plan.runs))
 	for i, run := range plan.runs {
 		rootNames[i] = run.name
 		if catalog != nil {
-			baseRootIDs[run.name] = catalog.rootID(run.name)
+			baseRootIDs[i] = catalog.rootID(run.name)
 		}
 	}
 	return rootNames, baseRootIDs
@@ -9533,7 +9581,7 @@ type insertBatchValidationContext struct {
 	catalog                   *collectionCatalog
 	meta                      CollectionMeta
 	rootNames                 []string
-	baseRootIDs               map[string]uint64
+	baseRootIDs               []uint64
 	plan                      *insertBatchPlan
 	allowRootDrift            bool
 	persistedConflictsChecked bool
@@ -9548,7 +9596,7 @@ func (c *Collection) lockAndValidateInsertBatchPlan(
 	catalog *collectionCatalog,
 	meta CollectionMeta,
 	rootNames []string,
-	baseRootIDs map[string]uint64,
+	baseRootIDs []uint64,
 	persistedConflictsChecked bool,
 	preflightBaseCommitSeq uint64,
 	preflightBaseSystemRoot uint64,
@@ -9582,13 +9630,43 @@ func (c *Collection) lockAndValidateInsertBatchPlan(
 	return pin, currentCatalog, snapshotCommitSeq(pin), snapshotSystemRoot(pin), nil
 }
 
-func updateInsertBatchBaseRootIDs(rootNames []string, baseRootIDs map[string]uint64, catalog *collectionCatalog) {
+func updateInsertBatchBaseRootIDs(rootNames []string, baseRootIDs []uint64, catalog *collectionCatalog) {
 	if catalog == nil || baseRootIDs == nil {
 		return
 	}
-	for _, rootName := range rootNames {
-		baseRootIDs[rootName] = catalog.rootID(rootName)
+	for i, rootName := range rootNames {
+		if i >= len(baseRootIDs) {
+			return
+		}
+		baseRootIDs[i] = catalog.rootID(rootName)
 	}
+}
+
+func insertBatchBaseRootID(rootNames []string, baseRootIDs []uint64, rootName string) (uint64, bool) {
+	for i, name := range rootNames {
+		if name != rootName {
+			continue
+		}
+		if i >= len(baseRootIDs) {
+			return 0, false
+		}
+		return baseRootIDs[i], true
+	}
+	return 0, false
+}
+
+func insertBatchBaseRootIDMap(rootNames []string, baseRootIDs []uint64) map[string]uint64 {
+	if len(rootNames) == 0 {
+		return nil
+	}
+	out := make(map[string]uint64, len(rootNames))
+	for i, rootName := range rootNames {
+		if i >= len(baseRootIDs) {
+			break
+		}
+		out[rootName] = baseRootIDs[i]
+	}
+	return out
 }
 
 func runTestBeforeInsertBatchPlanningHook() {
@@ -9640,10 +9718,18 @@ func (c *Collection) validateInsertBatchPlanLocked(validation insertBatchValidat
 	if validation.persistedConflictsChecked && validation.snap != nil && validation.catalog != nil {
 		currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
 		if currentCommitSeq == validation.preflightBaseCommitSeq && currentSystemRoot == validation.preflightBaseSystemRoot {
+			c.writeDomain.observeInsertValidationPreflight(false)
+			if validation.plan != nil {
+				validation.plan.stats.ValidationPreflightReused++
+			}
 			if err := c.validateInsertBatchPlanWithSnapshotLocked(validation); err != nil {
 				return nil, nil, err
 			}
 			return validation.snap, validation.catalog, nil
+		}
+		c.writeDomain.observeInsertValidationPreflight(true)
+		if validation.plan != nil {
+			validation.plan.stats.ValidationPreflightRechecked++
 		}
 	}
 	current := c.db.AcquireSnapshot()
@@ -9679,11 +9765,11 @@ func (c *Collection) validateInsertBatchPlanWithSnapshotLocked(validation insert
 	if !sameCollectionMeta(validation.catalog.meta, validation.meta) {
 		return fmt.Errorf("collections: concurrent schema modification detected for %q", validation.meta.Name)
 	}
-	for _, rootName := range validation.rootNames {
-		want, ok := validation.baseRootIDs[rootName]
-		if !ok {
+	for i, rootName := range validation.rootNames {
+		if i >= len(validation.baseRootIDs) {
 			return fmt.Errorf("collections: insert plan missing base root id collection=%q root=%q", validation.meta.Name, rootName)
 		}
+		want := validation.baseRootIDs[i]
 		if got := validation.catalog.rootID(rootName); got != want && !validation.allowRootDrift {
 			return errConcurrentRootModification(validation.meta.Name, rootName)
 		}
