@@ -176,8 +176,9 @@ type VectorIndexSearchOptions struct {
 	// MaxDecodedBlocks bounds the physical column row reader cache for column_graph search.
 	MaxDecodedBlocks int
 	// StatsMode selects column_graph search telemetry detail. The zero value
-	// preserves full diagnostics; minimal mode keeps production/admission counters
-	// with lower hot-loop overhead on the healthy combined prepared path.
+	// preserves full diagnostics; production/minimal mode keeps source-health,
+	// fallback, admission, and result counters with lower hot-loop overhead on
+	// the healthy combined prepared path.
 	StatsMode VectorIndexSearchStatsMode
 	// scoreBatchMode is an internal exact-order indexed-scoring test/benchmark hook.
 	scoreBatchMode columnVectorGraphScoreBatchMode
