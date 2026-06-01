@@ -687,6 +687,13 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		return findResponsePayload{document: doc}, err
 	}
 	ns := db + "." + collection
+	if payload, ok, err := s.findSimpleProjectedPrimaryEqualityPayload(col, ns, plan, int(batchSize), batchSizeSet); ok || err != nil {
+		if err != nil {
+			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+			return findResponsePayload{document: doc}, err
+		}
+		return payload, nil
+	}
 	if !plan.projection.present {
 		idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.Meta(), plan, s.maxFindScanDocuments())
 		if err != nil {
@@ -781,6 +788,58 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 	}
 	doc, err := marshalCursorResponseWithID(ns, cursorID, "firstBatch", firstBatch)
 	return findResponsePayload{document: doc}, err
+}
+
+func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Collection, ns string, plan findPlan, batchSize int, batchSizeSet bool) (findResponsePayload, bool, error) {
+	if !plan.projection.present {
+		return findResponsePayload{}, false, nil
+	}
+	value, ok := simplePrimaryEqualityFindValue(plan)
+	if !ok {
+		return findResponsePayload{}, false, nil
+	}
+	normalizedBatchSize, err := normalizeBatchSize(batchSize, batchSizeSet, defaultCursorBatchSize)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	if normalizedBatchSize < 1 {
+		return findResponsePayload{}, false, nil
+	}
+	key, err := encodePrimaryKey(value)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	stored, err := col.Get(key)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	if len(stored) == 0 {
+		return findResponsePayload{
+			kind: findResponsePayloadRaw,
+			raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"},
+		}, true, nil
+	}
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	defer func() { _ = materializer.Close() }()
+	doc, err := storedDocumentToBSON(col, materializer, stored)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	projected, err := projectDocumentWithProjection(doc, plan.projection)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	docBytes := findBatchDocumentBytes(projected, 0)
+	if findBatchOverheadBytes+docBytes > s.maxFindBatchBytes() {
+		return findResponsePayload{}, true, fmt.Errorf("mongo gateway cursor document exceeds max batch bytes: docBytes=%d maxBatchBytes=%d", docBytes, s.maxFindBatchBytes())
+	}
+	return findResponsePayload{
+		kind: findResponsePayloadRaw,
+		raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: []wire.Document{projected}},
+	}, true, nil
 }
 
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {

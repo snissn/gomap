@@ -18,6 +18,7 @@ type commandWALBatchIntent struct {
 	scope              commitlog.CommandScope
 	payloadFormat      commitlog.PayloadFormat
 	payload            []byte
+	trustedPayload     bool
 	externalRefs       bool
 	externalRefFileIDs []uint32
 	fromReplay         bool
@@ -122,6 +123,19 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 		payloadFormat: payloadFormat,
 		payload:       payload,
 	}}, nil
+}
+
+// NewTrustedCommandWALIntent creates a command-WAL intent for payload bytes
+// constructed through a canonical commitlog encoder. The append path still
+// validates command identity and size, but it skips payload decoding because
+// the caller owns that construction boundary.
+func (db *DB) NewTrustedCommandWALIntent(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (*CommandWALIntent, error) {
+	intent, err := db.NewCommandWALIntent(kind, scope, payloadFormat, payload)
+	if err != nil || intent == nil {
+		return intent, err
+	}
+	intent.inner.trustedPayload = true
+	return intent, nil
 }
 
 func newCommandWALReplayIntent(env commitlog.CommandEnvelope, replayToken uint64) *CommandWALIntent {
@@ -652,13 +666,19 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	db.mu.RLock()
 	baseAppliedLSN := db.meta.AppliedCommandLSN
 	db.mu.RUnlock()
-	lsn, err := db.commandJournal.AppendCommand(commitlog.CommandEnvelope{
-		Kind:           intent.kind,
-		Scope:          intent.scope,
-		BaseAppliedLSN: baseAppliedLSN,
-		PayloadFormat:  intent.payloadFormat,
-		Payload:        intent.payload,
-	})
+	var lsn uint64
+	var err error
+	if intent.trustedPayload && !intent.externalRefs {
+		lsn, err = db.commandJournal.AppendCommandPayloadTrusted(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
+	} else {
+		lsn, err = db.commandJournal.AppendCommand(commitlog.CommandEnvelope{
+			Kind:           intent.kind,
+			Scope:          intent.scope,
+			BaseAppliedLSN: baseAppliedLSN,
+			PayloadFormat:  intent.payloadFormat,
+			Payload:        intent.payload,
+		})
+	}
 	if err != nil {
 		return 0, err
 	}

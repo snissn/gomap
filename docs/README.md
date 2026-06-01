@@ -45,6 +45,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 
 - **[Benchmark Spec](BENCHMARK_SPEC.md)**: Methodology and test definitions.
 - **[TreeDB Canonical Benchmark Runbook](benchmarks/treedb_canonical_benchmark_runbook.md)**: Standard TreeDB engine, collections, Mongo gateway, profiling, and reporting workflows.
+- **[YCSB MongoDB / TreeDB Report](benchmarks/ycsb_mongodb_treedb_2026-05-31.md)**: Exact `go-ycsb` comparison for MongoDB, `treedb-native`, and TreeDB Mongo gateway.
 - **[TreeDB Collections Canonical Benchmark](benchmarks/collections_canonical_benchmark.md)**: Canonical TreeDB-vs-SQLite collection benchmark and maintenance-phase semantics.
 - **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
 - **[BenchProf](../cmd/benchprof/README.md)**: Analysis tool for CPU/alloc/block/mutex profiles and ops/sec outputs.

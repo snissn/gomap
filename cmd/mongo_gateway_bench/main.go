@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"math"
@@ -82,6 +84,8 @@ type config struct {
 	ConcurrentWriters                             int
 	ConcurrentWriterSweep                         []int
 	ConcurrentWrites                              int
+	DocumentShape                                 string
+	PointReadProjection                           string
 	UpdateIndexedField                            bool
 	RangeIndex                                    bool
 	SecondaryIndexes                              int
@@ -137,6 +141,8 @@ type benchmarkResult struct {
 	ConcurrentWriters          int      `json:"concurrent_writers,omitempty"`
 	ConcurrentWriterSweep      []int    `json:"concurrent_writer_sweep,omitempty"`
 	ConcurrentWrites           int      `json:"concurrent_writes,omitempty"`
+	DocumentShape              string   `json:"document_shape,omitempty"`
+	PointReadProjection        string   `json:"point_read_projection,omitempty"`
 
 	// Always emit this knob in JSON so benchmark artifacts distinguish default
 	// false runs from older runs that predate indexed-field update coverage.
@@ -395,6 +401,12 @@ const (
 	clientModeRawWireTCPPipeline = "raw-wire-tcp-pipeline"
 	clientModeNativeWireInproc   = "native-wire-inproc"
 	clientModeNativeWireTCP      = "native-wire-tcp"
+
+	documentShapeGateway = "gateway"
+	documentShapeYCSB    = "ycsb"
+
+	pointReadProjectionFull = "full"
+	pointReadProjectionYCSB = "ycsb"
 )
 
 func main() {
@@ -471,6 +483,8 @@ func parseConfig(args []string) (config, error) {
 		TreeDBMaintenance:           treeDBMaintenanceFull,
 		TreeDBReadState:             treeDBReadStateSettled,
 		ClientMode:                  clientModeDriver,
+		DocumentShape:               documentShapeGateway,
+		PointReadProjection:         pointReadProjectionFull,
 		RawWireTCPPipelineDepth:     defaultRawWireTCPPipelineDepth,
 		InsertProducers:             1,
 		ProfileBlockRate:            1,
@@ -518,6 +532,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.StringVar(&concurrentWriterSweep, "concurrent-writer-sweep", "", "comma- or space-separated writer counts for concurrent _id update throughput sweep phases; requires -concurrent-writes and cannot be combined with -concurrent-writers")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
+	fs.StringVar(&cfg.DocumentShape, "document-shape", cfg.DocumentShape, "benchmark document shape: gateway or ycsb")
+	fs.StringVar(&cfg.PointReadProjection, "point-read-projection", cfg.PointReadProjection, "point-read projection shape: full or ycsb")
 	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes >= 2 so the city index exists")
 	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
@@ -575,6 +591,19 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.Target != "treedb" && cfg.TreeDBCommandWAL {
 		return config{}, errors.New("treedb-command-wal is only supported with -target treedb")
+	}
+	documentShape, err := parseDocumentShape(cfg.DocumentShape)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.DocumentShape = documentShape
+	pointReadProjection, err := parsePointReadProjection(cfg.PointReadProjection)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.PointReadProjection = pointReadProjection
+	if cfg.PointReadProjection == pointReadProjectionYCSB && cfg.DocumentShape != documentShapeYCSB {
+		return config{}, errors.New("point-read-projection ycsb requires -document-shape ycsb")
 	}
 	clientMode, err := parseClientMode(cfg.ClientMode)
 	if err != nil {
@@ -703,6 +732,13 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.UpdateIndexedField && cfg.SecondaryIndexes < 2 {
 		return config{}, errors.New("update-indexed-field requires secondary-indexes >= 2 so the city index exists")
+	}
+	if cfg.DocumentShape == documentShapeYCSB && (cfg.SecondaryIndexes != 0 || cfg.RangeIndex || cfg.UpdateIndexedField) {
+		return config{}, errors.New("document-shape ycsb supports only secondary-indexes=0, no range-index, and no update-indexed-field")
+	}
+	if cfg.DocumentShape == documentShapeYCSB &&
+		(cfg.RangeReads > 0 || cfg.ConcurrentRangeReads > 0 || concurrentRangeReadKindEnabled(cfg)) {
+		return config{}, errors.New("document-shape ycsb does not support range read phases")
 	}
 	if cfg.TreeDBBufferedIndexedWriteMaxDocuments < 0 {
 		return config{}, errors.New("treedb-buffered-indexed-write-max-documents must be >= 0")
@@ -833,6 +869,28 @@ func parseTreeDBReadState(raw string) (string, error) {
 		return treeDBReadStateUnsettled, nil
 	default:
 		return "", fmt.Errorf("unknown treedb-read-state %q", raw)
+	}
+}
+
+func parseDocumentShape(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", documentShapeGateway:
+		return documentShapeGateway, nil
+	case documentShapeYCSB:
+		return documentShapeYCSB, nil
+	default:
+		return "", fmt.Errorf("unknown document-shape %q", raw)
+	}
+}
+
+func parsePointReadProjection(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", pointReadProjectionFull:
+		return pointReadProjectionFull, nil
+	case pointReadProjectionYCSB:
+		return pointReadProjectionYCSB, nil
+	default:
+		return "", fmt.Errorf("unknown point-read-projection %q", raw)
 	}
 }
 
@@ -1510,6 +1568,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		ConcurrentWriters:          cfg.ConcurrentWriters,
 		ConcurrentWriterSweep:      append([]int(nil), cfg.ConcurrentWriterSweep...),
 		ConcurrentWrites:           cfg.ConcurrentWrites,
+		DocumentShape:              cfg.DocumentShape,
+		PointReadProjection:        cfg.PointReadProjection,
 		UpdateIndexedField:         cfg.UpdateIndexedField,
 		RangeIndex:                 cfg.RangeIndex,
 		PrebuildDocuments:          cfg.PrebuildDocuments,
@@ -1560,7 +1620,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		prebuilt = make([]bson.D, cfg.Documents)
 		prebuiltRaw = make([]bson.Raw, cfg.Documents)
 		for i := range prebuilt {
-			doc := benchmarkDocument(i)
+			doc := benchmarkDocumentForShape(cfg.DocumentShape, i)
 			raw, err := bson.Marshal(doc)
 			if err != nil {
 				return nil, fmt.Errorf("prebuild document %d: %w", i, err)
@@ -1586,22 +1646,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		return nil, err
 	}
 
-	idPhase, err := measureTreeDBProfiledPhase(target, profiler, "id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
-		for i := 0; i < cfg.Reads; i++ {
-			id := benchmarkID(i % cfg.Documents)
-			var out bson.M
-			begin := time.Now()
-			err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
-			sample(time.Since(begin))
-			if err != nil {
-				return err
-			}
-			if out["_id"] != id {
-				return fmt.Errorf("id lookup returned _id=%v want %s", out["_id"], id)
-			}
-		}
-		return nil
-	})
+	idPhase, err := runIDFindPhase(ctx, cfg, target, profiler, coll)
 	if err != nil {
 		return nil, err
 	}
@@ -1651,7 +1696,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	updatePhase, err := measureTreeDBProfiledPhase(target, profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			documentOrdinal := benchmarkDocumentOrdinal(i, 31, cfg.Documents)
-			id := benchmarkID(documentOrdinal)
+			id := benchmarkIDForShape(cfg.DocumentShape, documentOrdinal)
 			filter := bson.D{{Key: "_id", Value: id}}
 			update := benchmarkSetUpdate(benchmarkSetUpdateParams{
 				Operation:          i,
@@ -1690,11 +1735,16 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 				continue
 			}
 			phaseName := concurrentReadPhaseName(cfg, readKind, concurrentReaders)
-			concurrentReadPhase, err := measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
-				return runConcurrentOperations(ctx, concurrentReaders, cfg.ConcurrentReads, func(op int) error {
-					return runConcurrentReadOperation(ctx, coll, cfg, readKind, op, sample)
+			var concurrentReadPhase phaseResult
+			if readKind == concurrentReadKindID {
+				concurrentReadPhase, err = runConcurrentIDFindPhase(ctx, cfg, target, profiler, coll, concurrentReaders, phaseName)
+			} else {
+				concurrentReadPhase, err = measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+					return runConcurrentOperations(ctx, concurrentReaders, cfg.ConcurrentReads, func(op int) error {
+						return runConcurrentReadOperation(ctx, coll, cfg, readKind, op, sample)
+					})
 				})
-			})
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -1708,7 +1758,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		concurrentWritePhase, err := measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, concurrentWriters, cfg.ConcurrentWrites, func(op int) error {
 				documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
-				id := benchmarkID(documentOrdinal)
+				id := benchmarkIDForShape(cfg.DocumentShape, documentOrdinal)
 				filter := bson.D{{Key: "_id", Value: id}}
 				update := benchmarkSetUpdate(benchmarkSetUpdateParams{
 					Operation:          concurrentUpdateOperation(op, concurrentWriters, cfg.ConcurrentWrites),
@@ -1741,7 +1791,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	if cfg.Deletes > 0 {
 		deletePhase, err := measureTreeDBProfiledPhase(target, profiler, "id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
 			for i := 0; i < cfg.Deletes; i++ {
-				id := benchmarkID(cfg.Documents - 1 - i)
+				id := benchmarkIDForShape(cfg.DocumentShape, cfg.Documents-1-i)
 				begin := time.Now()
 				res, err := coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: id}})
 				sample(time.Since(begin))
@@ -1793,6 +1843,8 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		ConcurrentWriters:                      cfg.ConcurrentWriters,
 		ConcurrentWriterSweep:                  append([]int(nil), cfg.ConcurrentWriterSweep...),
 		ConcurrentWrites:                       cfg.ConcurrentWrites,
+		DocumentShape:                          cfg.DocumentShape,
+		PointReadProjection:                    cfg.PointReadProjection,
 		UpdateIndexedField:                     cfg.UpdateIndexedField,
 		RangeIndex:                             cfg.RangeIndex,
 		PrebuildDocuments:                      cfg.PrebuildDocuments,
@@ -1820,7 +1872,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, target); err != nil {
 		return nil, err
 	}
-	directKeys, err := buildDirectBenchmarkKeySet(cfg.Documents)
+	directKeys, err := buildDirectBenchmarkKeySet(cfg.DocumentShape, cfg.Documents)
 	if err != nil {
 		return nil, err
 	}
@@ -1831,7 +1883,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		prebuiltIDs = make([][]byte, cfg.Documents)
 		prebuiltDocuments = make([][]byte, cfg.Documents)
 		for i := range prebuiltDocuments {
-			id, document, err := directTreeDBBenchmarkDocument(i, cfg.TreeDBDocumentFormat)
+			id, document, err := directTreeDBBenchmarkDocument(i, cfg.DocumentShape, cfg.TreeDBDocumentFormat)
 			if err != nil {
 				return nil, fmt.Errorf("prebuild direct document %d: %w", i, err)
 			}
@@ -2027,8 +2079,8 @@ func directTreeDBIndexDefinitions(cfg config) []collections.IndexDefinition {
 	return indexes
 }
 
-func directTreeDBBenchmarkDocument(i int, format collections.DocumentFormat) ([]byte, []byte, error) {
-	raw, err := bson.Marshal(benchmarkDocument(i))
+func directTreeDBBenchmarkDocument(i int, shape string, format collections.DocumentFormat) ([]byte, []byte, error) {
+	raw, err := bson.Marshal(benchmarkDocumentForShape(shape, i))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2068,8 +2120,8 @@ func directEncodeStoredDocument(raw bson.Raw, format collections.DocumentFormat)
 	}
 }
 
-func directBenchmarkDocumentKey(i int) ([]byte, string, error) {
-	id := benchmarkID(i)
+func directBenchmarkDocumentKey(shape string, i int) ([]byte, string, error) {
+	id := benchmarkIDForShape(shape, i)
 	typ, value, err := bson.MarshalValue(id)
 	if err != nil {
 		return nil, "", err
@@ -2086,13 +2138,13 @@ type directBenchmarkKeySet struct {
 	ids  []string
 }
 
-func buildDirectBenchmarkKeySet(documents int) (directBenchmarkKeySet, error) {
+func buildDirectBenchmarkKeySet(shape string, documents int) (directBenchmarkKeySet, error) {
 	out := directBenchmarkKeySet{
 		keys: make([][]byte, documents),
 		ids:  make([]string, documents),
 	}
 	for i := 0; i < documents; i++ {
-		key, id, err := directBenchmarkDocumentKey(i)
+		key, id, err := directBenchmarkDocumentKey(shape, i)
 		if err != nil {
 			return directBenchmarkKeySet{}, err
 		}
@@ -2213,7 +2265,7 @@ func runDirectTreeDBLoadPhase(ctx context.Context, cfg config, collection *colle
 		if err := batchCtx.Err(); err != nil {
 			return err
 		}
-		ids, docs, err := directTreeDBLoadBatch(producerScratch(scratch, producer), start, end, cfg.TreeDBDocumentFormat, prebuiltIDs, prebuiltDocuments)
+		ids, docs, err := directTreeDBLoadBatch(producerScratch(scratch, producer), start, end, cfg.DocumentShape, cfg.TreeDBDocumentFormat, prebuiltIDs, prebuiltDocuments)
 		if err != nil {
 			return err
 		}
@@ -2238,7 +2290,7 @@ func producerScratch(scratch []directTreeDBLoadScratch, producer int) *directTre
 	return &scratch[producer]
 }
 
-func directTreeDBLoadBatch(scratch *directTreeDBLoadScratch, start, end int, format collections.DocumentFormat, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) ([][]byte, [][]byte, error) {
+func directTreeDBLoadBatch(scratch *directTreeDBLoadScratch, start, end int, shape string, format collections.DocumentFormat, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) ([][]byte, [][]byte, error) {
 	if scratch == nil {
 		scratch = &directTreeDBLoadScratch{}
 	}
@@ -2250,7 +2302,7 @@ func directTreeDBLoadBatch(scratch *directTreeDBLoadScratch, start, end int, for
 			docs = append(docs, prebuiltDocuments[i])
 			continue
 		} else {
-			id, document, err := directTreeDBBenchmarkDocument(i, format)
+			id, document, err := directTreeDBBenchmarkDocument(i, shape, format)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2282,13 +2334,19 @@ func runDirectTreeDBIDFindPhase(ctx context.Context, cfg config, collection *col
 				return err
 			}
 			raw, err := directStoredDocumentToBSON(collection, materializer, stored)
-			sample(time.Since(begin))
 			if err != nil {
+				sample(time.Since(begin))
 				return err
 			}
-			if got, ok := bson.Raw(raw).Lookup("_id").StringValueOK(); !ok || got != id {
-				return fmt.Errorf("direct id lookup returned _id=%v ok=%t want %s", got, ok, id)
+			if cfg.PointReadProjection == pointReadProjectionYCSB {
+				raw, err = projectYCSBReadRawDocument(raw)
+				if err != nil {
+					sample(time.Since(begin))
+					return err
+				}
 			}
+			sample(time.Since(begin))
+			return validatePointReadRawDocument(raw, id, cfg)
 		}
 		return nil
 	})
@@ -2479,14 +2537,19 @@ func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, colle
 				return err
 			}
 			raw, err := directStoredDocumentToBSON(collection, materializer, stored)
-			sample(time.Since(begin))
 			if err != nil {
+				sample(time.Since(begin))
 				return err
 			}
-			if got, ok := bson.Raw(raw).Lookup("_id").StringValueOK(); !ok || got != id {
-				return fmt.Errorf("direct concurrent id lookup returned _id=%v ok=%t want %s", got, ok, id)
+			if cfg.PointReadProjection == pointReadProjectionYCSB {
+				raw, err = projectYCSBReadRawDocument(raw)
+				if err != nil {
+					sample(time.Since(begin))
+					return err
+				}
 			}
-			return nil
+			sample(time.Since(begin))
+			return validatePointReadRawDocument(raw, id, cfg)
 		})
 	})
 }
@@ -2867,6 +2930,179 @@ func addPhaseDuration(result *phaseResult, extra time.Duration) {
 	}
 }
 
+func runIDFindPhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection) (phaseResult, error) {
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
+		if target == nil || target.server == nil {
+			return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
+		}
+		var requestID atomic.Int32
+		var scratch rawWireInProcessScratch
+		return measureTreeDBProfiledPhase(target, profiler, "id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+			for i := 0; i < cfg.Reads; i++ {
+				if err := runTreeDBRawWireIDFindOperation(ctx, cfg, target, &requestID, 1, i%cfg.Documents, sample, &scratch); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	if cfg.Target == "treedb" && (cfg.ClientMode == clientModeRawWireTCP || cfg.ClientMode == clientModeRawWireTCPPipeline) {
+		if target == nil || target.mongoAddr == "" {
+			return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
+		}
+		client, err := fastclient.Connect(ctx, target.mongoAddr)
+		if err != nil {
+			return phaseResult{}, err
+		}
+		defer func() { _ = client.Close() }()
+		var commandBuf []byte
+		return measureTreeDBProfiledPhase(target, profiler, "id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+			for i := 0; i < cfg.Reads; i++ {
+				var err error
+				commandBuf, err = runTreeDBRawWireTCPIDFindOperation(ctx, cfg, client, i%cfg.Documents, sample, commandBuf)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	return measureTreeDBProfiledPhase(target, profiler, "id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+		for i := 0; i < cfg.Reads; i++ {
+			if err := runDriverIDFindOperation(ctx, coll, cfg, i%cfg.Documents, sample); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func runConcurrentIDFindPhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int, phaseName string) (phaseResult, error) {
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
+		if target == nil || target.server == nil {
+			return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
+		}
+		var requestID atomic.Int32
+		scratches := make([]rawWireInProcessScratch, readers)
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentReads, func(worker, op int) error {
+				documentOrdinal := benchmarkDocumentOrdinal(op, 17, cfg.Documents)
+				return runTreeDBRawWireIDFindOperation(ctx, cfg, target, &requestID, int64(worker+1), documentOrdinal, sample, &scratches[worker])
+			})
+		})
+	}
+	if cfg.Target == "treedb" && (cfg.ClientMode == clientModeRawWireTCP || cfg.ClientMode == clientModeRawWireTCPPipeline) {
+		if target == nil || target.mongoAddr == "" {
+			return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
+		}
+		clients := make([]*fastclient.Client, readers)
+		commandBufs := make([][]byte, readers)
+		for i := range clients {
+			client, err := fastclient.Connect(ctx, target.mongoAddr)
+			if err != nil {
+				for _, existing := range clients {
+					if existing != nil {
+						_ = existing.Close()
+					}
+				}
+				return phaseResult{}, err
+			}
+			clients[i] = client
+		}
+		defer func() {
+			for _, client := range clients {
+				_ = client.Close()
+			}
+		}()
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentReads, func(worker, op int) error {
+				documentOrdinal := benchmarkDocumentOrdinal(op, 17, cfg.Documents)
+				var err error
+				commandBufs[worker], err = runTreeDBRawWireTCPIDFindOperation(ctx, cfg, clients[worker], documentOrdinal, sample, commandBufs[worker])
+				return err
+			})
+		})
+	}
+	return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, readers, cfg.ConcurrentReads, func(op int) error {
+			return runConcurrentReadOperation(ctx, coll, cfg, concurrentReadKindID, op, sample)
+		})
+	})
+}
+
+func runDriverIDFindOperation(ctx context.Context, coll *mongo.Collection, cfg config, documentOrdinal int, sample func(time.Duration)) error {
+	id := benchmarkIDForShape(cfg.DocumentShape, documentOrdinal)
+	filter := bson.D{{Key: "_id", Value: id}}
+	opt := pointReadFindOneOption(cfg)
+	if cfg.PointReadProjection == pointReadProjectionYCSB {
+		var out map[string][]byte
+		begin := time.Now()
+		var err error
+		if opt != nil {
+			err = coll.FindOne(ctx, filter, opt).Decode(&out)
+		} else {
+			err = coll.FindOne(ctx, filter).Decode(&out)
+		}
+		sample(time.Since(begin))
+		if err != nil {
+			return err
+		}
+		return validateYCSBProjectedMap(out)
+	}
+	var out bson.M
+	begin := time.Now()
+	var err error
+	if opt != nil {
+		err = coll.FindOne(ctx, filter, opt).Decode(&out)
+	} else {
+		err = coll.FindOne(ctx, filter).Decode(&out)
+	}
+	sample(time.Since(begin))
+	if err != nil {
+		return err
+	}
+	if out["_id"] != id {
+		return fmt.Errorf("id lookup returned _id=%v want %s", out["_id"], id)
+	}
+	return nil
+}
+
+func pointReadFindOneOption(cfg config) *options.FindOneOptionsBuilder {
+	if cfg.PointReadProjection != pointReadProjectionYCSB {
+		return nil
+	}
+	return options.FindOne().SetProjection(ycsbMongoReadProjection())
+}
+
+func ycsbMongoReadProjection() bson.D {
+	projection := make(bson.D, 0, benchmarkYCSBFieldCount+1)
+	projection = append(projection, bson.E{Key: "_id", Value: false})
+	for field := 0; field < benchmarkYCSBFieldCount; field++ {
+		projection = append(projection, bson.E{Key: benchmarkYCSBFieldName(field), Value: true})
+	}
+	return projection
+}
+
+func validateYCSBProjectedMap(doc map[string][]byte) error {
+	if _, ok := doc["_id"]; ok {
+		return errors.New("YCSB projected read unexpectedly returned _id")
+	}
+	if len(doc) != benchmarkYCSBFieldCount {
+		return fmt.Errorf("YCSB projected read returned %d fields want %d", len(doc), benchmarkYCSBFieldCount)
+	}
+	for field := 0; field < benchmarkYCSBFieldCount; field++ {
+		name := benchmarkYCSBFieldName(field)
+		value, ok := doc[name]
+		if !ok {
+			return fmt.Errorf("YCSB projected read missing %s", name)
+		}
+		if len(value) != benchmarkYCSBFieldLength {
+			return fmt.Errorf("YCSB projected read %s length=%d want %d", name, len(value), benchmarkYCSBFieldLength)
+		}
+	}
+	return nil
+}
+
 func runEmailFindPhase(cfg config) bool {
 	return cfg.Reads > 0 && hasEmailIndex(cfg)
 }
@@ -2947,18 +3183,7 @@ func concurrentReadPhaseName(cfg config, kind string, readers int) string {
 func runConcurrentReadOperation(ctx context.Context, coll *mongo.Collection, cfg config, kind string, op int, sample func(time.Duration)) error {
 	switch kind {
 	case concurrentReadKindID:
-		id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
-		var out bson.M
-		begin := time.Now()
-		err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
-		sample(time.Since(begin))
-		if err != nil {
-			return err
-		}
-		if out["_id"] != id {
-			return fmt.Errorf("concurrent id lookup returned _id=%v want %s", out["_id"], id)
-		}
-		return nil
+		return runDriverIDFindOperation(ctx, coll, cfg, benchmarkDocumentOrdinal(op, 17, cfg.Documents), sample)
 	case concurrentReadKindEmail:
 		email := benchmarkEmail(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
 		var out bson.M
@@ -3181,7 +3406,7 @@ func runDriverLoadPhase(ctx context.Context, cfg config, coll *mongo.Collection,
 			if prebuilt != nil {
 				docs = append(docs, prebuilt[i])
 			} else {
-				docs = append(docs, benchmarkDocument(i))
+				docs = append(docs, benchmarkDocumentForShape(cfg.DocumentShape, i))
 			}
 		}
 		_, err := coll.InsertMany(batchCtx, docs)
@@ -3198,7 +3423,7 @@ func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Databa
 			} else if prebuilt != nil {
 				docs = append(docs, prebuilt[i])
 			} else {
-				docs = append(docs, benchmarkDocument(i))
+				docs = append(docs, benchmarkDocumentForShape(cfg.DocumentShape, i))
 			}
 		}
 		return db.RunCommand(batchCtx, bson.D{
@@ -3211,7 +3436,7 @@ func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Databa
 
 func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
-		command, err := rawInsertCommand(cfg.Collection, start, end, prebuilt, prebuiltRaw)
+		command, err := rawInsertCommand(cfg.Collection, start, end, cfg.DocumentShape, prebuilt, prebuiltRaw)
 		if err != nil {
 			return err
 		}
@@ -3219,7 +3444,7 @@ func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Dat
 	})
 }
 
-func rawInsertCommand(collection string, start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
+func rawInsertCommand(collection string, start, end int, shape string, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
 	arrIdx, arr := bsoncore.AppendArrayStart(nil)
 	for i := start; i < end; i++ {
 		var raw bson.Raw
@@ -3230,7 +3455,7 @@ func rawInsertCommand(collection string, start, end int, prebuilt []bson.D, preb
 			if prebuilt != nil {
 				doc = prebuilt[i]
 			} else {
-				doc = benchmarkDocument(i)
+				doc = benchmarkDocumentForShape(shape, i)
 			}
 			var err error
 			raw, err = bson.Marshal(doc)
@@ -3264,7 +3489,7 @@ func runDriverUnackLoadPhase(ctx context.Context, cfg config, db *mongo.Database
 			if prebuilt != nil {
 				docs = append(docs, prebuilt[i])
 			} else {
-				docs = append(docs, benchmarkDocument(i))
+				docs = append(docs, benchmarkDocumentForShape(cfg.DocumentShape, i))
 			}
 		}
 		_, err := unackColl.InsertMany(batchCtx, docs)
@@ -3278,7 +3503,7 @@ func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection)
 	if cfg.Documents <= 0 {
 		return nil
 	}
-	ids := loadVisibilitySentinelIDs(cfg.Documents, cfg.BatchSize)
+	ids := loadVisibilitySentinelIDs(cfg.DocumentShape, cfg.Documents, cfg.BatchSize)
 	if len(ids) == 0 {
 		return nil
 	}
@@ -3329,12 +3554,12 @@ func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection)
 
 const maxUnackVisibilityChecksPerPoll = 128
 
-func loadVisibilitySentinelIDs(documents, batchSize int) []string {
+func loadVisibilitySentinelIDs(shape string, documents, batchSize int) []string {
 	batches := makeLoadBatches(documents, batchSize)
 	ids := make([]string, 0, len(batches))
 	for _, batch := range batches {
 		if batch.end > batch.start {
-			ids = append(ids, benchmarkID(batch.end-1))
+			ids = append(ids, benchmarkIDForShape(shape, batch.end-1))
 		}
 	}
 	return ids
@@ -3525,6 +3750,28 @@ func runTreeDBRawWireRangeOperation(ctx context.Context, cfg config, target *ben
 	return validateRawAgeBatch(batch, minAge)
 }
 
+func runTreeDBRawWireIDFindOperation(ctx context.Context, cfg config, target *benchTarget, requestID *atomic.Int32, cursorOwner int64, documentOrdinal int, sample func(time.Duration), scratch *rawWireInProcessScratch) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if scratch == nil {
+		scratch = &rawWireInProcessScratch{}
+	}
+	id := benchmarkIDForShape(cfg.DocumentShape, documentOrdinal)
+	commandDoc, err := appendRawWireFindIDCommand(scratch.commandBuf[:0], cfg.Database, cfg.Collection, id, cfg.PointReadProjection)
+	if err != nil {
+		return err
+	}
+	scratch.commandBuf = commandDoc
+	begin := time.Now()
+	batch, err := serveRawWireFind(target.server, requestID.Add(1), cursorOwner, commandDoc, scratch)
+	sample(time.Since(begin))
+	if err != nil {
+		return err
+	}
+	return validateRawIDBatch(batch, id, cfg)
+}
+
 func runTreeDBRawWireTCPRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (phaseResult, error) {
 	if target == nil || target.mongoAddr == "" {
 		return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
@@ -3558,6 +3805,25 @@ func runTreeDBRawWireTCPRangeOperation(ctx context.Context, cfg config, client *
 		sample(time.Since(begin))
 		sampled = true
 		return validateRawAgeBatch(batch, minAge)
+	})
+	if !sampled {
+		sample(time.Since(begin))
+	}
+	return commandDoc, err
+}
+
+func runTreeDBRawWireTCPIDFindOperation(ctx context.Context, cfg config, client *fastclient.Client, documentOrdinal int, sample func(time.Duration), commandBuf []byte) ([]byte, error) {
+	id := benchmarkIDForShape(cfg.DocumentShape, documentOrdinal)
+	commandDoc, err := appendRawFindIDCommand(commandBuf[:0], cfg.Database, cfg.Collection, id, cfg.PointReadProjection)
+	if err != nil {
+		return commandBuf, err
+	}
+	begin := time.Now()
+	sampled := false
+	err = client.FindRawBSONBorrowed(ctx, commandDoc, func(batch []bson.Raw) error {
+		sample(time.Since(begin))
+		sampled = true
+		return validateRawIDBatch(batch, id, cfg)
 	})
 	if !sampled {
 		sample(time.Since(begin))
@@ -3963,6 +4229,44 @@ func rawFindAgeRangeCommand(database, collection string, minAge int64) (bson.Raw
 	return appendRawFindAgeRangeCommand(nil, database, collection, minAge)
 }
 
+func appendRawWireFindIDCommand(dst []byte, database, collection string, id string, projection string) (wire.Document, error) {
+	raw, err := appendRawFindIDCommand(dst, database, collection, id, projection)
+	return wire.Document(raw), err
+}
+
+func appendRawFindIDCommand(dst []byte, database, collection string, id string, projection string) (bson.Raw, error) {
+	idx, doc := bsoncore.AppendDocumentStart(dst[:0])
+	doc = bsoncore.AppendStringElement(doc, "find", collection)
+	filterIdx, doc := bsoncore.AppendDocumentElementStart(doc, "filter")
+	doc = bsoncore.AppendStringElement(doc, "_id", id)
+	var err error
+	doc, err = bsoncore.AppendDocumentEnd(doc, filterIdx)
+	if err != nil {
+		return nil, err
+	}
+	if projection == pointReadProjectionYCSB {
+		projectionIdx, projectionDoc := bsoncore.AppendDocumentElementStart(doc, "projection")
+		projectionDoc = bsoncore.AppendBooleanElement(projectionDoc, "_id", false)
+		for field := 0; field < benchmarkYCSBFieldCount; field++ {
+			projectionDoc = bsoncore.AppendBooleanElement(projectionDoc, benchmarkYCSBFieldName(field), true)
+		}
+		doc, err = bsoncore.AppendDocumentEnd(projectionDoc, projectionIdx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	doc = bsoncore.AppendInt32Element(doc, "limit", 1)
+	doc = bsoncore.AppendBooleanElement(doc, "singleBatch", true)
+	if database != "" {
+		doc = bsoncore.AppendStringElement(doc, "$db", database)
+	}
+	doc, err = bsoncore.AppendDocumentEnd(doc, idx)
+	if err != nil {
+		return nil, err
+	}
+	return bson.Raw(doc), nil
+}
+
 func appendRawWireFindAgeRangeCommand(dst []byte, database, collection string, minAge int64) (wire.Document, error) {
 	raw, err := appendRawFindAgeRangeCommand(dst, database, collection, minAge)
 	return wire.Document(raw), err
@@ -4175,6 +4479,61 @@ func validateRawAgeDocument(doc bson.Raw, minAge int64) error {
 	return nil
 }
 
+func validateRawIDBatch(batch []bson.Raw, id string, cfg config) error {
+	if len(batch) != 1 {
+		return fmt.Errorf("raw id lookup returned %d documents want 1", len(batch))
+	}
+	return validatePointReadRawDocument(batch[0], id, cfg)
+}
+
+func validatePointReadRawDocument(doc bson.Raw, id string, cfg config) error {
+	if cfg.PointReadProjection == pointReadProjectionYCSB {
+		return validateYCSBProjectedRawDocument(doc)
+	}
+	if got, ok := doc.Lookup("_id").StringValueOK(); !ok || got != id {
+		return fmt.Errorf("raw id lookup returned _id=%v ok=%t want %s", got, ok, id)
+	}
+	return nil
+}
+
+func validateYCSBProjectedRawDocument(doc bson.Raw) error {
+	if value := doc.Lookup("_id"); !value.IsZero() {
+		return errors.New("YCSB projected raw read unexpectedly returned _id")
+	}
+	elements, err := doc.Elements()
+	if err != nil {
+		return err
+	}
+	if len(elements) != benchmarkYCSBFieldCount {
+		return fmt.Errorf("YCSB projected raw read returned %d fields want %d", len(elements), benchmarkYCSBFieldCount)
+	}
+	for field := 0; field < benchmarkYCSBFieldCount; field++ {
+		name := benchmarkYCSBFieldName(field)
+		_, data, ok := doc.Lookup(name).BinaryOK()
+		if !ok {
+			return fmt.Errorf("YCSB projected raw read missing binary %s", name)
+		}
+		if len(data) != benchmarkYCSBFieldLength {
+			return fmt.Errorf("YCSB projected raw read %s length=%d want %d", name, len(data), benchmarkYCSBFieldLength)
+		}
+	}
+	return nil
+}
+
+func projectYCSBReadRawDocument(doc bson.Raw) (bson.Raw, error) {
+	out := make(bson.D, 0, benchmarkYCSBFieldCount)
+	for field := 0; field < benchmarkYCSBFieldCount; field++ {
+		name := benchmarkYCSBFieldName(field)
+		value := doc.Lookup(name)
+		if value.IsZero() {
+			return nil, fmt.Errorf("YCSB projection missing %s", name)
+		}
+		out = append(out, bson.E{Key: name, Value: value})
+	}
+	raw, err := bson.Marshal(out)
+	return bson.Raw(raw), err
+}
+
 func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
 	if target == nil || target.server == nil {
 		return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
@@ -4203,7 +4562,7 @@ func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTar
 			if prebuilt != nil {
 				doc = prebuilt[i]
 			} else {
-				doc = benchmarkDocument(i)
+				doc = benchmarkDocumentForShape(cfg.DocumentShape, i)
 			}
 			raw, err := bson.Marshal(doc)
 			if err != nil {
@@ -4239,7 +4598,7 @@ func runTreeDBRawWireTCPLoadPhase(ctx context.Context, cfg config, target *bench
 		}
 	}()
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
-		docs, err := rawBSONDocuments(start, end, prebuilt, prebuiltRaw)
+		docs, err := rawBSONDocuments(start, end, cfg.DocumentShape, prebuilt, prebuiltRaw)
 		if err != nil {
 			return err
 		}
@@ -4601,7 +4960,7 @@ func nativeWirePrebuildStoredDocuments(cfg config, prebuilt []bson.D, prebuiltRa
 	}
 	out := make([][]byte, cfg.Documents)
 	for i := range out {
-		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, i, prebuilt, prebuiltRaw, nil)
+		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, cfg.DocumentShape, i, prebuilt, prebuiltRaw, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -4614,8 +4973,8 @@ func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebui
 	ids := make([][]byte, end-start)
 	docs := make([][]byte, end-start)
 	for i := start; i < end; i++ {
-		ids[i-start] = nativeWireMongoPrimaryID(i)
-		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, i, prebuilt, prebuiltRaw, prebuiltNative)
+		ids[i-start] = nativeWireMongoPrimaryID(cfg.DocumentShape, i)
+		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, cfg.DocumentShape, i, prebuilt, prebuiltRaw, prebuiltNative)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -4626,8 +4985,8 @@ func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebui
 
 const nativeWireMongoPrimaryIDPathDepth = 1
 
-func nativeWireMongoPrimaryID(i int) []byte {
-	id := benchmarkID(i)
+func nativeWireMongoPrimaryID(shape string, i int) []byte {
+	id := benchmarkIDForShape(shape, i)
 	key := make([]byte, 0, 2+4+len(id)+1)
 	// Match the Mongo gateway primary-key layout: one path component for `_id`,
 	// then the BSON scalar type and BSON string payload for the benchmark ID.
@@ -4635,31 +4994,31 @@ func nativeWireMongoPrimaryID(i int) []byte {
 	return bsoncore.AppendString(key, id)
 }
 
-func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt []bson.D, prebuiltRaw []bson.Raw, prebuiltNative [][]byte) ([]byte, error) {
+func nativeWireStoredDocument(format collections.DocumentFormat, shape string, i int, prebuilt []bson.D, prebuiltRaw []bson.Raw, prebuiltNative [][]byte) ([]byte, error) {
 	if prebuiltNative != nil {
 		return prebuiltNative[i], nil
 	}
 	switch format {
 	case collections.DocumentFormatBSON:
-		raw, err := benchmarkBSONRaw(i, prebuilt, prebuiltRaw)
+		raw, err := benchmarkBSONRaw(i, shape, prebuilt, prebuiltRaw)
 		if err != nil {
 			return nil, err
 		}
 		return raw, nil
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
-		return nativeWireBenchmarkJSONDocument(i, prebuilt)
+		return nativeWireBenchmarkJSONDocument(i, shape, prebuilt)
 	case collections.DocumentFormatTemplateV1:
-		raw, err := nativeWireBenchmarkJSONDocument(i, prebuilt)
+		raw, err := nativeWireBenchmarkJSONDocument(i, shape, prebuilt)
 		if err != nil {
 			return nil, err
 		}
 		return collections.EncodeTemplateV1DocumentJSON(raw)
 	default:
-		return nativeWireBenchmarkJSONDocument(i, prebuilt)
+		return nativeWireBenchmarkJSONDocument(i, shape, prebuilt)
 	}
 }
 
-func benchmarkBSONRaw(i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
+func benchmarkBSONRaw(i int, shape string, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
 	if prebuiltRaw != nil {
 		return prebuiltRaw[i], nil
 	}
@@ -4667,7 +5026,7 @@ func benchmarkBSONRaw(i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Ra
 	if prebuilt != nil {
 		doc = prebuilt[i]
 	} else {
-		doc = benchmarkDocument(i)
+		doc = benchmarkDocumentForShape(shape, i)
 	}
 	raw, err := bson.Marshal(doc)
 	if err != nil {
@@ -4676,9 +5035,16 @@ func benchmarkBSONRaw(i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Ra
 	return bson.Raw(raw), nil
 }
 
-func nativeWireBenchmarkJSONDocument(i int, prebuilt []bson.D) ([]byte, error) {
+func nativeWireBenchmarkJSONDocument(i int, shape string, prebuilt []bson.D) ([]byte, error) {
 	if prebuilt != nil {
 		return bson.MarshalExtJSON(prebuilt[i], false, false)
+	}
+	if shape == documentShapeYCSB {
+		raw, err := bson.Marshal(benchmarkYCSBDocument(i))
+		if err != nil {
+			return nil, err
+		}
+		return bson.MarshalExtJSON(bson.Raw(raw), false, false)
 	}
 	city := benchmarkCity(i)
 	return []byte(fmt.Sprintf(
@@ -4696,8 +5062,8 @@ func nativeWireBenchmarkJSONDocument(i int, prebuilt []bson.D) ([]byte, error) {
 	)), nil
 }
 
-func rawWireDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]wire.Document, error) {
-	rawDocs, err := rawBSONDocuments(start, end, prebuilt, prebuiltRaw)
+func rawWireDocuments(start, end int, shape string, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]wire.Document, error) {
+	rawDocs, err := rawBSONDocuments(start, end, shape, prebuilt, prebuiltRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -4708,7 +5074,7 @@ func rawWireDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw)
 	return docs, nil
 }
 
-func rawBSONDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]bson.Raw, error) {
+func rawBSONDocuments(start, end int, shape string, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]bson.Raw, error) {
 	docs := make([]bson.Raw, end-start)
 	for i := start; i < end; i++ {
 		if prebuiltRaw != nil {
@@ -4719,7 +5085,7 @@ func rawBSONDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw)
 		if prebuilt != nil {
 			doc = prebuilt[i]
 		} else {
-			doc = benchmarkDocument(i)
+			doc = benchmarkDocumentForShape(shape, i)
 		}
 		raw, err := bson.Marshal(doc)
 		if err != nil {
@@ -5425,6 +5791,17 @@ var (
 const benchmarkUpdatedCityValueCount = 65521
 
 func benchmarkDocument(i int) bson.D {
+	return benchmarkGatewayDocument(i)
+}
+
+func benchmarkDocumentForShape(shape string, i int) bson.D {
+	if shape == documentShapeYCSB {
+		return benchmarkYCSBDocument(i)
+	}
+	return benchmarkGatewayDocument(i)
+}
+
+func benchmarkGatewayDocument(i int) bson.D {
 	city := benchmarkCity(i)
 	return bson.D{
 		{Key: "_id", Value: benchmarkID(i)},
@@ -5439,6 +5816,34 @@ func benchmarkDocument(i int) bson.D {
 			{Key: "bio", Value: strings.Repeat("x", 96)},
 		}},
 	}
+}
+
+const (
+	benchmarkYCSBFieldCount  = 10
+	benchmarkYCSBFieldLength = 100
+)
+
+func benchmarkYCSBDocument(i int) bson.D {
+	doc := make(bson.D, 0, benchmarkYCSBFieldCount+1)
+	doc = append(doc, bson.E{Key: "_id", Value: benchmarkYCSBID(i)})
+	for field := 0; field < benchmarkYCSBFieldCount; field++ {
+		doc = append(doc, bson.E{Key: benchmarkYCSBFieldName(field), Value: benchmarkYCSBFieldValue(i, field)})
+	}
+	return doc
+}
+
+func benchmarkYCSBFieldName(field int) string {
+	return fmt.Sprintf("field%d", field)
+}
+
+func benchmarkYCSBFieldValue(documentOrdinal int, field int) []byte {
+	prefix := fmt.Sprintf("value-%012d-%02d-", documentOrdinal, field)
+	out := make([]byte, benchmarkYCSBFieldLength)
+	copy(out, prefix)
+	for i := len(prefix); i < len(out); i++ {
+		out[i] = byte('a' + (documentOrdinal+field+i)%26)
+	}
+	return out
 }
 
 type benchmarkSetUpdateParams struct {
@@ -5493,6 +5898,29 @@ func benchmarkDocumentOrdinal(operation int, stride uint64, documentCount int) i
 
 func benchmarkID(i int) string {
 	return fmt.Sprintf("doc-%012d", i)
+}
+
+func benchmarkIDForShape(shape string, i int) string {
+	if shape == documentShapeYCSB {
+		return benchmarkYCSBID(i)
+	}
+	return benchmarkID(i)
+}
+
+func benchmarkYCSBID(i int) string {
+	return fmt.Sprintf("user%d", benchmarkYCSBHash64(int64(i)))
+}
+
+func benchmarkYCSBHash64(n int64) int64 {
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(n))
+	hash := fnv.New64a()
+	_, _ = hash.Write(b[:])
+	result := int64(hash.Sum64())
+	if result < 0 {
+		return -result
+	}
+	return result
 }
 
 func benchmarkEmail(i int) string {
@@ -5945,10 +6373,10 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_read_kinds=%v concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_range_readers=%d concurrent_range_reader_sweep=%v concurrent_range_reads=%d concurrent_writers=%d concurrent_writer_sweep=%v concurrent_writes=%d treedb_read_state=%s\n",
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d document_shape=%s point_read_projection=%s concurrent_read_kinds=%v concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_range_readers=%d concurrent_range_reader_sweep=%v concurrent_range_reads=%d concurrent_writers=%d concurrent_writer_sweep=%v concurrent_writes=%d treedb_read_state=%s\n",
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
-			result.ConcurrentReadKinds, result.ConcurrentReaders, result.ConcurrentReaderSweep, result.ConcurrentReads,
+			result.DocumentShape, result.PointReadProjection, result.ConcurrentReadKinds, result.ConcurrentReaders, result.ConcurrentReaderSweep, result.ConcurrentReads,
 			result.ConcurrentRangeReaders, result.ConcurrentRangeReaderSweep, result.ConcurrentRangeReads,
 			result.ConcurrentWriters, result.ConcurrentWriterSweep, result.ConcurrentWrites, result.TreeDBReadState)
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)

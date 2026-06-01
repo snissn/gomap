@@ -9,6 +9,7 @@ trace-based replays that approximate Celestia workloads.
 - **Trace summary replay:** `BenchmarkTraceReplay`
 - **Trace timeline replay (overlap-aware):** `BenchmarkTraceReplayTimeline`
 - **Memtable mode matrices:** `BenchmarkTraceReplayMemtableModes`, `BenchmarkTraceReplayTimelineMemtableModes`
+- **External YCSB comparison:** `scripts/ycsb_compare_mongodb_treedb.sh`, with the current report in `docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md`
 
 ## Common Principles
 
@@ -16,6 +17,29 @@ trace-based replays that approximate Celestia workloads.
 - Keep env and flags identical (journal, value log, compression, memtable settings).
 - Prefer multiple runs or `-count` to reduce noise.
 - Record inputs (trace file, summary, scaling, memtable mode) with results.
+
+## External YCSB Comparison
+
+Use this when comparing MongoDB, `treedb-native`, and the TreeDB Mongo gateway
+with the external `go-ycsb` client:
+
+```bash
+scripts/ycsb_compare_mongodb_treedb.sh
+```
+
+The script writes host metadata, raw `go-ycsb` output, exact commands,
+`summary.tsv`, and `summary.md` under `OUT_DIR`. Set `RUN_REPEATS=3` when
+investigating first-run versus steady-state behavior after a load phase.
+
+Any nonzero YCSB operation error counter such as `INSERT_ERROR`, `READ_ERROR`,
+or `UPDATE_ERROR` marks that phase invalid and makes the script exit nonzero by
+default. For exploratory parsing of known-bad artifacts, set
+`ALLOW_YCSB_ERRORS=true`; the generated summaries still show the invalid rows.
+Use `PARSE_ONLY=true OUT_DIR=/path/to/run` to regenerate summaries from saved
+raw `*.out` files without rerunning servers.
+
+The current captured report is
+`docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md`.
 
 ## 1) Unified Bench (Synthetic)
 
