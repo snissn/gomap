@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,6 +191,75 @@ func TestCollectionCommandWALIndexedInsertBatchStagesAppliedLSNUntilFlush(t *tes
 	assertCollectionIndexIDs(t, reopened, "email", "ada@example.com", "u1")
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALIndexedInsertBatchFlushesBeforeDirectBypass(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	firstDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "staged"},
+		{Key: "email", Value: "staged@example.com"},
+		{Key: "city", Value: "hnl"},
+	})
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("staged")}, [][]byte{firstDoc}); err != nil {
+		t.Fatalf("staged InsertBatchValidatedBSON: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after staged indexed insert=%d, want 0 before bypass batch", got)
+	}
+
+	largeCount := DefaultIndexedWriteMemtableDirectBatchDocuments
+	ids := make([][]byte, largeCount)
+	docs := make([][]byte, largeCount)
+	for i := 0; i < largeCount; i++ {
+		id := fmt.Sprintf("bulk-%05d", i)
+		email := fmt.Sprintf("bulk-%05d@example.com", i)
+		ids[i] = []byte(id)
+		docs[i] = mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: id},
+			{Key: "email", Value: email},
+			{Key: "city", Value: "hnl"},
+		})
+	}
+	if _, err := col.InsertBatchValidatedBSON(ids, docs); err != nil {
+		t.Fatalf("large bypass InsertBatchValidatedBSON: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after bypass batch=%d, want 2", got)
+	}
+	assertCollectionIndexIDs(t, col, "email", "staged@example.com", "staged")
+	assertCollectionIndexIDs(t, col, "email", "bulk-00000@example.com", "bulk-00000")
+	lastID := fmt.Sprintf("bulk-%05d", largeCount-1)
+	lastEmail := fmt.Sprintf("bulk-%05d@example.com", largeCount-1)
+	assertCollectionIndexIDs(t, col, "email", lastEmail, lastID)
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertCollectionIndexIDs(t, reopened, "email", "staged@example.com", "staged")
+	assertCollectionIndexIDs(t, reopened, "email", lastEmail, lastID)
+	if got := reopen.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 2", got)
 	}
 }
 
