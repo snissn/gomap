@@ -134,6 +134,22 @@ func vectorGraphSearchTruthMatrixRequiredMetricLabels2037() []string {
 		"adjacency_typed_list_scratch_decodes/search",
 		"adjacency_legacy_fallbacks/search",
 		"adjacency_source_fallbacks/search",
+		"benchmark_debug_searches/search",
+		"neighbor_tiles/search",
+		"neighbor_tile_avg_size",
+		"score_batch_singletons/search",
+		"score_batch_size_2_4/search",
+		"score_batch_size_5_8/search",
+		"score_batch_size_9_16/search",
+		"score_batch_size_17_plus/search",
+		"already_visited_skips/search",
+		"frontier_pushes/search",
+		"frontier_pops/search",
+		"top_k_insert_rejections/search",
+		"visited_mark_hits/search",
+		"visited_mark_misses/search",
+		"exact_candidate_order_observations/search",
+		"exact_candidate_order_backward_jumps/search",
 	}
 }
 
@@ -215,6 +231,9 @@ func TestVectorGraphSearchTruthMatrixMetricContract2037(t *testing.T) {
 		"adjacency_prepared_csr_mmap_direct/search",
 		"adjacency_typed_list_mmap_direct/search",
 		"typed_column_vector_fallbacks/search",
+		"benchmark_debug_searches/search",
+		"score_batch_singletons/search",
+		"exact_candidate_order_observations/search",
 	} {
 		if _, ok := seen[required]; !ok {
 			t.Fatalf("missing required metric label %q", required)

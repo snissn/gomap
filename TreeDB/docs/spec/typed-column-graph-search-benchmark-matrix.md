@@ -544,6 +544,133 @@ Decision for #2103 (promotion matrix):
   storage remain deferred/evidence-gated and are not prerequisites for this
   narrow default.
 
+## #2105 public VectorIndexSearcher promotion matrix
+
+`BenchmarkVectorIndexSearcherSearchPromotion2105` is the public-search follow-up
+to the #2103 internal `SearchCosine` promotion matrix. It uses the deterministic
+#2091 production topology-parity fixture (`rows=8192`, `dims=128`, degree 16,
+`topK=10`, bounded `efSearch=128`, exact `efSearch=8192`,
+`query_ordinal=4096`) and times an already-opened public
+`VectorIndexSearcher.Search` handle. Setup/open/rebuild are outside the timed
+search loop; `OpenVectorIndexSearcher` setup remains covered by the #2037
+`setup_open_prepare` boundary when that boundary is the measurement target.
+
+Command:
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkVectorIndexSearcherSearchPromotion2105$' \
+  -benchmem -benchtime=500ms -count=5
+```
+
+Smoke validation may use `-benchtime=1x -count=1`. Published comparisons should
+use one hardware/Go/GOMAXPROCS context and should keep the #2091 shape, query,
+`topK`, `efSearch`, and materialization boundary fixed within each table.
+
+Permanent rows:
+
+| Search | Boundary | Mode | Score mode | Fixture/materialization contract |
+| --- | --- | --- | --- | --- |
+| `ef_search_128` | `result_id` | `legacy_graph_row_direct` | `default` | Public result-ID response from the legacy/direct compatibility fixture; default must remain scalar. |
+| `ef_search_128` | `result_id` | `current_prepared_typed_column` | `default` | Public result-ID response from the prepared current-format fixture; default should select indexed/gathered scoring when eligible. |
+| `ef_search_128` | `result_id` | `current_prepared_typed_column` | `scalar` | Same public result-ID boundary and fixture, explicit scalar control. |
+| `ef_search_128` | `result_id` | `current_prepared_typed_column` | `indexed` | Same public result-ID boundary and fixture, explicit indexed/gathered control. |
+| `ef_search_128` | `document_materialization` | `current_prepared_typed_column` | `default` | Public response plus post-top-k document fetch/materialization; legacy is omitted because the physical-asset control fixture does not publish comparable base documents. |
+| `ef_search_128` | `document_materialization` | `current_prepared_typed_column` | `scalar` | Same document boundary, explicit scalar control. |
+| `ef_search_128` | `document_materialization` | `current_prepared_typed_column` | `indexed` | Same document boundary, explicit indexed/gathered control. |
+| `exact` | `result_id` | `legacy_graph_row_direct` | `default` | Public result-ID exact-mode control; default must remain scalar. |
+| `exact` | `result_id` | `current_prepared_typed_column` | `default` | Public result-ID exact-mode prepared default; default should select indexed/gathered scoring when eligible. |
+| `exact` | `result_id` | `current_prepared_typed_column` | `scalar` | Same exact public result-ID boundary, explicit scalar control. |
+| `exact` | `result_id` | `current_prepared_typed_column` | `indexed` | Same exact public result-ID boundary, explicit indexed/gathered control. |
+
+All #2105 rows run with `StatsMode=benchmark_debug` and emit the public metric
+labels from `reportVectorIndexSearchBenchMetricsV4`, including the #1979
+control-flow counters now exposed for public searcher benchmarks:
+`benchmark_debug_searches/search`, `neighbor_tile_avg_size`,
+`score_batch_singletons/search`, `score_batch_size_2_4/search`,
+`score_batch_size_5_8/search`, `score_batch_size_9_16/search`,
+`score_batch_size_17_plus/search`, `already_visited_skips/search`,
+`frontier_pushes/search`, `frontier_pops/search`,
+`top_k_insert_rejections/search`, `visited_mark_hits/search`,
+`visited_mark_misses/search`, `exact_candidate_order_observations/search`, and
+`exact_candidate_order_backward_jumps/search`. The regular public source and
+fallback labels still apply: healthy prepared rows must report
+`graph_rows=0`, `prepared_graph_search_views/search=1`,
+`graph_row_fallbacks/search=0`, `typed_column_vector_fallbacks/search=0`,
+`adjacency_source_fallbacks/search=0`, `result_id_graph_fallbacks/search=0`, and
+`row_ref_state_source_fallbacks/search=0`.
+
+Local #2105 evidence run:
+
+```sh
+OUT=/tmp/gomap_2105_public_matrix_rebased_20260531_190806
+GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkVectorIndexSearcherSearchPromotion2105$' \
+  -benchmem -benchtime=1s -count=3 | tee "$OUT/public_promotion_2105_bench.txt"
+benchstat "$OUT/public_promotion_2105_bench.txt" > "$OUT/public_promotion_2105_benchstat.txt"
+```
+
+Run context: macOS 26.2, Apple M3, 8 logical CPUs, 16 GiB memory,
+`go version go1.25.5 darwin/arm64`. The tables below record medians from the
+three-count run. Raw artifacts contain every emitted counter; all rows below use
+`rows=8192`, `dims=128`, degree 16, `topK=10`, `query_ordinal=4096`, and
+`StatsMode=benchmark_debug`.
+
+Bounded public result-ID rows (`efSearch=128`, setup/open/rebuild excluded):
+
+| Mode | Score | ns/op | ops/sec | B/op | allocs/op | Work counters | Score/debug counters | Source/fallback counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
+| `legacy_graph_row_direct` | `default` | 10.149 µs | 98,528 | 816 | 2 | `candidate_rows=8192`, `candidate_fetches=128`, `result_fetches=10`, `visited_edges=612`, `visited_mark_hits/misses=485/127` | scalar: `score_batch_calls=128`, max tile `1`, hist singleton `128`, exact obs/back `0/0` | `graph_rows=8192`, `graph_row_fallbacks=138`, `vector_scratch_decodes=128`, `typed_column_vector_fallbacks=1`, `result_id_graph_fallbacks=10`, `adjacency_source_fallbacks=0` |
+| `current_prepared_typed_column` | `default` | 8.870 µs | 112,734 | 816 | 2 | same fixed work: `candidate_fetches=128`, `result_fetches=10`, `visited_edges=612`, `visited_mark_hits/misses=485/127` | indexed/gathered: `score_batch_calls=25`, candidates `128`, max tile `16`, hist singleton/2-4/5-8/9-16 = `4/8/12/1`, exact obs/back `0/0` | `graph_rows=0`, `prepared_graph_search_views=1`, graph/vector/adjacency/result fallbacks `0`, vector/norm scratch decodes `0` |
+| `current_prepared_typed_column` | `scalar` | 11.440 µs | 87,414 | 816 | 2 | same fixed work | scalar: `score_batch_calls=128`, max tile `1`, hist singleton `128`, exact obs/back `0/0` | prepared path, all source/result fallbacks `0` |
+| `current_prepared_typed_column` | `indexed` | 8.473 µs | 118,027 | 816 | 2 | same fixed work | indexed/gathered: `score_batch_calls=25`, candidates `128`, max tile `16`, hist `4/8/12/1`, exact obs/back `0/0` | prepared path, all source/result fallbacks `0` |
+
+Bounded public document-materialization rows (`efSearch=128`, current prepared
+fixture only because the legacy physical-asset control does not publish
+comparable base documents):
+
+| Mode | Score | ns/op | ops/sec | B/op | allocs/op | Work/doc counters | Score/source counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| `current_prepared_typed_column` | `default` | 106.451 µs | 9,394 | 100,308 | 321 | `result_fetches=10`, `docs_fetched=10`, `doc_fetch_ns=108,042`, `visited_edges=612` | default indexed: `score_batch_calls=25`, hist `4/8/12/1`; prepared/source fallbacks `0` |
+| `current_prepared_typed_column` | `scalar` | 109.582 µs | 9,126 | 100,308 | 321 | `result_fetches=10`, `docs_fetched=10`, `doc_fetch_ns=108,667`, `visited_edges=612` | scalar: `score_batch_calls=128`, singleton hist `128`; prepared/source fallbacks `0` |
+| `current_prepared_typed_column` | `indexed` | 109.724 µs | 9,114 | 100,308 | 321 | `result_fetches=10`, `docs_fetched=10`, `doc_fetch_ns=109,500`, `visited_edges=612` | indexed: `score_batch_calls=25`, hist `4/8/12/1`; prepared/source fallbacks `0` |
+
+Exact public result-ID rows (`efSearch=8192`, setup/open/rebuild excluded):
+
+| Mode | Score | ns/op | ops/sec | B/op | allocs/op | Exact/work counters | Score/debug counters | Source/fallback counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
+| `legacy_graph_row_direct` | `default` | 1.053 ms | 949.3 | 816 | 2 | `candidate_fetches=8192`, `result_fetches=10`, `visited_edges=100748`, `visited_mark_hits/misses=92557/8191`, exact obs/back `8192/5977` | scalar: `score_batch_calls=8192`, singleton hist `8192`, max tile `1` | `graph_rows=8192`, `graph_row_fallbacks=8202`, `vector_scratch_decodes=8192`, `typed_column_vector_fallbacks=1`, `result_id_graph_fallbacks=10`, `adjacency_source_fallbacks=0` |
+| `current_prepared_typed_column` | `default` | 919.201 µs | 1,088 | 816 | 2 | same exact work: `candidate_fetches=8192`, `result_fetches=10`, `visited_edges=100748`, exact obs/back `8192/5977` | indexed/gathered: `score_batch_calls=1797`, candidates `8192`, max tile `16`, hist singleton/2-4/5-8/9-16 = `364/502/930/1` | `graph_rows=0`, `prepared_graph_search_views=1`, graph/vector/adjacency/result fallbacks `0`, vector/norm scratch decodes `0` |
+| `current_prepared_typed_column` | `scalar` | 1.084 ms | 922.9 | 816 | 2 | same exact work | scalar: `score_batch_calls=8192`, singleton hist `8192`, exact obs/back `8192/5977` | prepared path, all source/result fallbacks `0` |
+| `current_prepared_typed_column` | `indexed` | 929.601 µs | 1,076 | 816 | 2 | same exact work | indexed/gathered: `score_batch_calls=1797`, hist `364/502/930/1`, exact obs/back `8192/5977` | prepared path, all source/result fallbacks `0` |
+
+#2105 decision: recommend closing #2035 as performance-satisfied. On the public
+larger topology-parity matrix, prepared `default` is faster than the valid
+legacy/direct public result-ID controls in bounded and exact rows, tracks the
+explicit indexed/gathered counter shape, remains equivalent to scalar/indexed
+results in the focused public test, and keeps healthy prepared fallback counters
+at zero. The document-materialization boundary is dominated by post-top-k
+fetch/reconstruction work; prepared `default` remains competitive while preserving
+the same search work and document counters. No narrow performance follow-up is
+needed from this matrix. #1981 wavefront traversal and #1977 normalized-vector
+storage remain separate deferred experiments, not blockers to #2035 closeout.
+
+`TestColumnVectorGraphPublicVectorIndexSearcherSearchPromotion2105` is the
+focused correctness/admission gate. It uses the exact #2091 test fixture to prove
+that public prepared `default`, `scalar`, and `indexed` rows return equivalent
+result IDs/order/scores at both public result-ID and document-materialization
+boundaries. It also asserts that prepared `default` follows indexed score-batch
+counters, explicit scalar uses singleton batches, healthy prepared
+fallback/source counters remain zero, and legacy/direct `default` remains scalar
+at the public result-ID boundary.
+
+This #2105 harness and evidence are docs/tests/benchmarks only. They must not
+change traversal semantics, frontier behavior, candidate/tie/result ordering,
+`efSearch`, `topK`, fixture topology, public response ownership, or persistent
+formats.
+
 ## Interpretation rules
 
 - `combined_prepared_typed_column` rows are #2045 prepared-routing evidence;

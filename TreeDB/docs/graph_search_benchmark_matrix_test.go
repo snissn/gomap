@@ -72,6 +72,15 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		"eligible prepared typed-column path",
 		"legacy graph-row/direct compatibility",
 		"#2035 should remain open as the broader promotion tracker",
+		"#2105 public VectorIndexSearcher promotion matrix",
+		"BenchmarkVectorIndexSearcherSearchPromotion2105",
+		"TestColumnVectorGraphPublicVectorIndexSearcherSearchPromotion2105",
+		"Public result-ID response",
+		"document_materialization",
+		"exact",
+		"benchmark_debug_searches/search",
+		"exact_candidate_order_backward_jumps/search",
+		"legacy/direct `default` remains scalar",
 	}
 	for _, needle := range required {
 		if !strings.Contains(text, needle) {
