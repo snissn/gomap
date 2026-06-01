@@ -2207,7 +2207,7 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 		ConcurrentRangeReaders:     4,
 		ConcurrentRangeReaderSweep: []int{1, 4},
 		ConcurrentRangeReads:       8,
-		TreeDBProfile:              string(treedb.ProfileLegacyWALRelaxedFast),
+		TreeDBProfile:              string(treedb.ProfileBench),
 		TreeDBReadState:            treeDBReadStateUnsettled,
 		Phases: []phaseResult{{
 			Name:           "load_insert_many",
@@ -2610,7 +2610,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		Database:                               "bench",
 		Collection:                             "docs",
 		Documents:                              1,
-		TreeDBProfile:                          string(treedb.ProfileLegacyWALRelaxedFast),
+		TreeDBProfile:                          string(treedb.ProfileCommandWALRelaxed),
 		TreeDBCommandWAL:                       true,
 		TreeDBDocumentFormat:                   "bson",
 		TreeDBDataRootStorage:                  "compressed",

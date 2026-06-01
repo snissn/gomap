@@ -515,8 +515,8 @@ func knownExampleRun() *canonicalRun {
 			Docs:                      docs,
 			BatchSize:                 batch,
 			Indexes:                   2,
-			TreeEngine:                "production_wal_on_fast",
-			Profile:                   "fast",
+			TreeEngine:                "command_wal_relaxed",
+			Profile:                   "command_wal_relaxed",
 			Formats:                   []string{"json", "template-v1"},
 			LeafSegmentTargetBytes:    1048576,
 			LeafgenPackFrameK:         16,
@@ -531,7 +531,7 @@ func knownExampleRun() *canonicalRun {
 		Results: []resultRow{
 			{
 				ConfigName:      "treedb_template_v1_collection_2_indexes",
-				Engine:          "production_wal_on_fast",
+				Engine:          "command_wal_relaxed",
 				Format:          "template-v1",
 				Shape:           "collection",
 				IndexCount:      2,
@@ -549,7 +549,7 @@ func knownExampleRun() *canonicalRun {
 			},
 			{
 				ConfigName:      "treedb_template_v1_collection_2_indexes",
-				Engine:          "production_wal_on_fast",
+				Engine:          "command_wal_relaxed",
 				Format:          "template-v1",
 				Shape:           "collection",
 				IndexCount:      2,

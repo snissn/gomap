@@ -362,7 +362,7 @@ func BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2(b *testing.B) {
 
 func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	dir := filepath.Join(b.TempDir(), "treedb")
-	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
+	opts := treedb.OptionsFor(treedb.ProfileBench, dir)
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -472,7 +472,7 @@ func BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2(b *testing.B) {
 		Collection:                  "docs",
 		BatchSize:                   profileBenchBatchSize(b),
 		SecondaryIndexes:            2,
-		TreeDBProfile:               treedb.ProfileWALOnFast,
+		TreeDBProfile:               treedb.ProfileBench,
 		TreeDBDocumentFormat:        collections.DocumentFormatBSON,
 		TreeDBDataRootStorage:       collections.RootStorageCompressed,
 		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
@@ -541,7 +541,7 @@ func BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2(b *testing.B) {
 
 func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	dir := filepath.Join(b.TempDir(), "treedb")
-	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
+	opts := treedb.OptionsFor(treedb.ProfileBench, dir)
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -698,7 +698,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes3CityUpdate(b *testing.
 func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []collections.IndexDefinition, updateCity bool) {
 	b.Helper()
 	dir := filepath.Join(b.TempDir(), "treedb")
-	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
+	opts := treedb.OptionsFor(treedb.ProfileBench, dir)
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -2467,7 +2467,7 @@ func benchmarkTreeDBGatewayLoadWithDocument(b *testing.B, format collections.Doc
 		Collection:                  "docs",
 		BatchSize:                   profileBenchBatchSize(b),
 		SecondaryIndexes:            secondaryIndexes,
-		TreeDBProfile:               treedb.ProfileWALOnFast,
+		TreeDBProfile:               treedb.ProfileBench,
 		TreeDBDocumentFormat:        format,
 		TreeDBDataRootStorage:       collections.RootStorageCompressed,
 		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
@@ -2554,7 +2554,7 @@ func benchmarkTreeDBGatewayRunCommandLoad(b *testing.B, format collections.Docum
 		Collection:                  "docs",
 		BatchSize:                   profileBenchBatchSize(b),
 		SecondaryIndexes:            secondaryIndexes,
-		TreeDBProfile:               treedb.ProfileWALOnFast,
+		TreeDBProfile:               treedb.ProfileBench,
 		TreeDBDocumentFormat:        format,
 		TreeDBDataRootStorage:       collections.RootStorageCompressed,
 		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
@@ -2619,7 +2619,7 @@ func benchmarkTreeDBGatewayRunRawCommandLoad(b *testing.B, format collections.Do
 		Collection:                  "docs",
 		BatchSize:                   profileBenchBatchSize(b),
 		SecondaryIndexes:            secondaryIndexes,
-		TreeDBProfile:               treedb.ProfileWALOnFast,
+		TreeDBProfile:               treedb.ProfileBench,
 		TreeDBDocumentFormat:        format,
 		TreeDBDataRootStorage:       collections.RootStorageCompressed,
 		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
