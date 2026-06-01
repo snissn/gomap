@@ -316,8 +316,8 @@ ordinal, checks prepared vectors and document IDs against the source rows, runs
 both graph-only and result-ID searches, and asserts equivalent results plus equal
 search-work counters (`candidate_rows/search`, `candidates/search`,
 `edges/search`, `visited_edges/search`, `visited_nodes/search`, score-batch
-candidate counts, fetch counts, and adjacency prepared-CSR counters). After
-After #2103, these historical topology-parity rows explicitly pin scalar scoring so
+candidate counts, fetch counts, and adjacency prepared-CSR counters). After #2103,
+these historical topology-parity rows explicitly pin scalar scoring so
 the gate continues to isolate topology/search-work parity rather than the
 prepared indexed-scoring default.
 
