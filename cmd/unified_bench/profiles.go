@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	profileArg = flag.String("profile", "", "Benchmark profile to use (fast, wal_on_fast, durable, balanced). Overrides default flags unless explicitly set.")
+	profileArg = flag.String("profile", "", "Cross-DB benchmark preset to use (balanced, durable, fast, wal_on_fast). Not a TreeDB server profile. Overrides default flags unless explicitly set.")
 )
 
 type Profile struct {
@@ -64,11 +64,11 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB this mirrors treedb.ProfileFast (WAL off, relaxed read integrity, normal page reuse, Celestia-aligned auto/snappy/balanced value-log compression). UNSAFE for production data.",
+			Description: "Cross-DB no-sync throughput preset. For TreeDB this intentionally uses the legacy no-WAL compatibility bundle with relaxed read integrity and Celestia-aligned auto/snappy/balanced value-log compression. UNSAFE for production data.",
 			Apply:       applyFast,
 		},
 		"wal_on_fast": {
-			Description: "TreeDB fast WAL-on profile: mirrors treedb.ProfileWALOnFast (WAL on, relaxed sync/read integrity, normal page reuse, Celestia-aligned auto/snappy/balanced value-log compression).",
+			Description: "Cross-DB relaxed-WAL preset. For TreeDB this intentionally uses the legacy WAL-on compatibility bundle with relaxed sync/read integrity and Celestia-aligned auto/snappy/balanced value-log compression.",
 			Apply:       applyWALOnFast,
 		},
 		"unsafe": { // Alias for fast

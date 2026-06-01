@@ -280,7 +280,7 @@ func parseConfig(args []string) (config, error) {
 		ReadWorkers:            2,
 		FormatsCSV:             "template-v1,bson,json",
 		IndexesCSV:             "0,1,2",
-		Profile:                string(treedb.ProfileNoWALFast),
+		Profile:                string(treedb.ProfileBench),
 		LeafSegmentTargetBytes: 32 << 10,
 		CacheBudgetBytes:       32 << 10,
 		RetiredMmapBudgetBytes: 32 << 10,
@@ -1092,19 +1092,10 @@ func runRawWorker(cfg config) error {
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "production_fast":
-		// Transitional collection benchmark engine alias migrated by #2148.
-		return treedb.ProfileNoWALFast, nil
-	case "production_wal_on_fast":
-		// Transitional collection benchmark engine alias migrated by #2148.
-		return treedb.ProfileLegacyWALRelaxedFast, nil
-	default:
-		if profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench); ok {
-			return profile, nil
-		}
-		return "", fmt.Errorf("unsupported profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+	if profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench); ok {
+		return profile, nil
 	}
+	return "", fmt.Errorf("unsupported profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 }
 
 func rawBatchSet(db *treedb.DB, start, count, batchSize, valueSize, generation int) error {

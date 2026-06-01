@@ -12,6 +12,25 @@ func TestOptionsFor_ProfileSetsDir(t *testing.T) {
 	}
 }
 
+func TestOptionsFor_UnknownProfilePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("OptionsFor accepted unknown profile, want panic")
+		}
+	}()
+	_ = OptionsFor(Profile("not_a_profile"), t.TempDir())
+}
+
+func TestApplyProfile_UnknownProfilePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("ApplyProfile accepted unknown profile, want panic")
+		}
+	}()
+	var opts Options
+	ApplyProfile(&opts, Profile("not_a_profile"))
+}
+
 func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileFast)

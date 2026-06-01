@@ -1,6 +1,9 @@
 package treedb
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Profiles are intentionally defined in the public package so downstream users
 // can pick a coherent option bundle without duplicating the mapping from
@@ -211,6 +214,9 @@ func normalizeProfileToken(raw string) string {
 // left as zero values unless the selected profile intentionally owns that knob
 // (e.g. fast profiles set ChunkSize; KeepRecent, allocator policy, and
 // backpressure thresholds still use normal defaults).
+//
+// OptionsFor panics for unknown profiles. Parse public CLI/env strings with
+// ParsePublicProfile before calling OptionsFor.
 func OptionsFor(profile Profile, dir string) Options {
 	opts := Options{Dir: dir}
 	ApplyProfile(&opts, profile)
@@ -229,6 +235,9 @@ func OptionsFor(profile Profile, dir string) Options {
 // false”, so profiles set boolean policy knobs to match the profile. If you
 // want the opposite policy, apply the profile and then override the boolean
 // explicitly.
+//
+// ApplyProfile panics for unknown profiles so misspelled programmatic profile
+// tokens cannot silently select bare default options.
 func ApplyProfile(opts *Options, profile Profile) {
 	if opts == nil {
 		return
@@ -236,8 +245,7 @@ func ApplyProfile(opts *Options, profile Profile) {
 
 	normalized, ok := NormalizeProfile(profile)
 	if !ok {
-		// Unknown profile: no-op (callers can still use Options directly).
-		return
+		panic(fmt.Sprintf("treedb: unsupported profile %q", profile))
 	}
 
 	switch normalized {
