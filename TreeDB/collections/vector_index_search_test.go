@@ -16,6 +16,34 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
+func TestVectorIndexSearchStatsModePublicMapping2126(t *testing.T) {
+	tests := []struct {
+		name string
+		mode VectorIndexSearchStatsMode
+		want columnVectorGraphNativeSearchStatsMode
+	}{
+		{name: "default_preserves_full_diagnostics", mode: VectorIndexSearchStatsModeDefault, want: columnVectorGraphNativeSearchStatsModeFullDiagnostics},
+		{name: "full_diagnostics", mode: VectorIndexSearchStatsModeFullDiagnostics, want: columnVectorGraphNativeSearchStatsModeFullDiagnostics},
+		{name: "minimal", mode: VectorIndexSearchStatsModeMinimal, want: columnVectorGraphNativeSearchStatsModeMinimal},
+		{name: "production_alias", mode: VectorIndexSearchStatsModeProduction, want: columnVectorGraphNativeSearchStatsModeMinimal},
+		{name: "benchmark_debug", mode: VectorIndexSearchStatsModeBenchmarkDebug, want: columnVectorGraphNativeSearchStatsModeBenchmarkDebug},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := columnVectorGraphNativeSearchStatsModeFromPublic(tt.mode)
+			if err != nil {
+				t.Fatalf("columnVectorGraphNativeSearchStatsModeFromPublic(%q): %v", tt.mode, err)
+			}
+			if got != tt.want {
+				t.Fatalf("columnVectorGraphNativeSearchStatsModeFromPublic(%q)=%s want %s", tt.mode, got, tt.want)
+			}
+		})
+	}
+	if got, err := columnVectorGraphNativeSearchStatsModeFromPublic(VectorIndexSearchStatsMode("debug_everything")); err == nil || got != columnVectorGraphNativeSearchStatsModeDefault {
+		t.Fatalf("unsupported mode got=(%s,%v) want default mode with error", got, err)
+	}
+}
+
 func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -1641,6 +1669,10 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *tes
 	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b, false, DocumentFetchOptions{})
 }
 
+func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4StatsMode2126(b *testing.B) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderStatsModes2126(b, false, DocumentFetchOptions{})
+}
+
 func BenchmarkVectorSearchPublicSearchSerialTypedColumn1961(b *testing.B) {
 	BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b)
 }
@@ -1655,6 +1687,22 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocum
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
 	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithStatsModeV4(b, includeDocuments, fetchOptions, VectorIndexSearchStatsModeDefault)
+}
+
+func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderStatsModes2126(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
+	b.Helper()
+	for _, tc := range []struct {
+		name string
+		mode VectorIndexSearchStatsMode
+	}{
+		{name: "stats=full_diagnostics", mode: VectorIndexSearchStatsModeFullDiagnostics},
+		{name: "stats=production", mode: VectorIndexSearchStatsModeProduction},
+	} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithStatsModeV4(b, includeDocuments, fetchOptions, tc.mode)
+		})
+	}
 }
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithStatsModeV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions, statsMode VectorIndexSearchStatsMode) {
@@ -1714,6 +1762,7 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithStats
 		}
 	}
 	b.StopTimer()
+	reportVectorIndexSearchStatsModeBenchMetric2126(b, statsMode)
 	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
 }
 
@@ -1778,6 +1827,10 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV
 	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b, false, DocumentFetchOptions{})
 }
 
+func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4StatsMode2126(b *testing.B) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelStatsModes2126(b, false, DocumentFetchOptions{})
+}
+
 func BenchmarkVectorSearchPublicSearchParallelTypedColumn1961(b *testing.B) {
 	BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b)
 }
@@ -1792,6 +1845,22 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelW
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
 	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithStatsModeV4(b, includeDocuments, fetchOptions, VectorIndexSearchStatsModeDefault)
+}
+
+func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelStatsModes2126(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
+	b.Helper()
+	for _, tc := range []struct {
+		name string
+		mode VectorIndexSearchStatsMode
+	}{
+		{name: "stats=full_diagnostics", mode: VectorIndexSearchStatsModeFullDiagnostics},
+		{name: "stats=production", mode: VectorIndexSearchStatsModeProduction},
+	} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithStatsModeV4(b, includeDocuments, fetchOptions, tc.mode)
+		})
+	}
 }
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithStatsModeV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions, statsMode VectorIndexSearchStatsMode) {
@@ -1899,6 +1968,7 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelW
 		b.Fatalf("%s", errValue.(string))
 	}
 	vectorSearchBenchSinkOrdinalV4 += int(sink.Load())
+	reportVectorIndexSearchStatsModeBenchMetric2126(b, statsMode)
 	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
 }
 
@@ -2059,6 +2129,20 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6(b *testing.B
 	}
 	b.StopTimer()
 	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
+}
+
+func reportVectorIndexSearchStatsModeBenchMetric2126(b *testing.B, mode VectorIndexSearchStatsMode) {
+	b.Helper()
+	switch mode {
+	case VectorIndexSearchStatsModeMinimal:
+		b.ReportMetric(1, "stats_mode_minimal")
+	case VectorIndexSearchStatsModeProduction:
+		b.ReportMetric(1, "stats_mode_production")
+	case VectorIndexSearchStatsModeFullDiagnostics:
+		b.ReportMetric(1, "stats_mode_full_diagnostics")
+	case VectorIndexSearchStatsModeBenchmarkDebug:
+		b.ReportMetric(1, "stats_mode_benchmark_debug")
+	}
 }
 
 func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorIndexSearchStats, includeOpenPerOp bool) {
