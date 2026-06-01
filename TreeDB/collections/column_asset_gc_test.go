@@ -475,6 +475,118 @@ func TestColumnAssetGCProtectsPinnedCandidateM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetGCConsumesLifecyclePinSet1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 94, []byte("lifecycle-pinned-candidate-segment"))
+	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	pin, err := col.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{
+		Source: ColumnAssetLifecyclePinSourcePreparedQuery,
+		Owner:  "gc-lifecycle-pin-test",
+		Reason: "protect candidate from destructive GC",
+		Refs:   []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("AcquireColumnAssetLifecyclePinSet: %v", err)
+	}
+
+	pinnedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		_ = pin.Close()
+		t.Fatalf("ColumnAssetGC while lifecycle pin active: %v", err)
+	}
+	if pinnedStats.SegmentsEligible != 0 || pinnedStats.SegmentsDeleted != 0 || pinnedStats.Plan.Sources.PreparedQueryRefs != 1 || pinnedStats.Plan.Refs.Reclaimable != 0 {
+		_ = pin.Close()
+		t.Fatalf("pinned GC stats=%+v plan=%+v want lifecycle pin protection", pinnedStats, pinnedStats.Plan)
+	}
+	if _, err := os.Stat(candidatePath); err != nil {
+		_ = pin.Close()
+		t.Fatalf("candidate segment removed while lifecycle-pinned: %v", err)
+	}
+	if err := pin.Close(); err != nil {
+		t.Fatalf("pin close: %v", err)
+	}
+
+	drainedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{CandidateRefs: []ColumnAssetRef{candidate}})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after lifecycle pin release: %v", err)
+	}
+	if drainedStats.SegmentsDeleted != 1 || drainedStats.BytesDeleted != candidate.Length {
+		t.Fatalf("drained GC stats=%+v want candidate deleted", drainedStats)
+	}
+	if _, err := os.Stat(candidatePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("candidate still exists after pin release or unexpected stat error: %v", err)
+	}
+}
+
+func TestColumnAssetGCQuarantineRegistrySegmentsFailClosed1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 95, []byte("quarantined-candidate-segment"))
+	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	lease, err := col.RegisterColumnAssetQuarantine(ColumnAssetQuarantineRegistrationOptions{
+		Owner:  "gc-quarantine-test",
+		Source: "integrity",
+		Reason: "segment quarantine blocks destructive GC",
+		Segments: []ColumnAssetQuarantineSegment{{
+			FileID: candidate.FileID,
+			Bytes:  candidate.Length + 1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RegisterColumnAssetQuarantine: %v", err)
+	}
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetReachabilityIncomplete) || !strings.Contains(err.Error(), "quarantine_segment_mismatches=1") {
+		_ = lease.Close()
+		t.Fatalf("ColumnAssetGC error=%v want incomplete quarantine mismatch", err)
+	}
+	if stats.SegmentsDeleted != 0 || stats.Plan.Segments.QuarantineSegments != 1 || stats.Plan.Segments.QuarantineSegmentMismatches != 1 || stats.Plan.Complete {
+		_ = lease.Close()
+		t.Fatalf("quarantine GC stats=%+v plan=%+v", stats, stats.Plan)
+	}
+	if _, err := os.Stat(candidatePath); err != nil {
+		_ = lease.Close()
+		t.Fatalf("candidate segment removed while quarantined: %v", err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("quarantine release: %v", err)
+	}
+
+	drainedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{CandidateRefs: []ColumnAssetRef{candidate}})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after quarantine release: %v", err)
+	}
+	if drainedStats.SegmentsDeleted != 1 || drainedStats.BytesDeleted != candidate.Length {
+		t.Fatalf("drained GC stats=%+v want candidate deleted", drainedStats)
+	}
+}
+
 func TestColumnAssetGCAutomaticMappedResourcePinBlocksDelete1788(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

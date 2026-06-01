@@ -28,6 +28,7 @@ const (
 	ColumnAssetLifecycleIncompletePreparedAssetProcessLocalOnly  ColumnAssetLifecycleIncompleteReason = "prepared_asset_registry_process_local_only"
 	ColumnAssetLifecycleIncompleteQuarantineProcessLocalOnly     ColumnAssetLifecycleIncompleteReason = "quarantine_registry_process_local_only"
 	ColumnAssetLifecycleIncompletePinnedSnapshotExactRoots       ColumnAssetLifecycleIncompleteReason = "pinned_snapshot_exact_roots_unavailable"
+	ColumnAssetLifecycleIncompleteQuarantineSegmentUncertain     ColumnAssetLifecycleIncompleteReason = "quarantine_segment_uncertain"
 )
 
 // ColumnAssetLifecyclePinSource identifies the logical owner of an explicit
@@ -294,15 +295,16 @@ func validateColumnAssetLifecyclePinSource(source ColumnAssetLifecyclePinSource)
 // underlying reachability plan as reclaimable candidates, but are counted
 // separately in the report.
 type ColumnAssetLifecycleOptions struct {
-	Detailed          bool             `json:"detailed,omitempty"`
-	SegmentDetails    bool             `json:"segment_details,omitempty"`
-	CandidateRefs     []ColumnAssetRef `json:"candidate_refs,omitempty"`
-	SupersededRefs    []ColumnAssetRef `json:"superseded_refs,omitempty"`
-	PendingRefs       []ColumnAssetRef `json:"pending_refs,omitempty"`
-	PreparedRefs      []ColumnAssetRef `json:"prepared_refs,omitempty"`
-	PreparedQueryRefs []ColumnAssetRef `json:"prepared_query_refs,omitempty"`
-	QuarantineRefs    []ColumnAssetRef `json:"quarantine_refs,omitempty"`
-	PinnedRefs        []ColumnAssetRef `json:"pinned_refs,omitempty"`
+	Detailed           bool                           `json:"detailed,omitempty"`
+	SegmentDetails     bool                           `json:"segment_details,omitempty"`
+	CandidateRefs      []ColumnAssetRef               `json:"candidate_refs,omitempty"`
+	SupersededRefs     []ColumnAssetRef               `json:"superseded_refs,omitempty"`
+	PendingRefs        []ColumnAssetRef               `json:"pending_refs,omitempty"`
+	PreparedRefs       []ColumnAssetRef               `json:"prepared_refs,omitempty"`
+	PreparedQueryRefs  []ColumnAssetRef               `json:"prepared_query_refs,omitempty"`
+	QuarantineRefs     []ColumnAssetRef               `json:"quarantine_refs,omitempty"`
+	QuarantineSegments []ColumnAssetQuarantineSegment `json:"quarantine_segments,omitempty"`
+	PinnedRefs         []ColumnAssetRef               `json:"pinned_refs,omitempty"`
 }
 
 // ColumnAssetLifecycleReport is the stable JSON/report shape for collection-
@@ -323,6 +325,7 @@ type ColumnAssetLifecycleReport struct {
 	PendingPublish       ColumnAssetLifecycleRegistrySummary        `json:"pending_publish"`
 	PreparedAssets       ColumnAssetLifecycleRegistrySummary        `json:"prepared_assets"`
 	Quarantine           ColumnAssetLifecycleQuarantineSummary      `json:"quarantine"`
+	Bytes                ColumnAssetLifecycleByteClasses            `json:"bytes"`
 	Actions              ColumnAssetLifecycleActionSummary          `json:"actions"`
 	Reachability         ColumnAssetReachabilityPlan                `json:"reachability"`
 }
@@ -436,6 +439,26 @@ type ColumnAssetLifecycleQuarantineSummary struct {
 	Sources           []ColumnAssetLifecycleRegistrySourceSummary `json:"sources,omitempty"`
 }
 
+// ColumnAssetLifecycleByteClasses keeps manifest/catalog bytes separate from
+// referenced asset/section bytes and exposes overlapping safety classes used by
+// JSONBench lifecycle diagnostics.
+type ColumnAssetLifecycleByteClasses struct {
+	ManifestCatalogBytes      int64 `json:"manifest_catalog_bytes"`
+	ReferencedAssetBytes      int64 `json:"referenced_asset_bytes"`
+	LiveBytes                 int64 `json:"live_bytes"`
+	StaleBytes                int64 `json:"stale_bytes"`
+	ProtectedBytes            int64 `json:"protected_bytes"`
+	RewriteDebtBytes          int64 `json:"rewrite_debt_bytes"`
+	ReclaimableBytes          int64 `json:"reclaimable_bytes"`
+	ActivePinBytes            int64 `json:"active_pin_bytes"`
+	PreparedAssetBytes        int64 `json:"prepared_asset_bytes"`
+	PreparedQueryBytes        int64 `json:"prepared_query_bytes"`
+	PendingPublishBytes       int64 `json:"pending_publish_bytes"`
+	SnapshotPinnedBytes       int64 `json:"snapshot_pinned_bytes"`
+	MappedResourcePinnedBytes int64 `json:"mappedresource_pinned_bytes"`
+	QuarantineBytes           int64 `json:"quarantine_bytes"`
+}
+
 // ColumnAssetLifecycleActionSummary is intentionally non-destructive.
 type ColumnAssetLifecycleActionSummary struct {
 	DestructiveActionsEnabled bool  `json:"destructive_actions_enabled"`
@@ -473,6 +496,7 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 		PreparedRefs:                          refs.prepared,
 		PreparedQueryRefs:                     refs.preparedQuery,
 		QuarantineRefs:                        refs.quarantine,
+		QuarantineSegments:                    refs.quarantineSegments,
 		PinnedRefs:                            refs.pinned,
 	})
 	if err != nil {
@@ -493,6 +517,7 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 		PendingPublish:       registrySummary.PendingPublish,
 		PreparedAssets:       registrySummary.PreparedAssets,
 		Quarantine:           registrySummary.Quarantine,
+		Bytes:                columnAssetLifecycleByteClasses(plan, pinSummary, registrySummary),
 		Actions: ColumnAssetLifecycleActionSummary{
 			DestructiveActionsEnabled: false,
 			GCEligibleSegments:        plan.Segments.Reclaimable,
@@ -509,12 +534,13 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 }
 
 type columnAssetLifecycleReachabilityRefSets struct {
-	candidate     []ColumnAssetRef
-	pending       []ColumnAssetRef
-	prepared      []ColumnAssetRef
-	preparedQuery []ColumnAssetRef
-	quarantine    []ColumnAssetRef
-	pinned        []ColumnAssetRef
+	candidate          []ColumnAssetRef
+	pending            []ColumnAssetRef
+	prepared           []ColumnAssetRef
+	preparedQuery      []ColumnAssetRef
+	quarantine         []ColumnAssetRef
+	quarantineSegments []ColumnAssetQuarantineSegment
+	pinned             []ColumnAssetRef
 }
 
 func columnAssetLifecycleNamespace(c *Collection) string {
@@ -526,14 +552,37 @@ func columnAssetLifecycleNamespace(c *Collection) string {
 	return ""
 }
 
+func (c *Collection) columnAssetLifecycleAugmentReachabilityOptions(opts ColumnAssetReachabilityOptions) ColumnAssetReachabilityOptions {
+	pins := c.columnAssetLifecyclePinSetSnapshot()
+	registryRecords := c.columnAssetLifecycleRegistrySnapshot()
+	refs := columnAssetLifecycleReachabilityRefs(ColumnAssetLifecycleOptions{
+		CandidateRefs:      opts.CandidateRefs,
+		PendingRefs:        opts.PendingRefs,
+		PreparedRefs:       opts.PreparedRefs,
+		PreparedQueryRefs:  opts.PreparedQueryRefs,
+		QuarantineRefs:     opts.QuarantineRefs,
+		QuarantineSegments: opts.QuarantineSegments,
+		PinnedRefs:         opts.PinnedRefs,
+	}, pins, registryRecords)
+	opts.CandidateRefs = refs.candidate
+	opts.PendingRefs = refs.pending
+	opts.PreparedRefs = refs.prepared
+	opts.PreparedQueryRefs = refs.preparedQuery
+	opts.QuarantineRefs = refs.quarantine
+	opts.QuarantineSegments = refs.quarantineSegments
+	opts.PinnedRefs = refs.pinned
+	return opts
+}
+
 func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins []columnAssetLifecyclePinSetRecord, registryRecords []columnAssetLifecycleRegistryRecord) columnAssetLifecycleReachabilityRefSets {
 	refs := columnAssetLifecycleReachabilityRefSets{
-		candidate:     append(append([]ColumnAssetRef(nil), opts.CandidateRefs...), opts.SupersededRefs...),
-		pending:       append([]ColumnAssetRef(nil), opts.PendingRefs...),
-		prepared:      append([]ColumnAssetRef(nil), opts.PreparedRefs...),
-		preparedQuery: append([]ColumnAssetRef(nil), opts.PreparedQueryRefs...),
-		quarantine:    append([]ColumnAssetRef(nil), opts.QuarantineRefs...),
-		pinned:        append([]ColumnAssetRef(nil), opts.PinnedRefs...),
+		candidate:          append(append([]ColumnAssetRef(nil), opts.CandidateRefs...), opts.SupersededRefs...),
+		pending:            append([]ColumnAssetRef(nil), opts.PendingRefs...),
+		prepared:           append([]ColumnAssetRef(nil), opts.PreparedRefs...),
+		preparedQuery:      append([]ColumnAssetRef(nil), opts.PreparedQueryRefs...),
+		quarantine:         append([]ColumnAssetRef(nil), opts.QuarantineRefs...),
+		quarantineSegments: append([]ColumnAssetQuarantineSegment(nil), opts.QuarantineSegments...),
+		pinned:             append([]ColumnAssetRef(nil), opts.PinnedRefs...),
 	}
 	for _, record := range registryRecords {
 		switch record.Class {
@@ -543,6 +592,7 @@ func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins
 			refs.prepared = append(refs.prepared, record.Refs...)
 		case ColumnAssetLifecycleRegistryQuarantine:
 			refs.quarantine = append(refs.quarantine, record.Refs...)
+			refs.quarantineSegments = append(refs.quarantineSegments, record.Segments...)
 		}
 	}
 	for _, pin := range pins {
@@ -610,6 +660,27 @@ func summarizeColumnAssetLifecyclePins(pins []columnAssetLifecyclePinSetRecord) 
 	return summary
 }
 
+func columnAssetLifecycleByteClasses(plan ColumnAssetReachabilityPlan, pins ColumnAssetLifecyclePinSummary, registries columnAssetLifecycleRegistrySummaries) ColumnAssetLifecycleByteClasses {
+	activePinBytes := addColumnAssetReachabilityBytes(pins.Bytes, plan.MappedResources.PinnedBytes)
+	quarantineBytes := addColumnAssetReachabilityBytes(plan.Sources.QuarantineBytes, registries.Quarantine.SegmentBytes)
+	return ColumnAssetLifecycleByteClasses{
+		ManifestCatalogBytes:      plan.ManifestCatalogBytes,
+		ReferencedAssetBytes:      plan.Refs.BytesTotal,
+		LiveBytes:                 plan.Sources.ActiveManifestBytes,
+		StaleBytes:                plan.Sources.CandidateBytes,
+		ProtectedBytes:            plan.Refs.BytesProtected,
+		RewriteDebtBytes:          plan.RewriteDebtBytes,
+		ReclaimableBytes:          plan.Segments.BytesWholeReclaimable,
+		ActivePinBytes:            activePinBytes,
+		PreparedAssetBytes:        plan.Sources.PreparedBytes,
+		PreparedQueryBytes:        plan.Sources.PreparedQueryBytes,
+		PendingPublishBytes:       plan.Sources.PendingBytes,
+		SnapshotPinnedBytes:       plan.Sources.PinnedBytes,
+		MappedResourcePinnedBytes: plan.MappedResources.PinnedBytes,
+		QuarantineBytes:           quarantineBytes,
+	}
+}
+
 func (c *Collection) columnAssetLifecycleSnapshotFence(planCommitSeq uint64) ColumnAssetLifecycleSnapshotFence {
 	minPinned := uint64(math.MaxUint64)
 	if c != nil && c.db != nil {
@@ -658,7 +729,7 @@ func columnAssetLifecycleRootCounts(plan ColumnAssetReachabilityPlan, opts Colum
 		PreparedAssetRegistryRecords:  registries.PreparedAssets.OpenRecords,
 		QuarantineRegistryRecords:     registries.Quarantine.OpenRecords,
 		QuarantineRefs:                plan.Sources.QuarantineRefs,
-		QuarantineSegments:            registries.Quarantine.Segments,
+		QuarantineSegments:            registries.Quarantine.Segments + len(opts.QuarantineSegments),
 	}
 }
 
@@ -683,6 +754,9 @@ func columnAssetLifecycleIncompleteReasons(plan ColumnAssetReachabilityPlan, fen
 	}
 	if plan.Segments.OutOfBoundsRefs != 0 {
 		add(ColumnAssetLifecycleIncompleteOutOfBoundsRefs)
+	}
+	if plan.Segments.QuarantineSegmentMismatches != 0 {
+		add(ColumnAssetLifecycleIncompleteQuarantineSegmentUncertain)
 	}
 	if plan.MappedResources.UnconvertiblePins != 0 {
 		add(ColumnAssetLifecycleIncompleteMappedResourcePins)

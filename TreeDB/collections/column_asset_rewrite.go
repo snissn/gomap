@@ -22,11 +22,14 @@ var errColumnAssetRewritePublishPreflightFailed = errors.New("collections: colum
 type ColumnAssetRewriteOptions struct {
 	DryRun bool
 	// Detailed keeps detailed ref and segment entries in the returned plan.
-	Detailed      bool
-	CandidateRefs []ColumnAssetRef
-	PendingRefs   []ColumnAssetRef
-	PreparedRefs  []ColumnAssetRef
-	PinnedRefs    []ColumnAssetRef
+	Detailed           bool
+	CandidateRefs      []ColumnAssetRef
+	PendingRefs        []ColumnAssetRef
+	PreparedRefs       []ColumnAssetRef
+	PreparedQueryRefs  []ColumnAssetRef
+	QuarantineRefs     []ColumnAssetRef
+	QuarantineSegments []ColumnAssetQuarantineSegment
+	PinnedRefs         []ColumnAssetRef
 }
 
 type columnAssetRewriteOptions struct {
@@ -99,17 +102,21 @@ func (c *Collection) columnAssetRewriteWithOptions(ctx context.Context, opts col
 }
 
 func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
+	planOpts := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
+		Detailed:           opts.Detailed,
+		SegmentDetails:     true,
+		CandidateRefs:      opts.CandidateRefs,
+		PendingRefs:        opts.PendingRefs,
+		PreparedRefs:       opts.PreparedRefs,
+		PreparedQueryRefs:  opts.PreparedQueryRefs,
+		QuarantineRefs:     opts.QuarantineRefs,
+		QuarantineSegments: opts.QuarantineSegments,
+		PinnedRefs:         opts.PinnedRefs,
+	})
 	plan, sourceMasks, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
-		ColumnAssetReachabilityOptions: ColumnAssetReachabilityOptions{
-			Detailed:       opts.Detailed,
-			SegmentDetails: true,
-			CandidateRefs:  opts.CandidateRefs,
-			PendingRefs:    opts.PendingRefs,
-			PreparedRefs:   opts.PreparedRefs,
-			PinnedRefs:     opts.PinnedRefs,
-		},
-		omitDetailedEntrySources: !opts.Detailed,
-		omitDetailedEntrySort:    !opts.Detailed,
+		ColumnAssetReachabilityOptions: planOpts,
+		omitDetailedEntrySources:       !opts.Detailed,
+		omitDetailedEntrySort:          !opts.Detailed,
 	})
 	stats := ColumnAssetRewriteStats{
 		DryRun:           opts.DryRun,
@@ -127,13 +134,14 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		if opts.DryRun {
 			return stats, nil
 		}
-		return stats, fmt.Errorf("%w: collection=%q namespace=%q unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d unconvertible_pins=%d",
+		return stats, fmt.Errorf("%w: collection=%q namespace=%q unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d quarantine_segment_mismatches=%d unconvertible_pins=%d",
 			ErrColumnAssetReachabilityIncomplete,
 			plan.Collection,
 			plan.Namespace,
 			plan.Segments.Unknown,
 			plan.Segments.Missing,
 			plan.Segments.OutOfBoundsRefs,
+			plan.Segments.QuarantineSegmentMismatches,
 			plan.MappedResources.UnconvertiblePins,
 		)
 	}
@@ -251,9 +259,11 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 			return stats, cleanupRemap(err)
 		}
 		// Publish errors can be ambiguous after root/system application starts;
-		// retain the copied segment as fail-closed maintenance debt.
+		// retain the copied segment as fail-closed maintenance debt and make it a
+		// process-local logical quarantine root until DB close/recovery.
+		quarantineErr := c.columnAssetRewriteRegisterAmbiguousPublishQuarantine(remap.newRefs, err)
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, err
+		return stats, errors.Join(err, quarantineErr)
 	}
 	if len(rootIDs) != 1 || rootIDs[0] == 0 {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
@@ -281,6 +291,23 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 func columnAssetRewritePublishFailedBeforeApply(err error) bool {
 	return errors.Is(err, errColumnAssetRewritePublishPreflightFailed) ||
 		errors.Is(err, backenddb.ErrStorageMaintenancePublishPreApplyFailed)
+}
+
+func (c *Collection) columnAssetRewriteRegisterAmbiguousPublishQuarantine(refs []ColumnAssetRef, publishErr error) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	reason := "ambiguous column asset rewrite publish"
+	if publishErr != nil {
+		reason = fmt.Sprintf("%s: %v", reason, publishErr)
+	}
+	_, err := c.RegisterColumnAssetQuarantine(ColumnAssetQuarantineRegistrationOptions{
+		Owner:  "column_asset_rewrite",
+		Source: "ambiguous_publish",
+		Reason: reason,
+		Refs:   refs,
+	})
+	return err
 }
 
 type columnAssetRewriteManifestState struct {
