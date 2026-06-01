@@ -276,8 +276,25 @@ func (v *columnVectorGraphPreparedSearchView) validateVectorLive() error {
 		if part.outcome != columnVectorGraphTypedColumnVectorOutcomeMmapDirect {
 			return fmt.Errorf("base vector prepared single-part outcome=%s want mmap_direct", part.outcome)
 		}
-		if len(v.vector.values) != part.rows*v.dims {
-			return fmt.Errorf("base vector prepared single-part values=%d want rows*dims=%d", len(v.vector.values), part.rows*v.dims)
+		if part.rows < 0 || part.rows > maxCollectionInt/v.dims {
+			return fmt.Errorf("base vector prepared single-part rows=%d dims=%d overflows rows*dims", part.rows, v.dims)
+		}
+		wantValues := part.rows * v.dims
+		if len(v.vector.values) != wantValues {
+			return fmt.Errorf("base vector prepared single-part values=%d want rows*dims=%d", len(v.vector.values), wantValues)
+		}
+		if len(part.values) != wantValues {
+			return fmt.Errorf("base vector prepared single-part part values=%d want rows*dims=%d", len(part.values), wantValues)
+		}
+		rowIndexByOrdinal := v.vector.rowIndexByOrdinal
+		if rowIndexByOrdinal == nil {
+			if v.rows > part.rows {
+				return fmt.Errorf("base vector prepared single-part identity rows=%d exceeds part rows=%d", v.rows, part.rows)
+			}
+			return nil
+		}
+		if len(rowIndexByOrdinal) != v.rows {
+			return fmt.Errorf("base vector prepared single-part row map rows=%d want %d", len(rowIndexByOrdinal), v.rows)
 		}
 		return nil
 	}
@@ -508,25 +525,52 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 	if part == nil || part.handle == nil || part.handle.Released() || part.rows < 0 || v.dims <= 0 || part.rows > maxCollectionInt/v.dims || len(part.values) != part.rows*v.dims {
 		return dst, false, nil
 	}
+	if len(v.norm.values) != v.rows {
+		return dst, false, nil
+	}
+	rowIndexByOrdinal := v.vector.rowIndexByOrdinal
+	if rowIndexByOrdinal != nil && len(rowIndexByOrdinal) != v.rows {
+		return dst, false, nil
+	}
 	if cap(dst) < len(ordinals) {
 		dst = make([]float64, len(ordinals))
 	} else {
 		dst = dst[:len(ordinals)]
 	}
-	rowIndexByOrdinal := v.vector.rowIndexByOrdinal
+	dims := v.dims
+	values := part.values
 	if !vectorops.DotFloat32BatchOptimizedAvailable() {
-		for i, ordinal := range ordinals {
-			row, ok := v.singlePartRowForOrdinal(ordinal, rowIndexByOrdinal, part)
-			if !ok || ordinal >= len(v.norm.values) {
-				return dst, false, nil
+		if rowIndexByOrdinal == nil {
+			for i, ordinal := range ordinals {
+				if ordinal < 0 || ordinal >= v.rows || ordinal >= part.rows {
+					return dst, false, nil
+				}
+				start := ordinal * dims
+				vector := values[start : start+dims]
+				score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, float64(vectorDotProductFloat32(query, vector)), vector, stats)
+				if err != nil {
+					return dst, true, err
+				}
+				dst[i] = score
 			}
-			start := row * v.dims
-			vector := part.values[start : start+v.dims]
-			score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, float64(vectorDotProductFloat32(query, vector)), vector, stats)
-			if err != nil {
-				return dst, true, err
+		} else {
+			for i, ordinal := range ordinals {
+				if ordinal < 0 || ordinal >= v.rows {
+					return dst, false, nil
+				}
+				rowID := rowIndexByOrdinal[ordinal]
+				if uint64(rowID) >= uint64(part.rows) {
+					return dst, false, nil
+				}
+				row := int(rowID)
+				start := row * dims
+				vector := values[start : start+dims]
+				score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, float64(vectorDotProductFloat32(query, vector)), vector, stats)
+				if err != nil {
+					return dst, true, err
+				}
+				dst[i] = score
 			}
-			dst[i] = score
 		}
 		if stats != nil {
 			recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
@@ -538,23 +582,35 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 
 	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(ordinals))
 	rowIDs := scratch.scoreTileRowIDs[:len(ordinals)]
-	for i, ordinal := range ordinals {
-		row, ok := v.singlePartRowForOrdinal(ordinal, rowIndexByOrdinal, part)
-		if !ok || ordinal >= len(v.norm.values) || uint64(row) > uint64(^uint32(0)) {
-			return dst, false, nil
+	if rowIndexByOrdinal == nil {
+		for i, ordinal := range ordinals {
+			if ordinal < 0 || ordinal >= v.rows || ordinal >= part.rows || uint64(ordinal) > uint64(^uint32(0)) {
+				return dst, false, nil
+			}
+			rowIDs[i] = uint32(ordinal)
 		}
-		rowIDs[i] = uint32(row)
+	} else {
+		for i, ordinal := range ordinals {
+			if ordinal < 0 || ordinal >= v.rows {
+				return dst, false, nil
+			}
+			rowID := rowIndexByOrdinal[ordinal]
+			if uint64(rowID) >= uint64(part.rows) {
+				return dst, false, nil
+			}
+			rowIDs[i] = rowID
+		}
 	}
 	scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(ordinals))
 	dots := scratch.scoreTileDots[:len(ordinals)]
-	status := vectorops.DotFloat32Indexed(dots, part.values, query, rowIDs, v.dims)
+	status := vectorops.DotFloat32Indexed(dots, values, query, rowIDs, dims)
 	if status.Invalid || status.Rows != len(ordinals) {
 		return dst, false, nil
 	}
 	for i, ordinal := range ordinals {
 		row := int(rowIDs[i])
-		start := row * v.dims
-		vector := part.values[start : start+v.dims]
+		start := row * dims
+		vector := values[start : start+dims]
 		score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, float64(dots[i]), vector, stats)
 		if err != nil {
 			return dst, true, err
@@ -572,28 +628,6 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, true, nil
-}
-
-func (v *columnVectorGraphPreparedSearchView) singlePartRowForOrdinal(ordinal int, rowIndexByOrdinal []uint32, part *columnVectorGraphTypedColumnVectorPart) (int, bool) {
-	if v == nil || part == nil || ordinal < 0 || ordinal >= v.rows {
-		return 0, false
-	}
-	row := ordinal
-	if rowIndexByOrdinal != nil {
-		if ordinal >= len(rowIndexByOrdinal) {
-			return 0, false
-		}
-		row = int(rowIndexByOrdinal[ordinal])
-	}
-	if row < 0 || row >= part.rows {
-		return 0, false
-	}
-	start := row * v.dims
-	end := start + v.dims
-	if start < 0 || end < start || end > len(part.values) {
-		return 0, false
-	}
-	return row, true
 }
 
 func (v *columnVectorGraphPreparedSearchView) scorePreparedDot(query []float32, queryInvNorm float32, ordinal int, dot float64, vector []float32, stats *columnVectorGraphNativeSearchStats) (float64, error) {
