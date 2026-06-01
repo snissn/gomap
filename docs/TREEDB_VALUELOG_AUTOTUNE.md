@@ -125,7 +125,7 @@ import (
 func main() {
 	dir := "/var/lib/treedb"
 
-	opts := treedb.OptionsFor(treedb.ProfileLegacyWALRelaxedFast, dir)
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
 
 	// Ensure a meaningful fraction of values are externalized.
 	opts.ValueLog.PointerThreshold = 4 << 10 // 4 KiB

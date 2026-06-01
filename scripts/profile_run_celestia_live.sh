@@ -100,7 +100,7 @@ cat >"$OUT/meta.txt" <<META
 ts=$TS
 root=$ROOT
 run_cmd=$RUN_CMD
-treedb_open_profile=${TREEDB_OPEN_PROFILE:-wal_on_fast}
+treedb_open_profile=${TREEDB_OPEN_PROFILE:-command_wal_relaxed}
 post_sync_dwell_seconds=${POST_SYNC_DWELL_SECONDS:-900}
 pprof_base_url=$PPROF_BASE_URL
 vars_url=$VARS_URL
@@ -114,7 +114,7 @@ set +e
   set -euo pipefail
   export USE_LOCAL_TREE_STACK="${USE_LOCAL_TREE_STACK:-1}"
   export LOCAL_GOMAP_DIR="${LOCAL_GOMAP_DIR:-$ROOT}"
-  export TREEDB_OPEN_PROFILE="${TREEDB_OPEN_PROFILE:-wal_on_fast}"
+  export TREEDB_OPEN_PROFILE="${TREEDB_OPEN_PROFILE:-command_wal_relaxed}"
   export POST_SYNC_DWELL_SECONDS="${POST_SYNC_DWELL_SECONDS:-900}"
   bash -lc "$RUN_CMD"
 ) >"$OUT/launcher.log" 2>&1 &

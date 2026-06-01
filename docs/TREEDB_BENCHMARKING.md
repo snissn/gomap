@@ -61,6 +61,11 @@ Key-shape override for non-dataset 8-byte workloads:
 
 Capture profiles and analyze them in one pass:
 
+This example uses unified-bench's legacy `fast` benchmark-runner preset for a
+no-WAL profiling ceiling. Public TreeDB server runs should use
+`command_wal_durable`, `command_wal_relaxed`, or explicit benchmark-only
+`bench`.
+
 ```bash
 OUT=$(mktemp -d /tmp/treedb_profiles_XXXXXX)
 

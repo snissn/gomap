@@ -89,25 +89,29 @@ func main() {
 }
 ```
 
-## Profiles (Durable / Fast / Bench)
+## Profiles (Command WAL / Bench)
 
 If you want a simple, documented “bundle” of options, start with a profile and
 then override a few workload-specific knobs:
 
 ```go
-opts := treedb.OptionsFor(treedb.ProfileDurable, "./my-db-data")
+opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./my-db-data")
 opts.FlushThreshold = 128 << 20 // optional tuning
 db, err := treedb.Open(opts)
 ```
 
-Profiles are intended to make intent explicit:
+The public profile surface is intentionally narrow:
 
-- `ProfileDurable`: safest defaults (recommended).
-- `ProfileFast`: relax durability/integrity knobs for throughput, enables leaf pages in the value log + index optimizations (`LeafPrefixCompression`, `IndexColumnarLeaves`, `IndexPackedValuePtr`), uses a 4 MiB pager chunk size with moderate pager sync parallelism, and pins the current run_celestia-style value-log compression defaults (`auto` + balanced policy + snappy block codec + medium autotune).
-- `ProfileWALOnFast`: fast ingest profile that keeps WAL on, relaxes durability checks, and enables the same leaf-vlog, index optimization, pager chunk/sync, and value-log compression defaults.
-- `ProfileBench`: deterministic benchmarking profile (not production); includes `ProfileFast` index optimizations.
+- `ProfileCommandWALDurable`: command-WAL collections and raw writes with durable sync/checksum settings. Use this as the default server profile.
+- `ProfileCommandWALRelaxed`: command-WAL collections and raw writes with relaxed sync/read-integrity settings for high-throughput ingest and benchmark comparisons.
+- `ProfileBench`: benchmark-only no-WAL ceiling for measuring raw in-process storage overhead. Do not use it as a production profile.
 
-Note: WAL-off is selected via `opts.Durability = treedb.DurabilityWALOffRelaxed`.
+Legacy/raw bundles such as `ProfileDurable`, `ProfileFast`, and
+`ProfileWALOnFast` remain temporarily available for compatibility and focused
+low-level tests, but they are not the current public guidance.
+
+Note: WAL-off is selected by `ProfileBench` or by explicitly setting
+`opts.Durability = treedb.DurabilityWALOffRelaxed` in low-level experiments.
 The value log remains enabled in cached mode, so large values can still go
 through `value_vlog/` even when the redo journal is off.
 

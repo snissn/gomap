@@ -8,7 +8,7 @@ KEY_COUNT=${LEAFGEN_SWEEP_KEY_COUNT:-100000}
 HOT_KEY_COUNT=${LEAFGEN_SWEEP_HOT_KEY_COUNT:-25000}
 ROUNDS=${LEAFGEN_SWEEP_ROUNDS:-6}
 VALUE_BYTES=${LEAFGEN_SWEEP_VALUE_BYTES:-128}
-PROFILE=${TREEDB_PROFILE:-fast}
+PROFILE=${TREEDB_PROFILE:-bench}
 TREEMAP=(go run ./TreeDB/cmd/treemap)
 
 mkdir -p "$OUT"
@@ -61,7 +61,7 @@ type result struct {
 func main() {
     var (
         dbDir       = flag.String("db", "", "application.db directory")
-        profile     = flag.String("profile", string(treedb.ProfileFast), "profile")
+        profile     = flag.String("profile", string(treedb.ProfileBench), "profile")
         leafTarget  = flag.Int64("leaf-target", 0, "leaf_vlog segment target bytes")
         keyCount    = flag.Int("key-count", 100000, "total initial keys")
         hotKeyCount = flag.Int("hot-key-count", 25000, "keys rewritten each round")

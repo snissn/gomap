@@ -405,7 +405,7 @@ cat >>"$SUMMARY_MD" <<'EOF'
 
 ## Intended 768 Use
 
-The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `production_fast` and `production_wal_on_fast` engines keep the cached no-WAL and WAL-on fast paths visible without changing the collection storage policy.
+The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `production_fast` and `production_wal_on_fast` engines are legacy benchmark-engine labels retained until #2148 migrates the harness to command-WAL/bench vocabulary; they keep the cached no-WAL and WAL-on fast paths visible without changing the collection storage policy.
 
 The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost. Checkpointed rows report `insert_ns/doc` and `sync_ns/doc`, and the user-story TSV renders those as insert/sync milliseconds per batch.
 

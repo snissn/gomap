@@ -24,7 +24,10 @@ CLIENT_MODES="${CLIENT_MODES:-driver raw-wire-tcp native-wire-tcp direct}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-ycsb_attr}"
 COLLECTION="${COLLECTION:-usertable}"
 TIMEOUT="${TIMEOUT:-10m}"
-TREEDB_PROFILE="${TREEDB_PROFILE:-fast}"
+# Transitional mixed-shape benchmark baseline: gateway-shape runs include
+# secondary indexes, and command WAL rejects catalog index mutation until
+# catalog index commands land.
+TREEDB_PROFILE="${TREEDB_PROFILE:-legacy_wal_relaxed_fast}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-bson}"
 TREEDB_MAINTENANCE="${TREEDB_MAINTENANCE:-none}"
 TREEDB_READ_STATE="${TREEDB_READ_STATE:-unsettled}"

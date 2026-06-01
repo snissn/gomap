@@ -3578,9 +3578,11 @@ The pass/fail benchmark gates below apply to the full contract and to default
 enablement, not to the guarded PR1-min merge.
 
 Benchmarks must compare baseline and new implementation on the same host with
-`benchstat`. Use the current `ProfileWALOnFast` / `wal_on_fast` collection
-profile as the primary baseline when measuring WAL-on collection overhead, with
-the same storage-policy cell, document format, batch size, and fixture data.
+`benchstat`. This deprecated plan's historical commands use the legacy
+`ProfileWALOnFast` / `wal_on_fast` collection benchmark baseline when measuring
+WAL-on collection overhead, with the same storage-policy cell, document format,
+batch size, and fixture data. Current public profile guidance is the
+command-WAL profile surface described in `docs/TREEDB_PROFILES.md`.
 Durable-mode benchmarks are smoke gates for sync behavior, not the primary
 regression baseline.
 

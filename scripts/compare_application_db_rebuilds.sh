@@ -10,7 +10,7 @@ Environment:
   OUT_DIR                          Output directory. Default: /home/mikers/.application-db-compare-<timestamp>
   TREEDB_REPO                      TreeDB repo to use for rebuild/compact. Default: /home/mikers/dev/snissn/gomap-phasehook-active
   COSMOS_DB_REPO                   Cosmos DB repo to use. Default: /home/mikers/dev/snissn/cosmos-db
-  TREEDB_PROFILE                   TreeDB open profile. Default: wal_on_fast
+  TREEDB_PROFILE                   TreeDB open profile. Default: command_wal_relaxed
   TREEDB_FORCE_CHECKPOINT_ON_WRITE Forwarded to cosmos-db TreeDB adapter. Default: 0
   GOLEVELDB_BLOCK_SIZE             Override goleveldb SST block size for rebuild/compact. Default: 4096
   GOLEVELDB_BLOCK_RESTART_INTERVAL Override goleveldb block restart interval for rebuild/compact. Default: 16
@@ -36,7 +36,7 @@ fi
 
 TREEDB_REPO="${TREEDB_REPO:-/home/mikers/dev/snissn/gomap-phasehook-active}"
 COSMOS_DB_REPO="${COSMOS_DB_REPO:-/home/mikers/dev/snissn/cosmos-db}"
-TREEDB_PROFILE="${TREEDB_PROFILE:-wal_on_fast}"
+TREEDB_PROFILE="${TREEDB_PROFILE:-command_wal_relaxed}"
 TREEDB_FORCE_CHECKPOINT_ON_WRITE="${TREEDB_FORCE_CHECKPOINT_ON_WRITE:-0}"
 GOLEVELDB_BLOCK_SIZE="${GOLEVELDB_BLOCK_SIZE:-4096}"
 GOLEVELDB_BLOCK_RESTART_INTERVAL="${GOLEVELDB_BLOCK_RESTART_INTERVAL:-16}"
@@ -320,7 +320,7 @@ func runCompactLevelDB(args []string) {
 func runCompactTreeDB(args []string) {
 	fs := flag.NewFlagSet("compact-treedb", flag.ExitOnError)
 	destParent := fs.String("dest-parent", "", "destination parent directory")
-	profileRaw := fs.String("profile", "wal_on_fast", "fast or wal_on_fast")
+	profileRaw := fs.String("profile", "command_wal_relaxed", "command_wal_relaxed, command_wal_durable, bench, or a legacy compatibility profile")
 	if err := fs.Parse(args); err != nil {
 		fatalErr(err)
 	}
@@ -379,12 +379,24 @@ func runCompactTreeDB(args []string) {
 
 func parseTreeDBProfile(raw string) (treedb.Profile, string, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "command_wal_relaxed", "command-wal-relaxed", "":
+		return treedb.ProfileCommandWALRelaxed, "command_wal_relaxed", nil
+	case "command_wal_durable", "command-wal-durable":
+		return treedb.ProfileCommandWALDurable, "command_wal_durable", nil
+	case "bench":
+		return treedb.ProfileBench, "bench", nil
 	case "fast":
 		return treedb.ProfileFast, "fast", nil
-	case "wal_on_fast", "walonfast", "":
+	case "wal_on_fast", "walonfast":
 		return treedb.ProfileWALOnFast, "wal_on_fast", nil
+	case "legacy_wal_relaxed_fast":
+		return treedb.ProfileLegacyWALRelaxedFast, "legacy_wal_relaxed_fast", nil
+	case "legacy_wal_durable":
+		return treedb.ProfileLegacyWALDurable, "legacy_wal_durable", nil
+	case "no_wal_fast":
+		return treedb.ProfileNoWALFast, "no_wal_fast", nil
 	default:
-		return treedb.ProfileWALOnFast, "", fmt.Errorf("unsupported treedb profile %q", raw)
+		return treedb.ProfileCommandWALRelaxed, "", fmt.Errorf("unsupported treedb profile %q", raw)
 	}
 }
 

@@ -387,6 +387,9 @@ run_raw_engine() {
   run_logged build_raw_tools make unified-bench benchprof
   local root="$RUN_ROOT/raw_engine_full_matrix"
   mkdir -p "$root"
+  # unified-bench uses cross-adapter benchmark presets here, not the public
+  # TreeDB server profile vocabulary. #2148 owns command-WAL/bench migration for
+  # this raw-engine report matrix.
   for profile in wal_on_fast fast; do
     for checkpoint_mode in checkpoint_between_tests no_checkpoint_between_tests; do
       local out="$root/${profile}_${checkpoint_mode}"

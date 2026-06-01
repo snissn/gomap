@@ -14,13 +14,16 @@ import "strings"
 // trade-offs (durability vs throughput, steady-state vs benchmark determinism,
 // background maintenance vs predictable latency).
 //
-// In practice, most callers want one of a small number of explicit bundles:
+// In practice, most public callers should choose one of these explicit bundles:
 //
 //   - "Command WAL durable": command WAL plus durable sync/integrity.
 //   - "Command WAL relaxed": command WAL plus relaxed sync/integrity.
-//   - "Legacy WAL durable":  pre-command-WAL durable path.
-//   - "No WAL fast":         higher throughput by relaxing durability/integrity.
-//   - "Bench":               a deterministic variant intended for benchmarking.
+//   - "Bench":               no-WAL benchmark ceiling only.
+//
+// Additional legacy/no-WAL constants remain temporarily available for
+// compatibility and low-level tests while the public profile surface is being
+// narrowed. New server, collection, and Mongo gateway entry points should not
+// advertise those names as normal choices.
 //
 // Profiles are intentionally conservative:
 //   - They set the *meaningful policy knobs* (durability/integrity/background),
@@ -129,8 +132,10 @@ const (
 	ProfileBench Profile = "bench"
 )
 
-// ProfileFlagHelp is the recommended profile vocabulary for CLI flag help.
-const ProfileFlagHelp = "command_wal_durable, command_wal_relaxed, legacy_wal_durable, legacy_wal_relaxed_fast, no_wal_fast, or bench (aliases: durable, wal_on_fast, fast)"
+// ProfileFlagHelp is the recommended public profile vocabulary for CLI flag
+// help. Legacy profile constants are intentionally omitted here; they are
+// transitional/internal compatibility surfaces, not normal public choices.
+const ProfileFlagHelp = "command_wal_durable, command_wal_relaxed, or bench (benchmark-only no-WAL)"
 
 const fastProfileChunkSize = 4 << 20
 

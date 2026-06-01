@@ -8,6 +8,8 @@ OUT_DIR="${OUT_DIR:-$(mktemp -d /tmp/gomap_collections_harness_XXXXXX)}"
 COUNT="${COUNT:-1}"
 BENCHTIME="${BENCHTIME:-1s}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
+# Legacy collection benchmark engine name retained until #2148 migrates the
+# harness to command-WAL/bench vocabulary.
 BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-production_wal_on_fast}"
 PATH_LABEL="${TREEDB_COLLECTION_PATH_LABEL:-native-fastpath}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"

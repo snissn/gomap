@@ -91,6 +91,14 @@ update/delete planner, or pending-state merge may observe a mutation before its
 command WAL frame is committed/recoverable. Unsupported mutation kinds must be
 classified as `WAL-rejected` or `WAL-off-only` in `user-command-wal.md`.
 
+Raw public key/value writes are part of the command-WAL surface when a DB is
+opened with `CommandWAL=true`: `Set`, `SetSync`, `Delete`, `DeleteSync`,
+`Batch.Write`, and `Batch.WriteSync` append typed `RawKVBatch` command frames
+before publishing visibility. Public cached raw operations that cannot be
+replayed as typed commands yet fail closed with `ErrCommandWALRejected`;
+currently that includes callback-based `Update`, `UpdateSync`, and range
+`DeleteRange`.
+
 The user-command WAL is a local crash-recovery log, not a Raft log. Future Raft
 entries may share command-envelope payloads, but consensus ordering and local
 recoverability remain separate responsibilities.
@@ -196,12 +204,17 @@ These bound uncheckpointed log growth in long-running workloads.
 
 ## 8. Profiles and Intent Bundles
 
-Profiles map high-level intent to durability/integrity bundles:
+The current public profile surface maps high-level intent to command-WAL-backed
+durability/integrity bundles:
 
-- `ProfileDurable`: durable mode + checksum verification.
-- `ProfileFast`: WAL off relaxed + checksum skip + index optimization bundle + 4 MiB pager chunks with moderate pager sync parallelism + the current run_celestia value-log compression defaults (`auto` / balanced / snappy / medium autotune). Collection write success is not durable-at-ack; use `Flush`, `FlushAll`, `Checkpoint`, or `Close` for a persistence boundary.
-- `ProfileWALOnFast`: WAL on relaxed + checksum skip + the same index + pager chunk/sync + value-log compression bundle. After user-command WAL support lands for a collection command kind, that command's success is recoverable after process crash but not after power loss.
-- `ProfileBench`: fast profile plus disabled background checkpoint/prune triggers for determinism.
+- `ProfileCommandWALDurable`: command-WAL raw and collection writes with durable sync/checksum settings. This is the recommended default server profile.
+- `ProfileCommandWALRelaxed`: command-WAL raw and collection writes with relaxed sync/read-integrity settings for high-throughput ingest and benchmark comparisons.
+- `ProfileBench`: no-WAL benchmark-only ceiling with deterministic background maintenance behavior. It is not a production durability profile.
+
+Legacy/raw bundles such as `ProfileDurable`, `ProfileFast`, and
+`ProfileWALOnFast` remain compatibility profiles during the command-WAL
+transition. Public servers, wrappers, and new documentation should not present
+them as the primary supported profile surface.
 
 ## 9. Required Invariants
 

@@ -36,7 +36,7 @@ type OpenConfig struct {
 	AdapterName string
 	// DBFileSuffix defaults to ".db".
 	DBFileSuffix string
-	// DefaultProfile defaults to treedb.ProfileLegacyWALRelaxedFast.
+	// DefaultProfile defaults to treedb.ProfileCommandWALRelaxed.
 	DefaultProfile treedb.Profile
 	// DefaultKeepRecent is applied when the env override is unset.
 	DefaultKeepRecent uint64
@@ -68,7 +68,7 @@ type Opened struct {
 // to fallback for empty or unknown values.
 func ParseProfile(raw string, fallback treedb.Profile) treedb.Profile {
 	if fallback == "" {
-		fallback = treedb.ProfileLegacyWALRelaxedFast
+		fallback = treedb.ProfileCommandWALRelaxed
 	}
 	if profile, ok := treedb.ParseProfile(raw, fallback); ok {
 		return profile

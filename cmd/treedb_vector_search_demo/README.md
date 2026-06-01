@@ -65,18 +65,18 @@ the binary `documents.f32` vectors directly. Storage numbers should be read with
 that representation difference in mind.
 
 The demo defaults to TreeDB's `bench` profile because this is a benchmark
-harness. That profile uses the same index storage profile as `no_wal_fast`: outer
-index leaves are stored in the leaf value log, leaf prefix compression is
-enabled, and value-log compression remains profile/default driven. The demo
+harness. That profile is the explicit no-WAL benchmark ceiling: outer index
+leaves are stored in the leaf value log, leaf prefix compression is enabled, and
+value-log compression remains profile/default driven. The demo
 also defaults to `-value-pointer-threshold 1024` and
 `-leaf-generation-segment-target 4194304` for this vector-search workload, so
 the leaf-vlog layout keeps ordinary vector documents in outer leaves and gives
 the optional `CompactStorageFull` path sealed leaf generations to rewrite and
 GC. Use
-`-profile command_wal_durable|command_wal_relaxed|legacy_wal_durable|legacy_wal_relaxed_fast|no_wal_fast|bench`
-to select a different first-class TreeDB profile, or pass `0` for either demo
-storage knob to use the selected profile default. The short legacy aliases
-`durable`, `wal_on_fast`, and `fast` remain accepted for compatibility.
+`-profile command_wal_durable|command_wal_relaxed|bench` to select a current
+public TreeDB profile, or pass `0` for either demo storage knob to use the
+selected profile default. Legacy/raw profile names may still parse during the
+transition, but they are not recommended for new benchmark guidance.
 
 The output includes the persisted TreeDB `format.json` knobs and storage-domain
 bytes for `index.db`, `value_vlog`, and `leaf_vlog`. Use

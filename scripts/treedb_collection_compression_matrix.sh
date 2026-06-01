@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCS="${DOCS:-100000}"
 BATCH="${BATCH:-16000}"
 RUN_DIR="${RUN_DIR:-/tmp/treedb_collection_compression_$(date +%Y%m%d_%H%M%S)}"
-PROFILE="${PROFILE:-fast}"
+PROFILE="${PROFILE:-bench}"
 COLLECTION_INDEXES="${COLLECTION_INDEXES:-0 1 2}"
 
 mkdir -p "$RUN_DIR"/{dbs,logs}
@@ -39,7 +39,7 @@ func main() {
 	docs := flag.Int("docs", 100000, "documents to write")
 	batchSize := flag.Int("batch-size", 16000, "documents per batch")
 	reset := flag.Bool("reset", false, "remove directory before loading")
-	profile := flag.String("profile", "fast", "TreeDB profile: fast, wal_on_fast, durable, or bench")
+	profile := flag.String("profile", "bench", "TreeDB profile: command_wal_relaxed, command_wal_durable, bench, or a legacy compatibility profile")
 	flag.Parse()
 
 	if *dir == "" {
@@ -126,14 +126,24 @@ func main() {
 
 func parseProfile(raw string) treedb.Profile {
 	switch raw {
-	case "", "fast":
+	case "", "bench":
+		return treedb.ProfileBench
+	case "command_wal_relaxed", "command-wal-relaxed":
+		return treedb.ProfileCommandWALRelaxed
+	case "command_wal_durable", "command-wal-durable":
+		return treedb.ProfileCommandWALDurable
+	case "fast":
 		return treedb.ProfileFast
 	case "wal_on_fast":
 		return treedb.ProfileWALOnFast
 	case "durable":
 		return treedb.ProfileDurable
-	case "bench":
-		return treedb.ProfileBench
+	case "legacy_wal_relaxed_fast":
+		return treedb.ProfileLegacyWALRelaxedFast
+	case "legacy_wal_durable":
+		return treedb.ProfileLegacyWALDurable
+	case "no_wal_fast":
+		return treedb.ProfileNoWALFast
 	default:
 		fatalf("unsupported -profile %q", raw)
 		return ""
