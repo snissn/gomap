@@ -336,11 +336,6 @@ type columnVectorGraphNativeSearchLoopCounters struct {
 	VisitedEdges uint64
 }
 
-func (c *columnVectorGraphNativeSearchLoopCounters) recordEdge() {
-	c.Edges++
-	c.VisitedEdges++
-}
-
 func (c *columnVectorGraphNativeSearchLoopCounters) publish(stats *columnVectorGraphNativeSearchStats, candidates uint64) {
 	if c == nil || stats == nil {
 		return
@@ -959,6 +954,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	statsMode := opts.StatsMode.normalized()
 	candidateLimit := uint64(efSearch)
 	var visitedCandidates uint64
+	var loopEdgeVisits uint64
 	var plan *columnVectorGraphSearchPlan
 	var loopCounters *columnVectorGraphNativeSearchLoopCounters
 	if !statsMode.minimal() {
@@ -975,6 +971,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	defer func() {
 		if loopCounters != nil {
+			loopCounters.Edges += loopEdgeVisits
+			loopCounters.VisitedEdges += loopEdgeVisits
 			loopCounters.publish(&stats, visitedCandidates)
 		}
 		if preparedMinimalCounters != nil {
@@ -997,6 +995,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if loopCounters == nil && plan.preparedSearch == nil {
 		loopCounters = &columnVectorGraphNativeSearchLoopCounters{}
 	}
+	countLoopEdges := loopCounters != nil
 	if plan.preparedSearch != nil {
 		stats.PreparedGraphSearchViews = 1
 		if statsMode.minimal() {
@@ -1025,7 +1024,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, stats, err
 	}
 	for layer := maxLayer; layer > 0; layer-- {
-		entryOrdinal, err = r.greedyNearestAtLayer(plan, singleBlockView, query, queryInvNorm, entryOrdinal, layer, candidateRows, hasCandidateRows, scratch, hotStats, loopCounters, preparedMinimalCounters, debugCounters)
+		entryOrdinal, err = r.greedyNearestAtLayer(plan, singleBlockView, query, queryInvNorm, entryOrdinal, layer, candidateRows, hasCandidateRows, scratch, hotStats, countLoopEdges, &loopEdgeVisits, preparedMinimalCounters, debugCounters)
 		if err != nil {
 			return nil, stats, err
 		}
@@ -1075,8 +1074,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 					neighborIndex := i
 					neighbor := adjacency[i]
 					i++
-					if loopCounters != nil {
-						loopCounters.recordEdge()
+					if countLoopEdges {
+						loopEdgeVisits++
 					}
 					if debugStats != nil {
 						debugStats.Layer0EdgeVisits++
@@ -1122,8 +1121,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			if visitedCandidates >= candidateLimit {
 				break
 			}
-			if loopCounters != nil {
-				loopCounters.recordEdge()
+			if countLoopEdges {
+				loopEdgeVisits++
 			}
 			if debugStats != nil {
 				debugStats.Layer0EdgeVisits++
@@ -1248,7 +1247,7 @@ func (r *columnVectorGraphPhysicalRowReader) maxAdjacencyLayer(plan *columnVecto
 	return columnVectorGraphAdjacencyMaxLayer(adjacency)
 }
 
-func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, entryOrdinal int, layer int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, loopCounters *columnVectorGraphNativeSearchLoopCounters, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters, debugCounters *columnVectorGraphNativeSearchDebugCounters) (int, error) {
+func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, entryOrdinal int, layer int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters, debugCounters *columnVectorGraphNativeSearchDebugCounters) (int, error) {
 	best := entryOrdinal
 	bestScore, err := r.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, best, scratch, stats)
 	if err != nil {
@@ -1271,8 +1270,8 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 			scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
 			tile := scratch.scoreTileOrdinals[:0]
 			for i, neighbor := range adjacency {
-				if loopCounters != nil {
-					loopCounters.recordEdge()
+				if countLoopEdges {
+					(*loopEdgeVisits)++
 				}
 				if debugCounters != nil {
 					debugCounters.recordUpperLayerEdge()
@@ -1314,8 +1313,8 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 			continue
 		}
 		for i, neighbor := range adjacency {
-			if loopCounters != nil {
-				loopCounters.recordEdge()
+			if countLoopEdges {
+				(*loopEdgeVisits)++
 			}
 			if debugCounters != nil {
 				debugCounters.recordUpperLayerEdge()
