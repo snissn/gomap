@@ -261,6 +261,26 @@ func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
 	}
 }
 
+func TestEncodeCollectionInsertBatchByIDPayloadSortedAndUnsortedMatch(t *testing.T) {
+	sorted, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
+		{ID: []byte("u1"), Document: []byte(`{"name":"Ada"}`)},
+		{ID: []byte("u2"), Document: []byte(`{"name":"Grace"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload sorted: %v", err)
+	}
+	unsorted, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
+		{ID: []byte("u2"), Document: []byte(`{"name":"Grace"}`)},
+		{ID: []byte("u1"), Document: []byte(`{"name":"Ada"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload unsorted: %v", err)
+	}
+	if !bytes.Equal(sorted, unsorted) {
+		t.Fatalf("sorted and unsorted payloads differ\nsorted   %x\nunsorted %x", sorted, unsorted)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CollectionDeleteBatchByID(t *testing.T) {
 	payload, err := EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("u2"), []byte("u1")})
 	if err != nil {
