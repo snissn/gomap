@@ -52,6 +52,7 @@ const (
 	columnStoreCompressionSupportSupported     = "supported"
 	columnStoreCompressionSupportNotApplicable = "not_applicable"
 	columnStoreCompressionSupportFallback      = "fallback"
+	columnStoreCompressionSupportUnsupported   = "unsupported"
 	columnStoreCompressionNoneLabel            = "none"
 )
 
@@ -84,10 +85,17 @@ var (
 		columnStoreSuitePathList(columnStoreSuiteExecutableForcedPaths),
 		columnStoreSuitePathList(columnStoreSuiteAcceptedForcedPaths),
 	)
-	columnStoreSuitePathArg               = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
-	columnStoreSuiteFixtureArg            = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
-	columnStoreSuiteQueryArg              = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata; empty/all runs the full q1-q5/q5_metadata suite; duplicates are rejected)")
-	columnStoreSuiteAssetReadIntegrityArg = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, cached_verify, skip_checksums; relaxed modes are unsafe and require -treedb-allow-unsafe)")
+	columnStoreSuitePathArg                     = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
+	columnStoreSuiteFixtureArg                  = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
+	columnStoreSuiteQueryArg                    = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata; empty/all runs the full q1-q5/q5_metadata suite; duplicates are rejected)")
+	columnStoreSuiteAssetReadIntegrityArg       = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, cached_verify, skip_checksums; relaxed modes are unsafe and require -treedb-allow-unsafe)")
+	columnStoreSuiteTypedCompressionArg         = flag.String("column-store-typed-compression", "", "Benchmark-only typed_column_part compression policy for -suite column_store when typed-column assets are published (none,snappy,lz4,zstd,zstd_dict; zstd values fail closed; empty uses production default none)")
+	columnStoreSuiteTypedInt64EncodingArg       = flag.String("column-store-typed-int64-encoding", "", "Benchmark-only typed_column_part int64 encoding override (default,raw_int64,delta_varint,double_delta_varint; empty uses production default)")
+	columnStoreSuiteTypedRowsPerGranuleArg      = flag.Int("column-store-typed-rows-per-granule", 0, "Benchmark-only typed_column_part rows per granule override (0 uses production default)")
+	columnStoreSuiteTypedAdaptiveArg            = flag.Bool("column-store-typed-adaptive", false, "Benchmark-only typed_column_part adaptive rows-per-granule sizing (off by default; public config remains unchanged)")
+	columnStoreSuiteTypedAdaptiveTargetBytesArg = flag.Int("column-store-typed-adaptive-target-bytes", 0, "Benchmark-only typed_column_part adaptive target raw bytes per mark/granule (0 uses typedcolumn default when adaptive is enabled)")
+	columnStoreSuiteTypedAdaptiveMinRowsArg     = flag.Int("column-store-typed-adaptive-min-rows", 0, "Benchmark-only typed_column_part adaptive minimum rows (0 uses typedcolumn default when adaptive is enabled)")
+	columnStoreSuiteTypedAdaptiveMaxRowsArg     = flag.Int("column-store-typed-adaptive-max-rows", 0, "Benchmark-only typed_column_part adaptive maximum rows (0 uses rows-per-granule/default when adaptive is enabled)")
 
 	columnStoreSuiteAcceptedForcedPaths = []string{
 		columnStorePathRowStoreBaseline,
@@ -378,6 +386,11 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", err
 	}
+	cleanupTypedPolicyEnv, err := columnStoreSuiteInstallTypedBenchmarkPolicyEnv()
+	if err != nil {
+		return "", err
+	}
+	defer cleanupTypedPolicyEnv()
 	if err := validateColumnStoreSuiteDBSelection(baseCfg.DBsArg, baseCfg.DBsExcludeArg); err != nil {
 		return "", err
 	}
@@ -545,7 +558,12 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", fmt.Errorf("column_store: retained-payload byte accounting: %w", err)
 	}
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
-	codecLayouts := columnStoreBaselineCodecLayoutMetrics(rows, len(columnStoreSuiteConfigForPath(forcedPath).Columns), columnAssetBytes)
+	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{ReadIntegrity: assetReadIntegrity})
+	codecLayouts := columnStoreCodecLayoutMetrics(rows, len(columnStoreSuiteConfigForPath(forcedPath).Columns), columnAssetBytes, physicalAccounting)
+	compressionMatrixNote := "current production default remains compression=none; snappy/lz4 rows appear when typed_column_part assets were explicitly published with those opt-in policies; zstd/zstd_dict are reported as unsupported/deferred despite enum names"
+	if physicalAccountingErr != nil {
+		compressionMatrixNote += "; physical accounting unavailable: " + physicalAccountingErr.Error()
+	}
 	report := columnStoreSuiteReport{
 		GeneratedAt:           time.Now().UTC().Format(time.RFC3339),
 		Suite:                 "column_store",
@@ -580,7 +598,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			DBTotalFiles:                    totalFiles,
 		},
 		CodecLayouts:          codecLayouts,
-		CompressionMatrixNote: "Baseline reporting only: current_default_none is intentionally equivalent to compression_off until a later #1952 slice adds opt-in alternatives; unsupported future rows must use support_state/support_reason instead of widening runtime support here.",
+		CompressionMatrixNote: compressionMatrixNote,
 		Manifest: columnStoreManifestMetric{
 			ActiveGeneration:                manifestIdentity.ManifestGeneration,
 			ActiveChecksum:                  manifestIdentity.ManifestChecksum,
@@ -824,7 +842,12 @@ func buildColumnStoreSyntheticFixture(rows int, seed int64) ([]columnStoreFixtur
 }
 
 func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
-	return &collections.ColumnStoreConfig{
+	typedBenchmarkPolicyActive := columnStoreSuiteTypedBenchmarkPolicyFlagsActive()
+	profileSupport := collections.ColumnStoreProfileDurableOnly
+	if typedBenchmarkPolicyActive {
+		profileSupport = collections.ColumnStoreProfileBenchmarkRelaxed
+	}
+	cfg := &collections.ColumnStoreConfig{
 		Enabled: true,
 		Columns: []collections.ColumnStoreColumn{
 			{Name: "time_us", Path: "time_us", ValueType: collections.ColumnStoreValueInt64},
@@ -838,8 +861,115 @@ func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
 		},
 		RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
 		Reconstruction:  collections.ColumnReconstructionRetainedPayloadAndColumns,
-		ProfileSupport:  collections.ColumnStoreProfileDurableOnly,
+		ProfileSupport:  profileSupport,
 	}
+	if typedBenchmarkPolicyActive {
+		for i := range cfg.Columns {
+			cfg.Columns[i].Owner = collections.TypedStorageOwnerColumnPart
+		}
+	}
+	return cfg
+}
+
+func columnStoreSuiteTypedBenchmarkPolicyFlagsActive() bool {
+	return strings.TrimSpace(*columnStoreSuiteTypedCompressionArg) != "" ||
+		strings.TrimSpace(*columnStoreSuiteTypedInt64EncodingArg) != "" ||
+		*columnStoreSuiteTypedRowsPerGranuleArg != 0 ||
+		*columnStoreSuiteTypedAdaptiveArg ||
+		*columnStoreSuiteTypedAdaptiveTargetBytesArg != 0 ||
+		*columnStoreSuiteTypedAdaptiveMinRowsArg != 0 ||
+		*columnStoreSuiteTypedAdaptiveMaxRowsArg != 0
+}
+
+func columnStoreSuiteValidateTypedCompressionFlag(value string) error {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "default", "none", "off", "compression_off", "snappy", "lz4":
+		return nil
+	case "zstd", "zstd_dict", "zstd-dict":
+		return fmt.Errorf("column_store: typed compression %q is unsupported/deferred for production; enum labels are reported but not executable", value)
+	default:
+		return fmt.Errorf("column_store: unknown typed compression %q", value)
+	}
+}
+
+func columnStoreSuiteValidateTypedInt64EncodingFlag(value string) error {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "default", "raw", "raw_int64", "delta", "delta_varint", "double_delta", "double-delta", "double_delta_varint":
+		return nil
+	default:
+		return fmt.Errorf("column_store: unknown typed int64 encoding %q", value)
+	}
+}
+
+func columnStoreSuiteInstallTypedBenchmarkPolicyEnv() (func(), error) {
+	type envKV struct{ name, value string }
+	vars := make([]envKV, 0, 7)
+	if value := strings.TrimSpace(*columnStoreSuiteTypedCompressionArg); value != "" {
+		if err := columnStoreSuiteValidateTypedCompressionFlag(value); err != nil {
+			return nil, err
+		}
+		vars = append(vars, envKV{"TREEDB_COLUMN_STORE_TYPED_COMPRESSION", value})
+	}
+	if value := strings.TrimSpace(*columnStoreSuiteTypedInt64EncodingArg); value != "" {
+		if err := columnStoreSuiteValidateTypedInt64EncodingFlag(value); err != nil {
+			return nil, err
+		}
+		vars = append(vars, envKV{"TREEDB_COLUMN_STORE_TYPED_INT64_ENCODING", value})
+	}
+	if *columnStoreSuiteTypedRowsPerGranuleArg < 0 {
+		return nil, fmt.Errorf("column_store: -column-store-typed-rows-per-granule must be >= 0")
+	}
+	if *columnStoreSuiteTypedRowsPerGranuleArg > 0 {
+		vars = append(vars, envKV{"TREEDB_COLUMN_STORE_TYPED_ROWS_PER_GRANULE", strconv.Itoa(*columnStoreSuiteTypedRowsPerGranuleArg)})
+	}
+	if *columnStoreSuiteTypedAdaptiveArg {
+		vars = append(vars, envKV{"TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_ENABLED", "true"})
+	}
+	for _, item := range []struct {
+		flagValue int
+		flagName  string
+		envName   string
+	}{
+		{*columnStoreSuiteTypedAdaptiveTargetBytesArg, "-column-store-typed-adaptive-target-bytes", "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_TARGET_BYTES"},
+		{*columnStoreSuiteTypedAdaptiveMinRowsArg, "-column-store-typed-adaptive-min-rows", "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MIN_ROWS"},
+		{*columnStoreSuiteTypedAdaptiveMaxRowsArg, "-column-store-typed-adaptive-max-rows", "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MAX_ROWS"},
+	} {
+		if item.flagValue < 0 {
+			return nil, fmt.Errorf("column_store: %s must be >= 0", item.flagName)
+		}
+		if item.flagValue > 0 {
+			vars = append(vars, envKV{item.envName, strconv.Itoa(item.flagValue)})
+		}
+	}
+	if len(vars) == 0 {
+		return func() {}, nil
+	}
+	previous := make([]struct {
+		name  string
+		value string
+		ok    bool
+	}, 0, len(vars))
+	for _, item := range vars {
+		old, ok := os.LookupEnv(item.name)
+		previous = append(previous, struct {
+			name  string
+			value string
+			ok    bool
+		}{item.name, old, ok})
+		if err := os.Setenv(item.name, item.value); err != nil {
+			return nil, err
+		}
+	}
+	return func() {
+		for i := len(previous) - 1; i >= 0; i-- {
+			item := previous[i]
+			if item.ok {
+				_ = os.Setenv(item.name, item.value)
+			} else {
+				_ = os.Unsetenv(item.name)
+			}
+		}
+	}, nil
 }
 
 func columnStoreSuiteConfigForPath(path string) *collections.ColumnStoreConfig {
@@ -2203,8 +2333,44 @@ func columnStoreSuiteManifestControlUsage(root string) (int64, []string, error) 
 	return total, missing, nil
 }
 
+func columnStoreCodecLayoutMetrics(rows, columns int, physicalBytes int64, accounting collections.ColumnStorePhysicalAccounting) []columnStoreCodecLayoutMetric {
+	out := columnStoreBaselineCodecLayoutMetrics(rows, columns, physicalBytes)
+	for _, part := range accounting.TypedColumnParts {
+		for _, detail := range part.Image.CompressionDetail {
+			out = append(out, columnStoreCodecLayoutMetric{
+				columnStoreCompressionAttribution: columnStoreCompressionAttribution{
+					CodecLayoutLabel:            "typed_column_part/" + detail.Column + "/" + detail.Encoding,
+					CompressionPolicyLabel:      columnStoreCompressionPolicyLabel(detail.RequestedCompression),
+					RequestedCompression:        detail.RequestedCompression,
+					ActualCompression:           detail.ActualCompression,
+					SupportState:                columnStoreCompressionSupportSupported,
+					SupportReason:               detail.FallbackReason,
+					CompressedBytes:             detail.StoredBytes,
+					CompressedBytesSource:       "typed_column_part_byte_accounting.compression_detail.stored_bytes",
+					RawBytes:                    detail.EncodedRawBytes,
+					RawBytesSource:              "typed_column_part_byte_accounting.compression_detail.encoded_raw_bytes",
+					DecompressedBytes:           detail.EncodedRawBytes,
+					DecompressedBytesSource:     "typed_column_part_byte_accounting.compression_detail.encoded_raw_bytes",
+					CompressionRatio:            columnStoreCompressionRatio(detail.StoredBytes, detail.EncodedRawBytes),
+					CompressionRatioSource:      "typed_column_part_compressed_bytes/encoded_raw_bytes",
+					CompressionDurationMS:       float64(detail.CompressionNanos) / float64(time.Millisecond),
+					CompressionDurationSource:   "typed_column_part_codec_report_compression_nanos",
+					DecompressionDurationMS:     0,
+					DecompressionDurationSource: "not_measured_in_column_store_suite_accounting; query rows report scan/reduce timings separately",
+					BenchmarkBPerOp:             0,
+					BenchmarkAllocsPerOp:        0,
+					BenchmarkAllocationSource:   columnStoreBenchmarkAllocationSource(),
+				},
+				Rows:    part.Image.Rows,
+				Columns: part.Image.Columns,
+			})
+		}
+	}
+	return out
+}
+
 func columnStoreBaselineCodecLayoutMetrics(rows, columns int, physicalBytes int64) []columnStoreCodecLayoutMetric {
-	return []columnStoreCodecLayoutMetric{
+	out := []columnStoreCodecLayoutMetric{
 		{
 			columnStoreCompressionAttribution: columnStoreSuiteCompressionAttribution(
 				columnStoreCompressionPolicyOff,
@@ -2222,6 +2388,48 @@ func columnStoreBaselineCodecLayoutMetrics(rows, columns int, physicalBytes int6
 			Columns: columns,
 		},
 	}
+	out = append(out,
+		columnStoreUnsupportedCodecLayoutMetric(rows, columns, "zstd", "zstd production encode/decode is deferred; enum names are rejected by typedcolumn/production validation"),
+		columnStoreUnsupportedCodecLayoutMetric(rows, columns, "zstd_dict", "zstd dictionary production encode/decode/dictionary training is deferred; enum name is rejected by typedcolumn/production validation"),
+	)
+	return out
+}
+
+func columnStoreUnsupportedCodecLayoutMetric(rows, columns int, compression string, reason string) columnStoreCodecLayoutMetric {
+	return columnStoreCodecLayoutMetric{
+		columnStoreCompressionAttribution: columnStoreCompressionAttribution{
+			CodecLayoutLabel:            columnStoreCodecLayoutCurrent,
+			CompressionPolicyLabel:      "requested_" + compression,
+			RequestedCompression:        compression,
+			ActualCompression:           columnStoreCompressionNoneLabel,
+			SupportState:                columnStoreCompressionSupportUnsupported,
+			SupportReason:               reason,
+			CompressedBytes:             0,
+			CompressedBytesSource:       "unsupported_codec_not_run",
+			RawBytes:                    0,
+			RawBytesSource:              "unsupported_codec_not_run",
+			DecompressedBytes:           0,
+			DecompressedBytesSource:     "unsupported_codec_not_run",
+			CompressionRatio:            0,
+			CompressionRatioSource:      "unsupported_codec_not_run",
+			CompressionDurationMS:       0,
+			CompressionDurationSource:   "unsupported_codec_not_run",
+			DecompressionDurationMS:     0,
+			DecompressionDurationSource: "unsupported_codec_not_run",
+			BenchmarkBPerOp:             0,
+			BenchmarkAllocsPerOp:        0,
+			BenchmarkAllocationSource:   columnStoreBenchmarkAllocationSource(),
+		},
+		Rows:    rows,
+		Columns: columns,
+	}
+}
+
+func columnStoreCompressionPolicyLabel(requested string) string {
+	if requested == "" || requested == columnStoreCompressionNoneLabel {
+		return columnStoreCompressionPolicyOff
+	}
+	return "requested_" + requested
 }
 
 func columnStoreSuiteCompressionAttribution(policyLabel string, physicalBytes int64) columnStoreCompressionAttribution {

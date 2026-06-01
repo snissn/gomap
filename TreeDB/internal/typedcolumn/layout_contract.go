@@ -507,8 +507,10 @@ type columnPartContractLayout struct {
 func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) columnPartContractLayout {
 	switch def.Encoding {
 	case EncodingRawInt64:
-		direct := def.Compression == CompressionNone && logicalType == "int64" && def.Type == ColumnTypeInt64 && def.FixedWidthElements == 0
-		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8, direct: direct, stats: direct, pruning: direct}
+		scalarInt64 := logicalType == "int64" && def.Type == ColumnTypeInt64 && def.FixedWidthElements == 0
+		direct := def.Compression == CompressionNone && scalarInt64
+		streaming := scalarInt64 && !direct
+		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8, direct: direct, streaming: streaming, stats: direct, pruning: direct}
 	case EncodingRawFloat32:
 		direct := def.Compression == CompressionNone && logicalType == "float32" && def.Type == ColumnTypeFloat32 && def.FixedWidthElements == 0
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct}
@@ -535,14 +537,16 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 		direct := def.Compression == CompressionNone && def.FixedWidthElements == 0 && logicalType == "bytes" && def.Type == ColumnTypeBytes
 		return columnPartContractLayout{elementSize: 1, alignment: 1, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 1, direct: direct}
 	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
-		streaming := def.Compression == CompressionNone && logicalType == "int64"
-		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming, pruning: streaming}
+		streaming := logicalType == "int64"
+		statsPruning := streaming && def.Compression == CompressionNone
+		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: statsPruning, pruning: statsPruning}
 	case EncodingBoolBitpackRLE:
-		streaming := def.Compression == CompressionNone && logicalType == "bool"
-		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming}
+		streaming := logicalType == "bool"
+		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming && def.Compression == CompressionNone}
 	case EncodingLowCardinalityUint32:
-		streaming := def.Compression == CompressionNone && logicalType == "string"
-		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming, pruning: streaming}
+		streaming := logicalType == "string"
+		statsPruning := streaming && def.Compression == CompressionNone
+		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: statsPruning, pruning: statsPruning}
 	case EncodingNullableInt64:
 		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined}
 	default:

@@ -386,6 +386,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1952 is the scoped production codec/layout capability guard used by
 		// the adapter and prepared-state seams without adding a new data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_capability.go")): {},
+		// #1952 is the benchmark-only opt-in policy parser for the typed-column
+		// publication adapter; it is gated by the benchmark-relaxed profile.
+		filepath.Clean(filepath.Join(collectionsDir, "typed_column_benchmark_policy.go")): {},
 		// #1837 is the scoped prepared typed-column scan/session state seam
 		// shared by concrete collection hot paths.
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_prepared_state.go")): {},

@@ -77,8 +77,14 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 		t.Fatalf("wrong compression err=%v want compression rejection", err)
 	}
 	compressedCaps := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionSnappy})
-	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpSum); cap.Supported() || cap.Reason != ReasonUnsupportedCompression {
-		t.Fatalf("compressed semantic cap=%+v want %s", cap, ReasonUnsupportedCompression)
+	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpSum); !cap.Supported() {
+		t.Fatalf("compressed sum cap=%+v want decode-on-scan support", cap)
+	}
+	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonCompressedDirectView {
+		t.Fatalf("compressed direct carrier cap=%+v want %s", cap, ReasonCompressedDirectView)
+	}
+	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpStatsSum); cap.Supported() || cap.Reason != ReasonUnsupportedCompression {
+		t.Fatalf("compressed stats cap=%+v want %s", cap, ReasonUnsupportedCompression)
 	}
 	emptyRows := typedcolumn.EncodedGranule{Rows: 0, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0}
 	if err := caps.ValidateGranule(emptyRows); err != nil {
