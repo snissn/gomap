@@ -1954,7 +1954,7 @@ func TestColumnStoreJSONBenchUnavailablePreparedCellDoesNotClaimPreparedHash1955
 	if cell.CompatibilityStatus != "unavailable" || !strings.Contains(cell.CompatibilityStatusReason, "prepare unavailable") {
 		t.Fatalf("unexpected unavailable status: %+v", cell)
 	}
-	if cell.StorageSource != exec.StorageSource || cell.FallbackReason != exec.FallbackReason || cell.MetadataDataScanPath != columnStoreJSONBenchScanPathData || cell.PreparedSetupDurationMS <= 0 {
+	if cell.CellLabel != columnStoreJSONBenchCellColumnPrepared || cell.StorageSource != exec.StorageSource || cell.FallbackReason != exec.FallbackReason || cell.MetadataDataScanPath != columnStoreJSONBenchScanPathData || cell.PreparedSetupDurationMS <= 0 {
 		t.Fatalf("unavailable prepared cell did not preserve actual fallback diagnostics: %+v", cell)
 	}
 	if cell.RawHash != direct.RawHash {
