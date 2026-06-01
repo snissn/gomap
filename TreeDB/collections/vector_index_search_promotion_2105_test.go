@@ -57,7 +57,7 @@ func TestColumnVectorGraphPublicVectorIndexSearcherSearchPromotion2105(t *testin
 				assertVectorIndexSearchPromotionCurrentStats2105(t, boundary, defaultStats)
 				assertVectorIndexSearchPromotionCurrentStats2105(t, boundary, scalarStats)
 				assertVectorIndexSearchPromotionCurrentStats2105(t, boundary, indexedStats)
-				assertVectorIndexSearchDefaultIndexedScoreBatches2105(t, defaultStats, indexedStats, scalarStats)
+				assertVectorIndexSearchDefaultIndexedScoreBatches2105(t, defaultStats, indexedStats, scalarStats, shape.dims)
 			})
 		}
 	})
@@ -145,7 +145,7 @@ func benchmarkVectorIndexSearcherSearchPromotion2105(b *testing.B, searchName st
 	}
 	assertVectorIndexSearchPromotionModeStats2105(b, boundary, row.mode, measured.Stats)
 	assertVectorIndexSearchBenchmarkDebugStats2105(b, measured.Stats, shape.efSearch >= shape.rows)
-	assertVectorIndexSearchPromotionScoreStats2105(b, row.mode, row.scoreName, measured.Stats)
+	assertVectorIndexSearchPromotionScoreStats2105(b, row.mode, row.scoreName, measured.Stats, shape.dims)
 	var checksum int64
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -310,7 +310,7 @@ func assertVectorIndexSearchPromotionLegacyStats2105(tb testing.TB, stats Vector
 	}
 }
 
-func assertVectorIndexSearchDefaultIndexedScoreBatches2105(tb testing.TB, defaultStats, indexedStats, scalarStats VectorIndexSearchStats) {
+func assertVectorIndexSearchDefaultIndexedScoreBatches2105(tb testing.TB, defaultStats, indexedStats, scalarStats VectorIndexSearchStats, dims int) {
 	tb.Helper()
 	if defaultStats.ScoreBatchCalls != indexedStats.ScoreBatchCalls || defaultStats.ScoreBatchCandidates != indexedStats.ScoreBatchCandidates || defaultStats.ScoreBatchMaxTileSize != indexedStats.ScoreBatchMaxTileSize || defaultStats.ScoreBatchOptimizedCalls != indexedStats.ScoreBatchOptimizedCalls || defaultStats.ScoreBatchScalarFallbackCalls != indexedStats.ScoreBatchScalarFallbackCalls {
 		tb.Fatalf("default stats=%+v indexed stats=%+v want default to select identical indexed prepared score batching", defaultStats, indexedStats)
@@ -324,7 +324,7 @@ func assertVectorIndexSearchDefaultIndexedScoreBatches2105(tb testing.TB, defaul
 	if defaultStats.GraphRowFallbacks != 0 || defaultStats.TypedColumnFallbacks != 0 || defaultStats.VectorScratchDecodes != 0 || defaultStats.NormScratchDecodes != 0 || defaultStats.AdjacencySourceFallbacks != 0 || defaultStats.ResultIDGraphFallbacks != 0 {
 		tb.Fatalf("default stats=%+v want healthy prepared path without graph-row/source fallback", defaultStats)
 	}
-	assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, defaultStats.ScoreBatchOptimizedCalls, defaultStats.ScoreBatchScalarFallbackCalls)
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, defaultStats.ScoreBatchOptimizedCalls, defaultStats.ScoreBatchScalarFallbackCalls, int(defaultStats.ScoreBatchMaxTileSize), dims)
 }
 
 func assertVectorIndexSearchScalarScoreBatches2105(tb testing.TB, stats VectorIndexSearchStats) {
@@ -334,13 +334,13 @@ func assertVectorIndexSearchScalarScoreBatches2105(tb testing.TB, stats VectorIn
 	}
 }
 
-func assertVectorIndexSearchPromotionScoreStats2105(tb testing.TB, mode columnVectorGraphSearchTopologyParityMode2091, scoreName string, stats VectorIndexSearchStats) {
+func assertVectorIndexSearchPromotionScoreStats2105(tb testing.TB, mode columnVectorGraphSearchTopologyParityMode2091, scoreName string, stats VectorIndexSearchStats, dims int) {
 	tb.Helper()
 	if mode == columnVectorGraphSearchTopologyParityModeCurrentPrepared2091 && (scoreName == "default" || scoreName == "indexed") {
 		if stats.ScoreBatchCalls >= stats.ScoreBatchCandidates || stats.ScoreBatchMaxTileSize < 2 {
 			tb.Fatalf("mode=%s score=%s stats=%+v want grouped prepared indexed score batches", mode, scoreName, stats)
 		}
-		assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, stats.ScoreBatchOptimizedCalls, stats.ScoreBatchScalarFallbackCalls)
+		assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, stats.ScoreBatchOptimizedCalls, stats.ScoreBatchScalarFallbackCalls, int(stats.ScoreBatchMaxTileSize), dims)
 		return
 	}
 	assertVectorIndexSearchScalarScoreBatches2105(tb, stats)

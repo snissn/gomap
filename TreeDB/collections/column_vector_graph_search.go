@@ -611,6 +611,17 @@ func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(co
 	c.PreparedScoreCalls += count64
 }
 
+func (p *columnVectorGraphSearchPlan) recordPreparedMinimalScoreBatch(counters *columnVectorGraphPreparedMinimalSearchCounters, ordinals []int) {
+	if counters == nil || len(ordinals) == 0 {
+		return
+	}
+	if p == nil || p.preparedSearch == nil || !p.scoreBatchMode.indexedEnabled() || len(ordinals) <= 1 {
+		counters.recordPreparedScores(len(ordinals), false, true)
+		return
+	}
+	p.preparedSearch.recordIndexedScoreBatchMinimalCounters(counters, ordinals)
+}
+
 func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedAdjacency(adjacencyLen int) {
 	if c == nil {
 		return
@@ -1296,8 +1307,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 				debugCounters.recordScores(columnVectorGraphNativeSearchScoreContextUpperNeighbor, tile)
 			}
 			if preparedMinimal != nil {
-				optimized := plan.preparedSearch.indexedScoreBatchOptimizedEligible(len(tile))
-				preparedMinimal.recordPreparedScores(len(tile), optimized, !optimized)
+				plan.recordPreparedMinimalScoreBatch(preparedMinimal, tile)
 			}
 			for i, neighborOrdinal := range tile {
 				score := scores[i]
@@ -1541,8 +1551,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 		debugCounters.recordScores(scoreContext, ordinals)
 	}
 	if preparedMinimal != nil {
-		optimized := plan != nil && plan.scoreBatchMode.indexedEnabled() && plan.preparedSearch != nil && plan.preparedSearch.indexedScoreBatchOptimizedEligible(len(ordinals))
-		preparedMinimal.recordPreparedScores(len(ordinals), optimized, !optimized)
+		plan.recordPreparedMinimalScoreBatch(preparedMinimal, ordinals)
 	}
 	for i, ordinal := range ordinals {
 		loopCounters.recordCandidate()

@@ -181,6 +181,46 @@ func (v *columnVectorGraphPreparedSearchView) indexedScoreBatchOptimizedEligible
 	return v != nil && v.ready() && v.vector.singlePart != nil && vectorops.DotFloat32IndexedOptimizedEligible(count, v.dims)
 }
 
+func (v *columnVectorGraphPreparedSearchView) recordIndexedScoreBatchMinimalCounters(counters *columnVectorGraphPreparedMinimalSearchCounters, ordinals []int) {
+	if counters == nil || len(ordinals) == 0 {
+		return
+	}
+	if v == nil || !v.ready() || len(ordinals) <= 1 {
+		counters.recordPreparedScores(len(ordinals), false, true)
+		return
+	}
+	if v.vector.singlePart != nil {
+		optimized := v.indexedScoreBatchOptimizedEligible(len(ordinals))
+		counters.recordPreparedScores(len(ordinals), optimized, !optimized)
+		return
+	}
+	for _, ordinal := range ordinals {
+		if ordinal < 0 || ordinal >= len(v.norm.values) {
+			counters.recordPreparedScores(len(ordinals), false, true)
+			return
+		}
+		if _, _, ok := v.vector.locationForOrdinal(ordinal); !ok {
+			counters.recordPreparedScores(len(ordinals), false, true)
+			return
+		}
+	}
+	for runStart := 0; runStart < len(ordinals); {
+		part, _, _ := v.vector.locationForOrdinal(ordinals[runStart])
+		runEnd := runStart + 1
+		for runEnd < len(ordinals) {
+			nextPart, _, _ := v.vector.locationForOrdinal(ordinals[runEnd])
+			if nextPart != part {
+				break
+			}
+			runEnd++
+		}
+		runLen := runEnd - runStart
+		optimized := vectorops.DotFloat32IndexedOptimizedEligible(runLen, v.dims)
+		counters.recordPreparedScores(runLen, optimized, !optimized)
+		runStart = runEnd
+	}
+}
+
 func (v *columnVectorGraphPreparedSearchView) validateLive() error {
 	if v == nil {
 		return errors.New("nil prepared graph-search view")
