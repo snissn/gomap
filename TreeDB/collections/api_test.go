@@ -14513,6 +14513,98 @@ func TestCollectionUpdateBSONSetBatchReadsNoIndexBufferedInsertWithoutFlush(t *t
 	}
 }
 
+func TestCollectionUpdateBSONSetBatchNoIndexBufferedInsertInvalidatesStalePlan(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})},
+	); err != nil {
+		t.Fatalf("insert first buffered BSON document: %v", err)
+	}
+
+	col.writeDomain.mu.RLock()
+	initialGeneration := col.writeDomain.writeGeneration
+	var firstWriteGeneration uint64
+	var firstWriteNoted bool
+	if col.writeDomain.primaryWriteIndex != nil {
+		firstWriteGeneration, firstWriteNoted = col.writeDomain.primaryWriteIndex.generation([]byte("u1"))
+	}
+	col.writeDomain.mu.RUnlock()
+	if initialGeneration == 0 {
+		t.Fatalf("initial buffered insert write generation=0")
+	}
+	if !firstWriteNoted || firstWriteGeneration != initialGeneration {
+		t.Fatalf("primary write generation for u1=%d noted=%v want %d/true", firstWriteGeneration, firstWriteNoted, initialGeneration)
+	}
+
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("prepare bson set spec: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan([]updateBatchItem{
+		newBSONSetUpdateBatchItem([]byte("u1"), spec),
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true, nil)
+	if err != nil {
+		t.Fatalf("build buffered plan: %v", err)
+	}
+	defer plan.close()
+	if !plan.bufferedBase || plan.bufferedReadGeneration != initialGeneration {
+		t.Fatalf("plan bufferedBase=%v generation=%d want true/%d", plan.bufferedBase, plan.bufferedReadGeneration, initialGeneration)
+	}
+	if !col.bufferedUpdateBatchPlanStillCurrent(plan) {
+		t.Fatalf("fresh buffered plan unexpectedly stale")
+	}
+
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u2")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}})},
+	); err != nil {
+		t.Fatalf("insert second buffered BSON document: %v", err)
+	}
+
+	col.writeDomain.mu.RLock()
+	afterGeneration := col.writeDomain.writeGeneration
+	var secondWriteGeneration uint64
+	var secondWriteNoted bool
+	if col.writeDomain.primaryWriteIndex != nil {
+		secondWriteGeneration, secondWriteNoted = col.writeDomain.primaryWriteIndex.generation([]byte("u2"))
+	}
+	col.writeDomain.mu.RUnlock()
+	if afterGeneration <= initialGeneration {
+		t.Fatalf("second buffered insert write generation=%d want > %d", afterGeneration, initialGeneration)
+	}
+	if !secondWriteNoted || secondWriteGeneration != afterGeneration {
+		t.Fatalf("primary write generation for u2=%d noted=%v want %d/true", secondWriteGeneration, secondWriteNoted, afterGeneration)
+	}
+	if col.bufferedUpdateBatchPlanStillCurrent(plan) {
+		t.Fatalf("buffered update plan stayed current after a later buffered insert")
+	}
+}
+
 func TestCollectionUpdateBSONSetBatchFlushesStaleNoIndexBufferedInsert(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),

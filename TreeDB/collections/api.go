@@ -3774,9 +3774,11 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		}
 	}
 	domain.storagePolicy = plannerOptions.dataStoragePolicy
-	domain.table.SetEntry(id, document, page.ValuePtr{}, node.FlagInline)
-	domain.count++
 	resultID := bytes.Clone(id)
+	domain.table.SetEntry(resultID, document, page.ValuePtr{}, node.FlagInline)
+	domain.count++
+	domain.writeGeneration++
+	domain.notePrimaryWriteKeysLocked([][]byte{resultID}, domain.writeGeneration)
 	domain.mu.Unlock()
 	return resultID, nil
 }
@@ -3967,6 +3969,8 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		domain.table.SetEntry(entry.id, entry.document, page.ValuePtr{}, node.FlagInline)
 	}
 	domain.count += len(entries)
+	domain.writeGeneration++
+	domain.notePrimaryWriteKeysLocked(resultIDs, domain.writeGeneration)
 	c.setLastInsertStats(CollectionInsertStats{
 		Documents: len(entries),
 		Indexes:   0,
