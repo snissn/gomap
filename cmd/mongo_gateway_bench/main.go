@@ -475,7 +475,7 @@ func run(parent context.Context, args []string) error {
 
 func parseConfig(args []string) (config, error) {
 	cfg := config{
-		TreeDBProfile:               treedb.ProfileLegacyWALRelaxedFast,
+		TreeDBProfile:               treedb.ProfileBench,
 		TreeDBDocumentFormat:        collections.DocumentFormatTemplateV1,
 		TreeDBDataRootStorage:       collections.RootStorageCompressed,
 		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
@@ -571,6 +571,9 @@ func parseConfig(args []string) (config, error) {
 	fs.Visit(func(f *flag.Flag) {
 		seenFlags[f.Name] = true
 	})
+	if cfg.Target == "treedb" && cfg.TreeDBCommandWAL && !seenFlags["treedb-profile"] {
+		treeDBProfile = string(treedb.ProfileCommandWALRelaxed)
+	}
 	if cfg.TreeDBDisableBufferedIndexedAsyncFlush && cfg.TreeDBBufferedIndexedAsyncFlush {
 		return config{}, errors.New("cannot set both -treedb-buffered-indexed-async-flush and -treedb-disable-buffered-indexed-async-flush")
 	}
@@ -804,9 +807,9 @@ func parseConfig(args []string) (config, error) {
 }
 
 func parseTreeDBProfile(raw string) (treedb.Profile, error) {
-	profile, ok := treedb.ParseProfile(raw, treedb.ProfileLegacyWALRelaxedFast)
+	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench)
 	if !ok {
-		return "", fmt.Errorf("unknown treedb-profile %q", raw)
+		return "", fmt.Errorf("unsupported -treedb-profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 	}
 	return profile, nil
 }

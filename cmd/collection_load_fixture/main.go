@@ -326,7 +326,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		DocumentFormat:             collections.DocumentFormatTemplateV1,
 		IndexCount:                 2,
 		BufferedIndexedWrites:      true,
-		Profile:                    treedb.ProfileNoWALFast,
+		Profile:                    treedb.ProfileBench,
 		DataOuterLeavesInValueLog:  true,
 		IndexOuterLeavesInValueLog: true,
 		KeepRecent:                 1,
@@ -529,14 +529,16 @@ func parseDocumentFormat(raw string) (collections.DocumentFormat, error) {
 func parseProfile(raw string) (treedb.Profile, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "production_fast", "backend_direct_fast", "backend_direct", "cached":
+		// Transitional collection benchmark engine aliases are migrated by #2148.
 		return treedb.ProfileNoWALFast, nil
 	case "production_wal_on_fast", "backend_direct_wal_on_fast":
+		// Transitional collection benchmark engine aliases are migrated by #2148.
 		return treedb.ProfileLegacyWALRelaxedFast, nil
 	default:
-		if profile, ok := treedb.ParseProfile(raw, treedb.ProfileNoWALFast); ok {
+		if profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench); ok {
 			return profile, nil
 		}
-		return "", fmt.Errorf("unsupported -profile %q", raw)
+		return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 	}
 }
 

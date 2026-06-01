@@ -66,6 +66,9 @@ type Opened struct {
 
 // ParseProfile parses the common downstream profile vocabulary and falls back
 // to fallback for empty or unknown values.
+//
+// Deprecated: use ParsePublicProfile at env/CLI boundaries that must reject
+// deprecated TreeDB profiles.
 func ParseProfile(raw string, fallback treedb.Profile) treedb.Profile {
 	if fallback == "" {
 		fallback = treedb.ProfileCommandWALRelaxed
@@ -74,6 +77,26 @@ func ParseProfile(raw string, fallback treedb.Profile) treedb.Profile {
 		return profile
 	}
 	return fallback
+}
+
+// ParsePublicProfile parses the public downstream profile vocabulary. Empty
+// input falls back to fallback, but the fallback must also be a public profile.
+func ParsePublicProfile(raw string, fallback treedb.Profile) (treedb.Profile, error) {
+	if fallback == "" {
+		fallback = treedb.ProfileCommandWALRelaxed
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		profile, ok := treedb.ParsePublicProfile("", fallback)
+		if ok {
+			return profile, nil
+		}
+		return "", fmt.Errorf("unsupported TreeDB fallback profile %q; allowed: %s", fallback, treedb.ProfileFlagHelp)
+	}
+	if profile, ok := treedb.ParsePublicProfile(trimmed, fallback); ok {
+		return profile, nil
+	}
+	return "", fmt.Errorf("unsupported TreeDB profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 }
 
 // ResolveOptions converts downstream wrapper defaults and standard TREEDB_*
@@ -104,7 +127,11 @@ func ResolveOptions(cfg OpenConfig) (treedb.Options, string, error) {
 	if profileEnvKey == "" {
 		profileEnvKey = EnvOpenProfile
 	}
-	profile := ParseProfile(os.Getenv(profileEnvKey), cfg.DefaultProfile)
+	rawProfile := os.Getenv(profileEnvKey)
+	profile, err := ParsePublicProfile(rawProfile, cfg.DefaultProfile)
+	if err != nil {
+		return treedb.Options{}, "", fmt.Errorf("invalid %s=%q: %w", profileEnvKey, rawProfile, err)
+	}
 	opts := treedb.OptionsFor(profile, dbPath)
 
 	keepRecentEnvKey := cfg.KeepRecentEnvKey

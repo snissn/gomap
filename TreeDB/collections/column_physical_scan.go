@@ -233,6 +233,7 @@ type columnPhysicalScanSnapshotView struct {
 	Diagnostics           columnPhysicalScanDiagnostics
 	ColumnAssetRootDir    string
 	AssetNamespace        string
+	ManifestCatalogBytes  int64
 }
 
 func columnPhysicalScanSnapshotViewAssetRefs(view columnPhysicalScanSnapshotView) []ColumnAssetRef {
@@ -470,6 +471,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 	diag.MutationParts = mutationParts
 	view.AssetRefs = refs
 	view.TypedColumnPartRefs = typedColumnPartRefs
+	view.ManifestCatalogBytes = manifest.ManifestBytes
 	view.AggregateMetadata = manifest.AggregateMetadata
 	view.DictionaryCodes = manifest.DictionaryCodes
 	view.Int64Values = manifest.Int64Values
@@ -687,6 +689,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 	sawHeader := false
 	activeParts := uint64(0)
 	manifestRecords := 0
+	manifestBytes := int64(len(columnManifestIdentityRecordKey) + columnManifestIdentityRecordSize)
 	mutationParts := 0
 	var refs []columnManifestAssetRefForScan
 	var typedColumnPartRefs []columnManifestAssetRefForScan
@@ -706,6 +709,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, fmt.Errorf("collections: column manifest record %q must be inline", key)
 		}
 		manifestRecords++
+		manifestBytes = addColumnAssetReachabilityBytes(manifestBytes, int64(len(key)+len(value)))
 
 		switch {
 		case bytes.Equal(key, columnManifestHeaderRecordKeyBytes):
@@ -940,6 +944,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 	if checksum != identity.Checksum {
 		return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, fmt.Errorf("collections: physical column scan manifest checksum=%d want active identity checksum=%d", checksum, identity.Checksum)
 	}
+	snapshot.ManifestBytes = manifestBytes
 	return snapshot, refs, typedColumnPartRefs, graphRefs, mutationParts, manifestRecords, nil
 }
 

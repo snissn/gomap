@@ -155,7 +155,11 @@ func main() {
         fatalf("invalid -sample-interval-seconds %d", *sampleSeconds)
     }
 
-    opts := treedb.OptionsFor(treedb.Profile(*profile), *dbDir)
+    profileValue, ok := treedb.ParsePublicProfile(*profile, treedb.ProfileBench)
+    if !ok {
+        fatalf("unsupported -profile %q; allowed: %s", *profile, treedb.ProfileFlagHelp)
+    }
+    opts := treedb.OptionsFor(profileValue, *dbDir)
     if opts.ValueLog.Generational.Policy == treedb.ValueLogGenerationDefault {
         opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
     }

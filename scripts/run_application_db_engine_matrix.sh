@@ -538,26 +538,11 @@ func runCompactTreeDB(args []string) {
 }
 
 func parseTreeDBProfile(raw string) (treedb.Profile, string, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "command_wal_relaxed", "command-wal-relaxed", "":
-		return treedb.ProfileCommandWALRelaxed, "command_wal_relaxed", nil
-	case "command_wal_durable", "command-wal-durable":
-		return treedb.ProfileCommandWALDurable, "command_wal_durable", nil
-	case "bench":
-		return treedb.ProfileBench, "bench", nil
-	case "fast":
-		return treedb.ProfileFast, "fast", nil
-	case "wal_on_fast", "walonfast":
-		return treedb.ProfileWALOnFast, "wal_on_fast", nil
-	case "legacy_wal_relaxed_fast":
-		return treedb.ProfileLegacyWALRelaxedFast, "legacy_wal_relaxed_fast", nil
-	case "legacy_wal_durable":
-		return treedb.ProfileLegacyWALDurable, "legacy_wal_durable", nil
-	case "no_wal_fast":
-		return treedb.ProfileNoWALFast, "no_wal_fast", nil
-	default:
-		return treedb.ProfileCommandWALRelaxed, "", fmt.Errorf("unsupported treedb profile %q", raw)
+	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
+	if !ok {
+		return treedb.ProfileCommandWALRelaxed, "", fmt.Errorf("unsupported treedb profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 	}
+	return profile, string(profile), nil
 }
 
 func maxRSSKB() int64 {

@@ -39,7 +39,7 @@ func main() {
 	docs := flag.Int("docs", 100000, "documents to write")
 	batchSize := flag.Int("batch-size", 16000, "documents per batch")
 	reset := flag.Bool("reset", false, "remove directory before loading")
-	profile := flag.String("profile", "bench", "TreeDB profile: command_wal_relaxed, command_wal_durable, bench, or a legacy compatibility profile")
+	profile := flag.String("profile", "bench", "TreeDB profile: command_wal_durable, command_wal_relaxed, or bench")
 	flag.Parse()
 
 	if *dir == "" {
@@ -125,29 +125,11 @@ func main() {
 }
 
 func parseProfile(raw string) treedb.Profile {
-	switch raw {
-	case "", "bench":
-		return treedb.ProfileBench
-	case "command_wal_relaxed", "command-wal-relaxed":
-		return treedb.ProfileCommandWALRelaxed
-	case "command_wal_durable", "command-wal-durable":
-		return treedb.ProfileCommandWALDurable
-	case "fast":
-		return treedb.ProfileFast
-	case "wal_on_fast":
-		return treedb.ProfileWALOnFast
-	case "durable":
-		return treedb.ProfileDurable
-	case "legacy_wal_relaxed_fast":
-		return treedb.ProfileLegacyWALRelaxedFast
-	case "legacy_wal_durable":
-		return treedb.ProfileLegacyWALDurable
-	case "no_wal_fast":
-		return treedb.ProfileNoWALFast
-	default:
-		fatalf("unsupported -profile %q", raw)
-		return ""
+	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench)
+	if !ok {
+		fatalf("unsupported -profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 	}
+	return profile
 }
 
 func fatalf(format string, args ...any) {

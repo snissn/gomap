@@ -1094,14 +1094,16 @@ func runRawWorker(cfg config) error {
 func parseProfile(raw string) (treedb.Profile, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "production_fast":
+		// Transitional collection benchmark engine alias migrated by #2148.
 		return treedb.ProfileNoWALFast, nil
 	case "production_wal_on_fast":
+		// Transitional collection benchmark engine alias migrated by #2148.
 		return treedb.ProfileLegacyWALRelaxedFast, nil
 	default:
-		if profile, ok := treedb.ParseProfile(raw, treedb.ProfileNoWALFast); ok {
+		if profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench); ok {
 			return profile, nil
 		}
-		return "", fmt.Errorf("unsupported profile %q", raw)
+		return "", fmt.Errorf("unsupported profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 	}
 }
 

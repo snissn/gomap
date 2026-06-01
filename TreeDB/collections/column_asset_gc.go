@@ -15,11 +15,14 @@ type ColumnAssetGCOptions struct {
 	Detailed bool
 	// SegmentDetails keeps segment-level entries in the returned plan without
 	// retaining per-ref entries.
-	SegmentDetails bool
-	CandidateRefs  []ColumnAssetRef
-	PendingRefs    []ColumnAssetRef
-	PreparedRefs   []ColumnAssetRef
-	PinnedRefs     []ColumnAssetRef
+	SegmentDetails     bool
+	CandidateRefs      []ColumnAssetRef
+	PendingRefs        []ColumnAssetRef
+	PreparedRefs       []ColumnAssetRef
+	PreparedQueryRefs  []ColumnAssetRef
+	QuarantineRefs     []ColumnAssetRef
+	QuarantineSegments []ColumnAssetQuarantineSegment
+	PinnedRefs         []ColumnAssetRef
 }
 
 // ColumnAssetGCStats summarizes safe whole-segment column asset reclamation.
@@ -78,15 +81,19 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed, opts.SegmentDetails)
 	}()
 	needSegmentEntries := !opts.DryRun || opts.Detailed || opts.SegmentDetails
-	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
+	planOpts := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
 		Detailed:                              opts.Detailed,
 		SegmentDetails:                        needSegmentEntries,
 		ProtectCandidateRefsForOlderSnapshots: true,
 		CandidateRefs:                         opts.CandidateRefs,
 		PendingRefs:                           opts.PendingRefs,
 		PreparedRefs:                          opts.PreparedRefs,
+		PreparedQueryRefs:                     opts.PreparedQueryRefs,
+		QuarantineRefs:                        opts.QuarantineRefs,
+		QuarantineSegments:                    opts.QuarantineSegments,
 		PinnedRefs:                            opts.PinnedRefs,
 	})
+	plan, err := c.PlanColumnAssetReachability(ctx, planOpts)
 	stats = ColumnAssetGCStats{
 		DryRun:           opts.DryRun,
 		Plan:             plan,
@@ -100,7 +107,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if opts.DryRun {
 			return stats, nil
 		}
-		return stats, fmt.Errorf("%w: collection=%q namespace=%q uncertain_refs=%d unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d unconvertible_pins=%d",
+		return stats, fmt.Errorf("%w: collection=%q namespace=%q uncertain_refs=%d unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d quarantine_segment_mismatches=%d unconvertible_pins=%d",
 			ErrColumnAssetReachabilityIncomplete,
 			plan.Collection,
 			plan.Namespace,
@@ -108,6 +115,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			plan.Segments.Unknown,
 			plan.Segments.Missing,
 			plan.Segments.OutOfBoundsRefs,
+			plan.Segments.QuarantineSegmentMismatches,
 			plan.MappedResources.UnconvertiblePins,
 		)
 	}

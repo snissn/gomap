@@ -32,6 +32,7 @@ type ColumnAssetReachabilityOptions struct {
 	PreparedRefs                          []ColumnAssetRef
 	PreparedQueryRefs                     []ColumnAssetRef
 	QuarantineRefs                        []ColumnAssetRef
+	QuarantineSegments                    []ColumnAssetQuarantineSegment
 	PinnedRefs                            []ColumnAssetRef
 }
 
@@ -87,6 +88,7 @@ type ColumnAssetReachabilityPlan struct {
 	ActiveManifestChecksum     uint64
 	RecoveryManifestGeneration uint64
 	RecoveryManifestChecksum   uint64
+	ManifestCatalogBytes       int64
 	Sources                    ColumnAssetReachabilitySourceStats
 	Refs                       ColumnAssetReachabilityRefStats
 	Segments                   ColumnAssetReachabilitySegmentStats
@@ -102,17 +104,28 @@ type ColumnAssetReachabilityPlan struct {
 // are intentionally the same logical liveness set unless a future milestone
 // introduces distinct roots.
 type ColumnAssetReachabilitySourceStats struct {
-	ManifestRoots        int
-	ManifestRecords      int
-	ActiveManifestRefs   int
-	RecoveryManifestRefs int
-	CandidateRefs        int
-	PendingRefs          int
-	PreparedRefs         int
-	PreparedQueryRefs    int
-	QuarantineRefs       int
-	PinnedRefs           int
-	MappedResourcePins   int
+	ManifestRoots            int
+	ManifestRecords          int
+	ActiveManifestRefs       int
+	RecoveryManifestRefs     int
+	CandidateRefs            int
+	PendingRefs              int
+	PreparedRefs             int
+	PreparedQueryRefs        int
+	QuarantineRefs           int
+	QuarantineSegmentRecords int
+	PinnedRefs               int
+	MappedResourcePins       int
+	ActiveManifestBytes      int64
+	RecoveryManifestBytes    int64
+	CandidateBytes           int64
+	PendingBytes             int64
+	PreparedBytes            int64
+	PreparedQueryBytes       int64
+	QuarantineBytes          int64
+	QuarantineSegmentBytes   int64
+	PinnedBytes              int64
+	MappedResourcePinBytes   int64
 }
 
 type ColumnAssetReachabilityRefStats struct {
@@ -127,18 +140,21 @@ type ColumnAssetReachabilityRefStats struct {
 }
 
 type ColumnAssetReachabilitySegmentStats struct {
-	Total                 int
-	Protected             int
-	Reclaimable           int
-	Mixed                 int
-	Unknown               int
-	Missing               int
-	OutOfBoundsRefs       int
-	BytesTotal            int64
-	BytesProtected        int64
-	BytesReclaimable      int64
-	BytesWholeReclaimable int64
-	BytesUnknown          int64
+	Total                       int
+	Protected                   int
+	Reclaimable                 int
+	Mixed                       int
+	Unknown                     int
+	Missing                     int
+	OutOfBoundsRefs             int
+	QuarantineSegments          int
+	QuarantineSegmentMismatches int
+	BytesTotal                  int64
+	BytesProtected              int64
+	BytesReclaimable            int64
+	BytesWholeReclaimable       int64
+	BytesUnknown                int64
+	BytesQuarantined            int64
 }
 
 // ColumnAssetReachabilityMappedResourceStats summarizes active #1736
@@ -310,9 +326,11 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 		// both sources until M15B/M15C introduce destructive actions.
 		if input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceActiveManifest) {
 			input.activeRefs++
+			input.activeBytes = addColumnAssetReachabilityBytes(input.activeBytes, positiveColumnAssetReachabilityLength(assetRef.Ref.Length))
 		}
 		if input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceRecoveryManifest) {
 			input.recoveryRefs++
+			input.recoveryBytes = addColumnAssetReachabilityBytes(input.recoveryBytes, positiveColumnAssetReachabilityLength(assetRef.Ref.Length))
 		}
 	}
 	for i, typedPartRef := range view.TypedColumnPartRefs {
@@ -323,9 +341,11 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 		}
 		if input.addRef(typedPartRef.Ref, ColumnAssetReachabilitySourceActiveManifest) {
 			input.activeRefs++
+			input.activeBytes = addColumnAssetReachabilityBytes(input.activeBytes, positiveColumnAssetReachabilityLength(typedPartRef.Ref.Length))
 		}
 		if input.addRef(typedPartRef.Ref, ColumnAssetReachabilitySourceRecoveryManifest) {
 			input.recoveryRefs++
+			input.recoveryBytes = addColumnAssetReachabilityBytes(input.recoveryBytes, positiveColumnAssetReachabilityLength(typedPartRef.Ref.Length))
 		}
 	}
 	for i, metadataRef := range view.AggregateMetadata {
@@ -336,9 +356,11 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 		}
 		if input.addRef(metadataRef.AssetRef, ColumnAssetReachabilitySourceActiveManifest) {
 			input.activeRefs++
+			input.activeBytes = addColumnAssetReachabilityBytes(input.activeBytes, positiveColumnAssetReachabilityLength(metadataRef.AssetRef.Length))
 		}
 		if input.addRef(metadataRef.AssetRef, ColumnAssetReachabilitySourceRecoveryManifest) {
 			input.recoveryRefs++
+			input.recoveryBytes = addColumnAssetReachabilityBytes(input.recoveryBytes, positiveColumnAssetReachabilityLength(metadataRef.AssetRef.Length))
 		}
 	}
 	for i, dictionaryRef := range view.DictionaryCodes {
@@ -349,9 +371,11 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 		}
 		if input.addRef(dictionaryRef.AssetRef, ColumnAssetReachabilitySourceActiveManifest) {
 			input.activeRefs++
+			input.activeBytes = addColumnAssetReachabilityBytes(input.activeBytes, positiveColumnAssetReachabilityLength(dictionaryRef.AssetRef.Length))
 		}
 		if input.addRef(dictionaryRef.AssetRef, ColumnAssetReachabilitySourceRecoveryManifest) {
 			input.recoveryRefs++
+			input.recoveryBytes = addColumnAssetReachabilityBytes(input.recoveryBytes, positiveColumnAssetReachabilityLength(dictionaryRef.AssetRef.Length))
 		}
 	}
 	for i, valuesRef := range view.Int64Values {
@@ -362,9 +386,11 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 		}
 		if input.addRef(valuesRef.AssetRef, ColumnAssetReachabilitySourceActiveManifest) {
 			input.activeRefs++
+			input.activeBytes = addColumnAssetReachabilityBytes(input.activeBytes, positiveColumnAssetReachabilityLength(valuesRef.AssetRef.Length))
 		}
 		if input.addRef(valuesRef.AssetRef, ColumnAssetReachabilitySourceRecoveryManifest) {
 			input.recoveryRefs++
+			input.recoveryBytes = addColumnAssetReachabilityBytes(input.recoveryBytes, positiveColumnAssetReachabilityLength(valuesRef.AssetRef.Length))
 		}
 	}
 	for i, ref := range view.GraphAssetRefs {
@@ -375,9 +401,11 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 		}
 		if input.addRef(ref, ColumnAssetReachabilitySourceActiveManifest) {
 			input.activeRefs++
+			input.activeBytes = addColumnAssetReachabilityBytes(input.activeBytes, positiveColumnAssetReachabilityLength(ref.Length))
 		}
 		if input.addRef(ref, ColumnAssetReachabilitySourceRecoveryManifest) {
 			input.recoveryRefs++
+			input.recoveryBytes = addColumnAssetReachabilityBytes(input.recoveryBytes, positiveColumnAssetReachabilityLength(ref.Length))
 		}
 	}
 	if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate); err != nil {
@@ -398,6 +426,9 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
 	if err := input.addRefs(ctx, opts.QuarantineRefs, ColumnAssetReachabilitySourceQuarantine); err != nil {
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
+	if err := input.addQuarantineSegments(ctx, opts.QuarantineSegments); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
 	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.rootDir, input.namespace)
@@ -440,6 +471,7 @@ func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapsho
 		recoveryGen:      view.Diagnostics.RecoveryManifestGeneration,
 		recoveryChecksum: view.Diagnostics.RecoveryManifestChecksum,
 		manifestRecs:     view.Diagnostics.ManifestRecords,
+		manifestBytes:    view.ManifestCatalogBytes,
 		detailed:         opts.Detailed,
 		segmentDetails:   opts.Detailed || opts.SegmentDetails,
 		omitSources:      opts.omitDetailedEntrySources,
@@ -592,8 +624,11 @@ type columnAssetReachabilityInput struct {
 	recoveryGen        uint64
 	recoveryChecksum   uint64
 	manifestRecs       int
+	manifestBytes      int64
 	activeRefs         int
 	recoveryRefs       int
+	activeBytes        int64
+	recoveryBytes      int64
 	detailed           bool
 	segmentDetails     bool
 	omitSources        bool
@@ -602,6 +637,7 @@ type columnAssetReachabilityInput struct {
 	unknownSources     map[ColumnAssetRef][]ColumnAssetReachabilitySource
 	sourceCounts       ColumnAssetReachabilitySourceStats
 	mappedResources    ColumnAssetReachabilityMappedResourceStats
+	quarantineSegments map[uint32]int64
 	pinStateIncomplete bool
 }
 
@@ -613,7 +649,7 @@ func (in *columnAssetReachabilityInput) addRefs(ctx context.Context, refs []Colu
 			}
 		}
 		if in.addRef(ref, source) {
-			in.incrementSourceCount(source)
+			in.incrementSourceStats(source, ref)
 		}
 	}
 	if ctx != nil {
@@ -622,23 +658,57 @@ func (in *columnAssetReachabilityInput) addRefs(ctx context.Context, refs []Colu
 	return nil
 }
 
-func (in *columnAssetReachabilityInput) incrementSourceCount(source ColumnAssetReachabilitySource) {
+func (in *columnAssetReachabilityInput) incrementSourceStats(source ColumnAssetReachabilitySource, ref ColumnAssetRef) {
+	refBytes := positiveColumnAssetReachabilityLength(ref.Length)
 	switch source {
 	case ColumnAssetReachabilitySourceCandidate:
 		in.sourceCounts.CandidateRefs++
+		in.sourceCounts.CandidateBytes = addColumnAssetReachabilityBytes(in.sourceCounts.CandidateBytes, refBytes)
 	case ColumnAssetReachabilitySourcePendingPublish:
 		in.sourceCounts.PendingRefs++
+		in.sourceCounts.PendingBytes = addColumnAssetReachabilityBytes(in.sourceCounts.PendingBytes, refBytes)
 	case ColumnAssetReachabilitySourcePreparedAsset:
 		in.sourceCounts.PreparedRefs++
+		in.sourceCounts.PreparedBytes = addColumnAssetReachabilityBytes(in.sourceCounts.PreparedBytes, refBytes)
 	case ColumnAssetReachabilitySourcePreparedQuery:
 		in.sourceCounts.PreparedQueryRefs++
+		in.sourceCounts.PreparedQueryBytes = addColumnAssetReachabilityBytes(in.sourceCounts.PreparedQueryBytes, refBytes)
 	case ColumnAssetReachabilitySourceQuarantine:
 		in.sourceCounts.QuarantineRefs++
+		in.sourceCounts.QuarantineBytes = addColumnAssetReachabilityBytes(in.sourceCounts.QuarantineBytes, refBytes)
 	case ColumnAssetReachabilitySourcePinnedSnapshot:
 		in.sourceCounts.PinnedRefs++
+		in.sourceCounts.PinnedBytes = addColumnAssetReachabilityBytes(in.sourceCounts.PinnedBytes, refBytes)
 	case ColumnAssetReachabilitySourceMappedResourcePin:
 		in.sourceCounts.MappedResourcePins++
+		in.sourceCounts.MappedResourcePinBytes = addColumnAssetReachabilityBytes(in.sourceCounts.MappedResourcePinBytes, refBytes)
 	}
+}
+
+func (in *columnAssetReachabilityInput) addQuarantineSegments(ctx context.Context, segments []ColumnAssetQuarantineSegment) error {
+	for i, segment := range segments {
+		if ctx != nil && i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		normalized, bytes, err := normalizeColumnAssetQuarantineSegment(segment, in.namespace)
+		if err != nil {
+			return err
+		}
+		if in.quarantineSegments == nil {
+			in.quarantineSegments = make(map[uint32]int64)
+		}
+		if bytes > in.quarantineSegments[normalized.FileID] {
+			in.quarantineSegments[normalized.FileID] = bytes
+		}
+		in.sourceCounts.QuarantineSegmentRecords++
+		in.sourceCounts.QuarantineSegmentBytes = addColumnAssetReachabilityBytes(in.sourceCounts.QuarantineSegmentBytes, bytes)
+	}
+	if ctx != nil {
+		return ctx.Err()
+	}
+	return nil
 }
 
 func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source ColumnAssetReachabilitySource) bool {
@@ -732,8 +802,8 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 				}
 			}
 		}
-	} else if len(input.refs) != 0 {
-		rangesByFile = make(map[uint32]columnAssetReachabilityRangeSet, len(input.refs))
+	} else if len(input.refs) != 0 || len(input.quarantineSegments) != 0 {
+		rangesByFile = make(map[uint32]columnAssetReachabilityRangeSet, len(input.refs)+len(input.quarantineSegments))
 	}
 	if input.detailed {
 		plan.Entries = make([]ColumnAssetReachabilityRefEntry, 0, len(input.refs))
@@ -816,6 +886,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		return columnAssetReachabilityPlanIdentity(input), err
 	}
 
+	seenQuarantineSegments := make(map[uint32]struct{}, len(input.quarantineSegments))
 	for i, segment := range segments {
 		if i%columnAssetReachabilityContextCheckInterval == 0 {
 			if err := ctx.Err(); err != nil {
@@ -823,6 +894,23 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			}
 		}
 		rangeSet := rangesByFile[segment.fileID]
+		if quarantineBytes, ok := input.quarantineSegments[segment.fileID]; ok {
+			seenQuarantineSegments[segment.fileID] = struct{}{}
+			plan.Segments.QuarantineSegments++
+			plan.Segments.BytesQuarantined = addColumnAssetReachabilityBytes(plan.Segments.BytesQuarantined, segment.bytes)
+			if quarantineBytes > 0 && quarantineBytes != segment.bytes {
+				plan.Segments.QuarantineSegmentMismatches++
+				plan.Complete = false
+			}
+			if segment.bytes > 0 {
+				rangeSet.appendRange(columnAssetReachabilityRange{
+					start:  0,
+					end:    segment.bytes,
+					status: ColumnAssetReachabilityProtected,
+				})
+				rangesByFile[segment.fileID] = rangeSet
+			}
+		}
 		delete(rangesByFile, segment.fileID)
 		plan.Segments.Total++
 		plan.Segments.BytesTotal = addColumnAssetReachabilityBytes(plan.Segments.BytesTotal, segment.bytes)
@@ -865,6 +953,18 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 				RefCount:         rangeSet.count,
 			})
 		}
+	}
+	for fileID, quarantineBytes := range input.quarantineSegments {
+		if _, ok := seenQuarantineSegments[fileID]; ok {
+			continue
+		}
+		rangeSet := rangesByFile[fileID]
+		end := quarantineBytes
+		if end <= 0 {
+			end = 1
+		}
+		rangeSet.appendRange(columnAssetReachabilityRange{start: 0, end: end, status: ColumnAssetReachabilityProtected})
+		rangesByFile[fileID] = rangeSet
 	}
 	var missingFileIDs []uint32
 	for fileID := range rangesByFile {
@@ -922,6 +1022,7 @@ func columnAssetReachabilityPlanIdentity(input columnAssetReachabilityInput) Col
 		ActiveManifestChecksum:     input.activeChecksum,
 		RecoveryManifestGeneration: input.recoveryGen,
 		RecoveryManifestChecksum:   input.recoveryChecksum,
+		ManifestCatalogBytes:       input.manifestBytes,
 		MappedResources:            input.mappedResources,
 	}
 }
@@ -940,18 +1041,30 @@ func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) Co
 		ActiveManifestChecksum:     input.activeChecksum,
 		RecoveryManifestGeneration: input.recoveryGen,
 		RecoveryManifestChecksum:   input.recoveryChecksum,
+		ManifestCatalogBytes:       input.manifestBytes,
 		Sources: ColumnAssetReachabilitySourceStats{
-			ManifestRoots:        1,
-			ManifestRecords:      input.manifestRecs,
-			ActiveManifestRefs:   input.activeRefs,
-			RecoveryManifestRefs: input.recoveryRefs,
-			CandidateRefs:        input.sourceCounts.CandidateRefs,
-			PendingRefs:          input.sourceCounts.PendingRefs,
-			PreparedRefs:         input.sourceCounts.PreparedRefs,
-			PreparedQueryRefs:    input.sourceCounts.PreparedQueryRefs,
-			QuarantineRefs:       input.sourceCounts.QuarantineRefs,
-			PinnedRefs:           input.sourceCounts.PinnedRefs,
-			MappedResourcePins:   input.sourceCounts.MappedResourcePins,
+			ManifestRoots:            1,
+			ManifestRecords:          input.manifestRecs,
+			ActiveManifestRefs:       input.activeRefs,
+			RecoveryManifestRefs:     input.recoveryRefs,
+			CandidateRefs:            input.sourceCounts.CandidateRefs,
+			PendingRefs:              input.sourceCounts.PendingRefs,
+			PreparedRefs:             input.sourceCounts.PreparedRefs,
+			PreparedQueryRefs:        input.sourceCounts.PreparedQueryRefs,
+			QuarantineRefs:           input.sourceCounts.QuarantineRefs,
+			QuarantineSegmentRecords: input.sourceCounts.QuarantineSegmentRecords,
+			PinnedRefs:               input.sourceCounts.PinnedRefs,
+			MappedResourcePins:       input.sourceCounts.MappedResourcePins,
+			ActiveManifestBytes:      input.activeBytes,
+			RecoveryManifestBytes:    input.recoveryBytes,
+			CandidateBytes:           input.sourceCounts.CandidateBytes,
+			PendingBytes:             input.sourceCounts.PendingBytes,
+			PreparedBytes:            input.sourceCounts.PreparedBytes,
+			PreparedQueryBytes:       input.sourceCounts.PreparedQueryBytes,
+			QuarantineBytes:          input.sourceCounts.QuarantineBytes,
+			QuarantineSegmentBytes:   input.sourceCounts.QuarantineSegmentBytes,
+			PinnedBytes:              input.sourceCounts.PinnedBytes,
+			MappedResourcePinBytes:   input.sourceCounts.MappedResourcePinBytes,
 		},
 		MappedResources: input.mappedResources,
 	}

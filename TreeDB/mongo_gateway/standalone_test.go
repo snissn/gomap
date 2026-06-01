@@ -42,7 +42,7 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 
 	normalized, err := NormalizeStandaloneOptions(StandaloneOptions{
 		Dir:     t.TempDir(),
-		Profile: treedb.Profile(" WAL_ON_FAST "),
+		Profile: treedb.Profile("command-wal-relaxed"),
 		DefaultCollectionOptions: collections.CollectionOptions{
 			DocumentFormat: collections.DocumentFormat(" BSON "),
 		},
@@ -50,8 +50,8 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NormalizeStandaloneOptions normalized strings: %v", err)
 	}
-	if normalized.Profile != treedb.ProfileWALOnFast {
-		t.Fatalf("normalized profile=%q want %q", normalized.Profile, treedb.ProfileWALOnFast)
+	if normalized.Profile != treedb.ProfileCommandWALRelaxed {
+		t.Fatalf("normalized profile=%q want %q", normalized.Profile, treedb.ProfileCommandWALRelaxed)
 	}
 	commandWAL, err := NormalizeStandaloneOptions(StandaloneOptions{
 		Dir:     t.TempDir(),
@@ -83,7 +83,12 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 		{
 			name: "bad profile",
 			opts: StandaloneOptions{Dir: t.TempDir(), Profile: treedb.Profile("unsafe")},
-			want: "unsupported TreeDB profile",
+			want: "allowed: " + treedb.ProfileFlagHelp,
+		},
+		{
+			name: "deprecated profile",
+			opts: StandaloneOptions{Dir: t.TempDir(), Profile: treedb.Profile("WAL_ON_FAST")},
+			want: "allowed: " + treedb.ProfileFlagHelp,
 		},
 		{
 			name: "bad document format",

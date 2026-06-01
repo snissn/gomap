@@ -82,7 +82,11 @@ func main() {
         fatalf("mkdir parent: %v", err)
     }
 
-    opts := treedb.OptionsFor(treedb.Profile(*profile), *dbDir)
+    profileValue, ok := treedb.ParsePublicProfile(*profile, treedb.ProfileBench)
+    if !ok {
+        fatalf("unsupported -profile %q; allowed: %s", *profile, treedb.ProfileFlagHelp)
+    }
+    opts := treedb.OptionsFor(profileValue, *dbDir)
     opts.BackgroundCheckpointInterval = -1
     opts.BackgroundCheckpointIdleDuration = -1
     opts.MaxWALBytes = -1

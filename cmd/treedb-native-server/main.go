@@ -32,9 +32,9 @@ func main() {
 		log.Fatal("Data directory (-dir) is required")
 	}
 
-	normalizedProfile, ok := treedb.NormalizeProfile(treedb.Profile(*profile))
-	if !ok {
-		log.Fatalf("Unknown TreeDB profile %q", *profile)
+	normalizedProfile, err := parsePublicProfileFlag(*profile)
+	if err != nil {
+		log.Fatal(err)
 	}
 	opts := treedb.OptionsFor(normalizedProfile, *dataDir)
 
@@ -87,4 +87,12 @@ func main() {
 	if closeErr != nil {
 		log.Fatalf("Server close error: %v", closeErr)
 	}
+}
+
+func parsePublicProfileFlag(raw string) (treedb.Profile, error) {
+	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileCommandWALDurable)
+	if !ok {
+		return "", fmt.Errorf("unsupported TreeDB profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+	}
+	return profile, nil
 }

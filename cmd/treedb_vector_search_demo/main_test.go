@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
@@ -369,6 +370,23 @@ func TestParseProfileRejectsUnsupportedProfile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported -profile") {
 		t.Fatalf("error=%v, want unsupported -profile", err)
+	}
+}
+
+func TestParseProfileRejectsDeprecatedProfiles(t *testing.T) {
+	if got, err := parseProfile("command-wal-durable"); err != nil || got != treedb.ProfileCommandWALDurable {
+		t.Fatalf("parseProfile command WAL durable = %q err=%v", got, err)
+	}
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := parseProfile(raw)
+			if err == nil {
+				t.Fatal("parseProfile succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+				t.Fatalf("error=%v, want profile help", err)
+			}
+		})
 	}
 }
 

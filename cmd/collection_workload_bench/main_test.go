@@ -40,6 +40,40 @@ func TestParsePositiveIntsRejectsDuplicates(t *testing.T) {
 	}
 }
 
+func TestParseProfileAcceptsOnlyPublicProfiles(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want treedb.Profile
+	}{
+		{raw: "", want: treedb.ProfileBench},
+		{raw: "command-wal-durable", want: treedb.ProfileCommandWALDurable},
+		{raw: "command_wal_relaxed", want: treedb.ProfileCommandWALRelaxed},
+		{raw: "bench", want: treedb.ProfileBench},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			got, err := parseProfile(tt.raw)
+			if err != nil {
+				t.Fatalf("parseProfile(%q): %v", tt.raw, err)
+			}
+			if got != tt.want {
+				t.Fatalf("profile=%q want %q", got, tt.want)
+			}
+		})
+	}
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+		t.Run("reject_"+raw, func(t *testing.T) {
+			_, err := parseProfile(raw)
+			if err == nil {
+				t.Fatal("parseProfile succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+				t.Fatalf("error=%v, want profile help", err)
+			}
+		})
+	}
+}
+
 func TestRunSmallNativeCollectionMatrix(t *testing.T) {
 	cfg := config{
 		Documents:             32,

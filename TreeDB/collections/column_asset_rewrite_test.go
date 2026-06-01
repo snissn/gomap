@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -624,6 +625,60 @@ func TestColumnAssetRewriteSkipsSegmentWhenManifestRefAlsoProtectedByPinnedSourc
 	}
 }
 
+func TestColumnAssetRewriteSkipsPreparedRunnerLifecyclePin1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	beforeRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(beforeRefs) == 0 {
+		t.Fatal("manifest refs empty, test requires live physical assets")
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
+	if candidate.FileID != beforeRefs[0].FileID {
+		t.Fatalf("candidate file_id=%d live file_id=%d, test requires mixed segment", candidate.FileID, beforeRefs[0].FileID)
+	}
+	runner, err := col.PrepareColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	pinned, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		_ = runner.Close()
+		t.Fatalf("ColumnAssetRewrite while prepared runner lifecycle pin active: %v", err)
+	}
+	if pinned.SegmentsEligible != 0 || pinned.SegmentsRewritten != 0 || pinned.RefsEligible != 0 || pinned.RefsRemapped != 0 {
+		_ = runner.Close()
+		t.Fatalf("pinned rewrite stats=%+v want prepared-runner segment skipped", pinned)
+	}
+	if pinned.Plan.Sources.PreparedQueryRefs != len(columnPhysicalScanSnapshotViewAssetRefs(runner.view)) {
+		_ = runner.Close()
+		t.Fatalf("prepared-query refs=%d want runner refs; plan=%+v", pinned.Plan.Sources.PreparedQueryRefs, pinned.Plan.Sources)
+	}
+	assertColumnAssetRefsEqualM15C(t, beforeRefs, columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if err := runner.Close(); err != nil {
+		t.Fatalf("runner close: %v", err)
+	}
+
+	rewrite, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{CandidateRefs: []ColumnAssetRef{candidate}})
+	if err != nil {
+		t.Fatalf("ColumnAssetRewrite after prepared runner close: %v", err)
+	}
+	if rewrite.SegmentsRewritten != 1 || rewrite.RefsRemapped != len(beforeRefs) {
+		t.Fatalf("rewrite stats=%+v want one rewritten segment and %d refs", rewrite, len(beforeRefs))
+	}
+}
+
 func TestColumnAssetRewriteAutomaticMappedResourcePinSkipsSegment1788(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -931,6 +986,38 @@ func TestColumnAssetRewriteRecognizesBackendPreApplyFailureM15C(t *testing.T) {
 	ambiguousErr := backenddb.ErrRecoveryRequired
 	if columnAssetRewritePublishFailedBeforeApply(ambiguousErr) {
 		t.Fatalf("columnAssetRewritePublishFailedBeforeApply(%v)=true, want false", ambiguousErr)
+	}
+}
+
+func TestColumnAssetRewriteRegistersAmbiguousPublishQuarantine1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	copied := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 96, []byte("ambiguous-publish-copied-segment"))
+	if err := col.columnAssetRewriteRegisterAmbiguousPublishQuarantine([]ColumnAssetRef{copied}, errors.New("ambiguous publish test")); err != nil {
+		t.Fatalf("columnAssetRewriteRegisterAmbiguousPublishQuarantine: %v", err)
+	}
+	report, err := col.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{copied},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetLifecycle: %v", err)
+	}
+	if report.Quarantine.OpenRecords != 1 || report.Quarantine.Refs != 1 || report.Roots.QuarantineRefs != 1 || report.Reachability.Sources.QuarantineRefs != 1 {
+		t.Fatalf("quarantine report=%+v roots=%+v sources=%+v", report.Quarantine, report.Roots, report.Reachability.Sources)
+	}
+	if !columnAssetLifecycleRegistrySourcesContain(report.Quarantine.Sources, "ambiguous_publish", 1, copied.Length, 0, 0) {
+		t.Fatalf("quarantine sources=%+v missing ambiguous_publish", report.Quarantine.Sources)
+	}
+	entry, ok := columnAssetLifecycleFindEntry(report.Reachability.Entries, copied)
+	if !ok || entry.Status != ColumnAssetReachabilityProtected || !slices.Contains(entry.Sources, ColumnAssetReachabilitySourceQuarantine) {
+		t.Fatalf("ambiguous publish entry=%+v ok=%t", entry, ok)
 	}
 }
 
