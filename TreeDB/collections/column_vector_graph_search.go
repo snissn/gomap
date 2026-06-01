@@ -49,17 +49,8 @@ const (
 	columnVectorGraphNativeSearchStatsModeBenchmarkDebug
 )
 
-var columnVectorGraphIndexedScoringDefaultEnabled = false
-
 func (m columnVectorGraphScoreBatchMode) indexedEnabled() bool {
-	switch m {
-	case columnVectorGraphScoreBatchModeIndexed:
-		return true
-	case columnVectorGraphScoreBatchModeDefault:
-		return columnVectorGraphIndexedScoringDefaultEnabled
-	default:
-		return false
-	}
+	return m == columnVectorGraphScoreBatchModeIndexed
 }
 
 func (m columnVectorGraphScoreBatchMode) String() string {
@@ -69,11 +60,24 @@ func (m columnVectorGraphScoreBatchMode) String() string {
 	case columnVectorGraphScoreBatchModeScalar:
 		return "scalar"
 	default:
-		if columnVectorGraphIndexedScoringDefaultEnabled {
-			return "default_indexed"
-		}
-		return "default_scalar"
+		return "default"
 	}
+}
+
+func columnVectorGraphScoreBatchModeForSearchPlan(requested columnVectorGraphScoreBatchMode, plan *columnVectorGraphSearchPlan) columnVectorGraphScoreBatchMode {
+	switch requested {
+	case columnVectorGraphScoreBatchModeScalar, columnVectorGraphScoreBatchModeIndexed:
+		return requested
+	default:
+		if plan != nil && plan.preparedIndexedScoringDefaultEligible() {
+			return columnVectorGraphScoreBatchModeIndexed
+		}
+		return columnVectorGraphScoreBatchModeScalar
+	}
+}
+
+func (p *columnVectorGraphSearchPlan) preparedIndexedScoringDefaultEligible() bool {
+	return p != nil && p.preparedSearch != nil && p.preparedSearch.indexedScoringDefaultEligible()
 }
 
 func (m columnVectorGraphNativeSearchStatsMode) normalized() columnVectorGraphNativeSearchStatsMode {
@@ -988,7 +992,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if err != nil {
 		return nil, stats, err
 	}
-	plan.scoreBatchMode = opts.ScoreBatchMode
+	plan.scoreBatchMode = columnVectorGraphScoreBatchModeForSearchPlan(opts.ScoreBatchMode, plan)
 	if plan.preparedSearch != nil {
 		stats.PreparedGraphSearchViews = 1
 		if statsMode.minimal() {

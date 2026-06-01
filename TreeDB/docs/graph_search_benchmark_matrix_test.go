@@ -66,6 +66,12 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		"top_k_insert_rejections",
 		"exact_order_observations=8192",
 		"keep #2035 open as not performance-satisfied",
+		"#2103 prepared indexed-scoring promotion matrix",
+		"BenchmarkColumnVectorGraphSearchPromotion2103",
+		"ScoreBatchMode=default",
+		"eligible prepared typed-column path",
+		"legacy graph-row/direct compatibility",
+		"#2035 should remain open as the broader promotion tracker",
 	}
 	for _, needle := range required {
 		if !strings.Contains(text, needle) {

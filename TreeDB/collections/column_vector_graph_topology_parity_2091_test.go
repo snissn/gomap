@@ -304,7 +304,7 @@ func cloneColumnVectorGraphTopologyParityRows2091(rows []columnVectorGraphAssetR
 }
 
 func columnVectorGraphSearchTopologyParityOptions2091(shape columnVectorGraphSearchTopologyParityShape2091, boundary columnVectorGraphSearchTopologyParityBoundary2091) columnVectorGraphNativeSearchOptions {
-	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch}
+	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, ScoreBatchMode: columnVectorGraphScoreBatchModeScalar}
 	if boundary == columnVectorGraphSearchTopologyParityBoundaryGraphOnly2091 {
 		opts.OmitResultMaterialization = true
 	}
