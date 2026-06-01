@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -135,6 +136,13 @@ func TestColumnStorePhysicalAccountingOmitDetailedSections2118(t *testing.T) {
 	}
 	if accounting.TypedColumnParts[0].Image.TotalStoredBytes == 0 || accounting.Totals.TypedColumnSections.TotalStoredBytes == 0 {
 		t.Fatalf("compact section totals missing: part=%+v totals=%+v", accounting.TypedColumnParts[0].Image, accounting.Totals.TypedColumnSections)
+	}
+	encoded, err := json.Marshal(accounting.Totals)
+	if err != nil {
+		t.Fatalf("Marshal totals: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"typed_column_sections":`) {
+		t.Fatalf("json=%s want typed_column_sections field", encoded)
 	}
 }
 
