@@ -994,6 +994,9 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, stats, err
 	}
 	plan.scoreBatchMode = columnVectorGraphScoreBatchModeForSearchPlan(opts.ScoreBatchMode, plan)
+	if loopCounters == nil && plan.preparedSearch == nil {
+		loopCounters = &columnVectorGraphNativeSearchLoopCounters{}
+	}
 	if plan.preparedSearch != nil {
 		stats.PreparedGraphSearchViews = 1
 		if statsMode.minimal() {

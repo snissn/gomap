@@ -193,6 +193,10 @@ func TestColumnVectorGraphPreparedSearchNonMmapCompatibility2045(t *testing.T) {
 	if stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 || stats.NormHeapCopyTypedViews+stats.NormScratchDecodes == 0 || stats.AdjacencyTypedListHeapCopyTypedViews+stats.AdjacencyTypedListScratchDecodes == 0 {
 		t.Fatalf("stats=%+v want non-mmap vector/norm/adjacency compatibility counters", stats)
 	}
+	if stats.Candidates == 0 || stats.Edges == 0 || stats.VisitedEdges != stats.Edges {
+		t.Fatalf("stats=%+v want fallback traversal counters preserved in minimal mode", stats)
+	}
+	assertColumnVectorGraphDebugCountersZero2126(t, stats)
 }
 
 func TestColumnVectorGraphPreparedSearchStaleStateFailsClosed2045(t *testing.T) {
