@@ -2144,7 +2144,14 @@ func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int
 			cells = append(cells, columnStoreJSONBenchUnavailablePreparedCell(name, q, exec, cfg, retainedPayloadBytes, err))
 			continue
 		}
-		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHashes[name], q, exec, preparedKind, cfg, retainedPayloadBytes)
+		rawHash, ok := rawHashes[name]
+		if !ok {
+			rawHash = q.RawHash
+		}
+		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHash, q, exec, preparedKind, cfg, retainedPayloadBytes)
+		if err := columnStoreValidatePreparedJSONBenchCellParity(cell); err != nil {
+			return nil, err
+		}
 		cells = append(cells, cell)
 	}
 	return cells, nil
@@ -2265,6 +2272,13 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.ScheduledGranules = exec.ScheduledGranules
 	cell.CompatibilityStatus = "available"
 	return cell
+}
+
+func columnStoreValidatePreparedJSONBenchCellParity(cell columnStoreJSONBenchCell) error {
+	if cell.ExecutionMode == columnStoreJSONBenchModePrepared && cell.CompatibilityStatus == "available" && !cell.ParityWithRowScan {
+		return fmt.Errorf("column_store: prepared JSONBench cell %s/%s parity mismatch: raw_hash=%016x result_hash=%016x", cell.Query, cell.PlanLabel, cell.RawHash, cell.ResultHash)
+	}
+	return nil
 }
 
 func columnStoreJSONBenchUnavailablePreparedCell(name string, direct columnStoreQueryMetric, exec columnStoreQueryExecution, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64, err error) columnStoreJSONBenchCell {

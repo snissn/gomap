@@ -1884,6 +1884,22 @@ func TestColumnStoreSuiteRejectsOraclePathLabelM11B(t *testing.T) {
 	}
 }
 
+func TestColumnStoreJSONBenchPreparedParityMismatchIsFatal1955(t *testing.T) {
+	cell := columnStoreJSONBenchCell{
+		Query:               columnStoreQueryQ4B,
+		PlanLabel:           columnStorePathSerialColumnScan,
+		ExecutionMode:       columnStoreJSONBenchModePrepared,
+		CompatibilityStatus: "available",
+		RawHash:             0x1111,
+		ResultHash:          0x2222,
+		ParityWithRowScan:   false,
+	}
+	err := columnStoreValidatePreparedJSONBenchCellParity(cell)
+	if err == nil || !strings.Contains(err.Error(), "prepared JSONBench cell") || !strings.Contains(err.Error(), "parity mismatch") {
+		t.Fatalf("expected prepared parity mismatch error, got %v", err)
+	}
+}
+
 func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *testing.T) {
 	q := columnStoreQueryMetric{
 		Name:               "q4a",
