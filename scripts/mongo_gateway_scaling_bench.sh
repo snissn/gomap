@@ -21,10 +21,10 @@ RANGE_READS="${RANGE_READS:-0}"
 UPDATES="${UPDATES:-0}"
 DELETES="${DELETES:-0}"
 UPDATE_INDEXED_FIELD="${UPDATE_INDEXED_FIELD:-false}"
-# Transitional indexed benchmark baseline: the default shape uses secondary
-# indexes, and command WAL rejects catalog index mutation until catalog index
-# commands land.
-TREEDB_PROFILE="${TREEDB_PROFILE:-legacy_wal_relaxed_fast}"
+# Indexed benchmark baseline: the default shape uses secondary indexes. Use
+# command_wal_relaxed for command-WAL coverage once indexed catalog command
+# support is enabled for this workload; bench is the explicit no-WAL ceiling.
+TREEDB_PROFILE="${TREEDB_PROFILE:-bench}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-bson}"
 TREEDB_CLIENT_MODE="${TREEDB_CLIENT_MODE:-driver-command-raw}"
 TREEDB_MAINTENANCE="${TREEDB_MAINTENANCE:-none}"
@@ -74,7 +74,7 @@ Options:
   --database-prefix NAME MongoDB database prefix. Default: mongo_gateway_scaling_<run_id>.
   --treedb-format NAME   TreeDB document format. Default: bson.
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
-  --profile NAME         TreeDB profile. Default: legacy_wal_relaxed_fast.
+  --profile NAME         TreeDB profile. Default: bench.
   --maintenance MODE     TreeDB maintenance mode. Default: none.
   --update-indexed-field Include the city field in update phases to exercise
                          secondary-index maintenance; requires INDEXES=2.

@@ -3,12 +3,39 @@ package kvstoreadapter
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 )
 
-func TestParseProfileUsesPublicNames(t *testing.T) {
+func TestParseProfileUsesStandardNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		raw      string
+		fallback treedb.Profile
+		want     treedb.Profile
+	}{
+		{raw: "", fallback: "", want: treedb.ProfileCommandWALRelaxed},
+		{raw: "", fallback: treedb.ProfileWALOnFast, want: treedb.ProfileWALOnFast},
+		{raw: "fast", fallback: treedb.ProfileDurable, want: treedb.ProfileFast},
+		{raw: "walonfast", fallback: treedb.ProfileDurable, want: treedb.ProfileWALOnFast},
+		{raw: "durable", fallback: treedb.ProfileFast, want: treedb.ProfileDurable},
+		{raw: "command-wal-durable", fallback: treedb.ProfileFast, want: treedb.ProfileCommandWALDurable},
+		{raw: "legacy_wal_relaxed_fast", fallback: treedb.ProfileFast, want: treedb.ProfileLegacyWALRelaxedFast},
+		{raw: "no_wal_fast", fallback: treedb.ProfileDurable, want: treedb.ProfileNoWALFast},
+		{raw: "bench", fallback: treedb.ProfileFast, want: treedb.ProfileBench},
+		{raw: "unknown", fallback: treedb.ProfileFast, want: treedb.ProfileFast},
+	}
+	for _, tc := range cases {
+		if got := ParseProfile(tc.raw, tc.fallback); got != tc.want {
+			t.Fatalf("ParseProfile(%q, %q) = %q, want %q", tc.raw, tc.fallback, got, tc.want)
+		}
+	}
+}
+
+func TestParsePublicProfileUsesPublicNames(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -23,29 +50,31 @@ func TestParseProfileUsesPublicNames(t *testing.T) {
 		{raw: "bench", fallback: treedb.ProfileCommandWALRelaxed, want: treedb.ProfileBench},
 	}
 	for _, tc := range cases {
-		got, err := ParseProfile(tc.raw, tc.fallback)
+		got, err := ParsePublicProfile(tc.raw, tc.fallback)
 		if err != nil {
-			t.Fatalf("ParseProfile(%q, %q): %v", tc.raw, tc.fallback, err)
+			t.Fatalf("ParsePublicProfile(%q, %q): %v", tc.raw, tc.fallback, err)
 		}
 		if got != tc.want {
-			t.Fatalf("ParseProfile(%q, %q) = %q, want %q", tc.raw, tc.fallback, got, tc.want)
+			t.Fatalf("ParsePublicProfile(%q, %q) = %q, want %q", tc.raw, tc.fallback, got, tc.want)
 		}
 	}
 }
 
-func TestParseProfileRejectsDeprecatedAndUnknownNames(t *testing.T) {
+func TestParsePublicProfileRejectsDeprecatedAndUnknownNames(t *testing.T) {
 	t.Parallel()
 
 	for _, raw := range []string{"fast", "walonfast", "durable", "legacy_wal_relaxed_fast", "no_wal_fast", "unknown"} {
 		t.Run(raw, func(t *testing.T) {
-			_, err := ParseProfile(raw, treedb.ProfileCommandWALRelaxed)
+			_, err := ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
 			if err == nil {
-				t.Fatal("ParseProfile succeeded, want error")
+				t.Fatal("ParsePublicProfile succeeded, want error")
 			}
 		})
 	}
-	if _, err := ParseProfile("", treedb.ProfileFast); err == nil {
-		t.Fatal("ParseProfile accepted deprecated fallback, want error")
+	if _, err := ParsePublicProfile("", treedb.ProfileFast); err == nil {
+		t.Fatal("ParsePublicProfile accepted deprecated fallback, want error")
+	} else if !strings.Contains(err.Error(), "fallback profile") {
+		t.Fatalf("ParsePublicProfile deprecated fallback err=%v, want fallback profile context", err)
 	}
 }
 
