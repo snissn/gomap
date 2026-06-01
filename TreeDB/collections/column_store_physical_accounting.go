@@ -55,7 +55,7 @@ type ColumnStorePhysicalAccountingTotals struct {
 	DictionaryCodeBytes    int64                                    `json:"dictionary_code_bytes,omitempty"`
 	Int64ValueBytes        int64                                    `json:"int64_value_bytes,omitempty"`
 	GraphAssetBytes        int64                                    `json:"graph_asset_bytes,omitempty"`
-	TypedColumnSections    ColumnStoreTypedColumnPartByteAccounting `json:"typed_column_sections,omitempty"`
+	TypedColumnSections    ColumnStoreTypedColumnPartByteAccounting `json:"typed_column_sections"`
 }
 
 // ColumnStorePhysicalAssetKindAccounting summarizes active manifest refs by
@@ -153,7 +153,6 @@ func (c *Collection) ColumnStorePhysicalAccounting(ctx context.Context, opts Col
 	}
 
 	out := ColumnStorePhysicalAccounting{
-		Complete:                   true,
 		Collection:                 view.CollectionName,
 		Namespace:                  view.AssetNamespace,
 		ManifestRootName:           view.Diagnostics.ManifestRootName,
@@ -238,6 +237,7 @@ func (c *Collection) ColumnStorePhysicalAccounting(ctx context.Context, opts Col
 		out.GraphAssets = append(out.GraphAssets, columnStorePhysicalAssetRefAccounting(ref))
 	}
 	out.AssetKinds = columnStorePhysicalAccountingKindTotals(kinds)
+	out.Complete = true
 	return out, nil
 }
 

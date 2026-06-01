@@ -138,6 +138,36 @@ func TestColumnStorePhysicalAccountingOmitDetailedSections2118(t *testing.T) {
 	}
 }
 
+func TestPhysicalAccountingIncompleteOnTypedPartError2118(t *testing.T) {
+	events := columnPhysicalJSONBenchParityEventsP0()
+	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
+	defer closeFn()
+
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars(context.Background(), columnManifestScanAllSidecars())
+	if err != nil {
+		t.Fatalf("prepare snapshot view: %v", err)
+	}
+	if len(view.TypedColumnPartRefs) != 1 {
+		closeView()
+		t.Fatalf("typed part refs=%d want 1", len(view.TypedColumnPartRefs))
+	}
+	root := view.ColumnAssetRootDir
+	ref := view.TypedColumnPartRefs[0].Ref
+	closeView()
+
+	corruptColumnAssetPayloadByte(t, root, ref)
+	accounting, err := collection.ColumnStorePhysicalAccounting(context.Background(), ColumnStorePhysicalAccountingOptions{})
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("accounting error=%v, want checksum failure", err)
+	}
+	if accounting.Complete {
+		t.Fatalf("Complete=true on error: %+v", accounting)
+	}
+	if accounting.TypedColumnPartRefs != 1 {
+		t.Fatalf("typed part refs=%d want partial identity before error", accounting.TypedColumnPartRefs)
+	}
+}
+
 func TestPhysicalAccountingRejectsTypedPartManifestMismatch2118(t *testing.T) {
 	events := columnPhysicalJSONBenchParityEventsP0()
 	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
