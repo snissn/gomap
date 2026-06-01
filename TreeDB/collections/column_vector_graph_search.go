@@ -561,6 +561,7 @@ type columnVectorGraphPreparedMinimalSearchCounters struct {
 	ScoreBatchCalls                     uint64
 	ScoreBatchCandidates                uint64
 	ScoreBatchMaxTileSize               uint64
+	ScoreBatchOptimizedCalls            uint64
 	ScoreBatchScalarFallbackCalls       uint64
 	PreparedScoreCalls                  uint64
 	AdjacencyBytesRead                  uint64
@@ -579,7 +580,7 @@ func newColumnVectorGraphPreparedMinimalSearchCounters(view *columnVectorGraphPr
 	return &columnVectorGraphPreparedMinimalSearchCounters{dims: view.dims, vectorIdentityMapping: view.vectorIdentityMapping}
 }
 
-func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(count int, scalarFallback bool) {
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(count int, optimized bool, scalarFallback bool) {
 	if c == nil || count <= 0 {
 		return
 	}
@@ -591,10 +592,24 @@ func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(co
 	if count64 > c.ScoreBatchMaxTileSize {
 		c.ScoreBatchMaxTileSize = count64
 	}
+	if optimized {
+		c.ScoreBatchOptimizedCalls++
+	}
 	if scalarFallback {
 		c.ScoreBatchScalarFallbackCalls++
 	}
 	c.PreparedScoreCalls += count64
+}
+
+func (p *columnVectorGraphSearchPlan) recordPreparedMinimalScoreBatch(counters *columnVectorGraphPreparedMinimalSearchCounters, ordinals []int) {
+	if counters == nil || len(ordinals) == 0 {
+		return
+	}
+	if p == nil || p.preparedSearch == nil || !p.scoreBatchMode.indexedEnabled() || len(ordinals) <= 1 {
+		counters.recordPreparedScores(len(ordinals), false, true)
+		return
+	}
+	p.preparedSearch.recordIndexedScoreBatchMinimalCounters(counters, ordinals)
 }
 
 func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedAdjacency(adjacencyLen int) {
@@ -632,6 +647,7 @@ func (c *columnVectorGraphPreparedMinimalSearchCounters) publish(stats *columnVe
 	if c.ScoreBatchMaxTileSize > stats.ScoreBatchMaxTileSize {
 		stats.ScoreBatchMaxTileSize = c.ScoreBatchMaxTileSize
 	}
+	stats.ScoreBatchOptimizedCalls += c.ScoreBatchOptimizedCalls
 	stats.ScoreBatchScalarFallbackCalls += c.ScoreBatchScalarFallbackCalls
 	stats.PreparedScoreCalls += c.PreparedScoreCalls
 	stats.VisitedNodes += c.PreparedScoreCalls
@@ -1257,7 +1273,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 		debugCounters.recordScore(columnVectorGraphNativeSearchScoreContextUpperEntry, best)
 	}
 	if preparedMinimal != nil {
-		preparedMinimal.recordPreparedScores(1, true)
+		preparedMinimal.recordPreparedScores(1, false, true)
 	}
 	changed := true
 	for changed {
@@ -1300,7 +1316,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 				debugCounters.recordScores(columnVectorGraphNativeSearchScoreContextUpperNeighbor, tile)
 			}
 			if preparedMinimal != nil {
-				preparedMinimal.recordPreparedScores(len(tile), len(tile) <= 1)
+				plan.recordPreparedMinimalScoreBatch(preparedMinimal, tile)
 			}
 			for i, neighborOrdinal := range tile {
 				score := scores[i]
@@ -1337,7 +1353,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 				debugCounters.recordScore(columnVectorGraphNativeSearchScoreContextUpperNeighbor, neighborOrdinal)
 			}
 			if preparedMinimal != nil {
-				preparedMinimal.recordPreparedScores(1, true)
+				preparedMinimal.recordPreparedScores(1, false, true)
 			}
 			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
 				best = neighborOrdinal
@@ -1516,7 +1532,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		debugCounters.recordScore(scoreContext, ordinal)
 	}
 	if preparedMinimal != nil {
-		preparedMinimal.recordPreparedScores(1, true)
+		preparedMinimal.recordPreparedScores(1, false, true)
 	}
 	(*visitedCandidates)++
 	candidate := columnVectorGraphSearchCandidate{
@@ -1546,7 +1562,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 		debugCounters.recordScores(scoreContext, ordinals)
 	}
 	if preparedMinimal != nil {
-		preparedMinimal.recordPreparedScores(len(ordinals), len(ordinals) <= 1)
+		plan.recordPreparedMinimalScoreBatch(preparedMinimal, ordinals)
 	}
 	for i, ordinal := range ordinals {
 		(*visitedCandidates)++
