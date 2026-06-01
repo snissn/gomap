@@ -151,7 +151,16 @@ func (c *Collection) ColumnStorePhysicalAccounting(ctx context.Context, opts Col
 	if err := ctx.Err(); err != nil {
 		return ColumnStorePhysicalAccounting{}, err
 	}
+	return physicalAccountingFromScanView(ctx, view, opts)
+}
 
+func physicalAccountingFromScanView(ctx context.Context, view columnPhysicalScanSnapshotView, opts ColumnStorePhysicalAccountingOptions) (ColumnStorePhysicalAccounting, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return ColumnStorePhysicalAccounting{}, err
+	}
 	out := ColumnStorePhysicalAccounting{
 		Collection:                 view.CollectionName,
 		Namespace:                  view.AssetNamespace,
@@ -172,6 +181,7 @@ func (c *Collection) ColumnStorePhysicalAccounting(ctx context.Context, opts Col
 		TypedColumnParts:           make([]ColumnStoreTypedColumnPartAccounting, 0, len(view.TypedColumnPartRefs)),
 	}
 	seen := make(map[ColumnAssetRef]struct{})
+	graphSeen := make(map[ColumnAssetRef]struct{})
 	kinds := make(map[ColumnAssetKind]*ColumnStorePhysicalAssetKindAccounting)
 	addKind := func(ref ColumnAssetRef, rows int, bucket *int64) {
 		bytes := positiveColumnStorePhysicalAccountingBytes(ref.Length)
@@ -190,6 +200,14 @@ func (c *Collection) ColumnStorePhysicalAccounting(ctx context.Context, opts Col
 			total.Bytes = addColumnStorePhysicalAccountingBytes(total.Bytes, bytes)
 			total.Rows = addColumnStorePhysicalAccountingRows(total.Rows, rows)
 		}
+	}
+	addGraphKind := func(ref ColumnAssetRef) {
+		addKind(ref, 0, nil)
+		if _, ok := graphSeen[ref]; ok {
+			return
+		}
+		graphSeen[ref] = struct{}{}
+		out.Totals.GraphAssetBytes = addColumnStorePhysicalAccountingBytes(out.Totals.GraphAssetBytes, positiveColumnStorePhysicalAccountingBytes(ref.Length))
 	}
 
 	for _, asset := range view.AssetRefs {
@@ -233,7 +251,7 @@ func (c *Collection) ColumnStorePhysicalAccounting(ctx context.Context, opts Col
 		})
 	}
 	for _, ref := range view.GraphAssetRefs {
-		addKind(ref, 0, &out.Totals.GraphAssetBytes)
+		addGraphKind(ref)
 		out.GraphAssets = append(out.GraphAssets, columnStorePhysicalAssetRefAccounting(ref))
 	}
 	out.AssetKinds = columnStorePhysicalAccountingKindTotals(kinds)

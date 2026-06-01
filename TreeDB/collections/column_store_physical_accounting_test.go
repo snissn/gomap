@@ -223,6 +223,55 @@ func TestPhysicalAccountingRejectsTypedPartManifestMismatch2118(t *testing.T) {
 	}
 }
 
+func TestPhysicalAccountingCountsGraphDuplicateTypedPartBytes2118(t *testing.T) {
+	events := columnPhysicalJSONBenchParityEventsP0()
+	_, collection, closeFn, typedRefs := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
+	defer closeFn()
+	if len(typedRefs) != 1 {
+		t.Fatalf("typed refs=%d want 1", len(typedRefs))
+	}
+
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars(context.Background(), columnManifestScanAllSidecars())
+	if err != nil {
+		t.Fatalf("prepare snapshot view: %v", err)
+	}
+	defer closeView()
+	if len(view.GraphAssetRefs) != 0 {
+		t.Fatalf("fixture graph refs=%d want 0 before duplicate injection", len(view.GraphAssetRefs))
+	}
+	view.GraphAssetRefs = append(view.GraphAssetRefs, typedRefs[0])
+
+	accounting, err := physicalAccountingFromScanView(context.Background(), view, ColumnStorePhysicalAccountingOptions{})
+	if err != nil {
+		t.Fatalf("physicalAccountingFromScanView: %v", err)
+	}
+	if !accounting.Complete {
+		t.Fatal("Complete=false")
+	}
+	if got, want := accounting.GraphAssetRefs, 1; got != want {
+		t.Fatalf("graph refs=%d want %d", got, want)
+	}
+	if got, want := len(accounting.GraphAssets), 1; got != want {
+		t.Fatalf("graph assets=%d want %d", got, want)
+	}
+	if got, want := accounting.Totals.GraphAssetBytes, typedRefs[0].Length; got != want {
+		t.Fatalf("graph bytes=%d want duplicate typed ref length %d", got, want)
+	}
+	if got, want := accounting.Totals.TypedColumnPartBytes, typedRefs[0].Length; got != want {
+		t.Fatalf("typed part bytes=%d want %d", got, want)
+	}
+	var wantReferenced int64
+	for _, ref := range columnPhysicalScanSnapshotViewAssetRefs(view) {
+		wantReferenced = addColumnStorePhysicalAccountingBytes(wantReferenced, positiveColumnStorePhysicalAccountingBytes(ref.Length))
+	}
+	if got := accounting.Totals.ReferencedAssetBytes; got != wantReferenced {
+		t.Fatalf("referenced bytes=%d want globally deduped %d", got, wantReferenced)
+	}
+	if accounting.Totals.ReferencedAssetBytes == accounting.Totals.TypedColumnPartBytes+accounting.Totals.GraphAssetBytes {
+		t.Fatalf("referenced bytes double-counted duplicate typed graph ref: %+v", accounting.Totals)
+	}
+}
+
 func BenchmarkColumnStorePhysicalAccounting2118(b *testing.B) {
 	events := columnPhysicalQ3DenseBenchmarkEvents1950(4096)
 	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(b, events)
