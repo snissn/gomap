@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 type findPredicateOp uint8
@@ -709,6 +710,20 @@ func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool)
 		}
 	}
 	return findPredicate{}, false
+}
+
+func simplePrimaryEqualityFindValue(plan findPlan) (bson.RawValue, bool) {
+	if plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
+		return bson.RawValue{}, false
+	}
+	if len(plan.predicates) != 1 {
+		return bson.RawValue{}, false
+	}
+	pred := plan.predicates[0]
+	if pred.field != "_id" || pred.op != findPredicateEq || len(pred.values) != 1 {
+		return bson.RawValue{}, false
+	}
+	return pred.values[0], true
 }
 
 func documentsForPrimaryPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, maxDocuments int) ([]wire.Document, error) {
@@ -1431,11 +1446,15 @@ func projectDocumentWithProjection(doc wire.Document, projection compiledProject
 			mode = projectionExclude
 		}
 	}
+	return projectDocumentWithEffectiveProjection(doc, projection, mode)
+}
+
+func projectDocumentWithEffectiveProjection(doc wire.Document, projection compiledProjection, mode projectionMode) (wire.Document, error) {
 	elements, err := bson.Raw(doc).Elements()
 	if err != nil {
 		return nil, err
 	}
-	out := make(bson.D, 0, len(elements))
+	idx, out := bsoncore.AppendDocumentStart(make([]byte, 0, len(doc)))
 	for _, elem := range elements {
 		key, err := elem.KeyErr()
 		if err != nil {
@@ -1446,17 +1465,24 @@ func projectDocumentWithProjection(doc wire.Document, projection compiledProject
 		}
 		_, selected := projection.fields[key]
 		if mode == projectionInclude && (selected || key == "_id") {
-			out = append(out, bson.E{Key: key, Value: elem.Value()})
+			out = appendRawValueElement(out, key, elem.Value())
 		}
 		if mode == projectionExclude && !selected {
-			out = append(out, bson.E{Key: key, Value: elem.Value()})
+			out = appendRawValueElement(out, key, elem.Value())
 		}
 	}
-	raw, err := bson.Marshal(out)
+	out, err = bsoncore.AppendDocumentEnd(out, idx)
 	if err != nil {
 		return nil, err
 	}
-	return wire.Document(raw), nil
+	return wire.Document(out), nil
+}
+
+func appendRawValueElement(dst []byte, key string, value bson.RawValue) []byte {
+	return bsoncore.AppendValueElement(dst, key, bsoncore.Value{
+		Type: bsoncore.Type(value.Type),
+		Data: value.Value,
+	})
 }
 
 type projectionMode uint8
