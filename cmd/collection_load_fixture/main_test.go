@@ -62,10 +62,7 @@ func TestParseProfileRejectsDeprecatedProfileNames(t *testing.T) {
 	if got, err := parseProfile("command-wal-relaxed"); err != nil || got != treedb.ProfileCommandWALRelaxed {
 		t.Fatalf("parseProfile command WAL relaxed = %q err=%v", got, err)
 	}
-	if got, err := parseProfile("production_fast"); err != nil || got != treedb.ProfileNoWALFast {
-		t.Fatalf("parseProfile production_fast = %q err=%v", got, err)
-	}
-	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+	for _, raw := range []string{"fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast", "production_fast", "production_wal_on_fast", "backend_direct_fast", "backend_direct_wal_on_fast", "backend_direct", "cached"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := parseProfile(raw)
 			if err == nil {
@@ -75,6 +72,21 @@ func TestParseProfileRejectsDeprecatedProfileNames(t *testing.T) {
 				t.Fatalf("error=%v, want profile help", err)
 			}
 		})
+	}
+}
+
+func TestBackendOptionsLeafSegmentTargetRestoresGenerationPolicy(t *testing.T) {
+	cfg := config{
+		Dir:                    t.TempDir(),
+		Profile:                treedb.ProfileBench,
+		LeafSegmentTargetBytes: 32 << 10,
+	}
+	opts := backendOptions(cfg, false)
+	if got := opts.ValueLog.Generational.Policy; got != treedb.ValueLogGenerationHotWarmCold {
+		t.Fatalf("generation policy=%v want hot/warm/cold", got)
+	}
+	if got := opts.ValueLog.Generational.LeafSegmentTargetBytes; got != cfg.LeafSegmentTargetBytes {
+		t.Fatalf("leaf target bytes=%d want %d", got, cfg.LeafSegmentTargetBytes)
 	}
 }
 
