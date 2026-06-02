@@ -13,6 +13,7 @@ var poolPressureTestMu sync.Mutex
 
 func resetPoolPressureStateForTest() {
 	poolPressureState.Store(poolPressureSnapshot{})
+	resetPoolPressureLevelState(poolPressureNormal)
 	poolPressureLastLeaseTrimUnixNano.Store(0)
 }
 
@@ -380,4 +381,196 @@ func TestScaleMutableFlushThresholdForPressure(t *testing.T) {
 			t.Fatalf("small base critical scaled=%d want=%d", got, want)
 		}
 	})
+}
+
+func TestMutableFlushThresholdUsesCachedEffectivePressure(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	nowCalls := 0
+	poolPressureNow = func() time.Time {
+		nowCalls++
+		return now
+	}
+	var fake runtime.MemStats
+	readMemStatsCalls := 0
+	poolPressureReadMemStats = func(ms *runtime.MemStats) {
+		readMemStatsCalls++
+		*ms = fake
+	}
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	const base = int64(256 << 20)
+	db := &DB{flushThreshold: base}
+	db.updateMutableThresholdLocked()
+	for i := 0; i < 1000; i++ {
+		if got := db.mutableFlushThreshold(); got != base {
+			t.Fatalf("normal cached threshold=%d want=%d", got, base)
+		}
+	}
+	if nowCalls != 0 {
+		t.Fatalf("mutableFlushThreshold called poolPressureNow %d times", nowCalls)
+	}
+	if readMemStatsCalls != 0 {
+		t.Fatalf("mutableFlushThreshold sampled memstats %d times", readMemStatsCalls)
+	}
+
+	fake.HeapInuse = 5 << 30
+	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+	snap := samplePoolPressureSnapshot(now)
+	publishPoolPressureSnapshot(snap, now)
+	if readMemStatsCalls != 1 {
+		t.Fatalf("pressure publish memstats calls=%d want=1", readMemStatsCalls)
+	}
+	want := scaleMutableFlushThresholdForPressure(base, poolPressureHigh)
+	if got := db.mutableFlushThreshold(); got != want {
+		t.Fatalf("high cached threshold=%d want=%d", got, want)
+	}
+	nowCallsBefore := nowCalls
+	readMemStatsCallsBefore := readMemStatsCalls
+	for i := 0; i < 1000; i++ {
+		if got := db.mutableFlushThreshold(); got != want {
+			t.Fatalf("repeated high cached threshold=%d want=%d", got, want)
+		}
+	}
+	if nowCalls != nowCallsBefore {
+		t.Fatalf("repeated mutableFlushThreshold called poolPressureNow %d times", nowCalls-nowCallsBefore)
+	}
+	if readMemStatsCalls != readMemStatsCallsBefore {
+		t.Fatalf("repeated mutableFlushThreshold sampled memstats %d times", readMemStatsCalls-readMemStatsCallsBefore)
+	}
+}
+
+func TestMutableFlushThresholdTracksPressureTransitions(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	t.Cleanup(resetPoolPressureStateForTest)
+
+	const base = int64(256 << 20)
+	db := &DB{flushThreshold: base}
+	db.updateMutableThresholdLocked()
+
+	now := time.Unix(1, 0)
+	for _, tc := range []struct {
+		name  string
+		level poolPressureLevel
+	}{
+		{name: "normal", level: poolPressureNormal},
+		{name: "high", level: poolPressureHigh},
+		{name: "critical", level: poolPressureCritical},
+		{name: "recovered", level: poolPressureNormal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+			publishPoolPressureSnapshot(poolPressureSnapshot{
+				sampledUnixNano: now.UnixNano(),
+				level:           tc.level,
+			}, now)
+			want := scaleMutableFlushThresholdForPressure(base, tc.level)
+			if got := db.mutableFlushThreshold(); got != want {
+				t.Fatalf("cached threshold=%d want=%d", got, want)
+			}
+			if got := currentPoolPressureLevelFast(); got != tc.level {
+				t.Fatalf("fast pressure level=%v want=%v", got, tc.level)
+			}
+		})
+	}
+}
+
+func TestMutableFlushThresholdBaseChangeUnderPressure(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	t.Cleanup(resetPoolPressureStateForTest)
+
+	now := time.Unix(1, 0)
+	publishPoolPressureSnapshot(poolPressureSnapshot{
+		sampledUnixNano: now.UnixNano(),
+		level:           poolPressureCritical,
+	}, now)
+
+	db := &DB{flushThreshold: 256 << 20}
+	db.updateMutableThresholdLocked()
+	if got, want := db.mutableFlushThreshold(), int64(64<<20); got != want {
+		t.Fatalf("initial critical threshold=%d want=%d", got, want)
+	}
+
+	db.flushThreshold = 64 << 20
+	db.updateMutableThresholdLocked()
+	if got, want := db.mutableFlushThreshold(), mutableFlushThresholdPressureFloorBytes; got != want {
+		t.Fatalf("critical floor threshold=%d want=%d", got, want)
+	}
+
+	db.memtableWarmupActive = true
+	db.memtableWarmupThreshold = 8 << 20
+	db.updateMutableThresholdLocked()
+	if got, want := db.mutableFlushThreshold(), int64(2<<20); got != want {
+		t.Fatalf("small warmup threshold=%d want=%d", got, want)
+	}
+}
+
+func TestSampleProcessMemoryPeaksPublishesFreshPressureSnapshot(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	publishPoolPressureSnapshot(poolPressureSnapshot{
+		sampledUnixNano: now.UnixNano(),
+		level:           poolPressureNormal,
+		usedBytes:       1 << 20,
+	}, now)
+
+	var fake runtime.MemStats
+	fake.HeapInuse = 9 << 30
+	readMemStatsCalls := 0
+	poolPressureReadMemStats = func(ms *runtime.MemStats) {
+		readMemStatsCalls++
+		*ms = fake
+	}
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	db := &DB{}
+	db.sampleProcessMemoryPeaks(vlogMmapStatsSnapshot{})
+	if readMemStatsCalls != 1 {
+		t.Fatalf("sampleProcessMemoryPeaks memstats calls=%d want=1", readMemStatsCalls)
+	}
+	if got := currentPoolPressureLevelFast(); got != poolPressureCritical {
+		t.Fatalf("fast pressure level=%v want critical", got)
+	}
+	if got := currentPoolPressureSnapshot().level; got != poolPressureCritical {
+		t.Fatalf("cached pressure level=%v want critical", got)
+	}
+	if readMemStatsCalls != 1 {
+		t.Fatalf("fresh currentPoolPressureSnapshot resampled memstats calls=%d want=1", readMemStatsCalls)
+	}
+	if got := db.processPeakHeapInuseBytes.Load(); got != fake.HeapInuse {
+		t.Fatalf("peak heap inuse=%d want=%d", got, fake.HeapInuse)
+	}
 }
