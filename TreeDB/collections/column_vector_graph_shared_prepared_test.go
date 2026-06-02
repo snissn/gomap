@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
@@ -97,6 +98,27 @@ func TestVectorIndexSearcherSharedPreparedResourceCounters1735(t *testing.T) {
 	afterAllClosed := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
 	if afterAllClosed.Entries != 0 || afterAllClosed.Refs != 0 || afterAllClosed.ActiveHandles != 0 || afterAllClosed.ActiveMappedBytes != 0 {
 		t.Fatalf("shared prepared after all searchers closed=%+v want no active shared resources", afterAllClosed)
+	}
+}
+
+func TestColumnVectorGraphSharedPreparedSearchCachesNotEligible1735(t *testing.T) {
+	col := &Collection{}
+	builds := 0
+	for i := 0; i < 2; i++ {
+		_, err := col.acquireColumnVectorGraphSharedPreparedSearch("not-eligible", func() (*columnVectorGraphSharedPreparedSearch, error) {
+			builds++
+			return nil, errColumnVectorGraphSharedPreparedSearchNotEligible
+		})
+		if !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
+			t.Fatalf("acquire %d err=%v want not-eligible sentinel", i, err)
+		}
+	}
+	if builds != 1 {
+		t.Fatalf("not-eligible builds=%d want one negative-cached build", builds)
+	}
+	snap := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+	if snap.Entries != 0 || snap.CacheBuilds != 1 || snap.CacheMisses != 1 || snap.CacheHits != 0 {
+		t.Fatalf("not-eligible snapshot=%+v want inactive negative cache entry with one build/miss", snap)
 	}
 }
 

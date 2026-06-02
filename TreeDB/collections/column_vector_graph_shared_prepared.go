@@ -104,7 +104,9 @@ func (c *Collection) acquireColumnVectorGraphSharedPreparedSearch(key string, bu
 			entry.err = err
 			entry.building = false
 			if err != nil {
-				delete(c.vectorPreparedSearch, key)
+				if !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
+					delete(c.vectorPreparedSearch, key)
+				}
 			} else {
 				entry.refs = 1
 			}
@@ -122,7 +124,15 @@ func (c *Collection) acquireColumnVectorGraphSharedPreparedSearch(key string, bu
 			<-ready
 			continue
 		}
-		if entry.err != nil || entry.holder == nil || !entry.holder.ready() {
+		if entry.err != nil {
+			err := entry.err
+			if !errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
+				delete(c.vectorPreparedSearch, key)
+			}
+			c.vectorPreparedSearchMu.Unlock()
+			return nil, err
+		}
+		if entry.holder == nil || !entry.holder.ready() {
 			delete(c.vectorPreparedSearch, key)
 			c.vectorPreparedSearchMu.Unlock()
 			continue
@@ -294,7 +304,7 @@ func (c *Collection) columnVectorGraphSharedPreparedSearchCacheSnapshot() column
 		CacheBuilds: c.vectorPreparedSearchBuilds,
 	}
 	for _, entry := range c.vectorPreparedSearch {
-		if entry == nil {
+		if entry == nil || (entry.err != nil && entry.holder == nil && !entry.building) {
 			continue
 		}
 		snap.Entries++
