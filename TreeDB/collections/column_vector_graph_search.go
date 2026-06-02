@@ -99,11 +99,6 @@ func (m columnVectorGraphNativeSearchTraversalMode) normalized() (columnVectorGr
 	}
 }
 
-func (m columnVectorGraphNativeSearchTraversalMode) wavefrontEnabled() bool {
-	mode, err := m.normalized()
-	return err == nil && mode == columnVectorGraphNativeSearchTraversalModeWavefront
-}
-
 func (m columnVectorGraphNativeSearchTraversalMode) String() string {
 	switch m {
 	case columnVectorGraphNativeSearchTraversalModeWavefront:
