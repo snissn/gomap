@@ -451,6 +451,111 @@ func TestChooseValueLogBlockWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *t
 	}
 }
 
+func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		configure     func(*DB)
+		autoRawBypass bool
+		paused        bool
+	}{
+		{
+			name: "auto raw bypass",
+			configure: func(db *DB) {
+				db.forceValueLogPointers = true
+			},
+			autoRawBypass: true,
+		},
+		{
+			name: "paused wal-off raw",
+			configure: func(db *DB) {
+				db.disableJournal = true
+			},
+			paused: true,
+		},
+		{
+			name: "off current raw K",
+			configure: func(db *DB) {
+				db.valueLogDictCurrentK.Store(uint32(leafLogBlockMaxK * 4))
+			},
+		},
+		{
+			name: "off force-pointer wal-off default",
+			configure: func(db *DB) {
+				db.forceValueLogPointers = true
+				db.disableJournal = true
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{indexOuterLeavesInValueLog: true}
+			db.leafLog = lane{id: leafLogLaneID}
+			if tc.configure != nil {
+				tc.configure(db)
+			}
+
+			got := db.chooseValueLogRawWriteK(&db.leafLog, leafLogBlockMaxK*4, tc.autoRawBypass, tc.paused)
+			if got != leafLogBlockMaxK {
+				t.Fatalf("live leaf-log raw K=%d, want capped K=%d", got, leafLogBlockMaxK)
+			}
+		})
+	}
+}
+
+func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		configure     func(*DB)
+		autoRawBypass bool
+		paused        bool
+		want          int
+	}{
+		{
+			name: "auto raw bypass",
+			configure: func(db *DB) {
+				db.forceValueLogPointers = true
+			},
+			autoRawBypass: true,
+			want:          valuelog.MaxFrameK,
+		},
+		{
+			name: "paused wal-off raw",
+			configure: func(db *DB) {
+				db.disableJournal = true
+			},
+			paused: true,
+			want:   valuelog.MaxFrameK,
+		},
+		{
+			name: "off current raw K",
+			configure: func(db *DB) {
+				db.valueLogDictCurrentK.Store(uint32(leafLogBlockMaxK * 4))
+			},
+			want: leafLogBlockMaxK * 4,
+		},
+		{
+			name: "off force-pointer wal-off default",
+			configure: func(db *DB) {
+				db.forceValueLogPointers = true
+				db.disableJournal = true
+			},
+			want: 16,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{indexOuterLeavesInValueLog: true}
+			db.leafLog = lane{id: leafLogLaneID}
+			if tc.configure != nil {
+				tc.configure(db)
+			}
+
+			got := db.chooseValueLogRawWriteK(&lane{}, leafLogBlockMaxK*4, tc.autoRawBypass, tc.paused)
+			if got != tc.want {
+				t.Fatalf("non-leaf raw K=%d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestChooseValueLogBlockWriteK_ThroughputFastPathUsesAveragePayload(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode:  uint8(vlogCompressionAuto),

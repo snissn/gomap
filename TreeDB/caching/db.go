@@ -12685,15 +12685,8 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				}
 			} else if writeMode == vlogWriteBlock {
 				k = db.chooseValueLogBlockWriteK(l, end-i, rawBytes, blockCodec)
-			} else if rawPaused && db.disableJournal {
-				k = valuelog.MaxFrameK
-			} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
-				k = cur
 			} else {
-				k = 8
-				if db.disableJournal && db.forceValueLogPointers {
-					k = 16
-				}
+				k = db.chooseValueLogRawWriteK(l, end-i, false, rawPaused)
 			}
 		}
 		if limits.MaxRecordSize > 0 && maxValLen > 0 {
@@ -13861,18 +13854,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		//
 		// When no dict is available, we write raw frames (uncompressed) and still
 		// benefit from fewer syscalls and less framing work.
-		if autoRawBypass && db.forceValueLogPointers {
-			k = valuelog.MaxFrameK
-		} else if paused && db.disableJournal {
-			k = valuelog.MaxFrameK
-		} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
-			k = cur
-		} else {
-			k = 8
-			if db.disableJournal && db.forceValueLogPointers {
-				k = 16
-			}
-		}
+		k = db.chooseValueLogRawWriteK(l, len(records), autoRawBypass, paused)
 	}
 	if dictID != 0 && len(dict) > 0 && db.disableJournal {
 		// When the redo/journal log is disabled (ingest-mode), favor maximum frame

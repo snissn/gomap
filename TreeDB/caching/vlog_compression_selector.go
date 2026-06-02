@@ -1660,6 +1660,48 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	l.vlogCompressionSelector.observe(mode, blockCodec, rawPayloadBytes, storedPayloadBytes, wallNs, probe)
 }
 
+func (db *DB) isLiveLeafLogLane(l *lane) bool {
+	return db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID
+}
+
+func (db *DB) clampLiveLeafLogFrameK(l *lane, k int) int {
+	if k > leafLogBlockMaxK && db.isLiveLeafLogLane(l) {
+		return leafLogBlockMaxK
+	}
+	return k
+}
+
+func (db *DB) chooseValueLogRawWriteK(l *lane, records int, autoRawBypass, paused bool) int {
+	if records <= 1 {
+		return 1
+	}
+	k := 1
+	switch {
+	case db != nil && autoRawBypass && db.forceValueLogPointers:
+		k = valuelog.MaxFrameK
+	case db != nil && paused && db.disableJournal:
+		k = valuelog.MaxFrameK
+	case db != nil:
+		if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
+			k = cur
+		} else {
+			k = 8
+			if db.disableJournal && db.forceValueLogPointers {
+				k = 16
+			}
+		}
+	default:
+		k = 8
+	}
+	if k < 1 {
+		k = 1
+	}
+	if k > valuelog.MaxFrameK {
+		k = valuelog.MaxFrameK
+	}
+	return db.clampLiveLeafLogFrameK(l, k)
+}
+
 func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, codec valuelog.BlockCodec) int {
 	if records <= 1 {
 		recordLaneVlogBlockK(l, codec, 1)
@@ -1728,9 +1770,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	if k > valuelog.MaxFrameK {
 		k = valuelog.MaxFrameK
 	}
-	if db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && k > leafLogBlockMaxK {
-		k = leafLogBlockMaxK
-	}
+	k = db.clampLiveLeafLogFrameK(l, k)
 	recordLaneVlogBlockK(l, codec, k)
 	return k
 }
