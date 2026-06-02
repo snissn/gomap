@@ -33,7 +33,7 @@ Measured code:
 
 ```text
 branch: codex/readme-treedb-ycsb-headline
-commit: 32f17af9af42
+commit: 32f17af9af42133f41094caea085bce161795e58
 ```
 
 Generated artifacts:

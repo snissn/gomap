@@ -177,7 +177,7 @@ bench: unified-bench
 	./$(BIN_DIR)/unified-bench
 
 bench-readme: unified-bench
-	./$(BIN_DIR)/unified-bench -suite readme -format markdown -seed 1 -keycounts "$(BENCH_KEYCOUNTS)" -valsize "$(BENCH_VALSIZE)" -batchsize "$(BENCH_BATCHSIZE)" -range-queries "$(BENCH_RANGE_QUERIES)" -range-span "$(BENCH_RANGE_SPAN)" -outdir "$(BENCH_OUTDIR)" -progress=false | go run ./scripts/update_readme_bench.go -readme HashDB/README.md
+	./$(BIN_DIR)/unified-bench -suite readme -format markdown -seed 1 -keycounts "$(BENCH_KEYCOUNTS)" -valsize "$(BENCH_VALSIZE)" -batchsize "$(BENCH_BATCHSIZE)" -range-queries "$(BENCH_RANGE_QUERIES)" -range-span "$(BENCH_RANGE_SPAN)" -outdir "$(BENCH_OUTDIR)" -progress=false | sed 's#($(BENCH_OUTDIR)/#(../$(BENCH_OUTDIR)/#g' | go run ./scripts/update_readme_bench.go -readme HashDB/README.md
 
 .PHONY: bench-collections-canonical
 bench-collections-canonical:

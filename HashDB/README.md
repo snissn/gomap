@@ -108,7 +108,7 @@ to insert the current unified benchmark markdown for this host._
 
 ## More Docs
 
-- `docs/HASHDB_CONCEPTS.md`
-- `docs/HASHDB_TUNING.md`
-- `docs/HASHDB_SNAPSHOT.md`
-- `docs/contracts/README.md`
+- `../docs/HASHDB_CONCEPTS.md`
+- `../docs/HASHDB_TUNING.md`
+- `../docs/HASHDB_SNAPSHOT.md`
+- `../docs/contracts/README.md`

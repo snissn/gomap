@@ -2,7 +2,7 @@
 
 Status: superseded. This initial single-run profile sweep is retained as
 prior-run evidence, but `docs/benchmarks/ycsb_profile_closeout_2026-06-01.md`
-is only the preferred checked-in profile-surface closeout. Use
+is the preferred checked-in profile-surface closeout. Use
 `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md` for current headline
 YCSB performance, and use `docs/benchmarks/ycsb_mongodb_treedb_current.md` for
 the report index and rerun matrix.

@@ -103,6 +103,7 @@ Source:
 Build the primary TreeDB servers:
 
 ```sh
+mkdir -p bin
 go build -o bin/treedb-native-server ./cmd/treedb-native-server
 go build -o bin/treedb-mongo-gateway ./TreeDB/mongo_gateway/server.go
 ```
