@@ -307,8 +307,8 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 					"TreeDB": {
 						"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
 						"treedb.publish.ordered_root_delta_group.root_apply_ns_total":    "1200",
-						"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "32",
-						"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                  "1073741824",
+						"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "512",
+						"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                  "8589934592",
 					},
 				},
 			},

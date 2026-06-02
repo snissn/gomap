@@ -74,12 +74,12 @@ const (
 	defaultAdaptiveCapEnabled        = true
 	defaultMaxMappedSealed           = 8
 	defaultMaxMappedSealedBytes      = 64 << 20
-	defaultMaxMappedLeafSealed       = defaultMaxMappedSealed * 4
-	defaultLeafSealedBytesMultiplier = 16
-	// Leaf-log reads are on the BTree traversal hot path. Keep a larger mapped
-	// virtual-address window for sealed leaf generations so sustained indexed
-	// writes do not fall back to ReadAt as soon as a few generations rotate; OS
-	// page-cache policy still controls physical memory residency.
+	defaultMaxMappedLeafSealed       = defaultMaxMappedSealed * 64
+	defaultLeafSealedBytesMultiplier = 128
+	// Leaf-log reads are on the BTree traversal hot path. Keep a bounded 8GiB
+	// mapped virtual-address window for sealed leaf generations so large native
+	// fast-path datasets do not fall back to ReadAt once a few generations rotate;
+	// OS page-cache policy still controls physical memory residency.
 	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * defaultLeafSealedBytesMultiplier
 	defaultCurrentWritableMapTarget = 32 << 20
 )
