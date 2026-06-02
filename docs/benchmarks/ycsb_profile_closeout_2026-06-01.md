@@ -1,5 +1,13 @@
 # TreeDB YCSB Profile Closeout: Command WAL Public Surface
 
+Status: current checked-in command-WAL/public-profile evidence until a fresh
+post-#2164 YCSB rerun lands. PR #2164 removed mandatory command-WAL payload
+SHA-256 hashing, so these pre-#2164 command-WAL throughput numbers remain
+historical evidence and should be refreshed before they are used as final
+current headline performance. See
+`docs/benchmarks/ycsb_mongodb_treedb_current.md` for the report index and rerun
+matrix.
+
 This report is the closeout evidence for the TreeDB profile-surface sprint. It
 checks the intended public profiles:
 
