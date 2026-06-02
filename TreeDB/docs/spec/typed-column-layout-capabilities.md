@@ -42,6 +42,9 @@ not just encodings. A key includes:
 | `float32`/`double` | default compatibility `int64` + `raw_int64` bit-pattern carrier | Does not advertise int64 direct-view, numeric aggregate/range, stats, or pruning capabilities. |
 | `float32` | `float32` + `raw_float32` + `compression=none` | Explicit `fixed_width_encoding: "little_endian"` native scalar payload. It is a fixed-width direct-view candidate for downstream certification/readers, preserves raw IEEE-754 bits, and does not yet enable float numeric aggregate/range/stats/pruning fast paths. |
 | `double` | `float64` + `raw_float64` + `compression=none` | Explicit `fixed_width_encoding: "little_endian"` native scalar payload. It is a fixed-width direct-view candidate for downstream certification/readers, preserves raw IEEE-754 bits, and does not yet enable float numeric aggregate/range/stats/pruning fast paths. |
+| `int8`/`uint8`/`int16`/`uint16`/`int32`/`uint32` | matching primitive scalar type + matching `raw_*` encoding + `compression=none` | Non-null fixed-width little-endian primitive integer payloads. Direct-view certification is allowed after normal writer/read validation. Int64-compatible stats, sum stats, and value-row pruning are advertised for these widths because every value preserves logical ordering when widened to `int64`. |
+| `uint64` | `uint64` + `raw_uint64` + `compression=none` | Non-null fixed-width little-endian 64-bit unsigned payload. Direct-view certification is allowed, but int64-compatible stats/pruning/reducer certification is not advertised because values above `MaxInt64` need a native uint64 stats/pruning payload. |
+| `float16`/`bfloat16` | `float16`/`bfloat16` + `raw_float16`/`raw_bfloat16` + `compression=none` | Non-null storage-only raw 16-bit bit payloads. Direct-view certification preserves bits exactly; numeric float aggregate/range/stats/pruning fast paths are not advertised. |
 | `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with explicit vector direct-payload, similarity, dot-product, and vector-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
 | `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Legacy fixed-width little-endian dense fallback/compatibility payload bytes. Direct-view certification remains deferred; this is not the generic `uint32_list` target. Graph traversal/metrics may use decoded payloads; scalar aggregate/range shortcuts are rejected. |
 | `adjacency_list` | `adjacency_list` + `raw_uint32_offsets_list` | Legacy #1915/#1916 variable-list compatibility path selected by `adjacency_layout: "uint32_offsets_list"`: `uint64` offsets plus flattened `uint32` values. Safe writer/fallback-reader publication and certified direct-view readers are enabled through the adapter. #1989 quarantines the graph-specific `column_graph` source integration; primary list consumers should use generic `uint32_list`. |
@@ -75,7 +78,7 @@ carriers require an explicit kernel that composes #1844 row selections with
 null/default masks; otherwise they fallback/fail closed instead of treating
 carrier zeros as values.
 
-## Raw int64 policy
+## Raw fixed-width scalar policy
 
 The default `int64` `typed_column_part` publication remains `delta_varint` for
 legacy/pre-alpha compatibility. Raw fixed-width int64 is selected only by an
@@ -85,26 +88,37 @@ this field, so a raw-int64 schema and a legacy delta-varint schema are distinct.
 If a catalog/schema is inconsistent with on-disk parts, readers reject the asset
 with an explicit schema/layout mismatch rather than silently mixing layouts.
 
-Raw int64 validation requires:
+Raw fixed-width scalar validation requires:
 
-- logical type `int64`, physical type `int64`, encoding `raw_int64`;
+- logical type, physical type, and encoding match exactly (`int64`/`raw_int64`,
+  `int8`/`raw_int8`, `uint8`/`raw_uint8`, `int16`/`raw_int16`,
+  `uint16`/`raw_uint16`, `int32`/`raw_int32`, `uint32`/`raw_uint32`,
+  `uint64`/`raw_uint64`, `float16`/`raw_float16`, or
+  `bfloat16`/`raw_bfloat16`);
 - `compression=none`;
 - non-null/non-default wrapper state;
-- little-endian 8-byte elements;
-- raw bytes and stored bytes exactly `rows * 8` for every block;
+- little-endian fixed-width elements (`1`, `2`, `4`, or `8` bytes depending on
+  the primitive);
+- raw bytes and stored bytes exactly `rows * element_width` for every block;
 - payload bytes read equal the descriptor's stored length;
 - normal typed-column asset checksum/read-integrity policy.
 
-The prepared int64 aggregate path consults semantic capabilities first and then
-layout capabilities. For raw int64 it uses a safe little-endian byte-loop reducer
-and predicate cursor; it does not use unsafe pointer casts or expose zero-copy
-views. Delta-varint continues to use the streaming decode path. Raw int64
-carriers for scalar floats fail closed at both layers: they preserve bits for
+The prepared aggregate path consults semantic capabilities first and then layout
+capabilities. For raw int64 and #1929 integer primitives up to `uint32`, current
+int64-compatible physical stats/pruning certification uses safe little-endian
+byte loops and widening; it does not use unsafe pointer casts. Primitive integer
+sum/avg/min/max aggregate reducers remain semantically deferred until typedkernel
+widening kernels are registered. Delta-varint continues to use the streaming
+decode path. `uint64` is a direct-view payload candidate only; it does not
+advertise stats/pruning/reducer certification until a native uint64 stats/pruning
+payload exists. Raw int64 carriers for scalar floats
+fail closed at both layers: they preserve bits for
 reconstruction, but they are not direct int64 views and cannot certify int64
 numeric reducers, stats, or pruning metadata. Native scalar float payloads are
 selected only by explicit little-endian fixed-width metadata and use
-`raw_float32`/`raw_float64`; those layouts are payload/direct-view candidates but
-float numeric equality/range/aggregate/stats/pruning semantics remain deferred.
+`raw_float32`/`raw_float64`; #1929 `float16`/`bfloat16` use raw 16-bit bit
+payloads. These layouts are payload/direct-view candidates, but float numeric
+equality/range/aggregate/stats/pruning semantics remain deferred.
 
 ## Writer-certified layout contracts (#1895)
 
@@ -197,6 +211,9 @@ New layouts should declare unsupported operations explicitly. Examples:
   value order and require dictionary-order/collation proof before lexical range
   or pruning;
 - float layouts must not inherit int64 bit-pattern ordering or sum semantics;
+- primitive integer layouts must prove logical signedness/width before widening
+  into int64-compatible reducers or pruning metadata, and `uint64` requires a
+  native payload before stats/pruning can be enabled;
 - bool layouts should expose bool-specific counts/equality rather than broad
   scalar range;
 - vector layouts expose vector-specific direct payload, similarity/dot-product,

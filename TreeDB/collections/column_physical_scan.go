@@ -2341,6 +2341,51 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 			} else {
 				_ = cur.stringBytes()
 			}
+		case ColumnStoreValueInt8:
+			value := int8(cur.u8())
+			if selected {
+				rowValues[outputIdx].Int8 = value
+			}
+		case ColumnStoreValueUint8:
+			value := cur.u8()
+			if selected {
+				rowValues[outputIdx].Uint8 = value
+			}
+		case ColumnStoreValueInt16:
+			value := int16(cur.u16())
+			if selected {
+				rowValues[outputIdx].Int16 = value
+			}
+		case ColumnStoreValueUint16:
+			value := cur.u16()
+			if selected {
+				rowValues[outputIdx].Uint16 = value
+			}
+		case ColumnStoreValueInt32:
+			value := int32(cur.u32())
+			if selected {
+				rowValues[outputIdx].Int32 = value
+			}
+		case ColumnStoreValueUint32:
+			value := cur.u32()
+			if selected {
+				rowValues[outputIdx].Uint32 = value
+			}
+		case ColumnStoreValueUint64:
+			value := cur.u64()
+			if selected {
+				rowValues[outputIdx].Uint64 = value
+			}
+		case ColumnStoreValueFloat16:
+			value := cur.u16()
+			if selected {
+				rowValues[outputIdx].Float16 = value
+			}
+		case ColumnStoreValueBFloat16:
+			value := cur.u16()
+			if selected {
+				rowValues[outputIdx].BFloat16 = value
+			}
 		case ColumnStoreValueFloat32Vector:
 			if selected {
 				value := cur.float32SliceWithExpectedLengthAndEncoding(col.VectorDims, col.FixedWidthEncoding)

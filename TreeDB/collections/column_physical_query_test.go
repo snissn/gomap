@@ -1771,6 +1771,69 @@ func TestColumnPhysicalDirectQueryValidatesUnselectedTypeTags(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalDirectQuerySkipsUnselectedPrimitiveRowAssets1929(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = append(cfg.Columns,
+		ColumnStoreColumn{Name: "i8", Path: "i8", ValueType: ColumnStoreValueInt8},
+		ColumnStoreColumn{Name: "u8", Path: "u8", ValueType: ColumnStoreValueUint8},
+		ColumnStoreColumn{Name: "i16", Path: "i16", ValueType: ColumnStoreValueInt16},
+		ColumnStoreColumn{Name: "u16", Path: "u16", ValueType: ColumnStoreValueUint16},
+		ColumnStoreColumn{Name: "i32", Path: "i32", ValueType: ColumnStoreValueInt32},
+		ColumnStoreColumn{Name: "u32", Path: "u32", ValueType: ColumnStoreValueUint32},
+		ColumnStoreColumn{Name: "u64", Path: "u64", ValueType: ColumnStoreValueUint64},
+		ColumnStoreColumn{Name: "f16", Path: "f16", ValueType: ColumnStoreValueFloat16},
+		ColumnStoreColumn{Name: "bf16", Path: "bf16", ValueType: ColumnStoreValueBFloat16},
+	)
+	cfg.SortKey = nil
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows := []columnDeclaredRow{{ID: []byte("e1"), Values: []columnDeclaredValue{
+		{Type: ColumnStoreValueInt64, Present: true, Int64: 7},
+		{Type: ColumnStoreValueString, Present: true, String: "share"},
+		{Type: ColumnStoreValueString, Present: true, String: "did:1"},
+		{Type: ColumnStoreValueInt8, Present: true, Int8: -8},
+		{Type: ColumnStoreValueUint8, Present: true, Uint8: 8},
+		{Type: ColumnStoreValueInt16, Present: true, Int16: -16},
+		{Type: ColumnStoreValueUint16, Present: true, Uint16: 16},
+		{Type: ColumnStoreValueInt32, Present: true, Int32: -32},
+		{Type: ColumnStoreValueUint32, Present: true, Uint32: 32},
+		{Type: ColumnStoreValueUint64, Present: true, Uint64: 64},
+		{Type: ColumnStoreValueFloat16, Present: true, Float16: 0x3c00},
+		{Type: ColumnStoreValueBFloat16, Present: true, BFloat16: 0x3f80},
+	}}}
+	raw, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: normalized.AssetManager.Namespace, Generation: 1, PartID: 1, FileID: columnAssetM12ASegmentFileID, Length: int64(len(raw)), Checksum: page.Checksum(raw)}
+	exec, err := newColumnPhysicalQueryExecutor(*normalized, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalQueryExecutor: %v", err)
+	}
+	summary, err := reduceColumnPhysicalAssetDirect(raw, ref, "events", normalized, ColumnPublishOperationInsert, exec)
+	if err != nil {
+		t.Fatalf("reduce direct with unselected primitive row assets: %v", err)
+	}
+	if summary.rows != 1 || exec.reduceRows != 1 {
+		t.Fatalf("reduce summary rows=%d reduceRows=%d want 1", summary.rows, exec.reduceRows)
+	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", exec.groups()), []string{"q1:share=1"}; !equalStringSets(got, want) {
+		t.Fatalf("reduce groups=%v want %v", got, want)
+	}
+}
+
 func equalStringSets(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

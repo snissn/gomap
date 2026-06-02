@@ -34,13 +34,22 @@ type columnWriteDocument struct {
 type columnDeclaredValue struct {
 	Type ColumnStoreValueType
 	// Present distinguishes an omitted nullable JSON path from an explicit null.
-	Present bool
-	Null    bool
-	Bool    bool
-	Int64   int64
-	Float32 float32
-	Double  float64
-	String  string
+	Present  bool
+	Null     bool
+	Bool     bool
+	Int64    int64
+	Float32  float32
+	Double   float64
+	String   string
+	Int8     int8
+	Uint8    uint8
+	Int16    int16
+	Uint16   uint16
+	Int32    int32
+	Uint32   uint32
+	Uint64   uint64
+	Float16  uint16
+	BFloat16 uint16
 	// Float32Vector stores a decoded vector column value. It is used for first-
 	// class vector physical assets and is not part of scalar query hot paths.
 	Float32Vector []float32
@@ -211,6 +220,60 @@ func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (co
 			return columnDeclaredValue{}, fmt.Errorf("expected string got %T", raw)
 		}
 		value.String = v
+	case ColumnStoreValueInt8:
+		v, err := convertJSONSignedScalar(raw, "int8", -128, 127)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Int8 = int8(v)
+	case ColumnStoreValueUint8:
+		v, err := convertJSONUnsignedScalar(raw, "uint8", 1<<8-1)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Uint8 = uint8(v)
+	case ColumnStoreValueInt16:
+		v, err := convertJSONSignedScalar(raw, "int16", -1<<15, 1<<15-1)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Int16 = int16(v)
+	case ColumnStoreValueUint16:
+		v, err := convertJSONUnsignedScalar(raw, "uint16", 1<<16-1)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Uint16 = uint16(v)
+	case ColumnStoreValueInt32:
+		v, err := convertJSONSignedScalar(raw, "int32", -1<<31, 1<<31-1)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Int32 = int32(v)
+	case ColumnStoreValueUint32:
+		v, err := convertJSONUnsignedScalar(raw, "uint32", 1<<32-1)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Uint32 = uint32(v)
+	case ColumnStoreValueUint64:
+		v, err := convertJSONUnsignedScalar(raw, "uint64", ^uint64(0))
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Uint64 = v
+	case ColumnStoreValueFloat16:
+		v, err := convertJSONUnsignedScalar(raw, "float16", 1<<16-1)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Float16 = uint16(v)
+	case ColumnStoreValueBFloat16:
+		v, err := convertJSONUnsignedScalar(raw, "bfloat16", 1<<16-1)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.BFloat16 = uint16(v)
 	case ColumnStoreValueFloat32Vector:
 		values, err := convertJSONFloat32Vector(raw, col.VectorDims)
 		if err != nil {
@@ -422,6 +485,24 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 				writeManifestUint64(&b, math.Float64bits(value.Double))
 			case ColumnStoreValueString:
 				writeManifestString(&b, value.String)
+			case ColumnStoreValueInt8:
+				writeManifestUint8(&b, uint8(value.Int8))
+			case ColumnStoreValueUint8:
+				writeManifestUint8(&b, value.Uint8)
+			case ColumnStoreValueInt16:
+				writeManifestUint16(&b, uint16(value.Int16))
+			case ColumnStoreValueUint16:
+				writeManifestUint16(&b, value.Uint16)
+			case ColumnStoreValueInt32:
+				writeManifestUint32(&b, uint32(value.Int32))
+			case ColumnStoreValueUint32:
+				writeManifestUint32(&b, value.Uint32)
+			case ColumnStoreValueUint64:
+				writeManifestUint64(&b, value.Uint64)
+			case ColumnStoreValueFloat16:
+				writeManifestUint16(&b, value.Float16)
+			case ColumnStoreValueBFloat16:
+				writeManifestUint16(&b, value.BFloat16)
 			case ColumnStoreValueFloat32Vector:
 				if err := writeManifestFloat32SliceWithEncoding(&b, value.Float32Vector, col.FixedWidthEncoding); err != nil {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] float32_vector: %w", colIdx, err)
@@ -546,6 +627,24 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 						value.Double = math.Float64frombits(cur.u64())
 					case ColumnStoreValueString:
 						value.String = cur.string()
+					case ColumnStoreValueInt8:
+						value.Int8 = int8(cur.u8())
+					case ColumnStoreValueUint8:
+						value.Uint8 = cur.u8()
+					case ColumnStoreValueInt16:
+						value.Int16 = int16(cur.u16())
+					case ColumnStoreValueUint16:
+						value.Uint16 = cur.u16()
+					case ColumnStoreValueInt32:
+						value.Int32 = int32(cur.u32())
+					case ColumnStoreValueUint32:
+						value.Uint32 = cur.u32()
+					case ColumnStoreValueUint64:
+						value.Uint64 = cur.u64()
+					case ColumnStoreValueFloat16:
+						value.Float16 = cur.u16()
+					case ColumnStoreValueBFloat16:
+						value.BFloat16 = cur.u16()
 					case ColumnStoreValueFloat32Vector:
 						if version >= columnPhysicalAssetVersionV4 {
 							value.Float32Vector = cur.float32SliceWithExpectedLengthAndEncoding(asset.Columns[colIdx].VectorDims, asset.Columns[colIdx].FixedWidthEncoding)
@@ -764,6 +863,10 @@ func writeManifestBool(b *bytes.Buffer, value bool) {
 	_ = b.WriteByte(0)
 }
 
+func writeManifestUint8(b *bytes.Buffer, value uint8) {
+	_ = b.WriteByte(value)
+}
+
 func writeManifestBytes(b *bytes.Buffer, value []byte) {
 	writeManifestUint64(b, uint64(len(value)))
 	_, _ = b.Write(value)
@@ -828,6 +931,19 @@ func (c *manifestCursor) bool() bool {
 		return false
 	}
 	value := c.raw[c.pos] != 0
+	c.pos++
+	return value
+}
+
+func (c *manifestCursor) u8() uint8 {
+	if c.err != nil {
+		return 0
+	}
+	if len(c.raw)-c.pos < 1 {
+		c.err = errors.New("collections: short column binary uint8")
+		return 0
+	}
+	value := c.raw[c.pos]
 	c.pos++
 	return value
 }

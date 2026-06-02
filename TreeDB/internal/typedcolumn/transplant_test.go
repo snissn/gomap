@@ -383,6 +383,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
 	allowedImports := map[string]struct{}{
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go")): {},
+		// #1929 keeps primitive scalar adapter build/read helpers in a narrow
+		// typed-column adapter extension rather than publishing a generic data plane.
+		filepath.Clean(filepath.Join(collectionsDir, "typed_column_scalar_primitive.go")): {},
 		// #1952 is the scoped production codec/layout capability guard used by
 		// the adapter and prepared-state seams without adding a new data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_capability.go")): {},

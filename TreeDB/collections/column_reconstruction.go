@@ -512,6 +512,24 @@ func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
 			return string(value.StringBytes), nil
 		}
 		return value.String, nil
+	case ColumnStoreValueInt8:
+		return value.Int8, nil
+	case ColumnStoreValueUint8:
+		return value.Uint8, nil
+	case ColumnStoreValueInt16:
+		return value.Int16, nil
+	case ColumnStoreValueUint16:
+		return value.Uint16, nil
+	case ColumnStoreValueInt32:
+		return value.Int32, nil
+	case ColumnStoreValueUint32:
+		return value.Uint32, nil
+	case ColumnStoreValueUint64:
+		return value.Uint64, nil
+	case ColumnStoreValueFloat16:
+		return value.Float16, nil
+	case ColumnStoreValueBFloat16:
+		return value.BFloat16, nil
 	case ColumnStoreValueFloat32Vector:
 		return value.Float32Vector, nil
 	case ColumnStoreValueUint32List:

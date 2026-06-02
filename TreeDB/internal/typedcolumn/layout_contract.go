@@ -517,6 +517,14 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 	case EncodingRawFloat64:
 		direct := def.Compression == CompressionNone && logicalType == "double" && def.Type == ColumnTypeFloat64 && def.FixedWidthElements == 0
 		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8, direct: direct}
+	case EncodingRawInt8, EncodingRawUint8, EncodingRawInt16, EncodingRawUint16, EncodingRawInt32, EncodingRawUint32, EncodingRawUint64, EncodingRawFloat16, EncodingRawBFloat16:
+		width := rawScalarWidthForColumnType(def.Type)
+		if width == 0 || rawScalarEncodingForColumnType(def.Type) != def.Encoding {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
+		direct := def.Compression == CompressionNone && logicalType == string(def.Type) && def.FixedWidthElements == 0
+		statsPruning := direct && integerStatsPayloadColumnType(def.Type)
+		return columnPartContractLayout{elementSize: width, alignment: width, endian: ColumnPartLayoutEndianLittle, lengthMultiple: width, direct: direct, stats: statsPruning, pruning: statsPruning}
 	case EncodingRawFloat32Vector:
 		direct := def.Compression == CompressionNone && logicalType == "float32_vector" && def.Type == ColumnTypeFloat32Vector && def.FixedWidthElements > 0
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct, stats: direct, pruning: direct}

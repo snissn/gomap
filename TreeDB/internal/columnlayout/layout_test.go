@@ -96,6 +96,28 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 	}
 }
 
+func TestPrimitiveScalarLayoutRejectsFixedWidthElements1929(t *testing.T) {
+	valid := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalUint32, Physical: typedcolumn.ColumnTypeUint32, Encoding: typedcolumn.EncodingRawUint32, Compression: typedcolumn.CompressionNone})
+	if !valid.DirectView.Eligible || valid.Layout.ElementsPerRow != 1 || valid.Layout.ElementWidthBytes != 4 || valid.Reducers.Int64NumericAggregate || valid.Reducers.Int64FixedWidthRaw || !valid.Stats.MinMax || !valid.Pruning.ValueRows {
+		t.Fatalf("valid uint32 primitive caps=%+v want one-value-per-row direct/stats/pruning without primitive reducers", valid)
+	}
+
+	malformed := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalUint32, Physical: typedcolumn.ColumnTypeUint32, Encoding: typedcolumn.EncodingRawUint32, Compression: typedcolumn.CompressionNone, FixedWidthElements: 2})
+	if malformed.DirectView.Eligible || malformed.Layout.FixedWidth || malformed.Layout.ElementWidthBytes != 0 || malformed.Reducers.Int64NumericAggregate || malformed.Stats.MinMax || malformed.Pruning.ValueRows {
+		t.Fatalf("malformed primitive caps=%+v want fail-closed without direct/stats/pruning", malformed)
+	}
+	if cap := malformed.Supports(OpDirectView); cap.Supported() || cap.Reason != ReasonEncodingPhysicalMismatch {
+		t.Fatalf("malformed direct cap=%+v want %s", cap, ReasonEncodingPhysicalMismatch)
+	}
+	if cap := malformed.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonEncodingPhysicalMismatch {
+		t.Fatalf("malformed semantic direct cap=%+v want %s", cap, ReasonEncodingPhysicalMismatch)
+	}
+	granule := typedcolumn.EncodedGranule{Rows: 1, Encoding: typedcolumn.EncodingRawUint32, Compression: typedcolumn.CompressionNone, RawBytes: 4, StoredBytes: 4}
+	if err := malformed.ValidateGranule(granule); err == nil || !strings.Contains(err.Error(), "fixed_width_elements=0") {
+		t.Fatalf("malformed ValidateGranule err=%v want fixed_width_elements=0 rejection", err)
+	}
+}
+
 func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testing.T) {
 	for _, logical := range []columnsemantics.LogicalType{columnsemantics.LogicalFloat32, columnsemantics.LogicalDouble} {
 		floatBits := CapabilitiesFor(Descriptor{Logical: logical, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone})

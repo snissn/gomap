@@ -515,13 +515,24 @@ Typed-column part descriptor column type codes are currently:
 | 7 | `float64` | Native raw little-endian IEEE-754 scalar. |
 | 8 | `uint32_list` | Generic non-null offsets/value list primitive added by #1985. |
 | 9 | `bytes` | Generic non-null opaque byte payload primitive added by #2010. |
+| 10 | `int8` | #1929 non-null raw primitive scalar. |
+| 11 | `uint8` | #1929 non-null raw primitive scalar. |
+| 12 | `int16` | #1929 non-null raw primitive scalar. |
+| 13 | `uint16` | #1929 non-null raw primitive scalar. |
+| 14 | `int32` | #1929 non-null raw primitive scalar. |
+| 15 | `uint32` | #1929 non-null raw primitive scalar. |
+| 16 | `uint64` | #1929 non-null raw primitive scalar. |
+| 17 | `float16` | #1929 storage-only raw IEEE binary16 bit payload. |
+| 18 | `bfloat16` | #1929 storage-only raw bfloat16 bit payload. |
 
 `uint32_list` descriptors must use `raw_uint32_offsets_list` encoding,
 `fixed_width_elements=0`, and uncompressed split offsets/value sections. `bytes`
 descriptors must use `raw_bytes_offsets`, `fixed_width_elements=0`, and
 uncompressed split offsets/value sections whose values bytes are exact opaque
-payload bytes rather than text. Readers must fail closed on unknown type codes
-rather than guessing a payload shape.
+payload bytes rather than text. Primitive scalar descriptors must use their
+matching `raw_*` encoding, `fixed_width_elements=0`, and uncompressed fixed-width
+payload sections (`rows * width` bytes). Readers must fail closed on unknown type
+codes rather than guessing a payload shape.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
@@ -580,14 +591,18 @@ owner SortKeys fall back to the synthetic `__treedb_primary_id` order and publis
 no typed-column SortKey trailer; typed-column-owned unsupported, nullable,
 descending, or wider-than-8 SortKeys fail closed.
 The durable Issue `#1755` scalar path represents bool, int64, float32,
-double/float64, and
-string fields. Int64 typed-column fields use `delta_varint` by default; a
-non-null scalar `typed_column_part` field that explicitly sets
+double/float64, and string fields. Int64 typed-column fields use `delta_varint`
+by default; a non-null scalar `typed_column_part` field that explicitly sets
 `fixed_width_encoding: "little_endian"` uses an uncompressed native raw
 little-endian payload: `raw_int64` for `int64` (`rows * 8` bytes),
 `raw_float32` for `float32` (`rows * 4` IEEE-754 bits), or `raw_float64` for
-`double`/`float64` (`rows * 8` IEEE-754 bits). Native scalar float payloads
-preserve raw bits exactly, including NaN payloads and signed zero. The legacy
+`double`/`float64` (`rows * 8` IEEE-754 bits). Issue #1929 adds non-null
+primitive scalar payloads `raw_int8`, `raw_uint8`, `raw_int16`, `raw_uint16`,
+`raw_int32`, `raw_uint32`, `raw_uint64`, `raw_float16`, and `raw_bfloat16` with
+matching type codes above. Multi-byte primitive scalar values are little-endian;
+`float16` and `bfloat16` are raw 16-bit bit payloads, not arithmetic codecs.
+Native scalar float payloads preserve raw bits exactly, including NaN payloads
+and signed zero. The legacy
 raw-`int64` float bit-pattern carrier remains a compatibility/fallback layout
 when native fixed-width encoding is not selected and must not be treated as a
 native scalar float direct-view payload. Issue `#1756` adds fixed-dimension
@@ -671,8 +686,9 @@ validation and fail-closed rules.
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
 non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
-fixed-dimension `raw_float32_vector`, explicit `raw_uint32_offsets_list`, and
-explicit `raw_bytes_offsets` typed-column payload sections as
+Issue `#1929` raw primitive scalar sections, fixed-dimension `raw_float32_vector`,
+explicit `raw_uint32_offsets_list`, and explicit `raw_bytes_offsets`
+typed-column payload sections as
 `DirectViewCertified`; the adapter-internal
 `__treedb_primary_id` row-locator column is not a declared-value direct-view
 certification target. The contract records section/block offsets, lengths,

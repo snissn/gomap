@@ -348,7 +348,7 @@ func buildColumnPartPruning(part *ColumnPart) (ColumnPartPruning, error) {
 	}
 	out := ColumnPartPruning{Version: columnPartPruningSectionVersion, PartID: part.Descriptor.PartID, Rows: part.Descriptor.RowCount}
 	for _, columnDesc := range part.Descriptor.Columns {
-		if columnDesc.Type != ColumnTypeInt64 {
+		if !integerStatsPayloadColumnType(columnDesc.Type) {
 			continue
 		}
 		column, ok := part.Columns[columnDesc.Name]
@@ -371,7 +371,7 @@ func buildColumnPartPruning(part *ColumnPart) (ColumnPartPruning, error) {
 }
 
 func buildInt64ValueRowIndex(desc ColumnPartDescriptor, columnDesc ColumnPartColumnDescriptor, column ColumnPartColumn) (Int64ValueRowIndex, bool, error) {
-	if column.Definition.StatsDisabled || column.Definition.Type != ColumnTypeInt64 || column.Definition.Encoding == EncodingNullableInt64 || column.Definition.Compression != CompressionNone {
+	if column.Definition.StatsDisabled || !integerStatsPayloadColumnType(column.Definition.Type) || column.Definition.Encoding == EncodingNullableInt64 || column.Definition.Compression != CompressionNone {
 		return Int64ValueRowIndex{}, false, nil
 	}
 	index := Int64ValueRowIndex{
@@ -403,10 +403,11 @@ func buildInt64ValueRowIndex(desc ColumnPartDescriptor, columnDesc ColumnPartCol
 		if g.NullCount != 0 || g.DefaultCount != 0 {
 			return Int64ValueRowIndex{}, false, nil
 		}
-		values, err := reader.DecodeInt64Into(nil, g)
+		values, err := reader.DecodeIntegerAsInt64Into(reader.values[:0], column.Definition.Type, g)
 		if err != nil {
 			return Int64ValueRowIndex{}, false, fmt.Errorf("typedcolumn: pruning column %s block %d decode: %w", columnDesc.Name, i, err)
 		}
+		reader.values = values
 		if len(values) != block.Descriptor.RowCount {
 			return Int64ValueRowIndex{}, false, fmt.Errorf("typedcolumn: pruning column %s block %d values=%d want rows=%d", columnDesc.Name, i, len(values), block.Descriptor.RowCount)
 		}
@@ -875,8 +876,11 @@ func ValidateInt64ValueRowIndex(index Int64ValueRowIndex, desc ColumnPartDescrip
 	if column.Definition.StatsDisabled {
 		return fmt.Errorf("typedcolumn: column pruning %s disabled by definition: %s", envelope.ColumnName, ColumnPruningReasonUnsupportedPayload)
 	}
-	if envelope.ColumnType != ColumnTypeInt64 || columnDesc.Type != ColumnTypeInt64 || column.Definition.Type != ColumnTypeInt64 || envelope.PayloadKind != ColumnPruningPayloadInt64ValueRowsV1 {
-		return fmt.Errorf("typedcolumn: column pruning %s int64 payload cannot apply to type envelope=%s descriptor=%s definition=%s payload=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, envelope.PayloadKind, ColumnPruningReasonUnsupportedPayload)
+	if !integerStatsPayloadColumnType(envelope.ColumnType) || !integerStatsPayloadColumnType(columnDesc.Type) || !integerStatsPayloadColumnType(column.Definition.Type) || envelope.PayloadKind != ColumnPruningPayloadInt64ValueRowsV1 {
+		return fmt.Errorf("typedcolumn: column pruning %s int64-compatible payload cannot apply to type envelope=%s descriptor=%s definition=%s payload=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, envelope.PayloadKind, ColumnPruningReasonUnsupportedPayload)
+	}
+	if envelope.ColumnType != columnDesc.Type || envelope.ColumnType != column.Definition.Type {
+		return fmt.Errorf("typedcolumn: column pruning %s type identity envelope=%s descriptor=%s definition=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, ColumnPruningReasonIdentityMismatch)
 	}
 	if envelope.Encoding != column.Definition.Encoding || envelope.Compression != column.Definition.Compression {
 		return fmt.Errorf("typedcolumn: column pruning %s encoding/compression=%s/%s want %s/%s: %s", envelope.ColumnName, envelope.Encoding, envelope.Compression, column.Definition.Encoding, column.Definition.Compression, ColumnPruningReasonIdentityMismatch)

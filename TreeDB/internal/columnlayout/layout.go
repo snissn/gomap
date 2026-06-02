@@ -335,6 +335,16 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		} else {
 			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 8, AlignmentBytes: 8, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 		}
+	case typedcolumn.EncodingRawInt8,
+		typedcolumn.EncodingRawUint8,
+		typedcolumn.EncodingRawInt16,
+		typedcolumn.EncodingRawUint16,
+		typedcolumn.EncodingRawInt32,
+		typedcolumn.EncodingRawUint32,
+		typedcolumn.EncodingRawUint64,
+		typedcolumn.EncodingRawFloat16,
+		typedcolumn.EncodingRawBFloat16:
+		applyPrimitiveScalarLayout(&caps)
 	case typedcolumn.EncodingRawFloat32Vector:
 		caps.Layout.Kind = LayoutFixedWidth
 		caps.Layout.FixedWidth = true
@@ -408,6 +418,103 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonUnsupportedEncoding, ValidationBoundary: "prepare"}
 	}
 	return caps
+}
+
+func applyPrimitiveScalarLayout(caps *Capabilities) {
+	if caps == nil {
+		return
+	}
+	desc := caps.Descriptor
+	width, ok := primitiveScalarLayoutWidth(desc.Physical, desc.Encoding)
+	if !ok {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonEncodingPhysicalMismatch, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
+	if desc.FixedWidthElements != 0 {
+		caps.Layout = LayoutProperties{}
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonEncodingPhysicalMismatch, Endian: EndianLittle, WidthBytes: width, AlignmentBytes: width, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
+	caps.Layout.Kind = LayoutFixedWidth
+	caps.Layout.FixedWidth = true
+	caps.Layout.ElementWidthBytes = width
+	caps.Layout.ElementsPerRow = 1
+	caps.Layout.Endian = EndianLittle
+	caps.Layout.AlignmentBytes = width
+	caps.Layout.LengthMultipleBytes = width
+	if primitiveScalarLogicalPhysicalMatch(desc.Logical, desc.Physical, desc.Encoding) {
+		caps.DirectView = directView(desc, width, EndianLittle, width)
+	} else {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: width, AlignmentBytes: width, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+	}
+	if primitiveIntegerStatsCompatible(desc.Logical, desc.Physical, desc.Encoding) && desc.Compression == typedcolumn.CompressionNone && !caps.Wrappers.Nullable {
+		caps.Stats.MinMax = true
+		caps.Stats.Sum = true
+		caps.Pruning.OrderedMinMax = true
+		caps.Pruning.ValueRows = true
+	}
+}
+
+func primitiveScalarLayoutWidth(physical typedcolumn.ColumnType, encoding typedcolumn.Encoding) (int, bool) {
+	switch physical {
+	case typedcolumn.ColumnTypeInt8:
+		return 1, encoding == typedcolumn.EncodingRawInt8
+	case typedcolumn.ColumnTypeUint8:
+		return 1, encoding == typedcolumn.EncodingRawUint8
+	case typedcolumn.ColumnTypeInt16:
+		return 2, encoding == typedcolumn.EncodingRawInt16
+	case typedcolumn.ColumnTypeUint16:
+		return 2, encoding == typedcolumn.EncodingRawUint16
+	case typedcolumn.ColumnTypeInt32:
+		return 4, encoding == typedcolumn.EncodingRawInt32
+	case typedcolumn.ColumnTypeUint32:
+		return 4, encoding == typedcolumn.EncodingRawUint32
+	case typedcolumn.ColumnTypeUint64:
+		return 8, encoding == typedcolumn.EncodingRawUint64
+	case typedcolumn.ColumnTypeFloat16:
+		return 2, encoding == typedcolumn.EncodingRawFloat16
+	case typedcolumn.ColumnTypeBFloat16:
+		return 2, encoding == typedcolumn.EncodingRawBFloat16
+	default:
+		return 0, false
+	}
+}
+
+func primitiveScalarLogicalPhysicalMatch(logical columnsemantics.LogicalType, physical typedcolumn.ColumnType, encoding typedcolumn.Encoding) bool {
+	switch logical {
+	case columnsemantics.LogicalInt8:
+		return physical == typedcolumn.ColumnTypeInt8 && encoding == typedcolumn.EncodingRawInt8
+	case columnsemantics.LogicalUint8:
+		return physical == typedcolumn.ColumnTypeUint8 && encoding == typedcolumn.EncodingRawUint8
+	case columnsemantics.LogicalInt16:
+		return physical == typedcolumn.ColumnTypeInt16 && encoding == typedcolumn.EncodingRawInt16
+	case columnsemantics.LogicalUint16:
+		return physical == typedcolumn.ColumnTypeUint16 && encoding == typedcolumn.EncodingRawUint16
+	case columnsemantics.LogicalInt32:
+		return physical == typedcolumn.ColumnTypeInt32 && encoding == typedcolumn.EncodingRawInt32
+	case columnsemantics.LogicalUint32:
+		return physical == typedcolumn.ColumnTypeUint32 && encoding == typedcolumn.EncodingRawUint32
+	case columnsemantics.LogicalUint64:
+		return physical == typedcolumn.ColumnTypeUint64 && encoding == typedcolumn.EncodingRawUint64
+	case columnsemantics.LogicalFloat16:
+		return physical == typedcolumn.ColumnTypeFloat16 && encoding == typedcolumn.EncodingRawFloat16
+	case columnsemantics.LogicalBFloat16:
+		return physical == typedcolumn.ColumnTypeBFloat16 && encoding == typedcolumn.EncodingRawBFloat16
+	default:
+		return false
+	}
+}
+
+func primitiveIntegerStatsCompatible(logical columnsemantics.LogicalType, physical typedcolumn.ColumnType, encoding typedcolumn.Encoding) bool {
+	if !primitiveScalarLogicalPhysicalMatch(logical, physical, encoding) {
+		return false
+	}
+	switch logical {
+	case columnsemantics.LogicalInt8, columnsemantics.LogicalUint8, columnsemantics.LogicalInt16, columnsemantics.LogicalUint16, columnsemantics.LogicalInt32, columnsemantics.LogicalUint32:
+		return true
+	default:
+		return false
+	}
 }
 
 func rawInt64NonInt64DirectViewReason(desc Descriptor) ReasonCode {
@@ -742,6 +849,11 @@ func (c Capabilities) supportsDirectScalarValueCarrier() Capability {
 			return c.Supports(OpDirectView)
 		}
 		return Unsupported(op, ReasonFloatBitPatternNotNumeric, "float bit-pattern storage is not a direct scalar value carrier")
+	case columnsemantics.LogicalInt8, columnsemantics.LogicalUint8, columnsemantics.LogicalInt16, columnsemantics.LogicalUint16, columnsemantics.LogicalInt32, columnsemantics.LogicalUint32, columnsemantics.LogicalUint64, columnsemantics.LogicalFloat16, columnsemantics.LogicalBFloat16:
+		if primitiveScalarLogicalPhysicalMatch(c.Descriptor.Logical, c.Descriptor.Physical, c.Descriptor.Encoding) {
+			return c.Supports(OpDirectView)
+		}
+		return Unsupported(op, ReasonLogicalPhysicalMismatch, "primitive scalar logical type does not match physical encoding")
 	case columnsemantics.LogicalFloat32Vector:
 		return Unsupported(op, ReasonVectorScalarUnsupported, "vector layouts reject scalar direct-value carriers")
 	case columnsemantics.LogicalUint32List:
@@ -774,6 +886,9 @@ func (c Capabilities) validateDescriptor(op Operation) Capability {
 	if reason, ok := validatePhysicalEncoding(desc.Physical, desc.Encoding); !ok {
 		return Unsupported(op, reason, fmt.Sprintf("physical_type=%s encoding=%s", desc.Physical, desc.Encoding))
 	}
+	if _, primitive := primitiveScalarLayoutWidth(desc.Physical, desc.Encoding); primitive && desc.FixedWidthElements != 0 {
+		return Unsupported(op, ReasonEncodingPhysicalMismatch, fmt.Sprintf("primitive scalar layout requires fixed_width_elements=0 got %d", desc.FixedWidthElements))
+	}
 	if desc.Nullable && desc.Encoding != typedcolumn.EncodingNullableInt64 {
 		return Unsupported(op, ReasonEncodingPhysicalMismatch, fmt.Sprintf("nullable layout requires encoding=%s got=%s", typedcolumn.EncodingNullableInt64, desc.Encoding))
 	}
@@ -801,6 +916,24 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32
 	case typedcolumn.ColumnTypeFloat64:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat64
+	case typedcolumn.ColumnTypeInt8:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawInt8
+	case typedcolumn.ColumnTypeUint8:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint8
+	case typedcolumn.ColumnTypeInt16:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawInt16
+	case typedcolumn.ColumnTypeUint16:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint16
+	case typedcolumn.ColumnTypeInt32:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawInt32
+	case typedcolumn.ColumnTypeUint32:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32
+	case typedcolumn.ColumnTypeUint64:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint64
+	case typedcolumn.ColumnTypeFloat16:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat16
+	case typedcolumn.ColumnTypeBFloat16:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawBFloat16
 	case typedcolumn.ColumnTypeFloat32Vector:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
 	case typedcolumn.ColumnTypeUint32List:

@@ -47,6 +47,15 @@ drift from the runtime vocabulary strings.
 | `ColumnStoreValueFloat32` | `float32` | Legacy public declared-type compatibility name. |
 | `ColumnStoreValueDouble` | `double` | Legacy public declared-type compatibility name; docs may also say `float64`. |
 | `ColumnStoreValueString` | `string` | Legacy public declared-type compatibility name. |
+| `ColumnStoreValueInt8` | `int8` | Quantization-ready primitive scalar compatibility name. |
+| `ColumnStoreValueUint8` | `uint8` | Quantization-ready primitive scalar compatibility name. |
+| `ColumnStoreValueInt16` | `int16` | Quantization-ready primitive scalar compatibility name. |
+| `ColumnStoreValueUint16` | `uint16` | Quantization-ready primitive scalar compatibility name. |
+| `ColumnStoreValueInt32` | `int32` | Quantization-ready primitive scalar compatibility name. |
+| `ColumnStoreValueUint32` | `uint32` | Quantization-ready primitive scalar compatibility name. |
+| `ColumnStoreValueUint64` | `uint64` | Quantization-ready primitive scalar compatibility name. |
+| `ColumnStoreValueFloat16` | `float16` | Storage-only raw IEEE binary16 bits compatibility name. |
+| `ColumnStoreValueBFloat16` | `bfloat16` | Storage-only raw bfloat16 bits compatibility name. |
 | `ColumnStoreValueFloat32Vector` | `float32_vector` | Legacy public declared-type compatibility name. |
 | `ColumnStoreValueUint32List` | `uint32_list` | Generic integer-list declared-type compatibility name. |
 | `ColumnStoreValueBytes` | `bytes` | Generic opaque byte-payload declared-type compatibility name. |
@@ -101,10 +110,11 @@ declared columns with no explicit typed-storage owner resolve to
 `typed_row_asset`. `ColumnRetainedPayloadFull` is compatibility duplication in
 `document_payload`; it does not make the retained document a second
 authoritative owner for declared typed fields. `typed_column_part` ownership may
-be represented in metadata; after #1755/#1756, scalar
-bool/int64/float32/double/string and fixed-dimension `float32_vector` owners have
-opt-in durable publication and reconstruction, while unsupported value types
-still fail closed.
+be represented in metadata; after #1755/#1756 and the #1929 primitive scalar
+admission, scalar bool/int64/float32/double/string, non-null primitive
+int8/uint8/int16/uint16/int32/uint32/uint64/float16/bfloat16 owners, and
+fixed-dimension `float32_vector` owners have opt-in durable publication and
+reconstruction, while unsupported value types still fail closed.
 
 The resolver is pure metadata only: it must not perform filesystem IO, mmap,
 section decode, DB mutation, asset open, publication, query planning, or durable

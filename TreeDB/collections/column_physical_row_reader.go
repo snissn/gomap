@@ -610,6 +610,14 @@ func skipColumnPhysicalValue(cur *manifestCursor, col ColumnStoreColumn) error {
 		_ = cur.u64()
 	case ColumnStoreValueString:
 		_ = cur.stringBytes()
+	case ColumnStoreValueInt8, ColumnStoreValueUint8:
+		_ = cur.u8()
+	case ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueFloat16, ColumnStoreValueBFloat16:
+		_ = cur.u16()
+	case ColumnStoreValueInt32, ColumnStoreValueUint32:
+		_ = cur.u32()
+	case ColumnStoreValueUint64:
+		_ = cur.u64()
 	case ColumnStoreValueFloat32Vector:
 		n := cur.skipUint32Slice()
 		if cur.err != nil {
@@ -698,6 +706,24 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 		value.Double = math.Float64frombits(cur.u64())
 	case ColumnStoreValueString:
 		value.StringBytes = cur.stringBytes()
+	case ColumnStoreValueInt8:
+		value.Int8 = int8(cur.u8())
+	case ColumnStoreValueUint8:
+		value.Uint8 = cur.u8()
+	case ColumnStoreValueInt16:
+		value.Int16 = int16(cur.u16())
+	case ColumnStoreValueUint16:
+		value.Uint16 = cur.u16()
+	case ColumnStoreValueInt32:
+		value.Int32 = int32(cur.u32())
+	case ColumnStoreValueUint32:
+		value.Uint32 = cur.u32()
+	case ColumnStoreValueUint64:
+		value.Uint64 = cur.u64()
+	case ColumnStoreValueFloat16:
+		value.Float16 = cur.u16()
+	case ColumnStoreValueBFloat16:
+		value.BFloat16 = cur.u16()
 	case ColumnStoreValueFloat32Vector:
 		start := len(scratch.Float32Values)
 		var err error

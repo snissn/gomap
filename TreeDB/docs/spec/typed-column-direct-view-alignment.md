@@ -26,6 +26,9 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueInt64` | yes | raw non-null uncompressed typed-column payload, 8-byte little-endian `int64`. |
 | `ColumnStoreValueFloat32` | yes, native scalar layout | 4-byte little-endian IEEE-754 bits. The current raw-`int64` float bit carrier is compatibility/fallback-only and must not certify native scalar float direct views. |
 | `ColumnStoreValueDouble` | yes, native scalar layout | 8-byte little-endian IEEE-754 bits. The current raw-`int64` float bit carrier is compatibility/fallback-only and must not certify native scalar float direct views. |
+| `ColumnStoreValueInt8`/`Uint8`/`Int16`/`Uint16`/`Int32`/`Uint32` | yes | non-null uncompressed matching raw primitive scalar payloads; multi-byte values are little-endian and int64-compatible stats/pruning may be published. |
+| `ColumnStoreValueUint64` | yes, payload only | non-null uncompressed little-endian `uint64` payloads; direct-view payload certification is active, but int64-compatible stats/pruning are not. |
+| `ColumnStoreValueFloat16`/`BFloat16` | yes, storage-only bits | non-null uncompressed raw little-endian `uint16` bit payloads. Bits are preserved exactly; numeric float fast paths are not implied. |
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
 | `ColumnStoreValueString` | no | string values and dictionary string tables are not string direct-view payloads. Derived dictionary-code sidecar row-code payloads are a separate `uint32` sidecar direct-view format. |
@@ -91,7 +94,7 @@ valid.
 
 | Storage owner/path | Consumer path | Current classification |
 | --- | --- | --- |
-| `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
+| `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, #1929 primitive scalars, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
 | `typed_column_part` | `column_graph` typed-column vector source | `float32_vector` is the active candidate. Other value types fallback or are inapplicable. |
 | `typed_column_part` | vector-index state `uint32_list` consumer | `raw_uint32_offsets_list` is active for HNSW adjacency state with safe writer/fallback-reader plus certified primitive direct-view support. The `adjacency_list` selector remains compatibility-only. |
 | `typed_column_part` | legacy column_graph adjacency sources or legacy dense adjacency | Graph-specific `raw_uint32_offsets_list` source assets may be validated/reopened for old pre-alpha records and explicit compatibility fixtures, but #1989 quarantines them and new graph builds must not publish them. Row-asset adjacency remains fallback compatibility. Legacy fixed-degree `raw_uint32_dense` remains fallback/deferred compatibility. |
@@ -105,6 +108,9 @@ Conformance fixtures must pin little-endian bytes for:
 - native scalar `float32` bits, including NaN payloads, non-canonical NaNs,
   infinities, min/max finite values, and `+0` versus `-0`;
 - native scalar `double`/`float64` bits with the same raw-bit edge cases;
+- #1929 primitive integer scalars (`int8`, `uint8`, `int16`, `uint16`,
+  `int32`, `uint32`, `uint64`) and storage-only `float16`/`bfloat16` raw-bit
+  payloads;
 - dense row-major `float32_vector` payloads.
 
 Wrong-endian fixtures must fail closed or fallback. Raw-`int64` float carriers

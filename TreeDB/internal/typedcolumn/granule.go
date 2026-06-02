@@ -35,6 +35,17 @@ const (
 	// EncodingRawBytesOffsets is the v1 non-null opaque bytes primitive:
 	// little-endian uint64 offsets plus exact concatenated byte payloads.
 	EncodingRawBytesOffsets
+	// Raw fixed-width scalar primitives used by quantized side arrays. Multi-byte
+	// values are little-endian; float16/bfloat16 are raw uint16 bit payloads.
+	EncodingRawInt8
+	EncodingRawUint8
+	EncodingRawInt16
+	EncodingRawUint16
+	EncodingRawInt32
+	EncodingRawUint32
+	EncodingRawUint64
+	EncodingRawFloat16
+	EncodingRawBFloat16
 )
 
 func (e Encoding) String() string {
@@ -63,6 +74,24 @@ func (e Encoding) String() string {
 		return "raw_uint32_offsets_list"
 	case EncodingRawBytesOffsets:
 		return "raw_bytes_offsets"
+	case EncodingRawInt8:
+		return "raw_int8"
+	case EncodingRawUint8:
+		return "raw_uint8"
+	case EncodingRawInt16:
+		return "raw_int16"
+	case EncodingRawUint16:
+		return "raw_uint16"
+	case EncodingRawInt32:
+		return "raw_int32"
+	case EncodingRawUint32:
+		return "raw_uint32"
+	case EncodingRawUint64:
+		return "raw_uint64"
+	case EncodingRawFloat16:
+		return "raw_float16"
+	case EncodingRawBFloat16:
+		return "raw_bfloat16"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}
@@ -198,6 +227,15 @@ type GranuleReader struct {
 	nulls     []bool
 	defaults  []bool
 	codes     []uint32
+	int8s     []int8
+	uint8s    []uint8
+	int16s    []int16
+	uint16s   []uint16
+	int32s    []int32
+	uint32s   []uint32
+	uint64s   []uint64
+	float16s  []uint16
+	bfloat16s []uint16
 	float32s  []float32
 	float64s  []float64
 	offsets64 []uint64
@@ -915,6 +953,14 @@ func maxGranuleRawPayloadBytes(encoding Encoding, rows int) int {
 	case EncodingRawFloat32:
 		return rows * 4
 	case EncodingRawFloat64:
+		return rows * 8
+	case EncodingRawInt8, EncodingRawUint8:
+		return rows
+	case EncodingRawInt16, EncodingRawUint16, EncodingRawFloat16, EncodingRawBFloat16:
+		return rows * 2
+	case EncodingRawInt32, EncodingRawUint32:
+		return rows * 4
+	case EncodingRawUint64:
 		return rows * 8
 	default:
 		return -1

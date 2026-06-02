@@ -88,6 +88,36 @@ func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
 		t.Fatalf("bool plan=%+v want supported bool predicate plan", boolPlan)
 	}
 
+	primitiveCases := []struct {
+		valueType ColumnStoreValueType
+		logical   columnsemantics.LogicalType
+		physical  typedcolumn.ColumnType
+	}{
+		{ColumnStoreValueInt8, columnsemantics.LogicalInt8, typedcolumn.ColumnTypeInt8},
+		{ColumnStoreValueUint8, columnsemantics.LogicalUint8, typedcolumn.ColumnTypeUint8},
+		{ColumnStoreValueInt16, columnsemantics.LogicalInt16, typedcolumn.ColumnTypeInt16},
+		{ColumnStoreValueUint16, columnsemantics.LogicalUint16, typedcolumn.ColumnTypeUint16},
+		{ColumnStoreValueInt32, columnsemantics.LogicalInt32, typedcolumn.ColumnTypeInt32},
+		{ColumnStoreValueUint32, columnsemantics.LogicalUint32, typedcolumn.ColumnTypeUint32},
+		{ColumnStoreValueUint64, columnsemantics.LogicalUint64, typedcolumn.ColumnTypeUint64},
+		{ColumnStoreValueFloat16, columnsemantics.LogicalFloat16, typedcolumn.ColumnTypeFloat16},
+		{ColumnStoreValueBFloat16, columnsemantics.LogicalBFloat16, typedcolumn.ColumnTypeBFloat16},
+	}
+	for _, tc := range primitiveCases {
+		primitivePlan, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
+			Field:     TypedStorageField{Name: "v", Path: "v", Owner: TypedStorageOwnerColumnPart, ValueType: tc.valueType},
+			Role:      typedcolumn.ColumnRoleProjection,
+			Operation: columnsemantics.OpDirectScalarValueCarrier,
+		}, span)
+		if err != nil {
+			t.Fatalf("describe primitive %s direct scalar: %v", tc.valueType, err)
+		}
+		if !primitivePlan.Capability.Supported() || !primitivePlan.LayoutCapability.Supported() || primitivePlan.Logical != tc.logical || primitivePlan.Definition.Type != tc.physical {
+			t.Fatalf("primitive %s plan=%+v want supported prepared direct scalar plan", tc.valueType, primitivePlan)
+		}
+		assertPreparedPlanDependency(t, primitivePlan, typedcolumn.SectionDependencyValues)
+	}
+
 	vectorPlan, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
 		Field:                TypedStorageField{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 4},
 		Role:                 typedcolumn.ColumnRoleProjection,

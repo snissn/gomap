@@ -56,11 +56,21 @@ var (
 type ColumnStoreValueType string
 
 const (
-	ColumnStoreValueBool          ColumnStoreValueType = "bool"
-	ColumnStoreValueInt64         ColumnStoreValueType = "int64"
-	ColumnStoreValueFloat32       ColumnStoreValueType = "float32"
-	ColumnStoreValueDouble        ColumnStoreValueType = "double"
-	ColumnStoreValueString        ColumnStoreValueType = "string"
+	ColumnStoreValueBool    ColumnStoreValueType = "bool"
+	ColumnStoreValueInt64   ColumnStoreValueType = "int64"
+	ColumnStoreValueFloat32 ColumnStoreValueType = "float32"
+	ColumnStoreValueDouble  ColumnStoreValueType = "double"
+	ColumnStoreValueString  ColumnStoreValueType = "string"
+	ColumnStoreValueInt8    ColumnStoreValueType = "int8"
+	ColumnStoreValueUint8   ColumnStoreValueType = "uint8"
+	ColumnStoreValueInt16   ColumnStoreValueType = "int16"
+	ColumnStoreValueUint16  ColumnStoreValueType = "uint16"
+	ColumnStoreValueInt32   ColumnStoreValueType = "int32"
+	ColumnStoreValueUint32  ColumnStoreValueType = "uint32"
+	ColumnStoreValueUint64  ColumnStoreValueType = "uint64"
+	// Float16 and BFloat16 are storage-only raw 16-bit bit payloads.
+	ColumnStoreValueFloat16       ColumnStoreValueType = "float16"
+	ColumnStoreValueBFloat16      ColumnStoreValueType = "bfloat16"
 	ColumnStoreValueFloat32Vector ColumnStoreValueType = "float32_vector"
 	ColumnStoreValueUint32List    ColumnStoreValueType = "uint32_list"
 	ColumnStoreValueBytes         ColumnStoreValueType = "bytes"
@@ -501,6 +511,9 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 				return fmt.Errorf("collections: invalid column %q fixed_width_encoding: nullable %s raw fixed-width encoding is unsupported", col.Name, valueType)
 			}
 		}
+		if columnStoreValueTypeIsPrimitiveScalar(valueType) && owner == TypedStorageOwnerColumnPart && col.Nullable {
+			return fmt.Errorf("collections: invalid column %q nullable %s typed_column_part is unsupported", col.Name, valueType)
+		}
 		if valueType == ColumnStoreValueFloat32Vector {
 			if col.VectorDims <= 0 {
 				return fmt.Errorf("collections: invalid column %q vector_dims: must be positive", col.Name)
@@ -739,7 +752,9 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 
 func normalizeColumnStoreValueType(valueType ColumnStoreValueType) (ColumnStoreValueType, error) {
 	switch valueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes, ColumnStoreValueAdjacencyList:
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString,
+		ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16,
+		ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes, ColumnStoreValueAdjacencyList:
 		return valueType, nil
 	case "":
 		return "", errors.New("value_type is required")
@@ -799,7 +814,7 @@ func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueTy
 	case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
 		return true
 	default:
-		return false
+		return columnStoreValueTypeIsPrimitiveScalar(valueType)
 	}
 }
 
@@ -808,7 +823,7 @@ func columnStoreValueTypeHasScalarFixedWidthPayload(valueType ColumnStoreValueTy
 	case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble:
 		return true
 	default:
-		return false
+		return columnStoreValueTypeIsPrimitiveScalar(valueType)
 	}
 }
 
