@@ -96,6 +96,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 		}
 		vlogRefDelta = nil
 	}
+	touchedValueLogSegments := positiveValueLogRefDeltaFileIDs(vlogRefDelta, nil)
 
 	db.mu.Lock()
 	curUserRoot := db.meta.UserRootPageID
@@ -105,7 +106,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 		return 0, errors.New("concurrent modification detected during system root publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, touchedValueLogSegments, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, err
 	}
 	vlogRefDelta = nil
