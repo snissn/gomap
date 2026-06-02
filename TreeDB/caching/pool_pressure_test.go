@@ -576,6 +576,42 @@ func TestSampleProcessMemoryPeaksPublishesFreshPressureSnapshot(t *testing.T) {
 	}
 }
 
+func TestPoolPressureSamplerPublishesInitialPressureSnapshot(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var readMemStatsCalls atomic.Uint64
+	poolPressureReadMemStats = func(ms *runtime.MemStats) {
+		readMemStatsCalls.Add(1)
+		ms.HeapInuse = 9 << 30
+	}
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	release := retainPoolPressureSampler()
+	t.Cleanup(release)
+
+	if got := currentPoolPressureLevelFast(); got != poolPressureCritical {
+		t.Fatalf("fast pressure level=%v want critical after initial sampler retain", got)
+	}
+	release()
+	if got := readMemStatsCalls.Load(); got == 0 {
+		t.Fatalf("initial sampler did not read memstats")
+	}
+}
+
 func TestPoolPressureSamplerPublishesFreshPressureSnapshot(t *testing.T) {
 	poolPressureTestMu.Lock()
 	defer poolPressureTestMu.Unlock()

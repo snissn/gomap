@@ -723,6 +723,7 @@ func runPoolPressureSampler(stop <-chan struct{}, done chan<- struct{}) {
 func retainPoolPressureSampler() func() {
 	poolPressureSamplerMu.Lock()
 	if poolPressureSamplerRefs == 0 {
+		_ = sampleAndPublishPoolPressureSnapshot()
 		stop := make(chan struct{})
 		done := make(chan struct{})
 		poolPressureSamplerStop = stop
