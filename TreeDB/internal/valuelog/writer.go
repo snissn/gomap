@@ -1916,13 +1916,16 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 		return writeRaw(false, 0)
 	}
 
-	if cap(w.rawScratch) < rawPayloadBytes {
-		w.rawScratch = make([]byte, rawPayloadBytes)
-	}
-	payload := w.rawScratch[:rawPayloadBytes]
-	off := 0
-	for i := 0; i < k; i++ {
-		off += copy(payload[off:], records[i].Value)
+	payload := records[0].Value
+	if k > 1 {
+		if cap(w.rawScratch) < rawPayloadBytes {
+			w.rawScratch = make([]byte, rawPayloadBytes)
+		}
+		payload = w.rawScratch[:rawPayloadBytes]
+		off := 0
+		for i := 0; i < k; i++ {
+			off += copy(payload[off:], records[i].Value)
+		}
 	}
 
 	encodeStart := w.sampleEncodeStart()

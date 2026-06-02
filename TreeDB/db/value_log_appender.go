@@ -10,6 +10,9 @@ var ErrValueLogAppenderUnavailable = errors.New("value-log appender unavailable"
 
 // ValueLogAppender appends user values to the persistent value log and returns
 // stable ValuePtr references that may be stored by native-root callers.
+//
+// AppendValues must finish reading each values element before returning; callers
+// may reuse or release the backing buffers once the call completes.
 type ValueLogAppender interface {
 	AppendValues(values [][]byte) ([]page.ValuePtr, error)
 	Flush() error

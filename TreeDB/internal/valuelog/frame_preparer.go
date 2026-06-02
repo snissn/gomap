@@ -326,13 +326,16 @@ func (p *FramePreparer) prepareBlockFrameBody(dst []byte, records []Record, offs
 		p.skipRemain--
 		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, false, 0)
 	}
-	if cap(p.rawScratch) < rawPayloadBytes {
-		p.rawScratch = make([]byte, rawPayloadBytes)
-	}
-	payload := p.rawScratch[:rawPayloadBytes]
-	off := 0
-	for i := range records {
-		off += copy(payload[off:], records[i].Value)
+	payload := records[0].Value
+	if len(records) > 1 {
+		if cap(p.rawScratch) < rawPayloadBytes {
+			p.rawScratch = make([]byte, rawPayloadBytes)
+		}
+		payload = p.rawScratch[:rawPayloadBytes]
+		off := 0
+		for i := range records {
+			off += copy(payload[off:], records[i].Value)
+		}
 	}
 	encodeStart := p.sampleEncodeStart()
 	encoded, encodeErr := encodeBlockPayload(p.blockCodec, payload, p.blockScratch[:0])
