@@ -166,8 +166,51 @@ func CollectMaintenanceRootIDsForSystemRootWithContext(ctx context.Context, p *p
 
 func maintenanceRootIDs(roots []maintenanceRoot) []uint64 {
 	out := make([]uint64, 0, len(roots))
+	for _, root := range dedupeMaintenanceRootsByRootID(roots) {
+		if root.rootID != 0 {
+			out = append(out, root.rootID)
+		}
+	}
+	return out
+}
+
+func dedupeMaintenanceRootsByRootID(roots []maintenanceRoot) []maintenanceRoot {
+	if len(roots) <= 1 {
+		if len(roots) == 1 && roots[0].rootID == 0 {
+			return roots[:0]
+		}
+		return roots
+	}
+	if len(roots) <= 8 {
+		out := roots[:0]
+		for _, root := range roots {
+			if root.rootID == 0 {
+				continue
+			}
+			seen := false
+			for _, existing := range out {
+				if existing.rootID == root.rootID {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				out = append(out, root)
+			}
+		}
+		return out
+	}
+	seen := make(map[uint64]struct{}, len(roots))
+	out := roots[:0]
 	for _, root := range roots {
-		out = append(out, root.rootID)
+		if root.rootID == 0 {
+			continue
+		}
+		if _, ok := seen[root.rootID]; ok {
+			continue
+		}
+		seen[root.rootID] = struct{}{}
+		out = append(out, root)
 	}
 	return out
 }

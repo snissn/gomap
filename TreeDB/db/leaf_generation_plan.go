@@ -810,22 +810,3 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 	}
 	return stats, nil
 }
-
-func dedupeMaintenanceRootsByRootID(roots []maintenanceRoot) []maintenanceRoot {
-	if len(roots) <= 1 {
-		return roots
-	}
-	seen := make(map[uint64]struct{}, len(roots))
-	out := roots[:0]
-	for _, root := range roots {
-		if root.rootID == 0 {
-			continue
-		}
-		if _, ok := seen[root.rootID]; ok {
-			continue
-		}
-		seen[root.rootID] = struct{}{}
-		out = append(out, root)
-	}
-	return out
-}

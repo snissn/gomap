@@ -382,6 +382,9 @@ func (db *DB) registerLeafPageLogSegmentsForPublish() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if registered && db.isLeafGenerationSegmentPath(path) {
+		db.queueLeafGenerationWritableFileID(fileID)
+	}
 	markLeafPageLogSegmentsRegistered(db.leafPageLog, createdSegments)
 	return registered, nil
 }

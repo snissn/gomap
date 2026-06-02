@@ -847,6 +847,61 @@ func TestRegisterLeafPageLogSegmentsForPublishRegistersRewriteSegments(t *testin
 	}
 }
 
+func TestRegisterLeafPageLogSegmentsForPublishQueuesCurrentLeafGenerationSegment(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	path, fileID := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 9)
+	d.SetLeafPageLog(&manifestTestLeafPageLog{path: path, fileID: fileID})
+	if d.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("segment %d was registered before publish helper", fileID)
+	}
+
+	registered, err := d.registerLeafPageLogSegmentsForPublish()
+	if err != nil {
+		t.Fatalf("registerLeafPageLogSegmentsForPublish: %v", err)
+	}
+	if !registered {
+		t.Fatal("current leaf segment was not registered")
+	}
+	if !d.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("segment %d was not registered", fileID)
+	}
+
+	rawFileID, ok := rawLeafGenerationFileID(fileID)
+	if !ok {
+		t.Fatalf("raw leaf generation file id missing for segment %d", fileID)
+	}
+	d.leafGenerationPendingMu.Lock()
+	_, pending := d.leafGenerationPendingSet[rawFileID]
+	pendingCommitSeq := d.leafGenerationPendingCommitSeq[rawFileID]
+	d.leafGenerationPendingMu.Unlock()
+	if !pending {
+		t.Fatalf("raw leaf generation file id %d was not queued pending", rawFileID)
+	}
+	if pendingCommitSeq != 0 {
+		t.Fatalf("pending commitSeq=%d want 0 before publish commit succeeds", pendingCommitSeq)
+	}
+	staged, changed, err := d.stagedLeafGenerationManifestWithPending(d.leafGenerationManifest, 0, 222)
+	if err != nil {
+		t.Fatalf("stagedLeafGenerationManifestWithPending: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected staged manifest change")
+	}
+	current := staged.Generations[staged.currentGenerationIndex()]
+	if got, want := current.FileIDs, []uint32{rawFileID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("staged current FileIDs=%v want %v", got, want)
+	}
+}
+
 func TestCompactStorageHoldsMaintenanceLockAcrossPhases(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})

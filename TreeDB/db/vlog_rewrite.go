@@ -558,10 +558,7 @@ func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression
 	if len(maintenanceRoots) == 0 {
 		return nil, nil
 	}
-	roots := make([]uint64, 0, len(maintenanceRoots))
-	for _, root := range maintenanceRoots {
-		roots = append(roots, root.rootID)
-	}
+	roots := maintenanceRootIDs(maintenanceRoots)
 	targetBytes := rewriteLeafDictTrainBytes(cfg)
 	minRecords := rewriteLeafDictMinRecords(cfg)
 	if targetBytes <= 0 || minRecords <= 0 {
@@ -1159,6 +1156,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 		if err != nil {
 			return nil, err
 		}
+		roots = dedupeMaintenanceRootsByRootID(roots)
 		for _, root := range roots {
 			iter := tree.New(snap.idx.pager, &snap.reader, root.rootID).
 				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})

@@ -458,6 +458,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 		_ = snap.Close()
 		return nil, 0, err
 	}
+	roots = dedupeMaintenanceRootsByRootID(roots)
 	for _, root := range roots {
 		iter := scanValueLogRefCountRootIterator(snap, root)
 		if err := collectValueLogRefCounts(ctx, db, iter, counts); err != nil {
