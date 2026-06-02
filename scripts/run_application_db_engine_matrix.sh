@@ -288,7 +288,7 @@ func runRebuild(args []string) {
 
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := append([]byte(nil), iter.Key()...)
-		value := append([]byte(nil), iter.Value()...)
+		value := append([]byte{}, iter.Value()...)
 		if err := batch.Set(key, value); err != nil {
 			fatalErr(fmt.Errorf("batch set: %w", err))
 		}

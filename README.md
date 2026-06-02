@@ -1,174 +1,229 @@
-# gomap (dev): HashDB + TreeDB
+# TreeDB
 
-This repo is a development playground for two storage engines plus benchmarking tools:
+TreeDB is a pre-alpha persistent storage engine built around a copy-on-write
+B+Tree, a persistent value log, and command-WAL recovery. It includes a native
+wire server, a Mongo-compatible gateway, a collection/document layer, secondary
+indexes, and benchmark tooling for comparing TreeDB against MongoDB and other
+engines.
 
-- **Status: pre-alpha.** APIs and on-disk formats may change without backward-compatibility guarantees.
+TreeDB is the main focus of this repository. The repo also contains HashDB, an
+older mmap-backed hash engine used for experiments and comparison; see
+`HashDB/README.md`.
 
-- **HashDB** (`HashDB/`, package `hashdb`): mmap-backed hash index + slab value log.
-- **TreeDB** (`TreeDB/`, package `treedb`): persistent B+Tree with an optional cached write-back layer.
-- **BTreeOnHashDB** (`HashDB/BTreeOnHashDB/`): a B-Tree built on top of HashDB (benchmark/comparison).
-- **Unified Bench** (`cmd/unified_bench/`): runs a consistent workload across engines.
+## Status
+
+TreeDB is pre-alpha:
+
+- APIs and on-disk formats may change without backward-compatibility guarantees.
+- New binaries may intentionally reject old DB directories.
+- Benchmark DB directories should be rebuilt from scratch unless a report says
+  otherwise.
+
+## Benchmark Highlights
+
+These checked-in reports use different workloads, profiles, and caveats. Treat
+each workload as scoped evidence from its linked benchmark, not as one combined
+benchmark suite.
+
+### YCSB Server Workload
+
+External `go-ycsb`, local loopback TCP, `recordcount=100000`,
+`operationcount=10000`, `threadcount=16`, BSON document format, and zero YCSB
+operation errors. Run rows use the median total-throughput repeat from the
+June 2, 2026 report.
+
+| target | profile | load ops/sec | run ops/sec | run avg us | run p99 us |
+| --- | --- | ---: | ---: | ---: | ---: |
+| MongoDB 8 | baseline | 33,255.6 | 26,102.5 | 601.0 | 1,461.0 |
+| TreeDB nativewire | `command_wal_durable` | 77,065.3 | 120,500.7 | 128.0 | 477.0 |
+| TreeDB Mongo gateway | `command_wal_durable` | 57,370.1 | 74,544.7 | 206.0 | 649.0 |
+
+Full report, commands, host context, run repeats, and artifact paths:
+[June 2 YCSB report](docs/benchmarks/ycsb_post_update_stack_2026-06-02.md).
+
+### Indexed Collection Insert Workload
+
+Two secondary indexes, June 2 current-code rerun, `100000` documents, batch
+size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec` is the timed
+insert measurement for the value-log outer-leaf layout; B/doc uses the fully
+compacted storage phase for the same TreeDB layout and SQLite after `VACUUM`.
+
+| engine / format | layout | docs/sec | fully compacted B/doc |
+| --- | --- | ---: | ---: |
+| TreeDB template-v1 | data and index outer leaves in value log | 626,959 | 22.2 |
+| TreeDB JSON | data and index outer leaves in value log | 419,463 | 30.4 |
+| SQLite native columns | WAL normal | 330,797 | 156.7 |
+| SQLite JSON | WAL normal | 302,115 | 231.7 |
+
+Source:
+[June 2 two-index insert rerun](docs/benchmarks/collections_insert_two_index_current_2026-06-02.md).
+
+### Collection Read And Lookup Workload
+
+Two secondary indexes, April 27 collection/SQLite matrix.
+
+| operation | TreeDB template-v1 ops/sec | TreeDB JSON ops/sec | SQLite native columns ops/sec | SQLite JSON ops/sec |
+| --- | ---: | ---: | ---: | ---: |
+| Primary read | 771,803 | 524,843 | 357,398 | 473,634 |
+| Unique secondary lookup | 815,661 | 845,785 | 484,574 | 442,478 |
+| Nonunique secondary lookup | 243,625 | 257,356 | 68,815 | 39,399 |
+
+Source:
+[April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
+
+### `application.db` Offline Density Workload
+
+Offline compacted-size comparison from the June 2 Celestia `application.db`
+rerun.
+
+| engine | compacted size | workflow |
+| --- | ---: | --- |
+| TreeDB | 1.690 GiB | `command_wal_relaxed`, rebuild, `CompactStorageFull`, offline index vacuum |
+| PebbleDB | 2.108 GiB | snappy, 64 KiB blocks, 64 MiB target files, full compact |
+| goleveldb | 2.221 GiB | snappy, 64 KiB blocks, restart interval 256, full compact |
+
+Source:
+[June 2 density rerun](docs/benchmarks/application_db_engine_matrix_2026-06-02.md).
+
+## What TreeDB Provides
+
+- Persistent B+Tree index with copy-on-write root publishing.
+- Persistent value log for large values and leaf/value placement experiments.
+- Command WAL for collection and raw-key redo/recovery.
+- Snapshot-isolated readers and exclusive process-level DB directory locking.
+- Collection/document APIs with BSON, template-v1, secondary indexes, and vector
+  search experiments.
+- Native wire protocol through `cmd/treedb-native-server`.
+- Mongo-compatible gateway through `TreeDB/mongo_gateway`.
+- Benchmark and profiling scripts for YCSB, collections, vector search, and
+  storage-engine comparison.
 
 ## Quickstart
 
-- `make test`
-- `make build`
-- `make unified-bench && ./bin/unified-bench`
+Build the primary TreeDB servers:
 
-More docs:
+```sh
+mkdir -p bin
+go build -o bin/treedb-native-server ./cmd/treedb-native-server
+go build -o bin/treedb-mongo-gateway ./TreeDB/mongo_gateway/server.go
+```
 
-- `docs/README.md`
-- `docs/GETTING_STARTED.md`
-- `docs/TREEDB_CACHED_VS_BACKEND.md`
-- `docs/TREEDB_CONCEPTS.md`
-- `docs/TREEDB_STORAGE_FORMAT.md`
-- `docs/TREEDB_RECOVERY.md`
-- `CONTRIBUTING.md`
+Run the native server:
 
-## Choosing An Engine
+```sh
+./bin/treedb-native-server \
+  -dir /tmp/treedb-native \
+  -profile command_wal_durable \
+  -addr 127.0.0.1:17130
+```
 
-High-level guidance:
+Run the Mongo-compatible gateway:
 
-- **HashDB**: best for high-throughput random reads and perf experiments; use `PutSync`/`DeleteSync`/`ApplyBatchSync` for durable commits (non-`*Sync` writes are best-effort; sharded HashDB uses a write-back cache and can optionally enable a per-shard cache WAL via `OpenWithOptions`).
-- **TreeDB (cached, default)**: best for workloads dominated by many small random writes; WAL on/off is configurable; use `*Sync` for durability.
+```sh
+./bin/treedb-mongo-gateway \
+  -dir /tmp/treedb-mongo \
+  -profile command_wal_durable \
+  -document-format bson \
+  -addr 127.0.0.1:27130
+```
 
-Contracts (durability/locking/concurrency/iteration):
+Minimal Go usage:
 
-- `docs/contracts/README.md`
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+)
+
+func main() {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./my-db")
+	db, err := treedb.Open(opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("key"), []byte("value")); err != nil {
+		log.Fatal(err)
+	}
+	value, err := db.Get([]byte("key"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(value))
+}
+```
+
+## Profiles
+
+The current public TreeDB profile surface is intentionally small:
+
+- `command_wal_durable`: recommended server default; command WAL enabled with
+  durable sync/checksum settings.
+- `command_wal_relaxed`: command WAL enabled with relaxed sync/read-integrity
+  settings for high-throughput ingest and comparative benchmarks.
+- `bench`: explicit no-WAL benchmark-only ceiling.
+
+Legacy/raw profile names are retained only for compatibility and focused
+low-level tests. They should not be used as public server defaults.
+
+More detail: `docs/TREEDB_PROFILES.md` and `docs/TREEDB_WRITE_PATHS.md`.
 
 ## Benchmarking
 
-Primary tool: `cmd/unified_bench/` (side-by-side: HashDB, TreeDB, Badger, LevelDB).
+Current YCSB status and rerun commands:
 
-- Run: `make unified-bench && ./bin/unified-bench`
-- Sweep key counts (markdown output): `./bin/unified-bench -format markdown -keycounts 100000,1000000`
-- Profile + analyze (recommended):
-  - `OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)`
-  - `./bin/unified-bench ... -profile-dir "$OUT"`
-  - `make benchprof && ./bin/benchprof -profiles-dir "$OUT"`
-- Update the README benchmark snapshot: `make bench-readme`
+- `docs/benchmarks/ycsb_mongodb_treedb_current.md`
+- `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md`
+- `scripts/ycsb_compare_mongodb_treedb.sh`
 
-More details:
+Collection and engine benchmark runbooks:
 
+- `docs/benchmarks/collections_insert_two_index_current_2026-06-02.md`
+- `docs/benchmarks/treedb_canonical_benchmark_runbook.md`
+- `docs/benchmarks/collections_canonical_benchmark.md`
 - `cmd/unified_bench/README.md`
 - `cmd/benchprof/README.md`
-- `docs/BENCHMARK_SPEC.md`
 
-<!-- BENCHMARK_START -->
-_Generated by `go run ./cmd/unified_bench -suite readme -format markdown`._
+Profile capture workflow:
 
-_Generated at:_ 2025-12-16T22:33:24Z
-_Environment:_ darwin/arm64 | Go go1.25.5 | CPUs 8 | RAM 16 GiB | CPU Apple M3 | Model Mac15,13
-_Seed:_ 1
+```sh
+OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+./bin/unified-bench ... -profile-dir "$OUT"
+./bin/benchprof -profiles-dir "$OUT"
+```
 
-_Key counts:_ 1…1,000,000 (valsize=128, batchsize=1000, range-queries=200, range-span=100)
+## Documentation
 
-Notes:
-- Results depend on hardware and OS.
-- `HashDB` does not support ordered scans.
+- TreeDB canonical spec: `TreeDB/docs/spec/README.md`
+- TreeDB guides: `TreeDB/docs/guides/README.md`
+- TreeDB concepts: `docs/TREEDB_CONCEPTS.md`
+- TreeDB storage format: `docs/TREEDB_STORAGE_FORMAT.md`
+- TreeDB recovery: `docs/TREEDB_RECOVERY.md`
+- TreeDB collection quickstart: `docs/TREEDB_COLLECTION_QUICKSTART.md`
+- Contracts: `docs/contracts/README.md`
+- Full docs index: `docs/README.md`
 
-### Graphs
+## Repo Contents
 
-![Unified bench: point ops scaling](docs/images/unified_bench_point_ops.png)
-
-![Unified bench: batch + scans scaling](docs/images/unified_bench_batch_scans.png)
-
-### Point Ops (writes + gets)
-
-_Key counts:_ 1, 10, 100, 1,000, 10,000, 100,000, 1,000,000
-
-#### Sequential Write
-
-| keys | HashDB | TreeDB | Badger | LevelDB |
-|---:|---:|---:|---:|---:|
-| 1 | 510,725 | **1,712,329** | 54,918 | 263,713 |
-| 10 | 1,983,340 | **3,528,582** | 178,571 | 326,083 |
-| 100 | 4,780,800 | **5,063,291** | 168,812 | 419,287 |
-| 1,000 | **7,192,123** | 3,799,262 | 248,669 | 463,043 |
-| 10,000 | **11,378,182** | 4,221,413 | 218,227 | 499,895 |
-| 100,000 | **9,683,472** | 2,512,929 | 216,848 | 397,116 |
-| 1,000,000 | 1,424,436 | **2,226,944** | 203,911 | 198,315 |
-
-#### Random Write
-
-| keys | HashDB | TreeDB | Badger | LevelDB |
-|---:|---:|---:|---:|---:|
-| 1 | 1,600,000 | **3,003,003** | 218,198 | 300,030 |
-| 10 | 3,478,261 | **4,444,444** | 223,464 | 446,090 |
-| 100 | **5,429,766** | 4,116,582 | 58,857 | 409,417 |
-| 1,000 | **7,899,893** | 3,092,777 | 183,454 | 445,244 |
-| 10,000 | **7,544,084** | 2,304,435 | 202,036 | 435,469 |
-| 100,000 | **5,498,282** | 1,724,264 | 174,231 | 202,791 |
-| 1,000,000 | **1,286,706** | 1,133,272 | 141,807 | 83,609 |
-
-#### Random Read
-
-| keys | HashDB | TreeDB | Badger | LevelDB |
-|---:|---:|---:|---:|---:|
-| 1 | **2,000,000** | 1,600,000 | 269,687 | 1,333,333 |
-| 10 | **9,606,148** | 6,317,119 | 995,818 | 1,764,602 |
-| 100 | **10,908,694** | 8,571,184 | 822,761 | 3,234,571 |
-| 1,000 | **15,604,763** | 5,578,801 | 705,592 | 2,977,670 |
-| 10,000 | **16,003,201** | 4,215,999 | 1,154,268 | 2,170,453 |
-| 100,000 | 451,616 | **1,765,626** | 663,813 | 277,092 |
-| 1,000,000 | 255,763 | **618,247** | 299,327 | 162,509 |
-
-
-### Batch + Scans
-
-_Key counts:_ 1, 10, 100, 1,000, 10,000, 100,000, 1,000,000
-
-#### Batch Write
-
-| keys | TreeDB | Badger | LevelDB |
-|---:|---:|---:|---:|
-| 1 | **235,294** | 55,685 | 315 |
-| 10 | **1,283,368** | 516,129 | 23,552 |
-| 100 | **3,883,495** | 1,325,223 | 40,679 |
-| 1,000 | **8,645,583** | 2,230,694 | 1,268,633 |
-| 10,000 | 3,455,774 | 2,232,392 | 827,923 |
-| 100,000 | 2,688,922 | 1,991,356 | 485,423 |
-| 1,000,000 | **2,059,133** | 1,530,078 | 700,450 |
-
-#### Full Scan
-
-| keys | TreeDB | Badger | LevelDB |
-|---:|---:|---:|---:|
-| 1 | 44,944 | 81,360 | 158,932 |
-| 10 | 53,214 | 186,047 | 2,329,916 |
-| 100 | 6,946 | 20,000 | **3,438,435** |
-| 1,000 | 49,793 | 163,265 | 20,184,894 |
-| 10,000 | 357,143 | 461,531 | 22,643,646 |
-| 100,000 | 200,988 | 1,331,842 | 6,679,896 |
-| 1,000,000 | 1,503,759 | 940,402 | **2,987,744** |
-
-#### Prefix Scan
-
-| keys | TreeDB | Badger | LevelDB |
-|---:|---:|---:|---:|
-| 1 | 2,313,262 | 360,009 | 1,503,759 |
-| 10 | 4,747,774 | 365,491 | 5,183,542 |
-| 100 | 5,155,835 | 362,455 | 15,768,899 |
-| 1,000 | 661,072 | 53,031 | 19,055,167 |
-| 10,000 | 495,519 | 18,224 | 14,127,553 |
-| 100,000 | 347,390 | 4,681 | 10,851,872 |
-| 1,000,000 | 223,210 | 1,858 | 2,303,174 |
-
-
-### Quick takeaways
-
-- `HashDB`: great for high-throughput point reads/writes; no ordered scan API yet.
-- `TreeDB` (cached): strong default for random-write-heavy workloads; scans include merge overhead.
-- `Badger`/`LevelDB`: useful baselines with different storage tradeoffs.
-<!-- BENCHMARK_END -->
+- `TreeDB/`: TreeDB storage engine, collection layer, native APIs, command WAL,
+  and Mongo gateway.
+- `cmd/treedb-native-server/`: native wire server.
+- `TreeDB/mongo_gateway/`: Mongo-compatible TreeDB gateway.
+- `cmd/unified_bench/`: cross-engine benchmark harness.
+- `cmd/benchprof/`: profile/result summarizer.
+- `HashDB/`: mmap-backed hash-index engine used for experiments and comparison.
 
 ## Testing
 
-- `go test ./...`
-- `cd TreeDB && go test ./...`
-- `cd cmd/unified_bench && go test ./...`
+```sh
+go test ./...
+go test ./TreeDB/... ./cmd/treedb-native-server ./TreeDB/mongo_gateway
+```
 
-## Notes
-
-- Exclusive open: TreeDB and HashDB take an exclusive lock on the DB directory (`ErrLocked`).
-- On-disk formats and public APIs may evolve; see `docs/API_STABILITY.md`.
+For large benchmark runs, prefer a fresh DB directory and record the exact
+commit, host, profile, command, and artifact path in the report.
