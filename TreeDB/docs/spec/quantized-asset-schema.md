@@ -1,0 +1,69 @@
+# Quantized Asset Schema and Ordinal Access Contract (#1932)
+
+Status: pre-alpha typed-column contract for quantized vector-index assets. This
+adds schema validation and prepared ordinal readers only; quantized scoring,
+query-mode selection, exact rerank, training, and rebuild policy remain #1926 and
+follow-ups.
+
+## Role schema
+
+A quantized asset manifest maps logical roles to typed-column columns. Supported
+roles are:
+
+- code rows: `codes`, `packed_codes`;
+- scalar float32 side arrays: `norm`, `step`, `lower`, `code_sum`, `norm2`,
+  `centroid_distance`, `quantized_dot_product_inv`, `centroid_dot_product`;
+- integer side arrays: `code_count`, `centroid_id`, `list_id`.
+
+Roles use generic typed-column storage. `codes` admits `byte_vector` /
+`fixed_bytes` or unsigned dense numeric vector rows (`uint8_vector`,
+`uint16_vector`, `uint32_vector`, `uint64_vector`). `packed_codes` admits
+`packed_bit_vector`, `packed_uint2_vector`, or `packed_uint4_vector` with zero
+padding already certified by typed-column layout validation. Float side arrays are
+non-null `float32` / `raw_float32`; integer side arrays are non-null `uint32` /
+`raw_uint32` or `uint64` / `raw_uint64` where a wider identifier is required.
+
+## Fail-closed validation
+
+`TreeDB/internal/quantizedasset` prepares immutable readers from typed-column part
+images only after validating:
+
+- required roles and referenced columns are present exactly once;
+- typed-column logical type, physical type, encoding, compression, null/default
+  wrappers, direct-view certification, section identity, row count, and payload
+  length;
+- vector dimensions, code dimensions, and code width;
+- metric, codec name/version/config identity;
+- graph ordinal order (`vector_ordinal`) and base graph identity (index, field,
+  metric, dimensions, row count, base manifest generation/checksum/schema hash,
+  and graph schema hash);
+- persisted asset refs and checksums when supplied.
+
+Mismatches fail before any scorer-shaped loop receives a prepared reader. There is
+no silent fallback to exact search or document reconstruction.
+
+## Prepared ordinal API
+
+`Prepared` is immutable and safe for concurrent read-only access. Returned code
+row byte slices alias the prepared typed-column image and are valid for that
+prepared object's lifetime. Caller scratch must not be shared concurrently.
+
+Hot APIs include:
+
+- `CodeRowBytes(role, ordinal)` for fixed-byte, packed-code, and dense unsigned
+  code rows;
+- `Float32`, `Uint32`, and `Uint64` for scalar side arrays;
+- `RowWords(role, ordinal, scratch)` when callers need little-endian uint64 word
+  views over row bytes;
+- `PackedElements(role, ordinal, scratch)` for unpacked packed-code elements;
+- `DenseUint32Row(role, ordinal, scratch)` for decoded `uint32_vector` rows.
+
+Steady-state row/metadata lookup is allocation-free when direct row bytes are
+used or when adequate caller scratch is provided for decoded/word views.
+
+## Footprint evidence
+
+Prepare captures whole-asset bytes/vector and per-role section bytes/vector in
+`Footprint`. Benchmarks in `TreeDB/internal/quantizedasset` report prepared open
+cost, random ordinal lookup, scorer-shaped loops, `B/op`, `allocs/op`, and
+representative asset/column bytes per vector.

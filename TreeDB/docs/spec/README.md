@@ -209,6 +209,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #2047 optimized-consumer capability tier matrix for every current
     typed-column logical/physical pair, including graph-search admission baseline
     links for #2044 and direct-view certifier scope links for #2046.
+- `TreeDB/docs/spec/quantized-asset-schema.md`
+  - issue #1932 quantized asset role descriptors, fail-closed identity/shape
+    validation, prepared ordinal access APIs, scratch contracts, non-goals, and
+    footprint benchmark evidence.
 - `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
   - issue #2036 role-specific prepared runtime-view matrix, hot-loop boundaries,
     graph-row fallback prohibition, future type admission gate, and #2037/#2044
@@ -286,7 +290,9 @@ typed-column maintenance behavior is recorded in
 `typed-asset-maintenance-1788.md`, typed-column schema/version evolution
 policy is owned by `typed-column-schema-evolution.md`, optimized-consumer tier
 classification is owned by `typed-column-optimized-consumer-capabilities.md`,
-graph-search prepared runtime-view shapes and hot-loop boundaries are owned by
+quantized asset role descriptors and ordinal-reader contracts are owned by
+`quantized-asset-schema.md`, graph-search prepared runtime-view shapes and
+hot-loop boundaries are owned by
 `typed-column-graph-search-prepared-views.md`, graph-search optimized-state
 readiness/admission status is owned by
 `typed-column-graph-search-admission.md`, #1886 direct-view closeout evidence is owned by
@@ -315,8 +321,8 @@ blocking questions live:
 - Typed-storage persistence and historical roadmap questions:
   `typed-storage-naming.md`, `typed-column-transplant.md`,
   `typed-column-adapter.md`, `typed-storage-closeout-1758.md`,
-  `typed-asset-maintenance-1788.md`, `typed-column-schema-evolution.md`, and
-  `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
+  `typed-asset-maintenance-1788.md`, `typed-column-schema-evolution.md`,
+  `quantized-asset-schema.md`, and `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
 
 A blocking implementation question must be listed in this index and in its
 owner document. Non-blocking future-extension questions must be labeled as
