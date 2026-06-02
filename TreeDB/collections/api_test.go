@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -717,8 +718,15 @@ func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 		ids[i] = []byte(fmt.Sprintf("at://did:example:%06d", i))
 		docs[i] = collectionLargeJSONDocumentForTest(i, 8<<10)
 	}
+	wantFirst := bytes.Clone(docs[0])
+	wantLast := bytes.Clone(docs[documents-1])
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		t.Fatalf("insert large JSON batch: %v", err)
+	}
+	for i := range docs {
+		for j := range docs[i] {
+			docs[i][j] ^= 0xff
+		}
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush large JSON batch: %v", err)
@@ -731,8 +739,8 @@ func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get large JSON doc: %v", err)
 	}
-	if !bytes.Equal(got, docs[documents-1]) {
-		t.Fatalf("large JSON doc mismatch: got %d bytes want %d", len(got), len(docs[documents-1]))
+	if !bytes.Equal(got, wantLast) {
+		t.Fatalf("large JSON doc mismatch: got %d bytes want %d", len(got), len(wantLast))
 	}
 	requireCollectionPrimaryEntryPointer(t, d, "bluesky", ids[documents-1])
 
@@ -752,8 +760,8 @@ func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get reopened large JSON doc: %v", err)
 	}
-	if !bytes.Equal(reopenedDoc, docs[0]) {
-		t.Fatalf("reopened large JSON doc mismatch: got %d bytes want %d", len(reopenedDoc), len(docs[0]))
+	if !bytes.Equal(reopenedDoc, wantFirst) {
+		t.Fatalf("reopened large JSON doc mismatch: got %d bytes want %d", len(reopenedDoc), len(wantFirst))
 	}
 }
 
@@ -978,6 +986,66 @@ func collectionLargeJSONDocumentForTest(i, payloadBytes int) []byte {
 		i,
 		strings.Repeat("x", payloadBytes),
 	))
+}
+
+func BenchmarkCollectionLargeDocumentPointerizedInsertBatchFlush(b *testing.B) {
+	prevLog := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(prevLog) })
+
+	opts := treedb.OptionsFor(treedb.ProfileFast, b.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		b.Fatalf("open db: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			b.Errorf("close db: %v", err)
+		}
+	})
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "bluesky",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatJSON,
+			DataRootStoragePolicy: RootStorageFast,
+		},
+	}); err != nil {
+		b.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("bluesky")
+	if err != nil {
+		b.Fatalf("open collection: %v", err)
+	}
+
+	const targetBatchSize = 256
+	b.ReportAllocs()
+	b.ResetTimer()
+	for inserted := 0; inserted < b.N; {
+		b.StopTimer()
+		batchSize := targetBatchSize
+		if remaining := b.N - inserted; remaining < batchSize {
+			batchSize = remaining
+		}
+		ids := make([][]byte, batchSize)
+		docs := make([][]byte, batchSize)
+		for i := 0; i < batchSize; i++ {
+			docNum := inserted + i
+			ids[i] = []byte(fmt.Sprintf("at://did:example:%06d", docNum))
+			docs[i] = collectionLargeJSONDocumentForTest(docNum, 8<<10)
+		}
+		b.StartTimer()
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			b.Fatalf("insert large JSON batch: %v", err)
+		}
+		if err := col.Flush(); err != nil {
+			b.Fatalf("flush large JSON batch: %v", err)
+		}
+		inserted += batchSize
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(targetBatchSize), "target_docs/batch")
 }
 
 func requireCollectionPrimaryEntryPointer(t *testing.T, d *backenddb.DB, collectionName string, id []byte) {

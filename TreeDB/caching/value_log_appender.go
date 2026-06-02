@@ -30,7 +30,8 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 	if err != nil {
 		return nil, err
 	}
-	records := make([]valuelog.Record, len(values))
+	records := getValueLogRecords(len(values))
+	defer putValueLogRecordsNoClear(records)
 	for i := range values {
 		records[i] = valuelog.Record{
 			RID:   startRID + uint64(i),

@@ -4977,6 +4977,11 @@ const (
 	collectionPointerizeBatchMaxBytes  = 4 << 20
 )
 
+func collectionRunTableHasStableUnsafeSlices(table memtable.Table) bool {
+	stable, ok := table.(memtable.StableUnsafeIteratorTable)
+	return ok && stable.StableUnsafeIteratorSlices()
+}
+
 func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) (memtable.Table, bool, error) {
 	if db == nil || table == nil || !db.HasValueLogAppender() {
 		return table, false, nil
@@ -5003,6 +5008,11 @@ func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) 
 	}
 
 	entries := make([]collectionPointerizedRunEntry, 0, table.Len())
+	// AppendValueLogValues completes the append before returning. For run tables
+	// that promise immutable iterator values across Next/Close, borrow those
+	// slices for the synchronous append and avoid a per-value clone; unstable
+	// iterator tables keep the defensive copy below.
+	borrowPointerValues := collectionRunTableHasStableUnsafeSlices(table)
 	batchValues := make([][]byte, 0, collectionPointerizeBatchMaxValues)
 	batchEntryIndexes := make([]int, 0, collectionPointerizeBatchMaxValues)
 	batchBytes := 0
@@ -5046,10 +5056,13 @@ func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) 
 			flags&node.FlagPointer == 0 &&
 			len(value) > db.InlineThresholdForKey(entry.key) {
 			entries = append(entries, entry)
-			valueCopy := bytes.Clone(value)
-			batchValues = append(batchValues, valueCopy)
+			appendValue := value
+			if !borrowPointerValues {
+				appendValue = bytes.Clone(value)
+			}
+			batchValues = append(batchValues, appendValue)
 			batchEntryIndexes = append(batchEntryIndexes, len(entries)-1)
-			batchBytes += len(valueCopy)
+			batchBytes += len(appendValue)
 			if len(batchValues) >= collectionPointerizeBatchMaxValues || batchBytes >= collectionPointerizeBatchMaxBytes {
 				if err := flushBatch(); err != nil {
 					return table, false, err

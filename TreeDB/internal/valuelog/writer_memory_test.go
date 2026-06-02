@@ -295,3 +295,45 @@ func TestWriterClose_ReleasesScratchBuffers(t *testing.T) {
 		t.Fatalf("encLimiter not cleared on Close: buf=%v limit=%d", writer.encLimiter.buf != nil, writer.encLimiter.limit)
 	}
 }
+
+func TestWriterBlockCompressionSingleRecordAvoidsRawConcatScratch(t *testing.T) {
+	writer := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	value := bytes.Repeat([]byte("a"), 4096)
+	wantValue := bytes.Clone(value)
+	_, stats, err := writer.AppendFrameWithStatsInto(0, nil, []Record{{RID: 1, Value: value}}, make([]page.ValuePtr, 1))
+	if err != nil {
+		t.Fatalf("AppendFrameWithStatsInto: %v", err)
+	}
+	if !stats.Kept {
+		t.Fatalf("expected single-record block compression to be kept, stats=%+v", stats)
+	}
+	if cap(writer.rawScratch) != 0 {
+		t.Fatalf("rawScratch cap=%d want 0 for single-record block compression", cap(writer.rawScratch))
+	}
+	if !bytes.Equal(value, wantValue) {
+		t.Fatal("single-record block compression mutated source value")
+	}
+}
+
+func TestFramePreparerBlockCompressionSingleRecordAvoidsRawConcatScratch(t *testing.T) {
+	prep := NewFramePreparer()
+	prep.SetBlockCompression(BlockCodecSnappy, true)
+
+	value := bytes.Repeat([]byte("b"), 4096)
+	wantValue := bytes.Clone(value)
+	_, stats, err := prep.PrepareFrameInto(nil, 0, nil, []Record{{RID: 1, Value: value}})
+	if err != nil {
+		t.Fatalf("PrepareFrameInto: %v", err)
+	}
+	if !stats.Kept {
+		t.Fatalf("expected single-record block compression to be kept, stats=%+v", stats)
+	}
+	if cap(prep.rawScratch) != 0 {
+		t.Fatalf("rawScratch cap=%d want 0 for single-record block compression", cap(prep.rawScratch))
+	}
+	if !bytes.Equal(value, wantValue) {
+		t.Fatal("single-record block compression mutated source value")
+	}
+}
