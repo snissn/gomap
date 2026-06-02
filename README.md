@@ -73,16 +73,17 @@ Source:
 
 ### `application.db` Offline Density Workload
 
-Offline compacted-size comparison from the April 13 density report.
+Offline compacted-size comparison from the June 2 Celestia `application.db`
+rerun.
 
 | engine | compacted size | workflow |
 | --- | ---: | --- |
-| PebbleDB | 1.773 GiB | aggressive rebuild, then full compact |
-| TreeDB | 2.092 GiB | self-roundtrip rebuild, then offline `vlog_rewrite` |
-| goleveldb | 2.316 GiB | aggressive rebuild, then full compact |
+| TreeDB | 1.690 GiB | `command_wal_relaxed`, rebuild, `CompactStorageFull`, offline index vacuum |
+| PebbleDB | 2.108 GiB | snappy, 64 KiB blocks, 64 MiB target files, full compact |
+| goleveldb | 2.221 GiB | snappy, 64 KiB blocks, restart interval 256, full compact |
 
 Source:
-[April 13 density report](docs/benchmarks/application_db_engine_matrix_2026-04-13.md).
+[June 2 density rerun](docs/benchmarks/application_db_engine_matrix_2026-06-02.md).
 
 ## What TreeDB Provides
 
