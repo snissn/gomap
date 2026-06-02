@@ -428,10 +428,12 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 		for _, section := range sections {
 			rawBytes := int64(section.RawBytes)
 			storedBytes := int64(section.StoredBytes)
+			compression := section.Compression.String()
 			if section.Kind == typedcolumn.ColumnPartImageSectionColumnData && section.Column != "" {
 				if bytes, ok := columnSectionBytes[section.Column]; ok {
 					rawBytes = bytes.raw
 					storedBytes = bytes.stored
+					compression = bytes.compression
 				}
 			}
 			if rawBytes == 0 && section.Kind != typedcolumn.ColumnPartImageSectionRowLocators {
@@ -446,7 +448,7 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 				Name:             section.Name,
 				Column:           section.Column,
 				Bytes:            int64(section.Bytes),
-				Compression:      section.Compression.String(),
+				Compression:      compression,
 				RawBytes:         rawBytes,
 				StoredBytes:      storedBytes,
 				CompressionRatio: columnStoreCompressionRatioInt64(storedBytes, rawBytes),
@@ -457,8 +459,9 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 }
 
 type columnStoreTypedColumnPartColumnSectionByteTotals struct {
-	raw    int64
-	stored int64
+	raw         int64
+	stored      int64
+	compression string
 }
 
 func columnStoreTypedColumnPartColumnSectionBytes(details []typedcolumn.ColumnPartColumnByteAccounting) map[string]columnStoreTypedColumnPartColumnSectionByteTotals {
@@ -468,11 +471,26 @@ func columnStoreTypedColumnPartColumnSectionBytes(details []typedcolumn.ColumnPa
 			continue
 		}
 		out[detail.Column] = columnStoreTypedColumnPartColumnSectionByteTotals{
-			raw:    int64(detail.EncodedRawBytes),
-			stored: int64(detail.StoredBytes),
+			raw:         int64(detail.EncodedRawBytes),
+			stored:      int64(detail.StoredBytes),
+			compression: columnStoreTypedColumnPartColumnSectionCompression(detail),
 		}
 	}
 	return out
+}
+
+func columnStoreTypedColumnPartColumnSectionCompression(detail typedcolumn.ColumnPartColumnByteAccounting) string {
+	switch len(detail.ActualCompressionMix) {
+	case 0:
+		return detail.RequestedCompression.String()
+	case 1:
+		for actual := range detail.ActualCompressionMix {
+			return actual
+		}
+	default:
+		return "mixed"
+	}
+	return detail.RequestedCompression.String()
 }
 
 func columnStoreTypedColumnPartImageColumnNames(image typedcolumn.ColumnPartImage) []string {
