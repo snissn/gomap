@@ -725,7 +725,11 @@ func validateFixedWidthElements(cert typedcolumn.ColumnPartLayoutContractColumn,
 		typedcolumn.ColumnTypeFixedBytes,
 		typedcolumn.ColumnTypePackedBitVector, typedcolumn.ColumnTypePackedUint2Vector, typedcolumn.ColumnTypePackedUint4Vector:
 		if elementsPerRow <= 0 || cert.FixedWidthElements != elementsPerRow {
-			return StreamingStatus(ReasonDimensionMismatch, fmt.Sprintf("elements_per_row=%d want %d", cert.FixedWidthElements, elementsPerRow))
+			fieldName := "fixed_width_elements"
+			if cert.Type == typedcolumn.ColumnTypeFixedBytes {
+				fieldName = "bytes_per_row"
+			}
+			return StreamingStatus(ReasonDimensionMismatch, fmt.Sprintf("%s=%d want %d", fieldName, cert.FixedWidthElements, elementsPerRow))
 		}
 	default:
 		if cert.FixedWidthElements != 0 {
