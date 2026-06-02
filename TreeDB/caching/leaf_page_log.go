@@ -165,10 +165,24 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 	records := getValueLogRecordsCap(len(leafPages))
 	records = records[:len(leafPages)]
 	defer putValueLogRecordsNoClear(records)
+	var scratches []*compactLeafLogPayloadScratch
+	defer func() {
+		for _, scratch := range scratches {
+			putCompactLeafLogPayloadScratch(scratch)
+		}
+	}()
 	for i, leafPage := range leafPages {
-		encodedLeafPage, _, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
+		scratch := getCompactLeafLogPayloadScratch()
+		encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
 		if err != nil {
+			putCompactLeafLogPayloadScratch(scratch)
 			return nil, err
+		}
+		if compacted {
+			scratch.buf = encodedLeafPage
+			scratches = append(scratches, scratch)
+		} else {
+			putCompactLeafLogPayloadScratch(scratch)
 		}
 		records[i] = valuelog.Record{
 			RID:   startRID + uint64(i),

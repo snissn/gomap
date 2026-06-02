@@ -922,7 +922,7 @@ func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, _ node.N
 	if ref.Kind == page.ChildRefLeafLog {
 		metrics.ZipperLeafLogNodeLoads++
 		metrics.ZipperLeafLogNodeBytesRead += page.PageSize
-		if hint := int(ref.Log.RecordLengthHint); hint > 0 {
+		if hint := int(ref.Log.RecordLength()); hint > 0 {
 			metrics.ZipperLeafLogRecordHintBytesRead += hint
 		}
 		switch source {
@@ -962,7 +962,7 @@ func recordZipperLeafLogPageRecordHintWrite(metrics *adaptive.Metrics, ref page.
 	if metrics == nil || ref.Kind != page.ChildRefLeafLog {
 		return
 	}
-	if hint := int(ref.Log.RecordLengthHint); hint > 0 {
+	if hint := int(ref.Log.RecordLength()); hint > 0 {
 		metrics.ZipperLeafLogRecordHintBytesWritten += hint
 	}
 }

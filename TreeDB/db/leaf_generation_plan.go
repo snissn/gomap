@@ -736,7 +736,7 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 		scan.lastFileID = ptr.FileID
 		scan.lastFileState = fileState
 	}
-	recordLen := ptr.RecordLengthHint
+	recordLen := ptr.RecordLength()
 	ok := recordLen != 0
 	if !ok {
 		var hint int
@@ -770,11 +770,13 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 	if liveBytes <= ^uint32(0)-4 {
 		liveBytes += 4
 	}
-	if info, grouped, err := db.leafGenerationGroupedFrameInfo(scan, ptr, recordLen); err != nil {
-		return dst, err
-	} else if grouped {
-		if contribution, ok := info.liveByteContribution(ptr.SubIndex); ok {
-			liveBytes = contribution
+	if ptr.IsGrouped() {
+		if info, grouped, err := db.leafGenerationGroupedFrameInfo(scan, ptr, recordLen); err != nil {
+			return dst, err
+		} else if grouped {
+			if contribution, ok := info.liveByteContribution(ptr.SubIndex); ok {
+				liveBytes = contribution
+			}
 		}
 	}
 	if dst == nil {

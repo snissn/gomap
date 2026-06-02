@@ -171,6 +171,18 @@ func TestCachingLeafPageLog_AppendLeafPagesGroupsPointersAndPayloads(t *testing.
 		if ptr.RecordLengthHint == 0 {
 			t.Fatalf("ptr[%d] missing record length hint: %+v", i, ptr)
 		}
+		if !ptr.IsGrouped() || !page.ValuePtrIsGrouped(ptr.ValuePtr()) {
+			t.Fatalf("ptr[%d] did not preserve grouped frame flag: %+v valuePtr=%+v", i, ptr, ptr.ValuePtr())
+		}
+	}
+	if got := db.leafLog.vlogRetainedPath; got != path {
+		t.Fatalf("leaf retained path=%q want %q", got, path)
+	}
+	db.valueLogMu.Lock()
+	_, retained := db.valueLogRetain[path]
+	db.valueLogMu.Unlock()
+	if !retained {
+		t.Fatalf("leaf retained path %q was not registered", path)
 	}
 	if err := leafLog.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)

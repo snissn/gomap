@@ -13712,6 +13712,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		bytesWrittenTotal int64
 		bytesWrittenLive  int64
 		ptrs              []page.ValuePtr
+		retainPath        string
 		err               error
 	)
 
@@ -14239,6 +14240,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if durability == journalDurabilityNone && !flushedBoundary && !syncedBoundary && bytesWrittenLive > 0 {
 			l.backendReadDirtySeq.Add(1)
 		}
+		if l.vlogPath != "" && l.vlogPath != l.vlogRetainedPath {
+			l.vlogRetainedPath = l.vlogPath
+			retainPath = l.vlogPath
+		}
 	}
 	if db.testBeforeVlogUnlock != nil {
 		db.testBeforeVlogUnlock(int(l.id))
@@ -14248,6 +14253,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		for _, path := range retainPaths {
 			db.markValueLogRetain(path)
 		}
+	}
+	if retainPath != "" {
+		db.markValueLogRetain(retainPath)
 	}
 	if err != nil {
 		putValueLogPtrs(ptrs)
