@@ -3,6 +3,7 @@ package typeddecode
 import (
 	"encoding/binary"
 	"math"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -11,6 +12,51 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
+
+func TestFixedBytesPlanRejectsLogicalBitsMismatch1931(t *testing.T) {
+	cert := typedcolumn.ColumnPartLayoutContractColumn{
+		LogicalType:         string(columnsemantics.LogicalByteVector),
+		Type:                typedcolumn.ColumnTypeFixedBytes,
+		Encoding:            typedcolumn.EncodingRawFixedBytes,
+		Compression:         typedcolumn.CompressionNone,
+		DirectViewCertified: true,
+		Endian:              typedcolumn.ColumnPartLayoutEndianLittle,
+		ElementSize:         1,
+		Alignment:           1,
+		LengthMultiple:      1,
+		FixedWidthElements:  3,
+		BytesPerRow:         3,
+		LogicalBitsPerRow:   25,
+		Rows:                2,
+	}
+	plan := FixedBytesPlan(cert, 3)
+	if plan.Path != PathUnsupported || plan.Reason != ReasonDimensionMismatch || !strings.Contains(plan.Message, "logical_bits_per_row=25 want 24") {
+		t.Fatalf("plan=%+v want logical_bits_per_row mismatch", plan)
+	}
+}
+
+func TestFixedWidthElementsDiagnosticsUseStoredFieldNames1931(t *testing.T) {
+	base := typedcolumn.ColumnPartLayoutContractColumn{
+		DirectViewCertified: true,
+		Compression:         typedcolumn.CompressionNone,
+		Endian:              typedcolumn.ColumnPartLayoutEndianLittle,
+		ElementSize:         1,
+		Alignment:           1,
+		LengthMultiple:      1,
+	}
+	fixed := base
+	fixed.Type = typedcolumn.ColumnTypeFixedBytes
+	fixed.FixedWidthElements = 3
+	if status := validateDirectViewCertificationFields(fixed, 1, 4); status.Reason != ReasonDimensionMismatch || !strings.Contains(status.Message, "bytes_per_row=3 want 4") {
+		t.Fatalf("fixed status=%+v want bytes_per_row diagnostic", status)
+	}
+	packed := base
+	packed.Type = typedcolumn.ColumnTypePackedUint4Vector
+	packed.FixedWidthElements = 3
+	if status := validateDirectViewCertificationFields(packed, 1, 4); status.Reason != ReasonDimensionMismatch || !strings.Contains(status.Message, "fixed_width_elements=3 want 4") {
+		t.Fatalf("packed status=%+v want fixed_width_elements diagnostic", status)
+	}
+}
 
 func TestInt64DirectViewPlanAndHandleValidation(t *testing.T) {
 	rows := 3

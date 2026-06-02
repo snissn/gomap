@@ -147,6 +147,35 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 		base.Reason = "typed-column bytes raw_bytes_offsets uses certified uint64 offsets plus exact opaque byte values direct views with fail-closed fallback diagnostics"
 		return base
 	}
+	if valueType == ColumnStoreValueByteVector {
+		if consumer != typedColumnDirectViewConsumerTypedColumnPartGeneric {
+			base.Reason = "byte_vector direct-view classification only supports the generic typed-column consumer"
+			return base
+		}
+		base.Support = typedColumnDirectViewActiveLittleEndianCandidate
+		base.PayloadEndian = "little"
+		base.ElementSize = 1
+		base.Alignment = 1
+		base.RequiresElementsPerRow = true
+		base.Reason = "typed-column byte_vector raw_fixed_bytes uses certified fixed bytes_per_row payloads with byte-aligned direct row views"
+		return base
+	}
+	if bitsPerElement, ok := columnStorePackedUintVectorBits(valueType); ok {
+		if consumer != typedColumnDirectViewConsumerTypedColumnPartGeneric {
+			base.Reason = "packed-code vector direct-view classification only supports the generic typed-column consumer"
+			return base
+		}
+		base.Support = typedColumnDirectViewActiveLittleEndianCandidate
+		base.PayloadEndian = "little"
+		base.ElementSize = 1
+		base.Alignment = 1
+		base.RequiresElementsPerRow = true
+		base.Reason = "typed-column packed-code vector stores LSB-first packed uint elements with zero padding and little-endian word views"
+		if bitsPerElement == 1 {
+			base.Reason = "typed-column packed_bit_vector stores LSB-first bit codes with zero padding and little-endian word views"
+		}
+		return base
+	}
 	if width, ok := columnStoreDenseNumericVectorWidth(valueType); ok {
 		if consumer != typedColumnDirectViewConsumerTypedColumnPartGeneric {
 			base.Reason = "dense numeric vector direct-view classification only supports the generic typed-column consumer"
@@ -288,6 +317,10 @@ func typedColumnDirectViewAllTypeInventory() []ColumnStoreValueType {
 		ColumnStoreValueBFloat16Vector,
 		ColumnStoreValueFloat32Vector,
 		ColumnStoreValueFloat64Vector,
+		ColumnStoreValueByteVector,
+		ColumnStoreValuePackedBitVector,
+		ColumnStoreValuePackedUint2Vector,
+		ColumnStoreValuePackedUint4Vector,
 		ColumnStoreValueUint32List,
 		ColumnStoreValueBytes,
 		ColumnStoreValueAdjacencyList,

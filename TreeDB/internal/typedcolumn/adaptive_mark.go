@@ -140,6 +140,22 @@ func EstimateBatchUncompressedBytes(batch Batch, defs []ColumnDefinition) (int, 
 				return 0, err
 			}
 			total += bytes
+		case ColumnTypeFixedBytes:
+			bytes, err := FixedBytesPayloadBytes(rows, def.FixedWidthElements)
+			if err != nil {
+				return 0, err
+			}
+			total += bytes
+		case ColumnTypePackedBitVector, ColumnTypePackedUint2Vector, ColumnTypePackedUint4Vector:
+			bitsPerElement, ok := PackedUintVectorBits(def.Type)
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: unsupported packed_uint type %s for adaptive mark sizing", def.Type)
+			}
+			bytes, err := PackedUintPayloadBytes(rows, def.FixedWidthElements, bitsPerElement)
+			if err != nil {
+				return 0, err
+			}
+			total += bytes
 		case ColumnTypeUint32List:
 			list := batch.Uint32OffsetsLists[def.Name]
 			offsetsBytes, err := checkedMulInt(list.Rows+1, 8, "offsets-list offsets bytes")

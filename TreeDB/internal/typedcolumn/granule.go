@@ -60,6 +60,14 @@ const (
 	EncodingRawFloat16Vector
 	EncodingRawBFloat16Vector
 	EncodingRawFloat64Vector
+
+	// Fixed-byte and packed sub-byte row-major vector encodings. Packed elements
+	// are unsigned and LSB-first within each byte; unused high bits in the final
+	// byte of each row must be zero.
+	EncodingRawFixedBytes
+	EncodingRawPackedBitVector
+	EncodingRawPackedUint2Vector
+	EncodingRawPackedUint4Vector
 )
 
 func (e Encoding) String() string {
@@ -128,6 +136,14 @@ func (e Encoding) String() string {
 		return "raw_bfloat16_vector"
 	case EncodingRawFloat64Vector:
 		return "raw_float64_vector"
+	case EncodingRawFixedBytes:
+		return "raw_fixed_bytes"
+	case EncodingRawPackedBitVector:
+		return "raw_packed_bit_vector"
+	case EncodingRawPackedUint2Vector:
+		return "raw_packed_uint2_vector"
+	case EncodingRawPackedUint4Vector:
+		return "raw_packed_uint4_vector"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}
@@ -998,6 +1014,26 @@ func maxGranuleRawPayloadBytes(encoding Encoding, rows int) int {
 		return rows * 4
 	case EncodingRawUint64:
 		return rows * 8
+	case EncodingRawFloat32Vector,
+		EncodingRawUint8Vector,
+		EncodingRawInt8Vector,
+		EncodingRawUint16Vector,
+		EncodingRawInt16Vector,
+		EncodingRawUint32Vector,
+		EncodingRawInt32Vector,
+		EncodingRawUint64Vector,
+		EncodingRawInt64Vector,
+		EncodingRawFloat16Vector,
+		EncodingRawBFloat16Vector,
+		EncodingRawFloat64Vector,
+		EncodingRawUint32Dense,
+		EncodingRawUint32OffsetsList,
+		EncodingRawBytesOffsets,
+		EncodingRawFixedBytes,
+		EncodingRawPackedBitVector,
+		EncodingRawPackedUint2Vector,
+		EncodingRawPackedUint4Vector:
+		return int(^uint(0) >> 1)
 	default:
 		return -1
 	}

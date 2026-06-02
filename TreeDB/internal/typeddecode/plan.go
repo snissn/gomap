@@ -105,13 +105,16 @@ func (s Status) String() string {
 // Plan is a reusable per-column/operator decision. Per-block and per-handle
 // validation still has to run before exposing a direct-view slice.
 type Plan struct {
-	Path           Path
-	Reason         Reason
-	Message        string
-	ElementSize    int
-	ElementsPerRow int
-	Alignment      int
-	Rows           int
+	Path              Path
+	Reason            Reason
+	Message           string
+	ElementSize       int
+	ElementsPerRow    int
+	BytesPerRow       int
+	BitsPerElement    int
+	LogicalBitsPerRow int
+	Alignment         int
+	Rows              int
 }
 
 func (p Plan) Status() Status        { return Status{Path: p.Path, Reason: p.Reason, Message: p.Message} }
@@ -432,6 +435,93 @@ func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree i
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32Dense, 4, degree)
 }
 
+// FixedBytesPlan selects a direct-view candidate only for writer-certified
+// fixed_bytes/raw_fixed_bytes sections with the requested fixed bytes per row.
+func FixedBytesPlan(cert typedcolumn.ColumnPartLayoutContractColumn, bytesPerRow int) Plan {
+	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:            columnsemantics.LogicalByteVector,
+		Physical:           typedcolumn.ColumnTypeFixedBytes,
+		Encoding:           typedcolumn.EncodingRawFixedBytes,
+		Compression:        cert.Compression,
+		Nullable:           cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable:        cert.DefaultMaskPresent || cert.DefaultCount != 0,
+		FixedWidthElements: bytesPerRow,
+		BytesPerRow:        bytesPerRow,
+	})
+	if bytesPerRow <= 0 {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("bytes_per_row=%d", bytesPerRow), ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if status := validateDirectViewCertification(layout, cert, 1, bytesPerRow); !status.Direct() {
+		return Plan{Path: status.Path, Reason: status.Reason, Message: status.Message, ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if cert.LogicalType != string(columnsemantics.LogicalByteVector) || cert.Type != typedcolumn.ColumnTypeFixedBytes || cert.Encoding != typedcolumn.EncodingRawFixedBytes {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalByteVector, typedcolumn.ColumnTypeFixedBytes, typedcolumn.EncodingRawFixedBytes), ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if cert.BytesPerRow != 0 && cert.BytesPerRow != bytesPerRow {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("bytes_per_row=%d want %d", cert.BytesPerRow, bytesPerRow), ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	logicalBitsPerRow, ok := checkedMul3(bytesPerRow, 8, 1)
+	if !ok {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: "logical_bits_per_row overflow", ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if cert.LogicalBitsPerRow != 0 && cert.LogicalBitsPerRow != logicalBitsPerRow {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("logical_bits_per_row=%d want %d", cert.LogicalBitsPerRow, logicalBitsPerRow), ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	return plan
+}
+
+// PackedUintVectorPlan selects a direct-view candidate only for writer-certified
+// packed_bit_vector / packed_uint{2,4}_vector sections. The returned direct view is a byte payload;
+// BitsPerElement and LogicalBitsPerRow describe packed-code interpretation.
+func PackedUintVectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, logical columnsemantics.LogicalType, elementsPerRow int, bitsPerElement int) Plan {
+	rowBytes, err := typedcolumn.PackedUintRowBytes(elementsPerRow, bitsPerElement)
+	if err != nil {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: err.Error(), ElementSize: 1, ElementsPerRow: elementsPerRow, BitsPerElement: bitsPerElement, Rows: cert.Rows}
+	}
+	physical, ok := typedcolumn.PackedUintVectorTypeForBits(bitsPerElement)
+	if !ok {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("bits_per_element=%d", bitsPerElement), ElementSize: 1, ElementsPerRow: elementsPerRow, BitsPerElement: bitsPerElement, Rows: cert.Rows}
+	}
+	encoding, _ := typedcolumn.PackedUintVectorEncodingForBits(bitsPerElement)
+	logicalBitsPerRow, ok := checkedMul3(elementsPerRow, bitsPerElement, 1)
+	if !ok {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: "logical_bits_per_row overflow", ElementSize: 1, ElementsPerRow: elementsPerRow, BitsPerElement: bitsPerElement, Rows: cert.Rows}
+	}
+	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 1, ElementsPerRow: elementsPerRow, BytesPerRow: rowBytes, BitsPerElement: bitsPerElement, LogicalBitsPerRow: logicalBitsPerRow, Alignment: 1, Rows: cert.Rows}
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:            logical,
+		Physical:           physical,
+		Encoding:           encoding,
+		Compression:        cert.Compression,
+		Nullable:           cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable:        cert.DefaultMaskPresent || cert.DefaultCount != 0,
+		FixedWidthElements: elementsPerRow,
+		BitsPerElement:     bitsPerElement,
+		BytesPerRow:        rowBytes,
+		LogicalBitsPerRow:  logicalBitsPerRow,
+	})
+	if elementsPerRow <= 0 {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("elements_per_row=%d", elementsPerRow), ElementSize: 1, ElementsPerRow: elementsPerRow, BytesPerRow: rowBytes, BitsPerElement: bitsPerElement, LogicalBitsPerRow: logicalBitsPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if status := validateDirectViewCertification(layout, cert, 1, elementsPerRow); !status.Direct() {
+		return Plan{Path: status.Path, Reason: status.Reason, Message: status.Message, ElementSize: 1, ElementsPerRow: elementsPerRow, BytesPerRow: rowBytes, BitsPerElement: bitsPerElement, LogicalBitsPerRow: logicalBitsPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if cert.LogicalType != string(logical) || cert.Type != physical || cert.Encoding != encoding {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, logical, physical, encoding), ElementSize: 1, ElementsPerRow: elementsPerRow, BytesPerRow: rowBytes, BitsPerElement: bitsPerElement, LogicalBitsPerRow: logicalBitsPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if cert.BitsPerElement != bitsPerElement {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("bits_per_element=%d want %d", cert.BitsPerElement, bitsPerElement), ElementSize: 1, ElementsPerRow: elementsPerRow, BytesPerRow: rowBytes, BitsPerElement: bitsPerElement, LogicalBitsPerRow: logicalBitsPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if cert.BytesPerRow != 0 && cert.BytesPerRow != rowBytes {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("bytes_per_row=%d want %d", cert.BytesPerRow, rowBytes), ElementSize: 1, ElementsPerRow: elementsPerRow, BytesPerRow: rowBytes, BitsPerElement: bitsPerElement, LogicalBitsPerRow: logicalBitsPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if cert.LogicalBitsPerRow != 0 && cert.LogicalBitsPerRow != logicalBitsPerRow {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("logical_bits_per_row=%d want %d", cert.LogicalBitsPerRow, logicalBitsPerRow), ElementSize: 1, ElementsPerRow: elementsPerRow, BytesPerRow: rowBytes, BitsPerElement: bitsPerElement, LogicalBitsPerRow: logicalBitsPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	return plan
+}
+
 // Uint32ListPlan selects a direct-view candidate only for writer-certified
 // generic uint32_list/raw_uint32_offsets_list sections: little-endian uint64
 // offsets plus little-endian uint32 values.
@@ -641,9 +731,15 @@ func validateFixedWidthElements(cert typedcolumn.ColumnPartLayoutContractColumn,
 		typedcolumn.ColumnTypeUint32Vector, typedcolumn.ColumnTypeInt32Vector,
 		typedcolumn.ColumnTypeUint64Vector, typedcolumn.ColumnTypeInt64Vector,
 		typedcolumn.ColumnTypeFloat16Vector, typedcolumn.ColumnTypeBFloat16Vector,
-		typedcolumn.ColumnTypeFloat64Vector:
+		typedcolumn.ColumnTypeFloat64Vector,
+		typedcolumn.ColumnTypeFixedBytes,
+		typedcolumn.ColumnTypePackedBitVector, typedcolumn.ColumnTypePackedUint2Vector, typedcolumn.ColumnTypePackedUint4Vector:
 		if elementsPerRow <= 0 || cert.FixedWidthElements != elementsPerRow {
-			return StreamingStatus(ReasonDimensionMismatch, fmt.Sprintf("elements_per_row=%d want %d", cert.FixedWidthElements, elementsPerRow))
+			fieldName := "fixed_width_elements"
+			if cert.Type == typedcolumn.ColumnTypeFixedBytes {
+				fieldName = "bytes_per_row"
+			}
+			return StreamingStatus(ReasonDimensionMismatch, fmt.Sprintf("%s=%d want %d", fieldName, cert.FixedWidthElements, elementsPerRow))
 		}
 	default:
 		if cert.FixedWidthElements != 0 {
@@ -764,12 +860,22 @@ func ValidateDirectViewColumn(req DirectViewColumnRequest) Status {
 	if elementsPerRow <= 0 {
 		elementsPerRow = 1
 	}
-	want, ok := checkedMul3(req.Rows, elementsPerRow, req.Plan.ElementSize)
-	if !ok {
-		return UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width section byte count overflow")
+	want := 0
+	if req.Plan.BytesPerRow > 0 {
+		var ok bool
+		want, ok = checkedMul3(req.Rows, req.Plan.BytesPerRow, 1)
+		if !ok {
+			return UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width section byte count overflow")
+		}
+	} else {
+		var ok bool
+		want, ok = checkedMul3(req.Rows, elementsPerRow, req.Plan.ElementSize)
+		if !ok {
+			return UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width section byte count overflow")
+		}
 	}
 	if cert.Section.Length != want {
-		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("section_length=%d want rows=%d*elements=%d*width=%d=%d", cert.Section.Length, req.Rows, elementsPerRow, req.Plan.ElementSize, want))
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("section_length=%d want rows=%d row_bytes=%d elements=%d width=%d => %d", cert.Section.Length, req.Rows, req.Plan.BytesPerRow, elementsPerRow, req.Plan.ElementSize, want))
 	}
 	if len(cert.Blocks) == 0 {
 		if req.Rows == 0 && req.PayloadBytes == 0 {
@@ -1011,12 +1117,22 @@ func ValidateDirectViewBlock(req DirectViewBlockRequest) Status {
 	if elementsPerRow <= 0 {
 		elementsPerRow = 1
 	}
-	want, ok := checkedMul3(req.Rows, elementsPerRow, req.Plan.ElementSize)
-	if !ok {
-		return UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width byte count overflow")
+	want := 0
+	if req.Plan.BytesPerRow > 0 {
+		var ok bool
+		want, ok = checkedMul3(req.Rows, req.Plan.BytesPerRow, 1)
+		if !ok {
+			return UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width byte count overflow")
+		}
+	} else {
+		var ok bool
+		want, ok = checkedMul3(req.Rows, elementsPerRow, req.Plan.ElementSize)
+		if !ok {
+			return UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width byte count overflow")
+		}
 	}
 	if block.PayloadLength != want || block.RawBytes != want || block.StoredBytes != want {
-		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("payload/raw/stored=(%d,%d,%d) want rows=%d*elements=%d*width=%d=%d", block.PayloadLength, block.RawBytes, block.StoredBytes, req.Rows, elementsPerRow, req.Plan.ElementSize, want))
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("payload/raw/stored=(%d,%d,%d) want rows=%d row_bytes=%d elements=%d width=%d => %d", block.PayloadLength, block.RawBytes, block.StoredBytes, req.Rows, req.Plan.BytesPerRow, elementsPerRow, req.Plan.ElementSize, want))
 	}
 	return DirectStatus()
 }
@@ -1265,7 +1381,13 @@ func normalizeFixedWidthViewOptions(req DirectViewColumnRequest, opts ResourceVi
 	if elementsPerRow <= 0 {
 		elementsPerRow = 1
 	}
-	expected, ok := checkedMul3(req.Rows, elementsPerRow, 1)
+	expected := 0
+	var ok bool
+	if req.Plan.BytesPerRow > 0 {
+		expected, ok = checkedMul3(req.Rows, req.Plan.BytesPerRow, 1)
+	} else {
+		expected, ok = checkedMul3(req.Rows, elementsPerRow, 1)
+	}
 	if !ok {
 		return opts, UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width element count overflow")
 	}

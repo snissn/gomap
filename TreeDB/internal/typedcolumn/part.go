@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-const columnPartDescriptorVersion = 2
+const columnPartDescriptorVersion = 3
 
 type ColumnSchemaMode string
 
@@ -31,23 +31,27 @@ const (
 	ColumnTypeUint32             ColumnType = "uint32"
 	ColumnTypeUint64             ColumnType = "uint64"
 	// Float16 and BFloat16 are storage-only raw 16-bit bit payloads.
-	ColumnTypeFloat16        ColumnType = "float16"
-	ColumnTypeBFloat16       ColumnType = "bfloat16"
-	ColumnTypeUint8Vector    ColumnType = "uint8_vector"
-	ColumnTypeInt8Vector     ColumnType = "int8_vector"
-	ColumnTypeUint16Vector   ColumnType = "uint16_vector"
-	ColumnTypeInt16Vector    ColumnType = "int16_vector"
-	ColumnTypeUint32Vector   ColumnType = "uint32_vector"
-	ColumnTypeInt32Vector    ColumnType = "int32_vector"
-	ColumnTypeUint64Vector   ColumnType = "uint64_vector"
-	ColumnTypeInt64Vector    ColumnType = "int64_vector"
-	ColumnTypeFloat16Vector  ColumnType = "float16_vector"
-	ColumnTypeBFloat16Vector ColumnType = "bfloat16_vector"
-	ColumnTypeFloat32Vector  ColumnType = "float32_vector"
-	ColumnTypeFloat64Vector  ColumnType = "float64_vector"
-	ColumnTypeUint32List     ColumnType = "uint32_list"
-	ColumnTypeBytes          ColumnType = "bytes"
-	ColumnTypeAdjacencyList  ColumnType = "adjacency_list"
+	ColumnTypeFloat16           ColumnType = "float16"
+	ColumnTypeBFloat16          ColumnType = "bfloat16"
+	ColumnTypeUint8Vector       ColumnType = "uint8_vector"
+	ColumnTypeInt8Vector        ColumnType = "int8_vector"
+	ColumnTypeUint16Vector      ColumnType = "uint16_vector"
+	ColumnTypeInt16Vector       ColumnType = "int16_vector"
+	ColumnTypeUint32Vector      ColumnType = "uint32_vector"
+	ColumnTypeInt32Vector       ColumnType = "int32_vector"
+	ColumnTypeUint64Vector      ColumnType = "uint64_vector"
+	ColumnTypeInt64Vector       ColumnType = "int64_vector"
+	ColumnTypeFloat16Vector     ColumnType = "float16_vector"
+	ColumnTypeBFloat16Vector    ColumnType = "bfloat16_vector"
+	ColumnTypeFloat32Vector     ColumnType = "float32_vector"
+	ColumnTypeFloat64Vector     ColumnType = "float64_vector"
+	ColumnTypeFixedBytes        ColumnType = "fixed_bytes"
+	ColumnTypePackedBitVector   ColumnType = "packed_bit_vector"
+	ColumnTypePackedUint2Vector ColumnType = "packed_uint2_vector"
+	ColumnTypePackedUint4Vector ColumnType = "packed_uint4_vector"
+	ColumnTypeUint32List        ColumnType = "uint32_list"
+	ColumnTypeBytes             ColumnType = "bytes"
+	ColumnTypeAdjacencyList     ColumnType = "adjacency_list"
 )
 
 type SortKeyDirection string
@@ -108,6 +112,7 @@ type ColumnDefinition struct {
 	CompressionSet     bool
 	Cardinality        uint32
 	FixedWidthElements int
+	BitsPerElement     int
 	CodecBlockRows     int
 	StatsDisabled      bool
 }
@@ -131,6 +136,8 @@ type Batch struct {
 	BFloat16Columns        map[string][]uint16
 	Float32Vectors         map[string][]float32
 	DenseFixedWidthVectors map[string]RawDenseFixedWidth
+	FixedBytesColumns      map[string]FixedBytesRows
+	PackedUintColumns      map[string]PackedUintRows
 	Uint32Vectors          map[string][]uint32
 	Uint32OffsetsLists     map[string]RawUint32OffsetsList
 	BytesColumns           map[string]RawBytesOffsets
@@ -174,6 +181,7 @@ type ColumnPartColumnDescriptor struct {
 	Name               string
 	Type               ColumnType
 	FixedWidthElements int
+	BitsPerElement     int
 	Blocks             []ColumnBlockDescriptor
 }
 
@@ -227,6 +235,7 @@ type ColumnPartBuilder struct {
 	float16s  []uint16
 	bfloat16s []uint16
 	denseRaw  []byte
+	packedRaw []byte
 	u32dense  []uint32
 	u32offset []uint64
 	bytesData []byte
@@ -905,6 +914,9 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.FixedWidthElements <= 0 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires positive fixed-width elements", def.Name)
 		}
+		if def.BitsPerElement != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires bits_per_element=0", def.Name)
+		}
 		if def.Encoding == 0 {
 			def.Encoding = EncodingRawFloat32Vector
 		}
@@ -917,6 +929,9 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 	case ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
 		if def.FixedWidthElements <= 0 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: dense vector column %s type=%s requires positive fixed-width elements", def.Name, def.Type)
+		}
+		if def.BitsPerElement != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: dense vector column %s type=%s requires bits_per_element=0", def.Name, def.Type)
 		}
 		wantEncoding, ok := DenseFixedWidthVectorEncoding(def.Type)
 		if !ok || wantEncoding == EncodingRawFloat32Vector {
@@ -931,6 +946,46 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.Compression != CompressionNone {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: dense vector column %s type=%s requires uncompressed dense sections", def.Name, def.Type)
 		}
+	case ColumnTypeFixedBytes:
+		if def.FixedWidthElements <= 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: fixed_bytes column %s requires positive bytes_per_row/fixed-width elements", def.Name)
+		}
+		if def.BitsPerElement != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: fixed_bytes column %s requires bits_per_element=0", def.Name)
+		}
+		if def.Encoding == 0 {
+			def.Encoding = EncodingRawFixedBytes
+		}
+		if def.Encoding != EncodingRawFixedBytes {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported fixed_bytes encoding %s for %s", def.Encoding, def.Name)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: fixed_bytes column %s requires uncompressed raw sections", def.Name)
+		}
+	case ColumnTypePackedBitVector, ColumnTypePackedUint2Vector, ColumnTypePackedUint4Vector:
+		bitsPerElement, ok := PackedUintVectorBits(def.Type)
+		if !ok {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported packed_uint vector type %s for %s", def.Type, def.Name)
+		}
+		if def.FixedWidthElements <= 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: packed_uint vector column %s type=%s requires positive fixed-width elements", def.Name, def.Type)
+		}
+		if def.BitsPerElement == 0 {
+			def.BitsPerElement = bitsPerElement
+		}
+		if def.BitsPerElement != bitsPerElement {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: packed_uint vector column %s type=%s bits_per_element=%d want %d", def.Name, def.Type, def.BitsPerElement, bitsPerElement)
+		}
+		wantEncoding, _ := PackedUintVectorEncoding(def.Type)
+		if def.Encoding == 0 {
+			def.Encoding = wantEncoding
+		}
+		if def.Encoding != wantEncoding {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported packed_uint vector encoding %s for %s type=%s want %s", def.Encoding, def.Name, def.Type, wantEncoding)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: packed_uint vector column %s type=%s requires uncompressed raw sections", def.Name, def.Type)
+		}
 	case ColumnTypeUint32List:
 		if def.Encoding == 0 {
 			def.Encoding = EncodingRawUint32OffsetsList
@@ -940,6 +995,9 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		}
 		if def.FixedWidthElements != 0 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: uint32_list column %s requires fixed-width elements=0", def.Name)
+		}
+		if def.BitsPerElement != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: uint32_list column %s requires bits_per_element=0", def.Name)
 		}
 		if def.Compression != CompressionNone {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: uint32_list column %s requires uncompressed offsets-list sections", def.Name)
@@ -954,10 +1012,16 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.FixedWidthElements != 0 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: bytes column %s requires fixed-width elements=0", def.Name)
 		}
+		if def.BitsPerElement != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: bytes column %s requires bits_per_element=0", def.Name)
+		}
 		if def.Compression != CompressionNone {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: bytes column %s requires uncompressed offsets sections", def.Name)
 		}
 	case ColumnTypeAdjacencyList:
+		if def.BitsPerElement != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s requires bits_per_element=0", def.Name)
+		}
 		if def.Encoding == 0 {
 			def.Encoding = EncodingRawUint32Dense
 		}
@@ -982,8 +1046,11 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 	default:
 		return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported column type %s for %s", def.Type, def.Name)
 	}
-	if !IsDenseFixedWidthVectorColumnType(def.Type) && def.Type != ColumnTypeAdjacencyList && def.Type != ColumnTypeUint32List && def.Type != ColumnTypeBytes && def.FixedWidthElements != 0 {
+	if !IsDenseFixedWidthVectorColumnType(def.Type) && !IsPackedUintVectorColumnType(def.Type) && def.Type != ColumnTypeFixedBytes && def.Type != ColumnTypeAdjacencyList && def.Type != ColumnTypeUint32List && def.Type != ColumnTypeBytes && def.FixedWidthElements != 0 {
 		return ColumnDefinition{}, fmt.Errorf("typedcolumn: scalar column %s has fixed-width elements=%d", def.Name, def.FixedWidthElements)
+	}
+	if !IsPackedUintVectorColumnType(def.Type) && def.BitsPerElement != 0 {
+		return ColumnDefinition{}, fmt.Errorf("typedcolumn: column %s type=%s has bits_per_element=%d", def.Name, def.Type, def.BitsPerElement)
 	}
 	return def, nil
 }
@@ -1154,6 +1221,41 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 			}
 			if err := validateRawDenseFixedWidth(values, def.Name); err != nil {
 				return 0, err
+			}
+			if rows == 0 {
+				rows = values.Rows
+			}
+			if values.Rows != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, values.Rows, rows)
+			}
+		case ColumnTypeFixedBytes:
+			values, ok := batch.FixedBytesColumns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing fixed_bytes column %s", def.Name)
+			}
+			if values.BytesPerRow != def.FixedWidthElements {
+				return 0, fmt.Errorf("typedcolumn: fixed_bytes column %s bytes_per_row=%d want %d", def.Name, values.BytesPerRow, def.FixedWidthElements)
+			}
+			if err := values.Validate(); err != nil {
+				return 0, fmt.Errorf("typedcolumn: column %s: %w", def.Name, err)
+			}
+			if rows == 0 {
+				rows = values.Rows
+			}
+			if values.Rows != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, values.Rows, rows)
+			}
+		case ColumnTypePackedBitVector, ColumnTypePackedUint2Vector, ColumnTypePackedUint4Vector:
+			values, ok := batch.PackedUintColumns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing packed_uint column %s", def.Name)
+			}
+			bitsPerElement, _ := PackedUintVectorBits(def.Type)
+			if values.ElementsPerRow != def.FixedWidthElements || values.BitsPerElement != bitsPerElement {
+				return 0, fmt.Errorf("typedcolumn: packed_uint column %s metadata elements_per_row=%d bits=%d want elements_per_row=%d bits=%d", def.Name, values.ElementsPerRow, values.BitsPerElement, def.FixedWidthElements, bitsPerElement)
+			}
+			if err := values.Validate(); err != nil {
+				return 0, fmt.Errorf("typedcolumn: column %s: %w", def.Name, err)
 			}
 			if rows == 0 {
 				rows = values.Rows
@@ -1353,6 +1455,24 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 			return 0, fmt.Errorf("typedcolumn: undeclared dense vector column %s", name)
 		}
 	}
+	for name := range batch.FixedBytesColumns {
+		def, ok := declared[name]
+		if !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared fixed_bytes column %s", name)
+		}
+		if def.Type != ColumnTypeFixedBytes {
+			return 0, fmt.Errorf("typedcolumn: column %s supplied in fixed_bytes carrier but declared type %s", name, def.Type)
+		}
+	}
+	for name := range batch.PackedUintColumns {
+		def, ok := declared[name]
+		if !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared packed_uint column %s", name)
+		}
+		if !IsPackedUintVectorColumnType(def.Type) {
+			return 0, fmt.Errorf("typedcolumn: column %s supplied in packed_uint carrier but declared type %s", name, def.Type)
+		}
+	}
 	for name := range batch.Uint32Vectors {
 		if _, ok := declared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared adjacency_list column %s", name)
@@ -1419,6 +1539,23 @@ func batchAllowsZeroRowsForOffsetsList(batch Batch, defs []ColumnDefinition) boo
 			}
 			bytesColumn, ok := batch.BytesColumns[def.Name]
 			if !ok || bytesColumn.Rows != 0 || len(bytesColumn.Offsets) != 1 || len(bytesColumn.Values) != 0 || bytesColumn.Offsets[0] != 0 {
+				return false
+			}
+			hasOffsetsList = true
+		case ColumnTypeFixedBytes:
+			values, ok := batch.FixedBytesColumns[def.Name]
+			if !ok || values.Rows != 0 || values.BytesPerRow != def.FixedWidthElements || len(values.Values) != 0 {
+				return false
+			}
+			hasOffsetsList = true
+		case ColumnTypePackedBitVector, ColumnTypePackedUint2Vector, ColumnTypePackedUint4Vector:
+			bitsPerElement, _ := PackedUintVectorBits(def.Type)
+			rowBytes, err := PackedUintRowBytes(def.FixedWidthElements, bitsPerElement)
+			if err != nil {
+				return false
+			}
+			values, ok := batch.PackedUintColumns[def.Name]
+			if !ok || values.Rows != 0 || values.ElementsPerRow != def.FixedWidthElements || values.BitsPerElement != bitsPerElement || values.BytesPerRow != rowBytes || len(values.Values) != 0 {
 				return false
 			}
 			hasOffsetsList = true
@@ -1529,7 +1666,7 @@ func (b *ColumnPartBuilder) buildColumn(batch Batch, def ColumnDefinition) (Colu
 		blockRows = b.opts.PartPolicy.RowsPerGranule
 	}
 	column := ColumnPartColumn{Definition: def}
-	descriptor := ColumnPartColumnDescriptor{Name: def.Name, Type: def.Type, FixedWidthElements: def.FixedWidthElements}
+	descriptor := ColumnPartColumnDescriptor{Name: def.Name, Type: def.Type, FixedWidthElements: def.FixedWidthElements, BitsPerElement: def.BitsPerElement}
 	for start := 0; start < len(b.order); start += blockRows {
 		end := min(start+blockRows, len(b.order))
 		g, err := b.buildColumnBlockGranule(batch, def, start, end)
@@ -1653,6 +1790,18 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 			return EncodedGranule{}, err
 		}
 		return b.builder.BuildDenseFixedWidth(values, end-start, def.FixedWidthElements, elementWidth)
+	case ColumnTypeFixedBytes:
+		values, err := b.gatherFixedBytes(batch.FixedBytesColumns[def.Name], def, start, end)
+		if err != nil {
+			return EncodedGranule{}, err
+		}
+		return b.builder.BuildFixedBytes(values, end-start, def.FixedWidthElements)
+	case ColumnTypePackedBitVector, ColumnTypePackedUint2Vector, ColumnTypePackedUint4Vector:
+		values, err := b.gatherPackedUint(batch.PackedUintColumns[def.Name], def, start, end)
+		if err != nil {
+			return EncodedGranule{}, err
+		}
+		return b.builder.BuildPackedUint(values, end-start, def.FixedWidthElements, def.BitsPerElement)
 	case ColumnTypeUint32List:
 		list, err := b.gatherUint32OffsetsList(batch.Uint32OffsetsLists[def.Name], start, end)
 		if err != nil {

@@ -219,6 +219,7 @@ func mustRawBytesOffsetsDescriptorBlockNullCountOffset(t *testing.T, image Colum
 		mustValidationSkipU16(t, &dec)
 		mustValidationReadU32(t, &dec)
 		mustValidationReadU32(t, &dec)
+		mustValidationReadU32(t, &dec) // bits_per_element
 		blockCount := mustValidationReadU32(t, &dec)
 		if name == column {
 			if blockCount == 0 {

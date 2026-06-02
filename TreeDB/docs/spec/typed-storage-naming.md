@@ -68,6 +68,10 @@ drift from the runtime vocabulary strings.
 | `ColumnStoreValueBFloat16Vector` | `bfloat16_vector` | Dense row-major raw bfloat16-bit vector compatibility name. |
 | `ColumnStoreValueFloat32Vector` | `float32_vector` | Legacy public declared-type compatibility name. |
 | `ColumnStoreValueFloat64Vector` | `float64_vector` | Dense row-major numeric vector compatibility name. |
+| `ColumnStoreValueByteVector` | `byte_vector` | Fixed row-byte vector compatibility name. |
+| `ColumnStoreValuePackedBitVector` | `packed_bit_vector` | Packed 1-bit code vector compatibility name. |
+| `ColumnStoreValuePackedUint2Vector` | `packed_uint2_vector` | Packed 2-bit code vector compatibility name. |
+| `ColumnStoreValuePackedUint4Vector` | `packed_uint4_vector` | Packed 4-bit code vector compatibility name. |
 | `ColumnStoreValueUint32List` | `uint32_list` | Generic integer-list declared-type compatibility name. |
 | `ColumnStoreValueBytes` | `bytes` | Generic opaque byte-payload declared-type compatibility name. |
 | `ColumnStoreValueAdjacencyList` | `adjacency_list` | Legacy public declared-type compatibility name. |

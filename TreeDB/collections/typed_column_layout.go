@@ -9,7 +9,7 @@ import (
 
 func typedColumnLayoutDescriptorForAdapterColumn(column typedColumnAdapterColumn) columnlayout.Descriptor {
 	logical, _ := columnStoreSemanticLogicalType(column.Field.ValueType)
-	return columnlayout.Descriptor{
+	desc := columnlayout.Descriptor{
 		Logical:             logical,
 		Physical:            column.Definition.Type,
 		Encoding:            column.Definition.Encoding,
@@ -20,7 +20,18 @@ func typedColumnLayoutDescriptorForAdapterColumn(column typedColumnAdapterColumn
 		DictionaryOrder:     false,
 		DictionaryCollation: "",
 		FixedWidthElements:  column.Definition.FixedWidthElements,
+		BitsPerElement:      column.Definition.BitsPerElement,
 	}
+	if column.Field.ValueType == ColumnStoreValueByteVector {
+		desc.BytesPerRow = column.Field.BytesPerRow
+	} else if columnStoreValueTypeIsPackedUintVector(column.Field.ValueType) {
+		bytesPerRow, err := columnDeclaredPackedUintVectorBytesPerRow(column.Field.ValueType, column.Definition.FixedWidthElements)
+		if err == nil && column.Definition.BitsPerElement > 0 && column.Definition.FixedWidthElements <= int(^uint(0)>>1)/column.Definition.BitsPerElement {
+			desc.BytesPerRow = bytesPerRow
+			desc.LogicalBitsPerRow = column.Definition.FixedWidthElements * column.Definition.BitsPerElement
+		}
+	}
+	return desc
 }
 
 func typedColumnLayoutCapabilitiesForAdapterColumn(column typedColumnAdapterColumn) columnlayout.Capabilities {

@@ -51,7 +51,7 @@ func TestTypedColumnDirectViewConformanceMatrixRowsAreExplicit(t *testing.T) {
 	for _, valueType := range typedColumnDirectViewAllTypeInventory() {
 		support := typedColumnDirectViewFallbackOnly
 		switch valueType {
-		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes,
+		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector, ColumnStoreValueByteVector, ColumnStoreValuePackedBitVector, ColumnStoreValuePackedUint2Vector, ColumnStoreValuePackedUint4Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes,
 			ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16:
 			support = typedColumnDirectViewActiveLittleEndianCandidate
 		case ColumnStoreValueAdjacencyList:
@@ -128,6 +128,10 @@ func TestTypedColumnDirectViewOwnershipMatrix(t *testing.T) {
 		{name: "typed dense float64 vector", valueType: ColumnStoreValueFloat64Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 8, align: 8},
 		{name: "typed uint32 list", valueType: ColumnStoreValueUint32List, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 4, align: 4},
 		{name: "typed bytes", valueType: ColumnStoreValueBytes, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 1, align: 1},
+		{name: "typed byte vector", valueType: ColumnStoreValueByteVector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 1, align: 1},
+		{name: "typed packed bit vector", valueType: ColumnStoreValuePackedBitVector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 1, align: 1},
+		{name: "typed packed uint2 vector", valueType: ColumnStoreValuePackedUint2Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 1, align: 1},
+		{name: "typed packed uint4 vector", valueType: ColumnStoreValuePackedUint4Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 1, align: 1},
 		{name: "bytes is not column graph vector source", valueType: ColumnStoreValueBytes, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector, support: typedColumnDirectViewFallbackOnly},
 		{name: "bytes is not adjacency offsets source", valueType: ColumnStoreValueBytes, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartAdjacencyOffsets, support: typedColumnDirectViewFallbackOnly},
 		{name: "uint32 list is not column graph vector source", valueType: ColumnStoreValueUint32List, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector, support: typedColumnDirectViewFallbackOnly},
@@ -148,6 +152,51 @@ func TestTypedColumnDirectViewOwnershipMatrix(t *testing.T) {
 				t.Fatalf("classification=%+v want support=%s endian=%q size=%d align=%d follow_up=%d", got, tc.support, tc.endian, tc.size, tc.align, tc.followUp)
 			}
 		})
+	}
+}
+
+func TestTypedColumnLayoutDescriptorPackedOverflowZerosDerivedGeometry1931(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	column := typedColumnAdapterColumn{
+		Field: TypedStorageField{
+			Name:           "codes",
+			Path:           "codes",
+			Owner:          TypedStorageOwnerColumnPart,
+			ValueType:      ColumnStoreValuePackedUint4Vector,
+			ElementsPerRow: maxInt/4 + 1,
+			BitsPerElement: 4,
+		},
+		Definition: typedcolumn.ColumnDefinition{
+			Name:               "codes",
+			Type:               typedcolumn.ColumnTypePackedUint4Vector,
+			Encoding:           typedcolumn.EncodingRawPackedUint4Vector,
+			Compression:        typedcolumn.CompressionNone,
+			FixedWidthElements: maxInt/4 + 1,
+			BitsPerElement:     4,
+		},
+	}
+	desc := typedColumnLayoutDescriptorForAdapterColumn(column)
+	if desc.BytesPerRow != 0 || desc.LogicalBitsPerRow != 0 {
+		t.Fatalf("descriptor=%+v want overflow to leave derived row geometry zero", desc)
+	}
+	caps := columnlayout.CapabilitiesFor(desc)
+	if cap := caps.Supports(columnlayout.OpDirectView); cap.Supported() || cap.Reason != columnlayout.ReasonLengthMultipleMismatch {
+		t.Fatalf("overflow direct cap=%+v want %s", cap, columnlayout.ReasonLengthMultipleMismatch)
+	}
+}
+
+func TestTypedColumnDirectViewFixedAndPackedRequireRowGeometry1931(t *testing.T) {
+	byteVector := typedColumnDirectViewClassificationFor(ColumnStoreValueByteVector, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartGeneric)
+	if byteVector.Support != typedColumnDirectViewActiveLittleEndianCandidate || !byteVector.RequiresElementsPerRow {
+		t.Fatalf("byte_vector classification=%+v want active direct candidate requiring row geometry", byteVector)
+	}
+	packed := typedColumnDirectViewClassificationFor(ColumnStoreValuePackedUint4Vector, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartGeneric)
+	if packed.Support != typedColumnDirectViewActiveLittleEndianCandidate || !packed.RequiresElementsPerRow {
+		t.Fatalf("packed classification=%+v want active direct candidate requiring row geometry", packed)
+	}
+	bytes := typedColumnDirectViewClassificationFor(ColumnStoreValueBytes, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartGeneric)
+	if bytes.RequiresElementsPerRow {
+		t.Fatalf("bytes classification=%+v must remain offsets/value geometry, not fixed-row geometry", bytes)
 	}
 }
 
@@ -218,6 +267,10 @@ func TestTypedColumnDirectViewActiveRowsAreCertifiedSetOnly(t *testing.T) {
 		{valueType: ColumnStoreValueFloat64Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                 true,
 		{valueType: ColumnStoreValueUint32List, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                    true,
 		{valueType: ColumnStoreValueBytes, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                         true,
+		{valueType: ColumnStoreValueByteVector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                    true,
+		{valueType: ColumnStoreValuePackedBitVector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                               true,
+		{valueType: ColumnStoreValuePackedUint2Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                             true,
+		{valueType: ColumnStoreValuePackedUint4Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                             true,
 		{valueType: ColumnStoreValueInt8, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                          true,
 		{valueType: ColumnStoreValueUint8, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                         true,
 		{valueType: ColumnStoreValueInt16, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                         true,
