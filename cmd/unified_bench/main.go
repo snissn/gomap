@@ -704,6 +704,7 @@ func main() {
 				VectorDims:               *collectionStorageVectorDimsArg,
 				VectorTopK:               *collectionStorageVectorTopKArg,
 				IncludeFinalFetch:        *collectionStorageIncludeFinalFetchArg,
+				VectorFullDocuments:      *collectionStorageVectorFullDocumentsArg,
 				CheckpointReopen:         *collectionStorageCheckpointReopenArg,
 				ColumnAssetReadIntegrity: collections.ColumnAssetReadIntegrity(strings.TrimSpace(*collectionStorageAssetReadIntegrityArg)),
 				RunBenchprof:             true,

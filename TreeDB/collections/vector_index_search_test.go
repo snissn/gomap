@@ -259,15 +259,19 @@ func TestSearchVectorIndexColumnGraphProjectedDocuments1875(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchVectorIndex full documents: %v", err)
 	}
-	projected, err := col.SearchVectorIndex(VectorIndexSearchOptions{
-		IndexName:            def.Name,
-		Query:                []float32{0, 0, 1},
-		TopK:                 2,
-		EfSearch:             len(rows),
-		IncludeDocuments:     true,
-		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
-		MaxDecodedBlocks:     1,
-	})
+	projectedOpts := VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            []float32{0, 0, 1},
+		TopK:             2,
+		EfSearch:         len(rows),
+		MaxDecodedBlocks: 1,
+	}
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPreset(def)
+	if err != nil {
+		t.Fatalf("ProjectionOrientedVectorDocumentFetchPreset: %v", err)
+	}
+	fetchPreset.ApplyToSearchOptions(&projectedOpts)
+	projected, err := col.SearchVectorIndex(projectedOpts)
 	if err != nil {
 		t.Fatalf("SearchVectorIndex projected documents: %v", err)
 	}
@@ -325,13 +329,17 @@ func TestVectorIndexSearcherProjectedDocumentsSnapshotBound1875(t *testing.T) {
 	if err := col.Delete([]byte("doc-a")); err != nil {
 		t.Fatalf("Delete doc-a after opening searcher: %v", err)
 	}
-	got, err := searcher.Search(VectorIndexSearcherSearchOptions{
-		Query:                []float32{1, 0, 0},
-		TopK:                 1,
-		EfSearch:             len(rows),
-		IncludeDocuments:     true,
-		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
-	})
+	searchOpts := VectorIndexSearcherSearchOptions{
+		Query:    []float32{1, 0, 0},
+		TopK:     1,
+		EfSearch: len(rows),
+	}
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPreset(def)
+	if err != nil {
+		t.Fatalf("ProjectionOrientedVectorDocumentFetchPreset: %v", err)
+	}
+	fetchPreset.ApplyToSearcherSearchOptions(&searchOpts)
+	got, err := searcher.Search(searchOpts)
 	if err != nil {
 		t.Fatalf("Search projected after delete on bound searcher: %v", err)
 	}
@@ -1713,14 +1721,17 @@ func BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsExcludeEmbedd
 	}
 	query := append([]float32(nil), input[37].vector...)
 	opts := VectorIndexSearchOptions{
-		IndexName:            def.Name,
-		Query:                query,
-		TopK:                 topK,
-		EfSearch:             efSearch,
-		IncludeDocuments:     true,
-		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
-		MaxDecodedBlocks:     1,
+		IndexName:        def.Name,
+		Query:            query,
+		TopK:             topK,
+		EfSearch:         efSearch,
+		MaxDecodedBlocks: 1,
 	}
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPreset(def)
+	if err != nil {
+		b.Fatalf("ProjectionOrientedVectorDocumentFetchPreset: %v", err)
+	}
+	fetchPreset.ApplyToSearchOptions(&opts)
 	warm, err := col.SearchVectorIndex(opts)
 	if err != nil {
 		b.Fatalf("warm SearchVectorIndex: %v", err)
@@ -1813,12 +1824,15 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderWithDocumentsExclude
 	defer func() { _ = searcher.Close() }()
 	query := append([]float32(nil), input[37].vector...)
 	opts := VectorIndexSearcherSearchOptions{
-		Query:                query,
-		TopK:                 topK,
-		EfSearch:             efSearch,
-		IncludeDocuments:     true,
-		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
+		Query:    query,
+		TopK:     topK,
+		EfSearch: efSearch,
 	}
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPreset(def)
+	if err != nil {
+		b.Fatalf("ProjectionOrientedVectorDocumentFetchPreset: %v", err)
+	}
+	fetchPreset.ApplyToSearcherSearchOptions(&opts)
 	if _, err := searcher.Search(opts); err != nil {
 		b.Fatalf("warm Search: %v", err)
 	}
@@ -1857,7 +1871,11 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocum
 }
 
 func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocumentsExcludeEmbedding1875(b *testing.B) {
-	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b, true, DocumentFetchOptions{ExcludePaths: []string{"embedding"}})
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPresetForField("embedding")
+	if err != nil {
+		b.Fatalf("ProjectionOrientedVectorDocumentFetchPresetForField: %v", err)
+	}
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b, fetchPreset.IncludeDocuments, fetchPreset.DocumentFetchOptions)
 }
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
@@ -2015,7 +2033,11 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelW
 }
 
 func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithDocumentsExcludeEmbedding1875(b *testing.B) {
-	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b, true, DocumentFetchOptions{ExcludePaths: []string{"embedding"}})
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPresetForField("embedding")
+	if err != nil {
+		b.Fatalf("ProjectionOrientedVectorDocumentFetchPresetForField: %v", err)
+	}
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b, fetchPreset.IncludeDocuments, fetchPreset.DocumentFetchOptions)
 }
 
 func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {

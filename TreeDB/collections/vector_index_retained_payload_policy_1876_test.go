@@ -52,7 +52,7 @@ func TestSearchVectorIndexColumnGraphRetainedPayloadPolicyMatrix1876(t *testing.
 		t.Run(retainedPayloadPolicyName1876(policy), func(t *testing.T) {
 			fixture := openRetainedPayloadPolicyFixture1876(t, shape, policy, false)
 			defer func() { _ = fixture.db.Close() }()
-			for _, mode := range retainedPayloadSearchModes1876() {
+			for _, mode := range retainedPayloadSearchModes1876(t, fixture.def) {
 				mode := mode
 				t.Run(mode.name, func(t *testing.T) {
 					got, err := fixture.col.SearchVectorIndex(VectorIndexSearchOptions{
@@ -105,7 +105,7 @@ func TestSearchVectorIndexColumnGraphRetainedFullDocumentsReopenValueLogPointers
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, fixture.def.Name, fixture.shape.topK)
 	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, fixture.input, fixture.query, fixture.shape.topK), true)
-	assertRetainedPayloadPolicySearchDocuments1876(t, got, ColumnRetainedPayloadFull, retainedPayloadPolicySearchMode1876{name: "full_documents"}, fixture.docs)
+	assertRetainedPayloadPolicySearchDocuments1876(t, got, ColumnRetainedPayloadFull, retainedPayloadPolicySearchMode1876{name: "full_documents_comparison"}, fixture.docs)
 	if got.Stats.DocumentRetainedBytes == 0 || got.Stats.DocumentRowRefUnsupported == 0 {
 		t.Fatalf("stats=%+v want retained-full fetch from primary value-log-backed payload after reopen", got.Stats)
 	}
@@ -120,10 +120,12 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphRetainedPayloadPolicy1876(b *tes
 	for _, policy := range retainedPayloadPolicies1876() {
 		policy := policy
 		b.Run(retainedPayloadPolicyName1876(policy), func(b *testing.B) {
-			for _, mode := range retainedPayloadSearchModes1876() {
+			fixture := openRetainedPayloadPolicyFixture1876(b, shape, policy, false)
+			defer func() { _ = fixture.db.Close() }()
+			for _, mode := range retainedPayloadSearchModes1876(b, fixture.def) {
 				mode := mode
 				b.Run(mode.name, func(b *testing.B) {
-					benchmarkOpenVectorIndexSearcherRetainedPayloadPolicy1876(b, shape, policy, mode)
+					benchmarkOpenVectorIndexSearcherRetainedPayloadPolicy1876(b, fixture, mode)
 				})
 			}
 		})
@@ -201,13 +203,11 @@ func benchmarkOpenVectorIndexSearcherProjectionOrientedFetchPreset1903(b *testin
 	}
 	b.StopTimer()
 	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
-	reportRetainedPayloadPolicyFixtureMetrics1876(b, fixture, retainedPayloadPolicySearchMode1876{name: "exclude_embedding", opts: opts.DocumentFetchOptions})
+	reportRetainedPayloadPolicyFixtureMetrics1876(b, fixture, retainedPayloadPolicySearchMode1876{name: "preferred_exclude_embedding", opts: opts.DocumentFetchOptions})
 }
 
-func benchmarkOpenVectorIndexSearcherRetainedPayloadPolicy1876(b *testing.B, shape retainedPayloadPolicyFixtureShape1876, policy ColumnRetainedPayloadPolicy, mode retainedPayloadPolicySearchMode1876) {
+func benchmarkOpenVectorIndexSearcherRetainedPayloadPolicy1876(b *testing.B, fixture retainedPayloadPolicyFixture1876, mode retainedPayloadPolicySearchMode1876) {
 	b.Helper()
-	fixture := openRetainedPayloadPolicyFixture1876(b, shape, policy, false)
-	defer func() { _ = fixture.db.Close() }()
 	searcher, err := fixture.col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: fixture.def.Name, MaxDecodedBlocks: 1})
 	if err != nil {
 		b.Fatalf("OpenVectorIndexSearcher: %v", err)
@@ -250,10 +250,15 @@ func retainedPayloadPolicies1876() []ColumnRetainedPayloadPolicy {
 	}
 }
 
-func retainedPayloadSearchModes1876() []retainedPayloadPolicySearchMode1876 {
+func retainedPayloadSearchModes1876(tb testing.TB, def VectorIndexDefinition) []retainedPayloadPolicySearchMode1876 {
+	tb.Helper()
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPreset(def)
+	if err != nil {
+		tb.Fatalf("ProjectionOrientedVectorDocumentFetchPreset: %v", err)
+	}
 	return []retainedPayloadPolicySearchMode1876{
-		{name: "full_documents"},
-		{name: "exclude_embedding", opts: DocumentFetchOptions{ExcludePaths: []string{"embedding"}}},
+		{name: "preferred_exclude_embedding", opts: fetchPreset.DocumentFetchOptions},
+		{name: "full_documents_comparison"},
 	}
 }
 
