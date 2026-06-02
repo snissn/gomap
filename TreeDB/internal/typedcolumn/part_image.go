@@ -1097,13 +1097,15 @@ func (b *columnPartImageBuilder) appendSectionWithOptionalCompression(section Co
 }
 
 func canCompressImageSection(section ColumnPartImageSection, rawBytes int, compression Compression) bool {
-	if compression == CompressionNone {
+	if section.Kind != ColumnPartImageSectionRowLocators {
 		return false
 	}
-	if section.Kind == ColumnPartImageSectionRowLocators && rawBytes > maxCompressedRowLocatorSectionRawBytes {
+	switch compression {
+	case CompressionSnappy, CompressionLZ4:
+		return rawBytes <= maxCompressedRowLocatorSectionRawBytes
+	default:
 		return false
 	}
-	return true
 }
 
 type dictionaryImageEntry struct {
