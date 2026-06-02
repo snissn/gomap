@@ -43,8 +43,12 @@ func TestBuildTreeDBOptions_DefaultVlogCompressionAuto(t *testing.T) {
 	if opts.ValueLog.CompressionAutotune.Mode != treedb.AutotuneUnset {
 		t.Fatalf("unexpected default autotune mode: %v", opts.ValueLog.CompressionAutotune.Mode)
 	}
-	if got := rep.formatText(""); !strings.Contains(got, "vlog.compression_autotune=default (effective=medium)") {
+	got := rep.formatText("")
+	if !strings.Contains(got, "vlog.compression_autotune=default (effective=medium)") {
 		t.Fatalf("resolved options missing default autotune note: %q", got)
+	}
+	if !strings.Contains(got, "vlog.compression=auto selects the actual per-frame codec at runtime") {
+		t.Fatalf("resolved options missing auto actual-selection note: %q", got)
 	}
 }
 

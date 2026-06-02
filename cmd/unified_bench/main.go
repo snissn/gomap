@@ -5016,6 +5016,13 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString(perf)
 		sb.WriteString("\n```\n")
 	}
+	if codecStats := strings.TrimSpace(renderTreeDBVlogCodecSummaryString(run.Instances, run.TreeDBStats)); codecStats != "" {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB Value-Log Codec Summary (End of Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(codecStats)
+		sb.WriteString("\n```\n")
+	}
 	if stats := strings.TrimSpace(renderTreeDBSelectedStatsString(run.Instances, run.TreeDBStats)); stats != "" {
 		sb.WriteString("\n")
 		sb.WriteString("## TreeDB Selected Stats (End of Run)\n\n")
@@ -5100,6 +5107,151 @@ func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, di
 		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+type treeDBVlogSummaryMetric struct {
+	label string
+	key   string
+}
+
+func renderTreeDBVlogCodecSummaryString(instances []*DBInstance, treeStats map[string]map[string]string) string {
+	if len(treeStats) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		dbName := inst.Wrapper.Name()
+		stats := treeStats[dbName]
+		if len(stats) == 0 {
+			continue
+		}
+		var dbSB strings.Builder
+		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.frames", []treeDBVlogSummaryMetric{
+			{label: "off", key: "treedb.cache.vlog_auto.frames.off"},
+			{label: "dict", key: "treedb.cache.vlog_auto.frames.dict"},
+			{label: "block_snappy", key: "treedb.cache.vlog_auto.frames.block_snappy"},
+			{label: "block_lz4", key: "treedb.cache.vlog_auto.frames.block_lz4"},
+		})
+		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.bytes", []treeDBVlogSummaryMetric{
+			{label: "off", key: "treedb.cache.vlog_auto.bytes.off"},
+			{label: "dict", key: "treedb.cache.vlog_auto.bytes.dict"},
+			{label: "block_snappy", key: "treedb.cache.vlog_auto.bytes.block_snappy"},
+			{label: "block_lz4", key: "treedb.cache.vlog_auto.bytes.block_lz4"},
+		})
+		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.frames_frac", []treeDBVlogSummaryMetric{
+			{label: "off", key: "treedb.cache.vlog_auto.frames_frac.off"},
+			{label: "dict", key: "treedb.cache.vlog_auto.frames_frac.dict"},
+			{label: "block_snappy", key: "treedb.cache.vlog_auto.frames_frac.block_snappy"},
+			{label: "block_lz4", key: "treedb.cache.vlog_auto.frames_frac.block_lz4"},
+		})
+		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.probes", []treeDBVlogSummaryMetric{
+			{label: "attempts", key: "treedb.cache.vlog_auto.probe_attempts"},
+			{label: "successes", key: "treedb.cache.vlog_auto.probe_successes"},
+			{label: "success_frac", key: "treedb.cache.vlog_auto.probe_success_frac"},
+			{label: "hold_enters", key: "treedb.cache.vlog_auto.hold_enters"},
+			{label: "hold_exits", key: "treedb.cache.vlog_auto.hold_exits"},
+			{label: "bypass_bytes", key: "treedb.cache.vlog_auto.bypass_bytes"},
+		})
+		for _, mode := range []string{"off", "block", "dict"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_write_mode."+mode, []treeDBVlogSummaryMetric{
+				{label: "frames", key: "treedb.cache.vlog_write_mode.frames." + mode},
+				{label: "raw_bytes", key: "treedb.cache.vlog_write_mode.raw_bytes." + mode},
+				{label: "stored_bytes", key: "treedb.cache.vlog_write_mode.stored_bytes." + mode},
+				{label: "stored_ratio", key: "treedb.cache.vlog_write_mode.stored_ratio." + mode},
+			})
+		}
+		for _, kind := range []string{"single_value", "outer_leaf", "mixed"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_payload_kind."+kind, []treeDBVlogSummaryMetric{
+				{label: "frames", key: "treedb.cache.vlog_payload_kind.frames." + kind},
+				{label: "raw_bytes", key: "treedb.cache.vlog_payload_kind.raw_bytes." + kind},
+				{label: "stored_bytes", key: "treedb.cache.vlog_payload_kind.stored_bytes." + kind},
+				{label: "stored_ratio", key: "treedb.cache.vlog_payload_kind.stored_ratio." + kind},
+			})
+		}
+		for _, kind := range []string{"single_value", "outer_leaf"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_payload_split."+kind, []treeDBVlogSummaryMetric{
+				{label: "records", key: "treedb.cache.vlog_payload_split.records." + kind},
+				{label: "raw_bytes", key: "treedb.cache.vlog_payload_split.raw_bytes." + kind},
+				{label: "stored_bytes", key: "treedb.cache.vlog_payload_split.stored_bytes." + kind},
+				{label: "stored_ratio", key: "treedb.cache.vlog_payload_split.stored_ratio." + kind},
+			})
+		}
+		for _, codec := range []string{"none", "snappy", "lz4", "legacy_page", "unknown", "mixed"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_outer_leaf_codec."+codec, []treeDBVlogSummaryMetric{
+				{label: "frames", key: "treedb.cache.vlog_outer_leaf_codec.frames." + codec},
+				{label: "raw_bytes", key: "treedb.cache.vlog_outer_leaf_codec.raw_bytes." + codec},
+				{label: "stored_bytes", key: "treedb.cache.vlog_outer_leaf_codec.stored_bytes." + codec},
+				{label: "stored_ratio", key: "treedb.cache.vlog_outer_leaf_codec.stored_ratio." + codec},
+			})
+		}
+		for _, codec := range []string{"snappy", "lz4"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_block.k."+codec, []treeDBVlogSummaryMetric{
+				{label: "count", key: "treedb.cache.vlog_block.k.count." + codec},
+				{label: "avg", key: "treedb.cache.vlog_block.k.avg." + codec},
+				{label: "max", key: "treedb.cache.vlog_block.k.max." + codec},
+				{label: "ratio", key: "treedb.cache.vlog_block.ratio." + codec},
+			})
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_block.k.bucket."+codec, []treeDBVlogSummaryMetric{
+				{label: "le_1", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_1"},
+				{label: "le_2", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_2"},
+				{label: "le_4", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_4"},
+				{label: "le_8", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_8"},
+				{label: "le_16", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_16"},
+				{label: "le_32", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_32"},
+				{label: "le_64", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_64"},
+				{label: "le_128", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_128"},
+			})
+		}
+		if dbSB.Len() == 0 {
+			continue
+		}
+		sb.WriteString(dbName)
+		sb.WriteString(":\n")
+		sb.WriteString(dbSB.String())
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func appendTreeDBVlogSummaryLine(sb *strings.Builder, stats map[string]string, label string, metrics []treeDBVlogSummaryMetric) bool {
+	parts := make([]string, 0, len(metrics))
+	hasSignal := false
+	for _, metric := range metrics {
+		value, ok := stats[metric.key]
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		parts = append(parts, metric.label+"="+value)
+		if treeDBVlogStatValueHasSignal(value) {
+			hasSignal = true
+		}
+	}
+	if len(parts) == 0 || !hasSignal {
+		return false
+	}
+	sb.WriteString("  ")
+	sb.WriteString(label)
+	sb.WriteString(": ")
+	sb.WriteString(strings.Join(parts, " "))
+	sb.WriteByte('\n')
+	return true
+}
+
+func treeDBVlogStatValueHasSignal(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if f, err := strconv.ParseFloat(value, 64); err == nil {
+		return f != 0
+	}
+	return value != "false"
 }
 
 func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[string]map[string]string) string {
@@ -5319,6 +5471,27 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
 			sb.WriteString("```text\n")
 			sb.WriteString(perf)
+			sb.WriteString("\n```\n\n")
+		}
+	}
+
+	anyCodecStats := false
+	for _, run := range runs {
+		if strings.TrimSpace(renderTreeDBVlogCodecSummaryString(run.Instances, run.TreeDBStats)) != "" {
+			anyCodecStats = true
+			break
+		}
+	}
+	if anyCodecStats {
+		sb.WriteString("## TreeDB Value-Log Codec Summary (End of Run)\n\n")
+		for _, run := range runs {
+			codecStats := strings.TrimSpace(renderTreeDBVlogCodecSummaryString(run.Instances, run.TreeDBStats))
+			if codecStats == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(codecStats)
 			sb.WriteString("\n```\n\n")
 		}
 	}

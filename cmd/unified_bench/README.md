@@ -105,7 +105,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-force-value-pointers` TreeDB: force all values into the value log
 - `-treedb-value-log-threshold` TreeDB: inline-vs-pointer threshold
 - `-treedb-vlog-compression` TreeDB: value-log compression mode (`default|off|block|dict|auto`)
-- `-treedb-vlog-block-codec` TreeDB: block codec (`snappy|lz4`)
+- `-treedb-vlog-block-codec` TreeDB: block codec (`snappy|lz4`). When `-treedb-vlog-compression=auto`, this is the forced block-mode/default block codec, not proof that auto selected that codec; use the value-log codec summary and `treedb.cache.vlog_auto.*` stats for actual per-frame selection.
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-generation-policy` TreeDB: generation policy (`default|off|hot_warm_cold`)
 
@@ -120,6 +120,25 @@ These are mainly for experiments and should usually be left at engine defaults:
 - `-treedb-max-queued-memtables`, `-treedb-slowdown-backlog-seconds`, `-treedb-stop-backlog-seconds`
 
 Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
+
+### TreeDB value-log codec matrix
+
+For #2194-style codec characterization, use the matrix harness to run `auto`,
+`off`, `block/snappy`, and `block/lz4` with one shared dataset shape per value
+pattern:
+
+```bash
+RUN_DIR=/tmp/treedb_vlog_codec_matrix_$(date +%Y%m%d_%H%M%S) \
+  scripts/treedb_vlog_codec_matrix.sh
+```
+
+Defaults cover `zero`, `celestia_height_prefix_fill`,
+`half_repeat_half_random`, and `random` patterns with
+`dataset_write_random,batch_random,random_read_parallel,full_scan,prefix_scan`.
+Set `KEYS`, `VALSIZE`, `BATCHSIZE`, `READ_WORKERS`, `TESTS`, `PATTERNS`, and
+leaf-mmap environment variables to match the policy matrix under review. Final
+codec/default decisions must rerun this after #2190 frame grouping is merged or
+explicitly deferred.
 
 ### Additional Common Flags
 
@@ -152,7 +171,7 @@ Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
 - `-allocsprofilerate` allocation sampling rate in bytes for `runtime.MemProfileRate` (default `524288`)
 - `-checkpoint-cpuprofile` write per-checkpoint CPU profiles to `<prefix>_checkpoint_<test>_<db>.pprof`
 - `-checkpoint-cpuprofile-tests` restrict checkpoint CPU profiling to a CSV list of tests
-- `-profile-dir` write all profile outputs into one directory (auto-sets defaults for `-cpuprofile`, `-allocsprofile`, `-checkpoint-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace`; explicit flags still win). Also emits `benchprof_results.json` and `benchprof_results.md`, then automatically runs `benchprof` in-process. Requires `-path-label native-fastpath` or `-path-label oracle`.
+- `-profile-dir` write all profile outputs into one directory (auto-sets defaults for `-cpuprofile`, `-allocsprofile`, `-checkpoint-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace`; explicit flags still win). Also emits `benchprof_results.json` and `benchprof_results.md`, then automatically runs `benchprof` in-process. Requires `-path-label native-fastpath` or `-path-label oracle`. For TreeDB, the markdown includes a value-log codec summary with actual auto/write-mode/outer-leaf codec selection and block frame-K counters.
 - `-treedb-cache-stats-before-reads` print select `treedb.cache.*` stats before read/scan tests (treedb only)
 - `-blockprofile`, `-mutexprofile` write global profiling artifacts to files and also emit per-test contention delta profiles in the same directory (`block_<test>_<db>.pprof`, `mutex_<test>_<db>.pprof`) when the computed delta is non-empty
 - `-trace` write runtime execution trace to file

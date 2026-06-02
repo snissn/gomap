@@ -309,6 +309,8 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 						"treedb.publish.ordered_root_delta_group.root_apply_ns_total":    "1200",
 						"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "32",
 						"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                  "1073741824",
+						"treedb.cache.vlog_auto.frames.block_lz4":                        "9",
+						"treedb.cache.vlog_block.k.bucket.lz4.le_1":                      "9",
 					},
 				},
 			},
@@ -346,7 +348,9 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 	})
 	if !strings.Contains(md, "## TreeDB Stats Metadata") ||
 		!strings.Contains(md, "treedb.publish.ordered_root_delta_group.root_apply_calls_total") ||
-		!strings.Contains(md, "treedb.vlog.mmap_max_mapped_leaf_sealed_bytes") {
+		!strings.Contains(md, "treedb.vlog.mmap_max_mapped_leaf_sealed_bytes") ||
+		!strings.Contains(md, "treedb.cache.vlog_auto.frames.block_lz4") ||
+		!strings.Contains(md, "treedb.cache.vlog_block.k.bucket.lz4.le_1") {
 		t.Fatalf("markdown missing TreeDB stats metadata:\n%s", md)
 	}
 }

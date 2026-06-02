@@ -825,6 +825,9 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 	if *treedbVlogDictK > 0 {
 		opts.ValueLog.CompressionAutotune.CandidateK = []int{*treedbVlogDictK}
 	}
+	if opts.ValueLog.Compression == treedb.ValueLogCompressionAuto {
+		notes = append(notes, "vlog.compression=auto selects the actual per-frame codec at runtime; vlog.block_codec is the forced block-mode/default block codec, not proof that auto used that codec. Use treedb.cache.vlog_auto.* and treedb.cache.vlog_write_mode.* stats for actual selection.")
+	}
 	if opts.ValueLog.ForcePointers && opts.ValueLog.PointerThreshold > 0 {
 		notes = append(notes, "vlog.force_pointers=true: pointer_threshold does not affect pointer eligibility")
 	}
