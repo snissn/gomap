@@ -622,7 +622,7 @@ func TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn(t *test
 		got, err := reopen.Get(key)
 		want, ok := expected[string(key)]
 		if !ok {
-			if err != nil {
+			if err != nil && err != treedb.ErrKeyNotFound {
 				t.Fatalf("get deleted %d: %v", i, err)
 			}
 			if got != nil {
