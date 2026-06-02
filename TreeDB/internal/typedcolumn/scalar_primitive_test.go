@@ -295,6 +295,11 @@ func TestPrimitiveScalarValidationFailsClosed1929(t *testing.T) {
 	if _, err := NewColumnPartBuilder(Options{Columns: []ColumnDefinition{{Name: "id", Type: ColumnTypeInt64}, {Name: "bad", Type: ColumnTypeFloat16, Encoding: EncodingRawFloat16, Compression: CompressionSnappy, CompressionSet: true}}, LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}}}); err == nil || !strings.Contains(err.Error(), "requires uncompressed raw sections") {
 		t.Fatalf("float16 compression err=%v", err)
 	}
+	var builder GranuleBuilder
+	builder.Reset(Config{Encoding: EncodingRawUint8, Compression: CompressionNone})
+	if _, err := builder.BuildUint8(make([]uint8, maxGranuleDecodeRows+1)); err == nil || !strings.Contains(err.Error(), "exceed cap") {
+		t.Fatalf("oversized primitive build err=%v want row cap rejection", err)
+	}
 
 	var reader GranuleReader
 	if _, err := reader.DecodeUint16(EncodedGranule{Rows: 1, Encoding: EncodingRawInt16, Compression: CompressionNone, RawBytes: 2, StoredBytes: 2, PayloadRef: PayloadRef{Kind: PayloadRefInline, Length: 2}, Payload: []byte{1, 0}}); err == nil || !strings.Contains(err.Error(), "uint16 decode got encoding") {

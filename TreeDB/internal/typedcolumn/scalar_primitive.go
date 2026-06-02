@@ -84,8 +84,8 @@ func (b *GranuleBuilder) BuildUint32(values []uint32) (EncodedGranule, error) {
 }
 
 func (b *GranuleBuilder) BuildUint64(values []uint64) (EncodedGranule, error) {
-	if len(values) == 0 {
-		return EncodedGranule{}, errors.New("typedcolumn: empty granule")
+	if err := validateRawScalarBuildRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	if err := validateRawScalarBuildConfig(b.cfg, EncodingRawUint64, "uint64"); err != nil {
 		return EncodedGranule{}, err
@@ -118,8 +118,8 @@ func (b *GranuleBuilder) BuildBFloat16Bits(values []uint16) (EncodedGranule, err
 }
 
 func (b *GranuleBuilder) buildRawInt8(values []int8, columnType ColumnType, encoding Encoding, name string) (EncodedGranule, error) {
-	if len(values) == 0 {
-		return EncodedGranule{}, errors.New("typedcolumn: empty granule")
+	if err := validateRawScalarBuildRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	if err := validateRawScalarBuildConfig(b.cfg, encoding, name); err != nil {
 		return EncodedGranule{}, err
@@ -140,8 +140,8 @@ func (b *GranuleBuilder) buildRawInt8(values []int8, columnType ColumnType, enco
 }
 
 func (b *GranuleBuilder) buildRawUint8(values []uint8, columnType ColumnType, encoding Encoding, name string) (EncodedGranule, error) {
-	if len(values) == 0 {
-		return EncodedGranule{}, errors.New("typedcolumn: empty granule")
+	if err := validateRawScalarBuildRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	if err := validateRawScalarBuildConfig(b.cfg, encoding, name); err != nil {
 		return EncodedGranule{}, err
@@ -162,8 +162,8 @@ func (b *GranuleBuilder) buildRawUint8(values []uint8, columnType ColumnType, en
 }
 
 func (b *GranuleBuilder) buildRawInt16(values []int16, columnType ColumnType, encoding Encoding, name string) (EncodedGranule, error) {
-	if len(values) == 0 {
-		return EncodedGranule{}, errors.New("typedcolumn: empty granule")
+	if err := validateRawScalarBuildRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	if err := validateRawScalarBuildConfig(b.cfg, encoding, name); err != nil {
 		return EncodedGranule{}, err
@@ -184,8 +184,8 @@ func (b *GranuleBuilder) buildRawInt16(values []int16, columnType ColumnType, en
 }
 
 func (b *GranuleBuilder) buildRawUint16(values []uint16, columnType ColumnType, encoding Encoding, name string, hasMinMax bool) (EncodedGranule, error) {
-	if len(values) == 0 {
-		return EncodedGranule{}, errors.New("typedcolumn: empty granule")
+	if err := validateRawScalarBuildRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	if err := validateRawScalarBuildConfig(b.cfg, encoding, name); err != nil {
 		return EncodedGranule{}, err
@@ -209,8 +209,8 @@ func (b *GranuleBuilder) buildRawUint16(values []uint16, columnType ColumnType, 
 }
 
 func (b *GranuleBuilder) buildRawInt32(values []int32, columnType ColumnType, encoding Encoding, name string) (EncodedGranule, error) {
-	if len(values) == 0 {
-		return EncodedGranule{}, errors.New("typedcolumn: empty granule")
+	if err := validateRawScalarBuildRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	if err := validateRawScalarBuildConfig(b.cfg, encoding, name); err != nil {
 		return EncodedGranule{}, err
@@ -231,8 +231,8 @@ func (b *GranuleBuilder) buildRawInt32(values []int32, columnType ColumnType, en
 }
 
 func (b *GranuleBuilder) buildRawUint32(values []uint32, columnType ColumnType, encoding Encoding, name string, hasMinMax bool) (EncodedGranule, error) {
-	if len(values) == 0 {
-		return EncodedGranule{}, errors.New("typedcolumn: empty granule")
+	if err := validateRawScalarBuildRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	if err := validateRawScalarBuildConfig(b.cfg, encoding, name); err != nil {
 		return EncodedGranule{}, err
@@ -253,6 +253,13 @@ func (b *GranuleBuilder) buildRawUint32(values []uint32, columnType ColumnType, 
 	}
 	min, max := minMaxUint32(values)
 	return newEncodedGranule(len(values), int64(min), int64(max), true, encoding, selection), nil
+}
+
+func validateRawScalarBuildRows(rows int) error {
+	if rows == 0 {
+		return errors.New("typedcolumn: empty granule")
+	}
+	return validateGranuleDecodeRows(rows)
 }
 
 func validateRawScalarBuildConfig(cfg Config, want Encoding, name string) error {
