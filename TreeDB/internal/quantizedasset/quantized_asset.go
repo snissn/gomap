@@ -291,10 +291,8 @@ func validateSchema(schema SchemaDescriptor, expected ExpectedSchema) error {
 	if expected.CodeWidthBits != 0 && schema.CodeWidthBits != expected.CodeWidthBits {
 		return fmt.Errorf("quantizedasset: code_width_bits=%d want %d", schema.CodeWidthBits, expected.CodeWidthBits)
 	}
-	if expected.RowCount != 0 || schema.RowCount != 0 {
-		if schema.RowCount != expected.RowCount {
-			return fmt.Errorf("quantizedasset: row_count=%d want %d", schema.RowCount, expected.RowCount)
-		}
+	if expected.RowCount != 0 && schema.RowCount != expected.RowCount {
+		return fmt.Errorf("quantizedasset: row_count=%d want %d", schema.RowCount, expected.RowCount)
 	}
 	if schema.OrdinalOrder == "" {
 		return errors.New("quantizedasset: missing ordinal_order")
@@ -330,13 +328,6 @@ func validateSchema(schema SchemaDescriptor, expected ExpectedSchema) error {
 		}
 		if _, ok := seen[role]; !ok {
 			return fmt.Errorf("quantizedasset: missing required role %q", role)
-		}
-	}
-	for _, column := range schema.Columns {
-		if column.Required {
-			if _, ok := seen[column.Role]; !ok {
-				return fmt.Errorf("quantizedasset: missing required role %q", column.Role)
-			}
 		}
 	}
 	return nil
@@ -501,7 +492,11 @@ func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImage
 	if err != nil {
 		return preparedColumn{}, ColumnFootprint{}, err
 	}
-	if len(payload) != rowBytes*schema.RowCount {
+	wantBytes, err := checkedMul(rowBytes, schema.RowCount)
+	if err != nil {
+		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q payload size: %w", desc.Role, err)
+	}
+	if len(payload) != wantBytes {
 		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q payload bytes=%d want rows=%d*row_bytes=%d", desc.Role, len(payload), schema.RowCount, rowBytes)
 	}
 	col := preparedColumn{
