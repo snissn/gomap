@@ -712,6 +712,62 @@ func TestLeafPageLogStoresReadCache(t *testing.T) {
 	}
 }
 
+type leafPageCacheBatchTestLog struct {
+	ptrs []page.LeafLogPtr
+}
+
+func (l *leafPageCacheBatchTestLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	if len(l.ptrs) == 0 {
+		return page.LeafLogPtr{}, nil
+	}
+	return l.ptrs[0], nil
+}
+
+func (l *leafPageCacheBatchTestLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return l.ptrs[:len(leafPages)], nil
+}
+
+func (l *leafPageCacheBatchTestLog) Flush() error { return nil }
+func (l *leafPageCacheBatchTestLog) Sync() error  { return nil }
+
+func TestLeafPageLogStoresReadCacheForBatch(t *testing.T) {
+	ptrs := []page.LeafLogPtr{
+		{FileID: 11, Offset: 256, RecordLengthHint: page.ValuePtrMarkGrouped(4096, 0), SubIndex: 0},
+		{FileID: 11, Offset: 256, RecordLengthHint: page.ValuePtrMarkGrouped(4096, 1), SubIndex: 1},
+	}
+	db := &DB{leafPageReadCache: newLeafPageReadCache(8)}
+	log := &leafPageLogWithRecordLengthHints{db: db, inner: &leafPageCacheBatchTestLog{ptrs: ptrs}}
+	leafPages := [][]byte{
+		bytes.Repeat([]byte{0x7a}, page.PageSize),
+		bytes.Repeat([]byte{0x7b}, page.PageSize),
+	}
+
+	gotPtrs, err := log.AppendLeafPages(leafPages)
+	if err != nil {
+		t.Fatalf("AppendLeafPages: %v", err)
+	}
+	if len(gotPtrs) != len(ptrs) {
+		t.Fatalf("got ptrs=%d want %d", len(gotPtrs), len(ptrs))
+	}
+	for i, ptr := range ptrs {
+		got, ok := db.leafPageReadCache.get(ptr)
+		if !ok {
+			t.Fatalf("expected cached leaf page %d", i)
+		}
+		if !bytes.Equal(got, leafPages[i]) {
+			t.Fatalf("cached leaf %d mismatch", i)
+		}
+	}
+	leafPages[0][0] = 0
+	got, ok := db.leafPageReadCache.get(ptrs[0])
+	if !ok {
+		t.Fatalf("expected cached leaf page after source mutation")
+	}
+	if got[0] != 0x7a {
+		t.Fatalf("cache should own a copy, got first byte=%x", got[0])
+	}
+}
+
 type leafPageCacheMismatchBatchLog struct{}
 
 func (l *leafPageCacheMismatchBatchLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {

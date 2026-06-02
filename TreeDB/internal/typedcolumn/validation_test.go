@@ -6,6 +6,63 @@ import (
 	"testing"
 )
 
+func TestTypedColumnCompressedRowLocatorsRejectHugeDecodedLength1952(t *testing.T) {
+	rows := maxCompressedRowLocatorSectionRawBytes/rowLocatorBytes + 1
+	image := ColumnPartImage{Rows: rows, Bytes: []byte{0}}
+	section := ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Offset: 0, Length: 1, Rows: rows, Compression: CompressionLZ4}
+	if _, err := image.rowLocatorSectionBytes(section); err == nil || !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("rowLocatorSectionBytes huge decoded length err=%v want max-length fail-closed", err)
+	}
+}
+
+func TestTypedColumnUncompressedRowLocatorRawBytesAreNotCompressedCapLimited1952(t *testing.T) {
+	rows := maxCompressedRowLocatorSectionRawBytes/rowLocatorBytes + 1
+	rawBytes, err := rowLocatorSectionRawBytes(rows)
+	if err != nil {
+		t.Fatalf("rowLocatorSectionRawBytes(%d): %v", rows, err)
+	}
+	if rawBytes <= maxCompressedRowLocatorSectionRawBytes {
+		t.Fatalf("rawBytes=%d want above compressed decode cap=%d", rawBytes, maxCompressedRowLocatorSectionRawBytes)
+	}
+	section := ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Rows: rows}
+	if canCompressImageSection(section, rawBytes, CompressionSnappy) {
+		t.Fatalf("canCompressImageSection allowed compressed locator rawBytes=%d above cap=%d", rawBytes, maxCompressedRowLocatorSectionRawBytes)
+	}
+	if !canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Rows: 1}, rowLocatorBytes+4, CompressionSnappy) {
+		t.Fatalf("canCompressImageSection rejected small compressed locator section")
+	}
+	if canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionDictionaries}, 128, CompressionSnappy) {
+		t.Fatalf("canCompressImageSection allowed unsupported dictionary section compression")
+	}
+	if canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Rows: 1}, rowLocatorBytes+4, CompressionZSTD) {
+		t.Fatalf("canCompressImageSection allowed unsupported zstd locator compression")
+	}
+}
+
+func TestTypedColumnSectionAccountingLeavesInvalidLocatorRawBytesUnknown1952(t *testing.T) {
+	rows := int(^uint(0)>>1)/rowLocatorBytes + 1
+	image := ColumnPartImage{
+		Rows:  rows,
+		Bytes: []byte{0},
+		Sections: []ColumnPartImageSection{{
+			Kind:        ColumnPartImageSectionRowLocators,
+			Category:    ColumnPartImageCategoryLocators,
+			Name:        "primary_id_locators",
+			Offset:      0,
+			Length:      1,
+			Rows:        rows,
+			Compression: CompressionLZ4,
+		}},
+	}
+	sections := image.SectionByteAccounting()
+	if len(sections) != 1 {
+		t.Fatalf("SectionByteAccounting rows=%+v want one locator row", sections)
+	}
+	if sections[0].Kind != ColumnPartImageSectionRowLocators || sections[0].RawBytes != 0 || sections[0].StoredBytes != 1 || sections[0].Bytes != 1 {
+		t.Fatalf("locator accounting=%+v want raw bytes unknown and stored bytes preserved", sections[0])
+	}
+}
+
 func TestTypedColumnValidationUnsupportedImageVersionFailsClosed(t *testing.T) {
 	image := mustTransplantImage(t, mustTransplantPart(t, 178901, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
 

@@ -121,7 +121,7 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 			// LeafPageBatchLog guarantees returned pointers are positional:
 			// ptrs[i] references leafPages[i].
 			l.db.storeLeafPageReadCache(ptr, leafPages[i])
-			recordLen := ptr.RecordLengthHint
+			recordLen := ptr.RecordLength()
 			if recordLen == 0 {
 				recordLen = lastRecordLen
 			}

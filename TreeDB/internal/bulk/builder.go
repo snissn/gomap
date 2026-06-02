@@ -1,7 +1,10 @@
 package bulk
 
 import (
+	"fmt"
+
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -18,6 +21,10 @@ type Allocator interface {
 // bottom internal level. The returned root is always a normal index page ID.
 type LeafPageAppender interface {
 	AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
+}
+
+type LeafPageBatchAppender interface {
+	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
 }
 
 type levelBuilder struct {
@@ -113,65 +120,14 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		return 0, err
 	}
 
-	// flush finishes the current node at lvl, writes it, and promotes to lvl+1.
-	// It replaces the builder at lvl with a new one.
-	var flush func(int) error
-	flush = func(lvl int) error {
+	type pendingLeafPagePromotion struct {
+		key  []byte
+		page []byte
+	}
+	var pendingLeafPages []pendingLeafPagePromotion
+
+	resetLevelBuilder := func(lvl int) error {
 		lb := levels[lvl]
-		n := lb.builder.Finish()
-		childID := lb.builder.PageID()
-		childRef := page.PageChildRef(childID)
-		if lvl == 0 && leafLog != nil {
-			ptr, err := leafLog.AppendLeafPage(n.Data())
-			if err != nil {
-				return err
-			}
-			childRef = page.LeafLogChildRef(ptr)
-		} else {
-			if err := p.Write(childID, n.Data()); err != nil {
-				return err
-			}
-		}
-
-		// Promote to parent
-		if err := ensureLevel(lvl + 1); err != nil {
-			return err
-		}
-		parent := levels[lvl+1]
-
-		// The key to promote is the startKey of the node we just finished.
-		// For leaf nodes, startKey was set when we added the first entry.
-		// For internal nodes, startKey was set when we added the first child.
-		key := lb.startKey
-		if key == nil {
-			// Should not happen for valid tree
-			key = []byte{}
-		}
-
-		// Add to parent
-		if parent.startKey == nil {
-			parent.startKey = append([]byte(nil), key...)
-		}
-
-		err := parent.builder.AddInternalChildRef(key, childRef)
-		if err == node.ErrNodeFull {
-			// Parent full. Flush parent recursively.
-			if err := flush(lvl + 1); err != nil {
-				return err
-			}
-			// Retry add to new parent
-			parent = levels[lvl+1]
-			if parent.startKey == nil {
-				parent.startKey = append([]byte(nil), key...)
-			}
-			if err := parent.builder.AddInternalChildRef(key, childRef); err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
-		}
-
-		// Reset current level builder
 		buf := make([]byte, page.PageSize)
 		typ := page.PageTypeInternal
 		if lvl == 0 {
@@ -188,8 +144,107 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			lb.builder.SetPageID(pid)
 		}
 		lb.startKey = nil
-
 		return nil
+	}
+
+	// flush finishes the current node at lvl, writes it, and promotes to lvl+1.
+	// It replaces the builder at lvl with a new one.
+	var flush func(int) error
+	promoteChild := func(lvl int, key []byte, childRef page.ChildRef) error {
+		if err := ensureLevel(lvl + 1); err != nil {
+			return err
+		}
+		parent := levels[lvl+1]
+		if key == nil {
+			key = []byte{}
+		}
+		if parent.startKey == nil {
+			parent.startKey = append([]byte(nil), key...)
+		}
+		err := parent.builder.AddInternalChildRef(key, childRef)
+		if err == node.ErrNodeFull {
+			if err := flush(lvl + 1); err != nil {
+				return err
+			}
+			parent = levels[lvl+1]
+			if parent.startKey == nil {
+				parent.startKey = append([]byte(nil), key...)
+			}
+			if err := parent.builder.AddInternalChildRef(key, childRef); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		return nil
+	}
+	flushPendingLeafPages := func() error {
+		if len(pendingLeafPages) == 0 {
+			return nil
+		}
+		pages := make([][]byte, len(pendingLeafPages))
+		for i := range pendingLeafPages {
+			pages[i] = pendingLeafPages[i].page
+		}
+		var ptrs []page.LeafLogPtr
+		if batcher, ok := leafLog.(LeafPageBatchAppender); ok {
+			var err error
+			ptrs, err = batcher.AppendLeafPages(pages)
+			if err != nil {
+				return err
+			}
+		} else {
+			ptrs = make([]page.LeafLogPtr, len(pages))
+			for i, leafPage := range pages {
+				ptr, err := leafLog.AppendLeafPage(leafPage)
+				if err != nil {
+					return err
+				}
+				ptrs[i] = ptr
+			}
+		}
+		if len(ptrs) != len(pendingLeafPages) {
+			return fmt.Errorf("bulk: leaf page batch returned %d ptrs for %d pages", len(ptrs), len(pendingLeafPages))
+		}
+		for i, ptr := range ptrs {
+			if err := promoteChild(0, pendingLeafPages[i].key, page.LeafLogChildRef(ptr)); err != nil {
+				return err
+			}
+		}
+		for i := range pendingLeafPages {
+			pendingLeafPages[i] = pendingLeafPagePromotion{}
+		}
+		pendingLeafPages = pendingLeafPages[:0]
+		return nil
+	}
+	flush = func(lvl int) error {
+		lb := levels[lvl]
+		n := lb.builder.Finish()
+		childID := lb.builder.PageID()
+		key := lb.startKey
+		if key == nil {
+			key = []byte{}
+		}
+		if lvl == 0 && leafLog != nil {
+			pendingLeafPages = append(pendingLeafPages, pendingLeafPagePromotion{
+				key:  append([]byte(nil), key...),
+				page: n.Data(),
+			})
+			if len(pendingLeafPages) >= valuelog.MaxFrameK {
+				if err := flushPendingLeafPages(); err != nil {
+					return err
+				}
+			}
+			return resetLevelBuilder(lvl)
+		}
+		childRef := page.PageChildRef(childID)
+		if err := p.Write(childID, n.Data()); err != nil {
+			return err
+		}
+		if err := promoteChild(lvl, key, childRef); err != nil {
+			return err
+		}
+		return resetLevelBuilder(lvl)
 	}
 
 	for iter.Valid() {
@@ -233,45 +288,31 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		lb := levels[i]
 		n := lb.builder.Finish()
 		childID := lb.builder.PageID()
-		childRef := page.PageChildRef(childID)
+		key := lb.startKey
+		if key == nil {
+			key = []byte{}
+		}
 		if i == 0 && leafLog != nil {
-			ptr, err := leafLog.AppendLeafPage(n.Data())
-			if err != nil {
+			pendingLeafPages = append(pendingLeafPages, pendingLeafPagePromotion{
+				key:  append([]byte(nil), key...),
+				page: n.Data(),
+			})
+			if err := flushPendingLeafPages(); err != nil {
 				return 0, err
 			}
-			childRef = page.LeafLogChildRef(ptr)
-		} else {
-			if err := p.Write(childID, n.Data()); err != nil {
-				return 0, err
-			}
+			continue
+		}
+
+		childRef := page.PageChildRef(childID)
+		if err := p.Write(childID, n.Data()); err != nil {
+			return 0, err
 		}
 		currID = childID
 		currRef = childRef
 
-		// If this is not the top level, add to parent
+		// If this is not the top level, add to parent.
 		if i < len(levels)-1 {
-			parent := levels[i+1]
-			key := lb.startKey
-			if key == nil {
-				key = []byte{}
-			}
-			if parent.startKey == nil {
-				parent.startKey = append([]byte(nil), key...)
-			}
-
-			err := parent.builder.AddInternalChildRef(key, currRef)
-			if err == node.ErrNodeFull {
-				if err := flush(i + 1); err != nil {
-					return 0, err
-				}
-				parent = levels[i+1]
-				if parent.startKey == nil {
-					parent.startKey = append([]byte(nil), key...)
-				}
-				if err := parent.builder.AddInternalChildRef(key, currRef); err != nil {
-					return 0, err
-				}
-			} else if err != nil {
+			if err := promoteChild(i, key, currRef); err != nil {
 				return 0, err
 			}
 		}

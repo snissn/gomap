@@ -6256,3 +6256,44 @@ func TestPrepareRewriteLeafDict_CurrentClassMissingModeDefaultsCompact(t *testin
 		t.Fatal("expected class-current dict without mode metadata to default to compact payloads")
 	}
 }
+
+func TestRewriteWriterAppendLeafPagesCapsGroupedFrames(t *testing.T) {
+	leafDir := t.TempDir()
+	w := &rewriteWriter{
+		leafDir:  leafDir,
+		leafLane: uint32(255),
+		maxSize:  1 << 20,
+	}
+	defer func() {
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	leafPages := make([][]byte, rewriteLeafLogBatchMaxK+1)
+	for i := range leafPages {
+		leafPages[i] = bytes.Repeat([]byte{byte(i + 1)}, page.PageSize)
+	}
+	ptrs, err := w.appendLeafPagesWithRIDStart(1, leafPages)
+	if err != nil {
+		t.Fatalf("appendLeafPagesWithRIDStart: %v", err)
+	}
+	if len(ptrs) != len(leafPages) {
+		t.Fatalf("ptrs=%d want %d", len(ptrs), len(leafPages))
+	}
+	first := ptrs[0]
+	if !first.IsGrouped() {
+		t.Fatalf("first rewritten leaf ptr not grouped: %+v", first)
+	}
+	for i := 0; i < rewriteLeafLogBatchMaxK; i++ {
+		if ptrs[i].FileID != first.FileID || ptrs[i].Offset != first.Offset {
+			t.Fatalf("ptr[%d]=%+v not in first capped frame %+v", i, ptrs[i], first)
+		}
+		if ptrs[i].SubIndex != uint16(i) {
+			t.Fatalf("ptr[%d].SubIndex=%d want %d", i, ptrs[i].SubIndex, i)
+		}
+	}
+	if ptrs[rewriteLeafLogBatchMaxK].FileID == first.FileID && ptrs[rewriteLeafLogBatchMaxK].Offset == first.Offset {
+		t.Fatalf("ptr[%d]=%+v remained in first frame capped at %d", rewriteLeafLogBatchMaxK, ptrs[rewriteLeafLogBatchMaxK], rewriteLeafLogBatchMaxK)
+	}
+}

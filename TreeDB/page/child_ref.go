@@ -24,8 +24,10 @@ const (
 // over bit stealing here; compact page-local encodings can be added after the
 // format is easier to reason about.
 type LogRecordRef struct {
-	FileID           uint32
-	Offset           uint64
+	FileID uint32
+	Offset uint64
+	// RecordLengthHint stores the value-log pointer length hint, including any
+	// ValuePtr grouping/compression flags needed to reconstruct a ValuePtr.
 	RecordLengthHint uint32
 	SubIndex         uint16
 }
@@ -81,10 +83,22 @@ func (ptr LogRecordRef) ValueLogFileID() uint32 {
 	return ValueLogFileID(ptr.FileID)
 }
 
+func (ptr LogRecordRef) RecordLength() uint32 {
+	return ValuePtrRecordLength(ValuePtr{Length: ptr.RecordLengthHint})
+}
+
+func (ptr LogRecordRef) IsGrouped() bool {
+	return ValuePtrIsGrouped(ValuePtr{Length: ptr.RecordLengthHint})
+}
+
 func (ptr LogRecordRef) ValuePtr() ValuePtr {
+	length := ptr.RecordLengthHint
+	if ValuePtrIsGrouped(ValuePtr{Length: length}) {
+		length = ValuePtrMarkGrouped(ValuePtrRecordLength(ValuePtr{Length: length}), uint8(ptr.SubIndex))
+	}
 	return ValuePtr{
 		Offset: ptr.Offset,
-		Length: ValuePtrMarkGrouped(ptr.RecordLengthHint, uint8(ptr.SubIndex)),
+		Length: length,
 		FileID: ptr.ValueLogFileID(),
 	}
 }
@@ -96,7 +110,7 @@ func LeafLogPtrFromValuePtr(ptr ValuePtr) (LeafLogPtr, error) {
 	return LeafLogPtr{
 		Offset:           ptr.Offset,
 		FileID:           ValueLogSegmentID(ptr.FileID),
-		RecordLengthHint: ValuePtrRecordLength(ptr),
+		RecordLengthHint: ptr.Length,
 		SubIndex:         uint16(ValuePtrSubIndex(ptr)),
 	}, nil
 }

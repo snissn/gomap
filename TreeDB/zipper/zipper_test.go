@@ -142,6 +142,76 @@ func (s *memoryLeafPageStore) resetObservations() {
 	s.sawNoCache = 0
 }
 
+type batchMemoryLeafPageStore struct {
+	next        uint32
+	pages       map[page.LeafLogPtr][]byte
+	batchLens   []int
+	singleCalls int
+	readCalls   int
+}
+
+func newBatchMemoryLeafPageStore() *batchMemoryLeafPageStore {
+	return &batchMemoryLeafPageStore{pages: make(map[page.LeafLogPtr][]byte)}
+}
+
+func (s *batchMemoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	s.singleCalls++
+	if s.next == 0 {
+		s.next = 4
+	}
+	ptr := page.LeafLogPtr{FileID: 1, Offset: uint64(s.next), RecordLengthHint: page.PageSize}
+	s.next += page.PageSize + 32
+	s.pages[ptr] = append([]byte(nil), leafPage...)
+	return ptr, nil
+}
+
+func (s *batchMemoryLeafPageStore) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	s.batchLens = append(s.batchLens, len(leafPages))
+	if s.next == 0 {
+		s.next = 4
+	}
+	offset := uint64(s.next)
+	s.next += page.PageSize + 32
+	ptrs := make([]page.LeafLogPtr, len(leafPages))
+	for i, leafPage := range leafPages {
+		ptr := page.LeafLogPtr{FileID: 1, Offset: offset, RecordLengthHint: page.ValuePtrMarkGrouped(page.PageSize, uint8(i)), SubIndex: uint16(i)}
+		ptrs[i] = ptr
+		s.pages[ptr] = append([]byte(nil), leafPage...)
+	}
+	return ptrs, nil
+}
+
+func (s *batchMemoryLeafPageStore) Read(ptr page.ValuePtr) ([]byte, error) {
+	return s.ReadUnsafe(ptr)
+}
+
+func (s *batchMemoryLeafPageStore) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	leafPtr, err := page.LeafLogPtrFromValuePtr(ptr)
+	if err != nil {
+		return nil, err
+	}
+	data, ok := s.pages[leafPtr]
+	if !ok {
+		return nil, io.EOF
+	}
+	s.readCalls++
+	return append([]byte(nil), data...), nil
+}
+
+func (s *batchMemoryLeafPageStore) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error) {
+	data, ok := s.pages[ptr]
+	if !ok {
+		return nil, false, io.EOF
+	}
+	s.readCalls++
+	if cap(dst) >= len(data) {
+		out := dst[:len(data)]
+		copy(out, data)
+		return out, true, nil
+	}
+	return append([]byte(nil), data...), false, nil
+}
+
 func buildOuterLeafInternalRoot(t *testing.T, z *Zipper) uint64 {
 	t.Helper()
 
@@ -375,6 +445,68 @@ func TestZipperApply_MaintenanceRestorePathInstallsLeafRefCache(t *testing.T) {
 	}
 	if z.leafRefCache != nil {
 		t.Fatalf("leafRefCache not cleared after Apply")
+	}
+}
+
+func TestZipperApply_BatchesLiveOuterLeafWrites(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	store := newBatchMemoryLeafPageStore()
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID, _ := p.Alloc(1)
+	data, _ := p.Get(rootID)
+	n := node.NewNode(data)
+	n.SetPageID(rootID)
+	n.SetType(page.PageTypeLeaf)
+	n.UpdateChecksum()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	for i := 0; i < 400; i++ {
+		key := []byte(fmt.Sprintf("key-%03d", i))
+		val := []byte(fmt.Sprintf("val-%03d", i))
+		b.Set(key, val)
+	}
+
+	newRootID, _, _, err := z.Apply(rootID, b)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	batched := false
+	for _, n := range store.batchLens {
+		if n > 1 {
+			batched = true
+			break
+		}
+	}
+	if !batched {
+		t.Fatalf("expected at least one multi-page AppendLeafPages call, batch lens=%v singleCalls=%d", store.batchLens, store.singleCalls)
+	}
+	if store.singleCalls != 0 {
+		t.Fatalf("single leaf appends=%d, want batched path only", store.singleCalls)
+	}
+
+	tr := tree.New(p, store, newRootID)
+	for _, idx := range []int{0, 199, 399} {
+		key := []byte(fmt.Sprintf("key-%03d", idx))
+		got, err := tr.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		want := []byte(fmt.Sprintf("val-%03d", idx))
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get(%q)=%q want %q", key, got, want)
+		}
 	}
 }
 
