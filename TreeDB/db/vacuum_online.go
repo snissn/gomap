@@ -453,6 +453,22 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 				return err
 			}
 		}
+		var stagedLeafGenerationView *leafGenerationView
+		leafGenerationChanged := false
+		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+			db.mu.RLock()
+			stagedLeafManifest, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
+			db.mu.RUnlock()
+			if err != nil {
+				db.writeMu.Unlock()
+				cleanupNewPager()
+				return err
+			}
+			if changed {
+				stagedLeafGenerationView = newLeafGenerationView(stagedLeafManifest)
+				leafGenerationChanged = true
+			}
+		}
 
 		// Write redundant Meta pages (0/1) to the new file and sync it.
 		if err := writeMetaToPager(newPager, MetaPage0ID, nextMeta); err != nil {
@@ -536,14 +552,22 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			}
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		}
+		leafGenerationView := oldState.LeafGenerations
+		if leafGenerationChanged {
+			leafGenerationView = stagedLeafGenerationView
+		}
 		newState := &DBState{
 			CommitSeq:                  nextMeta.CommitSeq,
 			RootPageID:                 nextMeta.UserRootPageID,
 			SystemRootPageID:           nextMeta.SystemRootPageID,
 			AppliedCommandLSN:          nextMeta.AppliedCommandLSN,
 			ValueLogSet:                valueLogSet,
-			LeafGenerations:            oldState.LeafGenerations,
+			LeafGenerations:            leafGenerationView,
 			LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
+		}
+		if leafGenerationChanged {
+			db.leafGenerationStateVersion++
+			newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 		}
 		db.state.Store(newState)
 		db.publishSnapshotView(newGen, newState, db.valueLogManager)
@@ -554,6 +578,15 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 
 		if oldState != nil {
 			_ = db.valueLogManager.Release(oldState.ValueLogSet)
+		}
+		if db.leafPageLog != nil {
+			db.commitMu.Lock()
+			currentCommitSeq := db.meta.CommitSeq
+			err := db.noteLeafGenerationPendingFileIDs(0, currentCommitSeq)
+			db.commitMu.Unlock()
+			if err != nil {
+				db.reportError(err)
+			}
 		}
 
 		// Drop the DB-held reference to the previous generation outside the
