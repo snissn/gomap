@@ -732,8 +732,8 @@ func (l *leafPageCacheBatchTestLog) Sync() error  { return nil }
 
 func TestLeafPageLogStoresReadCacheForBatch(t *testing.T) {
 	ptrs := []page.LeafLogPtr{
-		{FileID: 11, Offset: 256, RecordLengthHint: 4096, SubIndex: 0},
-		{FileID: 11, Offset: 256, RecordLengthHint: 4096, SubIndex: 1},
+		{FileID: 11, Offset: 256, RecordLengthHint: page.ValuePtrMarkGrouped(4096, 0), SubIndex: 0},
+		{FileID: 11, Offset: 256, RecordLengthHint: page.ValuePtrMarkGrouped(4096, 1), SubIndex: 1},
 	}
 	db := &DB{leafPageReadCache: newLeafPageReadCache(8)}
 	log := &leafPageLogWithRecordLengthHints{db: db, inner: &leafPageCacheBatchTestLog{ptrs: ptrs}}

@@ -125,7 +125,7 @@ func (m *mockBatchLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafL
 	fileID := uint32(len(m.batchLens))
 	offset := uint64(len(m.ptrs) + 1)
 	for i, leafPage := range leafPages {
-		ptr := page.LeafLogPtr{FileID: fileID, Offset: offset, RecordLengthHint: page.PageSize, SubIndex: uint16(i)}
+		ptr := page.LeafLogPtr{FileID: fileID, Offset: offset, RecordLengthHint: page.ValuePtrMarkGrouped(page.PageSize, uint8(i)), SubIndex: uint16(i)}
 		ptrs[i] = ptr
 		m.ptrs = append(m.ptrs, ptr)
 		m.pages = append(m.pages, append([]byte(nil), leafPage...))

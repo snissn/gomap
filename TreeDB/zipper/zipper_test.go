@@ -174,7 +174,7 @@ func (s *batchMemoryLeafPageStore) AppendLeafPages(leafPages [][]byte) ([]page.L
 	s.next += page.PageSize + 32
 	ptrs := make([]page.LeafLogPtr, len(leafPages))
 	for i, leafPage := range leafPages {
-		ptr := page.LeafLogPtr{FileID: 1, Offset: offset, RecordLengthHint: page.PageSize, SubIndex: uint16(i)}
+		ptr := page.LeafLogPtr{FileID: 1, Offset: offset, RecordLengthHint: page.ValuePtrMarkGrouped(page.PageSize, uint8(i)), SubIndex: uint16(i)}
 		ptrs[i] = ptr
 		s.pages[ptr] = append([]byte(nil), leafPage...)
 	}
