@@ -878,6 +878,9 @@ func ValidateInt64ValueRowIndex(index Int64ValueRowIndex, desc ColumnPartDescrip
 	if !integerStatsPayloadColumnType(envelope.ColumnType) || !integerStatsPayloadColumnType(columnDesc.Type) || !integerStatsPayloadColumnType(column.Definition.Type) || envelope.PayloadKind != ColumnPruningPayloadInt64ValueRowsV1 {
 		return fmt.Errorf("typedcolumn: column pruning %s int64-compatible payload cannot apply to type envelope=%s descriptor=%s definition=%s payload=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, envelope.PayloadKind, ColumnPruningReasonUnsupportedPayload)
 	}
+	if envelope.ColumnType != columnDesc.Type || envelope.ColumnType != column.Definition.Type {
+		return fmt.Errorf("typedcolumn: column pruning %s type identity envelope=%s descriptor=%s definition=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, ColumnPruningReasonIdentityMismatch)
+	}
 	if envelope.Encoding != column.Definition.Encoding || envelope.Compression != column.Definition.Compression {
 		return fmt.Errorf("typedcolumn: column pruning %s encoding/compression=%s/%s want %s/%s: %s", envelope.ColumnName, envelope.Encoding, envelope.Compression, column.Definition.Encoding, column.Definition.Compression, ColumnPruningReasonIdentityMismatch)
 	}

@@ -950,6 +950,9 @@ func ValidateInt64ColumnStats(stats Int64ColumnStats, desc ColumnPartDescriptor,
 	if !integerStatsPayloadColumnType(envelope.ColumnType) || !integerStatsPayloadColumnType(columnDesc.Type) || !integerStatsPayloadColumnType(column.Definition.Type) || envelope.PayloadKind != ColumnStatsPayloadInt64V1 {
 		return fmt.Errorf("typedcolumn: column stats %s int64-compatible payload cannot apply to type envelope=%s descriptor=%s definition=%s payload=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, envelope.PayloadKind, ColumnStatsReasonUnsupportedPayload)
 	}
+	if envelope.ColumnType != columnDesc.Type || envelope.ColumnType != column.Definition.Type {
+		return fmt.Errorf("typedcolumn: column stats %s type identity envelope=%s descriptor=%s definition=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, ColumnStatsReasonIdentityMismatch)
+	}
 	if envelope.Encoding != column.Definition.Encoding || envelope.Compression != column.Definition.Compression {
 		return fmt.Errorf("typedcolumn: column stats %s encoding/compression=%s/%s want %s/%s: %s", envelope.ColumnName, envelope.Encoding, envelope.Compression, column.Definition.Encoding, column.Definition.Compression, ColumnStatsReasonIdentityMismatch)
 	}

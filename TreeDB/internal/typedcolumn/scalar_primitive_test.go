@@ -227,6 +227,27 @@ func TestPrimitiveScalarColumnPartImageRoundTripStatsAndPruning1929(t *testing.T
 			t.Fatalf("pruning[%s]=%+v ok=%v", tc.name, pruning, ok)
 		}
 	}
+	u8Desc := primitiveScalarColumnDesc1929(t, reconstructed.Descriptor, "u8")
+	u8Column := reconstructed.Columns["u8"]
+	u8Stats, ok := reconstructed.ColumnStats.Int64Column("u8")
+	if !ok {
+		t.Fatalf("missing u8 stats")
+	}
+	wrongStatsType := cloneInt64ColumnStats(u8Stats)
+	wrongStatsType.Envelope.ColumnType = ColumnTypeInt8
+	if err := ValidateInt64ColumnStats(wrongStatsType, reconstructed.Descriptor, u8Desc, u8Column); err == nil || !strings.Contains(err.Error(), ColumnStatsReasonIdentityMismatch) {
+		t.Fatalf("mismatched primitive stats type err=%v want %s", err, ColumnStatsReasonIdentityMismatch)
+	}
+	u8Pruning, ok := reconstructed.PruningMetadata.Int64Column("u8")
+	if !ok {
+		t.Fatalf("missing u8 pruning")
+	}
+	wrongPruningType := cloneInt64ValueRowIndex(u8Pruning)
+	wrongPruningType.Envelope.ColumnType = ColumnTypeInt8
+	if err := ValidateInt64ValueRowIndex(wrongPruningType, reconstructed.Descriptor, u8Desc, u8Column); err == nil || !strings.Contains(err.Error(), ColumnPruningReasonIdentityMismatch) {
+		t.Fatalf("mismatched primitive pruning type err=%v want %s", err, ColumnPruningReasonIdentityMismatch)
+	}
+
 	for _, name := range []string{"u64", "f16", "bf16"} {
 		if stats, ok := reconstructed.ColumnStats.Int64Column(name); ok {
 			t.Fatalf("stats[%s]=%+v want absent", name, stats)
@@ -288,6 +309,17 @@ func TestPrimitiveScalarValidationFailsClosed1929(t *testing.T) {
 	if err := validateDecodedColumnBlockDescriptor(desc, "u32", ColumnTypeUint32, 0, 0, 0, block); err == nil || !strings.Contains(err.Error(), "fixed-width raw bytes=7 want 8") {
 		t.Fatalf("validate decoded raw uint32 length err=%v", err)
 	}
+}
+
+func primitiveScalarColumnDesc1929(t *testing.T, desc ColumnPartDescriptor, name string) ColumnPartColumnDescriptor {
+	t.Helper()
+	for _, columnDesc := range desc.Columns {
+		if columnDesc.Name == name {
+			return columnDesc
+		}
+	}
+	t.Fatalf("missing descriptor column %q", name)
+	return ColumnPartColumnDescriptor{}
 }
 
 func buildPrimitiveScalarPart1929(t *testing.T) *ColumnPart {
