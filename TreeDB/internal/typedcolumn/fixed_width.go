@@ -6,12 +6,27 @@ import (
 	"math"
 )
 
+type littleEndian2Scalar interface {
+	~uint16 | ~int16
+}
+
 type littleEndian4Scalar interface {
 	~uint32 | ~int32
 }
 
 type littleEndian8Scalar interface {
 	~uint64 | ~int64
+}
+
+func encodeLittleEndian2Payload[T littleEndian2Scalar](dst []byte, values []T, name string) ([]byte, error) {
+	out, err := resizeFixedWidthPayload(dst, len(values), 2, name)
+	if err != nil {
+		return nil, err
+	}
+	for i, value := range values {
+		binary.LittleEndian.PutUint16(out[i*2:], uint16(value))
+	}
+	return out, nil
 }
 
 func encodeLittleEndian4Payload[T littleEndian4Scalar](dst []byte, values []T, name string) ([]byte, error) {

@@ -196,7 +196,7 @@ func buildColumnPartStats(part *ColumnPart) (ColumnPartStats, error) {
 	}
 	out := ColumnPartStats{Version: columnPartStatsSectionVersion, PartID: part.Descriptor.PartID, Rows: part.Descriptor.RowCount}
 	for _, columnDesc := range part.Descriptor.Columns {
-		if columnDesc.Type != ColumnTypeInt64 {
+		if !integerStatsPayloadColumnType(columnDesc.Type) {
 			continue
 		}
 		column, ok := part.Columns[columnDesc.Name]
@@ -222,7 +222,7 @@ func buildInt64ColumnStats(desc ColumnPartDescriptor, columnDesc ColumnPartColum
 	if !columnStatsPartFullyVisible(desc) {
 		return Int64ColumnStats{}, false, nil
 	}
-	if column.Definition.StatsDisabled || column.Definition.Type != ColumnTypeInt64 || column.Definition.Encoding == EncodingNullableInt64 {
+	if column.Definition.StatsDisabled || !integerStatsPayloadColumnType(column.Definition.Type) || column.Definition.Encoding == EncodingNullableInt64 {
 		return Int64ColumnStats{}, false, nil
 	}
 	if column.Definition.Compression != CompressionNone {
@@ -260,7 +260,7 @@ func buildInt64ColumnStats(desc ColumnPartDescriptor, columnDesc ColumnPartColum
 		if block.Descriptor != columnDesc.Blocks[i] {
 			return Int64ColumnStats{}, false, fmt.Errorf("typedcolumn: stats column %s block %d descriptor mismatch", columnDesc.Name, i)
 		}
-		blockStats, err := buildInt64BlockStats(&reader, i, block)
+		blockStats, err := buildInt64BlockStats(&reader, column.Definition.Type, i, block)
 		if err != nil {
 			return Int64ColumnStats{}, false, fmt.Errorf("typedcolumn: stats column %s block %d: %w", columnDesc.Name, i, err)
 		}
@@ -316,7 +316,7 @@ func columnStatsPartFullyVisible(desc ColumnPartDescriptor) bool {
 	return true
 }
 
-func buildInt64BlockStats(reader *GranuleReader, index int, block ColumnBlock) (Int64BlockStats, error) {
+func buildInt64BlockStats(reader *GranuleReader, columnType ColumnType, index int, block ColumnBlock) (Int64BlockStats, error) {
 	g := block.Granule
 	if g.Rows != block.Descriptor.RowCount {
 		return Int64BlockStats{}, fmt.Errorf("granule rows=%d descriptor rows=%d", g.Rows, block.Descriptor.RowCount)
@@ -340,15 +340,14 @@ func buildInt64BlockStats(reader *GranuleReader, index int, block ColumnBlock) (
 	if g.NullCount != 0 || g.DefaultCount != 0 {
 		return Int64BlockStats{}, fmt.Errorf("non-null int64 stats got null/default counts %d/%d", g.NullCount, g.DefaultCount)
 	}
-	cursor, err := reader.Int64Cursor(g)
+	values, err := reader.DecodeIntegerAsInt64Into(nil, columnType, g)
 	if err != nil {
 		return Int64BlockStats{}, err
 	}
-	for row := 0; row < g.Rows; row++ {
-		value, err := cursor.Next()
-		if err != nil {
-			return Int64BlockStats{}, err
-		}
+	if len(values) != g.Rows {
+		return Int64BlockStats{}, fmt.Errorf("decoded values=%d want rows=%d", len(values), g.Rows)
+	}
+	for _, value := range values {
 		if !stats.SumValid {
 			continue
 		}
@@ -359,9 +358,6 @@ func buildInt64BlockStats(reader *GranuleReader, index int, block ColumnBlock) (
 			continue
 		}
 		stats.Sum = updated
-	}
-	if err := cursor.Finish(); err != nil {
-		return Int64BlockStats{}, err
 	}
 	return stats, nil
 }
@@ -695,7 +691,7 @@ func decodeStatsEncoding(code uint16) (Encoding, error) {
 	}
 	encoding := Encoding(code)
 	switch encoding {
-	case EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint, EncodingNullableInt64, EncodingBoolBitpackRLE, EncodingLowCardinalityUint32, EncodingRawFloat32Vector, EncodingRawUint32Dense, EncodingRawFloat32, EncodingRawFloat64, EncodingRawUint32OffsetsList:
+	case EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint, EncodingNullableInt64, EncodingBoolBitpackRLE, EncodingLowCardinalityUint32, EncodingRawFloat32Vector, EncodingRawUint32Dense, EncodingRawFloat32, EncodingRawFloat64, EncodingRawUint32OffsetsList, EncodingRawBytesOffsets, EncodingRawInt8, EncodingRawUint8, EncodingRawInt16, EncodingRawUint16, EncodingRawInt32, EncodingRawUint32, EncodingRawUint64, EncodingRawFloat16, EncodingRawBFloat16:
 		return encoding, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unknown column stats envelope encoding=%d", code)
@@ -951,8 +947,8 @@ func ValidateInt64ColumnStats(stats Int64ColumnStats, desc ColumnPartDescriptor,
 	if envelope.ColumnName != columnDesc.Name || envelope.ColumnName != column.Definition.Name {
 		return fmt.Errorf("typedcolumn: column stats name=%q descriptor=%q definition=%q: %s", envelope.ColumnName, columnDesc.Name, column.Definition.Name, ColumnStatsReasonIdentityMismatch)
 	}
-	if envelope.ColumnType != ColumnTypeInt64 || columnDesc.Type != ColumnTypeInt64 || column.Definition.Type != ColumnTypeInt64 || envelope.PayloadKind != ColumnStatsPayloadInt64V1 {
-		return fmt.Errorf("typedcolumn: column stats %s int64 payload cannot apply to type envelope=%s descriptor=%s definition=%s payload=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, envelope.PayloadKind, ColumnStatsReasonUnsupportedPayload)
+	if !integerStatsPayloadColumnType(envelope.ColumnType) || !integerStatsPayloadColumnType(columnDesc.Type) || !integerStatsPayloadColumnType(column.Definition.Type) || envelope.PayloadKind != ColumnStatsPayloadInt64V1 {
+		return fmt.Errorf("typedcolumn: column stats %s int64-compatible payload cannot apply to type envelope=%s descriptor=%s definition=%s payload=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, envelope.PayloadKind, ColumnStatsReasonUnsupportedPayload)
 	}
 	if envelope.Encoding != column.Definition.Encoding || envelope.Compression != column.Definition.Compression {
 		return fmt.Errorf("typedcolumn: column stats %s encoding/compression=%s/%s want %s/%s: %s", envelope.ColumnName, envelope.Encoding, envelope.Compression, column.Definition.Encoding, column.Definition.Compression, ColumnStatsReasonIdentityMismatch)

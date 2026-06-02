@@ -11,7 +11,9 @@ not by itself admit a type to graph-search healthy paths.
 The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 
 - collection logical value type (`bool`, `int64`, `float32`, `double`, `string`,
-  `float32_vector`, `uint32_list`, `bytes`, and `adjacency_list`);
+  primitive scalar `int8`/`uint8`/`int16`/`uint16`/`int32`/`uint32`/`uint64`/
+  `float16`/`bfloat16`, `float32_vector`, `uint32_list`, `bytes`, and
+  `adjacency_list`);
 - `typedcolumn.ColumnType` physical carrier;
 - `typedcolumn.Encoding` layout/codec;
 - operation capability status: `supported`, `unsupported`, or `fallback` with a
@@ -26,6 +28,9 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | `float32` | default `int64` carrier; native `float32` when `fixed_width_encoding: "little_endian"` is selected | compatibility `raw_int64` carrying `math.Float32bits`; native `raw_float32` little-endian IEEE-754 bits | raw int64 bit patterns do **not** provide int64 ordered range, sum, avg, min/max, stats, pruning, or direct scalar value semantics (`float_raw_int64_bit_pattern`). Native `raw_float32` is a bit-preserving direct scalar payload candidate; equality/range/numeric aggregate/stats/pruning semantics remain explicit fallback/unsupported until the scalar float type-family work defines NaN, signed-zero, infinity, and accumulation policy. |
 | `double` | default `int64` carrier; native `float64` when `fixed_width_encoding: "little_endian"` is selected | compatibility `raw_int64` carrying `math.Float64bits`; native `raw_float64` little-endian IEEE-754 bits | same raw-bit restriction as `float32`; native `raw_float64` is a bit-preserving direct scalar payload candidate without enabling numeric float fast paths yet. |
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
+| `int8`/`uint8`/`int16`/`uint16`/`int32`/`uint32` | matching fixed-width scalar type | `raw_int8`/`raw_uint8`/`raw_int16`/`raw_uint16`/`raw_int32`/`raw_uint32` | non-null primitive integer scalars with logical signedness/width preserved. Equality, ordered range, count, sum/avg/min/max, direct scalar value carrier, int64-compatible stats, and value-row pruning are supported only when the physical type and raw little-endian encoding match the logical type. |
+| `uint64` | `uint64` | `raw_uint64` | non-null raw little-endian 64-bit unsigned payload. Direct scalar value carrier and logical count/value semantics are admitted, but int64-compatible stats/pruning payloads are not advertised because values above `MaxInt64` cannot be represented without changing payload format. |
+| `float16`/`bfloat16` | `float16`/`bfloat16` | `raw_float16`/`raw_bfloat16` | storage-only raw 16-bit bit payloads. Bits are preserved exactly, including NaN payloads, infinities, and signed zero; numeric equality/range/aggregate/stats/pruning semantics are fallback/unsupported until an explicit 16-bit float policy lands. |
 | `float32_vector` | `float32_vector` | `raw_float32_vector` | count rows/non-null plus vector direct-payload, similarity, dot-product, and vector-metric capabilities are explicit prepare-time entries for specialized vector kernels. Scalar equality/range/sum/min/max/stats/pruning shortcuts are rejected (`vector_scalar_operation_unsupported`). |
 | `uint32_list` | `uint32_list` | `raw_uint32_offsets_list` | count rows/non-null plus generic list length/payload direct-view capabilities are primitive shape semantics only. The primitive does not imply HNSW adjacency, graph ordinals, or scalar numeric range/aggregate semantics; scalar range/sum/min/max/stats/pruning shortcuts are rejected (`uint32_list_scalar_operation_unsupported`). |
 | `bytes` | `bytes` | `raw_bytes_offsets` | count rows/non-null plus opaque byte-payload direct-view capabilities are primitive shape semantics only. Bytes are not strings: no UTF-8, collation, dictionary, lexical range, scalar compare, or text predicate semantics are implied; scalar operations are rejected (`bytes_scalar_operation_unsupported`). |
@@ -213,6 +218,17 @@ The matrix covers every current `typedcolumn.ColumnType`:
 - `int64`
 - `low_cardinality_code`
 - `bool`
+- `float32`
+- `float64`
+- `int8`
+- `uint8`
+- `int16`
+- `uint16`
+- `int32`
+- `uint32`
+- `uint64`
+- `float16`
+- `bfloat16`
 - `float32_vector`
 - `uint32_list`
 - `bytes`
@@ -232,12 +248,24 @@ and every current `typedcolumn.Encoding`:
 - `raw_uint32_dense`
 - `raw_uint32_offsets_list`
 - `raw_bytes_offsets`
+- `raw_int8`
+- `raw_uint8`
+- `raw_int16`
+- `raw_uint16`
+- `raw_int32`
+- `raw_uint32`
+- `raw_uint64`
+- `raw_float16`
+- `raw_bfloat16`
 
 ## Future scalar numeric-width admission rules
 
-There are no public scalar `int32`, `int16`, `uint32`, `uint64`, decimal, or
-similar typed-storage logical value types today. Before adding one, the type
-must be admitted through this matrix with conformance tests that define:
+The #1929 primitive scalar set covers only non-null fixed-width integer widths
+needed by quantized side arrays plus storage-only raw 16-bit float-bit payloads.
+Future scalar additions (for example signed `int64`-incompatible widths,
+`int64`-sized unsigned stats, decimals, nullable primitive scalars, compressed
+primitive scalars, or arithmetic float16/bfloat16 semantics) must be admitted
+through this matrix with conformance tests that define:
 
 - logical signedness and width independently of physical carrier bytes;
 - comparison/range semantics over logical values, not reused carrier ordering;
@@ -248,6 +276,5 @@ must be admitted through this matrix with conformance tests that define:
 - explicit proof before any int64 kernel or pruning metadata is reused.
 
 Benchmarks are required only if capability checks move into block/run hot paths;
-current int64/string adapter consumption resolves semantic and layout
-capabilities during prepare and records the matrix resolution phase as
-`prepare`.
+current adapter consumption resolves semantic and layout capabilities during
+prepare and records the matrix resolution phase as `prepare`.

@@ -1223,6 +1223,24 @@ func columnTypeCode(t ColumnType) (uint16, error) {
 		return 8, nil
 	case ColumnTypeBytes:
 		return 9, nil
+	case ColumnTypeInt8:
+		return 10, nil
+	case ColumnTypeUint8:
+		return 11, nil
+	case ColumnTypeInt16:
+		return 12, nil
+	case ColumnTypeUint16:
+		return 13, nil
+	case ColumnTypeInt32:
+		return 14, nil
+	case ColumnTypeUint32:
+		return 15, nil
+	case ColumnTypeUint64:
+		return 16, nil
+	case ColumnTypeFloat16:
+		return 17, nil
+	case ColumnTypeBFloat16:
+		return 18, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported column type %s", t)
 	}

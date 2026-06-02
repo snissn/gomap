@@ -51,7 +51,8 @@ func TestTypedColumnDirectViewConformanceMatrixRowsAreExplicit(t *testing.T) {
 	for _, valueType := range typedColumnDirectViewAllTypeInventory() {
 		support := typedColumnDirectViewFallbackOnly
 		switch valueType {
-		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes:
+		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes,
+			ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16:
 			support = typedColumnDirectViewActiveLittleEndianCandidate
 		case ColumnStoreValueAdjacencyList:
 			support = typedColumnDirectViewDeferredFallbackOnly
@@ -190,6 +191,15 @@ func TestTypedColumnDirectViewActiveRowsAreCertifiedSetOnly(t *testing.T) {
 		{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                 true,
 		{valueType: ColumnStoreValueUint32List, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                    true,
 		{valueType: ColumnStoreValueBytes, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                         true,
+		{valueType: ColumnStoreValueInt8, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                          true,
+		{valueType: ColumnStoreValueUint8, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                         true,
+		{valueType: ColumnStoreValueInt16, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                         true,
+		{valueType: ColumnStoreValueUint16, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                        true,
+		{valueType: ColumnStoreValueInt32, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                         true,
+		{valueType: ColumnStoreValueUint32, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                        true,
+		{valueType: ColumnStoreValueUint64, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                        true,
+		{valueType: ColumnStoreValueFloat16, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                       true,
+		{valueType: ColumnStoreValueBFloat16, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                      true,
 		{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector}:                                                                                 true,
 		{valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartAdjacencyOffsets, adjacencyLayout: typedColumnDirectViewAdjacencyLayoutRawUint32Offsets}: true,
 	}

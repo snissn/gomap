@@ -101,8 +101,10 @@ published for row IDs/tombstones and row-owned fields; the matching
 `tcs1_typed_column_part` for the same generation contains authoritative scalar
 and fixed-dimension `float32_vector` typed-column values keyed by row index. The
 current typed-column publication matrix is bool, int64, float32, double/float64,
-string, and fixed-dimension float32 vectors; nullable/missing values and
-production adjacency sections fail closed until later typed-storage issues.
+string, #1929 non-null primitive scalars (int8/uint8/int16/uint16/int32/uint32/
+uint64 plus storage-only float16/bfloat16 raw bits), and fixed-dimension float32
+vectors; unsupported nullable primitive scalars and production adjacency sections
+fail closed until later typed-storage issues.
 Readers validate namespace, generation, part id, schema hash, column
 descriptors, length, and checksum before accepting an asset ref.
 

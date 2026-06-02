@@ -532,6 +532,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			case ColumnTypeInt64:
 				column.Definition.Encoding = EncodingRawInt64
 				column.Definition.Compression = CompressionNone
+			case ColumnTypeInt8, ColumnTypeUint8, ColumnTypeInt16, ColumnTypeUint16, ColumnTypeInt32, ColumnTypeUint32, ColumnTypeUint64, ColumnTypeFloat16, ColumnTypeBFloat16:
+				column.Definition.Encoding = rawScalarEncodingForColumnType(columnType)
+				column.Definition.Compression = CompressionNone
 			case ColumnTypeUint32List:
 				column.Definition.Encoding = EncodingRawUint32OffsetsList
 				column.Definition.Compression = CompressionNone
@@ -722,7 +725,7 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 			return fmt.Errorf("typedcolumn: descriptor column %s block %d dense raw bytes=%d want %d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
 		}
 	}
-	if columnType == ColumnTypeFloat32 || columnType == ColumnTypeFloat64 {
+	if columnType == ColumnTypeFloat32 || columnType == ColumnTypeFloat64 || rawScalarWidthForColumnType(columnType) != 0 {
 		if block.Compression != CompressionNone {
 			return fmt.Errorf("typedcolumn: descriptor column %s block %d fixed-width compression=%s want %s", column, blockIndex, block.Compression, CompressionNone)
 		}
@@ -870,6 +873,19 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, fixedWid
 			return 0, fmt.Errorf("unsupported float64 encoding %d", encoding)
 		}
 		return checkedMulInt(rows, 8, "float64 raw bytes")
+	case ColumnTypeInt8, ColumnTypeUint8, ColumnTypeInt16, ColumnTypeUint16, ColumnTypeInt32, ColumnTypeUint32, ColumnTypeUint64, ColumnTypeFloat16, ColumnTypeBFloat16:
+		if fixedWidthElements != 0 {
+			return 0, fmt.Errorf("unsupported %s fixed_width_elements=%d", columnType, fixedWidthElements)
+		}
+		want := rawScalarEncodingForColumnType(columnType)
+		if want == 0 || encoding != want {
+			return 0, fmt.Errorf("unsupported %s encoding %d", columnType, encoding)
+		}
+		width := rawScalarWidthForColumnType(columnType)
+		if width == 0 {
+			return 0, fmt.Errorf("unsupported %s fixed-width bytes", columnType)
+		}
+		return checkedMulInt(rows, width, string(columnType)+" raw bytes")
 	case ColumnTypeFloat32Vector:
 		if encoding != EncodingRawFloat32Vector {
 			return 0, fmt.Errorf("unsupported float32_vector encoding %d", encoding)
@@ -2538,6 +2554,24 @@ func columnTypeFromCode(code uint16) (ColumnType, error) {
 		return ColumnTypeUint32List, nil
 	case 9:
 		return ColumnTypeBytes, nil
+	case 10:
+		return ColumnTypeInt8, nil
+	case 11:
+		return ColumnTypeUint8, nil
+	case 12:
+		return ColumnTypeInt16, nil
+	case 13:
+		return ColumnTypeUint16, nil
+	case 14:
+		return ColumnTypeInt32, nil
+	case 15:
+		return ColumnTypeUint32, nil
+	case 16:
+		return ColumnTypeUint64, nil
+	case 17:
+		return ColumnTypeFloat16, nil
+	case 18:
+		return ColumnTypeBFloat16, nil
 	default:
 		return "", fmt.Errorf("typedcolumn: unknown column type code %d", code)
 	}

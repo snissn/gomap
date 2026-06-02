@@ -23,10 +23,20 @@ const (
 	ColumnTypeBool               ColumnType = "bool"
 	ColumnTypeFloat32            ColumnType = "float32"
 	ColumnTypeFloat64            ColumnType = "float64"
-	ColumnTypeFloat32Vector      ColumnType = "float32_vector"
-	ColumnTypeUint32List         ColumnType = "uint32_list"
-	ColumnTypeBytes              ColumnType = "bytes"
-	ColumnTypeAdjacencyList      ColumnType = "adjacency_list"
+	ColumnTypeInt8               ColumnType = "int8"
+	ColumnTypeUint8              ColumnType = "uint8"
+	ColumnTypeInt16              ColumnType = "int16"
+	ColumnTypeUint16             ColumnType = "uint16"
+	ColumnTypeInt32              ColumnType = "int32"
+	ColumnTypeUint32             ColumnType = "uint32"
+	ColumnTypeUint64             ColumnType = "uint64"
+	// Float16 and BFloat16 are storage-only raw 16-bit bit payloads.
+	ColumnTypeFloat16       ColumnType = "float16"
+	ColumnTypeBFloat16      ColumnType = "bfloat16"
+	ColumnTypeFloat32Vector ColumnType = "float32_vector"
+	ColumnTypeUint32List    ColumnType = "uint32_list"
+	ColumnTypeBytes         ColumnType = "bytes"
+	ColumnTypeAdjacencyList ColumnType = "adjacency_list"
 )
 
 type SortKeyDirection string
@@ -99,6 +109,15 @@ type Batch struct {
 	DefaultValues      map[string]int64
 	Float32Columns     map[string][]float32
 	Float64Columns     map[string][]float64
+	Int8Columns        map[string][]int8
+	Uint8Columns       map[string][]uint8
+	Int16Columns       map[string][]int16
+	Uint16Columns      map[string][]uint16
+	Int32Columns       map[string][]int32
+	Uint32Columns      map[string][]uint32
+	Uint64Columns      map[string][]uint64
+	Float16Columns     map[string][]uint16
+	BFloat16Columns    map[string][]uint16
 	Float32Vectors     map[string][]float32
 	Uint32Vectors      map[string][]uint32
 	Uint32OffsetsLists map[string]RawUint32OffsetsList
@@ -186,6 +205,15 @@ type ColumnPartBuilder struct {
 	defaults  []bool
 	float32s  []float32
 	float64s  []float64
+	int8s     []int8
+	u8s       []uint8
+	int16s    []int16
+	u16s      []uint16
+	int32s    []int32
+	u32s      []uint32
+	u64s      []uint64
+	float16s  []uint16
+	bfloat16s []uint16
 	u32dense  []uint32
 	u32offset []uint64
 	bytesData []byte
@@ -669,6 +697,13 @@ func (s *ColumnPartScanner) decodeBlock(columnType ColumnType, g EncodedGranule)
 			}
 		}
 		return s.scratch, nil
+	case ColumnTypeInt8, ColumnTypeUint8, ColumnTypeInt16, ColumnTypeUint16, ColumnTypeInt32, ColumnTypeUint32:
+		values, err := s.reader.DecodeIntegerAsInt64Into(s.scratch[:0], columnType, g)
+		if err != nil {
+			return nil, err
+		}
+		s.scratch = values
+		return values, nil
 	default:
 		return nil, fmt.Errorf("typedcolumn: unsupported column type %s", columnType)
 	}
@@ -836,6 +871,23 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.Compression != CompressionNone {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float64 column %s requires uncompressed raw sections", def.Name)
 		}
+	case ColumnTypeInt8, ColumnTypeUint8, ColumnTypeInt16, ColumnTypeUint16, ColumnTypeInt32, ColumnTypeUint32, ColumnTypeUint64, ColumnTypeFloat16, ColumnTypeBFloat16:
+		want := rawScalarEncodingForColumnType(def.Type)
+		if want == 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported scalar column type %s for %s", def.Type, def.Name)
+		}
+		if def.Encoding == 0 {
+			def.Encoding = want
+		}
+		if def.Encoding != want {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported %s encoding %s for %s", def.Type, def.Encoding, def.Name)
+		}
+		if def.FixedWidthElements != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: %s column %s requires fixed_width_elements=0", def.Type, def.Name)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: %s column %s requires uncompressed raw sections", def.Type, def.Name)
+		}
 	case ColumnTypeFloat32Vector:
 		if def.FixedWidthElements <= 0 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires positive fixed-width elements", def.Name)
@@ -937,6 +989,105 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 			values, ok := batch.Float64Columns[def.Name]
 			if !ok {
 				return 0, fmt.Errorf("typedcolumn: missing float64 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeInt8:
+			values, ok := batch.Int8Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing int8 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeUint8:
+			values, ok := batch.Uint8Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing uint8 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeInt16:
+			values, ok := batch.Int16Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing int16 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeUint16:
+			values, ok := batch.Uint16Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing uint16 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeInt32:
+			values, ok := batch.Int32Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing int32 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeUint32:
+			values, ok := batch.Uint32Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing uint32 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeUint64:
+			values, ok := batch.Uint64Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing uint64 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeFloat16:
+			values, ok := batch.Float16Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing float16 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeBFloat16:
+			values, ok := batch.BFloat16Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing bfloat16 column %s", def.Name)
 			}
 			if rows == 0 {
 				rows = len(values)
@@ -1087,6 +1238,51 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 	for name := range batch.Float64Columns {
 		if _, ok := declared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared float64 column %s", name)
+		}
+	}
+	for name := range batch.Int8Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared int8 column %s", name)
+		}
+	}
+	for name := range batch.Uint8Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared uint8 column %s", name)
+		}
+	}
+	for name := range batch.Int16Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared int16 column %s", name)
+		}
+	}
+	for name := range batch.Uint16Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared uint16 column %s", name)
+		}
+	}
+	for name := range batch.Int32Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared int32 column %s", name)
+		}
+	}
+	for name := range batch.Uint32Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared uint32 column %s", name)
+		}
+	}
+	for name := range batch.Uint64Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared uint64 column %s", name)
+		}
+	}
+	for name := range batch.Float16Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared float16 column %s", name)
+		}
+	}
+	for name := range batch.BFloat16Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared bfloat16 column %s", name)
 		}
 	}
 	for name := range batch.Float32Vectors {
@@ -1291,6 +1487,69 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 			b.float64s[row-start] = sourceValues[b.order[row]]
 		}
 		return b.builder.BuildFloat64(b.float64s)
+	case ColumnTypeInt8:
+		sourceValues := batch.Int8Columns[def.Name]
+		b.int8s = ensureInt8Len(b.int8s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.int8s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildInt8(b.int8s)
+	case ColumnTypeUint8:
+		sourceValues := batch.Uint8Columns[def.Name]
+		b.u8s = ensureUint8Len(b.u8s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.u8s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildUint8(b.u8s)
+	case ColumnTypeInt16:
+		sourceValues := batch.Int16Columns[def.Name]
+		b.int16s = ensureInt16Len(b.int16s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.int16s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildInt16(b.int16s)
+	case ColumnTypeUint16:
+		sourceValues := batch.Uint16Columns[def.Name]
+		b.u16s = ensureUint16Len(b.u16s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.u16s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildUint16(b.u16s)
+	case ColumnTypeInt32:
+		sourceValues := batch.Int32Columns[def.Name]
+		b.int32s = ensureInt32Len(b.int32s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.int32s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildInt32(b.int32s)
+	case ColumnTypeUint32:
+		sourceValues := batch.Uint32Columns[def.Name]
+		b.u32s = ensureUint32Len(b.u32s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.u32s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildUint32(b.u32s)
+	case ColumnTypeUint64:
+		sourceValues := batch.Uint64Columns[def.Name]
+		b.u64s = ensureUint64Len(b.u64s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.u64s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildUint64(b.u64s)
+	case ColumnTypeFloat16:
+		sourceValues := batch.Float16Columns[def.Name]
+		b.float16s = ensureUint16Len(b.float16s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.float16s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildFloat16Bits(b.float16s)
+	case ColumnTypeBFloat16:
+		sourceValues := batch.BFloat16Columns[def.Name]
+		b.bfloat16s = ensureUint16Len(b.bfloat16s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.bfloat16s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildBFloat16Bits(b.bfloat16s)
 	case ColumnTypeFloat32Vector:
 		sourceValues := batch.Float32Vectors[def.Name]
 		values, err := b.gatherFloat32Dense(sourceValues, def.FixedWidthElements, start, end)

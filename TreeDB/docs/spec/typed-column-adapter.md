@@ -40,10 +40,25 @@ time.
 | `float32` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float32bits` in the low 32 bits; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` float32 column selects native uncompressed `raw_float32` little-endian IEEE-754 payload bytes. |
 | `double` / `float64` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` double column selects native uncompressed `raw_float64` little-endian IEEE-754 payload bytes. |
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
+| `int8`/`uint8`/`int16`/`uint16`/`int32`/`uint32` | represented | Non-null raw fixed-width little-endian primitive scalar sections with matching `typedcolumn.ColumnType*` and `raw_*` encodings. Values round-trip without widening in storage; int64-compatible stats/pruning are published for these widths. |
+| `uint64` | represented | Non-null raw fixed-width little-endian `uint64` sections. Values round-trip without lossy conversion; int64-compatible stats/pruning are deliberately absent until a native uint64 stats/pruning payload exists. |
+| `float16`/`bfloat16` | represented | Non-null raw 16-bit bit payload sections (`raw_float16`/`raw_bfloat16`). Bits are preserved exactly, including NaN payloads, infinities, and signed zero; the adapter does not define arithmetic float semantics. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
 | `uint32_list` | represented | Generic non-null variable-width integer-list sections using `raw_uint32_offsets_list`: a `uint64` sentinel offsets substream (`rows+1`) plus flattened little-endian `uint32` values. Writer, owned fallback reader, and certified direct-view reader are generic and do not require adjacency semantics. |
 | `bytes` | represented | Generic non-null opaque byte payload sections using `raw_bytes_offsets`: a `uint64` sentinel offsets substream (`rows+1`) plus exact concatenated byte values. Empty byte slices, NUL bytes, and non-UTF-8 bytes are preserved exactly; the primitive is not text/dictionary/string semantics. |
 | `adjacency_list` | represented for dense compatibility; legacy offsets-list compatibility reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the #1915/#1916/#1901 variable-list compatibility path (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified direct views. #1989 quarantines graph-specific storage integration; primary list storage is generic `uint32_list`. |
+
+## Primitive scalar adapter boundary (#1929)
+
+Primitive scalar `typed_column_part` owners are non-null in this phase and use
+uncompressed raw little-endian fixed-width sections. The storage-facing public
+value types are `ColumnStoreValueInt8`, `ColumnStoreValueUint8`,
+`ColumnStoreValueInt16`, `ColumnStoreValueUint16`, `ColumnStoreValueInt32`,
+`ColumnStoreValueUint32`, `ColumnStoreValueUint64`, `ColumnStoreValueFloat16`,
+and `ColumnStoreValueBFloat16`. Multi-byte values are encoded little-endian.
+`float16` and `bfloat16` values are supplied and reconstructed as raw `uint16`
+bits; the adapter preserves bit patterns but does not parse decimal float16 or
+bfloat16 numbers from JSON.
 
 ## `uint32_list` adapter naming boundary (#1984)
 

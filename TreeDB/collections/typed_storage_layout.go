@@ -348,6 +348,13 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: nullable %s raw fixed-width encoding is unsupported", name, field.ValueType)
 			}
 		}
+		if columnStoreValueTypeIsPrimitiveScalar(field.ValueType) && field.Owner == TypedStorageOwnerColumnPart && field.Nullable {
+			name := field.Name
+			if name == "" {
+				name = field.Path
+			}
+			return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q nullable %s typed_column_part is unsupported", name, field.ValueType)
+		}
 		if prior, ok := seenPaths[field.Path]; ok {
 			return TypedStorageLayout{}, fmt.Errorf("collections: overlapping authoritative typed-storage owners for field path %q: %s and %s", field.Path, prior, field.Owner)
 		}
@@ -546,6 +553,10 @@ func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
 		}
 		switch field.ValueType {
 		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
+		case ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16:
+			if field.Nullable {
+				return fmt.Errorf("%w: nullable %s field %q", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+			}
 		case ColumnStoreValueFloat32Vector:
 			if field.Nullable {
 				return fmt.Errorf("%w: nullable vector field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
