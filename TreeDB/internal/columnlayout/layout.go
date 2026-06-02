@@ -448,8 +448,6 @@ func applyPrimitiveScalarLayout(caps *Capabilities) {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: width, AlignmentBytes: width, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 	}
 	if primitiveIntegerStatsCompatible(desc.Logical, desc.Physical, desc.Encoding) && desc.Compression == typedcolumn.CompressionNone && !caps.Wrappers.Nullable {
-		caps.Reducers.Int64NumericAggregate = true
-		caps.Reducers.Int64FixedWidthRaw = true
 		caps.Stats.MinMax = true
 		caps.Stats.Sum = true
 		caps.Pruning.OrderedMinMax = true

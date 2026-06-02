@@ -98,8 +98,8 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 
 func TestPrimitiveScalarLayoutRejectsFixedWidthElements1929(t *testing.T) {
 	valid := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalUint32, Physical: typedcolumn.ColumnTypeUint32, Encoding: typedcolumn.EncodingRawUint32, Compression: typedcolumn.CompressionNone})
-	if !valid.DirectView.Eligible || valid.Layout.ElementsPerRow != 1 || valid.Layout.ElementWidthBytes != 4 || !valid.Stats.MinMax || !valid.Pruning.ValueRows {
-		t.Fatalf("valid uint32 primitive caps=%+v want one-value-per-row direct/stats/pruning", valid)
+	if !valid.DirectView.Eligible || valid.Layout.ElementsPerRow != 1 || valid.Layout.ElementWidthBytes != 4 || valid.Reducers.Int64NumericAggregate || valid.Reducers.Int64FixedWidthRaw || !valid.Stats.MinMax || !valid.Pruning.ValueRows {
+		t.Fatalf("valid uint32 primitive caps=%+v want one-value-per-row direct/stats/pruning without primitive reducers", valid)
 	}
 
 	malformed := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalUint32, Physical: typedcolumn.ColumnTypeUint32, Encoding: typedcolumn.EncodingRawUint32, Compression: typedcolumn.CompressionNone, FixedWidthElements: 2})
