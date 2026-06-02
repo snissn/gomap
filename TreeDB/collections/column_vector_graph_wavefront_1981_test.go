@@ -70,7 +70,6 @@ func addColumnVectorGraphResultDelta1981(dst *columnVectorGraphResultDelta1981, 
 				dst.MaxScoreAbsDelta = delta
 			}
 		}
-		_ = candidateOrdinal
 	}
 	for ordinal := range exactScores {
 		if _, ok := candidateScores[ordinal]; !ok {
@@ -172,6 +171,10 @@ func TestColumnVectorGraphWavefrontOptions1981(t *testing.T) {
 	_, _, err = reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, TraversalMode: columnVectorGraphNativeSearchTraversalMode(99), WavefrontWidth: 4}, &invalidScratch)
 	if !errors.Is(err, errColumnVectorGraphNativeSearchTraversalModeInvalid) {
 		t.Fatalf("invalid traversal mode err=%v want mode invalid", err)
+	}
+	_, _, err = reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, TraversalMode: columnVectorGraphNativeSearchTraversalModeWavefront, WavefrontWidth: shape.efSearch + 1}, &invalidScratch)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchWavefrontWidthInvalid) {
+		t.Fatalf("wavefront width above ef_search err=%v want width invalid", err)
 	}
 	_, _, err = reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: shape.efSearch, TraversalMode: columnVectorGraphNativeSearchTraversalModeWavefront}, nil)
 	if !errors.Is(err, errColumnVectorGraphNativeSearchWavefrontWidthInvalid) {

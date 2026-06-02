@@ -1043,6 +1043,9 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if efSearch > candidateRowCount {
 		efSearch = candidateRowCount
 	}
+	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront && wavefrontWidth > efSearch {
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search wavefront width=%d exceeds normalized ef_search=%d: %w", r.def.Name, wavefrontWidth, efSearch, errColumnVectorGraphNativeSearchWavefrontWidthInvalid)
+	}
 	degree := r.def.M
 	if degree < 0 {
 		degree = 0
