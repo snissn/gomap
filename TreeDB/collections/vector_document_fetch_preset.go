@@ -21,7 +21,10 @@ type VectorDocumentFetchPreset struct {
 	// projection-oriented preset sets this to true because projection is only
 	// meaningful when callers request final documents.
 	IncludeDocuments bool
-	// DocumentFetchOptions should be copied to vector search options.
+	// DocumentFetchOptions should be copied to vector search options. ApplyTo*
+	// always replaces IncludePaths/ExcludePaths from the target options. Scalar
+	// fields use merge semantics: zero-valued preset scalars preserve the target
+	// option's existing value, and non-zero preset scalars override it.
 	DocumentFetchOptions DocumentFetchOptions
 }
 
@@ -93,8 +96,8 @@ func cloneDocumentFetchOptions(opts DocumentFetchOptions) DocumentFetchOptions {
 }
 
 // mergeDocumentFetchOptionsPreset applies preset projection paths to existing
-// fetch options while preserving existing scalar settings unless the preset
-// explicitly overrides them.
+// fetch options while preserving existing scalar settings when the preset uses
+// their zero value. Non-zero preset scalar fields override the existing value.
 func mergeDocumentFetchOptionsPreset(existing, preset DocumentFetchOptions) DocumentFetchOptions {
 	out := cloneDocumentFetchOptions(existing)
 	out.IncludePaths = append([]string(nil), preset.IncludePaths...)
