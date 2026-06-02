@@ -178,8 +178,8 @@ Expected output shape:
 TreeDB column_graph native-reader demo
 db_dir=/tmp/treedb-column-graph-doc-smoke rows=64 dims=8 degree=4 top_k=5 ef_search=32
 rebuild status=column_graph_loaded loaded=true reason=
-search path=column_graph_native_reader status=column_graph_loaded loaded=true results=5 include_docs=false
-stats candidates=... edges=... row_fetches=0 cache_hits=0 cache_misses=0 decoded_blocks=0 granules_touched=0 physical_B=0 max_resident_B=0 docs_fetched=0
+search path=column_graph_native_reader status=column_graph_loaded loaded=true results=5 include_docs=false doc_projection=none
+stats candidates=... edges=... row_fetches=0 cache_hits=0 cache_misses=0 decoded_blocks=0 granules_touched=0 physical_B=0 max_resident_B=0 docs_fetched=0 doc_output_B=0 doc_fields_skipped=0
 result[0] id=doc-... ordinal=... score=...
 ```
 
@@ -190,8 +190,12 @@ Interpretation:
 - `physical_B=0` and `row_fetches=0` on current healthy rebuilds mean search did
   not read legacy graph row payloads. Non-zero values indicate an explicit
   legacy compatibility path or a benchmark using old physical graph fixtures.
-- Add `-include-docs` when you intentionally want final document fetch included;
-  then `docs_fetched` should be non-zero.
+- Add `-include-docs` when you intentionally want projected final document
+  fetch included; the demo applies
+  `ProjectionOrientedVectorDocumentFetchPresetForField("embedding")`, so
+  documents omit the embedding field and `docs_fetched` plus
+  `doc_fields_skipped` should be non-zero. Add `-include-doc-embedding` only
+  for explicit full-document/embedding-echo comparison runs.
 
 ## Dense-section microbenchmarks
 
@@ -307,7 +311,7 @@ artifacts or when you also need one-shot open/setup names:
 ```sh
 go test ./TreeDB/collections \
   -run '^$' \
-  -bench 'Benchmark(ColumnVectorGraphNativeSearchCosineV3|ColumnVectorGraphNativeSearchCosineParallelV3|OpenVectorIndexSearcherColumnGraphNativeReaderSetupV6|OpenVectorIndexSearcherColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderWithDocumentsV4)$' \
+  -bench 'Benchmark(ColumnVectorGraphNativeSearchCosineV3|ColumnVectorGraphNativeSearchCosineParallelV3|OpenVectorIndexSearcherColumnGraphNativeReaderSetupV6|OpenVectorIndexSearcherColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderWithDocumentsExcludeEmbedding1875|SearchVectorIndexColumnGraphNativeReaderWithDocumentsV4)$' \
   -benchmem \
   -benchtime=500ms \
   -count=5
@@ -322,7 +326,8 @@ Read the benchmark names and row labels before comparing numbers:
 | `OpenVectorIndexSearcher...V4` | Reusable searcher steady-state query; setup/open outside timed loop. |
 | `SearchVectorIndex...V4` | Public one-shot search; setup/open inside each operation. |
 | `...ReusableBuffer...` | Opened public no-document search with caller-owned reusable response buffers. |
-| `...WithDocuments...` | Search plus post-top-k document materialization. |
+| `...WithDocumentsExcludeEmbedding1875` | Preferred projection-oriented final-fetch row: search plus post-top-k documents with the vector field excluded. |
+| `...WithDocumentsV4` | Explicit full-document comparison row: search plus post-top-k documents including the vector field. |
 
 Profile public response allocation and the reusable-buffer ceiling separately:
 

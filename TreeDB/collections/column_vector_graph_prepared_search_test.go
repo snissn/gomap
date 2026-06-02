@@ -131,7 +131,13 @@ func TestColumnVectorGraphPreparedSearchPublicDocumentsReopen2045(t *testing.T) 
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	query := []float32{1, 0, 0, 0}
-	before, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), IncludeDocuments: true, MaxDecodedBlocks: 1})
+	searchOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPreset(def)
+	if err != nil {
+		t.Fatalf("ProjectionOrientedVectorDocumentFetchPreset: %v", err)
+	}
+	fetchPreset.ApplyToSearchOptions(&searchOpts)
+	before, err := col.SearchVectorIndex(searchOpts)
 	if err != nil {
 		t.Fatalf("SearchVectorIndex before reopen: %v", err)
 	}
@@ -152,7 +158,7 @@ func TestColumnVectorGraphPreparedSearchPublicDocumentsReopen2045(t *testing.T) 
 	if err != nil {
 		t.Fatalf("OpenCollection reopen: %v", err)
 	}
-	after, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), IncludeDocuments: true, MaxDecodedBlocks: 1})
+	after, err := reopenedCol.SearchVectorIndex(searchOpts)
 	if err != nil {
 		t.Fatalf("SearchVectorIndex after reopen: %v", err)
 	}

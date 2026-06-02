@@ -180,6 +180,49 @@ func TestDocs_VectorIndexStateWordingDoesNotRecanonicalizeGraphRows(t *testing.T
 	}
 }
 
+func TestDocs_VectorProjectionFetchGuidance(t *testing.T) {
+	treeRoot, repoRoot := repoRoots(t)
+	checks := map[string][]string{
+		filepath.Join(treeRoot, "docs", "guides", "vector-search-typed-column.md"): {
+			"ProjectionOrientedVectorDocumentFetchPreset",
+			"ColumnRetainedPayloadNonColumn",
+			"ColumnRetainedPayloadFull` is supported for latency-oriented compatibility",
+			"full-document comparison row",
+		},
+		filepath.Join(treeRoot, "docs", "spec", "column-graph-native-vector-search.md"): {
+			"ProjectionOrientedVectorDocumentFetchPresetForField(\"embedding\")",
+			"explicit full-document/embedding-echo",
+			"Keep these document-fetch rows separate from graph-search",
+		},
+		filepath.Join(repoRoot, "cmd", "unified_bench", "README.md"): {
+			"projection_without_embedding",
+			"ProjectionOrientedVectorDocumentFetchPreset",
+			"-collection-storage-vector-full-documents",
+		},
+		filepath.Join(repoRoot, "cmd", "treedb_vector_search_demo", "README.md"): {
+			"no-document ANN/search-throughput boundary",
+			"do not time final",
+			"ProjectionOrientedVectorDocumentFetchPreset",
+		},
+		filepath.Join(repoRoot, "cmd", "treedb_vector_demo", "README.md"): {
+			"explicit full-document/embedding-echo",
+			"ProjectionOrientedVectorDocumentFetchPreset",
+		},
+	}
+	for path, needles := range checks {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(data)
+		for _, needle := range needles {
+			if !strings.Contains(text, needle) {
+				t.Fatalf("%s missing vector projection guidance %q", path, needle)
+			}
+		}
+	}
+}
+
 func TestTypedStorageStorageFormatDocsMentionCompatibilityDirectory(t *testing.T) {
 	treeRoot, _ := repoRoots(t)
 	path := filepath.Join(treeRoot, "docs", "spec", "storage-format.md")

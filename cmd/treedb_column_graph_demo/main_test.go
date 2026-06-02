@@ -48,6 +48,61 @@ func TestColumnGraphDemoRunsCloseReopenNativeReaderPath(t *testing.T) {
 	}
 }
 
+func TestColumnGraphDemoIncludeDocsUsesProjectionPreset(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "db")
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"-dir", dir,
+		"-reset",
+		"-rows", "32",
+		"-dims", "6",
+		"-degree", "4",
+		"-top-k", "2",
+		"-ef-search", "16",
+		"-include-docs",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run demo with include docs: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	for _, needle := range []string{"include_docs=true doc_projection=exclude_embedding", "docs_fetched=2", "doc_fields_skipped="} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("demo output missing %q\nstdout:\n%s\nstderr:\n%s", needle, out, stderr.String())
+		}
+	}
+}
+
+func TestDemoVectorSearchOptionsProjectionModes(t *testing.T) {
+	base := demoConfig{TopK: 3, EfSearch: 16}
+	opts, projection, err := demoVectorSearchOptions(base, []float32{1, 0, 0})
+	if err != nil {
+		t.Fatalf("no-doc options: %v", err)
+	}
+	if opts.IncludeDocuments || projection != "none" || len(opts.DocumentFetchOptions.ExcludePaths) != 0 {
+		t.Fatalf("no-doc opts=%+v projection=%q", opts, projection)
+	}
+
+	projected := base
+	projected.IncludeDocs = true
+	opts, projection, err = demoVectorSearchOptions(projected, []float32{1, 0, 0})
+	if err != nil {
+		t.Fatalf("projected options: %v", err)
+	}
+	if !opts.IncludeDocuments || projection != "exclude_embedding" || len(opts.DocumentFetchOptions.ExcludePaths) != 1 || opts.DocumentFetchOptions.ExcludePaths[0] != "embedding" {
+		t.Fatalf("projected opts=%+v projection=%q", opts, projection)
+	}
+
+	full := projected
+	full.IncludeDocEmbedding = true
+	opts, projection, err = demoVectorSearchOptions(full, []float32{1, 0, 0})
+	if err != nil {
+		t.Fatalf("full options: %v", err)
+	}
+	if !opts.IncludeDocuments || projection != "full_document_embedding_echo" || len(opts.DocumentFetchOptions.ExcludePaths) != 0 {
+		t.Fatalf("full opts=%+v projection=%q", opts, projection)
+	}
+}
+
 func TestValidateDemoResetDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "db")
 	got, err := validateDemoResetDir(dir)

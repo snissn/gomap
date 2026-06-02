@@ -21,10 +21,15 @@ fields (`-metadata typed-row`). The pre-alpha demo currently requires
 `-vectors typed-column`; unsupported vector storage modes fail clearly instead
 of silently using a different path.
 
-Use `-final-fetch` to time full-document fetch after top-k selection. Use
-`-metadata-filter` for a deterministic tenant filter smoke; this uses exact
-scoring while still publishing typed-column vector assets because public
-`column_graph` metadata predicates are not wired yet.
+Use `-final-fetch` to time the explicit full-document/embedding-echo
+compatibility path after top-k selection; keep those numbers separate from
+search-only throughput. For the preferred vector response shape that fetches
+documents without returning embeddings, use the collection/vector APIs (or
+`cmd/treedb_column_graph_demo -include-docs`) with
+`ProjectionOrientedVectorDocumentFetchPreset`. Use `-metadata-filter` for a
+deterministic tenant filter smoke; this uses exact scoring while still
+publishing typed-column vector assets because public `column_graph` metadata
+predicates are not wired yet.
 
 Text, JSON, and markdown summaries include operation-specific vector search counters such as candidate rows, visited nodes/edges, vector payload bytes, adjacency payload bytes, and direct/scratch decode counts.
 

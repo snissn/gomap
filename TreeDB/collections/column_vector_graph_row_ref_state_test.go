@@ -54,7 +54,14 @@ func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T)
 	}
 
 	query := []float32{0.1, 0.2, 1}
-	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), IncludeDocuments: true, DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}}})
+	searchOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows)}
+	fetchPreset, err := ProjectionOrientedVectorDocumentFetchPreset(def)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("ProjectionOrientedVectorDocumentFetchPreset: %v", err)
+	}
+	fetchPreset.ApplyToSearchOptions(&searchOpts)
+	got, err := col.SearchVectorIndex(searchOpts)
 	if err != nil {
 		_ = d.Close()
 		t.Fatalf("SearchVectorIndex include docs: %v", err)

@@ -60,6 +60,12 @@ const (
 	collectionStorageWorkloadMixed             = "mixed"
 )
 
+const (
+	collectionStorageVectorFinalFetchNone                  = "none"
+	collectionStorageVectorFinalFetchProjectionNoEmbedding = "projection_without_embedding"
+	collectionStorageVectorFinalFetchFullDocument          = "full_document_embedding_echo"
+)
+
 var (
 	collectionStorageAllModes = []string{
 		collectionStorageModeDocumentOnly,
@@ -92,17 +98,18 @@ var (
 		collectionStorageDefaultWorkloads,
 		"Comma-separated workloads for -suite collection_storage (insert_batch,point_get,predicate_scan,aggregate,vector_search_smoke,mixed; all=default)",
 	)
-	collectionStorageQueryCountArg         = flag.Int("collection-storage-query-count", collectionStorageDefaultQueryCount, "Per-mode query repetitions for scan/aggregate/vector/mixed workloads in -suite collection_storage")
-	collectionStoragePointGetCountArg      = flag.Int("collection-storage-point-get-count", collectionStorageDefaultPointGetCount, "Per-mode point-get operations for -suite collection_storage")
-	collectionStorageFieldCountArg         = flag.Int("collection-storage-field-count", 3, "Logical scalar field count reported for -suite collection_storage (current comparable fixture uses time_us, kind, score; higher values add payload-only fields)")
-	collectionStoragePayloadSizeArg        = flag.Int("collection-storage-payload-size", collectionStorageDefaultPayloadSize, "Payload bytes per logical document for -suite collection_storage")
-	collectionStorageCardinalityArg        = flag.Int("collection-storage-cardinality", collectionStorageDefaultCardinality, "Kind/cardinality bucket count for -suite collection_storage")
-	collectionStorageSelectivityArg        = flag.Float64("collection-storage-selectivity", collectionStorageDefaultSelectivity, "Target predicate selectivity for -suite collection_storage range/equality shapes (0<value<=1)")
-	collectionStorageVectorDimsArg         = flag.Int("collection-storage-vector-dims", collectionStorageDefaultVectorDims, "Vector dimensions for vector_typed_column mode in -suite collection_storage")
-	collectionStorageVectorTopKArg         = flag.Int("collection-storage-vector-top-k", collectionStorageDefaultVectorTopK, "TopK for vector_search_smoke in -suite collection_storage")
-	collectionStorageIncludeFinalFetchArg  = flag.Bool("collection-storage-include-final-fetch", true, "Include final document fetch/materialization in vector_search_smoke for -suite collection_storage")
-	collectionStorageCheckpointReopenArg   = flag.Bool("collection-storage-checkpoint-reopen", true, "Checkpoint, close, and reopen each collection before read workloads in -suite collection_storage")
-	collectionStorageAssetReadIntegrityArg = flag.String("collection-storage-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Typed column asset read integrity for -suite collection_storage (verify, cached_verify, skip_checksums; relaxed modes require -treedb-allow-unsafe)")
+	collectionStorageQueryCountArg          = flag.Int("collection-storage-query-count", collectionStorageDefaultQueryCount, "Per-mode query repetitions for scan/aggregate/vector/mixed workloads in -suite collection_storage")
+	collectionStoragePointGetCountArg       = flag.Int("collection-storage-point-get-count", collectionStorageDefaultPointGetCount, "Per-mode point-get operations for -suite collection_storage")
+	collectionStorageFieldCountArg          = flag.Int("collection-storage-field-count", 3, "Logical scalar field count reported for -suite collection_storage (current comparable fixture uses time_us, kind, score; higher values add payload-only fields)")
+	collectionStoragePayloadSizeArg         = flag.Int("collection-storage-payload-size", collectionStorageDefaultPayloadSize, "Payload bytes per logical document for -suite collection_storage")
+	collectionStorageCardinalityArg         = flag.Int("collection-storage-cardinality", collectionStorageDefaultCardinality, "Kind/cardinality bucket count for -suite collection_storage")
+	collectionStorageSelectivityArg         = flag.Float64("collection-storage-selectivity", collectionStorageDefaultSelectivity, "Target predicate selectivity for -suite collection_storage range/equality shapes (0<value<=1)")
+	collectionStorageVectorDimsArg          = flag.Int("collection-storage-vector-dims", collectionStorageDefaultVectorDims, "Vector dimensions for vector_typed_column mode in -suite collection_storage")
+	collectionStorageVectorTopKArg          = flag.Int("collection-storage-vector-top-k", collectionStorageDefaultVectorTopK, "TopK for vector_search_smoke in -suite collection_storage")
+	collectionStorageIncludeFinalFetchArg   = flag.Bool("collection-storage-include-final-fetch", true, "Include projection-oriented final document fetch/materialization in vector_search_smoke for -suite collection_storage")
+	collectionStorageVectorFullDocumentsArg = flag.Bool("collection-storage-vector-full-documents", false, "With collection-storage final fetch, return full documents including embedding instead of the preferred projection_without_embedding path")
+	collectionStorageCheckpointReopenArg    = flag.Bool("collection-storage-checkpoint-reopen", true, "Checkpoint, close, and reopen each collection before read workloads in -suite collection_storage")
+	collectionStorageAssetReadIntegrityArg  = flag.String("collection-storage-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Typed column asset read integrity for -suite collection_storage (verify, cached_verify, skip_checksums; relaxed modes require -treedb-allow-unsafe)")
 )
 
 type collectionStorageSuiteOptions struct {
@@ -119,6 +126,7 @@ type collectionStorageSuiteOptions struct {
 	VectorDims               int
 	VectorTopK               int
 	IncludeFinalFetch        bool
+	VectorFullDocuments      bool
 	CheckpointReopen         bool
 	ColumnAssetReadIntegrity collections.ColumnAssetReadIntegrity
 	RunBenchprof             bool
@@ -142,6 +150,7 @@ type collectionStorageReport struct {
 	VectorDims               int                               `json:"vector_dims"`
 	VectorTopK               int                               `json:"vector_top_k"`
 	IncludeFinalFetch        bool                              `json:"include_final_fetch"`
+	VectorFinalFetchShape    string                            `json:"vector_final_fetch_shape"`
 	CheckpointReopen         bool                              `json:"checkpoint_reopen"`
 	ColumnAssetReadIntegrity string                            `json:"column_asset_read_integrity"`
 	BenchmarkOnlyRelaxed     bool                              `json:"benchmark_only_relaxed"`
@@ -162,6 +171,7 @@ type collectionStorageSemantics struct {
 	FieldsQueried            []string `json:"fields_queried"`
 	ReturnedResultShape      string   `json:"returned_result_shape"`
 	FinalDocumentFetch       bool     `json:"final_document_fetch"`
+	VectorFinalFetchShape    string   `json:"vector_final_fetch_shape"`
 	CheckpointReopenIncluded bool     `json:"checkpoint_reopen_included"`
 	ReadIntegrityMode        string   `json:"read_integrity_mode"`
 	SelectivityDistribution  string   `json:"selectivity_distribution"`
@@ -242,6 +252,9 @@ type collectionStorageWorkloadCounters struct {
 	VectorDirectViews            uint64 `json:"vector_direct_views,omitempty"`
 	VectorScratchDecodes         uint64 `json:"vector_scratch_decodes,omitempty"`
 	VectorDocumentsFetched       uint64 `json:"vector_documents_fetched,omitempty"`
+	VectorDocumentOutputBytes    uint64 `json:"vector_document_output_bytes,omitempty"`
+	VectorDocumentFieldsSkipped  uint64 `json:"vector_document_fields_skipped,omitempty"`
+	VectorDocumentRetainedBytes  uint64 `json:"vector_document_retained_bytes,omitempty"`
 	VectorTypedColumnMappedBytes uint64 `json:"vector_typed_column_mapped_bytes,omitempty"`
 	VectorTypedColumnHeapBytes   uint64 `json:"vector_typed_column_heap_copy_bytes,omitempty"`
 	VectorTypedColumnDecoded     uint64 `json:"vector_typed_column_decoded_bytes,omitempty"`
@@ -425,6 +438,14 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 	if !includeFinalFetch && !flagExplicit("collection-storage-include-final-fetch") {
 		includeFinalFetch = *collectionStorageIncludeFinalFetchArg
 	}
+	vectorFullDocuments := opts.VectorFullDocuments
+	if !vectorFullDocuments && !flagExplicit("collection-storage-vector-full-documents") {
+		vectorFullDocuments = *collectionStorageVectorFullDocumentsArg
+	}
+	if vectorFullDocuments && !includeFinalFetch {
+		return "", errors.New("collection_storage: -collection-storage-vector-full-documents requires -collection-storage-include-final-fetch")
+	}
+	vectorFinalFetchShape := collectionStorageVectorFinalFetchShape(includeFinalFetch, vectorFullDocuments)
 	checkpointReopen := opts.CheckpointReopen
 	if !checkpointReopen && !flagExplicit("collection-storage-checkpoint-reopen") {
 		checkpointReopen = *collectionStorageCheckpointReopenArg
@@ -533,7 +554,7 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 
 	for _, rt := range modeRuntimes {
 		for _, workload := range workloads {
-			metric, err := runCollectionStorageWorkload(rt, workload, fixture, queryRange, queryCount, pointGetCount, vectorTopK, includeFinalFetch, assetReadIntegrity)
+			metric, err := runCollectionStorageWorkload(rt, workload, fixture, queryRange, queryCount, pointGetCount, vectorTopK, includeFinalFetch, vectorFullDocuments, assetReadIntegrity)
 			if err != nil {
 				return "", err
 			}
@@ -585,11 +606,12 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 		VectorDims:               vectorDims,
 		VectorTopK:               vectorTopK,
 		IncludeFinalFetch:        includeFinalFetch,
+		VectorFinalFetchShape:    vectorFinalFetchShape,
 		CheckpointReopen:         checkpointReopen,
 		ColumnAssetReadIntegrity: string(assetReadIntegrity),
 		BenchmarkOnlyRelaxed:     collectionStorageAssetReadIntegrityBenchmarkRelaxed(assetReadIntegrity),
 		PathLabel:                strings.TrimSpace(opts.ExecutionPath),
-		Semantics:                collectionStorageReportSemantics(rows, queryRange, includeFinalFetch, checkpointReopen, assetReadIntegrity),
+		Semantics:                collectionStorageReportSemantics(rows, queryRange, includeFinalFetch, vectorFinalFetchShape, checkpointReopen, assetReadIntegrity),
 		ModeSemantics:            modeSemantics,
 		Stages:                   stages,
 		Metrics:                  metrics,
@@ -619,6 +641,16 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 		return "", profileFinalizeErr
 	}
 	return md, nil
+}
+
+func collectionStorageVectorFinalFetchShape(includeFinalFetch, fullDocuments bool) string {
+	if !includeFinalFetch {
+		return collectionStorageVectorFinalFetchNone
+	}
+	if fullDocuments {
+		return collectionStorageVectorFinalFetchFullDocument
+	}
+	return collectionStorageVectorFinalFetchProjectionNoEmbedding
 }
 
 func collectionStorageEffectiveProfile(profile string) (string, error) {
@@ -1179,7 +1211,7 @@ func collectionStorageAssetByteBreakdown(col *collections.Collection) (rowBytes,
 	return rowBytes, columnBytes
 }
 
-func runCollectionStorageWorkload(rt *collectionStorageModeRuntime, workload string, fixture []collectionStorageFixtureRow, queryRange collectionStoragePredicateRange, queryCount, pointGetCount, vectorTopK int, includeFinalFetch bool, assetReadIntegrity collections.ColumnAssetReadIntegrity) (collectionStorageWorkloadMetric, error) {
+func runCollectionStorageWorkload(rt *collectionStorageModeRuntime, workload string, fixture []collectionStorageFixtureRow, queryRange collectionStoragePredicateRange, queryCount, pointGetCount, vectorTopK int, includeFinalFetch bool, vectorFullDocuments bool, assetReadIntegrity collections.ColumnAssetReadIntegrity) (collectionStorageWorkloadMetric, error) {
 	metric := collectionStorageWorkloadMetric{
 		Mode:                  rt.Mode,
 		Workload:              workload,
@@ -1217,7 +1249,7 @@ func runCollectionStorageWorkload(rt *collectionStorageModeRuntime, workload str
 	case collectionStorageWorkloadAggregate:
 		return runCollectionStorageAggregate(rt, metric, queryRange, queryCount, assetReadIntegrity)
 	case collectionStorageWorkloadVectorSearchSmoke:
-		return runCollectionStorageVectorSearch(rt, metric, fixture, queryCount, vectorTopK, includeFinalFetch)
+		return runCollectionStorageVectorSearch(rt, metric, fixture, queryCount, vectorTopK, includeFinalFetch, vectorFullDocuments)
 	case collectionStorageWorkloadMixed:
 		return runCollectionStorageMixed(rt, metric, fixture, queryRange, queryCount, assetReadIntegrity)
 	default:
@@ -1369,23 +1401,27 @@ func runCollectionStorageAggregate(rt *collectionStorageModeRuntime, metric coll
 	return metric, nil
 }
 
-func runCollectionStorageVectorSearch(rt *collectionStorageModeRuntime, metric collectionStorageWorkloadMetric, fixture []collectionStorageFixtureRow, queryCount, vectorTopK int, includeFinalFetch bool) (collectionStorageWorkloadMetric, error) {
+func runCollectionStorageVectorSearch(rt *collectionStorageModeRuntime, metric collectionStorageWorkloadMetric, fixture []collectionStorageFixtureRow, queryCount, vectorTopK int, includeFinalFetch bool, vectorFullDocuments bool) (collectionStorageWorkloadMetric, error) {
 	if len(fixture) == 0 {
 		return metric, errors.New("collection_storage: vector search needs at least one fixture row")
 	}
 	query := append([]float32(nil), fixture[0].Embedding...)
-	validate, err := rt.Collection.SearchVectorIndex(collections.VectorIndexSearchOptions{IndexName: collectionStorageVectorIndexName, Query: query, TopK: min(vectorTopK, len(fixture)), EfSearch: len(fixture), IncludeDocuments: includeFinalFetch, MaxDecodedBlocks: 1})
+	searchOpts, err := collectionStorageVectorSearchOptions(query, min(vectorTopK, len(fixture)), len(fixture), includeFinalFetch, vectorFullDocuments)
+	if err != nil {
+		return metric, err
+	}
+	validate, err := rt.Collection.SearchVectorIndex(searchOpts)
 	if err != nil {
 		return metric, fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness: %w", rt.Mode, err)
 	}
-	if err := validateCollectionStorageVectorResults(rt.Mode, validate.Results, fixture, min(vectorTopK, len(fixture)), includeFinalFetch); err != nil {
+	if err := validateCollectionStorageVectorResults(rt.Mode, validate.Results, fixture, min(vectorTopK, len(fixture)), includeFinalFetch, vectorFullDocuments); err != nil {
 		return metric, err
 	}
 	allocStart := readCollectionStorageMemStats()
 	start := time.Now()
 	var last collections.VectorIndexSearchResponse
 	for i := 0; i < queryCount; i++ {
-		last, err = rt.Collection.SearchVectorIndex(collections.VectorIndexSearchOptions{IndexName: collectionStorageVectorIndexName, Query: query, TopK: min(vectorTopK, len(fixture)), EfSearch: len(fixture), IncludeDocuments: includeFinalFetch, MaxDecodedBlocks: 1})
+		last, err = rt.Collection.SearchVectorIndex(searchOpts)
 		if err != nil {
 			return metric, fmt.Errorf("collection_storage: mode %s vector_search_smoke: %w", rt.Mode, err)
 		}
@@ -1403,12 +1439,15 @@ func runCollectionStorageVectorSearch(rt *collectionStorageModeRuntime, metric c
 	metric.AllocsPerOp = perOp(float64(allocDelta.Allocs), int64(queryCount))
 	metric.Matches = int64(len(last.Results) * queryCount)
 	metric.MatchesPerSecond = rate(float64(metric.Matches), dur)
-	metric.SemanticNote = "vector scoring excludes full document materialization until top-k; include_final_fetch controls post-top-k document fetch"
+	metric.SemanticNote = collectionStorageVectorSearchSemanticNote(includeFinalFetch, vectorFullDocuments)
 	metric.Counters.VectorCandidates = last.Stats.Candidates * uint64(queryCount)
 	metric.Counters.VectorEdges = last.Stats.Edges * uint64(queryCount)
 	metric.Counters.VectorDirectViews = last.Stats.VectorDirectViews * uint64(queryCount)
 	metric.Counters.VectorScratchDecodes = last.Stats.VectorScratchDecodes * uint64(queryCount)
 	metric.Counters.VectorDocumentsFetched = last.Stats.DocumentsFetched * uint64(queryCount)
+	metric.Counters.VectorDocumentOutputBytes = last.Stats.DocumentOutputBytes * uint64(queryCount)
+	metric.Counters.VectorDocumentFieldsSkipped = last.Stats.DocumentFieldsSkipped * uint64(queryCount)
+	metric.Counters.VectorDocumentRetainedBytes = last.Stats.DocumentRetainedBytes * uint64(queryCount)
 	metric.Counters.VectorTypedColumnMappedBytes = last.Stats.TypedColumnMappedBytes
 	metric.Counters.VectorTypedColumnHeapBytes = last.Stats.TypedColumnHeapCopyBytes
 	metric.Counters.VectorTypedColumnDecoded = last.Stats.TypedColumnDecodedBytes
@@ -1419,7 +1458,40 @@ func runCollectionStorageVectorSearch(rt *collectionStorageModeRuntime, metric c
 	return metric, nil
 }
 
-func validateCollectionStorageVectorResults(mode string, results []collections.VectorIndexSearchResult, fixture []collectionStorageFixtureRow, topK int, includeFinalFetch bool) error {
+func collectionStorageVectorSearchOptions(query []float32, topK, efSearch int, includeFinalFetch, vectorFullDocuments bool) (collections.VectorIndexSearchOptions, error) {
+	opts := collections.VectorIndexSearchOptions{
+		IndexName:        collectionStorageVectorIndexName,
+		Query:            query,
+		TopK:             topK,
+		EfSearch:         efSearch,
+		MaxDecodedBlocks: 1,
+	}
+	if !includeFinalFetch {
+		return opts, nil
+	}
+	if vectorFullDocuments {
+		opts.IncludeDocuments = true
+		return opts, nil
+	}
+	preset, err := collections.ProjectionOrientedVectorDocumentFetchPresetForField("embedding")
+	if err != nil {
+		return opts, err
+	}
+	preset.ApplyToSearchOptions(&opts)
+	return opts, nil
+}
+
+func collectionStorageVectorSearchSemanticNote(includeFinalFetch, vectorFullDocuments bool) string {
+	if !includeFinalFetch {
+		return "vector scoring/search returns top-k IDs/scores only; no post-top-k document fetch is timed"
+	}
+	if vectorFullDocuments {
+		return "vector scoring/search excludes document materialization until top-k; final fetch is explicit full-document/embedding-echo comparison path"
+	}
+	return "vector scoring/search excludes document materialization until top-k; final fetch uses preferred projection_without_embedding preset path"
+}
+
+func validateCollectionStorageVectorResults(mode string, results []collections.VectorIndexSearchResult, fixture []collectionStorageFixtureRow, topK int, includeFinalFetch bool, vectorFullDocuments bool) error {
 	if len(results) == 0 {
 		return fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness returned no results", mode)
 	}
@@ -1444,6 +1516,16 @@ func validateCollectionStorageVectorResults(mode string, results []collections.V
 			}
 			if _, err := decodeCollectionStorageDocument(result.Document); err != nil {
 				return fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness id %q final document decode: %w", mode, id, err)
+			}
+			hasEmbedding, err := collectionStorageDocumentHasField(result.Document, "embedding")
+			if err != nil {
+				return fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness id %q final document inspect: %w", mode, id, err)
+			}
+			if vectorFullDocuments && !hasEmbedding {
+				return fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness id %q full-document final fetch omitted embedding", mode, id)
+			}
+			if !vectorFullDocuments && hasEmbedding {
+				return fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness id %q projected final fetch retained embedding", mode, id)
 			}
 		}
 	}
@@ -1503,6 +1585,15 @@ func decodeCollectionStorageDocument(doc []byte) (collectionStorageDecodedDocume
 		return decoded, err
 	}
 	return decoded, nil
+}
+
+func collectionStorageDocumentHasField(doc []byte, field string) (bool, error) {
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &decoded); err != nil {
+		return false, err
+	}
+	_, ok := decoded[field]
+	return ok, nil
 }
 
 func collectionStorageSampleIndex(i, rows int) int {
@@ -1611,18 +1702,19 @@ func perOp(v float64, ops int64) float64 {
 	return v / float64(ops)
 }
 
-func collectionStorageReportSemantics(rows int, queryRange collectionStoragePredicateRange, includeFinalFetch, checkpointReopen bool, assetReadIntegrity collections.ColumnAssetReadIntegrity) collectionStorageSemantics {
+func collectionStorageReportSemantics(rows int, queryRange collectionStoragePredicateRange, includeFinalFetch bool, vectorFinalFetchShape string, checkpointReopen bool, assetReadIntegrity collections.ColumnAssetReadIntegrity) collectionStorageSemantics {
 	return collectionStorageSemantics{
 		LogicalRows:              rows,
 		InsertedDocuments:        rows,
 		FieldsProjected:          []string{"time_us", "kind", "score"},
 		FieldsQueried:            []string{"time_us", "embedding"},
-		ReturnedResultShape:      "point_get returns logical JSON fields; predicate_scan returns matched row count; aggregate returns count/sum/avg; vector_search_smoke returns top-k IDs/scores and optionally documents",
+		ReturnedResultShape:      "point_get returns logical JSON fields; predicate_scan returns matched row count; aggregate returns count/sum/avg; vector_search_smoke returns top-k IDs/scores plus either no docs, projection_without_embedding docs, or explicit full-document embedding echo",
 		FinalDocumentFetch:       includeFinalFetch,
+		VectorFinalFetchShape:    vectorFinalFetchShape,
 		CheckpointReopenIncluded: checkpointReopen,
 		ReadIntegrityMode:        string(assetReadIntegrity),
 		SelectivityDistribution:  fmt.Sprintf("clustered_monotonic time_us range [%d,%d] matching %d rows", queryRange.Low, queryRange.High, queryRange.ExpectedRows),
-		MaterializationBoundary:  "setup/fixture/create/insert/checkpoint/reopen/vector_rebuild are timed as stages; workload metrics time only the selected operation loop after correctness validation",
+		MaterializationBoundary:  "setup/fixture/create/insert/checkpoint/reopen/vector_rebuild are timed as stages; workload metrics time only the selected operation loop after correctness validation; vector_search_smoke includes post-top-k document fetch only when include_final_fetch is true",
 		SemanticComparability:    "scalar workloads use the same logical documents, ids, time_us/kind/score fields, predicate range, aggregate result, and point-get projection across all scalar modes; vector search is only semantically comparable for vector_typed_column and is marked unsupported elsewhere",
 	}
 }
@@ -1638,7 +1730,7 @@ func renderCollectionStorageSuiteMarkdown(report collectionStorageReport) string
 	sb.WriteString(fmt.Sprintf("- query_count: %d\n", report.QueryCount))
 	sb.WriteString(fmt.Sprintf("- point_get_count: %d\n", report.PointGetCount))
 	sb.WriteString(fmt.Sprintf("- selectivity: %.6f\n", report.Selectivity))
-	sb.WriteString(fmt.Sprintf("- vector_dims: %d vector_top_k: %d include_final_fetch: %v\n", report.VectorDims, report.VectorTopK, report.IncludeFinalFetch))
+	sb.WriteString(fmt.Sprintf("- vector_dims: %d vector_top_k: %d include_final_fetch: %v vector_final_fetch_shape: `%s`\n", report.VectorDims, report.VectorTopK, report.IncludeFinalFetch, report.VectorFinalFetchShape))
 	sb.WriteString(fmt.Sprintf("- checkpoint_reopen: %v\n", report.CheckpointReopen))
 	sb.WriteString(fmt.Sprintf("- collection asset read integrity: `%s`\n", report.ColumnAssetReadIntegrity))
 	if report.PathLabel != "" {
@@ -1654,6 +1746,7 @@ func renderCollectionStorageSuiteMarkdown(report collectionStorageReport) string
 	sb.WriteString(fmt.Sprintf("- projected fields: %s\n", markdownCodeList(report.Semantics.FieldsProjected)))
 	sb.WriteString(fmt.Sprintf("- queried fields: %s\n", markdownCodeList(report.Semantics.FieldsQueried)))
 	sb.WriteString(fmt.Sprintf("- returned result shape: %s\n", markdownTableText(report.Semantics.ReturnedResultShape)))
+	sb.WriteString(fmt.Sprintf("- vector final fetch shape: `%s`\n", report.Semantics.VectorFinalFetchShape))
 	sb.WriteString(fmt.Sprintf("- selectivity/distribution: %s\n", markdownTableText(report.Semantics.SelectivityDistribution)))
 	sb.WriteString(fmt.Sprintf("- materialization boundary: %s\n", markdownTableText(report.Semantics.MaterializationBoundary)))
 	sb.WriteString(fmt.Sprintf("- comparability: %s\n\n", markdownTableText(report.Semantics.SemanticComparability)))
@@ -1677,7 +1770,7 @@ func renderCollectionStorageSuiteMarkdown(report collectionStorageReport) string
 	sb.WriteString("\n")
 
 	sb.WriteString("## Workload Metrics\n\n")
-	sb.WriteString("| mode | workload | supported | rows/s | queries/s | matches/s | ns/op | B/op | allocs/op | rows processed | matches | row bytes | column bytes | materializations/reconstructions | typed parts decoded/pruned | typed blocks decoded/pruned | vector candidates/edges | note |\n")
+	sb.WriteString("| mode | workload | supported | rows/s | queries/s | matches/s | ns/op | B/op | allocs/op | rows processed | matches | row bytes | column bytes | materializations/reconstructions | typed parts decoded/pruned | typed blocks decoded/pruned | vector candidates/edges/docs/out_B/skipped | note |\n")
 	sb.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|\n")
 	for _, m := range report.Metrics {
 		supported := "yes"
@@ -1689,7 +1782,7 @@ func renderCollectionStorageSuiteMarkdown(report collectionStorageReport) string
 		mat := fmt.Sprintf("%d/%d", m.Counters.DocumentMaterializations+m.Counters.RowMaterializations, m.Counters.DocumentReconstructions)
 		parts := fmt.Sprintf("%d/%d", m.Counters.TypedColumnPartsDecoded, m.Counters.TypedColumnPartsPruned)
 		blocks := fmt.Sprintf("%d/%d", m.Counters.TypedColumnBlocksDecoded, m.Counters.TypedColumnBlocksPruned)
-		vector := fmt.Sprintf("%d/%d", m.Counters.VectorCandidates, m.Counters.VectorEdges)
+		vector := fmt.Sprintf("%d/%d/%d/%d/%d", m.Counters.VectorCandidates, m.Counters.VectorEdges, m.Counters.VectorDocumentsFetched, m.Counters.VectorDocumentOutputBytes, m.Counters.VectorDocumentFieldsSkipped)
 		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %.3f | %.3f | %.3f | %.1f | %.1f | %.3f | %d | %d | %d | %d | %s | %s | %s | %s | %s |\n",
 			markdownCodeTableText(m.Mode), markdownCodeTableText(m.Workload), supported, m.RowsPerSecond, m.QueriesPerSecond, m.MatchesPerSecond, m.NsPerOp, m.BytesPerOp, m.AllocsPerOp, m.RowsProcessed, m.Matches, m.TypedRowAssetBytes, m.TypedColumnAssetBytes, markdownCodeTableText(mat), markdownCodeTableText(parts), markdownCodeTableText(blocks), markdownCodeTableText(vector), markdownTableText(note)))
 	}

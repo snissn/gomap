@@ -274,7 +274,11 @@ Collection-storage flags:
 - `-collection-storage-selectivity`, `-collection-storage-cardinality`,
   `-collection-storage-payload-size`, `-collection-storage-field-count`.
 - `-collection-storage-vector-dims`, `-collection-storage-vector-top-k`,
-  `-collection-storage-include-final-fetch`.
+  `-collection-storage-include-final-fetch`. When final fetch is enabled, the
+  default vector response shape is `projection_without_embedding` via
+  `ProjectionOrientedVectorDocumentFetchPreset`; add
+  `-collection-storage-vector-full-documents` only for explicit
+  full-document/embedding-echo comparison rows.
 - `-collection-storage-checkpoint-reopen` to include the durability/recovery
   boundary before read workloads (default true).
 - `-collection-storage-asset-read-integrity` (`verify|cached_verify|skip_checksums`;

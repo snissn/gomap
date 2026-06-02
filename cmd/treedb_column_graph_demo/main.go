@@ -21,16 +21,17 @@ const defaultIndexName = "embedding_graph"
 const minDemoResetDirLen = 8
 
 type demoConfig struct {
-	Dir              string
-	Reset            bool
-	Rows             int
-	Dims             int
-	Degree           int
-	TopK             int
-	EfSearch         int
-	MaxDecodedBlocks int
-	IncludeDocs      bool
-	GlovePath        string
+	Dir                 string
+	Reset               bool
+	Rows                int
+	Dims                int
+	Degree              int
+	TopK                int
+	EfSearch            int
+	MaxDecodedBlocks    int
+	IncludeDocs         bool
+	IncludeDocEmbedding bool
+	GlovePath           string
 }
 
 type demoRow struct {
@@ -59,6 +60,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if cfg.Degree < 0 {
 		return errors.New("degree must be non-negative")
+	}
+	if cfg.IncludeDocEmbedding && !cfg.IncludeDocs {
+		return errors.New("include-doc-embedding requires include-docs")
 	}
 
 	cleanup := func() {}
@@ -160,12 +164,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer func() { _ = searcher.Close() }()
-	got, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
-		Query:            query,
-		TopK:             cfg.TopK,
-		EfSearch:         cfg.EfSearch,
-		IncludeDocuments: cfg.IncludeDocs,
-	})
+	searchOpts, docProjection, err := demoVectorSearchOptions(cfg, query)
+	if err != nil {
+		return err
+	}
+	got, err := searcher.Search(searchOpts)
 	if err != nil {
 		return err
 	}
@@ -176,8 +179,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "TreeDB column_graph native-reader demo\n")
 	fmt.Fprintf(stdout, "db_dir=%s rows=%d dims=%d degree=%d top_k=%d ef_search=%d\n", cfg.Dir, len(rows), dims, cfg.Degree, cfg.TopK, cfg.EfSearch)
 	fmt.Fprintf(stdout, "rebuild status=%s loaded=%t reason=%s\n", status.State, status.Loaded, status.Reason)
-	fmt.Fprintf(stdout, "search path=%s status=%s loaded=%t results=%d include_docs=%t\n", got.Path, got.Status.State, got.Status.Loaded, len(got.Results), cfg.IncludeDocs)
-	fmt.Fprintf(stdout, "stats candidate_rows=%d candidates=%d edges=%d visited_nodes=%d visited_edges=%d vector_B=%d adjacency_B=%d row_fetches=%d cache_hits=%d cache_misses=%d decoded_blocks=%d granules_touched=%d physical_B=%d max_resident_B=%d docs_fetched=%d\n",
+	fmt.Fprintf(stdout, "search path=%s status=%s loaded=%t results=%d include_docs=%t doc_projection=%s\n", got.Path, got.Status.State, got.Status.Loaded, len(got.Results), cfg.IncludeDocs, docProjection)
+	fmt.Fprintf(stdout, "stats candidate_rows=%d candidates=%d edges=%d visited_nodes=%d visited_edges=%d vector_B=%d adjacency_B=%d row_fetches=%d cache_hits=%d cache_misses=%d decoded_blocks=%d granules_touched=%d physical_B=%d max_resident_B=%d docs_fetched=%d doc_output_B=%d doc_fields_skipped=%d\n",
 		got.Stats.CandidateRows,
 		got.Stats.Candidates,
 		got.Stats.Edges,
@@ -193,6 +196,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		got.Stats.PhysicalBytesRead,
 		got.Stats.MaxResidentBytes,
 		got.Stats.DocumentsFetched,
+		got.Stats.DocumentOutputBytes,
+		got.Stats.DocumentFieldsSkipped,
 	)
 	for i, result := range got.Results {
 		if i >= 5 {
@@ -342,7 +347,8 @@ func parseConfig(args []string) (demoConfig, error) {
 	fs.IntVar(&cfg.TopK, "top-k", cfg.TopK, "number of nearest results")
 	fs.IntVar(&cfg.EfSearch, "ef-search", cfg.EfSearch, "graph search exploration bound")
 	fs.IntVar(&cfg.MaxDecodedBlocks, "max-decoded-blocks", cfg.MaxDecodedBlocks, "bounded physical column decoded-block cache size")
-	fs.BoolVar(&cfg.IncludeDocs, "include-docs", cfg.IncludeDocs, "materialize full documents after top-k")
+	fs.BoolVar(&cfg.IncludeDocs, "include-docs", cfg.IncludeDocs, "materialize projected documents after top-k, excluding the embedding field by default")
+	fs.BoolVar(&cfg.IncludeDocEmbedding, "include-doc-embedding", cfg.IncludeDocEmbedding, "with -include-docs, return full documents including the embedding field (explicit embedding echo/full-doc opt-in)")
 	fs.StringVar(&cfg.GlovePath, "glove", cfg.GlovePath, "optional GloVe text file to load as a real public embedding dataset")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
@@ -353,13 +359,35 @@ func parseConfig(args []string) (demoConfig, error) {
 	return cfg, nil
 }
 
+func demoVectorSearchOptions(cfg demoConfig, query []float32) (collections.VectorIndexSearcherSearchOptions, string, error) {
+	opts := collections.VectorIndexSearcherSearchOptions{
+		Query:    query,
+		TopK:     cfg.TopK,
+		EfSearch: cfg.EfSearch,
+	}
+	if !cfg.IncludeDocs {
+		return opts, "none", nil
+	}
+	if cfg.IncludeDocEmbedding {
+		opts.IncludeDocuments = true
+		return opts, "full_document_embedding_echo", nil
+	}
+	preset, err := collections.ProjectionOrientedVectorDocumentFetchPresetForField("embedding")
+	if err != nil {
+		return opts, "", err
+	}
+	preset.ApplyToSearcherSearchOptions(&opts)
+	return opts, "exclude_embedding", nil
+}
+
 func demoCollectionMeta(dims, degree int) *collections.CollectionMeta {
 	return &collections.CollectionMeta{
 		Name: "docs",
 		Options: collections.CollectionOptions{
 			DocumentFormat: collections.DocumentFormatJSON,
 			ColumnStore: &collections.ColumnStoreConfig{
-				Enabled: true,
+				Enabled:         true,
+				RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
 				Columns: []collections.ColumnStoreColumn{
 					{Name: "time_us", Path: "time_us", ValueType: collections.ColumnStoreValueInt64},
 					{Name: "kind", Path: "kind", ValueType: collections.ColumnStoreValueString, Dictionary: true},
