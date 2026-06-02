@@ -18,7 +18,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	stats := map[string]string{
 		"treedb.process.identity.wal_dir":                               "/tmp/app.db/wal",
 		"treedb.vlog.mmap_active_bytes":                                 "22222",
+		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                 "1073741824",
 		"treedb.cache.vlog_mmap.active_bytes":                           "12345",
+		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments":        "32",
 		"treedb.cache.vlog_mmap.read.hit_ratio":                         "0.625000",
 		"treedb.cache.vlog_mmap.enabled":                                "true",
 		"treedb.cache.vlog_decode_buffer_grow.calls_total":              "42",
@@ -55,6 +57,12 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.cache.vlog_mmap.active_bytes"].(int64); !ok || v != 12345 {
 		t.Fatalf("active_bytes=%T(%v) want int64(12345)", got["treedb.cache.vlog_mmap.active_bytes"], got["treedb.cache.vlog_mmap.active_bytes"])
+	}
+	if v, ok := got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"].(int64); !ok || v != 1073741824 {
+		t.Fatalf("backend leaf mmap byte cap=%T(%v) want int64(1073741824)", got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"], got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"])
+	}
+	if v, ok := got["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"].(int64); !ok || v != 32 {
+		t.Fatalf("cache leaf mmap segment cap=%T(%v) want int64(32)", got["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"], got["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"])
 	}
 	if v, ok := got["treedb.cache.vlog_mmap.read.hit_ratio"].(float64); !ok || v != 0.625 {
 		t.Fatalf("hit_ratio=%T(%v) want float64(0.625)", got["treedb.cache.vlog_mmap.read.hit_ratio"], got["treedb.cache.vlog_mmap.read.hit_ratio"])
