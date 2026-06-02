@@ -62,7 +62,7 @@ func TestColumnVectorGraphSearchSourceDisablesUnsupportedTypedVector1968(t *test
 	reader.typedVectorSource.dims = def.Dimensions + 1
 
 	scratch := &columnVectorGraphNativeSearchScratch{}
-	if err := scratch.prepare(reader.RowCount(), reader.def.Dimensions, reader.def.M, 8, 8); err != nil {
+	if err := scratch.prepare(reader.RowCount(), reader.def.Dimensions, reader.def.M, 8, 8, reader.def.M, 0); err != nil {
 		t.Fatalf("scratch prepare: %v", err)
 	}
 	_, err = scratch.prepareSearchPlan(reader)
@@ -318,7 +318,7 @@ func TestColumnVectorGraphSearchSourcePolicyMatchesLegacy1968(t *testing.T) {
 			t.Fatalf("query inv norm: %v", err)
 		}
 		badScratch := &columnVectorGraphNativeSearchScratch{}
-		if err := badScratch.prepare(badReader.RowCount(), badReader.def.Dimensions, badReader.def.M, 1, 1); err != nil {
+		if err := badScratch.prepare(badReader.RowCount(), badReader.def.Dimensions, badReader.def.M, 1, 1, badReader.def.M, 0); err != nil {
 			t.Fatalf("bad scratch prepare: %v", err)
 		}
 		badPlan, err := badScratch.prepareSearchPlan(badReader)
@@ -547,7 +547,7 @@ func prepareColumnVectorGraphScoreSourceTestPlan1968(tb testing.TB, reader *colu
 		tb.Fatalf("columnVectorGraphInvNorm query: %v", err)
 	}
 	scratch := &columnVectorGraphNativeSearchScratch{}
-	if err := scratch.prepare(reader.RowCount(), reader.def.Dimensions, reader.def.M, 8, 8); err != nil {
+	if err := scratch.prepare(reader.RowCount(), reader.def.Dimensions, reader.def.M, 8, 8, reader.def.M, 0); err != nil {
 		tb.Fatalf("scratch prepare: %v", err)
 	}
 	plan, err := scratch.prepareSearchPlan(reader)

@@ -567,7 +567,7 @@ func TestColumnVectorGraphNativeSearchEmptyAndTopKClampV3(t *testing.T) {
 
 func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	var scratch columnVectorGraphNativeSearchScratch
-	if err := scratch.prepare(64, 3, 2, 64, 64); err != nil {
+	if err := scratch.prepare(64, 3, 2, 64, 64, 2, 0); err != nil {
 		t.Fatalf("prepare large: %v", err)
 	}
 	if len(scratch.visitMarks) != 64 {
@@ -576,7 +576,7 @@ func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	if cap(scratch.frontier) < 64 || cap(scratch.top) < 64 || cap(scratch.results) < 64 || cap(scratch.idBuffers) < 64 || cap(scratch.resultOrder) < 64 || cap(scratch.resultOrdinals) < 64 {
 		t.Fatalf("large scratch caps frontier=%d top=%d results=%d idBuffers=%d resultOrder=%d resultOrdinals=%d want at least 64", cap(scratch.frontier), cap(scratch.top), cap(scratch.results), cap(scratch.idBuffers), cap(scratch.resultOrder), cap(scratch.resultOrdinals))
 	}
-	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
+	if err := scratch.prepare(1, 3, 2, 1, 1, 2, 0); err != nil {
 		t.Fatalf("prepare small: %v", err)
 	}
 	if len(scratch.visitMarks) != 1 {
@@ -615,7 +615,7 @@ func TestColumnVectorGraphNativeSearchScratchClearsResultAliasesV3(t *testing.T)
 		columnVectorGraphNativeSearchResult{Ordinal: 8, ID: oldID, Score: 0.5},
 	)
 	oldResults := scratch.results
-	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
+	if err := scratch.prepare(1, 3, 2, 1, 1, 2, 0); err != nil {
 		t.Fatalf("prepare small: %v", err)
 	}
 	if len(scratch.results) != 0 {
@@ -631,7 +631,7 @@ func TestColumnVectorGraphNativeSearchScratchClearsResultAliasesV3(t *testing.T)
 		columnVectorGraphNativeSearchResult{Ordinal: 10, ID: oldID, Score: 0.5},
 	)
 	oldResults = scratch.results
-	if err := scratch.prepare(2, 3, 2, 2, 2); err != nil {
+	if err := scratch.prepare(2, 3, 2, 2, 2, 2, 0); err != nil {
 		t.Fatalf("prepare same target: %v", err)
 	}
 	if len(scratch.results) != 0 {
@@ -646,7 +646,7 @@ func TestColumnVectorGraphNativeSearchScratchClearsResultAliasesV3(t *testing.T)
 	scratch.results[0].ID = oldID
 	scratch.results[1].ID = oldID
 	oldResults = scratch.results
-	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
+	if err := scratch.prepare(1, 3, 2, 1, 1, 2, 0); err != nil {
 		t.Fatalf("prepare oversized: %v", err)
 	}
 	if cap(scratch.results) > 1+columnVectorGraphNativeScratchOversizeSlack {
@@ -674,7 +674,7 @@ func TestColumnVectorGraphNativeSearchScratchClearsRowValueAliasesV3(t *testing.
 		AdjacencyList: staleAdjacency,
 	}
 	oldValues := scratch.scoreScratch.Values
-	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
+	if err := scratch.prepare(1, 3, 2, 1, 1, 2, 0); err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
 	if len(scratch.scoreScratch.Values) != 0 {
@@ -1334,6 +1334,16 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.ResultIDStateValidationFailures += stats.ResultIDStateValidationFailures
 		searchStats.PreparedGraphSearchViews += stats.PreparedGraphSearchViews
 		searchStats.GraphRowFallbacks += stats.GraphRowFallbacks
+		searchStats.WavefrontSearches += stats.WavefrontSearches
+		if stats.WavefrontWidth > searchStats.WavefrontWidth {
+			searchStats.WavefrontWidth = stats.WavefrontWidth
+		}
+		searchStats.WavefrontRounds += stats.WavefrontRounds
+		searchStats.WavefrontCandidatePops += stats.WavefrontCandidatePops
+		searchStats.WavefrontStagedNeighbors += stats.WavefrontStagedNeighbors
+		if stats.WavefrontMaxTileSize > searchStats.WavefrontMaxTileSize {
+			searchStats.WavefrontMaxTileSize = stats.WavefrontMaxTileSize
+		}
 		addColumnVectorGraphNativeSearchDebugStats1979(&searchStats, stats)
 	}
 	b.StopTimer()
@@ -2174,6 +2184,15 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.ResultIDStateValidationFailures)/float64(n), "result_id_state_validation_failures/search")
 	b.ReportMetric(float64(searchStats.PreparedGraphSearchViews)/float64(n), "prepared_graph_search_views/search")
 	b.ReportMetric(float64(searchStats.GraphRowFallbacks)/float64(n), "graph_row_fallbacks/search")
+	b.ReportMetric(float64(searchStats.WavefrontSearches)/float64(n), "wavefront_searches/search")
+	b.ReportMetric(float64(searchStats.WavefrontWidth), "wavefront_width")
+	b.ReportMetric(float64(searchStats.WavefrontRounds)/float64(n), "wavefront_rounds/search")
+	b.ReportMetric(float64(searchStats.WavefrontCandidatePops)/float64(n), "wavefront_candidate_pops/search")
+	b.ReportMetric(float64(searchStats.WavefrontStagedNeighbors)/float64(n), "wavefront_staged_neighbors/search")
+	b.ReportMetric(float64(searchStats.WavefrontMaxTileSize), "wavefront_max_tile_size")
+	if searchStats.WavefrontRounds > 0 {
+		b.ReportMetric(float64(searchStats.WavefrontStagedNeighbors)/float64(searchStats.WavefrontRounds), "wavefront_avg_tile_size")
+	}
 	b.ReportMetric(float64(searchStats.TypedColumnMappedBytes), "mapped_B")
 	b.ReportMetric(float64(searchStats.TypedColumnHeapCopyBytes), "heap_copy_B")
 	b.ReportMetric(float64(searchStats.TypedColumnDecodedBytes), "decoded_derived_B")
