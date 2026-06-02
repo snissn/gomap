@@ -457,6 +457,44 @@ func TestPublishSystemRootIterator_PointerRefreshesValueLogSet(t *testing.T) {
 	}
 }
 
+func TestPublishSystemRootIterator_PointerSkipsValueLogRefreshWhenSegmentAlreadyRegistered(t *testing.T) {
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	path := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+	before := d.valueLogManager.RefreshScanCount()
+
+	if _, err := d.PublishSystemRootIterator(mustFrozenSystemPointerMemtable(t, "sys/p", ptr).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("PublishSystemRootIterator: %v", err)
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after != before {
+		t.Fatalf("system root pointer publish triggered value-log refresh scan: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("system root publish missing pre-registered segment %d", fileID)
+	}
+}
+
 func TestPointerCommitSkipsValueLogRefreshWhenSegmentAlreadyRegistered(t *testing.T) {
 	dir := t.TempDir()
 	value := bytes.Repeat([]byte("p"), 256)

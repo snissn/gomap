@@ -90,13 +90,13 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	db.systemRootWarmPublishRebuildFallbacks.Add(publishStats.warmRebuildFallbacks)
 	db.systemRootWarmPreservedPages.Add(publishStats.warmPreservedPages)
 	db.systemRootWarmRewrittenPages.Add(publishStats.warmRewrittenPages)
+	touchedValueLogSegments := positiveValueLogRefDeltaFileIDs(vlogRefDelta, nil)
 	if publishStats.collectionRootDescriptorReachabilityMayChange() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 		vlogRefDelta = nil
 	}
-	touchedValueLogSegments := positiveValueLogRefDeltaFileIDs(vlogRefDelta, nil)
 
 	db.mu.Lock()
 	curUserRoot := db.meta.UserRootPageID
