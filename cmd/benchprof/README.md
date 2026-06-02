@@ -73,7 +73,12 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
   value-log mmap reads, unified-bench selected displays prefer backend
   `treedb.vlog.mmap_read.*` counters over cache-prefixed aliases, and the
   metadata includes generic plus leaf-specific sealed mmap budget caps when
-  TreeDB exposes them.
+  TreeDB exposes them. Value-log codec policy artifacts also preserve
+  `treedb.cache.vlog_auto.*`, `treedb.cache.vlog_write_mode.*`,
+  `treedb.cache.vlog_payload_kind.*`, `treedb.cache.vlog_payload_split.*`,
+  `treedb.cache.vlog_outer_leaf_codec.*`, and `treedb.cache.vlog_block.*`
+  counters so actual auto codec selection, outer-leaf codec distribution, and
+  frame-K distribution remain available in benchprof output.
 - `benchprof_results.json` also preserves collection-storage suite metadata
   under `runs[].collection_workloads` when `unified-bench -suite
   collection_storage` is used. `benchprof` keeps those stable mode/workload names

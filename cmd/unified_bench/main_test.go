@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1554,6 +1555,30 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 				"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":    "2048",
 				"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total": "4096",
 				"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total":                     "12345",
+				"treedb.cache.vlog_auto.frames.block_lz4":                                              "7",
+				"treedb.cache.vlog_auto.bytes.block_lz4":                                               "3500",
+				"treedb.cache.vlog_auto.frames_frac.block_lz4":                                         "1.000000",
+				"treedb.cache.vlog_write_mode.frames.block":                                            "7",
+				"treedb.cache.vlog_write_mode.raw_bytes.block":                                         "7000",
+				"treedb.cache.vlog_write_mode.stored_bytes.block":                                      "3500",
+				"treedb.cache.vlog_write_mode.stored_ratio.block":                                      "0.500000",
+				"treedb.cache.vlog_payload_kind.frames.outer_leaf":                                     "7",
+				"treedb.cache.vlog_payload_kind.raw_bytes.outer_leaf":                                  "7000",
+				"treedb.cache.vlog_payload_kind.stored_bytes.outer_leaf":                               "3500",
+				"treedb.cache.vlog_payload_kind.stored_ratio.outer_leaf":                               "0.500000",
+				"treedb.cache.vlog_payload_split.records.outer_leaf":                                   "7",
+				"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf":                                 "7000",
+				"treedb.cache.vlog_payload_split.stored_bytes.outer_leaf":                              "3500",
+				"treedb.cache.vlog_payload_split.stored_ratio.outer_leaf":                              "0.500000",
+				"treedb.cache.vlog_outer_leaf_codec.frames.lz4":                                        "7",
+				"treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4":                                     "7000",
+				"treedb.cache.vlog_outer_leaf_codec.stored_bytes.lz4":                                  "3500",
+				"treedb.cache.vlog_outer_leaf_codec.stored_ratio.lz4":                                  "0.500000",
+				"treedb.cache.vlog_block.k.count.lz4":                                                  "7",
+				"treedb.cache.vlog_block.k.avg.lz4":                                                    "1.000",
+				"treedb.cache.vlog_block.k.max.lz4":                                                    "1",
+				"treedb.cache.vlog_block.ratio.lz4":                                                    "0.500000",
+				"treedb.cache.vlog_block.k.bucket.lz4.le_1":                                            "7",
 			},
 		},
 	}
@@ -1567,6 +1592,23 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 	}
 	if !strings.Contains(md, "vlog_mmap.read.hits.delta=7") {
 		t.Fatalf("expected mmap metrics in markdown, got:\n%s", md)
+	}
+	if !strings.Contains(md, "## TreeDB Value-Log Codec Summary (End of Run)") {
+		t.Fatalf("expected TreeDB codec summary section, got:\n%s", md)
+	}
+	for _, want := range []string{
+		"vlog_auto.frames: block_lz4=7",
+		"vlog_auto.bytes: block_lz4=3500",
+		"vlog_write_mode.block: frames=7 raw_bytes=7000 stored_bytes=3500 stored_ratio=0.500000",
+		"vlog_payload_kind.outer_leaf: frames=7 raw_bytes=7000 stored_bytes=3500 stored_ratio=0.500000",
+		"vlog_payload_split.outer_leaf: records=7 raw_bytes=7000 stored_bytes=3500 stored_ratio=0.500000",
+		"vlog_outer_leaf_codec.lz4: frames=7 raw_bytes=7000 stored_bytes=3500 stored_ratio=0.500000",
+		"vlog_block.k.lz4: count=7 avg=1.000 max=1 ratio=0.500000",
+		"vlog_block.k.bucket.lz4: le_1=7",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("expected codec summary %q in markdown, got:\n%s", want, md)
+		}
 	}
 	if !strings.Contains(md, "## TreeDB Selected Stats (End of Run)") {
 		t.Fatalf("expected TreeDB selected stats section, got:\n%s", md)
@@ -1595,6 +1637,82 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 			t.Fatalf("expected selected ordered-root stat %q in markdown, got:\n%s", want, md)
 		}
 	}
+}
+
+func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
+	dir := t.TempDir()
+	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll leaf_vlog: %v", err)
+	}
+
+	var file []byte
+	file = append(file, testTreeDBVLogFrame(t, 3, treeDBVlogScanBlockCodecLZ4, true, 300, 120)...)
+	file = append(file, testTreeDBVLogFrame(t, 1, 0, false, 50, 50)...)
+	if err := os.WriteFile(filepath.Join(leafDir, "value-l255-000001.log"), file, 0o644); err != nil {
+		t.Fatalf("WriteFile leaf log: %v", err)
+	}
+
+	stats, err := scanTreeDBLeafVLogCodecStats(dir, "TreeDB (vlog=auto)")
+	if err != nil {
+		t.Fatalf("scanTreeDBLeafVLogCodecStats: %v", err)
+	}
+	want := map[string]string{
+		"treedb.cache.vlog_write_mode.frames.block":              "1",
+		"treedb.cache.vlog_write_mode.raw_bytes.block":           "300",
+		"treedb.cache.vlog_write_mode.stored_bytes.block":        "120",
+		"treedb.cache.vlog_write_mode.stored_ratio.block":        "0.400000",
+		"treedb.cache.vlog_write_mode.frames.off":                "1",
+		"treedb.cache.vlog_payload_kind.frames.outer_leaf":       "2",
+		"treedb.cache.vlog_payload_kind.raw_bytes.outer_leaf":    "350",
+		"treedb.cache.vlog_payload_kind.stored_bytes.outer_leaf": "170",
+		"treedb.cache.vlog_payload_split.records.outer_leaf":     "4",
+		"treedb.cache.vlog_outer_leaf_codec.frames.lz4":          "1",
+		"treedb.cache.vlog_outer_leaf_codec.frames.none":         "1",
+		"treedb.cache.vlog_block.k.count.lz4":                    "1",
+		"treedb.cache.vlog_block.k.avg.lz4":                      "3.000",
+		"treedb.cache.vlog_block.k.max.lz4":                      "3",
+		"treedb.cache.vlog_block.k.bucket.lz4.le_4":              "1",
+		"treedb.cache.vlog_block.ratio.lz4":                      "0.400000",
+		"treedb.cache.vlog_auto.frames.block_lz4":                "1",
+		"treedb.cache.vlog_auto.frames.off":                      "1",
+		"treedb.cache.vlog_auto.frames_frac.block_lz4":           "0.500000",
+		"treedb.cache.vlog_auto.frames_frac.off":                 "0.500000",
+	}
+	for key, wantValue := range want {
+		if got := stats[key]; got != wantValue {
+			t.Fatalf("%s=%q want %q (stats=%#v)", key, got, wantValue, stats)
+		}
+	}
+}
+
+func testTreeDBVLogFrame(t *testing.T, k int, codec int, compressed bool, rawBytes int, storedBytes int) []byte {
+	t.Helper()
+	if k <= 0 {
+		t.Fatalf("invalid k=%d", k)
+	}
+	prefixLen := treeDBVlogScanFrameHeaderSize + (k * 8) + ((k + 1) * 4)
+	bodyLen := prefixLen + storedBytes
+	body := make([]byte, bodyLen)
+	body[0] = treeDBVlogScanFrameVersion
+	if compressed {
+		body[1] = treeDBVlogScanFrameFlagCompressed
+	}
+	body[2] = byte(k)
+	body[3] = byte(codec)
+	for i := 0; i < k; i++ {
+		binary.LittleEndian.PutUint64(body[treeDBVlogScanFrameHeaderSize+(i*8):], uint64(i+1))
+	}
+	offsetStart := treeDBVlogScanFrameHeaderSize + (k * 8)
+	for i := 0; i <= k; i++ {
+		binary.LittleEndian.PutUint32(body[offsetStart+(i*4):], uint32((rawBytes*i)/k))
+	}
+
+	out := make([]byte, treeDBVlogScanHeaderSize+bodyLen)
+	out[4] = treeDBVlogScanVersion
+	binary.LittleEndian.PutUint32(out[16:20], uint32(bodyLen))
+	copy(out[treeDBVlogScanHeaderSize:], body)
+	return out
 }
 
 func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
@@ -1848,7 +1966,10 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":            "8589934592",
 					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "512",
 					"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
-					"treedb.unselected": "drop",
+					"treedb.cache.vlog_auto.frames.block_lz4":                        "5",
+					"treedb.cache.vlog_block.k.bucket.lz4.le_1":                      "5",
+					"treedb.cache.vlog_outer_leaf_codec.frames.lz4":                  "5",
+					"treedb.unselected":                                              "drop",
 				},
 			},
 		},
@@ -1902,6 +2023,15 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.vlog.mmap_max_mapped_leaf_sealed_segments"]; got != "512" {
 		t.Fatalf("unexpected backend leaf mmap budget stat=%q", got)
+	}
+	for key, want := range map[string]string{
+		"treedb.cache.vlog_auto.frames.block_lz4":       "5",
+		"treedb.cache.vlog_block.k.bucket.lz4.le_1":     "5",
+		"treedb.cache.vlog_outer_leaf_codec.frames.lz4": "5",
+	} {
+		if got := parsed.Runs[0].TreeDBStats["TreeDB"][key]; got != want {
+			t.Fatalf("unexpected TreeDB codec stat %s=%q want %q", key, got, want)
+		}
 	}
 	if _, ok := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.unselected"]; ok {
 		t.Fatalf("unselected TreeDB stat was exported: %#v", parsed.Runs[0].TreeDBStats["TreeDB"])
