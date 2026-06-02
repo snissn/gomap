@@ -73,10 +73,32 @@ storing a second copy of declared typed fields such as `embedding` in the primar
 row value. This is the storage-efficient full-document path.
 
 For projection-oriented responses, also use `ColumnRetainedPayloadNonColumn` and
-apply `DocumentFetchOptions` projection, especially `ExcludePaths: []string{"embedding"}`
-when the response does not return embeddings. This is the post-#1875 baseline and
-is the recommended default starting point for vector search APIs that fetch top-k
-documents but normally suppress the vector payload.
+apply the opt-in `ProjectionOrientedVectorDocumentFetchPreset` helper. The preset
+sets `IncludeDocuments=true` and configures `DocumentFetchOptions` to exclude the
+vector field declared by `VectorIndexDefinition.Field` (for example
+`ExcludePaths: []string{"embedding"}`) when the response does not return
+embeddings. This is the post-#1875/#1903 baseline and is the recommended default
+starting point for vector search APIs that fetch top-k documents but normally
+suppress the vector payload.
+
+```go
+fetchPreset, err := collections.ProjectionOrientedVectorDocumentFetchPreset(def)
+if err != nil {
+    // Current projection supports top-level JSON vector fields only.
+    return err
+}
+opts := collections.VectorIndexSearcherSearchOptions{
+    Query:    query,
+    TopK:     10,
+    EfSearch: 128,
+}
+fetchPreset.ApplyToSearcherSearchOptions(&opts)
+response, err := searcher.Search(opts)
+```
+
+Use `ProjectionOrientedVectorDocumentFetchPresetForField` when the vector field
+path comes from a custom API surface rather than an already-loaded
+`VectorIndexDefinition`.
 
 `ColumnRetainedPayloadFull` is supported for latency-oriented compatibility: the
 full retained document can be fetched directly from the primary root/value-log
@@ -105,6 +127,17 @@ Recommended retained-payload policy matrix command:
 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
   -bench 'BenchmarkOpenVectorIndexSearcherColumnGraphRetainedPayloadPolicy1876$' \
+  -benchmem \
+  -benchtime=500ms \
+  -count=5
+```
+
+Focused helper-route validation for the #1903 preset:
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'BenchmarkOpenVectorIndexSearcherProjectionOrientedFetchPreset1903$' \
   -benchmem \
   -benchtime=500ms \
   -count=5

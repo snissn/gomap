@@ -130,6 +130,80 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphRetainedPayloadPolicy1876(b *tes
 	}
 }
 
+func BenchmarkOpenVectorIndexSearcherProjectionOrientedFetchPreset1903(b *testing.B) {
+	// Issue #1903 focused helper route: compare manual #1876 preferred projection
+	// construction with the named preset over the same non-column retained-payload
+	// fixture. Preset construction is intentionally outside the timed search loop.
+	shape := retainedPayloadPolicyFixtureShape1876{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, bodyBytes: 192}
+	for _, tc := range []struct {
+		name      string
+		configure func(VectorIndexDefinition) (VectorIndexSearcherSearchOptions, error)
+	}{
+		{
+			name: "manual_non_column_exclude_embedding",
+			configure: func(VectorIndexDefinition) (VectorIndexSearcherSearchOptions, error) {
+				return VectorIndexSearcherSearchOptions{IncludeDocuments: true, DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}}}, nil
+			},
+		},
+		{
+			name: "preset_non_column_exclude_embedding",
+			configure: func(def VectorIndexDefinition) (VectorIndexSearcherSearchOptions, error) {
+				preset, err := ProjectionOrientedVectorDocumentFetchPreset(def)
+				if err != nil {
+					return VectorIndexSearcherSearchOptions{}, err
+				}
+				var opts VectorIndexSearcherSearchOptions
+				preset.ApplyToSearcherSearchOptions(&opts)
+				return opts, nil
+			},
+		},
+	} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			benchmarkOpenVectorIndexSearcherProjectionOrientedFetchPreset1903(b, shape, tc.configure)
+		})
+	}
+}
+
+func benchmarkOpenVectorIndexSearcherProjectionOrientedFetchPreset1903(b *testing.B, shape retainedPayloadPolicyFixtureShape1876, configure func(VectorIndexDefinition) (VectorIndexSearcherSearchOptions, error)) {
+	b.Helper()
+	fixture := openRetainedPayloadPolicyFixture1876(b, shape, ColumnRetainedPayloadNonColumn, false)
+	defer func() { _ = fixture.db.Close() }()
+	searcher, err := fixture.col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: fixture.def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		b.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	opts, err := configure(fixture.def)
+	if err != nil {
+		b.Fatalf("configure preset: %v", err)
+	}
+	opts.Query = fixture.query
+	opts.TopK = fixture.shape.topK
+	opts.EfSearch = fixture.shape.efSearch
+	if _, err := searcher.Search(opts); err != nil {
+		b.Fatalf("warm Search: %v", err)
+	}
+	measured, err := searcher.Search(opts)
+	if err != nil {
+		b.Fatalf("measure Search: %v", err)
+	}
+	stats := measured.Stats
+	b.ReportMetric(float64(stats.DocumentsFetched), "docs/search")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := searcher.Search(opts)
+		if err != nil {
+			b.Fatalf("Search: %v", err)
+		}
+		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
+	}
+	b.StopTimer()
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
+	reportRetainedPayloadPolicyFixtureMetrics1876(b, fixture, retainedPayloadPolicySearchMode1876{name: "exclude_embedding", opts: opts.DocumentFetchOptions})
+}
+
 func benchmarkOpenVectorIndexSearcherRetainedPayloadPolicy1876(b *testing.B, shape retainedPayloadPolicyFixtureShape1876, policy ColumnRetainedPayloadPolicy, mode retainedPayloadPolicySearchMode1876) {
 	b.Helper()
 	fixture := openRetainedPayloadPolicyFixture1876(b, shape, policy, false)
