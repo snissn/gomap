@@ -1255,6 +1255,141 @@ func TestCollectionCommandWALUpdateBSONSetCombinerLaneWorkerStagesAfterWALAppend
 	}
 }
 
+func TestCollectionCommandWALUpdateBSONSetCombinerMergedPreparedBatchesStageOneWALFrame(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1"), []byte("u2")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "nyc"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	setCity := func(city string) bsonSetUpdate {
+		t.Helper()
+		spec, err := newBSONSetUpdate([]BSONSetField{{
+			Key:   "city",
+			Value: mustBSONRawValue(t, city),
+		}})
+		if err != nil {
+			t.Fatalf("prepare BSON set %q: %v", city, err)
+		}
+		return spec
+	}
+	done1 := make(chan collectionUpdateCombineResult, 1)
+	done2 := make(chan collectionUpdateCombineResult, 1)
+	req1 := newCollectionUpdateCombineRequest(col, []byte("u1"), nil, setCity("sea"), true, done1)
+	req2 := newCollectionUpdateCombineRequest(col, []byte("u2"), nil, setCity("bos"), true, done2)
+	combiner := &collectionUpdateCombiner{
+		maxBatch:        8,
+		domain:          col.writeDomain,
+		laneWorkers:     true,
+		shardedRequests: []chan collectionUpdateCombineRequest{make(chan collectionUpdateCombineRequest, 8)},
+	}
+	prepared1 := combiner.prepareBatchWithScratch([]collectionUpdateCombineRequest{req1}, nil)
+	prepared2 := combiner.prepareBatchWithScratch([]collectionUpdateCombineRequest{req2}, nil)
+	combiner.stagePreparedBatches([]collectionUpdateCombinePreparedBatch{prepared1, prepared2})
+
+	for name, done := range map[string]chan collectionUpdateCombineResult{"first": done1, "second": done2} {
+		select {
+		case result := <-done:
+			if result.err != nil || !result.matched || !result.modified {
+				_ = d.Close()
+				t.Fatalf("%s result=%+v want matched modified nil err", name, result)
+			}
+		case <-time.After(collectionTestTimeout(t, time.Second)):
+			_ = d.Close()
+			t.Fatalf("%s update did not complete", name)
+		}
+	}
+	for _, want := range []struct {
+		id   []byte
+		city string
+	}{
+		{id: []byte("u1"), city: "sea"},
+		{id: []byte("u2"), city: "bos"},
+	} {
+		doc, err := col.Get(want.id)
+		if err != nil {
+			_ = d.Close()
+			t.Fatalf("Get staged doc %q: %v", string(want.id), err)
+		}
+		if got := bson.Raw(doc).Lookup("city").StringValue(); got != want.city {
+			_ = d.Close()
+			t.Fatalf("staged city for %q=%q want %q", string(want.id), got, want.city)
+		}
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN after staged merged combiner update=%d, want 0 before flush", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionUpdateBatchByID {
+		_ = d.Close()
+		t.Fatalf("command WAL frames=%+v, want one merged update frame before flush", frames)
+	}
+	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(frames[0].Payload)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("DecodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	if payload.Collection != "users" || len(payload.Documents) != 2 {
+		_ = d.Close()
+		t.Fatalf("payload collection=%q documents=%d, want users/2", payload.Collection, len(payload.Documents))
+	}
+	if !bytes.Equal(payload.Documents[0].ID, []byte("u1")) || !bytes.Equal(payload.Documents[1].ID, []byte("u2")) {
+		_ = d.Close()
+		t.Fatalf("payload document IDs=%q,%q want u1,u2", payload.Documents[0].ID, payload.Documents[1].ID)
+	}
+	if err := col.Flush(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN after flush=%d, want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	for _, want := range []struct {
+		id   []byte
+		city string
+	}{
+		{id: []byte("u1"), city: "sea"},
+		{id: []byte("u2"), city: "bos"},
+	} {
+		doc, err := reopened.Get(want.id)
+		if err != nil {
+			t.Fatalf("Get reopened doc %q: %v", string(want.id), err)
+		}
+		if got := bson.Raw(doc).Lookup("city").StringValue(); got != want.city {
+			t.Fatalf("reopened city for %q=%q want %q", string(want.id), got, want.city)
+		}
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALUpdateBSONSetNoIndexDrainsBeforeRawKVCommandWAL(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
