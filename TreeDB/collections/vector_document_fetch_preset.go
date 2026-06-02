@@ -57,25 +57,27 @@ func ProjectionOrientedVectorDocumentFetchPresetForField(vectorField string) (Ve
 }
 
 // ApplyToSearchOptions applies p to collection-level SearchVectorIndex options.
-// It replaces opts.DocumentFetchOptions; callers that need custom fetch options
-// should apply the preset first, then set their overrides.
+// It enables IncludeDocuments, replaces projection paths from
+// opts.DocumentFetchOptions, and preserves existing scalar fetch settings unless
+// the preset explicitly overrides them.
 func (p VectorDocumentFetchPreset) ApplyToSearchOptions(opts *VectorIndexSearchOptions) {
 	if opts == nil {
 		return
 	}
 	opts.IncludeDocuments = p.IncludeDocuments
-	opts.DocumentFetchOptions = cloneDocumentFetchOptions(p.DocumentFetchOptions)
+	opts.DocumentFetchOptions = mergeDocumentFetchOptionsPreset(opts.DocumentFetchOptions, p.DocumentFetchOptions)
 }
 
 // ApplyToSearcherSearchOptions applies p to reusable VectorIndexSearcher.Search
-// options. It replaces opts.DocumentFetchOptions; callers that need custom fetch
-// options should apply the preset first, then set their overrides.
+// options. It enables IncludeDocuments, replaces projection paths from
+// opts.DocumentFetchOptions, and preserves existing scalar fetch settings unless
+// the preset explicitly overrides them.
 func (p VectorDocumentFetchPreset) ApplyToSearcherSearchOptions(opts *VectorIndexSearcherSearchOptions) {
 	if opts == nil {
 		return
 	}
 	opts.IncludeDocuments = p.IncludeDocuments
-	opts.DocumentFetchOptions = cloneDocumentFetchOptions(p.DocumentFetchOptions)
+	opts.DocumentFetchOptions = mergeDocumentFetchOptionsPreset(opts.DocumentFetchOptions, p.DocumentFetchOptions)
 }
 
 // cloneDocumentFetchOptions returns a shallow copy of opts with independent
@@ -87,5 +89,18 @@ func cloneDocumentFetchOptions(opts DocumentFetchOptions) DocumentFetchOptions {
 	out := opts
 	out.IncludePaths = append([]string(nil), opts.IncludePaths...)
 	out.ExcludePaths = append([]string(nil), opts.ExcludePaths...)
+	return out
+}
+
+func mergeDocumentFetchOptionsPreset(existing, preset DocumentFetchOptions) DocumentFetchOptions {
+	out := cloneDocumentFetchOptions(existing)
+	out.IncludePaths = append([]string(nil), preset.IncludePaths...)
+	out.ExcludePaths = append([]string(nil), preset.ExcludePaths...)
+	if preset.Format != "" {
+		out.Format = preset.Format
+	}
+	if preset.ColumnAssetReadIntegrity != "" {
+		out.ColumnAssetReadIntegrity = preset.ColumnAssetReadIntegrity
+	}
 	return out
 }

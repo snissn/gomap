@@ -25,20 +25,35 @@ func TestProjectionOrientedVectorDocumentFetchPresetOutput1903(t *testing.T) {
 	}
 
 	searchOpts := VectorIndexSearchOptions{
-		IncludeDocuments:     false,
-		DocumentFetchOptions: DocumentFetchOptions{IncludePaths: []string{"title"}},
+		IncludeDocuments: false,
+		DocumentFetchOptions: DocumentFetchOptions{
+			IncludePaths:             []string{"title"},
+			Format:                   DocumentFormatBSON,
+			ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums,
+		},
 	}
 	preset.ApplyToSearchOptions(&searchOpts)
-	if !searchOpts.IncludeDocuments || !reflect.DeepEqual(searchOpts.DocumentFetchOptions.ExcludePaths, []string{"embedding"}) || len(searchOpts.DocumentFetchOptions.IncludePaths) != 0 {
+	if !searchOpts.IncludeDocuments ||
+		!reflect.DeepEqual(searchOpts.DocumentFetchOptions.ExcludePaths, []string{"embedding"}) ||
+		len(searchOpts.DocumentFetchOptions.IncludePaths) != 0 ||
+		searchOpts.DocumentFetchOptions.Format != DocumentFormatBSON ||
+		searchOpts.DocumentFetchOptions.ColumnAssetReadIntegrity != ColumnAssetReadIntegritySkipChecksums {
 		t.Fatalf("applied VectorIndexSearchOptions=%+v", searchOpts)
 	}
 
 	searcherOpts := VectorIndexSearcherSearchOptions{
-		IncludeDocuments:     false,
-		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"old"}},
+		IncludeDocuments: false,
+		DocumentFetchOptions: DocumentFetchOptions{
+			ExcludePaths:             []string{"old"},
+			Format:                   DocumentFormatTemplateV1,
+			ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify,
+		},
 	}
 	preset.ApplyToSearcherSearchOptions(&searcherOpts)
-	if !searcherOpts.IncludeDocuments || !reflect.DeepEqual(searcherOpts.DocumentFetchOptions.ExcludePaths, []string{"embedding"}) {
+	if !searcherOpts.IncludeDocuments ||
+		!reflect.DeepEqual(searcherOpts.DocumentFetchOptions.ExcludePaths, []string{"embedding"}) ||
+		searcherOpts.DocumentFetchOptions.Format != DocumentFormatTemplateV1 ||
+		searcherOpts.DocumentFetchOptions.ColumnAssetReadIntegrity != ColumnAssetReadIntegrityCachedVerify {
 		t.Fatalf("applied VectorIndexSearcherSearchOptions=%+v", searcherOpts)
 	}
 
