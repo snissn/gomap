@@ -25,12 +25,23 @@ const (
 	LogicalUint32  LogicalType = "uint32"
 	LogicalUint64  LogicalType = "uint64"
 	// Float16 and BFloat16 are storage-only raw 16-bit bit payloads.
-	LogicalFloat16       LogicalType = "float16"
-	LogicalBFloat16      LogicalType = "bfloat16"
-	LogicalFloat32Vector LogicalType = "float32_vector"
-	LogicalUint32List    LogicalType = "uint32_list"
-	LogicalBytes         LogicalType = "bytes"
-	LogicalAdjacencyList LogicalType = "adjacency_list"
+	LogicalFloat16        LogicalType = "float16"
+	LogicalBFloat16       LogicalType = "bfloat16"
+	LogicalUint8Vector    LogicalType = "uint8_vector"
+	LogicalInt8Vector     LogicalType = "int8_vector"
+	LogicalUint16Vector   LogicalType = "uint16_vector"
+	LogicalInt16Vector    LogicalType = "int16_vector"
+	LogicalUint32Vector   LogicalType = "uint32_vector"
+	LogicalInt32Vector    LogicalType = "int32_vector"
+	LogicalUint64Vector   LogicalType = "uint64_vector"
+	LogicalInt64Vector    LogicalType = "int64_vector"
+	LogicalFloat16Vector  LogicalType = "float16_vector"
+	LogicalBFloat16Vector LogicalType = "bfloat16_vector"
+	LogicalFloat32Vector  LogicalType = "float32_vector"
+	LogicalFloat64Vector  LogicalType = "float64_vector"
+	LogicalUint32List     LogicalType = "uint32_list"
+	LogicalBytes          LogicalType = "bytes"
+	LogicalAdjacencyList  LogicalType = "adjacency_list"
 )
 
 // Operation identifies the semantic question answered by the matrix. Query
@@ -191,15 +202,15 @@ func Fallback(op Operation, reason ReasonCode, msg string) Capability {
 }
 
 func LogicalTypes() []LogicalType {
-	return []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalInt8, LogicalUint8, LogicalInt16, LogicalUint16, LogicalInt32, LogicalUint32, LogicalUint64, LogicalFloat16, LogicalBFloat16, LogicalFloat32Vector, LogicalUint32List, LogicalBytes, LogicalAdjacencyList}
+	return []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalInt8, LogicalUint8, LogicalInt16, LogicalUint16, LogicalInt32, LogicalUint32, LogicalUint64, LogicalFloat16, LogicalBFloat16, LogicalUint8Vector, LogicalInt8Vector, LogicalUint16Vector, LogicalInt16Vector, LogicalUint32Vector, LogicalInt32Vector, LogicalUint64Vector, LogicalInt64Vector, LogicalFloat16Vector, LogicalBFloat16Vector, LogicalFloat32Vector, LogicalFloat64Vector, LogicalUint32List, LogicalBytes, LogicalAdjacencyList}
 }
 
 func ColumnTypes() []typedcolumn.ColumnType {
-	return []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeInt8, typedcolumn.ColumnTypeUint8, typedcolumn.ColumnTypeInt16, typedcolumn.ColumnTypeUint16, typedcolumn.ColumnTypeInt32, typedcolumn.ColumnTypeUint32, typedcolumn.ColumnTypeUint64, typedcolumn.ColumnTypeFloat16, typedcolumn.ColumnTypeBFloat16, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeUint32List, typedcolumn.ColumnTypeBytes, typedcolumn.ColumnTypeAdjacencyList}
+	return []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeInt8, typedcolumn.ColumnTypeUint8, typedcolumn.ColumnTypeInt16, typedcolumn.ColumnTypeUint16, typedcolumn.ColumnTypeInt32, typedcolumn.ColumnTypeUint32, typedcolumn.ColumnTypeUint64, typedcolumn.ColumnTypeFloat16, typedcolumn.ColumnTypeBFloat16, typedcolumn.ColumnTypeUint8Vector, typedcolumn.ColumnTypeInt8Vector, typedcolumn.ColumnTypeUint16Vector, typedcolumn.ColumnTypeInt16Vector, typedcolumn.ColumnTypeUint32Vector, typedcolumn.ColumnTypeInt32Vector, typedcolumn.ColumnTypeUint64Vector, typedcolumn.ColumnTypeInt64Vector, typedcolumn.ColumnTypeFloat16Vector, typedcolumn.ColumnTypeBFloat16Vector, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeFloat64Vector, typedcolumn.ColumnTypeUint32List, typedcolumn.ColumnTypeBytes, typedcolumn.ColumnTypeAdjacencyList}
 }
 
 func Encodings() []typedcolumn.Encoding {
-	return []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64, typedcolumn.EncodingRawUint32OffsetsList, typedcolumn.EncodingRawBytesOffsets, typedcolumn.EncodingRawInt8, typedcolumn.EncodingRawUint8, typedcolumn.EncodingRawInt16, typedcolumn.EncodingRawUint16, typedcolumn.EncodingRawInt32, typedcolumn.EncodingRawUint32, typedcolumn.EncodingRawUint64, typedcolumn.EncodingRawFloat16, typedcolumn.EncodingRawBFloat16}
+	return []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64, typedcolumn.EncodingRawUint32OffsetsList, typedcolumn.EncodingRawBytesOffsets, typedcolumn.EncodingRawInt8, typedcolumn.EncodingRawUint8, typedcolumn.EncodingRawInt16, typedcolumn.EncodingRawUint16, typedcolumn.EncodingRawInt32, typedcolumn.EncodingRawUint32, typedcolumn.EncodingRawUint64, typedcolumn.EncodingRawFloat16, typedcolumn.EncodingRawBFloat16, typedcolumn.EncodingRawUint8Vector, typedcolumn.EncodingRawInt8Vector, typedcolumn.EncodingRawUint16Vector, typedcolumn.EncodingRawInt16Vector, typedcolumn.EncodingRawUint32Vector, typedcolumn.EncodingRawInt32Vector, typedcolumn.EncodingRawUint64Vector, typedcolumn.EncodingRawInt64Vector, typedcolumn.EncodingRawFloat16Vector, typedcolumn.EncodingRawBFloat16Vector, typedcolumn.EncodingRawFloat64Vector}
 }
 
 func IsKnownLogicalType(t LogicalType) bool {
@@ -273,6 +284,8 @@ func CapabilityFor(desc Descriptor, op Operation) Capability {
 		return storageOnlyFloatBitsCapability(desc, op)
 	case LogicalFloat32Vector:
 		return vectorCapability(desc, op)
+	case LogicalUint8Vector, LogicalInt8Vector, LogicalUint16Vector, LogicalInt16Vector, LogicalUint32Vector, LogicalInt32Vector, LogicalUint64Vector, LogicalInt64Vector, LogicalFloat16Vector, LogicalBFloat16Vector, LogicalFloat64Vector:
+		return denseNumericVectorCapability(desc, op)
 	case LogicalUint32List:
 		return uint32ListCapability(desc, op)
 	case LogicalBytes:
@@ -333,6 +346,9 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawBFloat16
 	case typedcolumn.ColumnTypeFloat32Vector:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
+	case typedcolumn.ColumnTypeUint8Vector, typedcolumn.ColumnTypeInt8Vector, typedcolumn.ColumnTypeUint16Vector, typedcolumn.ColumnTypeInt16Vector, typedcolumn.ColumnTypeUint32Vector, typedcolumn.ColumnTypeInt32Vector, typedcolumn.ColumnTypeUint64Vector, typedcolumn.ColumnTypeInt64Vector, typedcolumn.ColumnTypeFloat16Vector, typedcolumn.ColumnTypeBFloat16Vector, typedcolumn.ColumnTypeFloat64Vector:
+		want, ok := typedcolumn.DenseFixedWidthVectorEncoding(physical)
+		return ReasonEncodingPhysicalMismatch, ok && encoding == want
 	case typedcolumn.ColumnTypeUint32List:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32OffsetsList
 	case typedcolumn.ColumnTypeBytes:
@@ -587,6 +603,64 @@ func vectorCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonVectorScalarOperationUnsupported, "vector columns are not scalar comparable or scalar aggregate values")
 	default:
 		return Unsupported(op, ReasonOperationUnsupported, "operation is not a vector semantic capability")
+	}
+}
+
+func denseNumericVectorCapability(desc Descriptor, op Operation) Capability {
+	wantPhysical, wantEncoding, ok := denseNumericVectorPhysical(desc.Logical)
+	if !ok {
+		return Unsupported(op, ReasonUnknownLogicalType, fmt.Sprintf("logical_type=%q", desc.Logical))
+	}
+	if desc.Physical != wantPhysical || desc.Encoding != wantEncoding {
+		return Unsupported(op, ReasonLogicalPhysicalMismatch, fmt.Sprintf("%s semantics require physical type %s and encoding %s", desc.Logical, wantPhysical, wantEncoding))
+	}
+	scalar := string(desc.Logical)
+	switch op {
+	case OpAllRows:
+		return Supported(op)
+	case OpCountRows, OpCountNonNull:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
+	case OpVectorDirectPayload:
+		return Supported(op)
+	case OpVectorSimilarity, OpVectorDotProduct, OpVectorMetrics:
+		return Unsupported(op, ReasonVectorCapabilityDeferred, scalar+" is a storage vector payload only in this issue; scoring/query semantics are deferred")
+	case OpAdjacencyTraversal, OpAdjacencyDirectPayload, OpAdjacencyMetrics:
+		return Unsupported(op, ReasonOperationUnsupported, "operation is not a dense numeric vector semantic capability")
+	case OpEquality, OpInequality, OpOrderedRange, OpInList, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier:
+		return Unsupported(op, ReasonVectorScalarOperationUnsupported, "dense numeric vector columns are not scalar comparable or scalar aggregate values")
+	case OpIsNull, OpIsNotNull:
+		return Unsupported(op, ReasonNotNullable, "non-null "+scalar+" column")
+	default:
+		return Unsupported(op, ReasonOperationUnsupported, "operation is not a dense numeric vector semantic capability")
+	}
+}
+
+func denseNumericVectorPhysical(logical LogicalType) (typedcolumn.ColumnType, typedcolumn.Encoding, bool) {
+	switch logical {
+	case LogicalUint8Vector:
+		return typedcolumn.ColumnTypeUint8Vector, typedcolumn.EncodingRawUint8Vector, true
+	case LogicalInt8Vector:
+		return typedcolumn.ColumnTypeInt8Vector, typedcolumn.EncodingRawInt8Vector, true
+	case LogicalUint16Vector:
+		return typedcolumn.ColumnTypeUint16Vector, typedcolumn.EncodingRawUint16Vector, true
+	case LogicalInt16Vector:
+		return typedcolumn.ColumnTypeInt16Vector, typedcolumn.EncodingRawInt16Vector, true
+	case LogicalUint32Vector:
+		return typedcolumn.ColumnTypeUint32Vector, typedcolumn.EncodingRawUint32Vector, true
+	case LogicalInt32Vector:
+		return typedcolumn.ColumnTypeInt32Vector, typedcolumn.EncodingRawInt32Vector, true
+	case LogicalUint64Vector:
+		return typedcolumn.ColumnTypeUint64Vector, typedcolumn.EncodingRawUint64Vector, true
+	case LogicalInt64Vector:
+		return typedcolumn.ColumnTypeInt64Vector, typedcolumn.EncodingRawInt64Vector, true
+	case LogicalFloat16Vector:
+		return typedcolumn.ColumnTypeFloat16Vector, typedcolumn.EncodingRawFloat16Vector, true
+	case LogicalBFloat16Vector:
+		return typedcolumn.ColumnTypeBFloat16Vector, typedcolumn.EncodingRawBFloat16Vector, true
+	case LogicalFloat64Vector:
+		return typedcolumn.ColumnTypeFloat64Vector, typedcolumn.EncodingRawFloat64Vector, true
+	default:
+		return "", 0, false
 	}
 }
 

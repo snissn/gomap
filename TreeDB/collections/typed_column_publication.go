@@ -46,6 +46,7 @@ func columnStoreTypedColumnPartFields(cfg ColumnStoreConfig) []TypedStorageField
 			Nullable:           col.Nullable,
 			Dictionary:         col.Dictionary,
 			VectorDims:         col.VectorDims,
+			ElementsPerRow:     col.ElementsPerRow,
 			AdjacencyDegree:    col.AdjacencyDegree,
 			AdjacencyLayout:    col.AdjacencyLayout,
 			FixedWidthEncoding: col.FixedWidthEncoding,

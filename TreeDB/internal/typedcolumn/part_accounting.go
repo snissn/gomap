@@ -295,6 +295,11 @@ func logicalColumnValueBytes(def ColumnDefinition, rows int) int {
 		return rows * 4
 	case ColumnTypeFloat32Vector, ColumnTypeAdjacencyList:
 		return rows * def.FixedWidthElements * 4
+	case ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
+		if width, ok := DenseFixedWidthVectorElementWidth(def.Type); ok {
+			return rows * def.FixedWidthElements * width
+		}
+		return 0
 	case ColumnTypeUint32List:
 		return 0
 	default:

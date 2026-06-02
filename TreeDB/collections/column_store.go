@@ -69,11 +69,22 @@ const (
 	ColumnStoreValueUint32  ColumnStoreValueType = "uint32"
 	ColumnStoreValueUint64  ColumnStoreValueType = "uint64"
 	// Float16 and BFloat16 are storage-only raw 16-bit bit payloads.
-	ColumnStoreValueFloat16       ColumnStoreValueType = "float16"
-	ColumnStoreValueBFloat16      ColumnStoreValueType = "bfloat16"
-	ColumnStoreValueFloat32Vector ColumnStoreValueType = "float32_vector"
-	ColumnStoreValueUint32List    ColumnStoreValueType = "uint32_list"
-	ColumnStoreValueBytes         ColumnStoreValueType = "bytes"
+	ColumnStoreValueFloat16        ColumnStoreValueType = "float16"
+	ColumnStoreValueBFloat16       ColumnStoreValueType = "bfloat16"
+	ColumnStoreValueUint8Vector    ColumnStoreValueType = "uint8_vector"
+	ColumnStoreValueInt8Vector     ColumnStoreValueType = "int8_vector"
+	ColumnStoreValueUint16Vector   ColumnStoreValueType = "uint16_vector"
+	ColumnStoreValueInt16Vector    ColumnStoreValueType = "int16_vector"
+	ColumnStoreValueUint32Vector   ColumnStoreValueType = "uint32_vector"
+	ColumnStoreValueInt32Vector    ColumnStoreValueType = "int32_vector"
+	ColumnStoreValueUint64Vector   ColumnStoreValueType = "uint64_vector"
+	ColumnStoreValueInt64Vector    ColumnStoreValueType = "int64_vector"
+	ColumnStoreValueFloat16Vector  ColumnStoreValueType = "float16_vector"
+	ColumnStoreValueBFloat16Vector ColumnStoreValueType = "bfloat16_vector"
+	ColumnStoreValueFloat32Vector  ColumnStoreValueType = "float32_vector"
+	ColumnStoreValueFloat64Vector  ColumnStoreValueType = "float64_vector"
+	ColumnStoreValueUint32List     ColumnStoreValueType = "uint32_list"
+	ColumnStoreValueBytes          ColumnStoreValueType = "bytes"
 	// AdjacencyList is the current compatibility name for graph adjacency data.
 	// It must not become the target variable-list datastore primitive; #1984/#1985
 	// own the generic uint32_list logical type and raw_uint32_offsets_list encoding.
@@ -208,6 +219,8 @@ type ColumnStoreColumn struct {
 	Nullable   bool                   `json:"nullable,omitempty"`
 	Dictionary bool                   `json:"dictionary,omitempty"`
 	VectorDims int                    `json:"vector_dims,omitempty"`
+	// ElementsPerRow is the generic row width for dense numeric vector typed-column payloads.
+	ElementsPerRow int `json:"elements_per_row,omitempty"`
 	// AdjacencyDegree is the fixed number of uint32 neighbors per row for the
 	// legacy/fallback dense adjacency_list typed_column_part layout.
 	AdjacencyDegree int `json:"adjacency_degree,omitempty"`
@@ -456,6 +469,11 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 	if out.RecoveryAuthoritativeManifest != nil {
 		normalizeColumnManifestIdentityFormat(out.RecoveryAuthoritativeManifest)
 	}
+	for i := range out.Columns {
+		if out.Columns[i].ValueType == ColumnStoreValueFloat32Vector && out.Columns[i].VectorDims == 0 && out.Columns[i].ElementsPerRow > 0 {
+			out.Columns[i].VectorDims = out.Columns[i].ElementsPerRow
+		}
+	}
 	if err := validateColumnStoreConfig(collection, out); err != nil {
 		return nil, err
 	}
@@ -515,11 +533,27 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			return fmt.Errorf("collections: invalid column %q nullable %s typed_column_part is unsupported", col.Name, valueType)
 		}
 		if valueType == ColumnStoreValueFloat32Vector {
-			if col.VectorDims <= 0 {
+			if col.VectorDims <= 0 && col.ElementsPerRow <= 0 {
 				return fmt.Errorf("collections: invalid column %q vector_dims: must be positive", col.Name)
+			}
+			if col.VectorDims > 0 && col.ElementsPerRow > 0 && col.VectorDims != col.ElementsPerRow {
+				return fmt.Errorf("collections: invalid column %q elements_per_row: must match vector_dims for float32_vector", col.Name)
 			}
 		} else if col.VectorDims != 0 {
 			return fmt.Errorf("collections: invalid column %q vector_dims: only float32_vector columns may set vector_dims", col.Name)
+		}
+		if columnStoreValueTypeIsDenseNumericVector(valueType) {
+			if owner != TypedStorageOwnerColumnPart {
+				return fmt.Errorf("collections: invalid column %q value_type %q requires owner %q", col.Name, valueType, TypedStorageOwnerColumnPart)
+			}
+			if col.Nullable {
+				return fmt.Errorf("collections: invalid column %q nullable %s typed_column_part is unsupported", col.Name, valueType)
+			}
+			if col.ElementsPerRow <= 0 {
+				return fmt.Errorf("collections: invalid column %q elements_per_row: must be positive for value_type %q", col.Name, valueType)
+			}
+		} else if valueType != ColumnStoreValueFloat32Vector && col.ElementsPerRow != 0 {
+			return fmt.Errorf("collections: invalid column %q elements_per_row: only dense vector columns may set elements_per_row", col.Name)
 		}
 		if valueType == ColumnStoreValueUint32List {
 			if col.Nullable {
@@ -754,7 +788,8 @@ func normalizeColumnStoreValueType(valueType ColumnStoreValueType) (ColumnStoreV
 	switch valueType {
 	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString,
 		ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16,
-		ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes, ColumnStoreValueAdjacencyList:
+		ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat32Vector, ColumnStoreValueFloat64Vector,
+		ColumnStoreValueUint32List, ColumnStoreValueBytes, ColumnStoreValueAdjacencyList:
 		return valueType, nil
 	case "":
 		return "", errors.New("value_type is required")
@@ -814,7 +849,7 @@ func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueTy
 	case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
 		return true
 	default:
-		return columnStoreValueTypeIsPrimitiveScalar(valueType)
+		return columnStoreValueTypeIsPrimitiveScalar(valueType) || columnStoreValueTypeIsDenseNumericVector(valueType)
 	}
 }
 
@@ -1199,6 +1234,7 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, string(col.ValueType))
 		writeHashString(&d, string(columnStoreColumnOwnerOrRowAsset(col)))
 		writeHashUint64(&d, uint64(col.VectorDims))
+		writeHashUint64(&d, uint64(col.ElementsPerRow))
 		writeHashUint64(&d, uint64(col.AdjacencyDegree))
 		if col.AdjacencyLayout != ColumnAdjacencyListLayoutFixedDense {
 			writeHashString(&d, string(col.AdjacencyLayout))

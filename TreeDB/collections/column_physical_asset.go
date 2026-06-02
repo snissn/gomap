@@ -53,9 +53,13 @@ type columnDeclaredValue struct {
 	// Float32Vector stores a decoded vector column value. It is used for first-
 	// class vector physical assets and is not part of scalar query hot paths.
 	Float32Vector []float32
-	Uint32List    []uint32
-	AdjacencyList []uint32
-	Bytes         []byte
+	// DenseNumericVector stores raw row-major fixed-width vector bytes for
+	// quantized dense vector typed-column values. Multi-byte elements are already
+	// little-endian encoded for the declared ColumnStoreValue*Vector type.
+	DenseNumericVector []byte
+	Uint32List         []uint32
+	AdjacencyList      []uint32
+	Bytes              []byte
 	// StringBytes is used by physical scan/query hot paths as an asset-buffer
 	// view valid only for the current scan callback / pinned prepared runner
 	// view. Copy before retaining beyond that lifetime. String remains the
@@ -275,11 +279,17 @@ func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (co
 		}
 		value.BFloat16 = uint16(v)
 	case ColumnStoreValueFloat32Vector:
-		values, err := convertJSONFloat32Vector(raw, col.VectorDims)
+		values, err := convertJSONFloat32Vector(raw, columnStoreFloat32VectorElementsPerRow(col))
 		if err != nil {
 			return columnDeclaredValue{}, err
 		}
 		value.Float32Vector = values
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		values, err := convertJSONDenseNumericVector(raw, col)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.DenseNumericVector = values
 	case ColumnStoreValueUint32List:
 		values, err := convertJSONUint32List(raw, "uint32_list")
 		if err != nil {
@@ -820,11 +830,24 @@ func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, 
 func validateColumnDeclaredPhysicalValueShape(col ColumnStoreColumn, value columnDeclaredValue) error {
 	switch col.ValueType {
 	case ColumnStoreValueFloat32Vector:
-		if col.VectorDims <= 0 {
-			return fmt.Errorf("float32_vector column has invalid vector_dims=%d", col.VectorDims)
+		dims := columnStoreFloat32VectorElementsPerRow(col)
+		if dims <= 0 {
+			return fmt.Errorf("float32_vector column has invalid vector_dims/elements_per_row=%d/%d", col.VectorDims, col.ElementsPerRow)
 		}
-		if len(value.Float32Vector) != col.VectorDims {
-			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", len(value.Float32Vector), col.VectorDims)
+		if len(value.Float32Vector) != dims {
+			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", len(value.Float32Vector), dims)
+		}
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		width, ok := columnStoreDenseNumericVectorWidth(col.ValueType)
+		if !ok {
+			return fmt.Errorf("unsupported dense numeric vector value_type=%s", col.ValueType)
+		}
+		if col.ElementsPerRow <= 0 {
+			return fmt.Errorf("%s column has invalid elements_per_row=%d", col.ValueType, col.ElementsPerRow)
+		}
+		want := col.ElementsPerRow * width
+		if len(value.DenseNumericVector) != want {
+			return fmt.Errorf("%s bytes=%d want elements_per_row=%d width=%d bytes=%d", col.ValueType, len(value.DenseNumericVector), col.ElementsPerRow, width, want)
 		}
 	case ColumnStoreValueUint32List:
 		if !value.Present || value.Null {

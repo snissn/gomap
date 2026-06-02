@@ -406,6 +406,19 @@ func DenseFloat32VectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, dim
 // layout as deferred/fallback-only. The #1901 offsets-list path is quarantined
 // compatibility; generic uint32_list direct-view planning owns the reusable
 // raw_uint32_offsets_list mechanics.
+func DenseFixedWidthVectorBytesPlan(cert typedcolumn.ColumnPartLayoutContractColumn, logical columnsemantics.LogicalType, physical typedcolumn.ColumnType, encoding typedcolumn.Encoding, elementSize int, elementsPerRow int) Plan {
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:            logical,
+		Physical:           physical,
+		Encoding:           cert.Encoding,
+		Compression:        cert.Compression,
+		Nullable:           cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable:        cert.DefaultMaskPresent || cert.DefaultCount != 0,
+		FixedWidthElements: elementsPerRow,
+	})
+	return denseDirectViewPlan(layout, cert, logical, physical, encoding, elementSize, elementsPerRow)
+}
+
 func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree int) Plan {
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
 		Logical:            columnsemantics.LogicalAdjacencyList,
@@ -622,7 +635,13 @@ func validateDirectViewCertificationFields(cert typedcolumn.ColumnPartLayoutCont
 
 func validateFixedWidthElements(cert typedcolumn.ColumnPartLayoutContractColumn, elementsPerRow int) Status {
 	switch cert.Type {
-	case typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeAdjacencyList:
+	case typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeAdjacencyList,
+		typedcolumn.ColumnTypeUint8Vector, typedcolumn.ColumnTypeInt8Vector,
+		typedcolumn.ColumnTypeUint16Vector, typedcolumn.ColumnTypeInt16Vector,
+		typedcolumn.ColumnTypeUint32Vector, typedcolumn.ColumnTypeInt32Vector,
+		typedcolumn.ColumnTypeUint64Vector, typedcolumn.ColumnTypeInt64Vector,
+		typedcolumn.ColumnTypeFloat16Vector, typedcolumn.ColumnTypeBFloat16Vector,
+		typedcolumn.ColumnTypeFloat64Vector:
 		if elementsPerRow <= 0 || cert.FixedWidthElements != elementsPerRow {
 			return StreamingStatus(ReasonDimensionMismatch, fmt.Sprintf("elements_per_row=%d want %d", cert.FixedWidthElements, elementsPerRow))
 		}

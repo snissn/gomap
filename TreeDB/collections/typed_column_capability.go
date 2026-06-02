@@ -54,7 +54,13 @@ func typedColumnProductionDefinitionForField(field TypedStorageField) (typedcolu
 			}
 			mapping.ColumnType = typedcolumn.ColumnTypeFloat64
 			mapping.Encoding = typedcolumn.EncodingRawFloat64
-		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList,
+			ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector,
+			ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector,
+			ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector,
+			ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector,
+			ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector,
+			ColumnStoreValueFloat64Vector:
 			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
 				return typedcolumn.ColumnDefinition{}, fmt.Errorf("%w: unsupported %s fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.ValueType, field.FixedWidthEncoding)
 			}
@@ -67,7 +73,8 @@ func typedColumnProductionDefinitionForField(field TypedStorageField) (typedcolu
 		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
 			mapping.Encoding = typedcolumn.EncodingNullableInt64
 		case ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes, ColumnStoreValueAdjacencyList,
-			ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16:
+			ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16,
+			ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
 			return typedcolumn.ColumnDefinition{}, fmt.Errorf("%w: nullable %s typed-column fields are not supported", errTypedColumnAdapterUnsupportedType, field.ValueType)
 		default:
 			return typedcolumn.ColumnDefinition{}, fmt.Errorf("%w: nullable %s", errTypedColumnAdapterUnsupportedType, field.ValueType)
@@ -87,10 +94,19 @@ func typedColumnProductionDefinitionForField(field TypedStorageField) (typedcolu
 	}
 	switch field.ValueType {
 	case ColumnStoreValueFloat32Vector:
-		if field.VectorDims <= 0 {
-			return typedcolumn.ColumnDefinition{}, fmt.Errorf("collections: typed-column adapter field %q float32_vector requires positive vector_dims", field.Path)
+		dims := field.VectorDims
+		if dims <= 0 {
+			dims = field.ElementsPerRow
 		}
-		def.FixedWidthElements = field.VectorDims
+		if dims <= 0 {
+			return typedcolumn.ColumnDefinition{}, fmt.Errorf("collections: typed-column adapter field %q float32_vector requires positive vector_dims/elements_per_row", field.Path)
+		}
+		def.FixedWidthElements = dims
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		if field.ElementsPerRow <= 0 {
+			return typedcolumn.ColumnDefinition{}, fmt.Errorf("collections: typed-column adapter field %q %s requires positive elements_per_row", field.Path, field.ValueType)
+		}
+		def.FixedWidthElements = field.ElementsPerRow
 	case ColumnStoreValueUint32List:
 		if field.AdjacencyDegree != 0 {
 			return typedcolumn.ColumnDefinition{}, fmt.Errorf("%w: uint32_list adjacency_degree=%d must be zero", errTypedColumnAdapterUnsupportedType, field.AdjacencyDegree)
@@ -201,6 +217,8 @@ func validateTypedColumnProductionDefinition(field TypedStorageField, def typedc
 		} else if def.FixedWidthElements <= 0 {
 			err = fmt.Errorf("%w: float32_vector field %q requires positive fixed_width_elements", errTypedColumnProductionLayoutUnsupported, field.Path)
 		}
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		err = validateTypedColumnProductionDenseNumericVectorDefinition(field, def)
 	case ColumnStoreValueUint32List:
 		if field.Nullable {
 			err = fmt.Errorf("%w: nullable uint32_list field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.Path)
@@ -321,6 +339,58 @@ func typedColumnPrimitiveScalarMapping(valueType ColumnStoreValueType) (typedcol
 	}
 }
 
+func typedColumnDenseNumericVectorMapping(valueType ColumnStoreValueType) (typedcolumn.ColumnType, typedcolumn.Encoding, int, bool) {
+	switch valueType {
+	case ColumnStoreValueUint8Vector:
+		return typedcolumn.ColumnTypeUint8Vector, typedcolumn.EncodingRawUint8Vector, 1, true
+	case ColumnStoreValueInt8Vector:
+		return typedcolumn.ColumnTypeInt8Vector, typedcolumn.EncodingRawInt8Vector, 1, true
+	case ColumnStoreValueUint16Vector:
+		return typedcolumn.ColumnTypeUint16Vector, typedcolumn.EncodingRawUint16Vector, 2, true
+	case ColumnStoreValueInt16Vector:
+		return typedcolumn.ColumnTypeInt16Vector, typedcolumn.EncodingRawInt16Vector, 2, true
+	case ColumnStoreValueUint32Vector:
+		return typedcolumn.ColumnTypeUint32Vector, typedcolumn.EncodingRawUint32Vector, 4, true
+	case ColumnStoreValueInt32Vector:
+		return typedcolumn.ColumnTypeInt32Vector, typedcolumn.EncodingRawInt32Vector, 4, true
+	case ColumnStoreValueUint64Vector:
+		return typedcolumn.ColumnTypeUint64Vector, typedcolumn.EncodingRawUint64Vector, 8, true
+	case ColumnStoreValueInt64Vector:
+		return typedcolumn.ColumnTypeInt64Vector, typedcolumn.EncodingRawInt64Vector, 8, true
+	case ColumnStoreValueFloat16Vector:
+		return typedcolumn.ColumnTypeFloat16Vector, typedcolumn.EncodingRawFloat16Vector, 2, true
+	case ColumnStoreValueBFloat16Vector:
+		return typedcolumn.ColumnTypeBFloat16Vector, typedcolumn.EncodingRawBFloat16Vector, 2, true
+	case ColumnStoreValueFloat64Vector:
+		return typedcolumn.ColumnTypeFloat64Vector, typedcolumn.EncodingRawFloat64Vector, 8, true
+	default:
+		return "", 0, 0, false
+	}
+}
+
+func validateTypedColumnProductionDenseNumericVectorDefinition(field TypedStorageField, def typedcolumn.ColumnDefinition) error {
+	wantType, wantEncoding, _, ok := typedColumnDenseNumericVectorMapping(field.ValueType)
+	if !ok {
+		return fmt.Errorf("%w: unsupported dense numeric vector value_type=%s", errTypedColumnProductionLayoutUnsupported, field.ValueType)
+	}
+	if field.Nullable {
+		return fmt.Errorf("%w: nullable %s field %q is unsupported", errTypedColumnProductionLayoutUnsupported, field.ValueType, field.Path)
+	}
+	if field.ElementsPerRow <= 0 {
+		return fmt.Errorf("%w: %s field %q requires positive elements_per_row", errTypedColumnProductionLayoutUnsupported, field.ValueType, field.Path)
+	}
+	if err := requireTypedColumnProductionTypeEncoding(field, def, wantType, wantEncoding); err != nil {
+		return err
+	}
+	if def.FixedWidthElements != field.ElementsPerRow {
+		return fmt.Errorf("%w: %s field %q fixed_width_elements=%d want elements_per_row=%d", errTypedColumnProductionLayoutUnsupported, field.ValueType, field.Path, def.FixedWidthElements, field.ElementsPerRow)
+	}
+	if def.Compression != typedcolumn.CompressionNone {
+		return fmt.Errorf("%w: compression %s is unsupported for field %q value_type=%s", errTypedColumnProductionLayoutUnsupported, def.Compression, field.Path, field.ValueType)
+	}
+	return nil
+}
+
 func validateTypedColumnProductionPrimitiveScalarDefinition(field TypedStorageField, def typedcolumn.ColumnDefinition) error {
 	wantType, wantEncoding, _, ok := typedColumnPrimitiveScalarMapping(field.ValueType)
 	if !ok {
@@ -421,7 +491,18 @@ func typedColumnProductionEncodingKnown(encoding typedcolumn.Encoding) bool {
 		typedcolumn.EncodingRawUint32,
 		typedcolumn.EncodingRawUint64,
 		typedcolumn.EncodingRawFloat16,
-		typedcolumn.EncodingRawBFloat16:
+		typedcolumn.EncodingRawBFloat16,
+		typedcolumn.EncodingRawUint8Vector,
+		typedcolumn.EncodingRawInt8Vector,
+		typedcolumn.EncodingRawUint16Vector,
+		typedcolumn.EncodingRawInt16Vector,
+		typedcolumn.EncodingRawUint32Vector,
+		typedcolumn.EncodingRawInt32Vector,
+		typedcolumn.EncodingRawUint64Vector,
+		typedcolumn.EncodingRawInt64Vector,
+		typedcolumn.EncodingRawFloat16Vector,
+		typedcolumn.EncodingRawBFloat16Vector,
+		typedcolumn.EncodingRawFloat64Vector:
 		return true
 	default:
 		return false

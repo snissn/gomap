@@ -50,6 +50,7 @@ type TypedStorageField struct {
 	Nullable           bool                      `json:"nullable,omitempty"`
 	Dictionary         bool                      `json:"dictionary,omitempty"`
 	VectorDims         int                       `json:"vector_dims,omitempty"`
+	ElementsPerRow     int                       `json:"elements_per_row,omitempty"`
 	AdjacencyDegree    int                       `json:"adjacency_degree,omitempty"`
 	AdjacencyLayout    ColumnAdjacencyListLayout `json:"adjacency_layout,omitempty"`
 	FixedWidthEncoding ColumnFixedWidthEncoding  `json:"fixed_width_encoding,omitempty"`
@@ -125,6 +126,7 @@ func ResolveTypedStorageLayout(meta CollectionMeta) (TypedStorageLayout, error) 
 			Nullable:           col.Nullable,
 			Dictionary:         col.Dictionary,
 			VectorDims:         col.VectorDims,
+			ElementsPerRow:     col.ElementsPerRow,
 			AdjacencyDegree:    col.AdjacencyDegree,
 			AdjacencyLayout:    col.AdjacencyLayout,
 			FixedWidthEncoding: col.FixedWidthEncoding,
@@ -217,12 +219,22 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_layout: only adjacency_list fields may set adjacency_layout", name)
 			}
 			if valueType == ColumnStoreValueFloat32Vector {
-				if field.VectorDims <= 0 {
+				if field.VectorDims <= 0 && field.ElementsPerRow <= 0 {
 					name := field.Name
 					if name == "" {
 						name = field.Path
 					}
 					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q vector_dims: must be positive", name)
+				}
+				if field.VectorDims > 0 && field.ElementsPerRow > 0 && field.VectorDims != field.ElementsPerRow {
+					name := field.Name
+					if name == "" {
+						name = field.Path
+					}
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q elements_per_row: must match vector_dims for float32_vector", name)
+				}
+				if field.VectorDims == 0 && field.ElementsPerRow > 0 {
+					field.VectorDims = field.ElementsPerRow
 				}
 			} else if field.VectorDims != 0 {
 				name := field.Name
@@ -230,6 +242,27 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 					name = field.Path
 				}
 				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q vector_dims: only float32_vector fields may set vector_dims", name)
+			}
+			if columnStoreValueTypeIsDenseNumericVector(valueType) {
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				if field.Owner != TypedStorageOwnerColumnPart {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q value_type %q requires owner %q", name, valueType, TypedStorageOwnerColumnPart)
+				}
+				if field.Nullable {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q nullable %s typed_column_part is unsupported", name, valueType)
+				}
+				if field.ElementsPerRow <= 0 {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q elements_per_row: must be positive for value_type %q", name, valueType)
+				}
+			} else if valueType != ColumnStoreValueFloat32Vector && field.ElementsPerRow != 0 {
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q elements_per_row: only dense vector fields may set elements_per_row", name)
 			}
 			if valueType == ColumnStoreValueUint32List {
 				name := field.Name
@@ -561,8 +594,15 @@ func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
 			if field.Nullable {
 				return fmt.Errorf("%w: nullable vector field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
 			}
-			if field.VectorDims <= 0 {
+			if field.VectorDims <= 0 && field.ElementsPerRow <= 0 {
 				return fmt.Errorf("%w: float32_vector field %q requires vector_dims", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+		case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+			if field.Nullable {
+				return fmt.Errorf("%w: nullable %s field %q", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+			}
+			if field.ElementsPerRow <= 0 {
+				return fmt.Errorf("%w: %s field %q requires elements_per_row", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
 			}
 		case ColumnStoreValueUint32List:
 			if field.Nullable {

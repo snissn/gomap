@@ -46,6 +46,20 @@ const (
 	EncodingRawUint64
 	EncodingRawFloat16
 	EncodingRawBFloat16
+
+	// Dense numeric vector encodings. The legacy raw_float32_vector keeps its
+	// original value; this block follows #1929's scalar encodings.
+	EncodingRawUint8Vector
+	EncodingRawInt8Vector
+	EncodingRawUint16Vector
+	EncodingRawInt16Vector
+	EncodingRawUint32Vector
+	EncodingRawInt32Vector
+	EncodingRawUint64Vector
+	EncodingRawInt64Vector
+	EncodingRawFloat16Vector
+	EncodingRawBFloat16Vector
+	EncodingRawFloat64Vector
 )
 
 func (e Encoding) String() string {
@@ -92,6 +106,28 @@ func (e Encoding) String() string {
 		return "raw_float16"
 	case EncodingRawBFloat16:
 		return "raw_bfloat16"
+	case EncodingRawUint8Vector:
+		return "raw_uint8_vector"
+	case EncodingRawInt8Vector:
+		return "raw_int8_vector"
+	case EncodingRawUint16Vector:
+		return "raw_uint16_vector"
+	case EncodingRawInt16Vector:
+		return "raw_int16_vector"
+	case EncodingRawUint32Vector:
+		return "raw_uint32_vector"
+	case EncodingRawInt32Vector:
+		return "raw_int32_vector"
+	case EncodingRawUint64Vector:
+		return "raw_uint64_vector"
+	case EncodingRawInt64Vector:
+		return "raw_int64_vector"
+	case EncodingRawFloat16Vector:
+		return "raw_float16_vector"
+	case EncodingRawBFloat16Vector:
+		return "raw_bfloat16_vector"
+	case EncodingRawFloat64Vector:
+		return "raw_float64_vector"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}
