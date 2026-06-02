@@ -217,6 +217,17 @@ func TestPreparedRandomOrdinalLookupAndScratchAllocs1932(t *testing.T) {
 	}
 }
 
+func TestPackedCodePaddingValidationFailsClosed1932(t *testing.T) {
+	rowBytes, err := typedcolumn.PackedUintRowBytes(10, 1)
+	if err != nil {
+		t.Fatalf("PackedUintRowBytes: %v", err)
+	}
+	err = validatePackedColumnPadding(RolePackedCodes, 1, 10, 1, rowBytes, []byte{0x4d, 0x83})
+	if err == nil || !strings.Contains(err.Error(), "packed padding") || !strings.Contains(err.Error(), "non-zero padding bits") {
+		t.Fatalf("validatePackedColumnPadding err=%v want packed padding failure", err)
+	}
+}
+
 func TestPrepareFailsClosedDenseCodesRequireUnsignedPhysicalType1932(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

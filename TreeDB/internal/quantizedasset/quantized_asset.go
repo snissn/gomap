@@ -504,6 +504,11 @@ func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImage
 	if len(payload) != wantBytes {
 		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q payload bytes=%d want rows=%d*row_bytes=%d", desc.Role, len(payload), schema.RowCount, rowBytes)
 	}
+	if kind == preparedColumnPackedUint {
+		if err := validatePackedColumnPadding(desc.Role, schema.RowCount, certCol.FixedWidthElements, certCol.BitsPerElement, rowBytes, payload); err != nil {
+			return preparedColumn{}, ColumnFootprint{}, err
+		}
+	}
 	col := preparedColumn{
 		role:              desc.Role,
 		column:            desc.Column,
@@ -541,6 +546,21 @@ func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImage
 		cf.BytesPerVector = float64(section.Length) / float64(schema.RowCount)
 	}
 	return col, cf, nil
+}
+
+func validatePackedColumnPadding(role Role, rows, elementsPerRow, bitsPerElement, rowBytes int, payload []byte) error {
+	logicalBits, err := checkedMul(elementsPerRow, bitsPerElement)
+	if err != nil {
+		return fmt.Errorf("quantizedasset: role %q packed logical bits: %w", role, err)
+	}
+	if logicalBits%8 == 0 {
+		return nil
+	}
+	packed := typedcolumn.PackedUintRows{Rows: rows, ElementsPerRow: elementsPerRow, BitsPerElement: bitsPerElement, BytesPerRow: rowBytes, Values: payload}
+	if err := packed.ValidatePadding(); err != nil {
+		return fmt.Errorf("quantizedasset: role %q packed padding: %w", role, err)
+	}
+	return nil
 }
 
 func validateColumnShape(schema SchemaDescriptor, desc ColumnDescriptor, cert typedcolumn.ColumnPartLayoutContractColumn, section typedcolumn.ColumnPartImageSection) error {
