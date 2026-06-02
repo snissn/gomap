@@ -328,6 +328,8 @@ func nativeWireCommandName(t *testing.T, id iwire.CommandID) string {
 		return "CommandInsertBatch"
 	case iwire.CommandReplaceBatch:
 		return "CommandReplaceBatch"
+	case iwire.CommandUpdateBSONSet:
+		return "CommandUpdateBSONSet"
 	case iwire.CommandDeleteBatch:
 		return "CommandDeleteBatch"
 	case iwire.CommandFlushCollection:

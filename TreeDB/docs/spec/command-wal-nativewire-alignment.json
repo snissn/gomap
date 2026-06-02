@@ -89,6 +89,18 @@
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin the same command kind and supported surface, but they are not byte-equivalent and currently use different logical fixture inputs. A future equivalence fixture must use matched collection/id/document inputs before claiming lowered_equivalent_v1."
     },
     {
+      "nativewire_command": "CommandUpdateBSONSet",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/update_bson_set_entry.hex",
+      "nativewire_fixture_sha256": "23bd0dd3ca32ca4084f92a452d5551fc04c402c1e51d30c8a153af0345648593",
+      "command_wal_kind": "CollectionUpdateBatchByID",
+      "command_wal_payload_format": "CollectionUpdateBatchByIDV1",
+      "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_update_by_id.hex",
+      "local_fixture_sha256": "21247138f1d50b019f59b63e9abb74dc65784f9f70bfcb5a27f8f363910a3ec7",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "lowered_kind_only_v1",
+      "notes": "Kind-only alignment: native-wire update_bson_set is a specialized top-level BSON field update entry point, while local command WAL records the resulting collection update-by-id command payload. Fixtures pin command support and recovery coverage, but they are not byte-equivalent."
+    },
+    {
       "nativewire_command": "CommandDeleteBatch",
       "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/delete_batch_entry.hex",
       "nativewire_fixture_sha256": "0c371815884ce5959869143ed5168cd477ab9aee276825447b7f9636961608c6",
