@@ -323,6 +323,11 @@ go test -run '^$' \
   aggregate, or vector payloads.
 - Keep vector payloads out of retained JSON for search-heavy workloads when a
   dense typed-column section is the intended search data plane.
+- For vector APIs that return documents without embedding echo, use
+  `ColumnRetainedPayloadNonColumn` plus
+  `ProjectionOrientedVectorDocumentFetchPreset` so final documents exclude the
+  vector field; request full documents/embeddings only as an explicit comparison
+  or compatibility path.
 - Separate candidate search/aggregate from final document fetch.
 - Use `cached_verify` or `verify` for correctness-oriented validation; treat
   `skip_checksums` only as an unsafe ceiling benchmark.

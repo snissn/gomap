@@ -359,12 +359,15 @@ Expected output shape:
 TreeDB column_graph native-reader demo
 db_dir=/tmp/treedb-column-graph-doc-smoke rows=64 dims=8 degree=4 top_k=5 ef_search=32
 rebuild status=column_graph_loaded loaded=true reason=
-search path=column_graph_native_reader status=column_graph_loaded loaded=true results=5 include_docs=false
-stats candidates=... edges=... row_fetches=... cache_hits=... cache_misses=... decoded_blocks=... granules_touched=... physical_B=... max_resident_B=... docs_fetched=0
+search path=column_graph_native_reader status=column_graph_loaded loaded=true results=5 include_docs=false doc_projection=none
+stats candidates=... edges=... row_fetches=... cache_hits=... cache_misses=... decoded_blocks=... granules_touched=... physical_B=... max_resident_B=... docs_fetched=0 doc_output_B=0 doc_fields_skipped=0
 ```
 
 `docs_fetched=0` is the expected search/scoring boundary when documents are not
-requested. Use `-include-docs` only when you want final document fetch included.
+requested. Use `-include-docs` when you want projected final document fetch
+included; the demo excludes the embedding field by default. Add
+`-include-doc-embedding` only for explicit full-document/embedding-echo
+comparison runs.
 
 ### Unified-bench profile-dir workflow
 
@@ -539,7 +542,8 @@ it a ceiling and keep verified/cached-verify evidence nearby.
   generation-bound accelerator.
 - **Runnable command:** `cmd/treedb_column_graph_demo` smoke above.
 - **Expected counters:** search output should show `search path=column_graph_native_reader`
-  and `docs_fetched=0` unless `-include-docs` is set.
+  and `docs_fetched=0` unless `-include-docs` is set; with `-include-docs`,
+  `doc_projection=exclude_embedding` is the preferred response shape.
 - **Why:** keeps vector scoring/candidate traversal separate from document fetch.
 - **When not:** authoritative adjacency typed-column storage or SIMD kernels are
   required today; those are follow-ups.

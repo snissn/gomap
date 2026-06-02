@@ -65,6 +65,27 @@ func TestBuildCollectionStorageFixtureHonorsFieldCount(t *testing.T) {
 	}
 }
 
+func TestCollectionStorageVectorSearchOptionsUseProjectionPreset(t *testing.T) {
+	opts, err := collectionStorageVectorSearchOptions([]float32{1, 0, 0}, 2, 8, true, false)
+	if err != nil {
+		t.Fatalf("projected options: %v", err)
+	}
+	if !opts.IncludeDocuments || len(opts.DocumentFetchOptions.ExcludePaths) != 1 || opts.DocumentFetchOptions.ExcludePaths[0] != "embedding" {
+		t.Fatalf("projected opts=%+v want include docs excluding embedding", opts)
+	}
+	if got := collectionStorageVectorFinalFetchShape(true, false); got != collectionStorageVectorFinalFetchProjectionNoEmbedding {
+		t.Fatalf("final fetch shape=%q", got)
+	}
+
+	full, err := collectionStorageVectorSearchOptions([]float32{1, 0, 0}, 2, 8, true, true)
+	if err != nil {
+		t.Fatalf("full options: %v", err)
+	}
+	if !full.IncludeDocuments || len(full.DocumentFetchOptions.ExcludePaths) != 0 {
+		t.Fatalf("full opts=%+v want full docs without projection", full)
+	}
+}
+
 func TestCollectionStorageSuiteSmoke(t *testing.T) {
 	withExplicitFlag(t, "keys")
 	out, err := runCollectionStorageSuite(BenchConfig{
@@ -87,7 +108,37 @@ func TestCollectionStorageSuiteSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runCollectionStorageSuite: %v", err)
 	}
-	for _, needle := range []string{"collection_storage", "typed_column_part", "vector_typed_column", "vector_search_smoke", "unsupported workloads", "Comparison Semantics"} {
+	for _, needle := range []string{"collection_storage", "typed_column_part", "vector_typed_column", "vector_search_smoke", "projection_without_embedding", "unsupported workloads", "Comparison Semantics"} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("output missing %q:\n%s", needle, out)
+		}
+	}
+}
+
+func TestCollectionStorageSuiteVectorFullDocumentsShape(t *testing.T) {
+	withExplicitFlag(t, "keys")
+	out, err := runCollectionStorageSuite(BenchConfig{
+		Keys:       8,
+		BatchSize:  4,
+		Profile:    "durable",
+		DBsArg:     "treedb",
+		SeedUsed:   1,
+		CPUProfile: filepath.Join(t.TempDir(), "cpu"),
+	}, collectionStorageSuiteOptions{
+		ModesArg:            "vector_typed_column",
+		WorkloadsArg:        "vector_search_smoke",
+		QueryCount:          1,
+		PointGetCount:       2,
+		VectorDims:          3,
+		VectorTopK:          2,
+		IncludeFinalFetch:   true,
+		VectorFullDocuments: true,
+		CheckpointReopen:    true,
+	})
+	if err != nil {
+		t.Fatalf("runCollectionStorageSuite full docs: %v", err)
+	}
+	for _, needle := range []string{"vector_final_fetch_shape: `full_document_embedding_echo`", "explicit full-document/embedding-echo comparison path"} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("output missing %q:\n%s", needle, out)
 		}

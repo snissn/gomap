@@ -118,10 +118,17 @@ Representative output shape:
 TreeDB column_graph native-reader demo
 db_dir=/tmp/treedb-column-graph-demo rows=1024 dims=128 degree=16 top_k=10 ef_search=128
 rebuild status=column_graph_loaded loaded=true reason=
-search path=column_graph_native_reader status=column_graph_loaded loaded=true results=10 include_docs=false
-stats candidate_rows=... candidates=... edges=... visited_nodes=... visited_edges=... vector_B=... adjacency_B=... row_fetches=... cache_hits=... cache_misses=... decoded_blocks=... granules_touched=... physical_B=... max_resident_B=... docs_fetched=0
+search path=column_graph_native_reader status=column_graph_loaded loaded=true results=10 include_docs=false doc_projection=none
+stats candidate_rows=... candidates=... edges=... visited_nodes=... visited_edges=... vector_B=... adjacency_B=... row_fetches=... cache_hits=... cache_misses=... decoded_blocks=... granules_touched=... physical_B=... max_resident_B=... docs_fetched=0 doc_output_B=0 doc_fields_skipped=0
 result[0] id=doc-000000 ordinal=0 score=1.000000
 ```
+
+When exercising document final fetch through the demo, `-include-docs` uses the
+preferred projection-oriented path and applies
+`ProjectionOrientedVectorDocumentFetchPresetForField("embedding")`; add
+`-include-doc-embedding` only for explicit full-document/embedding-echo
+comparison runs. Keep these document-fetch rows separate from graph-search
+throughput claims.
 
 Run an opt-in real public dataset smoke using GloVe 6B 50d:
 
@@ -163,7 +170,7 @@ Use the legacy/canonical benchmark set when comparing with older artifacts:
 ```sh
 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench 'Benchmark(ColumnVectorGraphNativeSearchCosineV3|ColumnVectorGraphNativeSearchCosineParallelV3|OpenVectorIndexSearcherColumnGraphNativeReaderSetupV6|OpenVectorIndexSearcherColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderWithDocumentsV4)$' \
+  -bench 'Benchmark(ColumnVectorGraphNativeSearchCosineV3|ColumnVectorGraphNativeSearchCosineParallelV3|OpenVectorIndexSearcherColumnGraphNativeReaderSetupV6|OpenVectorIndexSearcherColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderWithDocumentsExcludeEmbedding1875|SearchVectorIndexColumnGraphNativeReaderWithDocumentsV4)$' \
   -benchmem \
   -benchtime=500ms \
   -count=5
@@ -181,8 +188,11 @@ The expected categories are:
   searcher steady-state query. Setup/open is outside the timed loop.
 - `BenchmarkSearchVectorIndexColumnGraphNativeReaderV4`: public one-shot search.
   Setup/open is inside each timed operation.
-- `BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsV4`: public
-  one-shot search plus post-top-k document materialization.
+- `BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsExcludeEmbedding1875`:
+  public one-shot search plus preferred projection-oriented post-top-k document
+  materialization; documents omit the vector field.
+- `BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsV4`: explicit
+  full-document comparison path; documents include the vector field.
 
 Report and compare:
 

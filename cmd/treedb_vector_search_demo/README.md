@@ -19,6 +19,13 @@ Each case:
 7. benchmark serial ANN search and parallel ANN search, and
 8. report storage/memory usage.
 
+The benchmark search phase is a no-document ANN/search-throughput boundary:
+serial and parallel search metrics return IDs/scores and do not time final
+document fetch, reconstruction, projection, or serialization. Document reads in
+validation are correctness checks, not the preferred vector response-shape
+evidence; use `ProjectionOrientedVectorDocumentFetchPreset` in collection/vector
+APIs when timing projected documents without embeddings.
+
 `CompactStorageFull` is intentionally used instead of manually chaining
 maintenance calls. It is TreeDB's canonical full storage compaction path:
 value-log rewrite/GC, leaf-generation pack/GC, index vacuum, settle passes,

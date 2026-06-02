@@ -82,6 +82,7 @@ type result struct {
 	MetadataFilter            bool        `json:"metadata_filter"`
 	MetadataFilterDescription string      `json:"metadata_filter_description,omitempty"`
 	FinalFetch                bool        `json:"final_fetch"`
+	FinalFetchShape           string      `json:"final_fetch_shape"`
 	SearchPath                string      `json:"search_path"`
 	SetupMillis               float64     `json:"setup_ms"`
 	SearchMillis              float64     `json:"search_ms"`
@@ -181,7 +182,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.TopK, "top-k", cfg.TopK, "nearest neighbors per query")
 	fs.IntVar(&cfg.BatchSize, "batch-size", cfg.BatchSize, "documents per InsertBatch call")
 	fs.BoolVar(&cfg.MetadataFilter, "metadata-filter", cfg.MetadataFilter, "restrict scoring/search output to a deterministic tenant filter when supported")
-	fs.BoolVar(&cfg.FinalFetch, "final-fetch", cfg.FinalFetch, "fetch full documents after top-k selection and time that separately")
+	fs.BoolVar(&cfg.FinalFetch, "final-fetch", cfg.FinalFetch, "fetch explicit full documents (including embeddings) after top-k selection and time that separately")
 	fs.StringVar(&cfg.Dir, "dir", cfg.Dir, "TreeDB directory; empty uses a temporary directory")
 	fs.BoolVar(&cfg.KeepDir, "keep-dir", cfg.KeepDir, "keep an automatically-created temporary DB directory after the run")
 	fs.Int64Var(&cfg.Seed, "seed", cfg.Seed, "deterministic fixture seed")
@@ -352,6 +353,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		MetadataFilter:            cfg.MetadataFilter,
 		MetadataFilterDescription: metadataFilterDescription(cfg),
 		FinalFetch:                cfg.FinalFetch,
+		FinalFetchShape:           vectorDemoFinalFetchShape(cfg.FinalFetch),
 		SetupMillis:               millis(setupElapsed),
 		ProfileDir:                cfg.ProfileDir,
 	}
@@ -386,9 +388,10 @@ func collectionMeta(cfg config) *collections.CollectionMeta {
 		Options: collections.CollectionOptions{
 			DocumentFormat: collections.DocumentFormatJSON,
 			ColumnStore: &collections.ColumnStoreConfig{
-				Enabled: true,
-				Columns: columns,
-				SortKey: sortKey,
+				Enabled:         true,
+				RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
+				Columns:         columns,
+				SortKey:         sortKey,
 			},
 		},
 		VectorIndexes: []collections.VectorIndexDefinition{{
@@ -491,6 +494,13 @@ func insertRows(col *collections.Collection, rows []vectorRow, batchSize int) er
 		}
 	}
 	return nil
+}
+
+func vectorDemoFinalFetchShape(finalFetch bool) string {
+	if finalFetch {
+		return "full_document_embedding_echo"
+	}
+	return "none"
 }
 
 func runColumnGraphQueries(col *collections.Collection, queries []queryFixture, cfg config, res *result) error {
@@ -740,14 +750,14 @@ func writeProfileArtifacts(dir string, res *result) error {
 func summaryMarkdown(res result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# TreeDB vector demo summary\n\n")
-	fmt.Fprintf(&b, "- preset: `%s`\n- vectors: `%s`\n- metadata: `%s`\n- rows: `%d`\n- dims: `%d`\n- queries: `%d`\n- top_k: `%d`\n- batch_size: `%d`\n- search_path: `%s`\n- setup_ms: `%.3f`\n- search_ms: `%.3f`\n- fetch_ms: `%.3f`\n- ops_sec: `%.2f`\n- candidate_rows: `%d`\n- visited_nodes: `%d`\n- visited_edges: `%d`\n- vector_bytes_read: `%d`\n- adjacency_bytes_read: `%d`\n- vector_direct_views: `%d`\n- vector_scratch_decodes: `%d`\n- adjacency_direct_views: `%d`\n- adjacency_scratch_decodes: `%d`\n- docs_fetched: `%d`\n- mapped_bytes_peak: `%d`\n- heap_copy_bytes_peak: `%d`\n- decoded_bytes_peak: `%d`\n", res.Preset, res.VectorMode, res.MetadataMode, res.Rows, res.Dims, res.Queries, res.TopK, res.BatchSize, res.SearchPath, res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond, res.CandidateRows, res.VisitedNodes, res.VisitedEdges, res.VectorBytesRead, res.AdjacencyBytesRead, res.VectorDirectViews, res.VectorScratchDecodes, res.AdjacencyDirectViews, res.AdjacencyScratchDecodes, res.DocsFetched, res.MappedBytesPeak, res.HeapCopyBytesPeak, res.DecodedBytesPeak)
+	fmt.Fprintf(&b, "- preset: `%s`\n- vectors: `%s`\n- metadata: `%s`\n- rows: `%d`\n- dims: `%d`\n- queries: `%d`\n- top_k: `%d`\n- batch_size: `%d`\n- search_path: `%s`\n- final_fetch_shape: `%s`\n- setup_ms: `%.3f`\n- search_ms: `%.3f`\n- fetch_ms: `%.3f`\n- ops_sec: `%.2f`\n- candidate_rows: `%d`\n- visited_nodes: `%d`\n- visited_edges: `%d`\n- vector_bytes_read: `%d`\n- adjacency_bytes_read: `%d`\n- vector_direct_views: `%d`\n- vector_scratch_decodes: `%d`\n- adjacency_direct_views: `%d`\n- adjacency_scratch_decodes: `%d`\n- docs_fetched: `%d`\n- mapped_bytes_peak: `%d`\n- heap_copy_bytes_peak: `%d`\n- decoded_bytes_peak: `%d`\n", res.Preset, res.VectorMode, res.MetadataMode, res.Rows, res.Dims, res.Queries, res.TopK, res.BatchSize, res.SearchPath, res.FinalFetchShape, res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond, res.CandidateRows, res.VisitedNodes, res.VisitedEdges, res.VectorBytesRead, res.AdjacencyBytesRead, res.VectorDirectViews, res.VectorScratchDecodes, res.AdjacencyDirectViews, res.AdjacencyScratchDecodes, res.DocsFetched, res.MappedBytesPeak, res.HeapCopyBytesPeak, res.DecodedBytesPeak)
 	fmt.Fprintf(&b, "\nArtifacts: `vector_demo_cpu.pprof`, `vector_demo_allocs.pprof`, `vector_demo_summary.json`, `vector_demo_summary.md`.\n")
 	return b.String()
 }
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector/RAG demo (pre-alpha collections)\n")
-	fmt.Fprintf(w, "preset=%s vectors=%s metadata=%s metadata_filter=%t final_fetch=%t\n", res.Preset, res.VectorMode, res.MetadataMode, res.MetadataFilter, res.FinalFetch)
+	fmt.Fprintf(w, "preset=%s vectors=%s metadata=%s metadata_filter=%t final_fetch=%t final_fetch_shape=%s\n", res.Preset, res.VectorMode, res.MetadataMode, res.MetadataFilter, res.FinalFetch, res.FinalFetchShape)
 	fmt.Fprintf(w, "db_dir=%s rows=%d dims=%d queries=%d top_k=%d batch_size=%d search_path=%s\n", res.Dir, res.Rows, res.Dims, res.Queries, res.TopK, res.BatchSize, res.SearchPath)
 	fmt.Fprintf(w, "setup_ms=%.3f search_ms=%.3f fetch_ms=%.3f ops_sec=%.2f\n", res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond)
 	fmt.Fprintf(w, "candidate_rows=%d candidates=%d candidates_per_search=%.2f visited_nodes=%d visited_edges=%d scored_vectors=%d docs_fetched=%d document_bytes=%d\n", res.CandidateRows, res.Candidates, res.CandidatesPerSearch, res.VisitedNodes, res.VisitedEdges, res.ScoredVectors, res.DocsFetched, res.DocumentBytes)

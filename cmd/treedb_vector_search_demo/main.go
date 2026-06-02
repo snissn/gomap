@@ -562,8 +562,9 @@ func resultBackendForStrategy(strategy collections.VectorIndexStrategy) string {
 
 func columnGraphDemoColumnStoreConfig(dims int) *collections.ColumnStoreConfig {
 	return &collections.ColumnStoreConfig{
-		Enabled:        true,
-		ProfileSupport: collections.ColumnStoreProfileBenchmarkRelaxed,
+		Enabled:         true,
+		RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
+		ProfileSupport:  collections.ColumnStoreProfileBenchmarkRelaxed,
 		Columns: []collections.ColumnStoreColumn{
 			{
 				Name:       "embedding",
