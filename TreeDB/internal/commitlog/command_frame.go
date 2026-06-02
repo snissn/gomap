@@ -16,7 +16,7 @@ const (
 
 	CommandWALNonCriticalFlagStart uint64 = 1 << 32
 
-	commandFrameHeaderSize   = 4 + 2 + 2 + 2 + 2 + 8 + 8 + 8 + 8 + 8 + 2 + 2 + 4 + 4 + 4 + 4 + sha256.Size
+	commandFrameHeaderSize   = 4 + 2 + 2 + 2 + 2 + 8 + 8 + 8 + 8 + 8 + 2 + 2 + 4 + 4 + 4 + 4
 	rawKVBatchPayloadVersion = uint16(1)
 	rawKVZeroBatchPayloadV2  = uint16(2)
 	rawKVZeroBatchPayloadV3  = uint16(3)
@@ -969,7 +969,6 @@ type CommandEnvelope struct {
 	BaseAppliedLSN   uint64
 	PayloadFormat    PayloadFormat
 	Payload          []byte
-	PayloadDigest    [32]byte
 	ExternalRefs     []ExternalRef
 	Preconditions    []CommandExtension
 	ResultAssertions []CommandExtension
@@ -1010,7 +1009,6 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
 
 	off := commandFrameHeaderSize
-	payloadStart := off
 	binary.LittleEndian.PutUint16(frame[off:off+2], 1)
 	binary.LittleEndian.PutUint32(frame[off+2:off+6], 1)
 	off += rawKVBatchHeaderSize
@@ -1027,9 +1025,6 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 	copy(frame[off:], op.Key)
 	off += len(op.Key)
 	copy(frame[off:], value)
-	off += len(value)
-	digest := sha256.Sum256(frame[payloadStart:off])
-	copy(frame[72:72+sha256.Size], digest[:])
 	return frame, nil
 }
 
@@ -1056,12 +1051,7 @@ func encodeTrustedRawKVPointCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint6
 }
 
 func encodeTrustedRawKVPointCommandFrameSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int) ([]byte, error) {
-	frame := encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst, lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, total)
-	payloadStart := commandFrameHeaderSize
-	payloadEnd := payloadStart + payloadLen
-	digest := sha256.Sum256(frame[payloadStart:payloadEnd])
-	copy(frame[72:72+sha256.Size], digest[:])
-	return frame, nil
+	return encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst, lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, total), nil
 }
 
 func encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int) []byte {
@@ -1196,8 +1186,6 @@ func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 	binary.LittleEndian.PutUint32(frame[60:64], uint32(len(extRefs)))
 	binary.LittleEndian.PutUint32(frame[64:68], uint32(len(preconditions)))
 	binary.LittleEndian.PutUint32(frame[68:72], uint32(len(assertions)))
-	digest := sha256.Sum256(env.Payload)
-	copy(frame[72:72+sha256.Size], digest[:])
 	off := commandFrameHeaderSize
 	copy(frame[off:], env.Payload)
 	off += len(env.Payload)
@@ -1247,8 +1235,6 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 	extRefsLen := binary.LittleEndian.Uint32(frame[60:64])
 	preconditionsLen := binary.LittleEndian.Uint32(frame[64:68])
 	assertionsLen := binary.LittleEndian.Uint32(frame[68:72])
-	wantDigest := [32]byte{}
-	copy(wantDigest[:], frame[72:72+sha256.Size])
 	if err := validateCommandEnvelopeIdentity(env); err != nil {
 		return env, err
 	}
@@ -1259,11 +1245,6 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 	off := commandFrameHeaderSize
 	env.Payload = append([]byte(nil), frame[off:off+int(payloadLen)]...)
 	off += int(payloadLen)
-	gotDigest := sha256.Sum256(env.Payload)
-	if gotDigest != wantDigest {
-		return env, ErrCommandWALPayloadDigestMismatch
-	}
-	env.PayloadDigest = gotDigest
 	extRefs, err := decodeExternalRefs(frame[off : off+int(extRefsLen)])
 	if err != nil {
 		return env, err

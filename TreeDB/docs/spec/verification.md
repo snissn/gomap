@@ -245,7 +245,7 @@ PR 1: typed commit-log frames and feature gate:
 - `TestCommandWALFormatSkipsUnknownNonCriticalExtensionOnlyWhenAllowed`;
 - `TestCommandWALFormatRoundTripExternalRefs`;
 - `TestCommandWALFormatRejectsMalformedLengthBeforeAllocation`;
-- `TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch`;
+- `TestCommandWALFormatRejectsFrameCRCMismatch`;
 - `TestCommandWALFeatureGateRejectsLegacyRawPayload`;
 - `TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation`;
 - `TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled`;
@@ -532,7 +532,6 @@ Required decoder and bounds tests:
 - `TestCommandWALUnknownRequiredExternalRefClassFatal`;
 - `TestCommandWALUnknownOptionalExternalRefClassCannotCleanup`;
 - `TestCommandWALBadFrameCRCCompleteRecordFailsOpen`;
-- `TestCommandWALBadPayloadDigestCompleteRecordFailsOpen`;
 - `TestCommandWALTerminalShortHeaderIgnored`;
 - `TestCommandWALTruncatedActiveTailIgnoredOnlyWithoutCommitMarker`;
 - `TestCommandWALTruncatedSealedSegmentFailsOpen`;
@@ -637,7 +636,7 @@ Required golden fixture families:
 - unknown critical extension rejection;
 - unknown noncritical extension skip;
 - unsupported version fail-closed;
-- malformed length, frame CRC, payload digest, and commit marker corruption.
+- malformed length, frame CRC, and commit marker corruption.
 
 Required non-mutating CLI tooling:
 

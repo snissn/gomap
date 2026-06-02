@@ -334,7 +334,7 @@ Restore/open validation before serving reads:
    command WAL frames;
 6. for every complete typed command frame not covered by `AppliedLSN` plus
    cleanup:
-   - validate frame checksum and payload digest;
+   - validate frame checksum and command assertions;
    - validate command kind, scope, catalog/schema epochs, preconditions, and
      result assertions;
    - decode the canonical command payload;

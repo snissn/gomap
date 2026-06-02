@@ -110,7 +110,7 @@ the helper call.
 | Term | Meaning |
 |---|---|
 | `CommandEnvelope` | Versioned durable wrapper for one replayable user mutation command. |
-| `CommandPayload` | Canonical bytes for the command kind. Payload bytes must be stable for replay and digest validation. |
+| `CommandPayload` | Canonical bytes for the command kind. Payload bytes must be stable for replay and any command-specific assertion validation. |
 | `LSN` | Monotonic local WAL sequence number assigned by the shared command WAL journal before command visibility/durable acknowledgement. Raw KV, collection, catalog, and future native-wire commands share this one sequence stream. |
 | `AppliedLSN` | Highest contiguous command LSN covered by the durable checkpointed TreeDB state. This value is selected atomically with the roots that contain those command effects. |
 | `Checkpoint` | Durable root boundary that syncs required files and records `AppliedLSN`. |
@@ -191,7 +191,6 @@ type CommandEnvelope struct {
     BaseAppliedLSN   uint64
     PayloadFormat    PayloadFormat
     Payload          []byte
-    PayloadDigest    [32]byte
     ExternalRefs     []ExternalRef
     Preconditions    []Precondition
     ResultAssertions []ResultAssertion
@@ -209,7 +208,8 @@ must not change replay bytes.
 - `Kind` selects a versioned payload schema.
 - `Scope` identifies raw KV, one collection, catalog/DDL, or a future explicit
   multi-scope command.
-- `PayloadDigest` covers the canonical payload bytes.
+- The segment frame CRC covers the encoded command frame bytes for physical
+  corruption and truncation detection.
 - `ExternalRefs` declare required bytes that must be readable before replay can
   serve data depending on the command.
 - `Preconditions` make stale or incompatible replay fail closed.
@@ -308,7 +308,7 @@ rather than skipping frames.
 V1 batch commands are atomic at the command-frame level. `RawKVBatch`,
 `CollectionInsertBatchByID`, `CollectionDeleteBatchByID`, and
 `CollectionReplaceBatchByID` are each represented as one command frame with one
-LSN, one canonical payload digest, and all-or-nothing replay semantics.
+LSN, frame-level CRC integrity, and all-or-nothing replay semantics.
 
 If a batch is too large for the configured command-frame limits, the V1 WAL-on
 durable mode must reject it before assigning an LSN. The implementation must not

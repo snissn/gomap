@@ -842,7 +842,6 @@ u32      PayloadLen
 u32      ExternalRefsLen
 u32      PreconditionsLen
 u32      ResultAssertionsLen
-bytes[32] PayloadSHA256
 bytes Payload[PayloadLen]
 bytes ExternalRefs[ExternalRefsLen]
 bytes Preconditions[PreconditionsLen]
@@ -1098,7 +1097,6 @@ Readers must fail closed on:
 - unknown command kinds;
 - unknown critical flags;
 - malformed section lengths before allocating section-owned objects;
-- payload digest mismatch;
 - corrupt complete physical segment CRC;
 - duplicate command `LSN` during segment scan.
 
