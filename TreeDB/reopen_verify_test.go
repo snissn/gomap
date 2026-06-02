@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -89,6 +91,20 @@ func writeDataset(t *testing.T, db *treedb.DB, keys [][]byte, values map[string]
 	}
 }
 
+func writeDatasetOneBatch(t *testing.T, db *treedb.DB, keys [][]byte, values map[string][]byte) {
+	t.Helper()
+	batch := db.NewBatch()
+	defer batch.Close()
+	for _, key := range keys {
+		if err := batch.Set(key, values[string(key)]); err != nil {
+			t.Fatalf("batch set: %v", err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("batch write: %v", err)
+	}
+}
+
 func checkGets(t *testing.T, db *treedb.DB, keys [][]byte, values map[string][]byte, allowMissing bool) {
 	t.Helper()
 
@@ -154,6 +170,86 @@ func scanAndCheck(t *testing.T, db *treedb.DB, values map[string][]byte, allowMi
 	}
 }
 
+func leafVLogFrameStats(t *testing.T, dir string) (frames int, maxK int) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "maindb", "leaf_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog: %v", err)
+	}
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("open leaf_vlog segment %q: %v", path, err)
+		}
+		func() {
+			defer f.Close()
+			var header [valuelog.HeaderSize]byte
+			for {
+				n, err := io.ReadFull(f, header[:])
+				if err != nil {
+					if err == io.EOF || (err == io.ErrUnexpectedEOF && n == 0) {
+						return
+					}
+					t.Fatalf("read leaf_vlog header %q: %v", path, err)
+				}
+				if header[4] != valuelog.Version {
+					t.Fatalf("leaf_vlog segment %q has version %d want %d", path, header[4], valuelog.Version)
+				}
+				bodyLen := int64(binary.LittleEndian.Uint32(header[16:20]))
+				if header[5]&1 == 0 {
+					if _, err := f.Seek(bodyLen, io.SeekCurrent); err != nil {
+						t.Fatalf("seek leaf_vlog body %q: %v", path, err)
+					}
+					continue
+				}
+				if bodyLen < valuelog.FrameHeaderSize {
+					t.Fatalf("leaf_vlog grouped body too short in %q: %d", path, bodyLen)
+				}
+				var frameHeader [valuelog.FrameHeaderSize]byte
+				if _, err := io.ReadFull(f, frameHeader[:]); err != nil {
+					t.Fatalf("read leaf_vlog frame header %q: %v", path, err)
+				}
+				if frameHeader[0] != valuelog.FrameVersion {
+					t.Fatalf("leaf_vlog frame version %d want %d", frameHeader[0], valuelog.FrameVersion)
+				}
+				k := int(frameHeader[2])
+				frames++
+				if k > maxK {
+					maxK = k
+				}
+				if _, err := f.Seek(bodyLen-valuelog.FrameHeaderSize, io.SeekCurrent); err != nil {
+					t.Fatalf("seek leaf_vlog frame payload %q: %v", path, err)
+				}
+			}
+		}()
+	}
+	return frames, maxK
+}
+
+func corruptFirstLeafVLogCRC(t *testing.T, dir string) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "maindb", "leaf_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no leaf_vlog segments found")
+	}
+	f, err := os.OpenFile(paths[0], os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open leaf_vlog segment for corruption: %v", err)
+	}
+	defer f.Close()
+	var crcBytes [4]byte
+	if _, err := f.ReadAt(crcBytes[:], 0); err != nil {
+		t.Fatalf("read leaf_vlog crc: %v", err)
+	}
+	crcBytes[0] ^= 0xff
+	if _, err := f.WriteAt(crcBytes[:], 0); err != nil {
+		t.Fatalf("write corrupted leaf_vlog crc: %v", err)
+	}
+}
+
 func TestReopenVerify_WALOn_Checkpoint(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
@@ -205,9 +301,13 @@ func TestReopenVerify_WALOn_Checkpoint_LeafPagesInValueLog(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	writeDataset(t, db, keys, values, false)
+	writeDatasetOneBatch(t, db, keys, values)
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
+	}
+	frames, maxK := leafVLogFrameStats(t, dir)
+	if frames == 0 || maxK <= 1 {
+		t.Fatalf("leaf_vlog frame grouping frames=%d maxK=%d, want grouped live frames", frames, maxK)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -221,6 +321,67 @@ func TestReopenVerify_WALOn_Checkpoint_LeafPagesInValueLog(t *testing.T) {
 
 	checkGets(t, reopen, keys, values, false)
 	scanAndCheck(t, reopen, values, false, hash)
+}
+
+func TestReopenVerify_LeafPageLogGroupedFrameCRCIntegrityModes(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, _ := buildVerifyDataset(2000)
+
+	opts := treedb.Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+			ReadIntegrity:    treedb.IntegrityVerify,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	writeDatasetOneBatch(t, db, keys, values)
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	frames, maxK := leafVLogFrameStats(t, dir)
+	if frames == 0 || maxK <= 1 {
+		_ = db.Close()
+		t.Fatalf("leaf_vlog frame grouping frames=%d maxK=%d, want grouped live frames", frames, maxK)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	verifyDB, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen with checksum verification: %v", err)
+	}
+	corruptFirstLeafVLogCRC(t, dir)
+	_, getErr := verifyDB.Get(keys[0])
+	if closeErr := verifyDB.Close(); closeErr != nil {
+		t.Fatalf("close verify reopen: %v", closeErr)
+	}
+	corruptFirstLeafVLogCRC(t, dir) // restore the CRC before the skip-checksum reopen.
+	if getErr == nil {
+		t.Fatalf("Get with checksum verification succeeded after leaf_vlog CRC corruption")
+	}
+
+	skipOpts := opts
+	skipOpts.ValueLog.ReadIntegrity = treedb.IntegritySkipChecksums
+	skipDB, err := treedb.Open(skipOpts)
+	if err != nil {
+		t.Fatalf("reopen with skipped checksums: %v", err)
+	}
+	defer skipDB.Close()
+	corruptFirstLeafVLogCRC(t, dir)
+	got, err := skipDB.Get(keys[0])
+	if err != nil {
+		t.Fatalf("Get with skipped checksums: %v", err)
+	}
+	if want := values[string(keys[0])]; !bytes.Equal(got, want) {
+		t.Fatalf("Get with skipped checksums mismatch: got %d bytes want %d", len(got), len(want))
+	}
 }
 
 func TestReopenVerify_CurrentSetPublishedOnCheckpoint(t *testing.T) {

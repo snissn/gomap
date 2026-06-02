@@ -3735,6 +3735,21 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 		}
 		return []page.LeafLogPtr{ptr}, nil
 	}
+	if len(leafPages) > valuelog.MaxFrameK {
+		ptrs := make([]page.LeafLogPtr, 0, len(leafPages))
+		for start := 0; start < len(leafPages); start += valuelog.MaxFrameK {
+			end := start + valuelog.MaxFrameK
+			if end > len(leafPages) {
+				end = len(leafPages)
+			}
+			chunkPtrs, err := w.appendLeafPagesWithRIDStart(startRID+uint64(start), leafPages[start:end])
+			if err != nil {
+				return nil, err
+			}
+			ptrs = append(ptrs, chunkPtrs...)
+		}
+		return ptrs, nil
+	}
 	if w.leafDir == "" {
 		ptrs := make([]page.LeafLogPtr, len(leafPages))
 		for i, leafPage := range leafPages {

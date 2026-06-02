@@ -1696,6 +1696,16 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		ratio = largePayloadBlockBootstrapRatio
 	}
 	targetCompressedBytes := db.valueLogBlockTargetBytes
+	if db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && ratioSamples == 0 {
+		// Batch-only leaf-log bootstrap: without an initial lane-local block ratio,
+		// the generic incompressible guard chooses K=1 and defeats AppendLeafPages.
+		// Seed only the dedicated live leaf-log lane so the first multi-page batch
+		// forms grouped frames; normal observed ratios take over after writes.
+		ratio = 0.50
+		if targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
+			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
+		}
+	}
 	if db.forceValueLogPointers && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
 		if avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
 			targetCompressedBytes = forcePointerBlockTargetCompressedBytes

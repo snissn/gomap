@@ -1,7 +1,9 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -103,6 +105,10 @@ func TestDB_NoteLeafGenerationRecordLength_ForwardsToBackend(t *testing.T) {
 }
 
 func buildSparseLeafPageForLeafLogTest(t *testing.T) []byte {
+	return buildSparseLeafPageForLeafLogTestWithTag(t, 'x')
+}
+
+func buildSparseLeafPageForLeafLogTestWithTag(t *testing.T, tag byte) []byte {
 	t.Helper()
 	buf := make([]byte, page.PageSize)
 	b := node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
@@ -111,12 +117,92 @@ func buildSparseLeafPageForLeafLogTest(t *testing.T) []byte {
 		PackedValuePtr:        true,
 	})
 	for i := 0; i < 4; i++ {
-		if err := b.AddLeafEntry([]byte("key-"+string(rune('a'+i))), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		key := []byte{'k', 'e', 'y', '-', tag, '-', byte('a' + i)}
+		val := []byte{'v', 'a', 'l', '-', tag}
+		if err := b.AddLeafEntry(key, val, node.FlagInline, page.ValuePtr{}); err != nil {
 			t.Fatalf("AddLeafEntry(%d): %v", i, err)
 		}
 	}
 	b.FinishNoNode()
 	return buf
+}
+
+func TestCachingLeafPageLog_AppendLeafPagesGroupsPointersAndPayloads(t *testing.T) {
+	dir := t.TempDir()
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(leaf_vlog): %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	db := &DB{closeCh: make(chan struct{}), indexOuterLeavesInValueLog: true}
+	db.nextRID.Store(0)
+	db.leafLog = lane{id: leafLogLaneID, vlog: writer, vlogPath: path, vlogSeq: 1}
+	leafLog := &cachingLeafPageLog{db: db, lane: &db.leafLog}
+	pages := [][]byte{
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'a'),
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'b'),
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'c'),
+	}
+
+	ptrs, err := leafLog.AppendLeafPages(pages)
+	if err != nil {
+		t.Fatalf("AppendLeafPages: %v", err)
+	}
+	if len(ptrs) != len(pages) {
+		t.Fatalf("ptr count=%d want %d", len(ptrs), len(pages))
+	}
+	for i, ptr := range ptrs {
+		if ptr.Offset != ptrs[0].Offset || ptr.FileID != ptrs[0].FileID {
+			t.Fatalf("ptr[%d]=%+v not grouped with ptr[0]=%+v", i, ptr, ptrs[0])
+		}
+		if ptr.SubIndex != uint16(i) {
+			t.Fatalf("ptr[%d].SubIndex=%d want %d", i, ptr.SubIndex, i)
+		}
+		if ptr.RecordLengthHint == 0 {
+			t.Fatalf("ptr[%d] missing record length hint: %+v", i, ptr)
+		}
+	}
+	if err := leafLog.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	reader, err := valuelog.NewReader(path, fileID)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer reader.Close()
+	for i, want := range pages {
+		rid, got, gotPtr, err := reader.ReadNext()
+		if err != nil {
+			t.Fatalf("ReadNext(%d): %v", i, err)
+		}
+		if rid != uint64(i+1) {
+			t.Fatalf("rid[%d]=%d want %d", i, rid, i+1)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("payload[%d] mismatch", i)
+		}
+		gotLeafPtr, err := page.LeafLogPtrFromValuePtr(gotPtr)
+		if err != nil {
+			t.Fatalf("LeafLogPtrFromValuePtr(%d): %v", i, err)
+		}
+		if gotLeafPtr != ptrs[i] {
+			t.Fatalf("reader ptr[%d]=%+v want %+v", i, gotLeafPtr, ptrs[i])
+		}
+	}
+	if _, _, _, err := reader.ReadNext(); !errors.Is(err, io.EOF) {
+		t.Fatalf("ReadNext after records error=%v want EOF", err)
+	}
 }
 
 func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T) {

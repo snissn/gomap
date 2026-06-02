@@ -111,6 +111,28 @@ func (m *mockLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, erro
 	return ptr, nil
 }
 
+type mockBatchLeafPageLog struct {
+	mockLeafPageLog
+	batchLens []int
+}
+
+func (m *mockBatchLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if m.appendErr != nil {
+		return nil, m.appendErr
+	}
+	m.batchLens = append(m.batchLens, len(leafPages))
+	ptrs := make([]page.LeafLogPtr, len(leafPages))
+	fileID := uint32(len(m.batchLens))
+	offset := uint64(len(m.ptrs) + 1)
+	for i, leafPage := range leafPages {
+		ptr := page.LeafLogPtr{FileID: fileID, Offset: offset, RecordLengthHint: page.PageSize, SubIndex: uint16(i)}
+		ptrs[i] = ptr
+		m.ptrs = append(m.ptrs, ptr)
+		m.pages = append(m.pages, append([]byte(nil), leafPage...))
+	}
+	return ptrs, nil
+}
+
 type mockKVIterator struct {
 	keys   [][]byte
 	values [][]byte
@@ -220,6 +242,53 @@ func TestBuildWithOptions_NonEmptyLeafPageLogUsesLeafRefsForLeafChildren(t *test
 	}
 	if !foundLeafRef {
 		t.Fatalf("expected root to reference at least one leaf ref child")
+	}
+}
+
+func TestBuildWithOptions_BatchesLeafPageLogAppends(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	leafLog := &mockBatchLeafPageLog{}
+	iter := &mockKVIterator{}
+	const n = 2048
+	valuePrefix := bytes.Repeat([]byte("value-"), 16)
+	for i := 0; i < n; i++ {
+		iter.keys = append(iter.keys, []byte(fmt.Sprintf("key-%06d", i)))
+		v := append([]byte(nil), valuePrefix...)
+		binary.BigEndian.PutUint32(v[len(v)-4:], uint32(i))
+		iter.values = append(iter.values, v)
+	}
+
+	rootID, err := BuildWithOptions(iter, alloc, p, BuildOptions{LeafPageLog: leafLog})
+	if err != nil {
+		t.Fatalf("BuildWithOptions: %v", err)
+	}
+	batched := false
+	for _, n := range leafLog.batchLens {
+		if n > 1 {
+			batched = true
+			break
+		}
+	}
+	if !batched {
+		t.Fatalf("expected multi-leaf AppendLeafPages call, batchLens=%v", leafLog.batchLens)
+	}
+	if len(leafLog.ptrs) != len(leafLog.pages) || len(leafLog.ptrs) < 2 {
+		t.Fatalf("ptrs=%d pages=%d, want multiple stored leaf pages", len(leafLog.ptrs), len(leafLog.pages))
+	}
+	data, err := p.Get(rootID)
+	if err != nil {
+		t.Fatalf("pager.Get(root): %v", err)
+	}
+	root := node.NewNodeView(data)
+	if root.Type() != page.PageTypeInternal {
+		t.Fatalf("expected internal root, got %d", root.Type())
 	}
 }
 

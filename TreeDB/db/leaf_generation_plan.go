@@ -2,11 +2,13 @@ package db
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math/bits"
 	"sort"
 	"sync"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -112,6 +114,7 @@ type leafGenerationScanContext struct {
 	lastFileID    uint32
 	lastFileState *leafGenerationScanFileState
 	childStacks   [][]uint64
+	groupedFrames map[groupedRecordKey]leafGenerationGroupedFrameInfo
 }
 
 type leafGenerationLiveStatsScanOptions struct {
@@ -317,6 +320,9 @@ func leafGenerationPlanEligibility(gen LeafGenerationPlanGeneration, opts LeafGe
 		return false, leafGenerationPlanSkipDeletedGeneration
 	}
 	if gen.BytesDead <= 0 {
+		if opts.Force && gen.BytesLive > 0 {
+			return true, ""
+		}
 		return false, leafGenerationPlanSkipNoDeadBytes
 	}
 	if gen.BytesLive <= 0 {
@@ -585,6 +591,137 @@ func (db *DB) leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx c
 	})
 }
 
+type leafGenerationGroupedFrameInfo struct {
+	recordLen uint32
+	k         int
+	rawLen    uint32
+	offsets   [valuelog.MaxFrameK + 1]uint32
+}
+
+func (info leafGenerationGroupedFrameInfo) liveByteContribution(subIndex uint16) (uint32, bool) {
+	if info.k <= 1 {
+		if info.recordLen == 0 {
+			return 0, false
+		}
+		return info.recordLen, true
+	}
+	idx := int(subIndex)
+	if idx < 0 || idx >= info.k || info.recordLen == 0 {
+		return 0, false
+	}
+	if info.rawLen == 0 {
+		start := (uint64(info.recordLen) * uint64(idx)) / uint64(info.k)
+		end := (uint64(info.recordLen) * uint64(idx+1)) / uint64(info.k)
+		contribution := uint32(end - start)
+		if contribution == 0 {
+			contribution = 1
+		}
+		return contribution, true
+	}
+	startRaw := info.offsets[idx]
+	endRaw := info.offsets[idx+1]
+	if endRaw < startRaw || endRaw > info.rawLen {
+		return 0, false
+	}
+	start := (uint64(info.recordLen) * uint64(startRaw)) / uint64(info.rawLen)
+	end := (uint64(info.recordLen) * uint64(endRaw)) / uint64(info.rawLen)
+	contribution := uint32(end - start)
+	if contribution == 0 {
+		contribution = 1
+	}
+	return contribution, true
+}
+
+func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, ptr page.LeafLogPtr, recordLen uint32) (leafGenerationGroupedFrameInfo, bool, error) {
+	if scan == nil || scan.snap == nil || scan.snap.state == nil || scan.snap.state.ValueLogSet == nil || ptr.Offset < 4 {
+		return leafGenerationGroupedFrameInfo{}, false, nil
+	}
+	vptr := ptr.ValuePtr()
+	key, err := groupedRecordKeyForPtr(vptr)
+	if err != nil {
+		return leafGenerationGroupedFrameInfo{}, false, err
+	}
+	if scan.groupedFrames != nil {
+		if info, ok := scan.groupedFrames[key]; ok {
+			return info, true, nil
+		}
+	}
+	f := scan.snap.state.ValueLogSet.Files[vptr.FileID]
+	if f == nil || f.File == nil {
+		return leafGenerationGroupedFrameInfo{}, false, nil
+	}
+	start := int64(ptr.Offset - 4)
+	var header [valuelog.HeaderSize]byte
+	if _, err := f.File.ReadAt(header[:], start); err != nil {
+		return leafGenerationGroupedFrameInfo{}, false, err
+	}
+	if header[4] != valuelog.Version {
+		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+	}
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	expectedLen := uint32(valuelog.HeaderSize-4) + valueLen
+	if recordLen != 0 && recordLen != expectedLen {
+		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+	}
+	physicalLen := expectedLen
+	if physicalLen <= ^uint32(0)-4 {
+		physicalLen += 4
+	}
+	if header[5]&1 == 0 {
+		return leafGenerationGroupedFrameInfo{recordLen: physicalLen, k: 1}, true, nil
+	}
+	if valueLen < valuelog.FrameHeaderSize {
+		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+	}
+
+	const maxPrefixLen = valuelog.FrameHeaderSize + (valuelog.MaxFrameK * 8) + ((valuelog.MaxFrameK + 1) * 4)
+	var prefix [maxPrefixLen]byte
+	frameOff := start + valuelog.HeaderSize
+	if _, err := f.File.ReadAt(prefix[:valuelog.FrameHeaderSize], frameOff); err != nil {
+		return leafGenerationGroupedFrameInfo{}, false, err
+	}
+	if prefix[0] != valuelog.FrameVersion {
+		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+	}
+	k := int(prefix[2])
+	if k <= 0 || k > valuelog.MaxFrameK {
+		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+	}
+	prefixLen := valuelog.FrameHeaderSize + (k * 8) + ((k + 1) * 4)
+	if int(valueLen) < prefixLen {
+		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+	}
+	if _, err := f.File.ReadAt(prefix[valuelog.FrameHeaderSize:prefixLen], frameOff+valuelog.FrameHeaderSize); err != nil {
+		return leafGenerationGroupedFrameInfo{}, false, err
+	}
+
+	info := leafGenerationGroupedFrameInfo{recordLen: physicalLen, k: k}
+	ridOff := valuelog.FrameHeaderSize
+	for i := 0; i < k; i++ {
+		if binary.LittleEndian.Uint64(prefix[ridOff:ridOff+8]) == 0 {
+			return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+		}
+		ridOff += 8
+	}
+	off := valuelog.FrameHeaderSize + (k * 8)
+	prev := uint32(0)
+	for i := 0; i < k+1; i++ {
+		cur := binary.LittleEndian.Uint32(prefix[off : off+4])
+		if cur < prev {
+			return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+		}
+		info.offsets[i] = cur
+		prev = cur
+		off += 4
+	}
+	info.rawLen = info.offsets[k]
+	if scan.groupedFrames == nil {
+		scan.groupedFrames = make(map[groupedRecordKey]leafGenerationGroupedFrameInfo, 64)
+	}
+	scan.groupedFrames[key] = info
+	return info, true, nil
+}
+
 func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst leafGenerationSubtreeStats, ptr page.LeafLogPtr) (leafGenerationSubtreeStats, error) {
 	if scan == nil {
 		return dst, fmt.Errorf("leaf generation plan: missing scan context")
@@ -629,12 +766,23 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 			}
 		}
 	}
+	liveBytes := recordLen
+	if liveBytes <= ^uint32(0)-4 {
+		liveBytes += 4
+	}
+	if info, grouped, err := db.leafGenerationGroupedFrameInfo(scan, ptr, recordLen); err != nil {
+		return dst, err
+	} else if grouped {
+		if contribution, ok := info.liveByteContribution(ptr.SubIndex); ok {
+			liveBytes = contribution
+		}
+	}
 	if dst == nil {
 		dst = make(leafGenerationSubtreeStats, 1)
 	}
 	totals := dst[fileState.genID]
 	totals.LivePages++
-	totals.LiveBytes += int64(recordLen)
+	totals.LiveBytes += int64(liveBytes)
 	dst[fileState.genID] = totals
 	return dst, nil
 }
