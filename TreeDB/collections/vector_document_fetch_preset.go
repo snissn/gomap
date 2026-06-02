@@ -57,6 +57,8 @@ func ProjectionOrientedVectorDocumentFetchPresetForField(vectorField string) (Ve
 }
 
 // ApplyToSearchOptions applies p to collection-level SearchVectorIndex options.
+// It replaces opts.DocumentFetchOptions; callers that need custom fetch options
+// should apply the preset first, then set their overrides.
 func (p VectorDocumentFetchPreset) ApplyToSearchOptions(opts *VectorIndexSearchOptions) {
 	if opts == nil {
 		return
@@ -66,7 +68,8 @@ func (p VectorDocumentFetchPreset) ApplyToSearchOptions(opts *VectorIndexSearchO
 }
 
 // ApplyToSearcherSearchOptions applies p to reusable VectorIndexSearcher.Search
-// options.
+// options. It replaces opts.DocumentFetchOptions; callers that need custom fetch
+// options should apply the preset first, then set their overrides.
 func (p VectorDocumentFetchPreset) ApplyToSearcherSearchOptions(opts *VectorIndexSearcherSearchOptions) {
 	if opts == nil {
 		return
@@ -75,6 +78,11 @@ func (p VectorDocumentFetchPreset) ApplyToSearcherSearchOptions(opts *VectorInde
 	opts.DocumentFetchOptions = cloneDocumentFetchOptions(p.DocumentFetchOptions)
 }
 
+// cloneDocumentFetchOptions returns a shallow copy of opts with independent
+// slice backing arrays for IncludePaths and ExcludePaths.
+//
+// MAINTENANCE: update this function whenever DocumentFetchOptions gains new
+// reference-typed slice, map, or pointer fields.
 func cloneDocumentFetchOptions(opts DocumentFetchOptions) DocumentFetchOptions {
 	out := opts
 	out.IncludePaths = append([]string(nil), opts.IncludePaths...)
