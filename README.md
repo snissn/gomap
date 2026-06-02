@@ -71,21 +71,6 @@ Two secondary indexes, April 27 collection/SQLite matrix.
 Source:
 [April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
 
-### Collection Storage Density Workload
-
-Two secondary indexes, April 27 collection/SQLite matrix. The index-vlog rows
-move index outer leaves into the persistent value log.
-
-| engine / format | layout / maintenance | docs/sec | B/doc |
-| --- | --- | ---: | ---: |
-| TreeDB template-v1 | default index leaves | 1,079,797 | 155.10 |
-| TreeDB template-v1 | index outer leaves in value log | 941,029 | 104.90 |
-| SQLite native columns | after `VACUUM` | - | 156.40 |
-| SQLite JSON | after `VACUUM` | - | 231.40 |
-
-Source:
-[April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
-
 ### `application.db` Offline Density Workload
 
 Offline compacted-size comparison from the April 13 density report.
