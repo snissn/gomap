@@ -2228,18 +2228,13 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	watermarkHold += time.Since(holdStart)
 
 	leafPageSegmentRegistered := false
-	leafPageSegmentFileID := uint32(0)
 	valueLogSegmentRegistered := false
 	valueLogSegmentRegistrationAttempted := false
 	if db.testFailFinalizeCommit.Load() {
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
 	if forceValueLogRefresh && db.valueLogManager != nil {
-		path, fileID, ok := db.currentLeafPageLogSegment()
-		if ok {
-			leafPageSegmentFileID = fileID
-		}
-		registered, err := db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, 0)
+		registered, err := db.registerLeafPageLogSegmentsForPublish()
 		if err != nil {
 			return post, prePublishErr(err)
 		}
@@ -2319,9 +2314,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		post.persistLeafGenerationManifestView = leafManifest
 		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		leafGenerationView = newLeafGenerationView(leafManifest)
-	}
-	if leafPageSegmentRegistered && leafPageSegmentFileID != 0 {
-		db.queueLeafGenerationWritableFileIDAtCommit(leafPageSegmentFileID, nextMeta.CommitSeq)
 	}
 	if db.leafPageLog != nil {
 		stagedLeafManifest, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, nextMeta.CommitSeq)

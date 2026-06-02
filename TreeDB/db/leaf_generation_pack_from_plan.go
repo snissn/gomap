@@ -16,6 +16,8 @@ type LeafGenerationPackFromPlanOptions struct {
 	MaxBytesToCopy             int64
 	ReserveRIDs                func(count int) (start uint64, err error)
 	LeafFrameK                 int
+	ProtectedRootIDs           []uint64
+	ProtectedSystemRootIDs     []uint64
 }
 
 func leafGenerationPackFromPlanPlanOptions(opts LeafGenerationPackFromPlanOptions) LeafGenerationPlanOptions {
@@ -24,6 +26,8 @@ func leafGenerationPackFromPlanPlanOptions(opts LeafGenerationPackFromPlanOption
 		MinCandidateGenerations: opts.MinCandidateGenerations,
 		MinExpectedReclaimBytes: opts.MinExpectedReclaimBytes,
 		Force:                   opts.Force,
+		ProtectedRootIDs:        opts.ProtectedRootIDs,
+		ProtectedSystemRootIDs:  opts.ProtectedSystemRootIDs,
 	}
 }
 
@@ -38,6 +42,8 @@ func leafGenerationPackFromPlanPackOptions(opts LeafGenerationPackFromPlanOption
 		ReserveRIDs:                opts.ReserveRIDs,
 		Force:                      opts.Force,
 		LeafFrameK:                 opts.LeafFrameK,
+		ProtectedRootIDs:           opts.ProtectedRootIDs,
+		ProtectedSystemRootIDs:     opts.ProtectedSystemRootIDs,
 	}
 }
 

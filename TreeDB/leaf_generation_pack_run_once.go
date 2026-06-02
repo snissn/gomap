@@ -31,12 +31,15 @@ func (db *DB) LeafGenerationPackRunOnce(ctx context.Context, opts LeafGeneration
 		if err := db.Checkpoint(); err != nil {
 			return out, err
 		}
+		protectedRootIDs, protectedSystemRootIDs := db.cached.ProtectedLeafGenerationRootIDPair()
+		opts.ProtectedRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedRootIDs, protectedRootIDs)
+		opts.ProtectedSystemRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedSystemRootIDs, protectedSystemRootIDs)
 		if opts.ReserveRIDs == nil {
 			opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 		}
 	}
 	stats, err := db.backend.LeafGenerationPackRunOnce(ctx, treedbdb.LeafGenerationPackFromPlanOptions(opts))
-	if err != nil {
+	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return out, err
 	}
 	success = true

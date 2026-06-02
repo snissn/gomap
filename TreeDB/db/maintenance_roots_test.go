@@ -111,6 +111,40 @@ func TestMaintenanceRoots_DeduplicatesCollectionRootDescriptors(t *testing.T) {
 	requireMaintenanceRootCount(t, roots, maintenanceRootCollection, 1)
 }
 
+func TestMaintenanceRoots_PreservesDistinctRolesForSameRootID(t *testing.T) {
+	var acc maintenanceRootAccumulator
+	rootID := uint64(42)
+	acc.add(maintenanceRootUser, rootID, nil)
+	acc.add(maintenanceRootCollection, rootID, []byte(maintenanceTestCollectionRootKey))
+	acc.add(maintenanceRootCollection, rootID, []byte("collections/root/users/alias"))
+	acc.add(maintenanceRootSystem, rootID, nil)
+
+	requireMaintenanceRoot(t, acc.roots, maintenanceRootUser, rootID)
+	collectionRoot := requireMaintenanceRoot(t, acc.roots, maintenanceRootCollection, rootID)
+	if !bytes.Equal(collectionRoot.descriptorKey, []byte(maintenanceTestCollectionRootKey)) {
+		t.Fatalf("collection descriptor key=%q want %q", collectionRoot.descriptorKey, maintenanceTestCollectionRootKey)
+	}
+	requireMaintenanceRoot(t, acc.roots, maintenanceRootSystem, rootID)
+	requireMaintenanceRootCount(t, acc.roots, maintenanceRootUser, 1)
+	requireMaintenanceRootCount(t, acc.roots, maintenanceRootCollection, 1)
+	requireMaintenanceRootCount(t, acc.roots, maintenanceRootSystem, 1)
+}
+
+func TestMaintenanceRootIDsDedupesByRootID(t *testing.T) {
+	roots := []maintenanceRoot{
+		{kind: maintenanceRootUser, rootID: 7},
+		{kind: maintenanceRootCollection, rootID: 7, descriptorKey: []byte(maintenanceTestCollectionRootKey)},
+		{kind: maintenanceRootSystem, rootID: 8},
+		{kind: maintenanceRootCollection, rootID: 8, descriptorKey: []byte("collections/root/users/alias")},
+		{kind: maintenanceRootCollection, rootID: 0},
+	}
+	got := maintenanceRootIDs(roots)
+	want := []uint64{7, 8}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("maintenanceRootIDs=%v want %v", got, want)
+	}
+}
+
 func TestMaintenanceRoots_IncludesCollectionOverlayRootDescriptors(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -601,6 +635,78 @@ func TestValueLogRewritePlanningCountsCollectionRootPointers(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("collection-referenced file %d missing from chunk live-byte estimate: %+v", referenced.FileID, liveByChunk)
+	}
+}
+
+func TestMaintenanceRootScansDeduplicateRoleAliasesByRootID(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	referenced := appendPointersInNewSegment(t, dir, 0, 1, 130_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("role-alias-live|"), 64)
+	})[0]
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	batch := d.NewBatch()
+	ptrBatch, ok := batch.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch %T", batch)
+	}
+	if err := ptrBatch.SetPointer([]byte("doc/p"), referenced); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("batch write: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
+	aliasedUserRoot := d.State().RootPageID
+	if _, err := d.PublishSystemRootIterator(mustFrozenRawMemtable(t,
+		maintenanceTestCollectionRootKey, encodeMaintenanceRootID(aliasedUserRoot),
+	).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish collection alias descriptor: %v", err)
+	}
+
+	counts, _, err := d.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if got := counts[referenced.FileID]; got != 1 {
+		t.Fatalf("ref count for file %d = %d, want 1", referenced.FileID, got)
+	}
+
+	recordLen, err := d.valueLogRecordLengthForRewrite(referenced)
+	if err != nil {
+		t.Fatalf("valueLogRecordLengthForRewrite: %v", err)
+	}
+	liveByID, err := d.estimateValueLogLiveBytesBySegment(context.Background())
+	if err != nil {
+		t.Fatalf("estimateValueLogLiveBytesBySegment: %v", err)
+	}
+	if got, want := liveByID[referenced.FileID], int64(recordLen); got != want {
+		t.Fatalf("segment live bytes for file %d = %d, want %d", referenced.FileID, got, want)
+	}
+
+	chunkBytes := int64(16 << 20)
+	chunkOffset, err := valueLogChunkOffsetForPtr(referenced, chunkBytes)
+	if err != nil {
+		t.Fatalf("valueLogChunkOffsetForPtr: %v", err)
+	}
+	liveByChunk, err := d.estimateValueLogLiveBytesByChunk(context.Background(), chunkBytes)
+	if err != nil {
+		t.Fatalf("estimateValueLogLiveBytesByChunk: %v", err)
+	}
+	chunkKey := valueLogChunkKey{fileID: referenced.FileID, chunkOffset: chunkOffset}
+	if got, want := liveByChunk[chunkKey], int64(recordLen); got != want {
+		t.Fatalf("chunk live bytes for %+v = %d, want %d", chunkKey, got, want)
 	}
 }
 

@@ -210,6 +210,179 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	rootTable := mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+	rootID, err := db.PublishOrderedRootIterator(0, rootTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+	if rootID == 0 {
+		t.Fatal("expected non-zero detached root")
+	}
+	if state := db.State(); state.RootPageID == rootID || state.SystemRootPageID == rootID {
+		t.Fatalf("test requires detached root, got state roots user=%d system=%d detached=%d", state.RootPageID, state.SystemRootPageID, rootID)
+	}
+
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	refs := collectLeafRefIDsFromRoot(t, db, rootID)
+	if len(refs) == 0 {
+		t.Fatalf("expected detached root %d to contain leaf-log refs", rootID)
+	}
+	refsFile := false
+	for ptr := range refs {
+		if ptr.FileID == rawFileID1 {
+			refsFile = true
+			break
+		}
+	}
+	if !refsFile {
+		t.Fatalf("detached root refs do not include raw file id %d: %+v", rawFileID1, refs)
+	}
+
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "current", 1, 'z')
+
+	probe, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC dry-run: %v", err)
+	}
+	if got := probe.GenerationsEligible; got == 0 {
+		t.Fatalf("GenerationsEligible=%d want detached generation eligible without protection (stats=%+v)", got, probe)
+	}
+
+	stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{
+		ProtectedRootIDs: []uint64{0, rootID, rootID},
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC protected: %v", err)
+	}
+	if got := stats.GenerationsLive; got == 0 {
+		t.Fatalf("GenerationsLive=%d want protected detached generation live (stats=%+v)", got, stats)
+	}
+	if got := stats.GenerationsDeleted; got != 0 {
+		t.Fatalf("GenerationsDeleted=%d want 0 for protected detached root (stats=%+v)", got, stats)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("expected protected leaf segment to remain: %v", err)
+	}
+}
+
+func TestLeafGenerationPlan_ProtectedOrdinaryRootDoesNotParseDescriptors(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+
+	rootTable := mustFrozenRawMemtable(
+		t,
+		collectionRootDescriptorPrefix+"ordinary-user-key", encodeMaintenanceRootID(123456789),
+		"doc/a", []byte("value-a"),
+	)
+	rootID, err := db.PublishOrderedRootIterator(0, rootTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		ProtectedRootIDs: []uint64{rootID},
+	}); err != nil {
+		t.Fatalf("LeafGenerationPlan with protected ordinary root: %v", err)
+	}
+}
+
+func TestLeafGenerationPlan_ProtectedRootDescriptorReadErrorFailsClosed(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+
+	missingPtr := page.ValuePtr{
+		FileID: page.ValueLogFileID(99),
+		Offset: 8,
+		Length: 8,
+	}
+	rootID, err := db.PublishOrderedRootIterator(
+		0,
+		mustFrozenSystemPointerMemtable(t, maintenanceTestCollectionRootKey, missingPtr).NewIterator(nil, nil),
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		ProtectedSystemRootIDs: []uint64{rootID},
+	}); err == nil {
+		t.Fatal("LeafGenerationPlan with protected pointer-backed descriptor succeeded; want fail-closed read error")
+	}
+}
+
+func TestLeafGenerationGC_ProtectedSystemRootDescriptorsKeepCollectionRootLive(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	collectionRootID, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator collection: %v", err)
+	}
+	if collectionRootID == 0 {
+		t.Fatal("expected non-zero collection root")
+	}
+	refs := collectLeafRefIDsFromRoot(t, db, collectionRootID)
+	if len(refs) == 0 {
+		t.Fatalf("expected collection root %d to contain leaf-log refs", collectionRootID)
+	}
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	refsFile := false
+	for ptr := range refs {
+		if ptr.FileID == rawFileID1 {
+			refsFile = true
+			break
+		}
+	}
+	if !refsFile {
+		t.Fatalf("collection root refs do not include raw file id %d: %+v", rawFileID1, refs)
+	}
+
+	systemRootID, err := db.PublishOrderedRootIterator(0, mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(collectionRootID)).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator system: %v", err)
+	}
+	if systemRootID == 0 {
+		t.Fatal("expected non-zero system root")
+	}
+	if state := db.State(); state.RootPageID == collectionRootID || state.SystemRootPageID == systemRootID {
+		t.Fatalf("test requires detached roots, got state user=%d system=%d collection=%d protectedSystem=%d", state.RootPageID, state.SystemRootPageID, collectionRootID, systemRootID)
+	}
+
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "current", 1, 'z')
+
+	probe, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC dry-run: %v", err)
+	}
+	if got := probe.GenerationsEligible; got == 0 {
+		t.Fatalf("GenerationsEligible=%d want descriptor collection generation eligible without protection (stats=%+v)", got, probe)
+	}
+
+	stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{
+		ProtectedSystemRootIDs: []uint64{systemRootID},
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC protected: %v", err)
+	}
+	if got := stats.GenerationsLive; got == 0 {
+		t.Fatalf("GenerationsLive=%d want protected descriptor collection generation live (stats=%+v)", got, stats)
+	}
+	if got := stats.GenerationsDeleted; got != 0 {
+		t.Fatalf("GenerationsDeleted=%d want 0 for protected system descriptor root (stats=%+v)", got, stats)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("expected protected descriptor leaf segment to remain: %v", err)
+	}
+}
+
 func TestLeafGenerationGC_IgnoresStaleReachabilityCache(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 

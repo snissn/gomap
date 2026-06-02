@@ -40,6 +40,27 @@ type vacuumCollectionRootReplacement struct {
 
 type vacuumCollectionRootRewriteFunc func(vacuumCollectionRootDescriptor) (uint64, error)
 
+type collectionRootDescriptorShapeError struct {
+	key     []byte
+	length  int
+	overlay bool
+}
+
+func (e *collectionRootDescriptorShapeError) Error() string {
+	if e == nil {
+		return "vacuum: malformed collection root descriptor"
+	}
+	if e.overlay {
+		return fmt.Sprintf("vacuum: collection root overlay descriptor %q has malformed root id list length %d", string(e.key), e.length)
+	}
+	return fmt.Sprintf("vacuum: collection root descriptor %q has malformed root id length %d", string(e.key), e.length)
+}
+
+func isCollectionRootDescriptorShapeError(err error) bool {
+	var shapeErr *collectionRootDescriptorShapeError
+	return errors.As(err, &shapeErr)
+}
+
 type vacuumAllocator interface {
 	Alloc(hint uint64) (uint64, error)
 }
@@ -152,12 +173,12 @@ func decodeCollectionRootDescriptorRootIDs(key, val []byte, allowList bool) ([]u
 	}
 	if !allowList {
 		if len(val) != 8 {
-			return nil, fmt.Errorf("vacuum: collection root descriptor %q has malformed root id length %d", string(key), len(val))
+			return nil, &collectionRootDescriptorShapeError{key: append([]byte(nil), key...), length: len(val)}
 		}
 		return []uint64{binary.BigEndian.Uint64(val)}, nil
 	}
 	if len(val)%8 != 0 {
-		return nil, fmt.Errorf("vacuum: collection root overlay descriptor %q has malformed root id list length %d", string(key), len(val))
+		return nil, &collectionRootDescriptorShapeError{key: append([]byte(nil), key...), length: len(val), overlay: true}
 	}
 	out := make([]uint64, len(val)/8)
 	for i := range out {

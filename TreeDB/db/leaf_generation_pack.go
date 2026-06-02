@@ -26,6 +26,8 @@ type LeafGenerationPackOptions struct {
 	ReserveRIDs                func(count int) (start uint64, err error)
 	Force                      bool
 	LeafFrameK                 int
+	ProtectedRootIDs           []uint64
+	ProtectedSystemRootIDs     []uint64
 }
 
 type LeafGenerationPackStats struct {
@@ -249,6 +251,8 @@ func leafGenerationPackPlanOptions(opts LeafGenerationPackOptions) LeafGeneratio
 		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
 		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
 		Force:                      opts.Force,
+		ProtectedRootIDs:           opts.ProtectedRootIDs,
+		ProtectedSystemRootIDs:     opts.ProtectedSystemRootIDs,
 	}
 }
 

@@ -89,6 +89,7 @@ type lane struct {
 	vlogLiveBytes                  atomic.Int64
 	vlogClosedBytes                atomic.Int64
 	vlogClosedSizes                map[string]int64
+	vlogCreatedSegments            []laneValueLogSegment
 
 	// Observability counters for diagnosing pathological lane shapes (e.g. huge l0).
 	// These are incremented on segment rotation and allow distinguishing useful
@@ -97,6 +98,11 @@ type lane struct {
 	vlogRotateIdleTotal atomic.Uint64
 
 	syncing atomic.Bool
+}
+
+type laneValueLogSegment struct {
+	path   string
+	fileID uint32
 }
 
 const (
