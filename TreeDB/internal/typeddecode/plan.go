@@ -465,7 +465,7 @@ func FixedBytesPlan(cert typedcolumn.ColumnPartLayoutContractColumn, bytesPerRow
 }
 
 // PackedUintVectorPlan selects a direct-view candidate only for writer-certified
-// packed_uint{1,2,4}_vector sections. The returned direct view is a byte payload;
+// packed_bit_vector / packed_uint{2,4}_vector sections. The returned direct view is a byte payload;
 // BitsPerElement and LogicalBitsPerRow describe packed-code interpretation.
 func PackedUintVectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, logical columnsemantics.LogicalType, elementsPerRow int, bitsPerElement int) Plan {
 	rowBytes, err := typedcolumn.PackedUintRowBytes(elementsPerRow, bitsPerElement)
