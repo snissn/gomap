@@ -251,7 +251,7 @@ func TestMutationUpdateBSONSetRejectsInvalidRequests(t *testing.T) {
 		t.Fatalf("duplicate field err=%v want invalid command", err)
 	}
 
-	for _, badKey := range []string{"", "_id", "$set", "a.b", "a\x00b"} {
+	for _, badKey := range []string{"", "_id", "$set", "a.b", "a\x00b", string([]byte{0xff})} {
 		_, _, err := client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
 			{Key: badKey, Value: mustNativewireBSONRawValue(t, "a")},
 		}, AckVisible)

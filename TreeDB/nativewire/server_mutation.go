@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -565,6 +566,9 @@ func validateNativewireBSONSetFieldKey(key string) error {
 	}
 	if strings.Contains(key, "\x00") {
 		return errInvalidBSONSetField("field names cannot contain NUL")
+	}
+	if !utf8.ValidString(key) {
+		return errInvalidBSONSetField("field name must be valid UTF-8")
 	}
 	return nil
 }
