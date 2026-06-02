@@ -410,7 +410,7 @@ func DenseFixedWidthVectorBytesPlan(cert typedcolumn.ColumnPartLayoutContractCol
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
 		Logical:            logical,
 		Physical:           physical,
-		Encoding:           cert.Encoding,
+		Encoding:           encoding,
 		Compression:        cert.Compression,
 		Nullable:           cert.NullMaskPresent || cert.NullCount != 0,
 		Defaultable:        cert.DefaultMaskPresent || cert.DefaultCount != 0,
