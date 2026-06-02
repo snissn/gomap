@@ -495,7 +495,7 @@ Insert/update rows must have `Deleted=false` and exactly one value per declared
 owners, a `TCPA` row asset is still published for row IDs/tombstones and any
 row-owned fields; the matching `tcs1_typed_column_part` for the same non-delete
 generation contains authoritative scalar, fixed-dimension `float32_vector`,
-#1930 dense numeric vector, and non-null variable-width `uint32_list`
+Issue #1930 dense numeric vector, and non-null variable-width `uint32_list`
 typed-column values keyed by row index.
 Latest-visible readers resolve document identity from the typed-row
 row/tombstone assets first, then read the typed-column part for the winning

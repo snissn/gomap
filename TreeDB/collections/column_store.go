@@ -911,7 +911,7 @@ func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetada
 		if !ok {
 			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
 		}
-		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueBytes || valueType == ColumnStoreValueAdjacencyList {
+		if valueType == ColumnStoreValueFloat32Vector || columnStoreValueTypeIsDenseNumericVector(valueType) || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueBytes || valueType == ColumnStoreValueAdjacencyList {
 			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
 		}
 		if aggregate.GroupColumn == "" {
@@ -940,7 +940,7 @@ func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetada
 		if !ok {
 			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
 		}
-		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueBytes || valueType == ColumnStoreValueAdjacencyList {
+		if valueType == ColumnStoreValueFloat32Vector || columnStoreValueTypeIsDenseNumericVector(valueType) || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueBytes || valueType == ColumnStoreValueAdjacencyList {
 			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
 		}
 	}

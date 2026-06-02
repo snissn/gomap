@@ -478,6 +478,27 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "does not support",
 		},
 		{
+			name: "dense numeric vector min aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString},
+					{Name: "codes", Path: "codes", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueUint16Vector, ElementsPerRow: 3},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_codes", Column: "codes", GroupColumn: "kind", Kind: ColumnAggregateMin}},
+			},
+			want: "does not support",
+		},
+		{
+			name: "dense numeric vector count distinct aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled:           true,
+				Columns:           []ColumnStoreColumn{{Name: "codes", Path: "codes", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueUint16Vector, ElementsPerRow: 3}},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "distinct_codes", Column: "codes", Kind: ColumnAggregateCountDistinct}},
+			},
+			want: "does not support",
+		},
+		{
 			name: "string sum aggregate rejected",
 			cfg: &ColumnStoreConfig{
 				Enabled:           true,

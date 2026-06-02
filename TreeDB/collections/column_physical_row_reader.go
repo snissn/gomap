@@ -485,6 +485,7 @@ func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowRea
 	scratch.Values = scratch.Values[:0]
 	scratch.Float32Values = scratch.Float32Values[:0]
 	scratch.Uint32Values = scratch.Uint32Values[:0]
+	scratch.Bytes = scratch.Bytes[:0]
 	if deleted {
 		if block.header.Operation != ColumnPublishOperationDelete {
 			return columnPhysicalRowReaderRow{}, fmt.Errorf("column physical asset %s row[%d] is marked deleted", block.header.Operation, rowIndex)

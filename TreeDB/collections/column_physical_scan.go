@@ -2164,13 +2164,18 @@ func parseColumnPhysicalAssetScanHeader(raw []byte, ref ColumnAssetRef, expected
 			return columnPhysicalAssetScanHeader{}, 0, 0, cur.err
 		}
 		want := cfg.Columns[colIdx]
+		gotValueType := ColumnStoreValueType(string(valueType))
+		geometryMatches := vectorDims == want.VectorDims && elementsPerRow == want.ElementsPerRow
+		if gotValueType == ColumnStoreValueFloat32Vector && want.ValueType == ColumnStoreValueFloat32Vector {
+			gotWidth := columnStoreFloat32VectorElementsPerRow(ColumnStoreColumn{ValueType: gotValueType, VectorDims: vectorDims, ElementsPerRow: elementsPerRow})
+			geometryMatches = gotWidth == columnStoreFloat32VectorElementsPerRow(want)
+		}
 		if !columnPhysicalBytesEqualString(name, want.Name) ||
 			!columnPhysicalBytesEqualString(path, want.Path) ||
-			!columnPhysicalBytesEqualString(valueType, string(want.ValueType)) ||
+			gotValueType != want.ValueType ||
 			nullable != want.Nullable ||
 			dictionary != want.Dictionary ||
-			vectorDims != want.VectorDims ||
-			elementsPerRow != want.ElementsPerRow ||
+			!geometryMatches ||
 			fixedWidthEncoding != want.FixedWidthEncoding {
 			return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d ElementsPerRow:%d FixedWidthEncoding:%q} want %+v",
 				colIdx, string(name), string(path), string(valueType), nullable, dictionary, vectorDims, elementsPerRow, fixedWidthEncoding, want)

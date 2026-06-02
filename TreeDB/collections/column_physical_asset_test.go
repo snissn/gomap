@@ -318,6 +318,27 @@ func TestColumnPhysicalAssetVectorValueTypesRoundTrip(t *testing.T) {
 	if visited != 1 {
 		t.Fatalf("visited=%d want 1", visited)
 	}
+
+	aliasConfig := *normalized
+	aliasConfig.Columns = append([]ColumnStoreColumn(nil), normalized.Columns...)
+	aliasConfig.Columns[0].ElementsPerRow = aliasConfig.Columns[0].VectorDims
+	aliasConfig.SchemaHash = hashColumnStoreSchema(&aliasConfig)
+	if aliasConfig.SchemaHash != normalized.SchemaHash {
+		t.Fatalf("alias schema hash=%x want %x", aliasConfig.SchemaHash, normalized.SchemaHash)
+	}
+	aliasProjection, err := newColumnPhysicalScanProjection(aliasConfig, []string{"embedding"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection alias: %v", err)
+	}
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", &aliasConfig, aliasProjection, func(row columnPhysicalScanRowView) error {
+		if got := row.Values[0].Float32Vector; len(got) != 3 || got[2] != -0.25 {
+			t.Fatalf("alias scanned vector=%v", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalAssetRows alias cfg: %v", err)
+	}
 }
 
 func TestColumnPhysicalAssetDenseNumericVectorRoundTrip1930(t *testing.T) {

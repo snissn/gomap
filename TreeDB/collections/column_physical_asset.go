@@ -860,16 +860,12 @@ func validateColumnDeclaredPhysicalValueShape(col ColumnStoreColumn, value colum
 			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", len(value.Float32Vector), dims)
 		}
 	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
-		width, ok := columnStoreDenseNumericVectorWidth(col.ValueType)
-		if !ok {
-			return fmt.Errorf("unsupported dense numeric vector value_type=%s", col.ValueType)
+		want, err := columnStoreDenseNumericVectorRowBytes(col)
+		if err != nil {
+			return err
 		}
-		if col.ElementsPerRow <= 0 {
-			return fmt.Errorf("%s column has invalid elements_per_row=%d", col.ValueType, col.ElementsPerRow)
-		}
-		want := col.ElementsPerRow * width
 		if len(value.DenseNumericVector) != want {
-			return fmt.Errorf("%s bytes=%d want elements_per_row=%d width=%d bytes=%d", col.ValueType, len(value.DenseNumericVector), col.ElementsPerRow, width, want)
+			return fmt.Errorf("%s bytes=%d want elements_per_row=%d bytes=%d", col.ValueType, len(value.DenseNumericVector), col.ElementsPerRow, want)
 		}
 	case ColumnStoreValueUint32List:
 		if !value.Present || value.Null {
