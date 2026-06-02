@@ -4575,12 +4575,17 @@ func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
 
 func (db *DB) leafGenerationGCOptions() backenddb.LeafGenerationGCOptions {
 	return backenddb.LeafGenerationGCOptions{
-		ProtectedRootIDs: db.publishedRootIDsForLeafGenerationGC(),
+		ProtectedRootIDs:       db.publishedRootIDsForLeafGenerationGC(),
+		ProtectedSystemRootIDs: db.publishedSystemRootIDsForLeafGenerationGC(),
 	}
 }
 
 func (db *DB) ProtectedLeafGenerationRootIDs() []uint64 {
 	return db.publishedRootIDsForLeafGenerationGC()
+}
+
+func (db *DB) ProtectedLeafGenerationSystemRootIDs() []uint64 {
+	return db.publishedSystemRootIDsForLeafGenerationGC()
 }
 
 func (db *DB) publishedRootIDsForLeafGenerationGC() []uint64 {
@@ -4591,6 +4596,19 @@ func (db *DB) publishedRootIDsForLeafGenerationGC() []uint64 {
 	published := clonePublishedRootSet(db.rootPublishedSet)
 	db.mu.RUnlock()
 	return publishedRootSetRootIDs(published)
+}
+
+func (db *DB) publishedSystemRootIDsForLeafGenerationGC() []uint64 {
+	if db == nil {
+		return nil
+	}
+	db.mu.RLock()
+	published := clonePublishedRootSet(db.rootPublishedSet)
+	db.mu.RUnlock()
+	if published == nil || published.system.rootID == 0 {
+		return nil
+	}
+	return []uint64{published.system.rootID}
 }
 
 func publishedRootSetRootIDs(set *publishedRootSet) []uint64 {
@@ -17683,10 +17701,11 @@ planned:
 				// Maintenance rewrites are throughput-sensitive and operate on large
 				// source segments; group rewrite candidates by old segment+offset to
 				// improve value-log read locality and reduce wall-time.
-				LocalityPolicy:                 backenddb.ValueLogRewriteLocalityGrouped,
-				ProtectedPaths:                 db.valueLogProtectedPaths(),
-				LeafGenerationProtectedRootIDs: db.publishedRootIDsForLeafGenerationGC(),
-				ReserveRIDs:                    db.ReserveValueLogRIDs,
+				LocalityPolicy:                       backenddb.ValueLogRewriteLocalityGrouped,
+				ProtectedPaths:                       db.valueLogProtectedPaths(),
+				LeafGenerationProtectedRootIDs:       db.publishedRootIDsForLeafGenerationGC(),
+				LeafGenerationProtectedSystemRootIDs: db.publishedSystemRootIDsForLeafGenerationGC(),
+				ReserveRIDs:                          db.ReserveValueLogRIDs,
 			}
 			processedRewriteIDs := []uint32(nil)
 			processedRewriteChunks := []backenddb.ValueLogRewritePlanChunk(nil)
@@ -24641,6 +24660,7 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 				MaxBytesToCopy:             remainingBytesToCopy,
 				ReserveRIDs:                db.ReserveValueLogRIDs,
 				ProtectedRootIDs:           db.publishedRootIDsForLeafGenerationGC(),
+				ProtectedSystemRootIDs:     db.publishedSystemRootIDsForLeafGenerationGC(),
 			})
 			if runErr != nil {
 				return runErr

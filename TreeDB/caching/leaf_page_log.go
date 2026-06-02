@@ -32,6 +32,13 @@ func (l *cachingLeafPageLog) ProtectedLeafGenerationRootIDs() []uint64 {
 	return l.db.publishedRootIDsForLeafGenerationGC()
 }
 
+func (l *cachingLeafPageLog) ProtectedLeafGenerationSystemRootIDs() []uint64 {
+	if l == nil || l.db == nil {
+		return nil
+	}
+	return l.db.publishedSystemRootIDsForLeafGenerationGC()
+}
+
 func (l *cachingLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]backenddb.LeafPageLogSegment, error) {
 	if l == nil || l.lane == nil {
 		return nil, nil

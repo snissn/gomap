@@ -95,6 +95,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			}
 		}
 		backendOpts.LeafGenerationProtectedRootIDs = mergeCompactStorageProtectedRootIDs(backendOpts.LeafGenerationProtectedRootIDs, db.cached.ProtectedLeafGenerationRootIDs())
+		backendOpts.LeafGenerationProtectedSystemRootIDs = mergeCompactStorageProtectedRootIDs(backendOpts.LeafGenerationProtectedSystemRootIDs, db.cached.ProtectedLeafGenerationSystemRootIDs())
 		if backendOpts.ReserveRIDs == nil {
 			backendOpts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 		}

@@ -680,7 +680,7 @@ func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 	if len(snap.leafGenerationIDs) > 0 {
 		snap.releaseLeafGenerationPins()
 	}
-	if _, err := collectLiveLeafGenerationIDs(context.Background(), snap, nil); err != nil {
+	if _, err := collectLiveLeafGenerationIDs(context.Background(), snap, nil, nil); err != nil {
 		_ = snap.Close()
 		t.Fatalf("collectLiveLeafGenerationIDs: %v", err)
 	}

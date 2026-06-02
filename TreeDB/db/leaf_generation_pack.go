@@ -27,6 +27,7 @@ type LeafGenerationPackOptions struct {
 	Force                      bool
 	LeafFrameK                 int
 	ProtectedRootIDs           []uint64
+	ProtectedSystemRootIDs     []uint64
 }
 
 type LeafGenerationPackStats struct {
@@ -251,6 +252,7 @@ func leafGenerationPackPlanOptions(opts LeafGenerationPackOptions) LeafGeneratio
 		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
 		Force:                      opts.Force,
 		ProtectedRootIDs:           opts.ProtectedRootIDs,
+		ProtectedSystemRootIDs:     opts.ProtectedSystemRootIDs,
 	}
 }
 

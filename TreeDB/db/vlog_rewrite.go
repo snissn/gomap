@@ -192,6 +192,9 @@ type ValueLogRewriteOnlineOptions struct {
 	// LeafGenerationProtectedRootIDs are additional roots to preserve if rewrite
 	// cleanup runs leaf-generation GC after publishing rewritten value pointers.
 	LeafGenerationProtectedRootIDs []uint64
+	// LeafGenerationProtectedSystemRootIDs are system roots whose collection
+	// descriptors should be expanded if rewrite cleanup runs leaf-generation GC.
+	LeafGenerationProtectedSystemRootIDs []uint64
 	// MaxSourceSegments bounds the number of source segments selected by sparse
 	// segment selection. Applies only when SourceFileIDs is empty.
 	MaxSourceSegments int
@@ -2186,7 +2189,8 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	if db.indexOuterLeavesInValueLog && stats.RecordsCopied > 0 {
 		if _, err := db.leafGenerationGC(context.WithoutCancel(ctx), LeafGenerationGCOptions{
-			ProtectedRootIDs: db.valueLogRewriteLeafGenerationProtectedRootIDs(opts),
+			ProtectedRootIDs:       db.valueLogRewriteLeafGenerationProtectedRootIDs(opts),
+			ProtectedSystemRootIDs: db.valueLogRewriteLeafGenerationProtectedSystemRootIDs(opts),
 		}, false); err != nil {
 			return stats, err
 		}
@@ -2212,6 +2216,13 @@ func (db *DB) valueLogRewriteLeafGenerationProtectedRootIDs(opts ValueLogRewrite
 	var out []uint64
 	out = appendCompactStorageProtectedRootIDs(out, opts.LeafGenerationProtectedRootIDs)
 	out = appendCompactStorageProtectedRootIDs(out, db.protectedLeafGenerationRootIDsFromLeafPageLog())
+	return out
+}
+
+func (db *DB) valueLogRewriteLeafGenerationProtectedSystemRootIDs(opts ValueLogRewriteOnlineOptions) []uint64 {
+	var out []uint64
+	out = appendCompactStorageProtectedRootIDs(out, opts.LeafGenerationProtectedSystemRootIDs)
+	out = appendCompactStorageProtectedRootIDs(out, db.protectedLeafGenerationSystemRootIDsFromLeafPageLog())
 	return out
 }
 

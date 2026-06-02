@@ -275,10 +275,10 @@ func TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive(t *testing.T) {
 func TestLeafGenerationPlan_ProtectedOrdinaryRootDoesNotParseDescriptors(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 
-	rootTable := mustFrozenSystemMemtable(
+	rootTable := mustFrozenRawMemtable(
 		t,
-		collectionRootDescriptorPrefix+"ordinary-user-key", "not-a-root-id",
-		"doc/a", "value-a",
+		collectionRootDescriptorPrefix+"ordinary-user-key", encodeMaintenanceRootID(123456789),
+		"doc/a", []byte("value-a"),
 	)
 	rootID, err := db.PublishOrderedRootIterator(0, rootTable.NewIterator(nil, nil))
 	if err != nil {
@@ -309,7 +309,7 @@ func TestLeafGenerationPlan_ProtectedRootDescriptorReadErrorFailsClosed(t *testi
 	}
 
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
-		ProtectedRootIDs: []uint64{rootID},
+		ProtectedSystemRootIDs: []uint64{rootID},
 	}); err == nil {
 		t.Fatal("LeafGenerationPlan with protected pointer-backed descriptor succeeded; want fail-closed read error")
 	}
@@ -367,7 +367,7 @@ func TestLeafGenerationGC_ProtectedSystemRootDescriptorsKeepCollectionRootLive(t
 	}
 
 	stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{
-		ProtectedRootIDs: []uint64{systemRootID},
+		ProtectedSystemRootIDs: []uint64{systemRootID},
 	})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC protected: %v", err)

@@ -2672,6 +2672,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 
 	rootIDs := make([]uint64, len(ordered))
 	orderedConsumed := make([]bool, len(ordered))
+	var touchedValueLogSegments []uint32
 	defer closeUnconsumedOrderedRootPublishIterators(ordered, orderedConsumed)
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
@@ -2679,10 +2680,12 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 			return 0, nil, err
 		}
 		orderedConsumed[idx] = true
-		rootID, rootRetired, metrics, _, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts, false)
+		touchedIter := &orderedRootTouchedIterator{UnsafeIterator: ordered[idx].Iter}
+		rootID, rootRetired, metrics, _, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, touchedIter, opts, false)
 		if err != nil {
 			return 0, nil, err
 		}
+		touchedValueLogSegments = append(touchedValueLogSegments, touchedIter.touchedValueLogSegments...)
 		rootIDs[idx] = rootID
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
@@ -2720,7 +2723,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	}
 
 	forceRefTrackerRebuild := systemStats.collectionRootDescriptorReachabilityMayChange()
-	touchedValueLogSegments := positiveValueLogRefDeltaFileIDs(vlogRefDelta, nil)
+	touchedValueLogSegments = positiveValueLogRefDeltaFileIDs(vlogRefDelta, touchedValueLogSegments)
 	if forceRefTrackerRebuild {
 		// Collection descriptors make non-system roots part of value-log
 		// reachability. The system-root ref delta alone is not an exact commit

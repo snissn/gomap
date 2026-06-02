@@ -92,6 +92,11 @@ func TestLeafGenerationGCOptionsIncludePublishedRoots(t *testing.T) {
 	if !uint64SlicesEqual(got, want) {
 		t.Fatalf("ProtectedRootIDs=%v want %v", got, want)
 	}
+	gotSystem := db.leafGenerationGCOptions().ProtectedSystemRootIDs
+	wantSystem := []uint64{33}
+	if !uint64SlicesEqual(gotSystem, wantSystem) {
+		t.Fatalf("ProtectedSystemRootIDs=%v want %v", gotSystem, wantSystem)
+	}
 }
 
 func mustBackendUserPointer(tb testing.TB, backend *backenddb.DB, key []byte) page.ValuePtr {

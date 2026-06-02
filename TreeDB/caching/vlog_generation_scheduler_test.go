@@ -1530,7 +1530,10 @@ func (b *rewriteBudgetRecordingBackend) LeafGenerationPackRunOnce(ctx context.Co
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.leafPackCalls++
-	b.leafPackOpts = opts
+	cloned := opts
+	cloned.ProtectedRootIDs = append([]uint64(nil), opts.ProtectedRootIDs...)
+	cloned.ProtectedSystemRootIDs = append([]uint64(nil), opts.ProtectedSystemRootIDs...)
+	b.leafPackOpts = cloned
 	resp := b.leafPackResp
 	if len(b.leafPackResponses) > 0 {
 		idx := b.leafPackCalls - 1
@@ -1565,6 +1568,7 @@ func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backen
 	cloned.SourceChunks = append([]backenddb.ValueLogRewritePlanChunk(nil), opts.SourceChunks...)
 	cloned.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
 	cloned.LeafGenerationProtectedRootIDs = append([]uint64(nil), opts.LeafGenerationProtectedRootIDs...)
+	cloned.LeafGenerationProtectedSystemRootIDs = append([]uint64(nil), opts.LeafGenerationProtectedSystemRootIDs...)
 	return cloned
 }
 
@@ -1646,6 +1650,7 @@ func (b *leafPackMaintenanceRecordingBackend) LeafGenerationPackRunOnce(ctx cont
 	b.calls++
 	cloned := opts
 	cloned.ProtectedRootIDs = append([]uint64(nil), opts.ProtectedRootIDs...)
+	cloned.ProtectedSystemRootIDs = append([]uint64(nil), opts.ProtectedSystemRootIDs...)
 	b.opts = cloned
 	b.optsHistory = append(b.optsHistory, cloned)
 	b.deadline, b.hasDeadline = ctx.Deadline()
@@ -1691,6 +1696,7 @@ func (b *leafPackMaintenanceRecordingBackend) LeafGenerationGC(ctx context.Conte
 	b.leafGCCalls++
 	cloned := opts
 	cloned.ProtectedRootIDs = append([]uint64(nil), opts.ProtectedRootIDs...)
+	cloned.ProtectedSystemRootIDs = append([]uint64(nil), opts.ProtectedSystemRootIDs...)
 	b.leafGCOpts = append(b.leafGCOpts, cloned)
 	stats := b.leafGCResp
 	if len(b.leafGCResponses) > 0 {
@@ -1719,6 +1725,7 @@ func (b *leafPackMaintenanceRecordingBackend) recordedLeafPackHistory() []backen
 	for i := range b.optsHistory {
 		history[i] = b.optsHistory[i]
 		history[i].ProtectedRootIDs = append([]uint64(nil), b.optsHistory[i].ProtectedRootIDs...)
+		history[i].ProtectedSystemRootIDs = append([]uint64(nil), b.optsHistory[i].ProtectedSystemRootIDs...)
 	}
 	return history
 }
@@ -1744,6 +1751,7 @@ func (b *leafPackMaintenanceRecordingBackend) recordedLeafGCOptions() []backendd
 	for i := range b.leafGCOpts {
 		opts[i] = b.leafGCOpts[i]
 		opts[i].ProtectedRootIDs = append([]uint64(nil), b.leafGCOpts[i].ProtectedRootIDs...)
+		opts[i].ProtectedSystemRootIDs = append([]uint64(nil), b.leafGCOpts[i].ProtectedSystemRootIDs...)
 	}
 	return opts
 }
@@ -2163,8 +2171,12 @@ func TestLeafGenerationPackMaintenance_ProtectsPublishedRootsDuringLeafGC(t *tes
 		t.Fatalf("leaf pack history=%d want 1", len(history))
 	}
 	want := []uint64{101, 202, 303}
+	wantSystem := []uint64{303}
 	if !uint64SlicesEqual(history[0].ProtectedRootIDs, want) {
 		t.Fatalf("pack ProtectedRootIDs=%v want %v", history[0].ProtectedRootIDs, want)
+	}
+	if !uint64SlicesEqual(history[0].ProtectedSystemRootIDs, wantSystem) {
+		t.Fatalf("pack ProtectedSystemRootIDs=%v want %v", history[0].ProtectedSystemRootIDs, wantSystem)
 	}
 	opts := recorder.recordedLeafGCOptions()
 	if len(opts) != 1 {
@@ -2172,6 +2184,9 @@ func TestLeafGenerationPackMaintenance_ProtectsPublishedRootsDuringLeafGC(t *tes
 	}
 	if !uint64SlicesEqual(opts[0].ProtectedRootIDs, want) {
 		t.Fatalf("gc ProtectedRootIDs=%v want %v", opts[0].ProtectedRootIDs, want)
+	}
+	if !uint64SlicesEqual(opts[0].ProtectedSystemRootIDs, wantSystem) {
+		t.Fatalf("gc ProtectedSystemRootIDs=%v want %v", opts[0].ProtectedSystemRootIDs, wantSystem)
 	}
 }
 
