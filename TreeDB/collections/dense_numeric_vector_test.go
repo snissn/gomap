@@ -157,6 +157,22 @@ func TestTypedColumnDenseNumericVectorSelectedRows1930(t *testing.T) {
 		t.Fatalf("selected diagnostics=%+v want one decoded dense vector row/block", selectedDiag)
 	}
 
+	corruptPart := typedColumnAdapterBuildPart(t, field, values)
+	partColumn := corruptPart.Part.Columns[field.Name]
+	if len(partColumn.Blocks) < 2 {
+		t.Fatalf("dense vector fixture blocks=%d want at least 2", len(partColumn.Blocks))
+	}
+	partColumn.Blocks[1].Granule.Payload = []byte{0}
+	corruptPart.Part.Columns[field.Name] = partColumn
+	bounded, boundedDiag, err := corruptPart.scanColumnValuesRows(field.Name, []int{1})
+	if err != nil {
+		t.Fatalf("selected scan decoded unselected corrupt block: %v", err)
+	}
+	assertDenseNumericVectorDeclaredValuesEqual1930(t, bounded, []columnDeclaredValue{values[1]})
+	if boundedDiag.BlocksDecoded != 1 || boundedDiag.RowsScanned != 1 {
+		t.Fatalf("bounded diagnostics=%+v want one selected block/row", boundedDiag)
+	}
+
 	decoded, decodedDiag, err := part.scanDecodedValuesSelectedRows(nil, nil)
 	if err != nil {
 		t.Fatalf("scanDecodedValuesSelectedRows all rows: %v", err)
