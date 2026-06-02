@@ -340,6 +340,24 @@ func buildInt64BlockStats(reader *GranuleReader, columnType ColumnType, index in
 	if g.NullCount != 0 || g.DefaultCount != 0 {
 		return Int64BlockStats{}, fmt.Errorf("non-null int64-compatible integer stats for %s got null/default counts %d/%d", columnType, g.NullCount, g.DefaultCount)
 	}
+	if columnType == ColumnTypeInt64 {
+		cursor, err := reader.Int64Cursor(g)
+		if err != nil {
+			return Int64BlockStats{}, err
+		}
+		for row := 0; row < g.Rows; row++ {
+			value, err := cursor.Next()
+			if err != nil {
+				return Int64BlockStats{}, err
+			}
+			stats.addValueToSum(value)
+		}
+		if err := cursor.Finish(); err != nil {
+			return Int64BlockStats{}, err
+		}
+		return stats, nil
+	}
+
 	values, err := reader.DecodeIntegerAsInt64Into(nil, columnType, g)
 	if err != nil {
 		return Int64BlockStats{}, err
@@ -348,18 +366,22 @@ func buildInt64BlockStats(reader *GranuleReader, columnType ColumnType, index in
 		return Int64BlockStats{}, fmt.Errorf("decoded values=%d want rows=%d", len(values), g.Rows)
 	}
 	for _, value := range values {
-		if !stats.SumValid {
-			continue
-		}
-		updated, err := checkedInt64Add(stats.Sum, value)
-		if err != nil {
-			stats.SumValid = false
-			stats.Sum = 0
-			continue
-		}
-		stats.Sum = updated
+		stats.addValueToSum(value)
 	}
 	return stats, nil
+}
+
+func (stats *Int64BlockStats) addValueToSum(value int64) {
+	if !stats.SumValid {
+		return
+	}
+	updated, err := checkedInt64Add(stats.Sum, value)
+	if err != nil {
+		stats.SumValid = false
+		stats.Sum = 0
+		return
+	}
+	stats.Sum = updated
 }
 
 func anyInt64BlockSumValid(blocks []Int64BlockStats) bool {
