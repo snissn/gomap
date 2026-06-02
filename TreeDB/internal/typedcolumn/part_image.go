@@ -1083,7 +1083,7 @@ func (b *columnPartImageBuilder) appendSection(section ColumnPartImageSection, d
 }
 
 func (b *columnPartImageBuilder) appendSectionWithOptionalCompression(section ColumnPartImageSection, data []byte, compression Compression) error {
-	if compression == CompressionNone {
+	if !canCompressImageSection(section, len(data), compression) {
 		b.appendSection(section, data)
 		return nil
 	}
@@ -1094,6 +1094,16 @@ func (b *columnPartImageBuilder) appendSectionWithOptionalCompression(section Co
 	section.Compression = selection.Actual
 	b.appendSection(section, selection.Payload)
 	return nil
+}
+
+func canCompressImageSection(section ColumnPartImageSection, rawBytes int, compression Compression) bool {
+	if compression == CompressionNone {
+		return false
+	}
+	if section.Kind == ColumnPartImageSectionRowLocators && rawBytes > maxCompressedRowLocatorSectionRawBytes {
+		return false
+	}
+	return true
 }
 
 type dictionaryImageEntry struct {

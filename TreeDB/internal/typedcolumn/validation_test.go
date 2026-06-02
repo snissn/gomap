@@ -24,6 +24,13 @@ func TestTypedColumnUncompressedRowLocatorRawBytesAreNotCompressedCapLimited1952
 	if rawBytes <= maxCompressedRowLocatorSectionRawBytes {
 		t.Fatalf("rawBytes=%d want above compressed decode cap=%d", rawBytes, maxCompressedRowLocatorSectionRawBytes)
 	}
+	section := ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Rows: rows}
+	if canCompressImageSection(section, rawBytes, CompressionSnappy) {
+		t.Fatalf("canCompressImageSection allowed compressed locator rawBytes=%d above cap=%d", rawBytes, maxCompressedRowLocatorSectionRawBytes)
+	}
+	if !canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Rows: 1}, rowLocatorBytes+4, CompressionSnappy) {
+		t.Fatalf("canCompressImageSection rejected small compressed locator section")
+	}
 }
 
 func TestTypedColumnSectionAccountingLeavesInvalidLocatorRawBytesUnknown1952(t *testing.T) {

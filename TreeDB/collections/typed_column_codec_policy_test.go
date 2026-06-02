@@ -121,11 +121,12 @@ func TestTypedColumnBenchmarkPolicyCompressedDirectAggregate1952(t *testing.T) {
 			if result.Count != int64(len(values)) || result.Sum != int64(len(values))*7 || result.Diagnostics.Fallback {
 				t.Fatalf("aggregate result=%+v want compressed decode-on-scan without fallback", result)
 			}
-			accounting, err := col.ColumnStorePhysicalAccounting(nil, ColumnStorePhysicalAccountingOptions{ReadIntegrity: ColumnAssetReadIntegrityVerify})
+			accounting, err := col.ColumnStorePhysicalAccounting(nil, ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: ColumnAssetReadIntegrityVerify})
 			if err != nil {
 				t.Fatalf("ColumnStorePhysicalAccounting: %v", err)
 			}
 			found := false
+			foundColumnSection := false
 			for _, part := range accounting.TypedColumnParts {
 				for _, detail := range part.Image.CompressionDetail {
 					if detail.Column != "time_us" || detail.RequestedCompression != compression {
@@ -136,9 +137,21 @@ func TestTypedColumnBenchmarkPolicyCompressedDirectAggregate1952(t *testing.T) {
 						t.Fatalf("compression detail=%+v want kept %s smaller than raw", detail, compression)
 					}
 				}
+				for _, section := range part.Image.SerializedSections {
+					if section.Kind != string(typedcolumn.ColumnPartImageSectionColumnData) || section.Column != "time_us" {
+						continue
+					}
+					foundColumnSection = true
+					if section.RawBytes <= section.StoredBytes || section.StoredBytes != section.Bytes || section.CompressionRatio <= 0 || section.CompressionRatio >= 1 {
+						t.Fatalf("column_data section accounting=%+v want encoded raw bytes above compressed stored bytes", section)
+					}
+				}
 			}
 			if !found {
 				t.Fatalf("missing %s compression detail in %+v", compression, accounting.TypedColumnParts)
+			}
+			if !foundColumnSection {
+				t.Fatalf("missing compressed column_data section accounting in %+v", accounting.TypedColumnParts)
 			}
 		})
 	}

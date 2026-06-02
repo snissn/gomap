@@ -422,11 +422,18 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 		})
 	}
 	if detailed {
+		columnSectionBytes := columnStoreTypedColumnPartColumnSectionBytes(accounting.ColumnsDetail)
 		sections := image.SectionByteAccounting()
 		out.SerializedSections = make([]ColumnStoreTypedColumnPartSectionAccounting, 0, len(sections))
 		for _, section := range sections {
 			rawBytes := int64(section.RawBytes)
 			storedBytes := int64(section.StoredBytes)
+			if section.Kind == typedcolumn.ColumnPartImageSectionColumnData && section.Column != "" {
+				if bytes, ok := columnSectionBytes[section.Column]; ok {
+					rawBytes = bytes.raw
+					storedBytes = bytes.stored
+				}
+			}
 			if rawBytes == 0 && section.Kind != typedcolumn.ColumnPartImageSectionRowLocators {
 				rawBytes = int64(section.Bytes)
 			}
@@ -447,6 +454,25 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 		}
 	}
 	return out, nil
+}
+
+type columnStoreTypedColumnPartColumnSectionByteTotals struct {
+	raw    int64
+	stored int64
+}
+
+func columnStoreTypedColumnPartColumnSectionBytes(details []typedcolumn.ColumnPartColumnByteAccounting) map[string]columnStoreTypedColumnPartColumnSectionByteTotals {
+	out := make(map[string]columnStoreTypedColumnPartColumnSectionByteTotals, len(details))
+	for _, detail := range details {
+		if detail.Column == "" {
+			continue
+		}
+		out[detail.Column] = columnStoreTypedColumnPartColumnSectionByteTotals{
+			raw:    int64(detail.EncodedRawBytes),
+			stored: int64(detail.StoredBytes),
+		}
+	}
+	return out
 }
 
 func columnStoreTypedColumnPartImageColumnNames(image typedcolumn.ColumnPartImage) []string {
