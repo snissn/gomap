@@ -842,7 +842,6 @@ u32      PayloadLen
 u32      ExternalRefsLen
 u32      PreconditionsLen
 u32      ResultAssertionsLen
-bytes[32] PayloadSHA256
 bytes Payload[PayloadLen]
 bytes ExternalRefs[ExternalRefsLen]
 bytes Preconditions[PreconditionsLen]

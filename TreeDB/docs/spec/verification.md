@@ -532,7 +532,6 @@ Required decoder and bounds tests:
 - `TestCommandWALUnknownRequiredExternalRefClassFatal`;
 - `TestCommandWALUnknownOptionalExternalRefClassCannotCleanup`;
 - `TestCommandWALBadFrameCRCCompleteRecordFailsOpen`;
-- `TestCommandWALBadFrameCRCCompleteRecordFailsOpen`;
 - `TestCommandWALTerminalShortHeaderIgnored`;
 - `TestCommandWALTruncatedActiveTailIgnoredOnlyWithoutCommitMarker`;
 - `TestCommandWALTruncatedSealedSegmentFailsOpen`;

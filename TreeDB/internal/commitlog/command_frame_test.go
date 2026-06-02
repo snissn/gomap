@@ -555,6 +555,9 @@ func TestCommandWALFormatRejectsFrameCRCMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+	if len(data) == 0 {
+		t.Fatal("command WAL frame fixture is empty")
+	}
 	data[len(data)-1] ^= 0xff
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
