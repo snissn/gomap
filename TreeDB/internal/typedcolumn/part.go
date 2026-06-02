@@ -968,11 +968,11 @@ func validateCompression(compression Compression) error {
 }
 
 func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
-	declared := make(map[string]struct{}, len(defs))
+	declared := make(map[string]ColumnDefinition, len(defs))
 	nullableDeclared := make(map[string]struct{}, len(defs))
 	rows := batch.Rows
 	for _, def := range defs {
-		declared[def.Name] = struct{}{}
+		declared[def.Name] = def
 		switch def.Type {
 		case ColumnTypeFloat32:
 			values, ok := batch.Float32Columns[def.Name]
@@ -1201,9 +1201,16 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 			}
 		}
 	}
-	for name := range batch.Columns {
-		if _, ok := declared[name]; !ok {
+	for name, values := range batch.Columns {
+		def, ok := declared[name]
+		if !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared column %s", name)
+		}
+		if !columnTypeUsesInt64BatchCarrier(def.Type) {
+			return 0, fmt.Errorf("typedcolumn: column %s supplied in int64 carrier but declared type %s", name, def.Type)
+		}
+		if rows > 0 && len(values) != rows {
+			return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", name, len(values), rows)
 		}
 	}
 	for name := range batch.Nulls {
@@ -1230,59 +1237,59 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 			return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", name)
 		}
 	}
-	for name := range batch.Float32Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared float32 column %s", name)
+	for name, values := range batch.Float32Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeFloat32, "float32", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Float64Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared float64 column %s", name)
+	for name, values := range batch.Float64Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeFloat64, "float64", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Int8Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared int8 column %s", name)
+	for name, values := range batch.Int8Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeInt8, "int8", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Uint8Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared uint8 column %s", name)
+	for name, values := range batch.Uint8Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeUint8, "uint8", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Int16Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared int16 column %s", name)
+	for name, values := range batch.Int16Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeInt16, "int16", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Uint16Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared uint16 column %s", name)
+	for name, values := range batch.Uint16Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeUint16, "uint16", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Int32Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared int32 column %s", name)
+	for name, values := range batch.Int32Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeInt32, "int32", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Uint32Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared uint32 column %s", name)
+	for name, values := range batch.Uint32Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeUint32, "uint32", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Uint64Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared uint64 column %s", name)
+	for name, values := range batch.Uint64Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeUint64, "uint64", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.Float16Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared float16 column %s", name)
+	for name, values := range batch.Float16Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeFloat16, "float16", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
-	for name := range batch.BFloat16Columns {
-		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared bfloat16 column %s", name)
+	for name, values := range batch.BFloat16Columns {
+		if err := validateTypedBatchCarrier(declared, name, ColumnTypeBFloat16, "bfloat16", len(values), rows); err != nil {
+			return 0, err
 		}
 	}
 	for name := range batch.Float32Vectors {
@@ -1312,6 +1319,29 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 		return 0, fmt.Errorf("typedcolumn: invalid part rows %d", rows)
 	}
 	return rows, nil
+}
+
+func columnTypeUsesInt64BatchCarrier(t ColumnType) bool {
+	switch t {
+	case ColumnTypeInt64, ColumnTypeBool, ColumnTypeLowCardinalityCode:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateTypedBatchCarrier(declared map[string]ColumnDefinition, name string, want ColumnType, carrier string, actualRows, rows int) error {
+	def, ok := declared[name]
+	if !ok {
+		return fmt.Errorf("typedcolumn: undeclared %s column %s", carrier, name)
+	}
+	if def.Type != want {
+		return fmt.Errorf("typedcolumn: column %s supplied in %s carrier but declared type %s", name, carrier, def.Type)
+	}
+	if rows > 0 && actualRows != rows {
+		return fmt.Errorf("typedcolumn: column %s rows=%d want=%d", name, actualRows, rows)
+	}
+	return nil
 }
 
 func batchAllowsZeroRowsForOffsetsList(batch Batch, defs []ColumnDefinition) bool {

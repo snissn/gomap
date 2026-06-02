@@ -116,14 +116,25 @@ func TestTypedColumnAdapterPrimitiveScalarSelectedRows1929(t *testing.T) {
 	for _, tc := range primitiveScalarRoundTripCases1929() {
 		t.Run(string(tc.valueType), func(t *testing.T) {
 			field := typedColumnAdapterField("v", tc.valueType)
-			part := typedColumnAdapterBuildPart(t, field, tc.values)
+			values := append([]columnDeclaredValue(nil), tc.values...)
+			values = append(values, tc.values[0])
+			part := typedColumnAdapterBuildPart(t, field, values)
 			got, diag, err := part.scanColumnValuesRows(field.Name, []int{1})
 			if err != nil {
 				t.Fatalf("scanColumnValuesRows: %v", err)
 			}
-			assertPrimitiveScalarDeclaredValuesEqual1929(t, got, tc.values[1:])
+			assertPrimitiveScalarDeclaredValuesEqual1929(t, got, values[1:2])
 			if diag.RowsScanned != 1 || diag.ColumnsProjected != 1 || diag.BlocksDecoded != 1 || diag.BytesDecoded == 0 {
 				t.Fatalf("selected-row diagnostics=%+v want one decoded primitive scalar block", diag)
+			}
+
+			sparse, sparseDiag, err := part.scanColumnValuesRows(field.Name, []int{0, 2})
+			if err != nil {
+				t.Fatalf("scanColumnValuesRows sparse: %v", err)
+			}
+			assertPrimitiveScalarDeclaredValuesEqual1929(t, sparse, []columnDeclaredValue{values[0], values[2]})
+			if sparseDiag.RowsScanned != 2 || sparseDiag.ColumnsProjected != 1 || sparseDiag.BytesDecoded == 0 {
+				t.Fatalf("sparse selected-row diagnostics=%+v want two decoded primitive scalar rows", sparseDiag)
 			}
 
 			empty, emptyDiag, err := part.scanColumnValuesRows(field.Name, []int{})

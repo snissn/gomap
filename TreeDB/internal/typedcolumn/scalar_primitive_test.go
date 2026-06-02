@@ -309,6 +309,24 @@ func TestPrimitiveScalarValidationFailsClosed1929(t *testing.T) {
 		t.Fatalf("DecodeRawUint64Payload truncated err=%v", err)
 	}
 
+	opts := Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "u8", Type: ColumnTypeUint8, Encoding: EncodingRawUint8, Compression: CompressionNone, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}
+	if _, err := BuildColumnPart(1929, opts, Batch{Columns: map[string][]int64{"id": {1, 2}, "u8": {7, 8}}, Uint8Columns: map[string][]uint8{"u8": {7, 8}}}); err == nil || !strings.Contains(err.Error(), "u8 supplied in int64 carrier but declared type uint8") {
+		t.Fatalf("generic-carrier primitive mismatch err=%v", err)
+	}
+	if _, err := BuildColumnPart(1929, opts, Batch{Columns: map[string][]int64{"id": {1, 2}}, Uint8Columns: map[string][]uint8{"u8": {7, 8}}, Int8Columns: map[string][]int8{"u8": {7}}}); err == nil || !strings.Contains(err.Error(), "u8 supplied in int8 carrier but declared type uint8") {
+		t.Fatalf("typed-carrier primitive mismatch err=%v", err)
+	}
+
 	block := ColumnBlockDescriptor{FirstRow: 0, RowCount: 2, FirstGranule: 0, LastGranule: 0, Encoding: EncodingRawUint32, Compression: CompressionNone, RawBytes: 7, StoredBytes: 7}
 	desc := ColumnPartDescriptor{RowCount: 2, Granules: []GranuleDescriptor{{Ordinal: 0, FirstRow: 0, RowCount: 2, VisibleRows: 2}}}
 	if err := validateDecodedColumnBlockDescriptor(desc, "u32", ColumnTypeUint32, 0, 0, 0, block); err == nil || !strings.Contains(err.Error(), "fixed-width raw bytes=7 want 8") {
