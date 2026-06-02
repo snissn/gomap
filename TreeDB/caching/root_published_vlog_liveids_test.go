@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"sort"
@@ -412,6 +413,55 @@ func TestCollectValueLogLiveIDsUntil_IncludesPublishedSystemDescriptorCollection
 	}
 	if _, ok := liveAfter[fileID]; !ok {
 		t.Fatalf("expected published system descriptor collection root to keep leaf-log file id %d live", fileID)
+	}
+}
+
+func TestCollectPublishedRootValueLogLiveIDsUntil_SkipsCurrentPublishedSystemDescriptorExpansion(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:           256 << 20,
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		MemtableShards:           1,
+		JournalLanes:             1,
+		ValueLogPointerThreshold: 1,
+		ValueLogMaxSegmentBytes:  4 << 10,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	skipRetainedPrune(db)
+
+	systemRootID, err := backend.PublishSystemRootIterator(mustFrozenRawRootTable(t,
+		"collections/root/users/current", []byte("bad"),
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishSystemRootIterator: %v", err)
+	}
+	state := backend.State()
+	if state == nil {
+		t.Fatal("expected backend state")
+	}
+	if state.SystemRootPageID != systemRootID {
+		t.Fatalf("SystemRootPageID=%d want %d", state.SystemRootPageID, systemRootID)
+	}
+
+	reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
+	err = db.collectPublishedRootValueLogLiveIDsUntil(context.Background(), backend.Pager(), reader, &publishedRootSet{
+		system: publishedRootRef{rootID: systemRootID},
+	}, state.RootPageID, state.SystemRootPageID, nil, map[uint32]struct{}{}, 0)
+	if err != nil {
+		t.Fatalf("collectPublishedRootValueLogLiveIDsUntil: %v", err)
 	}
 }
 
