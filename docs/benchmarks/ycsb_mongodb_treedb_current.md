@@ -30,7 +30,7 @@ numbers without a rerun on the new command-WAL frame format. The no-WAL `bench`
 rows are less directly affected, but should still be rerun in the same matrix as
 a same-host ceiling/control.
 
-## Historical Reports
+## Report Inventory
 
 | report | status | use |
 | --- | --- | --- |
