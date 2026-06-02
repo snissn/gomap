@@ -50,17 +50,17 @@ running relaxed durability or a benchmark ceiling.
 
 ### Indexed Collection Insert Workload
 
-Two secondary indexes, June 2 rerun, `100000` documents, batch size `16000`,
-and `command_wal_relaxed` for TreeDB. Throughput columns are timed insert
-measurements; B/doc uses the fully compacted storage phase from the same
-canonical run.
+Two secondary indexes, June 2 current-code rerun, `100000` documents, batch
+size `16000`, and `command_wal_relaxed` for TreeDB. Throughput columns are timed
+insert measurements for the value-log outer-leaf layout; B/doc uses the fully
+compacted storage phase for the same TreeDB layout and SQLite after `VACUUM`.
 
 | engine / format | layout | ns/doc | docs/sec | fully compacted B/doc |
 | --- | --- | ---: | ---: | ---: |
-| TreeDB JSON | data and index outer leaves in value log | 3,730 | 268,097 | 30.4 |
-| SQLite native columns | WAL normal | 4,026 | 248,385 | 156.7 |
-| TreeDB template-v1 | data and index outer leaves in value log | 4,451 | 224,669 | 22.2 |
-| SQLite JSON | WAL normal | 4,512 | 221,631 | 231.7 |
+| TreeDB template-v1 | data and index outer leaves in value log | 1,595 | 626,959 | 22.2 |
+| TreeDB JSON | data and index outer leaves in value log | 2,384 | 419,463 | 30.4 |
+| SQLite native columns | WAL normal | 3,023 | 330,797 | 156.7 |
+| SQLite JSON | WAL normal | 3,310 | 302,115 | 231.7 |
 
 Source:
 [June 2 two-index insert rerun](docs/benchmarks/collections_insert_two_index_current_2026-06-02.md).

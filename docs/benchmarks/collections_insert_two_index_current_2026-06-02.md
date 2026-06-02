@@ -5,8 +5,9 @@ Date: 2026-06-02 HST / 2026-06-02 UTC
 This rerun refreshes the README benchmark claim for the two-index collection
 insert workload. The earlier README row cited the April 27 matrix and mixed a
 post-insert disk number into a high-level benchmark highlight, which made the
-TreeDB storage result easy to misread. This run records both the timed
-post-insert rows and the canonical compacted storage rows.
+TreeDB storage result easy to misread. This report records the canonical
+compacted storage rows and a follow-up timed layout comparison used for the
+current README headline.
 
 ## Command
 
@@ -49,12 +50,68 @@ indexes, `100000` documents, batch size `16000`, and `command_wal_relaxed` for
 TreeDB. The B/doc column is the post-insert footprint after the benchmark flush
 or checkpoint. It is not a compacted-state number.
 
+The canonical runner uses `storage-cells=index-vlog`, which is the TreeDB layout
+that writes data and index outer leaves to the value log. These timings should
+not be compared directly with the April 27 "default index leaves" rows, which
+used a legacy `production_fast` profile and a different index-leaf placement.
+
 | engine / format | layout | ns/doc | docs/sec | post-insert B/doc |
 | --- | --- | ---: | ---: | ---: |
 | TreeDB JSON | data and index outer leaves in value log | 3,730 | 268,097 | 233.2 |
 | SQLite native columns | WAL normal | 4,026 | 248,385 | 176.1 |
 | TreeDB template-v1 | data and index outer leaves in value log | 4,451 | 224,669 | 214.8 |
 | SQLite JSON | WAL normal | 4,512 | 221,631 | 262.6 |
+
+## Follow-up Timed Layout Comparison
+
+After the README table was reviewed, the timed insert comparison was rerun with
+both current TreeDB layout cells. This isolates the layout/profile difference
+from compaction storage accounting. The `docs/sec` column is still only the
+timed insert phase; no compaction time is included.
+
+```sh
+OUT=/tmp/collections_insert_layout_compare_$(date +%Y%m%d_%H%M%S)
+go run ./cmd/collection_bench_matrix \
+  -out-dir "$OUT" \
+  -formats template-v1,json \
+  -engine command_wal_relaxed \
+  -storage-cells mainline,index-vlog \
+  -tree-bench-pattern '^BenchmarkCollectionShapeInsertBatch$/^indexes_2$' \
+  -sqlite-bench-pattern '^(BenchmarkSQLiteShapeInsertBatchJSON|BenchmarkSQLiteShapeInsertBatchNativeColumns)$/^indexes_2$' \
+  -batch-size 16000 \
+  -benchtime 100000x \
+  -count 1 \
+  -leaf-segment-target-bytes 1048576 \
+  -leafgen-pack-frame-k 16 \
+  2>&1 | tee "$OUT.stdout.log"
+```
+
+Measured run:
+
+```text
+/tmp/collections_insert_layout_compare_20260602_083113
+```
+
+Measured code:
+
+```text
+branch: codex/readme-treedb-ycsb-headline
+commit: b8863137de27
+```
+
+| engine / format | layout | ns/doc | docs/sec | post-insert B/doc |
+| --- | --- | ---: | ---: | ---: |
+| TreeDB template-v1 | data outer leaves in value log, index outer leaves in pager | 1,292 | 773,994 | 237.9 |
+| TreeDB template-v1 | data and index outer leaves in value log | 1,595 | 626,959 | 214.8 |
+| TreeDB JSON | data outer leaves in value log, index outer leaves in pager | 1,927 | 518,941 | 255.5 |
+| TreeDB JSON | data and index outer leaves in value log | 2,384 | 419,463 | 233.2 |
+| SQLite native columns | WAL normal | 3,023 | 330,797 | 176.1 |
+| SQLite JSON | WAL normal | 3,310 | 302,115 | 262.6 |
+
+The root README uses the value-log outer-leaf TreeDB rows from this follow-up
+timed run, paired with the compacted storage values below. That keeps the
+headline compact while avoiding the impression that compacted storage time was
+included in the throughput measurement.
 
 ## Compacted Storage Rows
 
