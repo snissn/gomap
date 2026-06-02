@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestVlogCompressionSelector_EntersHoldAndProbes(t *testing.T) {
@@ -433,6 +434,20 @@ func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadRespectsConfiguredLar
 	want := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, configuredTargetBytes, ratio)
 	if kForce != want {
 		t.Fatalf("expected forced-pointer K to use configured target=%d, got=%d want=%d", configuredTargetBytes, kForce, want)
+	}
+}
+
+func TestChooseValueLogBlockWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogBlockTargetBytes:   forcePointerBlockTargetCompressedBytes,
+		indexOuterLeavesInValueLog: true,
+	}
+	db.leafLog = lane{id: leafLogLaneID}
+
+	got := db.chooseValueLogBlockWriteK(&db.leafLog, 128, 128*page.PageSize, valuelog.BlockCodecSnappy)
+	if got != leafLogBlockMaxK {
+		t.Fatalf("live leaf-log K=%d, want capped K=%d", got, leafLogBlockMaxK)
 	}
 }
 

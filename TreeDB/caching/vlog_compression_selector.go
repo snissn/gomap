@@ -95,6 +95,10 @@ const (
 	// Larger grouped-frame targets reduce per-record compression overhead for
 	// large forced-pointer streams.
 	forcePointerBlockTargetCompressedBytes = 32 << 10
+	// Live leaf-log frames are a read-path structure as well as a write/storage
+	// structure. Keep grouping modest so cold point reads do not repeatedly decode
+	// large multi-page frames when access has little locality.
+	leafLogBlockMaxK = 8
 	// For large payloads, allow strong observed dict wins to override generic
 	// throughput scoring so we do not lock highly-compressible streams into
 	// block mode.
@@ -1723,6 +1727,9 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	}
 	if k > valuelog.MaxFrameK {
 		k = valuelog.MaxFrameK
+	}
+	if db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && k > leafLogBlockMaxK {
+		k = leafLogBlockMaxK
 	}
 	recordLaneVlogBlockK(l, codec, k)
 	return k
