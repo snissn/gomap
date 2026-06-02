@@ -105,11 +105,13 @@ Raw fixed-width scalar validation requires:
 
 The prepared aggregate path consults semantic capabilities first and then layout
 capabilities. For raw int64 and #1929 integer primitives up to `uint32`, current
-int64-compatible reducer/stats/pruning certification uses safe little-endian
-byte loops and widening; it does not use unsafe pointer casts. Delta-varint
-continues to use the streaming decode path. `uint64` is a direct-view payload
-candidate only; it does not advertise stats/pruning/reducer certification until a
-native uint64 stats/pruning payload exists. Raw int64 carriers for scalar floats
+int64-compatible physical stats/pruning certification uses safe little-endian
+byte loops and widening; it does not use unsafe pointer casts. Primitive integer
+sum/avg/min/max aggregate reducers remain semantically deferred until typedkernel
+widening kernels are registered. Delta-varint continues to use the streaming
+decode path. `uint64` is a direct-view payload candidate only; it does not
+advertise stats/pruning/reducer certification until a native uint64 stats/pruning
+payload exists. Raw int64 carriers for scalar floats
 fail closed at both layers: they preserve bits for
 reconstruction, but they are not direct int64 views and cannot certify int64
 numeric reducers, stats, or pruning metadata. Native scalar float payloads are

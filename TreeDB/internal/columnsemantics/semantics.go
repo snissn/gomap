@@ -474,7 +474,7 @@ func stringCapability(desc Descriptor, op Operation) Capability {
 }
 
 func primitiveIntegerCapability(desc Descriptor, op Operation) Capability {
-	wantPhysical, wantEncoding, signed, maxWidthBits, ok := primitiveIntegerPhysical(desc.Logical)
+	wantPhysical, wantEncoding, _, maxWidthBits, ok := primitiveIntegerPhysical(desc.Logical)
 	if !ok {
 		return Unsupported(op, ReasonUnknownLogicalType, fmt.Sprintf("logical_type=%q", desc.Logical))
 	}
@@ -482,26 +482,14 @@ func primitiveIntegerCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonLogicalPhysicalMismatch, fmt.Sprintf("%s semantics require physical type %s and encoding %s", desc.Logical, wantPhysical, wantEncoding))
 	}
 	integerName := string(desc.Logical)
-	sumAccumulator := "checked uint64-compatible integer sum"
-	if signed {
-		sumAccumulator = "checked signed integer sum"
-	}
 	supportsInt64StatsPayload := maxWidthBits <= 32
 	switch op {
 	case OpAllRows, OpEquality, OpInequality, OpOrderedRange, OpInList, OpDirectScalarValueCarrier:
 		return Supported(op)
 	case OpCountRows, OpCountNonNull:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
-	case OpSum:
-		return SupportedResult(op, ResultSemantics{ResultType: integerName, Accumulator: sumAccumulator, OverflowPolicy: "checked"})
-	case OpAvg:
-		return SupportedResult(op, ResultSemantics{ResultType: "float64", Accumulator: sumAccumulator + " and int64 count", OverflowPolicy: "checked sum", Precision: "float64 quotient"})
-	case OpMin, OpMax:
-		comparison := "unsigned integer logical order"
-		if signed {
-			comparison = "signed integer logical order"
-		}
-		return SupportedResult(op, ResultSemantics{ResultType: integerName, Comparison: comparison})
+	case OpSum, OpAvg, OpMin, OpMax:
+		return Unsupported(op, ReasonOperationUnsupported, integerName+" aggregate reducers are deferred until primitive typedkernel widening kernels are registered")
 	case OpStatsMinMax, OpPruneEquality, OpPruneOrderedRange:
 		if supportsInt64StatsPayload {
 			return Supported(op)

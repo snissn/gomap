@@ -152,9 +152,14 @@ func TestCapabilityPrimitiveScalarSemantics1929(t *testing.T) {
 	}
 	for _, tc := range integerCases {
 		desc := Descriptor{Logical: tc.logical, Physical: tc.physical, Encoding: tc.encoding}
-		for _, op := range []Operation{OpAllRows, OpEquality, OpOrderedRange, OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpDirectScalarValueCarrier} {
+		for _, op := range []Operation{OpAllRows, OpEquality, OpOrderedRange, OpCountRows, OpCountNonNull, OpDirectScalarValueCarrier} {
 			if cap := CapabilityFor(desc, op); cap.Status != StatusSupported {
 				t.Fatalf("%s %s capability=%+v want supported", tc.logical, op, cap)
+			}
+		}
+		for _, op := range []Operation{OpSum, OpAvg, OpMin, OpMax} {
+			if cap := CapabilityFor(desc, op); cap.Status != StatusUnsupported || cap.Reason != ReasonOperationUnsupported {
+				t.Fatalf("%s %s capability=%+v want primitive aggregate kernels deferred", tc.logical, op, cap)
 			}
 		}
 		for _, op := range []Operation{OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange} {
