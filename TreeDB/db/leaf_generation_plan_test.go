@@ -70,6 +70,27 @@ func withLeafGenerationRecordLengthIndexScanCounter(t *testing.T) *atomic.Uint64
 	return &counter
 }
 
+func TestDedupeMaintenanceRootsByRootIDDropsRoleAliasesForLiveStats(t *testing.T) {
+	roots := []maintenanceRoot{
+		{kind: maintenanceRootUser, rootID: 7},
+		{kind: maintenanceRootCollection, rootID: 7, descriptorKey: []byte(maintenanceTestCollectionRootKey)},
+		{kind: maintenanceRootSystem, rootID: 8},
+		{kind: maintenanceRootCollection, rootID: 8, descriptorKey: []byte("collections/root/users/alias")},
+		{kind: maintenanceRootCollection, rootID: 0},
+	}
+
+	got := dedupeMaintenanceRootsByRootID(roots)
+	if len(got) != 2 {
+		t.Fatalf("roots len=%d want 2: %+v", len(got), got)
+	}
+	if got[0].kind != maintenanceRootUser || got[0].rootID != 7 {
+		t.Fatalf("first root=%+v want user rootID 7", got[0])
+	}
+	if got[1].kind != maintenanceRootSystem || got[1].rootID != 8 {
+		t.Fatalf("second root=%+v want system rootID 8", got[1])
+	}
+}
+
 func TestRankLeafGenerationPlanCandidates(t *testing.T) {
 	gens := []LeafGenerationPlanGeneration{
 		{GenerationID: 4, BytesDead: 100, BytesLive: 50},
