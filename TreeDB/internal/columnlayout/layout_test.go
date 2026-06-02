@@ -128,6 +128,18 @@ func TestFixedAndPackedGeometryMismatchesFailDescriptorValidation1931(t *testing
 			want:   "bytes_per_row=4 want 3",
 		},
 		{
+			name:   "fixed_bytes_bits_per_element",
+			desc:   Descriptor{Logical: columnsemantics.LogicalByteVector, Physical: typedcolumn.ColumnTypeFixedBytes, Encoding: typedcolumn.EncodingRawFixedBytes, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3, BitsPerElement: 1},
+			reason: ReasonFixedBytesGeometryMismatch,
+			want:   "bits_per_element=1 want 0",
+		},
+		{
+			name:   "fixed_bytes_logical_bits_per_row",
+			desc:   Descriptor{Logical: columnsemantics.LogicalByteVector, Physical: typedcolumn.ColumnTypeFixedBytes, Encoding: typedcolumn.EncodingRawFixedBytes, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3, LogicalBitsPerRow: 25},
+			reason: ReasonFixedBytesGeometryMismatch,
+			want:   "logical_bits_per_row=25 want 24",
+		},
+		{
 			name:   "packed_bits_per_element",
 			desc:   Descriptor{Logical: columnsemantics.LogicalPackedUint4Vector, Physical: typedcolumn.ColumnTypePackedUint4Vector, Encoding: typedcolumn.EncodingRawPackedUint4Vector, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3, BitsPerElement: 2},
 			reason: ReasonPackedUintBitsMismatch,

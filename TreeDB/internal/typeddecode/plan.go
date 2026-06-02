@@ -484,7 +484,10 @@ func PackedUintVectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, logic
 		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("bits_per_element=%d", bitsPerElement), ElementSize: 1, ElementsPerRow: elementsPerRow, BitsPerElement: bitsPerElement, Rows: cert.Rows}
 	}
 	encoding, _ := typedcolumn.PackedUintVectorEncodingForBits(bitsPerElement)
-	logicalBitsPerRow := elementsPerRow * bitsPerElement
+	logicalBitsPerRow, ok := checkedMul3(elementsPerRow, bitsPerElement, 1)
+	if !ok {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: "logical_bits_per_row overflow", ElementSize: 1, ElementsPerRow: elementsPerRow, BitsPerElement: bitsPerElement, Rows: cert.Rows}
+	}
 	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 1, ElementsPerRow: elementsPerRow, BytesPerRow: rowBytes, BitsPerElement: bitsPerElement, LogicalBitsPerRow: logicalBitsPerRow, Alignment: 1, Rows: cert.Rows}
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
 		Logical:            logical,

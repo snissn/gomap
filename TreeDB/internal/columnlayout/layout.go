@@ -75,6 +75,7 @@ const (
 	ReasonVectorScalarUnsupported                ReasonCode = "layout_vector_scalar_unsupported"
 	ReasonUint32ListScalarUnsupported            ReasonCode = "layout_uint32_list_scalar_unsupported"
 	ReasonBytesScalarUnsupported                 ReasonCode = "layout_bytes_scalar_unsupported"
+	ReasonFixedBytesGeometryMismatch             ReasonCode = "layout_fixed_bytes_geometry_mismatch"
 	ReasonPackedUintScalarUnsupported            ReasonCode = "layout_packed_uint_scalar_unsupported"
 	ReasonPackedUintBitsMismatch                 ReasonCode = "layout_packed_uint_bits_mismatch"
 	ReasonAdjacencyScalarUnsupported             ReasonCode = "layout_adjacency_scalar_unsupported"
@@ -499,7 +500,7 @@ func applyFixedBytesLayout(caps *Capabilities) {
 		return
 	}
 	if desc.LogicalBitsPerRow != 0 && desc.LogicalBitsPerRow != logicalBits {
-		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonPackedUintBitsMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonFixedBytesGeometryMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 		return
 	}
 	if desc.Logical == columnsemantics.LogicalByteVector && desc.Physical == typedcolumn.ColumnTypeFixedBytes && desc.Encoding == typedcolumn.EncodingRawFixedBytes {
@@ -1114,7 +1115,7 @@ func validateFixedAndPackedDescriptorGeometry(op Operation, desc Descriptor) Cap
 			return Unsupported(op, ReasonFixedWidthElementsRequired, fmt.Sprintf("fixed_bytes requires positive fixed_width_elements got %d", desc.FixedWidthElements))
 		}
 		if desc.BitsPerElement != 0 {
-			return Unsupported(op, ReasonPackedUintBitsMismatch, fmt.Sprintf("fixed_bytes bits_per_element=%d want 0", desc.BitsPerElement))
+			return Unsupported(op, ReasonFixedBytesGeometryMismatch, fmt.Sprintf("fixed_bytes bits_per_element=%d want 0", desc.BitsPerElement))
 		}
 		if desc.BytesPerRow != 0 && desc.BytesPerRow != desc.FixedWidthElements {
 			return Unsupported(op, ReasonLengthMultipleMismatch, fmt.Sprintf("fixed_bytes bytes_per_row=%d want %d", desc.BytesPerRow, desc.FixedWidthElements))
@@ -1124,7 +1125,7 @@ func validateFixedAndPackedDescriptorGeometry(op Operation, desc Descriptor) Cap
 			return Unsupported(op, ReasonLengthMultipleMismatch, err.Error())
 		}
 		if desc.LogicalBitsPerRow != 0 && desc.LogicalBitsPerRow != logicalBits {
-			return Unsupported(op, ReasonPackedUintBitsMismatch, fmt.Sprintf("fixed_bytes logical_bits_per_row=%d want %d", desc.LogicalBitsPerRow, logicalBits))
+			return Unsupported(op, ReasonFixedBytesGeometryMismatch, fmt.Sprintf("fixed_bytes logical_bits_per_row=%d want %d", desc.LogicalBitsPerRow, logicalBits))
 		}
 	case typedcolumn.ColumnTypePackedBitVector, typedcolumn.ColumnTypePackedUint2Vector, typedcolumn.ColumnTypePackedUint4Vector:
 		bitsPerElement, ok := typedcolumn.PackedUintVectorBits(desc.Physical)
