@@ -1,9 +1,9 @@
 # Typed-column fixed-byte and packed-code layout contract (#1931)
 
 Status: #1931 foundation contract and helper-level test baseline. Broad
-column-store/typed-column format admission waits for the #1929 scalar contract
-and the #1930 dense-vector contract to land; this document does not allocate a
-persistent type code by itself.
+collection typed-storage/typed-column format admission waits for the #1929
+scalar contract and the #1930 dense-vector contract to land; this document does
+not allocate a persistent type code by itself.
 
 ## Scope
 
