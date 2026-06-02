@@ -11209,6 +11209,9 @@ func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDo
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
 		if items[0].hasBSONSet {
+			if c.commandWALActive(nil) {
+				return c.updateBSONSetDirect(items[0].DocumentID, items[0].bsonSet)
+			}
 			return c.updateDirectBSONSet(items[0].DocumentID, items[0].bsonSet)
 		}
 		return c.updateDirect(items[0].DocumentID, items[0].Update)
@@ -11934,6 +11937,11 @@ func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collec
 		prepared.err = err
 		return prepared
 	}
+	if plan != nil && plan.directBufferedUpdate == nil && len(plan.deltaTables) > 0 {
+		plan.close()
+		prepared.fallbackDirect = true
+		return prepared
+	}
 	if plan == nil || plan.directBufferedUpdate == nil {
 		prepared.plan = plan
 		return prepared
@@ -12002,7 +12010,23 @@ func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collec
 	}
 	merged, collection, err := mergeDirectBufferedPreparedBatches(direct)
 	if err == nil {
+		var unlockCommandWALRawStage func()
+		unlockCommandWALRawStage, err = collection.prepareDirectUpdateCommandWALStage(merged)
+		if unlockCommandWALRawStage != nil {
+			defer unlockCommandWALRawStage()
+		}
+	}
+	if err == nil {
 		err = collection.withMutationLock(func() error {
+			var unlockCommandWALStage func()
+			if merged.bufferedCommandWALIntent != nil {
+				var lockErr error
+				unlockCommandWALStage, lockErr = collection.lockCommandWALStageCoordinator()
+				if lockErr != nil {
+					return lockErr
+				}
+				defer unlockCommandWALStage()
+			}
 			buffered, bufferErr := collection.bufferDirectUpdateBatchPlanLocked(merged)
 			if bufferErr != nil {
 				return bufferErr
@@ -12042,7 +12066,24 @@ func (combiner *collectionUpdateCombiner) stageSingleDirectPreparedBatch(prepare
 		return
 	}
 	collection := prepared.batch[0].collection
-	err := collection.withMutationLock(func() error {
+	unlockCommandWALRawStage, err := collection.prepareDirectUpdateCommandWALStage(prepared.plan)
+	if unlockCommandWALRawStage != nil {
+		defer unlockCommandWALRawStage()
+	}
+	if err != nil {
+		combiner.completePreparedBatchWithError(prepared, err)
+		return
+	}
+	err = collection.withMutationLock(func() error {
+		var unlockCommandWALStage func()
+		if prepared.plan.bufferedCommandWALIntent != nil {
+			var lockErr error
+			unlockCommandWALStage, lockErr = collection.lockCommandWALStageCoordinator()
+			if lockErr != nil {
+				return lockErr
+			}
+			defer unlockCommandWALStage()
+		}
 		buffered, bufferErr := collection.bufferDirectUpdateBatchPlanLocked(prepared.plan)
 		if bufferErr != nil {
 			return bufferErr
@@ -12167,6 +12208,7 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 	totalTemplateEntries := 0
 	totalPrimaryEntries := 0
 	totalSecondaryRootPlans := 0
+	totalCommandWALDocuments := 0
 	for _, p := range prepared {
 		plan := p.plan
 		if plan == nil || plan.directBufferedUpdate == nil {
@@ -12191,6 +12233,7 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 		totalTemplateEntries += len(plan.directBufferedUpdate.templateEntries)
 		totalPrimaryEntries += len(plan.directBufferedUpdate.primaryEntries)
 		totalSecondaryRootPlans += len(plan.directBufferedUpdate.secondaryRootPlans)
+		totalCommandWALDocuments += len(plan.commandWALDocuments)
 	}
 	merged := &updateBatchPlan{
 		meta:                        firstPlan.meta,
@@ -12220,6 +12263,9 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 	}
 	if totalSecondaryRootPlans > 0 {
 		merged.directBufferedUpdate.secondaryRootPlans = make([]directBufferedSecondaryRootPlan, 0, totalSecondaryRootPlans)
+	}
+	if totalCommandWALDocuments > 0 {
+		merged.commandWALDocuments = make([]commitlog.CollectionDocument, 0, totalCommandWALDocuments)
 	}
 	rootIndex := make(map[string]int, len(firstPlan.rootNames))
 	addRoot := func(plan *updateBatchPlan, idx int) error {
@@ -12267,12 +12313,38 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 		}
 		merged.directBufferedUpdate.secondaryRootPlans = append(merged.directBufferedUpdate.secondaryRootPlans, plan.directBufferedUpdate.secondaryRootPlans...)
 		merged.directBufferedUpdate.stagedBytes += plan.directBufferedUpdate.stagedBytes
+		merged.commandWALDocuments = append(merged.commandWALDocuments, plan.commandWALDocuments...)
+		merged.rowRemainderBytes = saturatingAddNonNegativeInt64(merged.rowRemainderBytes, plan.rowRemainderBytes)
 	}
 	if sameBufferedRead {
 		merged.bufferedBase = commonBufferedBase
 		merged.bufferedReadGeneration = commonBufferedReadGeneration
 	}
 	return merged, collection, nil
+}
+
+func (c *Collection) prepareDirectUpdateCommandWALStage(plan *updateBatchPlan) (func(), error) {
+	if c == nil || plan == nil || !c.commandWALActive(nil) ||
+		plan.bufferedCommandWALIntent != nil ||
+		!plan.canStageDirectBufferedUpdateAfterCommandWALAppend() ||
+		len(plan.commandWALDocuments) == 0 {
+		return nil, nil
+	}
+	intent, err := c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+	if err != nil {
+		return nil, err
+	}
+	plan.bufferedCommandWALIntent = intent
+	if c.db == nil {
+		return nil, nil
+	}
+	runTestBeforeCommandWALBufferedUpdateStageLockHook()
+	unlockCommandWALRawStage := c.db.LockCommandWALStaging()
+	if err := c.drainCommandWALStageCoordinatorBeforeMutation(); err != nil {
+		unlockCommandWALRawStage()
+		return nil, err
+	}
+	return unlockCommandWALRawStage, nil
 }
 
 func addCollectionUpdateStatsForMerge(dst *CollectionUpdateStats, src CollectionUpdateStats) {
@@ -15942,6 +16014,10 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	if err := c.requireColumnStoreCommandWAL(plan.meta, nil); err != nil {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, err
+	}
+	if c.commandWALActive(nil) && commandWALStageIntent == nil {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+		return false, nil
 	}
 	plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 

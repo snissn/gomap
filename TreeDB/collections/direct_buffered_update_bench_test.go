@@ -168,6 +168,9 @@ func benchmarkTemplateV1ReplaceWith(raw []byte) func([]byte) ([]byte, bool, erro
 
 func collectionManagerStatsBenchmarkDelta(after, before CollectionManagerStats) CollectionManagerStats {
 	return CollectionManagerStats{
+		MutationLockCalls:                after.MutationLockCalls - before.MutationLockCalls,
+		MutationLockWait:                 after.MutationLockWait - before.MutationLockWait,
+		MutationLockHold:                 after.MutationLockHold - before.MutationLockHold,
 		IndexedStageBatches:              after.IndexedStageBatches - before.IndexedStageBatches,
 		IndexedStageDocs:                 after.IndexedStageDocs - before.IndexedStageDocs,
 		IndexedStageBytes:                after.IndexedStageBytes - before.IndexedStageBytes,
@@ -215,6 +218,18 @@ func collectionManagerStatsBenchmarkDelta(after, before CollectionManagerStats) 
 		UpdateBatchIndexValueUnchanged:   after.UpdateBatchIndexValueUnchanged - before.UpdateBatchIndexValueUnchanged,
 		UpdateBatchUniqueChecks:          after.UpdateBatchUniqueChecks - before.UpdateBatchUniqueChecks,
 		UpdateBatchUniqueCheckSkips:      after.UpdateBatchUniqueCheckSkips - before.UpdateBatchUniqueCheckSkips,
+		UpdateCombineRequests:            after.UpdateCombineRequests - before.UpdateCombineRequests,
+		UpdateCombineBatches:             after.UpdateCombineBatches - before.UpdateCombineBatches,
+		UpdateCombineBatchedRequests:     after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
+		UpdateCombineFallbackRequests:    after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
+		UpdateCombineInlineRequests:      after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests,
+		UpdateCombineQueueDepthMax:       after.UpdateCombineQueueDepthMax - before.UpdateCombineQueueDepthMax,
+		UpdateCombineEnqueue:             after.UpdateCombineEnqueue - before.UpdateCombineEnqueue,
+		UpdateCombineWait:                after.UpdateCombineWait - before.UpdateCombineWait,
+		UpdateCombineQueueWait:           after.UpdateCombineQueueWait - before.UpdateCombineQueueWait,
+		UpdateCombineDrain:               after.UpdateCombineDrain - before.UpdateCombineDrain,
+		UpdateCombineRun:                 after.UpdateCombineRun - before.UpdateCombineRun,
+		UpdateCombineResultDelivery:      after.UpdateCombineResultDelivery - before.UpdateCombineResultDelivery,
 	}
 }
 
@@ -233,6 +248,12 @@ func reportCollectionUpdateStatsForBenchmark(b *testing.B, stats CollectionManag
 			b.ReportMetric(float64(value.Nanoseconds())/float64(docs), name)
 		}
 	}
+	if stats.MutationLockCalls > 0 {
+		b.ReportMetric(float64(stats.MutationLockCalls), "mutation_lock_calls")
+		b.ReportMetric(float64(stats.MutationLockCalls)/float64(docs), "mutation_lock_calls/doc")
+	}
+	reportDurationPerDoc(stats.MutationLockWait, "mutation_lock_wait_ns/doc")
+	reportDurationPerDoc(stats.MutationLockHold, "mutation_lock_hold_ns/doc")
 	if stats.IndexedStageBatches > 0 {
 		b.ReportMetric(float64(stats.IndexedStageBatches), "indexed_stage_batches")
 		b.ReportMetric(float64(stats.IndexedStageDocs)/float64(stats.IndexedStageBatches), "indexed_stage_docs/batch")
@@ -288,4 +309,26 @@ func reportCollectionUpdateStatsForBenchmark(b *testing.B, stats CollectionManag
 	reportDurationPerDoc(stats.UpdateBatchBufferSecondaryAppend, "update_buffer_secondary_append_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferRootAppend, "update_buffer_root_append_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchPublish, "update_publish_ns/doc")
+	if stats.UpdateCombineRequests > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineRequests), "update_combine_requests")
+		b.ReportMetric(float64(stats.UpdateCombineRequests)/float64(docs), "update_combine_requests/doc")
+	}
+	if stats.UpdateCombineInlineRequests > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineInlineRequests), "update_combine_inline_requests")
+	}
+	if stats.UpdateCombineBatches > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineBatches), "update_combine_batches")
+		b.ReportMetric(float64(stats.UpdateCombineBatchedRequests)/float64(stats.UpdateCombineBatches), "update_combine_requests/batch")
+	}
+	reportUintPerDoc(stats.UpdateCombineBatchedRequests, "update_combine_batched_requests/doc")
+	reportUintPerDoc(stats.UpdateCombineFallbackRequests, "update_combine_fallback_requests/doc")
+	if stats.UpdateCombineQueueDepthMax > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineQueueDepthMax), "update_combine_queue_depth_max")
+	}
+	reportDurationPerDoc(stats.UpdateCombineEnqueue, "update_combine_enqueue_ns/doc")
+	reportDurationPerDoc(stats.UpdateCombineWait, "update_combine_wait_ns/doc")
+	reportDurationPerDoc(stats.UpdateCombineQueueWait, "update_combine_queue_wait_ns/doc")
+	reportDurationPerDoc(stats.UpdateCombineDrain, "update_combine_drain_ns/doc")
+	reportDurationPerDoc(stats.UpdateCombineRun, "update_combine_run_ns/doc")
+	reportDurationPerDoc(stats.UpdateCombineResultDelivery, "update_combine_result_delivery_ns/doc")
 }
