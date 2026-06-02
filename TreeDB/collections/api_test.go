@@ -12975,6 +12975,92 @@ func TestCollectionInsertBatchNoIndexBSONFlushesPendingRootRunsBeforeBatchInsert
 	}
 }
 
+func TestCollectionNativewireInsertBatchNoIndexBSONFlushesPendingPrimaryOverlay(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("UpdateBSONSet matched=%v modified=%v want true/true", matched, modified)
+	}
+	rootCounts, rootRunCount := bufferedRootRunCountsForTest(t, col, collectionPrimaryRootName("users"))
+	overlayEntries := bufferedPrimaryOverlayCountForTest(t, col)
+	if rootRunCount != 0 || rootCounts[collectionPrimaryRootName("users")] != 0 || overlayEntries != 1 {
+		t.Fatalf("root runs=%d primary=%d overlay=%d want 0/0/1 before trusted insert", rootRunCount, rootCounts[collectionPrimaryRootName("users")], overlayEntries)
+	}
+
+	beforeInsert := d.State()
+	if err := col.NativewireInsertBatchNoResultIDs(
+		[][]byte{[]byte("u2")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u2"},
+			{Key: "city", Value: "sfo"},
+		})},
+		true,
+	); err != nil {
+		t.Fatalf("trusted nativewire insert after overlay update: %v", err)
+	}
+	afterInsert := d.State()
+	if afterInsert.CommitSeq <= beforeInsert.CommitSeq {
+		t.Fatalf("trusted insert commit seq=%d before=%d want pending overlay flushed first", afterInsert.CommitSeq, beforeInsert.CommitSeq)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush trusted insert: %v", err)
+	}
+	doc1, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if got := bson.Raw(doc1).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("u1 city=%q want sea", got)
+	}
+	doc2, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if got := bson.Raw(doc2).Lookup("city").StringValue(); got != "sfo" {
+		t.Fatalf("u2 city=%q want sfo", got)
+	}
+}
+
 func TestCollectionUpdateBSONSetNoIndexNoopSkipsDirectBufferedRetryLoop(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),

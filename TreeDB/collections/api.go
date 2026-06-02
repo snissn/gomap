@@ -3563,7 +3563,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && !c.db.CommandWALEnabled() {
-		if c.hasBufferedNoIndexBSONRootRuns() {
+		if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
 			}); err != nil {
@@ -3863,7 +3863,7 @@ func isBSONDocumentFormat(format DocumentFormat) bool {
 	return err == nil && normalized == DocumentFormatBSON
 }
 
-func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
+func (c *Collection) hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
@@ -3874,7 +3874,13 @@ func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
 		return false
 	}
 	collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
-	if collectionName == "" || !hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
+	if collectionName == "" {
+		return false
+	}
+	hasPrimaryWrites := hasBufferedPrimaryOverlay(domain) ||
+		hasPendingIndexedPrimaryOverlay(domain) ||
+		hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName))
+	if !hasPrimaryWrites {
 		return false
 	}
 	return isBSONDocumentFormat(domain.meta.Options.DocumentFormat)
@@ -8932,7 +8938,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	if c == nil || c.db == nil {
 		return nil, nil, false
 	}
-	if c.hasBufferedNoIndexBSONRootRuns() || c.hasBufferedIndexedDeletesOnly() {
+	if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() || c.hasBufferedIndexedDeletesOnly() {
 		return nil, nil, false
 	}
 	snap := c.db.AcquireSnapshot()
@@ -9026,7 +9032,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if c.hasBufferedNoIndexBSONRootRuns() || c.hasBufferedIndexedDeletesOnly() {
+	if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() || c.hasBufferedIndexedDeletesOnly() {
 		closePlanningSnapshot()
 		resetCollectionRunTables(plan.runs)
 		return nil, ErrConcurrentMutation, true
@@ -9102,7 +9108,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return nil, err
 		}
 	}
-	if c.hasBufferedNoIndexBSONRootRuns() && !commandWALNoIndexBufferCandidate {
+	if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() && !commandWALNoIndexBufferCandidate {
 		if err := c.flushBufferedWrites(); err != nil {
 			return nil, err
 		}
