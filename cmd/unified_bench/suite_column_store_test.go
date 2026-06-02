@@ -1915,6 +1915,7 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		ScanDurationMS:     1.5,
 		ReduceDurationMS:   2.5,
 		AdapterDurationMS:  0.75,
+		hotRunDuration:     6 * time.Millisecond,
 		RowsScanned:        13,
 		RowsMatched:        3,
 		ReduceRows:         2,
@@ -1927,7 +1928,7 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 
 	cell := columnStoreJSONBenchCellFromQueryMetric(q, &collections.ColumnStoreConfig{}, 0)
-	if got, want := cell.HotRunDurationMS, 4.75; got != want {
+	if got, want := cell.HotRunDurationMS, 6.0; got != want {
 		t.Fatalf("hot_run_duration_ms=%v want %v", got, want)
 	}
 	if got, want := cell.RowsScanned, q.RowsScanned; got != want {
@@ -2429,6 +2430,44 @@ func TestColumnStoreSuiteReportsParityMismatchM11A(t *testing.T) {
 	}
 	if q1.Pass {
 		t.Fatalf("expected q1 parity to be recorded as failed: %+v", q1)
+	}
+}
+
+func TestColumnStoreSuiteReportsPreparedCellParityMismatchAfterArtifacts1955(t *testing.T) {
+	dir := t.TempDir()
+	cfg := BenchConfig{Keys: 16, BatchSize: 8, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}
+	_, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+		ProfileDir:              dir,
+		ExecutionPath:           "native-fastpath",
+		ForcedPath:              columnStorePathSerialColumnScan,
+		QueryNames:              []string{columnStoreQueryQ1},
+		CorruptReferenceForTest: columnStoreQueryQ1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "prepared JSONBench cell") || !strings.Contains(err.Error(), "parity mismatch") {
+		t.Fatalf("expected prepared parity mismatch error, got %v", err)
+	}
+
+	var report columnStoreSuiteReport
+	data, readErr := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
+	if readErr != nil {
+		t.Fatalf("expected column_store_results.json after prepared mismatch: %v", readErr)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	var prepared *columnStoreJSONBenchCell
+	for i := range report.JSONBenchCells {
+		cell := &report.JSONBenchCells[i]
+		if cell.Query == columnStoreQueryQ1 && cell.ExecutionMode == columnStoreJSONBenchModePrepared {
+			prepared = cell
+			break
+		}
+	}
+	if prepared == nil {
+		t.Fatalf("missing prepared q1 JSONBench cell: %+v", report.JSONBenchCells)
+	}
+	if prepared.ParityWithRowScan || prepared.RawHash == prepared.ResultHash || prepared.ResultHash == 0 {
+		t.Fatalf("prepared mismatch cell did not preserve failing hashes: %+v", *prepared)
 	}
 }
 

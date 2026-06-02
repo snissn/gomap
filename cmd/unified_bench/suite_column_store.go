@@ -236,7 +236,8 @@ type columnStoreQueryMetric struct {
 	CacheLabel               string                            `json:"cache_label"`
 	CompressionAttribution   columnStoreCompressionAttribution `json:"compression_attribution"`
 
-	duration time.Duration
+	duration       time.Duration
+	hotRunDuration time.Duration
 }
 
 type columnStoreJSONBenchCell struct {
@@ -668,10 +669,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	// report phase and must not contaminate the measured column_store query-phase
 	// profiles or BenchmarkColumnStoreSuite* query-loop benchmarks.
 	start = time.Now()
-	jsonbenchCells, err := buildColumnStoreJSONBenchCells(collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames, queries, cfgForPath, retainedPayloadBytes)
-	if err != nil {
-		return "", err
-	}
+	jsonbenchCells, jsonbenchCellsErr := buildColumnStoreJSONBenchCells(collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames, queries, cfgForPath, retainedPayloadBytes)
 	stages = append(stages, columnStoreStage("jsonbench_cell_report", start, rows*len(queryNames), 0))
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
 	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{ReadIntegrity: assetReadIntegrity})
@@ -758,9 +756,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			}
 		}
 	}
-	// Keep artifacts available for diagnosis even when parity is the failing gate.
-	if parityErr != nil || profileFinalizeErr != nil {
-		return "", errors.Join(parityErr, profileFinalizeErr)
+	// Keep artifacts available for diagnosis even when parity/report-cell gates fail.
+	if parityErr != nil || profileFinalizeErr != nil || jsonbenchCellsErr != nil {
+		return "", errors.Join(parityErr, profileFinalizeErr, jsonbenchCellsErr)
 	}
 	return md, nil
 }
@@ -1511,6 +1509,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			ActiveManifestChecksum: activeManifestChecksum,
 			DurationMS:             durationMS(elapsed),
 			duration:               elapsed,
+			hotRunDuration:         exec.HotRunDuration,
 			Rows:                   rows,
 			RowsProcessed:          exec.RowsProcessed,
 			RowsProcessedKnown:     exec.RowsProcessedKnown,
@@ -2124,6 +2123,7 @@ func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collectio
 }
 
 func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int, rawHashes map[string]uint64, forcedPath string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string, queries []columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) ([]columnStoreJSONBenchCell, error) {
+	var reportErr error
 	byQuery := make(map[string]columnStoreQueryMetric, len(queries))
 	for _, q := range queries {
 		byQuery[q.Name] = q
@@ -2150,11 +2150,11 @@ func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int
 		}
 		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHash, q, exec, preparedKind, cfg, retainedPayloadBytes)
 		if err := columnStoreValidatePreparedJSONBenchCellParity(cell); err != nil {
-			return nil, err
+			reportErr = errors.Join(reportErr, err)
 		}
 		cells = append(cells, cell)
 	}
-	return cells, nil
+	return cells, reportErr
 }
 
 func columnStorePreparedCellPlanKind(planLabel string) (collections.ColumnQueryPlanKind, bool) {
@@ -2197,7 +2197,10 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.ManifestGeneration = q.ManifestGeneration
 	cell.ActiveManifestChecksum = q.ActiveManifestChecksum
 	cell.PlannerDurationMS = q.PlannerDurationMS
-	cell.HotRunDurationMS = q.ScanDurationMS + q.ReduceDurationMS + q.AdapterDurationMS
+	cell.HotRunDurationMS = durationMS(q.hotRunDuration)
+	if cell.HotRunDurationMS == 0 {
+		cell.HotRunDurationMS = q.ScanDurationMS + q.ReduceDurationMS + q.AdapterDurationMS
+	}
 	cell.ScanDurationMS = q.ScanDurationMS
 	cell.ReduceDurationMS = q.ReduceDurationMS
 	cell.ResultShapeDurationMS = q.AdapterDurationMS
@@ -2371,13 +2374,6 @@ func columnStoreJSONBenchActualCellLabel(planLabel, executionMode, storageSource
 
 func columnStoreJSONBenchActualScanPath(planLabel, storageSource string, metadataHits int) string {
 	if planLabel == columnStorePathAggregateMetadata && storageSource == string(collections.ColumnPhysicalQueryStorageSourceAggregateMetadata) && metadataHits > 0 {
-		return columnStoreJSONBenchScanPathMetadata
-	}
-	return columnStoreJSONBenchScanPathData
-}
-
-func columnStoreJSONBenchScanPathForPlan(planLabel string) string {
-	if planLabel == columnStorePathAggregateMetadata {
 		return columnStoreJSONBenchScanPathMetadata
 	}
 	return columnStoreJSONBenchScanPathData
