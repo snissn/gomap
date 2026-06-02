@@ -205,6 +205,24 @@ func typedColumnPreparedLogicalTypeForValueType(valueType ColumnStoreValueType) 
 		return columnsemantics.LogicalDouble, true
 	case ColumnStoreValueString:
 		return columnsemantics.LogicalString, true
+	case ColumnStoreValueInt8:
+		return columnsemantics.LogicalInt8, true
+	case ColumnStoreValueUint8:
+		return columnsemantics.LogicalUint8, true
+	case ColumnStoreValueInt16:
+		return columnsemantics.LogicalInt16, true
+	case ColumnStoreValueUint16:
+		return columnsemantics.LogicalUint16, true
+	case ColumnStoreValueInt32:
+		return columnsemantics.LogicalInt32, true
+	case ColumnStoreValueUint32:
+		return columnsemantics.LogicalUint32, true
+	case ColumnStoreValueUint64:
+		return columnsemantics.LogicalUint64, true
+	case ColumnStoreValueFloat16:
+		return columnsemantics.LogicalFloat16, true
+	case ColumnStoreValueBFloat16:
+		return columnsemantics.LogicalBFloat16, true
 	case ColumnStoreValueFloat32Vector:
 		return columnsemantics.LogicalFloat32Vector, true
 	// uint32_list uses split offsets/value sections; prepared-state dependency
