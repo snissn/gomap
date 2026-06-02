@@ -2161,7 +2161,18 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 		return []columnDeclaredValue{}, typedcolumn.PartScanDiagnostics{RowsScanned: 0, ColumnsProjected: 1, GranulesConsidered: len(p.Part.Descriptor.Granules)}, nil
 	}
 	if column.Field.Nullable {
-		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("%w: typed-column adapter selected-row scan does not support nullable column %q", ErrColumnQueryPlanUnsupported, columnName)
+		if rows != nil {
+			return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("%w: typed-column adapter selected-row scan does not support nullable column %q", ErrColumnQueryPlanUnsupported, columnName)
+		}
+		values, err := p.scanNullableColumnValues(column)
+		if err != nil {
+			return nil, typedcolumn.PartScanDiagnostics{}, err
+		}
+		diag, err := p.scanColumnValuesRowsFullDiagnostics(column)
+		if err != nil {
+			return nil, typedcolumn.PartScanDiagnostics{}, err
+		}
+		return values, diag, nil
 	}
 	switch column.Field.ValueType {
 	case ColumnStoreValueString, ColumnStoreValueInt64, ColumnStoreValueBool:
@@ -2188,6 +2199,54 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 		out[i] = value
 	}
 	return out, scan.Diagnostics, nil
+}
+
+func (p *typedColumnAdapterPart) scanColumnValuesRowsFullDiagnostics(column typedColumnAdapterColumn) (typedcolumn.PartScanDiagnostics, error) {
+	if p == nil || p.Part == nil {
+		return typedcolumn.PartScanDiagnostics{}, errors.New("collections: nil typed-column adapter part")
+	}
+	partColumn, ok := p.Part.Columns[column.Definition.Name]
+	if !ok {
+		return typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter missing column %q", column.Definition.Name)
+	}
+	diag := typedcolumn.PartScanDiagnostics{
+		RowsScanned:        p.Part.Descriptor.RowCount,
+		ColumnsProjected:   1,
+		GranulesConsidered: len(p.Part.Descriptor.Granules),
+	}
+	coveredStart := -1
+	coveredEnd := -1
+	prevFirstGranule := -1
+	for _, block := range partColumn.Blocks {
+		if block.Descriptor.FirstGranule < 0 || block.Descriptor.LastGranule < block.Descriptor.FirstGranule {
+			return typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter invalid granule range %d..%d for column %q", block.Descriptor.FirstGranule, block.Descriptor.LastGranule, column.Definition.Name)
+		}
+		if prevFirstGranule >= 0 && block.Descriptor.FirstGranule < prevFirstGranule {
+			return typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter granule ranges out of order for column %q: %d after %d", column.Definition.Name, block.Descriptor.FirstGranule, prevFirstGranule)
+		}
+		prevFirstGranule = block.Descriptor.FirstGranule
+		coveredStart, coveredEnd = typedColumnAdapterExtendGranuleCoverage(coveredStart, coveredEnd, block.Descriptor.FirstGranule, block.Descriptor.LastGranule, &diag.GranulesDecoded)
+		diag.BlocksDecoded++
+		diag.BytesDecoded += block.Granule.RawBytes
+	}
+	if coveredStart >= 0 {
+		diag.GranulesDecoded += coveredEnd - coveredStart + 1
+	}
+	return diag, nil
+}
+
+func typedColumnAdapterExtendGranuleCoverage(coveredStart, coveredEnd, first, last int, total *int) (int, int) {
+	if coveredStart < 0 {
+		return first, last
+	}
+	if first <= coveredEnd+1 {
+		if last > coveredEnd {
+			coveredEnd = last
+		}
+		return coveredStart, coveredEnd
+	}
+	*total += coveredEnd - coveredStart + 1
+	return first, last
 }
 
 func (p *typedColumnAdapterPart) scanNativeFloat32ColumnValues(column typedColumnAdapterColumn) ([]columnDeclaredValue, error) {

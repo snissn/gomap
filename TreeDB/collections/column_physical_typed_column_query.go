@@ -24,6 +24,7 @@ type columnTypedColumnPhysicalQueryPlan struct {
 	DenseGroupHourCount  bool
 	DenseInt64Span       bool
 	TimeOrderTopK        bool
+	NullableStringValues bool
 }
 
 type columnTypedColumnDenseGroupCountPart struct {
@@ -314,7 +315,8 @@ func columnTypedColumnPhysicalQueryUseSortedLatestVisible(plan columnTypedColumn
 }
 
 func columnTypedColumnPhysicalQueryUseSortedMarkPrunedTopK(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
-	return req.Kind == ColumnPhysicalQueryGroupMinInt64 &&
+	return !plan.NullableStringValues &&
+		req.Kind == ColumnPhysicalQueryGroupMinInt64 &&
 		req.GroupColumn != "" && req.ValueColumn != "" && req.DistinctColumn == "" &&
 		req.AggregateMetadataName == "" && req.TopK > 0 && req.TopKOrder == ColumnPhysicalQueryTopKInt64Asc &&
 		len(plan.PredicateSpecs) != 0 && plan.SortKeyPrefix.Planned && !columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req)
@@ -476,6 +478,7 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 	touchesTyped := columnTypedColumnPhysicalQueryTouchesTypedColumnPart(cfg, req)
 	anyTyped := false
 	allTyped := true
+	hasNullableStringValues := false
 	for column, wantType := range requiredTypes {
 		col, _, ok := columnPhysicalQueryDeclaredColumn(cfg, column)
 		if !ok {
@@ -488,7 +491,10 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 			return columnTypedColumnPhysicalQueryPlan{}, true, fmt.Errorf("%w: typed-column part physical query column %q has type %q, want %q", ErrColumnQueryPlanUnsupported, column, col.ValueType, wantType)
 		}
 		if col.Nullable {
-			return columnTypedColumnPhysicalQueryPlan{}, true, fmt.Errorf("%w: typed-column part physical query column %q does not support nullable values", ErrColumnQueryPlanUnsupported, column)
+			if wantType != ColumnStoreValueString {
+				return columnTypedColumnPhysicalQueryPlan{}, true, fmt.Errorf("%w: typed-column part physical query column %q does not support nullable %s values", ErrColumnQueryPlanUnsupported, column, wantType)
+			}
+			hasNullableStringValues = true
 		}
 		if columnStoreColumnIsTypedColumnPart(col) {
 			anyTyped = true
@@ -529,10 +535,14 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 		return columnTypedColumnPhysicalQueryPlan{}, true, err
 	}
 	plan.SortKeyPrefix = planColumnTypedColumnSortKeyPrefix(cfg, sortKey, req)
+	if hasNullableStringValues {
+		plan.SortKeyPrefix = columnTypedColumnSortKeyPrefixPlan{}
+	}
 	plan.DenseGroupCount = columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req)
 	plan.DenseGroupHourCount = columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req)
 	plan.DenseInt64Span = columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req)
 	plan.TimeOrderTopK = columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req) && columnTypedColumnPhysicalQuerySortKeyCanUseTimeOrderTopK(sortKey, req)
+	plan.NullableStringValues = hasNullableStringValues
 	plan.Fields = fields
 	plan.Selected = selected
 	plan.PredicateSpecs = predicateSpecs
@@ -627,9 +637,6 @@ func columnTypedColumnPhysicalQueryPredicateSpecs(cfg ColumnStoreConfig, req Col
 		}
 		if col.ValueType != ColumnStoreValueString {
 			return nil, fmt.Errorf("%w: typed-column part physical predicate column %q has type %q, want %q", ErrColumnQueryPlanUnsupported, predicate.Column, col.ValueType, ColumnStoreValueString)
-		}
-		if col.Nullable {
-			return nil, fmt.Errorf("%w: typed-column part physical predicate column %q does not support nullable values", ErrColumnQueryPlanUnsupported, predicate.Column)
 		}
 		if !columnStoreColumnIsTypedColumnPart(col) {
 			return nil, fmt.Errorf("%w: typed-column part physical predicate column %q is not owned by typed_column_part", ErrColumnQueryPlanUnsupported, predicate.Column)
@@ -1261,7 +1268,7 @@ func columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req ColumnPhysical
 }
 
 func columnTypedColumnPhysicalQueryUseDenseGroupCount(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
-	return plan.DenseGroupCount && columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req)
+	return !plan.NullableStringValues && plan.DenseGroupCount && columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req)
 }
 
 func columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req ColumnPhysicalQueryRequest) bool {
@@ -1269,7 +1276,7 @@ func columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req ColumnPhys
 }
 
 func columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
-	return plan.DenseGroupHourCount && columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req)
+	return !plan.NullableStringValues && plan.DenseGroupHourCount && columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req)
 }
 
 func columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req ColumnPhysicalQueryRequest) bool {
@@ -1277,7 +1284,7 @@ func columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req ColumnPhysicalQ
 }
 
 func columnTypedColumnPhysicalQueryUseDenseInt64Span(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
-	return plan.DenseInt64Span && columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req)
+	return !plan.NullableStringValues && plan.DenseInt64Span && columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req)
 }
 
 func columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req ColumnPhysicalQueryRequest) bool {
@@ -1293,7 +1300,7 @@ func columnTypedColumnPhysicalQuerySortKeyCanUseTimeOrderTopK(sortKey []ColumnSo
 }
 
 func columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
-	return plan.TimeOrderTopK && columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req)
+	return !plan.NullableStringValues && plan.TimeOrderTopK && columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req)
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) runTimeOrderTopK(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
@@ -1995,7 +2002,7 @@ func columnTypedColumnDensePredicatesMatch(predicates []columnTypedColumnDensePr
 }
 
 func columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
-	return req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && plan.SortKeyPrefix.SortedGroupedDistinctReady
+	return !plan.NullableStringValues && req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && plan.SortKeyPrefix.SortedGroupedDistinctReady
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) runSortedGroupedDistinct(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
@@ -2749,7 +2756,7 @@ func typedColumnPhysicalQueryStringValueAt(values map[string][]columnDeclaredVal
 		return columnDeclaredValue{}, fmt.Errorf("%w: typed-column part physical query expected string column %q, got %q", ErrColumnQueryPlanUnsupported, column, value.Type)
 	}
 	if !value.Present || value.Null {
-		return columnDeclaredValue{}, fmt.Errorf("%w: typed-column part physical query column %q has null/missing string value", ErrColumnQueryPlanUnsupported, column)
+		return columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: ""}, nil
 	}
 	return value, nil
 }
