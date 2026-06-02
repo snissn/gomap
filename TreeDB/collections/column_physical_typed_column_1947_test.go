@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -180,6 +181,61 @@ func TestColumnPhysicalJSONBenchTypedColumnPartStoresFullQ2Columns1947(t *testin
 	}
 	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.PredicateCount != len(q2.Predicates) {
 		t.Fatalf("q2 diagnostics=%+v want typed-column source and real predicates", result.Diagnostics)
+	}
+}
+
+func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataMissingStrings2165(t *testing.T) {
+	docs := []string{
+		`{"time_us":1000,"kind":"commit","did":"did_a","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":2000,"kind":"commit","did":"did_b","commit":{"operation":"create"}}`,
+		`{"time_us":3000,"did":"did_c"}`,
+		`{"time_us":4000,"kind":"commit","did":"did_a","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":5000,"kind":"commit","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":6000,"kind":"commit","did":"did_d","commit":{"operation":"delete","collection":"app.bsky.feed.post"}}`,
+	}
+	_, collection, closeFn := openColumnPhysicalJSONBenchNullableFullDataFixture2165(t, docs)
+	defer closeFn()
+
+	q1 := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event"}
+	q1Result := runNullableFullDataQuery2165(t, collection, "q1", q1, len(docs), 0, 0, len(docs))
+	if got, want := columnPhysicalGroupCountMap2165(q1Result.Groups), map[string]int{"": 2, "app.bsky.feed.post": 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("q1 groups=%v want %v raw=%+v", got, want, q1Result.Groups)
+	}
+
+	commitCreate := []ColumnPhysicalQueryPredicate{
+		{Column: "kind", Value: "commit"},
+		{Column: "operation", Value: "create"},
+	}
+	q2 := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "event",
+		DistinctColumn: "did",
+		Predicates:     commitCreate,
+	}
+	q2Result := runNullableFullDataQuery2165(t, collection, "q2", q2, len(docs), len(commitCreate), 4, 4)
+	wantQ2 := map[string]columnPhysicalCountDistinct2165{
+		"":                   {Count: 1, Distinct: 1},
+		"app.bsky.feed.post": {Count: 3, Distinct: 2},
+	}
+	if got := columnPhysicalCountDistinctMap2165(q2Result.Groups); !reflect.DeepEqual(got, wantQ2) {
+		t.Fatalf("q2 groups=%v want %v raw=%+v", got, wantQ2, q2Result.Groups)
+	}
+
+	postCreate := append(append([]ColumnPhysicalQueryPredicate(nil), commitCreate...), ColumnPhysicalQueryPredicate{Column: "event", Value: "app.bsky.feed.post"})
+	q4 := ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupMinInt64,
+		GroupColumn: "did",
+		ValueColumn: "time_us",
+		Predicates:  postCreate,
+		TopK:        2,
+		TopKOrder:   ColumnPhysicalQueryTopKInt64Asc,
+	}
+	q4Result := runNullableFullDataQuery2165(t, collection, "q4a", q4, len(docs), len(postCreate), 3, 3)
+	if got, want := columnPhysicalInt64Map2165(q4Result.Groups), map[string]int64{"did_a": 1000, "": 5000}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("q4 groups=%v want %v raw=%+v", got, want, q4Result.Groups)
+	}
+	if q4Result.Diagnostics.TimeOrderTopKUsed {
+		t.Fatalf("q4 diagnostics used nullable-unsafe time-order topK: %+v", q4Result.Diagnostics)
 	}
 }
 
@@ -496,6 +552,147 @@ func openColumnPhysicalJSONBenchTypedColumnPartFixture1947(tb testing.TB, events
 		tb.Fatalf("OpenCollection reopened: %v", err)
 	}
 	return reopen, reopened, func() { _ = reopen.Close() }, preCloseTypedRefs
+}
+
+func openColumnPhysicalJSONBenchNullableFullDataFixture2165(tb testing.TB, docs []string) (*backenddb.DB, *Collection, func()) {
+	tb.Helper()
+	dir := tb.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		tb.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open setup DB: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	cfg := &ColumnStoreConfig{
+		Enabled:         true,
+		RetainedPayload: ColumnRetainedPayloadNonColumn,
+		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+		Columns: []ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true, Nullable: true},
+			{Name: "operation", Path: "commit.operation", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true, Nullable: true},
+			{Name: "event", Path: "commit.collection", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true, Nullable: true},
+			{Name: "did", Path: "did", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true, Nullable: true},
+		},
+		SortKey: []ColumnSortKey{{Column: "time_us"}},
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		tb.Fatalf("Checkpoint setup DB: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection setup: %v", err)
+	}
+	ids := make([][]byte, len(docs))
+	payloads := make([][]byte, len(docs))
+	for i, doc := range docs {
+		ids[i] = []byte(fmt.Sprintf("event-%02d", i))
+		payloads[i] = []byte(doc)
+	}
+	if _, err := col.InsertBatch(ids, payloads); err != nil {
+		_ = d.Close()
+		tb.Fatalf("InsertBatch: %v", err)
+	}
+	if refs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(tb, d, col)); len(refs) != 1 {
+		_ = d.Close()
+		tb.Fatalf("typed refs=%+v want one", refs)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		tb.Fatalf("Checkpoint before reopen: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		tb.Fatalf("Close before reopen: %v", err)
+	}
+	reopen, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open reopened DB: %v", err)
+	}
+	reopened, err := NewCollectionManager(reopen).OpenCollection("events")
+	if err != nil {
+		_ = reopen.Close()
+		tb.Fatalf("OpenCollection reopened: %v", err)
+	}
+	return reopen, reopened, func() { _ = reopen.Close() }
+}
+
+func runNullableFullDataQuery2165(tb testing.TB, collection *Collection, name string, req ColumnPhysicalQueryRequest, wantRows, wantPredicates, wantMatched, wantReduce int) ColumnPhysicalQueryResult {
+	tb.Helper()
+	direct, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("RunColumnPhysicalQuery(%s): %v", name, err)
+	}
+	assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb, name+" direct", direct.Diagnostics, wantRows, wantPredicates, wantMatched, wantReduce)
+	assertNullableFullDataGenericDiagnostics2165(tb, name+" direct", direct.Diagnostics)
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("PrepareColumnPhysicalQuery(%s): %v", name, err)
+	}
+	defer func() { _ = runner.Close() }()
+	var prepared ColumnPhysicalQueryResult
+	for run := 0; run < 2; run++ {
+		prepared, err = runner.Run()
+		if err != nil {
+			tb.Fatalf("prepared %s run %d: %v", name, run, err)
+		}
+		assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics, wantRows, wantPredicates, wantMatched, wantReduce)
+		assertNullableFullDataGenericDiagnostics2165(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics)
+		if !reflect.DeepEqual(prepared.Groups, direct.Groups) {
+			tb.Fatalf("%s prepared run %d groups=%+v want direct %+v", name, run, prepared.Groups, direct.Groups)
+		}
+	}
+	return direct
+}
+
+func assertNullableFullDataGenericDiagnostics2165(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+	tb.Helper()
+	if diag.DenseGroupCountUsed || diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed || diag.SortedGroupedDistinctUsed || diag.TimeOrderTopKUsed {
+		tb.Fatalf("%s nullable full-data query used nullable-unsafe fast path: %+v", label, diag)
+	}
+	if diag.SortKeyPrefixPlanned || diag.SortKeyMarkChecks != 0 || diag.SortKeyMarkSkips != 0 {
+		tb.Fatalf("%s nullable full-data query used sort-key pruning: %+v", label, diag)
+	}
+	if diag.DecodedBlocks == 0 || diag.DecodedPayloadBytes == 0 {
+		tb.Fatalf("%s nullable full-data query did not report typed-column decode work: %+v", label, diag)
+	}
+}
+
+func columnPhysicalGroupCountMap2165(groups []ColumnPhysicalQueryGroup) map[string]int {
+	out := make(map[string]int, len(groups))
+	for _, group := range groups {
+		out[group.Key] = group.Count
+	}
+	return out
+}
+
+type columnPhysicalCountDistinct2165 struct {
+	Count    int
+	Distinct int
+}
+
+func columnPhysicalCountDistinctMap2165(groups []ColumnPhysicalQueryGroup) map[string]columnPhysicalCountDistinct2165 {
+	out := make(map[string]columnPhysicalCountDistinct2165, len(groups))
+	for _, group := range groups {
+		out[group.Key] = columnPhysicalCountDistinct2165{Count: group.Count, Distinct: group.DistinctCount}
+	}
+	return out
+}
+
+func columnPhysicalInt64Map2165(groups []ColumnPhysicalQueryGroup) map[string]int64 {
+	out := make(map[string]int64, len(groups))
+	for _, group := range groups {
+		out[group.Key] = group.Int64
+	}
+	return out
 }
 
 func assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb testing.TB, query string, diag ColumnPhysicalQueryDiagnostics, wantRowsScanned, wantPredicates, wantMatchedRows, wantReduceRows int) {
