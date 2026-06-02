@@ -75,6 +75,8 @@ const (
 	ReasonVectorScalarUnsupported                ReasonCode = "layout_vector_scalar_unsupported"
 	ReasonUint32ListScalarUnsupported            ReasonCode = "layout_uint32_list_scalar_unsupported"
 	ReasonBytesScalarUnsupported                 ReasonCode = "layout_bytes_scalar_unsupported"
+	ReasonPackedUintScalarUnsupported            ReasonCode = "layout_packed_uint_scalar_unsupported"
+	ReasonPackedUintBitsMismatch                 ReasonCode = "layout_packed_uint_bits_mismatch"
 	ReasonAdjacencyScalarUnsupported             ReasonCode = "layout_adjacency_scalar_unsupported"
 	ReasonAdjacencyDirectViewDeferred            ReasonCode = "layout_adjacency_direct_view_deferred"
 	ReasonAdjacencyOffsetsListDirectViewDeferred ReasonCode = "layout_adjacency_offsets_list_direct_view_deferred"
@@ -99,6 +101,9 @@ type Descriptor struct {
 	DictionaryOrder     bool
 	DictionaryCollation string
 	FixedWidthElements  int
+	BitsPerElement      int
+	BytesPerRow         int
+	LogicalBitsPerRow   int
 }
 
 type Capability struct {
@@ -138,6 +143,9 @@ type LayoutProperties struct {
 	VariableWidth       bool
 	ElementWidthBytes   int
 	ElementsPerRow      int
+	BytesPerRow         int
+	BitsPerElement      int
+	LogicalBitsPerRow   int
 	Endian              Endian
 	AlignmentBytes      int
 	LengthMultipleBytes int
@@ -365,6 +373,10 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		}
 	case typedcolumn.EncodingRawUint8Vector, typedcolumn.EncodingRawInt8Vector, typedcolumn.EncodingRawUint16Vector, typedcolumn.EncodingRawInt16Vector, typedcolumn.EncodingRawUint32Vector, typedcolumn.EncodingRawInt32Vector, typedcolumn.EncodingRawUint64Vector, typedcolumn.EncodingRawInt64Vector, typedcolumn.EncodingRawFloat16Vector, typedcolumn.EncodingRawBFloat16Vector, typedcolumn.EncodingRawFloat64Vector:
 		applyDenseNumericVectorLayout(&caps)
+	case typedcolumn.EncodingRawFixedBytes:
+		applyFixedBytesLayout(&caps)
+	case typedcolumn.EncodingRawPackedBitVector, typedcolumn.EncodingRawPackedUint2Vector, typedcolumn.EncodingRawPackedUint4Vector:
+		applyPackedUintVectorLayout(&caps)
 	case typedcolumn.EncodingRawUint32Dense:
 		caps.Layout.Kind = LayoutFixedWidth
 		caps.Layout.FixedWidth = true
@@ -455,6 +467,114 @@ func applyDenseNumericVectorLayout(caps *Capabilities) {
 		caps.DirectView = directView(desc, width, EndianLittle, width)
 	} else {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: width, AlignmentBytes: width, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+	}
+}
+
+func applyFixedBytesLayout(caps *Capabilities) {
+	if caps == nil {
+		return
+	}
+	desc := caps.Descriptor
+	caps.Layout.Kind = LayoutFixedWidth
+	caps.Layout.FixedWidth = true
+	caps.Layout.ElementWidthBytes = 1
+	caps.Layout.ElementsPerRow = desc.FixedWidthElements
+	caps.Layout.BytesPerRow = desc.FixedWidthElements
+	caps.Layout.Endian = EndianLittle
+	caps.Layout.AlignmentBytes = 1
+	caps.Layout.LengthMultipleBytes = 1
+	if desc.FixedWidthElements <= 0 {
+		caps.Layout.ElementsPerRow = 0
+		caps.Layout.BytesPerRow = 0
+		caps.DirectView = denseFixedWidthElementsRequiredDirectView(desc, 1, EndianLittle, 1)
+		return
+	}
+	if desc.BytesPerRow != 0 && desc.BytesPerRow != desc.FixedWidthElements {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLengthMultipleMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
+	if desc.Logical == columnsemantics.LogicalByteVector && desc.Physical == typedcolumn.ColumnTypeFixedBytes && desc.Encoding == typedcolumn.EncodingRawFixedBytes {
+		caps.DirectView = directView(desc, 1, EndianLittle, 1)
+		caps.DirectView.Lifetime = "caller-owned prepared/session fixed-byte payload resource handles"
+		caps.DirectView.ValidationBoundary = "prepare_and_payload_read"
+	} else {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+	}
+}
+
+func applyPackedUintVectorLayout(caps *Capabilities) {
+	if caps == nil {
+		return
+	}
+	desc := caps.Descriptor
+	bitsPerElement, ok := typedcolumn.PackedUintVectorBits(desc.Physical)
+	wantEncoding, encOK := typedcolumn.PackedUintVectorEncoding(desc.Physical)
+	if !ok || !encOK || desc.Encoding != wantEncoding {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonEncodingPhysicalMismatch, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
+	caps.Layout.Kind = LayoutFixedWidth
+	caps.Layout.FixedWidth = true
+	caps.Layout.ElementWidthBytes = 1
+	caps.Layout.ElementsPerRow = desc.FixedWidthElements
+	caps.Layout.BitsPerElement = bitsPerElement
+	caps.Layout.LogicalBitsPerRow = desc.FixedWidthElements * bitsPerElement
+	caps.Layout.Endian = EndianLittle
+	caps.Layout.AlignmentBytes = 1
+	caps.Layout.LengthMultipleBytes = 1
+	if desc.FixedWidthElements <= 0 {
+		caps.Layout.ElementsPerRow = 0
+		caps.Layout.LogicalBitsPerRow = 0
+		caps.DirectView = denseFixedWidthElementsRequiredDirectView(desc, 1, EndianLittle, 1)
+		return
+	}
+	rowBytes, err := typedcolumn.PackedUintRowBytes(desc.FixedWidthElements, bitsPerElement)
+	if err != nil {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLengthMultipleMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
+	caps.Layout.BytesPerRow = rowBytes
+	if desc.BitsPerElement != 0 && desc.BitsPerElement != bitsPerElement {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonPackedUintBitsMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
+	if desc.BytesPerRow != 0 && desc.BytesPerRow != rowBytes {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLengthMultipleMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
+	logicalBits := desc.FixedWidthElements * bitsPerElement
+	if desc.LogicalBitsPerRow != 0 && desc.LogicalBitsPerRow != logicalBits {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonPackedUintBitsMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
+	if packedUintVectorLogicalPhysicalMatch(desc.Logical, desc.Physical, desc.Encoding) {
+		caps.DirectView = directView(desc, 1, EndianLittle, 1)
+		caps.DirectView.Lifetime = "caller-owned prepared/session packed-code byte payload resource handles"
+		caps.DirectView.ValidationBoundary = "prepare_and_payload_read"
+	} else {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+	}
+}
+
+func packedUintVectorLogical(logical columnsemantics.LogicalType) bool {
+	switch logical {
+	case columnsemantics.LogicalPackedBitVector, columnsemantics.LogicalPackedUint2Vector, columnsemantics.LogicalPackedUint4Vector:
+		return true
+	default:
+		return false
+	}
+}
+
+func packedUintVectorLogicalPhysicalMatch(logical columnsemantics.LogicalType, physical typedcolumn.ColumnType, encoding typedcolumn.Encoding) bool {
+	switch logical {
+	case columnsemantics.LogicalPackedBitVector:
+		return physical == typedcolumn.ColumnTypePackedBitVector && encoding == typedcolumn.EncodingRawPackedBitVector
+	case columnsemantics.LogicalPackedUint2Vector:
+		return physical == typedcolumn.ColumnTypePackedUint2Vector && encoding == typedcolumn.EncodingRawPackedUint2Vector
+	case columnsemantics.LogicalPackedUint4Vector:
+		return physical == typedcolumn.ColumnTypePackedUint4Vector && encoding == typedcolumn.EncodingRawPackedUint4Vector
+	default:
+		return false
 	}
 }
 
@@ -772,7 +892,7 @@ func (c Capabilities) Supports(op Operation) Capability {
 		}
 		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise lexical range")
 	case OpVectorDirectView:
-		if c.Descriptor.Logical != columnsemantics.LogicalFloat32Vector && !denseNumericVectorLogicalPhysicalMatch(c.Descriptor.Logical, c.Descriptor.Physical, c.Descriptor.Encoding) {
+		if c.Descriptor.Logical != columnsemantics.LogicalFloat32Vector && c.Descriptor.Logical != columnsemantics.LogicalByteVector && !denseNumericVectorLogicalPhysicalMatch(c.Descriptor.Logical, c.Descriptor.Physical, c.Descriptor.Encoding) && !packedUintVectorLogicalPhysicalMatch(c.Descriptor.Logical, c.Descriptor.Physical, c.Descriptor.Encoding) {
 			return Unsupported(op, ReasonOperationUnsupported, "layout is not a vector payload")
 		}
 		if c.DirectView.Eligible {
@@ -796,7 +916,7 @@ func (c Capabilities) Supports(op Operation) Capability {
 		}
 		return Unsupported(op, c.DirectView.Reason, "adjacency payload layout is not eligible for direct view")
 	case OpBytesDirectView:
-		if c.Descriptor.Logical != columnsemantics.LogicalBytes {
+		if c.Descriptor.Logical != columnsemantics.LogicalBytes && c.Descriptor.Logical != columnsemantics.LogicalByteVector {
 			return Unsupported(op, ReasonOperationUnsupported, "layout is not a bytes payload")
 		}
 		if c.DirectView.Eligible {
@@ -837,16 +957,22 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 		if c.Descriptor.Logical == columnsemantics.LogicalBool {
 			return c.validateDescriptor(Operation(op))
 		}
-		if c.Descriptor.Logical == columnsemantics.LogicalBytes {
+		if c.Descriptor.Logical == columnsemantics.LogicalBytes || c.Descriptor.Logical == columnsemantics.LogicalByteVector {
 			return Unsupported(Operation(op), ReasonBytesScalarUnsupported, "bytes layouts are opaque payloads, not scalar predicates")
+		}
+		if packedUintVectorLogical(c.Descriptor.Logical) {
+			return Unsupported(Operation(op), ReasonPackedUintScalarUnsupported, "packed_uint vector layouts are not scalar predicates")
 		}
 		return c.Supports(OpInt64RangePredicate)
 	case columnsemantics.OpOrderedRange:
 		if c.Descriptor.Logical == columnsemantics.LogicalString {
 			return c.Supports(OpLexicalRangePredicate)
 		}
-		if c.Descriptor.Logical == columnsemantics.LogicalBytes {
+		if c.Descriptor.Logical == columnsemantics.LogicalBytes || c.Descriptor.Logical == columnsemantics.LogicalByteVector {
 			return Unsupported(Operation(op), ReasonBytesScalarUnsupported, "bytes layouts are opaque payloads, not ordered scalars")
+		}
+		if packedUintVectorLogical(c.Descriptor.Logical) {
+			return Unsupported(Operation(op), ReasonPackedUintScalarUnsupported, "packed_uint vector layouts are not ordered scalars")
 		}
 		return c.Supports(OpInt64RangePredicate)
 	case columnsemantics.OpSum, columnsemantics.OpAvg, columnsemantics.OpMin, columnsemantics.OpMax:
@@ -1009,6 +1135,11 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 	case typedcolumn.ColumnTypeUint8Vector, typedcolumn.ColumnTypeInt8Vector, typedcolumn.ColumnTypeUint16Vector, typedcolumn.ColumnTypeInt16Vector, typedcolumn.ColumnTypeUint32Vector, typedcolumn.ColumnTypeInt32Vector, typedcolumn.ColumnTypeUint64Vector, typedcolumn.ColumnTypeInt64Vector, typedcolumn.ColumnTypeFloat16Vector, typedcolumn.ColumnTypeBFloat16Vector, typedcolumn.ColumnTypeFloat64Vector:
 		want, ok := typedcolumn.DenseFixedWidthVectorEncoding(physical)
 		return ReasonEncodingPhysicalMismatch, ok && encoding == want
+	case typedcolumn.ColumnTypeFixedBytes:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFixedBytes
+	case typedcolumn.ColumnTypePackedBitVector, typedcolumn.ColumnTypePackedUint2Vector, typedcolumn.ColumnTypePackedUint4Vector:
+		want, ok := typedcolumn.PackedUintVectorEncoding(physical)
+		return ReasonEncodingPhysicalMismatch, ok && encoding == want
 	case typedcolumn.ColumnTypeUint32List:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32OffsetsList
 	case typedcolumn.ColumnTypeBytes:
@@ -1081,19 +1212,28 @@ func (c Capabilities) validateGranuleLengths(g typedcolumn.EncodedGranule) error
 		}
 		return nil
 	}
-	elements, err := checkedMul(g.Rows, c.Layout.ElementsPerRow, "fixed-width elements")
-	if err != nil {
-		return err
-	}
-	want, err := checkedMul(elements, c.Layout.ElementWidthBytes, "fixed-width raw bytes")
-	if err != nil {
-		return err
+	want := 0
+	var err error
+	if c.Layout.BytesPerRow > 0 {
+		want, err = checkedMul(g.Rows, c.Layout.BytesPerRow, "fixed-width row bytes")
+		if err != nil {
+			return err
+		}
+	} else {
+		elements, err := checkedMul(g.Rows, c.Layout.ElementsPerRow, "fixed-width elements")
+		if err != nil {
+			return err
+		}
+		want, err = checkedMul(elements, c.Layout.ElementWidthBytes, "fixed-width raw bytes")
+		if err != nil {
+			return err
+		}
 	}
 	if g.RawBytes != want {
-		return fmt.Errorf("columnlayout: raw bytes raw=%d want rows=%d*elements=%d*width=%d=%d: %s", g.RawBytes, g.Rows, c.Layout.ElementsPerRow, c.Layout.ElementWidthBytes, want, ReasonRawLengthRowCountMismatch)
+		return fmt.Errorf("columnlayout: raw bytes raw=%d want rows=%d row_bytes=%d elements=%d width=%d => %d: %s", g.RawBytes, g.Rows, c.Layout.BytesPerRow, c.Layout.ElementsPerRow, c.Layout.ElementWidthBytes, want, ReasonRawLengthRowCountMismatch)
 	}
 	if c.Descriptor.Compression == typedcolumn.CompressionNone && g.StoredBytes != want {
-		return fmt.Errorf("columnlayout: stored bytes raw=%d stored=%d want rows=%d*elements=%d*width=%d=%d: %s", g.RawBytes, g.StoredBytes, g.Rows, c.Layout.ElementsPerRow, c.Layout.ElementWidthBytes, want, ReasonRawLengthRowCountMismatch)
+		return fmt.Errorf("columnlayout: stored bytes raw=%d stored=%d want rows=%d row_bytes=%d elements=%d width=%d => %d: %s", g.RawBytes, g.StoredBytes, g.Rows, c.Layout.BytesPerRow, c.Layout.ElementsPerRow, c.Layout.ElementWidthBytes, want, ReasonRawLengthRowCountMismatch)
 	}
 	return nil
 }

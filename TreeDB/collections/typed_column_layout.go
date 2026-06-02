@@ -9,7 +9,7 @@ import (
 
 func typedColumnLayoutDescriptorForAdapterColumn(column typedColumnAdapterColumn) columnlayout.Descriptor {
 	logical, _ := columnStoreSemanticLogicalType(column.Field.ValueType)
-	return columnlayout.Descriptor{
+	desc := columnlayout.Descriptor{
 		Logical:             logical,
 		Physical:            column.Definition.Type,
 		Encoding:            column.Definition.Encoding,
@@ -20,7 +20,15 @@ func typedColumnLayoutDescriptorForAdapterColumn(column typedColumnAdapterColumn
 		DictionaryOrder:     false,
 		DictionaryCollation: "",
 		FixedWidthElements:  column.Definition.FixedWidthElements,
+		BitsPerElement:      column.Definition.BitsPerElement,
 	}
+	if column.Field.ValueType == ColumnStoreValueByteVector {
+		desc.BytesPerRow = column.Field.BytesPerRow
+	} else if columnStoreValueTypeIsPackedUintVector(column.Field.ValueType) {
+		desc.LogicalBitsPerRow = column.Definition.FixedWidthElements * column.Definition.BitsPerElement
+		desc.BytesPerRow, _ = columnDeclaredPackedUintVectorBytesPerRow(column.Field.ValueType, column.Definition.FixedWidthElements)
+	}
+	return desc
 }
 
 func typedColumnLayoutCapabilitiesForAdapterColumn(column typedColumnAdapterColumn) columnlayout.Capabilities {

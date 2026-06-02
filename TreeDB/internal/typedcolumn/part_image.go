@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const columnPartImageVersion uint16 = 2
+const columnPartImageVersion uint16 = 3
 
 const columnPartImageMagic uint32 = 0x4d494354 // "TCIM", little-endian on disk.
 
@@ -494,7 +494,25 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			if column.FixedWidthElements <= 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements", column.Name, column.Type)
 			}
+			if column.BitsPerElement != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires bits_per_element=0", column.Name, column.Type)
+			}
+		case ColumnTypeFixedBytes:
+			if column.FixedWidthElements <= 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements/bytes_per_row", column.Name, column.Type)
+			}
+			if column.BitsPerElement != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires bits_per_element=0", column.Name, column.Type)
+			}
+		case ColumnTypePackedBitVector, ColumnTypePackedUint2Vector, ColumnTypePackedUint4Vector:
+			bitsPerElement, ok := PackedUintVectorBits(column.Type)
+			if !ok || column.FixedWidthElements <= 0 || column.BitsPerElement != bitsPerElement {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements and bits_per_element=%d", column.Name, column.Type, bitsPerElement)
+			}
 		case ColumnTypeUint32List:
+			if column.BitsPerElement != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires bits_per_element=0", column.Name, column.Type)
+			}
 			if column.FixedWidthElements != 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires fixed-width elements=0", column.Name, column.Type)
 			}
@@ -505,6 +523,9 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 				}
 			}
 		case ColumnTypeBytes:
+			if column.BitsPerElement != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires bits_per_element=0", column.Name, column.Type)
+			}
 			if column.FixedWidthElements != 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires fixed-width elements=0", column.Name, column.Type)
 			}
@@ -515,6 +536,9 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 				}
 			}
 		case ColumnTypeAdjacencyList:
+			if column.BitsPerElement != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires bits_per_element=0", column.Name, column.Type)
+			}
 			if column.FixedWidthElements < 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has negative fixed-width elements=%d", column.Name, column.Type, column.FixedWidthElements)
 			}
@@ -525,11 +549,18 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 				}
 			}
 		default:
+			if column.BitsPerElement != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has bits_per_element=%d", column.Name, column.Type, column.BitsPerElement)
+			}
 			if column.FixedWidthElements != 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has fixed-width elements=%d", column.Name, column.Type, column.FixedWidthElements)
 			}
 		}
 		enc.u32(uint32(column.FixedWidthElements))
+		if column.BitsPerElement < 0 || uint64(column.BitsPerElement) > uint64(^uint32(0)) {
+			return fmt.Errorf("typedcolumn: descriptor column %s bits_per_element=%d", column.Name, column.BitsPerElement)
+		}
+		enc.u32(uint32(column.BitsPerElement))
 		enc.u32(uint32(len(column.Blocks)))
 		for i, block := range column.Blocks {
 			if i >= len(partColumn.Blocks) {
@@ -1263,6 +1294,14 @@ func columnTypeCode(t ColumnType) (uint16, error) {
 		return 28, nil
 	case ColumnTypeFloat64Vector:
 		return 29, nil
+	case ColumnTypeFixedBytes:
+		return 30, nil
+	case ColumnTypePackedBitVector:
+		return 31, nil
+	case ColumnTypePackedUint2Vector:
+		return 32, nil
+	case ColumnTypePackedUint4Vector:
+		return 33, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported column type %s", t)
 	}

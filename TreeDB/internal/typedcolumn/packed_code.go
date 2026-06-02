@@ -29,6 +29,83 @@ var nativePackedCodeLittleEndian = func() bool {
 	return *(*byte)(unsafe.Pointer(&value)) == 1
 }()
 
+func FixedBytesEncoding(t ColumnType) (Encoding, bool) {
+	if t == ColumnTypeFixedBytes {
+		return EncodingRawFixedBytes, true
+	}
+	return 0, false
+}
+
+func PackedUintVectorBits(t ColumnType) (int, bool) {
+	switch t {
+	case ColumnTypePackedBitVector:
+		return 1, true
+	case ColumnTypePackedUint2Vector:
+		return 2, true
+	case ColumnTypePackedUint4Vector:
+		return 4, true
+	default:
+		return 0, false
+	}
+}
+
+func PackedUintVectorTypeForBits(bitsPerElement int) (ColumnType, bool) {
+	switch bitsPerElement {
+	case 1:
+		return ColumnTypePackedBitVector, true
+	case 2:
+		return ColumnTypePackedUint2Vector, true
+	case 4:
+		return ColumnTypePackedUint4Vector, true
+	default:
+		return "", false
+	}
+}
+
+func PackedUintVectorEncoding(t ColumnType) (Encoding, bool) {
+	switch t {
+	case ColumnTypePackedBitVector:
+		return EncodingRawPackedBitVector, true
+	case ColumnTypePackedUint2Vector:
+		return EncodingRawPackedUint2Vector, true
+	case ColumnTypePackedUint4Vector:
+		return EncodingRawPackedUint4Vector, true
+	default:
+		return 0, false
+	}
+}
+
+func PackedUintVectorEncodingForBits(bitsPerElement int) (Encoding, bool) {
+	switch bitsPerElement {
+	case 1:
+		return EncodingRawPackedBitVector, true
+	case 2:
+		return EncodingRawPackedUint2Vector, true
+	case 4:
+		return EncodingRawPackedUint4Vector, true
+	default:
+		return 0, false
+	}
+}
+
+func PackedUintEncodingBits(encoding Encoding) (int, bool) {
+	switch encoding {
+	case EncodingRawPackedBitVector:
+		return 1, true
+	case EncodingRawPackedUint2Vector:
+		return 2, true
+	case EncodingRawPackedUint4Vector:
+		return 4, true
+	default:
+		return 0, false
+	}
+}
+
+func IsPackedUintVectorColumnType(t ColumnType) bool {
+	_, ok := PackedUintVectorBits(t)
+	return ok
+}
+
 // NewFixedBytesRows validates a fixed-byte row payload and returns the view.
 func NewFixedBytesRows(rows int, bytesPerRow int, values []byte) (FixedBytesRows, error) {
 	out := FixedBytesRows{Rows: rows, BytesPerRow: bytesPerRow, Values: values}
@@ -358,6 +435,280 @@ func ValidatePackedUintRowPadding(row []byte, elementsPerRow int, bitsPerElement
 		return fmt.Errorf("non-zero padding bits final_byte=0x%02x valid_mask=0x%02x", row[len(row)-1], validMask)
 	}
 	return nil
+}
+
+func DecodeRawFixedBytesPayload(dst []byte, raw []byte, rows int, bytesPerRow int) ([]byte, error) {
+	if _, err := NewFixedBytesRows(rows, bytesPerRow, raw); err != nil {
+		return nil, err
+	}
+	out := ensureByteLen(dst[:0], len(raw))
+	copy(out, raw)
+	return out, nil
+}
+
+func FixedBytesViewFromBytes(raw []byte, rows int, bytesPerRow int) (FixedBytesRows, error) {
+	return NewFixedBytesRows(rows, bytesPerRow, raw)
+}
+
+func DecodeRawPackedUintPayload(dst []byte, raw []byte, rows int, elementsPerRow int, bitsPerElement int) ([]byte, error) {
+	if _, err := NewPackedUintRows(rows, elementsPerRow, bitsPerElement, raw); err != nil {
+		return nil, err
+	}
+	out := ensureByteLen(dst[:0], len(raw))
+	copy(out, raw)
+	return out, nil
+}
+
+func PackedUintViewFromBytes(raw []byte, rows int, elementsPerRow int, bitsPerElement int) (PackedUintRows, error) {
+	return NewPackedUintRows(rows, elementsPerRow, bitsPerElement, raw)
+}
+
+func (b *ColumnPartBuilder) gatherFixedBytes(source FixedBytesRows, def ColumnDefinition, start int, end int) ([]byte, error) {
+	if def.Type != ColumnTypeFixedBytes {
+		return nil, fmt.Errorf("typedcolumn: column %s type=%s is not fixed_bytes", def.Name, def.Type)
+	}
+	if source.Rows < 0 || source.BytesPerRow != def.FixedWidthElements {
+		return nil, fmt.Errorf("typedcolumn: fixed_bytes column %s metadata rows=%d bytes_per_row=%d want bytes_per_row=%d", def.Name, source.Rows, source.BytesPerRow, def.FixedWidthElements)
+	}
+	if err := source.Validate(); err != nil {
+		return nil, err
+	}
+	count, err := checkedMulInt(end-start, def.FixedWidthElements, def.Name+" block bytes")
+	if err != nil {
+		return nil, err
+	}
+	b.packedRaw = ensureByteLen(b.packedRaw[:0], count)
+	for row := start; row < end; row++ {
+		sourceRow := b.order[row]
+		sourceStart, err := checkedMulInt(sourceRow, def.FixedWidthElements, def.Name+" source byte offset")
+		if err != nil {
+			return nil, err
+		}
+		if sourceStart > len(source.Values)-def.FixedWidthElements {
+			return nil, fmt.Errorf("typedcolumn: fixed_bytes column %s row %d outside source bytes=%d", def.Name, sourceRow, len(source.Values))
+		}
+		copy(b.packedRaw[(row-start)*def.FixedWidthElements:], source.Values[sourceStart:sourceStart+def.FixedWidthElements])
+	}
+	return b.packedRaw, nil
+}
+
+func (b *ColumnPartBuilder) gatherPackedUint(source PackedUintRows, def ColumnDefinition, start int, end int) ([]byte, error) {
+	bitsPerElement, ok := PackedUintVectorBits(def.Type)
+	if !ok {
+		return nil, fmt.Errorf("typedcolumn: column %s type=%s is not packed_uint vector", def.Name, def.Type)
+	}
+	if def.BitsPerElement != bitsPerElement {
+		return nil, fmt.Errorf("typedcolumn: packed_uint column %s bits_per_element=%d want %d", def.Name, def.BitsPerElement, bitsPerElement)
+	}
+	rowBytes, err := PackedUintRowBytes(def.FixedWidthElements, bitsPerElement)
+	if err != nil {
+		return nil, err
+	}
+	if source.Rows < 0 || source.ElementsPerRow != def.FixedWidthElements || source.BitsPerElement != bitsPerElement || source.BytesPerRow != rowBytes {
+		return nil, fmt.Errorf("typedcolumn: packed_uint column %s metadata rows=%d elements_per_row=%d bits=%d bytes_per_row=%d want elements_per_row=%d bits=%d bytes_per_row=%d", def.Name, source.Rows, source.ElementsPerRow, source.BitsPerElement, source.BytesPerRow, def.FixedWidthElements, bitsPerElement, rowBytes)
+	}
+	if err := source.Validate(); err != nil {
+		return nil, err
+	}
+	count, err := checkedMulInt(end-start, rowBytes, def.Name+" block bytes")
+	if err != nil {
+		return nil, err
+	}
+	b.packedRaw = ensureByteLen(b.packedRaw[:0], count)
+	for row := start; row < end; row++ {
+		sourceRow := b.order[row]
+		sourceStart, err := checkedMulInt(sourceRow, rowBytes, def.Name+" source byte offset")
+		if err != nil {
+			return nil, err
+		}
+		if sourceStart > len(source.Values)-rowBytes {
+			return nil, fmt.Errorf("typedcolumn: packed_uint column %s row %d outside source bytes=%d", def.Name, sourceRow, len(source.Values))
+		}
+		copy(b.packedRaw[(row-start)*rowBytes:], source.Values[sourceStart:sourceStart+rowBytes])
+	}
+	return b.packedRaw, nil
+}
+
+func (b *GranuleBuilder) BuildFixedBytes(values []byte, rows int, bytesPerRow int) (EncodedGranule, error) {
+	if b.cfg.Encoding != 0 && b.cfg.Encoding != EncodingRawFixedBytes {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: fixed_bytes encoding=%s want %s", b.cfg.Encoding, EncodingRawFixedBytes)
+	}
+	if b.cfg.Compression != CompressionNone {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: fixed_bytes sections require compression=none, got %s", b.cfg.Compression)
+	}
+	if rows <= 0 {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: invalid fixed_bytes rows %d", rows)
+	}
+	if _, err := NewFixedBytesRows(rows, bytesPerRow, values); err != nil {
+		return EncodedGranule{}, err
+	}
+	b.raw = ensureByteLen(b.raw[:0], len(values))
+	copy(b.raw, values)
+	selection, err := admitCompressionInto(b.compressed[:0], b.raw, EncodingRawFixedBytes, b.cfg.Compression)
+	if err != nil {
+		return EncodedGranule{}, err
+	}
+	b.compressed = selection.Scratch
+	return newEncodedGranule(rows, 0, 0, false, EncodingRawFixedBytes, selection), nil
+}
+
+func (b *GranuleBuilder) BuildPackedUint(values []byte, rows int, elementsPerRow int, bitsPerElement int) (EncodedGranule, error) {
+	wantEncoding, ok := PackedUintVectorEncodingForBits(bitsPerElement)
+	if !ok {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: unsupported packed_uint bits_per_element=%d", bitsPerElement)
+	}
+	if b.cfg.Encoding != 0 && b.cfg.Encoding != wantEncoding {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: packed_uint encoding=%s want %s", b.cfg.Encoding, wantEncoding)
+	}
+	if b.cfg.Compression != CompressionNone {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: packed_uint sections require compression=none, got %s", b.cfg.Compression)
+	}
+	if rows <= 0 {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: invalid packed_uint rows %d", rows)
+	}
+	if _, err := NewPackedUintRows(rows, elementsPerRow, bitsPerElement, values); err != nil {
+		return EncodedGranule{}, err
+	}
+	b.raw = ensureByteLen(b.raw[:0], len(values))
+	copy(b.raw, values)
+	selection, err := admitCompressionInto(b.compressed[:0], b.raw, wantEncoding, b.cfg.Compression)
+	if err != nil {
+		return EncodedGranule{}, err
+	}
+	b.compressed = selection.Scratch
+	return newEncodedGranule(rows, 0, 0, false, wantEncoding, selection), nil
+}
+
+func (r *GranuleReader) DecodeFixedBytesInto(dst []byte, g EncodedGranule, bytesPerRow int) ([]byte, error) {
+	if g.Encoding != EncodingRawFixedBytes {
+		return nil, fmt.Errorf("typedcolumn: fixed_bytes encoding=%s want %s", g.Encoding, EncodingRawFixedBytes)
+	}
+	raw, err := r.decompressPayload(g)
+	if err != nil {
+		return nil, err
+	}
+	return DecodeRawFixedBytesPayload(dst, raw, g.Rows, bytesPerRow)
+}
+
+func (r *GranuleReader) DecodePackedUintInto(dst []byte, g EncodedGranule, elementsPerRow int, bitsPerElement int) ([]byte, error) {
+	wantEncoding, ok := PackedUintVectorEncodingForBits(bitsPerElement)
+	if !ok {
+		return nil, fmt.Errorf("typedcolumn: unsupported packed_uint bits_per_element=%d", bitsPerElement)
+	}
+	if g.Encoding != wantEncoding {
+		return nil, fmt.Errorf("typedcolumn: packed_uint encoding=%s want %s", g.Encoding, wantEncoding)
+	}
+	raw, err := r.decompressPayload(g)
+	if err != nil {
+		return nil, err
+	}
+	return DecodeRawPackedUintPayload(dst, raw, g.Rows, elementsPerRow, bitsPerElement)
+}
+
+func (p *ColumnPart) FixedBytesColumn(name string, dst []byte) (FixedBytesRows, error) {
+	column, ok := p.Columns[name]
+	if !ok {
+		return FixedBytesRows{}, fmt.Errorf("typedcolumn: missing column %s", name)
+	}
+	if column.Definition.Type != ColumnTypeFixedBytes || column.Definition.Encoding != EncodingRawFixedBytes {
+		return FixedBytesRows{}, fmt.Errorf("typedcolumn: column %s type/encoding=(%s,%s) is not fixed_bytes/raw_fixed_bytes", name, column.Definition.Type, column.Definition.Encoding)
+	}
+	out, err := fixedBytesColumnInto(dst, p.Descriptor.RowCount, column)
+	if err != nil {
+		return FixedBytesRows{}, err
+	}
+	return FixedBytesRows{Rows: p.Descriptor.RowCount, BytesPerRow: column.Definition.FixedWidthElements, Values: out}, nil
+}
+
+func fixedBytesColumnInto(dst []byte, rows int, column ColumnPartColumn) ([]byte, error) {
+	bytes, err := FixedBytesPayloadBytes(rows, column.Definition.FixedWidthElements)
+	if err != nil {
+		return nil, err
+	}
+	out := ensureByteLen(dst[:0], bytes)
+	var reader GranuleReader
+	var scratch []byte
+	for _, block := range column.Blocks {
+		values, err := reader.DecodeFixedBytesInto(scratch[:0], block.Granule, column.Definition.FixedWidthElements)
+		if err != nil {
+			return nil, err
+		}
+		scratch = values
+		wantBytes, err := FixedBytesPayloadBytes(block.Descriptor.RowCount, column.Definition.FixedWidthElements)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != wantBytes {
+			return nil, fmt.Errorf("typedcolumn: block rows=%d decoded fixed_bytes bytes=%d want %d", block.Descriptor.RowCount, len(values), wantBytes)
+		}
+		start, err := checkedMulInt(block.Descriptor.FirstRow, column.Definition.FixedWidthElements, "fixed_bytes block offset bytes")
+		if err != nil {
+			return nil, err
+		}
+		if start > len(out)-len(values) {
+			return nil, fmt.Errorf("typedcolumn: fixed_bytes block first_row=%d bytes=%d outside column bytes=%d", block.Descriptor.FirstRow, len(values), len(out))
+		}
+		copy(out[start:start+len(values)], values)
+	}
+	return out, nil
+}
+
+func (p *ColumnPart) PackedUintColumn(name string, dst []byte) (PackedUintRows, error) {
+	column, ok := p.Columns[name]
+	if !ok {
+		return PackedUintRows{}, fmt.Errorf("typedcolumn: missing column %s", name)
+	}
+	bitsPerElement, ok := PackedUintVectorBits(column.Definition.Type)
+	if !ok {
+		return PackedUintRows{}, fmt.Errorf("typedcolumn: column %s type=%s is not packed_uint vector", name, column.Definition.Type)
+	}
+	wantEncoding, _ := PackedUintVectorEncodingForBits(bitsPerElement)
+	if column.Definition.Encoding != wantEncoding || column.Definition.BitsPerElement != bitsPerElement {
+		return PackedUintRows{}, fmt.Errorf("typedcolumn: column %s packed_uint encoding/bits=(%s,%d) want (%s,%d)", name, column.Definition.Encoding, column.Definition.BitsPerElement, wantEncoding, bitsPerElement)
+	}
+	out, err := packedUintColumnInto(dst, p.Descriptor.RowCount, column, bitsPerElement)
+	if err != nil {
+		return PackedUintRows{}, err
+	}
+	bytesPerRow, _ := PackedUintRowBytes(column.Definition.FixedWidthElements, bitsPerElement)
+	return PackedUintRows{Rows: p.Descriptor.RowCount, ElementsPerRow: column.Definition.FixedWidthElements, BitsPerElement: bitsPerElement, BytesPerRow: bytesPerRow, Values: out}, nil
+}
+
+func packedUintColumnInto(dst []byte, rows int, column ColumnPartColumn, bitsPerElement int) ([]byte, error) {
+	bytes, err := PackedUintPayloadBytes(rows, column.Definition.FixedWidthElements, bitsPerElement)
+	if err != nil {
+		return nil, err
+	}
+	out := ensureByteLen(dst[:0], bytes)
+	rowBytes, err := PackedUintRowBytes(column.Definition.FixedWidthElements, bitsPerElement)
+	if err != nil {
+		return nil, err
+	}
+	var reader GranuleReader
+	var scratch []byte
+	for _, block := range column.Blocks {
+		values, err := reader.DecodePackedUintInto(scratch[:0], block.Granule, column.Definition.FixedWidthElements, bitsPerElement)
+		if err != nil {
+			return nil, err
+		}
+		scratch = values
+		wantBytes, err := PackedUintPayloadBytes(block.Descriptor.RowCount, column.Definition.FixedWidthElements, bitsPerElement)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != wantBytes {
+			return nil, fmt.Errorf("typedcolumn: block rows=%d decoded packed_uint bytes=%d want %d", block.Descriptor.RowCount, len(values), wantBytes)
+		}
+		start, err := checkedMulInt(block.Descriptor.FirstRow, rowBytes, "packed_uint block offset bytes")
+		if err != nil {
+			return nil, err
+		}
+		if start > len(out)-len(values) {
+			return nil, fmt.Errorf("typedcolumn: packed_uint block first_row=%d bytes=%d outside column bytes=%d", block.Descriptor.FirstRow, len(values), len(out))
+		}
+		copy(out[start:start+len(values)], values)
+	}
+	return out, nil
 }
 
 func validatePackedBitsPerElement(bitsPerElement int) error {

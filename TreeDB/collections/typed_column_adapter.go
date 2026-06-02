@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -17,6 +18,90 @@ import (
 )
 
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
+
+func columnStoreValueTypeIsPackedUintVector(valueType ColumnStoreValueType) bool {
+	_, ok := columnStorePackedUintVectorBits(valueType)
+	return ok
+}
+
+func columnStorePackedUintVectorBits(valueType ColumnStoreValueType) (int, bool) {
+	switch valueType {
+	case ColumnStoreValuePackedBitVector:
+		return 1, true
+	case ColumnStoreValuePackedUint2Vector:
+		return 2, true
+	case ColumnStoreValuePackedUint4Vector:
+		return 4, true
+	default:
+		return 0, false
+	}
+}
+
+func typedColumnPackedUintVectorMapping(valueType ColumnStoreValueType) (typedcolumn.ColumnType, typedcolumn.Encoding, int, bool) {
+	bitsPerElement, ok := columnStorePackedUintVectorBits(valueType)
+	if !ok {
+		return "", 0, 0, false
+	}
+	columnType, _ := typedcolumn.PackedUintVectorTypeForBits(bitsPerElement)
+	encoding, _ := typedcolumn.PackedUintVectorEncodingForBits(bitsPerElement)
+	return columnType, encoding, bitsPerElement, true
+}
+
+func convertJSONByteVector(raw any, col ColumnStoreColumn) ([]byte, error) {
+	if col.BytesPerRow <= 0 {
+		return nil, fmt.Errorf("invalid byte_vector bytes_per_row %d", col.BytesPerRow)
+	}
+	values, err := convertJSONBytes(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(values) != col.BytesPerRow {
+		return nil, fmt.Errorf("byte_vector length=%d want bytes_per_row=%d", len(values), col.BytesPerRow)
+	}
+	return values, nil
+}
+
+func convertJSONPackedUintVector(raw any, col ColumnStoreColumn) ([]byte, error) {
+	bitsPerElement, ok := columnStorePackedUintVectorBits(col.ValueType)
+	if !ok {
+		return nil, fmt.Errorf("unsupported packed uint vector value_type=%s", col.ValueType)
+	}
+	if col.BitsPerElement != 0 && col.BitsPerElement != bitsPerElement {
+		return nil, fmt.Errorf("%s bits_per_element=%d want %d", col.ValueType, col.BitsPerElement, bitsPerElement)
+	}
+	if col.ElementsPerRow <= 0 {
+		return nil, fmt.Errorf("invalid %s elements_per_row %d", col.ValueType, col.ElementsPerRow)
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("expected %s array got %T", col.ValueType, raw)
+	}
+	if len(values) != col.ElementsPerRow {
+		return nil, fmt.Errorf("%s length=%d want elements_per_row=%d", col.ValueType, len(values), col.ElementsPerRow)
+	}
+	maxValue := uint64((1 << uint(bitsPerElement)) - 1)
+	unpacked := make([]uint8, len(values))
+	for i, rawValue := range values {
+		n, ok := rawValue.(json.Number)
+		if !ok {
+			return nil, fmt.Errorf("%s[%d] expected integer got %T", col.ValueType, i, rawValue)
+		}
+		v, err := convertJSONUnsignedScalar(n, string(col.ValueType), maxValue)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", col.ValueType, i, err)
+		}
+		unpacked[i] = uint8(v)
+	}
+	return typedcolumn.EncodePackedUintRows(nil, 1, col.ElementsPerRow, bitsPerElement, unpacked)
+}
+
+func columnDeclaredPackedUintVectorBytesPerRow(valueType ColumnStoreValueType, elementsPerRow int) (int, error) {
+	bitsPerElement, ok := columnStorePackedUintVectorBits(valueType)
+	if !ok {
+		return 0, fmt.Errorf("unsupported packed uint vector value_type=%s", valueType)
+	}
+	return typedcolumn.PackedUintRowBytes(elementsPerRow, bitsPerElement)
+}
 
 func typedColumnDefaultRowsPerGranule() int {
 	return typedcolumn.DefaultRowsPerGranule
@@ -142,6 +227,10 @@ func typedColumnAdapterTypeMatrix() []typedColumnAdapterTypeMapping {
 		{ValueType: ColumnStoreValueBFloat16Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeBFloat16Vector, Encoding: typedcolumn.EncodingRawBFloat16Vector, Reason: "stored as row-major dense little-endian raw bfloat16-bit vector sections"},
 		{ValueType: ColumnStoreValueFloat32Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Reason: "stored as fixed-dim dense little-endian float32 sections"},
 		{ValueType: ColumnStoreValueFloat64Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeFloat64Vector, Encoding: typedcolumn.EncodingRawFloat64Vector, Reason: "stored as row-major dense little-endian float64 vector sections"},
+		{ValueType: ColumnStoreValueByteVector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeFixedBytes, Encoding: typedcolumn.EncodingRawFixedBytes, Reason: "stored as fixed-width byte_vector/fixed_bytes sections"},
+		{ValueType: ColumnStoreValuePackedBitVector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypePackedBitVector, Encoding: typedcolumn.EncodingRawPackedBitVector, Reason: "stored as row-major packed 1-bit unsigned code vector sections with zero padding"},
+		{ValueType: ColumnStoreValuePackedUint2Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypePackedUint2Vector, Encoding: typedcolumn.EncodingRawPackedUint2Vector, Reason: "stored as row-major packed 2-bit unsigned code vector sections with zero padding"},
+		{ValueType: ColumnStoreValuePackedUint4Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypePackedUint4Vector, Encoding: typedcolumn.EncodingRawPackedUint4Vector, Reason: "stored as row-major packed 4-bit unsigned code vector sections with zero padding"},
 		{ValueType: ColumnStoreValueUint32List, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeUint32List, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Reason: "stored as generic non-null uint32_list sections with uint64 offsets plus flattened uint32 values"},
 		{ValueType: ColumnStoreValueBytes, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeBytes, Encoding: typedcolumn.EncodingRawBytesOffsets, Reason: "stored as generic non-null bytes sections with uint64 offsets plus exact opaque payload bytes"},
 		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Reason: "stored as fixed-degree dense little-endian uint32 sections by default; explicit adjacency_layout uint32_offsets_list selects the variable offsets-list writer/fallback/direct reader"},
@@ -176,6 +265,29 @@ func typedColumnAdapterBytesDirectPayloadSupported(column typedColumnAdapterColu
 		column.Definition.Encoding == typedcolumn.EncodingRawBytesOffsets &&
 		column.Definition.Compression == typedcolumn.CompressionNone &&
 		column.Definition.FixedWidthElements == 0
+}
+
+func typedColumnAdapterFixedBytesDirectPayloadSupported(column typedColumnAdapterColumn) bool {
+	return column.Field.ValueType == ColumnStoreValueByteVector &&
+		!column.Field.Nullable &&
+		column.Field.BytesPerRow > 0 &&
+		column.Definition.Type == typedcolumn.ColumnTypeFixedBytes &&
+		column.Definition.Encoding == typedcolumn.EncodingRawFixedBytes &&
+		column.Definition.Compression == typedcolumn.CompressionNone &&
+		column.Definition.FixedWidthElements == column.Field.BytesPerRow &&
+		column.Definition.BitsPerElement == 0
+}
+
+func typedColumnAdapterPackedUintDirectPayloadSupported(column typedColumnAdapterColumn) bool {
+	wantType, wantEncoding, wantBits, ok := typedColumnPackedUintVectorMapping(column.Field.ValueType)
+	return ok &&
+		!column.Field.Nullable &&
+		column.Definition.Type == wantType &&
+		column.Field.ElementsPerRow > 0 &&
+		column.Definition.Encoding == wantEncoding &&
+		column.Definition.Compression == typedcolumn.CompressionNone &&
+		column.Definition.FixedWidthElements == column.Field.ElementsPerRow &&
+		column.Definition.BitsPerElement == wantBits
 }
 
 // typedColumnAdapterOffsetsListAdjacencyDirectPayloadSupported gates the current
@@ -487,6 +599,32 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 				batch.DenseFixedWidthVectors = make(map[string]typedcolumn.RawDenseFixedWidth)
 			}
 			batch.DenseFixedWidthVectors[column.Definition.Name] = typedcolumn.RawDenseFixedWidth{Rows: len(rows), ElementsPerRow: column.Definition.FixedWidthElements, ElementWidthBytes: width, Values: make([]byte, bytes)}
+		case typedcolumn.ColumnTypeFixedBytes:
+			bytes, err := typedColumnAdapterDenseBytes(len(rows), column.Definition.FixedWidthElements, 1)
+			if err != nil {
+				return nil, err
+			}
+			if batch.FixedBytesColumns == nil {
+				batch.FixedBytesColumns = make(map[string]typedcolumn.FixedBytesRows)
+			}
+			batch.FixedBytesColumns[column.Definition.Name] = typedcolumn.FixedBytesRows{Rows: len(rows), BytesPerRow: column.Definition.FixedWidthElements, Values: make([]byte, bytes)}
+		case typedcolumn.ColumnTypePackedBitVector, typedcolumn.ColumnTypePackedUint2Vector, typedcolumn.ColumnTypePackedUint4Vector:
+			bitsPerElement, ok := typedcolumn.PackedUintVectorBits(column.Definition.Type)
+			if !ok {
+				return nil, fmt.Errorf("%w: unsupported packed uint column type %s", errTypedColumnAdapterUnsupportedType, column.Definition.Type)
+			}
+			rowBytes, err := typedcolumn.PackedUintRowBytes(column.Definition.FixedWidthElements, bitsPerElement)
+			if err != nil {
+				return nil, err
+			}
+			bytes, err := typedColumnAdapterDenseBytes(len(rows), rowBytes, 1)
+			if err != nil {
+				return nil, err
+			}
+			if batch.PackedUintColumns == nil {
+				batch.PackedUintColumns = make(map[string]typedcolumn.PackedUintRows)
+			}
+			batch.PackedUintColumns[column.Definition.Name] = typedcolumn.PackedUintRows{Rows: len(rows), ElementsPerRow: column.Definition.FixedWidthElements, BitsPerElement: bitsPerElement, BytesPerRow: rowBytes, Values: make([]byte, bytes)}
 		case typedcolumn.ColumnTypeUint32List:
 			if batch.Uint32OffsetsLists == nil {
 				batch.Uint32OffsetsLists = make(map[string]typedcolumn.RawUint32OffsetsList)
@@ -574,6 +712,18 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 				}
 				batch.DenseFixedWidthVectors[column.Definition.Name] = dense
+			case typedcolumn.ColumnTypeFixedBytes:
+				fixed := batch.FixedBytesColumns[column.Definition.Name]
+				if err := encodeTypedColumnAdapterFixedBytesValue(fixed, rowIdx, column, value); err != nil {
+					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
+				}
+				batch.FixedBytesColumns[column.Definition.Name] = fixed
+			case typedcolumn.ColumnTypePackedBitVector, typedcolumn.ColumnTypePackedUint2Vector, typedcolumn.ColumnTypePackedUint4Vector:
+				packed := batch.PackedUintColumns[column.Definition.Name]
+				if err := encodeTypedColumnAdapterPackedUintVectorValue(packed, rowIdx, column, value); err != nil {
+					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
+				}
+				batch.PackedUintColumns[column.Definition.Name] = packed
 			case typedcolumn.ColumnTypeUint32List:
 				list := batch.Uint32OffsetsLists[column.Definition.Name]
 				updated, err := encodeTypedColumnAdapterUint32ListValue(list, rowIdx, column, value)
@@ -802,8 +952,8 @@ func applyTypedColumnAdapterStoredDefinitions(columns []typedColumnAdapterColumn
 }
 
 func typedColumnAdapterValidateStoredDefinition(field TypedStorageField, want typedcolumn.ColumnDefinition, got typedcolumn.ColumnDefinition, context string) error {
-	if got.Name != want.Name || got.Type != want.Type || got.FixedWidthElements != want.FixedWidthElements || (typedColumnAdapterRequiresExactStoredEncoding(field) && got.Encoding != want.Encoding) {
-		return fmt.Errorf("collections: %s %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", context, want.Name, got.Type, got.Encoding, got.Compression, got.FixedWidthElements, want.Type, want.Encoding, want.Compression, want.FixedWidthElements)
+	if got.Name != want.Name || got.Type != want.Type || got.FixedWidthElements != want.FixedWidthElements || got.BitsPerElement != want.BitsPerElement || (typedColumnAdapterRequiresExactStoredEncoding(field) && got.Encoding != want.Encoding) {
+		return fmt.Errorf("collections: %s %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want %d bits_per_element=%d want %d (want type=%s encoding=%s compression=%s)", context, want.Name, got.Type, got.Encoding, got.Compression, got.FixedWidthElements, want.FixedWidthElements, got.BitsPerElement, want.BitsPerElement, want.Type, want.Encoding, want.Compression)
 	}
 	return nil
 }
@@ -2169,6 +2319,36 @@ func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDe
 		}
 		return out, nil
 	}
+	if column.Field.ValueType == ColumnStoreValueByteVector {
+		matrix, err := p.Part.FixedBytesColumn(column.Definition.Name, nil)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]columnDeclaredValue, matrix.Rows)
+		for i := 0; i < matrix.Rows; i++ {
+			row, err := matrix.Row(i)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, Bytes: append([]byte(nil), row...), BytesPerRow: matrix.BytesPerRow}
+		}
+		return out, nil
+	}
+	if columnStoreValueTypeIsPackedUintVector(column.Field.ValueType) {
+		matrix, err := p.Part.PackedUintColumn(column.Definition.Name, nil)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]columnDeclaredValue, matrix.Rows)
+		for i := 0; i < matrix.Rows; i++ {
+			row, err := matrix.RowBytes(i)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, Bytes: append([]byte(nil), row...), ElementsPerRow: matrix.ElementsPerRow, BitsPerElement: matrix.BitsPerElement}
+		}
+		return out, nil
+	}
 	if column.Field.ValueType == ColumnStoreValueUint32List {
 		list, err := p.Part.Uint32ListColumn(column.Definition.Name, nil, nil)
 		if err != nil {
@@ -2270,6 +2450,12 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 	}
 	if columnStoreValueTypeIsDenseNumericVector(column.Field.ValueType) {
 		return p.scanDenseNumericVectorColumnValuesRows(column, rows)
+	}
+	if column.Field.ValueType == ColumnStoreValueByteVector {
+		return p.scanFixedBytesColumnValuesRows(column, rows)
+	}
+	if columnStoreValueTypeIsPackedUintVector(column.Field.ValueType) {
+		return p.scanPackedUintVectorColumnValuesRows(column, rows)
 	}
 	switch column.Field.ValueType {
 	case ColumnStoreValueString, ColumnStoreValueInt64, ColumnStoreValueBool:
@@ -2376,6 +2562,142 @@ func (p *typedColumnAdapterPart) scanDenseNumericVectorColumnSelectedRows(column
 		for _, selectedRow := range rows[start:rowIndex] {
 			offset := (selectedRow - first) * rowBytes
 			out = append(out, columnDeclaredValue{Type: column.Field.ValueType, Present: true, DenseNumericVector: append([]byte(nil), values[offset:offset+rowBytes]...)})
+		}
+		diag.BlocksDecoded++
+		diag.BytesDecoded += block.Granule.RawBytes
+		if block.Descriptor.FirstGranule < 0 || block.Descriptor.LastGranule < block.Descriptor.FirstGranule {
+			return nil, diag, fmt.Errorf("collections: typed-column adapter invalid granule range %d..%d for column %q", block.Descriptor.FirstGranule, block.Descriptor.LastGranule, column.Definition.Name)
+		}
+		if prevFirstGranule >= 0 && block.Descriptor.FirstGranule < prevFirstGranule {
+			return nil, diag, fmt.Errorf("collections: typed-column adapter granule ranges out of order for column %q: %d after %d", column.Definition.Name, block.Descriptor.FirstGranule, prevFirstGranule)
+		}
+		prevFirstGranule = block.Descriptor.FirstGranule
+		coveredStart, coveredEnd = typedColumnAdapterExtendGranuleCoverage(coveredStart, coveredEnd, block.Descriptor.FirstGranule, block.Descriptor.LastGranule, &diag.GranulesDecoded)
+	}
+	if coveredStart >= 0 {
+		diag.GranulesDecoded += coveredEnd - coveredStart + 1
+	}
+	if rowIndex != len(rows) {
+		return nil, diag, fmt.Errorf("collections: typed-column adapter %d selected rows outside column %q blocks", len(rows)-rowIndex, column.Definition.Name)
+	}
+	return out, diag, nil
+}
+
+func (p *typedColumnAdapterPart) scanFixedBytesColumnValuesRows(column typedColumnAdapterColumn, rows []int) ([]columnDeclaredValue, typedcolumn.PartScanDiagnostics, error) {
+	if rows != nil {
+		return p.scanFixedRowByteColumnSelectedRows(column, rows, column.Definition.FixedWidthElements, "byte_vector", func(reader *typedcolumn.GranuleReader, scratch []byte, granule typedcolumn.EncodedGranule) ([]byte, error) {
+			return reader.DecodeFixedBytesInto(scratch, granule, column.Definition.FixedWidthElements)
+		})
+	}
+	diag, err := p.scanColumnValuesRowsFullDiagnostics(column)
+	if err != nil {
+		return nil, typedcolumn.PartScanDiagnostics{}, err
+	}
+	matrix, err := p.Part.FixedBytesColumn(column.Definition.Name, nil)
+	if err != nil {
+		return nil, diag, err
+	}
+	out := make([]columnDeclaredValue, matrix.Rows)
+	for i := 0; i < matrix.Rows; i++ {
+		row, err := matrix.Row(i)
+		if err != nil {
+			return nil, diag, err
+		}
+		out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, Bytes: append([]byte(nil), row...), BytesPerRow: matrix.BytesPerRow}
+	}
+	return out, diag, nil
+}
+
+func (p *typedColumnAdapterPart) scanPackedUintVectorColumnValuesRows(column typedColumnAdapterColumn, rows []int) ([]columnDeclaredValue, typedcolumn.PartScanDiagnostics, error) {
+	_, _, bitsPerElement, ok := typedColumnPackedUintVectorMapping(column.Field.ValueType)
+	if !ok {
+		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("%w: unsupported packed uint vector value_type=%s", errTypedColumnAdapterUnsupportedType, column.Field.ValueType)
+	}
+	rowBytes, err := typedcolumn.PackedUintRowBytes(column.Definition.FixedWidthElements, bitsPerElement)
+	if err != nil {
+		return nil, typedcolumn.PartScanDiagnostics{}, err
+	}
+	if rows != nil {
+		return p.scanFixedRowByteColumnSelectedRows(column, rows, rowBytes, string(column.Field.ValueType), func(reader *typedcolumn.GranuleReader, scratch []byte, granule typedcolumn.EncodedGranule) ([]byte, error) {
+			return reader.DecodePackedUintInto(scratch, granule, column.Definition.FixedWidthElements, bitsPerElement)
+		})
+	}
+	diag, err := p.scanColumnValuesRowsFullDiagnostics(column)
+	if err != nil {
+		return nil, typedcolumn.PartScanDiagnostics{}, err
+	}
+	matrix, err := p.Part.PackedUintColumn(column.Definition.Name, nil)
+	if err != nil {
+		return nil, diag, err
+	}
+	out := make([]columnDeclaredValue, matrix.Rows)
+	for i := 0; i < matrix.Rows; i++ {
+		row, err := matrix.RowBytes(i)
+		if err != nil {
+			return nil, diag, err
+		}
+		out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, Bytes: append([]byte(nil), row...), ElementsPerRow: matrix.ElementsPerRow, BitsPerElement: matrix.BitsPerElement}
+	}
+	return out, diag, nil
+}
+
+func (p *typedColumnAdapterPart) scanFixedRowByteColumnSelectedRows(column typedColumnAdapterColumn, rows []int, rowBytes int, label string, decode func(*typedcolumn.GranuleReader, []byte, typedcolumn.EncodedGranule) ([]byte, error)) ([]columnDeclaredValue, typedcolumn.PartScanDiagnostics, error) {
+	diag := typedcolumn.PartScanDiagnostics{RowsScanned: len(rows), ColumnsProjected: 1, GranulesConsidered: len(p.Part.Descriptor.Granules)}
+	if err := typedColumnAdapterValidateSelectedRows(rows, p.Part.Descriptor.RowCount); err != nil {
+		return nil, typedcolumn.PartScanDiagnostics{}, err
+	}
+	partColumn, ok := p.Part.Columns[column.Definition.Name]
+	if !ok {
+		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter missing column %q", column.Definition.Name)
+	}
+	if rowBytes <= 0 {
+		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter column %q invalid row bytes=%d", column.Definition.Name, rowBytes)
+	}
+	out := make([]columnDeclaredValue, 0, len(rows))
+	var reader typedcolumn.GranuleReader
+	var scratch []byte
+	coveredStart := -1
+	coveredEnd := -1
+	prevFirstGranule := -1
+	rowIndex := 0
+	for blockIdx, block := range partColumn.Blocks {
+		first := block.Descriptor.FirstRow
+		limit := first + block.Descriptor.RowCount
+		if first < 0 || block.Descriptor.RowCount < 0 || first > p.Part.Descriptor.RowCount-block.Descriptor.RowCount {
+			return nil, diag, fmt.Errorf("collections: typed-column adapter column %q block %d rows %d..%d outside part rows=%d", column.Definition.Name, blockIdx, first, limit, p.Part.Descriptor.RowCount)
+		}
+		for rowIndex < len(rows) && rows[rowIndex] < first {
+			return nil, diag, fmt.Errorf("collections: typed-column adapter selected row %d before block %d first row %d", rows[rowIndex], blockIdx, first)
+		}
+		start := rowIndex
+		for rowIndex < len(rows) && rows[rowIndex] < limit {
+			rowIndex++
+		}
+		if start == rowIndex {
+			continue
+		}
+		values, err := decode(&reader, scratch[:0], block.Granule)
+		if err != nil {
+			return nil, diag, fmt.Errorf("collections: typed-column adapter %s column %q block %d: %w", label, column.Definition.Name, blockIdx, err)
+		}
+		scratch = values
+		wantBytes, err := typedColumnAdapterDenseBytes(block.Descriptor.RowCount, rowBytes, 1)
+		if err != nil {
+			return nil, diag, err
+		}
+		if len(values) != wantBytes {
+			return nil, diag, fmt.Errorf("collections: typed-column adapter %s column %q block %d decoded bytes=%d want %d", label, column.Definition.Name, blockIdx, len(values), wantBytes)
+		}
+		for _, selectedRow := range rows[start:rowIndex] {
+			offset := (selectedRow - first) * rowBytes
+			value := columnDeclaredValue{Type: column.Field.ValueType, Present: true, Bytes: append([]byte(nil), values[offset:offset+rowBytes]...)}
+			if column.Field.ValueType == ColumnStoreValueByteVector {
+				value.BytesPerRow = rowBytes
+			} else if bitsPerElement, ok := columnStorePackedUintVectorBits(column.Field.ValueType); ok {
+				value.ElementsPerRow = column.Definition.FixedWidthElements
+				value.BitsPerElement = bitsPerElement
+			}
+			out = append(out, value)
 		}
 		diag.BlocksDecoded++
 		diag.BytesDecoded += block.Granule.RawBytes
@@ -2717,6 +3039,68 @@ func encodeTypedColumnAdapterDenseNumericVectorValue(dst typedcolumn.RawDenseFix
 		return fmt.Errorf("%s row %d outside destination", column.Field.ValueType, rowIdx)
 	}
 	copy(dst.Values[start:start+rowBytes], value.DenseNumericVector)
+	return nil
+}
+
+func encodeTypedColumnAdapterFixedBytesValue(dst typedcolumn.FixedBytesRows, rowIdx int, column typedColumnAdapterColumn, value columnDeclaredValue) error {
+	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
+		return err
+	}
+	if column.Definition.Type != typedcolumn.ColumnTypeFixedBytes || column.Definition.Encoding != typedcolumn.EncodingRawFixedBytes {
+		return fmt.Errorf("byte_vector column type=%s encoding=%s", column.Definition.Type, column.Definition.Encoding)
+	}
+	if dst.BytesPerRow != column.Definition.FixedWidthElements {
+		return fmt.Errorf("byte_vector bytes_per_row=%d want fixed_width_elements=%d", dst.BytesPerRow, column.Definition.FixedWidthElements)
+	}
+	if len(value.Bytes) != dst.BytesPerRow {
+		return fmt.Errorf("byte_vector bytes=%d want bytes_per_row=%d", len(value.Bytes), dst.BytesPerRow)
+	}
+	start, err := typedColumnAdapterDenseBytes(rowIdx, dst.BytesPerRow, 1)
+	if err != nil {
+		return err
+	}
+	if start > len(dst.Values)-dst.BytesPerRow {
+		return fmt.Errorf("byte_vector row %d outside destination", rowIdx)
+	}
+	copy(dst.Values[start:start+dst.BytesPerRow], value.Bytes)
+	return nil
+}
+
+func encodeTypedColumnAdapterPackedUintVectorValue(dst typedcolumn.PackedUintRows, rowIdx int, column typedColumnAdapterColumn, value columnDeclaredValue) error {
+	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
+		return err
+	}
+	wantType, wantEncoding, wantBits, ok := typedColumnPackedUintVectorMapping(column.Field.ValueType)
+	if !ok {
+		return fmt.Errorf("%w: unsupported packed uint vector value_type=%s", errTypedColumnAdapterUnsupportedType, column.Field.ValueType)
+	}
+	if column.Definition.Type != wantType || column.Definition.Encoding != wantEncoding {
+		return fmt.Errorf("%s column type=%s encoding=%s want type=%s encoding=%s", column.Field.ValueType, column.Definition.Type, column.Definition.Encoding, wantType, wantEncoding)
+	}
+	if dst.ElementsPerRow != column.Definition.FixedWidthElements || dst.BitsPerElement != wantBits {
+		return fmt.Errorf("%s metadata elements_per_row=%d bits_per_element=%d want elements_per_row=%d bits_per_element=%d", column.Field.ValueType, dst.ElementsPerRow, dst.BitsPerElement, column.Definition.FixedWidthElements, wantBits)
+	}
+	rowBytes, err := typedcolumn.PackedUintRowBytes(dst.ElementsPerRow, dst.BitsPerElement)
+	if err != nil {
+		return err
+	}
+	if dst.BytesPerRow != rowBytes {
+		return fmt.Errorf("%s bytes_per_row=%d want %d", column.Field.ValueType, dst.BytesPerRow, rowBytes)
+	}
+	if len(value.Bytes) != rowBytes {
+		return fmt.Errorf("%s bytes=%d want row_bytes=%d", column.Field.ValueType, len(value.Bytes), rowBytes)
+	}
+	if err := typedcolumn.ValidatePackedUintRowPadding(value.Bytes, dst.ElementsPerRow, dst.BitsPerElement); err != nil {
+		return err
+	}
+	start, err := typedColumnAdapterDenseBytes(rowIdx, rowBytes, 1)
+	if err != nil {
+		return err
+	}
+	if start > len(dst.Values)-rowBytes {
+		return fmt.Errorf("%s row %d outside destination", column.Field.ValueType, rowIdx)
+	}
+	copy(dst.Values[start:start+rowBytes], value.Bytes)
 	return nil
 }
 

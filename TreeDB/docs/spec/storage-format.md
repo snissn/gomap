@@ -536,6 +536,10 @@ Typed-column part descriptor column type codes are currently:
 | 27 | `float16_vector` | #1930 non-null row-major little-endian raw IEEE binary16-bit dense vector. |
 | 28 | `bfloat16_vector` | #1930 non-null row-major little-endian raw bfloat16-bit dense vector. |
 | 29 | `float64_vector` | #1930 non-null row-major little-endian IEEE-754 `float64` dense vector. |
+| 30 | `fixed_bytes` | #1931 fixed row-byte payload for `byte_vector`. |
+| 31 | `packed_bit_vector` | #1931 packed 1-bit unsigned code vector. |
+| 32 | `packed_uint2_vector` | #1931 packed 2-bit unsigned code vector. |
+| 33 | `packed_uint4_vector` | #1931 packed 4-bit unsigned code vector. |
 
 `uint32_list` descriptors must use `raw_uint32_offsets_list` encoding,
 `fixed_width_elements=0`, and uncompressed split offsets/value sections. `bytes`
@@ -550,8 +554,16 @@ by #1930 must use their matching raw vector encoding (`raw_uint8_vector`,
 `raw_int64_vector`, `raw_float16_vector`, `raw_bfloat16_vector`, or
 `raw_float64_vector`), positive `fixed_width_elements`/`elements_per_row`, and
 uncompressed row-major payload sections (`rows * elements_per_row * width`
-bytes). Readers must fail closed on unknown type codes rather than guessing a
-payload shape.
+bytes). Fixed-byte descriptors added by #1931 must use `raw_fixed_bytes`,
+positive `fixed_width_elements`/`bytes_per_row`, `bits_per_element=0`, and
+uncompressed row-major payload sections (`rows * bytes_per_row` bytes). Packed
+code descriptors added by #1931 must use their matching raw packed encoding
+(`raw_packed_bit_vector`, `raw_packed_uint2_vector`, or
+`raw_packed_uint4_vector`), positive `fixed_width_elements`/`elements_per_row`,
+matching `bits_per_element` (`1`, `2`, or `4`), zero unused high padding bits in
+the final byte of each row, and uncompressed row-major payload sections
+(`rows * ceil(elements_per_row * bits_per_element / 8)` bytes). Readers must
+fail closed on unknown type codes rather than guessing a payload shape.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
@@ -623,7 +635,10 @@ payloads `raw_uint8_vector`, `raw_int8_vector`, `raw_uint16_vector`,
 `raw_int16_vector`, `raw_uint32_vector`, `raw_int32_vector`,
 `raw_uint64_vector`, `raw_int64_vector`, `raw_float16_vector`,
 `raw_bfloat16_vector`, and `raw_float64_vector` with matching vector type codes
-above. Multi-byte primitive scalar and dense vector values are little-endian;
+above. Issue #1931 adds `raw_fixed_bytes`, `raw_packed_bit_vector`,
+`raw_packed_uint2_vector`, and `raw_packed_uint4_vector` payloads with matching
+fixed/packed type codes above. Multi-byte primitive scalar and dense vector
+values are little-endian;
 `float16` and `bfloat16` are raw 16-bit bit payloads, not arithmetic codecs.
 Native scalar float payloads preserve raw bits exactly, including NaN payloads
 and signed zero. The legacy

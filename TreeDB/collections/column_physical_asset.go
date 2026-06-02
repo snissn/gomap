@@ -58,9 +58,15 @@ type columnDeclaredValue struct {
 	// quantized dense vector typed-column values. Multi-byte elements are already
 	// little-endian encoded for the declared ColumnStoreValue*Vector type.
 	DenseNumericVector []byte
-	Uint32List         []uint32
-	AdjacencyList      []uint32
-	Bytes              []byte
+	// Byte/packed-code row-shape metadata accompanies Bytes when Type is
+	// byte_vector or packed_*_vector so reconstruction can fail closed and, for
+	// packed values, expand logical elements without consulting mutable schema.
+	ElementsPerRow int
+	BitsPerElement int
+	BytesPerRow    int
+	Uint32List     []uint32
+	AdjacencyList  []uint32
+	Bytes          []byte
 	// StringBytes is used by physical scan/query hot paths as an asset-buffer
 	// view valid only for the current scan callback / pinned prepared runner
 	// view. Copy before retaining beyond that lifetime. String remains the
@@ -291,6 +297,22 @@ func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (co
 			return columnDeclaredValue{}, err
 		}
 		value.DenseNumericVector = values
+	case ColumnStoreValueByteVector:
+		values, err := convertJSONByteVector(raw, col)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Bytes = values
+		value.BytesPerRow = col.BytesPerRow
+	case ColumnStoreValuePackedBitVector, ColumnStoreValuePackedUint2Vector, ColumnStoreValuePackedUint4Vector:
+		bitsPerElement, _ := columnStorePackedUintVectorBits(col.ValueType)
+		values, err := convertJSONPackedUintVector(raw, col)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Bytes = values
+		value.ElementsPerRow = col.ElementsPerRow
+		value.BitsPerElement = bitsPerElement
 	case ColumnStoreValueUint32List:
 		values, err := convertJSONUint32List(raw, "uint32_list")
 		if err != nil {

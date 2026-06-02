@@ -51,6 +51,8 @@ type TypedStorageField struct {
 	Dictionary         bool                      `json:"dictionary,omitempty"`
 	VectorDims         int                       `json:"vector_dims,omitempty"`
 	ElementsPerRow     int                       `json:"elements_per_row,omitempty"`
+	BytesPerRow        int                       `json:"bytes_per_row,omitempty"`
+	BitsPerElement     int                       `json:"bits_per_element,omitempty"`
 	AdjacencyDegree    int                       `json:"adjacency_degree,omitempty"`
 	AdjacencyLayout    ColumnAdjacencyListLayout `json:"adjacency_layout,omitempty"`
 	FixedWidthEncoding ColumnFixedWidthEncoding  `json:"fixed_width_encoding,omitempty"`
@@ -127,6 +129,8 @@ func ResolveTypedStorageLayout(meta CollectionMeta) (TypedStorageLayout, error) 
 			Dictionary:         col.Dictionary,
 			VectorDims:         col.VectorDims,
 			ElementsPerRow:     col.ElementsPerRow,
+			BytesPerRow:        col.BytesPerRow,
+			BitsPerElement:     col.BitsPerElement,
 			AdjacencyDegree:    col.AdjacencyDegree,
 			AdjacencyLayout:    col.AdjacencyLayout,
 			FixedWidthEncoding: col.FixedWidthEncoding,
@@ -271,12 +275,59 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 				if field.ElementsPerRow <= 0 {
 					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q elements_per_row: must be positive for value_type %q", name, valueType)
 				}
+			} else if columnStoreValueTypeIsPackedUintVector(valueType) {
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				if field.Owner != TypedStorageOwnerColumnPart {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q value_type %q requires owner %q", name, valueType, TypedStorageOwnerColumnPart)
+				}
+				if field.Nullable {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q nullable %s typed_column_part is unsupported", name, valueType)
+				}
+				if field.ElementsPerRow <= 0 {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q elements_per_row: must be positive for value_type %q", name, valueType)
+				}
+				wantBits, _ := columnStorePackedUintVectorBits(valueType)
+				if field.BitsPerElement != 0 && field.BitsPerElement != wantBits {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q bits_per_element=%d want %d for value_type %q", name, field.BitsPerElement, wantBits, valueType)
+				}
+				field.BitsPerElement = wantBits
 			} else if valueType != ColumnStoreValueFloat32Vector && field.ElementsPerRow != 0 {
 				name := field.Name
 				if name == "" {
 					name = field.Path
 				}
-				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q elements_per_row: only dense vector fields may set elements_per_row", name)
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q elements_per_row: only dense or packed vector fields may set elements_per_row", name)
+			}
+			if valueType == ColumnStoreValueByteVector {
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				if field.Owner != TypedStorageOwnerColumnPart {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q value_type %q requires owner %q", name, valueType, TypedStorageOwnerColumnPart)
+				}
+				if field.Nullable {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q nullable byte_vector typed_column_part is unsupported", name)
+				}
+				if field.BytesPerRow <= 0 {
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q bytes_per_row: must be positive for byte_vector", name)
+				}
+			} else if field.BytesPerRow != 0 {
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q bytes_per_row: only byte_vector fields may set bytes_per_row", name)
+			}
+			if !columnStoreValueTypeIsPackedUintVector(valueType) && field.BitsPerElement != 0 {
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q bits_per_element: only packed_uint vector fields may set bits_per_element", name)
 			}
 			if valueType == ColumnStoreValueUint32List {
 				name := field.Name
@@ -617,6 +668,24 @@ func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
 			}
 			if field.ElementsPerRow <= 0 {
 				return fmt.Errorf("%w: %s field %q requires elements_per_row", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+			}
+		case ColumnStoreValueByteVector:
+			if field.Nullable {
+				return fmt.Errorf("%w: nullable byte_vector field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+			if field.BytesPerRow <= 0 {
+				return fmt.Errorf("%w: byte_vector field %q requires bytes_per_row", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+		case ColumnStoreValuePackedBitVector, ColumnStoreValuePackedUint2Vector, ColumnStoreValuePackedUint4Vector:
+			if field.Nullable {
+				return fmt.Errorf("%w: nullable %s field %q", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+			}
+			if field.ElementsPerRow <= 0 {
+				return fmt.Errorf("%w: %s field %q requires elements_per_row", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+			}
+			wantBits, _ := columnStorePackedUintVectorBits(field.ValueType)
+			if field.BitsPerElement != 0 && field.BitsPerElement != wantBits {
+				return fmt.Errorf("%w: %s field %q bits_per_element=%d want %d", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path, field.BitsPerElement, wantBits)
 			}
 		case ColumnStoreValueUint32List:
 			if field.Nullable {

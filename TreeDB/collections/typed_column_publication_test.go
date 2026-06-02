@@ -236,6 +236,78 @@ func TestTypedColumnVectorDensePublicationCheckpointReopen1756(t *testing.T) {
 	assertJSONEqualM13C(t, reopenedGot, []byte(`{"embedding":[1,0.5,-0.25],"payload":"alpha"}`))
 }
 
+func TestTypedColumnFixedAndPackedCodePublicationCheckpointReopen1931(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnFixedAndPackedCodeCollection1931(t, d)
+	row1 := []byte(`{"code_bytes":[1,2,3],"code_bits":[1,0,1,1,0,0,1,0,1,1],"code_u2":[0,1,2,3,1],"code_u4":[10,11,12],"payload":"alpha"}`)
+	row2 := []byte(`{"code_bytes":[4,5,6],"code_bits":[0,1,0,1,0,1,0,1,0,1],"code_u2":[3,2,1,0,2],"code_u4":[0,1,15],"payload":"beta"}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("q1"), []byte("q2")}, [][]byte{row1, row2}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	assertTypedColumnManifestShape1755(t, d, col, 1, 1)
+	refs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(refs) != 1 {
+		_ = d.Close()
+		t.Fatalf("typed refs=%+v want one", refs)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[0])
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("read typed asset: %v", err)
+	}
+	part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: columnStoreTypedColumnPartFields(*col.Meta().Options.ColumnStore)}, raw)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("typedColumnAdapterPartFromBytes: %v", err)
+	}
+	if got := part.Part.Columns["code_bytes"].Definition; got.Type != typedcolumn.ColumnTypeFixedBytes || got.FixedWidthElements != 3 || got.BitsPerElement != 0 {
+		_ = d.Close()
+		t.Fatalf("code_bytes definition=%+v want fixed_bytes bytes_per_row=3", got)
+	}
+	if got := part.Part.Columns["code_bits"].Definition; got.Type != typedcolumn.ColumnTypePackedBitVector || got.FixedWidthElements != 10 || got.BitsPerElement != 1 {
+		_ = d.Close()
+		t.Fatalf("code_bits definition=%+v want packed_bit_vector elements=10 bits=1", got)
+	}
+	if got := part.Part.Columns["code_u2"].Definition; got.Type != typedcolumn.ColumnTypePackedUint2Vector || got.FixedWidthElements != 5 || got.BitsPerElement != 2 {
+		_ = d.Close()
+		t.Fatalf("code_u2 definition=%+v want packed_uint2_vector elements=5 bits=2", got)
+	}
+	if got := part.Part.Columns["code_u4"].Definition; got.Type != typedcolumn.ColumnTypePackedUint4Vector || got.FixedWidthElements != 3 || got.BitsPerElement != 4 {
+		_ = d.Close()
+		t.Fatalf("code_u4 definition=%+v want packed_uint4_vector elements=3 bits=4", got)
+	}
+	got, err := col.Get([]byte("q1"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get q1: %v", err)
+	}
+	assertJSONEqualM13C(t, got, row1)
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("packed_codes")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	assertTypedColumnManifestShape1755(t, reopened, reopenedCol, 1, 1)
+	reopenedGot, err := reopenedCol.Get([]byte("q2"))
+	if err != nil {
+		t.Fatalf("reopened Get q2: %v", err)
+	}
+	assertJSONEqualM13C(t, reopenedGot, row2)
+}
+
 func TestTypedColumnAdjacencyPublicationCheckpointReopen(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -2571,6 +2643,28 @@ func createTypedColumnVectorPartCollection1756(t testing.TB, d *backenddb.DB) *C
 		t.Fatalf("CreateCollection: %v", err)
 	}
 	col, err := mgr.OpenCollection("vectors")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return col
+}
+
+func createTypedColumnFixedAndPackedCodeCollection1931(t testing.TB, d *backenddb.DB) *Collection {
+	t.Helper()
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{
+		{Name: "code_bytes", Path: "code_bytes", ValueType: ColumnStoreValueByteVector, Owner: TypedStorageOwnerColumnPart, BytesPerRow: 3},
+		{Name: "code_bits", Path: "code_bits", ValueType: ColumnStoreValuePackedBitVector, Owner: TypedStorageOwnerColumnPart, ElementsPerRow: 10},
+		{Name: "code_u2", Path: "code_u2", ValueType: ColumnStoreValuePackedUint2Vector, Owner: TypedStorageOwnerColumnPart, ElementsPerRow: 5},
+		{Name: "code_u4", Path: "code_u4", ValueType: ColumnStoreValuePackedUint4Vector, Owner: TypedStorageOwnerColumnPart, ElementsPerRow: 3},
+	}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "packed_codes", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("packed_codes")
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}

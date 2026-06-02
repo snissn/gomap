@@ -6,7 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
-const ColumnPartLayoutContractVersion uint16 = 1
+const ColumnPartLayoutContractVersion uint16 = 2
 
 // ColumnPartLayoutEndian records the byte order guaranteed by the writer for a
 // certified physical section. Codec-defined variable-width encodings do not
@@ -66,6 +66,9 @@ type ColumnPartLayoutContractColumn struct {
 	OffsetsBytes        int
 	ValuesBytes         int
 	FixedWidthElements  int
+	BitsPerElement      int
+	BytesPerRow         int
+	LogicalBitsPerRow   int
 	ElementSize         int
 	Alignment           int
 	Endian              ColumnPartLayoutEndian
@@ -421,6 +424,9 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 		Rows:                sectionRows,
 		Section:             sectionContract,
 		FixedWidthElements:  column.Definition.FixedWidthElements,
+		BitsPerElement:      column.Definition.BitsPerElement,
+		BytesPerRow:         layout.bytesPerRow,
+		LogicalBitsPerRow:   layout.logicalBitsPerRow,
 		ElementSize:         layout.elementSize,
 		Alignment:           layout.alignment,
 		Endian:              layout.endian,
@@ -494,14 +500,16 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 }
 
 type columnPartContractLayout struct {
-	elementSize    int
-	alignment      int
-	endian         ColumnPartLayoutEndian
-	lengthMultiple int
-	direct         bool
-	streaming      bool
-	stats          bool
-	pruning        bool
+	elementSize       int
+	alignment         int
+	endian            ColumnPartLayoutEndian
+	lengthMultiple    int
+	bytesPerRow       int
+	logicalBitsPerRow int
+	direct            bool
+	streaming         bool
+	stats             bool
+	pruning           bool
 }
 
 func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) columnPartContractLayout {
@@ -535,7 +543,25 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
 		}
 		direct := def.Compression == CompressionNone && logicalType == string(def.Type)
-		return columnPartContractLayout{elementSize: width, alignment: width, endian: ColumnPartLayoutEndianLittle, lengthMultiple: width, direct: direct}
+		return columnPartContractLayout{elementSize: width, alignment: width, endian: ColumnPartLayoutEndianLittle, lengthMultiple: width, bytesPerRow: def.FixedWidthElements * width, logicalBitsPerRow: def.FixedWidthElements * width * 8, direct: direct}
+	case EncodingRawFixedBytes:
+		if def.Type != ColumnTypeFixedBytes || def.FixedWidthElements <= 0 || def.BitsPerElement != 0 {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
+		direct := def.Compression == CompressionNone && logicalType == "byte_vector"
+		return columnPartContractLayout{elementSize: 1, alignment: 1, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 1, bytesPerRow: def.FixedWidthElements, logicalBitsPerRow: def.FixedWidthElements * 8, direct: direct}
+	case EncodingRawPackedBitVector, EncodingRawPackedUint2Vector, EncodingRawPackedUint4Vector:
+		bitsPerElement, ok := PackedUintEncodingBits(def.Encoding)
+		wantEncoding, encOK := PackedUintVectorEncoding(def.Type)
+		if !ok || !encOK || def.Encoding != wantEncoding || def.FixedWidthElements <= 0 || def.BitsPerElement != bitsPerElement {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
+		rowBytes, err := PackedUintRowBytes(def.FixedWidthElements, bitsPerElement)
+		if err != nil {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
+		direct := def.Compression == CompressionNone && logicalType == string(def.Type)
+		return columnPartContractLayout{elementSize: 1, alignment: 1, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 1, bytesPerRow: rowBytes, logicalBitsPerRow: def.FixedWidthElements * bitsPerElement, direct: direct}
 	case EncodingRawUint32Dense:
 		// adjacency_list payload bytes are little-endian dense uint32, but certified
 		// adjacency direct views are deferred to #1901 for the active #1886 stack.
@@ -597,6 +623,9 @@ func certifyLayoutContractColumn(image ColumnPartImage, desc ColumnPartDescripto
 	if contract.FixedWidthElements != column.Definition.FixedWidthElements || contract.FixedWidthElements != columnDesc.FixedWidthElements {
 		return fmt.Errorf("typedcolumn: layout contract column %s fixed_width_elements=%d want %d", columnDesc.Name, contract.FixedWidthElements, column.Definition.FixedWidthElements)
 	}
+	if contract.BitsPerElement != column.Definition.BitsPerElement || contract.BitsPerElement != columnDesc.BitsPerElement {
+		return fmt.Errorf("typedcolumn: layout contract column %s bits_per_element=%d want %d", columnDesc.Name, contract.BitsPerElement, column.Definition.BitsPerElement)
+	}
 	if contract.Rows != desc.RowCount || section.Rows != desc.RowCount {
 		return fmt.Errorf("typedcolumn: layout contract column %s rows=%d section_rows=%d descriptor_rows=%d", columnDesc.Name, contract.Rows, section.Rows, desc.RowCount)
 	}
@@ -612,8 +641,8 @@ func certifyLayoutContractColumn(image ColumnPartImage, desc ColumnPartDescripto
 		expectedLayout.stats = false
 		expectedLayout.pruning = false
 	}
-	if contract.ElementSize != expectedLayout.elementSize || contract.Alignment != expectedLayout.alignment || contract.Endian != expectedLayout.endian || contract.LengthMultiple != expectedLayout.lengthMultiple {
-		return fmt.Errorf("typedcolumn: layout contract column %s element/alignment/endian/length=(%d,%d,%s,%d) want (%d,%d,%s,%d)", columnDesc.Name, contract.ElementSize, contract.Alignment, contract.Endian, contract.LengthMultiple, expectedLayout.elementSize, expectedLayout.alignment, expectedLayout.endian, expectedLayout.lengthMultiple)
+	if contract.ElementSize != expectedLayout.elementSize || contract.Alignment != expectedLayout.alignment || contract.Endian != expectedLayout.endian || contract.LengthMultiple != expectedLayout.lengthMultiple || contract.BytesPerRow != expectedLayout.bytesPerRow || contract.LogicalBitsPerRow != expectedLayout.logicalBitsPerRow {
+		return fmt.Errorf("typedcolumn: layout contract column %s element/alignment/endian/length/row=(%d,%d,%s,%d,%d,%d) want (%d,%d,%s,%d,%d,%d)", columnDesc.Name, contract.ElementSize, contract.Alignment, contract.Endian, contract.LengthMultiple, contract.BytesPerRow, contract.LogicalBitsPerRow, expectedLayout.elementSize, expectedLayout.alignment, expectedLayout.endian, expectedLayout.lengthMultiple, expectedLayout.bytesPerRow, expectedLayout.logicalBitsPerRow)
 	}
 	if contract.DirectViewCertified != expectedLayout.direct || contract.StreamingCertified != expectedLayout.streaming || contract.StatsCertified != expectedLayout.stats || contract.PruningCertified != expectedLayout.pruning {
 		return fmt.Errorf("typedcolumn: layout contract column %s capability flags direct=%v streaming=%v stats=%v pruning=%v want direct=%v streaming=%v stats=%v pruning=%v", columnDesc.Name, contract.DirectViewCertified, contract.StreamingCertified, contract.StatsCertified, contract.PruningCertified, expectedLayout.direct, expectedLayout.streaming, expectedLayout.stats, expectedLayout.pruning)
@@ -882,17 +911,26 @@ func certifyLayoutContractBlock(column string, index int, contract ColumnPartLay
 		if contract.Endian != ColumnPartLayoutEndianLittle || certified.Compression != CompressionNone {
 			return fmt.Errorf("typedcolumn: layout contract column %s block %d direct-view endian/compression=(%s,%s)", column, index, contract.Endian, certified.Compression)
 		}
-		elementsPerRow := contract.FixedWidthElements
-		if elementsPerRow == 0 {
-			elementsPerRow = 1
-		}
-		wantBytes, err := checkedMulInt(certified.RowCount, elementsPerRow, "layout contract fixed-width elements")
-		if err != nil {
-			return err
-		}
-		wantBytes, err = checkedMulInt(wantBytes, contract.ElementSize, "layout contract fixed-width bytes")
-		if err != nil {
-			return err
+		wantBytes := 0
+		var err error
+		if contract.BytesPerRow > 0 {
+			wantBytes, err = checkedMulInt(certified.RowCount, contract.BytesPerRow, "layout contract fixed-width row bytes")
+			if err != nil {
+				return err
+			}
+		} else {
+			elementsPerRow := contract.FixedWidthElements
+			if elementsPerRow == 0 {
+				elementsPerRow = 1
+			}
+			wantBytes, err = checkedMulInt(certified.RowCount, elementsPerRow, "layout contract fixed-width elements")
+			if err != nil {
+				return err
+			}
+			wantBytes, err = checkedMulInt(wantBytes, contract.ElementSize, "layout contract fixed-width bytes")
+			if err != nil {
+				return err
+			}
 		}
 		if certified.PayloadLength != wantBytes || certified.RawBytes != wantBytes || certified.StoredBytes != wantBytes {
 			return fmt.Errorf("typedcolumn: layout contract column %s block %d fixed-width bytes payload/raw/stored=(%d,%d,%d) want %d", column, index, certified.PayloadLength, certified.RawBytes, certified.StoredBytes, wantBytes)
@@ -1003,6 +1041,9 @@ func encodeColumnPartLayoutContractColumn(enc *columnPartImageEncoder, column Co
 		enc.i64(int64(column.ValuesBytes))
 	}
 	enc.i64(int64(column.FixedWidthElements))
+	enc.i64(int64(column.BitsPerElement))
+	enc.i64(int64(column.BytesPerRow))
+	enc.i64(int64(column.LogicalBitsPerRow))
 	enc.i64(int64(column.ElementSize))
 	enc.i64(int64(column.Alignment))
 	enc.u16(uint16(column.Endian))
@@ -1094,6 +1135,18 @@ func decodeColumnPartLayoutContractColumn(dec *columnPartImageDecoder) (ColumnPa
 	if err != nil {
 		return ColumnPartLayoutContractColumn{}, err
 	}
+	bitsPerElement, err := decodeNonNegativeLayoutInt(dec, "layout contract bits per element")
+	if err != nil {
+		return ColumnPartLayoutContractColumn{}, err
+	}
+	bytesPerRow, err := decodeNonNegativeLayoutInt(dec, "layout contract bytes per row")
+	if err != nil {
+		return ColumnPartLayoutContractColumn{}, err
+	}
+	logicalBitsPerRow, err := decodeNonNegativeLayoutInt(dec, "layout contract logical bits per row")
+	if err != nil {
+		return ColumnPartLayoutContractColumn{}, err
+	}
 	elementSize, err := decodeNonNegativeLayoutInt(dec, "layout contract element size")
 	if err != nil {
 		return ColumnPartLayoutContractColumn{}, err
@@ -1155,6 +1208,9 @@ func decodeColumnPartLayoutContractColumn(dec *columnPartImageDecoder) (ColumnPa
 		OffsetsBytes:        offsetsBytes,
 		ValuesBytes:         valuesBytes,
 		FixedWidthElements:  fixedWidthElements,
+		BitsPerElement:      bitsPerElement,
+		BytesPerRow:         bytesPerRow,
+		LogicalBitsPerRow:   logicalBitsPerRow,
 		ElementSize:         elementSize,
 		Alignment:           alignment,
 		Endian:              ColumnPartLayoutEndian(endianCode),

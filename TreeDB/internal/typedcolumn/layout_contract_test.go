@@ -461,6 +461,7 @@ func mustLayoutContractDescriptorStoredBytesOffset(t *testing.T, image ColumnPar
 		mustValidationSkipU16(t, &dec)
 		mustValidationReadU32(t, &dec)
 		mustValidationReadU32(t, &dec)
+		mustValidationReadU32(t, &dec) // bits_per_element
 		blockCount := mustValidationReadU32(t, &dec)
 		for block := 0; block < int(blockCount); block++ {
 			if name == column {
@@ -526,6 +527,9 @@ func mustLayoutContractBlockStoredBytesOffset(t *testing.T, contractRaw []byte, 
 		mustValidationSkipI64(t, &dec)       // section length
 		mustValidationReadU32(t, &dec)       // section checksum
 		mustValidationSkipI64(t, &dec)       // fixed-width elements
+		mustValidationSkipI64(t, &dec)       // bits per element
+		mustValidationSkipI64(t, &dec)       // bytes per row
+		mustValidationSkipI64(t, &dec)       // logical bits per row
 		mustValidationSkipI64(t, &dec)       // element size
 		mustValidationSkipI64(t, &dec)       // alignment
 		mustValidationSkipU16(t, &dec)       // endian

@@ -61,6 +61,14 @@ func columnStoreSemanticLogicalType(valueType ColumnStoreValueType) (columnseman
 		return columnsemantics.LogicalFloat32Vector, true
 	case ColumnStoreValueFloat64Vector:
 		return columnsemantics.LogicalFloat64Vector, true
+	case ColumnStoreValueByteVector:
+		return columnsemantics.LogicalByteVector, true
+	case ColumnStoreValuePackedBitVector:
+		return columnsemantics.LogicalPackedBitVector, true
+	case ColumnStoreValuePackedUint2Vector:
+		return columnsemantics.LogicalPackedUint2Vector, true
+	case ColumnStoreValuePackedUint4Vector:
+		return columnsemantics.LogicalPackedUint4Vector, true
 	case ColumnStoreValueUint32List:
 		return columnsemantics.LogicalUint32List, true
 	case ColumnStoreValueBytes:
@@ -94,6 +102,12 @@ func typedColumnAdapterCapability(column typedColumnAdapterColumn, op columnsema
 		return columnsemantics.Supported(op), nil
 	}
 	if op == columnsemantics.OpAdjacencyDirectPayload && typedColumnAdapterOffsetsListAdjacencyDirectPayloadSupported(column) {
+		return columnsemantics.Supported(op), nil
+	}
+	if op == columnsemantics.OpBytesDirectPayload && typedColumnAdapterFixedBytesDirectPayloadSupported(column) {
+		return columnsemantics.Supported(op), nil
+	}
+	if op == columnsemantics.OpVectorDirectPayload && typedColumnAdapterPackedUintDirectPayloadSupported(column) {
 		return columnsemantics.Supported(op), nil
 	}
 	return columnsemantics.CapabilityFor(desc, op), nil

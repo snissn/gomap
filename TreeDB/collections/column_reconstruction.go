@@ -536,6 +536,10 @@ func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
 		return value.Float32Vector, nil
 	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
 		return columnDeclaredDenseNumericVectorToJSONArray(value)
+	case ColumnStoreValueByteVector:
+		return columnDeclaredBytesToJSONArray(value.Bytes), nil
+	case ColumnStoreValuePackedBitVector, ColumnStoreValuePackedUint2Vector, ColumnStoreValuePackedUint4Vector:
+		return columnDeclaredPackedUintVectorToJSONArray(value)
 	case ColumnStoreValueUint32List:
 		return value.Uint32List, nil
 	case ColumnStoreValueBytes:
@@ -545,6 +549,40 @@ func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported declared value type %q", value.Type)
 	}
+}
+
+func columnDeclaredPackedUintVectorToJSONArray(value columnDeclaredValue) (any, error) {
+	bitsPerElement, ok := columnStorePackedUintVectorBits(value.Type)
+	if !ok {
+		return nil, fmt.Errorf("unsupported packed declared value type %q", value.Type)
+	}
+	if value.BitsPerElement != 0 && value.BitsPerElement != bitsPerElement {
+		return nil, fmt.Errorf("%s bits_per_element=%d want %d", value.Type, value.BitsPerElement, bitsPerElement)
+	}
+	if value.ElementsPerRow <= 0 {
+		return nil, fmt.Errorf("%s missing positive elements_per_row", value.Type)
+	}
+	rowBytes, err := columnDeclaredPackedUintVectorBytesPerRow(value.Type, value.ElementsPerRow)
+	if err != nil {
+		return nil, err
+	}
+	if len(value.Bytes) != rowBytes {
+		return nil, fmt.Errorf("%s bytes=%d want row_bytes=%d", value.Type, len(value.Bytes), rowBytes)
+	}
+	out := make([]int, value.ElementsPerRow)
+	mask := byte((1 << uint(bitsPerElement)) - 1)
+	for element := 0; element < value.ElementsPerRow; element++ {
+		bitOffset := element * bitsPerElement
+		byteOffset := bitOffset / 8
+		shift := uint(bitOffset % 8)
+		out[element] = int((value.Bytes[byteOffset] >> shift) & mask)
+	}
+	for bitOffset := value.ElementsPerRow * bitsPerElement; bitOffset < rowBytes*8; bitOffset++ {
+		if (value.Bytes[bitOffset/8]>>uint(bitOffset%8))&1 != 0 {
+			return nil, fmt.Errorf("%s non-zero padding bit at bit offset %d", value.Type, bitOffset)
+		}
+	}
+	return out, nil
 }
 
 func columnDeclaredBytesToJSONArray(value []byte) []int {

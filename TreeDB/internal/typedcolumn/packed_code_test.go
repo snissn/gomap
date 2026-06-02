@@ -3,6 +3,7 @@ package typedcolumn
 import (
 	"encoding/binary"
 	"math/bits"
+	"strings"
 	"testing"
 )
 
@@ -255,6 +256,133 @@ func TestPackedUintCorruptShapeFailsClosed(t *testing.T) {
 	if _, err := NewFixedBytesRows(1, 0, nil); err == nil {
 		t.Fatal("NewFixedBytesRows bytes_per_row=0 err=nil, want failure")
 	}
+}
+
+func TestFixedBytesAndPackedUintColumnPartImageRoundTrip1931(t *testing.T) {
+	fixedValues := []byte{
+		0x20, 0x21, 0x22,
+		0x00, 0x01, 0x02,
+		0x10, 0x11, 0x12,
+	}
+	fixedRows, err := NewFixedBytesRows(3, 3, fixedValues)
+	if err != nil {
+		t.Fatalf("NewFixedBytesRows: %v", err)
+	}
+	unpackedBits := []uint8{
+		1, 0, 1, 1, 0, 0, 1, 0, 1, 1,
+		0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+		1, 1, 1, 1, 0, 0, 0, 0, 1, 0,
+	}
+	packedValues, err := EncodePackedUintRows(nil, 3, 10, 1, unpackedBits)
+	if err != nil {
+		t.Fatalf("EncodePackedUintRows: %v", err)
+	}
+	packedRows, err := NewPackedUintRows(3, 10, 1, packedValues)
+	if err != nil {
+		t.Fatalf("NewPackedUintRows: %v", err)
+	}
+	part, err := BuildColumnPart(1931, Options{
+		SchemaMode: ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "blob", Type: ColumnTypeFixedBytes, FixedWidthElements: 3, Encoding: EncodingRawFixedBytes, Compression: CompressionNone, CompressionSet: true},
+			{Name: "bits", Type: ColumnTypePackedBitVector, FixedWidthElements: 10, BitsPerElement: 1, Encoding: EncodingRawPackedBitVector, Compression: CompressionNone, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:              3,
+		Columns:           map[string][]int64{"id": {2, 0, 1}},
+		FixedBytesColumns: map[string]FixedBytesRows{"blob": fixedRows},
+		PackedUintColumns: map[string]PackedUintRows{"bits": packedRows},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"blob": "byte_vector", "bits": string(ColumnTypePackedBitVector)}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	decoded, err := ColumnPartFromImage(image)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	gotFixed, err := decoded.FixedBytesColumn("blob", nil)
+	if err != nil {
+		t.Fatalf("FixedBytesColumn: %v", err)
+	}
+	wantFixed := [][]byte{{0x00, 0x01, 0x02}, {0x10, 0x11, 0x12}, {0x20, 0x21, 0x22}}
+	for row, want := range wantFixed {
+		got, err := gotFixed.Row(row)
+		if err != nil {
+			t.Fatalf("fixed Row(%d): %v", row, err)
+		}
+		if string(got) != string(want) {
+			t.Fatalf("fixed row %d=%x want %x", row, got, want)
+		}
+	}
+	gotPacked, err := decoded.PackedUintColumn("bits", nil)
+	if err != nil {
+		t.Fatalf("PackedUintColumn: %v", err)
+	}
+	wantRows := [][]uint8{
+		unpackedBits[10:20],
+		unpackedBits[20:30],
+		unpackedBits[0:10],
+	}
+	for row, want := range wantRows {
+		decodedRow, err := UnpackUintRow(nil, mustPackedUintRowBytes1931(t, gotPacked, row), gotPacked.ElementsPerRow, gotPacked.BitsPerElement)
+		if err != nil {
+			t.Fatalf("UnpackUintRow row %d: %v", row, err)
+		}
+		for i := range want {
+			if decodedRow[i] != want[i] {
+				t.Fatalf("packed row %d element %d=%d want %d decoded=%v", row, i, decodedRow[i], want[i], decodedRow)
+			}
+		}
+	}
+	cert, err := CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	blob, ok := cert.Column("blob")
+	if !ok || !blob.DirectViewCertified || blob.BytesPerRow != 3 || blob.LogicalBitsPerRow != 24 {
+		t.Fatalf("blob layout certification=%+v ok=%v want direct bytes_per_row=3 logical_bits_per_row=24", blob, ok)
+	}
+	bits, ok := cert.Column("bits")
+	if !ok || !bits.DirectViewCertified || bits.BitsPerElement != 1 || bits.BytesPerRow != 2 || bits.LogicalBitsPerRow != 10 {
+		t.Fatalf("bits layout certification=%+v ok=%v want packed metadata", bits, ok)
+	}
+
+	corrupt := image
+	corrupt.Bytes = append([]byte(nil), image.Bytes...)
+	for _, section := range corrupt.Sections {
+		if section.Kind == ColumnPartImageSectionColumnData && section.Column == "bits" {
+			if section.Length == 0 {
+				t.Fatalf("bits column data section is empty: %+v", section)
+			}
+			corrupt.Bytes[section.Offset+section.Length-1] |= 0x80
+			break
+		}
+	}
+	corruptPart, err := ColumnPartFromImage(corrupt)
+	if err == nil {
+		_, err = corruptPart.PackedUintColumn("bits", nil)
+	}
+	if err == nil || !strings.Contains(err.Error(), "padding") {
+		t.Fatalf("corrupt packed padding err=%v want padding failure", err)
+	}
+}
+
+func mustPackedUintRowBytes1931(t *testing.T, rows PackedUintRows, row int) []byte {
+	t.Helper()
+	rowBytes, err := rows.RowBytes(row)
+	if err != nil {
+		t.Fatalf("packed RowBytes(%d): %v", row, err)
+	}
+	return rowBytes
 }
 
 func BenchmarkFixedBytesRowsRandomOrdinalLookup(b *testing.B) {

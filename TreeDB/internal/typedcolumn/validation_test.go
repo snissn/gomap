@@ -157,6 +157,7 @@ func mustValidationDescriptorFixedWidthOffset(t *testing.T, image ColumnPartImag
 		mustValidationReadU32(t, &dec)
 		fixedWidthOffset := dec.offset
 		mustValidationReadU32(t, &dec)
+		mustValidationReadU32(t, &dec) // bits_per_element
 		blockCount := mustValidationReadU32(t, &dec)
 		if name == column {
 			return section.Offset + fixedWidthOffset
