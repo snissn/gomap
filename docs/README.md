@@ -26,6 +26,7 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 
 HashDB is a high-performance, memory-mapped hash index optimized for random I/O.
 
+- **[HashDB README](../HashDB/README.md)**: Focused HashDB overview, entry points, durability model, and benchmark snapshot target.
 - **[Concepts](HASHDB_CONCEPTS.md)**: Design overview (Swiss Tables, Slab Log).
 - **[Tuning](HASHDB_TUNING.md)**: Memory policies and performance configuration.
 - **[Snapshots](HASHDB_SNAPSHOT.md)**: Export/Restore and consistent iteration.
@@ -47,6 +48,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 - **[TreeDB Canonical Benchmark Runbook](benchmarks/treedb_canonical_benchmark_runbook.md)**: Standard TreeDB engine, collections, Mongo gateway, profiling, and reporting workflows.
 - **[YCSB MongoDB / TreeDB Status](benchmarks/ycsb_mongodb_treedb_current.md)**: Current report index and rerun plan for MongoDB, `treedb-native`, and TreeDB Mongo gateway.
 - **[TreeDB Collections Canonical Benchmark](benchmarks/collections_canonical_benchmark.md)**: Canonical TreeDB-vs-SQLite collection benchmark and maintenance-phase semantics.
+- **[Two-Index Collection Insert Rerun](benchmarks/collections_insert_two_index_current_2026-06-02.md)**: Current TreeDB-vs-SQLite two-index insert throughput and compacted storage rows.
 - **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
 - **[BenchProf](../cmd/benchprof/README.md)**: Analysis tool for CPU/alloc/block/mutex profiles and ops/sec outputs.
 - **[Redis Protocol Benchmarking](REDIS_PROTOCOL_BENCHMARKING.md)**: Preferred way to measure Redis wrapper throughput.

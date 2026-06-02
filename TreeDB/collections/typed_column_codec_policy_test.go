@@ -121,11 +121,12 @@ func TestTypedColumnBenchmarkPolicyCompressedDirectAggregate1952(t *testing.T) {
 			if result.Count != int64(len(values)) || result.Sum != int64(len(values))*7 || result.Diagnostics.Fallback {
 				t.Fatalf("aggregate result=%+v want compressed decode-on-scan without fallback", result)
 			}
-			accounting, err := col.ColumnStorePhysicalAccounting(nil, ColumnStorePhysicalAccountingOptions{ReadIntegrity: ColumnAssetReadIntegrityVerify})
+			accounting, err := col.ColumnStorePhysicalAccounting(nil, ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: ColumnAssetReadIntegrityVerify})
 			if err != nil {
 				t.Fatalf("ColumnStorePhysicalAccounting: %v", err)
 			}
 			found := false
+			foundColumnSection := false
 			for _, part := range accounting.TypedColumnParts {
 				for _, detail := range part.Image.CompressionDetail {
 					if detail.Column != "time_us" || detail.RequestedCompression != compression {
@@ -136,12 +137,175 @@ func TestTypedColumnBenchmarkPolicyCompressedDirectAggregate1952(t *testing.T) {
 						t.Fatalf("compression detail=%+v want kept %s smaller than raw", detail, compression)
 					}
 				}
+				for _, section := range part.Image.SerializedSections {
+					if section.Kind != string(typedcolumn.ColumnPartImageSectionColumnData) || section.Column != "time_us" {
+						continue
+					}
+					foundColumnSection = true
+					if section.RawBytes <= section.StoredBytes || section.StoredBytes != section.Bytes || section.CompressionRatio <= 0 || section.CompressionRatio >= 1 {
+						t.Fatalf("column_data section accounting=%+v want encoded raw bytes above compressed stored bytes", section)
+					}
+				}
 			}
 			if !found {
 				t.Fatalf("missing %s compression detail in %+v", compression, accounting.TypedColumnParts)
 			}
+			if !foundColumnSection {
+				t.Fatalf("missing compressed column_data section accounting in %+v", accounting.TypedColumnParts)
+			}
 		})
 	}
+}
+
+func TestTypedColumnAdapterOptInLocatorSectionCompression1952(t *testing.T) {
+	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
+		t.Run(compression.String(), func(t *testing.T) {
+			field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+			rows := make([]typedColumnAdapterRow, 4096)
+			for i := range rows {
+				rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i % 4)}}}
+			}
+			part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 256, Fields: []TypedStorageField{field}, SectionCompression: compression, SectionCompressionSet: true}, rows)
+			if err != nil {
+				t.Fatalf("build part: %v", err)
+			}
+			image, err := part.buildImage()
+			if err != nil {
+				t.Fatalf("buildImage: %v", err)
+			}
+			section, ok := typedColumnImageSectionByKind(image, typedcolumn.ColumnPartImageSectionRowLocators)
+			if !ok {
+				t.Fatalf("missing row locator section in %+v", image.Sections)
+			}
+			if section.Compression != compression {
+				t.Fatalf("row locator compression=%s want %s section=%+v", section.Compression, compression, section)
+			}
+			if section.Length <= 0 || section.Length >= 4+len(rows)*32 {
+				t.Fatalf("row locator stored bytes=%d want compressed below raw", section.Length)
+			}
+			reopened, err := typedcolumn.ParseColumnPartImage(image.Bytes)
+			if err != nil {
+				t.Fatalf("ParseColumnPartImage compressed locators: %v", err)
+			}
+			reopenedSection, ok := typedColumnImageSectionByKind(reopened, typedcolumn.ColumnPartImageSectionRowLocators)
+			if !ok || reopenedSection.Compression != compression || reopenedSection.Length != section.Length || reopenedSection.Rows != len(rows) {
+				t.Fatalf("reopened locator section=%+v found=%v want compression=%s length=%d rows=%d", reopenedSection, ok, compression, section.Length, len(rows))
+			}
+			parsed, err := typedcolumn.ColumnPartFromImage(reopened)
+			if err != nil {
+				t.Fatalf("ColumnPartFromImage compressed locators: %v", err)
+			}
+			if len(parsed.Locators) != len(rows) {
+				t.Fatalf("locators=%d want %d", len(parsed.Locators), len(rows))
+			}
+			sections := image.SectionByteAccounting()
+			foundAccounting := false
+			for _, accounting := range sections {
+				if accounting.Kind != typedcolumn.ColumnPartImageSectionRowLocators {
+					continue
+				}
+				foundAccounting = true
+				if accounting.Compression != compression || accounting.RawBytes <= accounting.StoredBytes || accounting.StoredBytes != section.Length {
+					t.Fatalf("locator section accounting=%+v section=%+v", accounting, section)
+				}
+			}
+			if !foundAccounting {
+				t.Fatalf("missing locator section accounting in %+v", sections)
+			}
+		})
+	}
+}
+
+func TestTypedColumnAdapterCompressedLocatorCorruptionFailsClosed1952(t *testing.T) {
+	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
+		t.Run(compression.String(), func(t *testing.T) {
+			field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+			rows := make([]typedColumnAdapterRow, 1024)
+			for i := range rows {
+				rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}}}
+			}
+			part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 128, Fields: []TypedStorageField{field}, SectionCompression: compression, SectionCompressionSet: true}, rows)
+			if err != nil {
+				t.Fatalf("build part: %v", err)
+			}
+			image, err := part.buildImage()
+			if err != nil {
+				t.Fatalf("buildImage: %v", err)
+			}
+			section, ok := typedColumnImageSectionByKind(image, typedcolumn.ColumnPartImageSectionRowLocators)
+			if !ok || section.Compression != compression || section.Length == 0 {
+				t.Fatalf("compressed locator section=%+v found=%v want %s", section, ok, compression)
+			}
+			corrupt := image
+			corrupt.Bytes = append([]byte(nil), image.Bytes...)
+			corrupt.Bytes[section.Offset+section.Length/2] ^= 0xff
+			_, err = typedcolumn.ColumnPartFromImage(corrupt)
+			if err == nil || !strings.Contains(err.Error(), "row locator") {
+				t.Fatalf("ColumnPartFromImage corrupt locator err=%v want row locator fail-closed", err)
+			}
+		})
+	}
+}
+
+func TestTypedColumnAdapterCompressedLocatorRowMismatchFailsClosed1952(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	rows := make([]typedColumnAdapterRow, 256)
+	for i := range rows {
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}}}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 64, Fields: []TypedStorageField{field}, SectionCompression: typedcolumn.CompressionLZ4, SectionCompressionSet: true}, rows)
+	if err != nil {
+		t.Fatalf("build part: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	corrupt := image
+	corrupt.Sections = append([]typedcolumn.ColumnPartImageSection(nil), image.Sections...)
+	for i := range corrupt.Sections {
+		if corrupt.Sections[i].Kind == typedcolumn.ColumnPartImageSectionRowLocators {
+			corrupt.Sections[i].Rows++
+		}
+	}
+	_, err = typedcolumn.ColumnPartFromImage(corrupt)
+	if err == nil || !strings.Contains(err.Error(), "row locator section rows") {
+		t.Fatalf("ColumnPartFromImage locator row mismatch err=%v want fail-closed row count diagnostic", err)
+	}
+}
+
+func TestTypedColumnAdapterDictionarySectionCompressionUnsupported1952(t *testing.T) {
+	field := typedColumnAdapterField("kind", ColumnStoreValueString)
+	rows := []typedColumnAdapterRow{
+		{PrimaryID: 1, Values: map[string]columnDeclaredValue{"kind": {Type: ColumnStoreValueString, Present: true, String: "commit"}}},
+		{PrimaryID: 2, Values: map[string]columnDeclaredValue{"kind": {Type: ColumnStoreValueString, Present: true, String: "handle"}}},
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 2, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		t.Fatalf("build part: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	for i := range image.Sections {
+		if image.Sections[i].Kind == typedcolumn.ColumnPartImageSectionDictionaries {
+			image.Sections[i].Compression = typedcolumn.CompressionSnappy
+		}
+	}
+	_, err = image.Dictionaries()
+	if err == nil || !strings.Contains(err.Error(), "dictionaries") || !strings.Contains(err.Error(), "raw-length") {
+		t.Fatalf("Dictionaries compressed section err=%v want fail-closed raw-length diagnostic", err)
+	}
+}
+
+func typedColumnImageSectionByKind(image typedcolumn.ColumnPartImage, kind typedcolumn.ColumnPartImageSectionKind) (typedcolumn.ColumnPartImageSection, bool) {
+	for _, section := range image.Sections {
+		if section.Kind == kind {
+			return section, true
+		}
+	}
+	return typedcolumn.ColumnPartImageSection{}, false
 }
 
 func TestTypedColumnAdapterOptInCompressionRejectsZSTD1952(t *testing.T) {

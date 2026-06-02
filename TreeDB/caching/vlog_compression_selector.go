@@ -95,6 +95,10 @@ const (
 	// Larger grouped-frame targets reduce per-record compression overhead for
 	// large forced-pointer streams.
 	forcePointerBlockTargetCompressedBytes = 32 << 10
+	// Live leaf-log frames are a read-path structure as well as a write/storage
+	// structure. Keep grouping modest so cold point reads do not repeatedly decode
+	// large multi-page frames when access has little locality.
+	leafLogBlockMaxK = 8
 	// For large payloads, allow strong observed dict wins to override generic
 	// throughput scoring so we do not lock highly-compressible streams into
 	// block mode.
@@ -1656,6 +1660,48 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	l.vlogCompressionSelector.observe(mode, blockCodec, rawPayloadBytes, storedPayloadBytes, wallNs, probe)
 }
 
+func (db *DB) isLiveLeafLogLane(l *lane) bool {
+	return db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID
+}
+
+func (db *DB) clampLiveLeafLogFrameK(l *lane, k int) int {
+	if k > leafLogBlockMaxK && db.isLiveLeafLogLane(l) {
+		return leafLogBlockMaxK
+	}
+	return k
+}
+
+func (db *DB) chooseValueLogRawWriteK(l *lane, records int, autoRawBypass, paused bool) int {
+	if records <= 1 {
+		return 1
+	}
+	k := 1
+	switch {
+	case db != nil && autoRawBypass && db.forceValueLogPointers:
+		k = valuelog.MaxFrameK
+	case db != nil && paused && db.disableJournal:
+		k = valuelog.MaxFrameK
+	case db != nil:
+		if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
+			k = cur
+		} else {
+			k = 8
+			if db.disableJournal && db.forceValueLogPointers {
+				k = 16
+			}
+		}
+	default:
+		k = 8
+	}
+	if k < 1 {
+		k = 1
+	}
+	if k > valuelog.MaxFrameK {
+		k = valuelog.MaxFrameK
+	}
+	return db.clampLiveLeafLogFrameK(l, k)
+}
+
 func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, codec valuelog.BlockCodec) int {
 	if records <= 1 {
 		recordLaneVlogBlockK(l, codec, 1)
@@ -1672,6 +1718,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		if k > valuelog.MaxFrameK {
 			k = valuelog.MaxFrameK
 		}
+		k = db.clampLiveLeafLogFrameK(l, k)
 		recordLaneVlogBlockK(l, codec, k)
 		return k
 	}
@@ -1696,6 +1743,16 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		ratio = largePayloadBlockBootstrapRatio
 	}
 	targetCompressedBytes := db.valueLogBlockTargetBytes
+	if db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && ratioSamples == 0 {
+		// Batch-only leaf-log bootstrap: without an initial lane-local block ratio,
+		// the generic incompressible guard chooses K=1 and defeats AppendLeafPages.
+		// Seed only the dedicated live leaf-log lane so the first multi-page batch
+		// forms grouped frames; normal observed ratios take over after writes.
+		ratio = 0.50
+		if targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
+			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
+		}
+	}
 	if db.forceValueLogPointers && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
 		if avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
 			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
@@ -1714,6 +1771,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	if k > valuelog.MaxFrameK {
 		k = valuelog.MaxFrameK
 	}
+	k = db.clampLiveLeafLogFrameK(l, k)
 	recordLaneVlogBlockK(l, codec, k)
 	return k
 }

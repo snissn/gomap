@@ -47,6 +47,8 @@ func applyTypedColumnBenchmarkPolicyFromEnv(cfg ColumnStoreConfig, opts *typedCo
 		if set {
 			opts.DefaultCompression = compression
 			opts.DefaultCompressionSet = true
+			opts.SectionCompression = compression
+			opts.SectionCompressionSet = true
 			active = true
 		}
 	}

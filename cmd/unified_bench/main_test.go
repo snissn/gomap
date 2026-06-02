@@ -1673,7 +1673,7 @@ func TestRenderTreeDBSelectedStatsString_PrefersBackendMmapReadFamily(t *testing
 			"treedb.vlog.mmap_read.miss_no_mapping":         "10",
 			"treedb.vlog.mmap_read.fallback_readat":         "0",
 			"treedb.vlog.mmap_read.hit_ratio":               "1.000000",
-			"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes": "1073741824",
+			"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes": "8589934592",
 		},
 	}
 
@@ -1682,7 +1682,7 @@ func TestRenderTreeDBSelectedStatsString_PrefersBackendMmapReadFamily(t *testing
 		"vlog_mmap.read.hits: 10626606",
 		"vlog_mmap.read.miss_no_mapping: 10",
 		"vlog_mmap.read.hit_ratio: 1.000000",
-		"vlog_mmap.max_mapped_leaf_sealed_bytes: 1073741824",
+		"vlog_mmap.max_mapped_leaf_sealed_bytes: 8589934592",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in selected stats, got:\n%s", want, got)
@@ -1845,8 +1845,8 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 			TreeDBStats: map[string]map[string]string{
 				"TreeDB": {
 					"treedb.cache.vlog_mmap.read.hits":                               "10",
-					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":            "1073741824",
-					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "32",
+					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":            "8589934592",
+					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "512",
 					"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
 					"treedb.unselected": "drop",
 				},
@@ -1897,10 +1897,10 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "4" {
 		t.Fatalf("unexpected TreeDB selected stat root_apply_calls_total=%q", got)
 	}
-	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes"]; got != "1073741824" {
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes"]; got != "8589934592" {
 		t.Fatalf("unexpected cache leaf mmap budget stat=%q", got)
 	}
-	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.vlog.mmap_max_mapped_leaf_sealed_segments"]; got != "32" {
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.vlog.mmap_max_mapped_leaf_sealed_segments"]; got != "512" {
 		t.Fatalf("unexpected backend leaf mmap budget stat=%q", got)
 	}
 	if _, ok := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.unselected"]; ok {

@@ -153,6 +153,8 @@ type typedColumnAdapterOptions struct {
 	RowsPerGranule        int
 	DefaultCompression    typedcolumn.Compression
 	DefaultCompressionSet bool
+	SectionCompression    typedcolumn.Compression
+	SectionCompressionSet bool
 	Int64Encoding         typedcolumn.Encoding
 	Int64EncodingSet      bool
 	AdaptiveMarkSizing    typedcolumn.ColumnAdaptiveMarkSizing
@@ -1021,7 +1023,11 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 			logicalTypes[column.Definition.Name] = string(logical)
 		}
 	}
-	return typedcolumn.BuildColumnPartImage(p.Part, typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary, LayoutLogicalTypes: logicalTypes})
+	imageOpts := typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary, LayoutLogicalTypes: logicalTypes}
+	if p.Options.SectionCompressionSet {
+		imageOpts.SectionCompression = p.Options.SectionCompression
+	}
+	return typedcolumn.BuildColumnPartImage(p.Part, imageOpts)
 }
 
 func decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, includePhysicalRows bool) (columnTypedColumnPhysicalQueryPart, error) {
