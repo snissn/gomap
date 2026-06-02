@@ -491,8 +491,11 @@ func (b *VectorIndexSearchBuffer) resetView() {
 
 // VectorIndexSearcher is a reusable, snapshot-bound vector index search handle.
 // It is not concurrency-safe; parallel query workers should open independent
-// searchers. Close and reopen the searcher after writes/rebuilds when callers
-// need the newest column_graph generation.
+// searchers/buffers. Current-format column_graph searchers opened over the same
+// immutable generation share prepared mmap/resource views internally, so worker
+// isolation applies to mutable scratch/result buffers rather than immutable
+// typed-column assets. Close and reopen the searcher after writes/rebuilds when
+// callers need the newest column_graph generation.
 type VectorIndexSearcher struct {
 	collection   *Collection
 	indexName    string

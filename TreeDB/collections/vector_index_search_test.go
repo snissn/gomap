@@ -2104,7 +2104,6 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelW
 		}
 	}
 	b.SetParallelism(1)
-	b.ReportMetric(float64(workers), "parallel_workers")
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -2139,6 +2138,8 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelW
 		sink.Add(localSink)
 	})
 	b.StopTimer()
+	b.ReportMetric(float64(workers), "parallel_workers")
+	reportColumnVectorGraphSharedPreparedSearchBenchMetrics1735(b, col.columnVectorGraphSharedPreparedSearchCacheSnapshot(), workers)
 	if errValue := firstErr.Load(); errValue != nil {
 		b.Fatalf("%s", errValue.(string))
 	}
@@ -2220,7 +2221,6 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableB
 		}
 	}
 	b.SetParallelism(1)
-	b.ReportMetric(float64(workers), "parallel_workers")
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -2251,6 +2251,8 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableB
 		sink.Add(localSink)
 	})
 	b.StopTimer()
+	b.ReportMetric(float64(workers), "parallel_workers")
+	reportColumnVectorGraphSharedPreparedSearchBenchMetrics1735(b, col.columnVectorGraphSharedPreparedSearchCacheSnapshot(), workers)
 	if errValue := firstErr.Load(); errValue != nil {
 		b.Fatalf("%s", errValue.(string))
 	}

@@ -358,22 +358,28 @@ type collectionManagerOptions struct {
 }
 
 type Collection struct {
-	db                *backenddb.DB
-	manager           *CollectionManager
-	writeDomain       *collectionWriteDomain
-	name              string
-	meta              CollectionMeta
-	catalogMu         sync.RWMutex
-	catalogCommitSeq  uint64
-	catalogSystemRoot uint64
-	catalog           *collectionCatalog
-	insertStatsMu     sync.RWMutex
-	lastInsertStats   CollectionInsertStats
-	updateStatsMu     sync.RWMutex
-	lastUpdateStats   CollectionUpdateStats
-	vectorIndexLoadMu sync.Mutex
-	vectorIndexesMu   sync.RWMutex
-	vectorIndexes     map[string]*VectorIndex
+	db                         *backenddb.DB
+	manager                    *CollectionManager
+	writeDomain                *collectionWriteDomain
+	name                       string
+	meta                       CollectionMeta
+	catalogMu                  sync.RWMutex
+	catalogCommitSeq           uint64
+	catalogSystemRoot          uint64
+	catalog                    *collectionCatalog
+	insertStatsMu              sync.RWMutex
+	lastInsertStats            CollectionInsertStats
+	updateStatsMu              sync.RWMutex
+	lastUpdateStats            CollectionUpdateStats
+	vectorIndexLoadMu          sync.Mutex
+	vectorIndexesMu            sync.RWMutex
+	vectorIndexes              map[string]*VectorIndex
+	vectorPreparedSearchMu     sync.Mutex
+	vectorPreparedSearch       map[string]*columnVectorGraphSharedPreparedSearchCacheEntry
+	vectorPreparedSearchHits   uint64
+	vectorPreparedSearchMisses uint64
+	vectorPreparedSearchWaits  uint64
+	vectorPreparedSearchBuilds uint64
 }
 
 type CollectionRootOverlayCompactionStats struct {

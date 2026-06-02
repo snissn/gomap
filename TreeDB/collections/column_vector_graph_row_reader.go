@@ -57,6 +57,7 @@ type columnVectorGraphPhysicalRowReader struct {
 	documentIDSource                    *columnVectorGraphDocumentIDStateSource
 	documentIDStateFallbackReason       typeddecode.Reason
 	preparedSearch                      *columnVectorGraphPreparedSearchView
+	sharedPreparedSearch                *columnVectorGraphSharedPreparedSearchRef
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
 	layer0AdjacencySource               *columnVectorGraphLayer0AdjacencyDirectSource
 	layer0AdjacencySourceUnavailable    bool
@@ -123,6 +124,62 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		catalog: catalog,
 		reader:  reader,
 	}
+	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != "" {
+		key, keyErr := columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
+		if keyErr != nil {
+			_ = graphReader.Close()
+			return nil, keyErr
+		}
+		shared, err := c.acquireColumnVectorGraphSharedPreparedSearch(key, func() (*columnVectorGraphSharedPreparedSearch, error) {
+			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog}
+			success := false
+			defer func() {
+				if !success {
+					_ = buildReader.Close()
+				}
+			}()
+			if err := c.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(buildReader, snap, view); err != nil {
+				return nil, err
+			}
+			holder, err := newColumnVectorGraphSharedPreparedSearchFromReader(buildReader)
+			if err != nil {
+				return nil, err
+			}
+			success = true
+			return holder, nil
+		})
+		if err != nil {
+			if errors.Is(err, errColumnVectorGraphSharedPreparedSearchNotEligible) {
+				if prepErr := c.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(graphReader, snap, view); prepErr != nil {
+					_ = graphReader.Close()
+					return nil, prepErr
+				}
+				return graphReader, nil
+			}
+			_ = graphReader.Close()
+			return nil, err
+		}
+		if err := graphReader.attachSharedPreparedSearch(shared); err != nil {
+			releaseErr := shared.release()
+			_ = graphReader.Close()
+			return nil, errors.Join(err, releaseErr)
+		}
+		return graphReader, nil
+	}
+	if err := c.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(graphReader, snap, view); err != nil {
+		_ = graphReader.Close()
+		return nil, err
+	}
+	return graphReader, nil
+}
+
+func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(graphReader *columnVectorGraphPhysicalRowReader, snap *backenddb.Snapshot, view columnPhysicalScanSnapshotView) error {
+	if graphReader == nil {
+		return errNilColumnVectorGraphPhysicalRowReader
+	}
+	catalog := graphReader.catalog
+	def := graphReader.def
+	graph := graphReader.graph
 	if catalog != nil && catalog.meta.Options.ColumnStore != nil {
 		baseCfg := catalog.meta.Options.ColumnStore
 		var baseManifest columnManifestSnapshot
@@ -148,26 +205,22 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		}
 		state := view.VectorIndexState
 		if !view.VectorIndexStateFound {
-			_ = graphReader.Close()
-			return nil, fmt.Errorf("collections: column_graph %q missing vector-index state record: %w", def.Name, errColumnVectorGraphManifestMismatch)
+			return fmt.Errorf("collections: column_graph %q missing vector-index state record: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 		if sources, _, sourceErr := c.openColumnVectorGraphAdjacencyStateSourcesForReader(catalog.meta.Name, *baseCfg, def, graph, state); sourceErr != nil {
-			_ = graphReader.Close()
-			return nil, sourceErr
+			return sourceErr
 		} else if sources != nil {
 			graphReader.adjacencyLayerSources = sources
 			if len(sources.sources) > 0 {
 				graphReader.layer0AdjacencySource = sources.sources[0]
 			}
 		} else {
-			_ = graphReader.Close()
-			return nil, fmt.Errorf("collections: column_graph %q missing vector-index adjacency state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+			return fmt.Errorf("collections: column_graph %q missing vector-index adjacency state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 		if _, ok := findColumnVectorGraphInvNormStateAsset(state); ok {
 			source, fallbackReason, sourceErr := c.openColumnVectorGraphInvNormStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
 			if sourceErr != nil {
-				_ = graphReader.Close()
-				return nil, sourceErr
+				return sourceErr
 			}
 			graphReader.invNormSource = source
 			graphReader.invNormStateFallbackReason = fallbackReason
@@ -177,13 +230,11 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		if columnVectorGraphRowRefStatePresent(state) {
 			_, records, recordsErr := loadBaseManifestRecords()
 			if recordsErr != nil {
-				_ = graphReader.Close()
-				return nil, recordsErr
+				return recordsErr
 			}
 			source, sourceErr := c.openColumnVectorGraphRowRefStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state, records)
 			if sourceErr != nil {
-				_ = graphReader.Close()
-				return nil, sourceErr
+				return sourceErr
 			}
 			graphReader.rowRefSource = source
 		} else {
@@ -215,30 +266,25 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 {
 		if graphReader.invNormSource == nil {
-			_ = graphReader.Close()
-			return nil, fmt.Errorf("collections: column_graph %q missing required vector-index inverse-norm state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+			return fmt.Errorf("collections: column_graph %q missing required vector-index inverse-norm state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 		if graphReader.rowRefSource == nil {
-			_ = graphReader.Close()
-			return nil, fmt.Errorf("collections: column_graph %q missing required vector-index row-ref state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+			return fmt.Errorf("collections: column_graph %q missing required vector-index row-ref state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 		if graphReader.documentIDSource == nil {
-			_ = graphReader.Close()
-			return nil, fmt.Errorf("collections: column_graph %q missing required vector-index document-id state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+			return fmt.Errorf("collections: column_graph %q missing required vector-index document-id state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 		if graphReader.typedVectorSource == nil {
-			_ = graphReader.Close()
 			if graphReader.typedVectorFallbackReason != "" {
-				return nil, fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %s: %w", def.Name, graphReader.typedVectorFallbackReason, errColumnVectorGraphManifestMismatch)
+				return fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %s: %w", def.Name, graphReader.typedVectorFallbackReason, errColumnVectorGraphManifestMismatch)
 			}
-			return nil, fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+			return fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 		if prepareErr := maybePrepareColumnVectorGraphPreparedSearchView(graphReader); prepareErr != nil {
-			_ = graphReader.Close()
-			return nil, fmt.Errorf("collections: column_graph %q combined prepared graph-search view: %w: %w", def.Name, prepareErr, errColumnVectorGraphManifestMismatch)
+			return fmt.Errorf("collections: column_graph %q combined prepared graph-search view: %w: %w", def.Name, prepareErr, errColumnVectorGraphManifestMismatch)
 		}
 	}
-	return graphReader, nil
+	return nil
 }
 
 func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
@@ -402,6 +448,11 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 		return nil
 	}
 	var closeErr error
+	if r.sharedPreparedSearch != nil {
+		if err := r.releaseSharedPreparedSearch(); err != nil {
+			closeErr = err
+		}
+	}
 	if r.typedVectorSource != nil {
 		if err := r.typedVectorSource.Close(); err != nil {
 			closeErr = err

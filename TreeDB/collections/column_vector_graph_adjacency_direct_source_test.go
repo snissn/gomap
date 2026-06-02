@@ -335,7 +335,10 @@ func TestColumnVectorGraphLayer0AdjacencySourceBadNeighborOrdinalFails1919(t *te
 	}
 }
 
-func TestColumnVectorGraphLayer0AdjacencySourceParallelReadersIndependent1919(t *testing.T) {
+func TestColumnVectorGraphLayer0AdjacencySourceParallelReadersSharePreparedHandles1735(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("shared prepared adjacency-source handle test requires mmap_direct support")
+	}
 	input := columnGraphRebuildSyntheticRowsV2A(64, 16)
 	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 16, 8, input)
 	defer func() { _ = d.Close() }()
@@ -349,13 +352,22 @@ func TestColumnVectorGraphLayer0AdjacencySourceParallelReadersIndependent1919(t 
 			t.Fatalf("open reader %d: %v", i, err)
 		}
 		defer func() { _ = reader.Close() }()
-		if reader.layer0AdjacencySource == nil || reader.layer0AdjacencySource.manager == nil {
-			t.Fatalf("reader %d source=%v fallback=%s", i, reader.layer0AdjacencySource != nil, reader.layer0AdjacencySourceFallbackReason)
+		if reader.layer0AdjacencySource == nil || reader.layer0AdjacencySource.manager == nil || reader.sharedPreparedSearch == nil {
+			t.Fatalf("reader %d source=%v shared=%v fallback=%s", i, reader.layer0AdjacencySource != nil, reader.sharedPreparedSearch != nil, reader.layer0AdjacencySourceFallbackReason)
 		}
-		if i > 0 && reader.layer0AdjacencySource.manager == readers[0].layer0AdjacencySource.manager {
-			t.Fatalf("reader %d shares layer-0 source manager with reader 0", i)
+		if i > 0 {
+			if reader.sharedPreparedSearch.holder != readers[0].sharedPreparedSearch.holder {
+				t.Fatalf("reader %d did not share prepared holder with reader 0", i)
+			}
+			if reader.layer0AdjacencySource.manager != readers[0].layer0AdjacencySource.manager {
+				t.Fatalf("reader %d layer-0 source manager differs from reader 0; want shared immutable manager", i)
+			}
 		}
 		readers[i] = reader
+	}
+	snap := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+	if snap.Entries != 1 || snap.Refs != len(readers) || snap.ActiveHandles == 0 || snap.ActiveMappedBytes == 0 {
+		t.Fatalf("shared prepared adjacency snapshot=%+v want one active holder with %d refs", snap, len(readers))
 	}
 	for i, reader := range readers {
 		var scratch columnVectorGraphNativeSearchScratch

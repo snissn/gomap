@@ -346,6 +346,10 @@ func TestColumnVectorGraphSearchSourcePolicyMatchesLegacy1968(t *testing.T) {
 		}
 	})
 
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close shared policy reader before stale source tests: %v", err)
+	}
+
 	t.Run("stale_prebound_vector_state_fallback", func(t *testing.T) {
 		staleReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 		if err != nil {
