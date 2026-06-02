@@ -126,7 +126,12 @@ var snapshotGetCallerSamplesTotal atomic.Uint64
 var snapshotGetCallerSampleSeq atomic.Uint64
 var snapshotGetCallerStatsMap sync.Map
 var poolPressureState atomic.Value
+var poolPressureLevelState atomic.Uint64
 var poolPressureMu sync.Mutex
+var poolPressureSamplerMu sync.Mutex
+var poolPressureSamplerRefs int
+var poolPressureSamplerStop chan struct{}
+var poolPressureSamplerDone chan struct{}
 var poolPressureLastLeaseTrimUnixNano atomic.Int64
 var poolPressureNormalSamplesTotal atomic.Uint64
 var poolPressureHighSamplesTotal atomic.Uint64
@@ -204,6 +209,53 @@ const (
 	poolPressureHigh
 	poolPressureCritical
 )
+
+const (
+	poolPressureLevelStateLevelBits = 8
+	poolPressureLevelStateLevelMask = uint64(1<<poolPressureLevelStateLevelBits - 1)
+)
+
+func packPoolPressureLevelState(version uint64, level poolPressureLevel) uint64 {
+	return (version << poolPressureLevelStateLevelBits) | (uint64(level) & poolPressureLevelStateLevelMask)
+}
+
+func unpackPoolPressureLevelState(state uint64) (uint64, poolPressureLevel) {
+	return state >> poolPressureLevelStateLevelBits, poolPressureLevel(state & poolPressureLevelStateLevelMask)
+}
+
+func resetPoolPressureLevelState(level poolPressureLevel) {
+	poolPressureLevelState.Store(packPoolPressureLevelState(1, level))
+}
+
+func currentPoolPressureLevelState() uint64 {
+	if state := poolPressureLevelState.Load(); state != 0 {
+		return state
+	}
+	initial := packPoolPressureLevelState(1, poolPressureNormal)
+	if poolPressureLevelState.CompareAndSwap(0, initial) {
+		return initial
+	}
+	return poolPressureLevelState.Load()
+}
+
+func currentPoolPressureLevelFast() poolPressureLevel {
+	_, level := unpackPoolPressureLevelState(currentPoolPressureLevelState())
+	return level
+}
+
+func publishPoolPressureLevel(level poolPressureLevel) uint64 {
+	for {
+		state := currentPoolPressureLevelState()
+		version, currentLevel := unpackPoolPressureLevelState(state)
+		if currentLevel == level {
+			return state
+		}
+		next := packPoolPressureLevelState(version+1, level)
+		if poolPressureLevelState.CompareAndSwap(state, next) {
+			return next
+		}
+	}
+}
 
 type poolPressureSnapshot struct {
 	sampledUnixNano    int64
@@ -631,6 +683,81 @@ func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt t
 	}
 }
 
+func publishPoolPressureSnapshot(snap poolPressureSnapshot, sampledAt time.Time) {
+	poolPressureState.Store(snap)
+	publishPoolPressureLevel(snap.level)
+	switch snap.level {
+	case poolPressureCritical:
+		poolPressureCriticalSamplesTotal.Add(1)
+	case poolPressureHigh:
+		poolPressureHighSamplesTotal.Add(1)
+	default:
+		poolPressureNormalSamplesTotal.Add(1)
+	}
+	maybeTrimEntrySliceLeasesUnderPressure(snap.level, sampledAt)
+}
+
+func sampleAndPublishPoolPressureSnapshot() poolPressureSnapshot {
+	now := poolPressureNow()
+	snap := samplePoolPressureSnapshot(now)
+	publishPoolPressureSnapshot(snap, now)
+	return snap
+}
+
+// Keep the pressure-level atomic fresh without putting time/memstats sampling
+// back on write paths that only need the scaled mutable flush threshold.
+func runPoolPressureSampler(stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(poolPressureRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			_ = sampleAndPublishPoolPressureSnapshot()
+		case <-stop:
+			return
+		}
+	}
+}
+
+func retainPoolPressureSampler() func() {
+	poolPressureSamplerMu.Lock()
+	if poolPressureSamplerRefs == 0 {
+		_ = sampleAndPublishPoolPressureSnapshot()
+		stop := make(chan struct{})
+		done := make(chan struct{})
+		poolPressureSamplerStop = stop
+		poolPressureSamplerDone = done
+		go runPoolPressureSampler(stop, done)
+	}
+	poolPressureSamplerRefs++
+	poolPressureSamplerMu.Unlock()
+
+	var released atomic.Bool
+	return func() {
+		if !released.CompareAndSwap(false, true) {
+			return
+		}
+
+		var done chan struct{}
+		poolPressureSamplerMu.Lock()
+		if poolPressureSamplerRefs > 0 {
+			poolPressureSamplerRefs--
+		}
+		if poolPressureSamplerRefs == 0 && poolPressureSamplerStop != nil {
+			close(poolPressureSamplerStop)
+			done = poolPressureSamplerDone
+			poolPressureSamplerStop = nil
+			poolPressureSamplerDone = nil
+		}
+		poolPressureSamplerMu.Unlock()
+
+		if done != nil {
+			<-done
+		}
+	}
+}
+
 func currentPoolPressureSnapshot() poolPressureSnapshot {
 	now := poolPressureNow()
 	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
@@ -649,18 +776,7 @@ func currentPoolPressureSnapshot() poolPressureSnapshot {
 		}
 	}
 
-	snap := samplePoolPressureSnapshot(now)
-	poolPressureState.Store(snap)
-	switch snap.level {
-	case poolPressureCritical:
-		poolPressureCriticalSamplesTotal.Add(1)
-	case poolPressureHigh:
-		poolPressureHighSamplesTotal.Add(1)
-	default:
-		poolPressureNormalSamplesTotal.Add(1)
-	}
-	maybeTrimEntrySliceLeasesUnderPressure(snap.level, now)
-	return snap
+	return sampleAndPublishPoolPressureSnapshot()
 }
 
 func currentZipperParallelMergePressure() zipper.ParallelMergePressureLevel {
@@ -957,6 +1073,7 @@ type batchArenaPoolBudgetCache struct {
 func init() {
 	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
 	poolPressureState.Store(poolPressureSnapshot{})
+	resetPoolPressureLevelState(poolPressureNormal)
 }
 
 func noteBatchArenaPoolGC(numGC uint64) {
@@ -6662,6 +6779,9 @@ type DB struct {
 	mutableShardMask              uint64
 	mutableBytes                  atomic.Int64
 	mutableThreshold              atomic.Int64
+	mutableThresholdEffective     atomic.Int64
+	mutableThresholdEffectiveBase atomic.Int64
+	mutableThresholdPressureState atomic.Uint64
 	rotatePending                 atomic.Bool
 	queue                         []memtable.Table
 	queueShardIDs                 []uint16
@@ -7357,10 +7477,11 @@ type DB struct {
 	processPeakVlogMmapSealedSegments  atomic.Uint64
 
 	// Lifecycle
-	closeCh chan struct{}
-	closing atomic.Bool
-	flushCh chan struct{}
-	wg      sync.WaitGroup
+	closeCh                    chan struct{}
+	closing                    atomic.Bool
+	flushCh                    chan struct{}
+	wg                         sync.WaitGroup
+	releasePoolPressureSampler func()
 
 	autoCheckpointOnceCh  chan struct{}
 	autoCheckpointWriteCh chan struct{}
@@ -8909,6 +9030,26 @@ func (db *DB) updateMutableThresholdLocked() {
 		threshold = db.memtableWarmupThreshold
 	}
 	db.mutableThreshold.Store(threshold)
+	db.refreshMutableFlushThresholdForPressureState(currentPoolPressureLevelState())
+}
+
+func (db *DB) refreshMutableFlushThresholdForPressureState(state uint64) int64 {
+	if state == 0 {
+		state = currentPoolPressureLevelState()
+	}
+	base := db.mutableThreshold.Load()
+	if base <= 0 {
+		db.mutableThresholdEffective.Store(base)
+		db.mutableThresholdEffectiveBase.Store(base)
+		db.mutableThresholdPressureState.Store(state)
+		return base
+	}
+	_, level := unpackPoolPressureLevelState(state)
+	effective := scaleMutableFlushThresholdForPressure(base, level)
+	db.mutableThresholdEffective.Store(effective)
+	db.mutableThresholdEffectiveBase.Store(base)
+	db.mutableThresholdPressureState.Store(state)
+	return effective
 }
 
 func (db *DB) mutableFlushThreshold() int64 {
@@ -8916,8 +9057,15 @@ func (db *DB) mutableFlushThreshold() int64 {
 	if base <= 0 {
 		return base
 	}
-	level := currentPoolPressureSnapshot().level
-	return scaleMutableFlushThresholdForPressure(base, level)
+	state := currentPoolPressureLevelState()
+	if db.mutableThresholdEffectiveBase.Load() != base || db.mutableThresholdPressureState.Load() != state {
+		return db.refreshMutableFlushThresholdForPressureState(state)
+	}
+	effective := db.mutableThresholdEffective.Load()
+	if effective <= 0 {
+		return db.refreshMutableFlushThresholdForPressureState(state)
+	}
+	return effective
 }
 
 func (db *DB) adaptiveBTreeMinIteratorSamples() uint64 {
@@ -9883,6 +10031,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.mu.Unlock()
 
 	db.startDomainIngressWorkers()
+	db.releasePoolPressureSampler = retainPoolPressureSampler()
 	db.startProcessMemorySampler()
 
 	// Start background flusher
@@ -10083,7 +10232,7 @@ func (db *DB) sampleProcessMemoryPeaks(backendMmap vlogMmapStatsSnapshot) {
 	if db == nil {
 		return
 	}
-	snap := samplePoolPressureSnapshot(time.Now())
+	snap := sampleAndPublishPoolPressureSnapshot()
 	updateAtomicMax(&db.processPeakHeapAllocBytes, snap.heapAllocBytes)
 	updateAtomicMax(&db.processPeakHeapInuseBytes, snap.heapInuseBytes)
 	updateAtomicMax(&db.processPeakTotalSysBytes, snap.totalSysBytes)
@@ -20237,6 +20386,10 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	if release := db.releasePoolPressureSampler; release != nil {
+		db.releasePoolPressureSampler = nil
+		release()
+	}
 	db.releaseClosingEmptyMemtables()
 	// Drain any in-flight dict-profile publish callbacks before teardown.
 	// New callbacks will observe closing=true and return without touching stores.

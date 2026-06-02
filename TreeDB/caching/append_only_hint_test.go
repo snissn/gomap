@@ -99,6 +99,7 @@ func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *tes
 	}
 
 	fake.HeapInuse = 1 << 30 // normal
+	_ = currentPoolPressureSnapshot()
 	normal := cache.appendOnlyMemtableCapacityHint(requestedCap, appendOnlyEstimatedBytesPerEntryDefault)
 	if want := expectedCapFor(poolPressureNormal); normal != want {
 		t.Fatalf("normal pressure cap=%d want=%d", normal, want)
@@ -106,6 +107,7 @@ func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *tes
 
 	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
 	fake.HeapInuse = 5 << 30 // high
+	_ = currentPoolPressureSnapshot()
 	high := cache.appendOnlyMemtableCapacityHint(requestedCap, appendOnlyEstimatedBytesPerEntryDefault)
 	if want := expectedCapFor(poolPressureHigh); high != want {
 		t.Fatalf("high pressure cap=%d want=%d", high, want)
@@ -113,6 +115,7 @@ func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *tes
 
 	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
 	fake.HeapInuse = 9 << 30 // critical
+	_ = currentPoolPressureSnapshot()
 	critical := cache.appendOnlyMemtableCapacityHint(requestedCap, appendOnlyEstimatedBytesPerEntryDefault)
 	if want := expectedCapFor(poolPressureCritical); critical != want {
 		t.Fatalf("critical pressure cap=%d want=%d", critical, want)
