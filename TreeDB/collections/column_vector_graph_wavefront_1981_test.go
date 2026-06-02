@@ -173,6 +173,10 @@ func TestColumnVectorGraphWavefrontOptions1981(t *testing.T) {
 	if !errors.Is(err, errColumnVectorGraphNativeSearchTraversalModeInvalid) {
 		t.Fatalf("invalid traversal mode err=%v want mode invalid", err)
 	}
+	_, _, err = reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: shape.efSearch, TraversalMode: columnVectorGraphNativeSearchTraversalModeWavefront}, nil)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchWavefrontWidthInvalid) {
+		t.Fatalf("zero top_k invalid wavefront err=%v want fail-closed width invalid", err)
+	}
 
 	wavefrontOpts := exactOpts
 	wavefrontOpts.TraversalMode = columnVectorGraphNativeSearchTraversalModeWavefront

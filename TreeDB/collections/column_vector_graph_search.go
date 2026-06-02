@@ -1010,6 +1010,10 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if efSearch < 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search ef_search cannot be negative: %w", r.def.Name, errColumnVectorGraphNativeSearchEfSearchNegative)
 	}
+	traversalMode, wavefrontWidth, err := columnVectorGraphNativeSearchTraversalOptions(opts)
+	if err != nil {
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search traversal: %w", r.def.Name, err)
+	}
 	if topK == 0 || rowCount == 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, nil
 	}
@@ -1047,10 +1051,6 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	degree := r.def.M
 	if degree < 0 {
 		degree = 0
-	}
-	traversalMode, wavefrontWidth, err := columnVectorGraphNativeSearchTraversalOptions(opts)
-	if err != nil {
-		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search traversal: %w", r.def.Name, err)
 	}
 	scoreTileCapacity := columnVectorGraphNativeSearchScoreTileCapacity(degree, efSearch, wavefrontWidth)
 	if err := scratch.prepare(rowCount, r.def.Dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth); err != nil {
