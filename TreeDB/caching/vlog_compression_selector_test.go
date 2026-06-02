@@ -438,16 +438,37 @@ func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadRespectsConfiguredLar
 }
 
 func TestChooseValueLogBlockWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *testing.T) {
-	db := &DB{
-		valueLogCompressionMode:    uint8(vlogCompressionAuto),
-		valueLogBlockTargetBytes:   forcePointerBlockTargetCompressedBytes,
-		indexOuterLeavesInValueLog: true,
-	}
-	db.leafLog = lane{id: leafLogLaneID}
+	for _, tc := range []struct {
+		name      string
+		configure func(*DB)
+	}{
+		{name: "auto block"},
+		{
+			name: "dict aggressive fallback",
+			configure: func(db *DB) {
+				db.valueLogCompressionMode = uint8(vlogCompressionDict)
+				db.valueLogAutotuneOptions.Mode = valuelog.AutotuneAggressive
+				db.forceValueLogPointers = true
+				db.disableJournal = true
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{
+				valueLogCompressionMode:    uint8(vlogCompressionAuto),
+				valueLogBlockTargetBytes:   forcePointerBlockTargetCompressedBytes,
+				indexOuterLeavesInValueLog: true,
+			}
+			db.leafLog = lane{id: leafLogLaneID}
+			if tc.configure != nil {
+				tc.configure(db)
+			}
 
-	got := db.chooseValueLogBlockWriteK(&db.leafLog, 128, 128*page.PageSize, valuelog.BlockCodecSnappy)
-	if got != leafLogBlockMaxK {
-		t.Fatalf("live leaf-log K=%d, want capped K=%d", got, leafLogBlockMaxK)
+			got := db.chooseValueLogBlockWriteK(&db.leafLog, 128, 128*page.PageSize, valuelog.BlockCodecSnappy)
+			if got != leafLogBlockMaxK {
+				t.Fatalf("live leaf-log K=%d, want capped K=%d", got, leafLogBlockMaxK)
+			}
+		})
 	}
 }
 

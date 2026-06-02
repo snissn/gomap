@@ -1718,6 +1718,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		if k > valuelog.MaxFrameK {
 			k = valuelog.MaxFrameK
 		}
+		k = db.clampLiveLeafLogFrameK(l, k)
 		recordLaneVlogBlockK(l, codec, k)
 		return k
 	}
