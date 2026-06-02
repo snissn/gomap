@@ -2,6 +2,8 @@ package nativewire
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -416,6 +418,159 @@ func replaceBatchDocuments(collection *collections.Collection, ids, docs [][]byt
 		}
 	}
 	return matched, modified, nil
+}
+
+func (s *Server) handleUpdateBSONSet(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
+	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	s.metadataMu.RLock()
+	defer s.metadataMu.RUnlock()
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, err
+	}
+	_, collection, err := s.openCollectionRef(state, sections)
+	if err != nil {
+		return nil, err
+	}
+	if collection.Meta().Options.DocumentFormat != collections.DocumentFormatBSON {
+		return nil, protocolError(iwire.ErrInvalidCommand, "update_bson_set requires a BSON collection")
+	}
+	var ids [][]byte
+	if state != nil {
+		ids, err = decodeIDVectorInto(state.idsScratch, sections, s.limits)
+		state.idsScratch = ids
+	} else {
+		ids, err = decodeIDVector(sections, s.limits)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) != 1 {
+		return nil, protocolError(iwire.ErrInvalidCommand, "update_bson_set requires exactly one document id, got %d", len(ids))
+	}
+	var fields []collections.BSONSetField
+	if state != nil {
+		state.updateNames, state.updateValues, fields, err = decodeBSONSetFieldSectionsInto(state.updateNames, state.updateValues, state.updateFields, sections, s.limits)
+		state.updateFields = fields
+	} else {
+		_, _, fields, err = decodeBSONSetFieldSectionsInto(nil, nil, nil, sections, s.limits)
+	}
+	if err != nil {
+		return nil, err
+	}
+	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.admitMutationAck(ack); err != nil {
+		return nil, err
+	}
+	matched, modified, err := collection.UpdateBSONSet(ids[0], fields)
+	if err != nil {
+		return nil, metadataWrap(err)
+	}
+	actualAck, err := s.satisfyAck(collection, ack)
+	if err != nil {
+		return nil, err
+	}
+	catalogVersion, hasCatalogVersion := s.mutationCatalogVersion()
+	return []iwire.Section{ackMetaCountsVersion(actualAck, catalogVersion, hasCatalogVersion,
+		responseMetaCount{key: "matched_count", value: boolCount(matched)},
+		responseMetaCount{key: "modified_count", value: boolCount(modified)},
+	)}, nil
+}
+
+func decodeBSONSetFieldSectionsInto(nameDst, valueDst [][]byte, fieldDst []collections.BSONSetField, sections []iwire.Section, limits iwire.Limits) ([][]byte, [][]byte, []collections.BSONSetField, error) {
+	rawNames, err := metadataSection(sections, iwire.SectionUpdateFieldNames)
+	if err != nil {
+		return nameDst, valueDst, fieldDst, err
+	}
+	names, err := decodeByteVectorBorrowedInto(nameDst, rawNames, limits)
+	if err != nil {
+		return names, valueDst, fieldDst, err
+	}
+	rawValues, err := metadataSection(sections, iwire.SectionUpdateFieldValues)
+	if err != nil {
+		return names, valueDst, fieldDst, err
+	}
+	values, err := decodeByteVectorBorrowedInto(valueDst, rawValues, limits)
+	if err != nil {
+		return names, values, fieldDst, err
+	}
+	if len(names) == 0 {
+		return names, values, fieldDst, protocolError(iwire.ErrInvalidCommand, "update_bson_set requires at least one field")
+	}
+	if len(names) != len(values) {
+		return names, values, fieldDst, protocolError(iwire.ErrInvalidCommand, "update_field_names length %d does not match update_field_values length %d", len(names), len(values))
+	}
+	fields := fieldDst[:0]
+	for i := range names {
+		rawValue := values[i]
+		if len(rawValue) == 0 {
+			return names, values, fields, protocolError(iwire.ErrInvalidCommand, "update_field_values[%d] missing BSON type", i)
+		}
+		fields = append(fields, collections.BSONSetField{
+			Key: string(names[i]),
+			Value: bson.RawValue{
+				Type:  bson.Type(rawValue[0]),
+				Value: rawValue[1:],
+			},
+		})
+	}
+	if err := validateNativewireBSONSetFields(fields); err != nil {
+		return names, values, fields, err
+	}
+	return names, values, fields, nil
+}
+
+func validateNativewireBSONSetFields(fields []collections.BSONSetField) error {
+	if len(fields) == 0 {
+		return protocolError(iwire.ErrInvalidCommand, "update_bson_set requires at least one field")
+	}
+	var seen map[string]struct{}
+	if len(fields) > 1 {
+		seen = make(map[string]struct{}, len(fields))
+	}
+	for i, field := range fields {
+		if err := validateNativewireBSONSetFieldKey(field.Key); err != nil {
+			return protocolError(iwire.ErrInvalidCommand, "update_field_names[%d] %q: %v", i, field.Key, err)
+		}
+		if err := field.Value.Validate(); err != nil {
+			return protocolError(iwire.ErrInvalidCommand, "update_field_values[%d] invalid BSON raw value: %v", i, err)
+		}
+		if len(fields) == 1 {
+			continue
+		}
+		if _, ok := seen[field.Key]; ok {
+			return protocolError(iwire.ErrInvalidCommand, "duplicate update field %q", field.Key)
+		}
+		seen[field.Key] = struct{}{}
+	}
+	return nil
+}
+
+func validateNativewireBSONSetFieldKey(key string) error {
+	if key == "" {
+		return errInvalidBSONSetField("field name cannot be empty")
+	}
+	if key == "_id" {
+		return errInvalidBSONSetField("cannot modify _id")
+	}
+	if strings.Contains(key, ".") {
+		return errInvalidBSONSetField("currently supports top-level fields only")
+	}
+	if strings.HasPrefix(key, "$") {
+		return errInvalidBSONSetField("field names cannot start with $")
+	}
+	if strings.Contains(key, "\x00") {
+		return errInvalidBSONSetField("field names cannot contain NUL")
+	}
+	return nil
+}
+
+func errInvalidBSONSetField(message string) error {
+	return errors.New(message)
 }
 
 func boolCount(v bool) int {

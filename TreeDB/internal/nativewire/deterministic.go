@@ -417,6 +417,28 @@ func validateDeterministicCommand(commandID CommandID, deterministic []Section, 
 		if err := validateDeterministicTemplateRecords(deterministic); err != nil {
 			return err
 		}
+	case CommandUpdateBSONSet:
+		idCount, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs)
+		if err != nil {
+			return err
+		}
+		if idCount != 1 {
+			return protocolError(ErrInvalidCommand, "update_bson_set requires exactly one document id, got %d", idCount)
+		}
+		nameCount, err := deterministicByteVectorCount(deterministic, SectionUpdateFieldNames)
+		if err != nil {
+			return err
+		}
+		valueCount, err := deterministicByteVectorCount(deterministic, SectionUpdateFieldValues)
+		if err != nil {
+			return err
+		}
+		if nameCount == 0 {
+			return protocolError(ErrInvalidCommand, "update_bson_set requires at least one field")
+		}
+		if nameCount != valueCount {
+			return protocolError(ErrInvalidCommand, "update_field_names length %d does not match update_field_values length %d", nameCount, valueCount)
+		}
 	case CommandDeleteBatch:
 		if _, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs); err != nil {
 			return err
@@ -898,7 +920,7 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 			return protocolError(ErrMalformedFrame, "document_format has %d trailing bytes", len(section.Bytes)-n)
 		}
 		return validateDeterministicDocumentFormatEnum(format)
-	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
+	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords, SectionUpdateFieldNames, SectionUpdateFieldValues:
 		if section.ID == SectionDocumentIDs {
 			return validateDeterministicDocumentIDs(section.Bytes, limits)
 		}

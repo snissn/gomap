@@ -153,6 +153,185 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMutationUpdateBSONSetRoundTrip(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	original, err := bson.Marshal(bson.D{
+		{Key: "field0", Value: []byte("old")},
+		{Key: "field1", Value: "keep"},
+	})
+	if err != nil {
+		t.Fatalf("marshal original: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatBSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{original},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	matched, modified, err := client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
+		{Key: "field0", Value: mustNativewireBSONRawValue(t, []byte("new"))},
+	}, AckVisible)
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if matched != 1 || modified != 1 {
+		t.Fatalf("UpdateBSONSet matched=%d modified=%d want 1/1", matched, modified)
+	}
+	matched, modified, err = client.UpdateBSONSet(ctx, "users", []byte("missing"), []collections.BSONSetField{
+		{Key: "field0", Value: mustNativewireBSONRawValue(t, []byte("new"))},
+	}, AckVisible)
+	if err != nil {
+		t.Fatalf("UpdateBSONSet missing: %v", err)
+	}
+	if matched != 0 || modified != 0 {
+		t.Fatalf("UpdateBSONSet missing matched=%d modified=%d want 0/0", matched, modified)
+	}
+
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	updated, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get updated: %v", err)
+	}
+	gotSubtype, gotBinary, ok := bson.Raw(updated).Lookup("field0").BinaryOK()
+	if !ok || gotSubtype != 0 || string(gotBinary) != "new" {
+		t.Fatalf("field0 subtype=%d value=%q ok=%v want binary new", gotSubtype, gotBinary, ok)
+	}
+	if got := bson.Raw(updated).Lookup("field1").StringValue(); got != "keep" {
+		t.Fatalf("field1=%q want keep", got)
+	}
+}
+
+func TestMutationUpdateBSONSetRejectsInvalidRequests(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection users: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "json_users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatJSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection json_users: %v", err)
+	}
+
+	_, _, err := client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
+		{Key: "field0", Value: mustNativewireBSONRawValue(t, "a")},
+		{Key: "field0", Value: mustNativewireBSONRawValue(t, "b")},
+	}, AckVisible)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("duplicate field err=%v want invalid command", err)
+	}
+
+	for _, badKey := range []string{"", "_id", "$set", "a.b", "a\x00b"} {
+		_, _, err := client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
+			{Key: badKey, Value: mustNativewireBSONRawValue(t, "a")},
+		}, AckVisible)
+		if !isRemoteError(err, iwire.ErrInvalidCommand) {
+			t.Fatalf("bad key %q err=%v want invalid command", badKey, err)
+		}
+	}
+
+	_, _, err = client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
+		{Key: "field0", Value: bson.RawValue{Type: bson.TypeString, Value: []byte{0xff}}},
+	}, AckVisible)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("invalid raw value err=%v want invalid command", err)
+	}
+
+	_, _, err = client.UpdateBSONSet(ctx, "json_users", []byte("u1"), []collections.BSONSetField{
+		{Key: "field0", Value: mustNativewireBSONRawValue(t, "a")},
+	}, AckVisible)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("json collection err=%v want invalid command", err)
+	}
+}
+
+func TestMutationUpdateBSONSetCommandWALAndIdempotency(t *testing.T) {
+	client, mgr, _ := serveCommandWALCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	doc, err := bson.Marshal(bson.D{{Key: "field0", Value: "old"}})
+	if err != nil {
+		t.Fatalf("marshal original: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatBSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{doc},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	idempotentCtx := WithIdempotencyKey(ctx, []byte("update-u1-field0"))
+	fields := []collections.BSONSetField{{Key: "field0", Value: mustNativewireBSONRawValue(t, "new")}}
+	matched, modified, err := client.UpdateBSONSet(idempotentCtx, "users", []byte("u1"), fields, AckVisible)
+	if err != nil {
+		t.Fatalf("first UpdateBSONSet: %v", err)
+	}
+	if matched != 1 || modified != 1 {
+		t.Fatalf("first UpdateBSONSet matched=%d modified=%d want 1/1", matched, modified)
+	}
+	matched, modified, err = client.UpdateBSONSet(idempotentCtx, "users", []byte("u1"), fields, AckVisible)
+	if err != nil {
+		t.Fatalf("idempotent replay UpdateBSONSet: %v", err)
+	}
+	if matched != 1 || modified != 0 {
+		t.Fatalf("idempotent replay matched=%d modified=%d want logical noop 1/0", matched, modified)
+	}
+
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	updated, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get updated: %v", err)
+	}
+	if got := bson.Raw(updated).Lookup("field0").StringValue(); got != "new" {
+		t.Fatalf("field0=%q want new", got)
+	}
+}
+
 func TestMutationInsertBatchOmitResultIDsJSONAndBSON(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1432,6 +1611,15 @@ func responseMetaPayloadForTest(pairs ...string) []byte {
 		dst = appendString(dst, pairs[i+1])
 	}
 	return dst
+}
+
+func mustNativewireBSONRawValue(t testing.TB, value any) bson.RawValue {
+	t.Helper()
+	valueType, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		t.Fatalf("MarshalValue(%T): %v", value, err)
+	}
+	return bson.RawValue{Type: valueType, Value: raw}
 }
 
 func assertDocumentMissing(t *testing.T, mgr *collections.CollectionManager, collectionName, id string) {

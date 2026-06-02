@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"testing"
 )
@@ -664,6 +665,9 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 	insertDocs := AppendByteVector(nil, makeBenchmarkTemplateDocuments("ins_doc", 64, 256, templateRecord, 4)...)
 	replaceIDs := AppendByteVector(nil, makeBenchmarkItems("rep_id", 64, 16)...)
 	replaceDocs := AppendByteVector(nil, makeBenchmarkTemplateDocuments("rep_doc", 64, 256, templateRecord, 4)...)
+	updateID := AppendByteVector(nil, []byte("upd_id_000000001"))
+	updateFieldNames := AppendByteVector(nil, []byte("field0"))
+	updateFieldValues := AppendByteVector(nil, benchmarkBSONStringRawValue("updated-value"))
 	deleteIDs := AppendByteVector(nil, makeBenchmarkItems("del_id", 128, 16)...)
 	getIDs := AppendByteVector(nil, makeBenchmarkItems("get_id", 128, 16)...)
 	templateRecords := AppendByteVector(nil, templateRecord)
@@ -705,6 +709,21 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 				{ID: SectionTemplateRecords, Bytes: templateRecords},
 				{ID: SectionExpectedCatalogVersion, Bytes: benchmarkUvarint(7)},
 				{ID: SectionReplacementMode, Bytes: benchmarkUvarint(1)},
+			},
+		},
+		{
+			name:          "update_bson_set_1_field",
+			commandID:     CommandUpdateBSONSet,
+			items:         1,
+			deterministic: true,
+			sections: []Section{
+				benchmarkCommandSection(CommandUpdateBSONSet),
+				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:update-bson-set:1")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("orders")},
+				{ID: SectionDocumentIDs, Bytes: updateID},
+				{ID: SectionUpdateFieldNames, Bytes: updateFieldNames},
+				{ID: SectionUpdateFieldValues, Bytes: updateFieldValues},
+				{ID: SectionExpectedCatalogVersion, Bytes: benchmarkUvarint(7)},
 			},
 		},
 		{
@@ -786,6 +805,14 @@ func benchmarkString(s string) []byte {
 func benchmarkScalarString(s string) []byte {
 	dst := appendUvarint(nil, 1)
 	return append(dst, benchmarkString(s)...)
+}
+
+func benchmarkBSONStringRawValue(s string) []byte {
+	dst := make([]byte, 1+4+len(s)+1)
+	dst[0] = 0x02
+	binary.LittleEndian.PutUint32(dst[1:5], uint32(len(s)+1))
+	copy(dst[5:], s)
+	return dst
 }
 
 func benchmarkIndexBound(s string, inclusive, unbounded bool) []byte {

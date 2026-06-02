@@ -91,6 +91,23 @@ func BenchmarkNativewireYCSBLoadServerPrecomputed(b *testing.B) {
 	})
 }
 
+// BenchmarkNativewireYCSBUpdateServerPrecomputed exercises the YCSB update
+// shape after load. The replace path models the current external client cost:
+// a GetMany request followed by a full-document ReplaceBatch. The set path
+// models the native structured BSON update command.
+func BenchmarkNativewireYCSBUpdateServerPrecomputed(b *testing.B) {
+	logOutput := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(logOutput)
+
+	for _, mode := range []string{"get_many_replace_batch", "update_bson_set"} {
+		mode := mode
+		b.Run("inproc/bson_binary/"+mode, func(b *testing.B) {
+			benchmarkNativewireYCSBUpdateServerPrecomputed(b, mode)
+		})
+	}
+}
+
 func TestYCSBBenchTreeDBProfileFromEnv(t *testing.T) {
 	t.Setenv(ycsbBenchProfileEnv, "")
 	if got := ycsbBenchTreeDBProfile(t); got != treedb.ProfileCommandWALRelaxed {
@@ -319,6 +336,16 @@ type ycsbPrecomputedNativewireWorker struct {
 	bodies [][]byte
 }
 
+type ycsbPrecomputedUpdateWorker struct {
+	state    *connState
+	requests []ycsbPrecomputedUpdateRequest
+}
+
+type ycsbPrecomputedUpdateRequest struct {
+	read     []byte
+	mutation []byte
+}
+
 func precomputeYCSBInsertRequests(b *testing.B, server *Server, handle CollectionHandle, format ycsbLoadFormat, start, count int) [][]byte {
 	b.Helper()
 	bodies := make([][]byte, count)
@@ -340,6 +367,192 @@ func precomputeYCSBInsertRequests(b *testing.B, server *Server, handle Collectio
 		bodies[i] = body
 	}
 	return bodies
+}
+
+func benchmarkNativewireYCSBUpdateServerPrecomputed(b *testing.B, mode string) {
+	requireSafeYCSBPrecomputedRequests(b)
+	format := ycsbLoadFormat{name: "bson_binary", format: collections.DocumentFormatBSON, encode: encodeYCSBBSONBinaryDocument}
+	env := newYCSBBenchEnv(b, format.format, false)
+	defer func() {
+		if err := env.cleanup(); err != nil {
+			b.Fatalf("cleanup: %v", err)
+		}
+	}()
+
+	col, err := env.server.collections.OpenCollection(ycsbBenchCollection)
+	if err != nil {
+		b.Fatalf("OpenCollection: %v", err)
+	}
+	preloadYCSBBSONDocuments(b, col, 10_000)
+
+	workers := make([]ycsbPrecomputedUpdateWorker, ycsbBenchClients)
+	base := 0
+	for worker := 0; worker < ycsbBenchClients; worker++ {
+		count := b.N / ycsbBenchClients
+		if worker < b.N%ycsbBenchClients {
+			count++
+		}
+		state := benchmarkConnState()
+		handle := benchmarkAddCollectionHandle(b, state, env.server, ycsbBenchCollection, col)
+		workers[worker] = ycsbPrecomputedUpdateWorker{
+			state:    state,
+			requests: precomputeYCSBUpdateRequests(b, env.server, handle, mode, base, count, 10_000),
+		}
+		base += count
+	}
+
+	sample, err := encodeYCSBBSONBinaryDocument(ycsbBenchKey(0))
+	if err != nil {
+		b.Fatalf("encode sample: %v", err)
+	}
+	beforeStats := env.server.collections.StatsSnapshot()
+	beforeNativeCounters := env.server.counters.snapshot()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(sample)))
+	b.ResetTimer()
+	b.StopTimer()
+	stopProfile := startTimedYCSBCPUProfile(b)
+	profileActive := true
+	defer func() {
+		if profileActive {
+			stopProfile()
+		}
+	}()
+
+	var failed atomic.Bool
+	var firstErr error
+	var firstErrOnce sync.Once
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		failed.Store(true)
+		firstErrOnce.Do(func() {
+			firstErr = err
+		})
+	}
+
+	var wg sync.WaitGroup
+	b.StartTimer()
+	for worker := range workers {
+		if len(workers[worker].requests) == 0 {
+			continue
+		}
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sink := benchmarkFrameSink{}
+			for _, request := range workers[worker].requests {
+				if failed.Load() {
+					return
+				}
+				if request.read != nil {
+					if _, err := benchmarkDispatchRequestError(env.server, workers[worker].state, &sink, request.read); err != nil {
+						recordErr(err)
+						return
+					}
+				}
+				if _, err := benchmarkDispatchRequestError(env.server, workers[worker].state, &sink, request.mutation); err != nil {
+					recordErr(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	b.StopTimer()
+	profileActive = false
+	stopProfile()
+	afterStats := env.server.collections.StatsSnapshot()
+	if firstErr != nil {
+		b.Fatal(firstErr)
+	}
+	b.ReportMetric(float64(len(sample)), "document_bytes")
+	b.ReportMetric(float64(ycsbBenchClients), "clients")
+	reportYCSBCollectionStatsDelta(b, beforeStats, afterStats, b.N)
+	reportYCSBUpdateNativeCounterDelta(b, beforeNativeCounters, env.server.counters.snapshot(), b.N)
+}
+
+func preloadYCSBBSONDocuments(b *testing.B, col *collections.Collection, count int) {
+	b.Helper()
+	const batchSize = 1000
+	ids := make([][]byte, 0, batchSize)
+	docs := make([][]byte, 0, batchSize)
+	for i := 0; i < count; i++ {
+		key := ycsbBenchKey(i)
+		doc, err := encodeYCSBBSONBinaryDocument(key)
+		if err != nil {
+			b.Fatalf("encode preload %s: %v", key, err)
+		}
+		ids = append(ids, []byte(key))
+		docs = append(docs, doc)
+		if len(ids) == batchSize {
+			if _, err := col.InsertBatchValidatedBSON(ids, docs); err != nil {
+				b.Fatalf("preload InsertBatchValidatedBSON: %v", err)
+			}
+			ids = ids[:0]
+			docs = docs[:0]
+		}
+	}
+	if len(ids) > 0 {
+		if _, err := col.InsertBatchValidatedBSON(ids, docs); err != nil {
+			b.Fatalf("preload final InsertBatchValidatedBSON: %v", err)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		b.Fatalf("preload Flush: %v", err)
+	}
+}
+
+func precomputeYCSBUpdateRequests(b *testing.B, server *Server, handle CollectionHandle, mode string, start, count, docCount int) []ycsbPrecomputedUpdateRequest {
+	b.Helper()
+	requests := make([]ycsbPrecomputedUpdateRequest, count)
+	for i := 0; i < count; i++ {
+		operation := start + i
+		key := ycsbBenchKey(operation % docCount)
+		id := []byte(key)
+		value := ycsbBenchUpdateValue(operation)
+		switch mode {
+		case "get_many_replace_batch":
+			readBody, err := appendGetManyRequestBodyRef(nil, "", handle, true, [][]byte{id})
+			if err != nil {
+				b.Fatalf("append get_many request: %v", err)
+			}
+			doc, err := encodeYCSBBSONBinaryDocumentWithField0(key, value)
+			if err != nil {
+				b.Fatalf("encode replacement %s: %v", key, err)
+			}
+			guard := benchmarkMutationGuard(b, server, "replace_batch_precomputed", operation)
+			replaceBody, err := appendCommandRequestBody(nil, iwire.CommandReplaceBatch,
+				append(guard,
+					collectionHandleRef(handle),
+					documentFormatSection(collections.DocumentFormatBSON),
+					iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, id)},
+					iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, doc)},
+					iwire.Section{ID: iwire.SectionReplacementMode, Bytes: []byte{byte(replacementModeExistingOnly)}},
+				)...,
+			)
+			if err != nil {
+				b.Fatalf("append replace request: %v", err)
+			}
+			requests[i] = ycsbPrecomputedUpdateRequest{read: readBody, mutation: replaceBody}
+		case "update_bson_set":
+			guard := benchmarkMutationGuard(b, server, "update_bson_set_precomputed", operation)
+			fields := []collections.BSONSetField{{
+				Key:   "field0",
+				Value: ycsbBenchBSONBinaryRawValue(value),
+			}}
+			body, err := appendUpdateBSONSetRequestBodyRef(nil, "", handle, true, id, fields, AckVisible, guard)
+			if err != nil {
+				b.Fatalf("append update_bson_set request: %v", err)
+			}
+			requests[i] = ycsbPrecomputedUpdateRequest{mutation: body}
+		default:
+			b.Fatalf("unknown update mode %q", mode)
+		}
+	}
+	return requests
 }
 
 func reportYCSBCollectionStatsDelta(b *testing.B, before, after collections.CollectionManagerStats, ops int) {
@@ -378,6 +591,19 @@ func reportYCSBNativeCounterDelta(b *testing.B, before, after map[string]uint64,
 	report("combiner_requests/op", "insert_batch_combiner.requests_total")
 	report("combiner_single_requests/op", "insert_batch_combiner.single_requests_total")
 	report("combiner_fallback_requests/op", "insert_batch_combiner.fallback_requests_total")
+}
+
+func reportYCSBUpdateNativeCounterDelta(b *testing.B, before, after map[string]uint64, ops int) {
+	b.Helper()
+	if ops <= 0 {
+		return
+	}
+	report := func(metricName, counterName string) {
+		b.ReportMetric(float64(uint64Delta(after[counterName], before[counterName]))/float64(ops), metricName)
+	}
+	report("get_many_requests/op", "commands.get_many.requests_total")
+	report("replace_batch_requests/op", "commands.replace_batch.requests_total")
+	report("update_bson_set_requests/op", "commands.update_bson_set.requests_total")
 }
 
 func uint64Delta(after, before uint64) uint64 {
@@ -572,12 +798,30 @@ func encodeYCSBJSONDocument(key string) ([]byte, error) {
 }
 
 func encodeYCSBBSONBinaryDocument(key string) ([]byte, error) {
+	return encodeYCSBBSONBinaryDocumentWithField0(key, ycsbBenchFieldValue)
+}
+
+func encodeYCSBBSONBinaryDocumentWithField0(key string, field0 []byte) ([]byte, error) {
 	row := make(bson.D, 0, ycsbBenchFields+1)
 	row = append(row, bson.E{Key: ycsbBenchKeyField, Value: key})
-	for _, field := range ycsbBenchFieldNames {
-		row = append(row, bson.E{Key: field, Value: ycsbBenchFieldValue})
+	for i, field := range ycsbBenchFieldNames {
+		value := ycsbBenchFieldValue
+		if i == 0 {
+			value = field0
+		}
+		row = append(row, bson.E{Key: field, Value: value})
 	}
 	return bson.Marshal(row)
+}
+
+func ycsbBenchBSONBinaryRawValue(value []byte) bson.RawValue {
+	return bson.RawValue{Type: bson.TypeBinary, Value: appendYCSBBSONBinaryValue(nil, value)}
+}
+
+func appendYCSBBSONBinaryValue(dst []byte, value []byte) []byte {
+	dst = binary.LittleEndian.AppendUint32(dst, uint32(len(value)))
+	dst = append(dst, 0)
+	return append(dst, value...)
 }
 
 func encodeYCSBBSONBase64StringDocument(key string) ([]byte, error) {
@@ -626,6 +870,14 @@ func ycsbFieldValue() []byte {
 	value := make([]byte, ycsbBenchFieldLen)
 	for i := range value {
 		value[i] = byte('a' + i%26)
+	}
+	return value
+}
+
+func ycsbBenchUpdateValue(operation int) []byte {
+	value := make([]byte, ycsbBenchFieldLen)
+	for i := range value {
+		value[i] = byte('A' + (operation+i)%26)
 	}
 	return value
 }
