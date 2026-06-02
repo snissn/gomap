@@ -15,6 +15,30 @@ func TestTypedColumnCompressedRowLocatorsRejectHugeDecodedLength1952(t *testing.
 	}
 }
 
+func TestTypedColumnSectionAccountingLeavesHugeLocatorRawBytesUnknown1952(t *testing.T) {
+	rows := maxRowLocatorSectionRawBytes/rowLocatorBytes + 1
+	image := ColumnPartImage{
+		Rows:  rows,
+		Bytes: []byte{0},
+		Sections: []ColumnPartImageSection{{
+			Kind:        ColumnPartImageSectionRowLocators,
+			Category:    ColumnPartImageCategoryLocators,
+			Name:        "primary_id_locators",
+			Offset:      0,
+			Length:      1,
+			Rows:        rows,
+			Compression: CompressionLZ4,
+		}},
+	}
+	sections := image.SectionByteAccounting()
+	if len(sections) != 1 {
+		t.Fatalf("SectionByteAccounting rows=%+v want one locator row", sections)
+	}
+	if sections[0].Kind != ColumnPartImageSectionRowLocators || sections[0].RawBytes != 0 || sections[0].StoredBytes != 1 || sections[0].Bytes != 1 {
+		t.Fatalf("locator accounting=%+v want raw bytes unknown and stored bytes preserved", sections[0])
+	}
+}
+
 func TestTypedColumnValidationUnsupportedImageVersionFailsClosed(t *testing.T) {
 	image := mustTransplantImage(t, mustTransplantPart(t, 178901, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
 
