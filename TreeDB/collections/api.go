@@ -11942,6 +11942,13 @@ func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collec
 		prepared.fallbackDirect = true
 		return prepared
 	}
+	if plan != nil && plan.directBufferedUpdate == nil && len(plan.deltaTables) == 0 &&
+		len(ownedBatch) > 0 && ownedBatch[0].collection != nil &&
+		ownedBatch[0].collection.commandWALActive(nil) {
+		plan.close()
+		prepared.fallbackDirect = true
+		return prepared
+	}
 	if plan == nil || plan.directBufferedUpdate == nil {
 		prepared.plan = plan
 		return prepared

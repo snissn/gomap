@@ -1827,10 +1827,15 @@ func TestCollectionCommandWALUpdateBSONSetNoopFlushesStagedUpdate(t *testing.T) 
 	})
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	col, err := NewCollectionManager(d).OpenCollection("users")
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
+	mgr.SetUpdateCombineShardsForProfiling(4)
+	mgr.SetUpdateCombineLaneWorkersForProfiling(true)
+	col.writeDomain.updateCombineLastRequestUnixNano.Store(time.Now().Add(time.Hour).UnixNano())
+	before := mgr.StatsSnapshot()
 	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
 		Key:   "city",
 		Value: mustBSONRawValue(t, "sea"),
@@ -1860,6 +1865,13 @@ func TestCollectionCommandWALUpdateBSONSetNoopFlushesStagedUpdate(t *testing.T) 
 	frames := collectionCommandWALFrames(t, dir)
 	if len(frames) != 2 {
 		t.Fatalf("command WAL frame count=%d, want 2", len(frames))
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.UpdateCombineRequests - before.UpdateCombineRequests; got < 2 {
+		t.Fatalf("update combiner requests delta=%d want at least 2", got)
+	}
+	if got := after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests; got == 0 {
+		t.Fatal("update combiner fallback requests delta=0 want positive for command-WAL no-op")
 	}
 }
 

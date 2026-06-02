@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,6 +91,8 @@ func benchmarkCollectionUpdateBSONSetYCSBNoIndexParallel16(b *testing.B, profile
 	if err := manager.FlushAll(); err != nil {
 		b.Fatalf("flush preload docs: %v", err)
 	}
+	manager.ResetUpdateCombinersForProfiling()
+	manager.ResetUpdateCombineQueueDepthMax()
 
 	valueA := bytes.Repeat([]byte{0xA5}, fieldLength)
 	valueB := bytes.Repeat([]byte{0x5A}, fieldLength)
@@ -111,19 +114,25 @@ func benchmarkCollectionUpdateBSONSetYCSBNoIndexParallel16(b *testing.B, profile
 	}
 
 	var next atomic.Uint64
+	var stop atomic.Bool
 	start := make(chan struct{})
-	errCh := make(chan error, workers)
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			<-start
 			fields := []BSONSetField{{
 				Key:   "field0",
 				Value: values[0],
 			}}
 			for {
+				if stop.Load() {
+					return
+				}
 				n := int(next.Add(1) - 1)
 				if n >= b.N {
-					errCh <- nil
 					return
 				}
 				fields[0].Value = values[(n/docCount)&1]
@@ -136,11 +145,15 @@ func benchmarkCollectionUpdateBSONSetYCSBNoIndexParallel16(b *testing.B, profile
 					matched, _, err = collection.UpdateBSONSet(id, fields)
 				}
 				if err != nil {
-					errCh <- fmt.Errorf("update %d id=%q: %w", n, string(id), err)
+					if stop.CompareAndSwap(false, true) {
+						errCh <- fmt.Errorf("update %d id=%q: %w", n, string(id), err)
+					}
 					return
 				}
 				if !matched {
-					errCh <- fmt.Errorf("update %d missing id %q", n, string(id))
+					if stop.CompareAndSwap(false, true) {
+						errCh <- fmt.Errorf("update %d missing id %q", n, string(id))
+					}
 					return
 				}
 			}
@@ -152,13 +165,16 @@ func benchmarkCollectionUpdateBSONSetYCSBNoIndexParallel16(b *testing.B, profile
 	b.ResetTimer()
 	startTime := time.Now()
 	close(start)
-	for worker := 0; worker < workers; worker++ {
-		if err := <-errCh; err != nil {
-			b.Fatalf("worker update: %v", err)
-		}
-	}
+	wg.Wait()
 	elapsed := time.Since(startTime)
 	b.StopTimer()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			b.Fatalf("worker update: %v", err)
+		}
+	default:
+	}
 
 	stats := collectionManagerStatsBenchmarkDelta(manager.StatsSnapshot(), statsBefore)
 	if elapsed > 0 {
