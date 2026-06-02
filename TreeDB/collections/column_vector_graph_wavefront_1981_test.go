@@ -11,7 +11,6 @@ type columnVectorGraphResultDelta1981 struct {
 	TopK                   int
 	TopKOverlap            int
 	OrderingMismatches     int
-	ScoreOverlapCount      int
 	MaxScoreAbsDelta       float64
 	ExactOnly              int
 	CandidateOnly          int
@@ -65,7 +64,6 @@ func addColumnVectorGraphResultDelta1981(dst *columnVectorGraphResultDelta1981, 
 		}
 		if candidateScore, ok := candidateScores[exactOrdinal]; ok {
 			dst.TopKOverlap++
-			dst.ScoreOverlapCount++
 			if delta := math.Abs(candidateScore - exact[i].Score); delta > dst.MaxScoreAbsDelta {
 				dst.MaxScoreAbsDelta = delta
 			}
