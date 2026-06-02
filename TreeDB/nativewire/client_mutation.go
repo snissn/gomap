@@ -208,6 +208,187 @@ func (c *Client) ReplaceBatch(ctx context.Context, collection string, format col
 	return c.replaceBatchCountsFromResponse(sections)
 }
 
+func (c *Client) UpdateBSONSet(ctx context.Context, collection string, id []byte, fields []collections.BSONSetField, ack AckPolicy) (matched, modified int, err error) {
+	return c.updateBSONSet(ctx, collection, 0, false, id, fields, ack)
+}
+
+func (c *Client) UpdateBSONSetHandle(ctx context.Context, handle CollectionHandle, id []byte, fields []collections.BSONSetField, ack AckPolicy) (matched, modified int, err error) {
+	return c.updateBSONSet(ctx, "", handle, true, id, fields, ack)
+}
+
+func (c *Client) updateBSONSet(ctx context.Context, collection string, handle CollectionHandle, useHandle bool, id []byte, fields []collections.BSONSetField, ack AckPolicy) (matched, modified int, err error) {
+	if c == nil {
+		return 0, 0, io.ErrClosedPipe
+	}
+	guard, err := c.replicatedMutationGuard(ctx, "update_bson_set")
+	if err != nil {
+		return 0, 0, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	body, err := appendUpdateBSONSetRequestBodyRef(c.requestBody[:0], collection, handle, useHandle, id, fields, ack, guard)
+	if err != nil {
+		return 0, 0, err
+	}
+	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	c.requestBody = body[:0]
+	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
+		return 0, 0, err
+	}
+	var sectionBuf [2]iwire.Section
+	sections, err := iwire.DecodeSectionsInto(sectionBuf[:0], response, c.limits)
+	if err != nil {
+		return 0, 0, err
+	}
+	return c.replaceBatchCountsFromResponse(sections)
+}
+
+func appendUpdateBSONSetRequestBodyRef(dst []byte, collection string, handle CollectionHandle, useHandle bool, id []byte, fields []collections.BSONSetField, ack AckPolicy, guard []iwire.Section) ([]byte, error) {
+	var commandHeader [16]byte
+	commandPayload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: iwire.CommandUpdateBSONSet, Version: 1})
+	var refBuf [1 + binary.MaxVarintLen64]byte
+	var refPayload []byte
+	refLen := collectionNameRefPayloadLen(collection)
+	if useHandle {
+		refPayload = appendCollectionHandleRefPayload(refBuf[:0], handle)
+		refLen = len(refPayload)
+	}
+	var ackBuf [binary.MaxVarintLen64]byte
+	var ackPayload []byte
+	if ack != 0 {
+		ackPayload = binary.AppendUvarint(ackBuf[:0], uint64(ack))
+	}
+	idsLen := iwire.ByteVectorEncodedLen([][]byte{id})
+	namesLen := bsonSetFieldNamesEncodedLen(fields)
+	valuesLen := bsonSetFieldValuesEncodedLen(fields)
+	total := iwire.SectionHeaderEncodedLen(iwire.SectionCommandHeader, 0, len(commandPayload)) + len(commandPayload)
+	for _, section := range guard {
+		var err error
+		total, err = addRequestBodyLen(total, iwire.SectionEncodedLen(section))
+		if err != nil {
+			return nil, err
+		}
+	}
+	var err error
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionCollectionRef, 0, refLen)+refLen)
+	if err != nil {
+		return nil, err
+	}
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionDocumentIDs, 0, idsLen)+idsLen)
+	if err != nil {
+		return nil, err
+	}
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionUpdateFieldNames, 0, namesLen)+namesLen)
+	if err != nil {
+		return nil, err
+	}
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionUpdateFieldValues, 0, valuesLen)+valuesLen)
+	if err != nil {
+		return nil, err
+	}
+	if ack != 0 {
+		total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionAckPolicy, 0, len(ackPayload))+len(ackPayload))
+		if err != nil {
+			return nil, err
+		}
+	}
+	dst, err = growRequestBody(dst, total)
+	if err != nil {
+		return nil, err
+	}
+	body, err := appendRawSection(dst, iwire.SectionCommandHeader, commandPayload)
+	if err != nil {
+		return nil, err
+	}
+	for _, section := range guard {
+		body, err = iwire.AppendSection(body, section)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if useHandle {
+		body, err = appendRawSection(body, iwire.SectionCollectionRef, refPayload)
+	} else {
+		body, err = appendCollectionNameRefSection(body, collection)
+	}
+	if err != nil {
+		return nil, err
+	}
+	body, err = appendByteVectorSectionKnownLen(body, iwire.SectionDocumentIDs, idsLen, [][]byte{id})
+	if err != nil {
+		return nil, err
+	}
+	body, err = appendBSONSetFieldNamesSectionKnownLen(body, namesLen, fields)
+	if err != nil {
+		return nil, err
+	}
+	body, err = appendBSONSetFieldValuesSectionKnownLen(body, valuesLen, fields)
+	if err != nil {
+		return nil, err
+	}
+	if ack != 0 {
+		body, err = appendRawSection(body, iwire.SectionAckPolicy, ackPayload)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return body, nil
+}
+
+func bsonSetFieldNamesEncodedLen(fields []collections.BSONSetField) int {
+	total := uvarintLen(uint64(len(fields)))
+	for _, field := range fields {
+		total += uvarintLen(uint64(len(field.Key)))
+	}
+	for _, field := range fields {
+		total += len(field.Key)
+	}
+	return total
+}
+
+func bsonSetFieldValuesEncodedLen(fields []collections.BSONSetField) int {
+	total := uvarintLen(uint64(len(fields)))
+	for _, field := range fields {
+		total += uvarintLen(uint64(1 + len(field.Value.Value)))
+	}
+	for _, field := range fields {
+		total += 1 + len(field.Value.Value)
+	}
+	return total
+}
+
+func appendBSONSetFieldNamesSectionKnownLen(dst []byte, encodedLen int, fields []collections.BSONSetField) ([]byte, error) {
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionUpdateFieldNames, 0, encodedLen)
+	if err != nil {
+		return nil, err
+	}
+	body = binary.AppendUvarint(body, uint64(len(fields)))
+	for _, field := range fields {
+		body = binary.AppendUvarint(body, uint64(len(field.Key)))
+	}
+	for _, field := range fields {
+		body = append(body, field.Key...)
+	}
+	return body, nil
+}
+
+func appendBSONSetFieldValuesSectionKnownLen(dst []byte, encodedLen int, fields []collections.BSONSetField) ([]byte, error) {
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionUpdateFieldValues, 0, encodedLen)
+	if err != nil {
+		return nil, err
+	}
+	body = binary.AppendUvarint(body, uint64(len(fields)))
+	for _, field := range fields {
+		body = binary.AppendUvarint(body, uint64(1+len(field.Value.Value)))
+	}
+	for _, field := range fields {
+		body = append(body, byte(field.Value.Type))
+		body = append(body, field.Value.Value...)
+	}
+	return body, nil
+}
+
 func (c *Client) replaceBatchCountsFromResponse(sections []iwire.Section) (int, int, error) {
 	fields, err := responseMetaFieldsFromSections(sections, "matched_count", "modified_count")
 	if err != nil {

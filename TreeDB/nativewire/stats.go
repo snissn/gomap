@@ -268,6 +268,8 @@ func commandCounterName(id iwire.CommandID) string {
 		return "replace_batch"
 	case iwire.CommandDeleteBatch:
 		return "delete_batch"
+	case iwire.CommandUpdateBSONSet:
+		return "update_bson_set"
 	case iwire.CommandFlushCollection:
 		return "flush_collection"
 	case iwire.CommandFlushAll:

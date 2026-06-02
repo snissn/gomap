@@ -3101,28 +3101,30 @@ func (c *Collection) Meta() CollectionMeta {
 	return *c.meta.copy()
 }
 
-// SameCachedCatalog reports whether both handles were opened against the same
-// collection catalog state.
+// SameCachedCatalog reports whether both handles are cached against the same
+// collection catalog state. For commit-agnostic catalog shapes, the system root
+// is the catalog identity; data-only commits can advance CommitSeq without
+// changing collection metadata or root descriptors.
 func (c *Collection) SameCachedCatalog(other *Collection) bool {
 	if c == nil || other == nil {
 		return false
 	}
-	cName, cSystemRoot, cCommitSeq := c.cachedCatalogIdentity()
-	otherName, otherSystemRoot, otherCommitSeq := other.cachedCatalogIdentity()
+	cName, cSystemRoot, cCommitSeq, cCommitAgnostic := c.cachedCatalogIdentity()
+	otherName, otherSystemRoot, otherCommitSeq, otherCommitAgnostic := other.cachedCatalogIdentity()
 	return cName != "" &&
 		cName == otherName &&
 		cSystemRoot != 0 &&
 		cSystemRoot == otherSystemRoot &&
-		cCommitSeq == otherCommitSeq
+		(cCommitSeq == otherCommitSeq || (cCommitAgnostic && otherCommitAgnostic))
 }
 
-func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq uint64) {
+func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq uint64, commitAgnostic bool) {
 	if c == nil {
-		return "", 0, 0
+		return "", 0, 0, false
 	}
 	c.catalogMu.RLock()
 	defer c.catalogMu.RUnlock()
-	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq
+	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq, c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)
 }
 
 // CreateIndex creates and backfills one secondary index as a schema barrier.
@@ -15809,7 +15811,7 @@ func (c *Collection) stageDirectPrimaryOverlayLocked(domain *collectionWriteDoma
 	domain.baseCommitSeq = plan.baseCommitSeq
 	domain.baseSystemRoot = plan.baseSystemRoot
 	if plan.catalog != nil {
-		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
+		domain.primaryRoot = plan.catalog.rootID(direct.primaryRootName)
 	}
 	domain.count += modifiedCount
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
@@ -15836,7 +15838,7 @@ func (c *Collection) stageDirectNoIndexTableUpdateLocked(domain *collectionWrite
 		hasBufferedIndexedPendingWrites(domain) {
 		return false, nil
 	}
-	if direct.primaryRootName == "" || direct.primaryRootName != collectionPrimaryRootName(plan.meta.Name) {
+	if direct.primaryRootName == "" || plan.catalog == nil || direct.primaryRootName != plan.catalog.primaryRootName {
 		return false, nil
 	}
 	baseRoot, ok := plan.baseRootIDs[direct.primaryRootName]
@@ -16780,7 +16782,10 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 	commitSeq := snapshotCommitSeq(snap)
 
 	c.catalogMu.RLock()
-	if cached := c.catalog; cached != nil && c.catalogSystemRoot == systemRoot && c.catalogCommitSeq == commitSeq {
+	if cached := c.catalog; cached != nil &&
+		systemRoot != 0 &&
+		c.catalogSystemRoot == systemRoot &&
+		(c.catalogCommitSeq == commitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(cached)) {
 		c.catalogMu.RUnlock()
 		return cached, nil
 	}
@@ -16813,6 +16818,14 @@ func (c *Collection) collectionName() string {
 		return c.name
 	}
 	return c.meta.Name
+}
+
+func (c *Collection) canReuseCachedCatalogAcrossDataOnlyCommits(catalog *collectionCatalog) bool {
+	return c != nil &&
+		c.db != nil &&
+		c.db.CommandWALEnabled() &&
+		catalog != nil &&
+		len(catalog.meta.VectorIndexes) == 0
 }
 
 func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot, commitSeq uint64) *collectionCatalog {

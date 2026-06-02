@@ -239,3 +239,137 @@ func BenchmarkCollectionUpdateBSONSetVsBatch_NoIndex_Size1(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkCollectionUpdateBSONSetYCSB_NoIndex_Size1(b *testing.B) {
+	profiles := []struct {
+		name    string
+		profile treedb.Profile
+	}{
+		{name: "bench_no_wal", profile: treedb.ProfileBench},
+		{name: "command_wal_relaxed", profile: treedb.ProfileCommandWALRelaxed},
+	}
+	for _, profile := range profiles {
+		b.Run(profile.name, func(b *testing.B) {
+			benchmarkCollectionUpdateBSONSetYCSBNoIndexSize1(b, profile.profile)
+		})
+	}
+}
+
+func benchmarkCollectionUpdateBSONSetYCSBNoIndexSize1(b *testing.B, profile treedb.Profile) {
+	b.Helper()
+	const (
+		docCount         = 10000
+		fieldCount       = 10
+		fieldLength      = 100
+		preloadBatchSize = 1000
+	)
+	openCollection := func() (*collections.Collection, [][]byte, func()) {
+		dbDir := b.TempDir()
+		opts := treedb.OptionsFor(profile, dbDir)
+		opts.IndexOuterLeavesInValueLog = true
+		backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+		if err != nil {
+			b.Fatalf("open backend: %v", err)
+		}
+		manager := collections.NewCollectionManager(backend)
+		meta := &collections.CollectionMeta{
+			Name: "bench.docs",
+			Options: collections.CollectionOptions{
+				DocumentFormat:          collections.DocumentFormatBSON,
+				DataRootStoragePolicy:   collections.RootStorageCompressed,
+				IndexStateStoragePolicy: collections.RootStorageCompressed,
+			},
+		}
+		if _, err := manager.CreateCollection(meta); err != nil {
+			_ = cleanup()
+			b.Fatalf("create collection: %v", err)
+		}
+		collection, err := manager.OpenCollection("bench.docs")
+		if err != nil {
+			_ = cleanup()
+			b.Fatalf("open collection: %v", err)
+		}
+		ids := make([][]byte, docCount)
+		docs := make([][]byte, docCount)
+		for i := 0; i < docCount; i++ {
+			id := "user" + strconv.Itoa(i)
+			ids[i] = []byte(id)
+			doc, err := bson.Marshal(benchmarkUpdateYCSBDocument(id, i, fieldCount, fieldLength))
+			if err != nil {
+				_ = cleanup()
+				b.Fatalf("marshal doc: %v", err)
+			}
+			docs[i] = doc
+		}
+		for i := 0; i < docCount; i += preloadBatchSize {
+			end := i + preloadBatchSize
+			if end > docCount {
+				end = docCount
+			}
+			if _, err := collection.InsertBatchValidatedBSON(ids[i:end], docs[i:end]); err != nil {
+				_ = cleanup()
+				b.Fatalf("insert docs [%d:%d]: %v", i, end, err)
+			}
+		}
+		if err := manager.FlushAll(); err != nil {
+			_ = cleanup()
+			b.Fatalf("flush preload docs: %v", err)
+		}
+		cleanupClosure := func() { _ = cleanup() }
+		return collection, ids, cleanupClosure
+	}
+
+	valueA := bytes.Repeat([]byte{0xA5}, fieldLength)
+	valueB := bytes.Repeat([]byte{0x5A}, fieldLength)
+	typeA, rawA, err := bson.MarshalValue(valueA)
+	if err != nil {
+		b.Fatalf("marshal value A: %v", err)
+	}
+	typeB, rawB, err := bson.MarshalValue(valueB)
+	if err != nil {
+		b.Fatalf("marshal value B: %v", err)
+	}
+	values := []bson.RawValue{
+		{Type: typeA, Value: rawA},
+		{Type: typeB, Value: rawB},
+	}
+	collection, ids, cleanup := openCollection()
+	b.Cleanup(cleanup)
+	fields := []collections.BSONSetField{{
+		Key:   "field0",
+		Value: values[0],
+	}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fields[0].Value = values[i&1]
+		matched, _, err := collection.UpdateBSONSet(ids[i%docCount], fields)
+		if err != nil {
+			b.Fatalf("UpdateBSONSet: %v", err)
+		}
+		if !matched {
+			b.Fatalf("UpdateBSONSet missing id %q", string(ids[i%docCount]))
+		}
+	}
+}
+
+func benchmarkUpdateYCSBDocument(id string, ordinal int, fieldCount int, fieldLength int) bson.D {
+	doc := make(bson.D, 0, fieldCount+1)
+	doc = append(doc, bson.E{Key: "_id", Value: id})
+	for field := 0; field < fieldCount; field++ {
+		doc = append(doc, bson.E{
+			Key:   "field" + strconv.Itoa(field),
+			Value: benchmarkUpdateYCSBFieldValue(ordinal, field, fieldLength),
+		})
+	}
+	return doc
+}
+
+func benchmarkUpdateYCSBFieldValue(ordinal int, field int, length int) []byte {
+	out := make([]byte, length)
+	seed := byte((ordinal + field*17) & 0xff)
+	for i := range out {
+		out[i] = seed + byte(i)
+	}
+	return out
+}
