@@ -12678,7 +12678,7 @@ func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.
 	}
 }
 
-func TestCollectionUpdateBSONSetNoIndexBuffersPrimaryRoot(t *testing.T) {
+func TestCollectionUpdateBSONSetNoIndexBuffersPrimaryOverlay(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),
 		Durability: backenddb.DurabilityWALOffRelaxed,
@@ -12732,12 +12732,10 @@ func TestCollectionUpdateBSONSetNoIndexBuffersPrimaryRoot(t *testing.T) {
 	if got, want := stats.BufferedBatches, 1; got != want {
 		t.Fatalf("buffered batches=%d want %d", got, want)
 	}
-	col.writeDomain.mu.RLock()
-	rootRunCount := col.writeDomain.rootRunCount
-	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
-	col.writeDomain.mu.RUnlock()
-	if rootRunCount != 1 || primaryRuns != 1 {
-		t.Fatalf("root runs=%d primary=%d want 1/1", rootRunCount, primaryRuns)
+	rootCounts, rootRunCount := bufferedRootRunCountsForTest(t, col, collectionPrimaryRootName("users"))
+	overlayEntries := bufferedPrimaryOverlayCountForTest(t, col)
+	if rootRunCount != 0 || rootCounts[collectionPrimaryRootName("users")] != 0 || overlayEntries != 1 {
+		t.Fatalf("root runs=%d primary=%d overlay=%d want 0/0/1", rootRunCount, rootCounts[collectionPrimaryRootName("users")], overlayEntries)
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush buffered update: %v", err)
@@ -12809,12 +12807,10 @@ func TestCollectionUpdateBSONSetNoIndexIgnoresIndexedThresholds(t *testing.T) {
 	if afterUpdate.CommitSeq != before.CommitSeq {
 		t.Fatalf("UpdateBSONSet advanced commit seq by %d before flush, want buffered", afterUpdate.CommitSeq-before.CommitSeq)
 	}
-	col.writeDomain.mu.RLock()
-	rootRunCount := col.writeDomain.rootRunCount
-	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
-	col.writeDomain.mu.RUnlock()
-	if rootRunCount != 1 || primaryRuns != 1 {
-		t.Fatalf("root runs=%d primary=%d want 1/1", rootRunCount, primaryRuns)
+	rootCounts, rootRunCount := bufferedRootRunCountsForTest(t, col, collectionPrimaryRootName("users"))
+	overlayEntries := bufferedPrimaryOverlayCountForTest(t, col)
+	if rootRunCount != 0 || rootCounts[collectionPrimaryRootName("users")] != 0 || overlayEntries != 1 {
+		t.Fatalf("root runs=%d primary=%d overlay=%d want 0/0/1", rootRunCount, rootCounts[collectionPrimaryRootName("users")], overlayEntries)
 	}
 }
 
@@ -13041,7 +13037,7 @@ func TestCollectionUpdateBSONSetNoIndexNoopSkipsDirectBufferedRetryLoop(t *testi
 	}
 }
 
-func TestCollectionUpdateBSONSetNoIndexWALOnBuffersBeforeAck(t *testing.T) {
+func TestCollectionUpdateBSONSetNoIndexWALOnBuffersPrimaryOverlayBeforeAck(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),
 		Durability: backenddb.DurabilityWALOnRelaxed,
@@ -13092,11 +13088,10 @@ func TestCollectionUpdateBSONSetNoIndexWALOnBuffersBeforeAck(t *testing.T) {
 	if afterUpdate.CommitSeq != before.CommitSeq {
 		t.Fatalf("UpdateBSONSet commit seq=%d before=%d want buffered", afterUpdate.CommitSeq, before.CommitSeq)
 	}
-	col.writeDomain.mu.RLock()
-	rootRunCount := col.writeDomain.rootRunCount
-	col.writeDomain.mu.RUnlock()
-	if rootRunCount != 1 {
-		t.Fatalf("root runs=%d want 1", rootRunCount)
+	rootCounts, rootRunCount := bufferedRootRunCountsForTest(t, col, collectionPrimaryRootName("users"))
+	overlayEntries := bufferedPrimaryOverlayCountForTest(t, col)
+	if rootRunCount != 0 || rootCounts[collectionPrimaryRootName("users")] != 0 || overlayEntries != 1 {
+		t.Fatalf("root runs=%d primary=%d overlay=%d want 0/0/1", rootRunCount, rootCounts[collectionPrimaryRootName("users")], overlayEntries)
 	}
 	doc, err := col.Get([]byte("u1"))
 	if err != nil {

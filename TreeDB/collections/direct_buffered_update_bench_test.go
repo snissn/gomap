@@ -202,14 +202,20 @@ func collectionManagerStatsBenchmarkDelta(after, before CollectionManagerStats) 
 		UpdateBatchPrimaryRunBuild:       after.UpdateBatchPrimaryRunBuild - before.UpdateBatchPrimaryRunBuild,
 		UpdateBatchSecondaryRunBuild:     after.UpdateBatchSecondaryRunBuild - before.UpdateBatchSecondaryRunBuild,
 		UpdateBatchBufferStage:           after.UpdateBatchBufferStage - before.UpdateBatchBufferStage,
+		UpdateBatchBufferPrecheck:        after.UpdateBatchBufferPrecheck - before.UpdateBatchBufferPrecheck,
 		UpdateBatchBufferLockWait:        after.UpdateBatchBufferLockWait - before.UpdateBatchBufferLockWait,
 		UpdateBatchBufferLockHold:        after.UpdateBatchBufferLockHold - before.UpdateBatchBufferLockHold,
+		UpdateBatchBufferValidation:      after.UpdateBatchBufferValidation - before.UpdateBatchBufferValidation,
+		UpdateBatchBufferRootScan:        after.UpdateBatchBufferRootScan - before.UpdateBatchBufferRootScan,
 		UpdateBatchBufferDomainPrepare:   after.UpdateBatchBufferDomainPrepare - before.UpdateBatchBufferDomainPrepare,
 		UpdateBatchBufferFreeze:          after.UpdateBatchBufferFreeze - before.UpdateBatchBufferFreeze,
 		UpdateBatchBufferRootTable:       after.UpdateBatchBufferRootTable - before.UpdateBatchBufferRootTable,
+		UpdateBatchBufferPrimaryIdx:      after.UpdateBatchBufferPrimaryIdx - before.UpdateBatchBufferPrimaryIdx,
+		UpdateBatchBufferUniqueIdx:       after.UpdateBatchBufferUniqueIdx - before.UpdateBatchBufferUniqueIdx,
 		UpdateBatchBufferPrimaryAppend:   after.UpdateBatchBufferPrimaryAppend - before.UpdateBatchBufferPrimaryAppend,
 		UpdateBatchBufferSecondaryAppend: after.UpdateBatchBufferSecondaryAppend - before.UpdateBatchBufferSecondaryAppend,
 		UpdateBatchBufferRootAppend:      after.UpdateBatchBufferRootAppend - before.UpdateBatchBufferRootAppend,
+		UpdateBatchBufferFlush:           after.UpdateBatchBufferFlush - before.UpdateBatchBufferFlush,
 		UpdateBatchPublish:               after.UpdateBatchPublish - before.UpdateBatchPublish,
 		UpdateBatchSecondaryDeletes:      after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
 		UpdateBatchSecondarySets:         after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
@@ -300,14 +306,20 @@ func reportCollectionUpdateStatsForBenchmark(b *testing.B, stats CollectionManag
 	reportDurationPerDoc(stats.UpdateBatchPrimaryRunBuild, "update_primary_run_build_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchSecondaryRunBuild, "update_secondary_run_build_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferStage, "update_buffer_stage_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchBufferPrecheck, "update_buffer_precheck_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferLockWait, "update_buffer_lock_wait_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferLockHold, "update_buffer_lock_hold_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchBufferValidation, "update_buffer_validation_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchBufferRootScan, "update_buffer_root_scan_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferDomainPrepare, "update_buffer_domain_prepare_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferFreeze, "update_buffer_freeze_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferRootTable, "update_buffer_root_table_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchBufferPrimaryIdx, "update_buffer_primary_index_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchBufferUniqueIdx, "update_buffer_unique_index_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferPrimaryAppend, "update_buffer_primary_append_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferSecondaryAppend, "update_buffer_secondary_append_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferRootAppend, "update_buffer_root_append_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchBufferFlush, "update_buffer_flush_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchPublish, "update_publish_ns/doc")
 	if stats.UpdateCombineRequests > 0 {
 		b.ReportMetric(float64(stats.UpdateCombineRequests), "update_combine_requests")

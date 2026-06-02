@@ -15842,10 +15842,8 @@ func directUpdatePrimaryRootPolicy(plan *updateBatchPlan, primaryRootName string
 func canStageDirectPrimaryOverlay(plan *updateBatchPlan, direct *directBufferedUpdatePlan, primaryOnlyDirectUpdate bool, wouldFlush bool) bool {
 	return plan != nil &&
 		direct != nil &&
-		!primaryOnlyDirectUpdate &&
 		!wouldFlush &&
-		len(plan.meta.Indexes) > 0 &&
-		plan.meta.Options.BufferedIndexedWrites &&
+		(primaryOnlyDirectUpdate || (len(plan.meta.Indexes) > 0 && plan.meta.Options.BufferedIndexedWrites)) &&
 		len(direct.templateEntries) == 0 &&
 		len(direct.secondaryRootPlans) == 0 &&
 		direct.primaryRootName != "" &&
