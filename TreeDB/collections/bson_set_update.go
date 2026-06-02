@@ -98,7 +98,15 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return false, false, err
 	}
-	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
+	var itemStorage [1]updateBatchItem
+	itemStorage[0] = updateBatchItem{
+		UpdateBatchItem: UpdateBatchItem{
+			DocumentID: documentID,
+		},
+		bsonSet:    spec,
+		hasBSONSet: true,
+	}
+	items := itemStorage[:]
 	mode := updateBatchModeNoSecondaryUniqueIndexChanges
 	results, batched, err := c.updateBatchOwnedItems(items, mode)
 	if c.commandWALActive(nil) && err == nil && !batched {

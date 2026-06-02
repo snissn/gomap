@@ -9306,23 +9306,40 @@ func TestCollectionCachedCatalogRefreshesAfterCrossHandleWrite(t *testing.T) {
 	}
 }
 
-func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+func TestCollectionCachedCatalogUsesSystemRoot(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, t.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer func() { _ = d.Close() }()
+	defer func() { _ = cleanup() }()
+	if !d.CommandWALEnabled() {
+		t.Fatal("expected command WAL")
+	}
 
 	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
 	col, err := mgr.OpenCollection("users")
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+	doc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "name", Value: "ada"},
+	})
+	if err != nil {
+		t.Fatalf("marshal doc: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
 		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
 	}
 
 	snap := d.AcquireSnapshot()
@@ -9335,10 +9352,9 @@ func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
 		t.Fatalf("load catalog: %v", err)
 	}
 	rootName := collectionPrimaryRootName("users")
-	staleCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, []uint64{^uint64(0)})
 
 	col.catalogMu.Lock()
-	col.catalog = staleCatalog
+	col.catalog = catalog
 	col.catalogSystemRoot = snapshotSystemRoot(snap)
 	col.catalogCommitSeq = snapshotCommitSeq(snap) + 1
 	col.catalogMu.Unlock()
@@ -9347,8 +9363,8 @@ func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("catalogForSnapshot: %v", err)
 	}
-	if got := refreshed.rootID(rootName); got == ^uint64(0) {
-		t.Fatalf("catalog cache ignored commit sequence and returned stale root %d", got)
+	if refreshed != catalog {
+		t.Fatal("catalog cache missed despite unchanged system root")
 	}
 	if got, want := refreshed.rootID(rootName), catalog.rootID(rootName); got != want {
 		t.Fatalf("refreshed root=%d want %d", got, want)
