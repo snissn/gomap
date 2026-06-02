@@ -1254,6 +1254,10 @@ func (m *Manager) currentWritableBarrier() func(uint32) (int64, error) {
 	return nil
 }
 
+func (f *File) EnsureCurrentWritableReadableFor(ptr page.ValuePtr) error {
+	return f.ensureCurrentWritableReadableFor(ptr)
+}
+
 func (f *File) ensureCurrentWritableReadable() error {
 	return f.ensureCurrentWritableReadableFor(page.ValuePtr{})
 }

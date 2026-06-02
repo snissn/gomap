@@ -164,7 +164,12 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 	}
 	records := getValueLogRecordsCap(len(leafPages))
 	records = records[:len(leafPages)]
-	defer putValueLogRecordsNoClear(records)
+	defer func() {
+		for i := range records {
+			records[i] = valuelog.Record{}
+		}
+		putValueLogRecordsNoClear(records)
+	}()
 	var scratches []*compactLeafLogPayloadScratch
 	defer func() {
 		for _, scratch := range scratches {

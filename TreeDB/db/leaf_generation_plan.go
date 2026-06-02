@@ -650,6 +650,9 @@ func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, pt
 	if f == nil || f.File == nil {
 		return leafGenerationGroupedFrameInfo{}, false, nil
 	}
+	if err := f.EnsureCurrentWritableReadableFor(vptr); err != nil {
+		return leafGenerationGroupedFrameInfo{}, false, err
+	}
 	start := int64(ptr.Offset - 4)
 	var header [valuelog.HeaderSize]byte
 	if _, err := f.File.ReadAt(header[:], start); err != nil {
