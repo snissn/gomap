@@ -301,6 +301,8 @@ Initial command-specific section IDs used by v1 commands and responses:
 118 status_vector             byte_vector of per-item status records, reserved
 119 catalog_guard             CatalogGuardV1
 120 existence_guard           ExistenceGuardV1
+121 update_field_names        byte_vector
+122 update_field_values       byte_vector of BSON typed raw values
 ```
 
 `cursor_limits` encodes both fields. A zero `max_items` or `max_bytes` means
@@ -309,6 +311,13 @@ negotiated and configured limits. `presence_bitmap` has exactly
 `ceil(result_count/8)` bytes, where bit `i` says whether result `i` is present.
 `status_vector` is reserved for a future command version that defines partial
 success records; v1 all-or-nothing commands MUST NOT emit it.
+
+`update_field_names` and `update_field_values` are used by `update_bson_set`.
+They MUST have identical item counts and at least one item. `update_field_names`
+items are UTF-8 field-name bytes. v1 `update_bson_set` supports top-level BSON
+field names only: names MUST NOT be empty, `_id`, contain `.`, contain NUL, or
+start with `$`. Each `update_field_values` item is one byte of BSON type followed
+by that type's raw BSON value bytes, matching `bson.RawValue{Type, Value}`.
 
 ### 5.5 Byte Vectors
 
@@ -595,12 +604,14 @@ handles.
 33 flush_collection
 34 flush_all
 35 checkpoint
+36 update_bson_set
 ```
 
-`insert_batch`, `replace_batch`, and `delete_batch` are logical mutation
-commands. `flush_collection`, `flush_all`, and `checkpoint` are local durability
-barriers in v1 and MUST NOT be replicated as Raft state-machine commands unless
-a future distributed barrier command gives them explicit consensus semantics.
+`insert_batch`, `replace_batch`, `delete_batch`, and `update_bson_set` are
+logical mutation commands. `flush_collection`, `flush_all`, and `checkpoint` are
+local durability barriers in v1 and MUST NOT be replicated as Raft state-machine
+commands unless a future distributed barrier command gives them explicit
+consensus semantics.
 An `ack_policy` common section may be present on mutation requests, but it is
 request/response policy only and is not part of deterministic command identity.
 
@@ -637,6 +648,22 @@ request/response policy only and is not part of deterministic command identity.
 105 expected_catalog_version optional
 119 catalog_guard required for distributed mode
 ```
+
+`update_bson_set` sections:
+
+```text
+100 collection_ref
+102 document_ids byte_vector, exactly one item
+105 expected_catalog_version optional
+121 update_field_names byte_vector
+122 update_field_values byte_vector
+119 catalog_guard required for distributed mode
+```
+
+`update_bson_set` applies one or more top-level BSON `$set` field assignments
+to exactly one BSON document. Missing IDs return `matched_count=0` and
+`modified_count=0`; unchanged values return `matched_count=1` and
+`modified_count=0`.
 
 Duplicate IDs in one mutation batch MUST be rejected unless a future command
 schema explicitly defines ordered same-ID semantics.

@@ -166,6 +166,9 @@ type connState struct {
 	getManyLengths  []int
 	getManyPresence []byte
 	getManyPayload  []byte
+	updateNames     [][]byte
+	updateValues    [][]byte
+	updateFields    []collections.BSONSetField
 }
 
 func (s *connState) addCollectionHandle(name string, collection *collections.Collection, handleLimit, cacheLimit int) (CollectionHandle, error) {
@@ -719,6 +722,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		responseSections, err = s.handleReplaceBatch(state, cmd.Known)
 	case iwire.CommandDeleteBatch:
 		responseSections, err = s.handleDeleteBatch(state, cmd.Known)
+	case iwire.CommandUpdateBSONSet:
+		responseSections, err = s.handleUpdateBSONSet(state, cmd.Known)
 	case iwire.CommandFlushCollection:
 		responseSections, err = s.handleFlushCollection(state, cmd.Known)
 	case iwire.CommandFlushAll:

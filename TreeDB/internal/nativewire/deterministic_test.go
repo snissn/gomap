@@ -1683,6 +1683,15 @@ func replaceBatchDeterministicSections() []Section {
 	return sections
 }
 
+func updateBSONSetDeterministicSections() []Section {
+	return deterministicFixtureSections(CommandUpdateBSONSet, "client-a:update-bson-set:1",
+		Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
+		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+		Section{ID: SectionUpdateFieldNames, Bytes: AppendByteVector(nil, []byte("x"))},
+		Section{ID: SectionUpdateFieldValues, Bytes: AppendByteVector(nil, deterministicBSONSetValueInt32(2))},
+	)
+}
+
 func deterministicCollectionNameRef(name string) []byte {
 	return append([]byte{1}, name...)
 }
@@ -1748,6 +1757,12 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 				Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"), []byte("b"))},
 			),
+		},
+		{
+			name:      "update_bson_set",
+			commandID: CommandUpdateBSONSet,
+			fixture:   "update_bson_set_entry.hex",
+			sections:  updateBSONSetDeterministicSections(),
 		},
 	}
 }
@@ -1874,6 +1889,12 @@ func deterministicBSONDocumentXInt32(value int32) []byte {
 	}
 	binary.LittleEndian.PutUint32(out[:4], uint32(len(out)))
 	return out
+}
+
+func deterministicBSONSetValueInt32(value int32) []byte {
+	var valueBytes [4]byte
+	binary.LittleEndian.PutUint32(valueBytes[:], uint32(value))
+	return []byte{0x10, valueBytes[0], valueBytes[1], valueBytes[2], valueBytes[3]}
 }
 
 func deterministicBSONEmptyDocument() []byte {

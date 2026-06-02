@@ -74,6 +74,8 @@ const (
 	SectionCursorLimits           SectionID = 115
 	SectionPresenceBitmap         SectionID = 116
 	SectionTruncated              SectionID = 117
+	SectionUpdateFieldNames       SectionID = 121
+	SectionUpdateFieldValues      SectionID = 122
 )
 
 type CommandID uint64
@@ -94,6 +96,7 @@ const (
 	CommandFlushCollection CommandID = 33
 	CommandFlushAll        CommandID = 34
 	CommandCheckpoint      CommandID = 35
+	CommandUpdateBSONSet   CommandID = 36
 
 	CommandGetMany     CommandID = 50
 	CommandIndexLookup CommandID = 51
