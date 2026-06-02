@@ -13,6 +13,28 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
+func TestFixedBytesPlanRejectsLogicalBitsMismatch1931(t *testing.T) {
+	cert := typedcolumn.ColumnPartLayoutContractColumn{
+		LogicalType:         string(columnsemantics.LogicalByteVector),
+		Type:                typedcolumn.ColumnTypeFixedBytes,
+		Encoding:            typedcolumn.EncodingRawFixedBytes,
+		Compression:         typedcolumn.CompressionNone,
+		DirectViewCertified: true,
+		Endian:              typedcolumn.ColumnPartLayoutEndianLittle,
+		ElementSize:         1,
+		Alignment:           1,
+		LengthMultiple:      1,
+		FixedWidthElements:  3,
+		BytesPerRow:         3,
+		LogicalBitsPerRow:   25,
+		Rows:                2,
+	}
+	plan := FixedBytesPlan(cert, 3)
+	if plan.Path != PathUnsupported || plan.Reason != ReasonDimensionMismatch || !strings.Contains(plan.Message, "logical_bits_per_row=25 want 24") {
+		t.Fatalf("plan=%+v want logical_bits_per_row mismatch", plan)
+	}
+}
+
 func TestFixedWidthElementsDiagnosticsUseStoredFieldNames1931(t *testing.T) {
 	base := typedcolumn.ColumnPartLayoutContractColumn{
 		DirectViewCertified: true,

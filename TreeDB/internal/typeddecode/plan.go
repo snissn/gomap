@@ -461,6 +461,13 @@ func FixedBytesPlan(cert typedcolumn.ColumnPartLayoutContractColumn, bytesPerRow
 	if cert.BytesPerRow != 0 && cert.BytesPerRow != bytesPerRow {
 		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("bytes_per_row=%d want %d", cert.BytesPerRow, bytesPerRow), ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
 	}
+	logicalBitsPerRow, ok := checkedMul3(bytesPerRow, 8, 1)
+	if !ok {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: "logical_bits_per_row overflow", ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	}
+	if cert.LogicalBitsPerRow != 0 && cert.LogicalBitsPerRow != logicalBitsPerRow {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("logical_bits_per_row=%d want %d", cert.LogicalBitsPerRow, logicalBitsPerRow), ElementSize: 1, ElementsPerRow: bytesPerRow, BytesPerRow: bytesPerRow, Alignment: 1, Rows: cert.Rows}
+	}
 	return plan
 }
 
