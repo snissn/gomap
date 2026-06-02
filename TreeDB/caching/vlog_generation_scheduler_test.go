@@ -1689,7 +1689,9 @@ func (b *leafPackMaintenanceRecordingBackend) LeafGenerationGC(ctx context.Conte
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.leafGCCalls++
-	b.leafGCOpts = append(b.leafGCOpts, opts)
+	cloned := opts
+	cloned.ProtectedRootIDs = append([]uint64(nil), opts.ProtectedRootIDs...)
+	b.leafGCOpts = append(b.leafGCOpts, cloned)
 	stats := b.leafGCResp
 	if len(b.leafGCResponses) > 0 {
 		idx := b.leafGCCalls - 1

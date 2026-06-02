@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"reflect"
+	"sort"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -88,7 +88,8 @@ func TestLeafGenerationGCOptionsIncludePublishedRoots(t *testing.T) {
 
 	got := db.leafGenerationGCOptions().ProtectedRootIDs
 	want := []uint64{11, 22, 33}
-	if !reflect.DeepEqual(got, want) {
+	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+	if !uint64SlicesEqual(got, want) {
 		t.Fatalf("ProtectedRootIDs=%v want %v", got, want)
 	}
 }

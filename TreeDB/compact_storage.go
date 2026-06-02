@@ -165,6 +165,11 @@ func appendCompactStorageProtectedRootIDs(dst []uint64, src []uint64) []uint64 {
 	return dst
 }
 
+func mergeCompactStorageProtectedRootIDs(dst []uint64, src []uint64) []uint64 {
+	out := append([]uint64(nil), dst...)
+	return appendCompactStorageProtectedRootIDs(out, src)
+}
+
 func appendCompactStorageProtectedPaths(dst []string, src []string) []string {
 	for _, path := range src {
 		seen := false

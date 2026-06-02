@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -492,6 +493,101 @@ func TestPublishSystemRootIterator_PointerSkipsValueLogRefreshWhenSegmentAlready
 	}
 	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
 		t.Fatalf("system root publish missing pre-registered segment %d", fileID)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_NonSystemPointerRefreshesValueLogSet(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+	before := d.valueLogManager.RefreshScanCount()
+
+	_, rootIDs, err := d.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: 0,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", ptr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", fmt.Sprintf("%d", rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaGroupWithSystemBuilder: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after <= before {
+		t.Fatalf("ordered root group pointer publish did not refresh value-log set: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("ordered root group publish did not refresh value-log set with segment %d", fileID)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_NonSystemPointerSkipsRefreshWhenSegmentRegistered(t *testing.T) {
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	path := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+	before := d.valueLogManager.RefreshScanCount()
+
+	_, rootIDs, err := d.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: 0,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", ptr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", fmt.Sprintf("%d", rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaGroupWithSystemBuilder: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after != before {
+		t.Fatalf("ordered root group pointer publish triggered value-log refresh scan: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("ordered root group publish missing pre-registered segment %d", fileID)
 	}
 }
 

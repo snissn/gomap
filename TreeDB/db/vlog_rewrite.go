@@ -2549,10 +2549,11 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	systemDelta.Freeze()
 	systemIter := systemDelta.NewIterator(nil, nil)
 	systemOpts := systemRootOrderedPublishOptions(db)
-	newSystemRoot, systemRetired, systemMetrics, err := db.publishOrderedRootDeltaIterator(systemRoot, systemIter, systemOpts)
+	newSystemRoot, systemRetired, systemMetrics, systemTouched, err := db.publishOrderedRootDeltaIterator(systemRoot, systemIter, systemOpts)
 	if err != nil {
 		return err
 	}
+	touched = append(touched, systemTouched...)
 	retired = append(retired, systemRetired...)
 	mergeOrderedRootPublishMetrics(&metrics, systemMetrics)
 	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog

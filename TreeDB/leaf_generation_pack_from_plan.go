@@ -31,7 +31,7 @@ func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGeneratio
 		if err := db.Checkpoint(); err != nil {
 			return out, err
 		}
-		opts.ProtectedRootIDs = appendCompactStorageProtectedRootIDs(opts.ProtectedRootIDs, db.cached.ProtectedLeafGenerationRootIDs())
+		opts.ProtectedRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedRootIDs, db.cached.ProtectedLeafGenerationRootIDs())
 		if opts.ReserveRIDs == nil {
 			opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 		}

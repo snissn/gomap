@@ -751,7 +751,7 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 		memo:          make(map[uint64]leafGenerationSubtreeStats, 64),
 		cacheEnabled:  !opts.DisableCache && !verifyAlways,
 	}
-	roots, err := maintenanceRootsForSnapshot(snap)
+	roots, err := maintenanceRootsForSnapshotWithContext(ctx, snap)
 	if err != nil {
 		return leafGenerationLiveScanStats{}, err
 	}

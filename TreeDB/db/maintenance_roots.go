@@ -80,10 +80,14 @@ func (a *maintenanceRootAccumulator) addSystemRootWithDescriptors(ctx context.Co
 }
 
 func maintenanceRootsForSnapshot(snap *Snapshot) ([]maintenanceRoot, error) {
+	return maintenanceRootsForSnapshotWithContext(context.Background(), snap)
+}
+
+func maintenanceRootsForSnapshotWithContext(ctx context.Context, snap *Snapshot) ([]maintenanceRoot, error) {
 	if snap == nil || snap.state == nil || snap.idx == nil || snap.idx.pager == nil {
 		return nil, fmt.Errorf("maintenance roots: missing snapshot state")
 	}
-	return collectMaintenanceRoots(snap.idx.pager, &snap.reader, snap.state)
+	return collectMaintenanceRootsWithContext(ctx, snap.idx.pager, &snap.reader, snap.state)
 }
 
 func collectMaintenanceRoots(p *pager.Pager, reader tree.SlabReader, state *DBState) ([]maintenanceRoot, error) {

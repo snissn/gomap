@@ -189,7 +189,11 @@ func leafPageLogCreatedSegments(log LeafPageLog) ([]LeafPageLogSegment, error) {
 		return leafPageLogCreatedSegments(wrapped.inner)
 	}
 	if provider, ok := log.(LeafPageLogCreatedSegmentProvider); ok {
-		return provider.CreatedLeafPageLogSegmentsSnapshot()
+		created, err := provider.CreatedLeafPageLogSegmentsSnapshot()
+		if err != nil || len(created) == 0 {
+			return nil, err
+		}
+		return sanitizeLeafPageLogCreatedSegments(created), nil
 	}
 	provider, ok := log.(interface {
 		createdSegmentsSnapshot() ([]rewriteCreatedSegment, error)
@@ -209,6 +213,17 @@ func leafPageLogCreatedSegments(log LeafPageLog) ([]LeafPageLogSegment, error) {
 		out = append(out, LeafPageLogSegment{Path: seg.path, FileID: seg.fileID})
 	}
 	return out, nil
+}
+
+func sanitizeLeafPageLogCreatedSegments(created []LeafPageLogSegment) []LeafPageLogSegment {
+	out := make([]LeafPageLogSegment, 0, len(created))
+	for _, seg := range created {
+		if seg.Path == "" || seg.FileID == 0 {
+			continue
+		}
+		out = append(out, seg)
+	}
+	return out
 }
 
 func markLeafPageLogSegmentsRegistered(log LeafPageLog, segments []LeafPageLogSegment) {
