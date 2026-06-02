@@ -1,5 +1,12 @@
 # YCSB MongoDB, TreeDB Native, and TreeDB Mongo Report
 
+Status: historical. This report used the legacy `fast` TreeDB profile and
+predates the command-WAL public-profile closeout plus PR #2164's command-WAL
+frame hashing change. Keep it as artifact-backed evidence for the original
+MongoDB / TreeDB comparison and post-load Mongo-gateway cliff attribution, but
+use `docs/benchmarks/ycsb_mongodb_treedb_current.md` for current report status
+and rerun guidance.
+
 This report captures the external `go-ycsb` workload used during the Mongo
 gateway throughput investigation. It compares:
 

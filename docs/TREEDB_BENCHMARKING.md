@@ -9,7 +9,7 @@ trace-based replays that approximate Celestia workloads.
 - **Trace summary replay:** `BenchmarkTraceReplay`
 - **Trace timeline replay (overlap-aware):** `BenchmarkTraceReplayTimeline`
 - **Memtable mode matrices:** `BenchmarkTraceReplayMemtableModes`, `BenchmarkTraceReplayTimelineMemtableModes`
-- **External YCSB comparison:** `scripts/ycsb_compare_mongodb_treedb.sh`, with the current report in `docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md`
+- **External YCSB comparison:** `scripts/ycsb_compare_mongodb_treedb.sh`, with the current report index in `docs/benchmarks/ycsb_mongodb_treedb_current.md`
 
 ## Common Principles
 
@@ -38,8 +38,10 @@ default. For exploratory parsing of known-bad artifacts, set
 Use `PARSE_ONLY=true OUT_DIR=/path/to/run` to regenerate summaries from saved
 raw `*.out` files without rerunning servers.
 
-The current captured report is
-`docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md`.
+The current report index is
+`docs/benchmarks/ycsb_mongodb_treedb_current.md`. It points at the latest
+checked-in command-WAL profile evidence, labels older reports as historical or
+superseded, and records the next full rerun matrix.
 
 ## 1) Unified Bench (Synthetic)
 

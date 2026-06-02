@@ -1,5 +1,10 @@
 # Mongo Gateway Comparison Artifact
 
+Status: historical non-YCSB gateway microbenchmark. This bundle is useful for
+Mongo-gateway attribution, but it is not a substitute for the external
+MongoDB / TreeDB / TreeDB Mongo YCSB matrix. Use
+`../ycsb_mongodb_treedb_current.md` for the current YCSB report index.
+
 This directory is the first checked-in TreeDB Mongo gateway vs MongoDB
 comparison bundle.
 
