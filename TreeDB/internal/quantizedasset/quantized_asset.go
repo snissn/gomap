@@ -645,8 +645,13 @@ func preparedKindAndRowBytes(desc ColumnDescriptor, cert typedcolumn.ColumnPartL
 		if cert.BytesPerRow <= 0 {
 			return preparedColumnUnknown, 0, 0, fmt.Errorf("quantizedasset: role %q bytes_per_row=%d", desc.Role, cert.BytesPerRow)
 		}
-		if schema.CodeDimensions != 0 && desc.Role == RoleCodes && cert.BytesPerRow != schema.CodeDimensions {
-			return preparedColumnUnknown, 0, 0, fmt.Errorf("quantizedasset: role %q bytes_per_row=%d want code_dimensions=%d", desc.Role, cert.BytesPerRow, schema.CodeDimensions)
+		if desc.Role == RoleCodes {
+			if schema.CodeDimensions != 0 && cert.BytesPerRow != schema.CodeDimensions {
+				return preparedColumnUnknown, 0, 0, fmt.Errorf("quantizedasset: role %q bytes_per_row=%d want code_dimensions=%d", desc.Role, cert.BytesPerRow, schema.CodeDimensions)
+			}
+			if schema.CodeWidthBits != 0 && schema.CodeWidthBits != 8 {
+				return preparedColumnUnknown, 0, 0, fmt.Errorf("quantizedasset: role %q fixed-byte element_width_bits=8 want code_width_bits=%d", desc.Role, schema.CodeWidthBits)
+			}
 		}
 		return preparedColumnFixedBytes, cert.BytesPerRow, 1, nil
 	case typedcolumn.ColumnTypePackedBitVector, typedcolumn.ColumnTypePackedUint2Vector, typedcolumn.ColumnTypePackedUint4Vector:

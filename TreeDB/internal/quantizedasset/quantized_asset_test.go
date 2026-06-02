@@ -115,6 +115,21 @@ func TestPrepareFailsClosedIdentityAndShapeMismatches1932(t *testing.T) {
 	}
 }
 
+func TestPrepareFailsClosedFixedByteCodesRequire8BitWidth1932(t *testing.T) {
+	fixture := buildFixedQuantizedFixture1932(t)
+	for _, width := range []int{4, 16} {
+		t.Run(fmt.Sprintf("code_width_%d", width), func(t *testing.T) {
+			req := fixture.prepareRequest()
+			req.Schema.CodeWidthBits = width
+			req.Expected.CodeWidthBits = width
+			_, err := Prepare(req)
+			if err == nil || !strings.Contains(err.Error(), "fixed-byte element_width_bits=8") || !strings.Contains(err.Error(), "code_width_bits") {
+				t.Fatalf("Prepare err=%v want fixed-byte code_width_bits failure", err)
+			}
+		})
+	}
+}
+
 func TestPrepareFailsClosedUnsupportedOrdinalOrder1932(t *testing.T) {
 	fixture := buildFixedQuantizedFixture1932(t)
 	for _, tc := range []struct {
