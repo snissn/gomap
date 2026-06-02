@@ -115,6 +115,28 @@ func TestPrepareFailsClosedIdentityAndShapeMismatches1932(t *testing.T) {
 	}
 }
 
+func TestPrepareFailsClosedUnsupportedOrdinalOrder1932(t *testing.T) {
+	fixture := buildFixedQuantizedFixture1932(t)
+	for _, tc := range []struct {
+		name        string
+		mutExpected func(*ExpectedSchema, GraphOrdinalOrder)
+	}{
+		{name: "expected omitted", mutExpected: func(expected *ExpectedSchema, _ GraphOrdinalOrder) { expected.OrdinalOrder = "" }},
+		{name: "expected matches unsupported", mutExpected: func(expected *ExpectedSchema, unsupported GraphOrdinalOrder) { expected.OrdinalOrder = unsupported }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := fixture.prepareRequest()
+			unsupported := GraphOrdinalOrder("document_ordinal")
+			req.Schema.OrdinalOrder = unsupported
+			tc.mutExpected(&req.Expected, unsupported)
+			_, err := Prepare(req)
+			if err == nil || !strings.Contains(err.Error(), "ordinal_order") || !strings.Contains(err.Error(), string(unsupported)) {
+				t.Fatalf("Prepare err=%v want unsupported ordinal_order failure", err)
+			}
+		})
+	}
+}
+
 func TestPreparedRandomOrdinalLookupAndScratchAllocs1932(t *testing.T) {
 	fixture := buildPackedQuantizedFixture1932(t)
 	prepared, err := Prepare(fixture.prepareRequest())

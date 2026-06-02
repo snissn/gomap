@@ -297,7 +297,10 @@ func validateSchema(schema SchemaDescriptor, expected ExpectedSchema) error {
 		}
 	}
 	if schema.OrdinalOrder == "" {
-		return errors.New("quantizedasset: missing graph ordinal order")
+		return errors.New("quantizedasset: missing ordinal_order")
+	}
+	if schema.OrdinalOrder != GraphOrdinalOrderVectorOrdinal {
+		return fmt.Errorf("quantizedasset: unsupported ordinal_order=%q want %q", schema.OrdinalOrder, GraphOrdinalOrderVectorOrdinal)
 	}
 	if expected.OrdinalOrder != "" && schema.OrdinalOrder != expected.OrdinalOrder {
 		return fmt.Errorf("quantizedasset: ordinal_order=%q want %q", schema.OrdinalOrder, expected.OrdinalOrder)
