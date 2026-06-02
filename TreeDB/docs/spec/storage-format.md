@@ -686,7 +686,7 @@ validation and fail-closed rules.
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
 non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
-#1929 raw primitive scalar sections, fixed-dimension `raw_float32_vector`,
+Issue `#1929` raw primitive scalar sections, fixed-dimension `raw_float32_vector`,
 explicit `raw_uint32_offsets_list`, and explicit `raw_bytes_offsets`
 typed-column payload sections as
 `DirectViewCertified`; the adapter-internal

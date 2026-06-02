@@ -430,9 +430,15 @@ func applyPrimitiveScalarLayout(caps *Capabilities) {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonEncodingPhysicalMismatch, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 		return
 	}
+	if desc.FixedWidthElements != 0 {
+		caps.Layout = LayoutProperties{}
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonEncodingPhysicalMismatch, Endian: EndianLittle, WidthBytes: width, AlignmentBytes: width, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
 	caps.Layout.Kind = LayoutFixedWidth
 	caps.Layout.FixedWidth = true
 	caps.Layout.ElementWidthBytes = width
+	caps.Layout.ElementsPerRow = 1
 	caps.Layout.Endian = EndianLittle
 	caps.Layout.AlignmentBytes = width
 	caps.Layout.LengthMultipleBytes = width
@@ -881,6 +887,9 @@ func (c Capabilities) validateDescriptor(op Operation) Capability {
 	}
 	if reason, ok := validatePhysicalEncoding(desc.Physical, desc.Encoding); !ok {
 		return Unsupported(op, reason, fmt.Sprintf("physical_type=%s encoding=%s", desc.Physical, desc.Encoding))
+	}
+	if _, primitive := primitiveScalarLayoutWidth(desc.Physical, desc.Encoding); primitive && desc.FixedWidthElements != 0 {
+		return Unsupported(op, ReasonEncodingPhysicalMismatch, fmt.Sprintf("primitive scalar layout requires fixed_width_elements=0 got %d", desc.FixedWidthElements))
 	}
 	if desc.Nullable && desc.Encoding != typedcolumn.EncodingNullableInt64 {
 		return Unsupported(op, ReasonEncodingPhysicalMismatch, fmt.Sprintf("nullable layout requires encoding=%s got=%s", typedcolumn.EncodingNullableInt64, desc.Encoding))
