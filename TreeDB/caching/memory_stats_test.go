@@ -287,13 +287,15 @@ func TestProcessMemoryStatsIncludeBackendVlogMmap(t *testing.T) {
 	backend := &mockBackendWithStats{
 		MockBackend: NewMockBackend(),
 		stats: map[string]string{
-			"treedb.vlog.mmap_active_bytes":     "111",
-			"treedb.vlog.mmap_current_bytes":    "22",
-			"treedb.vlog.mmap_sealed_bytes":     "89",
-			"treedb.vlog.mmap_dead_bytes":       "7",
-			"treedb.vlog.mmap_active_segments":  "5",
-			"treedb.vlog.mmap_current_segments": "2",
-			"treedb.vlog.mmap_sealed_segments":  "3",
+			"treedb.vlog.mmap_active_bytes":                    "111",
+			"treedb.vlog.mmap_current_bytes":                   "22",
+			"treedb.vlog.mmap_sealed_bytes":                    "89",
+			"treedb.vlog.mmap_dead_bytes":                      "7",
+			"treedb.vlog.mmap_active_segments":                 "5",
+			"treedb.vlog.mmap_current_segments":                "2",
+			"treedb.vlog.mmap_sealed_segments":                 "3",
+			"treedb.vlog.mmap_max_mapped_leaf_sealed_segments": "32",
+			"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":    "1073741824",
 		},
 	}
 
@@ -321,6 +323,12 @@ func TestProcessMemoryStatsIncludeBackendVlogMmap(t *testing.T) {
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.memory.vlog_mmap_backend_active_bytes"); got != 111 {
 		t.Fatalf("backend active_bytes=%d want 111", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.vlog.mmap_max_mapped_leaf_sealed_segments"); got != 32 {
+		t.Fatalf("backend leaf sealed segment cap=%d want 32", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"); got != 1073741824 {
+		t.Fatalf("backend leaf sealed byte cap=%d want 1073741824", got)
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.memory.vlog_mmap_cache_active_bytes"); got != 0 {
 		t.Fatalf("cache active_bytes=%d want 0", got)

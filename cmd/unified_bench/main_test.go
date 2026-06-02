@@ -26,8 +26,21 @@ type fixedNameDB struct {
 	name string
 }
 
+type statsOnlyDB struct {
+	fixedNameDB
+	stats map[string]string
+}
+
 func (d *fixedNameDB) Name() string {
 	return d.name
+}
+
+func (d *statsOnlyDB) Stats() map[string]string {
+	out := make(map[string]string, len(d.stats))
+	for k, v := range d.stats {
+		out[k] = v
+	}
+	return out
 }
 
 func (d *fixedNameDB) Close() error {
@@ -1648,6 +1661,83 @@ func TestRenderTreeDBSelectedStatsString_SkipsDBsWithoutSelectedKeys(t *testing.
 	}
 }
 
+func TestRenderTreeDBSelectedStatsString_PrefersBackendMmapReadFamily(t *testing.T) {
+	instances := []*DBInstance{
+		{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}},
+	}
+	stats := map[string]map[string]string{
+		"TreeDB": {
+			"treedb.cache.vlog_mmap.read.hits":              "0",
+			"treedb.cache.vlog_mmap.read.fallback_readat":   "0",
+			"treedb.vlog.mmap_read.hits":                    "10626606",
+			"treedb.vlog.mmap_read.miss_no_mapping":         "10",
+			"treedb.vlog.mmap_read.fallback_readat":         "0",
+			"treedb.vlog.mmap_read.hit_ratio":               "1.000000",
+			"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes": "1073741824",
+		},
+	}
+
+	got := renderTreeDBSelectedStatsString(instances, stats)
+	for _, want := range []string{
+		"vlog_mmap.read.hits: 10626606",
+		"vlog_mmap.read.miss_no_mapping: 10",
+		"vlog_mmap.read.hit_ratio: 1.000000",
+		"vlog_mmap.max_mapped_leaf_sealed_bytes: 1073741824",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in selected stats, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "vlog_mmap.read.hits: 0") {
+		t.Fatalf("selected stats used stale cache alias instead of backend family:\n%s", got)
+	}
+}
+
+func TestSnapshotSelectedTreeDBStats_PrefersBackendMmapReadFamilyAndKeepsValidZero(t *testing.T) {
+	db := &statsOnlyDB{
+		fixedNameDB: fixedNameDB{name: "TreeDB"},
+		stats: map[string]string{
+			"treedb.cache.vlog_mmap.read.hits":      "99",
+			"treedb.vlog.mmap_read.hits":            "0",
+			"treedb.vlog.mmap_read.fallback_readat": "0",
+		},
+	}
+
+	got := snapshotSelectedTreeDBStats(db)
+	if got.mmapHits != 0 || got.mmapFallbackReadAt != 0 {
+		t.Fatalf("expected valid backend zero values to win, got %+v", got)
+	}
+}
+
+func TestComputeTreeDBPerfMetrics_PopulatesMmapDeltaFromBackendStats(t *testing.T) {
+	before := snapshotSelectedTreeDBStats(&statsOnlyDB{
+		fixedNameDB: fixedNameDB{name: "TreeDB"},
+		stats: map[string]string{
+			"treedb.cache.vlog_mmap.read.hits":            "0",
+			"treedb.cache.vlog_mmap.read.fallback_readat": "0",
+			"treedb.vlog.mmap_read.hits":                  "10",
+			"treedb.vlog.mmap_read.fallback_readat":       "4",
+		},
+	})
+	after := snapshotSelectedTreeDBStats(&statsOnlyDB{
+		fixedNameDB: fixedNameDB{name: "TreeDB"},
+		stats: map[string]string{
+			"treedb.cache.vlog_mmap.read.hits":            "0",
+			"treedb.cache.vlog_mmap.read.fallback_readat": "0",
+			"treedb.vlog.mmap_read.hits":                  "35",
+			"treedb.vlog.mmap_read.fallback_readat":       "9",
+		},
+	})
+
+	got := computeTreeDBPerfMetrics(before, after, treeDBSnapshotPerfMetrics{})
+	if got.Mmap.Hits != 25 || got.Mmap.FallbackReadAt != 5 {
+		t.Fatalf("unexpected backend mmap deltas: %+v", got.Mmap)
+	}
+	if got.Mmap.HitRatio != 0.8333333333333334 {
+		t.Fatalf("unexpected hit ratio: %.12f", got.Mmap.HitRatio)
+	}
+}
+
 func TestRenderMarkdownSweep_IncludesTreeDBPerfAndStatsSections(t *testing.T) {
 	makeRun := func(keys int, hits uint64, pinned int64) BenchRun {
 		return BenchRun{
@@ -1755,8 +1845,10 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 			TreeDBStats: map[string]map[string]string{
 				"TreeDB": {
 					"treedb.cache.vlog_mmap.read.hits":                               "10",
+					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":            "1073741824",
+					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "32",
 					"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
-					"treedb.unselected":                                              "drop",
+					"treedb.unselected": "drop",
 				},
 			},
 		},
@@ -1804,6 +1896,12 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "4" {
 		t.Fatalf("unexpected TreeDB selected stat root_apply_calls_total=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes"]; got != "1073741824" {
+		t.Fatalf("unexpected cache leaf mmap budget stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.vlog.mmap_max_mapped_leaf_sealed_segments"]; got != "32" {
+		t.Fatalf("unexpected backend leaf mmap budget stat=%q", got)
 	}
 	if _, ok := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.unselected"]; ok {
 		t.Fatalf("unselected TreeDB stat was exported: %#v", parsed.Runs[0].TreeDBStats["TreeDB"])

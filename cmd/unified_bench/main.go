@@ -246,6 +246,25 @@ type treeDBSelectedStats struct {
 	leafPinsTotal      int64
 }
 
+type treeDBMmapReadStatDef struct {
+	label  string
+	suffix string
+}
+
+var treeDBMmapReadStatDefs = []treeDBMmapReadStatDef{
+	{label: "vlog_mmap.read.hits", suffix: "hits"},
+	{label: "vlog_mmap.read.miss_out_of_range", suffix: "miss_out_of_range"},
+	{label: "vlog_mmap.read.miss_no_mapping", suffix: "miss_no_mapping"},
+	{label: "vlog_mmap.read.miss_dead_mapping_cap", suffix: "miss_dead_mapping_cap"},
+	{label: "vlog_mmap.read.fallback_readat", suffix: "fallback_readat"},
+	{label: "vlog_mmap.read.hit_ratio", suffix: "hit_ratio"},
+}
+
+const (
+	treeDBVlogMmapReadBackendPrefix = "treedb.vlog.mmap_read."
+	treeDBVlogMmapReadCachePrefix   = "treedb.cache.vlog_mmap.read."
+)
+
 type benchprofExport struct {
 	GeneratedAt string               `json:"generated_at"`
 	Runs        []benchprofExportRun `json:"runs"`
@@ -1552,6 +1571,14 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_mmap.remaps",
 		"treedb.cache.vlog_mmap.dead_mappings",
 		"treedb.cache.vlog_mmap.dead_mappings.cap_base",
+		"treedb.cache.vlog_mmap.current_writable_map_target_bytes",
+		"treedb.cache.vlog_mmap.max_mapped_sealed_segments",
+		"treedb.cache.vlog_mmap.max_mapped_sealed_bytes",
+		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments",
+		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes",
+		"treedb.cache.vlog_mmap.sealed_map_denied",
+		"treedb.cache.vlog_mmap.sealed_map_denied.count_cap",
+		"treedb.cache.vlog_mmap.sealed_map_denied.bytes_cap",
 		"treedb.cache.vlog_mmap.read.hits",
 		"treedb.cache.vlog_mmap.read.miss_out_of_range",
 		"treedb.cache.vlog_mmap.read.miss_no_mapping",
@@ -1749,6 +1776,14 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.vlog.mmap_remaps",
 		"treedb.vlog.mmap_dead_mappings",
 		"treedb.vlog.mmap_dead_mappings.cap_base",
+		"treedb.vlog.mmap_current_writable_map_target_bytes",
+		"treedb.vlog.mmap_max_mapped_sealed_segments",
+		"treedb.vlog.mmap_max_mapped_sealed_bytes",
+		"treedb.vlog.mmap_max_mapped_leaf_sealed_segments",
+		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes",
+		"treedb.vlog.mmap_sealed_map_denied",
+		"treedb.vlog.mmap_sealed_map_denied.count_cap",
+		"treedb.vlog.mmap_sealed_map_denied.bytes_cap",
 		"treedb.vlog.mmap_read.hits",
 		"treedb.vlog.mmap_read.miss_out_of_range",
 		"treedb.vlog.mmap_read.miss_no_mapping",
@@ -1984,6 +2019,36 @@ func parseInt64StatValue(stats map[string]string, keys ...string) (int64, bool) 
 	return 0, false
 }
 
+func treeDBMmapReadStatSource(stats map[string]string) string {
+	if len(stats) == 0 {
+		return ""
+	}
+	if hasTreeDBMmapReadStatSource(stats, treeDBVlogMmapReadBackendPrefix) {
+		return treeDBVlogMmapReadBackendPrefix
+	}
+	if hasTreeDBMmapReadStatSource(stats, treeDBVlogMmapReadCachePrefix) {
+		return treeDBVlogMmapReadCachePrefix
+	}
+	return ""
+}
+
+func hasTreeDBMmapReadStatSource(stats map[string]string, prefix string) bool {
+	for _, def := range treeDBMmapReadStatDefs {
+		if _, ok := stats[prefix+def.suffix]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func parseTreeDBMmapReadUint64Stat(stats map[string]string, suffix string) (uint64, bool) {
+	prefix := treeDBMmapReadStatSource(stats)
+	if prefix == "" {
+		return 0, false
+	}
+	return parseUint64StatValue(stats, prefix+suffix)
+}
+
 func snapshotSelectedTreeDBStats(db kvstore.DB) treeDBSelectedStats {
 	sp, ok := db.(kvstore.StatsProvider)
 	if !ok {
@@ -1991,26 +2056,11 @@ func snapshotSelectedTreeDBStats(db kvstore.DB) treeDBSelectedStats {
 	}
 	stats := sp.Stats()
 	var snap treeDBSelectedStats
-	snap.mmapHits, _ = parseUint64StatValue(stats,
-		"treedb.cache.vlog_mmap.read.hits",
-		"treedb.vlog.mmap_read.hits",
-	)
-	snap.mmapMissOutOfRange, _ = parseUint64StatValue(stats,
-		"treedb.cache.vlog_mmap.read.miss_out_of_range",
-		"treedb.vlog.mmap_read.miss_out_of_range",
-	)
-	snap.mmapMissNoMapping, _ = parseUint64StatValue(stats,
-		"treedb.cache.vlog_mmap.read.miss_no_mapping",
-		"treedb.vlog.mmap_read.miss_no_mapping",
-	)
-	snap.mmapMissDeadCap, _ = parseUint64StatValue(stats,
-		"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap",
-		"treedb.vlog.mmap_read.miss_dead_mapping_cap",
-	)
-	snap.mmapFallbackReadAt, _ = parseUint64StatValue(stats,
-		"treedb.cache.vlog_mmap.read.fallback_readat",
-		"treedb.vlog.mmap_read.fallback_readat",
-	)
+	snap.mmapHits, _ = parseTreeDBMmapReadUint64Stat(stats, "hits")
+	snap.mmapMissOutOfRange, _ = parseTreeDBMmapReadUint64Stat(stats, "miss_out_of_range")
+	snap.mmapMissNoMapping, _ = parseTreeDBMmapReadUint64Stat(stats, "miss_no_mapping")
+	snap.mmapMissDeadCap, _ = parseTreeDBMmapReadUint64Stat(stats, "miss_dead_mapping_cap")
+	snap.mmapFallbackReadAt, _ = parseTreeDBMmapReadUint64Stat(stats, "fallback_readat")
 	snap.leafGenerationsPin, _ = parseInt64StatValue(stats, "treedb.leaf_generation.generations.pinned")
 	snap.leafPinsTotal, _ = parseInt64StatValue(stats, "treedb.leaf_generation.pins.total")
 	return snap
@@ -5062,12 +5112,14 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 	}{
 		{label: "write_path.mode", alts: []string{"treedb.write_path.mode"}},
 		{label: "write_path.redo_log", alts: []string{"treedb.write_path.redo_log"}},
-		{label: "vlog_mmap.read.hits", alts: []string{"treedb.cache.vlog_mmap.read.hits", "treedb.vlog.mmap_read.hits"}},
-		{label: "vlog_mmap.read.miss_out_of_range", alts: []string{"treedb.cache.vlog_mmap.read.miss_out_of_range", "treedb.vlog.mmap_read.miss_out_of_range"}},
-		{label: "vlog_mmap.read.miss_no_mapping", alts: []string{"treedb.cache.vlog_mmap.read.miss_no_mapping", "treedb.vlog.mmap_read.miss_no_mapping"}},
-		{label: "vlog_mmap.read.miss_dead_mapping_cap", alts: []string{"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap", "treedb.vlog.mmap_read.miss_dead_mapping_cap"}},
-		{label: "vlog_mmap.read.fallback_readat", alts: []string{"treedb.cache.vlog_mmap.read.fallback_readat", "treedb.vlog.mmap_read.fallback_readat"}},
-		{label: "vlog_mmap.read.hit_ratio", alts: []string{"treedb.cache.vlog_mmap.read.hit_ratio", "treedb.vlog.mmap_read.hit_ratio"}},
+		{label: "vlog_mmap.current_writable_map_target_bytes", alts: []string{"treedb.vlog.mmap_current_writable_map_target_bytes", "treedb.cache.vlog_mmap.current_writable_map_target_bytes"}},
+		{label: "vlog_mmap.max_mapped_sealed_segments", alts: []string{"treedb.vlog.mmap_max_mapped_sealed_segments", "treedb.cache.vlog_mmap.max_mapped_sealed_segments"}},
+		{label: "vlog_mmap.max_mapped_sealed_bytes", alts: []string{"treedb.vlog.mmap_max_mapped_sealed_bytes", "treedb.cache.vlog_mmap.max_mapped_sealed_bytes"}},
+		{label: "vlog_mmap.max_mapped_leaf_sealed_segments", alts: []string{"treedb.vlog.mmap_max_mapped_leaf_sealed_segments", "treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"}},
+		{label: "vlog_mmap.max_mapped_leaf_sealed_bytes", alts: []string{"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes", "treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes"}},
+		{label: "vlog_mmap.sealed_map_denied", alts: []string{"treedb.vlog.mmap_sealed_map_denied", "treedb.cache.vlog_mmap.sealed_map_denied"}},
+		{label: "vlog_mmap.sealed_map_denied.count_cap", alts: []string{"treedb.vlog.mmap_sealed_map_denied.count_cap", "treedb.cache.vlog_mmap.sealed_map_denied.count_cap"}},
+		{label: "vlog_mmap.sealed_map_denied.bytes_cap", alts: []string{"treedb.vlog.mmap_sealed_map_denied.bytes_cap", "treedb.cache.vlog_mmap.sealed_map_denied.bytes_cap"}},
 		{label: "applied_command_lsn", alts: []string{"treedb.applied_command_lsn"}},
 		{label: "command_wal.enabled", alts: []string{"treedb.command_wal.enabled"}},
 		{label: "command_wal.required_feature", alts: []string{"treedb.command_wal.required_feature"}},
@@ -5106,6 +5158,18 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		}
 		var dbSB strings.Builder
 		foundSelectedStat := false
+		if mmapReadPrefix := treeDBMmapReadStatSource(stats); mmapReadPrefix != "" {
+			for _, def := range treeDBMmapReadStatDefs {
+				if value, ok := stats[mmapReadPrefix+def.suffix]; ok {
+					dbSB.WriteString("  ")
+					dbSB.WriteString(def.label)
+					dbSB.WriteString(": ")
+					dbSB.WriteString(value)
+					dbSB.WriteByte('\n')
+					foundSelectedStat = true
+				}
+			}
+		}
 		for _, key := range keys {
 			for _, alt := range key.alts {
 				if value, ok := stats[alt]; ok {
