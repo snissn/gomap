@@ -7,7 +7,7 @@ import (
 )
 
 func TestTypedColumnCompressedRowLocatorsRejectHugeDecodedLength1952(t *testing.T) {
-	rows := maxRowLocatorSectionRawBytes/rowLocatorBytes + 1
+	rows := maxCompressedRowLocatorSectionRawBytes/rowLocatorBytes + 1
 	image := ColumnPartImage{Rows: rows, Bytes: []byte{0}}
 	section := ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Offset: 0, Length: 1, Rows: rows, Compression: CompressionLZ4}
 	if _, err := image.rowLocatorSectionBytes(section); err == nil || !strings.Contains(err.Error(), "exceeds max") {
@@ -15,8 +15,19 @@ func TestTypedColumnCompressedRowLocatorsRejectHugeDecodedLength1952(t *testing.
 	}
 }
 
-func TestTypedColumnSectionAccountingLeavesHugeLocatorRawBytesUnknown1952(t *testing.T) {
-	rows := maxRowLocatorSectionRawBytes/rowLocatorBytes + 1
+func TestTypedColumnUncompressedRowLocatorRawBytesAreNotCompressedCapLimited1952(t *testing.T) {
+	rows := maxCompressedRowLocatorSectionRawBytes/rowLocatorBytes + 1
+	rawBytes, err := rowLocatorSectionRawBytes(rows)
+	if err != nil {
+		t.Fatalf("rowLocatorSectionRawBytes(%d): %v", rows, err)
+	}
+	if rawBytes <= maxCompressedRowLocatorSectionRawBytes {
+		t.Fatalf("rawBytes=%d want above compressed decode cap=%d", rawBytes, maxCompressedRowLocatorSectionRawBytes)
+	}
+}
+
+func TestTypedColumnSectionAccountingLeavesInvalidLocatorRawBytesUnknown1952(t *testing.T) {
+	rows := int(^uint(0)>>1)/rowLocatorBytes + 1
 	image := ColumnPartImage{
 		Rows:  rows,
 		Bytes: []byte{0},

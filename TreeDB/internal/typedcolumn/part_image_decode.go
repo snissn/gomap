@@ -12,7 +12,7 @@ import (
 
 const maxColumnPartImageStringBytes = 1 << 20
 
-const maxRowLocatorSectionRawBytes = 256 << 20
+const maxCompressedRowLocatorSectionRawBytes = 256 << 20
 
 const ColumnPartImageManifestHeaderBytes = 32
 
@@ -2384,9 +2384,6 @@ func rowLocatorSectionRawBytes(rows int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if payloadBytes > maxRowLocatorSectionRawBytes {
-		return 0, fmt.Errorf("typedcolumn: row locator section bytes=%d exceeds max=%d", payloadBytes, maxRowLocatorSectionRawBytes)
-	}
 	return payloadBytes, nil
 }
 
@@ -2399,6 +2396,9 @@ func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageS
 		}
 		return payload, nil
 	case CompressionSnappy:
+		if rawBytes > maxCompressedRowLocatorSectionRawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d exceeds max=%d", label, rawBytes, maxCompressedRowLocatorSectionRawBytes)
+		}
 		decodedLen, err := snappy.DecodedLen(payload)
 		if err != nil {
 			return nil, fmt.Errorf("typedcolumn: %s snappy decoded length: %w", label, err)
@@ -2415,6 +2415,9 @@ func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageS
 		}
 		return out, nil
 	case CompressionLZ4:
+		if rawBytes > maxCompressedRowLocatorSectionRawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d exceeds max=%d", label, rawBytes, maxCompressedRowLocatorSectionRawBytes)
+		}
 		out := make([]byte, rawBytes)
 		n, err := lz4.UncompressBlock(payload, out)
 		if err != nil {
