@@ -198,6 +198,8 @@ func (i ColumnPartImage) SectionByteAccounting() []ColumnPartImageSectionByteAcc
 		if section.Kind == ColumnPartImageSectionRowLocators {
 			if raw, err := rowLocatorSectionRawBytes(section.Rows); err == nil {
 				rawBytes = raw
+			} else {
+				rawBytes = 0
 			}
 		}
 		out = append(out, ColumnPartImageSectionByteAccounting{
@@ -712,11 +714,7 @@ func (b *columnPartImageBuilder) addRowLocatorsSection() error {
 	if uint64(len(primaryIDs)) > uint64(^uint32(0)) {
 		return fmt.Errorf("typedcolumn: row locator count=%d exceeds uint32", len(primaryIDs))
 	}
-	recordBytes, err := checkedMulInt(len(primaryIDs), rowLocatorBytes, "row locator section bytes")
-	if err != nil {
-		return err
-	}
-	payloadBytes, err := checkedAddInt(4, recordBytes, "row locator section bytes")
+	payloadBytes, err := rowLocatorSectionRawBytes(len(primaryIDs))
 	if err != nil {
 		return err
 	}

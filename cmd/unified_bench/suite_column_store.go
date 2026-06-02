@@ -3104,7 +3104,7 @@ func columnStoreSectionCompressionAttribution(section collections.ColumnStoreTyp
 		decompressionDurationSource = "deferred_section_decompression_not_run"
 	}
 	rawBytes := section.RawBytes
-	if rawBytes <= 0 {
+	if rawBytes <= 0 && section.Kind != "row_locators" {
 		rawBytes = section.Bytes
 	}
 	storedBytes := section.StoredBytes

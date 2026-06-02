@@ -12,6 +12,8 @@ import (
 
 const maxColumnPartImageStringBytes = 1 << 20
 
+const maxRowLocatorSectionRawBytes = 256 << 20
+
 const ColumnPartImageManifestHeaderBytes = 32
 
 func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
@@ -2378,7 +2380,14 @@ func rowLocatorSectionRawBytes(rows int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return checkedAddInt(4, recordBytes, "row locator section bytes")
+	payloadBytes, err := checkedAddInt(4, recordBytes, "row locator section bytes")
+	if err != nil {
+		return 0, err
+	}
+	if payloadBytes > maxRowLocatorSectionRawBytes {
+		return 0, fmt.Errorf("typedcolumn: row locator section bytes=%d exceeds max=%d", payloadBytes, maxRowLocatorSectionRawBytes)
+	}
+	return payloadBytes, nil
 }
 
 func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageSection, rawBytes int, label string) ([]byte, error) {

@@ -427,7 +427,7 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 		for _, section := range sections {
 			rawBytes := int64(section.RawBytes)
 			storedBytes := int64(section.StoredBytes)
-			if rawBytes == 0 {
+			if rawBytes == 0 && section.Kind != typedcolumn.ColumnPartImageSectionRowLocators {
 				rawBytes = int64(section.Bytes)
 			}
 			if storedBytes == 0 {

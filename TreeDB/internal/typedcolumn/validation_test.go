@@ -6,6 +6,15 @@ import (
 	"testing"
 )
 
+func TestTypedColumnCompressedRowLocatorsRejectHugeDecodedLength1952(t *testing.T) {
+	rows := maxRowLocatorSectionRawBytes/rowLocatorBytes + 1
+	image := ColumnPartImage{Rows: rows, Bytes: []byte{0}}
+	section := ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Offset: 0, Length: 1, Rows: rows, Compression: CompressionLZ4}
+	if _, err := image.rowLocatorSectionBytes(section); err == nil || !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("rowLocatorSectionBytes huge decoded length err=%v want max-length fail-closed", err)
+	}
+}
+
 func TestTypedColumnValidationUnsupportedImageVersionFailsClosed(t *testing.T) {
 	image := mustTransplantImage(t, mustTransplantPart(t, 178901, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
 
