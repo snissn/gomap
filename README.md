@@ -37,30 +37,23 @@ June 2, 2026 report.
 | MongoDB 8 | baseline | 33,255.6 | 26,102.5 | 601.0 | 1,461.0 |
 | TreeDB nativewire | `command_wal_durable` | 77,065.3 | 120,500.7 | 128.0 | 477.0 |
 | TreeDB Mongo gateway | `command_wal_durable` | 57,370.1 | 74,544.7 | 206.0 | 649.0 |
-| TreeDB nativewire | `command_wal_relaxed` | 76,411.7 | 126,762.5 | 121.0 | 374.0 |
-| TreeDB Mongo gateway | `command_wal_relaxed` | 62,444.0 | 75,371.9 | 203.0 | 629.0 |
-| TreeDB nativewire | `bench` no-WAL | 85,201.7 | 134,415.5 | 114.0 | 365.0 |
 
 Full report, commands, host context, run repeats, and artifact paths:
 [June 2 YCSB report](docs/benchmarks/ycsb_post_update_stack_2026-06-02.md).
 
-The `bench` profile is a no-WAL benchmark-only ceiling. Use
-`command_wal_durable` as the default server profile unless you are deliberately
-running relaxed durability or a benchmark ceiling.
-
 ### Indexed Collection Insert Workload
 
 Two secondary indexes, June 2 current-code rerun, `100000` documents, batch
-size `16000`, and `command_wal_relaxed` for TreeDB. Throughput columns are timed
-insert measurements for the value-log outer-leaf layout; B/doc uses the fully
+size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec` is the timed
+insert measurement for the value-log outer-leaf layout; B/doc uses the fully
 compacted storage phase for the same TreeDB layout and SQLite after `VACUUM`.
 
-| engine / format | layout | ns/doc | docs/sec | fully compacted B/doc |
-| --- | --- | ---: | ---: | ---: |
-| TreeDB template-v1 | data and index outer leaves in value log | 1,595 | 626,959 | 22.2 |
-| TreeDB JSON | data and index outer leaves in value log | 2,384 | 419,463 | 30.4 |
-| SQLite native columns | WAL normal | 3,023 | 330,797 | 156.7 |
-| SQLite JSON | WAL normal | 3,310 | 302,115 | 231.7 |
+| engine / format | layout | docs/sec | fully compacted B/doc |
+| --- | --- | ---: | ---: |
+| TreeDB template-v1 | data and index outer leaves in value log | 626,959 | 22.2 |
+| TreeDB JSON | data and index outer leaves in value log | 419,463 | 30.4 |
+| SQLite native columns | WAL normal | 330,797 | 156.7 |
+| SQLite JSON | WAL normal | 302,115 | 231.7 |
 
 Source:
 [June 2 two-index insert rerun](docs/benchmarks/collections_insert_two_index_current_2026-06-02.md).
