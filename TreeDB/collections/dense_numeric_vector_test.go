@@ -78,6 +78,47 @@ func TestTypedColumnDenseNumericVectorAdapterRoundTripAllTypes1930(t *testing.T)
 	}
 }
 
+func TestTypedColumnDenseNumericVectorSelectedRows1930(t *testing.T) {
+	field := typedColumnAdapterField("codes", ColumnStoreValueUint16Vector)
+	field.ElementsPerRow = 3
+	values := []columnDeclaredValue{
+		{Type: ColumnStoreValueUint16Vector, Present: true, DenseNumericVector: denseNumericVectorRowBytes1930(3, 2, 1)},
+		{Type: ColumnStoreValueUint16Vector, Present: true, DenseNumericVector: denseNumericVectorRowBytes1930(3, 2, 21)},
+		{Type: ColumnStoreValueUint16Vector, Present: true, DenseNumericVector: denseNumericVectorRowBytes1930(3, 2, 41)},
+	}
+	part := typedColumnAdapterBuildPart(t, field, values)
+
+	allRows, allDiag, err := part.scanColumnValuesRows(field.Name, nil)
+	if err != nil {
+		t.Fatalf("scanColumnValuesRows all rows: %v", err)
+	}
+	assertDenseNumericVectorDeclaredValuesEqual1930(t, allRows, values)
+	if allDiag.RowsScanned != len(values) || allDiag.ColumnsProjected != 1 || allDiag.BytesDecoded == 0 {
+		t.Fatalf("all-row diagnostics=%+v want decoded dense vector column", allDiag)
+	}
+
+	selected, selectedDiag, err := part.scanColumnValuesRows(field.Name, []int{2, 0})
+	if err != nil {
+		t.Fatalf("scanColumnValuesRows selected: %v", err)
+	}
+	assertDenseNumericVectorDeclaredValuesEqual1930(t, selected, []columnDeclaredValue{values[2], values[0]})
+	if selectedDiag.RowsScanned != 2 || selectedDiag.ColumnsProjected != 1 || selectedDiag.BytesDecoded == 0 {
+		t.Fatalf("selected diagnostics=%+v want decoded dense vector rows", selectedDiag)
+	}
+
+	decoded, decodedDiag, err := part.scanDecodedValuesSelectedRows(nil, nil)
+	if err != nil {
+		t.Fatalf("scanDecodedValuesSelectedRows all rows: %v", err)
+	}
+	if len(decoded.Values) != 1 {
+		t.Fatalf("decoded columns=%d want 1", len(decoded.Values))
+	}
+	assertDenseNumericVectorDeclaredValuesEqual1930(t, decoded.Values[0], values)
+	if decodedDiag.RowsScanned != len(values) || decodedDiag.ColumnsProjected != 1 {
+		t.Fatalf("decoded diagnostics=%+v want all rows/projected column", decodedDiag)
+	}
+}
+
 func TestTypedColumnDenseNumericVectorDirectViewContractBFloat16Vector1930(t *testing.T) {
 	field := typedColumnAdapterField("codes", ColumnStoreValueBFloat16Vector)
 	field.ElementsPerRow = 3
@@ -171,6 +212,18 @@ func TestTypedColumnDenseNumericVectorJSONAndAdjacencyIsolation1930(t *testing.T
 	}
 	if columnStoreValueTypeIsDenseNumericVector(ColumnStoreValueAdjacencyList) {
 		t.Fatal("adjacency_list must not be classified as a generic dense numeric vector")
+	}
+}
+
+func assertDenseNumericVectorDeclaredValuesEqual1930(t *testing.T, got, want []columnDeclaredValue) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("values len=%d want %d", len(got), len(want))
+	}
+	for i := range got {
+		if got[i].Type != want[i].Type || got[i].Present != want[i].Present || got[i].Null != want[i].Null || !bytes.Equal(got[i].DenseNumericVector, want[i].DenseNumericVector) {
+			t.Fatalf("row %d got=%+v bytes=%x want=%+v bytes=%x", i, got[i], got[i].DenseNumericVector, want[i], want[i].DenseNumericVector)
+		}
 	}
 }
 

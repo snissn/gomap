@@ -2268,6 +2268,9 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 	if typedColumnAdapterPrimitiveScalarColumnType(column.Definition.Type) {
 		return p.scanPrimitiveScalarColumnValuesRows(column, rows)
 	}
+	if columnStoreValueTypeIsDenseNumericVector(column.Field.ValueType) {
+		return p.scanDenseNumericVectorColumnValuesRows(column, rows)
+	}
 	switch column.Field.ValueType {
 	case ColumnStoreValueString, ColumnStoreValueInt64, ColumnStoreValueBool:
 	default:
@@ -2293,6 +2296,38 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 		out[i] = value
 	}
 	return out, scan.Diagnostics, nil
+}
+
+func (p *typedColumnAdapterPart) scanDenseNumericVectorColumnValuesRows(column typedColumnAdapterColumn, rows []int) ([]columnDeclaredValue, typedcolumn.PartScanDiagnostics, error) {
+	matrix, err := p.Part.DenseFixedWidthColumn(column.Definition.Name, nil)
+	if err != nil {
+		return nil, typedcolumn.PartScanDiagnostics{}, err
+	}
+	diag, err := p.scanColumnValuesRowsFullDiagnostics(column)
+	if err != nil {
+		return nil, typedcolumn.PartScanDiagnostics{}, err
+	}
+	if rows == nil {
+		out := make([]columnDeclaredValue, matrix.Rows)
+		for i := 0; i < matrix.Rows; i++ {
+			row, err := matrix.RowBytes(i)
+			if err != nil {
+				return nil, diag, err
+			}
+			out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, DenseNumericVector: append([]byte(nil), row...)}
+		}
+		return out, diag, nil
+	}
+	diag.RowsScanned = len(rows)
+	out := make([]columnDeclaredValue, len(rows))
+	for i, rowIdx := range rows {
+		row, err := matrix.RowBytes(rowIdx)
+		if err != nil {
+			return nil, diag, err
+		}
+		out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, DenseNumericVector: append([]byte(nil), row...)}
+	}
+	return out, diag, nil
 }
 
 func (p *typedColumnAdapterPart) scanColumnValuesRowsFullDiagnostics(column typedColumnAdapterColumn) (typedcolumn.PartScanDiagnostics, error) {
