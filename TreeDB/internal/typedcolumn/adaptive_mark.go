@@ -126,6 +126,20 @@ func EstimateBatchUncompressedBytes(batch Batch, defs []ColumnDefinition) (int, 
 				return 0, err
 			}
 			total += bytes
+		case ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
+			width, ok := DenseFixedWidthVectorElementWidth(def.Type)
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: unsupported dense vector type %s for adaptive mark sizing", def.Type)
+			}
+			rowBytes, err := checkedMulInt(def.FixedWidthElements, width, "dense column row bytes")
+			if err != nil {
+				return 0, err
+			}
+			bytes, err := checkedMulInt(rows, rowBytes, "dense column uncompressed bytes")
+			if err != nil {
+				return 0, err
+			}
+			total += bytes
 		case ColumnTypeUint32List:
 			list := batch.Uint32OffsetsLists[def.Name]
 			offsetsBytes, err := checkedMulInt(list.Rows+1, 8, "offsets-list offsets bytes")

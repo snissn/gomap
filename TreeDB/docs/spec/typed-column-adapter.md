@@ -60,6 +60,18 @@ and `ColumnStoreValueBFloat16`. Multi-byte values are encoded little-endian.
 bits; the adapter preserves bit patterns but does not parse decimal float16 or
 bfloat16 numbers from JSON.
 
+## Dense numeric vector adapter boundary (#1930)
+
+Dense numeric vector `typed_column_part` owners are non-null in this phase and
+use uncompressed row-major fixed-width sections with positive `elements_per_row`.
+The generic dense vector value types are `uint8_vector`, `int8_vector`,
+`uint16_vector`, `int16_vector`, `uint32_vector`, `int32_vector`,
+`uint64_vector`, `int64_vector`, `float16_vector`, `bfloat16_vector`, and
+`float64_vector`. Multi-byte elements are encoded little-endian; `float16` and
+`bfloat16` vector elements are raw `uint16` bit payloads. The existing
+`float32_vector` compatibility type remains supported on its legacy encoding,
+and `uint32_vector` is separate from `adjacency_list` graph semantics.
+
 ## `uint32_list` adapter naming boundary (#1984)
 
 `typed-column-uint32-list-semantics.md` defines the generic logical primitive

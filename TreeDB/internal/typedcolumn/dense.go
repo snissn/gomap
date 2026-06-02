@@ -250,6 +250,9 @@ func validateDensePayloadBytes(rawBytes int, rows int, elementsPerRow int, eleme
 	if elementsPerRow <= 0 {
 		return fmt.Errorf("typedcolumn: %s requires positive fixed-width elements", name)
 	}
+	if elementBytes <= 0 {
+		return fmt.Errorf("typedcolumn: %s requires positive element bytes", name)
+	}
 	if err := validateGranuleDecodeRows(rows); err != nil {
 		return err
 	}

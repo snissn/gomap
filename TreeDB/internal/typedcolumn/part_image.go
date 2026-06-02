@@ -490,7 +490,7 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			return fmt.Errorf("typedcolumn: descriptor column %s fixed-width elements=%d", column.Name, column.FixedWidthElements)
 		}
 		switch column.Type {
-		case ColumnTypeFloat32Vector:
+		case ColumnTypeFloat32Vector, ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
 			if column.FixedWidthElements <= 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements", column.Name, column.Type)
 			}
@@ -1241,6 +1241,28 @@ func columnTypeCode(t ColumnType) (uint16, error) {
 		return 17, nil
 	case ColumnTypeBFloat16:
 		return 18, nil
+	case ColumnTypeUint8Vector:
+		return 19, nil
+	case ColumnTypeInt8Vector:
+		return 20, nil
+	case ColumnTypeUint16Vector:
+		return 21, nil
+	case ColumnTypeInt16Vector:
+		return 22, nil
+	case ColumnTypeUint32Vector:
+		return 23, nil
+	case ColumnTypeInt32Vector:
+		return 24, nil
+	case ColumnTypeUint64Vector:
+		return 25, nil
+	case ColumnTypeInt64Vector:
+		return 26, nil
+	case ColumnTypeFloat16Vector:
+		return 27, nil
+	case ColumnTypeBFloat16Vector:
+		return 28, nil
+	case ColumnTypeFloat64Vector:
+		return 29, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported column type %s", t)
 	}

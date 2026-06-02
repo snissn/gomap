@@ -340,6 +340,22 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "vector_dims",
 		},
 		{
+			name: "vector column rejects negative elements per row with dims",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3, ElementsPerRow: -1}},
+			},
+			want: "elements_per_row: must be non-negative",
+		},
+		{
+			name: "vector column rejects negative dims with elements per row",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: -1, ElementsPerRow: 128}},
+			},
+			want: "vector_dims: must be non-negative",
+		},
+		{
 			name: "adjacency column rejects dims",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,
@@ -458,6 +474,27 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 				Enabled:           true,
 				Columns:           []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128}},
 				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_embedding", Column: "embedding", Kind: ColumnAggregateMin}},
+			},
+			want: "does not support",
+		},
+		{
+			name: "dense numeric vector min aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString},
+					{Name: "codes", Path: "codes", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueUint16Vector, ElementsPerRow: 3},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_codes", Column: "codes", GroupColumn: "kind", Kind: ColumnAggregateMin}},
+			},
+			want: "does not support",
+		},
+		{
+			name: "dense numeric vector count distinct aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled:           true,
+				Columns:           []ColumnStoreColumn{{Name: "codes", Path: "codes", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueUint16Vector, ElementsPerRow: 3}},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "distinct_codes", Column: "codes", Kind: ColumnAggregateCountDistinct}},
 			},
 			want: "does not support",
 		},
@@ -765,6 +802,25 @@ func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
 	}
 	if meta.Options.ColumnStore.SchemaHash == 0 {
 		t.Fatal("schema hash was not populated")
+	}
+
+	alias := testColumnStoreConfig(nil)
+	alias.Columns = append(alias.Columns,
+		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, ElementsPerRow: 128},
+		ColumnStoreColumn{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+		ColumnStoreColumn{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList},
+	)
+	alias.SortKey = append(alias.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
+	alias.AggregateMetadata = append(alias.AggregateMetadata,
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMax},
+	)
+	aliasMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: alias}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta alias: %v", err)
+	}
+	if aliasMeta.Options.ColumnStore.SchemaHash != meta.Options.ColumnStore.SchemaHash {
+		t.Fatalf("schema hash should treat float32_vector elements_per_row as vector_dims alias: dims=%x alias=%x", meta.Options.ColumnStore.SchemaHash, aliasMeta.Options.ColumnStore.SchemaHash)
 	}
 
 	changed := testColumnStoreConfig(nil)

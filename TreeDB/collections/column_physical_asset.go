@@ -21,6 +21,7 @@ const (
 	columnPhysicalAssetVersionV3 = uint16(3)
 	columnPhysicalAssetVersionV4 = uint16(4)
 	columnPhysicalAssetVersionV5 = uint16(5)
+	columnPhysicalAssetVersionV6 = uint16(6)
 	columnPhysicalAssetVersion   = columnPhysicalAssetVersionV4
 )
 
@@ -53,9 +54,13 @@ type columnDeclaredValue struct {
 	// Float32Vector stores a decoded vector column value. It is used for first-
 	// class vector physical assets and is not part of scalar query hot paths.
 	Float32Vector []float32
-	Uint32List    []uint32
-	AdjacencyList []uint32
-	Bytes         []byte
+	// DenseNumericVector stores raw row-major fixed-width vector bytes for
+	// quantized dense vector typed-column values. Multi-byte elements are already
+	// little-endian encoded for the declared ColumnStoreValue*Vector type.
+	DenseNumericVector []byte
+	Uint32List         []uint32
+	AdjacencyList      []uint32
+	Bytes              []byte
 	// StringBytes is used by physical scan/query hot paths as an asset-buffer
 	// view valid only for the current scan callback / pinned prepared runner
 	// view. Copy before retaining beyond that lifetime. String remains the
@@ -275,11 +280,17 @@ func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (co
 		}
 		value.BFloat16 = uint16(v)
 	case ColumnStoreValueFloat32Vector:
-		values, err := convertJSONFloat32Vector(raw, col.VectorDims)
+		values, err := convertJSONFloat32Vector(raw, columnStoreFloat32VectorElementsPerRow(col))
 		if err != nil {
 			return columnDeclaredValue{}, err
 		}
 		value.Float32Vector = values
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		values, err := convertJSONDenseNumericVector(raw, col)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.DenseNumericVector = values
 	case ColumnStoreValueUint32List:
 		values, err := convertJSONUint32List(raw, "uint32_list")
 		if err != nil {
@@ -453,6 +464,9 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		writeManifestBool(&b, col.Nullable)
 		writeManifestBool(&b, col.Dictionary)
 		writeManifestUint64(&b, uint64(col.VectorDims))
+		if version >= columnPhysicalAssetVersionV6 {
+			writeManifestUint64(&b, uint64(col.ElementsPerRow))
+		}
 		if version >= columnPhysicalAssetVersionV5 {
 			writeManifestString(&b, string(col.FixedWidthEncoding))
 		}
@@ -507,6 +521,8 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 				if err := writeManifestFloat32SliceWithEncoding(&b, value.Float32Vector, col.FixedWidthEncoding); err != nil {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] float32_vector: %w", colIdx, err)
 				}
+			case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+				writeManifestBytes(&b, value.DenseNumericVector)
 			case ColumnStoreValueUint32List:
 				if err := writeManifestUint32SliceWithEncoding(&b, value.Uint32List, col.FixedWidthEncoding); err != nil {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] uint32_list: %w", colIdx, err)
@@ -575,6 +591,13 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 				return columnPhysicalAsset{}, errors.New("collections: column physical asset vector_dims overflow int")
 			}
 			asset.Columns[i].VectorDims = int(vectorDims)
+		}
+		if version >= columnPhysicalAssetVersionV6 {
+			elementsPerRow := cur.u64()
+			if elementsPerRow > uint64(maxCollectionInt) {
+				return columnPhysicalAsset{}, errors.New("collections: column physical asset elements_per_row overflow int")
+			}
+			asset.Columns[i].ElementsPerRow = int(elementsPerRow)
 		}
 		if version >= columnPhysicalAssetVersionV5 {
 			asset.Columns[i].FixedWidthEncoding = ColumnFixedWidthEncoding(cur.string())
@@ -647,10 +670,12 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 						value.BFloat16 = cur.u16()
 					case ColumnStoreValueFloat32Vector:
 						if version >= columnPhysicalAssetVersionV4 {
-							value.Float32Vector = cur.float32SliceWithExpectedLengthAndEncoding(asset.Columns[colIdx].VectorDims, asset.Columns[colIdx].FixedWidthEncoding)
+							value.Float32Vector = cur.float32SliceWithExpectedLengthAndEncoding(columnStoreFloat32VectorElementsPerRow(asset.Columns[colIdx]), asset.Columns[colIdx].FixedWidthEncoding)
 						} else {
 							value.Float32Vector = cur.float32Slice()
 						}
+					case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+						value.DenseNumericVector = cur.denseNumericVectorBytesWithExpectedLength(asset.Columns[colIdx])
 					case ColumnStoreValueUint32List:
 						value.Uint32List = cur.uint32SliceWithEncoding(asset.Columns[colIdx].FixedWidthEncoding)
 					case ColumnStoreValueAdjacencyList:
@@ -787,7 +812,7 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 
 func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 	switch version {
-	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5:
+	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6:
 		return true
 	default:
 		return false
@@ -796,10 +821,14 @@ func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 
 func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, error) {
 	requiresV5 := false
+	requiresV6 := false
 	for i, col := range columns {
 		encoding, err := normalizeColumnFixedWidthEncoding(col.FixedWidthEncoding)
 		if err != nil {
 			return 0, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding: %w", i, err)
+		}
+		if col.ElementsPerRow != 0 || columnStoreValueTypeIsDenseNumericVector(col.ValueType) {
+			requiresV6 = true
 		}
 		if encoding != ColumnFixedWidthEncodingDefault {
 			if !columnStoreValueTypeSupportsFixedWidthEncoding(col.ValueType) {
@@ -811,6 +840,9 @@ func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, 
 			requiresV5 = true
 		}
 	}
+	if requiresV6 {
+		return columnPhysicalAssetVersionV6, nil
+	}
 	if requiresV5 {
 		return columnPhysicalAssetVersionV5, nil
 	}
@@ -820,11 +852,20 @@ func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, 
 func validateColumnDeclaredPhysicalValueShape(col ColumnStoreColumn, value columnDeclaredValue) error {
 	switch col.ValueType {
 	case ColumnStoreValueFloat32Vector:
-		if col.VectorDims <= 0 {
-			return fmt.Errorf("float32_vector column has invalid vector_dims=%d", col.VectorDims)
+		dims := columnStoreFloat32VectorElementsPerRow(col)
+		if dims <= 0 {
+			return fmt.Errorf("float32_vector column has invalid vector_dims/elements_per_row=%d/%d", col.VectorDims, col.ElementsPerRow)
 		}
-		if len(value.Float32Vector) != col.VectorDims {
-			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", len(value.Float32Vector), col.VectorDims)
+		if len(value.Float32Vector) != dims {
+			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", len(value.Float32Vector), dims)
+		}
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		want, err := columnStoreDenseNumericVectorRowBytes(col)
+		if err != nil {
+			return err
+		}
+		if len(value.DenseNumericVector) != want {
+			return fmt.Errorf("%s bytes=%d want elements_per_row=%d bytes=%d", col.ValueType, len(value.DenseNumericVector), col.ElementsPerRow, want)
 		}
 	case ColumnStoreValueUint32List:
 		if !value.Present || value.Null {
@@ -1043,6 +1084,49 @@ func (c *manifestCursor) float32SliceAfterLengthWithEncoding(n uint64, encoding 
 		c.pos += 4
 	}
 	return out
+}
+
+func (c *manifestCursor) denseNumericVectorBytesWithExpectedLength(col ColumnStoreColumn) []byte {
+	value := c.denseNumericVectorBytesViewWithExpectedLength(col)
+	if c.err != nil {
+		return nil
+	}
+	return bytes.Clone(value)
+}
+
+func (c *manifestCursor) denseNumericVectorBytesViewWithExpectedLength(col ColumnStoreColumn) []byte {
+	value := c.bytesView()
+	if c.err != nil {
+		return nil
+	}
+	want, err := columnStoreDenseNumericVectorRowBytes(col)
+	if err != nil {
+		c.err = err
+		return nil
+	}
+	if len(value) != want {
+		c.err = fmt.Errorf("collections: %s bytes=%d want elements_per_row=%d bytes=%d", col.ValueType, len(value), col.ElementsPerRow, want)
+		return nil
+	}
+	return value
+}
+
+func (c *manifestCursor) skipDenseNumericVectorBytesWithExpectedLength(col ColumnStoreColumn) {
+	_ = c.denseNumericVectorBytesViewWithExpectedLength(col)
+}
+
+func columnStoreDenseNumericVectorRowBytes(col ColumnStoreColumn) (int, error) {
+	width, ok := columnStoreDenseNumericVectorWidth(col.ValueType)
+	if !ok {
+		return 0, fmt.Errorf("collections: unsupported dense numeric vector value_type=%s", col.ValueType)
+	}
+	if col.ElementsPerRow <= 0 {
+		return 0, fmt.Errorf("collections: %s column has invalid elements_per_row=%d", col.ValueType, col.ElementsPerRow)
+	}
+	if col.ElementsPerRow > maxCollectionInt/width {
+		return 0, fmt.Errorf("collections: %s bytes overflow elements_per_row=%d width=%d", col.ValueType, col.ElementsPerRow, width)
+	}
+	return col.ElementsPerRow * width, nil
 }
 
 func (c *manifestCursor) uint32Slice() []uint32 {

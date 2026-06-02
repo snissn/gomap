@@ -318,6 +318,111 @@ func TestColumnPhysicalAssetVectorValueTypesRoundTrip(t *testing.T) {
 	if visited != 1 {
 		t.Fatalf("visited=%d want 1", visited)
 	}
+
+	aliasConfig := *normalized
+	aliasConfig.Columns = append([]ColumnStoreColumn(nil), normalized.Columns...)
+	aliasConfig.Columns[0].ElementsPerRow = aliasConfig.Columns[0].VectorDims
+	aliasConfig.SchemaHash = hashColumnStoreSchema(&aliasConfig)
+	if aliasConfig.SchemaHash != normalized.SchemaHash {
+		t.Fatalf("alias schema hash=%x want %x", aliasConfig.SchemaHash, normalized.SchemaHash)
+	}
+	aliasProjection, err := newColumnPhysicalScanProjection(aliasConfig, []string{"embedding"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection alias: %v", err)
+	}
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", &aliasConfig, aliasProjection, func(row columnPhysicalScanRowView) error {
+		if got := row.Values[0].Float32Vector; len(got) != 3 || got[2] != -0.25 {
+			t.Fatalf("alias scanned vector=%v", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalAssetRows alias cfg: %v", err)
+	}
+}
+
+func TestColumnPhysicalAssetDenseNumericVectorRoundTrip1930(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{{
+			Name:           "codes",
+			Path:           "codes",
+			Owner:          TypedStorageOwnerColumnPart,
+			ValueType:      ColumnStoreValueUint16Vector,
+			ElementsPerRow: 3,
+		}},
+	}
+	normalized, err := normalizeColumnStoreConfig("vectors", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{{
+		ID:       []byte("v1"),
+		Document: []byte(`{"codes":[1,513,65535]}`),
+	}})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	wantRaw := []byte{1, 0, 1, 2, 0xff, 0xff}
+	if got := rows[0].Values[0].DenseNumericVector; !bytes.Equal(got, wantRaw) {
+		t.Fatalf("extracted dense vector=%x want %x", got, wantRaw)
+	}
+
+	encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "vectors",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        2,
+		PartID:            1,
+		AppliedCommandLSN: 9,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	if summary.RowCount != 1 || summary.ColumnCount != 1 || summary.PayloadBytes != int64(len(encoded)) {
+		t.Fatalf("unexpected summary=%+v len=%d", summary, len(encoded))
+	}
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset: %v", err)
+	}
+	if got := decoded.Columns[0].ElementsPerRow; got != 3 {
+		t.Fatalf("decoded elements_per_row=%d want 3", got)
+	}
+	if got := decoded.Rows[0].Values[0].DenseNumericVector; !bytes.Equal(got, wantRaw) {
+		t.Fatalf("decoded dense vector=%x want %x", got, wantRaw)
+	}
+
+	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: normalized.AssetManager.Namespace, Generation: 2, PartID: 1, FileID: columnAssetM12ASegmentFileID, Length: int64(len(encoded)), Checksum: page.Checksum(encoded)}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"codes"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	visited := 0
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
+		visited++
+		if got := row.Values[0].DenseNumericVector; !bytes.Equal(got, wantRaw) {
+			t.Fatalf("scanned dense vector=%x want %x", got, wantRaw)
+		}
+		jsonValue, err := columnDeclaredValueToJSON(row.Values[0])
+		if err != nil {
+			t.Fatalf("columnDeclaredValueToJSON: %v", err)
+		}
+		gotJSON, ok := jsonValue.([]uint16)
+		if !ok || len(gotJSON) != 3 || gotJSON[1] != 513 || gotJSON[2] != 65535 {
+			t.Fatalf("json value=%T %[1]v want []uint16", jsonValue)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalAssetRows: %v", err)
+	}
+	if visited != 1 {
+		t.Fatalf("visited=%d want 1", visited)
+	}
 }
 
 func TestColumnPhysicalAssetFloat32VectorLittleEndianRoundTrip(t *testing.T) {

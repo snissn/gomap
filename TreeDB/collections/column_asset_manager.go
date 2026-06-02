@@ -301,9 +301,11 @@ func columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg ColumnStoreConfig)
 				return true
 			}
 		case ColumnStoreValueFloat32Vector:
-			if column.VectorDims > 0 {
+			if column.VectorDims > 0 || column.ElementsPerRow > 0 {
 				return true
 			}
+		case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+			return true
 		case ColumnStoreValueUint32List, ColumnStoreValueBytes:
 			return true
 		case ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16:

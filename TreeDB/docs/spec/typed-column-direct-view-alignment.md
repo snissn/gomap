@@ -29,6 +29,10 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueInt8`/`Uint8`/`Int16`/`Uint16`/`Int32`/`Uint32` | yes | non-null uncompressed matching raw primitive scalar payloads; multi-byte values are little-endian and int64-compatible stats/pruning may be published. |
 | `ColumnStoreValueUint64` | yes, payload only | non-null uncompressed little-endian `uint64` payloads; direct-view payload certification is active, but int64-compatible stats/pruning are not. |
 | `ColumnStoreValueFloat16`/`BFloat16` | yes, storage-only bits | non-null uncompressed raw little-endian `uint16` bit payloads. Bits are preserved exactly; numeric float fast paths are not implied. |
+| `ColumnStoreValueUint8Vector`/`Int8Vector` | yes | row-major fixed-width 1-byte dense numeric vector payloads with positive `elements_per_row`. |
+| `ColumnStoreValueUint16Vector`/`Int16Vector`/`Float16Vector`/`BFloat16Vector` | yes | row-major fixed-width 2-byte little-endian dense numeric vector payloads with positive `elements_per_row`; float16/bfloat16 are raw bit payloads. |
+| `ColumnStoreValueUint32Vector`/`Int32Vector` | yes | row-major fixed-width 4-byte little-endian dense numeric vector payloads with positive `elements_per_row`; `uint32_vector` is distinct from `adjacency_list`. |
+| `ColumnStoreValueUint64Vector`/`Int64Vector`/`Float64Vector` | yes | row-major fixed-width 8-byte little-endian dense numeric vector payloads with positive `elements_per_row`. |
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
 | `ColumnStoreValueString` | no | string values and dictionary string tables are not string direct-view payloads. Derived dictionary-code sidecar row-code payloads are a separate `uint32` sidecar direct-view format. |

@@ -2,10 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -532,6 +534,8 @@ func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
 		return value.BFloat16, nil
 	case ColumnStoreValueFloat32Vector:
 		return value.Float32Vector, nil
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		return columnDeclaredDenseNumericVectorToJSONArray(value)
 	case ColumnStoreValueUint32List:
 		return value.Uint32List, nil
 	case ColumnStoreValueBytes:
@@ -549,4 +553,73 @@ func columnDeclaredBytesToJSONArray(value []byte) []int {
 		out[i] = int(b)
 	}
 	return out
+}
+
+func columnDeclaredDenseNumericVectorToJSONArray(value columnDeclaredValue) (any, error) {
+	width, ok := columnStoreDenseNumericVectorWidth(value.Type)
+	if !ok {
+		return nil, fmt.Errorf("unsupported dense numeric vector value type %q", value.Type)
+	}
+	if width <= 0 || len(value.DenseNumericVector)%width != 0 {
+		return nil, fmt.Errorf("%s bytes=%d not divisible by width=%d", value.Type, len(value.DenseNumericVector), width)
+	}
+	elements := len(value.DenseNumericVector) / width
+	switch value.Type {
+	case ColumnStoreValueUint8Vector:
+		out := make([]int, elements)
+		for i, b := range value.DenseNumericVector {
+			out[i] = int(b)
+		}
+		return out, nil
+	case ColumnStoreValueInt8Vector:
+		out := make([]int8, elements)
+		for i, b := range value.DenseNumericVector {
+			out[i] = int8(b)
+		}
+		return out, nil
+	case ColumnStoreValueUint16Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector:
+		out := make([]uint16, elements)
+		for i := range out {
+			out[i] = binary.LittleEndian.Uint16(value.DenseNumericVector[i*2:])
+		}
+		return out, nil
+	case ColumnStoreValueInt16Vector:
+		out := make([]int16, elements)
+		for i := range out {
+			out[i] = int16(binary.LittleEndian.Uint16(value.DenseNumericVector[i*2:]))
+		}
+		return out, nil
+	case ColumnStoreValueUint32Vector:
+		out := make([]uint32, elements)
+		for i := range out {
+			out[i] = binary.LittleEndian.Uint32(value.DenseNumericVector[i*4:])
+		}
+		return out, nil
+	case ColumnStoreValueInt32Vector:
+		out := make([]int32, elements)
+		for i := range out {
+			out[i] = int32(binary.LittleEndian.Uint32(value.DenseNumericVector[i*4:]))
+		}
+		return out, nil
+	case ColumnStoreValueUint64Vector:
+		out := make([]uint64, elements)
+		for i := range out {
+			out[i] = binary.LittleEndian.Uint64(value.DenseNumericVector[i*8:])
+		}
+		return out, nil
+	case ColumnStoreValueInt64Vector:
+		out := make([]int64, elements)
+		for i := range out {
+			out[i] = int64(binary.LittleEndian.Uint64(value.DenseNumericVector[i*8:]))
+		}
+		return out, nil
+	case ColumnStoreValueFloat64Vector:
+		out := make([]float64, elements)
+		for i := range out {
+			out[i] = math.Float64frombits(binary.LittleEndian.Uint64(value.DenseNumericVector[i*8:]))
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported dense numeric vector value type %q", value.Type)
+	}
 }

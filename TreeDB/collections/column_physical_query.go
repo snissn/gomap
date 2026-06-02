@@ -1869,9 +1869,12 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 			if cur.err != nil {
 				return nil, false, nil, false, 0, false, cur.err
 			}
-			if n != uint64(col.VectorDims) {
-				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] float32_vector length=%d want vector_dims=%d", colIdx, n, col.VectorDims)
+			dims := columnStoreFloat32VectorElementsPerRow(col)
+			if n != uint64(dims) {
+				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] float32_vector length=%d want vector_dims=%d", colIdx, n, dims)
 			}
+		case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+			cur.skipDenseNumericVectorBytesWithExpectedLength(col)
 		case ColumnStoreValueUint32List:
 			cur.skipUint32Slice()
 		case ColumnStoreValueAdjacencyList:

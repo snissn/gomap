@@ -487,7 +487,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			return ColumnPartDescriptor{}, nil, err
 		}
 		switch columnType {
-		case ColumnTypeFloat32Vector:
+		case ColumnTypeFloat32Vector, ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
 			if fixedWidthElements <= 0 {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s requires positive fixed-width elements", name, columnType)
 			}
@@ -534,6 +534,16 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 				column.Definition.Compression = CompressionNone
 			case ColumnTypeInt8, ColumnTypeUint8, ColumnTypeInt16, ColumnTypeUint16, ColumnTypeInt32, ColumnTypeUint32, ColumnTypeUint64, ColumnTypeFloat16, ColumnTypeBFloat16:
 				column.Definition.Encoding = rawScalarEncodingForColumnType(columnType)
+				column.Definition.Compression = CompressionNone
+			case ColumnTypeFloat32Vector:
+				column.Definition.Encoding = EncodingRawFloat32Vector
+				column.Definition.Compression = CompressionNone
+			case ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
+				encoding, ok := DenseFixedWidthVectorEncoding(columnType)
+				if !ok {
+					return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: empty dense vector column %s type=%s has no raw encoding mapping", name, columnType)
+				}
+				column.Definition.Encoding = encoding
 				column.Definition.Compression = CompressionNone
 			case ColumnTypeUint32List:
 				column.Definition.Encoding = EncodingRawUint32OffsetsList
@@ -593,7 +603,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 
 func validateDecodedColumnFixedWidthElements(name string, columnType ColumnType, fixedWidthElements int, blocks []ColumnBlockDescriptor, rows int) error {
 	switch columnType {
-	case ColumnTypeFloat32Vector:
+	case ColumnTypeFloat32Vector, ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
 		if fixedWidthElements <= 0 {
 			return fmt.Errorf("typedcolumn: column %s type=%s requires positive fixed-width elements", name, columnType)
 		}
@@ -717,7 +727,7 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	if block.RawBytes > maxRawBytes {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d raw bytes=%d exceed max=%d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
 	}
-	if columnType == ColumnTypeFloat32Vector || columnType == ColumnTypeAdjacencyList {
+	if IsDenseFixedWidthVectorColumnType(columnType) || columnType == ColumnTypeAdjacencyList {
 		if block.Compression != CompressionNone {
 			return fmt.Errorf("typedcolumn: descriptor column %s block %d dense compression=%s want %s", column, blockIndex, block.Compression, CompressionNone)
 		}
@@ -895,6 +905,20 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, fixedWid
 			return 0, err
 		}
 		return checkedMulInt(elements, 4, "float32_vector raw bytes")
+	case ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
+		wantEncoding, ok := DenseFixedWidthVectorEncoding(columnType)
+		if !ok || encoding != wantEncoding {
+			return 0, fmt.Errorf("unsupported %s encoding %d", columnType, encoding)
+		}
+		width, ok := DenseFixedWidthVectorElementWidth(columnType)
+		if !ok || width == 0 {
+			return 0, fmt.Errorf("unsupported %s fixed-width bytes", columnType)
+		}
+		elements, err := checkedMulInt(rows, fixedWidthElements, string(columnType)+" elements")
+		if err != nil {
+			return 0, err
+		}
+		return checkedMulInt(elements, width, string(columnType)+" raw bytes")
 	case ColumnTypeUint32List:
 		return 0, fmt.Errorf("unsupported uint32_list encoding %d", encoding)
 	case ColumnTypeBytes:
@@ -2572,6 +2596,28 @@ func columnTypeFromCode(code uint16) (ColumnType, error) {
 		return ColumnTypeFloat16, nil
 	case 18:
 		return ColumnTypeBFloat16, nil
+	case 19:
+		return ColumnTypeUint8Vector, nil
+	case 20:
+		return ColumnTypeInt8Vector, nil
+	case 21:
+		return ColumnTypeUint16Vector, nil
+	case 22:
+		return ColumnTypeInt16Vector, nil
+	case 23:
+		return ColumnTypeUint32Vector, nil
+	case 24:
+		return ColumnTypeInt32Vector, nil
+	case 25:
+		return ColumnTypeUint64Vector, nil
+	case 26:
+		return ColumnTypeInt64Vector, nil
+	case 27:
+		return ColumnTypeFloat16Vector, nil
+	case 28:
+		return ColumnTypeBFloat16Vector, nil
+	case 29:
+		return ColumnTypeFloat64Vector, nil
 	default:
 		return "", fmt.Errorf("typedcolumn: unknown column type code %d", code)
 	}

@@ -147,6 +147,19 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 		base.Reason = "typed-column bytes raw_bytes_offsets uses certified uint64 offsets plus exact opaque byte values direct views with fail-closed fallback diagnostics"
 		return base
 	}
+	if width, ok := columnStoreDenseNumericVectorWidth(valueType); ok {
+		if consumer != typedColumnDirectViewConsumerTypedColumnPartGeneric {
+			base.Reason = "dense numeric vector direct-view classification only supports the generic typed-column consumer"
+			return base
+		}
+		base.Support = typedColumnDirectViewActiveLittleEndianCandidate
+		base.PayloadEndian = "little"
+		base.ElementSize = width
+		base.Alignment = width
+		base.RequiresElementsPerRow = true
+		base.Reason = "typed-column dense numeric vector row-major little-endian fixed-width candidate"
+		return base
+	}
 	if width, ok := columnStorePrimitiveScalarWidth(valueType); ok {
 		if consumer != typedColumnDirectViewConsumerTypedColumnPartGeneric {
 			base.Reason = "primitive scalar direct-view classification only supports the generic typed-column consumer"
@@ -263,7 +276,18 @@ func typedColumnDirectViewAllTypeInventory() []ColumnStoreValueType {
 		ColumnStoreValueUint64,
 		ColumnStoreValueFloat16,
 		ColumnStoreValueBFloat16,
+		ColumnStoreValueUint8Vector,
+		ColumnStoreValueInt8Vector,
+		ColumnStoreValueUint16Vector,
+		ColumnStoreValueInt16Vector,
+		ColumnStoreValueUint32Vector,
+		ColumnStoreValueInt32Vector,
+		ColumnStoreValueUint64Vector,
+		ColumnStoreValueInt64Vector,
+		ColumnStoreValueFloat16Vector,
+		ColumnStoreValueBFloat16Vector,
 		ColumnStoreValueFloat32Vector,
+		ColumnStoreValueFloat64Vector,
 		ColumnStoreValueUint32List,
 		ColumnStoreValueBytes,
 		ColumnStoreValueAdjacencyList,

@@ -494,8 +494,9 @@ Insert/update rows must have `Deleted=false` and exactly one value per declared
 `Deleted=true` and zero column values. For layouts with `typed_column_part`
 owners, a `TCPA` row asset is still published for row IDs/tombstones and any
 row-owned fields; the matching `tcs1_typed_column_part` for the same non-delete
-generation contains authoritative scalar, fixed-dimension `float32_vector`, and
-non-null variable-width `uint32_list` typed-column values keyed by row index.
+generation contains authoritative scalar, fixed-dimension `float32_vector`,
+Issue #1930 dense numeric vector, and non-null variable-width `uint32_list`
+typed-column values keyed by row index.
 Latest-visible readers resolve document identity from the typed-row
 row/tombstone assets first, then read the typed-column part for the winning
 non-deleted generation+row. Readers validate namespace, generation, part id,
@@ -524,6 +525,17 @@ Typed-column part descriptor column type codes are currently:
 | 16 | `uint64` | #1929 non-null raw primitive scalar. |
 | 17 | `float16` | #1929 storage-only raw IEEE binary16 bit payload. |
 | 18 | `bfloat16` | #1929 storage-only raw bfloat16 bit payload. |
+| 19 | `uint8_vector` | #1930 non-null row-major raw `uint8` dense vector. |
+| 20 | `int8_vector` | #1930 non-null row-major raw `int8` dense vector. |
+| 21 | `uint16_vector` | #1930 non-null row-major little-endian `uint16` dense vector. |
+| 22 | `int16_vector` | #1930 non-null row-major little-endian `int16` dense vector. |
+| 23 | `uint32_vector` | #1930 non-null row-major little-endian `uint32` dense vector; not adjacency. |
+| 24 | `int32_vector` | #1930 non-null row-major little-endian `int32` dense vector. |
+| 25 | `uint64_vector` | #1930 non-null row-major little-endian `uint64` dense vector. |
+| 26 | `int64_vector` | #1930 non-null row-major little-endian `int64` dense vector. |
+| 27 | `float16_vector` | #1930 non-null row-major little-endian raw IEEE binary16-bit dense vector. |
+| 28 | `bfloat16_vector` | #1930 non-null row-major little-endian raw bfloat16-bit dense vector. |
+| 29 | `float64_vector` | #1930 non-null row-major little-endian IEEE-754 `float64` dense vector. |
 
 `uint32_list` descriptors must use `raw_uint32_offsets_list` encoding,
 `fixed_width_elements=0`, and uncompressed split offsets/value sections. `bytes`
@@ -531,8 +543,15 @@ descriptors must use `raw_bytes_offsets`, `fixed_width_elements=0`, and
 uncompressed split offsets/value sections whose values bytes are exact opaque
 payload bytes rather than text. Primitive scalar descriptors must use their
 matching `raw_*` encoding, `fixed_width_elements=0`, and uncompressed fixed-width
-payload sections (`rows * width` bytes). Readers must fail closed on unknown type
-codes rather than guessing a payload shape.
+payload sections (`rows * width` bytes). Dense numeric vector descriptors added
+by #1930 must use their matching raw vector encoding (`raw_uint8_vector`,
+`raw_int8_vector`, `raw_uint16_vector`, `raw_int16_vector`,
+`raw_uint32_vector`, `raw_int32_vector`, `raw_uint64_vector`,
+`raw_int64_vector`, `raw_float16_vector`, `raw_bfloat16_vector`, or
+`raw_float64_vector`), positive `fixed_width_elements`/`elements_per_row`, and
+uncompressed row-major payload sections (`rows * elements_per_row * width`
+bytes). Readers must fail closed on unknown type codes rather than guessing a
+payload shape.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
@@ -599,7 +618,12 @@ little-endian payload: `raw_int64` for `int64` (`rows * 8` bytes),
 `double`/`float64` (`rows * 8` IEEE-754 bits). Issue #1929 adds non-null
 primitive scalar payloads `raw_int8`, `raw_uint8`, `raw_int16`, `raw_uint16`,
 `raw_int32`, `raw_uint32`, `raw_uint64`, `raw_float16`, and `raw_bfloat16` with
-matching type codes above. Multi-byte primitive scalar values are little-endian;
+matching type codes above. Issue #1930 adds non-null dense numeric vector
+payloads `raw_uint8_vector`, `raw_int8_vector`, `raw_uint16_vector`,
+`raw_int16_vector`, `raw_uint32_vector`, `raw_int32_vector`,
+`raw_uint64_vector`, `raw_int64_vector`, `raw_float16_vector`,
+`raw_bfloat16_vector`, and `raw_float64_vector` with matching vector type codes
+above. Multi-byte primitive scalar and dense vector values are little-endian;
 `float16` and `bfloat16` are raw 16-bit bit payloads, not arithmetic codecs.
 Native scalar float payloads preserve raw bits exactly, including NaN payloads
 and signed zero. The legacy
@@ -687,7 +711,8 @@ As of the #1895 pre-alpha format update, newly written `typed_column_part` image
 carry a writer-built `layout_contract` section. The contract may mark only raw
 non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
 Issue `#1929` raw primitive scalar sections, fixed-dimension `raw_float32_vector`,
-explicit `raw_uint32_offsets_list`, and explicit `raw_bytes_offsets`
+Issue `#1930` raw dense numeric vector sections, explicit
+`raw_uint32_offsets_list`, and explicit `raw_bytes_offsets`
 typed-column payload sections as
 `DirectViewCertified`; the adapter-internal
 `__treedb_primary_id` row-locator column is not a declared-value direct-view

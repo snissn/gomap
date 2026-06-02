@@ -18,7 +18,7 @@ func TestColumnStorePrimitiveScalarValueTypesNormalizeAndFailClosed1929(t *testi
 			t.Fatalf("normalizeColumnStoreValueType(%s)=%s err=%v", valueType, got, err)
 		}
 	}
-	for _, valueType := range []ColumnStoreValueType{"int8_vector", "fixed_bytes", "packed_uint4_vector", "float64_vector"} {
+	for _, valueType := range []ColumnStoreValueType{"fixed_bytes", "packed_uint4_vector"} {
 		if _, err := normalizeColumnStoreValueType(valueType); err == nil || !strings.Contains(err.Error(), "unsupported value_type") {
 			t.Fatalf("normalizeColumnStoreValueType(%s) err=%v want unsupported", valueType, err)
 		}

@@ -37,8 +37,30 @@ func columnStoreSemanticLogicalType(valueType ColumnStoreValueType) (columnseman
 		return columnsemantics.LogicalFloat16, true
 	case ColumnStoreValueBFloat16:
 		return columnsemantics.LogicalBFloat16, true
+	case ColumnStoreValueUint8Vector:
+		return columnsemantics.LogicalUint8Vector, true
+	case ColumnStoreValueInt8Vector:
+		return columnsemantics.LogicalInt8Vector, true
+	case ColumnStoreValueUint16Vector:
+		return columnsemantics.LogicalUint16Vector, true
+	case ColumnStoreValueInt16Vector:
+		return columnsemantics.LogicalInt16Vector, true
+	case ColumnStoreValueUint32Vector:
+		return columnsemantics.LogicalUint32Vector, true
+	case ColumnStoreValueInt32Vector:
+		return columnsemantics.LogicalInt32Vector, true
+	case ColumnStoreValueUint64Vector:
+		return columnsemantics.LogicalUint64Vector, true
+	case ColumnStoreValueInt64Vector:
+		return columnsemantics.LogicalInt64Vector, true
+	case ColumnStoreValueFloat16Vector:
+		return columnsemantics.LogicalFloat16Vector, true
+	case ColumnStoreValueBFloat16Vector:
+		return columnsemantics.LogicalBFloat16Vector, true
 	case ColumnStoreValueFloat32Vector:
 		return columnsemantics.LogicalFloat32Vector, true
+	case ColumnStoreValueFloat64Vector:
+		return columnsemantics.LogicalFloat64Vector, true
 	case ColumnStoreValueUint32List:
 		return columnsemantics.LogicalUint32List, true
 	case ColumnStoreValueBytes:

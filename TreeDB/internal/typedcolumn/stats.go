@@ -714,7 +714,7 @@ func decodeStatsEncoding(code uint16) (Encoding, error) {
 	}
 	encoding := Encoding(code)
 	switch encoding {
-	case EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint, EncodingNullableInt64, EncodingBoolBitpackRLE, EncodingLowCardinalityUint32, EncodingRawFloat32Vector, EncodingRawUint32Dense, EncodingRawFloat32, EncodingRawFloat64, EncodingRawUint32OffsetsList, EncodingRawBytesOffsets, EncodingRawInt8, EncodingRawUint8, EncodingRawInt16, EncodingRawUint16, EncodingRawInt32, EncodingRawUint32, EncodingRawUint64, EncodingRawFloat16, EncodingRawBFloat16:
+	case EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint, EncodingNullableInt64, EncodingBoolBitpackRLE, EncodingLowCardinalityUint32, EncodingRawFloat32Vector, EncodingRawUint32Dense, EncodingRawFloat32, EncodingRawFloat64, EncodingRawUint32OffsetsList, EncodingRawBytesOffsets, EncodingRawInt8, EncodingRawUint8, EncodingRawInt16, EncodingRawUint16, EncodingRawInt32, EncodingRawUint32, EncodingRawUint64, EncodingRawFloat16, EncodingRawBFloat16, EncodingRawUint8Vector, EncodingRawInt8Vector, EncodingRawUint16Vector, EncodingRawInt16Vector, EncodingRawUint32Vector, EncodingRawInt32Vector, EncodingRawUint64Vector, EncodingRawInt64Vector, EncodingRawFloat16Vector, EncodingRawBFloat16Vector, EncodingRawFloat64Vector:
 		return encoding, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unknown column stats envelope encoding=%d", code)

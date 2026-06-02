@@ -50,6 +50,7 @@ type columnPhysicalRowReaderScratch struct {
 	Values        []columnDeclaredValue
 	Float32Values []float32
 	Uint32Values  []uint32
+	Bytes         []byte
 }
 
 // columnPhysicalRowReader is a bounded, row-oriented physical column reader.
@@ -484,6 +485,7 @@ func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowRea
 	scratch.Values = scratch.Values[:0]
 	scratch.Float32Values = scratch.Float32Values[:0]
 	scratch.Uint32Values = scratch.Uint32Values[:0]
+	scratch.Bytes = scratch.Bytes[:0]
 	if deleted {
 		if block.header.Operation != ColumnPublishOperationDelete {
 			return columnPhysicalRowReaderRow{}, fmt.Errorf("column physical asset %s row[%d] is marked deleted", block.header.Operation, rowIndex)
@@ -623,9 +625,11 @@ func skipColumnPhysicalValue(cur *manifestCursor, col ColumnStoreColumn) error {
 		if cur.err != nil {
 			return cur.err
 		}
-		if n != uint64(col.VectorDims) {
-			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", n, col.VectorDims)
+		if n != uint64(columnStoreFloat32VectorElementsPerRow(col)) {
+			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", n, columnStoreFloat32VectorElementsPerRow(col))
 		}
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		cur.skipDenseNumericVectorBytesWithExpectedLength(col)
 	case ColumnStoreValueUint32List:
 		_ = cur.skipUint32Slice()
 	case ColumnStoreValueAdjacencyList:
@@ -727,11 +731,19 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 	case ColumnStoreValueFloat32Vector:
 		start := len(scratch.Float32Values)
 		var err error
-		scratch.Float32Values, err = cur.appendFloat32SliceWithExpectedLengthAndEncoding(scratch.Float32Values, col.VectorDims, col.FixedWidthEncoding)
+		scratch.Float32Values, err = cur.appendFloat32SliceWithExpectedLengthAndEncoding(scratch.Float32Values, columnStoreFloat32VectorElementsPerRow(col), col.FixedWidthEncoding)
 		if err != nil {
 			return err
 		}
 		value.Float32Vector = scratch.Float32Values[start:]
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		start := len(scratch.Bytes)
+		var err error
+		scratch.Bytes, err = cur.appendDenseNumericVectorBytesWithExpectedLength(scratch.Bytes, col)
+		if err != nil {
+			return err
+		}
+		value.DenseNumericVector = scratch.Bytes[start:]
 	case ColumnStoreValueUint32List:
 		start := len(scratch.Uint32Values)
 		var err error
@@ -843,6 +855,24 @@ func columnPhysicalCopyLittleEndianFloat32Bytes(dst []float32, raw []byte) {
 	// changing the row reader's scratch-aliasing contract.
 	dstBytes := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(dst))), dstByteLen)
 	copy(dstBytes, raw)
+}
+
+func (c *manifestCursor) appendDenseNumericVectorBytesWithExpectedLength(dst []byte, col ColumnStoreColumn) ([]byte, error) {
+	value := c.denseNumericVectorBytesViewWithExpectedLength(col)
+	if c.err != nil {
+		return dst, c.err
+	}
+	base := len(dst)
+	need := base + len(value)
+	if cap(dst) < need {
+		next := make([]byte, need)
+		copy(next, dst)
+		dst = next
+	} else {
+		dst = dst[:need]
+	}
+	copy(dst[base:], value)
+	return dst, nil
 }
 
 func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {

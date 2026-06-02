@@ -56,7 +56,18 @@ drift from the runtime vocabulary strings.
 | `ColumnStoreValueUint64` | `uint64` | Quantization-ready primitive scalar compatibility name. |
 | `ColumnStoreValueFloat16` | `float16` | Storage-only raw IEEE binary16 bits compatibility name. |
 | `ColumnStoreValueBFloat16` | `bfloat16` | Storage-only raw bfloat16 bits compatibility name. |
+| `ColumnStoreValueUint8Vector` | `uint8_vector` | Dense row-major numeric vector compatibility name. |
+| `ColumnStoreValueInt8Vector` | `int8_vector` | Dense row-major numeric vector compatibility name. |
+| `ColumnStoreValueUint16Vector` | `uint16_vector` | Dense row-major numeric vector compatibility name. |
+| `ColumnStoreValueInt16Vector` | `int16_vector` | Dense row-major numeric vector compatibility name. |
+| `ColumnStoreValueUint32Vector` | `uint32_vector` | Dense row-major numeric vector compatibility name; distinct from `adjacency_list`. |
+| `ColumnStoreValueInt32Vector` | `int32_vector` | Dense row-major numeric vector compatibility name. |
+| `ColumnStoreValueUint64Vector` | `uint64_vector` | Dense row-major numeric vector compatibility name. |
+| `ColumnStoreValueInt64Vector` | `int64_vector` | Dense row-major numeric vector compatibility name. |
+| `ColumnStoreValueFloat16Vector` | `float16_vector` | Dense row-major raw float16-bit vector compatibility name. |
+| `ColumnStoreValueBFloat16Vector` | `bfloat16_vector` | Dense row-major raw bfloat16-bit vector compatibility name. |
 | `ColumnStoreValueFloat32Vector` | `float32_vector` | Legacy public declared-type compatibility name. |
+| `ColumnStoreValueFloat64Vector` | `float64_vector` | Dense row-major numeric vector compatibility name. |
 | `ColumnStoreValueUint32List` | `uint32_list` | Generic integer-list declared-type compatibility name. |
 | `ColumnStoreValueBytes` | `bytes` | Generic opaque byte-payload declared-type compatibility name. |
 | `ColumnStoreValueAdjacencyList` | `adjacency_list` | Legacy public declared-type compatibility name. |

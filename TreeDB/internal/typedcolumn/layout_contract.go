@@ -528,6 +528,14 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 	case EncodingRawFloat32Vector:
 		direct := def.Compression == CompressionNone && logicalType == "float32_vector" && def.Type == ColumnTypeFloat32Vector && def.FixedWidthElements > 0
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct, stats: direct, pruning: direct}
+	case EncodingRawUint8Vector, EncodingRawInt8Vector, EncodingRawUint16Vector, EncodingRawInt16Vector, EncodingRawUint32Vector, EncodingRawInt32Vector, EncodingRawUint64Vector, EncodingRawInt64Vector, EncodingRawFloat16Vector, EncodingRawBFloat16Vector, EncodingRawFloat64Vector:
+		width, ok := DenseFixedWidthVectorElementWidth(def.Type)
+		wantEncoding, encOK := DenseFixedWidthVectorEncoding(def.Type)
+		if !ok || !encOK || def.Encoding != wantEncoding || def.FixedWidthElements <= 0 {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
+		direct := def.Compression == CompressionNone && logicalType == string(def.Type)
+		return columnPartContractLayout{elementSize: width, alignment: width, endian: ColumnPartLayoutEndianLittle, lengthMultiple: width, direct: direct}
 	case EncodingRawUint32Dense:
 		// adjacency_list payload bytes are little-endian dense uint32, but certified
 		// adjacency direct views are deferred to #1901 for the active #1886 stack.

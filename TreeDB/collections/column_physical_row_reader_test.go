@@ -63,6 +63,45 @@ func TestColumnPhysicalRowReaderFetchesRowsWithBoundedCacheV1(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalRowReaderDenseVectorScratchResets1930(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{{Name: "codes", Path: "codes", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueUint16Vector, ElementsPerRow: 3}},
+	})
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	cfg.ActiveManifest = &ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 1}
+	cfg.RecoveryAuthoritativeManifest = &ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 1}
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	rows := []columnDeclaredRow{
+		{ID: []byte("doc-000"), Values: []columnDeclaredValue{{Type: ColumnStoreValueUint16Vector, Present: true, DenseNumericVector: []byte{1, 0, 2, 0, 3, 0}}}},
+		{ID: []byte("doc-001"), Values: []columnDeclaredValue{{Type: ColumnStoreValueUint16Vector, Present: true, DenseNumericVector: []byte{4, 0, 5, 0, 6, 0}}}},
+	}
+	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, cfg, 7, 1, rows)
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, cfg, ref), columnPhysicalRowReaderOptions{ProjectedColumns: []string{"codes"}, RequireInsertOnly: true})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnPhysicalRowReaderScratch
+	row, err := reader.FetchRow(0, &scratch)
+	if err != nil {
+		t.Fatalf("FetchRow(0): %v", err)
+	}
+	if got := row.Values[0].DenseNumericVector; !bytes.Equal(got, rows[0].Values[0].DenseNumericVector) || len(scratch.Bytes) != 6 {
+		t.Fatalf("row0 dense=%x scratch_bytes=%d", got, len(scratch.Bytes))
+	}
+	row, err = reader.FetchRow(1, &scratch)
+	if err != nil {
+		t.Fatalf("FetchRow(1): %v", err)
+	}
+	if got := row.Values[0].DenseNumericVector; !bytes.Equal(got, rows[1].Values[0].DenseNumericVector) || len(scratch.Bytes) != 6 {
+		t.Fatalf("row1 dense=%x scratch_bytes=%d want per-row scratch reset", got, len(scratch.Bytes))
+	}
+}
+
 func TestColumnPhysicalRowReaderFetchesLittleEndianFixedWidthRowsV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	normalized.Columns[1].FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
