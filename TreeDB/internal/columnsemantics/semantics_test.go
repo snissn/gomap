@@ -9,17 +9,17 @@ import (
 )
 
 func TestSemanticMatrixCoversCurrentLogicalTypesColumnTypesAndEncodings(t *testing.T) {
-	for _, logical := range []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalFloat32Vector, LogicalUint32List, LogicalBytes, LogicalAdjacencyList} {
+	for _, logical := range []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalInt8, LogicalUint8, LogicalInt16, LogicalUint16, LogicalInt32, LogicalUint32, LogicalUint64, LogicalFloat16, LogicalBFloat16, LogicalFloat32Vector, LogicalUint32List, LogicalBytes, LogicalAdjacencyList} {
 		if !IsKnownLogicalType(logical) {
 			t.Fatalf("logical type %q not covered", logical)
 		}
 	}
-	for _, columnType := range []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeUint32List, typedcolumn.ColumnTypeBytes, typedcolumn.ColumnTypeAdjacencyList} {
+	for _, columnType := range []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeInt8, typedcolumn.ColumnTypeUint8, typedcolumn.ColumnTypeInt16, typedcolumn.ColumnTypeUint16, typedcolumn.ColumnTypeInt32, typedcolumn.ColumnTypeUint32, typedcolumn.ColumnTypeUint64, typedcolumn.ColumnTypeFloat16, typedcolumn.ColumnTypeBFloat16, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeUint32List, typedcolumn.ColumnTypeBytes, typedcolumn.ColumnTypeAdjacencyList} {
 		if !slices.Contains(ColumnTypes(), columnType) || !IsKnownColumnType(columnType) {
 			t.Fatalf("typedcolumn column type %q not covered", columnType)
 		}
 	}
-	for _, encoding := range []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64, typedcolumn.EncodingRawUint32OffsetsList, typedcolumn.EncodingRawBytesOffsets} {
+	for _, encoding := range []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64, typedcolumn.EncodingRawUint32OffsetsList, typedcolumn.EncodingRawBytesOffsets, typedcolumn.EncodingRawInt8, typedcolumn.EncodingRawUint8, typedcolumn.EncodingRawInt16, typedcolumn.EncodingRawUint16, typedcolumn.EncodingRawInt32, typedcolumn.EncodingRawUint32, typedcolumn.EncodingRawUint64, typedcolumn.EncodingRawFloat16, typedcolumn.EncodingRawBFloat16} {
 		if !slices.Contains(Encodings(), encoding) || !IsKnownEncoding(encoding) {
 			t.Fatalf("typedcolumn encoding %s not covered", encoding)
 		}
@@ -130,6 +130,61 @@ func TestCapabilityNativeScalarFloatMatrixPreservesCarrierButDefersNumericSemant
 			cap := CapabilityFor(desc, op)
 			if cap.Status != StatusUnsupported || cap.Reason != ReasonNativeFloatLayoutMissing || !strings.Contains(cap.Message, "NaN") || !strings.Contains(cap.Message, "signed-zero") {
 				t.Fatalf("%s %s capability=%+v want explicit native-float numeric deferral", tc.logical, op, cap)
+			}
+		}
+	}
+}
+
+func TestCapabilityPrimitiveScalarSemantics1929(t *testing.T) {
+	integerCases := []struct {
+		logical  LogicalType
+		physical typedcolumn.ColumnType
+		encoding typedcolumn.Encoding
+		stats    bool
+	}{
+		{LogicalInt8, typedcolumn.ColumnTypeInt8, typedcolumn.EncodingRawInt8, true},
+		{LogicalUint8, typedcolumn.ColumnTypeUint8, typedcolumn.EncodingRawUint8, true},
+		{LogicalInt16, typedcolumn.ColumnTypeInt16, typedcolumn.EncodingRawInt16, true},
+		{LogicalUint16, typedcolumn.ColumnTypeUint16, typedcolumn.EncodingRawUint16, true},
+		{LogicalInt32, typedcolumn.ColumnTypeInt32, typedcolumn.EncodingRawInt32, true},
+		{LogicalUint32, typedcolumn.ColumnTypeUint32, typedcolumn.EncodingRawUint32, true},
+		{LogicalUint64, typedcolumn.ColumnTypeUint64, typedcolumn.EncodingRawUint64, false},
+	}
+	for _, tc := range integerCases {
+		desc := Descriptor{Logical: tc.logical, Physical: tc.physical, Encoding: tc.encoding}
+		for _, op := range []Operation{OpAllRows, OpEquality, OpOrderedRange, OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpDirectScalarValueCarrier} {
+			if cap := CapabilityFor(desc, op); cap.Status != StatusSupported {
+				t.Fatalf("%s %s capability=%+v want supported", tc.logical, op, cap)
+			}
+		}
+		for _, op := range []Operation{OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange} {
+			cap := CapabilityFor(desc, op)
+			if tc.stats && cap.Status != StatusSupported {
+				t.Fatalf("%s %s capability=%+v want int64-compatible stats/pruning support", tc.logical, op, cap)
+			}
+			if !tc.stats && cap.Status != StatusUnsupported {
+				t.Fatalf("%s %s capability=%+v want uint64 stats/pruning deferred", tc.logical, op, cap)
+			}
+		}
+	}
+
+	for _, tc := range []struct {
+		logical  LogicalType
+		physical typedcolumn.ColumnType
+		encoding typedcolumn.Encoding
+	}{
+		{LogicalFloat16, typedcolumn.ColumnTypeFloat16, typedcolumn.EncodingRawFloat16},
+		{LogicalBFloat16, typedcolumn.ColumnTypeBFloat16, typedcolumn.EncodingRawBFloat16},
+	} {
+		desc := Descriptor{Logical: tc.logical, Physical: tc.physical, Encoding: tc.encoding}
+		for _, op := range []Operation{OpAllRows, OpCountRows, OpCountNonNull, OpDirectScalarValueCarrier} {
+			if cap := CapabilityFor(desc, op); cap.Status != StatusSupported {
+				t.Fatalf("%s %s capability=%+v want storage carrier support", tc.logical, op, cap)
+			}
+		}
+		for _, op := range []Operation{OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange} {
+			if cap := CapabilityFor(desc, op); cap.Status != StatusUnsupported || cap.Reason != ReasonNativeFloatLayoutMissing {
+				t.Fatalf("%s %s capability=%+v want storage-only numeric fail-closed", tc.logical, op, cap)
 			}
 		}
 	}

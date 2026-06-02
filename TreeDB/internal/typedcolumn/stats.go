@@ -338,7 +338,7 @@ func buildInt64BlockStats(reader *GranuleReader, columnType ColumnType, index in
 		return Int64BlockStats{}, fmt.Errorf("value count=%d from rows=%d nulls=%d defaults=%d", stats.ValueCount, stats.RowCount, g.NullCount, g.DefaultCount)
 	}
 	if g.NullCount != 0 || g.DefaultCount != 0 {
-		return Int64BlockStats{}, fmt.Errorf("non-null int64 stats got null/default counts %d/%d", g.NullCount, g.DefaultCount)
+		return Int64BlockStats{}, fmt.Errorf("non-null int64-compatible integer stats for %s got null/default counts %d/%d", columnType, g.NullCount, g.DefaultCount)
 	}
 	values, err := reader.DecodeIntegerAsInt64Into(nil, columnType, g)
 	if err != nil {

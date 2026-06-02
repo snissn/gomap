@@ -2210,6 +2210,9 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 		}
 		return values, diag, nil
 	}
+	if typedColumnAdapterPrimitiveScalarColumnType(column.Definition.Type) {
+		return p.scanPrimitiveScalarColumnValuesRows(column, rows)
+	}
 	switch column.Field.ValueType {
 	case ColumnStoreValueString, ColumnStoreValueInt64, ColumnStoreValueBool:
 	default:

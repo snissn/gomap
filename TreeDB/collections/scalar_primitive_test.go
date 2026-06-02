@@ -112,6 +112,28 @@ func TestTypedColumnAdapterPrimitiveScalarRoundTrip1929(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterPrimitiveScalarSelectedRows1929(t *testing.T) {
+	for _, tc := range primitiveScalarRoundTripCases1929() {
+		t.Run(string(tc.valueType), func(t *testing.T) {
+			field := typedColumnAdapterField("v", tc.valueType)
+			part := typedColumnAdapterBuildPart(t, field, tc.values)
+			got, diag, err := part.scanColumnValuesRows(field.Name, []int{1})
+			if err != nil {
+				t.Fatalf("scanColumnValuesRows: %v", err)
+			}
+			assertPrimitiveScalarDeclaredValuesEqual1929(t, got, tc.values[1:])
+			if diag.RowsScanned != 1 || diag.ColumnsProjected != 1 || diag.BlocksDecoded != 1 || diag.BytesDecoded == 0 {
+				t.Fatalf("selected-row diagnostics=%+v want one decoded primitive scalar block", diag)
+			}
+
+			empty, emptyDiag, err := part.scanColumnValuesRows(field.Name, []int{})
+			if err != nil || len(empty) != 0 || emptyDiag.RowsScanned != 0 || emptyDiag.ColumnsProjected != 1 {
+				t.Fatalf("empty selected-row scan values=%+v diagnostics=%+v err=%v", empty, emptyDiag, err)
+			}
+		})
+	}
+}
+
 func TestColumnPhysicalAssetPrimitiveScalarEncodeDecodeIdentity1929(t *testing.T) {
 	columns := make([]ColumnStoreColumn, 0, len(primitiveScalarRoundTripCases1929()))
 	rowValues := make([]columnDeclaredValue, 0, len(primitiveScalarRoundTripCases1929()))
