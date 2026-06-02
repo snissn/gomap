@@ -342,10 +342,10 @@ hash, and reconstruction/full-data caveats. Prepared cells are collected in a
 separate `jsonbench_cell_report` stage after query-phase profiles finish, so the
 query CPU/allocation profiles and `BenchmarkColumnStoreSuite*` query-loop
 benchmarks remain scoped to the original measured query loop. These rows are
-gomap-local smoke coverage; external `snissn/JSONBench` cells remain a separate
-coordination item. Until #2117 and #2118 land, the report must keep full-data
-retained-JSON and apples-to-apples storage-accounting caveats visible and must
-not be used as a headline ClickHouse full-data comparison.
+gomap-local smoke coverage. The external `snissn/JSONBench` harness owns
+full-data retained-JSON/reconstruction parity (#2117) and apples-to-apples
+storage accounting (#2118), so headline ClickHouse/full-data claims require a
+fresh external JSONBench run against the selected gomap dependency.
 
 PR descriptions for column-store milestones should paste the command, row count,
 profile, forced path, q1-q5/q5_metadata rows/sec, MiB/sec, ns/row,

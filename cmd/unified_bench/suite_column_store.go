@@ -67,8 +67,8 @@ const (
 	columnStoreJSONBenchModePrepared               = "prepared"
 	columnStoreJSONBenchMutationInsertOnlyReopen   = "insert_only_checkpoint_reopen"
 	columnStoreJSONBenchSyntheticFixtureCaveat     = "in-repo synthetic JSONBench-shaped fixture; not an external full-data JSONBench run"
-	columnStoreJSONBenchFullDataCaveat             = "not a full-data retained-JSON parity cell; full retained JSON plus reconstruction parity is tracked by #2117"
-	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local and not an apples-to-apples ClickHouse comparison until #2118 fields are available"
+	columnStoreJSONBenchFullDataCaveat             = "not an external full-data retained-JSON parity run; #2117 full retained JSON plus reconstruction parity is implemented in the JSONBench TreeDB harness"
+	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local synthetic evidence; #2118 apples-to-apples storage fields are implemented and require an external JSONBench run for headline ClickHouse comparison"
 )
 
 type columnStoreSuitePathAlias struct {
@@ -726,7 +726,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		},
 		ProductionScope:          "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M14B planner-routed physical query execution",
 		PhysicalColumnQuery:      "M14B routes forced serial and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable for q4b and q5_metadata through typed aggregate metadata assets and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
-		ExternalJSONBenchStatus:  "gomap-only synthetic report cells are implemented here; external snissn/JSONBench column-direct/column-prepared cells require separate coordination",
+		ExternalJSONBenchStatus:  "gomap-only synthetic report cells are implemented here; external snissn/JSONBench full-data and comparison cells are implemented separately and require a fresh run against the selected gomap dependency",
 		ReportCaveats:            columnStoreReportCaveats(),
 		ColgranuleReuseMap:       columnStoreColgranuleReuseMap(),
 		ColumnAssetReadIntegrity: string(assetReadIntegrity),
@@ -2461,7 +2461,7 @@ func columnStoreReconstructionStatus(cfg *collections.ColumnStoreConfig) string 
 	if cfg == nil || cfg.Reconstruction == "" {
 		return "not_configured"
 	}
-	return fmt.Sprintf("configured_%s; full JSONBench retained-document reconstruction parity is tracked by #2117", cfg.Reconstruction)
+	return fmt.Sprintf("configured_%s; #2117 full JSONBench retained-document reconstruction parity is implemented in the external JSONBench TreeDB harness", cfg.Reconstruction)
 }
 
 func columnStoreColumnOwnerLabelValue(col collections.ColumnStoreColumn) collections.TypedStorageFieldOwner {
@@ -2517,7 +2517,7 @@ func columnStoreReportCaveats() []string {
 		columnStoreJSONBenchSyntheticFixtureCaveat,
 		columnStoreJSONBenchFullDataCaveat,
 		columnStoreJSONBenchStorageCaveat,
-		"external snissn/JSONBench column-direct/column-prepared cells are a coordination item outside this gomap-only PR",
+		"external snissn/JSONBench full-data and comparison cells are implemented separately and must be rerun against the selected gomap dependency before headline ClickHouse claims",
 		"current production default compression remains none; zstd/zstd_dict rows are unsupported/deferred report rows only",
 	}
 }
@@ -2527,7 +2527,7 @@ func columnStoreColgranuleReuseMap() []columnStoreColgranuleReuse {
 		{Source: "experiments/colgranule/jsonbench_split_document.go", ProductionTarget: "TreeDB/collections ColumnRetainedPayloadFromJSONDocument plus cmd/unified_bench synthetic fixture", Decision: "adapted", DivergenceReason: "gomap suite uses generated synthetic documents instead of external JSONBench input", Evidence: "retained_payload_bytes, retained_payload_policy, and full_data_caveat are reported per cell"},
 		{Source: "experiments/colgranule/jsonbench_part_queries.go", ProductionTarget: "TreeDB/collections RunColumnPhysicalQuery/PrepareColumnPhysicalQuery and cmd/unified_bench query matrix", Decision: "adapted", DivergenceReason: "production APIs own direct/prepared execution; experiments remain reference only", Evidence: "jsonbench_cells record direct/prepared mode, scan path, storage source, hashes, rows, and timing fields"},
 		{Source: "experiments/colgranule/jsonbench_report.go", ProductionTarget: "cmd/unified_bench/column_store_results.{json,md,html}", Decision: "adapted", DivergenceReason: "unified_bench keeps native TreeDB artifact names and benchprof integration", Evidence: "report shape tests require query, sort layout, source, mode, compression, mutation, owner, row count, and caveat labels"},
-		{Source: "experiments/colgranule/jsonbench_part_build_report.go", ProductionTarget: "cmd/unified_bench byte_accounting and codec_layouts", Decision: "adapted", DivergenceReason: "#2118 owns final apples-to-apples full storage accounting", Evidence: "storage_accounting_caveat, column_asset_bytes, retained_payload_bytes, codec_layouts, and compression_attribution remain machine-readable"},
+		{Source: "experiments/colgranule/jsonbench_part_build_report.go", ProductionTarget: "cmd/unified_bench byte_accounting and codec_layouts", Decision: "adapted", DivergenceReason: "#2118 implements external apples-to-apples full storage accounting; gomap synthetic reports remain local smoke evidence", Evidence: "storage_accounting_caveat, column_asset_bytes, retained_payload_bytes, codec_layouts, and compression_attribution remain machine-readable"},
 		{Source: "experiments/colgranule/part_accounting.go and part_image.go", ProductionTarget: "TreeDB/collections ColumnStorePhysicalAccounting plus codec/layout matrix", Decision: "ported", DivergenceReason: "production accounting comes from persisted column assets and typed_column_part details", Evidence: "typed_column_part codec rows and unsupported zstd rows surface when accounting is available"},
 	}
 }
