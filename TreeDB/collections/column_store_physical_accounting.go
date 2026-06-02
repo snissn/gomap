@@ -173,11 +173,15 @@ type ColumnStoreTypedColumnCompressionAccounting struct {
 // ColumnStoreTypedColumnPartSectionAccounting reports one serialized section in
 // a typed-column part image.
 type ColumnStoreTypedColumnPartSectionAccounting struct {
-	Kind     string `json:"kind"`
-	Category string `json:"category"`
-	Name     string `json:"name,omitempty"`
-	Column   string `json:"column,omitempty"`
-	Bytes    int64  `json:"bytes"`
+	Kind             string  `json:"kind"`
+	Category         string  `json:"category"`
+	Name             string  `json:"name,omitempty"`
+	Column           string  `json:"column,omitempty"`
+	Bytes            int64   `json:"bytes"`
+	Compression      string  `json:"compression,omitempty"`
+	RawBytes         int64   `json:"raw_bytes,omitempty"`
+	StoredBytes      int64   `json:"stored_bytes,omitempty"`
+	CompressionRatio float64 `json:"compression_ratio,omitempty"`
 }
 
 // ColumnStorePhysicalAccounting decodes active production column-store storage
@@ -421,12 +425,24 @@ func columnStoreTypedColumnPartImageAccounting(image typedcolumn.ColumnPartImage
 		sections := image.SectionByteAccounting()
 		out.SerializedSections = make([]ColumnStoreTypedColumnPartSectionAccounting, 0, len(sections))
 		for _, section := range sections {
+			rawBytes := int64(section.RawBytes)
+			storedBytes := int64(section.StoredBytes)
+			if rawBytes == 0 {
+				rawBytes = int64(section.Bytes)
+			}
+			if storedBytes == 0 {
+				storedBytes = int64(section.Bytes)
+			}
 			out.SerializedSections = append(out.SerializedSections, ColumnStoreTypedColumnPartSectionAccounting{
-				Kind:     string(section.Kind),
-				Category: string(section.Category),
-				Name:     section.Name,
-				Column:   section.Column,
-				Bytes:    int64(section.Bytes),
+				Kind:             string(section.Kind),
+				Category:         string(section.Category),
+				Name:             section.Name,
+				Column:           section.Column,
+				Bytes:            int64(section.Bytes),
+				Compression:      section.Compression.String(),
+				RawBytes:         rawBytes,
+				StoredBytes:      storedBytes,
+				CompressionRatio: columnStoreCompressionRatioInt64(storedBytes, rawBytes),
 			})
 		}
 	}
@@ -574,4 +590,11 @@ func addColumnStorePhysicalAccountingRows(left, right int) int {
 		return math.MaxInt
 	}
 	return left + right
+}
+
+func columnStoreCompressionRatioInt64(storedBytes, rawBytes int64) float64 {
+	if rawBytes <= 0 {
+		return 0
+	}
+	return float64(storedBytes) / float64(rawBytes)
 }

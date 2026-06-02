@@ -2637,10 +2637,43 @@ func TestRunColumnStoreSuiteTypedCompressionSurfacesTypedColumnPartCodecRowsM195
 	if err := json.Unmarshal(data, &report); err != nil {
 		t.Fatalf("unmarshal column_store_results.json: %v", err)
 	}
+	for _, q := range report.Queries {
+		if q.Name != columnStoreQueryQ1 {
+			t.Fatalf("unexpected query metric in q1-only typed compression run: %+v", q)
+		}
+		if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceTypedColumnPartSection) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+			t.Fatalf("compressed q1 query storage/fallback=%q/%q want typed-column part section/no fallback", q.StorageSource, q.FallbackReason)
+		}
+	}
+	for _, cell := range report.JSONBenchCells {
+		if cell.Query != columnStoreQueryQ1 {
+			t.Fatalf("unexpected JSONBench cell in q1-only typed compression run: %+v", cell)
+		}
+		if cell.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceTypedColumnPartSection) || cell.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) || cell.CompatibilityStatus != "available" || cell.MetadataDataScanPath != columnStoreJSONBenchScanPathData {
+			t.Fatalf("compressed q1 cell diagnostics=%+v want typed-column data path/no fallback", cell)
+		}
+	}
 	found := false
+	foundLocatorSection := false
+	foundDictionaryTarget := false
 	for _, row := range report.CodecLayouts {
 		attr := row.columnStoreCompressionAttribution
-		if !strings.HasPrefix(attr.CodecLayoutLabel, "typed_column_part/") || attr.CompressionPolicyLabel != "requested_snappy" {
+		if strings.HasPrefix(attr.CodecLayoutLabel, "typed_column_part/section/locators/") && attr.CompressionPolicyLabel == "requested_snappy" {
+			foundLocatorSection = true
+			if attr.RequestedCompression != "snappy" || attr.ActualCompression != "snappy" || attr.SupportState != columnStoreCompressionSupportSupported {
+				t.Fatalf("locator section attribution=%+v want requested/actual snappy supported", attr)
+			}
+			if attr.CompressedBytes <= 0 || attr.RawBytes <= attr.CompressedBytes || attr.DecompressedBytes != attr.RawBytes || attr.CompressionRatio <= 0 || attr.CompressionRatio >= 1 {
+				t.Fatalf("locator section bytes=%+v want compressed smaller than raw", attr)
+			}
+		}
+		if strings.HasPrefix(attr.CodecLayoutLabel, "typed_column_part/section/dictionaries/") && attr.CompressionPolicyLabel == "requested_snappy" {
+			foundDictionaryTarget = true
+			if attr.SupportState != columnStoreCompressionSupportDeferred || attr.ActualCompression != columnStoreCompressionNoneLabel || attr.SupportReason == "" {
+				t.Fatalf("dictionary section attribution=%+v want deferred target row", attr)
+			}
+		}
+		if !strings.HasPrefix(attr.CodecLayoutLabel, "typed_column_part/") || strings.Contains(attr.CodecLayoutLabel, "/section/") || attr.CompressionPolicyLabel != "requested_snappy" {
 			continue
 		}
 		found = true
@@ -2656,6 +2689,12 @@ func TestRunColumnStoreSuiteTypedCompressionSurfacesTypedColumnPartCodecRowsM195
 	}
 	if !found {
 		t.Fatalf("missing requested_snappy typed_column_part codec row in %+v", report.CodecLayouts)
+	}
+	if !foundLocatorSection {
+		t.Fatalf("missing requested_snappy locator section codec row in %+v", report.CodecLayouts)
+	}
+	if !foundDictionaryTarget {
+		t.Fatalf("missing requested_snappy dictionary section target row in %+v", report.CodecLayouts)
 	}
 }
 
@@ -2963,8 +3002,12 @@ func assertColumnStoreCompressionAttributionM1952(t testing.TB, label string, at
 	if !queryRow {
 		switch attr.SupportState {
 		case columnStoreCompressionSupportSupported:
-			if attr.CodecLayoutLabel != columnStoreCodecLayoutCurrent {
+			if attr.CodecLayoutLabel != columnStoreCodecLayoutCurrent && !strings.HasPrefix(attr.CodecLayoutLabel, "typed_column_part/") {
 				t.Fatalf("%s supported codec layout row labels=%+v", label, attr)
+			}
+		case columnStoreCompressionSupportDeferred:
+			if attr.SupportReason == "" || attr.CompressedBytes <= 0 || attr.RawBytes <= 0 || attr.DecompressedBytes <= 0 || attr.CompressionRatio <= 0 {
+				t.Fatalf("%s deferred codec layout row attribution=%+v", label, attr)
 			}
 		case columnStoreCompressionSupportUnsupported:
 			if attr.SupportReason == "" || attr.CompressedBytes != 0 || attr.RawBytes != 0 || attr.DecompressedBytes != 0 || attr.CompressionRatio != 0 {

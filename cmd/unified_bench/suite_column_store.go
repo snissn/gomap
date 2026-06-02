@@ -52,6 +52,7 @@ const (
 	columnStoreCompressionSupportSupported     = "supported"
 	columnStoreCompressionSupportNotApplicable = "not_applicable"
 	columnStoreCompressionSupportFallback      = "fallback"
+	columnStoreCompressionSupportDeferred      = "deferred"
 	columnStoreCompressionSupportUnsupported   = "unsupported"
 	columnStoreCompressionNoneLabel            = "none"
 
@@ -672,9 +673,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	jsonbenchCells, jsonbenchCellsErr := buildColumnStoreJSONBenchCells(collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames, queries, cfgForPath, retainedPayloadBytes)
 	stages = append(stages, columnStoreStage("jsonbench_cell_report", start, rows*len(queryNames), 0))
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
-	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{ReadIntegrity: assetReadIntegrity})
+	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: assetReadIntegrity})
 	codecLayouts := columnStoreCodecLayoutMetrics(rows, len(columnStoreSuiteConfigForPath(forcedPath).Columns), columnAssetBytes, physicalAccounting)
-	compressionMatrixNote := "current production default remains compression=none; snappy/lz4 rows appear when typed_column_part assets were explicitly published with those opt-in policies; zstd/zstd_dict are reported as unsupported/deferred despite enum names"
+	compressionMatrixNote := "current production default remains compression=none; snappy/lz4 rows appear when typed_column_part assets were explicitly published with those opt-in policies; locator section compression is benchmark-relaxed and opt-in only; dictionaries/pruning_metadata are reported as next byte targets but remain uncompressed/deferred without a section raw-length format gate; zstd/zstd_dict are reported as unsupported/deferred despite enum names"
 	if physicalAccountingErr != nil {
 		compressionMatrixNote += "; physical accounting unavailable: " + physicalAccountingErr.Error()
 	}
@@ -2518,7 +2519,7 @@ func columnStoreReportCaveats() []string {
 		columnStoreJSONBenchFullDataCaveat,
 		columnStoreJSONBenchStorageCaveat,
 		"external snissn/JSONBench full-data and comparison cells are implemented separately and must be rerun against the selected gomap dependency before headline ClickHouse claims",
-		"current production default compression remains none; zstd/zstd_dict rows are unsupported/deferred report rows only",
+		"current production default compression remains none; benchmark-relaxed locator section compression is opt-in only; dictionary/pruning section compression remains deferred; zstd/zstd_dict rows are unsupported/deferred report rows only",
 	}
 }
 
@@ -2528,7 +2529,8 @@ func columnStoreColgranuleReuseMap() []columnStoreColgranuleReuse {
 		{Source: "experiments/colgranule/jsonbench_part_queries.go", ProductionTarget: "TreeDB/collections RunColumnPhysicalQuery/PrepareColumnPhysicalQuery and cmd/unified_bench query matrix", Decision: "adapted", DivergenceReason: "production APIs own direct/prepared execution; experiments remain reference only", Evidence: "jsonbench_cells record direct/prepared mode, scan path, storage source, hashes, rows, and timing fields"},
 		{Source: "experiments/colgranule/jsonbench_report.go", ProductionTarget: "cmd/unified_bench/column_store_results.{json,md,html}", Decision: "adapted", DivergenceReason: "unified_bench keeps native TreeDB artifact names and benchprof integration", Evidence: "report shape tests require query, sort layout, source, mode, compression, mutation, owner, row count, and caveat labels"},
 		{Source: "experiments/colgranule/jsonbench_part_build_report.go", ProductionTarget: "cmd/unified_bench byte_accounting and codec_layouts", Decision: "adapted", DivergenceReason: "#2118 implements external apples-to-apples full storage accounting; gomap synthetic reports remain local smoke evidence", Evidence: "storage_accounting_caveat, column_asset_bytes, retained_payload_bytes, codec_layouts, and compression_attribution remain machine-readable"},
-		{Source: "experiments/colgranule/part_accounting.go and part_image.go", ProductionTarget: "TreeDB/collections ColumnStorePhysicalAccounting plus codec/layout matrix", Decision: "ported", DivergenceReason: "production accounting comes from persisted column assets and typed_column_part details", Evidence: "typed_column_part codec rows and unsupported zstd rows surface when accounting is available"},
+		{Source: "experiments/colgranule/part_accounting.go and part_image.go", ProductionTarget: "TreeDB/collections ColumnStorePhysicalAccounting plus codec/layout matrix", Decision: "ported", DivergenceReason: "production accounting comes from persisted column assets and typed_column_part details", Evidence: "typed_column_part codec rows, section byte-target rows, and unsupported zstd rows surface when accounting is available"},
+		{Source: "experiments/colgranule/granule.go admitCompressionInto keep-if-smaller", ProductionTarget: "TreeDB/internal/typedcolumn row locator section compression", Decision: "adapted", DivergenceReason: "section compression is limited to locator sections because their raw length is recoverable from existing manifest rows without a format bump", Evidence: "snappy/lz4 benchmark-relaxed locator rows report actual section compression; dictionaries/pruning_metadata stay deferred byte targets"},
 	}
 }
 
@@ -2996,6 +2998,16 @@ func columnStoreCodecLayoutMetrics(rows, columns int, physicalBytes int64, accou
 				Columns: part.Image.Columns,
 			})
 		}
+		for _, section := range part.Image.SerializedSections {
+			if !columnStoreTypedColumnPartSectionCodecTarget(section) {
+				continue
+			}
+			out = append(out, columnStoreCodecLayoutMetric{
+				columnStoreCompressionAttribution: columnStoreSectionCompressionAttribution(section),
+				Rows:                              part.Image.Rows,
+				Columns:                           part.Image.Columns,
+			})
+		}
 	}
 	return out
 }
@@ -3053,6 +3065,99 @@ func columnStoreUnsupportedCodecLayoutMetric(rows, columns int, compression stri
 		},
 		Rows:    rows,
 		Columns: columns,
+	}
+}
+
+func columnStoreTypedColumnPartSectionCodecTarget(section collections.ColumnStoreTypedColumnPartSectionAccounting) bool {
+	switch section.Category {
+	case "locators", "dictionaries", "pruning_metadata":
+		return true
+	default:
+		return false
+	}
+}
+
+func columnStoreSectionCompressionAttribution(section collections.ColumnStoreTypedColumnPartSectionAccounting) columnStoreCompressionAttribution {
+	requested := columnStoreSuiteRequestedTypedCompressionLabel()
+	actual := strings.TrimSpace(section.Compression)
+	if actual == "" {
+		actual = columnStoreCompressionNoneLabel
+	}
+	policyLabel := columnStoreCompressionPolicyLabel(requested)
+	supportState := columnStoreCompressionSupportSupported
+	supportReason := "typed_column_part section byte target currently stored uncompressed"
+	compressionDurationSource := "not_measured_current_default_none_section_reporting_placeholder"
+	decompressionDurationSource := "not_measured_current_default_none_no_section_decompression"
+	if section.Category == "locators" {
+		if requested != columnStoreCompressionNoneLabel && actual == columnStoreCompressionNoneLabel {
+			supportReason = "row locator section compression was requested but keep-if-smaller admission stored the raw section"
+			compressionDurationSource = "row_locator_section_compression_nanos_not_persisted"
+		} else if actual != columnStoreCompressionNoneLabel {
+			supportReason = "row locator section compressed under benchmark-relaxed typed compression opt-in"
+			compressionDurationSource = "row_locator_section_compression_nanos_not_persisted"
+			decompressionDurationSource = "row_locator_section_decompression_not_separated_from_part_image_decode"
+		}
+	} else if requested != columnStoreCompressionNoneLabel {
+		supportState = columnStoreCompressionSupportDeferred
+		supportReason = "dictionary/pruning section compression is deferred because current section metadata does not carry raw length for all requested codecs"
+		compressionDurationSource = "deferred_section_compression_not_run"
+		decompressionDurationSource = "deferred_section_decompression_not_run"
+	}
+	rawBytes := section.RawBytes
+	if rawBytes <= 0 {
+		rawBytes = section.Bytes
+	}
+	storedBytes := section.StoredBytes
+	if storedBytes <= 0 {
+		storedBytes = section.Bytes
+	}
+	return columnStoreCompressionAttribution{
+		CodecLayoutLabel:            "typed_column_part/section/" + section.Category + "/" + columnStoreSectionNameLabel(section),
+		CompressionPolicyLabel:      policyLabel,
+		RequestedCompression:        requested,
+		ActualCompression:           actual,
+		SupportState:                supportState,
+		SupportReason:               supportReason,
+		CompressedBytes:             storedBytes,
+		CompressedBytesSource:       "typed_column_part_byte_accounting.serialized_sections.stored_bytes",
+		RawBytes:                    rawBytes,
+		RawBytesSource:              "typed_column_part_byte_accounting.serialized_sections.raw_bytes",
+		DecompressedBytes:           rawBytes,
+		DecompressedBytesSource:     "typed_column_part_byte_accounting.serialized_sections.raw_bytes",
+		CompressionRatio:            columnStoreCompressionRatio(storedBytes, rawBytes),
+		CompressionRatioSource:      "typed_column_part_section_stored_bytes/raw_bytes",
+		CompressionDurationMS:       0,
+		CompressionDurationSource:   compressionDurationSource,
+		DecompressionDurationMS:     0,
+		DecompressionDurationSource: decompressionDurationSource,
+		BenchmarkBPerOp:             0,
+		BenchmarkAllocsPerOp:        0,
+		BenchmarkAllocationSource:   columnStoreBenchmarkAllocationSource(),
+	}
+}
+
+func columnStoreSectionNameLabel(section collections.ColumnStoreTypedColumnPartSectionAccounting) string {
+	if strings.TrimSpace(section.Name) != "" {
+		return section.Name
+	}
+	if strings.TrimSpace(section.Kind) != "" {
+		return section.Kind
+	}
+	return "unnamed"
+}
+
+func columnStoreSuiteRequestedTypedCompressionLabel() string {
+	switch strings.ToLower(strings.TrimSpace(*columnStoreSuiteTypedCompressionArg)) {
+	case "", "default", "none", "off", "compression_off":
+		return columnStoreCompressionNoneLabel
+	case "snappy":
+		return "snappy"
+	case "lz4":
+		return "lz4"
+	case "zstd", "zstd_dict", "zstd-dict":
+		return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(*columnStoreSuiteTypedCompressionArg)), "-", "_")
+	default:
+		return strings.ToLower(strings.TrimSpace(*columnStoreSuiteTypedCompressionArg))
 	}
 }
 

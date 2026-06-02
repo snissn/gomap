@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/golang/snappy"
+	"github.com/pierrec/lz4/v4"
 )
 
 const maxColumnPartImageStringBytes = 1 << 20
@@ -203,6 +206,9 @@ func parseColumnPartImage(data []byte, totalBytes int) (ColumnPartImage, error) 
 			Blocks:      int(blocks),
 			Encoding:    Encoding(encoding),
 			Compression: Compression(compression),
+		}
+		if err := validateImageSectionCompression(section); err != nil {
+			return ColumnPartImage{}, err
 		}
 		if err := validateImageSectionBounds(section, int(manifestBytes), totalBytes); err != nil {
 			return ColumnPartImage{}, err
@@ -1493,7 +1499,10 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 	if err != nil {
 		return nil, err
 	}
-	data := image.sectionBytes(section)
+	data, err := image.rowLocatorSectionBytes(section)
+	if err != nil {
+		return nil, err
+	}
 	if len(data) < 4 {
 		return nil, fmt.Errorf("typedcolumn: truncated row locators section bytes=%d", len(data))
 	}
@@ -2350,6 +2359,67 @@ func (i ColumnPartImage) sectionBytes(section ColumnPartImageSection) []byte {
 	return i.Bytes[section.Offset : section.Offset+section.Length]
 }
 
+func (i ColumnPartImage) rowLocatorSectionBytes(section ColumnPartImageSection) ([]byte, error) {
+	if section.Rows != i.Rows {
+		return nil, fmt.Errorf("typedcolumn: row locator section rows=%d want image rows=%d", section.Rows, i.Rows)
+	}
+	rawBytes, err := rowLocatorSectionRawBytes(section.Rows)
+	if err != nil {
+		return nil, err
+	}
+	return i.sectionBytesWithKnownRawLength(section, rawBytes, "row locators")
+}
+
+func rowLocatorSectionRawBytes(rows int) (int, error) {
+	if rows < 0 {
+		return 0, fmt.Errorf("typedcolumn: row locator section rows=%d is negative", rows)
+	}
+	recordBytes, err := checkedMulInt(rows, rowLocatorBytes, "row locator section bytes")
+	if err != nil {
+		return 0, err
+	}
+	return checkedAddInt(4, recordBytes, "row locator section bytes")
+}
+
+func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageSection, rawBytes int, label string) ([]byte, error) {
+	payload := i.sectionBytes(section)
+	switch section.Compression {
+	case CompressionNone:
+		if len(payload) != rawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s section bytes=%d want raw bytes=%d", label, len(payload), rawBytes)
+		}
+		return payload, nil
+	case CompressionSnappy:
+		decodedLen, err := snappy.DecodedLen(payload)
+		if err != nil {
+			return nil, fmt.Errorf("typedcolumn: %s snappy decoded length: %w", label, err)
+		}
+		if decodedLen != rawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s snappy decoded length=%d want=%d", label, decodedLen, rawBytes)
+		}
+		out, err := snappy.Decode(make([]byte, decodedLen), payload)
+		if err != nil {
+			return nil, fmt.Errorf("typedcolumn: %s snappy decode: %w", label, err)
+		}
+		if len(out) != rawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s snappy decoded length=%d want=%d", label, len(out), rawBytes)
+		}
+		return out, nil
+	case CompressionLZ4:
+		out := make([]byte, rawBytes)
+		n, err := lz4.UncompressBlock(payload, out)
+		if err != nil {
+			return nil, fmt.Errorf("typedcolumn: %s lz4 decode: %w", label, err)
+		}
+		if n != rawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s lz4 decoded length=%d want=%d", label, n, rawBytes)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("typedcolumn: %s section compression=%s is unsupported", label, section.Compression)
+	}
+}
+
 func (i ColumnPartImage) validateForRead() error {
 	if i.TotalBytes() == 0 {
 		return fmt.Errorf("typedcolumn: empty part image")
@@ -2370,6 +2440,9 @@ func (i ColumnPartImage) validateForRead() error {
 		if err := validateImageSectionCategory(section.Kind, section.Category); err != nil {
 			return err
 		}
+		if err := validateImageSectionCompression(section); err != nil {
+			return err
+		}
 		if err := validateImageSectionBounds(section, i.ManifestBytes, len(i.Bytes)); err != nil {
 			return err
 		}
@@ -2381,6 +2454,23 @@ func (i ColumnPartImage) validateForRead() error {
 		return err
 	}
 	return nil
+}
+
+func validateImageSectionCompression(section ColumnPartImageSection) error {
+	switch section.Kind {
+	case ColumnPartImageSectionColumnData, ColumnPartImageSectionRowLocators:
+		switch section.Compression {
+		case CompressionNone, CompressionSnappy, CompressionLZ4:
+			return nil
+		default:
+			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported", section.Kind, section.Compression)
+		}
+	default:
+		if section.Compression != CompressionNone {
+			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported without section raw-length metadata", section.Kind, section.Compression)
+		}
+		return nil
+	}
 }
 
 func validateImageSectionBounds(section ColumnPartImageSection, manifestBytes int, totalBytes int) error {

@@ -58,6 +58,10 @@ type ColumnPartImageOptions struct {
 	LayoutLogicalTypes  map[string]string
 	DictionaryOrder     map[string]bool
 	DictionaryCollation map[string]string
+	// SectionCompression is an internal, benchmark-relaxed section compression
+	// policy. It is intentionally limited to sections whose raw length can be
+	// recovered from existing manifest fields without a TCIM/TCS1 format change.
+	SectionCompression Compression
 }
 
 type ColumnPartImage struct {
@@ -84,11 +88,14 @@ type ColumnPartImageSection struct {
 }
 
 type ColumnPartImageSectionByteAccounting struct {
-	Kind     ColumnPartImageSectionKind     `json:"kind"`
-	Category ColumnPartImageSectionCategory `json:"category"`
-	Name     string                         `json:"name,omitempty"`
-	Column   string                         `json:"column,omitempty"`
-	Bytes    int                            `json:"bytes"`
+	Kind        ColumnPartImageSectionKind     `json:"kind"`
+	Category    ColumnPartImageSectionCategory `json:"category"`
+	Name        string                         `json:"name,omitempty"`
+	Column      string                         `json:"column,omitempty"`
+	Bytes       int                            `json:"bytes"`
+	Compression Compression                    `json:"compression,omitempty"`
+	RawBytes    int                            `json:"raw_bytes,omitempty"`
+	StoredBytes int                            `json:"stored_bytes,omitempty"`
 }
 
 func BuildColumnPartImage(part *ColumnPart, opts ColumnPartImageOptions) (ColumnPartImage, error) {
@@ -187,12 +194,21 @@ func (i ColumnPartImage) SectionByteAccounting() []ColumnPartImageSectionByteAcc
 		})
 	}
 	for _, section := range i.Sections {
+		rawBytes := section.Length
+		if section.Kind == ColumnPartImageSectionRowLocators {
+			if raw, err := rowLocatorSectionRawBytes(section.Rows); err == nil {
+				rawBytes = raw
+			}
+		}
 		out = append(out, ColumnPartImageSectionByteAccounting{
-			Kind:     section.Kind,
-			Category: section.Category,
-			Name:     section.Name,
-			Column:   section.Column,
-			Bytes:    section.Length,
+			Kind:        section.Kind,
+			Category:    section.Category,
+			Name:        section.Name,
+			Column:      section.Column,
+			Bytes:       section.Length,
+			Compression: section.Compression,
+			RawBytes:    rawBytes,
+			StoredBytes: section.Length,
 		})
 	}
 	return out
@@ -715,13 +731,13 @@ func (b *columnPartImageBuilder) addRowLocatorsSection() error {
 		enc.u32(uint32(locator.RowInGranule))
 		enc.u32(0)
 	}
-	b.appendSection(ColumnPartImageSection{
+	section := ColumnPartImageSection{
 		Kind:     ColumnPartImageSectionRowLocators,
 		Category: ColumnPartImageCategoryLocators,
 		Name:     "primary_id_locators",
 		Rows:     len(primaryIDs),
-	}, enc.bytes())
-	return nil
+	}
+	return b.appendSectionWithOptionalCompression(section, enc.bytes(), b.opts.SectionCompression)
 }
 
 func (b *columnPartImageBuilder) addAggregateMetadataSections() error {
@@ -1066,6 +1082,20 @@ func (b *columnPartImageBuilder) appendSection(section ColumnPartImageSection, d
 		section: section,
 		data:    data,
 	})
+}
+
+func (b *columnPartImageBuilder) appendSectionWithOptionalCompression(section ColumnPartImageSection, data []byte, compression Compression) error {
+	if compression == CompressionNone {
+		b.appendSection(section, data)
+		return nil
+	}
+	selection, err := admitCompressionInto(nil, data, 0, compression)
+	if err != nil {
+		return fmt.Errorf("typedcolumn: compress section %s/%s: %w", section.Kind, section.Name, err)
+	}
+	section.Compression = selection.Actual
+	b.appendSection(section, selection.Payload)
+	return nil
 }
 
 type dictionaryImageEntry struct {
