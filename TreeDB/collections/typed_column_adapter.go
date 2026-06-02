@@ -2299,13 +2299,19 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 }
 
 func (p *typedColumnAdapterPart) scanDenseNumericVectorColumnValuesRows(column typedColumnAdapterColumn, rows []int) ([]columnDeclaredValue, typedcolumn.PartScanDiagnostics, error) {
-	matrix, err := p.Part.DenseFixedWidthColumn(column.Definition.Name, nil)
+	var diag typedcolumn.PartScanDiagnostics
+	var err error
+	if rows == nil {
+		diag, err = p.scanColumnValuesRowsFullDiagnostics(column)
+	} else {
+		diag, err = p.scanColumnValuesRowsSelectedDiagnostics(column, rows)
+	}
 	if err != nil {
 		return nil, typedcolumn.PartScanDiagnostics{}, err
 	}
-	diag, err := p.scanColumnValuesRowsFullDiagnostics(column)
+	matrix, err := p.Part.DenseFixedWidthColumn(column.Definition.Name, nil)
 	if err != nil {
-		return nil, typedcolumn.PartScanDiagnostics{}, err
+		return nil, diag, err
 	}
 	if rows == nil {
 		out := make([]columnDeclaredValue, matrix.Rows)
@@ -2318,7 +2324,6 @@ func (p *typedColumnAdapterPart) scanDenseNumericVectorColumnValuesRows(column t
 		}
 		return out, diag, nil
 	}
-	diag.RowsScanned = len(rows)
 	out := make([]columnDeclaredValue, len(rows))
 	for i, rowIdx := range rows {
 		row, err := matrix.RowBytes(rowIdx)
@@ -2328,6 +2333,55 @@ func (p *typedColumnAdapterPart) scanDenseNumericVectorColumnValuesRows(column t
 		out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, DenseNumericVector: append([]byte(nil), row...)}
 	}
 	return out, diag, nil
+}
+
+func (p *typedColumnAdapterPart) scanColumnValuesRowsSelectedDiagnostics(column typedColumnAdapterColumn, rows []int) (typedcolumn.PartScanDiagnostics, error) {
+	diag := typedcolumn.PartScanDiagnostics{RowsScanned: len(rows), ColumnsProjected: 1, GranulesConsidered: len(p.Part.Descriptor.Granules)}
+	if err := typedColumnAdapterValidateSelectedRows(rows, p.Part.Descriptor.RowCount); err != nil {
+		return typedcolumn.PartScanDiagnostics{}, err
+	}
+	partColumn, ok := p.Part.Columns[column.Definition.Name]
+	if !ok {
+		return typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter missing column %q", column.Definition.Name)
+	}
+	coveredStart := -1
+	coveredEnd := -1
+	prevFirstGranule := -1
+	rowIndex := 0
+	for blockIdx, block := range partColumn.Blocks {
+		first := block.Descriptor.FirstRow
+		limit := first + block.Descriptor.RowCount
+		if first < 0 || block.Descriptor.RowCount < 0 || first > p.Part.Descriptor.RowCount-block.Descriptor.RowCount {
+			return diag, fmt.Errorf("collections: typed-column adapter column %q block %d rows %d..%d outside part rows=%d", column.Definition.Name, blockIdx, first, limit, p.Part.Descriptor.RowCount)
+		}
+		for rowIndex < len(rows) && rows[rowIndex] < first {
+			return diag, fmt.Errorf("collections: typed-column adapter selected row %d before block %d first row %d", rows[rowIndex], blockIdx, first)
+		}
+		start := rowIndex
+		for rowIndex < len(rows) && rows[rowIndex] < limit {
+			rowIndex++
+		}
+		if start == rowIndex {
+			continue
+		}
+		diag.BlocksDecoded++
+		diag.BytesDecoded += block.Granule.RawBytes
+		if block.Descriptor.FirstGranule < 0 || block.Descriptor.LastGranule < block.Descriptor.FirstGranule {
+			return diag, fmt.Errorf("collections: typed-column adapter invalid granule range %d..%d for column %q", block.Descriptor.FirstGranule, block.Descriptor.LastGranule, column.Definition.Name)
+		}
+		if prevFirstGranule >= 0 && block.Descriptor.FirstGranule < prevFirstGranule {
+			return diag, fmt.Errorf("collections: typed-column adapter granule ranges out of order for column %q: %d after %d", column.Definition.Name, block.Descriptor.FirstGranule, prevFirstGranule)
+		}
+		prevFirstGranule = block.Descriptor.FirstGranule
+		coveredStart, coveredEnd = typedColumnAdapterExtendGranuleCoverage(coveredStart, coveredEnd, block.Descriptor.FirstGranule, block.Descriptor.LastGranule, &diag.GranulesDecoded)
+	}
+	if coveredStart >= 0 {
+		diag.GranulesDecoded += coveredEnd - coveredStart + 1
+	}
+	if rowIndex != len(rows) {
+		return diag, fmt.Errorf("collections: typed-column adapter %d selected rows outside column %q blocks", len(rows)-rowIndex, column.Definition.Name)
+	}
+	return diag, nil
 }
 
 func (p *typedColumnAdapterPart) scanColumnValuesRowsFullDiagnostics(column typedColumnAdapterColumn) (typedcolumn.PartScanDiagnostics, error) {

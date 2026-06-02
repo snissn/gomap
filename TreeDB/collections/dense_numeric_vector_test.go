@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
@@ -78,6 +79,56 @@ func TestTypedColumnDenseNumericVectorAdapterRoundTripAllTypes1930(t *testing.T)
 	}
 }
 
+func TestTypedColumnFloat32VectorElementsPerRowCompatibility1930(t *testing.T) {
+	values := []columnDeclaredValue{
+		{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 2, 3}},
+		{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{4, 5, 6}},
+	}
+	cases := []struct {
+		name  string
+		field TypedStorageField
+	}{
+		{name: "legacy_vector_dims", field: typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)},
+		{name: "elements_per_row_alias", field: typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)},
+	}
+	cases[0].field.VectorDims = 3
+	cases[1].field.ElementsPerRow = 3
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := typedColumnAdapterRoundTrip(t, tc.field, values)
+			if len(got) != len(values) {
+				t.Fatalf("roundtrip rows=%d want %d", len(got), len(values))
+			}
+			for i := range got {
+				if got[i].Type != ColumnStoreValueFloat32Vector || !got[i].Present || !floatsEqual1930(got[i].Float32Vector, values[i].Float32Vector) {
+					t.Fatalf("row %d got=%+v want=%+v", i, got[i], values[i])
+				}
+			}
+			column, err := typedColumnAdapterMapField(tc.field)
+			if err != nil {
+				t.Fatalf("typedColumnAdapterMapField: %v", err)
+			}
+			if column.Definition.Type != typedcolumn.ColumnTypeFloat32Vector || column.Definition.Encoding != typedcolumn.EncodingRawFloat32Vector || column.Definition.FixedWidthElements != 3 {
+				t.Fatalf("definition=%+v want float32_vector/raw_float32_vector fixed_width_elements=3", column.Definition)
+			}
+		})
+	}
+}
+
+func TestTypedColumnFloat32VectorDimensionAliasFailClosed1930(t *testing.T) {
+	field := typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)
+	field.VectorDims = 3
+	field.ElementsPerRow = 4
+	if _, err := typedColumnProductionDefinitionForField(field); err == nil || !strings.Contains(err.Error(), "must match vector_dims") {
+		t.Fatalf("typedColumnProductionDefinitionForField err=%v want vector_dims/elements_per_row mismatch", err)
+	}
+
+	layout := TypedStorageLayout{Collection: "events", Fields: []TypedStorageField{{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3, ElementsPerRow: -1}}}
+	if _, err := NormalizeTypedStorageLayout(layout); err == nil || !strings.Contains(err.Error(), "elements_per_row: must be non-negative") {
+		t.Fatalf("NormalizeTypedStorageLayout err=%v want negative elements_per_row rejection", err)
+	}
+}
+
 func TestTypedColumnDenseNumericVectorSelectedRows1930(t *testing.T) {
 	field := typedColumnAdapterField("codes", ColumnStoreValueUint16Vector)
 	field.ElementsPerRow = 3
@@ -97,13 +148,13 @@ func TestTypedColumnDenseNumericVectorSelectedRows1930(t *testing.T) {
 		t.Fatalf("all-row diagnostics=%+v want decoded dense vector column", allDiag)
 	}
 
-	selected, selectedDiag, err := part.scanColumnValuesRows(field.Name, []int{2, 0})
+	selected, selectedDiag, err := part.scanColumnValuesRows(field.Name, []int{1})
 	if err != nil {
 		t.Fatalf("scanColumnValuesRows selected: %v", err)
 	}
-	assertDenseNumericVectorDeclaredValuesEqual1930(t, selected, []columnDeclaredValue{values[2], values[0]})
-	if selectedDiag.RowsScanned != 2 || selectedDiag.ColumnsProjected != 1 || selectedDiag.BytesDecoded == 0 {
-		t.Fatalf("selected diagnostics=%+v want decoded dense vector rows", selectedDiag)
+	assertDenseNumericVectorDeclaredValuesEqual1930(t, selected, []columnDeclaredValue{values[1]})
+	if selectedDiag.RowsScanned != 1 || selectedDiag.ColumnsProjected != 1 || selectedDiag.BlocksDecoded != 1 || selectedDiag.BytesDecoded == 0 {
+		t.Fatalf("selected diagnostics=%+v want one decoded dense vector row/block", selectedDiag)
 	}
 
 	decoded, decodedDiag, err := part.scanDecodedValuesSelectedRows(nil, nil)
@@ -207,12 +258,24 @@ func TestTypedColumnDenseNumericVectorJSONAndAdjacencyIsolation1930(t *testing.T
 	if uint32Column.Definition.Type != typedcolumn.ColumnTypeUint32Vector || uint32Column.Definition.Encoding != typedcolumn.EncodingRawUint32Vector {
 		t.Fatalf("uint32_vector definition=%+v want generic dense vector", uint32Column.Definition)
 	}
-	if cap, err := typedColumnAdapterCapability(uint32Column, columnsemantics.OpAdjacencyTraversal); err != nil || cap.Status == columnsemantics.StatusSupported {
-		t.Fatalf("uint32_vector adjacency capability=%+v err=%v want unsupported adjacency semantics", cap, err)
+	if cap, err := typedColumnAdapterCapability(uint32Column, columnsemantics.OpAdjacencyTraversal); err != nil || cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonOperationUnsupported {
+		t.Fatalf("uint32_vector adjacency capability=%+v err=%v want unsupported adjacency semantics reason=%s", cap, err, columnsemantics.ReasonOperationUnsupported)
 	}
 	if columnStoreValueTypeIsDenseNumericVector(ColumnStoreValueAdjacencyList) {
 		t.Fatal("adjacency_list must not be classified as a generic dense numeric vector")
 	}
+}
+
+func floatsEqual1930(got, want []float32) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func assertDenseNumericVectorDeclaredValuesEqual1930(t *testing.T, got, want []columnDeclaredValue) {

@@ -124,6 +124,43 @@ func TestDenseFixedWidthVectorValidationFailsClosed1930(t *testing.T) {
 	}
 }
 
+func TestEmptyFloat32VectorImageDefaultsEncoding1930(t *testing.T) {
+	sortKey := []SortKeyColumn{{Column: "id"}}
+	part := &ColumnPart{
+		Descriptor: ColumnPartDescriptor{
+			Version:           columnPartDescriptorVersion,
+			PartID:            193004,
+			SchemaVersion:     1,
+			LogicalPrimaryKey: []string{"id"},
+			SortKey:           sortKey,
+			Columns: []ColumnPartColumnDescriptor{
+				{Name: "id", Type: ColumnTypeInt64},
+				{Name: "embedding", Type: ColumnTypeFloat32Vector, FixedWidthElements: 3},
+			},
+		},
+		Columns: map[string]ColumnPartColumn{
+			"id":        {Definition: ColumnDefinition{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone}},
+			"embedding": {Definition: ColumnDefinition{Name: "embedding", Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, Compression: CompressionNone, FixedWidthElements: 3}},
+		},
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"embedding": string(ColumnTypeFloat32Vector)}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	reopened, err := ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	definition := reopened.Columns["embedding"].Definition
+	if definition.Encoding != EncodingRawFloat32Vector || definition.Compression != CompressionNone {
+		t.Fatalf("empty float32_vector definition=%+v want raw_float32_vector compression=none", definition)
+	}
+}
+
 func TestDenseFixedWidthVectorFloat32CompatibilityAndAdjacencyIsolation1930(t *testing.T) {
 	floatPart, err := BuildColumnPart(193003, Options{
 		SchemaVersion: 1,

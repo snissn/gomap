@@ -219,6 +219,13 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_layout: only adjacency_list fields may set adjacency_layout", name)
 			}
 			if valueType == ColumnStoreValueFloat32Vector {
+				if field.ElementsPerRow < 0 {
+					name := field.Name
+					if name == "" {
+						name = field.Path
+					}
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q elements_per_row: must be non-negative for float32_vector", name)
+				}
 				if field.VectorDims <= 0 && field.ElementsPerRow <= 0 {
 					name := field.Name
 					if name == "" {

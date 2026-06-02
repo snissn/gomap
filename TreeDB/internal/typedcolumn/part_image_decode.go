@@ -535,6 +535,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			case ColumnTypeInt8, ColumnTypeUint8, ColumnTypeInt16, ColumnTypeUint16, ColumnTypeInt32, ColumnTypeUint32, ColumnTypeUint64, ColumnTypeFloat16, ColumnTypeBFloat16:
 				column.Definition.Encoding = rawScalarEncodingForColumnType(columnType)
 				column.Definition.Compression = CompressionNone
+			case ColumnTypeFloat32Vector:
+				column.Definition.Encoding = EncodingRawFloat32Vector
+				column.Definition.Compression = CompressionNone
 			case ColumnTypeUint8Vector, ColumnTypeInt8Vector, ColumnTypeUint16Vector, ColumnTypeInt16Vector, ColumnTypeUint32Vector, ColumnTypeInt32Vector, ColumnTypeUint64Vector, ColumnTypeInt64Vector, ColumnTypeFloat16Vector, ColumnTypeBFloat16Vector, ColumnTypeFloat64Vector:
 				encoding, ok := DenseFixedWidthVectorEncoding(columnType)
 				if !ok {
