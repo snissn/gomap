@@ -35,6 +35,10 @@ type LeafGenerationPlanOptions struct {
 	MinExpectedReclaimRatioPPM int
 	MinReclaimPerByteCopiedPPM int
 	Force                      bool
+	// ProtectedRootIDs are additional root page IDs whose leaf-log children must
+	// be treated as live while planning maintenance. Empty uses the existing
+	// cached live-scan path.
+	ProtectedRootIDs []uint64
 }
 
 type LeafGenerationPlanGeneration struct {
@@ -108,7 +112,8 @@ type leafGenerationScanContext struct {
 }
 
 type leafGenerationLiveStatsScanOptions struct {
-	DisableCache bool
+	DisableCache     bool
+	ProtectedRootIDs []uint64
 }
 
 var leafGenerationLiveScanHook struct {
@@ -204,7 +209,7 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	plan.CurrentCommitSeq = snap.state.CommitSeq
 	plan.CurrentGenerationID = manifest.CurrentGenerationID
 
-	liveScan, err := db.leafGenerationLiveStatsForSnapshot(ctx, snap)
+	liveScan, err := db.leafGenerationLiveStatsForSnapshotWithProtectedRoots(ctx, snap, opts.ProtectedRootIDs)
 	if err != nil {
 		return plan, err
 	}
@@ -556,9 +561,23 @@ func (db *DB) leafGenerationLiveStatsForSnapshot(ctx context.Context, snap *Snap
 	return stats, nil
 }
 
+func (db *DB) leafGenerationLiveStatsForSnapshotWithProtectedRoots(ctx context.Context, snap *Snapshot, protectedRootIDs []uint64) (leafGenerationLiveScanStats, error) {
+	if len(protectedRootIDs) == 0 {
+		return db.leafGenerationLiveStatsForSnapshot(ctx, snap)
+	}
+	return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, protectedRootIDs)
+}
+
 func (db *DB) leafGenerationLiveStatsForSnapshotUncached(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {
+	return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, nil)
+}
+
+func (db *DB) leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx context.Context, snap *Snapshot, protectedRootIDs []uint64) (leafGenerationLiveScanStats, error) {
 	runLeafGenerationLiveScanHook()
-	return db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{DisableCache: true})
+	return db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{
+		DisableCache:     true,
+		ProtectedRootIDs: protectedRootIDs,
+	})
 }
 
 func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst leafGenerationSubtreeStats, ptr page.LeafLogPtr) (leafGenerationSubtreeStats, error) {
@@ -735,6 +754,27 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 	roots, err := maintenanceRootsForSnapshot(snap)
 	if err != nil {
 		return leafGenerationLiveScanStats{}, err
+	}
+	if len(opts.ProtectedRootIDs) > 0 {
+		seen := make(map[uint64]struct{}, len(roots)+len(opts.ProtectedRootIDs))
+		for _, root := range roots {
+			if root.rootID != 0 {
+				seen[root.rootID] = struct{}{}
+			}
+		}
+		for _, rootID := range opts.ProtectedRootIDs {
+			if rootID == 0 {
+				continue
+			}
+			if _, ok := seen[rootID]; ok {
+				continue
+			}
+			seen[rootID] = struct{}{}
+			roots = append(roots, maintenanceRoot{
+				kind:   maintenanceRootCollection,
+				rootID: rootID,
+			})
+		}
 	}
 	for _, root := range roots {
 		rootID := root.rootID

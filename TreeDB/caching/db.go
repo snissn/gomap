@@ -4463,7 +4463,7 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 		}
 	}
 	if hasLeafGenerationGC {
-		if _, err := leafGcer.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{}); err != nil {
+		if _, err := leafGcer.LeafGenerationGC(ctx, db.leafGenerationGCOptions()); err != nil {
 			return err
 		}
 	}
@@ -4571,6 +4571,53 @@ func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
 		ProtectedInUsePaths:    inUse,
 		ProtectedRetainedPaths: retained,
 	}
+}
+
+func (db *DB) leafGenerationGCOptions() backenddb.LeafGenerationGCOptions {
+	return backenddb.LeafGenerationGCOptions{
+		ProtectedRootIDs: db.publishedRootIDsForLeafGenerationGC(),
+	}
+}
+
+func (db *DB) ProtectedLeafGenerationRootIDs() []uint64 {
+	return db.publishedRootIDsForLeafGenerationGC()
+}
+
+func (db *DB) publishedRootIDsForLeafGenerationGC() []uint64 {
+	if db == nil {
+		return nil
+	}
+	db.mu.RLock()
+	published := clonePublishedRootSet(db.rootPublishedSet)
+	db.mu.RUnlock()
+	return publishedRootSetRootIDs(published)
+}
+
+func publishedRootSetRootIDs(set *publishedRootSet) []uint64 {
+	if set == nil {
+		return nil
+	}
+	roots := make([]uint64, 0, len(set.pointShards)+2)
+	var seen map[uint64]struct{}
+	add := func(rootID uint64) {
+		if rootID == 0 {
+			return
+		}
+		if seen == nil {
+			seen = make(map[uint64]struct{}, len(set.pointShards)+2)
+		}
+		if _, ok := seen[rootID]; ok {
+			return
+		}
+		seen[rootID] = struct{}{}
+		roots = append(roots, rootID)
+	}
+	for i := range set.pointShards {
+		add(set.pointShards[i].rootID)
+	}
+	add(set.system.rootID)
+	add(set.iterator.rootID)
+	return roots
 }
 
 // valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
@@ -4682,6 +4729,14 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 				reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
 				leafCtx, leafCancel := db.foregroundWriteResumeContext(lastWrite, 0)
 				defer leafCancel()
+				maintenanceRootIDs, err := backenddb.CollectMaintenanceRootIDsWithContext(leafCtx, p, reader, state)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						err = errForegroundWritesResumed
+					}
+					_ = snap.Close()
+					return nil, err
+				}
 				if state.RootPageID != 0 {
 					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
 						_ = snap.Close()
@@ -4716,7 +4771,7 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, err
 				}
-				if err := db.collectPublishedRootValueLogLiveIDsUntil(leafCtx, p, reader, publishedRoots, state.RootPageID, state.SystemRootPageID, live, lastWrite); err != nil {
+				if err := db.collectPublishedRootValueLogLiveIDsUntil(leafCtx, p, reader, publishedRoots, state.RootPageID, state.SystemRootPageID, maintenanceRootIDs, live, lastWrite); err != nil {
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
@@ -4750,11 +4805,15 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 	return live, nil
 }
 
-func (db *DB) collectPublishedRootValueLogLiveIDsUntil(ctx context.Context, p *pager.Pager, reader tree.SlabReader, published *publishedRootSet, userRootID, systemRootID uint64, live map[uint32]struct{}, lastWrite int64) error {
-	if db == nil || p == nil || reader == nil || published == nil || live == nil {
+func (db *DB) collectPublishedRootValueLogLiveIDsUntil(ctx context.Context, p *pager.Pager, reader tree.SlabReader, published *publishedRootSet, userRootID, systemRootID uint64, maintenanceRootIDs []uint64, live map[uint32]struct{}, lastWrite int64) error {
+	if db == nil || p == nil || reader == nil || live == nil {
 		return nil
 	}
-	seenRoots := make(map[uint64]struct{}, len(published.pointShards)+1)
+	seenCap := len(maintenanceRootIDs) + 2
+	if published != nil {
+		seenCap += len(published.pointShards)
+	}
+	seenRoots := make(map[uint64]struct{}, seenCap)
 	scanRoot := func(rootID uint64) error {
 		if rootID == 0 || rootID == userRootID || rootID == systemRootID {
 			return nil
@@ -4771,13 +4830,23 @@ func (db *DB) collectPublishedRootValueLogLiveIDsUntil(ctx context.Context, p *p
 		}
 		return collectLeafRefValueLogLiveIDs(ctx, p, rootID, reader, live)
 	}
-	for i := range published.pointShards {
-		if err := scanRoot(published.pointShards[i].rootID); err != nil {
+	for _, rootID := range maintenanceRootIDs {
+		if err := scanRoot(rootID); err != nil {
 			return err
 		}
 	}
-	if err := scanRoot(published.iterator.rootID); err != nil {
-		return err
+	if published != nil {
+		for i := range published.pointShards {
+			if err := scanRoot(published.pointShards[i].rootID); err != nil {
+				return err
+			}
+		}
+		if err := scanRoot(published.system.rootID); err != nil {
+			return err
+		}
+		if err := scanRoot(published.iterator.rootID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -17603,9 +17672,10 @@ planned:
 				// Maintenance rewrites are throughput-sensitive and operate on large
 				// source segments; group rewrite candidates by old segment+offset to
 				// improve value-log read locality and reduce wall-time.
-				LocalityPolicy: backenddb.ValueLogRewriteLocalityGrouped,
-				ProtectedPaths: db.valueLogProtectedPaths(),
-				ReserveRIDs:    db.ReserveValueLogRIDs,
+				LocalityPolicy:                 backenddb.ValueLogRewriteLocalityGrouped,
+				ProtectedPaths:                 db.valueLogProtectedPaths(),
+				LeafGenerationProtectedRootIDs: db.publishedRootIDsForLeafGenerationGC(),
+				ReserveRIDs:                    db.ReserveValueLogRIDs,
 			}
 			processedRewriteIDs := []uint32(nil)
 			processedRewriteChunks := []backenddb.ValueLogRewritePlanChunk(nil)
@@ -22163,6 +22233,9 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 	}
 	l.vlogPath = path
 	l.vlogLiveBytes.Store(0)
+	if db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID {
+		l.vlogCreatedSegments = append(l.vlogCreatedSegments, laneValueLogSegment{path: path, fileID: fileID})
+	}
 	return nil
 }
 
@@ -24556,6 +24629,7 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 				MaxGenerations:             remainingGenerations,
 				MaxBytesToCopy:             remainingBytesToCopy,
 				ReserveRIDs:                db.ReserveValueLogRIDs,
+				ProtectedRootIDs:           db.publishedRootIDsForLeafGenerationGC(),
 			})
 			if runErr != nil {
 				return runErr
@@ -24614,7 +24688,7 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 			db.storeVlogGenerationLeafPackLastSkipReason("")
 
 			if gcRunner != nil {
-				gcStats, gcErr := gcRunner.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+				gcStats, gcErr := gcRunner.LeafGenerationGC(ctx, db.leafGenerationGCOptions())
 				if gcErr != nil {
 					return gcErr
 				}

@@ -929,6 +929,69 @@ func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) 
 	}
 }
 
+func TestCompactStoragePlan_ProtectedRootIDsKeepDetachedLeafGenerationLive(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	rootTable := mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+	rootID, err := d.PublishOrderedRootIterator(0, rootTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+	if rootID == 0 {
+		t.Fatal("expected non-zero detached root")
+	}
+	if state := d.State(); state.RootPageID == rootID || state.SystemRootPageID == rootID {
+		t.Fatalf("test requires detached root, got state roots user=%d system=%d detached=%d", state.RootPageID, state.SystemRootPageID, rootID)
+	}
+
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	refs := collectLeafRefIDsFromRoot(t, d, rootID)
+	refsFile := false
+	for ptr := range refs {
+		if ptr.FileID == rawFileID1 {
+			refsFile = true
+			break
+		}
+	}
+	if !refsFile {
+		t.Fatalf("detached root refs do not include raw file id %d: %+v", rawFileID1, refs)
+	}
+
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, d, "current", 1, 'z')
+
+	unprotectedPlan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan unprotected: %v", err)
+	}
+	if got := unprotectedPlan.RemainingDebt.LeafGCGenerations; got == 0 {
+		t.Fatalf("LeafGCGenerations=%d want detached generation eligible without protection (debt=%+v)", got, unprotectedPlan.RemainingDebt)
+	}
+
+	protectedPlan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		LeafGenerationProtectedRootIDs: []uint64{0, rootID, rootID},
+		LeafPackMaxPasses:              1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan protected: %v", err)
+	}
+	if got := protectedPlan.RemainingDebt.LeafGCGenerations; got != 0 {
+		t.Fatalf("protected LeafGCGenerations=%d want 0 (debt=%+v)", got, protectedPlan.RemainingDebt)
+	}
+	if got := protectedPlan.LeafGenerationGC.GenerationsEligible; got != 0 {
+		t.Fatalf("protected GenerationsEligible=%d want 0 (stats=%+v)", got, protectedPlan.LeafGenerationGC)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("expected protected leaf segment to remain: %v", err)
+	}
+	if got := collectLeafRefIDsFromRoot(t, d, rootID); len(got) == 0 {
+		t.Fatalf("expected detached root %d leaf refs to remain readable", rootID)
+	}
+}
+
 func compactStoragePhaseSeen(phases []CompactStoragePhaseStats, name string) bool {
 	for _, phase := range phases {
 		if phase.Name == name {

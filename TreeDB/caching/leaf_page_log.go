@@ -25,6 +25,71 @@ func newCachingLeafPageLog(db *DB, l *lane) backenddb.LeafPageLog {
 	return &cachingLeafPageLog{db: db, lane: l}
 }
 
+func (l *cachingLeafPageLog) ProtectedLeafGenerationRootIDs() []uint64 {
+	if l == nil || l.db == nil {
+		return nil
+	}
+	return l.db.publishedRootIDsForLeafGenerationGC()
+}
+
+func (l *cachingLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]backenddb.LeafPageLogSegment, error) {
+	if l == nil || l.lane == nil {
+		return nil, nil
+	}
+	lane := l.lane
+	lane.vlogMu.Lock()
+	defer lane.vlogMu.Unlock()
+	if len(lane.vlogCreatedSegments) == 0 {
+		return nil, nil
+	}
+	out := make([]backenddb.LeafPageLogSegment, 0, len(lane.vlogCreatedSegments))
+	seen := make(map[uint32]struct{}, len(lane.vlogCreatedSegments))
+	for _, seg := range lane.vlogCreatedSegments {
+		if seg.path == "" || seg.fileID == 0 {
+			continue
+		}
+		if _, ok := seen[seg.fileID]; ok {
+			continue
+		}
+		seen[seg.fileID] = struct{}{}
+		out = append(out, backenddb.LeafPageLogSegment{Path: seg.path, FileID: seg.fileID})
+	}
+	return out, nil
+}
+
+func (l *cachingLeafPageLog) MarkLeafPageLogSegmentsRegistered(segments []backenddb.LeafPageLogSegment) {
+	if l == nil || l.lane == nil || len(segments) == 0 {
+		return
+	}
+	registered := make(map[uint32]struct{}, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		registered[seg.FileID] = struct{}{}
+	}
+	if len(registered) == 0 {
+		return
+	}
+	lane := l.lane
+	lane.vlogMu.Lock()
+	defer lane.vlogMu.Unlock()
+	if len(lane.vlogCreatedSegments) == 0 {
+		return
+	}
+	dst := lane.vlogCreatedSegments[:0]
+	for _, seg := range lane.vlogCreatedSegments {
+		if _, ok := registered[seg.fileID]; ok {
+			continue
+		}
+		dst = append(dst, seg)
+	}
+	for i := len(dst); i < len(lane.vlogCreatedSegments); i++ {
+		lane.vlogCreatedSegments[i] = laneValueLogSegment{}
+	}
+	lane.vlogCreatedSegments = dst
+}
+
 func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	if db == nil || db.backend == nil || ptr.FileID == 0 || ptr.Offset == 0 {
 		return

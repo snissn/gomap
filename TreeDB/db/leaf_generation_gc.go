@@ -13,6 +13,11 @@ import (
 
 type LeafGenerationGCOptions struct {
 	DryRun bool
+
+	// ProtectedRootIDs are additional root page IDs whose leaf-log children must
+	// be treated as live even when they are not reachable from the backend meta
+	// roots. Cached named roots use this during online maintenance.
+	ProtectedRootIDs []uint64
 }
 
 type LeafGenerationGCStats struct {
@@ -78,7 +83,7 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		return stats, nil
 	}
 
-	liveGenerations, err := collectLiveLeafGenerationIDs(ctx, snap)
+	liveGenerations, err := collectLiveLeafGenerationIDs(ctx, snap, opts.ProtectedRootIDs)
 	if err != nil {
 		_ = snap.Close()
 		return stats, err
@@ -193,7 +198,7 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	return stats, nil
 }
 
-func collectLiveLeafGenerationIDs(ctx context.Context, snap *Snapshot) (map[uint64]struct{}, error) {
+func collectLiveLeafGenerationIDs(ctx context.Context, snap *Snapshot, protectedRootIDs []uint64) (map[uint64]struct{}, error) {
 	live := make(map[uint64]struct{})
 	if snap == nil || snap.db == nil {
 		return live, nil
@@ -201,7 +206,7 @@ func collectLiveLeafGenerationIDs(ctx context.Context, snap *Snapshot) (map[uint
 	// GC deletion must not trust cached subtree/live reachability. A stale cache
 	// can turn a live generation into a deletion candidate, while a fresh scan is
 	// maintenance-only work outside the write/read happy path.
-	scan, err := snap.db.leafGenerationLiveStatsForSnapshotUncached(ctx, snap)
+	scan, err := snap.db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, protectedRootIDs)
 	if err != nil {
 		return nil, err
 	}

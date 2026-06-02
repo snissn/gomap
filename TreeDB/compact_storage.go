@@ -114,6 +114,8 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	}
 	explicitProtectedPaths := append([]string(nil), opts.ValueLogProtectedPaths...)
 	userProtectedPathsFunc := opts.ValueLogProtectedPathsFunc
+	explicitProtectedRootIDs := append([]uint64(nil), opts.LeafGenerationProtectedRootIDs...)
+	userProtectedRootIDsFunc := opts.LeafGenerationProtectedRootIDsFunc
 	opts.ValueLogProtectedPathsFunc = func() []string {
 		var out []string
 		if userProtectedPathsFunc != nil {
@@ -122,7 +124,16 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 		out = appendCompactStorageProtectedPaths(out, db.cached.ValueLogProtectedPaths())
 		return out
 	}
+	opts.LeafGenerationProtectedRootIDsFunc = func() []uint64 {
+		var out []uint64
+		if userProtectedRootIDsFunc != nil {
+			out = appendCompactStorageProtectedRootIDs(out, userProtectedRootIDsFunc())
+		}
+		out = appendCompactStorageProtectedRootIDs(out, db.cached.ProtectedLeafGenerationRootIDs())
+		return out
+	}
 	opts.ValueLogProtectedPaths = explicitProtectedPaths
+	opts.LeafGenerationProtectedRootIDs = explicitProtectedRootIDs
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 	}
@@ -133,6 +144,25 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 		}
 	}
 	return nil
+}
+
+func appendCompactStorageProtectedRootIDs(dst []uint64, src []uint64) []uint64 {
+	for _, rootID := range src {
+		if rootID == 0 {
+			continue
+		}
+		seen := false
+		for _, existing := range dst {
+			if existing == rootID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			dst = append(dst, rootID)
+		}
+	}
+	return dst
 }
 
 func appendCompactStorageProtectedPaths(dst []string, src []string) []string {

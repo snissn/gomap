@@ -31,6 +31,7 @@ func (db *DB) LeafGenerationPackRunOnce(ctx context.Context, opts LeafGeneration
 		if err := db.Checkpoint(); err != nil {
 			return out, err
 		}
+		opts.ProtectedRootIDs = appendCompactStorageProtectedRootIDs(opts.ProtectedRootIDs, db.cached.ProtectedLeafGenerationRootIDs())
 		if opts.ReserveRIDs == nil {
 			opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 		}

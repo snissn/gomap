@@ -119,6 +119,134 @@ func (l *registeredLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) 
 	return l.path, l.fileID, true
 }
 
+type createdThenCurrentLeafPageLog struct {
+	dir             string
+	writers         []*valuelog.Writer
+	nextRID         uint64
+	firstFileID     uint32
+	currentPath     string
+	currentFileID   uint32
+	createdSegments []rewriteCreatedSegment
+}
+
+func (l *createdThenCurrentLeafPageLog) openSegment(seq uint32) (*valuelog.Writer, string, uint32, error) {
+	if l == nil || l.dir == "" {
+		return nil, "", 0, errors.New("leaf log dir unavailable")
+	}
+	fileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, seq)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	path := filepath.Join(LeafLogDirPath(l.dir), fmt.Sprintf("value-l%d-%06d.log", rewriteLeafLogLaneID, seq))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, "", 0, err
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	l.writers = append(l.writers, w)
+	return w, path, fileID, nil
+}
+
+func (l *createdThenCurrentLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if l == nil {
+		return page.LeafLogPtr{}, errors.New("leaf log unavailable")
+	}
+	var w *valuelog.Writer
+	if l.firstFileID == 0 {
+		var path string
+		var err error
+		w, path, l.firstFileID, err = l.openSegment(1)
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
+		l.createdSegments = append(l.createdSegments, rewriteCreatedSegment{path: path, fileID: l.firstFileID})
+		currentW, currentPath, currentFileID, err := l.openSegment(2)
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
+		l.currentPath = currentPath
+		l.currentFileID = currentFileID
+		_ = currentW
+	} else if len(l.writers) > 0 {
+		w = l.writers[len(l.writers)-1]
+	}
+	if w == nil {
+		return page.LeafLogPtr{}, errors.New("leaf log writer unavailable")
+	}
+	l.nextRID++
+	ptr, err := w.Append(0, nil, l.nextRID, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return page.LeafLogPtrFromValuePtr(ptr)
+}
+
+func (l *createdThenCurrentLeafPageLog) Flush() error {
+	if l == nil {
+		return nil
+	}
+	for _, w := range l.writers {
+		if w == nil {
+			continue
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *createdThenCurrentLeafPageLog) Sync() error {
+	if l == nil {
+		return nil
+	}
+	for _, w := range l.writers {
+		if w == nil {
+			continue
+		}
+		if err := w.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *createdThenCurrentLeafPageLog) Close() error {
+	if l == nil {
+		return nil
+	}
+	var firstErr error
+	for _, w := range l.writers {
+		if w == nil {
+			continue
+		}
+		if err := w.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	l.writers = nil
+	return firstErr
+}
+
+func (l *createdThenCurrentLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	if l == nil || l.currentPath == "" || l.currentFileID == 0 {
+		return "", 0, false
+	}
+	return l.currentPath, l.currentFileID, true
+}
+
+func (l *createdThenCurrentLeafPageLog) createdSegmentsSnapshot() ([]rewriteCreatedSegment, error) {
+	if l == nil || len(l.createdSegments) == 0 {
+		return nil, nil
+	}
+	if err := l.Flush(); err != nil {
+		return nil, err
+	}
+	return append([]rewriteCreatedSegment(nil), l.createdSegments...), nil
+}
+
 // unregisteredLeafPageLog intentionally does not implement
 // CurrentValueLogSegment and does not register its segment with the manager.
 // It is used to verify forced-refresh safety fallbacks.
@@ -370,6 +498,53 @@ func TestOuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh(t *test
 	}
 	if _, ok := st.ValueLogSet.Files[leafLog.fileID]; !ok {
 		t.Fatalf("registered outer-leaf segment %d missing from published state", leafLog.fileID)
+	}
+
+	got, err := d.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("Get mismatch: got %q want %q", got, "v")
+	}
+}
+
+func TestOuterLeafCommitPublishesCreatedSegmentBeforeCurrentWithoutRefresh(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	leafLog := &createdThenCurrentLeafPageLog{dir: dir}
+	defer func() { _ = leafLog.Close() }()
+	d.SetLeafPageLog(leafLog)
+	refreshBefore := d.valueLogManager.RefreshScanCount()
+
+	if err := d.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if leafLog.firstFileID == 0 {
+		t.Fatal("leaf log did not create the first segment")
+	}
+	if leafLog.currentFileID == 0 || leafLog.currentFileID == leafLog.firstFileID {
+		t.Fatalf("leaf log current segment=%d, first=%d", leafLog.currentFileID, leafLog.firstFileID)
+	}
+	refreshAfter := d.valueLogManager.RefreshScanCount()
+	if refreshAfter != refreshBefore {
+		t.Fatalf("outer-leaf commit triggered value-log refresh scan: before=%d after=%d", refreshBefore, refreshAfter)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[leafLog.firstFileID]; !ok {
+		t.Fatalf("created outer-leaf segment %d missing from published state", leafLog.firstFileID)
+	}
+	if _, ok := st.ValueLogSet.Files[leafLog.currentFileID]; !ok {
+		t.Fatalf("current outer-leaf segment %d missing from published state", leafLog.currentFileID)
 	}
 
 	got, err := d.Get([]byte("k"))

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -45,6 +46,13 @@ func maintenanceRootsForSnapshot(snap *Snapshot) ([]maintenanceRoot, error) {
 }
 
 func collectMaintenanceRoots(p *pager.Pager, reader tree.SlabReader, state *DBState) ([]maintenanceRoot, error) {
+	return collectMaintenanceRootsWithContext(context.Background(), p, reader, state)
+}
+
+func collectMaintenanceRootsWithContext(ctx context.Context, p *pager.Pager, reader tree.SlabReader, state *DBState) ([]maintenanceRoot, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if state == nil {
 		return nil, fmt.Errorf("maintenance roots: missing db state")
 	}
@@ -77,7 +85,7 @@ func collectMaintenanceRoots(p *pager.Pager, reader tree.SlabReader, state *DBSt
 		return roots, nil
 	}
 
-	descriptors, err := vacuumCollectCollectionRootDescriptors(p, reader, state.SystemRootPageID)
+	descriptors, err := vacuumCollectCollectionRootDescriptorsWithContext(ctx, p, reader, state.SystemRootPageID)
 	if err != nil {
 		return nil, fmt.Errorf("maintenance roots: collect collection root descriptors: %w", err)
 	}
@@ -85,4 +93,25 @@ func collectMaintenanceRoots(p *pager.Pager, reader tree.SlabReader, state *DBSt
 		addRoot(maintenanceRootCollection, descriptor.rootID, descriptor.key)
 	}
 	return roots, nil
+}
+
+// CollectMaintenanceRootIDs returns the deduplicated root IDs that storage
+// maintenance must preserve for the supplied state: the active user and system
+// roots plus collection roots referenced by system descriptors.
+func CollectMaintenanceRootIDs(p *pager.Pager, reader tree.SlabReader, state *DBState) ([]uint64, error) {
+	return CollectMaintenanceRootIDsWithContext(context.Background(), p, reader, state)
+}
+
+// CollectMaintenanceRootIDsWithContext is the context-aware form of
+// CollectMaintenanceRootIDs.
+func CollectMaintenanceRootIDsWithContext(ctx context.Context, p *pager.Pager, reader tree.SlabReader, state *DBState) ([]uint64, error) {
+	roots, err := collectMaintenanceRootsWithContext(ctx, p, reader, state)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uint64, 0, len(roots))
+	for _, root := range roots {
+		out = append(out, root.rootID)
+	}
+	return out, nil
 }

@@ -1564,6 +1564,7 @@ func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backen
 	cloned.SourceFileIDs = append([]uint32(nil), opts.SourceFileIDs...)
 	cloned.SourceChunks = append([]backenddb.ValueLogRewritePlanChunk(nil), opts.SourceChunks...)
 	cloned.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
+	cloned.LeafGenerationProtectedRootIDs = append([]uint64(nil), opts.LeafGenerationProtectedRootIDs...)
 	return cloned
 }
 
@@ -1643,8 +1644,10 @@ type leafPackMaintenanceRecordingBackend struct {
 func (b *leafPackMaintenanceRecordingBackend) LeafGenerationPackRunOnce(ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error) {
 	b.mu.Lock()
 	b.calls++
-	b.opts = opts
-	b.optsHistory = append(b.optsHistory, opts)
+	cloned := opts
+	cloned.ProtectedRootIDs = append([]uint64(nil), opts.ProtectedRootIDs...)
+	b.opts = cloned
+	b.optsHistory = append(b.optsHistory, cloned)
 	b.deadline, b.hasDeadline = ctx.Deadline()
 	entered := b.entered
 	release := b.release
@@ -1711,7 +1714,10 @@ func (b *leafPackMaintenanceRecordingBackend) recordedLeafPackHistory() []backen
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	history := make([]backenddb.LeafGenerationPackFromPlanOptions, len(b.optsHistory))
-	copy(history, b.optsHistory)
+	for i := range b.optsHistory {
+		history[i] = b.optsHistory[i]
+		history[i].ProtectedRootIDs = append([]uint64(nil), b.optsHistory[i].ProtectedRootIDs...)
+	}
 	return history
 }
 
@@ -1727,6 +1733,29 @@ func (b *leafPackMaintenanceRecordingBackend) recordedLeafGC() (backenddb.LeafGe
 		stats = b.leafGCResponses[idx]
 	}
 	return stats, b.leafGCCalls
+}
+
+func (b *leafPackMaintenanceRecordingBackend) recordedLeafGCOptions() []backenddb.LeafGenerationGCOptions {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	opts := make([]backenddb.LeafGenerationGCOptions, len(b.leafGCOpts))
+	for i := range b.leafGCOpts {
+		opts[i] = b.leafGCOpts[i]
+		opts[i].ProtectedRootIDs = append([]uint64(nil), b.leafGCOpts[i].ProtectedRootIDs...)
+	}
+	return opts
+}
+
+func uint64SlicesEqual(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func mustLeafPackTempDir(t *testing.T, prefix string) string {
@@ -2095,6 +2124,52 @@ func TestLeafGenerationPackMaintenance_PassesReserveRIDs(t *testing.T) {
 	}
 	if got, want := db.nextRID.Load(), before+3; got != want {
 		t.Fatalf("nextRID after ReserveRIDs=%d want %d", got, want)
+	}
+}
+
+func TestLeafGenerationPackMaintenance_ProtectsPublishedRootsDuringLeafGC(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	recorder := &leafPackMaintenanceRecordingBackend{
+		DB:   mustOpenLeafPackBackend(t),
+		resp: leafPackWindowExhaustingStats(17, 1024, 4096),
+	}
+	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
+	defer cleanup()
+
+	db.mu.Lock()
+	db.rootPublishedSet = &publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{rootID: 101},
+			{rootID: 202},
+			{rootID: 101},
+		},
+		system:   publishedRootRef{rootID: 303},
+		iterator: publishedRootRef{rootID: 202},
+	}
+	db.mu.Unlock()
+
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if !attempted || !ran {
+		t.Fatalf("attempted=%t ran=%t want true/true", attempted, ran)
+	}
+	history := recorder.recordedLeafPackHistory()
+	if len(history) != 1 {
+		t.Fatalf("leaf pack history=%d want 1", len(history))
+	}
+	want := []uint64{101, 202, 303}
+	if !uint64SlicesEqual(history[0].ProtectedRootIDs, want) {
+		t.Fatalf("pack ProtectedRootIDs=%v want %v", history[0].ProtectedRootIDs, want)
+	}
+	opts := recorder.recordedLeafGCOptions()
+	if len(opts) != 1 {
+		t.Fatalf("leaf gc option calls=%d want 1", len(opts))
+	}
+	if !uint64SlicesEqual(opts[0].ProtectedRootIDs, want) {
+		t.Fatalf("gc ProtectedRootIDs=%v want %v", opts[0].ProtectedRootIDs, want)
 	}
 }
 
@@ -7687,16 +7762,24 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
 		if _, calls := recorder.recordedRewrite(); calls == 1 {
-			break
+			stats := db.Stats()
+			if stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] == "1" &&
+				stats["treedb.cache.vlog_generation.checkpoint_kick.active"] == "false" {
+				break
+			}
 		}
 		if time.Now().After(deadline) {
 			_, rewriteCalls := recorder.recordedRewrite()
 			_, planCalls := recorder.recordedPlan()
-			t.Fatalf("checkpoint kick did not run rewrite in time: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
+			stats := db.Stats()
+			t.Fatalf("checkpoint kick did not run rewrite in time: planCalls=%d rewriteCalls=%d stats=%v", planCalls, rewriteCalls, stats)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
 	if _, calls := recorder.recordedPlan(); calls != 1 {
 		t.Fatalf("plan calls=%d want=1", calls)
 	}
