@@ -762,18 +762,27 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 				seen[root.rootID] = struct{}{}
 			}
 		}
+		addProtectedRoot := func(root maintenanceRoot) {
+			if root.rootID == 0 {
+				return
+			}
+			if _, ok := seen[root.rootID]; ok {
+				return
+			}
+			seen[root.rootID] = struct{}{}
+			roots = append(roots, root)
+		}
 		for _, rootID := range opts.ProtectedRootIDs {
 			if rootID == 0 {
 				continue
 			}
-			if _, ok := seen[rootID]; ok {
-				continue
+			protectedRoots, err := collectMaintenanceRootsForSystemRootWithContext(ctx, snap.idx.pager, &snap.reader, rootID)
+			if err != nil {
+				return leafGenerationLiveScanStats{}, err
 			}
-			seen[rootID] = struct{}{}
-			roots = append(roots, maintenanceRoot{
-				kind:   maintenanceRootCollection,
-				rootID: rootID,
-			})
+			for _, root := range protectedRoots {
+				addProtectedRoot(root)
+			}
 		}
 	}
 	for _, root := range roots {

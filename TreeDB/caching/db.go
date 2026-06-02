@@ -4844,6 +4844,17 @@ func (db *DB) collectPublishedRootValueLogLiveIDsUntil(ctx context.Context, p *p
 		if err := scanRoot(published.system.rootID); err != nil {
 			return err
 		}
+		if published.system.rootID != 0 {
+			systemRootIDs, err := backenddb.CollectMaintenanceRootIDsForSystemRootWithContext(ctx, p, reader, published.system.rootID)
+			if err != nil {
+				return err
+			}
+			for _, rootID := range systemRootIDs {
+				if err := scanRoot(rootID); err != nil {
+					return err
+				}
+			}
+		}
 		if err := scanRoot(published.iterator.rootID); err != nil {
 			return err
 		}

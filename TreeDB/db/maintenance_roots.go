@@ -38,6 +38,47 @@ type maintenanceRoot struct {
 	descriptorKey []byte
 }
 
+type maintenanceRootAccumulator struct {
+	roots []maintenanceRoot
+	seen  map[uint64]struct{}
+}
+
+func (a *maintenanceRootAccumulator) add(kind maintenanceRootKind, rootID uint64, descriptorKey []byte) {
+	if rootID == 0 {
+		return
+	}
+	if a.seen == nil {
+		a.seen = make(map[uint64]struct{}, 4)
+	}
+	if _, ok := a.seen[rootID]; ok {
+		return
+	}
+	a.seen[rootID] = struct{}{}
+	root := maintenanceRoot{
+		kind:   kind,
+		rootID: rootID,
+	}
+	if len(descriptorKey) > 0 {
+		root.descriptorKey = append([]byte(nil), descriptorKey...)
+	}
+	a.roots = append(a.roots, root)
+}
+
+func (a *maintenanceRootAccumulator) addSystemRootWithDescriptors(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) error {
+	if systemRootID == 0 {
+		return nil
+	}
+	a.add(maintenanceRootSystem, systemRootID, nil)
+	descriptors, err := vacuumCollectCollectionRootDescriptorsWithContext(ctx, p, reader, systemRootID)
+	if err != nil {
+		return err
+	}
+	for _, descriptor := range descriptors {
+		a.add(maintenanceRootCollection, descriptor.rootID, descriptor.key)
+	}
+	return nil
+}
+
 func maintenanceRootsForSnapshot(snap *Snapshot) ([]maintenanceRoot, error) {
 	if snap == nil || snap.state == nil || snap.idx == nil || snap.idx.pager == nil {
 		return nil, fmt.Errorf("maintenance roots: missing snapshot state")
@@ -56,43 +97,27 @@ func collectMaintenanceRootsWithContext(ctx context.Context, p *pager.Pager, rea
 	if state == nil {
 		return nil, fmt.Errorf("maintenance roots: missing db state")
 	}
-	roots := make([]maintenanceRoot, 0, 2)
-	var seen map[uint64]struct{}
-	addRoot := func(kind maintenanceRootKind, rootID uint64, descriptorKey []byte) {
-		if rootID == 0 {
-			return
-		}
-		if seen == nil {
-			seen = make(map[uint64]struct{}, 4)
-		}
-		if _, ok := seen[rootID]; ok {
-			return
-		}
-		seen[rootID] = struct{}{}
-		root := maintenanceRoot{
-			kind:   kind,
-			rootID: rootID,
-		}
-		if len(descriptorKey) > 0 {
-			root.descriptorKey = append([]byte(nil), descriptorKey...)
-		}
-		roots = append(roots, root)
+	acc := maintenanceRootAccumulator{
+		roots: make([]maintenanceRoot, 0, 2),
 	}
-
-	addRoot(maintenanceRootUser, state.RootPageID, nil)
-	addRoot(maintenanceRootSystem, state.SystemRootPageID, nil)
-	if state.SystemRootPageID == 0 {
-		return roots, nil
-	}
-
-	descriptors, err := vacuumCollectCollectionRootDescriptorsWithContext(ctx, p, reader, state.SystemRootPageID)
-	if err != nil {
+	acc.add(maintenanceRootUser, state.RootPageID, nil)
+	if err := acc.addSystemRootWithDescriptors(ctx, p, reader, state.SystemRootPageID); err != nil {
 		return nil, fmt.Errorf("maintenance roots: collect collection root descriptors: %w", err)
 	}
-	for _, descriptor := range descriptors {
-		addRoot(maintenanceRootCollection, descriptor.rootID, descriptor.key)
+	return acc.roots, nil
+}
+
+func collectMaintenanceRootsForSystemRootWithContext(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]maintenanceRoot, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return roots, nil
+	acc := maintenanceRootAccumulator{
+		roots: make([]maintenanceRoot, 0, 2),
+	}
+	if err := acc.addSystemRootWithDescriptors(ctx, p, reader, systemRootID); err != nil {
+		return nil, fmt.Errorf("maintenance roots: collect collection root descriptors for system root %d: %w", systemRootID, err)
+	}
+	return acc.roots, nil
 }
 
 // CollectMaintenanceRootIDs returns the deduplicated root IDs that storage
@@ -109,9 +134,30 @@ func CollectMaintenanceRootIDsWithContext(ctx context.Context, p *pager.Pager, r
 	if err != nil {
 		return nil, err
 	}
+	return maintenanceRootIDs(roots), nil
+}
+
+// CollectMaintenanceRootIDsForSystemRoot returns the deduplicated root IDs for
+// a system root plus collection roots referenced by that system root's
+// descriptors.
+func CollectMaintenanceRootIDsForSystemRoot(p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]uint64, error) {
+	return CollectMaintenanceRootIDsForSystemRootWithContext(context.Background(), p, reader, systemRootID)
+}
+
+// CollectMaintenanceRootIDsForSystemRootWithContext is the context-aware form
+// of CollectMaintenanceRootIDsForSystemRoot.
+func CollectMaintenanceRootIDsForSystemRootWithContext(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]uint64, error) {
+	roots, err := collectMaintenanceRootsForSystemRootWithContext(ctx, p, reader, systemRootID)
+	if err != nil {
+		return nil, err
+	}
+	return maintenanceRootIDs(roots), nil
+}
+
+func maintenanceRootIDs(roots []maintenanceRoot) []uint64 {
 	out := make([]uint64, 0, len(roots))
 	for _, root := range roots {
 		out = append(out, root.rootID)
 	}
-	return out, nil
+	return out
 }

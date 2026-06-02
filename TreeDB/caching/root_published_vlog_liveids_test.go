@@ -326,6 +326,89 @@ func TestCollectValueLogLiveIDsUntil_IncludesSystemDescriptorCollectionRootLeafR
 	}
 }
 
+func TestCollectValueLogLiveIDsUntil_IncludesPublishedSystemDescriptorCollectionRootLeafRefs(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog:                   backenddb.ValueLogOptions{PointerThreshold: 1},
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:                           256 << 20,
+		DisableWAL:                               true,
+		RelaxedSync:                              true,
+		AllowUnsafe:                              true,
+		MemtableShards:                           1,
+		JournalLanes:                             1,
+		IndexOuterLeavesInValueLog:               true,
+		ValueLogPointerThreshold:                 1,
+		ValueLogMaxSegmentBytes:                  64 << 10,
+		ValueLogGenerationPolicy:                 uint8(backenddb.ValueLogGenerationOff),
+		ValueLogGenerationLeafSegmentTargetBytes: 64 << 10,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	skipRetainedPrune(db)
+
+	collectionRootID, err := backend.PublishOrderedRootIterator(0, mustFrozenInlineRootTable(t, "collection/published", 1024).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish collection root: %v", err)
+	}
+	if collectionRootID == 0 {
+		t.Fatal("expected non-zero collection root")
+	}
+	leafRefs := collectLeafRefs(t, backend.Pager(), collectionRootID)
+	if len(leafRefs) == 0 {
+		t.Fatalf("expected collection root %d to contain value-log leaf refs", collectionRootID)
+	}
+	fileID := leafRefs[0].ValueLogFileID()
+	systemRootID, err := backend.PublishOrderedRootIterator(0, mustFrozenRawRootTable(t, "collections/root/users/published", encodeRootDescriptorID(collectionRootID)).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish detached system root: %v", err)
+	}
+	if systemRootID == 0 {
+		t.Fatal("expected non-zero system root")
+	}
+	state := backend.State()
+	if state.SystemRootPageID == systemRootID {
+		t.Fatalf("test requires detached published system root, got state.SystemRootPageID=%d", state.SystemRootPageID)
+	}
+
+	liveBefore, err := db.collectValueLogLiveIDsUntil(0)
+	if err != nil {
+		t.Fatalf("collectValueLogLiveIDsUntil(before): %v", err)
+	}
+	if _, ok := liveBefore[fileID]; ok {
+		t.Fatalf("unexpected leaf-log file id %d before published system root install", fileID)
+	}
+
+	if err := db.publishInstalledRootSet(&publishedRootSet{
+		generation: 1,
+		system: publishedRootRef{
+			rootID: systemRootID,
+		},
+	}); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+
+	liveAfter, err := db.collectValueLogLiveIDsUntil(0)
+	if err != nil {
+		t.Fatalf("collectValueLogLiveIDsUntil(after): %v", err)
+	}
+	if _, ok := liveAfter[fileID]; !ok {
+		t.Fatalf("expected published system descriptor collection root to keep leaf-log file id %d live", fileID)
+	}
+}
+
 func TestPruneRetainedValueLogs_PublishedNonSystemRootsKeepClosedSegment(t *testing.T) {
 	disableVlogGenerationLoop(t)
 	dir := t.TempDir()
