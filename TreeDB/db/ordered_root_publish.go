@@ -707,6 +707,19 @@ func collectValueLogRefDeltaFromIterator(iter iterator.UnsafeIterator) (*valueLo
 	return delta, nil
 }
 
+func positiveValueLogRefDeltaFileIDs(delta *valueLogRefDelta, dst []uint32) []uint32 {
+	if delta == nil {
+		return dst
+	}
+	_ = delta.forEachChange(func(fileID uint32, change int64) error {
+		if change > 0 {
+			dst = append(dst, fileID)
+		}
+		return nil
+	})
+	return dst
+}
+
 func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
 	if db == nil {
 		err = ErrClosed
@@ -1323,6 +1336,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 	vlogRefDelta := refDelta
+	touchedValueLogSegments := positiveValueLogRefDeltaFileIDs(refDelta, nil)
 	forceRefTrackerRebuild := publishStats.collectionRootDescriptorReachabilityMayChange()
 	if len(ordered) > 0 || forceRefTrackerRebuild {
 		// Non-system roots were applied from deltas, so this commit has no
@@ -1351,7 +1365,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	phaseStart = time.Now()
-	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2620,6 +2634,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	}
 
 	forceRefTrackerRebuild := systemStats.collectionRootDescriptorReachabilityMayChange()
+	touchedValueLogSegments := positiveValueLogRefDeltaFileIDs(vlogRefDelta, nil)
 	if forceRefTrackerRebuild {
 		// Collection descriptors make non-system roots part of value-log
 		// reachability. The system-root ref delta alone is not an exact commit
@@ -2633,7 +2648,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	if vlogRefDelta == nil && !forceRefTrackerRebuild {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, nil, err
 	}
 	vlogRefDelta = nil
