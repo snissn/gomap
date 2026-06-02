@@ -3,6 +3,7 @@ package caching
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -572,5 +573,49 @@ func TestSampleProcessMemoryPeaksPublishesFreshPressureSnapshot(t *testing.T) {
 	}
 	if got := db.processPeakHeapInuseBytes.Load(); got != fake.HeapInuse {
 		t.Fatalf("peak heap inuse=%d want=%d", got, fake.HeapInuse)
+	}
+}
+
+func TestPoolPressureSamplerPublishesFreshPressureSnapshot(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var heapInuse atomic.Uint64
+	var readMemStatsCalls atomic.Uint64
+	poolPressureReadMemStats = func(ms *runtime.MemStats) {
+		readMemStatsCalls.Add(1)
+		ms.HeapInuse = heapInuse.Load()
+	}
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	release := retainPoolPressureSampler()
+	t.Cleanup(release)
+
+	heapInuse.Store(9 << 30)
+	deadline := time.Now().Add(2*poolPressureRefreshInterval + 500*time.Millisecond)
+	for time.Now().Before(deadline) {
+		if currentPoolPressureLevelFast() == poolPressureCritical {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := currentPoolPressureLevelFast(); got != poolPressureCritical {
+		t.Fatalf("fast pressure level=%v want critical after sampler refresh", got)
+	}
+	if got := readMemStatsCalls.Load(); got == 0 {
+		t.Fatalf("sampler did not read memstats")
 	}
 }

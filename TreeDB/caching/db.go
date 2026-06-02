@@ -128,6 +128,10 @@ var snapshotGetCallerStatsMap sync.Map
 var poolPressureState atomic.Value
 var poolPressureLevelState atomic.Uint64
 var poolPressureMu sync.Mutex
+var poolPressureSamplerMu sync.Mutex
+var poolPressureSamplerRefs int
+var poolPressureSamplerStop chan struct{}
+var poolPressureSamplerDone chan struct{}
 var poolPressureLastLeaseTrimUnixNano atomic.Int64
 var poolPressureNormalSamplesTotal atomic.Uint64
 var poolPressureHighSamplesTotal atomic.Uint64
@@ -693,6 +697,66 @@ func publishPoolPressureSnapshot(snap poolPressureSnapshot, sampledAt time.Time)
 	maybeTrimEntrySliceLeasesUnderPressure(snap.level, sampledAt)
 }
 
+func sampleAndPublishPoolPressureSnapshot() poolPressureSnapshot {
+	now := poolPressureNow()
+	snap := samplePoolPressureSnapshot(now)
+	publishPoolPressureSnapshot(snap, now)
+	return snap
+}
+
+// Keep the pressure-level atomic fresh without putting time/memstats sampling
+// back on write paths that only need the scaled mutable flush threshold.
+func runPoolPressureSampler(stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(poolPressureRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			_ = sampleAndPublishPoolPressureSnapshot()
+		case <-stop:
+			return
+		}
+	}
+}
+
+func retainPoolPressureSampler() func() {
+	poolPressureSamplerMu.Lock()
+	if poolPressureSamplerRefs == 0 {
+		stop := make(chan struct{})
+		done := make(chan struct{})
+		poolPressureSamplerStop = stop
+		poolPressureSamplerDone = done
+		go runPoolPressureSampler(stop, done)
+	}
+	poolPressureSamplerRefs++
+	poolPressureSamplerMu.Unlock()
+
+	var released atomic.Bool
+	return func() {
+		if !released.CompareAndSwap(false, true) {
+			return
+		}
+
+		var done chan struct{}
+		poolPressureSamplerMu.Lock()
+		if poolPressureSamplerRefs > 0 {
+			poolPressureSamplerRefs--
+		}
+		if poolPressureSamplerRefs == 0 && poolPressureSamplerStop != nil {
+			close(poolPressureSamplerStop)
+			done = poolPressureSamplerDone
+			poolPressureSamplerStop = nil
+			poolPressureSamplerDone = nil
+		}
+		poolPressureSamplerMu.Unlock()
+
+		if done != nil {
+			<-done
+		}
+	}
+}
+
 func currentPoolPressureSnapshot() poolPressureSnapshot {
 	now := poolPressureNow()
 	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
@@ -711,9 +775,7 @@ func currentPoolPressureSnapshot() poolPressureSnapshot {
 		}
 	}
 
-	snap := samplePoolPressureSnapshot(now)
-	publishPoolPressureSnapshot(snap, now)
-	return snap
+	return sampleAndPublishPoolPressureSnapshot()
 }
 
 func currentZipperParallelMergePressure() zipper.ParallelMergePressureLevel {
@@ -7414,10 +7476,11 @@ type DB struct {
 	processPeakVlogMmapSealedSegments  atomic.Uint64
 
 	// Lifecycle
-	closeCh chan struct{}
-	closing atomic.Bool
-	flushCh chan struct{}
-	wg      sync.WaitGroup
+	closeCh                    chan struct{}
+	closing                    atomic.Bool
+	flushCh                    chan struct{}
+	wg                         sync.WaitGroup
+	releasePoolPressureSampler func()
 
 	autoCheckpointOnceCh  chan struct{}
 	autoCheckpointWriteCh chan struct{}
@@ -9967,6 +10030,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.mu.Unlock()
 
 	db.startDomainIngressWorkers()
+	db.releasePoolPressureSampler = retainPoolPressureSampler()
 	db.startProcessMemorySampler()
 
 	// Start background flusher
@@ -10167,9 +10231,7 @@ func (db *DB) sampleProcessMemoryPeaks(backendMmap vlogMmapStatsSnapshot) {
 	if db == nil {
 		return
 	}
-	now := poolPressureNow()
-	snap := samplePoolPressureSnapshot(now)
-	publishPoolPressureSnapshot(snap, now)
+	snap := sampleAndPublishPoolPressureSnapshot()
 	updateAtomicMax(&db.processPeakHeapAllocBytes, snap.heapAllocBytes)
 	updateAtomicMax(&db.processPeakHeapInuseBytes, snap.heapInuseBytes)
 	updateAtomicMax(&db.processPeakTotalSysBytes, snap.totalSysBytes)
@@ -20323,6 +20385,10 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	if release := db.releasePoolPressureSampler; release != nil {
+		db.releasePoolPressureSampler = nil
+		release()
+	}
 	db.releaseClosingEmptyMemtables()
 	// Drain any in-flight dict-profile publish callbacks before teardown.
 	// New callbacks will observe closing=true and return without touching stores.
