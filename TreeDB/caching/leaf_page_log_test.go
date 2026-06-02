@@ -137,7 +137,7 @@ func TestCachingLeafPageLog_AppendLeafPagesGroupsPointersAndPayloads(t *testing.
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	path := filepath.Join(leafDir, "value-l255-000001.log")
+	path := filepath.Join(leafDir, valueLogName(leafLogLaneID, 1))
 	writer, err := valuelog.NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
