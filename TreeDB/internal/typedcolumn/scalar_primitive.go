@@ -55,32 +55,28 @@ func integerStatsPayloadColumnType(t ColumnType) bool {
 	}
 }
 
-func fixedWidthScalarColumnType(t ColumnType) bool {
-	return rawScalarWidthForColumnType(t) != 0 || t == ColumnTypeFloat32 || t == ColumnTypeFloat64
-}
-
 func (b *GranuleBuilder) BuildInt8(values []int8) (EncodedGranule, error) {
-	return b.buildRawInt8(values, ColumnTypeInt8, EncodingRawInt8, "int8")
+	return b.buildRawInt8(values, EncodingRawInt8, "int8")
 }
 
 func (b *GranuleBuilder) BuildUint8(values []uint8) (EncodedGranule, error) {
-	return b.buildRawUint8(values, ColumnTypeUint8, EncodingRawUint8, "uint8")
+	return b.buildRawUint8(values, EncodingRawUint8, "uint8")
 }
 
 func (b *GranuleBuilder) BuildInt16(values []int16) (EncodedGranule, error) {
-	return b.buildRawInt16(values, ColumnTypeInt16, EncodingRawInt16, "int16")
+	return b.buildRawInt16(values, EncodingRawInt16, "int16")
 }
 
 func (b *GranuleBuilder) BuildUint16(values []uint16) (EncodedGranule, error) {
-	return b.buildRawUint16(values, ColumnTypeUint16, EncodingRawUint16, "uint16", true)
+	return b.buildRawUint16(values, EncodingRawUint16, "uint16", true)
 }
 
 func (b *GranuleBuilder) BuildInt32(values []int32) (EncodedGranule, error) {
-	return b.buildRawInt32(values, ColumnTypeInt32, EncodingRawInt32, "int32")
+	return b.buildRawInt32(values, EncodingRawInt32, "int32")
 }
 
 func (b *GranuleBuilder) BuildUint32(values []uint32) (EncodedGranule, error) {
-	return b.buildRawUint32(values, ColumnTypeUint32, EncodingRawUint32, "uint32", true)
+	return b.buildRawUint32(values, EncodingRawUint32, "uint32", true)
 }
 
 func (b *GranuleBuilder) BuildUint64(values []uint64) (EncodedGranule, error) {
@@ -108,16 +104,16 @@ func (b *GranuleBuilder) BuildUint64(values []uint64) (EncodedGranule, error) {
 // BuildFloat16Bits stores IEEE binary16 raw uint16 bits without arithmetic
 // interpretation. NaN payloads, infinities, and signed zero bits are preserved.
 func (b *GranuleBuilder) BuildFloat16Bits(values []uint16) (EncodedGranule, error) {
-	return b.buildRawUint16(values, ColumnTypeFloat16, EncodingRawFloat16, "float16", false)
+	return b.buildRawUint16(values, EncodingRawFloat16, "float16", false)
 }
 
 // BuildBFloat16Bits stores bfloat16 raw uint16 bits without arithmetic
 // interpretation. NaN payloads, infinities, and signed zero bits are preserved.
 func (b *GranuleBuilder) BuildBFloat16Bits(values []uint16) (EncodedGranule, error) {
-	return b.buildRawUint16(values, ColumnTypeBFloat16, EncodingRawBFloat16, "bfloat16", false)
+	return b.buildRawUint16(values, EncodingRawBFloat16, "bfloat16", false)
 }
 
-func (b *GranuleBuilder) buildRawInt8(values []int8, columnType ColumnType, encoding Encoding, name string) (EncodedGranule, error) {
+func (b *GranuleBuilder) buildRawInt8(values []int8, encoding Encoding, name string) (EncodedGranule, error) {
 	if err := validateRawScalarBuildRows(len(values)); err != nil {
 		return EncodedGranule{}, err
 	}
@@ -135,11 +131,10 @@ func (b *GranuleBuilder) buildRawInt8(values []int8, columnType ColumnType, enco
 	}
 	b.compressed = selection.Scratch
 	min, max := minMaxInt8(values)
-	_ = columnType
 	return newEncodedGranule(len(values), int64(min), int64(max), true, encoding, selection), nil
 }
 
-func (b *GranuleBuilder) buildRawUint8(values []uint8, columnType ColumnType, encoding Encoding, name string) (EncodedGranule, error) {
+func (b *GranuleBuilder) buildRawUint8(values []uint8, encoding Encoding, name string) (EncodedGranule, error) {
 	if err := validateRawScalarBuildRows(len(values)); err != nil {
 		return EncodedGranule{}, err
 	}
@@ -157,11 +152,10 @@ func (b *GranuleBuilder) buildRawUint8(values []uint8, columnType ColumnType, en
 	}
 	b.compressed = selection.Scratch
 	min, max := minMaxUint8(values)
-	_ = columnType
 	return newEncodedGranule(len(values), int64(min), int64(max), true, encoding, selection), nil
 }
 
-func (b *GranuleBuilder) buildRawInt16(values []int16, columnType ColumnType, encoding Encoding, name string) (EncodedGranule, error) {
+func (b *GranuleBuilder) buildRawInt16(values []int16, encoding Encoding, name string) (EncodedGranule, error) {
 	if err := validateRawScalarBuildRows(len(values)); err != nil {
 		return EncodedGranule{}, err
 	}
@@ -179,11 +173,10 @@ func (b *GranuleBuilder) buildRawInt16(values []int16, columnType ColumnType, en
 	}
 	b.compressed = selection.Scratch
 	min, max := minMaxInt16(values)
-	_ = columnType
 	return newEncodedGranule(len(values), int64(min), int64(max), true, encoding, selection), nil
 }
 
-func (b *GranuleBuilder) buildRawUint16(values []uint16, columnType ColumnType, encoding Encoding, name string, hasMinMax bool) (EncodedGranule, error) {
+func (b *GranuleBuilder) buildRawUint16(values []uint16, encoding Encoding, name string, hasMinMax bool) (EncodedGranule, error) {
 	if err := validateRawScalarBuildRows(len(values)); err != nil {
 		return EncodedGranule{}, err
 	}
@@ -200,7 +193,6 @@ func (b *GranuleBuilder) buildRawUint16(values []uint16, columnType ColumnType, 
 		return EncodedGranule{}, err
 	}
 	b.compressed = selection.Scratch
-	_ = columnType
 	if !hasMinMax {
 		return newEncodedGranule(len(values), 0, 0, false, encoding, selection), nil
 	}
@@ -208,7 +200,7 @@ func (b *GranuleBuilder) buildRawUint16(values []uint16, columnType ColumnType, 
 	return newEncodedGranule(len(values), int64(min), int64(max), true, encoding, selection), nil
 }
 
-func (b *GranuleBuilder) buildRawInt32(values []int32, columnType ColumnType, encoding Encoding, name string) (EncodedGranule, error) {
+func (b *GranuleBuilder) buildRawInt32(values []int32, encoding Encoding, name string) (EncodedGranule, error) {
 	if err := validateRawScalarBuildRows(len(values)); err != nil {
 		return EncodedGranule{}, err
 	}
@@ -226,11 +218,10 @@ func (b *GranuleBuilder) buildRawInt32(values []int32, columnType ColumnType, en
 	}
 	b.compressed = selection.Scratch
 	min, max := minMaxInt32(values)
-	_ = columnType
 	return newEncodedGranule(len(values), int64(min), int64(max), true, encoding, selection), nil
 }
 
-func (b *GranuleBuilder) buildRawUint32(values []uint32, columnType ColumnType, encoding Encoding, name string, hasMinMax bool) (EncodedGranule, error) {
+func (b *GranuleBuilder) buildRawUint32(values []uint32, encoding Encoding, name string, hasMinMax bool) (EncodedGranule, error) {
 	if err := validateRawScalarBuildRows(len(values)); err != nil {
 		return EncodedGranule{}, err
 	}
@@ -247,7 +238,6 @@ func (b *GranuleBuilder) buildRawUint32(values []uint32, columnType ColumnType, 
 		return EncodedGranule{}, err
 	}
 	b.compressed = selection.Scratch
-	_ = columnType
 	if !hasMinMax {
 		return newEncodedGranule(len(values), 0, 0, false, encoding, selection), nil
 	}
