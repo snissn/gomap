@@ -19,6 +19,20 @@ TreeDB is pre-alpha:
 - Benchmark DB directories should be rebuilt from scratch unless a report says
   otherwise.
 
+## Benchmark Highlights
+
+These checked-in reports use different workloads, profiles, and caveats. Treat
+each row as scoped evidence from its linked benchmark, not as one combined
+benchmark suite.
+
+| workload | TreeDB result | comparison / context | report |
+| --- | ---: | --- | --- |
+| YCSB run phase | nativewire durable `120,500.7 ops/sec`; nativewire relaxed `126,762.5 ops/sec`; Mongo gateway durable `74,544.7 ops/sec` | MongoDB 8 baseline `26,102.5 ops/sec`; full table below | [June 2 YCSB](docs/benchmarks/ycsb_post_update_stack_2026-06-02.md) |
+| Two-index collection insert | template-v1 `1,079,797 docs/sec`; JSON `960,922 docs/sec` | SQLite JSON `394,685 docs/sec`; SQLite native columns `450,180 docs/sec` | [April 27 matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md) |
+| Collection read/lookup | template-v1 primary read `771,803 ops/sec`; parallel primary read `1,503,458 ops/sec`; nonunique secondary lookup `243,625-257,356 ops/sec` | SQLite nonunique secondary lookup `39,399-68,815 ops/sec` | [April 27 matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md) |
+| Collection storage density | index-vlog template-v1 `104.90 B/doc` | default template-v1 `155.10 B/doc`; SQLite native columns after `VACUUM` `156.40 B/doc`; `13-14%` write-throughput cost | [April 27 matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md) |
+| `application.db` offline density | TreeDB self-roundtrip compacted size `2.092 GiB` | PebbleDB `1.773 GiB`; goleveldb `2.316 GiB` | [April 13 density](docs/benchmarks/application_db_engine_matrix_2026-04-13.md) |
+
 ## Current YCSB Headline
 
 External `go-ycsb`, local loopback TCP, `recordcount=100000`,
@@ -41,34 +55,6 @@ Full report, commands, host context, run repeats, and artifact paths:
 The `bench` profile is a no-WAL benchmark-only ceiling. Use
 `command_wal_durable` as the default server profile unless you are deliberately
 running relaxed durability or a benchmark ceiling.
-
-## Additional Benchmark Highlights
-
-These are separate report-backed engineering benchmarks with their own
-workloads, profiles, and caveats. Treat them as scoped evidence, not as extra
-rows in the YCSB comparison above.
-
-- In the April 27, 2026 collection/SQLite matrix, two-index TreeDB collection
-  inserts measured `1,079,797 docs/sec` for template-v1 and
-  `960,922 docs/sec` for JSON, versus SQLite JSON at `394,685 docs/sec` and
-  SQLite native columns at `450,180 docs/sec`.
-- The same matrix measured two-index template-v1 primary reads at
-  `771,803 ops/sec`, parallel primary reads at `1,503,458 ops/sec`, and
-  nonunique secondary lookups at `243,625 ops/sec` for template-v1 and
-  `257,356 ops/sec` for JSON; the SQLite nonunique secondary lookup rows were
-  `39,399 ops/sec` for JSON and `68,815 ops/sec` for native columns.
-- Its index-vlog layout reduced two-index TreeDB template-v1 storage from
-  `155.10 B/doc` to `104.90 B/doc`, below SQLite native columns after
-  `VACUUM` at `156.40 B/doc`, with roughly a `13-14%` write-throughput cost on
-  that insert shape.
-- In the April 13, 2026 `application.db` offline density report, TreeDB's
-  self-roundtrip compacted size was `2.092 GiB`, between PebbleDB at
-  `1.773 GiB` and goleveldb at `2.316 GiB`.
-
-Sources:
-[`collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md`](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md)
-and
-[`application_db_engine_matrix_2026-04-13.md`](docs/benchmarks/application_db_engine_matrix_2026-04-13.md).
 
 ## What TreeDB Provides
 
