@@ -211,8 +211,11 @@ This writes:
 - `insights.md`, `insights.json`, `insights.html` (from `benchprof`)
 
 For TreeDB runs, `benchprof_results.json` also preserves selected TreeDB stats
-under `runs[].treedb_stats`, including ordered-root/root-apply and cache
-counters used by raw-engine review gates. The `collection_storage` suite also
+under `runs[].treedb_stats`, including ordered-root/root-apply, value-log mmap
+read counters, and generic plus leaf-specific mmap sealed-budget caps used by
+raw-engine review gates. Selected mmap read display fields prefer the backend
+`treedb.vlog.mmap_read.*` family over cache aliases so counts and ratios come
+from one source family. The `collection_storage` suite also
 adds `runs[].collection_workloads` entries with stable mode/workload names,
 semantic-equivalence flags, correctness-validation status, asset-byte splits,
 and materialization / typed-column / vector counters for `benchprof` rendering.

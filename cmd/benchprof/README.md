@@ -69,7 +69,11 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
   - `trace.out` (detected, but not deeply analyzed yet)
 - `benchprof_results.json` preserves selected TreeDB stats under
   `runs[].treedb_stats` when the benchmark exposes them. This is the raw
-  counter metadata used for TreeDB root-apply/cache review artifacts.
+  counter metadata used for TreeDB root-apply/cache review artifacts. For
+  value-log mmap reads, unified-bench selected displays prefer backend
+  `treedb.vlog.mmap_read.*` counters over cache-prefixed aliases, and the
+  metadata includes generic plus leaf-specific sealed mmap budget caps when
+  TreeDB exposes them.
 - `benchprof_results.json` also preserves collection-storage suite metadata
   under `runs[].collection_workloads` when `unified-bench -suite
   collection_storage` is used. `benchprof` keeps those stable mode/workload names

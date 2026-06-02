@@ -26697,6 +26697,8 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.current_writable_map_target_bytes"] = fmt.Sprintf("%d", valuelog.CurrentWritableMmapTargetBytes)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
+		stats["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedLeafSealedSegments)
+		stats["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedLeafSealedBytes)
 		zombieSegments, zombieBytes, zombiePinnedSegments, zombiePinnedBytes, zombieUnpinnedSegments, zombieUnpinnedBytes := db.valueLogReader.ZombieStats()
 		stats["treedb.cache.vlog_zombie.segments"] = fmt.Sprintf("%d", zombieSegments)
 		stats["treedb.cache.vlog_zombie.bytes"] = fmt.Sprintf("%d", zombieBytes)
