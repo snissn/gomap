@@ -40,6 +40,9 @@ const defaultValueLogRewriteSegmentBytes = 128 << 20
 const rewriteDictMinPayloadBytes = 32 << 10
 const rewriteDictBatchMaxK = 64
 const rewriteBlockBatchMaxK = valuelog.MaxFrameK
+
+// Keep rewritten leaf-log frames aligned with the live leaf-log read-amplification cap.
+const rewriteLeafLogBatchMaxK = 8
 const rewriteBlockBatchMaxRawBytes = 4 << 20
 const rewriteReadScratchMaxCap = 1 << 20 // 1MiB cap to avoid retaining oversized decode buffers
 const rewriteKeyArenaMaxCap = 1 << 20    // 1MiB cap to avoid retaining oversized key arenas
@@ -3734,6 +3737,21 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 			return nil, err
 		}
 		return []page.LeafLogPtr{ptr}, nil
+	}
+	if len(leafPages) > rewriteLeafLogBatchMaxK {
+		ptrs := make([]page.LeafLogPtr, 0, len(leafPages))
+		for start := 0; start < len(leafPages); start += rewriteLeafLogBatchMaxK {
+			end := start + rewriteLeafLogBatchMaxK
+			if end > len(leafPages) {
+				end = len(leafPages)
+			}
+			chunkPtrs, err := w.appendLeafPagesWithRIDStart(startRID+uint64(start), leafPages[start:end])
+			if err != nil {
+				return nil, err
+			}
+			ptrs = append(ptrs, chunkPtrs...)
+		}
+		return ptrs, nil
 	}
 	if w.leafDir == "" {
 		ptrs := make([]page.LeafLogPtr, len(leafPages))

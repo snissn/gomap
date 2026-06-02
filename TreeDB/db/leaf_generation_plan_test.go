@@ -153,6 +153,22 @@ func TestCompareDeadPerLive_ClampsNegativeInputs(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationGroupedFrameInfo_LiveByteContributionKeepsSparseRefsNonZero(t *testing.T) {
+	info := leafGenerationGroupedFrameInfo{recordLen: 2, k: 4, rawLen: 4096}
+	for i := 0; i <= info.k; i++ {
+		info.offsets[i] = uint32(i * 1024)
+	}
+	for i := 0; i < info.k; i++ {
+		got, ok := info.liveByteContribution(uint16(i))
+		if !ok {
+			t.Fatalf("liveByteContribution(%d) not ok", i)
+		}
+		if got == 0 {
+			t.Fatalf("liveByteContribution(%d)=0, want non-zero so a referenced grouped sub-record keeps its segment live", i)
+		}
+	}
+}
+
 func TestLeafGenerationPlan_SeparatesWholeGenerationGCFromPack(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 

@@ -41,6 +41,42 @@ func TestValuePtrEncoding(t *testing.T) {
 	}
 }
 
+func TestLeafLogPtrFromValuePtrPreservesGroupedFlag(t *testing.T) {
+	original := ValuePtr{
+		Offset: 128,
+		Length: ValuePtrMarkGrouped(1234, 5),
+		FileID: ValueLogFileID(7),
+	}
+
+	leafPtr, err := LeafLogPtrFromValuePtr(original)
+	if err != nil {
+		t.Fatalf("LeafLogPtrFromValuePtr: %v", err)
+	}
+	if !leafPtr.IsGrouped() {
+		t.Fatalf("leaf ptr did not preserve grouped flag: %+v", leafPtr)
+	}
+	if got := leafPtr.RecordLength(); got != 1234 {
+		t.Fatalf("RecordLength=%d want 1234", got)
+	}
+	if leafPtr.SubIndex != 5 {
+		t.Fatalf("SubIndex=%d want 5", leafPtr.SubIndex)
+	}
+	if got := leafPtr.ValuePtr(); got != original {
+		t.Fatalf("ValuePtr round trip=%+v want %+v", got, original)
+	}
+}
+
+func TestLeafLogPtrValuePtrLeavesUngroupedPointersUngrouped(t *testing.T) {
+	leafPtr := LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 1234, SubIndex: 5}
+	got := leafPtr.ValuePtr()
+	if ValuePtrIsGrouped(got) {
+		t.Fatalf("ValuePtr unexpectedly grouped: %+v", got)
+	}
+	if gotLen := ValuePtrRecordLength(got); gotLen != 1234 {
+		t.Fatalf("record length=%d want 1234", gotLen)
+	}
+}
+
 func TestPackedValuePtrEncoding(t *testing.T) {
 	original := ValuePtr{
 		Offset: 123456789,
