@@ -22,18 +22,10 @@ TreeDB is pre-alpha:
 ## Benchmark Highlights
 
 These checked-in reports use different workloads, profiles, and caveats. Treat
-each row as scoped evidence from its linked benchmark, not as one combined
+each workload as scoped evidence from its linked benchmark, not as one combined
 benchmark suite.
 
-| workload | TreeDB result | comparison / context | report |
-| --- | ---: | --- | --- |
-| YCSB run phase | nativewire durable `120,500.7 ops/sec`; nativewire relaxed `126,762.5 ops/sec`; Mongo gateway durable `74,544.7 ops/sec` | MongoDB 8 baseline `26,102.5 ops/sec`; full table below | [June 2 YCSB](docs/benchmarks/ycsb_post_update_stack_2026-06-02.md) |
-| Two-index collection insert | template-v1 `1,079,797 docs/sec`; JSON `960,922 docs/sec` | SQLite JSON `394,685 docs/sec`; SQLite native columns `450,180 docs/sec` | [April 27 matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md) |
-| Collection read/lookup | template-v1 primary read `771,803 ops/sec`; parallel primary read `1,503,458 ops/sec`; nonunique secondary lookup `243,625-257,356 ops/sec` | SQLite nonunique secondary lookup `39,399-68,815 ops/sec` | [April 27 matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md) |
-| Collection storage density | index-vlog template-v1 `104.90 B/doc` | default template-v1 `155.10 B/doc`; SQLite native columns after `VACUUM` `156.40 B/doc`; `13-14%` write-throughput cost | [April 27 matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md) |
-| `application.db` offline density | TreeDB self-roundtrip compacted size `2.092 GiB` | PebbleDB `1.773 GiB`; goleveldb `2.316 GiB` | [April 13 density](docs/benchmarks/application_db_engine_matrix_2026-04-13.md) |
-
-## Current YCSB Headline
+### YCSB Server Workload
 
 External `go-ycsb`, local loopback TCP, `recordcount=100000`,
 `operationcount=10000`, `threadcount=16`, BSON document format, and zero YCSB
@@ -50,11 +42,66 @@ June 2, 2026 report.
 | TreeDB nativewire | `bench` no-WAL | 85,201.7 | 134,415.5 | 114.0 | 365.0 |
 
 Full report, commands, host context, run repeats, and artifact paths:
-`docs/benchmarks/ycsb_post_update_stack_2026-06-02.md`.
+[June 2 YCSB report](docs/benchmarks/ycsb_post_update_stack_2026-06-02.md).
 
 The `bench` profile is a no-WAL benchmark-only ceiling. Use
 `command_wal_durable` as the default server profile unless you are deliberately
 running relaxed durability or a benchmark ceiling.
+
+### Indexed Collection Insert Workload
+
+Two secondary indexes, April 27 collection/SQLite matrix.
+
+| engine / format | layout | ns/doc | docs/sec | disk B/doc |
+| --- | --- | ---: | ---: | ---: |
+| TreeDB template-v1 | default index leaves | 926.10 | 1,079,797 | 155.10 |
+| TreeDB JSON | default index leaves | 1,040.67 | 960,922 | 153.70 |
+| SQLite native columns | WAL normal | 2,221.33 | 450,180 | 175.77 |
+| SQLite JSON | WAL normal | 2,533.67 | 394,685 | 262.30 |
+
+Source:
+[April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
+
+### Collection Read And Lookup Workload
+
+Two secondary indexes, April 27 collection/SQLite matrix.
+
+| operation | TreeDB template-v1 ops/sec | TreeDB JSON ops/sec | SQLite native columns ops/sec | SQLite JSON ops/sec |
+| --- | ---: | ---: | ---: | ---: |
+| Primary read | 771,803 | 524,843 | 357,398 | 473,634 |
+| Unique secondary lookup | 815,661 | 845,785 | 484,574 | 442,478 |
+| Nonunique secondary lookup | 243,625 | 257,356 | 68,815 | 39,399 |
+
+Source:
+[April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
+
+### Collection Storage Density Workload
+
+Two secondary indexes, April 27 collection/SQLite matrix. The index-vlog rows
+move index outer leaves into the persistent value log.
+
+| engine / format | layout / maintenance | docs/sec | B/doc |
+| --- | --- | ---: | ---: |
+| TreeDB template-v1 | default index leaves | 1,079,797 | 155.10 |
+| TreeDB template-v1 | index outer leaves in value log | 941,029 | 104.90 |
+| SQLite native columns | after `VACUUM` | - | 156.40 |
+| SQLite JSON | after `VACUUM` | - | 231.40 |
+
+Source:
+[April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
+
+### `application.db` Offline Density Workload
+
+Offline compacted-size comparison from the April 13 density report.
+
+| engine | compacted size | workflow |
+| --- | ---: | --- |
+| PebbleDB | 1.773 GiB | aggressive rebuild, then full compact |
+| TreeDB | 2.092 GiB | self-roundtrip rebuild, then offline `vlog_rewrite` |
+| goleveldb | 2.316 GiB | aggressive rebuild, then full compact |
+
+Source:
+[April 13 density report](docs/benchmarks/application_db_engine_matrix_2026-04-13.md).
 
 ## What TreeDB Provides
 
