@@ -301,6 +301,22 @@ func TestFixedBytesAndPackedUintColumnPartImageRoundTrip1931(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildColumnPart: %v", err)
 	}
+	for _, tc := range []struct {
+		name       string
+		columnName string
+		encoding   Encoding
+		want       string
+	}{
+		{name: "fixed_bytes", columnName: "blob", encoding: EncodingRawInt64, want: "requires encoding=raw_fixed_bytes"},
+		{name: "packed_bit", columnName: "bits", encoding: EncodingRawFixedBytes, want: "requires encoding=raw_packed_bit_vector"},
+	} {
+		t.Run("writer_rejects_descriptor_block_encoding_mismatch_"+tc.name, func(t *testing.T) {
+			mutated := cloneColumnPartDescriptorBlockEncoding1931(part, tc.columnName, tc.encoding)
+			if _, err := BuildColumnPartImage(mutated, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"blob": "byte_vector", "bits": string(ColumnTypePackedBitVector)}}); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("BuildColumnPartImage err=%v want %q", err, tc.want)
+			}
+		})
+	}
 	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"blob": "byte_vector", "bits": string(ColumnTypePackedBitVector)}})
 	if err != nil {
 		t.Fatalf("BuildColumnPartImage: %v", err)
@@ -394,6 +410,24 @@ func TestFixedBytesAndPackedUintColumnPartImageRoundTrip1931(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "padding") {
 		t.Fatalf("corrupt packed padding err=%v want padding failure", err)
 	}
+}
+
+func cloneColumnPartDescriptorBlockEncoding1931(part *ColumnPart, columnName string, encoding Encoding) *ColumnPart {
+	mutated := *part
+	mutated.Descriptor = part.Descriptor
+	mutated.Descriptor.Columns = append([]ColumnPartColumnDescriptor(nil), part.Descriptor.Columns...)
+	for i := range mutated.Descriptor.Columns {
+		if mutated.Descriptor.Columns[i].Name != columnName {
+			continue
+		}
+		mutated.Descriptor.Columns[i].Blocks = append([]ColumnBlockDescriptor(nil), mutated.Descriptor.Columns[i].Blocks...)
+		if len(mutated.Descriptor.Columns[i].Blocks) == 0 {
+			panic("test part has no blocks for " + columnName)
+		}
+		mutated.Descriptor.Columns[i].Blocks[0].Encoding = encoding
+		return &mutated
+	}
+	panic("test part missing column " + columnName)
 }
 
 func cloneColumnPartColumns1931(columns map[string]ColumnPartColumn) map[string]ColumnPartColumn {

@@ -504,10 +504,23 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			if column.BitsPerElement != 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires bits_per_element=0", column.Name, column.Type)
 			}
+			if !columnDescriptorAllBlocksEncoding(column, EncodingRawFixedBytes) {
+				zeroRowFixedBytes := desc.RowCount == 0 && len(column.Blocks) == 0 && partColumn.Definition.Encoding == EncodingRawFixedBytes
+				if !zeroRowFixedBytes {
+					return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires encoding=%s", column.Name, column.Type, EncodingRawFixedBytes)
+				}
+			}
 		case ColumnTypePackedBitVector, ColumnTypePackedUint2Vector, ColumnTypePackedUint4Vector:
 			bitsPerElement, ok := PackedUintVectorBits(column.Type)
 			if !ok || column.FixedWidthElements <= 0 || column.BitsPerElement != bitsPerElement {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements and bits_per_element=%d", column.Name, column.Type, bitsPerElement)
+			}
+			wantEncoding, _ := PackedUintVectorEncoding(column.Type)
+			if !columnDescriptorAllBlocksEncoding(column, wantEncoding) {
+				zeroRowPacked := desc.RowCount == 0 && len(column.Blocks) == 0 && partColumn.Definition.Encoding == wantEncoding
+				if !zeroRowPacked {
+					return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires encoding=%s", column.Name, column.Type, wantEncoding)
+				}
 			}
 		case ColumnTypeUint32List:
 			if column.BitsPerElement != 0 {
