@@ -533,6 +533,9 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			return fmt.Errorf("collections: invalid column %q nullable %s typed_column_part is unsupported", col.Name, valueType)
 		}
 		if valueType == ColumnStoreValueFloat32Vector {
+			if col.VectorDims < 0 {
+				return fmt.Errorf("collections: invalid column %q vector_dims: must be non-negative for float32_vector", col.Name)
+			}
 			if col.ElementsPerRow < 0 {
 				return fmt.Errorf("collections: invalid column %q elements_per_row: must be non-negative for float32_vector", col.Name)
 			}

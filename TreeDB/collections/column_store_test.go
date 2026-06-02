@@ -348,6 +348,14 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "elements_per_row: must be non-negative",
 		},
 		{
+			name: "vector column rejects negative dims with elements per row",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: -1, ElementsPerRow: 128}},
+			},
+			want: "vector_dims: must be non-negative",
+		},
+		{
 			name: "adjacency column rejects dims",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,

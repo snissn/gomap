@@ -94,6 +94,9 @@ func typedColumnProductionDefinitionForField(field TypedStorageField) (typedcolu
 	}
 	switch field.ValueType {
 	case ColumnStoreValueFloat32Vector:
+		if field.VectorDims < 0 {
+			return typedcolumn.ColumnDefinition{}, fmt.Errorf("collections: typed-column adapter field %q float32_vector vector_dims=%d must be non-negative", field.Path, field.VectorDims)
+		}
 		if field.VectorDims > 0 && field.ElementsPerRow > 0 && field.VectorDims != field.ElementsPerRow {
 			return typedcolumn.ColumnDefinition{}, fmt.Errorf("collections: typed-column adapter field %q float32_vector elements_per_row=%d must match vector_dims=%d", field.Path, field.ElementsPerRow, field.VectorDims)
 		}
