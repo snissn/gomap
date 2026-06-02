@@ -532,3 +532,53 @@ func TestVacuumIndexOnline_PreservesOuterLeafRefsAndDataWhenOuterLeavesInValueLo
 		}
 	}
 }
+
+func TestVacuumIndexOnline_StampsPendingLeafGenerationSegments(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "vacuum-pending", 64, 'a')
+	if _, fileID1 := currentLeafSegmentOrFatal(t, leafLog); fileID1 == 0 {
+		t.Fatal("missing initial leaf segment")
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	_, fileID2 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID2 := page.ValueLogSegmentID(fileID2)
+
+	stateBefore := db.State()
+	if stateBefore == nil || stateBefore.LeafGenerations == nil {
+		t.Fatalf("missing leaf generations before vacuum")
+	}
+	if _, ok := stateBefore.LeafGenerations.FileToGeneration[rawFileID2]; ok {
+		t.Fatalf("pending raw file %d visible before vacuum", rawFileID2)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := db.VacuumIndexOnline(ctx); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+
+	stateAfter := db.State()
+	if stateAfter == nil || stateAfter.LeafGenerations == nil {
+		t.Fatalf("missing leaf generations after vacuum")
+	}
+	if _, ok := stateAfter.LeafGenerations.FileToGeneration[rawFileID2]; !ok {
+		t.Fatalf("pending raw file %d missing from published leaf-generation view", rawFileID2)
+	}
+	manifestAfter := loadLeafGenerationManifestOrFatal(t, db.dir)
+	gen2 := findLeafGenerationByFileID(t, manifestAfter, rawFileID2)
+	if got, want := gen2.PublishedCommitSeq, stateAfter.CommitSeq; got != want {
+		t.Fatalf("published commit seq=%d, want vacuum commit seq %d", got, want)
+	}
+	db.leafGenerationPendingMu.Lock()
+	_, pending := db.leafGenerationPendingSet[rawFileID2]
+	db.leafGenerationPendingMu.Unlock()
+	if pending {
+		t.Fatalf("raw file %d still pending after vacuum publish", rawFileID2)
+	}
+}

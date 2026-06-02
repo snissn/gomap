@@ -486,6 +486,95 @@ func orderedRootEntryValueLogFileID(iter iterator.UnsafeIterator) (uint32, bool)
 	return ptr.FileID, true
 }
 
+const orderedRootTouchedValueLogSegmentLinearLimit = 8
+
+type orderedRootTouchedIterator struct {
+	iterator.UnsafeIterator
+	touchedValueLogSegments   []uint32
+	touchedValueLogSegmentSet map[uint32]struct{}
+}
+
+func (it *orderedRootTouchedIterator) capture() {
+	if it == nil {
+		return
+	}
+	fileID, ok := orderedRootEntryValueLogFileID(it.UnsafeIterator)
+	if !ok {
+		return
+	}
+	it.appendTouchedValueLogSegmentID(fileID)
+}
+
+func (it *orderedRootTouchedIterator) appendTouchedValueLogSegmentID(fileID uint32) {
+	if it == nil || fileID == 0 {
+		return
+	}
+	if it.touchedValueLogSegmentSet != nil {
+		if _, ok := it.touchedValueLogSegmentSet[fileID]; ok {
+			return
+		}
+		it.touchedValueLogSegmentSet[fileID] = struct{}{}
+		it.touchedValueLogSegments = append(it.touchedValueLogSegments, fileID)
+		return
+	}
+	for _, existing := range it.touchedValueLogSegments {
+		if existing == fileID {
+			return
+		}
+	}
+	if len(it.touchedValueLogSegments) >= orderedRootTouchedValueLogSegmentLinearLimit {
+		it.touchedValueLogSegmentSet = make(map[uint32]struct{}, len(it.touchedValueLogSegments)+1)
+		for _, existing := range it.touchedValueLogSegments {
+			if existing != 0 {
+				it.touchedValueLogSegmentSet[existing] = struct{}{}
+			}
+		}
+		it.touchedValueLogSegmentSet[fileID] = struct{}{}
+	}
+	it.touchedValueLogSegments = append(it.touchedValueLogSegments, fileID)
+}
+
+func (it *orderedRootTouchedIterator) Next() {
+	it.capture()
+	it.UnsafeIterator.Next()
+}
+
+func (it *orderedRootTouchedIterator) Seek(key []byte) {
+	it.capture()
+	it.UnsafeIterator.Seek(key)
+}
+
+func (it *orderedRootTouchedIterator) Close() error {
+	it.capture()
+	return it.UnsafeIterator.Close()
+}
+
+func appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(delta *batch.Batch, dst []uint32) []uint32 {
+	if delta == nil {
+		return dst
+	}
+	var seen map[uint32]struct{}
+	for _, entry := range delta.SortedEntries() {
+		if entry.Type == batch.OpDelete || !entry.IsPtr || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+			continue
+		}
+		if seen == nil {
+			seen = make(map[uint32]struct{}, len(dst)+1)
+			for _, existing := range dst {
+				if existing != 0 {
+					seen[existing] = struct{}{}
+				}
+			}
+		}
+		if _, ok := seen[entry.ValuePtr.FileID]; ok {
+			continue
+		}
+		seen[entry.ValuePtr.FileID] = struct{}{}
+		dst = append(dst, entry.ValuePtr.FileID)
+	}
+	return dst
+}
+
 func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator, borrowEntryViews bool, trustedSortedUnique bool) error {
 	if delta == nil || iter == nil || !iter.Valid() {
 		return nil
@@ -707,7 +796,20 @@ func collectValueLogRefDeltaFromIterator(iter iterator.UnsafeIterator) (*valueLo
 	return delta, nil
 }
 
-func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
+func positiveValueLogRefDeltaFileIDs(delta *valueLogRefDelta, dst []uint32) []uint32 {
+	if delta == nil {
+		return dst
+	}
+	_ = delta.forEachChange(func(fileID uint32, change int64) error {
+		if change > 0 {
+			dst = append(dst, fileID)
+		}
+		return nil
+	})
+	return dst
+}
+
+func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, touchedValueLogSegments []uint32, err error) {
 	if db == nil {
 		err = ErrClosed
 		return
@@ -718,7 +820,9 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	}
 
 	if baseRoot == 0 {
-		newRoot, retired, metrics, _, _, err = db.publishOrderedRootIterator(0, iter, opts, false)
+		touchedIter := &orderedRootTouchedIterator{UnsafeIterator: iter}
+		newRoot, retired, metrics, _, _, err = db.publishOrderedRootIterator(0, touchedIter, opts, false)
+		touchedValueLogSegments = touchedIter.touchedValueLogSegments
 		return
 	}
 	defer iter.Close()
@@ -734,17 +838,21 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	}
 	delta, err := orderedRootDeltaBatchFromIterator(iter)
 	if err != nil {
-		return 0, nil, metrics, err
+		return 0, nil, metrics, nil, err
 	}
 	defer delta.Close()
 	if delta.IsEmpty() {
-		return baseRoot, nil, metrics, nil
+		return baseRoot, nil, metrics, nil, nil
 	}
 	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
 	if err != nil {
-		return 0, nil, metrics, err
+		return 0, nil, metrics, nil, err
 	}
 	newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
+	if err != nil {
+		return
+	}
+	touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(delta, nil)
 	return
 }
 
@@ -1279,6 +1387,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	}
 	var retired []uint64
 	var merged adaptive.Metrics
+	var touchedValueLogSegments []uint32
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
 		if err != nil {
@@ -1286,12 +1395,13 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		}
 		orderedConsumed[idx] = true
 		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
+		rootID, rootRetired, metrics, rootTouched, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
 			return 0, nil, err
 		}
+		touchedValueLogSegments = append(touchedValueLogSegments, rootTouched...)
 		rootIDs[idx] = rootID
 		rootsObserved++
 		retired = append(retired, rootRetired...)
@@ -1323,6 +1433,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 	vlogRefDelta := refDelta
+	touchedValueLogSegments = positiveValueLogRefDeltaFileIDs(refDelta, touchedValueLogSegments)
 	forceRefTrackerRebuild := publishStats.collectionRootDescriptorReachabilityMayChange()
 	if len(ordered) > 0 || forceRefTrackerRebuild {
 		// Non-system roots were applied from deltas, so this commit has no
@@ -1351,7 +1462,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	phaseStart = time.Now()
-	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -1663,6 +1774,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var retired []uint64
 	var merged adaptive.Metrics
+	var touchedValueLogSegments []uint32
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
 		if err != nil {
@@ -1670,7 +1782,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		}
 		orderedConsumed[idx] = true
 		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
+		rootID, rootRetired, metrics, rootTouched, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
@@ -1679,6 +1791,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		if storageMaintenance && rootID == ordered[idx].BaseRoot {
 			return 0, nil, preApplyErr(fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaEmpty, idx))
 		}
+		touchedValueLogSegments = append(touchedValueLogSegments, rootTouched...)
 		rootIDs[idx] = rootID
 		rootsObserved++
 		retired = append(retired, rootRetired...)
@@ -1699,12 +1812,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		return 0, nil, errors.New("nil system root delta iterator")
 	}
 	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	rootID, rootRetired, metrics, systemTouched, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
 	}
+	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
 	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
@@ -1723,7 +1837,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	// tracker conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWAL(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil, commandWALIntent)
+	err = db.finalizeOrderedRootPublishWithCommandWAL(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -1839,6 +1953,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var retired []uint64
 	var merged adaptive.Metrics
+	var touchedValueLogSegments []uint32
 	rootIDs = make([]uint64, len(allOrdered))
 	for idx := range allOrdered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
@@ -1850,12 +1965,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		// a second time if root publication fails after ownership transfer.
 		orderedConsumed[idx] = true
 		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(allOrdered[idx].BaseRoot, allOrdered[idx].Iter, opts)
+		rootID, rootRetired, metrics, rootTouched, err := db.publishOrderedRootDeltaIterator(allOrdered[idx].BaseRoot, allOrdered[idx].Iter, opts)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
 			return 0, nil, err
 		}
+		touchedValueLogSegments = append(touchedValueLogSegments, rootTouched...)
 		rootIDs[idx] = rootID
 		rootsObserved++
 		retired = append(retired, rootRetired...)
@@ -1877,12 +1993,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, err
 	}
 	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	rootID, rootRetired, metrics, systemTouched, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
 	}
+	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
 	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
@@ -1899,7 +2016,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, syncCommandWAL, merged, nil, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2069,6 +2186,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var nonSystemRetired []uint64
 	var nonSystemMetrics adaptive.Metrics
+	var touchedValueLogSegments []uint32
 	phaseStart := time.Now()
 	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
@@ -2087,6 +2205,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		}
 		rootIDs[orderedIdx] = result.rootID
 		rootsObserved++
+		touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(ordered[orderedIdx].Delta, touchedValueLogSegments)
 		nonSystemRetired = append(nonSystemRetired, result.retired...)
 		mergeOrderedRootPublishMetrics(&nonSystemMetrics, result.metrics)
 		phaseStats.rootApplyMetrics.add(result.metrics)
@@ -2119,11 +2238,13 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		rootID, systemRetired, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
 		phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.systemApplyCalls++
-		_ = systemDelta.Close()
 		if applyErr != nil {
+			_ = systemDelta.Close()
 			err = applyErr
 			return 0, nil, false, err
 		}
+		systemTouched := appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(systemDelta, nil)
+		_ = systemDelta.Close()
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
 		lockStart := time.Now()
@@ -2157,6 +2278,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		merged := nonSystemMetrics
 		mergeOrderedRootPublishMetrics(&merged, systemMetrics)
 		newSystemRoot = rootID
+		commitTouchedValueLogSegments := append([]uint32(nil), touchedValueLogSegments...)
+		commitTouchedValueLogSegments = append(commitTouchedValueLogSegments, systemTouched...)
 
 		// Batch-based grouped deltas have the same value-log reachability shape as
 		// iterator-based grouped deltas: non-system roots changed, and the system
@@ -2166,7 +2289,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		phaseStart = time.Now()
 		var post finalizeCommitPost
 		commitStarted = true
-		post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+		post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments, true, vlogRefDelta, nil, nil)
 		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.finalizeCalls++
 		hold := time.Since(holdStart)
@@ -2245,6 +2368,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var retired []uint64
 	var merged adaptive.Metrics
+	var touchedValueLogSegments []uint32
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
 		if err != nil {
@@ -2257,6 +2381,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		if err != nil {
 			return 0, nil, err
 		}
+		touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(ordered[idx].Delta, touchedValueLogSegments)
 		rootIDs[idx] = rootID
 		rootsObserved++
 		retired = append(retired, rootRetired...)
@@ -2277,12 +2402,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, errors.New("nil system root delta iterator")
 	}
 	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	rootID, rootRetired, metrics, systemTouched, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
 	}
+	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
 	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
@@ -2302,7 +2428,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWAL(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil, commandWALIntent)
+	err = db.finalizeOrderedRootPublishWithCommandWAL(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2420,6 +2546,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var retired []uint64
 	var merged adaptive.Metrics
+	var touchedValueLogSegments []uint32
 	for idx := range allOrdered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
 		if err != nil {
@@ -2432,6 +2559,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		if err != nil {
 			return 0, nil, err
 		}
+		touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(allOrdered[idx].Delta, touchedValueLogSegments)
 		rootIDs[idx] = rootID
 		rootsObserved++
 		retired = append(retired, rootRetired...)
@@ -2453,12 +2581,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	rootID, rootRetired, metrics, systemTouched, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
 	}
+	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
 	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
@@ -2475,7 +2604,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, syncCommandWAL, merged, nil, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2572,6 +2701,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 
 	rootIDs := make([]uint64, len(ordered))
 	orderedConsumed := make([]bool, len(ordered))
+	var touchedValueLogSegments []uint32
 	defer closeUnconsumedOrderedRootPublishIterators(ordered, orderedConsumed)
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
@@ -2579,10 +2709,12 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 			return 0, nil, err
 		}
 		orderedConsumed[idx] = true
-		rootID, rootRetired, metrics, _, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts, false)
+		touchedIter := &orderedRootTouchedIterator{UnsafeIterator: ordered[idx].Iter}
+		rootID, rootRetired, metrics, _, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, touchedIter, opts, false)
 		if err != nil {
 			return 0, nil, err
 		}
+		touchedValueLogSegments = append(touchedValueLogSegments, touchedIter.touchedValueLogSegments...)
 		rootIDs[idx] = rootID
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
@@ -2620,6 +2752,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	}
 
 	forceRefTrackerRebuild := systemStats.collectionRootDescriptorReachabilityMayChange()
+	touchedValueLogSegments = positiveValueLogRefDeltaFileIDs(vlogRefDelta, touchedValueLogSegments)
 	if forceRefTrackerRebuild {
 		// Collection descriptors make non-system roots part of value-log
 		// reachability. The system-root ref delta alone is not an exact commit
@@ -2633,7 +2766,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	if vlogRefDelta == nil && !forceRefTrackerRebuild {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, nil, err
 	}
 	vlogRefDelta = nil

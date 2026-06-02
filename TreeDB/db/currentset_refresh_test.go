@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -119,6 +121,134 @@ func (l *registeredLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) 
 	return l.path, l.fileID, true
 }
 
+type createdThenCurrentLeafPageLog struct {
+	dir             string
+	writers         []*valuelog.Writer
+	nextRID         uint64
+	firstFileID     uint32
+	currentPath     string
+	currentFileID   uint32
+	createdSegments []rewriteCreatedSegment
+}
+
+func (l *createdThenCurrentLeafPageLog) openSegment(seq uint32) (*valuelog.Writer, string, uint32, error) {
+	if l == nil || l.dir == "" {
+		return nil, "", 0, errors.New("leaf log dir unavailable")
+	}
+	fileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, seq)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	path := filepath.Join(LeafLogDirPath(l.dir), fmt.Sprintf("value-l%d-%06d.log", rewriteLeafLogLaneID, seq))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, "", 0, err
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	l.writers = append(l.writers, w)
+	return w, path, fileID, nil
+}
+
+func (l *createdThenCurrentLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if l == nil {
+		return page.LeafLogPtr{}, errors.New("leaf log unavailable")
+	}
+	var w *valuelog.Writer
+	if l.firstFileID == 0 {
+		var path string
+		var err error
+		w, path, l.firstFileID, err = l.openSegment(1)
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
+		l.createdSegments = append(l.createdSegments, rewriteCreatedSegment{path: path, fileID: l.firstFileID})
+		currentW, currentPath, currentFileID, err := l.openSegment(2)
+		if err != nil {
+			return page.LeafLogPtr{}, err
+		}
+		l.currentPath = currentPath
+		l.currentFileID = currentFileID
+		_ = currentW
+	} else if len(l.writers) > 0 {
+		w = l.writers[len(l.writers)-1]
+	}
+	if w == nil {
+		return page.LeafLogPtr{}, errors.New("leaf log writer unavailable")
+	}
+	l.nextRID++
+	ptr, err := w.Append(0, nil, l.nextRID, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return page.LeafLogPtrFromValuePtr(ptr)
+}
+
+func (l *createdThenCurrentLeafPageLog) Flush() error {
+	if l == nil {
+		return nil
+	}
+	for _, w := range l.writers {
+		if w == nil {
+			continue
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *createdThenCurrentLeafPageLog) Sync() error {
+	if l == nil {
+		return nil
+	}
+	for _, w := range l.writers {
+		if w == nil {
+			continue
+		}
+		if err := w.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *createdThenCurrentLeafPageLog) Close() error {
+	if l == nil {
+		return nil
+	}
+	var firstErr error
+	for _, w := range l.writers {
+		if w == nil {
+			continue
+		}
+		if err := w.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	l.writers = nil
+	return firstErr
+}
+
+func (l *createdThenCurrentLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	if l == nil || l.currentPath == "" || l.currentFileID == 0 {
+		return "", 0, false
+	}
+	return l.currentPath, l.currentFileID, true
+}
+
+func (l *createdThenCurrentLeafPageLog) createdSegmentsSnapshot() ([]rewriteCreatedSegment, error) {
+	if l == nil || len(l.createdSegments) == 0 {
+		return nil, nil
+	}
+	if err := l.Flush(); err != nil {
+		return nil, err
+	}
+	return append([]rewriteCreatedSegment(nil), l.createdSegments...), nil
+}
+
 // unregisteredLeafPageLog intentionally does not implement
 // CurrentValueLogSegment and does not register its segment with the manager.
 // It is used to verify forced-refresh safety fallbacks.
@@ -185,6 +315,61 @@ func (l *unregisteredLeafPageLog) Close() error {
 	err := l.w.Close()
 	l.w = nil
 	return err
+}
+
+func TestAppendOrderedRootDeltaBatchFinalTouchedValueLogSegmentsDedupesWithSeed(t *testing.T) {
+	delta := batch.New(nil, 1024)
+	defer delta.Close()
+
+	fileA := page.ValueLogFileID(10)
+	fileB := page.ValueLogFileID(11)
+	if err := delta.SetPointer([]byte("a"), page.ValuePtr{FileID: fileA, Offset: 1, Length: 1}); err != nil {
+		t.Fatalf("SetPointer a: %v", err)
+	}
+	if err := delta.SetPointer([]byte("b"), page.ValuePtr{FileID: fileB, Offset: 2, Length: 1}); err != nil {
+		t.Fatalf("SetPointer b: %v", err)
+	}
+	if err := delta.SetPointer([]byte("c"), page.ValuePtr{FileID: fileA, Offset: 3, Length: 1}); err != nil {
+		t.Fatalf("SetPointer c: %v", err)
+	}
+	if err := delta.Set([]byte("inline"), []byte("value")); err != nil {
+		t.Fatalf("Set inline: %v", err)
+	}
+
+	got := appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(delta, []uint32{fileB})
+	want := []uint32{fileB, fileA}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("touched segments=%v want %v", got, want)
+	}
+}
+
+func TestOrderedRootTouchedIteratorDedupesWithSetAfterLinearLimit(t *testing.T) {
+	var it orderedRootTouchedIterator
+	first := page.ValueLogFileID(20)
+	it.appendTouchedValueLogSegmentID(first)
+	it.appendTouchedValueLogSegmentID(first)
+	for i := 0; i < orderedRootTouchedValueLogSegmentLinearLimit+2; i++ {
+		it.appendTouchedValueLogSegmentID(page.ValueLogFileID(uint32(30 + i)))
+	}
+	duplicateAfterSet := page.ValueLogFileID(32)
+	it.appendTouchedValueLogSegmentID(duplicateAfterSet)
+	if it.touchedValueLogSegmentSet == nil {
+		t.Fatal("expected touched segment set after linear limit")
+	}
+
+	want := []uint32{first}
+	for i := 0; i < orderedRootTouchedValueLogSegmentLinearLimit+2; i++ {
+		want = append(want, page.ValueLogFileID(uint32(30+i)))
+	}
+	got := it.touchedValueLogSegments
+	if len(got) != len(want) {
+		t.Fatalf("touched segments len=%d want %d: got=%v want=%v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("touched segment[%d]=%d want %d (got=%v want=%v)", i, got[i], want[i], got, want)
+		}
+	}
 }
 
 func TestInlineCommitSkipsValueLogRefresh(t *testing.T) {
@@ -296,6 +481,267 @@ func TestPointerCommitRefreshesValueLogSet(t *testing.T) {
 	}
 }
 
+func TestPublishSystemRootIterator_PointerRefreshesValueLogSet(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+	before := d.valueLogManager.RefreshScanCount()
+
+	if _, err := d.PublishSystemRootIterator(mustFrozenSystemPointerMemtable(t, "sys/p", ptr).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("PublishSystemRootIterator: %v", err)
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after <= before {
+		t.Fatalf("system root pointer publish did not refresh value-log set: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("system root publish did not refresh value-log set with segment %d", fileID)
+	}
+}
+
+func TestPublishSystemRootIterator_PointerSkipsValueLogRefreshWhenSegmentAlreadyRegistered(t *testing.T) {
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	path := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+	before := d.valueLogManager.RefreshScanCount()
+
+	if _, err := d.PublishSystemRootIterator(mustFrozenSystemPointerMemtable(t, "sys/p", ptr).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("PublishSystemRootIterator: %v", err)
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after != before {
+		t.Fatalf("system root pointer publish triggered value-log refresh scan: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("system root publish missing pre-registered segment %d", fileID)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_NonSystemPointerRefreshesValueLogSet(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+	before := d.valueLogManager.RefreshScanCount()
+
+	_, rootIDs, err := d.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: 0,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", ptr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", fmt.Sprintf("%d", rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaGroupWithSystemBuilder: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after <= before {
+		t.Fatalf("ordered root group pointer publish did not refresh value-log set: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("ordered root group publish did not refresh value-log set with segment %d", fileID)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilder_NonSystemPointerSkipsRefreshWhenSegmentRegistered(t *testing.T) {
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	path := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+	before := d.valueLogManager.RefreshScanCount()
+
+	_, rootIDs, err := d.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: 0,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", ptr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", fmt.Sprintf("%d", rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaGroupWithSystemBuilder: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after != before {
+		t.Fatalf("ordered root group pointer publish triggered value-log refresh scan: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("ordered root group publish missing pre-registered segment %d", fileID)
+	}
+}
+
+func TestPublishOrderedRootGroupWithSystemBuilder_NonSystemPointerRefreshesValueLogSet(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+	before := d.valueLogManager.RefreshScanCount()
+
+	_, rootIDs, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot: 0,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", ptr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", fmt.Sprintf("%d", rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after <= before {
+		t.Fatalf("ordered root full group pointer publish did not refresh value-log set: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("ordered root full group publish did not refresh value-log set with segment %d", fileID)
+	}
+}
+
+func TestPublishOrderedRootGroupWithSystemBuilder_NonSystemPointerSkipsRefreshWhenSegmentRegistered(t *testing.T) {
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte("p"), 128)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	path := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+	before := d.valueLogManager.RefreshScanCount()
+
+	_, rootIDs, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot: 0,
+		Iter:     mustFrozenSystemPointerMemtable(t, "root/p", ptr).NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+		}
+		return mustFrozenSystemMemtable(t, "sys/root", fmt.Sprintf("%d", rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs len=%d want 1", len(rootIDs))
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after != before {
+		t.Fatalf("ordered root full group pointer publish triggered value-log refresh scan: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("ordered root full group publish missing pre-registered segment %d", fileID)
+	}
+}
+
 func TestPointerCommitSkipsValueLogRefreshWhenSegmentAlreadyRegistered(t *testing.T) {
 	dir := t.TempDir()
 	value := bytes.Repeat([]byte("p"), 256)
@@ -370,6 +816,53 @@ func TestOuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh(t *test
 	}
 	if _, ok := st.ValueLogSet.Files[leafLog.fileID]; !ok {
 		t.Fatalf("registered outer-leaf segment %d missing from published state", leafLog.fileID)
+	}
+
+	got, err := d.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("Get mismatch: got %q want %q", got, "v")
+	}
+}
+
+func TestOuterLeafCommitPublishesCreatedSegmentBeforeCurrentWithoutRefresh(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	leafLog := &createdThenCurrentLeafPageLog{dir: dir}
+	defer func() { _ = leafLog.Close() }()
+	d.SetLeafPageLog(leafLog)
+	refreshBefore := d.valueLogManager.RefreshScanCount()
+
+	if err := d.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if leafLog.firstFileID == 0 {
+		t.Fatal("leaf log did not create the first segment")
+	}
+	if leafLog.currentFileID == 0 || leafLog.currentFileID == leafLog.firstFileID {
+		t.Fatalf("leaf log current segment=%d, first=%d", leafLog.currentFileID, leafLog.firstFileID)
+	}
+	refreshAfter := d.valueLogManager.RefreshScanCount()
+	if refreshAfter != refreshBefore {
+		t.Fatalf("outer-leaf commit triggered value-log refresh scan: before=%d after=%d", refreshBefore, refreshAfter)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[leafLog.firstFileID]; !ok {
+		t.Fatalf("created outer-leaf segment %d missing from published state", leafLog.firstFileID)
+	}
+	if _, ok := st.ValueLogSet.Files[leafLog.currentFileID]; !ok {
+		t.Fatalf("current outer-leaf segment %d missing from published state", leafLog.currentFileID)
 	}
 
 	got, err := d.Get([]byte("k"))

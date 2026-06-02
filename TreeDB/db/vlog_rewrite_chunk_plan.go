@@ -158,6 +158,7 @@ func (db *DB) estimateValueLogLiveBytesByChunk(ctx context.Context, chunkBytes i
 		if err != nil {
 			return nil, err
 		}
+		roots = dedupeMaintenanceRootsByRootID(roots)
 		for _, root := range roots {
 			iter := tree.New(snap.idx.pager, &snap.reader, root.rootID).
 				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})

@@ -9,7 +9,9 @@ import (
 // LeafGenerationGCOptions controls whole-generation leaf-log garbage
 // collection.
 type LeafGenerationGCOptions struct {
-	DryRun bool
+	DryRun                 bool
+	ProtectedRootIDs       []uint64
+	ProtectedSystemRootIDs []uint64
 }
 
 // LeafGenerationGCStats summarizes whole-generation leaf-log GC work.
@@ -43,10 +45,15 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		if err := db.Checkpoint(); err != nil {
 			return out, err
 		}
+		protectedRootIDs, protectedSystemRootIDs := db.cached.ProtectedLeafGenerationRootIDPair()
+		opts.ProtectedRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedRootIDs, protectedRootIDs)
+		opts.ProtectedSystemRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedSystemRootIDs, protectedSystemRootIDs)
 	}
 
 	stats, err := db.backend.LeafGenerationGC(ctx, treedbdb.LeafGenerationGCOptions{
-		DryRun: opts.DryRun,
+		DryRun:                 opts.DryRun,
+		ProtectedRootIDs:       opts.ProtectedRootIDs,
+		ProtectedSystemRootIDs: opts.ProtectedSystemRootIDs,
 	})
 	if err != nil {
 		return out, err

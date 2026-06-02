@@ -813,7 +813,7 @@ func TestRegisterLeafPageLogSegmentsForPublishRegistersRewriteSegments(t *testin
 		t.Fatalf("segment %d was registered before publish helper", createdSegments[0].fileID)
 	}
 
-	registered, err := d.registerLeafPageLogSegmentsForPublish(7)
+	registered, err := d.registerLeafPageLogSegmentsForPublish()
 	if err != nil {
 		t.Fatalf("registerLeafPageLogSegmentsForPublish: %v", err)
 	}
@@ -830,6 +830,75 @@ func TestRegisterLeafPageLogSegmentsForPublishRegistersRewriteSegments(t *testin
 	}
 	if _, ok := set.Files[createdSegments[0].fileID]; !ok {
 		t.Fatalf("published value-log set missing segment %d", createdSegments[0].fileID)
+	}
+	rawFileID, ok := rawLeafGenerationFileID(createdSegments[0].fileID)
+	if !ok {
+		t.Fatalf("raw leaf generation file id missing for segment %d", createdSegments[0].fileID)
+	}
+	d.leafGenerationPendingMu.Lock()
+	_, pending := d.leafGenerationPendingSet[rawFileID]
+	pendingCommitSeq := d.leafGenerationPendingCommitSeq[rawFileID]
+	d.leafGenerationPendingMu.Unlock()
+	if !pending {
+		t.Fatalf("raw leaf generation file id %d was not queued pending", rawFileID)
+	}
+	if pendingCommitSeq != 0 {
+		t.Fatalf("pending commitSeq=%d want 0 before publish commit succeeds", pendingCommitSeq)
+	}
+}
+
+func TestRegisterLeafPageLogSegmentsForPublishQueuesCurrentLeafGenerationSegment(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	path, fileID := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 9)
+	d.SetLeafPageLog(&manifestTestLeafPageLog{path: path, fileID: fileID})
+	if d.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("segment %d was registered before publish helper", fileID)
+	}
+
+	registered, err := d.registerLeafPageLogSegmentsForPublish()
+	if err != nil {
+		t.Fatalf("registerLeafPageLogSegmentsForPublish: %v", err)
+	}
+	if !registered {
+		t.Fatal("current leaf segment was not registered")
+	}
+	if !d.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("segment %d was not registered", fileID)
+	}
+
+	rawFileID, ok := rawLeafGenerationFileID(fileID)
+	if !ok {
+		t.Fatalf("raw leaf generation file id missing for segment %d", fileID)
+	}
+	d.leafGenerationPendingMu.Lock()
+	_, pending := d.leafGenerationPendingSet[rawFileID]
+	pendingCommitSeq := d.leafGenerationPendingCommitSeq[rawFileID]
+	d.leafGenerationPendingMu.Unlock()
+	if !pending {
+		t.Fatalf("raw leaf generation file id %d was not queued pending", rawFileID)
+	}
+	if pendingCommitSeq != 0 {
+		t.Fatalf("pending commitSeq=%d want 0 before publish commit succeeds", pendingCommitSeq)
+	}
+	staged, changed, err := d.stagedLeafGenerationManifestWithPending(d.leafGenerationManifest, 0, 222)
+	if err != nil {
+		t.Fatalf("stagedLeafGenerationManifestWithPending: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected staged manifest change")
+	}
+	current := staged.Generations[staged.currentGenerationIndex()]
+	if got, want := current.FileIDs, []uint32{rawFileID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("staged current FileIDs=%v want %v", got, want)
 	}
 }
 
@@ -926,6 +995,99 @@ func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) 
 				t.Fatalf("dead generation file %d still present in manifest: %+v", rawFileID1, manifest.Generations)
 			}
 		}
+	}
+}
+
+func TestCompactStoragePlan_ProtectedRootIDsKeepDetachedLeafGenerationLive(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	rootTable := mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+	rootID, err := d.PublishOrderedRootIterator(0, rootTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+	if rootID == 0 {
+		t.Fatal("expected non-zero detached root")
+	}
+	if state := d.State(); state.RootPageID == rootID || state.SystemRootPageID == rootID {
+		t.Fatalf("test requires detached root, got state roots user=%d system=%d detached=%d", state.RootPageID, state.SystemRootPageID, rootID)
+	}
+
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	refs := collectLeafRefIDsFromRoot(t, d, rootID)
+	refsFile := false
+	for ptr := range refs {
+		if ptr.FileID == rawFileID1 {
+			refsFile = true
+			break
+		}
+	}
+	if !refsFile {
+		t.Fatalf("detached root refs do not include raw file id %d: %+v", rawFileID1, refs)
+	}
+
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, d, "current", 1, 'z')
+
+	unprotectedPlan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan unprotected: %v", err)
+	}
+	if got := unprotectedPlan.RemainingDebt.LeafGCGenerations; got == 0 {
+		t.Fatalf("LeafGCGenerations=%d want detached generation eligible without protection (debt=%+v)", got, unprotectedPlan.RemainingDebt)
+	}
+
+	protectedPlan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		LeafGenerationProtectedRootIDs: []uint64{0, rootID, rootID},
+		LeafPackMaxPasses:              1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan protected: %v", err)
+	}
+	if got := protectedPlan.RemainingDebt.LeafGCGenerations; got != 0 {
+		t.Fatalf("protected LeafGCGenerations=%d want 0 (debt=%+v)", got, protectedPlan.RemainingDebt)
+	}
+	if got := protectedPlan.LeafGenerationGC.GenerationsEligible; got != 0 {
+		t.Fatalf("protected GenerationsEligible=%d want 0 (stats=%+v)", got, protectedPlan.LeafGenerationGC)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("expected protected leaf segment to remain: %v", err)
+	}
+	if got := collectLeafRefIDsFromRoot(t, d, rootID); len(got) == 0 {
+		t.Fatalf("expected detached root %d leaf refs to remain readable", rootID)
+	}
+}
+
+func TestCompactStorageLeafGenerationProtectedRootIDPairMergesSourcesOnce(t *testing.T) {
+	d := &DB{}
+	pairCalls := 0
+	opts := CompactStorageOptions{
+		LeafGenerationProtectedRootIDs:       []uint64{0, 1, 2, 1},
+		LeafGenerationProtectedSystemRootIDs: []uint64{10, 0, 10},
+		LeafGenerationProtectedRootIDsFunc: func() []uint64 {
+			return []uint64{2, 3}
+		},
+		LeafGenerationProtectedSystemRootIDsFunc: func() []uint64 {
+			return []uint64{10, 11}
+		},
+		LeafGenerationProtectedRootIDPairFunc: func() ([]uint64, []uint64) {
+			pairCalls++
+			return []uint64{3, 4}, []uint64{11, 12}
+		},
+	}
+
+	rootIDs, systemRootIDs := d.compactStorageLeafGenerationProtectedRootIDPair(opts)
+	if pairCalls != 1 {
+		t.Fatalf("pair callback calls=%d want 1", pairCalls)
+	}
+	if want := []uint64{1, 2, 3, 4}; !reflect.DeepEqual(rootIDs, want) {
+		t.Fatalf("rootIDs=%v want %v", rootIDs, want)
+	}
+	if want := []uint64{10, 11, 12}; !reflect.DeepEqual(systemRootIDs, want) {
+		t.Fatalf("systemRootIDs=%v want %v", systemRootIDs, want)
 	}
 }
 

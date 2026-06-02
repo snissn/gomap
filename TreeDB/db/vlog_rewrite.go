@@ -189,6 +189,12 @@ type ValueLogRewriteOnlineOptions struct {
 	// because concurrent writers may still be appending records whose pointers
 	// are not yet visible in the backend index.
 	ProtectedPaths []string
+	// LeafGenerationProtectedRootIDs are additional roots to preserve if rewrite
+	// cleanup runs leaf-generation GC after publishing rewritten value pointers.
+	LeafGenerationProtectedRootIDs []uint64
+	// LeafGenerationProtectedSystemRootIDs are system roots whose collection
+	// descriptors should be expanded if rewrite cleanup runs leaf-generation GC.
+	LeafGenerationProtectedSystemRootIDs []uint64
 	// MaxSourceSegments bounds the number of source segments selected by sparse
 	// segment selection. Applies only when SourceFileIDs is empty.
 	MaxSourceSegments int
@@ -552,10 +558,7 @@ func trainRewriteLeafDictFromLiveLeafRefs(d *DB, state *DBState, cfg compression
 	if len(maintenanceRoots) == 0 {
 		return nil, nil
 	}
-	roots := make([]uint64, 0, len(maintenanceRoots))
-	for _, root := range maintenanceRoots {
-		roots = append(roots, root.rootID)
-	}
+	roots := maintenanceRootIDs(maintenanceRoots)
 	targetBytes := rewriteLeafDictTrainBytes(cfg)
 	minRecords := rewriteLeafDictMinRecords(cfg)
 	if targetBytes <= 0 || minRecords <= 0 {
@@ -1153,6 +1156,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 		if err != nil {
 			return nil, err
 		}
+		roots = dedupeMaintenanceRootsByRootID(roots)
 		for _, root := range roots {
 			iter := tree.New(snap.idx.pager, &snap.reader, root.rootID).
 				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
@@ -2182,7 +2186,10 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, err
 	}
 	if db.indexOuterLeavesInValueLog && stats.RecordsCopied > 0 {
-		if _, err := db.leafGenerationGC(context.WithoutCancel(ctx), LeafGenerationGCOptions{}, false); err != nil {
+		if _, err := db.leafGenerationGC(context.WithoutCancel(ctx), LeafGenerationGCOptions{
+			ProtectedRootIDs:       db.valueLogRewriteLeafGenerationProtectedRootIDs(opts),
+			ProtectedSystemRootIDs: db.valueLogRewriteLeafGenerationProtectedSystemRootIDs(opts),
+		}, false); err != nil {
 			return stats, err
 		}
 	}
@@ -2201,6 +2208,20 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, canceledErr
 	}
 	return stats, nil
+}
+
+func (db *DB) valueLogRewriteLeafGenerationProtectedRootIDs(opts ValueLogRewriteOnlineOptions) []uint64 {
+	var out []uint64
+	out = appendCompactStorageProtectedRootIDs(out, opts.LeafGenerationProtectedRootIDs)
+	out = appendCompactStorageProtectedRootIDs(out, db.protectedLeafGenerationRootIDsFromLeafPageLog())
+	return out
+}
+
+func (db *DB) valueLogRewriteLeafGenerationProtectedSystemRootIDs(opts ValueLogRewriteOnlineOptions) []uint64 {
+	var out []uint64
+	out = appendCompactStorageProtectedRootIDs(out, opts.LeafGenerationProtectedSystemRootIDs)
+	out = appendCompactStorageProtectedRootIDs(out, db.protectedLeafGenerationSystemRootIDsFromLeafPageLog())
+	return out
 }
 
 func nextRewriteRIDStart(segments []logSegment) (uint64, error) {
@@ -2537,10 +2558,11 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	systemDelta.Freeze()
 	systemIter := systemDelta.NewIterator(nil, nil)
 	systemOpts := systemRootOrderedPublishOptions(db)
-	newSystemRoot, systemRetired, systemMetrics, err := db.publishOrderedRootDeltaIterator(systemRoot, systemIter, systemOpts)
+	newSystemRoot, systemRetired, systemMetrics, systemTouched, err := db.publishOrderedRootDeltaIterator(systemRoot, systemIter, systemOpts)
 	if err != nil {
 		return err
 	}
+	touched = append(touched, systemTouched...)
 	retired = append(retired, systemRetired...)
 	mergeOrderedRootPublishMetrics(&metrics, systemMetrics)
 	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog
@@ -3358,6 +3380,7 @@ type rewriteWriter struct {
 	records                   int
 	createdIDs                []uint32
 	createdSegments           []rewriteCreatedSegment
+	createdSegmentsPublishIdx int
 
 	pendingBlockStart   int64
 	pendingBlockRaw     int
@@ -4488,6 +4511,50 @@ func (w *rewriteWriter) createdSegmentsSnapshot() ([]rewriteCreatedSegment, erro
 		return nil, nil
 	}
 	return append([]rewriteCreatedSegment(nil), w.createdSegments...), nil
+}
+
+func (w *rewriteWriter) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	if w != nil {
+		if err := w.flushPendingBatches(); err != nil {
+			return nil, err
+		}
+	}
+	if w == nil || w.createdSegmentsPublishIdx >= len(w.createdSegments) {
+		return nil, nil
+	}
+	created := w.createdSegments[w.createdSegmentsPublishIdx:]
+	out := make([]LeafPageLogSegment, 0, len(created))
+	for _, seg := range created {
+		if seg.path == "" || seg.fileID == 0 {
+			continue
+		}
+		out = append(out, LeafPageLogSegment{Path: seg.path, FileID: seg.fileID})
+	}
+	return out, nil
+}
+
+func (w *rewriteWriter) MarkLeafPageLogSegmentsRegistered(segments []LeafPageLogSegment) {
+	if w == nil || len(segments) == 0 || w.createdSegmentsPublishIdx >= len(w.createdSegments) {
+		return
+	}
+	registered := make(map[uint32]struct{}, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		registered[seg.FileID] = struct{}{}
+	}
+	if len(registered) == 0 {
+		return
+	}
+	idx := w.createdSegmentsPublishIdx
+	for idx < len(w.createdSegments) {
+		if _, ok := registered[w.createdSegments[idx].fileID]; !ok {
+			break
+		}
+		idx++
+	}
+	w.createdSegmentsPublishIdx = idx
 }
 
 type rewriteIterator struct {

@@ -35,6 +35,13 @@ type LeafGenerationPlanOptions struct {
 	MinExpectedReclaimRatioPPM int
 	MinReclaimPerByteCopiedPPM int
 	Force                      bool
+	// ProtectedRootIDs are additional ordinary root page IDs whose leaf-log
+	// children must be treated as live while planning maintenance. Empty uses the
+	// existing cached live-scan path when no protected system roots are present.
+	ProtectedRootIDs []uint64
+	// ProtectedSystemRootIDs are system-root page IDs whose collection root
+	// descriptors should be expanded into additional protected roots.
+	ProtectedSystemRootIDs []uint64
 }
 
 type LeafGenerationPlanGeneration struct {
@@ -108,7 +115,9 @@ type leafGenerationScanContext struct {
 }
 
 type leafGenerationLiveStatsScanOptions struct {
-	DisableCache bool
+	DisableCache           bool
+	ProtectedRootIDs       []uint64
+	ProtectedSystemRootIDs []uint64
 }
 
 var leafGenerationLiveScanHook struct {
@@ -204,7 +213,7 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	plan.CurrentCommitSeq = snap.state.CommitSeq
 	plan.CurrentGenerationID = manifest.CurrentGenerationID
 
-	liveScan, err := db.leafGenerationLiveStatsForSnapshot(ctx, snap)
+	liveScan, err := db.leafGenerationLiveStatsForSnapshotWithProtectedRoots(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
 	if err != nil {
 		return plan, err
 	}
@@ -556,9 +565,24 @@ func (db *DB) leafGenerationLiveStatsForSnapshot(ctx context.Context, snap *Snap
 	return stats, nil
 }
 
+func (db *DB) leafGenerationLiveStatsForSnapshotWithProtectedRoots(ctx context.Context, snap *Snapshot, protectedRootIDs, protectedSystemRootIDs []uint64) (leafGenerationLiveScanStats, error) {
+	if len(protectedRootIDs) == 0 && len(protectedSystemRootIDs) == 0 {
+		return db.leafGenerationLiveStatsForSnapshot(ctx, snap)
+	}
+	return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, protectedRootIDs, protectedSystemRootIDs)
+}
+
 func (db *DB) leafGenerationLiveStatsForSnapshotUncached(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {
+	return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, nil, nil)
+}
+
+func (db *DB) leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx context.Context, snap *Snapshot, protectedRootIDs, protectedSystemRootIDs []uint64) (leafGenerationLiveScanStats, error) {
 	runLeafGenerationLiveScanHook()
-	return db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{DisableCache: true})
+	return db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{
+		DisableCache:           true,
+		ProtectedRootIDs:       protectedRootIDs,
+		ProtectedSystemRootIDs: protectedSystemRootIDs,
+	})
 }
 
 func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst leafGenerationSubtreeStats, ptr page.LeafLogPtr) (leafGenerationSubtreeStats, error) {
@@ -732,9 +756,49 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 		memo:          make(map[uint64]leafGenerationSubtreeStats, 64),
 		cacheEnabled:  !opts.DisableCache && !verifyAlways,
 	}
-	roots, err := maintenanceRootsForSnapshot(snap)
+	roots, err := maintenanceRootsForSnapshotWithContext(ctx, snap)
 	if err != nil {
 		return leafGenerationLiveScanStats{}, err
+	}
+	roots = dedupeMaintenanceRootsByRootID(roots)
+	if len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0 {
+		seen := make(map[uint64]struct{}, len(roots)+len(opts.ProtectedRootIDs)+len(opts.ProtectedSystemRootIDs))
+		for _, root := range roots {
+			if root.rootID != 0 {
+				seen[root.rootID] = struct{}{}
+			}
+		}
+		addProtectedRoot := func(root maintenanceRoot) {
+			if root.rootID == 0 {
+				return
+			}
+			if _, ok := seen[root.rootID]; ok {
+				return
+			}
+			seen[root.rootID] = struct{}{}
+			roots = append(roots, root)
+		}
+		for _, rootID := range opts.ProtectedRootIDs {
+			if rootID == 0 {
+				continue
+			}
+			addProtectedRoot(maintenanceRoot{kind: maintenanceRootUser, rootID: rootID})
+		}
+		for _, rootID := range opts.ProtectedSystemRootIDs {
+			if rootID == 0 {
+				continue
+			}
+			protectedRoots, err := collectMaintenanceRootsForSystemRootWithContext(ctx, snap.idx.pager, &snap.reader, rootID)
+			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return leafGenerationLiveScanStats{}, ctxErr
+				}
+				return leafGenerationLiveScanStats{}, err
+			}
+			for _, root := range protectedRoots {
+				addProtectedRoot(root)
+			}
+		}
 	}
 	for _, root := range roots {
 		rootID := root.rootID
