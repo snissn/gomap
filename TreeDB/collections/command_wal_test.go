@@ -1122,6 +1122,28 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexStagesAfterWALAppend(t *testing
 		_ = d.Close()
 		t.Fatalf("AppliedCommandLSN after staged update=%d, want 0 before flush", got)
 	}
+	if domain := col.writeDomain; domain == nil {
+		_ = d.Close()
+		t.Fatal("writeDomain=nil after staged update")
+	} else {
+		domain.mu.RLock()
+		overlayEntries := 0
+		if domain.primaryOverlay != nil {
+			overlayEntries = domain.primaryOverlay.len()
+		}
+		rootRuns := domain.rootRunCount
+		pendingFirst := domain.pendingCommandWALFirst
+		pendingLast := domain.pendingCommandWALLast
+		domain.mu.RUnlock()
+		if overlayEntries != 1 || rootRuns != 0 {
+			_ = d.Close()
+			t.Fatalf("staged update overlay_entries=%d root_runs=%d, want primary overlay and no root runs", overlayEntries, rootRuns)
+		}
+		if pendingFirst != 1 || pendingLast != 1 {
+			_ = d.Close()
+			t.Fatalf("pending command WAL range=[%d,%d], want [1,1]", pendingFirst, pendingLast)
+		}
+	}
 	frames := collectionCommandWALFrames(t, dir)
 	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionUpdateBatchByID {
 		_ = d.Close()
