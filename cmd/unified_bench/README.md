@@ -367,12 +367,13 @@ assets are published, plus explicit `column_asset_store_bytes`,
 `primary_index_bytes`, `ordinary_value_vlog_bytes`, and `leaf_vlog_bytes` splits
 so M12+ evidence does not confuse typed column assets with row value-log,
 leaf-log, or primary-index storage. `durable_storage_bytes_wal_excluded` is the
-steady-state comparison label: it subtracts only `wal/commit-l*.log`
-command/commit log bytes from `db_total_bytes`, while durable `value_vlog`,
-`leaf_vlog`, `index.db`, column assets, and manifest/control bytes remain
-included. `retained_payload_bytes` reports the row/remainder payload for the
-selected path; physical paths that strip declared columns into column assets
-should report less retained payload than the source JSONBench document bytes.
+steady-state comparison label: it subtracts only valid command WAL segment files
+named `wal/commit-l<lane>-<seq>.log` (numeric lane, non-zero sequence) from
+`db_total_bytes`, while durable `value_vlog`, `leaf_vlog`, `index.db`, column
+assets, and manifest/control bytes remain included. `retained_payload_bytes`
+reports the row/remainder payload for the selected path; physical paths that
+strip declared columns into column assets should report less retained payload
+than the source JSONBench document bytes.
 
 For post-V1 production-vs-experiment attribution, use the slope harness:
 

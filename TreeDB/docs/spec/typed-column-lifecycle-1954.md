@@ -57,9 +57,10 @@ sum.
 ## Whole-DB durable storage label
 
 Typed-column benchmark reports expose `durable_storage_bytes_wal_excluded` for
-steady-state comparisons. The label is report-only and subtracts only
-`wal/commit-l*.log` command/commit log bytes from `db_total_bytes`. Durable
-payload and index stores remain counted, including ordinary `value_vlog`, split
+steady-state comparisons. The label is report-only and subtracts only valid
+command WAL segment files named `wal/commit-l<lane>-<seq>.log` (numeric lane,
+non-zero sequence) from `db_total_bytes`. Durable payload and index stores
+remain counted, including ordinary `value_vlog`, split
 `leaf_vlog`, `index.db`, isolated `column_assets/`, and manifest/control bytes.
 Manifest/control bytes stay separately labeled from referenced column asset
 bytes; the WAL-excluded label must not imply value-log or leaf-log bytes are

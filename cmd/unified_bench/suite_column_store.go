@@ -68,8 +68,8 @@ const (
 	columnStoreJSONBenchMutationInsertOnlyReopen   = "insert_only_checkpoint_reopen"
 	columnStoreJSONBenchSyntheticFixtureCaveat     = "in-repo synthetic JSONBench-shaped fixture; not an external full-data JSONBench run"
 	columnStoreJSONBenchFullDataCaveat             = "not an external full-data retained-JSON parity run; #2117 full retained JSON plus reconstruction parity is implemented in the external snissn/JSONBench TreeDB harness"
-	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local synthetic evidence; WAL-excluded durable storage excludes only wal/commit-l*.log command/commit log bytes while retaining value_vlog, leaf_vlog, index.db, column assets, and manifest/control bytes; #2118 apples-to-apples storage fields are implemented in the external snissn/JSONBench TreeDB harness and require an external run for headline ClickHouse comparison"
-	columnStoreDurableStorageWALExcludedNote       = "steady-state durable storage label excludes only wal/commit-l*.log command/commit log bytes; value_vlog, leaf_vlog, index.db, column assets, and manifest/control bytes remain durable storage"
+	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local synthetic evidence; WAL-excluded durable storage excludes only valid command WAL segment files named wal/commit-l<lane>-<seq>.log (numeric lane, non-zero sequence) while retaining value_vlog, leaf_vlog, index.db, column assets, and manifest/control bytes; #2118 apples-to-apples storage fields are implemented in the external snissn/JSONBench TreeDB harness and require an external run for headline ClickHouse comparison"
+	columnStoreDurableStorageWALExcludedNote       = "steady-state durable storage label excludes only valid command WAL segment files named wal/commit-l<lane>-<seq>.log (numeric lane, non-zero sequence); value_vlog, leaf_vlog, index.db, column assets, and manifest/control bytes remain durable storage"
 )
 
 type columnStoreSuitePathAlias struct {
