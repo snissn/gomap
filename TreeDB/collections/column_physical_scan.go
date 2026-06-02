@@ -2139,6 +2139,14 @@ func parseColumnPhysicalAssetScanHeader(raw []byte, ref ColumnAssetRef, expected
 			}
 			vectorDims = int(rawVectorDims)
 		}
+		elementsPerRow := 0
+		if version >= columnPhysicalAssetVersionV6 {
+			rawElementsPerRow := cur.u64()
+			if rawElementsPerRow > uint64(maxCollectionInt) {
+				return columnPhysicalAssetScanHeader{}, 0, 0, errors.New("column physical asset elements_per_row overflows int")
+			}
+			elementsPerRow = int(rawElementsPerRow)
+		}
 		fixedWidthEncoding := ColumnFixedWidthEncodingDefault
 		if version >= columnPhysicalAssetVersionV5 {
 			fixedWidthEncoding = ColumnFixedWidthEncoding(string(cur.stringBytes()))
@@ -2162,9 +2170,10 @@ func parseColumnPhysicalAssetScanHeader(raw []byte, ref ColumnAssetRef, expected
 			nullable != want.Nullable ||
 			dictionary != want.Dictionary ||
 			vectorDims != want.VectorDims ||
+			elementsPerRow != want.ElementsPerRow ||
 			fixedWidthEncoding != want.FixedWidthEncoding {
-			return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d FixedWidthEncoding:%q} want %+v",
-				colIdx, string(name), string(path), string(valueType), nullable, dictionary, vectorDims, fixedWidthEncoding, want)
+			return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d ElementsPerRow:%d FixedWidthEncoding:%q} want %+v",
+				colIdx, string(name), string(path), string(valueType), nullable, dictionary, vectorDims, elementsPerRow, fixedWidthEncoding, want)
 		}
 	}
 	return header, version, cur.pos, nil
@@ -2388,13 +2397,25 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 			}
 		case ColumnStoreValueFloat32Vector:
 			if selected {
-				value := cur.float32SliceWithExpectedLengthAndEncoding(col.VectorDims, col.FixedWidthEncoding)
+				value := cur.float32SliceWithExpectedLengthAndEncoding(columnStoreFloat32VectorElementsPerRow(col), col.FixedWidthEncoding)
 				if cur.err != nil {
 					return cur.err
 				}
 				rowValues[outputIdx].Float32Vector = value
 			} else {
-				cur.skipFloat32SliceWithExpectedLength(col.VectorDims)
+				cur.skipFloat32SliceWithExpectedLength(columnStoreFloat32VectorElementsPerRow(col))
+				if cur.err != nil {
+					return cur.err
+				}
+			}
+		case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+			if selected {
+				rowValues[outputIdx].DenseNumericVector = cur.denseNumericVectorBytesWithExpectedLength(col)
+				if cur.err != nil {
+					return cur.err
+				}
+			} else {
+				cur.skipDenseNumericVectorBytesWithExpectedLength(col)
 				if cur.err != nil {
 					return cur.err
 				}
