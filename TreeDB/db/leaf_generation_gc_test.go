@@ -272,6 +272,26 @@ func TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPlan_ProtectedOrdinaryRootDoesNotParseDescriptors(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+
+	rootTable := mustFrozenSystemMemtable(
+		t,
+		collectionRootDescriptorPrefix+"ordinary-user-key", "not-a-root-id",
+		"doc/a", "value-a",
+	)
+	rootID, err := db.PublishOrderedRootIterator(0, rootTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		ProtectedRootIDs: []uint64{rootID},
+	}); err != nil {
+		t.Fatalf("LeafGenerationPlan with protected ordinary root: %v", err)
+	}
+}
+
 func TestLeafGenerationGC_ProtectedSystemRootDescriptorsKeepCollectionRootLive(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 

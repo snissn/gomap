@@ -776,9 +776,13 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 			if rootID == 0 {
 				continue
 			}
+			addProtectedRoot(maintenanceRoot{kind: maintenanceRootUser, rootID: rootID})
 			protectedRoots, err := collectMaintenanceRootsForSystemRootWithContext(ctx, snap.idx.pager, &snap.reader, rootID)
 			if err != nil {
-				return leafGenerationLiveScanStats{}, err
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return leafGenerationLiveScanStats{}, ctxErr
+				}
+				continue
 			}
 			for _, root := range protectedRoots {
 				addProtectedRoot(root)
