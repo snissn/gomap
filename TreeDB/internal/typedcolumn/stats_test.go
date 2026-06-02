@@ -64,6 +64,36 @@ func TestBuildInt64BlockStatsUsesCursorWithoutBlockAllocation(t *testing.T) {
 	}
 }
 
+func TestBuildInt64BlockStatsReusesPrimitiveScratch(t *testing.T) {
+	const rows = 4096
+	raw := make([]byte, rows*4)
+	var wantSum int64
+	for i := 0; i < rows; i++ {
+		value := uint32(i + 1)
+		wantSum += int64(value)
+		binary.LittleEndian.PutUint32(raw[i*4:], value)
+	}
+	block := ColumnBlock{
+		Descriptor: ColumnBlockDescriptor{FirstRow: 0, RowCount: rows, FirstGranule: 0, LastGranule: 0, Encoding: EncodingRawUint32, Compression: CompressionNone, RawBytes: len(raw), StoredBytes: len(raw)},
+		Granule:    EncodedGranule{Rows: rows, Encoding: EncodingRawUint32, Compression: CompressionNone, RawBytes: len(raw), StoredBytes: len(raw), HasMinMax: true, Min: 1, Max: rows, PayloadRef: PayloadRef{Kind: PayloadRefInline, Length: len(raw)}, Payload: raw},
+	}
+	var reader GranuleReader
+	var got Int64BlockStats
+	allocs := testing.AllocsPerRun(100, func() {
+		stats, err := buildInt64BlockStats(&reader, ColumnTypeUint32, 0, block)
+		if err != nil {
+			panic(err)
+		}
+		if stats.Sum != wantSum || !stats.SumValid || stats.RowCount != rows {
+			panic("unexpected uint32 block stats")
+		}
+		got = stats
+	})
+	if allocs != 0 {
+		t.Fatalf("buildInt64BlockStats uint32 allocations/run=%v want 0 after scratch warmup; stats=%+v", allocs, got)
+	}
+}
+
 func TestColumnStatsEnvelopeRejectsCorruptAndMismatchedMetadata(t *testing.T) {
 	part := mustStatsTestPart(t, []int64{10, 20, 30}, EncodingRawInt64)
 	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"id": "int64", "value": "int64"}})

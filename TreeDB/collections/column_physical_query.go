@@ -1841,6 +1841,15 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 			cur.skip(8)
 		case ColumnStoreValueFloat32:
 			cur.skip(4)
+		case ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16:
+			if selectedGroup || selectedValue || selectedDistinct {
+				return nil, false, nil, false, 0, false, fmt.Errorf("unsupported column physical value type %q", col.ValueType)
+			}
+			width, ok := columnStorePrimitiveScalarWidth(col.ValueType)
+			if !ok {
+				return nil, false, nil, false, 0, false, fmt.Errorf("unsupported column physical value type %q", col.ValueType)
+			}
+			cur.skip(uint64(width))
 		case ColumnStoreValueString:
 			if selectedGroup || selectedDistinct {
 				v := cur.stringBytes()

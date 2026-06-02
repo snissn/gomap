@@ -358,10 +358,11 @@ func buildInt64BlockStats(reader *GranuleReader, columnType ColumnType, index in
 		return stats, nil
 	}
 
-	values, err := reader.DecodeIntegerAsInt64Into(nil, columnType, g)
+	values, err := reader.DecodeIntegerAsInt64Into(reader.values[:0], columnType, g)
 	if err != nil {
 		return Int64BlockStats{}, err
 	}
+	reader.values = values
 	if len(values) != g.Rows {
 		return Int64BlockStats{}, fmt.Errorf("decoded values=%d want rows=%d", len(values), g.Rows)
 	}

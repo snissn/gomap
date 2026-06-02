@@ -403,10 +403,11 @@ func buildInt64ValueRowIndex(desc ColumnPartDescriptor, columnDesc ColumnPartCol
 		if g.NullCount != 0 || g.DefaultCount != 0 {
 			return Int64ValueRowIndex{}, false, nil
 		}
-		values, err := reader.DecodeIntegerAsInt64Into(nil, column.Definition.Type, g)
+		values, err := reader.DecodeIntegerAsInt64Into(reader.values[:0], column.Definition.Type, g)
 		if err != nil {
 			return Int64ValueRowIndex{}, false, fmt.Errorf("typedcolumn: pruning column %s block %d decode: %w", columnDesc.Name, i, err)
 		}
+		reader.values = values
 		if len(values) != block.Descriptor.RowCount {
 			return Int64ValueRowIndex{}, false, fmt.Errorf("typedcolumn: pruning column %s block %d values=%d want rows=%d", columnDesc.Name, i, len(values), block.Descriptor.RowCount)
 		}
