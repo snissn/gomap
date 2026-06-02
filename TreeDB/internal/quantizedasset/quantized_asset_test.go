@@ -115,6 +115,16 @@ func TestPrepareFailsClosedIdentityAndShapeMismatches1932(t *testing.T) {
 	}
 }
 
+func TestPrepareFailsClosedExpectedZeroRowCountRejectsNonEmptySchema1932(t *testing.T) {
+	fixture := buildPackedQuantizedFixture1932(t)
+	req := fixture.prepareRequest()
+	req.Expected.RowCount = 0
+	_, err := Prepare(req)
+	if err == nil || !strings.Contains(err.Error(), "row_count=4 want 0") {
+		t.Fatalf("Prepare err=%v want exact row_count zero expectation failure", err)
+	}
+}
+
 func TestPrepareFailsClosedDescriptorRefRequiresResolvedRef1932(t *testing.T) {
 	fixture := buildPackedQuantizedFixture1932(t)
 	req := fixture.prepareRequest()

@@ -291,7 +291,7 @@ func validateSchema(schema SchemaDescriptor, expected ExpectedSchema) error {
 	if expected.CodeWidthBits != 0 && schema.CodeWidthBits != expected.CodeWidthBits {
 		return fmt.Errorf("quantizedasset: code_width_bits=%d want %d", schema.CodeWidthBits, expected.CodeWidthBits)
 	}
-	if expected.RowCount != 0 && schema.RowCount != expected.RowCount {
+	if schema.RowCount != expected.RowCount {
 		return fmt.Errorf("quantizedasset: row_count=%d want %d", schema.RowCount, expected.RowCount)
 	}
 	if schema.OrdinalOrder == "" {
@@ -839,7 +839,6 @@ func (p *Prepared) RowWords(role Role, ordinal int, scratch []uint64) (words []u
 	} else {
 		scratch = scratch[:needed]
 	}
-	clear(scratch)
 	full := len(row) / 8
 	for i := 0; i < full; i++ {
 		scratch[i] = binary.LittleEndian.Uint64(row[i*8 : i*8+8])
