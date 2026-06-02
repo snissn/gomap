@@ -292,8 +292,17 @@ func (idx *columnPhysicalVisibilityIndex) cloneColumnDeclaredValues(values []col
 	idx.valuesArena = append(idx.valuesArena, values...)
 	out := idx.valuesArena[start:len(idx.valuesArena)]
 	for i := range out {
+		if out[i].Float32Vector != nil {
+			out[i].Float32Vector = append([]float32(nil), out[i].Float32Vector...)
+		}
 		if out[i].DenseNumericVector != nil {
 			out[i].DenseNumericVector = idx.cloneBytes(out[i].DenseNumericVector)
+		}
+		if out[i].Uint32List != nil {
+			out[i].Uint32List = append([]uint32(nil), out[i].Uint32List...)
+		}
+		if out[i].AdjacencyList != nil {
+			out[i].AdjacencyList = append([]uint32(nil), out[i].AdjacencyList...)
 		}
 		if out[i].Bytes != nil {
 			out[i].Bytes = idx.cloneBytes(out[i].Bytes)
