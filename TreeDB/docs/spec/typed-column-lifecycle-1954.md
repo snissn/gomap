@@ -54,6 +54,25 @@ referenced asset bytes and exposes overlapping safety classes:
 These counters intentionally overlap; they are diagnostics, not a storage-size
 sum.
 
+## Whole-DB durable storage label
+
+Typed-column benchmark reports expose `durable_storage_bytes_wal_excluded` for
+steady-state comparisons. The label is report-only and subtracts only
+`wal/commit-l*.log` command/commit log bytes from `db_total_bytes`. Durable
+payload and index stores remain counted, including ordinary `value_vlog`, split
+`leaf_vlog`, `index.db`, isolated `column_assets/`, and manifest/control bytes.
+Manifest/control bytes stay separately labeled from referenced column asset
+bytes; the WAL-excluded label must not imply value-log or leaf-log bytes are
+ephemeral.
+
+Corrected 100k external context for #1955 reporting lives in
+`/tmp/jsonbench_2165_full_100k_compacted_final/report.json`: full-retained-json
+with the full prepared typed-column layout/owner, reconstruction valid,
+70,726,513 total bytes, 11,966,546 typed-column-part bytes, 13,667,330 column
+asset bytes, 4,194,304 primary-index bytes, and 49,639,046 WAL bytes. Treat
+that artifact as context for PR/report wording, not as a replacement for fresh
+normal-profile #1955 evidence.
+
 ## Destructive consumer gates
 
 `ColumnAssetGC` and `ColumnAssetRewrite` augment caller-supplied refs with the
