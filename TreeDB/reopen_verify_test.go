@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"math/rand"
@@ -480,6 +481,196 @@ func TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint(t *testing.T) {
 
 	checkGets(t, reopen, keys, values, false)
 	scanAndCheck(t, reopen, values, false, hash)
+}
+
+func TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn(t *testing.T) {
+	dir := t.TempDir()
+	const total = 4096
+
+	type formatConfigView struct {
+		IndexOuterLeavesInValueLog bool `json:"index_outer_leaves_in_vlog"`
+		IndexInternalBaseDelta     bool `json:"index_internal_base_delta"`
+	}
+	readFormat := func() formatConfigView {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, "maindb", "format.json"))
+		if err != nil {
+			t.Fatalf("read format config: %v", err)
+		}
+		var cfg formatConfigView
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			t.Fatalf("decode format config: %v", err)
+		}
+		return cfg
+	}
+	keyFor := func(i int) []byte {
+		var k [8]byte
+		binary.BigEndian.PutUint64(k[:], uint64(i))
+		return append([]byte(nil), k[:]...)
+	}
+	valueFor := func(i int, seed byte) []byte {
+		v := make([]byte, 192)
+		for j := range v {
+			v[j] = seed + byte((i+j)%251)
+		}
+		return v
+	}
+	dirSize := func(path string) (int64, error) {
+		var total int64
+		err := filepath.WalkDir(path, func(_ string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			total += info.Size()
+			return nil
+		})
+		return total, err
+	}
+
+	opts := treedb.Options{
+		Dir:                        dir,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		IndexInternalBaseDelta:     true, // Must resolve false with outer leaf-log refs.
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	expected := make(map[string][]byte, total)
+	for i := 0; i < total; i++ {
+		key := keyFor(i)
+		val := valueFor(i, 17)
+		if err := db.Set(key, val); err != nil {
+			_ = db.Close()
+			t.Fatalf("set initial %d: %v", i, err)
+		}
+		expected[string(key)] = val
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint initial: %v", err)
+	}
+
+	if cfg := readFormat(); !cfg.IndexOuterLeavesInValueLog || cfg.IndexInternalBaseDelta {
+		_ = db.Close()
+		t.Fatalf("unexpected persisted index format after open: %+v", cfg)
+	}
+
+	if err := db.DeleteRange(keyFor(700), keyFor(1700)); err != nil {
+		_ = db.Close()
+		t.Fatalf("delete range: %v", err)
+	}
+	for i := 700; i < 1700; i++ {
+		delete(expected, string(keyFor(i)))
+	}
+	for i := 0; i < total; i++ {
+		if i >= 700 && i < 1700 {
+			continue
+		}
+		key := keyFor(i)
+		if i%11 == 0 {
+			val := valueFor(i, 83)
+			if err := db.Set(key, val); err != nil {
+				_ = db.Close()
+				t.Fatalf("overwrite %d: %v", i, err)
+			}
+			expected[string(key)] = val
+		}
+		if i%257 == 0 {
+			if err := db.Delete(key); err != nil {
+				_ = db.Close()
+				t.Fatalf("delete %d: %v", i, err)
+			}
+			delete(expected, string(key))
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint churn: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if cfg := readFormat(); !cfg.IndexOuterLeavesInValueLog || cfg.IndexInternalBaseDelta {
+		t.Fatalf("unexpected persisted index format after close: %+v", cfg)
+	}
+	if size, err := dirSize(filepath.Join(dir, "maindb", "leaf_vlog")); err != nil || size == 0 {
+		t.Fatalf("expected outer leaf log bytes, size=%d err=%v", size, err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	for i := 0; i < total; i++ {
+		key := keyFor(i)
+		got, err := reopen.Get(key)
+		want, ok := expected[string(key)]
+		if !ok {
+			if err != nil && err != treedb.ErrKeyNotFound {
+				t.Fatalf("get deleted %d: %v", i, err)
+			}
+			if got != nil {
+				t.Fatalf("expected key %d deleted, got %d bytes", i, len(got))
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("get %d: %v", i, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("get mismatch key=%d got=%d bytes want=%d bytes", i, len(got), len(want))
+		}
+	}
+
+	it, err := reopen.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	defer it.Close()
+	seen := 0
+	for i := 0; i < total; i++ {
+		key := keyFor(i)
+		want, ok := expected[string(key)]
+		if !ok {
+			continue
+		}
+		if !it.Valid() {
+			t.Fatalf("iterator ended early at %d", i)
+		}
+		if gotKey := it.KeyCopy(nil); !bytes.Equal(gotKey, key) {
+			t.Fatalf("iterator key mismatch at %d: got=%x want=%x", i, gotKey, key)
+		}
+		if gotVal := it.ValueCopy(nil); !bytes.Equal(gotVal, want) {
+			t.Fatalf("iterator value mismatch at %d", i)
+		}
+		seen++
+		it.Next()
+	}
+	if it.Valid() {
+		t.Fatalf("iterator has extra entries")
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if seen != len(expected) {
+		t.Fatalf("iterator count mismatch seen=%d want=%d", seen, len(expected))
+	}
 }
 
 func TestReopenVerify_WALOn_WriteSync(t *testing.T) {

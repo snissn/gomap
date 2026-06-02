@@ -523,6 +523,16 @@ func addColumnVectorGraphSearchTopologyParityStats2091(dst *columnVectorGraphNat
 	dst.ResultIDStateValidationFailures += src.ResultIDStateValidationFailures
 	dst.PreparedGraphSearchViews += src.PreparedGraphSearchViews
 	dst.GraphRowFallbacks += src.GraphRowFallbacks
+	dst.WavefrontSearches += src.WavefrontSearches
+	if src.WavefrontWidth > dst.WavefrontWidth {
+		dst.WavefrontWidth = src.WavefrontWidth
+	}
+	dst.WavefrontRounds += src.WavefrontRounds
+	dst.WavefrontCandidatePops += src.WavefrontCandidatePops
+	dst.WavefrontStagedNeighbors += src.WavefrontStagedNeighbors
+	if src.WavefrontMaxTileSize > dst.WavefrontMaxTileSize {
+		dst.WavefrontMaxTileSize = src.WavefrontMaxTileSize
+	}
 	addColumnVectorGraphNativeSearchDebugStats1979(dst, src)
 	dst.TypedColumnMappedBytes = src.TypedColumnMappedBytes
 	dst.TypedColumnHeapCopyBytes = src.TypedColumnHeapCopyBytes
@@ -608,6 +618,15 @@ func reportColumnVectorGraphSearchTopologyParityMetrics2091(b *testing.B, shape 
 	b.ReportMetric(float64(searchStats.ResultIDGraphFallbacks)/denom, "result_id_graph_fallbacks/search")
 	b.ReportMetric(float64(searchStats.PreparedGraphSearchViews)/denom, "prepared_graph_search_views/search")
 	b.ReportMetric(float64(searchStats.GraphRowFallbacks)/denom, "graph_row_fallbacks/search")
+	b.ReportMetric(float64(searchStats.WavefrontSearches)/denom, "wavefront_searches/search")
+	b.ReportMetric(float64(searchStats.WavefrontWidth), "wavefront_width")
+	b.ReportMetric(float64(searchStats.WavefrontRounds)/denom, "wavefront_rounds/search")
+	b.ReportMetric(float64(searchStats.WavefrontCandidatePops)/denom, "wavefront_candidate_pops/search")
+	b.ReportMetric(float64(searchStats.WavefrontStagedNeighbors)/denom, "wavefront_staged_neighbors/search")
+	b.ReportMetric(float64(searchStats.WavefrontMaxTileSize), "wavefront_max_tile_size")
+	if searchStats.WavefrontRounds > 0 {
+		b.ReportMetric(float64(searchStats.WavefrontStagedNeighbors)/float64(searchStats.WavefrontRounds), "wavefront_avg_tile_size")
+	}
 	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(readerStats.CacheHits, baseStats.CacheHits))/denom, "cache_hits/search")
 	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(readerStats.CacheMisses, baseStats.CacheMisses))/denom, "cache_misses/search")
 	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(readerStats.DecodedBlocks, baseStats.DecodedBlocks))/denom, "decoded_blocks/search")

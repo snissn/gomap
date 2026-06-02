@@ -30,9 +30,15 @@ var (
 	errColumnVectorGraphNativeSearchTopKNegative               = errors.New("collections: column_graph native search top_k cannot be negative")
 	errColumnVectorGraphNativeSearchEfSearchNegative           = errors.New("collections: column_graph native search ef_search cannot be negative")
 	errColumnVectorGraphNativeSearchCandidateDimensionMismatch = errors.New("collections: column_graph native search candidate dimension mismatch")
+	errColumnVectorGraphNativeSearchTraversalModeInvalid       = errors.New("collections: column_graph native search traversal mode invalid")
+	errColumnVectorGraphNativeSearchWavefrontWidthInvalid      = errors.New("collections: column_graph native search wavefront width invalid")
+	errColumnVectorGraphNativeSearchWavefrontRequiresPrepared  = errors.New("collections: column_graph native search wavefront requires prepared typed-column graph search")
+	errColumnVectorGraphNativeSearchWavefrontWidthWithoutMode  = errors.New("collections: column_graph native search wavefront width requires wavefront traversal mode")
 )
 
 type columnVectorGraphScoreBatchMode uint8
+
+type columnVectorGraphNativeSearchTraversalMode uint8
 
 type columnVectorGraphNativeSearchStatsMode uint8
 
@@ -40,6 +46,12 @@ const (
 	columnVectorGraphScoreBatchModeDefault columnVectorGraphScoreBatchMode = iota
 	columnVectorGraphScoreBatchModeScalar
 	columnVectorGraphScoreBatchModeIndexed
+)
+
+const (
+	columnVectorGraphNativeSearchTraversalModeDefault columnVectorGraphNativeSearchTraversalMode = iota
+	columnVectorGraphNativeSearchTraversalModeExact
+	columnVectorGraphNativeSearchTraversalModeWavefront
 )
 
 const (
@@ -76,6 +88,55 @@ func columnVectorGraphScoreBatchModeForSearchPlan(requested columnVectorGraphSco
 	}
 }
 
+func (m columnVectorGraphNativeSearchTraversalMode) normalized() (columnVectorGraphNativeSearchTraversalMode, error) {
+	switch m {
+	case columnVectorGraphNativeSearchTraversalModeDefault, columnVectorGraphNativeSearchTraversalModeExact:
+		return columnVectorGraphNativeSearchTraversalModeExact, nil
+	case columnVectorGraphNativeSearchTraversalModeWavefront:
+		return columnVectorGraphNativeSearchTraversalModeWavefront, nil
+	default:
+		return columnVectorGraphNativeSearchTraversalModeExact, errColumnVectorGraphNativeSearchTraversalModeInvalid
+	}
+}
+
+func (m columnVectorGraphNativeSearchTraversalMode) String() string {
+	switch m {
+	case columnVectorGraphNativeSearchTraversalModeWavefront:
+		return "wavefront"
+	case columnVectorGraphNativeSearchTraversalModeExact:
+		return "exact"
+	default:
+		return "default"
+	}
+}
+
+func columnVectorGraphNativeSearchTraversalOptions(opts columnVectorGraphNativeSearchOptions) (columnVectorGraphNativeSearchTraversalMode, int, error) {
+	mode, err := opts.TraversalMode.normalized()
+	if err != nil {
+		return columnVectorGraphNativeSearchTraversalModeExact, 0, err
+	}
+	if mode != columnVectorGraphNativeSearchTraversalModeWavefront {
+		if opts.WavefrontWidth != 0 {
+			return columnVectorGraphNativeSearchTraversalModeExact, 0, errColumnVectorGraphNativeSearchWavefrontWidthWithoutMode
+		}
+		return mode, 0, nil
+	}
+	if opts.WavefrontWidth < 2 {
+		return mode, 0, errColumnVectorGraphNativeSearchWavefrontWidthInvalid
+	}
+	return mode, opts.WavefrontWidth, nil
+}
+
+func columnVectorGraphNativeSearchScoreTileCapacity(degree, efSearch, wavefrontWidth int) int {
+	if degree < 0 {
+		degree = 0
+	}
+	if wavefrontWidth <= 1 || efSearch <= degree {
+		return degree
+	}
+	return efSearch
+}
+
 func (p *columnVectorGraphSearchPlan) preparedIndexedScoringDefaultEligible() bool {
 	return p != nil && p.preparedSearch != nil && p.preparedSearch.indexedScoringDefaultEligible()
 }
@@ -109,6 +170,13 @@ type columnVectorGraphNativeSearchOptions struct {
 	EfSearch int
 
 	ScoreBatchMode columnVectorGraphScoreBatchMode
+	// TraversalMode selects the layer-0 traversal scheduler. The default and
+	// explicit exact modes preserve current HNSW candidate order. Wavefront is an
+	// internal, non-default relaxed traversal experiment that stages candidates
+	// across multiple frontier pops and is only valid with a positive
+	// WavefrontWidth.
+	TraversalMode  columnVectorGraphNativeSearchTraversalMode
+	WavefrontWidth int
 	// StatsMode selects how much graph-search telemetry is collected. The zero
 	// value preserves full diagnostics; minimal mode keeps production source
 	// health, fallback, admission, and result counters while avoiding
@@ -268,6 +336,13 @@ type columnVectorGraphNativeSearchStats struct {
 	ResultIDStateValidationFailures      uint64
 	PreparedGraphSearchViews             uint64
 	GraphRowFallbacks                    uint64
+
+	WavefrontSearches        uint64
+	WavefrontWidth           uint64
+	WavefrontRounds          uint64
+	WavefrontCandidatePops   uint64
+	WavefrontStagedNeighbors uint64
+	WavefrontMaxTileSize     uint64
 
 	// Benchmark/debug-only HNSW control-flow counters. These are populated only
 	// when columnVectorGraphNativeSearchStatsModeBenchmarkDebug is selected so
@@ -694,32 +769,36 @@ type columnVectorGraphSearchCandidate struct {
 // It is not concurrency-safe. Parallel searches over immutable graph assets are
 // valid with one reader and one scratch per worker.
 type columnVectorGraphNativeSearchScratch struct {
-	scoreScratch      columnPhysicalRowReaderScratch
-	expandScratch     columnPhysicalRowReaderScratch
-	resultScratch     columnPhysicalRowReaderScratch
-	visitMarks        []uint64
-	visitEpoch        uint64
-	frontier          []columnVectorGraphSearchCandidate
-	top               []columnVectorGraphSearchCandidate
-	results           []columnVectorGraphNativeSearchResult
-	idBuffers         [][]byte
-	resultOrder       []int
-	resultOrdinals    []int
-	resultRowRefs     []DocumentRowRef
-	resultHasRefs     []bool
-	scoreTileOrdinals []int
-	scoreTileScores   []float64
-	scoreTileRowIDs   []uint32
-	scoreTileDots     []float32
-	searchPlan        columnVectorGraphSearchPlan
+	scoreScratch        columnPhysicalRowReaderScratch
+	expandScratch       columnPhysicalRowReaderScratch
+	resultScratch       columnPhysicalRowReaderScratch
+	visitMarks          []uint64
+	visitEpoch          uint64
+	frontier            []columnVectorGraphSearchCandidate
+	top                 []columnVectorGraphSearchCandidate
+	results             []columnVectorGraphNativeSearchResult
+	idBuffers           [][]byte
+	resultOrder         []int
+	resultOrdinals      []int
+	resultRowRefs       []DocumentRowRef
+	resultHasRefs       []bool
+	scoreTileOrdinals   []int
+	scoreTileScores     []float64
+	scoreTileRowIDs     []uint32
+	scoreTileDots       []float32
+	wavefrontCandidates []columnVectorGraphSearchCandidate
+	searchPlan          columnVectorGraphSearchPlan
 }
 
-func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch int) error {
+func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth int) error {
 	if s == nil {
 		return errColumnVectorGraphNativeSearchScratchRequired
 	}
-	if rowCount < 0 || dimensions < 0 || degree < 0 || topK < 0 || efSearch < 0 {
-		return fmt.Errorf("collections: column_graph native search received negative sizing input: rowCount=%d dimensions=%d degree=%d topK=%d efSearch=%d", rowCount, dimensions, degree, topK, efSearch)
+	if rowCount < 0 || dimensions < 0 || degree < 0 || topK < 0 || efSearch < 0 || scoreTileCapacity < 0 || wavefrontWidth < 0 {
+		return fmt.Errorf("collections: column_graph native search received negative sizing input: rowCount=%d dimensions=%d degree=%d topK=%d efSearch=%d scoreTileCapacity=%d wavefrontWidth=%d", rowCount, dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth)
+	}
+	if scoreTileCapacity < degree {
+		scoreTileCapacity = degree
 	}
 	for _, rowScratch := range []*columnPhysicalRowReaderScratch{&s.scoreScratch, &s.expandScratch, &s.resultScratch} {
 		prepareColumnVectorGraphNativeRowScratch(rowScratch, dimensions, degree)
@@ -745,10 +824,11 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
 	s.resultRowRefs = resizeColumnVectorGraphNativeRowRefScratch(s.resultRowRefs, topK)
 	s.resultHasRefs = resizeColumnVectorGraphNativeBoolScratch(s.resultHasRefs, topK)
-	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, degree)
-	s.scoreTileScores = resizeColumnVectorGraphNativeFloat64Scratch(s.scoreTileScores, degree)
-	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, degree)
-	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, degree)
+	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, scoreTileCapacity)
+	s.scoreTileScores = resizeColumnVectorGraphNativeFloat64Scratch(s.scoreTileScores, scoreTileCapacity)
+	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, scoreTileCapacity)
+	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, scoreTileCapacity)
+	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, wavefrontWidth)
 	return nil
 }
 
@@ -925,6 +1005,10 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if efSearch < 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search ef_search cannot be negative: %w", r.def.Name, errColumnVectorGraphNativeSearchEfSearchNegative)
 	}
+	traversalMode, wavefrontWidth, err := columnVectorGraphNativeSearchTraversalOptions(opts)
+	if err != nil {
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search traversal: %w", r.def.Name, err)
+	}
 	if topK == 0 || rowCount == 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, nil
 	}
@@ -959,11 +1043,15 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if efSearch > candidateRowCount {
 		efSearch = candidateRowCount
 	}
+	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront && wavefrontWidth > efSearch {
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search wavefront width=%d exceeds normalized ef_search=%d: %w", r.def.Name, wavefrontWidth, efSearch, errColumnVectorGraphNativeSearchWavefrontWidthInvalid)
+	}
 	degree := r.def.M
 	if degree < 0 {
 		degree = 0
 	}
-	if err := scratch.prepare(rowCount, r.def.Dimensions, degree, topK, efSearch); err != nil {
+	scoreTileCapacity := columnVectorGraphNativeSearchScoreTileCapacity(degree, efSearch, wavefrontWidth)
+	if err := scratch.prepare(rowCount, r.def.Dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth); err != nil {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search scratch prepare: %w", r.def.Name, err)
 	}
 
@@ -980,7 +1068,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	var debugCounters *columnVectorGraphNativeSearchDebugCounters
 	var debugStats *columnVectorGraphNativeSearchStats
 	if statsMode == columnVectorGraphNativeSearchStatsModeBenchmarkDebug {
-		debugCounters = newColumnVectorGraphNativeSearchDebugCounters(&stats, candidateLimit == uint64(candidateRowCount))
+		exactTraversalForDebug := traversalMode == columnVectorGraphNativeSearchTraversalModeExact && candidateLimit == uint64(candidateRowCount)
+		debugCounters = newColumnVectorGraphNativeSearchDebugCounters(&stats, exactTraversalForDebug)
 		if debugCounters != nil {
 			debugStats = debugCounters.stats
 		}
@@ -1008,6 +1097,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, stats, err
 	}
 	plan.scoreBatchMode = columnVectorGraphScoreBatchModeForSearchPlan(opts.ScoreBatchMode, plan)
+	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront {
+		if plan.preparedSearch == nil {
+			return nil, stats, fmt.Errorf("collections: column_graph %q native search wavefront: %w", r.def.Name, errColumnVectorGraphNativeSearchWavefrontRequiresPrepared)
+		}
+		stats.WavefrontSearches = 1
+		stats.WavefrontWidth = uint64(wavefrontWidth)
+	}
 	if loopCounters == nil && plan.preparedSearch == nil {
 		loopCounters = &columnVectorGraphNativeSearchLoopCounters{}
 	}
@@ -1050,127 +1146,133 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, stats, err
 	}
 	nextSeed := 0
-	for visitedCandidates < candidateLimit {
-		var candidate columnVectorGraphSearchCandidate
-		var ok bool
-		if debugCounters != nil {
-			candidate, ok = scratch.popFrontierDebug(debugCounters)
-		} else {
-			candidate, ok = scratch.popFrontier()
-		}
-		if !ok {
-			seed, ok := columnVectorGraphNextCandidateSeed(nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
-			if !ok {
-				break
-			}
-			nextSeed = seed + 1
-			visitMarks[seed] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
-				return nil, stats, err
-			}
-			continue
-		}
-		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, hotStats, preparedMinimalCounters, debugCounters)
-		if err != nil {
+	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront {
+		if err := r.searchLayer0Wavefront(plan, singleBlockView, query, queryInvNorm, topK, rowCount, candidateLimit, wavefrontWidth, candidateRows, hasCandidateRows, scratch, hotStats, &stats, &visitedCandidates, preparedMinimalCounters, debugCounters, countLoopEdges, &loopEdgeVisits, &nextSeed); err != nil {
 			return nil, stats, err
 		}
-		if plan.scoreBatchMode.indexedEnabled() {
-			for i := 0; i < len(adjacency) && visitedCandidates < candidateLimit; {
-				remaining := int(candidateLimit - visitedCandidates)
-				if remaining <= 0 {
+	} else {
+		for visitedCandidates < candidateLimit {
+			var candidate columnVectorGraphSearchCandidate
+			var ok bool
+			if debugCounters != nil {
+				candidate, ok = scratch.popFrontierDebug(debugCounters)
+			} else {
+				candidate, ok = scratch.popFrontier()
+			}
+			if !ok {
+				seed, ok := columnVectorGraphNextCandidateSeed(nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
+				if !ok {
 					break
 				}
-				tileCap := len(adjacency) - i
-				if tileCap > remaining {
-					tileCap = remaining
-				}
-				scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, tileCap)
-				tile := scratch.scoreTileOrdinals[:0]
-				for i < len(adjacency) && len(tile) < remaining {
-					neighborIndex := i
-					neighbor := adjacency[i]
-					i++
-					if countLoopEdges {
-						loopEdgeVisits++
-					}
-					if debugStats != nil {
-						debugStats.Layer0EdgeVisits++
-					}
-					if uint64(neighbor) >= uint64(rowCount) {
-						return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, neighborIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
-					}
-					neighborOrdinal := int(neighbor)
-					if visitMarks[neighborOrdinal] == visitEpoch {
-						if debugStats != nil {
-							debugStats.VisitedMarkChecks++
-							debugStats.VisitedMarkHits++
-							debugStats.AlreadyVisitedSkips++
-							debugStats.SkippedNeighbors++
-							debugStats.Layer0AlreadyVisitedSkips++
-						}
-						continue
-					}
-					if debugStats != nil {
-						debugStats.VisitedMarkChecks++
-						debugStats.VisitedMarkMisses++
-					}
-					if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
-						if debugCounters != nil {
-							debugCounters.recordFilterSkip(true)
-						}
-						visitMarks[neighborOrdinal] = visitEpoch
-						continue
-					}
-					visitMarks[neighborOrdinal] = visitEpoch
-					tile = append(tile, neighborOrdinal)
-				}
-				if len(tile) == 0 {
-					continue
-				}
-				if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, topK, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
+				nextSeed = seed + 1
+				visitMarks[seed] = visitEpoch
+				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
 					return nil, stats, err
 				}
+				continue
 			}
-			continue
-		}
-		for i, neighbor := range adjacency {
-			if visitedCandidates >= candidateLimit {
-				break
+			adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, hotStats, preparedMinimalCounters, debugCounters)
+			if err != nil {
+				return nil, stats, err
 			}
-			if countLoopEdges {
-				loopEdgeVisits++
+			if plan.scoreBatchMode.indexedEnabled() {
+				for i := 0; i < len(adjacency) && visitedCandidates < candidateLimit; {
+					remaining := int(candidateLimit - visitedCandidates)
+					if remaining <= 0 {
+						break
+					}
+					tileCap := len(adjacency) - i
+					if tileCap > remaining {
+						tileCap = remaining
+					}
+					scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, tileCap)
+					tile := scratch.scoreTileOrdinals[:0]
+					for i < len(adjacency) && len(tile) < remaining {
+						neighborIndex := i
+						neighbor := adjacency[i]
+						i++
+						if countLoopEdges {
+							loopEdgeVisits++
+						}
+						if debugStats != nil {
+							debugStats.Layer0EdgeVisits++
+						}
+						if uint64(neighbor) >= uint64(rowCount) {
+							return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, neighborIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+						}
+						neighborOrdinal := int(neighbor)
+						if visitMarks[neighborOrdinal] == visitEpoch {
+							if debugStats != nil {
+								debugStats.VisitedMarkChecks++
+								debugStats.VisitedMarkHits++
+								debugStats.AlreadyVisitedSkips++
+								debugStats.SkippedNeighbors++
+								debugStats.Layer0AlreadyVisitedSkips++
+							}
+							continue
+						}
+						if debugStats != nil {
+							debugStats.VisitedMarkChecks++
+							debugStats.VisitedMarkMisses++
+						}
+						if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+							if debugCounters != nil {
+								debugCounters.recordFilterSkip(true)
+							}
+							visitMarks[neighborOrdinal] = visitEpoch
+							continue
+						}
+						visitMarks[neighborOrdinal] = visitEpoch
+						tile = append(tile, neighborOrdinal)
+					}
+					if len(tile) == 0 {
+						continue
+					}
+					if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, topK, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
+						return nil, stats, err
+					}
+				}
+				continue
 			}
-			if debugStats != nil {
-				debugStats.Layer0EdgeVisits++
-			}
-			if uint64(neighbor) >= uint64(rowCount) {
-				return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
-			}
-			neighborOrdinal := int(neighbor)
-			if visitMarks[neighborOrdinal] == visitEpoch {
+			for i, neighbor := range adjacency {
+				if visitedCandidates >= candidateLimit {
+					break
+				}
+				if countLoopEdges {
+					loopEdgeVisits++
+				}
+				if debugStats != nil {
+					debugStats.Layer0EdgeVisits++
+				}
+				if uint64(neighbor) >= uint64(rowCount) {
+					return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+				}
+				neighborOrdinal := int(neighbor)
+				if visitMarks[neighborOrdinal] == visitEpoch {
+					if debugStats != nil {
+						debugStats.VisitedMarkChecks++
+						debugStats.VisitedMarkHits++
+						debugStats.AlreadyVisitedSkips++
+						debugStats.SkippedNeighbors++
+						debugStats.Layer0AlreadyVisitedSkips++
+					}
+					continue
+				}
 				if debugStats != nil {
 					debugStats.VisitedMarkChecks++
-					debugStats.VisitedMarkHits++
-					debugStats.AlreadyVisitedSkips++
-					debugStats.SkippedNeighbors++
-					debugStats.Layer0AlreadyVisitedSkips++
+					debugStats.VisitedMarkMisses++
 				}
-				continue
-			}
-			if debugStats != nil {
-				debugStats.VisitedMarkChecks++
-				debugStats.VisitedMarkMisses++
-			}
-			if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
-				if debugCounters != nil {
-					debugCounters.recordFilterSkip(true)
+				if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+					if debugCounters != nil {
+						debugCounters.recordFilterSkip(true)
+					}
+					visitMarks[neighborOrdinal] = visitEpoch
+					continue
 				}
 				visitMarks[neighborOrdinal] = visitEpoch
-				continue
-			}
-			visitMarks[neighborOrdinal] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, topK, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
-				return nil, stats, err
+				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, topK, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
+					return nil, stats, err
+				}
 			}
 		}
 	}
@@ -1194,6 +1296,129 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, stats, err
 	}
 	return scratch.results, stats, nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, topK int, rowCount int, candidateLimit uint64, wavefrontWidth int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, wavefrontStats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters, debugCounters *columnVectorGraphNativeSearchDebugCounters, countLoopEdges bool, loopEdgeVisits *uint64, nextSeed *int) error {
+	if wavefrontWidth < 2 {
+		return errColumnVectorGraphNativeSearchWavefrontWidthInvalid
+	}
+	visitMarks := scratch.visitMarks
+	visitEpoch := scratch.visitEpoch
+	for *visitedCandidates < candidateLimit {
+		scratch.wavefrontCandidates = ensureColumnVectorGraphNativeCandidateScratch(scratch.wavefrontCandidates, wavefrontWidth)
+		wave := scratch.wavefrontCandidates[:0]
+		for len(wave) < wavefrontWidth && *visitedCandidates < candidateLimit {
+			var candidate columnVectorGraphSearchCandidate
+			var ok bool
+			if debugCounters != nil {
+				candidate, ok = scratch.popFrontierDebug(debugCounters)
+			} else {
+				candidate, ok = scratch.popFrontier()
+			}
+			if !ok {
+				if len(wave) > 0 {
+					break
+				}
+				seed, seedOK := columnVectorGraphNextCandidateSeed(*nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
+				if !seedOK {
+					break
+				}
+				*nextSeed = seed + 1
+				visitMarks[seed] = visitEpoch
+				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
+					return err
+				}
+				continue
+			}
+			wave = append(wave, candidate)
+		}
+		if len(wave) == 0 {
+			if *visitedCandidates >= candidateLimit {
+				break
+			}
+			seed, seedOK := columnVectorGraphNextCandidateSeed(*nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
+			if !seedOK {
+				break
+			}
+			*nextSeed = seed + 1
+			visitMarks[seed] = visitEpoch
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
+				return err
+			}
+			continue
+		}
+		remaining := int(candidateLimit - *visitedCandidates)
+		if remaining <= 0 {
+			break
+		}
+		scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, remaining)
+		tile := scratch.scoreTileOrdinals[:0]
+		for _, candidate := range wave {
+			if len(tile) >= remaining {
+				break
+			}
+			adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, stats, preparedMinimal, debugCounters)
+			if err != nil {
+				return err
+			}
+			for i, neighbor := range adjacency {
+				if len(tile) >= remaining {
+					break
+				}
+				if countLoopEdges {
+					(*loopEdgeVisits)++
+				}
+				if debugCounters != nil {
+					debugCounters.recordLayer0Edge()
+				}
+				if uint64(neighbor) >= uint64(rowCount) {
+					return fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+				}
+				neighborOrdinal := int(neighbor)
+				if visitMarks[neighborOrdinal] == visitEpoch {
+					if debugCounters != nil {
+						debugCounters.recordVisitedMark(true)
+						debugCounters.recordAlreadyVisitedSkip()
+					}
+					continue
+				}
+				if debugCounters != nil {
+					debugCounters.recordVisitedMark(false)
+				}
+				if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+					if debugCounters != nil {
+						debugCounters.recordFilterSkip(true)
+					}
+					visitMarks[neighborOrdinal] = visitEpoch
+					continue
+				}
+				visitMarks[neighborOrdinal] = visitEpoch
+				tile = append(tile, neighborOrdinal)
+			}
+		}
+		if wavefrontStats != nil {
+			wavefrontStats.WavefrontRounds++
+			wavefrontStats.WavefrontCandidatePops += uint64(len(wave))
+			wavefrontStats.WavefrontStagedNeighbors += uint64(len(tile))
+			if uint64(len(tile)) > wavefrontStats.WavefrontMaxTileSize {
+				wavefrontStats.WavefrontMaxTileSize = uint64(len(tile))
+			}
+		}
+		if len(tile) == 0 {
+			continue
+		}
+		if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, topK, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureColumnVectorGraphNativeCandidateScratch(dst []columnVectorGraphSearchCandidate, target int) []columnVectorGraphSearchCandidate {
+	if cap(dst) < target {
+		return make([]columnVectorGraphSearchCandidate, 0, target)
+	}
+	return dst[:0]
 }
 
 func columnVectorGraphSearchCandidateRows(opts columnVectorGraphNativeSearchOptions, rowCount int) (typedcolumn.RowSelection, bool, error) {

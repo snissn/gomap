@@ -2,9 +2,10 @@
 
 Status: superseded. This initial single-run profile sweep is retained as
 prior-run evidence, but `docs/benchmarks/ycsb_profile_closeout_2026-06-01.md`
-is the preferred checked-in command-WAL profile report until a post-#2164 rerun
-lands. Use `docs/benchmarks/ycsb_mongodb_treedb_current.md` for the current
-report index and rerun matrix.
+is the preferred checked-in profile-surface closeout. Use
+`docs/benchmarks/ycsb_post_update_stack_2026-06-02.md` for current headline
+YCSB performance, and use `docs/benchmarks/ycsb_mongodb_treedb_current.md` for
+the report index and rerun matrix.
 
 This report captures an external `go-ycsb` profile sweep over the current
 TreeDB collection entry points:
