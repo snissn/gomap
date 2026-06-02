@@ -111,6 +111,25 @@ func TestMaintenanceRoots_DeduplicatesCollectionRootDescriptors(t *testing.T) {
 	requireMaintenanceRootCount(t, roots, maintenanceRootCollection, 1)
 }
 
+func TestMaintenanceRoots_PreservesDistinctRolesForSameRootID(t *testing.T) {
+	var acc maintenanceRootAccumulator
+	rootID := uint64(42)
+	acc.add(maintenanceRootUser, rootID, nil)
+	acc.add(maintenanceRootCollection, rootID, []byte(maintenanceTestCollectionRootKey))
+	acc.add(maintenanceRootCollection, rootID, []byte("collections/root/users/alias"))
+	acc.add(maintenanceRootSystem, rootID, nil)
+
+	requireMaintenanceRoot(t, acc.roots, maintenanceRootUser, rootID)
+	collectionRoot := requireMaintenanceRoot(t, acc.roots, maintenanceRootCollection, rootID)
+	if !bytes.Equal(collectionRoot.descriptorKey, []byte(maintenanceTestCollectionRootKey)) {
+		t.Fatalf("collection descriptor key=%q want %q", collectionRoot.descriptorKey, maintenanceTestCollectionRootKey)
+	}
+	requireMaintenanceRoot(t, acc.roots, maintenanceRootSystem, rootID)
+	requireMaintenanceRootCount(t, acc.roots, maintenanceRootUser, 1)
+	requireMaintenanceRootCount(t, acc.roots, maintenanceRootCollection, 1)
+	requireMaintenanceRootCount(t, acc.roots, maintenanceRootSystem, 1)
+}
+
 func TestMaintenanceRoots_IncludesCollectionOverlayRootDescriptors(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

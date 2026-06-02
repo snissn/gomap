@@ -40,7 +40,12 @@ type maintenanceRoot struct {
 
 type maintenanceRootAccumulator struct {
 	roots []maintenanceRoot
-	seen  map[uint64]struct{}
+	seen  map[maintenanceRootKey]struct{}
+}
+
+type maintenanceRootKey struct {
+	kind   maintenanceRootKind
+	rootID uint64
 }
 
 func (a *maintenanceRootAccumulator) add(kind maintenanceRootKind, rootID uint64, descriptorKey []byte) {
@@ -48,12 +53,13 @@ func (a *maintenanceRootAccumulator) add(kind maintenanceRootKind, rootID uint64
 		return
 	}
 	if a.seen == nil {
-		a.seen = make(map[uint64]struct{}, 4)
+		a.seen = make(map[maintenanceRootKey]struct{}, 4)
 	}
-	if _, ok := a.seen[rootID]; ok {
+	key := maintenanceRootKey{kind: kind, rootID: rootID}
+	if _, ok := a.seen[key]; ok {
 		return
 	}
-	a.seen[rootID] = struct{}{}
+	a.seen[key] = struct{}{}
 	root := maintenanceRoot{
 		kind:   kind,
 		rootID: rootID,
