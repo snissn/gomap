@@ -67,8 +67,8 @@ const (
 	columnStoreJSONBenchModePrepared               = "prepared"
 	columnStoreJSONBenchMutationInsertOnlyReopen   = "insert_only_checkpoint_reopen"
 	columnStoreJSONBenchSyntheticFixtureCaveat     = "in-repo synthetic JSONBench-shaped fixture; not an external full-data JSONBench run"
-	columnStoreJSONBenchFullDataCaveat             = "not an external full-data retained-JSON parity run; #2117 full retained JSON plus reconstruction parity is implemented in the JSONBench TreeDB harness"
-	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local synthetic evidence; #2118 apples-to-apples storage fields are implemented and require an external JSONBench run for headline ClickHouse comparison"
+	columnStoreJSONBenchFullDataCaveat             = "not an external full-data retained-JSON parity run; #2117 full retained JSON plus reconstruction parity is implemented in the external snissn/JSONBench TreeDB harness"
+	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local synthetic evidence; #2118 apples-to-apples storage fields are implemented in the external snissn/JSONBench TreeDB harness and require an external run for headline ClickHouse comparison"
 )
 
 type columnStoreSuitePathAlias struct {
@@ -2461,7 +2461,7 @@ func columnStoreReconstructionStatus(cfg *collections.ColumnStoreConfig) string 
 	if cfg == nil || cfg.Reconstruction == "" {
 		return "not_configured"
 	}
-	return fmt.Sprintf("configured_%s; #2117 full JSONBench retained-document reconstruction parity is implemented in the external JSONBench TreeDB harness", cfg.Reconstruction)
+	return fmt.Sprintf("configured_%s; #2117 full JSONBench retained-document reconstruction parity is implemented in the external snissn/JSONBench TreeDB harness", cfg.Reconstruction)
 }
 
 func columnStoreColumnOwnerLabelValue(col collections.ColumnStoreColumn) collections.TypedStorageFieldOwner {
