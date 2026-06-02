@@ -26,6 +26,7 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 
 HashDB is a high-performance, memory-mapped hash index optimized for random I/O.
 
+- **[HashDB README](../HashDB/README.md)**: Focused HashDB overview, entry points, durability model, and benchmark snapshot target.
 - **[Concepts](HASHDB_CONCEPTS.md)**: Design overview (Swiss Tables, Slab Log).
 - **[Tuning](HASHDB_TUNING.md)**: Memory policies and performance configuration.
 - **[Snapshots](HASHDB_SNAPSHOT.md)**: Export/Restore and consistent iteration.

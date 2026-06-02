@@ -39,7 +39,7 @@ help:
 	@echo "  make build-mongo-gateway - build TreeDB MongoDB gateway server"
 	@echo "  make run-mongo-gateway - run TreeDB MongoDB gateway server"
 	@echo "  make bench          - run unified bench"
-	@echo "  make bench-readme   - regenerate README benchmark snapshot"
+	@echo "  make bench-readme   - regenerate HashDB README benchmark snapshot"
 	@echo "  make benchmark-all  - run HashDB redis-benchmark suite (legacy)"
 	@echo "  make unified-bench  - build unified bench binary"
 	@echo "  make benchprof      - build profile analyzer binary"
@@ -177,7 +177,7 @@ bench: unified-bench
 	./$(BIN_DIR)/unified-bench
 
 bench-readme: unified-bench
-	./$(BIN_DIR)/unified-bench -suite readme -format markdown -seed 1 -keycounts "$(BENCH_KEYCOUNTS)" -valsize "$(BENCH_VALSIZE)" -batchsize "$(BENCH_BATCHSIZE)" -range-queries "$(BENCH_RANGE_QUERIES)" -range-span "$(BENCH_RANGE_SPAN)" -outdir "$(BENCH_OUTDIR)" -progress=false | go run ./scripts/update_readme_bench.go
+	./$(BIN_DIR)/unified-bench -suite readme -format markdown -seed 1 -keycounts "$(BENCH_KEYCOUNTS)" -valsize "$(BENCH_VALSIZE)" -batchsize "$(BENCH_BATCHSIZE)" -range-queries "$(BENCH_RANGE_QUERIES)" -range-span "$(BENCH_RANGE_SPAN)" -outdir "$(BENCH_OUTDIR)" -progress=false | go run ./scripts/update_readme_bench.go -readme HashDB/README.md
 
 .PHONY: bench-collections-canonical
 bench-collections-canonical:

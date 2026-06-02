@@ -11,32 +11,43 @@ which cells should be rerun next.
 
 ## Current Canonical Report
 
-Use `docs/benchmarks/ycsb_profile_closeout_2026-06-01.md` as the current
-checked-in command-WAL profile evidence until a fresh post-#2164 rerun lands.
+Use `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md` as the current
+checked-in external YCSB evidence for MongoDB, TreeDB nativewire, and TreeDB
+Mongo gateway.
 
-That closeout report covers the intended public TreeDB profile surface:
+That report covers the intended public TreeDB profile surface:
 
 - `command_wal_durable`
 - `command_wal_relaxed`
 - `bench`, as the explicit no-WAL benchmark-only ceiling
 
-It also records zero YCSB operation errors and separates the repeated `bench`
-ceiling run from an initial slow no-WAL Mongo-gateway run that did not reproduce.
+It also records zero YCSB operation errors, uses three run repeats per target
+or profile, and refreshes the earlier pre-update-stack numbers after the
+nativewire BSON `$set` update path and collection update-path optimizations
+landed.
 
-Important freshness note: PR #2164 removed mandatory command-WAL payload
-SHA-256 hashing. Command-WAL throughput numbers collected before that PR remain
-valid historical evidence, but should not be used as final current headline
-numbers without a rerun on the new command-WAL frame format. The no-WAL `bench`
-rows are less directly affected, but should still be rerun in the same matrix as
-a same-host ceiling/control.
+## Current Headline
+
+Run rows use the median total-throughput repeat from the June 2 report.
+
+| target | profile | load ops/sec | run ops/sec | run avg us | run p99 us | run max us | errors |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MongoDB | baseline | 33,255.6 | 26,102.5 | 601.0 | 1,461.0 | 3,401.0 | 0 |
+| TreeDB nativewire | `command_wal_durable` | 77,065.3 | 120,500.7 | 128.0 | 477.0 | 1,475.0 | 0 |
+| TreeDB Mongo gateway | `command_wal_durable` | 57,370.1 | 74,544.7 | 206.0 | 649.0 | 1,331.0 | 0 |
+| TreeDB nativewire | `command_wal_relaxed` | 76,411.7 | 126,762.5 | 121.0 | 374.0 | 1,687.0 | 0 |
+| TreeDB Mongo gateway | `command_wal_relaxed` | 62,444.0 | 75,371.9 | 203.0 | 629.0 | 1,674.0 | 0 |
+| TreeDB nativewire | `bench` no-WAL | 85,201.7 | 134,415.5 | 114.0 | 365.0 | 969.0 | 0 |
+| TreeDB Mongo gateway | `bench` no-WAL | 75,033.3 | 79,357.6 | 192.0 | 729.0 | 3,035.0 | 0 |
 
 ## Report Inventory
 
 | report | status | use |
 | --- | --- | --- |
+| `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md` | Current external YCSB report. | Use for current headline MongoDB / TreeDB nativewire / TreeDB Mongo gateway results after the June 2 update-path stack. |
 | `docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md` | Historical legacy-profile report. | Keep for the original MongoDB / TreeDB native / TreeDB Mongo comparison and the post-load Mongo-gateway cliff attribution. Do not use its `fast` rows as current public-profile guidance. |
-| `docs/benchmarks/ycsb_treedb_profile_sweep_2026-06-01.md` | Superseded initial command-WAL sweep. | Keep as prior-run evidence. Prefer the closeout report for profile-surface conclusions. |
-| `docs/benchmarks/ycsb_profile_closeout_2026-06-01.md` | Current checked-in command-WAL/public-profile report until post-#2164 rerun. | Use for current docs and profile-surface discussion, with the #2164 freshness caveat above. |
+| `docs/benchmarks/ycsb_treedb_profile_sweep_2026-06-01.md` | Superseded initial command-WAL sweep. | Keep as prior-run evidence. Prefer the June 2 report for current performance and the closeout report only for profile-surface conclusions. |
+| `docs/benchmarks/ycsb_profile_closeout_2026-06-01.md` | Superseded profile-surface closeout. | Keep for profile-surface closeout evidence. Do not use as current headline performance after the June 2 update-path stack. |
 | `docs/benchmarks/mongo_gateway_compare_2026-04-29/` | Historical non-YCSB Mongo-gateway microbenchmark. | Useful for gateway-specific attribution, but not a substitute for external YCSB comparisons. |
 
 ## Standard Benchmark Boundary
@@ -65,20 +76,19 @@ Any nonzero YCSB operation error counter such as `INSERT_ERROR`, `READ_ERROR`,
 or `UPDATE_ERROR` invalidates that phase unless the report explicitly marks it
 as exploratory known-bad evidence.
 
-## Next Full Rerun Matrix
+## Standard Full Rerun Matrix
 
-Run this matrix to replace the current pre-#2164 command-WAL numbers with fresh
-headline evidence.
+Run this matrix to refresh the current headline evidence after performance,
+profile, nativewire, or Mongo gateway changes.
 
 ### Baseline And Durable Cell
 
-For a formal fresh report, run the first cell with `RUN_REPEATS=3`. That repeats
-the YCSB run phase for MongoDB, TreeDB nativewire, and TreeDB Mongo gateway
-after each target's load phase, which is useful for separating first-run and
-repeat behavior:
+Run the first cell with `RUN_REPEATS=3`. That repeats the YCSB run phase for
+MongoDB, TreeDB nativewire, and TreeDB Mongo gateway after each target's load
+phase, which is useful for separating first-run and repeat behavior:
 
 ```sh
-RUN_ROOT=/tmp/treedb_ycsb_post2164_$(date +%Y%m%d_%H%M%S)
+RUN_ROOT=/tmp/treedb_ycsb_current_$(date +%Y%m%d_%H%M%S)
 mkdir -p "$RUN_ROOT"
 
 OUT_DIR="$RUN_ROOT/command_wal_durable" \
@@ -90,14 +100,12 @@ TREEDB_MONGO_ADDR=127.0.0.1:27130 \
 TREEDB_MONGO_DOCUMENT_FORMAT=bson \
 RUN_REPEATS=3 \
 BUILD=true \
-BUILD_GOYCSB=false \
+BUILD_GOYCSB=true \
 scripts/ycsb_compare_mongodb_treedb.sh
 ```
 
 For a cheaper informal sweep, set `RUN_REPEATS=1` in this first command and use
-the resulting MongoDB row as the once-per-matrix baseline. Then run the durable
-TreeDB cell again with `MONGODB_MODE=skip RUN_REPEATS=3` if repeated durable
-TreeDB rows are needed.
+the resulting MongoDB row as the once-per-matrix baseline.
 
 ### Remaining TreeDB Profiles
 

@@ -413,7 +413,8 @@ Details: `docs/TREEDB_STORAGE_FORMAT.md`.
 TreeDB performance depends heavily on workload shape. Prefer tuning with:
 
 - `./bin/unified-bench` (after `make unified-bench`)
-- `make bench-readme` (reproducible suite; prints environment metadata)
+- `./bin/unified-bench -suite readme -format markdown` for the reproducible
+  cross-engine snapshot shape with environment metadata
 
 Recommended “gate-style” suites:
 
