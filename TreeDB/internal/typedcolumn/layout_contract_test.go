@@ -240,6 +240,57 @@ func TestColumnPartLayoutContractCorruptionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestPhysicalColumnLayoutForContractOverflowFailsClosed1931(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	for _, tc := range []struct {
+		name        string
+		logicalType string
+		def         ColumnDefinition
+	}{
+		{
+			name:        "dense_vector_bytes_per_row",
+			logicalType: string(ColumnTypeUint64Vector),
+			def: ColumnDefinition{
+				Name:               "codes64",
+				Type:               ColumnTypeUint64Vector,
+				Encoding:           EncodingRawUint64Vector,
+				Compression:        CompressionNone,
+				FixedWidthElements: maxInt/8 + 1,
+			},
+		},
+		{
+			name:        "fixed_bytes_logical_bits",
+			logicalType: "byte_vector",
+			def: ColumnDefinition{
+				Name:               "codes",
+				Type:               ColumnTypeFixedBytes,
+				Encoding:           EncodingRawFixedBytes,
+				Compression:        CompressionNone,
+				FixedWidthElements: maxInt/8 + 1,
+			},
+		},
+		{
+			name:        "packed_logical_bits",
+			logicalType: string(ColumnTypePackedUint4Vector),
+			def: ColumnDefinition{
+				Name:               "codes4",
+				Type:               ColumnTypePackedUint4Vector,
+				Encoding:           EncodingRawPackedUint4Vector,
+				Compression:        CompressionNone,
+				FixedWidthElements: maxInt/4 + 1,
+				BitsPerElement:     4,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			layout := physicalColumnLayoutForContract(tc.logicalType, tc.def)
+			if layout.endian != ColumnPartLayoutEndianNone || layout.direct || layout.bytesPerRow != 0 || layout.logicalBitsPerRow != 0 {
+				t.Fatalf("overflow layout=%+v want fail-closed empty layout", layout)
+			}
+		})
+	}
+}
+
 func TestColumnPartLayoutContractOldAssetMissingContractFailsClosed(t *testing.T) {
 	image := mustLayoutContractFixedWidthImage(t)
 	descriptor := mustValidationSection(t, image, ColumnPartImageSectionDescriptor)

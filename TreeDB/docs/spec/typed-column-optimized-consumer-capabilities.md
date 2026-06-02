@@ -72,7 +72,7 @@ pointers must not be described as transient or WAL-like storage.
 | `uint32_vector` / `int32_vector` | `uint32_vector` / `int32_vector` | `raw_uint32_vector` / `raw_int32_vector` | `mmap_direct` | #1930 non-null dense numeric vector `typed_column_part` fields; `uint32_vector` is generic dense data, not graph `adjacency_list`. | Non-null, non-default, uncompressed row-major little-endian fixed-width payloads; exact `rows*elements_per_row*4`; positive `elements_per_row`; 4-byte alignment; logical/physical/encoding names must match. | Generic dense payload views only. Adjacency traversal remains on `uint32_list`/`raw_uint32_offsets_list`; scoring/query-mode semantics are deferred. | Dense fixed-width validation, adjacency-isolation tests, reopen/corruption failures, and #2046 certifier coverage. |
 | `uint64_vector` / `int64_vector` / `float64_vector` | `uint64_vector` / `int64_vector` / `float64_vector` | `raw_uint64_vector` / `raw_int64_vector` / `raw_float64_vector` | `mmap_direct` | #1930 non-null dense numeric vector `typed_column_part` fields for 8-byte quantized/packed-word assets. | Non-null, non-default, uncompressed row-major little-endian fixed-width payloads; exact `rows*elements_per_row*8`; positive `elements_per_row`; 8-byte alignment; logical/physical/encoding names must match. | Generic dense payload views only. Float64/vector scorers, query modes, and graph-search roles are deferred. | Dense fixed-width validation, non-divisible length failures, reopen/corruption failures, and #2046 certifier coverage. |
 | `byte_vector` | `fixed_bytes` | `raw_fixed_bytes` | `mmap_direct` | #1931 non-null fixed row-byte `typed_column_part` fields for opaque code/PQ/exception payload rows. | Non-null, non-default, uncompressed row-major fixed bytes; exact `rows*bytes_per_row`; positive `bytes_per_row`; byte alignment; `bits_per_element=0`. | Generic byte row views only. Scoring/query-mode semantics are deferred to #1932/#1926. | Fixed-byte round trip, reopen/corruption failures, direct-view conformance, and zero-allocation row lookup benchmarks. |
-| `packed_bit_vector` / `packed_uint2_vector` / `packed_uint4_vector` | matching packed type | matching `raw_packed_*` encoding | `mmap_direct` | #1931 non-null packed-code `typed_column_part` fields for bit/2-bit/4-bit quantized code rows. | Non-null, non-default, uncompressed row-major packed unsigned elements; LSB-first bit order; exact `rows*ceil(elements_per_row*bits_per_element/8)`; positive `elements_per_row`; matching `bits_per_element`; zero high padding bits; byte alignment with little-endian word views. | Generic packed row/word views only. Popcount/scalar-quantized scorers and query modes are deferred to #1932/#1926. | Bit-order golden tests, padding fail-closed tests, reopen/corruption failures, direct-view conformance, and zero-allocation scorer-shaped benchmarks. |
+| `packed_bit_vector` / `packed_uint2_vector` / `packed_uint4_vector` | `packed_bit_vector` / `packed_uint2_vector` / `packed_uint4_vector` | `raw_packed_bit_vector` / `raw_packed_uint2_vector` / `raw_packed_uint4_vector` | `mmap_direct` | #1931 non-null packed-code `typed_column_part` fields for bit/2-bit/4-bit quantized code rows. | Non-null, non-default, uncompressed row-major packed unsigned elements; LSB-first bit order; exact `rows*ceil(elements_per_row*bits_per_element/8)`; positive `elements_per_row`; matching `bits_per_element`; zero high padding bits; byte alignment with little-endian word views. | Generic packed row/word views only. Popcount/scalar-quantized scorers and query modes are deferred to #1932/#1926. | Bit-order golden tests, padding fail-closed tests, reopen/corruption failures, direct-view conformance, and zero-allocation scorer-shaped benchmarks. |
 | `uint32_list` | `uint32_list` | `raw_uint32_offsets_list` | `mmap_direct` | Generic list typed-column assets and vector-index `adjacency` state. | Non-null, non-default, uncompressed split sections: `offsets []uint64` length `rows+1`, `offsets[0]==0`, monotonic host-int-bounded offsets, final offset equals `values []uint32` count; offsets 8-byte and values 4-byte aligned. | Generic list length/payload views. Graph-search adjacency uses this as admitted prepared CSR-style HNSW state under #2044/#2038; graph ordinal/layer/deleted-row validation remains graph-owned. | Offsets/value validation, reopen/corruption, length-only-vs-value-integrity tests, `offsets_mmap_direct_view`, `values_mmap_direct_view`, `adjacency_prepared_csr_mmap_direct/search`, generic fallback counter `adjacency_typed_list_mmap_direct/search`, and #2046 certifier coverage. |
 | `bytes` | `bytes` | `raw_bytes_offsets` | `mmap_direct` | Generic opaque bytes typed-column assets and vector-index `document_ids` state. | Non-null, non-default, uncompressed split sections: `offsets []uint64` length `rows+1`, `offsets[0]==0`, monotonic host-int-bounded offsets, final offset equals values byte length; values are opaque and may be non-UTF-8. | Opaque bytes views and final result/document-ID materialization. Graph-search may use this for returned IDs/top-k materialization under #2044/#2041, not traversal/scoring. | Bytes offsets/value validation, corrupt-state fail-closed tests, `result_id_typed_bytes_state`, `result_id_state_validation_failures`, and #2046 certifier coverage. |
 | `adjacency_list` legacy dense | `adjacency_list` | `raw_uint32_dense` | `scratch_decode` | Legacy graph-specific compatibility assets only. | Fixed-degree dense graph layout is not the generic list primitive and is not a current direct-view target. | Old fixtures and diagnostics may decode it; new graph-search state must use `uint32_list` vector-index state. | Quarantine tests must keep new rebuilds from publishing this path; fallback counters must distinguish legacy dense use. |
@@ -112,21 +112,27 @@ Current logical value types covered: `bool`, `int64`, `float32`, `double`,
 (`uint8_vector`, `int8_vector`, `uint16_vector`, `int16_vector`,
 `uint32_vector`, `int32_vector`, `uint64_vector`, `int64_vector`,
 `float16_vector`, `bfloat16_vector`, `float32_vector`, `float64_vector`),
-`uint32_list`, `bytes`, and `adjacency_list`.
+#1931 fixed/packed code vectors (`byte_vector`, `packed_bit_vector`,
+`packed_uint2_vector`, `packed_uint4_vector`), `uint32_list`, `bytes`, and
+`adjacency_list`.
 Current physical typedcolumn types covered: `int64`, `low_cardinality_code`,
 `bool`, `float32`, `float64`, #1929 primitive scalar types, #1930 dense numeric
 vector types (`uint8_vector`, `int8_vector`, `uint16_vector`, `int16_vector`,
 `uint32_vector`, `int32_vector`, `uint64_vector`, `int64_vector`,
 `float16_vector`, `bfloat16_vector`, `float32_vector`, `float64_vector`),
-`uint32_list`, `bytes`, and `adjacency_list`.
+#1931 fixed/packed code types (`fixed_bytes`, `packed_bit_vector`,
+`packed_uint2_vector`, `packed_uint4_vector`), `uint32_list`, `bytes`, and
+`adjacency_list`.
 Current encodings covered: `raw_int64`, `delta_varint`,
 `double_delta_varint`, `nullable_int64`, `bool_bitpack_rle`,
 `low_cardinality_uint32`, `raw_float32_vector`, `raw_uint32_dense`,
 `raw_float32`, `raw_float64`, `raw_uint32_offsets_list`, `raw_bytes_offsets`,
 the #1929 primitive scalar encodings `raw_int8`, `raw_uint8`, `raw_int16`,
 `raw_uint16`, `raw_int32`, `raw_uint32`, `raw_uint64`, `raw_float16`,
-`raw_bfloat16`, and the #1930 dense vector encodings `raw_uint8_vector`,
+`raw_bfloat16`, the #1930 dense vector encodings `raw_uint8_vector`,
 `raw_int8_vector`, `raw_uint16_vector`, `raw_int16_vector`,
 `raw_uint32_vector`, `raw_int32_vector`, `raw_uint64_vector`,
-`raw_int64_vector`, `raw_float16_vector`, `raw_bfloat16_vector`, and
-`raw_float64_vector`.
+`raw_int64_vector`, `raw_float16_vector`, `raw_bfloat16_vector`,
+`raw_float64_vector`, and the #1931 fixed/packed encodings `raw_fixed_bytes`,
+`raw_packed_bit_vector`, `raw_packed_uint2_vector`, and
+`raw_packed_uint4_vector`.

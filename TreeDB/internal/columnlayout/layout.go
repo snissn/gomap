@@ -518,7 +518,6 @@ func applyPackedUintVectorLayout(caps *Capabilities) {
 	caps.Layout.ElementWidthBytes = 1
 	caps.Layout.ElementsPerRow = desc.FixedWidthElements
 	caps.Layout.BitsPerElement = bitsPerElement
-	caps.Layout.LogicalBitsPerRow = desc.FixedWidthElements * bitsPerElement
 	caps.Layout.Endian = EndianLittle
 	caps.Layout.AlignmentBytes = 1
 	caps.Layout.LengthMultipleBytes = 1
@@ -533,7 +532,13 @@ func applyPackedUintVectorLayout(caps *Capabilities) {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLengthMultipleMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 		return
 	}
+	logicalBits, err := checkedMul(desc.FixedWidthElements, bitsPerElement, "packed uint logical bits")
+	if err != nil {
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLengthMultipleMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		return
+	}
 	caps.Layout.BytesPerRow = rowBytes
+	caps.Layout.LogicalBitsPerRow = logicalBits
 	if desc.BitsPerElement != 0 && desc.BitsPerElement != bitsPerElement {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonPackedUintBitsMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 		return
@@ -542,7 +547,6 @@ func applyPackedUintVectorLayout(caps *Capabilities) {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLengthMultipleMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 		return
 	}
-	logicalBits := desc.FixedWidthElements * bitsPerElement
 	if desc.LogicalBitsPerRow != 0 && desc.LogicalBitsPerRow != logicalBits {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonPackedUintBitsMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 		return

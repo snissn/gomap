@@ -953,7 +953,7 @@ func applyTypedColumnAdapterStoredDefinitions(columns []typedColumnAdapterColumn
 
 func typedColumnAdapterValidateStoredDefinition(field TypedStorageField, want typedcolumn.ColumnDefinition, got typedcolumn.ColumnDefinition, context string) error {
 	if got.Name != want.Name || got.Type != want.Type || got.FixedWidthElements != want.FixedWidthElements || got.BitsPerElement != want.BitsPerElement || (typedColumnAdapterRequiresExactStoredEncoding(field) && got.Encoding != want.Encoding) {
-		return fmt.Errorf("collections: %s %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want %d bits_per_element=%d want %d (want type=%s encoding=%s compression=%s)", context, want.Name, got.Type, got.Encoding, got.Compression, got.FixedWidthElements, want.FixedWidthElements, got.BitsPerElement, want.BitsPerElement, want.Type, want.Encoding, want.Compression)
+		return fmt.Errorf("collections: %s %q schema mismatch: got {type=%s encoding=%s compression=%s fixed_width_elements=%d bits_per_element=%d}; want {type=%s encoding=%s compression=%s fixed_width_elements=%d bits_per_element=%d}; details: fixed_width_elements=%d want %d bits_per_element=%d want %d", context, want.Name, got.Type, got.Encoding, got.Compression, got.FixedWidthElements, got.BitsPerElement, want.Type, want.Encoding, want.Compression, want.FixedWidthElements, want.BitsPerElement, got.FixedWidthElements, want.FixedWidthElements, got.BitsPerElement, want.BitsPerElement)
 	}
 	return nil
 }

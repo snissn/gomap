@@ -542,14 +542,26 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 		if !ok || !encOK || def.Encoding != wantEncoding || def.FixedWidthElements <= 0 {
 			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
 		}
+		bytesPerRow, err := checkedMulInt(def.FixedWidthElements, width, "layout contract dense vector row bytes")
+		if err != nil {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
+		logicalBitsPerRow, err := checkedMulInt(bytesPerRow, 8, "layout contract dense vector logical bits")
+		if err != nil {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
 		direct := def.Compression == CompressionNone && logicalType == string(def.Type)
-		return columnPartContractLayout{elementSize: width, alignment: width, endian: ColumnPartLayoutEndianLittle, lengthMultiple: width, bytesPerRow: def.FixedWidthElements * width, logicalBitsPerRow: def.FixedWidthElements * width * 8, direct: direct}
+		return columnPartContractLayout{elementSize: width, alignment: width, endian: ColumnPartLayoutEndianLittle, lengthMultiple: width, bytesPerRow: bytesPerRow, logicalBitsPerRow: logicalBitsPerRow, direct: direct}
 	case EncodingRawFixedBytes:
 		if def.Type != ColumnTypeFixedBytes || def.FixedWidthElements <= 0 || def.BitsPerElement != 0 {
 			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
 		}
+		logicalBitsPerRow, err := checkedMulInt(def.FixedWidthElements, 8, "layout contract fixed-bytes logical bits")
+		if err != nil {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
 		direct := def.Compression == CompressionNone && logicalType == "byte_vector"
-		return columnPartContractLayout{elementSize: 1, alignment: 1, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 1, bytesPerRow: def.FixedWidthElements, logicalBitsPerRow: def.FixedWidthElements * 8, direct: direct}
+		return columnPartContractLayout{elementSize: 1, alignment: 1, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 1, bytesPerRow: def.FixedWidthElements, logicalBitsPerRow: logicalBitsPerRow, direct: direct}
 	case EncodingRawPackedBitVector, EncodingRawPackedUint2Vector, EncodingRawPackedUint4Vector:
 		bitsPerElement, ok := PackedUintEncodingBits(def.Encoding)
 		wantEncoding, encOK := PackedUintVectorEncoding(def.Type)
@@ -560,8 +572,12 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 		if err != nil {
 			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
 		}
+		logicalBitsPerRow, err := checkedMulInt(def.FixedWidthElements, bitsPerElement, "layout contract packed logical bits")
+		if err != nil {
+			return columnPartContractLayout{endian: ColumnPartLayoutEndianNone}
+		}
 		direct := def.Compression == CompressionNone && logicalType == string(def.Type)
-		return columnPartContractLayout{elementSize: 1, alignment: 1, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 1, bytesPerRow: rowBytes, logicalBitsPerRow: def.FixedWidthElements * bitsPerElement, direct: direct}
+		return columnPartContractLayout{elementSize: 1, alignment: 1, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 1, bytesPerRow: rowBytes, logicalBitsPerRow: logicalBitsPerRow, direct: direct}
 	case EncodingRawUint32Dense:
 		// adjacency_list payload bytes are little-endian dense uint32, but certified
 		// adjacency direct views are deferred to #1901 for the active #1886 stack.

@@ -96,6 +96,23 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 	}
 }
 
+func TestPackedUintVectorLayoutOverflowFailsClosed1931(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	caps := CapabilitiesFor(Descriptor{
+		Logical:            columnsemantics.LogicalPackedUint4Vector,
+		Physical:           typedcolumn.ColumnTypePackedUint4Vector,
+		Encoding:           typedcolumn.EncodingRawPackedUint4Vector,
+		Compression:        typedcolumn.CompressionNone,
+		FixedWidthElements: maxInt/4 + 1,
+	})
+	if caps.DirectView.Eligible || caps.Layout.BytesPerRow != 0 || caps.Layout.LogicalBitsPerRow != 0 {
+		t.Fatalf("overflow caps=%+v want fail-closed without derived row metadata", caps)
+	}
+	if cap := caps.Supports(OpDirectView); cap.Supported() || cap.Reason != ReasonLengthMultipleMismatch {
+		t.Fatalf("overflow direct cap=%+v want %s", cap, ReasonLengthMultipleMismatch)
+	}
+}
+
 func TestPrimitiveScalarLayoutRejectsFixedWidthElements1929(t *testing.T) {
 	valid := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalUint32, Physical: typedcolumn.ColumnTypeUint32, Encoding: typedcolumn.EncodingRawUint32, Compression: typedcolumn.CompressionNone})
 	if !valid.DirectView.Eligible || valid.Layout.ElementsPerRow != 1 || valid.Layout.ElementWidthBytes != 4 || valid.Reducers.Int64NumericAggregate || valid.Reducers.Int64FixedWidthRaw || !valid.Stats.MinMax || !valid.Pruning.ValueRows {
