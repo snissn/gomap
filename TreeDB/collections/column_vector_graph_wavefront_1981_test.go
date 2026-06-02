@@ -197,6 +197,35 @@ func TestColumnVectorGraphWavefrontOptions1981(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphWavefrontProcessesPartialWaveBeforeSeeding1981(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("partial-wave regression requires mmap_direct prepared typed-column views")
+	}
+	shape := columnVectorGraphSearchTopologyParityShape2091{rows: 4, dims: 2, degree: 1, topK: 1, efSearch: 2, queryOrdinal: 0}
+	rows := columnVectorGraphNativeSearchBenchAssetRowsV3(t, shape.rows, shape.dims, shape.degree)
+	for i := range rows {
+		rows[i].Adjacency = nil
+	}
+	closeFn, reader, query := openColumnVectorGraphSearchTopologyParityReader2091(t, shape, rows, columnVectorGraphSearchTopologyParityModeCurrentPrepared2091)
+	defer closeFn()
+
+	var scratch columnVectorGraphNativeSearchScratch
+	_, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{
+		TopK:           shape.topK,
+		EfSearch:       shape.efSearch,
+		ScoreBatchMode: columnVectorGraphScoreBatchModeIndexed,
+		TraversalMode:  columnVectorGraphNativeSearchTraversalModeWavefront,
+		WavefrontWidth: shape.efSearch,
+		StatsMode:      columnVectorGraphNativeSearchStatsModeBenchmarkDebug,
+	}, &scratch)
+	if err != nil {
+		t.Fatalf("wavefront partial wave SearchCosine: %v", err)
+	}
+	if stats.WavefrontRounds != 1 || stats.WavefrontCandidatePops != 1 {
+		t.Fatalf("partial-wave stats=%+v want popped candidate expanded before fallback seeding", stats)
+	}
+}
+
 func TestColumnVectorGraphWavefrontRequiresPrepared1981(t *testing.T) {
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 		t.Skip("wavefront prepared guard requires mmap_direct adjacency state")

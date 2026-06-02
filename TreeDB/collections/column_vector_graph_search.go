@@ -1316,6 +1316,9 @@ func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnV
 				candidate, ok = scratch.popFrontier()
 			}
 			if !ok {
+				if len(wave) > 0 {
+					break
+				}
 				seed, seedOK := columnVectorGraphNextCandidateSeed(*nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
 				if !seedOK {
 					break
