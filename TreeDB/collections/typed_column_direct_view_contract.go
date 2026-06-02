@@ -156,7 +156,7 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 		base.PayloadEndian = "little"
 		base.ElementSize = 1
 		base.Alignment = 1
-		base.RequiresElementsPerRow = false
+		base.RequiresElementsPerRow = true
 		base.Reason = "typed-column byte_vector raw_fixed_bytes uses certified fixed bytes_per_row payloads with byte-aligned direct row views"
 		return base
 	}

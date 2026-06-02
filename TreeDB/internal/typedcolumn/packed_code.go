@@ -628,7 +628,11 @@ func fixedBytesColumnInto(dst []byte, rows int, column ColumnPartColumn) ([]byte
 	out := ensureByteLen(dst[:0], bytes)
 	var reader GranuleReader
 	var scratch []byte
+	expectedFirstRow := 0
 	for _, block := range column.Blocks {
+		if block.Descriptor.FirstRow != expectedFirstRow {
+			return nil, fmt.Errorf("typedcolumn: fixed_bytes block first_row=%d want %d", block.Descriptor.FirstRow, expectedFirstRow)
+		}
 		values, err := reader.DecodeFixedBytesInto(scratch[:0], block.Granule, column.Definition.FixedWidthElements)
 		if err != nil {
 			return nil, err
@@ -649,6 +653,10 @@ func fixedBytesColumnInto(dst []byte, rows int, column ColumnPartColumn) ([]byte
 			return nil, fmt.Errorf("typedcolumn: fixed_bytes block first_row=%d bytes=%d outside column bytes=%d", block.Descriptor.FirstRow, len(values), len(out))
 		}
 		copy(out[start:start+len(values)], values)
+		expectedFirstRow += block.Descriptor.RowCount
+	}
+	if expectedFirstRow != rows {
+		return nil, fmt.Errorf("typedcolumn: fixed_bytes column covers %d rows, want %d", expectedFirstRow, rows)
 	}
 	return out, nil
 }
@@ -686,7 +694,11 @@ func packedUintColumnInto(dst []byte, rows int, column ColumnPartColumn, bitsPer
 	}
 	var reader GranuleReader
 	var scratch []byte
+	expectedFirstRow := 0
 	for _, block := range column.Blocks {
+		if block.Descriptor.FirstRow != expectedFirstRow {
+			return nil, fmt.Errorf("typedcolumn: packed_uint block first_row=%d want %d", block.Descriptor.FirstRow, expectedFirstRow)
+		}
 		values, err := reader.DecodePackedUintInto(scratch[:0], block.Granule, column.Definition.FixedWidthElements, bitsPerElement)
 		if err != nil {
 			return nil, err
@@ -707,6 +719,10 @@ func packedUintColumnInto(dst []byte, rows int, column ColumnPartColumn, bitsPer
 			return nil, fmt.Errorf("typedcolumn: packed_uint block first_row=%d bytes=%d outside column bytes=%d", block.Descriptor.FirstRow, len(values), len(out))
 		}
 		copy(out[start:start+len(values)], values)
+		expectedFirstRow += block.Descriptor.RowCount
+	}
+	if expectedFirstRow != rows {
+		return nil, fmt.Errorf("typedcolumn: packed_uint column covers %d rows, want %d", expectedFirstRow, rows)
 	}
 	return out, nil
 }

@@ -6,7 +6,7 @@ storage schema metadata, and collection `typed_column_part` publication.
 
 ## Scope
 
-#1931 owns fixed-byte and packed-code rows for quantized assets:
+Issue `#1931` owns fixed-byte and packed-code rows for quantized assets:
 
 - `fixed_bytes` / `byte_vector`: row-major opaque byte payloads with a fixed
   `bytes_per_row`.
@@ -16,8 +16,8 @@ storage schema metadata, and collection `typed_column_part` publication.
 - `uint64_word_vector` is a compatible access/view mode over row bytes, not a
   separate sidecar format.
 
-#1931 does not implement scalar/BRQ/PQ scoring and does not replace the dense
-numeric vector types owned by #1930.
+Issue `#1931` does not implement scalar/BRQ/PQ scoring and does not replace the dense
+numeric vector types owned by `#1930`.
 
 ## Durable names and encodings
 

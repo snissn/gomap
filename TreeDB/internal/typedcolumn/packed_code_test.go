@@ -356,6 +356,26 @@ func TestFixedBytesAndPackedUintColumnPartImageRoundTrip1931(t *testing.T) {
 		t.Fatalf("bits layout certification=%+v ok=%v want packed metadata", bits, ok)
 	}
 
+	gapFixed := *decoded
+	gapFixed.Columns = cloneColumnPartColumns1931(decoded.Columns)
+	blobColumn := gapFixed.Columns["blob"]
+	blobColumn.Blocks = append([]ColumnBlock(nil), blobColumn.Blocks...)
+	blobColumn.Blocks[1].Descriptor.FirstRow++
+	gapFixed.Columns["blob"] = blobColumn
+	if _, err := gapFixed.FixedBytesColumn("blob", nil); err == nil || !strings.Contains(err.Error(), "fixed_bytes block first_row") {
+		t.Fatalf("fixed_bytes gap err=%v want first_row fail-closed", err)
+	}
+
+	overlapPacked := *decoded
+	overlapPacked.Columns = cloneColumnPartColumns1931(decoded.Columns)
+	bitsColumn := overlapPacked.Columns["bits"]
+	bitsColumn.Blocks = append([]ColumnBlock(nil), bitsColumn.Blocks...)
+	bitsColumn.Blocks[1].Descriptor.FirstRow = 0
+	overlapPacked.Columns["bits"] = bitsColumn
+	if _, err := overlapPacked.PackedUintColumn("bits", nil); err == nil || !strings.Contains(err.Error(), "packed_uint block first_row") {
+		t.Fatalf("packed_uint overlap err=%v want first_row fail-closed", err)
+	}
+
 	corrupt := image
 	corrupt.Bytes = append([]byte(nil), image.Bytes...)
 	for _, section := range corrupt.Sections {
@@ -374,6 +394,14 @@ func TestFixedBytesAndPackedUintColumnPartImageRoundTrip1931(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "padding") {
 		t.Fatalf("corrupt packed padding err=%v want padding failure", err)
 	}
+}
+
+func cloneColumnPartColumns1931(columns map[string]ColumnPartColumn) map[string]ColumnPartColumn {
+	out := make(map[string]ColumnPartColumn, len(columns))
+	for name, column := range columns {
+		out[name] = column
+	}
+	return out
 }
 
 func mustPackedUintRowBytes1931(t *testing.T, rows PackedUintRows, row int) []byte {

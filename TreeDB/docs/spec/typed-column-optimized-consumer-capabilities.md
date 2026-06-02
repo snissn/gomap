@@ -112,7 +112,7 @@ Current logical value types covered: `bool`, `int64`, `float32`, `double`,
 (`uint8_vector`, `int8_vector`, `uint16_vector`, `int16_vector`,
 `uint32_vector`, `int32_vector`, `uint64_vector`, `int64_vector`,
 `float16_vector`, `bfloat16_vector`, `float32_vector`, `float64_vector`),
-#1931 fixed/packed code vectors (`byte_vector`, `packed_bit_vector`,
+Issue `#1931` fixed/packed code vectors (`byte_vector`, `packed_bit_vector`,
 `packed_uint2_vector`, `packed_uint4_vector`), `uint32_list`, `bytes`, and
 `adjacency_list`.
 Current physical typedcolumn types covered: `int64`, `low_cardinality_code`,
@@ -120,7 +120,7 @@ Current physical typedcolumn types covered: `int64`, `low_cardinality_code`,
 vector types (`uint8_vector`, `int8_vector`, `uint16_vector`, `int16_vector`,
 `uint32_vector`, `int32_vector`, `uint64_vector`, `int64_vector`,
 `float16_vector`, `bfloat16_vector`, `float32_vector`, `float64_vector`),
-#1931 fixed/packed code types (`fixed_bytes`, `packed_bit_vector`,
+Issue `#1931` fixed/packed code types (`fixed_bytes`, `packed_bit_vector`,
 `packed_uint2_vector`, `packed_uint4_vector`), `uint32_list`, `bytes`, and
 `adjacency_list`.
 Current encodings covered: `raw_int64`, `delta_varint`,

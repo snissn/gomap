@@ -155,6 +155,51 @@ func TestTypedColumnDirectViewOwnershipMatrix(t *testing.T) {
 	}
 }
 
+func TestTypedColumnLayoutDescriptorPackedOverflowZerosDerivedGeometry1931(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	column := typedColumnAdapterColumn{
+		Field: TypedStorageField{
+			Name:           "codes",
+			Path:           "codes",
+			Owner:          TypedStorageOwnerColumnPart,
+			ValueType:      ColumnStoreValuePackedUint4Vector,
+			ElementsPerRow: maxInt/4 + 1,
+			BitsPerElement: 4,
+		},
+		Definition: typedcolumn.ColumnDefinition{
+			Name:               "codes",
+			Type:               typedcolumn.ColumnTypePackedUint4Vector,
+			Encoding:           typedcolumn.EncodingRawPackedUint4Vector,
+			Compression:        typedcolumn.CompressionNone,
+			FixedWidthElements: maxInt/4 + 1,
+			BitsPerElement:     4,
+		},
+	}
+	desc := typedColumnLayoutDescriptorForAdapterColumn(column)
+	if desc.BytesPerRow != 0 || desc.LogicalBitsPerRow != 0 {
+		t.Fatalf("descriptor=%+v want overflow to leave derived row geometry zero", desc)
+	}
+	caps := columnlayout.CapabilitiesFor(desc)
+	if cap := caps.Supports(columnlayout.OpDirectView); cap.Supported() || cap.Reason != columnlayout.ReasonLengthMultipleMismatch {
+		t.Fatalf("overflow direct cap=%+v want %s", cap, columnlayout.ReasonLengthMultipleMismatch)
+	}
+}
+
+func TestTypedColumnDirectViewFixedAndPackedRequireRowGeometry1931(t *testing.T) {
+	byteVector := typedColumnDirectViewClassificationFor(ColumnStoreValueByteVector, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartGeneric)
+	if byteVector.Support != typedColumnDirectViewActiveLittleEndianCandidate || !byteVector.RequiresElementsPerRow {
+		t.Fatalf("byte_vector classification=%+v want active direct candidate requiring row geometry", byteVector)
+	}
+	packed := typedColumnDirectViewClassificationFor(ColumnStoreValuePackedUint4Vector, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartGeneric)
+	if packed.Support != typedColumnDirectViewActiveLittleEndianCandidate || !packed.RequiresElementsPerRow {
+		t.Fatalf("packed classification=%+v want active direct candidate requiring row geometry", packed)
+	}
+	bytes := typedColumnDirectViewClassificationFor(ColumnStoreValueBytes, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartGeneric)
+	if bytes.RequiresElementsPerRow {
+		t.Fatalf("bytes classification=%+v must remain offsets/value geometry, not fixed-row geometry", bytes)
+	}
+}
+
 func TestTypedColumnDirectViewAdjacencyOffsetsListSpecClassification(t *testing.T) {
 	offsets := typedColumnDirectViewClassificationForAdjacencyLayout(ColumnStoreValueAdjacencyList, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartAdjacencyOffsets, typedColumnDirectViewAdjacencyLayoutRawUint32Offsets)
 	if offsets.Support != typedColumnDirectViewActiveLittleEndianCandidate || offsets.AdjacencyLayout != typedColumnDirectViewAdjacencyLayoutRawUint32Offsets {

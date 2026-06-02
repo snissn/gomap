@@ -104,12 +104,59 @@ func TestPackedUintVectorLayoutOverflowFailsClosed1931(t *testing.T) {
 		Encoding:           typedcolumn.EncodingRawPackedUint4Vector,
 		Compression:        typedcolumn.CompressionNone,
 		FixedWidthElements: maxInt/4 + 1,
+		BitsPerElement:     4,
 	})
 	if caps.DirectView.Eligible || caps.Layout.BytesPerRow != 0 || caps.Layout.LogicalBitsPerRow != 0 {
 		t.Fatalf("overflow caps=%+v want fail-closed without derived row metadata", caps)
 	}
 	if cap := caps.Supports(OpDirectView); cap.Supported() || cap.Reason != ReasonLengthMultipleMismatch {
 		t.Fatalf("overflow direct cap=%+v want %s", cap, ReasonLengthMultipleMismatch)
+	}
+}
+
+func TestFixedAndPackedGeometryMismatchesFailDescriptorValidation1931(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		desc   Descriptor
+		reason ReasonCode
+		want   string
+	}{
+		{
+			name:   "fixed_bytes_bytes_per_row",
+			desc:   Descriptor{Logical: columnsemantics.LogicalByteVector, Physical: typedcolumn.ColumnTypeFixedBytes, Encoding: typedcolumn.EncodingRawFixedBytes, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3, BytesPerRow: 4},
+			reason: ReasonLengthMultipleMismatch,
+			want:   "bytes_per_row=4 want 3",
+		},
+		{
+			name:   "packed_bits_per_element",
+			desc:   Descriptor{Logical: columnsemantics.LogicalPackedUint4Vector, Physical: typedcolumn.ColumnTypePackedUint4Vector, Encoding: typedcolumn.EncodingRawPackedUint4Vector, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3, BitsPerElement: 2},
+			reason: ReasonPackedUintBitsMismatch,
+			want:   "bits_per_element=2 want 4",
+		},
+		{
+			name:   "packed_bytes_per_row",
+			desc:   Descriptor{Logical: columnsemantics.LogicalPackedUint4Vector, Physical: typedcolumn.ColumnTypePackedUint4Vector, Encoding: typedcolumn.EncodingRawPackedUint4Vector, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3, BitsPerElement: 4, BytesPerRow: 3},
+			reason: ReasonLengthMultipleMismatch,
+			want:   "bytes_per_row=3 want 2",
+		},
+		{
+			name:   "packed_logical_bits_per_row",
+			desc:   Descriptor{Logical: columnsemantics.LogicalPackedUint4Vector, Physical: typedcolumn.ColumnTypePackedUint4Vector, Encoding: typedcolumn.EncodingRawPackedUint4Vector, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3, BitsPerElement: 4, LogicalBitsPerRow: 13},
+			reason: ReasonPackedUintBitsMismatch,
+			want:   "logical_bits_per_row=13 want 12",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caps := CapabilitiesFor(tc.desc)
+			cap := caps.Supports(OpDirectView)
+			if cap.Supported() || cap.Reason != tc.reason || !strings.Contains(cap.Error(), tc.want) {
+				t.Fatalf("direct capability=%+v want reason=%s containing %q", cap, tc.reason, tc.want)
+			}
+			granule := typedcolumn.EncodedGranule{Rows: 1, Encoding: tc.desc.Encoding, Compression: tc.desc.Compression, RawBytes: 0, StoredBytes: 0}
+			if err := caps.ValidateGranule(granule); err == nil || !strings.Contains(err.Error(), string(tc.reason)) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ValidateGranule err=%v want reason=%s containing %q", err, tc.reason, tc.want)
+			}
+		})
 	}
 }
 

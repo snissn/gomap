@@ -25,8 +25,11 @@ func typedColumnLayoutDescriptorForAdapterColumn(column typedColumnAdapterColumn
 	if column.Field.ValueType == ColumnStoreValueByteVector {
 		desc.BytesPerRow = column.Field.BytesPerRow
 	} else if columnStoreValueTypeIsPackedUintVector(column.Field.ValueType) {
-		desc.LogicalBitsPerRow = column.Definition.FixedWidthElements * column.Definition.BitsPerElement
-		desc.BytesPerRow, _ = columnDeclaredPackedUintVectorBytesPerRow(column.Field.ValueType, column.Definition.FixedWidthElements)
+		bytesPerRow, err := columnDeclaredPackedUintVectorBytesPerRow(column.Field.ValueType, column.Definition.FixedWidthElements)
+		if err == nil && column.Definition.BitsPerElement > 0 && column.Definition.FixedWidthElements <= int(^uint(0)>>1)/column.Definition.BitsPerElement {
+			desc.BytesPerRow = bytesPerRow
+			desc.LogicalBitsPerRow = column.Definition.FixedWidthElements * column.Definition.BitsPerElement
+		}
 	}
 	return desc
 }
