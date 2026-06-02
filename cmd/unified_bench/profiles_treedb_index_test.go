@@ -563,3 +563,62 @@ func TestBuildTreeDBOptions_ExplicitCompositeFalseWinsUnlessPerFlagExplicit(t *t
 		t.Fatalf("expected explicit composite=false to disable remaining optimization fields")
 	}
 }
+
+func TestBuildTreeDBOptions_ExplicitInternalBaseDeltaDisabledWithOuterLeaves(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexInternalBaseDelta = true
+	explicitFlags = map[string]bool{
+		"treedb-index-internal-base-delta": true,
+	}
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected outer leaves in value log to remain enabled")
+	}
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected explicit internal base-delta to resolve false with outer leaves in value log")
+	}
+	text := rep.formatText("")
+	if !strings.Contains(text, "index_internal_base_delta=false") {
+		t.Fatalf("resolved report missing disabled internal base-delta line:\n%s", text)
+	}
+	if !strings.Contains(text, "index_internal_base_delta disabled: leaf-log child pages use explicit LogRecordRef entries") {
+		t.Fatalf("resolved report missing leaf-log compatibility note:\n%s", text)
+	}
+}
+
+func TestBuildTreeDBOptions_ExplicitInternalBaseDeltaEnabledWithPagerLeaves(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOptimizations = true
+	*treedbIndexOuterLeavesInVlog = false
+	*treedbIndexInternalBaseDelta = true
+	explicitFlags = map[string]bool{
+		"treedb-index-optimizations":        true,
+		"treedb-index-outer-leaves-in-vlog": true,
+		"treedb-index-internal-base-delta":  true,
+	}
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected explicit pager-leaf mode")
+	}
+	if !opts.IndexInternalBaseDelta {
+		t.Fatalf("expected internal base-delta to resolve true when pager leaves are used")
+	}
+	text := rep.formatText("")
+	if !strings.Contains(text, "index_optimizations=true") || !strings.Contains(text, "index_internal_base_delta=true") {
+		t.Fatalf("resolved report missing enabled index optimization lines:\n%s", text)
+	}
+}
