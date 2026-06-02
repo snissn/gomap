@@ -357,7 +357,7 @@ func (db *DB) ensureLeafPageLogSegmentRegistered(commitSeq uint64) (bool, error)
 	return db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, commitSeq)
 }
 
-func (db *DB) registerLeafPageLogSegmentsForPublish(commitSeq uint64) (bool, error) {
+func (db *DB) registerLeafPageLogSegmentsForPublish() (bool, error) {
 	if db == nil || db.valueLogManager == nil || db.leafPageLog == nil {
 		return true, nil
 	}
@@ -369,8 +369,8 @@ func (db *DB) registerLeafPageLogSegmentsForPublish(commitSeq uint64) (bool, err
 		if err := db.valueLogManager.RegisterSegment(seg.Path, seg.FileID); err != nil {
 			return false, err
 		}
-		if db.isLeafGenerationSegmentPath(seg.Path) && commitSeq > 0 {
-			db.queueLeafGenerationWritableFileIDAtCommit(seg.FileID, commitSeq)
+		if db.isLeafGenerationSegmentPath(seg.Path) {
+			db.queueLeafGenerationWritableFileID(seg.FileID)
 		}
 	}
 	path, fileID, ok := db.currentLeafPageLogSegment()
@@ -378,7 +378,7 @@ func (db *DB) registerLeafPageLogSegmentsForPublish(commitSeq uint64) (bool, err
 		markLeafPageLogSegmentsRegistered(db.leafPageLog, createdSegments)
 		return len(createdSegments) > 0, nil
 	}
-	registered, err := db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, commitSeq)
+	registered, err := db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, 0)
 	if err != nil {
 		return false, err
 	}

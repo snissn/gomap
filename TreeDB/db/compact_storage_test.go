@@ -813,7 +813,7 @@ func TestRegisterLeafPageLogSegmentsForPublishRegistersRewriteSegments(t *testin
 		t.Fatalf("segment %d was registered before publish helper", createdSegments[0].fileID)
 	}
 
-	registered, err := d.registerLeafPageLogSegmentsForPublish(7)
+	registered, err := d.registerLeafPageLogSegmentsForPublish()
 	if err != nil {
 		t.Fatalf("registerLeafPageLogSegmentsForPublish: %v", err)
 	}
@@ -830,6 +830,20 @@ func TestRegisterLeafPageLogSegmentsForPublishRegistersRewriteSegments(t *testin
 	}
 	if _, ok := set.Files[createdSegments[0].fileID]; !ok {
 		t.Fatalf("published value-log set missing segment %d", createdSegments[0].fileID)
+	}
+	rawFileID, ok := rawLeafGenerationFileID(createdSegments[0].fileID)
+	if !ok {
+		t.Fatalf("raw leaf generation file id missing for segment %d", createdSegments[0].fileID)
+	}
+	d.leafGenerationPendingMu.Lock()
+	_, pending := d.leafGenerationPendingSet[rawFileID]
+	pendingCommitSeq := d.leafGenerationPendingCommitSeq[rawFileID]
+	d.leafGenerationPendingMu.Unlock()
+	if !pending {
+		t.Fatalf("raw leaf generation file id %d was not queued pending", rawFileID)
+	}
+	if pendingCommitSeq != 0 {
+		t.Fatalf("pending commitSeq=%d want 0 before publish commit succeeds", pendingCommitSeq)
 	}
 }
 

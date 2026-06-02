@@ -446,7 +446,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		leafPageLogSegmentsRegistered := true
 		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
 			var err error
-			leafPageLogSegmentsRegistered, err = db.registerLeafPageLogSegmentsForPublish(nextMeta.CommitSeq)
+			leafPageLogSegmentsRegistered, err = db.registerLeafPageLogSegmentsForPublish()
 			if err != nil {
 				db.writeMu.Unlock()
 				cleanupNewPager()

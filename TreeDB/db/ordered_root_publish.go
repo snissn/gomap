@@ -486,36 +486,52 @@ func orderedRootEntryValueLogFileID(iter iterator.UnsafeIterator) (uint32, bool)
 	return ptr.FileID, true
 }
 
-func appendTouchedValueLogSegmentID(dst []uint32, fileID uint32) []uint32 {
-	if fileID == 0 {
-		return dst
-	}
-	for _, existing := range dst {
-		if existing == fileID {
-			return dst
-		}
-	}
-	return append(dst, fileID)
-}
-
-func appendOrderedRootEntryTouchedValueLogSegment(iter iterator.UnsafeIterator, dst []uint32) []uint32 {
-	fileID, ok := orderedRootEntryValueLogFileID(iter)
-	if !ok {
-		return dst
-	}
-	return appendTouchedValueLogSegmentID(dst, fileID)
-}
+const orderedRootTouchedValueLogSegmentLinearLimit = 8
 
 type orderedRootTouchedIterator struct {
 	iterator.UnsafeIterator
-	touchedValueLogSegments []uint32
+	touchedValueLogSegments   []uint32
+	touchedValueLogSegmentSet map[uint32]struct{}
 }
 
 func (it *orderedRootTouchedIterator) capture() {
 	if it == nil {
 		return
 	}
-	it.touchedValueLogSegments = appendOrderedRootEntryTouchedValueLogSegment(it.UnsafeIterator, it.touchedValueLogSegments)
+	fileID, ok := orderedRootEntryValueLogFileID(it.UnsafeIterator)
+	if !ok {
+		return
+	}
+	it.appendTouchedValueLogSegmentID(fileID)
+}
+
+func (it *orderedRootTouchedIterator) appendTouchedValueLogSegmentID(fileID uint32) {
+	if it == nil || fileID == 0 {
+		return
+	}
+	if it.touchedValueLogSegmentSet != nil {
+		if _, ok := it.touchedValueLogSegmentSet[fileID]; ok {
+			return
+		}
+		it.touchedValueLogSegmentSet[fileID] = struct{}{}
+		it.touchedValueLogSegments = append(it.touchedValueLogSegments, fileID)
+		return
+	}
+	for _, existing := range it.touchedValueLogSegments {
+		if existing == fileID {
+			return
+		}
+	}
+	if len(it.touchedValueLogSegments) >= orderedRootTouchedValueLogSegmentLinearLimit {
+		it.touchedValueLogSegmentSet = make(map[uint32]struct{}, len(it.touchedValueLogSegments)+1)
+		for _, existing := range it.touchedValueLogSegments {
+			if existing != 0 {
+				it.touchedValueLogSegmentSet[existing] = struct{}{}
+			}
+		}
+		it.touchedValueLogSegmentSet[fileID] = struct{}{}
+	}
+	it.touchedValueLogSegments = append(it.touchedValueLogSegments, fileID)
 }
 
 func (it *orderedRootTouchedIterator) Next() {

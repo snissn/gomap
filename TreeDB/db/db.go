@@ -2234,7 +2234,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
 	if forceValueLogRefresh && db.valueLogManager != nil {
-		registered, err := db.registerLeafPageLogSegmentsForPublish(nextMeta.CommitSeq)
+		registered, err := db.registerLeafPageLogSegmentsForPublish()
 		if err != nil {
 			return post, prePublishErr(err)
 		}

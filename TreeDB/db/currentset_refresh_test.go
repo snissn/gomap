@@ -343,6 +343,35 @@ func TestAppendOrderedRootDeltaBatchFinalTouchedValueLogSegmentsDedupesWithSeed(
 	}
 }
 
+func TestOrderedRootTouchedIteratorDedupesWithSetAfterLinearLimit(t *testing.T) {
+	var it orderedRootTouchedIterator
+	first := page.ValueLogFileID(20)
+	it.appendTouchedValueLogSegmentID(first)
+	it.appendTouchedValueLogSegmentID(first)
+	for i := 0; i < orderedRootTouchedValueLogSegmentLinearLimit+2; i++ {
+		it.appendTouchedValueLogSegmentID(page.ValueLogFileID(uint32(30 + i)))
+	}
+	duplicateAfterSet := page.ValueLogFileID(32)
+	it.appendTouchedValueLogSegmentID(duplicateAfterSet)
+	if it.touchedValueLogSegmentSet == nil {
+		t.Fatal("expected touched segment set after linear limit")
+	}
+
+	want := []uint32{first}
+	for i := 0; i < orderedRootTouchedValueLogSegmentLinearLimit+2; i++ {
+		want = append(want, page.ValueLogFileID(uint32(30+i)))
+	}
+	got := it.touchedValueLogSegments
+	if len(got) != len(want) {
+		t.Fatalf("touched segments len=%d want %d: got=%v want=%v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("touched segment[%d]=%d want %d (got=%v want=%v)", i, got[i], want[i], got, want)
+		}
+	}
+}
+
 func TestInlineCommitSkipsValueLogRefresh(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
