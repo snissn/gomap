@@ -42,6 +42,34 @@ The `bench` profile is a no-WAL benchmark-only ceiling. Use
 `command_wal_durable` as the default server profile unless you are deliberately
 running relaxed durability or a benchmark ceiling.
 
+## Additional Benchmark Highlights
+
+These are separate report-backed engineering benchmarks with their own
+workloads, profiles, and caveats. Treat them as scoped evidence, not as extra
+rows in the YCSB comparison above.
+
+- In the April 27, 2026 collection/SQLite matrix, two-index TreeDB collection
+  inserts measured `1,079,797 docs/sec` for template-v1 and
+  `960,922 docs/sec` for JSON, versus SQLite JSON at `394,685 docs/sec` and
+  SQLite native columns at `450,180 docs/sec`.
+- The same matrix measured two-index template-v1 primary reads at
+  `771,803 ops/sec`, parallel primary reads at `1,503,458 ops/sec`, and
+  nonunique secondary lookups at `243,625 ops/sec` for template-v1 and
+  `257,356 ops/sec` for JSON; the SQLite nonunique secondary lookup rows were
+  `39,399 ops/sec` for JSON and `68,815 ops/sec` for native columns.
+- Its index-vlog layout reduced two-index TreeDB template-v1 storage from
+  `155.10 B/doc` to `104.90 B/doc`, below SQLite native columns after
+  `VACUUM` at `156.40 B/doc`, with roughly a `13-14%` write-throughput cost on
+  that insert shape.
+- In the April 13, 2026 `application.db` offline density report, TreeDB's
+  self-roundtrip compacted size was `2.092 GiB`, between PebbleDB at
+  `1.773 GiB` and goleveldb at `2.316 GiB`.
+
+Sources:
+[`collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md`](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md)
+and
+[`application_db_engine_matrix_2026-04-13.md`](docs/benchmarks/application_db_engine_matrix_2026-04-13.md).
+
 ## What TreeDB Provides
 
 - Persistent B+Tree index with copy-on-write root publishing.
