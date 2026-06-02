@@ -537,11 +537,24 @@ func appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(delta *batch.Batch,
 	if delta == nil {
 		return dst
 	}
+	var seen map[uint32]struct{}
 	for _, entry := range delta.SortedEntries() {
 		if entry.Type == batch.OpDelete || !entry.IsPtr || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
 			continue
 		}
-		dst = appendTouchedValueLogSegmentID(dst, entry.ValuePtr.FileID)
+		if seen == nil {
+			seen = make(map[uint32]struct{}, len(dst)+1)
+			for _, existing := range dst {
+				if existing != 0 {
+					seen[existing] = struct{}{}
+				}
+			}
+		}
+		if _, ok := seen[entry.ValuePtr.FileID]; ok {
+			continue
+		}
+		seen[entry.ValuePtr.FileID] = struct{}{}
+		dst = append(dst, entry.ValuePtr.FileID)
 	}
 	return dst
 }

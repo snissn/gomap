@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -314,6 +315,32 @@ func (l *unregisteredLeafPageLog) Close() error {
 	err := l.w.Close()
 	l.w = nil
 	return err
+}
+
+func TestAppendOrderedRootDeltaBatchFinalTouchedValueLogSegmentsDedupesWithSeed(t *testing.T) {
+	delta := batch.New(nil, 1024)
+	defer delta.Close()
+
+	fileA := page.ValueLogFileID(10)
+	fileB := page.ValueLogFileID(11)
+	if err := delta.SetPointer([]byte("a"), page.ValuePtr{FileID: fileA, Offset: 1, Length: 1}); err != nil {
+		t.Fatalf("SetPointer a: %v", err)
+	}
+	if err := delta.SetPointer([]byte("b"), page.ValuePtr{FileID: fileB, Offset: 2, Length: 1}); err != nil {
+		t.Fatalf("SetPointer b: %v", err)
+	}
+	if err := delta.SetPointer([]byte("c"), page.ValuePtr{FileID: fileA, Offset: 3, Length: 1}); err != nil {
+		t.Fatalf("SetPointer c: %v", err)
+	}
+	if err := delta.Set([]byte("inline"), []byte("value")); err != nil {
+		t.Fatalf("Set inline: %v", err)
+	}
+
+	got := appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(delta, []uint32{fileB})
+	want := []uint32{fileB, fileA}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("touched segments=%v want %v", got, want)
+	}
 }
 
 func TestInlineCommitSkipsValueLogRefresh(t *testing.T) {
