@@ -26,6 +26,10 @@ type LeafPageLog interface {
 	AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 }
 
+type LeafPageBatchLog interface {
+	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
+}
+
 type LeafPageReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
@@ -1294,6 +1298,68 @@ func (z *Zipper) persistLeafPage(b *node.Builder) (page.ChildRef, error) {
 	return page.LeafLogChildRef(ptr), nil
 }
 
+func (z *Zipper) persistLeafPages(builders ...*node.Builder) ([]page.ChildRef, error) {
+	if len(builders) == 0 {
+		return nil, nil
+	}
+	if !z.outerLeavesInValueLog {
+		refs := make([]page.ChildRef, len(builders))
+		for i, b := range builders {
+			if b == nil {
+				return nil, errors.New("zipper: nil leaf builder")
+			}
+			refs[i] = page.PageChildRef(b.PageID())
+		}
+		return refs, nil
+	}
+	if z.leafPageLog == nil {
+		return nil, errors.New("zipper: missing leaf page log")
+	}
+	if len(builders) == 1 {
+		ref, err := z.persistLeafPage(builders[0])
+		if err != nil {
+			return nil, err
+		}
+		return []page.ChildRef{ref}, nil
+	}
+	batchLog, ok := z.leafPageLog.(LeafPageBatchLog)
+	if !ok {
+		refs := make([]page.ChildRef, len(builders))
+		for i, b := range builders {
+			ref, err := z.persistLeafPage(b)
+			if err != nil {
+				return nil, err
+			}
+			refs[i] = ref
+		}
+		return refs, nil
+	}
+	leafPages := make([][]byte, len(builders))
+	for i, b := range builders {
+		if b == nil {
+			return nil, errors.New("zipper: nil leaf builder")
+		}
+		leafPages[i] = b.Data()
+	}
+	ptrs, err := batchLog.AppendLeafPages(leafPages)
+	if err != nil {
+		return nil, err
+	}
+	if len(ptrs) != len(builders) {
+		return nil, fmt.Errorf("zipper: leaf page batch returned %d ptrs for %d pages", len(ptrs), len(builders))
+	}
+	refs := make([]page.ChildRef, len(ptrs))
+	z.leafRefCacheMu.Lock()
+	for i, ptr := range ptrs {
+		if z.leafRefCache != nil {
+			z.leafRefCache[ptr] = builders[i].Data()
+		}
+		refs[i] = page.LeafLogChildRef(ptr)
+	}
+	z.leafRefCacheMu.Unlock()
+	return refs, nil
+}
+
 func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive.Metrics) (uint64, error) {
 	if ref.Kind == page.ChildRefPage {
 		return ref.Page, nil
@@ -2524,21 +2590,22 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		metrics.LeafFill += float64(page.PageSize-rb.FreeSpace()) / float64(page.PageSize)
 		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
 		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
-		leftID, err = z.persistLeafPage(lb)
+		leafRefs, err := z.persistLeafPages(lb, rb)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
 				retired = append(retired, lid, rid)
 			}
 			return page.ChildRef{}, page.ChildRef{}, nil, false, err
 		}
+		if len(leafRefs) != 2 {
+			if !z.outerLeavesInValueLog {
+				retired = append(retired, lid, rid)
+			}
+			return page.ChildRef{}, page.ChildRef{}, nil, false, fmt.Errorf("zipper: persisted split returned %d refs", len(leafRefs))
+		}
+		leftID = leafRefs[0]
 		recordZipperLeafLogPageRecordHintWrite(metrics, leftID)
-		rightID, err = z.persistLeafPage(rb)
-		if err != nil {
-			if !z.outerLeavesInValueLog {
-				retired = append(retired, lid, rid)
-			}
-			return page.ChildRef{}, page.ChildRef{}, nil, false, err
-		}
+		rightID = leafRefs[1]
 		recordZipperLeafLogPageRecordHintWrite(metrics, rightID)
 		return leftID, rightID, rightStart, true, nil
 	}

@@ -12705,6 +12705,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				k = maxKBySize
 			}
 		}
+		if l == &db.leafLog && l.id == leafLogLaneID && db.classifyVlogPayloadKindForRecords(records[i:end]) == vlogPayloadKindOuterLeaf {
+			k = 1
+		}
 		k = db.clampValueLogDictK(k)
 
 		plans = append(plans, vlogBatchPlan{
@@ -13880,6 +13883,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		// syscall pressure, and is typically safe for write-heavy workloads where
 		// random point reads are not the dominant cost.
 		k = valuelog.MaxFrameK
+	}
+	if l == &db.leafLog && l.id == leafLogLaneID && outerLeafPayloadsOnly {
+		// Leaf-generation planning accounts liveness at leaf-record granularity.
+		// Keep batched outer-leaf appends as one record per frame so one live leaf
+		// does not make unrelated leaves in a grouped frame look live too.
+		k = 1
 	}
 	if dictID != 0 && len(dict) > 0 {
 		k = db.clampValueLogDictK(k)
