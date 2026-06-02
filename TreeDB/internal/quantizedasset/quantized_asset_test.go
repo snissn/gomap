@@ -115,6 +115,16 @@ func TestPrepareFailsClosedIdentityAndShapeMismatches1932(t *testing.T) {
 	}
 }
 
+func TestPrepareFailsClosedDescriptorRefRequiresResolvedRef1932(t *testing.T) {
+	fixture := buildPackedQuantizedFixture1932(t)
+	req := fixture.prepareRequest()
+	req.Parts[0].Ref = AssetRefIdentity{}
+	_, err := Prepare(req)
+	if err == nil || !strings.Contains(err.Error(), "missing resolved asset ref") || !strings.Contains(err.Error(), fixture.ref.key()) {
+		t.Fatalf("Prepare err=%v want missing resolved asset ref failure", err)
+	}
+}
+
 func TestPrepareFailsClosedFixedByteCodesRequire8BitWidth1932(t *testing.T) {
 	fixture := buildFixedQuantizedFixture1932(t)
 	for _, width := range []int{4, 16} {
@@ -194,6 +204,27 @@ func TestPreparedRandomOrdinalLookupAndScratchAllocs1932(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("steady-state ordinal lookup allocs/run=%v want 0", allocs)
+	}
+}
+
+func TestPrepareFailsClosedDenseCodesRequireUnsignedPhysicalType1932(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		columnType  typedcolumn.ColumnType
+		encoding    typedcolumn.Encoding
+		logicalType columnsemantics.LogicalType
+		widthBytes  int
+	}{
+		{name: "int8_physical_uint8_logical", columnType: typedcolumn.ColumnTypeInt8Vector, encoding: typedcolumn.EncodingRawInt8Vector, logicalType: columnsemantics.LogicalUint8Vector, widthBytes: 1},
+		{name: "float64_physical_uint64_logical", columnType: typedcolumn.ColumnTypeFloat64Vector, encoding: typedcolumn.EncodingRawFloat64Vector, logicalType: columnsemantics.LogicalUint64Vector, widthBytes: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := buildDensePhysicalCodeFixture1932(t, tc.columnType, tc.encoding, tc.logicalType, tc.widthBytes)
+			_, err := Prepare(fixture.prepareRequest())
+			if err == nil || !strings.Contains(err.Error(), "unsigned dense code column") || !strings.Contains(err.Error(), string(tc.columnType)) {
+				t.Fatalf("Prepare err=%v want unsigned dense physical type failure", err)
+			}
+		})
 	}
 }
 
@@ -547,6 +578,25 @@ func buildPQQuantizedFixture1932(t testing.TB) quantizedFixture1932 {
 		schema.Columns[i].Ref = ref
 	}
 	return quantizedFixture1932{rows: rows, schema: schema, expected: expectedFromSchema1932(schema, RoleCodes, RoleCentroidID, RoleListID, RoleCentroidDistance), part: image, ref: ref, assetID: "pq"}
+}
+
+func buildDensePhysicalCodeFixture1932(t testing.TB, columnType typedcolumn.ColumnType, encoding typedcolumn.Encoding, logicalType columnsemantics.LogicalType, widthBytes int) quantizedFixture1932 {
+	t.Helper()
+	rows := 4
+	codeDims := 4
+	values := make([]byte, rows*codeDims*widthBytes)
+	for i := range values {
+		values[i] = byte(i)
+	}
+	dense := typedcolumn.RawDenseFixedWidth{Rows: rows, ElementsPerRow: codeDims, ElementWidthBytes: widthBytes, Values: values}
+	image := buildQuantizedPartImage1932(t, []typedcolumn.ColumnDefinition{
+		{Name: "bad_codes", Type: columnType, FixedWidthElements: codeDims, Encoding: encoding, Compression: typedcolumn.CompressionNone, CompressionSet: true, StatsDisabled: true},
+	}, typedcolumn.Batch{Rows: rows, DenseFixedWidthVectors: map[string]typedcolumn.RawDenseFixedWidth{"bad_codes": dense}}, map[string]string{"bad_codes": string(logicalType)})
+	base := baseGraphIdentity1932(rows, 16, "dot")
+	schema := schemaDescriptor1932(rows, 16, codeDims, widthBytes*8, "dot", "dense-physical", base, []ColumnDescriptor{{Role: RoleCodes, Column: "bad_codes", AssetID: "bad-dense", Required: true, LogicalType: string(logicalType), Type: columnType, Encoding: encoding, ElementsPerRow: codeDims, AssetBytes: int64(image.TotalBytes()), SourceSchemaHash: 0x19320001}})
+	ref := refForImage1932("bad-dense", image)
+	schema.Columns[0].Ref = ref
+	return quantizedFixture1932{rows: rows, schema: schema, expected: expectedFromSchema1932(schema, RoleCodes), part: image, ref: ref, assetID: "bad-dense"}
 }
 
 func buildDenseUint32QuantizedFixture1932(t testing.TB) quantizedFixture1932 {

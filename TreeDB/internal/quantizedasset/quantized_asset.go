@@ -454,8 +454,13 @@ func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImage
 	if src.Image.Rows != schema.RowCount {
 		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q part rows=%d want schema row_count=%d", desc.Role, src.Image.Rows, schema.RowCount)
 	}
-	if desc.Ref.Present && src.Ref.Present && desc.Ref != src.Ref {
-		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q asset ref mismatch got=%s want=%s", desc.Role, src.Ref.key(), desc.Ref.key())
+	if desc.Ref.Present {
+		if !src.Ref.Present {
+			return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q missing resolved asset ref want=%s", desc.Role, desc.Ref.key())
+		}
+		if desc.Ref != src.Ref {
+			return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q asset ref mismatch got=%s want=%s", desc.Role, src.Ref.key(), desc.Ref.key())
+		}
 	}
 	if desc.AssetBytes != 0 {
 		assetBytes := src.AssetBytes
@@ -545,6 +550,9 @@ func validateColumnShape(schema SchemaDescriptor, desc ColumnDescriptor, cert ty
 	if cert.Name != desc.Column {
 		return fmt.Errorf("quantizedasset: role %q cert column=%q want %q", desc.Role, cert.Name, desc.Column)
 	}
+	if err := validateRoleType(desc.Role, cert); err != nil {
+		return err
+	}
 	if !cert.DirectViewCertified {
 		return fmt.Errorf("quantizedasset: role %q column %q is not direct-view certified", desc.Role, desc.Column)
 	}
@@ -584,9 +592,6 @@ func validateColumnShape(schema SchemaDescriptor, desc ColumnDescriptor, cert ty
 	if desc.BitsPerElement != 0 && cert.BitsPerElement != desc.BitsPerElement {
 		return fmt.Errorf("quantizedasset: role %q bits_per_element=%d want %d", desc.Role, cert.BitsPerElement, desc.BitsPerElement)
 	}
-	if err := validateRoleType(desc.Role, cert); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -596,9 +601,8 @@ func validateRoleType(role Role, cert typedcolumn.ColumnPartLayoutContractColumn
 		if cert.Type == typedcolumn.ColumnTypeFixedBytes && cert.Encoding == typedcolumn.EncodingRawFixedBytes && cert.LogicalType == string(columnsemantics.LogicalByteVector) {
 			return nil
 		}
-		if typedcolumn.IsGenericDenseFixedWidthVectorColumnType(cert.Type) {
-			wantEncoding, _ := typedcolumn.DenseFixedWidthVectorEncoding(cert.Type)
-			if cert.Encoding == wantEncoding && isUnsignedDenseCodeLogical(cert.LogicalType) {
+		if wantLogical, wantEncoding, ok := unsignedDenseCodePhysical(cert.Type); ok {
+			if cert.Encoding == wantEncoding && cert.LogicalType == wantLogical {
 				return nil
 			}
 		}
@@ -716,12 +720,18 @@ func KnownRole(role Role) bool {
 	}
 }
 
-func isUnsignedDenseCodeLogical(logical string) bool {
-	switch logical {
-	case string(columnsemantics.LogicalUint8Vector), string(columnsemantics.LogicalUint16Vector), string(columnsemantics.LogicalUint32Vector), string(columnsemantics.LogicalUint64Vector):
-		return true
+func unsignedDenseCodePhysical(t typedcolumn.ColumnType) (logical string, encoding typedcolumn.Encoding, ok bool) {
+	switch t {
+	case typedcolumn.ColumnTypeUint8Vector:
+		return string(columnsemantics.LogicalUint8Vector), typedcolumn.EncodingRawUint8Vector, true
+	case typedcolumn.ColumnTypeUint16Vector:
+		return string(columnsemantics.LogicalUint16Vector), typedcolumn.EncodingRawUint16Vector, true
+	case typedcolumn.ColumnTypeUint32Vector:
+		return string(columnsemantics.LogicalUint32Vector), typedcolumn.EncodingRawUint32Vector, true
+	case typedcolumn.ColumnTypeUint64Vector:
+		return string(columnsemantics.LogicalUint64Vector), typedcolumn.EncodingRawUint64Vector, true
 	default:
-		return false
+		return "", 0, false
 	}
 }
 
