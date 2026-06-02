@@ -1098,7 +1098,6 @@ Readers must fail closed on:
 - unknown command kinds;
 - unknown critical flags;
 - malformed section lengths before allocating section-owned objects;
-- payload digest mismatch;
 - corrupt complete physical segment CRC;
 - duplicate command `LSN` during segment scan.
 

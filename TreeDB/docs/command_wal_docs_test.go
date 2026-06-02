@@ -73,7 +73,7 @@ func TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents(t *testing.T)
 	rows := migrationInventoryRows(string(content))
 	pairs := map[string]string{
 		"TestCommitLogWriteReadBatch":                  "TestCommandWALFormatGoldenV1RawKVBatch",
-		"TestCommitLogCorruptCRC":                      "TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch",
+		"TestCommitLogCorruptCRC":                      "TestCommandWALFormatRejectsFrameCRCMismatch",
 		"TestCommitLogAppendBatchRejectsMixedSequence": "TestCommandWALDuplicateLSNFailsClosed",
 		"TestCommitLogTruncatedPayload":                "TestCommandWALTerminalShortHeaderIgnored",
 		"FuzzCommitLogReader":                          "FuzzCommandWALDecodeFrame",

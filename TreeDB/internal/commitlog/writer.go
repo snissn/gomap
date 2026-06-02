@@ -2,7 +2,6 @@ package commitlog
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -764,8 +763,6 @@ func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64
 	binary.LittleEndian.PutUint64(frameHeader[20:28], lsn)
 	binary.LittleEndian.PutUint64(frameHeader[44:52], baseAppliedLSN)
 	binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
-	digest := sha256.Sum256(payload)
-	copy(frameHeader[72:72+sha256.Size], digest[:])
 	binary.LittleEndian.PutUint32(prefix[0:4], uint32(size))
 	binary.LittleEndian.PutUint32(prefix[4:8], crc.ChecksumParts(frameHeader, payload))
 	if len(payload) >= directCommandPayloadMinLen {
@@ -796,8 +793,6 @@ func (w *Writer) appendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, k
 	var prefix [segmentHeaderSize + commandFrameHeaderSize]byte
 	frameHeader := prefix[segmentHeaderSize:]
 	fillTrustedCommandFrameHeader(frameHeader, lsn, baseAppliedLSN, kind, scope, format, len(payload))
-	digest := sha256.Sum256(payload)
-	copy(frameHeader[72:72+sha256.Size], digest[:])
 	binary.LittleEndian.PutUint32(prefix[0:4], uint32(size))
 	binary.LittleEndian.PutUint32(prefix[4:8], crc.ChecksumParts(frameHeader, payload))
 	if len(payload) >= directCommandPayloadMinLen {
@@ -919,9 +914,6 @@ func (w *Writer) flushBufferedCommandFrames() error {
 		if commandFrameHeaderSize+payloadLen > size {
 			return w.poisonCommandBuffer(ErrCorrupt)
 		}
-		payload := frame[commandFrameHeaderSize : commandFrameHeaderSize+payloadLen]
-		digest := sha256.Sum256(payload)
-		copy(frame[72:72+sha256.Size], digest[:])
 		binary.LittleEndian.PutUint32(w.commandBuf[off+4:off+8], crc.Checksum(frame))
 		off = frameEnd
 	}

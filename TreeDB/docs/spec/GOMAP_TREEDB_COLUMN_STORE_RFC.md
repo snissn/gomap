@@ -673,9 +673,9 @@ GC to enumerate every `ColumnFileRef`, delete bitmap ref, filter ref,
 dictionary ref, and external compression metadata ref without executing user
 code. `ExternalRefDigest`, when present, is a digest of the canonical sorted
 external-file set for the descriptor graph and must match the publish
-reachability closure. It is not the command payload digest and it must not make
-physical column descriptors, root deltas, locators, or marks part of the
-user-command WAL payload.
+reachability closure. It is not a command-specific assertion digest and it must
+not make physical column descriptors, root deltas, locators, or marks part of
+the user-command WAL payload.
 
 ### 6.3 Column File Layout
 

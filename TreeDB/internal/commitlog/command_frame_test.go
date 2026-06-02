@@ -533,16 +533,10 @@ func TestCommandWALFormatRejectsMalformedSectionCountsBeforeAllocation(t *testin
 	}
 }
 
-func TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch(t *testing.T) {
+func TestCommandWALFormatRejectsFrameCRCMismatch(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v")}})
 	if err != nil {
 		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
-	}
-	frame := mustCommandFrame(t, CommandEnvelope{LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, Payload: payload})
-	frame[len(frame)-1] ^= 0x7f
-	_, err = DecodeCommandFrame(frame)
-	if !errors.Is(err, ErrCommandWALPayloadDigestMismatch) {
-		t.Fatalf("DecodeCommandFrame error=%v, want ErrCommandWALPayloadDigestMismatch", err)
 	}
 
 	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")

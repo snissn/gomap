@@ -23,7 +23,7 @@
       "command_wal_kind": "CatalogCreateCollection",
       "command_wal_payload_format": "CatalogCreateCollectionV1",
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_catalog_create_collection.hex",
-      "local_fixture_sha256": "4782f9c9cca647e33b44f1143de7e17158a7f80c3302399611596641626d807e",
+      "local_fixture_sha256": "899bbf33a586e70b727e4014941455447248070f26950357d039dc25f399f76e",
       "support_matrix_status": "WAL-supported",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin create-collection support and acknowledgement semantics, but they encode collection metadata with different wire payload shapes. A future equivalence fixture must use matched metadata payloads before claiming lowered_equivalent_v1."
@@ -71,7 +71,7 @@
       "command_wal_kind": "CollectionInsertBatchByID",
       "command_wal_payload_format": "CollectionInsertBatchByIDV1",
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_insert_by_id.hex",
-      "local_fixture_sha256": "122bc8ee2e535d011ff956ca145b4c8a06ed4503e05cb480b40c49b10366d7b3",
+      "local_fixture_sha256": "795c4684ea76e21db16a236a7e4de2662e6597e2e77adbf54825a59ffb9c6df7",
       "support_matrix_status": "WAL-supported",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin the same command kind and supported surface, but they are not byte-equivalent and currently use different logical fixture inputs. A future equivalence fixture must use matched collection/id/document inputs before claiming lowered_equivalent_v1."
@@ -83,7 +83,7 @@
       "command_wal_kind": "CollectionUpdateBatchByID",
       "command_wal_payload_format": "CollectionUpdateBatchByIDV1",
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_update_by_id.hex",
-      "local_fixture_sha256": "3f3c82673c27f3952aa8683febfa6a96061562421b53ab05958d65998fac396d",
+      "local_fixture_sha256": "21247138f1d50b019f59b63e9abb74dc65784f9f70bfcb5a27f8f363910a3ec7",
       "support_matrix_status": "WAL-supported",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin the same command kind and supported surface, but they are not byte-equivalent and currently use different logical fixture inputs. A future equivalence fixture must use matched collection/id/document inputs before claiming lowered_equivalent_v1."
@@ -95,7 +95,7 @@
       "command_wal_kind": "CollectionDeleteBatchByID",
       "command_wal_payload_format": "CollectionDeleteBatchByIDV1",
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_delete_by_id.hex",
-      "local_fixture_sha256": "1e76994102339bf932e4bc4abde4122a744210dcf32376f58f516f79588577d7",
+      "local_fixture_sha256": "f62392ace88464fdf58a3eb9a92818c54a59aaeb3a53abc7ad54a0e674e87541",
       "support_matrix_status": "WAL-supported",
       "relationship": "lowered_kind_only_v1",
       "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin the same command kind and supported surface, but they are not byte-equivalent and currently use different logical fixture inputs. A future equivalence fixture must use matched collection/id/document inputs before claiming lowered_equivalent_v1."
