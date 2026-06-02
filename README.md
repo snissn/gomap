@@ -50,17 +50,29 @@ running relaxed durability or a benchmark ceiling.
 
 ### Indexed Collection Insert Workload
 
-Two secondary indexes, April 27 collection/SQLite matrix.
+Two secondary indexes, June 2 rerun, `100000` documents, batch size `16000`,
+and `command_wal_relaxed` for TreeDB. The first table is timed post-insert
+throughput; its B/doc column is not compacted storage.
 
-| engine / format | layout | ns/doc | docs/sec | disk B/doc |
+| engine / format | layout | ns/doc | docs/sec | post-insert B/doc |
 | --- | --- | ---: | ---: | ---: |
-| TreeDB template-v1 | default index leaves | 926.10 | 1,079,797 | 155.10 |
-| TreeDB JSON | default index leaves | 1,040.67 | 960,922 | 153.70 |
-| SQLite native columns | WAL normal | 2,221.33 | 450,180 | 175.77 |
-| SQLite JSON | WAL normal | 2,533.67 | 394,685 | 262.30 |
+| TreeDB JSON | data and index outer leaves in value log | 3,730 | 268,097 | 233.2 |
+| SQLite native columns | WAL normal | 4,026 | 248,385 | 176.1 |
+| TreeDB template-v1 | data and index outer leaves in value log | 4,451 | 224,669 | 214.8 |
+| SQLite JSON | WAL normal | 4,512 | 221,631 | 262.6 |
+
+Compacted-state storage comparison from the same canonical run:
+
+| engine / format | phase | B/doc | basis |
+| --- | --- | ---: | --- |
+| TreeDB template-v1 | `full_leafgen_pack_gc` | 22.2 | full leaf generation pack/GC plus offline index vacuum |
+| TreeDB JSON | `full_leafgen_pack_gc` | 30.4 | full leaf generation pack/GC plus offline index vacuum |
+| TreeDB template-v1 | `offline_compact` | 49.7 | high-level `treemap compact <dir> -rw` |
+| SQLite native columns | `sqlite_vacuum` | 156.7 | SQLite `VACUUM` |
+| SQLite JSON | `sqlite_vacuum` | 231.7 | SQLite `VACUUM` |
 
 Source:
-[April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
+[June 2 two-index insert rerun](docs/benchmarks/collections_insert_two_index_current_2026-06-02.md).
 
 ### Collection Read And Lookup Workload
 
@@ -200,6 +212,7 @@ Current YCSB status and rerun commands:
 
 Collection and engine benchmark runbooks:
 
+- `docs/benchmarks/collections_insert_two_index_current_2026-06-02.md`
 - `docs/benchmarks/treedb_canonical_benchmark_runbook.md`
 - `docs/benchmarks/collections_canonical_benchmark.md`
 - `cmd/unified_bench/README.md`
