@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 func TestColumnStorePhysicalAccountingReportsTypedColumnSections2118(t *testing.T) {
@@ -116,6 +118,25 @@ func TestColumnStorePhysicalAccountingReportsTypedColumnSections2118(t *testing.
 		accounting.Totals.TypedColumnSections.LocatorBytes
 	if totalCategoryBytes != accounting.Totals.TypedColumnSections.TotalStoredBytes {
 		t.Fatalf("total category bytes=%d want total stored bytes %d", totalCategoryBytes, accounting.Totals.TypedColumnSections.TotalStoredBytes)
+	}
+}
+
+func TestColumnStorePhysicalAccountingColumnDataSectionCompressionLabel1952(t *testing.T) {
+	tests := []struct {
+		name   string
+		detail typedcolumn.ColumnPartColumnByteAccounting
+		want   string
+	}{
+		{name: "all none", detail: typedcolumn.ColumnPartColumnByteAccounting{RequestedCompression: typedcolumn.CompressionSnappy, ActualCompressionMix: map[string]int{"none": 2}}, want: "none"},
+		{name: "all snappy", detail: typedcolumn.ColumnPartColumnByteAccounting{RequestedCompression: typedcolumn.CompressionSnappy, ActualCompressionMix: map[string]int{"snappy": 2}}, want: "snappy"},
+		{name: "mixed", detail: typedcolumn.ColumnPartColumnByteAccounting{RequestedCompression: typedcolumn.CompressionSnappy, ActualCompressionMix: map[string]int{"none": 1, "snappy": 1}}, want: "mixed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := columnStoreTypedColumnPartColumnSectionCompression(tc.detail); got != tc.want {
+				t.Fatalf("column section compression=%q want %q", got, tc.want)
+			}
+		})
 	}
 }
 
