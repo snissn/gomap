@@ -292,6 +292,29 @@ func TestLeafGenerationPlan_ProtectedOrdinaryRootDoesNotParseDescriptors(t *test
 	}
 }
 
+func TestLeafGenerationPlan_ProtectedRootDescriptorReadErrorFailsClosed(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+
+	missingPtr := page.ValuePtr{
+		FileID: page.ValueLogFileID(99),
+		Offset: 8,
+		Length: 8,
+	}
+	rootID, err := db.PublishOrderedRootIterator(
+		0,
+		mustFrozenSystemPointerMemtable(t, maintenanceTestCollectionRootKey, missingPtr).NewIterator(nil, nil),
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		ProtectedRootIDs: []uint64{rootID},
+	}); err == nil {
+		t.Fatal("LeafGenerationPlan with protected pointer-backed descriptor succeeded; want fail-closed read error")
+	}
+}
+
 func TestLeafGenerationGC_ProtectedSystemRootDescriptorsKeepCollectionRootLive(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 

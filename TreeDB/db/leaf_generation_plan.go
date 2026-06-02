@@ -782,6 +782,9 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return leafGenerationLiveScanStats{}, ctxErr
 				}
+				if !isCollectionRootDescriptorShapeError(err) {
+					return leafGenerationLiveScanStats{}, err
+				}
 				continue
 			}
 			for _, root := range protectedRoots {
