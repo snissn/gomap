@@ -92,6 +92,9 @@ func cloneDocumentFetchOptions(opts DocumentFetchOptions) DocumentFetchOptions {
 	return out
 }
 
+// mergeDocumentFetchOptionsPreset applies preset projection paths to existing
+// fetch options while preserving existing scalar settings unless the preset
+// explicitly overrides them.
 func mergeDocumentFetchOptionsPreset(existing, preset DocumentFetchOptions) DocumentFetchOptions {
 	out := cloneDocumentFetchOptions(existing)
 	out.IncludePaths = append([]string(nil), preset.IncludePaths...)
