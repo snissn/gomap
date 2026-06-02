@@ -113,15 +113,14 @@ func withCurrentWritableMmapTargetBytes(t *testing.T, target int64) {
 }
 
 func TestDefaultLeafMmapPolicyBudget(t *testing.T) {
-	if os.Getenv(maxMappedLeafSealedEnvKey) == "" {
-		if got, want := MaxMappedLeafSealedSegments, 512; got != want {
-			t.Fatalf("MaxMappedLeafSealedSegments=%d want %d", got, want)
-		}
+	withMappedLeafSealedBudget(t, defaultMaxMappedLeafSealed)
+	withMappedLeafSealedBytesBudget(t, defaultMaxMappedLeafSealedBytes)
+
+	if got, want := MaxMappedLeafSealedSegments, 512; got != want {
+		t.Fatalf("MaxMappedLeafSealedSegments=%d want %d", got, want)
 	}
-	if os.Getenv(maxMappedLeafBytesEnvKey) == "" {
-		if got, want := MaxMappedLeafSealedBytes, int64(8<<30); got != want {
-			t.Fatalf("MaxMappedLeafSealedBytes=%d want %d", got, want)
-		}
+	if got, want := MaxMappedLeafSealedBytes, int64(8<<30); got != want {
+		t.Fatalf("MaxMappedLeafSealedBytes=%d want %d", got, want)
 	}
 }
 
@@ -162,7 +161,7 @@ func TestReadUnsafe_CurrentLeafWritableMmapDisabledFallsBackToReadAt(t *testing.
 		t.Fatalf("ReadUnsafe current leaf mismatch: got=%q", string(got))
 	}
 	if data, _ := f.mmapData.Load().([]byte); len(data) != 0 {
-		t.Fatalf("current mutable leaf segment was mmaped, len=%d", len(data))
+		t.Fatalf("current mutable leaf segment was mmapped, len=%d", len(data))
 	}
 	if got := f.mmapReadFallbackReadAt.Load(); got == 0 {
 		t.Fatalf("expected current mutable leaf read to use ReadAt fallback when current mmap is disabled")
@@ -173,6 +172,9 @@ func TestReadUnsafe_DefaultSealedLeafBudgetUsesMmapWithCurrentMmapDisabled(t *te
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
 	}
+	withMappedLeafSealedBudget(t, defaultMaxMappedLeafSealed)
+	withMappedLeafSealedBytesBudget(t, defaultMaxMappedLeafSealedBytes)
+
 	prevCurrent := enableCurrentWritableMmap
 	prevLeaf := enableCurrentLeafWritableMmap
 	enableCurrentWritableMmap = false
