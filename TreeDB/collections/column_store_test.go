@@ -783,6 +783,25 @@ func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
 		t.Fatal("schema hash was not populated")
 	}
 
+	alias := testColumnStoreConfig(nil)
+	alias.Columns = append(alias.Columns,
+		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, ElementsPerRow: 128},
+		ColumnStoreColumn{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+		ColumnStoreColumn{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList},
+	)
+	alias.SortKey = append(alias.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
+	alias.AggregateMetadata = append(alias.AggregateMetadata,
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMax},
+	)
+	aliasMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: alias}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta alias: %v", err)
+	}
+	if aliasMeta.Options.ColumnStore.SchemaHash != meta.Options.ColumnStore.SchemaHash {
+		t.Fatalf("schema hash should treat float32_vector elements_per_row as vector_dims alias: dims=%x alias=%x", meta.Options.ColumnStore.SchemaHash, aliasMeta.Options.ColumnStore.SchemaHash)
+	}
+
 	changed := testColumnStoreConfig(nil)
 	changed.Columns = append(changed.Columns,
 		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 256},

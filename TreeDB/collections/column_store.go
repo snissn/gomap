@@ -1239,8 +1239,13 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, col.Path)
 		writeHashString(&d, string(col.ValueType))
 		writeHashString(&d, string(columnStoreColumnOwnerOrRowAsset(col)))
-		writeHashUint64(&d, uint64(col.VectorDims))
-		writeHashUint64(&d, uint64(col.ElementsPerRow))
+		if col.ValueType == ColumnStoreValueFloat32Vector {
+			writeHashUint64(&d, uint64(columnStoreFloat32VectorElementsPerRow(col)))
+			writeHashUint64(&d, 0)
+		} else {
+			writeHashUint64(&d, uint64(col.VectorDims))
+			writeHashUint64(&d, uint64(col.ElementsPerRow))
+		}
 		writeHashUint64(&d, uint64(col.AdjacencyDegree))
 		if col.AdjacencyLayout != ColumnAdjacencyListLayoutFixedDense {
 			writeHashString(&d, string(col.AdjacencyLayout))
