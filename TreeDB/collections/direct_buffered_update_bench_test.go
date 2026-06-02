@@ -223,7 +223,7 @@ func collectionManagerStatsBenchmarkDelta(after, before CollectionManagerStats) 
 		UpdateCombineBatchedRequests:     after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
 		UpdateCombineFallbackRequests:    after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
 		UpdateCombineInlineRequests:      after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests,
-		UpdateCombineQueueDepthMax:       after.UpdateCombineQueueDepthMax - before.UpdateCombineQueueDepthMax,
+		UpdateCombineQueueDepthMax:       after.UpdateCombineQueueDepthMax,
 		UpdateCombineEnqueue:             after.UpdateCombineEnqueue - before.UpdateCombineEnqueue,
 		UpdateCombineWait:                after.UpdateCombineWait - before.UpdateCombineWait,
 		UpdateCombineQueueWait:           after.UpdateCombineQueueWait - before.UpdateCombineQueueWait,
