@@ -134,6 +134,12 @@ func TestTypedColumnFloat32VectorDimensionAliasFailClosed1930(t *testing.T) {
 	if _, err := typedColumnProductionDefinitionForField(negativeDims); err == nil || !strings.Contains(err.Error(), "vector_dims=-1 must be non-negative") {
 		t.Fatalf("typedColumnProductionDefinitionForField negative dims err=%v want fail-closed", err)
 	}
+	negativeElements := typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)
+	negativeElements.VectorDims = 3
+	negativeElements.ElementsPerRow = -1
+	if _, err := typedColumnProductionDefinitionForField(negativeElements); err == nil || !strings.Contains(err.Error(), "elements_per_row=-1 must be non-negative") {
+		t.Fatalf("typedColumnProductionDefinitionForField negative elements err=%v want fail-closed", err)
+	}
 	layout = TypedStorageLayout{Collection: "events", Fields: []TypedStorageField{{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: -1, ElementsPerRow: 3}}}
 	if _, err := NormalizeTypedStorageLayout(layout); err == nil || !strings.Contains(err.Error(), "vector_dims: must be non-negative") {
 		t.Fatalf("NormalizeTypedStorageLayout negative dims err=%v want rejection", err)
