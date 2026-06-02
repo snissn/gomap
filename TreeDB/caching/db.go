@@ -4574,41 +4574,35 @@ func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
 }
 
 func (db *DB) leafGenerationGCOptions() backenddb.LeafGenerationGCOptions {
+	protectedRootIDs, protectedSystemRootIDs := db.publishedLeafGenerationProtectionIDs()
 	return backenddb.LeafGenerationGCOptions{
-		ProtectedRootIDs:       db.publishedRootIDsForLeafGenerationGC(),
-		ProtectedSystemRootIDs: db.publishedSystemRootIDsForLeafGenerationGC(),
+		ProtectedRootIDs:       protectedRootIDs,
+		ProtectedSystemRootIDs: protectedSystemRootIDs,
 	}
 }
 
 func (db *DB) ProtectedLeafGenerationRootIDs() []uint64 {
-	return db.publishedRootIDsForLeafGenerationGC()
+	protectedRootIDs, _ := db.publishedLeafGenerationProtectionIDs()
+	return protectedRootIDs
 }
 
 func (db *DB) ProtectedLeafGenerationSystemRootIDs() []uint64 {
-	return db.publishedSystemRootIDsForLeafGenerationGC()
+	_, protectedSystemRootIDs := db.publishedLeafGenerationProtectionIDs()
+	return protectedSystemRootIDs
 }
 
-func (db *DB) publishedRootIDsForLeafGenerationGC() []uint64 {
+func (db *DB) ProtectedLeafGenerationRootIDPair() ([]uint64, []uint64) {
+	return db.publishedLeafGenerationProtectionIDs()
+}
+
+func (db *DB) publishedLeafGenerationProtectionIDs() ([]uint64, []uint64) {
 	if db == nil {
-		return nil
+		return nil, nil
 	}
 	db.mu.RLock()
 	published := clonePublishedRootSet(db.rootPublishedSet)
 	db.mu.RUnlock()
-	return publishedRootSetRootIDs(published)
-}
-
-func (db *DB) publishedSystemRootIDsForLeafGenerationGC() []uint64 {
-	if db == nil {
-		return nil
-	}
-	db.mu.RLock()
-	published := clonePublishedRootSet(db.rootPublishedSet)
-	db.mu.RUnlock()
-	if published == nil || published.system.rootID == 0 {
-		return nil
-	}
-	return []uint64{published.system.rootID}
+	return publishedRootSetRootIDs(published), publishedRootSetSystemRootIDs(published)
 }
 
 func publishedRootSetRootIDs(set *publishedRootSet) []uint64 {
@@ -4636,6 +4630,13 @@ func publishedRootSetRootIDs(set *publishedRootSet) []uint64 {
 	add(set.system.rootID)
 	add(set.iterator.rootID)
 	return roots
+}
+
+func publishedRootSetSystemRootIDs(set *publishedRootSet) []uint64 {
+	if set == nil || set.system.rootID == 0 {
+		return nil
+	}
+	return []uint64{set.system.rootID}
 }
 
 // valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
@@ -17694,6 +17695,7 @@ planned:
 					maxSourceBytes = totalBytes
 				}
 			}
+			protectedRootIDs, protectedSystemRootIDs := db.publishedLeafGenerationProtectionIDs()
 			rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
@@ -17703,8 +17705,8 @@ planned:
 				// improve value-log read locality and reduce wall-time.
 				LocalityPolicy:                       backenddb.ValueLogRewriteLocalityGrouped,
 				ProtectedPaths:                       db.valueLogProtectedPaths(),
-				LeafGenerationProtectedRootIDs:       db.publishedRootIDsForLeafGenerationGC(),
-				LeafGenerationProtectedSystemRootIDs: db.publishedSystemRootIDsForLeafGenerationGC(),
+				LeafGenerationProtectedRootIDs:       protectedRootIDs,
+				LeafGenerationProtectedSystemRootIDs: protectedSystemRootIDs,
 				ReserveRIDs:                          db.ReserveValueLogRIDs,
 			}
 			processedRewriteIDs := []uint32(nil)
@@ -24649,6 +24651,7 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 		remainingGenerations := maxGenerations
 		remainingBytesToCopy := maxBytesToCopy
 		for remainingGenerations > 0 && remainingBytesToCopy > 0 {
+			protectedRootIDs, protectedSystemRootIDs := db.publishedLeafGenerationProtectionIDs()
 			stats, runErr := runner.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
 				// Pack maintenance runs GC immediately after successful pack runs.
 				// Keep pack writes durable before GC can retire older generations.
@@ -24659,8 +24662,8 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 				MaxGenerations:             remainingGenerations,
 				MaxBytesToCopy:             remainingBytesToCopy,
 				ReserveRIDs:                db.ReserveValueLogRIDs,
-				ProtectedRootIDs:           db.publishedRootIDsForLeafGenerationGC(),
-				ProtectedSystemRootIDs:     db.publishedSystemRootIDsForLeafGenerationGC(),
+				ProtectedRootIDs:           protectedRootIDs,
+				ProtectedSystemRootIDs:     protectedSystemRootIDs,
 			})
 			if runErr != nil {
 				return runErr

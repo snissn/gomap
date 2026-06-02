@@ -992,6 +992,36 @@ func TestCompactStoragePlan_ProtectedRootIDsKeepDetachedLeafGenerationLive(t *te
 	}
 }
 
+func TestCompactStorageLeafGenerationProtectedRootIDPairMergesSourcesOnce(t *testing.T) {
+	d := &DB{}
+	pairCalls := 0
+	opts := CompactStorageOptions{
+		LeafGenerationProtectedRootIDs:       []uint64{0, 1, 2, 1},
+		LeafGenerationProtectedSystemRootIDs: []uint64{10, 0, 10},
+		LeafGenerationProtectedRootIDsFunc: func() []uint64 {
+			return []uint64{2, 3}
+		},
+		LeafGenerationProtectedSystemRootIDsFunc: func() []uint64 {
+			return []uint64{10, 11}
+		},
+		LeafGenerationProtectedRootIDPairFunc: func() ([]uint64, []uint64) {
+			pairCalls++
+			return []uint64{3, 4}, []uint64{11, 12}
+		},
+	}
+
+	rootIDs, systemRootIDs := d.compactStorageLeafGenerationProtectedRootIDPair(opts)
+	if pairCalls != 1 {
+		t.Fatalf("pair callback calls=%d want 1", pairCalls)
+	}
+	if want := []uint64{1, 2, 3, 4}; !reflect.DeepEqual(rootIDs, want) {
+		t.Fatalf("rootIDs=%v want %v", rootIDs, want)
+	}
+	if want := []uint64{10, 11, 12}; !reflect.DeepEqual(systemRootIDs, want) {
+		t.Fatalf("systemRootIDs=%v want %v", systemRootIDs, want)
+	}
+}
+
 func compactStoragePhaseSeen(phases []CompactStoragePhaseStats, name string) bool {
 	for _, phase := range phases {
 		if phase.Name == name {

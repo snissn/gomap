@@ -55,6 +55,10 @@ type leafPageLogProtectedSystemRootProvider interface {
 	ProtectedLeafGenerationSystemRootIDs() []uint64
 }
 
+type leafPageLogProtectedRootPairProvider interface {
+	ProtectedLeafGenerationRootIDPair() (rootIDs []uint64, systemRootIDs []uint64)
+}
+
 type leafPageLogRecordLengthProvider interface {
 	LastLeafPageRecordLength() uint32
 }
@@ -174,6 +178,17 @@ func (l *leafPageLogWithRecordLengthHints) ProtectedLeafGenerationSystemRootIDs(
 	return provider.ProtectedLeafGenerationSystemRootIDs()
 }
 
+func (l *leafPageLogWithRecordLengthHints) ProtectedLeafGenerationRootIDPair() ([]uint64, []uint64) {
+	if l == nil || l.inner == nil {
+		return nil, nil
+	}
+	provider, ok := l.inner.(leafPageLogProtectedRootPairProvider)
+	if !ok {
+		return nil, nil
+	}
+	return provider.ProtectedLeafGenerationRootIDPair()
+}
+
 func (db *DB) currentLeafPageLogSegment() (path string, fileID uint32, ok bool) {
 	if db == nil || db.leafPageLog == nil {
 		return "", 0, false
@@ -205,6 +220,17 @@ func (db *DB) protectedLeafGenerationSystemRootIDsFromLeafPageLog() []uint64 {
 		return nil
 	}
 	return provider.ProtectedLeafGenerationSystemRootIDs()
+}
+
+func (db *DB) protectedLeafGenerationRootIDPairFromLeafPageLog() ([]uint64, []uint64) {
+	if db == nil || db.leafPageLog == nil {
+		return nil, nil
+	}
+	pairProvider, ok := db.leafPageLog.(leafPageLogProtectedRootPairProvider)
+	if ok {
+		return pairProvider.ProtectedLeafGenerationRootIDPair()
+	}
+	return db.protectedLeafGenerationRootIDsFromLeafPageLog(), db.protectedLeafGenerationSystemRootIDsFromLeafPageLog()
 }
 
 func leafPageLogCreatedSegments(log LeafPageLog) ([]LeafPageLogSegment, error) {

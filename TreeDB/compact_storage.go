@@ -118,6 +118,7 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	userProtectedRootIDsFunc := opts.LeafGenerationProtectedRootIDsFunc
 	explicitProtectedSystemRootIDs := append([]uint64(nil), opts.LeafGenerationProtectedSystemRootIDs...)
 	userProtectedSystemRootIDsFunc := opts.LeafGenerationProtectedSystemRootIDsFunc
+	userProtectedRootIDPairFunc := opts.LeafGenerationProtectedRootIDPairFunc
 	opts.ValueLogProtectedPathsFunc = func() []string {
 		var out []string
 		if userProtectedPathsFunc != nil {
@@ -126,22 +127,21 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 		out = appendCompactStorageProtectedPaths(out, db.cached.ValueLogProtectedPaths())
 		return out
 	}
-	opts.LeafGenerationProtectedRootIDsFunc = func() []uint64 {
-		var out []uint64
-		if userProtectedRootIDsFunc != nil {
-			out = appendCompactStorageProtectedRootIDs(out, userProtectedRootIDsFunc())
+	opts.LeafGenerationProtectedRootIDPairFunc = func() ([]uint64, []uint64) {
+		var rootIDs []uint64
+		var systemRootIDs []uint64
+		if userProtectedRootIDPairFunc != nil {
+			userRootIDs, userSystemRootIDs := userProtectedRootIDPairFunc()
+			rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, userRootIDs)
+			systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, userSystemRootIDs)
 		}
-		out = appendCompactStorageProtectedRootIDs(out, db.cached.ProtectedLeafGenerationRootIDs())
-		return out
+		cachedRootIDs, cachedSystemRootIDs := db.cached.ProtectedLeafGenerationRootIDPair()
+		rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, cachedRootIDs)
+		systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, cachedSystemRootIDs)
+		return rootIDs, systemRootIDs
 	}
-	opts.LeafGenerationProtectedSystemRootIDsFunc = func() []uint64 {
-		var out []uint64
-		if userProtectedSystemRootIDsFunc != nil {
-			out = appendCompactStorageProtectedRootIDs(out, userProtectedSystemRootIDsFunc())
-		}
-		out = appendCompactStorageProtectedRootIDs(out, db.cached.ProtectedLeafGenerationSystemRootIDs())
-		return out
-	}
+	opts.LeafGenerationProtectedRootIDsFunc = userProtectedRootIDsFunc
+	opts.LeafGenerationProtectedSystemRootIDsFunc = userProtectedSystemRootIDsFunc
 	opts.ValueLogProtectedPaths = explicitProtectedPaths
 	opts.LeafGenerationProtectedRootIDs = explicitProtectedRootIDs
 	opts.LeafGenerationProtectedSystemRootIDs = explicitProtectedSystemRootIDs

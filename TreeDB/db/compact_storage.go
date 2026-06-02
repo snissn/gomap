@@ -66,13 +66,16 @@ type CompactStorageOptions struct {
 	// LeafGenerationProtectedSystemRootIDsFunc refreshes additional system roots
 	// whose collection root descriptors should be expanded during compaction.
 	LeafGenerationProtectedSystemRootIDsFunc func() []uint64
-	LeafPackMaxPasses                        int
-	LeafPackMaxGenerationsPerPass            int
-	LeafPackMaxBytesToCopyPerPass            int64
-	LeafPackMinExpectedReclaimBytes          int64
-	LeafPackMinExpectedReclaimRatioPPM       int
-	LeafPackMinReclaimPerCopyPPM             int
-	LeafPackLeafFrameK                       int
+	// LeafGenerationProtectedRootIDPairFunc refreshes ordinary and system roots
+	// from one caller snapshot when both lists come from the same source.
+	LeafGenerationProtectedRootIDPairFunc func() (rootIDs []uint64, systemRootIDs []uint64)
+	LeafPackMaxPasses                     int
+	LeafPackMaxGenerationsPerPass         int
+	LeafPackMaxBytesToCopyPerPass         int64
+	LeafPackMinExpectedReclaimBytes       int64
+	LeafPackMinExpectedReclaimRatioPPM    int
+	LeafPackMinReclaimPerCopyPPM          int
+	LeafPackLeafFrameK                    int
 
 	// ReserveRIDs lets cached-mode callers share the live RID allocator with
 	// foreground writers.
@@ -233,9 +236,10 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	defer cleanupLeafLog()
 	if err := db.runCompactStoragePhase(&stats, "value-log-rewrite", func() error {
 		protectedPaths := compactStorageOnlineRewriteProtectedPaths(opts)
+		protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 		rewriteOpts := compactStorageRewritePlanOptions(protectedPaths)
-		rewriteOpts.LeafGenerationProtectedRootIDs = db.compactStorageLeafGenerationProtectedRootIDs(opts)
-		rewriteOpts.LeafGenerationProtectedSystemRootIDs = db.compactStorageLeafGenerationProtectedSystemRootIDs(opts)
+		rewriteOpts.LeafGenerationProtectedRootIDs = protectedRootIDs
+		rewriteOpts.LeafGenerationProtectedSystemRootIDs = protectedSystemRootIDs
 		rewriteOpts.BatchSize = opts.ValueLogRewriteBatchSize
 		rewriteOpts.SyncEachBatch = opts.SyncEachPhase
 		rewriteOpts.MaxSegmentBytes = opts.ValueLogRewriteMaxSegmentBytes
@@ -271,6 +275,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		phaseName := fmt.Sprintf("leaf-generation-pack-%d", pass+1)
 		if err := db.runCompactStoragePhase(&stats, phaseName, func() error {
 			var err error
+			protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 			pack, err = db.leafGenerationPackRunOnce(ctx, LeafGenerationPackFromPlanOptions{
 				Sync:                       opts.SyncEachPhase,
 				MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
@@ -280,8 +285,8 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 				MaxBytesToCopy:             opts.LeafPackMaxBytesToCopyPerPass,
 				ReserveRIDs:                opts.ReserveRIDs,
 				LeafFrameK:                 opts.LeafPackLeafFrameK,
-				ProtectedRootIDs:           db.compactStorageLeafGenerationProtectedRootIDs(opts),
-				ProtectedSystemRootIDs:     db.compactStorageLeafGenerationProtectedSystemRootIDs(opts),
+				ProtectedRootIDs:           protectedRootIDs,
+				ProtectedSystemRootIDs:     protectedSystemRootIDs,
 			}, !maintenanceLocked)
 			return err
 		}); err != nil {
@@ -306,9 +311,10 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 
 	if err := db.runCompactStoragePhase(&stats, "leaf-generation-gc", func() error {
+		protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 		gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
-			ProtectedRootIDs:       db.compactStorageLeafGenerationProtectedRootIDs(opts),
-			ProtectedSystemRootIDs: db.compactStorageLeafGenerationProtectedSystemRootIDs(opts),
+			ProtectedRootIDs:       protectedRootIDs,
+			ProtectedSystemRootIDs: protectedSystemRootIDs,
 		}, !maintenanceLocked)
 		stats.LeafGenerationGC = gc
 		return err
@@ -437,9 +443,10 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if debt.LeafGCGenerations > 0 {
 			phaseName := fmt.Sprintf("settle-leaf-generation-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
+				protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 				gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
-					ProtectedRootIDs:       db.compactStorageLeafGenerationProtectedRootIDs(opts),
-					ProtectedSystemRootIDs: db.compactStorageLeafGenerationProtectedSystemRootIDs(opts),
+					ProtectedRootIDs:       protectedRootIDs,
+					ProtectedSystemRootIDs: protectedSystemRootIDs,
 				}, lockMaintenance)
 				stats.LeafGenerationGC = gc
 				return err
@@ -552,12 +559,13 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 	debt.ValueLogGCSegments += len(fencedValueLogIDs)
 	debt.ValueLogGCBytes += fencedValueLogBytes
 
+	protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 	leafPlan, err := db.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{
 		MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
 		MinExpectedReclaimRatioPPM: opts.LeafPackMinExpectedReclaimRatioPPM,
 		MinReclaimPerByteCopiedPPM: opts.LeafPackMinReclaimPerCopyPPM,
-		ProtectedRootIDs:           db.compactStorageLeafGenerationProtectedRootIDs(opts),
-		ProtectedSystemRootIDs:     db.compactStorageLeafGenerationProtectedSystemRootIDs(opts),
+		ProtectedRootIDs:           protectedRootIDs,
+		ProtectedSystemRootIDs:     protectedSystemRootIDs,
 	})
 	if err != nil {
 		return debt, err
@@ -568,10 +576,11 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		debt.LeafPackBytes = leafPlan.ExpectedReclaimBytes
 	}
 
+	protectedRootIDs, protectedSystemRootIDs = db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 	leafGC, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
 		DryRun:                 true,
-		ProtectedRootIDs:       db.compactStorageLeafGenerationProtectedRootIDs(opts),
-		ProtectedSystemRootIDs: db.compactStorageLeafGenerationProtectedSystemRootIDs(opts),
+		ProtectedRootIDs:       protectedRootIDs,
+		ProtectedSystemRootIDs: protectedSystemRootIDs,
 	}, lockMaintenance)
 	if err != nil {
 		return debt, err
@@ -803,24 +812,26 @@ func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 	return out
 }
 
-func (db *DB) compactStorageLeafGenerationProtectedRootIDs(opts CompactStorageOptions) []uint64 {
-	var out []uint64
-	out = appendCompactStorageProtectedRootIDs(out, opts.LeafGenerationProtectedRootIDs)
+func (db *DB) compactStorageLeafGenerationProtectedRootIDPair(opts CompactStorageOptions) ([]uint64, []uint64) {
+	var rootIDs []uint64
+	var systemRootIDs []uint64
+	rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, opts.LeafGenerationProtectedRootIDs)
+	systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, opts.LeafGenerationProtectedSystemRootIDs)
 	if opts.LeafGenerationProtectedRootIDsFunc != nil {
-		out = appendCompactStorageProtectedRootIDs(out, opts.LeafGenerationProtectedRootIDsFunc())
+		rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, opts.LeafGenerationProtectedRootIDsFunc())
 	}
-	out = appendCompactStorageProtectedRootIDs(out, db.protectedLeafGenerationRootIDsFromLeafPageLog())
-	return out
-}
-
-func (db *DB) compactStorageLeafGenerationProtectedSystemRootIDs(opts CompactStorageOptions) []uint64 {
-	var out []uint64
-	out = appendCompactStorageProtectedRootIDs(out, opts.LeafGenerationProtectedSystemRootIDs)
 	if opts.LeafGenerationProtectedSystemRootIDsFunc != nil {
-		out = appendCompactStorageProtectedRootIDs(out, opts.LeafGenerationProtectedSystemRootIDsFunc())
+		systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, opts.LeafGenerationProtectedSystemRootIDsFunc())
 	}
-	out = appendCompactStorageProtectedRootIDs(out, db.protectedLeafGenerationSystemRootIDsFromLeafPageLog())
-	return out
+	if opts.LeafGenerationProtectedRootIDPairFunc != nil {
+		dynamicRootIDs, dynamicSystemRootIDs := opts.LeafGenerationProtectedRootIDPairFunc()
+		rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, dynamicRootIDs)
+		systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, dynamicSystemRootIDs)
+	}
+	dynamicRootIDs, dynamicSystemRootIDs := db.protectedLeafGenerationRootIDPairFromLeafPageLog()
+	rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, dynamicRootIDs)
+	systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, dynamicSystemRootIDs)
+	return rootIDs, systemRootIDs
 }
 
 func appendCompactStorageProtectedRootIDs(dst []uint64, src []uint64) []uint64 {
