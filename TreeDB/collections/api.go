@@ -15904,6 +15904,9 @@ func (c *Collection) stageDirectPrimaryOverlayLocked(domain *collectionWriteDoma
 	domain.writeGeneration++
 	domain.notePrimaryWriteEntriesLocked(direct.primaryEntries, domain.writeGeneration)
 	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, 0)
+	if len(plan.meta.Indexes) == 0 {
+		domain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, false, collectionRootDeltaPlanStats{})
+	}
 	c.meta = plan.meta
 	plan.stats.BufferedBatches = 1
 	return true, nil

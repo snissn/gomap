@@ -12714,6 +12714,7 @@ func TestCollectionUpdateBSONSetNoIndexBuffersPrimaryOverlay(t *testing.T) {
 		t.Fatalf("flush insert: %v", err)
 	}
 	before := d.State()
+	statsBefore := mgr.StatsSnapshot()
 	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
 		Key:   "city",
 		Value: mustBSONRawValue(t, "sea"),
@@ -12731,6 +12732,19 @@ func TestCollectionUpdateBSONSetNoIndexBuffersPrimaryOverlay(t *testing.T) {
 	stats := col.LastUpdateStats()
 	if got, want := stats.BufferedBatches, 1; got != want {
 		t.Fatalf("buffered batches=%d want %d", got, want)
+	}
+	statsAfterStage := mgr.StatsSnapshot()
+	if got, want := statsAfterStage.PrimaryOnlyUpdateCalls-statsBefore.PrimaryOnlyUpdateCalls, uint64(1); got != want {
+		t.Fatalf("primary-only update calls delta=%d want %d", got, want)
+	}
+	if got, want := statsAfterStage.PrimaryOnlyMatched-statsBefore.PrimaryOnlyMatched, uint64(1); got != want {
+		t.Fatalf("primary-only matched delta=%d want %d", got, want)
+	}
+	if got, want := statsAfterStage.PrimaryOnlyModified-statsBefore.PrimaryOnlyModified, uint64(1); got != want {
+		t.Fatalf("primary-only modified delta=%d want %d", got, want)
+	}
+	if got, want := statsAfterStage.PrimaryOnlyRootPublishes-statsBefore.PrimaryOnlyRootPublishes, uint64(0); got != want {
+		t.Fatalf("primary-only root publishes delta=%d want %d before flush", got, want)
 	}
 	rootCounts, rootRunCount := bufferedRootRunCountsForTest(t, col, collectionPrimaryRootName("users"))
 	overlayEntries := bufferedPrimaryOverlayCountForTest(t, col)
