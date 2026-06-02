@@ -578,7 +578,10 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedSectionUsesScratchFallback1
 	}
 }
 
-func TestColumnVectorGraphTypedColumnVectorParallelReadersIndependentHandles1898(t *testing.T) {
+func TestColumnVectorGraphTypedColumnVectorParallelReadersSharePreparedHandles1735(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("shared prepared handle test requires mmap_direct support")
+	}
 	const (
 		rows = 96
 		dims = 16
@@ -607,19 +610,24 @@ func TestColumnVectorGraphTypedColumnVectorParallelReadersIndependentHandles1898
 			t.Fatalf("open reader %d: %v", i, err)
 		}
 		defer func(reader *columnVectorGraphPhysicalRowReader) { _ = reader.Close() }(reader)
-		if reader.typedVectorSource == nil || reader.typedVectorSource.manager == nil {
-			t.Fatalf("reader %d missing typed-column vector source", i)
+		if reader.typedVectorSource == nil || reader.typedVectorSource.manager == nil || reader.preparedSearch == nil {
+			t.Fatalf("reader %d missing shared prepared typed-column vector source", i)
 		}
-		if i > 0 && reader.typedVectorSource.manager == readers[0].typedVectorSource.manager {
-			t.Fatalf("reader %d shares typed-column vector manager with reader 0", i)
+		if i > 0 {
+			if reader.sharedPreparedSearch == nil || readers[0].sharedPreparedSearch == nil || reader.sharedPreparedSearch.holder != readers[0].sharedPreparedSearch.holder {
+				t.Fatalf("reader %d did not share prepared search holder with reader 0", i)
+			}
+			if reader.typedVectorSource.manager != readers[0].typedVectorSource.manager {
+				t.Fatalf("reader %d typed-column vector manager differs from reader 0; want shared immutable manager", i)
+			}
 		}
 		resourceStats := reader.typedVectorSource.manager.Stats()
 		if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 			if resourceStats.ActiveMappedBytes == 0 || resourceStats.ActiveHandles == 0 {
-				t.Fatalf("reader %d resource stats=%+v want independent mmap handles", i, resourceStats)
+				t.Fatalf("reader %d resource stats=%+v want shared mmap handles", i, resourceStats)
 			}
 		} else if resourceStats.ActiveHandles == 0 && reader.typedVectorSource.decodedDerivedBytes == 0 {
-			t.Fatalf("reader %d resource stats=%+v decoded=%d want independent heap-copy or scratch source", i, resourceStats, reader.typedVectorSource.decodedDerivedBytes)
+			t.Fatalf("reader %d resource stats=%+v decoded=%d want shared heap-copy or scratch source", i, resourceStats, reader.typedVectorSource.decodedDerivedBytes)
 		}
 		readers[i] = reader
 	}

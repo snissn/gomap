@@ -324,6 +324,146 @@ func TestColumnVectorGraphPreparedSearchParallelScratchSafety2045(t *testing.T) 
 	}
 }
 
+func TestColumnVectorGraphPreparedSearchSharedResourceRefcount1735(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("shared prepared resource refcount test requires mmap_direct support")
+	}
+	rows := columnGraphRebuildSyntheticRowsV2A(128, 16)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 16, 8, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader1, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("open reader1: %v", err)
+	}
+	if reader1.sharedPreparedSearch == nil || reader1.preparedSearch == nil || !reader1.preparedSearch.ready() {
+		_ = reader1.Close()
+		t.Fatalf("reader1 sharedPrepared=%v prepared=%v want shared ready prepared search", reader1.sharedPreparedSearch != nil, reader1.preparedSearch != nil)
+	}
+	first := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+	if first.Entries != 1 || first.Refs != 1 || first.ActiveHandles == 0 || first.ActiveMappedBytes == 0 || first.ActiveHeapCopyBytes != 0 {
+		_ = reader1.Close()
+		t.Fatalf("first shared prepared cache snapshot=%+v want one mapped entry/ref without heap-copy fallback", first)
+	}
+	reader2, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		_ = reader1.Close()
+		t.Fatalf("open reader2: %v", err)
+	}
+	if reader2.sharedPreparedSearch == nil || reader2.sharedPreparedSearch.holder != reader1.sharedPreparedSearch.holder || reader2.preparedSearch != reader1.preparedSearch {
+		_ = reader2.Close()
+		_ = reader1.Close()
+		t.Fatal("reader2 did not share the immutable prepared holder/view with reader1")
+	}
+	second := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+	if second.Entries != 1 || second.Refs != 2 || second.CacheHits != 1 || second.CacheMisses != 1 || second.CacheBuilds != 1 || second.ActiveHandles != first.ActiveHandles || second.ActiveMappedBytes != first.ActiveMappedBytes || second.TotalAcquires != first.TotalAcquires {
+		_ = reader2.Close()
+		_ = reader1.Close()
+		t.Fatalf("second shared prepared cache snapshot=%+v first=%+v want ref growth without new mapped handles", second, first)
+	}
+	query := append([]float32(nil), rows[7].vector...)
+	baseline, _, err := reader2.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 8, EfSearch: 64}, &columnVectorGraphNativeSearchScratch{})
+	if err != nil {
+		_ = reader2.Close()
+		_ = reader1.Close()
+		t.Fatalf("baseline SearchCosine: %v", err)
+	}
+	baseline = cloneColumnVectorGraphPreparedResults2045(baseline)
+	if err := reader1.Close(); err != nil {
+		_ = reader2.Close()
+		t.Fatalf("close reader1: %v", err)
+	}
+	afterFirstClose := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+	if afterFirstClose.Entries != 1 || afterFirstClose.Refs != 1 || afterFirstClose.ActiveHandles != first.ActiveHandles || afterFirstClose.ActiveMappedBytes != first.ActiveMappedBytes {
+		_ = reader2.Close()
+		t.Fatalf("cache after first close=%+v want remaining reader to retain shared handles", afterFirstClose)
+	}
+	got, stats, err := reader2.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 8, EfSearch: 64, StatsMode: columnVectorGraphNativeSearchStatsModeMinimal}, &columnVectorGraphNativeSearchScratch{})
+	if err != nil {
+		_ = reader2.Close()
+		t.Fatalf("reader2 SearchCosine after reader1 close: %v", err)
+	}
+	if mismatch := columnGraphNativeSearchResultsMismatchV3(got, baseline); mismatch != "" {
+		_ = reader2.Close()
+		t.Fatalf("reader2 after reader1 close: %s", mismatch)
+	}
+	if stats.PreparedGraphSearchViews != 1 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.ResultIDGraphFallbacks != 0 {
+		_ = reader2.Close()
+		t.Fatalf("reader2 stats=%+v want shared prepared path without fallback", stats)
+	}
+	holder := reader2.sharedPreparedSearch.holder
+	if err := reader2.Close(); err != nil {
+		t.Fatalf("close reader2: %v", err)
+	}
+	afterAllClosed := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+	if afterAllClosed.Entries != 0 || afterAllClosed.Refs != 0 || afterAllClosed.ActiveHandles != 0 || afterAllClosed.ActiveMappedBytes != 0 {
+		t.Fatalf("cache after all close=%+v want no active shared handles", afterAllClosed)
+	}
+	if holder != nil {
+		if stats := holder.stats(); stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 {
+			t.Fatalf("holder stats after last close=%+v want released resources", stats)
+		}
+	}
+}
+
+func TestColumnVectorGraphPreparedSearchConcurrentOpenSharesSingleHolder1735(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("shared prepared concurrent-open test requires mmap_direct support")
+	}
+	rows := columnGraphRebuildSyntheticRowsV2A(96, 16)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 16, 8, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	const workers = 4
+	readers := make([]*columnVectorGraphPhysicalRowReader, workers)
+	errs := make(chan string, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+			if err != nil {
+				errs <- fmt.Sprintf("open reader %d: %v", worker, err)
+				return
+			}
+			readers[worker] = reader
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	defer func() {
+		for _, reader := range readers {
+			_ = reader.Close()
+		}
+	}()
+	if t.Failed() {
+		return
+	}
+	holder := readers[0].sharedPreparedSearch.holder
+	for i, reader := range readers {
+		var gotHolder *columnVectorGraphSharedPreparedSearch
+		if reader != nil && reader.sharedPreparedSearch != nil {
+			gotHolder = reader.sharedPreparedSearch.holder
+		}
+		if reader == nil || reader.sharedPreparedSearch == nil || gotHolder != holder || reader.preparedSearch == nil || !reader.preparedSearch.ready() {
+			t.Fatalf("reader %d sharedPrepared=%v holder=%p first=%p prepared=%v", i, reader != nil && reader.sharedPreparedSearch != nil, gotHolder, holder, reader != nil && reader.preparedSearch != nil)
+		}
+	}
+	snap := col.columnVectorGraphSharedPreparedSearchCacheSnapshot()
+	if snap.Entries != 1 || snap.Refs != workers || snap.CacheBuilds != 1 || snap.CacheMisses != 1 || snap.CacheHits != workers-1 || snap.CacheWaits > workers-1 || snap.BuildingEntries != 0 || snap.ActiveHandles == 0 || snap.ActiveMappedBytes == 0 {
+		t.Fatalf("concurrent-open cache snapshot=%+v want one built holder with %d refs", snap, workers)
+	}
+}
+
 func assertColumnVectorGraphPreparedSearchStats2045(tb testing.TB, stats columnVectorGraphNativeSearchStats, results int) {
 	tb.Helper()
 	if stats.PreparedGraphSearchViews != 1 || stats.GraphRowFallbacks != 0 {
