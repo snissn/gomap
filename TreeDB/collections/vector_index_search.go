@@ -69,6 +69,15 @@ type VectorIndexSearcherOptions struct {
 type VectorIndexSearcherSearchOptions struct {
 	// Query is the query vector. V4 column_graph search supports cosine indexes.
 	Query []float32
+	// QueryMode selects exact, quantized-only, or quantized-rerank search. The
+	// zero value is exact; quantized modes require QuantizedIndexName and fail
+	// closed until matching assets/scorers are available.
+	QueryMode VectorIndexQueryMode
+	// QuantizedIndexName selects the named derived score plane for quantized modes.
+	QuantizedIndexName string
+	// QuantizedRerankCandidates bounds the quantized candidate set reranked by
+	// exact float32 vectors in quantized_rerank mode. Zero uses TopK.
+	QuantizedRerankCandidates int
 	// TopK is the maximum number of nearest results to return.
 	TopK int
 	// EfSearch bounds graph exploration. Zero uses the persisted index default.
@@ -529,13 +538,16 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 		return response, err
 	}
 	response, err = searcher.Search(VectorIndexSearcherSearchOptions{
-		Query:                opts.Query,
-		TopK:                 opts.TopK,
-		EfSearch:             opts.EfSearch,
-		IncludeDocuments:     opts.IncludeDocuments,
-		DocumentFetchOptions: opts.DocumentFetchOptions,
-		StatsMode:            opts.StatsMode,
-		scoreBatchMode:       opts.scoreBatchMode,
+		Query:                     opts.Query,
+		QueryMode:                 opts.QueryMode,
+		QuantizedIndexName:        opts.QuantizedIndexName,
+		QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
+		TopK:                      opts.TopK,
+		EfSearch:                  opts.EfSearch,
+		IncludeDocuments:          opts.IncludeDocuments,
+		DocumentFetchOptions:      opts.DocumentFetchOptions,
+		StatsMode:                 opts.StatsMode,
+		scoreBatchMode:            opts.scoreBatchMode,
 	})
 	documentView := searcher.documentView
 	if closeErr := searcher.Close(); err == nil && closeErr != nil {
@@ -706,12 +718,19 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if err != nil {
 		return response, err
 	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		return response, err
+	}
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
-		TopK:           opts.TopK,
-		EfSearch:       opts.EfSearch,
-		ScoreBatchMode: opts.scoreBatchMode,
-		StatsMode:      statsMode,
+		TopK:                      opts.TopK,
+		EfSearch:                  opts.EfSearch,
+		ScoreBatchMode:            opts.scoreBatchMode,
+		StatsMode:                 statsMode,
+		QueryMode:                 queryMode,
+		QuantizedIndexName:        opts.QuantizedIndexName,
+		QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
 	}, &s.scratch)
 	readerStatsAfter := s.reader.Stats()
 	s.readerLast = readerStatsAfter
@@ -863,12 +882,20 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 		clear(previousResults)
 		return response, err
 	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		clear(previousResults)
+		return response, err
+	}
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
-		TopK:           opts.TopK,
-		EfSearch:       opts.EfSearch,
-		ScoreBatchMode: opts.scoreBatchMode,
-		StatsMode:      statsMode,
+		TopK:                      opts.TopK,
+		EfSearch:                  opts.EfSearch,
+		ScoreBatchMode:            opts.scoreBatchMode,
+		StatsMode:                 statsMode,
+		QueryMode:                 queryMode,
+		QuantizedIndexName:        opts.QuantizedIndexName,
+		QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
 	}, &s.scratch)
 	readerStatsAfter := s.reader.Stats()
 	s.readerLast = readerStatsAfter
@@ -933,6 +960,50 @@ func validateVectorIndexSearchRequest(topK, efSearch int) error {
 	}
 	if efSearch < 0 {
 		return errors.New("collections: vector index search ef_search cannot be negative")
+	}
+	return nil
+}
+
+func normalizeVectorIndexSearchQueryMode(mode VectorIndexQueryMode, quantizedIndexName string, quantizedRerankCandidates, topK int) (columnVectorGraphNativeSearchQueryMode, error) {
+	switch mode {
+	case "", VectorIndexQueryModeExact:
+		if quantizedIndexName != "" {
+			return columnVectorGraphNativeSearchQueryModeExact, errors.New("collections: exact vector index search cannot select a quantized index")
+		}
+		if quantizedRerankCandidates != 0 {
+			return columnVectorGraphNativeSearchQueryModeExact, errors.New("collections: exact vector index search cannot set quantized rerank candidates")
+		}
+		return columnVectorGraphNativeSearchQueryModeExact, nil
+	case VectorIndexQueryModeQuantizedOnly:
+		if err := validateSelectedQuantizedVectorIndexName(quantizedIndexName); err != nil {
+			return columnVectorGraphNativeSearchQueryModeExact, err
+		}
+		if quantizedRerankCandidates != 0 {
+			return columnVectorGraphNativeSearchQueryModeExact, errors.New("collections: quantized_only vector index search cannot set quantized rerank candidates")
+		}
+		return columnVectorGraphNativeSearchQueryModeQuantizedOnly, nil
+	case VectorIndexQueryModeQuantizedRerank:
+		if err := validateSelectedQuantizedVectorIndexName(quantizedIndexName); err != nil {
+			return columnVectorGraphNativeSearchQueryModeExact, err
+		}
+		if quantizedRerankCandidates < 0 {
+			return columnVectorGraphNativeSearchQueryModeExact, errors.New("collections: quantized vector index rerank candidates cannot be negative")
+		}
+		if quantizedRerankCandidates != 0 && topK > 0 && quantizedRerankCandidates < topK {
+			return columnVectorGraphNativeSearchQueryModeExact, errors.New("collections: quantized vector index rerank candidates cannot be less than top_k")
+		}
+		return columnVectorGraphNativeSearchQueryModeQuantizedRerank, nil
+	default:
+		return columnVectorGraphNativeSearchQueryModeExact, fmt.Errorf("collections: vector index query mode %q is unsupported", mode)
+	}
+}
+
+func validateSelectedQuantizedVectorIndexName(name string) error {
+	if name == "" {
+		return errors.New("collections: quantized vector index name is required for quantized query mode")
+	}
+	if err := ValidateIndexName(name); err != nil {
+		return fmt.Errorf("collections: quantized vector index name: %w", err)
 	}
 	return nil
 }

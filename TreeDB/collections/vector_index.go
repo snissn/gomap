@@ -155,19 +155,39 @@ type VectorIndexOptions struct {
 	schemaGeneration    uint64
 }
 
+// VectorIndexQueryMode selects the score plane used by column_graph search.
+// The zero value is exact to preserve existing search behavior. Quantized modes
+// must be selected explicitly with a named quantized index and fail closed until
+// matching assets and scorers are available.
+type VectorIndexQueryMode string
+
+const (
+	VectorIndexQueryModeExact           VectorIndexQueryMode = "exact"
+	VectorIndexQueryModeQuantizedOnly   VectorIndexQueryMode = "quantized_only"
+	VectorIndexQueryModeQuantizedRerank VectorIndexQueryMode = "quantized_rerank"
+)
+
 // VectorIndexSearchOptions configures one in-memory vector index search.
 type VectorIndexSearchOptions struct {
 	// IndexName is used by collection-level physical column_graph search.
 	IndexName string
 	// Query is used by collection-level physical column_graph search.
-	Query                []float32
-	TopK                 int
-	EfSearch             int
-	FetchMultiplier      int
-	Filter               func(DocumentRecord) (bool, error)
-	IndexRangeFilter     *VectorIndexRangeFilter
-	ExactFilterMaxDocs   int
-	DisableExactFallback bool
+	Query []float32
+	// QueryMode selects exact, quantized-only, or quantized-rerank search for
+	// collection column_graph APIs. The zero value is exact.
+	QueryMode VectorIndexQueryMode
+	// QuantizedIndexName selects the named derived score plane for quantized modes.
+	QuantizedIndexName string
+	// QuantizedRerankCandidates bounds the quantized candidate set reranked by
+	// exact float32 vectors in quantized_rerank mode. Zero uses TopK.
+	QuantizedRerankCandidates int
+	TopK                      int
+	EfSearch                  int
+	FetchMultiplier           int
+	Filter                    func(DocumentRecord) (bool, error)
+	IndexRangeFilter          *VectorIndexRangeFilter
+	ExactFilterMaxDocs        int
+	DisableExactFallback      bool
 	// IncludeDocuments materializes documents after column_graph top-k selection.
 	IncludeDocuments bool
 	// DocumentFetchOptions controls optional projected final-fetch materialization.
@@ -1403,6 +1423,13 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	if idx == nil {
 		return nil, trace, errors.New("collections: vector index is nil")
 	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		return nil, trace, err
+	}
+	if queryMode != columnVectorGraphNativeSearchQueryModeExact {
+		return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not support quantized query mode %q", ErrVectorIndexSearchUnavailable, idx.name, opts.QueryMode)
+	}
 	if opts.TopK <= 0 {
 		return nil, trace, errors.New("collections: vector search TopK must be positive")
 	}
@@ -1507,7 +1534,6 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	var resultNodeIDs []int
 	var resultNodeIDStack [64]int
 	var candidateIDs [][]byte
-	var err error
 	if fastRerank {
 		rerankLimit := len(candidates)
 		resultNodeIDs = resultNodeIDStack[:0]

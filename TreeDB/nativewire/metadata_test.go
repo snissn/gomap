@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"encoding/binary"
+	"reflect"
 	"testing"
 	"time"
 
@@ -141,12 +142,15 @@ func TestMetadataCommandsPreserveVectorIndexes(t *testing.T) {
 		VectorIndexes: []collections.VectorIndexDefinition{{
 			Name:           "embedding",
 			Field:          "embedding",
-			Metric:         collections.VectorMetricL2,
+			Metric:         collections.VectorMetricCosine,
 			Dimensions:     64,
 			M:              12,
 			EfConstruction: 96,
 			EfSearch:       48,
-			Encoding:       collections.VectorIndexEncodingInt8,
+			Strategy:       collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name: "embedding.scalar_u8.fast",
+			}},
 		}},
 	})
 	if err != nil {
@@ -156,8 +160,11 @@ func TestMetadataCommandsPreserveVectorIndexes(t *testing.T) {
 		t.Fatalf("created vector indexes=%+v", meta.VectorIndexes)
 	}
 	got := meta.VectorIndexes[0]
-	if got.Name != "embedding" || got.Field != "embedding" || got.Metric != collections.VectorMetricL2 || got.Dimensions != 64 || got.Encoding != collections.VectorIndexEncodingInt8 {
+	if got.Name != "embedding" || got.Field != "embedding" || got.Metric != collections.VectorMetricCosine || got.Dimensions != 64 || got.Encoding != collections.VectorIndexEncodingFloat32 || got.Strategy != collections.VectorIndexStrategyColumnGraph {
 		t.Fatalf("created vector index=%+v", got)
+	}
+	if len(got.QuantizedIndexes) != 1 || got.QuantizedIndexes[0].Name != "embedding.scalar_u8.fast" || got.QuantizedIndexes[0].Codec != collections.QuantizedVectorCodecScalarU8 || got.QuantizedIndexes[0].Version != 1 {
+		t.Fatalf("created quantized vector indexes=%+v", got.QuantizedIndexes)
 	}
 
 	metas, err := client.ListCollections(ctx)
@@ -167,7 +174,7 @@ func TestMetadataCommandsPreserveVectorIndexes(t *testing.T) {
 	if len(metas) != 1 || len(metas[0].VectorIndexes) != 1 {
 		t.Fatalf("listed collections=%+v", metas)
 	}
-	if metas[0].VectorIndexes[0] != got {
+	if !reflect.DeepEqual(metas[0].VectorIndexes[0], got) {
 		t.Fatalf("listed vector index=%+v want %+v", metas[0].VectorIndexes[0], got)
 	}
 }

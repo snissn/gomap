@@ -992,6 +992,12 @@ The payload name and decoded metadata name must match. Replay is idempotent only
 when an existing catalog entry has identical normalized metadata; incompatible
 metadata fails closed before advancing `AppliedCommandLSN`.
 
+Collection vector-index declarations are stored in the canonical collection
+metadata JSON under top-level `vector_indexes`. Quantized score-plane
+declarations, when present, live under `vector_indexes[].quantized_indexes` and
+are declarations only until matching derived assets are built and loaded; explicit
+quantized query modes must fail closed when those assets are absent or stale.
+
 Column-enabled collection metadata is stored inside the canonical collection
 metadata JSON under `options.column_store`. It is production-facing
 control-plane state, not a sidecar hint. Current normalized fields are:

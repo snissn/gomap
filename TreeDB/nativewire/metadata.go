@@ -51,7 +51,7 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
-	dst := binary.AppendUvarint(nil, 2)
+	dst := binary.AppendUvarint(nil, 3)
 	dst = appendString(dst, meta.Name)
 	dst = binary.AppendUvarint(dst, uint64(encodeDocumentFormat(meta.Options.DocumentFormat)))
 	dst = binary.AppendUvarint(dst, uint64(encodeRootStorage(meta.Options.DataRootStoragePolicy)))
@@ -71,7 +71,7 @@ func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
 	}
 	dst = binary.AppendUvarint(dst, uint64(len(meta.VectorIndexes)))
 	for _, def := range meta.VectorIndexes {
-		dst = appendVectorIndexDefinition(dst, def, false)
+		dst = appendVectorIndexDefinitionForCollectionMeta(dst, def, 3)
 	}
 	return dst
 }
@@ -81,7 +81,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	if version != 1 && version != 2 {
+	if version != 1 && version != 2 && version != 3 {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	name, err := readString(src, &off)
@@ -215,7 +215,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 		}
 		meta.VectorIndexes = make([]collections.VectorIndexDefinition, 0, int(vectorIndexCount))
 		for i := uint64(0); i < vectorIndexCount; i++ {
-			def, next, err := decodeVectorIndexDefinitionAt(src, off, false)
+			def, next, err := decodeVectorIndexDefinitionForCollectionMeta(src, off, version)
 			if err != nil {
 				return collections.CollectionMeta{}, err
 			}
@@ -314,6 +314,24 @@ func appendVectorIndexDefinition(dst []byte, def collections.VectorIndexDefiniti
 	if withVersion && len(dst) == 0 {
 		dst = binary.AppendUvarint(dst, 1)
 	}
+	return appendVectorIndexDefinitionFields(dst, def)
+}
+
+func appendVectorIndexDefinitionForCollectionMeta(dst []byte, def collections.VectorIndexDefinition, collectionMetaVersion uint64) []byte {
+	dst = appendVectorIndexDefinitionFields(dst, def)
+	if collectionMetaVersion >= 3 {
+		dst = binary.AppendUvarint(dst, encodeVectorIndexStrategy(def.Strategy))
+		dst = binary.AppendUvarint(dst, uint64(len(def.QuantizedIndexes)))
+		for _, q := range def.QuantizedIndexes {
+			dst = appendString(dst, q.Name)
+			dst = appendString(dst, q.Codec)
+			dst = binary.AppendUvarint(dst, uint64(q.Version))
+		}
+	}
+	return dst
+}
+
+func appendVectorIndexDefinitionFields(dst []byte, def collections.VectorIndexDefinition) []byte {
 	dst = appendString(dst, def.Name)
 	dst = appendString(dst, def.Field)
 	dst = binary.AppendUvarint(dst, encodeVectorMetric(def.Metric))
@@ -398,6 +416,60 @@ func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool) (colle
 		EfSearch:       int(efSearch),
 		Encoding:       decodedEncoding,
 	}, off, nil
+}
+
+func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectionMetaVersion uint64) (collections.VectorIndexDefinition, int, error) {
+	def, off, err := decodeVectorIndexDefinitionAt(src, off, false)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	if collectionMetaVersion < 3 {
+		return def, off, nil
+	}
+	strategy, err := readEnum(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	decodedStrategy, err := decodeVectorIndexStrategyStrict(strategy)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	quantizedCount, err := readUvarintField(src, &off, "quantized_index_count")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	if quantizedCount > uint64(maxInt) {
+		return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrResourceExhausted, "quantized vector index count exceeds int capacity")
+	}
+	if quantizedCount > maxCollectionMetaIndexDefinitions {
+		return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrResourceExhausted, "quantized vector index count %d exceeds limit %d", quantizedCount, maxCollectionMetaIndexDefinitions)
+	}
+	quantized := make([]collections.QuantizedVectorIndexDefinition, 0, int(quantizedCount))
+	for i := uint64(0); i < quantizedCount; i++ {
+		name, err := readString(src, &off)
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
+		codec, err := readString(src, &off)
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
+		codecVersion, err := readUvarintField(src, &off, "quantized_index_version")
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
+		if codecVersion > uint64(^uint32(0)) {
+			return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrResourceExhausted, "quantized vector index version %d exceeds uint32 capacity", codecVersion)
+		}
+		quantized = append(quantized, collections.QuantizedVectorIndexDefinition{
+			Name:    name,
+			Codec:   codec,
+			Version: uint32(codecVersion),
+		})
+	}
+	def.Strategy = decodedStrategy
+	def.QuantizedIndexes = quantized
+	return def, off, nil
 }
 
 func encodeCollectionMetaVector(metas []collections.CollectionMeta) []byte {
@@ -669,6 +741,28 @@ func decodeVectorIndexEncodingStrict(encoding uint64) (collections.VectorIndexEn
 		return collections.VectorIndexEncodingInt8, nil
 	default:
 		return collections.VectorIndexEncodingFloat32, protocolError(iwire.ErrInvalidCommand, "unsupported vector_index_encoding enum %d", encoding)
+	}
+}
+
+func encodeVectorIndexStrategy(strategy collections.VectorIndexStrategy) uint64 {
+	switch strategy {
+	case "", collections.VectorIndexStrategyNativeRuntime:
+		return 1
+	case collections.VectorIndexStrategyColumnGraph:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func decodeVectorIndexStrategyStrict(strategy uint64) (collections.VectorIndexStrategy, error) {
+	switch strategy {
+	case 1:
+		return collections.VectorIndexStrategyNativeRuntime, nil
+	case 2:
+		return collections.VectorIndexStrategyColumnGraph, nil
+	default:
+		return "", protocolError(iwire.ErrInvalidCommand, "unsupported vector_index_strategy enum %d", strategy)
 	}
 }
 
