@@ -42,7 +42,7 @@ const (
 	appendOnlyValueArenaPoolMaxCap      = 1 << appendOnlyValueArenaMaxShift
 	appendOnlyValueArenaRetainMaxCap    = 4 << 20
 	appendOnlyValueArenaRetainChunks    = 128
-	appendOnlySortedRunMaxCount         = 32
+	appendOnlySortedRunMaxCount         = 256
 	appendOnlyReuseOversizeFactor       = 4
 	appendOnlyResetDropThresholdEntries = 1 << 15
 	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
