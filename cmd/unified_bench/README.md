@@ -83,7 +83,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-keyscale` generate keycounts by scale: `log10` or `doubling` (uses `-keys-min` / `-keys-max`)
 - `-valsize` value size in bytes (default 128)
 - `-val-pattern` value pattern for write tests (including `dataset_write_*`) (`zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random`)
-  - Note: dataset-write generation now uses the same normalized behavior as other write tests (legacy pattern names are accepted as aliases, but generation is unified under `makeValuePool`). Reusable dataset-write key/value fixtures are materialized before per-test CPU/allocation/contention profiles and runtime traces start, so those artifacts represent the measured DB write loops rather than fixture setup.
+  - Note: dataset-write generation now uses the same normalized behavior as other write tests (legacy pattern names are accepted as aliases, but generation is unified under `makeValuePool`). Reusable dataset key/value fixtures for `dataset_write_*` and `dataset_read_random` are materialized before per-test CPU/allocation/contention profiles and runtime traces start, so those artifacts represent the measured DB loops rather than fixture setup.
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-batchsize` batch size (default 8000)
 - `-read-workers` number of goroutines for `random_read_parallel` and `random_read_parallel_acquire_snapshot` (default `GOMAXPROCS`)
