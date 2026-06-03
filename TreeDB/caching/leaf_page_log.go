@@ -18,6 +18,9 @@ var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLog)(nil)
 
 var compactLeafLogPayloadScratchPool sync.Pool
+var compactLeafLogPayloadScratchPtrPool sync.Pool
+
+const compactLeafLogPayloadScratchPtrPoolMaxCap = 4096
 
 type compactLeafLogPayloadScratch struct {
 	buf []byte
@@ -170,11 +173,12 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 		}
 		putValueLogRecordsNoClear(records)
 	}()
-	var scratches []*compactLeafLogPayloadScratch
+	scratches := getCompactLeafLogPayloadScratchPtrsCap(len(leafPages))
 	defer func() {
 		for _, scratch := range scratches {
 			putCompactLeafLogPayloadScratch(scratch)
 		}
+		putCompactLeafLogPayloadScratchPtrs(scratches)
 	}()
 	for i, leafPage := range leafPages {
 		scratch := getCompactLeafLogPayloadScratch()
@@ -234,6 +238,30 @@ func putCompactLeafLogPayloadScratch(scratch *compactLeafLogPayloadScratch) {
 	}
 	scratch.buf = scratch.buf[:0]
 	compactLeafLogPayloadScratchPool.Put(scratch)
+}
+
+func getCompactLeafLogPayloadScratchPtrsCap(capacity int) []*compactLeafLogPayloadScratch {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > compactLeafLogPayloadScratchPtrPoolMaxCap {
+		return make([]*compactLeafLogPayloadScratch, 0, capacity)
+	}
+	if v := compactLeafLogPayloadScratchPtrPool.Get(); v != nil {
+		if s, ok := v.([]*compactLeafLogPayloadScratch); ok && cap(s) >= capacity {
+			return s[:0]
+		}
+	}
+	return make([]*compactLeafLogPayloadScratch, 0, capacity)
+}
+
+func putCompactLeafLogPayloadScratchPtrs(s []*compactLeafLogPayloadScratch) {
+	if s == nil || cap(s) == 0 || cap(s) > compactLeafLogPayloadScratchPtrPoolMaxCap {
+		return
+	}
+	full := s[:cap(s)]
+	clear(full)
+	compactLeafLogPayloadScratchPtrPool.Put(full[:0])
 }
 
 func (l *cachingLeafPageLog) Flush() error {

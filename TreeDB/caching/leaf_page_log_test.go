@@ -104,6 +104,24 @@ func TestDB_NoteLeafGenerationRecordLength_ForwardsToBackend(t *testing.T) {
 	}
 }
 
+func TestCompactLeafLogPayloadScratchPtrsClearedForPooling(t *testing.T) {
+	scratch := &compactLeafLogPayloadScratch{buf: make([]byte, 0, page.PageSize)}
+	ptrs := make([]*compactLeafLogPayloadScratch, 1, 2)
+	ptrs[0] = scratch
+	putCompactLeafLogPayloadScratchPtrs(ptrs)
+
+	got := getCompactLeafLogPayloadScratchPtrsCap(1)
+	if len(got) != 0 {
+		t.Fatalf("len(got)=%d want 0", len(got))
+	}
+	for i, ptr := range got[:cap(got)] {
+		if ptr != nil {
+			t.Fatalf("pooled scratch ptr %d retained %p", i, ptr)
+		}
+	}
+	putCompactLeafLogPayloadScratchPtrs(got)
+}
+
 func buildSparseLeafPageForLeafLogTest(t *testing.T) []byte {
 	return buildSparseLeafPageForLeafLogTestWithTag(t, 'x')
 }
