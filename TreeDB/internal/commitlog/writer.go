@@ -16,13 +16,14 @@ import (
 )
 
 const (
-	defaultBufferSize            = 4 << 20
-	defaultMaxSegmentSize        = 64 * 1024 * 1024
-	defaultCompressMinLen        = 64 << 10
-	directSegmentPayloadMinLen   = 128 << 10
-	directCommandPayloadMinLen   = 64 << 10
-	batchChecksumChunkBytes      = 64 << 10
-	pendingAppendBatchMaxPayload = defaultBufferSize - segmentHeaderSize
+	defaultBufferSize                = 4 << 20
+	defaultMaxSegmentSize            = 64 * 1024 * 1024
+	defaultCompressMinLen            = 64 << 10
+	directSegmentPayloadMinLen       = 128 << 10
+	directCommandPayloadMinLen       = 64 << 10
+	batchChecksumChunkBytes          = 64 << 10
+	pendingAppendBatchInitialPayload = 64 << 10
+	pendingAppendBatchMaxPayload     = defaultBufferSize - segmentHeaderSize
 )
 
 var syncDirFn = syncDir
@@ -187,12 +188,12 @@ func (w *Writer) appendPendingRecord(record Record, keyLen uint16, valLen uint32
 	}
 	if w.pendingBatchRecs == 0 {
 		need := batchHeaderSize + recLen
-		capHint := limit
-		if capHint > pendingAppendBatchMaxPayload {
-			capHint = pendingAppendBatchMaxPayload
-		}
+		capHint := pendingAppendBatchInitialPayload
 		if capHint < need {
 			capHint = need
+		}
+		if capHint > limit {
+			capHint = limit
 		}
 		if cap(w.pendingBatch) < need {
 			w.pendingBatch = make([]byte, batchHeaderSize, capHint)
