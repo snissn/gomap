@@ -235,12 +235,12 @@ func (db *DB) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
 		return errors.New("GetManyView: nil callback")
 	}
 	retryEpoch := db.readRetryRefreshEpoch.Load()
-	called := false
+	var called atomic.Bool
 	err := db.getManyViewOnce(keys, func(index int, key []byte, value []byte, found bool) error {
-		called = true
+		called.Store(true)
 		return fn(index, key, value, found)
 	})
-	if db.refreshOnValueLogFileNotFound(err) && !called {
+	if db.refreshOnValueLogFileNotFound(err) && !called.Load() {
 		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
 			return refreshErr
 		}
@@ -258,7 +258,65 @@ func (db *DB) getManyViewOnce(keys [][]byte, fn GetManyViewFunc) error {
 		return err
 	}
 	defer snap.Close()
+
+	workers := getManyWorkerCount(len(keys))
+	if getManyCanParallelize(len(keys), workers) {
+		return db.getManyViewParallel(snap, keys, fn, workers)
+	}
 	return snap.GetManyView(keys, fn)
+}
+
+func (db *DB) getManyViewParallel(snap *Snapshot, keys [][]byte, fn GetManyViewFunc, workers int) error {
+	var (
+		wg       sync.WaitGroup
+		stop     atomic.Bool
+		cbMu     sync.Mutex
+		firstErr error
+	)
+	for worker := 0; worker < workers; worker++ {
+		start, end := getManyChunkBounds(worker, workers, len(keys))
+		if start >= end {
+			continue
+		}
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			err := snap.tree.GetManyView(keys[start:end], func(index int, key []byte, value []byte, found bool) error {
+				if stop.Load() {
+					cbMu.Lock()
+					err := firstErr
+					cbMu.Unlock()
+					if err != nil {
+						return err
+					}
+					return nil
+				}
+				cbMu.Lock()
+				defer cbMu.Unlock()
+				if firstErr != nil {
+					return firstErr
+				}
+				err := fn(start+index, key, value, found)
+				if err != nil {
+					firstErr = err
+					stop.Store(true)
+				}
+				return err
+			})
+			if err != nil {
+				cbMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					stop.Store(true)
+				}
+				cbMu.Unlock()
+			}
+		}(start, end)
+	}
+	wg.Wait()
+	cbMu.Lock()
+	defer cbMu.Unlock()
+	return firstErr
 }
 
 func (db *DB) getManySequential(snap *Snapshot, keys [][]byte, out [][]byte) error {

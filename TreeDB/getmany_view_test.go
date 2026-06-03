@@ -159,3 +159,33 @@ func TestGetManyViewCallbackErrorStops(t *testing.T) {
 		t.Fatalf("GetManyView err=%v want %v", err, want)
 	}
 }
+
+func TestGetManyViewParallelCallbackErrorStops(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	keys := make([][]byte, 256)
+	for i := range keys {
+		keys[i] = []byte{byte(i >> 8), byte(i)}
+		if err := db.Set(keys[i], []byte("v")); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	want := errors.New("stop")
+	calls := 0
+	err = db.GetManyView(keys, func(int, []byte, []byte, bool) error {
+		calls++
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("GetManyView err=%v want %v", err, want)
+	}
+	if calls != 1 {
+		t.Fatalf("callbacks after error=%d want 1", calls)
+	}
+}
