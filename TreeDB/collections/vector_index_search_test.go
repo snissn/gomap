@@ -44,6 +44,272 @@ func TestVectorIndexSearchStatsModePublicMapping2126(t *testing.T) {
 	}
 }
 
+func TestVectorIndexQuantizedDefinitionNormalization1926(t *testing.T) {
+	def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:       "embedding_graph",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 3,
+		Strategy:   VectorIndexStrategyColumnGraph,
+		QuantizedIndexes: []QuantizedVectorIndexDefinition{{
+			Name: "embedding.scalar_u8.fast",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("normalizeVectorIndexDefinition: %v", err)
+	}
+	if got := def.QuantizedIndexes; len(got) != 1 || got[0].Name != "embedding.scalar_u8.fast" || got[0].Codec != QuantizedVectorCodecScalarU8 || got[0].Version != 1 {
+		t.Fatalf("QuantizedIndexes=%+v want normalized scalar_u8 v1", got)
+	}
+	if _, ok := findQuantizedVectorIndex(def, "embedding.scalar_u8.fast"); !ok {
+		t.Fatalf("findQuantizedVectorIndex did not find normalized quantized index")
+	}
+
+	rejects := []struct {
+		name string
+		def  VectorIndexDefinition
+		want string
+	}{
+		{
+			name: "non_column_graph",
+			def: VectorIndexDefinition{
+				Name:       "embedding_graph",
+				Field:      "embedding",
+				Metric:     VectorMetricCosine,
+				Dimensions: 3,
+				QuantizedIndexes: []QuantizedVectorIndexDefinition{{
+					Name: "q",
+				}},
+			},
+			want: "require strategy",
+		},
+		{
+			name: "duplicate_name",
+			def: VectorIndexDefinition{
+				Name:       "embedding_graph",
+				Field:      "embedding",
+				Metric:     VectorMetricCosine,
+				Dimensions: 3,
+				Strategy:   VectorIndexStrategyColumnGraph,
+				QuantizedIndexes: []QuantizedVectorIndexDefinition{
+					{Name: "q"},
+					{Name: "q"},
+				},
+			},
+			want: "duplicate quantized index",
+		},
+		{
+			name: "unsupported_codec",
+			def: VectorIndexDefinition{
+				Name:       "embedding_graph",
+				Field:      "embedding",
+				Metric:     VectorMetricCosine,
+				Dimensions: 3,
+				Strategy:   VectorIndexStrategyColumnGraph,
+				QuantizedIndexes: []QuantizedVectorIndexDefinition{{
+					Name:  "q",
+					Codec: "brq_1bit",
+				}},
+			},
+			want: "unsupported",
+		},
+	}
+	for _, tt := range rejects {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := normalizeVectorIndexDefinition(tt.def)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("normalizeVectorIndexDefinition err=%v want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestSearchVectorIndexQuantizedModesFailClosed1926(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+	}
+	dir, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+
+	query := []float32{1, 0, 0}
+	exactOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	exact, err := col.SearchVectorIndex(exactOpts)
+	if err != nil {
+		t.Fatalf("exact SearchVectorIndex: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, exact, def.Name, 2)
+	assertVectorIndexSearchResultsV4(t, exact.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
+	explicitExact, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeExact, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("explicit exact SearchVectorIndex: %v", err)
+	}
+	assertVectorIndexSearchResultsV4(t, explicitExact.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
+
+	for _, tc := range []struct {
+		name       string
+		mode       VectorIndexQueryMode
+		rerankCand int
+	}{
+		{name: "quantized_only", mode: VectorIndexQueryModeQuantizedOnly},
+		{name: "quantized_rerank", mode: VectorIndexQueryModeQuantizedRerank, rerankCand: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+				IndexName:                 def.Name,
+				Query:                     query,
+				QueryMode:                 tc.mode,
+				QuantizedIndexName:        def.QuantizedIndexes[0].Name,
+				QuantizedRerankCandidates: tc.rerankCand,
+				TopK:                      2,
+				EfSearch:                  len(rows),
+				IncludeDocuments:          true,
+				MaxDecodedBlocks:          1,
+			})
+			if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+				t.Fatalf("SearchVectorIndex err=%v want ErrVectorIndexSearchUnavailable", err)
+			}
+			if !strings.Contains(err.Error(), string(tc.mode)) || !strings.Contains(err.Error(), def.QuantizedIndexes[0].Name) {
+				t.Fatalf("SearchVectorIndex err=%v want mode and selected quantized index", err)
+			}
+			if len(got.Results) != 0 {
+				t.Fatalf("quantized fail-closed returned %d results: %+v", len(got.Results), got.Results)
+			}
+			if got.Stats.Candidates != 0 || got.Stats.CandidateFetches != 0 || got.Stats.DocumentsFetched != 0 || got.Stats.DocumentJSONReconstructionRows != 0 {
+				t.Fatalf("quantized fail-closed stats=%+v want no scoring or document materialization", got.Stats)
+			}
+		})
+	}
+
+	if _, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: "missing.scalar_u8", TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}); !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "is not declared") {
+		t.Fatalf("undeclared quantized index err=%v want unavailable declared-name failure", err)
+	}
+	if _, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeExact, QuantizedIndexName: def.QuantizedIndexes[0].Name, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}); err == nil || !strings.Contains(err.Error(), "exact") {
+		t.Fatalf("exact with quantized index err=%v want validation failure", err)
+	}
+
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	reopenedMeta := reopenedCol.Meta()
+	if got := reopenedMeta.VectorIndexes[0].QuantizedIndexes; len(got) != 1 || got[0] != def.QuantizedIndexes[0] {
+		t.Fatalf("reopened QuantizedIndexes=%+v want %+v", got, def.QuantizedIndexes)
+	}
+}
+
+func TestVectorIndexSearcherQuantizedFailClosedResetsBuffer1926(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+
+	var buffer VectorIndexSearchBuffer
+	validOpts := VectorIndexSearcherSearchOptions{Query: []float32{1, 0, 0}, TopK: 2, EfSearch: len(rows)}
+	valid, err := searcher.SearchWithBuffer(validOpts, &buffer)
+	if err != nil || len(valid.Results) != 2 || len(buffer.results) != 2 {
+		t.Fatalf("initial SearchWithBuffer results=%d buffer=%d err=%v want 2,2,nil", len(valid.Results), len(buffer.results), err)
+	}
+	got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
+		Query:              []float32{1, 0, 0},
+		QueryMode:          VectorIndexQueryModeQuantizedOnly,
+		QuantizedIndexName: def.QuantizedIndexes[0].Name,
+		TopK:               2,
+		EfSearch:           len(rows),
+	}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+		t.Fatalf("SearchWithBuffer err=%v want ErrVectorIndexSearchUnavailable", err)
+	}
+	if len(got.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("quantized error results=%d buffer.results=%d idBytes=%d want reset empty views", len(got.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	validAgain, err := searcher.SearchWithBuffer(validOpts, &buffer)
+	if err != nil || len(validAgain.Results) != 2 {
+		t.Fatalf("valid SearchWithBuffer after quantized error results=%d err=%v", len(validAgain.Results), err)
+	}
+}
+
+func TestNativeRuntimeVectorIndexRejectsQuantizedQueryMode1926(t *testing.T) {
+	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding_idx", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
+	if err != nil {
+		t.Fatalf("newVectorIndex: %v", err)
+	}
+	_, _, err = idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: "q"})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+		t.Fatalf("VectorIndex.Search err=%v want ErrVectorIndexSearchUnavailable", err)
+	}
+}
+
+func openColumnGraphQuantizedGuardrailTestCollection1926(tb testing.TB, rows []columnGraphRebuildInputRowV2A) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
+	dir := tb.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		tb.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(tb, dir)
+	def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:       "embedding_graph",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 3,
+		M:          3,
+		Strategy:   VectorIndexStrategyColumnGraph,
+		QuantizedIndexes: []QuantizedVectorIndexDefinition{{
+			Name: "embedding.scalar_u8.fast",
+		}},
+	})
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("normalizeVectorIndexDefinition: %v", err)
+	}
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    columnGraphRebuildColumnStoreConfigV2A(3),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	if len(rows) != 0 {
+		insertColumnGraphRebuildRowsV2A(tb, col, rows)
+	}
+	return dir, d, col, def
+}
+
 func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -1467,7 +1733,7 @@ func assertVectorIndexSearchResultsV4(tb testing.TB, got []VectorIndexSearchResu
 
 func assertVectorIndexSearchResponsesEquivalentNoDocs2124(tb testing.TB, got, want VectorIndexSearchResponse) {
 	tb.Helper()
-	if got.IndexName != want.IndexName || got.Strategy != want.Strategy || got.Path != want.Path || got.Status != want.Status {
+	if got.IndexName != want.IndexName || got.Strategy != want.Strategy || got.Path != want.Path || !vectorIndexStatusEquivalentForSearchResponse2124(got.Status, want.Status) {
 		tb.Fatalf("response metadata got=%+v status=%+v want=%+v status=%+v", got, got.Status, want, want.Status)
 	}
 	if len(got.Results) != len(want.Results) {
@@ -1481,6 +1747,24 @@ func assertVectorIndexSearchResponsesEquivalentNoDocs2124(tb testing.TB, got, wa
 			tb.Fatalf("result[%d] document len=%d want no-document reusable response", i, len(got.Results[i].Document))
 		}
 	}
+}
+
+func vectorIndexStatusEquivalentForSearchResponse2124(a, b VectorIndexStatus) bool {
+	return vectorIndexDefinitionValuesEqual(a.Definition, b.Definition) &&
+		a.Name == b.Name &&
+		a.Strategy == b.Strategy &&
+		a.State == b.State &&
+		a.Reason == b.Reason &&
+		a.Loaded == b.Loaded &&
+		a.RootName == b.RootName &&
+		a.RootID == b.RootID &&
+		a.NativeRootLoaded == b.NativeRootLoaded &&
+		a.NativeRootBytes == b.NativeRootBytes &&
+		a.ExactFallbackReason == b.ExactFallbackReason &&
+		a.Registered == b.Registered &&
+		a.Stats == b.Stats &&
+		a.RebuildNeeded == b.RebuildNeeded &&
+		a.Duration == b.Duration
 }
 
 func assertVectorIndexSearchResultIDStatsContract2124(tb testing.TB, got, want VectorIndexSearchStats) {

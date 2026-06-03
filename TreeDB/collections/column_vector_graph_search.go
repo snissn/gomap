@@ -34,6 +34,8 @@ var (
 	errColumnVectorGraphNativeSearchWavefrontWidthInvalid      = errors.New("collections: column_graph native search wavefront width invalid")
 	errColumnVectorGraphNativeSearchWavefrontRequiresPrepared  = errors.New("collections: column_graph native search wavefront requires prepared typed-column graph search")
 	errColumnVectorGraphNativeSearchWavefrontWidthWithoutMode  = errors.New("collections: column_graph native search wavefront width requires wavefront traversal mode")
+	errColumnVectorGraphNativeSearchQueryModeInvalid           = errors.New("collections: column_graph native search query mode invalid")
+	errColumnVectorGraphNativeSearchQuantizedRerankLimit       = errors.New("collections: column_graph quantized rerank candidate limit invalid")
 )
 
 type columnVectorGraphScoreBatchMode uint8
@@ -41,6 +43,8 @@ type columnVectorGraphScoreBatchMode uint8
 type columnVectorGraphNativeSearchTraversalMode uint8
 
 type columnVectorGraphNativeSearchStatsMode uint8
+
+type columnVectorGraphNativeSearchQueryMode uint8
 
 const (
 	columnVectorGraphScoreBatchModeDefault columnVectorGraphScoreBatchMode = iota
@@ -59,6 +63,12 @@ const (
 	columnVectorGraphNativeSearchStatsModeMinimal
 	columnVectorGraphNativeSearchStatsModeFullDiagnostics
 	columnVectorGraphNativeSearchStatsModeBenchmarkDebug
+)
+
+const (
+	columnVectorGraphNativeSearchQueryModeExact columnVectorGraphNativeSearchQueryMode = iota
+	columnVectorGraphNativeSearchQueryModeQuantizedOnly
+	columnVectorGraphNativeSearchQueryModeQuantizedRerank
 )
 
 func (m columnVectorGraphScoreBatchMode) indexedEnabled() bool {
@@ -165,11 +175,46 @@ func (m columnVectorGraphNativeSearchStatsMode) String() string {
 	}
 }
 
+func (m columnVectorGraphNativeSearchQueryMode) normalized() (columnVectorGraphNativeSearchQueryMode, error) {
+	switch m {
+	case columnVectorGraphNativeSearchQueryModeExact:
+		return columnVectorGraphNativeSearchQueryModeExact, nil
+	case columnVectorGraphNativeSearchQueryModeQuantizedOnly:
+		return columnVectorGraphNativeSearchQueryModeQuantizedOnly, nil
+	case columnVectorGraphNativeSearchQueryModeQuantizedRerank:
+		return columnVectorGraphNativeSearchQueryModeQuantizedRerank, nil
+	default:
+		return columnVectorGraphNativeSearchQueryModeExact, errColumnVectorGraphNativeSearchQueryModeInvalid
+	}
+}
+
+func (m columnVectorGraphNativeSearchQueryMode) quantized() bool {
+	return m == columnVectorGraphNativeSearchQueryModeQuantizedOnly || m == columnVectorGraphNativeSearchQueryModeQuantizedRerank
+}
+
+func (m columnVectorGraphNativeSearchQueryMode) String() string {
+	switch m {
+	case columnVectorGraphNativeSearchQueryModeQuantizedOnly:
+		return "quantized_only"
+	case columnVectorGraphNativeSearchQueryModeQuantizedRerank:
+		return "quantized_rerank"
+	default:
+		return "exact"
+	}
+}
+
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
 	EfSearch int
 
 	ScoreBatchMode columnVectorGraphScoreBatchMode
+	QueryMode      columnVectorGraphNativeSearchQueryMode
+	// QuantizedIndexName selects a named derived score plane for quantized query
+	// modes. Exact mode must leave it empty.
+	QuantizedIndexName string
+	// QuantizedRerankCandidates bounds the candidate set exact-reranked after
+	// quantized traversal. Zero means TopK.
+	QuantizedRerankCandidates int
 	// TraversalMode selects the layer-0 traversal scheduler. The default and
 	// explicit exact modes preserve current HNSW candidate order. Wavefront is an
 	// internal, non-default relaxed traversal experiment that stages candidates
@@ -195,6 +240,36 @@ type columnVectorGraphNativeSearchOptions struct {
 	// visibility masks through typedcolumn.ComposeRowSelections first.
 	CandidateRows    typedcolumn.RowSelection
 	HasCandidateRows bool
+}
+
+func (r *columnVectorGraphPhysicalRowReader) validateQuantizedNativeSearchOptions(mode columnVectorGraphNativeSearchQueryMode, opts columnVectorGraphNativeSearchOptions) error {
+	if mode == columnVectorGraphNativeSearchQueryModeExact {
+		if opts.QuantizedIndexName != "" {
+			return errors.New("collections: exact column_graph search cannot select a quantized index")
+		}
+		if opts.QuantizedRerankCandidates != 0 {
+			return errors.New("collections: exact column_graph search cannot set quantized rerank candidates")
+		}
+		return nil
+	}
+	if opts.QuantizedIndexName == "" {
+		return errors.New("collections: column_graph quantized search requires a quantized index name")
+	}
+	if _, ok := findQuantizedVectorIndex(r.def, opts.QuantizedIndexName); !ok {
+		return fmt.Errorf("%w: column_graph %q quantized index %q is not declared", ErrVectorIndexSearchUnavailable, r.def.Name, opts.QuantizedIndexName)
+	}
+	if mode == columnVectorGraphNativeSearchQueryModeQuantizedOnly && opts.QuantizedRerankCandidates != 0 {
+		return errors.New("collections: column_graph quantized_only search cannot set rerank candidates")
+	}
+	if mode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		if opts.QuantizedRerankCandidates < 0 {
+			return errColumnVectorGraphNativeSearchQuantizedRerankLimit
+		}
+		if opts.QuantizedRerankCandidates != 0 && opts.TopK > 0 && opts.QuantizedRerankCandidates < opts.TopK {
+			return errColumnVectorGraphNativeSearchQuantizedRerankLimit
+		}
+	}
+	return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q has no loaded quantized score-plane asset", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
 }
 
 type columnVectorGraphAdjacencySourceCounterSnapshot struct {
@@ -995,6 +1070,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	if len(query) != r.def.Dimensions {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query dims=%d want %d: %w", r.def.Name, len(query), r.def.Dimensions, errColumnVectorGraphNativeSearchQueryDimensionMismatch)
+	}
+	queryMode, err := opts.QueryMode.normalized()
+	if err != nil {
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search query mode: %w", r.def.Name, err)
+	}
+	if err := r.validateQuantizedNativeSearchOptions(queryMode, opts); err != nil {
+		return nil, columnVectorGraphNativeSearchStats{}, err
 	}
 	rowCount := r.RowCount()
 	topK := opts.TopK
