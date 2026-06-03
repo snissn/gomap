@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -2494,6 +2495,44 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 	}
 	if mutexAfterIdx > allocAfterIdx {
 		t.Fatalf("expected mutex_after before allocs_after, events=%v", events)
+	}
+}
+
+func TestRunBenchmarkDatasetWriteRandomAllocsProfileExcludesFixtureSetup(t *testing.T) {
+	outDir := t.TempDir()
+	allocPrefix := filepath.Join(outDir, "allocs")
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:              2048,
+		ValueSize:         256,
+		ValuePattern:      "random",
+		BatchSize:         256,
+		RangeQueries:      0,
+		RangeSpan:         0,
+		DBsArg:            "treedb",
+		TestsArg:          "dataset_write_random",
+		KeepDir:           false,
+		Progress:          false,
+		SeedUsed:          1,
+		AllocsProfile:     allocPrefix,
+		AllocsProfileRate: 1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+
+	profilePath := allocPrefix + "_dataset_write_random_treedb.pprof"
+	if _, err := os.Stat(profilePath); err != nil {
+		t.Fatalf("expected allocs profile %q: %v", profilePath, err)
+	}
+
+	cmd := exec.Command(goToolExecutable(), "tool", "pprof", "-top", "-sample_index=alloc_objects", profilePath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pprof top: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "main.makeValuePool") {
+		t.Fatalf("dataset fixture generation leaked into dataset_write_random allocs profile:\n%s", out)
 	}
 }
 

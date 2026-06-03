@@ -3986,6 +3986,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		prefixScanBase = cfg.Keys
 	}
 
+	// Materialize reusable dataset fixtures before profiling starts. The
+	// dataset_write_* timers already exclude this setup; keeping it outside CPU,
+	// allocation, contention, and trace profiles makes those artifacts represent
+	// the DB hot path instead of fixture generation.
+	if containsAny(finalTestOrder, "dataset_write_random", "dataset_write_sorted", "dataset_read_random") {
+		if err := ensureWriteDatasets(); err != nil {
+			return BenchRun{}, fmt.Errorf("dataset fixture setup: %w", err)
+		}
+	}
+
 	settledBeforeScans := false
 	blockProfilePath := strings.TrimSpace(cfg.BlockProfile)
 	mutexProfilePath := strings.TrimSpace(cfg.MutexProfile)
