@@ -294,7 +294,7 @@ func (w *Writer) Append(record Record) error {
 		copy(payload[off+recordHeaderSize+len(record.Key):], record.Value)
 
 		binary.LittleEndian.PutUint32(buf[0:4], uint32(payloadLen))
-		binary.LittleEndian.PutUint32(buf[4:8], crc.Checksum(payload))
+		binary.LittleEndian.PutUint32(buf[4:8], crc.ChecksumParts(payload[:batchHeaderSize], payload[batchHeaderSize:]))
 		if _, err := w.bw.Write(buf); err != nil {
 			return err
 		}
@@ -319,6 +319,9 @@ func (w *Writer) Append(record Record) error {
 	copy(buf[off+recordHeaderSize:], record.Key)
 	copy(buf[off+recordHeaderSize+len(record.Key):], record.Value)
 
+	if !w.compress {
+		return w.writeRawSegmentWithChecksum(buf, crc.ChecksumParts(buf[:batchHeaderSize], buf[batchHeaderSize:]))
+	}
 	return w.writeSegment(buf)
 }
 
@@ -419,7 +422,7 @@ func (w *Writer) AppendBatch(records []Record) error {
 
 	w.scratch = buf[:off]
 	if !w.compress {
-		return w.writeRawSegmentWithChecksum(w.scratch, crc.Checksum(w.scratch))
+		return w.writeRawSegmentWithChecksum(w.scratch, crc.ChecksumParts(w.scratch[:batchHeaderSize], w.scratch[batchHeaderSize:]))
 	}
 	return w.writeSegment(w.scratch)
 }
@@ -496,7 +499,7 @@ func (w *Writer) appendZeroInlineBatchIfCompact(records []Record, batchSeq uint6
 		off += len(r.Key)
 	}
 	w.scratch = buf
-	return true, w.writeRawSegmentWithChecksum(buf, crc.Checksum(buf))
+	return true, w.writeRawSegmentWithChecksum(buf, crc.ChecksumParts(buf[:zeroInlineBatchHeaderSize], buf[zeroInlineBatchHeaderSize:]))
 }
 
 func (w *Writer) AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, keyAt func(int) []byte) error {
@@ -556,7 +559,7 @@ func (w *Writer) AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, 
 		off += len(key)
 	}
 	w.scratch = buf[:off]
-	return w.writeRawSegmentWithChecksum(w.scratch, crc.Checksum(w.scratch))
+	return w.writeRawSegmentWithChecksum(w.scratch, crc.ChecksumParts(w.scratch[:zeroInlineBatchHeaderSize], w.scratch[zeroInlineBatchHeaderSize:]))
 }
 
 func (w *Writer) AppendCommand(env CommandEnvelope) error {
