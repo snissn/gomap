@@ -1504,7 +1504,7 @@ func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnV
 				candidate, ok = scratch.popFrontier()
 			}
 			if !ok {
-				if len(wave) > 0 {
+				if len(wave) > 0 || len(scratch.top) >= retainedCandidateLimit {
 					break
 				}
 				seed, seedOK := columnVectorGraphNextCandidateSeed(*nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
@@ -1521,7 +1521,7 @@ func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnV
 			wave = append(wave, candidate)
 		}
 		if len(wave) == 0 {
-			if *visitedCandidates >= candidateLimit {
+			if len(scratch.top) >= retainedCandidateLimit || *visitedCandidates >= candidateLimit {
 				break
 			}
 			seed, seedOK := columnVectorGraphNextCandidateSeed(*nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)

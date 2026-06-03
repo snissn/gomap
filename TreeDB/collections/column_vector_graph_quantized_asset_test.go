@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T) {
@@ -234,6 +236,47 @@ func TestColumnGraphScalarU8QuantizedRerankExactRanksCandidateSet1926(t *testing
 	}
 }
 
+func TestColumnGraphScalarU8QuantizedRerankWavefrontStopsSeedingAtRetainedLimit1926(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("quantized_rerank wavefront regression requires mmap_direct prepared typed-column views")
+	}
+	shape := columnVectorGraphSearchTopologyParityShape2091{rows: 4, dims: 3, degree: 1, topK: 1, efSearch: 4, queryOrdinal: 0}
+	rows := []columnVectorGraphAssetRow{
+		columnGraphQuantizedWavefrontAssetRow1926(t, "doc-a", []float32{1, 0, 0}),
+		columnGraphQuantizedWavefrontAssetRow1926(t, "doc-b", []float32{0, 1, 0}),
+		columnGraphQuantizedWavefrontAssetRow1926(t, "doc-c", []float32{0, 0, 1}),
+		columnGraphQuantizedWavefrontAssetRow1926(t, "doc-d", []float32{-1, 0, 0}),
+	}
+	closeFn, reader, query := openColumnVectorGraphSearchTopologyParityReader2091(t, shape, rows, columnVectorGraphSearchTopologyParityModeCurrentPrepared2091)
+	defer closeFn()
+	q := attachScalarU8QuantizedAssetForReader1926(t, reader, rows)
+
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{
+		TopK:                      shape.topK,
+		EfSearch:                  shape.efSearch,
+		ScoreBatchMode:            columnVectorGraphScoreBatchModeIndexed,
+		QueryMode:                 columnVectorGraphNativeSearchQueryModeQuantizedRerank,
+		QuantizedIndexName:        q.Name,
+		QuantizedRerankCandidates: 2,
+		TraversalMode:             columnVectorGraphNativeSearchTraversalModeWavefront,
+		WavefrontWidth:            3,
+		OmitResultMaterialization: true,
+	}, &scratch)
+	if err != nil {
+		t.Fatalf("quantized_rerank wavefront SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 0 {
+		t.Fatalf("quantized_rerank wavefront results=%+v want exact-reranked top ordinal 0", got)
+	}
+	if stats.Candidates != 2 || stats.QuantizedScoreCalls != 2 {
+		t.Fatalf("quantized_rerank wavefront stats=%+v want no fallback seeding after retained shortlist reaches limit", stats)
+	}
+	if stats.QuantizedRerankCandidates != 2 || stats.QuantizedRerankExactScoreCalls != 2 {
+		t.Fatalf("quantized_rerank wavefront rerank stats=%+v want exact rerank of retained candidates only", stats)
+	}
+}
+
 func TestColumnGraphScalarU8QuantizedOnlyMultipleIndexes1926(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -386,6 +429,62 @@ func vectorIndexSearchResultsMismatch1926(got []VectorIndexSearchResult, want []
 		}
 	}
 	return ""
+}
+
+func columnGraphQuantizedWavefrontAssetRow1926(tb testing.TB, id string, vector []float32) columnVectorGraphAssetRow {
+	tb.Helper()
+	invNorm, err := columnVectorGraphInvNorm(vector)
+	if err != nil {
+		tb.Fatalf("columnVectorGraphInvNorm %s: %v", id, err)
+	}
+	return columnVectorGraphAssetRow{ID: []byte(id), Vector: append([]float32(nil), vector...), InvNorm: invNorm}
+}
+
+func attachScalarU8QuantizedAssetForReader1926(tb testing.TB, reader *columnVectorGraphPhysicalRowReader, rows []columnVectorGraphAssetRow) QuantizedVectorIndexDefinition {
+	tb.Helper()
+	if reader == nil || reader.catalog == nil || reader.catalog.meta.Options.ColumnStore == nil {
+		tb.Fatal("reader missing catalog typed-storage metadata")
+	}
+	def := reader.def
+	def.QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: "embedding.scalar_u8.fast"}}
+	def, err := normalizeVectorIndexDefinition(def)
+	if err != nil {
+		tb.Fatalf("normalizeVectorIndexDefinition with quantized index: %v", err)
+	}
+	q := def.QuantizedIndexes[0]
+	payload, sourceCfg, err := prepareColumnVectorGraphQuantizedCodesPayload(reader.catalog.meta.Name, *reader.catalog.meta.Options.ColumnStore, def, q, 1001, rows)
+	if err != nil {
+		tb.Fatalf("prepareColumnVectorGraphQuantizedCodesPayload: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(payload)
+	if err != nil {
+		tb.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	asset := columnVectorIndexStateAssetSnapshot{SourceSchemaHash: sourceCfg.SchemaHash, AssetBytes: int64(len(payload))}
+	schema := columnVectorGraphQuantizedAssetSchema(def, reader.graph, q, asset, quantizedasset.AssetRefIdentity{})
+	prepared, err := quantizedasset.Prepare(quantizedasset.PrepareRequest{
+		Schema: schema,
+		Expected: quantizedasset.ExpectedSchema{
+			Metric:           schema.Metric,
+			VectorDimensions: schema.VectorDimensions,
+			CodeDimensions:   schema.CodeDimensions,
+			CodeWidthBits:    schema.CodeWidthBits,
+			RowCount:         schema.RowCount,
+			OrdinalOrder:     schema.OrdinalOrder,
+			Codec:            schema.Codec,
+			BaseGraph:        schema.BaseGraph,
+			RequiredRoles:    []quantizedasset.Role{quantizedasset.RoleCodes},
+		},
+		Parts: []quantizedasset.PartImageSource{{Image: image, AssetBytes: asset.AssetBytes, SourceSchemaHash: asset.SourceSchemaHash}},
+	})
+	if err != nil {
+		tb.Fatalf("quantizedasset.Prepare: %v", err)
+	}
+	reader.def = def
+	reader.quantizedAssetStatus = map[string]columnVectorGraphQuantizedAssetLoadStatus{
+		q.Name: {Definition: q, Asset: asset, Prepared: prepared},
+	}
+	return q
 }
 
 func openColumnGraphQuantizedTestCollection1926(tb testing.TB, rows []columnGraphRebuildInputRowV2A, quantizedIndexes []QuantizedVectorIndexDefinition) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
