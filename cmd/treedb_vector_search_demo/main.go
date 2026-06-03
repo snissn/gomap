@@ -39,6 +39,7 @@ const (
 	defaultEfSearch              = 128
 	defaultValuePointerThreshold = 1024
 	defaultLeafGenerationTarget  = 4 << 20
+	defaultQuantizedIndexName    = "embedding.scalar_u8.fast"
 	nativeRuntimeSnapshotPath    = collections.VectorIndexSearchPath("native_runtime_snapshot")
 )
 
@@ -72,53 +73,59 @@ type config struct {
 
 	indexOuterLeavesInValueLog *bool
 	vectorIndexStrategy        collections.VectorIndexStrategy
+	vectorQueryMode            collections.VectorIndexQueryMode
+	quantizedIndexName         string
+	quantizedRerankCandidates  int
 }
 
 type result struct {
-	Backend               string                            `json:"backend"`
-	Engine                string                            `json:"engine"`
-	VectorIndexStrategy   collections.VectorIndexStrategy   `json:"vector_index_strategy"`
-	VectorIndexSearchPath collections.VectorIndexSearchPath `json:"vector_index_search_path,omitempty"`
-	Dir                   string                            `json:"dir"`
-	DatasetDir            string                            `json:"dataset_dir,omitempty"`
-	KeptDir               bool                              `json:"kept_dir"`
-	Profile               string                            `json:"profile"`
-	Docs                  int                               `json:"docs"`
-	Dimensions            int                               `json:"dimensions"`
-	Queries               int                               `json:"queries"`
-	SearchConcurrency     []int                             `json:"search_concurrency"`
-	ValidateQueries       int                               `json:"validate_queries"`
-	ValidateDocs          int                               `json:"validate_docs"`
-	TopK                  int                               `json:"top_k"`
-	M                     int                               `json:"m"`
-	EfConstruction        int                               `json:"ef_construction"`
-	EfSearch              int                               `json:"ef_search"`
-	ValuePointerThreshold int                               `json:"value_pointer_threshold"`
-	LeafGenerationTarget  int64                             `json:"leaf_generation_segment_target"`
-	MinRecall             float64                           `json:"min_recall"`
-	Compact               bool                              `json:"compact"`
-	CompactSyncEachPhase  bool                              `json:"compact_sync_each_phase"`
-	DisableExactFallback  bool                              `json:"disable_exact_fallback"`
-	Insert                phaseResult                       `json:"insert"`
-	Rebuild               phaseResult                       `json:"rebuild"`
-	CompactPhase          phaseResult                       `json:"compact_phase"`
-	IndexVacuum           phaseResult                       `json:"index_vacuum"`
-	ReopenLoad            phaseResult                       `json:"reopen_load"`
-	Validation            validationResult                  `json:"validation"`
-	Search                searchBenchmarkResult             `json:"search"`
-	SearchBenchmarks      []searchBenchmarkResult           `json:"search_benchmarks"`
-	StorageBeforeCompact  storageReport                     `json:"storage_before_compact"`
-	StorageAfterCompact   storageReport                     `json:"storage_after_compact"`
-	StorageAfterClose     storageReport                     `json:"storage_after_close"`
-	StorageAfterVacuum    storageReport                     `json:"storage_after_index_vacuum"`
-	IndexStatsBefore      collections.VectorIndexStats      `json:"index_stats_before_compact"`
-	IndexStatsLoaded      collections.VectorIndexStats      `json:"index_stats_loaded"`
-	NativeRootBytes       int64                             `json:"native_root_bytes"`
-	VectorIndexStatus     collections.VectorIndexStatus     `json:"vector_index_status"`
-	CompactStorage        *backenddb.CompactStorageStats    `json:"compact_storage,omitempty"`
-	FormatConfig          *backenddb.FormatConfig           `json:"format_config,omitempty"`
-	StorageExpectation    storageExpectationReport          `json:"storage_expectation"`
-	Memory                memoryReport                      `json:"memory"`
+	Backend                   string                            `json:"backend"`
+	Engine                    string                            `json:"engine"`
+	VectorIndexStrategy       collections.VectorIndexStrategy   `json:"vector_index_strategy"`
+	VectorIndexSearchPath     collections.VectorIndexSearchPath `json:"vector_index_search_path,omitempty"`
+	QueryMode                 collections.VectorIndexQueryMode  `json:"query_mode"`
+	QuantizedIndexName        string                            `json:"quantized_index_name"`
+	QuantizedRerankCandidates int                               `json:"quantized_rerank_candidates"`
+	Dir                       string                            `json:"dir"`
+	DatasetDir                string                            `json:"dataset_dir,omitempty"`
+	KeptDir                   bool                              `json:"kept_dir"`
+	Profile                   string                            `json:"profile"`
+	Docs                      int                               `json:"docs"`
+	Dimensions                int                               `json:"dimensions"`
+	Queries                   int                               `json:"queries"`
+	SearchConcurrency         []int                             `json:"search_concurrency"`
+	ValidateQueries           int                               `json:"validate_queries"`
+	ValidateDocs              int                               `json:"validate_docs"`
+	TopK                      int                               `json:"top_k"`
+	M                         int                               `json:"m"`
+	EfConstruction            int                               `json:"ef_construction"`
+	EfSearch                  int                               `json:"ef_search"`
+	ValuePointerThreshold     int                               `json:"value_pointer_threshold"`
+	LeafGenerationTarget      int64                             `json:"leaf_generation_segment_target"`
+	MinRecall                 float64                           `json:"min_recall"`
+	Compact                   bool                              `json:"compact"`
+	CompactSyncEachPhase      bool                              `json:"compact_sync_each_phase"`
+	DisableExactFallback      bool                              `json:"disable_exact_fallback"`
+	Insert                    phaseResult                       `json:"insert"`
+	Rebuild                   phaseResult                       `json:"rebuild"`
+	CompactPhase              phaseResult                       `json:"compact_phase"`
+	IndexVacuum               phaseResult                       `json:"index_vacuum"`
+	ReopenLoad                phaseResult                       `json:"reopen_load"`
+	Validation                validationResult                  `json:"validation"`
+	Search                    searchBenchmarkResult             `json:"search"`
+	SearchBenchmarks          []searchBenchmarkResult           `json:"search_benchmarks"`
+	StorageBeforeCompact      storageReport                     `json:"storage_before_compact"`
+	StorageAfterCompact       storageReport                     `json:"storage_after_compact"`
+	StorageAfterClose         storageReport                     `json:"storage_after_close"`
+	StorageAfterVacuum        storageReport                     `json:"storage_after_index_vacuum"`
+	IndexStatsBefore          collections.VectorIndexStats      `json:"index_stats_before_compact"`
+	IndexStatsLoaded          collections.VectorIndexStats      `json:"index_stats_loaded"`
+	NativeRootBytes           int64                             `json:"native_root_bytes"`
+	VectorIndexStatus         collections.VectorIndexStatus     `json:"vector_index_status"`
+	CompactStorage            *backenddb.CompactStorageStats    `json:"compact_storage,omitempty"`
+	FormatConfig              *backenddb.FormatConfig           `json:"format_config,omitempty"`
+	StorageExpectation        storageExpectationReport          `json:"storage_expectation"`
+	Memory                    memoryReport                      `json:"memory"`
 }
 
 type matrixResult struct {
@@ -157,19 +164,30 @@ type validationResult struct {
 }
 
 type searchBenchmarkResult struct {
-	Concurrency          int     `json:"concurrency"`
-	Queries              int     `json:"queries"`
-	TotalDurationNanos   int64   `json:"total_duration_nanos"`
-	AvgNanos             float64 `json:"avg_nanos"`
-	AvgMicros            float64 `json:"avg_micros"`
-	OpsPerSecond         float64 `json:"ops_per_second"`
-	P50Nanos             int64   `json:"p50_nanos"`
-	P95Nanos             int64   `json:"p95_nanos"`
-	P99Nanos             int64   `json:"p99_nanos"`
-	AvgCandidates        float64 `json:"avg_candidates"`
-	AvgRerank            float64 `json:"avg_rerank"`
-	ExactFallbacks       int     `json:"exact_fallbacks"`
-	DisableExactFallback bool    `json:"disable_exact_fallback"`
+	Concurrency                       int                              `json:"concurrency"`
+	Queries                           int                              `json:"queries"`
+	QueryMode                         collections.VectorIndexQueryMode `json:"query_mode"`
+	QuantizedIndexName                string                           `json:"quantized_index_name"`
+	QuantizedRerankCandidates         int                              `json:"quantized_rerank_candidates"`
+	TotalDurationNanos                int64                            `json:"total_duration_nanos"`
+	AvgNanos                          float64                          `json:"avg_nanos"`
+	AvgMicros                         float64                          `json:"avg_micros"`
+	OpsPerSecond                      float64                          `json:"ops_per_second"`
+	P50Nanos                          int64                            `json:"p50_nanos"`
+	P95Nanos                          int64                            `json:"p95_nanos"`
+	P99Nanos                          int64                            `json:"p99_nanos"`
+	AvgCandidates                     float64                          `json:"avg_candidates"`
+	AvgRerank                         float64                          `json:"avg_rerank"`
+	AvgQuantizedScoreCalls            float64                          `json:"avg_quantized_score_calls"`
+	AvgQuantizedCodeBytes             float64                          `json:"avg_quantized_code_bytes"`
+	AvgQuantizedRerankCandidates      float64                          `json:"avg_quantized_rerank_candidates"`
+	AvgQuantizedRerankExactScoreCalls float64                          `json:"avg_quantized_rerank_exact_score_calls"`
+	AvgVectorBytes                    float64                          `json:"avg_vector_bytes"`
+	AvgNormBytes                      float64                          `json:"avg_norm_bytes"`
+	AvgPreparedScoreCalls             float64                          `json:"avg_prepared_score_calls"`
+	AvgScoreBatchCandidates           float64                          `json:"avg_score_batch_candidates"`
+	ExactFallbacks                    int                              `json:"exact_fallbacks"`
+	DisableExactFallback              bool                             `json:"disable_exact_fallback"`
 }
 
 type storageReport struct {
@@ -282,9 +300,11 @@ func parseConfig(args []string) (config, error) {
 		disableExactFallback:  true,
 		profile:               treedb.ProfileBench,
 		vectorIndexStrategy:   collections.VectorIndexStrategyNativeRuntime,
+		vectorQueryMode:       collections.VectorIndexQueryModeExact,
 	}
 	profileRaw := string(cfg.profile)
 	vectorIndexStrategyRaw := string(cfg.vectorIndexStrategy)
+	vectorQueryModeRaw := string(cfg.vectorQueryMode)
 	searchConcurrencyRaw := defaultSearchConcurrency
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -294,6 +314,9 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
 	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: "+treedb.ProfileFlagHelp)
 	fs.StringVar(&vectorIndexStrategyRaw, "vector-index-strategy", vectorIndexStrategyRaw, "TreeDB vector index strategy: native_runtime or column_graph")
+	fs.StringVar(&vectorQueryModeRaw, "vector-query-mode", vectorQueryModeRaw, "TreeDB vector query mode: exact, quantized_only, or quantized_rerank")
+	fs.StringVar(&cfg.quantizedIndexName, "quantized-index-name", cfg.quantizedIndexName, "Named scalar_u8 quantized index to use for column_graph quantized query modes, for example "+defaultQuantizedIndexName)
+	fs.IntVar(&cfg.quantizedRerankCandidates, "quantized-rerank-candidates", cfg.quantizedRerankCandidates, "Candidate limit exact-reranked by column_graph quantized_rerank mode; 0 uses the normalized ef_search set")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of ANN search queries to benchmark")
@@ -333,6 +356,14 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.vectorIndexStrategy = strategy
+	queryMode, err := parseVectorQueryMode(vectorQueryModeRaw)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.vectorQueryMode = queryMode
+	if err := validateVectorQueryConfig(cfg); err != nil {
+		return config{}, err
+	}
 	if cfg.docs <= 0 {
 		return config{}, errors.New("-docs must be positive")
 	}
@@ -399,6 +430,62 @@ func parseVectorIndexStrategy(raw string) (collections.VectorIndexStrategy, erro
 	default:
 		return "", fmt.Errorf("unsupported -vector-index-strategy %q", raw)
 	}
+}
+
+func parseVectorQueryMode(raw string) (collections.VectorIndexQueryMode, error) {
+	switch collections.VectorIndexQueryMode(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", collections.VectorIndexQueryModeExact:
+		return collections.VectorIndexQueryModeExact, nil
+	case collections.VectorIndexQueryModeQuantizedOnly:
+		return collections.VectorIndexQueryModeQuantizedOnly, nil
+	case collections.VectorIndexQueryModeQuantizedRerank:
+		return collections.VectorIndexQueryModeQuantizedRerank, nil
+	default:
+		return "", fmt.Errorf("unsupported -vector-query-mode %q", raw)
+	}
+}
+
+func validateVectorQueryConfig(cfg config) error {
+	mode := normalizedVectorQueryMode(cfg.vectorQueryMode)
+	if cfg.quantizedRerankCandidates < 0 {
+		return errors.New("-quantized-rerank-candidates cannot be negative")
+	}
+	if !vectorQueryModeIsQuantized(mode) {
+		if cfg.quantizedIndexName != "" {
+			return errors.New("-quantized-index-name requires -vector-query-mode quantized_only or quantized_rerank")
+		}
+		if cfg.quantizedRerankCandidates != 0 {
+			return errors.New("-quantized-rerank-candidates requires -vector-query-mode quantized_rerank")
+		}
+		return nil
+	}
+	if cfg.vectorIndexStrategy != collections.VectorIndexStrategyColumnGraph {
+		return errors.New("quantized vector query modes require -vector-index-strategy column_graph")
+	}
+	if cfg.quantizedIndexName == "" {
+		return errors.New("-quantized-index-name is required for quantized vector query modes")
+	}
+	if err := collections.ValidateIndexName(cfg.quantizedIndexName); err != nil {
+		return fmt.Errorf("-quantized-index-name: %w", err)
+	}
+	if mode == collections.VectorIndexQueryModeQuantizedOnly && cfg.quantizedRerankCandidates != 0 {
+		return errors.New("-quantized-rerank-candidates requires -vector-query-mode quantized_rerank")
+	}
+	if mode == collections.VectorIndexQueryModeQuantizedRerank && cfg.quantizedRerankCandidates != 0 && cfg.quantizedRerankCandidates < cfg.topK {
+		return errors.New("-quantized-rerank-candidates cannot be less than -top-k")
+	}
+	return nil
+}
+
+func normalizedVectorQueryMode(mode collections.VectorIndexQueryMode) collections.VectorIndexQueryMode {
+	if mode == "" {
+		return collections.VectorIndexQueryModeExact
+	}
+	return mode
+}
+
+func vectorQueryModeIsQuantized(mode collections.VectorIndexQueryMode) bool {
+	return mode == collections.VectorIndexQueryModeQuantizedOnly || mode == collections.VectorIndexQueryModeQuantizedRerank
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
@@ -560,6 +647,45 @@ func resultBackendForStrategy(strategy collections.VectorIndexStrategy) string {
 	return "treedb"
 }
 
+func resultBackendForQuery(strategy collections.VectorIndexStrategy, mode collections.VectorIndexQueryMode) string {
+	if strategy != collections.VectorIndexStrategyColumnGraph {
+		return resultBackendForStrategy(strategy)
+	}
+	switch normalizedVectorQueryMode(mode) {
+	case collections.VectorIndexQueryModeQuantizedOnly:
+		return "treedb_column_graph_quantized_only"
+	case collections.VectorIndexQueryModeQuantizedRerank:
+		return "treedb_column_graph_quantized_rerank"
+	default:
+		return "treedb_column_graph"
+	}
+}
+
+func effectiveQuantizedIndexName(cfg config) string {
+	if vectorQueryModeIsQuantized(normalizedVectorQueryMode(cfg.vectorQueryMode)) {
+		return cfg.quantizedIndexName
+	}
+	return ""
+}
+
+func effectiveQuantizedRerankCandidates(cfg config) int {
+	if normalizedVectorQueryMode(cfg.vectorQueryMode) == collections.VectorIndexQueryModeQuantizedRerank {
+		return cfg.quantizedRerankCandidates
+	}
+	return 0
+}
+
+func columnGraphSearchOptions(query []float32, cfg config) collections.VectorIndexSearcherSearchOptions {
+	return collections.VectorIndexSearcherSearchOptions{
+		Query:                     query,
+		QueryMode:                 normalizedVectorQueryMode(cfg.vectorQueryMode),
+		QuantizedIndexName:        effectiveQuantizedIndexName(cfg),
+		QuantizedRerankCandidates: effectiveQuantizedRerankCandidates(cfg),
+		TopK:                      cfg.topK,
+		EfSearch:                  cfg.efSearch,
+	}
+}
+
 func columnGraphDemoColumnStoreConfig(dims int) *collections.ColumnStoreConfig {
 	return &collections.ColumnStoreConfig{
 		Enabled:         true,
@@ -581,6 +707,12 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	cfg.profile = defaultProfile(cfg.profile)
 	if cfg.vectorIndexStrategy == "" {
 		cfg.vectorIndexStrategy = collections.VectorIndexStrategyNativeRuntime
+	}
+	if cfg.vectorQueryMode == "" {
+		cfg.vectorQueryMode = collections.VectorIndexQueryModeExact
+	}
+	if err := validateVectorQueryConfig(cfg); err != nil {
+		return result{}, err
 	}
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return result{}, err
@@ -644,30 +776,40 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		EfSearch:       cfg.efSearch,
 		Strategy:       cfg.vectorIndexStrategy,
 	}
+	if vectorQueryModeIsQuantized(cfg.vectorQueryMode) {
+		def.QuantizedIndexes = []collections.QuantizedVectorIndexDefinition{{
+			Name:    cfg.quantizedIndexName,
+			Codec:   collections.QuantizedVectorCodecScalarU8,
+			Version: 1,
+		}}
+	}
 	res := result{
-		Backend:               resultBackendForStrategy(def.Strategy),
-		Engine:                "treedb",
-		VectorIndexStrategy:   def.Strategy,
-		Dir:                   dir,
-		DatasetDir:            cfg.datasetDir,
-		KeptDir:               cfg.keepDir || explicitDir,
-		Profile:               string(cfg.profile),
-		Docs:                  cfg.docs,
-		Dimensions:            cfg.dimensions,
-		Queries:               cfg.queries,
-		SearchConcurrency:     append([]int(nil), cfg.searchConcurrency...),
-		ValidateQueries:       cfg.validateQueries,
-		ValidateDocs:          cfg.validateDocs,
-		TopK:                  cfg.topK,
-		M:                     cfg.m,
-		EfConstruction:        cfg.efConstruction,
-		EfSearch:              cfg.efSearch,
-		ValuePointerThreshold: cfg.valuePointerThreshold,
-		LeafGenerationTarget:  cfg.leafGenerationTarget,
-		MinRecall:             cfg.minRecall,
-		Compact:               cfg.compact,
-		CompactSyncEachPhase:  cfg.compactSyncEachPhase,
-		DisableExactFallback:  cfg.disableExactFallback,
+		Backend:                   resultBackendForQuery(def.Strategy, cfg.vectorQueryMode),
+		Engine:                    "treedb",
+		VectorIndexStrategy:       def.Strategy,
+		QueryMode:                 normalizedVectorQueryMode(cfg.vectorQueryMode),
+		QuantizedIndexName:        effectiveQuantizedIndexName(cfg),
+		QuantizedRerankCandidates: effectiveQuantizedRerankCandidates(cfg),
+		Dir:                       dir,
+		DatasetDir:                cfg.datasetDir,
+		KeptDir:                   cfg.keepDir || explicitDir,
+		Profile:                   string(cfg.profile),
+		Docs:                      cfg.docs,
+		Dimensions:                cfg.dimensions,
+		Queries:                   cfg.queries,
+		SearchConcurrency:         append([]int(nil), cfg.searchConcurrency...),
+		ValidateQueries:           cfg.validateQueries,
+		ValidateDocs:              cfg.validateDocs,
+		TopK:                      cfg.topK,
+		M:                         cfg.m,
+		EfConstruction:            cfg.efConstruction,
+		EfSearch:                  cfg.efSearch,
+		ValuePointerThreshold:     cfg.valuePointerThreshold,
+		LeafGenerationTarget:      cfg.leafGenerationTarget,
+		MinRecall:                 cfg.minRecall,
+		Compact:                   cfg.compact,
+		CompactSyncEachPhase:      cfg.compactSyncEachPhase,
+		DisableExactFallback:      cfg.disableExactFallback,
 	}
 
 	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
@@ -850,11 +992,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 				_ = columnGraphSearcher.Close()
 			}
 		}()
-		response, err := columnGraphSearcher.Search(collections.VectorIndexSearcherSearchOptions{
-			Query:    embedding(0, cfg.dimensions),
-			TopK:     cfg.topK,
-			EfSearch: cfg.efSearch,
-		})
+		response, err := columnGraphSearcher.Search(columnGraphSearchOptions(embedding(0, cfg.dimensions), cfg))
 		if err != nil {
 			return result{}, err
 		}
@@ -1338,11 +1476,7 @@ func validateCompactedColumnGraphData(col *collections.Collection, indexName str
 		if err != nil {
 			return out, err
 		}
-		response, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
-			Query:    query,
-			TopK:     cfg.topK,
-			EfSearch: cfg.efSearch,
-		})
+		response, err := searcher.Search(columnGraphSearchOptions(query, cfg))
 		if err != nil {
 			return out, err
 		}
@@ -1610,6 +1744,7 @@ func benchmarkSearchLoadedConcurrent(idx *collections.VectorIndex, cfg config, q
 	return searchBenchmarkResult{
 		Concurrency:          concurrency,
 		Queries:              len(queries),
+		QueryMode:            collections.VectorIndexQueryModeExact,
 		TotalDurationNanos:   total.Nanoseconds(),
 		AvgNanos:             avg,
 		AvgMicros:            avg / 1000,
@@ -1666,7 +1801,15 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 
 	latencies := make([]int64, len(queries))
 	var next atomic.Int64
-	var candidatesTotal int64
+	var candidatesTotal uint64
+	var quantizedScoreCallsTotal uint64
+	var quantizedCodeBytesTotal uint64
+	var quantizedRerankCandidatesTotal uint64
+	var quantizedRerankExactScoreCallsTotal uint64
+	var vectorBytesTotal uint64
+	var normBytesTotal uint64
+	var preparedScoreCallsTotal uint64
+	var scoreBatchCandidatesTotal uint64
 	var errMu sync.Mutex
 	var firstErr error
 	setErr := func(err error) {
@@ -1683,11 +1826,7 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 				return
 			}
 			start := time.Now()
-			response, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
-				Query:    queries[i],
-				TopK:     cfg.topK,
-				EfSearch: cfg.efSearch,
-			})
+			response, err := searcher.Search(columnGraphSearchOptions(queries[i], cfg))
 			if err != nil {
 				setErr(err)
 				return
@@ -1701,7 +1840,15 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 				setErr(errors.New("vector search returned no results"))
 				return
 			}
-			atomic.AddInt64(&candidatesTotal, int64(response.Stats.Candidates))
+			atomic.AddUint64(&candidatesTotal, response.Stats.Candidates)
+			atomic.AddUint64(&quantizedScoreCallsTotal, response.Stats.QuantizedScoreCalls)
+			atomic.AddUint64(&quantizedCodeBytesTotal, response.Stats.QuantizedCodeBytesRead)
+			atomic.AddUint64(&quantizedRerankCandidatesTotal, response.Stats.QuantizedRerankCandidates)
+			atomic.AddUint64(&quantizedRerankExactScoreCallsTotal, response.Stats.QuantizedRerankExactScoreCalls)
+			atomic.AddUint64(&vectorBytesTotal, response.Stats.VectorBytesRead)
+			atomic.AddUint64(&normBytesTotal, response.Stats.NormBytesRead)
+			atomic.AddUint64(&preparedScoreCallsTotal, response.Stats.PreparedScoreCalls)
+			atomic.AddUint64(&scoreBatchCandidatesTotal, response.Stats.ScoreBatchCandidates)
 		}
 	}
 	startAll := time.Now()
@@ -1733,20 +1880,33 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 	if total > 0 {
 		opsPerSecond = float64(len(queries)) / total.Seconds()
 	}
+	queryCount := float64(len(queries))
+	avgQuantizedRerankCandidates := float64(quantizedRerankCandidatesTotal) / queryCount
 	return searchBenchmarkResult{
-		Concurrency:          concurrency,
-		Queries:              len(queries),
-		TotalDurationNanos:   total.Nanoseconds(),
-		AvgNanos:             avg,
-		AvgMicros:            avg / 1000,
-		OpsPerSecond:         opsPerSecond,
-		P50Nanos:             percentile(latencies, 0.50),
-		P95Nanos:             percentile(latencies, 0.95),
-		P99Nanos:             percentile(latencies, 0.99),
-		AvgCandidates:        float64(candidatesTotal) / float64(len(queries)),
-		AvgRerank:            0,
-		ExactFallbacks:       0,
-		DisableExactFallback: cfg.disableExactFallback,
+		Concurrency:                       concurrency,
+		Queries:                           len(queries),
+		QueryMode:                         normalizedVectorQueryMode(cfg.vectorQueryMode),
+		QuantizedIndexName:                effectiveQuantizedIndexName(cfg),
+		QuantizedRerankCandidates:         effectiveQuantizedRerankCandidates(cfg),
+		TotalDurationNanos:                total.Nanoseconds(),
+		AvgNanos:                          avg,
+		AvgMicros:                         avg / 1000,
+		OpsPerSecond:                      opsPerSecond,
+		P50Nanos:                          percentile(latencies, 0.50),
+		P95Nanos:                          percentile(latencies, 0.95),
+		P99Nanos:                          percentile(latencies, 0.99),
+		AvgCandidates:                     float64(candidatesTotal) / queryCount,
+		AvgRerank:                         avgQuantizedRerankCandidates,
+		AvgQuantizedScoreCalls:            float64(quantizedScoreCallsTotal) / queryCount,
+		AvgQuantizedCodeBytes:             float64(quantizedCodeBytesTotal) / queryCount,
+		AvgQuantizedRerankCandidates:      avgQuantizedRerankCandidates,
+		AvgQuantizedRerankExactScoreCalls: float64(quantizedRerankExactScoreCallsTotal) / queryCount,
+		AvgVectorBytes:                    float64(vectorBytesTotal) / queryCount,
+		AvgNormBytes:                      float64(normBytesTotal) / queryCount,
+		AvgPreparedScoreCalls:             float64(preparedScoreCallsTotal) / queryCount,
+		AvgScoreBatchCandidates:           float64(scoreBatchCandidatesTotal) / queryCount,
+		ExactFallbacks:                    0,
+		DisableExactFallback:              cfg.disableExactFallback,
 	}, nil
 }
 
@@ -2007,8 +2167,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
-		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s query_mode=%s quantized_index_name=%s quantized_rerank_candidates=%d docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
+		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), resultQueryMode(res), res.QuantizedIndexName, res.QuantizedRerankCandidates, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_vector_index strategy=%s: %.3fs native_root_bytes=%d\n", resultStrategy(res), res.Rebuild.Seconds, res.NativeRootBytes)
@@ -2038,7 +2198,15 @@ func printText(w io.Writer, res result) {
 		float64(res.Search.P99Nanos)/1000,
 		res.Search.OpsPerSecond,
 		res.Search.ExactFallbacks)
-	fmt.Fprintf(w, "avg_candidates=%.1f avg_rerank=%.1f\n", res.Search.AvgCandidates, res.Search.AvgRerank)
+	fmt.Fprintf(w, "avg_candidates=%.1f avg_rerank=%.1f avg_quantized_score_calls=%.1f avg_quantized_code_bytes=%.1f avg_quantized_rerank_candidates=%.1f avg_quantized_rerank_exact_score_calls=%.1f avg_vector_bytes=%.1f avg_norm_bytes=%.1f\n",
+		res.Search.AvgCandidates,
+		res.Search.AvgRerank,
+		res.Search.AvgQuantizedScoreCalls,
+		res.Search.AvgQuantizedCodeBytes,
+		res.Search.AvgQuantizedRerankCandidates,
+		res.Search.AvgQuantizedRerankExactScoreCalls,
+		res.Search.AvgVectorBytes,
+		res.Search.AvgNormBytes)
 	fmt.Fprintf(w, "\nParallel Search Benchmark\n")
 	printSearchBenchmarks(w, res.SearchBenchmarks)
 	fmt.Fprintf(w, "\nStorage\n")
@@ -2073,10 +2241,11 @@ func printMatrixText(w io.Writer, res matrixResult) {
 	for _, testCase := range res.Cases {
 		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
 		fmt.Fprintf(w, "%s\n", testCase.Description)
-		fmt.Fprintf(w, "backend=%s vector_index_strategy=%s vector_index_search_path=%s\n",
+		fmt.Fprintf(w, "backend=%s vector_index_strategy=%s vector_index_search_path=%s query_mode=%s\n",
 			resultBackend(testCase.Result),
 			resultStrategy(testCase.Result),
-			resultSearchPath(testCase.Result))
+			resultSearchPath(testCase.Result),
+			resultQueryMode(testCase.Result))
 		fmt.Fprintf(w, "storage_after_compact_total=%d bytes (%.1f/doc)\n",
 			testCase.Result.StorageAfterCompact.TotalBytes,
 			testCase.Result.StorageAfterCompact.BytesPerDoc)
@@ -2125,17 +2294,32 @@ func resultSearchPath(res result) string {
 	return string(nativeRuntimeSnapshotPath)
 }
 
+func resultQueryMode(res result) collections.VectorIndexQueryMode {
+	if res.QueryMode != "" {
+		return res.QueryMode
+	}
+	return collections.VectorIndexQueryModeExact
+}
+
 func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
 	for _, bench := range benchmarks {
-		fmt.Fprintf(w, "search concurrency=%d queries=%d avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d\n",
+		fmt.Fprintf(w, "search concurrency=%d queries=%d query_mode=%s avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d avg_candidates=%.1f avg_quantized_score_calls=%.1f avg_quantized_code_bytes=%.1f avg_quantized_rerank_candidates=%.1f avg_quantized_rerank_exact_score_calls=%.1f avg_vector_bytes=%.1f avg_norm_bytes=%.1f\n",
 			bench.Concurrency,
 			bench.Queries,
+			bench.QueryMode,
 			bench.AvgMicros,
 			float64(bench.P50Nanos)/1000,
 			float64(bench.P95Nanos)/1000,
 			float64(bench.P99Nanos)/1000,
 			bench.OpsPerSecond,
-			bench.ExactFallbacks)
+			bench.ExactFallbacks,
+			bench.AvgCandidates,
+			bench.AvgQuantizedScoreCalls,
+			bench.AvgQuantizedCodeBytes,
+			bench.AvgQuantizedRerankCandidates,
+			bench.AvgQuantizedRerankExactScoreCalls,
+			bench.AvgVectorBytes,
+			bench.AvgNormBytes)
 	}
 }
 

@@ -18,7 +18,16 @@ M="${M:-16}"
 EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
 TREEDB_COLUMN_GRAPH_EF_SEARCH="${TREEDB_COLUMN_GRAPH_EF_SEARCH:-}"
+TREEDB_QUANTIZED_INDEX_NAME="${TREEDB_QUANTIZED_INDEX_NAME:-embedding.scalar_u8.fast}"
+DEFAULT_TREEDB_QUANTIZED_RERANK_CANDIDATES=32
+if [[ "$TOP_K" =~ ^[0-9]+$ ]] && ((TOP_K > DEFAULT_TREEDB_QUANTIZED_RERANK_CANDIDATES)); then
+	DEFAULT_TREEDB_QUANTIZED_RERANK_CANDIDATES="$TOP_K"
+fi
+TREEDB_QUANTIZED_RERANK_CANDIDATES="${TREEDB_QUANTIZED_RERANK_CANDIDATES:-$DEFAULT_TREEDB_QUANTIZED_RERANK_CANDIDATES}"
 MIN_RECALL="${MIN_RECALL:-0.95}"
+TREEDB_QUANTIZED_MIN_RECALL="${TREEDB_QUANTIZED_MIN_RECALL:-0}"
+TREEDB_QUANTIZED_ONLY_MIN_RECALL="${TREEDB_QUANTIZED_ONLY_MIN_RECALL:-$TREEDB_QUANTIZED_MIN_RECALL}"
+TREEDB_QUANTIZED_RERANK_MIN_RECALL="${TREEDB_QUANTIZED_RERANK_MIN_RECALL:-$TREEDB_QUANTIZED_MIN_RECALL}"
 NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
 VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
 
@@ -68,14 +77,14 @@ validate_backends() {
 	for backend in "${raw[@]}"; do
 		backend="${backend//[[:space:]]/}"
 		case "$backend" in
-			treedb|treedb_column_graph|vectorlite|pgvector|mongodb)
+			treedb|treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank|vectorlite|pgvector|mongodb)
 				;;
 			"")
 				echo "empty backend in BACKENDS=$BACKENDS" >&2
 				exit 1
 				;;
 			*)
-				echo "unknown backend: $backend (known: treedb,treedb_column_graph,vectorlite,pgvector,mongodb)" >&2
+				echo "unknown backend: $backend (known: treedb,treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank,vectorlite,pgvector,mongodb)" >&2
 				exit 1
 				;;
 		esac
@@ -159,13 +168,18 @@ cat >"$RUN_DIR/README.md" <<EOF
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
 - TreeDB column_graph efSearch: \`$TREEDB_COLUMN_GRAPH_EF_SEARCH\`
+- minimum recall: \`$MIN_RECALL\`
+- TreeDB quantized index/rerank candidates: \`$TREEDB_QUANTIZED_INDEX_NAME / $TREEDB_QUANTIZED_RERANK_CANDIDATES\`
+- TreeDB quantized-only/rerank minimum recall: \`$TREEDB_QUANTIZED_ONLY_MIN_RECALL / $TREEDB_QUANTIZED_RERANK_MIN_RECALL\`
 - Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
 
 This run compares persistent database-tier ANN search:
 
 - TreeDB native persisted HNSW through \`cmd/treedb_vector_search_demo\`
-- TreeDB column-store graph search through
+- TreeDB column-store graph exact/default search through
   \`cmd/treedb_vector_search_demo -vector-index-strategy column_graph\`
+- TreeDB column-store graph scalar_u8 quantized modes through explicit
+  \`-vector-query-mode quantized_only|quantized_rerank\` demo flags
 - SQLite+Vectorlite HNSW through Python's \`sqlite3\` and the \`vectorlite-py\`
   loadable extension
 - PostgreSQL+pgvector HNSW through a PostgreSQL server
@@ -251,6 +265,57 @@ if contains_backend treedb_column_graph; then
 		-min-recall "$MIN_RECALL" \
 		-json >"$RUN_DIR/treedb_column_graph.json"
 	result_args+=(--result "$RUN_DIR/treedb_column_graph.json")
+fi
+
+if contains_backend treedb_column_graph_quantized_only; then
+	echo "running TreeDB column-store graph scalar_u8 quantized_only benchmark"
+	GOWORK=off go run ./cmd/treedb_vector_search_demo \
+		-matrix=false \
+		-vector-index-strategy column_graph \
+		-vector-query-mode quantized_only \
+		-quantized-index-name "$TREEDB_QUANTIZED_INDEX_NAME" \
+		-dataset-dir "$RUN_DIR/dataset" \
+		-dir "$RUN_DIR/treedb_column_graph_quantized_only" \
+		-keep-dir \
+		-docs "$DOCS" \
+		-dims "$DIMS" \
+		-queries "$QUERIES" \
+		-search-concurrency "$SEARCH_CONCURRENCY" \
+		-validate-queries "$VALIDATE_QUERIES" \
+		-validate-docs 16 \
+		-top-k "$TOP_K" \
+		-m "$M" \
+		-ef-construction "$EF_CONSTRUCTION" \
+		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
+		-min-recall "$TREEDB_QUANTIZED_ONLY_MIN_RECALL" \
+		-json >"$RUN_DIR/treedb_column_graph_quantized_only.json"
+	result_args+=(--result "$RUN_DIR/treedb_column_graph_quantized_only.json")
+fi
+
+if contains_backend treedb_column_graph_quantized_rerank; then
+	echo "running TreeDB column-store graph scalar_u8 quantized_rerank benchmark"
+	GOWORK=off go run ./cmd/treedb_vector_search_demo \
+		-matrix=false \
+		-vector-index-strategy column_graph \
+		-vector-query-mode quantized_rerank \
+		-quantized-index-name "$TREEDB_QUANTIZED_INDEX_NAME" \
+		-quantized-rerank-candidates "$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
+		-dataset-dir "$RUN_DIR/dataset" \
+		-dir "$RUN_DIR/treedb_column_graph_quantized_rerank" \
+		-keep-dir \
+		-docs "$DOCS" \
+		-dims "$DIMS" \
+		-queries "$QUERIES" \
+		-search-concurrency "$SEARCH_CONCURRENCY" \
+		-validate-queries "$VALIDATE_QUERIES" \
+		-validate-docs 16 \
+		-top-k "$TOP_K" \
+		-m "$M" \
+		-ef-construction "$EF_CONSTRUCTION" \
+		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
+		-min-recall "$TREEDB_QUANTIZED_RERANK_MIN_RECALL" \
+		-json >"$RUN_DIR/treedb_column_graph_quantized_rerank.json"
+	result_args+=(--result "$RUN_DIR/treedb_column_graph_quantized_rerank.json")
 fi
 
 if contains_backend vectorlite; then
