@@ -862,7 +862,7 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 	}
 
 	foundCount := 0
-	retainedArena := make([]byte, 0, min(len(ids)*128, 1<<20))
+	var retainedArena []byte
 	err := collectionGetManyViewAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), ids, func(i int, _ []byte, value []byte, found bool) error {
 		if i < 0 || i >= len(ids) {
 			return fmt.Errorf("collections: GetManyView callback index %d outside %d ids", i, len(ids))
