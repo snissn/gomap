@@ -3568,9 +3568,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					encodeKey(keys[j], uint64(rng.Intn(cfg.Keys)))
 				}
 				if hasManyView {
-					seen := 0
+					var seen atomic.Int64
 					err := mgv.GetManyView(keys[:n], func(index int, _ []byte, value []byte, found bool) error {
-						seen++
+						seen.Add(1)
 						if index < 0 || index >= n {
 							return fmt.Errorf("GetManyView callback index %d outside %d keys", index, n)
 						}
@@ -3587,8 +3587,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					if err != nil {
 						return 0, fmt.Errorf("random_read_batch: %w", err)
 					}
-					if cfg.ReadRequireHit && seen != n {
-						return 0, fmt.Errorf("random_read_batch: GetManyView returned %d callbacks for %d keys", seen, n)
+					if cfg.ReadRequireHit && int(seen.Load()) != n {
+						return 0, fmt.Errorf("random_read_batch: GetManyView returned %d callbacks for %d keys", seen.Load(), n)
 					}
 				} else if hasMany {
 					vals, err := mg.GetMany(keys[:n])
