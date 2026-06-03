@@ -3805,6 +3805,21 @@ func (db *DB) readValueLog(key []byte, ptr page.ValuePtr) ([]byte, error) {
 	return db.valueLogReader.Read(ptr)
 }
 
+func (db *DB) readValueLogUnsafe(key []byte, ptr page.ValuePtr) ([]byte, error) {
+	if db.valueLogReader == nil {
+		return nil, errors.New("cachingdb: value-log reader unavailable")
+	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return nil, fmt.Errorf("cachingdb: non value-log pointer %#x", ptr.FileID)
+	}
+	if db.valueLogEnabled() {
+		if err := db.flushValueLogForPtr(ptr); err != nil {
+			return nil, err
+		}
+	}
+	return db.valueLogReader.ReadUnsafe(ptr)
+}
+
 func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	if db.valueLogReader == nil {
 		return nil, errors.New("cachingdb: value-log reader unavailable")
@@ -24308,6 +24323,21 @@ func copyGetManyValueToRefs(out [][]byte, refs []getManyProbeRef, val []byte, ar
 	}
 }
 
+func visitGetManyValueRefs(refs []getManyProbeRef, val []byte, found bool, fn tree.GetManyViewFunc) error {
+	if found && len(val) == 0 {
+		val = rootDomainGetManyEmptyValue
+	}
+	if !found {
+		val = nil
+	}
+	for _, ref := range refs {
+		if err := fn(ref.idx, ref.key, val, found); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	if view == nil || len(view.rootPointShards) == 0 {
@@ -24413,6 +24443,114 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		}
 	}
 	return out, nil
+}
+
+func (db *DB) getManyViewFromPublishedRootPointShards(view *memtableView, keys [][]byte, fn tree.GetManyViewFunc) error {
+	if fn == nil {
+		return errors.New("cachingdb: GetManyView nil callback")
+	}
+	if view == nil || len(view.rootPointShards) == 0 {
+		for i, key := range keys {
+			if err := fn(i, key, nil, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	refs := make([]getManyProbeRef, len(keys))
+	for i, key := range keys {
+		shard := 0
+		if len(view.rootPointShards) > 1 {
+			shard = db.shardIndex(key)
+		}
+		refs[i] = getManyProbeRef{key: key, idx: i, shard: shard}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].shard != refs[j].shard {
+			return refs[i].shard < refs[j].shard
+		}
+		return bytes.Compare(refs[i].key, refs[j].key) < 0
+	})
+
+	unique := make([]getManyProbeRef, 0, len(refs))
+	groupStarts := make([]int, 0, len(refs))
+	for i, ref := range refs {
+		if len(unique) == 0 || ref.shard != unique[len(unique)-1].shard || !bytes.Equal(ref.key, unique[len(unique)-1].key) {
+			unique = append(unique, ref)
+			groupStarts = append(groupStarts, i)
+		}
+	}
+	db.noteRootDomainGetManyNative(len(keys), len(unique))
+
+	results := make([]rootDomainProbeResult, len(unique))
+	start := 0
+	for start < len(unique) {
+		end := start + 1
+		shard := unique[start].shard
+		for end < len(unique) && unique[end].shard == shard {
+			end++
+		}
+		if shard >= 0 && shard < len(view.rootPointShards) {
+			if err := view.rootPointShards[shard].getManySortedRefs(unique[start:end], results[start:end]); err != nil {
+				return err
+			}
+		}
+		start = end
+	}
+
+	backendIdx := make([]int, 0, len(unique))
+	backendKeys := make([][]byte, 0, len(unique))
+	for i, res := range results {
+		groupEnd := len(refs)
+		if i+1 < len(groupStarts) {
+			groupEnd = groupStarts[i+1]
+		}
+		groupRefs := refs[groupStarts[i]:groupEnd]
+		switch {
+		case !res.found:
+			backendIdx = append(backendIdx, i)
+			backendKeys = append(backendKeys, unique[i].key)
+		case res.flags&node.FlagTombstone != 0:
+			if err := visitGetManyValueRefs(groupRefs, nil, false, fn); err != nil {
+				return err
+			}
+		case res.flags&node.FlagPointer != 0:
+			val := res.val
+			if val == nil {
+				var err error
+				val, err = db.readValueLogUnsafe(unique[i].key, res.ptr)
+				if err != nil {
+					return err
+				}
+			}
+			if err := visitGetManyValueRefs(groupRefs, val, true, fn); err != nil {
+				return err
+			}
+		case res.val == nil:
+			if err := visitGetManyValueRefs(groupRefs, rootDomainGetManyEmptyValue, true, fn); err != nil {
+				return err
+			}
+		default:
+			if err := visitGetManyValueRefs(groupRefs, res.val, true, fn); err != nil {
+				return err
+			}
+		}
+	}
+	if len(backendKeys) == 0 {
+		return nil
+	}
+	db.noteRootDomainGetManyBackendFallback(len(backendKeys))
+	return db.backendGetManyView(backendKeys, func(i int, _ []byte, value []byte, found bool) error {
+		if i < 0 || i >= len(backendIdx) {
+			return fmt.Errorf("cachingdb: backend GetManyView callback index %d out of range for %d keys", i, len(backendIdx))
+		}
+		uniqueIdx := backendIdx[i]
+		groupEnd := len(refs)
+		if uniqueIdx+1 < len(groupStarts) {
+			groupEnd = groupStarts[uniqueIdx+1]
+		}
+		return visitGetManyValueRefs(refs[groupStarts[uniqueIdx]:groupEnd], value, found, fn)
+	})
 }
 
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
@@ -24529,6 +24667,10 @@ type backendManyGetter interface {
 	GetMany(keys [][]byte) ([][]byte, error)
 }
 
+type backendManyViewer interface {
+	GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error
+}
+
 type backendManyPlanner interface {
 	GetManyParallelPlan(keyCount int) (workers int, parallel bool)
 }
@@ -24571,6 +24713,35 @@ func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
 		out[i] = val
 	}
 	return out, nil
+}
+
+func (db *DB) backendGetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
+	if fn == nil {
+		return errors.New("cachingdb: GetManyView nil callback")
+	}
+	if err := db.flushValueLogForBackendRead(); err != nil {
+		return err
+	}
+	if viewer, ok := db.backend.(backendManyViewer); ok {
+		return viewer.GetManyView(keys, fn)
+	}
+	vals, err := db.backendGetMany(keys)
+	if err != nil {
+		return err
+	}
+	if len(vals) != len(keys) {
+		return fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(vals), len(keys))
+	}
+	for i, val := range vals {
+		found := val != nil
+		if found && len(val) == 0 {
+			val = rootDomainGetManyEmptyValue
+		}
+		if err := fn(i, keys[i], val, found); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetUnsafe returns a safe copy of the value.
@@ -24725,6 +24896,77 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		out[outIdx] = backendVals[i]
 	}
 	return out, nil
+}
+
+// GetManyView calls fn once for each key with a read-only value view. The
+// callback may be invoked in any order and may be invoked concurrently when
+// backend fallback reads are parallelized. The value is valid only until fn
+// returns; callers must copy values they retain. Missing keys are reported with
+// found=false and value=nil.
+func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
+	if fn == nil {
+		return errors.New("cachingdb: GetManyView nil callback")
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	db.noteRead()
+
+	view := db.retainMemtableView()
+	bypass := db.canBypassMemtableReadMany(view, keys)
+	if bypass {
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+		}
+		return db.backendGetManyView(keys, fn)
+	}
+	if view != nil {
+		defer db.releaseMemtableView(view)
+	}
+	if view != nil && len(view.rootPointShards) > 0 {
+		return db.getManyViewFromPublishedRootPointShards(view, keys, fn)
+	}
+	db.noteRootDomainGetManyFallback(len(keys))
+
+	backendIdx := make([]int, 0, len(keys))
+	backendKeys := make([][]byte, 0, len(keys))
+	arena := make([]byte, 0, min(len(keys)*128, 1<<20))
+	for i, key := range keys {
+		start := len(arena)
+		nextArena, found, err := db.getMemtableAppend(key, arena)
+		if err != nil {
+			if err == tree.ErrKeyNotFound && found {
+				if err := fn(i, key, nil, false); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		if found {
+			arena = nextArena
+			val := arena[start:len(arena):len(arena)]
+			if len(val) == 0 {
+				val = rootDomainGetManyEmptyValue
+			}
+			if err := fn(i, key, val, true); err != nil {
+				return err
+			}
+			continue
+		}
+		backendIdx = append(backendIdx, i)
+		backendKeys = append(backendKeys, key)
+	}
+	if len(backendKeys) == 0 {
+		return nil
+	}
+	return db.backendGetManyView(backendKeys, func(i int, key []byte, value []byte, found bool) error {
+		if i < 0 || i >= len(backendIdx) {
+			return fmt.Errorf("cachingdb: backend GetManyView callback index %d out of range for %d keys", i, len(backendIdx))
+		}
+		return fn(backendIdx[i], key, value, found)
+	})
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.

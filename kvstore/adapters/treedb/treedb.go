@@ -125,6 +125,22 @@ func (d *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	return vals, err
 }
 
+func (d *DB) GetManyView(keys [][]byte, fn kvstore.MultiGetViewFunc) error {
+	if d == nil || d.DB == nil {
+		return kvstore.ErrUnsupported
+	}
+	if fn == nil {
+		return errors.New("treedb adapter: GetManyView nil callback")
+	}
+	err := d.DB.GetManyView(keys, func(index int, key []byte, value []byte, found bool) error {
+		return fn(index, key, value, found)
+	})
+	if errors.Is(err, treedb.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
 func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 	if len(keys) == 0 {
 		return nil

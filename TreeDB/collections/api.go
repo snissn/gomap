@@ -19667,6 +19667,62 @@ func collectionGetAppendAtCatalogRoot(snap *backenddb.Snapshot, catalog *collect
 	return out, true, nil
 }
 
+func collectionGetManyViewAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, keys [][]byte, fn backenddb.GetManyViewFunc) error {
+	if fn == nil {
+		return errors.New("collections: GetManyView nil callback")
+	}
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if len(catalog.overlayRootIDs(rootName)) == 0 {
+		rootID := catalog.rootID(rootName)
+		if rootID == 0 {
+			for i, key := range keys {
+				if err := fn(i, key, nil, false); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		err := snap.GetManyViewAtRoot(rootID, keys, fn)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			for i, key := range keys {
+				if err := fn(i, key, nil, false); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		return err
+	}
+
+	var scratch []byte
+	for i, key := range keys {
+		value, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, key, scratch[:0])
+		if err != nil {
+			return err
+		}
+		if !found {
+			if err := fn(i, key, nil, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := fn(i, key, value, true); err != nil {
+			return err
+		}
+		if cap(value) <= 64<<10 {
+			scratch = value[:0]
+		} else {
+			scratch = nil
+		}
+	}
+	return nil
+}
+
 func collectionGetAppendAtCatalogOverlayRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, key, dst []byte) ([]byte, bool, bool, error) {
 	if snap == nil {
 		return dst[:0], false, false, backenddb.ErrClosed

@@ -17,6 +17,7 @@ type Snapshot interface {
 
 	Get(key []byte) ([]byte, error)
 	GetAppend(key, dst []byte) ([]byte, error)
+	GetManyView(keys [][]byte, fn GetManyViewFunc) error
 	GetUnsafe(key []byte) ([]byte, error)
 	Has(key []byte) (bool, error)
 	HasMany(keys [][]byte) ([]bool, error)

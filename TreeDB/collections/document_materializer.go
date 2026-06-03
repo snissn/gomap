@@ -828,8 +828,12 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 				if err != nil {
 					return response, err
 				}
+				documentArena = appendDocumentFetchOwnedBytes(documentArena, document, &response.Results[i])
+			} else if len(document) == 0 {
+				response.Results[i].Document = []byte{}
+			} else {
+				response.Results[i].Document = document[:len(document):len(document)]
 			}
-			documentArena = appendDocumentFetchOwnedBytes(documentArena, document, &response.Results[i])
 			response.Stats.DocumentsFetched++
 			response.Stats.DocumentBytes += uint64(len(response.Results[i].Document))
 			response.Stats.OutputBytes += uint64(len(response.Results[i].Document))
@@ -848,28 +852,40 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 	}
 	var idArena []byte
 	retained := make([][]byte, len(ids))
-	foundCount := 0
 	for i, id := range ids {
 		if len(id) == 0 {
-			return response, retained, foundCount, fmt.Errorf("collections: document id at position %d cannot be empty", i)
+			return response, retained, 0, fmt.Errorf("collections: document id at position %d cannot be empty", i)
 		}
 		idStart := len(idArena)
 		idArena = append(idArena, id...)
-		ownedID := idArena[idStart:len(idArena):len(idArena)]
-		response.Results[i].ID = ownedID
-		value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), id, nil)
-		if err != nil {
-			return response, retained, foundCount, err
+		response.Results[i].ID = idArena[idStart:len(idArena):len(idArena)]
+	}
+
+	foundCount := 0
+	var retainedArena []byte
+	err := collectionGetManyViewAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), ids, func(i int, _ []byte, value []byte, found bool) error {
+		if i < 0 || i >= len(ids) {
+			return fmt.Errorf("collections: GetManyView callback index %d outside %d ids", i, len(ids))
 		}
 		if !found {
 			response.Stats.DocumentsMissing++
-			continue
+			return nil
 		}
 		response.Results[i].Found = true
-		retained[i] = value
+		if len(value) == 0 {
+			retained[i] = []byte{}
+		} else {
+			start := len(retainedArena)
+			retainedArena = append(retainedArena, value...)
+			retained[i] = retainedArena[start:len(retainedArena):len(retainedArena)]
+		}
 		foundCount++
 		response.Stats.RetainedPayloadFetches++
 		response.Stats.RetainedPayloadBytes += uint64(len(value))
+		return nil
+	})
+	if err != nil {
+		return response, retained, foundCount, err
 	}
 	return response, retained, foundCount, nil
 }
