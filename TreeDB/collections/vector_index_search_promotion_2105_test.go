@@ -315,9 +315,10 @@ func assertVectorIndexSearchDefaultIndexedScoreBatches2105(tb testing.TB, defaul
 	if defaultStats.ScoreBatchCalls != indexedStats.ScoreBatchCalls || defaultStats.ScoreBatchCandidates != indexedStats.ScoreBatchCandidates || defaultStats.ScoreBatchMaxTileSize != indexedStats.ScoreBatchMaxTileSize || defaultStats.ScoreBatchOptimizedCalls != indexedStats.ScoreBatchOptimizedCalls || defaultStats.ScoreBatchScalarFallbackCalls != indexedStats.ScoreBatchScalarFallbackCalls {
 		tb.Fatalf("default stats=%+v indexed stats=%+v want default to select identical indexed prepared score batching", defaultStats, indexedStats)
 	}
-	if defaultStats.ScoreBatchCalls >= scalarStats.ScoreBatchCalls || defaultStats.ScoreBatchMaxTileSize < 2 {
-		tb.Fatalf("default stats=%+v scalar stats=%+v want default indexed grouping", defaultStats, scalarStats)
+	if defaultStats.ScoreBatchCalls != scalarStats.ScoreBatchCalls || defaultStats.ScoreBatchCandidates != scalarStats.ScoreBatchCandidates || defaultStats.ScoreBatchMaxTileSize != scalarStats.ScoreBatchMaxTileSize || defaultStats.ScoreBatchMaxTileSize < 2 {
+		tb.Fatalf("default stats=%+v scalar stats=%+v want prepared scalar and indexed modes to share neighbor-tile grouping", defaultStats, scalarStats)
 	}
+	assertVectorIndexSearchPreparedScalarScoreBatches2105(tb, scalarStats)
 	if defaultStats.ScoreBatchSingletons+defaultStats.ScoreBatchSize2To4+defaultStats.ScoreBatchSize5To8+defaultStats.ScoreBatchSize9To16+defaultStats.ScoreBatchSize17Plus != defaultStats.ScoreBatchCalls {
 		tb.Fatalf("default stats=%+v want score-batch histogram to reconcile", defaultStats)
 	}
@@ -334,14 +335,27 @@ func assertVectorIndexSearchScalarScoreBatches2105(tb testing.TB, stats VectorIn
 	}
 }
 
+func assertVectorIndexSearchPreparedScalarScoreBatches2105(tb testing.TB, stats VectorIndexSearchStats) {
+	tb.Helper()
+	if stats.ScoreBatchCalls == 0 || stats.ScoreBatchCalls >= stats.ScoreBatchCandidates || stats.ScoreBatchMaxTileSize < 2 || stats.ScoreBatchOptimizedCalls != 0 || stats.ScoreBatchScalarFallbackCalls != stats.ScoreBatchCalls {
+		tb.Fatalf("stats=%+v want prepared scalar neighbor-tile batches with scalar fallback backend", stats)
+	}
+}
+
 func assertVectorIndexSearchPromotionScoreStats2105(tb testing.TB, mode columnVectorGraphSearchTopologyParityMode2091, scoreName string, stats VectorIndexSearchStats, dims int) {
 	tb.Helper()
-	if mode == columnVectorGraphSearchTopologyParityModeCurrentPrepared2091 && (scoreName == "default" || scoreName == "indexed") {
-		if stats.ScoreBatchCalls >= stats.ScoreBatchCandidates || stats.ScoreBatchMaxTileSize < 2 {
-			tb.Fatalf("mode=%s score=%s stats=%+v want grouped prepared indexed score batches", mode, scoreName, stats)
+	if mode == columnVectorGraphSearchTopologyParityModeCurrentPrepared2091 {
+		if scoreName == "scalar" {
+			assertVectorIndexSearchPreparedScalarScoreBatches2105(tb, stats)
+			return
 		}
-		assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, stats.ScoreBatchOptimizedCalls, stats.ScoreBatchScalarFallbackCalls, int(stats.ScoreBatchMaxTileSize), dims)
-		return
+		if scoreName == "default" || scoreName == "indexed" {
+			if stats.ScoreBatchCalls >= stats.ScoreBatchCandidates || stats.ScoreBatchMaxTileSize < 2 {
+				tb.Fatalf("mode=%s score=%s stats=%+v want grouped prepared indexed score batches", mode, scoreName, stats)
+			}
+			assertColumnVectorGraphPreparedIndexedBackendCounters2125(tb, stats.ScoreBatchOptimizedCalls, stats.ScoreBatchScalarFallbackCalls, int(stats.ScoreBatchMaxTileSize), dims)
+			return
+		}
 	}
 	assertVectorIndexSearchScalarScoreBatches2105(tb, stats)
 }

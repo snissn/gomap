@@ -18,8 +18,11 @@ func TestColumnVectorGraphPreparedExactIndexedScoringEquivalence2098(t *testing.
 		t.Fatal(mismatch)
 	}
 	assertColumnVectorGraphPreparedExactIndexedWorkStatsEqual2098(t, scalarStats, indexedStats)
-	if indexedStats.ScoreBatchMaxTileSize < 2 || indexedStats.ScoreBatchCalls >= scalarStats.ScoreBatchCalls {
-		t.Fatalf("indexed stats=%+v scalar stats=%+v want exact prepared indexed scoring to preserve work while grouping score batches", indexedStats, scalarStats)
+	if indexedStats.ScoreBatchMaxTileSize < 2 || scalarStats.ScoreBatchMaxTileSize != indexedStats.ScoreBatchMaxTileSize || scalarStats.ScoreBatchCalls != indexedStats.ScoreBatchCalls {
+		t.Fatalf("indexed stats=%+v scalar stats=%+v want exact prepared scoring modes to preserve neighbor-tile topology", indexedStats, scalarStats)
+	}
+	if scalarStats.ScoreBatchOptimizedCalls != 0 || scalarStats.ScoreBatchScalarFallbackCalls != scalarStats.ScoreBatchCalls {
+		t.Fatalf("indexed stats=%+v scalar stats=%+v want scalar mode to use tile fallback backend", indexedStats, scalarStats)
 	}
 	assertColumnVectorGraphPreparedIndexedBackendCounters2125(t, indexedStats.ScoreBatchOptimizedCalls, indexedStats.ScoreBatchScalarFallbackCalls, int(indexedStats.ScoreBatchMaxTileSize), shape.dims)
 }

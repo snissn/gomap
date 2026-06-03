@@ -1280,7 +1280,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			if err != nil {
 				return nil, stats, err
 			}
-			if plan.scoreBatchMode.indexedEnabled() {
+			if plan != nil && (plan.preparedSearch != nil || plan.scoreBatchMode.indexedEnabled()) {
 				for i := 0; i < len(adjacency); {
 					tileCap := len(adjacency) - i
 					scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, tileCap)
@@ -1612,7 +1612,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 		if err != nil {
 			return 0, err
 		}
-		if plan.scoreBatchMode.indexedEnabled() {
+		if plan != nil && (plan.preparedSearch != nil || plan.scoreBatchMode.indexedEnabled()) {
 			scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
 			tile := scratch.scoreTileOrdinals[:0]
 			for i, neighbor := range adjacency {
