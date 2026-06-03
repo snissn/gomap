@@ -97,19 +97,23 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinals(ordinals []int,
 	}
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
-		s.recordScoreStats(stats, len(ordinals))
 	}
+	successCount := 0
 	for i, ordinal := range ordinals {
 		row, ok := s.prepared.CodeRowBytes(quantizedasset.RoleCodes, ordinal)
 		if !ok || len(row) != s.dims {
+			s.recordScoreStats(stats, successCount)
 			return dst[:i], fmt.Errorf("%w: column_graph query_mode=quantized_only quantized index %q code row ordinal=%d unavailable len=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, len(row), ok, s.dims)
 		}
 		score := scalarU8QuantizedCosineScore(s.queryCode, row)
 		if math.IsNaN(score) || math.IsInf(score, 0) {
+			s.recordScoreStats(stats, successCount)
 			return dst[:i], fmt.Errorf("collections: column_graph quantized index %q candidate ordinal=%d scalar_u8 score is not finite", s.indexName, ordinal)
 		}
 		dst[i] = score
+		successCount++
 	}
+	s.recordScoreStats(stats, successCount)
 	return dst, nil
 }
 
