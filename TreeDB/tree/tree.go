@@ -464,7 +464,7 @@ func validateLeafLogNodeIntoWithState(dst *node.Node, data []byte, ptr page.LogR
 	}
 	node.InitFreshNodeView(dst, data)
 	if verifyChecksum {
-		if state.PageChecksumVerified {
+		if state.PageChecksumVerified && state.RecordChecksumVerified {
 			noteOuterLeafChecksumSkipped()
 		} else {
 			noteOuterLeafChecksumVerified()

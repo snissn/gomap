@@ -191,6 +191,37 @@ func TestTreeLeafLogUnverifiedStateStillChecksChecksum(t *testing.T) {
 	}
 }
 
+func TestValidateLeafLogStateRequiresRecordChecksumForChecksumSkip(t *testing.T) {
+	before := OuterLeafReadStatsSnapshot()
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	if err := leaf.AddLeafEntry([]byte("k"), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
+	}
+	leaf.UpdateChecksum()
+	leafData[node.NodeHeaderSize] ^= 0x80
+
+	var dst node.Node
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: page.PageSize}
+	_, err := validateLeafLogNodeIntoWithState(&dst, leafData, ptr, true, false, LeafLogPageReadState{
+		CacheEntryPresent:      true,
+		PageChecksumVerified:   true,
+		RecordChecksumVerified: false,
+	})
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("validate error=%v, want checksum mismatch", err)
+	}
+	after := OuterLeafReadStatsSnapshot()
+	if after.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal != 1 {
+		t.Fatalf("checksum verifications delta=%d want 1", after.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal)
+	}
+	if after.ChecksumSkippedTotal != before.ChecksumSkippedTotal {
+		t.Fatalf("checksum skips delta=%d want 0", after.ChecksumSkippedTotal-before.ChecksumSkippedTotal)
+	}
+}
+
 func TestTreeGetManyAppend_RejectsUndersizedOut(t *testing.T) {
 	var tr *Tree
 	arena := []byte("keep")
