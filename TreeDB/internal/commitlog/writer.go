@@ -284,8 +284,10 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 		return nil
 	}
 
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -698,8 +700,10 @@ func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op R
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -748,8 +752,10 @@ func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64
 }
 
 func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, size int) error {
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	total := segmentHeaderSize + size
 	if !w.canBufferCommandFrame(total) {
@@ -807,8 +813,10 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	total := segmentHeaderSize + size
 	if len(payload) >= directCommandPayloadMinLen {
@@ -860,8 +868,10 @@ func (w *Writer) AppendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, k
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	total := segmentHeaderSize + size
 	if len(payload) >= directCommandPayloadMinLen {
@@ -884,8 +894,10 @@ func (w *Writer) AppendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, k
 }
 
 func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64, payload []byte, size int) error {
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -920,8 +932,10 @@ func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64
 }
 
 func (w *Writer) appendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, kind CommandKind, scope CommandScope, format PayloadFormat, payload []byte, size int) error {
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -1091,8 +1105,10 @@ func (w *Writer) poisonCommandBuffer(err error) error {
 }
 
 func (w *Writer) writeSegment(payload []byte) error {
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -1156,8 +1172,10 @@ func (w *Writer) writeSegment(payload []byte) error {
 }
 
 func (w *Writer) writeRawSegmentWithChecksum(payload []byte, wantCRC uint32) error {
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	return w.writeRawSegmentWithChecksumNoPending(payload, wantCRC)
 }
@@ -1230,8 +1248,10 @@ func (w *Writer) Flush() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -1243,8 +1263,10 @@ func (w *Writer) Sync() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.flushPendingBatch(); err != nil {
-		return err
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
