@@ -4732,6 +4732,11 @@ const (
 	treeDBVlogScanBlockCodecSnappy    = 1
 	treeDBVlogScanBlockCodecLZ4       = 2
 	treeDBVlogScanMaxFrameK           = 128
+
+	treeDBVlogScanOuterLeafCodecHeaderOffset = 5
+	treeDBVlogScanOuterLeafCodecNoneID       = 0
+	treeDBVlogScanOuterLeafCodecSnappyID     = 1
+	treeDBVlogScanOuterLeafCodecLZ4ID        = 2
 )
 
 var treeDBVlogScanKBucketUpperBounds = []int{1, 2, 4, 8, 16, 32, 64, treeDBVlogScanMaxFrameK}
@@ -4748,6 +4753,7 @@ type treeDBVlogCodecScanStats struct {
 	PayloadKinds    map[string]treeDBVlogCodecScanCounters
 	PayloadSplits   map[string]treeDBVlogCodecScanCounters
 	OuterLeafCodecs map[string]treeDBVlogCodecScanCounters
+	BlockCodecs     map[string]treeDBVlogCodecScanCounters
 	BlockKCount     map[string]uint64
 	BlockKSum       map[string]uint64
 	BlockKMax       map[string]uint64
@@ -4761,6 +4767,7 @@ func newTreeDBVlogCodecScanStats() *treeDBVlogCodecScanStats {
 		PayloadKinds:    map[string]treeDBVlogCodecScanCounters{},
 		PayloadSplits:   map[string]treeDBVlogCodecScanCounters{},
 		OuterLeafCodecs: map[string]treeDBVlogCodecScanCounters{},
+		BlockCodecs:     map[string]treeDBVlogCodecScanCounters{},
 		BlockKCount:     map[string]uint64{},
 		BlockKSum:       map[string]uint64{},
 		BlockKMax:       map[string]uint64{},
@@ -4821,12 +4828,16 @@ func scanTreeDBLeafVLogCodecStats(rootDir string, countAuto bool) (map[string]st
 	}
 	sort.Strings(paths)
 	scan := newTreeDBVlogCodecScanStats()
+	var firstErr error
 	for _, path := range paths {
 		if err := scanTreeDBVLogCodecStatsFile(path, scan, countAuto); err != nil {
-			return nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 	}
-	return scan.treeDBStats(), nil
+	return scan.treeDBStats(), firstErr
 }
 
 func scanTreeDBVLogCodecStatsFile(path string, scan *treeDBVlogCodecScanStats, countAuto bool) error {
@@ -4894,29 +4905,49 @@ func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto b
 		return fmt.Errorf("frame body length %d shorter than prefix %d", len(body), prefixLen)
 	}
 	offsetStart := treeDBVlogScanFrameHeaderSize + (k * 8)
-	rawPayloadBytes := uint64(binary.LittleEndian.Uint32(body[offsetStart+(k*4) : offsetStart+((k+1)*4)]))
+	offsets := make([]uint32, k+1)
+	var prevOffset uint32
+	for i := 0; i <= k; i++ {
+		cur := binary.LittleEndian.Uint32(body[offsetStart+(i*4) : offsetStart+((i+1)*4)])
+		if i == 0 && cur != 0 {
+			return fmt.Errorf("frame first offset=%d want 0", cur)
+		}
+		if i > 0 && cur < prevOffset {
+			return fmt.Errorf("frame offsets are not monotonic at index %d", i)
+		}
+		offsets[i] = cur
+		prevOffset = cur
+	}
+	rawPayloadBytes := uint64(offsets[k])
+	if rawPayloadBytes > treeDBVlogScanMaxBodyLen {
+		return fmt.Errorf("frame raw payload too large: %d > %d", rawPayloadBytes, treeDBVlogScanMaxBodyLen)
+	}
 	storedPayloadBytes := uint64(len(body) - prefixLen)
 	dictID := binary.LittleEndian.Uint64(body[4:12])
 	compressed := flags&treeDBVlogScanFrameFlagCompressed != 0
+	if !compressed && rawPayloadBytes != storedPayloadBytes {
+		return fmt.Errorf("uncompressed frame raw/stored size mismatch: raw=%d stored=%d", rawPayloadBytes, storedPayloadBytes)
+	}
 
 	writeMode := "off"
-	outerCodec := "none"
+	outerCodec := "unknown"
+	blockCodec := ""
 	autoCandidate := "off"
-	if compressed && dictID != 0 {
+	if !compressed {
+		outerCodec = treeDBVlogScanOuterLeafCodecFromPayload(body[prefixLen:], offsets)
+	} else if dictID != 0 {
 		writeMode = "dict"
-		outerCodec = "unknown"
 		autoCandidate = "dict"
-	} else if compressed {
+	} else {
 		writeMode = "block"
 		switch body[3] {
 		case treeDBVlogScanBlockCodecLZ4:
-			outerCodec = "lz4"
+			blockCodec = "lz4"
 			autoCandidate = "block_lz4"
 		case treeDBVlogScanBlockCodecSnappy:
-			outerCodec = "snappy"
+			blockCodec = "snappy"
 			autoCandidate = "block_snappy"
 		default:
-			outerCodec = "unknown"
 			autoCandidate = ""
 		}
 	}
@@ -4925,16 +4956,19 @@ func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto b
 	s.addCounters(s.PayloadKinds, "outer_leaf", k, rawPayloadBytes, storedPayloadBytes)
 	s.addCounters(s.PayloadSplits, "outer_leaf", k, rawPayloadBytes, storedPayloadBytes)
 	s.addCounters(s.OuterLeafCodecs, outerCodec, k, rawPayloadBytes, storedPayloadBytes)
+	if blockCodec != "" {
+		s.addCounters(s.BlockCodecs, blockCodec, k, rawPayloadBytes, storedPayloadBytes)
+	}
 	if countAuto && autoCandidate != "" {
 		s.addCounters(s.AutoCandidates, autoCandidate, k, rawPayloadBytes, storedPayloadBytes)
 	}
-	if writeMode == "block" && (outerCodec == "snappy" || outerCodec == "lz4") {
-		s.BlockKCount[outerCodec]++
-		s.BlockKSum[outerCodec] += uint64(k)
-		if uint64(k) > s.BlockKMax[outerCodec] {
-			s.BlockKMax[outerCodec] = uint64(k)
+	if writeMode == "block" && (blockCodec == "snappy" || blockCodec == "lz4") {
+		s.BlockKCount[blockCodec]++
+		s.BlockKSum[blockCodec] += uint64(k)
+		if uint64(k) > s.BlockKMax[blockCodec] {
+			s.BlockKMax[blockCodec] = uint64(k)
 		}
-		buckets := s.BlockKBuckets[outerCodec]
+		buckets := s.BlockKBuckets[blockCodec]
 		if len(buckets) == 0 {
 			buckets = make([]uint64, len(treeDBVlogScanKBucketUpperBounds))
 		}
@@ -4944,9 +4978,56 @@ func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto b
 				break
 			}
 		}
-		s.BlockKBuckets[outerCodec] = buckets
+		s.BlockKBuckets[blockCodec] = buckets
 	}
 	return nil
+}
+
+func treeDBVlogScanOuterLeafCodecFromPayload(payload []byte, offsets []uint32) string {
+	if len(offsets) < 2 {
+		return "unknown"
+	}
+	kind := ""
+	for i := 0; i+1 < len(offsets); i++ {
+		start, end := int(offsets[i]), int(offsets[i+1])
+		if start < 0 || end < start || end > len(payload) {
+			return "unknown"
+		}
+		next := treeDBVlogScanOuterLeafCodecFromValue(payload[start:end])
+		if kind == "" {
+			kind = next
+			continue
+		}
+		if next != kind {
+			return "mixed"
+		}
+	}
+	if kind == "" {
+		return "unknown"
+	}
+	return kind
+}
+
+func treeDBVlogScanOuterLeafCodecFromValue(value []byte) string {
+	if len(value) == 0 {
+		return "unknown"
+	}
+	if len(value) >= 4 && value[0] == 'T' && value[1] == 'O' && value[2] == 'L' && value[3] == '2' {
+		if len(value) <= treeDBVlogScanOuterLeafCodecHeaderOffset {
+			return "unknown"
+		}
+		switch value[treeDBVlogScanOuterLeafCodecHeaderOffset] {
+		case treeDBVlogScanOuterLeafCodecNoneID:
+			return "none"
+		case treeDBVlogScanOuterLeafCodecSnappyID:
+			return "snappy"
+		case treeDBVlogScanOuterLeafCodecLZ4ID:
+			return "lz4"
+		default:
+			return "unknown"
+		}
+	}
+	return "legacy_page"
 }
 
 func (s *treeDBVlogCodecScanStats) addCounters(dst map[string]treeDBVlogCodecScanCounters, key string, records int, rawBytes, storedBytes uint64) {
@@ -5013,7 +5094,7 @@ func (s *treeDBVlogCodecScanStats) treeDBStats() map[string]string {
 		out["treedb.cache.vlog_block.k.count."+codec] = fmt.Sprintf("%d", count)
 		out["treedb.cache.vlog_block.k.avg."+codec] = fmt.Sprintf("%.3f", float64(s.BlockKSum[codec])/float64(count))
 		out["treedb.cache.vlog_block.k.max."+codec] = fmt.Sprintf("%d", s.BlockKMax[codec])
-		if c := s.OuterLeafCodecs[codec]; c.RawBytes > 0 {
+		if c := s.BlockCodecs[codec]; c.RawBytes > 0 {
 			out["treedb.cache.vlog_block.ratio."+codec] = fmt.Sprintf("%.6f", float64(c.StoredBytes)/float64(c.RawBytes))
 		}
 		buckets := s.BlockKBuckets[codec]

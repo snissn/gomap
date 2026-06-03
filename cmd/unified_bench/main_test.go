@@ -1692,8 +1692,8 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 		"treedb.cache.vlog_payload_kind.raw_bytes.outer_leaf":    "350",
 		"treedb.cache.vlog_payload_kind.stored_bytes.outer_leaf": "170",
 		"treedb.cache.vlog_payload_split.records.outer_leaf":     "4",
-		"treedb.cache.vlog_outer_leaf_codec.frames.lz4":          "1",
-		"treedb.cache.vlog_outer_leaf_codec.frames.none":         "1",
+		"treedb.cache.vlog_outer_leaf_codec.frames.unknown":      "1",
+		"treedb.cache.vlog_outer_leaf_codec.frames.legacy_page":  "1",
 		"treedb.cache.vlog_block.k.count.lz4":                    "1",
 		"treedb.cache.vlog_block.k.avg.lz4":                      "3.000",
 		"treedb.cache.vlog_block.k.max.lz4":                      "3",
@@ -1710,6 +1710,32 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 		if got := stats[key]; got != wantValue {
 			t.Fatalf("%s=%q want %q (stats=%#v)", key, got, wantValue, stats)
 		}
+	}
+}
+
+func TestScanTreeDBLeafVLogCodecStats_PreservesPartialStatsOnSegmentError(t *testing.T) {
+	dir := t.TempDir()
+	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll leaf_vlog: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(leafDir, "value-l255-000001.log"), testTreeDBVLogFrame(t, 1, 0, false, 50, 50), 0o644); err != nil {
+		t.Fatalf("WriteFile good leaf log: %v", err)
+	}
+	bad := make([]byte, treeDBVlogScanHeaderSize)
+	bad[4] = treeDBVlogScanVersion
+	bad[5] = treeDBVlogScanRecordFlagGrouped
+	binary.LittleEndian.PutUint32(bad[16:20], treeDBVlogScanMaxBodyLen+1)
+	if err := os.WriteFile(filepath.Join(leafDir, "value-l255-000002.log"), bad, 0o644); err != nil {
+		t.Fatalf("WriteFile bad leaf log: %v", err)
+	}
+
+	stats, err := scanTreeDBLeafVLogCodecStats(dir, true)
+	if err == nil || !strings.Contains(err.Error(), "value-log body too large") {
+		t.Fatalf("expected oversized body error, got %v", err)
+	}
+	if got := stats["treedb.cache.vlog_write_mode.frames.off"]; got != "1" {
+		t.Fatalf("partial stats off frames=%q want 1 (stats=%#v)", got, stats)
 	}
 }
 
@@ -1733,6 +1759,21 @@ func TestScanTreeDBLeafVLogCodecStats_UnknownBlockCodecNotAttributedToSnappy(t *
 	}
 	if got := stats["treedb.cache.vlog_auto.frames.block_snappy"]; got != "" {
 		t.Fatalf("unknown codec attributed to block_snappy=%q (stats=%#v)", got, stats)
+	}
+}
+
+func TestScanTreeDBVLogCodecStatsFile_RejectsInvalidOffsets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "value-l255-000001.log")
+	record := testTreeDBVLogFrame(t, 2, 0, false, 50, 50)
+	offsetStart := treeDBVlogScanHeaderSize + treeDBVlogScanFrameHeaderSize + (2 * 8)
+	binary.LittleEndian.PutUint32(record[offsetStart:offsetStart+4], 1)
+	if err := os.WriteFile(path, record, 0o644); err != nil {
+		t.Fatalf("WriteFile leaf log: %v", err)
+	}
+
+	err := scanTreeDBVLogCodecStatsFile(path, newTreeDBVlogCodecScanStats(), true)
+	if err == nil || !strings.Contains(err.Error(), "frame first offset") {
+		t.Fatalf("expected invalid offset error, got %v", err)
 	}
 }
 
