@@ -4431,9 +4431,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if statsSnapshot == nil {
 					statsSnapshot = make(map[string]string, len(leafStats))
 				}
-				for k, v := range leafStats {
-					statsSnapshot[k] = v
-				}
+				mergeTreeDBLeafVLogCodecStats(statsSnapshot, leafStats)
 			}
 		}
 		if len(statsSnapshot) > 0 {
@@ -4736,6 +4734,44 @@ func newTreeDBVlogCodecScanStats() *treeDBVlogCodecScanStats {
 		BlockKBuckets:   map[string][]uint64{},
 		AutoCandidates:  map[string]treeDBVlogCodecScanCounters{},
 	}
+}
+
+func hasExistingTreeDBVlogCodecStats(stats map[string]string) bool {
+	for key, value := range stats {
+		switch {
+		case strings.HasPrefix(key, "treedb.cache.vlog_auto.frames."),
+			strings.HasPrefix(key, "treedb.cache.vlog_auto.bytes."),
+			strings.HasPrefix(key, "treedb.cache.vlog_write_mode."),
+			strings.HasPrefix(key, "treedb.cache.vlog_payload_kind."),
+			strings.HasPrefix(key, "treedb.cache.vlog_payload_split."),
+			strings.HasPrefix(key, "treedb.cache.vlog_outer_leaf_codec."),
+			strings.HasPrefix(key, "treedb.cache.vlog_block."):
+			if treeDBVlogStatValueHasSignal(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mergeTreeDBLeafVLogCodecStats(dst, leafStats map[string]string) {
+	if len(dst) == 0 || !hasExistingTreeDBVlogCodecStats(dst) {
+		for key, value := range leafStats {
+			dst[key] = value
+		}
+		return
+	}
+	for key, value := range leafStats {
+		dst[treeDBLeafVLogScanStatKey(key)] = value
+	}
+}
+
+func treeDBLeafVLogScanStatKey(key string) string {
+	const cacheVlogPrefix = "treedb.cache.vlog_"
+	if strings.HasPrefix(key, cacheVlogPrefix) {
+		return "treedb.cache.vlog_leaf_scan." + strings.TrimPrefix(key, cacheVlogPrefix)
+	}
+	return "treedb.cache.vlog_leaf_scan." + strings.TrimPrefix(key, "treedb.cache.")
 }
 
 func scanTreeDBLeafVLogCodecStats(rootDir, dbName string) (map[string]string, error) {

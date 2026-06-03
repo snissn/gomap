@@ -1715,6 +1715,42 @@ func testTreeDBVLogFrame(t *testing.T, k int, codec int, compressed bool, rawByt
 	return out
 }
 
+func TestMergeTreeDBLeafVLogCodecStats_PreservesAggregateStats(t *testing.T) {
+	dst := map[string]string{
+		"treedb.cache.vlog_write_mode.frames.block":       "9",
+		"treedb.cache.vlog_write_mode.raw_bytes.block":    "900",
+		"treedb.cache.vlog_write_mode.stored_bytes.block": "450",
+	}
+	leaf := map[string]string{
+		"treedb.cache.vlog_write_mode.frames.block":       "2",
+		"treedb.cache.vlog_write_mode.raw_bytes.block":    "200",
+		"treedb.cache.vlog_write_mode.stored_bytes.block": "100",
+	}
+	mergeTreeDBLeafVLogCodecStats(dst, leaf)
+	if got := dst["treedb.cache.vlog_write_mode.frames.block"]; got != "9" {
+		t.Fatalf("aggregate frames overwritten: %q", got)
+	}
+	if got := dst["treedb.cache.vlog_leaf_scan.write_mode.frames.block"]; got != "2" {
+		t.Fatalf("leaf-only frames missing: %q in %#v", got, dst)
+	}
+}
+
+func TestMergeTreeDBLeafVLogCodecStats_FillsZeroAggregateStats(t *testing.T) {
+	dst := map[string]string{
+		"treedb.cache.vlog_write_mode.frames.block": "0",
+	}
+	leaf := map[string]string{
+		"treedb.cache.vlog_write_mode.frames.block": "2",
+	}
+	mergeTreeDBLeafVLogCodecStats(dst, leaf)
+	if got := dst["treedb.cache.vlog_write_mode.frames.block"]; got != "2" {
+		t.Fatalf("zero aggregate not filled: %q", got)
+	}
+	if _, ok := dst["treedb.cache.vlog_leaf_scan.write_mode.frames.block"]; ok {
+		t.Fatalf("unexpected leaf-only key when aggregate was zero: %#v", dst)
+	}
+}
+
 func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
 	makeRun := func(keys int, dir string) BenchRun {
 		return BenchRun{

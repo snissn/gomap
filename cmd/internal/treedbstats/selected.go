@@ -47,6 +47,8 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_autotune."):
 		return true
+	case strings.HasPrefix(key, "treedb.cache.vlog_leaf_scan."):
+		return true
 	case strings.HasPrefix(key, "treedb.vlog.mmap"):
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_zombie."):
