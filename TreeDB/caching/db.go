@@ -64,6 +64,8 @@ var batchArenaPools [batchArenaClassCount]sync.Pool // stores []byte
 var batchArenaLeasePool sync.Pool                   // stores *batchArenaLease
 var appendOnlyDirectValueArenaPools [appendOnlyDirectValueArenaClassCount]sync.Pool
 var batchEntrySliceRefPool sync.Pool                        // stores *batchEntrySliceRef
+var batchIntSliceRefPool sync.Pool                          // stores *batchIntSliceRef
+var batchInt64SliceRefPool sync.Pool                        // stores *batchInt64SliceRef
 var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
 var outerLeafArenaLeaseMu sync.Mutex
 var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
@@ -171,6 +173,7 @@ var flushMergeParallelAppliedOpsTotal atomic.Uint64
 var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchIntPoolDropUnderPressureTotal atomic.Uint64
+var batchInt64PoolDropUnderPressureTotal atomic.Uint64
 var appendOnlyDirectArenaPoolHitChunksTotal atomic.Uint64
 var appendOnlyDirectArenaPoolHitBytesTotal atomic.Uint64
 var appendOnlyDirectArenaRetainedHitChunksTotal atomic.Uint64
@@ -1124,6 +1127,14 @@ type batchEntrySliceRef struct {
 	entries []batch.Entry
 }
 
+type batchIntSliceRef struct {
+	idxs []int
+}
+
+type batchInt64SliceRef struct {
+	idxs []int64
+}
+
 func getBatchEntrySliceRef(entries []batch.Entry) *batchEntrySliceRef {
 	if v := batchEntrySliceRefPool.Get(); v != nil {
 		if ref, ok := v.(*batchEntrySliceRef); ok {
@@ -1140,6 +1151,42 @@ func putBatchEntrySliceRef(ref *batchEntrySliceRef) {
 	}
 	ref.entries = nil
 	batchEntrySliceRefPool.Put(ref)
+}
+
+func getBatchIntSliceRef(idxs []int) *batchIntSliceRef {
+	if v := batchIntSliceRefPool.Get(); v != nil {
+		if ref, ok := v.(*batchIntSliceRef); ok {
+			ref.idxs = idxs
+			return ref
+		}
+	}
+	return &batchIntSliceRef{idxs: idxs}
+}
+
+func putBatchIntSliceRef(ref *batchIntSliceRef) {
+	if ref == nil {
+		return
+	}
+	ref.idxs = nil
+	batchIntSliceRefPool.Put(ref)
+}
+
+func getBatchInt64SliceRef(idxs []int64) *batchInt64SliceRef {
+	if v := batchInt64SliceRefPool.Get(); v != nil {
+		if ref, ok := v.(*batchInt64SliceRef); ok {
+			ref.idxs = idxs
+			return ref
+		}
+	}
+	return &batchInt64SliceRef{idxs: idxs}
+}
+
+func putBatchInt64SliceRef(ref *batchInt64SliceRef) {
+	if ref == nil {
+		return
+	}
+	ref.idxs = nil
+	batchInt64SliceRefPool.Put(ref)
 }
 
 func getValueLogEligible(capacity int) []int {
@@ -6812,6 +6859,7 @@ type DB struct {
 	batchEntriesPool              sync.Pool
 	batchShardEntriesPool         sync.Pool
 	batchIntPool                  sync.Pool
+	batchInt64Pool                sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -25621,6 +25669,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.cache.batch_pool.drop_under_pressure.int64_slices_total"] = fmt.Sprintf("%d", batchInt64PoolDropUnderPressureTotal.Load())
 	stats["treedb.process.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
 	stats["treedb.process.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
 	stats["treedb.process.append_only_direct_arena.pool_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitChunksTotal.Load())
@@ -25632,6 +25681,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.batch_pool.drop_under_pressure.int64_slices_total"] = fmt.Sprintf("%d", batchInt64PoolDropUnderPressureTotal.Load())
 	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
 	stats["treedb.process.memory.pool_pressure_used_bytes"] = fmt.Sprintf("%d", poolPressure.usedBytes)
 	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
@@ -28069,12 +28119,23 @@ func (db *DB) getBatchIntSlice(minCap int) []int {
 	}
 	if db != nil {
 		if pooled := db.batchIntPool.Get(); pooled != nil {
-			if idxs, ok := pooled.([]int); ok {
+			switch v := pooled.(type) {
+			case *batchIntSliceRef:
+				idxs := v.idxs
+				putBatchIntSliceRef(v)
 				if cap(idxs) >= minCap {
 					return idxs[:0]
 				}
 				if c := cap(idxs); c > 0 && c <= batchIntSlicePoolMaxRetain {
-					db.batchIntPool.Put(idxs[:0])
+					db.batchIntPool.Put(getBatchIntSliceRef(idxs[:0]))
+				}
+			case []int:
+				// Backward-compatible fallback for any legacy pooled shape.
+				if cap(v) >= minCap {
+					return v[:0]
+				}
+				if c := cap(v); c > 0 && c <= batchIntSlicePoolMaxRetain {
+					db.batchIntPool.Put(getBatchIntSliceRef(v[:0]))
 				}
 			}
 		}
@@ -28093,7 +28154,63 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 		batchIntPoolDropUnderPressureTotal.Add(1)
 		return
 	}
-	db.batchIntPool.Put(idxs[:0])
+	db.batchIntPool.Put(getBatchIntSliceRef(idxs[:0]))
+}
+
+func (db *DB) getBatchInt64Slice(minCap int) []int64 {
+	if minCap < 0 {
+		minCap = 0
+	}
+	if db != nil {
+		if pooled := db.batchInt64Pool.Get(); pooled != nil {
+			switch v := pooled.(type) {
+			case *batchInt64SliceRef:
+				idxs := v.idxs
+				putBatchInt64SliceRef(v)
+				if cap(idxs) >= minCap {
+					return idxs[:0]
+				}
+				if c := cap(idxs); c > 0 && c <= batchIntSlicePoolMaxRetain {
+					db.batchInt64Pool.Put(getBatchInt64SliceRef(idxs[:0]))
+				}
+			case []int64:
+				// Backward-compatible fallback for any legacy pooled shape.
+				if cap(v) >= minCap {
+					return v[:0]
+				}
+				if c := cap(v); c > 0 && c <= batchIntSlicePoolMaxRetain {
+					db.batchInt64Pool.Put(getBatchInt64SliceRef(v[:0]))
+				}
+			}
+		}
+	}
+	return make([]int64, 0, minCap)
+}
+
+func (db *DB) putBatchInt64Slice(idxs []int64) {
+	if db == nil || cap(idxs) == 0 {
+		return
+	}
+	if cap(idxs) > batchIntSlicePoolMaxRetain {
+		return
+	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchInt64PoolDropUnderPressureTotal.Add(1)
+		return
+	}
+	db.batchInt64Pool.Put(getBatchInt64SliceRef(idxs[:0]))
+}
+
+func appendUniqueMemtable(dst []memtable.Table, mt memtable.Table) []memtable.Table {
+	if mt == nil {
+		return dst
+	}
+	for _, existing := range dst {
+		if existing == mt {
+			return dst
+		}
+	}
+	return append(dst, mt)
 }
 
 // Reset clears the batch for reuse without closing it.
@@ -28785,6 +28902,7 @@ const (
 	batchArenaTailCompactPinnedMaxFillDenominator = 4
 	batchEntriesPoolMaxRetain                     = 16 << 10
 	batchIntSlicePoolMaxRetain                    = 16 << 10
+	batchMemtableRetainStackCap                   = 64
 	// When deferred iterator views pin retired memtables, reduce retained
 	// batch-arena headroom to limit extra lease growth under that pressure.
 	batchArenaDeferredPressureThresholdBytes = int64(512 << 20)
@@ -29080,24 +29198,35 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	shardCount := len(b.db.mutableShards)
 	shardAdds := b.shardAdds
 	if cap(shardAdds) < shardCount {
-		shardAdds = make([]int64, shardCount)
+		if cap(shardAdds) > 0 {
+			b.db.putBatchInt64Slice(shardAdds)
+		}
+		shardAdds = b.db.getBatchInt64Slice(shardCount)
+		shardAdds = shardAdds[:shardCount]
 	} else {
 		shardAdds = shardAdds[:shardCount]
-		clear(shardAdds)
 	}
+	clear(shardAdds)
 	b.shardAdds = shardAdds
 
 	shardCounts := b.shardCnts
 	if cap(shardCounts) < shardCount {
-		shardCounts = make([]int, shardCount)
+		if cap(shardCounts) > 0 {
+			b.db.putBatchIntSlice(shardCounts)
+		}
+		shardCounts = b.db.getBatchIntSlice(shardCount)
+		shardCounts = shardCounts[:shardCount]
 	} else {
 		shardCounts = shardCounts[:shardCount]
-		clear(shardCounts)
 	}
+	clear(shardCounts)
 	b.shardCnts = shardCounts
 
 	shardIdxs := b.shardIdxs
 	if cap(shardIdxs) < len(b.entries) {
+		if cap(shardIdxs) > 0 {
+			b.db.putBatchIntSlice(shardIdxs)
+		}
 		shardIdxs = b.db.getBatchIntSlice(len(b.entries))
 		shardIdxs = shardIdxs[:len(b.entries)]
 	} else {
@@ -29142,8 +29271,11 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		shardAdds[idx] += add
 	}
-	retainMainMems := make([]memtable.Table, 0, shardCount)
-	retainMainSeen := make(map[memtable.Table]struct{}, shardCount)
+	var retainMainMemStack [batchMemtableRetainStackCap]memtable.Table
+	retainMainMems := retainMainMemStack[:0]
+	if shardCount > len(retainMainMemStack) {
+		retainMainMems = make([]memtable.Table, 0, shardCount)
+	}
 	for i, add := range shardAdds {
 		if add == 0 {
 			continue
@@ -29213,10 +29345,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if !allDeletes {
 		eligibleIdxs = b.eligibleIdxs
 		if cap(eligibleIdxs) < len(b.entries) {
-			eligibleIdxs = make([]int, 0, len(b.entries))
-		} else {
-			eligibleIdxs = eligibleIdxs[:0]
+			if cap(eligibleIdxs) > 0 {
+				b.db.putBatchIntSlice(eligibleIdxs)
+			}
+			eligibleIdxs = b.db.getBatchIntSlice(len(b.entries))
 		}
+		eligibleIdxs = eligibleIdxs[:0]
 		b.eligibleIdxs = eligibleIdxs
 		if valueLogEnabled || debugPtr {
 			for i := range b.entries {
@@ -29548,6 +29682,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			idxs := shardIdxSets[i]
 			if cap(idxs) < count {
+				if cap(idxs) > 0 {
+					b.db.putBatchIntSlice(idxs)
+				}
 				idxs = b.db.getBatchIntSlice(count)
 			} else {
 				idxs = idxs[:0]
@@ -29574,10 +29711,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(idxs)))
 			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				if _, ok := retainMainSeen[shard.mem]; !ok {
-					retainMainSeen[shard.mem] = struct{}{}
-					retainMainMems = append(retainMainMems, shard.mem)
-				}
+				retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
 			}
 			if b.streamEligible {
 				first := b.entries[idxs[0]].Key
@@ -29621,6 +29755,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			if count > 0 {
 				entries := shardEntries[i]
 				if cap(entries) < count {
+					if cap(entries) > 0 {
+						b.db.putBatchShardEntries(entries)
+					}
 					entries = b.db.getBatchShardEntries(count)
 				} else {
 					entries = entries[:0]
@@ -29649,10 +29786,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
 			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				if _, ok := retainMainSeen[shard.mem]; !ok {
-					retainMainSeen[shard.mem] = struct{}{}
-					retainMainMems = append(retainMainMems, shard.mem)
-				}
+				retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
 			}
 			storeInlinePtrValues := !b.db.memtableValueLogPointers
 			appliedSortedRun := false
@@ -29674,10 +29808,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					appliedSortedRun = true
 				} else if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
 					if borrowed := applier.ApplyCopySortedBatchTrusted(entries, allowBatchArenaBorrow, storeInlinePtrValues, nil); borrowed {
-						if _, ok := retainMainSeen[shard.mem]; !ok {
-							retainMainSeen[shard.mem] = struct{}{}
-							retainMainMems = append(retainMainMems, shard.mem)
-						}
+						retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
 					}
 					appliedSortedRun = true
 				}
@@ -29699,10 +29830,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						}
 						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
 						if borrowed {
-							if _, ok := retainMainSeen[shard.mem]; !ok {
-								retainMainSeen[shard.mem] = struct{}{}
-								retainMainMems = append(retainMainMems, shard.mem)
-							}
+							retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
 						}
 					}
 					if useStream {
@@ -29741,9 +29869,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.updateBatchCopyHint()
 	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueIdxs))
+	var ptrTouchedMemStack [batchMemtableRetainStackCap]memtable.Table
+	ptrTouchedMems := ptrTouchedMemStack[:0]
 	if allowBatchArenaBorrow && len(b.ptrValueIdxs) > 0 {
-		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueIdxs))
 		for _, idx := range b.ptrValueIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
 				b.db.writeMu.RUnlock()
@@ -29762,11 +29890,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			if mt == nil {
 				continue
 			}
-			if _, ok := seenPtrMems[mt]; ok {
-				continue
-			}
-			seenPtrMems[mt] = struct{}{}
-			ptrTouchedMems = append(ptrTouchedMems, mt)
+			ptrTouchedMems = appendUniqueMemtable(ptrTouchedMems, mt)
 		}
 	}
 	if b.ptrValueIdxs != nil {
@@ -30246,6 +30370,15 @@ func (b *Batch) Close() error {
 	}
 	if b.db != nil && b.shardIdxs != nil {
 		b.db.putBatchIntSlice(b.shardIdxs)
+	}
+	if b.db != nil && b.eligibleIdxs != nil {
+		b.db.putBatchIntSlice(b.eligibleIdxs)
+	}
+	if b.db != nil && b.shardAdds != nil {
+		b.db.putBatchInt64Slice(b.shardAdds)
+	}
+	if b.db != nil && b.shardCnts != nil {
+		b.db.putBatchIntSlice(b.shardCnts)
 	}
 	if b.db != nil && b.shardIdxSets != nil && cap(b.shardIdxSets) > 0 {
 		full := b.shardIdxSets[:cap(b.shardIdxSets)]
