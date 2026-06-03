@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -127,6 +128,13 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	exact, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1})
 	if err != nil || len(exact.Results) != 1 {
 		t.Fatalf("exact SearchVectorIndex results=%d err=%v", len(exact.Results), err)
+	}
+}
+
+func TestColumnGraphScalarU8QuantizedAssetBuildRejectsDimensionOverflow1926(t *testing.T) {
+	_, err := buildColumnVectorGraphScalarU8Codes(VectorIndexDefinition{Dimensions: math.MaxInt}, []columnVectorGraphAssetRow{{}, {}})
+	if err == nil || !strings.Contains(err.Error(), "codes bytes overflow") {
+		t.Fatalf("buildColumnVectorGraphScalarU8Codes err=%v want codes bytes overflow", err)
 	}
 }
 

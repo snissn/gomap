@@ -194,6 +194,9 @@ func buildColumnVectorGraphScalarU8Codes(def VectorIndexDefinition, rows []colum
 	if def.Dimensions <= 0 {
 		return nil, errors.New("collections: column_graph quantized asset dimensions must be positive")
 	}
+	if len(rows) != 0 && def.Dimensions > math.MaxInt/len(rows) {
+		return nil, errors.New("collections: column_graph quantized asset codes bytes overflow")
+	}
 	codes := make([]byte, 0, len(rows)*def.Dimensions)
 	for rowIdx, row := range rows {
 		if len(row.Vector) != def.Dimensions {

@@ -715,8 +715,10 @@ count, and typed-column asset refs by logical type plus physical encoding. Its
 asset roles include adjacency (`uint32_list` over
 `raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
 optional normalized vectors (`float32_vector` over `raw_float32_vector`), row
-references (`int64` over `raw_int64`), and exact returned document IDs (`bytes`
-over `raw_bytes_offsets`). The active manifest checksum includes
+references (`int64` over `raw_int64`), exact returned document IDs (`bytes`
+over `raw_bytes_offsets`), and quantized code assets (`quantized_codes` role,
+`byte_vector` over `raw_fixed_bytes`, asset IDs `quantized/<name>/codes`) for
+declared scalar_u8 score planes. The active manifest checksum includes
 the control record, but the record's base checksum excludes vector-index derived
 records so stale-state checks compare against authoritative collection data. See
 `vector-index-state-manifest.md` and `vector-index-row-ref-state-1993.md` for
