@@ -273,13 +273,16 @@ func (r *columnVectorGraphPhysicalRowReader) validateQuantizedNativeSearchOption
 	if !ok {
 		return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q has no loaded quantized score-plane asset", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
 	}
+	if status.Err != nil {
+		return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q score-plane asset unavailable: %w", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName, status.Err)
+	}
 	if status.Prepared == nil {
-		if status.Err != nil {
-			return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q score-plane asset unavailable: %w", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName, status.Err)
-		}
 		return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q has no loaded quantized score-plane asset", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
 	}
-	return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q prepared; quantized scorer is unavailable in this build", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
+	if mode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q prepared; quantized exact rerank is unavailable in this build", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
+	}
+	return nil
 }
 
 type columnVectorGraphAdjacencySourceCounterSnapshot struct {
@@ -352,6 +355,8 @@ type columnVectorGraphNativeSearchStats struct {
 	ScoreBatchOptimizedCalls             uint64
 	ScoreBatchScalarFallbackCalls        uint64
 	PreparedScoreCalls                   uint64
+	QuantizedScoreCalls                  uint64
+	QuantizedCodeBytesRead               uint64
 	ScoreFloat64Fallbacks                uint64
 	BlockViewHits                        uint64
 	BlockViewMisses                      uint64
@@ -871,6 +876,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	scoreTileScores     []float64
 	scoreTileRowIDs     []uint32
 	scoreTileDots       []float32
+	quantizedQueryCodes []byte
 	wavefrontCandidates []columnVectorGraphSearchCandidate
 	searchPlan          columnVectorGraphSearchPlan
 }
@@ -985,6 +991,13 @@ func resizeColumnVectorGraphNativeFloat32Scratch(dst []float32, target int) []fl
 func resizeColumnVectorGraphNativeFloat64Scratch(dst []float64, target int) []float64 {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		return make([]float64, 0, target)
+	}
+	return dst[:0]
+}
+
+func resizeColumnVectorGraphNativeByteScratch(dst []byte, target int) []byte {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]byte, 0, target)
 	}
 	return dst[:0]
 }
@@ -1188,6 +1201,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if err != nil {
 		return nil, stats, err
 	}
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedOnly {
+		plan.quantizedScorer, err = r.prepareScalarU8QuantizedOnlyScorer(opts.QuantizedIndexName, query, queryInvNorm, scratch)
+		if err != nil {
+			return nil, stats, err
+		}
+		plan.quantizedScorerActive = true
+	}
 	plan.scoreBatchMode = columnVectorGraphScoreBatchModeForSearchPlan(opts.ScoreBatchMode, plan)
 	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront {
 		if plan.preparedSearch == nil {
@@ -1196,13 +1216,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		stats.WavefrontSearches = 1
 		stats.WavefrontWidth = uint64(wavefrontWidth)
 	}
-	if loopCounters == nil && plan.preparedSearch == nil {
+	if loopCounters == nil && (plan.preparedSearch == nil || plan.quantizedScorerActive) {
 		loopCounters = &columnVectorGraphNativeSearchLoopCounters{}
 	}
 	countLoopEdges := loopCounters != nil
 	if plan.preparedSearch != nil {
 		stats.PreparedGraphSearchViews = 1
-		if statsMode.minimal() {
+		if statsMode.minimal() && !plan.quantizedScorerActive {
 			preparedMinimalCounters = newColumnVectorGraphPreparedMinimalSearchCounters(plan.preparedSearch)
 		}
 	}
@@ -1896,6 +1916,9 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 }
 
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if plan != nil && plan.quantizedScorerActive {
+		return plan.quantizedScorer.scoreOrdinal(ordinal, stats)
+	}
 	if plan != nil && plan.preparedSearch != nil {
 		return plan.preparedSearch.scoreOrdinal(plan, query, queryInvNorm, ordinal, stats)
 	}
@@ -1906,6 +1929,9 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGrap
 }
 
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinals(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	if plan != nil && plan.quantizedScorerActive {
+		return plan.quantizedScorer.scoreOrdinals(ordinals, dst, stats)
+	}
 	if plan != nil && plan.preparedSearch != nil {
 		return plan.preparedSearch.scoreOrdinals(plan, query, queryInvNorm, ordinals, dst, scratch, stats)
 	}
