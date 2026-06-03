@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 )
@@ -136,6 +137,23 @@ func selectLeafGenerationPackCandidatesBounded(plan LeafGenerationPlan, opts Lea
 	return finalizeLeafGenerationPackSelection(out, opts, rejectedOversize, rejected)
 }
 
+var errLeafGenerationPackSelectionThreshold = errors.New("leaf generation pack selection threshold")
+
+type leafGenerationPackSelectionThresholdErr struct {
+	err error
+}
+
+func (e leafGenerationPackSelectionThresholdErr) Error() string {
+	if e.err == nil {
+		return errLeafGenerationPackSelectionThreshold.Error()
+	}
+	return e.err.Error()
+}
+
+func (e leafGenerationPackSelectionThresholdErr) Unwrap() error {
+	return errLeafGenerationPackSelectionThreshold
+}
+
 type leafGenerationPackSelectionThresholdRejections struct {
 	minBytes   bool
 	minRatio   bool
@@ -169,16 +187,19 @@ func leafGenerationPackSelectionThresholdError(opts LeafGenerationPackSelectOpti
 	if opts.Force {
 		return nil
 	}
+	var err error
 	switch {
 	case opts.MinExpectedReclaimBytes > 0 && rejected.minBytes:
-		return fmt.Errorf("leaf generation pack selection: no candidate generations satisfy min-expected-reclaim-bytes=%d", opts.MinExpectedReclaimBytes)
+		err = fmt.Errorf("leaf generation pack selection: no candidate generations satisfy min-expected-reclaim-bytes=%d", opts.MinExpectedReclaimBytes)
 	case opts.MinExpectedReclaimRatioPPM > 0 && rejected.minRatio:
-		return fmt.Errorf("leaf generation pack selection: no candidate generations satisfy min-expected-reclaim-ratio-ppm=%d", opts.MinExpectedReclaimRatioPPM)
+		err = fmt.Errorf("leaf generation pack selection: no candidate generations satisfy min-expected-reclaim-ratio-ppm=%d", opts.MinExpectedReclaimRatioPPM)
 	case opts.MinReclaimPerByteCopiedPPM > 0 && rejected.minPerCopy:
-		return fmt.Errorf("leaf generation pack selection: no candidate generations satisfy min-reclaim-per-byte-copied-ppm=%d", opts.MinReclaimPerByteCopiedPPM)
-	default:
+		err = fmt.Errorf("leaf generation pack selection: no candidate generations satisfy min-reclaim-per-byte-copied-ppm=%d", opts.MinReclaimPerByteCopiedPPM)
+	}
+	if err == nil {
 		return nil
 	}
+	return leafGenerationPackSelectionThresholdErr{err: err}
 }
 
 func finalizeLeafGenerationPackSelection(out LeafGenerationPackSelection, opts LeafGenerationPackSelectOptions, rejectedOversize bool, rejected leafGenerationPackSelectionThresholdRejections) (LeafGenerationPackSelection, error) {

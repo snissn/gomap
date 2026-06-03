@@ -1091,6 +1091,182 @@ func TestCompactStorageLeafGenerationProtectedRootIDPairMergesSourcesOnce(t *tes
 	}
 }
 
+func TestCompactStorageReportsAndCompactsSelectableLeafPackDebt(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "k", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, d, "z", 32, 'z')
+	d.SetLeafPageLog(nil)
+
+	plan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := plan.RemainingDebt.LeafPackGenerations; got == 0 {
+		t.Fatalf("LeafPackGenerations=%d want selectable debt, plan=%+v debt=%+v", got, plan.LeafGenerationPlan, plan.RemainingDebt)
+	}
+	if got := plan.LeafGenerationPlan.ExpectedReclaimPerByteCopiedPPM; got < leafGenerationPackDefaultMinReclaimPerByteCopiedPPM {
+		t.Fatalf("test setup produced low-yield plan per-copy=%d, want >= %d", got, leafGenerationPackDefaultMinReclaimPerByteCopiedPPM)
+	}
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{LeafPackMaxPasses: 4})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran {
+		t.Fatalf("expected first leaf-generation pack to run, packs=%+v", stats.LeafGenerationPacks)
+	}
+	if stats.RemainingDebt.LeafPackGenerations != 0 || stats.RemainingDebt.LeafPackBytes != 0 {
+		t.Fatalf("remaining leaf-pack debt=%+v, want none", stats.RemainingDebt)
+	}
+	if !stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
+	}
+}
+
+func TestCompactStoragePlanSkipsLowYieldLeafPackDebtByDefault(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "k", 32768, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "k", 0, 1, 'b')
+	d.SetLeafPageLog(nil)
+
+	plan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if plan.LeafGenerationPlan.ExpectedReclaimBytes <= 0 || len(plan.LeafGenerationPlan.Candidates) == 0 {
+		t.Fatalf("test setup produced no raw leaf-pack candidate: plan=%+v", plan.LeafGenerationPlan)
+	}
+	if got := plan.LeafGenerationPlan.ExpectedReclaimPerByteCopiedPPM; got >= leafGenerationPackDefaultMinReclaimPerByteCopiedPPM {
+		t.Fatalf("test setup per-copy=%d, want below default %d", got, leafGenerationPackDefaultMinReclaimPerByteCopiedPPM)
+	}
+	if got := plan.RemainingDebt.LeafPackGenerations; got != 0 {
+		t.Fatalf("low-yield LeafPackGenerations=%d want 0, plan=%+v debt=%+v", got, plan.LeafGenerationPlan, plan.RemainingDebt)
+	}
+	if got := plan.RemainingDebt.LeafPackBytes; got != 0 {
+		t.Fatalf("low-yield LeafPackBytes=%d want 0, plan=%+v debt=%+v", got, plan.LeafGenerationPlan, plan.RemainingDebt)
+	}
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{LeafPackMaxPasses: 1})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if len(stats.LeafGenerationPacks) == 0 || stats.LeafGenerationPacks[0].Ran {
+		t.Fatalf("expected low-yield leaf pack to skip, packs=%+v", stats.LeafGenerationPacks)
+	}
+	if !stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=false for low-yield residual, remaining debt=%+v", stats.RemainingDebt)
+	}
+}
+
+func TestCompactStoragePlanLeafPackDebtUsesBoundedSelection(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "dense", 32768, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf dense: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "dense", 0, 1, 'b')
+
+	writeLeafGenerationKeys(t, d, "sparse", 2048, 'c')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf sparse: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "sparse", 0, 1024, 'd')
+	d.SetLeafPageLog(nil)
+
+	const minPerCopy = 200000
+	plan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		LeafPackMaxGenerationsPerPass: 1,
+		LeafPackMinReclaimPerCopyPPM:  minPerCopy,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := plan.LeafGenerationPlan.ExpectedReclaimPerByteCopiedPPM; got >= minPerCopy {
+		t.Fatalf("test setup whole-plan per-copy=%d, want below %d to prove bounded selection", got, minPerCopy)
+	}
+	if got := plan.RemainingDebt.LeafPackGenerations; got != 1 {
+		t.Fatalf("bounded selection LeafPackGenerations=%d want 1, plan=%+v debt=%+v", got, plan.LeafGenerationPlan, plan.RemainingDebt)
+	}
+	if got := plan.RemainingDebt.LeafPackBytes; got <= 0 {
+		t.Fatalf("bounded selection LeafPackBytes=%d want >0, debt=%+v", got, plan.RemainingDebt)
+	}
+}
+
+func TestCompactStorageStopsLeafPackOnLowYieldResidualWithinPassBudget(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "dense", 32768, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf dense: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "dense", 0, 1, 'b')
+
+	writeLeafGenerationKeys(t, d, "sparse", 2048, 'c')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf sparse: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "sparse", 0, 1024, 'd')
+	d.SetLeafPageLog(nil)
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{
+		LeafPackMaxPasses:             4,
+		LeafPackMaxGenerationsPerPass: 1,
+		LeafPackMinReclaimPerCopyPPM:  200000,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if len(stats.LeafGenerationPacks) < 2 {
+		t.Fatalf("expected run plus bounded low-yield skip, packs=%+v", stats.LeafGenerationPacks)
+	}
+	if !stats.LeafGenerationPacks[0].Ran {
+		t.Fatalf("first pack did not run: %+v", stats.LeafGenerationPacks[0])
+	}
+	if stats.LeafGenerationPacks[1].Ran || stats.LeafGenerationPacks[1].SkipReason == "" {
+		t.Fatalf("second pack should stop on low-yield residual, packs=%+v", stats.LeafGenerationPacks)
+	}
+	if len(stats.LeafGenerationPacks) > 2 {
+		t.Fatalf("leaf pack did not stop after low-yield residual, packs=%+v", stats.LeafGenerationPacks)
+	}
+	if !stats.FullyCompacted || stats.RemainingDebt.LeafPackGenerations != 0 || stats.RemainingDebt.LeafPackBytes != 0 {
+		t.Fatalf("expected bounded full compaction after low-yield residual, fully=%t debt=%+v", stats.FullyCompacted, stats.RemainingDebt)
+	}
+}
+
+func TestCompactStoragePlanIgnoresEmptyAndCurrentLeafGenerations(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+	d.SetLeafPageLog(nil)
+
+	empty, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan empty: %v", err)
+	}
+	if empty.RemainingDebt.LeafPackGenerations != 0 || empty.RemainingDebt.LeafGCGenerations != 0 {
+		t.Fatalf("empty leaf generation reported debt=%+v", empty.RemainingDebt)
+	}
+
+	d.SetLeafPageLog(leafLog)
+	writeLeafGenerationKeys(t, d, "current", 64, 'z')
+	d.SetLeafPageLog(nil)
+	current, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan current: %v", err)
+	}
+	if current.RemainingDebt.LeafPackGenerations != 0 || current.RemainingDebt.LeafGCGenerations != 0 {
+		t.Fatalf("current writable leaf generation reported debt=%+v plan=%+v", current.RemainingDebt, current.LeafGenerationPlan)
+	}
+}
+
 func compactStoragePhaseSeen(phases []CompactStoragePhaseStats, name string) bool {
 	for _, phase := range phases {
 		if phase.Name == name {
