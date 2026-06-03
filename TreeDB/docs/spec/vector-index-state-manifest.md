@@ -81,9 +81,12 @@ Quantized-code state uses one `quantized_codes` asset per declared quantized
 index, distinguished by asset id `quantized/<name>/codes`. Current #1926
 scalar_u8 slices use this prepared state for explicit `quantized_only` scoring
 and for `quantized_rerank` candidate collection before exact reranking the
-validated shortlist by graph ordinal. Missing, stale, mismatched, or unprepared
-quantized assets still fail closed; quantized modes must not silently fall back to
-exact candidate collection. Legacy graph row ID bytes remain compatibility or
+validated shortlist by graph ordinal. `quantized_rerank` traverses the normalized
+`ef_search` candidate pool, then trims to `QuantizedRerankCandidates` before
+reading authoritative vectors/norms for exact scores. Missing, stale,
+mismatched, or unprepared quantized assets still fail closed; quantized modes
+must not silently fall back to exact candidate collection. Legacy graph row ID
+bytes remain compatibility or
 quarantine fallback records only for old physical graph row assets; current
 healthy rebuilds return IDs from TVIS `document_ids` bytes state.
 

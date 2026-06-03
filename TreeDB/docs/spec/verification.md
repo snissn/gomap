@@ -924,6 +924,40 @@ Coverage:
     default-gating decision; `BenchmarkColumnVectorGraphSearchPromotion2103`
     emits the default/scalar/indexed promotion rows.
 
+## 12.10 Quantized Vector Score Planes
+
+Invariant:
+- Exact/default `column_graph` search remains authoritative float32-vector
+  scoring unless callers explicitly select a named quantized score plane.
+- `quantized_only` returns estimated scalar_u8 scores and must not read exact
+  vectors or norms during scoring.
+- `quantized_rerank` uses quantized traversal over the normalized `ef_search`
+  candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks only that
+  shortlist by graph ordinal, and returns exact cosine scores.
+- Missing, stale, mismatched, unsupported, or unprepared quantized assets fail
+  closed with no hidden exact fallback.
+
+Coverage:
+- Policy owner: `TreeDB/docs/spec/quantized-vector-index.md`.
+- Runtime tests:
+  - `TreeDB/collections/column_vector_graph_quantized_asset_test.go` covers
+    scalar_u8 asset build/prepare/reopen, quantized_only score semantics,
+    quantized_rerank exact shortlist ranking, normalized `ef_search` traversal
+    before trim, multiple quantized indexes, concurrency, and fail-closed asset
+    validation.
+  - `TreeDB/collections/vector_index_search_test.go` covers public exact,
+    quantized_only, quantized_rerank, searcher buffer, and missing-name behavior.
+  - `TreeDB/internal/quantizedasset/quantized_asset_test.go` covers prepared
+    ordinal readers, role/schema validation, footprint metrics, and scorer-shaped
+    allocation benchmarks.
+- Benchmarks:
+  - `BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926` reports exact vs
+    `quantized_only` vs `quantized_rerank` `ns/op`, `ops/sec`, `B/op`,
+    `allocs/op`, recall@K, candidate/rerank counts, code bytes, exact vector/norm
+    bytes, fallback counters, and asset bytes/vector on one fixture.
+  - `BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926` reports rebuild
+    cost and storage/asset bytes for exact assets versus scalar_u8 assets.
+
 ## 13. Native Wire Protocol
 
 Invariant:

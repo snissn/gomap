@@ -106,6 +106,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - user-facing quickstart, benchmark matrix, demo, and caveats for explicit
     `column_graph` vector indexes that search through the native physical column
     row reader.
+- `TreeDB/docs/spec/quantized-vector-index.md`
+  - issue #1926 scalar_u8 quantized score-plane semantics, fail-closed query
+    modes, exact rerank behavior, benchmark/storage evidence, and future-work
+    boundaries.
 - `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
   - issue #2036 role-specific prepared runtime-view and admission policy for
     current-format typed-column graph search.
