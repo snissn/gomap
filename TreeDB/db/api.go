@@ -414,12 +414,18 @@ func (it *DBIterator) Valid() bool {
 	return it.iter.Valid() && it.err == nil
 }
 
+// Key returns a read-only view of the current key. The view is valid only
+// until the next Next()/Seek()/Close() on this iterator; use KeyCopy for
+// stable bytes.
 func (it *DBIterator) Key() []byte {
-	return it.KeyCopy(nil)
+	return it.UnsafeKey()
 }
 
+// Value returns a read-only view of the current value. The view is valid only
+// until the next Next()/Seek()/Close() on this iterator; use ValueCopy for
+// stable bytes.
 func (it *DBIterator) Value() []byte {
-	return it.ValueCopy(nil)
+	return it.UnsafeValue()
 }
 
 func (it *DBIterator) KeyCopy(dst []byte) []byte {

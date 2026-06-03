@@ -219,7 +219,7 @@ func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
 	}
 }
 
-func TestIteratorKeyValueAreDefensiveCopies(t *testing.T) {
+func TestIteratorKeyValueViewsAndCopyOwnership(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -240,29 +240,31 @@ func TestIteratorKeyValueAreDefensiveCopies(t *testing.T) {
 		t.Fatalf("iterator invalid")
 	}
 
-	unsafeKeyBefore := append([]byte(nil), it.UnsafeKey()...)
-	unsafeValBefore := append([]byte(nil), it.UnsafeValue()...)
-	key := it.Key()
-	val := it.Value()
-
-	if len(key) > 0 && len(it.UnsafeKey()) > 0 && &key[0] == &it.UnsafeKey()[0] {
-		t.Fatalf("Key returned unsafe alias")
+	keyView := it.Key()
+	valueView := it.Value()
+	if !sameBacking(keyView, it.UnsafeKey()) {
+		t.Fatalf("Key() should return the current iterator view")
 	}
-	if len(val) > 0 && len(it.UnsafeValue()) > 0 && &val[0] == &it.UnsafeValue()[0] {
-		t.Fatalf("Value returned unsafe alias")
+	if !sameBacking(valueView, it.UnsafeValue()) {
+		t.Fatalf("Value() should return the current iterator view")
 	}
 
-	if len(key) > 0 {
-		key[0] ^= 0x1
+	keyCopy := it.KeyCopy(make([]byte, 0, 16))
+	valueCopy := it.ValueCopy(make([]byte, 0, 16))
+	if sameBacking(keyCopy, keyView) {
+		t.Fatalf("KeyCopy() must return caller-owned bytes")
 	}
-	if len(val) > 0 {
-		val[0] ^= 0x1
+	if sameBacking(valueCopy, valueView) {
+		t.Fatalf("ValueCopy() must return caller-owned bytes")
 	}
-	if !bytes.Equal(it.UnsafeKey(), unsafeKeyBefore) {
-		t.Fatalf("mutating Key() changed iterator state")
+
+	keyCopy[0] ^= 0x1
+	valueCopy[0] ^= 0x1
+	if !bytes.Equal(it.UnsafeKey(), []byte("k1")) {
+		t.Fatalf("mutating KeyCopy() changed iterator key view")
 	}
-	if !bytes.Equal(it.UnsafeValue(), unsafeValBefore) {
-		t.Fatalf("mutating Value() changed iterator state")
+	if !bytes.Equal(it.UnsafeValue(), []byte("value1")) {
+		t.Fatalf("mutating ValueCopy() changed iterator value view")
 	}
 }
 

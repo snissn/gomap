@@ -256,6 +256,77 @@ type preferGetManyDB struct {
 	getManyCalls int
 }
 
+type scanViewOnlyDB struct {
+	fixedNameDB
+	entries        []scanViewEntry
+	keyCalls       int
+	valueCalls     int
+	keyCopyCalls   int
+	valueCopyCalls int
+}
+
+type scanViewEntry struct {
+	key   []byte
+	value []byte
+}
+
+type scanViewOnlyIterator struct {
+	db      *scanViewOnlyDB
+	entries []scanViewEntry
+	idx     int
+}
+
+func (d *scanViewOnlyDB) Set(key, value []byte) error {
+	d.entries = append(d.entries, scanViewEntry{
+		key:   append([]byte(nil), key...),
+		value: append([]byte(nil), value...),
+	})
+	return nil
+}
+
+func (d *scanViewOnlyDB) Iterator(start, end []byte) (kvstore.Iterator, error) {
+	sorted := append([]scanViewEntry(nil), d.entries...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return bytes.Compare(sorted[i].key, sorted[j].key) < 0
+	})
+	filtered := sorted[:0]
+	for _, entry := range sorted {
+		if start != nil && bytes.Compare(entry.key, start) < 0 {
+			continue
+		}
+		if end != nil && bytes.Compare(entry.key, end) >= 0 {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return &scanViewOnlyIterator{db: d, entries: filtered}, nil
+}
+
+func (d *scanViewOnlyDB) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
+	return nil, kvstore.ErrUnsupported
+}
+
+func (it *scanViewOnlyIterator) Valid() bool { return it.idx < len(it.entries) }
+func (it *scanViewOnlyIterator) Next()       { it.idx++ }
+func (it *scanViewOnlyIterator) Key() []byte {
+	it.db.keyCalls++
+	return it.entries[it.idx].key
+}
+func (it *scanViewOnlyIterator) Value() []byte {
+	it.db.valueCalls++
+	return it.entries[it.idx].value
+}
+func (it *scanViewOnlyIterator) KeyCopy(dst []byte) []byte {
+	it.db.keyCopyCalls++
+	return append(dst[:0], it.entries[it.idx].key...)
+}
+func (it *scanViewOnlyIterator) ValueCopy(dst []byte) []byte {
+	it.db.valueCopyCalls++
+	return append(dst[:0], it.entries[it.idx].value...)
+}
+func (it *scanViewOnlyIterator) Error() error { return nil }
+func (it *scanViewOnlyIterator) Close() error { return nil }
+
 type countingReadSnapshotDB struct {
 	getCalls               atomic.Int64
 	setCalls               atomic.Int64
@@ -388,6 +459,46 @@ func TestRunBenchmark_PreloadsForReadAndScanOnly(t *testing.T) {
 	}
 	if math.IsNaN(prefix) || prefix <= 0 {
 		t.Fatalf("expected prefix_scan > 0, got %v", prefix)
+	}
+}
+
+func TestRunBenchmark_ScansUseIteratorViewsNotCopies(t *testing.T) {
+	var db *scanViewOnlyDB
+	const dbName = "scan_view_only"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = &scanViewOnlyDB{fixedNameDB: fixedNameDB{name: "ScanViewOnly"}}
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:         64,
+		ValueSize:    16,
+		BatchSize:    16,
+		RangeQueries: 8,
+		RangeSpan:    4,
+		DBsArg:       dbName,
+		TestsArg:     "full_scan,prefix_scan",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected test DB instance")
+	}
+	if db.keyCopyCalls != 0 || db.valueCopyCalls != 0 {
+		t.Fatalf("scan benchmarks should use Key()/Value() views, got KeyCopy=%d ValueCopy=%d", db.keyCopyCalls, db.valueCopyCalls)
+	}
+	if db.keyCalls == 0 || db.valueCalls == 0 {
+		t.Fatalf("expected Key()/Value() view calls, got Key=%d Value=%d", db.keyCalls, db.valueCalls)
+	}
+	if got := run.Results["full_scan"][db.Name()]; math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected full_scan > 0, got %v", got)
+	}
+	if got := run.Results["prefix_scan"][db.Name()]; math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected prefix_scan > 0, got %v", got)
 	}
 }
 
