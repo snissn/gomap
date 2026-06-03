@@ -443,7 +443,6 @@ func (c *leafPageReadCache) getViewLockedWithState(ptr page.LeafLogPtr) ([]byte,
 }
 
 func (c *leafPageReadCache) recordHitState(state leafPageReadCacheState) {
-	c.hits.Add(1)
 	if state.PageChecksumVerified {
 		c.pageChecksumVerifiedHits.Add(1)
 	} else {
@@ -479,8 +478,10 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		return leafPageReadCacheStats{}
 	}
 	entries := c.entries.Load()
+	verifiedHits := c.pageChecksumVerifiedHits.Load()
+	unverifiedHits := c.pageChecksumUnverifiedHits.Load()
 	return leafPageReadCacheStats{
-		Hits:                            c.hits.Load(),
+		Hits:                            verifiedHits + unverifiedHits,
 		Misses:                          c.misses.Load(),
 		Stores:                          c.stores.Load(),
 		Evictions:                       c.evictions.Load(),
@@ -492,8 +493,8 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		ReadMissAdmissionStores:         c.readMissAdmissionStores.Load(),
 		RecordChecksumVerifiedStores:    c.recordChecksumVerifiedStores.Load(),
 		PageChecksumVerifiedMarks:       c.pageChecksumVerifiedMarks.Load(),
-		PageChecksumVerifiedHits:        c.pageChecksumVerifiedHits.Load(),
-		PageChecksumUnverifiedHits:      c.pageChecksumUnverifiedHits.Load(),
+		PageChecksumVerifiedHits:        verifiedHits,
+		PageChecksumUnverifiedHits:      unverifiedHits,
 		PageChecksumMarkMisses:          c.pageChecksumMarkMisses.Load(),
 		PageChecksumMarkUnsafeSkips:     c.pageChecksumMarkUnsafeSkips.Load(),
 	}
