@@ -76,15 +76,15 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 		t.Fatalf("prepared rows=%d want %d", prepared.Rows(), len(rows))
 	}
 	row0, ok := prepared.CodeRowBytes("codes", 0)
-	if !ok || !bytes.Equal(row0, []byte{255, 128, 0}) {
+	if !ok || !bytes.Equal(row0, []byte{218, 128, 37}) {
 		t.Fatalf("row0 codes=%v ok=%v", row0, ok)
 	}
 	row1, ok := prepared.CodeRowBytes("codes", 1)
-	if !ok || !bytes.Equal(row1, []byte{96, 223, 128}) {
+	if !ok || !bytes.Equal(row1, []byte{87, 248, 128}) {
 		t.Fatalf("row1 codes=%v ok=%v", row1, ok)
 	}
 	row2, ok := prepared.CodeRowBytes("codes", 2)
-	if !ok || !bytes.Equal(row2, []byte{191, 64, 159}) {
+	if !ok || !bytes.Equal(row2, []byte{213, 42, 170}) {
 		t.Fatalf("row2 codes=%v ok=%v", row2, ok)
 	}
 
@@ -135,6 +135,19 @@ func TestColumnGraphScalarU8QuantizedAssetBuildRejectsDimensionOverflow1926(t *t
 	_, err := buildColumnVectorGraphScalarU8Codes(VectorIndexDefinition{Dimensions: math.MaxInt}, []columnVectorGraphAssetRow{{}, {}})
 	if err == nil || !strings.Contains(err.Error(), "codes bytes overflow") {
 		t.Fatalf("buildColumnVectorGraphScalarU8Codes err=%v want codes bytes overflow", err)
+	}
+}
+
+func TestColumnGraphScalarU8QuantizedAssetBuildNormalizesCosineRows1926(t *testing.T) {
+	codes, err := buildColumnVectorGraphScalarU8Codes(VectorIndexDefinition{Metric: VectorMetricCosine, Dimensions: 2}, []columnVectorGraphAssetRow{
+		{Vector: []float32{1, 0}, InvNorm: 1},
+		{Vector: []float32{2, 0}, InvNorm: 0.5},
+	})
+	if err != nil {
+		t.Fatalf("buildColumnVectorGraphScalarU8Codes: %v", err)
+	}
+	if !bytes.Equal(codes[:2], codes[2:]) || !bytes.Equal(codes[:2], []byte{255, 128}) {
+		t.Fatalf("codes=%v want equivalent cosine directions encoded identically as [255 128]", codes)
 	}
 }
 

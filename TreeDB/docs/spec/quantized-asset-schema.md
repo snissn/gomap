@@ -31,9 +31,12 @@ options expose explicit `exact`, `quantized_only`, and `quantized_rerank` query
 modes. The zero/default mode remains exact.
 
 The first #1926 asset-lifecycle slice builds and loads `scalar_u8` v1 `codes`
-assets for declared `column_graph` quantized indexes. Rebuild emits one dense
-fixed-byte typed-column part per declared quantized index in graph ordinal order,
-records it in vector-index state as `quantized_codes` with asset id
+assets for declared `column_graph` quantized indexes. For the current cosine
+`column_graph` metric, scalar_u8 codes are encoded from inverse-norm-normalized
+vector components so equivalent directions persist the same score-plane rows.
+Rebuild emits one dense fixed-byte typed-column part per declared quantized index
+in graph ordinal order, records it in vector-index state as `quantized_codes`
+with asset id
 `quantized/<name>/codes`, and validates the prepared asset against the base graph
 generation/checksum/schema identity on open. Quantized modes validate the
 selected name/options and asset load status, then still fail closed with

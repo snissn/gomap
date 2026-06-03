@@ -202,8 +202,15 @@ func buildColumnVectorGraphScalarU8Codes(def VectorIndexDefinition, rows []colum
 		if len(row.Vector) != def.Dimensions {
 			return nil, fmt.Errorf("collections: column_graph quantized asset row %d vector dimensions=%d want %d", rowIdx, len(row.Vector), def.Dimensions)
 		}
+		if def.Metric == VectorMetricCosine && (row.InvNorm <= 0 || math.IsNaN(float64(row.InvNorm)) || math.IsInf(float64(row.InvNorm), 0)) {
+			return nil, fmt.Errorf("collections: column_graph quantized asset row %d inverse norm is invalid", rowIdx)
+		}
 		for _, value := range row.Vector {
-			codes = append(codes, columnVectorGraphScalarU8Code(value))
+			codeValue := value
+			if def.Metric == VectorMetricCosine {
+				codeValue *= row.InvNorm
+			}
+			codes = append(codes, columnVectorGraphScalarU8Code(codeValue))
 		}
 	}
 	return codes, nil
