@@ -26,6 +26,14 @@ validation are correctness checks, not the preferred vector response-shape
 evidence; use `ProjectionOrientedVectorDocumentFetchPreset` in collection/vector
 APIs when timing projected documents without embeddings.
 
+For `-vector-index-strategy column_graph`, the demo can also select explicit
+TreeDB query modes with `-vector-query-mode exact|quantized_only|quantized_rerank`.
+Quantized modes declare a named `scalar_u8` score plane on the TreeDB vector
+index, build it during `RebuildVectorIndex`, validate recall against exact
+full-vector ground truth, and report per-search quantized counters. They do not
+change exact/default behavior and do not affect PostgreSQL+pgvector comparator
+semantics in the external harness.
+
 `CompactStorageFull` is intentionally used instead of manually chaining
 maintenance calls. It is TreeDB's canonical full storage compaction path:
 value-log rewrite/GC, leaf-generation pack/GC, index vacuum, settle passes,
@@ -49,6 +57,26 @@ GOWORK=off go run ./cmd/treedb_vector_search_demo \
   -compact=true \
   -disable-exact-fallback=true \
   -require-leaf-vlog-bytes \
+  -json
+```
+
+TreeDB column_graph quantized-rerank example:
+
+```sh
+GOWORK=off go run ./cmd/treedb_vector_search_demo \
+  -matrix=false \
+  -vector-index-strategy column_graph \
+  -vector-query-mode quantized_rerank \
+  -quantized-index-name embedding.scalar_u8.fast \
+  -quantized-rerank-candidates 32 \
+  -docs 10000 \
+  -dims 128 \
+  -queries 10000 \
+  -validate-queries 64 \
+  -top-k 10 \
+  -m 16 \
+  -ef-construction 128 \
+  -ef-search 128 \
   -json
 ```
 
@@ -105,4 +133,14 @@ Useful flags:
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
   queries; set `-min-recall=0` when disabling validation with
   `-validate-queries=0`.
+- `-vector-index-strategy column_graph`: use TreeDB's persisted column-store
+  graph search path instead of the native runtime snapshot path.
+- `-vector-query-mode exact|quantized_only|quantized_rerank`: select the
+  column_graph score plane. The default is `exact`; quantized modes require
+  `column_graph` and a quantized index name.
+- `-quantized-index-name NAME`: named scalar_u8 score plane for quantized modes
+  (for example `embedding.scalar_u8.fast`). Exact mode rejects this flag so it
+  cannot accidentally declare quantized assets.
+- `-quantized-rerank-candidates N`: exact-rerank candidate limit for
+  `quantized_rerank`; `0` uses the normalized `ef_search` candidate set.
 - `-json`: emit the full result object for scripts.

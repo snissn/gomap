@@ -3,8 +3,11 @@
 This benchmark compares persistent database-tier ANN search:
 
 - TreeDB native persisted HNSW via `cmd/treedb_vector_search_demo`
+- TreeDB `column_graph` full-vector exact/default HNSW via the same demo
+- TreeDB `column_graph` scalar_u8 `quantized_only` and `quantized_rerank`
+  query modes via explicit demo flags
 - SQLite with the Vectorlite loadable extension, backed by hnswlib/HNSW
-- PostgreSQL with pgvector HNSW
+- PostgreSQL with pgvector full-vector HNSW
 - MongoDB Vector Search HNSW when pointed at Atlas or a local Atlas deployment
 
 `sqlite-vec` is intentionally not used for the ANN comparison. Upstream
@@ -22,8 +25,9 @@ Run:
 scripts/bench_vector_db_compare.sh
 ```
 
-The default backend set is `treedb,vectorlite`. Add `pgvector` or `mongodb` to
-`BACKENDS` when those external services are available.
+The default backend set is `treedb,vectorlite`. Add `treedb_column_graph`, the
+TreeDB quantized aliases, `pgvector`, or `mongodb` to `BACKENDS` when those
+paths or external services are needed.
 
 Useful overrides:
 
@@ -38,12 +42,39 @@ SEARCH_CONCURRENCY=2,4,8,16,32,64,128 \
 scripts/bench_vector_db_compare.sh
 ```
 
+TreeDB exact vs quantized column-graph comparison:
+
+```sh
+RUN_DIR=/tmp/vector_db_compare_quantized \
+BACKENDS=treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank,pgvector \
+DOCS=10000 \
+DIMS=128 \
+QUERIES=10000 \
+VALIDATE_QUERIES=64 \
+TOP_K=10 \
+EF_SEARCH=128 \
+TREEDB_QUANTIZED_INDEX_NAME=embedding.scalar_u8.fast \
+TREEDB_QUANTIZED_RERANK_CANDIDATES=32 \
+scripts/bench_vector_db_compare.sh
+```
+
 Backends:
 
 - `treedb`: runs the TreeDB native persisted vector index benchmark.
+- `treedb_column_graph`: runs TreeDB `column_graph` exact/default full-vector
+  graph search.
+- `treedb_column_graph_quantized_only`: runs TreeDB `column_graph` with a named
+  scalar_u8 score plane and `query_mode=quantized_only`.
+- `treedb_column_graph_quantized_rerank`: runs TreeDB `column_graph` with a
+  named scalar_u8 score plane and `query_mode=quantized_rerank`, exact-reranking
+  `TREEDB_QUANTIZED_RERANK_CANDIDATES` candidates (or the demo's normalized
+  `ef_search` set when set to `0`).
 - `vectorlite`: runs SQLite+Vectorlite with its persisted HNSW sidecar file.
-- `pgvector`: runs PostgreSQL+pgvector. If `PGVECTOR_DSN` is not set, the
+- `pgvector`: runs PostgreSQL+pgvector full-vector HNSW. If `PGVECTOR_DSN` is not set, the
   runner starts a temporary `pgvector/pgvector:pg16` Docker container. The
+  harness does not use pgvector `halfvec`, `binary_quantize`, SQL rerank,
+  custom byte-code scoring, or custom operator classes; pgvector remains the
+  full-vector HNSW anchor. The
   harness writes into a fresh benchmark schema (`PGVECTOR_SCHEMA`) instead of
   dropping tables in the caller's default schema. Set
   `PGVECTOR_DROP_SCHEMA_AFTER=true` when using an external DSN and you want the
@@ -62,6 +93,12 @@ Configuration:
 - `DOCS`, `DIMS`, `QUERIES`, `VALIDATE_QUERIES`, `TOP_K`: dataset and validation sizes.
 - `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
 - `M`, `EF_CONSTRUCTION`, `EF_SEARCH`, `MIN_RECALL`: HNSW and recall parameters.
+- `TREEDB_COLUMN_GRAPH_EF_SEARCH`: optional efSearch override for TreeDB
+  `column_graph` rows; defaults to `EF_SEARCH`.
+- `TREEDB_QUANTIZED_INDEX_NAME`: scalar_u8 TreeDB quantized score-plane name.
+  Defaults to `embedding.scalar_u8.fast`.
+- `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB quantized-rerank exact rerank
+  candidate limit. Defaults to `32`; set `0` to use the normalized efSearch set.
 - `PGVECTOR_DSN`: external PostgreSQL DSN. If empty and `pgvector` is enabled,
   the runner starts Docker unless `PGVECTOR_DOCKER=false`.
 - `PGVECTOR_DOCKER`, `PGVECTOR_IMAGE`, `PGVECTOR_MAX_CONNECTIONS`: automatic
@@ -80,9 +117,12 @@ Configuration:
 The runner writes:
 
 - `dataset/`: TreeDB-owned synthetic vectors and manifest
-- `treedb.json`: TreeDB benchmark result
+- `treedb.json`: TreeDB native benchmark result
+- `treedb_column_graph.json`: TreeDB column_graph exact/default result when enabled
+- `treedb_column_graph_quantized_only.json`: TreeDB scalar_u8 quantized-only result when enabled
+- `treedb_column_graph_quantized_rerank.json`: TreeDB scalar_u8 quantized-rerank result when enabled
 - `vectorlite.json`: SQLite+Vectorlite benchmark result
-- `pgvector.json`: PostgreSQL+pgvector benchmark result when enabled
+- `pgvector.json`: PostgreSQL+pgvector full-vector HNSW benchmark result when enabled
 - `mongodb.json`: MongoDB Vector Search benchmark result when enabled
 - `comparison.md`: normalized comparison table
 
