@@ -13497,13 +13497,14 @@ func (db *DB) appendWALOne(l *lane, record logRecord, durability journalDurabili
 }
 
 func canCoalesceWALPointRecord(record logRecord) bool {
-	return record.Op == logOpSetInline || record.Op == logOpDelete
+	return record.Op == logOpSetInline
 }
 
 // nextWALCoalesceSeqLocked returns the shared commit-fence sequence for an
-// adjacent run of unsynced inline/delete point records. Callers must hold
-// l.walMu. RID-backed records are intentionally excluded from this coalescing
-// path so their value-log reachability fence remains per explicit write/batch.
+// adjacent run of unsynced inline point records. Callers must hold l.walMu.
+// Deletes and RID-backed records stay on explicit write/batch fences: deletes
+// must preserve overwrite/delete ordering for same-key WAL replay, while RID
+// records must preserve value-log reachability fences.
 func (db *DB) nextWALCoalesceSeqLocked(l *lane) uint64 {
 	if l.walCoalesceSeq == 0 {
 		l.walCoalesceSeq = db.nextCommitSeq.Add(1)
