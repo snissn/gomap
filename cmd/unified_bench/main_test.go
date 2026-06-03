@@ -1886,11 +1886,12 @@ func TestMergeTreeDBLeafVLogCodecStats_PreservesAggregateStats(t *testing.T) {
 
 func TestAppendTreeDBLeafScanVlogSummaryLines_IncludesNamespacedStats(t *testing.T) {
 	stats := map[string]string{
-		"treedb.cache.vlog_leaf_scan.write_mode.frames.block":        "2",
-		"treedb.cache.vlog_leaf_scan.write_mode.stored_ratio.block":  "0.500000",
-		"treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames.snappy": "2",
-		"treedb.cache.vlog_leaf_scan.block.k.count.snappy":           "2",
-		"treedb.cache.vlog_leaf_scan.block.k.max.snappy":             "8",
+		"treedb.cache.vlog_leaf_scan.write_mode.frames.block":             "2",
+		"treedb.cache.vlog_leaf_scan.write_mode.stored_ratio.block":       "0.500000",
+		"treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames.snappy":      "2",
+		"treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames.legacy_page": "1",
+		"treedb.cache.vlog_leaf_scan.block.k.count.snappy":                "2",
+		"treedb.cache.vlog_leaf_scan.block.k.max.snappy":                  "8",
 	}
 	var sb strings.Builder
 	appendTreeDBLeafScanVlogSummaryLines(&sb, stats)
@@ -1898,6 +1899,7 @@ func TestAppendTreeDBLeafScanVlogSummaryLines_IncludesNamespacedStats(t *testing
 	for _, want := range []string{
 		"vlog_leaf_scan.write_mode.block: frames=2 stored_ratio=0.500000",
 		"vlog_leaf_scan.outer_leaf_codec.snappy: frames=2",
+		"vlog_leaf_scan.outer_leaf_codec.legacy_page: frames=1",
 		"vlog_leaf_scan.block.k.snappy: count=2 max=8",
 	} {
 		if !strings.Contains(got, want) {

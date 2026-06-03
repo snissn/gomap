@@ -5666,7 +5666,7 @@ func appendTreeDBLeafScanVlogSummaryLines(sb *strings.Builder, stats map[string]
 			{label: "stored_ratio", key: "treedb.cache.vlog_leaf_scan.write_mode.stored_ratio." + mode},
 		})
 	}
-	for _, codec := range []string{"none", "snappy", "lz4", "unknown"} {
+	for _, codec := range []string{"none", "snappy", "lz4", "legacy_page", "unknown", "mixed"} {
 		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.outer_leaf_codec."+codec, []treeDBVlogSummaryMetric{
 			{label: "frames", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames." + codec},
 			{label: "raw_bytes", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.raw_bytes." + codec},
