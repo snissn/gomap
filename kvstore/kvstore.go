@@ -22,10 +22,11 @@ type MultiGetter interface {
 }
 
 // MultiGetViewFunc receives one MultiGetterView result. The callback order is
-// unspecified; the index argument identifies the input key. The value slice is
-// a read-only view that is valid only until the callback returns; callers must
-// copy it before retaining. Missing keys are reported with found=false and
-// value=nil.
+// unspecified and implementations may invoke callbacks concurrently; callers
+// that mutate shared state must synchronize it. The index argument identifies
+// the input key. The value slice is a read-only view that is valid only until
+// the callback returns; callers must copy it before retaining. Missing keys are
+// reported with found=false and value=nil.
 type MultiGetViewFunc func(index int, key []byte, value []byte, found bool) error
 
 // MultiGetterView is an optional lower-allocation batched point-read capability

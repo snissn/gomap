@@ -24899,7 +24899,8 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 }
 
 // GetManyView calls fn once for each key with a read-only value view. The
-// callback may be invoked in any order. The value is valid only until fn
+// callback may be invoked in any order and may be invoked concurrently when
+// backend fallback reads are parallelized. The value is valid only until fn
 // returns; callers must copy values they retain. Missing keys are reported with
 // found=false and value=nil.
 func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
