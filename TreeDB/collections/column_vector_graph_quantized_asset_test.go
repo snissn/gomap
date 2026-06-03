@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -214,10 +215,11 @@ func TestColumnGraphScalarU8QuantizedOnlyConcurrentSearch1926(t *testing.T) {
 	const workers = 4
 	errCh := make(chan error, workers)
 	for worker := 0; worker < workers; worker++ {
+		worker := worker
 		go func() {
 			searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
 			if err != nil {
-				errCh <- err
+				errCh <- fmt.Errorf("worker %d open searcher: %w", worker, err)
 				return
 			}
 			defer func() { _ = searcher.Close() }()
@@ -225,11 +227,11 @@ func TestColumnGraphScalarU8QuantizedOnlyConcurrentSearch1926(t *testing.T) {
 			for i := 0; i < 50; i++ {
 				got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: def.QuantizedIndexes[0].Name, TopK: 2, EfSearch: len(rows)}, &buffer)
 				if err != nil {
-					errCh <- err
+					errCh <- fmt.Errorf("worker %d iteration %d search: %w", worker, i, err)
 					return
 				}
 				if mismatch := vectorIndexSearchResultsMismatch1926(got.Results, want); mismatch != "" {
-					errCh <- errors.New(mismatch)
+					errCh <- fmt.Errorf("worker %d iteration %d: %s", worker, i, mismatch)
 					return
 				}
 			}
@@ -238,7 +240,7 @@ func TestColumnGraphScalarU8QuantizedOnlyConcurrentSearch1926(t *testing.T) {
 	}
 	for worker := 0; worker < workers; worker++ {
 		if err := <-errCh; err != nil {
-			t.Fatalf("worker %d: %v", worker, err)
+			t.Fatal(err)
 		}
 	}
 }
