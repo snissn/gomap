@@ -120,10 +120,11 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		}
 	}
 	graphReader := &columnVectorGraphPhysicalRowReader{
-		def:     def,
-		graph:   graph,
-		catalog: catalog,
-		reader:  reader,
+		def:                  def,
+		graph:                graph,
+		catalog:              catalog,
+		reader:               reader,
+		quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
 	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != "" {
 		key, keyErr := columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
@@ -132,7 +133,7 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			return nil, keyErr
 		}
 		shared, err := c.acquireColumnVectorGraphSharedPreparedSearch(key, func() (*columnVectorGraphSharedPreparedSearch, error) {
-			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog}
+			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog, quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus)}
 			success := false
 			defer func() {
 				if !success {
