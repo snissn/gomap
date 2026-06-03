@@ -18,6 +18,8 @@ M="${M:-16}"
 EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
 TREEDB_COLUMN_GRAPH_EF_SEARCH="${TREEDB_COLUMN_GRAPH_EF_SEARCH:-}"
+TREEDB_SEARCH_CPU_PROFILE_DIR="${TREEDB_SEARCH_CPU_PROFILE_DIR:-}"
+TREEDB_SEARCH_WITH_BUFFER="${TREEDB_SEARCH_WITH_BUFFER:-false}"
 MIN_RECALL="${MIN_RECALL:-0.95}"
 NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
 VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
@@ -159,6 +161,8 @@ cat >"$RUN_DIR/README.md" <<EOF
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
 - TreeDB column_graph efSearch: \`$TREEDB_COLUMN_GRAPH_EF_SEARCH\`
+- TreeDB search CPU profile dir: \`$TREEDB_SEARCH_CPU_PROFILE_DIR\`
+- TreeDB column_graph SearchWithBuffer: \`$TREEDB_SEARCH_WITH_BUFFER\`
 - Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
 
 This run compares persistent database-tier ANN search:
@@ -210,46 +214,59 @@ result_args=()
 
 if contains_backend treedb; then
 	echo "running TreeDB benchmark"
-	GOWORK=off go run ./cmd/treedb_vector_search_demo \
-		-matrix=false \
-		-dataset-dir "$RUN_DIR/dataset" \
-		-dir "$RUN_DIR/treedb" \
-		-keep-dir \
-		-docs "$DOCS" \
-		-dims "$DIMS" \
-		-queries "$QUERIES" \
-		-search-concurrency "$SEARCH_CONCURRENCY" \
-		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
-		-top-k "$TOP_K" \
-		-m "$M" \
-		-ef-construction "$EF_CONSTRUCTION" \
-		-ef-search "$EF_SEARCH" \
-		-min-recall "$MIN_RECALL" \
-		-json >"$RUN_DIR/treedb.json"
+	treedb_args=(
+		-matrix=false
+		-dataset-dir "$RUN_DIR/dataset"
+		-dir "$RUN_DIR/treedb"
+		-keep-dir
+		-docs "$DOCS"
+		-dims "$DIMS"
+		-queries "$QUERIES"
+		-search-concurrency "$SEARCH_CONCURRENCY"
+		-validate-queries "$VALIDATE_QUERIES"
+		-validate-docs 16
+		-top-k "$TOP_K"
+		-m "$M"
+		-ef-construction "$EF_CONSTRUCTION"
+		-ef-search "$EF_SEARCH"
+		-min-recall "$MIN_RECALL"
+		-json
+	)
+	if [[ -n "$TREEDB_SEARCH_CPU_PROFILE_DIR" ]]; then
+		treedb_args+=(-search-cpu-profile-dir "$TREEDB_SEARCH_CPU_PROFILE_DIR/treedb")
+	fi
+	GOWORK=off go run ./cmd/treedb_vector_search_demo "${treedb_args[@]}" >"$RUN_DIR/treedb.json"
 	result_args+=(--result "$RUN_DIR/treedb.json")
 fi
 
 if contains_backend treedb_column_graph; then
 	echo "running TreeDB column-store graph benchmark"
-	GOWORK=off go run ./cmd/treedb_vector_search_demo \
-		-matrix=false \
-		-vector-index-strategy column_graph \
-		-dataset-dir "$RUN_DIR/dataset" \
-		-dir "$RUN_DIR/treedb_column_graph" \
-		-keep-dir \
-		-docs "$DOCS" \
-		-dims "$DIMS" \
-		-queries "$QUERIES" \
-		-search-concurrency "$SEARCH_CONCURRENCY" \
-		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
-		-top-k "$TOP_K" \
-		-m "$M" \
-		-ef-construction "$EF_CONSTRUCTION" \
-		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
-		-min-recall "$MIN_RECALL" \
-		-json >"$RUN_DIR/treedb_column_graph.json"
+	treedb_column_graph_args=(
+		-matrix=false
+		-vector-index-strategy column_graph
+		-dataset-dir "$RUN_DIR/dataset"
+		-dir "$RUN_DIR/treedb_column_graph"
+		-keep-dir
+		-docs "$DOCS"
+		-dims "$DIMS"
+		-queries "$QUERIES"
+		-search-concurrency "$SEARCH_CONCURRENCY"
+		-validate-queries "$VALIDATE_QUERIES"
+		-validate-docs 16
+		-top-k "$TOP_K"
+		-m "$M"
+		-ef-construction "$EF_CONSTRUCTION"
+		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH"
+		-min-recall "$MIN_RECALL"
+		-json
+	)
+	if [[ -n "$TREEDB_SEARCH_CPU_PROFILE_DIR" ]]; then
+		treedb_column_graph_args+=(-search-cpu-profile-dir "$TREEDB_SEARCH_CPU_PROFILE_DIR/treedb_column_graph")
+	fi
+	if [[ "$TREEDB_SEARCH_WITH_BUFFER" == "true" ]]; then
+		treedb_column_graph_args+=(-search-with-buffer)
+	fi
+	GOWORK=off go run ./cmd/treedb_vector_search_demo "${treedb_column_graph_args[@]}" >"$RUN_DIR/treedb_column_graph.json"
 	result_args+=(--result "$RUN_DIR/treedb_column_graph.json")
 fi
 

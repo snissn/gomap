@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,6 +70,8 @@ type config struct {
 	requireValueLogBytes  bool
 	requireLeafVLogBytes  bool
 	jsonOut               bool
+	searchCPUProfileDir   string
+	searchWithBuffer      bool
 
 	indexOuterLeavesInValueLog *bool
 	vectorIndexStrategy        collections.VectorIndexStrategy
@@ -99,6 +102,8 @@ type result struct {
 	Compact               bool                              `json:"compact"`
 	CompactSyncEachPhase  bool                              `json:"compact_sync_each_phase"`
 	DisableExactFallback  bool                              `json:"disable_exact_fallback"`
+	SearchWithBuffer      bool                              `json:"search_with_buffer"`
+	SearchCPUProfileDir   string                            `json:"search_cpu_profile_dir,omitempty"`
 	Insert                phaseResult                       `json:"insert"`
 	Rebuild               phaseResult                       `json:"rebuild"`
 	CompactPhase          phaseResult                       `json:"compact_phase"`
@@ -122,15 +127,17 @@ type result struct {
 }
 
 type matrixResult struct {
-	Dir               string             `json:"dir"`
-	KeptDir           bool               `json:"kept_dir"`
-	Profile           string             `json:"profile"`
-	Docs              int                `json:"docs"`
-	Dimensions        int                `json:"dimensions"`
-	Queries           int                `json:"queries"`
-	SearchConcurrency []int              `json:"search_concurrency"`
-	TopK              int                `json:"top_k"`
-	Cases             []matrixCaseResult `json:"cases"`
+	Dir                 string             `json:"dir"`
+	KeptDir             bool               `json:"kept_dir"`
+	Profile             string             `json:"profile"`
+	Docs                int                `json:"docs"`
+	Dimensions          int                `json:"dimensions"`
+	Queries             int                `json:"queries"`
+	SearchConcurrency   []int              `json:"search_concurrency"`
+	TopK                int                `json:"top_k"`
+	SearchWithBuffer    bool               `json:"search_with_buffer"`
+	SearchCPUProfileDir string             `json:"search_cpu_profile_dir,omitempty"`
+	Cases               []matrixCaseResult `json:"cases"`
 }
 
 type matrixCaseResult struct {
@@ -314,6 +321,8 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
 	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
 	fs.BoolVar(&cfg.requireLeafVLogBytes, "require-leaf-vlog-bytes", false, "Fail if compacted storage has no leaf value-log bytes")
+	fs.StringVar(&cfg.searchCPUProfileDir, "search-cpu-profile-dir", "", "Optional directory for search-only CPU profiles, one per backend/concurrency")
+	fs.BoolVar(&cfg.searchWithBuffer, "search-with-buffer", false, "Use VectorIndexSearcher.SearchWithBuffer for no-document column_graph search benchmarks")
 	fs.BoolVar(&cfg.jsonOut, "json", false, "Emit JSON instead of text")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -668,6 +677,8 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		Compact:               cfg.compact,
 		CompactSyncEachPhase:  cfg.compactSyncEachPhase,
 		DisableExactFallback:  cfg.disableExactFallback,
+		SearchWithBuffer:      cfg.searchWithBuffer,
+		SearchCPUProfileDir:   cfg.searchCPUProfileDir,
 	}
 
 	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
@@ -1025,15 +1036,17 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		},
 	}
 	out := matrixResult{
-		Dir:               root,
-		KeptDir:           cfg.keepDir || explicitRoot,
-		Profile:           string(cfg.profile),
-		Docs:              cfg.docs,
-		Dimensions:        cfg.dimensions,
-		Queries:           cfg.queries,
-		SearchConcurrency: append([]int(nil), cfg.searchConcurrency...),
-		TopK:              cfg.topK,
-		Cases:             make([]matrixCaseResult, 0, len(cases)),
+		Dir:                 root,
+		KeptDir:             cfg.keepDir || explicitRoot,
+		Profile:             string(cfg.profile),
+		Docs:                cfg.docs,
+		Dimensions:          cfg.dimensions,
+		Queries:             cfg.queries,
+		SearchConcurrency:   append([]int(nil), cfg.searchConcurrency...),
+		TopK:                cfg.topK,
+		SearchWithBuffer:    cfg.searchWithBuffer,
+		SearchCPUProfileDir: cfg.searchCPUProfileDir,
+		Cases:               make([]matrixCaseResult, 0, len(cases)),
 	}
 	for _, testCase := range cases {
 		caseCfg := cfg
@@ -1499,6 +1512,42 @@ func datasetDocuments(docIndexes []int, work workload, visit func(docIndex int, 
 	return fmt.Errorf("dataset document %d not found", missing[0])
 }
 
+func startSearchCPUProfile(cfg config, backend string, concurrency int) (func(), error) {
+	if cfg.searchCPUProfileDir == "" {
+		return func() {}, nil
+	}
+	if err := os.MkdirAll(cfg.searchCPUProfileDir, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := createSearchCPUProfileFile(cfg.searchCPUProfileDir, backend, concurrency)
+	if err != nil {
+		return nil, err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() {
+		pprof.StopCPUProfile()
+		_ = f.Close()
+	}, nil
+}
+
+func createSearchCPUProfileFile(dir, backend string, concurrency int) (*os.File, error) {
+	stem := fmt.Sprintf("cpu_%s_concurrency_%d", backend, concurrency)
+	for i := 0; ; i++ {
+		name := stem + ".pprof"
+		if i > 0 {
+			name = fmt.Sprintf("%s_%d.pprof", stem, i+1)
+		}
+		f, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		return f, err
+	}
+}
+
 func benchmarkSearch(idx *collections.VectorIndex, cfg config, work workload) (searchBenchmarkResult, error) {
 	return benchmarkSearchConcurrent(idx, cfg, work, 1)
 }
@@ -1537,6 +1586,11 @@ func benchmarkSearchLoadedConcurrent(idx *collections.VectorIndex, cfg config, q
 	if concurrency <= 0 {
 		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
 	}
+	stopProfile, err := startSearchCPUProfile(cfg, resultBackendForStrategy(cfg.vectorIndexStrategy), concurrency)
+	if err != nil {
+		return searchBenchmarkResult{}, err
+	}
+	defer stopProfile()
 	latencies := make([]int64, len(queries))
 	var next atomic.Int64
 	var candidatesTotal int64
@@ -1647,6 +1701,11 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 	if concurrency <= 0 {
 		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
 	}
+	stopProfile, err := startSearchCPUProfile(cfg, resultBackendForStrategy(cfg.vectorIndexStrategy), concurrency)
+	if err != nil {
+		return searchBenchmarkResult{}, err
+	}
+	defer stopProfile()
 	searchers := make([]*collections.VectorIndexSearcher, concurrency)
 	for i := range searchers {
 		searcher, err := col.OpenVectorIndexSearcher(collections.VectorIndexSearcherOptions{IndexName: indexName})
@@ -1677,17 +1736,25 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 		}
 	}
 	worker := func(searcher *collections.VectorIndexSearcher) {
+		var buffer collections.VectorIndexSearchBuffer
 		for {
 			i := int(next.Add(1) - 1)
 			if i >= len(queries) {
 				return
 			}
 			start := time.Now()
-			response, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
+			opts := collections.VectorIndexSearcherSearchOptions{
 				Query:    queries[i],
 				TopK:     cfg.topK,
 				EfSearch: cfg.efSearch,
-			})
+			}
+			var response collections.VectorIndexSearchResponse
+			var err error
+			if cfg.searchWithBuffer {
+				response, err = searcher.SearchWithBuffer(opts, &buffer)
+			} else {
+				response, err = searcher.Search(opts)
+			}
 			if err != nil {
 				setErr(err)
 				return
@@ -2007,8 +2074,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
-		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d search_with_buffer=%t search_cpu_profile_dir=%s\n",
+		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget, res.SearchWithBuffer, res.SearchCPUProfileDir)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_vector_index strategy=%s: %.3fs native_root_bytes=%d\n", resultStrategy(res), res.Rebuild.Seconds, res.NativeRootBytes)
@@ -2068,8 +2135,8 @@ func printText(w io.Writer, res result) {
 
 func printMatrixText(w io.Writer, res matrixResult) {
 	fmt.Fprintf(w, "TreeDB vector search matrix\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d search_concurrency=%s\n",
-		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, joinInts(res.SearchConcurrency))
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d search_concurrency=%s search_with_buffer=%t search_cpu_profile_dir=%s\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, joinInts(res.SearchConcurrency), res.SearchWithBuffer, res.SearchCPUProfileDir)
 	for _, testCase := range res.Cases {
 		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
 		fmt.Fprintf(w, "%s\n", testCase.Description)

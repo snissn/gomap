@@ -62,6 +62,13 @@ Configuration:
 - `DOCS`, `DIMS`, `QUERIES`, `VALIDATE_QUERIES`, `TOP_K`: dataset and validation sizes.
 - `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
 - `M`, `EF_CONSTRUCTION`, `EF_SEARCH`, `MIN_RECALL`: HNSW and recall parameters.
+- `TREEDB_SEARCH_CPU_PROFILE_DIR`: optional directory for TreeDB search-only CPU
+  profiles. The runner writes backend-specific subdirectories such as
+  `treedb_column_graph/cpu_treedb_column_graph_concurrency_1.pprof`.
+- `TREEDB_SEARCH_WITH_BUFFER=true`: use TreeDB column-graph
+  `VectorIndexSearcher.SearchWithBuffer` for the no-document search benchmark,
+  separating reusable response-buffer performance from response-owned result
+  allocation overhead.
 - `PGVECTOR_DSN`: external PostgreSQL DSN. If empty and `pgvector` is enabled,
   the runner starts Docker unless `PGVECTOR_DOCKER=false`.
 - `PGVECTOR_DOCKER`, `PGVECTOR_IMAGE`, `PGVECTOR_MAX_CONNECTIONS`: automatic
@@ -85,6 +92,7 @@ The runner writes:
 - `pgvector.json`: PostgreSQL+pgvector benchmark result when enabled
 - `mongodb.json`: MongoDB Vector Search benchmark result when enabled
 - `comparison.md`: normalized comparison table
+- TreeDB search CPU profiles under `TREEDB_SEARCH_CPU_PROFILE_DIR` when set
 
 The TreeDB dataset exporter writes row-major little-endian `float32` vector
 files plus JSONL convenience files. TreeDB loads documents from the exported
