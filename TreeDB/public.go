@@ -1695,6 +1695,9 @@ func (db *DB) AcquireSnapshot() Snapshot {
 		return nil
 	}
 	if db.cached != nil {
+		if snap := db.cached.AcquireBackendSnapshotFastPath(); snap != nil {
+			return snap
+		}
 		return db.cached.AcquireSnapshot()
 	}
 	if db.backend == nil {
