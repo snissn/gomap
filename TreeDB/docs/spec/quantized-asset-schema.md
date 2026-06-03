@@ -1,9 +1,9 @@
 # Quantized Asset Schema and Ordinal Access Contract (#1932)
 
 Status: pre-alpha typed-column contract for quantized vector-index assets. This
-adds schema validation and prepared ordinal readers only; quantized scoring,
-query-mode selection, exact rerank, training, and rebuild policy remain #1926 and
-follow-ups.
+owns schema validation and prepared ordinal readers. The scalar `scalar_u8` v1
+`column_graph` score-plane behavior, query modes, exact rerank semantics, and
+benchmark closeout are documented in `quantized-vector-index.md`.
 
 ## Role schema
 
@@ -30,8 +30,8 @@ score planes under `VectorIndexDefinition.QuantizedIndexes`. Public search
 options expose explicit `exact`, `quantized_only`, and `quantized_rerank` query
 modes. The zero/default mode remains exact.
 
-The first #1926 asset-lifecycle slice builds and loads `scalar_u8` v1 `codes`
-assets for declared `column_graph` quantized indexes. For the current cosine
+The #1926 scalar lifecycle builds and loads `scalar_u8` v1 `codes` assets for
+declared `column_graph` quantized indexes. For the current cosine
 `column_graph` metric, scalar_u8 codes are encoded from inverse-norm-normalized
 vector components so equivalent directions persist the same score-plane rows.
 Rebuild emits one dense fixed-byte typed-column part per declared quantized index
@@ -98,4 +98,8 @@ used or when adequate caller scratch is provided for decoded/word views.
 Prepare captures whole-asset bytes/vector and per-role section bytes/vector in
 `Footprint`. Benchmarks in `TreeDB/internal/quantizedasset` report prepared open
 cost, random ordinal lookup, scorer-shaped loops, `B/op`, `allocs/op`, and
-representative asset/column bytes per vector.
+representative asset/column bytes per vector. The end-to-end #1926 collection
+harnesses `BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926` and
+`BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926` report exact vs
+`quantized_only` vs `quantized_rerank` latency/allocation/recall counters plus
+actual scalar_u8 code-asset bytes per vector.

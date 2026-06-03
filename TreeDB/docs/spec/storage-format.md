@@ -1117,13 +1117,16 @@ The collection and index names must be non-empty. The command payload names the
 logical rebuild request only; it does not carry vector graph bytes, physical root
 deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
 collection vector-index rebuild path for the named index. For explicit
-`column_graph` indexes, that path rebuilds the legacy row graph asset for
-compatibility, publishes inverse norms, HNSW adjacency, base row references, and
-returned document IDs as vector-index state assets, and records vector-index
-control identity in the `TVIS` state record. Old adjacency-source refs are
-`#1989-quarantined` compatibility. Current graph manifests may still contain row
-graph refs and legacy layer-source trailer refs for compatibility; new
-derived-state refs belong in vector-index state. Replay outcomes that are
+`column_graph` indexes, that path rebuilds any legacy row graph asset only for
+compatibility, publishes inverse norms, HNSW adjacency, base row references,
+returned document IDs, and declared scalar quantized code score planes as
+vector-index state assets, and records vector-index control identity in the
+`TVIS` state record. Quantized assets use role `quantized_codes` and asset ids
+`quantized/<name>/codes`; query modes that select them fail closed when matching
+state is absent or stale. Old adjacency-source refs are `#1989-quarantined`
+compatibility. Current graph manifests may still contain row graph refs and
+legacy layer-source trailer refs for compatibility; new derived-state refs belong
+in vector-index state. Replay outcomes that are
 defined no-ops, such as a strategy/config drift status that no longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and
