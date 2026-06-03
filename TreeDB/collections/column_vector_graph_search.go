@@ -269,7 +269,17 @@ func (r *columnVectorGraphPhysicalRowReader) validateQuantizedNativeSearchOption
 			return errColumnVectorGraphNativeSearchQuantizedRerankLimit
 		}
 	}
-	return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q has no loaded quantized score-plane asset", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
+	status, ok := r.quantizedAssetStatus[opts.QuantizedIndexName]
+	if !ok {
+		return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q has no loaded quantized score-plane asset", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
+	}
+	if status.Prepared == nil {
+		if status.Err != nil {
+			return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q score-plane asset unavailable: %v", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName, status.Err)
+		}
+		return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q has no loaded quantized score-plane asset", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
+	}
+	return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q prepared; quantized scorer is unavailable in this build", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
 }
 
 type columnVectorGraphAdjacencySourceCounterSnapshot struct {

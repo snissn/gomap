@@ -30,11 +30,16 @@ score planes under `VectorIndexDefinition.QuantizedIndexes`. Public search
 options expose explicit `exact`, `quantized_only`, and `quantized_rerank` query
 modes. The zero/default mode remains exact.
 
-Until a later #1926 slice builds and loads matching quantized typed-column
-assets, quantized modes validate the selected name/options and then fail closed
-with search-unavailable status before graph traversal/scoring. They must not
-silently return exact results. Exact mode rejects quantized-only fields so future
-callers do not accidentally rely on no-op options.
+The first #1926 asset-lifecycle slice builds and loads `scalar_u8` v1 `codes`
+assets for declared `column_graph` quantized indexes. Rebuild emits one dense
+fixed-byte typed-column part per declared quantized index in graph ordinal order,
+records it in vector-index state as `quantized_codes` with asset id
+`quantized/<name>/codes`, and validates the prepared asset against the base graph
+generation/checksum/schema identity on open. Quantized modes validate the
+selected name/options and asset load status, then still fail closed with
+search-unavailable scorer-unavailable status before graph traversal/scoring.
+They must not silently return exact results. Exact mode rejects quantized-only
+fields so future callers do not accidentally rely on no-op options.
 
 ## Fail-closed validation
 

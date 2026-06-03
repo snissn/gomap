@@ -175,8 +175,8 @@ func TestSearchVectorIndexQuantizedModesFailClosed1926(t *testing.T) {
 			if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
 				t.Fatalf("SearchVectorIndex err=%v want ErrVectorIndexSearchUnavailable", err)
 			}
-			if !strings.Contains(err.Error(), string(tc.mode)) || !strings.Contains(err.Error(), def.QuantizedIndexes[0].Name) {
-				t.Fatalf("SearchVectorIndex err=%v want mode and selected quantized index", err)
+			if !strings.Contains(err.Error(), string(tc.mode)) || !strings.Contains(err.Error(), def.QuantizedIndexes[0].Name) || !strings.Contains(err.Error(), "scorer is unavailable") {
+				t.Fatalf("SearchVectorIndex err=%v want mode, selected quantized index, and scorer-unavailable", err)
 			}
 			if len(got.Results) != 0 {
 				t.Fatalf("quantized fail-closed returned %d results: %+v", len(got.Results), got.Results)

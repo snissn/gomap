@@ -382,6 +382,8 @@ func columnVectorIndexStateAssetTypeContract(role string) (logicalType, physical
 		return columnVectorIndexStateLogicalTypeInt64, columnVectorIndexStateEncodingRawInt64, true
 	case columnVectorIndexStateAssetRoleDocumentIDs:
 		return columnVectorIndexStateLogicalTypeBytes, columnVectorIndexStateEncodingRawBytesOffsets, true
+	case columnVectorIndexStateAssetRoleQuantizedCodes:
+		return columnVectorIndexStateLogicalTypeByteVector, columnVectorIndexStateEncodingRawFixedBytes, true
 	default:
 		return "", "", false
 	}
@@ -393,7 +395,8 @@ func columnVectorIndexStateAssetRoleKnown(role string) bool {
 		columnVectorIndexStateAssetRoleInverseNorm,
 		columnVectorIndexStateAssetRoleNormalizedVectors,
 		columnVectorIndexStateAssetRoleRowRefs,
-		columnVectorIndexStateAssetRoleDocumentIDs:
+		columnVectorIndexStateAssetRoleDocumentIDs,
+		columnVectorIndexStateAssetRoleQuantizedCodes:
 		return true
 	default:
 		return false

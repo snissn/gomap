@@ -359,6 +359,9 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 	maxAdjacencyLayer := -1
 	var rawScratch []byte
 	for _, asset := range state.Assets {
+		if columnVectorIndexStateAssetIsQuantized(asset) {
+			continue
+		}
 		if validatePayload || asset.Role != columnVectorIndexStateAssetRoleDocumentIDs {
 			if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
 				return fmt.Errorf("collections: vector-index state asset role=%q id=%q unavailable: %w", asset.Role, asset.AssetID, err)
