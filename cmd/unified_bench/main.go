@@ -109,9 +109,11 @@ func flagExplicit(name string) bool {
 const checkpointPostRunLabel = "post-run"
 
 type DBInstance struct {
-	Name    string
-	Wrapper kvstore.DB
-	Dir     string
+	Name                         string
+	Wrapper                      kvstore.DB
+	Dir                          string
+	TreeDBVlogCompressionMode    treedb.ValueLogCompressionMode
+	TreeDBVlogCompressionModeSet bool
 }
 
 type BenchConfig struct {
@@ -2194,7 +2196,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
-		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir})
+		vlogCompressionMode, vlogCompressionModeSet := selectedTreeDBVlogCompressionMode(name)
+		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir, TreeDBVlogCompressionMode: vlogCompressionMode, TreeDBVlogCompressionModeSet: vlogCompressionModeSet})
 	}
 	if len(instances) == 0 {
 		return BenchRun{}, fmt.Errorf("no DBs selected")
@@ -4422,6 +4425,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				statsSnapshot = postCloseStats
 			}
 		}
+		if isTreeDBInstance(inst) {
+			leafStats, err := scanTreeDBLeafVLogCodecStats(inst.Dir, treeDBInstanceCountsAutoVlogCandidates(inst))
+			if err != nil {
+				log.Printf("scan %s leaf value-log codec stats: %v", inst.Name, err)
+			}
+			if len(leafStats) > 0 {
+				if statsSnapshot == nil {
+					statsSnapshot = make(map[string]string, len(leafStats))
+				}
+				mergeTreeDBLeafVLogCodecStats(statsSnapshot, leafStats)
+			}
+		}
 		if len(statsSnapshot) > 0 {
 			copySnap := make(map[string]string, len(statsSnapshot))
 			for k, v := range statsSnapshot {
@@ -4563,6 +4578,34 @@ func isTreeDBInstance(inst *DBInstance) bool {
 	return false
 }
 
+func selectedTreeDBVlogCompressionMode(dbName string) (treedb.ValueLogCompressionMode, bool) {
+	switch strings.ToLower(strings.TrimSpace(dbName)) {
+	case "treedb_vlog_off", "treedb_vlog_dict_off":
+		return treedb.ValueLogCompressionOff, true
+	case "treedb_vlog_block_snappy", "treedb_vlog_block_lz4":
+		return treedb.ValueLogCompressionBlock, true
+	case "treedb_vlog_dict":
+		return treedb.ValueLogCompressionDict, true
+	case "treedb_vlog_dict_on", "treedb_vlog_dict_on_entropy",
+		"treedb_vlog_dict_on_level_default", "treedb_vlog_dict_on_level_default_entropy",
+		"treedb_vlog_dict_on_level_better", "treedb_vlog_dict_on_level_better_entropy",
+		"treedb_vlog_dict_on_level_best", "treedb_vlog_dict_on_level_best_entropy":
+		return treedb.ValueLogCompressionDict, true
+	case "treedb_vlog_auto":
+		return treedb.ValueLogCompressionAuto, true
+	case treedbAdapterName:
+		mode, _, err := parseTreeDBVlogCompressionMode(*treedbVlogCompression)
+		if err == nil {
+			return mode, true
+		}
+	}
+	return treedb.ValueLogCompressionOff, false
+}
+
+func treeDBInstanceCountsAutoVlogCandidates(inst *DBInstance) bool {
+	return inst != nil && inst.TreeDBVlogCompressionModeSet && inst.TreeDBVlogCompressionMode == treedb.ValueLogCompressionAuto
+}
+
 func computeWalDiskUsage(dir string) (walDiskUsage, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -4676,6 +4719,398 @@ func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
 	}
 
 	return out, nil
+}
+
+const (
+	treeDBVlogScanHeaderSize          = 20
+	treeDBVlogScanVersion             = 1
+	treeDBVlogScanFrameHeaderSize     = 12
+	treeDBVlogScanMaxBodyLen          = 64 << 20
+	treeDBVlogScanRecordFlagGrouped   = 1 << 0
+	treeDBVlogScanFrameVersion        = 1
+	treeDBVlogScanFrameFlagCompressed = 1 << 0
+	treeDBVlogScanBlockCodecSnappy    = 1
+	treeDBVlogScanBlockCodecLZ4       = 2
+	treeDBVlogScanMaxFrameK           = 128
+
+	treeDBVlogScanOuterLeafCodecHeaderOffset = 5
+	treeDBVlogScanOuterLeafCodecNoneID       = 0
+	treeDBVlogScanOuterLeafCodecSnappyID     = 1
+	treeDBVlogScanOuterLeafCodecLZ4ID        = 2
+)
+
+var treeDBVlogScanKBucketUpperBounds = []int{1, 2, 4, 8, 16, 32, 64, treeDBVlogScanMaxFrameK}
+
+type treeDBVlogCodecScanCounters struct {
+	Frames      uint64
+	Records     uint64
+	RawBytes    uint64
+	StoredBytes uint64
+}
+
+type treeDBVlogCodecScanStats struct {
+	WriteModes      map[string]treeDBVlogCodecScanCounters
+	PayloadKinds    map[string]treeDBVlogCodecScanCounters
+	PayloadSplits   map[string]treeDBVlogCodecScanCounters
+	OuterLeafCodecs map[string]treeDBVlogCodecScanCounters
+	BlockCodecs     map[string]treeDBVlogCodecScanCounters
+	BlockKCount     map[string]uint64
+	BlockKSum       map[string]uint64
+	BlockKMax       map[string]uint64
+	BlockKBuckets   map[string][]uint64
+	AutoCandidates  map[string]treeDBVlogCodecScanCounters
+}
+
+func newTreeDBVlogCodecScanStats() *treeDBVlogCodecScanStats {
+	return &treeDBVlogCodecScanStats{
+		WriteModes:      map[string]treeDBVlogCodecScanCounters{},
+		PayloadKinds:    map[string]treeDBVlogCodecScanCounters{},
+		PayloadSplits:   map[string]treeDBVlogCodecScanCounters{},
+		OuterLeafCodecs: map[string]treeDBVlogCodecScanCounters{},
+		BlockCodecs:     map[string]treeDBVlogCodecScanCounters{},
+		BlockKCount:     map[string]uint64{},
+		BlockKSum:       map[string]uint64{},
+		BlockKMax:       map[string]uint64{},
+		BlockKBuckets:   map[string][]uint64{},
+		AutoCandidates:  map[string]treeDBVlogCodecScanCounters{},
+	}
+}
+
+func hasExistingTreeDBVlogCodecStats(stats map[string]string) bool {
+	for key, value := range stats {
+		switch {
+		case strings.HasPrefix(key, "treedb.cache.vlog_auto.frames."),
+			strings.HasPrefix(key, "treedb.cache.vlog_auto.bytes."),
+			strings.HasPrefix(key, "treedb.cache.vlog_write_mode."),
+			strings.HasPrefix(key, "treedb.cache.vlog_payload_kind."),
+			strings.HasPrefix(key, "treedb.cache.vlog_payload_split."),
+			strings.HasPrefix(key, "treedb.cache.vlog_outer_leaf_codec."),
+			strings.HasPrefix(key, "treedb.cache.vlog_block."):
+			if treeDBVlogStatValueHasSignal(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mergeTreeDBLeafVLogCodecStats(dst, leafStats map[string]string) {
+	if len(dst) == 0 || !hasExistingTreeDBVlogCodecStats(dst) {
+		for key, value := range leafStats {
+			dst[key] = value
+		}
+		return
+	}
+	for key, value := range leafStats {
+		dst[treeDBLeafVLogScanStatKey(key)] = value
+	}
+}
+
+func treeDBLeafVLogScanStatKey(key string) string {
+	const cacheVlogPrefix = "treedb.cache.vlog_"
+	if strings.HasPrefix(key, cacheVlogPrefix) {
+		return "treedb.cache.vlog_leaf_scan." + strings.TrimPrefix(key, cacheVlogPrefix)
+	}
+	return "treedb.cache.vlog_leaf_scan." + strings.TrimPrefix(key, "treedb.cache.")
+}
+
+func scanTreeDBLeafVLogCodecStats(rootDir string, countAuto bool) (map[string]string, error) {
+	if strings.TrimSpace(rootDir) == "" {
+		return nil, nil
+	}
+	leafDir := filepath.Join(rootDir, "maindb", "leaf_vlog")
+	paths, err := filepath.Glob(filepath.Join(leafDir, "value-l*.log"))
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	sort.Strings(paths)
+	scan := newTreeDBVlogCodecScanStats()
+	var firstErr error
+	for _, path := range paths {
+		if err := scanTreeDBVLogCodecStatsFile(path, scan, countAuto); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+	}
+	return scan.treeDBStats(), firstErr
+}
+
+func scanTreeDBVLogCodecStatsFile(path string, scan *treeDBVlogCodecScanStats, countAuto bool) error {
+	if scan == nil {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var header [treeDBVlogScanHeaderSize]byte
+	for {
+		_, err := io.ReadFull(f, header[:])
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if header[4] != treeDBVlogScanVersion {
+			return fmt.Errorf("%s: unsupported value-log version %d", path, header[4])
+		}
+		bodyLen := binary.LittleEndian.Uint32(header[16:20])
+		if header[5]&treeDBVlogScanRecordFlagGrouped == 0 {
+			if _, err := io.CopyN(io.Discard, f, int64(bodyLen)); err != nil {
+				return err
+			}
+			continue
+		}
+		if bodyLen < treeDBVlogScanFrameHeaderSize {
+			return fmt.Errorf("%s: value-log body too short: %d", path, bodyLen)
+		}
+		if bodyLen > treeDBVlogScanMaxBodyLen {
+			return fmt.Errorf("%s: value-log body too large: %d > %d", path, bodyLen, treeDBVlogScanMaxBodyLen)
+		}
+		body := make([]byte, int(bodyLen))
+		if _, err := io.ReadFull(f, body); err != nil {
+			return err
+		}
+		if err := scan.observeValueLogFrame(body, countAuto); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+}
+
+func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto bool) error {
+	if s == nil || len(body) == 0 {
+		return nil
+	}
+	if len(body) < treeDBVlogScanFrameHeaderSize {
+		return fmt.Errorf("frame body too short: %d", len(body))
+	}
+	if body[0] != treeDBVlogScanFrameVersion {
+		return fmt.Errorf("unsupported frame version %d", body[0])
+	}
+	flags := body[1]
+	k := int(body[2])
+	if k <= 0 || k > treeDBVlogScanMaxFrameK {
+		return fmt.Errorf("invalid frame K=%d", k)
+	}
+	prefixLen := treeDBVlogScanFrameHeaderSize + (k * 8) + ((k + 1) * 4)
+	if len(body) < prefixLen {
+		return fmt.Errorf("frame body length %d shorter than prefix %d", len(body), prefixLen)
+	}
+	offsetStart := treeDBVlogScanFrameHeaderSize + (k * 8)
+	offsets := make([]uint32, k+1)
+	var prevOffset uint32
+	for i := 0; i <= k; i++ {
+		cur := binary.LittleEndian.Uint32(body[offsetStart+(i*4) : offsetStart+((i+1)*4)])
+		if i == 0 && cur != 0 {
+			return fmt.Errorf("frame first offset=%d want 0", cur)
+		}
+		if i > 0 && cur < prevOffset {
+			return fmt.Errorf("frame offsets are not monotonic at index %d", i)
+		}
+		offsets[i] = cur
+		prevOffset = cur
+	}
+	rawPayloadBytes := uint64(offsets[k])
+	if rawPayloadBytes > treeDBVlogScanMaxBodyLen {
+		return fmt.Errorf("frame raw payload too large: %d > %d", rawPayloadBytes, treeDBVlogScanMaxBodyLen)
+	}
+	storedPayloadBytes := uint64(len(body) - prefixLen)
+	dictID := binary.LittleEndian.Uint64(body[4:12])
+	compressed := flags&treeDBVlogScanFrameFlagCompressed != 0
+	if !compressed && rawPayloadBytes != storedPayloadBytes {
+		return fmt.Errorf("uncompressed frame raw/stored size mismatch: raw=%d stored=%d", rawPayloadBytes, storedPayloadBytes)
+	}
+
+	writeMode := "off"
+	outerCodec := "unknown"
+	blockCodec := ""
+	autoCandidate := "off"
+	if dictID != 0 {
+		writeMode = "dict"
+		autoCandidate = "dict"
+		if !compressed {
+			outerCodec = treeDBVlogScanOuterLeafCodecFromPayload(body[prefixLen:], offsets)
+		}
+	} else if !compressed {
+		outerCodec = treeDBVlogScanOuterLeafCodecFromPayload(body[prefixLen:], offsets)
+	} else {
+		writeMode = "block"
+		switch body[3] {
+		case treeDBVlogScanBlockCodecLZ4:
+			blockCodec = "lz4"
+			autoCandidate = "block_lz4"
+		case treeDBVlogScanBlockCodecSnappy:
+			blockCodec = "snappy"
+			autoCandidate = "block_snappy"
+		default:
+			autoCandidate = ""
+		}
+	}
+
+	s.addCounters(s.WriteModes, writeMode, k, rawPayloadBytes, storedPayloadBytes)
+	s.addCounters(s.PayloadKinds, "outer_leaf", k, rawPayloadBytes, storedPayloadBytes)
+	s.addCounters(s.PayloadSplits, "outer_leaf", k, rawPayloadBytes, storedPayloadBytes)
+	s.addCounters(s.OuterLeafCodecs, outerCodec, k, rawPayloadBytes, storedPayloadBytes)
+	if blockCodec != "" {
+		s.addCounters(s.BlockCodecs, blockCodec, k, rawPayloadBytes, storedPayloadBytes)
+	}
+	if countAuto && autoCandidate != "" {
+		s.addCounters(s.AutoCandidates, autoCandidate, k, rawPayloadBytes, storedPayloadBytes)
+	}
+	if writeMode == "block" && (blockCodec == "snappy" || blockCodec == "lz4") {
+		s.BlockKCount[blockCodec]++
+		s.BlockKSum[blockCodec] += uint64(k)
+		if uint64(k) > s.BlockKMax[blockCodec] {
+			s.BlockKMax[blockCodec] = uint64(k)
+		}
+		buckets := s.BlockKBuckets[blockCodec]
+		if len(buckets) == 0 {
+			buckets = make([]uint64, len(treeDBVlogScanKBucketUpperBounds))
+		}
+		for i, upper := range treeDBVlogScanKBucketUpperBounds {
+			if k <= upper {
+				buckets[i]++
+				break
+			}
+		}
+		s.BlockKBuckets[blockCodec] = buckets
+	}
+	return nil
+}
+
+func treeDBVlogScanOuterLeafCodecFromPayload(payload []byte, offsets []uint32) string {
+	if len(offsets) < 2 {
+		return "unknown"
+	}
+	kind := ""
+	for i := 0; i+1 < len(offsets); i++ {
+		start, end := int(offsets[i]), int(offsets[i+1])
+		if start < 0 || end < start || end > len(payload) {
+			return "unknown"
+		}
+		next := treeDBVlogScanOuterLeafCodecFromValue(payload[start:end])
+		if kind == "" {
+			kind = next
+			continue
+		}
+		if next != kind {
+			return "mixed"
+		}
+	}
+	if kind == "" {
+		return "unknown"
+	}
+	return kind
+}
+
+func treeDBVlogScanOuterLeafCodecFromValue(value []byte) string {
+	if len(value) == 0 {
+		return "unknown"
+	}
+	if len(value) >= 4 && value[0] == 'T' && value[1] == 'O' && value[2] == 'L' && value[3] == '2' {
+		if len(value) <= treeDBVlogScanOuterLeafCodecHeaderOffset {
+			return "unknown"
+		}
+		switch value[treeDBVlogScanOuterLeafCodecHeaderOffset] {
+		case treeDBVlogScanOuterLeafCodecNoneID:
+			return "none"
+		case treeDBVlogScanOuterLeafCodecSnappyID:
+			return "snappy"
+		case treeDBVlogScanOuterLeafCodecLZ4ID:
+			return "lz4"
+		default:
+			return "unknown"
+		}
+	}
+	return "legacy_page"
+}
+
+func (s *treeDBVlogCodecScanStats) addCounters(dst map[string]treeDBVlogCodecScanCounters, key string, records int, rawBytes, storedBytes uint64) {
+	c := dst[key]
+	c.Frames++
+	if records > 0 {
+		c.Records += uint64(records)
+	}
+	c.RawBytes += rawBytes
+	c.StoredBytes += storedBytes
+	dst[key] = c
+}
+
+func (s *treeDBVlogCodecScanStats) treeDBStats() map[string]string {
+	if s == nil {
+		return nil
+	}
+	out := map[string]string{}
+	putCounters := func(prefix string, counters map[string]treeDBVlogCodecScanCounters, includeRecords bool) {
+		for name, c := range counters {
+			if c.Frames > 0 {
+				out[prefix+".frames."+name] = fmt.Sprintf("%d", c.Frames)
+			}
+			if includeRecords && c.Records > 0 {
+				out[prefix+".records."+name] = fmt.Sprintf("%d", c.Records)
+			}
+			if c.RawBytes > 0 {
+				out[prefix+".raw_bytes."+name] = fmt.Sprintf("%d", c.RawBytes)
+			}
+			if c.StoredBytes > 0 {
+				out[prefix+".stored_bytes."+name] = fmt.Sprintf("%d", c.StoredBytes)
+			}
+			if c.RawBytes > 0 {
+				out[prefix+".stored_ratio."+name] = fmt.Sprintf("%.6f", float64(c.StoredBytes)/float64(c.RawBytes))
+			}
+		}
+	}
+	putCounters("treedb.cache.vlog_write_mode", s.WriteModes, false)
+	putCounters("treedb.cache.vlog_payload_kind", s.PayloadKinds, false)
+	putCounters("treedb.cache.vlog_payload_split", s.PayloadSplits, true)
+	putCounters("treedb.cache.vlog_outer_leaf_codec", s.OuterLeafCodecs, false)
+
+	totalAutoFrames := uint64(0)
+	for _, c := range s.AutoCandidates {
+		totalAutoFrames += c.Frames
+	}
+	for name, c := range s.AutoCandidates {
+		if c.Frames > 0 {
+			out["treedb.cache.vlog_auto.frames."+name] = fmt.Sprintf("%d", c.Frames)
+		}
+		if c.RawBytes > 0 {
+			out["treedb.cache.vlog_auto.bytes."+name] = fmt.Sprintf("%d", c.RawBytes)
+		}
+		if totalAutoFrames > 0 && c.Frames > 0 {
+			out["treedb.cache.vlog_auto.frames_frac."+name] = fmt.Sprintf("%.6f", float64(c.Frames)/float64(totalAutoFrames))
+		}
+	}
+
+	for _, codec := range []string{"snappy", "lz4"} {
+		count := s.BlockKCount[codec]
+		if count == 0 {
+			continue
+		}
+		out["treedb.cache.vlog_block.k.count."+codec] = fmt.Sprintf("%d", count)
+		out["treedb.cache.vlog_block.k.avg."+codec] = fmt.Sprintf("%.3f", float64(s.BlockKSum[codec])/float64(count))
+		out["treedb.cache.vlog_block.k.max."+codec] = fmt.Sprintf("%d", s.BlockKMax[codec])
+		if c := s.BlockCodecs[codec]; c.RawBytes > 0 {
+			out["treedb.cache.vlog_block.ratio."+codec] = fmt.Sprintf("%.6f", float64(c.StoredBytes)/float64(c.RawBytes))
+		}
+		buckets := s.BlockKBuckets[codec]
+		for i, upper := range treeDBVlogScanKBucketUpperBounds {
+			if i < len(buckets) && buckets[i] > 0 {
+				out[fmt.Sprintf("treedb.cache.vlog_block.k.bucket.%s.le_%d", codec, upper)] = fmt.Sprintf("%d", buckets[i])
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
@@ -5016,6 +5451,13 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString(perf)
 		sb.WriteString("\n```\n")
 	}
+	if codecStats := strings.TrimSpace(renderTreeDBVlogCodecSummaryString(run.Instances, run.TreeDBStats)); codecStats != "" {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB Value-Log Codec Summary (End of Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(codecStats)
+		sb.WriteString("\n```\n")
+	}
 	if stats := strings.TrimSpace(renderTreeDBSelectedStatsString(run.Instances, run.TreeDBStats)); stats != "" {
 		sb.WriteString("\n")
 		sb.WriteString("## TreeDB Selected Stats (End of Run)\n\n")
@@ -5100,6 +5542,185 @@ func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, di
 		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+type treeDBVlogSummaryMetric struct {
+	label string
+	key   string
+}
+
+func renderTreeDBVlogCodecSummaryString(instances []*DBInstance, treeStats map[string]map[string]string) string {
+	if len(treeStats) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		dbName := inst.Wrapper.Name()
+		stats := treeStats[dbName]
+		if len(stats) == 0 {
+			continue
+		}
+		var dbSB strings.Builder
+		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.frames", []treeDBVlogSummaryMetric{
+			{label: "off", key: "treedb.cache.vlog_auto.frames.off"},
+			{label: "dict", key: "treedb.cache.vlog_auto.frames.dict"},
+			{label: "block_snappy", key: "treedb.cache.vlog_auto.frames.block_snappy"},
+			{label: "block_lz4", key: "treedb.cache.vlog_auto.frames.block_lz4"},
+		})
+		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.bytes", []treeDBVlogSummaryMetric{
+			{label: "off", key: "treedb.cache.vlog_auto.bytes.off"},
+			{label: "dict", key: "treedb.cache.vlog_auto.bytes.dict"},
+			{label: "block_snappy", key: "treedb.cache.vlog_auto.bytes.block_snappy"},
+			{label: "block_lz4", key: "treedb.cache.vlog_auto.bytes.block_lz4"},
+		})
+		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.frames_frac", []treeDBVlogSummaryMetric{
+			{label: "off", key: "treedb.cache.vlog_auto.frames_frac.off"},
+			{label: "dict", key: "treedb.cache.vlog_auto.frames_frac.dict"},
+			{label: "block_snappy", key: "treedb.cache.vlog_auto.frames_frac.block_snappy"},
+			{label: "block_lz4", key: "treedb.cache.vlog_auto.frames_frac.block_lz4"},
+		})
+		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.probes", []treeDBVlogSummaryMetric{
+			{label: "attempts", key: "treedb.cache.vlog_auto.probe_attempts"},
+			{label: "successes", key: "treedb.cache.vlog_auto.probe_successes"},
+			{label: "success_frac", key: "treedb.cache.vlog_auto.probe_success_frac"},
+			{label: "hold_enters", key: "treedb.cache.vlog_auto.hold_enters"},
+			{label: "hold_exits", key: "treedb.cache.vlog_auto.hold_exits"},
+			{label: "bypass_bytes", key: "treedb.cache.vlog_auto.bypass_bytes"},
+		})
+		for _, mode := range []string{"off", "block", "dict"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_write_mode."+mode, []treeDBVlogSummaryMetric{
+				{label: "frames", key: "treedb.cache.vlog_write_mode.frames." + mode},
+				{label: "raw_bytes", key: "treedb.cache.vlog_write_mode.raw_bytes." + mode},
+				{label: "stored_bytes", key: "treedb.cache.vlog_write_mode.stored_bytes." + mode},
+				{label: "stored_ratio", key: "treedb.cache.vlog_write_mode.stored_ratio." + mode},
+			})
+		}
+		for _, kind := range []string{"single_value", "outer_leaf", "mixed"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_payload_kind."+kind, []treeDBVlogSummaryMetric{
+				{label: "frames", key: "treedb.cache.vlog_payload_kind.frames." + kind},
+				{label: "raw_bytes", key: "treedb.cache.vlog_payload_kind.raw_bytes." + kind},
+				{label: "stored_bytes", key: "treedb.cache.vlog_payload_kind.stored_bytes." + kind},
+				{label: "stored_ratio", key: "treedb.cache.vlog_payload_kind.stored_ratio." + kind},
+			})
+		}
+		for _, kind := range []string{"single_value", "outer_leaf"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_payload_split."+kind, []treeDBVlogSummaryMetric{
+				{label: "records", key: "treedb.cache.vlog_payload_split.records." + kind},
+				{label: "raw_bytes", key: "treedb.cache.vlog_payload_split.raw_bytes." + kind},
+				{label: "stored_bytes", key: "treedb.cache.vlog_payload_split.stored_bytes." + kind},
+				{label: "stored_ratio", key: "treedb.cache.vlog_payload_split.stored_ratio." + kind},
+			})
+		}
+		for _, codec := range []string{"none", "snappy", "lz4", "legacy_page", "unknown", "mixed"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_outer_leaf_codec."+codec, []treeDBVlogSummaryMetric{
+				{label: "frames", key: "treedb.cache.vlog_outer_leaf_codec.frames." + codec},
+				{label: "raw_bytes", key: "treedb.cache.vlog_outer_leaf_codec.raw_bytes." + codec},
+				{label: "stored_bytes", key: "treedb.cache.vlog_outer_leaf_codec.stored_bytes." + codec},
+				{label: "stored_ratio", key: "treedb.cache.vlog_outer_leaf_codec.stored_ratio." + codec},
+			})
+		}
+		for _, codec := range []string{"snappy", "lz4"} {
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_block.k."+codec, []treeDBVlogSummaryMetric{
+				{label: "count", key: "treedb.cache.vlog_block.k.count." + codec},
+				{label: "avg", key: "treedb.cache.vlog_block.k.avg." + codec},
+				{label: "max", key: "treedb.cache.vlog_block.k.max." + codec},
+				{label: "ratio", key: "treedb.cache.vlog_block.ratio." + codec},
+			})
+			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_block.k.bucket."+codec, []treeDBVlogSummaryMetric{
+				{label: "le_1", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_1"},
+				{label: "le_2", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_2"},
+				{label: "le_4", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_4"},
+				{label: "le_8", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_8"},
+				{label: "le_16", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_16"},
+				{label: "le_32", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_32"},
+				{label: "le_64", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_64"},
+				{label: "le_128", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_128"},
+			})
+		}
+		appendTreeDBLeafScanVlogSummaryLines(&dbSB, stats)
+		if dbSB.Len() == 0 {
+			continue
+		}
+		sb.WriteString(dbName)
+		sb.WriteString(":\n")
+		sb.WriteString(dbSB.String())
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func appendTreeDBLeafScanVlogSummaryLines(sb *strings.Builder, stats map[string]string) {
+	appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.auto.frames", []treeDBVlogSummaryMetric{
+		{label: "off", key: "treedb.cache.vlog_leaf_scan.auto.frames.off"},
+		{label: "dict", key: "treedb.cache.vlog_leaf_scan.auto.frames.dict"},
+		{label: "block_snappy", key: "treedb.cache.vlog_leaf_scan.auto.frames.block_snappy"},
+		{label: "block_lz4", key: "treedb.cache.vlog_leaf_scan.auto.frames.block_lz4"},
+	})
+	for _, mode := range []string{"off", "block", "dict"} {
+		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.write_mode."+mode, []treeDBVlogSummaryMetric{
+			{label: "frames", key: "treedb.cache.vlog_leaf_scan.write_mode.frames." + mode},
+			{label: "raw_bytes", key: "treedb.cache.vlog_leaf_scan.write_mode.raw_bytes." + mode},
+			{label: "stored_bytes", key: "treedb.cache.vlog_leaf_scan.write_mode.stored_bytes." + mode},
+			{label: "stored_ratio", key: "treedb.cache.vlog_leaf_scan.write_mode.stored_ratio." + mode},
+		})
+	}
+	for _, codec := range []string{"none", "snappy", "lz4", "legacy_page", "unknown", "mixed"} {
+		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.outer_leaf_codec."+codec, []treeDBVlogSummaryMetric{
+			{label: "frames", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames." + codec},
+			{label: "raw_bytes", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.raw_bytes." + codec},
+			{label: "stored_bytes", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.stored_bytes." + codec},
+			{label: "stored_ratio", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.stored_ratio." + codec},
+		})
+	}
+	for _, codec := range []string{"snappy", "lz4"} {
+		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.block.k."+codec, []treeDBVlogSummaryMetric{
+			{label: "count", key: "treedb.cache.vlog_leaf_scan.block.k.count." + codec},
+			{label: "avg", key: "treedb.cache.vlog_leaf_scan.block.k.avg." + codec},
+			{label: "max", key: "treedb.cache.vlog_leaf_scan.block.k.max." + codec},
+			{label: "ratio", key: "treedb.cache.vlog_leaf_scan.block.ratio." + codec},
+		})
+	}
+}
+
+func appendTreeDBVlogSummaryLine(sb *strings.Builder, stats map[string]string, label string, metrics []treeDBVlogSummaryMetric) bool {
+	parts := make([]string, 0, len(metrics))
+	hasSignal := false
+	for _, metric := range metrics {
+		value, ok := stats[metric.key]
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		parts = append(parts, metric.label+"="+value)
+		if treeDBVlogStatValueHasSignal(value) {
+			hasSignal = true
+		}
+	}
+	if len(parts) == 0 || !hasSignal {
+		return false
+	}
+	sb.WriteString("  ")
+	sb.WriteString(label)
+	sb.WriteString(": ")
+	sb.WriteString(strings.Join(parts, " "))
+	sb.WriteByte('\n')
+	return true
+}
+
+func treeDBVlogStatValueHasSignal(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if f, err := strconv.ParseFloat(value, 64); err == nil {
+		return f != 0
+	}
+	return value != "false"
 }
 
 func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[string]map[string]string) string {
@@ -5319,6 +5940,27 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
 			sb.WriteString("```text\n")
 			sb.WriteString(perf)
+			sb.WriteString("\n```\n\n")
+		}
+	}
+
+	anyCodecStats := false
+	for _, run := range runs {
+		if strings.TrimSpace(renderTreeDBVlogCodecSummaryString(run.Instances, run.TreeDBStats)) != "" {
+			anyCodecStats = true
+			break
+		}
+	}
+	if anyCodecStats {
+		sb.WriteString("## TreeDB Value-Log Codec Summary (End of Run)\n\n")
+		for _, run := range runs {
+			codecStats := strings.TrimSpace(renderTreeDBVlogCodecSummaryString(run.Instances, run.TreeDBStats))
+			if codecStats == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(codecStats)
 			sb.WriteString("\n```\n\n")
 		}
 	}
