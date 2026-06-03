@@ -7805,6 +7805,11 @@ type memtableView struct {
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
 	deferredRetiredBytes     atomic.Int64
+	// readerRefs coalesces tracked external readers for this immutable view.
+	// The first reader registers the view in DB.retainedMemtableViews under
+	// retiredMemtablesMu; overlapping readers only bump this atomic and avoid
+	// per-snapshot registry lock traffic. The last reader unregisters the view.
+	readerRefs atomic.Int64
 }
 
 // appendOnlyEstimatedBytesPerEntryDefault tunes initial append-only memtable
@@ -8050,30 +8055,55 @@ func (db *DB) registerMemtableViewReader(view *memtableView) {
 	if db == nil || view == nil {
 		return
 	}
-	db.retiredMemtablesMu.Lock()
-	if db.retainedMemtableViews == nil {
-		db.retainedMemtableViews = make(map[*memtableView]int)
+	for {
+		refs := view.readerRefs.Load()
+		if refs > 0 {
+			if view.readerRefs.CompareAndSwap(refs, refs+1) {
+				return
+			}
+			continue
+		}
+
+		db.retiredMemtablesMu.Lock()
+		refs = view.readerRefs.Load()
+		if refs == 0 {
+			view.readerRefs.Store(1)
+			if db.retainedMemtableViews == nil {
+				db.retainedMemtableViews = make(map[*memtableView]int)
+			}
+			db.retainedMemtableViews[view] = 1
+			db.memtableViewReaders.Add(1)
+			db.retiredMemtablesMu.Unlock()
+			return
+		}
+		db.retiredMemtablesMu.Unlock()
 	}
-	db.retainedMemtableViews[view]++
-	db.memtableViewReaders.Add(1)
-	db.retiredMemtablesMu.Unlock()
 }
 
 func (db *DB) unregisterMemtableViewReader(view *memtableView) {
-	if db == nil {
+	if db == nil || view == nil {
 		return
 	}
+	refs := view.readerRefs.Add(-1)
+	if refs > 0 {
+		return
+	}
+	if refs < 0 {
+		// Defensive self-heal for tests or future callers that accidentally pair an
+		// unregister without a tracked register. Production retain/release paths are
+		// balanced, so this should not happen.
+		view.readerRefs.Store(0)
+		return
+	}
+
 	var reclaim []memtable.Table
 	released := false
 	db.retiredMemtablesMu.Lock()
-	if view != nil && db.retainedMemtableViews != nil {
-		if refs := db.retainedMemtableViews[view]; refs > 1 {
-			db.retainedMemtableViews[view] = refs - 1
-			released = true
-		} else {
+	if view.readerRefs.Load() == 0 && db.retainedMemtableViews != nil {
+		if _, ok := db.retainedMemtableViews[view]; ok {
 			delete(db.retainedMemtableViews, view)
 			reclaim = append(reclaim, db.releaseDeferredRetiredMemtablesForViewLocked(view)...)
-			released = refs == 1
+			released = true
 		}
 	}
 	if released {

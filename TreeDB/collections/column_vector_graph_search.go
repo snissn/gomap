@@ -15,6 +15,12 @@ import (
 // probes.
 const columnVectorGraphNativeScratchOversizeSlack = 16
 
+// Layer-0 frontier pushes can exceed efSearch because every candidate admitted
+// into the retained top set is also queued for expansion, including candidates
+// later displaced from that top set. Seed frontier capacity from efSearch*M to
+// avoid repeated grow/shrink churn while keeping retention capped by row count.
+const columnVectorGraphNativeFrontierCapacityDegreeFloor = 1
+
 // Default TopK values are small; insertion order avoids sort overhead there.
 // Larger result sets switch to sort.Slice so result ordering does not go O(k^2).
 const columnVectorGraphNativeResultOrderInsertionSortLimit = 32
@@ -899,13 +905,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 		clear(s.visitMarks)
 		s.visitEpoch = 1
 	}
-	frontierCap := efSearch
-	if frontierCap > rowCount {
-		frontierCap = rowCount
-	}
-	if frontierCap < topK {
-		frontierCap = topK
-	}
+	frontierCap := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
 	s.frontier = resizeColumnVectorGraphNativeCandidateScratch(s.frontier, frontierCap)
 	topCandidateCap := efSearch
 	if topCandidateCap > rowCount {
@@ -953,6 +953,39 @@ func resizeColumnVectorGraphNativeCandidateScratch(dst []columnVectorGraphSearch
 		return make([]columnVectorGraphSearchCandidate, 0, target)
 	}
 	return dst[:0]
+}
+
+func columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch int) int {
+	if rowCount < 0 {
+		rowCount = 0
+	}
+	if topK < 0 {
+		topK = 0
+	}
+	if topK > rowCount {
+		topK = rowCount
+	}
+	if degree < columnVectorGraphNativeFrontierCapacityDegreeFloor {
+		degree = columnVectorGraphNativeFrontierCapacityDegreeFloor
+	}
+	frontierCap := efSearch
+	if frontierCap < 0 {
+		frontierCap = 0
+	}
+	if frontierCap > 0 && degree > 1 {
+		if rowCount > 0 && frontierCap <= rowCount/degree {
+			frontierCap *= degree
+		} else {
+			frontierCap = rowCount
+		}
+	}
+	if frontierCap > rowCount {
+		frontierCap = rowCount
+	}
+	if frontierCap < topK {
+		frontierCap = topK
+	}
+	return frontierCap
 }
 
 func resizeColumnVectorGraphNativeResultScratch(dst []columnVectorGraphNativeSearchResult, target int) []columnVectorGraphNativeSearchResult {
