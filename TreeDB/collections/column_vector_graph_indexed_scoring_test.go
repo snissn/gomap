@@ -114,6 +114,29 @@ func TestColumnVectorGraphIndexedScoringTieAndApplicationOrder1969(t *testing.T)
 	}
 }
 
+func TestColumnVectorGraphIndexedScoringEfOneExpandsEntry1969(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-entry"), Vector: []float32{0, 1}, InvNorm: 1, Adjacency: []uint32{1}},
+		{ID: []byte("doc-best-neighbor"), Vector: []float32{1, 0}, InvNorm: 1},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(t, 2, 1, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	attachColumnVectorGraphIndexedScoreSources1969(t, reader, rows)
+
+	indexedResults, indexedStats := searchColumnVectorGraphIndexedScoring1969(t, reader, []float32{1, 0}, columnVectorGraphScoreBatchModeIndexed, 1, 1)
+	if len(indexedResults) != 1 || indexedResults[0].Ordinal != 1 {
+		t.Fatalf("indexed results=%+v want efSearch=1 to expand the entry and find best neighbor", indexedResults)
+	}
+	if indexedStats.Candidates != 2 {
+		t.Fatalf("indexed stats=%+v want entry plus one adjacency candidate", indexedStats)
+	}
+}
+
 func TestColumnVectorGraphIndexedScoringUnsupportedFallback1969(t *testing.T) {
 	rows := []columnVectorGraphAssetRow{
 		{ID: []byte("doc-entry"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{1, 2, 3}},

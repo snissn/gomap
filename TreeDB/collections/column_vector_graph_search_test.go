@@ -369,8 +369,8 @@ func TestColumnVectorGraphNativeSearchUsesBestFirstFrontierV3(t *testing.T) {
 	if len(got) != 1 || got[0].Ordinal != 4 || string(got[0].ID) != "doc-best" {
 		t.Fatalf("results=%+v want best-first traversal to reach doc-best before lower-score branch", got)
 	}
-	if stats.Candidates != 4 || stats.CandidateFetches != 4 || stats.ScoreBatches != 4 || stats.ExpansionFetches != stats.AdjacencyExpansions {
-		t.Fatalf("stats=%+v want four scored candidates plus lazy adjacency expansion fetches", stats)
+	if stats.Candidates != 5 || stats.CandidateFetches != 5 || stats.ScoreBatches != 5 || stats.ExpansionFetches != stats.AdjacencyExpansions {
+		t.Fatalf("stats=%+v want five scored candidates plus lazy adjacency expansion fetches", stats)
 	}
 	if readerStats := reader.Stats(); readerStats.RowFetches != 0 || readerStats.BatchFetches != 0 || readerStats.RowsFetched != 0 {
 		t.Fatalf("reader stats=%+v want no generic row fetches for scoring or result IDs stats=%+v", readerStats, stats)

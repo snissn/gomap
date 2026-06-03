@@ -1390,7 +1390,7 @@ func columnVectorGraphLayer0SearchShouldStop(candidate columnVectorGraphSearchCa
 	if efSearch <= 0 || len(top) < efSearch {
 		return false
 	}
-	return !columnVectorGraphSearchCandidateBetter(candidate, top[len(top)-1])
+	return candidate.score < top[len(top)-1].score
 }
 
 func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, topK int, rowCount int, candidateLimit uint64, wavefrontWidth int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, wavefrontStats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters, debugCounters *columnVectorGraphNativeSearchDebugCounters, countLoopEdges bool, loopEdgeVisits *uint64, nextSeed *int) error {
@@ -1860,10 +1860,10 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		score:   score,
 	}
 	if debugCounters != nil {
-		scratch.insertTopDebug(topK, candidate, debugCounters)
-		scratch.pushFrontierDebug(candidate, debugCounters)
-	} else {
-		scratch.insertTop(topK, candidate)
+		if scratch.insertTopDebug(topK, candidate, debugCounters) {
+			scratch.pushFrontierDebug(candidate, debugCounters)
+		}
+	} else if scratch.insertTop(topK, candidate) {
 		scratch.pushFrontier(candidate)
 	}
 	return nil
@@ -1888,10 +1888,10 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 		(*visitedCandidates)++
 		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: scores[i]}
 		if debugCounters != nil {
-			scratch.insertTopDebug(topK, candidate, debugCounters)
-			scratch.pushFrontierDebug(candidate, debugCounters)
-		} else {
-			scratch.insertTop(topK, candidate)
+			if scratch.insertTopDebug(topK, candidate, debugCounters) {
+				scratch.pushFrontierDebug(candidate, debugCounters)
+			}
+		} else if scratch.insertTop(topK, candidate) {
 			scratch.pushFrontier(candidate)
 		}
 	}
@@ -2383,29 +2383,30 @@ func (s *columnVectorGraphNativeSearchScratch) frontierSiftDownDebug(idx int, ca
 	debugCounters.stats.FrontierSiftDownSteps += steps
 }
 
-func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate columnVectorGraphSearchCandidate) {
+func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate columnVectorGraphSearchCandidate) bool {
 	if limit <= 0 {
-		return
+		return false
 	}
 	pos := len(s.top)
 	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, s.top[pos-1]) {
 		pos--
 	}
 	if pos >= limit {
-		return
+		return false
 	}
 	if len(s.top) < limit {
 		s.top = append(s.top, columnVectorGraphSearchCandidate{})
 	}
 	copy(s.top[pos+1:], s.top[pos:len(s.top)-1])
 	s.top[pos] = candidate
+	return true
 }
 
-func (s *columnVectorGraphNativeSearchScratch) insertTopDebug(limit int, candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+func (s *columnVectorGraphNativeSearchScratch) insertTopDebug(limit int, candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) bool {
 	debugCounters.stats.TopKInsertAttempts++
 	if limit <= 0 {
 		debugCounters.stats.TopKInsertRejections++
-		return
+		return false
 	}
 	pos := len(s.top)
 	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, s.top[pos-1]) {
@@ -2413,7 +2414,7 @@ func (s *columnVectorGraphNativeSearchScratch) insertTopDebug(limit int, candida
 	}
 	if pos >= limit {
 		debugCounters.stats.TopKInsertRejections++
-		return
+		return false
 	}
 	debugCounters.stats.TopKInsertSuccesses++
 	shiftSteps := len(s.top) - pos
@@ -2426,6 +2427,7 @@ func (s *columnVectorGraphNativeSearchScratch) insertTopDebug(limit int, candida
 	}
 	copy(s.top[pos+1:], s.top[pos:len(s.top)-1])
 	s.top[pos] = candidate
+	return true
 }
 
 func columnVectorGraphSearchCandidateBetter(left, right columnVectorGraphSearchCandidate) bool {
