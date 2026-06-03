@@ -32,6 +32,107 @@ func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_IgnoresInlineLeafLogWhenDBDefaultUsesPagerLeaves(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir:                    dir,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if db.indexOuterLeavesInValueLog {
+		t.Fatalf("indexOuterLeavesInValueLog=true, want false for this regression")
+	}
+	inlineAppender, err := newReplayInlineAppender(db, nil, nil)
+	if err != nil {
+		t.Fatalf("new replay inline appender: %v", err)
+	}
+	defer func() { _ = inlineAppender.close() }()
+	db.SetValueLogAppender(inlineAppender)
+	db.SetLeafPageLog(replayInlineLeafPageLog{appender: inlineAppender})
+	defer db.SetValueLogAppender(nil)
+	defer db.SetLeafPageLog(nil)
+	if db.leafPageLog == nil {
+		t.Fatalf("inline appender did not install a leaf page log")
+	}
+
+	if _, err := db.AppendValueLogValues([][]byte{bytes.Repeat([]byte("ordinary-value|"), 32)}); err != nil {
+		t.Fatalf("append ordinary value-log value: %v", err)
+	}
+	appender := db.currentValueLogAppender()
+	if appender == nil {
+		t.Fatalf("missing value-log appender")
+	}
+	primaryPath, primaryFileID, ok := appender.CurrentValueLogSegment()
+	if !ok || primaryPath == "" || primaryFileID == 0 {
+		t.Fatalf("ordinary value-log segment not opened: path=%q id=%d ok=%t", primaryPath, primaryFileID, ok)
+	}
+
+	table := mustFrozenSystemMemtable(t, "doc/u1", "document")
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          table.NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}})
+	if err != nil {
+		t.Fatalf("publish value-log leaf root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("rootIDs=%d want 1", len(rootIDs))
+	}
+	leafPtrs := requireLeafLogRootChildren(t, db, rootIDs[0])
+	leafFileID := page.ValueLogFileID(leafPtrs[0].FileID)
+
+	preSet := db.valueLogManager.CurrentSetNoRefresh()
+	if preSet == nil {
+		t.Fatalf("missing value-log set before GC")
+	}
+	if _, ok := preSet.Files[primaryFileID]; !ok {
+		_ = db.valueLogManager.Release(preSet)
+		t.Fatalf("ordinary value-log segment %d missing before GC", primaryFileID)
+	}
+	if _, ok := preSet.Files[leafFileID]; !ok {
+		_ = db.valueLogManager.Release(preSet)
+		t.Fatalf("leaf-log segment %d missing before GC", leafFileID)
+	}
+	_ = db.valueLogManager.Release(preSet)
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{ProtectedPaths: []string{primaryPath}})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsEligible != 0 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("leaf-log segment was considered ordinary GC work: %+v", stats)
+	}
+
+	postSet := db.valueLogManager.CurrentSetNoRefresh()
+	if postSet == nil {
+		t.Fatalf("missing value-log set after GC")
+	}
+	if _, ok := postSet.Files[leafFileID]; !ok {
+		_ = db.valueLogManager.Release(postSet)
+		t.Fatalf("leaf-log segment %d missing from current set after GC", leafFileID)
+	}
+	_ = db.valueLogManager.Release(postSet)
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("doc/u1"))
+	if err != nil {
+		t.Fatalf("read value-log leaf root after GC: %v", err)
+	}
+	if got := string(entry.Value); got != "document" {
+		t.Fatalf("value after GC=%q want document", got)
+	}
+}
+
 func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	dir := t.TempDir()
 

@@ -844,26 +844,35 @@ func selectSingleExplicitRewriteSourceID(sourceFileIDs []uint32, files map[uint3
 }
 
 func (db *DB) isLeafLogValueFileID(fileID uint32) bool {
-	if db == nil || !db.indexOuterLeavesInValueLog {
-		return false
-	}
 	lane, _ := valuelog.DecodeFileID(fileID)
 	return lane == rewriteLeafLogLaneID
+}
+
+func (db *DB) isLeafLogValueFile(id uint32, f *valuelog.File) bool {
+	// Per-root value-log leaf storage can be wired by the command-WAL inline
+	// appender even when the DB-level default keeps outer leaves in pager pages.
+	// Ordinary value-log maintenance must still exclude those leaf_vlog files.
+	if f != nil && f.Path != "" && db != nil && db.dir != "" {
+		if filepath.Clean(filepath.Dir(f.Path)) == filepath.Clean(LeafLogDirPath(db.dir)) {
+			return true
+		}
+	}
+	if db == nil || (db.leafPageLog == nil && db.leafGenerationManifest == nil && !db.indexOuterLeavesInValueLog) {
+		return false
+	}
+	return db.isLeafLogValueFileID(id)
 }
 
 func (db *DB) valueOnlyValueLogFiles(files map[uint32]*valuelog.File) map[uint32]*valuelog.File {
 	if len(files) == 0 {
 		return nil
 	}
-	if db == nil || !db.indexOuterLeavesInValueLog {
-		return files
-	}
 	filtered := make(map[uint32]*valuelog.File, len(files))
 	for id, f := range files {
 		if f == nil {
 			continue
 		}
-		if db.isLeafLogValueFileID(id) {
+		if db.isLeafLogValueFile(id, f) {
 			continue
 		}
 		filtered[id] = f
@@ -5258,7 +5267,7 @@ func (db *DB) valueLogSegmentStatsValueOnly(dir string) (count int, bytes int64,
 		if !seg.valueLog {
 			continue
 		}
-		if db != nil && db.isLeafLogValueFileID(uint32(seg.fileID)) {
+		if db != nil && db.isLeafLogValueFile(uint32(seg.fileID), &valuelog.File{Path: seg.path}) {
 			continue
 		}
 		if seg.size > 0 {
