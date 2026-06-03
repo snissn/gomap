@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
 
@@ -367,19 +368,42 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinal(plan *columnVectorGra
 	if len(query) != v.dims {
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, v.dims, len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
-	vector, reason, ok := v.vector.vectorForOrdinal(ordinal)
-	if !ok {
-		return 0, fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, reason)
+	if ordinal < 0 || ordinal >= v.rows || ordinal >= len(v.norm.values) {
+		return 0, fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonRowCountMismatch)
 	}
-	invNorm, reason, ok := v.norm.valueForOrdinal(ordinal)
+	if v.norm.source == nil || v.norm.source.closed || (v.norm.source.handle != nil && v.norm.source.handle.Released()) {
+		return 0, fmt.Errorf("collections: column_graph prepared inverse-norm ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+	}
+	vector, ok := v.vectorForOrdinalFast(ordinal)
 	if !ok {
-		return 0, fmt.Errorf("collections: column_graph prepared inverse-norm ordinal=%d unavailable reason=%s", ordinal, reason)
+		return 0, fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+	}
+	score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, vector, v.norm.values[ordinal], stats)
+	if err != nil {
+		return 0, err
 	}
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
 		v.recordScoreStats(stats, plan, 1)
 		v.recordMappingStats(stats, ordinal)
 	}
+	return score, nil
+}
+
+func (v *columnVectorGraphPreparedSearchView) checkScalarScoreInputs(query []float32, ordinal int) error {
+	if v == nil || !v.ready() {
+		return errors.New("collections: column_graph prepared graph-search view is unavailable")
+	}
+	if len(query) != v.dims {
+		return fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, v.dims, len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
+	}
+	if v.norm.source == nil || v.norm.source.closed || (v.norm.source.handle != nil && v.norm.source.handle.Released()) {
+		return fmt.Errorf("collections: column_graph prepared inverse-norm ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+	}
+	return nil
+}
+
+func columnVectorGraphPreparedCosineScore(query []float32, queryInvNorm float32, ordinal int, vector []float32, invNorm float32, stats *columnVectorGraphNativeSearchStats) (float64, error) {
 	dot := float64(vectorDotProductFloat32(query, vector))
 	if math.IsInf(dot, 0) || math.IsNaN(dot) {
 		if stats != nil {
@@ -392,6 +416,45 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinal(plan *columnVectorGra
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d cosine score is not finite", ordinal)
 	}
 	return score, nil
+}
+
+func (v *columnVectorGraphPreparedSearchView) vectorForOrdinalFast(ordinal int) ([]float32, bool) {
+	vector := &v.vector
+	dims := vector.dims
+	if vector.singlePart != nil {
+		part := vector.singlePart
+		if part.handle == nil || part.handle.Released() {
+			return nil, false
+		}
+		row := ordinal
+		if vector.rowIndexByOrdinal != nil {
+			row = int(vector.rowIndexByOrdinal[ordinal])
+		}
+		start := row * dims
+		end := start + dims
+		if row < 0 || row >= part.rows || start < 0 || end < start || end > len(part.values) {
+			return nil, false
+		}
+		return part.values[start:end], true
+	}
+	if ordinal >= len(vector.partIndexByOrdinal) || ordinal >= len(vector.rowIndexByOrdinal) {
+		return nil, false
+	}
+	partIndex := int(vector.partIndexByOrdinal[ordinal])
+	if partIndex < 0 || partIndex >= len(vector.parts) {
+		return nil, false
+	}
+	part := vector.parts[partIndex]
+	if part == nil || part.handle == nil || part.handle.Released() {
+		return nil, false
+	}
+	row := int(vector.rowIndexByOrdinal[ordinal])
+	start := row * dims
+	end := start + dims
+	if row < 0 || row >= part.rows || start < 0 || end < start || end > len(part.values) {
+		return nil, false
+	}
+	return part.values[start:end], true
 }
 
 func (v *columnVectorGraphPreparedSearchView) scoreOrdinals(plan *columnVectorGraphSearchPlan, query []float32, queryInvNorm float32, ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
@@ -410,12 +473,72 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsScalar(plan *columnVe
 	} else {
 		dst = dst[:len(ordinals)]
 	}
-	for i, ordinal := range ordinals {
-		score, err := v.scoreOrdinal(plan, query, queryInvNorm, ordinal, stats)
-		if err != nil {
-			return dst[:i], err
+	if len(ordinals) == 0 {
+		return dst, nil
+	}
+	if err := v.checkScalarScoreInputs(query, ordinals[0]); err != nil {
+		return dst[:0], err
+	}
+	vectorView := &v.vector
+	dims := v.dims
+	normValues := v.norm.values
+	if part := vectorView.singlePart; part != nil {
+		if part.handle == nil || part.handle.Released() {
+			return dst[:0], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinals[0], typeddecode.ReasonStaleHandle)
 		}
-		dst[i] = score
+		rowIndexByOrdinal := vectorView.rowIndexByOrdinal
+		for i, ordinal := range ordinals {
+			if ordinal < 0 || ordinal >= v.rows || ordinal >= len(normValues) {
+				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonRowCountMismatch)
+			}
+			row := ordinal
+			if rowIndexByOrdinal != nil {
+				row = int(rowIndexByOrdinal[ordinal])
+			}
+			start := row * dims
+			end := start + dims
+			if row < 0 || row >= part.rows || start < 0 || end < start || end > len(part.values) {
+				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+			}
+			score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, part.values[start:end], normValues[ordinal], stats)
+			if err != nil {
+				return dst[:i], err
+			}
+			dst[i] = score
+		}
+	} else {
+		parts := vectorView.parts
+		partIndexByOrdinal := vectorView.partIndexByOrdinal
+		rowIndexByOrdinal := vectorView.rowIndexByOrdinal
+		for i, ordinal := range ordinals {
+			if ordinal < 0 || ordinal >= v.rows || ordinal >= len(normValues) || ordinal >= len(partIndexByOrdinal) || ordinal >= len(rowIndexByOrdinal) {
+				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonRowCountMismatch)
+			}
+			partIndex := int(partIndexByOrdinal[ordinal])
+			if partIndex < 0 || partIndex >= len(parts) {
+				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+			}
+			part := parts[partIndex]
+			if part == nil || part.handle == nil || part.handle.Released() {
+				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+			}
+			row := int(rowIndexByOrdinal[ordinal])
+			start := row * dims
+			end := start + dims
+			if row < 0 || row >= part.rows || start < 0 || end < start || end > len(part.values) {
+				return dst[:i], fmt.Errorf("collections: column_graph prepared vector ordinal=%d unavailable reason=%s", ordinal, typeddecode.ReasonStaleHandle)
+			}
+			score, err := columnVectorGraphPreparedCosineScore(query, queryInvNorm, ordinal, part.values[start:end], normValues[ordinal], stats)
+			if err != nil {
+				return dst[:i], err
+			}
+			dst[i] = score
+		}
+	}
+	if stats != nil {
+		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
+		v.recordScoreStats(stats, plan, len(ordinals))
+		v.recordMappingStatsCount(stats, len(ordinals))
 	}
 	return dst, nil
 }

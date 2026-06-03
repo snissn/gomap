@@ -386,7 +386,6 @@ func assertColumnVectorGraphSearchTopologyParityWork2091(tb testing.TB, boundary
 		{name: "candidate_fetches", legacyValue: legacy.CandidateFetches, currentValue: current.CandidateFetches},
 		{name: "expansion_fetches", legacyValue: legacy.ExpansionFetches, currentValue: current.ExpansionFetches},
 		{name: "result_fetches", legacyValue: legacy.ResultFetches, currentValue: current.ResultFetches},
-		{name: "score_batch_calls", legacyValue: legacy.ScoreBatchCalls, currentValue: current.ScoreBatchCalls},
 		{name: "score_batch_candidates", legacyValue: legacy.ScoreBatchCandidates, currentValue: current.ScoreBatchCandidates},
 		{name: "vector_bytes", legacyValue: legacy.VectorBytesRead, currentValue: current.VectorBytesRead},
 		{name: "norm_bytes", legacyValue: legacy.NormBytesRead, currentValue: current.NormBytesRead},
@@ -399,6 +398,9 @@ func assertColumnVectorGraphSearchTopologyParityWork2091(tb testing.TB, boundary
 		if check.legacyValue != check.currentValue {
 			tb.Fatalf("%s %s legacy=%d current=%d legacyStats=%+v currentStats=%+v", boundary, check.name, check.legacyValue, check.currentValue, legacy, current)
 		}
+	}
+	if current.ScoreBatchCalls == 0 || current.ScoreBatchCalls > legacy.ScoreBatchCalls || current.ScoreBatchMaxTileSize == 0 {
+		tb.Fatalf("%s current score batches calls=%d max_tile=%d legacy_calls=%d currentStats=%+v legacyStats=%+v want prepared path to preserve candidates while allowing scalar neighbor-tile grouping", boundary, current.ScoreBatchCalls, current.ScoreBatchMaxTileSize, legacy.ScoreBatchCalls, current, legacy)
 	}
 }
 
