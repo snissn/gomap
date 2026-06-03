@@ -105,7 +105,8 @@ Configuration:
 - `TREEDB_QUANTIZED_INDEX_NAME`: scalar_u8 TreeDB quantized score-plane name.
   Defaults to `embedding.scalar_u8.fast`.
 - `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB quantized-rerank exact rerank
-  candidate limit. Defaults to `32`; set `0` to use the normalized efSearch set.
+  candidate limit. Defaults to `max(32, TOP_K)`; set `0` to use the normalized
+  efSearch set.
 - `TREEDB_QUANTIZED_MIN_RECALL`: recall gate for both TreeDB quantized rows.
   Defaults to `0`, so comparisons report quantized recall instead of failing
   before rendering; set a positive value to enforce a quantized recall floor.
