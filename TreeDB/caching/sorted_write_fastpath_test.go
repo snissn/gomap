@@ -92,6 +92,34 @@ func TestBatchWriteSortedUniqueUsesCopySortedFastPath(t *testing.T) {
 	requireCachedValue(t, db, []byte("c"), []byte("vc"))
 }
 
+func TestBatchWriteSortedSetViewCopiesExternalValues(t *testing.T) {
+	db, rec := newSortedWriteFastPathDB(t)
+	defer db.Close()
+
+	keyA := []byte("a")
+	valA := []byte("va")
+	keyB := []byte("b")
+	valB := []byte("vb")
+	b := db.NewBatchWithSize(2)
+	if err := b.SetView(keyA, valA); err != nil {
+		t.Fatalf("SetView(a): %v", err)
+	}
+	if err := b.SetView(keyB, valB); err != nil {
+		t.Fatalf("SetView(b): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	valA[0] = 'z'
+	valB[0] = 'z'
+
+	if rec.calls != 1 {
+		t.Fatalf("copy sorted fast path calls=%d want 1", rec.calls)
+	}
+	requireCachedValue(t, db, []byte("a"), []byte("va"))
+	requireCachedValue(t, db, []byte("b"), []byte("vb"))
+}
+
 func TestBatchWriteSortedDuplicateFallsBackToGenericLatestWins(t *testing.T) {
 	db, rec := newSortedWriteFastPathDB(t)
 	defer db.Close()

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestAppendOnlyApplyCopySortedBatchTrusted_AppendKeepsOrderedAndCopiesKeys(t *testing.T) {
@@ -43,6 +45,34 @@ func TestAppendOnlyApplyCopySortedBatchTrusted_AppendKeepsOrderedAndCopiesKeys(t
 	}
 	if count != 2 {
 		t.Fatalf("count=%d want 2", count)
+	}
+}
+
+func TestAppendOnlyApplyCopySortedBatchTrusted_PointerInlinePolicy(t *testing.T) {
+	ptr := page.ValuePtr{FileID: 42, Offset: 7, Length: 3}
+
+	m := NewAppendOnlyWithCapacity(0)
+	m.ApplyCopySortedBatchTrusted([]batchpkg.Entry{{
+		Type:     batchpkg.OpPut,
+		Key:      []byte("a"),
+		Value:    []byte("raw"),
+		ValuePtr: ptr,
+		IsPtr:    true,
+	}}, false, false, nil)
+	if got, gotPtr, flags, ok := m.GetEntry([]byte("a")); !ok || got != nil || gotPtr != ptr || flags != node.FlagPointer {
+		t.Fatalf("GetEntry without inline ptr value=(%q,%+v,%d,%v), want nil,%+v,%d,true", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
+	}
+
+	withInline := NewAppendOnlyWithCapacity(0)
+	withInline.ApplyCopySortedBatchTrusted([]batchpkg.Entry{{
+		Type:     batchpkg.OpPut,
+		Key:      []byte("a"),
+		Value:    []byte("raw"),
+		ValuePtr: ptr,
+		IsPtr:    true,
+	}}, false, true, nil)
+	if got, gotPtr, flags, ok := withInline.GetEntry([]byte("a")); !ok || string(got) != "raw" || gotPtr != ptr || flags != node.FlagPointer {
+		t.Fatalf("GetEntry with inline ptr value=(%q,%+v,%d,%v), want raw,%+v,%d,true", string(got), gotPtr, flags, ok, ptr, node.FlagPointer)
 	}
 }
 
