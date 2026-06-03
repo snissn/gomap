@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestSelectLeafGenerationPackCandidates(t *testing.T) {
 	plan := LeafGenerationPlan{
@@ -128,7 +131,7 @@ func TestSelectLeafGenerationPackCandidates_RejectsNonEligiblePlan(t *testing.T)
 	}
 }
 
-func TestSelectLeafGenerationPackCandidates_PrioritizesLowYieldErrorWhenOversizeCandidateWasSkipped(t *testing.T) {
+func TestSelectLeafGenerationPackCandidates_PreservesOversizeDebtWhenRemainingCandidateLowYield(t *testing.T) {
 	plan := LeafGenerationPlan{
 		Admission: leafGenerationPlanAdmissionEligible,
 		Candidates: []LeafGenerationPlanGeneration{
@@ -141,10 +144,35 @@ func TestSelectLeafGenerationPackCandidates_PrioritizesLowYieldErrorWhenOversize
 		MinReclaimPerByteCopiedPPM: 200000,
 	})
 	if err == nil {
+		t.Fatal("expected oversize selection error")
+	}
+	if errors.Is(err, errLeafGenerationPackSelectionThreshold) {
+		t.Fatalf("errors.Is(threshold)=true for mixed oversize/threshold rejection: %v", err)
+	}
+	if got := err.Error(); got != "leaf generation pack selection: no candidate generations fit max-bytes-to-copy=50" {
+		t.Fatalf("error=%q, want oversize no-fit error", got)
+	}
+}
+
+func TestSelectLeafGenerationPackCandidates_ThresholdErrorIsSentinelAndUnwrapsDetail(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 7, BytesDead: 5, BytesLive: 95, BytesToCopy: 95},
+		},
+	}
+	_, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{MinReclaimPerByteCopiedPPM: 100000})
+	if err == nil {
 		t.Fatal("expected low-yield selection error")
 	}
-	if got := err.Error(); got != "leaf generation pack selection: no candidate generations satisfy min-reclaim-per-byte-copied-ppm=200000" {
-		t.Fatalf("error=%q, want low-yield selection error", got)
+	if !errors.Is(err, errLeafGenerationPackSelectionThreshold) {
+		t.Fatalf("errors.Is(threshold)=false for %T %v", err, err)
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped == nil || unwrapped == errLeafGenerationPackSelectionThreshold {
+		t.Fatalf("Unwrap()=%v, want underlying detail error", unwrapped)
+	}
+	if got := err.Error(); got != "leaf generation pack selection: no candidate generations satisfy min-reclaim-per-byte-copied-ppm=100000" {
+		t.Fatalf("error=%q, want detailed threshold error", got)
 	}
 }
 

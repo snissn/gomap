@@ -151,7 +151,11 @@ func (e leafGenerationPackSelectionThresholdErr) Error() string {
 }
 
 func (e leafGenerationPackSelectionThresholdErr) Unwrap() error {
-	return errLeafGenerationPackSelectionThreshold
+	return e.err
+}
+
+func (e leafGenerationPackSelectionThresholdErr) Is(target error) bool {
+	return target == errLeafGenerationPackSelectionThreshold
 }
 
 type leafGenerationPackSelectionThresholdRejections struct {
@@ -204,15 +208,18 @@ func leafGenerationPackSelectionThresholdError(opts LeafGenerationPackSelectOpti
 
 func finalizeLeafGenerationPackSelection(out LeafGenerationPackSelection, opts LeafGenerationPackSelectOptions, rejectedOversize bool, rejected leafGenerationPackSelectionThresholdRejections) (LeafGenerationPackSelection, error) {
 	if len(out.GenerationIDs) == 0 {
-		if err := leafGenerationPackSelectionThresholdError(opts, rejected); err != nil {
-			return out, err
-		}
 		if opts.MaxBytesToCopy > 0 && rejectedOversize {
 			return out, fmt.Errorf("leaf generation pack selection: no candidate generations fit max-bytes-to-copy=%d", opts.MaxBytesToCopy)
+		}
+		if err := leafGenerationPackSelectionThresholdError(opts, rejected); err != nil {
+			return out, err
 		}
 		return out, fmt.Errorf("leaf generation pack selection: plan produced no candidate generations within limits")
 	}
 	if ok, thresholdRejected := leafGenerationPackSelectionThresholdsOK(out.BytesDead, out.BytesToCopy, opts); !ok {
+		if opts.MaxBytesToCopy > 0 && rejectedOversize {
+			return out, fmt.Errorf("leaf generation pack selection: no candidate generations fit max-bytes-to-copy=%d", opts.MaxBytesToCopy)
+		}
 		return out, leafGenerationPackSelectionThresholdError(opts, thresholdRejected)
 	}
 	out.ExpectedReclaimBytes = out.BytesDead
