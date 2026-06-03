@@ -94,7 +94,7 @@ func TestColumnVectorGraphIndexedScoringTieAndApplicationOrder1969(t *testing.T)
 		{ID: []byte("doc-entry"), Vector: []float32{0, 1}, InvNorm: 1, Adjacency: []uint32{2, 1, 3}},
 		{ID: []byte("doc-tie-low-ordinal"), Vector: []float32{0.5, 0}, InvNorm: 1},
 		{ID: []byte("doc-tie-high-ordinal"), Vector: []float32{0.5, 0}, InvNorm: 1},
-		{ID: []byte("doc-must-not-be-scored-after-ef-limit"), Vector: []float32{1, 0}, InvNorm: 1},
+		{ID: []byte("doc-best-neighbor-scored-despite-ef-cap"), Vector: []float32{1, 0}, InvNorm: 1},
 	}
 	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(t, 2, 3, rows)
 	defer func() { _ = d.Close() }()
@@ -106,16 +106,11 @@ func TestColumnVectorGraphIndexedScoringTieAndApplicationOrder1969(t *testing.T)
 	attachColumnVectorGraphIndexedScoreSources1969(t, reader, rows)
 
 	indexedResults, indexedStats := searchColumnVectorGraphIndexedScoring1969(t, reader, []float32{1, 0}, columnVectorGraphScoreBatchModeIndexed, 2, 3)
-	if indexedStats.Candidates != 3 || indexedStats.ScoreBatchMaxTileSize != 2 {
-		t.Fatalf("indexed stats=%+v want entry plus first two adjacency candidates only", indexedStats)
+	if indexedStats.Candidates != 4 || indexedStats.ScoreBatchMaxTileSize != 3 {
+		t.Fatalf("indexed stats=%+v want entry plus full expanded adjacency tile", indexedStats)
 	}
-	if len(indexedResults) != 2 || indexedResults[0].Ordinal != 1 || indexedResults[1].Ordinal != 2 {
-		t.Fatalf("indexed results=%+v want tie broken by ordinal after applying first two adjacency entries", indexedResults)
-	}
-	for _, result := range indexedResults {
-		if result.Ordinal == 3 {
-			t.Fatalf("indexed results=%+v scored adjacency beyond efSearch limit", indexedResults)
-		}
+	if len(indexedResults) != 2 || indexedResults[0].Ordinal != 3 || indexedResults[1].Ordinal != 1 {
+		t.Fatalf("indexed results=%+v want best neighbor plus ordinal tie after full HNSW expansion", indexedResults)
 	}
 }
 
