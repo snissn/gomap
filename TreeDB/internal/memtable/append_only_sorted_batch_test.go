@@ -48,6 +48,33 @@ func TestAppendOnlyApplyCopySortedBatchTrusted_AppendKeepsOrderedAndCopiesKeys(t
 	}
 }
 
+func TestAppendOnlyApplyCopySortedBatchWithValueCopierOwnsValues(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("a")
+	value := []byte("mutable-value")
+	var copiedBacking [][]byte
+	copied := m.ApplyCopySortedBatchWithValueCopierTrusted([]batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   key,
+		Value: value,
+	}}, func(src []byte) []byte {
+		dst := append([]byte(nil), src...)
+		copiedBacking = append(copiedBacking, dst)
+		return dst
+	}, true, nil)
+	if !copied {
+		t.Fatalf("copied=false, want true")
+	}
+	key[0] = 'z'
+	value[0] = 'X'
+	if len(copiedBacking) != 1 || string(copiedBacking[0]) != "mutable-value" {
+		t.Fatalf("copied backing mutated or missing: %q", copiedBacking)
+	}
+	if got, deleted, ok := m.Get([]byte("a")); !ok || deleted || string(got) != "mutable-value" {
+		t.Fatalf("Get(a)=(%q,%v,%v), want copied immutable value", string(got), deleted, ok)
+	}
+}
+
 func TestAppendOnlyApplyCopySortedBatchTrusted_PointerInlinePolicy(t *testing.T) {
 	ptr := page.ValuePtr{FileID: 42, Offset: 7, Length: 3}
 
@@ -76,7 +103,7 @@ func TestAppendOnlyApplyCopySortedBatchTrusted_PointerInlinePolicy(t *testing.T)
 	}
 }
 
-func TestAppendOnlyApplyCopySortedBatchTrusted_OverlappingSortedRunFallsBack(t *testing.T) {
+func TestAppendOnlyApplyCopySortedBatchTrusted_OverlappingSortedRunUsesRunIndex(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("m"), []byte("old"))
 
@@ -96,12 +123,20 @@ func TestAppendOnlyApplyCopySortedBatchTrusted_OverlappingSortedRunFallsBack(t *
 	m.mu.RLock()
 	ordered := m.ordered
 	latestDirty := m.latestDirty
+	runCount := len(m.sortedRuns)
+	latestLen := len(m.latest) + len(m.latest64)
 	m.mu.RUnlock()
 	if ordered {
 		t.Fatalf("ordered=true after sorted run overlapped existing max key")
 	}
 	if latestDirty {
-		t.Fatalf("latestDirty=true after fallback; latest index should be immediately usable")
+		t.Fatalf("latestDirty=true after sorted-run index; latest lookup should be immediately usable")
+	}
+	if runCount != 2 {
+		t.Fatalf("sorted run count=%d want 2", runCount)
+	}
+	if latestLen != 0 {
+		t.Fatalf("hash latest index len=%d want 0 before fallback", latestLen)
 	}
 }
 
@@ -132,12 +167,19 @@ func TestAppendOnlyKey64MonotonicOrderingMatchesLexicographic(t *testing.T) {
 	m.mu.RLock()
 	ordered = m.ordered
 	latestDirty := m.latestDirty
-	_, latest64OK := m.latest64[binary.BigEndian.Uint64(lo[:])]
+	runCount := len(m.sortedRuns)
+	latestLen = len(m.latest) + len(m.latest64)
 	m.mu.RUnlock()
 	if ordered {
 		t.Fatalf("ordered=true after lower 8-byte key append")
 	}
-	if latestDirty || !latest64OK {
-		t.Fatalf("latest64 not ready after key64 order break: dirty=%v ok=%v", latestDirty, latest64OK)
+	if latestDirty {
+		t.Fatalf("latestDirty=true after key64 sorted-run order break")
+	}
+	if runCount != 2 {
+		t.Fatalf("sorted run count=%d want 2", runCount)
+	}
+	if latestLen != 0 {
+		t.Fatalf("hash latest index len=%d want 0 before fallback", latestLen)
 	}
 }

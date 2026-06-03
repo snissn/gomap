@@ -30080,11 +30080,28 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						}
 					}
 					appliedSortedRun = true
-				} else if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
-					if borrowed := applier.ApplyCopySortedBatchTrusted(entries, allowBatchArenaBorrow, storeInlinePtrValues, nil); borrowed {
-						retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
+				} else {
+					if !allowBatchArenaBorrow {
+						if applier, ok := shard.mem.(memtable.CopySortedBatchValueCopier); ok {
+							applier.ApplyCopySortedBatchWithValueCopierTrusted(entries, func(value []byte) []byte {
+								if len(value) == 0 {
+									return nil
+								}
+								owned := shard.appendOnlyDirectValueArena.alloc(len(value))
+								copy(owned, value)
+								return owned
+							}, storeInlinePtrValues, nil)
+							appliedSortedRun = true
+						}
 					}
-					appliedSortedRun = true
+					if !appliedSortedRun {
+						if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
+							if borrowed := applier.ApplyCopySortedBatchTrusted(entries, allowBatchArenaBorrow, storeInlinePtrValues, nil); borrowed {
+								retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
+							}
+							appliedSortedRun = true
+						}
+					}
 				}
 			}
 			if !appliedSortedRun {
