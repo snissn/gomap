@@ -4694,6 +4694,7 @@ const (
 	treeDBVlogScanHeaderSize          = 20
 	treeDBVlogScanVersion             = 1
 	treeDBVlogScanFrameHeaderSize     = 12
+	treeDBVlogScanRecordFlagGrouped   = 1 << 0
 	treeDBVlogScanFrameVersion        = 1
 	treeDBVlogScanFrameFlagCompressed = 1 << 0
 	treeDBVlogScanBlockCodecSnappy    = 1
@@ -4819,6 +4820,12 @@ func scanTreeDBVLogCodecStatsFile(path string, scan *treeDBVlogCodecScanStats, c
 			return fmt.Errorf("%s: unsupported value-log version %d", path, header[4])
 		}
 		bodyLen := binary.LittleEndian.Uint32(header[16:20])
+		if header[5]&treeDBVlogScanRecordFlagGrouped == 0 {
+			if _, err := io.CopyN(io.Discard, f, int64(bodyLen)); err != nil {
+				return err
+			}
+			continue
+		}
 		if bodyLen < treeDBVlogScanFrameHeaderSize {
 			return fmt.Errorf("%s: value-log body too short: %d", path, bodyLen)
 		}

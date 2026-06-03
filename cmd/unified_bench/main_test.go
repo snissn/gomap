@@ -1649,6 +1649,7 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 	var file []byte
 	file = append(file, testTreeDBVLogFrame(t, 3, treeDBVlogScanBlockCodecLZ4, true, 300, 120)...)
 	file = append(file, testTreeDBVLogFrame(t, 1, 0, false, 50, 50)...)
+	file = append(file, testTreeDBVLogUngroupedRecord(t, 4096)...)
 	if err := os.WriteFile(filepath.Join(leafDir, "value-l255-000001.log"), file, 0o644); err != nil {
 		t.Fatalf("WriteFile leaf log: %v", err)
 	}
@@ -1710,8 +1711,23 @@ func testTreeDBVLogFrame(t *testing.T, k int, codec int, compressed bool, rawByt
 
 	out := make([]byte, treeDBVlogScanHeaderSize+bodyLen)
 	out[4] = treeDBVlogScanVersion
+	out[5] = treeDBVlogScanRecordFlagGrouped
 	binary.LittleEndian.PutUint32(out[16:20], uint32(bodyLen))
 	copy(out[treeDBVlogScanHeaderSize:], body)
+	return out
+}
+
+func testTreeDBVLogUngroupedRecord(t *testing.T, bodyLen int) []byte {
+	t.Helper()
+	if bodyLen <= 0 {
+		t.Fatalf("invalid bodyLen=%d", bodyLen)
+	}
+	out := make([]byte, treeDBVlogScanHeaderSize+bodyLen)
+	out[4] = treeDBVlogScanVersion
+	binary.LittleEndian.PutUint32(out[16:20], uint32(bodyLen))
+	for i := treeDBVlogScanHeaderSize; i < len(out); i++ {
+		out[i] = byte(i)
+	}
 	return out
 }
 
