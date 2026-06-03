@@ -23,6 +23,19 @@ padding already certified by typed-column layout validation. Float side arrays a
 non-null `float32` / `raw_float32`; integer side arrays are non-null `uint32` /
 `raw_uint32` or `uint64` / `raw_uint64` where a wider identifier is required.
 
+## Query-mode guardrail
+
+Collection vector-index metadata can declare named `scalar_u8` v1 quantized
+score planes under `VectorIndexDefinition.QuantizedIndexes`. Public search
+options expose explicit `exact`, `quantized_only`, and `quantized_rerank` query
+modes. The zero/default mode remains exact.
+
+Until a later #1926 slice builds and loads matching quantized typed-column
+assets, quantized modes validate the selected name/options and then fail closed
+with search-unavailable status before graph traversal/scoring. They must not
+silently return exact results. Exact mode rejects quantized-only fields so future
+callers do not accidentally rely on no-op options.
+
 ## Fail-closed validation
 
 `TreeDB/internal/quantizedasset` prepares immutable readers from typed-column part

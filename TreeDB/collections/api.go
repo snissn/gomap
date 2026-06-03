@@ -864,16 +864,27 @@ type IndexDefinition struct {
 // collection index. PRs after the metadata/API step persist and maintain the
 // HNSW graph through collection index roots.
 type VectorIndexDefinition struct {
-	Name             string              `json:"name"`
-	Field            string              `json:"field"`
-	Metric           VectorMetric        `json:"metric"`
-	Dimensions       int                 `json:"dimensions"`
-	M                int                 `json:"m,omitempty"`
-	EfConstruction   int                 `json:"ef_construction,omitempty"`
-	EfSearch         int                 `json:"ef_search,omitempty"`
-	Encoding         VectorIndexEncoding `json:"encoding,omitempty"`
-	Strategy         VectorIndexStrategy `json:"strategy,omitempty"`
-	SchemaGeneration uint64              `json:"schema_generation,omitempty"`
+	Name             string                           `json:"name"`
+	Field            string                           `json:"field"`
+	Metric           VectorMetric                     `json:"metric"`
+	Dimensions       int                              `json:"dimensions"`
+	M                int                              `json:"m,omitempty"`
+	EfConstruction   int                              `json:"ef_construction,omitempty"`
+	EfSearch         int                              `json:"ef_search,omitempty"`
+	Encoding         VectorIndexEncoding              `json:"encoding,omitempty"`
+	Strategy         VectorIndexStrategy              `json:"strategy,omitempty"`
+	SchemaGeneration uint64                           `json:"schema_generation,omitempty"`
+	QuantizedIndexes []QuantizedVectorIndexDefinition `json:"quantized_indexes,omitempty"`
+}
+
+// QuantizedVectorIndexDefinition declares a named derived score plane attached
+// to a column_graph vector index. Query modes must still select these indexes
+// explicitly, and search must fail closed until matching prepared assets are
+// loaded and scored.
+type QuantizedVectorIndexDefinition struct {
+	Name    string `json:"name"`
+	Codec   string `json:"codec"`
+	Version uint32 `json:"version,omitempty"`
 }
 
 type CollectionMeta struct {
@@ -20155,6 +20166,14 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	def.Metric = metric
 	def.Encoding = encoding
 	def.Strategy = strategy
+	quantized, err := normalizeQuantizedVectorIndexDefinitions(def)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	def.QuantizedIndexes = quantized
+	if len(def.QuantizedIndexes) > 0 && def.Strategy != VectorIndexStrategyColumnGraph {
+		return VectorIndexDefinition{}, fmt.Errorf("collections: quantized vector indexes require strategy %q", VectorIndexStrategyColumnGraph)
+	}
 	if def.Strategy == VectorIndexStrategyColumnGraph {
 		if def.Metric != VectorMetricCosine {
 			return VectorIndexDefinition{}, fmt.Errorf("collections: column_graph vector index %q supports only metric %q", def.Name, VectorMetricCosine)
@@ -20198,13 +20217,67 @@ func normalizeVectorIndexStrategy(strategy VectorIndexStrategy) (VectorIndexStra
 	}
 }
 
+const QuantizedVectorCodecScalarU8 = "scalar_u8"
+
+func normalizeQuantizedVectorIndexDefinitions(def VectorIndexDefinition) ([]QuantizedVectorIndexDefinition, error) {
+	if len(def.QuantizedIndexes) == 0 {
+		return nil, nil
+	}
+	out := make([]QuantizedVectorIndexDefinition, len(def.QuantizedIndexes))
+	seen := make(map[string]struct{}, len(def.QuantizedIndexes))
+	for i, q := range def.QuantizedIndexes {
+		if q.Name == "" {
+			return nil, fmt.Errorf("collections: vector index %q quantized index[%d] name is required", def.Name, i)
+		}
+		if err := ValidateIndexName(q.Name); err != nil {
+			return nil, fmt.Errorf("collections: vector index %q quantized index[%d] name: %w", def.Name, i, err)
+		}
+		if _, ok := seen[q.Name]; ok {
+			return nil, fmt.Errorf("collections: vector index %q duplicate quantized index %q", def.Name, q.Name)
+		}
+		seen[q.Name] = struct{}{}
+		switch q.Codec {
+		case "":
+			q.Codec = QuantizedVectorCodecScalarU8
+		case QuantizedVectorCodecScalarU8:
+		default:
+			return nil, fmt.Errorf("collections: vector index %q quantized index %q codec %q is unsupported", def.Name, q.Name, q.Codec)
+		}
+		if q.Version == 0 {
+			q.Version = 1
+		}
+		if q.Version != 1 {
+			return nil, fmt.Errorf("collections: vector index %q quantized index %q scalar_u8 version=%d is unsupported", def.Name, q.Name, q.Version)
+		}
+		out[i] = q
+	}
+	return out, nil
+}
+
+func findQuantizedVectorIndex(def VectorIndexDefinition, name string) (QuantizedVectorIndexDefinition, bool) {
+	for _, q := range def.QuantizedIndexes {
+		if q.Name == name {
+			return q, true
+		}
+	}
+	return QuantizedVectorIndexDefinition{}, false
+}
+
 func (m CollectionMeta) copy() *CollectionMeta {
 	return &CollectionMeta{
 		Name:          m.Name,
 		Options:       copyCollectionOptions(m.Options),
 		Indexes:       append([]IndexDefinition(nil), m.Indexes...),
-		VectorIndexes: append([]VectorIndexDefinition(nil), m.VectorIndexes...),
+		VectorIndexes: copyVectorIndexDefinitions(m.VectorIndexes),
 	}
+}
+
+func copyVectorIndexDefinitions(in []VectorIndexDefinition) []VectorIndexDefinition {
+	out := append([]VectorIndexDefinition(nil), in...)
+	for i := range out {
+		out[i].QuantizedIndexes = append([]QuantizedVectorIndexDefinition(nil), out[i].QuantizedIndexes...)
+	}
+	return out
 }
 
 func copyCollectionMeta(meta CollectionMeta) CollectionMeta {
@@ -20242,7 +20315,29 @@ func collectionMetaValuesEqual(a, b CollectionMeta) bool {
 		}
 	}
 	for i := range a.VectorIndexes {
-		if a.VectorIndexes[i] != b.VectorIndexes[i] {
+		if !vectorIndexDefinitionValuesEqual(a.VectorIndexes[i], b.VectorIndexes[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func vectorIndexDefinitionValuesEqual(a, b VectorIndexDefinition) bool {
+	if a.Name != b.Name ||
+		a.Field != b.Field ||
+		a.Metric != b.Metric ||
+		a.Dimensions != b.Dimensions ||
+		a.M != b.M ||
+		a.EfConstruction != b.EfConstruction ||
+		a.EfSearch != b.EfSearch ||
+		a.Encoding != b.Encoding ||
+		a.Strategy != b.Strategy ||
+		a.SchemaGeneration != b.SchemaGeneration ||
+		len(a.QuantizedIndexes) != len(b.QuantizedIndexes) {
+		return false
+	}
+	for i := range a.QuantizedIndexes {
+		if a.QuantizedIndexes[i] != b.QuantizedIndexes[i] {
 			return false
 		}
 	}
