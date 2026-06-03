@@ -223,23 +223,8 @@ func (db *DB) getManySequential(snap *Snapshot, keys [][]byte, out [][]byte) err
 	// Copy all found values into a single arena to avoid one allocation per key.
 	// Each returned slice is capacity-capped to preserve safe-copy semantics.
 	arena := make([]byte, 0, getManyArenaCap(len(keys)))
-	for i, key := range keys {
-		start := len(arena)
-		nextArena, err := snap.GetAppend(key, arena)
-		if err == tree.ErrKeyNotFound {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		arena = nextArena
-		if len(arena) == start {
-			out[i] = getManyEmptyValue
-			continue
-		}
-		out[i] = arena[start:len(arena):len(arena)]
-	}
-	return nil
+	_, err := snap.tree.GetManyAppend(keys, out, arena)
+	return err
 }
 
 func (db *DB) getManyParallel(snap *Snapshot, keys [][]byte, out [][]byte, workers int) error {
@@ -259,30 +244,13 @@ func (db *DB) getManyParallel(snap *Snapshot, keys [][]byte, out [][]byte, worke
 		go func(start, end, arenaCap int) {
 			defer wg.Done()
 			arena := make([]byte, 0, arenaCap)
-			for i := start; i < end; i++ {
-				if stop.Load() {
-					return
+			if _, err := snap.tree.GetManyAppend(keys[start:end], out[start:end], arena); err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					stop.Store(true)
 				}
-				arenaStart := len(arena)
-				nextArena, err := snap.GetAppend(keys[i], arena)
-				if err == tree.ErrKeyNotFound {
-					continue
-				}
-				if err != nil {
-					errMu.Lock()
-					if firstErr == nil {
-						firstErr = err
-						stop.Store(true)
-					}
-					errMu.Unlock()
-					return
-				}
-				arena = nextArena
-				if len(arena) == arenaStart {
-					out[i] = getManyEmptyValue
-					continue
-				}
-				out[i] = arena[arenaStart:len(arena):len(arena)]
+				errMu.Unlock()
 			}
 		}(start, end, workerArenaCap)
 	}
@@ -661,6 +629,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.backend_tree.get_append_inline_bytes_total"] = fmt.Sprintf("%d", readPathStats.GetAppendInlineBytesTotal)
 	stats["treedb.process.read_path.backend_tree.get_append_pointer_hits_total"] = fmt.Sprintf("%d", readPathStats.GetAppendPointerHitsTotal)
 	stats["treedb.process.read_path.backend_tree.get_append_pointer_bytes_total"] = fmt.Sprintf("%d", readPathStats.GetAppendPointerBytesTotal)
+	getManyReadStats := tree.GetManyReadStatsSnapshot()
+	stats["treedb.process.read_path.backend_tree.getmany.calls_total"] = fmt.Sprintf("%d", getManyReadStats.CallsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.grouped_calls_total"] = fmt.Sprintf("%d", getManyReadStats.GroupedCallsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.fallback_calls_total"] = fmt.Sprintf("%d", getManyReadStats.FallbackCallsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.leaf_groups_total"] = fmt.Sprintf("%d", getManyReadStats.LeafGroupsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.leaf_group_items_total"] = fmt.Sprintf("%d", getManyReadStats.LeafGroupItemsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.leaf_loads_saved_total"] = fmt.Sprintf("%d", getManyReadStats.LeafLoadsSavedTotal)
 	outerLeafReadStats := tree.OuterLeafReadStatsSnapshot()
 	stats["treedb.process.read_path.outer_leaf.loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.LoadsTotal)
 	stats["treedb.process.read_path.outer_leaf.point_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.PointLoadsTotal)

@@ -34,16 +34,35 @@ type ReadPathStats struct {
 	GetAppendPointerBytesTotal uint64
 }
 
+type GetManyReadStats struct {
+	CallsTotal          uint64
+	GroupedCallsTotal   uint64
+	FallbackCallsTotal  uint64
+	LeafGroupsTotal     uint64
+	LeafGroupItemsTotal uint64
+	LeafLoadsSavedTotal uint64
+}
+
 type ProbeFallbackStats struct {
 	FallbackCalls uint64
 	FallbackItems uint64
 }
 
+const getManyLeafGroupMinKeys = 64
+
 var treeGetAppendInlineHitsTotal atomic.Uint64
 var treeGetAppendInlineBytesTotal atomic.Uint64
 var treeGetAppendPointerHitsTotal atomic.Uint64
 var treeGetAppendPointerBytesTotal atomic.Uint64
+var treeGetManyCallsTotal atomic.Uint64
+var treeGetManyGroupedCallsTotal atomic.Uint64
+var treeGetManyFallbackCallsTotal atomic.Uint64
+var treeGetManyLeafGroupsTotal atomic.Uint64
+var treeGetManyLeafGroupItemsTotal atomic.Uint64
+var treeGetManyLeafLoadsSavedTotal atomic.Uint64
 var treeHotReadStatsEnabled = os.Getenv("TREEDB_HOT_PATH_STATS") != ""
+
+var treeGetManyEmptyValue = []byte{}
 
 func ReadPathStatsSnapshot() ReadPathStats {
 	return ReadPathStats{
@@ -51,6 +70,17 @@ func ReadPathStatsSnapshot() ReadPathStats {
 		GetAppendInlineBytesTotal:  treeGetAppendInlineBytesTotal.Load(),
 		GetAppendPointerHitsTotal:  treeGetAppendPointerHitsTotal.Load(),
 		GetAppendPointerBytesTotal: treeGetAppendPointerBytesTotal.Load(),
+	}
+}
+
+func GetManyReadStatsSnapshot() GetManyReadStats {
+	return GetManyReadStats{
+		CallsTotal:          treeGetManyCallsTotal.Load(),
+		GroupedCallsTotal:   treeGetManyGroupedCallsTotal.Load(),
+		FallbackCallsTotal:  treeGetManyFallbackCallsTotal.Load(),
+		LeafGroupsTotal:     treeGetManyLeafGroupsTotal.Load(),
+		LeafGroupItemsTotal: treeGetManyLeafGroupItemsTotal.Load(),
+		LeafLoadsSavedTotal: treeGetManyLeafLoadsSavedTotal.Load(),
 	}
 }
 
@@ -697,6 +727,79 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 	return val, nil
 }
 
+func (t *Tree) appendPointerValueForKey(key []byte, ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	if t.slabKeyAppender != nil {
+		oldLen := len(dst)
+		tail, err := t.slabKeyAppender.ReadUnsafeAppendForKey(ptr, key, dst[oldLen:oldLen])
+		if err != nil {
+			return dst, err
+		}
+		if oldLen == 0 {
+			recordTreeGetAppendPointer(len(tail))
+			return tail, nil
+		}
+		if len(tail) == 0 {
+			recordTreeGetAppendPointer(0)
+			return dst[:oldLen], nil
+		}
+		if cap(dst) > oldLen {
+			base := dst[:cap(dst):cap(dst)]
+			if &tail[0] == &base[oldLen] {
+				recordTreeGetAppendPointer(len(tail))
+				return dst[:oldLen+len(tail)], nil
+			}
+		}
+		recordTreeGetAppendPointer(len(tail))
+		return append(dst[:oldLen], tail...), nil
+	}
+	if t.slabKeyReader != nil {
+		out, err := t.slabKeyReader.ReadUnsafeForKey(ptr, key)
+		if err != nil {
+			return dst, err
+		}
+		if out == nil {
+			recordTreeGetAppendPointer(0)
+			return dst, nil
+		}
+		recordTreeGetAppendPointer(len(out))
+		return append(dst, out...), nil
+	}
+	if t.slabAppender != nil {
+		oldLen := len(dst)
+		tail, err := t.slabAppender.ReadUnsafeAppend(ptr, dst[oldLen:oldLen])
+		if err != nil {
+			return dst, err
+		}
+		if oldLen == 0 {
+			recordTreeGetAppendPointer(len(tail))
+			return tail, nil
+		}
+		if len(tail) == 0 {
+			recordTreeGetAppendPointer(0)
+			return dst[:oldLen], nil
+		}
+		if cap(dst) > oldLen {
+			base := dst[:cap(dst):cap(dst)]
+			if &tail[0] == &base[oldLen] {
+				recordTreeGetAppendPointer(len(tail))
+				return dst[:oldLen+len(tail)], nil
+			}
+		}
+		recordTreeGetAppendPointer(len(tail))
+		return append(dst[:oldLen], tail...), nil
+	}
+	out, err := t.slabReader.ReadUnsafe(ptr)
+	if err != nil {
+		return dst, err
+	}
+	if out == nil {
+		recordTreeGetAppendPointer(0)
+		return dst, nil
+	}
+	recordTreeGetAppendPointer(len(out))
+	return append(dst, out...), nil
+}
+
 // GetAppend appends the value for key to dst and returns the grown slice.
 // If key is missing/tombstoned, it returns dst and ErrKeyNotFound.
 func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
@@ -712,76 +815,7 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
-		if t.slabKeyAppender != nil {
-			oldLen := len(dst)
-			tail, err := t.slabKeyAppender.ReadUnsafeAppendForKey(ptr, key, dst[oldLen:oldLen])
-			if err != nil {
-				return dst, err
-			}
-			if oldLen == 0 {
-				recordTreeGetAppendPointer(len(tail))
-				return tail, nil
-			}
-			if len(tail) == 0 {
-				recordTreeGetAppendPointer(0)
-				return dst[:oldLen], nil
-			}
-			if cap(dst) > oldLen {
-				base := dst[:cap(dst):cap(dst)]
-				if &tail[0] == &base[oldLen] {
-					recordTreeGetAppendPointer(len(tail))
-					return dst[:oldLen+len(tail)], nil
-				}
-			}
-			recordTreeGetAppendPointer(len(tail))
-			return append(dst[:oldLen], tail...), nil
-		}
-		if t.slabKeyReader != nil {
-			out, err := t.slabKeyReader.ReadUnsafeForKey(ptr, key)
-			if err != nil {
-				return dst, err
-			}
-			if out == nil {
-				recordTreeGetAppendPointer(0)
-				return dst, nil
-			}
-			recordTreeGetAppendPointer(len(out))
-			return append(dst, out...), nil
-		}
-		if t.slabAppender != nil {
-			oldLen := len(dst)
-			tail, err := t.slabAppender.ReadUnsafeAppend(ptr, dst[oldLen:oldLen])
-			if err != nil {
-				return dst, err
-			}
-			if oldLen == 0 {
-				recordTreeGetAppendPointer(len(tail))
-				return tail, nil
-			}
-			if len(tail) == 0 {
-				recordTreeGetAppendPointer(0)
-				return dst[:oldLen], nil
-			}
-			if cap(dst) > oldLen {
-				base := dst[:cap(dst):cap(dst)]
-				if &tail[0] == &base[oldLen] {
-					recordTreeGetAppendPointer(len(tail))
-					return dst[:oldLen+len(tail)], nil
-				}
-			}
-			recordTreeGetAppendPointer(len(tail))
-			return append(dst[:oldLen], tail...), nil
-		}
-		out, err := t.slabReader.ReadUnsafe(ptr)
-		if err != nil {
-			return dst, err
-		}
-		if out == nil {
-			recordTreeGetAppendPointer(0)
-			return dst, nil
-		}
-		recordTreeGetAppendPointer(len(out))
-		return append(dst, out...), nil
+		return t.appendPointerValueForKey(key, ptr, dst)
 	}
 	if val == nil {
 		recordTreeGetAppendInline(0)
@@ -789,6 +823,368 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 	}
 	recordTreeGetAppendInline(len(val))
 	return append(dst, val...), nil
+}
+
+type getManyLeafProbe struct {
+	key      []byte
+	outIndex int
+	next     int
+}
+
+type getManyLeafGroup struct {
+	ref   page.ChildRef
+	first int
+	count int
+}
+
+type getManyLeafNodeLease struct {
+	scratch *leafRefPageScratch
+	lease   LeafLogPageViewLease
+}
+
+type getManyScratch struct {
+	probes        []getManyLeafProbe
+	groups        []getManyLeafGroup
+	groupByRef    map[page.ChildRef]int
+	groupByRefCap int
+}
+
+const getManyScratchMaxReuseKeys = 8192
+
+var getManyScratchPool sync.Pool
+
+func (l getManyLeafNodeLease) Release() {
+	if l.lease != nil {
+		l.lease.ReleaseLeafLogPageView()
+	}
+	if l.scratch != nil {
+		putLeafRefPageScratch(l.scratch)
+	}
+}
+
+func getGetManyScratch(keyCount int) *getManyScratch {
+	scratch, _ := getManyScratchPool.Get().(*getManyScratch)
+	if scratch == nil {
+		scratch = &getManyScratch{}
+	}
+	if cap(scratch.probes) < keyCount || cap(scratch.probes) > getManyScratchMaxReuseKeys {
+		scratch.probes = make([]getManyLeafProbe, 0, keyCount)
+	} else {
+		scratch.probes = scratch.probes[:0]
+	}
+	if cap(scratch.groups) < keyCount || cap(scratch.groups) > getManyScratchMaxReuseKeys {
+		scratch.groups = make([]getManyLeafGroup, 0, keyCount)
+	} else {
+		scratch.groups = scratch.groups[:0]
+	}
+	if scratch.groupByRef == nil || keyCount > getManyScratchMaxReuseKeys || scratch.groupByRefCap < keyCount {
+		scratch.groupByRef = make(map[page.ChildRef]int, keyCount)
+		scratch.groupByRefCap = keyCount
+	} else {
+		clear(scratch.groupByRef)
+	}
+	return scratch
+}
+
+func putGetManyScratch(scratch *getManyScratch) {
+	if scratch == nil {
+		return
+	}
+	if len(scratch.probes) > 0 {
+		clear(scratch.probes)
+	}
+	if len(scratch.groups) > 0 {
+		clear(scratch.groups)
+	}
+	if scratch.groupByRef != nil {
+		clear(scratch.groupByRef)
+	}
+	if cap(scratch.probes) > getManyScratchMaxReuseKeys || cap(scratch.groups) > getManyScratchMaxReuseKeys {
+		return
+	}
+	scratch.probes = scratch.probes[:0]
+	scratch.groups = scratch.groups[:0]
+	getManyScratchPool.Put(scratch)
+}
+
+// GetManyAppend resolves keys into out using arena for returned safe-copy
+// values. Missing keys leave nil entries in out. Present empty values use a
+// shared zero-length, capacity-zero slice.
+func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte, error) {
+	treeGetManyCallsTotal.Add(1)
+	if len(out) < len(keys) {
+		return arena, fmt.Errorf("GetManyAppend: out len %d < keys len %d", len(out), len(keys))
+	}
+	if len(keys) == 0 {
+		return arena, nil
+	}
+	if t == nil {
+		return arena, errors.New("missing tree")
+	}
+	if len(keys) < getManyLeafGroupMinKeys {
+		treeGetManyFallbackCallsTotal.Add(1)
+		return t.getManyAppendFallback(keys, out, arena)
+	}
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
+
+	scratch := getGetManyScratch(len(keys))
+	defer putGetManyScratch(scratch)
+	for i, key := range keys {
+		ref, groupable, err := t.findLeafRefForGetMany(key, verifyAlways)
+		if err == ErrKeyNotFound {
+			out[i] = nil
+			continue
+		}
+		if err != nil {
+			return arena, err
+		}
+		if !groupable {
+			treeGetManyFallbackCallsTotal.Add(1)
+			return t.getManyAppendFallback(keys, out, arena)
+		}
+
+		groupIdx, ok := scratch.groupByRef[ref]
+		if !ok {
+			groupIdx = len(scratch.groups)
+			scratch.groupByRef[ref] = groupIdx
+			scratch.groups = append(scratch.groups, getManyLeafGroup{ref: ref, first: -1})
+		}
+		probeIdx := len(scratch.probes)
+		scratch.probes = append(scratch.probes, getManyLeafProbe{
+			key:      key,
+			outIndex: i,
+			next:     scratch.groups[groupIdx].first,
+		})
+		scratch.groups[groupIdx].first = probeIdx
+		scratch.groups[groupIdx].count++
+	}
+	if len(scratch.groups) == 0 {
+		return arena, nil
+	}
+
+	treeGetManyGroupedCallsTotal.Add(1)
+	treeGetManyLeafGroupsTotal.Add(uint64(len(scratch.groups)))
+	treeGetManyLeafGroupItemsTotal.Add(uint64(len(scratch.probes)))
+	if saved := len(scratch.probes) - len(scratch.groups); saved > 0 {
+		treeGetManyLeafLoadsSavedTotal.Add(uint64(saved))
+	}
+
+	for i := range scratch.groups {
+		g := &scratch.groups[i]
+		var n node.Node
+		lease, err := t.loadLeafNodeForGetMany(&n, g.ref, verifyAlways)
+		if err != nil {
+			lease.Release()
+			return arena, err
+		}
+		for probeIdx := g.first; probeIdx >= 0; probeIdx = scratch.probes[probeIdx].next {
+			probe := scratch.probes[probeIdx]
+			var err error
+			arena, err = t.appendLeafValueFromNode(&n, probe.key, out, probe.outIndex, arena)
+			if err != nil {
+				lease.Release()
+				return arena, err
+			}
+		}
+		lease.Release()
+	}
+	return arena, nil
+}
+
+func (t *Tree) getManyAppendFallback(keys [][]byte, out [][]byte, arena []byte) ([]byte, error) {
+	for i, key := range keys {
+		start := len(arena)
+		nextArena, err := t.GetAppend(key, arena)
+		if err == ErrKeyNotFound {
+			out[i] = nil
+			continue
+		}
+		if err != nil {
+			return arena, err
+		}
+		arena = nextArena
+		if len(arena) == start {
+			out[i] = treeGetManyEmptyValue
+			continue
+		}
+		out[i] = arena[start:len(arena):len(arena)]
+	}
+	return arena, nil
+}
+
+func (t *Tree) findLeafRefForGetMany(key []byte, verifyAlways bool) (page.ChildRef, bool, error) {
+	if t == nil {
+		return page.ChildRef{}, false, errors.New("missing tree")
+	}
+	currRef := page.PageChildRef(t.rootPageID)
+	for depth := 0; depth < 50; depth++ {
+		if currRef.Kind == page.ChildRefLeafLog {
+			return currRef, true, nil
+		}
+		var n node.Node
+		if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
+			return page.ChildRef{}, false, err
+		}
+		switch n.Type() {
+		case page.PageTypeInternal:
+			if depth == 0 {
+				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+					return page.ChildRef{}, false, err
+				} else if ok {
+					if len(low) > 0 && compareTreeKey(key, low) < 0 {
+						return page.ChildRef{}, false, ErrKeyNotFound
+					}
+					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
+						return page.ChildRef{}, false, ErrKeyNotFound
+					}
+				}
+			}
+			if n.InternalLeafLogRefsEnabled() {
+				childRef, _, err := n.SearchInternalChildRef(key)
+				if err != nil {
+					return page.ChildRef{}, false, err
+				}
+				currRef = childRef
+			} else {
+				childID, _, err := n.SearchInternalChildID(key)
+				if err != nil {
+					return page.ChildRef{}, false, err
+				}
+				currRef = page.PageChildRef(childID)
+			}
+		case page.PageTypeLeaf:
+			return currRef, false, nil
+		default:
+			return page.ChildRef{}, false, fmt.Errorf("invalid page type %d", n.Type())
+		}
+	}
+	return page.ChildRef{}, false, errors.New("tree too deep")
+}
+
+func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyAlways bool) (getManyLeafNodeLease, error) {
+	var lease getManyLeafNodeLease
+	if ref.Kind != page.ChildRefLeafLog {
+		if err := t.loadChildRefViewInto(dst, ref, verifyAlways, false); err != nil {
+			return lease, err
+		}
+		if dst.Type() != page.PageTypeLeaf {
+			return lease, fmt.Errorf("invalid page type %d", dst.Type())
+		}
+		return lease, nil
+	}
+	if t.slabReader == nil {
+		return lease, errors.New("missing slab reader")
+	}
+
+	ptr := ref.Log
+	var (
+		data        []byte
+		leafScratch *leafRefPageScratch
+		leafLease   LeafLogPageViewLease
+	)
+	if t.leafLogView != nil {
+		var ok bool
+		var err error
+		data, leafLease, ok, err = t.leafLogView.ReadLeafLogPageUnsafeView(ptr)
+		if err != nil {
+			return lease, err
+		}
+		if ok {
+			lease.lease = leafLease
+			if err := validateLeafLogNodeInto(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false); err != nil {
+				lease.Release()
+				return getManyLeafNodeLease{}, err
+			}
+			return lease, nil
+		}
+	}
+
+	leafScratch = getLeafRefPageScratch()
+	var usedScratch bool
+	if t.leafLogToReader != nil {
+		var err error
+		data, usedScratch, err = t.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, leafScratch.buf)
+		if err != nil {
+			putLeafRefPageScratch(leafScratch)
+			return lease, err
+		}
+	} else if t.slabToReader != nil {
+		var err error
+		data, usedScratch, err = t.slabToReader.ReadUnsafeTo(ptr.ValuePtr(), leafScratch.buf)
+		if err != nil {
+			putLeafRefPageScratch(leafScratch)
+			return lease, err
+		}
+	} else if t.slabAppender != nil {
+		var err error
+		data, err = t.slabAppender.ReadUnsafeAppend(ptr.ValuePtr(), leafScratch.buf[:0])
+		if err != nil {
+			putLeafRefPageScratch(leafScratch)
+			return lease, err
+		}
+		usedScratch = true
+	} else {
+		putLeafRefPageScratch(leafScratch)
+		leafScratch = nil
+		var err error
+		data, err = t.slabReader.ReadUnsafe(ptr.ValuePtr())
+		if err != nil {
+			return lease, err
+		}
+	}
+	if leafScratch != nil {
+		if usedScratch {
+			lease.scratch = leafScratch
+		} else {
+			putLeafRefPageScratch(leafScratch)
+			leafScratch = nil
+		}
+	}
+	if err := validateLeafLogNodeInto(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false); err != nil {
+		lease.Release()
+		return getManyLeafNodeLease{}, err
+	}
+	return lease, nil
+}
+
+func (t *Tree) appendLeafValueFromNode(n *node.Node, key []byte, out [][]byte, outIndex int, arena []byte) ([]byte, error) {
+	idx, found, err := n.SearchLeaf(key)
+	if err != nil {
+		return arena, err
+	}
+	if !found {
+		out[outIndex] = nil
+		return arena, nil
+	}
+	val, ptr, flags, err := n.GetLeafValueView(idx)
+	if err != nil {
+		return arena, err
+	}
+	if flags&node.FlagTombstone != 0 {
+		out[outIndex] = nil
+		return arena, nil
+	}
+	start := len(arena)
+	if flags&node.FlagPointer != 0 {
+		arena, err = t.appendPointerValueForKey(key, ptr, arena)
+		if err != nil {
+			return arena, err
+		}
+	} else if val != nil {
+		recordTreeGetAppendInline(len(val))
+		arena = append(arena, val...)
+	} else {
+		recordTreeGetAppendInline(0)
+	}
+	if len(arena) == start {
+		out[outIndex] = treeGetManyEmptyValue
+		return arena, nil
+	}
+	out[outIndex] = arena[start:len(arena):len(arena)]
+	return arena, nil
 }
 
 // Get returns the value for key.
