@@ -7,31 +7,95 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type recordingCopySortedMem struct {
 	memtable.Table
-	calls int
+	calls  int
+	hasMax bool
+	maxKey []byte
+}
+
+func (m *recordingCopySortedMem) noteKey(key []byte) {
+	if key == nil {
+		return
+	}
+	if !m.hasMax || bytes.Compare(key, m.maxKey) > 0 {
+		m.maxKey = append(m.maxKey[:0], key...)
+		m.hasMax = true
+	}
+}
+
+func (m *recordingCopySortedMem) noteEntries(entries []batch.Entry) {
+	for i := range entries {
+		m.noteKey(entries[i].Key)
+	}
+}
+
+func (m *recordingCopySortedMem) canRecordOrderedAppend(entries []batch.Entry) bool {
+	if len(entries) == 0 || entries[0].Key == nil {
+		return false
+	}
+	return !m.hasMax || bytes.Compare(entries[0].Key, m.maxKey) > 0
+}
+
+func (m *recordingCopySortedMem) Set(key, value []byte) {
+	m.noteKey(key)
+	m.Table.Set(key, value)
+}
+
+func (m *recordingCopySortedMem) SetSteal(key, value []byte) {
+	m.noteKey(key)
+	m.Table.SetSteal(key, value)
+}
+
+func (m *recordingCopySortedMem) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.noteKey(key)
+	m.Table.SetEntry(key, value, ptr, flags)
+}
+
+func (m *recordingCopySortedMem) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.noteKey(key)
+	m.Table.SetEntrySteal(key, value, ptr, flags)
+}
+
+func (m *recordingCopySortedMem) Delete(key []byte) {
+	m.noteKey(key)
+	m.Table.Delete(key)
+}
+
+func (m *recordingCopySortedMem) DeleteSteal(key []byte) {
+	m.noteKey(key)
+	m.Table.DeleteSteal(key)
 }
 
 func (m *recordingCopySortedMem) ApplyCopySortedBatchTrusted(entries []batch.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
-	m.calls++
+	orderedAppend := m.canRecordOrderedAppend(entries)
+	appliedWithSortedApplier := false
+	borrowed := false
 	if applier, ok := m.Table.(memtable.CopySortedBatchApplier); ok {
-		return applier.ApplyCopySortedBatchTrusted(entries, borrowValues, storeInlinePtrValues, onKey)
-	}
-	for _, op := range entries {
-		if op.Type == batch.OpDelete {
-			m.Table.Delete(op.Key)
-		} else if op.IsPtr {
-			m.Table.SetEntry(op.Key, op.Value, op.ValuePtr, node.FlagPointer)
-		} else {
-			m.Table.Set(op.Key, op.Value)
+		borrowed = applier.ApplyCopySortedBatchTrusted(entries, borrowValues, storeInlinePtrValues, onKey)
+		appliedWithSortedApplier = true
+	} else {
+		for _, op := range entries {
+			if op.Type == batch.OpDelete {
+				m.Table.Delete(op.Key)
+			} else if op.IsPtr {
+				m.Table.SetEntry(op.Key, op.Value, op.ValuePtr, node.FlagPointer)
+			} else {
+				m.Table.Set(op.Key, op.Value)
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
 		}
-		if onKey != nil {
-			onKey(op.Key)
-		}
 	}
-	return false
+	if orderedAppend && appliedWithSortedApplier {
+		m.calls++
+	}
+	m.noteEntries(entries)
+	return borrowed
 }
 
 func newSortedWriteFastPathDB(t *testing.T) (*DB, *recordingCopySortedMem) {
@@ -143,6 +207,32 @@ func TestBatchWriteSortedDuplicateFallsBackToGenericLatestWins(t *testing.T) {
 	}
 	requireCachedValue(t, db, []byte("a"), []byte("new"))
 	requireCachedValue(t, db, []byte("b"), []byte("vb"))
+}
+
+func TestBatchWriteSortedOverlappingExistingKeyFallsBackToGeneric(t *testing.T) {
+	db, rec := newSortedWriteFastPathDB(t)
+	defer db.Close()
+
+	if err := db.Set([]byte("a"), []byte("original")); err != nil {
+		t.Fatalf("Set existing: %v", err)
+	}
+
+	b := db.NewBatchWithSize(2)
+	if err := b.Set([]byte("a"), []byte("updated")); err != nil {
+		t.Fatalf("Set(a updated): %v", err)
+	}
+	if err := b.Set([]byte("b"), []byte("new")); err != nil {
+		t.Fatalf("Set(b new): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if rec.calls != 0 {
+		t.Fatalf("copy sorted fast path used for overlapping-key batch: calls=%d", rec.calls)
+	}
+	requireCachedValue(t, db, []byte("a"), []byte("updated"))
+	requireCachedValue(t, db, []byte("b"), []byte("new"))
 }
 
 func TestBatchWriteOutOfOrderFallsBackToGeneric(t *testing.T) {

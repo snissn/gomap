@@ -666,7 +666,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	m.latest[appendOnlyKeyString(key)] = idx
 }
 
-func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) *appendOnlyEntry {
+func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) (idx int, ent *appendOnlyEntry, storedKey []byte) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
 		prev := m.entries
@@ -675,9 +675,9 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		m.entries = grown
 		putAppendOnlyEntries(prev)
 	}
-	idx := m.count
+	idx = m.count
 	m.count++
-	ent := &m.entries[idx]
+	ent = &m.entries[idx]
 	ent.ptr = ptr
 	ent.flags = flags
 	ent.keyInline = false
@@ -713,8 +713,13 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		ent.valueOwned = false
 		ent.ptr = page.ValuePtr{}
 	}
-	k := appendOnlyEntryKey(ent)
-	m.sizeBytes += int64(len(k) + entryValueSize(flags, ent.value))
+	storedKey = appendOnlyEntryKey(ent)
+	m.sizeBytes += int64(len(storedKey) + entryValueSize(flags, ent.value))
+	return idx, ent, storedKey
+}
+
+func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) *appendOnlyEntry {
+	idx, ent, k := m.appendEntryCoreLocked(key, value, ptr, flags, steal, borrowValue)
 
 	if !m.hasLast {
 		m.lastIdx = idx
@@ -746,54 +751,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 }
 
 func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) *appendOnlyEntry {
-	if m.count == len(m.entries) {
-		nextCap := appendOnlyNextCapacity(len(m.entries))
-		prev := m.entries
-		grown := getAppendOnlyEntries(nextCap)
-		copy(grown, m.entries[:m.count])
-		m.entries = grown
-		putAppendOnlyEntries(prev)
-	}
-	idx := m.count
-	m.count++
-	ent := &m.entries[idx]
-	ent.ptr = ptr
-	ent.flags = flags
-	ent.keyInline = false
-	ent.keyArena = false
-	ent.keyReusable = false
-	ent.valueOwned = false
-	if steal {
-		ent.key = key
-		ent.value = value
-	} else {
-		if len(key) == appendOnlyInlineKeyLen {
-			copy(ent.inlineKey[:], key)
-			ent.keyInline = true
-			ent.key = nil
-		} else {
-			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
-			ent.keyReusable = true
-		}
-		if len(value) > 0 {
-			if borrowValue {
-				ent.value = value
-			} else {
-				ent.value = m.valueArena.alloc(len(value))
-				copy(ent.value, value)
-				ent.valueOwned = true
-			}
-		} else {
-			ent.value = nil
-		}
-	}
-	if flags&node.FlagTombstone != 0 {
-		ent.value = nil
-		ent.valueOwned = false
-		ent.ptr = page.ValuePtr{}
-	}
-	k := appendOnlyEntryKey(ent)
-	m.sizeBytes += int64(len(k) + entryValueSize(flags, ent.value))
+	idx, ent, _ := m.appendEntryCoreLocked(key, value, ptr, flags, steal, borrowValue)
 	m.lastIdx = idx
 	m.hasLast = true
 	return ent
@@ -901,17 +859,7 @@ func (m *AppendOnly) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKe
 }
 
 func appendOnlyBatchEntryPayload(op batchpkg.Entry, storeInlinePtrValues bool) (value []byte, ptr page.ValuePtr, flags byte) {
-	switch {
-	case op.Type == batchpkg.OpDelete:
-		return nil, page.ValuePtr{}, node.FlagTombstone
-	case op.IsPtr:
-		if storeInlinePtrValues {
-			return op.Value, op.ValuePtr, node.FlagPointer
-		}
-		return nil, op.ValuePtr, node.FlagPointer
-	default:
-		return op.Value, page.ValuePtr{}, node.FlagInline
-	}
+	return batchEntryPayload(op, storeInlinePtrValues)
 }
 
 func (m *AppendOnly) canAppendTrustedSortedBatchLocked(entries []batchpkg.Entry) bool {
