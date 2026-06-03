@@ -24211,14 +24211,22 @@ type getManyProbeRef struct {
 	shard int
 }
 
-func copyGetManyValueToRefs(out [][]byte, refs []getManyProbeRef, val []byte) {
+var rootDomainGetManyEmptyValue = []byte{}
+
+func copyGetManyValueToRefs(out [][]byte, refs []getManyProbeRef, val []byte, arena *[]byte) {
 	if val == nil {
 		return
 	}
+	if len(val) == 0 {
+		for _, ref := range refs {
+			out[ref.idx] = rootDomainGetManyEmptyValue
+		}
+		return
+	}
 	for _, ref := range refs {
-		cpy := make([]byte, len(val))
-		copy(cpy, val)
-		out[ref.idx] = cpy
+		start := len(*arena)
+		*arena = append(*arena, val...)
+		out[ref.idx] = (*arena)[start:len(*arena):len(*arena)]
 	}
 }
 
@@ -24227,6 +24235,18 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 	if view == nil || len(view.rootPointShards) == 0 {
 		return out, nil
 	}
+	const (
+		rootDomainGetManyValueGuessBytes = 128
+		rootDomainGetManyMaxArenaBytes   = 1 << 20
+	)
+	arenaCap := len(keys) * rootDomainGetManyValueGuessBytes
+	if arenaCap < 0 {
+		arenaCap = 0
+	}
+	if arenaCap > rootDomainGetManyMaxArenaBytes {
+		arenaCap = rootDomainGetManyMaxArenaBytes
+	}
+	arena := make([]byte, 0, arenaCap)
 	refs := make([]getManyProbeRef, len(keys))
 	for i, key := range keys {
 		shard := 0
@@ -24283,18 +24303,18 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		case res.flags&node.FlagTombstone != 0:
 		case res.flags&node.FlagPointer != 0:
 			if res.val != nil {
-				copyGetManyValueToRefs(out, groupRefs, res.val)
+				copyGetManyValueToRefs(out, groupRefs, res.val, &arena)
 				break
 			}
 			readVal, err := db.readValueLog(unique[i].key, res.ptr)
 			if err != nil {
 				return nil, err
 			}
-			copyGetManyValueToRefs(out, groupRefs, readVal)
+			copyGetManyValueToRefs(out, groupRefs, readVal, &arena)
 		case res.val == nil:
-			copyGetManyValueToRefs(out, groupRefs, []byte{})
+			copyGetManyValueToRefs(out, groupRefs, rootDomainGetManyEmptyValue, &arena)
 		default:
-			copyGetManyValueToRefs(out, groupRefs, res.val)
+			copyGetManyValueToRefs(out, groupRefs, res.val, &arena)
 		}
 	}
 	if len(backendKeys) > 0 {
@@ -24311,7 +24331,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 			if uniqueIdx+1 < len(groupStarts) {
 				groupEnd = groupStarts[uniqueIdx+1]
 			}
-			copyGetManyValueToRefs(out, refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i])
+			copyGetManyValueToRefs(out, refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i], &arena)
 		}
 	}
 	return out, nil
@@ -25523,6 +25543,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.snapshot.queue_pointer_bytes_total"] = fmt.Sprintf("%d", snapshotReadQueuePointerBytesTotal.Load())
 	stats["treedb.process.read_path.snapshot.backend_hits_total"] = fmt.Sprintf("%d", snapshotReadBackendHitsTotal.Load())
 	stats["treedb.process.read_path.snapshot.backend_bytes_total"] = fmt.Sprintf("%d", snapshotReadBackendBytesTotal.Load())
+	getManyReadStats := tree.GetManyReadStatsSnapshot()
+	stats["treedb.process.read_path.backend_tree.getmany.calls_total"] = fmt.Sprintf("%d", getManyReadStats.CallsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.grouped_calls_total"] = fmt.Sprintf("%d", getManyReadStats.GroupedCallsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.fallback_calls_total"] = fmt.Sprintf("%d", getManyReadStats.FallbackCallsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.leaf_groups_total"] = fmt.Sprintf("%d", getManyReadStats.LeafGroupsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.leaf_group_items_total"] = fmt.Sprintf("%d", getManyReadStats.LeafGroupItemsTotal)
+	stats["treedb.process.read_path.backend_tree.getmany.leaf_loads_saved_total"] = fmt.Sprintf("%d", getManyReadStats.LeafLoadsSavedTotal)
 	outerLeafReadStats := tree.OuterLeafReadStatsSnapshot()
 	stats["treedb.process.read_path.outer_leaf.loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.LoadsTotal)
 	stats["treedb.process.read_path.outer_leaf.point_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.PointLoadsTotal)

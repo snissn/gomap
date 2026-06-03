@@ -1159,8 +1159,34 @@ func (s rootDomainSnapshot) hasVisibleKey(key []byte) bool {
 	return ok
 }
 
+type sortedPointProbePreference interface {
+	PreferSortedPointProbes(first, last []byte, refCount int) bool
+}
+
+func probeRootDomainTablePointRefs(mt memtable.Table, refs []getManyProbeRef, out []rootDomainProbeResult) {
+	for refIdx := 0; refIdx < len(refs); refIdx++ {
+		if out[refIdx].found {
+			continue
+		}
+		val, ptr, flags, found := mt.GetEntry(refs[refIdx].key)
+		if !found {
+			continue
+		}
+		out[refIdx] = rootDomainProbeResult{
+			val:   val,
+			ptr:   ptr,
+			flags: flags,
+			found: true,
+		}
+	}
+}
+
 func probeRootDomainTableSortedRefs(mt memtable.Table, refs []getManyProbeRef, out []rootDomainProbeResult) error {
 	if mt == nil || len(refs) == 0 {
+		return nil
+	}
+	if pref, ok := mt.(sortedPointProbePreference); ok && pref.PreferSortedPointProbes(refs[0].key, refs[len(refs)-1].key, len(refs)) {
+		probeRootDomainTablePointRefs(mt, refs, out)
 		return nil
 	}
 	it := mt.NewIterator(refs[0].key, nil)

@@ -58,6 +58,14 @@ func (t *countingTable) Freeze() { t.inner.Freeze() }
 
 var _ memtable.Table = (*countingTable)(nil)
 
+type pointPreferredCountingTable struct {
+	*countingTable
+}
+
+func (t *pointPreferredCountingTable) PreferSortedPointProbes(_, _ []byte, _ int) bool {
+	return true
+}
+
 type panicBackend struct{}
 
 func (panicBackend) Get(_ []byte) ([]byte, error) { panic("backend Get should not be called") }
@@ -579,6 +587,45 @@ func TestGetMany_DuplicateHitsReuseSingleProbeWithoutResultAliasing(t *testing.T
 	got[0][0] = 'X'
 	if string(got[1]) != "value" || string(got[2]) != "value" {
 		t.Fatalf("duplicate outputs must not alias: %#v", got)
+	}
+}
+
+func TestGetMany_UsesPointProbesWhenTablePrefersSparseSortedRefs(t *testing.T) {
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	pt := &pointPreferredCountingTable{countingTable: ct}
+	for _, kv := range []struct{ key, value string }{
+		{"a", "va"}, {"m", "vm"}, {"z", "vz"},
+	} {
+		pt.SetEntry([]byte(kv.key), []byte(kv.value), page.ValuePtr{}, node.FlagInline)
+	}
+	db.memtables.Store(&memtableView{
+		rootPointShards: []rootDomainSnapshot{
+			{immutables: []memtable.Table{pt}},
+		},
+	})
+
+	got, err := db.GetMany([][]byte{[]byte("z"), []byte("a"), []byte("m")})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 3 || string(got[0]) != "vz" || string(got[1]) != "va" || string(got[2]) != "vm" {
+		t.Fatalf("unexpected GetMany values: %#v", got)
+	}
+	if ct.iterCalls != 0 {
+		t.Fatalf("expected no iterator probes, got %d", ct.iterCalls)
+	}
+	if ct.getEntryCalls != 3 {
+		t.Fatalf("expected one point probe per unique key, got %d", ct.getEntryCalls)
 	}
 }
 

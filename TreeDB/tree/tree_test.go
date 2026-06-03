@@ -2,6 +2,7 @@ package tree
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,6 +86,92 @@ func (r *trackedLeafLogPageReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, 
 		return out, true, nil
 	}
 	return val, false, nil
+}
+
+func TestTreeGetManyAppend_GroupsLeafLogLoads(t *testing.T) {
+	tracked := &trackedLeafLogPageReader{trackedValueReader: &trackedValueReader{mapValueReader: newMapValueReader()}}
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	pointerValue := []byte("pointer-value")
+	pointerValuePtr := tracked.Add(pointerValue)
+	want := make(map[string][]byte)
+	for i := 0; i < getManyLeafGroupMinKeys+16; i++ {
+		key := []byte(fmt.Sprintf("k%03d", i))
+		value := []byte(fmt.Sprintf("v%03d", i))
+		flags := byte(node.FlagInline)
+		ptr := page.ValuePtr{}
+		switch i {
+		case 0:
+			value = nil
+			flags = node.FlagPointer
+			ptr = pointerValuePtr
+			want[string(key)] = pointerValue
+		case 4:
+			value = nil
+			want[string(key)] = []byte{}
+		default:
+			want[string(key)] = value
+		}
+		if err := leaf.AddLeafEntry(key, value, flags, ptr); err != nil {
+			t.Fatalf("AddLeafEntry(%q): %v", key, err)
+		}
+	}
+	leaf.UpdateChecksum()
+
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: page.PageSize}
+	tracked.values[ptr.ValuePtr()] = leafData
+	tr, _ := newTreeWithLeafLogRoot(t, tracked, []byte{}, ptr)
+
+	keys := make([][]byte, 0, getManyLeafGroupMinKeys+20)
+	keys = append(keys, []byte("k001"), []byte("missing"), []byte("k002"), []byte("k001"), []byte("k000"), []byte("k004"))
+	for i := 3; len(keys) < getManyLeafGroupMinKeys+20; i++ {
+		keys = append(keys, []byte(fmt.Sprintf("k%03d", i)))
+	}
+	out := make([][]byte, len(keys))
+	before := GetManyReadStatsSnapshot()
+	arena, err := tr.GetManyAppend(keys, out, make([]byte, 0, len(keys)*8))
+	if err != nil {
+		t.Fatalf("GetManyAppend: %v", err)
+	}
+	if len(arena) == 0 {
+		t.Fatal("expected arena-backed values")
+	}
+	if tracked.leafLogPageCalls != 1 {
+		t.Fatalf("leaf-log page loads=%d, want 1 grouped load", tracked.leafLogPageCalls)
+	}
+	if out[1] != nil {
+		t.Fatalf("missing key out[1]=%q, want nil", out[1])
+	}
+	for i, key := range keys {
+		if i == 1 {
+			continue
+		}
+		if !bytes.Equal(out[i], want[string(key)]) {
+			t.Fatalf("out[%d] for key %q=%q want %q", i, key, out[i], want[string(key)])
+		}
+	}
+	if !bytes.Equal(out[4], pointerValue) {
+		t.Fatalf("pointer-backed grouped value=%q want %q", out[4], pointerValue)
+	}
+	if out[5] == nil || len(out[5]) != 0 {
+		t.Fatalf("empty grouped value=%q, want non-nil empty", out[5])
+	}
+	if tracked.readUnsafeAppendCalls == 0 {
+		t.Fatal("expected grouped pointer value to use append-style pointer read")
+	}
+	out[0][0] = 'X'
+	if !bytes.Equal(out[3], want[string(keys[3])]) {
+		t.Fatalf("duplicate value aliased after mutation: got %q want %q", out[3], want[string(keys[3])])
+	}
+	after := GetManyReadStatsSnapshot()
+	if after.GroupedCallsTotal-before.GroupedCallsTotal != 1 {
+		t.Fatalf("grouped calls delta=%d, want 1", after.GroupedCallsTotal-before.GroupedCallsTotal)
+	}
+	if after.LeafLoadsSavedTotal <= before.LeafLoadsSavedTotal {
+		t.Fatalf("expected leaf-load savings counter to increase: before=%d after=%d", before.LeafLoadsSavedTotal, after.LeafLoadsSavedTotal)
+	}
 }
 
 func TestTreeGet(t *testing.T) {

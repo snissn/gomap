@@ -302,6 +302,12 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	if _, ok := stats["treedb.process.read_path.backend_tree.get_append_pointer_hits_total"]; !ok {
 		t.Fatalf("missing treedb.process.read_path.backend_tree.get_append_pointer_hits_total")
 	}
+	if _, ok := stats["treedb.process.read_path.backend_tree.getmany.grouped_calls_total"]; !ok {
+		t.Fatalf("missing treedb.process.read_path.backend_tree.getmany.grouped_calls_total")
+	}
+	if _, ok := stats["treedb.process.read_path.backend_tree.getmany.leaf_loads_saved_total"]; !ok {
+		t.Fatalf("missing treedb.process.read_path.backend_tree.getmany.leaf_loads_saved_total")
+	}
 	if _, ok := stats["treedb.process.read_path.outer_leaf.loads_total"]; !ok {
 		t.Fatalf("missing treedb.process.read_path.outer_leaf.loads_total")
 	}

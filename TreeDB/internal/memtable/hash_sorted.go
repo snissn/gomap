@@ -522,6 +522,34 @@ func (m *HashSorted) Freeze() {
 	m.startFinalize()
 }
 
+// PreferSortedPointProbes reports whether a sorted batch of point probes should
+// use individual hash lookups instead of one iterator scan. Frozen hash-sorted
+// tables have stable maps; sparse random batches avoid scanning large key gaps.
+func (m *HashSorted) PreferSortedPointProbes(first, last []byte, refCount int) bool {
+	if m == nil || refCount <= 0 {
+		return false
+	}
+	m.mu.RLock()
+	frozen := m.frozen
+	count := len(m.items)
+	m.mu.RUnlock()
+	if !frozen {
+		return false
+	}
+	if refCount == 1 {
+		return true
+	}
+	if first64, ok := appendOnlyKeyU64(first); ok {
+		if last64, ok := appendOnlyKeyU64(last); ok && last64 >= first64 {
+			span := last64 - first64 + 1
+			if span <= uint64(refCount*4) {
+				return false
+			}
+		}
+	}
+	return refCount*4 < count || refCount <= 256
+}
+
 func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
 	frozen := m.frozen
