@@ -107,6 +107,28 @@ type AppendOnly struct {
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
 
+// PreferSortedPointProbes reports whether a sorted batch of point probes should
+// use individual GetEntry lookups instead of one iterator scan. Frozen
+// append-only tables can answer point probes without locks; for sparse random
+// batches this avoids scanning the gaps between sorted keys.
+func (m *AppendOnly) PreferSortedPointProbes(first, last []byte, refCount int) bool {
+	if m == nil || refCount <= 0 || !m.frozenFast.Load() {
+		return false
+	}
+	if refCount == 1 {
+		return true
+	}
+	if first64, ok := appendOnlyKeyU64(first); ok {
+		if last64, ok := appendOnlyKeyU64(last); ok && last64 >= first64 {
+			span := last64 - first64 + 1
+			if span <= uint64(refCount*4) {
+				return false
+			}
+		}
+	}
+	return refCount*4 < m.count || refCount <= 256
+}
+
 func appendOnlyMaxReuseEntries(length int) int {
 	maxReuse := appendOnlyEntryPoolMaxCap
 	if length <= appendOnlyEntryPoolMaxCap/appendOnlyReuseOversizeFactor {

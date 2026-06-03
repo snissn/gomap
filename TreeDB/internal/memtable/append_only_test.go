@@ -406,6 +406,32 @@ func TestAppendOnlyOrderedGetAndGetEntryFastPath(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyPreferSortedPointProbesForSparseFrozenBatches(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	var key [8]byte
+	for i := uint64(0); i < 1000; i++ {
+		binary.BigEndian.PutUint64(key[:], i)
+		m.Set(key[:], []byte("v"))
+	}
+	m.Freeze()
+
+	binary.BigEndian.PutUint64(key[:], 10)
+	first := append([]byte(nil), key[:]...)
+	binary.BigEndian.PutUint64(key[:], 900)
+	last := append([]byte(nil), key[:]...)
+	if !m.PreferSortedPointProbes(first, last, 16) {
+		t.Fatal("expected sparse frozen batch to prefer point probes")
+	}
+
+	binary.BigEndian.PutUint64(key[:], 10)
+	first = append(first[:0], key[:]...)
+	binary.BigEndian.PutUint64(key[:], 40)
+	last = append(last[:0], key[:]...)
+	if m.PreferSortedPointProbes(first, last, 16) {
+		t.Fatal("expected dense frozen batch to keep iterator scan")
+	}
+}
+
 func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 	keyKinds := []struct {
 		name       string
