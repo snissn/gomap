@@ -8533,15 +8533,13 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
 	}
+	resetCapacity := db.checkpointRotateCapacity()
+	estimate := appendOnlyEstimatedBytesPerEntryDefault
+	appendOnlyResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, estimate)
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
-			// Retired memtables are no longer visible once they reach this path. Drop
-			// their entry/value buffers back to the shared pools now and let the next
-			// lease pop size the table for the then-current mutable threshold. This
-			// avoids charging recycle-time readers/snapshot closes for replacement
-			// entry-slice allocations while preserving warm reuse through the pools.
-			typed.Release()
+			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
@@ -8550,7 +8548,7 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	}
 }
 
-func (db *DB) trimAppendOnlyMemLeases(maxLeases int, _ int) int {
+func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) int {
 	if db == nil {
 		return 0
 	}
@@ -8573,10 +8571,11 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, _ int) int {
 	if len(dropped) == 0 {
 		return 0
 	}
+	effectiveResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
 	returned := 0
 	for i := range dropped {
 		if dropped[i] != nil {
-			dropped[i].Release()
+			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(dropped[i])
 			db.appendOnlyMemPool.Put(dropped[i])
 			returned++
