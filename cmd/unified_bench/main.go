@@ -4997,8 +4997,8 @@ func (s *treeDBVlogCodecScanStats) treeDBStats() map[string]string {
 		if c.Frames > 0 {
 			out["treedb.cache.vlog_auto.frames."+name] = fmt.Sprintf("%d", c.Frames)
 		}
-		if c.StoredBytes > 0 {
-			out["treedb.cache.vlog_auto.bytes."+name] = fmt.Sprintf("%d", c.StoredBytes)
+		if c.RawBytes > 0 {
+			out["treedb.cache.vlog_auto.bytes."+name] = fmt.Sprintf("%d", c.RawBytes)
 		}
 		if totalAutoFrames > 0 && c.Frames > 0 {
 			out["treedb.cache.vlog_auto.frames_frac."+name] = fmt.Sprintf("%.6f", float64(c.Frames)/float64(totalAutoFrames))

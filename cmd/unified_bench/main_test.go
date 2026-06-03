@@ -1700,7 +1700,9 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 		"treedb.cache.vlog_block.k.bucket.lz4.le_4":              "1",
 		"treedb.cache.vlog_block.ratio.lz4":                      "0.400000",
 		"treedb.cache.vlog_auto.frames.block_lz4":                "1",
+		"treedb.cache.vlog_auto.bytes.block_lz4":                 "300",
 		"treedb.cache.vlog_auto.frames.off":                      "1",
+		"treedb.cache.vlog_auto.bytes.off":                       "50",
 		"treedb.cache.vlog_auto.frames_frac.block_lz4":           "0.500000",
 		"treedb.cache.vlog_auto.frames_frac.off":                 "0.500000",
 	}
