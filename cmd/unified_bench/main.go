@@ -4933,11 +4933,14 @@ func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto b
 	outerCodec := "unknown"
 	blockCodec := ""
 	autoCandidate := "off"
-	if !compressed {
-		outerCodec = treeDBVlogScanOuterLeafCodecFromPayload(body[prefixLen:], offsets)
-	} else if dictID != 0 {
+	if dictID != 0 {
 		writeMode = "dict"
 		autoCandidate = "dict"
+		if !compressed {
+			outerCodec = treeDBVlogScanOuterLeafCodecFromPayload(body[prefixLen:], offsets)
+		}
+	} else if !compressed {
+		outerCodec = treeDBVlogScanOuterLeafCodecFromPayload(body[prefixLen:], offsets)
 	} else {
 		writeMode = "block"
 		switch body[3] {

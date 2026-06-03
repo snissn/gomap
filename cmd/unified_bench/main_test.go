@@ -1713,6 +1713,33 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 	}
 }
 
+func TestScanTreeDBLeafVLogCodecStats_UncompressedDictFrameUsesDictMode(t *testing.T) {
+	dir := t.TempDir()
+	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll leaf_vlog: %v", err)
+	}
+	record := testTreeDBVLogFrame(t, 1, 0, false, 50, 50)
+	binary.LittleEndian.PutUint64(record[treeDBVlogScanHeaderSize+4:treeDBVlogScanHeaderSize+12], 123)
+	if err := os.WriteFile(filepath.Join(leafDir, "value-l255-000001.log"), record, 0o644); err != nil {
+		t.Fatalf("WriteFile leaf log: %v", err)
+	}
+
+	stats, err := scanTreeDBLeafVLogCodecStats(dir, true)
+	if err != nil {
+		t.Fatalf("scanTreeDBLeafVLogCodecStats: %v", err)
+	}
+	if got := stats["treedb.cache.vlog_write_mode.frames.dict"]; got != "1" {
+		t.Fatalf("dict frames=%q want 1 (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.cache.vlog_auto.frames.dict"]; got != "1" {
+		t.Fatalf("auto dict frames=%q want 1 (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.cache.vlog_write_mode.frames.off"]; got != "" {
+		t.Fatalf("uncompressed dict frame misclassified as off=%q (stats=%#v)", got, stats)
+	}
+}
+
 func TestScanTreeDBLeafVLogCodecStats_PreservesPartialStatsOnSegmentError(t *testing.T) {
 	dir := t.TempDir()
 	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
