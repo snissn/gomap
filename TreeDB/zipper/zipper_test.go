@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -940,4 +941,190 @@ func TestApplyScratch_TrimsOversizedOuterLeafBuildPageCache(t *testing.T) {
 		t.Fatalf("cap(outerLeafBuildPages)=%d exceeds keep cap %d", cap(reused.outerLeafBuildPages), mergeOuterLeafPageKeepCap)
 	}
 	z.releaseApplyScratch(reused)
+}
+
+func TestZipperCompareKeysMatchesBytesCompareForEightByteKeys(t *testing.T) {
+	var a, b [8]byte
+	for i := uint64(0); i < 1024; i++ {
+		for j := uint64(0); j < 1024; j += 17 {
+			binary.BigEndian.PutUint64(a[:], i)
+			binary.BigEndian.PutUint64(b[:], j)
+			got := compareZipperKeys(a[:], b[:])
+			want := bytes.Compare(a[:], b[:])
+			if (got < 0) != (want < 0) || (got == 0) != (want == 0) || (got > 0) != (want > 0) {
+				t.Fatalf("compareZipperKeys(%x,%x)=%d want sign %d", a, b, got, want)
+			}
+		}
+	}
+}
+
+func TestZipperMergeScratch_ReusesAndClearsPendingLeafPageScratch(t *testing.T) {
+	s := newMergeScratch()
+	buf := s.acquirePendingLeafPagePersists(2)
+	buf = append(buf, pendingLeafPagePersist{data: []byte("page-a"), pooled: &outerLeafBuildPage{}})
+	buf = append(buf, pendingLeafPagePersist{data: []byte("page-b"), root: true, splitIdx: 1, pooled: &outerLeafBuildPage{}})
+	s.releasePendingLeafPagePersists(buf)
+
+	reused := s.acquirePendingLeafPagePersists(2)
+	if cap(reused) < 2 {
+		t.Fatalf("reused cap=%d want >=2", cap(reused))
+	}
+	full := reused[:cap(reused)]
+	for i, entry := range full {
+		if entry.data != nil || entry.pooled != nil || entry.root || entry.splitIdx != 0 {
+			t.Fatalf("pending leaf persist scratch retained entry %d: %+v", i, entry)
+		}
+	}
+	s.releasePendingLeafPagePersists(reused)
+}
+
+func TestZipperMergeScratch_ReusesAndClearsLeafPageBatchScratch(t *testing.T) {
+	s := newMergeScratch()
+	buf := s.acquireLeafPageBatch(2)
+	buf = append(buf, []byte("page-a"), []byte("page-b"))
+	s.releaseLeafPageBatch(buf)
+
+	reused := s.acquireLeafPageBatch(2)
+	if cap(reused) < 2 {
+		t.Fatalf("reused cap=%d want >=2", cap(reused))
+	}
+	for i, page := range reused[:cap(reused)] {
+		if page != nil {
+			t.Fatalf("leaf page batch scratch retained page %d", i)
+		}
+	}
+	s.releaseLeafPageBatch(reused)
+}
+
+func TestZipperMergeScratch_ReusesAndClearsChildRefBatchScratch(t *testing.T) {
+	s := newMergeScratch()
+	buf := s.acquireChildRefBatch(2)
+	buf = append(buf, page.PageChildRef(1), page.PageChildRef(2))
+	s.releaseChildRefBatch(buf)
+
+	reused := s.acquireChildRefBatch(2)
+	if cap(reused) < 2 {
+		t.Fatalf("reused cap=%d want >=2", cap(reused))
+	}
+	for i, ref := range reused[:cap(reused)] {
+		if ref != (page.ChildRef{}) {
+			t.Fatalf("child ref batch scratch retained ref %d: %+v", i, ref)
+		}
+	}
+	s.releaseChildRefBatch(reused)
+}
+
+func TestZipperMergeScratch_TrimsPendingLeafPageScratchCaches(t *testing.T) {
+	z := New(nil, nil)
+	s := z.acquireApplyScratch()
+	for i := 0; i < mergePendingLeafPersistKeep+16; i++ {
+		s.releasePendingLeafPagePersists(make([]pendingLeafPagePersist, 0, 1))
+	}
+	for i := 0; i < mergeLeafPageBatchKeep+16; i++ {
+		s.releaseLeafPageBatch(make([][]byte, 0, 1))
+	}
+	for i := 0; i < mergeChildRefBatchKeep+16; i++ {
+		s.releaseChildRefBatch(make([]page.ChildRef, 0, 1))
+	}
+	z.releaseApplyScratch(s)
+
+	reused := z.acquireApplyScratch()
+	if len(reused.pendingLeafPersistScratch) > mergePendingLeafPersistKeep {
+		t.Fatalf("pending leaf persist scratch len=%d exceeds keep %d", len(reused.pendingLeafPersistScratch), mergePendingLeafPersistKeep)
+	}
+	if len(reused.leafPageBatchScratch) > mergeLeafPageBatchKeep {
+		t.Fatalf("leaf page batch scratch len=%d exceeds keep %d", len(reused.leafPageBatchScratch), mergeLeafPageBatchKeep)
+	}
+	if len(reused.childRefBatchScratch) > mergeChildRefBatchKeep {
+		t.Fatalf("child ref batch scratch len=%d exceeds keep %d", len(reused.childRefBatchScratch), mergeChildRefBatchKeep)
+	}
+	z.releaseApplyScratch(reused)
+}
+
+func TestZipperMergeScratch_ConcurrentPendingLeafPageScratchReuse(t *testing.T) {
+	s := newMergeScratch()
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < 128; i++ {
+				pending := s.acquirePendingLeafPagePersists(4)
+				pending = append(pending, pendingLeafPagePersist{data: []byte{byte(id), byte(i)}})
+				pages := s.acquireLeafPageBatch(4)
+				pages = append(pages, []byte{byte(i)})
+				refs := s.acquireChildRefBatch(4)
+				refs = append(refs, page.PageChildRef(uint64(i)))
+				s.releaseChildRefBatch(refs)
+				s.releaseLeafPageBatch(pages)
+				s.releasePendingLeafPagePersists(pending)
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+type benchmarkLeafBatchLog struct {
+	next uint64
+	ptrs []page.LeafLogPtr
+}
+
+func (l *benchmarkLeafBatchLog) AppendLeafPage(_ []byte) (page.LeafLogPtr, error) {
+	if l.next == 0 {
+		l.next = 4
+	}
+	ptr := page.LeafLogPtr{FileID: 1, Offset: l.next, RecordLengthHint: page.PageSize}
+	l.next += page.PageSize + 32
+	return ptr, nil
+}
+
+func (l *benchmarkLeafBatchLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if cap(l.ptrs) < len(leafPages) {
+		l.ptrs = make([]page.LeafLogPtr, len(leafPages))
+	}
+	out := l.ptrs[:len(leafPages)]
+	if l.next == 0 {
+		l.next = 4
+	}
+	for i := range out {
+		out[i] = page.LeafLogPtr{FileID: 1, Offset: l.next, RecordLengthHint: page.ValuePtrMarkGrouped(page.PageSize, uint8(i)), SubIndex: uint16(i)}
+	}
+	l.next += uint64(len(out)) * (page.PageSize + 32)
+	return out, nil
+}
+
+func BenchmarkMergeLeafOuterLeafBatchScratch(b *testing.B) {
+	z := New(nil, nil)
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageLog(&benchmarkLeafBatchLog{})
+
+	oldData := make([]byte, page.PageSize)
+	oldNode := node.NewNode(oldData)
+	oldNode.SetType(page.PageTypeLeaf)
+	oldNode.UpdateChecksum()
+
+	prefix := bytes.Repeat([]byte{'b'}, 96)
+	value := bytes.Repeat([]byte{'v'}, 64)
+	ops := make([]batch.Entry, 0, 512)
+	for i := 0; i < 512; i++ {
+		key := make([]byte, len(prefix)+8)
+		copy(key, prefix)
+		binary.BigEndian.PutUint64(key[len(prefix):], uint64(i))
+		ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var data [page.PageSize]byte
+		builder := z.newLeafBuilder(data[:], ops)
+		builder.SetPageID(0)
+		scratch := z.acquireApplyScratch()
+		var metrics adaptive.Metrics
+		_, _, err := z.mergeLeaf(oldNode, builder, ops, &metrics, scratch, true)
+		z.releaseApplyScratch(scratch)
+		if err != nil {
+			b.Fatalf("mergeLeaf: %v", err)
+		}
+	}
 }

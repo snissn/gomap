@@ -1,7 +1,6 @@
 package node
 
 import (
-	"bytes"
 	"encoding/binary"
 	"sort"
 	"sync"
@@ -166,7 +165,7 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 	if !leafHeuristicEntriesSorted(entries) {
 		ordered = append(make([]LeafHeuristicEntry, 0, len(entries)), entries...)
 		sort.Slice(ordered, func(i, j int) bool {
-			cmp := bytes.Compare(ordered[i].Key, ordered[j].Key)
+			cmp := compareLeafKey(ordered[i].Key, ordered[j].Key)
 			if cmp != 0 {
 				return cmp < 0
 			}
@@ -234,7 +233,7 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 
 func leafHeuristicEntriesSorted(entries []LeafHeuristicEntry) bool {
 	for i := 1; i < len(entries); i++ {
-		cmp := bytes.Compare(entries[i-1].Key, entries[i].Key)
+		cmp := compareLeafKey(entries[i-1].Key, entries[i].Key)
 		if cmp > 0 || (cmp == 0 && entries[i-1].Flags > entries[i].Flags) {
 			return false
 		}

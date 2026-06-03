@@ -91,6 +91,21 @@ func putOuterLeafBuildPage(p *outerLeafBuildPage) {
 	outerLeafBuildPagePool.Put(p)
 }
 
+func compareZipperKeys(a, b []byte) int {
+	if len(a) == 8 && len(b) == 8 {
+		av := binary.BigEndian.Uint64(a)
+		bv := binary.BigEndian.Uint64(b)
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+		return 0
+	}
+	return bytes.Compare(a, b)
+}
+
 type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
@@ -131,16 +146,32 @@ type Split struct {
 	Ref page.ChildRef
 }
 
+type pendingLeafPagePersist struct {
+	data     []byte
+	root     bool
+	splitIdx int
+	pooled   *outerLeafBuildPage
+}
+
 const (
-	mergeSplitKeyArenaInitCap = page.PageSize
-	mergeSplitKeyArenaKeepCap = 1 << 20
-	mergeOuterLeafPageInitCap = 16
-	mergeOuterLeafPageKeepCap = 128
-	mergeLeafPageScratchInit  = 16
-	mergeLeafPageScratchKeep  = 128
-	mergeNodeKeyScratchInit   = 16
-	mergeNodeKeyScratchKeep   = 128
-	mergeNodeKeyScratchMaxCap = 1 << 20
+	mergeSplitKeyArenaInitCap     = page.PageSize
+	mergeSplitKeyArenaKeepCap     = 1 << 20
+	mergeOuterLeafPageInitCap     = 16
+	mergeOuterLeafPageKeepCap     = 128
+	mergeLeafPageScratchInit      = 16
+	mergeLeafPageScratchKeep      = 128
+	mergeNodeKeyScratchInit       = 16
+	mergeNodeKeyScratchKeep       = 128
+	mergeNodeKeyScratchMaxCap     = 1 << 20
+	mergePendingLeafPersistInit   = 8
+	mergePendingLeafPersistKeep   = 64
+	mergePendingLeafPersistMaxCap = 512
+	mergeLeafPageBatchInit        = 8
+	mergeLeafPageBatchKeep        = 64
+	mergeLeafPageBatchMaxCap      = 512
+	mergeChildRefBatchInit        = 8
+	mergeChildRefBatchKeep        = 64
+	mergeChildRefBatchMaxCap      = 512
 
 	mergeInternalMinParallelChildren         = 8
 	mergeInternalMinParallelOps              = 4096
@@ -151,19 +182,25 @@ const (
 )
 
 type mergeScratch struct {
-	mu                  sync.Mutex
-	splitKeyArena       []byte
-	outerLeafBuildPages []*outerLeafBuildPage
-	leafPageScratch     [][]byte
-	nodeKeyScratch      [][]byte
+	mu                        sync.Mutex
+	splitKeyArena             []byte
+	outerLeafBuildPages       []*outerLeafBuildPage
+	leafPageScratch           [][]byte
+	nodeKeyScratch            [][]byte
+	pendingLeafPersistScratch [][]pendingLeafPagePersist
+	leafPageBatchScratch      [][][]byte
+	childRefBatchScratch      [][]page.ChildRef
 }
 
 func newMergeScratch() *mergeScratch {
 	return &mergeScratch{
-		splitKeyArena:       make([]byte, 0, mergeSplitKeyArenaInitCap),
-		outerLeafBuildPages: make([]*outerLeafBuildPage, 0, mergeOuterLeafPageInitCap),
-		leafPageScratch:     make([][]byte, 0, mergeLeafPageScratchInit),
-		nodeKeyScratch:      make([][]byte, 0, mergeNodeKeyScratchInit),
+		splitKeyArena:             make([]byte, 0, mergeSplitKeyArenaInitCap),
+		outerLeafBuildPages:       make([]*outerLeafBuildPage, 0, mergeOuterLeafPageInitCap),
+		leafPageScratch:           make([][]byte, 0, mergeLeafPageScratchInit),
+		nodeKeyScratch:            make([][]byte, 0, mergeNodeKeyScratchInit),
+		pendingLeafPersistScratch: make([][]pendingLeafPagePersist, 0, mergePendingLeafPersistInit),
+		leafPageBatchScratch:      make([][][]byte, 0, mergeLeafPageBatchInit),
+		childRefBatchScratch:      make([][]page.ChildRef, 0, mergeChildRefBatchInit),
 	}
 }
 
@@ -210,6 +247,27 @@ func (s *mergeScratch) reset() {
 			extra[i] = nil
 		}
 		s.nodeKeyScratch = s.nodeKeyScratch[:mergeNodeKeyScratchKeep]
+	}
+	if n := len(s.pendingLeafPersistScratch); n > mergePendingLeafPersistKeep {
+		extra := s.pendingLeafPersistScratch[mergePendingLeafPersistKeep:]
+		for i := range extra {
+			extra[i] = nil
+		}
+		s.pendingLeafPersistScratch = s.pendingLeafPersistScratch[:mergePendingLeafPersistKeep]
+	}
+	if n := len(s.leafPageBatchScratch); n > mergeLeafPageBatchKeep {
+		extra := s.leafPageBatchScratch[mergeLeafPageBatchKeep:]
+		for i := range extra {
+			extra[i] = nil
+		}
+		s.leafPageBatchScratch = s.leafPageBatchScratch[:mergeLeafPageBatchKeep]
+	}
+	if n := len(s.childRefBatchScratch); n > mergeChildRefBatchKeep {
+		extra := s.childRefBatchScratch[mergeChildRefBatchKeep:]
+		for i := range extra {
+			extra[i] = nil
+		}
+		s.childRefBatchScratch = s.childRefBatchScratch[:mergeChildRefBatchKeep]
 	}
 }
 
@@ -314,6 +372,129 @@ func (s *mergeScratch) releaseNodeKeyScratch(buf []byte) {
 	s.mu.Lock()
 	if len(s.nodeKeyScratch) < mergeNodeKeyScratchKeep {
 		s.nodeKeyScratch = append(s.nodeKeyScratch, buf[:0])
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquirePendingLeafPagePersists(capacity int) []pendingLeafPagePersist {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([]pendingLeafPagePersist, 0, capacity)
+	}
+	s.mu.Lock()
+	n := len(s.pendingLeafPersistScratch)
+	if n > 0 {
+		buf := s.pendingLeafPersistScratch[n-1]
+		s.pendingLeafPersistScratch[n-1] = nil
+		s.pendingLeafPersistScratch = s.pendingLeafPersistScratch[:n-1]
+		s.mu.Unlock()
+		if cap(buf) >= capacity {
+			return buf[:0]
+		}
+	} else {
+		s.mu.Unlock()
+	}
+	return make([]pendingLeafPagePersist, 0, capacity)
+}
+
+func (s *mergeScratch) releasePendingLeafPagePersists(buf []pendingLeafPagePersist) {
+	if buf == nil {
+		return
+	}
+	full := buf[:cap(buf)]
+	clear(full)
+	if s == nil || cap(buf) > mergePendingLeafPersistMaxCap {
+		return
+	}
+	s.mu.Lock()
+	if len(s.pendingLeafPersistScratch) < mergePendingLeafPersistKeep {
+		s.pendingLeafPersistScratch = append(s.pendingLeafPersistScratch, full[:0])
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquireLeafPageBatch(capacity int) [][]byte {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([][]byte, 0, capacity)
+	}
+	s.mu.Lock()
+	n := len(s.leafPageBatchScratch)
+	if n > 0 {
+		buf := s.leafPageBatchScratch[n-1]
+		s.leafPageBatchScratch[n-1] = nil
+		s.leafPageBatchScratch = s.leafPageBatchScratch[:n-1]
+		s.mu.Unlock()
+		if cap(buf) >= capacity {
+			return buf[:0]
+		}
+	} else {
+		s.mu.Unlock()
+	}
+	return make([][]byte, 0, capacity)
+}
+
+func (s *mergeScratch) releaseLeafPageBatch(buf [][]byte) {
+	if buf == nil {
+		return
+	}
+	full := buf[:cap(buf)]
+	clear(full)
+	if s == nil || cap(buf) > mergeLeafPageBatchMaxCap {
+		return
+	}
+	s.mu.Lock()
+	if len(s.leafPageBatchScratch) < mergeLeafPageBatchKeep {
+		s.leafPageBatchScratch = append(s.leafPageBatchScratch, full[:0])
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquireChildRefBatch(capacity int) []page.ChildRef {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([]page.ChildRef, 0, capacity)
+	}
+	s.mu.Lock()
+	n := len(s.childRefBatchScratch)
+	if n > 0 {
+		buf := s.childRefBatchScratch[n-1]
+		s.childRefBatchScratch[n-1] = nil
+		s.childRefBatchScratch = s.childRefBatchScratch[:n-1]
+		s.mu.Unlock()
+		if cap(buf) >= capacity {
+			return buf[:0]
+		}
+	} else {
+		s.mu.Unlock()
+	}
+	return make([]page.ChildRef, 0, capacity)
+}
+
+func (s *mergeScratch) releaseChildRefBatch(buf []page.ChildRef) {
+	if buf == nil {
+		return
+	}
+	full := buf[:cap(buf)]
+	clear(full)
+	if s == nil || cap(buf) > mergeChildRefBatchMaxCap {
+		return
+	}
+	s.mu.Lock()
+	if len(s.childRefBatchScratch) < mergeChildRefBatchKeep {
+		s.childRefBatchScratch = append(s.childRefBatchScratch, full[:0])
 		s.mu.Unlock()
 		return
 	}
@@ -805,7 +986,7 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 	}
 	sorted := true
 	for i := 1; i < len(entries); i++ {
-		cmp := bytes.Compare(entries[i-1].Key, entries[i].Key)
+		cmp := compareZipperKeys(entries[i-1].Key, entries[i].Key)
 		if cmp > 0 || (cmp == 0 && entries[i-1].Flags > entries[i].Flags) {
 			sorted = false
 			break
@@ -813,7 +994,7 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 	}
 	if !sorted {
 		sort.Slice(entries, func(i, j int) bool {
-			cmp := bytes.Compare(entries[i].Key, entries[j].Key)
+			cmp := compareZipperKeys(entries[i].Key, entries[j].Key)
 			if cmp != 0 {
 				return cmp < 0
 			}
@@ -1299,22 +1480,31 @@ func (z *Zipper) persistLeafPageData(leafPage []byte) (page.ChildRef, error) {
 }
 
 func (z *Zipper) persistLeafPageBatchData(leafPages [][]byte) ([]page.ChildRef, error) {
+	return z.persistLeafPageBatchDataTo(leafPages, nil)
+}
+
+func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
+	refs = refs[:0]
 	if len(leafPages) == 0 {
-		return nil, nil
+		return refs, nil
 	}
 	if len(leafPages) == 1 {
 		ref, err := z.persistLeafPageData(leafPages[0])
 		if err != nil {
 			return nil, err
 		}
-		return []page.ChildRef{ref}, nil
+		return append(refs, ref), nil
 	}
 	if z.leafPageLog == nil {
 		return nil, errors.New("zipper: missing leaf page log")
 	}
 	batcher, ok := z.leafPageLog.(LeafPageBatchLog)
 	if !ok {
-		refs := make([]page.ChildRef, len(leafPages))
+		if cap(refs) < len(leafPages) {
+			refs = make([]page.ChildRef, len(leafPages))
+		} else {
+			refs = refs[:len(leafPages)]
+		}
 		for i, leafPage := range leafPages {
 			ref, err := z.persistLeafPageData(leafPage)
 			if err != nil {
@@ -1331,7 +1521,11 @@ func (z *Zipper) persistLeafPageBatchData(leafPages [][]byte) ([]page.ChildRef, 
 	if len(ptrs) != len(leafPages) {
 		return nil, fmt.Errorf("zipper: leaf page batch returned %d ptrs for %d pages", len(ptrs), len(leafPages))
 	}
-	refs := make([]page.ChildRef, len(ptrs))
+	if cap(refs) < len(ptrs) {
+		refs = make([]page.ChildRef, len(ptrs))
+	} else {
+		refs = refs[:len(ptrs)]
+	}
 	for i, ptr := range ptrs {
 		z.cachePersistedLeafPage(ptr, leafPages[i])
 		refs[i] = page.LeafLogChildRef(ptr)
@@ -1483,13 +1677,6 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	oldCount := oldNode.Count()
 	opIdx := 0
 
-	type pendingLeafPagePersist struct {
-		data     []byte
-		root     bool
-		splitIdx int
-		pooled   *outerLeafBuildPage
-	}
-
 	var (
 		splits                  []Split
 		rootNodeRef             page.ChildRef
@@ -1499,15 +1686,18 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	)
 	pendingSplitIdx = -1
 	batchLeafPagePersists := z.outerLeavesInValueLog && reuseOuterLeafPages
+	if batchLeafPagePersists && scratch != nil {
+		pendingLeafPagePersists = scratch.acquirePendingLeafPagePersists(mergePendingLeafPersistInit)
+	}
 	defer func() {
-		if scratch == nil {
-			return
-		}
 		for i := range pendingLeafPagePersists {
-			if pendingLeafPagePersists[i].pooled != nil {
+			if pendingLeafPagePersists[i].pooled != nil && scratch != nil {
 				scratch.releaseOuterLeafBuildPage(pendingLeafPagePersists[i].pooled)
 				pendingLeafPagePersists[i].pooled = nil
 			}
+		}
+		if scratch != nil {
+			scratch.releasePendingLeafPagePersists(pendingLeafPagePersists)
 		}
 	}()
 
@@ -1618,7 +1808,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			oldFlags = f
 			batchKey := ops[opIdx].Key
 
-			cmp := bytes.Compare(k, batchKey)
+			cmp := compareZipperKeys(k, batchKey)
 			if cmp < 0 {
 				// useOld = true
 			} else if cmp > 0 {
@@ -1753,6 +1943,15 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// Split keys escape this call via the returned []Split, so detach
 			// from source buffers into apply-lifetime scratch.
 			splitE.Key = scratch.cloneSplitKey(key)
+			if splits == nil {
+				hint := len(ops) / 16
+				if hint < 1 {
+					hint = 1
+				} else if hint > 512 {
+					hint = 512
+				}
+				splits = make([]Split, 0, hint)
+			}
 			splits = append(splits, splitE)
 			pendingSplitIdx = len(splits) - 1
 
@@ -1779,15 +1978,34 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	}
 
 	if len(pendingLeafPagePersists) > 0 {
-		leafPages := make([][]byte, len(pendingLeafPagePersists))
+		var leafPages [][]byte
+		if scratch != nil {
+			leafPages = scratch.acquireLeafPageBatch(len(pendingLeafPagePersists))
+		} else {
+			leafPages = make([][]byte, 0, len(pendingLeafPagePersists))
+		}
+		leafPages = leafPages[:len(pendingLeafPagePersists)]
 		for i := range pendingLeafPagePersists {
 			leafPages[i] = pendingLeafPagePersists[i].data
 		}
-		refs, err := z.persistLeafPageBatchData(leafPages)
+		var refScratch []page.ChildRef
+		if scratch != nil {
+			refScratch = scratch.acquireChildRefBatch(len(pendingLeafPagePersists))
+		}
+		refs, err := z.persistLeafPageBatchDataTo(leafPages, refScratch)
+		if scratch != nil {
+			scratch.releaseLeafPageBatch(leafPages)
+		}
 		if err != nil {
+			if scratch != nil {
+				scratch.releaseChildRefBatch(refScratch)
+			}
 			return page.ChildRef{}, nil, err
 		}
 		if len(refs) != len(pendingLeafPagePersists) {
+			if scratch != nil {
+				scratch.releaseChildRefBatch(refs)
+			}
 			return page.ChildRef{}, nil, fmt.Errorf("zipper: leaf page batch returned %d refs for %d pages", len(refs), len(pendingLeafPagePersists))
 		}
 		for i, pending := range pendingLeafPagePersists {
@@ -1800,6 +2018,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			if pending.splitIdx >= 0 && pending.splitIdx < len(splits) {
 				splits[pending.splitIdx].Ref = ref
 			}
+		}
+		if scratch != nil {
+			scratch.releaseChildRefBatch(refs)
 		}
 	}
 
@@ -1935,7 +2156,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 			startOpIdx := opIdx
 			for opIdx < len(ops) {
-				if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+				if endKey == nil || compareZipperKeys(ops[opIdx].Key, endKey) < 0 {
 					opIdx++
 					continue
 				}
@@ -2013,7 +2234,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 		startOpIdx := opIdx
 		for opIdx < len(ops) {
-			if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+			if endKey == nil || compareZipperKeys(ops[opIdx].Key, endKey) < 0 {
 				opIdx++
 				continue
 			}
