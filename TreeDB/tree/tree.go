@@ -912,6 +912,9 @@ func putGetManyScratch(scratch *getManyScratch) {
 // shared zero-length, capacity-zero slice.
 func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte, error) {
 	treeGetManyCallsTotal.Add(1)
+	if len(out) < len(keys) {
+		return arena, fmt.Errorf("GetManyAppend: out len %d < keys len %d", len(out), len(keys))
+	}
 	if len(keys) == 0 {
 		return arena, nil
 	}
@@ -932,6 +935,7 @@ func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte,
 	for i, key := range keys {
 		ref, groupable, err := t.findLeafRefForGetMany(key, verifyAlways)
 		if err == ErrKeyNotFound {
+			out[i] = nil
 			continue
 		}
 		if err != nil {
