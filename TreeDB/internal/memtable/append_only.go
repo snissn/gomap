@@ -2,7 +2,6 @@ package memtable
 
 import (
 	"bytes"
-	"container/heap"
 	"encoding/binary"
 	"errors"
 	"math/bits"
@@ -602,35 +601,62 @@ func appendOnlySortedRunValid(run appendOnlySortedRun, count int) bool {
 	return run.start >= 0 && run.start < run.end && run.end <= count
 }
 
-type appendOnlySortedRunHeap struct {
-	active  []appendOnlyEntry
-	cursors []appendOnlySortedRunCursor
-}
-
-func (h appendOnlySortedRunHeap) Len() int { return len(h.cursors) }
-
-func (h appendOnlySortedRunHeap) Less(i, j int) bool {
+func appendOnlySortedRunCursorLess(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, i, j int) bool {
 	return bytes.Compare(
-		appendOnlyEntryKey(&h.active[h.cursors[i].idx]),
-		appendOnlyEntryKey(&h.active[h.cursors[j].idx]),
+		appendOnlyEntryKey(&active[cursors[i].idx]),
+		appendOnlyEntryKey(&active[cursors[j].idx]),
 	) < 0
 }
 
-func (h appendOnlySortedRunHeap) Swap(i, j int) {
-	h.cursors[i], h.cursors[j] = h.cursors[j], h.cursors[i]
+func appendOnlySortedRunCursorDown(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, i, n int) bool {
+	orig := i
+	for {
+		child := 2*i + 1
+		if child >= n || child < 0 {
+			break
+		}
+		if right := child + 1; right < n && appendOnlySortedRunCursorLess(active, cursors, right, child) {
+			child = right
+		}
+		if !appendOnlySortedRunCursorLess(active, cursors, child, i) {
+			break
+		}
+		cursors[i], cursors[child] = cursors[child], cursors[i]
+		i = child
+	}
+	return i > orig
 }
 
-func (h *appendOnlySortedRunHeap) Push(x any) {
-	h.cursors = append(h.cursors, x.(appendOnlySortedRunCursor))
+func appendOnlySortedRunCursorUp(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if !appendOnlySortedRunCursorLess(active, cursors, i, parent) {
+			break
+		}
+		cursors[parent], cursors[i] = cursors[i], cursors[parent]
+		i = parent
+	}
 }
 
-func (h *appendOnlySortedRunHeap) Pop() any {
-	old := h.cursors
-	n := len(old)
-	out := old[n-1]
-	old[n-1] = appendOnlySortedRunCursor{}
-	h.cursors = old[:n-1]
-	return out
+func appendOnlySortedRunCursorHeapInit(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor) {
+	for i := len(cursors)/2 - 1; i >= 0; i-- {
+		appendOnlySortedRunCursorDown(active, cursors, i, len(cursors))
+	}
+}
+
+func appendOnlySortedRunCursorHeapPop(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor) (appendOnlySortedRunCursor, []appendOnlySortedRunCursor) {
+	n := len(cursors) - 1
+	cursors[0], cursors[n] = cursors[n], cursors[0]
+	appendOnlySortedRunCursorDown(active, cursors, 0, n)
+	out := cursors[n]
+	cursors[n] = appendOnlySortedRunCursor{}
+	return out, cursors[:n]
+}
+
+func appendOnlySortedRunCursorHeapPush(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, cursor appendOnlySortedRunCursor) []appendOnlySortedRunCursor {
+	cursors = append(cursors, cursor)
+	appendOnlySortedRunCursorUp(active, cursors, len(cursors)-1)
+	return cursors
 }
 
 func entryValueSize(flags byte, value []byte) int {
@@ -740,20 +766,20 @@ func (m *AppendOnly) forEachSortedRunLatestLocked(visit func(*appendOnlyEntry)) 
 		m.runCursorBuf = cursors[:0]
 		return
 	}
-	h := appendOnlySortedRunHeap{active: active, cursors: cursors}
-	heap.Init(&h)
+	appendOnlySortedRunCursorHeapInit(active, cursors)
 	popped := m.runMergeBuf[:0]
-	for h.Len() > 0 {
-		first := heap.Pop(&h).(appendOnlySortedRunCursor)
+	for len(cursors) > 0 {
+		var first appendOnlySortedRunCursor
+		first, cursors = appendOnlySortedRunCursorHeapPop(active, cursors)
 		key := appendOnlyEntryKey(&active[first.idx])
 		chosen := first
 		popped = append(popped[:0], first)
-		for h.Len() > 0 {
-			next := h.cursors[0]
+		for len(cursors) > 0 {
+			next := cursors[0]
 			if !bytes.Equal(appendOnlyEntryKey(&active[next.idx]), key) {
 				break
 			}
-			next = heap.Pop(&h).(appendOnlySortedRunCursor)
+			next, cursors = appendOnlySortedRunCursorHeapPop(active, cursors)
 			if next.run > chosen.run {
 				chosen = next
 			}
@@ -763,11 +789,11 @@ func (m *AppendOnly) forEachSortedRunLatestLocked(visit func(*appendOnlyEntry)) 
 		for _, cursor := range popped {
 			cursor.idx++
 			if cursor.idx < cursor.end {
-				heap.Push(&h, cursor)
+				cursors = appendOnlySortedRunCursorHeapPush(active, cursors, cursor)
 			}
 		}
 	}
-	m.runCursorBuf = h.cursors[:0]
+	m.runCursorBuf = cursors[:0]
 	m.runMergeBuf = popped[:0]
 }
 
