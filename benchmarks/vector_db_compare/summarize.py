@@ -88,7 +88,7 @@ def backend_name(result: dict[str, Any]) -> str:
     backend = result.get("backend")
     if backend in (None, "", "treedb"):
         return "TreeDB native HNSW"
-    if backend == "treedb_column_graph":
+    if backend in ("treedb_column_graph", "treedb_column_graph_quantized_only", "treedb_column_graph_quantized_rerank"):
         return "TreeDB column-store graph HNSW"
     if backend == "sqlite_vectorlite":
         return "SQLite+Vectorlite HNSW"
@@ -97,6 +97,34 @@ def backend_name(result: dict[str, Any]) -> str:
     if backend == "mongodb_vector_search":
         return "MongoDB Vector Search HNSW"
     raise ValueError(f"unknown backend {backend!r}")
+
+
+def search_mode(result: dict[str, Any]) -> str:
+    backend = result.get("backend")
+    mode = str(result.get("query_mode") or "").strip()
+    if backend in (None, "", "treedb"):
+        return "exact/default" if mode in ("", "exact") else mode
+    if backend == "treedb_column_graph":
+        return "exact/default" if mode in ("", "exact") else mode
+    if backend == "treedb_column_graph_quantized_only":
+        return mode or "quantized_only"
+    if backend == "treedb_column_graph_quantized_rerank":
+        return mode or "quantized_rerank"
+    if backend == "pgvector":
+        return "full-vector HNSW"
+    if backend in ("sqlite_vectorlite", "mongodb_vector_search"):
+        return "full-vector HNSW"
+    return mode or "HNSW"
+
+
+def search_row_mode(result: dict[str, Any], row: dict[str, Any]) -> str:
+    backend = result.get("backend")
+    if backend == "pgvector":
+        return "full-vector HNSW"
+    mode = str(row.get("query_mode") or result.get("query_mode") or "").strip()
+    if backend in (None, "", "treedb", "treedb_column_graph") and mode in ("", "exact"):
+        return "exact/default"
+    return mode or search_mode(result)
 
 
 def result_label(result: dict[str, Any]) -> str:
@@ -127,16 +155,17 @@ def render(results: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     lines.append("# Vector Database Benchmark")
     lines.append("")
-    lines.append("All reported systems use persistent database files or server-side durable storage, close/reopen or reconnect before validation/search, cosine distance, HNSW ANN search, and the same TreeDB-exported vectors and query set.")
+    lines.append("All reported systems use persistent database files or server-side durable storage, close/reopen or reconnect before validation/search, cosine distance, HNSW ANN search, and the same TreeDB-exported vectors and query set. TreeDB quantized rows are explicit TreeDB column_graph scalar_u8 query modes; PostgreSQL+pgvector remains a full-vector HNSW anchor.")
     lines.append("")
     lines.append("## Build, Recall, Storage")
     lines.append("")
-    lines.append("| Backend | Insert | Index build | Reopen/load | Recall@K | Storage | Storage/doc | TreeDB index memory | Process max RSS |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| Backend | Search mode | Insert | Index build | Reopen/load | Recall@K | Storage | Storage/doc | TreeDB index memory | Process max RSS |")
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for result in results:
         lines.append(
-            "| {backend} | {insert:.3f}s | {build:.3f}s | {reopen:.3f}s | {recall:.4f} | {storage} | {per_doc:.1f}B | {index_memory} | {process_rss} |".format(
+            "| {backend} | {mode} | {insert:.3f}s | {build:.3f}s | {reopen:.3f}s | {recall:.4f} | {storage} | {per_doc:.1f}B | {index_memory} | {process_rss} |".format(
                 backend=backend_name(result),
+                mode=search_mode(result),
                 insert=insert_seconds(result),
                 build=build_seconds(result),
                 reopen=reopen_seconds(result),
@@ -150,13 +179,14 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("")
     lines.append("## Search")
     lines.append("")
-    lines.append("| Backend | Concurrency | Avg | P50 | P95 | P99 | Ops/sec |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| Backend | Search mode | Concurrency | Avg | P50 | P95 | P99 | Ops/sec |")
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
     for result in results:
         for row in result["search_benchmarks"]:
             lines.append(
-                "| {backend} | {concurrency} | {avg} | {p50} | {p95} | {p99} | {ops:.1f} |".format(
+                "| {backend} | {mode} | {concurrency} | {avg} | {p50} | {p95} | {p99} | {ops:.1f} |".format(
                     backend=backend_name(result),
+                    mode=search_row_mode(result, row),
                     concurrency=row["concurrency"],
                     avg=micros(float(row["avg_micros"])),
                     p50=micros(float(row["p50_nanos"]) / 1000),
@@ -166,14 +196,53 @@ def render(results: list[dict[str, Any]]) -> str:
                 )
             )
     lines.append("")
+    counter_fields = [
+        "avg_candidates",
+        "avg_quantized_score_calls",
+        "avg_quantized_code_bytes",
+        "avg_quantized_rerank_candidates",
+        "avg_quantized_rerank_exact_score_calls",
+        "avg_vector_bytes",
+        "avg_norm_bytes",
+    ]
+    counter_rows = [
+        (result, row)
+        for result in results
+        if str(result.get("backend") or "treedb").startswith("treedb")
+        for row in result.get("search_benchmarks", [])
+        if any(field in row for field in counter_fields)
+    ]
+    if counter_rows:
+        lines.append("## TreeDB Search Counters")
+        lines.append("")
+        lines.append("| Backend | Search mode | Concurrency | Avg candidates | Avg quantized score calls | Avg quantized code bytes | Avg quantized rerank candidates | Avg exact rerank score calls | Avg vector bytes | Avg norm bytes |")
+        lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for result, row in counter_rows:
+            lines.append(
+                "| {backend} | {mode} | {concurrency} | {candidates:.1f} | {qscore:.1f} | {qbytes:.1f} | {qrerank:.1f} | {qexact:.1f} | {vbytes:.1f} | {nbytes:.1f} |".format(
+                    backend=backend_name(result),
+                    mode=search_row_mode(result, row),
+                    concurrency=row["concurrency"],
+                    candidates=float(row.get("avg_candidates", 0)),
+                    qscore=float(row.get("avg_quantized_score_calls", 0)),
+                    qbytes=float(row.get("avg_quantized_code_bytes", 0)),
+                    qrerank=float(row.get("avg_quantized_rerank_candidates", 0)),
+                    qexact=float(row.get("avg_quantized_rerank_exact_score_calls", 0)),
+                    vbytes=float(row.get("avg_vector_bytes", 0)),
+                    nbytes=float(row.get("avg_norm_bytes", 0)),
+                )
+            )
+        lines.append("")
     lines.append("## Notes")
     lines.append("")
     lines.append("- sqlite-vec is intentionally not used here because upstream sqlite-vec is brute-force today; ANN support is tracked as future work.")
     lines.append("- SQLite+Vectorlite stores the SQLite table and its HNSW index file under the benchmark DB directory; storage includes both.")
-    lines.append("- PostgreSQL+pgvector storage uses the benchmark table's `pg_total_relation_size`, including its HNSW index.")
+    lines.append("- PostgreSQL+pgvector storage uses the benchmark table's `pg_total_relation_size`, including its full-vector HNSW index.")
+    lines.append("- PostgreSQL+pgvector is not quantized by this harness: no halfvec, binary quantize, SQL rerank, byte-code scoring, or custom operator class is used.")
     lines.append("- MongoDB is included only when run against a MongoDB Vector Search deployment, such as Atlas or local Atlas with `mongot`; plain `mongod` is not a vector-search comparator.")
     lines.append("- MongoDB storage marked with `*` uses `collStats` collection storage and ordinary index bytes; MongoDB Vector Search index bytes are not exposed by this harness.")
     lines.append("- TreeDB storage uses the post-close, post-index-vacuum retained datastore when reported by `treedb_vector_search_demo`; raw pre-close and pre-vacuum storage fields remain in the JSON.")
+    lines.append("- TreeDB quantized rows declare a named scalar_u8 score plane and select it through explicit `query_mode`; exact/default TreeDB rows do not declare or use quantized assets.")
     lines.append("- Memory columns are intentionally separated: TreeDB reports native vector-index memory when available, while Python-backed comparator harnesses report whole benchmark process max RSS.")
     lines.append("")
     return "\n".join(lines)
