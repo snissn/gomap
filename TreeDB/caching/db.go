@@ -24510,23 +24510,17 @@ func (db *DB) getManyViewFromPublishedRootPointShards(view *memtableView, keys [
 		return nil
 	}
 	db.noteRootDomainGetManyBackendFallback(len(backendKeys))
-	backendVals, err := db.backendGetMany(backendKeys)
-	if err != nil {
-		return err
-	}
-	if len(backendVals) != len(backendKeys) {
-		return fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(backendVals), len(backendKeys))
-	}
-	for i, uniqueIdx := range backendIdx {
+	return db.backendGetManyView(backendKeys, func(i int, _ []byte, val []byte, found bool) error {
+		if i < 0 || i >= len(backendIdx) {
+			return fmt.Errorf("cachingdb: backend GetManyView callback index %d out of range for %d keys", i, len(backendIdx))
+		}
+		uniqueIdx := backendIdx[i]
 		groupEnd := len(refs)
 		if uniqueIdx+1 < len(groupStarts) {
 			groupEnd = groupStarts[uniqueIdx+1]
 		}
-		if err := visitGetManyValueRefs(refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i], backendVals[i] != nil, fn); err != nil {
-			return err
-		}
-	}
-	return nil
+		return visitGetManyValueRefs(refs[groupStarts[uniqueIdx]:groupEnd], val, found, fn)
+	})
 }
 
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
@@ -24893,19 +24887,7 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 			db.releaseMemtableView(view)
 			view = nil
 		}
-		backendVals, err := db.backendGetMany(keys)
-		if err != nil {
-			return err
-		}
-		if len(backendVals) != len(keys) {
-			return fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(backendVals), len(keys))
-		}
-		for i, val := range backendVals {
-			if err := fn(i, keys[i], val, val != nil); err != nil {
-				return err
-			}
-		}
-		return nil
+		return db.backendGetManyView(keys, fn)
 	}
 	if view != nil {
 		defer db.releaseMemtableView(view)
@@ -24947,19 +24929,12 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 	if len(backendKeys) == 0 {
 		return nil
 	}
-	backendVals, err := db.backendGetMany(backendKeys)
-	if err != nil {
-		return err
-	}
-	if len(backendVals) != len(backendKeys) {
-		return fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(backendVals), len(backendKeys))
-	}
-	for i, outIdx := range backendIdx {
-		if err := fn(outIdx, backendKeys[i], backendVals[i], backendVals[i] != nil); err != nil {
-			return err
+	return db.backendGetManyView(backendKeys, func(i int, key []byte, val []byte, found bool) error {
+		if i < 0 || i >= len(backendIdx) {
+			return fmt.Errorf("cachingdb: backend GetManyView callback index %d out of range for %d keys", i, len(backendIdx))
 		}
-	}
-	return nil
+		return fn(backendIdx[i], key, val, found)
+	})
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.
