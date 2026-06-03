@@ -276,18 +276,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		if err := db.runCompactStoragePhase(&stats, phaseName, func() error {
 			var err error
 			protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-			pack, err = db.leafGenerationPackRunOnce(ctx, LeafGenerationPackFromPlanOptions{
-				Sync:                       opts.SyncEachPhase,
-				MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
-				MinExpectedReclaimRatioPPM: opts.LeafPackMinExpectedReclaimRatioPPM,
-				MinReclaimPerByteCopiedPPM: opts.LeafPackMinReclaimPerCopyPPM,
-				MaxGenerations:             opts.LeafPackMaxGenerationsPerPass,
-				MaxBytesToCopy:             opts.LeafPackMaxBytesToCopyPerPass,
-				ReserveRIDs:                opts.ReserveRIDs,
-				LeafFrameK:                 opts.LeafPackLeafFrameK,
-				ProtectedRootIDs:           protectedRootIDs,
-				ProtectedSystemRootIDs:     protectedSystemRootIDs,
-			}, !maintenanceLocked)
+			pack, err = db.leafGenerationPackRunOnce(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), !maintenanceLocked)
 			return err
 		}); err != nil {
 			return stats, err
@@ -528,6 +517,43 @@ func compactStorageRewritePlanOptions(protectedPaths []string) ValueLogRewriteOn
 	}
 }
 
+func compactStorageLeafPackFromPlanOptions(opts CompactStorageOptions, protectedRootIDs, protectedSystemRootIDs []uint64) LeafGenerationPackFromPlanOptions {
+	out := LeafGenerationPackFromPlanOptions{
+		Sync:                       opts.SyncEachPhase,
+		MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
+		MinExpectedReclaimRatioPPM: opts.LeafPackMinExpectedReclaimRatioPPM,
+		MinReclaimPerByteCopiedPPM: opts.LeafPackMinReclaimPerCopyPPM,
+		MaxGenerations:             opts.LeafPackMaxGenerationsPerPass,
+		MaxBytesToCopy:             opts.LeafPackMaxBytesToCopyPerPass,
+		ReserveRIDs:                opts.ReserveRIDs,
+		LeafFrameK:                 normalizeLeafGenerationPackLeafFrameK(opts.LeafPackLeafFrameK),
+		ProtectedRootIDs:           protectedRootIDs,
+		ProtectedSystemRootIDs:     protectedSystemRootIDs,
+	}
+	if out.MinExpectedReclaimBytes == 0 && out.MinExpectedReclaimRatioPPM == 0 && out.MinReclaimPerByteCopiedPPM == 0 {
+		out.MinReclaimPerByteCopiedPPM = leafGenerationPackDefaultMinReclaimPerByteCopiedPPM
+	}
+	return out
+}
+
+func compactStorageLeafPackDebtFromPlan(plan LeafGenerationPlan, opts LeafGenerationPackFromPlanOptions) (int, int64, error) {
+	if plan.Admission != leafGenerationPlanAdmissionEligible || len(plan.Candidates) == 0 {
+		return 0, 0, nil
+	}
+	selection, err := SelectLeafGenerationPackCandidates(plan, leafGenerationPackFromPlanSelectOptions(opts))
+	if err != nil {
+		if compactStorageLeafPackSelectionErrorMeansNoDebt(err) {
+			return 0, 0, nil
+		}
+		return len(plan.Candidates), plan.ExpectedReclaimBytes, nil
+	}
+	return len(selection.GenerationIDs), selection.ExpectedReclaimBytes, nil
+}
+
+func compactStorageLeafPackSelectionErrorMeansNoDebt(err error) bool {
+	return errors.Is(err, errLeafGenerationPackSelectionThreshold)
+}
+
 func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, fencedIDsOut *[]uint32) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
 	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
@@ -560,21 +586,18 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 	debt.ValueLogGCBytes += fencedValueLogBytes
 
 	protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-	leafPlan, err := db.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{
-		MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
-		MinExpectedReclaimRatioPPM: opts.LeafPackMinExpectedReclaimRatioPPM,
-		MinReclaimPerByteCopiedPPM: opts.LeafPackMinReclaimPerCopyPPM,
-		ProtectedRootIDs:           protectedRootIDs,
-		ProtectedSystemRootIDs:     protectedSystemRootIDs,
-	})
+	leafPackOpts := compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs)
+	leafPlan, err := db.LeafGenerationPlan(ctx, leafGenerationPackFromPlanPlanOptions(leafPackOpts))
 	if err != nil {
 		return debt, err
 	}
 	stats.LeafGenerationPlan = leafPlan
-	if leafPlan.Admission == leafGenerationPlanAdmissionEligible {
-		debt.LeafPackGenerations = len(leafPlan.Candidates)
-		debt.LeafPackBytes = leafPlan.ExpectedReclaimBytes
+	leafPackGenerations, leafPackBytes, err := compactStorageLeafPackDebtFromPlan(leafPlan, leafPackOpts)
+	if err != nil {
+		return debt, err
 	}
+	debt.LeafPackGenerations = leafPackGenerations
+	debt.LeafPackBytes = leafPackBytes
 
 	protectedRootIDs, protectedSystemRootIDs = db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 	leafGC, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{

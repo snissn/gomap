@@ -31,6 +31,17 @@ func leafGenerationPackFromPlanPlanOptions(opts LeafGenerationPackFromPlanOption
 	}
 }
 
+func leafGenerationPackFromPlanSelectOptions(opts LeafGenerationPackFromPlanOptions) LeafGenerationPackSelectOptions {
+	return LeafGenerationPackSelectOptions{
+		Force:                      opts.Force,
+		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
+		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
+		MaxGenerations:             opts.MaxGenerations,
+		MaxBytesToCopy:             opts.MaxBytesToCopy,
+		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
+	}
+}
+
 func leafGenerationPackFromPlanPackOptions(opts LeafGenerationPackFromPlanOptions, generationIDs []uint64) LeafGenerationPackOptions {
 	return LeafGenerationPackOptions{
 		GenerationIDs:              generationIDs,
@@ -54,14 +65,7 @@ func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGeneratio
 	if err != nil {
 		return LeafGenerationPackStats{}, err
 	}
-	selection, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
-		Force:                      opts.Force,
-		MinExpectedReclaimBytes:    opts.MinExpectedReclaimBytes,
-		MinExpectedReclaimRatioPPM: opts.MinExpectedReclaimRatioPPM,
-		MaxGenerations:             opts.MaxGenerations,
-		MaxBytesToCopy:             opts.MaxBytesToCopy,
-		MinReclaimPerByteCopiedPPM: opts.MinReclaimPerByteCopiedPPM,
-	})
+	selection, err := SelectLeafGenerationPackCandidates(plan, leafGenerationPackFromPlanSelectOptions(opts))
 	if err != nil {
 		return LeafGenerationPackStats{}, err
 	}
