@@ -69,7 +69,8 @@ const (
 	columnStoreJSONBenchMutationInsertOnlyReopen   = "insert_only_checkpoint_reopen"
 	columnStoreJSONBenchSyntheticFixtureCaveat     = "in-repo synthetic JSONBench-shaped fixture; not an external full-data JSONBench run"
 	columnStoreJSONBenchFullDataCaveat             = "not an external full-data retained-JSON parity run; #2117 full retained JSON plus reconstruction parity is implemented in the external snissn/JSONBench TreeDB harness"
-	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local synthetic evidence; #2118 apples-to-apples storage fields are implemented in the external snissn/JSONBench TreeDB harness and require an external run for headline ClickHouse comparison"
+	columnStoreJSONBenchStorageCaveat              = "storage accounting is gomap-local synthetic evidence; WAL-excluded durable storage excludes only valid command WAL segment files named `wal/commit-l<lane>-<seq>.log` (numeric lane, non-zero sequence) while retaining value_vlog, leaf_vlog, index.db, column assets, and manifest/control bytes; #2118 apples-to-apples storage fields are implemented in the external snissn/JSONBench TreeDB harness and require an external run for headline ClickHouse comparison"
+	columnStoreDurableStorageWALExcludedNote       = "steady-state durable storage label excludes only valid command WAL segment files named `wal/commit-l<lane>-<seq>.log` (numeric lane, non-zero sequence); value_vlog, leaf_vlog, index.db, column assets, and manifest/control bytes remain durable storage"
 )
 
 type columnStoreSuitePathAlias struct {
@@ -391,20 +392,24 @@ type columnStoreQueryExecution struct {
 }
 
 type columnStoreByteAccounting struct {
-	SourceDocumentBytes             int64    `json:"source_document_bytes"`
-	RetainedPayloadBytes            int64    `json:"retained_payload_bytes"`
-	RetainedPayloadBytesNote        string   `json:"retained_payload_bytes_note,omitempty"`
-	ColumnAssetBytes                int64    `json:"column_asset_bytes"`
-	ColumnAssetBytesNote            string   `json:"column_asset_bytes_note,omitempty"`
-	ColumnAssetStoreBytes           int64    `json:"column_asset_store_bytes"`
-	ManifestControlBytes            int64    `json:"manifest_control_bytes"`
-	ManifestControlMissing          []string `json:"manifest_control_missing,omitempty"`
-	OrdinaryValueLogBytes           int64    `json:"ordinary_value_vlog_bytes"`
-	LeafLogBytes                    int64    `json:"leaf_vlog_bytes"`
-	CommandWALBytesBeforeCheckpoint int64    `json:"command_wal_bytes_before_checkpoint"`
-	TotalReconstructableBytes       int64    `json:"total_reconstructable_bytes"`
-	DBTotalBytes                    int64    `json:"db_total_bytes"`
-	DBTotalFiles                    int      `json:"db_total_files"`
+	SourceDocumentBytes                int64    `json:"source_document_bytes"`
+	RetainedPayloadBytes               int64    `json:"retained_payload_bytes"`
+	RetainedPayloadBytesNote           string   `json:"retained_payload_bytes_note,omitempty"`
+	ColumnAssetBytes                   int64    `json:"column_asset_bytes"`
+	ColumnAssetBytesNote               string   `json:"column_asset_bytes_note,omitempty"`
+	ColumnAssetStoreBytes              int64    `json:"column_asset_store_bytes"`
+	ManifestControlBytes               int64    `json:"manifest_control_bytes"`
+	ManifestControlMissing             []string `json:"manifest_control_missing,omitempty"`
+	PrimaryIndexBytes                  int64    `json:"primary_index_bytes"`
+	OrdinaryValueLogBytes              int64    `json:"ordinary_value_vlog_bytes"`
+	LeafLogBytes                       int64    `json:"leaf_vlog_bytes"`
+	CommandWALBytesBeforeCheckpoint    int64    `json:"command_wal_bytes_before_checkpoint"`
+	WALBytesExcludedFromDurable        int64    `json:"wal_bytes_excluded_from_durable_storage"`
+	DurableStorageBytesWALExcluded     int64    `json:"durable_storage_bytes_wal_excluded"`
+	DurableStorageBytesWALExcludedNote string   `json:"durable_storage_bytes_wal_excluded_note,omitempty"`
+	TotalReconstructableBytes          int64    `json:"total_reconstructable_bytes"`
+	DBTotalBytes                       int64    `json:"db_total_bytes"`
+	DBTotalFiles                       int      `json:"db_total_files"`
 }
 
 type columnStoreManifestMetric struct {
@@ -567,7 +572,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", err
 	}
 	stages = append(stages, columnStoreStage("ingest_insert_batch", start, rows, sourceBytes))
-	commandWALBytesBeforeCheckpoint, _, err := columnStoreSuiteDirUsage(backenddb.WALDirPath(dataDir))
+	commandWALBytesBeforeCheckpoint, err := columnStoreSuiteCommandWALLogBytes(dataDir)
 	if err != nil {
 		_ = db.Close()
 		return "", fmt.Errorf("column_store: command WAL byte accounting: %w", err)
@@ -640,6 +645,14 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", fmt.Errorf("column_store: DB byte accounting: %w", err)
 	}
+	walBytesExcludedFromDurable, err := columnStoreSuiteCommandWALLogBytes(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("column_store: WAL-excluded durable storage accounting: %w", err)
+	}
+	primaryIndexBytes, err := columnStoreSuiteOptionalFileBytes(filepath.Join(dataDir, "index.db"))
+	if err != nil {
+		return "", fmt.Errorf("column_store: primary index byte accounting: %w", err)
+	}
 	manifestControlBytes, manifestControlMissing, err := columnStoreSuiteManifestControlUsage(dataDir)
 	if err != nil {
 		return "", fmt.Errorf("column_store: manifest/control byte accounting: %w", err)
@@ -698,20 +711,24 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		JSONBenchCells:        jsonbenchCells,
 		Parity:                parity,
 		ByteAccounting: columnStoreByteAccounting{
-			SourceDocumentBytes:             sourceBytes,
-			RetainedPayloadBytes:            retainedPayloadBytes,
-			RetainedPayloadBytesNote:        retainedPayloadBytesNote,
-			ColumnAssetBytes:                columnAssetBytes,
-			ColumnAssetBytesNote:            columnAssetBytesNote,
-			ColumnAssetStoreBytes:           columnAssetBytes,
-			ManifestControlBytes:            manifestControlBytes,
-			ManifestControlMissing:          manifestControlMissing,
-			OrdinaryValueLogBytes:           ordinaryValueLogBytes,
-			LeafLogBytes:                    leafLogBytes,
-			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
-			TotalReconstructableBytes:       totalReconstructableBytes,
-			DBTotalBytes:                    totalBytes,
-			DBTotalFiles:                    totalFiles,
+			SourceDocumentBytes:                sourceBytes,
+			RetainedPayloadBytes:               retainedPayloadBytes,
+			RetainedPayloadBytesNote:           retainedPayloadBytesNote,
+			ColumnAssetBytes:                   columnAssetBytes,
+			ColumnAssetBytesNote:               columnAssetBytesNote,
+			ColumnAssetStoreBytes:              columnAssetBytes,
+			ManifestControlBytes:               manifestControlBytes,
+			ManifestControlMissing:             manifestControlMissing,
+			PrimaryIndexBytes:                  primaryIndexBytes,
+			OrdinaryValueLogBytes:              ordinaryValueLogBytes,
+			LeafLogBytes:                       leafLogBytes,
+			CommandWALBytesBeforeCheckpoint:    commandWALBytesBeforeCheckpoint,
+			WALBytesExcludedFromDurable:        walBytesExcludedFromDurable,
+			DurableStorageBytesWALExcluded:     columnStoreSuiteDurableStorageBytesWALExcluded(totalBytes, walBytesExcludedFromDurable),
+			DurableStorageBytesWALExcludedNote: columnStoreDurableStorageWALExcludedNote,
+			TotalReconstructableBytes:          totalReconstructableBytes,
+			DBTotalBytes:                       totalBytes,
+			DBTotalFiles:                       totalFiles,
 		},
 		CodecLayouts:          codecLayouts,
 		CompressionMatrixNote: compressionMatrixNote,
@@ -2929,6 +2946,74 @@ func columnStoreSuiteDirUsage(root string) (int64, int, error) {
 	return bytes, files, nil
 }
 
+func columnStoreSuiteCommandWALLogBytes(root string) (int64, error) {
+	walRoot := backenddb.WALDirPath(root)
+	entries, err := os.ReadDir(walRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var bytes int64
+	for _, entry := range entries {
+		if entry == nil || entry.IsDir() || !columnStoreSuiteCommandWALLogName(entry.Name()) {
+			continue
+		}
+		info, statErr := entry.Info()
+		if statErr != nil {
+			return 0, statErr
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		bytes += info.Size()
+	}
+	return bytes, nil
+}
+
+func columnStoreSuiteCommandWALLogName(name string) bool {
+	if !strings.HasPrefix(name, "commit-l") || !strings.HasSuffix(name, ".log") {
+		return false
+	}
+	rest := strings.TrimSuffix(strings.TrimPrefix(name, "commit-l"), ".log")
+	parts := strings.SplitN(rest, "-", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	if !columnStoreSuiteDecimalDigits(parts[0]) || !columnStoreSuiteDecimalDigits(parts[1]) {
+		return false
+	}
+	lane, err := strconv.Atoi(parts[0])
+	if err != nil || lane < 0 {
+		return false
+	}
+	seq, err := strconv.ParseUint(parts[1], 10, 64)
+	return err == nil && seq != 0
+}
+
+func columnStoreSuiteDecimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func columnStoreSuiteDurableStorageBytesWALExcluded(totalBytes, walBytes int64) int64 {
+	if totalBytes <= 0 || walBytes >= totalBytes {
+		return 0
+	}
+	if walBytes <= 0 {
+		return totalBytes
+	}
+	return totalBytes - walBytes
+}
+
 func columnStoreSuiteColumnAssetUsage(root string) (int64, error) {
 	assetRoot := backenddb.ColumnAssetRootDirPath(root)
 	return columnStoreSuiteOptionalDirBytes(assetRoot)
@@ -2943,6 +3028,20 @@ func columnStoreSuiteOptionalDirBytes(root string) (int64, error) {
 		return 0, err
 	}
 	return bytes, nil
+}
+
+func columnStoreSuiteOptionalFileBytes(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if info.IsDir() {
+		return 0, fmt.Errorf("%s is a directory", path)
+	}
+	return info.Size(), nil
 }
 
 func columnStoreSuiteManifestControlUsage(root string) (int64, []string, error) {
@@ -3382,9 +3481,15 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	if len(report.ByteAccounting.ManifestControlMissing) != 0 {
 		sb.WriteString(fmt.Sprintf("- manifest_control_missing: %s\n", markdownCodeList(report.ByteAccounting.ManifestControlMissing)))
 	}
+	sb.WriteString(fmt.Sprintf("- primary_index_bytes: %d\n", report.ByteAccounting.PrimaryIndexBytes))
 	sb.WriteString(fmt.Sprintf("- ordinary_value_vlog_bytes: %d\n", report.ByteAccounting.OrdinaryValueLogBytes))
 	sb.WriteString(fmt.Sprintf("- leaf_vlog_bytes: %d\n", report.ByteAccounting.LeafLogBytes))
 	sb.WriteString(fmt.Sprintf("- command_wal_bytes_before_checkpoint: %d\n", report.ByteAccounting.CommandWALBytesBeforeCheckpoint))
+	sb.WriteString(fmt.Sprintf("- wal_bytes_excluded_from_durable_storage: %d\n", report.ByteAccounting.WALBytesExcludedFromDurable))
+	sb.WriteString(fmt.Sprintf("- durable_storage_bytes_wal_excluded: %d\n", report.ByteAccounting.DurableStorageBytesWALExcluded))
+	if report.ByteAccounting.DurableStorageBytesWALExcludedNote != "" {
+		sb.WriteString(fmt.Sprintf("- durable_storage_bytes_wal_excluded_note: %s\n", report.ByteAccounting.DurableStorageBytesWALExcludedNote))
+	}
 	sb.WriteString(fmt.Sprintf("- total_reconstructable_bytes: %d\n", report.ByteAccounting.TotalReconstructableBytes))
 	sb.WriteString(fmt.Sprintf("- db_total_bytes: %d across %d files\n\n", report.ByteAccounting.DBTotalBytes, report.ByteAccounting.DBTotalFiles))
 

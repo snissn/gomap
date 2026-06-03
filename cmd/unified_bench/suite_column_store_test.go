@@ -128,6 +128,110 @@ func TestRunColumnStoreSuiteReportsRelaxedAssetReadIntegrityM1634(t *testing.T) 
 	}
 }
 
+func TestColumnStoreSuiteWALExcludedDurableStorageAccounting1954(t *testing.T) {
+	dir := t.TempDir()
+	writeSizedFile := func(rel string, size int) {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), size), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", rel, err)
+		}
+	}
+
+	writeSizedFile("index.db", 100)
+	writeSizedFile("vlog_ref_counts.meta", 5)
+	writeSizedFile(filepath.Join("value_vlog", "value-l0-000001.log"), 11)
+	writeSizedFile(filepath.Join("leaf_vlog", "value-l255-000001.log"), 12)
+	writeSizedFile(filepath.Join("column_assets", "events", "segment-000001.bin"), 13)
+	writeSizedFile(filepath.Join("wal", "commit-l0-000001.log"), 40)
+	writeSizedFile(filepath.Join("wal", "commit-lane-readme.log"), 17)
+	writeSizedFile(filepath.Join("wal", "commit-l+1-000001.log"), 23)
+	writeSizedFile(filepath.Join("wal", "commit-l0-000000.log"), 19)
+	writeSizedFile(filepath.Join("wal", "operator-note.txt"), 9)
+	writeSizedFile(filepath.Join("wal", "recovery-artifacts", "artifact.bin"), 7)
+
+	totalBytes, _, err := columnStoreSuiteDirUsage(dir)
+	if err != nil {
+		t.Fatalf("columnStoreSuiteDirUsage: %v", err)
+	}
+	walBytes, err := columnStoreSuiteCommandWALLogBytes(dir)
+	if err != nil {
+		t.Fatalf("columnStoreSuiteCommandWALLogBytes: %v", err)
+	}
+	primaryIndexBytes, err := columnStoreSuiteOptionalFileBytes(filepath.Join(dir, "index.db"))
+	if err != nil {
+		t.Fatalf("columnStoreSuiteOptionalFileBytes(index.db): %v", err)
+	}
+	manifestControlBytes, missing, err := columnStoreSuiteManifestControlUsage(dir)
+	if err != nil {
+		t.Fatalf("columnStoreSuiteManifestControlUsage: %v", err)
+	}
+	ordinaryValueLogBytes, err := columnStoreSuiteOptionalDirBytes(backenddb.ValueLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("ordinary value-log bytes: %v", err)
+	}
+	leafLogBytes, err := columnStoreSuiteOptionalDirBytes(backenddb.LeafLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("leaf-log bytes: %v", err)
+	}
+	columnAssetBytes, err := columnStoreSuiteColumnAssetUsage(dir)
+	if err != nil {
+		t.Fatalf("column asset bytes: %v", err)
+	}
+
+	if walBytes != 40 {
+		t.Fatalf("wal bytes excluded=%d want only valid wal/commit-l<lane>-<seq>.log command WAL segment bytes", walBytes)
+	}
+	if got, want := primaryIndexBytes, int64(100); got != want {
+		t.Fatalf("primary index bytes=%d want %d", got, want)
+	}
+	if got, want := manifestControlBytes, int64(5); got != want || len(missing) != 0 {
+		t.Fatalf("manifest control bytes=%d missing=%v want %d and no missing", got, missing, want)
+	}
+	if ordinaryValueLogBytes != 11 || leafLogBytes != 12 || columnAssetBytes != 13 {
+		t.Fatalf("durable split bytes ordinary=%d leaf=%d column=%d want 11/12/13", ordinaryValueLogBytes, leafLogBytes, columnAssetBytes)
+	}
+	wantDurable := totalBytes - walBytes
+	if got := columnStoreSuiteDurableStorageBytesWALExcluded(totalBytes, walBytes); got != wantDurable {
+		t.Fatalf("durable storage bytes WAL excluded=%d want %d", got, wantDurable)
+	}
+	if got := columnStoreSuiteDurableStorageBytesWALExcluded(10, 20); got != 0 {
+		t.Fatalf("durable storage bytes should floor at zero when WAL exceeds total, got %d", got)
+	}
+
+	report := columnStoreSuiteReport{ByteAccounting: columnStoreByteAccounting{
+		PrimaryIndexBytes:                  primaryIndexBytes,
+		OrdinaryValueLogBytes:              ordinaryValueLogBytes,
+		LeafLogBytes:                       leafLogBytes,
+		ColumnAssetBytes:                   columnAssetBytes,
+		ManifestControlBytes:               manifestControlBytes,
+		WALBytesExcludedFromDurable:        walBytes,
+		DurableStorageBytesWALExcluded:     wantDurable,
+		DurableStorageBytesWALExcludedNote: columnStoreDurableStorageWALExcludedNote,
+		DBTotalBytes:                       totalBytes,
+	}}
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal(report): %v", err)
+	}
+	for _, want := range []string{`"primary_index_bytes"`, `"wal_bytes_excluded_from_durable_storage"`, `"durable_storage_bytes_wal_excluded"`, `"durable_storage_bytes_wal_excluded_note"`, `"ordinary_value_vlog_bytes"`, `"leaf_vlog_bytes"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("JSON missing %s:\n%s", want, data)
+		}
+	}
+	if strings.Contains(string(data), `"command_wal_bytes":`) {
+		t.Fatalf("JSON contains ambiguous command WAL label:\n%s", data)
+	}
+	md := renderColumnStoreSuiteMarkdown(report)
+	for _, want := range []string{"primary_index_bytes", "wal_bytes_excluded_from_durable_storage", "durable_storage_bytes_wal_excluded", "value_vlog, leaf_vlog, index.db"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
+	}
+}
+
 func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -437,6 +541,15 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.ByteAccounting.OrdinaryValueLogBytes < 0 || report.ByteAccounting.LeafLogBytes < 0 {
 		t.Fatalf("expected non-negative ordinary value_vlog and leaf_vlog byte splits: %+v", report.ByteAccounting)
 	}
+	if report.ByteAccounting.PrimaryIndexBytes == 0 {
+		t.Fatalf("expected primary index bytes in byte accounting: %+v", report.ByteAccounting)
+	}
+	if got, want := report.ByteAccounting.DurableStorageBytesWALExcluded, columnStoreSuiteDurableStorageBytesWALExcluded(report.ByteAccounting.DBTotalBytes, report.ByteAccounting.WALBytesExcludedFromDurable); got != want {
+		t.Fatalf("durable_storage_bytes_wal_excluded=%d want db_total-wal=%d (accounting=%+v)", got, want, report.ByteAccounting)
+	}
+	if report.ByteAccounting.DurableStorageBytesWALExcludedNote == "" || !strings.Contains(report.ByteAccounting.DurableStorageBytesWALExcludedNote, "value_vlog") || !strings.Contains(report.ByteAccounting.DurableStorageBytesWALExcludedNote, "leaf_vlog") || !strings.Contains(report.ByteAccounting.DurableStorageBytesWALExcludedNote, "index.db") {
+		t.Fatalf("expected durable-storage WAL-excluded note to list durable included stores: %+v", report.ByteAccounting)
+	}
 	if got, want := report.ByteAccounting.TotalReconstructableBytes, report.ByteAccounting.RetainedPayloadBytes+report.ByteAccounting.ColumnAssetBytes+report.ByteAccounting.ManifestControlBytes; got != want {
 		t.Fatalf("total_reconstructable_bytes=%d want retained+column+manifest=%d", got, want)
 	}
@@ -454,6 +567,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"command_wal_bytes_before_checkpoint"`) {
 		t.Fatalf("column store JSON missing before-checkpoint command WAL label:\n%s", data)
+	}
+	for _, want := range []string{`"primary_index_bytes"`, `"wal_bytes_excluded_from_durable_storage"`, `"durable_storage_bytes_wal_excluded"`, `"durable_storage_bytes_wal_excluded_note"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("column store JSON missing WAL-excluded durable storage field %s:\n%s", want, data)
+		}
 	}
 	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"mutation_mode"`, `"retained_payload_policy"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
 		if !strings.Contains(string(data), want) {
@@ -478,6 +596,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if !strings.Contains(string(columnMarkdown), "command_wal_bytes_before_checkpoint") {
 		t.Fatalf("column store markdown missing before-checkpoint command WAL label:\n%s", columnMarkdown)
 	}
+	for _, want := range []string{"primary_index_bytes", "wal_bytes_excluded_from_durable_storage", "durable_storage_bytes_wal_excluded", "durable_storage_bytes_wal_excluded_note"} {
+		if !strings.Contains(string(columnMarkdown), want) {
+			t.Fatalf("column store markdown missing WAL-excluded durable storage field %q:\n%s", want, columnMarkdown)
+		}
+	}
 	for _, want := range []string{"## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "retained payload", "typed owner", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
@@ -485,6 +608,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 	if !strings.Contains(string(columnMarkdown), "column_asset_bytes") ||
 		!strings.Contains(string(columnMarkdown), "column_asset_store_bytes") ||
+		!strings.Contains(string(columnMarkdown), "primary_index_bytes") ||
 		!strings.Contains(string(columnMarkdown), "ordinary_value_vlog_bytes") ||
 		!strings.Contains(string(columnMarkdown), "leaf_vlog_bytes") ||
 		!strings.Contains(string(columnMarkdown), "retained_payload_bytes_note") {
