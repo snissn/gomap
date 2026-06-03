@@ -213,7 +213,7 @@ type columnVectorGraphNativeSearchOptions struct {
 	// modes. Exact mode must leave it empty.
 	QuantizedIndexName string
 	// QuantizedRerankCandidates bounds the candidate set exact-reranked after
-	// quantized traversal. Zero means TopK.
+	// quantized traversal. Zero uses the normalized ef_search candidate set.
 	QuantizedRerankCandidates int
 	// TraversalMode selects the layer-0 traversal scheduler. The default and
 	// explicit exact modes preserve current HNSW candidate order. Wavefront is an
@@ -278,9 +278,6 @@ func (r *columnVectorGraphPhysicalRowReader) validateQuantizedNativeSearchOption
 	}
 	if status.Prepared == nil {
 		return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q has no loaded quantized score-plane asset", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
-	}
-	if mode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
-		return fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q prepared; quantized exact rerank is unavailable in this build", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), opts.QuantizedIndexName)
 	}
 	return nil
 }
@@ -357,6 +354,8 @@ type columnVectorGraphNativeSearchStats struct {
 	PreparedScoreCalls                   uint64
 	QuantizedScoreCalls                  uint64
 	QuantizedCodeBytesRead               uint64
+	QuantizedRerankCandidates            uint64
+	QuantizedRerankExactScoreCalls       uint64
 	ScoreFloat64Fallbacks                uint64
 	BlockViewHits                        uint64
 	BlockViewMisses                      uint64
@@ -1155,6 +1154,24 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if efSearch > candidateRowCount {
 		efSearch = candidateRowCount
 	}
+	retainedCandidateLimit := efSearch
+	quantizedRerankCandidateLimit := 0
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		quantizedRerankCandidateLimit = opts.QuantizedRerankCandidates
+		if quantizedRerankCandidateLimit == 0 {
+			quantizedRerankCandidateLimit = efSearch
+		}
+		if quantizedRerankCandidateLimit < topK {
+			return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search quantized rerank candidates=%d below normalized top_k=%d: %w", r.def.Name, quantizedRerankCandidateLimit, topK, errColumnVectorGraphNativeSearchQuantizedRerankLimit)
+		}
+		if quantizedRerankCandidateLimit > candidateRowCount {
+			quantizedRerankCandidateLimit = candidateRowCount
+		}
+		if efSearch < quantizedRerankCandidateLimit {
+			efSearch = quantizedRerankCandidateLimit
+		}
+		retainedCandidateLimit = quantizedRerankCandidateLimit
+	}
 	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront && wavefrontWidth > efSearch {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search wavefront width=%d exceeds normalized ef_search=%d: %w", r.def.Name, wavefrontWidth, efSearch, errColumnVectorGraphNativeSearchWavefrontWidthInvalid)
 	}
@@ -1163,6 +1180,9 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		degree = 0
 	}
 	scoreTileCapacity := columnVectorGraphNativeSearchScoreTileCapacity(degree, efSearch, wavefrontWidth)
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank && scoreTileCapacity < retainedCandidateLimit {
+		scoreTileCapacity = retainedCandidateLimit
+	}
 	if err := scratch.prepare(rowCount, r.def.Dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth); err != nil {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search scratch prepare: %w", r.def.Name, err)
 	}
@@ -1208,8 +1228,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if err != nil {
 		return nil, stats, err
 	}
-	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedOnly {
-		plan.quantizedScorer, err = r.prepareScalarU8QuantizedOnlyScorer(opts.QuantizedIndexName, query, queryInvNorm, scratch)
+	if queryMode.quantized() {
+		plan.quantizedScorer, err = r.prepareScalarU8QuantizedScorer(queryMode, opts.QuantizedIndexName, query, queryInvNorm, scratch)
 		if err != nil {
 			return nil, stats, err
 		}
@@ -1261,12 +1281,12 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		}
 	}
 	visitMarks[entryOrdinal] = visitEpoch
-	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, entryOrdinal, efSearch, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
+	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, entryOrdinal, retainedCandidateLimit, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
 		return nil, stats, err
 	}
 	nextSeed := 0
 	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront {
-		if err := r.searchLayer0Wavefront(plan, singleBlockView, query, queryInvNorm, efSearch, rowCount, candidateLimit, wavefrontWidth, candidateRows, hasCandidateRows, scratch, hotStats, &stats, &visitedCandidates, preparedMinimalCounters, debugCounters, countLoopEdges, &loopEdgeVisits, &nextSeed); err != nil {
+		if err := r.searchLayer0Wavefront(plan, singleBlockView, query, queryInvNorm, retainedCandidateLimit, rowCount, candidateLimit, wavefrontWidth, candidateRows, hasCandidateRows, scratch, hotStats, &stats, &visitedCandidates, preparedMinimalCounters, debugCounters, countLoopEdges, &loopEdgeVisits, &nextSeed); err != nil {
 			return nil, stats, err
 		}
 	} else {
@@ -1279,7 +1299,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				candidate, ok = scratch.popFrontier()
 			}
 			if !ok {
-				if len(scratch.top) >= efSearch {
+				if len(scratch.top) >= retainedCandidateLimit {
 					break
 				}
 				seed, ok := columnVectorGraphNextCandidateSeed(nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
@@ -1288,12 +1308,12 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				}
 				nextSeed = seed + 1
 				visitMarks[seed] = visitEpoch
-				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, efSearch, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
+				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, retainedCandidateLimit, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
 					return nil, stats, err
 				}
 				continue
 			}
-			if columnVectorGraphLayer0SearchShouldStop(candidate, scratch.top, efSearch) {
+			if columnVectorGraphLayer0SearchShouldStop(candidate, scratch.top, retainedCandidateLimit) {
 				break
 			}
 			adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, hotStats, preparedMinimalCounters, debugCounters)
@@ -1346,7 +1366,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 					if len(tile) == 0 {
 						continue
 					}
-					if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, efSearch, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
+					if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, retainedCandidateLimit, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
 						return nil, stats, err
 					}
 				}
@@ -1385,7 +1405,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 					continue
 				}
 				visitMarks[neighborOrdinal] = visitEpoch
-				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, efSearch, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
+				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, retainedCandidateLimit, scratch, hotStats, &visitedCandidates, preparedMinimalCounters, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
 					return nil, stats, err
 				}
 			}
@@ -1395,7 +1415,11 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
-	if len(scratch.top) > topK {
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		if err := r.exactRerankQuantizedCandidates(plan, singleBlockView, query, queryInvNorm, topK, scratch, &stats); err != nil {
+			return nil, stats, err
+		}
+	} else if len(scratch.top) > topK {
 		scratch.top = scratch.top[:topK]
 	}
 	if opts.OmitResultMaterialization {
@@ -1414,6 +1438,45 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, stats, err
 	}
 	return scratch.results, stats, nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) exactRerankQuantizedCandidates(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	if len(scratch.top) == 0 || topK <= 0 {
+		scratch.top = scratch.top[:0]
+		return nil
+	}
+	n := len(scratch.top)
+	scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, n)
+	ordinals := scratch.scoreTileOrdinals[:0]
+	for _, candidate := range scratch.top {
+		ordinals = append(ordinals, candidate.ordinal)
+	}
+	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, n)
+	previousQuantizedActive := false
+	if plan != nil {
+		previousQuantizedActive = plan.quantizedScorerActive
+		plan.quantizedScorerActive = false
+	}
+	exactScores, err := r.scoreOrdinals(plan, singleBlockView, query, queryInvNorm, ordinals, scratch.scoreTileScores, scratch, stats)
+	if plan != nil {
+		plan.quantizedScorerActive = previousQuantizedActive
+	}
+	if err != nil {
+		return fmt.Errorf("collections: column_graph %q quantized exact rerank: %w", r.def.Name, err)
+	}
+	if len(exactScores) != n {
+		return fmt.Errorf("collections: column_graph %q quantized exact rerank scored %d candidates want %d", r.def.Name, len(exactScores), n)
+	}
+	if stats != nil {
+		stats.QuantizedRerankCandidates += uint64(n)
+		stats.QuantizedRerankExactScoreCalls += uint64(n)
+	}
+	scratch.top = scratch.top[:0]
+	for i, ordinal := range ordinals {
+		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: exactScores[i]}
+		scratch.insertTop(topK, candidate)
+	}
+	return nil
 }
 
 func columnVectorGraphLayer0SearchShouldStop(candidate columnVectorGraphSearchCandidate, top []columnVectorGraphSearchCandidate, efSearch int) bool {

@@ -124,7 +124,7 @@ func TestVectorIndexQuantizedDefinitionNormalization1926(t *testing.T) {
 	}
 }
 
-func TestSearchVectorIndexQuantizedOnlySupportedAndRerankFailClosed1926(t *testing.T) {
+func TestSearchVectorIndexQuantizedOnlyAndRerankSupported1926(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
@@ -180,7 +180,7 @@ func TestSearchVectorIndexQuantizedOnlySupportedAndRerankFailClosed1926(t *testi
 		t.Fatalf("production-stats quantized stats=%+v want candidate/edge/code counters", minimal.Stats)
 	}
 
-	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+	reranked, err := col.SearchVectorIndex(VectorIndexSearchOptions{
 		IndexName:                 def.Name,
 		Query:                     query,
 		QueryMode:                 VectorIndexQueryModeQuantizedRerank,
@@ -191,21 +191,24 @@ func TestSearchVectorIndexQuantizedOnlySupportedAndRerankFailClosed1926(t *testi
 		IncludeDocuments:          true,
 		MaxDecodedBlocks:          1,
 	})
-	if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
-		t.Fatalf("quantized_rerank SearchVectorIndex err=%v want ErrVectorIndexSearchUnavailable", err)
+	if err != nil {
+		t.Fatalf("quantized_rerank SearchVectorIndex: %v", err)
 	}
-	if !strings.Contains(err.Error(), string(VectorIndexQueryModeQuantizedRerank)) || !strings.Contains(err.Error(), def.QuantizedIndexes[0].Name) || !strings.Contains(err.Error(), "exact rerank is unavailable") {
-		t.Fatalf("quantized_rerank err=%v want mode, selected quantized index, and rerank-unavailable", err)
+	assertColumnGraphSearchResponseLoadedV4(t, reranked, def.Name, 2)
+	assertVectorIndexSearchResultsV4(t, reranked.Results, exactColumnGraphTopKForTest(t, rows, query, 2), true)
+	if reranked.Stats.QuantizedScoreCalls == 0 || reranked.Stats.QuantizedRerankCandidates != 2 || reranked.Stats.QuantizedRerankExactScoreCalls != 2 || reranked.Stats.VectorBytesRead == 0 || reranked.Stats.NormBytesRead == 0 {
+		t.Fatalf("quantized_rerank stats=%+v want quantized traversal plus exact rerank", reranked.Stats)
 	}
-	if len(got.Results) != 0 {
-		t.Fatalf("quantized_rerank fail-closed returned %d results: %+v", len(got.Results), got.Results)
-	}
-	if got.Stats.Candidates != 0 || got.Stats.CandidateFetches != 0 || got.Stats.DocumentsFetched != 0 || got.Stats.DocumentJSONReconstructionRows != 0 {
-		t.Fatalf("quantized_rerank fail-closed stats=%+v want no scoring or document materialization", got.Stats)
+	if reranked.Stats.DocumentsFetched != uint64(len(reranked.Results)) {
+		t.Fatalf("quantized_rerank stats=%+v want documents fetched after exact rerank", reranked.Stats)
 	}
 
 	if _, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: "missing.scalar_u8", TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}); !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "is not declared") {
 		t.Fatalf("undeclared quantized index err=%v want unavailable declared-name failure", err)
+	}
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: "missing.scalar_u8", TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "is not declared") || len(got.Results) != 0 || got.Stats.CandidateFetches != 0 || got.Stats.QuantizedScoreCalls != 0 || got.Stats.PreparedScoreCalls != 0 {
+		t.Fatalf("undeclared quantized_rerank response=%+v err=%v want fail-closed no fallback", got, err)
 	}
 	if _, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeExact, QuantizedIndexName: def.QuantizedIndexes[0].Name, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}); err == nil || !strings.Contains(err.Error(), "exact") {
 		t.Fatalf("exact with quantized index err=%v want validation failure", err)
@@ -267,9 +270,24 @@ func TestVectorIndexSearcherQuantizedSearchWithBufferSuccessAndErrorReset1926(t 
 	if len(buffer.results) != 2 || len(buffer.idBytes) == 0 || quantized.Stats.QuantizedScoreCalls == 0 {
 		t.Fatalf("quantized buffer/results stats=%+v buffer.results=%d idBytes=%d", quantized.Stats, len(buffer.results), len(buffer.idBytes))
 	}
+	reranked, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
+		Query:                     query,
+		QueryMode:                 VectorIndexQueryModeQuantizedRerank,
+		QuantizedIndexName:        def.QuantizedIndexes[0].Name,
+		QuantizedRerankCandidates: len(rows),
+		TopK:                      2,
+		EfSearch:                  len(rows),
+	}, &buffer)
+	if err != nil {
+		t.Fatalf("quantized_rerank SearchWithBuffer: %v", err)
+	}
+	assertVectorIndexSearchResultsV4(t, reranked.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
+	if len(buffer.results) != 2 || len(buffer.idBytes) == 0 || reranked.Stats.QuantizedScoreCalls == 0 || reranked.Stats.QuantizedRerankExactScoreCalls == 0 {
+		t.Fatalf("rerank buffer/results stats=%+v buffer.results=%d idBytes=%d", reranked.Stats, len(buffer.results), len(buffer.idBytes))
+	}
 	got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
 		Query:              query,
-		QueryMode:          VectorIndexQueryModeQuantizedOnly,
+		QueryMode:          VectorIndexQueryModeQuantizedRerank,
 		QuantizedIndexName: "missing.scalar_u8",
 		TopK:               2,
 		EfSearch:           len(rows),
@@ -2279,7 +2297,7 @@ func BenchmarkVectorSearchReusableBufferSerialTypedColumn1961(b *testing.B) {
 	BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4(b)
 }
 
-func BenchmarkOpenVectorIndexSearcherColumnGraphScalarU8QuantizedOnly1926(b *testing.B) {
+func BenchmarkOpenVectorIndexSearcherColumnGraphScalarU8QuantizedModes1926(b *testing.B) {
 	const (
 		rows     = 1024
 		dims     = 128
@@ -2291,11 +2309,15 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphScalarU8QuantizedOnly1926(b *tes
 	query := append([]float32(nil), input[37].vector...)
 	exactWant := exactColumnGraphTopKForTest(b, input, query, topK)
 	for _, tc := range []struct {
-		name string
-		mode VectorIndexQueryMode
+		name               string
+		mode               VectorIndexQueryMode
+		rerankCandidates   int
+		wantQuantizedStats bool
+		wantExactStats     bool
 	}{
-		{name: "mode=exact"},
-		{name: "mode=quantized_only", mode: VectorIndexQueryModeQuantizedOnly},
+		{name: "mode=exact", wantExactStats: true},
+		{name: "mode=quantized_only", mode: VectorIndexQueryModeQuantizedOnly, wantQuantizedStats: true},
+		{name: "mode=quantized_rerank", mode: VectorIndexQueryModeQuantizedRerank, rerankCandidates: efSearch, wantQuantizedStats: true, wantExactStats: true},
 	} {
 		tc := tc
 		b.Run(tc.name, func(b *testing.B) {
@@ -2309,8 +2331,8 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphScalarU8QuantizedOnly1926(b *tes
 				b.Fatalf("OpenVectorIndexSearcher: %v", err)
 			}
 			defer func() { _ = searcher.Close() }()
-			opts := VectorIndexSearcherSearchOptions{Query: query, QueryMode: tc.mode, TopK: topK, EfSearch: efSearch}
-			if tc.mode == VectorIndexQueryModeQuantizedOnly {
+			opts := VectorIndexSearcherSearchOptions{Query: query, QueryMode: tc.mode, TopK: topK, EfSearch: efSearch, QuantizedRerankCandidates: tc.rerankCandidates}
+			if tc.wantQuantizedStats {
 				opts.QuantizedIndexName = def.QuantizedIndexes[0].Name
 			}
 			var buffer VectorIndexSearchBuffer
@@ -2327,15 +2349,25 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphScalarU8QuantizedOnly1926(b *tes
 			}
 			stats := measured.Stats
 			quantizedAssetBytesPerVector := 0.0
-			if tc.mode == VectorIndexQueryModeQuantizedOnly {
-				if stats.QuantizedScoreCalls == 0 || stats.PreparedScoreCalls != 0 || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 {
-					b.Fatalf("quantized stats=%+v want scalar_u8 scorer without exact scoring", stats)
+			if tc.wantQuantizedStats {
+				if stats.QuantizedScoreCalls == 0 {
+					b.Fatalf("quantized stats=%+v want scalar_u8 traversal scoring", stats)
 				}
 				if status := searcher.reader.quantizedAssetStatus[def.QuantizedIndexes[0].Name]; status.Prepared != nil {
 					quantizedAssetBytesPerVector = status.Prepared.Footprint().BytesPerVector
 				}
-			} else if stats.PreparedScoreCalls == 0 && columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+			}
+			if tc.mode == VectorIndexQueryModeQuantizedOnly {
+				if stats.PreparedScoreCalls != 0 || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 || stats.QuantizedRerankExactScoreCalls != 0 {
+					b.Fatalf("quantized_only stats=%+v want scalar_u8 scorer without exact scoring", stats)
+				}
+			} else if tc.wantExactStats && stats.PreparedScoreCalls == 0 && columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 				b.Fatalf("exact stats=%+v want prepared exact scorer", stats)
+			}
+			if tc.mode == VectorIndexQueryModeQuantizedRerank {
+				if stats.QuantizedRerankCandidates == 0 || stats.QuantizedRerankExactScoreCalls != stats.QuantizedRerankCandidates || stats.VectorBytesRead == 0 || stats.NormBytesRead == 0 {
+					b.Fatalf("quantized_rerank stats=%+v want quantized traversal plus exact rerank", stats)
+				}
 			}
 			recallAt10 := recallAtKVectorIndexResults1926(measured.Results, exactWant)
 			b.ReportAllocs()
@@ -2820,6 +2852,7 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.VisitedEdges), "visited_edges/search")
 	b.ReportMetric(float64(stats.VectorBytesRead), "vector_B/search")
 	b.ReportMetric(float64(stats.NormBytesRead), "norm_B/search")
+	b.ReportMetric(float64(stats.VectorBytesRead+stats.NormBytesRead), "exact_vector_norm_B/search")
 	b.ReportMetric(float64(stats.AdjacencyBytesRead), "adjacency_B/search")
 	if stats.Candidates > 0 {
 		b.ReportMetric(float64(stats.Edges)/float64(stats.Candidates), "edges/node")
@@ -2833,6 +2866,8 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.PreparedScoreCalls), "prepared_score_calls/search")
 	b.ReportMetric(float64(stats.QuantizedScoreCalls), "quantized_score_calls/search")
 	b.ReportMetric(float64(stats.QuantizedCodeBytesRead), "quantized_code_B/search")
+	b.ReportMetric(float64(stats.QuantizedRerankCandidates), "quantized_rerank_candidates/search")
+	b.ReportMetric(float64(stats.QuantizedRerankExactScoreCalls), "quantized_rerank_exact_score_calls/search")
 	b.ReportMetric(float64(stats.ScoreFloat64Fallbacks), "score_float64_fallbacks/search")
 	if stats.ScoreBatchCalls > 0 {
 		b.ReportMetric(float64(stats.ScoreBatchCandidates)/float64(stats.ScoreBatchCalls), "score_batch_avg_tile_size")
