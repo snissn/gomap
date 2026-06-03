@@ -75,6 +75,224 @@ func TestCommitLogWriteReadBatch(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestCommitLogAppendCoalescesSameSeqSmallRecords(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := []Record{
+		{Op: OpSetInline, Key: []byte("k1"), Value: []byte("v1"), Seq: 42},
+		{Op: OpDelete, Key: []byte("k2"), Seq: 42},
+		{Op: OpSetInline, Key: []byte("k3"), Value: bytes.Repeat([]byte("v"), 64), Seq: 42},
+	}
+	for _, rec := range records {
+		if err := writer.Append(rec); err != nil {
+			_ = writer.Close()
+			t.Fatalf("append: %v", err)
+		}
+	}
+	if got := writer.Size(); got <= int64(segmentHeaderSize+batchHeaderSize) {
+		_ = writer.Close()
+		t.Fatalf("logical size before flush=%d, want pending bytes included", got)
+	}
+	if err := writer.Flush(); err != nil {
+		_ = writer.Close()
+		t.Fatalf("flush: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if len(data) < segmentHeaderSize+batchHeaderSize {
+		t.Fatalf("coalesced segment too small: %d", len(data))
+	}
+	payloadLen := int(binary.LittleEndian.Uint32(data[0:4]) & segmentLenMask)
+	if gotCRC, wantCRC := binary.LittleEndian.Uint32(data[4:8]), crc.Checksum(data[segmentHeaderSize:segmentHeaderSize+payloadLen]); gotCRC != wantCRC {
+		t.Fatalf("coalesced crc=%08x want %08x", gotCRC, wantCRC)
+	}
+	if count := binary.LittleEndian.Uint32(data[segmentHeaderSize+1 : segmentHeaderSize+5]); count != uint32(len(records)) {
+		t.Fatalf("coalesced count=%d want %d", count, len(records))
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != len(records) {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want %d", len(got), len(records))
+	}
+	for i := range records {
+		if got[i].Op != records[i].Op || got[i].Seq != records[i].Seq || got[i].RID != records[i].RID || !bytes.Equal(got[i].Key, records[i].Key) || !bytes.Equal(got[i].Value, records[i].Value) {
+			_ = reader.Close()
+			t.Fatalf("record %d mismatch: got=%+v want=%+v", i, got[i], records[i])
+		}
+	}
+	if _, err := reader.ReadBatch(); !errors.Is(err, io.EOF) {
+		_ = reader.Close()
+		t.Fatalf("expected EOF, got %v", err)
+	}
+	_ = reader.Close()
+}
+
+func TestCommitLogAppendFlushesCoalescedBatchOnSeqChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	if err := writer.Append(Record{Op: OpSetInline, Key: []byte("k1"), Value: []byte("v1"), Seq: 1}); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append seq1: %v", err)
+	}
+	if err := writer.Append(Record{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 2}); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append seq2: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	first, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read first: %v", err)
+	}
+	second, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read second: %v", err)
+	}
+	if len(first) != 1 || first[0].Seq != 1 || string(first[0].Key) != "k1" {
+		_ = reader.Close()
+		t.Fatalf("first batch=%+v, want seq1/k1", first)
+	}
+	if len(second) != 1 || second[0].Seq != 2 || string(second[0].Key) != "k2" {
+		_ = reader.Close()
+		t.Fatalf("second batch=%+v, want seq2/k2", second)
+	}
+	if _, err := reader.ReadBatch(); !errors.Is(err, io.EOF) {
+		_ = reader.Close()
+		t.Fatalf("expected EOF, got %v", err)
+	}
+	_ = reader.Close()
+}
+
+func TestCommitLogCoalescedBatchChecksumMismatchFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	for _, key := range []string{"k1", "k2"} {
+		if err := writer.Append(Record{Op: OpSetInline, Key: []byte(key), Value: []byte("value"), Seq: 9}); err != nil {
+			_ = writer.Close()
+			t.Fatalf("append %s: %v", key, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open for corrupt: %v", err)
+	}
+	var b [1]byte
+	if _, err := f.ReadAt(b[:], int64(segmentHeaderSize+batchHeaderSize)); err != nil {
+		_ = f.Close()
+		t.Fatalf("read corrupt byte: %v", err)
+	}
+	b[0] ^= 0xff
+	if _, err := f.WriteAt(b[:], int64(segmentHeaderSize+batchHeaderSize)); err != nil {
+		_ = f.Close()
+		t.Fatalf("write corrupt byte: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close corrupt file: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	if _, err := reader.ReadBatch(); !errors.Is(err, ErrCorrupt) {
+		_ = reader.Close()
+		t.Fatalf("ReadBatch error=%v, want ErrCorrupt", err)
+	}
+	_ = reader.Close()
+}
+
+func TestCommitLogCoalescedBatchTruncatedTailKeepsPriorBatchReadable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	if err := writer.Append(Record{Op: OpSetInline, Key: []byte("first"), Value: []byte("value"), Seq: 1}); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append first: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		_ = writer.Close()
+		t.Fatalf("flush first: %v", err)
+	}
+	if err := writer.Append(Record{Op: OpSetInline, Key: []byte("second"), Value: bytes.Repeat([]byte("x"), 32), Seq: 2}); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append second: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if err := os.Truncate(path, info.Size()-3); err != nil {
+		t.Fatalf("truncate tail: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	first, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read first: %v", err)
+	}
+	if len(first) != 1 || string(first[0].Key) != "first" || first[0].Seq != 1 {
+		_ = reader.Close()
+		t.Fatalf("first batch=%+v, want first seq1", first)
+	}
+	if _, err := reader.ReadBatch(); !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		_ = reader.Close()
+		t.Fatalf("truncated tail error=%v, want EOF/UnexpectedEOF", err)
+	}
+	_ = reader.Close()
+}
+
 func TestCommitLogWriteReadLargeRawBatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")
