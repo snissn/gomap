@@ -76,7 +76,8 @@ type VectorIndexSearcherSearchOptions struct {
 	// QuantizedIndexName selects the named derived score plane for quantized modes.
 	QuantizedIndexName string
 	// QuantizedRerankCandidates bounds the quantized candidate set reranked by
-	// exact float32 vectors in quantized_rerank mode. Zero uses TopK.
+	// exact float32 vectors in quantized_rerank mode. Zero uses the normalized
+	// ef_search candidate set.
 	QuantizedRerankCandidates int
 	// TopK is the maximum number of nearest results to return.
 	TopK int
@@ -107,7 +108,9 @@ type VectorIndexSearchResult struct {
 	ID []byte `json:"id"`
 	// Ordinal is the vector row ordinal in the persisted column_graph index.
 	Ordinal int `json:"ordinal"`
-	// Score is the cosine similarity score for the result.
+	// Score is the result score for the selected query mode: exact/default and
+	// quantized_rerank return authoritative float32 cosine scores, while
+	// quantized_only returns the scalar_u8 estimated cosine score.
 	Score float64 `json:"score"`
 	// Document is populated only when IncludeDocuments is true.
 	Document []byte `json:"document,omitempty"`
@@ -153,6 +156,10 @@ type VectorIndexSearchStats struct {
 	QuantizedScoreCalls uint64 `json:"quantized_score_calls,omitempty"`
 	// QuantizedCodeBytesRead is the logical quantized code-row byte count read while scoring candidates.
 	QuantizedCodeBytesRead uint64 `json:"quantized_code_bytes_read,omitempty"`
+	// QuantizedRerankCandidates counts quantized shortlist candidates submitted to exact rerank.
+	QuantizedRerankCandidates uint64 `json:"quantized_rerank_candidates,omitempty"`
+	// QuantizedRerankExactScoreCalls counts exact float32/norm score calls used by quantized_rerank.
+	QuantizedRerankExactScoreCalls uint64 `json:"quantized_rerank_exact_score_calls,omitempty"`
 	// ScoreFloat64Fallbacks counts rare dot-product retries using float64 after a non-finite float32 dot.
 	ScoreFloat64Fallbacks uint64 `json:"score_float64_fallbacks,omitempty"`
 	// ExpansionFetches is the per-search count of adjacency row fetches for expanded nodes.
@@ -1134,6 +1141,8 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		PreparedScoreCalls:                    searchStats.PreparedScoreCalls,
 		QuantizedScoreCalls:                   searchStats.QuantizedScoreCalls,
 		QuantizedCodeBytesRead:                searchStats.QuantizedCodeBytesRead,
+		QuantizedRerankCandidates:             searchStats.QuantizedRerankCandidates,
+		QuantizedRerankExactScoreCalls:        searchStats.QuantizedRerankExactScoreCalls,
 		ScoreFloat64Fallbacks:                 searchStats.ScoreFloat64Fallbacks,
 		ExpansionFetches:                      searchStats.ExpansionFetches,
 		ResultFetches:                         searchStats.ResultFetches,

@@ -41,10 +41,16 @@ with asset id
 generation/checksum/schema identity on open. Quantized modes validate the
 selected name/options and asset load status before graph traversal/scoring. The
 `scalar_u8` v1 `quantized_only` scorer consumes the prepared `codes` reader and
-scores normalized query/candidate code rows. `quantized_rerank` remains
-fail-closed until exact rerank over the quantized candidate set lands. Quantized
-modes must not silently return exact results. Exact mode rejects quantized-only
-fields so future callers do not accidentally rely on no-op options.
+scores normalized query/candidate code rows. `quantized_rerank` uses the same
+selected scalar_u8 scorer for graph traversal/candidate collection, then exact
+scores only the resulting quantized shortlist by graph ordinal through the
+authoritative `float32_vector`/inverse-norm score path and returns final topK in
+exact cosine-score order. `QuantizedRerankCandidates` bounds that shortlist;
+zero uses the normalized `ef_search` candidate set, and non-zero values below
+`TopK` are rejected. Quantized modes must not silently return exact results when
+selected assets are missing, stale, mismatched, or unprepared. Exact mode rejects
+quantized-only fields so future callers do not accidentally rely on no-op
+options.
 
 ## Fail-closed validation
 
@@ -62,8 +68,11 @@ images only after validating:
   and graph schema hash);
 - persisted asset refs and checksums when supplied.
 
-Mismatches fail before any scorer-shaped loop receives a prepared reader. There is
-no silent fallback to exact search or document reconstruction.
+Mismatches fail before any scorer-shaped loop receives a prepared reader. There is no silent fallback to exact search or document reconstruction before a
+quantized mode has validated and used its selected score-plane asset. In
+`quantized_rerank`, exact scoring is limited to the validated quantized candidate
+set and is reported through search stats (`quantized_score_calls` for traversal
+and `quantized_rerank_exact_score_calls` for rerank).
 
 ## Prepared ordinal API
 

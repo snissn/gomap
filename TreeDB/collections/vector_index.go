@@ -179,7 +179,8 @@ type VectorIndexSearchOptions struct {
 	// QuantizedIndexName selects the named derived score plane for quantized modes.
 	QuantizedIndexName string
 	// QuantizedRerankCandidates bounds the quantized candidate set reranked by
-	// exact float32 vectors in quantized_rerank mode. Zero uses TopK.
+	// exact float32 vectors in quantized_rerank mode. Zero uses the normalized
+	// ef_search candidate set.
 	QuantizedRerankCandidates int
 	TopK                      int
 	EfSearch                  int
