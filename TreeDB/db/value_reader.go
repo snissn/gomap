@@ -88,33 +88,51 @@ func (r valueReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, 
 }
 
 func (r valueReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error) {
+	val, usedDst, _, err := r.ReadLeafLogPageUnsafeToWithState(ptr, dst)
+	return val, usedDst, err
+}
+
+func (r valueReader) ReadLeafLogPageUnsafeToWithState(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, tree.LeafLogPageReadState, error) {
 	if r.vlogs == nil {
-		return nil, false, errors.New("treedb: missing value-log reader")
+		return nil, false, tree.LeafLogPageReadState{}, errors.New("treedb: missing value-log reader")
 	}
 	if r.leafPageCache != nil && cap(dst) >= page.PageSize {
-		if val, usedDst, ok := r.leafPageCache.getTo(ptr, dst); ok {
-			return val, usedDst, nil
+		if val, usedDst, state, ok := r.leafPageCache.getToWithState(ptr, dst); ok {
+			return val, usedDst, tree.LeafLogPageReadState{RecordChecksumVerified: state.RecordChecksumVerified, PageChecksumVerified: state.PageChecksumVerified}, nil
 		}
 	}
 	val, usedDst, err := r.ReadUnsafeTo(ptr.ValuePtr(), dst)
 	if err != nil {
-		return nil, false, err
+		return nil, false, tree.LeafLogPageReadState{}, err
 	}
+	recordChecksumVerified := r.ReadChecksumEnabled()
 	if r.leafPageCache != nil && cap(dst) >= page.PageSize && len(val) == page.PageSize {
-		r.leafPageCache.storeReadMiss(ptr, val)
+		r.leafPageCache.storeReadMiss(ptr, val, recordChecksumVerified)
 	}
-	return val, usedDst, nil
+	return val, usedDst, tree.LeafLogPageReadState{RecordChecksumVerified: recordChecksumVerified}, nil
 }
 
 func (r valueReader) ReadLeafLogPageUnsafeView(ptr page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, bool, error) {
+	data, lease, ok, _, err := r.ReadLeafLogPageUnsafeViewWithState(ptr)
+	return data, lease, ok, err
+}
+
+func (r valueReader) ReadLeafLogPageUnsafeViewWithState(ptr page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, bool, tree.LeafLogPageReadState, error) {
 	if r.vlogs == nil {
-		return nil, nil, false, errors.New("treedb: missing value-log reader")
+		return nil, nil, false, tree.LeafLogPageReadState{}, errors.New("treedb: missing value-log reader")
 	}
 	if r.leafPageCache == nil {
-		return nil, nil, false, nil
+		return nil, nil, false, tree.LeafLogPageReadState{}, nil
 	}
-	data, release, ok := r.leafPageCache.getViewLocked(ptr)
-	return data, release, ok, nil
+	data, release, state, ok := r.leafPageCache.getViewLockedWithState(ptr)
+	return data, release, ok, tree.LeafLogPageReadState{RecordChecksumVerified: state.RecordChecksumVerified, PageChecksumVerified: state.PageChecksumVerified}, nil
+}
+
+func (r valueReader) MarkLeafLogPageChecksumVerified(ptr page.LeafLogPtr) {
+	if r.leafPageCache == nil {
+		return
+	}
+	r.leafPageCache.markPageChecksumVerified(ptr)
 }
 
 func (r valueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {

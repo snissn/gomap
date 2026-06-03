@@ -18,6 +18,8 @@ func TestOuterLeafReadStatsRecentEstimator(t *testing.T) {
 	outerLeafRecent256HitsTotal.Store(0)
 	outerLeafRecent1KHitsTotal.Store(0)
 	outerLeafRecent4KHitsTotal.Store(0)
+	outerLeafChecksumVerifiedTotal.Store(0)
+	outerLeafChecksumSkippedTotal.Store(0)
 	outerLeafReadSampleMod = 1
 	outerLeafRecentReadEstimator = newOuterLeafRecentReadEstimator()
 	defer func() {
@@ -74,6 +76,8 @@ func TestOuterLeafReadStatsEstimatorKeyAvoidsHighOffsetCollision(t *testing.T) {
 	outerLeafRecent256HitsTotal.Store(0)
 	outerLeafRecent1KHitsTotal.Store(0)
 	outerLeafRecent4KHitsTotal.Store(0)
+	outerLeafChecksumVerifiedTotal.Store(0)
+	outerLeafChecksumSkippedTotal.Store(0)
 	outerLeafReadSampleMod = 1
 	outerLeafRecentReadEstimator = newOuterLeafRecentReadEstimator()
 	defer func() {

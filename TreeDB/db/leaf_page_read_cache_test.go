@@ -417,6 +417,83 @@ func TestValueReaderLeafLogPageUnsafeToAdmitsRepeatedReadMiss(t *testing.T) {
 	}
 }
 
+func TestLeafPageReadCacheChecksumVerifiedStateRequiresVerifiedRecord(t *testing.T) {
+	cache := newLeafPageReadCache(2)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x77}, page.PageSize)
+	dst := make([]byte, 0, page.PageSize)
+
+	cache.store(ptr, leaf)
+	if cache.markPageChecksumVerified(ptr) {
+		t.Fatal("write-origin cache entry should not become page-checksum verified without record checksum state")
+	}
+	_, _, state, ok := cache.getToWithState(ptr, dst)
+	if !ok {
+		t.Fatal("expected cache hit for write-origin entry")
+	}
+	if state.PageChecksumVerified {
+		t.Fatal("write-origin entry unexpectedly reported page checksum verified")
+	}
+
+	cache.storeWithRecordChecksumState(ptr, leaf, true)
+	if !cache.markPageChecksumVerified(ptr) {
+		t.Fatal("record-verified cache entry should accept page checksum mark")
+	}
+	_, _, state, ok = cache.getToWithState(ptr, dst[:0])
+	if !ok {
+		t.Fatal("expected cache hit for record-verified entry")
+	}
+	if !state.PageChecksumVerified {
+		t.Fatal("record-verified entry did not report page checksum verified after mark")
+	}
+
+	stats := cache.stats()
+	if stats.RecordChecksumVerifiedStores != 1 || stats.PageChecksumVerifiedMarks != 1 {
+		t.Fatalf("stats=%+v, want one record-verified store and one page-checksum mark", stats)
+	}
+	if stats.PageChecksumMarkUnsafeSkips != 1 {
+		t.Fatalf("unsafe mark skips=%d, want 1", stats.PageChecksumMarkUnsafeSkips)
+	}
+	if stats.PageChecksumUnverifiedHits != 1 || stats.PageChecksumVerifiedHits != 1 {
+		t.Fatalf("verified/unverified hits=%d/%d, want 1/1", stats.PageChecksumVerifiedHits, stats.PageChecksumUnverifiedHits)
+	}
+}
+
+func TestLeafPageReadCacheVerifiedStateEvictedAndRewriteFallback(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	oldPtr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	newPtr := page.LeafLogPtr{FileID: 7, Offset: 256, RecordLengthHint: 4096}
+	oldLeaf := bytes.Repeat([]byte{0x11}, page.PageSize)
+	newLeaf := bytes.Repeat([]byte{0x22}, page.PageSize)
+	dst := make([]byte, 0, page.PageSize)
+
+	cache.storeWithRecordChecksumState(oldPtr, oldLeaf, true)
+	if !cache.markPageChecksumVerified(oldPtr) {
+		t.Fatal("old page did not become verified")
+	}
+	cache.storeWithRecordChecksumState(newPtr, newLeaf, true)
+	if !cache.markPageChecksumVerified(newPtr) {
+		t.Fatal("new page did not become verified")
+	}
+
+	if got, _, _, ok := cache.getToWithState(oldPtr, dst); ok {
+		t.Fatalf("old rewritten/evicted ptr unexpectedly hit cache: first byte=%x", got[0])
+	}
+	got, _, state, ok := cache.getToWithState(newPtr, dst[:0])
+	if !ok {
+		t.Fatal("new rewritten ptr should hit cache")
+	}
+	if !state.PageChecksumVerified {
+		t.Fatal("new rewritten ptr should retain verified state")
+	}
+	if !bytes.Equal(got, newLeaf) {
+		t.Fatal("new rewritten ptr returned wrong leaf bytes")
+	}
+	if stats := cache.stats(); stats.Evictions != 1 || stats.Misses != 1 {
+		t.Fatalf("stats=%+v, want one eviction and one old-ptr miss", stats)
+	}
+}
+
 func TestLeafPageReadCacheReadMissCandidateEpochPreventsStaleAdmission(t *testing.T) {
 	cache := newLeafPageReadCache(1)
 	slot := &cache.slots[0]
@@ -576,7 +653,7 @@ func TestLeafPageReadCacheStoreReadMissSkipsWhenSlotLockContended(t *testing.T) 
 	slot := &cache.slots[cache.slotIndex(key)]
 
 	// First read miss only arms the admission fingerprint and should skip.
-	cache.storeReadMiss(ptr, leaf)
+	cache.storeReadMiss(ptr, leaf, false)
 	if stats := cache.stats(); stats.ReadMissAdmissionSkips != 1 || stats.ReadMissAdmissionStores != 0 {
 		t.Fatalf("stats after first miss=%+v, want one admission skip and no stores", stats)
 	}
@@ -588,7 +665,7 @@ func TestLeafPageReadCacheStoreReadMissSkipsWhenSlotLockContended(t *testing.T) 
 
 	done := make(chan struct{})
 	go func() {
-		cache.storeReadMiss(ptr, leaf)
+		cache.storeReadMiss(ptr, leaf, false)
 		close(done)
 	}()
 

@@ -12,15 +12,17 @@ import (
 )
 
 var (
-	outerLeafLoadsTotal         atomic.Uint64
-	outerLeafPointLoadsTotal    atomic.Uint64
-	outerLeafIteratorLoadsTotal atomic.Uint64
-	outerLeafBytesTotal         atomic.Uint64
-	outerLeafSamplesTotal       atomic.Uint64
-	outerLeafRecent64HitsTotal  atomic.Uint64
-	outerLeafRecent256HitsTotal atomic.Uint64
-	outerLeafRecent1KHitsTotal  atomic.Uint64
-	outerLeafRecent4KHitsTotal  atomic.Uint64
+	outerLeafLoadsTotal            atomic.Uint64
+	outerLeafPointLoadsTotal       atomic.Uint64
+	outerLeafIteratorLoadsTotal    atomic.Uint64
+	outerLeafBytesTotal            atomic.Uint64
+	outerLeafSamplesTotal          atomic.Uint64
+	outerLeafRecent64HitsTotal     atomic.Uint64
+	outerLeafRecent256HitsTotal    atomic.Uint64
+	outerLeafRecent1KHitsTotal     atomic.Uint64
+	outerLeafRecent4KHitsTotal     atomic.Uint64
+	outerLeafChecksumVerifiedTotal atomic.Uint64
+	outerLeafChecksumSkippedTotal  atomic.Uint64
 )
 
 var outerLeafReadSampleMod = loadUintEnvDefault("TREEDB_OUTER_LEAF_READ_SAMPLE_MOD", 64)
@@ -28,30 +30,34 @@ var outerLeafReadSampleMod = loadUintEnvDefault("TREEDB_OUTER_LEAF_READ_SAMPLE_M
 var outerLeafRecentReadEstimator = newOuterLeafRecentReadEstimator()
 
 type OuterLeafReadStats struct {
-	LoadsTotal         uint64
-	PointLoadsTotal    uint64
-	IteratorLoadsTotal uint64
-	BytesTotal         uint64
-	SampleMod          uint64
-	SamplesTotal       uint64
-	Recent64HitsTotal  uint64
-	Recent256HitsTotal uint64
-	Recent1KHitsTotal  uint64
-	Recent4KHitsTotal  uint64
+	LoadsTotal            uint64
+	PointLoadsTotal       uint64
+	IteratorLoadsTotal    uint64
+	BytesTotal            uint64
+	SampleMod             uint64
+	SamplesTotal          uint64
+	Recent64HitsTotal     uint64
+	Recent256HitsTotal    uint64
+	Recent1KHitsTotal     uint64
+	Recent4KHitsTotal     uint64
+	ChecksumVerifiedTotal uint64
+	ChecksumSkippedTotal  uint64
 }
 
 func OuterLeafReadStatsSnapshot() OuterLeafReadStats {
 	return OuterLeafReadStats{
-		LoadsTotal:         outerLeafLoadsTotal.Load(),
-		PointLoadsTotal:    outerLeafPointLoadsTotal.Load(),
-		IteratorLoadsTotal: outerLeafIteratorLoadsTotal.Load(),
-		BytesTotal:         outerLeafBytesTotal.Load(),
-		SampleMod:          outerLeafReadSampleMod,
-		SamplesTotal:       outerLeafSamplesTotal.Load(),
-		Recent64HitsTotal:  outerLeafRecent64HitsTotal.Load(),
-		Recent256HitsTotal: outerLeafRecent256HitsTotal.Load(),
-		Recent1KHitsTotal:  outerLeafRecent1KHitsTotal.Load(),
-		Recent4KHitsTotal:  outerLeafRecent4KHitsTotal.Load(),
+		LoadsTotal:            outerLeafLoadsTotal.Load(),
+		PointLoadsTotal:       outerLeafPointLoadsTotal.Load(),
+		IteratorLoadsTotal:    outerLeafIteratorLoadsTotal.Load(),
+		BytesTotal:            outerLeafBytesTotal.Load(),
+		SampleMod:             outerLeafReadSampleMod,
+		SamplesTotal:          outerLeafSamplesTotal.Load(),
+		Recent64HitsTotal:     outerLeafRecent64HitsTotal.Load(),
+		Recent256HitsTotal:    outerLeafRecent256HitsTotal.Load(),
+		Recent1KHitsTotal:     outerLeafRecent1KHitsTotal.Load(),
+		Recent4KHitsTotal:     outerLeafRecent4KHitsTotal.Load(),
+		ChecksumVerifiedTotal: outerLeafChecksumVerifiedTotal.Load(),
+		ChecksumSkippedTotal:  outerLeafChecksumSkippedTotal.Load(),
 	}
 }
 
@@ -121,6 +127,14 @@ func outerLeafRecentRingContains(ring []uint64, used int, key uint64) bool {
 		}
 	}
 	return false
+}
+
+func noteOuterLeafChecksumVerified() {
+	outerLeafChecksumVerifiedTotal.Add(1)
+}
+
+func noteOuterLeafChecksumSkipped() {
+	outerLeafChecksumSkippedTotal.Add(1)
 }
 
 func noteOuterLeafLoad(ptr page.ValuePtr, bytes int, iterator bool) {

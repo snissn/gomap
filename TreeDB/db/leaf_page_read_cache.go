@@ -91,12 +91,14 @@ func newLeafPageReadCacheKey(ptr page.LeafLogPtr) leafPageReadCacheKey {
 }
 
 type leafPageReadCacheSlot struct {
-	mu                  sync.RWMutex
-	key                 leafPageReadCacheKey
-	data                []byte
-	valid               bool
-	readMissCandidateFP atomic.Uint64
-	readMissEpoch       atomic.Uint64
+	mu                     sync.RWMutex
+	key                    leafPageReadCacheKey
+	data                   []byte
+	valid                  bool
+	recordChecksumVerified bool
+	pageChecksumVerified   bool
+	readMissCandidateFP    atomic.Uint64
+	readMissEpoch          atomic.Uint64
 }
 
 func (s *leafPageReadCacheSlot) ReleaseLeafLogPageView() {
@@ -118,6 +120,13 @@ type leafPageReadCache struct {
 	readMissAdmissionSkips          atomic.Uint64
 	readMissAdmissionCandidateSkips atomic.Uint64
 	readMissAdmissionStores         atomic.Uint64
+
+	recordChecksumVerifiedStores atomic.Uint64
+	pageChecksumVerifiedMarks    atomic.Uint64
+	pageChecksumVerifiedHits     atomic.Uint64
+	pageChecksumUnverifiedHits   atomic.Uint64
+	pageChecksumMarkMisses       atomic.Uint64
+	pageChecksumMarkUnsafeSkips  atomic.Uint64
 }
 
 type leafPageReadCacheStats struct {
@@ -131,6 +140,12 @@ type leafPageReadCacheStats struct {
 	ReadMissAdmissionSkips          uint64
 	ReadMissAdmissionCandidateSkips uint64
 	ReadMissAdmissionStores         uint64
+	RecordChecksumVerifiedStores    uint64
+	PageChecksumVerifiedMarks       uint64
+	PageChecksumVerifiedHits        uint64
+	PageChecksumUnverifiedHits      uint64
+	PageChecksumMarkMisses          uint64
+	PageChecksumMarkUnsafeSkips     uint64
 }
 
 func newLeafPageReadCache(entries int) *leafPageReadCache {
@@ -141,15 +156,19 @@ func newLeafPageReadCache(entries int) *leafPageReadCache {
 }
 
 func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
+	c.storeWithRecordChecksumState(ptr, leafPage, false)
+}
+
+func (c *leafPageReadCache) storeWithRecordChecksumState(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) {
 	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
 		return
 	}
 	key := newLeafPageReadCacheKey(ptr)
 	slot := &c.slots[c.slotIndex(key)]
 	slot.mu.Lock()
-	result := slot.storeLocked(key, leafPage)
+	result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
 	slot.mu.Unlock()
-	c.recordStore(result, key)
+	c.recordStore(result, key, recordChecksumVerified)
 }
 
 // storeReadMiss admits read-miss pages only after a repeated miss in the same
@@ -158,7 +177,7 @@ func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 // this keeps one-off sparse reads from copying 4KiB pages into the cache and
 // evicting recently-written leaves that are likely to be reused during
 // publish/apply.
-func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) {
+func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) {
 	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
 		return
 	}
@@ -205,10 +224,10 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) 
 		c.readMissAdmissionCandidateSkips.Add(1)
 		return
 	}
-	result := slot.storeLocked(key, leafPage)
+	result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
 	slot.mu.Unlock()
 	c.readMissAdmissionStores.Add(1)
-	c.recordStore(result, key)
+	c.recordStore(result, key, recordChecksumVerified)
 }
 
 type leafPageReadCacheStoreResult struct {
@@ -217,6 +236,10 @@ type leafPageReadCacheStoreResult struct {
 }
 
 func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage []byte) leafPageReadCacheStoreResult {
+	return s.storeLockedWithRecordChecksumState(key, leafPage, false)
+}
+
+func (s *leafPageReadCacheSlot) storeLockedWithRecordChecksumState(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified bool) leafPageReadCacheStoreResult {
 	result := leafPageReadCacheStoreResult{
 		wasValid: s.valid,
 		prevKey:  s.key,
@@ -228,6 +251,8 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 	copy(s.data, leafPage)
 	s.key = key
 	s.valid = true
+	s.recordChecksumVerified = recordChecksumVerified
+	s.pageChecksumVerified = false
 	s.resetReadMissCandidateLocked()
 	return result
 }
@@ -325,8 +350,11 @@ func (s *leafPageReadCacheSlot) resetReadMissCandidateLocked() {
 	s.readMissEpoch.Store(start + 2)
 }
 
-func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key leafPageReadCacheKey) {
+func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key leafPageReadCacheKey, recordChecksumVerified bool) {
 	c.stores.Add(1)
+	if recordChecksumVerified {
+		c.recordChecksumVerifiedStores.Add(1)
+	}
 	switch {
 	case !result.wasValid:
 		c.entries.Add(1)
@@ -347,15 +375,26 @@ func (c *leafPageReadCache) get(ptr page.LeafLogPtr) ([]byte, bool) {
 		c.misses.Add(1)
 		return nil, false
 	}
+	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, PageChecksumVerified: slot.pageChecksumVerified}
 	data := cloneLeafPageReadCacheData(slot.data)
 	slot.mu.RUnlock()
-	c.hits.Add(1)
+	c.recordHitState(state)
 	return data, true
 }
 
 func (c *leafPageReadCache) getTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, bool) {
+	data, usedDst, _, ok := c.getToWithState(ptr, dst)
+	return data, usedDst, ok
+}
+
+type leafPageReadCacheState struct {
+	RecordChecksumVerified bool
+	PageChecksumVerified   bool
+}
+
+func (c *leafPageReadCache) getToWithState(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, leafPageReadCacheState, bool) {
 	if c == nil || len(c.slots) == 0 {
-		return nil, false, false
+		return nil, false, leafPageReadCacheState{}, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
 	slot := &c.slots[c.slotIndex(key)]
@@ -363,35 +402,74 @@ func (c *leafPageReadCache) getTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool
 	if !slot.valid || slot.key != key {
 		slot.mu.RUnlock()
 		c.misses.Add(1)
-		return nil, false, false
+		return nil, false, leafPageReadCacheState{}, false
 	}
+	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, PageChecksumVerified: slot.pageChecksumVerified}
 	if cap(dst) >= len(slot.data) {
 		out := dst[:len(slot.data)]
 		copy(out, slot.data)
 		slot.mu.RUnlock()
-		c.hits.Add(1)
-		return out, true, true
+		c.recordHitState(state)
+		return out, true, state, true
 	}
 	data := cloneLeafPageReadCacheData(slot.data)
 	slot.mu.RUnlock()
-	c.hits.Add(1)
-	return data, false, true
+	c.recordHitState(state)
+	return data, false, state, true
 }
 
 func (c *leafPageReadCache) getViewLocked(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, bool) {
+	data, slot, _, ok := c.getViewLockedWithState(ptr)
+	return data, slot, ok
+}
+
+func (c *leafPageReadCache) getViewLockedWithState(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, leafPageReadCacheState, bool) {
 	if c == nil || len(c.slots) == 0 {
-		return nil, nil, false
+		return nil, nil, leafPageReadCacheState{}, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
 	slot := &c.slots[c.slotIndex(key)]
 	slot.mu.RLock()
 	if !slot.valid || slot.key != key {
 		slot.mu.RUnlock()
-		return nil, nil, false
+		return nil, nil, leafPageReadCacheState{}, false
 	}
+	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, PageChecksumVerified: slot.pageChecksumVerified}
 	data := slot.data
+	c.recordHitState(state)
+	return data, slot, state, true
+}
+
+func (c *leafPageReadCache) recordHitState(state leafPageReadCacheState) {
 	c.hits.Add(1)
-	return data, slot, true
+	if state.PageChecksumVerified {
+		c.pageChecksumVerifiedHits.Add(1)
+	} else {
+		c.pageChecksumUnverifiedHits.Add(1)
+	}
+}
+
+func (c *leafPageReadCache) markPageChecksumVerified(ptr page.LeafLogPtr) bool {
+	if c == nil || len(c.slots) == 0 {
+		return false
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	slot := &c.slots[c.slotIndex(key)]
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if !slot.valid || slot.key != key {
+		c.pageChecksumMarkMisses.Add(1)
+		return false
+	}
+	if !slot.recordChecksumVerified {
+		c.pageChecksumMarkUnsafeSkips.Add(1)
+		return false
+	}
+	if !slot.pageChecksumVerified {
+		slot.pageChecksumVerified = true
+		c.pageChecksumVerifiedMarks.Add(1)
+	}
+	return true
 }
 
 func (c *leafPageReadCache) stats() leafPageReadCacheStats {
@@ -410,6 +488,12 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		ReadMissAdmissionSkips:          c.readMissAdmissionSkips.Load(),
 		ReadMissAdmissionCandidateSkips: c.readMissAdmissionCandidateSkips.Load(),
 		ReadMissAdmissionStores:         c.readMissAdmissionStores.Load(),
+		RecordChecksumVerifiedStores:    c.recordChecksumVerifiedStores.Load(),
+		PageChecksumVerifiedMarks:       c.pageChecksumVerifiedMarks.Load(),
+		PageChecksumVerifiedHits:        c.pageChecksumVerifiedHits.Load(),
+		PageChecksumUnverifiedHits:      c.pageChecksumUnverifiedHits.Load(),
+		PageChecksumMarkMisses:          c.pageChecksumMarkMisses.Load(),
+		PageChecksumMarkUnsafeSkips:     c.pageChecksumMarkUnsafeSkips.Load(),
 	}
 }
 

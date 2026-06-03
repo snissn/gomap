@@ -88,6 +88,109 @@ func (r *trackedLeafLogPageReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, 
 	return val, false, nil
 }
 
+type statefulLeafLogPageReader struct {
+	*mapValueReader
+	state LeafLogPageReadState
+	reads int
+	marks int
+}
+
+func (r *statefulLeafLogPageReader) ReadChecksumEnabled() bool { return true }
+
+func (r *statefulLeafLogPageReader) ReadLeafLogPageUnsafeToWithState(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, LeafLogPageReadState, error) {
+	r.reads++
+	val, err := r.mapValueReader.ReadUnsafe(ptr.ValuePtr())
+	if err != nil {
+		return nil, false, LeafLogPageReadState{}, err
+	}
+	if cap(dst) >= len(val) {
+		out := dst[:len(val)]
+		copy(out, val)
+		return out, true, r.state, nil
+	}
+	return val, false, r.state, nil
+}
+
+func (r *statefulLeafLogPageReader) MarkLeafLogPageChecksumVerified(ptr page.LeafLogPtr) {
+	r.marks++
+	r.state.PageChecksumVerified = true
+}
+
+func TestTreeLeafLogVerifiedCacheStateSkipsChecksum(t *testing.T) {
+	before := OuterLeafReadStatsSnapshot()
+	reader := &statefulLeafLogPageReader{mapValueReader: newMapValueReader(), state: LeafLogPageReadState{RecordChecksumVerified: true}}
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	if err := leaf.AddLeafEntry([]byte("k"), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
+	}
+	leaf.UpdateChecksum()
+
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: page.PageSize}
+	reader.values[ptr.ValuePtr()] = leafData
+	tr, _ := newTreeWithLeafLogRoot(t, reader, []byte{}, ptr)
+
+	got, err := tr.GetAppend([]byte("k"), nil)
+	if err != nil {
+		t.Fatalf("first GetAppend: %v", err)
+	}
+	if string(got) != "value" {
+		t.Fatalf("first GetAppend=%q", got)
+	}
+	afterFirst := OuterLeafReadStatsSnapshot()
+	if afterFirst.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal != 1 {
+		t.Fatalf("checksum verifications delta=%d want 1", afterFirst.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal)
+	}
+	if afterFirst.ChecksumSkippedTotal != before.ChecksumSkippedTotal {
+		t.Fatalf("unexpected checksum skip before verified cache hit")
+	}
+	if reader.marks != 1 || !reader.state.PageChecksumVerified {
+		t.Fatalf("marks=%d state=%+v, want one verified mark", reader.marks, reader.state)
+	}
+
+	got, err = tr.GetAppend([]byte("k"), nil)
+	if err != nil {
+		t.Fatalf("second GetAppend: %v", err)
+	}
+	if string(got) != "value" {
+		t.Fatalf("second GetAppend=%q", got)
+	}
+	afterSecond := OuterLeafReadStatsSnapshot()
+	if afterSecond.ChecksumVerifiedTotal != afterFirst.ChecksumVerifiedTotal {
+		t.Fatalf("checksum verification ran again: before=%d after=%d", afterFirst.ChecksumVerifiedTotal, afterSecond.ChecksumVerifiedTotal)
+	}
+	if afterSecond.ChecksumSkippedTotal-afterFirst.ChecksumSkippedTotal != 1 {
+		t.Fatalf("checksum skips delta=%d want 1", afterSecond.ChecksumSkippedTotal-afterFirst.ChecksumSkippedTotal)
+	}
+}
+
+func TestTreeLeafLogUnverifiedStateStillChecksChecksum(t *testing.T) {
+	reader := &statefulLeafLogPageReader{mapValueReader: newMapValueReader(), state: LeafLogPageReadState{RecordChecksumVerified: true}}
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	if err := leaf.AddLeafEntry([]byte("k"), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
+	}
+	leaf.UpdateChecksum()
+	leafData[node.NodeHeaderSize] ^= 0x80
+
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: page.PageSize}
+	reader.values[ptr.ValuePtr()] = leafData
+	tr, _ := newTreeWithLeafLogRoot(t, reader, []byte{}, ptr)
+
+	_, err := tr.GetAppend([]byte("k"), nil)
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("GetAppend error=%v, want checksum mismatch", err)
+	}
+	if reader.marks != 0 || reader.state.PageChecksumVerified {
+		t.Fatalf("corrupt page should not be marked verified: marks=%d state=%+v", reader.marks, reader.state)
+	}
+}
+
 func TestTreeGetManyAppend_RejectsUndersizedOut(t *testing.T) {
 	var tr *Tree
 	arena := []byte("keep")

@@ -689,6 +689,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.outer_leaf.point_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.PointLoadsTotal)
 	stats["treedb.process.read_path.outer_leaf.iterator_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.IteratorLoadsTotal)
 	stats["treedb.process.read_path.outer_leaf.bytes_total"] = fmt.Sprintf("%d", outerLeafReadStats.BytesTotal)
+	stats["treedb.process.read_path.outer_leaf.checksum.verifications_total"] = fmt.Sprintf("%d", outerLeafReadStats.ChecksumVerifiedTotal)
+	stats["treedb.process.read_path.outer_leaf.checksum.skips_total"] = fmt.Sprintf("%d", outerLeafReadStats.ChecksumSkippedTotal)
 	stats["treedb.process.read_path.outer_leaf.sample_mod"] = fmt.Sprintf("%d", outerLeafReadStats.SampleMod)
 	stats["treedb.process.read_path.outer_leaf.samples_total"] = fmt.Sprintf("%d", outerLeafReadStats.SamplesTotal)
 	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent64HitsTotal)
@@ -712,6 +714,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionSkips)
 	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_candidate_skips"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionCandidateSkips)
 	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionStores)
+	stats["treedb.process.read_path.outer_leaf.cache.record_checksum_verified_stores"] = fmt.Sprintf("%d", cacheStats.RecordChecksumVerifiedStores)
+	stats["treedb.process.read_path.outer_leaf.cache.page_checksum_verified_marks"] = fmt.Sprintf("%d", cacheStats.PageChecksumVerifiedMarks)
+	stats["treedb.process.read_path.outer_leaf.cache.page_checksum_verified_hits"] = fmt.Sprintf("%d", cacheStats.PageChecksumVerifiedHits)
+	stats["treedb.process.read_path.outer_leaf.cache.page_checksum_unverified_hits"] = fmt.Sprintf("%d", cacheStats.PageChecksumUnverifiedHits)
+	stats["treedb.process.read_path.outer_leaf.cache.page_checksum_mark_misses"] = fmt.Sprintf("%d", cacheStats.PageChecksumMarkMisses)
+	stats["treedb.process.read_path.outer_leaf.cache.page_checksum_mark_unsafe_skips"] = fmt.Sprintf("%d", cacheStats.PageChecksumMarkUnsafeSkips)
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()

@@ -25899,6 +25899,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.outer_leaf.point_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.PointLoadsTotal)
 	stats["treedb.process.read_path.outer_leaf.iterator_loads_total"] = fmt.Sprintf("%d", outerLeafReadStats.IteratorLoadsTotal)
 	stats["treedb.process.read_path.outer_leaf.bytes_total"] = fmt.Sprintf("%d", outerLeafReadStats.BytesTotal)
+	stats["treedb.process.read_path.outer_leaf.checksum.verifications_total"] = fmt.Sprintf("%d", outerLeafReadStats.ChecksumVerifiedTotal)
+	stats["treedb.process.read_path.outer_leaf.checksum.skips_total"] = fmt.Sprintf("%d", outerLeafReadStats.ChecksumSkippedTotal)
 	stats["treedb.process.read_path.outer_leaf.sample_mod"] = fmt.Sprintf("%d", outerLeafReadStats.SampleMod)
 	stats["treedb.process.read_path.outer_leaf.samples_total"] = fmt.Sprintf("%d", outerLeafReadStats.SamplesTotal)
 	stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hits_total"] = fmt.Sprintf("%d", outerLeafReadStats.Recent64HitsTotal)
