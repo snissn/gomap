@@ -130,6 +130,16 @@ type TrustedSortedBatchApplier interface {
 	ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// CopySortedBatchApplier is an optional fast path for callers that already
+// guarantee strictly increasing keys but cannot transfer key ownership to the
+// memtable. Implementations must copy keys into table-owned storage. When
+// borrowValues is true, implementations may retain non-key value slices until
+// the memtable is retired and must return true if they did so. Pointer entries
+// receive inline value bytes only when storeInlinePtrValues is true.
+type CopySortedBatchApplier interface {
+	ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) (borrowedValues bool)
+}
+
 type Memtable struct {
 	sl *skiplist.SkipList
 	mu sync.RWMutex

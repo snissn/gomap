@@ -331,6 +331,32 @@ func appendOnlyEntryInlineKeyU64(ent *appendOnlyEntry) (uint64, bool) {
 	return binary.BigEndian.Uint64(ent.inlineKey[:]), true
 }
 
+func appendOnlyEntryKeyU64(ent *appendOnlyEntry) (uint64, bool) {
+	if ent == nil {
+		return 0, false
+	}
+	if ent.keyInline {
+		return binary.BigEndian.Uint64(ent.inlineKey[:]), true
+	}
+	return appendOnlyKeyU64(ent.key)
+}
+
+func appendOnlyCompareKeyWithEntry(key []byte, ent *appendOnlyEntry) int {
+	if key64, ok := appendOnlyKeyU64(key); ok {
+		if ent64, ok := appendOnlyEntryKeyU64(ent); ok {
+			switch {
+			case key64 > ent64:
+				return 1
+			case key64 < ent64:
+				return -1
+			default:
+				return 0
+			}
+		}
+	}
+	return bytes.Compare(key, appendOnlyEntryKey(ent))
+}
+
 func cloneBytes(src []byte) []byte {
 	if len(src) == 0 {
 		return nil
@@ -667,6 +693,10 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 }
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) *appendOnlyEntry {
+	return m.appendEntryLockedWithOrder(key, value, ptr, flags, steal, borrowValue, false)
+}
+
+func (m *AppendOnly) appendEntryLockedWithOrder(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool, trustedOrdered bool) *appendOnlyEntry {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
 		prev := m.entries
@@ -716,14 +746,18 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	k := appendOnlyEntryKey(ent)
 	m.sizeBytes += int64(len(k) + entryValueSize(flags, ent.value))
 
+	if trustedOrdered && m.ordered {
+		m.lastIdx = idx
+		m.hasLast = true
+		return ent
+	}
 	if !m.hasLast {
 		m.lastIdx = idx
 		m.hasLast = true
 		return ent
 	}
 	if m.ordered {
-		prev := appendOnlyEntryKey(&m.entries[m.lastIdx])
-		cmp := bytes.Compare(k, prev)
+		cmp := appendOnlyCompareKeyWithEntry(k, &m.entries[m.lastIdx])
 		if cmp > 0 {
 			m.lastIdx = idx
 			return ent
@@ -839,11 +873,58 @@ func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 }
 
 func (m *AppendOnly) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
-	m.applyStealBatch(entries, onKey)
+	m.applyStealBatch(entries, onKey, false)
 }
 
 func (m *AppendOnly) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte)) {
-	m.applyStealBatch(entries, onKey)
+	m.applyStealBatch(entries, onKey, true)
+}
+
+func appendOnlyBatchEntryPayload(op batchpkg.Entry, storeInlinePtrValues bool) (value []byte, ptr page.ValuePtr, flags byte) {
+	switch {
+	case op.Type == batchpkg.OpDelete:
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	case op.IsPtr:
+		if storeInlinePtrValues {
+			return op.Value, op.ValuePtr, node.FlagPointer
+		}
+		return nil, op.ValuePtr, node.FlagPointer
+	default:
+		return op.Value, page.ValuePtr{}, node.FlagInline
+	}
+}
+
+func (m *AppendOnly) canAppendTrustedSortedBatchLocked(entries []batchpkg.Entry) bool {
+	if len(entries) == 0 || len(entries[0].Key) == 0 || !m.ordered {
+		return false
+	}
+	if m.count == 0 || !m.hasLast {
+		return true
+	}
+	return appendOnlyCompareKeyWithEntry(entries[0].Key, &m.entries[m.lastIdx]) > 0
+}
+
+func (m *AppendOnly) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	if len(entries) == 0 {
+		return false
+	}
+	borrowedValues := false
+	m.mu.Lock()
+	trustedOrdered := m.canAppendTrustedSortedBatchLocked(entries)
+	for i := range entries {
+		op := entries[i]
+		value, ptr, flags := appendOnlyBatchEntryPayload(op, storeInlinePtrValues)
+		borrowValue := borrowValues && len(value) > 0
+		if borrowValue {
+			borrowedValues = true
+		}
+		m.appendEntryLockedWithOrder(op.Key, value, ptr, flags, false, borrowValue, trustedOrdered)
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+	m.mu.Unlock()
+	return borrowedValues
 }
 
 func (m *AppendOnly) ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error {
@@ -865,17 +946,18 @@ func (m *AppendOnly) ApplyStealEntryFunc(count int, emit func(i int) (key, value
 	return nil
 }
 
-func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
+func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []byte), trustedOrder bool) {
 	m.mu.Lock()
+	trustedOrdered := trustedOrder && m.canAppendTrustedSortedBatchLocked(entries)
 	for i := range entries {
 		op := entries[i]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+			m.appendEntryLockedWithOrder(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false, trustedOrdered)
 		case op.IsPtr:
-			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+			m.appendEntryLockedWithOrder(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false, trustedOrdered)
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+			m.appendEntryLockedWithOrder(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false, trustedOrdered)
 		}
 		if onKey != nil {
 			onKey(op.Key)

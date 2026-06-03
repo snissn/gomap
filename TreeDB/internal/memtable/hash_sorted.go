@@ -217,6 +217,45 @@ func (m *HashSorted) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKe
 	m.applyStealSortedBatch(entries, onKey, true)
 }
 
+func (m *HashSorted) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	_ = borrowValues // HashSorted owns values in its arena; it never borrows batch value storage.
+	var chunks []hashSortedIndexWork
+
+	m.mu.Lock()
+	if m.canAppendAfterMaxLocked(entries) {
+		keys := make([]string, 0, len(entries))
+		keyBytes := 0
+		for _, op := range entries {
+			if keyStored, n, ok := m.setEntryNewCopyNoChunkLocked(op, storeInlinePtrValues); ok {
+				keys = append(keys, keyStored)
+				keyBytes += n
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+		if chunk, seq := m.noteNewKeysBatchLocked(keys, keyBytes); seq != 0 {
+			chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk, sorted: true})
+		}
+	} else {
+		for _, op := range entries {
+			value, ptr, flags := hashSortedBatchEntryPayload(op, storeInlinePtrValues)
+			if chunk, seq := m.setEntryLocked(op.Key, value, ptr, flags, false); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range chunks {
+		c.mt.indexer.enqueue(c.mt, c.seq, c.keys, c.sorted)
+	}
+	return false
+}
+
 func (m *HashSorted) applyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte), trustedOrder bool) {
 	var chunks []hashSortedIndexWork
 
@@ -931,6 +970,44 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	}
 	m.updateMaxKeyLocked(keyStored)
 	return m.noteNewKeyLocked(keyStored)
+}
+
+func hashSortedBatchEntryPayload(op batchpkg.Entry, storeInlinePtrValues bool) (value []byte, ptr page.ValuePtr, flags byte) {
+	switch {
+	case op.Type == batchpkg.OpDelete:
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	case op.IsPtr:
+		if storeInlinePtrValues {
+			return op.Value, op.ValuePtr, node.FlagPointer
+		}
+		return nil, op.ValuePtr, node.FlagPointer
+	default:
+		return op.Value, page.ValuePtr{}, node.FlagInline
+	}
+}
+
+func (m *HashSorted) setEntryNewCopyNoChunkLocked(op batchpkg.Entry, storeInlinePtrValues bool) (string, int, bool) {
+	if op.Key == nil {
+		return "", 0, false
+	}
+	keyCopy := m.arena.copyBytes(op.Key)
+	keyStored := bytesToStringNoCopy(keyCopy)
+	value, ptr, flags := hashSortedBatchEntryPayload(op, storeInlinePtrValues)
+	valCopy := m.encodeEntryValueLocked(value, ptr, flags, false)
+	ent := hashEntry{value: valCopy, flags: flags}
+	if flags&node.FlagPointer != 0 {
+		ent.ptr = ptr
+	}
+	m.entries = append(m.entries, ent)
+	m.items[keyStored] = uint32(len(m.entries) - 1)
+	m.sizeBytes += int64(len(keyCopy) + hashEntryValueSize(flags, valCopy))
+	if flags&node.FlagTombstone != 0 {
+		m.hasDeletes = true
+	}
+	// The fast path is append-only and entries are strictly increasing.
+	m.maxKey = keyStored
+	m.hasMaxKey = true
+	return keyStored, len(keyCopy), true
 }
 
 func (m *HashSorted) setEntryNewStealNoChunkLocked(op batchpkg.Entry) (string, int, bool) {
