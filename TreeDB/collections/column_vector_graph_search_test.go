@@ -598,6 +598,135 @@ func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphNativeSearchScratchFrontierCapacityPolicyV3(t *testing.T) {
+	const (
+		rowCount = 4096
+		degree   = 16
+		topK     = 10
+		efSearch = 128
+	)
+	var scratch columnVectorGraphNativeSearchScratch
+	if err := scratch.prepare(rowCount, 32, degree, topK, efSearch, degree, 0); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	wantFrontierCap := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
+	if wantFrontierCap != efSearch*degree {
+		t.Fatalf("frontier policy target=%d want %d", wantFrontierCap, efSearch*degree)
+	}
+	if cap(scratch.frontier) != wantFrontierCap {
+		t.Fatalf("frontier cap=%d want %d", cap(scratch.frontier), wantFrontierCap)
+	}
+	if cap(scratch.top) != efSearch {
+		t.Fatalf("top cap=%d want efSearch cap %d unchanged", cap(scratch.top), efSearch)
+	}
+	if !scratch.markVisited(7) {
+		t.Fatal("initial markVisited failed")
+	}
+	scratch.frontier = scratch.frontier[:cap(scratch.frontier)]
+	frontierBacking := columnVectorGraphCandidateBackingPtrForTest(scratch.frontier)
+	visitEpoch := scratch.visitEpoch
+	if err := scratch.prepare(rowCount, 32, degree, topK, efSearch, degree, 0); err != nil {
+		t.Fatalf("prepare repeated: %v", err)
+	}
+	if len(scratch.frontier) != 0 {
+		t.Fatalf("repeated prepare frontier len=%d want 0", len(scratch.frontier))
+	}
+	if cap(scratch.frontier) != wantFrontierCap || columnVectorGraphCandidateBackingPtrForTest(scratch.frontier) != frontierBacking {
+		t.Fatalf("repeated prepare frontier cap=%d ptr=%#x want cap=%d ptr=%#x", cap(scratch.frontier), columnVectorGraphCandidateBackingPtrForTest(scratch.frontier), wantFrontierCap, frontierBacking)
+	}
+	if scratch.visitEpoch != visitEpoch+1 {
+		t.Fatalf("visitEpoch=%d want %d", scratch.visitEpoch, visitEpoch+1)
+	}
+	if !scratch.markVisited(7) {
+		t.Fatal("markVisited after prepare should see prior epoch as reset")
+	}
+
+	scratch.frontier = make([]columnVectorGraphSearchCandidate, 0, rowCount)
+	if err := scratch.prepare(8, 32, degree, 1, efSearch, degree, 0); err != nil {
+		t.Fatalf("prepare small rowCount: %v", err)
+	}
+	if cap(scratch.frontier) > 8+columnVectorGraphNativeScratchOversizeSlack {
+		t.Fatalf("small rowCount frontier cap=%d want bounded by row count/slack", cap(scratch.frontier))
+	}
+	if got := columnVectorGraphNativeSearchFrontierCapacity(8, degree, 32, efSearch); got != 8 {
+		t.Fatalf("frontier target with topK above rowCount=%d want rowCount cap 8", got)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchRepeatedSearchRetainsFrontierCapacityV3(t *testing.T) {
+	const (
+		rows     = 256
+		dims     = 16
+		m        = 16
+		topK     = 10
+		efSearch = 16
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, dims, m, input)
+	defer func() { _ = d.Close() }()
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer reader.Close()
+
+	query := append([]float32(nil), input[17].vector...)
+	opts := columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}
+	var scratch columnVectorGraphNativeSearchScratch
+	first, _, err := reader.SearchCosine(query, opts, &scratch)
+	if err != nil {
+		t.Fatalf("first SearchCosine: %v", err)
+	}
+	if len(first) == 0 {
+		t.Fatal("first SearchCosine returned no results")
+	}
+	firstOrdinals := make([]int, len(first))
+	firstScores := make([]float64, len(first))
+	for i := range first {
+		firstOrdinals[i] = first[i].Ordinal
+		firstScores[i] = first[i].Score
+	}
+	wantFrontierCap := columnVectorGraphNativeSearchFrontierCapacity(reader.RowCount(), reader.def.M, topK, efSearch)
+	if cap(scratch.frontier) < wantFrontierCap || cap(scratch.frontier) > reader.RowCount() {
+		t.Fatalf("frontier cap after first search=%d want [%d,%d]", cap(scratch.frontier), wantFrontierCap, reader.RowCount())
+	}
+	frontierCap := cap(scratch.frontier)
+	frontierBacking := columnVectorGraphCandidateBackingPtrForTest(scratch.frontier)
+	visitEpoch := scratch.visitEpoch
+
+	second, _, err := reader.SearchCosine(query, opts, &scratch)
+	if err != nil {
+		t.Fatalf("second SearchCosine: %v", err)
+	}
+	if len(second) != len(first) {
+		t.Fatalf("second results len=%d want %d", len(second), len(first))
+	}
+	for i := range firstOrdinals {
+		if firstOrdinals[i] != second[i].Ordinal || firstScores[i] != second[i].Score {
+			t.Fatalf("result[%d]=%+v want ordinal=%d score=%v", i, second[i], firstOrdinals[i], firstScores[i])
+		}
+	}
+	if cap(scratch.frontier) != frontierCap || columnVectorGraphCandidateBackingPtrForTest(scratch.frontier) != frontierBacking {
+		t.Fatalf("frontier reallocated across repeated search: cap=%d ptr=%#x want cap=%d ptr=%#x", cap(scratch.frontier), columnVectorGraphCandidateBackingPtrForTest(scratch.frontier), frontierCap, frontierBacking)
+	}
+	if scratch.visitEpoch != visitEpoch+1 {
+		t.Fatalf("visitEpoch after repeated search=%d want %d", scratch.visitEpoch, visitEpoch+1)
+	}
+}
+
+func columnVectorGraphCandidateBackingPtrForTest(candidates []columnVectorGraphSearchCandidate) uintptr {
+	if cap(candidates) == 0 {
+		return 0
+	}
+	backing := candidates[:cap(candidates)]
+	return uintptr(unsafe.Pointer(&backing[0]))
+}
+
 func TestColumnVectorGraphNativeScratchCapOversizedOverflowSafeV3(t *testing.T) {
 	if !columnVectorGraphNativeScratchCapOversized(64, 1) {
 		t.Fatalf("expected oversized scratch cap for small target")
