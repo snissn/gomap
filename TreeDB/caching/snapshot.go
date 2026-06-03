@@ -138,7 +138,19 @@ func (db *DB) AcquireBackendSnapshotFastPath() *backenddb.Snapshot {
 	if !ok {
 		return nil
 	}
-	return provider.AcquireSnapshot()
+	backendSnap := provider.AcquireSnapshot()
+	if backendSnap == nil {
+		return nil
+	}
+	// A durability-none value-log flush can race between the clean check above
+	// and the backend snapshot acquisition. If that happens, the raw backend
+	// snapshot may see a newly-published pointer whose value-log tail still needs
+	// the cached read barrier. Fail closed to the cached Snapshot wrapper.
+	if !db.backendReadValueLogCleanForSnapshotFastPath() {
+		_ = backendSnap.Close()
+		return nil
+	}
+	return backendSnap
 }
 
 // AcquireSnapshot returns a cached snapshot that includes queued memtable writes.

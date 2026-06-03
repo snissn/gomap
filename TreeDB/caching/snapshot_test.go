@@ -428,6 +428,57 @@ func TestAcquireBackendSnapshotFastPath_RejectsDirtyBackendValueLogState(t *test
 	defer snap.Close()
 }
 
+type dirtyDuringAcquireBackend struct {
+	BackendDB
+	snapper   backendSnapshotProvider
+	onAcquire func()
+}
+
+func (b *dirtyDuringAcquireBackend) AcquireSnapshot() *db.Snapshot {
+	if b.onAcquire != nil {
+		b.onAcquire()
+	}
+	return b.snapper.AcquireSnapshot()
+}
+
+func TestAcquireBackendSnapshotFastPath_RejectsValueLogDirtyRace(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer cached.Close()
+
+	cached.backendReadVlogDirtySeq.Store(1)
+	cached.backendReadVlogFlushedSeq.Store(1)
+	wrapped := &dirtyDuringAcquireBackend{
+		BackendDB: cached.backend,
+		snapper:   backend,
+		onAcquire: func() {
+			cached.backendReadVlogDirtySeq.Add(1)
+		},
+	}
+	cached.backend = wrapped
+	if snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {
+		_ = snap.Close()
+		t.Fatal("AcquireBackendSnapshotFastPath returned snapshot after value-log state became dirty during backend acquire")
+	}
+
+	cached.backendReadVlogFlushedSeq.Store(cached.backendReadVlogDirtySeq.Load())
+	wrapped.onAcquire = nil
+	snap := cached.AcquireBackendSnapshotFastPath()
+	if snap == nil {
+		t.Fatal("AcquireBackendSnapshotFastPath=nil after dirty race was marked flushed")
+	}
+	defer snap.Close()
+}
+
 func TestAcquireBackendSnapshotFastPath_RejectsPublishedRootState(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
