@@ -66,13 +66,12 @@ Manifest/control bytes stay separately labeled from referenced column asset
 bytes; the WAL-excluded label must not imply value-log or leaf-log bytes are
 ephemeral.
 
-Corrected 100k external context for #1955 reporting lives in
-`/tmp/jsonbench_2165_full_100k_compacted_final/report.json`: full-retained-json
-with the full prepared typed-column layout/owner, reconstruction valid,
-70,726,513 total bytes, 11,966,546 typed-column-part bytes, 13,667,330 column
-asset bytes, 4,194,304 primary-index bytes, and 49,639,046 WAL bytes. Treat
-that artifact as context for PR/report wording, not as a replacement for fresh
-normal-profile #1955 evidence.
+Corrected 100k external context preserved in the #1955/#2165 reporting thread:
+full-retained-json with the full prepared typed-column layout/owner,
+reconstruction valid, 70,726,513 total bytes, 11,966,546 typed-column-part
+bytes, 13,667,330 column asset bytes, 4,194,304 primary-index bytes, and
+49,639,046 WAL bytes. Treat those figures as context for PR/report wording, not
+as a replacement for fresh normal-profile #1955 evidence.
 
 ## Destructive consumer gates
 

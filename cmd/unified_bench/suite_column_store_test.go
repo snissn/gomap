@@ -147,6 +147,7 @@ func TestColumnStoreSuiteWALExcludedDurableStorageAccounting1954(t *testing.T) {
 	writeSizedFile(filepath.Join("column_assets", "events", "segment-000001.bin"), 13)
 	writeSizedFile(filepath.Join("wal", "commit-l0-000001.log"), 40)
 	writeSizedFile(filepath.Join("wal", "commit-lane-readme.log"), 17)
+	writeSizedFile(filepath.Join("wal", "commit-l+1-000001.log"), 23)
 	writeSizedFile(filepath.Join("wal", "commit-l0-000000.log"), 19)
 	writeSizedFile(filepath.Join("wal", "operator-note.txt"), 9)
 	writeSizedFile(filepath.Join("wal", "recovery-artifacts", "artifact.bin"), 7)

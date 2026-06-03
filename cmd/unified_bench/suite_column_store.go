@@ -2964,6 +2964,9 @@ func columnStoreSuiteCommandWALLogBytes(root string) (int64, error) {
 		if statErr != nil {
 			return 0, statErr
 		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
 		bytes += info.Size()
 	}
 	return bytes, nil
@@ -2978,12 +2981,27 @@ func columnStoreSuiteCommandWALLogName(name string) bool {
 	if len(parts) != 2 {
 		return false
 	}
+	if !columnStoreSuiteDecimalDigits(parts[0]) || !columnStoreSuiteDecimalDigits(parts[1]) {
+		return false
+	}
 	lane, err := strconv.Atoi(parts[0])
 	if err != nil || lane < 0 {
 		return false
 	}
 	seq, err := strconv.ParseUint(parts[1], 10, 64)
 	return err == nil && seq != 0
+}
+
+func columnStoreSuiteDecimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func columnStoreSuiteDurableStorageBytesWALExcluded(totalBytes, walBytes int64) int64 {
