@@ -1734,6 +1734,22 @@ func TestScanTreeDBLeafVLogCodecStats_UnknownBlockCodecNotAttributedToSnappy(t *
 	}
 }
 
+func TestScanTreeDBLeafVLogCodecStatsFile_RejectsOversizedBodyLength(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "value-l255-000001.log")
+	record := make([]byte, treeDBVlogScanHeaderSize)
+	record[4] = treeDBVlogScanVersion
+	record[5] = treeDBVlogScanRecordFlagGrouped
+	binary.LittleEndian.PutUint32(record[16:20], treeDBVlogScanMaxBodyLen+1)
+	if err := os.WriteFile(path, record, 0o644); err != nil {
+		t.Fatalf("WriteFile leaf log: %v", err)
+	}
+
+	err := scanTreeDBVLogCodecStatsFile(path, newTreeDBVlogCodecScanStats(), true)
+	if err == nil || !strings.Contains(err.Error(), "value-log body too large") {
+		t.Fatalf("expected oversized body error, got %v", err)
+	}
+}
+
 func testTreeDBVLogFrame(t *testing.T, k int, codec int, compressed bool, rawBytes int, storedBytes int) []byte {
 	t.Helper()
 	if k <= 0 {

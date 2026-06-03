@@ -135,7 +135,7 @@ def auto_frames(stats):
     parts = []
     for name in ("off", "dict", "block_snappy", "block_lz4"):
         v = stat(stats, f"treedb.cache.vlog_auto.frames.{name}")
-        if v:
+        if v and v != "0":
             frac = stat(stats, f"treedb.cache.vlog_auto.frames_frac.{name}")
             parts.append(f"{name}={v}" + (f"/{frac}" if frac else ""))
     return ";".join(parts)

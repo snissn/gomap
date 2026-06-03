@@ -4428,7 +4428,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if isTreeDBInstance(inst) {
 			leafStats, err := scanTreeDBLeafVLogCodecStats(inst.Dir, treeDBInstanceCountsAutoVlogCandidates(inst))
 			if err != nil {
-				return BenchRun{}, fmt.Errorf("scan %s leaf value-log codec stats: %w", inst.Name, err)
+				log.Printf("scan %s leaf value-log codec stats: %v", inst.Name, err)
 			}
 			if len(leafStats) > 0 {
 				if statsSnapshot == nil {
@@ -4725,6 +4725,7 @@ const (
 	treeDBVlogScanHeaderSize          = 20
 	treeDBVlogScanVersion             = 1
 	treeDBVlogScanFrameHeaderSize     = 12
+	treeDBVlogScanMaxBodyLen          = 64 << 20
 	treeDBVlogScanRecordFlagGrouped   = 1 << 0
 	treeDBVlogScanFrameVersion        = 1
 	treeDBVlogScanFrameFlagCompressed = 1 << 0
@@ -4859,6 +4860,13 @@ func scanTreeDBVLogCodecStatsFile(path string, scan *treeDBVlogCodecScanStats, c
 		}
 		if bodyLen < treeDBVlogScanFrameHeaderSize {
 			return fmt.Errorf("%s: value-log body too short: %d", path, bodyLen)
+		}
+		if bodyLen > treeDBVlogScanMaxBodyLen {
+			return fmt.Errorf("%s: value-log body too large: %d > %d", path, bodyLen, treeDBVlogScanMaxBodyLen)
+		}
+		maxInt := uint64(^uint(0) >> 1)
+		if uint64(bodyLen) > maxInt {
+			return fmt.Errorf("%s: value-log body too large for allocation: %d", path, bodyLen)
 		}
 		body := make([]byte, int(bodyLen))
 		if _, err := io.ReadFull(f, body); err != nil {
