@@ -109,9 +109,11 @@ func flagExplicit(name string) bool {
 const checkpointPostRunLabel = "post-run"
 
 type DBInstance struct {
-	Name    string
-	Wrapper kvstore.DB
-	Dir     string
+	Name                         string
+	Wrapper                      kvstore.DB
+	Dir                          string
+	TreeDBVlogCompressionMode    treedb.ValueLogCompressionMode
+	TreeDBVlogCompressionModeSet bool
 }
 
 type BenchConfig struct {
@@ -2194,7 +2196,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
-		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir})
+		vlogCompressionMode, vlogCompressionModeSet := selectedTreeDBVlogCompressionMode(name)
+		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir, TreeDBVlogCompressionMode: vlogCompressionMode, TreeDBVlogCompressionModeSet: vlogCompressionModeSet})
 	}
 	if len(instances) == 0 {
 		return BenchRun{}, fmt.Errorf("no DBs selected")
@@ -4423,7 +4426,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		if isTreeDBInstance(inst) {
-			leafStats, err := scanTreeDBLeafVLogCodecStats(inst.Dir, wrapperName)
+			leafStats, err := scanTreeDBLeafVLogCodecStats(inst.Dir, treeDBInstanceCountsAutoVlogCandidates(inst))
 			if err != nil {
 				return BenchRun{}, fmt.Errorf("scan %s leaf value-log codec stats: %w", inst.Name, err)
 			}
@@ -4573,6 +4576,34 @@ func isTreeDBInstance(inst *DBInstance) bool {
 		return true
 	}
 	return false
+}
+
+func selectedTreeDBVlogCompressionMode(dbName string) (treedb.ValueLogCompressionMode, bool) {
+	switch strings.ToLower(strings.TrimSpace(dbName)) {
+	case "treedb_vlog_off", "treedb_vlog_dict_off":
+		return treedb.ValueLogCompressionOff, true
+	case "treedb_vlog_block_snappy", "treedb_vlog_block_lz4":
+		return treedb.ValueLogCompressionBlock, true
+	case "treedb_vlog_dict":
+		return treedb.ValueLogCompressionDict, true
+	case "treedb_vlog_dict_on", "treedb_vlog_dict_on_entropy",
+		"treedb_vlog_dict_on_level_default", "treedb_vlog_dict_on_level_default_entropy",
+		"treedb_vlog_dict_on_level_better", "treedb_vlog_dict_on_level_better_entropy",
+		"treedb_vlog_dict_on_level_best", "treedb_vlog_dict_on_level_best_entropy":
+		return treedb.ValueLogCompressionDict, true
+	case "treedb_vlog_auto":
+		return treedb.ValueLogCompressionAuto, true
+	case treedbAdapterName:
+		mode, _, err := parseTreeDBVlogCompressionMode(*treedbVlogCompression)
+		if err == nil {
+			return mode, true
+		}
+	}
+	return treedb.ValueLogCompressionOff, false
+}
+
+func treeDBInstanceCountsAutoVlogCandidates(inst *DBInstance) bool {
+	return inst != nil && inst.TreeDBVlogCompressionModeSet && inst.TreeDBVlogCompressionMode == treedb.ValueLogCompressionAuto
 }
 
 func computeWalDiskUsage(dir string) (walDiskUsage, error) {
@@ -4775,7 +4806,7 @@ func treeDBLeafVLogScanStatKey(key string) string {
 	return "treedb.cache.vlog_leaf_scan." + strings.TrimPrefix(key, "treedb.cache.")
 }
 
-func scanTreeDBLeafVLogCodecStats(rootDir, dbName string) (map[string]string, error) {
+func scanTreeDBLeafVLogCodecStats(rootDir string, countAuto bool) (map[string]string, error) {
 	if strings.TrimSpace(rootDir) == "" {
 		return nil, nil
 	}
@@ -4790,7 +4821,7 @@ func scanTreeDBLeafVLogCodecStats(rootDir, dbName string) (map[string]string, er
 	sort.Strings(paths)
 	scan := newTreeDBVlogCodecScanStats()
 	for _, path := range paths {
-		if err := scanTreeDBVLogCodecStatsFile(path, scan, strings.Contains(dbName, "vlog=auto")); err != nil {
+		if err := scanTreeDBVLogCodecStatsFile(path, scan, countAuto); err != nil {
 			return nil, err
 		}
 	}

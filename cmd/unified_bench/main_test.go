@@ -1443,6 +1443,30 @@ func TestParseTreeDBVlogCompressionVariant(t *testing.T) {
 	}
 }
 
+func TestSelectedTreeDBVlogCompressionMode_DefaultTreeDBCountsAuto(t *testing.T) {
+	prev := *treedbVlogCompression
+	defer func() { *treedbVlogCompression = prev }()
+	*treedbVlogCompression = "default"
+
+	mode, ok := selectedTreeDBVlogCompressionMode("treedb")
+	if !ok || formatTreeDBVlogCompression(mode) != "auto" {
+		t.Fatalf("selected mode ok=%t mode=%s, want auto", ok, formatTreeDBVlogCompression(mode))
+	}
+	if !treeDBInstanceCountsAutoVlogCandidates(&DBInstance{TreeDBVlogCompressionMode: mode, TreeDBVlogCompressionModeSet: ok}) {
+		t.Fatalf("default treedb instance should count auto candidates")
+	}
+}
+
+func TestSelectedTreeDBVlogCompressionMode_VariantBlockDoesNotCountAuto(t *testing.T) {
+	mode, ok := selectedTreeDBVlogCompressionMode("treedb_vlog_block_lz4")
+	if !ok || formatTreeDBVlogCompression(mode) != "block" {
+		t.Fatalf("selected mode ok=%t mode=%s, want block", ok, formatTreeDBVlogCompression(mode))
+	}
+	if treeDBInstanceCountsAutoVlogCandidates(&DBInstance{TreeDBVlogCompressionMode: mode, TreeDBVlogCompressionModeSet: ok}) {
+		t.Fatalf("block variant should not count auto candidates")
+	}
+}
+
 func TestRenderKeptDirsString_SortsAndUsesWrapperNames(t *testing.T) {
 	got := renderKeptDirsString([]*DBInstance{
 		{Name: "zeta", Wrapper: &fixedNameDB{name: "B DB"}, Dir: "/tmp/b"},
@@ -1654,7 +1678,7 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 		t.Fatalf("WriteFile leaf log: %v", err)
 	}
 
-	stats, err := scanTreeDBLeafVLogCodecStats(dir, "TreeDB (vlog=auto)")
+	stats, err := scanTreeDBLeafVLogCodecStats(dir, true)
 	if err != nil {
 		t.Fatalf("scanTreeDBLeafVLogCodecStats: %v", err)
 	}
@@ -1698,7 +1722,7 @@ func TestScanTreeDBLeafVLogCodecStats_UnknownBlockCodecNotAttributedToSnappy(t *
 		t.Fatalf("WriteFile leaf log: %v", err)
 	}
 
-	stats, err := scanTreeDBLeafVLogCodecStats(dir, "TreeDB (vlog=auto)")
+	stats, err := scanTreeDBLeafVLogCodecStats(dir, true)
 	if err != nil {
 		t.Fatalf("scanTreeDBLeafVLogCodecStats: %v", err)
 	}
