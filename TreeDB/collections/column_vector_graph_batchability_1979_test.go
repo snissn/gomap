@@ -148,7 +148,7 @@ func assertColumnVectorGraphBenchmarkDebugStats1979(tb testing.TB, stats columnV
 	if stats.VisitedMarkHits+stats.VisitedMarkMisses != stats.VisitedMarkChecks || stats.VisitedMarkHits != stats.Layer0AlreadyVisitedSkips {
 		tb.Fatalf("stats=%+v want visited-mark hits/misses to reconcile", stats)
 	}
-	if stats.FrontierPushes != stats.Candidates || stats.TopKInsertAttempts != stats.Candidates || stats.TopKInsertSuccesses+stats.TopKInsertRejections != stats.TopKInsertAttempts {
+	if stats.FrontierPushes != stats.TopKInsertSuccesses || stats.TopKInsertAttempts != stats.Candidates || stats.TopKInsertSuccesses+stats.TopKInsertRejections != stats.TopKInsertAttempts {
 		tb.Fatalf("stats=%+v want frontier/top-k operation counts to reconcile with candidates", stats)
 	}
 	if stats.NeighborTileSize0+stats.NeighborTileSize1+stats.NeighborTileSize2To4+stats.NeighborTileSize5To8+stats.NeighborTileSize9To16+stats.NeighborTileSize17Plus != stats.NeighborTiles {

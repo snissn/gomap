@@ -197,6 +197,41 @@ func TestColumnVectorGraphWavefrontOptions1981(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphWavefrontRetainsEfFrontierBreadth1981(t *testing.T) {
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		t.Skip("wavefront ef-frontier regression requires mmap_direct prepared typed-column views")
+	}
+	shape := columnVectorGraphSearchTopologyParityShape2091{rows: 6, dims: 2, degree: 3, topK: 1, efSearch: 5, queryOrdinal: 5}
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-entry"), Vector: []float32{0.8, 0.6}, Adjacency: []uint32{1, 2, 3}},
+		{ID: []byte("doc-bridge-outside-topk"), Vector: []float32{0.5, 0.8660254}, Adjacency: []uint32{5}},
+		{ID: []byte("doc-decoy"), Vector: []float32{0.7, 0.71414286}},
+		{ID: []byte("doc-filler"), Vector: []float32{0.4, 0.9165151}},
+		{ID: []byte("doc-seed-filler"), Vector: []float32{0.3, 0.9539392}},
+		{ID: []byte("doc-best"), Vector: []float32{1, 0}},
+	}
+	closeFn, reader, query := openColumnVectorGraphSearchTopologyParityReader2091(t, shape, rows, columnVectorGraphSearchTopologyParityModeCurrentPrepared2091)
+	defer closeFn()
+
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{
+		TopK:           shape.topK,
+		EfSearch:       shape.efSearch,
+		ScoreBatchMode: columnVectorGraphScoreBatchModeIndexed,
+		TraversalMode:  columnVectorGraphNativeSearchTraversalModeWavefront,
+		WavefrontWidth: 3,
+	}, &scratch)
+	if err != nil {
+		t.Fatalf("wavefront SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 5 {
+		t.Fatalf("wavefront results=%+v want bridge outside topK retained under efSearch to reach best ordinal 5", got)
+	}
+	if stats.Candidates != uint64(shape.efSearch) || stats.WavefrontCandidatePops < 2 {
+		t.Fatalf("wavefront stats=%+v want efSearch-scored candidates and multiple frontier pops", stats)
+	}
+}
+
 func TestColumnVectorGraphWavefrontProcessesPartialWaveBeforeSeeding1981(t *testing.T) {
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 		t.Skip("partial-wave regression requires mmap_direct prepared typed-column views")
