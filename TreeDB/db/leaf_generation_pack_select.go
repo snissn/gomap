@@ -56,14 +56,18 @@ func SelectLeafGenerationPackCandidates(plan LeafGenerationPlan, opts LeafGenera
 
 func selectLeafGenerationPackCandidatesGreedy(plan LeafGenerationPlan, opts LeafGenerationPackSelectOptions) (LeafGenerationPackSelection, error) {
 	var out LeafGenerationPackSelection
-	rejectedOversize := false
+	rejectedOversizeActionable := false
 	var rejected leafGenerationPackSelectionThresholdRejections
 	for _, gen := range plan.Candidates {
 		if opts.MaxGenerations > 0 && len(out.GenerationIDs) >= opts.MaxGenerations {
 			break
 		}
 		if opts.MaxBytesToCopy > 0 && gen.BytesToCopy > 0 && out.BytesToCopy+gen.BytesToCopy > opts.MaxBytesToCopy {
-			rejectedOversize = true
+			if ok, flags := leafGenerationPackSelectionThresholdsOK(out.BytesDead+gen.BytesDead, out.BytesToCopy+gen.BytesToCopy, opts); ok {
+				rejectedOversizeActionable = true
+			} else {
+				rejected.merge(flags)
+			}
 			continue
 		}
 		if !opts.Force && opts.MinReclaimPerByteCopiedPPM > 0 {
@@ -76,7 +80,7 @@ func selectLeafGenerationPackCandidatesGreedy(plan LeafGenerationPlan, opts Leaf
 		}
 		appendLeafGenerationPackSelection(&out, gen)
 	}
-	return finalizeLeafGenerationPackSelection(out, opts, rejectedOversize, rejected)
+	return finalizeLeafGenerationPackSelection(out, opts, rejectedOversizeActionable, rejected)
 }
 
 func selectLeafGenerationPackCandidatesBounded(plan LeafGenerationPlan, opts LeafGenerationPackSelectOptions) (LeafGenerationPackSelection, error) {
@@ -86,7 +90,8 @@ func selectLeafGenerationPackCandidatesBounded(plan LeafGenerationPlan, opts Lea
 	}
 	frontiers := make([][]leafGenerationPackSelectionState, maxGenerations+1)
 	frontiers[0] = []leafGenerationPackSelectionState{{}}
-	rejectedOversize := false
+	rejectedOversizeActionable := false
+	var rejected leafGenerationPackSelectionThresholdRejections
 	for idx, gen := range plan.Candidates {
 		for selected := maxGenerations - 1; selected >= 0; selected-- {
 			if len(frontiers[selected]) == 0 {
@@ -96,7 +101,11 @@ func selectLeafGenerationPackCandidatesBounded(plan LeafGenerationPlan, opts Lea
 			for _, state := range frontiers[selected] {
 				tentativeCopy := state.bytesToCopy + gen.BytesToCopy
 				if opts.MaxBytesToCopy > 0 && tentativeCopy > opts.MaxBytesToCopy {
-					rejectedOversize = true
+					if ok, flags := leafGenerationPackSelectionThresholdsOK(state.bytesDead+gen.BytesDead, tentativeCopy, opts); ok {
+						rejectedOversizeActionable = true
+					} else {
+						rejected.merge(flags)
+					}
 					continue
 				}
 				indices := append(append([]int(nil), state.indices...), idx)
@@ -113,7 +122,6 @@ func selectLeafGenerationPackCandidatesBounded(plan LeafGenerationPlan, opts Lea
 	var (
 		bestState leafGenerationPackSelectionState
 		haveBest  bool
-		rejected  leafGenerationPackSelectionThresholdRejections
 	)
 	for selected := 1; selected <= maxGenerations; selected++ {
 		for _, state := range frontiers[selected] {
@@ -128,13 +136,13 @@ func selectLeafGenerationPackCandidatesBounded(plan LeafGenerationPlan, opts Lea
 		}
 	}
 	if !haveBest {
-		return finalizeLeafGenerationPackSelection(LeafGenerationPackSelection{}, opts, rejectedOversize, rejected)
+		return finalizeLeafGenerationPackSelection(LeafGenerationPackSelection{}, opts, rejectedOversizeActionable, rejected)
 	}
 	var out LeafGenerationPackSelection
 	for _, idx := range bestState.indices {
 		appendLeafGenerationPackSelection(&out, plan.Candidates[idx])
 	}
-	return finalizeLeafGenerationPackSelection(out, opts, rejectedOversize, rejected)
+	return finalizeLeafGenerationPackSelection(out, opts, rejectedOversizeActionable, rejected)
 }
 
 var errLeafGenerationPackSelectionThreshold = errors.New("leaf generation pack selection threshold")
@@ -206,9 +214,9 @@ func leafGenerationPackSelectionThresholdError(opts LeafGenerationPackSelectOpti
 	return leafGenerationPackSelectionThresholdErr{err: err}
 }
 
-func finalizeLeafGenerationPackSelection(out LeafGenerationPackSelection, opts LeafGenerationPackSelectOptions, rejectedOversize bool, rejected leafGenerationPackSelectionThresholdRejections) (LeafGenerationPackSelection, error) {
+func finalizeLeafGenerationPackSelection(out LeafGenerationPackSelection, opts LeafGenerationPackSelectOptions, rejectedOversizeActionable bool, rejected leafGenerationPackSelectionThresholdRejections) (LeafGenerationPackSelection, error) {
 	if len(out.GenerationIDs) == 0 {
-		if opts.MaxBytesToCopy > 0 && rejectedOversize {
+		if opts.MaxBytesToCopy > 0 && rejectedOversizeActionable {
 			return out, fmt.Errorf("leaf generation pack selection: no candidate generations fit max-bytes-to-copy=%d", opts.MaxBytesToCopy)
 		}
 		if err := leafGenerationPackSelectionThresholdError(opts, rejected); err != nil {
@@ -217,7 +225,7 @@ func finalizeLeafGenerationPackSelection(out LeafGenerationPackSelection, opts L
 		return out, fmt.Errorf("leaf generation pack selection: plan produced no candidate generations within limits")
 	}
 	if ok, thresholdRejected := leafGenerationPackSelectionThresholdsOK(out.BytesDead, out.BytesToCopy, opts); !ok {
-		if opts.MaxBytesToCopy > 0 && rejectedOversize {
+		if opts.MaxBytesToCopy > 0 && rejectedOversizeActionable {
 			return out, fmt.Errorf("leaf generation pack selection: no candidate generations fit max-bytes-to-copy=%d", opts.MaxBytesToCopy)
 		}
 		return out, leafGenerationPackSelectionThresholdError(opts, thresholdRejected)

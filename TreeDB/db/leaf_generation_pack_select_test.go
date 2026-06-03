@@ -176,6 +176,46 @@ func TestSelectLeafGenerationPackCandidates_ThresholdErrorIsSentinelAndUnwrapsDe
 	}
 }
 
+func TestSelectLeafGenerationPackCandidates_OversizeLowYieldCandidateIsThresholdDebt(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 40, BytesDead: 5, BytesLive: 95, BytesToCopy: 95},
+		},
+	}
+	_, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		MaxBytesToCopy:             50,
+		MinReclaimPerByteCopiedPPM: 100000,
+	})
+	if err == nil {
+		t.Fatal("expected low-yield threshold error")
+	}
+	if !errors.Is(err, errLeafGenerationPackSelectionThreshold) {
+		t.Fatalf("errors.Is(threshold)=false for oversize low-yield candidate: %v", err)
+	}
+}
+
+func TestSelectLeafGenerationPackCandidates_BoundedLowYieldCombinationsRemainThresholdDebt(t *testing.T) {
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 41, BytesDead: 5, BytesLive: 45, BytesToCopy: 45},
+			{GenerationID: 42, BytesDead: 5, BytesLive: 45, BytesToCopy: 45},
+		},
+	}
+	_, err := SelectLeafGenerationPackCandidates(plan, LeafGenerationPackSelectOptions{
+		MaxGenerations:             2,
+		MaxBytesToCopy:             50,
+		MinReclaimPerByteCopiedPPM: 500000,
+	})
+	if err == nil {
+		t.Fatal("expected low-yield threshold error")
+	}
+	if !errors.Is(err, errLeafGenerationPackSelectionThreshold) {
+		t.Fatalf("errors.Is(threshold)=false for bounded low-yield copy-bound combinations: %v", err)
+	}
+}
+
 func TestSelectLeafGenerationPackCandidates_PrioritizesOversizeErrorWhenNothingFits(t *testing.T) {
 	plan := LeafGenerationPlan{
 		Admission: leafGenerationPlanAdmissionEligible,
