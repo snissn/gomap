@@ -1236,7 +1236,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	nextSeed := 0
 	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront {
-		if err := r.searchLayer0Wavefront(plan, singleBlockView, query, queryInvNorm, topK, rowCount, candidateLimit, wavefrontWidth, candidateRows, hasCandidateRows, scratch, hotStats, &stats, &visitedCandidates, preparedMinimalCounters, debugCounters, countLoopEdges, &loopEdgeVisits, &nextSeed); err != nil {
+		if err := r.searchLayer0Wavefront(plan, singleBlockView, query, queryInvNorm, efSearch, rowCount, candidateLimit, wavefrontWidth, candidateRows, hasCandidateRows, scratch, hotStats, &stats, &visitedCandidates, preparedMinimalCounters, debugCounters, countLoopEdges, &loopEdgeVisits, &nextSeed); err != nil {
 			return nil, stats, err
 		}
 	} else {
@@ -1393,7 +1393,7 @@ func columnVectorGraphLayer0SearchShouldStop(candidate columnVectorGraphSearchCa
 	return candidate.score < top[len(top)-1].score
 }
 
-func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, topK int, rowCount int, candidateLimit uint64, wavefrontWidth int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, wavefrontStats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters, debugCounters *columnVectorGraphNativeSearchDebugCounters, countLoopEdges bool, loopEdgeVisits *uint64, nextSeed *int) error {
+func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, retainedCandidateLimit int, rowCount int, candidateLimit uint64, wavefrontWidth int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, wavefrontStats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters, debugCounters *columnVectorGraphNativeSearchDebugCounters, countLoopEdges bool, loopEdgeVisits *uint64, nextSeed *int) error {
 	if wavefrontWidth < 2 {
 		return errColumnVectorGraphNativeSearchWavefrontWidthInvalid
 	}
@@ -1420,7 +1420,7 @@ func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnV
 				}
 				*nextSeed = seed + 1
 				visitMarks[seed] = visitEpoch
-				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
+				if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, retainedCandidateLimit, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
 					return err
 				}
 				continue
@@ -1437,7 +1437,7 @@ func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnV
 			}
 			*nextSeed = seed + 1
 			visitMarks[seed] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, retainedCandidateLimit, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Seed); err != nil {
 				return err
 			}
 			continue
@@ -1502,7 +1502,7 @@ func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnV
 		if len(tile) == 0 {
 			continue
 		}
-		if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, topK, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
+		if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, retainedCandidateLimit, scratch, stats, visitedCandidates, preparedMinimal, debugCounters, columnVectorGraphNativeSearchScoreContextLayer0Neighbor); err != nil {
 			return err
 		}
 	}
