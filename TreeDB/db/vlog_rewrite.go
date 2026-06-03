@@ -853,8 +853,12 @@ func (db *DB) isLeafLogValueFile(id uint32, f *valuelog.File) bool {
 	// appender even when the DB-level default keeps outer leaves in pager pages.
 	// Ordinary value-log maintenance must still exclude those leaf_vlog files.
 	if f != nil && f.Path != "" && db != nil && db.dir != "" {
-		if filepath.Clean(filepath.Dir(f.Path)) == filepath.Clean(LeafLogDirPath(db.dir)) {
+		dir := filepath.Clean(filepath.Dir(f.Path))
+		if dir == filepath.Clean(LeafLogDirPath(db.dir)) {
 			return true
+		}
+		if dir == filepath.Clean(ValueLogDirPath(db.dir)) {
+			return false
 		}
 	}
 	if db == nil || (db.leafPageLog == nil && db.leafGenerationManifest == nil && !db.indexOuterLeavesInValueLog) {

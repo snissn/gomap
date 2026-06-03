@@ -32,6 +32,31 @@ func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
 	}
 }
 
+func TestValueOnlyValueLogFiles_KeepsReservedLaneInPrimaryValueLog(t *testing.T) {
+	dir := t.TempDir()
+	id, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 1)
+	if err != nil {
+		t.Fatalf("fileid: %v", err)
+	}
+	db := &DB{dir: dir, leafPageLog: replayInlineLeafPageLog{}}
+
+	valuePath := filepath.Join(ValueLogDirPath(dir), "value-l255-000001.log")
+	valueFiles := db.valueOnlyValueLogFiles(map[uint32]*valuelog.File{
+		id: {Path: valuePath},
+	})
+	if _, ok := valueFiles[id]; !ok {
+		t.Fatalf("primary value_vlog reserved-lane segment was filtered")
+	}
+
+	leafPath := filepath.Join(LeafLogDirPath(dir), "value-l255-000001.log")
+	leafFiles := db.valueOnlyValueLogFiles(map[uint32]*valuelog.File{
+		id: {Path: leafPath},
+	})
+	if _, ok := leafFiles[id]; ok {
+		t.Fatalf("leaf_vlog reserved-lane segment was not filtered")
+	}
+}
+
 func TestValueLogGC_IgnoresInlineLeafLogWhenDBDefaultUsesPagerLeaves(t *testing.T) {
 	dir := t.TempDir()
 
