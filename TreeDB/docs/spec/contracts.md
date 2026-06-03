@@ -25,17 +25,34 @@ Status:
 - `Get(key)` returns `(nil, nil)` when key is absent.
 - Returned bytes are safe copies.
 
-### 2.2 `GetUnsafe`
+### 2.2 `GetMany` and `GetManyView`
+
+- `GetMany(keys)` returns one entry per input key. Missing keys are returned as
+  `nil` entries with no error. Returned value bytes are safe copies.
+- `GetManyView(keys, fn)` calls `fn(index, key, value, found)` once for each
+  input key unless an error stops the call. The callback order is unspecified;
+  `index` identifies the input key.
+- `GetManyView` reports missing or tombstoned keys with `found=false` and
+  `value=nil`. Present empty values have `found=true` and `len(value)==0`.
+- `GetManyView` value slices are read-only views valid only until the callback
+  returns. Callers must copy a value before retaining it, mutating it, passing it
+  to another goroutine, or using it after the owning DB/snapshot/view operation
+  advances or closes.
+- `GetManyView` must not weaken `GetMany`: callers that need stable ownership
+  must continue to use `GetMany` or copy inside the callback.
+
+### 2.3 `GetUnsafe`
 
 - Public `DB.GetUnsafe` currently aliases `Get` behavior (safe copy).
-- Zero-copy reads are available through snapshot/iterator internals, not through this API.
+- Zero-copy reads are available through snapshot/iterator internals and the
+  callback-scoped `GetManyView` API.
 
-### 2.3 `Has`
+### 2.4 `Has`
 
 - `Has(key)` returns `(true, nil)` only for a visible non-deleted key.
 - Deleted/missing keys return `(false, nil)`.
 
-### 2.4 Cached-mode visibility
+### 2.5 Cached-mode visibility
 
 When the cached layer is enabled (default `treedb.Open` behavior):
 

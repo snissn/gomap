@@ -3550,6 +3550,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			for i := 0; i < batchSize; i++ {
 				keys[i] = keyBuf[i*8 : (i+1)*8]
 			}
+			mgv, hasManyView := db.(kvstore.MultiGetterView)
 			mg, hasMany := db.(kvstore.MultiGetter)
 			nextGuard := 0
 			for i := 0; i < cfg.Keys; {
@@ -3566,7 +3567,30 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				for j := 0; j < n; j++ {
 					encodeKey(keys[j], uint64(rng.Intn(cfg.Keys)))
 				}
-				if hasMany {
+				if hasManyView {
+					seen := 0
+					err := mgv.GetManyView(keys[:n], func(index int, _ []byte, value []byte, found bool) error {
+						seen++
+						if index < 0 || index >= n {
+							return fmt.Errorf("GetManyView callback index %d outside %d keys", index, n)
+						}
+						if cfg.ReadRequireHit {
+							if !found {
+								return fmt.Errorf("value missing at index %d", index)
+							}
+							if len(value) != cfg.ValueSize {
+								return fmt.Errorf("value length mismatch: got=%d want=%d", len(value), cfg.ValueSize)
+							}
+						}
+						return nil
+					})
+					if err != nil {
+						return 0, fmt.Errorf("random_read_batch: %w", err)
+					}
+					if cfg.ReadRequireHit && seen != n {
+						return 0, fmt.Errorf("random_read_batch: GetManyView returned %d callbacks for %d keys", seen, n)
+					}
+				} else if hasMany {
 					vals, err := mg.GetMany(keys[:n])
 					if err != nil {
 						return 0, fmt.Errorf("random_read_batch: %w", err)

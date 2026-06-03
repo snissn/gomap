@@ -752,6 +752,39 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 	return s.backend.GetUnsafe(key)
 }
 
+// GetManyView calls fn once for each key with a read-only value view. Values
+// are valid only until fn returns and must be copied before retaining.
+func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
+	if fn == nil {
+		return errors.New("caching snapshot: GetManyView nil callback")
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if s == nil || s.closed.Load() || s.backend == nil {
+		return backenddb.ErrClosed
+	}
+	for i, key := range keys {
+		val, err := s.GetUnsafe(key)
+		if err == tree.ErrKeyNotFound {
+			if err := fn(i, key, nil, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if len(val) == 0 {
+			val = rootDomainGetManyEmptyValue
+		}
+		if err := fn(i, key, val, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Snapshot) Has(key []byte) (bool, error) {
 	_, _, flags, found := s.lookupCachedRootDomainEntry(key)
 	if found {

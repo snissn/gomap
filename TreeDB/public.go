@@ -86,6 +86,13 @@ type getManyPlanner interface {
 	GetManyParallelPlan(keyCount int) (workers int, parallel bool)
 }
 
+// GetManyViewFunc receives one GetManyView result. The value slice is a
+// read-only view that is valid only until the callback returns (or until a
+// snapshot/view boundary documented by the caller closes, whichever comes
+// first). Copy value before retaining it. Missing/tombstoned keys are reported
+// with found=false and value=nil.
+type GetManyViewFunc = db.GetManyViewFunc
+
 // UpdateOp describes the write produced by an Update callback.
 type UpdateOp = db.UpdateOp
 
@@ -1387,6 +1394,21 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		return db.cached.GetMany(keys)
 	}
 	return db.backend.GetMany(keys)
+}
+
+// GetManyView calls fn once for each key with a read-only value view. The
+// callback may be invoked in any order; the index argument identifies the input
+// key. Values are valid only until fn returns and must be copied before
+// retaining. Missing keys are reported with found=false and value=nil. Existing
+// safe-copy GetMany semantics are unchanged.
+func (db *DB) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.GetManyView(keys, fn)
+	}
+	return db.backend.GetManyView(keys, fn)
 }
 
 // GetManyParallelPlan reports how TreeDB would schedule GetMany for the given

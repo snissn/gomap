@@ -24,6 +24,12 @@ const (
 
 var getManyEmptyValue = []byte{}
 
+// GetManyViewFunc receives one GetManyView result. The value slice is a
+// read-only view that is valid only until the callback returns; callers must
+// copy it before retaining it. Missing/tombstoned keys are reported with
+// found=false and value=nil.
+type GetManyViewFunc = tree.GetManyViewFunc
+
 func getManyArenaCap(keyCount int) int {
 	if keyCount <= 0 {
 		return 0
@@ -217,6 +223,42 @@ func (db *DB) getManyOnce(keys [][]byte) ([][]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// GetManyView calls fn once for each key with a read-only value view.
+// Missing keys are reported with found=false and value=nil. Callback values are
+// valid only until fn returns and must be copied before retaining. If fn returns
+// an error, iteration stops and that error is returned; callbacks already
+// invoked are not retried.
+func (db *DB) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	if fn == nil {
+		return errors.New("GetManyView: nil callback")
+	}
+	retryEpoch := db.readRetryRefreshEpoch.Load()
+	called := false
+	err := db.getManyViewOnce(keys, func(index int, key []byte, value []byte, found bool) error {
+		called = true
+		return fn(index, key, value, found)
+	})
+	if db.refreshOnValueLogFileNotFound(err) && !called {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
+			return refreshErr
+		}
+		return db.getManyViewOnce(keys, fn)
+	}
+	return err
+}
+
+func (db *DB) getManyViewOnce(keys [][]byte, fn GetManyViewFunc) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	snap, err := db.acquireSnapshotOrErr()
+	if err != nil {
+		return err
+	}
+	defer snap.Close()
+	return snap.GetManyView(keys, fn)
 }
 
 func (db *DB) getManySequential(snap *Snapshot, keys [][]byte, out [][]byte) error {

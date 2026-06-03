@@ -196,6 +196,12 @@ type slabKeyAwareCapability interface {
 	KeyAwareEnabled() bool
 }
 
+// GetManyViewFunc receives one GetManyView result. The value slice is a
+// read-only view that is valid only until the callback returns; callers must
+// copy it before retaining it. Missing/tombstoned keys are reported with
+// found=false and value=nil.
+type GetManyViewFunc func(index int, key []byte, value []byte, found bool) error
+
 // Optional capability gate for slab/leaf-ref checksum verification.
 //
 // Returning false allows tree leaf-ref readers to skip per-page checksum
@@ -845,6 +851,7 @@ type getManyLeafNodeLease struct {
 type getManyScratch struct {
 	probes        []getManyLeafProbe
 	groups        []getManyLeafGroup
+	present       []bool
 	groupByRef    map[page.ChildRef]int
 	groupByRefCap int
 }
@@ -877,6 +884,12 @@ func getGetManyScratch(keyCount int) *getManyScratch {
 	} else {
 		scratch.groups = scratch.groups[:0]
 	}
+	if cap(scratch.present) < keyCount || cap(scratch.present) > getManyScratchMaxReuseKeys {
+		scratch.present = make([]bool, keyCount)
+	} else {
+		scratch.present = scratch.present[:keyCount]
+		clear(scratch.present)
+	}
 	if scratch.groupByRef == nil || keyCount > getManyScratchMaxReuseKeys || scratch.groupByRefCap < keyCount {
 		scratch.groupByRef = make(map[page.ChildRef]int, keyCount)
 		scratch.groupByRefCap = keyCount
@@ -896,14 +909,18 @@ func putGetManyScratch(scratch *getManyScratch) {
 	if len(scratch.groups) > 0 {
 		clear(scratch.groups)
 	}
+	if len(scratch.present) > 0 {
+		clear(scratch.present)
+	}
 	if scratch.groupByRef != nil {
 		clear(scratch.groupByRef)
 	}
-	if cap(scratch.probes) > getManyScratchMaxReuseKeys || cap(scratch.groups) > getManyScratchMaxReuseKeys {
+	if cap(scratch.probes) > getManyScratchMaxReuseKeys || cap(scratch.groups) > getManyScratchMaxReuseKeys || cap(scratch.present) > getManyScratchMaxReuseKeys {
 		return
 	}
 	scratch.probes = scratch.probes[:0]
 	scratch.groups = scratch.groups[:0]
+	scratch.present = scratch.present[:0]
 	getManyScratchPool.Put(scratch)
 }
 
@@ -992,6 +1009,123 @@ func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte,
 		lease.Release()
 	}
 	return arena, nil
+}
+
+// GetManyView resolves keys and calls fn once per input key with a read-only
+// value view. The callback may be invoked in any order, but the index argument
+// always identifies the input key. Value views are valid only until fn returns;
+// callers must copy values they need after the callback. Missing or tombstoned
+// keys are reported with found=false and value=nil.
+func (t *Tree) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	treeGetManyCallsTotal.Add(1)
+	if fn == nil {
+		return errors.New("GetManyView: nil callback")
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if t == nil {
+		return errors.New("missing tree")
+	}
+	if len(keys) < getManyLeafGroupMinKeys {
+		treeGetManyFallbackCallsTotal.Add(1)
+		return t.getManyViewFallback(keys, fn)
+	}
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
+
+	scratch := getGetManyScratch(len(keys))
+	defer putGetManyScratch(scratch)
+	for i, key := range keys {
+		ref, groupable, err := t.findLeafRefForGetMany(key, verifyAlways)
+		if err == ErrKeyNotFound {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !groupable {
+			treeGetManyFallbackCallsTotal.Add(1)
+			return t.getManyViewFallback(keys, fn)
+		}
+
+		groupIdx, ok := scratch.groupByRef[ref]
+		if !ok {
+			groupIdx = len(scratch.groups)
+			scratch.groupByRef[ref] = groupIdx
+			scratch.groups = append(scratch.groups, getManyLeafGroup{ref: ref, first: -1})
+		}
+		probeIdx := len(scratch.probes)
+		scratch.probes = append(scratch.probes, getManyLeafProbe{
+			key:      key,
+			outIndex: i,
+			next:     scratch.groups[groupIdx].first,
+		})
+		scratch.groups[groupIdx].first = probeIdx
+		scratch.groups[groupIdx].count++
+		scratch.present[i] = true
+	}
+
+	if len(scratch.groups) > 0 {
+		treeGetManyGroupedCallsTotal.Add(1)
+		treeGetManyLeafGroupsTotal.Add(uint64(len(scratch.groups)))
+		treeGetManyLeafGroupItemsTotal.Add(uint64(len(scratch.probes)))
+		if saved := len(scratch.probes) - len(scratch.groups); saved > 0 {
+			treeGetManyLeafLoadsSavedTotal.Add(uint64(saved))
+		}
+
+		for i := range scratch.groups {
+			g := &scratch.groups[i]
+			var n node.Node
+			lease, err := t.loadLeafNodeForGetMany(&n, g.ref, verifyAlways)
+			if err != nil {
+				lease.Release()
+				return err
+			}
+			for probeIdx := g.first; probeIdx >= 0; probeIdx = scratch.probes[probeIdx].next {
+				probe := scratch.probes[probeIdx]
+				if err := t.visitLeafValueFromNode(&n, probe.key, probe.outIndex, fn); err != nil {
+					lease.Release()
+					return err
+				}
+			}
+			lease.Release()
+		}
+	}
+
+	for i, key := range keys {
+		if scratch.present[i] {
+			continue
+		}
+		if err := fn(i, key, nil, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Tree) getManyViewFallback(keys [][]byte, fn GetManyViewFunc) error {
+	for i, key := range keys {
+		val, err := t.GetUnsafe(key)
+		if err == ErrKeyNotFound {
+			if err := fn(i, key, nil, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if len(val) == 0 {
+			val = treeGetManyEmptyValue
+		}
+		if err := fn(i, key, val, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *Tree) getManyAppendFallback(keys [][]byte, out [][]byte, arena []byte) ([]byte, error) {
@@ -1148,6 +1282,47 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 		return getManyLeafNodeLease{}, err
 	}
 	return lease, nil
+}
+
+func (t *Tree) pointerValueViewForKey(key []byte, ptr page.ValuePtr) ([]byte, error) {
+	if t.slabKeyReader != nil {
+		return t.slabKeyReader.ReadUnsafeForKey(ptr, key)
+	}
+	if t.slabReader == nil {
+		return nil, errors.New("missing slab reader")
+	}
+	return t.slabReader.ReadUnsafe(ptr)
+}
+
+func (t *Tree) visitLeafValueFromNode(n *node.Node, key []byte, outIndex int, fn GetManyViewFunc) error {
+	idx, found, err := n.SearchLeaf(key)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fn(outIndex, key, nil, false)
+	}
+	val, ptr, flags, err := n.GetLeafValueView(idx)
+	if err != nil {
+		return err
+	}
+	if flags&node.FlagTombstone != 0 {
+		return fn(outIndex, key, nil, false)
+	}
+	if flags&node.FlagPointer != 0 {
+		val, err = t.pointerValueViewForKey(key, ptr)
+		if err != nil {
+			return err
+		}
+		if len(val) == 0 {
+			val = treeGetManyEmptyValue
+		}
+		return fn(outIndex, key, val, true)
+	}
+	if val == nil {
+		val = treeGetManyEmptyValue
+	}
+	return fn(outIndex, key, val, true)
 }
 
 func (t *Tree) appendLeafValueFromNode(n *node.Node, key []byte, out [][]byte, outIndex int, arena []byte) ([]byte, error) {

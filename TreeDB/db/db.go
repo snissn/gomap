@@ -2579,6 +2579,15 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	return s.tree.GetAppend(key, dst)
 }
 
+// GetManyView calls fn once for each key with a read-only value view.
+// Values are valid until fn returns and must be copied before retaining.
+func (s *Snapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	if s == nil || s.closed.Load() {
+		return ErrClosed
+	}
+	return s.tree.GetManyView(keys, fn)
+}
+
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
 // The slice is valid until the snapshot is closed.
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {

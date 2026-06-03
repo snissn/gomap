@@ -21,6 +21,18 @@ type MultiGetter interface {
 	GetMany(keys [][]byte) ([][]byte, error)
 }
 
+// MultiGetViewFunc receives one MultiGetterView result. The value slice is a
+// read-only view that is valid only until the callback returns; callers must
+// copy it before retaining. Missing keys are reported with found=false and
+// value=nil.
+type MultiGetViewFunc func(index int, key []byte, value []byte, found bool) error
+
+// MultiGetterView is an optional lower-allocation batched point-read capability
+// for callers that can consume each value before the callback returns.
+type MultiGetterView interface {
+	GetManyView(keys [][]byte, fn MultiGetViewFunc) error
+}
+
 // BatchReader is an optional capability for batched read execution where
 // callers only need completion/error, not materialized values.
 //
