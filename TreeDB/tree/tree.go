@@ -1107,8 +1107,9 @@ func (t *Tree) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
 }
 
 func (t *Tree) getManyViewFallback(keys [][]byte, fn GetManyViewFunc) error {
+	var scratch []byte
 	for i, key := range keys {
-		val, err := t.GetUnsafe(key)
+		out, err := t.GetAppend(key, scratch[:0])
 		if err == ErrKeyNotFound {
 			if err := fn(i, key, nil, false); err != nil {
 				return err
@@ -1118,11 +1119,17 @@ func (t *Tree) getManyViewFallback(keys [][]byte, fn GetManyViewFunc) error {
 		if err != nil {
 			return err
 		}
+		val := out
 		if len(val) == 0 {
 			val = treeGetManyEmptyValue
 		}
 		if err := fn(i, key, val, true); err != nil {
 			return err
+		}
+		if cap(out) <= 1<<20 {
+			scratch = out[:0]
+		} else {
+			scratch = nil
 		}
 	}
 	return nil
