@@ -13536,7 +13536,7 @@ func canCoalesceWALPointRecord(record logRecord) bool {
 // must preserve overwrite/delete ordering for same-key WAL replay, while RID
 // records must preserve value-log reachability fences.
 func (db *DB) nextWALCoalesceSeqLocked(l *lane) uint64 {
-	if l.walCoalesceSeq == 0 {
+	if l.walCoalesceSeq == 0 || db.nextCommitSeq.Load() != l.walCoalesceSeq {
 		l.walCoalesceSeq = db.nextCommitSeq.Add(1)
 	}
 	return l.walCoalesceSeq
