@@ -236,16 +236,56 @@ func TestColumnGraphScalarU8QuantizedRerankExactRanksCandidateSet1926(t *testing
 	}
 }
 
-func TestColumnGraphScalarU8QuantizedRerankWavefrontStopsSeedingAtRetainedLimit1926(t *testing.T) {
+func TestColumnGraphScalarU8QuantizedRerankTraversesEfSearchBeforeTrim1926(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		columnGraphQuantizedAssetRow1926(t, "doc-a", []float32{-1, 0, 0}),
+		columnGraphQuantizedAssetRow1926(t, "doc-b", []float32{1, 0, 0}),
+		columnGraphQuantizedAssetRow1926(t, "doc-c", []float32{0, -1, 0}),
+		columnGraphQuantizedAssetRow1926(t, "doc-target", []float32{0, 0, 1}),
+	}
+	query := []float32{0, 0, 1}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencyState1989(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	q := attachScalarU8QuantizedAssetForReader1926(t, reader, rows)
+
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{
+		TopK:                      1,
+		EfSearch:                  len(rows),
+		QueryMode:                 columnVectorGraphNativeSearchQueryModeQuantizedRerank,
+		QuantizedIndexName:        q.Name,
+		QuantizedRerankCandidates: 2,
+		OmitResultMaterialization: true,
+	}, &scratch)
+	if err != nil {
+		t.Fatalf("quantized_rerank SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 3 {
+		t.Fatalf("quantized_rerank results=%+v want later row 3 discovered by ef_search fallback seeding", got)
+	}
+	if stats.Candidates != uint64(len(rows)) || stats.QuantizedScoreCalls != uint64(len(rows)) {
+		t.Fatalf("quantized_rerank stats=%+v want traversal to score normalized ef_search candidate pool", stats)
+	}
+	if stats.QuantizedRerankCandidates != 2 || stats.QuantizedRerankExactScoreCalls != 2 {
+		t.Fatalf("quantized_rerank rerank stats=%+v want exact rerank of trimmed quantized shortlist only", stats)
+	}
+}
+
+func TestColumnGraphScalarU8QuantizedRerankWavefrontKeepsEfSearchTraversal1926(t *testing.T) {
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 		t.Skip("quantized_rerank wavefront regression requires mmap_direct prepared typed-column views")
 	}
 	shape := columnVectorGraphSearchTopologyParityShape2091{rows: 4, dims: 3, degree: 1, topK: 1, efSearch: 4, queryOrdinal: 0}
 	rows := []columnVectorGraphAssetRow{
-		columnGraphQuantizedWavefrontAssetRow1926(t, "doc-a", []float32{1, 0, 0}),
-		columnGraphQuantizedWavefrontAssetRow1926(t, "doc-b", []float32{0, 1, 0}),
-		columnGraphQuantizedWavefrontAssetRow1926(t, "doc-c", []float32{0, 0, 1}),
-		columnGraphQuantizedWavefrontAssetRow1926(t, "doc-d", []float32{-1, 0, 0}),
+		columnGraphQuantizedAssetRow1926(t, "doc-a", []float32{1, 0, 0}),
+		columnGraphQuantizedAssetRow1926(t, "doc-b", []float32{0, 1, 0}),
+		columnGraphQuantizedAssetRow1926(t, "doc-c", []float32{0, 0, 1}),
+		columnGraphQuantizedAssetRow1926(t, "doc-d", []float32{-1, 0, 0}),
 	}
 	closeFn, reader, query := openColumnVectorGraphSearchTopologyParityReader2091(t, shape, rows, columnVectorGraphSearchTopologyParityModeCurrentPrepared2091)
 	defer closeFn()
@@ -269,11 +309,11 @@ func TestColumnGraphScalarU8QuantizedRerankWavefrontStopsSeedingAtRetainedLimit1
 	if len(got) != 1 || got[0].Ordinal != 0 {
 		t.Fatalf("quantized_rerank wavefront results=%+v want exact-reranked top ordinal 0", got)
 	}
-	if stats.Candidates != 2 || stats.QuantizedScoreCalls != 2 {
-		t.Fatalf("quantized_rerank wavefront stats=%+v want no fallback seeding after retained shortlist reaches limit", stats)
+	if stats.Candidates != uint64(shape.efSearch) || stats.QuantizedScoreCalls != uint64(shape.efSearch) {
+		t.Fatalf("quantized_rerank wavefront stats=%+v want traversal to keep normalized ef_search candidate pool", stats)
 	}
 	if stats.QuantizedRerankCandidates != 2 || stats.QuantizedRerankExactScoreCalls != 2 {
-		t.Fatalf("quantized_rerank wavefront rerank stats=%+v want exact rerank of retained candidates only", stats)
+		t.Fatalf("quantized_rerank wavefront rerank stats=%+v want exact rerank of trimmed quantized shortlist only", stats)
 	}
 }
 
@@ -431,7 +471,7 @@ func vectorIndexSearchResultsMismatch1926(got []VectorIndexSearchResult, want []
 	return ""
 }
 
-func columnGraphQuantizedWavefrontAssetRow1926(tb testing.TB, id string, vector []float32) columnVectorGraphAssetRow {
+func columnGraphQuantizedAssetRow1926(tb testing.TB, id string, vector []float32) columnVectorGraphAssetRow {
 	tb.Helper()
 	invNorm, err := columnVectorGraphInvNorm(vector)
 	if err != nil {

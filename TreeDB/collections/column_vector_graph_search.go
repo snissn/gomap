@@ -1167,10 +1167,6 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		if quantizedRerankCandidateLimit > candidateRowCount {
 			quantizedRerankCandidateLimit = candidateRowCount
 		}
-		if efSearch < quantizedRerankCandidateLimit {
-			efSearch = quantizedRerankCandidateLimit
-		}
-		retainedCandidateLimit = quantizedRerankCandidateLimit
 	}
 	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront && wavefrontWidth > efSearch {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search wavefront width=%d exceeds normalized ef_search=%d: %w", r.def.Name, wavefrontWidth, efSearch, errColumnVectorGraphNativeSearchWavefrontWidthInvalid)
@@ -1416,7 +1412,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return scratch.results, stats, nil
 	}
 	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
-		if err := r.exactRerankQuantizedCandidates(plan, singleBlockView, query, queryInvNorm, topK, scratch, &stats); err != nil {
+		if err := r.exactRerankQuantizedCandidates(plan, singleBlockView, query, queryInvNorm, topK, quantizedRerankCandidateLimit, scratch, &stats); err != nil {
 			return nil, stats, err
 		}
 	} else if len(scratch.top) > topK {
@@ -1440,10 +1436,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	return scratch.results, stats, nil
 }
 
-func (r *columnVectorGraphPhysicalRowReader) exactRerankQuantizedCandidates(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
-	if len(scratch.top) == 0 || topK <= 0 {
+func (r *columnVectorGraphPhysicalRowReader) exactRerankQuantizedCandidates(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, topK int, rerankLimit int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	if len(scratch.top) == 0 || topK <= 0 || rerankLimit <= 0 {
 		scratch.top = scratch.top[:0]
 		return nil
+	}
+	if len(scratch.top) > rerankLimit {
+		scratch.top = scratch.top[:rerankLimit]
 	}
 	n := len(scratch.top)
 	scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, n)
