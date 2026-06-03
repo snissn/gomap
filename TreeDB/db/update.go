@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -80,9 +81,9 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 	}
 
 	for {
-		unlock := db.lockUpdateKey(key)
+		guard := db.lockUpdateKey(key)
 		old, err := db.getForUpdate(key)
-		unlock()
+		guard.Unlock()
 		if err != nil {
 			return err
 		}
@@ -99,39 +100,39 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 
-		unlock = db.lockUpdateKey(key)
+		guard = db.lockUpdateKey(key)
 		latest, err := db.getForUpdate(key)
 		if err != nil {
-			unlock()
+			guard.Unlock()
 			return err
 		}
 		if !sameUpdateValue(observed, latest) {
-			unlock()
+			guard.Unlock()
 			continue
 		}
 
 		switch result.Op {
 		case UpdateNoop:
-			unlock()
+			guard.Unlock()
 			return nil
 		case UpdateSet:
 			err = db.setPoint(key, result.Value, syncWrite)
-			unlock()
+			guard.Unlock()
 			return err
 		case UpdateDelete:
 			err = db.deletePoint(key, syncWrite)
-			unlock()
+			guard.Unlock()
 			return err
 		default:
-			unlock()
+			guard.Unlock()
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
 }
 
-func (db *DB) lockUpdateKey(key []byte) func() {
+func (db *DB) lockUpdateKey(key []byte) keyupdate.Guard {
 	if db == nil {
-		return func() {}
+		return keyupdate.Guard{}
 	}
 	return db.updateLocks.Lock(key)
 }

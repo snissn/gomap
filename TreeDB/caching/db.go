@@ -20543,8 +20543,8 @@ func (db *DB) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	guard := db.lockUpdateKey(key)
+	defer guard.Unlock()
 	return db.set(key, value, false)
 }
 
@@ -20556,8 +20556,8 @@ func (db *DB) SetSync(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	guard := db.lockUpdateKey(key)
+	defer guard.Unlock()
 	return db.set(key, value, true)
 }
 
@@ -20577,8 +20577,8 @@ func (db *DB) SetAfterCommandWALAppend(key, value []byte, appendCommand func() e
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	guard := db.lockUpdateKey(key)
+	defer guard.Unlock()
 	return db.setDirectAfterCommandWALAppend(key, value, appendCommand)
 }
 
@@ -20604,9 +20604,9 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	db.waitForCheckpoint()
 
 	for {
-		unlock := db.lockUpdateKey(key)
+		guard := db.lockUpdateKey(key)
 		old, err := db.getForUpdate(key)
-		unlock()
+		guard.Unlock()
 		if err != nil {
 			return err
 		}
@@ -20623,31 +20623,31 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 
-		unlock = db.lockUpdateKey(key)
+		guard = db.lockUpdateKey(key)
 		latest, err := db.getForUpdate(key)
 		if err != nil {
-			unlock()
+			guard.Unlock()
 			return err
 		}
 		if !sameUpdateValue(observed, latest) {
-			unlock()
+			guard.Unlock()
 			continue
 		}
 
 		switch result.Op {
 		case backenddb.UpdateNoop:
-			unlock()
+			guard.Unlock()
 			return nil
 		case backenddb.UpdateSet:
 			err = db.set(key, result.Value, syncWrite)
-			unlock()
+			guard.Unlock()
 			return err
 		case backenddb.UpdateDelete:
 			err = db.delete(key, syncWrite)
-			unlock()
+			guard.Unlock()
 			return err
 		default:
-			unlock()
+			guard.Unlock()
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
@@ -21056,8 +21056,8 @@ func (db *DB) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	guard := db.lockUpdateKey(key)
+	defer guard.Unlock()
 	return db.delete(key, false)
 }
 
@@ -21670,8 +21670,8 @@ func (db *DB) DeleteSync(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	guard := db.lockUpdateKey(key)
+	defer guard.Unlock()
 	return db.delete(key, true)
 }
 
@@ -21685,14 +21685,14 @@ func (db *DB) DeleteAfterCommandWALAppend(key []byte, appendCommand func() error
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
 	db.waitForCheckpoint()
-	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	guard := db.lockUpdateKey(key)
+	defer guard.Unlock()
 	return db.deleteDirectAfterCommandWALAppend(key, appendCommand)
 }
 
-func (db *DB) lockUpdateKey(key []byte) func() {
+func (db *DB) lockUpdateKey(key []byte) keyupdate.Guard {
 	if db == nil {
-		return func() {}
+		return keyupdate.Guard{}
 	}
 	return db.updateLocks.Lock(key)
 }
