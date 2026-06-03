@@ -54,6 +54,40 @@ var ownedReadScratchPool = sync.Pool{
 	},
 }
 
+// snapshotPool keeps the cached Snapshot wrapper off the heap-heavy per-key
+// read path. Snapshot.Close returns objects here after releasing backend and
+// memtable-view references; callers must not use a Snapshot after Close.
+var snapshotPool = sync.Pool{
+	New: func() any { return &Snapshot{} },
+}
+
+func getSnapshot() *Snapshot {
+	snap, _ := snapshotPool.Get().(*Snapshot)
+	if snap == nil {
+		snap = &Snapshot{}
+	}
+	snap.closed.Store(false)
+	return snap
+}
+
+func putSnapshot(snap *Snapshot) {
+	if snap == nil {
+		return
+	}
+	snap.db = nil
+	snap.view = nil
+	snap.backend = nil
+	snap.backendRootID = 0
+	snap.backendFallback = backendSnapshotLookup{}
+	snap.rootVersion = 0
+	snap.rootPointShards = nil
+	snap.rootSystem = rootDomainSnapshot{}
+	snap.rootIterator = rootDomainSnapshot{}
+	snap.publishedRoots = nil
+	snap.closed.Store(true)
+	snapshotPool.Put(snap)
+}
+
 func getOwnedReadScratch() *ownedReadScratch {
 	scratch, _ := ownedReadScratchPool.Get().(*ownedReadScratch)
 	if scratch == nil || cap(scratch.buf) != page.PageSize {
@@ -163,12 +197,12 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		if state := backendSnap.State(); state != nil {
 			backendRootID = state.RootPageID
 		}
-		return &Snapshot{
-			db:              db,
-			backend:         backendSnap,
-			backendRootID:   backendRootID,
-			backendFallback: backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendRootID},
-		}
+		snap := getSnapshot()
+		snap.db = db
+		snap.backend = backendSnap
+		snap.backendRootID = backendRootID
+		snap.backendFallback = backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendRootID}
+		return snap
 	}
 
 	view := db.retainMemtableView()
@@ -255,13 +289,12 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if state := backendSnap.State(); state != nil {
 		backendRootID = state.RootPageID
 	}
-	snap := &Snapshot{
-		db:              db,
-		view:            view,
-		backend:         backendSnap,
-		backendRootID:   backendRootID,
-		backendFallback: backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendRootID},
-	}
+	snap := getSnapshot()
+	snap.db = db
+	snap.view = view
+	snap.backend = backendSnap
+	snap.backendRootID = backendRootID
+	snap.backendFallback = backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendRootID}
 	snap.rootVersion = viewRootVersion
 	snap.rootPointShards = viewRootPointShards
 	snap.rootSystem = viewRootSystem
@@ -298,18 +331,11 @@ func (s *Snapshot) Close() error {
 	var err error
 	if s.backend != nil {
 		err = s.backend.Close()
-		s.backend = nil
 	}
 	if s.view != nil && s.db != nil {
 		s.db.releaseMemtableView(s.view)
-		s.view = nil
 	}
-	s.rootPointShards = nil
-	s.rootSystem = rootDomainSnapshot{}
-	s.rootIterator = rootDomainSnapshot{}
-	s.publishedRoots = nil
-	s.rootVersion = 0
-	s.db = nil
+	putSnapshot(s)
 	return err
 }
 
