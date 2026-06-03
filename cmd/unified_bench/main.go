@@ -4882,7 +4882,7 @@ func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto b
 			autoCandidate = "block_snappy"
 		default:
 			outerCodec = "unknown"
-			autoCandidate = "block_snappy"
+			autoCandidate = ""
 		}
 	}
 
@@ -4890,7 +4890,7 @@ func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto b
 	s.addCounters(s.PayloadKinds, "outer_leaf", k, rawPayloadBytes, storedPayloadBytes)
 	s.addCounters(s.PayloadSplits, "outer_leaf", k, rawPayloadBytes, storedPayloadBytes)
 	s.addCounters(s.OuterLeafCodecs, outerCodec, k, rawPayloadBytes, storedPayloadBytes)
-	if countAuto {
+	if countAuto && autoCandidate != "" {
 		s.addCounters(s.AutoCandidates, autoCandidate, k, rawPayloadBytes, storedPayloadBytes)
 	}
 	if writeMode == "block" && (outerCodec == "snappy" || outerCodec == "lz4") {
@@ -5521,6 +5521,7 @@ func renderTreeDBVlogCodecSummaryString(instances []*DBInstance, treeStats map[s
 				{label: "le_128", key: "treedb.cache.vlog_block.k.bucket." + codec + ".le_128"},
 			})
 		}
+		appendTreeDBLeafScanVlogSummaryLines(&dbSB, stats)
 		if dbSB.Len() == 0 {
 			continue
 		}
@@ -5529,6 +5530,39 @@ func renderTreeDBVlogCodecSummaryString(instances []*DBInstance, treeStats map[s
 		sb.WriteString(dbSB.String())
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func appendTreeDBLeafScanVlogSummaryLines(sb *strings.Builder, stats map[string]string) {
+	appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.auto.frames", []treeDBVlogSummaryMetric{
+		{label: "off", key: "treedb.cache.vlog_leaf_scan.auto.frames.off"},
+		{label: "dict", key: "treedb.cache.vlog_leaf_scan.auto.frames.dict"},
+		{label: "block_snappy", key: "treedb.cache.vlog_leaf_scan.auto.frames.block_snappy"},
+		{label: "block_lz4", key: "treedb.cache.vlog_leaf_scan.auto.frames.block_lz4"},
+	})
+	for _, mode := range []string{"off", "block", "dict"} {
+		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.write_mode."+mode, []treeDBVlogSummaryMetric{
+			{label: "frames", key: "treedb.cache.vlog_leaf_scan.write_mode.frames." + mode},
+			{label: "raw_bytes", key: "treedb.cache.vlog_leaf_scan.write_mode.raw_bytes." + mode},
+			{label: "stored_bytes", key: "treedb.cache.vlog_leaf_scan.write_mode.stored_bytes." + mode},
+			{label: "stored_ratio", key: "treedb.cache.vlog_leaf_scan.write_mode.stored_ratio." + mode},
+		})
+	}
+	for _, codec := range []string{"none", "snappy", "lz4", "unknown"} {
+		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.outer_leaf_codec."+codec, []treeDBVlogSummaryMetric{
+			{label: "frames", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames." + codec},
+			{label: "raw_bytes", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.raw_bytes." + codec},
+			{label: "stored_bytes", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.stored_bytes." + codec},
+			{label: "stored_ratio", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.stored_ratio." + codec},
+		})
+	}
+	for _, codec := range []string{"snappy", "lz4"} {
+		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.block.k."+codec, []treeDBVlogSummaryMetric{
+			{label: "count", key: "treedb.cache.vlog_leaf_scan.block.k.count." + codec},
+			{label: "avg", key: "treedb.cache.vlog_leaf_scan.block.k.avg." + codec},
+			{label: "max", key: "treedb.cache.vlog_leaf_scan.block.k.max." + codec},
+			{label: "ratio", key: "treedb.cache.vlog_leaf_scan.block.ratio." + codec},
+		})
+	}
 }
 
 func appendTreeDBVlogSummaryLine(sb *strings.Builder, stats map[string]string, label string, metrics []treeDBVlogSummaryMetric) bool {

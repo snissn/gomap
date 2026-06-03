@@ -1687,6 +1687,29 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 	}
 }
 
+func TestScanTreeDBLeafVLogCodecStats_UnknownBlockCodecNotAttributedToSnappy(t *testing.T) {
+	dir := t.TempDir()
+	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll leaf_vlog: %v", err)
+	}
+	file := testTreeDBVLogFrame(t, 2, 99, true, 200, 120)
+	if err := os.WriteFile(filepath.Join(leafDir, "value-l255-000001.log"), file, 0o644); err != nil {
+		t.Fatalf("WriteFile leaf log: %v", err)
+	}
+
+	stats, err := scanTreeDBLeafVLogCodecStats(dir, "TreeDB (vlog=auto)")
+	if err != nil {
+		t.Fatalf("scanTreeDBLeafVLogCodecStats: %v", err)
+	}
+	if got := stats["treedb.cache.vlog_outer_leaf_codec.frames.unknown"]; got != "1" {
+		t.Fatalf("unknown codec frames=%q want 1 (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.cache.vlog_auto.frames.block_snappy"]; got != "" {
+		t.Fatalf("unknown codec attributed to block_snappy=%q (stats=%#v)", got, stats)
+	}
+}
+
 func testTreeDBVLogFrame(t *testing.T, k int, codec int, compressed bool, rawBytes int, storedBytes int) []byte {
 	t.Helper()
 	if k <= 0 {
@@ -1748,6 +1771,28 @@ func TestMergeTreeDBLeafVLogCodecStats_PreservesAggregateStats(t *testing.T) {
 	}
 	if got := dst["treedb.cache.vlog_leaf_scan.write_mode.frames.block"]; got != "2" {
 		t.Fatalf("leaf-only frames missing: %q in %#v", got, dst)
+	}
+}
+
+func TestAppendTreeDBLeafScanVlogSummaryLines_IncludesNamespacedStats(t *testing.T) {
+	stats := map[string]string{
+		"treedb.cache.vlog_leaf_scan.write_mode.frames.block":        "2",
+		"treedb.cache.vlog_leaf_scan.write_mode.stored_ratio.block":  "0.500000",
+		"treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames.snappy": "2",
+		"treedb.cache.vlog_leaf_scan.block.k.count.snappy":           "2",
+		"treedb.cache.vlog_leaf_scan.block.k.max.snappy":             "8",
+	}
+	var sb strings.Builder
+	appendTreeDBLeafScanVlogSummaryLines(&sb, stats)
+	got := sb.String()
+	for _, want := range []string{
+		"vlog_leaf_scan.write_mode.block: frames=2 stored_ratio=0.500000",
+		"vlog_leaf_scan.outer_leaf_codec.snappy: frames=2",
+		"vlog_leaf_scan.block.k.snappy: count=2 max=8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q in:\n%s", want, got)
+		}
 	}
 }
 
