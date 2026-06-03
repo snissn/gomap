@@ -216,6 +216,12 @@ type leafLogPageUnsafeViewStateReader interface {
 	ReadLeafLogPageUnsafeViewWithState(ptr page.LeafLogPtr) ([]byte, LeafLogPageViewLease, bool, LeafLogPageReadState, error)
 }
 
+// LeafLogPageViewChecksumMarker can be implemented by a view lease to mark the
+// leased cache entry as page-checksum verified while the view lock is still held.
+type LeafLogPageViewChecksumMarker interface {
+	MarkLeafLogPageViewChecksumVerified()
+}
+
 // Optional marker used after a checksum-enabled tree validation succeeds. Cache
 // implementations must fail closed and only mark entries that were populated
 // from checksum-verified value-log bytes.
@@ -717,8 +723,14 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						}
 						return nil, page.ValuePtr{}, 0, false, err
 					}
-					if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent && leafViewLease == nil {
-						t.markLeafLogPageChecksumVerified(ptr)
+					if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
+						if leafViewLease != nil {
+							if marker, ok := leafViewLease.(LeafLogPageViewChecksumMarker); ok {
+								marker.MarkLeafLogPageViewChecksumVerified()
+							}
+						} else {
+							t.markLeafLogPageChecksumVerified(ptr)
+						}
 					}
 				}
 			}
@@ -1352,9 +1364,15 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 		}
 		if ok {
 			lease.lease = leafLease
-			if _, err := validateLeafLogNodeIntoWithState(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false, state); err != nil {
+			verifiedNow, err := validateLeafLogNodeIntoWithState(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false, state)
+			if err != nil {
 				lease.Release()
 				return getManyLeafNodeLease{}, err
+			}
+			if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
+				if marker, ok := leafLease.(LeafLogPageViewChecksumMarker); ok {
+					marker.MarkLeafLogPageViewChecksumVerified()
+				}
 			}
 			return lease, nil
 		}
