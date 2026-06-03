@@ -98,7 +98,7 @@ func (r valueReader) ReadLeafLogPageUnsafeToWithState(ptr page.LeafLogPtr, dst [
 	}
 	if r.leafPageCache != nil && cap(dst) >= page.PageSize {
 		if val, usedDst, state, ok := r.leafPageCache.getToWithState(ptr, dst); ok {
-			return val, usedDst, tree.LeafLogPageReadState{RecordChecksumVerified: state.RecordChecksumVerified, PageChecksumVerified: state.PageChecksumVerified}, nil
+			return val, usedDst, tree.LeafLogPageReadState{RecordChecksumVerified: state.RecordChecksumVerified, CacheEntryPresent: state.CacheEntryPresent, PageChecksumVerified: state.PageChecksumVerified}, nil
 		}
 	}
 	val, usedDst, err := r.ReadUnsafeTo(ptr.ValuePtr(), dst)
@@ -106,10 +106,11 @@ func (r valueReader) ReadLeafLogPageUnsafeToWithState(ptr page.LeafLogPtr, dst [
 		return nil, false, tree.LeafLogPageReadState{}, err
 	}
 	recordChecksumVerified := r.ReadChecksumEnabled()
+	cacheEntryPresent := false
 	if r.leafPageCache != nil && cap(dst) >= page.PageSize && len(val) == page.PageSize {
-		r.leafPageCache.storeReadMiss(ptr, val, recordChecksumVerified)
+		cacheEntryPresent = r.leafPageCache.storeReadMiss(ptr, val, recordChecksumVerified)
 	}
-	return val, usedDst, tree.LeafLogPageReadState{RecordChecksumVerified: recordChecksumVerified}, nil
+	return val, usedDst, tree.LeafLogPageReadState{RecordChecksumVerified: recordChecksumVerified, CacheEntryPresent: cacheEntryPresent}, nil
 }
 
 func (r valueReader) ReadLeafLogPageUnsafeView(ptr page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, bool, error) {
@@ -125,7 +126,7 @@ func (r valueReader) ReadLeafLogPageUnsafeViewWithState(ptr page.LeafLogPtr) ([]
 		return nil, nil, false, tree.LeafLogPageReadState{}, nil
 	}
 	data, release, state, ok := r.leafPageCache.getViewLockedWithState(ptr)
-	return data, release, ok, tree.LeafLogPageReadState{RecordChecksumVerified: state.RecordChecksumVerified, PageChecksumVerified: state.PageChecksumVerified}, nil
+	return data, release, ok, tree.LeafLogPageReadState{RecordChecksumVerified: state.RecordChecksumVerified, CacheEntryPresent: state.CacheEntryPresent, PageChecksumVerified: state.PageChecksumVerified}, nil
 }
 
 func (r valueReader) MarkLeafLogPageChecksumVerified(ptr page.LeafLogPtr) {

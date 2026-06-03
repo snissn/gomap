@@ -118,7 +118,7 @@ func (r *statefulLeafLogPageReader) MarkLeafLogPageChecksumVerified(ptr page.Lea
 
 func TestTreeLeafLogVerifiedCacheStateSkipsChecksum(t *testing.T) {
 	before := OuterLeafReadStatsSnapshot()
-	reader := &statefulLeafLogPageReader{mapValueReader: newMapValueReader(), state: LeafLogPageReadState{RecordChecksumVerified: true}}
+	reader := &statefulLeafLogPageReader{mapValueReader: newMapValueReader(), state: LeafLogPageReadState{RecordChecksumVerified: true, CacheEntryPresent: true}}
 	leafData := make([]byte, page.PageSize)
 	leaf := node.NewNode(leafData)
 	leaf.SetType(page.PageTypeLeaf)
@@ -167,7 +167,7 @@ func TestTreeLeafLogVerifiedCacheStateSkipsChecksum(t *testing.T) {
 }
 
 func TestTreeLeafLogUnverifiedStateStillChecksChecksum(t *testing.T) {
-	reader := &statefulLeafLogPageReader{mapValueReader: newMapValueReader(), state: LeafLogPageReadState{RecordChecksumVerified: true}}
+	reader := &statefulLeafLogPageReader{mapValueReader: newMapValueReader(), state: LeafLogPageReadState{RecordChecksumVerified: true, CacheEntryPresent: true}}
 	leafData := make([]byte, page.PageSize)
 	leaf := node.NewNode(leafData)
 	leaf.SetType(page.PageTypeLeaf)

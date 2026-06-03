@@ -182,11 +182,14 @@ type leafLogPageUnsafeToReader interface {
 
 // LeafLogPageReadState describes validation state carried by a leaf-log page
 // read. RecordChecksumVerified is true when the bytes were produced by a
-// checksum-enabled value-log read. PageChecksumVerified is true only when those
-// bytes also had the B-tree page checksum validated successfully before being
-// cached as verified.
+// checksum-enabled value-log read. CacheEntryPresent is true when the reader has
+// an entry for this leaf pointer that may be marked after successful page
+// checksum validation. PageChecksumVerified is true only when cached bytes had
+// the B-tree page checksum validated successfully before being cached as
+// verified.
 type LeafLogPageReadState struct {
 	RecordChecksumVerified bool
+	CacheEntryPresent      bool
 	PageChecksumVerified   bool
 }
 
@@ -430,7 +433,7 @@ func (t *Tree) loadLeafLogNodeViewInto(dst *node.Node, ptr page.LogRecordRef, it
 	if err != nil {
 		return err
 	}
-	if verifiedNow && state.RecordChecksumVerified {
+	if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
 		t.markLeafLogPageChecksumVerified(ptr)
 	}
 	return nil
@@ -714,7 +717,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						}
 						return nil, page.ValuePtr{}, 0, false, err
 					}
-					if verifiedNow && state.RecordChecksumVerified && leafViewLease == nil {
+					if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent && leafViewLease == nil {
 						t.markLeafLogPageChecksumVerified(ptr)
 					}
 				}
@@ -1425,7 +1428,7 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 		lease.Release()
 		return getManyLeafNodeLease{}, err
 	}
-	if verifiedNow && state.RecordChecksumVerified {
+	if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
 		t.markLeafLogPageChecksumVerified(ptr)
 	}
 	return lease, nil

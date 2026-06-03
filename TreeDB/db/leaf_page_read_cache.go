@@ -177,9 +177,9 @@ func (c *leafPageReadCache) storeWithRecordChecksumState(ptr page.LeafLogPtr, le
 // this keeps one-off sparse reads from copying 4KiB pages into the cache and
 // evicting recently-written leaves that are likely to be reused during
 // publish/apply.
-func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) {
+func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) bool {
 	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
-		return
+		return false
 	}
 	key := newLeafPageReadCacheKey(ptr)
 	slot := &c.slots[c.slotIndex(key)]
@@ -188,7 +188,7 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, 
 	epoch, repeated := slot.observeReadMissCandidate(fp)
 	if !repeated {
 		c.readMissAdmissionSkips.Add(1)
-		return
+		return false
 	}
 
 	// Parallel read misses can race: another goroutine may populate this exact
@@ -197,12 +197,12 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, 
 	if slot.mu.TryRLock() {
 		if slot.valid && slot.key == key {
 			slot.mu.RUnlock()
-			return
+			return true
 		}
 		slot.mu.RUnlock()
 	} else {
 		c.readMissAdmissionSkips.Add(1)
-		return
+		return false
 	}
 
 	// Read-miss cache admission is best effort. If this slot is currently under
@@ -210,11 +210,11 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, 
 	// in the random-read miss hot path.
 	if !slot.mu.TryLock() {
 		c.readMissAdmissionSkips.Add(1)
-		return
+		return false
 	}
 	if slot.valid && slot.key == key {
 		slot.mu.Unlock()
-		return
+		return true
 	}
 	if !slot.readMissCandidateStillCurrent(fp, epoch) {
 		// A writer/read race can repurpose this slot between miss observation and
@@ -222,12 +222,13 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, 
 		// candidate churn under concurrent misses.
 		slot.mu.Unlock()
 		c.readMissAdmissionCandidateSkips.Add(1)
-		return
+		return false
 	}
 	result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
 	slot.mu.Unlock()
 	c.readMissAdmissionStores.Add(1)
 	c.recordStore(result, key, recordChecksumVerified)
+	return true
 }
 
 type leafPageReadCacheStoreResult struct {
@@ -375,7 +376,7 @@ func (c *leafPageReadCache) get(ptr page.LeafLogPtr) ([]byte, bool) {
 		c.misses.Add(1)
 		return nil, false
 	}
-	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, PageChecksumVerified: slot.pageChecksumVerified}
+	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified}
 	data := cloneLeafPageReadCacheData(slot.data)
 	slot.mu.RUnlock()
 	c.recordHitState(state)
@@ -389,6 +390,7 @@ func (c *leafPageReadCache) getTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool
 
 type leafPageReadCacheState struct {
 	RecordChecksumVerified bool
+	CacheEntryPresent      bool
 	PageChecksumVerified   bool
 }
 
@@ -404,7 +406,7 @@ func (c *leafPageReadCache) getToWithState(ptr page.LeafLogPtr, dst []byte) ([]b
 		c.misses.Add(1)
 		return nil, false, leafPageReadCacheState{}, false
 	}
-	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, PageChecksumVerified: slot.pageChecksumVerified}
+	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified}
 	if cap(dst) >= len(slot.data) {
 		out := dst[:len(slot.data)]
 		copy(out, slot.data)
@@ -434,7 +436,7 @@ func (c *leafPageReadCache) getViewLockedWithState(ptr page.LeafLogPtr) ([]byte,
 		slot.mu.RUnlock()
 		return nil, nil, leafPageReadCacheState{}, false
 	}
-	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, PageChecksumVerified: slot.pageChecksumVerified}
+	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified}
 	data := slot.data
 	c.recordHitState(state)
 	return data, slot, state, true

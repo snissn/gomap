@@ -1042,7 +1042,7 @@ func (it *Iterator) loadNodeRef(ref page.ChildRef) (node.Node, error) {
 			it.leafRefScratch = it.leafRefScratch[:0]
 			return node.Node{}, err
 		}
-		if verifiedNow && state.RecordChecksumVerified {
+		if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
 			it.tree.markLeafLogPageChecksumVerified(ptr)
 		}
 		if usedDst {
