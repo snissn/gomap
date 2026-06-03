@@ -49,6 +49,48 @@ func TestReopenVerify_DurableWALCoalescedInlineWrites(t *testing.T) {
 	}
 }
 
+func TestReopenVerify_DurableWALForcedValueLogPointers(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileDurable, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
+	opts.ValueLog.PointerThreshold = 1
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	want := map[string][]byte{}
+	for i := 0; i < 128; i++ {
+		key := []byte(fmt.Sprintf("forced-pointer-%04d", i))
+		value := bytes.Repeat([]byte{byte(i)}, 128)
+		if err := db.SetSync(key, value); err != nil {
+			_ = db.Close()
+			t.Fatalf("set sync %q: %v", key, err)
+		}
+		want[string(key)] = bytes.Clone(value)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	for key, value := range want {
+		got, err := reopened.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("get %q after reopen: %v", key, err)
+		}
+		if !bytes.Equal(got, value) {
+			t.Fatalf("get %q mismatch: got %d bytes want %d", key, len(got), len(value))
+		}
+	}
+}
+
 func TestReopenVerify_DurableWALCoalescedInlineAroundPointerRecords(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileDurable, dir)
