@@ -403,6 +403,19 @@ func TestParseConfigValuePointerThreshold(t *testing.T) {
 	}
 }
 
+func TestParseConfigSearchProfilingFlags(t *testing.T) {
+	cfg, err := parseConfig([]string{"-search-cpu-profile-dir", "/tmp/search-profiles", "-search-with-buffer"})
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.searchCPUProfileDir != "/tmp/search-profiles" {
+		t.Fatalf("search CPU profile dir=%q want /tmp/search-profiles", cfg.searchCPUProfileDir)
+	}
+	if !cfg.searchWithBuffer {
+		t.Fatal("searchWithBuffer=false want true")
+	}
+}
+
 func TestParseConfigLeafGenerationSegmentTarget(t *testing.T) {
 	cfg, err := parseConfig([]string{"-leaf-generation-segment-target", "8388608"})
 	if err != nil {

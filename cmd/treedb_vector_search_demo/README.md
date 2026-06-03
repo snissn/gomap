@@ -24,7 +24,10 @@ serial and parallel search metrics return IDs/scores and do not time final
 document fetch, reconstruction, projection, or serialization. Document reads in
 validation are correctness checks, not the preferred vector response-shape
 evidence; use `ProjectionOrientedVectorDocumentFetchPreset` in collection/vector
-APIs when timing projected documents without embeddings.
+APIs when timing projected documents without embeddings. For TreeDB column-graph
+search, `-search-with-buffer` switches this no-document phase to
+`VectorIndexSearcher.SearchWithBuffer`, which is useful when profiling the
+retrieval/scoring path without response-owned result allocation overhead.
 
 `CompactStorageFull` is intentionally used instead of manually chaining
 maintenance calls. It is TreeDB's canonical full storage compaction path:
@@ -102,6 +105,12 @@ Useful flags:
   run.
 - `-disable-exact-fallback=false`: allow exact fallback during benchmark
   searches.
+- `-search-cpu-profile-dir PATH`: emit search-only Go CPU profiles for each
+  backend/concurrency benchmark, excluding insert, rebuild, validation, and
+  reopen setup. If multiple cases share the same backend/concurrency label, the
+  harness appends a numeric suffix instead of overwriting earlier profiles.
+- `-search-with-buffer`: for column-graph no-document searches, use the reusable
+  `VectorIndexSearchBuffer` API instead of response-owned results.
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
   queries; set `-min-recall=0` when disabling validation with
   `-validate-queries=0`.
