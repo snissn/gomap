@@ -18,17 +18,20 @@ const (
 	columnVectorIndexStateAssetRoleNormalizedVectors = "normalized_vectors"
 	columnVectorIndexStateAssetRoleRowRefs           = "row_refs"
 	columnVectorIndexStateAssetRoleDocumentIDs       = "document_ids"
+	columnVectorIndexStateAssetRoleQuantizedCodes    = "quantized_codes"
 
 	columnVectorIndexStateLogicalTypeUint32List    = "uint32_list"
 	columnVectorIndexStateLogicalTypeInt64         = "int64"
 	columnVectorIndexStateLogicalTypeFloat32       = "float32"
 	columnVectorIndexStateLogicalTypeFloat32Vector = "float32_vector"
 	columnVectorIndexStateLogicalTypeBytes         = "bytes"
+	columnVectorIndexStateLogicalTypeByteVector    = "byte_vector"
 	columnVectorIndexStateEncodingRawUint32List    = "raw_uint32_offsets_list"
 	columnVectorIndexStateEncodingRawInt64         = "raw_int64"
 	columnVectorIndexStateEncodingRawFloat32       = "raw_float32"
 	columnVectorIndexStateEncodingRawFloat32Vector = "raw_float32_vector"
 	columnVectorIndexStateEncodingRawBytesOffsets  = "raw_bytes_offsets"
+	columnVectorIndexStateEncodingRawFixedBytes    = "raw_fixed_bytes"
 )
 
 var columnVectorIndexStateRecordPrefixBytes = []byte(columnVectorIndexStateRecordPrefix)

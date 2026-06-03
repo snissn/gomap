@@ -10,13 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
-const (
-	columnVectorIndexStateAssetRoleQuantizedCodes = "quantized_codes"
-	columnVectorIndexStateLogicalTypeByteVector   = "byte_vector"
-	columnVectorIndexStateEncodingRawFixedBytes   = "raw_fixed_bytes"
-
-	columnVectorGraphQuantizedCodesColumnName = "codes"
-)
+const columnVectorGraphQuantizedCodesColumnName = "codes"
 
 type columnVectorGraphPreparedQuantizedAsset struct {
 	Definition QuantizedVectorIndexDefinition
