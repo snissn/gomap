@@ -71,6 +71,10 @@ type Printer interface {
 }
 
 // Iterator is a forward-only iterator over key/value pairs.
+//
+// Key()/Value() may return read-only views that are valid only until the next
+// Next()/Close() on the same iterator. KeyCopy()/ValueCopy() return
+// caller-owned stable bytes, reusing dst capacity when possible.
 type Iterator interface {
 	Valid() bool
 	Next()

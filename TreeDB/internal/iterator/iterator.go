@@ -17,7 +17,8 @@ type UnsafeIterator interface {
 	// same lifetime rules as UnsafeKey/UnsafeValue.
 	Key() []byte
 	Value() []byte
-	// KeyCopy/ValueCopy append the current key/value into dst and return it.
+	// KeyCopy/ValueCopy copy the current key/value into dst[:0] and return
+	// caller-owned bytes that remain stable after iterator movement/close.
 	KeyCopy(dst []byte) []byte
 	ValueCopy(dst []byte) []byte
 	IsDeleted() bool // True if the current item is a tombstone

@@ -84,8 +84,9 @@ For WAL replay, commit-log batches are treated atomically at replay boundaries.
 ### 4.3 Iterator lifetime
 
 - Iterators are point-in-time views.
-- `Key()`/`Value()` data is valid until next movement/close.
-- `KeyCopy`/`ValueCopy` provide stable copies.
+- `Key()`/`Value()` data is a read-only view valid only until next movement/close.
+- Callers must not retain or mutate `Key()`/`Value()` views across iterator movement.
+- `KeyCopy`/`ValueCopy` provide caller-owned stable copies that may be retained after movement/close.
 - Iterator must be closed.
 
 ### 4.4 Cached-mode iterator semantics
