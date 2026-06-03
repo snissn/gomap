@@ -15,6 +15,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/snissn/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
@@ -1826,6 +1827,105 @@ func TestValueLogCorruptCRC(t *testing.T) {
 	if !errors.Is(err, ErrCorrupt) {
 		_ = reader.Close()
 		t.Fatalf("expected corrupt error, got %v", err)
+	}
+	_ = reader.Close()
+}
+
+func TestValueLogGroupedFrameCRCMatchesContiguousRecordBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+	fileID := page.ValueLogFileID(1)
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("bravo-bravo")},
+	}
+	if _, _, err := writer.AppendFrameWithStatsInto(0, nil, records, make([]page.ValuePtr, len(records))); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append grouped frame: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if len(data) <= HeaderSize {
+		t.Fatalf("unexpected record size %d", len(data))
+	}
+	got := binary.LittleEndian.Uint32(data[0:4])
+	if want := crc.Checksum(data[4:]); got != want {
+		t.Fatalf("stored crc=%08x want contiguous checksum=%08x", got, want)
+	}
+
+	data[5] ^= 0x40 // mutate grouped header bytes that are covered by the CRC.
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("write corrupt file: %v", err)
+	}
+	reader, err := NewReader(path, fileID)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	_, _, _, err = reader.ReadNext()
+	if !errors.Is(err, ErrCorrupt) {
+		_ = reader.Close()
+		t.Fatalf("expected corrupt header error, got %v", err)
+	}
+	_ = reader.Close()
+}
+
+func TestValueLogCompressedGroupedFrameCRCMatchesContiguousRecordBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+	fileID := page.ValueLogFileID(1)
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	records := []Record{{RID: 1, Value: bytes.Repeat([]byte("A"), 4096)}}
+	if _, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, make([]page.ValuePtr, len(records))); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append compressed grouped frame: %v", err)
+	} else if !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected block-compressed frame to be kept: %+v", stats)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if len(data) <= HeaderSize {
+		t.Fatalf("unexpected record size %d", len(data))
+	}
+	got := binary.LittleEndian.Uint32(data[0:4])
+	if want := crc.Checksum(data[4:]); got != want {
+		t.Fatalf("stored crc=%08x want contiguous checksum=%08x", got, want)
+	}
+
+	data[len(data)-1] ^= 0x01
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("write corrupt file: %v", err)
+	}
+	reader, err := NewReader(path, fileID)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	_, _, _, err = reader.ReadNext()
+	if !errors.Is(err, ErrCorrupt) {
+		_ = reader.Close()
+		t.Fatalf("expected corrupt compressed payload error, got %v", err)
 	}
 	_ = reader.Close()
 }

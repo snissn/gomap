@@ -267,10 +267,46 @@ func (w *Writer) Append(record Record) error {
 		return ErrRecordTooLarge
 	}
 
-	if cap(w.scratch) < int(total) {
-		w.scratch = make([]byte, int(total))
+	payloadLen := int(total)
+	if payloadLen > int(segmentLenMask) {
+		return ErrRecordTooLarge
 	}
-	buf := w.scratch[:int(total)]
+	if !w.compress && segmentHeaderSize+payloadLen < directSegmentPayloadMinLen {
+		if err := w.flushBufferedCommandFrames(); err != nil {
+			return err
+		}
+		totalLen := segmentHeaderSize + payloadLen
+		if cap(w.scratch) < totalLen {
+			w.scratch = make([]byte, totalLen)
+		}
+		buf := w.scratch[:totalLen]
+		payload := buf[segmentHeaderSize:]
+
+		payload[0] = Version
+		binary.LittleEndian.PutUint32(payload[1:5], 1)
+
+		off := batchHeaderSize
+		payload[off] = record.Op
+		binary.LittleEndian.PutUint16(payload[off+1:off+3], keyLen)
+		binary.LittleEndian.PutUint32(payload[off+3:off+7], valLen)
+		binary.LittleEndian.PutUint64(payload[off+7:off+15], record.RID)
+		binary.LittleEndian.PutUint64(payload[off+15:off+23], record.Seq)
+		copy(payload[off+recordHeaderSize:], record.Key)
+		copy(payload[off+recordHeaderSize+len(record.Key):], record.Value)
+
+		binary.LittleEndian.PutUint32(buf[0:4], uint32(payloadLen))
+		binary.LittleEndian.PutUint32(buf[4:8], crc.ChecksumParts(payload[:batchHeaderSize], payload[batchHeaderSize:]))
+		if _, err := w.bw.Write(buf); err != nil {
+			return err
+		}
+		w.size += int64(totalLen)
+		return nil
+	}
+
+	if cap(w.scratch) < payloadLen {
+		w.scratch = make([]byte, payloadLen)
+	}
+	buf := w.scratch[:payloadLen]
 
 	buf[0] = Version
 	binary.LittleEndian.PutUint32(buf[1:5], 1)
@@ -284,6 +320,9 @@ func (w *Writer) Append(record Record) error {
 	copy(buf[off+recordHeaderSize:], record.Key)
 	copy(buf[off+recordHeaderSize+len(record.Key):], record.Value)
 
+	if !w.compress {
+		return w.writeRawSegmentWithChecksum(buf, crc.ChecksumParts(buf[:batchHeaderSize], buf[batchHeaderSize:]))
+	}
 	return w.writeSegment(buf)
 }
 

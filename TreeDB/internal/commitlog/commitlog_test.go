@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 func TestCommitLogWriteReadBatch(t *testing.T) {
@@ -506,6 +508,97 @@ func TestCommitLogCorruptCRC(t *testing.T) {
 		t.Fatalf("expected corrupt error, got %v", err)
 	}
 	_ = reader.Close()
+}
+
+func TestCommitLogAppendSingleCRCMatchesPayloadBytes(t *testing.T) {
+	tests := []struct {
+		name     string
+		record   Record
+		wantLong bool
+	}{
+		{
+			name:   "small-direct-segment",
+			record: Record{Op: OpSetInline, Key: []byte("single-key"), Value: []byte("single-value"), Seq: 7},
+		},
+		{
+			name: "large-raw-segment",
+			record: Record{
+				Op:    OpSetInline,
+				Key:   []byte("single-large-key"),
+				Value: bytes.Repeat([]byte("large-value"), directSegmentPayloadMinLen/len("large-value")),
+				Seq:   8,
+			},
+			wantLong: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "commit.log")
+
+			writer, err := NewWriterWithOptions(path, Options{Compress: false})
+			if err != nil {
+				t.Fatalf("new writer: %v", err)
+			}
+			if err := writer.Append(tt.record); err != nil {
+				_ = writer.Close()
+				t.Fatalf("append single: %v", err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read file: %v", err)
+			}
+			if len(data) <= segmentHeaderSize {
+				t.Fatalf("unexpected segment size %d", len(data))
+			}
+			payloadLen := int(binary.LittleEndian.Uint32(data[0:4]) & segmentLenMask)
+			if payloadLen != len(data)-segmentHeaderSize {
+				t.Fatalf("payload len=%d want %d", payloadLen, len(data)-segmentHeaderSize)
+			}
+			if tt.wantLong && segmentHeaderSize+payloadLen < directSegmentPayloadMinLen {
+				t.Fatalf("large append did not cover raw segment threshold: total=%d threshold=%d", segmentHeaderSize+payloadLen, directSegmentPayloadMinLen)
+			}
+			gotCRC := binary.LittleEndian.Uint32(data[4:8])
+			if wantCRC := crc.Checksum(data[segmentHeaderSize:]); gotCRC != wantCRC {
+				t.Fatalf("stored crc=%08x want payload checksum=%08x", gotCRC, wantCRC)
+			}
+
+			reader, err := NewReader(path)
+			if err != nil {
+				t.Fatalf("new reader: %v", err)
+			}
+			got, err := reader.ReadBatch()
+			if err != nil {
+				_ = reader.Close()
+				t.Fatalf("read batch: %v", err)
+			}
+			if len(got) != 1 || got[0].Op != tt.record.Op || got[0].Seq != tt.record.Seq || !bytes.Equal(got[0].Key, tt.record.Key) || !bytes.Equal(got[0].Value, tt.record.Value) {
+				_ = reader.Close()
+				t.Fatalf("decoded single record mismatch: %+v", got)
+			}
+			_ = reader.Close()
+
+			data[segmentHeaderSize] ^= 0x80
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatalf("write corrupt file: %v", err)
+			}
+			reader, err = NewReader(path)
+			if err != nil {
+				t.Fatalf("new corrupt reader: %v", err)
+			}
+			_, err = reader.ReadBatch()
+			if !errors.Is(err, ErrCorrupt) {
+				_ = reader.Close()
+				t.Fatalf("expected corrupt error, got %v", err)
+			}
+			_ = reader.Close()
+		})
+	}
 }
 
 func TestCommitLogAppendBatchRejectsMixedSequence(t *testing.T) {
