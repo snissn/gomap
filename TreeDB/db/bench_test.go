@@ -427,7 +427,7 @@ func BenchmarkLargeVal(b *testing.B) {
 				continue
 			}
 
-			unlock := d.lockUpdateKey(key)
+			guard := d.lockUpdateKey(key)
 			wb := d.NewBatch().(*Batch)
 			err = wb.SetPointer(key, ptr)
 			if err == nil {
@@ -436,7 +436,7 @@ func BenchmarkLargeVal(b *testing.B) {
 			if closeErr := wb.Close(); err == nil {
 				err = closeErr
 			}
-			unlock()
+			guard.Unlock()
 			if err != nil {
 				b.Errorf("SetPointer failed: %v", err)
 			}
