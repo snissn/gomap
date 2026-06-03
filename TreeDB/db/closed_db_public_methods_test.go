@@ -174,6 +174,15 @@ func TestClosedDB_GetMany(t *testing.T) {
 	})
 }
 
+func TestClosedDB_GetManyView(t *testing.T) {
+	runClosedDBMethod(t, "GetManyView", func(d *DB) {
+		err := d.GetManyView([][]byte{[]byte("k")}, func(int, []byte, []byte, bool) error { return nil })
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("GetManyView err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
 func TestClosedDB_GetUnsafe(t *testing.T) {
 	runClosedDBMethod(t, "GetUnsafe", func(d *DB) {
 		_, err := d.GetUnsafe([]byte("k"))

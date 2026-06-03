@@ -24,6 +24,12 @@ const (
 
 var getManyEmptyValue = []byte{}
 
+// GetManyViewFunc receives one GetManyView result. The value slice is a
+// read-only view that is valid only until the callback returns; callers must
+// copy it before retaining it. Missing/tombstoned keys are reported with
+// found=false and value=nil.
+type GetManyViewFunc = tree.GetManyViewFunc
+
 func getManyArenaCap(keyCount int) int {
 	if keyCount <= 0 {
 		return 0
@@ -217,6 +223,97 @@ func (db *DB) getManyOnce(keys [][]byte) ([][]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// GetManyView calls fn once for each key with a read-only value view.
+// Missing keys are reported with found=false and value=nil. Callback values are
+// valid only until fn returns and must be copied before retaining. Large batches
+// may invoke callbacks concurrently; callers that mutate shared state must
+// synchronize it. If fn returns an error, iteration stops best-effort and that
+// error is returned; callbacks already invoked are not retried.
+func (db *DB) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	if fn == nil {
+		return errors.New("GetManyView: nil callback")
+	}
+	retryEpoch := db.readRetryRefreshEpoch.Load()
+	var called atomic.Bool
+	err := db.getManyViewOnce(keys, func(index int, key []byte, value []byte, found bool) error {
+		called.Store(true)
+		return fn(index, key, value, found)
+	})
+	if db.refreshOnValueLogFileNotFound(err) && !called.Load() {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
+			return refreshErr
+		}
+		return db.getManyViewOnce(keys, fn)
+	}
+	return err
+}
+
+func (db *DB) getManyViewOnce(keys [][]byte, fn GetManyViewFunc) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	snap, err := db.acquireSnapshotOrErr()
+	if err != nil {
+		return err
+	}
+	defer snap.Close()
+
+	workers := getManyWorkerCount(len(keys))
+	if getManyCanParallelize(len(keys), workers) {
+		return db.getManyViewParallel(snap, keys, fn, workers)
+	}
+	return snap.GetManyView(keys, fn)
+}
+
+func (db *DB) getManyViewParallel(snap *Snapshot, keys [][]byte, fn GetManyViewFunc, workers int) error {
+	var (
+		wg       sync.WaitGroup
+		stop     atomic.Bool
+		errMu    sync.Mutex
+		firstErr error
+	)
+	setErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			stop.Store(true)
+		}
+		errMu.Unlock()
+	}
+	getErr := func() error {
+		errMu.Lock()
+		err := firstErr
+		errMu.Unlock()
+		return err
+	}
+	for worker := 0; worker < workers; worker++ {
+		start, end := getManyChunkBounds(worker, workers, len(keys))
+		if start >= end {
+			continue
+		}
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			err := snap.tree.GetManyView(keys[start:end], func(index int, key []byte, value []byte, found bool) error {
+				if stop.Load() {
+					return getErr()
+				}
+				err := fn(start+index, key, value, found)
+				if err != nil {
+					setErr(err)
+				}
+				return err
+			})
+			setErr(err)
+		}(start, end)
+	}
+	wg.Wait()
+	return getErr()
 }
 
 func (db *DB) getManySequential(snap *Snapshot, keys [][]byte, out [][]byte) error {

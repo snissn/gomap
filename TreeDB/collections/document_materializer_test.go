@@ -13,6 +13,64 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+func TestCollectionReadViewFetchDocumentsByIDUsesBatchViewForOwnedRetainedPayloads2242(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir: t.TempDir(),
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	docA := []byte(`{"kind":"alpha","payload":"` + strings.Repeat("a", 128) + `"}`)
+	docB := []byte(`{}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{docA, docB}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	got, err := view.FetchDocumentsByID([][]byte{[]byte("a"), []byte("missing"), []byte("b"), []byte("a")}, DocumentFetchOptions{})
+	if err != nil {
+		_ = view.Close()
+		t.Fatalf("FetchDocumentsByID: %v", err)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("Close view: %v", err)
+	}
+	if len(got.Results) != 4 {
+		t.Fatalf("results=%d want 4", len(got.Results))
+	}
+	if !got.Results[0].Found || !bytes.Equal(got.Results[0].Document, docA) || got.Results[1].Found || got.Results[1].Document != nil || !got.Results[2].Found || !bytes.Equal(got.Results[2].Document, docB) || !got.Results[3].Found || !bytes.Equal(got.Results[3].Document, docA) {
+		t.Fatalf("unexpected results: %+v", got.Results)
+	}
+	if got.Stats.DocumentsRequested != 4 || got.Stats.DocumentsFetched != 3 || got.Stats.DocumentsMissing != 1 || got.Stats.RetainedPayloadFetches != 3 {
+		t.Fatalf("stats=%+v want requested=4 fetched=3 missing=1 retained=3", got.Stats)
+	}
+	if len(got.Results[0].Document) > 0 {
+		got.Results[0].Document[0] = '['
+	}
+	fresh, err := col.Get([]byte("a"))
+	if err != nil {
+		t.Fatalf("Get after response mutation: %v", err)
+	}
+	if !bytes.Equal(fresh, docA) {
+		t.Fatalf("mutating response affected stored document: got=%s want=%s", fresh, docA)
+	}
+}
+
 func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testing.T) {
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()
