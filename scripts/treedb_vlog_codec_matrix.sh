@@ -145,12 +145,12 @@ def auto_frames(stats):
     parts = []
     for name in ("off", "dict", "block_snappy", "block_lz4"):
         v = stat_first(stats,
-            f"treedb.cache.vlog_auto.frames.{name}",
-            f"treedb.cache.vlog_leaf_scan.auto.frames.{name}")
+            f"treedb.cache.vlog_leaf_scan.auto.frames.{name}",
+            f"treedb.cache.vlog_auto.frames.{name}")
         if v and v != "0":
             frac = stat_first(stats,
-                f"treedb.cache.vlog_auto.frames_frac.{name}",
-                f"treedb.cache.vlog_leaf_scan.auto.frames_frac.{name}")
+                f"treedb.cache.vlog_leaf_scan.auto.frames_frac.{name}",
+                f"treedb.cache.vlog_auto.frames_frac.{name}")
             parts.append(f"{name}={v}" + (f"/{frac}" if frac else ""))
     return ";".join(parts)
 
@@ -158,12 +158,12 @@ def outer_leaf_codecs(stats):
     parts = []
     for name in ("none", "snappy", "lz4", "legacy_page", "unknown", "mixed"):
         v = stat_first(stats,
-            f"treedb.cache.vlog_outer_leaf_codec.frames.{name}",
-            f"treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames.{name}")
+            f"treedb.cache.vlog_leaf_scan.outer_leaf_codec.frames.{name}",
+            f"treedb.cache.vlog_outer_leaf_codec.frames.{name}")
         if v and v != "0":
             ratio = stat_first(stats,
-                f"treedb.cache.vlog_outer_leaf_codec.stored_ratio.{name}",
-                f"treedb.cache.vlog_leaf_scan.outer_leaf_codec.stored_ratio.{name}")
+                f"treedb.cache.vlog_leaf_scan.outer_leaf_codec.stored_ratio.{name}",
+                f"treedb.cache.vlog_outer_leaf_codec.stored_ratio.{name}")
             parts.append(f"{name}={v}" + (f"/{ratio}" if ratio else ""))
     return ";".join(parts)
 
@@ -171,21 +171,21 @@ def block_k(stats):
     parts = []
     for codec in ("snappy", "lz4"):
         count = stat_first(stats,
-            f"treedb.cache.vlog_block.k.count.{codec}",
-            f"treedb.cache.vlog_leaf_scan.block.k.count.{codec}")
+            f"treedb.cache.vlog_leaf_scan.block.k.count.{codec}",
+            f"treedb.cache.vlog_block.k.count.{codec}")
         if count and count != "0":
             avg = stat_first(stats,
-                f"treedb.cache.vlog_block.k.avg.{codec}",
-                f"treedb.cache.vlog_leaf_scan.block.k.avg.{codec}")
+                f"treedb.cache.vlog_leaf_scan.block.k.avg.{codec}",
+                f"treedb.cache.vlog_block.k.avg.{codec}")
             maxv = stat_first(stats,
-                f"treedb.cache.vlog_block.k.max.{codec}",
-                f"treedb.cache.vlog_leaf_scan.block.k.max.{codec}")
+                f"treedb.cache.vlog_leaf_scan.block.k.max.{codec}",
+                f"treedb.cache.vlog_block.k.max.{codec}")
             le1 = stat_first(stats,
-                f"treedb.cache.vlog_block.k.bucket.{codec}.le_1",
-                f"treedb.cache.vlog_leaf_scan.block.k.bucket.{codec}.le_1")
+                f"treedb.cache.vlog_leaf_scan.block.k.bucket.{codec}.le_1",
+                f"treedb.cache.vlog_block.k.bucket.{codec}.le_1")
             le128 = stat_first(stats,
-                f"treedb.cache.vlog_block.k.bucket.{codec}.le_128",
-                f"treedb.cache.vlog_leaf_scan.block.k.bucket.{codec}.le_128")
+                f"treedb.cache.vlog_leaf_scan.block.k.bucket.{codec}.le_128",
+                f"treedb.cache.vlog_block.k.bucket.{codec}.le_128")
             parts.append(f"{codec}:count={count},avg={avg},max={maxv},le1={le1},le128={le128}")
     return ";".join(parts)
 
@@ -212,12 +212,12 @@ for p in patterns:
                 p.name,
                 db,
                 *[result(results, t, db) for t in tests],
-                stat_first(stats, "treedb.cache.vlog_write_mode.frames.off", "treedb.cache.vlog_leaf_scan.write_mode.frames.off"),
-                stat_first(stats, "treedb.cache.vlog_write_mode.frames.block", "treedb.cache.vlog_leaf_scan.write_mode.frames.block"),
-                stat_first(stats, "treedb.cache.vlog_write_mode.frames.dict", "treedb.cache.vlog_leaf_scan.write_mode.frames.dict"),
-                stat_first(stats, "treedb.cache.vlog_write_mode.stored_ratio.block", "treedb.cache.vlog_leaf_scan.write_mode.stored_ratio.block"),
-                stat_first(stats, "treedb.cache.vlog_payload_kind.stored_ratio.outer_leaf", "treedb.cache.vlog_leaf_scan.payload_kind.stored_ratio.outer_leaf"),
-                stat_first(stats, "treedb.cache.vlog_payload_kind.frames.outer_leaf", "treedb.cache.vlog_leaf_scan.payload_kind.frames.outer_leaf"),
+                stat_first(stats, "treedb.cache.vlog_leaf_scan.write_mode.frames.off", "treedb.cache.vlog_write_mode.frames.off"),
+                stat_first(stats, "treedb.cache.vlog_leaf_scan.write_mode.frames.block", "treedb.cache.vlog_write_mode.frames.block"),
+                stat_first(stats, "treedb.cache.vlog_leaf_scan.write_mode.frames.dict", "treedb.cache.vlog_write_mode.frames.dict"),
+                stat_first(stats, "treedb.cache.vlog_leaf_scan.write_mode.stored_ratio.block", "treedb.cache.vlog_write_mode.stored_ratio.block"),
+                stat_first(stats, "treedb.cache.vlog_leaf_scan.payload_kind.stored_ratio.outer_leaf", "treedb.cache.vlog_payload_kind.stored_ratio.outer_leaf"),
+                stat_first(stats, "treedb.cache.vlog_leaf_scan.payload_kind.frames.outer_leaf", "treedb.cache.vlog_payload_kind.frames.outer_leaf"),
                 outer_leaf_codecs(stats),
                 auto_frames(stats),
                 block_k(stats),
