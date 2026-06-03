@@ -29655,28 +29655,34 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				}
 			}
 			storeInlinePtrValues := !b.db.memtableValueLogPointers
-			if useStream && useSteal {
-				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
-					applier.ApplyStealSortedBatchTrusted(entries, nil)
-				} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
-					applier.ApplyStealSortedBatch(entries, nil)
-				} else {
-					for _, op := range entries {
-						if op.Type == batch.OpDelete {
-							memtableBatchDelete(shard.mem, true, op.Key)
-						} else {
-							memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
+			appliedSortedRun := false
+			if useStream {
+				if useSteal {
+					if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
+						applier.ApplyStealSortedBatchTrusted(entries, nil)
+					} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
+						applier.ApplyStealSortedBatch(entries, nil)
+					} else {
+						for _, op := range entries {
+							if op.Type == batch.OpDelete {
+								memtableBatchDelete(shard.mem, true, op.Key)
+							} else {
+								memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
+							}
 						}
 					}
+					appliedSortedRun = true
+				} else if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
+					if borrowed := applier.ApplyCopySortedBatchTrusted(entries, allowBatchArenaBorrow, storeInlinePtrValues, nil); borrowed {
+						if _, ok := retainMainSeen[shard.mem]; !ok {
+							retainMainSeen[shard.mem] = struct{}{}
+							retainMainMems = append(retainMainMems, shard.mem)
+						}
+					}
+					appliedSortedRun = true
 				}
-				first := entries[0].Key
-				last := entries[len(entries)-1].Key
-				shard.rng.add(first)
-				if len(entries) > 1 {
-					shard.rng.add(last)
-				}
-				b.db.noteWriteSortedRun(first, last, len(entries))
-			} else {
+			}
+			if !appliedSortedRun {
 				for _, op := range entries {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
@@ -29700,21 +29706,21 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						}
 					}
 					if useStream {
-						// Preserve sorted-run accounting even when we avoid Steal.
+						// Preserve sorted-run accounting even when no sorted batch applier is available.
 						continue
 					}
 					shard.rng.add(op.Key)
 					b.db.noteWriteKey(op.Key)
 				}
-				if useStream {
-					first := entries[0].Key
-					last := entries[len(entries)-1].Key
-					shard.rng.add(first)
-					if len(entries) > 1 {
-						shard.rng.add(last)
-					}
-					b.db.noteWriteSortedRun(first, last, len(entries))
+			}
+			if useStream {
+				first := entries[0].Key
+				last := entries[len(entries)-1].Key
+				shard.rng.add(first)
+				if len(entries) > 1 {
+					shard.rng.add(last)
 				}
+				b.db.noteWriteSortedRun(first, last, len(entries))
 			}
 			newBytes := shard.mem.Size()
 			delta := newBytes - shard.bytes
