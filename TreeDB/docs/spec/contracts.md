@@ -30,16 +30,14 @@ Status:
 - `GetMany(keys)` returns one entry per input key. Missing keys are returned as
   `nil` entries with no error. Returned value bytes are safe copies.
 - `GetManyView(keys, fn)` calls `fn(index, key, value, found)` once for each
-  input key unless an error stops the call. The callback order is unspecified,
-  and DB-level implementations may invoke callbacks concurrently for large
-  batches; callers that mutate shared state in the callback must synchronize it.
+  input key unless an error stops the call. The callback order is unspecified;
   `index` identifies the input key.
 - `GetManyView` reports missing or tombstoned keys with `found=false` and
   `value=nil`. Present empty values have `found=true` and `len(value)==0`.
 - `GetManyView` value slices are read-only views valid only until the callback
-  returns. Callers must copy a value before retaining it, mutating it, passing
-  the view itself to another goroutine, or using it after the owning
-  DB/snapshot/view operation advances or closes.
+  returns. Callers must copy a value before retaining it, mutating it, passing it
+  to another goroutine, or using it after the owning DB/snapshot/view operation
+  advances or closes.
 - `GetManyView` must not weaken `GetMany`: callers that need stable ownership
   must continue to use `GetMany` or copy inside the callback.
 

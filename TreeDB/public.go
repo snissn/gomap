@@ -86,9 +86,7 @@ type getManyPlanner interface {
 	GetManyParallelPlan(keyCount int) (workers int, parallel bool)
 }
 
-// GetManyViewFunc receives one GetManyView result. DB-level callbacks may be
-// invoked in any order and may be invoked concurrently for large batches;
-// callers that mutate shared state must synchronize it. The value slice is a
+// GetManyViewFunc receives one GetManyView result. The value slice is a
 // read-only view that is valid only until the callback returns (or until a
 // snapshot/view boundary documented by the caller closes, whichever comes
 // first). Copy value before retaining it. Missing/tombstoned keys are reported
@@ -1399,11 +1397,10 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 }
 
 // GetManyView calls fn once for each key with a read-only value view. The
-// callback may be invoked in any order and may be invoked concurrently for
-// large batches; the index argument identifies the input key. Values are valid
-// only until fn returns and must be copied before retaining. Missing keys are
-// reported with found=false and value=nil. Existing safe-copy GetMany semantics
-// are unchanged.
+// callback may be invoked in any order; the index argument identifies the input
+// key. Values are valid only until fn returns and must be copied before
+// retaining. Missing keys are reported with found=false and value=nil. Existing
+// safe-copy GetMany semantics are unchanged.
 func (db *DB) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
 	if err := db.ensureOpen(); err != nil {
 		return err

@@ -161,7 +161,7 @@ func TestGetManyViewCallbackErrorStops(t *testing.T) {
 	}
 }
 
-func TestGetManyViewParallelCallbackErrorStops(t *testing.T) {
+func TestGetManyViewLargeBatchCallbackErrorStops(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
