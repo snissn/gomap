@@ -326,6 +326,203 @@ func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
 	}
 }
 
+func TestAcquireBackendSnapshotFastPath_AvailableAfterCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer cached.Close()
+
+	key := []byte("fast-path-key")
+	if err := cached.Set(key, []byte("persisted")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	snap := cached.AcquireBackendSnapshotFastPath()
+	if snap == nil {
+		t.Fatal("AcquireBackendSnapshotFastPath=nil after checkpointed empty cached state")
+	}
+	defer snap.Close()
+	got, err := snap.GetAppend(key, nil)
+	if err != nil {
+		t.Fatalf("backend fast-path GetAppend: %v", err)
+	}
+	if string(got) != "persisted" {
+		t.Fatalf("backend fast-path value=%q want persisted", string(got))
+	}
+}
+
+func TestAcquireBackendSnapshotFastPath_RejectsMutableCachedWrites(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer cached.Close()
+
+	key := []byte("mutable-key")
+	if err := cached.Set(key, []byte("cached")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {
+		_ = snap.Close()
+		t.Fatal("AcquireBackendSnapshotFastPath returned snapshot with mutable cached write")
+	}
+
+	snap := cached.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	defer snap.Close()
+	got, err := snap.GetAppend(key, nil)
+	if err != nil {
+		t.Fatalf("cached snapshot GetAppend: %v", err)
+	}
+	if string(got) != "cached" {
+		t.Fatalf("cached snapshot value=%q want cached", string(got))
+	}
+}
+
+func TestAcquireBackendSnapshotFastPath_RejectsDirtyBackendValueLogState(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer cached.Close()
+
+	cached.backendReadVlogFlushedSeq.Store(1)
+	cached.backendReadVlogDirtySeq.Store(2)
+	if snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {
+		_ = snap.Close()
+		t.Fatal("AcquireBackendSnapshotFastPath returned snapshot with dirty backend value-log state")
+	}
+
+	cached.backendReadVlogFlushedSeq.Store(2)
+	snap := cached.AcquireBackendSnapshotFastPath()
+	if snap == nil {
+		t.Fatal("AcquireBackendSnapshotFastPath=nil after dirty value-log state marked flushed")
+	}
+	defer snap.Close()
+}
+
+type dirtyDuringAcquireBackend struct {
+	BackendDB
+	snapper   backendSnapshotProvider
+	onAcquire func()
+}
+
+func (b *dirtyDuringAcquireBackend) AcquireSnapshot() *db.Snapshot {
+	if b.onAcquire != nil {
+		b.onAcquire()
+	}
+	return b.snapper.AcquireSnapshot()
+}
+
+func TestAcquireBackendSnapshotFastPath_RejectsValueLogDirtyRace(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer cached.Close()
+
+	cached.backendReadVlogDirtySeq.Store(1)
+	cached.backendReadVlogFlushedSeq.Store(1)
+	wrapped := &dirtyDuringAcquireBackend{
+		BackendDB: cached.backend,
+		snapper:   backend,
+		onAcquire: func() {
+			cached.backendReadVlogDirtySeq.Add(1)
+		},
+	}
+	cached.backend = wrapped
+	if snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {
+		_ = snap.Close()
+		t.Fatal("AcquireBackendSnapshotFastPath returned snapshot after value-log state became dirty during backend acquire")
+	}
+
+	cached.backendReadVlogFlushedSeq.Store(cached.backendReadVlogDirtySeq.Load())
+	wrapped.onAcquire = nil
+	snap := cached.AcquireBackendSnapshotFastPath()
+	if snap == nil {
+		t.Fatal("AcquireBackendSnapshotFastPath=nil after dirty race was marked flushed")
+	}
+	defer snap.Close()
+}
+
+func TestAcquireBackendSnapshotFastPath_RejectsPublishedRootState(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30, MemtableShards: 1})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer cached.Close()
+
+	published := newRootDomainTestTable(t, rootDomainTestOp{key: "root-key", value: "published"})
+	cached.mu.Lock()
+	ok := cached.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{lookup: published, rootID: 101},
+		},
+	})
+	cached.mu.Unlock()
+	if !ok {
+		t.Fatal("installPublishedRootSetLocked=false")
+	}
+
+	if snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {
+		_ = snap.Close()
+		t.Fatal("AcquireBackendSnapshotFastPath returned snapshot with published root state")
+	}
+
+	snap := cached.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	defer snap.Close()
+	if snap.view != nil {
+		t.Fatal("published-root snapshot should not retain empty memtable view")
+	}
+	rootSnap := rootDomainSnapshotFromCachedSnapshot(snap, []byte("root-key"))
+	assertRootDomainVisibleValue(t, rootSnap, "root-key", "published")
+}
+
 func TestSnapshotClose_Idempotent(t *testing.T) {
 	dir, err := os.MkdirTemp("", "treedb-snapshot-close-idempotent-")
 	if err != nil {

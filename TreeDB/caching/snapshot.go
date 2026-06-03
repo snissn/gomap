@@ -75,10 +75,100 @@ type backendSnapshotProvider interface {
 	AcquireSnapshot() *backenddb.Snapshot
 }
 
+func snapshotRootDomainBlocksBackendFastPath(snap rootDomainSnapshot) bool {
+	return rootDomainSnapshotHasInMemoryState(snap) || rootDomainSnapshotHasPublishedState(snap)
+}
+
+func snapshotRootDomainStaticBlocksBackendFastPath(snap rootDomainSnapshot) bool {
+	return len(snap.immutables) != 0 || rootDomainSnapshotHasPublishedState(snap)
+}
+
+func memtableViewAllowsBackendSnapshotFastPath(view *memtableView) bool {
+	if view == nil {
+		return false
+	}
+	if len(view.queue) != 0 || view.publishedRoots != nil {
+		return false
+	}
+	for _, mt := range view.mutables {
+		if mt != nil && mt.Len() != 0 {
+			return false
+		}
+	}
+	pointSnapshots := view.rootSnapshotShards
+	if len(pointSnapshots) == 0 {
+		pointSnapshots = view.rootPointShards
+	}
+	for i := range pointSnapshots {
+		if snapshotRootDomainStaticBlocksBackendFastPath(pointSnapshots[i]) {
+			return false
+		}
+	}
+	return !snapshotRootDomainBlocksBackendFastPath(view.rootSystem) &&
+		!snapshotRootDomainBlocksBackendFastPath(view.rootIterator)
+}
+
+func (db *DB) backendReadValueLogCleanForSnapshotFastPath() bool {
+	if db == nil || !db.valueLogEnabled() {
+		return true
+	}
+	dirtySeq := db.backendReadVlogDirtySeq.Load()
+	return dirtySeq == 0 || dirtySeq == db.backendReadVlogFlushedSeq.Load()
+}
+
+// AcquireBackendSnapshotFastPath returns a backend snapshot when the cached
+// layer has no mutable, queued, root-domain, or pending value-log state that the
+// cached Snapshot wrapper must preserve. The returned snapshot has the normal
+// backend snapshot lifetime and must be closed by the caller.
+func (db *DB) AcquireBackendSnapshotFastPath() *backenddb.Snapshot {
+	if db == nil || db.backend == nil || db.closing.Load() {
+		return nil
+	}
+	if !db.backendReadValueLogCleanForSnapshotFastPath() {
+		return nil
+	}
+	view := db.retainMemtableViewUntracked()
+	if !memtableViewAllowsBackendSnapshotFastPath(view) {
+		db.releaseUntrackedMemtableView(view)
+		return nil
+	}
+	db.releaseUntrackedMemtableView(view)
+
+	provider, ok := db.backend.(backendSnapshotProvider)
+	if !ok {
+		return nil
+	}
+	backendSnap := provider.AcquireSnapshot()
+	if backendSnap == nil {
+		return nil
+	}
+	// A durability-none value-log flush can race between the clean check above
+	// and the backend snapshot acquisition. If that happens, the raw backend
+	// snapshot may see a newly-published pointer whose value-log tail still needs
+	// the cached read barrier. Fail closed to the cached Snapshot wrapper.
+	if !db.backendReadValueLogCleanForSnapshotFastPath() {
+		_ = backendSnap.Close()
+		return nil
+	}
+	return backendSnap
+}
+
 // AcquireSnapshot returns a cached snapshot that includes queued memtable writes.
 func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
+	}
+	if backendSnap := db.AcquireBackendSnapshotFastPath(); backendSnap != nil {
+		var backendRootID uint64
+		if state := backendSnap.State(); state != nil {
+			backendRootID = state.RootPageID
+		}
+		return &Snapshot{
+			db:              db,
+			backend:         backendSnap,
+			backendRootID:   backendRootID,
+			backendFallback: backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendRootID},
+		}
 	}
 
 	view := db.retainMemtableView()
@@ -140,9 +230,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 				viewRootPointShards = nil
 				viewRootSystem = rootDomainSnapshot{}
 				viewRootIterator = rootDomainSnapshot{}
-			} else {
-				viewRootPointShards = append([]rootDomainSnapshot(nil), view.rootSnapshotShards...)
-				viewPublishedRoots = clonePublishedRootSet(view.publishedRoots)
 			}
 			db.releaseMemtableView(view)
 			view = nil
