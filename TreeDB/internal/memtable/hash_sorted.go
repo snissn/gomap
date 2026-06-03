@@ -92,11 +92,12 @@ type HashSorted struct {
 	// Incremental ordering:
 	// We record first-seen keys into pendingKeys and seal them into chunk slices.
 	// A global background worker sorts those chunks and stores them as sorted runs.
-	pendingKeys  []string
-	pendingBytes int
-	nextSeq      uint64
-	index        hashSortedIndex
-	indexer      *HashSortedIndexer
+	pendingKeys   []string
+	pendingBytes  int
+	pendingSorted bool
+	nextSeq       uint64
+	index         hashSortedIndex
+	indexer       *HashSortedIndexer
 
 	finalizeOnce sync.Once
 	finalizeDone chan struct{}
@@ -201,6 +202,7 @@ func (m *HashSorted) Reset() {
 	m.hasMaxKey = false
 	m.pendingKeys = nil
 	m.pendingBytes = 0
+	m.pendingSorted = false
 	m.nextSeq = 0
 	m.index.reset()
 	m.finalizeOnce = sync.Once{}
@@ -215,6 +217,45 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 
 func (m *HashSorted) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte)) {
 	m.applyStealSortedBatch(entries, onKey, true)
+}
+
+func (m *HashSorted) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	_ = borrowValues // HashSorted owns values in its arena; it never borrows batch value storage.
+	var chunks []hashSortedIndexWork
+
+	m.mu.Lock()
+	if m.canAppendAfterMaxLocked(entries) {
+		keys := make([]string, 0, len(entries))
+		keyBytes := 0
+		for _, op := range entries {
+			if keyStored, n, ok := m.setEntryNewCopyNoChunkLocked(op, storeInlinePtrValues); ok {
+				keys = append(keys, keyStored)
+				keyBytes += n
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+		if chunk, seq, sorted := m.noteNewKeysBatchLocked(keys, keyBytes, true); seq != 0 {
+			chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk, sorted: sorted})
+		}
+	} else {
+		for _, op := range entries {
+			value, ptr, flags := hashSortedBatchEntryPayload(op, storeInlinePtrValues)
+			if chunk, seq := m.setEntryLocked(op.Key, value, ptr, flags, false); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+			if onKey != nil {
+				onKey(op.Key)
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range chunks {
+		c.mt.indexer.enqueue(c.mt, c.seq, c.keys, c.sorted)
+	}
+	return false
 }
 
 func (m *HashSorted) applyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte), trustedOrder bool) {
@@ -239,8 +280,8 @@ func (m *HashSorted) applyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 				onKey(op.Key)
 			}
 		}
-		if chunk, seq := m.noteNewKeysBatchLocked(keys, keyBytes); seq != 0 {
-			chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk, sorted: true})
+		if chunk, seq, sorted := m.noteNewKeysBatchLocked(keys, keyBytes, true); seq != 0 {
+			chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk, sorted: sorted})
 		}
 	} else {
 		for _, op := range entries {
@@ -702,9 +743,11 @@ func (m *HashSorted) ensureIndexFrozen() {
 	}
 	target := m.nextSeq
 	pending := m.pendingKeys
+	pendingSorted := m.pendingSorted
 	dst := m.sortedKeys
 	m.pendingKeys = nil
 	m.pendingBytes = 0
+	m.pendingSorted = false
 	m.mu.Unlock()
 
 	m.index.wait(target)
@@ -712,7 +755,9 @@ func (m *HashSorted) ensureIndexFrozen() {
 	// Seal any remaining keys locally as a final chunk after prior chunks have
 	// completed to preserve the seq->run mapping.
 	if len(pending) > 0 {
-		sort.Strings(pending)
+		if !pendingSorted {
+			sort.Strings(pending)
+		}
 		finalSeq := target + 1
 		m.index.apply(finalSeq, pending)
 		target = finalSeq
@@ -847,11 +892,23 @@ func (m *HashSorted) startFinalize() {
 	})
 }
 
+func (m *HashSorted) notePendingKeyOrderLocked(key string) {
+	if len(m.pendingKeys) == 0 {
+		m.pendingSorted = true
+		return
+	}
+	if m.pendingSorted && strings.Compare(m.pendingKeys[len(m.pendingKeys)-1], key) < 0 {
+		return
+	}
+	m.pendingSorted = false
+}
+
 func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	m.sortedValid = false
 	if m.pendingKeys == nil {
 		m.pendingKeys = make([]string, 0, hashSortedSealKeysThreshold)
 	}
+	m.notePendingKeyOrderLocked(key)
 	m.pendingKeys = append(m.pendingKeys, key)
 	m.pendingBytes += len(key)
 	if m.pendingBytes < hashSortedSealBytesThreshold && len(m.pendingKeys) < hashSortedSealKeysThreshold {
@@ -861,13 +918,14 @@ func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	chunk = m.pendingKeys
 	m.pendingKeys = nil
 	m.pendingBytes = 0
+	m.pendingSorted = false
 	m.nextSeq++
 	return chunk, m.nextSeq
 }
 
-func (m *HashSorted) noteNewKeysBatchLocked(keys []string, keyBytes int) (chunk []string, seq uint64) {
+func (m *HashSorted) noteNewKeysBatchLocked(keys []string, keyBytes int, keysSorted bool) (chunk []string, seq uint64, sorted bool) {
 	if len(keys) == 0 {
-		return nil, 0
+		return nil, 0, false
 	}
 	m.sortedValid = false
 	if m.pendingKeys == nil {
@@ -877,17 +935,24 @@ func (m *HashSorted) noteNewKeysBatchLocked(keys []string, keyBytes int) (chunk 
 		}
 		m.pendingKeys = make([]string, 0, c)
 	}
+	if len(m.pendingKeys) == 0 {
+		m.pendingSorted = keysSorted
+	} else if !(m.pendingSorted && keysSorted && strings.Compare(m.pendingKeys[len(m.pendingKeys)-1], keys[0]) < 0) {
+		m.pendingSorted = false
+	}
 	m.pendingKeys = append(m.pendingKeys, keys...)
 	m.pendingBytes += keyBytes
 	if m.pendingBytes < hashSortedSealBytesThreshold && len(m.pendingKeys) < hashSortedSealKeysThreshold {
-		return nil, 0
+		return nil, 0, false
 	}
 
 	chunk = m.pendingKeys
+	sorted = m.pendingSorted
 	m.pendingKeys = nil
 	m.pendingBytes = 0
+	m.pendingSorted = false
 	m.nextSeq++
-	return chunk, m.nextSeq
+	return chunk, m.nextSeq, sorted
 }
 
 func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) ([]string, uint64) {
@@ -931,6 +996,34 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	}
 	m.updateMaxKeyLocked(keyStored)
 	return m.noteNewKeyLocked(keyStored)
+}
+
+func hashSortedBatchEntryPayload(op batchpkg.Entry, storeInlinePtrValues bool) (value []byte, ptr page.ValuePtr, flags byte) {
+	return batchEntryPayload(op, storeInlinePtrValues)
+}
+
+func (m *HashSorted) setEntryNewCopyNoChunkLocked(op batchpkg.Entry, storeInlinePtrValues bool) (string, int, bool) {
+	if op.Key == nil {
+		return "", 0, false
+	}
+	keyCopy := m.arena.copyBytes(op.Key)
+	keyStored := bytesToStringNoCopy(keyCopy)
+	value, ptr, flags := hashSortedBatchEntryPayload(op, storeInlinePtrValues)
+	valCopy := m.encodeEntryValueLocked(value, ptr, flags, false)
+	ent := hashEntry{value: valCopy, flags: flags}
+	if flags&node.FlagPointer != 0 {
+		ent.ptr = ptr
+	}
+	m.entries = append(m.entries, ent)
+	m.items[keyStored] = uint32(len(m.entries) - 1)
+	m.sizeBytes += int64(len(keyCopy) + hashEntryValueSize(flags, valCopy))
+	if flags&node.FlagTombstone != 0 {
+		m.hasDeletes = true
+	}
+	// The fast path is append-only and entries are strictly increasing.
+	m.maxKey = keyStored
+	m.hasMaxKey = true
+	return keyStored, len(keyCopy), true
 }
 
 func (m *HashSorted) setEntryNewStealNoChunkLocked(op batchpkg.Entry) (string, int, bool) {
