@@ -257,6 +257,90 @@ func TestAppendOnlyIteratorSortedLatest(t *testing.T) {
 	}
 }
 
+func TestAppendOnlySortedRunsFrozenLookupsIteratorDuplicatesAndTombstones(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k3"), []byte("old3"))
+	m.Set([]byte("k1"), []byte("old1")) // order break: [k3], [k1]
+	m.Set([]byte("k2"), []byte("v2"))   // extends second sorted run
+	m.Set([]byte("k1"), []byte("new1")) // duplicate starts a newer run
+	m.Delete([]byte("k3"))              // tombstone extends duplicate run
+
+	if m.ordered {
+		t.Fatalf("expected unordered sorted-run state")
+	}
+	if got := len(m.sortedRuns); got != 3 {
+		t.Fatalf("sorted run count=%d want=3", got)
+	}
+	if got := len(m.latest) + len(m.latest64); got != 0 {
+		t.Fatalf("hash latest index len=%d want 0 before fallback", got)
+	}
+
+	m.Freeze()
+	if got, del, ok := m.Get([]byte("k1")); !ok || del || string(got) != "new1" {
+		t.Fatalf("frozen Get(k1)=(%q,%v,%v), want (new1,false,true)", string(got), del, ok)
+	}
+	if got, del, ok := m.Get([]byte("k3")); !ok || !del || got != nil {
+		t.Fatalf("frozen Get(k3)=(%v,%v,%v), want tombstone", got, del, ok)
+	}
+	if got, ptr, flags, ok := m.GetEntry([]byte("k2")); !ok || string(got) != "v2" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
+		t.Fatalf("frozen GetEntry(k2)=(%q,%+v,%d,%v), want (v2,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	want := []struct {
+		key     string
+		value   string
+		deleted bool
+	}{
+		{key: "k1", value: "new1"},
+		{key: "k2", value: "v2"},
+		{key: "k3", deleted: true},
+	}
+	for i, w := range want {
+		if !it.Valid() {
+			t.Fatalf("iterator ended at %d", i)
+		}
+		if got := string(it.Key()); got != w.key {
+			t.Fatalf("iterator key[%d]=%q want %q", i, got, w.key)
+		}
+		if got := it.IsDeleted(); got != w.deleted {
+			t.Fatalf("iterator deleted[%d]=%v want %v", i, got, w.deleted)
+		}
+		if !w.deleted && string(it.Value()) != w.value {
+			t.Fatalf("iterator value[%d]=%q want %q", i, string(it.Value()), w.value)
+		}
+		it.Next()
+	}
+	if it.Valid() {
+		t.Fatalf("iterator has extra key %q", string(it.Key()))
+	}
+}
+
+func TestAppendOnlySortedRunsFallbackBuildsHashIndexAfterRunCap(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	for i := 0; i < appendOnlySortedRunMaxCount+2; i++ {
+		v := appendOnlySortedRunMaxCount + 2 - i
+		key := []byte{byte(v >> 8), byte(v)}
+		m.Set(key, []byte{byte(i)})
+	}
+	m.mu.RLock()
+	runCount := len(m.sortedRuns)
+	latestDirty := m.latestDirty
+	latestLen := len(m.latest) + len(m.latest64)
+	count := m.count
+	m.mu.RUnlock()
+	if runCount != 0 {
+		t.Fatalf("sorted run count after cap fallback=%d want 0", runCount)
+	}
+	if latestDirty {
+		t.Fatalf("latestDirty=true after cap fallback")
+	}
+	if latestLen != count {
+		t.Fatalf("latest index len=%d want count=%d", latestLen, count)
+	}
+}
+
 func TestAppendOnlyResetClearsLatestIndex(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("k1"), []byte("v1"))
@@ -432,30 +516,15 @@ func TestAppendOnlyPreferSortedPointProbesForSparseFrozenBatches(t *testing.T) {
 	}
 }
 
-func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
+func TestAppendOnlyGetUsesSortedRunsAfterOrderBreak(t *testing.T) {
 	keyKinds := []struct {
-		name       string
-		makeKey    func(v uint64) []byte
-		latestIdx  func(m *AppendOnly, key []byte) (idx int, ok bool)
-		latestSize func(m *AppendOnly) int
+		name    string
+		makeKey func(v uint64) []byte
 	}{
 		{
 			name: "non-8-byte",
 			makeKey: func(v uint64) []byte {
 				return []byte{byte('a' + v)}
-			},
-			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
-				if m.latest == nil {
-					return 0, false
-				}
-				idx, ok := m.latest[appendOnlyKeyString(key)]
-				return idx, ok
-			},
-			latestSize: func(m *AppendOnly) int {
-				if m.latest == nil {
-					return 0
-				}
-				return len(m.latest)
 			},
 		},
 		{
@@ -464,20 +533,6 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 				k := make([]byte, 8)
 				binary.BigEndian.PutUint64(k, v)
 				return k
-			},
-			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
-				k64, ok := appendOnlyKeyU64(key)
-				if !ok || m.latest64 == nil {
-					return 0, false
-				}
-				idx, ok := m.latest64[k64]
-				return idx, ok
-			},
-			latestSize: func(m *AppendOnly) int {
-				if m.latest64 == nil {
-					return 0
-				}
-				return len(m.latest64)
 			},
 		},
 	}
@@ -496,58 +551,41 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 			m.mu.RLock()
 			ordered := m.ordered
 			dirty := m.latestDirty
+			runCount := len(m.sortedRuns)
+			latestSize := len(m.latest) + len(m.latest64)
 			m.mu.RUnlock()
 			if ordered {
 				t.Fatalf("expected memtable to become unordered")
 			}
 			if dirty {
-				t.Fatalf("expected latest index to stay clean after order break")
+				t.Fatalf("expected sorted-run index to stay clean after order break")
 			}
-			m.mu.RLock()
-			latestSizeBeforeGet := kk.latestSize(m)
-			idxBeforeGet, okBeforeGet := kk.latestIdx(m, lo)
-			countBeforeGet := m.count
-			m.mu.RUnlock()
-			if latestSizeBeforeGet < 2 {
-				t.Fatalf("expected latest index to be materialized on order break, size=%d", latestSizeBeforeGet)
+			if runCount != 2 {
+				t.Fatalf("sorted run count after order break=%d want=2", runCount)
 			}
-			if !okBeforeGet {
-				t.Fatalf("expected latest index lookup to succeed immediately after order break")
-			}
-			if idxBeforeGet != countBeforeGet-1 {
-				t.Fatalf("latest index before Get=%d want %d", idxBeforeGet, countBeforeGet-1)
+			if latestSize != 0 {
+				t.Fatalf("hash latest index size after order break=%d want=0", latestSize)
 			}
 
 			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo" {
 				t.Fatalf("Get(lo) = (%q,%v,%v), want (lo,false,true)", string(got), del, ok)
 			}
 
-			m.mu.RLock()
-			dirty = m.latestDirty
-			latestSize := kk.latestSize(m)
-			m.mu.RUnlock()
-			if dirty {
-				t.Fatalf("expected point read to keep latest index clean (latestDirty=false)")
-			}
-			if latestSize < 2 {
-				t.Fatalf("expected latest index to be populated, size=%d", latestSize)
-			}
-
 			m.Set(lo, []byte("lo2"))
 
 			m.mu.RLock()
 			dirty = m.latestDirty
-			count := m.count
-			idx, ok := kk.latestIdx(m, lo)
+			runCount = len(m.sortedRuns)
+			latestSize = len(m.latest) + len(m.latest64)
 			m.mu.RUnlock()
 			if dirty {
-				t.Fatalf("expected writes to keep latest index clean after rebuild")
+				t.Fatalf("expected duplicate write to keep sorted-run index clean")
 			}
-			if !ok {
-				t.Fatalf("expected latest index lookup to succeed after rebuild")
+			if runCount != 3 {
+				t.Fatalf("sorted run count after duplicate write=%d want=3", runCount)
 			}
-			if idx != count-1 {
-				t.Fatalf("latest index points at %d, want %d", idx, count-1)
+			if latestSize != 0 {
+				t.Fatalf("hash latest index size after duplicate write=%d want=0", latestSize)
 			}
 			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo2" {
 				t.Fatalf("Get(lo after overwrite) = (%q,%v,%v), want (lo2,false,true)", string(got), del, ok)
@@ -557,17 +595,17 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 
 			m.mu.RLock()
 			dirty = m.latestDirty
-			count = m.count
-			idx, ok = kk.latestIdx(m, lo)
+			runCount = len(m.sortedRuns)
+			latestSize = len(m.latest) + len(m.latest64)
 			m.mu.RUnlock()
 			if dirty {
-				t.Fatalf("expected deletes to keep latest index clean after rebuild")
+				t.Fatalf("expected delete to keep sorted-run index clean")
 			}
-			if !ok {
-				t.Fatalf("expected latest index lookup to succeed after delete")
+			if runCount != 4 {
+				t.Fatalf("sorted run count after delete=%d want=4", runCount)
 			}
-			if idx != count-1 {
-				t.Fatalf("latest index points at %d after delete, want %d", idx, count-1)
+			if latestSize != 0 {
+				t.Fatalf("hash latest index size after delete=%d want=0", latestSize)
 			}
 			if got, del, ok := m.Get(lo); !ok || !del || got != nil {
 				t.Fatalf("Get(lo after delete) = (%v,%v,%v), want (nil,true,true)", got, del, ok)
@@ -579,12 +617,12 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 
-	// Force the memtable into the unordered path so it uses the latest-index maps.
+	// Force the memtable into the unordered path so it uses the sorted-run latest
+	// index before adding a smaller empty-key run.
 	m.Set([]byte("b"), []byte("1"))
 	m.Set([]byte("a"), []byte("2"))
 
-	// Trigger a point read to build the latest index (latestDirty=false) before
-	// adding the empty key.
+	// Trigger a point read against the sorted-run index before adding the empty key.
 	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "2" {
 		t.Fatalf("precondition Get(a) = (%q,%v,%v), want (2,false,true)", string(got), del, ok)
 	}

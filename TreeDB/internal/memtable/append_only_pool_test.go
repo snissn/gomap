@@ -366,7 +366,7 @@ func TestAppendOnlyResetRetainedArenaBounded(t *testing.T) {
 	}
 }
 
-func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
+func TestAppendOnlyUnorderedAppendUsesSortedRunIndexBeforeHashFallback(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("b"), []byte("v1"))
 	m.Set([]byte("a"), []byte("v2")) // force unordered path
@@ -374,7 +374,13 @@ func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
 		t.Fatalf("expected unordered memtable")
 	}
 	if m.latestDirty {
-		t.Fatalf("expected latest index to stay clean after order break")
+		t.Fatalf("expected sorted-run index to keep latest lookups clean after order break")
+	}
+	if got := len(m.sortedRuns); got != 2 {
+		t.Fatalf("sorted run count after order break=%d want=2", got)
+	}
+	if got := len(m.latest) + len(m.latest64); got != 0 {
+		t.Fatalf("hash latest index len after order break=%d want=0", got)
 	}
 
 	it := m.NewIterator(nil, nil)
@@ -382,7 +388,7 @@ func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
 		t.Fatalf("iterator close: %v", err)
 	}
 	if m.latestDirty {
-		t.Fatalf("expected iterator snapshot build to refresh latest index")
+		t.Fatalf("expected iterator snapshot build to keep sorted-run index clean")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected mutable unordered iterator to avoid caching snapshot; got snapCount=%d", m.snapCount)
@@ -393,7 +399,7 @@ func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
 
 	m.Set([]byte("b"), []byte("v3"))
 	if m.latestDirty {
-		t.Fatalf("expected unordered append to keep latest index clean")
+		t.Fatalf("expected unordered append to keep sorted-run index clean")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)
@@ -412,17 +418,16 @@ func TestAppendOnlyUnorderedAppendBuildsLatestIndexImmediately(t *testing.T) {
 		t.Fatalf("iterator close after append: %v", err)
 	}
 	if m.latestDirty {
-		t.Fatalf("expected latest index rebuild on second iterator snapshot")
+		t.Fatalf("expected second iterator snapshot to keep sorted-run index clean")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected mutable unordered iterator to keep shared snapshot uncached after rebuild; got snapCount=%d", m.snapCount)
 	}
-	idx, ok := m.latest[appendOnlyKeyString([]byte("b"))]
-	if !ok {
-		t.Fatalf("missing latest index entry for key b")
+	if got := len(m.latest) + len(m.latest64); got != 0 {
+		t.Fatalf("hash latest index len after sorted-run iterator=%d want=0", got)
 	}
-	if idx != 2 {
-		t.Fatalf("latest index for key b=%d want=2", idx)
+	if got := len(m.sortedRuns); got != 2 {
+		t.Fatalf("sorted run count after append=%d want=2", got)
 	}
 }
 
@@ -434,7 +439,7 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 		t.Fatalf("expected unordered memtable")
 	}
 	if m.latestDirty {
-		t.Fatalf("expected latest index to stay clean after order break")
+		t.Fatalf("expected sorted-run index to stay clean after order break")
 	}
 
 	it := m.NewReverseIterator(nil, nil)
@@ -442,7 +447,7 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 		t.Fatalf("reverse iterator close: %v", err)
 	}
 	if m.latestDirty {
-		t.Fatalf("expected reverse iterator snapshot build to refresh latest index")
+		t.Fatalf("expected reverse iterator snapshot build to keep sorted-run index clean")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected mutable unordered reverse iterator to avoid caching snapshot; got snapCount=%d", m.snapCount)
@@ -453,7 +458,7 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 
 	m.Set([]byte("b"), []byte("v3"))
 	if m.latestDirty {
-		t.Fatalf("expected unordered append to keep latest index clean")
+		t.Fatalf("expected unordered append to keep sorted-run index clean")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)
@@ -464,13 +469,16 @@ func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing
 		t.Fatalf("reverse iterator close after append: %v", err)
 	}
 	if m.latestDirty {
-		t.Fatalf("expected latest index rebuild on second reverse iterator snapshot")
+		t.Fatalf("expected second reverse iterator snapshot to keep sorted-run index clean")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected mutable unordered reverse iterator to keep shared snapshot uncached after rebuild; got snapCount=%d", m.snapCount)
 	}
 	if m.snapshot != nil {
 		t.Fatalf("expected mutable unordered reverse iterator to keep shared snapshot nil after rebuild")
+	}
+	if got := len(m.latest) + len(m.latest64); got != 0 {
+		t.Fatalf("hash latest index len after reverse sorted-run iterator=%d want=0", got)
 	}
 }
 

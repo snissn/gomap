@@ -41,6 +41,7 @@ const (
 	appendOnlyValueArenaPoolMaxCap      = 1 << appendOnlyValueArenaMaxShift
 	appendOnlyValueArenaRetainMaxCap    = 4 << 20
 	appendOnlyValueArenaRetainChunks    = 128
+	appendOnlySortedRunMaxCount         = 256
 	appendOnlyReuseOversizeFactor       = 4
 	appendOnlyResetDropThresholdEntries = 1 << 15
 	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
@@ -71,6 +72,17 @@ type appendOnlyValueArena struct {
 	curPos    int
 }
 
+type appendOnlySortedRun struct {
+	start int
+	end   int
+}
+
+type appendOnlySortedRunCursor struct {
+	run int
+	idx int
+	end int
+}
+
 type appendOnlyKeyArena struct {
 	chunks [][]byte
 	cur    []byte
@@ -85,6 +97,9 @@ type AppendOnly struct {
 	orderedKey64   []uint64
 	latest         map[string]int
 	latest64       map[uint64]int
+	sortedRuns     []appendOnlySortedRun
+	runCursorBuf   []appendOnlySortedRunCursor
+	runMergeBuf    []appendOnlySortedRunCursor
 	snapshot       []*appendOnlyEntry
 	indexBuf       []int
 	keyArena       appendOnlyKeyArena
@@ -582,6 +597,68 @@ func appendOnlyKeyU64(key []byte) (uint64, bool) {
 	return binary.BigEndian.Uint64(key), true
 }
 
+func appendOnlySortedRunValid(run appendOnlySortedRun, count int) bool {
+	return run.start >= 0 && run.start < run.end && run.end <= count
+}
+
+func appendOnlySortedRunCursorLess(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, i, j int) bool {
+	return bytes.Compare(
+		appendOnlyEntryKey(&active[cursors[i].idx]),
+		appendOnlyEntryKey(&active[cursors[j].idx]),
+	) < 0
+}
+
+func appendOnlySortedRunCursorDown(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, i, n int) bool {
+	orig := i
+	for {
+		child := 2*i + 1
+		if child >= n || child < 0 {
+			break
+		}
+		if right := child + 1; right < n && appendOnlySortedRunCursorLess(active, cursors, right, child) {
+			child = right
+		}
+		if !appendOnlySortedRunCursorLess(active, cursors, child, i) {
+			break
+		}
+		cursors[i], cursors[child] = cursors[child], cursors[i]
+		i = child
+	}
+	return i > orig
+}
+
+func appendOnlySortedRunCursorUp(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if !appendOnlySortedRunCursorLess(active, cursors, i, parent) {
+			break
+		}
+		cursors[parent], cursors[i] = cursors[i], cursors[parent]
+		i = parent
+	}
+}
+
+func appendOnlySortedRunCursorHeapInit(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor) {
+	for i := len(cursors)/2 - 1; i >= 0; i-- {
+		appendOnlySortedRunCursorDown(active, cursors, i, len(cursors))
+	}
+}
+
+func appendOnlySortedRunCursorHeapPop(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor) (appendOnlySortedRunCursor, []appendOnlySortedRunCursor) {
+	n := len(cursors) - 1
+	cursors[0], cursors[n] = cursors[n], cursors[0]
+	appendOnlySortedRunCursorDown(active, cursors, 0, n)
+	out := cursors[n]
+	cursors[n] = appendOnlySortedRunCursor{}
+	return out, cursors[:n]
+}
+
+func appendOnlySortedRunCursorHeapPush(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, cursor appendOnlySortedRunCursor) []appendOnlySortedRunCursor {
+	cursors = append(cursors, cursor)
+	appendOnlySortedRunCursorUp(active, cursors, len(cursors)-1)
+	return cursors
+}
+
 func entryValueSize(flags byte, value []byte) int {
 	if flags&node.FlagPointer != 0 {
 		return page.ValuePtrSize + len(value)
@@ -599,9 +676,171 @@ func (m *AppendOnly) clearSnapshotLocked() {
 	m.snapCount = 0
 }
 
+func (m *AppendOnly) clearSortedRunsLocked() {
+	if m.sortedRuns != nil {
+		m.sortedRuns = m.sortedRuns[:0]
+	}
+	if m.runCursorBuf != nil {
+		m.runCursorBuf = m.runCursorBuf[:0]
+	}
+	if m.runMergeBuf != nil {
+		m.runMergeBuf = m.runMergeBuf[:0]
+	}
+}
+
+func (m *AppendOnly) initSortedRunsAfterOrderBreakLocked(idx int) {
+	m.clearSortedRunsLocked()
+	if idx > 0 {
+		m.sortedRuns = append(m.sortedRuns, appendOnlySortedRun{start: 0, end: idx})
+	}
+	m.sortedRuns = append(m.sortedRuns, appendOnlySortedRun{start: idx, end: idx + 1})
+	m.latestDirty = false
+	m.clearSnapshotLocked()
+}
+
+func (m *AppendOnly) extendSortedRunsLocked(idx int, key []byte) {
+	if len(m.sortedRuns) == 0 {
+		return
+	}
+	last := &m.sortedRuns[len(m.sortedRuns)-1]
+	if appendOnlySortedRunValid(*last, idx) {
+		prev := appendOnlyEntryKey(&m.entries[last.end-1])
+		if bytes.Compare(key, prev) > 0 && last.end == idx {
+			last.end = idx + 1
+			m.latestDirty = false
+			m.clearSnapshotLocked()
+			return
+		}
+	}
+	m.sortedRuns = append(m.sortedRuns, appendOnlySortedRun{start: idx, end: idx + 1})
+	m.latestDirty = false
+	m.clearSnapshotLocked()
+	if len(m.sortedRuns) > appendOnlySortedRunMaxCount {
+		// Arbitrary point-write streams can create one run per write. Fall back to
+		// the hash latest-index once the run table stops being a compact sorted-run
+		// description; sorted batch workloads normally stay at one or two runs and
+		// avoid this rebuild on the ingest path.
+		m.rebuildLatestIndexLocked()
+	}
+}
+
+func (m *AppendOnly) lookupSortedRunsEntryLocked(key []byte) *appendOnlyEntry {
+	if len(m.sortedRuns) == 0 || m.count == 0 {
+		return nil
+	}
+	active := m.entries[:m.count]
+	for runIdx := len(m.sortedRuns) - 1; runIdx >= 0; runIdx-- {
+		run := m.sortedRuns[runIdx]
+		if !appendOnlySortedRunValid(run, len(active)) {
+			continue
+		}
+		base := run.start
+		n := run.end - run.start
+		pos := sort.Search(n, func(i int) bool {
+			return bytes.Compare(appendOnlyEntryKey(&active[base+i]), key) >= 0
+		})
+		if pos >= n {
+			continue
+		}
+		ent := &active[base+pos]
+		if bytes.Equal(appendOnlyEntryKey(ent), key) {
+			return ent
+		}
+	}
+	return nil
+}
+
+func (m *AppendOnly) forEachSortedRunLatestLocked(visit func(*appendOnlyEntry)) {
+	if len(m.sortedRuns) == 0 || m.count == 0 || visit == nil {
+		return
+	}
+	active := m.entries[:m.count]
+	cursors := m.runCursorBuf[:0]
+	for runIdx, run := range m.sortedRuns {
+		if !appendOnlySortedRunValid(run, len(active)) {
+			continue
+		}
+		cursors = append(cursors, appendOnlySortedRunCursor{run: runIdx, idx: run.start, end: run.end})
+	}
+	if len(cursors) == 0 {
+		m.runCursorBuf = cursors[:0]
+		return
+	}
+	appendOnlySortedRunCursorHeapInit(active, cursors)
+	popped := m.runMergeBuf[:0]
+	for len(cursors) > 0 {
+		var first appendOnlySortedRunCursor
+		first, cursors = appendOnlySortedRunCursorHeapPop(active, cursors)
+		key := appendOnlyEntryKey(&active[first.idx])
+		chosen := first
+		popped = append(popped[:0], first)
+		for len(cursors) > 0 {
+			next := cursors[0]
+			if !bytes.Equal(appendOnlyEntryKey(&active[next.idx]), key) {
+				break
+			}
+			next, cursors = appendOnlySortedRunCursorHeapPop(active, cursors)
+			if next.run > chosen.run {
+				chosen = next
+			}
+			popped = append(popped, next)
+		}
+		visit(&active[chosen.idx])
+		for _, cursor := range popped {
+			cursor.idx++
+			if cursor.idx < cursor.end {
+				cursors = appendOnlySortedRunCursorHeapPush(active, cursors, cursor)
+			}
+		}
+	}
+	m.runCursorBuf = cursors[:0]
+	m.runMergeBuf = popped[:0]
+}
+
+func (m *AppendOnly) buildSortedRunLatestSnapshotLocked() []*appendOnlyEntry {
+	if len(m.sortedRuns) == 0 || m.count == 0 {
+		return nil
+	}
+	if m.snapshot != nil && m.snapCount == m.count {
+		return m.snapshot
+	}
+	snapshot := m.snapshot
+	if cap(snapshot) < m.count {
+		snapshot = make([]*appendOnlyEntry, m.count)
+	} else {
+		snapshot = snapshot[:m.count]
+	}
+	used := 0
+	m.forEachSortedRunLatestLocked(func(ent *appendOnlyEntry) {
+		snapshot[used] = ent
+		used++
+	})
+	clear(snapshot[used:])
+	snapshot = snapshot[:used]
+	m.snapshot = snapshot
+	m.snapCount = m.count
+	return snapshot
+}
+
+func (m *AppendOnly) buildSortedRunIteratorEntriesLocked() []appendOnlyEntry {
+	if len(m.sortedRuns) == 0 || m.count == 0 {
+		return getAppendOnlyIteratorEntries(0)
+	}
+	entries := getAppendOnlyIteratorEntries(m.count)
+	used := 0
+	m.forEachSortedRunLatestLocked(func(ent *appendOnlyEntry) {
+		entries[used] = *ent
+		used++
+	})
+	return entries[:used]
+}
+
 func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	if m.count == 0 || m.ordered {
 		return nil
+	}
+	if len(m.sortedRuns) > 0 {
+		m.rebuildLatestIndexLocked()
 	}
 	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
@@ -634,6 +873,7 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 }
 
 func (m *AppendOnly) rebuildLatestIndexLocked() {
+	m.clearSortedRunsLocked()
 	if m.count == 0 {
 		if m.latest != nil {
 			clear(m.latest)
@@ -756,13 +996,11 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			return ent
 		}
 		m.ordered = false
-		// Once order breaks, invalidate the cached snapshot state and
-		// materialize the latest-key index immediately so subsequent unordered
-		// appends can maintain it incrementally instead of forcing the next
-		// iterator/lookup to rebuild the full map from scratch.
-		// rebuildLatestIndexLocked clears the cached snapshot as part of the
-		// transition.
-		m.rebuildLatestIndexLocked()
+		m.initSortedRunsAfterOrderBreakLocked(idx)
+		return ent
+	}
+	if len(m.sortedRuns) > 0 {
+		m.extendSortedRunsLocked(idx, k)
 		return ent
 	}
 	if !m.latestDirty {
@@ -921,6 +1159,37 @@ func (m *AppendOnly) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borro
 	return borrowedValues
 }
 
+func (m *AppendOnly) ApplyCopySortedBatchWithValueCopierTrusted(entries []batchpkg.Entry, copyValue func(value []byte) []byte, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	if len(entries) == 0 {
+		return false
+	}
+	copiedValues := false
+	m.mu.Lock()
+	trustedOrdered := m.canAppendTrustedSortedBatchLocked(entries)
+	for i := range entries {
+		op := entries[i]
+		value, ptr, flags := appendOnlyBatchEntryPayload(op, storeInlinePtrValues)
+		borrowValue := false
+		if len(value) > 0 && copyValue != nil {
+			if copied := copyValue(value); len(copied) == len(value) {
+				value = copied
+				borrowValue = true
+				copiedValues = true
+			}
+		}
+		if trustedOrdered {
+			m.appendEntryTrustedOrderedLocked(op.Key, value, ptr, flags, false, borrowValue)
+		} else {
+			m.appendEntryLocked(op.Key, value, ptr, flags, false, borrowValue)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+	m.mu.Unlock()
+	return copiedValues
+}
+
 func (m *AppendOnly) ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error {
 	if count <= 0 {
 		return nil
@@ -1032,6 +1301,13 @@ func (m *AppendOnly) getEntryFrozen(key []byte) ([]byte, page.ValuePtr, byte, bo
 		}
 		return ent.value, ent.ptr, ent.flags, true, true
 	}
+	if len(m.sortedRuns) > 0 {
+		ent := m.lookupSortedRunsEntryLocked(key)
+		if ent == nil {
+			return nil, page.ValuePtr{}, 0, false, true
+		}
+		return ent.value, ent.ptr, ent.flags, true, true
+	}
 	if m.latestDirty {
 		return nil, page.ValuePtr{}, 0, false, false
 	}
@@ -1079,6 +1355,20 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 			return val, false, true
 		}
 		if m.ordered {
+			m.mu.RUnlock()
+			return nil, false, false
+		}
+
+		if len(m.sortedRuns) > 0 {
+			if ent := m.lookupSortedRunsEntryLocked(key); ent != nil {
+				deleted := ent.flags&node.FlagTombstone != 0
+				val := ent.value
+				m.mu.RUnlock()
+				if deleted {
+					return nil, true, true
+				}
+				return val, false, true
+			}
 			m.mu.RUnlock()
 			return nil, false, false
 		}
@@ -1143,6 +1433,18 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 			return val, ptr, flags, true
 		}
 		if m.ordered {
+			m.mu.RUnlock()
+			return nil, page.ValuePtr{}, 0, false
+		}
+
+		if len(m.sortedRuns) > 0 {
+			if ent := m.lookupSortedRunsEntryLocked(key); ent != nil {
+				val := ent.value
+				ptr := ent.ptr
+				flags := ent.flags
+				m.mu.RUnlock()
+				return val, ptr, flags, true
+			}
 			m.mu.RUnlock()
 			return nil, page.ValuePtr{}, 0, false
 		}
@@ -1286,6 +1588,9 @@ func (m *AppendOnly) Release() {
 	m.orderedKey64 = nil
 	m.latest = nil
 	m.latest64 = nil
+	m.sortedRuns = nil
+	m.runCursorBuf = nil
+	m.runMergeBuf = nil
 	m.snapshot = nil
 	m.indexBuf = nil
 	m.keyArena.reset()
@@ -1380,6 +1685,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 		clear(m.latest)
 		clear(m.latest64)
 	}
+	m.clearSortedRunsLocked()
 	// Snapshot/index buffers are only needed for unordered memtables; drop large
 	// ones on reset to keep post-spike memory bounded.
 	if !retainObserved || (cap(m.snapshot) > 0 && cap(m.snapshot) >= appendOnlyResetDropThresholdEntries) {
@@ -1441,6 +1747,9 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 	if m.ordered {
 		return nil
 	}
+	if len(m.sortedRuns) > 0 {
+		return m.buildSortedRunLatestSnapshotLocked()
+	}
 	if m.snapshot != nil && m.snapCount == m.count {
 		return m.snapshot
 	}
@@ -1465,6 +1774,11 @@ func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() []appendOnlyEntry
 	if m.count == 0 {
 		m.clearSnapshotLocked()
 		return getAppendOnlyIteratorEntries(0)
+	}
+	if len(m.sortedRuns) > 0 {
+		entries := m.buildSortedRunIteratorEntriesLocked()
+		m.clearSnapshotLocked()
+		return entries
 	}
 	indices := m.buildSortedLatestIndicesLocked()
 	active := m.entries[:m.count]
