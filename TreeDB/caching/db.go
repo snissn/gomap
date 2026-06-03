@@ -3,7 +3,6 @@ package caching
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -3293,12 +3292,6 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		priority := len(unitRuns) - 1 - i
 		heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
 	}
-	useKey64Merge := len(heap) > 1
-	if useKey64Merge {
-		for i := range heap {
-			heap[i].key64, heap[i].key64OK = opMergeKeyU64(heap[i].key)
-		}
-	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
 		(&heap).down(i, len(heap))
 	}
@@ -3438,17 +3431,15 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	for len(heap) > 0 {
 		top := heap.pop()
 		currentKey := top.key
-		currentKey64 := top.key64
-		currentKey64OK := top.key64OK
 
 		for len(heap) > 0 {
 			next := heap.peek()
-			if next != nil && opMergeKeysEqual(next.key, next.key64, next.key64OK, currentKey, currentKey64, currentKey64OK) {
+			if next != nil && bytes.Equal(next.key, currentKey) {
 				shadowed := heap.pop()
 				shadowedOps++
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
-					shadowed.refreshKey(useKey64Merge)
+					shadowed.key = shadowed.iter.Key()
 					heap.push(shadowed)
 				}
 				continue
@@ -3511,7 +3502,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 		top.iter.Next()
 		if top.iter.Valid() {
-			top.refreshKey(useKey64Merge)
+			top.key = top.iter.Key()
 			heap.push(top)
 		}
 	}
@@ -11773,51 +11764,6 @@ type opMergeItem struct {
 	iter     *opRunIter
 	priority int
 	key      []byte
-	key64    uint64
-	key64OK  bool
-}
-
-func opMergeKeyU64(key []byte) (uint64, bool) {
-	if len(key) != 8 {
-		return 0, false
-	}
-	return binary.BigEndian.Uint64(key), true
-}
-
-func (x *opMergeItem) refreshKey(useKey64 bool) {
-	if x == nil || x.iter == nil || !x.iter.Valid() {
-		x.key = nil
-		x.key64 = 0
-		x.key64OK = false
-		return
-	}
-	x.key = x.iter.Key()
-	if useKey64 {
-		x.key64, x.key64OK = opMergeKeyU64(x.key)
-	} else {
-		x.key64 = 0
-		x.key64OK = false
-	}
-}
-
-func opMergeCompareKeys(a []byte, a64 uint64, a64OK bool, b []byte, b64 uint64, b64OK bool) int {
-	if a64OK && b64OK {
-		if a64 < b64 {
-			return -1
-		}
-		if a64 > b64 {
-			return 1
-		}
-		return 0
-	}
-	return bytes.Compare(a, b)
-}
-
-func opMergeKeysEqual(a []byte, a64 uint64, a64OK bool, b []byte, b64 uint64, b64OK bool) bool {
-	if a64OK && b64OK {
-		return a64 == b64
-	}
-	return bytes.Equal(a, b)
 }
 
 type opMergeHeap []opMergeItem
@@ -11825,7 +11771,7 @@ type opMergeHeap []opMergeItem
 func (h opMergeHeap) Len() int { return len(h) }
 
 func (h opMergeHeap) Less(i, j int) bool {
-	cmp := opMergeCompareKeys(h[i].key, h[i].key64, h[i].key64OK, h[j].key, h[j].key64, h[j].key64OK)
+	cmp := bytes.Compare(h[i].key, h[j].key)
 	if cmp != 0 {
 		return cmp < 0
 	}
@@ -23260,12 +23206,6 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
 			}
 		}
-		useKey64Merge := len(heap) > 1
-		if useKey64Merge {
-			for i := range heap {
-				heap[i].key64, heap[i].key64OK = opMergeKeyU64(heap[i].key)
-			}
-		}
 		for i := len(heap)/2 - 1; i >= 0; i-- {
 			(&heap).down(i, len(heap))
 		}
@@ -23275,17 +23215,15 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		for len(heap) > 0 {
 			top := heap.pop()
 			currentKey := top.key
-			currentKey64 := top.key64
-			currentKey64OK := top.key64OK
 
 			for len(heap) > 0 {
 				next := heap.peek()
-				if next != nil && opMergeKeysEqual(next.key, next.key64, next.key64OK, currentKey, currentKey64, currentKey64OK) {
+				if next != nil && bytes.Equal(next.key, currentKey) {
 					shadowed := heap.pop()
 					shadowedOps++
 					shadowed.iter.Next()
 					if shadowed.iter.Valid() {
-						shadowed.refreshKey(useKey64Merge)
+						shadowed.key = shadowed.iter.Key()
 						heap.push(shadowed)
 					}
 					continue
@@ -23341,7 +23279,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 
 			top.iter.Next()
 			if top.iter.Valid() {
-				top.refreshKey(useKey64Merge)
+				top.key = top.iter.Key()
 				heap.push(top)
 			}
 		}

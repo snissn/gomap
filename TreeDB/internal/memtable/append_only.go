@@ -368,53 +368,6 @@ func appendOnlyEntryInlineKeyU64(ent *appendOnlyEntry) (uint64, bool) {
 	return binary.BigEndian.Uint64(ent.inlineKey[:]), true
 }
 
-func appendOnlyEntryKeyU64(ent *appendOnlyEntry) (uint64, bool) {
-	if ent == nil {
-		return 0, false
-	}
-	if ent.keyInline {
-		return binary.BigEndian.Uint64(ent.inlineKey[:]), true
-	}
-	return appendOnlyKeyU64(ent.key)
-}
-
-func appendOnlyCompareU64(a, b uint64) int {
-	if a < b {
-		return -1
-	}
-	if a > b {
-		return 1
-	}
-	return 0
-}
-
-func appendOnlyEntryKeyCompare(a, b *appendOnlyEntry) int {
-	if av, ok := appendOnlyEntryKeyU64(a); ok {
-		if bv, ok := appendOnlyEntryKeyU64(b); ok {
-			return appendOnlyCompareU64(av, bv)
-		}
-	}
-	return bytes.Compare(appendOnlyEntryKey(a), appendOnlyEntryKey(b))
-}
-
-func appendOnlyCompareKeyToEntry(key []byte, ent *appendOnlyEntry) int {
-	if kv, ok := appendOnlyKeyU64(key); ok {
-		if ev, ok := appendOnlyEntryKeyU64(ent); ok {
-			return appendOnlyCompareU64(kv, ev)
-		}
-	}
-	return bytes.Compare(key, appendOnlyEntryKey(ent))
-}
-
-func appendOnlyEntryKeysEqual(a, b *appendOnlyEntry) bool {
-	if av, ok := appendOnlyEntryKeyU64(a); ok {
-		if bv, ok := appendOnlyEntryKeyU64(b); ok {
-			return av == bv
-		}
-	}
-	return bytes.Equal(appendOnlyEntryKey(a), appendOnlyEntryKey(b))
-}
-
 func cloneBytes(src []byte) []byte {
 	if len(src) == 0 {
 		return nil
@@ -649,7 +602,10 @@ func appendOnlySortedRunValid(run appendOnlySortedRun, count int) bool {
 }
 
 func appendOnlySortedRunCursorLess(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, i, j int) bool {
-	return appendOnlyEntryKeyCompare(&active[cursors[i].idx], &active[cursors[j].idx]) < 0
+	return bytes.Compare(
+		appendOnlyEntryKey(&active[cursors[i].idx]),
+		appendOnlyEntryKey(&active[cursors[j].idx]),
+	) < 0
 }
 
 func appendOnlySortedRunCursorDown(active []appendOnlyEntry, cursors []appendOnlySortedRunCursor, i, n int) bool {
@@ -748,8 +704,8 @@ func (m *AppendOnly) extendSortedRunsLocked(idx int, key []byte) {
 	}
 	last := &m.sortedRuns[len(m.sortedRuns)-1]
 	if appendOnlySortedRunValid(*last, idx) {
-		prev := &m.entries[last.end-1]
-		if appendOnlyCompareKeyToEntry(key, prev) > 0 && last.end == idx {
+		prev := appendOnlyEntryKey(&m.entries[last.end-1])
+		if bytes.Compare(key, prev) > 0 && last.end == idx {
 			last.end = idx + 1
 			m.latestDirty = false
 			m.clearSnapshotLocked()
@@ -781,13 +737,13 @@ func (m *AppendOnly) lookupSortedRunsEntryLocked(key []byte) *appendOnlyEntry {
 		base := run.start
 		n := run.end - run.start
 		pos := sort.Search(n, func(i int) bool {
-			return appendOnlyCompareKeyToEntry(key, &active[base+i]) <= 0
+			return bytes.Compare(appendOnlyEntryKey(&active[base+i]), key) >= 0
 		})
 		if pos >= n {
 			continue
 		}
 		ent := &active[base+pos]
-		if appendOnlyCompareKeyToEntry(key, ent) == 0 {
+		if bytes.Equal(appendOnlyEntryKey(ent), key) {
 			return ent
 		}
 	}
@@ -815,11 +771,12 @@ func (m *AppendOnly) forEachSortedRunLatestLocked(visit func(*appendOnlyEntry)) 
 	for len(cursors) > 0 {
 		var first appendOnlySortedRunCursor
 		first, cursors = appendOnlySortedRunCursorHeapPop(active, cursors)
+		key := appendOnlyEntryKey(&active[first.idx])
 		chosen := first
 		popped = append(popped[:0], first)
 		for len(cursors) > 0 {
 			next := cursors[0]
-			if !appendOnlyEntryKeysEqual(&active[next.idx], &active[first.idx]) {
+			if !bytes.Equal(appendOnlyEntryKey(&active[next.idx]), key) {
 				break
 			}
 			next, cursors = appendOnlySortedRunCursorHeapPop(active, cursors)
@@ -907,7 +864,10 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	}
 	active := m.entries[:m.count]
 	sort.Slice(indices, func(i, j int) bool {
-		return appendOnlyEntryKeyCompare(&active[indices[i]], &active[indices[j]]) < 0
+		return bytes.Compare(
+			appendOnlyEntryKey(&active[indices[i]]),
+			appendOnlyEntryKey(&active[indices[j]]),
+		) < 0
 	})
 	return indices
 }
@@ -1029,8 +989,8 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		return ent
 	}
 	if m.ordered {
-		prev := &m.entries[m.lastIdx]
-		cmp := appendOnlyCompareKeyToEntry(k, prev)
+		prev := appendOnlyEntryKey(&m.entries[m.lastIdx])
+		cmp := bytes.Compare(k, prev)
 		if cmp > 0 {
 			m.lastIdx = idx
 			return ent
@@ -1169,7 +1129,7 @@ func (m *AppendOnly) canAppendTrustedSortedBatchLocked(entries []batchpkg.Entry)
 	if m.count == 0 || !m.hasLast {
 		return true
 	}
-	return appendOnlyCompareKeyToEntry(entries[0].Key, &m.entries[m.lastIdx]) > 0
+	return bytes.Compare(entries[0].Key, appendOnlyEntryKey(&m.entries[m.lastIdx])) > 0
 }
 
 func (m *AppendOnly) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
@@ -1297,7 +1257,7 @@ func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
 			return &active[idx]
 		}
 		idx := sort.Search(len(active), func(i int) bool {
-			if entryKey64, ok := appendOnlyEntryKeyU64(&active[i]); ok {
+			if entryKey64, ok := appendOnlyEntryInlineKeyU64(&active[i]); ok {
 				return entryKey64 >= key64
 			}
 			return bytes.Compare(appendOnlyEntryKey(&active[i]), key) >= 0
@@ -1306,7 +1266,7 @@ func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
 			return nil
 		}
 		ent := &active[idx]
-		if entryKey64, ok := appendOnlyEntryKeyU64(ent); ok {
+		if entryKey64, ok := appendOnlyEntryInlineKeyU64(ent); ok {
 			if entryKey64 != key64 {
 				return nil
 			}

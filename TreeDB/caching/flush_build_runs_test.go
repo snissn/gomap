@@ -290,9 +290,6 @@ func TestOpMergeHeapEightByteDuplicatePriorityAndTombstone(t *testing.T) {
 		priority := len(runs) - 1 - i
 		heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
 	}
-	for i := range heap {
-		heap[i].key64, heap[i].key64OK = opMergeKeyU64(heap[i].key)
-	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
 		(&heap).down(i, len(heap))
 	}
@@ -300,23 +297,23 @@ func TestOpMergeHeapEightByteDuplicatePriorityAndTombstone(t *testing.T) {
 	var out []batch.Entry
 	for len(heap) > 0 {
 		top := heap.pop()
-		currentKey, currentKey64, currentKey64OK := top.key, top.key64, top.key64OK
+		currentKey := top.key
 		for len(heap) > 0 {
 			next := heap.peek()
-			if next == nil || !opMergeKeysEqual(next.key, next.key64, next.key64OK, currentKey, currentKey64, currentKey64OK) {
+			if next == nil || !bytes.Equal(next.key, currentKey) {
 				break
 			}
 			shadowed := heap.pop()
 			shadowed.iter.Next()
 			if shadowed.iter.Valid() {
-				shadowed.refreshKey(true)
+				shadowed.key = shadowed.iter.Key()
 				heap.push(shadowed)
 			}
 		}
 		out = append(out, top.iter.Entry())
 		top.iter.Next()
 		if top.iter.Valid() {
-			top.refreshKey(true)
+			top.key = top.iter.Key()
 			heap.push(top)
 		}
 	}
