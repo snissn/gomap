@@ -56,6 +56,7 @@ type columnVectorGraphPhysicalRowReader struct {
 	rowRefStateFallbackReason           typeddecode.Reason
 	documentIDSource                    *columnVectorGraphDocumentIDStateSource
 	documentIDStateFallbackReason       typeddecode.Reason
+	quantizedAssetStatus                map[string]columnVectorGraphQuantizedAssetLoadStatus
 	preparedSearch                      *columnVectorGraphPreparedSearchView
 	sharedPreparedSearch                *columnVectorGraphSharedPreparedSearchRef
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
@@ -119,10 +120,11 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		}
 	}
 	graphReader := &columnVectorGraphPhysicalRowReader{
-		def:     def,
-		graph:   graph,
-		catalog: catalog,
-		reader:  reader,
+		def:                  def,
+		graph:                graph,
+		catalog:              catalog,
+		reader:               reader,
+		quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
 	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != "" {
 		key, keyErr := columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
@@ -131,7 +133,7 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			return nil, keyErr
 		}
 		shared, err := c.acquireColumnVectorGraphSharedPreparedSearch(key, func() (*columnVectorGraphSharedPreparedSearch, error) {
-			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog}
+			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog, quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus)}
 			success := false
 			defer func() {
 				if !success {
@@ -164,6 +166,7 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			_ = graphReader.Close()
 			return nil, errors.Join(err, releaseErr)
 		}
+		c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)
 		return graphReader, nil
 	}
 	if err := c.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(graphReader, snap, view); err != nil {
@@ -263,6 +266,7 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 				graphReader.typedVectorFallbackReason = fallbackReason
 			}
 		}
+		c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)
 	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 {
 		if graphReader.invNormSource == nil {

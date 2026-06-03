@@ -422,6 +422,9 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 			return err
 		}
 	}
+	if err := validateColumnVectorGraphQuantizedStateAssets(collection, cfg, def, state); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -18,17 +18,20 @@ const (
 	columnVectorIndexStateAssetRoleNormalizedVectors = "normalized_vectors"
 	columnVectorIndexStateAssetRoleRowRefs           = "row_refs"
 	columnVectorIndexStateAssetRoleDocumentIDs       = "document_ids"
+	columnVectorIndexStateAssetRoleQuantizedCodes    = "quantized_codes"
 
 	columnVectorIndexStateLogicalTypeUint32List    = "uint32_list"
 	columnVectorIndexStateLogicalTypeInt64         = "int64"
 	columnVectorIndexStateLogicalTypeFloat32       = "float32"
 	columnVectorIndexStateLogicalTypeFloat32Vector = "float32_vector"
 	columnVectorIndexStateLogicalTypeBytes         = "bytes"
+	columnVectorIndexStateLogicalTypeByteVector    = "byte_vector"
 	columnVectorIndexStateEncodingRawUint32List    = "raw_uint32_offsets_list"
 	columnVectorIndexStateEncodingRawInt64         = "raw_int64"
 	columnVectorIndexStateEncodingRawFloat32       = "raw_float32"
 	columnVectorIndexStateEncodingRawFloat32Vector = "raw_float32_vector"
 	columnVectorIndexStateEncodingRawBytesOffsets  = "raw_bytes_offsets"
+	columnVectorIndexStateEncodingRawFixedBytes    = "raw_fixed_bytes"
 )
 
 var columnVectorIndexStateRecordPrefixBytes = []byte(columnVectorIndexStateRecordPrefix)
@@ -382,6 +385,8 @@ func columnVectorIndexStateAssetTypeContract(role string) (logicalType, physical
 		return columnVectorIndexStateLogicalTypeInt64, columnVectorIndexStateEncodingRawInt64, true
 	case columnVectorIndexStateAssetRoleDocumentIDs:
 		return columnVectorIndexStateLogicalTypeBytes, columnVectorIndexStateEncodingRawBytesOffsets, true
+	case columnVectorIndexStateAssetRoleQuantizedCodes:
+		return columnVectorIndexStateLogicalTypeByteVector, columnVectorIndexStateEncodingRawFixedBytes, true
 	default:
 		return "", "", false
 	}
@@ -393,7 +398,8 @@ func columnVectorIndexStateAssetRoleKnown(role string) bool {
 		columnVectorIndexStateAssetRoleInverseNorm,
 		columnVectorIndexStateAssetRoleNormalizedVectors,
 		columnVectorIndexStateAssetRoleRowRefs,
-		columnVectorIndexStateAssetRoleDocumentIDs:
+		columnVectorIndexStateAssetRoleDocumentIDs,
+		columnVectorIndexStateAssetRoleQuantizedCodes:
 		return true
 	default:
 		return false
@@ -445,7 +451,8 @@ func columnVectorIndexStateDefinitionParametersMatch(state *columnVectorIndexSta
 		state.Dimensions == def.Dimensions &&
 		state.M == def.M &&
 		state.EfConstruction == def.EfConstruction &&
-		state.EfSearch == def.EfSearch
+		state.EfSearch == def.EfSearch &&
+		columnVectorGraphQuantizedStateAssetIDSetMatches(*def, *state)
 }
 
 func columnVectorIndexStateMatchesGraph(state columnVectorIndexStateSnapshot, graph columnVectorGraphManifestSnapshot) bool {

@@ -423,6 +423,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #2013 is the scoped production vector graph writer/reader that publishes
 		// and consumes raw_bytes_offsets document-ID state through typed-column assets.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_document_id_state.go")): {},
+		// #1926 is the scoped production vector graph writer/reader that publishes
+		// and validates scalar_u8 quantized code assets through typed-column storage.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_quantized_asset.go")): {},
 		// #2041 is the scoped production vector graph prepared-view helper that
 		// certifies row-ref and document-ID side-channel typed-column sections.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_prepared_state.go")): {},

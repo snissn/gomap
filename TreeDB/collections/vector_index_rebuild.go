@@ -780,6 +780,14 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
+	quantizedPartID := documentIDPartID
+	if preparedDocumentIDs.Present {
+		quantizedPartID = nextColumnVectorGraphPartIDAfter(quantizedPartID, preparedDocumentIDs.Ref.PartID)
+	}
+	preparedQuantizedAssets, err := prepareColumnVectorGraphQuantizedAssets(assetRootDir, collection, cfg, def, graph, manifest.Generation, quantizedPartID, rows)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -799,6 +807,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if documentIDAsset, ok := columnVectorGraphDocumentIDStateAssetSnapshot(preparedDocumentIDs); ok {
 		state.Assets = append(state.Assets, documentIDAsset)
 	}
+	state.Assets = append(state.Assets, columnVectorGraphQuantizedAssetSnapshotsFromPrepared(preparedQuantizedAssets)...)
 	stateRaw, err := encodeColumnVectorIndexStateRecord(state)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
