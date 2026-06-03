@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 func TestCommitLogWriteReadBatch(t *testing.T) {
@@ -499,6 +501,70 @@ func TestCommitLogCorruptCRC(t *testing.T) {
 	reader, err := NewReader(path)
 	if err != nil {
 		t.Fatalf("new reader: %v", err)
+	}
+	_, err = reader.ReadBatch()
+	if !errors.Is(err, ErrCorrupt) {
+		_ = reader.Close()
+		t.Fatalf("expected corrupt error, got %v", err)
+	}
+	_ = reader.Close()
+}
+
+func TestCommitLogAppendSingleCRCMatchesPayloadBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	record := Record{Op: OpSetInline, Key: []byte("single-key"), Value: []byte("single-value"), Seq: 7}
+	if err := writer.Append(record); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append single: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if len(data) <= segmentHeaderSize {
+		t.Fatalf("unexpected segment size %d", len(data))
+	}
+	payloadLen := int(binary.LittleEndian.Uint32(data[0:4]) & segmentLenMask)
+	if payloadLen != len(data)-segmentHeaderSize {
+		t.Fatalf("payload len=%d want %d", payloadLen, len(data)-segmentHeaderSize)
+	}
+	gotCRC := binary.LittleEndian.Uint32(data[4:8])
+	if wantCRC := crc.Checksum(data[segmentHeaderSize:]); gotCRC != wantCRC {
+		t.Fatalf("stored crc=%08x want payload checksum=%08x", gotCRC, wantCRC)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != 1 || got[0].Op != record.Op || got[0].Seq != record.Seq || !bytes.Equal(got[0].Key, record.Key) || !bytes.Equal(got[0].Value, record.Value) {
+		_ = reader.Close()
+		t.Fatalf("decoded single record mismatch: %+v", got)
+	}
+	_ = reader.Close()
+
+	data[segmentHeaderSize] ^= 0x80
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("write corrupt file: %v", err)
+	}
+	reader, err = NewReader(path)
+	if err != nil {
+		t.Fatalf("new corrupt reader: %v", err)
 	}
 	_, err = reader.ReadBatch()
 	if !errors.Is(err, ErrCorrupt) {

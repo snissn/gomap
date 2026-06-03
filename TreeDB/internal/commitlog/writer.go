@@ -21,7 +21,6 @@ const (
 	defaultCompressMinLen      = 64 << 10
 	directSegmentPayloadMinLen = 128 << 10
 	directCommandPayloadMinLen = 64 << 10
-	batchChecksumChunkBytes    = 64 << 10
 )
 
 var syncDirFn = syncDir
@@ -267,10 +266,46 @@ func (w *Writer) Append(record Record) error {
 		return ErrRecordTooLarge
 	}
 
-	if cap(w.scratch) < int(total) {
-		w.scratch = make([]byte, int(total))
+	payloadLen := int(total)
+	if payloadLen > int(segmentLenMask) {
+		return ErrRecordTooLarge
 	}
-	buf := w.scratch[:int(total)]
+	if !w.compress && segmentHeaderSize+payloadLen < directSegmentPayloadMinLen {
+		if err := w.flushBufferedCommandFrames(); err != nil {
+			return err
+		}
+		totalLen := segmentHeaderSize + payloadLen
+		if cap(w.scratch) < totalLen {
+			w.scratch = make([]byte, totalLen)
+		}
+		buf := w.scratch[:totalLen]
+		payload := buf[segmentHeaderSize:]
+
+		payload[0] = Version
+		binary.LittleEndian.PutUint32(payload[1:5], 1)
+
+		off := batchHeaderSize
+		payload[off] = record.Op
+		binary.LittleEndian.PutUint16(payload[off+1:off+3], keyLen)
+		binary.LittleEndian.PutUint32(payload[off+3:off+7], valLen)
+		binary.LittleEndian.PutUint64(payload[off+7:off+15], record.RID)
+		binary.LittleEndian.PutUint64(payload[off+15:off+23], record.Seq)
+		copy(payload[off+recordHeaderSize:], record.Key)
+		copy(payload[off+recordHeaderSize+len(record.Key):], record.Value)
+
+		binary.LittleEndian.PutUint32(buf[0:4], uint32(payloadLen))
+		binary.LittleEndian.PutUint32(buf[4:8], crc.Checksum(payload))
+		if _, err := w.bw.Write(buf); err != nil {
+			return err
+		}
+		w.size += int64(totalLen)
+		return nil
+	}
+
+	if cap(w.scratch) < payloadLen {
+		w.scratch = make([]byte, payloadLen)
+	}
+	buf := w.scratch[:payloadLen]
 
 	buf[0] = Version
 	binary.LittleEndian.PutUint32(buf[1:5], 1)
@@ -312,8 +347,6 @@ func (w *Writer) AppendBatch(records []Record) error {
 	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(records)))
 
 	off := batchHeaderSize
-	checksum := uint32(0)
-	checksumStart := 0
 	var zeroValueRef []byte
 	for i := range records {
 		r := &records[i]
@@ -382,16 +415,11 @@ func (w *Writer) AppendBatch(records []Record) error {
 			copy(buf[valueStart:valueEnd], r.Value)
 		}
 		off = next
-		if !w.compress && off-checksumStart >= batchChecksumChunkBytes {
-			checksum = crc.Update(checksum, buf[checksumStart:off])
-			checksumStart = off
-		}
 	}
 
 	w.scratch = buf[:off]
 	if !w.compress {
-		checksum = crc.Update(checksum, w.scratch[checksumStart:])
-		return w.writeRawSegmentWithChecksum(w.scratch, checksum)
+		return w.writeRawSegmentWithChecksum(w.scratch, crc.Checksum(w.scratch))
 	}
 	return w.writeSegment(w.scratch)
 }
@@ -459,8 +487,6 @@ func (w *Writer) appendZeroInlineBatchIfCompact(records []Record, batchSeq uint6
 	binary.LittleEndian.PutUint32(buf[13:17], uint32(valueLen))
 
 	off := zeroInlineBatchHeaderSize
-	checksum := uint32(0)
-	checksumStart := 0
 	for i := range records {
 		r := &records[i]
 		keyLen := uint16(len(r.Key))
@@ -468,14 +494,9 @@ func (w *Writer) appendZeroInlineBatchIfCompact(records []Record, batchSeq uint6
 		off += zeroInlineRecordHeaderSize
 		copy(buf[off:off+len(r.Key)], r.Key)
 		off += len(r.Key)
-		if off-checksumStart >= batchChecksumChunkBytes {
-			checksum = crc.Update(checksum, buf[checksumStart:off])
-			checksumStart = off
-		}
 	}
-	checksum = crc.Update(checksum, buf[checksumStart:])
 	w.scratch = buf
-	return true, w.writeRawSegmentWithChecksum(buf, checksum)
+	return true, w.writeRawSegmentWithChecksum(buf, crc.Checksum(buf))
 }
 
 func (w *Writer) AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, keyAt func(int) []byte) error {
@@ -498,8 +519,6 @@ func (w *Writer) AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, 
 	binary.LittleEndian.PutUint32(buf[13:17], uint32(valueLen))
 
 	off := zeroInlineBatchHeaderSize
-	checksum := uint32(0)
-	checksumStart := 0
 	for i := 0; i < count; i++ {
 		key := keyAt(i)
 		if len(key) > int(^uint16(0)) {
@@ -535,14 +554,9 @@ func (w *Writer) AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, 
 		off += zeroInlineRecordHeaderSize
 		copy(buf[off:off+len(key)], key)
 		off += len(key)
-		if off-checksumStart >= batchChecksumChunkBytes {
-			checksum = crc.Update(checksum, buf[checksumStart:off])
-			checksumStart = off
-		}
 	}
-	checksum = crc.Update(checksum, buf[checksumStart:])
 	w.scratch = buf[:off]
-	return w.writeRawSegmentWithChecksum(w.scratch, checksum)
+	return w.writeRawSegmentWithChecksum(w.scratch, crc.Checksum(w.scratch))
 }
 
 func (w *Writer) AppendCommand(env CommandEnvelope) error {
