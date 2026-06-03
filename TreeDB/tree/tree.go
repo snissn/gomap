@@ -837,6 +837,20 @@ type getManyLeafGroup struct {
 	count int
 }
 
+type getManyLeafNodeLease struct {
+	scratch *leafRefPageScratch
+	lease   LeafLogPageViewLease
+}
+
+func (l getManyLeafNodeLease) Release() {
+	if l.lease != nil {
+		l.lease.ReleaseLeafLogPageView()
+	}
+	if l.scratch != nil {
+		putLeafRefPageScratch(l.scratch)
+	}
+}
+
 // GetManyAppend resolves keys into out using arena for returned safe-copy
 // values. Missing keys leave nil entries in out. Present empty values use a
 // shared zero-length, capacity-zero slice.
@@ -902,11 +916,9 @@ func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte,
 	for i := range groups {
 		g := &groups[i]
 		var n node.Node
-		release, err := t.loadLeafNodeForGetMany(&n, g.ref, verifyAlways)
+		lease, err := t.loadLeafNodeForGetMany(&n, g.ref, verifyAlways)
 		if err != nil {
-			if release != nil {
-				release()
-			}
+			lease.Release()
 			return arena, err
 		}
 		for probeIdx := g.first; probeIdx >= 0; probeIdx = probes[probeIdx].next {
@@ -914,15 +926,11 @@ func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte,
 			var err error
 			arena, err = t.appendLeafValueFromNode(&n, probe.key, out, probe.outIndex, arena)
 			if err != nil {
-				if release != nil {
-					release()
-				}
+				lease.Release()
 				return arena, err
 			}
 		}
-		if release != nil {
-			release()
-		}
+		lease.Release()
 	}
 	return arena, nil
 }
@@ -997,18 +1005,19 @@ func (t *Tree) findLeafRefForGetMany(key []byte, verifyAlways bool) (page.ChildR
 	return page.ChildRef{}, false, errors.New("tree too deep")
 }
 
-func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyAlways bool) (func(), error) {
+func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyAlways bool) (getManyLeafNodeLease, error) {
+	var lease getManyLeafNodeLease
 	if ref.Kind != page.ChildRefLeafLog {
 		if err := t.loadChildRefViewInto(dst, ref, verifyAlways, false); err != nil {
-			return nil, err
+			return lease, err
 		}
 		if dst.Type() != page.PageTypeLeaf {
-			return nil, fmt.Errorf("invalid page type %d", dst.Type())
+			return lease, fmt.Errorf("invalid page type %d", dst.Type())
 		}
-		return nil, nil
+		return lease, nil
 	}
 	if t.slabReader == nil {
-		return nil, errors.New("missing slab reader")
+		return lease, errors.New("missing slab reader")
 	}
 
 	ptr := ref.Log
@@ -1016,22 +1025,21 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 		data        []byte
 		leafScratch *leafRefPageScratch
 		leafLease   LeafLogPageViewLease
-		release     func()
 	)
 	if t.leafLogView != nil {
 		var ok bool
 		var err error
 		data, leafLease, ok, err = t.leafLogView.ReadLeafLogPageUnsafeView(ptr)
 		if err != nil {
-			return nil, err
+			return lease, err
 		}
 		if ok {
-			release = func() { leafLease.ReleaseLeafLogPageView() }
+			lease.lease = leafLease
 			if err := validateLeafLogNodeInto(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false); err != nil {
-				release()
-				return nil, err
+				lease.Release()
+				return getManyLeafNodeLease{}, err
 			}
-			return release, nil
+			return lease, nil
 		}
 	}
 
@@ -1042,21 +1050,21 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 		data, usedScratch, err = t.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, leafScratch.buf)
 		if err != nil {
 			putLeafRefPageScratch(leafScratch)
-			return nil, err
+			return lease, err
 		}
 	} else if t.slabToReader != nil {
 		var err error
 		data, usedScratch, err = t.slabToReader.ReadUnsafeTo(ptr.ValuePtr(), leafScratch.buf)
 		if err != nil {
 			putLeafRefPageScratch(leafScratch)
-			return nil, err
+			return lease, err
 		}
 	} else if t.slabAppender != nil {
 		var err error
 		data, err = t.slabAppender.ReadUnsafeAppend(ptr.ValuePtr(), leafScratch.buf[:0])
 		if err != nil {
 			putLeafRefPageScratch(leafScratch)
-			return nil, err
+			return lease, err
 		}
 		usedScratch = true
 	} else {
@@ -1065,24 +1073,22 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 		var err error
 		data, err = t.slabReader.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
-			return nil, err
+			return lease, err
 		}
 	}
 	if leafScratch != nil {
 		if usedScratch {
-			release = func() { putLeafRefPageScratch(leafScratch) }
+			lease.scratch = leafScratch
 		} else {
 			putLeafRefPageScratch(leafScratch)
 			leafScratch = nil
 		}
 	}
 	if err := validateLeafLogNodeInto(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false); err != nil {
-		if release != nil {
-			release()
-		}
-		return nil, err
+		lease.Release()
+		return getManyLeafNodeLease{}, err
 	}
-	return release, nil
+	return lease, nil
 }
 
 func (t *Tree) appendLeafValueFromNode(n *node.Node, key []byte, out [][]byte, outIndex int, arena []byte) ([]byte, error) {
