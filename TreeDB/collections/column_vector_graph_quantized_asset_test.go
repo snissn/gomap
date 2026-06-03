@@ -45,7 +45,29 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	if asset.Role != columnVectorIndexStateAssetRoleQuantizedCodes || asset.AssetID != columnVectorGraphQuantizedCodesAssetID(def.QuantizedIndexes[0]) || asset.RowCount != len(rows) || asset.AssetBytes <= 0 {
 		t.Fatalf("quantized asset snapshot=%+v", asset)
 	}
-	prepared, err := loadColumnVectorGraphQuantizedAsset(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, state, def.QuantizedIndexes[0], asset)
+	if err := validateColumnVectorIndexStateAssetsForStatus(d.ColumnAssetRootDir(), "docs", *cfg, def, state, graph); err != nil {
+		t.Fatalf("validate state assets with quantized asset: %v", err)
+	}
+	missingQuantized := state
+	missingQuantized.Assets = append([]columnVectorIndexStateAssetSnapshot(nil), state.Assets...)
+	for i := range missingQuantized.Assets {
+		if missingQuantized.Assets[i].Role == columnVectorIndexStateAssetRoleQuantizedCodes {
+			missingQuantized.Assets = append(missingQuantized.Assets[:i], missingQuantized.Assets[i+1:]...)
+			break
+		}
+	}
+	if err := validateColumnVectorIndexStateAssetsForStatus(d.ColumnAssetRootDir(), "docs", *cfg, def, missingQuantized, graph); err == nil || !strings.Contains(err.Error(), "missing quantized asset") {
+		t.Fatalf("validate missing quantized asset err=%v want missing quantized asset", err)
+	}
+	noQuantizedDef := def
+	noQuantizedDef.QuantizedIndexes = nil
+	if columnVectorIndexStateDefinitionParametersMatch(&state, &noQuantizedDef) {
+		t.Fatalf("state with quantized asset matched definition without quantized declarations")
+	}
+	if err := validateColumnVectorIndexStateAssetsForStatus(d.ColumnAssetRootDir(), "docs", *cfg, noQuantizedDef, state, graph); err == nil || !strings.Contains(err.Error(), "unexpected quantized asset") {
+		t.Fatalf("validate unexpected quantized asset err=%v want unexpected quantized asset", err)
+	}
+	prepared, err := loadColumnVectorGraphQuantizedAsset(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, def.QuantizedIndexes[0], asset)
 	if err != nil {
 		t.Fatalf("loadColumnVectorGraphQuantizedAsset: %v", err)
 	}

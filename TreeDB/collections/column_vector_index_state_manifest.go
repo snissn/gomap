@@ -451,7 +451,8 @@ func columnVectorIndexStateDefinitionParametersMatch(state *columnVectorIndexSta
 		state.Dimensions == def.Dimensions &&
 		state.M == def.M &&
 		state.EfConstruction == def.EfConstruction &&
-		state.EfSearch == def.EfSearch
+		state.EfSearch == def.EfSearch &&
+		columnVectorGraphQuantizedStateAssetIDSetMatches(*def, *state)
 }
 
 func columnVectorIndexStateMatchesGraph(state columnVectorIndexStateSnapshot, graph columnVectorGraphManifestSnapshot) bool {

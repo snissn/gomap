@@ -254,6 +254,61 @@ func columnVectorGraphQuantizedAssetByName(state columnVectorIndexStateSnapshot,
 	return out
 }
 
+func columnVectorGraphQuantizedStateAssetIDSetMatches(def VectorIndexDefinition, state columnVectorIndexStateSnapshot) bool {
+	expected := make(map[string]struct{}, len(def.QuantizedIndexes))
+	for _, q := range def.QuantizedIndexes {
+		expected[columnVectorGraphQuantizedCodesAssetID(q)] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(expected))
+	for _, asset := range state.Assets {
+		if asset.Role != columnVectorIndexStateAssetRoleQuantizedCodes {
+			continue
+		}
+		if _, ok := expected[asset.AssetID]; !ok {
+			return false
+		}
+		if _, ok := seen[asset.AssetID]; ok {
+			return false
+		}
+		seen[asset.AssetID] = struct{}{}
+	}
+	return len(seen) == len(expected)
+}
+
+func validateColumnVectorGraphQuantizedStateAssets(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot) error {
+	expected := make(map[string]QuantizedVectorIndexDefinition, len(def.QuantizedIndexes))
+	for _, q := range def.QuantizedIndexes {
+		expected[columnVectorGraphQuantizedCodesAssetID(q)] = q
+	}
+	seen := make(map[string]struct{}, len(expected))
+	for _, asset := range state.Assets {
+		if asset.Role != columnVectorIndexStateAssetRoleQuantizedCodes {
+			continue
+		}
+		q, ok := expected[asset.AssetID]
+		if !ok {
+			return fmt.Errorf("collections: vector-index state unexpected quantized asset id=%q", asset.AssetID)
+		}
+		if _, ok := seen[asset.AssetID]; ok {
+			return fmt.Errorf("collections: vector-index state duplicate quantized asset id=%q", asset.AssetID)
+		}
+		seen[asset.AssetID] = struct{}{}
+		sourceCfg, err := columnVectorGraphQuantizedCodesColumnStoreConfig(collection, cfg, def, q)
+		if err != nil {
+			return err
+		}
+		if asset.SourceSchemaHash != sourceCfg.SchemaHash {
+			return fmt.Errorf("collections: vector-index state quantized asset %q schema_hash=%d want %d", q.Name, asset.SourceSchemaHash, sourceCfg.SchemaHash)
+		}
+	}
+	for assetID, q := range expected {
+		if _, ok := seen[assetID]; !ok {
+			return fmt.Errorf("collections: vector-index state missing quantized asset %q", q.Name)
+		}
+	}
+	return nil
+}
+
 func (c *Collection) prepareColumnVectorGraphQuantizedAssetsForReader(graphReader *columnVectorGraphPhysicalRowReader, view columnPhysicalScanSnapshotView) {
 	if c == nil || c.db == nil || graphReader == nil || graphReader.catalog == nil || graphReader.catalog.meta.Options.ColumnStore == nil || len(graphReader.def.QuantizedIndexes) == 0 || !view.VectorIndexStateFound {
 		return
@@ -276,7 +331,7 @@ func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, c
 			continue
 		}
 		status.Asset = asset
-		prepared, err := loadColumnVectorGraphQuantizedAsset(rootDir, collection, cfg, def, graph, state, q, asset)
+		prepared, err := loadColumnVectorGraphQuantizedAsset(rootDir, collection, cfg, def, graph, q, asset)
 		if err != nil {
 			status.Err = err
 		} else {
@@ -287,7 +342,7 @@ func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, c
 	return out
 }
 
-func loadColumnVectorGraphQuantizedAsset(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, q QuantizedVectorIndexDefinition, asset columnVectorIndexStateAssetSnapshot) (*quantizedasset.Prepared, error) {
+func loadColumnVectorGraphQuantizedAsset(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, asset columnVectorIndexStateAssetSnapshot) (*quantizedasset.Prepared, error) {
 	sourceCfg, err := columnVectorGraphQuantizedCodesColumnStoreConfig(collection, cfg, def, q)
 	if err != nil {
 		return nil, err
