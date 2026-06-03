@@ -173,11 +173,99 @@ func TestExecuteColumnGraphSearchPath(t *testing.T) {
 	if res.VectorIndexSearchPath != collections.VectorIndexSearchPathColumnGraphNativeReader {
 		t.Fatalf("search path=%q want %q", res.VectorIndexSearchPath, collections.VectorIndexSearchPathColumnGraphNativeReader)
 	}
+	if res.QueryMode != collections.VectorIndexQueryModeExact || res.QuantizedIndexName != "" || res.QuantizedRerankCandidates != 0 {
+		t.Fatalf("exact query config leaked quantized settings: mode=%q name=%q rerank=%d", res.QueryMode, res.QuantizedIndexName, res.QuantizedRerankCandidates)
+	}
+	if res.Search.AvgQuantizedScoreCalls != 0 || res.Search.AvgQuantizedCodeBytes != 0 || res.Search.AvgQuantizedRerankCandidates != 0 {
+		t.Fatalf("exact search reported quantized counters: %+v", res.Search)
+	}
 	if res.Validation.Recall < res.Validation.MinRecall {
 		t.Fatalf("recall=%f below min=%f", res.Validation.Recall, res.Validation.MinRecall)
 	}
 	if res.Search.Queries != 4 || res.Search.ExactFallbacks != 0 {
 		t.Fatalf("unexpected column_graph search result: %+v", res.Search)
+	}
+}
+
+func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		mode        collections.VectorIndexQueryMode
+		rerank      int
+		assertStats func(t *testing.T, res result)
+	}{
+		{
+			name: "quantized_only",
+			mode: collections.VectorIndexQueryModeQuantizedOnly,
+			assertStats: func(t *testing.T, res result) {
+				t.Helper()
+				if res.Search.AvgQuantizedScoreCalls <= 0 || res.Search.AvgQuantizedCodeBytes <= 0 {
+					t.Fatalf("quantized_only stats missing quantized scoring: %+v", res.Search)
+				}
+				if res.Search.AvgQuantizedRerankCandidates != 0 || res.Search.AvgQuantizedRerankExactScoreCalls != 0 {
+					t.Fatalf("quantized_only unexpectedly reranked: %+v", res.Search)
+				}
+			},
+		},
+		{
+			name:   "quantized_rerank",
+			mode:   collections.VectorIndexQueryModeQuantizedRerank,
+			rerank: 8,
+			assertStats: func(t *testing.T, res result) {
+				t.Helper()
+				if res.Search.AvgQuantizedScoreCalls <= 0 || res.Search.AvgQuantizedCodeBytes <= 0 {
+					t.Fatalf("quantized_rerank stats missing quantized scoring: %+v", res.Search)
+				}
+				if res.Search.AvgQuantizedRerankCandidates <= 0 || res.Search.AvgQuantizedRerankExactScoreCalls <= 0 {
+					t.Fatalf("quantized_rerank stats missing exact rerank: %+v", res.Search)
+				}
+				if res.Search.AvgVectorBytes <= 0 || res.Search.AvgNormBytes <= 0 {
+					t.Fatalf("quantized_rerank stats missing exact vector/norm reads: %+v", res.Search)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := execute(context.Background(), config{
+				dir:                       t.TempDir(),
+				keepDir:                   true,
+				docs:                      96,
+				dimensions:                8,
+				queries:                   4,
+				searchConcurrency:         []int{2},
+				validateQueries:           2,
+				validateDocs:              2,
+				topK:                      3,
+				batchSize:                 32,
+				m:                         4,
+				efConstruction:            32,
+				efSearch:                  32,
+				valuePointerThreshold:     defaultValuePointerThreshold,
+				leafGenerationTarget:      defaultLeafGenerationTarget,
+				minRecall:                 0,
+				disableExactFallback:      true,
+				vectorIndexStrategy:       collections.VectorIndexStrategyColumnGraph,
+				vectorQueryMode:           tc.mode,
+				quantizedIndexName:        defaultQuantizedIndexName,
+				quantizedRerankCandidates: tc.rerank,
+			})
+			if err != nil {
+				t.Fatalf("execute %s: %v", tc.name, err)
+			}
+			if res.Backend != "treedb_column_graph_"+tc.name {
+				t.Fatalf("backend=%q want treedb_column_graph_%s", res.Backend, tc.name)
+			}
+			if res.QueryMode != tc.mode {
+				t.Fatalf("query_mode=%q want %q", res.QueryMode, tc.mode)
+			}
+			if res.QuantizedIndexName != defaultQuantizedIndexName || res.QuantizedRerankCandidates != tc.rerank {
+				t.Fatalf("quantized config name=%q rerank=%d", res.QuantizedIndexName, res.QuantizedRerankCandidates)
+			}
+			if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].QueryMode != tc.mode || res.SearchBenchmarks[1].QueryMode != tc.mode {
+				t.Fatalf("search benchmark modes not threaded: %+v", res.SearchBenchmarks)
+			}
+			tc.assertStats(t, res)
+		})
 	}
 }
 
@@ -400,6 +488,69 @@ func TestParseConfigValuePointerThreshold(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-value-pointer-threshold", "-1"}); err == nil {
 		t.Fatal("parseConfig accepted negative value pointer threshold")
+	}
+}
+
+func TestParseConfigVectorQueryMode(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-matrix=false",
+		"-vector-index-strategy", "column_graph",
+		"-vector-query-mode", "quantized_rerank",
+		"-quantized-index-name", defaultQuantizedIndexName,
+		"-quantized-rerank-candidates", "32",
+	})
+	if err != nil {
+		t.Fatalf("parseConfig quantized_rerank: %v", err)
+	}
+	if cfg.vectorQueryMode != collections.VectorIndexQueryModeQuantizedRerank || cfg.quantizedIndexName != defaultQuantizedIndexName || cfg.quantizedRerankCandidates != 32 {
+		t.Fatalf("parsed quantized config=%+v", cfg)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "invalid mode",
+			args: []string{"-vector-query-mode", "binary_quantize"},
+			want: "unsupported -vector-query-mode",
+		},
+		{
+			name: "quantized requires column graph",
+			args: []string{"-vector-query-mode", "quantized_only", "-quantized-index-name", defaultQuantizedIndexName},
+			want: "require -vector-index-strategy column_graph",
+		},
+		{
+			name: "quantized requires index name",
+			args: []string{"-vector-index-strategy", "column_graph", "-vector-query-mode", "quantized_only"},
+			want: "-quantized-index-name is required",
+		},
+		{
+			name: "exact rejects quantized name",
+			args: []string{"-vector-query-mode", "exact", "-quantized-index-name", defaultQuantizedIndexName},
+			want: "-quantized-index-name requires",
+		},
+		{
+			name: "quantized only rejects rerank candidates",
+			args: []string{"-vector-index-strategy", "column_graph", "-vector-query-mode", "quantized_only", "-quantized-index-name", defaultQuantizedIndexName, "-quantized-rerank-candidates", "4"},
+			want: "requires -vector-query-mode quantized_rerank",
+		},
+		{
+			name: "rerank candidates below top k",
+			args: []string{"-vector-index-strategy", "column_graph", "-vector-query-mode", "quantized_rerank", "-quantized-index-name", defaultQuantizedIndexName, "-quantized-rerank-candidates", "2", "-top-k", "3"},
+			want: "cannot be less than -top-k",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseConfig(tc.args)
+			if err == nil {
+				t.Fatal("parseConfig succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

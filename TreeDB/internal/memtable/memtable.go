@@ -140,6 +140,14 @@ type CopySortedBatchApplier interface {
 	ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) (borrowedValues bool)
 }
 
+// CopySortedBatchValueCopier is an optional fast path for sorted batch callers
+// that cannot retain caller-owned values but can provide an owner/lifetime-aware
+// value copier. Implementations must still copy keys into table-owned storage.
+// The copied value slices may be retained by the memtable until it is retired.
+type CopySortedBatchValueCopier interface {
+	ApplyCopySortedBatchWithValueCopierTrusted(entries []batchpkg.Entry, copyValue func(value []byte) []byte, storeInlinePtrValues bool, onKey func(key []byte)) (copiedValues bool)
+}
+
 type Memtable struct {
 	sl *skiplist.SkipList
 	mu sync.RWMutex
