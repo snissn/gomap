@@ -553,12 +553,27 @@ func validatePackedColumnPadding(role Role, rows, elementsPerRow, bitsPerElement
 	if err != nil {
 		return fmt.Errorf("quantizedasset: role %q packed logical bits: %w", role, err)
 	}
-	if logicalBits%8 == 0 {
+	paddingBits := rowBytes*8 - logicalBits
+	if paddingBits == 0 {
 		return nil
 	}
-	packed := typedcolumn.PackedUintRows{Rows: rows, ElementsPerRow: elementsPerRow, BitsPerElement: bitsPerElement, BytesPerRow: rowBytes, Values: payload}
-	if err := packed.ValidatePadding(); err != nil {
-		return fmt.Errorf("quantizedasset: role %q packed padding: %w", role, err)
+	if paddingBits < 0 || paddingBits >= 8 {
+		return fmt.Errorf("quantizedasset: role %q packed padding bits=%d", role, paddingBits)
+	}
+	wantBytes, err := checkedMul(rows, rowBytes)
+	if err != nil {
+		return fmt.Errorf("quantizedasset: role %q packed padding payload size: %w", role, err)
+	}
+	if len(payload) != wantBytes {
+		return fmt.Errorf("quantizedasset: role %q packed padding payload bytes=%d want rows=%d*row_bytes=%d", role, len(payload), rows, rowBytes)
+	}
+	validBits := 8 - paddingBits
+	validMask := byte((1 << uint(validBits)) - 1)
+	for row := 0; row < rows; row++ {
+		finalByte := payload[row*rowBytes+rowBytes-1]
+		if finalByte&^validMask != 0 {
+			return fmt.Errorf("quantizedasset: role %q packed padding: row %d: non-zero padding bits final_byte=0x%02x valid_mask=0x%02x", role, row, finalByte, validMask)
+		}
 	}
 	return nil
 }
@@ -630,7 +645,8 @@ func validateRoleType(role Role, cert typedcolumn.ColumnPartLayoutContractColumn
 	case RolePackedCodes:
 		bits, ok := typedcolumn.PackedUintVectorBits(cert.Type)
 		wantEncoding, encOK := typedcolumn.PackedUintVectorEncoding(cert.Type)
-		if ok && encOK && cert.Encoding == wantEncoding && cert.BitsPerElement == bits && isPackedLogical(cert.LogicalType) {
+		wantLogical, logicalOK := packedLogicalTypeForPhysical(cert.Type)
+		if ok && encOK && logicalOK && cert.Encoding == wantEncoding && cert.BitsPerElement == bits && cert.LogicalType == wantLogical {
 			return nil
 		}
 		return fmt.Errorf("quantizedasset: role %q type/logical/encoding=(%s,%q,%s) is not a packed-code column", role, cert.Type, cert.LogicalType, cert.Encoding)
@@ -755,12 +771,16 @@ func unsignedDenseCodePhysical(t typedcolumn.ColumnType) (logical string, encodi
 	}
 }
 
-func isPackedLogical(logical string) bool {
-	switch logical {
-	case string(columnsemantics.LogicalPackedBitVector), string(columnsemantics.LogicalPackedUint2Vector), string(columnsemantics.LogicalPackedUint4Vector):
-		return true
+func packedLogicalTypeForPhysical(t typedcolumn.ColumnType) (string, bool) {
+	switch t {
+	case typedcolumn.ColumnTypePackedBitVector:
+		return string(columnsemantics.LogicalPackedBitVector), true
+	case typedcolumn.ColumnTypePackedUint2Vector:
+		return string(columnsemantics.LogicalPackedUint2Vector), true
+	case typedcolumn.ColumnTypePackedUint4Vector:
+		return string(columnsemantics.LogicalPackedUint4Vector), true
 	default:
-		return false
+		return "", false
 	}
 }
 

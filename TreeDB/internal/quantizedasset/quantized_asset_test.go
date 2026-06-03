@@ -217,6 +217,46 @@ func TestPreparedRandomOrdinalLookupAndScratchAllocs1932(t *testing.T) {
 	}
 }
 
+func TestPrepareFailsClosedPackedCodeLogicalTypeMatchesPhysical1932(t *testing.T) {
+	rows := 1
+	unpacked := []uint8{1, 0, 1, 1, 0, 0, 1, 0, 1, 0}
+	packedRaw, err := typedcolumn.EncodePackedUintRows(nil, rows, 10, 1, unpacked)
+	if err != nil {
+		t.Fatalf("EncodePackedUintRows: %v", err)
+	}
+	packedRows, err := typedcolumn.NewPackedUintRows(rows, 10, 1, packedRaw)
+	if err != nil {
+		t.Fatalf("NewPackedUintRows: %v", err)
+	}
+	image := buildQuantizedPartImage1932(t, []typedcolumn.ColumnDefinition{
+		{Name: "packed_col", Type: typedcolumn.ColumnTypePackedBitVector, FixedWidthElements: 10, BitsPerElement: 1, Encoding: typedcolumn.EncodingRawPackedBitVector, Compression: typedcolumn.CompressionNone, CompressionSet: true, StatsDisabled: true},
+	}, typedcolumn.Batch{
+		Rows:              rows,
+		PackedUintColumns: map[string]typedcolumn.PackedUintRows{"packed_col": packedRows},
+	}, map[string]string{"packed_col": string(columnsemantics.LogicalPackedUint4Vector)})
+	base := baseGraphIdentity1932(rows, 16, "cosine")
+	schema := schemaDescriptor1932(rows, 16, 10, 1, "cosine", "rabitq-bits", base, []ColumnDescriptor{
+		{Role: RolePackedCodes, Column: "packed_col", AssetID: "packed", Required: true, LogicalType: string(columnsemantics.LogicalPackedUint4Vector), Type: typedcolumn.ColumnTypePackedBitVector, Encoding: typedcolumn.EncodingRawPackedBitVector, ElementsPerRow: 10, BitsPerElement: 1, AssetBytes: int64(image.TotalBytes()), SourceSchemaHash: 0x19320001},
+	})
+	ref := refForImage1932("packed", image)
+	schema.Columns[0].Ref = ref
+	req := PrepareRequest{
+		Schema:   schema,
+		Expected: expectedFromSchema1932(schema, RolePackedCodes),
+		Parts: []PartImageSource{{
+			AssetID:          "packed",
+			Image:            image,
+			Ref:              ref,
+			AssetBytes:       int64(image.TotalBytes()),
+			SourceSchemaHash: 0x19320001,
+		}},
+	}
+	_, err = Prepare(req)
+	if err == nil || !strings.Contains(err.Error(), "packed-code column") || !strings.Contains(err.Error(), string(columnsemantics.LogicalPackedUint4Vector)) {
+		t.Fatalf("Prepare err=%v want packed logical/physical mismatch failure", err)
+	}
+}
+
 func TestPackedCodePaddingValidationFailsClosed1932(t *testing.T) {
 	rowBytes, err := typedcolumn.PackedUintRowBytes(10, 1)
 	if err != nil {
