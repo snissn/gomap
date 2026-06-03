@@ -95,6 +95,10 @@ type errorGetManyDB struct {
 	err error
 }
 
+type errorGetManyViewDB struct {
+	err error
+}
+
 func (d *errorGetManyDB) Name() string {
 	return "ErrGetMany"
 }
@@ -117,6 +121,30 @@ func (d *errorGetManyDB) Delete(key []byte) error {
 
 func (d *errorGetManyDB) GetMany(keys [][]byte) ([][]byte, error) {
 	return nil, d.err
+}
+
+func (d *errorGetManyViewDB) Name() string {
+	return "ErrGetManyView"
+}
+
+func (d *errorGetManyViewDB) Close() error {
+	return nil
+}
+
+func (d *errorGetManyViewDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *errorGetManyViewDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *errorGetManyViewDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *errorGetManyViewDB) GetManyView(keys [][]byte, fn kvstore.MultiGetViewFunc) error {
+	return d.err
 }
 
 type errorGetDB struct {
@@ -254,6 +282,12 @@ func (d *settleProbeDB) Delete(key []byte) error { return nil }
 type preferGetManyDB struct {
 	getCalls     int
 	getManyCalls int
+}
+
+type preferGetManyViewDB struct {
+	getCalls         int
+	getManyCalls     int
+	getManyViewCalls int
 }
 
 type scanViewOnlyDB struct {
@@ -406,6 +440,42 @@ func (d *preferGetManyDB) Delete(key []byte) error {
 func (d *preferGetManyDB) GetMany(keys [][]byte) ([][]byte, error) {
 	d.getManyCalls++
 	return make([][]byte, len(keys)), nil
+}
+
+func (d *preferGetManyViewDB) Name() string {
+	return "PreferGetManyView"
+}
+
+func (d *preferGetManyViewDB) Close() error {
+	return nil
+}
+
+func (d *preferGetManyViewDB) Get(key []byte) ([]byte, error) {
+	d.getCalls++
+	return nil, errors.New("get should not be called when GetManyView is available")
+}
+
+func (d *preferGetManyViewDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *preferGetManyViewDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *preferGetManyViewDB) GetMany(keys [][]byte) ([][]byte, error) {
+	d.getManyCalls++
+	return nil, errors.New("GetMany should not be called when GetManyView is available")
+}
+
+func (d *preferGetManyViewDB) GetManyView(keys [][]byte, fn kvstore.MultiGetViewFunc) error {
+	d.getManyViewCalls++
+	for i, key := range keys {
+		if err := fn(i, key, nil, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runRandomReadBatchErrorCase(t *testing.T, dbName string, factory DBFactory, want error) {
@@ -623,6 +693,51 @@ func TestRunBenchmark_RandomReadBatch_PrefersGetManyOverGet(t *testing.T) {
 	if math.IsNaN(got) || got <= 0 {
 		t.Fatalf("expected random_read_batch > 0 for %s, got %v", db.Name(), got)
 	}
+}
+
+func TestRunBenchmark_RandomReadBatch_PrefersGetManyViewOverGetMany(t *testing.T) {
+	var db *preferGetManyViewDB
+	const dbName = "random_read_batch_prefer_getmanyview"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = &preferGetManyViewDB{}
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:         257,
+		ValueSize:    16,
+		BatchSize:    64,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "random_read_batch",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected test DB instance")
+	}
+	if db.getCalls != 0 || db.getManyCalls != 0 {
+		t.Fatalf("expected Get/GetMany to be unused when GetManyView is implemented, get=%d getmany=%d", db.getCalls, db.getManyCalls)
+	}
+	if db.getManyViewCalls == 0 {
+		t.Fatalf("expected GetManyView to be called at least once")
+	}
+	got := run.Results["random_read_batch"][db.Name()]
+	if math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected random_read_batch > 0 for %s, got %v", db.Name(), got)
+	}
+}
+
+func TestRunBenchmark_RandomReadBatch_PropagatesGetManyViewError(t *testing.T) {
+	want := errors.New("getmanyview forced failure")
+	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_getmanyview", func(_ string) (kvstore.DB, error) {
+		return &errorGetManyViewDB{err: want}, nil
+	}, want)
 }
 
 func TestRunBenchmark_RandomReadBatch_PropagatesGetManyError(t *testing.T) {

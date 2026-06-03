@@ -53,6 +53,13 @@ func (r *SnapshotRootReader) GetAppend(key, dst []byte) ([]byte, error) {
 	return r.tree.GetAppend(key, dst)
 }
 
+func (r *SnapshotRootReader) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	if r == nil || !r.ok {
+		return tree.ErrKeyNotFound
+	}
+	return r.tree.GetManyView(keys, fn)
+}
+
 func (s *Snapshot) GetEntryAtRoot(rootID uint64, key []byte) (node.LeafEntry, error) {
 	tr, err := s.treeAtRoot(rootID)
 	if err != nil {
@@ -75,6 +82,14 @@ func (s *Snapshot) GetAppendAtRoot(rootID uint64, key, dst []byte) ([]byte, erro
 		return dst, err
 	}
 	return tr.GetAppend(key, dst)
+}
+
+func (s *Snapshot) GetManyViewAtRoot(rootID uint64, keys [][]byte, fn GetManyViewFunc) error {
+	tr, err := s.treeAtRoot(rootID)
+	if err != nil {
+		return err
+	}
+	return tr.GetManyView(keys, fn)
 }
 
 func (s *Snapshot) GetUnsafeAtRoot(rootID uint64, key []byte) ([]byte, error) {
