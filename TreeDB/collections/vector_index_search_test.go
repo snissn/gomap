@@ -124,7 +124,7 @@ func TestVectorIndexQuantizedDefinitionNormalization1926(t *testing.T) {
 	}
 }
 
-func TestSearchVectorIndexQuantizedModesFailClosed1926(t *testing.T) {
+func TestSearchVectorIndexQuantizedOnlySupportedAndRerankFailClosed1926(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
