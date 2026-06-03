@@ -842,6 +842,17 @@ type getManyLeafNodeLease struct {
 	lease   LeafLogPageViewLease
 }
 
+type getManyScratch struct {
+	probes        []getManyLeafProbe
+	groups        []getManyLeafGroup
+	groupByRef    map[page.ChildRef]int
+	groupByRefCap int
+}
+
+const getManyScratchMaxReuseKeys = 8192
+
+var getManyScratchPool sync.Pool
+
 func (l getManyLeafNodeLease) Release() {
 	if l.lease != nil {
 		l.lease.ReleaseLeafLogPageView()
@@ -849,6 +860,51 @@ func (l getManyLeafNodeLease) Release() {
 	if l.scratch != nil {
 		putLeafRefPageScratch(l.scratch)
 	}
+}
+
+func getGetManyScratch(keyCount int) *getManyScratch {
+	scratch, _ := getManyScratchPool.Get().(*getManyScratch)
+	if scratch == nil {
+		scratch = &getManyScratch{}
+	}
+	if cap(scratch.probes) < keyCount || cap(scratch.probes) > getManyScratchMaxReuseKeys {
+		scratch.probes = make([]getManyLeafProbe, 0, keyCount)
+	} else {
+		scratch.probes = scratch.probes[:0]
+	}
+	if cap(scratch.groups) < keyCount || cap(scratch.groups) > getManyScratchMaxReuseKeys {
+		scratch.groups = make([]getManyLeafGroup, 0, keyCount)
+	} else {
+		scratch.groups = scratch.groups[:0]
+	}
+	if scratch.groupByRef == nil || keyCount > getManyScratchMaxReuseKeys || scratch.groupByRefCap < keyCount {
+		scratch.groupByRef = make(map[page.ChildRef]int, keyCount)
+		scratch.groupByRefCap = keyCount
+	} else {
+		clear(scratch.groupByRef)
+	}
+	return scratch
+}
+
+func putGetManyScratch(scratch *getManyScratch) {
+	if scratch == nil {
+		return
+	}
+	if len(scratch.probes) > 0 {
+		clear(scratch.probes)
+	}
+	if len(scratch.groups) > 0 {
+		clear(scratch.groups)
+	}
+	if scratch.groupByRef != nil {
+		clear(scratch.groupByRef)
+	}
+	if cap(scratch.probes) > getManyScratchMaxReuseKeys || cap(scratch.groups) > getManyScratchMaxReuseKeys {
+		return
+	}
+	scratch.probes = scratch.probes[:0]
+	scratch.groups = scratch.groups[:0]
+	getManyScratchPool.Put(scratch)
 }
 
 // GetManyAppend resolves keys into out using arena for returned safe-copy
@@ -871,9 +927,8 @@ func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte,
 		verifyAlways = t.pager.VerifyOnRead()
 	}
 
-	probes := make([]getManyLeafProbe, 0, len(keys))
-	groups := make([]getManyLeafGroup, 0, len(keys)/4+1)
-	groupByRef := make(map[page.ChildRef]int, len(keys)/4+1)
+	scratch := getGetManyScratch(len(keys))
+	defer putGetManyScratch(scratch)
 	for i, key := range keys {
 		ref, groupable, err := t.findLeafRefForGetMany(key, verifyAlways)
 		if err == ErrKeyNotFound {
@@ -887,42 +942,42 @@ func (t *Tree) GetManyAppend(keys [][]byte, out [][]byte, arena []byte) ([]byte,
 			return t.getManyAppendFallback(keys, out, arena)
 		}
 
-		groupIdx, ok := groupByRef[ref]
+		groupIdx, ok := scratch.groupByRef[ref]
 		if !ok {
-			groupIdx = len(groups)
-			groupByRef[ref] = groupIdx
-			groups = append(groups, getManyLeafGroup{ref: ref, first: -1})
+			groupIdx = len(scratch.groups)
+			scratch.groupByRef[ref] = groupIdx
+			scratch.groups = append(scratch.groups, getManyLeafGroup{ref: ref, first: -1})
 		}
-		probeIdx := len(probes)
-		probes = append(probes, getManyLeafProbe{
+		probeIdx := len(scratch.probes)
+		scratch.probes = append(scratch.probes, getManyLeafProbe{
 			key:      key,
 			outIndex: i,
-			next:     groups[groupIdx].first,
+			next:     scratch.groups[groupIdx].first,
 		})
-		groups[groupIdx].first = probeIdx
-		groups[groupIdx].count++
+		scratch.groups[groupIdx].first = probeIdx
+		scratch.groups[groupIdx].count++
 	}
-	if len(groups) == 0 {
+	if len(scratch.groups) == 0 {
 		return arena, nil
 	}
 
 	treeGetManyGroupedCallsTotal.Add(1)
-	treeGetManyLeafGroupsTotal.Add(uint64(len(groups)))
-	treeGetManyLeafGroupItemsTotal.Add(uint64(len(probes)))
-	if saved := len(probes) - len(groups); saved > 0 {
+	treeGetManyLeafGroupsTotal.Add(uint64(len(scratch.groups)))
+	treeGetManyLeafGroupItemsTotal.Add(uint64(len(scratch.probes)))
+	if saved := len(scratch.probes) - len(scratch.groups); saved > 0 {
 		treeGetManyLeafLoadsSavedTotal.Add(uint64(saved))
 	}
 
-	for i := range groups {
-		g := &groups[i]
+	for i := range scratch.groups {
+		g := &scratch.groups[i]
 		var n node.Node
 		lease, err := t.loadLeafNodeForGetMany(&n, g.ref, verifyAlways)
 		if err != nil {
 			lease.Release()
 			return arena, err
 		}
-		for probeIdx := g.first; probeIdx >= 0; probeIdx = probes[probeIdx].next {
-			probe := probes[probeIdx]
+		for probeIdx := g.first; probeIdx >= 0; probeIdx = scratch.probes[probeIdx].next {
+			probe := scratch.probes[probeIdx]
 			var err error
 			arena, err = t.appendLeafValueFromNode(&n, probe.key, out, probe.outIndex, arena)
 			if err != nil {
