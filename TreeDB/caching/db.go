@@ -64,6 +64,8 @@ var batchArenaPools [batchArenaClassCount]sync.Pool // stores []byte
 var batchArenaLeasePool sync.Pool                   // stores *batchArenaLease
 var appendOnlyDirectValueArenaPools [appendOnlyDirectValueArenaClassCount]sync.Pool
 var batchEntrySliceRefPool sync.Pool                        // stores *batchEntrySliceRef
+var batchIntSliceRefPool sync.Pool                          // stores *batchIntSliceRef
+var batchInt64SliceRefPool sync.Pool                        // stores *batchInt64SliceRef
 var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
 var outerLeafArenaLeaseMu sync.Mutex
 var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
@@ -1125,6 +1127,14 @@ type batchEntrySliceRef struct {
 	entries []batch.Entry
 }
 
+type batchIntSliceRef struct {
+	idxs []int
+}
+
+type batchInt64SliceRef struct {
+	idxs []int64
+}
+
 func getBatchEntrySliceRef(entries []batch.Entry) *batchEntrySliceRef {
 	if v := batchEntrySliceRefPool.Get(); v != nil {
 		if ref, ok := v.(*batchEntrySliceRef); ok {
@@ -1141,6 +1151,42 @@ func putBatchEntrySliceRef(ref *batchEntrySliceRef) {
 	}
 	ref.entries = nil
 	batchEntrySliceRefPool.Put(ref)
+}
+
+func getBatchIntSliceRef(idxs []int) *batchIntSliceRef {
+	if v := batchIntSliceRefPool.Get(); v != nil {
+		if ref, ok := v.(*batchIntSliceRef); ok {
+			ref.idxs = idxs
+			return ref
+		}
+	}
+	return &batchIntSliceRef{idxs: idxs}
+}
+
+func putBatchIntSliceRef(ref *batchIntSliceRef) {
+	if ref == nil {
+		return
+	}
+	ref.idxs = nil
+	batchIntSliceRefPool.Put(ref)
+}
+
+func getBatchInt64SliceRef(idxs []int64) *batchInt64SliceRef {
+	if v := batchInt64SliceRefPool.Get(); v != nil {
+		if ref, ok := v.(*batchInt64SliceRef); ok {
+			ref.idxs = idxs
+			return ref
+		}
+	}
+	return &batchInt64SliceRef{idxs: idxs}
+}
+
+func putBatchInt64SliceRef(ref *batchInt64SliceRef) {
+	if ref == nil {
+		return
+	}
+	ref.idxs = nil
+	batchInt64SliceRefPool.Put(ref)
 }
 
 func getValueLogEligible(capacity int) []int {
@@ -28046,12 +28092,23 @@ func (db *DB) getBatchIntSlice(minCap int) []int {
 	}
 	if db != nil {
 		if pooled := db.batchIntPool.Get(); pooled != nil {
-			if idxs, ok := pooled.([]int); ok {
+			switch v := pooled.(type) {
+			case *batchIntSliceRef:
+				idxs := v.idxs
+				putBatchIntSliceRef(v)
 				if cap(idxs) >= minCap {
 					return idxs[:0]
 				}
 				if c := cap(idxs); c > 0 && c <= batchIntSlicePoolMaxRetain {
-					db.batchIntPool.Put(idxs[:0])
+					db.batchIntPool.Put(getBatchIntSliceRef(idxs[:0]))
+				}
+			case []int:
+				// Backward-compatible fallback for any legacy pooled shape.
+				if cap(v) >= minCap {
+					return v[:0]
+				}
+				if c := cap(v); c > 0 && c <= batchIntSlicePoolMaxRetain {
+					db.batchIntPool.Put(getBatchIntSliceRef(v[:0]))
 				}
 			}
 		}
@@ -28070,7 +28127,7 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 		batchIntPoolDropUnderPressureTotal.Add(1)
 		return
 	}
-	db.batchIntPool.Put(idxs[:0])
+	db.batchIntPool.Put(getBatchIntSliceRef(idxs[:0]))
 }
 
 func (db *DB) getBatchInt64Slice(minCap int) []int64 {
@@ -28079,12 +28136,23 @@ func (db *DB) getBatchInt64Slice(minCap int) []int64 {
 	}
 	if db != nil {
 		if pooled := db.batchInt64Pool.Get(); pooled != nil {
-			if idxs, ok := pooled.([]int64); ok {
+			switch v := pooled.(type) {
+			case *batchInt64SliceRef:
+				idxs := v.idxs
+				putBatchInt64SliceRef(v)
 				if cap(idxs) >= minCap {
 					return idxs[:0]
 				}
 				if c := cap(idxs); c > 0 && c <= batchIntSlicePoolMaxRetain {
-					db.batchInt64Pool.Put(idxs[:0])
+					db.batchInt64Pool.Put(getBatchInt64SliceRef(idxs[:0]))
+				}
+			case []int64:
+				// Backward-compatible fallback for any legacy pooled shape.
+				if cap(v) >= minCap {
+					return v[:0]
+				}
+				if c := cap(v); c > 0 && c <= batchIntSlicePoolMaxRetain {
+					db.batchInt64Pool.Put(getBatchInt64SliceRef(v[:0]))
 				}
 			}
 		}
@@ -28103,7 +28171,7 @@ func (db *DB) putBatchInt64Slice(idxs []int64) {
 		batchInt64PoolDropUnderPressureTotal.Add(1)
 		return
 	}
-	db.batchInt64Pool.Put(idxs[:0])
+	db.batchInt64Pool.Put(getBatchInt64SliceRef(idxs[:0]))
 }
 
 func appendUniqueMemtable(dst []memtable.Table, mt memtable.Table) []memtable.Table {
