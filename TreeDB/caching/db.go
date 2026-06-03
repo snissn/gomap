@@ -3291,9 +3291,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			continue
 		}
 		priority := len(unitRuns) - 1 - i
-		item := opMergeItem{iter: it, priority: priority}
-		item.refreshKey()
-		heap = append(heap, item)
+		heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+	}
+	useKey64Merge := len(heap) > 1
+	if useKey64Merge {
+		for i := range heap {
+			heap[i].key64, heap[i].key64OK = opMergeKeyU64(heap[i].key)
+		}
 	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
 		(&heap).down(i, len(heap))
@@ -3444,7 +3448,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				shadowedOps++
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
-					shadowed.refreshKey()
+					shadowed.refreshKey(useKey64Merge)
 					heap.push(shadowed)
 				}
 				continue
@@ -3507,7 +3511,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 		top.iter.Next()
 		if top.iter.Valid() {
-			top.refreshKey()
+			top.refreshKey(useKey64Merge)
 			heap.push(top)
 		}
 	}
@@ -11765,7 +11769,7 @@ func opMergeKeyU64(key []byte) (uint64, bool) {
 	return binary.BigEndian.Uint64(key), true
 }
 
-func (x *opMergeItem) refreshKey() {
+func (x *opMergeItem) refreshKey(useKey64 bool) {
 	if x == nil || x.iter == nil || !x.iter.Valid() {
 		x.key = nil
 		x.key64 = 0
@@ -11773,7 +11777,12 @@ func (x *opMergeItem) refreshKey() {
 		return
 	}
 	x.key = x.iter.Key()
-	x.key64, x.key64OK = opMergeKeyU64(x.key)
+	if useKey64 {
+		x.key64, x.key64OK = opMergeKeyU64(x.key)
+	} else {
+		x.key64 = 0
+		x.key64OK = false
+	}
 }
 
 func opMergeCompareKeys(a []byte, a64 uint64, a64OK bool, b []byte, b64 uint64, b64OK bool) int {
@@ -23233,9 +23242,13 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			it := newOpRunIter(unitRuns[i])
 			if it.Valid() {
 				priority := len(unitRuns) - 1 - i
-				item := opMergeItem{iter: it, priority: priority}
-				item.refreshKey()
-				heap = append(heap, item)
+				heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+			}
+		}
+		useKey64Merge := len(heap) > 1
+		if useKey64Merge {
+			for i := range heap {
+				heap[i].key64, heap[i].key64OK = opMergeKeyU64(heap[i].key)
 			}
 		}
 		for i := len(heap)/2 - 1; i >= 0; i-- {
@@ -23257,7 +23270,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 					shadowedOps++
 					shadowed.iter.Next()
 					if shadowed.iter.Valid() {
-						shadowed.refreshKey()
+						shadowed.refreshKey(useKey64Merge)
 						heap.push(shadowed)
 					}
 					continue
@@ -23313,7 +23326,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 
 			top.iter.Next()
 			if top.iter.Valid() {
-				top.refreshKey()
+				top.refreshKey(useKey64Merge)
 				heap.push(top)
 			}
 		}

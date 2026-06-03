@@ -272,3 +272,64 @@ func BenchmarkBuildOpRunsAppendOnlyShapes(b *testing.B) {
 		})
 	}
 }
+
+func TestOpMergeHeapEightByteDuplicatePriorityAndTombstone(t *testing.T) {
+	older := []batch.Entry{
+		{Type: batch.OpPut, Key: buildRunKey(1), Value: []byte("old-1")},
+		{Type: batch.OpPut, Key: buildRunKey(2), Value: []byte("old-2")},
+	}
+	newer := []batch.Entry{
+		{Type: batch.OpDelete, Key: buildRunKey(1)},
+		{Type: batch.OpPut, Key: buildRunKey(3), Value: []byte("new-3")},
+	}
+	runs := [][]batch.Entry{older, newer}
+	heap := getOpMergeHeap(len(runs))
+	defer putOpMergeHeap(heap)
+	for i := range runs {
+		it := newOpRunIter([][]batch.Entry{runs[i]})
+		priority := len(runs) - 1 - i
+		heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+	}
+	for i := range heap {
+		heap[i].key64, heap[i].key64OK = opMergeKeyU64(heap[i].key)
+	}
+	for i := len(heap)/2 - 1; i >= 0; i-- {
+		(&heap).down(i, len(heap))
+	}
+
+	var out []batch.Entry
+	for len(heap) > 0 {
+		top := heap.pop()
+		currentKey, currentKey64, currentKey64OK := top.key, top.key64, top.key64OK
+		for len(heap) > 0 {
+			next := heap.peek()
+			if next == nil || !opMergeKeysEqual(next.key, next.key64, next.key64OK, currentKey, currentKey64, currentKey64OK) {
+				break
+			}
+			shadowed := heap.pop()
+			shadowed.iter.Next()
+			if shadowed.iter.Valid() {
+				shadowed.refreshKey(true)
+				heap.push(shadowed)
+			}
+		}
+		out = append(out, top.iter.Entry())
+		top.iter.Next()
+		if top.iter.Valid() {
+			top.refreshKey(true)
+			heap.push(top)
+		}
+	}
+	if len(out) != 3 {
+		t.Fatalf("merged entries=%d want 3: %+v", len(out), out)
+	}
+	if binary.BigEndian.Uint64(out[0].Key) != 1 || out[0].Type != batch.OpDelete {
+		t.Fatalf("first merged entry = key %d type %d, want delete tombstone for key 1", binary.BigEndian.Uint64(out[0].Key), out[0].Type)
+	}
+	if binary.BigEndian.Uint64(out[1].Key) != 2 || string(out[1].Value) != "old-2" {
+		t.Fatalf("second merged entry = key %d value %q, want key 2 old-2", binary.BigEndian.Uint64(out[1].Key), out[1].Value)
+	}
+	if binary.BigEndian.Uint64(out[2].Key) != 3 || string(out[2].Value) != "new-3" {
+		t.Fatalf("third merged entry = key %d value %q, want key 3 new-3", binary.BigEndian.Uint64(out[2].Key), out[2].Value)
+	}
+}
