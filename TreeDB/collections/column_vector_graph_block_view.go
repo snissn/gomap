@@ -32,20 +32,22 @@ type columnVectorGraphAdjacencySpan struct {
 }
 
 type columnVectorGraphSearchPlan struct {
-	reader             *columnVectorGraphPhysicalRowReader
-	physicalReader     *columnPhysicalRowReader
-	blockViews         map[int]*columnVectorGraphBlockView
-	singleBlockView    *columnVectorGraphBlockView
-	ordinalRefs        []columnVectorGraphOrdinalRef
-	ordinalAssigned    []bool
-	ordinalRefsReady   bool
-	singleOrdinalRange bool
-	scoreSource        columnVectorGraphSearchSource
-	preparedSearch     *columnVectorGraphPreparedSearchView
-	scoreBatchMode     columnVectorGraphScoreBatchMode
-	hits               uint64
-	misses             uint64
-	builds             uint64
+	reader                *columnVectorGraphPhysicalRowReader
+	physicalReader        *columnPhysicalRowReader
+	blockViews            map[int]*columnVectorGraphBlockView
+	singleBlockView       *columnVectorGraphBlockView
+	ordinalRefs           []columnVectorGraphOrdinalRef
+	ordinalAssigned       []bool
+	ordinalRefsReady      bool
+	singleOrdinalRange    bool
+	scoreSource           columnVectorGraphSearchSource
+	preparedSearch        *columnVectorGraphPreparedSearchView
+	quantizedScorer       columnVectorGraphScalarU8QuantizedScorer
+	quantizedScorerActive bool
+	scoreBatchMode        columnVectorGraphScoreBatchMode
+	hits                  uint64
+	misses                uint64
+	builds                uint64
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
@@ -81,6 +83,8 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlanInternal(reader 
 	}
 	plan.physicalReader = physicalReader
 	plan.preparedSearch = nil
+	plan.quantizedScorer = columnVectorGraphScalarU8QuantizedScorer{}
+	plan.quantizedScorerActive = false
 	plan.hits = 0
 	plan.misses = 0
 	plan.builds = 0

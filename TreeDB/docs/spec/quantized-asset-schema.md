@@ -39,9 +39,11 @@ in graph ordinal order, records it in vector-index state as `quantized_codes`
 with asset id
 `quantized/<name>/codes`, and validates the prepared asset against the base graph
 generation/checksum/schema identity on open. Quantized modes validate the
-selected name/options and asset load status, then still fail closed with
-search-unavailable scorer-unavailable status before graph traversal/scoring.
-They must not silently return exact results. Exact mode rejects quantized-only
+selected name/options and asset load status before graph traversal/scoring. The
+`scalar_u8` v1 `quantized_only` scorer consumes the prepared `codes` reader and
+scores normalized query/candidate code rows. `quantized_rerank` remains
+fail-closed until exact rerank over the quantized candidate set lands. Quantized
+modes must not silently return exact results. Exact mode rejects quantized-only
 fields so future callers do not accidentally rely on no-op options.
 
 ## Fail-closed validation

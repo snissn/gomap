@@ -135,7 +135,7 @@ type VectorIndexSearchStats struct {
 	NormBytesRead uint64 `json:"norm_bytes_read,omitempty"`
 	// AdjacencyBytesRead is the logical adjacency payload bytes read while expanding graph nodes.
 	AdjacencyBytesRead uint64 `json:"adjacency_bytes_read,omitempty"`
-	// CandidateFetches is the per-search count of vector row fetches for scored candidates.
+	// CandidateFetches is the per-search count of score-plane row fetches for scored candidates.
 	CandidateFetches uint64 `json:"candidate_fetches,omitempty"`
 	// ScoreBatchCalls counts logical score calls: singleton scalar calls and indexed tile calls.
 	ScoreBatchCalls uint64 `json:"score_batch_calls,omitempty"`
@@ -149,6 +149,10 @@ type VectorIndexSearchStats struct {
 	ScoreBatchScalarFallbackCalls uint64 `json:"score_batch_fallback,omitempty"`
 	// PreparedScoreCalls counts candidate scores produced by the prepared vector/norm scoring view.
 	PreparedScoreCalls uint64 `json:"prepared_score_calls,omitempty"`
+	// QuantizedScoreCalls counts candidate scores produced by a quantized score-plane scorer.
+	QuantizedScoreCalls uint64 `json:"quantized_score_calls,omitempty"`
+	// QuantizedCodeBytesRead is the logical quantized code-row byte count read while scoring candidates.
+	QuantizedCodeBytesRead uint64 `json:"quantized_code_bytes_read,omitempty"`
 	// ScoreFloat64Fallbacks counts rare dot-product retries using float64 after a non-finite float32 dot.
 	ScoreFloat64Fallbacks uint64 `json:"score_float64_fallbacks,omitempty"`
 	// ExpansionFetches is the per-search count of adjacency row fetches for expanded nodes.
@@ -1128,6 +1132,8 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		ScoreBatchOptimizedCalls:              searchStats.ScoreBatchOptimizedCalls,
 		ScoreBatchScalarFallbackCalls:         searchStats.ScoreBatchScalarFallbackCalls,
 		PreparedScoreCalls:                    searchStats.PreparedScoreCalls,
+		QuantizedScoreCalls:                   searchStats.QuantizedScoreCalls,
+		QuantizedCodeBytesRead:                searchStats.QuantizedCodeBytesRead,
 		ScoreFloat64Fallbacks:                 searchStats.ScoreFloat64Fallbacks,
 		ExpansionFetches:                      searchStats.ExpansionFetches,
 		ResultFetches:                         searchStats.ResultFetches,
