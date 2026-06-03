@@ -55,8 +55,13 @@ TOP_K=10 \
 EF_SEARCH=128 \
 TREEDB_QUANTIZED_INDEX_NAME=embedding.scalar_u8.fast \
 TREEDB_QUANTIZED_RERANK_CANDIDATES=32 \
+TREEDB_QUANTIZED_MIN_RECALL=0 \
 scripts/bench_vector_db_compare.sh
 ```
+
+The quantized comparison leaves TreeDB quantized recall as an observation by
+setting `TREEDB_QUANTIZED_MIN_RECALL=0`; full-vector TreeDB/pgvector rows still
+use `MIN_RECALL` (default `0.95`) as their recall gate.
 
 Backends:
 
@@ -92,13 +97,21 @@ Configuration:
 - `BACKENDS`: comma-separated backend list. Defaults to `treedb,vectorlite`.
 - `DOCS`, `DIMS`, `QUERIES`, `VALIDATE_QUERIES`, `TOP_K`: dataset and validation sizes.
 - `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
-- `M`, `EF_CONSTRUCTION`, `EF_SEARCH`, `MIN_RECALL`: HNSW and recall parameters.
+- `M`, `EF_CONSTRUCTION`, `EF_SEARCH`: HNSW parameters.
+- `MIN_RECALL`: recall gate for full-vector rows such as TreeDB exact/default,
+  Vectorlite, pgvector, and MongoDB. Defaults to `0.95`.
 - `TREEDB_COLUMN_GRAPH_EF_SEARCH`: optional efSearch override for TreeDB
   `column_graph` rows; defaults to `EF_SEARCH`.
 - `TREEDB_QUANTIZED_INDEX_NAME`: scalar_u8 TreeDB quantized score-plane name.
   Defaults to `embedding.scalar_u8.fast`.
 - `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB quantized-rerank exact rerank
   candidate limit. Defaults to `32`; set `0` to use the normalized efSearch set.
+- `TREEDB_QUANTIZED_MIN_RECALL`: recall gate for both TreeDB quantized rows.
+  Defaults to `0`, so comparisons report quantized recall instead of failing
+  before rendering; set a positive value to enforce a quantized recall floor.
+- `TREEDB_QUANTIZED_ONLY_MIN_RECALL` and
+  `TREEDB_QUANTIZED_RERANK_MIN_RECALL`: optional per-mode overrides for
+  `TREEDB_QUANTIZED_MIN_RECALL`.
 - `PGVECTOR_DSN`: external PostgreSQL DSN. If empty and `pgvector` is enabled,
   the runner starts Docker unless `PGVECTOR_DOCKER=false`.
 - `PGVECTOR_DOCKER`, `PGVECTOR_IMAGE`, `PGVECTOR_MAX_CONNECTIONS`: automatic
