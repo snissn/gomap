@@ -4864,10 +4864,6 @@ func scanTreeDBVLogCodecStatsFile(path string, scan *treeDBVlogCodecScanStats, c
 		if bodyLen > treeDBVlogScanMaxBodyLen {
 			return fmt.Errorf("%s: value-log body too large: %d > %d", path, bodyLen, treeDBVlogScanMaxBodyLen)
 		}
-		maxInt := uint64(^uint(0) >> 1)
-		if uint64(bodyLen) > maxInt {
-			return fmt.Errorf("%s: value-log body too large for allocation: %d", path, bodyLen)
-		}
 		body := make([]byte, int(bodyLen))
 		if _, err := io.ReadFull(f, body); err != nil {
 			return err
