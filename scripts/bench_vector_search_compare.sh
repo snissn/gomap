@@ -174,7 +174,14 @@ Canonical current production comparison:
   The script emits a separate \`## search benchmarks cpu=<n>\` block for each
   requested concurrency so worker counts stay unambiguous.
   The timed loop uses production stats mode; a full-diagnostics sample is taken
-  outside the timed loop to report candidates/search and edge counters.
+  outside the timed loop to report candidates/search and edge counters. TreeDB
+  rows also report route/search-pack guardrails such as
+  \`search_route_column_graph_prepared/search\`,
+  \`hnsw_search_pack_active/search\`,
+  \`hnsw_search_pack_missing/search\`, \`docs_fetched/search\`,
+  \`graph_row_fallbacks/search\`, score-batch fallback reason flags,
+  vector/adjacency source-state counters, and candidate/visited-edge byte
+  counters used by the HNSW search-pack stack.
 - \`.../USearch_Search\` and \`.../USearch_SearchParallel\` time the pure
   in-memory USearch Go binding baseline with cosine/f32 HNSW and the same
   synthetic vector/query generator, M, efConstruction, efSearch, topK, docs,

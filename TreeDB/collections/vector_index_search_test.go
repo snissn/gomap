@@ -994,6 +994,79 @@ func TestVectorIndexSearcherSearchWithBufferResultEquivalenceAndZeroAllocs2124(t
 	}
 }
 
+func TestVectorIndexSearcherSearchWithBufferRouteStatsAndNoDocumentBoundary2311(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{0.7, 0.3, 0}},
+		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+
+	var buffer VectorIndexSearchBuffer
+	got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
+		Query:     []float32{0.6, 0.4, 0},
+		TopK:      3,
+		EfSearch:  len(rows),
+		StatsMode: VectorIndexSearchStatsModeFullDiagnostics,
+	}, &buffer)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 3)
+	if got.Path != VectorIndexSearchPathColumnGraphNativeReader {
+		t.Fatalf("path=%q want current column_graph native-reader route", got.Path)
+	}
+	stats := got.Stats
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+		t.Fatalf("route stats=%+v want exactly one current column_graph route and no search-pack route", stats)
+	}
+	if stats.HNSWSearchPackActive != 0 || stats.HNSWSearchPackMissing != 1 || stats.HNSWSearchPackInvalid != 0 || stats.HNSWSearchPackFallbacks != 0 || stats.HNSWSearchPackMmapDirect != 0 || stats.HNSWSearchPackHeapCopy != 0 {
+		t.Fatalf("pack stats=%+v want hnsw_search_pack_v1 absent and inactive in #2311 baseline", stats)
+	}
+	if stats.SearchRouteColumnGraphPrepared == 1 && stats.PreparedGraphSearchViews == 0 {
+		t.Fatalf("graph route stats=%+v want prepared-route views when prepared route is active", stats)
+	}
+	if stats.GraphRows != 0 || stats.GraphRowFallbacks != 0 {
+		t.Fatalf("graph route stats=%+v want current-format route without graph-row fallback", stats)
+	}
+	if stats.DocumentsFetched != 0 || stats.DocumentsMissing != 0 || stats.DocumentBytes != 0 || stats.DocumentOutputBytes != 0 || stats.DocumentFieldsReconstructed != 0 {
+		t.Fatalf("document boundary stats=%+v want no document materialization for SearchWithBuffer", stats)
+	}
+	for i, result := range got.Results {
+		if len(result.Document) != 0 {
+			t.Fatalf("result[%d] materialized document len=%d want no-document boundary", i, len(result.Document))
+		}
+	}
+	if stats.Candidates == 0 || stats.VisitedNodes == 0 || stats.VisitedEdges == 0 || stats.VectorBytesRead == 0 || stats.AdjacencyBytesRead == 0 {
+		t.Fatalf("hot-loop counters=%+v want candidates, visited nodes/edges, vector bytes, adjacency bytes", stats)
+	}
+	if stats.ScoreBatchCalls == 0 || stats.ScoreBatchCandidates == 0 || stats.ScoreBatchOptimizedCalls+stats.ScoreBatchScalarFallbackCalls == 0 {
+		t.Fatalf("score-batch counters=%+v want score batch mode/fallback evidence", stats)
+	}
+	vectorTypedSourceViews := stats.VectorDirectViews + stats.VectorMmapDirectViews + stats.VectorPreparedDirectViews + stats.VectorHeapCopyTypedViews
+	if vectorTypedSourceViews == 0 || stats.VectorScratchDecodes != 0 {
+		t.Fatalf("vector source stats=%+v want typed-column vector source without scratch fallback", stats)
+	}
+	adjacencyTypedSourceViews := stats.AdjacencyPreparedCSRDirectViews + stats.AdjacencyPreparedCSRMmapDirectViews + stats.AdjacencyTypedListDirectViews + stats.AdjacencyTypedListMmapDirectViews + stats.AdjacencyTypedListHeapCopyTypedViews
+	if adjacencyTypedSourceViews == 0 || stats.AdjacencyScratchDecodes != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencySourceFallbacks != 0 {
+		t.Fatalf("adjacency source stats=%+v want typed-column adjacency source without legacy/scratch fallback", stats)
+	}
+	if stats.ResultIDTypedBytesState == 0 || stats.RowRefStateResultRefs == 0 || stats.ResultIDGraphFallbacks != 0 {
+		t.Fatalf("identity stats=%+v want vector-index row-ref/document-id state without graph-row fallback", stats)
+	}
+}
+
 func TestVectorIndexSearcherSearchWithBufferReuseGrowShrinkNoStaleIDs1961(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-long-a", vector: []float32{1, 0, 0}},
@@ -1836,6 +1909,15 @@ func assertVectorIndexSearchResultIDStatsContract2124(tb testing.TB, got, want V
 		{name: "expansion_fetches", got: got.ExpansionFetches, want: want.ExpansionFetches},
 		{name: "result_fetches", got: got.ResultFetches, want: want.ResultFetches},
 		{name: "prepared_graph_search_views", got: got.PreparedGraphSearchViews, want: want.PreparedGraphSearchViews},
+		{name: "search_route_column_graph_prepared", got: got.SearchRouteColumnGraphPrepared, want: want.SearchRouteColumnGraphPrepared},
+		{name: "search_route_column_graph_fallback", got: got.SearchRouteColumnGraphFallback, want: want.SearchRouteColumnGraphFallback},
+		{name: "search_route_hnsw_search_pack", got: got.SearchRouteHNSWSearchPack, want: want.SearchRouteHNSWSearchPack},
+		{name: "hnsw_search_pack_active", got: got.HNSWSearchPackActive, want: want.HNSWSearchPackActive},
+		{name: "hnsw_search_pack_missing", got: got.HNSWSearchPackMissing, want: want.HNSWSearchPackMissing},
+		{name: "hnsw_search_pack_invalid", got: got.HNSWSearchPackInvalid, want: want.HNSWSearchPackInvalid},
+		{name: "hnsw_search_pack_fallbacks", got: got.HNSWSearchPackFallbacks, want: want.HNSWSearchPackFallbacks},
+		{name: "hnsw_search_pack_mmap_direct", got: got.HNSWSearchPackMmapDirect, want: want.HNSWSearchPackMmapDirect},
+		{name: "hnsw_search_pack_heap_copy", got: got.HNSWSearchPackHeapCopy, want: want.HNSWSearchPackHeapCopy},
 		{name: "result_id_typed_bytes_state", got: got.ResultIDTypedBytesState, want: want.ResultIDTypedBytesState},
 		{name: "result_id_graph_fallbacks", got: got.ResultIDGraphFallbacks, want: want.ResultIDGraphFallbacks},
 		{name: "row_ref_state_result_refs", got: got.RowRefStateResultRefs, want: want.RowRefStateResultRefs},
@@ -1852,6 +1934,12 @@ func assertVectorIndexSearchResultIDStatsContract2124(tb testing.TB, got, want V
 	}
 	if got.GraphRows != 0 || got.ResultIDGraphFallbacks != 0 || got.GraphRowFallbacks != 0 || got.VectorScratchDecodes != 0 || got.NormScratchDecodes != 0 || got.AdjacencyScratchDecodes != 0 || got.TypedColumnFallbacks != 0 {
 		tb.Fatalf("stats=%+v want healthy typed-column result-ID path without graph-row/scratch fallbacks", got)
+	}
+	if got.SearchRouteHNSWSearchPack != 0 || got.SearchRouteColumnGraphPrepared+got.SearchRouteColumnGraphFallback != 1 {
+		tb.Fatalf("stats=%+v want exactly one current column_graph route and no search-pack route", got)
+	}
+	if got.HNSWSearchPackActive != 0 || got.HNSWSearchPackMissing != 1 || got.HNSWSearchPackInvalid != 0 || got.HNSWSearchPackFallbacks != 0 || got.HNSWSearchPackMmapDirect != 0 || got.HNSWSearchPackHeapCopy != 0 {
+		tb.Fatalf("stats=%+v want hnsw_search_pack_v1 absent/inactive baseline", got)
 	}
 	if got.ResultIDTypedBytesState == 0 || got.ResultIDPreparedBytesViews == 0 || got.RowRefVectorSourceState == 0 {
 		tb.Fatalf("stats=%+v want typed-column result-ID and row-ref state", got)
@@ -2956,6 +3044,25 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.ResultIDStateValidationFailures), "result_id_state_validation_failures/search")
 	b.ReportMetric(float64(stats.PreparedGraphSearchViews), "prepared_graph_search_views/search")
 	b.ReportMetric(float64(stats.GraphRowFallbacks), "graph_row_fallbacks/search")
+	b.ReportMetric(float64(stats.SearchRouteColumnGraphPrepared), "search_route_column_graph_prepared/search")
+	b.ReportMetric(float64(stats.SearchRouteColumnGraphFallback), "search_route_column_graph_fallback/search")
+	b.ReportMetric(float64(stats.SearchRouteHNSWSearchPack), "search_route_hnsw_search_pack/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackActive), "hnsw_search_pack_active/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackMissing), "hnsw_search_pack_missing/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackInvalid), "hnsw_search_pack_invalid/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackFallbacks), "hnsw_search_pack_fallbacks/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackMmapDirect), "hnsw_search_pack_mmap_direct/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackHeapCopy), "hnsw_search_pack_heap_copy/search")
+	scoreBatchFallbackReasonScalar := 0.0
+	if stats.ScoreBatchScalarFallbackCalls > 0 {
+		scoreBatchFallbackReasonScalar = 1
+	}
+	b.ReportMetric(scoreBatchFallbackReasonScalar, "score_batch_fallback_reason_scalar")
+	scoreBatchFallbackReasonNone := 0.0
+	if stats.ScoreBatchCalls > 0 && stats.ScoreBatchScalarFallbackCalls == 0 {
+		scoreBatchFallbackReasonNone = 1
+	}
+	b.ReportMetric(scoreBatchFallbackReasonNone, "score_batch_fallback_reason_none")
 	b.ReportMetric(float64(stats.RowFetches), "row_fetches/search")
 	b.ReportMetric(float64(stats.BatchFetches), "batch_fetches/search")
 	b.ReportMetric(float64(stats.RowsFetched), "rows_fetched/search")
