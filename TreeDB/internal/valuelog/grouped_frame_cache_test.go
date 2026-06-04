@@ -3,6 +3,9 @@ package valuelog
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -193,6 +196,78 @@ func TestGroupedFrameCache_AfterCloseDoesNotRecreateOrRetain(t *testing.T) {
 	}
 	if _, _, err, hit := f.groupedFrameCacheReadTo(1, false, 1, offsets, offsets[1], 0, nil); err != nil || hit {
 		t.Fatalf("closed file returned cache hit/state: hit=%v err=%v", hit, err)
+	}
+}
+
+func TestValueLogManager_GroupedFrameCache_CorruptSourceFailsClosedAfterCachedVerifyRead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTests(t, writer, 0, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(false)
+	m.SetGroupedFrameCacheEntries(4)
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+	got, err := m.ReadUnsafe(ptrs[0])
+	if err != nil {
+		t.Fatalf("warm verified read: %v", err)
+	}
+	if !bytes.Equal(got, want[0]) {
+		t.Fatalf("warm read mismatch")
+	}
+	if hits, misses, entries, _ := f.groupedFrameCacheStats(); misses == 0 || entries == 0 || hits != 0 {
+		t.Fatalf("expected verified warm read to populate cache without hit: hits=%d misses=%d entries=%d", hits, misses, entries)
+	}
+
+	fh, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open for corrupt: %v", err)
+	}
+	corruptAt := int64(ptrs[0].Offset-4) + HeaderSize + FrameHeaderSize
+	var one [1]byte
+	if _, err := fh.ReadAt(one[:], corruptAt); err != nil {
+		_ = fh.Close()
+		t.Fatalf("read corrupt byte: %v", err)
+	}
+	one[0] ^= 0x80
+	if _, err := fh.WriteAt(one[:], corruptAt); err != nil {
+		_ = fh.Close()
+		t.Fatalf("write corrupt byte: %v", err)
+	}
+	if err := fh.Sync(); err != nil {
+		_ = fh.Close()
+		t.Fatalf("sync corrupt byte: %v", err)
+	}
+	if err := fh.Close(); err != nil {
+		t.Fatalf("close corrupt writer: %v", err)
+	}
+
+	_, err = m.ReadUnsafe(ptrs[1])
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("cached verified read masked source corruption: err=%v", err)
 	}
 }
 
