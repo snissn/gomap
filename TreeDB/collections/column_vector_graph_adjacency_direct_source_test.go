@@ -481,6 +481,58 @@ func TestColumnVectorGraphAllLayerAdjacencyDirectSourcesSearchParity1921(t *test
 	}
 }
 
+func TestColumnVectorGraphPreparedCSRAdjacencyNeighborsFastPath2274(t *testing.T) {
+	source := &columnVectorGraphLayer0AdjacencyDirectSource{
+		layer:   0,
+		rows:    3,
+		offsets: []uint64{0, 2, 2, 3},
+		values:  []uint32{7, 11, 13},
+		outcome: columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect,
+		owned:   true,
+	}
+	group := &columnVectorGraphAdjacencyDirectSources{sources: []*columnVectorGraphLayer0AdjacencyDirectSource{source}, allLayers: true}
+	got, reason, ok := group.preparedCSRNeighbors(0, 0)
+	if !ok || reason != "" || len(got) != 2 || got[0] != 7 || got[1] != 11 {
+		t.Fatalf("row 0 prepared neighbors=%v reason=%s ok=%v, want [7 11]", got, reason, ok)
+	}
+	got, reason, ok = group.preparedCSRNeighbors(0, 1)
+	if !ok || reason != "" || len(got) != 0 {
+		t.Fatalf("row 1 prepared neighbors=%v reason=%s ok=%v, want empty direct slice", got, reason, ok)
+	}
+	_, reason, ok = group.preparedCSRNeighbors(0, 3)
+	if ok || reason != typeddecode.ReasonRowCountMismatch {
+		t.Fatalf("out-of-range prepared neighbors reason=%s ok=%v, want row-count mismatch", reason, ok)
+	}
+	badOffsets := &columnVectorGraphLayer0AdjacencyDirectSource{
+		rows:    1,
+		offsets: []uint64{0, 2},
+		values:  []uint32{1},
+		outcome: columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect,
+		owned:   true,
+	}
+	_, reason, ok = badOffsets.preparedCSRNeighbors(0)
+	if ok || reason != typeddecode.ReasonValuesLengthMismatch {
+		t.Fatalf("malformed prepared neighbors reason=%s ok=%v, want values-length mismatch", reason, ok)
+	}
+	source.outcome = columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect
+	_, reason, ok = group.preparedCSRNeighbors(0, 0)
+	if ok || reason != typeddecode.ReasonHandleSourceUnsupported {
+		t.Fatalf("non-prepared outcome reason=%s ok=%v, want handle-source unsupported", reason, ok)
+	}
+	source.outcome = columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect
+	source.owned = false
+	_, reason, ok = group.preparedCSRNeighbors(0, 0)
+	if ok || reason != typeddecode.ReasonStaleHandle {
+		t.Fatalf("nil handle prepared neighbors reason=%s ok=%v, want stale handle", reason, ok)
+	}
+	source.owned = true
+	source.closed = true
+	_, reason, ok = group.preparedCSRNeighbors(0, 0)
+	if ok || reason != typeddecode.ReasonStaleHandle {
+		t.Fatalf("closed prepared neighbors reason=%s ok=%v, want stale handle", reason, ok)
+	}
+}
+
 func TestColumnVectorGraphAllLayerAdjacencyDirectSourcesEmptyUpperLayers1921(t *testing.T) {
 	d, col, def, _, rows := openManualColumnGraphAllLayerSourceSearchFixture1921(t, nil)
 	defer func() { _ = d.Close() }()

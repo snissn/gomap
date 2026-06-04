@@ -826,11 +826,11 @@ func (v *columnVectorGraphPreparedSearchView) adjacencyLayerForOrdinal(ordinal i
 	if v == nil || v.adjacency == nil {
 		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, errors.New("collections: column_graph prepared adjacency view is unavailable")
 	}
-	neighbors, outcome, reason, ok := v.adjacency.Neighbors(layer, ordinal)
+	neighbors, reason, ok := v.adjacency.preparedCSRNeighbors(layer, ordinal)
 	if !ok {
-		return nil, outcome, fmt.Errorf("collections: column_graph prepared adjacency ordinal=%d layer=%d unavailable reason=%s", ordinal, layer, reason)
+		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, fmt.Errorf("collections: column_graph prepared adjacency ordinal=%d layer=%d unavailable reason=%s", ordinal, layer, reason)
 	}
-	return neighbors, outcome, nil
+	return neighbors, columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect, nil
 }
 
 func (v *columnVectorGraphPreparedSearchView) documentIDForOrdinal(ordinal int) ([]byte, bool) {
