@@ -37,7 +37,7 @@ var (
 	treedbPagerSyncConcurrency            = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
 	treedbPagerMmapPopulate               = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
 	treedbPagerPrefetchOnRead             = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
-	treedbLeafPageReadCacheEntries        = flag.Int("treedb-leaf-page-read-cache-entries", 0, "TreeDB: outer-leaf read cache slots for leaf pages stored in the value log (0=default/env, <0=disable)")
+	treedbLeafPageReadCacheEntries        = flag.Int("treedb-leaf-page-read-cache-entries", 0, "TreeDB: outer-leaf read cache entries for leaf pages stored in the value log (0=default/env, <0=disable)")
 	treedbChunkSize                       = flag.Int64("treedb-chunk-size", defaultTreeDBChunkSizeBytes, "TreeDB: pager chunk size in bytes (default 256KiB)")
 	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=auto)")
 	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")

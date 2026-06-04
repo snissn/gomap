@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -417,6 +418,280 @@ func TestValueReaderLeafLogPageUnsafeToAdmitsRepeatedReadMiss(t *testing.T) {
 	}
 }
 
+func TestLeafPageReadCacheSetAssociativeRetainsDirectMapCollisions(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptrs := findDirectSlotCollidingLeafPagePtrs(t, cache, leafPageReadCacheWays)
+	oldSlot := leafPageReadCacheDirectSlotIndex(cache, newLeafPageReadCacheKey(ptrs[0]))
+	bucket := cache.bucketIndex(newLeafPageReadCacheKey(ptrs[0]))
+	for _, ptr := range ptrs[1:] {
+		key := newLeafPageReadCacheKey(ptr)
+		if got := leafPageReadCacheDirectSlotIndex(cache, key); got != oldSlot {
+			t.Fatalf("test ptr did not collide under old direct slot: got %d want %d", got, oldSlot)
+		}
+		if got := cache.bucketIndex(key); got != bucket {
+			t.Fatalf("test ptr did not map to same new bucket: got %d want %d", got, bucket)
+		}
+	}
+
+	leaves := make([][]byte, len(ptrs))
+	for i, ptr := range ptrs {
+		leaves[i] = bytes.Repeat([]byte{byte(0x40 + i)}, page.PageSize)
+		cache.storeWithRecordChecksumState(ptr, leaves[i], true)
+		if !cache.markPageChecksumVerified(ptr) {
+			t.Fatalf("ptr %d should accept page-checksum mark", i)
+		}
+	}
+
+	dst := make([]byte, 0, page.PageSize)
+	for i, ptr := range ptrs {
+		got, usedDst, state, ok := cache.getToWithState(ptr, dst[:0])
+		if !ok {
+			t.Fatalf("direct-map-colliding ptr %d missed set-associative cache", i)
+		}
+		if !usedDst || !bytes.Equal(got, leaves[i]) {
+			t.Fatalf("ptr %d cached bytes mismatch usedDst=%v", i, usedDst)
+		}
+		if !state.RecordChecksumVerified || !state.PageChecksumVerified {
+			t.Fatalf("ptr %d verified state not preserved: %+v", i, state)
+		}
+	}
+
+	stats := cache.stats()
+	if stats.Entries != uint64(len(ptrs)) || stats.Stores != uint64(len(ptrs)) || stats.Evictions != 0 {
+		t.Fatalf("stats=%+v, want retained colliding entries without eviction", stats)
+	}
+	if stats.Capacity != 8 || stats.Buckets != 2 || stats.Ways != leafPageReadCacheWays || stats.Bytes != uint64(len(ptrs))*page.PageSize {
+		t.Fatalf("cache shape stats=%+v, want capacity=8 buckets=2 ways=%d bounded bytes", stats, leafPageReadCacheWays)
+	}
+}
+
+func TestLeafPageReadCacheReadMissAdmissionsRetainDirectMapCollisions(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptrs := findDirectSlotCollidingLeafPagePtrs(t, cache, leafPageReadCacheWays)
+	leaves := make([][]byte, len(ptrs))
+	for i, ptr := range ptrs {
+		leaves[i] = bytes.Repeat([]byte{byte(0x50 + i)}, page.PageSize)
+		if cache.storeReadMiss(ptr, leaves[i], true) {
+			t.Fatalf("first read miss for ptr %d should only arm admission", i)
+		}
+		if !cache.storeReadMiss(ptr, leaves[i], true) {
+			t.Fatalf("second read miss for ptr %d should be admitted", i)
+		}
+	}
+
+	dst := make([]byte, 0, page.PageSize)
+	for i, ptr := range ptrs {
+		got, usedDst, state, ok := cache.getToWithState(ptr, dst[:0])
+		if !ok {
+			t.Fatalf("admitted direct-map-colliding ptr %d missed set-associative cache", i)
+		}
+		if !usedDst || !bytes.Equal(got, leaves[i]) {
+			t.Fatalf("ptr %d cached bytes mismatch usedDst=%v", i, usedDst)
+		}
+		if !state.RecordChecksumVerified {
+			t.Fatalf("ptr %d record checksum state not preserved: %+v", i, state)
+		}
+	}
+
+	stats := cache.stats()
+	if stats.ReadMissAdmissionSkips != uint64(len(ptrs)) || stats.ReadMissAdmissionStores != uint64(len(ptrs)) {
+		t.Fatalf("admission stats=%+v, want one first-miss skip and one store per ptr", stats)
+	}
+	if stats.Evictions != 0 || stats.ConflictEvictions != 0 || stats.CapacityEvictions != 0 {
+		t.Fatalf("colliding read-miss admissions thrashed: stats=%+v", stats)
+	}
+}
+
+func TestLeafPageReadCacheInterleavedReadMissAdmissionsRetainDirectMapCollisions(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptrs := findDirectSlotCollidingLeafPagePtrsWithDistinctAdmissionLanes(t, cache, leafPageReadCacheWays)
+	leaves := make([][]byte, len(ptrs))
+	for i, ptr := range ptrs {
+		leaves[i] = bytes.Repeat([]byte{byte(0x58 + i)}, page.PageSize)
+		if cache.storeReadMiss(ptr, leaves[i], true) {
+			t.Fatalf("first interleaved read miss for ptr %d should only arm admission", i)
+		}
+	}
+	for i, ptr := range ptrs {
+		if !cache.storeReadMiss(ptr, leaves[i], true) {
+			t.Fatalf("second interleaved read miss for ptr %d should be admitted", i)
+		}
+	}
+
+	dst := make([]byte, 0, page.PageSize)
+	for i, ptr := range ptrs {
+		got, usedDst, _, ok := cache.getToWithState(ptr, dst[:0])
+		if !ok {
+			t.Fatalf("interleaved direct-map-colliding ptr %d missed set-associative cache", i)
+		}
+		if !usedDst || !bytes.Equal(got, leaves[i]) {
+			t.Fatalf("ptr %d cached bytes mismatch usedDst=%v", i, usedDst)
+		}
+	}
+
+	stats := cache.stats()
+	if stats.ReadMissAdmissionSkips != uint64(len(ptrs)) || stats.ReadMissAdmissionStores != uint64(len(ptrs)) {
+		t.Fatalf("interleaved admission stats=%+v, want one first-miss skip and one store per ptr", stats)
+	}
+	if stats.Evictions != 0 || stats.ConflictEvictions != 0 || stats.CapacityEvictions != 0 {
+		t.Fatalf("interleaved colliding admissions thrashed: stats=%+v", stats)
+	}
+}
+
+func TestLeafPageReadCacheEvictionAccountingAndMemoryCap(t *testing.T) {
+	cache := newLeafPageReadCache(5)
+	bucket0Ptrs := findBucketLeafPagePtrs(t, cache, 0, leafPageReadCacheWays+1)
+	bucket1Ptrs := findBucketLeafPagePtrs(t, cache, 1, 2)
+
+	for i, ptr := range bucket0Ptrs {
+		cache.store(ptr, bytes.Repeat([]byte{byte(0x60 + i)}, page.PageSize))
+	}
+	stats := cache.stats()
+	if stats.Entries != leafPageReadCacheWays || stats.Evictions != 1 || stats.ConflictEvictions != 1 || stats.CapacityEvictions != 0 {
+		t.Fatalf("after bucket conflict stats=%+v, want entries=%d one conflict eviction", stats, leafPageReadCacheWays)
+	}
+	if stats.Bytes != stats.Entries*page.PageSize || stats.Bytes > stats.Capacity*page.PageSize {
+		t.Fatalf("cache bytes not bounded by entries/capacity: stats=%+v", stats)
+	}
+
+	cache.store(bucket1Ptrs[0], bytes.Repeat([]byte{0x70}, page.PageSize))
+	cache.store(bucket1Ptrs[1], bytes.Repeat([]byte{0x71}, page.PageSize))
+	stats = cache.stats()
+	if stats.Entries != stats.Capacity || stats.Evictions != 2 || stats.ConflictEvictions != 1 || stats.CapacityEvictions != 1 {
+		t.Fatalf("after capacity eviction stats=%+v, want split conflict/capacity evictions", stats)
+	}
+	if stats.Bytes != stats.Capacity*page.PageSize {
+		t.Fatalf("retained bytes=%d want capacity bytes=%d", stats.Bytes, stats.Capacity*page.PageSize)
+	}
+}
+
+func TestLeafPageReadCacheConcurrentSetAssociativeAccess(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptrs := findBucketLeafPagePtrs(t, cache, 0, 8)
+	leaves := make([][]byte, len(ptrs))
+	for i := range ptrs {
+		leaves[i] = bytes.Repeat([]byte{byte(0x80 + i)}, page.PageSize)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			<-start
+			dst := make([]byte, 0, page.PageSize)
+			for i := 0; i < 200; i++ {
+				idx := (i + g) % len(ptrs)
+				ptr := ptrs[idx]
+				leaf := leaves[idx]
+				cache.storeReadMiss(ptr, leaf, true)
+				cache.storeReadMiss(ptr, leaf, true)
+				if got, _, state, ok := cache.getToWithState(ptr, dst[:0]); ok {
+					if len(got) != page.PageSize {
+						t.Errorf("cached len=%d want %d", len(got), page.PageSize)
+						return
+					}
+					if state.RecordChecksumVerified {
+						cache.markPageChecksumVerified(ptr)
+					}
+				}
+				if view, lease, ok := cache.getViewLocked(ptr); ok {
+					if len(view) != page.PageSize {
+						t.Errorf("view len=%d want %d", len(view), page.PageSize)
+						lease.ReleaseLeafLogPageView()
+						return
+					}
+					lease.MarkLeafLogPageViewChecksumVerified()
+					lease.ReleaseLeafLogPageView()
+				}
+			}
+		}(g)
+	}
+	close(start)
+	wg.Wait()
+
+	stats := cache.stats()
+	if stats.Entries > stats.Capacity || stats.Bytes > stats.Capacity*page.PageSize {
+		t.Fatalf("cache exceeded memory cap under concurrency: stats=%+v", stats)
+	}
+}
+
+func findDirectSlotCollidingLeafPagePtrs(t *testing.T, cache *leafPageReadCache, want int) []page.LeafLogPtr {
+	t.Helper()
+	var targetSlot int
+	haveTarget := false
+	return findLeafPageReadCachePtrs(t, want, func(key leafPageReadCacheKey) bool {
+		idx := leafPageReadCacheDirectSlotIndex(cache, key)
+		if !haveTarget {
+			targetSlot = idx
+			haveTarget = true
+		}
+		return idx == targetSlot
+	})
+}
+
+func findDirectSlotCollidingLeafPagePtrsWithDistinctAdmissionLanes(t *testing.T, cache *leafPageReadCache, want int) []page.LeafLogPtr {
+	t.Helper()
+	lanes := make(map[int]struct{}, want)
+	var targetSlot int
+	haveTarget := false
+	return findLeafPageReadCachePtrs(t, want, func(key leafPageReadCacheKey) bool {
+		idx := leafPageReadCacheDirectSlotIndex(cache, key)
+		if !haveTarget {
+			targetSlot = idx
+			haveTarget = true
+		}
+		if idx != targetSlot {
+			return false
+		}
+		lane := leafPageReadMissCandidateLaneIndex(leafPageReadMissFingerprint(key))
+		if _, ok := lanes[lane]; ok {
+			return false
+		}
+		lanes[lane] = struct{}{}
+		return true
+	})
+}
+
+func leafPageReadCacheDirectSlotIndex(cache *leafPageReadCache, key leafPageReadCacheKey) int {
+	return int(leafPageReadCacheHash(key) % uint64(len(cache.slots)))
+}
+
+func findBucketLeafPagePtrs(t *testing.T, cache *leafPageReadCache, bucketIndex, want int) []page.LeafLogPtr {
+	t.Helper()
+	return findLeafPageReadCachePtrs(t, want, func(key leafPageReadCacheKey) bool {
+		return cache.bucketIndex(key) == bucketIndex
+	})
+}
+
+func findLeafPageReadCachePtrs(t *testing.T, want int, match func(leafPageReadCacheKey) bool) []page.LeafLogPtr {
+	t.Helper()
+	ptrs := make([]page.LeafLogPtr, 0, want)
+	seen := make(map[leafPageReadCacheKey]struct{}, want)
+	for i := 0; i < 1_000_000 && len(ptrs) < want; i++ {
+		ptr := page.LeafLogPtr{
+			FileID:           uint32(1 + i%251),
+			Offset:           uint64(i+1) * uint64(page.PageSize),
+			SubIndex:         uint16(i % 7),
+			RecordLengthHint: page.PageSize,
+		}
+		key := newLeafPageReadCacheKey(ptr)
+		if !match(key) {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		ptrs = append(ptrs, ptr)
+	}
+	if len(ptrs) != want {
+		t.Fatalf("found %d matching leaf-page ptrs, want %d", len(ptrs), want)
+	}
+	return ptrs
+}
+
 func TestLeafPageReadCacheChecksumVerifiedStateRequiresVerifiedRecord(t *testing.T) {
 	cache := newLeafPageReadCache(2)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
@@ -496,54 +771,54 @@ func TestLeafPageReadCacheVerifiedStateEvictedAndRewriteFallback(t *testing.T) {
 
 func TestLeafPageReadCacheReadMissCandidateEpochPreventsStaleAdmission(t *testing.T) {
 	cache := newLeafPageReadCache(1)
-	slot := &cache.slots[0]
+	bucket := &cache.buckets[0]
 	keyA := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096})
 	keyB := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096})
 	fpA := leafPageReadMissFingerprint(keyA)
 
-	slot.readMissCandidateFP.Store(readMissCandidateToken(fpA, slot.readMissEpoch.Load()))
-	epochBefore, repeated := slot.observeReadMissCandidate(fpA)
+	laneA := bucket.readMissCandidateLane(fpA)
+	laneA.candidateFP.Store(readMissCandidateToken(fpA, laneA.epoch.Load()))
+	epochBefore, repeated := bucket.observeReadMissCandidate(fpA)
 	if !repeated {
 		t.Fatal("expected matching candidate to be treated as repeated miss")
 	}
 
-	slot.mu.Lock()
-	_ = slot.storeLocked(keyB, bytes.Repeat([]byte{0x61}, page.PageSize))
-	slot.mu.Unlock()
+	cache.storeWithRecordChecksumState(page.LeafLogPtr{FileID: keyB.fileID, Offset: keyB.offset, SubIndex: keyB.subIndex, RecordLengthHint: 4096}, bytes.Repeat([]byte{0x61}, page.PageSize), false)
 
-	epochAfterReset, repeated := slot.observeReadMissCandidate(fpA)
+	epochAfterReset, repeated := bucket.observeReadMissCandidate(fpA)
 	if repeated {
 		t.Fatal("expected first post-reset miss to be non-repeated")
 	}
 	if epochAfterReset == epochBefore {
 		t.Fatalf("read miss epoch did not advance after reset: before=%d after=%d", epochBefore, epochAfterReset)
 	}
-	if slot.readMissCandidateStillCurrent(fpA, epochBefore) {
+	if bucket.readMissCandidateStillCurrent(fpA, epochBefore) {
 		t.Fatal("stale pre-reset candidate unexpectedly considered current")
 	}
-	if !slot.readMissCandidateStillCurrent(fpA, epochAfterReset) {
+	if !bucket.readMissCandidateStillCurrent(fpA, epochAfterReset) {
 		t.Fatal("fresh post-reset candidate should be current")
 	}
 }
 
 func TestLeafPageReadCacheReadMissCandidateEpochTokenRejectsStaleCAS(t *testing.T) {
 	cache := newLeafPageReadCache(1)
-	slot := &cache.slots[0]
+	bucket := &cache.buckets[0]
 	keyA := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 11, Offset: 64, RecordLengthHint: 4096})
 	keyB := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 12, Offset: 96, RecordLengthHint: 4096})
 	fpA := leafPageReadMissFingerprint(keyA)
 	fpB := leafPageReadMissFingerprint(keyB)
-	oldEpoch := slot.readMissEpoch.Load()
+	laneA := bucket.readMissCandidateLane(fpA)
+	oldEpoch := laneA.epoch.Load()
 	oldTokenA := readMissCandidateToken(fpA, oldEpoch)
 	oldTokenB := readMissCandidateToken(fpB, oldEpoch)
 
-	slot.readMissCandidateFP.Store(oldTokenA)
+	laneA.candidateFP.Store(oldTokenA)
 
-	slot.mu.Lock()
-	slot.resetReadMissCandidateLocked()
-	slot.mu.Unlock()
+	bucket.mu.Lock()
+	bucket.resetReadMissCandidateLocked()
+	bucket.mu.Unlock()
 
-	newEpoch := slot.readMissEpoch.Load()
+	newEpoch := laneA.epoch.Load()
 	if newEpoch == oldEpoch {
 		t.Fatalf("epoch did not advance across reset: old=%d new=%d", oldEpoch, newEpoch)
 	}
@@ -552,32 +827,32 @@ func TestLeafPageReadCacheReadMissCandidateEpochTokenRejectsStaleCAS(t *testing.
 		t.Fatalf("candidate token unexpectedly reused across epochs: epoch=%d token=%d", newEpoch, newTokenA)
 	}
 
-	observedEpoch, repeated := slot.observeReadMissCandidate(fpA)
+	observedEpoch, repeated := bucket.observeReadMissCandidate(fpA)
 	if repeated {
 		t.Fatal("expected first post-reset miss for key A to be non-repeated")
 	}
 	if observedEpoch != newEpoch {
 		t.Fatalf("observeReadMissCandidate epoch=%d, want %d", observedEpoch, newEpoch)
 	}
-	if got := slot.readMissCandidateFP.Load(); got != newTokenA {
+	if got := laneA.candidateFP.Load(); got != newTokenA {
 		t.Fatalf("post-reset candidate token=%d, want %d", got, newTokenA)
 	}
 
 	// Simulate a stale observer from oldEpoch trying to publish into newEpoch.
-	if slot.readMissCandidateFP.CompareAndSwap(oldTokenA, oldTokenB) {
+	if laneA.candidateFP.CompareAndSwap(oldTokenA, oldTokenB) {
 		t.Fatal("stale epoch compare-and-swap unexpectedly succeeded")
 	}
-	if got := slot.readMissCandidateFP.Load(); got != newTokenA {
+	if got := laneA.candidateFP.Load(); got != newTokenA {
 		t.Fatalf("candidate token changed after stale CAS: got=%d want=%d", got, newTokenA)
 	}
 }
 
 func TestLeafPageReadCacheReadMissCandidateOddEpochSpinBound(t *testing.T) {
 	cache := newLeafPageReadCache(1)
-	slot := &cache.slots[0]
+	bucket := &cache.buckets[0]
 	key := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 13, Offset: 4096, RecordLengthHint: 4096})
 	fp := leafPageReadMissFingerprint(key)
-	slot.readMissEpoch.Store(1) // odd epoch simulates reset in progress
+	bucket.readMissCandidateLane(fp).epoch.Store(1) // odd epoch simulates reset in progress
 
 	type result struct {
 		epoch    uint64
@@ -585,7 +860,7 @@ func TestLeafPageReadCacheReadMissCandidateOddEpochSpinBound(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		epoch, repeated := slot.observeReadMissCandidate(fp)
+		epoch, repeated := bucket.observeReadMissCandidate(fp)
 		done <- result{epoch: epoch, repeated: repeated}
 	}()
 
@@ -650,7 +925,7 @@ func TestLeafPageReadCacheStoreReadMissSkipsWhenSlotLockContended(t *testing.T) 
 	ptr := page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096}
 	leaf := bytes.Repeat([]byte{0x66}, page.PageSize)
 	key := newLeafPageReadCacheKey(ptr)
-	slot := &cache.slots[cache.slotIndex(key)]
+	slot := &cache.slots[leafPageReadCacheDirectSlotIndex(cache, key)]
 
 	// First read miss only arms the admission fingerprint and should skip.
 	cache.storeReadMiss(ptr, leaf, false)
@@ -678,6 +953,9 @@ func TestLeafPageReadCacheStoreReadMissSkipsWhenSlotLockContended(t *testing.T) 
 	stats := cache.stats()
 	if stats.ReadMissAdmissionSkips < 2 {
 		t.Fatalf("expected additional skip on lock contention, stats=%+v", stats)
+	}
+	if stats.ReadMissAdmissionLockSkips != 1 {
+		t.Fatalf("lock admission skips=%d, want 1; stats=%+v", stats.ReadMissAdmissionLockSkips, stats)
 	}
 	if stats.ReadMissAdmissionStores != 0 {
 		t.Fatalf("unexpected admission store under lock contention, stats=%+v", stats)
