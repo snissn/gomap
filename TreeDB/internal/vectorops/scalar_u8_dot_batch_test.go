@@ -156,6 +156,38 @@ func TestDotScalarU8CenteredIndexedInvalidShapesLeaveDestinationUnchanged(t *tes
 	}
 }
 
+func TestDotScalarU8CenteredIndexedUsesReslicedQuerySum(t *testing.T) {
+	t.Parallel()
+
+	const (
+		preparedDims = 32
+		dims         = 16
+	)
+	queryCodes := make([]byte, preparedDims)
+	for i := 0; i < dims; i++ {
+		queryCodes[i] = 255
+	}
+	scratch := make([]ScalarU8CenteredCode, 0, preparedDims)
+	query, _, ok := PrepareScalarU8CenteredQuery(scratch, queryCodes, preparedDims)
+	if !ok {
+		t.Fatal("PrepareScalarU8CenteredQuery rejected resliced query")
+	}
+	query.Values = query.Values[:dims]
+
+	codes := make([]byte, 2*dims)
+	for i := 0; i < dims; i++ {
+		codes[i] = 255
+		codes[dims+i] = 0
+	}
+	dst := make([]int64, 2)
+	status := DotScalarU8CenteredIndexed(dst, codes, query, []uint32{0, 1}, dims)
+	if status.Invalid || status.Rows != 2 {
+		t.Fatalf("status=%+v want valid resliced query rows", status)
+	}
+	want := []int64{int64(65025 * dims), -int64(65025 * dims)}
+	assertInt64SliceExact(t, dst, want)
+}
+
 func TestDotScalarU8CenteredIndexedZeroAllocs(t *testing.T) {
 	codes := scalarU8DotBatchTestCodes(32, 128)
 	query := scalarU8DotBatchTestQuery(t, 128, 41)
@@ -198,6 +230,8 @@ func TestDotScalarU8CenteredIndexedOverflowSensitiveDims(t *testing.T) {
 	if status.Invalid || status.Rows != 2 {
 		t.Fatalf("status=%+v want valid overflow-sensitive rows", status)
 	}
+	// Scalar_u8 centering maps both all-255 query codes and all-255 row codes to
+	// +255, and all-0 row codes to -255, so each dimension contributes +/-65025.
 	want := []int64{int64(65025 * dims), -int64(65025 * dims)}
 	assertInt64SliceExact(t, dst, want)
 }

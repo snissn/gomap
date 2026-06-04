@@ -34,6 +34,16 @@ func TestScalarU8CenteredQueryParity2258(t *testing.T) {
 		t.Fatalf("manual query CenteredSum()=%d want %d", got, wantSum)
 	}
 
+	resliced := query
+	resliced.Values = resliced.Values[:3]
+	var wantReslicedSum int64
+	for _, v := range wantCentered[:3] {
+		wantReslicedSum += int64(v)
+	}
+	if got := resliced.CenteredSum(); got != wantReslicedSum {
+		t.Fatalf("resliced query CenteredSum()=%d want %d", got, wantReslicedSum)
+	}
+
 	gotDot, ok := ScalarU8CenteredDot(query, row)
 	if !ok {
 		t.Fatal("ScalarU8CenteredDot rejected valid query/row")

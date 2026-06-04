@@ -18,6 +18,7 @@ type ScalarU8CenteredQuery struct {
 	Values []ScalarU8CenteredCode
 
 	sum      int64
+	sumDims  int
 	sumValid bool
 }
 
@@ -34,10 +35,10 @@ func (q ScalarU8CenteredQuery) ValidForDims(dims int) bool {
 
 // CenteredSum returns sum(q.Values). Queries returned by
 // PrepareScalarU8CenteredQuery carry this value so batch kernels can reuse it
-// without rescanning the query per call. Manually constructed queries still
-// return the correct sum by scanning Values.
+// without rescanning the query per call. Manually constructed or resliced
+// queries still return the correct sum by scanning Values.
 func (q ScalarU8CenteredQuery) CenteredSum() int64 {
-	if q.sumValid {
+	if q.sumValid && q.sumDims == len(q.Values) {
 		return q.sum
 	}
 	return scalarU8CenteredQuerySum(q.Values)
@@ -63,7 +64,7 @@ func PrepareScalarU8CenteredQuery(dst []ScalarU8CenteredCode, codes []byte, dims
 		dst[i] = centered
 		sum += int64(centered)
 	}
-	return ScalarU8CenteredQuery{Values: dst, sum: sum, sumValid: true}, dst, true
+	return ScalarU8CenteredQuery{Values: dst, sum: sum, sumDims: dims, sumValid: true}, dst, true
 }
 
 // ScalarU8CenteredDot computes the integer dot product between a centered query
