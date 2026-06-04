@@ -152,7 +152,6 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		groupedFrameCacheMaxRaw:      defaultGroupedFrameCacheMaxRawBytes,
 		groupedFrameCacheMaxBytes:    defaultGroupedFrameCacheMaxBytes,
 	}
-	vf.resetGroupedFrameCacheLocked()
 	vf.mmapData.Store([]byte(nil))
 	if info, err := f.Stat(); err == nil {
 		vf.noteVerifiedFileSize(info.Size())
@@ -283,11 +282,12 @@ func (f *File) resetGroupedFrameCacheLocked() {
 	if f == nil {
 		return
 	}
-	if old := f.groupedFrameCache.Load(); old != nil {
+	old := f.groupedFrameCache.Load()
+	f.groupedFrameCache.Store(nil)
+	if old != nil {
 		old.clear()
 	}
 	if f.closed.Load() {
-		f.groupedFrameCache.Store(nil)
 		return
 	}
 	f.groupedFrameCache.Store(newGroupedFrameCache(f, f.groupedFrameCacheEntries, f.groupedFrameCacheMaxRaw, f.groupedFrameCacheMaxBytes, f.groupedFrameCacheBudget))

@@ -87,14 +87,20 @@ func TestGroupedFrameCache_StateIsolationAndSubValues(t *testing.T) {
 }
 
 func TestGroupedFrameCache_BudgetEvictionReleaseStats(t *testing.T) {
-	f := newTestGroupedCacheFile(1, 1024, 96)
+	f := newTestGroupedCacheFile(2, 1024, 96)
 	offsets := groupedCacheOffsets(64)
 	raw1 := bytes.Repeat([]byte{'a'}, 64)
 	raw2 := bytes.Repeat([]byte{'b'}, 64)
-	if !f.groupedFrameCacheStore(1, false, 1, offsets, raw1, true) {
+	firstStart := int64(1)
+	secondStart := int64(2)
+	cache := f.ensureGroupedFrameCache()
+	for cache.shardFor(secondStart, false) != cache.shardFor(firstStart, false) {
+		secondStart++
+	}
+	if !f.groupedFrameCacheStore(firstStart, false, 1, offsets, raw1, true) {
 		t.Fatalf("store first frame")
 	}
-	if !f.groupedFrameCacheStore(2, false, 1, offsets, raw2, true) {
+	if !f.groupedFrameCacheStore(secondStart, false, 1, offsets, raw2, true) {
 		t.Fatalf("store second frame")
 	}
 	stats := f.groupedFrameCacheDetailedStats()
@@ -305,7 +311,7 @@ func TestGroupedFrameCache_StatsConcurrentAdmissions(t *testing.T) {
 }
 
 func TestGroupedFrameCache_ConcurrentReadsAndEvictions(t *testing.T) {
-	f := newTestGroupedCacheFile(8, 1024, 512)
+	f := newTestGroupedCacheFile(8, 1024, 96)
 	baseRaw := groupedCacheRaw([]byte("left"), []byte("right"))
 	baseOffsets := groupedCacheOffsets(4, 5)
 	if !f.groupedFrameCacheStore(1, false, 2, baseOffsets, append([]byte(nil), baseRaw...), false) {
