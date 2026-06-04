@@ -64,42 +64,49 @@ that writes data and index outer leaves to the value log.
 
 ## Compacted Storage Rows
 
-These rows use the canonical compacted-state comparison basis: TreeDB compacted
-phases are compared with SQLite after `VACUUM`.
+These rows separate the current high-level compact path from lower-level
+leaf-generation maintenance diagnostics. The root README uses the
+`offline_compact` TreeDB template-v1 row as the current compacted-size headline
+because `full_leafgen_pack_gc` can leave a large writable/current leaf generation
+behind and is not a stable byte-minimized storage-floor contract. A true
+exhaustive/VACUUM-equivalent TreeDB mode is tracked in
+[#2288](https://github.com/snissn/gomap/issues/2288).
 
-| engine / format | phase | B/doc | comparison basis |
-| --- | --- | ---: | --- |
-| TreeDB template-v1 | `full_leafgen_pack_gc` | 27.8 | full leaf generation pack/GC plus offline index vacuum |
-| TreeDB JSON | `full_leafgen_pack_gc` | 33.7 | full leaf generation pack/GC plus offline index vacuum |
-| TreeDB template-v1 | `offline_compact` | 46.7 | high-level `treemap compact <dir> -rw` |
-| SQLite native columns | `sqlite_vacuum` | 156.7 | SQLite `VACUUM` |
-| SQLite JSON | `sqlite_vacuum` | 231.7 | SQLite `VACUUM` |
+| engine / format | phase | B/doc | comparison basis | README headline? |
+| --- | --- | ---: | --- | --- |
+| TreeDB template-v1 | `offline_compact` | 46.7 | high-level `treemap compact <dir> -rw` | yes |
+| TreeDB template-v1 | `full_leafgen_pack_gc` | 27.8 | diagnostic full leaf generation pack/GC plus offline index vacuum | no |
+| TreeDB JSON | `full_leafgen_pack_gc` | 33.7 | diagnostic full leaf generation pack/GC plus offline index vacuum | no |
+| SQLite native columns | `sqlite_vacuum` | 156.7 | SQLite `VACUUM` | yes |
+| SQLite JSON | `sqlite_vacuum` | 231.7 | SQLite `VACUUM` | yes |
 
 Derived comparison ratios from `benchmark_results.json`:
 
-| TreeDB row | vs SQLite native columns after `VACUUM` | vs SQLite JSON after `VACUUM` |
-| --- | ---: | ---: |
-| template-v1 `offline_compact` | 3.4x smaller | 5.0x smaller |
-| template-v1 `full_leafgen_pack_gc` | 5.6x smaller | 8.3x smaller |
-| JSON `full_leafgen_pack_gc` | 4.7x smaller | 6.9x smaller |
+| TreeDB row | vs SQLite native columns after `VACUUM` | vs SQLite JSON after `VACUUM` | README headline? |
+| --- | ---: | ---: | --- |
+| template-v1 `offline_compact` | 3.4x smaller | 5.0x smaller | yes |
+| template-v1 `full_leafgen_pack_gc` | 5.6x smaller | 8.3x smaller | no, diagnostic only |
+| JSON `full_leafgen_pack_gc` | 4.7x smaller | 6.9x smaller | no, diagnostic only |
 
 ## Comparison With June 2 Current Report
 
 Previous checked-in report:
 `docs/benchmarks/collections_insert_two_index_current_2026-06-02.md`.
 
-| engine / format | previous docs/sec | current docs/sec | docs/sec delta | previous compacted B/doc | current compacted B/doc | B/doc delta |
+| engine / format | previous docs/sec | current docs/sec | docs/sec delta | previous README compacted B/doc | current README compacted B/doc | B/doc delta |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| TreeDB template-v1 | 626,959 | 600,962 | -4.1% | 22.2 | 27.8 | +25.2% |
-| TreeDB JSON | 419,463 | 450,857 | +7.5% | 30.4 | 33.7 | +10.9% |
+| TreeDB template-v1 | 626,959 | 600,962 | -4.1% | 49.7 | 46.7 | -6.1% |
+| TreeDB JSON | 419,463 | 450,857 | +7.5% | — | — | — |
 | SQLite native columns | 330,797 | 344,353 | +4.1% | 156.7 | 156.7 | +0.0% |
 | SQLite JSON | 302,115 | 296,912 | -1.7% | 231.7 | 231.7 | +0.0% |
 
 The latest-main collection insert rerun is broadly in the same range as the June
 2 evidence. It does not show the same clear improvement that the YCSB server
 workload shows: template-v1 throughput is slightly lower, JSON throughput is
-higher, and compacted TreeDB B/doc is somewhat larger in this run while still
-materially smaller than SQLite after `VACUUM`.
+higher, and the current high-level TreeDB template-v1 compacted row improved
+from 49.7 B/doc to 46.7 B/doc. The lower `full_leafgen_pack_gc` rows remain in
+this report as diagnostics, but they are no longer used as README compacted-size
+headlines because they can leave writable/current leaf-generation bytes behind.
 
 ## Additional Layout Probe
 
@@ -121,7 +128,9 @@ That probe included both TreeDB layout cells and showed:
 | SQLite JSON | WAL normal | 3,206 | 311,915 | 262.6 |
 | SQLite native columns | WAL normal | 3,376 | 296,209 | 176.1 |
 
-The root README keeps using the canonical run rows for its compact highlight.
+The root README uses the canonical timed throughput rows, but only uses the
+high-level `offline_compact` TreeDB template-v1 row for its compacted-size
+highlight until the exhaustive compact mode from #2288 exists.
 
 ## Guardrail Notes
 

@@ -45,14 +45,16 @@ Full report, commands, host context, run repeats, and artifact paths:
 
 Two secondary indexes, latest-main June 3 HST / June 4 UTC rerun, `100000`
 documents, batch size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec`
-is the timed insert measurement for the value-log outer-leaf layout; B/doc uses
-the fully compacted storage phase for the same TreeDB layout and SQLite after
-`VACUUM`.
+is the timed insert measurement for the value-log outer-leaf layout. Compacted
+B/doc uses the current high-level `offline_compact` row for TreeDB template-v1
+and SQLite after `VACUUM`; TreeDB JSON awaits the exhaustive compact mode tracked
+in [#2288](https://github.com/snissn/gomap/issues/2288) before it is used as a
+README storage-floor headline.
 
-| engine / format | layout | docs/sec | fully compacted B/doc |
+| engine / format | layout | docs/sec | compacted B/doc |
 | --- | --- | ---: | ---: |
-| TreeDB template-v1 | data and index outer leaves in value log | 600,962 | 27.8 |
-| TreeDB JSON | data and index outer leaves in value log | 450,857 | 33.7 |
+| TreeDB template-v1 | data and index outer leaves in value log | 600,962 | 46.7 |
+| TreeDB JSON | data and index outer leaves in value log | 450,857 | — |
 | SQLite native columns | WAL normal | 344,353 | 156.7 |
 | SQLite JSON | WAL normal | 296,912 | 231.7 |
 
