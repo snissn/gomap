@@ -6,51 +6,131 @@ cd "$ROOT"
 
 USEARCH_VERSION="${USEARCH_VERSION:-2.25.2}"
 USEARCH_ARCH="${USEARCH_ARCH:-}"
+USER_USEARCH_ROOT="${USEARCH_ROOT:-}"
 USEARCH_ROOT="${USEARCH_ROOT:-}"
 RUN_DIR="${RUN_DIR:-/tmp/gomap_vector_search_compare_$(date +%Y%m%d_%H%M%S)}"
-COUNT="${COUNT:-3}"
+COUNT="${COUNT:-1}"
 BENCHTIME="${BENCHTIME:-1x}"
+CPU_LIST="${CPU_LIST:-1,8}"
 RUN_UNSAFE_USEARCH_FILTERED="${RUN_UNSAFE_USEARCH_FILTERED:-false}"
-BENCH_REGEX="${BENCH_REGEX:-BenchmarkCollectionVector(SearchExact|IndexSearch(Int8)?|IndexGraphOnlySearch(Int8)?|IndexFilteredSearch|USearchBaseline)$}"
+BENCH_REGEX="${BENCH_REGEX:-BenchmarkCollectionVector(SearchExact|IndexSearch(Int8)?|IndexGraphOnlySearch(Int8)?|IndexFilteredSearch|USearchBaseline|USearchProductionCompare)$}"
 BUILD_BENCH_REGEX="${BUILD_BENCH_REGEX:-BenchmarkCollectionVector(IndexBuild(Int8)?|USearchBuild)$}"
 WRITE_BENCH_REGEX="${WRITE_BENCH_REGEX:-BenchmarkCollectionVector(IndexIncrementalWrite|USearchIncrementalWrite)$}"
 RUN_BUILD_BENCH="${RUN_BUILD_BENCH:-false}"
 RUN_WRITE_BENCH="${RUN_WRITE_BENCH:-false}"
-TREEDB_VECTOR_BENCH_DOCS="${TREEDB_VECTOR_BENCH_DOCS:-1000}"
-TREEDB_VECTOR_BENCH_DIMS="${TREEDB_VECTOR_BENCH_DIMS:-32}"
+TREEDB_VECTOR_BENCH_DOCS="${TREEDB_VECTOR_BENCH_DOCS:-10000}"
+TREEDB_VECTOR_BENCH_DIMS="${TREEDB_VECTOR_BENCH_DIMS:-64}"
+TREEDB_VECTOR_BENCH_M="${TREEDB_VECTOR_BENCH_M:-16}"
+TREEDB_VECTOR_BENCH_EF_CONSTRUCTION="${TREEDB_VECTOR_BENCH_EF_CONSTRUCTION:-128}"
+TREEDB_VECTOR_BENCH_EF_SEARCH="${TREEDB_VECTOR_BENCH_EF_SEARCH:-128}"
+TREEDB_VECTOR_BENCH_TOPK="${TREEDB_VECTOR_BENCH_TOPK:-10}"
+TREEDB_VECTOR_BENCH_QUERIES="${TREEDB_VECTOR_BENCH_QUERIES:-16}"
 
-case "${USEARCH_ARCH:-$(uname -m)}" in
-	x86_64|amd64) USEARCH_ARCH=amd64 ;;
-	aarch64|arm64) USEARCH_ARCH=arm64 ;;
-	*) echo "unsupported USearch arch: ${USEARCH_ARCH:-$(uname -m)}" >&2; exit 1 ;;
+case "$(uname -s)" in
+	Linux) USEARCH_OS=linux; USEARCH_LIB=libusearch_c.so ;;
+	Darwin) USEARCH_OS=macos; USEARCH_LIB=libusearch_c.dylib ;;
+	*) echo "unsupported USearch OS: $(uname -s)" >&2; exit 1 ;;
 esac
 
-if [[ -z "$USEARCH_ROOT" ]]; then
-	USEARCH_CACHE="/tmp/usearch_${USEARCH_VERSION}_${USEARCH_ARCH}"
-	USEARCH_ROOT="$USEARCH_CACHE/root/usr/local"
+case "${USEARCH_ARCH:-$(uname -m)}" in
+	x86_64|amd64) USEARCH_LINUX_ARCH=amd64; USEARCH_MACOS_ARCH=x86_64 ;;
+	aarch64|arm64) USEARCH_LINUX_ARCH=arm64; USEARCH_MACOS_ARCH=arm64 ;;
+	*) echo "unsupported USearch arch: ${USEARCH_ARCH:-$(uname -m)}" >&2; exit 1 ;;
+esac
+if [[ "$USEARCH_OS" == "macos" ]]; then
+	USEARCH_PACKAGE_ARCH="$USEARCH_MACOS_ARCH"
 else
-	USEARCH_CACHE=$(dirname "$(dirname "$USEARCH_ROOT")")
+	USEARCH_PACKAGE_ARCH="$USEARCH_LINUX_ARCH"
 fi
 
+if [[ -z "$USEARCH_ROOT" ]]; then
+	case "$USEARCH_OS" in
+		linux)
+			USEARCH_CACHE="/tmp/usearch_${USEARCH_VERSION}_linux_${USEARCH_LINUX_ARCH}"
+			USEARCH_ROOT="$USEARCH_CACHE/root/usr/local"
+			;;
+		macos)
+			USEARCH_CACHE="/tmp/usearch_${USEARCH_VERSION}_macos_${USEARCH_MACOS_ARCH}"
+			USEARCH_ROOT="$USEARCH_CACHE/root"
+			;;
+	esac
+else
+	USEARCH_CACHE=$(dirname "$USEARCH_ROOT")
+fi
+
+find_usearch_include_dir() {
+	local dir
+	for dir in "$USEARCH_ROOT/include" "$USEARCH_ROOT"; do
+		if [[ -f "$dir/usearch.h" ]]; then
+			printf '%s\n' "$dir"
+			return 0
+		fi
+	done
+	return 1
+}
+
+find_usearch_lib_dir() {
+	local dir
+	for dir in "$USEARCH_ROOT/lib" "$USEARCH_ROOT"; do
+		if [[ -f "$dir/$USEARCH_LIB" ]]; then
+			printf '%s\n' "$dir"
+			return 0
+		fi
+	done
+	return 1
+}
+
 ensure_usearch() {
-	if [[ -f "$USEARCH_ROOT/include/usearch.h" && -f "$USEARCH_ROOT/lib/libusearch_c.so" ]]; then
+	if find_usearch_include_dir >/dev/null 2>&1 && find_usearch_lib_dir >/dev/null 2>&1; then
 		return
 	fi
-	local deb="usearch_linux_${USEARCH_ARCH}_${USEARCH_VERSION}.deb"
-	local url="https://github.com/unum-cloud/usearch/releases/download/v${USEARCH_VERSION}/${deb}"
-	mkdir -p "$USEARCH_CACHE"
-	if [[ ! -f "$USEARCH_CACHE/$deb" ]]; then
-		if command -v gh >/dev/null 2>&1; then
-			gh release download "v${USEARCH_VERSION}" --repo unum-cloud/usearch --pattern "$deb" --dir "$USEARCH_CACHE"
-		else
-			curl -L --fail "$url" -o "$USEARCH_CACHE/$deb"
-		fi
+	if [[ -n "$USER_USEARCH_ROOT" ]]; then
+		echo "USEARCH_ROOT=$USER_USEARCH_ROOT does not contain usearch.h and $USEARCH_LIB" >&2
+		exit 1
 	fi
-	rm -rf "$USEARCH_CACHE/root"
-	dpkg-deb -x "$USEARCH_CACHE/$deb" "$USEARCH_CACHE/root"
+	mkdir -p "$USEARCH_CACHE"
+	case "$USEARCH_OS" in
+		linux)
+			local deb="usearch_linux_${USEARCH_LINUX_ARCH}_${USEARCH_VERSION}.deb"
+			local url="https://github.com/unum-cloud/usearch/releases/download/v${USEARCH_VERSION}/${deb}"
+			if ! command -v dpkg-deb >/dev/null 2>&1; then
+				echo "USearch Linux bootstrap requires dpkg-deb to extract $deb; install dpkg/dpkg-deb or set USEARCH_ROOT to an existing USearch install containing usearch.h and $USEARCH_LIB." >&2
+				exit 1
+			fi
+			if [[ ! -f "$USEARCH_CACHE/$deb" ]]; then
+				if command -v gh >/dev/null 2>&1; then
+					gh release download "v${USEARCH_VERSION}" --repo unum-cloud/usearch --pattern "$deb" --dir "$USEARCH_CACHE"
+				else
+					curl -L --fail "$url" -o "$USEARCH_CACHE/$deb"
+				fi
+			fi
+			rm -rf "$USEARCH_CACHE/root"
+			dpkg-deb -x "$USEARCH_CACHE/$deb" "$USEARCH_CACHE/root"
+			;;
+		macos)
+			local zip="usearch_macos_${USEARCH_MACOS_ARCH}_${USEARCH_VERSION}.zip"
+			local url="https://github.com/unum-cloud/usearch/releases/download/v${USEARCH_VERSION}/${zip}"
+			if [[ ! -f "$USEARCH_CACHE/$zip" ]]; then
+				if command -v gh >/dev/null 2>&1; then
+					gh release download "v${USEARCH_VERSION}" --repo unum-cloud/usearch --pattern "$zip" --dir "$USEARCH_CACHE"
+				else
+					curl -L --fail "$url" -o "$USEARCH_CACHE/$zip"
+				fi
+			fi
+			rm -rf "$USEARCH_CACHE/root"
+			mkdir -p "$USEARCH_CACHE/root"
+			unzip -q "$USEARCH_CACHE/$zip" -d "$USEARCH_CACHE/root"
+			;;
+	esac
+	if ! find_usearch_include_dir >/dev/null 2>&1 || ! find_usearch_lib_dir >/dev/null 2>&1; then
+		echo "USearch bootstrap did not produce usearch.h and $USEARCH_LIB under $USEARCH_ROOT" >&2
+		exit 1
+	fi
 }
 
 ensure_usearch
+USEARCH_INCLUDE_DIR=$(find_usearch_include_dir)
+USEARCH_LIB_DIR=$(find_usearch_lib_dir)
 mkdir -p "$RUN_DIR"
 
 cat >"$RUN_DIR/README.md" <<EOF
@@ -60,9 +140,18 @@ cat >"$RUN_DIR/README.md" <<EOF
 - branch: \`$(git rev-parse --abbrev-ref HEAD)\`
 - commit: \`$(git rev-parse --short HEAD)\`
 - USearch version: \`$USEARCH_VERSION\`
+- USearch OS/arch: \`$USEARCH_OS\` / \`$USEARCH_PACKAGE_ARCH\`
 - USearch root: \`$USEARCH_ROOT\`
+- USearch include dir: \`$USEARCH_INCLUDE_DIR\`
+- USearch lib dir: \`$USEARCH_LIB_DIR\`
 - docs: \`$TREEDB_VECTOR_BENCH_DOCS\`
 - dims: \`$TREEDB_VECTOR_BENCH_DIMS\`
+- M: \`$TREEDB_VECTOR_BENCH_M\`
+- efConstruction: \`$TREEDB_VECTOR_BENCH_EF_CONSTRUCTION\`
+- efSearch: \`$TREEDB_VECTOR_BENCH_EF_SEARCH\`
+- topK: \`$TREEDB_VECTOR_BENCH_TOPK\`
+- query stream length: \`$TREEDB_VECTOR_BENCH_QUERIES\`
+- cpu/concurrency list: \`$CPU_LIST\`
 - benchtime: \`$BENCHTIME\`
 - count: \`$COUNT\`
 - benchmark regex: \`$BENCH_REGEX\`
@@ -72,10 +161,40 @@ cat >"$RUN_DIR/README.md" <<EOF
 - run write benchmarks: \`$RUN_WRITE_BENCH\`
 - unsafe USearch filtered benchmark: \`$RUN_UNSAFE_USEARCH_FILTERED\`
 
-The harness compares TreeDB exact scan, TreeDB in-memory ANN, TreeDB int8 ANN,
-and USearch cosine/f32 HNSW using the same synthetic vector generator.
+## Benchmark boundaries
 
-With \`RUN_WRITE_BENCH=true\`, it also compares TreeDB incremental
+Canonical current production comparison:
+
+- \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_SearchWithBuffer\`
+  and \`.../TreeDB_SearchWithBufferParallel\` time the persisted TreeDB
+  \`column_graph\` path through \`Collection.OpenVectorIndexSearcher\` plus
+  \`VectorIndexSearcher.SearchWithBuffer\`. Setup, inserts, rebuild, open, and
+  warmup are outside the timed loop. Parallel runs use one searcher and one
+  caller-owned buffer per Go worker; use \`CPU_LIST=1,8\` for c=1/c=8 evidence.
+  The script emits a separate \`## search benchmarks cpu=<n>\` block for each
+  requested concurrency so worker counts stay unambiguous.
+  The timed loop uses production stats mode; a full-diagnostics sample is taken
+  outside the timed loop to report candidates/search and edge counters.
+- \`.../USearch_Search\` and \`.../USearch_SearchParallel\` time the pure
+  in-memory USearch Go binding baseline with cosine/f32 HNSW and the same
+  synthetic vector/query generator, M, efConstruction, efSearch, topK, docs,
+  dims, and CPU/concurrency list.
+
+Legacy/control rows:
+
+- \`BenchmarkCollectionVectorIndex*\` rows are older TreeDB in-memory/native-root
+  vector-index controls. They are useful historical comparators but are not the
+  current production no-document fast path.
+- \`BenchmarkCollectionVectorSearchExact\` is an exact scan control.
+- One-shot \`Collection.SearchVectorIndex\` benchmarks, when run separately, pay
+  setup/open costs per operation and should not be presented as the high-QPS
+  production fast path.
+
+Data boundary: TreeDB stores generated float32 vectors through JSON collection
+inserts and rebuilds the persisted \`column_graph\`; USearch is built directly
+from the generated float32 vectors as a pure in-memory external ANN baseline.
+
+With \`RUN_WRITE_BENCH=true\`, the script also compares TreeDB incremental
 \`InsertBatch\` with a registered in-memory vector index against USearch
 incremental \`Add\` on the same synthetic vector stream. The TreeDB benchmark
 includes collection document writes and vector-index update notifications; the
@@ -83,22 +202,43 @@ USearch benchmark is in-memory index insertion only.
 EOF
 
 echo "USearch root: $USEARCH_ROOT"
+echo "USearch include dir: $USEARCH_INCLUDE_DIR"
+echo "USearch lib dir: $USEARCH_LIB_DIR"
 echo "run dir: $RUN_DIR"
 (
 	if [[ "$RUN_UNSAFE_USEARCH_FILTERED" == "true" ]]; then
-		export BENCH_REGEX="BenchmarkCollectionVector(SearchExact|IndexSearch(Int8)?|IndexGraphOnlySearch(Int8)?|IndexFilteredSearch|USearchBaseline|USearchFilteredBaseline)$"
+		export BENCH_REGEX="BenchmarkCollectionVector(SearchExact|IndexSearch(Int8)?|IndexGraphOnlySearch(Int8)?|IndexFilteredSearch|USearchBaseline|USearchFilteredBaseline|USearchProductionCompare)$"
 		export GODEBUG="cgocheck=0${GODEBUG:+,$GODEBUG}"
 	fi
-	export CGO_CFLAGS="-I$USEARCH_ROOT/include ${CGO_CFLAGS:-}"
-	export CGO_LDFLAGS="-L$USEARCH_ROOT/lib ${CGO_LDFLAGS:-}"
-	export LD_LIBRARY_PATH="$USEARCH_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+	export CGO_CFLAGS="-I$USEARCH_INCLUDE_DIR ${CGO_CFLAGS:-}"
+	if [[ "$USEARCH_OS" == "macos" ]]; then
+		export CGO_LDFLAGS="-L$USEARCH_LIB_DIR -Wl,-rpath,$USEARCH_LIB_DIR ${CGO_LDFLAGS:-}"
+		export DYLD_LIBRARY_PATH="$USEARCH_LIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+	else
+		export CGO_LDFLAGS="-L$USEARCH_LIB_DIR ${CGO_LDFLAGS:-}"
+		export LD_LIBRARY_PATH="$USEARCH_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+	fi
 	export TREEDB_VECTOR_BENCH_DOCS
 	export TREEDB_VECTOR_BENCH_DIMS
-	go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+	export TREEDB_VECTOR_BENCH_M
+	export TREEDB_VECTOR_BENCH_EF_CONSTRUCTION
+	export TREEDB_VECTOR_BENCH_EF_SEARCH
+	export TREEDB_VECTOR_BENCH_TOPK
+	export TREEDB_VECTOR_BENCH_QUERIES
+	for cpu in ${CPU_LIST//,/ }; do
+		echo "## search benchmarks cpu=$cpu"
+		go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$BENCH_REGEX" -benchmem -benchtime="$BENCHTIME" -count="$COUNT" -cpu="$cpu"
+	done
 	if [[ "$RUN_BUILD_BENCH" == "true" ]]; then
-		go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$BUILD_BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+		for cpu in ${CPU_LIST//,/ }; do
+			echo "## build benchmarks cpu=$cpu"
+			go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$BUILD_BENCH_REGEX" -benchmem -benchtime="$BENCHTIME" -count="$COUNT" -cpu="$cpu"
+		done
 	fi
 	if [[ "$RUN_WRITE_BENCH" == "true" ]]; then
-		go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$WRITE_BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+		for cpu in ${CPU_LIST//,/ }; do
+			echo "## write benchmarks cpu=$cpu"
+			go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$WRITE_BENCH_REGEX" -benchmem -benchtime="$BENCHTIME" -count="$COUNT" -cpu="$cpu"
+		done
 	fi
 ) 2>&1 | tee "$RUN_DIR/bench.txt"
