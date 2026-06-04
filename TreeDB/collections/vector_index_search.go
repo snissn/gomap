@@ -424,19 +424,37 @@ type VectorIndexSearchStats struct {
 	UpperLayerScores                      uint64 `json:"upper_layer_scores,omitempty"`
 	UpperLayerEntryScores                 uint64 `json:"upper_layer_entry_scores,omitempty"`
 	UpperLayerNeighborScores              uint64 `json:"upper_layer_neighbor_scores,omitempty"`
+	UpperLayerScoreTiles                  uint64 `json:"upper_layer_score_tiles,omitempty"`
+	UpperLayerScoreTileCandidates         uint64 `json:"upper_layer_score_tile_candidates,omitempty"`
+	UpperLayerScoreTileMaxSize            uint64 `json:"upper_layer_score_tile_max_size,omitempty"`
+	UpperLayerAdjacencyLoads              uint64 `json:"upper_layer_adjacency_loads,omitempty"`
+	UpperLayerAdjacencyNeighbors          uint64 `json:"upper_layer_adjacency_neighbors,omitempty"`
 	UpperLayerEdgeVisits                  uint64 `json:"upper_layer_edge_visits,omitempty"`
 	UpperLayerScoredNeighbors             uint64 `json:"upper_layer_scored_neighbors,omitempty"`
 	UpperLayerFilterSkips                 uint64 `json:"upper_layer_filter_skips,omitempty"`
 	Layer0Scores                          uint64 `json:"layer0_scores,omitempty"`
 	Layer0SeedScores                      uint64 `json:"layer0_seed_scores,omitempty"`
 	Layer0NeighborScores                  uint64 `json:"layer0_neighbor_scores,omitempty"`
+	Layer0ScoreTiles                      uint64 `json:"layer0_score_tiles,omitempty"`
+	Layer0ScoreTileCandidates             uint64 `json:"layer0_score_tile_candidates,omitempty"`
+	Layer0ScoreTileMaxSize                uint64 `json:"layer0_score_tile_max_size,omitempty"`
+	Layer0AdjacencyLoads                  uint64 `json:"layer0_adjacency_loads,omitempty"`
+	Layer0AdjacencyNeighbors              uint64 `json:"layer0_adjacency_neighbors,omitempty"`
 	Layer0EdgeVisits                      uint64 `json:"layer0_edge_visits,omitempty"`
 	Layer0ScoredNeighbors                 uint64 `json:"layer0_scored_neighbors,omitempty"`
 	Layer0AlreadyVisitedSkips             uint64 `json:"layer0_already_visited_skips,omitempty"`
 	Layer0FilterSkips                     uint64 `json:"layer0_filter_skips,omitempty"`
+	Layer0StopChecks                      uint64 `json:"layer0_stop_checks,omitempty"`
+	Layer0StopTrue                        uint64 `json:"layer0_stop_true,omitempty"`
+	Layer0StopFalse                       uint64 `json:"layer0_stop_false,omitempty"`
+	CandidateComparisons                  uint64 `json:"candidate_comparisons,omitempty"`
+	FrontierComparisons                   uint64 `json:"frontier_comparisons,omitempty"`
+	TopKComparisons                       uint64 `json:"top_k_comparisons,omitempty"`
 	FrontierPushes                        uint64 `json:"frontier_pushes,omitempty"`
 	FrontierPops                          uint64 `json:"frontier_pops,omitempty"`
 	FrontierPopMisses                     uint64 `json:"frontier_pop_misses,omitempty"`
+	FrontierSiftUpCalls                   uint64 `json:"frontier_sift_up_calls,omitempty"`
+	FrontierSiftDownCalls                 uint64 `json:"frontier_sift_down_calls,omitempty"`
 	FrontierSiftUpSteps                   uint64 `json:"frontier_sift_up_steps,omitempty"`
 	FrontierSiftDownSteps                 uint64 `json:"frontier_sift_down_steps,omitempty"`
 	TopKInsertAttempts                    uint64 `json:"top_k_insert_attempts,omitempty"`
@@ -446,6 +464,9 @@ type VectorIndexSearchStats struct {
 	VisitedMarkChecks                     uint64 `json:"visited_mark_checks,omitempty"`
 	VisitedMarkHits                       uint64 `json:"visited_mark_hits,omitempty"`
 	VisitedMarkMisses                     uint64 `json:"visited_mark_misses,omitempty"`
+	VisitedMarkInserts                    uint64 `json:"visited_mark_inserts,omitempty"`
+	VisitedResetEpochAdvances             uint64 `json:"visited_reset_epoch_advances,omitempty"`
+	VisitedResetClearedRows               uint64 `json:"visited_reset_cleared_rows,omitempty"`
 	ExactModeSearches                     uint64 `json:"exact_mode_searches,omitempty"`
 	ExactCandidateOrderObservations       uint64 `json:"exact_candidate_order_observations,omitempty"`
 	ExactCandidateOrderTransitions        uint64 `json:"exact_candidate_order_transitions,omitempty"`
@@ -1243,19 +1264,37 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		UpperLayerScores:                      searchStats.UpperLayerScores,
 		UpperLayerEntryScores:                 searchStats.UpperLayerEntryScores,
 		UpperLayerNeighborScores:              searchStats.UpperLayerNeighborScores,
+		UpperLayerScoreTiles:                  searchStats.UpperLayerScoreTiles,
+		UpperLayerScoreTileCandidates:         searchStats.UpperLayerScoreTileCandidates,
+		UpperLayerScoreTileMaxSize:            searchStats.UpperLayerScoreTileMaxSize,
+		UpperLayerAdjacencyLoads:              searchStats.UpperLayerAdjacencyLoads,
+		UpperLayerAdjacencyNeighbors:          searchStats.UpperLayerAdjacencyNeighbors,
 		UpperLayerEdgeVisits:                  searchStats.UpperLayerEdgeVisits,
 		UpperLayerScoredNeighbors:             searchStats.UpperLayerScoredNeighbors,
 		UpperLayerFilterSkips:                 searchStats.UpperLayerFilterSkips,
 		Layer0Scores:                          searchStats.Layer0Scores,
 		Layer0SeedScores:                      searchStats.Layer0SeedScores,
 		Layer0NeighborScores:                  searchStats.Layer0NeighborScores,
+		Layer0ScoreTiles:                      searchStats.Layer0ScoreTiles,
+		Layer0ScoreTileCandidates:             searchStats.Layer0ScoreTileCandidates,
+		Layer0ScoreTileMaxSize:                searchStats.Layer0ScoreTileMaxSize,
+		Layer0AdjacencyLoads:                  searchStats.Layer0AdjacencyLoads,
+		Layer0AdjacencyNeighbors:              searchStats.Layer0AdjacencyNeighbors,
 		Layer0EdgeVisits:                      searchStats.Layer0EdgeVisits,
 		Layer0ScoredNeighbors:                 searchStats.Layer0ScoredNeighbors,
 		Layer0AlreadyVisitedSkips:             searchStats.Layer0AlreadyVisitedSkips,
 		Layer0FilterSkips:                     searchStats.Layer0FilterSkips,
+		Layer0StopChecks:                      searchStats.Layer0StopChecks,
+		Layer0StopTrue:                        searchStats.Layer0StopTrue,
+		Layer0StopFalse:                       searchStats.Layer0StopFalse,
+		CandidateComparisons:                  searchStats.CandidateComparisons,
+		FrontierComparisons:                   searchStats.FrontierComparisons,
+		TopKComparisons:                       searchStats.TopKComparisons,
 		FrontierPushes:                        searchStats.FrontierPushes,
 		FrontierPops:                          searchStats.FrontierPops,
 		FrontierPopMisses:                     searchStats.FrontierPopMisses,
+		FrontierSiftUpCalls:                   searchStats.FrontierSiftUpCalls,
+		FrontierSiftDownCalls:                 searchStats.FrontierSiftDownCalls,
 		FrontierSiftUpSteps:                   searchStats.FrontierSiftUpSteps,
 		FrontierSiftDownSteps:                 searchStats.FrontierSiftDownSteps,
 		TopKInsertAttempts:                    searchStats.TopKInsertAttempts,
@@ -1265,6 +1304,9 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		VisitedMarkChecks:                     searchStats.VisitedMarkChecks,
 		VisitedMarkHits:                       searchStats.VisitedMarkHits,
 		VisitedMarkMisses:                     searchStats.VisitedMarkMisses,
+		VisitedMarkInserts:                    searchStats.VisitedMarkInserts,
+		VisitedResetEpochAdvances:             searchStats.VisitedResetEpochAdvances,
+		VisitedResetClearedRows:               searchStats.VisitedResetClearedRows,
 		ExactModeSearches:                     searchStats.ExactModeSearches,
 		ExactCandidateOrderObservations:       searchStats.ExactCandidateOrderObservations,
 		ExactCandidateOrderTransitions:        searchStats.ExactCandidateOrderTransitions,

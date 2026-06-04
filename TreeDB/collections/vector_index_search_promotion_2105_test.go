@@ -383,17 +383,29 @@ func assertVectorIndexSearchBenchmarkDebugStats2105(tb testing.TB, stats VectorI
 	if stats.ScoredNeighbors+stats.SkippedNeighbors != stats.VisitedEdges {
 		tb.Fatalf("stats=%+v want scored+skipped neighbor buckets to reconcile", stats)
 	}
-	if stats.VisitedMarkHits+stats.VisitedMarkMisses != stats.VisitedMarkChecks || stats.VisitedMarkHits != stats.Layer0AlreadyVisitedSkips {
-		tb.Fatalf("stats=%+v want visited-mark hits/misses to reconcile", stats)
+	if stats.VisitedMarkHits+stats.VisitedMarkMisses != stats.VisitedMarkChecks || stats.VisitedMarkHits != stats.Layer0AlreadyVisitedSkips || stats.VisitedMarkInserts < stats.VisitedMarkMisses || stats.VisitedResetEpochAdvances != 1 {
+		tb.Fatalf("stats=%+v want visited-mark hits/misses/inserts/reset work to reconcile", stats)
 	}
 	if stats.FrontierPushes != stats.Candidates || stats.TopKInsertAttempts != stats.Candidates || stats.TopKInsertSuccesses+stats.TopKInsertRejections != stats.TopKInsertAttempts {
 		tb.Fatalf("stats=%+v want frontier/top-k operation counts to reconcile with candidates", stats)
 	}
+	if stats.FrontierSiftUpCalls != stats.FrontierPushes || stats.FrontierSiftDownCalls > stats.FrontierPops || stats.CandidateComparisons != stats.FrontierComparisons+stats.TopKComparisons {
+		tb.Fatalf("stats=%+v want frontier/top-k comparison and sift counters to reconcile", stats)
+	}
+	if stats.Layer0StopTrue+stats.Layer0StopFalse != stats.Layer0StopChecks || stats.Layer0StopChecks == 0 {
+		tb.Fatalf("stats=%+v want layer0 stop checks to reconcile", stats)
+	}
 	if stats.NeighborTileSize0+stats.NeighborTileSize1+stats.NeighborTileSize2To4+stats.NeighborTileSize5To8+stats.NeighborTileSize9To16+stats.NeighborTileSize17Plus != stats.NeighborTiles {
 		tb.Fatalf("stats=%+v want neighbor tile histogram to sum to neighbor_tiles", stats)
 	}
+	if stats.UpperLayerAdjacencyLoads+stats.Layer0AdjacencyLoads != stats.NeighborTiles || stats.UpperLayerAdjacencyNeighbors+stats.Layer0AdjacencyNeighbors != stats.NeighborTileNeighbors {
+		tb.Fatalf("stats=%+v want phase adjacency load counters to reconcile", stats)
+	}
 	if stats.ScoreBatchSingletons+stats.ScoreBatchSize2To4+stats.ScoreBatchSize5To8+stats.ScoreBatchSize9To16+stats.ScoreBatchSize17Plus != stats.ScoreBatchCalls {
 		tb.Fatalf("stats=%+v want score batch histogram to sum to score_batch_calls", stats)
+	}
+	if stats.UpperLayerScoreTileCandidates != stats.UpperLayerScores || stats.Layer0ScoreTileCandidates != stats.Layer0Scores || stats.UpperLayerScoreTiles+stats.Layer0ScoreTiles == 0 {
+		tb.Fatalf("stats=%+v want phase score tile counters to reconcile", stats)
 	}
 	if exactMode {
 		if stats.ExactModeSearches != 1 || stats.ExactCandidateOrderObservations != stats.Candidates {
@@ -435,19 +447,37 @@ func reportVectorIndexSearchBenchmarkDebugMetrics2105(b *testing.B, stats Vector
 	b.ReportMetric(float64(stats.UpperLayerScores), "upper_layer_scores/search")
 	b.ReportMetric(float64(stats.UpperLayerEntryScores), "upper_layer_entry_scores/search")
 	b.ReportMetric(float64(stats.UpperLayerNeighborScores), "upper_layer_neighbor_scores/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTiles), "upper_layer_score_tiles/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTileCandidates), "upper_layer_score_tile_candidates/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTileMaxSize), "upper_layer_score_tile_max_size")
+	b.ReportMetric(float64(stats.UpperLayerAdjacencyLoads), "upper_layer_adjacency_loads/search")
+	b.ReportMetric(float64(stats.UpperLayerAdjacencyNeighbors), "upper_layer_adjacency_neighbors/search")
 	b.ReportMetric(float64(stats.UpperLayerEdgeVisits), "upper_layer_edge_visits/search")
 	b.ReportMetric(float64(stats.UpperLayerScoredNeighbors), "upper_layer_scored_neighbors/search")
 	b.ReportMetric(float64(stats.UpperLayerFilterSkips), "upper_layer_filter_skips/search")
 	b.ReportMetric(float64(stats.Layer0Scores), "layer0_scores/search")
 	b.ReportMetric(float64(stats.Layer0SeedScores), "layer0_seed_scores/search")
 	b.ReportMetric(float64(stats.Layer0NeighborScores), "layer0_neighbor_scores/search")
+	b.ReportMetric(float64(stats.Layer0ScoreTiles), "layer0_score_tiles/search")
+	b.ReportMetric(float64(stats.Layer0ScoreTileCandidates), "layer0_score_tile_candidates/search")
+	b.ReportMetric(float64(stats.Layer0ScoreTileMaxSize), "layer0_score_tile_max_size")
+	b.ReportMetric(float64(stats.Layer0AdjacencyLoads), "layer0_adjacency_loads/search")
+	b.ReportMetric(float64(stats.Layer0AdjacencyNeighbors), "layer0_adjacency_neighbors/search")
 	b.ReportMetric(float64(stats.Layer0EdgeVisits), "layer0_edge_visits/search")
 	b.ReportMetric(float64(stats.Layer0ScoredNeighbors), "layer0_scored_neighbors/search")
 	b.ReportMetric(float64(stats.Layer0AlreadyVisitedSkips), "layer0_already_visited_skips/search")
 	b.ReportMetric(float64(stats.Layer0FilterSkips), "layer0_filter_skips/search")
+	b.ReportMetric(float64(stats.Layer0StopChecks), "layer0_stop_checks/search")
+	b.ReportMetric(float64(stats.Layer0StopTrue), "layer0_stop_true/search")
+	b.ReportMetric(float64(stats.Layer0StopFalse), "layer0_stop_false/search")
+	b.ReportMetric(float64(stats.CandidateComparisons), "candidate_comparisons/search")
+	b.ReportMetric(float64(stats.FrontierComparisons), "frontier_comparisons/search")
+	b.ReportMetric(float64(stats.TopKComparisons), "top_k_comparisons/search")
 	b.ReportMetric(float64(stats.FrontierPushes), "frontier_pushes/search")
 	b.ReportMetric(float64(stats.FrontierPops), "frontier_pops/search")
 	b.ReportMetric(float64(stats.FrontierPopMisses), "frontier_pop_misses/search")
+	b.ReportMetric(float64(stats.FrontierSiftUpCalls), "frontier_sift_up_calls/search")
+	b.ReportMetric(float64(stats.FrontierSiftDownCalls), "frontier_sift_down_calls/search")
 	b.ReportMetric(float64(stats.FrontierSiftUpSteps), "frontier_sift_up_steps/search")
 	b.ReportMetric(float64(stats.FrontierSiftDownSteps), "frontier_sift_down_steps/search")
 	b.ReportMetric(float64(stats.TopKInsertAttempts), "top_k_insert_attempts/search")
@@ -457,6 +487,9 @@ func reportVectorIndexSearchBenchmarkDebugMetrics2105(b *testing.B, stats Vector
 	b.ReportMetric(float64(stats.VisitedMarkChecks), "visited_mark_checks/search")
 	b.ReportMetric(float64(stats.VisitedMarkHits), "visited_mark_hits/search")
 	b.ReportMetric(float64(stats.VisitedMarkMisses), "visited_mark_misses/search")
+	b.ReportMetric(float64(stats.VisitedMarkInserts), "visited_mark_inserts/search")
+	b.ReportMetric(float64(stats.VisitedResetEpochAdvances), "visited_reset_epoch_advances/search")
+	b.ReportMetric(float64(stats.VisitedResetClearedRows), "visited_reset_cleared_rows/search")
 	b.ReportMetric(float64(stats.ExactModeSearches), "exact_mode_searches/search")
 	b.ReportMetric(float64(stats.ExactCandidateOrderObservations), "exact_candidate_order_observations/search")
 	b.ReportMetric(float64(stats.ExactCandidateOrderTransitions), "exact_candidate_order_transitions/search")

@@ -145,17 +145,29 @@ func assertColumnVectorGraphBenchmarkDebugStats1979(tb testing.TB, stats columnV
 	if stats.ScoredNeighbors+stats.SkippedNeighbors != stats.VisitedEdges {
 		tb.Fatalf("stats=%+v want scored+skipped neighbor buckets to reconcile with visited_edges", stats)
 	}
-	if stats.VisitedMarkHits+stats.VisitedMarkMisses != stats.VisitedMarkChecks || stats.VisitedMarkHits != stats.Layer0AlreadyVisitedSkips {
-		tb.Fatalf("stats=%+v want visited-mark hits/misses to reconcile", stats)
+	if stats.VisitedMarkHits+stats.VisitedMarkMisses != stats.VisitedMarkChecks || stats.VisitedMarkHits != stats.Layer0AlreadyVisitedSkips || stats.VisitedMarkInserts < stats.VisitedMarkMisses || stats.VisitedResetEpochAdvances != 1 {
+		tb.Fatalf("stats=%+v want visited-mark hits/misses/inserts/reset work to reconcile", stats)
 	}
 	if stats.FrontierPushes != stats.TopKInsertSuccesses || stats.TopKInsertAttempts != stats.Candidates || stats.TopKInsertSuccesses+stats.TopKInsertRejections != stats.TopKInsertAttempts {
 		tb.Fatalf("stats=%+v want frontier/top-k operation counts to reconcile with candidates", stats)
 	}
+	if stats.FrontierSiftUpCalls != stats.FrontierPushes || stats.FrontierSiftDownCalls > stats.FrontierPops || stats.CandidateComparisons != stats.FrontierComparisons+stats.TopKComparisons {
+		tb.Fatalf("stats=%+v want frontier/top-k comparison and sift counters to reconcile", stats)
+	}
+	if stats.Layer0StopTrue+stats.Layer0StopFalse != stats.Layer0StopChecks || (stats.Layer0StopChecks == 0 && stats.WavefrontSearches == 0) {
+		tb.Fatalf("stats=%+v want layer0 stop checks to reconcile", stats)
+	}
 	if stats.NeighborTileSize0+stats.NeighborTileSize1+stats.NeighborTileSize2To4+stats.NeighborTileSize5To8+stats.NeighborTileSize9To16+stats.NeighborTileSize17Plus != stats.NeighborTiles {
 		tb.Fatalf("stats=%+v want neighbor tile histogram to sum to neighbor_tiles", stats)
 	}
+	if stats.UpperLayerAdjacencyLoads+stats.Layer0AdjacencyLoads != stats.NeighborTiles || stats.UpperLayerAdjacencyNeighbors+stats.Layer0AdjacencyNeighbors != stats.NeighborTileNeighbors {
+		tb.Fatalf("stats=%+v want phase adjacency load counters to reconcile", stats)
+	}
 	if stats.ScoreBatchSingletons+stats.ScoreBatchSize2To4+stats.ScoreBatchSize5To8+stats.ScoreBatchSize9To16+stats.ScoreBatchSize17Plus != stats.ScoreBatchCalls {
 		tb.Fatalf("stats=%+v want score batch histogram to sum to score_batch_calls", stats)
+	}
+	if stats.UpperLayerScoreTileCandidates != stats.UpperLayerScores || stats.Layer0ScoreTileCandidates != stats.Layer0Scores || stats.UpperLayerScoreTiles+stats.Layer0ScoreTiles == 0 {
+		tb.Fatalf("stats=%+v want phase score tile counters to reconcile", stats)
 	}
 	if exactMode {
 		if stats.ExactModeSearches != 1 || stats.ExactCandidateOrderObservations != stats.Candidates {
@@ -199,19 +211,41 @@ func addColumnVectorGraphNativeSearchDebugStats1979(dst *columnVectorGraphNative
 	dst.UpperLayerScores += src.UpperLayerScores
 	dst.UpperLayerEntryScores += src.UpperLayerEntryScores
 	dst.UpperLayerNeighborScores += src.UpperLayerNeighborScores
+	dst.UpperLayerScoreTiles += src.UpperLayerScoreTiles
+	dst.UpperLayerScoreTileCandidates += src.UpperLayerScoreTileCandidates
+	if src.UpperLayerScoreTileMaxSize > dst.UpperLayerScoreTileMaxSize {
+		dst.UpperLayerScoreTileMaxSize = src.UpperLayerScoreTileMaxSize
+	}
+	dst.UpperLayerAdjacencyLoads += src.UpperLayerAdjacencyLoads
+	dst.UpperLayerAdjacencyNeighbors += src.UpperLayerAdjacencyNeighbors
 	dst.UpperLayerEdgeVisits += src.UpperLayerEdgeVisits
 	dst.UpperLayerScoredNeighbors += src.UpperLayerScoredNeighbors
 	dst.UpperLayerFilterSkips += src.UpperLayerFilterSkips
 	dst.Layer0Scores += src.Layer0Scores
 	dst.Layer0SeedScores += src.Layer0SeedScores
 	dst.Layer0NeighborScores += src.Layer0NeighborScores
+	dst.Layer0ScoreTiles += src.Layer0ScoreTiles
+	dst.Layer0ScoreTileCandidates += src.Layer0ScoreTileCandidates
+	if src.Layer0ScoreTileMaxSize > dst.Layer0ScoreTileMaxSize {
+		dst.Layer0ScoreTileMaxSize = src.Layer0ScoreTileMaxSize
+	}
+	dst.Layer0AdjacencyLoads += src.Layer0AdjacencyLoads
+	dst.Layer0AdjacencyNeighbors += src.Layer0AdjacencyNeighbors
 	dst.Layer0EdgeVisits += src.Layer0EdgeVisits
 	dst.Layer0ScoredNeighbors += src.Layer0ScoredNeighbors
 	dst.Layer0AlreadyVisitedSkips += src.Layer0AlreadyVisitedSkips
 	dst.Layer0FilterSkips += src.Layer0FilterSkips
+	dst.Layer0StopChecks += src.Layer0StopChecks
+	dst.Layer0StopTrue += src.Layer0StopTrue
+	dst.Layer0StopFalse += src.Layer0StopFalse
+	dst.CandidateComparisons += src.CandidateComparisons
+	dst.FrontierComparisons += src.FrontierComparisons
+	dst.TopKComparisons += src.TopKComparisons
 	dst.FrontierPushes += src.FrontierPushes
 	dst.FrontierPops += src.FrontierPops
 	dst.FrontierPopMisses += src.FrontierPopMisses
+	dst.FrontierSiftUpCalls += src.FrontierSiftUpCalls
+	dst.FrontierSiftDownCalls += src.FrontierSiftDownCalls
 	dst.FrontierSiftUpSteps += src.FrontierSiftUpSteps
 	dst.FrontierSiftDownSteps += src.FrontierSiftDownSteps
 	dst.TopKInsertAttempts += src.TopKInsertAttempts
@@ -221,6 +255,9 @@ func addColumnVectorGraphNativeSearchDebugStats1979(dst *columnVectorGraphNative
 	dst.VisitedMarkChecks += src.VisitedMarkChecks
 	dst.VisitedMarkHits += src.VisitedMarkHits
 	dst.VisitedMarkMisses += src.VisitedMarkMisses
+	dst.VisitedMarkInserts += src.VisitedMarkInserts
+	dst.VisitedResetEpochAdvances += src.VisitedResetEpochAdvances
+	dst.VisitedResetClearedRows += src.VisitedResetClearedRows
 	dst.ExactModeSearches += src.ExactModeSearches
 	dst.ExactCandidateOrderObservations += src.ExactCandidateOrderObservations
 	dst.ExactCandidateOrderTransitions += src.ExactCandidateOrderTransitions
@@ -263,19 +300,37 @@ func reportColumnVectorGraphNativeSearchDebugMetrics1979(b *testing.B, n int, st
 	b.ReportMetric(float64(stats.UpperLayerScores)/denom, "upper_layer_scores/search")
 	b.ReportMetric(float64(stats.UpperLayerEntryScores)/denom, "upper_layer_entry_scores/search")
 	b.ReportMetric(float64(stats.UpperLayerNeighborScores)/denom, "upper_layer_neighbor_scores/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTiles)/denom, "upper_layer_score_tiles/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTileCandidates)/denom, "upper_layer_score_tile_candidates/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTileMaxSize), "upper_layer_score_tile_max_size")
+	b.ReportMetric(float64(stats.UpperLayerAdjacencyLoads)/denom, "upper_layer_adjacency_loads/search")
+	b.ReportMetric(float64(stats.UpperLayerAdjacencyNeighbors)/denom, "upper_layer_adjacency_neighbors/search")
 	b.ReportMetric(float64(stats.UpperLayerEdgeVisits)/denom, "upper_layer_edge_visits/search")
 	b.ReportMetric(float64(stats.UpperLayerScoredNeighbors)/denom, "upper_layer_scored_neighbors/search")
 	b.ReportMetric(float64(stats.UpperLayerFilterSkips)/denom, "upper_layer_filter_skips/search")
 	b.ReportMetric(float64(stats.Layer0Scores)/denom, "layer0_scores/search")
 	b.ReportMetric(float64(stats.Layer0SeedScores)/denom, "layer0_seed_scores/search")
 	b.ReportMetric(float64(stats.Layer0NeighborScores)/denom, "layer0_neighbor_scores/search")
+	b.ReportMetric(float64(stats.Layer0ScoreTiles)/denom, "layer0_score_tiles/search")
+	b.ReportMetric(float64(stats.Layer0ScoreTileCandidates)/denom, "layer0_score_tile_candidates/search")
+	b.ReportMetric(float64(stats.Layer0ScoreTileMaxSize), "layer0_score_tile_max_size")
+	b.ReportMetric(float64(stats.Layer0AdjacencyLoads)/denom, "layer0_adjacency_loads/search")
+	b.ReportMetric(float64(stats.Layer0AdjacencyNeighbors)/denom, "layer0_adjacency_neighbors/search")
 	b.ReportMetric(float64(stats.Layer0EdgeVisits)/denom, "layer0_edge_visits/search")
 	b.ReportMetric(float64(stats.Layer0ScoredNeighbors)/denom, "layer0_scored_neighbors/search")
 	b.ReportMetric(float64(stats.Layer0AlreadyVisitedSkips)/denom, "layer0_already_visited_skips/search")
 	b.ReportMetric(float64(stats.Layer0FilterSkips)/denom, "layer0_filter_skips/search")
+	b.ReportMetric(float64(stats.Layer0StopChecks)/denom, "layer0_stop_checks/search")
+	b.ReportMetric(float64(stats.Layer0StopTrue)/denom, "layer0_stop_true/search")
+	b.ReportMetric(float64(stats.Layer0StopFalse)/denom, "layer0_stop_false/search")
+	b.ReportMetric(float64(stats.CandidateComparisons)/denom, "candidate_comparisons/search")
+	b.ReportMetric(float64(stats.FrontierComparisons)/denom, "frontier_comparisons/search")
+	b.ReportMetric(float64(stats.TopKComparisons)/denom, "top_k_comparisons/search")
 	b.ReportMetric(float64(stats.FrontierPushes)/denom, "frontier_pushes/search")
 	b.ReportMetric(float64(stats.FrontierPops)/denom, "frontier_pops/search")
 	b.ReportMetric(float64(stats.FrontierPopMisses)/denom, "frontier_pop_misses/search")
+	b.ReportMetric(float64(stats.FrontierSiftUpCalls)/denom, "frontier_sift_up_calls/search")
+	b.ReportMetric(float64(stats.FrontierSiftDownCalls)/denom, "frontier_sift_down_calls/search")
 	b.ReportMetric(float64(stats.FrontierSiftUpSteps)/denom, "frontier_sift_up_steps/search")
 	b.ReportMetric(float64(stats.FrontierSiftDownSteps)/denom, "frontier_sift_down_steps/search")
 	b.ReportMetric(float64(stats.TopKInsertAttempts)/denom, "top_k_insert_attempts/search")
@@ -285,6 +340,9 @@ func reportColumnVectorGraphNativeSearchDebugMetrics1979(b *testing.B, n int, st
 	b.ReportMetric(float64(stats.VisitedMarkChecks)/denom, "visited_mark_checks/search")
 	b.ReportMetric(float64(stats.VisitedMarkHits)/denom, "visited_mark_hits/search")
 	b.ReportMetric(float64(stats.VisitedMarkMisses)/denom, "visited_mark_misses/search")
+	b.ReportMetric(float64(stats.VisitedMarkInserts)/denom, "visited_mark_inserts/search")
+	b.ReportMetric(float64(stats.VisitedResetEpochAdvances)/denom, "visited_reset_epoch_advances/search")
+	b.ReportMetric(float64(stats.VisitedResetClearedRows)/denom, "visited_reset_cleared_rows/search")
 	b.ReportMetric(float64(stats.ExactModeSearches)/denom, "exact_mode_searches/search")
 	b.ReportMetric(float64(stats.ExactCandidateOrderObservations)/denom, "exact_candidate_order_observations/search")
 	b.ReportMetric(float64(stats.ExactCandidateOrderTransitions)/denom, "exact_candidate_order_transitions/search")

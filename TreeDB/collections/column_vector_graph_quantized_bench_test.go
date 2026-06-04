@@ -91,6 +91,67 @@ func BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926(b *testing.B) {
 	}
 }
 
+func BenchmarkColumnGraphScalarU8QuantizedTraversalCounters2271(b *testing.B) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
+	defer fixture.close()
+
+	cases := []struct {
+		name               string
+		mode               VectorIndexQueryMode
+		rerankCandidates   int
+		quantizedIndexName string
+	}{
+		{name: "mode=exact", mode: VectorIndexQueryModeExact},
+		{name: "mode=quantized_only", mode: VectorIndexQueryModeQuantizedOnly, quantizedIndexName: columnGraphScalarU8QuantizedBenchIndexName1926},
+		{name: "mode=quantized_rerank/candidates=32", mode: VectorIndexQueryModeQuantizedRerank, quantizedIndexName: columnGraphScalarU8QuantizedBenchIndexName1926, rerankCandidates: 32},
+	}
+	for _, tc := range cases {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			searcher, err := fixture.collection.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: fixture.definition.Name, MaxDecodedBlocks: 1})
+			if err != nil {
+				b.Fatalf("OpenVectorIndexSearcher: %v", err)
+			}
+			defer func() { _ = searcher.Close() }()
+			opts := VectorIndexSearcherSearchOptions{
+				Query:                     fixture.query,
+				QueryMode:                 tc.mode,
+				QuantizedIndexName:        tc.quantizedIndexName,
+				QuantizedRerankCandidates: tc.rerankCandidates,
+				TopK:                      fixture.shape.topK,
+				EfSearch:                  fixture.shape.efSearch,
+				StatsMode:                 VectorIndexSearchStatsModeBenchmarkDebug,
+			}
+			var buffer VectorIndexSearchBuffer
+			warm, err := searcher.SearchWithBuffer(opts, &buffer)
+			if err != nil {
+				b.Fatalf("warm SearchWithBuffer: %v", err)
+			}
+			if len(warm.Results) == 0 || warm.Stats.BenchmarkDebugSearches != 1 {
+				b.Fatalf("warm response results=%d stats=%+v want benchmark_debug counters", len(warm.Results), warm.Stats)
+			}
+
+			var stats VectorIndexSearchStats
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				response, err := searcher.SearchWithBuffer(opts, &buffer)
+				if err != nil {
+					b.Fatalf("SearchWithBuffer: %v", err)
+				}
+				if len(response.Results) == 0 {
+					b.Fatalf("SearchWithBuffer returned no results")
+				}
+				columnPhysicalScanBenchSum += int64(response.Results[0].Ordinal)
+				addColumnGraphScalarU8QuantizedBenchmarkStats1926(&stats, response.Stats)
+			}
+			b.StopTimer()
+			reportColumnGraphScalarU8QuantizedTraversalCounterMetrics2271(b, fixture, stats)
+		})
+	}
+}
+
 func BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926(b *testing.B) {
 	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 256, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
 	for _, tc := range []struct {
@@ -266,6 +327,60 @@ func addColumnGraphScalarU8QuantizedBenchmarkStats1926(dst *VectorIndexSearchSta
 	dst.ResultIDTypedBytesState += src.ResultIDTypedBytesState
 	dst.RowRefVectorSourceState += src.RowRefVectorSourceState
 	dst.RowRefVectorSourceLegacyGraphIDs += src.RowRefVectorSourceLegacyGraphIDs
+	dst.BenchmarkDebugSearches += src.BenchmarkDebugSearches
+	dst.NeighborTiles += src.NeighborTiles
+	dst.NeighborTileNeighbors += src.NeighborTileNeighbors
+	if src.NeighborTileMaxSize > dst.NeighborTileMaxSize {
+		dst.NeighborTileMaxSize = src.NeighborTileMaxSize
+	}
+	dst.ScoredNeighbors += src.ScoredNeighbors
+	dst.SkippedNeighbors += src.SkippedNeighbors
+	dst.AlreadyVisitedSkips += src.AlreadyVisitedSkips
+	dst.FilterSkips += src.FilterSkips
+	dst.UpperLayerScores += src.UpperLayerScores
+	dst.UpperLayerScoreTiles += src.UpperLayerScoreTiles
+	dst.UpperLayerScoreTileCandidates += src.UpperLayerScoreTileCandidates
+	if src.UpperLayerScoreTileMaxSize > dst.UpperLayerScoreTileMaxSize {
+		dst.UpperLayerScoreTileMaxSize = src.UpperLayerScoreTileMaxSize
+	}
+	dst.UpperLayerAdjacencyLoads += src.UpperLayerAdjacencyLoads
+	dst.UpperLayerAdjacencyNeighbors += src.UpperLayerAdjacencyNeighbors
+	dst.UpperLayerEdgeVisits += src.UpperLayerEdgeVisits
+	dst.Layer0Scores += src.Layer0Scores
+	dst.Layer0ScoreTiles += src.Layer0ScoreTiles
+	dst.Layer0ScoreTileCandidates += src.Layer0ScoreTileCandidates
+	if src.Layer0ScoreTileMaxSize > dst.Layer0ScoreTileMaxSize {
+		dst.Layer0ScoreTileMaxSize = src.Layer0ScoreTileMaxSize
+	}
+	dst.Layer0AdjacencyLoads += src.Layer0AdjacencyLoads
+	dst.Layer0AdjacencyNeighbors += src.Layer0AdjacencyNeighbors
+	dst.Layer0EdgeVisits += src.Layer0EdgeVisits
+	dst.Layer0ScoredNeighbors += src.Layer0ScoredNeighbors
+	dst.Layer0AlreadyVisitedSkips += src.Layer0AlreadyVisitedSkips
+	dst.Layer0FilterSkips += src.Layer0FilterSkips
+	dst.Layer0StopChecks += src.Layer0StopChecks
+	dst.Layer0StopTrue += src.Layer0StopTrue
+	dst.Layer0StopFalse += src.Layer0StopFalse
+	dst.CandidateComparisons += src.CandidateComparisons
+	dst.FrontierComparisons += src.FrontierComparisons
+	dst.TopKComparisons += src.TopKComparisons
+	dst.FrontierPushes += src.FrontierPushes
+	dst.FrontierPops += src.FrontierPops
+	dst.FrontierPopMisses += src.FrontierPopMisses
+	dst.FrontierSiftUpCalls += src.FrontierSiftUpCalls
+	dst.FrontierSiftDownCalls += src.FrontierSiftDownCalls
+	dst.FrontierSiftUpSteps += src.FrontierSiftUpSteps
+	dst.FrontierSiftDownSteps += src.FrontierSiftDownSteps
+	dst.TopKInsertAttempts += src.TopKInsertAttempts
+	dst.TopKInsertSuccesses += src.TopKInsertSuccesses
+	dst.TopKInsertRejections += src.TopKInsertRejections
+	dst.TopKShiftSteps += src.TopKShiftSteps
+	dst.VisitedMarkChecks += src.VisitedMarkChecks
+	dst.VisitedMarkHits += src.VisitedMarkHits
+	dst.VisitedMarkMisses += src.VisitedMarkMisses
+	dst.VisitedMarkInserts += src.VisitedMarkInserts
+	dst.VisitedResetEpochAdvances += src.VisitedResetEpochAdvances
+	dst.VisitedResetClearedRows += src.VisitedResetClearedRows
 }
 
 func reportColumnGraphScalarU8QuantizedBenchShapeMetrics1926(b *testing.B, shape columnGraphScalarU8QuantizedBenchShape1926) {
@@ -326,6 +441,63 @@ func reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b *testing.B, fixtu
 	b.ReportMetric(float64(fixture.quantizedAssetBytes), "quantized_asset_B_total")
 	if fixture.shape.rows > 0 {
 		b.ReportMetric(float64(fixture.quantizedAssetBytes)/float64(fixture.shape.rows), "quantized_asset_B/vector")
+	}
+}
+
+func reportColumnGraphScalarU8QuantizedTraversalCounterMetrics2271(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, stats VectorIndexSearchStats) {
+	b.Helper()
+	reportColumnGraphScalarU8QuantizedBenchShapeMetrics1926(b, fixture.shape)
+	if elapsed := b.Elapsed().Seconds(); elapsed > 0 {
+		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
+	}
+	denom := float64(b.N)
+	if denom == 0 {
+		denom = 1
+	}
+	b.ReportMetric(2271, "traversal_counter_issue")
+	b.ReportMetric(float64(stats.BenchmarkDebugSearches)/denom, "benchmark_debug_searches/search")
+	b.ReportMetric(float64(stats.Candidates)/denom, "candidates/search")
+	b.ReportMetric(float64(stats.VisitedEdges)/denom, "visited_edges/search")
+	b.ReportMetric(float64(stats.NeighborTiles)/denom, "adjacency_layer_loads/search")
+	b.ReportMetric(float64(stats.NeighborTileNeighbors)/denom, "adjacency_loaded_neighbors/search")
+	b.ReportMetric(float64(stats.NeighborTileMaxSize), "adjacency_layer_max_neighbors")
+	b.ReportMetric(float64(stats.UpperLayerAdjacencyLoads)/denom, "upper_layer_adjacency_loads/search")
+	b.ReportMetric(float64(stats.UpperLayerAdjacencyNeighbors)/denom, "upper_layer_adjacency_neighbors/search")
+	b.ReportMetric(float64(stats.UpperLayerEdgeVisits)/denom, "upper_layer_neighbors_iterated/search")
+	b.ReportMetric(float64(stats.Layer0AdjacencyLoads)/denom, "layer0_adjacency_loads/search")
+	b.ReportMetric(float64(stats.Layer0AdjacencyNeighbors)/denom, "layer0_adjacency_neighbors/search")
+	b.ReportMetric(float64(stats.Layer0EdgeVisits)/denom, "layer0_neighbors_iterated/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTiles)/denom, "upper_layer_score_tiles/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTileCandidates)/denom, "upper_layer_score_tile_candidates/search")
+	b.ReportMetric(float64(stats.UpperLayerScoreTileMaxSize), "upper_layer_score_tile_max_size")
+	b.ReportMetric(float64(stats.Layer0ScoreTiles)/denom, "layer0_score_tiles/search")
+	b.ReportMetric(float64(stats.Layer0ScoreTileCandidates)/denom, "layer0_score_tile_candidates/search")
+	b.ReportMetric(float64(stats.Layer0ScoreTileMaxSize), "layer0_score_tile_max_size")
+	b.ReportMetric(float64(stats.CandidateComparisons)/denom, "candidate_comparisons/search")
+	b.ReportMetric(float64(stats.FrontierComparisons)/denom, "frontier_comparisons/search")
+	b.ReportMetric(float64(stats.TopKComparisons)/denom, "top_k_comparisons/search")
+	b.ReportMetric(float64(stats.FrontierPushes)/denom, "frontier_pushes/search")
+	b.ReportMetric(float64(stats.FrontierPops)/denom, "frontier_pops/search")
+	b.ReportMetric(float64(stats.FrontierPopMisses)/denom, "frontier_pop_misses/search")
+	b.ReportMetric(float64(stats.FrontierSiftUpCalls)/denom, "frontier_sift_up_calls/search")
+	b.ReportMetric(float64(stats.FrontierSiftDownCalls)/denom, "frontier_sift_down_calls/search")
+	b.ReportMetric(float64(stats.FrontierSiftUpSteps)/denom, "frontier_sift_up_steps/search")
+	b.ReportMetric(float64(stats.FrontierSiftDownSteps)/denom, "frontier_sift_down_steps/search")
+	b.ReportMetric(float64(stats.TopKInsertAttempts)/denom, "top_k_insert_attempts/search")
+	b.ReportMetric(float64(stats.TopKInsertSuccesses)/denom, "top_k_insert_successes/search")
+	b.ReportMetric(float64(stats.TopKInsertRejections)/denom, "top_k_insert_rejections/search")
+	b.ReportMetric(float64(stats.TopKShiftSteps)/denom, "top_k_shift_steps/search")
+	b.ReportMetric(float64(stats.VisitedMarkChecks)/denom, "visited_mark_checks/search")
+	b.ReportMetric(float64(stats.VisitedMarkHits)/denom, "visited_mark_hits/search")
+	b.ReportMetric(float64(stats.VisitedMarkMisses)/denom, "visited_mark_misses/search")
+	b.ReportMetric(float64(stats.VisitedMarkInserts)/denom, "visited_mark_inserts/search")
+	b.ReportMetric(float64(stats.VisitedResetEpochAdvances)/denom, "visited_reset_epoch_advances/search")
+	b.ReportMetric(float64(stats.VisitedResetClearedRows)/denom, "visited_reset_cleared_rows/search")
+	b.ReportMetric(float64(stats.Layer0StopChecks)/denom, "layer0_stop_checks/search")
+	b.ReportMetric(float64(stats.Layer0StopTrue)/denom, "layer0_stop_true/search")
+	b.ReportMetric(float64(stats.Layer0StopFalse)/denom, "layer0_stop_false/search")
+	if stats.VisitedNodes > 0 {
+		b.ReportMetric(float64(stats.VisitedEdges)/float64(stats.VisitedNodes), "edges_per_visited_node")
 	}
 }
 
