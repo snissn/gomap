@@ -109,20 +109,37 @@ func applyTypedColumnBenchmarkPolicyFromEnv(cfg ColumnStoreConfig, opts *typedCo
 	return nil
 }
 
-func parseColumnStoreTypedColumnCompression(name string, raw ColumnStoreTypedColumnCompression) (typedcolumn.Compression, error) {
+func canonicalColumnStoreTypedColumnCompression(name string, raw ColumnStoreTypedColumnCompression) (ColumnStoreTypedColumnCompression, error) {
 	switch strings.ToLower(strings.TrimSpace(string(raw))) {
 	case "", "default":
-		return typedcolumn.CompressionLZ4, nil
+		return ColumnStoreTypedColumnCompressionLZ4, nil
 	case "none", "off", "compression_off":
-		return typedcolumn.CompressionNone, nil
+		return ColumnStoreTypedColumnCompressionNone, nil
 	case "snappy":
-		return typedcolumn.CompressionSnappy, nil
+		return ColumnStoreTypedColumnCompressionSnappy, nil
 	case "lz4":
-		return typedcolumn.CompressionLZ4, nil
+		return ColumnStoreTypedColumnCompressionLZ4, nil
 	case "zstd":
-		return 0, fmt.Errorf("%w: unsupported %s zstd (production zstd encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
+		return "", fmt.Errorf("%w: unsupported %s zstd (production zstd encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
 	case "zstd_dict", "zstd-dict":
-		return 0, fmt.Errorf("%w: unsupported %s zstd_dict (production zstd dictionary encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
+		return "", fmt.Errorf("%w: unsupported %s zstd_dict (production zstd dictionary encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
+	default:
+		return "", fmt.Errorf("%w: unknown %s %q", errTypedColumnProductionLayoutUnsupported, name, raw)
+	}
+}
+
+func parseColumnStoreTypedColumnCompression(name string, raw ColumnStoreTypedColumnCompression) (typedcolumn.Compression, error) {
+	canonical, err := canonicalColumnStoreTypedColumnCompression(name, raw)
+	if err != nil {
+		return 0, err
+	}
+	switch canonical {
+	case ColumnStoreTypedColumnCompressionNone:
+		return typedcolumn.CompressionNone, nil
+	case ColumnStoreTypedColumnCompressionSnappy:
+		return typedcolumn.CompressionSnappy, nil
+	case ColumnStoreTypedColumnCompressionLZ4:
+		return typedcolumn.CompressionLZ4, nil
 	default:
 		return 0, fmt.Errorf("%w: unknown %s %q", errTypedColumnProductionLayoutUnsupported, name, raw)
 	}

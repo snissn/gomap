@@ -798,6 +798,23 @@ func TestColumnStoreTypedColumnCompressionPolicyNormalizes2297(t *testing.T) {
 		t.Fatalf("typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
 	}
 
+	defaultAlias := testColumnStoreConfig(nil)
+	defaultAlias.TypedColumnCompression = ColumnStoreTypedColumnCompression(" default ")
+	defaultAlias.TypedColumnSectionCompression = ColumnStoreTypedColumnCompression("default")
+	defaultAliasMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: defaultAlias}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta default alias: %v", err)
+	}
+	if got := defaultAliasMeta.Options.ColumnStore.TypedColumnCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
+		t.Fatalf("alias typed_column_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
+	}
+	if got := defaultAliasMeta.Options.ColumnStore.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
+		t.Fatalf("alias typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
+	}
+	if defaultAliasMeta.Options.ColumnStore.SchemaHash != defaultCfg.SchemaHash {
+		t.Fatalf("schema hash should canonicalize default alias: alias=%x default=%x", defaultAliasMeta.Options.ColumnStore.SchemaHash, defaultCfg.SchemaHash)
+	}
+
 	snappy := testColumnStoreConfig(nil)
 	snappy.TypedColumnCompression = ColumnStoreTypedColumnCompressionSnappy
 	snappyMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: snappy}})
@@ -817,6 +834,23 @@ func TestColumnStoreTypedColumnCompressionPolicyNormalizes2297(t *testing.T) {
 	}
 	if noneMeta.Options.ColumnStore.SchemaHash == defaultCfg.SchemaHash {
 		t.Fatalf("schema hash did not include typed-column compression policy: default=%x none=%x", defaultCfg.SchemaHash, noneMeta.Options.ColumnStore.SchemaHash)
+	}
+
+	off := testColumnStoreConfig(nil)
+	off.TypedColumnCompression = ColumnStoreTypedColumnCompression("off")
+	off.TypedColumnSectionCompression = ColumnStoreTypedColumnCompression("compression_off")
+	offMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: off}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta off alias: %v", err)
+	}
+	if got := offMeta.Options.ColumnStore.TypedColumnCompression; got != ColumnStoreTypedColumnCompressionNone {
+		t.Fatalf("off alias typed_column_compression=%q want %q", got, ColumnStoreTypedColumnCompressionNone)
+	}
+	if got := offMeta.Options.ColumnStore.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionNone {
+		t.Fatalf("off alias typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionNone)
+	}
+	if offMeta.Options.ColumnStore.SchemaHash != noneMeta.Options.ColumnStore.SchemaHash {
+		t.Fatalf("schema hash should canonicalize none aliases: off=%x none=%x", offMeta.Options.ColumnStore.SchemaHash, noneMeta.Options.ColumnStore.SchemaHash)
 	}
 
 	invalid := testColumnStoreConfig(nil)

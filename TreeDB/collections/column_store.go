@@ -485,11 +485,19 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 	if out.ProfileSupport == "" {
 		out.ProfileSupport = ColumnStoreProfileDurableOnly
 	}
-	if out.TypedColumnCompression == ColumnStoreTypedColumnCompressionDefault {
-		out.TypedColumnCompression = ColumnStoreTypedColumnCompressionLZ4
+	typedColumnCompression, err := canonicalColumnStoreTypedColumnCompression("typed_column_compression", out.TypedColumnCompression)
+	if err != nil {
+		return nil, err
 	}
+	out.TypedColumnCompression = typedColumnCompression
 	if out.TypedColumnSectionCompression == ColumnStoreTypedColumnCompressionDefault {
 		out.TypedColumnSectionCompression = out.TypedColumnCompression
+	} else {
+		typedColumnSectionCompression, err := canonicalColumnStoreTypedColumnCompression("typed_column_section_compression", out.TypedColumnSectionCompression)
+		if err != nil {
+			return nil, err
+		}
+		out.TypedColumnSectionCompression = typedColumnSectionCompression
 	}
 	if out.ActiveManifest != nil {
 		normalizeColumnManifestIdentityFormat(out.ActiveManifest)
