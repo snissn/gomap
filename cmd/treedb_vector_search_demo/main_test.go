@@ -140,6 +140,87 @@ func TestExecuteConsumesDatasetDir(t *testing.T) {
 	}
 }
 
+func TestExecuteDatasetExactValidationNativeRuntime(t *testing.T) {
+	datasetDir := writeDemoDataset(t, 96, 8, 6, 3)
+	res, err := execute(context.Background(), config{
+		dir:                   t.TempDir(),
+		datasetDir:            datasetDir,
+		keepDir:               true,
+		docs:                  96,
+		dimensions:            8,
+		queries:               4,
+		searchConcurrency:     []int{2},
+		validateQueries:       3,
+		validateDocs:          2,
+		validationExactSource: validationExactSourceDataset,
+		topK:                  3,
+		batchSize:             24,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.5,
+		disableExactFallback:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute dataset exact native_runtime: %v", err)
+	}
+	if res.ValidationExactSource != validationExactSourceDataset || res.Validation.ExactSource != validationExactSourceDataset {
+		t.Fatalf("validation exact source result=%q validation=%q, want dataset", res.ValidationExactSource, res.Validation.ExactSource)
+	}
+	if res.Validation.ExactTotal != 9 || res.Validation.ANNTotal == 0 {
+		t.Fatalf("unexpected dataset exact validation totals: %+v", res.Validation)
+	}
+	if res.Validation.Recall < res.Validation.MinRecall {
+		t.Fatalf("recall=%f below min=%f", res.Validation.Recall, res.Validation.MinRecall)
+	}
+}
+
+func TestExecuteColumnGraphDatasetExactValidationThreadsQueryMode(t *testing.T) {
+	datasetDir := writeDemoDataset(t, 96, 8, 6, 3)
+	res, err := execute(context.Background(), config{
+		dir:                       t.TempDir(),
+		datasetDir:                datasetDir,
+		keepDir:                   true,
+		docs:                      96,
+		dimensions:                8,
+		queries:                   4,
+		searchConcurrency:         []int{2},
+		validateQueries:           3,
+		validateDocs:              2,
+		validationExactSource:     validationExactSourceDataset,
+		topK:                      3,
+		batchSize:                 24,
+		m:                         4,
+		efConstruction:            32,
+		efSearch:                  32,
+		valuePointerThreshold:     defaultValuePointerThreshold,
+		leafGenerationTarget:      defaultLeafGenerationTarget,
+		minRecall:                 0,
+		disableExactFallback:      true,
+		vectorIndexStrategy:       collections.VectorIndexStrategyColumnGraph,
+		vectorQueryMode:           collections.VectorIndexQueryModeQuantizedRerank,
+		quantizedIndexName:        defaultQuantizedIndexName,
+		quantizedRerankCandidates: 8,
+	})
+	if err != nil {
+		t.Fatalf("execute column_graph dataset exact quantized_rerank: %v", err)
+	}
+	if res.ValidationExactSource != validationExactSourceDataset || res.Validation.ExactSource != validationExactSourceDataset {
+		t.Fatalf("validation exact source result=%q validation=%q, want dataset", res.ValidationExactSource, res.Validation.ExactSource)
+	}
+	if res.QueryMode != collections.VectorIndexQueryModeQuantizedRerank || res.Search.QueryMode != collections.VectorIndexQueryModeQuantizedRerank {
+		t.Fatalf("query mode not threaded: result=%q search=%q", res.QueryMode, res.Search.QueryMode)
+	}
+	if res.Validation.ExactTotal != 9 || res.Validation.ANNTotal == 0 {
+		t.Fatalf("unexpected dataset exact validation totals: %+v", res.Validation)
+	}
+	if res.Search.AvgQuantizedRerankExactScoreCalls <= 0 {
+		t.Fatalf("quantized_rerank search stats missing exact rerank: %+v", res.Search)
+	}
+}
+
 func TestExecuteColumnGraphSearchPath(t *testing.T) {
 	res, err := execute(context.Background(), config{
 		dir:                   t.TempDir(),
@@ -506,6 +587,24 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 		t.Fatalf("parsed quantized config=%+v", cfg)
 	}
 
+	datasetCfg, err := parseConfig([]string{
+		"-dataset-dir", filepath.Join("tmp", "dataset"),
+		"-validation-exact-source", " Dataset ",
+	})
+	if err != nil {
+		t.Fatalf("parseConfig dataset exact source: %v", err)
+	}
+	if datasetCfg.validationExactSource != validationExactSourceDataset {
+		t.Fatalf("validation exact source=%q want dataset", datasetCfg.validationExactSource)
+	}
+	defaultCfg, err := parseConfig(nil)
+	if err != nil {
+		t.Fatalf("parseConfig defaults: %v", err)
+	}
+	if defaultCfg.validationExactSource != validationExactSourceTreeDB {
+		t.Fatalf("default validation exact source=%q want treedb", defaultCfg.validationExactSource)
+	}
+
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -515,6 +614,16 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 			name: "invalid mode",
 			args: []string{"-vector-query-mode", "binary_quantize"},
 			want: "unsupported -vector-query-mode",
+		},
+		{
+			name: "invalid validation source",
+			args: []string{"-validation-exact-source", "pgvector"},
+			want: "unsupported -validation-exact-source",
+		},
+		{
+			name: "dataset validation source requires dataset dir",
+			args: []string{"-validation-exact-source", "dataset"},
+			want: "requires -dataset-dir",
 		},
 		{
 			name: "quantized requires column graph",
