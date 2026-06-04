@@ -390,14 +390,13 @@ func (s *mergeScratch) releasePendingLeafPagePersists(buf []pendingLeafPagePersi
 	if buf == nil {
 		return
 	}
-	full := buf[:cap(buf)]
-	clear(full)
+	clear(buf)
 	if s == nil || cap(buf) > mergePendingLeafPersistMaxCap {
 		return
 	}
 	s.mu.Lock()
 	if len(s.pendingLeafPersistScratch) < mergePendingLeafPersistKeep {
-		s.pendingLeafPersistScratch = append(s.pendingLeafPersistScratch, full[:0])
+		s.pendingLeafPersistScratch = append(s.pendingLeafPersistScratch, buf[:0])
 		s.mu.Unlock()
 		return
 	}
@@ -431,14 +430,13 @@ func (s *mergeScratch) releaseLeafPageBatch(buf [][]byte) {
 	if buf == nil {
 		return
 	}
-	full := buf[:cap(buf)]
-	clear(full)
+	clear(buf)
 	if s == nil || cap(buf) > mergeLeafPageBatchMaxCap {
 		return
 	}
 	s.mu.Lock()
 	if len(s.leafPageBatchScratch) < mergeLeafPageBatchKeep {
-		s.leafPageBatchScratch = append(s.leafPageBatchScratch, full[:0])
+		s.leafPageBatchScratch = append(s.leafPageBatchScratch, buf[:0])
 		s.mu.Unlock()
 		return
 	}
@@ -472,14 +470,13 @@ func (s *mergeScratch) releaseChildRefBatch(buf []page.ChildRef) {
 	if buf == nil {
 		return
 	}
-	full := buf[:cap(buf)]
-	clear(full)
+	clear(buf)
 	if s == nil || cap(buf) > mergeChildRefBatchMaxCap {
 		return
 	}
 	s.mu.Lock()
 	if len(s.childRefBatchScratch) < mergeChildRefBatchKeep {
-		s.childRefBatchScratch = append(s.childRefBatchScratch, full[:0])
+		s.childRefBatchScratch = append(s.childRefBatchScratch, buf[:0])
 		s.mu.Unlock()
 		return
 	}
