@@ -467,6 +467,8 @@ func reportColumnGraphScalarU8QuantizedTraversalCounterMetrics2271(b *testing.B,
 	b.ReportMetric(float64(stats.Layer0AdjacencyLoads)/denom, "layer0_adjacency_loads/search")
 	b.ReportMetric(float64(stats.Layer0AdjacencyNeighbors)/denom, "layer0_adjacency_neighbors/search")
 	b.ReportMetric(float64(stats.Layer0EdgeVisits)/denom, "layer0_neighbors_iterated/search")
+	b.ReportMetric(float64(stats.AlreadyVisitedSkips)/denom, "already_visited_skips/search")
+	b.ReportMetric(float64(stats.Layer0AlreadyVisitedSkips)/denom, "layer0_already_visited_skips/search")
 	b.ReportMetric(float64(stats.UpperLayerScoreTiles)/denom, "upper_layer_score_tiles/search")
 	b.ReportMetric(float64(stats.UpperLayerScoreTileCandidates)/denom, "upper_layer_score_tile_candidates/search")
 	b.ReportMetric(float64(stats.UpperLayerScoreTileMaxSize), "upper_layer_score_tile_max_size")
