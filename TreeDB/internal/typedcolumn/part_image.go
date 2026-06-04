@@ -1078,7 +1078,7 @@ func (b *columnPartImageBuilder) refreshLayoutContractSection(sections []ColumnP
 
 func (b *columnPartImageBuilder) appendSection(section ColumnPartImageSection, data []byte) {
 	section.Length = len(data)
-	if section.Compression == CompressionNone || section.RawBytes == 0 {
+	if section.RawBytes == 0 && (section.Compression == CompressionNone || section.Kind != ColumnPartImageSectionColumnData) {
 		section.RawBytes = len(data)
 	}
 	b.sections = append(b.sections, columnPartImageSectionData{
