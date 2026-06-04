@@ -2348,7 +2348,6 @@ func TestTypedColumnAdapterPrepareInt64AggregateTargetedRestoresSectionCompressi
 		rows         = rowsPerBlock * 2
 	)
 	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
-	field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
 	primaryIDs := make([]int64, rows)
 	counts := make([]int64, rows)
 	x := uint64(0x9e3779b97f4a7c15)

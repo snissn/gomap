@@ -351,24 +351,19 @@ func applyTypedColumnAdapterDefinitionOptions(field TypedStorageField, def *type
 		}
 	}
 	if opts.DefaultCompressionSet {
-		if !opts.DefaultCompressionOnlySupported || typedColumnProductionFieldSupportsCompression(field, opts.DefaultCompression) {
+		if opts.DefaultCompressionOnlySupported {
+			trial := *def
+			trial.Compression = opts.DefaultCompression
+			trial.CompressionSet = true
+			if validateTypedColumnProductionDefinition(field, trial) == nil {
+				*def = trial
+			}
+		} else {
 			def.Compression = opts.DefaultCompression
 			def.CompressionSet = true
 		}
 	}
 	return validateTypedColumnProductionDefinition(field, *def)
-}
-
-func typedColumnProductionFieldSupportsCompression(field TypedStorageField, compression typedcolumn.Compression) bool {
-	if compression == typedcolumn.CompressionNone {
-		return true
-	}
-	switch field.ValueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueString:
-		return true
-	default:
-		return false
-	}
 }
 
 func typedColumnAdapterColumnsForFields(fields []TypedStorageField) ([]typedColumnAdapterColumn, error) {

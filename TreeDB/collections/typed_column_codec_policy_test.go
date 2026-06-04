@@ -300,6 +300,27 @@ func TestTypedColumnProductionCompressionPolicySkipsUnsupportedFields2297(t *tes
 	if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "compression lz4 is unsupported") {
 		t.Fatalf("forced vector compression err=%v want fail-closed unsupported compression", err)
 	}
+
+	fixedWidthInt64 := typedColumnAdapterField("raw_count", ColumnStoreValueInt64)
+	fixedWidthInt64.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	columns, err = typedColumnAdapterColumnsForFieldsWithOptions([]TypedStorageField{fixedWidthInt64}, typedColumnAdapterOptions{
+		DefaultCompression:              typedcolumn.CompressionLZ4,
+		DefaultCompressionSet:           true,
+		DefaultCompressionOnlySupported: true,
+	})
+	if err != nil {
+		t.Fatalf("typedColumnAdapterColumnsForFieldsWithOptions fixed-width int64 skip: %v", err)
+	}
+	if got := columns[0].Definition.Compression; got != typedcolumn.CompressionNone {
+		t.Fatalf("fixed-width int64 compression=%s want none when production policy skips unsupported fields", got)
+	}
+	_, err = typedColumnAdapterColumnsForFieldsWithOptions([]TypedStorageField{fixedWidthInt64}, typedColumnAdapterOptions{
+		DefaultCompression:    typedcolumn.CompressionLZ4,
+		DefaultCompressionSet: true,
+	})
+	if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "compression lz4 is unsupported for fixed-width field") {
+		t.Fatalf("forced fixed-width int64 compression err=%v want fail-closed unsupported compression", err)
+	}
 }
 
 func TestTypedColumnAdapterOptInLocatorSectionCompression1952(t *testing.T) {
