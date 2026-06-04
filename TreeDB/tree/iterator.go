@@ -1017,19 +1017,33 @@ func (it *Iterator) loadNodeRef(ref page.ChildRef) (node.Node, error) {
 	if it == nil || it.tree == nil {
 		return node.Node{}, errors.New("missing tree")
 	}
-	if ref.Kind == page.ChildRefLeafLog && it.tree.leafLogToReader != nil {
+	if ref.Kind == page.ChildRefLeafLog && (it.tree.leafLogToState != nil || it.tree.leafLogToReader != nil) {
 		ptr := ref.Log
 		if cap(it.leafRefScratch) != page.PageSize {
 			it.leafRefScratch = make([]byte, 0, page.PageSize)
 		}
-		data, usedDst, err := it.tree.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, it.leafRefScratch[:0])
+		var (
+			data    []byte
+			usedDst bool
+			state   LeafLogPageReadState
+			err     error
+		)
+		if it.tree.leafLogToState != nil {
+			data, usedDst, state, err = it.tree.leafLogToState.ReadLeafLogPageUnsafeToWithState(ptr, it.leafRefScratch[:0])
+		} else {
+			data, usedDst, err = it.tree.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, it.leafRefScratch[:0])
+		}
 		if err != nil {
 			return node.Node{}, err
 		}
-		n, err := validateLeafLogNode(data, ptr, it.tree.shouldVerifyLeafRefChecksum(), true)
+		var n node.Node
+		verifiedNow, err := validateLeafLogNodeIntoWithState(&n, data, ptr, it.tree.shouldVerifyLeafRefChecksum(), true, state)
 		if err != nil {
 			it.leafRefScratch = it.leafRefScratch[:0]
 			return node.Node{}, err
+		}
+		if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
+			it.tree.markLeafLogPageChecksumVerified(ptr)
 		}
 		if usedDst {
 			it.leafRefScratch = data[:0]

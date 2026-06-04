@@ -88,6 +88,173 @@ func (r *trackedLeafLogPageReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, 
 	return val, false, nil
 }
 
+type statefulLeafLogPageReader struct {
+	*mapValueReader
+	state    LeafLogPageReadState
+	reads    int
+	views    int
+	releases int
+	marks    int
+}
+
+type statefulLeafLogPageViewLease struct {
+	reader *statefulLeafLogPageReader
+}
+
+func (l *statefulLeafLogPageViewLease) ReleaseLeafLogPageView() {
+	if l != nil && l.reader != nil {
+		l.reader.releases++
+	}
+}
+
+func (l *statefulLeafLogPageViewLease) MarkLeafLogPageViewChecksumVerified() {
+	if l != nil && l.reader != nil {
+		l.reader.MarkLeafLogPageChecksumVerified(page.LeafLogPtr{})
+	}
+}
+
+func (r *statefulLeafLogPageReader) ReadChecksumEnabled() bool { return true }
+
+func (r *statefulLeafLogPageReader) ReadLeafLogPageUnsafeToWithState(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, LeafLogPageReadState, error) {
+	r.reads++
+	val, err := r.mapValueReader.ReadUnsafe(ptr.ValuePtr())
+	if err != nil {
+		return nil, false, LeafLogPageReadState{}, err
+	}
+	if cap(dst) >= len(val) {
+		out := dst[:len(val)]
+		copy(out, val)
+		return out, true, r.state, nil
+	}
+	return val, false, r.state, nil
+}
+
+func (r *statefulLeafLogPageReader) ReadLeafLogPageUnsafeViewWithState(ptr page.LeafLogPtr) ([]byte, LeafLogPageViewLease, bool, LeafLogPageReadState, error) {
+	r.views++
+	val, err := r.mapValueReader.ReadUnsafe(ptr.ValuePtr())
+	if err != nil {
+		return nil, nil, false, LeafLogPageReadState{}, err
+	}
+	return val, &statefulLeafLogPageViewLease{reader: r}, true, r.state, nil
+}
+
+func (r *statefulLeafLogPageReader) MarkLeafLogPageChecksumVerified(ptr page.LeafLogPtr) {
+	r.marks++
+	r.state.PageChecksumVerified = true
+}
+
+func TestTreeLeafLogVerifiedCacheStateSkipsChecksum(t *testing.T) {
+	before := OuterLeafReadStatsSnapshot()
+	reader := &statefulLeafLogPageReader{mapValueReader: newMapValueReader(), state: LeafLogPageReadState{RecordChecksumVerified: true, CacheEntryPresent: true}}
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	if err := leaf.AddLeafEntry([]byte("k"), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
+	}
+	leaf.UpdateChecksum()
+
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: page.PageSize}
+	reader.values[ptr.ValuePtr()] = leafData
+	tr, _ := newTreeWithLeafLogRoot(t, reader, []byte{}, ptr)
+
+	got, err := tr.GetAppend([]byte("k"), nil)
+	if err != nil {
+		t.Fatalf("first GetAppend: %v", err)
+	}
+	if string(got) != "value" {
+		t.Fatalf("first GetAppend=%q", got)
+	}
+	afterFirst := OuterLeafReadStatsSnapshot()
+	if afterFirst.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal != 1 {
+		t.Fatalf("checksum verifications delta=%d want 1", afterFirst.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal)
+	}
+	if afterFirst.ChecksumSkippedTotal != before.ChecksumSkippedTotal {
+		t.Fatalf("unexpected checksum skip before verified cache hit")
+	}
+	if reader.views != 1 || reader.releases != 1 {
+		t.Fatalf("view path calls/releases=%d/%d, want 1/1", reader.views, reader.releases)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("fallback leaf-log reads=%d, want view-state path", reader.reads)
+	}
+	if reader.marks != 1 || !reader.state.PageChecksumVerified {
+		t.Fatalf("marks=%d state=%+v, want one verified mark", reader.marks, reader.state)
+	}
+
+	got, err = tr.GetAppend([]byte("k"), nil)
+	if err != nil {
+		t.Fatalf("second GetAppend: %v", err)
+	}
+	if string(got) != "value" {
+		t.Fatalf("second GetAppend=%q", got)
+	}
+	afterSecond := OuterLeafReadStatsSnapshot()
+	if afterSecond.ChecksumVerifiedTotal != afterFirst.ChecksumVerifiedTotal {
+		t.Fatalf("checksum verification ran again: before=%d after=%d", afterFirst.ChecksumVerifiedTotal, afterSecond.ChecksumVerifiedTotal)
+	}
+	if afterSecond.ChecksumSkippedTotal-afterFirst.ChecksumSkippedTotal != 1 {
+		t.Fatalf("checksum skips delta=%d want 1", afterSecond.ChecksumSkippedTotal-afterFirst.ChecksumSkippedTotal)
+	}
+}
+
+func TestTreeLeafLogUnverifiedStateStillChecksChecksum(t *testing.T) {
+	reader := &statefulLeafLogPageReader{mapValueReader: newMapValueReader(), state: LeafLogPageReadState{RecordChecksumVerified: true, CacheEntryPresent: true}}
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	if err := leaf.AddLeafEntry([]byte("k"), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
+	}
+	leaf.UpdateChecksum()
+	leafData[node.NodeHeaderSize] ^= 0x80
+
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: page.PageSize}
+	reader.values[ptr.ValuePtr()] = leafData
+	tr, _ := newTreeWithLeafLogRoot(t, reader, []byte{}, ptr)
+
+	_, err := tr.GetAppend([]byte("k"), nil)
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("GetAppend error=%v, want checksum mismatch", err)
+	}
+	if reader.marks != 0 || reader.state.PageChecksumVerified {
+		t.Fatalf("corrupt page should not be marked verified: marks=%d state=%+v", reader.marks, reader.state)
+	}
+}
+
+func TestValidateLeafLogStateRequiresRecordChecksumForChecksumSkip(t *testing.T) {
+	before := OuterLeafReadStatsSnapshot()
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	if err := leaf.AddLeafEntry([]byte("k"), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
+	}
+	leaf.UpdateChecksum()
+	leafData[node.NodeHeaderSize] ^= 0x80
+
+	var dst node.Node
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: page.PageSize}
+	_, err := validateLeafLogNodeIntoWithState(&dst, leafData, ptr, true, false, LeafLogPageReadState{
+		CacheEntryPresent:      true,
+		PageChecksumVerified:   true,
+		RecordChecksumVerified: false,
+	})
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("validate error=%v, want checksum mismatch", err)
+	}
+	after := OuterLeafReadStatsSnapshot()
+	if after.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal != 1 {
+		t.Fatalf("checksum verifications delta=%d want 1", after.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal)
+	}
+	if after.ChecksumSkippedTotal != before.ChecksumSkippedTotal {
+		t.Fatalf("checksum skips delta=%d want 0", after.ChecksumSkippedTotal-before.ChecksumSkippedTotal)
+	}
+}
+
 func TestTreeGetManyAppend_RejectsUndersizedOut(t *testing.T) {
 	var tr *Tree
 	arena := []byte("keep")
