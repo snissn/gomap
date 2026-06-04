@@ -48,7 +48,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 - **[TreeDB Canonical Benchmark Runbook](benchmarks/treedb_canonical_benchmark_runbook.md)**: Standard TreeDB engine, collections, Mongo gateway, profiling, and reporting workflows.
 - **[YCSB MongoDB / TreeDB Status](benchmarks/ycsb_mongodb_treedb_current.md)**: Current report index and rerun plan for MongoDB, `treedb-native`, and TreeDB Mongo gateway.
 - **[TreeDB Collections Canonical Benchmark](benchmarks/collections_canonical_benchmark.md)**: Canonical TreeDB-vs-SQLite collection benchmark and maintenance-phase semantics.
-- **[Two-Index Collection Insert Rerun](benchmarks/collections_insert_two_index_latest_main_2026-06-03.md)**: Current TreeDB-vs-SQLite two-index insert throughput and compacted storage rows.
+- **[Two-Index Collection Insert Rerun](benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md)**: Current TreeDB-vs-SQLite two-index insert throughput and exhaustive/VACUUM-equivalent compacted storage rows.
 - **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
 - **[BenchProf](../cmd/benchprof/README.md)**: Analysis tool for CPU/alloc/block/mutex profiles and ops/sec outputs.
 - **[Redis Protocol Benchmarking](REDIS_PROTOCOL_BENCHMARKING.md)**: Preferred way to measure Redis wrapper throughput.

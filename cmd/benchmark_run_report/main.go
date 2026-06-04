@@ -1798,8 +1798,8 @@ func collectionRowsForIndex(rows []collectionRow, idx int) []collectionRow {
 }
 
 func collectionLifecycleRows(rows []collectionRow) collectionChartRows {
-	phases := []string{"post_insert", "online_one_pass_maintenance", "offline_compact", "offline_rewrite", "full_leafgen_pack_gc", "sqlite_vacuum"}
-	phaseLabels := []string{"post insert", "online maint", "offline compact", "offline rewrite", "leafgen GC", "SQLite VACUUM"}
+	phases := []string{"post_insert", "online_one_pass_maintenance", "offline_compact", "offline_rewrite", "exhaustive_compact", "full_leafgen_pack_gc", "sqlite_vacuum"}
+	phaseLabels := []string{"post insert", "online maint", "offline compact", "offline rewrite", "exhaustive", "leafgen GC", "SQLite VACUUM"}
 	values := make(map[string][]float64)
 	phasePresent := make([]bool, len(phases))
 	for _, row := range rows {
@@ -2045,7 +2045,7 @@ func collectionChartPhase(family, kind string) (string, bool) {
 		return "", false
 	}
 	if family == "TreeDB" {
-		return "full_leafgen_pack_gc", true
+		return "exhaustive_compact", true
 	}
 	if family == "SQLite" {
 		return "sqlite_vacuum", true
@@ -2056,7 +2056,8 @@ func collectionChartPhase(family, kind string) (string, bool) {
 func collectionChartPhaseMatches(family, kind, phase string) bool {
 	if kind == "bytes" {
 		if family == "TreeDB" {
-			return phase == "full_leafgen_pack_gc" ||
+			return phase == "exhaustive_compact" ||
+				phase == "full_leafgen_pack_gc" ||
 				phase == "offline_compact" ||
 				phase == "offline_rewrite" ||
 				phase == "online_one_pass_maintenance"

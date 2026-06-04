@@ -268,12 +268,12 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		}
 		if desc.Logical == columnsemantics.LogicalInt64 && desc.Physical == typedcolumn.ColumnTypeInt64 && !caps.Wrappers.Nullable {
 			caps.Reducers.Int64NumericAggregate = true
+			caps.Stats.MinMax = true
+			caps.Stats.Sum = true
+			caps.Pruning.OrderedMinMax = true
+			caps.Pruning.ValueRows = true
 			if desc.Compression == typedcolumn.CompressionNone {
 				caps.Reducers.Int64FixedWidthRaw = true
-				caps.Stats.MinMax = true
-				caps.Stats.Sum = true
-				caps.Pruning.OrderedMinMax = true
-				caps.Pruning.ValueRows = true
 			} else {
 				caps.Reducers.Int64Streaming = true
 			}
@@ -286,12 +286,10 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		if desc.Logical == columnsemantics.LogicalInt64 && desc.Physical == typedcolumn.ColumnTypeInt64 && !caps.Wrappers.Nullable {
 			caps.Reducers.Int64Streaming = true
 			caps.Reducers.Int64NumericAggregate = true
-			if desc.Compression == typedcolumn.CompressionNone {
-				caps.Stats.MinMax = true
-				caps.Stats.Sum = true
-				caps.Pruning.OrderedMinMax = true
-				caps.Pruning.ValueRows = true
-			}
+			caps.Stats.MinMax = true
+			caps.Stats.Sum = true
+			caps.Pruning.OrderedMinMax = true
+			caps.Pruning.ValueRows = true
 		}
 	case typedcolumn.EncodingNullableInt64:
 		caps.Layout.Kind = LayoutWrapper
@@ -648,7 +646,7 @@ func applyPrimitiveScalarLayout(caps *Capabilities) {
 	} else {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: width, AlignmentBytes: width, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
 	}
-	if primitiveIntegerStatsCompatible(desc.Logical, desc.Physical, desc.Encoding) && desc.Compression == typedcolumn.CompressionNone && !caps.Wrappers.Nullable {
+	if primitiveIntegerStatsCompatible(desc.Logical, desc.Physical, desc.Encoding) && !caps.Wrappers.Nullable {
 		caps.Stats.MinMax = true
 		caps.Stats.Sum = true
 		caps.Pruning.OrderedMinMax = true
@@ -780,8 +778,6 @@ func (c Capabilities) Supports(op Operation) Capability {
 		switch op {
 		case OpDirectView, OpVectorDirectView, OpUint32ListDirectView, OpBytesDirectView, OpAdjacencyDirectView:
 			return Unsupported(op, ReasonCompressedDirectView, fmt.Sprintf("compression=%s", c.Descriptor.Compression))
-		case OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats:
-			return Unsupported(op, ReasonUnsupportedCompression, fmt.Sprintf("compression=%s", c.Descriptor.Compression))
 		}
 	}
 	if c.Descriptor.Logical == columnsemantics.LogicalFloat32 || c.Descriptor.Logical == columnsemantics.LogicalDouble {

@@ -43,23 +43,22 @@ Full report, commands, host context, run repeats, and artifact paths:
 
 ### Indexed Collection Insert Workload
 
-Two secondary indexes, latest-main June 3 HST / June 4 UTC rerun, `100000`
+Two secondary indexes, latest-main June 4 HST / June 4 UTC rerun, `100000`
 documents, batch size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec`
 is the timed insert measurement for the value-log outer-leaf layout. Compacted
-B/doc uses the current high-level `offline_compact` row for TreeDB template-v1
-and SQLite after `VACUUM`; TreeDB JSON awaits the exhaustive compact mode tracked
-in [#2288](https://github.com/snissn/gomap/issues/2288) before it is used as a
-README storage-floor headline.
+B/doc uses the byte-minimized `exhaustive_compact` row for TreeDB template-v1 and
+SQLite after `VACUUM`; TreeDB JSON is omitted from the README compacted-size
+headline until the canonical exhaustive fixture covers that format.
 
 | engine / format | layout | docs/sec | compacted B/doc |
 | --- | --- | ---: | ---: |
-| TreeDB template-v1 | data and index outer leaves in value log | 600,962 | 46.7 |
-| TreeDB JSON | data and index outer leaves in value log | 450,857 | — |
-| SQLite native columns | WAL normal | 344,353 | 156.7 |
-| SQLite JSON | WAL normal | 296,912 | 231.7 |
+| TreeDB template-v1 | data and index outer leaves in value log | 697,350 | 22.8 |
+| TreeDB JSON | data and index outer leaves in value log | 475,511 | — |
+| SQLite native columns | WAL normal | 332,116 | 156.7 |
+| SQLite JSON | WAL normal | 282,885 | 231.7 |
 
 Source:
-[June 3 latest-main two-index insert rerun](docs/benchmarks/collections_insert_two_index_latest_main_2026-06-03.md).
+[June 4 exhaustive-compact two-index insert rerun](docs/benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md).
 
 ### Collection Read And Lookup Workload
 
@@ -186,7 +185,7 @@ Current YCSB status and rerun commands:
 
 Collection and engine benchmark runbooks:
 
-- `docs/benchmarks/collections_insert_two_index_latest_main_2026-06-03.md`
+- `docs/benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md`
 - `docs/benchmarks/treedb_canonical_benchmark_runbook.md`
 - `docs/benchmarks/collections_canonical_benchmark.md`
 - `cmd/unified_bench/README.md`
