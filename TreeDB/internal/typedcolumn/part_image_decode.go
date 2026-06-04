@@ -305,6 +305,9 @@ func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageR
 	if err := attachColumnPayloadsFromImage(image, columns); err != nil {
 		return nil, err
 	}
+	if err := applyImageSectionCompressionToColumns(image, columns); err != nil {
+		return nil, err
+	}
 	if opts.ValidateRowLocators {
 		if err := validateDecodedRowLocatorsPrimaryKey(desc, columns, locators); err != nil {
 			return nil, err
@@ -1291,6 +1294,24 @@ func decodeColumnBlockDescriptorAndGranule(dec *columnPartImageDecoder) (ColumnB
 		},
 	}
 	return desc, granule, nil
+}
+
+func applyImageSectionCompressionToColumns(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
+	for _, section := range image.Sections {
+		if section.Kind != ColumnPartImageSectionColumnData {
+			continue
+		}
+		column, ok := columns[section.Column]
+		if !ok {
+			return fmt.Errorf("typedcolumn: image column data section %s missing decoded column", section.Column)
+		}
+		if section.Encoding != column.Definition.Encoding {
+			return fmt.Errorf("typedcolumn: image column %s section encoding=%s want %s", section.Column, section.Encoding, column.Definition.Encoding)
+		}
+		column.Definition.Compression = section.Compression
+		columns[section.Column] = column
+	}
+	return nil
 }
 
 func decodeSortKeyMetadataSection(image ColumnPartImage) ([]SortKeyColumn, error) {

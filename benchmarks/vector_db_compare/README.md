@@ -110,6 +110,10 @@ Configuration:
   optional passthroughs to the matching `cmd/treedb_vector_search_demo` storage
   flags for every TreeDB row. Unset variables are not passed, so demo defaults
   are preserved.
+- `TREEDB_VALIDATION_EXACT_SOURCE`: optional passthrough to
+  `-validation-exact-source=treedb|dataset` for every TreeDB row. Unset keeps
+  the demo default (`treedb`). Set `dataset` to compute validation exact top-K
+  IDs from the exported dataset vectors instead of TreeDB exact search.
 - `TREEDB_QUANTIZED_INDEX_NAME`: scalar_u8 TreeDB quantized score-plane name.
   Defaults to `embedding.scalar_u8.fast`.
 - `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB quantized-rerank exact rerank
@@ -151,7 +155,10 @@ The runner writes:
 The TreeDB dataset exporter writes row-major little-endian `float32` vector
 files plus JSONL convenience files. TreeDB loads documents from the exported
 JSONL and query vectors from the exported binary query file; the Python
-benchmarks consume the exported binary vector files directly.
+benchmarks consume the exported binary vector files directly. With
+`TREEDB_VALIDATION_EXACT_SOURCE=dataset`, TreeDB recall validation computes the
+exact baseline from `documents.f32`/`queries.f32` and compares result IDs only;
+it does not materialize TreeDB documents for the exact baseline.
 
 Record the generated `README.md`, backend JSON results, and `comparison.md` with
 any published result. The script records the git commit and run shape; reruns

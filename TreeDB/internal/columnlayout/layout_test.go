@@ -83,8 +83,11 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonCompressedDirectView {
 		t.Fatalf("compressed direct carrier cap=%+v want %s", cap, ReasonCompressedDirectView)
 	}
-	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpStatsSum); cap.Supported() || cap.Reason != ReasonUnsupportedCompression {
-		t.Fatalf("compressed stats cap=%+v want %s", cap, ReasonUnsupportedCompression)
+	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpStatsSum); !cap.Supported() {
+		t.Fatalf("compressed stats cap=%+v want decode-on-scan stats support", cap)
+	}
+	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpPruneOrderedRange); !cap.Supported() {
+		t.Fatalf("compressed pruning cap=%+v want stats-backed pruning support", cap)
 	}
 	emptyRows := typedcolumn.EncodedGranule{Rows: 0, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0}
 	if err := caps.ValidateGranule(emptyRows); err != nil {

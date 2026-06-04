@@ -225,12 +225,6 @@ func buildInt64ColumnStats(desc ColumnPartDescriptor, columnDesc ColumnPartColum
 	if column.Definition.StatsDisabled || !integerStatsPayloadColumnType(column.Definition.Type) || column.Definition.Encoding == EncodingNullableInt64 {
 		return Int64ColumnStats{}, false, nil
 	}
-	if column.Definition.Compression != CompressionNone {
-		// Current stats are still correct for compressed blocks, but the #1840
-		// prepared shortcut is intentionally scoped to writer-certified non-null
-		// int64 reducer layouts. Leave compressed values to the decode path.
-		return Int64ColumnStats{}, false, nil
-	}
 	stats := Int64ColumnStats{
 		Envelope: ColumnStatsEnvelope{
 			Version:     ColumnStatsEnvelopeVersion,

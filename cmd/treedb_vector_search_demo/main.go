@@ -43,6 +43,13 @@ const (
 	nativeRuntimeSnapshotPath    = collections.VectorIndexSearchPath("native_runtime_snapshot")
 )
 
+type validationExactSource string
+
+const (
+	validationExactSourceTreeDB  validationExactSource = "treedb"
+	validationExactSourceDataset validationExactSource = "dataset"
+)
+
 type config struct {
 	dir                   string
 	datasetDir            string
@@ -55,6 +62,7 @@ type config struct {
 	searchConcurrency     []int
 	validateQueries       int
 	validateDocs          int
+	validationExactSource validationExactSource
 	topK                  int
 	batchSize             int
 	m                     int
@@ -96,6 +104,7 @@ type result struct {
 	SearchConcurrency         []int                             `json:"search_concurrency"`
 	ValidateQueries           int                               `json:"validate_queries"`
 	ValidateDocs              int                               `json:"validate_docs"`
+	ValidationExactSource     validationExactSource             `json:"validation_exact_source"`
 	TopK                      int                               `json:"top_k"`
 	M                         int                               `json:"m"`
 	EfConstruction            int                               `json:"ef_construction"`
@@ -152,15 +161,16 @@ type phaseResult struct {
 }
 
 type validationResult struct {
-	DocumentsChecked int     `json:"documents_checked"`
-	QueriesChecked   int     `json:"queries_checked"`
-	ExactTotal       int     `json:"exact_total"`
-	ANNTotal         int     `json:"ann_total"`
-	Overlap          int     `json:"overlap"`
-	Recall           float64 `json:"recall"`
-	MinRecall        float64 `json:"min_recall"`
-	DurationNanos    int64   `json:"duration_nanos"`
-	Seconds          float64 `json:"seconds"`
+	DocumentsChecked int                   `json:"documents_checked"`
+	QueriesChecked   int                   `json:"queries_checked"`
+	ExactSource      validationExactSource `json:"exact_source"`
+	ExactTotal       int                   `json:"exact_total"`
+	ANNTotal         int                   `json:"ann_total"`
+	Overlap          int                   `json:"overlap"`
+	Recall           float64               `json:"recall"`
+	MinRecall        float64               `json:"min_recall"`
+	DurationNanos    int64                 `json:"duration_nanos"`
+	Seconds          float64               `json:"seconds"`
 }
 
 type searchBenchmarkResult struct {
@@ -286,6 +296,7 @@ func parseConfig(args []string) (config, error) {
 		queries:               defaultQueries,
 		validateQueries:       32,
 		validateDocs:          16,
+		validationExactSource: validationExactSourceTreeDB,
 		topK:                  defaultTopK,
 		batchSize:             defaultBatchSize,
 		m:                     defaultM,
@@ -305,6 +316,7 @@ func parseConfig(args []string) (config, error) {
 	profileRaw := string(cfg.profile)
 	vectorIndexStrategyRaw := string(cfg.vectorIndexStrategy)
 	vectorQueryModeRaw := string(cfg.vectorQueryMode)
+	validationExactSourceRaw := string(cfg.validationExactSource)
 	searchConcurrencyRaw := defaultSearchConcurrency
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -315,13 +327,14 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: "+treedb.ProfileFlagHelp)
 	fs.StringVar(&vectorIndexStrategyRaw, "vector-index-strategy", vectorIndexStrategyRaw, "TreeDB vector index strategy: native_runtime or column_graph")
 	fs.StringVar(&vectorQueryModeRaw, "vector-query-mode", vectorQueryModeRaw, "TreeDB vector query mode: exact, quantized_only, or quantized_rerank")
+	fs.StringVar(&validationExactSourceRaw, "validation-exact-source", validationExactSourceRaw, "Exact baseline source for recall validation: treedb or dataset")
 	fs.StringVar(&cfg.quantizedIndexName, "quantized-index-name", cfg.quantizedIndexName, "Named scalar_u8 quantized index to use for column_graph quantized query modes, for example "+defaultQuantizedIndexName)
 	fs.IntVar(&cfg.quantizedRerankCandidates, "quantized-rerank-candidates", cfg.quantizedRerankCandidates, "Candidate limit exact-reranked by column_graph quantized_rerank mode; 0 uses the normalized ef_search set")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of ANN search queries to benchmark")
 	fs.StringVar(&searchConcurrencyRaw, "search-concurrency", searchConcurrencyRaw, "Comma-separated parallel ANN search concurrency levels; serial concurrency=1 is always included")
-	fs.IntVar(&cfg.validateQueries, "validate-queries", cfg.validateQueries, "Number of queries to validate against exact search")
+	fs.IntVar(&cfg.validateQueries, "validate-queries", cfg.validateQueries, "Number of queries to validate against the selected exact baseline")
 	fs.IntVar(&cfg.validateDocs, "validate-docs", cfg.validateDocs, "Number of documents to read and byte-validate after compaction/reopen")
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "Nearest-neighbor result count")
 	fs.IntVar(&cfg.batchSize, "batch-size", cfg.batchSize, "Insert batch size")
@@ -361,6 +374,11 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.vectorQueryMode = queryMode
+	validationExactSource, err := parseValidationExactSource(validationExactSourceRaw)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.validationExactSource = validationExactSource
 	if err := validateVectorQueryConfig(cfg); err != nil {
 		return config{}, err
 	}
@@ -409,6 +427,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.datasetDir != "" {
 		cfg.datasetDir = filepath.Clean(cfg.datasetDir)
 	}
+	if err := validateValidationExactSourceConfig(cfg); err != nil {
+		return config{}, err
+	}
 	if cfg.datasetDir == "" && cfg.validateQueries > cfg.docs {
 		return config{}, errors.New("-validate-queries cannot exceed -docs")
 	}
@@ -443,6 +464,24 @@ func parseVectorQueryMode(raw string) (collections.VectorIndexQueryMode, error) 
 	default:
 		return "", fmt.Errorf("unsupported -vector-query-mode %q", raw)
 	}
+}
+
+func parseValidationExactSource(raw string) (validationExactSource, error) {
+	switch validationExactSource(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", validationExactSourceTreeDB:
+		return validationExactSourceTreeDB, nil
+	case validationExactSourceDataset:
+		return validationExactSourceDataset, nil
+	default:
+		return "", fmt.Errorf("unsupported -validation-exact-source %q", raw)
+	}
+}
+
+func validateValidationExactSourceConfig(cfg config) error {
+	if cfg.validationExactSource == validationExactSourceDataset && cfg.datasetDir == "" {
+		return errors.New("-validation-exact-source=dataset requires -dataset-dir")
+	}
+	return nil
 }
 
 func validateVectorQueryConfig(cfg config) error {
@@ -711,6 +750,14 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if cfg.vectorQueryMode == "" {
 		cfg.vectorQueryMode = collections.VectorIndexQueryModeExact
 	}
+	validationExactSource, err := parseValidationExactSource(string(cfg.validationExactSource))
+	if err != nil {
+		return result{}, err
+	}
+	cfg.validationExactSource = validationExactSource
+	if err := validateValidationExactSourceConfig(cfg); err != nil {
+		return result{}, err
+	}
 	if err := validateVectorQueryConfig(cfg); err != nil {
 		return result{}, err
 	}
@@ -800,6 +847,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		SearchConcurrency:         append([]int(nil), cfg.searchConcurrency...),
 		ValidateQueries:           cfg.validateQueries,
 		ValidateDocs:              cfg.validateDocs,
+		ValidationExactSource:     cfg.validationExactSource,
 		TopK:                      cfg.topK,
 		M:                         cfg.m,
 		EfConstruction:            cfg.efConstruction,
@@ -1242,6 +1290,9 @@ func loadDatasetManifest(dir string) (datasetManifest, error) {
 	if m.DocumentsJSONLFile == "" {
 		m.DocumentsJSONLFile = "documents.jsonl"
 	}
+	if m.DocumentVectorsFile == "" {
+		m.DocumentVectorsFile = "documents.f32"
+	}
 	if m.QueryVectorsFile == "" {
 		m.QueryVectorsFile = "queries.f32"
 	}
@@ -1380,6 +1431,7 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 	out = validationResult{
 		DocumentsChecked: cfg.validateDocs,
 		QueriesChecked:   cfg.validateQueries,
+		ExactSource:      cfg.validationExactSource,
 		MinRecall:        cfg.minRecall,
 	}
 	expectedDocs, err := expectedValidationDocuments(cfg, work)
@@ -1405,20 +1457,48 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 	if err != nil {
 		return out, err
 	}
-	// Recall validation disables exact fallback on the ANN side so it measures
-	// the graph result against the exact baseline computed inside CheckRecall.
-	recall, err := idx.CheckRecall(queries, collections.VectorIndexSearchOptions{
-		TopK:                 cfg.topK,
-		EfSearch:             cfg.efSearch,
-		DisableExactFallback: true,
-	})
-	if err != nil {
-		return out, err
+	if cfg.validationExactSource == validationExactSourceDataset {
+		exactSets, err := datasetExactIDSets(queries, cfg, work)
+		if err != nil {
+			return out, err
+		}
+		for i, query := range queries {
+			ann, _, err := idx.Search(query, collections.VectorIndexSearchOptions{
+				TopK:                 cfg.topK,
+				EfSearch:             cfg.efSearch,
+				DisableExactFallback: true,
+			})
+			if err != nil {
+				return out, err
+			}
+			exactIDs := exactSets[i]
+			out.ExactTotal += len(exactIDs)
+			out.ANNTotal += len(ann)
+			for _, result := range ann {
+				if _, ok := exactIDs[string(result.DocumentID)]; ok {
+					out.Overlap++
+				}
+			}
+		}
+	} else {
+		// Recall validation disables exact fallback on the ANN side so it measures
+		// the graph result against the exact baseline computed inside CheckRecall.
+		recall, err := idx.CheckRecall(queries, collections.VectorIndexSearchOptions{
+			TopK:                 cfg.topK,
+			EfSearch:             cfg.efSearch,
+			DisableExactFallback: true,
+		})
+		if err != nil {
+			return out, err
+		}
+		out.ExactTotal = recall.ExactTotal
+		out.ANNTotal = recall.ANNTotal
+		out.Overlap = recall.Overlap
+		out.Recall = recall.Recall
 	}
-	out.ExactTotal = recall.ExactTotal
-	out.ANNTotal = recall.ANNTotal
-	out.Overlap = recall.Overlap
-	out.Recall = recall.Recall
+	if out.ExactTotal > 0 {
+		out.Recall = float64(out.Overlap) / float64(out.ExactTotal)
+	}
 	if out.Recall < cfg.minRecall {
 		return out, fmt.Errorf("recall %.4f below minimum %.4f", out.Recall, cfg.minRecall)
 	}
@@ -1435,6 +1515,7 @@ func validateCompactedColumnGraphData(col *collections.Collection, indexName str
 	out = validationResult{
 		DocumentsChecked: cfg.validateDocs,
 		QueriesChecked:   cfg.validateQueries,
+		ExactSource:      cfg.validationExactSource,
 		MinRecall:        cfg.minRecall,
 	}
 	expectedDocs, err := expectedValidationDocuments(cfg, work)
@@ -1458,6 +1539,13 @@ func validateCompactedColumnGraphData(col *collections.Collection, indexName str
 	if err != nil {
 		return out, err
 	}
+	var datasetExact []map[string]struct{}
+	if cfg.validationExactSource == validationExactSourceDataset {
+		datasetExact, err = datasetExactIDSets(queries, cfg, work)
+		if err != nil {
+			return out, err
+		}
+	}
 	searcher, err := col.OpenVectorIndexSearcher(collections.VectorIndexSearcherOptions{IndexName: indexName})
 	if err != nil {
 		return out, err
@@ -1467,14 +1555,23 @@ func validateCompactedColumnGraphData(col *collections.Collection, indexName str
 			err = closeErr
 		}
 	}()
-	for _, query := range queries {
-		exact, err := col.SearchVectorsExact(query, collections.VectorSearchOptions{
-			Field:  "embedding",
-			Metric: collections.VectorMetricCosine,
-			TopK:   cfg.topK,
-		})
-		if err != nil {
-			return out, err
+	for i, query := range queries {
+		var exactIDs map[string]struct{}
+		if cfg.validationExactSource == validationExactSourceDataset {
+			exactIDs = datasetExact[i]
+		} else {
+			exact, err := col.SearchVectorsExact(query, collections.VectorSearchOptions{
+				Field:  "embedding",
+				Metric: collections.VectorMetricCosine,
+				TopK:   cfg.topK,
+			})
+			if err != nil {
+				return out, err
+			}
+			exactIDs = make(map[string]struct{}, len(exact))
+			for _, result := range exact {
+				exactIDs[string(result.DocumentID)] = struct{}{}
+			}
 		}
 		response, err := searcher.Search(columnGraphSearchOptions(query, cfg))
 		if err != nil {
@@ -1483,11 +1580,7 @@ func validateCompactedColumnGraphData(col *collections.Collection, indexName str
 		if response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader {
 			return out, fmt.Errorf("unexpected column_graph validation path %q", response.Path)
 		}
-		exactIDs := make(map[string]struct{}, len(exact))
-		for _, result := range exact {
-			exactIDs[string(result.DocumentID)] = struct{}{}
-		}
-		out.ExactTotal += len(exact)
+		out.ExactTotal += len(exactIDs)
 		out.ANNTotal += len(response.Results)
 		for _, result := range response.Results {
 			if _, ok := exactIDs[string(result.ID)]; ok {
@@ -1500,6 +1593,187 @@ func validateCompactedColumnGraphData(col *collections.Collection, indexName str
 	}
 	if out.Recall < cfg.minRecall {
 		return out, fmt.Errorf("recall %.4f below minimum %.4f", out.Recall, cfg.minRecall)
+	}
+	return out, nil
+}
+
+type datasetExactCandidate struct {
+	id    string
+	index int
+	score float64
+}
+
+func datasetExactIDSets(queries [][]float32, cfg config, work workload) ([]map[string]struct{}, error) {
+	if work.datasetDir == "" {
+		return nil, errors.New("dataset exact validation requires -dataset-dir")
+	}
+	documentIDs, err := datasetDocumentIDs(cfg, work)
+	if err != nil {
+		return nil, err
+	}
+	documentVectors, err := readFloat32Matrix(datasetPath(work, work.manifest.DocumentVectorsFile, "documents.f32"), cfg.docs, cfg.dimensions)
+	if err != nil {
+		return nil, err
+	}
+	documentNorms, err := vectorNorms(documentVectors, cfg.docs, cfg.dimensions)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]struct{}, len(queries))
+	for i, query := range queries {
+		ids, err := datasetExactTopKIDs(documentVectors, documentNorms, documentIDs, query, cfg.topK, cfg.dimensions)
+		if err != nil {
+			return nil, fmt.Errorf("dataset exact query %d: %w", i, err)
+		}
+		out[i] = ids
+	}
+	return out, nil
+}
+
+func datasetDocumentIDs(cfg config, work workload) ([]string, error) {
+	ids := make([]string, cfg.docs)
+	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	rows := 0
+	for i := 0; scanner.Scan(); i++ {
+		if i >= cfg.docs {
+			return nil, fmt.Errorf("dataset documents file has more than %d rows", cfg.docs)
+		}
+		var header datasetDocumentHeader
+		if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
+			return nil, fmt.Errorf("decode dataset document %d: %w", i, err)
+		}
+		if header.Index != i {
+			return nil, fmt.Errorf("dataset document index=%d at row %d", header.Index, i)
+		}
+		if header.ID == "" {
+			return nil, fmt.Errorf("dataset document %d has empty id", i)
+		}
+		ids[i] = header.ID
+		rows++
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if rows != cfg.docs {
+		return nil, fmt.Errorf("dataset documents rows=%d, want %d", rows, cfg.docs)
+	}
+	return ids, nil
+}
+
+func datasetExactTopKIDs(documentVectors []float32, documentNorms []float64, documentIDs []string, query []float32, topK, dims int) (map[string]struct{}, error) {
+	if len(query) != dims {
+		return nil, fmt.Errorf("query dimensions=%d want %d", len(query), dims)
+	}
+	if len(documentIDs)*dims != len(documentVectors) {
+		return nil, fmt.Errorf("document vector matrix has %d floats for %d ids and %d dims", len(documentVectors), len(documentIDs), dims)
+	}
+	if len(documentNorms) != len(documentIDs) {
+		return nil, fmt.Errorf("document norm count=%d want %d", len(documentNorms), len(documentIDs))
+	}
+	queryNorm, err := vectorNorm(query)
+	if err != nil {
+		return nil, fmt.Errorf("query vector: %w", err)
+	}
+	top := make([]datasetExactCandidate, 0, topK)
+	for i, id := range documentIDs {
+		row := documentVectors[i*dims : (i+1)*dims]
+		score := cosineScore(query, queryNorm, row, documentNorms[i])
+		candidate := datasetExactCandidate{id: id, index: i, score: score}
+		top = appendDatasetExactCandidate(top, candidate, topK)
+	}
+	sort.Slice(top, func(i, j int) bool { return datasetExactCandidateBetter(top[i], top[j]) })
+	ids := make(map[string]struct{}, len(top))
+	for _, candidate := range top {
+		ids[candidate.id] = struct{}{}
+	}
+	return ids, nil
+}
+
+func appendDatasetExactCandidate(top []datasetExactCandidate, candidate datasetExactCandidate, limit int) []datasetExactCandidate {
+	if len(top) < limit {
+		return append(top, candidate)
+	}
+	worst := 0
+	for i := 1; i < len(top); i++ {
+		if datasetExactCandidateBetter(top[worst], top[i]) {
+			worst = i
+		}
+	}
+	if datasetExactCandidateBetter(candidate, top[worst]) {
+		top[worst] = candidate
+	}
+	return top
+}
+
+func datasetExactCandidateBetter(a, b datasetExactCandidate) bool {
+	if a.score == b.score {
+		return a.index < b.index
+	}
+	return a.score > b.score
+}
+
+func vectorNorm(v []float32) (float64, error) {
+	var sum float64
+	for _, value := range v {
+		f := float64(value)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, fmt.Errorf("non-finite value %v", value)
+		}
+		sum += f * f
+	}
+	if sum == 0 {
+		return 0, errors.New("zero magnitude")
+	}
+	return math.Sqrt(sum), nil
+}
+
+func vectorNorms(matrix []float32, count, dims int) ([]float64, error) {
+	if len(matrix) != count*dims {
+		return nil, fmt.Errorf("vector matrix has %d floats for %d rows and %d dims", len(matrix), count, dims)
+	}
+	out := make([]float64, count)
+	for i := 0; i < count; i++ {
+		norm, err := vectorNorm(matrix[i*dims : (i+1)*dims])
+		if err != nil {
+			return nil, fmt.Errorf("document vector %d: %w", i, err)
+		}
+		out[i] = norm
+	}
+	return out, nil
+}
+
+func cosineScore(query []float32, queryNorm float64, document []float32, documentNorm float64) float64 {
+	var dot float64
+	for i, value := range query {
+		dot += float64(value) * float64(document[i])
+	}
+	return dot / (queryNorm * documentNorm)
+}
+
+func readFloat32Matrix(path string, count, dims int) ([]float32, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 1<<20)
+	rowBytes := dims * 4
+	buf := make([]byte, rowBytes)
+	out := make([]float32, count*dims)
+	for i := 0; i < count; i++ {
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil, fmt.Errorf("read vector %d from %s: %w", i, path, err)
+		}
+		base := i * dims
+		for j := 0; j < dims; j++ {
+			out[base+j] = math.Float32frombits(binary.LittleEndian.Uint32(buf[j*4:]))
+		}
 	}
 	return out, nil
 }
@@ -2188,8 +2462,8 @@ func printText(w io.Writer, res result) {
 	}
 	fmt.Fprintf(w, "reopen_and_load_vector_index path=%s: %.3fs\n", resultSearchPath(res), res.ReopenLoad.Seconds)
 	fmt.Fprintf(w, "\nValidation\n")
-	fmt.Fprintf(w, "documents_checked=%d queries_checked=%d recall_at_%d=%.4f overlap=%d/%d\n",
-		res.Validation.DocumentsChecked, res.Validation.QueriesChecked, res.TopK, res.Validation.Recall, res.Validation.Overlap, res.Validation.ExactTotal)
+	fmt.Fprintf(w, "documents_checked=%d queries_checked=%d exact_source=%s recall_at_%d=%.4f overlap=%d/%d\n",
+		res.Validation.DocumentsChecked, res.Validation.QueriesChecked, res.Validation.ExactSource, res.TopK, res.Validation.Recall, res.Validation.Overlap, res.Validation.ExactTotal)
 	fmt.Fprintf(w, "\nSearch Benchmark\n")
 	fmt.Fprintf(w, "avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d\n",
 		res.Search.AvgMicros,
