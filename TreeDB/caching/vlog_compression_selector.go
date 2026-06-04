@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type vlogCompressionMode uint8
@@ -99,6 +98,11 @@ const (
 	// structure. Keep grouping modest so cold point reads do not repeatedly decode
 	// large multi-page frames when access has little locality.
 	leafLogBlockMaxK = 8
+	// Keep the live leaf-log on a larger block target than generic value-log
+	// payloads. Leaf pages are appended in batches and benefit materially from
+	// grouped compression; the K cap above still bounds cold point-read decode
+	// amplification.
+	leafLogBlockTargetCompressedBytes = 32 << 10
 	// For large payloads, allow strong observed dict wins to override generic
 	// throughput scoring so we do not lock highly-compressible streams into
 	// block mode.
@@ -1428,9 +1432,6 @@ func (db *DB) preferLeafPageBlockCodec(l *lane, unitPayloadBytes int, configured
 	if l != &db.leafLog || l.id != leafLogLaneID {
 		return configured, false
 	}
-	if unitPayloadBytes != page.PageSize {
-		return configured, false
-	}
 	switch normalizeVlogCompressionMode(db.valueLogCompressionMode) {
 	case vlogCompressionDefault, vlogCompressionAuto:
 		if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
@@ -1743,15 +1744,17 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		ratio = largePayloadBlockBootstrapRatio
 	}
 	targetCompressedBytes := db.valueLogBlockTargetBytes
-	if db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && ratioSamples == 0 {
+	if db.isLiveLeafLogLane(l) {
+		if targetCompressedBytes < leafLogBlockTargetCompressedBytes {
+			targetCompressedBytes = leafLogBlockTargetCompressedBytes
+		}
+	}
+	if db.isLiveLeafLogLane(l) && ratioSamples == 0 {
 		// Batch-only leaf-log bootstrap: without an initial lane-local block ratio,
 		// the generic incompressible guard chooses K=1 and defeats AppendLeafPages.
 		// Seed only the dedicated live leaf-log lane so the first multi-page batch
 		// forms grouped frames; normal observed ratios take over after writes.
 		ratio = 0.50
-		if targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
-			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
-		}
 	}
 	if db.forceValueLogPointers && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
 		if avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
