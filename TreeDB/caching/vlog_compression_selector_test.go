@@ -472,6 +472,52 @@ func TestChooseValueLogBlockWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *t
 	}
 }
 
+func TestChooseValueLogBlockWriteK_LiveLeafLogKeepsLeafTargetAfterObservedRatio(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:         uint8(vlogAutoBalanced),
+		valueLogBlockTargetBytes:   4096,
+		indexOuterLeavesInValueLog: true,
+	}
+	db.leafLog = lane{id: leafLogLaneID}
+	db.observeVlogWriteMode(&db.leafLog, vlogWriteBlock, valuelog.BlockCodecLZ4, 4*page.PageSize, page.PageSize, 2*page.PageSize, false, 1000)
+
+	records := 64
+	rawPayloadBytes := records * page.PageSize
+	got := db.chooseValueLogBlockWriteK(&db.leafLog, records, rawPayloadBytes, valuelog.BlockCodecLZ4)
+	want := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, leafLogBlockTargetCompressedBytes, 0.5)
+	if want > leafLogBlockMaxK {
+		want = leafLogBlockMaxK
+	}
+	if got != want {
+		t.Fatalf("live leaf-log observed-ratio K=%d, want leaf target K=%d", got, want)
+	}
+	generic := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, db.valueLogBlockTargetBytes, 0.5)
+	if got <= generic {
+		t.Fatalf("live leaf-log K=%d did not exceed generic target K=%d", got, generic)
+	}
+}
+
+func TestPreferLeafPageBlockCodec_CompactedLeafPayloadsPreferLZ4(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:    uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:         uint8(vlogAutoBalanced),
+		indexOuterLeavesInValueLog: true,
+	}
+	db.leafLog = lane{id: leafLogLaneID}
+
+	got, ok := db.preferLeafPageBlockCodec(&db.leafLog, 1024, valuelog.BlockCodecSnappy)
+	if !ok || got != valuelog.BlockCodecLZ4 {
+		t.Fatalf("compacted leaf payload codec=%v ok=%t, want lz4 override", got, ok)
+	}
+
+	db.valueLogAutoPolicy = uint8(vlogAutoThroughput)
+	got, ok = db.preferLeafPageBlockCodec(&db.leafLog, 1024, valuelog.BlockCodecSnappy)
+	if ok || got != valuelog.BlockCodecSnappy {
+		t.Fatalf("throughput compacted leaf codec=%v ok=%t, want configured snappy without override", got, ok)
+	}
+}
+
 func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
