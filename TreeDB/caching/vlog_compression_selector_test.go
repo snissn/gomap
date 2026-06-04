@@ -480,13 +480,6 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 		paused        bool
 	}{
 		{
-			name: "auto raw bypass",
-			configure: func(db *DB) {
-				db.forceValueLogPointers = true
-			},
-			autoRawBypass: true,
-		},
-		{
 			name: "paused wal-off raw",
 			configure: func(db *DB) {
 				db.disableJournal = true
@@ -505,6 +498,13 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 				db.forceValueLogPointers = true
 				db.disableJournal = true
 			},
+		},
+		{
+			name: "force-pointer auto raw bypass",
+			configure: func(db *DB) {
+				db.forceValueLogPointers = true
+			},
+			autoRawBypass: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -531,14 +531,6 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 		want          int
 	}{
 		{
-			name: "auto raw bypass",
-			configure: func(db *DB) {
-				db.forceValueLogPointers = true
-			},
-			autoRawBypass: true,
-			want:          valuelog.MaxFrameK,
-		},
-		{
 			name: "paused wal-off raw",
 			configure: func(db *DB) {
 				db.disableJournal = true
@@ -560,6 +552,14 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 				db.disableJournal = true
 			},
 			want: 16,
+		},
+		{
+			name: "force-pointer auto raw bypass",
+			configure: func(db *DB) {
+				db.forceValueLogPointers = true
+			},
+			autoRawBypass: true,
+			want:          valuelog.MaxFrameK,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1017,23 +1017,6 @@ func TestResolveVlogWriteMode_ForcePointersLargeBypassesSelectorToConfiguredBloc
 	}
 }
 
-func TestObserveVlogWriteMode_ForcePointersLargeSkipsSelectorObserve(t *testing.T) {
-	db := &DB{
-		valueLogCompressionMode: uint8(vlogCompressionAuto),
-		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
-		forceValueLogPointers:   true,
-	}
-	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
-	l := &lane{vlogCompressionSelector: s}
-
-	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
-	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, forcePointerAutoBlockMinPayloadBytes, forcePointerAutoBlockMinPayloadBytes, forcePointerAutoBlockMinPayloadBytes, false, 1000)
-	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
-	if after != before {
-		t.Fatalf("expected selector observe to be skipped for force-pointer large payload, samples %d -> %d", before, after)
-	}
-}
-
 func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
@@ -1052,14 +1035,17 @@ func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.
 	if !db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
 		t.Fatal("expected high-entropy force-pointer value batch to bypass auto compression")
 	}
+	if !db.shouldBypassAutoRawValueCompression(0, records, forcePointerAutoBlockMinPayloadBytes, vlogPayloadKindSingleValue) {
+		t.Fatal("expected threshold-sized high-entropy force-pointer values to bypass block compression")
+	}
 	if db.shouldBypassAutoRawValueCompression(7, records, len(value), vlogPayloadKindSingleValue) {
 		t.Fatal("expected dict-backed values to stay eligible for compression")
 	}
 	if db.shouldBypassAutoRawValueCompression(0, records, len(value)-1, vlogPayloadKindSingleValue) {
 		t.Fatal("expected sub-threshold values to stay eligible for selector sampling")
 	}
-	if db.shouldBypassAutoRawValueCompression(0, records, forcePointerAutoBlockMinPayloadBytes, vlogPayloadKindSingleValue) {
-		t.Fatal("expected large force-pointer values to stay on the block fast path")
+	if db.shouldBypassAutoRawValueCompression(0, records, forcePointerAutoRawBypassMaxPayloadBytes+1, vlogPayloadKindSingleValue) {
+		t.Fatal("expected large values to preserve normal block grouping and maintenance granularity")
 	}
 	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindOuterLeaf) {
 		t.Fatal("expected outer-leaf payloads to keep leaf-log compression selection")
@@ -1076,6 +1062,23 @@ func TestShouldBypassAutoRawValueCompression_CompressibleStaysEligible(t *testin
 
 	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
 		t.Fatal("expected low-entropy value batch to stay eligible for selector sampling")
+	}
+}
+
+func TestObserveVlogWriteMode_ForcePointersLargeSkipsSelectorObserve(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		forceValueLogPointers:   true,
+	}
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	l := &lane{vlogCompressionSelector: s}
+
+	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, forcePointerAutoBlockMinPayloadBytes, forcePointerAutoBlockMinPayloadBytes, forcePointerAutoBlockMinPayloadBytes, false, 1000)
+	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
+	if after != before {
+		t.Fatalf("expected selector observe to be skipped for force-pointer large payload, samples %d -> %d", before, after)
 	}
 }
 
