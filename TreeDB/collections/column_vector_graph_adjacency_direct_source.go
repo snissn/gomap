@@ -368,6 +368,19 @@ func (g *columnVectorGraphAdjacencyDirectSources) Neighbors(layer, ordinal int) 
 	return g.sources[layer].Neighbors(ordinal)
 }
 
+func (g *columnVectorGraphAdjacencyDirectSources) preparedCSRNeighbors(layer, ordinal int) ([]uint32, typeddecode.Reason, bool) {
+	if g == nil {
+		return nil, "", false
+	}
+	if g.closed {
+		return nil, typeddecode.ReasonStaleHandle, false
+	}
+	if layer < 0 || layer >= len(g.sources) || g.sources[layer] == nil {
+		return nil, typeddecode.ReasonRowCountMismatch, false
+	}
+	return g.sources[layer].preparedCSRNeighbors(ordinal)
+}
+
 func (g *columnVectorGraphAdjacencyDirectSources) MaxLayerForOrdinal(ordinal int) (int, []uint32, columnVectorGraphAdjacencySourceCounterSnapshot, typeddecode.Reason, bool) {
 	if g == nil || g.closed || len(g.sources) == 0 {
 		return 0, nil, columnVectorGraphAdjacencySourceCounterSnapshot{}, "", false
@@ -433,6 +446,34 @@ func (s *columnVectorGraphLayer0AdjacencyDirectSource) Neighbors(ordinal int) ([
 		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, typeddecode.ReasonValuesLengthMismatch, false
 	}
 	return s.values[int(start64):int(end64)], s.outcome, "", true
+}
+
+func (s *columnVectorGraphLayer0AdjacencyDirectSource) preparedCSRNeighbors(ordinal int) ([]uint32, typeddecode.Reason, bool) {
+	if s == nil {
+		return nil, "", false
+	}
+	if s.closed {
+		return nil, typeddecode.ReasonStaleHandle, false
+	}
+	if s.outcome != columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect {
+		return nil, typeddecode.ReasonHandleSourceUnsupported, false
+	}
+	if !s.owned && (s.offsetsHandle == nil || s.valuesHandle == nil || s.offsetsHandle.Released() || s.valuesHandle.Released()) {
+		return nil, typeddecode.ReasonStaleHandle, false
+	}
+	return s.neighborsUncheckedHandle(ordinal)
+}
+
+func (s *columnVectorGraphLayer0AdjacencyDirectSource) neighborsUncheckedHandle(ordinal int) ([]uint32, typeddecode.Reason, bool) {
+	if ordinal < 0 || ordinal >= s.rows || ordinal+1 >= len(s.offsets) {
+		return nil, typeddecode.ReasonRowCountMismatch, false
+	}
+	start64 := s.offsets[ordinal]
+	end64 := s.offsets[ordinal+1]
+	if end64 < start64 || end64 > uint64(len(s.values)) || end64 > uint64(math.MaxInt) {
+		return nil, typeddecode.ReasonValuesLengthMismatch, false
+	}
+	return s.values[int(start64):int(end64)], "", true
 }
 
 func (s *columnVectorGraphLayer0AdjacencyDirectSource) captureResourceStats() {
