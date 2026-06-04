@@ -564,7 +564,11 @@ func (c *groupedFrameCache) stats() GroupedFrameCacheStats {
 	for i := range c.shards {
 		s := &c.shards[i]
 		for j := range s.slots {
-			if s.slots[j].valid {
+			slot := &s.slots[j]
+			slot.mu.RLock()
+			valid := slot.valid
+			slot.mu.RUnlock()
+			if valid {
 				st.Entries++
 			}
 		}

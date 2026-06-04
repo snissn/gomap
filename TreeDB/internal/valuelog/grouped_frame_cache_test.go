@@ -279,6 +279,31 @@ func TestValueLogManager_GroupedFrameCache_CorruptSourceFailsClosedAfterCachedVe
 	}
 }
 
+func TestGroupedFrameCache_StatsConcurrentAdmissions(t *testing.T) {
+	f := newTestGroupedCacheFile(16, 1024, 1024)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = f.groupedFrameCacheDetailedStats()
+			}
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		raw := bytes.Repeat([]byte{byte(i)}, 32)
+		offsets := groupedCacheOffsets(32)
+		_ = f.groupedFrameCacheStore(int64(i), false, 1, offsets, raw, false)
+	}
+	close(stop)
+	wg.Wait()
+}
+
 func TestGroupedFrameCache_ConcurrentReadsAndEvictions(t *testing.T) {
 	f := newTestGroupedCacheFile(8, 1024, 512)
 	baseRaw := groupedCacheRaw([]byte("left"), []byte("right"))
