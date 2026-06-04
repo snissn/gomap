@@ -766,10 +766,6 @@ func (c *leafPageReadCache) bucketIndex(key leafPageReadCacheKey) int {
 	return int(leafPageReadCacheHash(key) % uint64(len(c.buckets)))
 }
 
-func (c *leafPageReadCache) slotIndex(key leafPageReadCacheKey) int {
-	return int(leafPageReadCacheHash(key) % uint64(len(c.slots)))
-}
-
 func leafPageReadCacheHash(key leafPageReadCacheKey) uint64 {
 	h := uint64(key.fileID)
 	h ^= key.offset + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)

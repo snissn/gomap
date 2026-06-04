@@ -421,11 +421,11 @@ func TestValueReaderLeafLogPageUnsafeToAdmitsRepeatedReadMiss(t *testing.T) {
 func TestLeafPageReadCacheSetAssociativeRetainsDirectMapCollisions(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptrs := findDirectSlotCollidingLeafPagePtrs(t, cache, leafPageReadCacheWays)
-	oldSlot := cache.slotIndex(newLeafPageReadCacheKey(ptrs[0]))
+	oldSlot := leafPageReadCacheDirectSlotIndex(cache, newLeafPageReadCacheKey(ptrs[0]))
 	bucket := cache.bucketIndex(newLeafPageReadCacheKey(ptrs[0]))
 	for _, ptr := range ptrs[1:] {
 		key := newLeafPageReadCacheKey(ptr)
-		if got := cache.slotIndex(key); got != oldSlot {
+		if got := leafPageReadCacheDirectSlotIndex(cache, key); got != oldSlot {
 			t.Fatalf("test ptr did not collide under old direct slot: got %d want %d", got, oldSlot)
 		}
 		if got := cache.bucketIndex(key); got != bucket {
@@ -622,7 +622,7 @@ func findDirectSlotCollidingLeafPagePtrs(t *testing.T, cache *leafPageReadCache,
 	var targetSlot int
 	haveTarget := false
 	return findLeafPageReadCachePtrs(t, want, func(key leafPageReadCacheKey) bool {
-		idx := cache.slotIndex(key)
+		idx := leafPageReadCacheDirectSlotIndex(cache, key)
 		if !haveTarget {
 			targetSlot = idx
 			haveTarget = true
@@ -637,7 +637,7 @@ func findDirectSlotCollidingLeafPagePtrsWithDistinctAdmissionLanes(t *testing.T,
 	var targetSlot int
 	haveTarget := false
 	return findLeafPageReadCachePtrs(t, want, func(key leafPageReadCacheKey) bool {
-		idx := cache.slotIndex(key)
+		idx := leafPageReadCacheDirectSlotIndex(cache, key)
 		if !haveTarget {
 			targetSlot = idx
 			haveTarget = true
@@ -652,6 +652,10 @@ func findDirectSlotCollidingLeafPagePtrsWithDistinctAdmissionLanes(t *testing.T,
 		lanes[lane] = struct{}{}
 		return true
 	})
+}
+
+func leafPageReadCacheDirectSlotIndex(cache *leafPageReadCache, key leafPageReadCacheKey) int {
+	return int(leafPageReadCacheHash(key) % uint64(len(cache.slots)))
 }
 
 func findBucketLeafPagePtrs(t *testing.T, cache *leafPageReadCache, bucketIndex, want int) []page.LeafLogPtr {
@@ -921,7 +925,7 @@ func TestLeafPageReadCacheStoreReadMissSkipsWhenSlotLockContended(t *testing.T) 
 	ptr := page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096}
 	leaf := bytes.Repeat([]byte{0x66}, page.PageSize)
 	key := newLeafPageReadCacheKey(ptr)
-	slot := &cache.slots[cache.slotIndex(key)]
+	slot := &cache.slots[leafPageReadCacheDirectSlotIndex(cache, key)]
 
 	// First read miss only arms the admission fingerprint and should skip.
 	cache.storeReadMiss(ptr, leaf, false)

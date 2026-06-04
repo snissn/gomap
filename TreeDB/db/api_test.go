@@ -322,6 +322,12 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	if _, ok := stats["treedb.process.read_path.outer_leaf.cache.capacity_evictions"]; !ok {
 		t.Fatalf("missing treedb.process.read_path.outer_leaf.cache.capacity_evictions")
 	}
+	if _, ok := stats["treedb.process.read_path.outer_leaf.cache.buckets"]; !ok {
+		t.Fatalf("missing treedb.process.read_path.outer_leaf.cache.buckets")
+	}
+	if _, ok := stats["treedb.process.read_path.outer_leaf.cache.ways"]; !ok {
+		t.Fatalf("missing treedb.process.read_path.outer_leaf.cache.ways")
+	}
 	if _, ok := stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips"]; !ok {
 		t.Fatalf("missing treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips")
 	}
