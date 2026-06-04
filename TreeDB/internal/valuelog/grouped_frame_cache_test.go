@@ -252,8 +252,8 @@ func TestValueLogManager_GroupedFrameCache_CorruptSourceFailsClosedAfterCachedVe
 	if !bytes.Equal(got, want[0]) {
 		t.Fatalf("warm read mismatch")
 	}
-	if hits, misses, entries, _ := f.groupedFrameCacheStats(); misses == 0 || entries == 0 || hits != 0 {
-		t.Fatalf("expected verified warm read to populate cache without hit: hits=%d misses=%d entries=%d", hits, misses, entries)
+	if hits, _, entries, _ := f.groupedFrameCacheStats(); entries == 0 || hits != 0 {
+		t.Fatalf("expected verified warm read to populate cache without hit: hits=%d entries=%d", hits, entries)
 	}
 
 	fh, err := os.OpenFile(path, os.O_RDWR, 0)
@@ -282,6 +282,30 @@ func TestValueLogManager_GroupedFrameCache_CorruptSourceFailsClosedAfterCachedVe
 	_, err = m.ReadUnsafe(ptrs[1])
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("cached verified read masked source corruption: err=%v", err)
+	}
+}
+
+func TestGroupedFrameCache_ReadMissDoesNotCreateIdleCache(t *testing.T) {
+	f := &File{
+		groupedFrameCacheEntries:  4,
+		groupedFrameCacheMaxRaw:   1024,
+		groupedFrameCacheMaxBytes: 1024,
+	}
+	offsets := groupedCacheOffsets(16)
+	if got, _, err, hit := f.groupedFrameCacheReadTo(1, false, 1, offsets, offsets[1], 0, nil); err != nil || hit || got != nil {
+		t.Fatalf("idle read should miss without value: hit=%v err=%v got=%q", hit, err, got)
+	}
+	if cache := f.groupedFrameCache.Load(); cache != nil {
+		t.Fatalf("read miss created grouped cache")
+	}
+	if stats := f.groupedFrameCacheDetailedStats(); stats != (GroupedFrameCacheStats{}) {
+		t.Fatalf("read miss retained stats: %+v", stats)
+	}
+	if !f.groupedFrameCacheStore(1, false, 1, offsets, bytes.Repeat([]byte{'x'}, 16), false) {
+		t.Fatalf("store after idle read miss")
+	}
+	if stats := f.groupedFrameCacheDetailedStats(); stats.Stores != 1 || stats.Entries != 1 || stats.Capacity != 4 {
+		t.Fatalf("expected live cache stats after store, got %+v", stats)
 	}
 }
 

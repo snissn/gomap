@@ -364,7 +364,10 @@ func (f *File) ensureGroupedFrameCache() *groupedFrameCache {
 }
 
 func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, expectedK int, expectedOffsets [MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
-	cache := f.ensureGroupedFrameCache()
+	if f == nil || f.closed.Load() {
+		return nil, false, nil, false
+	}
+	cache := f.groupedFrameCache.Load()
 	return cache.readTo(start, verifyCRC, expectedK, expectedOffsets, expectedRawLen, subIndex, dst, f)
 }
 
