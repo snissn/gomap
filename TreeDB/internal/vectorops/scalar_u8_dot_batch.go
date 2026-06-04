@@ -80,7 +80,7 @@ func scalarU8CenteredQuerySum(values []ScalarU8CenteredCode) int64 {
 }
 
 func dotScalarU8CenteredIndexedScalar(dst []int64, codes []byte, query ScalarU8CenteredQuery, rowIDs []uint32, dims, rows int) {
-	queryValues := query.Values[:dims]
+	queryValues := query.values[:dims]
 	for i := 0; i < rows; i++ {
 		start := int(rowIDs[i]) * dims
 		row := codes[start : start+dims]

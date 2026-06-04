@@ -87,12 +87,12 @@ func TestDotScalarU8CenteredIndexedOptimizedStatusAndFallback(t *testing.T) {
 	assertInt64SliceExact(t, dst, want)
 
 	tinyDst := make([]int64, len(rowIDs))
-	tinyStatus := DotScalarU8CenteredIndexed(tinyDst, codes, ScalarU8CenteredQuery{Values: query.Values[:15]}, rowIDs, 15)
+	tinyStatus := DotScalarU8CenteredIndexed(tinyDst, codes, ScalarU8CenteredQuery{values: query.values[:15]}, rowIDs, 15)
 	if tinyStatus.Invalid || tinyStatus.Rows != len(rowIDs) || tinyStatus.Optimized || !tinyStatus.Fallback {
 		t.Fatalf("tiny status=%+v want scalar fallback", tinyStatus)
 	}
 	tinyWant := make([]int64, len(rowIDs))
-	dotScalarU8CenteredIndexedScalar(tinyWant, codes, ScalarU8CenteredQuery{Values: query.Values[:15]}, rowIDs, 15, len(rowIDs))
+	dotScalarU8CenteredIndexedScalar(tinyWant, codes, ScalarU8CenteredQuery{values: query.values[:15]}, rowIDs, 15, len(rowIDs))
 	assertInt64SliceExact(t, tinyDst, tinyWant)
 
 	singleDst := make([]int64, 1)
@@ -172,7 +172,7 @@ func TestDotScalarU8CenteredIndexedUsesReslicedQuerySum(t *testing.T) {
 	if !ok {
 		t.Fatal("PrepareScalarU8CenteredQuery rejected resliced query")
 	}
-	query.Values = query.Values[:dims]
+	query.values = query.values[:dims]
 
 	codes := make([]byte, 2*dims)
 	for i := 0; i < dims; i++ {

@@ -32,7 +32,7 @@ func DotScalarU8CenteredIndexed(dst []int64, codes []byte, query ScalarU8Centere
 		dotScalarU8CenteredIndexedScalar(dst, codes, query, rowIDs, dims, rows)
 		return scalarU8DotBatchStatus(rows, false)
 	}
-	queryValues := query.Values[:dims]
+	queryValues := query.values[:dims]
 	dotScalarU8CenteredIndexedARM64(dst, codes, queryValues, rowIDs, dims, rows, query.CenteredSum())
 	return scalarU8DotBatchStatus(rows, true)
 }

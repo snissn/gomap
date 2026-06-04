@@ -10,12 +10,12 @@ const scalarU8CenterOffset = 255
 type ScalarU8CenteredCode = int16
 
 // ScalarU8CenteredQuery is a validated, allocation-free view over centered
-// scalar_u8 query codes. Values aliases caller-owned scratch, must be treated as
-// immutable while the query is in use, and remains valid until that scratch is
-// reused. Mutating Values after preparation invalidates cached query metadata
-// consumed by batch kernels.
+// scalar_u8 query codes. Centered values alias caller-owned scratch, must be
+// treated as immutable while the query is in use, and remain valid until that
+// scratch is reused. The values slice is intentionally unexported so callers
+// cannot mutate cached query metadata through the query handle.
 type ScalarU8CenteredQuery struct {
-	Values []ScalarU8CenteredCode
+	values []ScalarU8CenteredCode
 
 	sum      int64
 	sumDims  int
@@ -23,25 +23,34 @@ type ScalarU8CenteredQuery struct {
 }
 
 // Dims returns the number of centered query dimensions.
-func (q ScalarU8CenteredQuery) Dims() int { return len(q.Values) }
+func (q ScalarU8CenteredQuery) Dims() int { return len(q.values) }
 
 // Valid reports whether q has a positive-dimension centered-code layout.
-func (q ScalarU8CenteredQuery) Valid() bool { return len(q.Values) > 0 }
+func (q ScalarU8CenteredQuery) Valid() bool { return len(q.values) > 0 }
 
 // ValidForDims reports whether q is valid for exactly dims dimensions.
 func (q ScalarU8CenteredQuery) ValidForDims(dims int) bool {
-	return dims > 0 && len(q.Values) == dims
+	return dims > 0 && len(q.values) == dims
 }
 
-// CenteredSum returns sum(q.Values). Queries returned by
+// Value returns the centered value at i for tests and diagnostics without
+// exposing the mutable backing slice.
+func (q ScalarU8CenteredQuery) Value(i int) (ScalarU8CenteredCode, bool) {
+	if i < 0 || i >= len(q.values) {
+		return 0, false
+	}
+	return q.values[i], true
+}
+
+// CenteredSum returns sum(q.values). Queries returned by
 // PrepareScalarU8CenteredQuery carry this value so batch kernels can reuse it
 // without rescanning the query per call. Manually constructed or resliced
-// queries still return the correct sum by scanning Values.
+// queries still return the correct sum by scanning values.
 func (q ScalarU8CenteredQuery) CenteredSum() int64 {
-	if q.sumValid && q.sumDims == len(q.Values) {
+	if q.sumValid && q.sumDims == len(q.values) {
 		return q.sum
 	}
-	return scalarU8CenteredQuerySum(q.Values)
+	return scalarU8CenteredQuerySum(q.values)
 }
 
 // ScalarU8CenteredValue returns the centered scalar_u8 value 2*code-255.
@@ -64,18 +73,18 @@ func PrepareScalarU8CenteredQuery(dst []ScalarU8CenteredCode, codes []byte, dims
 		dst[i] = centered
 		sum += int64(centered)
 	}
-	return ScalarU8CenteredQuery{Values: dst, sum: sum, sumDims: dims, sumValid: true}, dst, true
+	return ScalarU8CenteredQuery{values: dst, sum: sum, sumDims: dims, sumValid: true}, dst, true
 }
 
 // ScalarU8CenteredDot computes the integer dot product between a centered query
 // and a raw scalar_u8 row. The row is centered as 2*row_code-255 while the query
 // is consumed from its pre-centered layout.
 func ScalarU8CenteredDot(query ScalarU8CenteredQuery, row []byte) (int64, bool) {
-	if !query.Valid() || len(row) != len(query.Values) {
+	if !query.Valid() || len(row) != len(query.values) {
 		return 0, false
 	}
 	var dot int64
-	for i, q := range query.Values {
+	for i, q := range query.values {
 		c := ScalarU8CenteredValue(row[i])
 		dot += int64(q) * int64(c)
 	}

@@ -20,8 +20,9 @@ func TestScalarU8CenteredQueryParity2258(t *testing.T) {
 	var wantSum int64
 	for i, want := range wantCentered {
 		wantSum += int64(want)
-		if got := query.Values[i]; got != want {
-			t.Fatalf("centered[%d]=%d want %d", i, got, want)
+		got, ok := query.Value(i)
+		if !ok || got != want {
+			t.Fatalf("centered[%d]=%d ok=%v want %d", i, got, ok, want)
 		}
 		if got := ScalarU8CenteredValue(codes[i]); got != want {
 			t.Fatalf("ScalarU8CenteredValue(%d)=%d want %d", codes[i], got, want)
@@ -30,12 +31,12 @@ func TestScalarU8CenteredQueryParity2258(t *testing.T) {
 	if got := query.CenteredSum(); got != wantSum {
 		t.Fatalf("query.CenteredSum()=%d want %d", got, wantSum)
 	}
-	if got := (ScalarU8CenteredQuery{Values: wantCentered}).CenteredSum(); got != wantSum {
+	if got := (ScalarU8CenteredQuery{values: wantCentered}).CenteredSum(); got != wantSum {
 		t.Fatalf("manual query CenteredSum()=%d want %d", got, wantSum)
 	}
 
 	resliced := query
-	resliced.Values = resliced.Values[:3]
+	resliced.values = resliced.values[:3]
 	var wantReslicedSum int64
 	for _, v := range wantCentered[:3] {
 		wantReslicedSum += int64(v)
