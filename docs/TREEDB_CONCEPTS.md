@@ -67,9 +67,19 @@ or:
 treemap compact <db-dir> -rw
 ```
 
+For byte-minimized benchmark/VACUUM-equivalent storage claims, use exhaustive
+mode instead:
+
+```sh
+treemap compact <db-dir> -rw -mode exhaustive
+```
+
+Exhaustive mode seals the current leaf generation and forces low-yield leaf-pack
+work that production `full` mode can intentionally skip.
+
 `vlog-gc`, `vlog-rewrite`, `leafgen-pack`, `leafgen-gc`, and index `vacuum`
 are domain-specific internals. They are useful for diagnostics, but they are
-not the recommended user-facing way to obtain a fully compacted storage number.
+not the recommended user-facing way to obtain a compacted storage number.
 
 ### Inline vs value-log values
 

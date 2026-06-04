@@ -1267,6 +1267,64 @@ func TestCompactStoragePlanIgnoresEmptyAndCurrentLeafGenerations(t *testing.T) {
 	}
 }
 
+func TestCompactStorageExhaustiveSealsCurrentLeafGeneration(t *testing.T) {
+	d, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "current", 64, 'z')
+	_, fileID := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID := page.ValueLogSegmentID(fileID)
+	d.SetLeafPageLog(nil)
+
+	fullPlan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan full: %v", err)
+	}
+	if fullPlan.RemainingDebt.LeafPackGenerations != 0 {
+		t.Fatalf("full mode should ignore current writable generation debt=%+v", fullPlan.RemainingDebt)
+	}
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if err != nil {
+		t.Fatalf("CompactStorage exhaustive: %v", err)
+	}
+	if !compactStoragePhaseSeen(stats.Phases, "seal-current-leaf-generation") {
+		t.Fatalf("missing seal-current-leaf-generation phase: %+v", stats.Phases)
+	}
+	if !stats.ByteMinimized || !stats.FullyCompacted || !stats.PolicyFullyCompacted {
+		t.Fatalf("unexpected compacted flags: byte=%t fully=%t policy=%t debt=%+v", stats.ByteMinimized, stats.FullyCompacted, stats.PolicyFullyCompacted, stats.RemainingDebt)
+	}
+	if len(stats.LeafGenerationPacks) == 0 || !stats.LeafGenerationPacks[0].Ran {
+		t.Fatalf("expected exhaustive leaf pack to run after sealing current generation: %+v", stats.LeafGenerationPacks)
+	}
+
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	for _, gen := range manifest.Generations {
+		if gen.State == leafGenerationStateWritable {
+			for _, got := range gen.FileIDs {
+				if got == rawFileID {
+					t.Fatalf("original current raw file %d remained writable after exhaustive compact: %+v", rawFileID, manifest.Generations)
+				}
+			}
+		}
+	}
+}
+
+func TestCompactStorageNormalizeExhaustiveForcesUnboundedLeafPack(t *testing.T) {
+	opts := normalizeCompactStorageOptions(CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if opts.Mode != CompactStorageExhaustive {
+		t.Fatalf("Mode=%q want exhaustive", opts.Mode)
+	}
+	if !opts.LeafPackForce {
+		t.Fatal("exhaustive mode should force leaf pack thresholds")
+	}
+	if opts.LeafPackMaxPasses < 256 {
+		t.Fatalf("LeafPackMaxPasses=%d want at least 256", opts.LeafPackMaxPasses)
+	}
+	if opts.LeafPackMaxGenerationsPerPass != 0 || opts.LeafPackMaxBytesToCopyPerPass != 0 {
+		t.Fatalf("exhaustive leaf pack limits gens=%d bytes=%d want unbounded", opts.LeafPackMaxGenerationsPerPass, opts.LeafPackMaxBytesToCopyPerPass)
+	}
+}
+
 func compactStoragePhaseSeen(phases []CompactStoragePhaseStats, name string) bool {
 	for _, phase := range phases {
 		if phase.Name == name {
