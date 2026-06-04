@@ -1234,8 +1234,14 @@ func compactStorageValueLogFileID(name string) (uint32, bool) {
 }
 
 func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rewriteWriter, func(), error) {
-	if db == nil || !db.indexOuterLeavesInValueLog || db.leafPageLog != nil {
+	if db == nil || !db.indexOuterLeavesInValueLog {
 		return nil, func() {}, nil
+	}
+	previousLeafPageLog := db.leafPageLog
+	if previousLeafPageLog != nil {
+		if opts.Mode != CompactStorageExhaustive || !compactStorageReplaceableLeafPageLog(previousLeafPageLog) {
+			return nil, func() {}, nil
+		}
 	}
 	segments, err := listValueLogSegments(db.dir)
 	if err != nil {
@@ -1270,9 +1276,17 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 	}
 	db.SetLeafPageLog(writer)
 	return writer, func() {
-		db.SetLeafPageLog(nil)
+		db.SetLeafPageLog(previousLeafPageLog)
 		_ = writer.Close()
 	}, nil
+}
+
+func compactStorageReplaceableLeafPageLog(log LeafPageLog) bool {
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		log = wrapped.inner
+	}
+	_, ok := log.(replayInlineLeafPageLog)
+	return ok
 }
 
 func (db *DB) refreshCompactStorageLeafPageLog(writer *rewriteWriter) error {

@@ -8,6 +8,7 @@ BATCH="${BATCH:-16000}"
 RUN_DIR="${RUN_DIR:-/tmp/treedb_collection_compression_$(date +%Y%m%d_%H%M%S)}"
 PROFILE="${PROFILE:-bench}"
 COLLECTION_INDEXES="${COLLECTION_INDEXES:-0 1 2}"
+COMPACT_MODE="${COMPACT_MODE:-full}"
 
 mkdir -p "$RUN_DIR"/{dbs,logs}
 
@@ -243,7 +244,7 @@ measure_tsv_row() {
 	run_compact() {
 		local case_name="$1"
 		local db_dir="$2"
-		"$treemap" compact "$db_dir" -rw >"$RUN_DIR/logs/${case_name}.compact.log" 2>&1
+		"$treemap" compact "$db_dir" -rw -mode "$COMPACT_MODE" >"$RUN_DIR/logs/${case_name}.compact.log" 2>&1
 	}
 
 run_raw_case() {
@@ -307,7 +308,7 @@ done
 	printf -- '- Document shape: template-v1 fixture fields `name`, `email`, `city`, `pad`\n'
 	printf -- '- Raw TreeDB case: generated template-v1 payloads stored directly by key\n'
 	printf -- '- Collection cases: generated template-v1 payloads inserted through collection mode with indexes `%s`\n' "$COLLECTION_INDEXES"
-		printf -- '- Compaction: `treemap compact <dir> -rw`\n'
+		printf -- '- Compaction: `treemap compact <dir> -rw -mode %s`\n' "$COMPACT_MODE"
 		printf -- '- Gzip ratio is `bytes/gzip_bytes`; lower is closer to gzip-compressed density already being present on disk.\n\n'
 		printf '| Mode | Indexes | Before bytes | Before gzip | Before bytes/gzip | After compact bytes | After compact gzip | After bytes/gzip | Disk delta | Gzip delta | After leaf_vlog bytes | After leaf bytes/gzip | After index.db bytes | After value_vlog bytes |\n'
 		printf '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n'

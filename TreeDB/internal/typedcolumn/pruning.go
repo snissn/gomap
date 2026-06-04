@@ -371,7 +371,7 @@ func buildColumnPartPruning(part *ColumnPart) (ColumnPartPruning, error) {
 }
 
 func buildInt64ValueRowIndex(desc ColumnPartDescriptor, columnDesc ColumnPartColumnDescriptor, column ColumnPartColumn) (Int64ValueRowIndex, bool, error) {
-	if column.Definition.StatsDisabled || !integerStatsPayloadColumnType(column.Definition.Type) || column.Definition.Encoding == EncodingNullableInt64 || column.Definition.Compression != CompressionNone {
+	if column.Definition.StatsDisabled || !integerStatsPayloadColumnType(column.Definition.Type) || column.Definition.Encoding == EncodingNullableInt64 {
 		return Int64ValueRowIndex{}, false, nil
 	}
 	index := Int64ValueRowIndex{

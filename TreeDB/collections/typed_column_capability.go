@@ -547,7 +547,12 @@ func validateTypedColumnProductionCompressionForField(field TypedStorageField, d
 		return err
 	}
 	switch field.ValueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueString:
+	case ColumnStoreValueBool, ColumnStoreValueString:
+		return nil
+	case ColumnStoreValueInt64:
+		if field.FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian && !field.Nullable {
+			return fmt.Errorf("%w: compression %s is unsupported for fixed-width field %q value_type=%s", errTypedColumnProductionLayoutUnsupported, def.Compression, field.Path, field.ValueType)
+		}
 		return nil
 	default:
 		return fmt.Errorf("%w: compression %s is unsupported for field %q value_type=%s", errTypedColumnProductionLayoutUnsupported, def.Compression, field.Path, field.ValueType)
