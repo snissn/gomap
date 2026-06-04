@@ -763,6 +763,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if valEnd < valStart || valEnd > rawLen {
 		return nil, false, ErrCorrupt, true
 	}
+	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
 	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, k, offsets, rawLen, subIndex, dst); hit {
 		return out, usedDst, err, true
 	}
@@ -805,7 +806,10 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	val := raw[valStart:valEnd]
 	if f.templateLookup != nil && templ.IsEncodedPayload(val) {
 		encoded := append([]byte(nil), val...)
-		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		cachedRaw := false
+		if cacheableRaw {
+			cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		}
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
 		}
@@ -821,7 +825,10 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if dst != nil && cap(dst) >= len(val) {
 		out := dst[:len(val)]
 		copy(out, val)
-		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		cachedRaw := false
+		if cacheableRaw {
+			cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		}
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
 		}
@@ -829,7 +836,10 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	}
 	out := make([]byte, len(val))
 	copy(out, val)
-	cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+	cachedRaw := false
+	if cacheableRaw {
+		cachedRaw = f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+	}
 	if pooledRaw && !cachedRaw {
 		f.releaseDecodeScratch(raw)
 	}
