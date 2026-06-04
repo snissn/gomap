@@ -1,0 +1,197 @@
+package valuelog
+
+import (
+	"bytes"
+	"errors"
+	"sync"
+	"testing"
+)
+
+func groupedCacheOffsets(lengths ...int) [MaxFrameK + 1]uint32 {
+	var offsets [MaxFrameK + 1]uint32
+	var off uint32
+	for i, n := range lengths {
+		offsets[i] = off
+		off += uint32(n)
+	}
+	offsets[len(lengths)] = off
+	return offsets
+}
+
+func groupedCacheRaw(parts ...[]byte) []byte {
+	total := 0
+	for _, p := range parts {
+		total += len(p)
+	}
+	raw := make([]byte, 0, total)
+	for _, p := range parts {
+		raw = append(raw, p...)
+	}
+	return raw
+}
+
+func newTestGroupedCacheFile(entries int, maxRaw int, maxBytes int64) *File {
+	f := &File{
+		groupedFrameCacheEntries:  entries,
+		groupedFrameCacheMaxRaw:   maxRaw,
+		groupedFrameCacheMaxBytes: maxBytes,
+	}
+	f.resetGroupedFrameCacheLocked()
+	return f
+}
+
+func TestGroupedFrameCache_StateIsolationAndSubValues(t *testing.T) {
+	f := newTestGroupedCacheFile(4, 1024, 0)
+	raw := groupedCacheRaw([]byte("aa"), []byte("bbb"), []byte("cccc"))
+	offsets := groupedCacheOffsets(2, 3, 4)
+	if !f.groupedFrameCacheStore(100, false, 3, offsets, raw, false) {
+		t.Fatalf("store grouped frame")
+	}
+
+	for i, want := range [][]byte{[]byte("aa"), []byte("bbb"), []byte("cccc")} {
+		got, _, err, hit := f.groupedFrameCacheReadTo(100, false, 3, i, nil)
+		if err != nil {
+			t.Fatalf("read sub-value %d: %v", i, err)
+		}
+		if !hit || !bytes.Equal(got, want) {
+			t.Fatalf("sub-value %d hit=%v got=%q want=%q", i, hit, got, want)
+		}
+	}
+
+	if _, _, _, hit := f.groupedFrameCacheReadTo(100, false, 2, 0, nil); hit {
+		t.Fatalf("cache hit crossed K identity")
+	}
+	if _, _, _, hit := f.groupedFrameCacheReadTo(100, true, 3, 0, nil); hit {
+		t.Fatalf("cache hit crossed verifyCRC identity")
+	}
+	if _, _, _, hit := f.groupedFrameCacheReadTo(101, false, 3, 0, nil); hit {
+		t.Fatalf("cache hit crossed start identity")
+	}
+}
+
+func TestGroupedFrameCache_BudgetEvictionReleaseStats(t *testing.T) {
+	f := newTestGroupedCacheFile(1, 1024, 96)
+	offsets := groupedCacheOffsets(64)
+	raw1 := bytes.Repeat([]byte{'a'}, 64)
+	raw2 := bytes.Repeat([]byte{'b'}, 64)
+	if !f.groupedFrameCacheStore(1, false, 1, offsets, raw1, true) {
+		t.Fatalf("store first frame")
+	}
+	if !f.groupedFrameCacheStore(2, false, 1, offsets, raw2, true) {
+		t.Fatalf("store second frame")
+	}
+	stats := f.groupedFrameCacheDetailedStats()
+	if stats.Entries != 1 {
+		t.Fatalf("expected budget eviction to leave one entry, got %d", stats.Entries)
+	}
+	if stats.RetainedBytes > 96 || stats.RetainedBytes != 64 {
+		t.Fatalf("retained bytes=%d want=64 within budget", stats.RetainedBytes)
+	}
+	if stats.Evictions == 0 {
+		t.Fatalf("expected eviction stat")
+	}
+	if stats.Releases == 0 {
+		t.Fatalf("expected pooled release stat")
+	}
+}
+
+func TestGroupedFrameCache_SkipsOversizeAndBudget(t *testing.T) {
+	f := newTestGroupedCacheFile(4, 8, 0)
+	offsets := groupedCacheOffsets(16)
+	if f.groupedFrameCacheStore(1, false, 1, offsets, bytes.Repeat([]byte{'x'}, 16), false) {
+		t.Fatalf("oversize frame was admitted")
+	}
+	stats := f.groupedFrameCacheDetailedStats()
+	if stats.SkippedOversize == 0 || stats.Entries != 0 {
+		t.Fatalf("expected oversize skip without entry: %+v", stats)
+	}
+
+	f = newTestGroupedCacheFile(4, 1024, 8)
+	if f.groupedFrameCacheStore(1, false, 1, offsets, bytes.Repeat([]byte{'x'}, 16), false) {
+		t.Fatalf("over-budget frame was admitted")
+	}
+	stats = f.groupedFrameCacheDetailedStats()
+	if stats.SkippedBudget == 0 || stats.Entries != 0 {
+		t.Fatalf("expected budget skip without entry: %+v", stats)
+	}
+}
+
+func TestGroupedFrameCache_InvalidCachedStateFailsClosed(t *testing.T) {
+	f := newTestGroupedCacheFile(2, 1024, 0)
+	raw := groupedCacheRaw([]byte("good"), []byte("value"))
+	offsets := groupedCacheOffsets(4, 5)
+	if !f.groupedFrameCacheStore(10, false, 2, offsets, raw, false) {
+		t.Fatalf("store grouped frame")
+	}
+
+	cache := f.groupedFrameCache.Load()
+	shard := cache.shardFor(10, false)
+	shard.mu.Lock()
+	if len(shard.entries) != 1 {
+		shard.mu.Unlock()
+		t.Fatalf("expected one entry, got %d", len(shard.entries))
+	}
+	shard.entries[0].raw = shard.entries[0].raw[:len(shard.entries[0].raw)-1]
+	shard.publishLocked()
+	shard.mu.Unlock()
+
+	_, _, err, hit := f.groupedFrameCacheReadTo(10, false, 2, 1, nil)
+	if !hit {
+		t.Fatalf("expected corrupt cached state to be detected on hit")
+	}
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt, got %v", err)
+	}
+}
+
+func TestGroupedFrameCache_ConcurrentReadsAndEvictions(t *testing.T) {
+	f := newTestGroupedCacheFile(8, 1024, 512)
+	baseRaw := groupedCacheRaw([]byte("left"), []byte("right"))
+	baseOffsets := groupedCacheOffsets(4, 5)
+	if !f.groupedFrameCacheStore(1, false, 2, baseOffsets, append([]byte(nil), baseRaw...), false) {
+		t.Fatalf("store base frame")
+	}
+
+	var wg sync.WaitGroup
+	for g := 0; g < 16; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 1000; i++ {
+				got, _, err, hit := f.groupedFrameCacheReadTo(1, false, 2, i&1, nil)
+				if err != nil {
+					t.Errorf("cache read: %v", err)
+					return
+				}
+				if hit {
+					want := []byte("left")
+					if i&1 == 1 {
+						want = []byte("right")
+					}
+					if !bytes.Equal(got, want) {
+						t.Errorf("cache value mismatch got=%q want=%q", got, want)
+						return
+					}
+				}
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			raw := bytes.Repeat([]byte{byte(i)}, 32)
+			offsets := groupedCacheOffsets(32)
+			_ = f.groupedFrameCacheStore(int64(100+i), false, 1, offsets, raw, false)
+		}
+	}()
+	wg.Wait()
+
+	stats := f.groupedFrameCacheDetailedStats()
+	if stats.Hits == 0 || stats.Misses == 0 || stats.Evictions == 0 {
+		t.Fatalf("expected mixed hits/misses/evictions, got %+v", stats)
+	}
+	if stats.RetainedBytes > stats.BudgetBytes && stats.BudgetBytes > 0 {
+		t.Fatalf("retained bytes exceed budget: %+v", stats)
+	}
+}

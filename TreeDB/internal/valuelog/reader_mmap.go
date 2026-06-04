@@ -636,7 +636,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	}
 
 	if fFlags&FrameFlagCompressed != 0 {
-		if val, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, subIndex, nil); hit {
+		if val, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, subIndex, nil); hit {
 			if err != nil {
 				return nil, err, true
 			}
@@ -946,7 +946,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 
 	if fFlags&FrameFlagCompressed != 0 {
-		if val, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, subIndex, dst); hit {
+		if val, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, subIndex, dst); hit {
 			if err != nil {
 				return nil, false, err, true
 			}
@@ -1259,7 +1259,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 
-	if cachedVal, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, subIndex, nil); hit {
+	if cachedVal, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, subIndex, nil); hit {
 		if err != nil {
 			return nil, err, true
 		}

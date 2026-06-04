@@ -22,22 +22,14 @@ import (
 )
 
 const (
-	// Keep grouped-frame cache modest by default so restore workloads with many
-	// open segments do not retain large decoded-raw payloads per file.
-	defaultGroupedFrameCacheEntries     = 2
+	// Keep decoded grouped-frame retention bounded while allowing enough entries
+	// to cover hot read working sets. Bytes are additionally capped by the
+	// manager-level budget below.
+	defaultGroupedFrameCacheEntries     = 2048
 	defaultGroupedFrameCacheMaxRawBytes = 1 << 20
+	defaultGroupedFrameCacheMaxBytes    = 64 << 20
 	valueLogRecordCRCPrefixBytes        = HeaderSize - headerWithoutCRC
 )
-
-type groupedFrameCacheEntry struct {
-	start     int64
-	verifyCRC bool
-	k         int
-	offsets   [MaxFrameK + 1]uint32
-	raw       []byte
-	rawPooled bool
-	used      uint64
-}
 
 type sealedLazyMmapDenyReason uint8
 
@@ -69,7 +61,7 @@ type File struct {
 	compactLeafPayloadAllowedSet bool
 
 	cacheMu    sync.RWMutex
-	groupedMu  sync.RWMutex
+	groupedMu  sync.Mutex
 	scratchMu  sync.Mutex
 	cacheStart atomic.Int64
 	cacheK     int
@@ -84,12 +76,11 @@ type File struct {
 	// scratch buffer that must be returned on eviction.
 	cacheRawPooled bool
 
-	groupedFrameCacheEntries int
-	groupedFrameCacheMaxRaw  int
-	groupedFrameCacheClock   uint64
-	groupedFrameCache        []groupedFrameCacheEntry
-	groupedFrameCacheHits    atomic.Uint64
-	groupedFrameCacheMisses  atomic.Uint64
+	groupedFrameCacheEntries  int
+	groupedFrameCacheMaxRaw   int
+	groupedFrameCacheMaxBytes int64
+	groupedFrameCacheBudget   *groupedFrameCacheBudget
+	groupedFrameCache         atomic.Pointer[groupedFrameCache]
 
 	closed atomic.Bool
 
@@ -159,7 +150,9 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		compactLeafPayloadAllowedSet: true,
 		groupedFrameCacheEntries:     defaultGroupedFrameCacheEntries,
 		groupedFrameCacheMaxRaw:      defaultGroupedFrameCacheMaxRawBytes,
+		groupedFrameCacheMaxBytes:    defaultGroupedFrameCacheMaxBytes,
 	}
+	vf.resetGroupedFrameCacheLocked()
 	vf.mmapData.Store([]byte(nil))
 	if info, err := f.Stat(); err == nil {
 		vf.noteVerifiedFileSize(info.Size())
@@ -286,18 +279,25 @@ func (f *File) releaseDecodeScratch(buf []byte) {
 	putDecodeScratch(buf)
 }
 
-func (f *File) clearGroupedFrameCacheLocked() (pooled [][]byte) {
-	for i := range f.groupedFrameCache {
-		if f.groupedFrameCache[i].rawPooled {
-			pooled = append(pooled, f.groupedFrameCache[i].raw)
-		}
-		f.groupedFrameCache[i].raw = nil
-		f.groupedFrameCache[i].k = 0
-		f.groupedFrameCache[i].rawPooled = false
+func (f *File) resetGroupedFrameCacheLocked() {
+	if f == nil {
+		return
 	}
-	f.groupedFrameCache = nil
-	f.groupedFrameCacheClock = 0
-	return pooled
+	if old := f.groupedFrameCache.Load(); old != nil {
+		old.clear()
+	}
+	f.groupedFrameCache.Store(newGroupedFrameCache(f, f.groupedFrameCacheEntries, f.groupedFrameCacheMaxRaw, f.groupedFrameCacheMaxBytes, f.groupedFrameCacheBudget))
+}
+
+func (f *File) setGroupedFrameCacheBudget(budget *groupedFrameCacheBudget) {
+	f.groupedMu.Lock()
+	if f.groupedFrameCacheBudget == budget {
+		f.groupedMu.Unlock()
+		return
+	}
+	f.groupedFrameCacheBudget = budget
+	f.resetGroupedFrameCacheLocked()
+	f.groupedMu.Unlock()
 }
 
 func (f *File) setGroupedFrameCacheEntries(entries int) {
@@ -309,147 +309,9 @@ func (f *File) setGroupedFrameCacheEntries(entries int) {
 		f.groupedMu.Unlock()
 		return
 	}
-	pooled := f.clearGroupedFrameCacheLocked()
 	f.groupedFrameCacheEntries = entries
-	f.groupedFrameCacheHits.Store(0)
-	f.groupedFrameCacheMisses.Store(0)
+	f.resetGroupedFrameCacheLocked()
 	f.groupedMu.Unlock()
-	for _, raw := range pooled {
-		f.releaseDecodeScratch(raw)
-	}
-}
-
-func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
-	f.groupedMu.RLock()
-	if f.groupedFrameCacheEntries <= 0 {
-		f.groupedMu.RUnlock()
-		return nil, false, nil, false
-	}
-	if len(f.groupedFrameCache) == 0 {
-		f.groupedFrameCacheMisses.Add(1)
-		f.groupedMu.RUnlock()
-		return nil, false, nil, false
-	}
-	for i := range f.groupedFrameCache {
-		e := &f.groupedFrameCache[i]
-		if e.k <= 0 || e.start != start || e.verifyCRC != verifyCRC || subIndex < 0 || subIndex >= e.k {
-			continue
-		}
-		valStart := e.offsets[subIndex]
-		valEnd := e.offsets[subIndex+1]
-		rawLen := e.offsets[e.k]
-		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
-			continue
-		}
-		val := e.raw[valStart:valEnd]
-		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
-			// Copy payload while holding groupedMu so callers do not race with
-			// cache entry eviction/reuse after unlock.
-			encoded := append([]byte(nil), val...)
-			f.groupedFrameCacheHits.Add(1)
-			f.groupedMu.RUnlock()
-			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-			}, f.templateDecodeOpts)
-			if decErr != nil {
-				return nil, false, decErr, true
-			}
-			return decoded, false, nil, true
-		}
-		if dst != nil && cap(dst) >= len(val) {
-			out := dst[:len(val)]
-			copy(out, val)
-			f.groupedFrameCacheHits.Add(1)
-			f.groupedMu.RUnlock()
-			return out, true, nil, true
-		}
-		out := make([]byte, len(val))
-		copy(out, val)
-		f.groupedFrameCacheHits.Add(1)
-		f.groupedMu.RUnlock()
-		return out, false, nil, true
-	}
-	f.groupedFrameCacheMisses.Add(1)
-	f.groupedMu.RUnlock()
-	return nil, false, nil, false
-}
-
-func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
-	if k <= 0 || len(raw) == 0 {
-		return false
-	}
-	f.groupedMu.Lock()
-	var oldPooledRaw []byte
-	stored := false
-	if f.groupedFrameCacheEntries <= 0 {
-		f.groupedMu.Unlock()
-		return false
-	}
-	if f.groupedFrameCacheMaxRaw > 0 && len(raw) > f.groupedFrameCacheMaxRaw {
-		f.groupedMu.Unlock()
-		return false
-	}
-
-	f.groupedFrameCacheClock++
-	used := f.groupedFrameCacheClock
-
-	for i := range f.groupedFrameCache {
-		e := &f.groupedFrameCache[i]
-		if e.k > 0 && e.start == start && e.verifyCRC == verifyCRC {
-			if e.rawPooled {
-				oldPooledRaw = e.raw
-			}
-			e.k = k
-			e.offsets = offsets
-			e.raw = raw
-			e.rawPooled = pooled
-			e.used = used
-			stored = true
-			break
-		}
-	}
-	if !stored {
-		idx := -1
-		if len(f.groupedFrameCache) < f.groupedFrameCacheEntries {
-			f.groupedFrameCache = append(f.groupedFrameCache, groupedFrameCacheEntry{})
-			idx = len(f.groupedFrameCache) - 1
-		} else {
-			oldest := f.groupedFrameCache[0].used
-			idx = 0
-			for i := 1; i < len(f.groupedFrameCache); i++ {
-				if f.groupedFrameCache[i].used < oldest {
-					oldest = f.groupedFrameCache[i].used
-					idx = i
-				}
-			}
-		}
-
-		if idx >= 0 && idx < len(f.groupedFrameCache) && f.groupedFrameCache[idx].rawPooled {
-			oldPooledRaw = f.groupedFrameCache[idx].raw
-		}
-		f.groupedFrameCache[idx] = groupedFrameCacheEntry{
-			start:     start,
-			verifyCRC: verifyCRC,
-			k:         k,
-			offsets:   offsets,
-			raw:       raw,
-			rawPooled: pooled,
-			used:      used,
-		}
-		stored = true
-	}
-	f.groupedMu.Unlock()
-	if oldPooledRaw != nil {
-		// Avoid doing scratch handoff while holding groupedMu on the hot path.
-		f.releaseDecodeScratch(oldPooledRaw)
-	}
-	return stored
-}
-
-func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
-	f.groupedMu.RLock()
-	defer f.groupedMu.RUnlock()
-	return f.groupedFrameCacheHits.Load(), f.groupedFrameCacheMisses.Load(), len(f.groupedFrameCache), f.groupedFrameCacheEntries
 }
 
 func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
@@ -461,23 +323,82 @@ func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
 		f.groupedMu.Unlock()
 		return
 	}
-	pooled := f.clearGroupedFrameCacheLocked()
 	f.groupedFrameCacheMaxRaw = maxRaw
-	f.groupedFrameCacheHits.Store(0)
-	f.groupedFrameCacheMisses.Store(0)
+	f.resetGroupedFrameCacheLocked()
 	f.groupedMu.Unlock()
-	for _, raw := range pooled {
-		f.releaseDecodeScratch(raw)
+}
+
+func (f *File) setGroupedFrameCacheMaxBytes(maxBytes int64) {
+	if maxBytes < 0 {
+		maxBytes = 0
 	}
+	f.groupedMu.Lock()
+	if f.groupedFrameCacheMaxBytes == maxBytes {
+		f.groupedMu.Unlock()
+		return
+	}
+	f.groupedFrameCacheMaxBytes = maxBytes
+	f.resetGroupedFrameCacheLocked()
+	f.groupedMu.Unlock()
+}
+
+func (f *File) ensureGroupedFrameCache() *groupedFrameCache {
+	if f == nil {
+		return nil
+	}
+	if cache := f.groupedFrameCache.Load(); cache != nil {
+		return cache
+	}
+	f.groupedMu.Lock()
+	cache := f.groupedFrameCache.Load()
+	if cache == nil {
+		f.resetGroupedFrameCacheLocked()
+		cache = f.groupedFrameCache.Load()
+	}
+	f.groupedMu.Unlock()
+	return cache
+}
+
+func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, expectedK, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
+	cache := f.ensureGroupedFrameCache()
+	return cache.readTo(start, verifyCRC, expectedK, subIndex, dst, f)
+}
+
+func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
+	cache := f.ensureGroupedFrameCache()
+	stored := cache.store(start, verifyCRC, k, offsets, raw, pooled)
+	if stored && f != nil && f.groupedFrameCache.Load() != cache {
+		// A rare configuration reset/close raced with admission. The cache took
+		// ownership of raw; clear the now-unpublished cache so pooled buffers and
+		// budget reservations are released instead of leaking.
+		cache.clear()
+	}
+	return stored
+}
+
+func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
+	stats := f.groupedFrameCacheDetailedStats()
+	return stats.Hits, stats.Misses, stats.Entries, stats.Capacity
+}
+
+func (f *File) groupedFrameCacheDetailedStats() GroupedFrameCacheStats {
+	cache := f.ensureGroupedFrameCache()
+	return cache.stats()
 }
 
 func (f *File) groupedFrameCacheAllowsRaw(rawLen int) bool {
-	f.groupedMu.RLock()
-	defer f.groupedMu.RUnlock()
-	if f.groupedFrameCacheEntries <= 0 {
+	f.groupedMu.Lock()
+	entries := f.groupedFrameCacheEntries
+	maxRaw := f.groupedFrameCacheMaxRaw
+	maxBytes := f.groupedFrameCacheMaxBytes
+	f.groupedMu.Unlock()
+	if entries <= 0 || rawLen <= 0 {
 		return false
 	}
-	return f.groupedFrameCacheMaxRaw <= 0 || rawLen <= f.groupedFrameCacheMaxRaw
+	if maxRaw > 0 && rawLen > maxRaw {
+		return false
+	}
+	return maxBytes <= 0 || int64(rawLen) <= maxBytes
 }
 
 func (f *File) Close() error {
@@ -500,10 +421,11 @@ func (f *File) Close() error {
 	f.decodeScratch = nil
 	f.scratchMu.Unlock()
 	f.groupedMu.Lock()
-	pooled := f.clearGroupedFrameCacheLocked()
+	cache := f.groupedFrameCache.Load()
+	f.groupedFrameCache.Store(nil)
 	f.groupedMu.Unlock()
-	for _, raw := range pooled {
-		putDecodeScratch(raw)
+	if cache != nil {
+		cache.clear()
 	}
 	if scratch != nil {
 		putDecodeScratch(scratch)
@@ -779,7 +701,7 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if subIndex < 0 || subIndex >= k {
 		return nil, false, ErrCorrupt, true
 	}
-	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, subIndex, dst); hit {
+	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, k, subIndex, dst); hit {
 		return out, usedDst, err, true
 	}
 
@@ -1180,18 +1102,22 @@ type Manager struct {
 	templateDefCache           *templateDefCache
 	groupedFrameCacheEntries   int
 	groupedFrameCacheMaxRaw    int
+	groupedFrameCacheMaxBytes  int64
+	groupedFrameCacheBudget    *groupedFrameCacheBudget
 	currentWritableMmap        atomic.Bool
 	currentWritableReadBarrier atomic.Value
 }
 
 func NewManager(dir string) (*Manager, error) {
 	m := &Manager{
-		dir:                      dir,
-		files:                    make(map[uint32]*File),
-		currentWritableByLane:    make(map[uint32]uint32),
-		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
-		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
+		dir:                       dir,
+		files:                     make(map[uint32]*File),
+		currentWritableByLane:     make(map[uint32]uint32),
+		groupedFrameCacheEntries:  defaultGroupedFrameCacheEntries,
+		groupedFrameCacheMaxRaw:   defaultGroupedFrameCacheMaxRawBytes,
+		groupedFrameCacheMaxBytes: defaultGroupedFrameCacheMaxBytes,
 	}
+	m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(defaultGroupedFrameCacheMaxBytes)
 	if err := m.Refresh(); err != nil {
 		return nil, err
 	}
@@ -1355,6 +1281,29 @@ func (m *Manager) SetGroupedFrameCacheMaxRawBytes(maxRaw int) {
 	}
 }
 
+// SetGroupedFrameCacheMaxBytes configures the manager-wide decoded grouped-frame
+// byte budget. A value <= 0 disables the byte budget while preserving entry and
+// per-frame raw-size bounds.
+func (m *Manager) SetGroupedFrameCacheMaxBytes(maxBytes int64) {
+	if m == nil {
+		return
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.groupedFrameCacheMaxBytes = maxBytes
+	if m.groupedFrameCacheBudget == nil {
+		m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(maxBytes)
+	} else {
+		m.groupedFrameCacheBudget.setLimit(maxBytes)
+	}
+	for _, f := range m.files {
+		f.setGroupedFrameCacheMaxBytes(maxBytes)
+	}
+}
+
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1489,6 +1438,8 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 		return err
 	}
 	f.manager = m
+	f.setGroupedFrameCacheBudget(m.groupedFrameCacheBudget)
+	f.setGroupedFrameCacheMaxBytes(m.groupedFrameCacheMaxBytes)
 	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
 	m.files[id] = f
@@ -2152,19 +2103,25 @@ func (m *Manager) TemplateDefCacheStats() (hits, misses uint64, entries, capacit
 }
 
 func (m *Manager) GroupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
+	stats := m.GroupedFrameCacheDetailedStats()
+	return stats.Hits, stats.Misses, stats.Entries, stats.Capacity
+}
+
+func (m *Manager) GroupedFrameCacheDetailedStats() GroupedFrameCacheStats {
 	if m == nil {
-		return 0, 0, 0, 0
+		return GroupedFrameCacheStats{}
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	var stats GroupedFrameCacheStats
 	for _, f := range m.files {
-		h, miss, e, capPerFile := f.groupedFrameCacheStats()
-		hits += h
-		misses += miss
-		entries += e
-		capacity += capPerFile
+		stats.add(f.groupedFrameCacheDetailedStats())
 	}
-	return hits, misses, entries, capacity
+	if m.groupedFrameCacheBudget != nil {
+		stats.RetainedBytes = m.groupedFrameCacheBudget.retainedBytes()
+		stats.BudgetBytes = m.groupedFrameCacheBudget.budgetBytes()
+	}
+	return stats
 }
 
 func (m *Manager) RemoveSegment(id uint32) error {
