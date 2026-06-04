@@ -377,9 +377,9 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 	if stored && (f.closed.Load() || f.groupedFrameCache.Load() != cache) {
 		// A rare configuration reset/close raced with admission. The cache took
 		// ownership of raw; clear the now-unpublished/closed cache so pooled buffers
-		// and budget reservations are released instead of leaking.
+		// and budget reservations are released instead of leaking. Keep returning
+		// true so callers do not release an already-owned pooled raw buffer again.
 		cache.clear()
-		return false
 	}
 	return stored
 }
