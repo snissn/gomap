@@ -22,6 +22,8 @@ func (s *stubBatch) Delete(_ []byte) error {
 	return nil
 }
 
+func (s *stubBatch) DeleteRange(_, _ []byte) error { return nil }
+
 func (s *stubBatch) Write() error                             { return nil }
 func (s *stubBatch) WriteSync() error                         { return nil }
 func (s *stubBatch) Close() error                             { return nil }

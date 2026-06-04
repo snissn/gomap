@@ -937,16 +937,21 @@ u32 OpCount
 Op[OpCount]
 
 Op:
-u8  Op             // 1=set, 2=delete
-u32 KeyLen
-u32 ValueLen
-bytes Key[KeyLen]
-bytes Value[ValueLen]
+u8  Op             // 1=set, 2=delete, 3=set-by-value-log-RID, 4=delete-range
+u32 KeyLen          // for delete-range: StartLen, or 0xffffffff for nil/unbounded
+u32 ValueLen        // for delete-range: EndLen, or 0xffffffff for nil/unbounded
+bytes Key[KeyLen]   // omitted when delete-range StartLen is 0xffffffff
+bytes Value[ValueLen] // omitted when delete-range EndLen is 0xffffffff
 ```
 
 A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
-`ValueLen=0`.
+`ValueLen=0`. Delete-range operations use half-open `[start,end)` semantics;
+nil start/end bounds are unbounded and are encoded with the `0xffffffff` length
+sentinel. Malformed delete-range payloads (for example bounded `start >= end` or
+extra bytes after a nil-bound sentinel) fail closed as corrupt. Public APIs treat
+empty or reversed range deletes as no-ops and do not emit dangerous command-WAL
+mutations for them.
 
 Writers may use compact all-zero set payload variants when every operation is a
 set with the same non-empty zero-filled value length:

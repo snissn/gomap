@@ -170,6 +170,10 @@ func (b *Batch) Delete(key []byte) error {
 	return b.batch.Delete(key)
 }
 
+func (b *Batch) DeleteRange(start, end []byte) error {
+	return b.batch.DeleteRange(start, end)
+}
+
 // DeleteView records a Delete without copying the key bytes. Callers must treat
 // key as immutable until the batch is written or closed.
 func (b *Batch) DeleteView(key []byte) error {
@@ -213,7 +217,7 @@ func (b *Batch) write(sync bool) error {
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
-	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 && b.commandWALPublishIntent == nil {
+	if sync && b.batch != nil && b.batch.Len() == 0 && b.commandWALPublishIntent == nil {
 		return b.db.Checkpoint()
 	}
 	intent := b.commandWALPublishIntent
@@ -280,8 +284,8 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		}
 		return false, err
 	}
-	entries := b.batch.SortedEntries()
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	entries, ranges := b.batch.ApplyPlan()
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -340,7 +344,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	b.db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	b.db.finalizeCommitPostWork(post)
 	if b.db.vacuum.Active() {
-		b.db.vacuum.RecordEntries(entries)
+		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
 	b.db.writeMu.RUnlock()
 	return true, nil
@@ -369,8 +373,8 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	if err != nil {
 		return err
 	}
-	entries := b.batch.SortedEntries()
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	entries, ranges := b.batch.ApplyPlan()
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
 	if err != nil {
 		return err
 	}
@@ -410,7 +414,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	b.db.finalizeCommitPostWork(post)
 	b.db.clearLeafGenerationReachabilityCaches()
 	if b.db.vacuum.Active() {
-		b.db.vacuum.RecordEntries(entries)
+		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
 	return nil
 }
@@ -440,7 +444,10 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 	if b == nil || b.batch == nil {
 		return nil
 	}
-	entries := b.batch.SortedEntries()
+	entries := b.batch.OrderedEntries()
+	if !b.batch.HasDeleteRanges() {
+		entries = b.batch.SortedEntries()
+	}
 	for _, entry := range entries {
 		if entry.IsPtr && entry.Value == nil {
 			ptr := entry.ValuePtr

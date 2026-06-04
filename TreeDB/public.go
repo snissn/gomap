@@ -75,6 +75,7 @@ type Iterator interface {
 type Batch interface {
 	Set(key, value []byte) error
 	Delete(key []byte) error
+	DeleteRange(start, end []byte) error
 	Write() error
 	WriteSync() error
 	Close() error

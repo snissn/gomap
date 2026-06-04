@@ -84,6 +84,11 @@ func (b *pointerBatch) Delete(key []byte) error {
 	return nil
 }
 
+func (b *pointerBatch) DeleteRange(start, end []byte) error {
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDeleteRange, Key: start, Value: end})
+	return nil
+}
+
 func (b *pointerBatch) DeleteView(key []byte) error {
 	b.deleteViewCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})

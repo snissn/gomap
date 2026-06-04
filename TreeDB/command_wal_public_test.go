@@ -891,6 +891,18 @@ func (b *commandWALNoResetBatch) Delete(key []byte) error {
 	return nil
 }
 
+func (b *commandWALNoResetBatch) DeleteRange(start, end []byte) error {
+	var startCopy, endCopy []byte
+	if start != nil {
+		startCopy = append([]byte(nil), start...)
+	}
+	if end != nil {
+		endCopy = append([]byte(nil), end...)
+	}
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDeleteRange, Key: startCopy, Value: endCopy})
+	return nil
+}
+
 func (b *commandWALNoResetBatch) Write() error { return nil }
 
 func (b *commandWALNoResetBatch) WriteSync() error { return nil }
@@ -1002,5 +1014,52 @@ func assertPublicCommandWALFramesB(b *testing.B, db *DB, minFrames uint64) {
 	}
 	if frames < minFrames {
 		b.Fatalf("command_wal.frames=%d, want at least %d", frames, minFrames)
+	}
+}
+
+func TestPublicCommandWALBatchDeleteRangeCachedReopen(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}, {"c", "vc"}, {"d", "vd"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+	b := db.NewBatch()
+	if err := b.DeleteRange([]byte("a"), []byte("d")); err != nil {
+		t.Fatalf("batch DeleteRange: %v", err)
+	}
+	if err := b.Set([]byte("b"), []byte("after")); err != nil {
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	for _, key := range []string{"a", "c"} {
+		has, err := reopen.Has([]byte(key))
+		if err != nil || has {
+			t.Fatalf("Has(%s)=(%t,%v), want false,nil", key, has, err)
+		}
+	}
+	got, err := reopen.Get([]byte("b"))
+	if err != nil || string(got) != "after" {
+		t.Fatalf("Get(b)=(%q,%v), want after,nil", got, err)
+	}
+	got, err = reopen.Get([]byte("d"))
+	if err != nil || string(got) != "vd" {
+		t.Fatalf("Get(d)=(%q,%v), want vd,nil", got, err)
 	}
 }

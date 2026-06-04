@@ -38,6 +38,7 @@ type vacuumRecorder struct {
 	active atomic.Bool
 	mu     sync.Mutex
 	ops    map[string]batch.Entry
+	ranges []batch.DeleteRange
 }
 
 func (r *vacuumRecorder) Active() bool {
@@ -47,6 +48,7 @@ func (r *vacuumRecorder) Active() bool {
 func (r *vacuumRecorder) Start() {
 	r.mu.Lock()
 	r.ops = make(map[string]batch.Entry, 1024)
+	r.ranges = nil
 	r.mu.Unlock()
 	r.active.Store(true)
 }
@@ -64,6 +66,19 @@ func vacuumRecordCopyEntry(entry batch.Entry) batch.Entry {
 		out.Value = nil
 	}
 	return out
+}
+
+func vacuumRecordCopyRange(r batch.DeleteRange) batch.DeleteRange {
+	cloneBound := func(bound []byte) []byte {
+		if bound == nil {
+			return nil
+		}
+		return append([]byte{}, bound...)
+	}
+	return batch.DeleteRange{
+		Start: cloneBound(r.Start),
+		End:   cloneBound(r.End),
+	}
 }
 
 func (r *vacuumRecorder) RecordOps(ops map[string]batch.Entry) {
@@ -84,7 +99,11 @@ func (r *vacuumRecorder) RecordOps(ops map[string]batch.Entry) {
 }
 
 func (r *vacuumRecorder) RecordEntries(entries []batch.Entry) {
-	if !r.active.Load() || len(entries) == 0 {
+	r.RecordApplyPlan(entries, nil)
+}
+
+func (r *vacuumRecorder) RecordApplyPlan(entries []batch.Entry, ranges []batch.DeleteRange) {
+	if !r.active.Load() || (len(entries) == 0 && len(ranges) == 0) {
 		return
 	}
 	r.mu.Lock()
@@ -92,27 +111,60 @@ func (r *vacuumRecorder) RecordEntries(entries []batch.Entry) {
 	if !r.active.Load() {
 		return
 	}
-	if r.ops == nil {
+	if r.ops == nil && len(entries) > 0 {
 		r.ops = make(map[string]batch.Entry, len(entries))
+	}
+	for _, rg := range ranges {
+		if batch.IsDeleteRangeNoop(rg.Start, rg.End) {
+			continue
+		}
+		copied := vacuumRecordCopyRange(rg)
+		r.ranges = append(r.ranges, copied)
+		if len(r.ops) == 0 {
+			continue
+		}
+		start, end := string(copied.Start), string(copied.End)
+		for key := range r.ops {
+			if copied.Start != nil && key < start {
+				continue
+			}
+			if copied.End != nil && key >= end {
+				continue
+			}
+			delete(r.ops, key)
+		}
 	}
 	for i := range entries {
 		entry := entries[i]
 		if len(entry.Key) == 0 {
 			continue
 		}
+		if r.ops == nil {
+			r.ops = make(map[string]batch.Entry, len(entries)-i)
+		}
 		r.ops[string(entry.Key)] = vacuumRecordCopyEntry(entry)
 	}
 }
 
 func (r *vacuumRecorder) Drain() map[string]batch.Entry {
+	ops, _ := r.DrainApplyPlan()
+	return ops
+}
+
+func (r *vacuumRecorder) DrainApplyPlan() (map[string]batch.Entry, []batch.DeleteRange) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.ops) == 0 {
-		return nil
+	if len(r.ops) == 0 && len(r.ranges) == 0 {
+		return nil, nil
 	}
-	out := r.ops
+	outOps := r.ops
+	if len(outOps) == 0 {
+		outOps = nil
+	}
+	outRanges := r.ranges
 	r.ops = make(map[string]batch.Entry, 1024)
-	return out
+	r.ranges = nil
+	return outOps, outRanges
 }
 
 // VacuumIndexOnline rebuilds the index into a new file and swaps it in with a
@@ -294,12 +346,12 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			cleanupNewPager()
 			return err
 		}
-		opsMap := db.vacuum.Drain()
-		if len(opsMap) == 0 {
+		opsMap, ranges := db.vacuum.DrainApplyPlan()
+		if len(opsMap) == 0 && len(ranges) == 0 {
 			break
 		}
 		var retired []uint64
-		newRoot, retired, err = db.applyVacuumDelta(newRoot, opsMap, newZ, nil)
+		newRoot, retired, err = db.applyVacuumDelta(newRoot, opsMap, ranges, newZ, nil)
 		if err != nil {
 			cleanupNewPager()
 			return err
@@ -331,14 +383,14 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 
 		db.writeMu.Lock()
 		db.vacuum.Stop()
-		finalOps := db.vacuum.Drain()
-		if len(finalOps) > vacuumCutoverMaxKeys && defers < vacuumCutoverMaxDefers {
+		finalOps, finalRanges := db.vacuum.DrainApplyPlan()
+		if len(finalOps) > vacuumCutoverMaxKeys && len(finalRanges) == 0 && defers < vacuumCutoverMaxDefers {
 			db.vacuum.Start()
 			db.writeMu.Unlock()
 			defers++
 
 			var retired []uint64
-			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalOps, newZ, nil)
+			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalOps, finalRanges, newZ, nil)
 			if err != nil {
 				cleanupNewPager()
 				return err
@@ -357,9 +409,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			continue
 		}
 
-		if len(finalOps) > 0 {
+		if len(finalOps) > 0 || len(finalRanges) > 0 {
 			var retired []uint64
-			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalOps, newZ, nil)
+			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalOps, finalRanges, newZ, nil)
 			if err != nil {
 				db.writeMu.Unlock()
 				cleanupNewPager()
@@ -597,9 +649,56 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 	}
 }
 
-func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, z *zipper.Zipper, retired []uint64) (uint64, []uint64, error) {
-	if len(opsMap) == 0 {
+type vacuumRangeDeltaApplier func(root uint64, b *batch.Batch) (newRoot uint64, retired []uint64, err error)
+
+func applyVacuumRangeDeltaBatches(root uint64, ranges []batch.DeleteRange, retired []uint64, reader batch.ValueReader, apply vacuumRangeDeltaApplier) (uint64, []uint64, error) {
+	if len(ranges) == 0 {
 		return root, retired, nil
+	}
+	if apply == nil {
+		return 0, nil, errors.New("vacuum: missing range delta applier")
+	}
+	for start := 0; start < len(ranges); start += vacuumDeltaBatchSize {
+		end := start + vacuumDeltaBatchSize
+		if end > len(ranges) {
+			end = len(ranges)
+		}
+		b := batch.New(reader, vacuumInlineThresholdMax)
+		for _, r := range ranges[start:end] {
+			if err := b.DeleteRange(r.Start, r.End); err != nil {
+				_ = b.Close()
+				return 0, nil, err
+			}
+		}
+		if b.Len() == 0 {
+			_ = b.Close()
+			continue
+		}
+		newRoot, newRetired, err := apply(root, b)
+		_ = b.Close()
+		if err != nil {
+			return 0, nil, err
+		}
+		root = newRoot
+		if len(newRetired) > 0 {
+			retired = append(retired, newRetired...)
+		}
+	}
+	return root, retired, nil
+}
+
+func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, ranges []batch.DeleteRange, z *zipper.Zipper, retired []uint64) (uint64, []uint64, error) {
+	if len(opsMap) == 0 && len(ranges) == 0 {
+		return root, retired, nil
+	}
+
+	var err error
+	root, retired, err = applyVacuumRangeDeltaBatches(root, ranges, retired, db.valueLogManager, func(root uint64, b *batch.Batch) (uint64, []uint64, error) {
+		newRoot, newRetired, _, err := z.Apply(root, b)
+		return newRoot, newRetired, err
+	})
+	if err != nil {
+		return 0, nil, err
 	}
 
 	keys := make([]string, 0, len(opsMap))

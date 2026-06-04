@@ -80,6 +80,50 @@ func TestTrustedCommandWALIntentAppendsCanonicalCollectionPayload(t *testing.T) 
 	}
 }
 
+func TestAppendRawKVSingleCommandWALSupportsDeleteRange(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	lsn, err := d.AppendRawKVSingleCommandWAL(commitlog.RawKVOperation{
+		Op:    commitlog.RawKVOpDeleteRange,
+		Key:   nil,
+		Value: []byte("m"),
+	}, true)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("AppendRawKVSingleCommandWAL DeleteRange: %v", err)
+	}
+	if lsn == 0 {
+		_ = d.Close()
+		t.Fatalf("AppendRawKVSingleCommandWAL DeleteRange lsn=0")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	if env.LSN != lsn || env.Kind != commitlog.CommandKindRawKVBatch || env.Scope != commitlog.CommandScopeRawKV || env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+		t.Fatalf("decoded DeleteRange command identity mismatch: %+v", env)
+	}
+	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpDeleteRange || ops[0].Key != nil || string(ops[0].Value) != "m" {
+		t.Fatalf("decoded DeleteRange ops=%+v, want single [nil,m)", ops)
+	}
+}
+
 func TestCommandWALReplayIntentZeroLSNFailsClosedM10C(t *testing.T) {
 	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
