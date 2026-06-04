@@ -51,6 +51,12 @@ func TestColumnVectorGraphAdjacencySourceStatsSkipEmptyNoopV3(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphNativeSearchFrontierHeapFanout2272(t *testing.T) {
+	if columnVectorGraphNativeFrontierHeapFanout != 4 {
+		t.Fatalf("frontier heap fanout=%d; update unrolled frontierSiftDown child scan before changing fanout", columnVectorGraphNativeFrontierHeapFanout)
+	}
+}
+
 func TestColumnVectorGraphNativeSearchFrontierHeapOrder1980(t *testing.T) {
 	candidates := []columnVectorGraphSearchCandidate{
 		{ordinal: 7, score: 0.70},
@@ -139,6 +145,64 @@ func assertColumnVectorGraphFrontierPopOrderDebug1980(t *testing.T, scratch *col
 	if got, ok := scratch.popFrontierDebug(debugCounters); ok {
 		t.Fatalf("debug frontier pop after drain=%+v, want empty", got)
 	}
+}
+
+func TestColumnVectorGraphNativeSearchTopInsertOrder2272(t *testing.T) {
+	candidates := []columnVectorGraphSearchCandidate{
+		{ordinal: 7, score: 0.70},
+		{ordinal: 3, score: 0.70},
+		{ordinal: 11, score: -0.10},
+		{ordinal: 1, score: 0.95},
+		{ordinal: 9, score: 0.20},
+		{ordinal: 5, score: 0.95},
+		{ordinal: 4, score: 0.20},
+		{ordinal: 2, score: -0.10},
+	}
+	const limit = 4
+	var scratch columnVectorGraphNativeSearchScratch
+	var debugScratch columnVectorGraphNativeSearchScratch
+	var stats columnVectorGraphNativeSearchStats
+	debugCounters := &columnVectorGraphNativeSearchDebugCounters{stats: &stats}
+	var want []columnVectorGraphSearchCandidate
+	var successes uint64
+	for i, candidate := range candidates {
+		before := append([]columnVectorGraphSearchCandidate(nil), want...)
+		want = insertColumnGraphTopForTest(want, limit, candidate)
+		wantAccepted := !columnVectorGraphCandidateSlicesEqual2272(before, want)
+		if gotAccepted := scratch.insertTop(limit, candidate); gotAccepted != wantAccepted {
+			t.Fatalf("insertTop[%d] accepted=%v want %v", i, gotAccepted, wantAccepted)
+		}
+		if !columnVectorGraphCandidateSlicesEqual2272(scratch.top, want) {
+			t.Fatalf("insertTop[%d] top=%+v want %+v", i, scratch.top, want)
+		}
+		if gotAccepted := debugScratch.insertTopDebug(limit, candidate, debugCounters); gotAccepted != wantAccepted {
+			t.Fatalf("debug insertTop[%d] accepted=%v want %v", i, gotAccepted, wantAccepted)
+		}
+		if !columnVectorGraphCandidateSlicesEqual2272(debugScratch.top, want) {
+			t.Fatalf("debug insertTop[%d] top=%+v want %+v", i, debugScratch.top, want)
+		}
+		if wantAccepted {
+			successes++
+		}
+	}
+	if stats.TopKInsertAttempts != uint64(len(candidates)) || stats.TopKInsertSuccesses != successes || stats.TopKInsertRejections != uint64(len(candidates))-successes {
+		t.Fatalf("debug top-k stats=%+v want attempts=%d successes=%d", stats, len(candidates), successes)
+	}
+	if stats.TopKComparisons == 0 || stats.TopKShiftSteps == 0 {
+		t.Fatalf("debug top-k comparison/shift stats=%+v want non-zero", stats)
+	}
+}
+
+func columnVectorGraphCandidateSlicesEqual2272(left, right []columnVectorGraphSearchCandidate) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func columnVectorGraphNativeSearchSmallBenchShapeV3() columnVectorGraphNativeSearchBenchShapeV3 {
