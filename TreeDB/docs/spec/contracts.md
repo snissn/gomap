@@ -84,6 +84,9 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 - Batch `Set`, `Delete`, and `DeleteRange(start,end)` are applied in submission
   order as one atomic write unit; range bounds are half-open `[start,end)`, with
   nil bounds unbounded and empty/reversed bounded ranges treated as no-ops.
+- Cached batch `DeleteRange` uses a serialized materialization fallback and
+  fails closed with `ErrBatchDeleteRangeTooLarge` if the bounded fallback cap is
+  exceeded; the backend TreeDB path applies range deletes natively.
 - `Write` commits without strict sync guarantee.
 - `WriteSync` commits with sync guarantee only in durable mode.
 

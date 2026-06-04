@@ -11,6 +11,9 @@ var (
 	ErrLocked = db.ErrLocked
 	// ErrMemtableFull indicates the cached memtable has reached its hard cap.
 	ErrMemtableFull = caching.ErrMemtableFull
+	// ErrBatchDeleteRangeTooLarge indicates the cached batch DeleteRange fallback
+	// exceeded its bounded materialization cap before publishing any mutation.
+	ErrBatchDeleteRangeTooLarge = caching.ErrBatchDeleteRangeTooLarge
 
 	// ErrClosed indicates the DB handle has been closed.
 	ErrClosed = db.ErrClosed
