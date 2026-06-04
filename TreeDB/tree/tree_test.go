@@ -90,9 +90,27 @@ func (r *trackedLeafLogPageReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, 
 
 type statefulLeafLogPageReader struct {
 	*mapValueReader
-	state LeafLogPageReadState
-	reads int
-	marks int
+	state    LeafLogPageReadState
+	reads    int
+	views    int
+	releases int
+	marks    int
+}
+
+type statefulLeafLogPageViewLease struct {
+	reader *statefulLeafLogPageReader
+}
+
+func (l *statefulLeafLogPageViewLease) ReleaseLeafLogPageView() {
+	if l != nil && l.reader != nil {
+		l.reader.releases++
+	}
+}
+
+func (l *statefulLeafLogPageViewLease) MarkLeafLogPageViewChecksumVerified() {
+	if l != nil && l.reader != nil {
+		l.reader.MarkLeafLogPageChecksumVerified(page.LeafLogPtr{})
+	}
 }
 
 func (r *statefulLeafLogPageReader) ReadChecksumEnabled() bool { return true }
@@ -109,6 +127,15 @@ func (r *statefulLeafLogPageReader) ReadLeafLogPageUnsafeToWithState(ptr page.Le
 		return out, true, r.state, nil
 	}
 	return val, false, r.state, nil
+}
+
+func (r *statefulLeafLogPageReader) ReadLeafLogPageUnsafeViewWithState(ptr page.LeafLogPtr) ([]byte, LeafLogPageViewLease, bool, LeafLogPageReadState, error) {
+	r.views++
+	val, err := r.mapValueReader.ReadUnsafe(ptr.ValuePtr())
+	if err != nil {
+		return nil, nil, false, LeafLogPageReadState{}, err
+	}
+	return val, &statefulLeafLogPageViewLease{reader: r}, true, r.state, nil
 }
 
 func (r *statefulLeafLogPageReader) MarkLeafLogPageChecksumVerified(ptr page.LeafLogPtr) {
@@ -145,6 +172,12 @@ func TestTreeLeafLogVerifiedCacheStateSkipsChecksum(t *testing.T) {
 	}
 	if afterFirst.ChecksumSkippedTotal != before.ChecksumSkippedTotal {
 		t.Fatalf("unexpected checksum skip before verified cache hit")
+	}
+	if reader.views != 1 || reader.releases != 1 {
+		t.Fatalf("view path calls/releases=%d/%d, want 1/1", reader.views, reader.releases)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("fallback leaf-log reads=%d, want view-state path", reader.reads)
 	}
 	if reader.marks != 1 || !reader.state.PageChecksumVerified {
 		t.Fatalf("marks=%d state=%+v, want one verified mark", reader.marks, reader.state)
