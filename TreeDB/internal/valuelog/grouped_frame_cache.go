@@ -7,10 +7,7 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-const (
-	groupedFrameCacheMaxShards = 64
-	groupedFrameEntryRetired   = uint64(1) << 63
-)
+const groupedFrameCacheMaxShards = 64
 
 // GroupedFrameCacheStats captures decoded grouped-frame cache behavior.
 // RetainedBytes is the currently retained decoded-raw bytes; BudgetBytes is the
@@ -130,10 +127,13 @@ type groupedFrameCacheShard struct {
 }
 
 type groupedFrameCacheSlot struct {
-	ptr atomic.Pointer[groupedFrameCacheEntry]
-}
+	// fp is zero when the slot is empty or being mutated. Readers check fp before
+	// taking the slot lock so non-matching slots are cheap and hit-path contention
+	// is bounded to the target slot only.
+	fp atomic.Uint64
+	mu sync.RWMutex
 
-type groupedFrameCacheEntry struct {
+	valid     bool
 	start     int64
 	verifyCRC bool
 	k         int
@@ -142,7 +142,6 @@ type groupedFrameCacheEntry struct {
 	raw       []byte
 	rawPooled bool
 	used      uint64
-	state     atomic.Uint64 // low bits are refs; high bit means retired
 }
 
 func newGroupedFrameCache(owner *File, entries, maxRaw int, maxBytes int64, budget *groupedFrameCacheBudget) *groupedFrameCache {
@@ -266,6 +265,20 @@ func groupedFrameCacheHash(start int64, verifyCRC bool) uint64 {
 	return x
 }
 
+func groupedFrameCacheFingerprint(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, rawLen uint32) uint64 {
+	x := groupedFrameCacheHash(start, verifyCRC)
+	x ^= uint64(uint32(k)) * 0x9e3779b185ebca87
+	x ^= uint64(rawLen) * 0xc2b2ae3d27d4eb4f
+	for i := 0; i < k+1 && i <= MaxFrameK; i++ {
+		y := uint64(offsets[i]) + 0x9e3779b97f4a7c15 + (x << 6) + (x >> 2)
+		x ^= y
+	}
+	if x == 0 {
+		return 1
+	}
+	return x
+}
+
 func (c *groupedFrameCache) shardFor(start int64, verifyCRC bool) *groupedFrameCacheShard {
 	if c == nil || len(c.shards) == 0 {
 		return nil
@@ -304,64 +317,19 @@ func groupedFrameOffsetsEqual(a, b [MaxFrameK + 1]uint32, k int) bool {
 	return true
 }
 
-func (e *groupedFrameCacheEntry) tryAcquire() bool {
-	if e == nil {
-		return false
-	}
-	for {
-		s := e.state.Load()
-		if s&groupedFrameEntryRetired != 0 {
-			return false
-		}
-		if s == groupedFrameEntryRetired-1 {
-			return false
-		}
-		if e.state.CompareAndSwap(s, s+1) {
-			return true
-		}
-	}
-}
-
-func (e *groupedFrameCacheEntry) release(c *groupedFrameCache) {
-	if e == nil {
+func (c *groupedFrameCache) releaseRaw(raw []byte, pooled bool) {
+	if c == nil || len(raw) == 0 {
 		return
 	}
-	s := e.state.Add(^uint64(0))
-	if s == groupedFrameEntryRetired {
-		c.releaseEntry(e)
-	}
-}
-
-func (e *groupedFrameCacheEntry) retire(c *groupedFrameCache) {
-	if e == nil {
+	c.releaseRetained(len(raw))
+	if !pooled {
 		return
 	}
-	for {
-		s := e.state.Load()
-		if s&groupedFrameEntryRetired != 0 {
-			return
-		}
-		if e.state.CompareAndSwap(s, s|groupedFrameEntryRetired) {
-			if s == 0 {
-				c.releaseEntry(e)
-			}
-			return
-		}
-	}
-}
-
-func (c *groupedFrameCache) releaseEntry(e *groupedFrameCacheEntry) {
-	if c == nil || e == nil {
-		return
-	}
-	c.releaseRetained(len(e.raw))
-	if e.rawPooled {
-		c.releases.Add(1)
-		if c.owner != nil && !c.owner.closed.Load() {
-			c.owner.releaseDecodeScratch(e.raw)
-		} else {
-			putDecodeScratch(e.raw)
-		}
+	c.releases.Add(1)
+	if c.owner != nil && !c.owner.closed.Load() {
+		c.owner.releaseDecodeScratch(raw)
+	} else {
+		putDecodeScratch(raw)
 	}
 }
 
@@ -376,26 +344,29 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 	if s == nil {
 		return nil, false, nil, false
 	}
+	wantFP := groupedFrameCacheFingerprint(start, verifyCRC, expectedK, expectedOffsets, expectedRawLen)
 	for i := range s.slots {
-		e := s.slots[i].ptr.Load()
-		if e == nil || e.start != start || e.verifyCRC != verifyCRC || e.k != expectedK || e.rawLen != expectedRawLen || !groupedFrameOffsetsEqual(e.offsets, expectedOffsets, expectedK) {
+		slot := &s.slots[i]
+		if slot.fp.Load() != wantFP {
 			continue
 		}
-		if !e.tryAcquire() {
+		slot.mu.RLock()
+		if slot.fp.Load() != wantFP || !slot.valid || slot.start != start || slot.verifyCRC != verifyCRC || slot.k != expectedK || slot.rawLen != expectedRawLen || !groupedFrameOffsetsEqual(slot.offsets, expectedOffsets, expectedK) {
+			slot.mu.RUnlock()
 			continue
 		}
-		valStart := e.offsets[subIndex]
-		valEnd := e.offsets[subIndex+1]
-		rawLen := e.rawLen
-		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen || e.offsets[e.k] != rawLen {
-			e.release(c)
+		valStart := slot.offsets[subIndex]
+		valEnd := slot.offsets[subIndex+1]
+		rawLen := slot.rawLen
+		if valEnd < valStart || valEnd > rawLen || uint32(len(slot.raw)) != rawLen || slot.offsets[slot.k] != rawLen {
+			slot.mu.RUnlock()
 			c.hits.Add(1)
 			return nil, false, ErrCorrupt, true
 		}
-		val := e.raw[valStart:valEnd]
+		val := slot.raw[valStart:valEnd]
 		if f != nil && f.templateLookup != nil && templ.IsEncodedPayload(val) {
 			encoded := append([]byte(nil), val...)
-			e.release(c)
+			slot.mu.RUnlock()
 			c.hits.Add(1)
 			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
@@ -408,13 +379,13 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 		if dst != nil && cap(dst) >= len(val) {
 			out := dst[:len(val)]
 			copy(out, val)
-			e.release(c)
+			slot.mu.RUnlock()
 			c.hits.Add(1)
 			return out, true, nil, true
 		}
 		out := make([]byte, len(val))
 		copy(out, val)
-		e.release(c)
+		slot.mu.RUnlock()
 		c.hits.Add(1)
 		return out, false, nil, true
 	}
@@ -438,7 +409,7 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 		return false
 	}
 	s := c.shardFor(start, verifyCRC)
-	if s == nil || s.cap <= 0 {
+	if s == nil || s.cap <= 0 || len(s.slots) == 0 {
 		c.skippedDisabled.Add(1)
 		return false
 	}
@@ -452,12 +423,9 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	// entry includes K/raw length/offsets, so stale state cannot be reused across
 	// frame shape changes at the same file-local start.
 	for i := range s.slots {
-		e := s.slots[i].ptr.Load()
-		if e != nil && e.start == start && e.verifyCRC == verifyCRC {
-			if old := s.slots[i].ptr.Swap(nil); old != nil {
-				old.retire(c)
-				c.evictions.Add(1)
-			}
+		slot := &s.slots[i]
+		if slot.valid && slot.start == start && slot.verifyCRC == verifyCRC {
+			s.evictSlotLocked(c, i)
 		}
 	}
 
@@ -486,17 +454,22 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	}
 
 	s.clock++
-	e := &groupedFrameCacheEntry{
-		start:     start,
-		verifyCRC: verifyCRC,
-		k:         k,
-		rawLen:    uint32(len(raw)),
-		offsets:   offsets,
-		raw:       raw,
-		rawPooled: pooled,
-		used:      s.clock,
-	}
-	s.slots[idx].ptr.Store(e)
+	slot := &s.slots[idx]
+	slot.mu.Lock()
+	// Block new readers while publishing; evictSlotLocked already clears fp, but
+	// empty slots may still hold zero from initialization.
+	slot.fp.Store(0)
+	slot.start = start
+	slot.verifyCRC = verifyCRC
+	slot.k = k
+	slot.rawLen = uint32(len(raw))
+	slot.offsets = offsets
+	slot.raw = raw
+	slot.rawPooled = pooled
+	slot.used = s.clock
+	slot.valid = true
+	slot.fp.Store(groupedFrameCacheFingerprint(start, verifyCRC, k, offsets, uint32(len(raw))))
+	slot.mu.Unlock()
 	c.stores.Add(1)
 	return true
 }
@@ -505,13 +478,13 @@ func (s *groupedFrameCacheShard) oldestIndexLocked() int {
 	idx := -1
 	var oldest uint64
 	for i := range s.slots {
-		e := s.slots[i].ptr.Load()
-		if e == nil {
+		slot := &s.slots[i]
+		if !slot.valid {
 			continue
 		}
-		if idx < 0 || e.used < oldest {
+		if idx < 0 || slot.used < oldest {
 			idx = i
-			oldest = e.used
+			oldest = slot.used
 		}
 	}
 	return idx
@@ -519,7 +492,7 @@ func (s *groupedFrameCacheShard) oldestIndexLocked() int {
 
 func (s *groupedFrameCacheShard) emptyIndexLocked() int {
 	for i := range s.slots {
-		if s.slots[i].ptr.Load() == nil {
+		if !s.slots[i].valid {
 			return i
 		}
 	}
@@ -530,11 +503,27 @@ func (s *groupedFrameCacheShard) evictSlotLocked(c *groupedFrameCache, idx int) 
 	if idx < 0 || idx >= len(s.slots) {
 		return false
 	}
-	old := s.slots[idx].ptr.Swap(nil)
-	if old == nil {
+	slot := &s.slots[idx]
+	if !slot.valid {
 		return false
 	}
-	old.retire(c)
+	// Clear the fingerprint before taking the writer lock so new readers skip the
+	// slot while we wait for existing readers to finish copying from raw.
+	slot.fp.Store(0)
+	slot.mu.Lock()
+	raw := slot.raw
+	pooled := slot.rawPooled
+	slot.valid = false
+	slot.start = 0
+	slot.verifyCRC = false
+	slot.k = 0
+	slot.rawLen = 0
+	slot.offsets = [MaxFrameK + 1]uint32{}
+	slot.raw = nil
+	slot.rawPooled = false
+	slot.used = 0
+	slot.mu.Unlock()
+	c.releaseRaw(raw, pooled)
 	c.evictions.Add(1)
 	return true
 }
@@ -546,17 +535,11 @@ func (c *groupedFrameCache) clear() {
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
-		entries := make([]*groupedFrameCacheEntry, 0, len(s.slots))
 		for j := range s.slots {
-			if e := s.slots[j].ptr.Swap(nil); e != nil {
-				entries = append(entries, e)
-			}
+			s.evictSlotLocked(c, j)
 		}
 		s.clock = 0
 		s.mu.Unlock()
-		for _, e := range entries {
-			e.retire(c)
-		}
 	}
 }
 
@@ -581,7 +564,7 @@ func (c *groupedFrameCache) stats() GroupedFrameCacheStats {
 	for i := range c.shards {
 		s := &c.shards[i]
 		for j := range s.slots {
-			if s.slots[j].ptr.Load() != nil {
+			if s.slots[j].valid {
 				st.Entries++
 			}
 		}
