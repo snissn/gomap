@@ -30,33 +30,34 @@ benchmark suite.
 External `go-ycsb`, local loopback TCP, `recordcount=100000`,
 `operationcount=10000`, `threadcount=16`, BSON document format, and zero YCSB
 operation errors. Run rows use the median total-throughput repeat from the
-June 2, 2026 report.
+latest-main June 3 HST / June 4 UTC report.
 
 | target | profile | load ops/sec | run ops/sec | run avg us | run p99 us |
 | --- | --- | ---: | ---: | ---: | ---: |
-| MongoDB 8 | baseline | 33,255.6 | 26,102.5 | 601.0 | 1,461.0 |
-| TreeDB nativewire | `command_wal_durable` | 77,065.3 | 120,500.7 | 128.0 | 477.0 |
-| TreeDB Mongo gateway | `command_wal_durable` | 57,370.1 | 74,544.7 | 206.0 | 649.0 |
+| MongoDB 8 | baseline | 38,755.4 | 26,494.1 | 595.0 | 1,275.0 |
+| TreeDB nativewire | `command_wal_durable` | 83,217.0 | 135,318.6 | 113.0 | 367.0 |
+| TreeDB Mongo gateway | `command_wal_durable` | 68,218.2 | 80,628.4 | 199.0 | 649.0 |
 
 Full report, commands, host context, run repeats, and artifact paths:
-[June 2 YCSB report](docs/benchmarks/ycsb_post_update_stack_2026-06-02.md).
+[June 3 latest-main YCSB report](docs/benchmarks/ycsb_latest_main_2026-06-03.md).
 
 ### Indexed Collection Insert Workload
 
-Two secondary indexes, June 2 current-code rerun, `100000` documents, batch
-size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec` is the timed
-insert measurement for the value-log outer-leaf layout; B/doc uses the fully
-compacted storage phase for the same TreeDB layout and SQLite after `VACUUM`.
+Two secondary indexes, latest-main June 3 HST / June 4 UTC rerun, `100000`
+documents, batch size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec`
+is the timed insert measurement for the value-log outer-leaf layout; B/doc uses
+the fully compacted storage phase for the same TreeDB layout and SQLite after
+`VACUUM`.
 
 | engine / format | layout | docs/sec | fully compacted B/doc |
 | --- | --- | ---: | ---: |
-| TreeDB template-v1 | data and index outer leaves in value log | 626,959 | 22.2 |
-| TreeDB JSON | data and index outer leaves in value log | 419,463 | 30.4 |
-| SQLite native columns | WAL normal | 330,797 | 156.7 |
-| SQLite JSON | WAL normal | 302,115 | 231.7 |
+| TreeDB template-v1 | data and index outer leaves in value log | 600,962 | 27.8 |
+| TreeDB JSON | data and index outer leaves in value log | 450,857 | 33.7 |
+| SQLite native columns | WAL normal | 344,353 | 156.7 |
+| SQLite JSON | WAL normal | 296,912 | 231.7 |
 
 Source:
-[June 2 two-index insert rerun](docs/benchmarks/collections_insert_two_index_current_2026-06-02.md).
+[June 3 latest-main two-index insert rerun](docs/benchmarks/collections_insert_two_index_latest_main_2026-06-03.md).
 
 ### Collection Read And Lookup Workload
 
@@ -178,12 +179,12 @@ More detail: `docs/TREEDB_PROFILES.md` and `docs/TREEDB_WRITE_PATHS.md`.
 Current YCSB status and rerun commands:
 
 - `docs/benchmarks/ycsb_mongodb_treedb_current.md`
-- `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md`
+- `docs/benchmarks/ycsb_latest_main_2026-06-03.md`
 - `scripts/ycsb_compare_mongodb_treedb.sh`
 
 Collection and engine benchmark runbooks:
 
-- `docs/benchmarks/collections_insert_two_index_current_2026-06-02.md`
+- `docs/benchmarks/collections_insert_two_index_latest_main_2026-06-03.md`
 - `docs/benchmarks/treedb_canonical_benchmark_runbook.md`
 - `docs/benchmarks/collections_canonical_benchmark.md`
 - `cmd/unified_bench/README.md`
