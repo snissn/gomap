@@ -158,6 +158,76 @@ func TestColumnPartImageCompressedNumericScalars2300(t *testing.T) {
 	}
 }
 
+func TestColumnPartImageMixedActualCompressionKeepsRequestedCompression2300(t *testing.T) {
+	const rows = 4096
+	const blockRows = 2048
+	ids := make([]int64, rows)
+	u32 := make([]uint32, rows)
+	x := uint32(0x9e3779b9)
+	for i := 0; i < blockRows; i++ {
+		ids[i] = int64(i)
+		x ^= x << 13
+		x ^= x >> 17
+		x ^= x << 5
+		u32[i] = x
+	}
+	for i := blockRows; i < rows; i++ {
+		ids[i] = int64(i)
+		u32[i] = 7
+	}
+	part, err := BuildColumnPart(2302, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true, StatsDisabled: true},
+			{Name: "u32", Type: ColumnTypeUint32, Encoding: EncodingRawUint32, Compression: CompressionLZ4, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: blockRows, DefaultCodecBlockRows: blockRows},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:          rows,
+		Columns:       map[string][]int64{"id": ids},
+		Uint32Columns: map[string][]uint32{"u32": u32},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	blocks := part.Columns["u32"].Blocks
+	if len(blocks) != 2 {
+		t.Fatalf("u32 blocks=%d want 2", len(blocks))
+	}
+	if blocks[0].Descriptor.Compression != CompressionNone || blocks[1].Descriptor.Compression != CompressionLZ4 {
+		t.Fatalf("u32 actual block compression=(%s,%s) want (%s,%s)", blocks[0].Descriptor.Compression, blocks[1].Descriptor.Compression, CompressionNone, CompressionLZ4)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"id": "int64", "u32": "uint32"}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	section, ok := image.columnDataSection("u32")
+	if !ok {
+		t.Fatalf("missing u32 column_data section")
+	}
+	if section.Compression != CompressionLZ4 {
+		t.Fatalf("u32 section compression=%s want requested %s", section.Compression, CompressionLZ4)
+	}
+	reconstructed, err := ColumnPartFromImage(image)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	reconstructedColumn := reconstructed.Columns["u32"]
+	if reconstructedColumn.Definition.Compression != CompressionLZ4 {
+		t.Fatalf("reconstructed u32 definition compression=%s want requested %s", reconstructedColumn.Definition.Compression, CompressionLZ4)
+	}
+	if reconstructedColumn.Blocks[0].Descriptor.Compression != CompressionNone || reconstructedColumn.Blocks[1].Descriptor.Compression != CompressionLZ4 {
+		t.Fatalf("reconstructed u32 actual block compression=(%s,%s) want (%s,%s)", reconstructedColumn.Blocks[0].Descriptor.Compression, reconstructedColumn.Blocks[1].Descriptor.Compression, CompressionNone, CompressionLZ4)
+	}
+	if _, err := BuildColumnPartImage(reconstructed, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"id": "int64", "u32": "uint32"}}); err != nil {
+		t.Fatalf("BuildColumnPartImage reconstructed mixed-compression part: %v", err)
+	}
+}
+
 func TestColumnPartImageCompressedDictionaries2300(t *testing.T) {
 	const rows = 1024
 	const cardinality = 128

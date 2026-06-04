@@ -314,6 +314,9 @@ func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageR
 	if err := attachColumnPayloadsFromImage(image, columns); err != nil {
 		return nil, err
 	}
+	if err := restoreColumnDefinitionCompressionFromImageSections(image, columns); err != nil {
+		return nil, err
+	}
 	if opts.ValidateRowLocators {
 		if err := validateDecodedRowLocatorsPrimaryKey(desc, columns, locators); err != nil {
 			return nil, err
@@ -1821,6 +1824,41 @@ func attachBytesColumnPayloadsFromImage(image ColumnPartImage, name string, colu
 		return fmt.Errorf("typedcolumn: image column %s covers %d rows, want %d", name, expectedFirstRow, global.Rows)
 	}
 	columns[name] = column
+	return nil
+}
+
+func restoreColumnDefinitionCompressionFromImageSections(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
+	for name, column := range columns {
+		if column.Definition.Encoding == EncodingRawUint32OffsetsList || column.Definition.Encoding == EncodingRawBytesOffsets {
+			continue
+		}
+		section, ok := image.columnDataSection(name)
+		if !ok {
+			return fmt.Errorf("typedcolumn: image missing column data section %s", name)
+		}
+		if section.Encoding != column.Definition.Encoding {
+			return fmt.Errorf("typedcolumn: image column %s section encoding=%s definition=%s", name, section.Encoding, column.Definition.Encoding)
+		}
+		for i, block := range column.Blocks {
+			if block.Descriptor.Encoding != section.Encoding {
+				return fmt.Errorf("typedcolumn: image column %s block %d encoding=%s section=%s", name, i, block.Descriptor.Encoding, section.Encoding)
+			}
+			switch section.Compression {
+			case CompressionNone:
+				if block.Descriptor.Compression != CompressionNone {
+					return fmt.Errorf("typedcolumn: image column %s block %d compression=%s section=%s", name, i, block.Descriptor.Compression, section.Compression)
+				}
+			case CompressionSnappy, CompressionLZ4:
+				if block.Descriptor.Compression != section.Compression && block.Descriptor.Compression != CompressionNone {
+					return fmt.Errorf("typedcolumn: image column %s block %d compression=%s section requested=%s", name, i, block.Descriptor.Compression, section.Compression)
+				}
+			default:
+				return fmt.Errorf("typedcolumn: image column %s section compression=%s is unsupported", name, section.Compression)
+			}
+		}
+		column.Definition.Compression = section.Compression
+		columns[name] = column
+	}
 	return nil
 }
 

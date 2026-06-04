@@ -2793,8 +2793,11 @@ func TestRunColumnStoreSuiteTypedCompressionSurfacesTypedColumnPartCodecRowsM195
 		}
 		if strings.HasPrefix(attr.CodecLayoutLabel, "typed_column_part/section/dictionaries/") && attr.CompressionPolicyLabel == "requested_snappy" {
 			foundDictionaryTarget = true
-			if attr.SupportState != columnStoreCompressionSupportDeferred || attr.ActualCompression != columnStoreCompressionNoneLabel || attr.SupportReason == "" {
-				t.Fatalf("dictionary section attribution=%+v want deferred target row", attr)
+			if attr.RequestedCompression != "snappy" || attr.ActualCompression != "snappy" || attr.SupportState != columnStoreCompressionSupportSupported {
+				t.Fatalf("dictionary section attribution=%+v want requested/actual snappy supported", attr)
+			}
+			if attr.CompressedBytes <= 0 || attr.RawBytes <= attr.CompressedBytes || attr.DecompressedBytes != attr.RawBytes || attr.CompressionRatio <= 0 || attr.CompressionRatio >= 1 {
+				t.Fatalf("dictionary section bytes=%+v want compressed smaller than raw", attr)
 			}
 		}
 		if !strings.HasPrefix(attr.CodecLayoutLabel, "typed_column_part/") || strings.Contains(attr.CodecLayoutLabel, "/section/") || attr.CompressionPolicyLabel != "requested_snappy" {
@@ -2818,7 +2821,7 @@ func TestRunColumnStoreSuiteTypedCompressionSurfacesTypedColumnPartCodecRowsM195
 		t.Fatalf("missing requested_snappy locator section codec row in %+v", report.CodecLayouts)
 	}
 	if !foundDictionaryTarget {
-		t.Fatalf("missing requested_snappy dictionary section target row in %+v", report.CodecLayouts)
+		t.Fatalf("missing requested_snappy dictionary section codec row in %+v", report.CodecLayouts)
 	}
 }
 
