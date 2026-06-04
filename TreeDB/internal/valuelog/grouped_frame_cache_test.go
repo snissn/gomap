@@ -334,6 +334,28 @@ func TestGroupedFrameCache_StatsDoesNotCreateIdleCache(t *testing.T) {
 	}
 }
 
+func TestGroupedFrameCache_ConfigSettersDoNotCreateIdleCache(t *testing.T) {
+	f := &File{}
+	f.setGroupedFrameCacheEntries(4)
+	f.setGroupedFrameCacheMaxRawBytes(1024)
+	f.setGroupedFrameCacheMaxBytes(1024)
+	f.setGroupedFrameCacheBudget(newGroupedFrameCacheBudget(2048))
+	if cache := f.groupedFrameCache.Load(); cache != nil {
+		t.Fatalf("config setters created grouped cache")
+	}
+	if stats := f.groupedFrameCacheDetailedStats(); stats != (GroupedFrameCacheStats{}) {
+		t.Fatalf("idle stats should remain zero after config setters, got %+v", stats)
+	}
+	offsets := groupedCacheOffsets(16)
+	if !f.groupedFrameCacheStore(1, false, 1, offsets, bytes.Repeat([]byte{'x'}, 16), false) {
+		t.Fatalf("store after idle config setters")
+	}
+	stats := f.groupedFrameCacheDetailedStats()
+	if stats.Stores != 1 || stats.Entries != 1 || stats.Capacity != 4 || stats.BudgetBytes != 2048 {
+		t.Fatalf("expected configured live cache after store, got %+v", stats)
+	}
+}
+
 func TestGroupedFrameCache_StatsConcurrentAdmissions(t *testing.T) {
 	f := newTestGroupedCacheFile(16, 1024, 1024)
 	var wg sync.WaitGroup

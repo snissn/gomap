@@ -284,9 +284,10 @@ func (f *File) resetGroupedFrameCacheLocked() {
 	}
 	old := f.groupedFrameCache.Load()
 	f.groupedFrameCache.Store(nil)
-	if old != nil {
-		old.clear()
+	if old == nil {
+		return
 	}
+	old.clear()
 	if f.closed.Load() {
 		return
 	}
@@ -356,8 +357,8 @@ func (f *File) ensureGroupedFrameCache() *groupedFrameCache {
 	f.groupedMu.Lock()
 	cache := f.groupedFrameCache.Load()
 	if cache == nil && !f.closed.Load() {
-		f.resetGroupedFrameCacheLocked()
-		cache = f.groupedFrameCache.Load()
+		cache = newGroupedFrameCache(f, f.groupedFrameCacheEntries, f.groupedFrameCacheMaxRaw, f.groupedFrameCacheMaxBytes, f.groupedFrameCacheBudget)
+		f.groupedFrameCache.Store(cache)
 	}
 	f.groupedMu.Unlock()
 	return cache

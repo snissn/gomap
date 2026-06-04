@@ -888,8 +888,8 @@ func TestValueLogManager_GroupedFrameCache_MaxRawBytesSkipsOversize(t *testing.T
 	}
 
 	hits, misses, entries, capacity := f.groupedFrameCacheStats()
-	if capacity != 4 {
-		t.Fatalf("cache capacity=%d want=4", capacity)
+	if capacity != 0 {
+		t.Fatalf("oversized reads should not create idle cache metadata, capacity=%d", capacity)
 	}
 	if entries != 0 {
 		t.Fatalf("expected no cached entries when frame exceeds max raw bytes, got=%d", entries)
@@ -897,8 +897,8 @@ func TestValueLogManager_GroupedFrameCache_MaxRawBytesSkipsOversize(t *testing.T
 	if hits != 0 {
 		t.Fatalf("expected zero cache hits for oversized frame, got=%d", hits)
 	}
-	if misses < 2 {
-		t.Fatalf("expected misses on both reads for oversized frame, got=%d", misses)
+	if misses != 0 {
+		t.Fatalf("oversized reads should not create miss stats without a cache, got=%d", misses)
 	}
 }
 
@@ -953,8 +953,8 @@ func TestValueLogManager_ReadUnsafeTo_CompressedGroupedFallbackUsesCache(t *test
 	}
 
 	hits0, misses0, entries0, _ := f.groupedFrameCacheStats()
-	if misses0 == 0 {
-		t.Fatalf("expected first compressed grouped read to miss cache")
+	if hits0 != 0 {
+		t.Fatalf("unexpected grouped cache hit on first read: %d", hits0)
 	}
 	if entries0 == 0 {
 		t.Fatalf("expected first compressed grouped read to populate cache")
@@ -1047,8 +1047,8 @@ func TestValueLogManager_ReadUnsafeTo_CompressedGroupedMmapUsesCache(t *testing.
 	}
 
 	hits0, misses0, entries0, _ := f.groupedFrameCacheStats()
-	if misses0 == 0 {
-		t.Fatalf("expected first mmap grouped read to miss cache")
+	if hits0 != 0 {
+		t.Fatalf("unexpected grouped cache hit on first mmap read: %d", hits0)
 	}
 	if entries0 == 0 {
 		t.Fatalf("expected first mmap grouped read to populate cache")

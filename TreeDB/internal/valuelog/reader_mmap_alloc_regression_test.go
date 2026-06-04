@@ -165,11 +165,11 @@ func TestFileReadViaMmapViewTo_DoesNotCacheGroupedFrameWithNilDst(t *testing.T) 
 	}
 
 	hits1, misses1, entries1, _ := f.groupedFrameCacheStats()
-	if misses1 <= misses0 {
-		t.Fatalf("expected grouped-frame miss on first read: before=%d after=%d", misses0, misses1)
-	}
 	if hits1 != hits0 {
 		t.Fatalf("unexpected grouped-frame hit on first read: before=%d after=%d", hits0, hits1)
+	}
+	if misses1 != misses0 {
+		t.Fatalf("nil-dst miss should not create grouped cache stats: before=%d after=%d", misses0, misses1)
 	}
 	if entries1 != 0 {
 		t.Fatalf("expected no grouped-frame cache entry for nil dst read, got entries=%d", entries1)
@@ -186,12 +186,15 @@ func TestFileReadViaMmapViewTo_DoesNotCacheGroupedFrameWithNilDst(t *testing.T) 
 		t.Fatalf("second read mismatch")
 	}
 
-	hits2, misses2, _, _ := f.groupedFrameCacheStats()
+	hits2, misses2, entries2, _ := f.groupedFrameCacheStats()
 	if hits2 != hits1 {
 		t.Fatalf("unexpected grouped-frame cache hit on second nil-dst read: before=%d after=%d", hits1, hits2)
 	}
-	if misses2 <= misses1 {
-		t.Fatalf("expected grouped-frame miss increase on second nil-dst read: before=%d after=%d", misses1, misses2)
+	if misses2 != misses1 {
+		t.Fatalf("second nil-dst miss should not create grouped cache stats: before=%d after=%d", misses1, misses2)
+	}
+	if entries2 != 0 {
+		t.Fatalf("expected nil-dst reads to avoid grouped-frame entries, got entries=%d", entries2)
 	}
 }
 
