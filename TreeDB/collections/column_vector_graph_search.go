@@ -1492,47 +1492,74 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 					tileCap := len(adjacency) - i
 					scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, tileCap)
 					tile := scratch.scoreTileOrdinals[:0]
-					for i < len(adjacency) && len(tile) < tileCap {
-						neighborIndex := i
-						neighbor := adjacency[i]
-						i++
-						if countLoopEdges {
-							loopEdgeVisits++
+					if debugStats == nil && debugCounters == nil {
+						// Keep the steady-state visited check/mark loop free of
+						// benchmark-debug counter branches; the debug path below
+						// preserves the #2271 counter contract.
+						for i < len(adjacency) && len(tile) < tileCap {
+							neighborIndex := i
+							neighbor := adjacency[i]
+							i++
+							if countLoopEdges {
+								loopEdgeVisits++
+							}
+							if uint64(neighbor) >= uint64(rowCount) {
+								return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, neighborIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+							}
+							neighborOrdinal := int(neighbor)
+							if visitMarks[neighborOrdinal] == visitEpoch {
+								continue
+							}
+							if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+								visitMarks[neighborOrdinal] = visitEpoch
+								continue
+							}
+							visitMarks[neighborOrdinal] = visitEpoch
+							tile = append(tile, neighborOrdinal)
 						}
-						if debugStats != nil {
-							debugStats.Layer0EdgeVisits++
-						}
-						if uint64(neighbor) >= uint64(rowCount) {
-							return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, neighborIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
-						}
-						neighborOrdinal := int(neighbor)
-						if visitMarks[neighborOrdinal] == visitEpoch {
+					} else {
+						for i < len(adjacency) && len(tile) < tileCap {
+							neighborIndex := i
+							neighbor := adjacency[i]
+							i++
+							if countLoopEdges {
+								loopEdgeVisits++
+							}
+							if debugStats != nil {
+								debugStats.Layer0EdgeVisits++
+							}
+							if uint64(neighbor) >= uint64(rowCount) {
+								return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, neighborIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+							}
+							neighborOrdinal := int(neighbor)
+							if visitMarks[neighborOrdinal] == visitEpoch {
+								if debugStats != nil {
+									debugStats.VisitedMarkChecks++
+									debugStats.VisitedMarkHits++
+									debugStats.AlreadyVisitedSkips++
+									debugStats.SkippedNeighbors++
+									debugStats.Layer0AlreadyVisitedSkips++
+								}
+								continue
+							}
 							if debugStats != nil {
 								debugStats.VisitedMarkChecks++
-								debugStats.VisitedMarkHits++
-								debugStats.AlreadyVisitedSkips++
-								debugStats.SkippedNeighbors++
-								debugStats.Layer0AlreadyVisitedSkips++
+								debugStats.VisitedMarkMisses++
 							}
-							continue
-						}
-						if debugStats != nil {
-							debugStats.VisitedMarkChecks++
-							debugStats.VisitedMarkMisses++
-						}
-						if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+							if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+								if debugCounters != nil {
+									debugCounters.recordFilterSkip(true)
+									debugCounters.recordVisitedInsert()
+								}
+								visitMarks[neighborOrdinal] = visitEpoch
+								continue
+							}
 							if debugCounters != nil {
-								debugCounters.recordFilterSkip(true)
 								debugCounters.recordVisitedInsert()
 							}
 							visitMarks[neighborOrdinal] = visitEpoch
-							continue
+							tile = append(tile, neighborOrdinal)
 						}
-						if debugCounters != nil {
-							debugCounters.recordVisitedInsert()
-						}
-						visitMarks[neighborOrdinal] = visitEpoch
-						tile = append(tile, neighborOrdinal)
 					}
 					if len(tile) == 0 {
 						continue

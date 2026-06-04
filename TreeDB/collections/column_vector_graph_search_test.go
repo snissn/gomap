@@ -57,6 +57,61 @@ func TestColumnVectorGraphNativeSearchFrontierHeapFanout2272(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphNativeSearchVisitedEpochReuseGrowthWrap2273(t *testing.T) {
+	var scratch columnVectorGraphNativeSearchScratch
+	prepare := func(rows int) {
+		t.Helper()
+		if err := scratch.prepare(rows, 4, 2, 2, 4, 4, 0); err != nil {
+			t.Fatalf("prepare rows=%d: %v", rows, err)
+		}
+	}
+
+	prepare(3)
+	firstEpoch := scratch.visitEpoch
+	if firstEpoch == 0 || len(scratch.visitMarks) != 3 {
+		t.Fatalf("first prepare epoch=%d marks=%d", firstEpoch, len(scratch.visitMarks))
+	}
+	if !scratch.markVisited(1) || scratch.markVisited(1) {
+		t.Fatalf("markVisited did not report first mark then duplicate for epoch=%d marks=%v", scratch.visitEpoch, scratch.visitMarks)
+	}
+	if seed, ok := columnVectorGraphNextCandidateSeed(1, 3, typedcolumn.RowSelection{}, false, scratch.visitMarks, scratch.visitEpoch); !ok || seed != 2 {
+		t.Fatalf("seed after visited mark=(%d,%v), want (2,true)", seed, ok)
+	}
+
+	prepare(3)
+	if scratch.visitEpoch != firstEpoch+1 {
+		t.Fatalf("reuse prepare epoch=%d want %d", scratch.visitEpoch, firstEpoch+1)
+	}
+	if !scratch.markVisited(1) {
+		t.Fatalf("reused scratch treated prior epoch mark as current: epoch=%d marks=%v", scratch.visitEpoch, scratch.visitMarks)
+	}
+
+	prepare(5)
+	if len(scratch.visitMarks) != 5 {
+		t.Fatalf("grown marks len=%d want 5", len(scratch.visitMarks))
+	}
+	if !scratch.markVisited(4) || !scratch.markVisited(2) {
+		t.Fatalf("grown scratch did not accept first marks: epoch=%d marks=%v", scratch.visitEpoch, scratch.visitMarks)
+	}
+
+	for i := range scratch.visitMarks {
+		scratch.visitMarks[i] = math.MaxUint64
+	}
+	scratch.visitEpoch = math.MaxUint64
+	prepare(5)
+	if scratch.visitEpoch != 1 {
+		t.Fatalf("wrap prepare epoch=%d want 1", scratch.visitEpoch)
+	}
+	for i, mark := range scratch.visitMarks {
+		if mark != 0 {
+			t.Fatalf("wrap mark[%d]=%d want cleared 0; marks=%v", i, mark, scratch.visitMarks)
+		}
+	}
+	if !scratch.markVisited(3) || scratch.markVisited(3) {
+		t.Fatalf("markVisited after wrap did not report first mark then duplicate: epoch=%d marks=%v", scratch.visitEpoch, scratch.visitMarks)
+	}
+}
+
 func TestColumnVectorGraphNativeSearchFrontierHeapOrder1980(t *testing.T) {
 	candidates := []columnVectorGraphSearchCandidate{
 		{ordinal: 7, score: 0.70},
