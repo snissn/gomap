@@ -294,6 +294,13 @@ func (f *File) resetGroupedFrameCacheLocked() {
 	f.groupedFrameCache.Store(newGroupedFrameCache(f, f.groupedFrameCacheEntries, f.groupedFrameCacheMaxRaw, f.groupedFrameCacheMaxBytes, f.groupedFrameCacheBudget))
 }
 
+func (f *File) resetGroupedFrameCacheIfPresentLocked() {
+	if f == nil || f.groupedFrameCache.Load() == nil {
+		return
+	}
+	f.resetGroupedFrameCacheLocked()
+}
+
 func (f *File) setGroupedFrameCacheBudget(budget *groupedFrameCacheBudget) {
 	f.groupedMu.Lock()
 	if f.groupedFrameCacheBudget == budget {
@@ -301,7 +308,7 @@ func (f *File) setGroupedFrameCacheBudget(budget *groupedFrameCacheBudget) {
 		return
 	}
 	f.groupedFrameCacheBudget = budget
-	f.resetGroupedFrameCacheLocked()
+	f.resetGroupedFrameCacheIfPresentLocked()
 	f.groupedMu.Unlock()
 }
 
@@ -315,7 +322,7 @@ func (f *File) setGroupedFrameCacheEntries(entries int) {
 		return
 	}
 	f.groupedFrameCacheEntries = entries
-	f.resetGroupedFrameCacheLocked()
+	f.resetGroupedFrameCacheIfPresentLocked()
 	f.groupedMu.Unlock()
 }
 
@@ -329,7 +336,7 @@ func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
 		return
 	}
 	f.groupedFrameCacheMaxRaw = maxRaw
-	f.resetGroupedFrameCacheLocked()
+	f.resetGroupedFrameCacheIfPresentLocked()
 	f.groupedMu.Unlock()
 }
 
@@ -343,7 +350,7 @@ func (f *File) setGroupedFrameCacheMaxBytes(maxBytes int64) {
 		return
 	}
 	f.groupedFrameCacheMaxBytes = maxBytes
-	f.resetGroupedFrameCacheLocked()
+	f.resetGroupedFrameCacheIfPresentLocked()
 	f.groupedMu.Unlock()
 }
 
