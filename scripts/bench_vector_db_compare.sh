@@ -28,6 +28,13 @@ MIN_RECALL="${MIN_RECALL:-0.95}"
 TREEDB_QUANTIZED_MIN_RECALL="${TREEDB_QUANTIZED_MIN_RECALL:-0}"
 TREEDB_QUANTIZED_ONLY_MIN_RECALL="${TREEDB_QUANTIZED_ONLY_MIN_RECALL:-$TREEDB_QUANTIZED_MIN_RECALL}"
 TREEDB_QUANTIZED_RERANK_MIN_RECALL="${TREEDB_QUANTIZED_RERANK_MIN_RECALL:-$TREEDB_QUANTIZED_MIN_RECALL}"
+VALIDATE_DOCS="${VALIDATE_DOCS:-16}"
+TREEDB_COMPACT="${TREEDB_COMPACT:-}"
+TREEDB_COMPACT_SYNC_EACH_PHASE="${TREEDB_COMPACT_SYNC_EACH_PHASE:-}"
+TREEDB_VALUE_POINTER_THRESHOLD="${TREEDB_VALUE_POINTER_THRESHOLD:-}"
+TREEDB_LEAF_GENERATION_SEGMENT_TARGET="${TREEDB_LEAF_GENERATION_SEGMENT_TARGET:-}"
+TREEDB_REQUIRE_VALUE_LOG_BYTES="${TREEDB_REQUIRE_VALUE_LOG_BYTES:-}"
+TREEDB_REQUIRE_LEAF_VLOG_BYTES="${TREEDB_REQUIRE_LEAF_VLOG_BYTES:-}"
 NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
 VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
 
@@ -151,6 +158,28 @@ validate_backend_configuration
 if [[ -z "$TREEDB_COLUMN_GRAPH_EF_SEARCH" ]]; then
 	TREEDB_COLUMN_GRAPH_EF_SEARCH="$EF_SEARCH"
 fi
+
+# Preserve the existing TreeDB harness default for document validation, and pass
+# the remaining storage knobs only when the caller explicitly sets their env var.
+treedb_storage_args=(-validate-docs "$VALIDATE_DOCS")
+if [[ -n "$TREEDB_COMPACT" ]]; then
+	treedb_storage_args+=("-compact=$TREEDB_COMPACT")
+fi
+if [[ -n "$TREEDB_COMPACT_SYNC_EACH_PHASE" ]]; then
+	treedb_storage_args+=("-compact-sync-each-phase=$TREEDB_COMPACT_SYNC_EACH_PHASE")
+fi
+if [[ -n "$TREEDB_VALUE_POINTER_THRESHOLD" ]]; then
+	treedb_storage_args+=(-value-pointer-threshold "$TREEDB_VALUE_POINTER_THRESHOLD")
+fi
+if [[ -n "$TREEDB_LEAF_GENERATION_SEGMENT_TARGET" ]]; then
+	treedb_storage_args+=(-leaf-generation-segment-target "$TREEDB_LEAF_GENERATION_SEGMENT_TARGET")
+fi
+if [[ -n "$TREEDB_REQUIRE_VALUE_LOG_BYTES" ]]; then
+	treedb_storage_args+=("-require-value-log-bytes=$TREEDB_REQUIRE_VALUE_LOG_BYTES")
+fi
+if [[ -n "$TREEDB_REQUIRE_LEAF_VLOG_BYTES" ]]; then
+	treedb_storage_args+=("-require-leaf-vlog-bytes=$TREEDB_REQUIRE_LEAF_VLOG_BYTES")
+fi
 mkdir -p "$RUN_DIR"
 
 cat >"$RUN_DIR/README.md" <<EOF
@@ -164,6 +193,7 @@ cat >"$RUN_DIR/README.md" <<EOF
 - dims: \`$DIMS\`
 - queries: \`$QUERIES\`
 - validate queries: \`$VALIDATE_QUERIES\`
+- validate docs: \`$VALIDATE_DOCS\`
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
@@ -171,6 +201,14 @@ cat >"$RUN_DIR/README.md" <<EOF
 - minimum recall: \`$MIN_RECALL\`
 - TreeDB quantized index/rerank candidates: \`$TREEDB_QUANTIZED_INDEX_NAME / $TREEDB_QUANTIZED_RERANK_CANDIDATES\`
 - TreeDB quantized-only/rerank minimum recall: \`$TREEDB_QUANTIZED_ONLY_MIN_RECALL / $TREEDB_QUANTIZED_RERANK_MIN_RECALL\`
+- TreeDB storage/validation knobs:
+  - \`VALIDATE_DOCS=$VALIDATE_DOCS\`
+  - \`TREEDB_COMPACT=${TREEDB_COMPACT:-<unset>}\`
+  - \`TREEDB_COMPACT_SYNC_EACH_PHASE=${TREEDB_COMPACT_SYNC_EACH_PHASE:-<unset>}\`
+  - \`TREEDB_VALUE_POINTER_THRESHOLD=${TREEDB_VALUE_POINTER_THRESHOLD:-<unset>}\`
+  - \`TREEDB_LEAF_GENERATION_SEGMENT_TARGET=${TREEDB_LEAF_GENERATION_SEGMENT_TARGET:-<unset>}\`
+  - \`TREEDB_REQUIRE_VALUE_LOG_BYTES=${TREEDB_REQUIRE_VALUE_LOG_BYTES:-<unset>}\`
+  - \`TREEDB_REQUIRE_LEAF_VLOG_BYTES=${TREEDB_REQUIRE_LEAF_VLOG_BYTES:-<unset>}\`
 - Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
 
 This run compares persistent database-tier ANN search:
@@ -234,7 +272,7 @@ if contains_backend treedb; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
+		"${treedb_storage_args[@]}" \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -257,7 +295,7 @@ if contains_backend treedb_column_graph; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
+		"${treedb_storage_args[@]}" \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -282,7 +320,7 @@ if contains_backend treedb_column_graph_quantized_only; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
+		"${treedb_storage_args[@]}" \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -308,7 +346,7 @@ if contains_backend treedb_column_graph_quantized_rerank; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
+		"${treedb_storage_args[@]}" \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
