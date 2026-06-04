@@ -19,6 +19,7 @@ const (
 	LeafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
 	defaultLeafPageReadCacheEntries = 32768
 	maxLeafPageReadCacheEntries     = 1 << 18
+	leafPageReadCacheWays           = 4
 	// Bound miss-admission observer retries so high contention yields a skipped
 	// admission instead of unbounded reader spinning. 64 odd-epoch yields cover
 	// transient reset windows; 256 stable-epoch retries bound CAS churn; and a
@@ -94,12 +95,12 @@ type leafPageReadCacheSlot struct {
 	owner                  *leafPageReadCache
 	mu                     sync.RWMutex
 	key                    leafPageReadCacheKey
+	keyFP                  atomic.Uint64
 	data                   []byte
 	valid                  bool
 	recordChecksumVerified bool
 	pageChecksumVerified   atomic.Bool
-	readMissCandidateFP    atomic.Uint64
-	readMissEpoch          atomic.Uint64
+	recent                 atomic.Bool
 }
 
 func (s *leafPageReadCacheSlot) ReleaseLeafLogPageView() {
@@ -118,8 +119,21 @@ func (s *leafPageReadCacheSlot) MarkLeafLogPageViewChecksumVerified() {
 	}
 }
 
+type leafPageReadMissAdmissionLane struct {
+	candidateFP atomic.Uint64
+	epoch       atomic.Uint64
+}
+
+type leafPageReadCacheBucket struct {
+	mu                 sync.Mutex
+	readMissCandidates [leafPageReadCacheWays]leafPageReadMissAdmissionLane
+	clockHand          uint32
+}
+
 type leafPageReadCache struct {
-	slots []leafPageReadCacheSlot
+	slots   []leafPageReadCacheSlot
+	buckets []leafPageReadCacheBucket
+	ways    int
 
 	hits      atomic.Uint64
 	misses    atomic.Uint64
@@ -127,8 +141,12 @@ type leafPageReadCache struct {
 	evictions atomic.Uint64
 	entries   atomic.Uint64
 
+	conflictEvictions atomic.Uint64
+	capacityEvictions atomic.Uint64
+
 	readMissAdmissionSkips          atomic.Uint64
 	readMissAdmissionCandidateSkips atomic.Uint64
+	readMissAdmissionLockSkips      atomic.Uint64
 	readMissAdmissionStores         atomic.Uint64
 
 	recordChecksumVerifiedStores atomic.Uint64
@@ -144,11 +162,16 @@ type leafPageReadCacheStats struct {
 	Misses                          uint64
 	Stores                          uint64
 	Evictions                       uint64
+	ConflictEvictions               uint64
+	CapacityEvictions               uint64
 	Entries                         uint64
 	Capacity                        uint64
+	Buckets                         uint64
+	Ways                            uint64
 	Bytes                           uint64
 	ReadMissAdmissionSkips          uint64
 	ReadMissAdmissionCandidateSkips uint64
+	ReadMissAdmissionLockSkips      uint64
 	ReadMissAdmissionStores         uint64
 	RecordChecksumVerifiedStores    uint64
 	PageChecksumVerifiedMarks       uint64
@@ -162,7 +185,16 @@ func newLeafPageReadCache(entries int) *leafPageReadCache {
 	if entries <= 0 {
 		return nil
 	}
-	c := &leafPageReadCache{slots: make([]leafPageReadCacheSlot, entries)}
+	ways := leafPageReadCacheWays
+	if entries < ways {
+		ways = entries
+	}
+	bucketCount := (entries + ways - 1) / ways
+	c := &leafPageReadCache{
+		slots:   make([]leafPageReadCacheSlot, entries),
+		buckets: make([]leafPageReadCacheBucket, bucketCount),
+		ways:    ways,
+	}
 	for i := range c.slots {
 		c.slots[i].owner = c
 	}
@@ -174,72 +206,81 @@ func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 }
 
 func (c *leafPageReadCache) storeWithRecordChecksumState(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) {
-	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
+	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
 		return
 	}
 	key := newLeafPageReadCacheKey(ptr)
-	slot := &c.slots[c.slotIndex(key)]
-	slot.mu.Lock()
-	result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
-	slot.mu.Unlock()
+	bucketIndex := c.bucketIndex(key)
+	bucket := &c.buckets[bucketIndex]
+	bucket.mu.Lock()
+	result, _ := c.storeInBucketLocked(bucketIndex, key, leafPage, recordChecksumVerified, false)
+	c.resetReadMissCandidatesForStoreLocked(bucketIndex, key, result)
+	bucket.mu.Unlock()
 	c.recordStore(result, key, recordChecksumVerified)
 }
 
 // storeReadMiss admits read-miss pages only after a repeated miss in the same
-// direct-mapped slot with a matching fingerprint token in the same admission
+// set-associative bucket with a matching fingerprint token in the same admission
 // epoch (probabilistic under collisions). Write-side stores remain immediate;
 // this keeps one-off sparse reads from copying 4KiB pages into the cache and
 // evicting recently-written leaves that are likely to be reused during
 // publish/apply.
 func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) bool {
-	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
+	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
 		return false
 	}
 	key := newLeafPageReadCacheKey(ptr)
-	slot := &c.slots[c.slotIndex(key)]
+	bucketIndex := c.bucketIndex(key)
+	bucket := &c.buckets[bucketIndex]
 
 	fp := leafPageReadMissFingerprint(key)
-	epoch, repeated := slot.observeReadMissCandidate(fp)
+	epoch, repeated := bucket.observeReadMissCandidate(fp)
 	if !repeated {
 		c.readMissAdmissionSkips.Add(1)
 		return false
 	}
 
-	// Parallel read misses can race: another goroutine may populate this exact
-	// slot/key before we reach admission. Fast-path that case with only a read
-	// lock to avoid unnecessary writer lock traffic in the miss hot path.
-	if slot.mu.TryRLock() {
+	// Read-miss cache admission is best effort. If this bucket is currently under
+	// store contention, skip admission rather than queuing behind a writer in the
+	// random-read miss hot path.
+	if !bucket.mu.TryLock() {
+		c.recordReadMissAdmissionLockSkip()
+		return false
+	}
+	defer bucket.mu.Unlock()
+
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(bucketIndex)
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP {
+			continue
+		}
+		if !slot.mu.TryRLock() {
+			c.recordReadMissAdmissionLockSkip()
+			return false
+		}
 		if slot.valid && slot.key == key {
+			slot.recent.Store(true)
 			slot.mu.RUnlock()
 			return true
 		}
 		slot.mu.RUnlock()
-	} else {
-		c.readMissAdmissionSkips.Add(1)
-		return false
 	}
 
-	// Read-miss cache admission is best effort. If this slot is currently under
-	// heavy contention, skip admission rather than queuing behind a writer lock
-	// in the random-read miss hot path.
-	if !slot.mu.TryLock() {
-		c.readMissAdmissionSkips.Add(1)
-		return false
-	}
-	if slot.valid && slot.key == key {
-		slot.mu.Unlock()
-		return true
-	}
-	if !slot.readMissCandidateStillCurrent(fp, epoch) {
-		// A writer/read race can repurpose this slot between miss observation and
+	if !bucket.readMissCandidateStillCurrent(fp, epoch) {
+		// A writer/read race can repurpose this bucket between miss observation and
 		// lock acquisition. Candidate mismatches include epoch resets and same-epoch
 		// candidate churn under concurrent misses.
-		slot.mu.Unlock()
 		c.readMissAdmissionCandidateSkips.Add(1)
 		return false
 	}
-	result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
-	slot.mu.Unlock()
+	result, ok := c.storeInBucketLocked(bucketIndex, key, leafPage, recordChecksumVerified, true)
+	if !ok {
+		c.recordReadMissAdmissionLockSkip()
+		return false
+	}
+	c.resetReadMissCandidatesForStoreLocked(bucketIndex, key, result)
 	c.readMissAdmissionStores.Add(1)
 	c.recordStore(result, key, recordChecksumVerified)
 	return true
@@ -248,6 +289,100 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, 
 type leafPageReadCacheStoreResult struct {
 	wasValid bool
 	prevKey  leafPageReadCacheKey
+}
+
+func (c *leafPageReadCache) storeInBucketLocked(bucketIndex int, key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, nonBlocking bool) (leafPageReadCacheStoreResult, bool) {
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(bucketIndex)
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP {
+			continue
+		}
+		if !lockLeafPageReadCacheSlot(slot, nonBlocking) {
+			return leafPageReadCacheStoreResult{}, false
+		}
+		if slot.valid && slot.key == key {
+			result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
+			slot.mu.Unlock()
+			return result, true
+		}
+		slot.mu.Unlock()
+	}
+
+	slot, ok := c.lockVictimSlotLocked(bucketIndex, nonBlocking)
+	if !ok {
+		return leafPageReadCacheStoreResult{}, false
+	}
+	result := slot.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified)
+	slot.mu.Unlock()
+	return result, true
+}
+
+func (c *leafPageReadCache) lockVictimSlotLocked(bucketIndex int, nonBlocking bool) (*leafPageReadCacheSlot, bool) {
+	start, end := c.bucketRange(bucketIndex)
+	bucket := &c.buckets[bucketIndex]
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != 0 {
+			continue
+		}
+		if !lockLeafPageReadCacheSlot(slot, nonBlocking) {
+			continue
+		}
+		if !slot.valid {
+			bucket.clockHand = uint32((i - start + 1) % (end - start))
+			return slot, true
+		}
+		slot.mu.Unlock()
+	}
+
+	n := end - start
+	if n <= 0 {
+		return nil, false
+	}
+	hand := int(bucket.clockHand % uint32(n))
+	for pass := 0; pass < 2; pass++ {
+		for step := 0; step < n; step++ {
+			idx := start + (hand+step)%n
+			slot := &c.slots[idx]
+			if pass == 0 && slot.recent.Swap(false) {
+				continue
+			}
+			if !lockLeafPageReadCacheSlot(slot, nonBlocking) {
+				continue
+			}
+			bucket.clockHand = uint32((idx - start + 1) % n)
+			return slot, true
+		}
+	}
+
+	if nonBlocking {
+		for step := 0; step < n; step++ {
+			idx := start + (hand+step)%n
+			slot := &c.slots[idx]
+			if !slot.mu.TryLock() {
+				continue
+			}
+			bucket.clockHand = uint32((idx - start + 1) % n)
+			return slot, true
+		}
+		return nil, false
+	}
+
+	idx := start + hand
+	slot := &c.slots[idx]
+	slot.mu.Lock()
+	bucket.clockHand = uint32((hand + 1) % n)
+	return slot, true
+}
+
+func lockLeafPageReadCacheSlot(slot *leafPageReadCacheSlot, nonBlocking bool) bool {
+	if nonBlocking {
+		return slot.mu.TryLock()
+	}
+	slot.mu.Lock()
+	return true
 }
 
 func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage []byte) leafPageReadCacheStoreResult {
@@ -268,20 +403,28 @@ func (s *leafPageReadCacheSlot) storeLockedWithRecordChecksumState(key leafPageR
 	s.valid = true
 	s.recordChecksumVerified = recordChecksumVerified
 	s.pageChecksumVerified.Store(false)
-	s.resetReadMissCandidateLocked()
+	s.recent.Store(true)
+	s.keyFP.Store(leafPageReadCacheKeyFingerprint(key))
 	return result
 }
 
 // observeReadMissCandidate implements the read-miss admission state machine for
-// one cache slot:
-//   - odd readMissEpoch values mean writer reset in progress (slot unstable),
+// one cache-bucket candidate lane:
+//   - odd lane epoch values mean reset in progress (lane unstable),
 //   - even values mean stable epoch (candidate token can be observed/published),
 //   - repeated=true is only returned when the token matches in a stable epoch
 //     without crossing into a newer stable epoch mid-observation.
 //
+// Each bucket has one candidate lane per cache way. That keeps read-miss
+// admission non-blocking while avoiding the old direct-map behavior where every
+// key colliding in a slot constantly overwrote one shared probation token.
 // The multiple epoch reads fence reset races; bounded retry counters ensure this
 // path eventually gives up and reports non-repeated under heavy contention.
-func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
+func (b *leafPageReadCacheBucket) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
+	return b.readMissCandidateLane(fp).observeReadMissCandidate(fp)
+}
+
+func (l *leafPageReadMissAdmissionLane) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
 	totalSpins := 0
 	oddEpochSpins := 0
 	stableEpochSpins := 0
@@ -293,9 +436,9 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 		if totalSpins >= maxReadMissTotalSpins {
 			return epoch, false
 		}
-		epoch = s.readMissEpoch.Load()
+		epoch = l.epoch.Load()
 		if epoch&1 != 0 {
-			// Writer is resetting this slot's admission candidate.
+			// Writer is resetting this lane's admission candidate.
 			oddEpochSpins++
 			if oddEpochSpins >= maxReadMissOddEpochSpins {
 				return epoch, false
@@ -315,20 +458,20 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 			observedEpochAdvance = true
 		}
 		candidateToken := readMissCandidateToken(fp, epoch)
-		candidate := s.readMissCandidateFP.Load()
+		candidate := l.candidateFP.Load()
 		if candidate == candidateToken {
-			if s.readMissEpoch.Load() == epoch {
+			if l.epoch.Load() == epoch {
 				if observedEpochAdvance {
 					return epoch, false
 				}
 				return epoch, true
 			}
-		} else if s.readMissEpoch.Load() == epoch {
+		} else if l.epoch.Load() == epoch {
 			if observedEpochAdvance {
 				return epoch, false
 			}
-			if s.readMissCandidateFP.CompareAndSwap(candidate, candidateToken) {
-				if s.readMissEpoch.Load() == epoch {
+			if l.candidateFP.CompareAndSwap(candidate, candidateToken) {
+				if l.epoch.Load() == epoch {
 					return epoch, false
 				}
 				// Epoch-scoped tokens fence stale publishes: even if this CAS raced
@@ -346,23 +489,67 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 	}
 }
 
-func (s *leafPageReadCacheSlot) readMissCandidateStillCurrent(fp, epoch uint64) bool {
+func (b *leafPageReadCacheBucket) readMissCandidateStillCurrent(fp, epoch uint64) bool {
+	return b.readMissCandidateLane(fp).readMissCandidateStillCurrent(fp, epoch)
+}
+
+func (l *leafPageReadMissAdmissionLane) readMissCandidateStillCurrent(fp, epoch uint64) bool {
 	if epoch&1 != 0 {
 		return false
 	}
-	return s.readMissEpoch.Load() == epoch && s.readMissCandidateFP.Load() == readMissCandidateToken(fp, epoch)
+	return l.epoch.Load() == epoch && l.candidateFP.Load() == readMissCandidateToken(fp, epoch)
 }
 
-func (s *leafPageReadCacheSlot) resetReadMissCandidateLocked() {
+func (b *leafPageReadCacheBucket) readMissCandidateLane(fp uint64) *leafPageReadMissAdmissionLane {
+	return &b.readMissCandidates[leafPageReadMissCandidateLaneIndex(fp)]
+}
+
+func leafPageReadMissCandidateLaneIndex(fp uint64) int {
+	return int(fp % leafPageReadCacheWays)
+}
+
+func (b *leafPageReadCacheBucket) resetReadMissCandidateLocked() {
+	for i := range b.readMissCandidates {
+		b.readMissCandidates[i].resetReadMissCandidateLocked()
+	}
+}
+
+func (b *leafPageReadCacheBucket) resetReadMissCandidateFingerprintLocked(fp uint64) {
+	b.readMissCandidateLane(fp).resetReadMissCandidateLocked()
+}
+
+func (l *leafPageReadMissAdmissionLane) resetReadMissCandidateLocked() {
 	// Mark reset in-progress, clear candidate, then publish the next stable epoch.
 	// observeReadMissCandidate() only accepts even (stable) epochs.
-	start := s.readMissEpoch.Load()
+	start := l.epoch.Load()
 	if start&1 != 0 {
 		start++
 	}
-	s.readMissEpoch.Store(start + 1)
-	s.readMissCandidateFP.Store(0)
-	s.readMissEpoch.Store(start + 2)
+	l.epoch.Store(start + 1)
+	l.candidateFP.Store(0)
+	l.epoch.Store(start + 2)
+}
+
+func (c *leafPageReadCache) resetReadMissCandidatesForStoreLocked(bucketIndex int, key leafPageReadCacheKey, result leafPageReadCacheStoreResult) {
+	bucket := &c.buckets[bucketIndex]
+	if result.wasValid && result.prevKey != key {
+		bucket.resetReadMissCandidateLocked()
+		return
+	}
+	bucket.resetReadMissCandidateFingerprintLocked(leafPageReadMissFingerprint(key))
+	if !result.wasValid && !c.bucketHasInvalidLocked(bucketIndex) {
+		bucket.resetReadMissCandidateLocked()
+	}
+}
+
+func (c *leafPageReadCache) bucketHasInvalidLocked(bucketIndex int) bool {
+	start, end := c.bucketRange(bucketIndex)
+	for i := start; i < end; i++ {
+		if !c.slots[i].valid {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key leafPageReadCacheKey, recordChecksumVerified bool) {
@@ -375,26 +562,45 @@ func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key
 		c.entries.Add(1)
 	case result.prevKey != key:
 		c.evictions.Add(1)
+		if c.entries.Load() < uint64(len(c.slots)) {
+			c.conflictEvictions.Add(1)
+		} else {
+			c.capacityEvictions.Add(1)
+		}
 	}
 }
 
+func (c *leafPageReadCache) recordReadMissAdmissionLockSkip() {
+	c.readMissAdmissionSkips.Add(1)
+	c.readMissAdmissionLockSkips.Add(1)
+}
+
 func (c *leafPageReadCache) get(ptr page.LeafLogPtr) ([]byte, bool) {
-	if c == nil || len(c.slots) == 0 {
+	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
-	slot := &c.slots[c.slotIndex(key)]
-	slot.mu.RLock()
-	if !slot.valid || slot.key != key {
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP {
+			continue
+		}
+		slot.mu.RLock()
+		if !slot.valid || slot.key != key {
+			slot.mu.RUnlock()
+			continue
+		}
+		state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
+		data := cloneLeafPageReadCacheData(slot.data)
+		slot.recent.Store(true)
 		slot.mu.RUnlock()
-		c.misses.Add(1)
-		return nil, false
+		c.recordHitState(state)
+		return data, true
 	}
-	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
-	data := cloneLeafPageReadCacheData(slot.data)
-	slot.mu.RUnlock()
-	c.recordHitState(state)
-	return data, true
+	c.misses.Add(1)
+	return nil, false
 }
 
 func (c *leafPageReadCache) getTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, bool) {
@@ -409,29 +615,39 @@ type leafPageReadCacheState struct {
 }
 
 func (c *leafPageReadCache) getToWithState(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, leafPageReadCacheState, bool) {
-	if c == nil || len(c.slots) == 0 {
+	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, false, leafPageReadCacheState{}, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
-	slot := &c.slots[c.slotIndex(key)]
-	slot.mu.RLock()
-	if !slot.valid || slot.key != key {
-		slot.mu.RUnlock()
-		c.misses.Add(1)
-		return nil, false, leafPageReadCacheState{}, false
-	}
-	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
-	if cap(dst) >= len(slot.data) {
-		out := dst[:len(slot.data)]
-		copy(out, slot.data)
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP {
+			continue
+		}
+		slot.mu.RLock()
+		if !slot.valid || slot.key != key {
+			slot.mu.RUnlock()
+			continue
+		}
+		state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
+		if cap(dst) >= len(slot.data) {
+			out := dst[:len(slot.data)]
+			copy(out, slot.data)
+			slot.recent.Store(true)
+			slot.mu.RUnlock()
+			c.recordHitState(state)
+			return out, true, state, true
+		}
+		data := cloneLeafPageReadCacheData(slot.data)
+		slot.recent.Store(true)
 		slot.mu.RUnlock()
 		c.recordHitState(state)
-		return out, true, state, true
+		return data, false, state, true
 	}
-	data := cloneLeafPageReadCacheData(slot.data)
-	slot.mu.RUnlock()
-	c.recordHitState(state)
-	return data, false, state, true
+	c.misses.Add(1)
+	return nil, false, leafPageReadCacheState{}, false
 }
 
 func (c *leafPageReadCache) getViewLocked(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, bool) {
@@ -440,20 +656,29 @@ func (c *leafPageReadCache) getViewLocked(ptr page.LeafLogPtr) ([]byte, *leafPag
 }
 
 func (c *leafPageReadCache) getViewLockedWithState(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, leafPageReadCacheState, bool) {
-	if c == nil || len(c.slots) == 0 {
+	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, nil, leafPageReadCacheState{}, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
-	slot := &c.slots[c.slotIndex(key)]
-	slot.mu.RLock()
-	if !slot.valid || slot.key != key {
-		slot.mu.RUnlock()
-		return nil, nil, leafPageReadCacheState{}, false
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP {
+			continue
+		}
+		slot.mu.RLock()
+		if !slot.valid || slot.key != key {
+			slot.mu.RUnlock()
+			continue
+		}
+		state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
+		data := slot.data
+		slot.recent.Store(true)
+		c.recordHitState(state)
+		return data, slot, state, true
 	}
-	state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
-	data := slot.data
-	c.recordHitState(state)
-	return data, slot, state, true
+	return nil, nil, leafPageReadCacheState{}, false
 }
 
 func (c *leafPageReadCache) recordHitState(state leafPageReadCacheState) {
@@ -465,29 +690,38 @@ func (c *leafPageReadCache) recordHitState(state leafPageReadCacheState) {
 }
 
 func (c *leafPageReadCache) markPageChecksumVerified(ptr page.LeafLogPtr) bool {
-	if c == nil || len(c.slots) == 0 {
+	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return false
 	}
 	key := newLeafPageReadCacheKey(ptr)
-	slot := &c.slots[c.slotIndex(key)]
-	slot.mu.Lock()
-	defer slot.mu.Unlock()
-	if !slot.valid || slot.key != key {
-		c.pageChecksumMarkMisses.Add(1)
-		return false
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP {
+			continue
+		}
+		slot.mu.Lock()
+		if !slot.valid || slot.key != key {
+			slot.mu.Unlock()
+			continue
+		}
+		defer slot.mu.Unlock()
+		if !slot.recordChecksumVerified {
+			c.pageChecksumMarkUnsafeSkips.Add(1)
+			return false
+		}
+		if slot.pageChecksumVerified.CompareAndSwap(false, true) {
+			c.pageChecksumVerifiedMarks.Add(1)
+		}
+		return true
 	}
-	if !slot.recordChecksumVerified {
-		c.pageChecksumMarkUnsafeSkips.Add(1)
-		return false
-	}
-	if slot.pageChecksumVerified.CompareAndSwap(false, true) {
-		c.pageChecksumVerifiedMarks.Add(1)
-	}
-	return true
+	c.pageChecksumMarkMisses.Add(1)
+	return false
 }
 
 func (c *leafPageReadCache) stats() leafPageReadCacheStats {
-	if c == nil || len(c.slots) == 0 {
+	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return leafPageReadCacheStats{}
 	}
 	entries := c.entries.Load()
@@ -498,11 +732,16 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		Misses:                          c.misses.Load(),
 		Stores:                          c.stores.Load(),
 		Evictions:                       c.evictions.Load(),
+		ConflictEvictions:               c.conflictEvictions.Load(),
+		CapacityEvictions:               c.capacityEvictions.Load(),
 		Entries:                         entries,
 		Capacity:                        uint64(len(c.slots)),
+		Buckets:                         uint64(len(c.buckets)),
+		Ways:                            uint64(c.ways),
 		Bytes:                           entries * page.PageSize,
 		ReadMissAdmissionSkips:          c.readMissAdmissionSkips.Load(),
 		ReadMissAdmissionCandidateSkips: c.readMissAdmissionCandidateSkips.Load(),
+		ReadMissAdmissionLockSkips:      c.readMissAdmissionLockSkips.Load(),
 		ReadMissAdmissionStores:         c.readMissAdmissionStores.Load(),
 		RecordChecksumVerifiedStores:    c.recordChecksumVerifiedStores.Load(),
 		PageChecksumVerifiedMarks:       c.pageChecksumVerifiedMarks.Load(),
@@ -513,17 +752,42 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 	}
 }
 
+func (c *leafPageReadCache) bucketRange(bucketIndex int) (int, int) {
+	start := bucketIndex * c.ways
+	end := start + c.ways
+	if end > len(c.slots) {
+		end = len(c.slots)
+	}
+	return start, end
+}
+
+func (c *leafPageReadCache) bucketIndex(key leafPageReadCacheKey) int {
+	return int(leafPageReadCacheHash(key) % uint64(len(c.buckets)))
+}
+
 func (c *leafPageReadCache) slotIndex(key leafPageReadCacheKey) int {
+	return int(leafPageReadCacheHash(key) % uint64(len(c.slots)))
+}
+
+func leafPageReadCacheHash(key leafPageReadCacheKey) uint64 {
 	h := uint64(key.fileID)
 	h ^= key.offset + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
 	h ^= uint64(key.subIndex) + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
-	return int(h % uint64(len(c.slots)))
+	return h
+}
+
+func leafPageReadCacheKeyFingerprint(key leafPageReadCacheKey) uint64 {
+	h := leafPageReadCacheHash(key)
+	if h == 0 {
+		return 1
+	}
+	return h
 }
 
 func leafPageReadMissFingerprint(key leafPageReadCacheKey) uint64 {
 	// Admission is intentionally probabilistic under collisions, so keep this
 	// hash stable but well-mixed (SplitMix64-style finalizer constants) to reduce
-	// accidental first-miss admissions when unrelated keys map to the same slot.
+	// accidental first-miss admissions when unrelated keys map to the same bucket.
 	h := uint64(key.fileID)*0x9e3779b97f4a7c15 + key.offset*0xbf58476d1ce4e5b9
 	h ^= uint64(key.subIndex) * 0x94d049bb133111eb
 	h ^= h >> 30

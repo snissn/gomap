@@ -728,7 +728,7 @@ type Options struct {
 	// Semantics:
 	//   - 0 uses the process default/env override.
 	//   - <0 disables the cache for this DB.
-	//   - >0 sets the exact number of direct-mapped cache slots.
+	//   - >0 sets the exact number of set-associative cache entries.
 	LeafPageReadCacheEntries int
 
 	// Durability configures cached-mode durability semantics.
