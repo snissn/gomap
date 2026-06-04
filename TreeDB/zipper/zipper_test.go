@@ -945,15 +945,22 @@ func TestApplyScratch_TrimsOversizedOuterLeafBuildPageCache(t *testing.T) {
 
 func TestZipperMergeScratch_ReusesAndClearsPendingLeafPageScratch(t *testing.T) {
 	s := newMergeScratch()
-	buf := s.acquirePendingLeafPagePersists(2)
-	buf = append(buf, pendingLeafPagePersist{data: []byte("page-a"), pooled: &outerLeafBuildPage{}})
-	buf = append(buf, pendingLeafPagePersist{data: []byte("page-b"), root: true, splitIdx: 1, pooled: &outerLeafBuildPage{}})
+	buf := s.acquirePendingLeafPagePersists(3)
+	buf = append(buf,
+		pendingLeafPagePersist{data: []byte("page-a"), pooled: &outerLeafBuildPage{}},
+		pendingLeafPagePersist{data: []byte("page-b"), root: true, splitIdx: 1, pooled: &outerLeafBuildPage{}},
+		pendingLeafPagePersist{data: []byte("page-c"), root: true, splitIdx: 2, pooled: &outerLeafBuildPage{}},
+	)
 	s.releasePendingLeafPagePersists(buf)
 
 	reused := s.acquirePendingLeafPagePersists(2)
-	if cap(reused) < 2 {
-		t.Fatalf("reused cap=%d want >=2", cap(reused))
+	if cap(reused) < 3 {
+		t.Fatalf("reused cap=%d want >=3", cap(reused))
 	}
+	reused = append(reused, pendingLeafPagePersist{data: []byte("page-d"), pooled: &outerLeafBuildPage{}})
+	s.releasePendingLeafPagePersists(reused)
+
+	reused = s.acquirePendingLeafPagePersists(2)
 	full := reused[:cap(reused)]
 	for i, entry := range full {
 		if entry.data != nil || entry.pooled != nil || entry.root || entry.splitIdx != 0 {
@@ -965,14 +972,18 @@ func TestZipperMergeScratch_ReusesAndClearsPendingLeafPageScratch(t *testing.T) 
 
 func TestZipperMergeScratch_ReusesAndClearsLeafPageBatchScratch(t *testing.T) {
 	s := newMergeScratch()
-	buf := s.acquireLeafPageBatch(2)
-	buf = append(buf, []byte("page-a"), []byte("page-b"))
+	buf := s.acquireLeafPageBatch(3)
+	buf = append(buf, []byte("page-a"), []byte("page-b"), []byte("page-c"))
 	s.releaseLeafPageBatch(buf)
 
 	reused := s.acquireLeafPageBatch(2)
-	if cap(reused) < 2 {
-		t.Fatalf("reused cap=%d want >=2", cap(reused))
+	if cap(reused) < 3 {
+		t.Fatalf("reused cap=%d want >=3", cap(reused))
 	}
+	reused = append(reused, []byte("page-d"))
+	s.releaseLeafPageBatch(reused)
+
+	reused = s.acquireLeafPageBatch(2)
 	for i, page := range reused[:cap(reused)] {
 		if page != nil {
 			t.Fatalf("leaf page batch scratch retained page %d", i)
