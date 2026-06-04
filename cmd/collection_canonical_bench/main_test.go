@@ -14,12 +14,13 @@ func TestCanonicalReportKnownCompressionShape(t *testing.T) {
 
 	required := []string{
 		"| `command_line` | `./scripts/bench_collections_canonical.sh -docs 100000` |",
-		"44.3 B/doc via high-level offline compact and 31.7 B/doc via full leafgen pack/GC",
-		"offline compact is about 3.5x smaller than SQLite native columns and 5.2x smaller than SQLite JSON",
-		"full leafgen pack/GC is about 4.9x and 7.3x smaller, respectively",
+		"23.2 B/doc via exhaustive compact; production offline compact is 44.3 B/doc",
+		"exhaustive compact is about 6.8x smaller than SQLite native columns and 10.0x smaller than SQLite JSON",
+		"production offline compact is about 3.5x and 5.2x smaller, respectively",
 		"`online_one_pass_maintenance`",
-		"Do not compare TreeDB `offline_compact` or `full_leafgen_pack_gc` only against SQLite `post_insert` rows.",
+		"Use `exhaustive_compact` for byte-minimized benchmark/VACUUM-equivalent claims",
 		"`treedb_template_v1_collection_2_indexes` | `offline_compact` | 44.3",
+		"`treedb_template_v1_collection_2_indexes` | `exhaustive_compact` | 23.2",
 		"`treedb_template_v1_collection_2_indexes` | `full_leafgen_pack_gc` | 31.7",
 		"make bench-collections-canonical",
 	}
@@ -256,6 +257,8 @@ func TestCanonicalDerivedCompactedComparisonsUseConfiguredIndexCount(t *testing.
 	canon.Results = append(canon.Results,
 		testStorageRow("sqlite_json_1_indexes", "sqlite_wal_normal", "json", "collection", phaseSQLiteVacuum, 1, 18000000, 180.0),
 		testStorageRow("sqlite_native_columns_1_indexes", "sqlite_wal_normal", "native-columns", "collection", phaseSQLiteVacuum, 1, 12000000, 120.0),
+		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseOfflineCompact, 1, 3600000, 36.0),
+		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseExhaustiveCompact, 1, 2400000, 24.0),
 		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseFullLeafgenPackGC, 1, 2800000, 28.0),
 	)
 	finalizeRunMetadata(canon)
@@ -306,12 +309,14 @@ func TestExecutiveSummaryUsesConfiguredIndexCountLabel(t *testing.T) {
 	canon.Results = append(canon.Results,
 		testStorageRow("sqlite_json_1_indexes", "sqlite_wal_normal", "json", "collection", phaseSQLiteVacuum, 1, 18000000, 180.0),
 		testStorageRow("sqlite_native_columns_1_indexes", "sqlite_wal_normal", "native-columns", "collection", phaseSQLiteVacuum, 1, 12000000, 120.0),
+		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseOfflineCompact, 1, 3600000, 36.0),
+		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseExhaustiveCompact, 1, 2400000, 24.0),
 		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseFullLeafgenPackGC, 1, 2800000, 28.0),
 	)
 	finalizeRunMetadata(canon)
 
 	summary := renderExecutiveSummary(canon)
-	if !strings.Contains(summary, "fully compacted one-index template-v1 collection storage") {
+	if !strings.Contains(summary, "byte-minimized one-index template-v1 collection storage") {
 		t.Fatalf("summary did not use configured index count: %s", summary)
 	}
 	if strings.Contains(summary, "two-index") {
@@ -567,6 +572,7 @@ func knownExampleRun() *canonicalRun {
 			row("treedb_template_v1_collection_0_indexes", "treedb_fast", "template-v1", "collection", phaseOfflineCompact, 0, 1948075, 19.5),
 			row("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseOfflineCompact, 1, 3751406, 37.5),
 			row("treedb_template_v1_collection_2_indexes", "treedb_fast", "template-v1", "collection", phaseOfflineCompact, 2, 4434451, 44.3),
+			row("treedb_template_v1_collection_2_indexes", "treedb_fast", "template-v1", "collection", phaseExhaustiveCompact, 2, 2319517, 23.2),
 			row("treedb_template_v1_collection_2_indexes", "treedb_fast", "template-v1", "collection", phaseFullLeafgenPackGC, 2, 3174681, 31.7),
 			row("sqlite_json_2_indexes", "sqlite_wal_normal", "json", "collection", phaseSQLiteVacuum, 2, 23166976, 231.7),
 			row("sqlite_native_columns_2_indexes", "sqlite_wal_normal", "native-columns", "collection", phaseSQLiteVacuum, 2, 15671296, 156.7),
