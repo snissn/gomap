@@ -943,21 +943,6 @@ func TestApplyScratch_TrimsOversizedOuterLeafBuildPageCache(t *testing.T) {
 	z.releaseApplyScratch(reused)
 }
 
-func TestZipperCompareKeysMatchesBytesCompareForEightByteKeys(t *testing.T) {
-	var a, b [8]byte
-	for i := uint64(0); i < 1024; i++ {
-		for j := uint64(0); j < 1024; j += 17 {
-			binary.BigEndian.PutUint64(a[:], i)
-			binary.BigEndian.PutUint64(b[:], j)
-			got := compareZipperKeys(a[:], b[:])
-			want := bytes.Compare(a[:], b[:])
-			if (got < 0) != (want < 0) || (got == 0) != (want == 0) || (got > 0) != (want > 0) {
-				t.Fatalf("compareZipperKeys(%x,%x)=%d want sign %d", a, b, got, want)
-			}
-		}
-	}
-}
-
 func TestZipperMergeScratch_ReusesAndClearsPendingLeafPageScratch(t *testing.T) {
 	s := newMergeScratch()
 	buf := s.acquirePendingLeafPagePersists(2)

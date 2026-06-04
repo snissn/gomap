@@ -91,25 +91,6 @@ func putOuterLeafBuildPage(p *outerLeafBuildPage) {
 	outerLeafBuildPagePool.Put(p)
 }
 
-func compareZipperEightByteKeys(a, b []byte) int {
-	av := binary.BigEndian.Uint64(a)
-	bv := binary.BigEndian.Uint64(b)
-	if av < bv {
-		return -1
-	}
-	if av > bv {
-		return 1
-	}
-	return 0
-}
-
-func compareZipperKeys(a, b []byte) int {
-	if len(a) == 8 && len(b) == 8 {
-		return compareZipperEightByteKeys(a, b)
-	}
-	return bytes.Compare(a, b)
-}
-
 type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
@@ -988,16 +969,9 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 		}
 		entries = append(entries, node.LeafHeuristicEntry{Key: op.Key, Flags: flags})
 	}
-	fastEightByteKeys := len(entries[0].Key) == 8
 	sorted := true
 	for i := 1; i < len(entries); i++ {
-		prevKey, curKey := entries[i-1].Key, entries[i].Key
-		var cmp int
-		if fastEightByteKeys && len(prevKey) == 8 && len(curKey) == 8 {
-			cmp = compareZipperEightByteKeys(prevKey, curKey)
-		} else {
-			cmp = bytes.Compare(prevKey, curKey)
-		}
+		cmp := bytes.Compare(entries[i-1].Key, entries[i].Key)
 		if cmp > 0 || (cmp == 0 && entries[i-1].Flags > entries[i].Flags) {
 			sorted = false
 			break
@@ -1005,13 +979,7 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 	}
 	if !sorted {
 		sort.Slice(entries, func(i, j int) bool {
-			leftKey, rightKey := entries[i].Key, entries[j].Key
-			var cmp int
-			if fastEightByteKeys && len(leftKey) == 8 && len(rightKey) == 8 {
-				cmp = compareZipperEightByteKeys(leftKey, rightKey)
-			} else {
-				cmp = bytes.Compare(leftKey, rightKey)
-			}
+			cmp := bytes.Compare(entries[i].Key, entries[j].Key)
 			if cmp != 0 {
 				return cmp < 0
 			}
@@ -1703,7 +1671,6 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	)
 	pendingSplitIdx = -1
 	batchLeafPagePersists := z.outerLeavesInValueLog && reuseOuterLeafPages
-	fastEightByteOps := len(ops) > 0 && len(ops[0].Key) == 8
 	defer func() {
 		for i := range pendingLeafPagePersists {
 			if pendingLeafPagePersists[i].pooled != nil && scratch != nil {
@@ -1826,12 +1793,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			oldFlags = f
 			batchKey := ops[opIdx].Key
 
-			var cmp int
-			if fastEightByteOps && len(k) == 8 && len(batchKey) == 8 {
-				cmp = compareZipperEightByteKeys(k, batchKey)
-			} else {
-				cmp = bytes.Compare(k, batchKey)
-			}
+			cmp := bytes.Compare(k, batchKey)
 			if cmp < 0 {
 				// useOld = true
 			} else if cmp > 0 {
@@ -2067,7 +2029,6 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		metrics.ZipperInternalMerges++
 	}
 	count := oldNode.Count()
-	fastEightByteOps := len(ops) > 0 && len(ops[0].Key) == 8
 
 	var splits []Split
 
@@ -2192,18 +2153,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 			startOpIdx := opIdx
 			for opIdx < len(ops) {
-				if endKey == nil {
-					opIdx++
-					continue
-				}
-				opKey := ops[opIdx].Key
-				var cmp int
-				if fastEightByteOps && len(opKey) == 8 && len(endKey) == 8 {
-					cmp = compareZipperEightByteKeys(opKey, endKey)
-				} else {
-					cmp = bytes.Compare(opKey, endKey)
-				}
-				if cmp < 0 {
+				if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
 					opIdx++
 					continue
 				}
@@ -2281,18 +2231,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 		startOpIdx := opIdx
 		for opIdx < len(ops) {
-			if endKey == nil {
-				opIdx++
-				continue
-			}
-			opKey := ops[opIdx].Key
-			var cmp int
-			if fastEightByteOps && len(opKey) == 8 && len(endKey) == 8 {
-				cmp = compareZipperEightByteKeys(opKey, endKey)
-			} else {
-				cmp = bytes.Compare(opKey, endKey)
-			}
-			if cmp < 0 {
+			if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
 				opIdx++
 				continue
 			}
