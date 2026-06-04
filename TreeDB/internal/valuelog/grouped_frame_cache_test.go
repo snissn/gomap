@@ -160,12 +160,18 @@ func TestGroupedFrameCache_InvalidCachedStateFailsClosed(t *testing.T) {
 	cache := f.groupedFrameCache.Load()
 	shard := cache.shardFor(10, false)
 	shard.mu.Lock()
-	if len(shard.entries) != 1 {
-		shard.mu.Unlock()
-		t.Fatalf("expected one entry, got %d", len(shard.entries))
+	var entry *groupedFrameCacheEntry
+	for i := range shard.slots {
+		if e := shard.slots[i].ptr.Load(); e != nil {
+			entry = e
+			break
+		}
 	}
-	shard.entries[0].raw = shard.entries[0].raw[:len(shard.entries[0].raw)-1]
-	shard.publishLocked()
+	if entry == nil {
+		shard.mu.Unlock()
+		t.Fatalf("expected one entry")
+	}
+	entry.raw = entry.raw[:len(entry.raw)-1]
 	shard.mu.Unlock()
 
 	_, _, err, hit := f.groupedFrameCacheReadTo(10, false, 2, offsets, uint32(len(raw)), 1, nil)

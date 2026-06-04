@@ -123,11 +123,14 @@ type groupedFrameCache struct {
 }
 
 type groupedFrameCacheShard struct {
-	mu       sync.Mutex
-	cap      int
-	clock    uint64
-	entries  []*groupedFrameCacheEntry
-	snapshot atomic.Value // stores []*groupedFrameCacheEntry
+	mu    sync.Mutex
+	cap   int
+	clock uint64
+	slots []groupedFrameCacheSlot
+}
+
+type groupedFrameCacheSlot struct {
+	ptr atomic.Pointer[groupedFrameCacheEntry]
 }
 
 type groupedFrameCacheEntry struct {
@@ -166,7 +169,9 @@ func newGroupedFrameCache(owner *File, entries, maxRaw int, maxBytes int64, budg
 			capForShard++
 		}
 		c.shards[i].cap = capForShard
-		c.shards[i].snapshot.Store([]*groupedFrameCacheEntry(nil))
+		if capForShard > 0 {
+			c.shards[i].slots = make([]groupedFrameCacheSlot, capForShard)
+		}
 	}
 	return c
 }
@@ -371,8 +376,8 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 	if s == nil {
 		return nil, false, nil, false
 	}
-	snap, _ := s.snapshot.Load().([]*groupedFrameCacheEntry)
-	for _, e := range snap {
+	for i := range s.slots {
+		e := s.slots[i].ptr.Load()
 		if e == nil || e.start != start || e.verifyCRC != verifyCRC || e.k != expectedK || e.rawLen != expectedRawLen || !groupedFrameOffsetsEqual(e.offsets, expectedOffsets, expectedK) {
 			continue
 		}
@@ -446,13 +451,13 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	// Replace any existing entry for the same identity in this shard. The new
 	// entry includes K/raw length/offsets, so stale state cannot be reused across
 	// frame shape changes at the same file-local start.
-	for i := 0; i < len(s.entries); i++ {
-		e := s.entries[i]
+	for i := range s.slots {
+		e := s.slots[i].ptr.Load()
 		if e != nil && e.start == start && e.verifyCRC == verifyCRC {
-			s.entries = append(s.entries[:i], s.entries[i+1:]...)
-			e.retire(c)
-			c.evictions.Add(1)
-			i--
+			if old := s.slots[i].ptr.Swap(nil); old != nil {
+				old.retire(c)
+				c.evictions.Add(1)
+			}
 		}
 	}
 
@@ -460,24 +465,24 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 		idx := s.oldestIndexLocked()
 		if idx < 0 {
 			c.skippedBudget.Add(1)
-			s.publishLocked()
 			return false
 		}
-		e := s.entries[idx]
-		s.entries = append(s.entries[:idx], s.entries[idx+1:]...)
-		e.retire(c)
-		c.evictions.Add(1)
+		s.evictSlotLocked(c, idx)
 	}
 
-	for len(s.entries) >= s.cap {
-		idx := s.oldestIndexLocked()
-		if idx < 0 {
-			break
+	idx := s.emptyIndexLocked()
+	if idx < 0 {
+		idx = s.oldestIndexLocked()
+		if idx >= 0 {
+			s.evictSlotLocked(c, idx)
 		}
-		e := s.entries[idx]
-		s.entries = append(s.entries[:idx], s.entries[idx+1:]...)
-		e.retire(c)
-		c.evictions.Add(1)
+	}
+	if idx < 0 {
+		// Should only happen with a zero-capacity shard, guarded above. Release the
+		// reservation and let the caller keep ownership of raw.
+		c.releaseRetained(len(raw))
+		c.skippedBudget.Add(1)
+		return false
 	}
 
 	s.clock++
@@ -491,8 +496,7 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 		rawPooled: pooled,
 		used:      s.clock,
 	}
-	s.entries = append(s.entries, e)
-	s.publishLocked()
+	s.slots[idx].ptr.Store(e)
 	c.stores.Add(1)
 	return true
 }
@@ -500,7 +504,8 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 func (s *groupedFrameCacheShard) oldestIndexLocked() int {
 	idx := -1
 	var oldest uint64
-	for i, e := range s.entries {
+	for i := range s.slots {
+		e := s.slots[i].ptr.Load()
 		if e == nil {
 			continue
 		}
@@ -512,10 +517,26 @@ func (s *groupedFrameCacheShard) oldestIndexLocked() int {
 	return idx
 }
 
-func (s *groupedFrameCacheShard) publishLocked() {
-	snap := make([]*groupedFrameCacheEntry, len(s.entries))
-	copy(snap, s.entries)
-	s.snapshot.Store(snap)
+func (s *groupedFrameCacheShard) emptyIndexLocked() int {
+	for i := range s.slots {
+		if s.slots[i].ptr.Load() == nil {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *groupedFrameCacheShard) evictSlotLocked(c *groupedFrameCache, idx int) bool {
+	if idx < 0 || idx >= len(s.slots) {
+		return false
+	}
+	old := s.slots[idx].ptr.Swap(nil)
+	if old == nil {
+		return false
+	}
+	old.retire(c)
+	c.evictions.Add(1)
+	return true
 }
 
 func (c *groupedFrameCache) clear() {
@@ -525,15 +546,16 @@ func (c *groupedFrameCache) clear() {
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
-		entries := s.entries
-		s.entries = nil
+		entries := make([]*groupedFrameCacheEntry, 0, len(s.slots))
+		for j := range s.slots {
+			if e := s.slots[j].ptr.Swap(nil); e != nil {
+				entries = append(entries, e)
+			}
+		}
 		s.clock = 0
-		s.publishLocked()
 		s.mu.Unlock()
 		for _, e := range entries {
-			if e != nil {
-				e.retire(c)
-			}
+			e.retire(c)
 		}
 	}
 }
@@ -557,8 +579,12 @@ func (c *groupedFrameCache) stats() GroupedFrameCacheStats {
 		Capacity:          c.capacity,
 	}
 	for i := range c.shards {
-		snap, _ := c.shards[i].snapshot.Load().([]*groupedFrameCacheEntry)
-		st.Entries += len(snap)
+		s := &c.shards[i]
+		for j := range s.slots {
+			if s.slots[j].ptr.Load() != nil {
+				st.Entries++
+			}
+		}
 	}
 	return st
 }
