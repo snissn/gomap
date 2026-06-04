@@ -97,7 +97,14 @@ func TestDotScalarU8CenteredIndexedOptimizedStatusAndFallback(t *testing.T) {
 
 	singleDst := make([]int64, 1)
 	singleStatus := DotScalarU8CenteredIndexed(singleDst, codes, query, rowIDs[:1], 64)
-	if singleStatus.Invalid || singleStatus.Rows != 1 || singleStatus.Optimized || !singleStatus.Fallback {
+	if singleStatus.Invalid || singleStatus.Rows != 1 {
+		t.Fatalf("single-row status=%+v want valid row", singleStatus)
+	}
+	if DotScalarU8CenteredIndexedOptimizedEligible(1, 64) {
+		if !singleStatus.Optimized || singleStatus.Fallback {
+			t.Fatalf("single-row status=%+v want optimized indexed backend", singleStatus)
+		}
+	} else if singleStatus.Optimized || !singleStatus.Fallback {
 		t.Fatalf("single-row status=%+v want scalar fallback", singleStatus)
 	}
 	singleWant := make([]int64, 1)

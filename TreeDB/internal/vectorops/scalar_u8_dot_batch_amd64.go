@@ -8,7 +8,7 @@ const scalarU8DotBatchOptimizedAvailable = true
 
 const (
 	dotScalarU8CenteredIndexedAMD64MinDims = 16
-	dotScalarU8CenteredIndexedAMD64MinRows = 2
+	dotScalarU8CenteredIndexedAMD64MinRows = 1
 	// The SSE2 kernel accumulates into signed 32-bit vector lanes and reduces once
 	// per row. At 32,768 dimensions, the worst-case full-row scalar_u8 dot product
 	// is 65,025*32,768 = 2,130,739,200, which still fits int32. Larger dimensions

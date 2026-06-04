@@ -240,6 +240,10 @@ func TestPreparedCodeRowViewValidatesOnceAndSlicesRows2256(t *testing.T) {
 	if got := view.ElementsPerRow(); got != fixture.schema.CodeDimensions {
 		t.Fatalf("view elements_per_row=%d want %d", got, fixture.schema.CodeDimensions)
 	}
+	payload, ok := view.PayloadBytes()
+	if !ok || !bytes.Equal(payload, bytes.Join(fixture.fixedRows, nil)) {
+		t.Fatalf("view payload=%x ok=%v want row-major fixed rows", payload, ok)
+	}
 
 	for ordinal, want := range fixture.fixedRows {
 		row, ok := view.RowBytes(ordinal)
@@ -269,6 +273,9 @@ func TestPreparedCodeRowViewValidatesOnceAndSlicesRows2256(t *testing.T) {
 	var zero CodeRowView
 	if zero.Valid() {
 		t.Fatal("zero CodeRowView valid=true want false")
+	}
+	if payload, ok := zero.PayloadBytes(); ok || payload != nil {
+		t.Fatalf("zero PayloadBytes payload=%x ok=%v want fail-closed", payload, ok)
 	}
 	if row, ok := zero.RowBytes(0); ok || row != nil {
 		t.Fatalf("zero RowBytes row=%x ok=%v want fail-closed", row, ok)

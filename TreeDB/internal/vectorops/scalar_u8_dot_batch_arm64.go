@@ -8,7 +8,7 @@ const scalarU8DotBatchOptimizedAvailable = true
 
 const (
 	dotScalarU8CenteredIndexedARM64MinDims = 16
-	dotScalarU8CenteredIndexedARM64MinRows = 2
+	dotScalarU8CenteredIndexedARM64MinRows = 1
 )
 
 func dotScalarU8CenteredIndexedOptimizedEligible(rows, dims int) bool {

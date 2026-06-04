@@ -228,7 +228,7 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 	if !ok {
 		t.Fatal("row 1 code bytes unavailable")
 	}
-	got, err := scorer.scoreOrdinal(1, nil)
+	got, err := scorer.scoreOrdinal(1, &scratch, nil)
 	if err != nil {
 		t.Fatalf("scoreOrdinal: %v", err)
 	}
@@ -243,9 +243,12 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 		t.Fatalf("centered score=%v want legacy=%v", got, want)
 	}
 
-	_, err = reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, &scratch)
+	scorer, err = reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, &scratch)
 	if err != nil {
 		t.Fatalf("warm prepare scorer: %v", err)
+	}
+	if _, err := scorer.scoreOrdinal(1, &scratch, nil); err != nil {
+		t.Fatalf("warm scoreOrdinal: %v", err)
 	}
 	var stats columnVectorGraphNativeSearchStats
 	allocs := testing.AllocsPerRun(1000, func() {
@@ -253,7 +256,7 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		score, err := scorer.scoreOrdinal(1, &stats)
+		score, err := scorer.scoreOrdinal(1, &scratch, &stats)
 		if err != nil {
 			panic(err)
 		}
@@ -262,6 +265,118 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("steady-state centered scalar_u8 prepare+score allocs/run=%v want 0", allocs)
 	}
+}
+
+func TestColumnGraphScalarU8QuantizedScoreOrdinalsUsesScalarU8BatchKernel2260(t *testing.T) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 8, dims: 32, m: 4, topK: 2, efSearch: 8, queryOrdinal: 3}
+	_, d, col, def, rows := openColumnGraphScalarU8QuantizedBenchCollection1926(t, shape, true)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	query := rows[shape.queryOrdinal].vector
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		t.Fatalf("columnVectorGraphInvNorm query: %v", err)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	scorer, err := reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, &scratch)
+	if err != nil {
+		t.Fatalf("prepare scorer: %v", err)
+	}
+	if payload, ok := scorer.codeRows.PayloadBytes(); !ok || !bytes.Equal(payload, scorer.codePayload) {
+		t.Fatalf("scorer code payload ok=%v len=%d want direct CodeRowView payload", ok, len(payload))
+	}
+
+	ordinals := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	scores := make([]float64, 0, len(ordinals))
+	var stats columnVectorGraphNativeSearchStats
+	scores, err = scorer.scoreOrdinals(ordinals, scores, &scratch, &stats)
+	if err != nil {
+		t.Fatalf("scoreOrdinals batch: %v", err)
+	}
+	if len(scores) != len(ordinals) {
+		t.Fatalf("scoreOrdinals len=%d want %d", len(scores), len(ordinals))
+	}
+	for i, ordinal := range ordinals {
+		row, ok := scorer.codeRows.RowBytes(ordinal)
+		if !ok {
+			t.Fatalf("row %d unavailable", ordinal)
+		}
+		want, ok := scalarU8CenteredQuantizedCosineScore(scorer.centeredQuery, row)
+		if !ok {
+			t.Fatalf("scalar score row %d unavailable", ordinal)
+		}
+		if math.Abs(scores[i]-want) > 1e-12 {
+			t.Fatalf("batch score ordinal=%d got=%v want scalar=%v", ordinal, scores[i], want)
+		}
+	}
+	if stats.QuantizedScoreCalls != uint64(len(ordinals)) || stats.QuantizedCodeBytesRead != uint64(len(ordinals)*shape.dims) || stats.ScoreBatchCalls != 1 || stats.ScoreBatchCandidates != uint64(len(ordinals)) || stats.ScoreBatchMaxTileSize != uint64(len(ordinals)) {
+		t.Fatalf("batch stats=%+v want one quantized batch over all ordinals", stats)
+	}
+	if vectorops.DotScalarU8CenteredIndexedOptimizedEligible(len(ordinals), shape.dims) {
+		if stats.ScoreBatchOptimizedCalls != 1 || stats.ScoreBatchScalarFallbackCalls != 0 {
+			t.Fatalf("batch stats=%+v want optimized scalar_u8 batch status", stats)
+		}
+	} else if stats.ScoreBatchOptimizedCalls != 0 || stats.ScoreBatchScalarFallbackCalls != 1 {
+		t.Fatalf("batch stats=%+v want fallback scalar_u8 batch status", stats)
+	}
+
+	singleStats := columnVectorGraphNativeSearchStats{}
+	single, err := scorer.scoreOrdinals(ordinals[:1], scores[:0], &scratch, &singleStats)
+	if err != nil {
+		t.Fatalf("scoreOrdinals single fallback: %v", err)
+	}
+	wantSingle, ok := scalarU8CenteredQuantizedCosineScore(scorer.centeredQuery, mustColumnGraphQuantizedCodeRowForTest2260(t, scorer, ordinals[0]))
+	if !ok || len(single) != 1 || math.Abs(single[0]-wantSingle) > 1e-12 {
+		t.Fatalf("single score=%v ok=%v want %v", single, ok, wantSingle)
+	}
+	if vectorops.DotScalarU8CenteredIndexedOptimizedEligible(1, shape.dims) {
+		if singleStats.ScoreBatchOptimizedCalls != 1 || singleStats.ScoreBatchScalarFallbackCalls != 0 || singleStats.QuantizedScoreCalls != 1 {
+			t.Fatalf("single stats=%+v want optimized scalar_u8 single-row status", singleStats)
+		}
+	} else if singleStats.ScoreBatchOptimizedCalls != 0 || singleStats.ScoreBatchScalarFallbackCalls != 1 || singleStats.QuantizedScoreCalls != 1 {
+		t.Fatalf("single stats=%+v want scalar_u8 fallback status", singleStats)
+	}
+
+	_, err = scorer.scoreOrdinals([]int{0, len(ordinals)}, scores[:0], &scratch, &columnVectorGraphNativeSearchStats{})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "ordinal=8") {
+		t.Fatalf("invalid ordinal err=%v want fail-closed unavailable", err)
+	}
+	if _, err = scorer.scoreOrdinals(ordinals, scores[:0], nil, &columnVectorGraphNativeSearchStats{}); !errors.Is(err, errColumnVectorGraphNativeSearchScratchRequired) {
+		t.Fatalf("nil scratch err=%v want scratch required", err)
+	}
+
+	_, err = scorer.scoreOrdinals(ordinals, scores[:0], &scratch, &columnVectorGraphNativeSearchStats{})
+	if err != nil {
+		t.Fatalf("warm scoreOrdinals: %v", err)
+	}
+	var allocStats columnVectorGraphNativeSearchStats
+	allocs := testing.AllocsPerRun(1000, func() {
+		allocStats = columnVectorGraphNativeSearchStats{}
+		got, err := scorer.scoreOrdinals(ordinals, scores[:0], &scratch, &allocStats)
+		if err != nil {
+			panic(err)
+		}
+		columnPhysicalScanBenchSum += int64(got[0] * 1_000_000)
+	})
+	if allocs != 0 {
+		t.Fatalf("steady-state scalar_u8 batch scoreOrdinals allocs/run=%v want 0", allocs)
+	}
+}
+
+func mustColumnGraphQuantizedCodeRowForTest2260(tb testing.TB, scorer columnVectorGraphScalarU8QuantizedScorer, ordinal int) []byte {
+	tb.Helper()
+	row, ok := scorer.codeRows.RowBytes(ordinal)
+	if !ok {
+		tb.Fatalf("row %d unavailable", ordinal)
+	}
+	return row
 }
 
 func TestColumnGraphScalarU8QuantizedRerankExactRanksCandidateSet1926(t *testing.T) {
