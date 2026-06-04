@@ -1046,6 +1046,7 @@ func TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder(t *testing.T) {
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
 		{Op: RawKVOpDelete, Key: []byte("bravo")},
 		{Op: RawKVOpSetRID, Key: []byte("charlie"), RID: 42},
+		{Op: RawKVOpDeleteRange, Key: nil, Value: []byte("delta")},
 	} {
 		want, err := EncodeRawKVBatchPayload([]RawKVOperation{op})
 		if err != nil {
@@ -1065,6 +1066,7 @@ func TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder(t *testing.T) {
 	for _, op := range []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
 		{Op: RawKVOpDelete, Key: []byte("bravo")},
+		{Op: RawKVOpDeleteRange, Key: []byte("charlie"), Value: nil},
 	} {
 		payload, err := EncodeRawKVSingleOperationPayload(op)
 		if err != nil {

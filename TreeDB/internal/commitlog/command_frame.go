@@ -1047,7 +1047,18 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 		return nil, err
 	}
 	if op.Op == RawKVOpDeleteRange {
-		return nil, fmt.Errorf("commitlog: raw kv DeleteRange requires batch payload encoder")
+		payload, err := EncodeRawKVSingleOperationPayload(op)
+		if err != nil {
+			return nil, err
+		}
+		return encodeCommandFrameTo(dst, CommandEnvelope{
+			LSN:            lsn,
+			Kind:           CommandKindRawKVBatch,
+			Scope:          CommandScopeRawKV,
+			BaseAppliedLSN: baseAppliedLSN,
+			PayloadFormat:  PayloadFormatRawKVBatchV1,
+			Payload:        payload,
+		})
 	}
 	valueLen := len(op.Value)
 	if op.Op == RawKVOpSetRID {
