@@ -28,6 +28,8 @@ const columnVectorGraphNativeResultOrderInsertionSortLimit = 32
 
 // Frontier traversal uses a max-heap ordered by score/ordinal. A modest fanout
 // lowers sift depth while preserving the same total comparator and pop order.
+// frontierSiftDown has a fanout-4 child scan unrolled for the hot path; update
+// that scan if this fanout changes.
 const columnVectorGraphNativeFrontierHeapFanout = 4
 
 var (
@@ -2619,15 +2621,17 @@ func (s *columnVectorGraphNativeSearchScratch) frontierSiftDown(idx int, candida
 		}
 		child := firstChild
 		childCandidate := frontier[firstChild]
-		lastChild := firstChild + columnVectorGraphNativeFrontierHeapFanout
-		if lastChild > n {
-			lastChild = n
+		if next := firstChild + 1; next < n && columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
+			child = next
+			childCandidate = frontier[next]
 		}
-		for next := firstChild + 1; next < lastChild; next++ {
-			if columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
-				child = next
-				childCandidate = frontier[next]
-			}
+		if next := firstChild + 2; next < n && columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
+			child = next
+			childCandidate = frontier[next]
+		}
+		if next := firstChild + 3; next < n && columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
+			child = next
+			childCandidate = frontier[next]
 		}
 		if !columnVectorGraphSearchCandidateBetter(childCandidate, candidate) {
 			break
@@ -2650,11 +2654,21 @@ func (s *columnVectorGraphNativeSearchScratch) frontierSiftDownDebug(idx int, ca
 		}
 		child := firstChild
 		childCandidate := frontier[firstChild]
-		lastChild := firstChild + columnVectorGraphNativeFrontierHeapFanout
-		if lastChild > n {
-			lastChild = n
+		if next := firstChild + 1; next < n {
+			debugCounters.recordCandidateComparison(true)
+			if columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
+				child = next
+				childCandidate = frontier[next]
+			}
 		}
-		for next := firstChild + 1; next < lastChild; next++ {
+		if next := firstChild + 2; next < n {
+			debugCounters.recordCandidateComparison(true)
+			if columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
+				child = next
+				childCandidate = frontier[next]
+			}
+		}
+		if next := firstChild + 3; next < n {
 			debugCounters.recordCandidateComparison(true)
 			if columnVectorGraphSearchCandidateBetter(frontier[next], childCandidate) {
 				child = next
@@ -2677,18 +2691,22 @@ func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate co
 	if limit <= 0 {
 		return false
 	}
-	pos := len(s.top)
-	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, s.top[pos-1]) {
+	top := s.top
+	pos := len(top)
+	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, top[pos-1]) {
 		pos--
 	}
 	if pos >= limit {
 		return false
 	}
-	if len(s.top) < limit {
-		s.top = append(s.top, columnVectorGraphSearchCandidate{})
+	if len(top) < limit {
+		top = append(top, columnVectorGraphSearchCandidate{})
+		s.top = top
 	}
-	copy(s.top[pos+1:], s.top[pos:len(s.top)-1])
-	s.top[pos] = candidate
+	for shift := len(top) - 1; shift > pos; shift-- {
+		top[shift] = top[shift-1]
+	}
+	top[pos] = candidate
 	return true
 }
 
@@ -2698,10 +2716,11 @@ func (s *columnVectorGraphNativeSearchScratch) insertTopDebug(limit int, candida
 		debugCounters.stats.TopKInsertRejections++
 		return false
 	}
-	pos := len(s.top)
+	top := s.top
+	pos := len(top)
 	for pos > 0 {
 		debugCounters.recordCandidateComparison(false)
-		if !columnVectorGraphSearchCandidateBetter(candidate, s.top[pos-1]) {
+		if !columnVectorGraphSearchCandidateBetter(candidate, top[pos-1]) {
 			break
 		}
 		pos--
@@ -2711,16 +2730,19 @@ func (s *columnVectorGraphNativeSearchScratch) insertTopDebug(limit int, candida
 		return false
 	}
 	debugCounters.stats.TopKInsertSuccesses++
-	shiftSteps := len(s.top) - pos
-	if len(s.top) >= limit && shiftSteps > 0 {
+	shiftSteps := len(top) - pos
+	if len(top) >= limit && shiftSteps > 0 {
 		shiftSteps--
 	}
 	debugCounters.stats.TopKShiftSteps += uint64(shiftSteps)
-	if len(s.top) < limit {
-		s.top = append(s.top, columnVectorGraphSearchCandidate{})
+	if len(top) < limit {
+		top = append(top, columnVectorGraphSearchCandidate{})
+		s.top = top
 	}
-	copy(s.top[pos+1:], s.top[pos:len(s.top)-1])
-	s.top[pos] = candidate
+	for shift := len(top) - 1; shift > pos; shift-- {
+		top[shift] = top[shift-1]
+	}
+	top[pos] = candidate
 	return true
 }
 
