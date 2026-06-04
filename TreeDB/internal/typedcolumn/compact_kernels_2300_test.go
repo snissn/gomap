@@ -1,8 +1,10 @@
 package typedcolumn
 
 import (
+	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -153,6 +155,111 @@ func TestColumnPartImageCompressedNumericScalars2300(t *testing.T) {
 		if math.Float64bits(gotF64[i]) != math.Float64bits(want) {
 			t.Fatalf("reconstructed f64 row %d bits=%016x want %016x", i, math.Float64bits(gotF64[i]), math.Float64bits(want))
 		}
+	}
+}
+
+func TestColumnPartImageCompressedDictionaries2300(t *testing.T) {
+	const rows = 1024
+	const cardinality = 128
+	ids := make([]int64, rows)
+	codes := make([]int64, rows)
+	dictionary := make(map[string]int64, cardinality)
+	for i := 0; i < cardinality; i++ {
+		dictionary[fmt.Sprintf("%s%03d", strings.Repeat("atlas://did:plc:jsonbench-storage-parity/", 4), i)] = int64(i)
+	}
+	for i := range ids {
+		ids[i] = int64(i)
+		codes[i] = int64(i % cardinality)
+	}
+	part, err := BuildColumnPart(2301, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "tag_code", Type: ColumnTypeLowCardinalityCode, Compression: CompressionNone, Cardinality: cardinality},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: rows},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:    rows,
+		Columns: map[string][]int64{"id": ids, "tag_code": codes},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{
+		Dictionaries:       map[string]map[string]int64{"tag_code": dictionary},
+		SectionCompression: CompressionLZ4,
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	dictSection, err := image.singleSection(ColumnPartImageSectionDictionaries)
+	if err != nil {
+		t.Fatalf("dictionary section: %v", err)
+	}
+	if dictSection.Compression != CompressionLZ4 {
+		t.Fatalf("dictionary compression=%s want %s raw/stored=%d/%d", dictSection.Compression, CompressionLZ4, dictSection.RawBytes, dictSection.Length)
+	}
+	if dictSection.RawBytes <= dictSection.Length {
+		t.Fatalf("dictionary raw/stored=%d/%d want compressed section smaller", dictSection.RawBytes, dictSection.Length)
+	}
+	accounting := image.SectionByteAccounting()
+	foundAccounting := false
+	for _, row := range accounting {
+		if row.Kind == ColumnPartImageSectionDictionaries {
+			foundAccounting = true
+			if row.RawBytes != dictSection.RawBytes || row.StoredBytes != dictSection.Length || row.Compression != CompressionLZ4 {
+				t.Fatalf("dictionary accounting=%+v section=%+v", row, dictSection)
+			}
+		}
+	}
+	if !foundAccounting {
+		t.Fatalf("dictionary section missing from accounting: %+v", accounting)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	dictionaries, err := parsed.Dictionaries()
+	if err != nil {
+		t.Fatalf("Dictionaries: %v", err)
+	}
+	if len(dictionaries["tag_code"]) != cardinality {
+		t.Fatalf("dictionary entries=%d want %d", len(dictionaries["tag_code"]), cardinality)
+	}
+	for value, code := range dictionary {
+		if got := dictionaries["tag_code"][value]; got != code {
+			t.Fatalf("dictionary value %q code=%d want %d", value, got, code)
+		}
+	}
+	if _, err := ColumnPartFromImage(parsed); err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	tcs1, _, err := EncodeTCS1ColumnPartImage(parsed)
+	if err != nil {
+		t.Fatalf("EncodeTCS1ColumnPartImage: %v", err)
+	}
+	decoded, _, err := DecodeTCS1ColumnPartImage(tcs1)
+	if err != nil {
+		t.Fatalf("DecodeTCS1ColumnPartImage: %v", err)
+	}
+	if _, err := decoded.Dictionaries(); err != nil {
+		t.Fatalf("decoded TCS1 dictionaries: %v", err)
+	}
+
+	corrupt := parsed
+	corrupt.Sections = append([]ColumnPartImageSection(nil), parsed.Sections...)
+	for i := range corrupt.Sections {
+		if corrupt.Sections[i].Kind == ColumnPartImageSectionDictionaries {
+			corrupt.Sections[i].RawBytes++
+			break
+		}
+	}
+	if _, err := corrupt.Dictionaries(); err == nil || !strings.Contains(err.Error(), "decoded length") {
+		t.Fatalf("corrupt dictionary raw bytes err=%v want decoded length mismatch", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -216,6 +217,55 @@ func TestTypedColumnAdapterOptInLocatorSectionCompression1952(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterOptInDictionarySectionCompression2300(t *testing.T) {
+	field := typedColumnAdapterField("kind", ColumnStoreValueString)
+	field.Dictionary = true
+	const cardinality = 128
+	const rowsN = 1024
+	values := make([]string, cardinality)
+	for i := range values {
+		values[i] = fmt.Sprintf("%s%03d", strings.Repeat("atlas://did:plc:jsonbench-storage-parity/", 4), i)
+	}
+	rows := make([]typedColumnAdapterRow, rowsN)
+	for i := range rows {
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{
+			"kind": {Type: ColumnStoreValueString, Present: true, String: values[i%cardinality]},
+		}}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{
+		PartID:                2300,
+		RowsPerGranule:        rowsN,
+		Fields:                []TypedStorageField{field},
+		SectionCompression:    typedcolumn.CompressionLZ4,
+		SectionCompressionSet: true,
+	}, rows)
+	if err != nil {
+		t.Fatalf("build part: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	section, ok := typedColumnImageSectionByKind(image, typedcolumn.ColumnPartImageSectionDictionaries)
+	if !ok {
+		t.Fatalf("missing dictionary section in %+v", image.Sections)
+	}
+	if section.Compression != typedcolumn.CompressionLZ4 || section.RawBytes <= section.Length {
+		t.Fatalf("dictionary section=%+v want lz4 compressed below raw", section)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{Fields: []TypedStorageField{field}}, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	got, err := parsed.scanColumnValues("kind")
+	if err != nil {
+		t.Fatalf("scan kind: %v", err)
+	}
+	if len(got) != len(rows) || got[0].String != values[0] || got[cardinality+1].String != values[1] {
+		t.Fatalf("scan values len=%d first=%q second-cycle=%q", len(got), got[0].String, got[cardinality+1].String)
+	}
+}
+
 func TestTypedColumnAdapterCompressedLocatorCorruptionFailsClosed1952(t *testing.T) {
 	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
 		t.Run(compression.String(), func(t *testing.T) {
@@ -269,12 +319,12 @@ func TestTypedColumnAdapterCompressedLocatorRowMismatchFailsClosed1952(t *testin
 		}
 	}
 	_, err = typedcolumn.ColumnPartFromImage(corrupt)
-	if err == nil || !strings.Contains(err.Error(), "row locator section rows") {
-		t.Fatalf("ColumnPartFromImage locator row mismatch err=%v want fail-closed row count diagnostic", err)
+	if err == nil || !strings.Contains(err.Error(), "raw bytes") {
+		t.Fatalf("ColumnPartFromImage locator row mismatch err=%v want fail-closed raw bytes diagnostic", err)
 	}
 }
 
-func TestTypedColumnAdapterDictionarySectionCompressionUnsupported1952(t *testing.T) {
+func TestTypedColumnAdapterDictionarySectionCompressionRawLengthMismatchFailsClosed1952(t *testing.T) {
 	field := typedColumnAdapterField("kind", ColumnStoreValueString)
 	rows := []typedColumnAdapterRow{
 		{PrimaryID: 1, Values: map[string]columnDeclaredValue{"kind": {Type: ColumnStoreValueString, Present: true, String: "commit"}}},
@@ -294,8 +344,8 @@ func TestTypedColumnAdapterDictionarySectionCompressionUnsupported1952(t *testin
 		}
 	}
 	_, err = image.Dictionaries()
-	if err == nil || !strings.Contains(err.Error(), "dictionaries") || !strings.Contains(err.Error(), "raw-length") {
-		t.Fatalf("Dictionaries compressed section err=%v want fail-closed raw-length diagnostic", err)
+	if err == nil || !strings.Contains(err.Error(), "dictionaries") || !strings.Contains(err.Error(), "decoded length") {
+		t.Fatalf("Dictionaries compressed section err=%v want fail-closed decoded-length diagnostic", err)
 	}
 }
 
