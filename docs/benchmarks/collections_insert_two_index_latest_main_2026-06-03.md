@@ -14,6 +14,7 @@ evidence, not a formal product benchmark.
 
 ```sh
 OUT=/tmp/collections_insert_latest_main_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$OUT"
 GOWORK=off USE_BUILT_BIN=1 ./scripts/bench_collections_canonical.sh \
   -out-dir "$OUT" \
   -formats template-v1,json \
