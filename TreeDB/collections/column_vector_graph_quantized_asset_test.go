@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
 
 func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T) {
@@ -176,6 +177,89 @@ func TestColumnGraphScalarU8QuantizedOnlyUsesPreparedCodes1926(t *testing.T) {
 	}
 	if quantized.Stats.QuantizedScoreCalls == 0 || quantized.Stats.PreparedScoreCalls != 0 || quantized.Stats.VectorBytesRead != 0 || quantized.Stats.NormBytesRead != 0 {
 		t.Fatalf("quantized stats=%+v want prepared scalar_u8 code scoring without exact vector/norm scoring", quantized.Stats)
+	}
+}
+
+func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, -1}},
+		{id: "doc-b", vector: []float32{0.25, -0.5, 0.75}},
+		{id: "doc-c", vector: []float32{-0.75, 0.25, 0.5}},
+	}
+	query := []float32{0.2, -0.4, 0.9}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		t.Fatalf("columnVectorGraphInvNorm query: %v", err)
+	}
+
+	if _, err := reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query[:2], queryInvNorm, &columnVectorGraphNativeSearchScratch{}); !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
+		t.Fatalf("prepare short query err=%v want dimension mismatch", err)
+	}
+	if _, err := reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, nil); !errors.Is(err, errColumnVectorGraphNativeSearchScratchRequired) {
+		t.Fatalf("prepare nil scratch err=%v want scratch required", err)
+	}
+
+	var scratch columnVectorGraphNativeSearchScratch
+	scorer, err := reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, &scratch)
+	if err != nil {
+		t.Fatalf("prepare scorer: %v", err)
+	}
+	if len(scorer.queryCode) != def.Dimensions || !scorer.centeredQuery.ValidForDims(def.Dimensions) {
+		t.Fatalf("scorer query_code_len=%d centered=%+v dims=%d", len(scorer.queryCode), scorer.centeredQuery, def.Dimensions)
+	}
+	for i, code := range scorer.queryCode {
+		want := vectorops.ScalarU8CenteredValue(code)
+		if got := scorer.centeredQuery.Values[i]; got != want {
+			t.Fatalf("centered query[%d]=%d want %d from code %d", i, got, want, code)
+		}
+	}
+	row, ok := scorer.codeRows.RowBytes(1)
+	if !ok {
+		t.Fatal("row 1 code bytes unavailable")
+	}
+	got, err := scorer.scoreOrdinal(1, nil)
+	if err != nil {
+		t.Fatalf("scoreOrdinal: %v", err)
+	}
+	var legacyDot int64
+	for i, qc := range scorer.queryCode {
+		q := int64(2*int(qc) - 255)
+		c := int64(2*int(row[i]) - 255)
+		legacyDot += q * c
+	}
+	want := float64(legacyDot) / columnVectorGraphScalarU8CodeScale
+	if math.Abs(got-want) > 1e-12 {
+		t.Fatalf("centered score=%v want legacy=%v", got, want)
+	}
+
+	_, err = reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, &scratch)
+	if err != nil {
+		t.Fatalf("warm prepare scorer: %v", err)
+	}
+	var stats columnVectorGraphNativeSearchStats
+	allocs := testing.AllocsPerRun(1000, func() {
+		scorer, err := reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, &scratch)
+		if err != nil {
+			panic(err)
+		}
+		score, err := scorer.scoreOrdinal(1, &stats)
+		if err != nil {
+			panic(err)
+		}
+		columnPhysicalScanBenchSum += int64(score * 1_000_000)
+	})
+	if allocs != 0 {
+		t.Fatalf("steady-state centered scalar_u8 prepare+score allocs/run=%v want 0", allocs)
 	}
 }
 
@@ -439,6 +523,10 @@ func scalarU8QuantizedTopKForTest1926(tb testing.TB, rows []columnGraphRebuildIn
 	for i, value := range query {
 		queryCodes[i] = columnVectorGraphScalarU8Code(value * queryInvNorm)
 	}
+	queryCentered, _, ok := vectorops.PrepareScalarU8CenteredQuery(make([]vectorops.ScalarU8CenteredCode, 0, len(queryCodes)), queryCodes, len(queryCodes))
+	if !ok {
+		tb.Fatalf("PrepareScalarU8CenteredQuery query dims=%d", len(queryCodes))
+	}
 	var top []columnVectorGraphSearchCandidate
 	rowCodes := make([]byte, len(query))
 	for ordinal, row := range rows {
@@ -449,7 +537,10 @@ func scalarU8QuantizedTopKForTest1926(tb testing.TB, rows []columnGraphRebuildIn
 		for i, value := range row.vector {
 			rowCodes[i] = columnVectorGraphScalarU8Code(value * invNorm)
 		}
-		score := scalarU8QuantizedCosineScore(queryCodes, rowCodes)
+		score, ok := scalarU8CenteredQuantizedCosineScore(queryCentered, rowCodes)
+		if !ok {
+			tb.Fatalf("scalarU8CenteredQuantizedCosineScore row %d", ordinal)
+		}
 		top = insertColumnGraphTopForTest(top, topK, columnVectorGraphSearchCandidate{ordinal: ordinal, score: score})
 	}
 	out := make([]columnVectorGraphNativeSearchResult, len(top))

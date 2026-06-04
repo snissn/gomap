@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
 
 // Keep modest scratch overgrowth to avoid realloc churn when callers vary
@@ -864,26 +865,27 @@ type columnVectorGraphSearchCandidate struct {
 // It is not concurrency-safe. Parallel searches over immutable graph assets are
 // valid with one reader and one scratch per worker.
 type columnVectorGraphNativeSearchScratch struct {
-	scoreScratch        columnPhysicalRowReaderScratch
-	expandScratch       columnPhysicalRowReaderScratch
-	resultScratch       columnPhysicalRowReaderScratch
-	visitMarks          []uint64
-	visitEpoch          uint64
-	frontier            []columnVectorGraphSearchCandidate
-	top                 []columnVectorGraphSearchCandidate
-	results             []columnVectorGraphNativeSearchResult
-	idBuffers           [][]byte
-	resultOrder         []int
-	resultOrdinals      []int
-	resultRowRefs       []DocumentRowRef
-	resultHasRefs       []bool
-	scoreTileOrdinals   []int
-	scoreTileScores     []float64
-	scoreTileRowIDs     []uint32
-	scoreTileDots       []float32
-	quantizedQueryCodes []byte
-	wavefrontCandidates []columnVectorGraphSearchCandidate
-	searchPlan          columnVectorGraphSearchPlan
+	scoreScratch           columnPhysicalRowReaderScratch
+	expandScratch          columnPhysicalRowReaderScratch
+	resultScratch          columnPhysicalRowReaderScratch
+	visitMarks             []uint64
+	visitEpoch             uint64
+	frontier               []columnVectorGraphSearchCandidate
+	top                    []columnVectorGraphSearchCandidate
+	results                []columnVectorGraphNativeSearchResult
+	idBuffers              [][]byte
+	resultOrder            []int
+	resultOrdinals         []int
+	resultRowRefs          []DocumentRowRef
+	resultHasRefs          []bool
+	scoreTileOrdinals      []int
+	scoreTileScores        []float64
+	scoreTileRowIDs        []uint32
+	scoreTileDots          []float32
+	quantizedQueryCodes    []byte
+	quantizedQueryCentered []vectorops.ScalarU8CenteredCode
+	wavefrontCandidates    []columnVectorGraphSearchCandidate
+	searchPlan             columnVectorGraphSearchPlan
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth int) error {
@@ -1037,6 +1039,13 @@ func resizeColumnVectorGraphNativeFloat64Scratch(dst []float64, target int) []fl
 func resizeColumnVectorGraphNativeByteScratch(dst []byte, target int) []byte {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		return make([]byte, 0, target)
+	}
+	return dst[:0]
+}
+
+func resizeColumnVectorGraphNativeScalarU8CenteredScratch(dst []vectorops.ScalarU8CenteredCode, target int) []vectorops.ScalarU8CenteredCode {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]vectorops.ScalarU8CenteredCode, 0, target)
 	}
 	return dst[:0]
 }
