@@ -1,0 +1,433 @@
+#!/usr/bin/env python3
+"""Emit non-mutating TreeDB JSONBench storage compression audits.
+
+The audit is intentionally filesystem/frame-level. It does not mutate the DB,
+does not run compaction, and does not exclude durable TreeDB storage from the
+reported size basis. Command WAL remains a separate subtree so downstream
+reports can keep using durable bytes excluding only command WAL.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import os
+import struct
+import time
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+
+RECORD_HEADER_SIZE = 20
+FRAME_HEADER_SIZE = 12
+RECORD_FLAG_GROUPED = 1 << 0
+FRAME_FLAG_COMPRESSED = 1 << 0
+
+
+def resolve_main_dir(db_dir: Path) -> Path:
+    db_dir = db_dir.expanduser().resolve()
+    candidates = [db_dir]
+    if db_dir.name != "maindb":
+        candidates.append(db_dir / "maindb")
+    for candidate in candidates:
+        if candidate.is_dir() and (candidate / "index.db").exists():
+            return candidate
+    raise SystemExit(f"could not resolve TreeDB maindb under {db_dir}")
+
+
+def iter_files(path: Path) -> list[Path]:
+    if not path.exists():
+        return []
+    if path.is_file():
+        return [path]
+    files: list[Path] = []
+    for root, _, names in os.walk(path):
+        for name in names:
+            files.append(Path(root) / name)
+    return sorted(files)
+
+
+def gzip_oracle(main_dir: Path, level: int) -> dict[str, Any]:
+    subtrees = [(".", main_dir)]
+    for name in ("leaf_vlog", "value_vlog", "column_assets", "index.db", "wal"):
+        subtrees.append((name, main_dir / name))
+
+    rows: list[dict[str, Any]] = []
+    for name, path in subtrees:
+        raw = 0
+        gz = 0
+        files = iter_files(path)
+        for file_path in files:
+            data = file_path.read_bytes()
+            raw += len(data)
+            gz += len(gzip.compress(data, compresslevel=level))
+        rows.append(
+            {
+                "subtree": name,
+                "path": str(path),
+                "files": len(files),
+                "raw_bytes": raw,
+                "gzip_bytes": gz,
+                "gzip_to_raw_ratio": (gz / raw) if raw else None,
+            }
+        )
+    return {"gzip_level": level, "subtrees": rows}
+
+
+def value_log_files(log_dir: Path) -> list[Path]:
+    if not log_dir.is_dir():
+        return []
+    return sorted(
+        p
+        for p in log_dir.iterdir()
+        if p.is_file() and p.name.startswith("value-") and p.name.endswith(".log")
+    )
+
+
+def frame_mode(frame_flags: int, reserved: int, dict_id: int) -> str:
+    if frame_flags & FRAME_FLAG_COMPRESSED == 0:
+        return "grouped_raw"
+    if dict_id:
+        return "grouped_dict"
+    if reserved == 1:
+        return "grouped_block_snappy"
+    if reserved == 2:
+        return "grouped_block_lz4"
+    if reserved == 0:
+        return "grouped_block_none"
+    return f"grouped_block_codec_{reserved}"
+
+
+def empty_mode_stats() -> dict[str, int]:
+    return {
+        "frames": 0,
+        "records": 0,
+        "raw_payload_bytes": 0,
+        "stored_payload_bytes": 0,
+        "record_body_bytes": 0,
+    }
+
+
+def scan_log_frames(log_dir: Path) -> dict[str, Any]:
+    modes: dict[str, dict[str, int]] = defaultdict(empty_mode_stats)
+    stats = {
+        "files": 0,
+        "file_bytes": 0,
+        "records": 0,
+        "grouped_frames": 0,
+        "grouped_records": 0,
+        "raw_records": 0,
+        "raw_payload_bytes": 0,
+        "stored_payload_bytes": 0,
+        "truncated_files": 0,
+        "parse_errors": 0,
+    }
+    samples: list[dict[str, Any]] = []
+
+    for path in value_log_files(log_dir):
+        stats["files"] += 1
+        data = path.read_bytes()
+        stats["file_bytes"] += len(data)
+        pos = 0
+        while pos + RECORD_HEADER_SIZE <= len(data):
+            flags = data[pos + 5]
+            body_len = struct.unpack_from("<I", data, pos + 16)[0]
+            body_start = pos + RECORD_HEADER_SIZE
+            body_end = body_start + body_len
+            if body_end > len(data):
+                stats["truncated_files"] += 1
+                break
+            body = data[body_start:body_end]
+            stats["records"] += 1
+            if flags & RECORD_FLAG_GROUPED == 0:
+                mode = modes["raw_record"]
+                mode["frames"] += 1
+                mode["records"] += 1
+                mode["raw_payload_bytes"] += body_len
+                mode["stored_payload_bytes"] += body_len
+                mode["record_body_bytes"] += body_len
+                stats["raw_records"] += 1
+                stats["raw_payload_bytes"] += body_len
+                stats["stored_payload_bytes"] += body_len
+                if len(samples) < 12:
+                    samples.append(
+                        {
+                            "path": str(path),
+                            "offset": pos,
+                            "mode": "raw_record",
+                            "raw_payload_bytes": body_len,
+                            "stored_payload_bytes": body_len,
+                        }
+                    )
+                pos = body_end
+                continue
+
+            if len(body) < FRAME_HEADER_SIZE:
+                stats["parse_errors"] += 1
+                pos = body_end
+                continue
+            version = body[0]
+            frame_flags = body[1]
+            k = body[2]
+            reserved = body[3]
+            dict_id = struct.unpack_from("<Q", body, 4)[0]
+            offsets_start = FRAME_HEADER_SIZE + k * 8
+            offsets_end = offsets_start + (k + 1) * 4
+            if version != 1 or k == 0 or offsets_end > len(body):
+                stats["parse_errors"] += 1
+                pos = body_end
+                continue
+            raw_payload = struct.unpack_from("<I", body, offsets_start + k * 4)[0]
+            stored_payload = len(body) - offsets_end
+            name = frame_mode(frame_flags, reserved, dict_id)
+            mode = modes[name]
+            mode["frames"] += 1
+            mode["records"] += k
+            mode["raw_payload_bytes"] += raw_payload
+            mode["stored_payload_bytes"] += stored_payload
+            mode["record_body_bytes"] += body_len
+
+            stats["grouped_frames"] += 1
+            stats["grouped_records"] += k
+            stats["raw_payload_bytes"] += raw_payload
+            stats["stored_payload_bytes"] += stored_payload
+            if len(samples) < 12 and (name == "grouped_raw" or raw_payload == stored_payload):
+                samples.append(
+                    {
+                        "path": str(path),
+                        "offset": pos,
+                        "mode": name,
+                        "raw_payload_bytes": raw_payload,
+                        "stored_payload_bytes": stored_payload,
+                        "records": k,
+                    }
+                )
+            pos = body_end
+        if pos < len(data) and pos + RECORD_HEADER_SIZE > len(data):
+            stats["truncated_files"] += 1
+
+    raw = stats["raw_payload_bytes"]
+    stored = stats["stored_payload_bytes"]
+    raw_mode_bytes = modes.get("raw_record", {}).get("raw_payload_bytes", 0) + modes.get(
+        "grouped_raw", {}
+    ).get("raw_payload_bytes", 0)
+    return {
+        **stats,
+        "stored_to_raw_ratio": (stored / raw) if raw else None,
+        "raw_mode_payload_bytes": raw_mode_bytes,
+        "raw_mode_payload_fraction": (raw_mode_bytes / raw) if raw else None,
+        "modes": dict(sorted(modes.items())),
+        "raw_frame_samples": samples,
+    }
+
+
+def vlog_frame_audit(main_dir: Path) -> dict[str, Any]:
+    leaf = scan_log_frames(main_dir / "leaf_vlog")
+    value = scan_log_frames(main_dir / "value_vlog")
+    return {
+        "leaf_vlog": leaf,
+        "value_vlog": value,
+        "gates": {
+            "value_vlog_raw_mode_payload_bytes": value["raw_mode_payload_bytes"],
+            "value_vlog_raw_mode_payload_fraction": value["raw_mode_payload_fraction"],
+            "leaf_vlog_raw_mode_payload_bytes": leaf["raw_mode_payload_bytes"],
+            "leaf_vlog_raw_mode_payload_fraction": leaf["raw_mode_payload_fraction"],
+        },
+    }
+
+
+def column_section_audit(main_dir: Path, gzip_level: int) -> dict[str, Any]:
+    root = main_dir / "column_assets"
+    files = []
+    for path in iter_files(root):
+        data = path.read_bytes()
+        gz = gzip.compress(data, compresslevel=gzip_level)
+        files.append(
+            {
+                "path": str(path),
+                "name": path.name,
+                "bytes": len(data),
+                "gzip_bytes": len(gz),
+                "gzip_to_raw_ratio": (len(gz) / len(data)) if data else None,
+            }
+        )
+    total = sum(row["bytes"] for row in files)
+    gzip_total = sum(row["gzip_bytes"] for row in files)
+    return {
+        "status": "filesystem_oracle_only",
+        "reason": "section-level typed-column descriptors require JSONBench/typed-column metadata; this audit reports file-level compression headroom",
+        "files": files,
+        "total_bytes": total,
+        "gzip_bytes": gzip_total,
+        "gzip_to_raw_ratio": (gzip_total / total) if total else None,
+    }
+
+
+def compression_fields(data: Any, prefix: str = "") -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if "compression" in str(key).lower():
+                out.append({"path": path, "value": value})
+            out.extend(compression_fields(value, path))
+    elif isinstance(data, list):
+        for idx, value in enumerate(data):
+            out.extend(compression_fields(value, f"{prefix}[{idx}]"))
+    return out
+
+
+def load_result_compression_summary(result_json: Path | None) -> dict[str, Any] | None:
+    if result_json is None:
+        return None
+    data = json.loads(result_json.read_text())
+    fields = compression_fields(data)
+    raw = json.dumps(fields, sort_keys=True)
+    silent_none = "requested=none" in raw or "actual=none" in raw
+    return {
+        "path": str(result_json),
+        "compression_fields": fields,
+        "silent_none_suspected": silent_none,
+    }
+
+
+def retained_payload_audit_stub() -> dict[str, Any]:
+    return {
+        "status": "not_available_from_filesystem_audit",
+        "required_for_final_claim": True,
+        "reason": "path-aware retained-payload audit must decode retained rows and verify declared JSON paths are absent while reconstruction hash passes",
+        "declared_paths": [
+            "time_us",
+            "kind",
+            "did",
+            "commit.operation",
+            "commit.collection",
+        ],
+    }
+
+
+def write_json(path: Path, data: Any) -> None:
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def ratio_text(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.3f}"
+
+
+def write_md(path: Path, report: dict[str, Any]) -> None:
+    gzip_rows = report["gzip_oracle"]["subtrees"]
+    frame = report["vlog_frame_audit"]
+    column = report["column_section_audit"]
+    retained = report["retained_payload_audit"]
+    lines = [
+        "# TreeDB JSONBench Storage Compression Audit",
+        "",
+        f"- DB dir: `{report['db_dir']}`",
+        f"- main dir: `{report['main_dir']}`",
+        f"- generated at unix: `{report['generated_at_unix']}`",
+        "",
+        "## gzip oracle",
+        "",
+        "| subtree | files | raw bytes | gzip bytes | gzip/raw |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for row in gzip_rows:
+        lines.append(
+            f"| `{row['subtree']}` | {row['files']} | {row['raw_bytes']} | {row['gzip_bytes']} | {ratio_text(row['gzip_to_raw_ratio'])} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## vlog frame audit",
+            "",
+            "| log | records | raw payload | stored payload | raw-mode bytes | raw-mode fraction | stored/raw |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for name in ("leaf_vlog", "value_vlog"):
+        row = frame[name]
+        lines.append(
+            f"| `{name}` | {row['records']} | {row['raw_payload_bytes']} | {row['stored_payload_bytes']} | {row['raw_mode_payload_bytes']} | {ratio_text(row['raw_mode_payload_fraction'])} | {ratio_text(row['stored_to_raw_ratio'])} |"
+        )
+
+    for name in ("leaf_vlog", "value_vlog"):
+        row = frame[name]
+        lines.extend(["", f"### {name} modes", "", "| mode | frames | records | raw payload | stored payload | stored/raw |", "|---|---:|---:|---:|---:|---:|"])
+        for mode, stats in row["modes"].items():
+            ratio = None
+            if stats["raw_payload_bytes"]:
+                ratio = stats["stored_payload_bytes"] / stats["raw_payload_bytes"]
+            lines.append(
+                f"| `{mode}` | {stats['frames']} | {stats['records']} | {stats['raw_payload_bytes']} | {stats['stored_payload_bytes']} | {ratio_text(ratio)} |"
+            )
+
+    lines.extend(
+        [
+            "",
+            "## column section audit",
+            "",
+            f"- status: `{column['status']}`",
+            f"- reason: {column['reason']}",
+            f"- total bytes: `{column['total_bytes']}`",
+            f"- gzip bytes: `{column['gzip_bytes']}`",
+            f"- gzip/raw: `{ratio_text(column['gzip_to_raw_ratio'])}`",
+            "",
+            "## retained payload audit",
+            "",
+            f"- status: `{retained['status']}`",
+            f"- final claim requires path-aware retained payload audit: `{retained['required_for_final_claim']}`",
+            f"- reason: {retained['reason']}",
+        ]
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def build_report(args: argparse.Namespace) -> dict[str, Any]:
+    main_dir = resolve_main_dir(Path(args.db_dir))
+    result_json = Path(args.result_json).expanduser().resolve() if args.result_json else None
+    return {
+        "schema": "treedb_jsonbench_storage_audit_v1",
+        "db_dir": str(Path(args.db_dir).expanduser().resolve()),
+        "main_dir": str(main_dir),
+        "generated_at_unix": int(time.time()),
+        "gzip_oracle": gzip_oracle(main_dir, args.gzip_level),
+        "vlog_frame_audit": vlog_frame_audit(main_dir),
+        "column_section_audit": column_section_audit(main_dir, args.gzip_level),
+        "retained_payload_audit": retained_payload_audit_stub(),
+        "result_compression_summary": load_result_compression_summary(result_json),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db-dir", required=True, help="TreeDB DB dir or maindb dir")
+    parser.add_argument("--result-json", help="Optional JSONBench result.json for compression policy fields")
+    parser.add_argument("--out-dir", help="Directory for audit JSON/Markdown artifacts")
+    parser.add_argument("--gzip-level", type=int, default=6)
+    parser.add_argument("--json-only", action="store_true", help="Print combined JSON to stdout")
+    args = parser.parse_args()
+
+    report = build_report(args)
+    if args.json_only or not args.out_dir:
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    out_dir = Path(args.out_dir).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_json(out_dir / "compression_audit.json", report)
+    write_md(out_dir / "compression_audit.md", report)
+    write_json(out_dir / "gzip_oracle.json", report["gzip_oracle"])
+    write_json(out_dir / "vlog_frame_audit.json", report["vlog_frame_audit"])
+    write_json(out_dir / "column_section_audit.json", report["column_section_audit"])
+    write_json(out_dir / "retained_payload_audit.json", report["retained_payload_audit"])
+    print(out_dir / "compression_audit.json")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
