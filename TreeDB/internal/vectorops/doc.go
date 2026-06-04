@@ -7,5 +7,6 @@
 // tiles directly. They validate full-row shapes, leave dst unchanged for invalid
 // shapes, and report whether a platform batch SIMD kernel or a non-batch
 // fallback handled the call. Scalar_u8 helpers expose centered int16 query
-// layouts for future indexed u8 kernels while keeping callers allocation-free.
+// layouts and indexed row-major byte-code dot kernels while keeping callers
+// allocation-free.
 package vectorops

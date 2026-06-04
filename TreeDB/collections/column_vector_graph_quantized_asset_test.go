@@ -219,8 +219,9 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 	}
 	for i, code := range scorer.queryCode {
 		want := vectorops.ScalarU8CenteredValue(code)
-		if got := scorer.centeredQuery.Values[i]; got != want {
-			t.Fatalf("centered query[%d]=%d want %d from code %d", i, got, want, code)
+		got, ok := scorer.centeredQuery.Value(i)
+		if !ok || got != want {
+			t.Fatalf("centered query[%d]=%d ok=%v want %d from code %d", i, got, ok, want, code)
 		}
 	}
 	row, ok := scorer.codeRows.RowBytes(1)
