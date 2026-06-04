@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1306,6 +1307,16 @@ func TestCompactStorageExhaustiveSealsCurrentLeafGeneration(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestCompactStorageExhaustiveRefusesExternalLeafPageLog(t *testing.T) {
+	d, _, _ := openLeafGenerationPackTestDB(t)
+	writeLeafGenerationKeys(t, d, "current", 8, 'x')
+
+	_, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if err == nil || !strings.Contains(err.Error(), "internally-owned leaf page log") {
+		t.Fatalf("CompactStorage exhaustive with external leaf log error=%v, want ownership error", err)
 	}
 }
 
