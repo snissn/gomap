@@ -2,7 +2,6 @@ package collections
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
@@ -11,9 +10,10 @@ import (
 const columnVectorGraphScalarU8CodeScale = 255.0 * 255.0
 
 type columnVectorGraphScalarU8QuantizedScorer struct {
-	indexName string
-	dims      int
-	codeRows  quantizedasset.CodeRowView
+	indexName   string
+	dims        int
+	codeRows    quantizedasset.CodeRowView
+	codePayload []byte
 	// queryCode and centeredQuery alias caller-owned search scratch.
 	queryCode     []byte
 	centeredQuery vectorops.ScalarU8CenteredQuery
@@ -69,6 +69,10 @@ func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode
 	if elements := codeRows.ElementsPerRow(); elements != r.def.Dimensions {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q code elements_per_row=%d want dimensions=%d", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, elements, r.def.Dimensions)
 	}
+	codePayload, ok := codeRows.PayloadBytes()
+	if !ok || len(codePayload) != r.RowCount()*r.def.Dimensions {
+		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q code row payload bytes=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, len(codePayload), ok, r.RowCount()*r.def.Dimensions)
+	}
 	queryCode := resizeColumnVectorGraphNativeByteScratch(scratch.quantizedQueryCodes, r.def.Dimensions)
 	for _, value := range query {
 		queryCode = append(queryCode, columnVectorGraphScalarU8Code(value*queryInvNorm))
@@ -80,29 +84,38 @@ func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q centered scalar_u8 query unavailable", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName)
 	}
 	scratch.quantizedQueryCentered = centeredScratch
-	return columnVectorGraphScalarU8QuantizedScorer{indexName: indexName, dims: r.def.Dimensions, codeRows: codeRows, queryCode: queryCode, centeredQuery: centeredQuery}, nil
+	return columnVectorGraphScalarU8QuantizedScorer{indexName: indexName, dims: r.def.Dimensions, codeRows: codeRows, codePayload: codePayload, queryCode: queryCode, centeredQuery: centeredQuery}, nil
 }
 
-func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinal(ordinal int, stats *columnVectorGraphNativeSearchStats) (float64, error) {
-	if s == nil || !s.codeRows.Valid() || s.dims <= 0 || len(s.queryCode) != s.dims || !s.centeredQuery.ValidForDims(s.dims) {
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if s == nil || !s.codeRows.Valid() || s.dims <= 0 || len(s.codePayload) != s.codeRows.Rows()*s.dims || len(s.queryCode) != s.dims || !s.centeredQuery.ValidForDims(s.dims) {
 		return 0, fmt.Errorf("%w: column_graph quantized scalar_u8 scorer is unavailable", ErrVectorIndexSearchUnavailable)
 	}
-	row, ok := s.codeRows.RowBytes(ordinal)
-	if !ok || len(row) != s.dims {
-		return 0, fmt.Errorf("%w: column_graph quantized index %q code row ordinal=%d unavailable len=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, len(row), ok, s.dims)
+	if scratch == nil {
+		return 0, fmt.Errorf("collections: column_graph quantized scalar_u8 scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
 	}
+	rows := s.codeRows.Rows()
+	if ordinal < 0 || ordinal >= rows || uint64(ordinal) > uint64(^uint32(0)) {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q code row ordinal=%d unavailable len=0 ok=false want %d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, s.dims)
+	}
+	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, 1)
+	rowIDs := scratch.scoreTileRowIDs[:1]
+	rowIDs[0] = uint32(ordinal)
+	scratch.scoreTileQuantizedDots = ensureColumnVectorGraphNativeInt64Scratch(scratch.scoreTileQuantizedDots, 1)
+	dots := scratch.scoreTileQuantizedDots[:1]
+	status := vectorops.DotScalarU8CenteredIndexed(dots, s.codePayload, s.centeredQuery, rowIDs, s.dims)
+	if status.Invalid || status.Rows != 1 {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q scalar_u8 score invalid status=%+v rows=%d want 1", ErrVectorIndexSearchUnavailable, s.indexName, status, status.Rows)
+	}
+	score := scalarU8QuantizedCosineScoreFromDot(dots[0])
 	if stats != nil {
-		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
-		s.recordScoreStats(stats, 1)
-	}
-	score, ok := scalarU8CenteredQuantizedCosineScore(s.centeredQuery, row)
-	if !ok || math.IsNaN(score) || math.IsInf(score, 0) {
-		return 0, fmt.Errorf("collections: column_graph quantized index %q candidate ordinal=%d scalar_u8 score is not finite", s.indexName, ordinal)
+		recordColumnVectorGraphScoreBatchStats(stats, status.Rows, status.Optimized, status.Fallback)
+		s.recordScoreStats(stats, status.Rows)
 	}
 	return score, nil
 }
 
-func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinals(ordinals []int, dst []float64, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinals(ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
 	if cap(dst) < len(ordinals) {
 		dst = make([]float64, len(ordinals))
 	} else {
@@ -111,28 +124,34 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinals(ordinals []int,
 	if len(ordinals) == 0 {
 		return dst, nil
 	}
-	if s == nil || !s.codeRows.Valid() || s.dims <= 0 || len(s.queryCode) != s.dims || !s.centeredQuery.ValidForDims(s.dims) {
+	if s == nil || !s.codeRows.Valid() || s.dims <= 0 || len(s.codePayload) != s.codeRows.Rows()*s.dims || len(s.queryCode) != s.dims || !s.centeredQuery.ValidForDims(s.dims) {
 		return dst[:0], fmt.Errorf("%w: column_graph quantized scalar_u8 scorer is unavailable", ErrVectorIndexSearchUnavailable)
 	}
-	if stats != nil {
-		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
+	if scratch == nil {
+		return dst[:0], fmt.Errorf("collections: column_graph quantized scalar_u8 scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
 	}
-	successCount := 0
+	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(ordinals))
+	rowIDs := scratch.scoreTileRowIDs[:len(ordinals)]
+	rows := s.codeRows.Rows()
 	for i, ordinal := range ordinals {
-		row, ok := s.codeRows.RowBytes(ordinal)
-		if !ok || len(row) != s.dims {
-			s.recordScoreStats(stats, successCount)
-			return dst[:i], fmt.Errorf("%w: column_graph quantized index %q code row ordinal=%d unavailable len=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, len(row), ok, s.dims)
+		if ordinal < 0 || ordinal >= rows || uint64(ordinal) > uint64(^uint32(0)) {
+			return dst[:0], fmt.Errorf("%w: column_graph quantized index %q code row ordinal=%d unavailable len=0 ok=false want %d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, s.dims)
 		}
-		score, ok := scalarU8CenteredQuantizedCosineScore(s.centeredQuery, row)
-		if !ok || math.IsNaN(score) || math.IsInf(score, 0) {
-			s.recordScoreStats(stats, successCount)
-			return dst[:i], fmt.Errorf("collections: column_graph quantized index %q candidate ordinal=%d scalar_u8 score is not finite", s.indexName, ordinal)
-		}
-		dst[i] = score
-		successCount++
+		rowIDs[i] = uint32(ordinal)
 	}
-	s.recordScoreStats(stats, successCount)
+	scratch.scoreTileQuantizedDots = ensureColumnVectorGraphNativeInt64Scratch(scratch.scoreTileQuantizedDots, len(ordinals))
+	dots := scratch.scoreTileQuantizedDots[:len(ordinals)]
+	status := vectorops.DotScalarU8CenteredIndexed(dots, s.codePayload, s.centeredQuery, rowIDs, s.dims)
+	if status.Invalid || status.Rows != len(ordinals) {
+		return dst[:0], fmt.Errorf("%w: column_graph quantized index %q scalar_u8 batch score invalid status=%+v rows=%d want %d", ErrVectorIndexSearchUnavailable, s.indexName, status, status.Rows, len(ordinals))
+	}
+	for i, dot := range dots {
+		dst[i] = scalarU8QuantizedCosineScoreFromDot(dot)
+	}
+	if stats != nil {
+		recordColumnVectorGraphScoreBatchStats(stats, status.Rows, status.Optimized, status.Fallback)
+	}
+	s.recordScoreStats(stats, status.Rows)
 	return dst, nil
 }
 
@@ -152,5 +171,9 @@ func scalarU8CenteredQuantizedCosineScore(query vectorops.ScalarU8CenteredQuery,
 	if !ok {
 		return 0, false
 	}
-	return float64(dot) / columnVectorGraphScalarU8CodeScale, true
+	return scalarU8QuantizedCosineScoreFromDot(dot), true
+}
+
+func scalarU8QuantizedCosineScoreFromDot(dot int64) float64 {
+	return float64(dot) / columnVectorGraphScalarU8CodeScale
 }

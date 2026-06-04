@@ -244,6 +244,13 @@ func addColumnGraphScalarU8QuantizedBenchmarkStats1926(dst *VectorIndexSearchSta
 	dst.CandidateFetches += src.CandidateFetches
 	dst.ExpansionFetches += src.ExpansionFetches
 	dst.ResultFetches += src.ResultFetches
+	dst.ScoreBatchCalls += src.ScoreBatchCalls
+	dst.ScoreBatchCandidates += src.ScoreBatchCandidates
+	if src.ScoreBatchMaxTileSize > dst.ScoreBatchMaxTileSize {
+		dst.ScoreBatchMaxTileSize = src.ScoreBatchMaxTileSize
+	}
+	dst.ScoreBatchOptimizedCalls += src.ScoreBatchOptimizedCalls
+	dst.ScoreBatchScalarFallbackCalls += src.ScoreBatchScalarFallbackCalls
 	dst.PreparedScoreCalls += src.PreparedScoreCalls
 	dst.QuantizedScoreCalls += src.QuantizedScoreCalls
 	dst.QuantizedCodeBytesRead += src.QuantizedCodeBytesRead
@@ -292,6 +299,11 @@ func reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b *testing.B, fixtu
 	b.ReportMetric(float64(stats.VectorBytesRead)/denom, "vector_B/search")
 	b.ReportMetric(float64(stats.NormBytesRead)/denom, "norm_B/search")
 	b.ReportMetric(float64(stats.AdjacencyBytesRead)/denom, "adjacency_B/search")
+	b.ReportMetric(float64(stats.ScoreBatchCalls)/denom, "score_batch_calls/search")
+	b.ReportMetric(float64(stats.ScoreBatchCandidates)/denom, "score_batch_candidates/search")
+	b.ReportMetric(float64(stats.ScoreBatchMaxTileSize), "score_batch_max_tile_size")
+	b.ReportMetric(float64(stats.ScoreBatchOptimizedCalls)/denom, "score_batch_optimized/search")
+	b.ReportMetric(float64(stats.ScoreBatchScalarFallbackCalls)/denom, "score_batch_fallback/search")
 	b.ReportMetric(float64(stats.PreparedScoreCalls)/denom, "prepared_score_calls/search")
 	b.ReportMetric(float64(stats.QuantizedScoreCalls)/denom, "quantized_score_calls/search")
 	b.ReportMetric(float64(stats.QuantizedCodeBytesRead)/denom, "quantized_code_B/search")
