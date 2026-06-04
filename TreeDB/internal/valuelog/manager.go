@@ -286,6 +286,10 @@ func (f *File) resetGroupedFrameCacheLocked() {
 	if old := f.groupedFrameCache.Load(); old != nil {
 		old.clear()
 	}
+	if f.closed.Load() {
+		f.groupedFrameCache.Store(nil)
+		return
+	}
 	f.groupedFrameCache.Store(newGroupedFrameCache(f, f.groupedFrameCacheEntries, f.groupedFrameCacheMaxRaw, f.groupedFrameCacheMaxBytes, f.groupedFrameCacheBudget))
 }
 
@@ -343,7 +347,7 @@ func (f *File) setGroupedFrameCacheMaxBytes(maxBytes int64) {
 }
 
 func (f *File) ensureGroupedFrameCache() *groupedFrameCache {
-	if f == nil {
+	if f == nil || f.closed.Load() {
 		return nil
 	}
 	if cache := f.groupedFrameCache.Load(); cache != nil {
@@ -351,7 +355,7 @@ func (f *File) ensureGroupedFrameCache() *groupedFrameCache {
 	}
 	f.groupedMu.Lock()
 	cache := f.groupedFrameCache.Load()
-	if cache == nil {
+	if cache == nil && !f.closed.Load() {
 		f.resetGroupedFrameCacheLocked()
 		cache = f.groupedFrameCache.Load()
 	}
@@ -359,19 +363,23 @@ func (f *File) ensureGroupedFrameCache() *groupedFrameCache {
 	return cache
 }
 
-func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, expectedK, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
+func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, expectedK int, expectedOffsets [MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
 	cache := f.ensureGroupedFrameCache()
-	return cache.readTo(start, verifyCRC, expectedK, subIndex, dst, f)
+	return cache.readTo(start, verifyCRC, expectedK, expectedOffsets, expectedRawLen, subIndex, dst, f)
 }
 
 func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
+	if f == nil || f.closed.Load() {
+		return false
+	}
 	cache := f.ensureGroupedFrameCache()
 	stored := cache.store(start, verifyCRC, k, offsets, raw, pooled)
-	if stored && f != nil && f.groupedFrameCache.Load() != cache {
+	if stored && (f.closed.Load() || f.groupedFrameCache.Load() != cache) {
 		// A rare configuration reset/close raced with admission. The cache took
-		// ownership of raw; clear the now-unpublished cache so pooled buffers and
-		// budget reservations are released instead of leaking.
+		// ownership of raw; clear the now-unpublished/closed cache so pooled buffers
+		// and budget reservations are released instead of leaking.
 		cache.clear()
+		return false
 	}
 	return stored
 }
@@ -387,6 +395,9 @@ func (f *File) groupedFrameCacheDetailedStats() GroupedFrameCacheStats {
 }
 
 func (f *File) groupedFrameCacheAllowsRaw(rawLen int) bool {
+	if f == nil || f.closed.Load() {
+		return false
+	}
 	f.groupedMu.Lock()
 	entries := f.groupedFrameCacheEntries
 	maxRaw := f.groupedFrameCacheMaxRaw
@@ -701,10 +712,6 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	if subIndex < 0 || subIndex >= k {
 		return nil, false, ErrCorrupt, true
 	}
-	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, k, subIndex, dst); hit {
-		return out, usedDst, err, true
-	}
-
 	ridBytes := k * 8
 	offsetBytes := (k + 1) * 4
 	prefixLen := FrameHeaderSize + ridBytes + offsetBytes
@@ -738,6 +745,9 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	valEnd := offsets[subIndex+1]
 	if valEnd < valStart || valEnd > rawLen {
 		return nil, false, ErrCorrupt, true
+	}
+	if out, usedDst, err, hit := f.groupedFrameCacheReadTo(start, false, k, offsets, rawLen, subIndex, dst); hit {
+		return out, usedDst, err, true
 	}
 
 	frame := FrameHeader{

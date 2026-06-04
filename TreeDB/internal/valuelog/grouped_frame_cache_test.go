@@ -49,7 +49,7 @@ func TestGroupedFrameCache_StateIsolationAndSubValues(t *testing.T) {
 	}
 
 	for i, want := range [][]byte{[]byte("aa"), []byte("bbb"), []byte("cccc")} {
-		got, _, err, hit := f.groupedFrameCacheReadTo(100, false, 3, i, nil)
+		got, _, err, hit := f.groupedFrameCacheReadTo(100, false, 3, offsets, uint32(len(raw)), i, nil)
 		if err != nil {
 			t.Fatalf("read sub-value %d: %v", i, err)
 		}
@@ -58,14 +58,28 @@ func TestGroupedFrameCache_StateIsolationAndSubValues(t *testing.T) {
 		}
 	}
 
-	if _, _, _, hit := f.groupedFrameCacheReadTo(100, false, 2, 0, nil); hit {
-		t.Fatalf("cache hit crossed K identity")
+	kChangedOffsets := groupedCacheOffsets(2, 7)
+	if _, _, err, hit := f.groupedFrameCacheReadTo(100, false, 2, kChangedOffsets, kChangedOffsets[2], 0, nil); err != nil || hit {
+		t.Fatalf("cache hit crossed K identity: hit=%v err=%v", hit, err)
 	}
-	if _, _, _, hit := f.groupedFrameCacheReadTo(100, true, 3, 0, nil); hit {
+	if _, _, _, hit := f.groupedFrameCacheReadTo(100, true, 3, offsets, uint32(len(raw)), 0, nil); hit {
 		t.Fatalf("cache hit crossed verifyCRC identity")
 	}
-	if _, _, _, hit := f.groupedFrameCacheReadTo(101, false, 3, 0, nil); hit {
+	if _, _, _, hit := f.groupedFrameCacheReadTo(101, false, 3, offsets, uint32(len(raw)), 0, nil); hit {
 		t.Fatalf("cache hit crossed start identity")
+	}
+	changedOffsets := groupedCacheOffsets(1, 4, 4)
+	if _, _, err, hit := f.groupedFrameCacheReadTo(100, false, 3, changedOffsets, changedOffsets[3], 0, nil); err != nil || hit {
+		t.Fatalf("cache hit crossed offset-table identity: hit=%v err=%v", hit, err)
+	}
+	changedRawLenOffsets := groupedCacheOffsets(2, 3, 5)
+	if _, _, err, hit := f.groupedFrameCacheReadTo(100, false, 3, changedRawLenOffsets, changedRawLenOffsets[3], 0, nil); err != nil || hit {
+		t.Fatalf("cache hit crossed raw-length identity: hit=%v err=%v", hit, err)
+	}
+	invalidOffsets := offsets
+	invalidOffsets[2] = invalidOffsets[1] - 1
+	if _, _, err, hit := f.groupedFrameCacheReadTo(100, false, 3, invalidOffsets, offsets[3], 0, nil); !hit || !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected invalid current offset state to fail closed, hit=%v err=%v", hit, err)
 	}
 }
 
@@ -116,6 +130,22 @@ func TestGroupedFrameCache_SkipsOversizeAndBudget(t *testing.T) {
 	}
 }
 
+func TestGroupedFrameCache_DoesNotAdmitAfterClose(t *testing.T) {
+	f := newTestGroupedCacheFile(2, 1024, 0)
+	f.closed.Store(true)
+	offsets := groupedCacheOffsets(16)
+	if f.groupedFrameCacheStore(1, false, 1, offsets, bytes.Repeat([]byte{'x'}, 16), true) {
+		t.Fatalf("closed file admitted grouped-frame cache entry")
+	}
+	stats := f.groupedFrameCacheDetailedStats()
+	if stats.Entries != 0 || stats.RetainedBytes != 0 {
+		t.Fatalf("closed file retained cache state: %+v", stats)
+	}
+	if cache := f.ensureGroupedFrameCache(); cache != nil {
+		t.Fatalf("closed file recreated grouped-frame cache")
+	}
+}
+
 func TestGroupedFrameCache_InvalidCachedStateFailsClosed(t *testing.T) {
 	f := newTestGroupedCacheFile(2, 1024, 0)
 	raw := groupedCacheRaw([]byte("good"), []byte("value"))
@@ -135,12 +165,34 @@ func TestGroupedFrameCache_InvalidCachedStateFailsClosed(t *testing.T) {
 	shard.publishLocked()
 	shard.mu.Unlock()
 
-	_, _, err, hit := f.groupedFrameCacheReadTo(10, false, 2, 1, nil)
+	_, _, err, hit := f.groupedFrameCacheReadTo(10, false, 2, offsets, uint32(len(raw)), 1, nil)
 	if !hit {
 		t.Fatalf("expected corrupt cached state to be detected on hit")
 	}
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("expected ErrCorrupt, got %v", err)
+	}
+}
+
+func TestGroupedFrameCache_AfterCloseDoesNotRecreateOrRetain(t *testing.T) {
+	f := newTestGroupedCacheFile(2, 1024, 0)
+	f.closed.Store(true)
+	f.groupedFrameCache.Store(nil)
+
+	raw := bytes.Repeat([]byte{'z'}, 32)
+	offsets := groupedCacheOffsets(32)
+	if f.groupedFrameCacheStore(1, false, 1, offsets, raw, false) {
+		t.Fatalf("closed file admitted grouped-frame cache entry")
+	}
+	if cache := f.groupedFrameCache.Load(); cache != nil {
+		t.Fatalf("closed file recreated grouped-frame cache")
+	}
+	stats := f.groupedFrameCacheDetailedStats()
+	if stats.Entries != 0 || stats.RetainedBytes != 0 || stats.Stores != 0 {
+		t.Fatalf("closed file retained grouped-frame cache state: %+v", stats)
+	}
+	if _, _, err, hit := f.groupedFrameCacheReadTo(1, false, 1, offsets, offsets[1], 0, nil); err != nil || hit {
+		t.Fatalf("closed file returned cache hit/state: hit=%v err=%v", hit, err)
 	}
 }
 
@@ -151,6 +203,9 @@ func TestGroupedFrameCache_ConcurrentReadsAndEvictions(t *testing.T) {
 	if !f.groupedFrameCacheStore(1, false, 2, baseOffsets, append([]byte(nil), baseRaw...), false) {
 		t.Fatalf("store base frame")
 	}
+	if got, _, err, hit := f.groupedFrameCacheReadTo(1, false, 2, baseOffsets, uint32(len(baseRaw)), 0, nil); err != nil || !hit || !bytes.Equal(got, []byte("left")) {
+		t.Fatalf("warm cache hit failed: hit=%v err=%v got=%q", hit, err, got)
+	}
 
 	var wg sync.WaitGroup
 	for g := 0; g < 16; g++ {
@@ -158,7 +213,7 @@ func TestGroupedFrameCache_ConcurrentReadsAndEvictions(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 1000; i++ {
-				got, _, err, hit := f.groupedFrameCacheReadTo(1, false, 2, i&1, nil)
+				got, _, err, hit := f.groupedFrameCacheReadTo(1, false, 2, baseOffsets, uint32(len(baseRaw)), i&1, nil)
 				if err != nil {
 					t.Errorf("cache read: %v", err)
 					return

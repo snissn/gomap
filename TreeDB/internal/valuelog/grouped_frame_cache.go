@@ -287,6 +287,18 @@ func validateGroupedFrameCacheState(k int, offsets [MaxFrameK + 1]uint32, rawLen
 	return uint32(rawLen) == offsets[k]
 }
 
+func groupedFrameOffsetsEqual(a, b [MaxFrameK + 1]uint32, k int) bool {
+	if k < 0 || k > MaxFrameK {
+		return false
+	}
+	for i := 0; i < k+1; i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *groupedFrameCacheEntry) tryAcquire() bool {
 	if e == nil {
 		return false
@@ -348,9 +360,12 @@ func (c *groupedFrameCache) releaseEntry(e *groupedFrameCacheEntry) {
 	}
 }
 
-func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK, subIndex int, dst []byte, f *File) (out []byte, usedDst bool, err error, hit bool) {
+func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, expectedOffsets [MaxFrameK + 1]uint32, expectedRawLen uint32, subIndex int, dst []byte, f *File) (out []byte, usedDst bool, err error, hit bool) {
 	if c == nil || c.capacity <= 0 || len(c.shards) == 0 {
 		return nil, false, nil, false
+	}
+	if !validateGroupedFrameCacheState(expectedK, expectedOffsets, int(expectedRawLen)) || subIndex < 0 || subIndex >= expectedK {
+		return nil, false, ErrCorrupt, true
 	}
 	s := c.shardFor(start, verifyCRC)
 	if s == nil {
@@ -358,7 +373,7 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK, subIn
 	}
 	snap, _ := s.snapshot.Load().([]*groupedFrameCacheEntry)
 	for _, e := range snap {
-		if e == nil || e.start != start || e.verifyCRC != verifyCRC || e.k != expectedK || subIndex < 0 || subIndex >= e.k {
+		if e == nil || e.start != start || e.verifyCRC != verifyCRC || e.k != expectedK || e.rawLen != expectedRawLen || !groupedFrameOffsetsEqual(e.offsets, expectedOffsets, expectedK) {
 			continue
 		}
 		if !e.tryAcquire() {
