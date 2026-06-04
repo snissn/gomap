@@ -16,12 +16,14 @@ import (
 )
 
 const (
-	defaultBufferSize          = 4 << 20
-	defaultMaxSegmentSize      = 64 * 1024 * 1024
-	defaultCompressMinLen      = 64 << 10
-	directSegmentPayloadMinLen = 128 << 10
-	directCommandPayloadMinLen = 64 << 10
-	batchChecksumChunkBytes    = 64 << 10
+	defaultBufferSize                = 4 << 20
+	defaultMaxSegmentSize            = 64 * 1024 * 1024
+	defaultCompressMinLen            = 64 << 10
+	directSegmentPayloadMinLen       = 128 << 10
+	directCommandPayloadMinLen       = 64 << 10
+	batchChecksumChunkBytes          = 64 << 10
+	pendingAppendBatchInitialPayload = 64 << 10
+	pendingAppendBatchMaxPayload     = defaultBufferSize - segmentHeaderSize
 )
 
 var syncDirFn = syncDir
@@ -65,20 +67,23 @@ func sameNonEmptyBytesData(a, b []byte) bool {
 }
 
 type Writer struct {
-	f               *os.File
-	bw              *bufio.Writer
-	scratch         []byte
-	encScratch      []byte
-	commandBuf      []byte
-	commandBufLimit int
-	commandErr      error
-	headerBuf       [segmentHeaderSize]byte
-	rawLenPrefix    [4]byte
-	size            int64
-	maxSegmentSize  int64
-	compress        bool
-	enc             *zstd.Encoder
-	syncFn          func(*os.File) error
+	f                *os.File
+	bw               *bufio.Writer
+	scratch          []byte
+	encScratch       []byte
+	commandBuf       []byte
+	commandBufLimit  int
+	commandErr       error
+	pendingBatch     []byte
+	pendingBatchSeq  uint64
+	pendingBatchRecs uint32
+	headerBuf        [segmentHeaderSize]byte
+	rawLenPrefix     [4]byte
+	size             int64
+	maxSegmentSize   int64
+	compress         bool
+	enc              *zstd.Encoder
+	syncFn           func(*os.File) error
 }
 
 func NewWriter(path string) (*Writer, error) {
@@ -143,6 +148,106 @@ func (w *Writer) ensureEncoder() error {
 	return nil
 }
 
+func (w *Writer) pendingBatchBytes() int64 {
+	if w == nil || w.pendingBatchRecs == 0 {
+		return 0
+	}
+	return int64(segmentHeaderSize + len(w.pendingBatch))
+}
+
+func (w *Writer) pendingAppendBatchLimit(recLen int) int {
+	limit := pendingAppendBatchMaxPayload
+	if w != nil && w.maxSegmentSize > 0 && int64(limit) > w.maxSegmentSize {
+		limit = int(w.maxSegmentSize)
+	}
+	if limit > int(segmentLenMask) {
+		limit = int(segmentLenMask)
+	}
+	minNeed := batchHeaderSize + recLen
+	if limit < minNeed {
+		limit = minNeed
+	}
+	return limit
+}
+
+func (w *Writer) appendPendingRecord(record Record, keyLen uint16, valLen uint32) error {
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	recLen := recordHeaderSize + len(record.Key) + len(record.Value)
+	limit := w.pendingAppendBatchLimit(recLen)
+	if w.pendingBatchRecs > 0 && w.pendingBatchSeq != record.Seq {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	if w.pendingBatchRecs > 0 && (w.pendingBatchRecs == ^uint32(0) || len(w.pendingBatch)+recLen > limit) {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	if w.pendingBatchRecs == 0 {
+		need := batchHeaderSize + recLen
+		capHint := pendingAppendBatchInitialPayload
+		if capHint < need {
+			capHint = need
+		}
+		if capHint > limit {
+			capHint = limit
+		}
+		if cap(w.pendingBatch) < need {
+			w.pendingBatch = make([]byte, batchHeaderSize, capHint)
+		} else {
+			w.pendingBatch = w.pendingBatch[:batchHeaderSize]
+		}
+		w.pendingBatch[0] = Version
+		binary.LittleEndian.PutUint32(w.pendingBatch[1:5], 0)
+		w.pendingBatchSeq = record.Seq
+	}
+
+	off := len(w.pendingBatch)
+	next := off + recLen
+	if next > cap(w.pendingBatch) {
+		newCap := cap(w.pendingBatch) * 2
+		if newCap < next {
+			newCap = next
+		}
+		if newCap > limit {
+			newCap = limit
+		}
+		nextBuf := make([]byte, next, newCap)
+		copy(nextBuf, w.pendingBatch)
+		w.pendingBatch = nextBuf
+	} else {
+		w.pendingBatch = w.pendingBatch[:next]
+	}
+	buf := w.pendingBatch
+	buf[off] = record.Op
+	binary.LittleEndian.PutUint16(buf[off+1:off+3], keyLen)
+	binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
+	binary.LittleEndian.PutUint64(buf[off+7:off+15], record.RID)
+	binary.LittleEndian.PutUint64(buf[off+15:off+23], record.Seq)
+	copy(buf[off+recordHeaderSize:], record.Key)
+	copy(buf[off+recordHeaderSize+len(record.Key):], record.Value)
+	w.pendingBatchRecs++
+	binary.LittleEndian.PutUint32(buf[1:5], w.pendingBatchRecs)
+	return nil
+}
+
+func (w *Writer) flushPendingBatch() error {
+	if w == nil || w.pendingBatchRecs == 0 {
+		return nil
+	}
+	payload := w.pendingBatch
+	if err := w.writeRawSegmentWithChecksumNoPending(payload, crc.Checksum(payload)); err != nil {
+		return err
+	}
+	w.pendingBatch = w.pendingBatch[:0]
+	w.pendingBatchSeq = 0
+	w.pendingBatchRecs = 0
+	return nil
+}
+
 // RotateTo flushes and closes the current file, then opens (or creates) the
 // provided path and reuses the writer's buffers for future appends.
 func (w *Writer) RotateTo(path string) error {
@@ -180,6 +285,11 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 		return nil
 	}
 
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
 	}
@@ -272,35 +382,7 @@ func (w *Writer) Append(record Record) error {
 		return ErrRecordTooLarge
 	}
 	if !w.compress && segmentHeaderSize+payloadLen < directSegmentPayloadMinLen {
-		if err := w.flushBufferedCommandFrames(); err != nil {
-			return err
-		}
-		totalLen := segmentHeaderSize + payloadLen
-		if cap(w.scratch) < totalLen {
-			w.scratch = make([]byte, totalLen)
-		}
-		buf := w.scratch[:totalLen]
-		payload := buf[segmentHeaderSize:]
-
-		payload[0] = Version
-		binary.LittleEndian.PutUint32(payload[1:5], 1)
-
-		off := batchHeaderSize
-		payload[off] = record.Op
-		binary.LittleEndian.PutUint16(payload[off+1:off+3], keyLen)
-		binary.LittleEndian.PutUint32(payload[off+3:off+7], valLen)
-		binary.LittleEndian.PutUint64(payload[off+7:off+15], record.RID)
-		binary.LittleEndian.PutUint64(payload[off+15:off+23], record.Seq)
-		copy(payload[off+recordHeaderSize:], record.Key)
-		copy(payload[off+recordHeaderSize+len(record.Key):], record.Value)
-
-		binary.LittleEndian.PutUint32(buf[0:4], uint32(payloadLen))
-		binary.LittleEndian.PutUint32(buf[4:8], crc.ChecksumParts(payload[:batchHeaderSize], payload[batchHeaderSize:]))
-		if _, err := w.bw.Write(buf); err != nil {
-			return err
-		}
-		w.size += int64(totalLen)
-		return nil
+		return w.appendPendingRecord(record, keyLen, valLen)
 	}
 
 	if cap(w.scratch) < payloadLen {
@@ -619,6 +701,11 @@ func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op R
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
 	}
@@ -666,6 +753,11 @@ func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64
 }
 
 func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, size int) error {
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
 	total := segmentHeaderSize + size
 	if !w.canBufferCommandFrame(total) {
 		if cap(w.scratch) < total {
@@ -722,6 +814,11 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
 	total := segmentHeaderSize + size
 	if len(payload) >= directCommandPayloadMinLen {
 		return w.appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN, payload, size)
@@ -772,6 +869,11 @@ func (w *Writer) AppendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, k
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
 	total := segmentHeaderSize + size
 	if len(payload) >= directCommandPayloadMinLen {
 		return w.appendCommandPayloadDirectTrusted(lsn, baseAppliedLSN, kind, scope, format, payload, size)
@@ -793,6 +895,11 @@ func (w *Writer) AppendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, k
 }
 
 func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64, payload []byte, size int) error {
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
 	}
@@ -826,6 +933,11 @@ func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64
 }
 
 func (w *Writer) appendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, kind CommandKind, scope CommandScope, format PayloadFormat, payload []byte, size int) error {
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
 	}
@@ -994,6 +1106,11 @@ func (w *Writer) poisonCommandBuffer(err error) error {
 }
 
 func (w *Writer) writeSegment(payload []byte) error {
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
 	}
@@ -1056,6 +1173,15 @@ func (w *Writer) writeSegment(payload []byte) error {
 }
 
 func (w *Writer) writeRawSegmentWithChecksum(payload []byte, wantCRC uint32) error {
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	return w.writeRawSegmentWithChecksumNoPending(payload, wantCRC)
+}
+
+func (w *Writer) writeRawSegmentWithChecksumNoPending(payload []byte, wantCRC uint32) error {
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
 	}
@@ -1116,12 +1242,17 @@ func (w *Writer) Size() int64 {
 	if w == nil {
 		return 0
 	}
-	return w.size
+	return w.size + w.pendingBatchBytes()
 }
 
 func (w *Writer) Flush() error {
 	if w == nil || w.f == nil {
 		return nil
+	}
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -1132,6 +1263,11 @@ func (w *Writer) Flush() error {
 func (w *Writer) Sync() error {
 	if w == nil || w.f == nil {
 		return nil
+	}
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -1149,6 +1285,10 @@ func (w *Writer) Close() error {
 	if w.enc != nil {
 		w.enc.Close()
 		w.enc = nil
+	}
+	if err := w.flushPendingBatch(); err != nil {
+		_ = w.f.Close()
+		return err
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		_ = w.f.Close()
