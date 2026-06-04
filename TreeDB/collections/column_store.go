@@ -173,6 +173,15 @@ const (
 	ColumnStoreProfileBenchmarkRelaxed ColumnStoreProfileSupport = "benchmark-relaxed"
 )
 
+type ColumnStoreTypedColumnCompression string
+
+const (
+	ColumnStoreTypedColumnCompressionDefault ColumnStoreTypedColumnCompression = ""
+	ColumnStoreTypedColumnCompressionNone    ColumnStoreTypedColumnCompression = "none"
+	ColumnStoreTypedColumnCompressionSnappy  ColumnStoreTypedColumnCompression = "snappy"
+	ColumnStoreTypedColumnCompressionLZ4     ColumnStoreTypedColumnCompression = "lz4"
+)
+
 // ColumnAssetReadIntegrity controls hot physical column asset read validation.
 // It does not change durability, manifest/header/schema validation, or the
 // checksum fields written into typed column asset refs.
@@ -195,22 +204,24 @@ const (
 )
 
 type ColumnStoreConfig struct {
-	Enabled                                bool                          `json:"enabled,omitempty"`
-	Columns                                []ColumnStoreColumn           `json:"columns,omitempty"`
-	SortKey                                []ColumnSortKey               `json:"sort_key,omitempty"`
-	AggregateMetadata                      []ColumnAggregateMetadata     `json:"aggregate_metadata,omitempty"`
-	RetainedPayload                        ColumnRetainedPayloadPolicy   `json:"retained_payload,omitempty"`
-	Reconstruction                         ColumnReconstructionPolicy    `json:"reconstruction,omitempty"`
-	AssetManager                           *ColumnAssetManagerConfig     `json:"asset_manager,omitempty"`
-	ManifestRoot                           *ColumnManifestRootDescriptor `json:"manifest_root,omitempty"`
-	ActiveManifest                         *ColumnManifestIdentity       `json:"active_manifest,omitempty"`
-	RecoveryAuthoritativeManifest          *ColumnManifestIdentity       `json:"recovery_authoritative_manifest,omitempty"`
-	RecoveryAuthoritativeAppliedCommandLSN uint64                        `json:"recovery_authoritative_applied_command_lsn,omitempty"`
-	PhysicalMutationParts                  uint64                        `json:"physical_mutation_parts,omitempty"`
-	ProfileSupport                         ColumnStoreProfileSupport     `json:"profile_support,omitempty"`
-	Locator                                *ColumnLocatorConfig          `json:"locator,omitempty"`
-	ControlRootStoragePolicy               RootStoragePolicy             `json:"control_root_storage_policy,omitempty"`
-	SchemaHash                             uint64                        `json:"schema_hash,omitempty"`
+	Enabled                                bool                              `json:"enabled,omitempty"`
+	Columns                                []ColumnStoreColumn               `json:"columns,omitempty"`
+	SortKey                                []ColumnSortKey                   `json:"sort_key,omitempty"`
+	AggregateMetadata                      []ColumnAggregateMetadata         `json:"aggregate_metadata,omitempty"`
+	RetainedPayload                        ColumnRetainedPayloadPolicy       `json:"retained_payload,omitempty"`
+	Reconstruction                         ColumnReconstructionPolicy        `json:"reconstruction,omitempty"`
+	AssetManager                           *ColumnAssetManagerConfig         `json:"asset_manager,omitempty"`
+	ManifestRoot                           *ColumnManifestRootDescriptor     `json:"manifest_root,omitempty"`
+	ActiveManifest                         *ColumnManifestIdentity           `json:"active_manifest,omitempty"`
+	RecoveryAuthoritativeManifest          *ColumnManifestIdentity           `json:"recovery_authoritative_manifest,omitempty"`
+	RecoveryAuthoritativeAppliedCommandLSN uint64                            `json:"recovery_authoritative_applied_command_lsn,omitempty"`
+	PhysicalMutationParts                  uint64                            `json:"physical_mutation_parts,omitempty"`
+	ProfileSupport                         ColumnStoreProfileSupport         `json:"profile_support,omitempty"`
+	TypedColumnCompression                 ColumnStoreTypedColumnCompression `json:"typed_column_compression,omitempty"`
+	TypedColumnSectionCompression          ColumnStoreTypedColumnCompression `json:"typed_column_section_compression,omitempty"`
+	Locator                                *ColumnLocatorConfig              `json:"locator,omitempty"`
+	ControlRootStoragePolicy               RootStoragePolicy                 `json:"control_root_storage_policy,omitempty"`
+	SchemaHash                             uint64                            `json:"schema_hash,omitempty"`
 }
 
 type ColumnStoreColumn struct {
@@ -473,6 +484,20 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 	}
 	if out.ProfileSupport == "" {
 		out.ProfileSupport = ColumnStoreProfileDurableOnly
+	}
+	typedColumnCompression, err := canonicalColumnStoreTypedColumnCompression("typed_column_compression", out.TypedColumnCompression)
+	if err != nil {
+		return nil, err
+	}
+	out.TypedColumnCompression = typedColumnCompression
+	if out.TypedColumnSectionCompression == ColumnStoreTypedColumnCompressionDefault {
+		out.TypedColumnSectionCompression = out.TypedColumnCompression
+	} else {
+		typedColumnSectionCompression, err := canonicalColumnStoreTypedColumnCompression("typed_column_section_compression", out.TypedColumnSectionCompression)
+		if err != nil {
+			return nil, err
+		}
+		out.TypedColumnSectionCompression = typedColumnSectionCompression
 	}
 	if out.ActiveManifest != nil {
 		normalizeColumnManifestIdentityFormat(out.ActiveManifest)
@@ -796,6 +821,12 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 	case ColumnStoreProfileDurableOnly, ColumnStoreProfileBenchmarkRelaxed:
 	default:
 		return fmt.Errorf("collections: unsupported column profile support %q", cfg.ProfileSupport)
+	}
+	if _, err := parseColumnStoreTypedColumnCompression("typed_column_compression", cfg.TypedColumnCompression); err != nil {
+		return err
+	}
+	if _, err := parseColumnStoreTypedColumnCompression("typed_column_section_compression", cfg.TypedColumnSectionCompression); err != nil {
+		return err
 	}
 	if cfg.Locator == nil {
 		return errors.New("collections: column_store requires locator strategy metadata")
@@ -1132,6 +1163,8 @@ func columnStoreConfigEmpty(cfg ColumnStoreConfig) bool {
 		cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 &&
 		cfg.PhysicalMutationParts == 0 &&
 		cfg.ProfileSupport == "" &&
+		cfg.TypedColumnCompression == ColumnStoreTypedColumnCompressionDefault &&
+		cfg.TypedColumnSectionCompression == ColumnStoreTypedColumnCompressionDefault &&
 		cfg.Locator == nil &&
 		cfg.ControlRootStoragePolicy == "" &&
 		cfg.SchemaHash == 0
@@ -1210,6 +1243,8 @@ func columnStoreConfigEqual(a, b *ColumnStoreConfig) bool {
 		a.RecoveryAuthoritativeAppliedCommandLSN != b.RecoveryAuthoritativeAppliedCommandLSN ||
 		a.PhysicalMutationParts != b.PhysicalMutationParts ||
 		a.ProfileSupport != b.ProfileSupport ||
+		a.TypedColumnCompression != b.TypedColumnCompression ||
+		a.TypedColumnSectionCompression != b.TypedColumnSectionCompression ||
 		a.SchemaHash != b.SchemaHash ||
 		!columnAssetManagerConfigEqual(a.AssetManager, b.AssetManager) ||
 		!columnManifestRootDescriptorEqual(a.ManifestRoot, b.ManifestRoot) ||
@@ -1275,6 +1310,8 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 	writeHashString(&d, string(cfg.RetainedPayload))
 	writeHashString(&d, string(cfg.Reconstruction))
 	writeHashString(&d, string(cfg.ControlRootStoragePolicy))
+	writeHashString(&d, string(cfg.TypedColumnCompression))
+	writeHashString(&d, string(cfg.TypedColumnSectionCompression))
 	if cfg.ManifestRoot != nil {
 		writeHashString(&d, cfg.ManifestRoot.Name)
 		writeHashString(&d, string(cfg.ManifestRoot.StoragePolicy))
