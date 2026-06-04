@@ -888,8 +888,8 @@ func TestValueLogManager_GroupedFrameCache_MaxRawBytesSkipsOversize(t *testing.T
 	}
 
 	hits, misses, entries, capacity := f.groupedFrameCacheStats()
-	if capacity != 4 {
-		t.Fatalf("cache capacity=%d want=4", capacity)
+	if capacity != 0 {
+		t.Fatalf("oversized reads should not create idle cache metadata, capacity=%d", capacity)
 	}
 	if entries != 0 {
 		t.Fatalf("expected no cached entries when frame exceeds max raw bytes, got=%d", entries)
@@ -897,8 +897,77 @@ func TestValueLogManager_GroupedFrameCache_MaxRawBytesSkipsOversize(t *testing.T
 	if hits != 0 {
 		t.Fatalf("expected zero cache hits for oversized frame, got=%d", hits)
 	}
-	if misses < 2 {
-		t.Fatalf("expected misses on both reads for oversized frame, got=%d", misses)
+	if misses != 0 {
+		t.Fatalf("oversized reads should not create miss stats without a cache, got=%d", misses)
+	}
+}
+
+func TestValueLogManager_ReadUnsafeTo_CompressedGroupedFallbackSkipsOversizeCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	// Force file-read fallback so this test exercises readGroupedCompressedFromFileTo.
+	withMappedSealedBudget(t, 0)
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTests(t, writer, 0, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(true)
+	m.SetGroupedFrameCacheEntries(4)
+	m.SetGroupedFrameCacheMaxRawBytes(8)
+
+	f := m.files[fileID]
+	if f == nil {
+		t.Fatalf("missing opened file for id=%d", fileID)
+	}
+	if cache := f.groupedFrameCache.Load(); cache != nil {
+		t.Fatalf("oversize config created grouped cache before reads")
+	}
+
+	dst := make([]byte, 0, 512)
+	for i := 0; i < 2; i++ {
+		got, used, err := m.ReadUnsafeTo(ptrs[i], dst[:0])
+		if err != nil {
+			t.Fatalf("read unsafe to oversize fallback idx=%d: %v", i, err)
+		}
+		if !used {
+			t.Fatalf("expected fallback read idx=%d to use dst", i)
+		}
+		if !bytes.Equal(got, want[i]) {
+			t.Fatalf("value mismatch idx=%d: got=%q want=%q", i, got, want[i])
+		}
+	}
+
+	hits, misses, entries, capacity := f.groupedFrameCacheStats()
+	if hits != 0 || misses != 0 || entries != 0 || capacity != 0 {
+		t.Fatalf("oversize fallback reads created grouped cache metadata/stats: hits=%d misses=%d entries=%d capacity=%d", hits, misses, entries, capacity)
+	}
+	if cache := f.groupedFrameCache.Load(); cache != nil {
+		t.Fatalf("oversize fallback reads materialized grouped cache")
+	}
+	_, _, missNoMapping, _, fallbacks := m.MmapReadStats()
+	if missNoMapping == 0 || fallbacks == 0 {
+		t.Fatalf("expected fallback path stats to reflect no-mmap reads: miss_no_mapping=%d fallbacks=%d", missNoMapping, fallbacks)
 	}
 }
 
@@ -953,8 +1022,8 @@ func TestValueLogManager_ReadUnsafeTo_CompressedGroupedFallbackUsesCache(t *test
 	}
 
 	hits0, misses0, entries0, _ := f.groupedFrameCacheStats()
-	if misses0 == 0 {
-		t.Fatalf("expected first compressed grouped read to miss cache")
+	if hits0 != 0 {
+		t.Fatalf("unexpected grouped cache hit on first read: %d", hits0)
 	}
 	if entries0 == 0 {
 		t.Fatalf("expected first compressed grouped read to populate cache")
@@ -1047,8 +1116,8 @@ func TestValueLogManager_ReadUnsafeTo_CompressedGroupedMmapUsesCache(t *testing.
 	}
 
 	hits0, misses0, entries0, _ := f.groupedFrameCacheStats()
-	if misses0 == 0 {
-		t.Fatalf("expected first mmap grouped read to miss cache")
+	if hits0 != 0 {
+		t.Fatalf("unexpected grouped cache hit on first mmap read: %d", hits0)
 	}
 	if entries0 == 0 {
 		t.Fatalf("expected first mmap grouped read to populate cache")

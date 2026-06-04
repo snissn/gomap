@@ -814,13 +814,22 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.vlog.mmap_read.hit_ratio"] = fmt.Sprintf("%.6f", float64(mmapHits)/float64(total))
 		}
 
-		gHits, gMisses, gEntries, gCapacity := db.valueLogManager.GroupedFrameCacheStats()
-		stats["treedb.vlog.grouped_frame_cache.hits"] = fmt.Sprintf("%d", gHits)
-		stats["treedb.vlog.grouped_frame_cache.misses"] = fmt.Sprintf("%d", gMisses)
-		stats["treedb.vlog.grouped_frame_cache.entries"] = fmt.Sprintf("%d", gEntries)
-		stats["treedb.vlog.grouped_frame_cache.capacity"] = fmt.Sprintf("%d", gCapacity)
-		if total := gHits + gMisses; total > 0 {
-			stats["treedb.vlog.grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gHits)/float64(total))
+		gStats := db.valueLogManager.GroupedFrameCacheDetailedStats()
+		stats["treedb.vlog.grouped_frame_cache.hits"] = fmt.Sprintf("%d", gStats.Hits)
+		stats["treedb.vlog.grouped_frame_cache.misses"] = fmt.Sprintf("%d", gStats.Misses)
+		stats["treedb.vlog.grouped_frame_cache.stores"] = fmt.Sprintf("%d", gStats.Stores)
+		stats["treedb.vlog.grouped_frame_cache.evictions"] = fmt.Sprintf("%d", gStats.Evictions)
+		stats["treedb.vlog.grouped_frame_cache.releases"] = fmt.Sprintf("%d", gStats.Releases)
+		stats["treedb.vlog.grouped_frame_cache.retained_bytes"] = fmt.Sprintf("%d", gStats.RetainedBytes)
+		stats["treedb.vlog.grouped_frame_cache.budget_bytes"] = fmt.Sprintf("%d", gStats.BudgetBytes)
+		stats["treedb.vlog.grouped_frame_cache.skipped_disabled"] = fmt.Sprintf("%d", gStats.SkippedDisabled)
+		stats["treedb.vlog.grouped_frame_cache.skipped_oversize"] = fmt.Sprintf("%d", gStats.SkippedOversize)
+		stats["treedb.vlog.grouped_frame_cache.skipped_budget"] = fmt.Sprintf("%d", gStats.SkippedBudget)
+		stats["treedb.vlog.grouped_frame_cache.skipped_contention"] = fmt.Sprintf("%d", gStats.SkippedContention)
+		stats["treedb.vlog.grouped_frame_cache.entries"] = fmt.Sprintf("%d", gStats.Entries)
+		stats["treedb.vlog.grouped_frame_cache.capacity"] = fmt.Sprintf("%d", gStats.Capacity)
+		if total := gStats.Hits + gStats.Misses; total > 0 {
+			stats["treedb.vlog.grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gStats.Hits)/float64(total))
 		}
 
 		stats["treedb.vlog.read_retry_refresh.leader_calls"] = fmt.Sprintf("%d", db.readRetryRefreshLeaderCount.Load())

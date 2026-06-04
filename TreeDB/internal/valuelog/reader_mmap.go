@@ -635,18 +635,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		return nil, ErrCorrupt, true
 	}
 
-	if fFlags&FrameFlagCompressed != 0 {
-		if val, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, subIndex, nil); hit {
-			if err != nil {
-				return nil, err, true
-			}
-			decoded, err := decodeTemplatePayload(val)
-			if err != nil {
-				return nil, err, true
-			}
-			return decoded, nil, true
-		}
-	} else if readViaMmapViewPrefixCacheEnabled && f.cacheStart.Load() == start {
+	if fFlags&FrameFlagCompressed == 0 && readViaMmapViewPrefixCacheEnabled && f.cacheStart.Load() == start {
 		f.cacheMu.Lock()
 		hit := f.cacheStart.Load() == start &&
 			f.cacheK > 0 &&
@@ -705,6 +694,16 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	}
 
 	if fFlags&FrameFlagCompressed != 0 {
+		if val, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, offsets, rawLen, subIndex, nil); hit {
+			if err != nil {
+				return nil, err, true
+			}
+			decoded, err := decodeTemplatePayload(val)
+			if err != nil {
+				return nil, err, true
+			}
+			return decoded, nil, true
+		}
 		if len(payload) < prefixLen {
 			return nil, ErrCorrupt, true
 		}
@@ -945,22 +944,6 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, false, ErrCorrupt, true
 	}
 
-	if fFlags&FrameFlagCompressed != 0 {
-		if val, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, subIndex, dst); hit {
-			if err != nil {
-				return nil, false, err, true
-			}
-			val, decoded, err := decodeTemplatePayload(val)
-			if err != nil {
-				return nil, false, err, true
-			}
-			if decoded {
-				return val, false, nil, true
-			}
-			return val, usedDst, nil, true
-		}
-	}
-
 	off := FrameHeaderSize + ridBytes
 	var offsets [MaxFrameK + 1]uint32
 	prev := uint32(0)
@@ -985,6 +968,22 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	valEnd := offsets[subIndex+1]
 	if valEnd < valStart || valEnd > rawLen {
 		return nil, false, ErrCorrupt, true
+	}
+
+	if fFlags&FrameFlagCompressed != 0 {
+		if val, usedDst, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, offsets, rawLen, subIndex, dst); hit {
+			if err != nil {
+				return nil, false, err, true
+			}
+			val, decoded, err := decodeTemplatePayload(val)
+			if err != nil {
+				return nil, false, err, true
+			}
+			if decoded {
+				return val, false, nil, true
+			}
+			return val, usedDst, nil, true
+		}
 	}
 
 	if fFlags&FrameFlagCompressed == 0 {
@@ -1259,21 +1258,6 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 
-	if cachedVal, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, subIndex, nil); hit {
-		if err != nil {
-			return nil, err, true
-		}
-		oldLen := len(dst)
-		dst, err = appendDecodedTemplatePayload(dst, cachedVal, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-		if err != nil {
-			return nil, err, true
-		}
-		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
-		if err != nil {
-			return nil, err, true
-		}
-		return dst, nil, true
-	}
 	off := FrameHeaderSize + ridBytes
 	var offsets [MaxFrameK + 1]uint32
 	prev := uint32(0)
@@ -1294,6 +1278,22 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	valEnd := offsets[subIndex+1]
 	if valEnd < valStart || valEnd > rawLen {
 		return nil, ErrCorrupt, true
+	}
+
+	if cachedVal, _, err, hit := f.groupedFrameCacheReadTo(start, verifyCRC, k, offsets, rawLen, subIndex, nil); hit {
+		if err != nil {
+			return nil, err, true
+		}
+		oldLen := len(dst)
+		dst, err = appendDecodedTemplatePayload(dst, cachedVal, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		if err != nil {
+			return nil, err, true
+		}
+		dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
+		if err != nil {
+			return nil, err, true
+		}
+		return dst, nil, true
 	}
 
 	frame := FrameHeader{
