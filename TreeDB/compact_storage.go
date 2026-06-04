@@ -11,9 +11,10 @@ import (
 type CompactStorageMode = treedbdb.CompactStorageMode
 
 const (
-	CompactStorageDefault = treedbdb.CompactStorageDefault
-	CompactStorageFull    = treedbdb.CompactStorageFull
-	CompactStorageQuick   = treedbdb.CompactStorageQuick
+	CompactStorageDefault    = treedbdb.CompactStorageDefault
+	CompactStorageFull       = treedbdb.CompactStorageFull
+	CompactStorageQuick      = treedbdb.CompactStorageQuick
+	CompactStorageExhaustive = treedbdb.CompactStorageExhaustive
 )
 
 // CompactStorageOptions controls full storage compaction across TreeDB storage
