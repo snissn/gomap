@@ -217,6 +217,74 @@ func TestPreparedRandomOrdinalLookupAndScratchAllocs1932(t *testing.T) {
 	}
 }
 
+func TestPreparedCodeRowViewValidatesOnceAndSlicesRows2256(t *testing.T) {
+	fixture := buildFixedQuantizedFixture1932(t)
+	prepared, err := Prepare(fixture.prepareRequest())
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	view, ok := prepared.CodeRowView(RoleCodes)
+	if !ok || !view.Valid() {
+		t.Fatalf("CodeRowView(RoleCodes) ok=%v valid=%v", ok, view.Valid())
+	}
+	if got := view.Role(); got != RoleCodes {
+		t.Fatalf("view role=%q want %q", got, RoleCodes)
+	}
+	if got := view.Rows(); got != fixture.rows {
+		t.Fatalf("view rows=%d want %d", got, fixture.rows)
+	}
+	if got := view.BytesPerRow(); got != fixture.schema.CodeDimensions {
+		t.Fatalf("view bytes_per_row=%d want %d", got, fixture.schema.CodeDimensions)
+	}
+	if got := view.ElementsPerRow(); got != fixture.schema.CodeDimensions {
+		t.Fatalf("view elements_per_row=%d want %d", got, fixture.schema.CodeDimensions)
+	}
+
+	for ordinal, want := range fixture.fixedRows {
+		row, ok := view.RowBytes(ordinal)
+		if !ok || !bytes.Equal(row, want) {
+			t.Fatalf("view row ordinal=%d row=%x ok=%v want %x", ordinal, row, ok, want)
+		}
+		generic, ok := prepared.CodeRowBytes(RoleCodes, ordinal)
+		if !ok || !bytes.Equal(generic, row) {
+			t.Fatalf("generic row ordinal=%d row=%x ok=%v want view row %x", ordinal, generic, ok, row)
+		}
+	}
+	for _, ordinal := range []int{-1, fixture.rows} {
+		if row, ok := view.RowBytes(ordinal); ok || row != nil {
+			t.Fatalf("view RowBytes(%d) row=%x ok=%v want fail-closed", ordinal, row, ok)
+		}
+	}
+	if view, ok := prepared.CodeRowView(RoleNorm); ok || view.Valid() {
+		t.Fatalf("CodeRowView(RoleNorm) ok=%v valid=%v want scalar role rejected", ok, view.Valid())
+	}
+	if view, ok := prepared.CodeRowView(RolePackedCodes); ok || view.Valid() {
+		t.Fatalf("CodeRowView(missing RolePackedCodes) ok=%v valid=%v want missing role rejected", ok, view.Valid())
+	}
+	var nilPrepared *Prepared
+	if view, ok := nilPrepared.CodeRowView(RoleCodes); ok || view.Valid() {
+		t.Fatalf("nil Prepared CodeRowView ok=%v valid=%v want rejected", ok, view.Valid())
+	}
+	var zero CodeRowView
+	if zero.Valid() {
+		t.Fatal("zero CodeRowView valid=true want false")
+	}
+	if row, ok := zero.RowBytes(0); ok || row != nil {
+		t.Fatalf("zero RowBytes row=%x ok=%v want fail-closed", row, ok)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		for ordinal := range fixture.fixedRows {
+			row, _ := view.RowBytes(ordinal)
+			quantizedAssetByteSink ^= row[0]
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("CodeRowView RowBytes allocs/run=%v want 0", allocs)
+	}
+}
+
 func TestPrepareFailsClosedPackedCodeLogicalTypeMatchesPhysical1932(t *testing.T) {
 	rows := 1
 	unpacked := []uint8{1, 0, 1, 1, 0, 0, 1, 0, 1, 0}

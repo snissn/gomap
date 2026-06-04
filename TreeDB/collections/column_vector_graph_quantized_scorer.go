@@ -12,7 +12,7 @@ const columnVectorGraphScalarU8CodeScale = 255.0 * 255.0
 type columnVectorGraphScalarU8QuantizedScorer struct {
 	indexName string
 	dims      int
-	prepared  *quantizedasset.Prepared
+	codeRows  quantizedasset.CodeRowView
 	queryCode []byte
 }
 
@@ -50,25 +50,32 @@ func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode
 	if prepared.Rows() != r.RowCount() {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q prepared rows=%d want graph rows=%d", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, prepared.Rows(), r.RowCount())
 	}
-	if bytesPerRow, ok := prepared.BytesPerRow(quantizedasset.RoleCodes); !ok || bytesPerRow != r.def.Dimensions {
-		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q code bytes_per_row=%d ok=%v want dimensions=%d", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, bytesPerRow, ok, r.def.Dimensions)
+	codeRows, ok := prepared.CodeRowView(quantizedasset.RoleCodes)
+	if !ok {
+		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q code row view unavailable", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName)
 	}
-	if elements, ok := prepared.ElementsPerRow(quantizedasset.RoleCodes); !ok || elements != r.def.Dimensions {
-		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q code elements_per_row=%d ok=%v want dimensions=%d", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, elements, ok, r.def.Dimensions)
+	if codeRows.Rows() != r.RowCount() {
+		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q code row view rows=%d want graph rows=%d", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, codeRows.Rows(), r.RowCount())
+	}
+	if bytesPerRow := codeRows.BytesPerRow(); bytesPerRow != r.def.Dimensions {
+		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q code bytes_per_row=%d want dimensions=%d", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, bytesPerRow, r.def.Dimensions)
+	}
+	if elements := codeRows.ElementsPerRow(); elements != r.def.Dimensions {
+		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q code elements_per_row=%d want dimensions=%d", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, elements, r.def.Dimensions)
 	}
 	queryCode := resizeColumnVectorGraphNativeByteScratch(scratch.quantizedQueryCodes, r.def.Dimensions)
 	for _, value := range query {
 		queryCode = append(queryCode, columnVectorGraphScalarU8Code(value*queryInvNorm))
 	}
 	scratch.quantizedQueryCodes = queryCode
-	return columnVectorGraphScalarU8QuantizedScorer{indexName: indexName, dims: r.def.Dimensions, prepared: prepared, queryCode: queryCode}, nil
+	return columnVectorGraphScalarU8QuantizedScorer{indexName: indexName, dims: r.def.Dimensions, codeRows: codeRows, queryCode: queryCode}, nil
 }
 
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinal(ordinal int, stats *columnVectorGraphNativeSearchStats) (float64, error) {
-	if s == nil || s.prepared == nil || s.dims <= 0 || len(s.queryCode) != s.dims {
+	if s == nil || !s.codeRows.Valid() || s.dims <= 0 || len(s.queryCode) != s.dims {
 		return 0, fmt.Errorf("%w: column_graph quantized scalar_u8 scorer is unavailable", ErrVectorIndexSearchUnavailable)
 	}
-	row, ok := s.prepared.CodeRowBytes(quantizedasset.RoleCodes, ordinal)
+	row, ok := s.codeRows.RowBytes(ordinal)
 	if !ok || len(row) != s.dims {
 		return 0, fmt.Errorf("%w: column_graph quantized index %q code row ordinal=%d unavailable len=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, len(row), ok, s.dims)
 	}
@@ -92,7 +99,7 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinals(ordinals []int,
 	if len(ordinals) == 0 {
 		return dst, nil
 	}
-	if s == nil || s.prepared == nil || s.dims <= 0 || len(s.queryCode) != s.dims {
+	if s == nil || !s.codeRows.Valid() || s.dims <= 0 || len(s.queryCode) != s.dims {
 		return dst[:0], fmt.Errorf("%w: column_graph quantized scalar_u8 scorer is unavailable", ErrVectorIndexSearchUnavailable)
 	}
 	if stats != nil {
@@ -100,7 +107,7 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinals(ordinals []int,
 	}
 	successCount := 0
 	for i, ordinal := range ordinals {
-		row, ok := s.prepared.CodeRowBytes(quantizedasset.RoleCodes, ordinal)
+		row, ok := s.codeRows.RowBytes(ordinal)
 		if !ok || len(row) != s.dims {
 			s.recordScoreStats(stats, successCount)
 			return dst[:i], fmt.Errorf("%w: column_graph quantized index %q code row ordinal=%d unavailable len=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, len(row), ok, s.dims)
