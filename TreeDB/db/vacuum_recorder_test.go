@@ -93,6 +93,41 @@ func TestVacuumRecorder_RecordApplyPlan_RangesShadowEarlierPoints(t *testing.T) 
 	}
 }
 
+func TestApplyVacuumRangeDeltaBatches_ChunksRanges(t *testing.T) {
+	ranges := make([]batch.DeleteRange, vacuumDeltaBatchSize+1)
+	for i := range ranges {
+		start := []byte(fmt.Sprintf("k%05d", i))
+		end := []byte(fmt.Sprintf("k%05d~", i))
+		ranges[i] = batch.DeleteRange{Start: start, End: end}
+	}
+
+	var batchLens []int
+	var roots []uint64
+	root, retired, err := applyVacuumRangeDeltaBatches(10, ranges, []uint64{1}, nil, func(root uint64, b *batch.Batch) (uint64, []uint64, error) {
+		roots = append(roots, root)
+		batchLens = append(batchLens, b.Len())
+		if b.Len() > vacuumDeltaBatchSize {
+			t.Fatalf("range batch len=%d exceeds chunk size %d", b.Len(), vacuumDeltaBatchSize)
+		}
+		return root + uint64(b.Len()), []uint64{uint64(100 + len(batchLens))}, nil
+	})
+	if err != nil {
+		t.Fatalf("apply range deltas: %v", err)
+	}
+	if len(batchLens) != 2 || batchLens[0] != vacuumDeltaBatchSize || batchLens[1] != 1 {
+		t.Fatalf("batch lens=%v, want [%d 1]", batchLens, vacuumDeltaBatchSize)
+	}
+	if len(roots) != 2 || roots[0] != 10 || roots[1] != 10+uint64(vacuumDeltaBatchSize) {
+		t.Fatalf("apply roots=%v, want [10 %d]", roots, 10+uint64(vacuumDeltaBatchSize))
+	}
+	if want := uint64(10 + len(ranges)); root != want {
+		t.Fatalf("root=%d want=%d", root, want)
+	}
+	if len(retired) != 3 || retired[0] != 1 || retired[1] != 101 || retired[2] != 102 {
+		t.Fatalf("retired=%v want [1 101 102]", retired)
+	}
+}
+
 func TestVacuumRecorder_RecordEntries_LastWriteWinsAndCopies(t *testing.T) {
 	var r vacuumRecorder
 	r.Start()

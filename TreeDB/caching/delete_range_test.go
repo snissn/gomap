@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
@@ -405,6 +406,53 @@ func TestCachingBatchDeleteRangeMaterializationCapFailsClosed(t *testing.T) {
 		if err != nil || string(val) != kv.v {
 			t.Fatalf("%s=(%q,%v), want %q", kv.k, val, err, kv.v)
 		}
+	}
+}
+
+func TestCachingBatchDeleteRangeBackendBatchUsesSetOpsBridge(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.Set([]byte("a"), []byte("1"))
+	backend.Set([]byte("b"), []byte("2"))
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	b := db.NewBatch()
+	defer b.Close()
+	b.backend = backend.NewBatch()
+	if err := b.Set([]byte("c"), []byte("3")); err != nil {
+		t.Fatalf("backend Set: %v", err)
+	}
+	if err := b.DeleteRange([]byte("a"), []byte("c")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	if b.hasDeleteRanges {
+		t.Fatalf("backend-backed DeleteRange should not switch to cached materialization")
+	}
+	if len(b.entries) != 0 {
+		t.Fatalf("backend-backed DeleteRange queued %d cached entries", len(b.entries))
+	}
+
+	backend.mu.RLock()
+	lastOps := append([]batch.Entry(nil), backend.lastOps...)
+	backend.mu.RUnlock()
+	if len(lastOps) != 1 || lastOps[0].Type != batch.OpDeleteRange || string(lastOps[0].Key) != "a" || string(lastOps[0].Value) != "c" {
+		t.Fatalf("last backend SetOps=%+v, want single DeleteRange [a,c)", lastOps)
+	}
+
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	backend.mu.RLock()
+	_, hasA := backend.data["a"]
+	_, hasB := backend.data["b"]
+	gotC := string(backend.data["c"])
+	backend.mu.RUnlock()
+	if hasA || hasB || gotC != "3" {
+		t.Fatalf("backend data after bridged range: hasA=%t hasB=%t c=%q, want only c=3", hasA, hasB, gotC)
 	}
 }
 

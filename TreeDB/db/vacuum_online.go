@@ -649,20 +649,32 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 	}
 }
 
-func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, ranges []batch.DeleteRange, z *zipper.Zipper, retired []uint64) (uint64, []uint64, error) {
-	if len(opsMap) == 0 && len(ranges) == 0 {
+type vacuumRangeDeltaApplier func(root uint64, b *batch.Batch) (newRoot uint64, retired []uint64, err error)
+
+func applyVacuumRangeDeltaBatches(root uint64, ranges []batch.DeleteRange, retired []uint64, reader batch.ValueReader, apply vacuumRangeDeltaApplier) (uint64, []uint64, error) {
+	if len(ranges) == 0 {
 		return root, retired, nil
 	}
-
-	if len(ranges) > 0 {
-		b := batch.New(db.valueLogManager, vacuumInlineThresholdMax)
-		for _, r := range ranges {
+	if apply == nil {
+		return 0, nil, errors.New("vacuum: missing range delta applier")
+	}
+	for start := 0; start < len(ranges); start += vacuumDeltaBatchSize {
+		end := start + vacuumDeltaBatchSize
+		if end > len(ranges) {
+			end = len(ranges)
+		}
+		b := batch.New(reader, vacuumInlineThresholdMax)
+		for _, r := range ranges[start:end] {
 			if err := b.DeleteRange(r.Start, r.End); err != nil {
 				_ = b.Close()
 				return 0, nil, err
 			}
 		}
-		newRoot, newRetired, _, err := z.Apply(root, b)
+		if b.Len() == 0 {
+			_ = b.Close()
+			continue
+		}
+		newRoot, newRetired, err := apply(root, b)
 		_ = b.Close()
 		if err != nil {
 			return 0, nil, err
@@ -671,6 +683,22 @@ func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, range
 		if len(newRetired) > 0 {
 			retired = append(retired, newRetired...)
 		}
+	}
+	return root, retired, nil
+}
+
+func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, ranges []batch.DeleteRange, z *zipper.Zipper, retired []uint64) (uint64, []uint64, error) {
+	if len(opsMap) == 0 && len(ranges) == 0 {
+		return root, retired, nil
+	}
+
+	var err error
+	root, retired, err = applyVacuumRangeDeltaBatches(root, ranges, retired, db.valueLogManager, func(root uint64, b *batch.Batch) (uint64, []uint64, error) {
+		newRoot, newRetired, _, err := z.Apply(root, b)
+		return newRoot, newRetired, err
+	})
+	if err != nil {
+		return 0, nil, err
 	}
 
 	keys := make([]string, 0, len(opsMap))

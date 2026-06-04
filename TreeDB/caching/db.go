@@ -29105,10 +29105,12 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 		endCopy = b.cloneKey(end)
 	}
 	if b.backend != nil {
-		if ranged, ok := b.backend.(interface{ DeleteRange(start, end []byte) error }); ok {
-			b.size += len(startCopy) + len(endCopy)
-			return ranged.DeleteRange(startCopy, endCopy)
+		single := [1]batch.Entry{{Type: batch.OpDeleteRange, Key: startCopy, Value: endCopy}}
+		if err := b.backend.SetOps(single[:]); err != nil {
+			return err
 		}
+		b.size += len(startCopy) + len(endCopy)
+		return nil
 	}
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpDeleteRange, Key: startCopy, Value: endCopy})
 	b.noteEntryAppend()
@@ -29543,14 +29545,20 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	origEntries := b.entries
 	origHasRanges := b.hasDeleteRanges
 	origStreamEligible := b.streamEligible
+	origHasViewOps := b.hasViewOps
 	b.entries = materialized
 	b.hasDeleteRanges = false
 	b.streamEligible = false
+	// Materialization reallocates and reorders entries, so any ptrValueIdxs still
+	// refer to the original entry indexes. Force the safe copy path for this write
+	// instead of retaining batch arenas by stale indexes.
+	b.hasViewOps = true
 	err := b.writeRegularLocked(sync, unlockWriteMu)
 	if err != nil {
 		b.entries = origEntries
 		b.hasDeleteRanges = origHasRanges
 		b.streamEligible = origStreamEligible
+		b.hasViewOps = origHasViewOps
 	}
 	return err
 }
