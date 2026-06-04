@@ -882,6 +882,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	scoreTileScores        []float64
 	scoreTileRowIDs        []uint32
 	scoreTileDots          []float32
+	scoreTileQuantizedDots []int64
 	quantizedQueryCodes    []byte
 	quantizedQueryCentered []vectorops.ScalarU8CenteredCode
 	wavefrontCandidates    []columnVectorGraphSearchCandidate
@@ -927,6 +928,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	s.scoreTileScores = resizeColumnVectorGraphNativeFloat64Scratch(s.scoreTileScores, scoreTileCapacity)
 	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, scoreTileCapacity)
 	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, scoreTileCapacity)
+	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, scoreTileCapacity)
 	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, wavefrontWidth)
 	return nil
 }
@@ -1029,6 +1031,13 @@ func resizeColumnVectorGraphNativeFloat32Scratch(dst []float32, target int) []fl
 	return dst[:0]
 }
 
+func resizeColumnVectorGraphNativeInt64Scratch(dst []int64, target int) []int64 {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]int64, 0, target)
+	}
+	return dst[:0]
+}
+
 func resizeColumnVectorGraphNativeFloat64Scratch(dst []float64, target int) []float64 {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		return make([]float64, 0, target)
@@ -1067,6 +1076,13 @@ func ensureColumnVectorGraphNativeUint32Scratch(dst []uint32, target int) []uint
 func ensureColumnVectorGraphNativeFloat32Scratch(dst []float32, target int) []float32 {
 	if cap(dst) < target {
 		return make([]float32, 0, target)
+	}
+	return dst[:0]
+}
+
+func ensureColumnVectorGraphNativeInt64Scratch(dst []int64, target int) []int64 {
+	if cap(dst) < target {
+		return make([]int64, 0, target)
 	}
 	return dst[:0]
 }
@@ -1358,7 +1374,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			if err != nil {
 				return nil, stats, err
 			}
-			if plan != nil && (plan.preparedSearch != nil || plan.scoreBatchMode.indexedEnabled()) {
+			if plan != nil && (plan.quantizedScorerActive || plan.preparedSearch != nil || plan.scoreBatchMode.indexedEnabled()) {
 				for i := 0; i < len(adjacency); {
 					tileCap := len(adjacency) - i
 					scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, tileCap)
@@ -1736,7 +1752,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 		if err != nil {
 			return 0, err
 		}
-		if plan != nil && (plan.preparedSearch != nil || plan.scoreBatchMode.indexedEnabled()) {
+		if plan != nil && (plan.quantizedScorerActive || plan.preparedSearch != nil || plan.scoreBatchMode.indexedEnabled()) {
 			scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
 			tile := scratch.scoreTileOrdinals[:0]
 			for i, neighbor := range adjacency {
@@ -2034,7 +2050,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
 	if plan != nil && plan.quantizedScorerActive {
-		return plan.quantizedScorer.scoreOrdinal(ordinal, stats)
+		return plan.quantizedScorer.scoreOrdinal(ordinal, scratch, stats)
 	}
 	if plan != nil && plan.preparedSearch != nil {
 		return plan.preparedSearch.scoreOrdinal(plan, query, queryInvNorm, ordinal, stats)
@@ -2047,7 +2063,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGrap
 
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinals(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
 	if plan != nil && plan.quantizedScorerActive {
-		return plan.quantizedScorer.scoreOrdinals(ordinals, dst, stats)
+		return plan.quantizedScorer.scoreOrdinals(ordinals, dst, scratch, stats)
 	}
 	if plan != nil && plan.preparedSearch != nil {
 		return plan.preparedSearch.scoreOrdinals(plan, query, queryInvNorm, ordinals, dst, scratch, stats)

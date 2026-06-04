@@ -1007,6 +1007,15 @@ func (v CodeRowView) ElementsPerRow() int {
 	return v.elementsPerRow
 }
 
+// PayloadBytes returns the validated row-major payload backing this view. The
+// slice aliases immutable prepared image bytes and must be treated as read-only.
+func (v CodeRowView) PayloadBytes() ([]byte, bool) {
+	if !v.Valid() {
+		return nil, false
+	}
+	return v.payload, true
+}
+
 // RowBytes returns a zero-copy row byte slice by graph/vector ordinal. The
 // slice aliases immutable prepared image bytes and must be treated as read-only.
 func (v CodeRowView) RowBytes(ordinal int) ([]byte, bool) {
