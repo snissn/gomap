@@ -476,8 +476,8 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 
 func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
 	for idx, ref := range refs {
-		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1TypedColumnPart && ref.Kind != ColumnAssetKindTCS1AggregateMetadata && ref.Kind != ColumnAssetKindTCS1DictionaryCodes && ref.Kind != ColumnAssetKindTCS1Int64Values {
-			return fmt.Errorf("collections: column asset rewrite supports only physical part, typed-column part, aggregate metadata, dictionary code, or int64 value refs: ref %d kind %q", idx, ref.Kind)
+		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1TypedColumnPart && ref.Kind != ColumnAssetKindTCS1AggregateMetadata && ref.Kind != ColumnAssetKindTCS1DictionaryCodes && ref.Kind != ColumnAssetKindTCS1Int64Values && ref.Kind != ColumnAssetKindTCS1HNSWSearchPack {
+			return fmt.Errorf("collections: column asset rewrite supports only physical part, typed-column part, aggregate metadata, dictionary code, int64 value, or hnsw search pack refs: ref %d kind %q", idx, ref.Kind)
 		}
 	}
 	return nil

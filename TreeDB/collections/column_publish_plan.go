@@ -65,6 +65,9 @@ const (
 	// ColumnAssetKindTCS1Int64Values references dense int64 values derived from
 	// one non-null declared int64 column in a TCS1 part.
 	ColumnAssetKindTCS1Int64Values ColumnAssetKind = "tcs1_int64_values"
+	// ColumnAssetKindTCS1HNSWSearchPack references one durable
+	// hnsw_search_pack_v1 serving artifact owned by vector-index state.
+	ColumnAssetKindTCS1HNSWSearchPack ColumnAssetKind = "tcs1_hnsw_search_pack"
 )
 
 // ColumnAssetRef is the durable typed address of a column-asset-manager-owned
@@ -1039,7 +1042,7 @@ func validateColumnManifestPartRoleForAsset(role ColumnManifestPartRole, kind Co
 
 func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	switch ref.Kind {
-	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values:
+	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values, ColumnAssetKindTCS1HNSWSearchPack:
 	default:
 		if ref.Kind == "" {
 			return errors.New("collections: column asset ref kind is required")
