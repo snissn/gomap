@@ -515,21 +515,21 @@ func assertColumnVectorGraphBenchmarkDebugStats2126(tb testing.TB, stats columnV
 	if stats.Candidates == 0 || stats.Edges == 0 || stats.VisitedEdges != stats.Edges {
 		tb.Fatalf("benchmark debug stats=%+v want full traversal counters", stats)
 	}
-	if stats.BenchmarkDebugSearches != 1 || stats.NeighborTiles == 0 || stats.Layer0EdgeVisits == 0 || stats.FrontierPushes == 0 || stats.TopKInsertAttempts == 0 || stats.VisitedMarkChecks == 0 || stats.ExactModeSearches != 1 || stats.ExactCandidateOrderObservations == 0 {
+	if stats.BenchmarkDebugSearches != 1 || stats.NeighborTiles == 0 || stats.Layer0AdjacencyLoads == 0 || stats.Layer0EdgeVisits == 0 || stats.Layer0StopChecks == 0 || stats.Layer0ScoreTiles == 0 || stats.FrontierPushes == 0 || stats.FrontierSiftUpCalls == 0 || stats.CandidateComparisons == 0 || stats.TopKInsertAttempts == 0 || stats.VisitedMarkChecks == 0 || stats.VisitedMarkInserts == 0 || stats.VisitedResetEpochAdvances != 1 || stats.ExactModeSearches != 1 || stats.ExactCandidateOrderObservations == 0 {
 		tb.Fatalf("benchmark debug stats=%+v want tile/frontier/top-k/visited/exact-order counters", stats)
 	}
 }
 
 func assertColumnVectorGraphDebugCountersZero2126(tb testing.TB, stats columnVectorGraphNativeSearchStats) {
 	tb.Helper()
-	if stats.BenchmarkDebugSearches != 0 || stats.NeighborTiles != 0 || stats.Layer0EdgeVisits != 0 || stats.FrontierPushes != 0 || stats.TopKInsertAttempts != 0 || stats.VisitedMarkChecks != 0 || stats.ExactCandidateOrderObservations != 0 {
+	if stats.BenchmarkDebugSearches != 0 || stats.NeighborTiles != 0 || stats.Layer0AdjacencyLoads != 0 || stats.Layer0EdgeVisits != 0 || stats.Layer0StopChecks != 0 || stats.Layer0ScoreTiles != 0 || stats.FrontierPushes != 0 || stats.FrontierSiftUpCalls != 0 || stats.CandidateComparisons != 0 || stats.TopKInsertAttempts != 0 || stats.VisitedMarkChecks != 0 || stats.VisitedMarkInserts != 0 || stats.VisitedResetEpochAdvances != 0 || stats.ExactCandidateOrderObservations != 0 {
 		tb.Fatalf("stats=%+v want benchmark/debug counters suppressed", stats)
 	}
 }
 
 func assertVectorIndexSearchDebugCountersZero2126(tb testing.TB, stats VectorIndexSearchStats) {
 	tb.Helper()
-	if stats.BenchmarkDebugSearches != 0 || stats.NeighborTiles != 0 || stats.Layer0EdgeVisits != 0 || stats.FrontierPushes != 0 || stats.TopKInsertAttempts != 0 || stats.VisitedMarkChecks != 0 || stats.ExactCandidateOrderObservations != 0 {
+	if stats.BenchmarkDebugSearches != 0 || stats.NeighborTiles != 0 || stats.Layer0AdjacencyLoads != 0 || stats.Layer0EdgeVisits != 0 || stats.Layer0StopChecks != 0 || stats.Layer0ScoreTiles != 0 || stats.FrontierPushes != 0 || stats.FrontierSiftUpCalls != 0 || stats.CandidateComparisons != 0 || stats.TopKInsertAttempts != 0 || stats.VisitedMarkChecks != 0 || stats.VisitedMarkInserts != 0 || stats.VisitedResetEpochAdvances != 0 || stats.ExactCandidateOrderObservations != 0 {
 		tb.Fatalf("stats=%+v want benchmark/debug counters suppressed", stats)
 	}
 }
