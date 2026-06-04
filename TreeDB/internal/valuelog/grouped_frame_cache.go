@@ -7,7 +7,7 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-const groupedFrameCacheMaxShards = 64
+const groupedFrameCacheMaxShards = 512
 
 // GroupedFrameCacheStats captures decoded grouped-frame cache behavior.
 // RetainedBytes is the currently retained decoded-raw bytes; BudgetBytes is the
