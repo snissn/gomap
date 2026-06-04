@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"encoding/binary"
 	"sort"
 	"sync"
@@ -162,10 +163,16 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 		return base
 	}
 	ordered := entries
-	if !leafHeuristicEntriesSorted(entries) {
+	fastEightByteKeys := len(entries[0].Key) == 8
+	if !leafHeuristicEntriesSortedWithMode(entries, fastEightByteKeys) {
 		ordered = append(make([]LeafHeuristicEntry, 0, len(entries)), entries...)
 		sort.Slice(ordered, func(i, j int) bool {
-			cmp := compareLeafKey(ordered[i].Key, ordered[j].Key)
+			var cmp int
+			if fastEightByteKeys {
+				cmp = compareLeafKey(ordered[i].Key, ordered[j].Key)
+			} else {
+				cmp = bytes.Compare(ordered[i].Key, ordered[j].Key)
+			}
 			if cmp != 0 {
 				return cmp < 0
 			}
@@ -232,8 +239,20 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 }
 
 func leafHeuristicEntriesSorted(entries []LeafHeuristicEntry) bool {
+	if len(entries) == 0 {
+		return true
+	}
+	return leafHeuristicEntriesSortedWithMode(entries, len(entries[0].Key) == 8)
+}
+
+func leafHeuristicEntriesSortedWithMode(entries []LeafHeuristicEntry, fastEightByteKeys bool) bool {
 	for i := 1; i < len(entries); i++ {
-		cmp := compareLeafKey(entries[i-1].Key, entries[i].Key)
+		var cmp int
+		if fastEightByteKeys {
+			cmp = compareLeafKey(entries[i-1].Key, entries[i].Key)
+		} else {
+			cmp = bytes.Compare(entries[i-1].Key, entries[i].Key)
+		}
 		if cmp > 0 || (cmp == 0 && entries[i-1].Flags > entries[i].Flags) {
 			return false
 		}
