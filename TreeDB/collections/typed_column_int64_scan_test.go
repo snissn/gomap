@@ -3552,6 +3552,10 @@ func createTypedColumnInt64ScanCollectionWithFixedWidthEncoding(tb testing.TB, d
 		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: fixedWidthEncoding},
 		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerRowAsset, Dictionary: true},
 	}
+	if fixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian {
+		cfg.TypedColumnCompression = ColumnStoreTypedColumnCompressionNone
+		cfg.TypedColumnSectionCompression = ColumnStoreTypedColumnCompressionNone
+	}
 	cfg.SortKey = nil
 	cfg.AggregateMetadata = nil
 	mgr := NewCollectionManager(d)

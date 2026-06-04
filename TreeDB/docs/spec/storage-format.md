@@ -1038,6 +1038,13 @@ control-plane state, not a sidecar hint. Current normalized fields are:
 - `profile_support`: current production default is `durable-only`.
   `benchmark-relaxed` is permitted only for explicit benchmark/experimental
   use under relaxed durability modes.
+- `typed_column_compression`: declared typed-column block compression policy.
+  Current production default is `lz4`; `none` is an explicit isolation policy,
+  and unsupported codecs fail closed during metadata normalization.
+- `typed_column_section_compression`: whole-image section compression policy for
+  eligible `tcs1_typed_column_part` sections. Empty/default follows
+  `typed_column_compression`. Current production default is `lz4`; unsupported
+  section codecs fail closed.
 - `locator`: current default strategy is `side-index`.
 - `schema_hash`: normalized hash of stable column schema/config fields used for
   cache identity invalidation. Manifest generation and recovery LSN are not
@@ -1050,6 +1057,15 @@ owners; issue `#1756` adds fixed-dimension `float32_vector` dense sections. The
 transplant and adapter boundaries are documented in `typed-column-transplant.md`
 and `typed-column-adapter.md`; closeout evidence and #1736 COW-maintenance
 handoff facts are recorded in `typed-storage-closeout-1758.md`.
+
+As of issue `#2297`, normalized column-store metadata records production
+typed-column compression policy. The default policy requests `lz4` for
+supported typed-column block families and for eligible typed-column image
+sections whose raw length can be validated from existing metadata. Compression is
+kept only when it is a strict stored-size win; unsupported field/layout families
+remain uncompressed unless a benchmark override explicitly forces them, in which
+case writers fail closed. `none` disables the production policy for isolation and
+is part of the schema hash.
 
 Readers must fail closed for a column-enabled collection when:
 

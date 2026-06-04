@@ -724,7 +724,7 @@ func (s *TypedColumnBoolPredicateAggregateSession) scanPreparedAggregateColumnSt
 		granule := block.Granule
 		granule.Payload = payload
 		granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: block.PayloadLength}
-		if err := preparedColumn.Plan.Layout.ValidateGranulePayload(granule, payload); err != nil {
+		if err := typedColumnPreparedGranuleLayout(preparedColumn.Plan, granule).ValidateGranulePayload(granule, payload); err != nil {
 			return false, err
 		}
 		decodedAny = true

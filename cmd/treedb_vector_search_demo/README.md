@@ -92,7 +92,12 @@ concurrency levels `2,4,8,16,32,64,128`; override those with `-queries` and
 
 When `-dataset-dir` is used, `-queries` may truncate the exported query vector
 file but cannot exceed the manifest query count. `-validate-queries` is a recall
-sample size and is clamped to the exported query count.
+sample size and is clamped to the exported query count. Recall validation uses
+TreeDB exact search by default (`-validation-exact-source=treedb`). Set
+`-validation-exact-source=dataset` to require `-dataset-dir` and compute exact
+top-K IDs directly from the exported `documents.f32`/`queries.f32` vectors;
+that mode compares IDs only and does not materialize TreeDB documents as part of
+the exact baseline.
 
 Dataset-mode TreeDB documents intentionally store the full exported JSONL
 record, including the `embedding` field, while comparator backends may consume
@@ -133,6 +138,9 @@ Useful flags:
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
   queries; set `-min-recall=0` when disabling validation with
   `-validate-queries=0`.
+- `-validation-exact-source treedb|dataset`: select the exact baseline for
+  recall validation. The default `treedb` preserves current behavior; `dataset`
+  requires `-dataset-dir` and computes exact IDs from exported dataset vectors.
 - `-vector-index-strategy column_graph`: use TreeDB's persisted column-store
   graph search path instead of the native runtime snapshot path.
 - `-vector-query-mode exact|quantized_only|quantized_rerank`: select the

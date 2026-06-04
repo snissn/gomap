@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/golang/snappy"
+	"github.com/pierrec/lz4/v4"
 	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
+
+const maxTypedColumnPreparedCompressedDictionarySectionRawBytes = 256 << 20
 
 // typedColumnPreparedRangeReader is the caller-owned byte access boundary used
 // while preparing immutable typed-column state. It deliberately has no package
@@ -482,7 +486,11 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 	if err := typedColumnPreparedValidateColumnDataSections(image, desc, columns); err != nil {
 		return nil, diag, err
 	}
-	certification, err := typedcolumn.CertifyColumnPartLayoutContract(image, desc, columns, descriptorRaw, contractRaw)
+	storedColumns, err := typedColumnPreparedColumnsWithSectionCompression(image, columns)
+	if err != nil {
+		return nil, diag, err
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContract(image, desc, storedColumns, descriptorRaw, contractRaw)
 	if err != nil {
 		diag.CertificationFailures++
 		diag.CertificationFailureReason = err.Error()
@@ -498,7 +506,7 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 		Image:           image,
 		Descriptor:      desc,
 		RowSpan:         span,
-		PhysicalColumns: columns,
+		PhysicalColumns: storedColumns,
 		Columns:         make(map[string]*typedColumnPreparedColumnState, len(columnRequests)),
 		Certification:   certification,
 		ManifestBytes:   manifestBytes,
@@ -542,18 +550,20 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 			diag.SectionDependencies += len(plan.Dependencies)
 			continue
 		}
-		column, ok := columns[plan.Definition.Name]
+		column, ok := storedColumns[plan.Definition.Name]
 		if !ok {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state missing column %q", plan.Definition.Name)
 		}
-		if err := typedColumnPreparedValidateColumnDefinition(plan.Field, plan.Definition, column.Definition); err != nil {
+		section, ok := typedColumnAdapterColumnDataSection(image, plan.Definition.Name)
+		if !ok {
+			return nil, diag, fmt.Errorf("collections: typed-column prepared state missing column data section %q", plan.Definition.Name)
+		}
+		storedDefinition, err := typedColumnPreparedStoredDefinitionForSection(plan.Field, column, section)
+		if err != nil {
 			return nil, diag, err
 		}
-		if err := validateTypedColumnProductionPartColumnLayout(plan.Field, column); err != nil {
-			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q layout validation failed: %w", plan.Definition.Name, err)
-		}
-		if column.Definition.Encoding != plan.Definition.Encoding || column.Definition.Compression != plan.Definition.Compression {
-			plan, err = typedColumnDescribePreparedColumnWithDefinition(request, span, column.Definition)
+		if storedDefinition.Encoding != plan.Definition.Encoding || storedDefinition.Compression != plan.Definition.Compression {
+			plan, err = typedColumnDescribePreparedColumnWithDefinition(request, span, storedDefinition)
 			if err != nil {
 				return nil, diag, err
 			}
@@ -568,12 +578,16 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 				return part, diag, nil
 			}
 		}
-		section, ok := typedColumnAdapterColumnDataSection(image, plan.Definition.Name)
-		if !ok {
-			return nil, diag, fmt.Errorf("collections: typed-column prepared state missing column data section %q", plan.Definition.Name)
+		if err := typedColumnPreparedValidateColumnDefinition(plan.Field, plan.Definition, storedDefinition); err != nil {
+			return nil, diag, err
+		}
+		validationColumn := column
+		validationColumn.Definition = storedDefinition
+		if err := validateTypedColumnProductionPartColumnLayout(plan.Field, validationColumn); err != nil {
+			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q layout validation failed: %w", plan.Definition.Name, err)
 		}
 		columnCertification, _ := certification.Column(plan.Definition.Name)
-		state, columnDiag, err := buildTypedColumnPreparedColumnState(plan, column, section, columnCertification, blockSelection)
+		state, columnDiag, err := buildTypedColumnPreparedColumnState(plan, validationColumn, section, columnCertification, blockSelection)
 		if err != nil {
 			return nil, diag, err
 		}
@@ -599,6 +613,56 @@ func typedColumnPreparedValidateColumnDefinition(field TypedStorageField, want t
 	return typedColumnAdapterValidateStoredDefinition(field, want, got, "typed-column prepared state column")
 }
 
+func typedColumnPreparedStoredDefinitionForSection(field TypedStorageField, column typedcolumn.ColumnPartColumn, section typedcolumn.ColumnPartImageSection) (typedcolumn.ColumnDefinition, error) {
+	def := column.Definition
+	if section.Encoding != def.Encoding {
+		return typedcolumn.ColumnDefinition{}, fmt.Errorf("collections: typed-column prepared state column %q section encoding=%s want %s", def.Name, section.Encoding, def.Encoding)
+	}
+	if err := validateTypedColumnProductionCompression(section.Compression); err != nil {
+		return typedcolumn.ColumnDefinition{}, fmt.Errorf("collections: typed-column prepared state column %q section compression=%s unsupported: %w", def.Name, section.Compression, err)
+	}
+	def.Compression = section.Compression
+	if err := validateTypedColumnProductionDefinition(field, def); err != nil {
+		return typedcolumn.ColumnDefinition{}, err
+	}
+	return def, nil
+}
+
+func typedColumnPreparedColumnsWithSectionCompression(image typedcolumn.ColumnPartImage, columns map[string]typedcolumn.ColumnPartColumn) (map[string]typedcolumn.ColumnPartColumn, error) {
+	out := make(map[string]typedcolumn.ColumnPartColumn, len(columns))
+	for name, column := range columns {
+		out[name] = column
+	}
+	for _, section := range image.Sections {
+		if section.Kind != typedcolumn.ColumnPartImageSectionColumnData {
+			continue
+		}
+		column, ok := out[section.Column]
+		if !ok {
+			return nil, fmt.Errorf("collections: typed-column prepared state image unexpected column data section %q", section.Column)
+		}
+		if section.Encoding != column.Definition.Encoding {
+			return nil, fmt.Errorf("collections: typed-column prepared state column %q section encoding=%s want %s", section.Column, section.Encoding, column.Definition.Encoding)
+		}
+		if err := validateTypedColumnProductionCompression(section.Compression); err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared state column %q section compression=%s unsupported: %w", section.Column, section.Compression, err)
+		}
+		column.Definition.Compression = section.Compression
+		out[section.Column] = column
+	}
+	return out, nil
+}
+
+func typedColumnPreparedGranuleLayout(plan typedColumnPreparedColumnPlan, granule typedcolumn.EncodedGranule) columnlayout.Capabilities {
+	if granule.Encoding == plan.Definition.Encoding && granule.Compression == plan.Definition.Compression {
+		return plan.Layout
+	}
+	def := plan.Definition
+	def.Encoding = granule.Encoding
+	def.Compression = granule.Compression
+	return typedColumnLayoutCapabilitiesForAdapterColumn(typedColumnAdapterColumn{Field: plan.Field, Definition: def})
+}
+
 func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, column typedcolumn.ColumnPartColumn, section typedcolumn.ColumnPartImageSection, certification typedcolumn.ColumnPartLayoutContractColumn, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedColumnState, typedColumnPreparedStateDiagnostics, error) {
 	state := &typedColumnPreparedColumnState{Plan: plan, Column: column, Section: section, BlockPlans: make([]typedColumnPreparedBlockPlan, 0, len(column.Blocks)), Certification: certification}
 	var diag typedColumnPreparedStateDiagnostics
@@ -608,7 +672,7 @@ func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, col
 		block := column.Blocks[i]
 		length := block.Descriptor.StoredBytes
 		if plan.Layout.Descriptor.Logical != "" {
-			if err := plan.Layout.ValidateGranule(block.Granule); err != nil {
+			if err := typedColumnPreparedGranuleLayout(plan, block.Granule).ValidateGranule(block.Granule); err != nil {
 				return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d layout validation: %w", plan.Definition.Name, i, err)
 			}
 		}
@@ -882,7 +946,11 @@ func typedColumnAttachPreparedDictionaries(part *typedColumnPreparedPartState, i
 	if readRange == nil {
 		return diag, errors.New("collections: typed-column prepared dictionaries require range reader")
 	}
-	raw, err := readRange(section.Offset, section.Length, true)
+	stored, err := readRange(section.Offset, section.Length, true)
+	if err != nil {
+		return diag, err
+	}
+	raw, err := decodeTypedColumnPreparedDictionarySectionBytes(section, stored)
 	if err != nil {
 		return diag, err
 	}
@@ -916,6 +984,60 @@ func typedColumnAttachPreparedDictionaries(part *typedColumnPreparedPartState, i
 		column.Dictionaries = dict
 	}
 	return diag, nil
+}
+
+func decodeTypedColumnPreparedDictionarySectionBytes(section typedcolumn.ColumnPartImageSection, stored []byte) ([]byte, error) {
+	rawBytes := section.RawBytes
+	if rawBytes == 0 && section.Compression == typedcolumn.CompressionNone {
+		rawBytes = len(stored)
+	}
+	switch section.Compression {
+	case typedcolumn.CompressionNone:
+		if len(stored) != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries section bytes=%d want raw bytes=%d", len(stored), rawBytes)
+		}
+		return stored, nil
+	case typedcolumn.CompressionSnappy:
+		if rawBytes <= 0 {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d is invalid", rawBytes)
+		}
+		if rawBytes > maxTypedColumnPreparedCompressedDictionarySectionRawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d exceeds max=%d", rawBytes, maxTypedColumnPreparedCompressedDictionarySectionRawBytes)
+		}
+		decodedLen, err := snappy.DecodedLen(stored)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries snappy decoded length: %w", err)
+		}
+		if decodedLen != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries snappy decoded length=%d want=%d", decodedLen, rawBytes)
+		}
+		out, err := snappy.Decode(make([]byte, decodedLen), stored)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries snappy decode: %w", err)
+		}
+		if len(out) != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries snappy decoded length=%d want=%d", len(out), rawBytes)
+		}
+		return out, nil
+	case typedcolumn.CompressionLZ4:
+		if rawBytes <= 0 {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d is invalid", rawBytes)
+		}
+		if rawBytes > maxTypedColumnPreparedCompressedDictionarySectionRawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d exceeds max=%d", rawBytes, maxTypedColumnPreparedCompressedDictionarySectionRawBytes)
+		}
+		out := make([]byte, rawBytes)
+		n, err := lz4.UncompressBlock(stored, out)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries lz4 decode: %w", err)
+		}
+		if n != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries lz4 decoded length=%d want=%d", n, rawBytes)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("collections: typed-column prepared dictionaries section compression=%s is unsupported", section.Compression)
+	}
 }
 
 type typedColumnPreparedDictionaryDecoder struct {
@@ -1118,8 +1240,11 @@ func typedColumnPreparedValidateColumnDataSections(image typedcolumn.ColumnPartI
 		if _, exists := sectionsByColumn[section.Column]; exists {
 			return fmt.Errorf("collections: typed-column prepared state image duplicate column data section %q", section.Column)
 		}
-		if section.Encoding != column.Definition.Encoding || section.Compression != column.Definition.Compression {
-			return fmt.Errorf("collections: typed-column prepared state image column %q section encoding=%s compression=%s want encoding=%s compression=%s", section.Column, section.Encoding, section.Compression, column.Definition.Encoding, column.Definition.Compression)
+		if section.Encoding != column.Definition.Encoding {
+			return fmt.Errorf("collections: typed-column prepared state image column %q section encoding=%s want %s", section.Column, section.Encoding, column.Definition.Encoding)
+		}
+		if err := validateTypedColumnProductionCompression(section.Compression); err != nil {
+			return fmt.Errorf("collections: typed-column prepared state image column %q section compression=%s unsupported: %w", section.Column, section.Compression, err)
 		}
 		if section.Rows != 0 && section.Rows != desc.RowCount {
 			return fmt.Errorf("collections: typed-column prepared state image column %q section rows=%d want %d", section.Column, section.Rows, desc.RowCount)
@@ -1136,6 +1261,9 @@ func typedColumnPreparedValidateColumnDataSections(image typedcolumn.ColumnPartI
 				return fmt.Errorf("collections: typed-column prepared state image column %q stored bytes overflow", section.Column)
 			}
 			expectedBytes += block.Descriptor.StoredBytes
+		}
+		if err := validateTypedColumnProductionBlocks(section.Column, section.Encoding, section.Compression, column.Blocks); err != nil {
+			return fmt.Errorf("collections: typed-column prepared state image column %q blocks validation failed: %w", section.Column, err)
 		}
 		if section.Length != expectedBytes {
 			return fmt.Errorf("collections: typed-column prepared state image column %q section length=%d want %d", section.Column, section.Length, expectedBytes)

@@ -58,9 +58,9 @@ type ColumnPartImageOptions struct {
 	LayoutLogicalTypes  map[string]string
 	DictionaryOrder     map[string]bool
 	DictionaryCollation map[string]string
-	// SectionCompression is an internal, benchmark-relaxed section compression
-	// policy. It is intentionally limited to sections with manifest raw-length
-	// metadata so section-level decompression can fail closed before allocating.
+	// SectionCompression compresses eligible whole-image sections. It is
+	// intentionally limited to sections whose raw length can be recovered from
+	// existing manifest fields without a TCIM/TCS1 format change.
 	SectionCompression Compression
 }
 
