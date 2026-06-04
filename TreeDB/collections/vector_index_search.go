@@ -396,6 +396,25 @@ type VectorIndexSearchStats struct {
 	// GraphRowFallbacks aggregates compatibility graph-row reads/fallbacks observed during vector/norm/adjacency/result materialization.
 	GraphRowFallbacks uint64 `json:"graph_row_fallbacks,omitempty"`
 
+	// SearchRouteColumnGraphPrepared reports that this search used the current prepared column_graph route.
+	SearchRouteColumnGraphPrepared uint64 `json:"search_route_column_graph_prepared,omitempty"`
+	// SearchRouteColumnGraphFallback reports that this search used the column_graph compatibility/fallback route instead of the prepared route.
+	SearchRouteColumnGraphFallback uint64 `json:"search_route_column_graph_fallback,omitempty"`
+	// SearchRouteHNSWSearchPack reports that this search used the future hnsw_search_pack_v1 route.
+	SearchRouteHNSWSearchPack uint64 `json:"search_route_hnsw_search_pack,omitempty"`
+	// HNSWSearchPackActive reports that a validated hnsw_search_pack_v1 served this search.
+	HNSWSearchPackActive uint64 `json:"hnsw_search_pack_active,omitempty"`
+	// HNSWSearchPackMissing reports that no hnsw_search_pack_v1 was available for this searcher.
+	HNSWSearchPackMissing uint64 `json:"hnsw_search_pack_missing,omitempty"`
+	// HNSWSearchPackInvalid reports that a hnsw_search_pack_v1 candidate was present but failed validation.
+	HNSWSearchPackInvalid uint64 `json:"hnsw_search_pack_invalid,omitempty"`
+	// HNSWSearchPackFallbacks reports searches that fell back from hnsw_search_pack_v1 to an existing route.
+	HNSWSearchPackFallbacks uint64 `json:"hnsw_search_pack_fallbacks,omitempty"`
+	// HNSWSearchPackMmapDirect reports searches served from a direct mmap hnsw_search_pack_v1 view.
+	HNSWSearchPackMmapDirect uint64 `json:"hnsw_search_pack_mmap_direct,omitempty"`
+	// HNSWSearchPackHeapCopy reports searches served from a heap-copy hnsw_search_pack_v1 view.
+	HNSWSearchPackHeapCopy uint64 `json:"hnsw_search_pack_heap_copy,omitempty"`
+
 	// BenchmarkDebugSearches reports searches collected with benchmark_debug graph-control-flow instrumentation.
 	BenchmarkDebugSearches uint64 `json:"benchmark_debug_searches,omitempty"`
 	// NeighborTiles counts expanded adjacency neighbor tiles.
@@ -549,7 +568,45 @@ type VectorIndexSearcher struct {
 	documentView *CollectionReadView
 	scratch      columnVectorGraphNativeSearchScratch
 	readerLast   columnPhysicalRowReaderStats
+	routeStats   vectorIndexSearchRouteStats
 	closed       bool
+}
+
+type vectorIndexSearchRouteStats struct {
+	SearchRouteColumnGraphPrepared uint64
+	SearchRouteColumnGraphFallback uint64
+	SearchRouteHNSWSearchPack      uint64
+	HNSWSearchPackActive           uint64
+	HNSWSearchPackMissing          uint64
+	HNSWSearchPackInvalid          uint64
+	HNSWSearchPackFallbacks        uint64
+	HNSWSearchPackMmapDirect       uint64
+	HNSWSearchPackHeapCopy         uint64
+}
+
+func vectorIndexSearchRouteStatsForColumnGraphReader(reader *columnVectorGraphPhysicalRowReader) vectorIndexSearchRouteStats {
+	stats := vectorIndexSearchRouteStats{HNSWSearchPackMissing: 1}
+	if reader != nil && reader.preparedSearch != nil && reader.preparedSearch.ready() {
+		stats.SearchRouteColumnGraphPrepared = 1
+		return stats
+	}
+	stats.SearchRouteColumnGraphFallback = 1
+	return stats
+}
+
+func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
+	if stats == nil {
+		return
+	}
+	stats.SearchRouteColumnGraphPrepared = r.SearchRouteColumnGraphPrepared
+	stats.SearchRouteColumnGraphFallback = r.SearchRouteColumnGraphFallback
+	stats.SearchRouteHNSWSearchPack = r.SearchRouteHNSWSearchPack
+	stats.HNSWSearchPackActive = r.HNSWSearchPackActive
+	stats.HNSWSearchPackMissing = r.HNSWSearchPackMissing
+	stats.HNSWSearchPackInvalid = r.HNSWSearchPackInvalid
+	stats.HNSWSearchPackFallbacks = r.HNSWSearchPackFallbacks
+	stats.HNSWSearchPackMmapDirect = r.HNSWSearchPackMmapDirect
+	stats.HNSWSearchPackHeapCopy = r.HNSWSearchPackHeapCopy
 }
 
 // SearchVectorIndex searches a collection vector index through the public
@@ -705,6 +762,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		catalog:    readerCatalog,
 		reader:     reader,
 		readerLast: reader.Stats(),
+		routeStats: vectorIndexSearchRouteStatsForColumnGraphReader(reader),
 	}
 	closeOnErr = false
 	return searcher, response, nil
@@ -768,6 +826,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	s.readerLast = readerStatsAfter
 	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
+	s.routeStats.apply(&response.Stats)
 	if err != nil {
 		return response, err
 	}
@@ -933,6 +992,7 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	s.readerLast = readerStatsAfter
 	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
+	s.routeStats.apply(&response.Stats)
 	if err != nil {
 		clear(previousResults)
 		return response, err
