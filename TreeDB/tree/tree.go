@@ -180,6 +180,26 @@ type leafLogPageUnsafeToReader interface {
 	ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error)
 }
 
+// LeafLogPageReadState describes validation state carried by a leaf-log page
+// read. RecordChecksumVerified is true when the bytes were produced by a
+// checksum-enabled value-log read. CacheEntryPresent is true when the reader has
+// an entry for this leaf pointer that may be marked after successful page
+// checksum validation. PageChecksumVerified is true only when cached bytes had
+// the B-tree page checksum validated successfully before being cached as
+// verified.
+type LeafLogPageReadState struct {
+	RecordChecksumVerified bool
+	CacheEntryPresent      bool
+	PageChecksumVerified   bool
+}
+
+// Optional fast path for leaf-log page reads that can report cached validation
+// state to let the tree skip repeated page checksum work without weakening
+// durable read-integrity semantics.
+type leafLogPageUnsafeToStateReader interface {
+	ReadLeafLogPageUnsafeToWithState(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, LeafLogPageReadState, error)
+}
+
 // LeafLogPageViewLease releases a read-only leaf-log page view.
 type LeafLogPageViewLease interface {
 	ReleaseLeafLogPageView()
@@ -189,6 +209,24 @@ type LeafLogPageViewLease interface {
 // released before the caller lets the returned page slice escape.
 type leafLogPageUnsafeViewReader interface {
 	ReadLeafLogPageUnsafeView(ptr page.LeafLogPtr) ([]byte, LeafLogPageViewLease, bool, error)
+}
+
+// Optional read-only leaf-log page view with cached validation state.
+type leafLogPageUnsafeViewStateReader interface {
+	ReadLeafLogPageUnsafeViewWithState(ptr page.LeafLogPtr) ([]byte, LeafLogPageViewLease, bool, LeafLogPageReadState, error)
+}
+
+// LeafLogPageViewChecksumMarker can be implemented by a view lease to mark the
+// leased cache entry as page-checksum verified while the view lock is still held.
+type LeafLogPageViewChecksumMarker interface {
+	MarkLeafLogPageViewChecksumVerified()
+}
+
+// Optional marker used after a checksum-enabled tree validation succeeds. Cache
+// implementations must fail closed and only mark entries that were populated
+// from checksum-verified value-log bytes.
+type leafLogPageChecksumVerifyMarker interface {
+	MarkLeafLogPageChecksumVerified(ptr page.LeafLogPtr)
 }
 
 // Optional capability gate for key-aware pointer read interfaces.
@@ -225,17 +263,20 @@ func slabReadChecksumEnabled(sr SlabReader) bool {
 }
 
 type Tree struct {
-	pager           *pager.Pager
-	slabReader      SlabReader
-	slabAppender    slabUnsafeAppender
-	slabBatcher     slabUnsafeBatchAppender
-	slabToReader    slabUnsafeToReader
-	slabKeyReader   slabUnsafeKeyReader
-	slabKeyAppender slabUnsafeKeyAppender
-	slabKeyBatcher  slabUnsafeKeyBatchAppender
-	leafLogToReader leafLogPageUnsafeToReader
-	leafLogView     leafLogPageUnsafeViewReader
-	rootPageID      uint64
+	pager               *pager.Pager
+	slabReader          SlabReader
+	slabAppender        slabUnsafeAppender
+	slabBatcher         slabUnsafeBatchAppender
+	slabToReader        slabUnsafeToReader
+	slabKeyReader       slabUnsafeKeyReader
+	slabKeyAppender     slabUnsafeKeyAppender
+	slabKeyBatcher      slabUnsafeKeyBatchAppender
+	leafLogToReader     leafLogPageUnsafeToReader
+	leafLogToState      leafLogPageUnsafeToStateReader
+	leafLogView         leafLogPageUnsafeViewReader
+	leafLogViewState    leafLogPageUnsafeViewStateReader
+	leafLogVerifyMarker leafLogPageChecksumVerifyMarker
+	rootPageID          uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
@@ -257,8 +298,17 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	if leafToReader, ok := sr.(leafLogPageUnsafeToReader); ok {
 		t.leafLogToReader = leafToReader
 	}
+	if leafToState, ok := sr.(leafLogPageUnsafeToStateReader); ok {
+		t.leafLogToState = leafToState
+	}
 	if leafView, ok := sr.(leafLogPageUnsafeViewReader); ok {
 		t.leafLogView = leafView
+	}
+	if leafViewState, ok := sr.(leafLogPageUnsafeViewStateReader); ok {
+		t.leafLogViewState = leafViewState
+	}
+	if marker, ok := sr.(leafLogPageChecksumVerifyMarker); ok {
+		t.leafLogVerifyMarker = marker
 	}
 	if keyAwareEnabled {
 		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
@@ -298,10 +348,25 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	} else {
 		t.leafLogToReader = nil
 	}
+	if leafToState, ok := sr.(leafLogPageUnsafeToStateReader); ok {
+		t.leafLogToState = leafToState
+	} else {
+		t.leafLogToState = nil
+	}
 	if leafView, ok := sr.(leafLogPageUnsafeViewReader); ok {
 		t.leafLogView = leafView
 	} else {
 		t.leafLogView = nil
+	}
+	if leafViewState, ok := sr.(leafLogPageUnsafeViewStateReader); ok {
+		t.leafLogViewState = leafViewState
+	} else {
+		t.leafLogViewState = nil
+	}
+	if marker, ok := sr.(leafLogPageChecksumVerifyMarker); ok {
+		t.leafLogVerifyMarker = marker
+	} else {
+		t.leafLogVerifyMarker = nil
 	}
 	if keyAwarePointerReadsEnabled(sr) {
 		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
@@ -356,10 +421,13 @@ func (t *Tree) loadLeafLogNodeViewInto(dst *node.Node, ptr page.LogRecordRef, it
 		return errors.New("missing slab reader")
 	}
 	var (
-		data []byte
-		err  error
+		data  []byte
+		state LeafLogPageReadState
+		err   error
 	)
-	if t.leafLogToReader != nil {
+	if t.leafLogToState != nil {
+		data, _, state, err = t.leafLogToState.ReadLeafLogPageUnsafeToWithState(ptr, nil)
+	} else if t.leafLogToReader != nil {
 		data, _, err = t.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, nil)
 	} else {
 		data, err = t.slabReader.ReadUnsafe(ptr.ValuePtr())
@@ -367,7 +435,14 @@ func (t *Tree) loadLeafLogNodeViewInto(dst *node.Node, ptr page.LogRecordRef, it
 	if err != nil {
 		return err
 	}
-	return validateLeafLogNodeInto(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), iterator)
+	verifiedNow, err := validateLeafLogNodeIntoWithState(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), iterator, state)
+	if err != nil {
+		return err
+	}
+	if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
+		t.markLeafLogPageChecksumVerified(ptr)
+	}
+	return nil
 }
 
 func validateLeafLogNode(data []byte, ptr page.LogRecordRef, verifyChecksum bool, iterator bool) (node.Node, error) {
@@ -379,18 +454,38 @@ func validateLeafLogNode(data []byte, ptr page.LogRecordRef, verifyChecksum bool
 }
 
 func validateLeafLogNodeInto(dst *node.Node, data []byte, ptr page.LogRecordRef, verifyChecksum bool, iterator bool) error {
+	_, err := validateLeafLogNodeIntoWithState(dst, data, ptr, verifyChecksum, iterator, LeafLogPageReadState{})
+	return err
+}
+
+func validateLeafLogNodeIntoWithState(dst *node.Node, data []byte, ptr page.LogRecordRef, verifyChecksum bool, iterator bool, state LeafLogPageReadState) (verifiedNow bool, err error) {
 	if len(data) != page.PageSize {
-		return fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
+		return false, fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
 	}
 	node.InitFreshNodeView(dst, data)
-	if verifyChecksum && !dst.VerifyChecksum() {
-		return fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
+	if verifyChecksum {
+		if state.PageChecksumVerified && state.RecordChecksumVerified {
+			noteOuterLeafChecksumSkipped()
+		} else {
+			noteOuterLeafChecksumVerified()
+			if !dst.VerifyChecksum() {
+				return false, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
+			}
+			verifiedNow = true
+		}
 	}
 	if dst.Type() != page.PageTypeLeaf {
-		return fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", dst.Type(), ptr.FileID, ptr.Offset)
+		return false, fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", dst.Type(), ptr.FileID, ptr.Offset)
 	}
 	noteOuterLeafLoad(ptr.ValuePtr(), len(data), iterator)
-	return nil
+	return verifiedNow, nil
+}
+
+func (t *Tree) markLeafLogPageChecksumVerified(ptr page.LeafLogPtr) {
+	if t == nil || t.leafLogVerifyMarker == nil {
+		return
+	}
+	t.leafLogVerifyMarker.MarkLeafLogPageChecksumVerified(ptr)
 }
 
 func (t *Tree) loadChildRefView(ref page.ChildRef, verifyAlways bool, iterator bool) (node.Node, error) {
@@ -540,10 +635,20 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 			if currRef.Kind == page.ChildRefLeafLog && t.slabReader != nil {
 				ptr := currRef.Log
 				var (
-					data []byte
-					err  error
+					data  []byte
+					state LeafLogPageReadState
+					err   error
 				)
-				if t.leafLogView != nil {
+				if t.leafLogViewState != nil {
+					var ok bool
+					data, leafViewLease, ok, state, err = t.leafLogViewState.ReadLeafLogPageUnsafeViewWithState(ptr)
+					if err != nil {
+						return nil, page.ValuePtr{}, 0, false, err
+					}
+					if ok {
+						loadedLeafRef = true
+					}
+				} else if t.leafLogView != nil {
 					var ok bool
 					data, leafViewLease, ok, err = t.leafLogView.ReadLeafLogPageUnsafeView(ptr)
 					if err != nil {
@@ -555,7 +660,20 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				}
 				if !loadedLeafRef {
 					leafScratch = getLeafRefPageScratch()
-					if t.leafLogToReader != nil {
+					if t.leafLogToState != nil {
+						var usedDst bool
+						data, usedDst, state, err = t.leafLogToState.ReadLeafLogPageUnsafeToWithState(ptr, leafScratch.buf)
+						if err != nil {
+							putLeafRefPageScratch(leafScratch)
+							return nil, page.ValuePtr{}, 0, false, err
+						}
+						loadedLeafRef = true
+						leafScratchOwned = usedDst
+						if !usedDst {
+							putLeafRefPageScratch(leafScratch)
+							leafScratch = nil
+						}
+					} else if t.leafLogToReader != nil {
 						var usedDst bool
 						data, usedDst, err = t.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, leafScratch.buf)
 						if err != nil {
@@ -595,7 +713,8 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					}
 				}
 				if loadedLeafRef {
-					if err := validateLeafLogNodeInto(&n, data, ptr, t.shouldVerifyLeafRefChecksum(), false); err != nil {
+					verifiedNow, err := validateLeafLogNodeIntoWithState(&n, data, ptr, t.shouldVerifyLeafRefChecksum(), false, state)
+					if err != nil {
 						if leafViewLease != nil {
 							leafViewLease.ReleaseLeafLogPageView()
 						}
@@ -603,6 +722,15 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 							putLeafRefPageScratch(leafScratch)
 						}
 						return nil, page.ValuePtr{}, 0, false, err
+					}
+					if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
+						if leafViewLease != nil {
+							if marker, ok := leafViewLease.(LeafLogPageViewChecksumMarker); ok {
+								marker.MarkLeafLogPageViewChecksumVerified()
+							}
+						} else {
+							t.markLeafLogPageChecksumVerified(ptr)
+						}
 					}
 				}
 			}
@@ -1223,10 +1351,32 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 	ptr := ref.Log
 	var (
 		data        []byte
+		state       LeafLogPageReadState
 		leafScratch *leafRefPageScratch
 		leafLease   LeafLogPageViewLease
 	)
-	if t.leafLogView != nil {
+	if t.leafLogViewState != nil {
+		var ok bool
+		var err error
+		data, leafLease, ok, state, err = t.leafLogViewState.ReadLeafLogPageUnsafeViewWithState(ptr)
+		if err != nil {
+			return lease, err
+		}
+		if ok {
+			lease.lease = leafLease
+			verifiedNow, err := validateLeafLogNodeIntoWithState(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false, state)
+			if err != nil {
+				lease.Release()
+				return getManyLeafNodeLease{}, err
+			}
+			if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
+				if marker, ok := leafLease.(LeafLogPageViewChecksumMarker); ok {
+					marker.MarkLeafLogPageViewChecksumVerified()
+				}
+			}
+			return lease, nil
+		}
+	} else if t.leafLogView != nil {
 		var ok bool
 		var err error
 		data, leafLease, ok, err = t.leafLogView.ReadLeafLogPageUnsafeView(ptr)
@@ -1245,7 +1395,14 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 
 	leafScratch = getLeafRefPageScratch()
 	var usedScratch bool
-	if t.leafLogToReader != nil {
+	if t.leafLogToState != nil {
+		var err error
+		data, usedScratch, state, err = t.leafLogToState.ReadLeafLogPageUnsafeToWithState(ptr, leafScratch.buf)
+		if err != nil {
+			putLeafRefPageScratch(leafScratch)
+			return lease, err
+		}
+	} else if t.leafLogToReader != nil {
 		var err error
 		data, usedScratch, err = t.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, leafScratch.buf)
 		if err != nil {
@@ -1284,9 +1441,13 @@ func (t *Tree) loadLeafNodeForGetMany(dst *node.Node, ref page.ChildRef, verifyA
 			leafScratch = nil
 		}
 	}
-	if err := validateLeafLogNodeInto(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false); err != nil {
+	verifiedNow, err := validateLeafLogNodeIntoWithState(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), false, state)
+	if err != nil {
 		lease.Release()
 		return getManyLeafNodeLease{}, err
+	}
+	if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
+		t.markLeafLogPageChecksumVerified(ptr)
 	}
 	return lease, nil
 }
