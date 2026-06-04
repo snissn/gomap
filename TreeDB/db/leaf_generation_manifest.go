@@ -132,6 +132,49 @@ func (m *leafGenerationManifest) registerCurrentGenerationFileID(fileID uint32, 
 	return true, nil
 }
 
+func (m *leafGenerationManifest) sealCurrentGeneration(commitSeq uint64) ([]uint32, bool, error) {
+	if m == nil {
+		return nil, false, errors.New("treedb: leaf generation manifest is nil")
+	}
+	idx := m.currentGenerationIndex()
+	if idx < 0 {
+		return nil, false, fmt.Errorf("treedb: %s current_generation_id %d not found in generations", leafGenerationManifestFileName, m.CurrentGenerationID)
+	}
+	gen := &m.Generations[idx]
+	if gen.State != leafGenerationStateWritable {
+		return nil, false, fmt.Errorf("treedb: current generation %d is not writable (state=%q)", gen.GenerationID, gen.State)
+	}
+	if len(gen.FileIDs) == 0 {
+		return nil, false, nil
+	}
+	maxID := uint64(0)
+	for i := range m.Generations {
+		if m.Generations[i].GenerationID > maxID {
+			maxID = m.Generations[i].GenerationID
+		}
+	}
+	if m.NextGenerationID <= maxID {
+		m.NextGenerationID = maxID + 1
+	}
+	newID := m.NextGenerationID
+	m.NextGenerationID++
+	gen.State = leafGenerationStateSealed
+	if commitSeq > gen.SealedCommitSeq {
+		gen.SealedCommitSeq = commitSeq
+	}
+	if commitSeq > gen.PublishedCommitSeq {
+		gen.PublishedCommitSeq = commitSeq
+	}
+	m.CurrentGenerationID = newID
+	m.Generations = append(m.Generations, leafGenerationRecord{
+		GenerationID:       newID,
+		State:              leafGenerationStateWritable,
+		CreatedCommitSeq:   commitSeq,
+		PublishedCommitSeq: commitSeq,
+	})
+	return append([]uint32(nil), gen.FileIDs...), true, nil
+}
+
 func (m *leafGenerationManifest) appendRecoveredSealedGenerationFileID(fileID uint32, commitSeq uint64) (bool, error) {
 	if m == nil {
 		return false, errors.New("treedb: leaf generation manifest is nil")

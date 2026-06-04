@@ -487,7 +487,7 @@ func runCompact(dir string, args []string) {
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
 	jsonOut := fs.Bool("json", false, "Emit JSON report")
 	scope := fs.String("scope", "all", "Compaction scope: all|index")
-	mode := fs.String("mode", "full", "Compaction mode: full|quick")
+	mode := fs.String("mode", "full", "Compaction mode: full|quick|exhaustive")
 	syncEachPhase := fs.Bool("sync-each-phase", false, "Force fsync boundaries for rewrite/pack batches")
 	batchSize := fs.Int("rewrite-batch-size", 0, "Value-log rewrite pointer-swap batch size (0=default)")
 	maxSegmentBytes := fs.Int64("rewrite-max-segment-bytes", 0, "Maximum value-log segment bytes during rewrite (0=default)")
@@ -531,7 +531,7 @@ func runCompact(dir string, args []string) {
 func runCompactPlan(dir string, args []string) {
 	fs := flag.NewFlagSet("compact-plan", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "Emit JSON report")
-	mode := fs.String("mode", "full", "Compaction mode: full|quick")
+	mode := fs.String("mode", "full", "Compaction mode: full|quick|exhaustive")
 	_ = fs.Parse(args)
 
 	opts := treedb.Options{Dir: dir, ReadOnly: true}
@@ -553,8 +553,10 @@ func parseCompactStorageModeFlag(command, raw string) treedbdb.CompactStorageMod
 		return treedbdb.CompactStorageFull
 	case "quick":
 		return treedbdb.CompactStorageQuick
+	case "exhaustive":
+		return treedbdb.CompactStorageExhaustive
 	default:
-		fatalf("%s -mode must be full or quick", command)
+		fatalf("%s -mode must be full, quick, or exhaustive", command)
 		return treedbdb.CompactStorageFull
 	}
 }
@@ -574,9 +576,11 @@ func printCompactStorageStats(stats treedb.CompactStorageStats, jsonOut bool) {
 	}
 	beforeTotal := compactStorageUsageBytes(stats.Before, "total")
 	afterTotal := compactStorageUsageBytes(stats.After, "total")
-	fmt.Printf("compact-storage (%s): fully_compacted=%t before_bytes=%d after_bytes=%d\n",
+	fmt.Printf("compact-storage (%s): fully_compacted=%t policy_fully_compacted=%t byte_minimized=%t before_bytes=%d after_bytes=%d\n",
 		mode,
 		stats.FullyCompacted,
+		stats.PolicyFullyCompacted,
+		stats.ByteMinimized,
 		beforeTotal,
 		afterTotal,
 	)
