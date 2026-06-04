@@ -95,13 +95,21 @@ Configuration:
 
 - `RUN_DIR`: output directory. Defaults to a timestamped directory under `/tmp`.
 - `BACKENDS`: comma-separated backend list. Defaults to `treedb,vectorlite`.
-- `DOCS`, `DIMS`, `QUERIES`, `VALIDATE_QUERIES`, `TOP_K`: dataset and validation sizes.
+- `DOCS`, `DIMS`, `QUERIES`, `VALIDATE_QUERIES`, `VALIDATE_DOCS`,
+  `TOP_K`: dataset and validation sizes. `VALIDATE_DOCS` applies only to TreeDB
+  rows and defaults to `16`.
 - `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
 - `M`, `EF_CONSTRUCTION`, `EF_SEARCH`: HNSW parameters.
 - `MIN_RECALL`: recall gate for full-vector rows such as TreeDB exact/default,
   Vectorlite, pgvector, and MongoDB. Defaults to `0.95`.
 - `TREEDB_COLUMN_GRAPH_EF_SEARCH`: optional efSearch override for TreeDB
   `column_graph` rows; defaults to `EF_SEARCH`.
+- `TREEDB_COMPACT`, `TREEDB_COMPACT_SYNC_EACH_PHASE`,
+  `TREEDB_VALUE_POINTER_THRESHOLD`, `TREEDB_LEAF_GENERATION_SEGMENT_TARGET`,
+  `TREEDB_REQUIRE_VALUE_LOG_BYTES`, and `TREEDB_REQUIRE_LEAF_VLOG_BYTES`:
+  optional passthroughs to the matching `cmd/treedb_vector_search_demo` storage
+  flags for every TreeDB row. Unset variables are not passed, so demo defaults
+  are preserved.
 - `TREEDB_QUANTIZED_INDEX_NAME`: scalar_u8 TreeDB quantized score-plane name.
   Defaults to `embedding.scalar_u8.fast`.
 - `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB quantized-rerank exact rerank
