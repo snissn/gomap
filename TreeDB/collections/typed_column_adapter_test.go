@@ -2341,6 +2341,78 @@ func TestTypedColumnAdapterPrepareInt64AggregateTargetedMetadataSectionsFailClos
 	}
 }
 
+func TestTypedColumnAdapterPrepareInt64AggregateTargetedRestoresSectionCompressionBeforeValidation(t *testing.T) {
+	const (
+		partID       = uint64(2297)
+		rowsPerBlock = 512
+		rows         = rowsPerBlock * 2
+	)
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	primaryIDs := make([]int64, rows)
+	counts := make([]int64, rows)
+	x := uint64(0x9e3779b97f4a7c15)
+	for row := 0; row < rows; row++ {
+		primaryIDs[row] = int64(row + 1)
+		if row < rowsPerBlock {
+			x ^= x << 13
+			x ^= x >> 7
+			x ^= x << 17
+			counts[row] = int64(x)
+			continue
+		}
+		counts[row] = 7
+	}
+	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
+		SchemaVersion: uint32(partID),
+		SchemaMode:    typedcolumn.ColumnSchemaFixed,
+		Columns: []typedcolumn.ColumnDefinition{
+			{Name: typedColumnAdapterPrimaryIDColumn, Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+			{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionLZ4, CompressionSet: true},
+		},
+		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
+		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
+		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: rowsPerBlock, DefaultCodecBlockRows: rowsPerBlock},
+		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
+	}, typedcolumn.Batch{
+		Rows: rows,
+		Columns: map[string][]int64{
+			typedColumnAdapterPrimaryIDColumn: primaryIDs,
+			"count":                           counts,
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	countColumn := part.Columns["count"]
+	if len(countColumn.Blocks) != 2 {
+		t.Fatalf("count blocks=%d want 2", len(countColumn.Blocks))
+	}
+	if countColumn.Blocks[0].Descriptor.Compression != typedcolumn.CompressionNone || countColumn.Blocks[1].Descriptor.Compression != typedcolumn.CompressionLZ4 {
+		t.Fatalf("count block compression=%s/%s want none/lz4", countColumn.Blocks[0].Descriptor.Compression, countColumn.Blocks[1].Descriptor.Compression)
+	}
+	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	countSection := typedColumnAdapterFindColumnSection(t, image, "count")
+	if countSection.Compression != typedcolumn.CompressionLZ4 {
+		t.Fatalf("count section compression=%s want lz4", countSection.Compression)
+	}
+	descriptor := typedColumnAdapterFindSection(t, image, typedcolumn.ColumnPartImageSectionDescriptor)
+	descriptorRaw := image.Bytes[descriptor.Offset : descriptor.Offset+descriptor.Length]
+	targeted, err := typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections([]TypedStorageField{field}, image, descriptorRaw, image.PartID, image.Rows, image.Rows, uint64(part.Descriptor.SchemaVersion), "count", TypedColumnInt64PredicateScanRequest{Kind: TypedColumnInt64PredicateAll})
+	if err != nil {
+		t.Fatalf("prepare targeted aggregate: %v", err)
+	}
+	if got := targeted.adapterColumn.Definition.Compression; got != typedcolumn.CompressionLZ4 {
+		t.Fatalf("targeted adapter compression=%s want lz4", got)
+	}
+	if got := targeted.adapterPart.Part.Columns["count"].Definition.Compression; got != typedcolumn.CompressionLZ4 {
+		t.Fatalf("targeted part column compression=%s want lz4", got)
+	}
+}
+
 func TestTypedColumnAdapterPrepareInt64AggregateTargetedSkipsCorruptPrunedPayload(t *testing.T) {
 	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 	fields := []TypedStorageField{field}

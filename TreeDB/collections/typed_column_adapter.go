@@ -4168,6 +4168,10 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 	if err != nil {
 		return nil, err
 	}
+	columns, err = typedColumnAdapterColumnsWithSectionCompression(image, columns)
+	if err != nil {
+		return nil, err
+	}
 	part := &typedcolumn.ColumnPart{Descriptor: desc, Columns: columns}
 	if err := validateTypedColumnAdapterInt64AggregateImage(part, adapterColumn, uint32(schemaHash)); err != nil {
 		return nil, err
@@ -4230,6 +4234,31 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 	part.Columns[adapterColumn.Definition.Name] = valueCol
 	adapterPart := &typedColumnAdapterPart{Options: typedColumnAdapterOptions{Fields: []TypedStorageField{adapterColumn.Field}, SchemaVersion: uint32(schemaHash)}, Columns: []typedColumnAdapterColumn{adapterColumn}, Part: part}
 	return &typedColumnInt64AggregateTargetedPart{adapterPart: adapterPart, adapterColumn: adapterColumn, manifestBytes: image.ManifestBytes, blockRanges: blockRanges}, nil
+}
+
+func typedColumnAdapterColumnsWithSectionCompression(image typedcolumn.ColumnPartImage, columns map[string]typedcolumn.ColumnPartColumn) (map[string]typedcolumn.ColumnPartColumn, error) {
+	out := make(map[string]typedcolumn.ColumnPartColumn, len(columns))
+	for name, column := range columns {
+		out[name] = column
+	}
+	for _, section := range image.Sections {
+		if section.Kind != typedcolumn.ColumnPartImageSectionColumnData {
+			continue
+		}
+		column, ok := out[section.Column]
+		if !ok {
+			return nil, fmt.Errorf("collections: typed-column adapter image unexpected column data section %q", section.Column)
+		}
+		if section.Encoding != column.Definition.Encoding {
+			return nil, fmt.Errorf("collections: typed-column adapter image column %q section encoding=%s want %s", section.Column, section.Encoding, column.Definition.Encoding)
+		}
+		if err := validateTypedColumnProductionCompression(section.Compression); err != nil {
+			return nil, fmt.Errorf("collections: typed-column adapter image column %q section compression=%s unsupported: %w", section.Column, section.Compression, err)
+		}
+		column.Definition.Compression = section.Compression
+		out[section.Column] = column
+	}
+	return out, nil
 }
 
 func validateTypedColumnAdapterInt64AggregateTargetedSections(image typedcolumn.ColumnPartImage, part *typedcolumn.ColumnPart) error {
