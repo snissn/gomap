@@ -93,6 +93,10 @@ ensure_usearch() {
 		linux)
 			local deb="usearch_linux_${USEARCH_LINUX_ARCH}_${USEARCH_VERSION}.deb"
 			local url="https://github.com/unum-cloud/usearch/releases/download/v${USEARCH_VERSION}/${deb}"
+			if ! command -v dpkg-deb >/dev/null 2>&1; then
+				echo "USearch Linux bootstrap requires dpkg-deb to extract $deb; install dpkg/dpkg-deb or set USEARCH_ROOT to an existing USearch install containing usearch.h and $USEARCH_LIB." >&2
+				exit 1
+			fi
 			if [[ ! -f "$USEARCH_CACHE/$deb" ]]; then
 				if command -v gh >/dev/null 2>&1; then
 					gh release download "v${USEARCH_VERSION}" --repo unum-cloud/usearch --pattern "$deb" --dir "$USEARCH_CACHE"

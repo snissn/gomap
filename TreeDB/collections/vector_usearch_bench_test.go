@@ -151,7 +151,7 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 			if err != nil {
 				b.Fatalf("OpenVectorIndexSearcher worker %d: %v", i, err)
 			}
-			defer func() { _ = searcher.Close() }()
+			defer func(searcher *VectorIndexSearcher) { _ = searcher.Close() }(searcher)
 			benchWorkers[i].searcher = searcher
 			opts.Query = queries[i%len(queries)]
 			warm, err := searcher.SearchWithBuffer(opts, &benchWorkers[i].buffer)
