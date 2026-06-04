@@ -19,9 +19,10 @@ import (
 type CompactStorageMode string
 
 const (
-	CompactStorageDefault CompactStorageMode = ""
-	CompactStorageFull    CompactStorageMode = "full"
-	CompactStorageQuick   CompactStorageMode = "quick"
+	CompactStorageDefault    CompactStorageMode = ""
+	CompactStorageFull       CompactStorageMode = "full"
+	CompactStorageQuick      CompactStorageMode = "quick"
+	CompactStorageExhaustive CompactStorageMode = "exhaustive"
 )
 
 // CompactStorageOptions controls full storage compaction across TreeDB storage
@@ -75,7 +76,12 @@ type CompactStorageOptions struct {
 	LeafPackMinExpectedReclaimBytes       int64
 	LeafPackMinExpectedReclaimRatioPPM    int
 	LeafPackMinReclaimPerCopyPPM          int
-	LeafPackLeafFrameK                    int
+	// LeafPackForce bypasses leaf-pack admission thresholds. It is enabled by
+	// CompactStorageExhaustive so benchmark/VACUUM-equivalent compaction can
+	// drain low-yield physical debt instead of stopping at production policy
+	// thresholds.
+	LeafPackForce      bool
+	LeafPackLeafFrameK int
 
 	// ReserveRIDs lets cached-mode callers share the live RID allocator with
 	// foreground writers.
@@ -157,8 +163,13 @@ type CompactStorageStats struct {
 
 	ZeroByteValueLogFilesDeleted int `json:"zero_byte_value_log_files_deleted,omitempty"`
 
-	RemainingDebt  CompactStorageDebt `json:"remaining_debt"`
-	FullyCompacted bool               `json:"fully_compacted"`
+	RemainingDebt CompactStorageDebt `json:"remaining_debt"`
+
+	// FullyCompacted is the legacy policy-oriented compacted flag. For
+	// exhaustive mode, ByteMinimized reports the stricter benchmark contract.
+	FullyCompacted       bool `json:"fully_compacted"`
+	PolicyFullyCompacted bool `json:"policy_fully_compacted"`
+	ByteMinimized        bool `json:"byte_minimized"`
 }
 
 // CompactStoragePlan reports full storage compaction debt without mutating the
@@ -217,6 +228,8 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if opts.DryRun {
 		stats.After = before
 		stats.FullyCompacted = initialDebt.Empty()
+		stats.PolicyFullyCompacted = stats.FullyCompacted
+		stats.ByteMinimized = false
 		return stats, nil
 	}
 
@@ -234,6 +247,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return stats, err
 	}
 	defer cleanupLeafLog()
+	if opts.Mode == CompactStorageExhaustive && db.indexOuterLeavesInValueLog && compactLeafLog == nil && db.leafPageLog != nil {
+		return stats, fmt.Errorf("treedb: exhaustive compact requires an internally-owned leaf page log; close or clear the installed leaf page log before compacting")
+	}
 	if err := db.runCompactStoragePhase(&stats, "value-log-rewrite", func() error {
 		protectedPaths := compactStorageOnlineRewriteProtectedPaths(opts)
 		protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
@@ -268,6 +284,21 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return db.Checkpoint()
 	}); err != nil {
 		return stats, err
+	}
+
+	if opts.Mode == CompactStorageExhaustive {
+		sealedCurrent := false
+		if err := db.runCompactStoragePhase(&stats, "seal-current-leaf-generation", func() error {
+			var err error
+			sealedCurrent, err = db.sealCompactStorageCurrentLeafGeneration(compactLeafLog)
+			return err
+		}); err != nil {
+			return stats, err
+		}
+		if !sealedCurrent && len(stats.Phases) > 0 {
+			stats.Phases[len(stats.Phases)-1].Skipped = true
+			stats.Phases[len(stats.Phases)-1].SkipReason = "no current leaf generation files"
+		}
 	}
 
 	for pass := 0; pass < opts.LeafPackMaxPasses; pass++ {
@@ -374,7 +405,67 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	stats.LeafGenerationPlan = finalAudit.LeafGenerationPlan
 	stats.RemainingDebt = finalDebt
 	stats.FullyCompacted = finalDebt.Empty()
+	stats.PolicyFullyCompacted = stats.FullyCompacted
+	stats.ByteMinimized = opts.Mode == CompactStorageExhaustive && finalDebt.Empty()
 	return stats, nil
+}
+
+func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWriter) (bool, error) {
+	if db == nil || db.leafGenerationManifest == nil {
+		return false, nil
+	}
+	commitSeq := uint64(1)
+	if state := db.State(); state != nil && state.CommitSeq != 0 {
+		commitSeq = state.CommitSeq
+	}
+	db.mu.Lock()
+	if db.leafGenerationManifest == nil {
+		db.mu.Unlock()
+		return false, nil
+	}
+	nextManifest := db.leafGenerationManifest.clone()
+	db.mu.Unlock()
+
+	rawFileIDs, changed, err := nextManifest.sealCurrentGeneration(commitSeq)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
+	}
+
+	if compactLeafLog != nil {
+		if _, currentFileID, ok := compactLeafLog.CurrentValueLogSegment(); ok {
+			if currentRawFileID, ok := rawLeafGenerationFileID(currentFileID); ok {
+				for _, sealedRawFileID := range rawFileIDs {
+					if sealedRawFileID == currentRawFileID {
+						if err := compactLeafLog.rotateLeaf(); err != nil {
+							return false, err
+						}
+						if db.valueLogManager != nil {
+							if rotatedPath, rotatedFileID, ok := compactLeafLog.CurrentValueLogSegment(); ok {
+								if err := db.valueLogManager.RegisterSegment(rotatedPath, rotatedFileID); err != nil {
+									return false, err
+								}
+							}
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if err := db.persistLeafGenerationManifestAndRecordLengthIndexes(nextManifest, rawFileIDs); err != nil {
+		return false, err
+	}
+	db.mu.Lock()
+	db.leafGenerationManifest = nextManifest
+	db.mu.Unlock()
+	if err := db.publishLeafGenerationState(false); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool) error {
@@ -473,17 +564,23 @@ func normalizeCompactStorageOptions(opts CompactStorageOptions) CompactStorageOp
 	switch opts.Mode {
 	case CompactStorageDefault:
 		opts.Mode = CompactStorageFull
-	case CompactStorageFull, CompactStorageQuick:
+	case CompactStorageFull, CompactStorageQuick, CompactStorageExhaustive:
 	default:
 		opts.Mode = CompactStorageFull
 	}
 	if opts.ValueLogRewriteBatchSize < 0 {
 		opts.ValueLogRewriteBatchSize = 0
 	}
+	if opts.Mode == CompactStorageExhaustive {
+		opts.LeafPackForce = true
+	}
 	if opts.LeafPackMaxPasses <= 0 {
-		if opts.Mode == CompactStorageQuick {
+		switch opts.Mode {
+		case CompactStorageQuick:
 			opts.LeafPackMaxPasses = 1
-		} else {
+		case CompactStorageExhaustive:
+			opts.LeafPackMaxPasses = 256
+		default:
 			opts.LeafPackMaxPasses = 32
 		}
 	}
@@ -491,9 +588,12 @@ func normalizeCompactStorageOptions(opts CompactStorageOptions) CompactStorageOp
 		opts.LeafPackMaxGenerationsPerPass = 0
 	}
 	if opts.LeafPackMaxGenerationsPerPass == 0 {
-		if opts.Mode == CompactStorageQuick {
+		switch opts.Mode {
+		case CompactStorageQuick:
 			opts.LeafPackMaxGenerationsPerPass = 8
-		} else {
+		case CompactStorageExhaustive:
+			opts.LeafPackMaxGenerationsPerPass = 0
+		default:
 			opts.LeafPackMaxGenerationsPerPass = 64
 		}
 	}
@@ -501,9 +601,12 @@ func normalizeCompactStorageOptions(opts CompactStorageOptions) CompactStorageOp
 		opts.LeafPackMaxBytesToCopyPerPass = 0
 	}
 	if opts.LeafPackMaxBytesToCopyPerPass == 0 {
-		if opts.Mode == CompactStorageQuick {
+		switch opts.Mode {
+		case CompactStorageQuick:
 			opts.LeafPackMaxBytesToCopyPerPass = 256 << 20
-		} else {
+		case CompactStorageExhaustive:
+			opts.LeafPackMaxBytesToCopyPerPass = 0
+		default:
 			opts.LeafPackMaxBytesToCopyPerPass = 1 << 30
 		}
 	}
@@ -520,6 +623,7 @@ func compactStorageRewritePlanOptions(protectedPaths []string) ValueLogRewriteOn
 func compactStorageLeafPackFromPlanOptions(opts CompactStorageOptions, protectedRootIDs, protectedSystemRootIDs []uint64) LeafGenerationPackFromPlanOptions {
 	out := LeafGenerationPackFromPlanOptions{
 		Sync:                       opts.SyncEachPhase,
+		Force:                      opts.LeafPackForce,
 		MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
 		MinExpectedReclaimRatioPPM: opts.LeafPackMinExpectedReclaimRatioPPM,
 		MinReclaimPerByteCopiedPPM: opts.LeafPackMinReclaimPerCopyPPM,
@@ -530,7 +634,7 @@ func compactStorageLeafPackFromPlanOptions(opts CompactStorageOptions, protected
 		ProtectedRootIDs:           protectedRootIDs,
 		ProtectedSystemRootIDs:     protectedSystemRootIDs,
 	}
-	if out.MinExpectedReclaimBytes == 0 && out.MinExpectedReclaimRatioPPM == 0 && out.MinReclaimPerByteCopiedPPM == 0 {
+	if !out.Force && out.MinExpectedReclaimBytes == 0 && out.MinExpectedReclaimRatioPPM == 0 && out.MinReclaimPerByteCopiedPPM == 0 {
 		out.MinReclaimPerByteCopiedPPM = leafGenerationPackDefaultMinReclaimPerByteCopiedPPM
 	}
 	return out
