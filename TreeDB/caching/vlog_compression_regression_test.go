@@ -2,12 +2,38 @@ package caching
 
 import (
 	"bytes"
+	"encoding/binary"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func readFirstValueLogFrameHeader(t *testing.T, path string) valuelog.FrameHeader {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) < valuelog.HeaderSize {
+		t.Fatalf("value log too short: %d", len(data))
+	}
+	bodyLen := int(binary.LittleEndian.Uint32(data[16:20]))
+	if bodyLen < valuelog.FrameHeaderSize || valuelog.HeaderSize+bodyLen > len(data) {
+		t.Fatalf("invalid first value-log body length %d in file length %d", bodyLen, len(data))
+	}
+	header, rids, offsets, _, err := valuelog.DecodeFrame(data[valuelog.HeaderSize : valuelog.HeaderSize+bodyLen])
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if len(rids) != int(header.K) || len(offsets) != int(header.K)+1 {
+		t.Fatalf("decoded frame cardinality mismatch: k=%d rids=%d offsets=%d", header.K, len(rids), len(offsets))
+	}
+	return header
+}
 
 func TestResolveVlogWriteMode_DefaultUsesAutoBehavior(t *testing.T) {
 	db := &DB{
@@ -319,6 +345,132 @@ func TestAppendValueLogOne_NonLeafLaneAutoBalancedKeepsConfiguredCodec(t *testin
 	}
 	if got := ratioSnap.Samples[vlogBlockCodecIndex(valuelog.BlockCodecLZ4)]; got != 0 {
 		t.Fatalf("expected no lz4 sample on non-leaf lane, got=%d", got)
+	}
+}
+
+func TestAppendValueLog_AutoForcePointerMediumPayloadUsesGroupedBlockFrame(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+
+	base := bytes.Repeat([]byte(`{"commit":{"operation":"create","collection":"app.bsky.feed.post"},"kind":"commit","did":"did:plc:storage-parity"}`), 8)
+	value := base[:forcePointerAutoBlockMinPayloadBytes+128]
+	records := []valuelog.Record{
+		{RID: 1, Value: value},
+		{RID: 2, Value: value},
+		{RID: 3, Value: value},
+		{RID: 4, Value: value},
+	}
+	ptrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLog: %v", err)
+	}
+	if len(ptrs) != len(records) {
+		t.Fatalf("ptr count=%d want %d", len(ptrs), len(records))
+	}
+	for i, ptr := range ptrs {
+		if ptr == (page.ValuePtr{}) {
+			t.Fatalf("empty pointer at %d", i)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	header := readFirstValueLogFrameHeader(t, path)
+	if header.K != uint8(len(records)) {
+		t.Fatalf("frame K=%d want grouped K=%d", header.K, len(records))
+	}
+	if header.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected forced-pointer medium payload batch to store a block-compressed frame")
+	}
+	if header.DictID != 0 {
+		t.Fatalf("expected no dict id for block-compressed retained payload, got %d", header.DictID)
+	}
+	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecSnappy {
+		t.Fatalf("block codec=%v want snappy", got)
+	}
+}
+
+func TestAppendValueLog_AutoForcePointerHighEntropyPayloadUsesGroupedRawFrame(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+
+	records := make([]valuelog.Record, 4)
+	for i := range records {
+		value := make([]byte, forcePointerAutoBlockMinPayloadBytes)
+		for j := range value {
+			value[j] = byte(j + i*17)
+		}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
+	}
+	ptrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLog: %v", err)
+	}
+	if len(ptrs) != len(records) {
+		t.Fatalf("ptr count=%d want %d", len(ptrs), len(records))
+	}
+	for i, ptr := range ptrs {
+		if ptr == (page.ValuePtr{}) {
+			t.Fatalf("empty pointer at %d", i)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	header := readFirstValueLogFrameHeader(t, path)
+	if header.K != uint8(len(records)) {
+		t.Fatalf("frame K=%d want grouped K=%d", header.K, len(records))
+	}
+	if header.Flags&valuelog.FrameFlagCompressed != 0 {
+		t.Fatalf("expected high-entropy forced-pointer batch to bypass block compression")
+	}
+	if header.DictID != 0 {
+		t.Fatalf("expected no dict id for raw high-entropy payload, got %d", header.DictID)
+	}
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteOff] == 0 {
+		t.Fatalf("expected raw/off write-mode observation")
+	}
+	if writeSnap.Frames[vlogWriteBlock] != 0 {
+		t.Fatalf("expected no block write-mode observation for bypassed high-entropy payload")
+	}
+	selectorSnap := db.lanes[0].vlogCompressionSelector.snapshot()
+	if selectorSnap.framesByCandidate[vlogAutoCandidateOff] != 0 {
+		t.Fatalf("expected bypassed raw batch not to train selector off frames")
 	}
 }
 

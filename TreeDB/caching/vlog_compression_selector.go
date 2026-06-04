@@ -83,17 +83,20 @@ const (
 	// Throughput policy favors a stable, low-overhead block path for medium+
 	// payloads to avoid per-write selector churn in hot write workloads.
 	throughputAutoBlockMinPayloadBytes = 256
-	// Force-pointer workloads with large values are write-path throughput-bound.
-	// Keep them on a stable block codec path and avoid selector overhead.
-	forcePointerAutoBlockMinPayloadBytes = 1024
-	// High-entropy forced-pointer streams below the block fast-path threshold
-	// should stay on the raw path once a cheap sample says compression is very
-	// unlikely to help. This keeps auto mode close to off-mode throughput while
-	// retaining auto's leaf-log compression path.
+	// Force-pointer retained payloads are storage-critical. Keep medium+ values
+	// on a stable block codec path and let the frame preparer fall back to raw
+	// only when compressed bytes are not worth keeping.
+	forcePointerAutoBlockMinPayloadBytes = 512
+	// High-entropy forced-pointer streams should bypass compression even at the
+	// block fast-path threshold. This keeps auto mode close to off-mode on
+	// incompressible workloads without disabling block grouping for JSON-like
+	// retained payloads.
 	forcePointerAutoRawBypassMinPayloadBytes = 512
+	forcePointerAutoRawBypassMaxPayloadBytes = 1024
 	// Larger grouped-frame targets reduce per-record compression overhead for
 	// large forced-pointer streams.
 	forcePointerBlockTargetCompressedBytes = 32 << 10
+	forcePointerBlockBootstrapRatio        = 0.50
 	// Live leaf-log frames are a read-path structure as well as a write/storage
 	// structure. Keep grouping modest so cold point reads do not repeatedly decode
 	// large multi-page frames when access has little locality.
@@ -1593,7 +1596,7 @@ func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []value
 		return false
 	}
 	if unitPayloadBytes < forcePointerAutoRawBypassMinPayloadBytes ||
-		unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes ||
+		unitPayloadBytes > forcePointerAutoRawBypassMaxPayloadBytes ||
 		len(records) == 0 {
 		return false
 	}
@@ -1748,6 +1751,15 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		if targetCompressedBytes < leafLogBlockTargetCompressedBytes {
 			targetCompressedBytes = leafLogBlockTargetCompressedBytes
 		}
+	}
+	if db.forceValueLogPointers &&
+		avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes &&
+		ratioSamples == 0 &&
+		ratio >= 0.98 {
+		// Retained-payload value-log streams are expected to be JSON-like in the
+		// storage-parity workload. Bootstrap grouped frames on the first batch so
+		// compression can exploit cross-record repetition before lane ratios exist.
+		ratio = forcePointerBlockBootstrapRatio
 	}
 	if db.isLiveLeafLogLane(l) && ratioSamples == 0 {
 		// Batch-only leaf-log bootstrap: without an initial lane-local block ratio,
