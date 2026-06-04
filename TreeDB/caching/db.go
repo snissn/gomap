@@ -12576,6 +12576,7 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	l.walCoalesceSeq = 0
 	beforeSize := w.Size()
 	for i := range requests {
 		req := &requests[i]
@@ -13480,6 +13481,7 @@ func (db *DB) appendWALZeroInlineEntries(l *lane, entries []batch.Entry, seq uin
 		l.walMu.Unlock()
 		return true, errWALUnavailable
 	}
+	l.walCoalesceSeq = 0
 	beforeSize := w.Size()
 	zw, ok := w.(zeroInlineBatchCommitWriter)
 	if !ok {
@@ -13539,14 +13541,34 @@ func (db *DB) appendWALOne(l *lane, record logRecord, durability journalDurabili
 	return db.appendWALOneChecked(l, record, durability)
 }
 
+func canCoalesceWALPointRecord(record logRecord) bool {
+	return record.Op == logOpSetInline
+}
+
+// nextWALCoalesceSeqLocked returns the shared commit-fence sequence for an
+// adjacent run of unsynced inline point records. Callers must hold l.walMu.
+// Deletes and RID-backed records stay on explicit write/batch fences: deletes
+// must preserve overwrite/delete ordering for same-key WAL replay, while RID
+// records must preserve value-log reachability fences.
+func (db *DB) nextWALCoalesceSeqLocked(l *lane) uint64 {
+	if l.walCoalesceSeq == 0 || db.nextCommitSeq.Load() != l.walCoalesceSeq {
+		l.walCoalesceSeq = db.nextCommitSeq.Add(1)
+	}
+	return l.walCoalesceSeq
+}
+
 func (db *DB) appendWALOneChecked(l *lane, record logRecord, durability journalDurability) error {
-	record.Seq = db.nextCommitSeq.Add(1)
 	switch durability {
 	case journalDurabilitySync:
+		record.Seq = db.nextCommitSeq.Add(1)
 		return db.appendWALDirect(l, []logRecord{record}, true)
 	case journalDurabilityFlush:
+		record.Seq = db.nextCommitSeq.Add(1)
 		return db.appendWALInlineOne(l, record, true)
 	default:
+		if !canCoalesceWALPointRecord(record) {
+			record.Seq = db.nextCommitSeq.Add(1)
+		}
 		return db.appendWALInlineOne(l, record, false)
 	}
 }
@@ -15012,6 +15034,7 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	l.walCoalesceSeq = 0
 	beforeSize := w.Size()
 	if len(records) == 1 {
 		rec := records[0]
@@ -15053,6 +15076,16 @@ func (db *DB) appendWALInlineOne(l *lane, record logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	if flush {
+		l.walCoalesceSeq = 0
+	} else if record.Seq == 0 && canCoalesceWALPointRecord(record) {
+		record.Seq = db.nextWALCoalesceSeqLocked(l)
+	} else {
+		l.walCoalesceSeq = 0
+		if record.Seq == 0 {
+			record.Seq = db.nextCommitSeq.Add(1)
+		}
+	}
 	beforeSize := w.Size()
 	err := w.Append(record)
 	if err == nil && flush {
@@ -15093,6 +15126,7 @@ func (db *DB) flushWALLane(l *lane) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	l.walCoalesceSeq = 0
 	err := w.Flush()
 	l.walMu.Unlock()
 
@@ -22334,6 +22368,7 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	name := commitLogName(l.id, nextSeq)
 	path := filepath.Join(db.dir, name)
 
+	l.walCoalesceSeq = 0
 	if l.wal != nil {
 		oldPath := l.walPath
 		oldSize := l.wal.Size()
