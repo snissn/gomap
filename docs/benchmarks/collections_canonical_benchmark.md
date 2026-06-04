@@ -31,7 +31,8 @@ another location such as `$TMPDIR` on macOS) and writes:
 - `benchmark_summary.md`: human-readable report.
 - `benchmark_matrix.csv`: flat table for spreadsheet/diff tooling.
 - `timed_matrix/`: existing timed TreeDB/SQLite benchmark matrix artifacts.
-- `offline_compact/`: high-level TreeDB compaction artifacts.
+- `offline_compact/`: production high-level TreeDB compaction artifacts.
+- `exhaustive_compact/`: byte-minimized high-level TreeDB compaction artifacts.
 - `full_leafgen_pack_gc/`: full leaf-generation pack/GC fixture artifacts.
 
 Use `-out-dir <dir>` to keep a specific run directory:
@@ -100,7 +101,8 @@ byte-minimized storage-floor claims.
 `sqlite_vacuum`
 
 SQLite compacted baseline after `VACUUM`. This is the required SQLite baseline
-when comparing against TreeDB `offline_compact` or `full_leafgen_pack_gc`.
+when comparing against TreeDB `exhaustive_compact`, `offline_compact`, or
+`full_leafgen_pack_gc`.
 
 ## Fair Comparisons
 
@@ -111,13 +113,14 @@ Fair post-insert comparison:
 
 Fair compacted-state comparison:
 
-- TreeDB `offline_compact`
-- TreeDB `full_leafgen_pack_gc`
+- TreeDB `exhaustive_compact` for byte-minimized/VACUUM-equivalent public storage-floor claims
+- TreeDB `offline_compact` for production policy compaction comparisons
+- TreeDB `full_leafgen_pack_gc` as a diagnostic maintenance primitive
 - SQLite `sqlite_vacuum`
 
-Do not compare TreeDB fully compacted rows only against SQLite post-insert rows.
-The generated report includes guardrail checks for missing SQLite VACUUM rows
-and labels `online_one_pass_maintenance` as partial maintenance.
+Do not compare TreeDB compacted rows only against SQLite post-insert rows. The
+generated report includes guardrail checks for missing SQLite VACUUM rows and
+labels `online_one_pass_maintenance` as partial maintenance.
 
 ## Default Shape
 
@@ -126,8 +129,8 @@ The default run uses:
 - 100,000 documents
 - batch size 16,000
 - two secondary indexes for the primary TreeDB/SQLite comparison
-- TreeDB collection benchmark engine `production_wal_on_fast`
-- raw TreeDB compaction/profile fixtures remain on profile `fast`
+- TreeDB collection benchmark engine `command_wal_relaxed`
+- raw TreeDB compaction/profile fixtures remain on profile `command_wal_relaxed`
 - TreeDB document formats `template-v1`, `bson`, and `json`
 - SQLite JSON and SQLite native-column baselines
 - full leafgen pack/GC with:
@@ -201,13 +204,19 @@ missing, the guardrail checks report an error because B/doc would be ambiguous.
 The canonical report can represent the PR 1096-style finding without hardcoding
 it as production output:
 
-- offline rewrite:
-  - raw TreeDB template-v1: about 19.8 B/doc
-  - collection, 0 indexes: about 19.5 B/doc
-  - collection, 1 index: about 37.5 B/doc
-  - collection, 2 indexes: about 44.3 B/doc
+- production offline compact:
+  - raw TreeDB template-v1: about 25.7 B/doc
+  - collection, 0 indexes: about 22.1 B/doc
+  - collection, 1 index: about 34.4 B/doc
+  - collection, 2 indexes: about 46.7 B/doc
+- exhaustive compact:
+  - raw TreeDB template-v1: about 15.8 B/doc
+  - collection, 0 indexes: about 15.5 B/doc
+  - collection, 1 index: about 20.2 B/doc
+  - collection, 2 indexes: about 22.8 B/doc
 - full leafgen pack/GC:
-  - collection template-v1, 2 indexes: about 31.7 B/doc
+  - collection template-v1, 2 indexes: about 27.8 B/doc
+  - collection JSON, 2 indexes: about 33.7 B/doc
 - SQLite after `VACUUM`:
   - JSON: about 231.7 B/doc
   - native columns: about 156.7 B/doc
