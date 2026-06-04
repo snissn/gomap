@@ -84,17 +84,14 @@ const (
 	// Throughput policy favors a stable, low-overhead block path for medium+
 	// payloads to avoid per-write selector churn in hot write workloads.
 	throughputAutoBlockMinPayloadBytes = 256
-	// Force-pointer workloads with large values are write-path throughput-bound.
-	// Keep them on a stable block codec path and avoid selector overhead.
-	forcePointerAutoBlockMinPayloadBytes = 1024
-	// High-entropy forced-pointer streams below the block fast-path threshold
-	// should stay on the raw path once a cheap sample says compression is very
-	// unlikely to help. This keeps auto mode close to off-mode throughput while
-	// retaining auto's leaf-log compression path.
-	forcePointerAutoRawBypassMinPayloadBytes = 512
+	// Force-pointer retained payloads are storage-critical. Keep medium+ values
+	// on a stable block codec path and let the frame preparer fall back to raw
+	// only when compressed bytes are not worth keeping.
+	forcePointerAutoBlockMinPayloadBytes = 512
 	// Larger grouped-frame targets reduce per-record compression overhead for
 	// large forced-pointer streams.
 	forcePointerBlockTargetCompressedBytes = 32 << 10
+	forcePointerBlockBootstrapRatio        = 0.50
 	// Live leaf-log frames are a read-path structure as well as a write/storage
 	// structure. Keep grouping modest so cold point reads do not repeatedly decode
 	// large multi-page frames when access has little locality.
@@ -1584,37 +1581,6 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 	}
 }
 
-func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []valuelog.Record, unitPayloadBytes int, payloadKind vlogPayloadKind) bool {
-	if db == nil || normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
-		return false
-	}
-	if dictID != 0 || !db.forceValueLogPointers || payloadKind != vlogPayloadKindSingleValue {
-		return false
-	}
-	if unitPayloadBytes < forcePointerAutoRawBypassMinPayloadBytes ||
-		unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes ||
-		len(records) == 0 {
-		return false
-	}
-	checks := [3]int{0, len(records) / 2, len(records) - 1}
-	checked := 0
-	prev := -1
-	for _, idx := range checks {
-		if idx < 0 || idx >= len(records) {
-			continue
-		}
-		if idx == prev {
-			continue
-		}
-		prev = idx
-		checked++
-		if likelyCompressibleSample(records[idx].Value) {
-			return false
-		}
-	}
-	return checked > 0
-}
-
 func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
 	if db == nil || l == nil {
 		return
@@ -1628,14 +1594,6 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	}
 	compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	if !db.vlogSelectorEnabled(compressionMode) {
-		return
-	}
-	if compressionMode == vlogCompressionAuto &&
-		db.forceValueLogPointers &&
-		mode == vlogWriteOff &&
-		unitPayloadBytes >= forcePointerAutoRawBypassMinPayloadBytes {
-		// Raw high-entropy forced-pointer batches do not teach the selector
-		// anything useful after the caller already bypassed compression.
 		return
 	}
 	if compressionMode == vlogCompressionAuto &&
@@ -1671,14 +1629,12 @@ func (db *DB) clampLiveLeafLogFrameK(l *lane, k int) int {
 	return k
 }
 
-func (db *DB) chooseValueLogRawWriteK(l *lane, records int, autoRawBypass, paused bool) int {
+func (db *DB) chooseValueLogRawWriteK(l *lane, records int, paused bool) int {
 	if records <= 1 {
 		return 1
 	}
 	k := 1
 	switch {
-	case db != nil && autoRawBypass && db.forceValueLogPointers:
-		k = valuelog.MaxFrameK
 	case db != nil && paused && db.disableJournal:
 		k = valuelog.MaxFrameK
 	case db != nil:
@@ -1743,6 +1699,15 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		ratio = largePayloadBlockBootstrapRatio
 	}
 	targetCompressedBytes := db.valueLogBlockTargetBytes
+	if db.forceValueLogPointers &&
+		avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes &&
+		ratioSamples == 0 &&
+		ratio >= 0.98 {
+		// Retained-payload value-log streams are expected to be JSON-like in the
+		// storage-parity workload. Bootstrap grouped frames on the first batch so
+		// compression can exploit cross-record repetition before lane ratios exist.
+		ratio = forcePointerBlockBootstrapRatio
+	}
 	if db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && ratioSamples == 0 {
 		// Batch-only leaf-log bootstrap: without an initial lane-local block ratio,
 		// the generic incompressible guard chooses K=1 and defeats AppendLeafPages.

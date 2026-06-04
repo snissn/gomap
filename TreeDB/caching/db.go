@@ -12780,7 +12780,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			} else if writeMode == vlogWriteBlock {
 				k = db.chooseValueLogBlockWriteK(l, end-i, rawBytes, blockCodec)
 			} else {
-				k = db.chooseValueLogRawWriteK(l, end-i, false, rawPaused)
+				k = db.chooseValueLogRawWriteK(l, end-i, rawPaused)
 			}
 		}
 		if limits.MaxRecordSize > 0 && maxValLen > 0 {
@@ -13871,11 +13871,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if n := len(records); n > 0 {
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
-	autoRawBypass := db.shouldBypassAutoRawValueCompression(dictID, records, selectorUnitPayloadBytes, payloadKindForFallback)
-	writeMode, blockCodec, selectorProbe := vlogWriteOff, db.valueLogBlockCodec, false
-	if !autoRawBypass {
-		writeMode, blockCodec, selectorProbe = db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
-	}
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
 	normalizeNoDictBlockCodec := func() {
 		if writeMode != vlogWriteBlock {
 			return
@@ -13970,7 +13966,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		//
 		// When no dict is available, we write raw frames (uncompressed) and still
 		// benefit from fewer syscalls and less framing work.
-		k = db.chooseValueLogRawWriteK(l, len(records), autoRawBypass, paused)
+		k = db.chooseValueLogRawWriteK(l, len(records), paused)
 	}
 	if dictID != 0 && len(dict) > 0 && db.disableJournal {
 		// When the redo/journal log is disabled (ingest-mode), favor maximum frame
@@ -14185,7 +14181,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	if err == nil && !rawBatchUsed {
 		useRawBatch := dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
-		preferBufferedRaw := useRawBatch && hasRawBufferedInto && !autoRawBypass
+		preferBufferedRaw := useRawBatch && hasRawBufferedInto
 		if useRawBatch && (preferBufferedRaw || hasRawInto) {
 			ptrs = getValueLogPtrs(len(records))
 			var (
