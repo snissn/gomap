@@ -60,14 +60,26 @@ maintenance and must not be described as full compaction.
 
 `offline_compact`
 
-The high-level TreeDB compaction path:
+The production high-level TreeDB compaction path:
 
 ```bash
-treemap compact <dir> -rw
+treemap compact <dir> -rw -mode full
 ```
 
-This is the preferred full/offline compaction comparison point. Compare it with
-SQLite after `VACUUM`, not SQLite post-insert.
+This is a policy/full compaction comparison point. Compare it with SQLite after
+`VACUUM`, not SQLite post-insert, but do not use it as the byte-minimized public
+storage-floor headline.
+
+`exhaustive_compact`
+
+The benchmark/VACUUM-equivalent TreeDB compaction path:
+
+```bash
+treemap compact <dir> -rw -mode exhaustive
+```
+
+This is the preferred TreeDB byte-minimized compacted-size headline. Compare it
+with SQLite after `VACUUM`.
 
 `full_leafgen_pack_gc`
 
@@ -81,8 +93,9 @@ the exact knobs:
 - `leafgen-pack-frame-k`
 - `index-vacuum`
 
-This is also a full compacted TreeDB comparison point. Compare it with SQLite
-after `VACUUM`.
+This is a diagnostic compacted TreeDB comparison point. Compare it with SQLite
+after `VACUUM` if reported, but prefer `exhaustive_compact` for public
+byte-minimized storage-floor claims.
 
 `sqlite_vacuum`
 

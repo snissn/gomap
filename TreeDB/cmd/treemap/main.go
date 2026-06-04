@@ -512,10 +512,18 @@ func runCompact(dir string, args []string) {
 		fatalf("compact -scope must be all or index")
 	}
 
-	db := openTreeDB(dir, true)
-	defer closeTreeDB(db)
+	rootDir := resolveTreeDBRootDir(dir)
+	backend, cleanupBackend, err := treedb.OpenBackend(treedb.Options{Dir: rootDir})
+	if err != nil {
+		fatalf("Failed to open DB backend: %v", err)
+	}
+	defer func() {
+		if err := cleanupBackend(); err != nil {
+			fatalf("Close DB backend: %v", err)
+		}
+	}()
 
-	stats, err := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{
+	stats, err := backend.CompactStorage(context.Background(), treedb.CompactStorageOptions{
 		Mode:                           treedb.CompactStorageMode(parseCompactStorageModeFlag("compact", *mode)),
 		SyncEachPhase:                  *syncEachPhase,
 		ValueLogRewriteBatchSize:       *batchSize,
