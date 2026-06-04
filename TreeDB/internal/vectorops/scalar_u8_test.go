@@ -17,13 +17,21 @@ func TestScalarU8CenteredQueryParity2258(t *testing.T) {
 		t.Fatalf("PrepareScalarU8CenteredQuery ok=%v query=%+v scratch_len=%d", ok, query, len(scratch))
 	}
 	wantCentered := []ScalarU8CenteredCode{-255, -253, -1, 1, 253, 255}
+	var wantSum int64
 	for i, want := range wantCentered {
+		wantSum += int64(want)
 		if got := query.Values[i]; got != want {
 			t.Fatalf("centered[%d]=%d want %d", i, got, want)
 		}
 		if got := ScalarU8CenteredValue(codes[i]); got != want {
 			t.Fatalf("ScalarU8CenteredValue(%d)=%d want %d", codes[i], got, want)
 		}
+	}
+	if got := query.CenteredSum(); got != wantSum {
+		t.Fatalf("query.CenteredSum()=%d want %d", got, wantSum)
+	}
+	if got := (ScalarU8CenteredQuery{Values: wantCentered}).CenteredSum(); got != wantSum {
+		t.Fatalf("manual query CenteredSum()=%d want %d", got, wantSum)
 	}
 
 	gotDot, ok := ScalarU8CenteredDot(query, row)

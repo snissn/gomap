@@ -10,10 +10,15 @@ const scalarU8CenterOffset = 255
 type ScalarU8CenteredCode = int16
 
 // ScalarU8CenteredQuery is a validated, allocation-free view over centered
-// scalar_u8 query codes. Values aliases caller-owned scratch and remains valid
-// until that scratch is reused.
+// scalar_u8 query codes. Values aliases caller-owned scratch, must be treated as
+// immutable while the query is in use, and remains valid until that scratch is
+// reused. Mutating Values after preparation invalidates cached query metadata
+// consumed by batch kernels.
 type ScalarU8CenteredQuery struct {
 	Values []ScalarU8CenteredCode
+
+	sum      int64
+	sumValid bool
 }
 
 // Dims returns the number of centered query dimensions.
@@ -25,6 +30,17 @@ func (q ScalarU8CenteredQuery) Valid() bool { return len(q.Values) > 0 }
 // ValidForDims reports whether q is valid for exactly dims dimensions.
 func (q ScalarU8CenteredQuery) ValidForDims(dims int) bool {
 	return dims > 0 && len(q.Values) == dims
+}
+
+// CenteredSum returns sum(q.Values). Queries returned by
+// PrepareScalarU8CenteredQuery carry this value so batch kernels can reuse it
+// without rescanning the query per call. Manually constructed queries still
+// return the correct sum by scanning Values.
+func (q ScalarU8CenteredQuery) CenteredSum() int64 {
+	if q.sumValid {
+		return q.sum
+	}
+	return scalarU8CenteredQuerySum(q.Values)
 }
 
 // ScalarU8CenteredValue returns the centered scalar_u8 value 2*code-255.
@@ -41,10 +57,13 @@ func PrepareScalarU8CenteredQuery(dst []ScalarU8CenteredCode, codes []byte, dims
 		return ScalarU8CenteredQuery{}, dst[:0], false
 	}
 	dst = dst[:dims]
+	var sum int64
 	for i, code := range codes {
-		dst[i] = ScalarU8CenteredValue(code)
+		centered := ScalarU8CenteredValue(code)
+		dst[i] = centered
+		sum += int64(centered)
 	}
-	return ScalarU8CenteredQuery{Values: dst}, dst, true
+	return ScalarU8CenteredQuery{Values: dst, sum: sum, sumValid: true}, dst, true
 }
 
 // ScalarU8CenteredDot computes the integer dot product between a centered query
