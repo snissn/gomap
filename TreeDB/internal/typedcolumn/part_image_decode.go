@@ -848,6 +848,9 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 			return fmt.Errorf("typedcolumn: descriptor column %s block %d fixed-width raw bytes=%d want %d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
 		}
 	}
+	if err := validateCompression(block.Compression); err != nil {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d compression=%s is unsupported", column, blockIndex, block.Compression)
+	}
 	if block.Compression == CompressionNone && block.StoredBytes != block.RawBytes {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d uncompressed stored bytes=%d raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
 	}

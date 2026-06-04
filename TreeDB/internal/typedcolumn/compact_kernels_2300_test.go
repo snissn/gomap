@@ -1,6 +1,7 @@
 package typedcolumn
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"slices"
@@ -228,6 +229,49 @@ func TestColumnPartImageMixedActualCompressionKeepsRequestedCompression2300(t *t
 	}
 }
 
+func TestColumnPartImageRejectsUnsupportedScalarBlockCompression2300(t *testing.T) {
+	const rows = 1024
+	ids := make([]int64, rows)
+	u32 := make([]uint32, rows)
+	for i := range ids {
+		ids[i] = int64(i)
+		u32[i] = uint32(i % 3)
+	}
+	part, err := BuildColumnPart(2303, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true, StatsDisabled: true},
+			{Name: "u32", Type: ColumnTypeUint32, Encoding: EncodingRawUint32, Compression: CompressionLZ4, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: rows},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:          rows,
+		Columns:       map[string][]int64{"id": ids},
+		Uint32Columns: map[string][]uint32{"u32": u32},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	if got := part.Columns["u32"].Blocks[0].Descriptor.Compression; got != CompressionLZ4 {
+		t.Fatalf("u32 block compression=%s want %s", got, CompressionLZ4)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"id": "int64", "u32": "uint32"}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	corrupt := cloneColumnPartImageBytes(image)
+	compressionOffset := mustColumnPartDescriptorBlockCompressionOffset2300(t, corrupt, "u32", 0)
+	binary.LittleEndian.PutUint16(corrupt.Bytes[compressionOffset:compressionOffset+2], uint16(CompressionZSTD))
+
+	if _, err := ColumnPartFromImage(corrupt); err == nil || !strings.Contains(err.Error(), "compression=zstd is unsupported") {
+		t.Fatalf("ColumnPartFromImage unsupported scalar block compression err=%v want fail-closed unsupported compression", err)
+	}
+}
+
 func TestColumnPartImageCompressedDictionaries2300(t *testing.T) {
 	const rows = 1024
 	const cardinality = 128
@@ -344,4 +388,50 @@ func assertKeptCompression2300(t *testing.T, granule EncodedGranule, encoding En
 	if !granule.CodecReport.CompressionAttempted || !granule.CodecReport.CompressionKept || granule.CodecReport.ActualCompression != compression {
 		t.Fatalf("codec report=%+v want kept %s", granule.CodecReport, compression)
 	}
+}
+
+func mustColumnPartDescriptorBlockCompressionOffset2300(t *testing.T, image ColumnPartImage, column string, blockIndex int) int {
+	t.Helper()
+	const encodedBlockDescriptorBytes = 94
+	section := mustValidationSection(t, image, ColumnPartImageSectionDescriptor)
+	dec := columnPartImageDecoder{data: image.sectionBytes(section)}
+	mustValidationSkipU16(t, &dec)
+	mustValidationSkipU64(t, &dec)
+	mustValidationReadU32(t, &dec)
+	mustValidationSkipI64(t, &dec)
+	mustValidationSkipI64(t, &dec)
+	if _, err := dec.stringSlice(); err != nil {
+		t.Fatalf("decode logical primary key: %v", err)
+	}
+	granuleCount := mustValidationReadU32(t, &dec)
+	granuleBytes := int(granuleCount) * 64
+	if err := dec.require(granuleBytes); err != nil {
+		t.Fatalf("skip descriptor granules: %v", err)
+	}
+	dec.offset += granuleBytes
+	columnCount := mustValidationReadU32(t, &dec)
+	for i := 0; i < int(columnCount); i++ {
+		name, err := dec.str()
+		if err != nil {
+			t.Fatalf("decode descriptor column name: %v", err)
+		}
+		mustValidationSkipU16(t, &dec)
+		mustValidationReadU32(t, &dec) // cardinality
+		mustValidationReadU32(t, &dec) // fixed_width_elements
+		mustValidationReadU32(t, &dec) // bits_per_element
+		blockCount := mustValidationReadU32(t, &dec)
+		if name == column {
+			if blockIndex < 0 || blockIndex >= int(blockCount) {
+				t.Fatalf("descriptor column %q block index=%d outside blocks=%d", column, blockIndex, blockCount)
+			}
+			return section.Offset + dec.offset + blockIndex*encodedBlockDescriptorBytes + 34
+		}
+		blockBytes := int(blockCount) * encodedBlockDescriptorBytes
+		if err := dec.require(blockBytes); err != nil {
+			t.Fatalf("skip descriptor column %q blocks: %v", name, err)
+		}
+		dec.offset += blockBytes
+	}
+	t.Fatalf("descriptor column %q not found", column)
+	return 0
 }
