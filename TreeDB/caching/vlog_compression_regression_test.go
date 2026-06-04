@@ -407,6 +407,73 @@ func TestAppendValueLog_AutoForcePointerMediumPayloadUsesGroupedBlockFrame(t *te
 	}
 }
 
+func TestAppendValueLog_AutoForcePointerHighEntropyPayloadUsesGroupedRawFrame(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+
+	records := make([]valuelog.Record, 4)
+	for i := range records {
+		value := make([]byte, forcePointerAutoBlockMinPayloadBytes)
+		for j := range value {
+			value[j] = byte(j + i*17)
+		}
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
+	}
+	ptrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLog: %v", err)
+	}
+	if len(ptrs) != len(records) {
+		t.Fatalf("ptr count=%d want %d", len(ptrs), len(records))
+	}
+	for i, ptr := range ptrs {
+		if ptr == (page.ValuePtr{}) {
+			t.Fatalf("empty pointer at %d", i)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	header := readFirstValueLogFrameHeader(t, path)
+	if header.K != uint8(len(records)) {
+		t.Fatalf("frame K=%d want grouped K=%d", header.K, len(records))
+	}
+	if header.Flags&valuelog.FrameFlagCompressed != 0 {
+		t.Fatalf("expected high-entropy forced-pointer batch to bypass block compression")
+	}
+	if header.DictID != 0 {
+		t.Fatalf("expected no dict id for raw high-entropy payload, got %d", header.DictID)
+	}
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteOff] == 0 {
+		t.Fatalf("expected raw/off write-mode observation")
+	}
+	if writeSnap.Frames[vlogWriteBlock] != 0 {
+		t.Fatalf("expected no block write-mode observation for bypassed high-entropy payload")
+	}
+	selectorSnap := db.lanes[0].vlogCompressionSelector.snapshot()
+	if selectorSnap.framesByCandidate[vlogAutoCandidateOff] != 0 {
+		t.Fatalf("expected bypassed raw batch not to train selector off frames")
+	}
+}
+
 func TestAppendValueLog_DictModeOuterLeafBypassFallsBackToBlock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value.log")

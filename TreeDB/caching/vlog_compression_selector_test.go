@@ -474,9 +474,10 @@ func TestChooseValueLogBlockWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *t
 
 func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		configure func(*DB)
-		paused    bool
+		name          string
+		configure     func(*DB)
+		autoRawBypass bool
+		paused        bool
 	}{
 		{
 			name: "paused wal-off raw",
@@ -498,6 +499,13 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 				db.disableJournal = true
 			},
 		},
+		{
+			name: "force-pointer auto raw bypass",
+			configure: func(db *DB) {
+				db.forceValueLogPointers = true
+			},
+			autoRawBypass: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := &DB{indexOuterLeavesInValueLog: true}
@@ -506,7 +514,7 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 				tc.configure(db)
 			}
 
-			got := db.chooseValueLogRawWriteK(&db.leafLog, leafLogBlockMaxK*4, tc.paused)
+			got := db.chooseValueLogRawWriteK(&db.leafLog, leafLogBlockMaxK*4, tc.autoRawBypass, tc.paused)
 			if got != leafLogBlockMaxK {
 				t.Fatalf("live leaf-log raw K=%d, want capped K=%d", got, leafLogBlockMaxK)
 			}
@@ -516,10 +524,11 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 
 func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		configure func(*DB)
-		paused    bool
-		want      int
+		name          string
+		configure     func(*DB)
+		autoRawBypass bool
+		paused        bool
+		want          int
 	}{
 		{
 			name: "paused wal-off raw",
@@ -544,6 +553,14 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 			},
 			want: 16,
 		},
+		{
+			name: "force-pointer auto raw bypass",
+			configure: func(db *DB) {
+				db.forceValueLogPointers = true
+			},
+			autoRawBypass: true,
+			want:          valuelog.MaxFrameK,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := &DB{indexOuterLeavesInValueLog: true}
@@ -552,7 +569,7 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 				tc.configure(db)
 			}
 
-			got := db.chooseValueLogRawWriteK(&lane{}, leafLogBlockMaxK*4, tc.paused)
+			got := db.chooseValueLogRawWriteK(&lane{}, leafLogBlockMaxK*4, tc.autoRawBypass, tc.paused)
 			if got != tc.want {
 				t.Fatalf("non-leaf raw K=%d, want %d", got, tc.want)
 			}
@@ -997,6 +1014,54 @@ func TestResolveVlogWriteMode_ForcePointersLargeBypassesSelectorToConfiguredBloc
 	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 1025, 1025, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
 		t.Fatalf("expected force-pointer large payload to force configured block codec, got mode=%v codec=%v probe=%t", mode, codec, probe)
+	}
+}
+
+func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		forceValueLogPointers:   true,
+	}
+	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	records := []valuelog.Record{
+		{RID: 1, Value: value},
+		{RID: 2, Value: value},
+		{RID: 3, Value: value},
+	}
+
+	if !db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected high-entropy force-pointer value batch to bypass auto compression")
+	}
+	if !db.shouldBypassAutoRawValueCompression(0, records, forcePointerAutoBlockMinPayloadBytes, vlogPayloadKindSingleValue) {
+		t.Fatal("expected threshold-sized high-entropy force-pointer values to bypass block compression")
+	}
+	if db.shouldBypassAutoRawValueCompression(7, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected dict-backed values to stay eligible for compression")
+	}
+	if db.shouldBypassAutoRawValueCompression(0, records, len(value)-1, vlogPayloadKindSingleValue) {
+		t.Fatal("expected sub-threshold values to stay eligible for selector sampling")
+	}
+	if db.shouldBypassAutoRawValueCompression(0, records, forcePointerAutoRawBypassMaxPayloadBytes+1, vlogPayloadKindSingleValue) {
+		t.Fatal("expected large values to preserve normal block grouping and maintenance granularity")
+	}
+	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindOuterLeaf) {
+		t.Fatal("expected outer-leaf payloads to keep leaf-log compression selection")
+	}
+}
+
+func TestShouldBypassAutoRawValueCompression_CompressibleStaysEligible(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		forceValueLogPointers:   true,
+	}
+	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
+	records := []valuelog.Record{{RID: 1, Value: value}}
+
+	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected low-entropy value batch to stay eligible for selector sampling")
 	}
 }
 
