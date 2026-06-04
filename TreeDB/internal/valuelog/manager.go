@@ -390,7 +390,13 @@ func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity 
 }
 
 func (f *File) groupedFrameCacheDetailedStats() GroupedFrameCacheStats {
-	cache := f.ensureGroupedFrameCache()
+	if f == nil {
+		return GroupedFrameCacheStats{}
+	}
+	cache := f.groupedFrameCache.Load()
+	if cache == nil {
+		return GroupedFrameCacheStats{}
+	}
 	return cache.stats()
 }
 

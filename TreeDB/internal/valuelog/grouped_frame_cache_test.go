@@ -285,6 +285,31 @@ func TestValueLogManager_GroupedFrameCache_CorruptSourceFailsClosedAfterCachedVe
 	}
 }
 
+func TestGroupedFrameCache_StatsDoesNotCreateIdleCache(t *testing.T) {
+	f := &File{
+		groupedFrameCacheEntries:  4,
+		groupedFrameCacheMaxRaw:   1024,
+		groupedFrameCacheMaxBytes: 1024,
+	}
+	if cache := f.groupedFrameCache.Load(); cache != nil {
+		t.Fatalf("new file unexpectedly has grouped cache")
+	}
+	stats := f.groupedFrameCacheDetailedStats()
+	if stats != (GroupedFrameCacheStats{}) {
+		t.Fatalf("idle stats should be zero, got %+v", stats)
+	}
+	if cache := f.groupedFrameCache.Load(); cache != nil {
+		t.Fatalf("stats created grouped cache")
+	}
+	offsets := groupedCacheOffsets(16)
+	if !f.groupedFrameCacheStore(1, false, 1, offsets, bytes.Repeat([]byte{'x'}, 16), false) {
+		t.Fatalf("store after idle stats")
+	}
+	if stats = f.groupedFrameCacheDetailedStats(); stats.Stores != 1 || stats.Entries != 1 || stats.Capacity != 4 {
+		t.Fatalf("expected live cache stats after store, got %+v", stats)
+	}
+}
+
 func TestGroupedFrameCache_StatsConcurrentAdmissions(t *testing.T) {
 	f := newTestGroupedCacheFile(16, 1024, 1024)
 	var wg sync.WaitGroup
