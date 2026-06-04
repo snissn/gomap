@@ -191,13 +191,26 @@ External comparison benchmark with local USearch bootstrap:
 scripts/bench_vector_search_compare.sh
 ```
 
-The script downloads and extracts the USearch Linux release package into `/tmp`,
-sets `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LD_LIBRARY_PATH`, and writes results under
-`/tmp/gomap_vector_search_compare_*`. Override `USEARCH_VERSION`,
-`TREEDB_VECTOR_BENCH_DOCS`, `TREEDB_VECTOR_BENCH_DIMS`, `BENCHTIME`, and `COUNT`
-to change the comparison shape. The USearch filtered Go binding currently trips
-Go's cgo pointer checks on this toolchain; set `RUN_UNSAFE_USEARCH_FILTERED=true`
-only when you explicitly want that benchmark with `GODEBUG=cgocheck=0`.
+The script downloads and extracts a USearch Linux or macOS release package into
+`/tmp` when `USEARCH_ROOT` is not set, configures cgo include/library paths, and
+writes results under `/tmp/gomap_vector_search_compare_*`. The canonical current
+production rows are
+`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_SearchWithBuffer*`
+versus `.../USearch_Search*`: TreeDB uses persisted `column_graph` through
+`Collection.OpenVectorIndexSearcher` plus `VectorIndexSearcher.SearchWithBuffer`
+with one searcher and one reusable buffer per worker, while USearch is a pure
+in-memory cosine/f32 HNSW baseline. Use `CPU_LIST=1,8` for c=1/c=8 evidence.
+Older `BenchmarkCollectionVectorIndex*` rows are historical controls, not the
+current high-QPS production fast path; one-shot `Collection.SearchVectorIndex`
+benchmarks include setup/open cost and should not be presented as that fast path.
+Override `USEARCH_VERSION`, `USEARCH_ROOT`, `TREEDB_VECTOR_BENCH_DOCS`,
+`TREEDB_VECTOR_BENCH_DIMS`, `TREEDB_VECTOR_BENCH_M`,
+`TREEDB_VECTOR_BENCH_EF_CONSTRUCTION`, `TREEDB_VECTOR_BENCH_EF_SEARCH`,
+`TREEDB_VECTOR_BENCH_TOPK`, `TREEDB_VECTOR_BENCH_QUERIES`, `BENCHTIME`, `COUNT`,
+and `CPU_LIST` to change the comparison shape. The USearch filtered Go binding
+currently trips Go's cgo pointer checks on this toolchain; set
+`RUN_UNSAFE_USEARCH_FILTERED=true` only when you explicitly want that benchmark
+with `GODEBUG=cgocheck=0`.
 
 The tiny BERT embedding demo in `../examples/vector_search/tiny_bert/` is a
 caller-side fixture/demo; TreeDB core does not generate embeddings. Export it
@@ -205,18 +218,23 @@ with `--output-jsonl` and set `TREEDB_VECTOR_BENCH_JSONL` to run
 `BenchmarkCollectionVectorTinyBERTFixture`.
 
 Optional external engine baseline: build with `-tags usearch_bench` after
-installing the USearch C library and headers for the host. This runs the same
-synthetic vectors against USearch's Go bindings with cosine/f32 HNSW and matching
-`M`, `efConstruction`, and `efSearch` knobs:
+installing the USearch C library and headers for the host. The current comparison
+benchmark runs the same deterministic synthetic vector/query generator through
+TreeDB's persisted `column_graph` reusable-buffer path and through USearch's Go
+bindings with cosine/f32 HNSW and matching `M`, `efConstruction`, `efSearch`,
+`topK`, docs, dims, and `-cpu`/concurrency knobs:
 
 The Go binding is intentionally kept as an indirect module dependency because it
 is only imported by the optional `usearch_bench` build tag.
 
 ```sh
-TREEDB_VECTOR_BENCH_DOCS=1000 TREEDB_VECTOR_BENCH_DIMS=32 \
-  go test -tags usearch_bench ./TreeDB/collections -run '^$' \
-  -bench 'BenchmarkCollectionVector(USearch|SearchExact|Index(Search|SearchInt8|FilteredSearch))' \
-  -benchtime=1x -count=1
+for cpu in 1 8; do
+  TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64 \
+    TREEDB_VECTOR_BENCH_EF_SEARCH=128 \
+    go test -tags usearch_bench ./TreeDB/collections -run '^$' \
+    -bench '^BenchmarkCollectionVectorUSearchProductionCompare$' \
+    -benchmem -benchtime=1x -count=1 -cpu="$cpu"
+done
 ```
 
 ## Durability & Safety Notes

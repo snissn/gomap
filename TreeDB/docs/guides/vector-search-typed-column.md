@@ -343,6 +343,40 @@ already-visited optimization if future profiles continue to justify it, and keep
 #1977 normalized vectors deferred until a prototype beats raw vectors plus
 inverse norms including storage/rebuild cost.
 
+## USearch comparison boundary
+
+Use `scripts/bench_vector_search_compare.sh` for the optional external ANN
+baseline. Its current production comparison benchmark is
+`BenchmarkCollectionVectorUSearchProductionCompare`:
+
+- `TreeDB_SearchWithBuffer` / `TreeDB_SearchWithBufferParallel` time persisted
+  `column_graph` search through `Collection.OpenVectorIndexSearcher` and
+  `VectorIndexSearcher.SearchWithBuffer`; setup, inserts, rebuild, open, and
+  warmup are outside the timed loop. Parallel rows use one searcher and one
+  `VectorIndexSearchBuffer` per worker.
+- `USearch_Search` / `USearch_SearchParallel` time the pure in-memory USearch Go
+  binding with cosine/f32 HNSW.
+- Both sides use the same deterministic synthetic vector/query generator and the
+  same docs, dims, `M`, `efConstruction`, `efSearch`, `topK`, and `-cpu` list.
+  TreeDB vectors cross the collection JSON insert/rebuild boundary; USearch is
+  built directly from generated float32 vectors, so describe that data boundary
+  when publishing numbers.
+
+Quick c=1/c=8 smoke (the script runs one `go test -cpu=<n>` block per
+`CPU_LIST` entry so worker counts stay explicit):
+
+```sh
+TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64 \
+  TREEDB_VECTOR_BENCH_EF_SEARCH=128 CPU_LIST=1,8 COUNT=1 BENCHTIME=1x \
+  scripts/bench_vector_search_compare.sh
+```
+
+Older `BenchmarkCollectionVectorIndex*` and graph-only rows remain useful
+historical controls, but they are not the current persisted production
+no-document fast path. One-shot `Collection.SearchVectorIndex` rows include
+setup/open cost per operation; do not use them as the high-QPS production
+comparator.
+
 The broader legacy/canonical matrix remains useful when comparing with older
 artifacts or when you also need one-shot open/setup names:
 
