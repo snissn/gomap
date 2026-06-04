@@ -64,6 +64,35 @@ func TestVacuumRecorder_DoesNotRecordUncommittedWrites(t *testing.T) {
 	}
 }
 
+func TestVacuumRecorder_RecordApplyPlan_RangesShadowEarlierPoints(t *testing.T) {
+	var r vacuumRecorder
+	r.Start()
+	defer r.Stop()
+
+	r.RecordApplyPlan([]batch.Entry{
+		{Type: batch.OpPut, Key: []byte("a"), Value: []byte("old-a")},
+		{Type: batch.OpPut, Key: []byte("b"), Value: []byte("old-b")},
+	}, nil)
+	r.RecordApplyPlan([]batch.Entry{
+		{Type: batch.OpPut, Key: []byte("b"), Value: []byte("new-b")},
+	}, []batch.DeleteRange{{Start: []byte("a"), End: []byte("c")}})
+
+	ops, ranges := r.DrainApplyPlan()
+	if len(ranges) != 1 || string(ranges[0].Start) != "a" || string(ranges[0].End) != "c" {
+		t.Fatalf("ranges=%+v want [a,c)", ranges)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("ops len=%d want 1: %v", len(ops), ops)
+	}
+	got, ok := ops["b"]
+	if !ok || got.Type != batch.OpPut || string(got.Value) != "new-b" {
+		t.Fatalf("recorded b=%+v ok=%t, want later put", got, ok)
+	}
+	if _, ok := ops["a"]; ok {
+		t.Fatalf("range did not remove earlier point a: %v", ops)
+	}
+}
+
 func TestVacuumRecorder_RecordEntries_LastWriteWinsAndCopies(t *testing.T) {
 	var r vacuumRecorder
 	r.Start()

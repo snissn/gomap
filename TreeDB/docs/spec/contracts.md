@@ -81,6 +81,9 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 ### 3.2 Batches
 
 - `NewBatch` accumulates operations.
+- Batch `Set`, `Delete`, and `DeleteRange(start,end)` are applied in submission
+  order as one atomic write unit; range bounds are half-open `[start,end)`, with
+  nil bounds unbounded and empty/reversed bounded ranges treated as no-ops.
 - `Write` commits without strict sync guarantee.
 - `WriteSync` commits with sync guarantee only in durable mode.
 

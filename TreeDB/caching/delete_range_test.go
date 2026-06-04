@@ -293,3 +293,46 @@ func TestCachingDB_DeleteRange_WALFlushesOnlySelectedLane(t *testing.T) {
 		t.Fatalf("expected no WAL sync calls for non-sync DeleteRange, got %d", totalSyncs)
 	}
 }
+
+func TestCachingBatchDeleteRangeMixedOrder(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 20, JournalLanes: 1})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}, {"c", "vc"}, {"d", "vd"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("b"), []byte("shadowed")); err != nil {
+		t.Fatalf("batch Set shadowed: %v", err)
+	}
+	if err := b.DeleteRange([]byte("a"), []byte("d")); err != nil {
+		t.Fatalf("batch DeleteRange: %v", err)
+	}
+	if err := b.Set([]byte("c"), []byte("after")); err != nil {
+		t.Fatalf("batch Set after: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("batch Write: %v", err)
+	}
+	_ = b.Close()
+
+	if val, err := db.Get([]byte("a")); err != nil || val != nil {
+		t.Fatalf("a=(%q,%v), want missing", val, err)
+	}
+	if val, err := db.Get([]byte("b")); err != nil || val != nil {
+		t.Fatalf("b=(%q,%v), want missing", val, err)
+	}
+	if val, err := db.Get([]byte("c")); err != nil || string(val) != "after" {
+		t.Fatalf("c=(%q,%v), want after", val, err)
+	}
+	if val, err := db.Get([]byte("d")); err != nil || string(val) != "vd" {
+		t.Fatalf("d=(%q,%v), want vd", val, err)
+	}
+}

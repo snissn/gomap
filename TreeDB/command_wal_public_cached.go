@@ -348,6 +348,26 @@ func (b *commandWALPublicBatch) DeleteView(key []byte) error {
 	return nil
 }
 
+func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	if batch.IsDeleteRangeNoop(start, end) {
+		return nil
+	}
+	oldLen, oldCount := b.payload.Len(), b.payload.Count()
+	if _, err := b.payload.AppendDeleteRange(start, end); err != nil {
+		return err
+	}
+	if err := b.inner.DeleteRange(start, end); err != nil {
+		b.payload.Truncate(oldLen, oldCount)
+		return err
+	}
+	b.opCount++
+	b.dirty = true
+	return nil
+}
+
 func (b *commandWALPublicBatch) innerSetView(key, value []byte) error {
 	if b.innerSetViewFn != nil {
 		return b.innerSetViewFn(key, value)
@@ -458,6 +478,11 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	return commitlog.EncodeRawKVBatchPayloadScanWithHint(func(emit func(commitlog.RawKVOperation) error) error {
 		return b.inner.Replay(func(entry batch.Entry) error {
 			switch entry.Type {
+			case batch.OpDeleteRange:
+				if batch.IsDeleteRangeNoop(entry.Key, entry.Value) {
+					return nil
+				}
+				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: entry.Key, Value: entry.Value})
 			case batch.OpDelete:
 				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key})
 			case batch.OpPut:

@@ -228,9 +228,12 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if b == nil || b.batch == nil {
 		return nil, nil
 	}
-	// SortedEntries is idempotent after the first sort/compaction; later write
-	// paths reuse the sorted+compacted batch-owned slice without resorting.
-	entries := b.batch.SortedEntries()
+	entries := b.batch.OrderedEntries()
+	if !b.batch.HasDeleteRanges() {
+		// SortedEntries is idempotent after the first sort/compaction; point-only
+		// batches keep the existing compacted command-WAL fast path.
+		entries = b.batch.SortedEntries()
+	}
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -244,6 +247,11 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	for i := range entries {
 		entry := entries[i]
 		switch entry.Type {
+		case batchpkg.OpDeleteRange:
+			if batchpkg.IsDeleteRangeNoop(entry.Key, entry.Value) {
+				continue
+			}
+			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: entry.Key, Value: entry.Value})
 		case batchpkg.OpDelete:
 			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key})
 		case batchpkg.OpPut:
@@ -816,6 +824,10 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			}
 		case commitlog.RawKVOpDelete:
 			if err := b.Delete(entry.Key); err != nil {
+				return err
+			}
+		case commitlog.RawKVOpDeleteRange:
+			if err := b.DeleteRange(entry.Key, entry.Value); err != nil {
 				return err
 			}
 		case commitlog.RawKVOpSetRID:

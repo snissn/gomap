@@ -28044,6 +28044,7 @@ type Batch struct {
 	firstKey         []byte
 	lastKey          []byte
 	batchRange       keyRange
+	hasDeleteRanges  bool
 	commandWALAppend func() error
 }
 
@@ -28572,6 +28573,7 @@ func (b *Batch) Reset() {
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
+	b.hasDeleteRanges = false
 	b.maxEntries = 0
 	b.commandWALAppend = nil
 	if b.ptrValueIdxs != nil {
@@ -29087,6 +29089,34 @@ func (b *Batch) Delete(key []byte) error {
 	return nil
 }
 
+func (b *Batch) DeleteRange(start, end []byte) error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if batch.IsDeleteRangeNoop(start, end) {
+		return nil
+	}
+	var startCopy, endCopy []byte
+	if start != nil {
+		startCopy = b.cloneKey(start)
+	}
+	if end != nil {
+		endCopy = b.cloneKey(end)
+	}
+	if b.backend != nil {
+		if ranged, ok := b.backend.(interface{ DeleteRange(start, end []byte) error }); ok {
+			b.size += len(startCopy) + len(endCopy)
+			return ranged.DeleteRange(startCopy, endCopy)
+		}
+	}
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDeleteRange, Key: startCopy, Value: endCopy})
+	b.noteEntryAppend()
+	b.size += len(startCopy) + len(endCopy)
+	b.hasDeleteRanges = true
+	b.streamEligible = false
+	return nil
+}
+
 // DeleteView records a Delete without copying key bytes. Callers must treat
 // key as immutable until the batch is written or closed.
 func (b *Batch) DeleteView(key []byte) error {
@@ -29139,14 +29169,28 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		return ErrBatchClosed
 	}
 	if b.backend != nil {
-		copied := make([]batch.Entry, len(ops))
-		for i, op := range ops {
+		copied := make([]batch.Entry, 0, len(ops))
+		for _, op := range ops {
 			copiedOp := op
+			if op.Type == batch.OpDeleteRange {
+				if batch.IsDeleteRangeNoop(op.Key, op.Value) {
+					continue
+				}
+				if op.Key != nil {
+					copiedOp.Key = b.cloneKey(op.Key)
+				}
+				if op.Value != nil {
+					copiedOp.Value = b.cloneKey(op.Value)
+				}
+				copied = append(copied, copiedOp)
+				b.size += len(copiedOp.Key) + len(copiedOp.Value)
+				continue
+			}
 			copiedOp.Key = b.cloneKey(op.Key)
 			if op.Value != nil {
 				copiedOp.Value = b.cloneValue(op.Value)
 			}
-			copied[i] = copiedOp
+			copied = append(copied, copiedOp)
 			b.size += len(copiedOp.Key) + len(copiedOp.Value)
 			b.batchRange.add(copiedOp.Key)
 		}
@@ -29154,6 +29198,23 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	}
 	for _, op := range ops {
 		copied := op
+		if op.Type == batch.OpDeleteRange {
+			if batch.IsDeleteRangeNoop(op.Key, op.Value) {
+				continue
+			}
+			if op.Key != nil {
+				copied.Key = b.cloneKey(op.Key)
+			}
+			if op.Value != nil {
+				copied.Value = b.cloneKey(op.Value)
+			}
+			b.entries = append(b.entries, copied)
+			b.noteEntryAppend()
+			b.size += len(copied.Key) + len(copied.Value)
+			b.hasDeleteRanges = true
+			b.streamEligible = false
+			continue
+		}
 		if op.Value != nil {
 			copied.Key, copied.Value = b.cloneKeyValue(op.Key, op.Value)
 		} else {
@@ -29341,6 +29402,9 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 	defer func() {
 		b.commandWALAppend = prevAppend
 	}()
+	if b.hasDeleteRanges {
+		return b.writeRangeBatch(sync)
+	}
 	return b.writeRegular(sync)
 }
 
@@ -29349,6 +29413,10 @@ func (b *Batch) write(sync bool) error {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpoint()
+
+	if b.hasDeleteRanges {
+		return b.writeRangeBatch(sync)
+	}
 
 	if b.backend != nil {
 		var err error
@@ -29401,6 +29469,57 @@ func (b *Batch) write(sync bool) error {
 		return b.writeBypass(sync)
 	}
 	return b.writeRegular(sync)
+}
+
+func (b *Batch) writeRangeBatch(sync bool) error {
+	if b == nil || b.db == nil {
+		return backenddb.ErrClosed
+	}
+	if !b.hasDeleteRanges {
+		return b.write(sync)
+	}
+	points, ranges := batch.BuildApplyPlanFromEntries(b.entries, true)
+	if len(points) == 0 && len(ranges) == 0 {
+		b.updateBatchEntryHint()
+		b.updateBatchCopyHint()
+		b.Reset()
+		return nil
+	}
+
+	materialized := make([]batch.Entry, 0, len(points))
+	for _, r := range ranges {
+		it, err := b.db.Iterator(r.Start, r.End)
+		if err != nil {
+			return err
+		}
+		for it.Valid() {
+			key := it.Key()
+			materialized = append(materialized, batch.Entry{Type: batch.OpDelete, Key: append([]byte(nil), key...)})
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return err
+		}
+		if err := it.Close(); err != nil {
+			return err
+		}
+	}
+	materialized = append(materialized, points...)
+
+	origEntries := b.entries
+	origHasRanges := b.hasDeleteRanges
+	origStreamEligible := b.streamEligible
+	b.entries = materialized
+	b.hasDeleteRanges = false
+	b.streamEligible = false
+	err := b.write(sync)
+	if err != nil {
+		b.entries = origEntries
+		b.hasDeleteRanges = origHasRanges
+		b.streamEligible = origStreamEligible
+	}
+	return err
 }
 
 func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
