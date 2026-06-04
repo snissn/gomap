@@ -28,10 +28,33 @@ func typedColumnPublicationAdapterOptionsFromConfig(cfg ColumnStoreConfig, partI
 		Fields:        fields,
 		SortKey:       sortKey,
 	}
+	if err := applyTypedColumnProductionCompressionPolicy(cfg, &opts); err != nil {
+		return typedColumnAdapterOptions{}, err
+	}
 	if err := applyTypedColumnBenchmarkPolicyFromEnv(cfg, &opts); err != nil {
 		return typedColumnAdapterOptions{}, err
 	}
 	return opts, nil
+}
+
+func applyTypedColumnProductionCompressionPolicy(cfg ColumnStoreConfig, opts *typedColumnAdapterOptions) error {
+	if opts == nil {
+		return nil
+	}
+	compression, err := parseColumnStoreTypedColumnCompression("typed_column_compression", cfg.TypedColumnCompression)
+	if err != nil {
+		return err
+	}
+	sectionCompression, err := parseColumnStoreTypedColumnCompression("typed_column_section_compression", cfg.TypedColumnSectionCompression)
+	if err != nil {
+		return err
+	}
+	opts.DefaultCompression = compression
+	opts.DefaultCompressionSet = true
+	opts.DefaultCompressionOnlySupported = true
+	opts.SectionCompression = sectionCompression
+	opts.SectionCompressionSet = true
+	return nil
 }
 
 func applyTypedColumnBenchmarkPolicyFromEnv(cfg ColumnStoreConfig, opts *typedColumnAdapterOptions) error {
@@ -47,6 +70,7 @@ func applyTypedColumnBenchmarkPolicyFromEnv(cfg ColumnStoreConfig, opts *typedCo
 		if set {
 			opts.DefaultCompression = compression
 			opts.DefaultCompressionSet = true
+			opts.DefaultCompressionOnlySupported = false
 			opts.SectionCompression = compression
 			opts.SectionCompressionSet = true
 			active = true
@@ -83,6 +107,25 @@ func applyTypedColumnBenchmarkPolicyFromEnv(cfg ColumnStoreConfig, opts *typedCo
 		return fmt.Errorf("collections: typed-column benchmark codec/granule policy requires column_store profile_support=%q (got %q); policy is controlled by internal benchmark env vars, not public config", ColumnStoreProfileBenchmarkRelaxed, cfg.ProfileSupport)
 	}
 	return nil
+}
+
+func parseColumnStoreTypedColumnCompression(name string, raw ColumnStoreTypedColumnCompression) (typedcolumn.Compression, error) {
+	switch strings.ToLower(strings.TrimSpace(string(raw))) {
+	case "", "default":
+		return typedcolumn.CompressionLZ4, nil
+	case "none", "off", "compression_off":
+		return typedcolumn.CompressionNone, nil
+	case "snappy":
+		return typedcolumn.CompressionSnappy, nil
+	case "lz4":
+		return typedcolumn.CompressionLZ4, nil
+	case "zstd":
+		return 0, fmt.Errorf("%w: unsupported %s zstd (production zstd encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
+	case "zstd_dict", "zstd-dict":
+		return 0, fmt.Errorf("%w: unsupported %s zstd_dict (production zstd dictionary encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
+	default:
+		return 0, fmt.Errorf("%w: unknown %s %q", errTypedColumnProductionLayoutUnsupported, name, raw)
+	}
 }
 
 func parseTypedColumnBenchmarkCompression(raw string) (typedcolumn.Compression, bool, error) {

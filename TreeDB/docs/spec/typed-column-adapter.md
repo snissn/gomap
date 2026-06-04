@@ -165,6 +165,26 @@ reconstruction. Reopen/recovery uses the manifest refs and existing typed asset
 manager paths; typed-column refs participate in reachability and rewrite/GC
 eligibility as durable typed-storage assets.
 
+## Production Compression Policy (#2297)
+
+Production `typed_column_part` publication now derives compression from
+normalized `ColumnStoreConfig` metadata instead of relying on benchmark
+environment variables. The default `typed_column_compression` is `lz4`, and the
+default `typed_column_section_compression` follows it. `none` is an explicit
+isolation policy. Unsupported codecs such as `zstd` fail closed at metadata
+normalization until their durable encode/decode path is implemented.
+
+The default policy applies typed-column block compression only to layout families
+that the current production validator admits, currently bool, int64, and
+low-cardinality string carrier columns. Other durable layout families stay
+uncompressed under the production policy rather than making a collection
+unwritable. Whole-image section compression is applied only to eligible sections
+whose raw byte length is recoverable from existing image metadata. Compression is
+retained only when the stored payload is strictly smaller than the encoded raw
+payload. The benchmark-relaxed environment override can still force compression
+requests for experiments and keeps its fail-closed behavior for unsupported
+layout families.
+
 ## Resource Seam
 
 `typedColumnAdapterResourceReader` acquires typed-column image sections through

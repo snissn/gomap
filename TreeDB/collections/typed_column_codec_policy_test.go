@@ -157,6 +157,151 @@ func TestTypedColumnBenchmarkPolicyCompressedDirectAggregate1952(t *testing.T) {
 	}
 }
 
+func TestTypedColumnProductionCompressionPolicyDefaultsDurable2297(t *testing.T) {
+	for _, name := range []string{typedColumnBenchmarkCompressionEnv, typedColumnBenchmarkInt64EncodingEnv, typedColumnBenchmarkRowsPerGranuleEnv, typedColumnBenchmarkAdaptiveEnabledEnv, typedColumnBenchmarkAdaptiveTargetBytesEnv, typedColumnBenchmarkAdaptiveMinRowsEnv, typedColumnBenchmarkAdaptiveMaxRowsEnv} {
+		old, ok := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+		t.Cleanup(func() {
+			if ok {
+				_ = os.Setenv(name, old)
+			} else {
+				_ = os.Unsetenv(name)
+			}
+		})
+	}
+	d := openTypedColumnInt64ScanDB(t)
+	defer func() { _ = d.Close() }()
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if got := col.Meta().Options.ColumnStore.TypedColumnCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
+		t.Fatalf("typed_column_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
+	}
+	if got := col.Meta().Options.ColumnStore.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
+		t.Fatalf("typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
+	}
+	values := make([]int64, 4096)
+	for i := range values {
+		values[i] = 7
+	}
+	insertTypedColumnInt64ScanRows(t, col, values)
+
+	result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	if result.Count != int64(len(values)) || result.Sum != int64(len(values))*7 || result.Diagnostics.Fallback {
+		t.Fatalf("aggregate result=%+v want production default compressed policy without fallback", result)
+	}
+	accounting, err := col.ColumnStorePhysicalAccounting(nil, ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: ColumnAssetReadIntegrityVerify})
+	if err != nil {
+		t.Fatalf("ColumnStorePhysicalAccounting: %v", err)
+	}
+	foundColumnPolicy := false
+	foundLocatorSection := false
+	for _, part := range accounting.TypedColumnParts {
+		for _, detail := range part.Image.CompressionDetail {
+			if detail.Column != "time_us" || detail.RequestedCompression != string(ColumnStoreTypedColumnCompressionLZ4) {
+				continue
+			}
+			foundColumnPolicy = true
+			if detail.Blocks == 0 || detail.CompressionAttempted == 0 || detail.EncodedRawBytes == 0 || detail.StoredBytes == 0 {
+				t.Fatalf("compression detail=%+v want production LZ4 attempted with byte accounting", detail)
+			}
+		}
+		for _, section := range part.Image.SerializedSections {
+			if section.Kind != string(typedcolumn.ColumnPartImageSectionRowLocators) {
+				continue
+			}
+			foundLocatorSection = true
+			if section.Compression != string(ColumnStoreTypedColumnCompressionLZ4) || section.RawBytes <= section.StoredBytes || section.StoredBytes != section.Bytes {
+				t.Fatalf("row locator section=%+v want kept LZ4 section compression", section)
+			}
+		}
+	}
+	if !foundColumnPolicy {
+		t.Fatalf("missing production LZ4 compression detail in %+v", accounting.TypedColumnParts)
+	}
+	if !foundLocatorSection {
+		t.Fatalf("missing compressed row locator section in %+v", accounting.TypedColumnParts)
+	}
+}
+
+func TestTypedColumnProductionCompressionPolicyNoneIsolation2297(t *testing.T) {
+	rawCfg := testColumnStoreConfig(nil)
+	rawCfg.TypedColumnCompression = ColumnStoreTypedColumnCompressionNone
+	rawCfg.TypedColumnSectionCompression = ColumnStoreTypedColumnCompressionNone
+	normalizedCfg, err := normalizeColumnStoreConfig("events", rawCfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	cfg := *normalizedCfg
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	opts, err := typedColumnPublicationAdapterOptionsFromConfig(cfg, 2297, []TypedStorageField{field}, nil)
+	if err != nil {
+		t.Fatalf("typedColumnPublicationAdapterOptionsFromConfig: %v", err)
+	}
+	if !opts.DefaultCompressionSet || opts.DefaultCompression != typedcolumn.CompressionNone || !opts.SectionCompressionSet || opts.SectionCompression != typedcolumn.CompressionNone {
+		t.Fatalf("opts=%+v want explicit none policy", opts)
+	}
+	rows := make([]typedColumnAdapterRow, 512)
+	for i := range rows {
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 42}}}
+	}
+	part, err := buildTypedColumnAdapterPart(opts, rows)
+	if err != nil {
+		t.Fatalf("build part: %v", err)
+	}
+	if got := part.Part.Columns["count"].Definition.Compression; got != typedcolumn.CompressionNone {
+		t.Fatalf("count compression=%s want none", got)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	section, ok := typedColumnImageSectionByKind(image, typedcolumn.ColumnPartImageSectionRowLocators)
+	if !ok {
+		t.Fatalf("missing row locator section in %+v", image.Sections)
+	}
+	if section.Compression != typedcolumn.CompressionNone {
+		t.Fatalf("row locator section compression=%s want none", section.Compression)
+	}
+}
+
+func TestTypedColumnProductionCompressionPolicySkipsUnsupportedFields2297(t *testing.T) {
+	field := typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)
+	field.VectorDims = 3
+	columns, err := typedColumnAdapterColumnsForFieldsWithOptions([]TypedStorageField{field}, typedColumnAdapterOptions{
+		DefaultCompression:              typedcolumn.CompressionLZ4,
+		DefaultCompressionSet:           true,
+		DefaultCompressionOnlySupported: true,
+	})
+	if err != nil {
+		t.Fatalf("typedColumnAdapterColumnsForFieldsWithOptions production skip: %v", err)
+	}
+	if got := columns[0].Definition.Compression; got != typedcolumn.CompressionNone {
+		t.Fatalf("vector compression=%s want none when production policy skips unsupported fields", got)
+	}
+	_, err = typedColumnAdapterColumnsForFieldsWithOptions([]TypedStorageField{field}, typedColumnAdapterOptions{
+		DefaultCompression:    typedcolumn.CompressionLZ4,
+		DefaultCompressionSet: true,
+	})
+	if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "compression lz4 is unsupported") {
+		t.Fatalf("forced vector compression err=%v want fail-closed unsupported compression", err)
+	}
+}
+
 func TestTypedColumnAdapterOptInLocatorSectionCompression1952(t *testing.T) {
 	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
 		t.Run(compression.String(), func(t *testing.T) {

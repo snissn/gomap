@@ -146,20 +146,21 @@ type typedColumnAdapterColumn struct {
 }
 
 type typedColumnAdapterOptions struct {
-	Collection            string
-	Namespace             string
-	SchemaVersion         uint32
-	PartID                uint64
-	RowsPerGranule        int
-	DefaultCompression    typedcolumn.Compression
-	DefaultCompressionSet bool
-	SectionCompression    typedcolumn.Compression
-	SectionCompressionSet bool
-	Int64Encoding         typedcolumn.Encoding
-	Int64EncodingSet      bool
-	AdaptiveMarkSizing    typedcolumn.ColumnAdaptiveMarkSizing
-	Fields                []TypedStorageField
-	SortKey               []ColumnSortKey
+	Collection                      string
+	Namespace                       string
+	SchemaVersion                   uint32
+	PartID                          uint64
+	RowsPerGranule                  int
+	DefaultCompression              typedcolumn.Compression
+	DefaultCompressionSet           bool
+	DefaultCompressionOnlySupported bool
+	SectionCompression              typedcolumn.Compression
+	SectionCompressionSet           bool
+	Int64Encoding                   typedcolumn.Encoding
+	Int64EncodingSet                bool
+	AdaptiveMarkSizing              typedcolumn.ColumnAdaptiveMarkSizing
+	Fields                          []TypedStorageField
+	SortKey                         []ColumnSortKey
 }
 
 type typedColumnAdapterRow struct {
@@ -350,10 +351,24 @@ func applyTypedColumnAdapterDefinitionOptions(field TypedStorageField, def *type
 		}
 	}
 	if opts.DefaultCompressionSet {
-		def.Compression = opts.DefaultCompression
-		def.CompressionSet = true
+		if !opts.DefaultCompressionOnlySupported || typedColumnProductionFieldSupportsCompression(field, opts.DefaultCompression) {
+			def.Compression = opts.DefaultCompression
+			def.CompressionSet = true
+		}
 	}
 	return validateTypedColumnProductionDefinition(field, *def)
+}
+
+func typedColumnProductionFieldSupportsCompression(field TypedStorageField, compression typedcolumn.Compression) bool {
+	if compression == typedcolumn.CompressionNone {
+		return true
+	}
+	switch field.ValueType {
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueString:
+		return true
+	default:
+		return false
+	}
 }
 
 func typedColumnAdapterColumnsForFields(fields []TypedStorageField) ([]typedColumnAdapterColumn, error) {
@@ -4174,9 +4189,19 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 		return nil, fmt.Errorf("collections: typed-column int64 aggregate image missing column data section %q", adapterColumn.Definition.Name)
 	}
 	if section.Encoding != adapterColumn.Definition.Encoding || section.Compression != adapterColumn.Definition.Compression {
-		return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q section encoding=%s compression=%s want encoding=%s compression=%s", adapterColumn.Definition.Name, section.Encoding, section.Compression, adapterColumn.Definition.Encoding, adapterColumn.Definition.Compression)
+		if section.Encoding != adapterColumn.Definition.Encoding {
+			return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q section encoding=%s want %s", adapterColumn.Definition.Name, section.Encoding, adapterColumn.Definition.Encoding)
+		}
+		if err := validateTypedColumnProductionCompression(section.Compression); err != nil {
+			return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q section compression=%s unsupported: %w", adapterColumn.Definition.Name, section.Compression, err)
+		}
+		adapterColumn.Definition.Compression = section.Compression
 	}
 	valueCol := part.Columns[adapterColumn.Definition.Name]
+	valueCol.Definition = adapterColumn.Definition
+	if err := validateTypedColumnProductionPartColumnLayout(adapterColumn.Field, valueCol); err != nil {
+		return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q layout validation failed: %w", adapterColumn.Definition.Name, err)
+	}
 	if section.Blocks != 0 && section.Blocks != len(valueCol.Blocks) {
 		return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q section blocks=%d want %d", adapterColumn.Definition.Name, section.Blocks, len(valueCol.Blocks))
 	}
@@ -4223,8 +4248,11 @@ func validateTypedColumnAdapterInt64AggregateTargetedSections(image typedcolumn.
 		if _, exists := sectionsByColumn[section.Column]; exists {
 			return fmt.Errorf("collections: typed-column int64 aggregate image duplicate column data section %q", section.Column)
 		}
-		if section.Encoding != column.Definition.Encoding || section.Compression != column.Definition.Compression {
-			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section encoding=%s compression=%s want encoding=%s compression=%s", section.Column, section.Encoding, section.Compression, column.Definition.Encoding, column.Definition.Compression)
+		if section.Encoding != column.Definition.Encoding {
+			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section encoding=%s want %s", section.Column, section.Encoding, column.Definition.Encoding)
+		}
+		if err := validateTypedColumnProductionCompression(section.Compression); err != nil {
+			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section compression=%s unsupported: %w", section.Column, section.Compression, err)
 		}
 		if section.Rows != 0 && section.Rows != part.Descriptor.RowCount {
 			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section rows=%d want %d", section.Column, section.Rows, part.Descriptor.RowCount)
@@ -4241,6 +4269,9 @@ func validateTypedColumnAdapterInt64AggregateTargetedSections(image typedcolumn.
 				return fmt.Errorf("collections: typed-column int64 aggregate image column %q stored bytes overflow", section.Column)
 			}
 			expectedBytes += block.Descriptor.StoredBytes
+		}
+		if err := validateTypedColumnProductionBlocks(section.Column, section.Encoding, section.Compression, column.Blocks); err != nil {
+			return fmt.Errorf("collections: typed-column int64 aggregate image column %q blocks validation failed: %w", section.Column, err)
 		}
 		if section.Length != expectedBytes {
 			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section length=%d want %d", section.Column, section.Length, expectedBytes)
@@ -4977,7 +5008,7 @@ func scanTypedColumnStringPreparedPartWithVisibility(preparedPart *typedColumnPr
 		granule := g
 		granule.Payload = payload
 		granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: block.PayloadLength}
-		if err := preparedColumn.Plan.Layout.ValidateGranulePayload(granule, payload); err != nil {
+		if err := typedColumnPreparedGranuleLayout(preparedColumn.Plan, granule).ValidateGranulePayload(granule, payload); err != nil {
 			return false, err
 		}
 		selection := block.CandidateSelection
