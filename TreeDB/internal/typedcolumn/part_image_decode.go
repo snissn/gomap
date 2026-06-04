@@ -832,9 +832,6 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 		}
 	}
 	if columnType == ColumnTypeFloat32 || columnType == ColumnTypeFloat64 || rawScalarWidthForColumnType(columnType) != 0 {
-		if block.Compression != CompressionNone {
-			return fmt.Errorf("typedcolumn: descriptor column %s block %d fixed-width compression=%s want %s", column, blockIndex, block.Compression, CompressionNone)
-		}
 		if block.RawBytes != maxRawBytes {
 			return fmt.Errorf("typedcolumn: descriptor column %s block %d fixed-width raw bytes=%d want %d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
 		}
