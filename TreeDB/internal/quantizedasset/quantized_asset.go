@@ -152,6 +152,18 @@ type Prepared struct {
 	footprint Footprint
 }
 
+// CodeRowView is an immutable, zero-copy fixed-width row view over a prepared
+// code role. RowBytes slices the validated payload directly, avoiding per-row
+// role-map lookups. The returned row slices alias prepared image bytes and must
+// be treated as read-only.
+type CodeRowView struct {
+	role           Role
+	rows           int
+	payload        []byte
+	bytesPerRow    int
+	elementsPerRow int
+}
+
 type preparedColumnKind uint8
 
 const (
@@ -811,6 +823,22 @@ func (p *Prepared) Footprint() Footprint {
 	return out
 }
 
+// CodeRowView returns a zero-copy fixed-width row view for fixed-byte,
+// packed-code, and dense unsigned code-vector roles. Role/kind/shape/payload
+// checks happen once when the view is created; per-row access only validates the
+// ordinal before slicing the immutable prepared payload.
+func (p *Prepared) CodeRowView(role Role) (CodeRowView, bool) {
+	col, ok := p.preparedColumn(role)
+	if !ok || !col.isCode() || col.rows < 0 || col.bytesPerRow <= 0 {
+		return CodeRowView{}, false
+	}
+	wantBytes, err := checkedMul(col.rows, col.bytesPerRow)
+	if err != nil || len(col.payload) != wantBytes {
+		return CodeRowView{}, false
+	}
+	return CodeRowView{role: role, rows: col.rows, payload: col.payload, bytesPerRow: col.bytesPerRow, elementsPerRow: col.elementsPerRow}, true
+}
+
 // CodeRowBytes returns a zero-copy row byte view for fixed-byte, packed-code,
 // and dense unsigned code-vector roles. The slice aliases the prepared image.
 func (p *Prepared) CodeRowBytes(role Role, ordinal int) ([]byte, bool) {
@@ -943,6 +971,50 @@ func (p *Prepared) DenseUint32Row(role Role, ordinal int, scratch []uint32) ([]u
 		scratch[i] = binary.LittleEndian.Uint32(row[off : off+4])
 	}
 	return scratch, true
+}
+
+// Role returns the code role validated for this view.
+func (v CodeRowView) Role() Role {
+	return v.role
+}
+
+// Valid reports whether the view was produced by Prepared.CodeRowView.
+func (v CodeRowView) Valid() bool {
+	return v.rows >= 0 && v.bytesPerRow > 0 && len(v.payload) == v.rows*v.bytesPerRow
+}
+
+// Rows returns the number of graph/vector ordinal rows covered by the view.
+func (v CodeRowView) Rows() int {
+	if !v.Valid() {
+		return 0
+	}
+	return v.rows
+}
+
+// BytesPerRow returns the validated physical bytes per code row.
+func (v CodeRowView) BytesPerRow() int {
+	if !v.Valid() {
+		return 0
+	}
+	return v.bytesPerRow
+}
+
+// ElementsPerRow returns the validated code elements per row.
+func (v CodeRowView) ElementsPerRow() int {
+	if !v.Valid() {
+		return 0
+	}
+	return v.elementsPerRow
+}
+
+// RowBytes returns a zero-copy row byte slice by graph/vector ordinal. The
+// slice aliases immutable prepared image bytes and must be treated as read-only.
+func (v CodeRowView) RowBytes(ordinal int) ([]byte, bool) {
+	if ordinal < 0 || ordinal >= v.rows || v.bytesPerRow <= 0 {
+		return nil, false
+	}
+	start := ordinal * v.bytesPerRow
+	return v.payload[start : start+v.bytesPerRow], true
 }
 
 // ElementsPerRow returns the fixed vector/code elements per row for role.
