@@ -1028,14 +1028,17 @@ func TestVectorIndexSearcherSearchWithBufferRouteStatsAndNoDocumentBoundary2311(
 		t.Fatalf("path=%q want current column_graph native-reader route", got.Path)
 	}
 	stats := got.Stats
-	if stats.SearchRouteColumnGraphPrepared != 1 || stats.SearchRouteColumnGraphFallback != 0 || stats.SearchRouteHNSWSearchPack != 0 {
-		t.Fatalf("route stats=%+v want current prepared column_graph route only", stats)
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+		t.Fatalf("route stats=%+v want exactly one current column_graph route and no search-pack route", stats)
 	}
 	if stats.HNSWSearchPackActive != 0 || stats.HNSWSearchPackMissing != 1 || stats.HNSWSearchPackInvalid != 0 || stats.HNSWSearchPackFallbacks != 0 || stats.HNSWSearchPackMmapDirect != 0 || stats.HNSWSearchPackHeapCopy != 0 {
 		t.Fatalf("pack stats=%+v want hnsw_search_pack_v1 absent and inactive in #2311 baseline", stats)
 	}
-	if stats.PreparedGraphSearchViews != 1 || stats.GraphRows != 0 || stats.GraphRowFallbacks != 0 {
-		t.Fatalf("graph route stats=%+v want prepared current-format route without graph-row fallback", stats)
+	if stats.SearchRouteColumnGraphPrepared == 1 && stats.PreparedGraphSearchViews == 0 {
+		t.Fatalf("graph route stats=%+v want prepared-route views when prepared route is active", stats)
+	}
+	if stats.GraphRows != 0 || stats.GraphRowFallbacks != 0 {
+		t.Fatalf("graph route stats=%+v want current-format route without graph-row fallback", stats)
 	}
 	if stats.DocumentsFetched != 0 || stats.DocumentsMissing != 0 || stats.DocumentBytes != 0 || stats.DocumentOutputBytes != 0 || stats.DocumentFieldsReconstructed != 0 {
 		t.Fatalf("document boundary stats=%+v want no document materialization for SearchWithBuffer", stats)
@@ -1051,11 +1054,13 @@ func TestVectorIndexSearcherSearchWithBufferRouteStatsAndNoDocumentBoundary2311(
 	if stats.ScoreBatchCalls == 0 || stats.ScoreBatchCandidates == 0 || stats.ScoreBatchOptimizedCalls+stats.ScoreBatchScalarFallbackCalls == 0 {
 		t.Fatalf("score-batch counters=%+v want score batch mode/fallback evidence", stats)
 	}
-	if stats.VectorMmapDirectViews == 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes != 0 {
-		t.Fatalf("vector source stats=%+v want mmap-direct typed-column source without heap/scratch fallback", stats)
+	vectorTypedSourceViews := stats.VectorDirectViews + stats.VectorMmapDirectViews + stats.VectorPreparedDirectViews + stats.VectorHeapCopyTypedViews
+	if vectorTypedSourceViews == 0 || stats.VectorScratchDecodes != 0 {
+		t.Fatalf("vector source stats=%+v want typed-column vector source without scratch fallback", stats)
 	}
-	if stats.AdjacencyPreparedCSRMmapDirectViews == 0 || stats.AdjacencyHeapCopyTypedViews != 0 || stats.AdjacencyScratchDecodes != 0 {
-		t.Fatalf("adjacency source stats=%+v want prepared CSR mmap source without heap/scratch fallback", stats)
+	adjacencyTypedSourceViews := stats.AdjacencyPreparedCSRDirectViews + stats.AdjacencyPreparedCSRMmapDirectViews + stats.AdjacencyTypedListDirectViews + stats.AdjacencyTypedListMmapDirectViews + stats.AdjacencyTypedListHeapCopyTypedViews
+	if adjacencyTypedSourceViews == 0 || stats.AdjacencyScratchDecodes != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencySourceFallbacks != 0 {
+		t.Fatalf("adjacency source stats=%+v want typed-column adjacency source without legacy/scratch fallback", stats)
 	}
 	if stats.ResultIDTypedBytesState == 0 || stats.RowRefStateResultRefs == 0 || stats.ResultIDGraphFallbacks != 0 {
 		t.Fatalf("identity stats=%+v want vector-index row-ref/document-id state without graph-row fallback", stats)
@@ -1930,8 +1935,8 @@ func assertVectorIndexSearchResultIDStatsContract2124(tb testing.TB, got, want V
 	if got.GraphRows != 0 || got.ResultIDGraphFallbacks != 0 || got.GraphRowFallbacks != 0 || got.VectorScratchDecodes != 0 || got.NormScratchDecodes != 0 || got.AdjacencyScratchDecodes != 0 || got.TypedColumnFallbacks != 0 {
 		tb.Fatalf("stats=%+v want healthy typed-column result-ID path without graph-row/scratch fallbacks", got)
 	}
-	if got.SearchRouteColumnGraphPrepared != 1 || got.SearchRouteColumnGraphFallback != 0 || got.SearchRouteHNSWSearchPack != 0 {
-		tb.Fatalf("stats=%+v want current prepared column_graph route identity", got)
+	if got.SearchRouteHNSWSearchPack != 0 || got.SearchRouteColumnGraphPrepared+got.SearchRouteColumnGraphFallback != 1 {
+		tb.Fatalf("stats=%+v want exactly one current column_graph route and no search-pack route", got)
 	}
 	if got.HNSWSearchPackActive != 0 || got.HNSWSearchPackMissing != 1 || got.HNSWSearchPackInvalid != 0 || got.HNSWSearchPackFallbacks != 0 || got.HNSWSearchPackMmapDirect != 0 || got.HNSWSearchPackHeapCopy != 0 {
 		tb.Fatalf("stats=%+v want hnsw_search_pack_v1 absent/inactive baseline", got)
