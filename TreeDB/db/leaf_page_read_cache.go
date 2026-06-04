@@ -706,14 +706,15 @@ func (c *leafPageReadCache) markPageChecksumVerified(ptr page.LeafLogPtr) bool {
 			slot.mu.Unlock()
 			continue
 		}
-		defer slot.mu.Unlock()
 		if !slot.recordChecksumVerified {
+			slot.mu.Unlock()
 			c.pageChecksumMarkUnsafeSkips.Add(1)
 			return false
 		}
 		if slot.pageChecksumVerified.CompareAndSwap(false, true) {
 			c.pageChecksumVerifiedMarks.Add(1)
 		}
+		slot.mu.Unlock()
 		return true
 	}
 	c.pageChecksumMarkMisses.Add(1)
