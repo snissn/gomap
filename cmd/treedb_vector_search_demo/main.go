@@ -773,6 +773,10 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return result{}, err
 	}
+	restoreMemProfileRate := configureSearchMemoryProfileRate(cfg)
+	if restoreMemProfileRate != nil {
+		defer restoreMemProfileRate()
+	}
 	work, err := loadWorkload(&cfg)
 	if err != nil {
 		return result{}, err
@@ -2219,13 +2223,11 @@ func startColumnGraphSearchProfile(cfg config, concurrency int) (func() error, e
 	if err != nil {
 		return nil, fmt.Errorf("create search CPU profile: %w", err)
 	}
-	oldMemProfileRate := runtime.MemProfileRate
 	oldMutexProfileFraction := runtime.SetMutexProfileFraction(1)
-	runtime.MemProfileRate = 1
 	runtime.SetBlockProfileRate(1)
 	if err := pprof.StartCPUProfile(cpuFile); err != nil {
 		_ = cpuFile.Close()
-		restoreRuntimeSearchProfileSettings(oldMemProfileRate, oldMutexProfileFraction)
+		restoreRuntimeSearchProfileSettings(oldMutexProfileFraction)
 		return nil, fmt.Errorf("start search CPU profile: %w", err)
 	}
 	return func() error {
@@ -2241,13 +2243,23 @@ func startColumnGraphSearchProfile(cfg config, concurrency int) (func() error, e
 				errs = append(errs, err)
 			}
 		}
-		restoreRuntimeSearchProfileSettings(oldMemProfileRate, oldMutexProfileFraction)
+		restoreRuntimeSearchProfileSettings(oldMutexProfileFraction)
 		return errors.Join(errs...)
 	}, nil
 }
 
-func restoreRuntimeSearchProfileSettings(memProfileRate, mutexProfileFraction int) {
-	runtime.MemProfileRate = memProfileRate
+func configureSearchMemoryProfileRate(cfg config) func() {
+	if cfg.searchProfileDir == "" || cfg.vectorIndexStrategy != collections.VectorIndexStrategyColumnGraph {
+		return nil
+	}
+	oldMemProfileRate := runtime.MemProfileRate
+	runtime.MemProfileRate = 1
+	return func() {
+		runtime.MemProfileRate = oldMemProfileRate
+	}
+}
+
+func restoreRuntimeSearchProfileSettings(mutexProfileFraction int) {
 	runtime.SetBlockProfileRate(0)
 	runtime.SetMutexProfileFraction(mutexProfileFraction)
 }
@@ -2261,9 +2273,16 @@ func writeRuntimeProfile(path, name string) error {
 	if err != nil {
 		return fmt.Errorf("create %s profile: %w", name, err)
 	}
-	defer func() { _ = f.Close() }()
-	if err := profile.WriteTo(f, 0); err != nil {
-		return fmt.Errorf("write %s profile: %w", name, err)
+	writeErr := profile.WriteTo(f, 0)
+	closeErr := f.Close()
+	if writeErr != nil && closeErr != nil {
+		return errors.Join(fmt.Errorf("write %s profile: %w", name, writeErr), fmt.Errorf("close %s profile: %w", name, closeErr))
+	}
+	if writeErr != nil {
+		return fmt.Errorf("write %s profile: %w", name, writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %s profile: %w", name, closeErr)
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -93,6 +94,7 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 
 func TestExecuteColumnGraphSearchProfileDirWritesProfiles(t *testing.T) {
 	profileDir := t.TempDir()
+	oldMemProfileRate := runtime.MemProfileRate
 	res, err := execute(context.Background(), config{
 		dir:                       t.TempDir(),
 		keepDir:                   true,
@@ -119,6 +121,9 @@ func TestExecuteColumnGraphSearchProfileDirWritesProfiles(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("execute with search profile dir: %v", err)
+	}
+	if runtime.MemProfileRate != oldMemProfileRate {
+		t.Fatalf("MemProfileRate=%d want restored %d", runtime.MemProfileRate, oldMemProfileRate)
 	}
 	if res.SearchProfileDir != profileDir {
 		t.Fatalf("search profile dir=%q want %q", res.SearchProfileDir, profileDir)
