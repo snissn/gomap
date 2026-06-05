@@ -167,16 +167,20 @@ Canonical current production comparison:
 
 - \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_SearchWithBuffer\`
   and \`.../TreeDB_SearchWithBufferParallel\` time the persisted TreeDB
-  \`column_graph\` path through \`Collection.OpenVectorIndexSearcher\` plus
-  \`VectorIndexSearcher.SearchWithBuffer\`. Setup, inserts, rebuild, open, and
-  warmup are outside the timed loop. Parallel runs use one searcher and one
+  no-document \`hnsw_search_pack_v1\` route through
+  \`Collection.OpenVectorIndexSearcher\` plus \`VectorIndexSearcher.SearchWithBuffer\`
+  when a live validated pack is available. The existing prepared \`column_graph\`
+  route remains the fallback for missing/invalid/stale packs or unsupported
+  query modes. Setup, inserts, rebuild, open, and warmup are outside the timed
+  loop. Parallel runs use one searcher and one
   caller-owned buffer per Go worker; use \`CPU_LIST=1,8\` for c=1/c=8 evidence.
   The script emits a separate \`## search benchmarks cpu=<n>\` block for each
   requested concurrency so worker counts stay unambiguous.
   The timed loop uses production stats mode; a full-diagnostics sample is taken
-  outside the timed loop to report candidates/search and edge counters. TreeDB
-  rows also report route/search-pack guardrails such as
-  \`search_route_column_graph_prepared/search\`,
+  outside the timed loop to report candidates/search and edge counters. Healthy
+  pack rows should report \`search_route_hnsw_search_pack/search=1\`, no document
+  fetches, no graph-row fallback, no vector scratch decode, and route/search-pack
+  guardrails such as \`search_route_column_graph_prepared/search\`,
   \`hnsw_search_pack_active/search\`,
   \`hnsw_search_pack_missing/search\`, \`hnsw_search_pack_invalid/search\`,
   \`hnsw_search_pack_stale/search\`, \`hnsw_search_pack_closed/search\`,
@@ -201,8 +205,10 @@ Legacy/control rows:
   production fast path.
 
 Data boundary: TreeDB stores generated float32 vectors through JSON collection
-inserts and rebuilds the persisted \`column_graph\`; USearch is built directly
-from the generated float32 vectors as a pure in-memory external ANN baseline.
+inserts and rebuilds the persisted \`column_graph\` plus derived
+\`hnsw_search_pack_v1\`; raw collection vectors remain authoritative while the
+pack is vector-index serving state. USearch is built directly from the generated
+float32 vectors as a pure in-memory external ANN baseline.
 
 With \`RUN_WRITE_BENCH=true\`, the script also compares TreeDB incremental
 \`InsertBatch\` with a registered in-memory vector index against USearch

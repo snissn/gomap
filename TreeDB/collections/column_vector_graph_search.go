@@ -968,6 +968,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	top                    []columnVectorGraphSearchCandidate
 	results                []columnVectorGraphNativeSearchResult
 	idBuffers              [][]byte
+	resultIDViews          [][]byte
 	resultOrder            []int
 	resultOrdinals         []int
 	resultRowRefs          []DocumentRowRef
@@ -1014,6 +1015,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, topCandidateCap)
 	s.results = resizeColumnVectorGraphNativeResultScratch(s.results, topK)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
+	s.resultIDViews = resizeColumnVectorGraphNativeIDBuffersScratch(s.resultIDViews, topK)
 	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
 	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
 	s.resultRowRefs = resizeColumnVectorGraphNativeRowRefScratch(s.resultRowRefs, topK)

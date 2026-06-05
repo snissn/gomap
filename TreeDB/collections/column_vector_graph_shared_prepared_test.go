@@ -61,8 +61,8 @@ func TestVectorIndexSearcherSharedPreparedResourceCounters1735(t *testing.T) {
 					errs <- fmt.Sprintf("worker %d iteration %d top result=%v baseline=%v", worker, i, got.Results, baseline.Results)
 					return
 				}
-				if got.Stats.PreparedGraphSearchViews != 1 || got.Stats.TypedColumnFallbacks != 0 || got.Stats.GraphRowFallbacks != 0 || got.Stats.ResultIDGraphFallbacks != 0 {
-					errs <- fmt.Sprintf("worker %d stats=%+v want prepared current-format path", worker, got.Stats)
+				if got.Stats.SearchRouteHNSWSearchPack != 1 || got.Stats.HNSWSearchPackActive != 1 || got.Stats.HNSWSearchPackFallbacks != 0 || got.Stats.TypedColumnFallbacks != 0 || got.Stats.GraphRowFallbacks != 0 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.VectorScratchDecodes != 0 {
+					errs <- fmt.Sprintf("worker %d stats=%+v want shared hnsw_search_pack_v1 path", worker, got.Stats)
 					return
 				}
 			}
@@ -252,8 +252,8 @@ func openWarmCloseVectorSearchersSharedPrepared1735(col *Collection, indexName s
 		if len(got.Results) == 0 {
 			return sample, fmt.Errorf("warm SearchWithBuffer worker %d returned no results", i)
 		}
-		if got.Stats.PreparedGraphSearchViews != 1 || got.Stats.TypedColumnFallbacks != 0 || got.Stats.GraphRowFallbacks != 0 || got.Stats.ResultIDGraphFallbacks != 0 {
-			return sample, fmt.Errorf("warm SearchWithBuffer worker %d stats=%+v want shared prepared current-format path", i, got.Stats)
+		if got.Stats.SearchRouteHNSWSearchPack != 1 || got.Stats.HNSWSearchPackActive != 1 || got.Stats.HNSWSearchPackFallbacks != 0 || got.Stats.TypedColumnFallbacks != 0 || got.Stats.GraphRowFallbacks != 0 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.VectorScratchDecodes != 0 {
+			return sample, fmt.Errorf("warm SearchWithBuffer worker %d stats=%+v want shared hnsw_search_pack_v1 path", i, got.Stats)
 		}
 	}
 	sample.warmupNanos = time.Since(warmStart).Nanoseconds()
