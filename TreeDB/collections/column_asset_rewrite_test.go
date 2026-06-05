@@ -318,10 +318,12 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorIndexStateRefs1986(t 
 	}
 	oldAdjacencyRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: oldGraphRef.Namespace, Generation: oldGraph.BaseManifestGeneration, PartID: oldGraphRef.PartID + 1, FileID: oldGraphRef.FileID + 11, Offset: oldGraphRef.Offset + oldGraphRef.Length + 64, Length: 512, Checksum: 0x19860002}
 	oldNormRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: oldGraphRef.Namespace, Generation: oldGraph.BaseManifestGeneration, PartID: oldGraphRef.PartID + 2, FileID: oldGraphRef.FileID + 12, Offset: oldAdjacencyRef.Offset + oldAdjacencyRef.Length + 64, Length: 256, Checksum: 0x19860003}
+	oldPackRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1HNSWSearchPack, Namespace: oldGraphRef.Namespace, Generation: oldGraph.BaseManifestGeneration, PartID: oldGraphRef.PartID + 3, FileID: oldGraphRef.FileID + 13, Offset: oldNormRef.Offset + oldNormRef.Length + 64, Length: 768, Checksum: 0x19860004}
 	indexState := columnVectorIndexStateSnapshotFromGraph(oldGraph)
 	indexState.Assets = []columnVectorIndexStateAssetSnapshot{
 		columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleAdjacency, "hnsw/layer/0", oldAdjacencyRef, indexState.RowCount, state.cfg.SchemaHash+1),
 		columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleInverseNorm, "inv_norm_by_ordinal", oldNormRef, indexState.RowCount, state.cfg.SchemaHash+2),
+		columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleHNSWSearchPack, columnVectorIndexStateHNSWSearchPackAssetID, oldPackRef, indexState.RowCount, state.cfg.SchemaHash+3),
 	}
 	stateRaw, err := encodeColumnVectorIndexStateRecord(indexState)
 	if err != nil {
@@ -336,19 +338,23 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorIndexStateRefs1986(t 
 	newNormRef := oldNormRef
 	newNormRef.FileID += 102
 	newNormRef.Offset += oldNormRef.Length + 19
+	newPackRef := oldPackRef
+	newPackRef.FileID += 103
+	newPackRef.Offset += oldPackRef.Length + 23
 	patched, count, err := patchColumnAssetRewriteManifestRecords(
 		records,
 		map[ColumnAssetRef]ColumnAssetRef{
 			oldAdjacencyRef: newAdjacencyRef,
 			oldNormRef:      newNormRef,
+			oldPackRef:      newPackRef,
 		},
 		state.cfg.AssetManager.Namespace,
 	)
 	if err != nil {
 		t.Fatalf("patchColumnAssetRewriteManifestRecords: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("patch count=%d want 2", count)
+	if count != 3 {
+		t.Fatalf("patch count=%d want 3", count)
 	}
 	stateRecord, ok := findColumnVectorIndexStateRecord(patched, def.Name)
 	if !ok {
@@ -358,14 +364,17 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorIndexStateRefs1986(t 
 	if err != nil {
 		t.Fatalf("decode patched vector-index state record: %v", err)
 	}
-	if len(patchedState.Assets) != 2 {
-		t.Fatalf("patched state assets=%d want 2", len(patchedState.Assets))
+	if len(patchedState.Assets) != 3 {
+		t.Fatalf("patched state assets=%d want 3", len(patchedState.Assets))
 	}
 	if patchedState.Assets[0].Ref != newAdjacencyRef || patchedState.Assets[0].AssetBytes != newAdjacencyRef.Length {
 		t.Fatalf("patched adjacency asset=%+v want ref=%+v bytes=%d", patchedState.Assets[0], newAdjacencyRef, newAdjacencyRef.Length)
 	}
 	if patchedState.Assets[1].Ref != newNormRef || patchedState.Assets[1].AssetBytes != newNormRef.Length {
 		t.Fatalf("patched norm asset=%+v want ref=%+v bytes=%d", patchedState.Assets[1], newNormRef, newNormRef.Length)
+	}
+	if patchedState.Assets[2].Ref != newPackRef || patchedState.Assets[2].AssetBytes != newPackRef.Length {
+		t.Fatalf("patched hnsw search pack asset=%+v want ref=%+v bytes=%d", patchedState.Assets[2], newPackRef, newPackRef.Length)
 	}
 
 	inPlaceRecords := cloneColumnManifestRecords(records)
@@ -374,14 +383,15 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorIndexStateRefs1986(t 
 		map[ColumnAssetRef]ColumnAssetRef{
 			oldAdjacencyRef: newAdjacencyRef,
 			oldNormRef:      newNormRef,
+			oldPackRef:      newPackRef,
 		},
 		state.cfg.AssetManager.Namespace,
 	)
 	if err != nil {
 		t.Fatalf("patchColumnAssetRewriteManifestRecordsInPlace: %v", err)
 	}
-	if inPlaceCount != 2 {
-		t.Fatalf("in-place patch count=%d want 2", inPlaceCount)
+	if inPlaceCount != 3 {
+		t.Fatalf("in-place patch count=%d want 3", inPlaceCount)
 	}
 	if len(inPlacePatched) != 0 && &inPlacePatched[0] != &inPlaceRecords[0] {
 		t.Fatal("in-place vector-index state patch returned a copied record slice")
@@ -394,7 +404,7 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorIndexStateRefs1986(t 
 	if err != nil {
 		t.Fatalf("decode in-place patched vector-index state record: %v", err)
 	}
-	if patchedState.Assets[0].Ref != newAdjacencyRef || patchedState.Assets[1].Ref != newNormRef {
+	if patchedState.Assets[0].Ref != newAdjacencyRef || patchedState.Assets[1].Ref != newNormRef || patchedState.Assets[2].Ref != newPackRef {
 		t.Fatalf("in-place patched state assets=%+v", patchedState.Assets)
 	}
 }

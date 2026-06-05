@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type vlogCompressionMode uint8
@@ -87,10 +88,10 @@ const (
 	// on a stable block codec path and let the frame preparer fall back to raw
 	// only when compressed bytes are not worth keeping.
 	forcePointerAutoBlockMinPayloadBytes = 512
-	// High-entropy forced-pointer streams should bypass compression even at the
-	// block fast-path threshold. This keeps auto mode close to off-mode on
-	// incompressible workloads without disabling block grouping for JSON-like
-	// retained payloads.
+	// High-entropy forced-pointer streams may bypass compression in explicit
+	// throughput policy. Balanced/size policy treats forced pointers as durable
+	// storage-first payloads and keeps them on block compression so retained JSON
+	// does not silently land as raw value-log frames.
 	forcePointerAutoRawBypassMinPayloadBytes = 512
 	forcePointerAutoRawBypassMaxPayloadBytes = 1024
 	// Larger grouped-frame targets reduce per-record compression overhead for
@@ -1428,6 +1429,51 @@ func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec)
 	return configured
 }
 
+func (db *DB) storageFirstValueLogAuto(unitPayloadBytes int) bool {
+	if db == nil {
+		return false
+	}
+	if unitPayloadBytes < forcePointerAutoBlockMinPayloadBytes {
+		return false
+	}
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+		return false
+	}
+	if db.forceValueLogPointers {
+		return true
+	}
+	return unitPayloadBytes > db.minValueLogInlineThreshold()
+}
+
+func (db *DB) valueLogPayloadExceedsInlineThreshold(unitPayloadBytes int) bool {
+	if db == nil {
+		return false
+	}
+	if db.forceValueLogPointers {
+		return true
+	}
+	return unitPayloadBytes > db.minValueLogInlineThreshold()
+}
+
+func (db *DB) minValueLogInlineThreshold() int {
+	threshold := db.valueLogThreshold
+	if threshold <= 0 {
+		threshold = page.DefaultInlineThreshold
+	}
+	for i := range db.valueLogDomainThresholds {
+		domainThreshold := db.valueLogDomainThresholds[i].InlineThreshold
+		if domainThreshold >= 0 && domainThreshold < threshold {
+			threshold = domainThreshold
+		}
+	}
+	return threshold
+}
+
+func (db *DB) storageFirstMediumValueLogAuto(unitPayloadBytes int) bool {
+	return db.storageFirstValueLogAuto(unitPayloadBytes) &&
+		unitPayloadBytes < largePayloadBlockTargetMinPayloadBytes
+}
+
 func (db *DB) preferLeafPageBlockCodec(l *lane, unitPayloadBytes int, configured valuelog.BlockCodec) (valuelog.BlockCodec, bool) {
 	if db == nil || l == nil || !db.indexOuterLeavesInValueLog {
 		return configured, false
@@ -1566,8 +1612,8 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 		if unitPayloadBytes <= 0 {
 			unitPayloadBytes = rawPayloadBytes
 		}
-		if dictID == 0 && db.forceValueLogPointers && unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
-			return vlogWriteBlock, db.valueLogBlockCodec, false
+		if dictID == 0 && db.storageFirstValueLogAuto(unitPayloadBytes) {
+			return vlogWriteBlock, chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec), false
 		}
 		if dictID == 0 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && unitPayloadBytes >= throughputAutoBlockMinPayloadBytes {
 			return vlogWriteBlock, db.valueLogBlockCodec, false
@@ -1584,7 +1630,11 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 			}
 			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
-		return l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes, unitPayloadBytes)
+		chosenMode, chosenCodec, probe := l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes, unitPayloadBytes)
+		if chosenMode == vlogWriteOff && db.storageFirstValueLogAuto(unitPayloadBytes) {
+			return vlogWriteBlock, chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec), probe
+		}
+		return chosenMode, chosenCodec, probe
 	}
 }
 
@@ -1592,7 +1642,10 @@ func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []value
 	if db == nil || normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
 		return false
 	}
-	if dictID != 0 || !db.forceValueLogPointers || payloadKind != vlogPayloadKindSingleValue {
+	if dictID != 0 || payloadKind != vlogPayloadKindSingleValue {
+		return false
+	}
+	if !db.valueLogPayloadExceedsInlineThreshold(unitPayloadBytes) {
 		return false
 	}
 	if unitPayloadBytes < forcePointerAutoRawBypassMinPayloadBytes ||
@@ -1681,7 +1734,7 @@ func (db *DB) chooseValueLogRawWriteK(l *lane, records int, autoRawBypass, pause
 	}
 	k := 1
 	switch {
-	case db != nil && autoRawBypass && db.forceValueLogPointers:
+	case db != nil && autoRawBypass:
 		k = valuelog.MaxFrameK
 	case db != nil && paused && db.disableJournal:
 		k = valuelog.MaxFrameK
@@ -1735,7 +1788,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	// collapse K on fallback paths.
 	useSelectorRatio := compressionMode == vlogCompressionAuto && l != nil && l.vlogCompressionSelector != nil
 	stableFastPath := compressionMode == vlogCompressionAuto &&
-		((db.forceValueLogPointers && avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes) ||
+		(db.storageFirstMediumValueLogAuto(avgPayloadBytes) ||
 			(normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && avgPayloadBytes >= throughputAutoBlockMinPayloadBytes))
 	if useSelectorRatio && !stableFastPath {
 		ratio, ratioSamples = l.vlogCompressionSelector.blockObservedRatioWithSamples(codec)
@@ -1752,8 +1805,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 			targetCompressedBytes = leafLogBlockTargetCompressedBytes
 		}
 	}
-	if db.forceValueLogPointers &&
-		avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes &&
+	if db.storageFirstMediumValueLogAuto(avgPayloadBytes) &&
 		ratioSamples == 0 &&
 		ratio >= 0.98 {
 		// Retained-payload value-log streams are expected to be JSON-like in the
@@ -1768,10 +1820,8 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		// forms grouped frames; normal observed ratios take over after writes.
 		ratio = 0.50
 	}
-	if db.forceValueLogPointers && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
-		if avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
-			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
-		}
+	if db.storageFirstMediumValueLogAuto(avgPayloadBytes) && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
+		targetCompressedBytes = forcePointerBlockTargetCompressedBytes
 	}
 	if avgPayloadBytes >= largePayloadBlockTargetMinPayloadBytes {
 		largePayloadTargetBytes := valuelog.NormalizeBlockTargetCompressedBytes(avgPayloadBytes * largePayloadBlockTargetMultiplier)

@@ -1,9 +1,11 @@
 package caching
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -546,7 +548,7 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 			},
 		},
 		{
-			name: "force-pointer auto raw bypass",
+			name: "auto raw bypass",
 			configure: func(db *DB) {
 				db.forceValueLogPointers = true
 			},
@@ -600,10 +602,7 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 			want: 16,
 		},
 		{
-			name: "force-pointer auto raw bypass",
-			configure: func(db *DB) {
-				db.forceValueLogPointers = true
-			},
+			name:          "auto raw bypass",
 			autoRawBypass: true,
 			want:          valuelog.MaxFrameK,
 		},
@@ -1063,9 +1062,88 @@ func TestResolveVlogWriteMode_ForcePointersLargeBypassesSelectorToConfiguredBloc
 	}
 }
 
-func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.T) {
+func TestResolveVlogWriteMode_StorageFirstValueLogWithDictCannotSelectOff(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
+		valueLogThreshold:       page.DefaultInlineThreshold,
+	}
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	s.dwellBytes = 0
+	s.exploreBytes = 0
+	s.exploreRemaining = 0
+	s.currentCandidate = vlogAutoCandidateOff
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	l := &lane{vlogCompressionSelector: s}
+
+	unitPayloadBytes := forcePointerAutoBlockMinPayloadBytes + 128
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, unitPayloadBytes*4, unitPayloadBytes, false)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("expected storage-first value-log payload to remap selector off to block, got mode=%v codec=%v probe=%t", mode, codec, probe)
+	}
+}
+
+func TestResolveVlogWriteMode_StorageFirstValueLogUsesDomainThreshold(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
+		valueLogThreshold:       1 << 20,
+		valueLogDomainThresholds: []backenddb.ValueLogDomainThreshold{
+			{Prefix: []byte("hot/"), InlineThreshold: page.DefaultInlineThreshold},
+		},
+	}
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	s.dwellBytes = 0
+	s.exploreBytes = 0
+	s.exploreRemaining = 0
+	s.currentCandidate = vlogAutoCandidateOff
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	l := &lane{vlogCompressionSelector: s}
+
+	unitPayloadBytes := forcePointerAutoBlockMinPayloadBytes + 128
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, unitPayloadBytes*4, unitPayloadBytes, false)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("expected domain-threshold value-log payload to remap selector off to block, got mode=%v codec=%v probe=%t", mode, codec, probe)
+	}
+}
+
+func TestResolveVlogWriteMode_ThroughputValueLogWithDictCanSelectOff(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
+		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
+		valueLogThreshold:       page.DefaultInlineThreshold,
+	}
+	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	s.dwellBytes = 0
+	s.exploreBytes = 0
+	s.exploreRemaining = 0
+	s.currentCandidate = vlogAutoCandidateOff
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	l := &lane{vlogCompressionSelector: s}
+
+	unitPayloadBytes := forcePointerAutoBlockMinPayloadBytes + 128
+	mode, _, probe := db.resolveVlogWriteMode(l, 7, unitPayloadBytes*4, unitPayloadBytes, false)
+	if mode != vlogWriteOff || probe {
+		t.Fatalf("expected throughput value-log payload to keep selector off, got mode=%v probe=%t", mode, probe)
+	}
+}
+
+func TestShouldBypassAutoRawValueCompression_StorageOwnedHighEntropy(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
 		forceValueLogPointers:   true,
 	}
 	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
@@ -1096,18 +1174,40 @@ func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.
 	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindOuterLeaf) {
 		t.Fatal("expected outer-leaf payloads to keep leaf-log compression selection")
 	}
+
+	thresholdDB := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		valueLogThreshold:       1,
+	}
+	if !thresholdDB.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected high-entropy threshold-owned value batch to bypass auto compression")
+	}
+
+	domainThresholdDB := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		valueLogThreshold:       1 << 20,
+		valueLogDomainThresholds: []backenddb.ValueLogDomainThreshold{
+			{Prefix: []byte("hot/"), InlineThreshold: 1},
+		},
+	}
+	if !domainThresholdDB.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected high-entropy domain-threshold-owned value batch to bypass auto compression")
+	}
 }
 
-func TestShouldBypassAutoRawValueCompression_CompressibleStaysEligible(t *testing.T) {
+func TestShouldBypassAutoRawValueCompression_CompressibleStorageOwnedStaysEligible(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
-		forceValueLogPointers:   true,
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		valueLogThreshold:       1,
 	}
-	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
+	value := bytes.Repeat([]byte(`{"text":"retained-json","did":"did:plc:abc"}`), 16)
 	records := []valuelog.Record{{RID: 1, Value: value}}
 
 	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
-		t.Fatal("expected low-entropy value batch to stay eligible for selector sampling")
+		t.Fatal("expected JSON-like retained value batch to stay eligible for compression")
 	}
 }
 
