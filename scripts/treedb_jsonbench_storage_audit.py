@@ -275,7 +275,7 @@ def vlog_frame_audit(main_dir: Path) -> dict[str, Any]:
     }
 
 
-def column_section_audit(main_dir: Path, gzip_level: int) -> dict[str, Any]:
+def column_assets_filesystem_oracle(main_dir: Path, gzip_level: int) -> dict[str, Any]:
     root = main_dir / "column_assets"
     files = []
     for path in iter_files(root):
@@ -293,13 +293,153 @@ def column_section_audit(main_dir: Path, gzip_level: int) -> dict[str, Any]:
     total = sum(row["bytes"] for row in files)
     gzip_total = sum(row["gzip_bytes"] for row in files)
     return {
-        "status": "filesystem_oracle_only",
-        "reason": "section-level typed-column descriptors require JSONBench/typed-column metadata; this audit reports file-level compression headroom",
         "files": files,
         "total_bytes": total,
         "gzip_bytes": gzip_total,
         "gzip_to_raw_ratio": (gzip_total / total) if total else None,
     }
+
+
+def summarize_section_rows(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        name = str(row.get(key) or "")
+        bucket = buckets.setdefault(
+            name,
+            {
+                key: name,
+                "sections": 0,
+                "bytes": 0,
+                "raw_bytes": 0,
+                "stored_bytes": 0,
+            },
+        )
+        bucket["sections"] += 1
+        bucket["bytes"] += int(row.get("bytes") or 0)
+        bucket["raw_bytes"] += int(row.get("raw_bytes") or 0)
+        bucket["stored_bytes"] += int(row.get("stored_bytes") or 0)
+    return sorted(buckets.values(), key=lambda row: (-int(row["bytes"]), str(row[key])))
+
+
+def summarize_column_sections(physical: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for part_index, part in enumerate(physical.get("typed_column_parts") or []):
+        if not isinstance(part, dict):
+            continue
+        asset = part.get("asset") if isinstance(part.get("asset"), dict) else {}
+        ref = asset.get("ref") if isinstance(asset.get("ref"), dict) else {}
+        image = part.get("image") if isinstance(part.get("image"), dict) else {}
+        for section in image.get("serialized_sections") or []:
+            if not isinstance(section, dict):
+                continue
+            row = dict(section)
+            row["part_index"] = part_index
+            row["part_id"] = ref.get("part_id")
+            row["asset_kind"] = ref.get("kind")
+            rows.append(row)
+    return {
+        "sections": rows,
+        "by_category": summarize_section_rows(rows, "category"),
+        "by_kind": summarize_section_rows(rows, "kind"),
+        "by_compression": summarize_section_rows(rows, "compression"),
+    }
+
+
+def column_section_audit_stub(main_dir: Path, gzip_level: int, reason: str) -> dict[str, Any]:
+    filesystem = column_assets_filesystem_oracle(main_dir, gzip_level)
+    return {
+        "status": "filesystem_oracle_only",
+        "reason": reason,
+        "filesystem_oracle": filesystem,
+        **filesystem,
+    }
+
+
+def column_section_audit(
+    args: argparse.Namespace,
+    result_data: Any | None,
+    main_dir: Path,
+    gzip_level: int,
+) -> dict[str, Any]:
+    if getattr(args, "skip_column_section_audit", False):
+        return column_section_audit_stub(main_dir, gzip_level, "section-aware column audit was explicitly skipped")
+
+    collection = result_collection_name(result_data)
+    if collection is None and not getattr(args, "column_section_audit_cmd", None):
+        return column_section_audit_stub(
+            main_dir,
+            gzip_level,
+            "no collection name found in result.json; this audit reports file-level compression headroom",
+        )
+
+    filesystem = column_assets_filesystem_oracle(main_dir, gzip_level)
+    audit_cmd = getattr(args, "column_section_audit_cmd", None)
+    if audit_cmd:
+        command = shlex.split(audit_cmd)
+        cwd = None
+    else:
+        repo_root = Path(__file__).resolve().parent.parent
+        command = ["go", "run", "./cmd/treedb_column_section_audit"]
+        cwd = str(repo_root)
+    command.extend(["-db-dir", str(main_dir), "-detailed-sections=true"])
+    if collection is not None:
+        command.extend(["-collection", collection])
+    read_integrity = getattr(args, "column_section_read_integrity", None) or "verify"
+    command.extend(["-read-integrity", read_integrity])
+
+    try:
+        completed = subprocess.run(command, cwd=cwd, check=False, text=True, capture_output=True)
+    except Exception as exc:  # pragma: no cover - defensive CLI failure path.
+        return {
+            "status": "failed",
+            "reason": "column section audit command failed before producing JSON",
+            "collection": collection,
+            "command": command,
+            "errors": [str(exc)],
+            "filesystem_oracle": filesystem,
+            **filesystem,
+        }
+
+    try:
+        helper = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {
+            "status": "failed",
+            "reason": "column section audit command did not produce JSON",
+            "collection": collection,
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-4000:],
+            "stderr": completed.stderr[-4000:],
+            "filesystem_oracle": filesystem,
+            **filesystem,
+        }
+    if not isinstance(helper, dict):
+        helper = {"status": "failed", "errors": ["column section audit JSON was not an object"]}
+    physical = helper.get("physical_accounting") if isinstance(helper.get("physical_accounting"), dict) else {}
+    section_summary = summarize_column_sections(physical)
+    status = "section_aware" if completed.returncode == 0 and helper.get("status") == "passed" else "failed"
+    out = {
+        "status": status,
+        "reason": "decoded active manifest typed-column section accounting; filesystem oracle retained for gzip headroom",
+        "collection": helper.get("collection") or collection,
+        "command": command,
+        "returncode": completed.returncode,
+        "read_integrity": helper.get("read_integrity") or read_integrity,
+        "filesystem_oracle": filesystem,
+        "physical_accounting": physical,
+        "section_summary": section_summary,
+        "active_referenced_asset_bytes": ((physical.get("totals") or {}).get("referenced_asset_bytes") if isinstance(physical, dict) else None),
+        "active_typed_column_part_bytes": ((physical.get("totals") or {}).get("typed_column_part_bytes") if isinstance(physical, dict) else None),
+        **filesystem,
+    }
+    if completed.stderr:
+        out["stderr"] = completed.stderr[-4000:]
+    if helper.get("errors"):
+        out["errors"] = helper.get("errors")
+    if completed.returncode != 0:
+        out.setdefault("reason", "column section audit command returned non-zero")
+    return out
 
 
 def compression_fields(data: Any, prefix: str = "") -> list[dict[str, Any]]:
@@ -761,6 +901,41 @@ def write_md(path: Path, report: dict[str, Any]) -> None:
             f"- gzip bytes: `{column['gzip_bytes']}`",
             f"- gzip/raw: `{ratio_text(column['gzip_to_raw_ratio'])}`",
             "",
+        ]
+    )
+    if column.get("status") == "section_aware":
+        lines.extend(
+            [
+                f"- active referenced asset bytes: `{column.get('active_referenced_asset_bytes', 'n/a')}`",
+                f"- active typed-column part bytes: `{column.get('active_typed_column_part_bytes', 'n/a')}`",
+                f"- read integrity: `{column.get('read_integrity', 'n/a')}`",
+                "",
+                "### column sections by category",
+                "",
+                "| category | sections | bytes | raw bytes | stored bytes |",
+                "|---|---:|---:|---:|---:|",
+            ]
+        )
+        for row in (column.get("section_summary") or {}).get("by_category", []):
+            lines.append(
+                f"| `{row.get('category', '')}` | {row['sections']} | {row['bytes']} | {row['raw_bytes']} | {row['stored_bytes']} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### column sections by compression",
+                "",
+                "| compression | sections | bytes | raw bytes | stored bytes |",
+                "|---|---:|---:|---:|---:|",
+            ]
+        )
+        for row in (column.get("section_summary") or {}).get("by_compression", []):
+            lines.append(
+                f"| `{row.get('compression', '')}` | {row['sections']} | {row['bytes']} | {row['raw_bytes']} | {row['stored_bytes']} |"
+            )
+        lines.append("")
+    lines.extend(
+        [
             "## retained payload audit",
             "",
             f"- status: `{retained['status']}`",
@@ -793,7 +968,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "generated_at_unix": int(time.time()),
         "gzip_oracle": gzip_oracle(main_dir, args.gzip_level),
         "vlog_frame_audit": vlog_frame_audit(main_dir),
-        "column_section_audit": column_section_audit(main_dir, args.gzip_level),
+        "column_section_audit": column_section_audit(args, result_data, main_dir, args.gzip_level),
         "retained_payload_status_audit": retained_status,
         "retained_payload_audit": retained_audit,
         "result_compression_summary": load_result_compression_summary(result_json, result_data),
@@ -807,6 +982,9 @@ def main() -> int:
     parser.add_argument("--out-dir", help="Directory for audit JSON/Markdown artifacts")
     parser.add_argument("--gzip-level", type=int, default=6)
     parser.add_argument("--json-only", action="store_true", help="Print combined JSON to stdout")
+    parser.add_argument("--column-section-audit-cmd", help="Command used to run the section-aware column audit; defaults to go run ./cmd/treedb_column_section_audit")
+    parser.add_argument("--column-section-read-integrity", default="verify", help="Column asset read integrity for section-aware audit")
+    parser.add_argument("--skip-column-section-audit", action="store_true", help="Skip section-aware column-store audit and report filesystem gzip headroom only")
     parser.add_argument("--retained-payload-audit-cmd", help="Command used to run the retained-payload audit; defaults to go run ./cmd/treedb_retained_payload_audit")
     parser.add_argument("--retained-payload-audit-limit", type=int, default=0, help="Maximum retained rows to audit; zero audits all rows")
     parser.add_argument("--skip-retained-payload-audit", action="store_true", help="Skip the path-aware retained-payload audit")

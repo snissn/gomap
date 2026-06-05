@@ -386,6 +386,52 @@ class StorageAuditTest(unittest.TestCase):
         self.assertNotIn("-collection", retained["command"])
         self.assertIn("-paths", retained["command"])
 
+    def test_column_section_audit_runs_helper_and_summarizes_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "fake_column_section_audit.py"
+            script.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "print(json.dumps({"
+                "'status':'passed',"
+                "'collection':'events',"
+                "'read_integrity':'verify',"
+                "'physical_accounting':{"
+                "'totals':{'referenced_asset_bytes':77,'typed_column_part_bytes':77},"
+                "'typed_column_parts':[{'asset':{'ref':{'kind':'tcs1_typed_column_part','part_id':7}},"
+                "'image':{'serialized_sections':["
+                "{'kind':'part_local_string_dictionary_v1','category':'dictionaries','bytes':20,'compression':'none','raw_bytes':20,'stored_bytes':20},"
+                "{'kind':'declared_column_values','category':'declared_columns','bytes':10,'compression':'zstd','raw_bytes':40,'stored_bytes':10}"
+                "]}}]}}))\n"
+            )
+            script.chmod(0o755)
+            main = Path(tmp) / "db" / "maindb"
+            (main / "column_assets").mkdir(parents=True)
+            (main / "column_assets" / "segment.tca").write_bytes(b"x" * 100)
+            args = type(
+                "Args",
+                (),
+                {
+                    "db_dir": str(Path(tmp) / "db"),
+                    "column_section_audit_cmd": str(script),
+                    "column_section_read_integrity": "verify",
+                    "skip_column_section_audit": False,
+                },
+            )()
+
+            column = audit.column_section_audit(args, {"collection": "events"}, main, 6)
+
+        self.assertEqual(column["status"], "section_aware")
+        self.assertEqual(column["collection"], "events")
+        self.assertEqual(column["active_referenced_asset_bytes"], 77)
+        self.assertEqual(column["active_typed_column_part_bytes"], 77)
+        self.assertIn("-collection", column["command"])
+        self.assertIn("events", column["command"])
+        self.assertEqual(column["total_bytes"], 100)
+        self.assertEqual(column["section_summary"]["by_category"][0]["category"], "dictionaries")
+        self.assertEqual(column["section_summary"]["by_compression"][0]["compression"], "none")
+        self.assertEqual(column["section_summary"]["sections"][0]["part_id"], 7)
+
     def test_resolve_main_dir_accepts_maindb(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             main = Path(tmp) / "maindb"
