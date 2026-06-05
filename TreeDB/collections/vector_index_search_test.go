@@ -1225,6 +1225,17 @@ func TestSearchVectorIndexWithBufferUnsupportedShapesFailClosed2362(t *testing.T
 	if _, err := col.SearchVectorIndexWithBuffer(base, nil); err == nil || !strings.Contains(err.Error(), "nil vector index search buffer") {
 		t.Fatalf("nil buffer err=%v want fail closed", err)
 	}
+	var nilCollection *Collection
+	gotNilCollection, err := nilCollection.SearchVectorIndexWithBuffer(base, &buffer)
+	if !errors.Is(err, errCollectionNil) {
+		t.Fatalf("nil collection err=%v want errCollectionNil", err)
+	}
+	if len(gotNilCollection.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("nil collection left results: returned=%d bufferResults=%d idBytes=%d", len(gotNilCollection.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	if _, err := col.SearchVectorIndexWithBuffer(base, &buffer); err != nil {
+		t.Fatalf("valid SearchVectorIndexWithBuffer after nil collection: %v", err)
+	}
 
 	tests := []struct {
 		name    string
