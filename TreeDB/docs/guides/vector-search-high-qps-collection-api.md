@@ -137,6 +137,28 @@ Canonical rows:
 - `USearch_Search` and `USearch_SearchParallel`: pure in-memory external ANN
   baseline.
 
+### Tier F no-document scaling command
+
+For 100k/128-class Tier F evidence, keep the same exact FP32 fixture and route
+contract but focus the benchmark regex on the no-document TreeDB rows and the
+USearch baseline. The with-documents/materialization row is intentionally
+excluded here because it is not part of the high-QPS no-document contract and can
+be measured separately as a document-fetch row.
+
+```sh
+TREEDB_VECTOR_BENCH_DOCS=100000 TREEDB_VECTOR_BENCH_DIMS=128 \
+  TREEDB_VECTOR_BENCH_M=16 TREEDB_VECTOR_BENCH_EF_CONSTRUCTION=128 \
+  TREEDB_VECTOR_BENCH_EF_SEARCH=128 TREEDB_VECTOR_BENCH_TOPK=10 \
+  TREEDB_VECTOR_BENCH_QUERIES=16 CPU_LIST=1,8 BENCHTIME=1000x COUNT=3 \
+  BENCH_REGEX='BenchmarkCollectionVectorUSearchProductionCompare/(TreeDB_SearchWithBuffer|TreeDB_SearchWithBufferParallel|TreeDB_CollectionSearchVectorIndexWithBuffer|TreeDB_CollectionSearchVectorIndexNoDocsOneShot|USearch_Search|USearch_SearchParallel)$' \
+  scripts/bench_vector_search_compare.sh
+```
+
+Report the same guardrail counters as the Tier S run, especially
+`search_route_hnsw_search_pack/search=1`, `hnsw_search_pack_active/search=1`,
+zero document/fallback/scratch counters, collection `open_*` counters at 0, and
+allocation accounting for the caller-owned-buffer rows.
+
 ## Profile capture notes
 
 For focused CPU profiles of the response-owned no-document convenience row,
