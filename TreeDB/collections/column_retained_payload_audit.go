@@ -137,8 +137,12 @@ func auditColumnRetainedPayloadPathsAbsentWithResolver(cfg ColumnStoreConfig, re
 // bodies and verifies that declared typed-column paths were removed. It is
 // read-only: it does not flush buffered writes, publish roots, compact, or
 // mutate storage.
-func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetainedPayloadCollectionAuditOptions) (ColumnRetainedPayloadCollectionAuditResult, error) {
-	var result ColumnRetainedPayloadCollectionAuditResult
+func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetainedPayloadCollectionAuditOptions) (result ColumnRetainedPayloadCollectionAuditResult, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result, err = retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit panic: %v", recovered))
+		}
+	}()
 	if c == nil {
 		return retainedPayloadCollectionAuditError(result, errCollectionNil)
 	}
@@ -203,6 +207,12 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		}
 		documentID := string(it.UnsafeKey())
 		retained := it.ValueCopy(nil)
+		if err := it.Error(); err != nil {
+			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit read %q: %w", documentID, err))
+		}
+		if !it.Valid() {
+			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit iterator invalid after reading %q", documentID))
+		}
 		result.CheckedRows++
 		result.RetainedPayloadBytes += int64(len(retained))
 		payloadAudit, auditErr := auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)

@@ -2,6 +2,8 @@ package collections
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -205,6 +207,72 @@ func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentSampled2382(t *testing
 	}
 	if audit.Status != "passed_sampled" || !audit.Truncated || audit.CheckedRows != 1 {
 		t.Fatalf("sample audit=%+v want passed_sampled truncated one row", audit)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentValueReadErrorFailsClosed2384(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		DisableBackgroundPrune:     true,
+		ValueLog:                   backenddb.ValueLogOptions{PointerThreshold: 1},
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat:          DocumentFormatJSON,
+			ColumnStore:             jsonbenchRetainedPayloadAuditConfig2382(true),
+			DataRootStoragePolicy:   RootStorageCompressed,
+			IndexStateStoragePolicy: RootStorageCompressed,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("doc-000000")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post"},"payload":"` + strings.Repeat("kept", 512) + `"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(backenddb.ValueLogDirPath(dir), "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob value log: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("expected value-log segment for forced pointer retained payload")
+	}
+	for _, path := range paths {
+		if err := os.Truncate(path, 0); err != nil {
+			t.Fatalf("truncate value log %s: %v", path, err)
+		}
+	}
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{})
+	if err == nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent err=nil want value read failure audit=%+v", audit)
+	}
+	if audit.Status != "failed" || len(audit.Errors) == 0 {
+		t.Fatalf("audit=%+v want failed status with error", audit)
+	}
+	if strings.Contains(strings.ToLower(audit.Errors[0]), "panic") {
+		t.Fatalf("audit error still reports panic: %+v", audit)
 	}
 }
 

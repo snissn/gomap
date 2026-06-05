@@ -8,19 +8,24 @@ import (
 	"os"
 	"strings"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func main() {
 	os.Exit(run())
 }
 
-func run() int {
+func run() (code int) {
 	var dbDir string
 	var collectionName string
 	var pathsCSV string
 	var maxDocuments int
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			code = writeFailure(collectionName, fmt.Errorf("retained payload audit panic: %v", recovered))
+		}
+	}()
 	flag.StringVar(&dbDir, "db-dir", "", "TreeDB DB directory")
 	flag.StringVar(&collectionName, "collection", "", "Collection name; defaults to the only collection")
 	flag.StringVar(&pathsCSV, "paths", "", "Comma-separated JSON paths to require absent; defaults to collection column paths")
@@ -30,11 +35,11 @@ func run() int {
 	if strings.TrimSpace(dbDir) == "" {
 		return writeFailure("", errors.New("-db-dir is required"))
 	}
-	db, err := backenddb.Open(backenddb.Options{Dir: dbDir, ReadOnly: true, DisableBackgroundPrune: true})
+	db, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dbDir, ReadOnly: true, DisableBackgroundPrune: true})
 	if err != nil {
 		return writeFailure(collectionName, fmt.Errorf("open read-only DB: %w", err))
 	}
-	defer func() { _ = db.Close() }()
+	defer func() { _ = cleanup() }()
 
 	manager := collections.NewCollectionManager(db)
 	if strings.TrimSpace(collectionName) == "" {
