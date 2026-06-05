@@ -1464,7 +1464,7 @@ func laneVlogBlockObservedRatioWithSamples(l *lane, codec valuelog.BlockCodec) (
 	return normalizeMetricRatio(math.Float64frombits(bits)), samples
 }
 
-func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec) valuelog.BlockCodec {
+func chooseLargePayloadNoDictBlockCodecObserved(l *lane, configured valuelog.BlockCodec) (valuelog.BlockCodec, bool) {
 	configured = normalizeSelectorBlockCodec(configured)
 	bestCodec := configured
 	bestRatio := 1.0
@@ -1485,13 +1485,40 @@ func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec)
 		}
 	}
 	if found {
-		return bestCodec
+		return bestCodec, true
 	}
-	return configured
+	return configured, false
 }
 
-func chooseRetainedStorageFirstBlockCodec(l *lane, configured valuelog.BlockCodec) valuelog.BlockCodec {
-	return chooseLargePayloadNoDictBlockCodec(l, configured)
+func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec) valuelog.BlockCodec {
+	codec, _ := chooseLargePayloadNoDictBlockCodecObserved(l, configured)
+	return codec
+}
+
+func retainedStorageFirstObservedBlockCodecReady(l *lane) bool {
+	sampledCodecs := 0
+	for _, codec := range vlogSelectorBlockCodecs {
+		_, samples := laneVlogBlockObservedRatioWithSamples(l, codec)
+		if samples < largePayloadBlockCodecMinSamples {
+			continue
+		}
+		if codec == valuelog.BlockCodecZSTD {
+			return true
+		}
+		sampledCodecs++
+	}
+	return sampledCodecs >= 2
+}
+
+func chooseRetainedStorageFirstBlockCodec(l *lane, configured valuelog.BlockCodec, mode vlogCompressionMode) valuelog.BlockCodec {
+	configured = normalizeSelectorBlockCodec(configured)
+	if mode != vlogCompressionDefault && mode != vlogCompressionAuto {
+		return configured
+	}
+	if codec, ok := chooseLargePayloadNoDictBlockCodecObserved(l, configured); ok && retainedStorageFirstObservedBlockCodecReady(l) {
+		return codec
+	}
+	return valuelog.BlockCodecZSTD
 }
 
 func (db *DB) storageFirstValueLogAuto(unitPayloadBytes int) bool {

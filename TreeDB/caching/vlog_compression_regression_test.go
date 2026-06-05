@@ -252,6 +252,9 @@ func TestAppendValueLog_AutoBalancedCompactRetainedTemplateBatchUsesBlockFrames(
 		if header.DictID != 0 {
 			t.Fatalf("frame %d dict id=%d, want block-compressed no-dict frame", i, header.DictID)
 		}
+		if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecZSTD {
+			t.Fatalf("frame %d block codec=%v, want zstd for retained storage-first bootstrap", i, got)
+		}
 	}
 	if recordsSeen != len(records) {
 		t.Fatalf("records in frames=%d want %d", recordsSeen, len(records))
@@ -323,6 +326,9 @@ func TestFlushVlogRequests_AutoBalancedCompactRetainedTemplateQueueUsesBlockFram
 		}
 		if header.DictID != 0 {
 			t.Fatalf("frame %d dict id=%d, want block-compressed no-dict frame", i, header.DictID)
+		}
+		if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecZSTD {
+			t.Fatalf("frame %d block codec=%v, want zstd for queued retained storage-first bootstrap", i, got)
 		}
 	}
 	if recordsSeen != len(requests) {
@@ -694,8 +700,8 @@ func TestAppendValueLog_AutoForcePointerMediumPayloadUsesGroupedBlockFrame(t *te
 	if header.DictID != 0 {
 		t.Fatalf("expected no dict id for block-compressed retained payload, got %d", header.DictID)
 	}
-	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecSnappy {
-		t.Fatalf("block codec=%v want snappy", got)
+	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecZSTD {
+		t.Fatalf("block codec=%v want zstd", got)
 	}
 }
 
@@ -759,8 +765,8 @@ func TestAppendValueLogOne_AutoForcePointerRetainedPayloadResetsBlockBackoff(t *
 	if header.DictID != 0 {
 		t.Fatalf("expected no dict id for retained single write, got %d", header.DictID)
 	}
-	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecSnappy {
-		t.Fatalf("block codec=%v want snappy", got)
+	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecZSTD {
+		t.Fatalf("block codec=%v want zstd", got)
 	}
 }
 
