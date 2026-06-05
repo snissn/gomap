@@ -90,6 +90,14 @@ The matrix search stage defaults to 10,000 ANN queries per lane and parallel
 concurrency levels `2,4,8,16,32,64,128`; override those with `-queries` and
 `-search-concurrency`.
 
+Use `-search-profile-dir DIR` to write per-concurrency search profiles for the
+column_graph search stage. Each measured concurrency emits
+`search_<mode>_c<N>_cpu.pprof`, plus `heap`, `allocs`, `block`, and `mutex`
+runtime snapshots with the same prefix. CPU profiles are scoped to the measured
+search loop; the runtime snapshots are supporting diagnostics and can include
+process state outside the search loop. Profiling changes timings and should be
+used for bottleneck analysis, not as the comparison number to publish.
+
 When `-dataset-dir` is used, `-queries` may truncate the exported query vector
 file but cannot exceed the manifest query count. `-validate-queries` is a recall
 sample size and is clamped to the exported query count. Recall validation uses
@@ -135,6 +143,8 @@ Useful flags:
   run.
 - `-disable-exact-fallback=false`: allow exact fallback during benchmark
   searches.
+- `-search-profile-dir DIR`: write per-concurrency column_graph search profiles
+  under `DIR`.
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
   queries; set `-min-recall=0` when disabling validation with
   `-validate-queries=0`.
