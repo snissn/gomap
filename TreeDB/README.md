@@ -212,8 +212,12 @@ rows are historical controls, not the current high-QPS production fast path;
 with-documents `Collection.SearchVectorIndex` rows still include setup/open and
 materialization cost and should not be presented as the no-document fast path.
 See `TreeDB/docs/guides/vector-search-high-qps-collection-api.md` for the final
-collection API boundary, guardrail counters, and profile capture notes.
-Override `USEARCH_VERSION`, `USEARCH_ROOT`, `TREEDB_VECTOR_BENCH_DOCS`,
+collection API boundary, and
+`TreeDB/docs/guides/vector-search-benchmark-workflow.md` for the dated Tier S
+snapshot from #2366/#2379, required fast-path counters, canonical Tier S/Tier F
+commands, USearch platform path setup, artifact/profile capture notes, and the
+zero-allocation vs response-owned vs materialization row boundary. Override
+`USEARCH_VERSION`, `USEARCH_ROOT`, `TREEDB_VECTOR_BENCH_DOCS`,
 `TREEDB_VECTOR_BENCH_DIMS`, `TREEDB_VECTOR_BENCH_M`,
 `TREEDB_VECTOR_BENCH_EF_CONSTRUCTION`, `TREEDB_VECTOR_BENCH_EF_SEARCH`,
 `TREEDB_VECTOR_BENCH_TOPK`, `TREEDB_VECTOR_BENCH_QUERIES`, `BENCHTIME`, `COUNT`,
