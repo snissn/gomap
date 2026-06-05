@@ -380,6 +380,16 @@ type Collection struct {
 	vectorPreparedSearchMisses uint64
 	vectorPreparedSearchWaits  uint64
 	vectorPreparedSearchBuilds uint64
+
+	vectorBufferedSearchMu            sync.Mutex
+	vectorBufferedSearch              map[string]*collectionVectorIndexPreparedSearchCacheEntry
+	vectorBufferedSearchHits          uint64
+	vectorBufferedSearchMisses        uint64
+	vectorBufferedSearchWaits         uint64
+	vectorBufferedSearchBuilds        uint64
+	vectorBufferedSearchInvalidations uint64
+	vectorBufferedSearchCloses        uint64
+	vectorBufferedSearchErrors        uint64
 }
 
 type CollectionRootOverlayCompactionStats struct {
@@ -1266,7 +1276,9 @@ func (m *CollectionManager) closeForBackend() error {
 		}
 	}()
 	m.stopUpdateCombiners()
-	return m.FlushAll()
+	cacheErr := m.closeCollectionVectorIndexPreparedSearchCaches()
+	flushErr := m.FlushAll()
+	return errors.Join(cacheErr, flushErr)
 }
 
 func (m *CollectionManager) isClosing() bool {

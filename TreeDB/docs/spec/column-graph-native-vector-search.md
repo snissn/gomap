@@ -105,10 +105,10 @@ fmt.Println(status.State, response.Path, response.Stats.RowFetches)
 Use `SearchVectorIndex` for response-owned one-shot calls. It opens and closes
 the native reader per call, so it measures setup/open cost in addition to graph
 search. Use `SearchVectorIndexWithBuffer` when collection-level code needs the
-exact no-document caller-owned result-buffer seam; until collection-owned
-prepared caching lands, it still opens/closes a searcher per call. Use
-`OpenVectorIndexSearcher` plus `SearchWithBuffer` when benchmarking or serving
-steady-state query load with open/prepared state outside the hot loop.
+exact no-document caller-owned result-buffer seam; healthy current
+`hnsw_search_pack_v1` state is prepared once in a collection-owned warmed cache.
+Use `OpenVectorIndexSearcher` plus `SearchWithBuffer` when callers need explicit
+snapshot/open lifetime control outside the hot loop.
 
 ## Collection-level no-document high-QPS contract (#2361)
 
@@ -131,8 +131,9 @@ claiming high-QPS vector search:
 - Current buffered collection seam: `Collection.SearchVectorIndexWithBuffer`
   exposes caller-owned reusable result/ID storage for exact no-document searches
   and fails closed when a healthy `hnsw_search_pack_v1` route is not selected.
-  It still opens/closes per call until the collection-owned prepared cache lands,
-  so benchmark rows must report that setup boundary separately.
+  On warmed healthy current pack state, it reuses collection-owned prepared pack
+  state and benchmark rows must report no per-search open/setup inside the timed
+  boundary.
 - Current response-owned baseline boundary: `Collection.SearchVectorIndex` is
   still a one-shot convenience API. It opens/closes per call and owns response
   result buffers, so its no-document benchmark row is a baseline/regression

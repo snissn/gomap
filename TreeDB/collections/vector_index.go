@@ -175,9 +175,9 @@ const (
 // Collection.SearchVectorIndex method is a response-owned one-shot convenience
 // boundary that opens a searcher per call. Collection.SearchVectorIndexWithBuffer
 // exposes caller-owned result storage for the exact no-document hnsw_search_pack_v1
-// seam but still opens per call until collection-owned prepared caching lands;
-// callers that need zero-allocation steady-state behavior should use a reusable
-// VectorIndexSearcher with VectorIndexSearcher.SearchWithBuffer.
+// seam and reuses collection-owned prepared pack state on warmed healthy current
+// state; callers that need explicit snapshot lifetime control can still use a
+// reusable VectorIndexSearcher with VectorIndexSearcher.SearchWithBuffer.
 type VectorIndexSearchOptions struct {
 	// IndexName is used by collection-level physical column_graph search.
 	IndexName string

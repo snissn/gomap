@@ -199,8 +199,9 @@ production rows include
 `BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexNoDocsOneShot`
 as the current collection-level one-shot baseline,
 `.../TreeDB_CollectionSearchVectorIndexWithBuffer` as the collection-level
-caller-owned result-buffer seam with per-call open still inside the timed
-boundary, plus `.../TreeDB_SearchWithBuffer*` versus `.../USearch_Search*`:
+caller-owned result-buffer seam on a warmed collection-owned prepared cache
+(`open_searcher_calls/op=0`, `open_setup_in_timed_loop=0` in the timed loop),
+plus `.../TreeDB_SearchWithBuffer*` versus `.../USearch_Search*`:
 TreeDB's high-QPS comparison uses persisted `column_graph` through
 `Collection.OpenVectorIndexSearcher` plus `VectorIndexSearcher.SearchWithBuffer`
 with one searcher and one reusable buffer per worker, while USearch is a pure

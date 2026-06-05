@@ -288,9 +288,10 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 		reportVectorIndexSearchStatsModeBenchMetric2126(b, params.statsMode())
 		b.ReportMetric(1, "reported_stats_mode_full_diagnostics")
 		b.ReportMetric(1, "collection_searchvectorindex_with_buffer_seam")
-		b.ReportMetric(1, "open_searcher_calls/op")
-		b.ReportMetric(1, "open_setup_in_timed_loop")
+		b.ReportMetric(0, "open_searcher_calls/op")
+		b.ReportMetric(0, "open_setup_in_timed_loop")
 		b.ReportMetric(0, "response_owned_result_alloc/op")
+		reportCollectionVectorIndexPreparedSearchBenchMetrics2363(b, col.collectionVectorIndexPreparedSearchCacheSnapshot())
 		reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
 	})
 
@@ -754,6 +755,23 @@ func openVectorUSearchBenchmarkIndex(tb testing.TB, docs, dims, m, efConstructio
 		}
 	}
 	return index
+}
+
+func reportCollectionVectorIndexPreparedSearchBenchMetrics2363(b *testing.B, snap collectionVectorIndexPreparedSearchCacheSnapshot) {
+	b.Helper()
+	b.ReportMetric(float64(snap.Entries), "collection_prepared_cache_entries")
+	b.ReportMetric(float64(snap.BuildingEntries), "collection_prepared_cache_building_entries")
+	b.ReportMetric(float64(snap.CacheBuilds), "collection_prepared_cache_builds")
+	b.ReportMetric(float64(snap.CacheMisses), "collection_prepared_cache_misses")
+	b.ReportMetric(float64(snap.CacheHits), "collection_prepared_cache_hits")
+	b.ReportMetric(float64(snap.CacheWaits), "collection_prepared_cache_waits")
+	b.ReportMetric(float64(snap.Invalidations), "collection_prepared_cache_invalidations")
+	b.ReportMetric(float64(snap.Closes), "collection_prepared_cache_closes")
+	b.ReportMetric(float64(snap.Errors), "collection_prepared_cache_errors")
+	b.ReportMetric(float64(snap.ActiveHandles), "collection_prepared_active_handles")
+	b.ReportMetric(float64(snap.ActiveMappedBytes), "collection_prepared_mapped_B")
+	b.ReportMetric(float64(snap.ActiveHeapCopyBytes), "collection_prepared_heap_copy_B")
+	b.ReportMetric(float64(snap.ActiveDerivedMetadataBytes), "collection_prepared_derived_metadata_B")
 }
 
 func openVectorUSearchFixtureIndex(tb testing.TB, fixture []vectorBenchmarkFixtureRecord, m, efConstruction, efSearch int) *usearch.Index {
