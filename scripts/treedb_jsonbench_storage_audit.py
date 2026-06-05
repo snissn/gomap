@@ -353,6 +353,21 @@ def compression_metadata_only_field(field: dict[str, Any]) -> bool:
     return "requested" in leaf or "policy" in leaf
 
 
+def compression_active_evidence_field(field: dict[str, Any]) -> bool:
+    leaf = str(field.get("path", "")).lower().rsplit(".", 1)[-1]
+    if compression_metadata_only_field(field):
+        return False
+    if "attribution" in leaf or leaf.endswith("_detail") or leaf.endswith("_details"):
+        return False
+    return (
+        "actual" in leaf
+        or "status" in leaf
+        or leaf == "compression"
+        or leaf == "compression_mode"
+        or leaf.endswith("_compression")
+    )
+
+
 def observed_compression_value_tokens(value: Any) -> set[str]:
     if isinstance(value, str):
         text = value.lower()
@@ -390,7 +405,11 @@ def load_result_compression_summary(result_json: Path | None, data: Any | None =
         tokens = compression_value_tokens(field.get("value"))
         if "none" in tokens:
             none_fields.append(field)
-        observed_tokens = set() if compression_metadata_only_field(field) else observed_compression_value_tokens(field.get("value"))
+        observed_tokens = (
+            observed_compression_value_tokens(field.get("value"))
+            if compression_active_evidence_field(field)
+            else set()
+        )
         if observed_tokens & active_tokens:
             active_fields.append(field)
     silent_none = bool(none_fields) and not active_fields

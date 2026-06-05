@@ -284,6 +284,41 @@ class StorageAuditTest(unittest.TestCase):
         self.assertGreater(len(summary["compression_none_fields"]), 0)
         self.assertEqual(summary["compression_active_fields"], [])
 
+    def test_result_compression_summary_ignores_attribution_labels_as_active_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "result.json"
+            result.write_text(
+                json.dumps(
+                    {
+                        "storage": {
+                            "column_store_physical": {
+                                "typed_column_parts": [
+                                    {
+                                        "image": {
+                                            "sections": [
+                                                {
+                                                    "compression_attribution": {
+                                                        "actual_compression": "none",
+                                                        "codec_layout_label": "typed_column_part/section/dictionaries/zstd",
+                                                        "support_reason": "dictionary compression is unsupported",
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                )
+            )
+
+            summary = audit.load_result_compression_summary(result)
+
+        self.assertTrue(summary["silent_none_suspected"])
+        self.assertGreater(len(summary["compression_none_fields"]), 0)
+        self.assertEqual(summary["compression_active_fields"], [])
+
     def test_retained_payload_audit_command_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / "fake_retained_audit.py"
