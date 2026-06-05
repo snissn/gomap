@@ -849,6 +849,22 @@ func TestSearchVectorIndexWithBufferUnsupportedShapesFailClosed2362(t *testing.T
 	}
 }
 
+func TestResetBufferedVectorIndexSearchResponseClearsReturnedResults2362(t *testing.T) {
+	var buffer VectorIndexSearchBuffer
+	buffer.results = append(buffer.results, VectorIndexSearchResult{ID: []byte("stale"), Score: 1})
+	buffer.idBytes = append(buffer.idBytes, "stale"...)
+	response := VectorIndexSearchResponse{Results: buffer.results}
+
+	resetBufferedVectorIndexSearchResponse(&response, &buffer)
+
+	if response.Results != nil {
+		t.Fatalf("response results=%v want nil after buffered error invalidation", response.Results)
+	}
+	if len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("buffer results=%d idBytes=%d want reset view", len(buffer.results), len(buffer.idBytes))
+	}
+}
+
 func assertSearchVectorIndexWithBufferNoDocumentPackStats2362(tb testing.TB, stats VectorIndexSearchStats) {
 	tb.Helper()
 	if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(stats) {

@@ -813,15 +813,14 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		scoreBatchMode: opts.scoreBatchMode,
 	}, buffer)
 	if closeErr := searcher.Close(); err == nil && closeErr != nil {
-		buffer.Reset()
+		resetBufferedVectorIndexSearchResponse(&response, buffer)
 		return response, closeErr
 	}
 	if err != nil {
 		return response, err
 	}
 	if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats) {
-		buffer.Reset()
-		response.Results = nil
+		resetBufferedVectorIndexSearchResponse(&response, buffer)
 		return response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
 	}
 	return response, nil
@@ -868,6 +867,15 @@ func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearch
 		return err
 	}
 	return nil
+}
+
+func resetBufferedVectorIndexSearchResponse(response *VectorIndexSearchResponse, buffer *VectorIndexSearchBuffer) {
+	if buffer != nil {
+		buffer.Reset()
+	}
+	if response != nil {
+		response.Results = nil
+	}
 }
 
 func vectorIndexDocumentFetchOptionsNonZero(opts DocumentFetchOptions) bool {
