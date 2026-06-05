@@ -1442,11 +1442,7 @@ func (db *DB) storageFirstValueLogAuto(unitPayloadBytes int) bool {
 	if db.forceValueLogPointers {
 		return true
 	}
-	threshold := db.valueLogThreshold
-	if threshold <= 0 {
-		threshold = page.DefaultInlineThreshold
-	}
-	return unitPayloadBytes > threshold
+	return unitPayloadBytes > db.minValueLogInlineThreshold()
 }
 
 func (db *DB) valueLogPayloadExceedsInlineThreshold(unitPayloadBytes int) bool {
@@ -1456,11 +1452,21 @@ func (db *DB) valueLogPayloadExceedsInlineThreshold(unitPayloadBytes int) bool {
 	if db.forceValueLogPointers {
 		return true
 	}
+	return unitPayloadBytes > db.minValueLogInlineThreshold()
+}
+
+func (db *DB) minValueLogInlineThreshold() int {
 	threshold := db.valueLogThreshold
 	if threshold <= 0 {
 		threshold = page.DefaultInlineThreshold
 	}
-	return unitPayloadBytes > threshold
+	for i := range db.valueLogDomainThresholds {
+		domainThreshold := db.valueLogDomainThresholds[i].InlineThreshold
+		if domainThreshold >= 0 && domainThreshold < threshold {
+			threshold = domainThreshold
+		}
+	}
+	return threshold
 }
 
 func (db *DB) storageFirstMediumValueLogAuto(unitPayloadBytes int) bool {
