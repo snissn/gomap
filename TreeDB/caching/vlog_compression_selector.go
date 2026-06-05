@@ -1428,6 +1428,16 @@ func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec)
 	return configured
 }
 
+func (db *DB) storageFirstForcePointerAuto(unitPayloadBytes int) bool {
+	if db == nil || !db.forceValueLogPointers {
+		return false
+	}
+	if unitPayloadBytes < forcePointerAutoBlockMinPayloadBytes {
+		return false
+	}
+	return normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput
+}
+
 func (db *DB) preferLeafPageBlockCodec(l *lane, unitPayloadBytes int, configured valuelog.BlockCodec) (valuelog.BlockCodec, bool) {
 	if db == nil || l == nil || !db.indexOuterLeavesInValueLog {
 		return configured, false
@@ -1566,7 +1576,7 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 		if unitPayloadBytes <= 0 {
 			unitPayloadBytes = rawPayloadBytes
 		}
-		if dictID == 0 && db.forceValueLogPointers && unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
+		if dictID == 0 && db.storageFirstForcePointerAuto(unitPayloadBytes) {
 			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
 		if dictID == 0 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && unitPayloadBytes >= throughputAutoBlockMinPayloadBytes {
@@ -1584,7 +1594,11 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 			}
 			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
-		return l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes, unitPayloadBytes)
+		chosenMode, chosenCodec, probe := l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes, unitPayloadBytes)
+		if chosenMode == vlogWriteOff && db.storageFirstForcePointerAuto(unitPayloadBytes) {
+			return vlogWriteBlock, chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec), probe
+		}
+		return chosenMode, chosenCodec, probe
 	}
 }
 

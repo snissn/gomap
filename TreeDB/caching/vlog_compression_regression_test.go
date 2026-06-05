@@ -477,6 +477,79 @@ func TestAppendValueLog_AutoBalancedForcePointerHighEntropyPayloadUsesGroupedBlo
 	}
 }
 
+func TestAppendValueLog_AutoBalancedForcePointerDictSelectorOffUsesGroupedBlockFrame(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	selector.dwellBytes = 0
+	selector.exploreBytes = 0
+	selector.exploreRemaining = 0
+	selector.currentCandidate = vlogAutoCandidateOff
+	selector.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: selector},
+		},
+	}
+
+	base := bytes.Repeat([]byte(`{"commit":{"operation":"create","collection":"app.bsky.feed.post"},"kind":"commit","did":"did:plc:storage-parity","text":"value-log-retained-json"}`), 6)
+	value := base[:forcePointerAutoBlockMinPayloadBytes+128]
+	records := []valuelog.Record{
+		{RID: 1, Value: value},
+		{RID: 2, Value: value},
+		{RID: 3, Value: value},
+		{RID: 4, Value: value},
+	}
+	ptrs, err := db.appendValueLog(&db.lanes[0], 7, []byte("stub-dict"), records, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLog: %v", err)
+	}
+	if len(ptrs) != len(records) {
+		t.Fatalf("ptr count=%d want %d", len(ptrs), len(records))
+	}
+	for i, ptr := range ptrs {
+		if ptr == (page.ValuePtr{}) {
+			t.Fatalf("empty pointer at %d", i)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	header := readFirstValueLogFrameHeader(t, path)
+	if header.K != uint8(len(records)) {
+		t.Fatalf("frame K=%d want grouped K=%d", header.K, len(records))
+	}
+	if header.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected storage-first forced-pointer dict-available batch to store a block-compressed frame")
+	}
+	if header.DictID != 0 {
+		t.Fatalf("expected selector-off remap to store block frame without dict id, got %d", header.DictID)
+	}
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected block write-mode observation")
+	}
+	if writeSnap.Frames[vlogWriteOff] != 0 {
+		t.Fatalf("expected no raw/off write-mode observation for storage-first forced-pointer dict path")
+	}
+}
+
 func TestAppendValueLog_AutoThroughputForcePointerHighEntropyPayloadUsesGroupedRawFrame(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value.log")
