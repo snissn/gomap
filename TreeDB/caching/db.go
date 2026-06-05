@@ -12807,7 +12807,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				retainedUnitBytes := retainedRawBytes / retainedRecords
 				if db.retainedStorageFirstValueLogAuto(retainedRawBytes, retainedUnitBytes, records[i:retainedEnd]) {
 					writeMode = vlogWriteBlock
-					blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+					blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec, mode)
 					dictID = 0
 					dict = nil
 					probe = retainedProbe
@@ -12845,7 +12845,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			retainedStorageFirst = db.retainedStorageFirstValueLogAuto(rawBytes, unitPayloadBytes, records[i:end])
 			if retainedStorageFirst && mode != vlogCompressionOff && writeMode != vlogWriteDict {
 				writeMode = vlogWriteBlock
-				blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+				blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec, mode)
 				dictID = 0
 				dict = nil
 			}
@@ -14016,7 +14016,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			return
 		}
 		writeMode = vlogWriteBlock
-		blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+		blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec, mode)
 	}
 	probeCompression := selectorProbe
 	paused := false
@@ -14730,7 +14730,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			return
 		}
 		writeMode = vlogWriteBlock
-		blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+		blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec, mode)
 	}
 	probeCompression := selectorProbe
 	if writeMode != vlogWriteDict {
