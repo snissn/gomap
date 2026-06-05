@@ -90,10 +90,46 @@ class StorageAuditTest(unittest.TestCase):
                 )
             )
             status = audit.retained_status_summary(result)
+        self.assertEqual(status["jsonbench_cell_count"], 1)
         self.assertFalse(status["retained_payload_encoding_status_missing"])
         self.assertFalse(status["retained_payload_encoding_inactive"])
         self.assertTrue(status["retained_payload_compression_status_missing"])
         self.assertTrue(status["retained_payload_compression_inactive"])
+        self.assertEqual(status["retained_payload_encoding_missing_cells"], [])
+        self.assertEqual(status["retained_payload_encoding_inactive_cells"], [])
+        self.assertEqual(len(status["retained_payload_compression_missing_cells"]), 1)
+
+    def test_retained_status_summary_requires_encoding_per_jsonbench_cell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "result.json"
+            result.write_text(
+                json.dumps(
+                    {
+                        "jsonbench_cells": [
+                            {
+                                "query": "q1",
+                                "retained_payload_encoding": "json",
+                                "retained_payload_encoding_status": "active_json_non_column_retained_payload",
+                            },
+                            {"query": "q2"},
+                        ]
+                    }
+                )
+            )
+            status = audit.retained_status_summary(result)
+        self.assertEqual(status["jsonbench_cell_count"], 2)
+        self.assertTrue(status["retained_payload_encoding_status_missing"])
+        self.assertTrue(status["retained_payload_encoding_inactive"])
+        self.assertEqual(
+            status["retained_payload_encoding_missing_cells"],
+            [
+                {
+                    "path": "jsonbench_cells[1]",
+                    "missing_value_fields": ["retained_payload_encoding"],
+                    "missing_status_fields": ["retained_payload_encoding_status"],
+                }
+            ],
+        )
 
     def test_resolve_main_dir_accepts_maindb(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

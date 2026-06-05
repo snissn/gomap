@@ -314,6 +314,54 @@ def fields_named(data: Any, names: set[str], prefix: str = "") -> list[dict[str,
     return out
 
 
+def jsonbench_cells(data: Any, prefix: str = "") -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if str(key) == "jsonbench_cells" and isinstance(value, list):
+                for idx, cell in enumerate(value):
+                    if isinstance(cell, dict):
+                        out.append({"path": f"{path}[{idx}]", "value": cell})
+            out.extend(jsonbench_cells(value, path))
+    elif isinstance(data, list):
+        for idx, value in enumerate(data):
+            out.extend(jsonbench_cells(value, f"{prefix}[{idx}]"))
+    return out
+
+
+def retained_status_value_inactive(value: Any) -> bool:
+    text = str(value).lower()
+    return text == "" or "inactive" in text or text in {"none", "not_configured"}
+
+
+def retained_status_cell_findings(
+    cells: list[dict[str, Any]],
+    value_names: set[str],
+    status_names: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    missing: list[dict[str, Any]] = []
+    inactive: list[dict[str, Any]] = []
+    for cell_info in cells:
+        path = str(cell_info["path"])
+        cell = cell_info["value"]
+        present_values = [name for name in sorted(value_names) if name in cell]
+        present_statuses = [name for name in sorted(status_names) if name in cell]
+        if not present_values or not present_statuses:
+            missing.append(
+                {
+                    "path": path,
+                    "missing_value_fields": sorted(value_names - set(present_values)),
+                    "missing_status_fields": sorted(status_names - set(present_statuses)),
+                }
+            )
+        for name in present_values + present_statuses:
+            value = cell.get(name)
+            if retained_status_value_inactive(value):
+                inactive.append({"path": f"{path}.{name}", "value": value})
+    return missing, inactive
+
+
 def retained_status_summary(result_json: Path | None, data: Any | None = None) -> dict[str, Any]:
     if result_json is None:
         return {
@@ -326,6 +374,7 @@ def retained_status_summary(result_json: Path | None, data: Any | None = None) -
         }
     if data is None:
         data = load_result_json(result_json)
+    cells = jsonbench_cells(data)
     encoding_fields = fields_named(data, {"retained_payload_encoding"})
     encoding_status_fields = fields_named(data, {"retained_payload_encoding_status"})
     compression_fields = fields_named(
@@ -338,21 +387,46 @@ def retained_status_summary(result_json: Path | None, data: Any | None = None) -
         if not fields:
             return True
         for field in fields:
-            value = str(field.get("value", "")).lower()
-            if value == "" or "inactive" in value or value in {"none", "not_configured"}:
+            if retained_status_value_inactive(field.get("value", "")):
                 return True
         return False
 
+    encoding_missing_cells, encoding_inactive_cells = retained_status_cell_findings(
+        cells,
+        {"retained_payload_encoding"},
+        {"retained_payload_encoding_status"},
+    )
+    compression_missing_cells, compression_inactive_cells = retained_status_cell_findings(
+        cells,
+        {"retained_payload_compression", "retained_payload_compression_policy"},
+        {"retained_payload_compression_status"},
+    )
+    if cells:
+        encoding_missing = bool(encoding_missing_cells)
+        encoding_inactive = encoding_missing or bool(encoding_inactive_cells)
+        compression_missing = bool(compression_missing_cells)
+        compression_inactive = compression_missing or bool(compression_inactive_cells)
+    else:
+        encoding_missing = not encoding_fields or not encoding_status_fields
+        encoding_inactive = inactive(encoding_fields) or inactive(encoding_status_fields)
+        compression_missing = not compression_fields or not compression_status_fields
+        compression_inactive = inactive(compression_fields) or inactive(compression_status_fields)
+
     return {
         "path": str(result_json),
+        "jsonbench_cell_count": len(cells),
         "retained_payload_encoding_fields": encoding_fields,
         "retained_payload_encoding_status_fields": encoding_status_fields,
-        "retained_payload_encoding_status_missing": not encoding_fields or not encoding_status_fields,
-        "retained_payload_encoding_inactive": inactive(encoding_fields) or inactive(encoding_status_fields),
+        "retained_payload_encoding_missing_cells": encoding_missing_cells,
+        "retained_payload_encoding_inactive_cells": encoding_inactive_cells,
+        "retained_payload_encoding_status_missing": encoding_missing,
+        "retained_payload_encoding_inactive": encoding_inactive,
         "retained_payload_compression_fields": compression_fields,
         "retained_payload_compression_status_fields": compression_status_fields,
-        "retained_payload_compression_status_missing": not compression_fields or not compression_status_fields,
-        "retained_payload_compression_inactive": inactive(compression_fields) or inactive(compression_status_fields),
+        "retained_payload_compression_missing_cells": compression_missing_cells,
+        "retained_payload_compression_inactive_cells": compression_inactive_cells,
+        "retained_payload_compression_status_missing": compression_missing,
+        "retained_payload_compression_inactive": compression_inactive,
     }
 
 
