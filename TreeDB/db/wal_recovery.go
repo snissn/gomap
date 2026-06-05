@@ -812,6 +812,29 @@ func (a *replayInlineAppender) AppendValues(values [][]byte) ([]page.ValuePtr, e
 	return ptrs, nil
 }
 
+func (a *replayInlineAppender) ReserveRIDs(count int) (uint64, error) {
+	if a == nil {
+		return 0, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if err := validateRewriteRIDCount(count); err != nil {
+		return 0, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writer == nil {
+		return 0, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	start := a.nextRID
+	if start == 0 {
+		return 0, fmt.Errorf("value-log rid space exhausted")
+	}
+	if err := validateRewriteRIDRange(start, count); err != nil {
+		return 0, err
+	}
+	a.nextRID = start + uint64(count)
+	return start, nil
+}
+
 func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if a == nil {
 		return page.LeafLogPtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")

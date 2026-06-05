@@ -4292,7 +4292,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	baseCommitSeq := snapshotCommitSeq(pin)
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	table := domain.table
-	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	publishTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, meta, rootName, table)
 	if err != nil {
 		return err
 	}
@@ -5004,8 +5004,52 @@ func collectionRunTableHasStableUnsafeSlices(table memtable.Table) bool {
 }
 
 func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) (memtable.Table, bool, error) {
+	return pointerizeCollectionRunTableValuesWithResolver(db, table, nil)
+}
+
+func pointerizeCollectionRunTableValuesForRoot(db *backenddb.DB, meta CollectionMeta, rootName string, table memtable.Table) (memtable.Table, bool, error) {
+	return pointerizeCollectionRunTableValuesWithResolver(db, table, collectionValueLogInlineThresholdResolverForRoot(db, meta, rootName))
+}
+
+func collectionValueLogInlineThresholdResolverForRoot(db *backenddb.DB, meta CollectionMeta, rootName string) func([]byte) int {
+	if db == nil || !collectionRootStoresRetainedPayloadBodies(meta, rootName) {
+		return nil
+	}
+	return func([]byte) int {
+		// Retained payload bodies are the residual/original document bytes for this
+		// primary root. Keep them out of leaf pages regardless of document-body
+		// representation; empty retained bodies still remain inline.
+		return 0
+	}
+}
+
+func collectionRootStoresRetainedPayloadBodies(meta CollectionMeta, rootName string) bool {
+	if rootName == "" || rootName != collectionPrimaryRootName(meta.Name) {
+		return false
+	}
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled {
+		return false
+	}
+	switch columnRetainedPayloadAuditPolicy(cfg) {
+	case ColumnRetainedPayloadNone:
+		return false
+	case ColumnRetainedPayloadNonColumn, ColumnRetainedPayloadFull:
+		return true
+	default:
+		// Invalid retained-payload policies are rejected during collection metadata
+		// normalization. If one reaches placement, fail closed by keeping the body
+		// out of leaf pages rather than silently inlining it.
+		return true
+	}
+}
+
+func pointerizeCollectionRunTableValuesWithResolver(db *backenddb.DB, table memtable.Table, inlineThresholdForKey func([]byte) int) (memtable.Table, bool, error) {
 	if db == nil || table == nil || !db.HasValueLogAppender() {
 		return table, false, nil
+	}
+	if inlineThresholdForKey == nil {
+		inlineThresholdForKey = db.InlineThresholdForKey
 	}
 	needsPointer := false
 	probe := table.NewIterator(nil, nil)
@@ -5013,7 +5057,7 @@ func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) 
 		value, _, flags := probe.UnsafeEntry()
 		if flags&node.FlagTombstone == 0 &&
 			flags&node.FlagPointer == 0 &&
-			len(value) > db.InlineThresholdForKey(probe.UnsafeKey()) {
+			len(value) > inlineThresholdForKey(probe.UnsafeKey()) {
 			needsPointer = true
 			break
 		}
@@ -5075,7 +5119,7 @@ func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) 
 		}
 		if flags&node.FlagTombstone == 0 &&
 			flags&node.FlagPointer == 0 &&
-			len(value) > db.InlineThresholdForKey(entry.key) {
+			len(value) > inlineThresholdForKey(entry.key) {
 			entries = append(entries, entry)
 			appendValue := value
 			if !borrowPointerValues {
@@ -5115,7 +5159,7 @@ func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) 
 	return out, true, nil
 }
 
-func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, plan *insertBatchPlan) ([]memtable.Table, error) {
+func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, meta CollectionMeta, plan *insertBatchPlan) ([]memtable.Table, error) {
 	if plan == nil || db == nil || !db.HasValueLogAppender() {
 		return nil, nil
 	}
@@ -5126,7 +5170,7 @@ func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, plan *insertBatchPlan) 
 		default:
 			continue
 		}
-		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValues(db, plan.runs[i].table)
+		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, plan.runs[i].name, plan.runs[i].table)
 		if err != nil {
 			resetCollectionTables(obsolete)
 			return nil, err
@@ -5164,7 +5208,7 @@ func pointerizeCollectionDataRootDeltaTables(db *backenddb.DB, meta CollectionMe
 		if _, ok := dataRoots[rootName]; !ok {
 			continue
 		}
-		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValues(db, tables[i])
+		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, rootName, tables[i])
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -5210,7 +5254,7 @@ func pointerizeCollectionDataRootRunMapValues(db *backenddb.DB, meta CollectionM
 			continue
 		}
 		for i, run := range runs {
-			pointerizedTable, pointerized, err := pointerizeCollectionRunTableValues(db, run)
+			pointerizedTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, rootName, run)
 			if err != nil {
 				cleanup()
 				return nil, nil, err
@@ -8795,7 +8839,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	table := newCollectionRunTable(1)
 	setCollectionRunValue(table, resultID, bytes.Clone(document))
 	table.Freeze()
-	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	publishTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, rootName, table)
 	if err != nil {
 		resetCollectionRunTable(table)
 		return nil, err
@@ -9491,7 +9535,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = pin.Close() }()
-	obsoletePointerizedTables, err := pointerizeInsertBatchPlanDataRuns(c.db, plan)
+	obsoletePointerizedTables, err := pointerizeInsertBatchPlanDataRuns(c.db, meta, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -10094,7 +10138,7 @@ func (c *Collection) insertBatchNoIndex(
 	}
 	table.Freeze()
 	stats.PrimaryRunBuild = time.Since(phaseStart)
-	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	publishTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, rootName, table)
 	if err != nil {
 		return nil, err
 	}
@@ -13367,7 +13411,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	primaryTable := newCollectionRunTable(1)
 	setCollectionRunValue(primaryTable, bytes.Clone(documentID), primaryDocument)
 	primaryTable.Freeze()
-	if pointerizedPrimaryTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, primaryTable); err != nil {
+	if pointerizedPrimaryTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, primaryRootName, primaryTable); err != nil {
 		_ = snap.Close()
 		resetCollectionTables(append(deltaTables, primaryTable))
 		return false, false, err

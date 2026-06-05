@@ -24,6 +24,10 @@ type valueLogAppenderHolder struct {
 	appender ValueLogAppender
 }
 
+type valueLogRIDReserver interface {
+	ReserveRIDs(count int) (start uint64, err error)
+}
+
 // SetValueLogAppender installs the appender used by native-root APIs that need
 // to create persistent value-log pointers. Cached mode wires this to its normal
 // value-log writer.
@@ -47,6 +51,18 @@ func (db *DB) currentValueLogAppender() ValueLogAppender {
 		return nil
 	}
 	return holder.appender
+}
+
+func (db *DB) currentValueLogRIDReserver() valueLogRIDReserver {
+	appender := db.currentValueLogAppender()
+	if appender == nil {
+		return nil
+	}
+	reserver, ok := appender.(valueLogRIDReserver)
+	if !ok {
+		return nil
+	}
+	return reserver
 }
 
 // HasValueLogAppender reports whether native-root callers can append user
