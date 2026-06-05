@@ -24,8 +24,16 @@ high-QPS path:
 - `graph_row_fallbacks/search=0`
 - `typed_column_vector_fallbacks/search=0`
 - `vector_scratch_decodes/search=0`
+
+Collection-level one-shot/buffer rows must additionally prove there is no
+per-query open/setup in the timed loop:
+
 - `open_searcher_calls/op=0`
 - `open_setup_in_timed_loop=0`
+
+Reusable-searcher `SearchWithBuffer` rows open the searcher before `ResetTimer`
+and may not emit those collection-level open/setup counters; their open/setup
+boundary is proven by the benchmark shape plus the route/fallback counters above.
 
 `Collection.SearchVectorIndexWithBuffer` must also report `0 B/op` and
 `0 allocs/op`. `Collection.SearchVectorIndex` no-document convenience rows
