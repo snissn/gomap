@@ -197,19 +197,20 @@ The script downloads and extracts a USearch Linux or macOS release package into
 writes results under `/tmp/gomap_vector_search_compare_*`. The canonical current
 production rows include
 `BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexNoDocsOneShot`
-as the current collection-level one-shot baseline,
+as the response-owned collection convenience API on the cached no-document
+`hnsw_search_pack_v1` route,
 `.../TreeDB_CollectionSearchVectorIndexWithBuffer` as the collection-level
-caller-owned result-buffer seam on a warmed collection-owned prepared cache
-(`open_searcher_calls/op=0`, `open_setup_in_timed_loop=0` in the timed loop),
-plus `.../TreeDB_SearchWithBuffer*` versus `.../USearch_Search*`:
+caller-owned result-buffer seam on the same warmed collection-owned prepared
+cache (`open_searcher_calls/op=0`, `open_setup_in_timed_loop=0` in the timed
+loop), plus `.../TreeDB_SearchWithBuffer*` versus `.../USearch_Search*`:
 TreeDB's high-QPS comparison uses persisted `column_graph` through
 `Collection.OpenVectorIndexSearcher` plus `VectorIndexSearcher.SearchWithBuffer`
 with one searcher and one reusable buffer per worker, while USearch is a pure
 in-memory cosine/f32 HNSW baseline.
 Use `CPU_LIST=1,8` for c=1/c=8 evidence. Older `BenchmarkCollectionVectorIndex*`
 rows are historical controls, not the current high-QPS production fast path;
-one-shot `Collection.SearchVectorIndex` benchmarks include setup/open cost and
-should not be presented as that fast path.
+with-documents `Collection.SearchVectorIndex` rows still include setup/open and
+materialization cost and should not be presented as the no-document fast path.
 Override `USEARCH_VERSION`, `USEARCH_ROOT`, `TREEDB_VECTOR_BENCH_DOCS`,
 `TREEDB_VECTOR_BENCH_DIMS`, `TREEDB_VECTOR_BENCH_M`,
 `TREEDB_VECTOR_BENCH_EF_CONSTRUCTION`, `TREEDB_VECTOR_BENCH_EF_SEARCH`,

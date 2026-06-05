@@ -320,14 +320,12 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 			b.Fatalf("measure SearchVectorIndex stats: %v", err)
 		}
 		stats := measured.Stats
-		if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 ||
-			stats.SearchRouteHNSWSearchPack != 0 ||
-			stats.HNSWSearchPackActive != 1 ||
+		if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(stats) ||
 			stats.TypedColumnFallbacks != 0 ||
 			stats.VectorScratchDecodes != 0 ||
 			stats.GraphRowFallbacks != 0 ||
 			stats.DocumentsFetched != 0 {
-			b.Fatalf("TreeDB collection one-shot stats=%+v want current no-document SearchVectorIndex baseline with docs/fallback/decode counters clear and pack available but not selected", stats)
+			b.Fatalf("TreeDB collection no-doc stats=%+v want cached hnsw_search_pack_v1 SearchVectorIndex route with docs/fallback/decode counters clear", stats)
 		}
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -349,8 +347,10 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 		reportVectorIndexSearchStatsModeBenchMetric2126(b, params.statsMode())
 		b.ReportMetric(1, "reported_stats_mode_full_diagnostics")
 		b.ReportMetric(1, "collection_searchvectorindex_one_shot")
-		b.ReportMetric(1, "open_searcher_calls/op")
-		b.ReportMetric(1, "open_setup_in_timed_loop")
+		b.ReportMetric(0, "open_searcher_calls/op")
+		b.ReportMetric(0, "open_setup_in_timed_loop")
+		b.ReportMetric(1, "response_owned_result_alloc/op")
+		reportCollectionVectorIndexPreparedSearchBenchMetrics2363(b, col.collectionVectorIndexPreparedSearchCacheSnapshot())
 		reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
 	})
 

@@ -352,11 +352,12 @@ Use `scripts/bench_vector_search_compare.sh` for the optional external ANN
 baseline. Its current production comparison benchmark is
 `BenchmarkCollectionVectorUSearchProductionCompare`:
 
-- `TreeDB_CollectionSearchVectorIndexNoDocsOneShot` times today's public
-  collection-level no-document convenience API. It calls
-  `Collection.SearchVectorIndex` once per operation, so setup/open/validation,
-  response-owned result allocation, and close are inside the timed boundary. Use
-  this row as a baseline/guardrail only; it is not the high-QPS target.
+- `TreeDB_CollectionSearchVectorIndexNoDocsOneShot` times the public
+  collection-level no-document convenience API. Exact healthy calls use the
+  cached `hnsw_search_pack_v1` route with `open_searcher_calls/op=0` and
+  `open_setup_in_timed_loop=0`, but still allocate response-owned result/ID
+  storage. Use this row as the response-owned convenience route, not the
+  zero-allocation target.
 - `TreeDB_SearchWithBuffer` / `TreeDB_SearchWithBufferParallel` time persisted
   `column_graph` search through `Collection.OpenVectorIndexSearcher` and
   `VectorIndexSearcher.SearchWithBuffer`; setup, inserts, rebuild, open, and
@@ -392,9 +393,11 @@ TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64 \
 
 Older `BenchmarkCollectionVectorIndex*` and graph-only rows remain useful
 historical controls, but they are not the current persisted production
-no-document fast path. One-shot `Collection.SearchVectorIndex` rows, including
-`TreeDB_CollectionSearchVectorIndexNoDocsOneShot`, include setup/open cost per
-operation; do not use them as the high-QPS production comparator.
+no-document fast path. The response-owned
+`TreeDB_CollectionSearchVectorIndexNoDocsOneShot` row should use the cached pack
+route but still reports convenience-wrapper allocations; use the buffered rows
+for zero-allocation high-QPS production claims. With-document one-shot rows still
+include setup/open and document materialization cost per operation.
 
 The broader legacy/canonical matrix remains useful when comparing with older
 artifacts or when you also need one-shot open/setup names:
@@ -415,7 +418,7 @@ Read the benchmark names and row labels before comparing numbers:
 | `OpenVectorIndexSearcher...Setup...` | Native-reader setup/open only; no search. |
 | `ColumnVectorGraphNativeSearchCosine...` | Lower-level graph traversal/scoring/top-k over the physical reader. |
 | `OpenVectorIndexSearcher...V4` | Reusable searcher steady-state query; setup/open outside timed loop. |
-| `SearchVectorIndex...V4` | Public one-shot search; setup/open inside each operation. |
+| `SearchVectorIndex...V4` | Public response-owned search; exact no-doc collection convenience rows use the cached pack route when healthy, while with-doc/unsupported one-shot rows include setup/open inside each operation. |
 | `...ReusableBuffer...` | Opened public no-document search with caller-owned reusable response buffers. |
 | `...WithDocumentsExcludeEmbedding1875` | Preferred projection-oriented final-fetch row: search plus post-top-k documents with the vector field excluded. |
 | `...WithDocumentsV4` | Explicit full-document comparison row: search plus post-top-k documents including the vector field. |

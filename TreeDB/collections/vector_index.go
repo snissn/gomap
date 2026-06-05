@@ -172,10 +172,12 @@ const (
 // Collection-level high-QPS no-document searches are intentionally narrow: use
 // an explicit column_graph index, exact/zero QueryMode, IncludeDocuments=false,
 // no document projection, and no legacy filter fields. The current
-// Collection.SearchVectorIndex method is a response-owned one-shot convenience
-// boundary that opens a searcher per call. Collection.SearchVectorIndexWithBuffer
-// exposes caller-owned result storage for the exact no-document hnsw_search_pack_v1
-// seam and reuses collection-owned prepared pack state on warmed healthy current
+// Collection.SearchVectorIndex method is a response-owned convenience boundary
+// that uses the cached hnsw_search_pack_v1 route for healthy exact no-document
+// calls and falls back to a one-shot searcher for unsupported shapes.
+// Collection.SearchVectorIndexWithBuffer exposes caller-owned result storage for
+// the exact no-document hnsw_search_pack_v1 seam and reuses collection-owned
+// prepared pack state on warmed healthy current
 // state; callers that need explicit snapshot lifetime control can still use a
 // reusable VectorIndexSearcher with VectorIndexSearcher.SearchWithBuffer. To
 // materialize documents after a no-document search, open a CollectionReadView

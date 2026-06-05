@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -12,6 +13,8 @@ import (
 // ErrVectorIndexSearchUnavailable reports that the requested vector index is
 // not currently searchable through the selected product path.
 var ErrVectorIndexSearchUnavailable = errors.New("collections: vector index search unavailable")
+
+var collectionSearchVectorIndexResponseBufferPool sync.Pool
 
 // VectorIndexSearchPath identifies the physical implementation used for a
 // public vector-index search.
@@ -717,20 +720,104 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // With IncludeDocuments=false, SearchVectorIndex returns response-owned result
 // IDs and scores only and must not materialize documents. With
 // IncludeDocuments=true, document fetch happens after top-k selection and is
-// reported through document counters. This method currently opens and closes a
-// searcher per call, so its no-document benchmarks are one-shot/convenience
-// baselines rather than the high-QPS target; compare route/open counters before
-// treating it as a serving hot path. Use SearchVectorIndexWithBuffer for the
-// collection-level caller-owned result-buffer seam, and OpenVectorIndexSearcher
-// plus SearchWithBuffer when callers can keep open/prepared state outside the
-// timed query boundary. Callers that want a split search/fetch shape can run a
-// no-document search first, then use
+// reported through document counters. Exact no-document calls use the
+// collection-owned prepared hnsw_search_pack_v1 cache when healthy; unsupported
+// shapes and unavailable packs fall back to the one-shot searcher path. Use
+// SearchVectorIndexWithBuffer for the zero-allocation caller-owned result-buffer
+// seam, and OpenVectorIndexSearcher plus SearchWithBuffer when callers can keep
+// open/prepared state outside the timed query boundary. Callers that want a
+// split search/fetch shape can run a no-document search first, then use
 // CollectionReadView.FetchDocumentsForVectorIndexSearchResults as a separate
 // materialization phase with separate counters.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
+	if collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts) {
+		buffer := acquireCollectionSearchVectorIndexResponseBuffer()
+		response, err := c.SearchVectorIndexWithBuffer(opts, buffer)
+		if err == nil {
+			cloneBufferedVectorIndexSearchResponseResults(&response)
+			releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+			return response, nil
+		}
+		releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+		if !errors.Is(err, ErrVectorIndexSearchUnavailable) && !errors.Is(err, ErrIndexNotFound) {
+			return response, err
+		}
+	}
+	return c.searchVectorIndexOneShot(opts)
+}
+
+func acquireCollectionSearchVectorIndexResponseBuffer() *VectorIndexSearchBuffer {
+	if buffer, ok := collectionSearchVectorIndexResponseBufferPool.Get().(*VectorIndexSearchBuffer); ok && buffer != nil {
+		return buffer
+	}
+	return &VectorIndexSearchBuffer{}
+}
+
+func releaseCollectionSearchVectorIndexResponseBuffer(buffer *VectorIndexSearchBuffer) {
+	if buffer == nil {
+		return
+	}
+	buffer.Reset()
+	collectionSearchVectorIndexResponseBufferPool.Put(buffer)
+}
+
+func cloneBufferedVectorIndexSearchResponseResults(response *VectorIndexSearchResponse) {
+	if response == nil || len(response.Results) == 0 {
+		if response != nil {
+			response.Results = nil
+		}
+		return
+	}
+	idBytesLen := 0
+	for _, result := range response.Results {
+		idBytesLen += len(result.ID)
+	}
+	idBytes := make([]byte, idBytesLen)
+	results := make([]VectorIndexSearchResult, len(response.Results))
+	idOffset := 0
+	for i, result := range response.Results {
+		results[i] = result
+		if len(result.ID) > 0 {
+			idEnd := idOffset + len(result.ID)
+			copy(idBytes[idOffset:idEnd], result.ID)
+			results[i].ID = idBytes[idOffset:idEnd:idEnd]
+			idOffset = idEnd
+		}
+		if len(result.Document) > 0 {
+			results[i].Document = append([]byte(nil), result.Document...)
+		}
+	}
+	response.Results = results
+}
+
+func collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts VectorIndexSearchOptions) bool {
+	if opts.IncludeDocuments || vectorIndexDocumentFetchOptionsNonZero(opts.DocumentFetchOptions) {
+		return false
+	}
+	if opts.Filter != nil || opts.IndexRangeFilter != nil {
+		return false
+	}
+	if opts.FetchMultiplier != 0 || opts.ExactFilterMaxDocs != 0 || opts.DisableExactFallback {
+		return false
+	}
+	if opts.QueryMode != "" && opts.QueryMode != VectorIndexQueryModeExact {
+		return false
+	}
+	if opts.QuantizedIndexName != "" || opts.QuantizedRerankCandidates != 0 {
+		return false
+	}
+	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
+	if err != nil || !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
+		return false
+	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	return err == nil && queryMode == columnVectorGraphNativeSearchQueryModeExact
+}
+
+func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	searcher, response, err := c.openVectorIndexSearcher(VectorIndexSearcherOptions{
 		IndexName:        opts.IndexName,
 		MaxDecodedBlocks: opts.MaxDecodedBlocks,

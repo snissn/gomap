@@ -247,6 +247,12 @@ func (c *Collection) openCollectionVectorIndexPreparedSearch(opts VectorIndexSea
 	if err != nil {
 		return nil, response, err
 	}
+	if !columnVectorGraphDocumentIDStatePresent(view.VectorIndexState) {
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires vector-index document-id state for response IDs", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	if err := validateColumnVectorGraphDocumentIDStateAssetPayload(c.db.ColumnAssetRootDir(), readerCatalog.meta.Name, *readerCatalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState); err != nil {
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires valid vector-index document-id state: %w", ErrVectorIndexSearchUnavailable, def.Name, err)
+	}
 	pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReader(readerCatalog.meta.Name, *readerCatalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState)
 	if packErr != nil {
 		response.Stats = VectorIndexSearchStats{}

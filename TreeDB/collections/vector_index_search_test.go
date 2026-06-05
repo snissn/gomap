@@ -394,6 +394,7 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 		TopK:             2,
 		EfSearch:         len(rows),
 		MaxDecodedBlocks: 1,
+		StatsMode:        VectorIndexSearchStatsModeBenchmarkDebug,
 	})
 	if err != nil {
 		t.Fatalf("SearchVectorIndex: %v", err)
@@ -475,10 +476,42 @@ func TestSearchVectorIndexNoDocumentHighQPSContractBoundary2361(t *testing.T) {
 	assertColumnGraphSearchResponseLoadedV4(t, noDocs, def.Name, 2)
 	assertVectorIndexSearchResultsV4(t, noDocs.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
 	assertSearchVectorIndexNoDocumentCurrentOneShotStats2361(t, noDocs.Stats)
+	firstNoDocTopID := string(noDocs.Results[0].ID)
 	for i, result := range noDocs.Results {
 		if len(result.ID) == 0 || len(result.Document) != 0 {
 			t.Fatalf("no-doc result[%d]=%+v want ID/score only without document", i, result)
 		}
+	}
+	var searcherBuffer VectorIndexSearchBuffer
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	searcherNoDocs, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeExact, TopK: 2, EfSearch: len(rows)}, &searcherBuffer)
+	if closeErr := searcher.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("SearchWithBuffer no-doc: %v", err)
+	}
+	if len(noDocs.Results) != len(searcherNoDocs.Results) {
+		t.Fatalf("SearchVectorIndex results=%d SearchWithBuffer results=%d", len(noDocs.Results), len(searcherNoDocs.Results))
+	}
+	for i := range noDocs.Results {
+		if !bytes.Equal(noDocs.Results[i].ID, searcherNoDocs.Results[i].ID) || noDocs.Results[i].Ordinal != searcherNoDocs.Results[i].Ordinal || math.Abs(float64(noDocs.Results[i].Score-searcherNoDocs.Results[i].Score)) > 1e-6 {
+			t.Fatalf("result[%d] SearchVectorIndex=%+v SearchWithBuffer=%+v want same ID/order/score", i, noDocs.Results[i], searcherNoDocs.Results[i])
+		}
+	}
+	noDocsAgain, err := col.SearchVectorIndex(base)
+	if err != nil {
+		t.Fatalf("second SearchVectorIndex no-doc: %v", err)
+	}
+	assertSearchVectorIndexNoDocumentCurrentOneShotStats2361(t, noDocsAgain.Stats)
+	if string(noDocs.Results[0].ID) != firstNoDocTopID {
+		t.Fatalf("first no-doc response ID changed after second call: got %q want %q", noDocs.Results[0].ID, firstNoDocTopID)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 1 || snap.CacheBuilds != 1 || snap.CacheHits == 0 {
+		t.Fatalf("cache snapshot after SearchVectorIndex no-doc route=%+v want reused collection prepared pack", snap)
 	}
 
 	withDocsOpts := base
@@ -1395,9 +1428,8 @@ func assertSearchVectorIndexNoDocumentCurrentOneShotStats2361(tb testing.TB, sta
 		stats.DocumentJSONReconstructionRows != 0 {
 		tb.Fatalf("no-doc stats=%+v want zero document materialization counters", stats)
 	}
-	assertSearchVectorIndexCurrentOneShotRoute2361(tb, "no-doc", stats)
-	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackOpenNanos == 0 {
-		tb.Fatalf("no-doc stats=%+v want hnsw_search_pack_v1 active/open evidence available for future high-QPS route", stats)
+	if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(stats) {
+		tb.Fatalf("no-doc stats=%+v want Collection.SearchVectorIndex exact no-document cached hnsw_search_pack_v1 route", stats)
 	}
 	assertVectorIndexSearchNoFallbackStats2361(tb, stats)
 }
