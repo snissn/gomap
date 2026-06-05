@@ -18,6 +18,8 @@ const maxCompressedRowLocatorSectionRawBytes = maxCompressedImageSectionRawBytes
 
 const maxCompressedDictionarySectionRawBytes = maxCompressedImageSectionRawBytes
 
+const maxCompressedPruningMetadataSectionRawBytes = maxCompressedImageSectionRawBytes
+
 const ColumnPartImageManifestHeaderBytes = 32
 
 func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
@@ -2464,8 +2466,23 @@ func (i ColumnPartImage) dictionarySectionBytes(section ColumnPartImageSection) 
 	return i.sectionBytesWithKnownRawLength(section, rawBytes, maxCompressedDictionarySectionRawBytes, "dictionaries")
 }
 
+func (i ColumnPartImage) pruningMetadataSectionBytes(section ColumnPartImageSection) ([]byte, error) {
+	rawBytes := section.RawBytes
+	if rawBytes == 0 && section.Compression == CompressionNone {
+		rawBytes = section.Length
+	}
+	return i.sectionBytesWithKnownRawLength(section, rawBytes, maxCompressedPruningMetadataSectionRawBytes, "pruning metadata")
+}
+
 func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageSection, rawBytes int, maxRawBytes int, label string) ([]byte, error) {
 	payload := i.sectionBytes(section)
+	return sectionPayloadBytesWithKnownRawLength(section, payload, rawBytes, maxRawBytes, label)
+}
+
+func sectionPayloadBytesWithKnownRawLength(section ColumnPartImageSection, payload []byte, rawBytes int, maxRawBytes int, label string) ([]byte, error) {
+	if len(payload) != section.Length {
+		return nil, fmt.Errorf("typedcolumn: %s section payload bytes=%d want section length=%d", label, len(payload), section.Length)
+	}
 	switch section.Compression {
 	case CompressionNone:
 		if len(payload) != rawBytes {
@@ -2582,7 +2599,11 @@ func validateImageSectionCompression(section ColumnPartImageSection) error {
 		default:
 			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported", section.Kind, section.Compression)
 		}
-	case ColumnPartImageSectionDictionaries:
+	case ColumnPartImageSectionDictionaries, ColumnPartImageSectionPruningMetadata:
+		maxRawBytes := maxCompressedDictionarySectionRawBytes
+		if section.Kind == ColumnPartImageSectionPruningMetadata {
+			maxRawBytes = maxCompressedPruningMetadataSectionRawBytes
+		}
 		switch section.Compression {
 		case CompressionNone:
 			if section.RawBytes != 0 && section.RawBytes != section.Length {
@@ -2593,8 +2614,8 @@ func validateImageSectionCompression(section ColumnPartImageSection) error {
 			if section.RawBytes <= 0 {
 				return fmt.Errorf("typedcolumn: section %s compressed raw bytes=%d is invalid", section.Kind, section.RawBytes)
 			}
-			if section.RawBytes > maxCompressedDictionarySectionRawBytes {
-				return fmt.Errorf("typedcolumn: section %s raw bytes=%d exceeds max=%d", section.Kind, section.RawBytes, maxCompressedDictionarySectionRawBytes)
+			if section.RawBytes > maxRawBytes {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d exceeds max=%d", section.Kind, section.RawBytes, maxRawBytes)
 			}
 			return nil
 		default:

@@ -2251,7 +2251,7 @@ func TestTypedColumnAdapterPrepareInt64AggregateValidationFailsClosed(t *testing
 		{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone, CompressionSet: true},
 	}, "id", 2)
 	primaryEncodingMismatch := typedColumnAdapterBuildCustomInt64AggregateImage(t, []typedcolumn.ColumnDefinition{
-		{Name: typedColumnAdapterPrimaryIDColumn, Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+		{Name: typedColumnAdapterPrimaryIDColumn, Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingNullableInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true},
 		{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone, CompressionSet: true},
 	}, typedColumnAdapterPrimaryIDColumn, 2)
 	selectedEncodingMismatch := typedColumnAdapterBuildCustomInt64AggregateImage(t, []typedcolumn.ColumnDefinition{

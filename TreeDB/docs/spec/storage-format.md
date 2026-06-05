@@ -574,10 +574,10 @@ the final byte of each row, and uncompressed row-major payload sections
 (`rows * ceil(elements_per_row * bits_per_element / 8)` bytes). Readers must
 fail closed on unknown type codes rather than guessing a payload shape.
 Current typed-column image version 4 directory entries carry per-section
-`raw_bytes` metadata for compressed sections. Row-locator and dictionary
-sections may use Snappy or LZ4 when the raw length is within the decoder cap;
-readers validate the raw byte count before decompression and fail closed on
-unsupported section compression.
+`raw_bytes` metadata for compressed sections. Row-locator, dictionary, and
+pruning-metadata sections may use Snappy or LZ4 when the raw length is within
+the decoder cap; readers validate the raw byte count before decompression and
+fail closed on unsupported section compression.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:

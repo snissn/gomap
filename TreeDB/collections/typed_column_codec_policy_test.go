@@ -33,10 +33,15 @@ func TestTypedColumnAdapterOptInCompressionRoundTrip1952(t *testing.T) {
 				t.Fatalf("build compressed part: %v", err)
 			}
 			primary := part.Part.Columns[typedColumnAdapterPrimaryIDColumn]
-			if primary.Definition.Compression != typedcolumn.CompressionNone {
-				t.Fatalf("primary compression=%s want none", primary.Definition.Compression)
+			if primary.Definition.Encoding != typedcolumn.EncodingDeltaVarint || primary.Definition.Compression != compression {
+				t.Fatalf("primary definition=%+v want delta_varint/%s", primary.Definition, compression)
 			}
 			kept := 0
+			for _, block := range primary.Blocks {
+				if block.Descriptor.Encoding != typedcolumn.EncodingDeltaVarint || block.Granule.Encoding != typedcolumn.EncodingDeltaVarint {
+					t.Fatalf("primary block encoding=%s/%s want delta_varint", block.Descriptor.Encoding, block.Granule.Encoding)
+				}
+			}
 			for _, column := range part.Columns {
 				got := part.Part.Columns[column.Definition.Name]
 				if got.Definition.Compression != compression {
@@ -211,7 +216,18 @@ func TestTypedColumnProductionCompressionPolicyDefaultsDurable2297(t *testing.T)
 	}
 	foundColumnPolicy := false
 	foundLocatorSection := false
+	foundPruningSection := false
+	foundPrimaryID := false
 	for _, part := range accounting.TypedColumnParts {
+		for _, column := range part.Image.ColumnsDetail {
+			if column.Column != typedColumnAdapterPrimaryIDColumn {
+				continue
+			}
+			foundPrimaryID = true
+			if column.Encoding != typedcolumn.EncodingDeltaVarint.String() || column.RequestedCompression != string(ColumnStoreTypedColumnCompressionLZ4) || column.StoredBytes >= column.LogicalValueBytes {
+				t.Fatalf("primary-id column accounting=%+v want compact delta_varint/lz4 storage", column)
+			}
+		}
 		for _, detail := range part.Image.CompressionDetail {
 			if detail.Column != "time_us" || detail.RequestedCompression != string(ColumnStoreTypedColumnCompressionLZ4) {
 				continue
@@ -223,6 +239,12 @@ func TestTypedColumnProductionCompressionPolicyDefaultsDurable2297(t *testing.T)
 		}
 		for _, section := range part.Image.SerializedSections {
 			if section.Kind != string(typedcolumn.ColumnPartImageSectionRowLocators) {
+				if section.Kind == string(typedcolumn.ColumnPartImageSectionPruningMetadata) {
+					foundPruningSection = true
+					if section.Compression != string(ColumnStoreTypedColumnCompressionLZ4) || section.RawBytes <= section.StoredBytes || section.StoredBytes != section.Bytes {
+						t.Fatalf("pruning metadata section=%+v want kept LZ4 section compression", section)
+					}
+				}
 				continue
 			}
 			foundLocatorSection = true
@@ -236,6 +258,12 @@ func TestTypedColumnProductionCompressionPolicyDefaultsDurable2297(t *testing.T)
 	}
 	if !foundLocatorSection {
 		t.Fatalf("missing compressed row locator section in %+v", accounting.TypedColumnParts)
+	}
+	if !foundPruningSection {
+		t.Fatalf("missing compressed pruning metadata section in %+v", accounting.TypedColumnParts)
+	}
+	if !foundPrimaryID {
+		t.Fatalf("missing primary-id column accounting in %+v", accounting.TypedColumnParts)
 	}
 }
 

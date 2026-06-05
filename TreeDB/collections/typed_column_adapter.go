@@ -366,6 +366,21 @@ func applyTypedColumnAdapterDefinitionOptions(field TypedStorageField, def *type
 	return validateTypedColumnProductionDefinition(field, *def)
 }
 
+func typedColumnAdapterPrimaryIDDefinition(opts typedColumnAdapterOptions) typedcolumn.ColumnDefinition {
+	compression := typedcolumn.CompressionNone
+	if opts.DefaultCompressionSet {
+		compression = opts.DefaultCompression
+	}
+	return typedcolumn.ColumnDefinition{
+		Name:           typedColumnAdapterPrimaryIDColumn,
+		Type:           typedcolumn.ColumnTypeInt64,
+		Encoding:       typedcolumn.EncodingDeltaVarint,
+		Compression:    compression,
+		CompressionSet: true,
+		StatsDisabled:  true,
+	}
+}
+
 func typedColumnAdapterColumnsForFields(fields []TypedStorageField) ([]typedColumnAdapterColumn, error) {
 	return typedColumnAdapterColumnsForFieldsMapped(fields, nil)
 }
@@ -559,14 +574,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 	}
 
 	defs := make([]typedcolumn.ColumnDefinition, 0, len(columns)+1)
-	defs = append(defs, typedcolumn.ColumnDefinition{
-		Name:           typedColumnAdapterPrimaryIDColumn,
-		Type:           typedcolumn.ColumnTypeInt64,
-		Encoding:       typedcolumn.EncodingRawInt64,
-		Compression:    typedcolumn.CompressionNone,
-		CompressionSet: true,
-		StatsDisabled:  true,
-	})
+	defs = append(defs, typedColumnAdapterPrimaryIDDefinition(opts))
 	for _, column := range columns {
 		defs = append(defs, column.Definition)
 	}
@@ -4992,8 +5000,13 @@ func scanTypedColumnStringPreparedPartWithVisibility(preparedPart *typedColumnPr
 	if !ok {
 		return false, fmt.Errorf("missing primary id section %q", typedColumnAdapterPrimaryIDColumn)
 	}
-	if idCol.Definition.Type != typedcolumn.ColumnTypeInt64 || idCol.Definition.Encoding != typedcolumn.EncodingRawInt64 {
-		return false, fmt.Errorf("primary id column %q type=%s encoding=%s", typedColumnAdapterPrimaryIDColumn, idCol.Definition.Type, idCol.Definition.Encoding)
+	if idCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return false, fmt.Errorf("primary id column %q type=%s", typedColumnAdapterPrimaryIDColumn, idCol.Definition.Type)
+	}
+	switch idCol.Definition.Encoding {
+	case typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint:
+	default:
+		return false, fmt.Errorf("primary id column %q unsupported encoding=%s", typedColumnAdapterPrimaryIDColumn, idCol.Definition.Encoding)
 	}
 	cardinality := preparedColumn.Column.Definition.Cardinality
 	if cardinality == 0 {
