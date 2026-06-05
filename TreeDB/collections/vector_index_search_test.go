@@ -445,6 +445,169 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	}
 }
 
+func TestSearchVectorIndexNoDocumentHighQPSContractBoundary2361(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	query := []float32{1, 0, 0}
+	base := VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            query,
+		QueryMode:        VectorIndexQueryModeExact,
+		TopK:             2,
+		EfSearch:         len(rows),
+		MaxDecodedBlocks: 1,
+	}
+	noDocs, err := col.SearchVectorIndex(base)
+	if err != nil {
+		t.Fatalf("SearchVectorIndex no-doc: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, noDocs, def.Name, 2)
+	assertVectorIndexSearchResultsV4(t, noDocs.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
+	assertSearchVectorIndexNoDocumentCurrentOneShotStats2361(t, noDocs.Stats)
+	for i, result := range noDocs.Results {
+		if len(result.ID) == 0 || len(result.Document) != 0 {
+			t.Fatalf("no-doc result[%d]=%+v want ID/score only without document", i, result)
+		}
+	}
+
+	withDocsOpts := base
+	withDocsOpts.IncludeDocuments = true
+	withDocs, err := col.SearchVectorIndex(withDocsOpts)
+	if err != nil {
+		t.Fatalf("SearchVectorIndex IncludeDocuments: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, withDocs, def.Name, 2)
+	assertVectorIndexSearchResultsV4(t, withDocs.Results, exactColumnGraphTopKForTest(t, rows, query, 2), true)
+	assertSearchVectorIndexIncludeDocumentsStats2361(t, withDocs.Stats, len(withDocs.Results))
+	for i, result := range withDocs.Results {
+		if len(result.ID) == 0 || len(result.Document) == 0 {
+			t.Fatalf("with-docs result[%d]=%+v want ID/score plus materialized document", i, result)
+		}
+		assertVectorIndexSearchDocumentDIDV4(t, result.Document, string(result.ID))
+	}
+}
+
+func TestVectorIndexSearcherSearchWithBufferHighQPSContractRejectsDocuments2361(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+
+	var buffer VectorIndexSearchBuffer
+	valid, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
+		Query:     []float32{1, 0, 0},
+		QueryMode: VectorIndexQueryModeExact,
+		TopK:      1,
+		EfSearch:  len(rows),
+	}, &buffer)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer no-doc: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, valid, def.Name, 1)
+	if valid.Stats.SearchRouteHNSWSearchPack != 1 ||
+		valid.Stats.HNSWSearchPackActive != 1 ||
+		valid.Stats.DocumentsFetched != 0 ||
+		valid.Stats.GraphRowFallbacks != 0 ||
+		valid.Stats.TypedColumnFallbacks != 0 ||
+		valid.Stats.VectorScratchDecodes != 0 {
+		t.Fatalf("SearchWithBuffer stats=%+v want exact no-document hnsw_search_pack_v1 route without docs/fallback/decode", valid.Stats)
+	}
+	if len(valid.Results[0].Document) != 0 || len(buffer.results) != 1 || len(buffer.idBytes) == 0 {
+		t.Fatalf("SearchWithBuffer result=%+v bufferResults=%d idBytes=%d want no-doc buffered result", valid.Results[0], len(buffer.results), len(buffer.idBytes))
+	}
+
+	got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
+		Query:            []float32{1, 0, 0},
+		TopK:             1,
+		EfSearch:         len(rows),
+		IncludeDocuments: true,
+	}, &buffer)
+	if err == nil || !strings.Contains(err.Error(), "IncludeDocuments") {
+		t.Fatalf("SearchWithBuffer IncludeDocuments err=%v want documented fail-closed no-document boundary", err)
+	}
+	if len(got.Results) != 0 || got.Stats.DocumentsFetched != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("IncludeDocuments error response=%+v bufferResults=%d idBytes=%d want no results/doc counters", got, len(buffer.results), len(buffer.idBytes))
+	}
+}
+
+func assertSearchVectorIndexNoDocumentCurrentOneShotStats2361(tb testing.TB, stats VectorIndexSearchStats) {
+	tb.Helper()
+	if stats.DocumentsFetched != 0 ||
+		stats.DocumentBytes != 0 ||
+		stats.DocumentOutputBytes != 0 ||
+		stats.DocumentRowRefStateFetches != 0 ||
+		stats.DocumentRowRefLookupFallbacks != 0 ||
+		stats.DocumentPointRowFetches != 0 ||
+		stats.DocumentJSONReconstructionRows != 0 {
+		tb.Fatalf("no-doc stats=%+v want zero document materialization counters", stats)
+	}
+	assertSearchVectorIndexCurrentOneShotRoute2361(tb, "no-doc", stats)
+	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackOpenNanos == 0 {
+		tb.Fatalf("no-doc stats=%+v want hnsw_search_pack_v1 active/open evidence available for future high-QPS route", stats)
+	}
+	assertVectorIndexSearchNoFallbackStats2361(tb, stats)
+}
+
+func assertSearchVectorIndexIncludeDocumentsStats2361(tb testing.TB, stats VectorIndexSearchStats, results int) {
+	tb.Helper()
+	if stats.DocumentsFetched != uint64(results) || stats.DocumentBytes == 0 || stats.DocumentOutputBytes == 0 {
+		tb.Fatalf("with-docs stats=%+v want document materialization counters for %d results", stats, results)
+	}
+	if stats.DocumentRowRefStateFetches != uint64(results) ||
+		stats.DocumentRowRefLookupFallbacks != 0 ||
+		stats.DocumentPointRowFetches != uint64(results) ||
+		stats.DocumentPointRowDecodes != uint64(results) {
+		tb.Fatalf("with-docs stats=%+v want vector-index row-ref state point fetches", stats)
+	}
+	assertSearchVectorIndexCurrentOneShotRoute2361(tb, "with-docs", stats)
+	assertVectorIndexSearchNoFallbackStats2361(tb, stats)
+}
+
+func assertSearchVectorIndexCurrentOneShotRoute2361(tb testing.TB, label string, stats VectorIndexSearchStats) {
+	tb.Helper()
+	if stats.SearchRouteHNSWSearchPack != 0 {
+		tb.Fatalf("%s stats=%+v want current Collection.SearchVectorIndex one-shot route, not high-QPS pack route", label, stats)
+	}
+	if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+		tb.Fatalf("%s stats=%+v want exactly one current Collection.SearchVectorIndex one-shot column_graph route", label, stats)
+	}
+}
+
+func assertVectorIndexSearchNoFallbackStats2361(tb testing.TB, stats VectorIndexSearchStats) {
+	tb.Helper()
+	if stats.GraphRows != 0 ||
+		stats.GraphRowFallbacks != 0 ||
+		stats.TypedColumnFallbacks != 0 ||
+		stats.VectorScratchDecodes != 0 ||
+		stats.RowFetches != 0 ||
+		stats.BatchFetches != 0 ||
+		stats.RowsFetched != 0 ||
+		stats.ResultIDGraphFallbacks != 0 ||
+		stats.RowRefVectorSourceLegacyGraphIDs != 0 {
+		tb.Fatalf("stats=%+v want no graph-row fallback, no typed-column fallback, no vector scratch decode, and no legacy row/ID path", stats)
+	}
+}
+
 func TestSearchVectorIndexColumnGraphResultIDsAreCapacityIsolatedV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
