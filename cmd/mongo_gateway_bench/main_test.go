@@ -60,6 +60,29 @@ func TestSummarizePhaseZeroOperationsWithSamples(t *testing.T) {
 	}
 }
 
+func TestRunTreeDBProfiledPhaseWithDrainReportsBoundaryMetrics(t *testing.T) {
+	phase, err := runTreeDBProfiledPhaseWithDrain(nil, nil, "load_insert_many", true, func() (phaseResult, error) {
+		return phaseResult{
+			Name:           "load_insert_many",
+			Operations:     10,
+			DurationMillis: 12.5,
+			OpsPerSecond:   800,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("run profiled phase: %v", err)
+	}
+	if got := phase.TreeDBMetrics["foreground_duration_ms"]; got != 12.5 {
+		t.Fatalf("foreground_duration_ms=%v want 12.5; metrics=%v", got, phase.TreeDBMetrics)
+	}
+	if got := phase.TreeDBMetrics["settled_drain_duration_ms"]; got != 0 {
+		t.Fatalf("settled_drain_duration_ms=%v want 0; metrics=%v", got, phase.TreeDBMetrics)
+	}
+	if got := phase.TreeDBMetrics["settled_drain_included"]; got != 1 {
+		t.Fatalf("settled_drain_included=%v want 1; metrics=%v", got, phase.TreeDBMetrics)
+	}
+}
+
 func TestCollectDiskSnapshotBreakdown(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.db"), []byte("1234"), 0o600); err != nil {

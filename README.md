@@ -197,6 +197,7 @@ Current YCSB status and rerun commands:
 Collection and engine benchmark runbooks:
 
 - `docs/benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md`
+- `docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md`
 - `docs/benchmarks/treedb_canonical_benchmark_runbook.md`
 - `docs/benchmarks/collections_canonical_benchmark.md`
 - `cmd/unified_bench/README.md`

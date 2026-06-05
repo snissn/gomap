@@ -50,6 +50,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 - **[TreeDB Collections Canonical Benchmark](benchmarks/collections_canonical_benchmark.md)**: Canonical TreeDB-vs-SQLite collection benchmark and maintenance-phase semantics.
 - **[Two-Index Collection Insert Rerun](benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md)**: Current TreeDB-vs-SQLite two-index insert throughput and exhaustive/VACUUM-equivalent compacted storage rows.
 - **[TreeDB-vs-SQLite Collection Concurrency](benchmarks/collections_concurrency_main_2026-06-04.md)**: Concurrent collection read/lookup and mixed read/write rows with explicit `GOMAXPROCS` and SQLite connection-pool metadata.
+- **[TreeDB Fast Mongo/Native Client-Shape Matrix](benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md)**: Standard fast-client Mongo gateway/native/direct benchmark contract and baseline interpretation.
 - **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
 - **[BenchProf](../cmd/benchprof/README.md)**: Analysis tool for CPU/alloc/block/mutex profiles and ops/sec outputs.
 - **[Redis Protocol Benchmarking](REDIS_PROTOCOL_BENCHMARKING.md)**: Preferred way to measure Redis wrapper throughput.
