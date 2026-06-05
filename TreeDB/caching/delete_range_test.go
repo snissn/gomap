@@ -119,6 +119,80 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	}
 }
 
+func TestCachingDB_DeleteRangeAfterCommandWALAppendFailureDoesNotMutate(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("a"), []byte("va")); err != nil {
+		t.Fatalf("Set(a): %v", err)
+	}
+	if err := db.Set([]byte("z"), []byte("vz")); err != nil {
+		t.Fatalf("Set(z): %v", err)
+	}
+
+	appendErr := errors.New("append failed")
+	appendCalls := 0
+	if err := db.DeleteRangeAfterCommandWALAppend([]byte("a"), []byte("z"), func() error {
+		appendCalls++
+		return appendErr
+	}); !errors.Is(err, appendErr) {
+		t.Fatalf("DeleteRangeAfterCommandWALAppend error=%v, want appendErr", err)
+	}
+	if appendCalls != 1 {
+		t.Fatalf("append calls=%d, want 1", appendCalls)
+	}
+	got, err := db.Get([]byte("a"))
+	if err != nil || string(got) != "va" {
+		t.Fatalf("Get(a)=(%q,%v), want va,nil after append failure", got, err)
+	}
+	got, err = db.Get([]byte("z"))
+	if err != nil || string(got) != "vz" {
+		t.Fatalf("Get(z)=(%q,%v), want vz,nil after append failure", got, err)
+	}
+}
+
+func TestCachingDB_DeleteRangeAfterCommandWALAppendNoopDoesNotAppend(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendCalls := 0
+	if err := db.DeleteRangeAfterCommandWALAppend([]byte("z"), []byte("a"), func() error {
+		appendCalls++
+		return nil
+	}); err != nil {
+		t.Fatalf("reversed no-op DeleteRangeAfterCommandWALAppend: %v", err)
+	}
+	if err := db.DeleteRangeAfterCommandWALAppend(nil, []byte{}, func() error {
+		appendCalls++
+		return nil
+	}); err != nil {
+		t.Fatalf("unbounded-to-empty no-op DeleteRangeAfterCommandWALAppend: %v", err)
+	}
+	if appendCalls != 0 {
+		t.Fatalf("append calls=%d, want 0 for no-op ranges", appendCalls)
+	}
+}
+
 func TestCachingDB_DeleteRange_WALFlushesAfterDeletes(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

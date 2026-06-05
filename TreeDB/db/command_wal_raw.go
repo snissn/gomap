@@ -761,6 +761,18 @@ func (db *DB) MarkCommandWALIntentRecoveryRequired(intent *CommandWALIntent) {
 	db.poisonCommandWALAfterPublicPostAppendFailure(intent)
 }
 
+// MarkCommandWALRecoveryRequired marks this open handle as requiring recovery
+// after a public command-WAL frame was appended but the caller could not prove
+// that the matching physical mutation became visible/publishable on this
+// handle. Reopen recovery may apply the frame, so further command appends and
+// AppliedCommandLSN publishes must fail closed.
+func (db *DB) MarkCommandWALRecoveryRequired() {
+	if db == nil || !db.commandWAL {
+		return
+	}
+	db.commandWALFlushPoisoned.Store(true)
+}
+
 func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
