@@ -36,6 +36,7 @@ TREEDB_LEAF_GENERATION_SEGMENT_TARGET="${TREEDB_LEAF_GENERATION_SEGMENT_TARGET:-
 TREEDB_REQUIRE_VALUE_LOG_BYTES="${TREEDB_REQUIRE_VALUE_LOG_BYTES:-}"
 TREEDB_REQUIRE_LEAF_VLOG_BYTES="${TREEDB_REQUIRE_LEAF_VLOG_BYTES:-}"
 TREEDB_VALIDATION_EXACT_SOURCE="${TREEDB_VALIDATION_EXACT_SOURCE:-}"
+TREEDB_SEARCH_PROFILE_DIR="${TREEDB_SEARCH_PROFILE_DIR:-}"
 NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
 VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
 
@@ -184,6 +185,25 @@ fi
 if [[ -n "$TREEDB_VALIDATION_EXACT_SOURCE" ]]; then
 	treedb_storage_args+=(-validation-exact-source "$TREEDB_VALIDATION_EXACT_SOURCE")
 fi
+treedb_profile_args=()
+treedb_search_profile_backend_supported() {
+	case "$1" in
+		treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+treedb_profile_args_for_backend() {
+	local backend="$1"
+	treedb_profile_args=()
+	if [[ -n "$TREEDB_SEARCH_PROFILE_DIR" ]] && treedb_search_profile_backend_supported "$backend"; then
+		treedb_profile_args=(-search-profile-dir "$TREEDB_SEARCH_PROFILE_DIR/$backend")
+	fi
+}
 mkdir -p "$RUN_DIR"
 
 cat >"$RUN_DIR/README.md" <<EOF
@@ -214,6 +234,7 @@ cat >"$RUN_DIR/README.md" <<EOF
   - \`TREEDB_REQUIRE_VALUE_LOG_BYTES=${TREEDB_REQUIRE_VALUE_LOG_BYTES:-<unset>}\`
   - \`TREEDB_REQUIRE_LEAF_VLOG_BYTES=${TREEDB_REQUIRE_LEAF_VLOG_BYTES:-<unset>}\`
   - \`TREEDB_VALIDATION_EXACT_SOURCE=${TREEDB_VALIDATION_EXACT_SOURCE:-<unset; demo default treedb>}\`
+  - \`TREEDB_SEARCH_PROFILE_DIR=${TREEDB_SEARCH_PROFILE_DIR:-<unset>}\`
 - Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
 
 This run compares persistent database-tier ANN search:
@@ -231,6 +252,10 @@ This run compares persistent database-tier ANN search:
 
 \`sqlite-vec\` is not included because upstream sqlite-vec's \`vec0\` table is
 brute-force today; ANN support is still future work.
+
+When \`TREEDB_SEARCH_PROFILE_DIR\` is set, the runner forwards it only to TreeDB
+\`column_graph\` rows; the native \`treedb\` row does not emit search profile
+artifacts.
 EOF
 
 echo "run dir: $RUN_DIR"
@@ -267,6 +292,7 @@ result_args=()
 
 if contains_backend treedb; then
 	echo "running TreeDB benchmark"
+	treedb_profile_args_for_backend treedb
 	GOWORK=off go run ./cmd/treedb_vector_search_demo \
 		-matrix=false \
 		-dataset-dir "$RUN_DIR/dataset" \
@@ -277,7 +303,8 @@ if contains_backend treedb; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		"${treedb_storage_args[@]}" \
+		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
+		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -289,6 +316,7 @@ fi
 
 if contains_backend treedb_column_graph; then
 	echo "running TreeDB column-store graph benchmark"
+	treedb_profile_args_for_backend treedb_column_graph
 	GOWORK=off go run ./cmd/treedb_vector_search_demo \
 		-matrix=false \
 		-vector-index-strategy column_graph \
@@ -300,7 +328,8 @@ if contains_backend treedb_column_graph; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		"${treedb_storage_args[@]}" \
+		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
+		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -312,6 +341,7 @@ fi
 
 if contains_backend treedb_column_graph_quantized_only; then
 	echo "running TreeDB column-store graph scalar_u8 quantized_only benchmark"
+	treedb_profile_args_for_backend treedb_column_graph_quantized_only
 	GOWORK=off go run ./cmd/treedb_vector_search_demo \
 		-matrix=false \
 		-vector-index-strategy column_graph \
@@ -325,7 +355,8 @@ if contains_backend treedb_column_graph_quantized_only; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		"${treedb_storage_args[@]}" \
+		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
+		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -337,6 +368,7 @@ fi
 
 if contains_backend treedb_column_graph_quantized_rerank; then
 	echo "running TreeDB column-store graph scalar_u8 quantized_rerank benchmark"
+	treedb_profile_args_for_backend treedb_column_graph_quantized_rerank
 	GOWORK=off go run ./cmd/treedb_vector_search_demo \
 		-matrix=false \
 		-vector-index-strategy column_graph \
@@ -351,7 +383,8 @@ if contains_backend treedb_column_graph_quantized_rerank; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		"${treedb_storage_args[@]}" \
+		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
+		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
