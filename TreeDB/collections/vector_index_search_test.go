@@ -998,7 +998,19 @@ func TestSearchVectorIndexWithBufferPreparedCacheCloseReleasesHandles2363(t *tes
 	}
 	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 1 || snap.ActiveHandles != 1 {
 		_ = d.Close()
-		t.Fatalf("cache before DB close=%+v want rebuilt active handle", snap)
+		t.Fatalf("cache before manager flush=%+v want rebuilt active handle", snap)
+	}
+	if col.manager == nil {
+		_ = d.Close()
+		t.Fatal("test setup missing collection manager")
+	}
+	if err := col.manager.FlushAll(); err != nil {
+		_ = d.Close()
+		t.Fatalf("manager FlushAll with active prepared cache: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 1 || snap.ActiveHandles != 1 {
+		_ = d.Close()
+		t.Fatalf("cache after manager flush=%+v want still registered active handle", snap)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("DB Close: %v", err)
