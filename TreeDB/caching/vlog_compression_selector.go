@@ -90,6 +90,13 @@ const (
 	// on a stable block codec path and let the frame preparer fall back to raw
 	// only when compressed bytes are not worth keeping.
 	forcePointerAutoBlockMinPayloadBytes = 512
+	// Template-v1 retained bodies in collection typed-storage runs are often
+	// smaller than the generic forced-pointer threshold after column elision, but
+	// they arrive as highly repetitive value-log batches. Treat those batches as
+	// storage-first once the frame has enough total bytes to amortize block
+	// compression.
+	retainedStorageFirstMinUnitPayloadBytes  = 128
+	retainedStorageFirstMinBatchPayloadBytes = 4 << 10
 	// High-entropy forced-pointer streams may bypass compression in explicit
 	// throughput policy. Balanced/size policy treats forced pointers as durable
 	// storage-first payloads and keeps them on block compression so retained JSON
@@ -1483,6 +1490,10 @@ func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec)
 	return configured
 }
 
+func chooseRetainedStorageFirstBlockCodec(l *lane, configured valuelog.BlockCodec) valuelog.BlockCodec {
+	return chooseLargePayloadNoDictBlockCodec(l, configured)
+}
+
 func (db *DB) storageFirstValueLogAuto(unitPayloadBytes int) bool {
 	if db == nil {
 		return false
@@ -1497,6 +1508,44 @@ func (db *DB) storageFirstValueLogAuto(unitPayloadBytes int) bool {
 		return true
 	}
 	return unitPayloadBytes > db.minValueLogInlineThreshold()
+}
+
+func (db *DB) retainedStorageFirstValueLogAuto(rawPayloadBytes, unitPayloadBytes int, records []valuelog.Record) bool {
+	if db == nil || len(records) == 0 {
+		return false
+	}
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+		return false
+	}
+	if rawPayloadBytes <= 0 {
+		for i := range records {
+			rawPayloadBytes += len(records[i].Value)
+		}
+	}
+	if unitPayloadBytes <= 0 {
+		unitPayloadBytes = rawPayloadBytes / len(records)
+	}
+	if !valueLogRecordsLookRetainedJSONLike(records) {
+		return false
+	}
+	if db.storageFirstValueLogAuto(unitPayloadBytes) {
+		return true
+	}
+	if unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
+		return true
+	}
+	return unitPayloadBytes >= retainedStorageFirstMinUnitPayloadBytes &&
+		rawPayloadBytes >= retainedStorageFirstMinBatchPayloadBytes
+}
+
+func (db *DB) retainedStorageFirstValueLogAutoValue(value []byte) bool {
+	if db == nil || !valueLogPayloadLooksRetainedJSONLike(value) {
+		return false
+	}
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+		return false
+	}
+	return db.storageFirstValueLogAuto(len(value)) || len(value) >= forcePointerAutoBlockMinPayloadBytes
 }
 
 func (db *DB) valueLogPayloadExceedsInlineThreshold(unitPayloadBytes int) bool {
@@ -1923,6 +1972,31 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		if targetCompressedBytes < largePayloadTargetBytes {
 			targetCompressedBytes = largePayloadTargetBytes
 		}
+	}
+	k := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, targetCompressedBytes, ratio)
+	if k < 1 {
+		k = 1
+	}
+	if k > valuelog.MaxFrameK {
+		k = valuelog.MaxFrameK
+	}
+	k = db.clampLiveLeafLogFrameK(l, k)
+	recordLaneVlogBlockK(l, codec, k)
+	return k
+}
+
+func (db *DB) chooseRetainedStorageFirstValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, codec valuelog.BlockCodec) int {
+	if records <= 1 {
+		recordLaneVlogBlockK(l, codec, 1)
+		return 1
+	}
+	ratio, ratioSamples := laneVlogBlockObservedRatioWithSamples(l, codec)
+	if ratio <= 0 || ratioSamples == 0 || ratio >= 0.98 {
+		ratio = forcePointerBlockBootstrapRatio
+	}
+	targetCompressedBytes := db.valueLogBlockTargetBytes
+	if targetCompressedBytes < storageFirstRetainedValueLogBlockTargetCompressedBytes {
+		targetCompressedBytes = storageFirstRetainedValueLogBlockTargetCompressedBytes
 	}
 	k := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, targetCompressedBytes, ratio)
 	if k < 1 {
