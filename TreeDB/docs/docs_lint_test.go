@@ -223,6 +223,69 @@ func TestDocs_VectorProjectionFetchGuidance(t *testing.T) {
 	}
 }
 
+func TestDocs_VectorHighQPSBenchmarkWorkflow2410(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "guides", "vector-search-benchmark-workflow.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	doc := string(data)
+	normalizedDoc := strings.Join(strings.Fields(doc), " ")
+
+	for _, want := range []string{
+		"# TreeDB vs USearch vector benchmark workflow",
+		"## Current performance snapshot: Tier S exact no-document comparison",
+		"2feb1f0e35459d1b3d044008203d0c8afcf5630f",
+		"Apple M3 (`darwin/arm64`)",
+		"Fixture: 10k documents, 64 dimensions, `M=16`, `efConstruction=128`",
+		"USearch is a pure in-memory external ANN baseline, not TreeDB persistent storage",
+		"| `TreeDB_CollectionSearchVectorIndexWithBuffer` | 1 | 43,049 | 0 | 0 | collection buffered, caller-owned results |",
+		"| `TreeDB_CollectionSearchVectorIndexNoDocsOneShot` | 8 | 44,679 | 816 | 2 | public one-shot convenience, response-owned results |",
+		"| `TreeDB_SearchWithBufferParallel` | 8 | 8,610 | 0 | 0 | reusable searcher, one buffer/searcher per worker |",
+		"| `USearch_SearchParallel` | 8 | 6,906 | 139 | 3 | pure in-memory USearch baseline |",
+		"search_route_hnsw_search_pack/search=1",
+		"hnsw_search_pack_active/search=1",
+		"docs_fetched/search=0",
+		"open_searcher_calls/op=0",
+		"open_setup_in_timed_loop=0",
+		"graph_row_fallbacks/search=0",
+		"typed_column_vector_fallbacks/search=0",
+		"vector_scratch_decodes/search=0",
+		"`816 B/op`, `2 allocs/op`, and `response_owned_result_alloc/op=1`",
+		"`TreeDB_CollectionSearchVectorIndexWithDocumentsOneShot` | 0 | 1.000 | 10.00",
+		"libusearch_c.dylib",
+		"libusearch_c.so",
+		"DYLD_LIBRARY_PATH",
+		"LD_LIBRARY_PATH",
+		"$RUN_DIR/README.md",
+		"$RUN_DIR/bench.txt",
+		"RUN_DIR=/tmp/gomap_vector_search_compare_tier_s_$(date +%Y%m%d_%H%M%S)",
+		"TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64",
+		"TREEDB_VECTOR_BENCH_DOCS=100000 TREEDB_VECTOR_BENCH_DIMS=128",
+		"CPU_LIST=1,8 BENCHTIME=1000x COUNT=3",
+		"BENCH_REGEX='BenchmarkCollectionVectorUSearchProductionCompare$'",
+		"/tmp/gomap_2366_final_20260605_030355/closeout_summary.md",
+		"/tmp/gomap_2366_final_20260605_030355/tier_s_bench.log",
+		"/tmp/gomap_2366_final_20260605_030355/with_buffer_alloc_proof.log",
+		"The exact FP32 `hnsw_search_pack_v1` counters above are distinct from future quantized route counters",
+	} {
+		normalizedWant := strings.Join(strings.Fields(want), " ")
+		if !strings.Contains(doc, want) && !strings.Contains(normalizedDoc, normalizedWant) {
+			t.Fatalf("%s missing #2410 vector benchmark contract text %q", path, want)
+		}
+	}
+
+	readmePath := filepath.Join(treeRoot, "README.md")
+	readme, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", readmePath, err)
+	}
+	if !strings.Contains(string(readme), "TreeDB/docs/guides/vector-search-benchmark-workflow.md") {
+		t.Fatalf("%s missing link to #2410 vector benchmark workflow guide", readmePath)
+	}
+}
+
 func TestTypedStorageStorageFormatDocsMentionCompatibilityDirectory(t *testing.T) {
 	treeRoot, _ := repoRoots(t)
 	path := filepath.Join(treeRoot, "docs", "spec", "storage-format.md")
