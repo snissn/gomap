@@ -1563,6 +1563,14 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if opts.ReserveRIDs == nil {
+		// A live appender may have advanced the RID namespace beyond what a disk
+		// scan can observe (for example, command-WAL native-root writes). Share its
+		// allocator so online rewrite cannot create duplicate value-log RIDs.
+		if reserver := db.currentValueLogRIDReserver(); reserver != nil {
+			opts.ReserveRIDs = reserver.ReserveRIDs
+		}
+	}
 	if err := db.publishValueLogSetNoRefresh(); err != nil {
 		return stats, err
 	}

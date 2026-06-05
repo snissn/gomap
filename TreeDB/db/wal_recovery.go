@@ -721,6 +721,7 @@ func commitFenceSatisfied(records []commitlog.Record, ridMap map[uint64]page.Val
 
 type replayInlineAppender struct {
 	mu      sync.Mutex
+	db      *DB
 	writer  *rewriteWriter
 	nextRID uint64
 	dirty   bool
@@ -764,6 +765,7 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
 	return &replayInlineAppender{
+		db:      db,
 		writer:  writer,
 		nextRID: maxRID + 1,
 	}, nil
@@ -782,11 +784,10 @@ func (a *replayInlineAppender) appendLocked(value []byte) (page.ValuePtr, error)
 	if a == nil || a.writer == nil {
 		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
 	}
-	if a.nextRID == 0 {
-		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+	rid, err := a.reserveAppendRIDsLocked(1)
+	if err != nil {
+		return page.ValuePtr{}, err
 	}
-	rid := a.nextRID
-	a.nextRID++
 	ptr, err := a.writer.appendValue(rid, value)
 	if err != nil {
 		return page.ValuePtr{}, err
@@ -799,17 +800,69 @@ func (a *replayInlineAppender) AppendValues(values [][]byte) ([]page.ValuePtr, e
 	if a == nil {
 		return nil, fmt.Errorf("commitlog: replay value-log appender unavailable")
 	}
+	ptrs := make([]page.ValuePtr, len(values))
+	if len(values) == 0 {
+		return ptrs, nil
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	ptrs := make([]page.ValuePtr, len(values))
+	if a.writer == nil {
+		return nil, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	startRID, err := a.reserveAppendRIDsLocked(len(values))
+	if err != nil {
+		return nil, err
+	}
 	for i := range values {
-		ptr, err := a.appendLocked(values[i])
+		ptr, err := a.writer.appendValue(startRID+uint64(i), values[i])
 		if err != nil {
 			return nil, err
 		}
 		ptrs[i] = ptr
 	}
+	a.dirty = true
 	return ptrs, nil
+}
+
+func (a *replayInlineAppender) ReserveRIDs(count int) (uint64, error) {
+	if a == nil {
+		return 0, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if err := validateRewriteRIDCount(count); err != nil {
+		return 0, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writer == nil {
+		return 0, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	return a.reserveLocalRIDsLocked(count)
+}
+
+func (a *replayInlineAppender) reserveLocalRIDsLocked(count int) (uint64, error) {
+	start := a.nextRID
+	if start == 0 {
+		return 0, fmt.Errorf("value-log rid space exhausted")
+	}
+	if err := validateRewriteRIDRange(start, count); err != nil {
+		return 0, err
+	}
+	a.nextRID = start + uint64(count)
+	return start, nil
+}
+
+// reserveAppendRIDsLocked keeps command-WAL inline leaf/value appends in the
+// same RID namespace as any appender installed after replay, such as cached
+// mode's persistent value-log appender.
+func (a *replayInlineAppender) reserveAppendRIDsLocked(count int) (uint64, error) {
+	if a != nil && a.db != nil {
+		if reserver := a.db.currentValueLogRIDReserver(); reserver != nil {
+			if current, ok := reserver.(*replayInlineAppender); !ok || current != a {
+				return reserver.ReserveRIDs(count)
+			}
+		}
+	}
+	return a.reserveLocalRIDsLocked(count)
 }
 
 func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
@@ -821,11 +874,10 @@ func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr,
 	if a == nil || a.writer == nil {
 		return page.LeafLogPtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
 	}
-	if a.nextRID == 0 {
-		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
+	rid, err := a.reserveAppendRIDsLocked(1)
+	if err != nil {
+		return page.LeafLogPtr{}, err
 	}
-	rid := a.nextRID
-	a.nextRID++
 	leafPtr, err := a.writer.appendLeafPageWithRID(rid, leafPage)
 	if err != nil {
 		return page.LeafLogPtr{}, err
