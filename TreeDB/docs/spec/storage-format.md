@@ -380,6 +380,12 @@ bytes FramePayload
 - `Offsets` are monotonic and define raw value slices.
 - If `FrameFlags` indicates compression, frame payload is decoded first.
 - `DictID` selects dictionary for dict-compressed payloads.
+- For compressed non-dictionary block frames (`DictID=0`), `Reserved` stores
+  the block codec id:
+  - `1`: Snappy
+  - `2`: LZ4
+  - `3`: Zstandard
+  Readers must fail closed on unknown non-zero block codec ids.
 
 ### 7.2 Compact split-leaf payload format
 

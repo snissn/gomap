@@ -20,7 +20,7 @@ func TestFormatConfig_SaveLoadApply_RoundTrip(t *testing.T) {
 
 		ValueLog: ValueLogOptions{
 			Compression: ValueLogCompressionDict,
-			BlockCodec:  ValueLogBlockLZ4,
+			BlockCodec:  ValueLogBlockZSTD,
 			AutoPolicy:  ValueLogAutoSize,
 		},
 	})
@@ -77,7 +77,7 @@ func TestFormatConfig_SaveLoadApply_RoundTrip(t *testing.T) {
 	if got, want := applied.ValueLog.Compression, ValueLogCompressionDict; got != want {
 		t.Fatalf("ValueLog.Compression=%v, want %v", got, want)
 	}
-	if got, want := applied.ValueLog.BlockCodec, ValueLogBlockLZ4; got != want {
+	if got, want := applied.ValueLog.BlockCodec, ValueLogBlockZSTD; got != want {
 		t.Fatalf("ValueLog.BlockCodec=%v, want %v", got, want)
 	}
 	if got, want := applied.ValueLog.AutoPolicy, ValueLogAutoSize; got != want {

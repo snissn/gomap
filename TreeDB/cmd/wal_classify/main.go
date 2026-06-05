@@ -392,6 +392,8 @@ func scanFrameMeta(path string) (frameMeta, error) {
 					mode = "block_snappy"
 				case valuelog.BlockCodecLZ4:
 					mode = "block_lz4"
+				case valuelog.BlockCodecZSTD:
+					mode = "block_zstd"
 				default:
 					mode = "block_unknown"
 				}
@@ -488,6 +490,8 @@ func blockCodecName(id uint8) string {
 		return "snappy"
 	case valuelog.BlockCodecLZ4:
 		return "lz4"
+	case valuelog.BlockCodecZSTD:
+		return "zstd"
 	default:
 		return "none/unknown"
 	}

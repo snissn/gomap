@@ -32,6 +32,26 @@ func ColumnRetainedPayloadEncodingStatus(cfg *ColumnStoreConfig) (encoding, stat
 	}
 }
 
+// ColumnRetainedPayloadCompressionStatus reports the durable storage compression
+// policy expected for retained payload bodies. Retained payload bytes are stored
+// through TreeDB's persistent value-log/leaf-log path, whose default compression
+// mode resolves to auto grouped-frame compression.
+func ColumnRetainedPayloadCompressionStatus(cfg *ColumnStoreConfig) (compression, policy, status string) {
+	if cfg == nil || !cfg.Enabled {
+		return "none", "not_configured", "not_configured"
+	}
+	switch policyValue := columnRetainedPayloadAuditPolicy(cfg); policyValue {
+	case ColumnRetainedPayloadNone:
+		return "none", "none", "inactive_no_retained_payload"
+	case ColumnRetainedPayloadFull, "":
+		return "value_log_grouped_frame", "default_value_log_auto", "active_value_log_auto_grouped_frame_full_retained_payload"
+	case ColumnRetainedPayloadNonColumn:
+		return "value_log_grouped_frame", "default_value_log_auto_storage_first", "active_value_log_auto_grouped_frame_non_column_retained_payload"
+	default:
+		return "unavailable", "unavailable", fmt.Sprintf("unknown_retained_payload_policy_%s", policyValue)
+	}
+}
+
 type ColumnRetainedPayloadPathAudit struct {
 	RetainedPayloadPolicy         ColumnRetainedPayloadPolicy `json:"retained_payload_policy"`
 	RetainedPayloadEncoding       string                      `json:"retained_payload_encoding"`

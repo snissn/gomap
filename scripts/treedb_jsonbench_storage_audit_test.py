@@ -53,6 +53,7 @@ class StorageAuditTest(unittest.TestCase):
             (root / "index.db").write_bytes(b"index")
             (root / "leaf_vlog" / "value-l255-000001.log").write_bytes(
                 record(grouped_frame([100, 200], b"x" * 80, compressed=True, reserved=2), grouped=True)
+                + record(grouped_frame([120, 80], b"y" * 40, compressed=True, reserved=3), grouped=True)
             )
             (root / "value_vlog" / "value-l000001.log").write_bytes(
                 record(b"raw-json-payload", grouped=False)
@@ -68,6 +69,9 @@ class StorageAuditTest(unittest.TestCase):
         leaf = report["vlog_frame_audit"]["leaf_vlog"]
         value = report["vlog_frame_audit"]["value_vlog"]
         self.assertEqual(leaf["modes"]["grouped_block_lz4"]["raw_payload_bytes"], 300)
+        self.assertEqual(leaf["modes"]["grouped_block_zstd"]["codec"], "zstd")
+        self.assertEqual(leaf["modes"]["grouped_block_zstd"]["records_per_frame"], 2)
+        self.assertEqual(leaf["modes"]["grouped_block_zstd"]["raw_payload_bytes_per_frame"], 200)
         self.assertEqual(leaf["raw_mode_payload_bytes"], 0)
         self.assertEqual(value["modes"]["raw_record"]["raw_payload_bytes"], len(b"raw-json-payload"))
         self.assertEqual(value["modes"]["grouped_block_snappy"]["stored_payload_bytes"], 25)

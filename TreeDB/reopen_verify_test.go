@@ -1271,6 +1271,7 @@ func TestReopenVerify_WALOn_Checkpoint_CompressionModes(t *testing.T) {
 		{name: "off", compression: treedb.ValueLogCompressionOff},
 		{name: "block_snappy", compression: treedb.ValueLogCompressionBlock, codec: treedb.ValueLogBlockSnappy},
 		{name: "block_lz4", compression: treedb.ValueLogCompressionBlock, codec: treedb.ValueLogBlockLZ4},
+		{name: "block_zstd", compression: treedb.ValueLogCompressionBlock, codec: treedb.ValueLogBlockZSTD},
 		{name: "dict", compression: treedb.ValueLogCompressionDict},
 		{name: "auto", compression: treedb.ValueLogCompressionAuto},
 	}

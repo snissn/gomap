@@ -140,6 +140,7 @@ func TestChooseValueLogBlockWriteK_LargePayloadBootstrapKeepsSelectorIncompressi
 		valueLogCompressionMode:  uint8(vlogCompressionAuto),
 		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
 		valueLogBlockTargetBytes: 4096,
+		valueLogThreshold:        1 << 20,
 	}
 	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
 	selector.dwellBytes = 0

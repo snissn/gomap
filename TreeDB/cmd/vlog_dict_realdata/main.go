@@ -184,7 +184,7 @@ func main() {
 	benchMode := flag.String("bench-mode", "wal_on", "Bench write-path: wal_on|wal_off")
 	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
 	benchCompressionMode := flag.String("bench-compression-mode", "default", "Bench compression mode: default|off|dict|block")
-	benchBlockCodec := flag.String("bench-block-codec", "snappy", "Bench block codec when -bench-compression-mode=block: snappy|lz4")
+	benchBlockCodec := flag.String("bench-block-codec", "snappy", "Bench block codec when -bench-compression-mode=block: snappy|lz4|zstd")
 	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off|prepass")
 	benchKeepDir := flag.Bool("bench-keep-dir", false, "Keep bench directory after run")
 	cpuProfile := flag.String("cpu-profile", "", "Write CPU profile to this file (optional)")
@@ -711,8 +711,10 @@ func parseBenchBlockCodec(codec string) (string, treedb.ValueLogBlockCodec, erro
 		return "snappy", treedb.ValueLogBlockSnappy, nil
 	case "lz4":
 		return "lz4", treedb.ValueLogBlockLZ4, nil
+	case "zstd":
+		return "zstd", treedb.ValueLogBlockZSTD, nil
 	default:
-		return "", 0, fmt.Errorf("unsupported -bench-block-codec=%q (expected snappy|lz4)", codec)
+		return "", 0, fmt.Errorf("unsupported -bench-block-codec=%q (expected snappy|lz4|zstd)", codec)
 	}
 }
 
