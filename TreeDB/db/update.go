@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -13,7 +12,9 @@ import (
 // ErrNilUpdateFunc indicates a nil callback was passed to Update.
 var ErrNilUpdateFunc = errors.New("treedb: nil update function")
 
-// ErrUpdateValueNil indicates an Update callback requested Set with a nil value.
+// ErrUpdateValueNil is retained for callers that handled the former nil-value
+// Update error. Raw KV Update now canonicalizes nil SetUpdate values to
+// zero-length values.
 var ErrUpdateValueNil = errors.New("value cannot be nil")
 
 // UpdateOp describes the write produced by an Update callback.
@@ -70,9 +71,7 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 	if db == nil {
 		return ErrClosed
 	}
-	if len(key) == 0 {
-		return batchpkg.ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	if fn == nil {
 		return ErrNilUpdateFunc
 	}
@@ -93,8 +92,8 @@ func (db *DB) update(key []byte, fn UpdateFunc, syncWrite bool) error {
 		if err != nil {
 			return err
 		}
-		if result.Op == UpdateSet && result.Value == nil {
-			return ErrUpdateValueNil
+		if result.Op == UpdateSet {
+			result.Value = normalizeRawKVValue(result.Value)
 		}
 		if result.Op != UpdateNoop && result.Op != UpdateSet && result.Op != UpdateDelete {
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)

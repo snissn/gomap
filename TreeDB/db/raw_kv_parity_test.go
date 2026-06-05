@@ -44,6 +44,26 @@ func TestRawKVParityBackendEmptyKeyNilValue(t *testing.T) {
 	}
 	requireBackendRawKVValue(t, db, nil, []byte("empty"))
 
+	if err := db.Update(nil, func(old []byte) (UpdateResult, error) {
+		if !bytes.Equal(old, []byte("empty")) {
+			t.Fatalf("Update(nil) old=%q want empty", old)
+		}
+		return SetUpdate(nil), nil
+	}); err != nil {
+		t.Fatalf("Update(nil -> nil value): %v", err)
+	}
+	requireBackendRawKVValue(t, db, []byte{}, []byte{})
+
+	if err := db.UpdateSync([]byte{}, func(old []byte) (UpdateResult, error) {
+		if old == nil || len(old) != 0 {
+			t.Fatalf("UpdateSync(empty) old=%#v want non-nil zero-length", old)
+		}
+		return SetUpdate([]byte("updated-empty")), nil
+	}); err != nil {
+		t.Fatalf("UpdateSync(empty): %v", err)
+	}
+	requireBackendRawKVValue(t, db, nil, []byte("updated-empty"))
+
 	b := db.NewBatch()
 	if err := b.Set(nil, nil); err != nil {
 		_ = b.Close()
@@ -71,6 +91,34 @@ func TestRawKVParityBackendEmptyKeyNilValue(t *testing.T) {
 	} else if has {
 		t.Fatal("empty key still present after Delete(nil)")
 	}
+}
+
+func TestRawKVParityBackendUpdateEmptyKeyNilValue(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Update(nil, func(old []byte) (UpdateResult, error) {
+		if old != nil {
+			t.Fatalf("initial old=%#v want nil missing", old)
+		}
+		return SetUpdate(nil), nil
+	}); err != nil {
+		t.Fatalf("Update(nil): %v", err)
+	}
+	requireBackendRawKVValue(t, db, []byte{}, []byte{})
+
+	if err := db.UpdateSync([]byte{}, func(old []byte) (UpdateResult, error) {
+		if old == nil || len(old) != 0 {
+			t.Fatalf("old=%#v want non-nil empty", old)
+		}
+		return SetUpdate([]byte("updated")), nil
+	}); err != nil {
+		t.Fatalf("UpdateSync(empty): %v", err)
+	}
+	requireBackendRawKVValue(t, db, nil, []byte("updated"))
 }
 
 func TestCommandWALRawKVParityBackendRecoveryEmptyKeyNilValue(t *testing.T) {

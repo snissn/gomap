@@ -87,6 +87,26 @@ func TestRawKVParityEmptyPointKeyNilValueCached(t *testing.T) {
 	}
 	requireRawKVValue(t, db, []byte("nil-value"), []byte{})
 
+	if err := db.Update(nil, func(old []byte) (UpdateResult, error) {
+		if !bytes.Equal(old, []byte("nil-key-value")) {
+			t.Fatalf("Update(nil) old=%q want nil-key-value", old)
+		}
+		return SetUpdate(nil), nil
+	}); err != nil {
+		t.Fatalf("Update(nil -> nil value): %v", err)
+	}
+	requireRawKVValue(t, db, []byte{}, []byte{})
+
+	if err := db.UpdateSync([]byte{}, func(old []byte) (UpdateResult, error) {
+		if old == nil || len(old) != 0 {
+			t.Fatalf("UpdateSync(empty) old=%#v want non-nil zero-length", old)
+		}
+		return SetUpdate([]byte("updated-empty")), nil
+	}); err != nil {
+		t.Fatalf("UpdateSync(empty): %v", err)
+	}
+	requireRawKVValue(t, db, nil, []byte("updated-empty"))
+
 	if err := db.Delete(nil); err != nil {
 		t.Fatalf("Delete(nil): %v", err)
 	}
@@ -97,6 +117,48 @@ func TestRawKVParityEmptyPointKeyNilValueCached(t *testing.T) {
 	}
 	if err := db.Delete([]byte{}); err != nil {
 		t.Fatalf("Delete(empty missing): %v", err)
+	}
+}
+
+func TestRawKVParityUpdateEmptyKeyNilValueCached(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Update(nil, func(old []byte) (UpdateResult, error) {
+		if old != nil {
+			t.Fatalf("initial old=%#v want nil missing", old)
+		}
+		return SetUpdate(nil), nil
+	}); err != nil {
+		t.Fatalf("Update(nil -> nil value): %v", err)
+	}
+	requireRawKVValue(t, db, []byte{}, []byte{})
+
+	if err := db.UpdateSync([]byte{}, func(old []byte) (UpdateResult, error) {
+		if old == nil || len(old) != 0 {
+			t.Fatalf("old=%#v want non-nil empty", old)
+		}
+		return SetUpdate([]byte("updated")), nil
+	}); err != nil {
+		t.Fatalf("UpdateSync(empty): %v", err)
+	}
+	requireRawKVValue(t, db, nil, []byte("updated"))
+
+	if err := db.Update([]byte{}, func(old []byte) (UpdateResult, error) {
+		if !bytes.Equal(old, []byte("updated")) {
+			t.Fatalf("old=%q want updated", old)
+		}
+		return DeleteUpdate(), nil
+	}); err != nil {
+		t.Fatalf("Update(empty delete): %v", err)
+	}
+	if has, err := db.Has(nil); err != nil {
+		t.Fatalf("Has(nil after Update delete): %v", err)
+	} else if has {
+		t.Fatal("empty key still present after Update delete")
 	}
 }
 

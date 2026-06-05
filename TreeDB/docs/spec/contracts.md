@@ -16,7 +16,7 @@ Status:
 - Raw KV keys and values are byte strings.
 - The empty point key is a valid raw KV key and sorts before every non-empty key.
 - A nil point key passed to raw KV point APIs is equivalent to the empty key.
-- A nil raw KV value passed to `Set`/batch `Set` is stored as a zero-length value.
+- A nil raw KV value passed to `Set`/batch `Set` or an `Update` set intent is stored as a zero-length value.
 - Key order is lexicographic (`bytes.Compare` semantics).
 - The tree is ordered and range-addressable.
 - Collection/document APIs may keep separate non-empty logical ID contracts.
@@ -73,8 +73,8 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 
 - `Set`, `Delete` are non-sync writes.
 - `SetSync`, `DeleteSync` request sync durability boundary subject to durability mode.
-- Point `Set`/`SetSync`/`Get`/`Has`/`Delete`/`DeleteSync` accept the empty key; nil point keys are canonicalized to the empty key.
-- Point `Set`/`SetSync` accept nil values and store them as zero-length values.
+- Point `Set`/`SetSync`/`Get`/`Has`/`Delete`/`DeleteSync`/`Update`/`UpdateSync` accept the empty key; nil point keys are canonicalized to the empty key.
+- Point `Set`/`SetSync` and `Update`/`UpdateSync` set intents accept nil values and store them as zero-length values.
 - `Update`, `UpdateSync` are single-key read-modify-write helpers. The callback
   receives the current value as a safe copy, or `nil` when the key is absent, and
   returns `Set`, `Delete`, or `Noop` intent through `UpdateResult`.

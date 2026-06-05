@@ -20736,9 +20736,7 @@ func (db *DB) UpdateSync(key []byte, fn backenddb.UpdateFunc) error {
 }
 
 func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error {
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	if fn == nil {
 		return backenddb.ErrNilUpdateFunc
 	}
@@ -20757,8 +20755,8 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 		if err != nil {
 			return err
 		}
-		if result.Op == backenddb.UpdateSet && result.Value == nil {
-			return ErrValueNil
+		if result.Op == backenddb.UpdateSet {
+			result.Value = normalizeRawKVValue(result.Value)
 		}
 		if result.Op != backenddb.UpdateNoop && result.Op != backenddb.UpdateSet && result.Op != backenddb.UpdateDelete {
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)

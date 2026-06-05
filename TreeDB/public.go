@@ -1558,6 +1558,7 @@ func (db *DB) SetSync(key, value []byte) error {
 // the same single-key commit serialization but remain unconditional writes.
 // Because fn may be retried, it should avoid externally visible side effects.
 func (db *DB) Update(key []byte, fn UpdateFunc) error {
+	key = normalizeRawKVPointKey(key)
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
@@ -1579,6 +1580,7 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 // not lose each other's changes. Because fn may be retried, it should avoid
 // externally visible side effects.
 func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
+	key = normalizeRawKVPointKey(key)
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}

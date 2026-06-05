@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -99,6 +100,26 @@ func TestRawKVParityCachedEmptyKeyNilValue(t *testing.T) {
 		t.Fatalf("Set(empty,value): %v", err)
 	}
 	requireCachingRawKVValue(t, db, nil, []byte("empty"))
+
+	if err := db.Update(nil, func(old []byte) (backenddb.UpdateResult, error) {
+		if !bytes.Equal(old, []byte("empty")) {
+			t.Fatalf("Update(nil) old=%q want empty", old)
+		}
+		return backenddb.SetUpdate(nil), nil
+	}); err != nil {
+		t.Fatalf("Update(nil -> nil value): %v", err)
+	}
+	requireCachingRawKVValue(t, db, []byte{}, []byte{})
+
+	if err := db.UpdateSync([]byte{}, func(old []byte) (backenddb.UpdateResult, error) {
+		if old == nil || len(old) != 0 {
+			t.Fatalf("UpdateSync(empty) old=%#v want non-nil zero-length", old)
+		}
+		return backenddb.SetUpdate([]byte("updated-empty")), nil
+	}); err != nil {
+		t.Fatalf("UpdateSync(empty): %v", err)
+	}
+	requireCachingRawKVValue(t, db, nil, []byte("updated-empty"))
 
 	b := db.NewBatch()
 	if err := b.Set(nil, nil); err != nil {
