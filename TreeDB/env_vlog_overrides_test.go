@@ -59,6 +59,7 @@ func TestApplyEnvMaintenanceOverrides_VlogBlockCodec(t *testing.T) {
 		env  string
 		want ValueLogBlockCodec
 	}{
+		{env: "snappy", want: ValueLogBlockSnappy},
 		{env: "lz4", want: ValueLogBlockLZ4},
 		{env: "zstd", want: ValueLogBlockZSTD},
 	}

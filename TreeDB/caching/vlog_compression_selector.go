@@ -1758,7 +1758,7 @@ func valueLogPayloadLooksRetainedJSONLike(value []byte) bool {
 			return true
 		case 'T':
 			return len(value)-i >= 4 &&
-				(value[i] == 'T' && value[i+1] == 'D' && value[i+2] == '1') &&
+				(value[i+1] == 'D' && value[i+2] == '1') &&
 				(value[i+3] == 'D' || value[i+3] == 'I' || value[i+3] == 'H')
 		default:
 			return false

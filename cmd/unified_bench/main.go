@@ -6142,7 +6142,7 @@ func renderTreeDBVlogCodecSummaryString(instances []*DBInstance, treeStats map[s
 				{label: "stored_ratio", key: "treedb.cache.vlog_outer_leaf_codec.stored_ratio." + codec},
 			})
 		}
-		for _, codec := range []string{"snappy", "lz4"} {
+		for _, codec := range []string{"snappy", "lz4", "zstd"} {
 			appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_block.k."+codec, []treeDBVlogSummaryMetric{
 				{label: "count", key: "treedb.cache.vlog_block.k.count." + codec},
 				{label: "avg", key: "treedb.cache.vlog_block.k.avg." + codec},
@@ -6195,7 +6195,7 @@ func appendTreeDBLeafScanVlogSummaryLines(sb *strings.Builder, stats map[string]
 			{label: "stored_ratio", key: "treedb.cache.vlog_leaf_scan.outer_leaf_codec.stored_ratio." + codec},
 		})
 	}
-	for _, codec := range []string{"snappy", "lz4"} {
+	for _, codec := range []string{"snappy", "lz4", "zstd"} {
 		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.block.k."+codec, []treeDBVlogSummaryMetric{
 			{label: "count", key: "treedb.cache.vlog_leaf_scan.block.k.count." + codec},
 			{label: "avg", key: "treedb.cache.vlog_leaf_scan.block.k.avg." + codec},
