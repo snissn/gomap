@@ -27,6 +27,9 @@ type columnVectorGraphSharedPreparedSearch struct {
 	invNormSource         *columnVectorGraphInvNormStateSource
 	rowRefSource          *columnVectorGraphRowRefStateSource
 	documentIDSource      *columnVectorGraphDocumentIDStateSource
+	hnswSearchPack        *columnHNSWSearchPackPreparedView
+	hnswSearchPackStatus  columnHNSWSearchPackPreparedStatus
+	hnswSearchPackNanos   uint64
 	adjacencyLayerSources *columnVectorGraphAdjacencyDirectSources
 	preparedSearch        *columnVectorGraphPreparedSearchView
 }
@@ -193,6 +196,9 @@ func newColumnVectorGraphSharedPreparedSearchFromReader(reader *columnVectorGrap
 		invNormSource:         reader.invNormSource,
 		rowRefSource:          reader.rowRefSource,
 		documentIDSource:      reader.documentIDSource,
+		hnswSearchPack:        reader.hnswSearchPack,
+		hnswSearchPackStatus:  reader.hnswSearchPackStatus,
+		hnswSearchPackNanos:   reader.hnswSearchPackOpenNanos,
 		adjacencyLayerSources: reader.adjacencyLayerSources,
 		preparedSearch:        reader.preparedSearch,
 	}
@@ -205,6 +211,7 @@ func newColumnVectorGraphSharedPreparedSearchFromReader(reader *columnVectorGrap
 	reader.invNormSource = nil
 	reader.rowRefSource = nil
 	reader.documentIDSource = nil
+	reader.hnswSearchPack = nil
 	reader.adjacencyLayerSources = nil
 	reader.layer0AdjacencySource = nil
 	reader.preparedSearch = nil
@@ -244,6 +251,12 @@ func (h *columnVectorGraphSharedPreparedSearch) close() error {
 		}
 		h.documentIDSource = nil
 	}
+	if h.hnswSearchPack != nil {
+		if err := h.hnswSearchPack.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		h.hnswSearchPack = nil
+	}
 	if h.adjacencyLayerSources != nil {
 		if err := h.adjacencyLayerSources.Close(); err != nil && closeErr == nil {
 			closeErr = err
@@ -267,6 +280,9 @@ func (r *columnVectorGraphPhysicalRowReader) attachSharedPreparedSearch(ref *col
 	r.invNormSource = h.invNormSource
 	r.rowRefSource = h.rowRefSource
 	r.documentIDSource = h.documentIDSource
+	r.hnswSearchPack = h.hnswSearchPack
+	r.hnswSearchPackStatus = h.hnswSearchPackStatus
+	r.hnswSearchPackOpenNanos = h.hnswSearchPackNanos
 	r.adjacencyLayerSources = h.adjacencyLayerSources
 	if h.adjacencyLayerSources != nil && len(h.adjacencyLayerSources.sources) > 0 {
 		r.layer0AdjacencySource = h.adjacencyLayerSources.sources[0]
@@ -285,6 +301,7 @@ func (r *columnVectorGraphPhysicalRowReader) releaseSharedPreparedSearch() error
 	r.invNormSource = nil
 	r.rowRefSource = nil
 	r.documentIDSource = nil
+	r.hnswSearchPack = nil
 	r.adjacencyLayerSources = nil
 	r.layer0AdjacencySource = nil
 	r.preparedSearch = nil
@@ -372,6 +389,9 @@ func (h *columnVectorGraphSharedPreparedSearch) stats() mappedresource.Stats {
 	}
 	if h.documentIDSource != nil && h.documentIDSource.manager != nil {
 		add(h.documentIDSource.manager.Stats())
+	}
+	if h.hnswSearchPack != nil && h.hnswSearchPack.manager != nil {
+		add(h.hnswSearchPack.manager.Stats())
 	}
 	if h.adjacencyLayerSources != nil {
 		for _, source := range h.adjacencyLayerSources.sources {

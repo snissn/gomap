@@ -117,9 +117,13 @@ func TestDocs_GraphSearchAdmissionCoversVectorIndexStateRoles(t *testing.T) {
 		assertAdmissionCellContains(t, contract.role, "format", cells[2], contract.encoding)
 		assertAdmissionCellContains(t, contract.role, "tier", cells[3], "mmap_direct")
 		switch contract.role {
-		case "normalized_vectors", "hnsw_search_pack":
+		case "normalized_vectors":
 			if !graphSearchAdmissionCellHasStatus(cells[4], "deferred") && !graphSearchAdmissionCellHasStatus(cells[4], "experimental") {
 				t.Fatalf("%s admission status=%q, want deferred or experimental", contract.role, cells[4])
+			}
+		case "hnsw_search_pack":
+			if !graphSearchAdmissionCellHasStatus(cells[4], "deferred") && !graphSearchAdmissionCellHasStatus(cells[4], "experimental") && !graphSearchAdmissionCellHasStatus(cells[4], "prepared_view_only") {
+				t.Fatalf("%s admission status=%q, want deferred, experimental, or prepared_view_only", contract.role, cells[4])
 			}
 		default:
 			if !graphSearchAdmissionCellHasStatus(cells[4], "pending") && !graphSearchAdmissionCellHasStatus(cells[4], "admitted") {

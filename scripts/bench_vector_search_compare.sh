@@ -178,7 +178,10 @@ Canonical current production comparison:
   rows also report route/search-pack guardrails such as
   \`search_route_column_graph_prepared/search\`,
   \`hnsw_search_pack_active/search\`,
-  \`hnsw_search_pack_missing/search\`, \`docs_fetched/search\`,
+  \`hnsw_search_pack_missing/search\`, \`hnsw_search_pack_invalid/search\`,
+  \`hnsw_search_pack_stale/search\`, \`hnsw_search_pack_closed/search\`,
+  \`hnsw_search_pack_open_ns\`, \`hnsw_search_pack_mapped_B\`,
+  \`hnsw_search_pack_heap_copy_B\`, \`docs_fetched/search\`,
   \`graph_row_fallbacks/search\`, score-batch fallback reason flags,
   vector/adjacency source-state counters, and candidate/visited-edge byte
   counters used by the HNSW search-pack stack.
