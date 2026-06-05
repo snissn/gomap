@@ -958,8 +958,8 @@ func TestSearchVectorIndexWithBufferPreparedCacheKeepsWarmStateOnQueryError2363(
 	badOpts := opts
 	badOpts.Query = []float32{1, 0}
 	bad, err := col.SearchVectorIndexWithBuffer(badOpts, &buffer)
-	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
-		t.Fatalf("bad query response=%+v err=%v want query dimension mismatch", bad, err)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) || !strings.Contains(err.Error(), "hnsw_search_pack_v1 query dims=2 want 3") {
+		t.Fatalf("bad query response=%+v err=%v want hnsw_search_pack_v1 query dimension mismatch", bad, err)
 	}
 	if len(bad.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
 		t.Fatalf("bad query left results response=%d bufferResults=%d idBytes=%d", len(bad.Results), len(buffer.results), len(buffer.idBytes))
@@ -1002,8 +1002,8 @@ func TestSearchVectorIndexWithBufferPreparedCacheInvalidatesOnMutationAndRefresh
 	insertColumnGraphRebuildRowsV2A(t, col, []columnGraphRebuildInputRowV2A{{id: "doc-c", vector: []float32{0, 0, 1}}})
 	staleOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 0, 1}, TopK: 1, EfSearch: len(rows) + 1, MaxDecodedBlocks: 1}
 	stale, err := col.SearchVectorIndexWithBuffer(staleOpts, &buffer)
-	if err == nil {
-		t.Fatalf("stale SearchVectorIndexWithBuffer response=%+v err=nil want fail-closed error", stale)
+	if !errors.Is(err, ErrIndexNotFound) || !strings.Contains(err.Error(), "SearchVectorIndexWithBuffer requires a declared vector index") {
+		t.Fatalf("stale SearchVectorIndexWithBuffer response=%+v err=%v want fail-closed declared-index error", stale, err)
 	}
 	if len(stale.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
 		t.Fatalf("stale search left results response=%d bufferResults=%d idBytes=%d", len(stale.Results), len(buffer.results), len(buffer.idBytes))
@@ -1313,6 +1313,61 @@ func TestSearchVectorIndexWithBufferPreparedCacheConcurrentSharedState2363(t *te
 	}
 }
 
+func TestSearchVectorIndexWithBufferMissingIndexStateFailsClosed2408(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	base := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	buffer := VectorIndexSearchBuffer{
+		results: []VectorIndexSearchResult{{ID: []byte("stale"), Score: 1}},
+		idBytes: []byte("stale"),
+	}
+
+	got, err := col.SearchVectorIndexWithBuffer(base, &buffer)
+	if !errors.Is(err, ErrIndexNotFound) || !strings.Contains(err.Error(), "SearchVectorIndexWithBuffer requires a declared vector index") || strings.Contains(err.Error(), "manifest") {
+		t.Fatalf("SearchVectorIndexWithBuffer missing state response=%+v err=%v want stable fail-closed declared-index error", got, err)
+	}
+	if len(got.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("missing state left results: returned=%d bufferResults=%d idBytes=%d", len(got.Results), len(buffer.results), len(buffer.idBytes))
+	}
+}
+
+func TestSearchVectorIndexWithBufferClosedDBFailsClosed2408(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	base := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(base, &buffer); err != nil {
+		_ = d.Close()
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	if len(buffer.results) == 0 || len(buffer.idBytes) == 0 {
+		_ = d.Close()
+		t.Fatalf("warm buffer results=%d idBytes=%d want populated before closed DB case", len(buffer.results), len(buffer.idBytes))
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got, err := col.SearchVectorIndexWithBuffer(base, &buffer)
+	if !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("SearchVectorIndexWithBuffer closed DB response=%+v err=%v want ErrClosed", got, err)
+	}
+	if len(got.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("closed DB left results: returned=%d bufferResults=%d idBytes=%d", len(got.Results), len(buffer.results), len(buffer.idBytes))
+	}
+}
+
 func TestSearchVectorIndexWithBufferUnsupportedShapesFailClosed2362(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -1350,36 +1405,58 @@ func TestSearchVectorIndexWithBufferUnsupportedShapesFailClosed2362(t *testing.T
 	}
 
 	tests := []struct {
-		name    string
-		mutate  func(*VectorIndexSearchOptions)
-		wantErr string
+		name            string
+		mutate          func(*VectorIndexSearchOptions)
+		wantErrs        []string
+		wantUnavailable bool
 	}{
-		{name: "include_documents", mutate: func(opts *VectorIndexSearchOptions) { opts.IncludeDocuments = true }, wantErr: "IncludeDocuments"},
-		{name: "document_projection", mutate: func(opts *VectorIndexSearchOptions) { opts.DocumentFetchOptions.IncludePaths = []string{"did"} }, wantErr: "DocumentFetchOptions"},
+		{name: "include_documents", mutate: func(opts *VectorIndexSearchOptions) { opts.IncludeDocuments = true }, wantErrs: []string{"SearchVectorIndexWithBuffer", "IncludeDocuments=true", "no-document", "SearchVectorIndex with IncludeDocuments=true"}, wantUnavailable: true},
+		{name: "document_include_projection", mutate: func(opts *VectorIndexSearchOptions) { opts.DocumentFetchOptions.IncludePaths = []string{"did"} }, wantErrs: []string{"SearchVectorIndexWithBuffer", "DocumentFetchOptions.IncludePaths", "projection", "IncludeDocuments=true"}, wantUnavailable: true},
+		{name: "document_exclude_projection", mutate: func(opts *VectorIndexSearchOptions) { opts.DocumentFetchOptions.ExcludePaths = []string{"embedding"} }, wantErrs: []string{"SearchVectorIndexWithBuffer", "DocumentFetchOptions.ExcludePaths", "projection", "IncludeDocuments=true"}, wantUnavailable: true},
+		{name: "document_format", mutate: func(opts *VectorIndexSearchOptions) { opts.DocumentFetchOptions.Format = DocumentFormatJSON }, wantErrs: []string{"SearchVectorIndexWithBuffer", "DocumentFetchOptions.Format", "materialization"}, wantUnavailable: true},
 		{name: "document_integrity_option", mutate: func(opts *VectorIndexSearchOptions) {
 			opts.DocumentFetchOptions.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
-		}, wantErr: "DocumentFetchOptions"},
+		}, wantErrs: []string{"SearchVectorIndexWithBuffer", "DocumentFetchOptions.ColumnAssetReadIntegrity", "materialization"}, wantUnavailable: true},
 		{name: "filter", mutate: func(opts *VectorIndexSearchOptions) {
 			opts.Filter = func(DocumentRecord) (bool, error) { return true, nil }
-		}, wantErr: "filters"},
+		}, wantErrs: []string{"SearchVectorIndexWithBuffer", "Filter", "hnsw_search_pack_v1"}, wantUnavailable: true},
 		{name: "range_filter", mutate: func(opts *VectorIndexSearchOptions) {
 			opts.IndexRangeFilter = &VectorIndexRangeFilter{IndexName: "kind"}
-		}, wantErr: "filters"},
-		{name: "quantized_mode", mutate: func(opts *VectorIndexSearchOptions) {
+		}, wantErrs: []string{"SearchVectorIndexWithBuffer", "IndexRangeFilter", "hnsw_search_pack_v1"}, wantUnavailable: true},
+		{name: "fetch_multiplier", mutate: func(opts *VectorIndexSearchOptions) { opts.FetchMultiplier = 2 }, wantErrs: []string{"SearchVectorIndexWithBuffer", "FetchMultiplier", "pack-only"}, wantUnavailable: true},
+		{name: "exact_filter_max_docs", mutate: func(opts *VectorIndexSearchOptions) { opts.ExactFilterMaxDocs = 32 }, wantErrs: []string{"SearchVectorIndexWithBuffer", "ExactFilterMaxDocs", "pack-only"}, wantUnavailable: true},
+		{name: "disable_exact_fallback", mutate: func(opts *VectorIndexSearchOptions) { opts.DisableExactFallback = true }, wantErrs: []string{"SearchVectorIndexWithBuffer", "DisableExactFallback", "fails closed"}, wantUnavailable: true},
+		{name: "quantized_only_mode", mutate: func(opts *VectorIndexSearchOptions) {
 			opts.QueryMode = VectorIndexQueryModeQuantizedOnly
 			opts.QuantizedIndexName = "embedding.scalar_u8.fast"
-		}, wantErr: "only exact"},
-		{name: "quantized_option", mutate: func(opts *VectorIndexSearchOptions) { opts.QuantizedIndexName = "embedding.scalar_u8.fast" }, wantErr: "quantized"},
-		{name: "legacy_controls", mutate: func(opts *VectorIndexSearchOptions) { opts.FetchMultiplier = 2 }, wantErr: "legacy"},
-		{name: "benchmark_debug", mutate: func(opts *VectorIndexSearchOptions) { opts.StatsMode = VectorIndexSearchStatsModeBenchmarkDebug }, wantErr: "benchmark_debug"},
+		}, wantErrs: []string{"SearchVectorIndexWithBuffer", "QueryMode=\"quantized_only\"", "quantized", "OpenVectorIndexSearcher"}, wantUnavailable: true},
+		{name: "quantized_rerank_mode", mutate: func(opts *VectorIndexSearchOptions) {
+			opts.QueryMode = VectorIndexQueryModeQuantizedRerank
+			opts.QuantizedIndexName = "embedding.scalar_u8.fast"
+			opts.QuantizedRerankCandidates = 2
+		}, wantErrs: []string{"SearchVectorIndexWithBuffer", "QueryMode=\"quantized_rerank\"", "quantized", "OpenVectorIndexSearcher"}, wantUnavailable: true},
+		{name: "unknown_query_mode", mutate: func(opts *VectorIndexSearchOptions) { opts.QueryMode = VectorIndexQueryMode("future_mode") }, wantErrs: []string{"SearchVectorIndexWithBuffer", "QueryMode=\"future_mode\"", "exact/zero"}, wantUnavailable: true},
+		{name: "quantized_index_name_option", mutate: func(opts *VectorIndexSearchOptions) { opts.QuantizedIndexName = "embedding.scalar_u8.fast" }, wantErrs: []string{"SearchVectorIndexWithBuffer", "QuantizedIndexName", "quantized"}, wantUnavailable: true},
+		{name: "quantized_rerank_candidates_option", mutate: func(opts *VectorIndexSearchOptions) { opts.QuantizedRerankCandidates = 8 }, wantErrs: []string{"SearchVectorIndexWithBuffer", "QuantizedRerankCandidates", "quantized"}, wantUnavailable: true},
+		{name: "benchmark_debug", mutate: func(opts *VectorIndexSearchOptions) { opts.StatsMode = VectorIndexSearchStatsModeBenchmarkDebug }, wantErrs: []string{"SearchVectorIndexWithBuffer", "StatsMode=benchmark_debug", "debug-only"}, wantUnavailable: true},
+		{name: "unknown_stats_mode", mutate: func(opts *VectorIndexSearchOptions) { opts.StatsMode = VectorIndexSearchStatsMode("debug_everything") }, wantErrs: []string{"SearchVectorIndexWithBuffer", "StatsMode=\"debug_everything\"", "unsupported"}, wantUnavailable: true},
+		{name: "negative_max_decoded_blocks", mutate: func(opts *VectorIndexSearchOptions) { opts.MaxDecodedBlocks = -1 }, wantErrs: []string{"max_decoded_blocks", "cannot be negative"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := base
 			tt.mutate(&opts)
 			got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("SearchVectorIndexWithBuffer err=%v want substring %q", err, tt.wantErr)
+			if err == nil {
+				t.Fatalf("SearchVectorIndexWithBuffer err=nil want fail-closed error containing %v", tt.wantErrs)
+			}
+			for _, want := range tt.wantErrs {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("SearchVectorIndexWithBuffer err=%v want substring %q", err, want)
+				}
+			}
+			if tt.wantUnavailable && !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+				t.Fatalf("SearchVectorIndexWithBuffer err=%v want ErrVectorIndexSearchUnavailable", err)
 			}
 			if len(got.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
 				t.Fatalf("unsupported shape left results: returned=%d bufferResults=%d idBytes=%d", len(got.Results), len(buffer.results), len(buffer.idBytes))
