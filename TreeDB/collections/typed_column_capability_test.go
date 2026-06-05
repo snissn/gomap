@@ -218,8 +218,8 @@ func TestTypedColumnProductionCapabilityValidatesCompressedReadLayouts(t *testin
 		primary.Definition.Compression = typedcolumn.CompressionSnappy
 		part.Part.Columns[typedColumnAdapterPrimaryIDColumn] = primary
 		err := validateTypedColumnAdapterImageSchema(part.Part, part.Columns, uint32(part.Part.Descriptor.SchemaVersion))
-		if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "primary-id validation failed") || !strings.Contains(err.Error(), "compression=snappy") {
-			t.Fatalf("err=%v want compressed primary rejection", err)
+		if err != nil {
+			t.Fatalf("validate compressed primary layout: %v", err)
 		}
 	})
 }

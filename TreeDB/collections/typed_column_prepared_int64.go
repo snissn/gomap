@@ -163,8 +163,16 @@ func validateTypedColumnPreparedInt64AggregatePart(part *typedColumnPreparedPart
 	if !primaryFound {
 		return fmt.Errorf("collections: typed-column int64 aggregate prepared image missing primary-id column %q", primaryName)
 	}
-	if primary.Definition.Type != typedcolumn.ColumnTypeInt64 || primary.Definition.Encoding != typedcolumn.EncodingRawInt64 || primary.Definition.Compression != typedcolumn.CompressionNone {
-		return fmt.Errorf("collections: typed-column int64 aggregate prepared image primary-id column %q type=%s encoding=%s compression=%s want type=%s encoding=%s compression=%s", primaryName, primary.Definition.Type, primary.Definition.Encoding, primary.Definition.Compression, typedcolumn.ColumnTypeInt64, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone)
+	if primary.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return fmt.Errorf("collections: typed-column int64 aggregate prepared image primary-id column %q type=%s want %s", primaryName, primary.Definition.Type, typedcolumn.ColumnTypeInt64)
+	}
+	switch primary.Definition.Encoding {
+	case typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint:
+	default:
+		return fmt.Errorf("collections: typed-column int64 aggregate prepared image primary-id column %q encoding=%s is unsupported", primaryName, primary.Definition.Encoding)
+	}
+	if err := validateTypedColumnProductionCompression(primary.Definition.Compression); err != nil {
+		return fmt.Errorf("collections: typed-column int64 aggregate prepared image primary-id column %q compression=%s: %w", primaryName, primary.Definition.Compression, err)
 	}
 	preparedColumn, ok := part.Columns[adapterColumn.Definition.Name]
 	if !ok || preparedColumn == nil {

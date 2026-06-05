@@ -797,7 +797,7 @@ func typedColumnAttachPreparedPruning(part *typedColumnPreparedPartState, image 
 		return diag, err
 	}
 	diag.DecodedMetadataBytes += uint64(len(raw))
-	pruning, err := typedcolumn.DecodeColumnPartPruningSection(raw)
+	pruning, err := typedcolumn.DecodeColumnPartPruningImageSection(section, raw)
 	if err != nil {
 		return diag, err
 	}
