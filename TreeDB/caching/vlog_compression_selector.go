@@ -1449,6 +1449,20 @@ func (db *DB) storageFirstValueLogAuto(unitPayloadBytes int) bool {
 	return unitPayloadBytes > threshold
 }
 
+func (db *DB) valueLogPayloadExceedsInlineThreshold(unitPayloadBytes int) bool {
+	if db == nil {
+		return false
+	}
+	if db.forceValueLogPointers {
+		return true
+	}
+	threshold := db.valueLogThreshold
+	if threshold <= 0 {
+		threshold = page.DefaultInlineThreshold
+	}
+	return unitPayloadBytes > threshold
+}
+
 func (db *DB) storageFirstMediumValueLogAuto(unitPayloadBytes int) bool {
 	return db.storageFirstValueLogAuto(unitPayloadBytes) &&
 		unitPayloadBytes < largePayloadBlockTargetMinPayloadBytes
@@ -1622,10 +1636,10 @@ func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []value
 	if db == nil || normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
 		return false
 	}
-	if dictID != 0 || !db.forceValueLogPointers || payloadKind != vlogPayloadKindSingleValue {
+	if dictID != 0 || payloadKind != vlogPayloadKindSingleValue {
 		return false
 	}
-	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput {
+	if !db.valueLogPayloadExceedsInlineThreshold(unitPayloadBytes) {
 		return false
 	}
 	if unitPayloadBytes < forcePointerAutoRawBypassMinPayloadBytes ||
@@ -1714,7 +1728,7 @@ func (db *DB) chooseValueLogRawWriteK(l *lane, records int, autoRawBypass, pause
 	}
 	k := 1
 	switch {
-	case db != nil && autoRawBypass && db.forceValueLogPointers:
+	case db != nil && autoRawBypass:
 		k = valuelog.MaxFrameK
 	case db != nil && paused && db.disableJournal:
 		k = valuelog.MaxFrameK

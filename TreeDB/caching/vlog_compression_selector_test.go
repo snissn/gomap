@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 
@@ -546,7 +547,7 @@ func TestChooseValueLogRawWriteK_LiveLeafLogCapsGroupedFramesForColdReads(t *tes
 			},
 		},
 		{
-			name: "force-pointer auto raw bypass",
+			name: "auto raw bypass",
 			configure: func(db *DB) {
 				db.forceValueLogPointers = true
 			},
@@ -600,10 +601,7 @@ func TestChooseValueLogRawWriteK_NonLeafRawPolicyUnchanged(t *testing.T) {
 			want: 16,
 		},
 		{
-			name: "force-pointer auto raw bypass",
-			configure: func(db *DB) {
-				db.forceValueLogPointers = true
-			},
+			name:          "auto raw bypass",
 			autoRawBypass: true,
 			want:          valuelog.MaxFrameK,
 		},
@@ -1113,10 +1111,10 @@ func TestResolveVlogWriteMode_ThroughputValueLogWithDictCanSelectOff(t *testing.
 	}
 }
 
-func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.T) {
+func TestShouldBypassAutoRawValueCompression_StorageOwnedHighEntropy(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
-		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
 		forceValueLogPointers:   true,
 	}
 	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
@@ -1147,39 +1145,28 @@ func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.
 	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindOuterLeaf) {
 		t.Fatal("expected outer-leaf payloads to keep leaf-log compression selection")
 	}
+
+	thresholdDB := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		valueLogThreshold:       1,
+	}
+	if !thresholdDB.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected high-entropy threshold-owned value batch to bypass auto compression")
+	}
 }
 
-func TestShouldBypassAutoRawValueCompression_BalancedForcePointerHighEntropyStaysEligible(t *testing.T) {
+func TestShouldBypassAutoRawValueCompression_CompressibleStorageOwnedStaysEligible(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
 		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
-		forceValueLogPointers:   true,
+		valueLogThreshold:       1,
 	}
-	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
-	for i := range value {
-		value[i] = byte(i)
-	}
-	records := []valuelog.Record{
-		{RID: 1, Value: value},
-		{RID: 2, Value: value},
-		{RID: 3, Value: value},
-	}
-
-	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
-		t.Fatal("expected balanced force-pointer value batch to stay eligible for block compression")
-	}
-}
-
-func TestShouldBypassAutoRawValueCompression_CompressibleStaysEligible(t *testing.T) {
-	db := &DB{
-		valueLogCompressionMode: uint8(vlogCompressionAuto),
-		forceValueLogPointers:   true,
-	}
-	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
+	value := bytes.Repeat([]byte(`{"text":"retained-json","did":"did:plc:abc"}`), 16)
 	records := []valuelog.Record{{RID: 1, Value: value}}
 
 	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
-		t.Fatal("expected low-entropy value batch to stay eligible for selector sampling")
+		t.Fatal("expected JSON-like retained value batch to stay eligible for compression")
 	}
 }
 

@@ -407,7 +407,7 @@ func TestAppendValueLog_AutoForcePointerMediumPayloadUsesGroupedBlockFrame(t *te
 	}
 }
 
-func TestAppendValueLog_AutoBalancedForcePointerHighEntropyPayloadUsesGroupedBlockFrame(t *testing.T) {
+func TestAppendValueLog_AutoBalancedForcePointerHighEntropyPayloadUsesGroupedRawFrame(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value.log")
 	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
@@ -455,25 +455,22 @@ func TestAppendValueLog_AutoBalancedForcePointerHighEntropyPayloadUsesGroupedBlo
 	if header.K != uint8(len(records)) {
 		t.Fatalf("frame K=%d want grouped K=%d", header.K, len(records))
 	}
-	if header.Flags&valuelog.FrameFlagCompressed == 0 {
-		t.Fatalf("expected balanced forced-pointer batch to store a block-compressed frame")
+	if header.Flags&valuelog.FrameFlagCompressed != 0 {
+		t.Fatalf("expected balanced forced-pointer high-entropy batch to use grouped raw frame")
 	}
 	if header.DictID != 0 {
-		t.Fatalf("expected no dict id for block-compressed high-entropy payload, got %d", header.DictID)
-	}
-	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecSnappy {
-		t.Fatalf("block codec=%v want snappy", got)
+		t.Fatalf("expected no dict id for high-entropy raw payload, got %d", header.DictID)
 	}
 	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
-	if writeSnap.Frames[vlogWriteBlock] == 0 {
-		t.Fatalf("expected block write-mode observation")
+	if writeSnap.Frames[vlogWriteOff] == 0 {
+		t.Fatalf("expected raw/off write-mode observation")
 	}
-	if writeSnap.Frames[vlogWriteOff] != 0 {
-		t.Fatalf("expected no raw/off write-mode observation for balanced forced-pointer payload")
+	if writeSnap.Frames[vlogWriteBlock] != 0 {
+		t.Fatalf("expected no block write-mode observation for high-entropy raw bypass")
 	}
 	selectorSnap := db.lanes[0].vlogCompressionSelector.snapshot()
 	if selectorSnap.framesByCandidate[vlogAutoCandidateOff] != 0 {
-		t.Fatalf("expected stable block forced-pointer batch not to train selector off frames")
+		t.Fatalf("expected high-entropy forced-pointer bypass not to train selector off frames")
 	}
 }
 
