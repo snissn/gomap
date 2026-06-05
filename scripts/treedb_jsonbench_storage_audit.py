@@ -539,10 +539,6 @@ def run_retained_payload_audit(
         retained["reason"] = "retained payload audit was explicitly skipped"
         return retained
     collection = result_collection_name(result_data)
-    if collection is None:
-        retained = retained_payload_audit_stub(retained_status)
-        retained["reason"] = "no collection name found in result.json; retained payload audit command was not run"
-        return retained
 
     paths = JSONBENCH_DECLARED_PATHS
     audit_db_dir = Path(db_dir if db_dir is not None else args.db_dir).expanduser().resolve()
@@ -558,12 +554,11 @@ def run_retained_payload_audit(
         [
             "-db-dir",
             str(audit_db_dir),
-            "-collection",
-            collection,
-            "-paths",
-            ",".join(paths),
         ]
     )
+    if collection is not None:
+        command.extend(["-collection", collection])
+    command.extend(["-paths", ",".join(paths)])
     limit = int(getattr(args, "retained_payload_audit_limit", 0) or 0)
     if limit > 0:
         command.extend(["-max-documents", str(limit)])

@@ -61,7 +61,16 @@ class StorageAuditTest(unittest.TestCase):
             )
 
             report = audit.build_report(
-                type("Args", (), {"db_dir": str(root.parent), "result_json": None, "gzip_level": 6})()
+                type(
+                    "Args",
+                    (),
+                    {
+                        "db_dir": str(root.parent),
+                        "result_json": None,
+                        "gzip_level": 6,
+                        "skip_retained_payload_audit": True,
+                    },
+                )()
             )
 
         self.assertTrue(report["retained_payload_status_audit"]["retained_payload_encoding_status_missing"])
@@ -199,6 +208,33 @@ class StorageAuditTest(unittest.TestCase):
         self.assertIn("-paths", retained["command"])
         db_dir_index = retained["command"].index("-db-dir") + 1
         self.assertEqual(retained["command"][db_dir_index], str(main.resolve()))
+
+    def test_retained_payload_audit_runs_without_collection_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "fake_retained_audit.py"
+            script.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "print(json.dumps({'status':'passed','collection':'events','checked_rows':1}))\n"
+            )
+            script.chmod(0o755)
+            main = Path(tmp) / "db" / "maindb"
+            main.mkdir(parents=True)
+            args = type(
+                "Args",
+                (),
+                {
+                    "db_dir": str(Path(tmp) / "db"),
+                    "retained_payload_audit_cmd": str(script),
+                    "retained_payload_audit_limit": 0,
+                    "skip_retained_payload_audit": False,
+                },
+            )()
+            retained = audit.run_retained_payload_audit(args, {"rows": 1}, {}, main)
+
+        self.assertEqual(retained["status"], "passed")
+        self.assertNotIn("-collection", retained["command"])
+        self.assertIn("-paths", retained["command"])
 
     def test_resolve_main_dir_accepts_maindb(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
