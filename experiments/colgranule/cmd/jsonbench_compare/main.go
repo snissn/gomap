@@ -96,6 +96,8 @@ type remainingTreeDBResult struct {
 	RewriteRecordsCopied int     `json:"rewrite_records_copied"`
 	RewriteValueBytes    int64   `json:"rewrite_value_bytes"`
 	RewriteSourceBytes   int64   `json:"rewrite_source_bytes"`
+	RewriteReclaimFiles  int     `json:"rewrite_reclaim_files"`
+	RewriteReclaimBytes  int64   `json:"rewrite_reclaim_bytes"`
 	StoredShape          string  `json:"stored_shape"`
 }
 
@@ -384,9 +386,17 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 			BatchSize:     16_000,
 			SyncEachBatch: true,
 		})
+		var reclaimStats backenddb.ValueLogGCStats
+		var reclaimErr error
+		if rewriteErr == nil {
+			reclaimStats, reclaimErr = reclaimUnreferencedRewriteSources(ctx, rewriteDB, rewriteStats.SourceFileIDsUnreferenced)
+		}
 		rewriteCleanupErr := rewriteCleanup()
 		if rewriteErr != nil {
 			return out, fmt.Errorf("rewrite remaining TreeDB value log: %w", rewriteErr)
+		}
+		if reclaimErr != nil {
+			return out, fmt.Errorf("reclaim rewritten remaining TreeDB value-log sources: %w", reclaimErr)
 		}
 		if rewriteCleanupErr != nil {
 			return out, fmt.Errorf("close remaining TreeDB rewrite handle: %w", rewriteCleanupErr)
@@ -395,6 +405,8 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 		out.RewriteRecordsCopied = rewriteStats.ValueRecordsCopied
 		out.RewriteValueBytes = rewriteStats.ValueBytesCopied
 		out.RewriteSourceBytes = rewriteStats.SourceBytesRequested
+		out.RewriteReclaimFiles = reclaimStats.ObservedSourceSegmentsDeleted
+		out.RewriteReclaimBytes = reclaimStats.ObservedSourceBytesDeleted
 	}
 	after, afterFiles, err := directoryUsage(dbDir)
 	if err != nil {
@@ -404,6 +416,22 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 	out.AfterCompactFiles = afterFiles
 	out.CompactedBytesPerRow = float64(after) / float64(out.Rows)
 	return out, nil
+}
+
+type observedRewriteSourceReclaimer interface {
+	ValueLogGC(context.Context, backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+}
+
+func reclaimUnreferencedRewriteSources(ctx context.Context, db observedRewriteSourceReclaimer, sourceFileIDs []uint32) (backenddb.ValueLogGCStats, error) {
+	var zero backenddb.ValueLogGCStats
+	if db == nil || len(sourceFileIDs) == 0 {
+		return zero, nil
+	}
+	return db.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
+		ObservedSourceFileIDs:            sourceFileIDs,
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+	})
 }
 
 func measureRawJSONTreeDB(ctx context.Context, files []string, rows int, dbDir string) (remainingTreeDBResult, error) {
@@ -1176,23 +1204,23 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "\n")
 	if raw.RemainingTreeDB.Enabled {
 		fmt.Fprintf(&b, "The ClickHouse-aligned remaining-fields TreeDB collections store each original JSON row after deleting the same explicitly typed JSON paths used by the local ClickHouse JSONBench schema: `time_us`, `kind`, `did`, `commit.operation`, and `commit.collection`. The removed paths are represented by granule columns in this experiment. Nested values such as `commit.rev`, `commit.rkey`, `commit.cid`, `commit.record.text`, `langs`, `reply`, and `subject` remain in the TreeDB payload. The conservative rows keep those string paths in the TreeDB payload and remove only `time_us`.\n\n")
-		fmt.Fprintf(&b, "BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDB.BeforeCompactBytes, raw.RemainingTreeDB.BeforeCompactFiles, raw.RemainingTreeDB.AfterCompactBytes, raw.RemainingTreeDB.AfterCompactFiles, raw.RemainingTreeDB.CompactionDuration, raw.RemainingTreeDB.RewriteDuration, raw.RemainingTreeDB.RewriteRecordsCopied, raw.RemainingTreeDB.RewriteValueBytes, raw.RemainingTreeDB.RewriteSourceBytes, raw.RemainingTreeDB.RawDocumentBytes)
+		fmt.Fprintf(&b, "BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; reclaimed rewrite source files `%d`; reclaimed rewrite source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDB.BeforeCompactBytes, raw.RemainingTreeDB.BeforeCompactFiles, raw.RemainingTreeDB.AfterCompactBytes, raw.RemainingTreeDB.AfterCompactFiles, raw.RemainingTreeDB.CompactionDuration, raw.RemainingTreeDB.RewriteDuration, raw.RemainingTreeDB.RewriteRecordsCopied, raw.RemainingTreeDB.RewriteValueBytes, raw.RemainingTreeDB.RewriteSourceBytes, raw.RemainingTreeDB.RewriteReclaimFiles, raw.RemainingTreeDB.RewriteReclaimBytes, raw.RemainingTreeDB.RawDocumentBytes)
 	}
 	if raw.RemainingTreeDBJSON.Enabled {
-		fmt.Fprintf(&b, "JSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; JSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBJSON.BeforeCompactBytes, raw.RemainingTreeDBJSON.BeforeCompactFiles, raw.RemainingTreeDBJSON.AfterCompactBytes, raw.RemainingTreeDBJSON.AfterCompactFiles, raw.RemainingTreeDBJSON.CompactionDuration, raw.RemainingTreeDBJSON.RewriteDuration, raw.RemainingTreeDBJSON.RewriteRecordsCopied, raw.RemainingTreeDBJSON.RewriteValueBytes, raw.RemainingTreeDBJSON.RewriteSourceBytes, raw.RemainingTreeDBJSON.RawDocumentBytes)
+		fmt.Fprintf(&b, "JSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; reclaimed rewrite source files `%d`; reclaimed rewrite source bytes `%d`; JSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBJSON.BeforeCompactBytes, raw.RemainingTreeDBJSON.BeforeCompactFiles, raw.RemainingTreeDBJSON.AfterCompactBytes, raw.RemainingTreeDBJSON.AfterCompactFiles, raw.RemainingTreeDBJSON.CompactionDuration, raw.RemainingTreeDBJSON.RewriteDuration, raw.RemainingTreeDBJSON.RewriteRecordsCopied, raw.RemainingTreeDBJSON.RewriteValueBytes, raw.RemainingTreeDBJSON.RewriteSourceBytes, raw.RemainingTreeDBJSON.RewriteReclaimFiles, raw.RemainingTreeDBJSON.RewriteReclaimBytes, raw.RemainingTreeDBJSON.RawDocumentBytes)
 	}
 	if raw.RemainingTreeDBTpl.Enabled {
-		fmt.Fprintf(&b, "Template-v1 remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; Template-v1 payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBTpl.BeforeCompactBytes, raw.RemainingTreeDBTpl.BeforeCompactFiles, raw.RemainingTreeDBTpl.AfterCompactBytes, raw.RemainingTreeDBTpl.AfterCompactFiles, raw.RemainingTreeDBTpl.CompactionDuration, raw.RemainingTreeDBTpl.RewriteDuration, raw.RemainingTreeDBTpl.RewriteRecordsCopied, raw.RemainingTreeDBTpl.RewriteValueBytes, raw.RemainingTreeDBTpl.RewriteSourceBytes, raw.RemainingTreeDBTpl.RawDocumentBytes)
+		fmt.Fprintf(&b, "Template-v1 remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; reclaimed rewrite source files `%d`; reclaimed rewrite source bytes `%d`; Template-v1 payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBTpl.BeforeCompactBytes, raw.RemainingTreeDBTpl.BeforeCompactFiles, raw.RemainingTreeDBTpl.AfterCompactBytes, raw.RemainingTreeDBTpl.AfterCompactFiles, raw.RemainingTreeDBTpl.CompactionDuration, raw.RemainingTreeDBTpl.RewriteDuration, raw.RemainingTreeDBTpl.RewriteRecordsCopied, raw.RemainingTreeDBTpl.RewriteValueBytes, raw.RemainingTreeDBTpl.RewriteSourceBytes, raw.RemainingTreeDBTpl.RewriteReclaimFiles, raw.RemainingTreeDBTpl.RewriteReclaimBytes, raw.RemainingTreeDBTpl.RawDocumentBytes)
 		fmt.Fprintf(&b, "Template-v1 reuses one encoder across bounded insert batches, so template records and compact stored documents are learned across the whole measurement without retaining every row in memory. The rewritten record count includes template-root records as well as primary documents.\n\n")
 	}
 	if raw.ConservativeBSON.Enabled {
-		fmt.Fprintf(&b, "Conservative BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeBSON.BeforeCompactBytes, raw.ConservativeBSON.BeforeCompactFiles, raw.ConservativeBSON.AfterCompactBytes, raw.ConservativeBSON.AfterCompactFiles, raw.ConservativeBSON.CompactionDuration, raw.ConservativeBSON.RewriteDuration, raw.ConservativeBSON.RewriteRecordsCopied, raw.ConservativeBSON.RewriteValueBytes, raw.ConservativeBSON.RewriteSourceBytes, raw.ConservativeBSON.RawDocumentBytes)
+		fmt.Fprintf(&b, "Conservative BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; reclaimed rewrite source files `%d`; reclaimed rewrite source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeBSON.BeforeCompactBytes, raw.ConservativeBSON.BeforeCompactFiles, raw.ConservativeBSON.AfterCompactBytes, raw.ConservativeBSON.AfterCompactFiles, raw.ConservativeBSON.CompactionDuration, raw.ConservativeBSON.RewriteDuration, raw.ConservativeBSON.RewriteRecordsCopied, raw.ConservativeBSON.RewriteValueBytes, raw.ConservativeBSON.RewriteSourceBytes, raw.ConservativeBSON.RewriteReclaimFiles, raw.ConservativeBSON.RewriteReclaimBytes, raw.ConservativeBSON.RawDocumentBytes)
 	}
 	if raw.ConservativeJSON.Enabled {
-		fmt.Fprintf(&b, "Conservative JSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; JSON payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeJSON.BeforeCompactBytes, raw.ConservativeJSON.BeforeCompactFiles, raw.ConservativeJSON.AfterCompactBytes, raw.ConservativeJSON.AfterCompactFiles, raw.ConservativeJSON.CompactionDuration, raw.ConservativeJSON.RewriteDuration, raw.ConservativeJSON.RewriteRecordsCopied, raw.ConservativeJSON.RewriteValueBytes, raw.ConservativeJSON.RewriteSourceBytes, raw.ConservativeJSON.RawDocumentBytes)
+		fmt.Fprintf(&b, "Conservative JSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; reclaimed rewrite source files `%d`; reclaimed rewrite source bytes `%d`; JSON payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeJSON.BeforeCompactBytes, raw.ConservativeJSON.BeforeCompactFiles, raw.ConservativeJSON.AfterCompactBytes, raw.ConservativeJSON.AfterCompactFiles, raw.ConservativeJSON.CompactionDuration, raw.ConservativeJSON.RewriteDuration, raw.ConservativeJSON.RewriteRecordsCopied, raw.ConservativeJSON.RewriteValueBytes, raw.ConservativeJSON.RewriteSourceBytes, raw.ConservativeJSON.RewriteReclaimFiles, raw.ConservativeJSON.RewriteReclaimBytes, raw.ConservativeJSON.RawDocumentBytes)
 	}
 	if raw.ConservativeTpl.Enabled {
-		fmt.Fprintf(&b, "Conservative Template-v1 remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; Template-v1 payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeTpl.BeforeCompactBytes, raw.ConservativeTpl.BeforeCompactFiles, raw.ConservativeTpl.AfterCompactBytes, raw.ConservativeTpl.AfterCompactFiles, raw.ConservativeTpl.CompactionDuration, raw.ConservativeTpl.RewriteDuration, raw.ConservativeTpl.RewriteRecordsCopied, raw.ConservativeTpl.RewriteValueBytes, raw.ConservativeTpl.RewriteSourceBytes, raw.ConservativeTpl.RawDocumentBytes)
+		fmt.Fprintf(&b, "Conservative Template-v1 remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; reclaimed rewrite source files `%d`; reclaimed rewrite source bytes `%d`; Template-v1 payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeTpl.BeforeCompactBytes, raw.ConservativeTpl.BeforeCompactFiles, raw.ConservativeTpl.AfterCompactBytes, raw.ConservativeTpl.AfterCompactFiles, raw.ConservativeTpl.CompactionDuration, raw.ConservativeTpl.RewriteDuration, raw.ConservativeTpl.RewriteRecordsCopied, raw.ConservativeTpl.RewriteValueBytes, raw.ConservativeTpl.RewriteSourceBytes, raw.ConservativeTpl.RewriteReclaimFiles, raw.ConservativeTpl.RewriteReclaimBytes, raw.ConservativeTpl.RawDocumentBytes)
 	}
 	if raw.RawTreeDBJSON.Enabled {
 		fmt.Fprintf(&b, "Raw TreeDB key/value JSON detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; raw JSON payload bytes before TreeDB storage `%d`.\n\n", raw.RawTreeDBJSON.BeforeCompactBytes, raw.RawTreeDBJSON.BeforeCompactFiles, raw.RawTreeDBJSON.AfterCompactBytes, raw.RawTreeDBJSON.AfterCompactFiles, raw.RawTreeDBJSON.CompactionDuration, raw.RawTreeDBJSON.RewriteDuration, raw.RawTreeDBJSON.RewriteRecordsCopied, raw.RawTreeDBJSON.RewriteValueBytes, raw.RawTreeDBJSON.RewriteSourceBytes, raw.RawTreeDBJSON.RawDocumentBytes)
