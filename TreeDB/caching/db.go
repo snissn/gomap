@@ -12740,10 +12740,16 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
-	for i := 0; i < len(requests); {
-		writeMode := requests[i].writeMode
-		blockCodec := normalizeSelectorBlockCodec(requests[i].blockCodec)
-		dictID := requests[i].dictID
+	type queuedVlogRequestPlan struct {
+		writeMode  vlogCompressionWriteMode
+		blockCodec valuelog.BlockCodec
+		dictID     uint64
+		dict       []byte
+	}
+	normalizeQueuedRequest := func(idx int) queuedVlogRequestPlan {
+		writeMode := requests[idx].writeMode
+		blockCodec := normalizeSelectorBlockCodec(requests[idx].blockCodec)
+		dictID := requests[idx].dictID
 		if writeMode != vlogWriteDict {
 			dictID = 0
 		}
@@ -12758,54 +12764,91 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				}
 			}
 		}
+		return queuedVlogRequestPlan{
+			writeMode:  writeMode,
+			blockCodec: blockCodec,
+			dictID:     dictID,
+			dict:       dict,
+		}
+	}
+	for i := 0; i < len(requests); {
+		current := normalizeQueuedRequest(i)
+		writeMode := current.writeMode
+		blockCodec := current.blockCodec
+		dictID := current.dictID
+		dict := current.dict
 		probe := requests[i].probeCompression
 		maxValLen := len(requests[i].value)
 		rawBytes := len(requests[i].value)
 		end := i + 1
-		for end < len(requests) {
-			nextMode := requests[end].writeMode
-			nextCodec := normalizeSelectorBlockCodec(requests[end].blockCodec)
-			nextDictID := requests[end].dictID
-			nextDict := lookupVlogDictBytes(nextDictID, singleDictID, singleDict, dictByID)
-			if nextMode != vlogWriteDict {
-				nextDictID = 0
+		retainedStorageFirst := false
+		if mode != vlogCompressionOff && writeMode != vlogWriteDict {
+			retainedRawBytes := 0
+			retainedMaxValLen := 0
+			retainedProbe := false
+			retainedEnd := i
+			for retainedEnd < len(requests) {
+				next := normalizeQueuedRequest(retainedEnd)
+				if next.writeMode == vlogWriteDict && next.dictID != 0 {
+					break
+				}
+				if !valueLogPayloadLooksRetainedJSONLike(requests[retainedEnd].value) {
+					break
+				}
+				retainedProbe = retainedProbe || requests[retainedEnd].probeCompression
+				if n := len(requests[retainedEnd].value); n > retainedMaxValLen {
+					retainedMaxValLen = n
+				}
+				retainedRawBytes += len(requests[retainedEnd].value)
+				retainedEnd++
 			}
-			if nextDictID == 0 || len(nextDict) == 0 || nextMode != vlogWriteDict {
-				nextDictID = 0
-			}
-			if nextMode == vlogWriteDict && nextDictID == 0 {
-				nextMode = fallbackAutoVlogWriteMode(mode, nextMode, allowDictFallback)
-				if nextMode == vlogWriteDict {
-					nextMode = vlogWriteOff
+			if retainedEnd > i {
+				retainedRecords := retainedEnd - i
+				retainedUnitBytes := retainedRawBytes / retainedRecords
+				if db.retainedStorageFirstValueLogAuto(retainedRawBytes, retainedUnitBytes, records[i:retainedEnd]) {
+					writeMode = vlogWriteBlock
+					blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+					dictID = 0
+					dict = nil
+					probe = retainedProbe
+					maxValLen = retainedMaxValLen
+					rawBytes = retainedRawBytes
+					end = retainedEnd
+					retainedStorageFirst = true
 				}
 			}
-			if nextMode != writeMode {
-				break
-			}
-			if nextMode == vlogWriteBlock && nextCodec != blockCodec {
-				break
-			}
-			if nextDictID != dictID {
-				break
-			}
-			probe = probe || requests[end].probeCompression
-			if n := len(requests[end].value); n > maxValLen {
-				maxValLen = n
-			}
-			rawBytes += len(requests[end].value)
-			end++
 		}
+		if !retainedStorageFirst {
+			for end < len(requests) {
+				next := normalizeQueuedRequest(end)
+				if next.writeMode != writeMode {
+					break
+				}
+				if next.writeMode == vlogWriteBlock && next.blockCodec != blockCodec {
+					break
+				}
+				if next.dictID != dictID {
+					break
+				}
+				probe = probe || requests[end].probeCompression
+				if n := len(requests[end].value); n > maxValLen {
+					maxValLen = n
+				}
+				rawBytes += len(requests[end].value)
+				end++
+			}
 
-		unitPayloadBytes := rawBytes
-		if recordsInPlan := end - i; recordsInPlan > 0 {
-			unitPayloadBytes = rawBytes / recordsInPlan
-		}
-		retainedStorageFirst := db.retainedStorageFirstValueLogAuto(rawBytes, unitPayloadBytes, records[i:end])
-		if retainedStorageFirst && mode != vlogCompressionOff && writeMode != vlogWriteDict {
-			writeMode = vlogWriteBlock
-			blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
-			dictID = 0
-			dict = nil
+			unitPayloadBytes := rawBytes
+			if recordsInPlan := end - i; recordsInPlan > 0 {
+				unitPayloadBytes = rawBytes / recordsInPlan
+			}
+			retainedStorageFirst = db.retainedStorageFirstValueLogAuto(rawBytes, unitPayloadBytes, records[i:end])
+			if retainedStorageFirst && mode != vlogCompressionOff && writeMode != vlogWriteDict {
+				writeMode = vlogWriteBlock
+				blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+				dictID = 0
+				dict = nil
+			}
 		}
 
 		k := 1
