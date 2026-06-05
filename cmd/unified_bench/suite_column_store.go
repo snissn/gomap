@@ -243,60 +243,62 @@ type columnStoreQueryMetric struct {
 }
 
 type columnStoreJSONBenchCell struct {
-	CellLabel                   string                            `json:"cell_label"`
-	Query                       string                            `json:"query"`
-	AliasOf                     string                            `json:"alias_of,omitempty"`
-	SortLayout                  string                            `json:"sort_layout"`
-	SortKey                     []string                          `json:"sort_key"`
-	PlanLabel                   string                            `json:"plan_label"`
-	StorageSource               string                            `json:"storage_source"`
-	FallbackReason              string                            `json:"fallback_reason"`
-	ExecutionMode               string                            `json:"execution_mode"`
-	MetadataDataScanPath        string                            `json:"metadata_data_scan_path"`
-	CompressionMode             string                            `json:"compression_mode"`
-	RequestedCompression        string                            `json:"requested_compression"`
-	ActualCompression           string                            `json:"actual_compression"`
-	MutationMode                string                            `json:"mutation_mode"`
-	RetainedPayloadPolicy       string                            `json:"retained_payload_policy"`
-	RetainedPayloadBytes        int64                             `json:"retained_payload_bytes"`
-	TypedStorageOwner           string                            `json:"typed_storage_owner"`
-	TypedStorageOwnerColumns    []columnStoreTypedOwnerColumn     `json:"typed_storage_owner_columns"`
-	RowCount                    int                               `json:"row_count"`
-	RowsProcessed               int                               `json:"rows_processed"`
-	RowsProcessedKnown          bool                              `json:"rows_processed_known"`
-	BytesRead                   int64                             `json:"bytes_read"`
-	ResultCount                 int                               `json:"result_count"`
-	RawHash                     uint64                            `json:"raw_hash"`
-	ResultHash                  uint64                            `json:"result_hash"`
-	ParityWithRowScan           bool                              `json:"parity_with_row_scan"`
-	ManifestRootName            string                            `json:"manifest_root_name,omitempty"`
-	ManifestRoot                uint64                            `json:"manifest_root,omitempty"`
-	ManifestGeneration          uint64                            `json:"manifest_generation,omitempty"`
-	ActiveManifestChecksum      uint64                            `json:"active_manifest_checksum,omitempty"`
-	PlannerDurationMS           float64                           `json:"planner_duration_ms"`
-	PreparedSetupDurationMS     float64                           `json:"prepared_setup_duration_ms,omitempty"`
-	HotRunDurationMS            float64                           `json:"hot_run_duration_ms,omitempty"`
-	ScanDurationMS              float64                           `json:"scan_duration_ms"`
-	ReduceDurationMS            float64                           `json:"reduce_duration_ms"`
-	ResultShapeDurationMS       float64                           `json:"result_shape_duration_ms"`
-	ParityHashDurationMS        float64                           `json:"parity_hash_duration_ms"`
-	MetadataHits                int                               `json:"metadata_hits"`
-	RowsScanned                 int                               `json:"rows_scanned"`
-	RowsMatched                 int                               `json:"rows_matched"`
-	ReduceRows                  int                               `json:"reduce_rows"`
-	DecodedGranules             int                               `json:"decoded_granules"`
-	SkippedGranules             int                               `json:"skipped_granules"`
-	ScheduledGranules           int                               `json:"scheduled_granules"`
-	PredicateMode               string                            `json:"predicate_mode"`
-	RealPredicates              bool                              `json:"real_predicates"`
-	RetainedPayloadPolicyCaveat string                            `json:"retained_payload_policy_caveat"`
-	ReconstructionStatus        string                            `json:"reconstruction_status"`
-	FullDataCell                bool                              `json:"full_data_cell"`
-	FullDataCaveat              string                            `json:"full_data_caveat"`
-	StorageAccountingCaveat     string                            `json:"storage_accounting_caveat"`
-	CompatibilityStatus         string                            `json:"compatibility_status"`
-	CompatibilityStatusReason   string                            `json:"compatibility_status_reason,omitempty"`
-	CompressionAttribution      columnStoreCompressionAttribution `json:"compression_attribution"`
+	CellLabel                     string                            `json:"cell_label"`
+	Query                         string                            `json:"query"`
+	AliasOf                       string                            `json:"alias_of,omitempty"`
+	SortLayout                    string                            `json:"sort_layout"`
+	SortKey                       []string                          `json:"sort_key"`
+	PlanLabel                     string                            `json:"plan_label"`
+	StorageSource                 string                            `json:"storage_source"`
+	FallbackReason                string                            `json:"fallback_reason"`
+	ExecutionMode                 string                            `json:"execution_mode"`
+	MetadataDataScanPath          string                            `json:"metadata_data_scan_path"`
+	CompressionMode               string                            `json:"compression_mode"`
+	RequestedCompression          string                            `json:"requested_compression"`
+	ActualCompression             string                            `json:"actual_compression"`
+	MutationMode                  string                            `json:"mutation_mode"`
+	RetainedPayloadPolicy         string                            `json:"retained_payload_policy"`
+	RetainedPayloadEncoding       string                            `json:"retained_payload_encoding"`
+	RetainedPayloadEncodingStatus string                            `json:"retained_payload_encoding_status"`
+	RetainedPayloadBytes          int64                             `json:"retained_payload_bytes"`
+	TypedStorageOwner             string                            `json:"typed_storage_owner"`
+	TypedStorageOwnerColumns      []columnStoreTypedOwnerColumn     `json:"typed_storage_owner_columns"`
+	RowCount                      int                               `json:"row_count"`
+	RowsProcessed                 int                               `json:"rows_processed"`
+	RowsProcessedKnown            bool                              `json:"rows_processed_known"`
+	BytesRead                     int64                             `json:"bytes_read"`
+	ResultCount                   int                               `json:"result_count"`
+	RawHash                       uint64                            `json:"raw_hash"`
+	ResultHash                    uint64                            `json:"result_hash"`
+	ParityWithRowScan             bool                              `json:"parity_with_row_scan"`
+	ManifestRootName              string                            `json:"manifest_root_name,omitempty"`
+	ManifestRoot                  uint64                            `json:"manifest_root,omitempty"`
+	ManifestGeneration            uint64                            `json:"manifest_generation,omitempty"`
+	ActiveManifestChecksum        uint64                            `json:"active_manifest_checksum,omitempty"`
+	PlannerDurationMS             float64                           `json:"planner_duration_ms"`
+	PreparedSetupDurationMS       float64                           `json:"prepared_setup_duration_ms,omitempty"`
+	HotRunDurationMS              float64                           `json:"hot_run_duration_ms,omitempty"`
+	ScanDurationMS                float64                           `json:"scan_duration_ms"`
+	ReduceDurationMS              float64                           `json:"reduce_duration_ms"`
+	ResultShapeDurationMS         float64                           `json:"result_shape_duration_ms"`
+	ParityHashDurationMS          float64                           `json:"parity_hash_duration_ms"`
+	MetadataHits                  int                               `json:"metadata_hits"`
+	RowsScanned                   int                               `json:"rows_scanned"`
+	RowsMatched                   int                               `json:"rows_matched"`
+	ReduceRows                    int                               `json:"reduce_rows"`
+	DecodedGranules               int                               `json:"decoded_granules"`
+	SkippedGranules               int                               `json:"skipped_granules"`
+	ScheduledGranules             int                               `json:"scheduled_granules"`
+	PredicateMode                 string                            `json:"predicate_mode"`
+	RealPredicates                bool                              `json:"real_predicates"`
+	RetainedPayloadPolicyCaveat   string                            `json:"retained_payload_policy_caveat"`
+	ReconstructionStatus          string                            `json:"reconstruction_status"`
+	FullDataCell                  bool                              `json:"full_data_cell"`
+	FullDataCaveat                string                            `json:"full_data_caveat"`
+	StorageAccountingCaveat       string                            `json:"storage_accounting_caveat"`
+	CompatibilityStatus           string                            `json:"compatibility_status"`
+	CompatibilityStatusReason     string                            `json:"compatibility_status_reason,omitempty"`
+	CompressionAttribution        columnStoreCompressionAttribution `json:"compression_attribution"`
 }
 
 type columnStoreTypedOwnerColumn struct {
@@ -2341,23 +2343,26 @@ func columnStoreJSONBenchUnavailablePreparedCell(name string, direct columnStore
 }
 
 func columnStoreBaseJSONBenchCell(query, planLabel string, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) columnStoreJSONBenchCell {
+	retainedEncoding, retainedEncodingStatus := collections.ColumnRetainedPayloadEncodingStatus(cfg)
 	return columnStoreJSONBenchCell{
-		Query:                       query,
-		SortLayout:                  columnStoreSortLayoutLabel(cfg),
-		SortKey:                     columnStoreSortKeyLabels(cfg),
-		PlanLabel:                   planLabel,
-		MutationMode:                columnStoreJSONBenchMutationInsertOnlyReopen,
-		RetainedPayloadPolicy:       columnStoreRetainedPayloadPolicyLabel(cfg),
-		RetainedPayloadBytes:        retainedPayloadBytes,
-		TypedStorageOwner:           columnStoreTypedStorageOwnerSummary(cfg),
-		TypedStorageOwnerColumns:    columnStoreTypedStorageOwnerColumns(cfg),
-		PredicateMode:               columnStorePredicateModeLabel(query),
-		RealPredicates:              columnStoreQueryUsesRealPredicates(query),
-		RetainedPayloadPolicyCaveat: columnStoreRetainedPayloadCaveat(cfg),
-		ReconstructionStatus:        columnStoreReconstructionStatus(cfg),
-		FullDataCell:                false,
-		FullDataCaveat:              columnStoreJSONBenchFullDataCaveat,
-		StorageAccountingCaveat:     columnStoreJSONBenchStorageCaveat,
+		Query:                         query,
+		SortLayout:                    columnStoreSortLayoutLabel(cfg),
+		SortKey:                       columnStoreSortKeyLabels(cfg),
+		PlanLabel:                     planLabel,
+		MutationMode:                  columnStoreJSONBenchMutationInsertOnlyReopen,
+		RetainedPayloadPolicy:         columnStoreRetainedPayloadPolicyLabel(cfg),
+		RetainedPayloadEncoding:       retainedEncoding,
+		RetainedPayloadEncodingStatus: retainedEncodingStatus,
+		RetainedPayloadBytes:          retainedPayloadBytes,
+		TypedStorageOwner:             columnStoreTypedStorageOwnerSummary(cfg),
+		TypedStorageOwnerColumns:      columnStoreTypedStorageOwnerColumns(cfg),
+		PredicateMode:                 columnStorePredicateModeLabel(query),
+		RealPredicates:                columnStoreQueryUsesRealPredicates(query),
+		RetainedPayloadPolicyCaveat:   columnStoreRetainedPayloadCaveat(cfg),
+		ReconstructionStatus:          columnStoreReconstructionStatus(cfg),
+		FullDataCell:                  false,
+		FullDataCaveat:                columnStoreJSONBenchFullDataCaveat,
+		StorageAccountingCaveat:       columnStoreJSONBenchStorageCaveat,
 	}
 }
 
@@ -3544,8 +3549,8 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		sb.WriteString("No JSONBench synthetic cells were recorded.\n\n")
 		return
 	}
-	sb.WriteString("| cell | query | sort layout | storage source | mode | metadata/data path | compression | mutation | retained payload | typed owner | rows | rows processed | bytes read | result hash | parity | full-data caveat | reconstruction | status |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|\n")
+	sb.WriteString("| cell | query | sort layout | storage source | mode | metadata/data path | compression | mutation | retained payload | retained encoding | typed owner | rows | rows processed | bytes read | result hash | parity | full-data caveat | reconstruction | status |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|\n")
 	for _, cell := range report.JSONBenchCells {
 		parity := "pass"
 		if !cell.ParityWithRowScan {
@@ -3555,7 +3560,7 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		if cell.CompatibilityStatusReason != "" {
 			status += ": " + cell.CompatibilityStatusReason
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %d | %d | %d | %016x | %s | %s | %s | %s |\n",
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %d | %d | %d | %016x | %s | %s | %s | %s |\n",
 			markdownCodeTableText(cell.CellLabel),
 			markdownCodeTableText(cell.Query),
 			markdownCodeTableText(cell.SortLayout),
@@ -3565,6 +3570,7 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 			markdownCodeTableText(cell.CompressionMode),
 			markdownCodeTableText(cell.MutationMode),
 			markdownCodeTableText(cell.RetainedPayloadPolicy),
+			markdownCodeTableText(cell.RetainedPayloadEncoding),
 			markdownCodeTableText(cell.TypedStorageOwner),
 			cell.RowCount,
 			cell.RowsProcessed,
