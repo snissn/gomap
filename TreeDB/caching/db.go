@@ -12718,18 +12718,19 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 
 	type vlogBatchPlan struct {
-		start       int
-		end         int
-		writeMode   vlogCompressionWriteMode
-		blockCodec  valuelog.BlockCodec
-		dictID      uint64
-		dict        []byte
-		k           int
-		probe       bool
-		rawBytes    int
-		frames      []preparedDictFrame
-		storedBytes int
-		wallNs      int64
+		start                int
+		end                  int
+		writeMode            vlogCompressionWriteMode
+		blockCodec           valuelog.BlockCodec
+		dictID               uint64
+		dict                 []byte
+		k                    int
+		probe                bool
+		rawBytes             int
+		retainedStorageFirst bool
+		frames               []preparedDictFrame
+		storedBytes          int
+		wallNs               int64
 	}
 	rawPaused := db.valueLogDictPauseRemaining.Load() > 0
 	var planScratch [16]vlogBatchPlan
@@ -12739,10 +12740,16 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
-	for i := 0; i < len(requests); {
-		writeMode := requests[i].writeMode
-		blockCodec := normalizeSelectorBlockCodec(requests[i].blockCodec)
-		dictID := requests[i].dictID
+	type queuedVlogRequestPlan struct {
+		writeMode  vlogCompressionWriteMode
+		blockCodec valuelog.BlockCodec
+		dictID     uint64
+		dict       []byte
+	}
+	normalizeQueuedRequest := func(idx int) queuedVlogRequestPlan {
+		writeMode := requests[idx].writeMode
+		blockCodec := normalizeSelectorBlockCodec(requests[idx].blockCodec)
+		dictID := requests[idx].dictID
 		if writeMode != vlogWriteDict {
 			dictID = 0
 		}
@@ -12757,42 +12764,91 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				}
 			}
 		}
+		return queuedVlogRequestPlan{
+			writeMode:  writeMode,
+			blockCodec: blockCodec,
+			dictID:     dictID,
+			dict:       dict,
+		}
+	}
+	for i := 0; i < len(requests); {
+		current := normalizeQueuedRequest(i)
+		writeMode := current.writeMode
+		blockCodec := current.blockCodec
+		dictID := current.dictID
+		dict := current.dict
 		probe := requests[i].probeCompression
 		maxValLen := len(requests[i].value)
 		rawBytes := len(requests[i].value)
 		end := i + 1
-		for end < len(requests) {
-			nextMode := requests[end].writeMode
-			nextCodec := normalizeSelectorBlockCodec(requests[end].blockCodec)
-			nextDictID := requests[end].dictID
-			nextDict := lookupVlogDictBytes(nextDictID, singleDictID, singleDict, dictByID)
-			if nextMode != vlogWriteDict {
-				nextDictID = 0
+		retainedStorageFirst := false
+		if mode != vlogCompressionOff && writeMode != vlogWriteDict {
+			retainedRawBytes := 0
+			retainedMaxValLen := 0
+			retainedProbe := false
+			retainedEnd := i
+			for retainedEnd < len(requests) {
+				next := normalizeQueuedRequest(retainedEnd)
+				if next.writeMode == vlogWriteDict && next.dictID != 0 {
+					break
+				}
+				if !valueLogPayloadLooksRetainedJSONLike(requests[retainedEnd].value) {
+					break
+				}
+				retainedProbe = retainedProbe || requests[retainedEnd].probeCompression
+				if n := len(requests[retainedEnd].value); n > retainedMaxValLen {
+					retainedMaxValLen = n
+				}
+				retainedRawBytes += len(requests[retainedEnd].value)
+				retainedEnd++
 			}
-			if nextDictID == 0 || len(nextDict) == 0 || nextMode != vlogWriteDict {
-				nextDictID = 0
-			}
-			if nextMode == vlogWriteDict && nextDictID == 0 {
-				nextMode = fallbackAutoVlogWriteMode(mode, nextMode, allowDictFallback)
-				if nextMode == vlogWriteDict {
-					nextMode = vlogWriteOff
+			if retainedEnd > i {
+				retainedRecords := retainedEnd - i
+				retainedUnitBytes := retainedRawBytes / retainedRecords
+				if db.retainedStorageFirstValueLogAuto(retainedRawBytes, retainedUnitBytes, records[i:retainedEnd]) {
+					writeMode = vlogWriteBlock
+					blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+					dictID = 0
+					dict = nil
+					probe = retainedProbe
+					maxValLen = retainedMaxValLen
+					rawBytes = retainedRawBytes
+					end = retainedEnd
+					retainedStorageFirst = true
 				}
 			}
-			if nextMode != writeMode {
-				break
+		}
+		if !retainedStorageFirst {
+			for end < len(requests) {
+				next := normalizeQueuedRequest(end)
+				if next.writeMode != writeMode {
+					break
+				}
+				if next.writeMode == vlogWriteBlock && next.blockCodec != blockCodec {
+					break
+				}
+				if next.dictID != dictID {
+					break
+				}
+				probe = probe || requests[end].probeCompression
+				if n := len(requests[end].value); n > maxValLen {
+					maxValLen = n
+				}
+				rawBytes += len(requests[end].value)
+				end++
 			}
-			if nextMode == vlogWriteBlock && nextCodec != blockCodec {
-				break
+
+			unitPayloadBytes := rawBytes
+			if recordsInPlan := end - i; recordsInPlan > 0 {
+				unitPayloadBytes = rawBytes / recordsInPlan
 			}
-			if nextDictID != dictID {
-				break
+			retainedStorageFirst = db.retainedStorageFirstValueLogAuto(rawBytes, unitPayloadBytes, records[i:end])
+			if retainedStorageFirst && mode != vlogCompressionOff && writeMode != vlogWriteDict {
+				writeMode = vlogWriteBlock
+				blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+				dictID = 0
+				dict = nil
 			}
-			probe = probe || requests[end].probeCompression
-			if n := len(requests[end].value); n > maxValLen {
-				maxValLen = n
-			}
-			rawBytes += len(requests[end].value)
-			end++
 		}
 
 		k := 1
@@ -12804,7 +12860,11 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 					k = valuelog.MaxFrameK
 				}
 			} else if writeMode == vlogWriteBlock {
-				k = db.chooseValueLogBlockWriteK(l, end-i, rawBytes, blockCodec)
+				if retainedStorageFirst {
+					k = db.chooseRetainedStorageFirstValueLogBlockWriteK(l, end-i, rawBytes, blockCodec)
+				} else {
+					k = db.chooseValueLogBlockWriteK(l, end-i, rawBytes, blockCodec)
+				}
 			} else {
 				k = db.chooseValueLogRawWriteK(l, end-i, false, rawPaused)
 			}
@@ -12818,18 +12878,28 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				k = maxKBySize
 			}
 		}
-		k = db.clampValueLogDictK(k)
+		if writeMode == vlogWriteDict && dictID != 0 {
+			k = db.clampValueLogDictK(k)
+		} else {
+			if k < 1 {
+				k = 1
+			}
+			if k > valuelog.MaxFrameK {
+				k = valuelog.MaxFrameK
+			}
+		}
 
 		plans = append(plans, vlogBatchPlan{
-			start:      i,
-			end:        end,
-			writeMode:  writeMode,
-			blockCodec: blockCodec,
-			dictID:     dictID,
-			dict:       dict,
-			k:          k,
-			probe:      probe,
-			rawBytes:   rawBytes,
+			start:                i,
+			end:                  end,
+			writeMode:            writeMode,
+			blockCodec:           blockCodec,
+			dictID:               dictID,
+			dict:                 dict,
+			k:                    k,
+			probe:                probe,
+			rawBytes:             rawBytes,
+			retainedStorageFirst: retainedStorageFirst,
 		})
 		i = end
 	}
@@ -13069,12 +13139,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if plan.start < 0 || plan.end > len(records) || plan.start >= plan.end {
 			return false
 		}
-		unitPayloadBytes := plan.rawBytes
-		if recordsInPlan := plan.end - plan.start; recordsInPlan > 0 {
-			unitPayloadBytes = plan.rawBytes / recordsInPlan
-		}
-		return db.storageFirstValueLogAuto(unitPayloadBytes) &&
-			valueLogRecordsLookRetainedJSONLike(records[plan.start:plan.end])
+		return plan.retainedStorageFirst
 	}
 
 	ptrs = getValueLogPtrsCap(len(records))
@@ -13920,6 +13985,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if n := len(records); n > 0 {
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
+	retainedStorageFirstBatch := db.retainedStorageFirstValueLogAuto(rawPayloadBytes, selectorUnitPayloadBytes, records)
 	autoRawBypass := db.shouldBypassAutoRawValueCompression(dictID, records, selectorUnitPayloadBytes, payloadKindForFallback)
 	writeMode, blockCodec, selectorProbe := vlogWriteOff, db.valueLogBlockCodec, false
 	if !autoRawBypass {
@@ -13945,14 +14011,22 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 		blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
 	}
-	blockMode := writeMode == vlogWriteBlock
+	forceRetainedStorageFirstBlock := func() {
+		if !retainedStorageFirstBatch || mode == vlogCompressionOff || dictID != 0 {
+			return
+		}
+		writeMode = vlogWriteBlock
+		blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+	}
 	probeCompression := selectorProbe
 	paused := false
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
 		normalizeNoDictBlockCodec()
+		forceRetainedStorageFirstBlock()
 	}
+	blockMode := writeMode == vlogWriteBlock
 
 	if dictID != 0 {
 		attemptCompression, dictProbe, dictPaused := db.valueLogDictShouldAttemptCompression(rawPayloadBytes)
@@ -13962,16 +14036,18 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			dictID = 0
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
-			blockMode = writeMode == vlogWriteBlock
 			normalizeNoDictBlockCodec()
+			forceRetainedStorageFirstBlock()
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
 		dictID = 0
 		dict = nil
 		writeMode = dictFallbackWriteMode(writeMode)
-		blockMode = writeMode == vlogWriteBlock
 		normalizeNoDictBlockCodec()
+		forceRetainedStorageFirstBlock()
+		blockMode = writeMode == vlogWriteBlock
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
 		avg := rawPayloadBytes / len(records)
@@ -13979,8 +14055,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			dictID = 0
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
-			blockMode = writeMode == vlogWriteBlock
 			normalizeNoDictBlockCodec()
+			forceRetainedStorageFirstBlock()
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	if dictID != 0 && len(dict) == 0 {
@@ -13990,8 +14067,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			dictID = 0
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
-			blockMode = writeMode == vlogWriteBlock
 			normalizeNoDictBlockCodec()
+			forceRetainedStorageFirstBlock()
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	switch mode {
@@ -14011,7 +14089,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			k = 16
 		}
 	} else if blockMode && len(records) > 1 {
-		k = db.chooseValueLogBlockWriteK(l, len(records), rawPayloadBytes, blockCodec)
+		if retainedStorageFirstBatch {
+			k = db.chooseRetainedStorageFirstValueLogBlockWriteK(l, len(records), rawPayloadBytes, blockCodec)
+		} else {
+			k = db.chooseValueLogBlockWriteK(l, len(records), rawPayloadBytes, blockCodec)
+		}
 	} else if len(records) > 1 {
 		// Even when dictionary compression is disabled/paused, grouping records into
 		// frames reduces per-record overhead (CRC/header writes) on append-heavy
@@ -14086,8 +14168,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	encodeNsPerRawForWriter := encodeNsPerRaw
 	blockEvalBypass := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
 	retainedStorageFirstBlockAttempt := finalWriteMode == vlogWriteBlock &&
-		db.storageFirstValueLogAuto(selectorUnitPayloadBytes) &&
-		valueLogRecordsLookRetainedJSONLike(records)
+		retainedStorageFirstBatch
 	forceBlockCompressionAttempt := finalWriteMode == vlogWriteBlock &&
 		(probeCompression || blockEvalBypass || retainedStorageFirstBlockAttempt)
 	if forceBlockCompressionAttempt {
@@ -14613,6 +14694,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
 	outerLeafPayload := db.isOuterLeafValueLogPayload(value)
+	retainedStorageFirstValue := db.retainedStorageFirstValueLogAutoValue(value)
 	dictFallbackWriteMode := func(current vlogCompressionWriteMode) vlogCompressionWriteMode {
 		next := fallbackAutoVlogWriteMode(mode, current, allowDictFallback)
 		if mode == vlogCompressionDict && next == vlogWriteDict && outerLeafPayload {
@@ -14643,11 +14725,19 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 		blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
 	}
+	forceRetainedStorageFirstBlock := func() {
+		if !retainedStorageFirstValue || mode == vlogCompressionOff || dictID != 0 {
+			return
+		}
+		writeMode = vlogWriteBlock
+		blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec)
+	}
 	probeCompression := selectorProbe
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
 		normalizeNoDictBlockCodec()
+		forceRetainedStorageFirstBlock()
 	}
 	if dictID != 0 {
 		attemptCompression, dictProbe, _ := db.valueLogDictShouldAttemptCompression(len(value))
@@ -14657,6 +14747,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
 			normalizeNoDictBlockCodec()
+			forceRetainedStorageFirstBlock()
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
@@ -14664,12 +14755,14 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		dict = nil
 		writeMode = dictFallbackWriteMode(writeMode)
 		normalizeNoDictBlockCodec()
+		forceRetainedStorageFirstBlock()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
 		writeMode = dictFallbackWriteMode(writeMode)
 		normalizeNoDictBlockCodec()
+		forceRetainedStorageFirstBlock()
 	}
 	if dictID != 0 && len(dict) == 0 {
 		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
@@ -14679,6 +14772,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			dict = nil
 			writeMode = dictFallbackWriteMode(writeMode)
 			normalizeNoDictBlockCodec()
+			forceRetainedStorageFirstBlock()
 		}
 	}
 	finalWriteMode := vlogWriteOff
@@ -14695,8 +14789,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		finalBlockCodec = db.valueLogBlockCodec
 	}
 	retainedStorageFirstBlockAttempt := finalWriteMode == vlogWriteBlock &&
-		db.storageFirstValueLogAuto(len(value)) &&
-		valueLogPayloadLooksRetainedJSONLike(value)
+		retainedStorageFirstValue
 	forceBlockCompressionAttempt := finalWriteMode == vlogWriteBlock &&
 		(probeCompression || mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode)) || retainedStorageFirstBlockAttempt)
 	resetBlockCompressionHints := finalWriteMode == vlogWriteBlock &&

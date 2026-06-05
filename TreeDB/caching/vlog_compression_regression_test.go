@@ -53,6 +53,53 @@ func readValueLogFrameHeaderAt(t *testing.T, path string, index int) valuelog.Fr
 	return valuelog.FrameHeader{}
 }
 
+func readValueLogFrameHeaders(t *testing.T, path string) []valuelog.FrameHeader {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	headers := make([]valuelog.FrameHeader, 0, 8)
+	for pos := 0; pos < len(data); {
+		if len(data)-pos < valuelog.HeaderSize {
+			t.Fatalf("truncated value-log frame header at offset %d in file length %d", pos, len(data))
+		}
+		bodyLen := int(binary.LittleEndian.Uint32(data[pos+16 : pos+20]))
+		end := pos + valuelog.HeaderSize + bodyLen
+		if bodyLen < valuelog.FrameHeaderSize || end > len(data) {
+			t.Fatalf("invalid value-log body length %d at offset %d in file length %d", bodyLen, pos, len(data))
+		}
+		header, rids, offsets, _, err := valuelog.DecodeFrame(data[pos+valuelog.HeaderSize : end])
+		if err != nil {
+			t.Fatalf("DecodeFrame: %v", err)
+		}
+		if len(rids) != int(header.K) || len(offsets) != int(header.K)+1 {
+			t.Fatalf("decoded frame cardinality mismatch: k=%d rids=%d offsets=%d", header.K, len(rids), len(offsets))
+		}
+		headers = append(headers, header)
+		pos = end
+	}
+	return headers
+}
+
+func compactRetainedTemplatePayload(suffix byte) []byte {
+	base := []byte(`TD1D{"commit":{"operation":"create","collection":"app.bsky.feed.post"},"kind":"commit","did":"did:plc:storage-parity","text":"compact-retained-template-body"}`)
+	value := bytes.Repeat(base, 2)
+	if len(value) > 300 {
+		value = value[:300]
+	}
+	value[len(value)-1] = suffix
+	return value
+}
+
+func largeRetainedTemplatePayload(suffix byte) []byte {
+	base := []byte(`TD1D{"commit":{"operation":"create","collection":"app.bsky.feed.post"},"kind":"commit","did":"did:plc:storage-parity","text":"large-retained-template-body-for-block-resolution"}`)
+	value := bytes.Repeat(base, 5)
+	value[len(value)-1] = suffix
+	return value
+}
+
 func TestResolveVlogWriteMode_DefaultUsesAutoBehavior(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionDefault),
@@ -142,6 +189,233 @@ func TestResolveVlogWriteMode_DictAggressiveSelectorBlockUsesConfiguredCodec(t *
 	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 4096, 4096, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 || probe {
 		t.Fatalf("dict/aggressive selector block fallback should use configured block codec, got mode=%v codec=%v probe=%v", mode, codec, probe)
+	}
+}
+
+func TestAppendValueLog_AutoBalancedCompactRetainedTemplateBatchUsesBlockFrames(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	selector.dwellBytes = 0
+	selector.exploreBytes = 0
+	selector.exploreRemaining = 0
+	selector.currentCandidate = vlogAutoCandidateOff
+	selector.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.20, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.20, samples: 16}
+	selector.metrics[vlogAutoCandidateBlockZSTD] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.20, samples: 16}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: selector},
+		},
+	}
+	db.valueLogDictCurrentK.Store(32)
+
+	records := make([]valuelog.Record, 64)
+	for i := range records {
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: compactRetainedTemplatePayload(byte(i))}
+	}
+	ptrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLog: %v", err)
+	}
+	if len(ptrs) != len(records) {
+		t.Fatalf("ptr count=%d want %d", len(ptrs), len(records))
+	}
+	for i, ptr := range ptrs {
+		if ptr == (page.ValuePtr{}) {
+			t.Fatalf("empty pointer at %d", i)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	headers := readValueLogFrameHeaders(t, path)
+	recordsSeen := 0
+	for i, header := range headers {
+		recordsSeen += int(header.K)
+		if header.Flags&valuelog.FrameFlagCompressed == 0 {
+			t.Fatalf("frame %d is raw; compact retained template batches must not follow grouped_raw path", i)
+		}
+		if header.DictID != 0 {
+			t.Fatalf("frame %d dict id=%d, want block-compressed no-dict frame", i, header.DictID)
+		}
+	}
+	if recordsSeen != len(records) {
+		t.Fatalf("records in frames=%d want %d", recordsSeen, len(records))
+	}
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected block write-mode observation")
+	}
+	if writeSnap.Frames[vlogWriteOff] != 0 {
+		t.Fatalf("expected no raw/off write-mode observations for compact retained template batch")
+	}
+}
+
+func TestFlushVlogRequests_AutoBalancedCompactRetainedTemplateQueueUsesBlockFrames(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+	db.valueLogDictCurrentK.Store(32)
+
+	requests := make([]vlogWriteRequest, 64)
+	for i := range requests {
+		ack := &vlogAck{}
+		ack.wg.Add(1)
+		requests[i] = vlogWriteRequest{
+			rid:        uint64(i + 1),
+			value:      compactRetainedTemplatePayload(byte(i)),
+			writeMode:  vlogWriteOff,
+			blockCodec: valuelog.BlockCodecSnappy,
+			durability: journalDurabilityFlush,
+			ack:        ack,
+		}
+	}
+
+	db.flushVlogRequests(&db.lanes[0], requests)
+	for i := range requests {
+		ack := requests[i].ack
+		ack.wg.Wait()
+		if ack.err != nil {
+			t.Fatalf("ack[%d] err: %v", i, ack.err)
+		}
+		if ack.ptr == (page.ValuePtr{}) {
+			t.Fatalf("ack[%d] missing pointer", i)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	headers := readValueLogFrameHeaders(t, path)
+	recordsSeen := 0
+	for i, header := range headers {
+		recordsSeen += int(header.K)
+		if header.Flags&valuelog.FrameFlagCompressed == 0 {
+			t.Fatalf("frame %d is raw; queued compact retained template batches must not follow grouped_raw path", i)
+		}
+		if header.DictID != 0 {
+			t.Fatalf("frame %d dict id=%d, want block-compressed no-dict frame", i, header.DictID)
+		}
+	}
+	if recordsSeen != len(requests) {
+		t.Fatalf("records in frames=%d want %d", recordsSeen, len(requests))
+	}
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected queued block write-mode observation")
+	}
+	if writeSnap.Frames[vlogWriteOff] != 0 {
+		t.Fatalf("expected no queued raw/off write-mode observations for compact retained template batch")
+	}
+}
+
+func TestFlushVlogRequests_AutoBalancedMixedRetainedResolvedModesCoalesceBeforeRaw(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+	db.valueLogDictCurrentK.Store(32)
+
+	requests := make([]vlogWriteRequest, 14)
+	for i := 0; i < 13; i++ {
+		ack := &vlogAck{}
+		ack.wg.Add(1)
+		requests[i] = vlogWriteRequest{
+			rid:        uint64(i + 1),
+			value:      compactRetainedTemplatePayload(byte(i)),
+			writeMode:  vlogWriteOff,
+			blockCodec: valuelog.BlockCodecSnappy,
+			durability: journalDurabilityFlush,
+			ack:        ack,
+		}
+	}
+	ack := &vlogAck{}
+	ack.wg.Add(1)
+	requests[len(requests)-1] = vlogWriteRequest{
+		rid:        uint64(len(requests)),
+		value:      largeRetainedTemplatePayload(byte(len(requests))),
+		writeMode:  vlogWriteBlock,
+		blockCodec: valuelog.BlockCodecSnappy,
+		durability: journalDurabilityFlush,
+		ack:        ack,
+	}
+
+	db.flushVlogRequests(&db.lanes[0], requests)
+	for i := range requests {
+		ack := requests[i].ack
+		ack.wg.Wait()
+		if ack.err != nil {
+			t.Fatalf("ack[%d] err: %v", i, ack.err)
+		}
+		if ack.ptr == (page.ValuePtr{}) {
+			t.Fatalf("ack[%d] missing pointer", i)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	headers := readValueLogFrameHeaders(t, path)
+	recordsSeen := 0
+	for i, header := range headers {
+		recordsSeen += int(header.K)
+		if header.Flags&valuelog.FrameFlagCompressed == 0 {
+			t.Fatalf("frame %d is raw; retained mode coalescing must happen before old write-mode boundaries", i)
+		}
+		if header.DictID != 0 {
+			t.Fatalf("frame %d dict id=%d, want block-compressed no-dict frame", i, header.DictID)
+		}
+	}
+	if recordsSeen != len(requests) {
+		t.Fatalf("records in frames=%d want %d", recordsSeen, len(requests))
+	}
+	writeSnap := snapshotLaneVlogWriteMode(&db.lanes[0])
+	if writeSnap.Frames[vlogWriteBlock] == 0 {
+		t.Fatalf("expected mixed resolved-mode queue to record block write-mode observation")
+	}
+	if writeSnap.Frames[vlogWriteOff] != 0 {
+		t.Fatalf("expected no raw/off observations for mixed retained resolved-mode queue")
 	}
 }
 
