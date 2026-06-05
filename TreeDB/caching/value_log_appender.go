@@ -52,7 +52,7 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 }
 
 func (a *cachingValueLogAppender) ReserveRIDs(count int) (uint64, error) {
-	if a == nil || a.db == nil {
+	if a == nil || a.db == nil || a.lane == nil {
 		return 0, errWALUnavailable
 	}
 	return a.db.ReserveValueLogRIDs(count)
