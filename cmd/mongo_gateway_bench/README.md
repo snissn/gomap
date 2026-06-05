@@ -239,6 +239,20 @@ harness builds `mongo_gateway_bench`, runs matching TreeDB and MongoDB cells,
 writes raw JSON for every target, records physical `du` bytes where available,
 and generates a Markdown report plus TSV summary.
 
+For the standard fast Mongo/native client-shape matrix used by the TreeDB
+client-attribution tracker, prefer:
+
+```sh
+OUT_DIR=/tmp/treedb_fast_client_matrix_$(date +%Y%m%d_%H%M%S) \
+  scripts/mongo_gateway_fast_client_matrix.sh
+```
+
+That wrapper pins gateway-shaped BSON documents, two secondary indexes, 16
+insert producers/readers, `command_wal_relaxed`, settled read state, and the
+current TreeDB/MongoDB client-mode sets. It also writes
+`fast_client_matrix_context.md`, which explains client-mode, acknowledgement,
+raw-command construction, direct-storage, and settled drain/flush boundaries.
+
 To compare every TreeDB document format in one bundle:
 
 ```sh
