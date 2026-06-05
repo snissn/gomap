@@ -2,10 +2,14 @@ package collections
 
 import (
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -241,6 +245,471 @@ func TestColumnHNSWSearchPackVectorIndexStateAssetContract2312(t *testing.T) {
 	if _, err := encodeColumnVectorIndexStateRecord(wrongEncoding); err == nil || !strings.Contains(err.Error(), "type/encoding") {
 		t.Fatalf("wrong encoding encode err=%v want type/encoding failure", err)
 	}
+}
+
+func TestColumnHNSWSearchPackRebuildPublishesPack2313(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{3, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 4, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 5}},
+		{id: "doc-d", vector: []float32{1, 1, 0}},
+		{id: "doc-e", vector: []float32{0, 1, 1}},
+	}
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	asset, raw, pack := loadColumnHNSWSearchPackForTest2313(t, d, def, graph, state)
+	assertColumnHNSWSearchPackMatchesRebuild2313(t, pack, raw, def, graph, scanned)
+	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, asset.Ref)
+	if got, want := status.Stats.BytesDisk, columnVectorGraphStorageBytesWithState(graph, state); got != want {
+		t.Fatalf("status bytes_disk=%d want graph+state+pack=%d", got, want)
+	}
+	if asset.AssetBytes != int64(len(raw)) || asset.AssetBytes <= 0 {
+		t.Fatalf("pack asset bytes=%d raw=%d", asset.AssetBytes, len(raw))
+	}
+	if cfg.ActiveManifest == nil || pack.Header.BaseManifestGeneration != cfg.ActiveManifest.Generation {
+		t.Fatalf("pack base generation=%d active=%+v", pack.Header.BaseManifestGeneration, cfg.ActiveManifest)
+	}
+	if dir == "" {
+		t.Fatal("test fixture returned empty dir")
+	}
+}
+
+func TestColumnHNSWSearchPackReopenPreservesManifestIdentity2313(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	status, err := reopenedCol.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("VectorIndexStatus reopen: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, reopened, "docs", def)
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, reopened, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	_, raw, pack := loadColumnHNSWSearchPackForTest2313(t, reopened, def, graph, state)
+	assertColumnHNSWSearchPackMatchesRebuild2313(t, pack, raw, def, graph, scanned)
+}
+
+func TestColumnHNSWSearchPackEmptyAndSingleRowFixtures2313(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rows []columnGraphRebuildInputRowV2A
+	}{
+		{name: "empty"},
+		{name: "single", rows: []columnGraphRebuildInputRowV2A{{id: "solo", vector: []float32{1, 0, 0}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, tc.rows)
+			defer func() { _ = d.Close() }()
+			if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+				t.Fatalf("RebuildVectorIndex: %v", err)
+			}
+			graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+			records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+			state := columnVectorIndexStateFromRecords1987(t, records, def)
+			_, raw, pack := loadColumnHNSWSearchPackForTest2313(t, d, def, graph, state)
+			assertColumnHNSWSearchPackMatchesRebuild2313(t, pack, raw, def, graph, scanned)
+			if len(tc.rows) == 0 && (pack.Header.EntryOrdinal != -1 || pack.Header.MaxLayer != -1 || pack.Header.AdjacencyLayerCount != 0) {
+				t.Fatalf("empty pack header=%+v want no-entry/no-layer", pack.Header)
+			}
+			if len(tc.rows) == 1 && (pack.Header.EntryOrdinal != 0 || pack.Header.MaxLayer != 0 || pack.Header.AdjacencyLayerCount != 1 || len(pack.AdjacencyLayers[0].Neighbors) != 0) {
+				t.Fatalf("single-row pack header/layers=%+v %+v", pack.Header, pack.AdjacencyLayers)
+			}
+		})
+	}
+}
+
+func TestColumnHNSWSearchPackValidationRejectsMismatchedRefs2313(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	asset, _, _ := loadColumnHNSWSearchPackForTest2313(t, d, def, graph, state)
+
+	badChecksum := state
+	badChecksum.Assets = append([]columnVectorIndexStateAssetSnapshot(nil), state.Assets...)
+	for i := range badChecksum.Assets {
+		if badChecksum.Assets[i].Role == columnVectorIndexStateAssetRoleHNSWSearchPack {
+			badChecksum.Assets[i].Ref.Checksum++
+			break
+		}
+	}
+	if err := validateColumnHNSWSearchPackStateAssetIfPresent(d.ColumnAssetRootDir(), *cfg, def, graph, badChecksum); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("bad checksum validation err=%v want checksum failure", err)
+	}
+	if _, err := decodeColumnHNSWSearchPack(readColumnHNSWSearchPackRawForTest2313(t, d, asset.Ref), columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: graph.BaseManifestGeneration + 1}}); err == nil || !strings.Contains(err.Error(), "base manifest generation") {
+		t.Fatalf("base mismatch decode err=%v want generation failure", err)
+	}
+}
+
+func TestColumnHNSWSearchPackFallbackSearchPathStillUsable2313(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	var buf VectorIndexSearchBuffer
+	response, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: []float32{1, 0, 0}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buf)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer: %v", err)
+	}
+	if len(response.Results) != 2 {
+		t.Fatalf("results=%d want 2", len(response.Results))
+	}
+	stats := response.Stats
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.HNSWSearchPackActive != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+		t.Fatalf("route stats=%+v want existing column_graph route, no pack route", stats)
+	}
+}
+
+func loadColumnHNSWSearchPackForTest2313(tb testing.TB, d *backenddb.DB, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (columnVectorIndexStateAssetSnapshot, []byte, columnHNSWSearchPack) {
+	tb.Helper()
+	asset, found, err := findColumnHNSWSearchPackStateAsset(state)
+	if err != nil {
+		tb.Fatalf("findColumnHNSWSearchPackStateAsset: %v", err)
+	}
+	if !found {
+		tb.Fatalf("state missing hnsw search pack asset: %+v", state.Assets)
+	}
+	raw := readColumnHNSWSearchPackRawForTest2313(tb, d, asset.Ref)
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: graph.BaseManifestGeneration, ManifestChecksum: graph.BaseManifestChecksum, SchemaHash: graph.BaseSchemaHash}})
+	if err != nil {
+		tb.Fatalf("decodeColumnHNSWSearchPack: %v", err)
+	}
+	return asset, raw, pack
+}
+
+func readColumnHNSWSearchPackRawForTest2313(tb testing.TB, d *backenddb.DB, ref ColumnAssetRef) []byte {
+	tb.Helper()
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		tb.Fatalf("read hnsw search pack asset: %v", err)
+	}
+	return raw
+}
+
+func assertColumnHNSWSearchPackMatchesRebuild2313(tb testing.TB, pack columnHNSWSearchPack, raw []byte, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, rows []columnGraphRebuildScannedRowV2A) {
+	tb.Helper()
+	stride, err := columnHNSWSearchPackVectorStrideForDimensions(def.Dimensions)
+	if err != nil {
+		tb.Fatalf("columnHNSWSearchPackVectorStrideForDimensions: %v", err)
+	}
+	if pack.Header.Rows != len(rows) || pack.Header.Rows != graph.RowCount || pack.Header.Dimensions != def.Dimensions || pack.Header.VectorStride != stride || pack.Header.M != def.M || pack.Header.EfConstruction != def.EfConstruction || pack.Header.EfSearch != def.EfSearch {
+		tb.Fatalf("pack header=%+v graph rows=%d def=%+v stride=%d", pack.Header, graph.RowCount, def, stride)
+	}
+	if pack.Header.BaseManifestGeneration != graph.BaseManifestGeneration || pack.Header.BaseManifestChecksum != graph.BaseManifestChecksum || pack.Header.BaseSchemaHash != graph.BaseSchemaHash {
+		tb.Fatalf("pack base identity header=%+v graph=%+v", pack.Header, graph)
+	}
+	wantSections := 8 + 2*pack.Header.AdjacencyLayerCount
+	if len(pack.Sections) != wantSections {
+		tb.Fatalf("pack sections=%d want %d", len(pack.Sections), wantSections)
+	}
+	if len(pack.NormalizedVectors) != len(rows)*stride || len(pack.Levels) != len(rows) || len(pack.RowRefGenerations) != len(rows) || len(pack.RowRefPartIDs) != len(rows) || len(pack.RowRefRowIndexes) != len(rows) || len(pack.RowRefAppliedLSNs) != len(rows) || len(pack.DocumentIDOffsets) != len(rows)+1 {
+		tb.Fatalf("pack section lengths vectors=%d levels=%d rowrefs=(%d,%d,%d,%d) doc_offsets=%d rows=%d stride=%d", len(pack.NormalizedVectors), len(pack.Levels), len(pack.RowRefGenerations), len(pack.RowRefPartIDs), len(pack.RowRefRowIndexes), len(pack.RowRefAppliedLSNs), len(pack.DocumentIDOffsets), len(rows), stride)
+	}
+	assetRows := make([]columnVectorGraphAssetRow, len(rows))
+	for ordinal, row := range rows {
+		assetRows[ordinal] = columnVectorGraphAssetRow{ID: []byte(row.id), Vector: row.vector, InvNorm: row.invNorm, Adjacency: row.adjacency}
+		base := ordinal * stride
+		for dim := 0; dim < def.Dimensions; dim++ {
+			want := row.vector[dim] * row.invNorm
+			if math.Abs(float64(pack.NormalizedVectors[base+dim]-want)) > 1e-6 {
+				tb.Fatalf("normalized row=%d dim=%d got=%v want=%v", ordinal, dim, pack.NormalizedVectors[base+dim], want)
+			}
+		}
+		for pad := def.Dimensions; pad < stride; pad++ {
+			if pack.NormalizedVectors[base+pad] != 0 {
+				tb.Fatalf("normalized row=%d padding dim=%d got=%v want 0", ordinal, pad, pack.NormalizedVectors[base+pad])
+			}
+		}
+		if pack.RowRefGenerations[ordinal] <= 0 || pack.RowRefPartIDs[ordinal] <= 0 || pack.RowRefAppliedLSNs[ordinal] <= 0 || pack.RowRefRowIndexes[ordinal] < 0 {
+			tb.Fatalf("row-ref ordinal=%d generations/part/row/lsn=(%d,%d,%d,%d)", ordinal, pack.RowRefGenerations[ordinal], pack.RowRefPartIDs[ordinal], pack.RowRefRowIndexes[ordinal], pack.RowRefAppliedLSNs[ordinal])
+		}
+		start, end := pack.DocumentIDOffsets[ordinal], pack.DocumentIDOffsets[ordinal+1]
+		if string(pack.DocumentIDBytes[start:end]) != row.id {
+			tb.Fatalf("document id ordinal=%d got=%q want %q", ordinal, string(pack.DocumentIDBytes[start:end]), row.id)
+		}
+	}
+	lists, err := buildColumnVectorIndexStateAdjacencyLists(assetRows)
+	if err != nil {
+		tb.Fatalf("buildColumnVectorIndexStateAdjacencyLists: %v", err)
+	}
+	if len(rows) == 0 {
+		lists = nil
+	}
+	if len(pack.AdjacencyLayers) != len(lists) {
+		tb.Fatalf("pack adjacency layers=%d want %d", len(pack.AdjacencyLayers), len(lists))
+	}
+	for layer, list := range lists {
+		if !uint64SlicesEqual2313(pack.AdjacencyLayers[layer].Offsets, list.Offsets) || !uint32SlicesEqual(pack.AdjacencyLayers[layer].Neighbors, list.Values) {
+			tb.Fatalf("pack adjacency layer %d=%+v want offsets=%v values=%v", layer, pack.AdjacencyLayers[layer], list.Offsets, list.Values)
+		}
+	}
+	for _, section := range pack.Sections {
+		if section.Offset%uint64(section.Alignment) != 0 || section.Offset+section.Length > uint64(len(raw)) {
+			tb.Fatalf("bad section bounds/alignment %+v raw=%d", section, len(raw))
+		}
+	}
+}
+
+func uint64SlicesEqual2313(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func BenchmarkColumnHNSWSearchPackRebuildStorage2313(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	params := columnHNSWSearchPackRebuildBenchParamsFromEnv2313(b)
+	d, col, def := openColumnHNSWSearchPackRebuildBenchCollection2313(b, docs, dims, params)
+	defer func() { _ = d.Close() }()
+	b.ReportAllocs()
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(params.m), "hnsw_m")
+	b.ReportMetric(float64(params.efConstruction), "ef_construction")
+	b.ReportMetric(float64(params.efSearch), "ef_search")
+	var status VectorIndexStatus
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var err error
+		status, err = col.RebuildVectorIndex(def.Name)
+		if err != nil {
+			b.Fatalf("RebuildVectorIndex: %v", err)
+		}
+		if !status.Loaded || status.RebuildNeeded {
+			b.Fatalf("status=%+v, want loaded", status)
+		}
+		columnGraphRebuildBenchSinkV2A = status
+	}
+	b.StopTimer()
+	if elapsed := b.Elapsed(); elapsed > 0 {
+		b.ReportMetric(float64(b.N)/elapsed.Seconds(), "ops/sec")
+	}
+	b.ReportMetric(float64(status.Stats.BytesDisk), "index_bytes_disk")
+	if status.Duration > 0 {
+		b.ReportMetric(float64(status.Duration.Nanoseconds()), "rebuild_ns")
+	}
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(b, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(b, records, def)
+	packAsset := reportColumnHNSWSearchPackStorageMetrics2313(b, d, state)
+	if status.Stats.BytesDisk >= packAsset.AssetBytes {
+		b.ReportMetric(float64(status.Stats.BytesDisk-packAsset.AssetBytes), "index_without_hnsw_search_pack_B/op")
+	}
+}
+
+type columnHNSWSearchPackRebuildBenchParams2313 struct {
+	m              int
+	efConstruction int
+	efSearch       int
+}
+
+func columnHNSWSearchPackRebuildBenchParamsFromEnv2313(tb testing.TB) columnHNSWSearchPackRebuildBenchParams2313 {
+	tb.Helper()
+	params := columnHNSWSearchPackRebuildBenchParams2313{
+		m:              vectorBenchmarkPositiveEnvInt(tb, "TREEDB_VECTOR_BENCH_M", 16),
+		efConstruction: vectorBenchmarkPositiveEnvInt(tb, "TREEDB_VECTOR_BENCH_EF_CONSTRUCTION", 128),
+		efSearch:       vectorBenchmarkPositiveEnvInt(tb, "TREEDB_VECTOR_BENCH_EF_SEARCH", 128),
+	}
+	if params.efConstruction < params.m {
+		tb.Fatalf("TREEDB_VECTOR_BENCH_EF_CONSTRUCTION=%d must be >= TREEDB_VECTOR_BENCH_M=%d", params.efConstruction, params.m)
+	}
+	return params
+}
+
+func openColumnHNSWSearchPackRebuildBenchCollection2313(tb testing.TB, docs, dims int, params columnHNSWSearchPackRebuildBenchParams2313) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
+	dir := tb.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		tb.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(tb, dir)
+	def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:           "embedding_graph_production",
+		Field:          "embedding",
+		Metric:         VectorMetricCosine,
+		Dimensions:     dims,
+		M:              params.m,
+		EfConstruction: params.efConstruction,
+		EfSearch:       params.efSearch,
+		Strategy:       VectorIndexStrategyColumnGraph,
+	})
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("normalize vector index definition: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    columnGraphRebuildColumnStoreConfigV2A(dims),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	insertColumnHNSWSearchPackRebuildBenchRows2313(tb, col, docs, dims, 512)
+	return d, col, def
+}
+
+func insertColumnHNSWSearchPackRebuildBenchRows2313(tb testing.TB, col *Collection, docs, dims, batchSize int) {
+	tb.Helper()
+	ids := make([][]byte, 0, batchSize)
+	documents := make([][]byte, 0, batchSize)
+	flush := func() {
+		if len(ids) == 0 {
+			return
+		}
+		if _, err := col.InsertBatch(ids, documents); err != nil {
+			tb.Fatalf("InsertBatch: %v", err)
+		}
+		ids = ids[:0]
+		documents = documents[:0]
+	}
+	for i := 0; i < docs; i++ {
+		docID := fmt.Sprintf("doc-%06d", i)
+		raw, err := json.Marshal(map[string]any{
+			"time_us":   int64(i + 1),
+			"kind":      "vector",
+			"did":       docID,
+			"embedding": vectorBenchmarkEmbedding(i, dims),
+		})
+		if err != nil {
+			tb.Fatalf("json.Marshal row %q: %v", docID, err)
+		}
+		ids = append(ids, []byte(docID))
+		documents = append(documents, raw)
+		if len(ids) == batchSize {
+			flush()
+		}
+	}
+	flush()
+	if err := col.Flush(); err != nil {
+		tb.Fatalf("Flush: %v", err)
+	}
+}
+
+func reportColumnHNSWSearchPackStorageMetrics2313(b *testing.B, d *backenddb.DB, state columnVectorIndexStateSnapshot) columnVectorIndexStateAssetSnapshot {
+	b.Helper()
+	asset, found, err := findColumnHNSWSearchPackStateAsset(state)
+	if err != nil {
+		b.Fatalf("findColumnHNSWSearchPackStateAsset: %v", err)
+	}
+	if !found {
+		b.Fatalf("state missing hnsw search pack asset: %+v", state.Assets)
+	}
+	raw := readColumnHNSWSearchPackRawForTest2313(b, d, asset.Ref)
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{})
+	if err != nil {
+		b.Fatalf("decodeColumnHNSWSearchPack: %v", err)
+	}
+	var payloadBytes, normalizedBytes, levelsBytes, adjacencyOffsetsBytes, adjacencyNeighborsBytes, rowRefBytes, documentIDOffsetsBytes, documentIDBytes uint64
+	for _, section := range pack.Sections {
+		payloadBytes += section.Length
+		switch section.Kind {
+		case columnHNSWSearchPackSectionNormalizedVectors:
+			normalizedBytes += section.Length
+		case columnHNSWSearchPackSectionLevels:
+			levelsBytes += section.Length
+		case columnHNSWSearchPackSectionAdjacencyOffsets:
+			adjacencyOffsetsBytes += section.Length
+		case columnHNSWSearchPackSectionAdjacencyNeighbors:
+			adjacencyNeighborsBytes += section.Length
+		case columnHNSWSearchPackSectionRowRefGeneration, columnHNSWSearchPackSectionRowRefPartID, columnHNSWSearchPackSectionRowRefRowIndex, columnHNSWSearchPackSectionRowRefAppliedLSN:
+			rowRefBytes += section.Length
+		case columnHNSWSearchPackSectionDocumentIDOffsets:
+			documentIDOffsetsBytes += section.Length
+		case columnHNSWSearchPackSectionDocumentIDBytes:
+			documentIDBytes += section.Length
+		}
+	}
+	metadataBytes := int64(columnHNSWSearchPackHeaderSize + len(pack.Sections)*columnHNSWSearchPackSectionEntrySize)
+	paddingBytes := int64(len(raw)) - metadataBytes - int64(payloadBytes)
+	if paddingBytes < 0 {
+		paddingBytes = 0
+	}
+	b.ReportMetric(float64(asset.AssetBytes), "hnsw_search_pack_B/op")
+	b.ReportMetric(float64(metadataBytes), "hnsw_search_pack_metadata_B/op")
+	b.ReportMetric(float64(paddingBytes), "hnsw_search_pack_padding_B/op")
+	b.ReportMetric(float64(normalizedBytes), "hnsw_search_pack_normalized_vectors_B/op")
+	b.ReportMetric(float64(levelsBytes), "hnsw_search_pack_levels_B/op")
+	b.ReportMetric(float64(adjacencyOffsetsBytes), "hnsw_search_pack_adjacency_offsets_B/op")
+	b.ReportMetric(float64(adjacencyNeighborsBytes), "hnsw_search_pack_adjacency_neighbors_B/op")
+	b.ReportMetric(float64(adjacencyOffsetsBytes+adjacencyNeighborsBytes), "hnsw_search_pack_adjacency_B/op")
+	b.ReportMetric(float64(rowRefBytes), "hnsw_search_pack_row_refs_B/op")
+	b.ReportMetric(float64(documentIDOffsetsBytes), "hnsw_search_pack_document_id_offsets_B/op")
+	b.ReportMetric(float64(documentIDBytes), "hnsw_search_pack_document_id_bytes_B/op")
+	b.ReportMetric(float64(rowRefBytes+documentIDOffsetsBytes+documentIDBytes), "hnsw_search_pack_identity_B/op")
+	b.ReportMetric(float64(len(pack.Sections)), "hnsw_search_pack_sections")
+	b.ReportMetric(float64(pack.Header.AdjacencyLayerCount), "hnsw_search_pack_adjacency_layers")
+	b.ReportMetric(float64(pack.Header.VectorStride), "hnsw_search_pack_vector_stride")
+	if asset.RowCount > 0 {
+		b.ReportMetric(float64(asset.AssetBytes)/float64(asset.RowCount), "hnsw_search_pack_B/row")
+		b.ReportMetric(float64(normalizedBytes)/float64(asset.RowCount), "hnsw_search_pack_normalized_vectors_B/row")
+		b.ReportMetric(float64(adjacencyOffsetsBytes+adjacencyNeighborsBytes)/float64(asset.RowCount), "hnsw_search_pack_adjacency_B/row")
+		b.ReportMetric(float64(rowRefBytes+documentIDOffsetsBytes+documentIDBytes)/float64(asset.RowCount), "hnsw_search_pack_identity_B/row")
+	}
+	return asset
 }
 
 func BenchmarkColumnHNSWSearchPackDecodeValidate2312(b *testing.B) {

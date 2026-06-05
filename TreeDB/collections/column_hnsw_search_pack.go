@@ -25,8 +25,9 @@ import (
 //   - all allocation-sized counts are capped before slices are allocated;
 //   - corrupt, truncated, mismatched, overlapping, or stale packs fail closed.
 //
-// Publication, mmap resource ownership, and production SearchWithBuffer routing
-// are intentionally left to the writer/reader issues in the #2309 stack.
+// Rebuild publication is handled by the writer path. Mmap resource ownership
+// and production SearchWithBuffer routing remain deferred to later reader/search
+// promotion issues in the #2309 stack.
 const (
 	columnHNSWSearchPackVersionV1 = uint16(1)
 

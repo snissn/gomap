@@ -425,6 +425,9 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 	if err := validateColumnVectorGraphQuantizedStateAssets(collection, cfg, def, state); err != nil {
 		return err
 	}
+	if err := validateColumnHNSWSearchPackStateAssetIfPresentWithMode(rootDir, cfg, def, graph, state, validatePayload); err != nil {
+		return err
+	}
 	return nil
 }
 

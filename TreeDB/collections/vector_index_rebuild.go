@@ -788,6 +788,14 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
+	searchPackPartID := quantizedPartID
+	if len(preparedQuantizedAssets) > 0 {
+		searchPackPartID = nextColumnVectorGraphPartIDAfter(searchPackPartID, preparedQuantizedAssets[len(preparedQuantizedAssets)-1].Ref.PartID)
+	}
+	preparedSearchPack, err := prepareColumnHNSWSearchPackAsset(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -808,6 +816,9 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		state.Assets = append(state.Assets, documentIDAsset)
 	}
 	state.Assets = append(state.Assets, columnVectorGraphQuantizedAssetSnapshotsFromPrepared(preparedQuantizedAssets)...)
+	if searchPackAsset, ok := columnHNSWSearchPackStateAssetSnapshot(preparedSearchPack); ok {
+		state.Assets = append(state.Assets, searchPackAsset)
+	}
 	stateRaw, err := encodeColumnVectorIndexStateRecord(state)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
