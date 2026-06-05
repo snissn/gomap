@@ -1527,7 +1527,7 @@ func (it *hashReverseIterator) ensureLoaded() {
 	if it.loaded {
 		return
 	}
-	if !it.valid || it.curKey == "" {
+	if !it.valid {
 		return
 	}
 	idx, ok := it.mt.items[it.curKey]
@@ -1678,7 +1678,7 @@ func (it *hashIterator) ensureLoaded() {
 	if it.loaded {
 		return
 	}
-	if !it.valid || it.curKey == "" {
+	if !it.valid {
 		return
 	}
 	idx, ok := it.mt.items[it.curKey]

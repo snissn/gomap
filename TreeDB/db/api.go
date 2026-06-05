@@ -154,6 +154,7 @@ func (db *DB) refreshValueLogSetForReadRetry(observedEpoch uint64) error {
 //
 // Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	key = normalizeRawKVPointKey(key)
 	readOnce := func() ([]byte, error) {
 		snap, err := db.acquireSnapshotOrErr()
 		if err != nil {
@@ -190,6 +191,7 @@ func (db *DB) DurabilityMode() DurabilityMode {
 // Semantics: Returns safe copies of values. Missing keys are returned as nil
 // entries with no error.
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	keys = normalizeRawKVPointKeys(keys)
 	retryEpoch := db.readRetryRefreshEpoch.Load()
 	out, err := db.getManyOnce(keys)
 	if db.refreshOnValueLogFileNotFound(err) {
@@ -232,6 +234,7 @@ func (db *DB) getManyOnce(keys [][]byte) ([][]byte, error) {
 // synchronize it. If fn returns an error, iteration stops best-effort and that
 // error is returned; callbacks already invoked are not retried.
 func (db *DB) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	keys = normalizeRawKVPointKeys(keys)
 	if fn == nil {
 		return errors.New("GetManyView: nil callback")
 	}
@@ -401,6 +404,7 @@ func (db *DB) CheckStorageMaintenanceReady() error {
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
+	key = normalizeRawKVPointKey(key)
 	readOnce := func(base []byte) ([]byte, error) {
 		snap, err := db.acquireSnapshotOrErr()
 		if err != nil {
@@ -429,6 +433,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
+	key = normalizeRawKVPointKey(key)
 	snap, err := db.acquireSnapshotOrErr()
 	if err != nil {
 		return false, err
@@ -439,12 +444,16 @@ func (db *DB) Has(key []byte) (bool, error) {
 
 // Set sets the value for a key.
 func (db *DB) Set(key, value []byte) error {
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.setPoint(key, value, false)
 }
 
 func (db *DB) setPoint(key, value []byte, sync bool) error {
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	if handled, err := db.writeViaCommitCombiner(key, value, false, sync); handled {
 		return err
 	}
@@ -453,6 +462,8 @@ func (db *DB) setPoint(key, value []byte, sync bool) error {
 
 // SetSync sets the value and syncs to disk.
 func (db *DB) SetSync(key, value []byte) error {
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.setPoint(key, value, true)
@@ -460,12 +471,14 @@ func (db *DB) SetSync(key, value []byte) error {
 
 // Delete removes a key.
 func (db *DB) Delete(key []byte) error {
+	key = normalizeRawKVPointKey(key)
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.deletePoint(key, false)
 }
 
 func (db *DB) deletePoint(key []byte, sync bool) error {
+	key = normalizeRawKVPointKey(key)
 	if handled, err := db.writeViaCommitCombiner(key, nil, true, sync); handled {
 		return err
 	}
@@ -474,6 +487,7 @@ func (db *DB) deletePoint(key []byte, sync bool) error {
 
 // DeleteSync removes a key and syncs.
 func (db *DB) DeleteSync(key []byte) error {
+	key = normalizeRawKVPointKey(key)
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.deletePoint(key, true)

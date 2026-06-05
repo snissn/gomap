@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
@@ -262,12 +261,8 @@ func (b *commandWALPublicBatch) Set(key, value []byte) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if len(key) == 0 {
-		return caching.ErrKeyEmpty
-	}
-	if value == nil {
-		return caching.ErrValueNil
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, valueView, err := b.payload.AppendSet(key, value)
 	if err != nil {
@@ -286,12 +281,8 @@ func (b *commandWALPublicBatch) SetView(key, value []byte) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if len(key) == 0 {
-		return caching.ErrKeyEmpty
-	}
-	if value == nil {
-		return caching.ErrValueNil
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, valueView, err := b.payload.AppendSet(key, value)
 	if err != nil {
@@ -310,9 +301,7 @@ func (b *commandWALPublicBatch) Delete(key []byte) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if len(key) == 0 {
-		return caching.ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, err := b.payload.AppendDelete(key)
 	if err != nil {
@@ -331,9 +320,7 @@ func (b *commandWALPublicBatch) DeleteView(key []byte) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if len(key) == 0 {
-		return caching.ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, err := b.payload.AppendDelete(key)
 	if err != nil {

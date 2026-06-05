@@ -427,9 +427,8 @@ func (b *Batch) SetView(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 
 	entry := Entry{
 		Type: OpPut,
@@ -449,16 +448,15 @@ func (b *Batch) SetView(key, value []byte) error {
 }
 
 // AppendViewTrustedSortedUnique records a Put without copying key/value bytes or
-// invalidating the sorted/compacted state. Caller must guarantee key is non-empty,
-// key/value remain immutable until commit/close, and appended keys are strictly
-// increasing with no duplicates.
+// invalidating the sorted/compacted state. Nil keys/values are canonicalized to
+// zero-length byte strings. Caller must guarantee key/value remain immutable
+// until commit/close, and appended keys are strictly increasing with no duplicates.
 func (b *Batch) AppendViewTrustedSortedUnique(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	if len(value) > b.inlineThresholdForKey(key) {
 		return ErrValueTooLarge
 	}
@@ -479,9 +477,8 @@ func (b *Batch) Set(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 
 	// Enforce inline threshold before copying into the arena so rejected values
 	// do not consume batch-retained memory.
@@ -516,9 +513,7 @@ func (b *Batch) DeleteView(key []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 
 	b.entries = append(b.entries, Entry{
 		Type: OpDelete,
@@ -531,16 +526,14 @@ func (b *Batch) DeleteView(key []byte) error {
 }
 
 // AppendDeleteViewTrustedSortedUnique records a Delete without copying key bytes
-// or invalidating sorted/compacted state. Caller must guarantee key is non-empty,
-// key remains immutable until commit/close, and appended keys are strictly
-// increasing with no duplicates.
+// or invalidating sorted/compacted state. Nil keys are canonicalized to the
+// empty key. Caller must guarantee key remains immutable until commit/close,
+// and appended keys are strictly increasing with no duplicates.
 func (b *Batch) AppendDeleteViewTrustedSortedUnique(key []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	b.entries = append(b.entries, Entry{
 		Type: OpDelete,
 		Key:  key,
@@ -557,9 +550,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
 	}
@@ -600,16 +591,15 @@ func (b *Batch) SetPointerViewNoTouch(key []byte, ptr page.ValuePtr) error {
 }
 
 // AppendPointerViewTrustedSortedUnique records a pointer Put without copying key
-// bytes or invalidating sorted/compacted state. Caller must guarantee key is
-// non-empty, key remains immutable until commit/close, ptr is a value-log pointer,
-// and appended keys are strictly increasing with no duplicates.
+// bytes or invalidating sorted/compacted state. Nil keys are canonicalized to
+// the empty key. Caller must guarantee key remains immutable until commit/close,
+// ptr is a value-log pointer, and appended keys are strictly increasing with no
+// duplicates.
 func (b *Batch) AppendPointerViewTrustedSortedUnique(key []byte, ptr page.ValuePtr) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
 	}
@@ -629,8 +619,8 @@ func (b *Batch) AppendPointerViewTrustedSortedUnique(key []byte, ptr page.ValueP
 
 // AppendPointerViewNoTouchTrustedSorted appends a pointer Put without input
 // validation, touched-segment tracking, or key-order checks. Caller must
-// guarantee: batch is open, key is non-empty, ptr is a value-log pointer, and
-// appended keys are already non-decreasing.
+// guarantee: batch is open, key is canonicalized if nil, ptr is a value-log
+// pointer, and appended keys are already non-decreasing.
 func (b *Batch) AppendPointerViewNoTouchTrustedSorted(key []byte, ptr page.ValuePtr) {
 	if b == nil {
 		return
@@ -662,9 +652,7 @@ func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouche
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
 	}
@@ -688,9 +676,7 @@ func (b *Batch) Delete(key []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 
 	k := b.arenaCopy(key)
 
@@ -780,7 +766,14 @@ func (b *Batch) SetOps(ops []Entry) error {
 	}
 
 	for i := range ops {
-		op := &ops[i]
+		op := ops[i]
+		if op.Type == OpDeleteRange {
+			continue
+		}
+		op.Key = normalizeRawKVPointKey(op.Key)
+		if op.Type == OpPut && !op.IsPtr {
+			op.Value = normalizeRawKVValue(op.Value)
+		}
 		if op.Type != OpPut || op.IsPtr {
 			continue
 		}
@@ -802,6 +795,10 @@ func (b *Batch) SetOps(ops []Entry) error {
 			b.entries = append(b.entries, op)
 			b.byteSize += len(op.Key) + len(op.Value)
 			continue
+		}
+		op.Key = normalizeRawKVPointKey(op.Key)
+		if op.Type == OpPut && !op.IsPtr {
+			op.Value = normalizeRawKVValue(op.Value)
 		}
 		if op.IsPtr {
 			if !page.IsValueLogFileID(op.ValuePtr.FileID) {
@@ -1051,8 +1048,8 @@ func IsDeleteRangeNoop(start, end []byte) bool {
 	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
 		return true
 	}
-	// TreeDB point keys cannot be empty. An unbounded-lower range ending at the
-	// empty byte string contains no valid keys.
+	// The empty byte string is the minimum concrete key. An unbounded-lower
+	// range ending at that exclusive bound contains no keys.
 	return start == nil && end != nil && len(end) == 0
 }
 

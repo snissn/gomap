@@ -1602,7 +1602,7 @@ func lookupV2Value(entries []byte, entryCount int, key []byte, restarts []uint32
 	if entryCount <= 0 {
 		return nil, false, nil
 	}
-	if len(key) == 0 {
+	if key == nil {
 		_, first, err := decodeFirstV2(entries)
 		if err != nil {
 			return nil, false, err
@@ -1834,7 +1834,7 @@ func lookupV3Entry(entries []byte, entryCount int, key []byte, restarts []uint32
 	if entryCount <= 0 {
 		return LookupResult{}, false, nil
 	}
-	if len(key) == 0 {
+	if key == nil {
 		_, first, err := decodeFirstV3(entries)
 		if err != nil {
 			return LookupResult{}, false, err
@@ -2317,12 +2317,12 @@ func (d *DecodedBlock) ValueForKey(key []byte) ([]byte, bool, error) {
 	}
 	switch d.version {
 	case blockVersionV1:
-		if len(key) == 0 || bytes.Equal(d.firstKey, key) {
+		if key == nil || bytes.Equal(d.firstKey, key) {
 			return d.firstValue, true, nil
 		}
 		return nil, false, nil
 	case blockVersionV2:
-		if len(key) == 0 {
+		if key == nil {
 			if d.firstValue != nil {
 				return d.firstValue, true, nil
 			}
@@ -2374,12 +2374,12 @@ func (d *DecodedBlock) EntryForKeyNoRestartKeys(key []byte) (LookupResult, bool,
 	}
 	switch d.version {
 	case blockVersionV1:
-		if len(key) == 0 || bytes.Equal(d.firstKey, key) {
+		if key == nil || bytes.Equal(d.firstKey, key) {
 			return LookupResult{Kind: EntryKindInline, Value: d.firstValue}, true, nil
 		}
 		return LookupResult{}, false, nil
 	case blockVersionV2:
-		if len(key) == 0 {
+		if key == nil {
 			if d.firstValue == nil {
 				return LookupResult{}, false, fmt.Errorf("outerleaf: empty block")
 			}
@@ -2408,7 +2408,7 @@ func (d *DecodedBlock) EntryForKeyNoRestartKeys(key []byte) (LookupResult, bool,
 		}
 		return LookupResult{Kind: EntryKindInline, Value: val}, true, nil
 	case blockVersionV3:
-		if len(key) == 0 {
+		if key == nil {
 			if d.firstKind == EntryKindBlobRef {
 				return LookupResult{Kind: EntryKindBlobRef, BlobPtr: d.firstBlob}, true, nil
 			}
@@ -2433,7 +2433,7 @@ func (d *DecodedBlock) EntryForKey(key []byte) (LookupResult, bool, error) {
 	}
 	switch d.version {
 	case blockVersionV1:
-		if len(key) == 0 || bytes.Equal(d.firstKey, key) {
+		if key == nil || bytes.Equal(d.firstKey, key) {
 			return LookupResult{Kind: EntryKindInline, Value: d.firstValue}, true, nil
 		}
 		return LookupResult{}, false, nil
@@ -2447,7 +2447,7 @@ func (d *DecodedBlock) EntryForKey(key []byte) (LookupResult, bool, error) {
 		}
 		return LookupResult{Kind: EntryKindInline, Value: val}, true, nil
 	case blockVersionV3:
-		if len(key) == 0 {
+		if key == nil {
 			if d.firstKind == EntryKindBlobRef {
 				return LookupResult{Kind: EntryKindBlobRef, BlobPtr: d.firstBlob}, true, nil
 			}
@@ -2740,10 +2740,10 @@ func (d *DecodedBlock) KeysRange(dst [][]byte, lower []byte, upper []byte) ([][]
 	if d == nil {
 		return nil, fmt.Errorf("outerleaf: nil block")
 	}
-	if len(lower) == 0 && len(upper) == 0 {
+	if lower == nil && upper == nil {
 		return d.Keys(dst)
 	}
-	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+	if lower != nil && upper != nil && bytes.Compare(lower, upper) >= 0 {
 		if dst == nil {
 			return nil, nil
 		}
@@ -2793,7 +2793,7 @@ func (d *DecodedBlock) KeysRangeLease(lower []byte, upper []byte) (*KeyLease, er
 	if d == nil {
 		return nil, fmt.Errorf("outerleaf: nil block")
 	}
-	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+	if lower != nil && upper != nil && bytes.Compare(lower, upper) >= 0 {
 		return nil, nil
 	}
 	switch d.version {
@@ -2825,7 +2825,7 @@ func (d *DecodedBlock) LowerBound(target []byte) (pos int, below bool, above boo
 		if d.firstKey == nil {
 			return 0, false, false, fmt.Errorf("outerleaf: missing v1 key")
 		}
-		if len(target) == 0 {
+		if target == nil {
 			return 0, false, false, nil
 		}
 		cmp := bytes.Compare(d.firstKey, target)
@@ -2862,7 +2862,7 @@ func lowerBoundStructured(version uint8, entryCount int, encoded []byte, target 
 	if entryCount <= 0 {
 		return 0, false, false, fmt.Errorf("outerleaf: empty v%d block", version)
 	}
-	if len(target) == 0 {
+	if target == nil {
 		return 0, false, false, nil
 	}
 	headerLen := 8
@@ -3015,10 +3015,10 @@ func decodeStructuredKeys(version uint8, entryCount int, encoded []byte) ([][]by
 }
 
 func keyWithinRange(key []byte, lower []byte, upper []byte) bool {
-	if len(lower) > 0 && bytes.Compare(key, lower) < 0 {
+	if lower != nil && bytes.Compare(key, lower) < 0 {
 		return false
 	}
-	if len(upper) > 0 && bytes.Compare(key, upper) >= 0 {
+	if upper != nil && bytes.Compare(key, upper) >= 0 {
 		return false
 	}
 	return true
@@ -3042,7 +3042,7 @@ func decodeStructuredKeysBoundedLease(version uint8, entryCount int, encoded []b
 	if entryCount <= 0 {
 		return nil, fmt.Errorf("outerleaf: empty v%d block", version)
 	}
-	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+	if lower != nil && upper != nil && bytes.Compare(lower, upper) >= 0 {
 		return nil, nil
 	}
 
@@ -3065,7 +3065,7 @@ func decodeStructuredKeysBoundedLease(version uint8, entryCount int, encoded []b
 	}
 
 	selectedCap := entryCount
-	hasBounds := len(lower) > 0 || len(upper) > 0
+	hasBounds := lower != nil || upper != nil
 	if hasBounds {
 		selectedCap = entryCount / 8
 		if selectedCap < 4 {
@@ -3134,7 +3134,7 @@ func decodeStructuredKeysBoundedLease(version uint8, entryCount int, encoded []b
 		off += valueLen
 
 		if hasBounds {
-			if len(upper) > 0 && bytes.Compare(prev, upper) >= 0 {
+			if upper != nil && bytes.Compare(prev, upper) >= 0 {
 				if len(lease.keys) == 0 {
 					released = true
 					releaseKeyLease(lease)
@@ -3143,7 +3143,7 @@ func decodeStructuredKeysBoundedLease(version uint8, entryCount int, encoded []b
 				released = true
 				return lease, nil
 			}
-			if len(lower) > 0 && bytes.Compare(prev, lower) < 0 {
+			if lower != nil && bytes.Compare(prev, lower) < 0 {
 				continue
 			}
 		}
@@ -3272,7 +3272,7 @@ func DecodeKeysRangeWithVerify(payload []byte, lower []byte, upper []byte, verif
 // DecodeKeysRangeLeaseWithVerify decodes keys in [lower, upper) and returns a
 // lease that must be released by the caller.
 func DecodeKeysRangeLeaseWithVerify(payload []byte, lower []byte, upper []byte, verifyChecksum bool) (*KeyLease, error) {
-	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+	if lower != nil && upper != nil && bytes.Compare(lower, upper) >= 0 {
 		return nil, nil
 	}
 	if len(payload) < blockHeaderSize {
@@ -3398,7 +3398,7 @@ func DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload []byte, target []byte
 			return 0, false, false, nil, fmt.Errorf("outerleaf: invalid key length %d", keyLen)
 		}
 		key := raw[:keyLen]
-		if len(target) > 0 {
+		if target != nil {
 			cmp := bytes.Compare(key, target)
 			if cmp > 0 {
 				return 0, true, false, nil, nil
@@ -3562,7 +3562,6 @@ func DecodeValueForKey(payload []byte, key []byte, scratch []byte) (value []byte
 	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
 		return nil, false, false, scratch, nil
 	}
-	// This function remains unchanged to protect legacy behavior.
 
 	version := payload[4]
 	codec := payload[5]
@@ -3581,7 +3580,7 @@ func DecodeValueForKey(payload []byte, key []byte, scratch []byte) (value []byte
 		}
 		blockKey := outScratch[:keyLen]
 		blockValue := outScratch[keyLen : keyLen+valueLen]
-		if len(key) == 0 || bytes.Equal(blockKey, key) {
+		if key == nil || bytes.Equal(blockKey, key) {
 			return blockValue, true, true, outScratch, nil
 		}
 		return nil, true, false, outScratch, nil
@@ -3680,7 +3679,7 @@ func DecodeEntryForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 		}
 		blockKey := outScratch[:keyLen]
 		blockValue := outScratch[keyLen : keyLen+valueLen]
-		if len(key) == 0 || bytes.Equal(blockKey, key) {
+		if key == nil || bytes.Equal(blockKey, key) {
 			return LookupResult{Kind: EntryKindInline, Value: blockValue}, true, true, outScratch, nil
 		}
 		return LookupResult{}, true, false, outScratch, nil
@@ -3747,7 +3746,7 @@ func decodeValueForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 		}
 		blockKey := outScratch[:keyLen]
 		blockValue := outScratch[keyLen : keyLen+valueLen]
-		if len(key) == 0 || bytes.Equal(blockKey, key) {
+		if key == nil || bytes.Equal(blockKey, key) {
 			return blockValue, true, true, outScratch, nil
 		}
 		return nil, true, false, outScratch, nil

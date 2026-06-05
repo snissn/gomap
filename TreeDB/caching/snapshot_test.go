@@ -725,7 +725,7 @@ func TestSnapshotGetAppend_NilReceiverMissReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestSnapshotGet_PublishedEmptyInlineValueReturnsNil(t *testing.T) {
+func TestSnapshotGet_PublishedEmptyInlineValueReturnsNonNilEmpty(t *testing.T) {
 	published := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: ""})
 	snap := &Snapshot{
 		rootPointShards: []rootDomainSnapshot{
@@ -740,8 +740,8 @@ func TestSnapshotGet_PublishedEmptyInlineValueReturnsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(k): %v", err)
 	}
-	if got != nil {
-		t.Fatalf("Get(k)=%v want nil for empty value", got)
+	if got == nil || len(got) != 0 {
+		t.Fatalf("Get(k)=%#v want non-nil empty value", got)
 	}
 }
 

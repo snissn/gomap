@@ -637,6 +637,131 @@ func TestEncodeDecodeEntriesLookup(t *testing.T) {
 	}
 }
 
+func TestDecodeValueForEmptyKeyDoesNotMeanFirstEntry(t *testing.T) {
+	v1, err := EncodeSingle(nil, []byte("a"), []byte("va"), 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingle: %v", err)
+	}
+	if got, ok, found, _, err := DecodeValueForKey(v1, []byte{}, nil); err != nil || !ok || found || got != nil {
+		t.Fatalf("v1 empty miss got value=%q ok=%v found=%v err=%v", got, ok, found, err)
+	}
+	if got, ok, found, _, err := DecodeValueForKey(v1, nil, nil); err != nil || !ok || !found || !bytes.Equal(got, []byte("va")) {
+		t.Fatalf("v1 nil first got value=%q ok=%v found=%v err=%v", got, ok, found, err)
+	}
+
+	v2, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("a"), Value: []byte("va")},
+		{Key: []byte("b"), Value: []byte("vb")},
+	}, 0, 1)
+	if err != nil {
+		t.Fatalf("EncodeEntries(v2): %v", err)
+	}
+	if got, ok, found, _, err := DecodeValueForKey(v2, []byte{}, nil); err != nil || !ok || found || got != nil {
+		t.Fatalf("v2 empty miss got value=%q ok=%v found=%v err=%v", got, ok, found, err)
+	}
+
+	v3, err := EncodeTypedEntries(nil, []TypedEntry{
+		{Key: []byte("a"), Kind: EntryKindInline, Value: []byte("va")},
+		{Key: []byte("b"), Kind: EntryKindInline, Value: []byte("vb")},
+	}, 0, 1)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+	if entry, ok, found, _, err := DecodeEntryForKey(v3, []byte{}, nil); err != nil || !ok || found || entry.Value != nil {
+		t.Fatalf("v3 empty miss got entry=%+v ok=%v found=%v err=%v", entry, ok, found, err)
+	}
+}
+
+func TestDecodeValueForConcreteEmptyKey(t *testing.T) {
+	v1, err := EncodeSingle(nil, []byte{}, []byte("v-empty"), 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingle: %v", err)
+	}
+	if got, ok, found, _, err := DecodeValueForKey(v1, []byte{}, nil); err != nil || !ok || !found || !bytes.Equal(got, []byte("v-empty")) {
+		t.Fatalf("v1 empty hit got value=%q ok=%v found=%v err=%v", got, ok, found, err)
+	}
+
+	v2, err := EncodeEntries(nil, []Entry{
+		{Key: []byte{}, Value: []byte("v-empty")},
+		{Key: []byte("a"), Value: []byte("va")},
+	}, 0, 1)
+	if err != nil {
+		t.Fatalf("EncodeEntries(v2): %v", err)
+	}
+	if got, ok, found, _, err := DecodeValueForKey(v2, []byte{}, nil); err != nil || !ok || !found || !bytes.Equal(got, []byte("v-empty")) {
+		t.Fatalf("v2 empty hit got value=%q ok=%v found=%v err=%v", got, ok, found, err)
+	}
+
+	v3, err := EncodeTypedEntries(nil, []TypedEntry{
+		{Key: []byte{}, Kind: EntryKindInline, Value: []byte("v-empty")},
+		{Key: []byte("a"), Kind: EntryKindInline, Value: []byte("va")},
+	}, 0, 1)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+	entry, ok, found, _, err := DecodeEntryForKey(v3, []byte{}, nil)
+	if err != nil || !ok || !found || entry.Kind != EntryKindInline || !bytes.Equal(entry.Value, []byte("v-empty")) {
+		t.Fatalf("v3 empty hit got entry=%+v ok=%v found=%v err=%v", entry, ok, found, err)
+	}
+}
+
+func TestDecodeKeysRangeEmptyUpperBoundIsNotUnbounded(t *testing.T) {
+	payload, err := EncodeEntries(nil, []Entry{
+		{Key: []byte{}, Value: []byte("v-empty")},
+		{Key: []byte("a"), Value: []byte("va")},
+	}, 0, 1)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	keys, err := DecodeKeysRangeWithVerify(payload, nil, []byte{}, true)
+	if err != nil {
+		t.Fatalf("DecodeKeysRangeWithVerify: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("upper empty returned %d keys, want 0: %q", len(keys), keys)
+	}
+
+	blk, err := DecodeBlock(payload, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	keys, err = blk.KeysRange(nil, nil, []byte{})
+	if err != nil {
+		t.Fatalf("KeysRange: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("decoded upper empty returned %d keys, want 0: %q", len(keys), keys)
+	}
+}
+
+func TestLowerBoundEmptyTargetIsConcrete(t *testing.T) {
+	payload, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("a"), Value: []byte("va")},
+		{Key: []byte("b"), Value: []byte("vb")},
+	}, 0, 1)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(payload, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	pos, below, above, err := blk.LowerBound([]byte{})
+	if err != nil {
+		t.Fatalf("LowerBound(empty): %v", err)
+	}
+	if pos != 0 || !below || above {
+		t.Fatalf("LowerBound(empty)=(pos=%d below=%v above=%v), want (0,true,false)", pos, below, above)
+	}
+	pos, below, above, err = blk.LowerBound(nil)
+	if err != nil {
+		t.Fatalf("LowerBound(nil): %v", err)
+	}
+	if pos != 0 || below || above {
+		t.Fatalf("LowerBound(nil)=(pos=%d below=%v above=%v), want (0,false,false)", pos, below, above)
+	}
+}
+
 func TestEncodeEntriesRequiresIncreasingKeys(t *testing.T) {
 	entries := []Entry{
 		{Key: []byte("k2"), Value: []byte("v2")},

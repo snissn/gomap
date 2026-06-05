@@ -65,6 +65,43 @@ func TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawEmptyPointKeyAndZeroLengthValueReplayReopen(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{
+		{Op: commitlog.RawKVOpSet, Key: []byte{}, Value: []byte("before-delete")},
+		{Op: commitlog.RawKVOpDelete, Key: []byte{}},
+		{Op: commitlog.RawKVOpSet, Key: []byte{}, Value: []byte{}},
+		{Op: commitlog.RawKVOpSet, Key: []byte("zero"), Value: []byte{}},
+	})
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	for _, key := range [][]byte{[]byte{}, []byte("zero")} {
+		has, err := reopen.Has(key)
+		if err != nil {
+			t.Fatalf("Has(%q): %v", key, err)
+		}
+		if !has {
+			t.Fatalf("Has(%q)=false, want true", key)
+		}
+		got, err := reopen.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if got == nil || len(got) != 0 {
+			t.Fatalf("Get(%q)=%#v (len=%d), want non-nil zero-length", key, got, len(got))
+		}
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCommandWALCrashAfterFrameBeforeRootPublishRecovers(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

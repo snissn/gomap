@@ -8905,21 +8905,46 @@ func addMemtableResidencyStats(stats map[string]string, prefix string, summary m
 	add("append_only", summary.appendOnly)
 }
 
+func cloneKeyRangePointKey(key []byte) []byte {
+	if key == nil {
+		return nil
+	}
+	if len(key) == 0 {
+		return rawKVEmptyPointKey
+	}
+	return append([]byte(nil), key...)
+}
+
+func assignKeyRangePointKey(dst []byte, key []byte) []byte {
+	if key == nil {
+		return nil
+	}
+	if len(key) == 0 {
+		return rawKVEmptyPointKey
+	}
+	if cap(dst) < len(key) {
+		return cloneKeyRangePointKey(key)
+	}
+	dst = dst[:len(key)]
+	copy(dst, key)
+	return dst
+}
+
 func (r *keyRange) add(key []byte) {
 	if key == nil {
 		return
 	}
 	if !r.valid {
 		r.valid = true
-		r.min = append([]byte(nil), key...)
-		r.max = append([]byte(nil), key...)
+		r.min = cloneKeyRangePointKey(key)
+		r.max = cloneKeyRangePointKey(key)
 		return
 	}
 	if bytes.Compare(key, r.min) < 0 {
-		r.min = append(r.min[:0], key...)
+		r.min = assignKeyRangePointKey(r.min, key)
 	}
 	if bytes.Compare(key, r.max) > 0 {
-		r.max = append(r.max[:0], key...)
+		r.max = assignKeyRangePointKey(r.max, key)
 	}
 }
 
@@ -8982,8 +9007,8 @@ func cloneRange(r keyRange) keyRange {
 	if !r.valid {
 		return r
 	}
-	r.min = append([]byte(nil), r.min...)
-	r.max = append([]byte(nil), r.max...)
+	r.min = cloneKeyRangePointKey(r.min)
+	r.max = cloneKeyRangePointKey(r.max)
 	return r
 }
 
@@ -20664,12 +20689,8 @@ func (db *DB) Close() error {
 	return errors.Join(errs...)
 }
 func (db *DB) Set(key, value []byte) error {
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
-	if value == nil {
-		return ErrValueNil
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	db.waitForCheckpoint()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
@@ -20677,12 +20698,8 @@ func (db *DB) Set(key, value []byte) error {
 }
 
 func (db *DB) SetSync(key, value []byte) error {
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
-	if value == nil {
-		return ErrValueNil
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	db.waitForCheckpoint()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
@@ -20695,12 +20712,8 @@ func (db *DB) SetSync(key, value []byte) error {
 // the mutation becomes visible in the mutable table. This is for public
 // command-WAL mode, where command WAL durability replaces the cached redo log.
 func (db *DB) SetAfterCommandWALAppend(key, value []byte, appendCommand func() error) error {
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
-	if value == nil {
-		return ErrValueNil
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
@@ -20723,9 +20736,7 @@ func (db *DB) UpdateSync(key []byte, fn backenddb.UpdateFunc) error {
 }
 
 func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error {
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	if fn == nil {
 		return backenddb.ErrNilUpdateFunc
 	}
@@ -20744,8 +20755,8 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 		if err != nil {
 			return err
 		}
-		if result.Op == backenddb.UpdateSet && result.Value == nil {
-			return ErrValueNil
+		if result.Op == backenddb.UpdateSet {
+			result.Value = normalizeRawKVValue(result.Value)
 		}
 		if result.Op != backenddb.UpdateNoop && result.Op != backenddb.UpdateSet && result.Op != backenddb.UpdateDelete {
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
@@ -21180,9 +21191,7 @@ func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand fu
 }
 
 func (db *DB) Delete(key []byte) error {
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	db.waitForCheckpoint()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
@@ -21794,9 +21803,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 }
 
 func (db *DB) DeleteSync(key []byte) error {
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	db.waitForCheckpoint()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
@@ -21806,9 +21813,7 @@ func (db *DB) DeleteSync(key []byte) error {
 // DeleteAfterCommandWALAppend applies a point Delete after appendCommand
 // succeeds under the same per-key serialization lock as Delete.
 func (db *DB) DeleteAfterCommandWALAppend(key []byte, appendCommand func() error) error {
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
@@ -24787,6 +24792,7 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	key = normalizeRawKVPointKey(key)
 	db.noteRead()
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableRead(view, key)
@@ -24818,7 +24824,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 	if found {
 		if len(val) == 0 {
-			return nil, nil
+			return []byte{}, nil
 		}
 		return ownedReadResult(val, scratch), nil
 	}
@@ -24839,6 +24845,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 //
 // Missing keys are returned as nil entries with no error.
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	keys = normalizeRawKVPointKeys(keys)
 	if len(keys) == 0 {
 		return make([][]byte, 0), nil
 	}
@@ -24940,6 +24947,7 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 // returns; callers must copy values they retain. Missing keys are reported with
 // found=false and value=nil.
 func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
+	keys = normalizeRawKVPointKeys(keys)
 	if fn == nil {
 		return errors.New("cachingdb: GetManyView nil callback")
 	}
@@ -25008,6 +25016,7 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
+	key = normalizeRawKVPointKey(key)
 	// 1. Memtable
 	out, found, err := db.getMemtableAppend(key, dst)
 	if err != nil {
@@ -25025,6 +25034,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
+	key = normalizeRawKVPointKey(key)
 	db.noteRead()
 	view := db.retainMemtableView()
 	if view != nil {
@@ -25046,6 +25056,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 }
 
 func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
+	keys = normalizeRawKVPointKeys(keys)
 	out := make([]bool, len(keys))
 	if len(keys) == 0 {
 		return out, nil
@@ -28754,9 +28765,10 @@ func (b *Batch) arenaCopyInto(kind batchArenaKind, arena *[]byte, chunks *[][]by
 
 func (b *Batch) cloneKey(key []byte) []byte {
 	batchArenaCopyKeyCallsTotal.Add(1)
-	if len(key) > 0 {
-		batchArenaCopyKeyBytesTotal.Add(uint64(len(key)))
+	if len(key) == 0 {
+		return rawKVEmptyPointKey
 	}
+	batchArenaCopyKeyBytesTotal.Add(uint64(len(key)))
 	dst := b.arenaCopy(len(key))
 	copy(dst, key)
 	return dst
@@ -28764,9 +28776,10 @@ func (b *Batch) cloneKey(key []byte) []byte {
 
 func (b *Batch) cloneValue(value []byte) []byte {
 	batchArenaCopyValueCallsTotal.Add(1)
-	if len(value) > 0 {
-		batchArenaCopyValueBytesTotal.Add(uint64(len(value)))
+	if len(value) == 0 {
+		return rawKVEmptyValue
 	}
+	batchArenaCopyValueBytesTotal.Add(uint64(len(value)))
 	dst := b.arenaCopy(len(value))
 	copy(dst, value)
 	return dst
@@ -28776,6 +28789,8 @@ func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
 	batchArenaCopyKeyValueCallsTotal.Add(1)
 	if n := len(key) + len(value); n > 0 {
 		batchArenaCopyKeyValueBytesTotal.Add(uint64(n))
+	} else {
+		return rawKVEmptyPointKey, rawKVEmptyValue
 	}
 	buf := b.arenaCopy(len(key) + len(value))
 	keyCopy := buf[:len(key):len(key)]
@@ -28937,12 +28952,8 @@ func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
-	if value == nil {
-		return ErrValueNil
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	if hotPathStatsEnabled {
 		batchSetCallsTotal.Add(1)
 		batchSetBytesTotal.Add(uint64(len(key) + len(value)))
@@ -29000,12 +29011,8 @@ func (b *Batch) SetView(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
-	if value == nil {
-		return ErrValueNil
-	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	return b.SetViewValidated(key, value)
 }
 
@@ -29054,9 +29061,7 @@ func (b *Batch) Delete(key []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 
 	keyCopy := b.cloneKey(key)
 	if b.backend != nil {
@@ -29126,9 +29131,7 @@ func (b *Batch) DeleteView(key []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	if len(key) == 0 {
-		return ErrKeyEmpty
-	}
+	key = normalizeRawKVPointKey(key)
 	return b.DeleteViewValidated(key)
 }
 
@@ -29189,8 +29192,10 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 				b.size += len(copiedOp.Key) + len(copiedOp.Value)
 				continue
 			}
-			copiedOp.Key = b.cloneKey(op.Key)
-			if op.Value != nil {
+			copiedOp.Key = b.cloneKey(normalizeRawKVPointKey(op.Key))
+			if op.Type == batch.OpPut && !op.IsPtr {
+				copiedOp.Value = b.cloneValue(normalizeRawKVValue(op.Value))
+			} else if op.Value != nil {
 				copiedOp.Value = b.cloneValue(op.Value)
 			}
 			copied = append(copied, copiedOp)
@@ -29218,10 +29223,13 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 			b.streamEligible = false
 			continue
 		}
-		if op.Value != nil {
-			copied.Key, copied.Value = b.cloneKeyValue(op.Key, op.Value)
+		normalizedKey := normalizeRawKVPointKey(op.Key)
+		if op.Type == batch.OpPut && !op.IsPtr {
+			copied.Key, copied.Value = b.cloneKeyValue(normalizedKey, normalizeRawKVValue(op.Value))
+		} else if op.Value != nil {
+			copied.Key, copied.Value = b.cloneKeyValue(normalizedKey, op.Value)
 		} else {
-			copied.Key = b.cloneKey(op.Key)
+			copied.Key = b.cloneKey(normalizedKey)
 			copied.Value = nil
 		}
 		if b.streamEligible {
@@ -29367,8 +29375,8 @@ func (b *Batch) maybeSwitchToStreaming() {
 		// so the batch range is simply [first,last]. Keep copies for backend range
 		// tracking after commit.
 		b.batchRange.valid = true
-		b.batchRange.min = append([]byte(nil), b.firstKey...)
-		b.batchRange.max = append([]byte(nil), b.lastKey...)
+		b.batchRange.min = cloneKeyRangePointKey(b.firstKey)
+		b.batchRange.max = cloneKeyRangePointKey(b.lastKey)
 	}
 	if err := backendBatch.SetOps(b.entries); err != nil {
 		_ = backendBatch.Close()

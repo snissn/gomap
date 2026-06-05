@@ -201,15 +201,15 @@ func TestBatchAppendViewTrustedSortedUniquePreservesCompactedState(t *testing.T)
 	}
 }
 
-func TestBatchAppendTrustedSortedUniqueRejectsEmptyKeys(t *testing.T) {
+func TestBatchAppendTrustedSortedUniqueAcceptsEmptyKeys(t *testing.T) {
 	b := New(newMapValueReader(), page.DefaultInlineThreshold)
 	t.Cleanup(func() { _ = b.Close() })
 
-	if err := b.AppendViewTrustedSortedUnique([]byte{}, []byte("value")); err != ErrKeyEmpty {
-		t.Fatalf("AppendViewTrustedSortedUnique empty key error=%v want %v", err, ErrKeyEmpty)
+	if err := b.AppendViewTrustedSortedUnique([]byte{}, []byte("value")); err != nil {
+		t.Fatalf("AppendViewTrustedSortedUnique empty key error=%v", err)
 	}
-	if err := b.AppendDeleteViewTrustedSortedUnique([]byte{}); err != ErrKeyEmpty {
-		t.Fatalf("AppendDeleteViewTrustedSortedUnique empty key error=%v want %v", err, ErrKeyEmpty)
+	if err := b.AppendDeleteViewTrustedSortedUnique([]byte{}); err != nil {
+		t.Fatalf("AppendDeleteViewTrustedSortedUnique empty key error=%v", err)
 	}
 }
 

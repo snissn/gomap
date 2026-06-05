@@ -175,6 +175,9 @@ func (s *combinedLeafKeyState) init(pageID uint64, n *node.Node) (bool, error) {
 }
 
 func (s *combinedLeafKeyState) ensureScratch(size int) []byte {
+	if size == 0 {
+		return []byte{}
+	}
 	if cap(s.keyScratch) < size {
 		s.keyScratch = make([]byte, size)
 	}

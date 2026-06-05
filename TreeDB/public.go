@@ -1376,6 +1376,7 @@ func (db *DB) backgroundError() error {
 //
 // Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	key = normalizeRawKVPointKey(key)
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
 	}
@@ -1468,6 +1469,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 
 // Has reports whether a key exists in the database.
 func (db *DB) Has(key []byte) (bool, error) {
+	key = normalizeRawKVPointKey(key)
 	if err := db.ensureOpen(); err != nil {
 		return false, err
 	}
@@ -1511,6 +1513,8 @@ func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 
 // Set writes a key/value pair without forcing an fsync boundary.
 func (db *DB) Set(key, value []byte) error {
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
@@ -1529,6 +1533,8 @@ func (db *DB) Set(key, value []byte) error {
 // With DurabilityWALOnRelaxed or DurabilityWALOffRelaxed enabled, Sync operations are
 // crash-consistent only (no fsync) and may not survive power loss.
 func (db *DB) SetSync(key, value []byte) error {
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
@@ -1552,6 +1558,7 @@ func (db *DB) SetSync(key, value []byte) error {
 // the same single-key commit serialization but remain unconditional writes.
 // Because fn may be retried, it should avoid externally visible side effects.
 func (db *DB) Update(key []byte, fn UpdateFunc) error {
+	key = normalizeRawKVPointKey(key)
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
@@ -1573,6 +1580,7 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 // not lose each other's changes. Because fn may be retried, it should avoid
 // externally visible side effects.
 func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
+	key = normalizeRawKVPointKey(key)
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
@@ -1587,6 +1595,7 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 
 // Delete removes a key without forcing an fsync boundary.
 func (db *DB) Delete(key []byte) error {
+	key = normalizeRawKVPointKey(key)
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
@@ -1640,6 +1649,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 // DeleteSync removes a key and forces a durability boundary.
 func (db *DB) DeleteSync(key []byte) error {
+	key = normalizeRawKVPointKey(key)
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
