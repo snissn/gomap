@@ -84,6 +84,33 @@ reads with one writer measured 2.96M reader ops/sec and 44.3k writer docs/sec.
 Source:
 [June 4 collection concurrency report](docs/benchmarks/collections_concurrency_main_2026-06-04.md).
 
+### TreeDB Mongo Gateway Client-Shape Workload
+
+Gateway-shaped BSON documents, `200000` documents, batch size `1000`,
+16 insert producers, two secondary indexes (`email`, `city`), TreeDB
+`command_wal_relaxed`, settled read state, and 16 concurrent readers for the
+read phases. This benchmark keeps TreeDB storage constant while changing the
+client/protocol boundary.
+
+| TreeDB access path | load docs/sec | concurrent `_id` reads/sec | concurrent indexed `email` reads/sec | `_id` p95 us | `email` p95 us |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Direct collection API | 299,777 | 2,026,834 | 230,846 | 6 | 813 |
+| Mongo raw wire over TCP | 283,472 | 276,187 | 65,365 | 81 | 627 |
+| TreeDB native wire over TCP | 271,948 | 115,712 | 66,917 | 213 | 618 |
+| Mongo driver raw command | 276,503 | 124,961 | 70,215 | 197 | 580 |
+| Mongo driver command | 253,315 | 130,387 | 69,213 | 191 | 596 |
+| Mongo driver CRUD | 228,906 | 115,262 | 62,586 | 221 | 643 |
+| Mongo driver unacknowledged writes | 233,169 | 114,026 | 68,454 | 219 | 601 |
+
+`Direct collection API` is the TreeDB collection/storage ceiling, not a
+Mongo-compatible protocol row. `Mongo driver unacknowledged writes` is not a
+durability-equivalent default. Use this table to compare TreeDB access-path
+overhead; compare against MongoDB only when client mode and acknowledgement
+semantics match.
+
+Source:
+[June 4 fast Mongo/native client-shape matrix](docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md).
+
 ### `application.db` Offline Density Workload
 
 Offline compacted-size comparison from the June 2 Celestia `application.db`
