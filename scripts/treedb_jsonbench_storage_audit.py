@@ -15,6 +15,7 @@ import argparse
 import gzip
 import json
 import os
+import re
 import shlex
 import struct
 import subprocess
@@ -321,18 +322,103 @@ def load_result_json(result_json: Path | None) -> Any | None:
     return json.loads(result_json.read_text())
 
 
+def compression_value_tokens(value: Any) -> set[str]:
+    tokens: set[str] = set()
+    if isinstance(value, str):
+        text = value.lower()
+        if "none" in text:
+            tokens.add("none")
+        for codec in ("lz4", "snappy", "zstd", "dict", "value_log_grouped_frame"):
+            if codec in text:
+                tokens.add(codec)
+        if "active_" in text:
+            tokens.add("active")
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key).lower()
+            if key_text == "none":
+                tokens.add("none")
+            for codec in ("lz4", "snappy", "zstd", "dict"):
+                if key_text == codec:
+                    tokens.add(codec)
+            tokens.update(compression_value_tokens(child))
+    elif isinstance(value, list):
+        for child in value:
+            tokens.update(compression_value_tokens(child))
+    return tokens
+
+
+def compression_metadata_only_field(field: dict[str, Any]) -> bool:
+    leaf = str(field.get("path", "")).lower().rsplit(".", 1)[-1]
+    return "requested" in leaf or "policy" in leaf
+
+
+def compression_active_evidence_field(field: dict[str, Any]) -> bool:
+    leaf = str(field.get("path", "")).lower().rsplit(".", 1)[-1]
+    if compression_metadata_only_field(field):
+        return False
+    if "attribution" in leaf or leaf.endswith("_detail") or leaf.endswith("_details"):
+        return False
+    return (
+        "actual" in leaf
+        or "status" in leaf
+        or leaf == "compression"
+        or leaf == "compression_mode"
+        or leaf.endswith("_compression")
+    )
+
+
+def observed_compression_value_tokens(value: Any) -> set[str]:
+    if isinstance(value, str):
+        text = value.lower()
+        if "requested" in text:
+            pieces = [piece for piece in re.split(r"[;,]", text) if "requested" not in piece]
+            text = " ".join(pieces)
+        return compression_value_tokens(text)
+    if isinstance(value, dict):
+        tokens: set[str] = set()
+        for key, child in value.items():
+            key_text = str(key).lower()
+            if "requested" in key_text or "policy" in key_text:
+                continue
+            tokens.update(compression_value_tokens(key_text))
+            tokens.update(observed_compression_value_tokens(child))
+        return tokens
+    if isinstance(value, list):
+        tokens: set[str] = set()
+        for child in value:
+            tokens.update(observed_compression_value_tokens(child))
+        return tokens
+    return compression_value_tokens(value)
+
+
 def load_result_compression_summary(result_json: Path | None, data: Any | None = None) -> dict[str, Any] | None:
     if result_json is None:
         return None
     if data is None:
         data = load_result_json(result_json)
     fields = compression_fields(data)
-    raw = json.dumps(fields, sort_keys=True).lower()
-    silent_none = "requested=none" in raw or "actual=none" in raw or '"none"' in raw
+    active_tokens = {"active", "lz4", "snappy", "zstd", "dict", "value_log_grouped_frame"}
+    none_fields: list[dict[str, Any]] = []
+    active_fields: list[dict[str, Any]] = []
+    for field in fields:
+        tokens = compression_value_tokens(field.get("value"))
+        if "none" in tokens:
+            none_fields.append(field)
+        observed_tokens = (
+            observed_compression_value_tokens(field.get("value"))
+            if compression_active_evidence_field(field)
+            else set()
+        )
+        if observed_tokens & active_tokens:
+            active_fields.append(field)
+    silent_none = bool(none_fields) and not active_fields
     return {
         "path": str(result_json),
         "compression_fields": fields,
         "silent_none_suspected": silent_none,
+        "compression_none_fields": none_fields,
+        "compression_active_fields": active_fields,
     }
 
 
