@@ -265,6 +265,8 @@ func TestDocs_VectorHighQPSBenchmarkWorkflow2410(t *testing.T) {
 		"TREEDB_VECTOR_BENCH_DOCS=100000 TREEDB_VECTOR_BENCH_DIMS=128",
 		"CPU_LIST=1,8 BENCHTIME=1000x COUNT=3",
 		"BENCH_REGEX='BenchmarkCollectionVectorUSearchProductionCompare$'",
+		"focused regex that excludes the with-documents/materialization row",
+		"BENCH_REGEX='BenchmarkCollectionVectorUSearchProductionCompare/(TreeDB_SearchWithBuffer|TreeDB_SearchWithBufferParallel|TreeDB_CollectionSearchVectorIndexWithBuffer|TreeDB_CollectionSearchVectorIndexNoDocsOneShot|USearch_Search|USearch_SearchParallel)$'",
 		"/tmp/gomap_2366_final_20260605_030355/closeout_summary.md",
 		"/tmp/gomap_2366_final_20260605_030355/tier_s_bench.log",
 		"/tmp/gomap_2366_final_20260605_030355/with_buffer_alloc_proof.log",

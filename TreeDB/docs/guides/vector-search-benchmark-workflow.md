@@ -139,9 +139,11 @@ TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64 \
 ### Tier F scaling command template
 
 Tier F is the 100k-document, 128-dimension scaling fixture. Use it when measuring
-scaling-sensitive work; do not replace the Tier S snapshot table with Tier F
-numbers unless the PR or tracker cites the exact command, hardware, commit,
-route counters, `ns/op`, derived `ops/sec`, `B/op`, and `allocs/op`.
+scaling-sensitive exact no-document work; do not replace the Tier S snapshot
+table with Tier F numbers unless the PR or tracker cites the exact command,
+hardware, commit, route counters, `ns/op`, derived `ops/sec`, `B/op`, and
+`allocs/op`. The publishable no-document Tier F command intentionally uses a
+focused regex that excludes the with-documents/materialization row.
 
 ```sh
 RUN_DIR=/tmp/gomap_vector_search_compare_tier_f_$(date +%Y%m%d_%H%M%S) \
@@ -149,7 +151,7 @@ TREEDB_VECTOR_BENCH_DOCS=100000 TREEDB_VECTOR_BENCH_DIMS=128 \
   TREEDB_VECTOR_BENCH_M=16 TREEDB_VECTOR_BENCH_EF_CONSTRUCTION=128 \
   TREEDB_VECTOR_BENCH_EF_SEARCH=128 TREEDB_VECTOR_BENCH_TOPK=10 \
   TREEDB_VECTOR_BENCH_QUERIES=16 CPU_LIST=1,8 BENCHTIME=1000x COUNT=3 \
-  BENCH_REGEX='BenchmarkCollectionVectorUSearchProductionCompare$' \
+  BENCH_REGEX='BenchmarkCollectionVectorUSearchProductionCompare/(TreeDB_SearchWithBuffer|TreeDB_SearchWithBufferParallel|TreeDB_CollectionSearchVectorIndexWithBuffer|TreeDB_CollectionSearchVectorIndexNoDocsOneShot|USearch_Search|USearch_SearchParallel)$' \
   scripts/bench_vector_search_compare.sh
 ```
 
