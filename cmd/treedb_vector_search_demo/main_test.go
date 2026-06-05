@@ -720,7 +720,10 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 	if defaultCfg.validationExactSource != validationExactSourceTreeDB {
 		t.Fatalf("default validation exact source=%q want treedb", defaultCfg.validationExactSource)
 	}
-	profileCfg, err := parseConfig([]string{"-search-profile-dir", filepath.Join("tmp", ".", "profiles")})
+	profileCfg, err := parseConfig([]string{
+		"-vector-index-strategy", "column_graph",
+		"-search-profile-dir", filepath.Join("tmp", ".", "profiles"),
+	})
 	if err != nil {
 		t.Fatalf("parseConfig search profile dir: %v", err)
 	}
@@ -742,6 +745,11 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 			name: "invalid validation source",
 			args: []string{"-validation-exact-source", "pgvector"},
 			want: "unsupported -validation-exact-source",
+		},
+		{
+			name: "search profile dir requires column graph",
+			args: []string{"-search-profile-dir", filepath.Join("tmp", "profiles")},
+			want: "requires -vector-index-strategy column_graph",
 		},
 		{
 			name: "dataset validation source requires dataset dir",

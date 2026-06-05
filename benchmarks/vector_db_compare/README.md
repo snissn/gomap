@@ -114,9 +114,11 @@ Configuration:
   `-validation-exact-source=treedb|dataset` for every TreeDB row. Unset keeps
   the demo default (`treedb`). Set `dataset` to compute validation exact top-K
   IDs from the exported dataset vectors instead of TreeDB exact search.
-- `TREEDB_SEARCH_PROFILE_DIR`: optional top-level directory for TreeDB search
-  profiles. When set, each TreeDB row passes a backend-specific subdirectory to
-  `-search-profile-dir`; column_graph rows emit per-concurrency
+- `TREEDB_SEARCH_PROFILE_DIR`: optional top-level directory for TreeDB
+  column_graph search profiles. When set, only TreeDB column_graph rows pass a
+  backend-specific subdirectory to `-search-profile-dir`; the native `treedb`
+  row does not receive the flag because native search profiling is not
+  implemented. Column_graph rows emit per-concurrency
   `search_<mode>_c<N>_{cpu,heap,allocs,block,mutex}.pprof` files there. If the
   demo matrix mode is used, profiles are further nested under the matrix case
   name (`<profile-dir>/<backend>/<matrix_case>/...`) so case artifacts are not
@@ -162,7 +164,7 @@ The runner writes:
 - `pgvector.json`: PostgreSQL+pgvector full-vector HNSW benchmark result when enabled
 - `mongodb.json`: MongoDB Vector Search benchmark result when enabled
 - `comparison.md`: normalized comparison table
-- TreeDB search profiles under backend-specific subdirectories of
+- TreeDB column_graph search profiles under backend-specific subdirectories of
   `TREEDB_SEARCH_PROFILE_DIR`, when set
 
 The TreeDB dataset exporter writes row-major little-endian `float32` vector

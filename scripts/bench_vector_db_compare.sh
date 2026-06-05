@@ -186,10 +186,21 @@ if [[ -n "$TREEDB_VALIDATION_EXACT_SOURCE" ]]; then
 	treedb_storage_args+=(-validation-exact-source "$TREEDB_VALIDATION_EXACT_SOURCE")
 fi
 treedb_profile_args=()
+treedb_search_profile_backend_supported() {
+	case "$1" in
+		treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
 treedb_profile_args_for_backend() {
 	local backend="$1"
 	treedb_profile_args=()
-	if [[ -n "$TREEDB_SEARCH_PROFILE_DIR" ]]; then
+	if [[ -n "$TREEDB_SEARCH_PROFILE_DIR" ]] && treedb_search_profile_backend_supported "$backend"; then
 		treedb_profile_args=(-search-profile-dir "$TREEDB_SEARCH_PROFILE_DIR/$backend")
 	fi
 }
@@ -241,6 +252,10 @@ This run compares persistent database-tier ANN search:
 
 \`sqlite-vec\` is not included because upstream sqlite-vec's \`vec0\` table is
 brute-force today; ANN support is still future work.
+
+When \`TREEDB_SEARCH_PROFILE_DIR\` is set, the runner forwards it only to TreeDB
+\`column_graph\` rows; the native \`treedb\` row does not emit search profile
+artifacts.
 EOF
 
 echo "run dir: $RUN_DIR"
@@ -288,8 +303,8 @@ if contains_backend treedb; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		"${treedb_storage_args[@]}" \
-		"${treedb_profile_args[@]}" \
+		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
+		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -313,8 +328,8 @@ if contains_backend treedb_column_graph; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		"${treedb_storage_args[@]}" \
-		"${treedb_profile_args[@]}" \
+		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
+		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -340,8 +355,8 @@ if contains_backend treedb_column_graph_quantized_only; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		"${treedb_storage_args[@]}" \
-		"${treedb_profile_args[@]}" \
+		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
+		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -368,8 +383,8 @@ if contains_backend treedb_column_graph_quantized_rerank; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		"${treedb_storage_args[@]}" \
-		"${treedb_profile_args[@]}" \
+		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
+		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \

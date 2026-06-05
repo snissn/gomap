@@ -354,7 +354,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
 	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
 	fs.BoolVar(&cfg.requireLeafVLogBytes, "require-leaf-vlog-bytes", false, "Fail if compacted storage has no leaf value-log bytes")
-	fs.StringVar(&cfg.searchProfileDir, "search-profile-dir", "", "Write per-concurrency search CPU/heap/alloc/block/mutex profiles under this directory")
+	fs.StringVar(&cfg.searchProfileDir, "search-profile-dir", "", "Write per-concurrency column_graph search CPU/heap/alloc/block/mutex profiles under this directory")
 	fs.BoolVar(&cfg.jsonOut, "json", false, "Emit JSON instead of text")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -434,6 +434,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.searchProfileDir != "" {
 		cfg.searchProfileDir = filepath.Clean(cfg.searchProfileDir)
+		if cfg.vectorIndexStrategy != collections.VectorIndexStrategyColumnGraph {
+			return config{}, errors.New("-search-profile-dir requires -vector-index-strategy column_graph")
+		}
 	}
 	if err := validateValidationExactSourceConfig(cfg); err != nil {
 		return config{}, err
