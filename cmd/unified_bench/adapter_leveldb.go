@@ -65,11 +65,20 @@ func (b *LevelDBBatch) Delete(key []byte) error {
 	})
 	return nil
 }
+func cloneLevelDBRangeBound(bound []byte) []byte {
+	if bound == nil {
+		return nil
+	}
+	clone := make([]byte, len(bound))
+	copy(clone, bound)
+	return clone
+}
+
 func (b *LevelDBBatch) DeleteRange(start, end []byte) error {
 	b.ops = append(b.ops, levelDBBatchOp{
 		kind:  levelDBBatchDeleteRange,
-		start: append([]byte(nil), start...),
-		limit: append([]byte(nil), end...),
+		start: cloneLevelDBRangeBound(start),
+		limit: cloneLevelDBRangeBound(end),
 	})
 	return nil
 }

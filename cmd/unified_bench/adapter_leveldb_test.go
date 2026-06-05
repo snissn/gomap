@@ -60,6 +60,70 @@ func TestLevelDBBatchDeleteRangeMixedOpsOrderedSemantics(t *testing.T) {
 	}
 }
 
+func TestLevelDBBatchDeleteRangePreservesEmptyEndBound(t *testing.T) {
+	db, err := NewLevelDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLevelDB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	seed := func(key, value []byte) {
+		t.Helper()
+		if err := db.Set(key, value); err != nil {
+			t.Fatalf("seed %q: %v", key, err)
+		}
+	}
+	assertPresent := func(key []byte) {
+		t.Helper()
+		val, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("key %q should be present, got err=%v", key, err)
+		}
+		if string(val) != string(key)+"-value" {
+			t.Fatalf("key %q value=%q", key, val)
+		}
+	}
+	commitRange := func(start, end []byte) {
+		t.Helper()
+		batcher, ok := db.(kvstore.Batcher)
+		if !ok {
+			t.Fatalf("LevelDB wrapper missing Batcher")
+		}
+		batch, err := batcher.NewBatch()
+		if err != nil {
+			t.Fatalf("NewBatch: %v", err)
+		}
+		defer func() { _ = batch.Close() }()
+		deleter, ok := batch.(kvstore.BatchRangeDeleter)
+		if !ok {
+			t.Fatalf("LevelDB batch missing BatchRangeDeleter")
+		}
+		if err := deleter.DeleteRange(start, end); err != nil {
+			t.Fatalf("DeleteRange: %v", err)
+		}
+		if err := batch.Commit(); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+	}
+
+	keys := [][]byte{[]byte(""), []byte("a")}
+	for _, key := range keys {
+		seed(key, append(append([]byte(nil), key...), []byte("-value")...))
+	}
+
+	commitRange(nil, []byte{})
+	for _, key := range keys {
+		assertPresent(key)
+	}
+
+	commitRange(nil, nil)
+	for _, key := range keys {
+		if val, err := db.Get(key); !errors.Is(err, leveldb.ErrNotFound) {
+			t.Fatalf("key %q should be deleted by unbounded range, got value=%q err=%v", key, val, err)
+		}
+	}
+}
+
 func TestLevelDBBenchOptions_BlockSizeFlag(t *testing.T) {
 	prev := *leveldbBlockSize
 	defer func() { *leveldbBlockSize = prev }()
