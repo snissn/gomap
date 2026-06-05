@@ -5,6 +5,10 @@ SQLite. It exists to prevent the earlier reporting mistake where TreeDB's
 partial online maintenance size was presented as if it were a fully compacted
 state.
 
+The canonical insert/read rows are single benchmark-driver rows. Use
+`scripts/bench_collections_concurrency.sh` and the concurrency report when making
+claims about concurrent collection-layer reads or mixed read/write workloads.
+
 ## Run
 
 The canonical end-to-end run target is:

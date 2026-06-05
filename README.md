@@ -73,6 +73,17 @@ Two secondary indexes, April 27 collection/SQLite matrix.
 Source:
 [April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
 
+### Collection Concurrency Workload
+
+The collection insert/read/lookup rows above are single benchmark-driver rows.
+For concurrent collection-layer reads and mixed read/write evidence, use the
+separate concurrency report. In the June 4 run, TreeDB template-v1 primary reads
+into a caller buffer measured 332.3 ns/op at `GOMAXPROCS=12`; mixed primary
+reads with one writer measured 2.96M reader ops/sec and 44.3k writer docs/sec.
+
+Source:
+[June 4 collection concurrency report](docs/benchmarks/collections_concurrency_main_2026-06-04.md).
+
 ### `application.db` Offline Density Workload
 
 Offline compacted-size comparison from the June 2 Celestia `application.db`
