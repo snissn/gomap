@@ -1,22 +1,93 @@
 # TreeDB high-QPS collection vector search
 
 This guide summarizes the collection-level vector-search API boundary after the
-`#2360` high-QPS work.
+`#2360` high-QPS work. It owns the API-selection and caveat guidance from #2406;
+benchmark snapshots and full counter workflow are documented separately by
+#2410.
 
-## API boundary
+## Choosing a vector search API
 
-| API | Result ownership | Document fetch | Intended use |
-| --- | --- | --- | --- |
-| `Collection.SearchVectorIndexWithBuffer` | caller-owned `VectorIndexSearchBuffer` | rejected | primary high-QPS no-document serving path; steady state should be `0 B/op`, `0 allocs/op` |
-| `Collection.SearchVectorIndex` with `IncludeDocuments=false` | response-owned results/IDs | no documents | convenience no-document path; uses the same cached `hnsw_search_pack_v1` route when healthy, but allocates response-owned result storage |
-| `Collection.SearchVectorIndex` with `IncludeDocuments=true` | response-owned results/documents | included in timed call | explicit with-documents/materialization path; not a no-document high-QPS success row |
-| `CollectionReadView.FetchDocumentsForVectorIndexSearchResults` | response-owned documents | separate post-search call | explicit split search/fetch materialization phase for top-k IDs |
-| `OpenVectorIndexSearcher` + `SearchWithBuffer` | caller-owned buffer | rejected by buffered search | reusable-searcher path when callers control snapshot/open lifetime |
+| User goal | API | Result ownership | Document/materialization boundary | Notes |
+| --- | --- | --- | --- | --- |
+| Production high-QPS exact no-document serving through the collection API | `Collection.SearchVectorIndexWithBuffer` | caller-owned `VectorIndexSearchBuffer` | `IncludeDocuments=false`; document fetch/projection/filter/fallback controls rejected | Primary collection-level fast path. Warm the collection-owned prepared `hnsw_search_pack_v1` state before the timed/serving loop; steady state targets `0 B/op`, `0 allocs/op`. |
+| Simple no-document call when per-call result allocation is acceptable | `Collection.SearchVectorIndex` with `IncludeDocuments=false` | response-owned results/IDs | no documents materialized | Convenience route. Healthy exact calls use the cached `hnsw_search_pack_v1` route, but returned result/ID storage is response-owned and intentionally allocates. |
+| Search and materialize documents in the same call | `Collection.SearchVectorIndex` with `IncludeDocuments=true` | response-owned results/documents | with-document materialization is part of the call | explicit materialization path. Do not mix these rows into no-document high-QPS claims; report document fetch counters separately. |
+| Search first, fetch top-k documents later | `CollectionReadView.FetchDocumentsForVectorIndexSearchResults` after a no-document search | response-owned documents | separate fetch/materialization phase | Use when a service can keep ANN search no-document and fetch only selected top-k IDs later. Buffered-search results alias the caller buffer, so do not reuse/reset the buffer until this fetch returns. |
+| Reusable low-level serving when the caller owns snapshot/open lifetime | `OpenVectorIndexSearcher` + `SearchWithBuffer` | caller-owned `VectorIndexSearchBuffer` | buffered search rejects document materialization | Open/warm one searcher and one buffer per worker. Use this when explicit searcher lifetime control matters more than the collection-level convenience seam. |
+
+## Production high-QPS serving recipe
+
+For the collection-level serving path:
+
+1. Build or rebuild the declared `column_graph` vector index for the current
+   generation, and keep rebuild/setup outside the timed request loop.
+2. Use the exact/zero query mode with `IncludeDocuments=false`; leave document
+   fetch options, filters, projections, legacy fallback controls, and
+   `benchmark_debug` stats out of the high-QPS request shape.
+3. Allocate one `VectorIndexSearchBuffer` per goroutine/worker. A buffer is not
+   concurrency-safe, and returned `Results`/ID byte slices alias that buffer
+   until it is reused or reset.
+4. Warm once before serving or before `ResetTimer` so the collection-owned
+   prepared `hnsw_search_pack_v1` state is built outside the measured loop.
+5. Fetch documents only after the no-document search, as a separately measured
+   materialization phase, or choose an explicitly with-document API row instead.
+
+```go
+var buffer collections.VectorIndexSearchBuffer
+opts := collections.VectorIndexSearchOptions{
+    IndexName: "embedding_graph",
+    Query:     warmupQuery,
+    TopK:      10,
+    EfSearch:  128,
+    StatsMode: collections.VectorIndexSearchStatsModeProduction,
+}
+
+// Warm the collection-owned prepared search state outside the timed loop.
+if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+    return err
+}
+
+for query := range queries {
+    opts.Query = query
+    response, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+    if err != nil {
+        return err
+    }
+    // response.Results aliases buffer; copy IDs/results before reusing buffer
+    // if another goroutine or later stage must retain them.
+    consumeTopK(response.Results)
+}
+```
+
+For lower-level serving, open `OpenVectorIndexSearcher` once per worker, warm
+`SearchWithBuffer` with that worker's own buffer, and close/reopen the searcher
+when the worker must move to a newer collection/vector-index generation.
+
+## Do not overclaim
+
+- Say TreeDB is close to USearch only for the warmed exact no-document parallel
+  buffered serving route measured in the #2360/#2379 snapshot: Apple M3
+  (`darwin/arm64`), 2026-06-05, commit
+  `2feb1f0e35459d1b3d044008203d0c8afcf5630f`, Tier S fixture (10k docs,
+  64 dims, M=16, efConstruction=128, efSearch=128, topK=10, query stream
+  length 16, `BENCHTIME=1000x`, `COUNT=3`, `CPU_LIST=1,8`). USearch in that
+  comparison is a pure in-memory external ANN baseline, not TreeDB persistent
+  storage.
+- With-document search is a different materialization path. It includes final
+  document fetch/reconstruction work and must not be mixed into no-document
+  high-QPS claims.
+- Filters, projections, debug-only stats, and quantized modes are outside the
+  exact FP32 `hnsw_search_pack_v1` no-document success claim unless a separate
+  fail-closed route row and benchmark/counter evidence are published.
+- Collection-level buffered quantized search support is unavailable/planned
+  follow-up until #2415 lands. Keep any low-level quantized search evidence
+  separate from exact FP32 `hnsw_search_pack_v1` route claims.
 
 ## Required no-document route counters
 
-Healthy no-document rows must prove all of the following before claiming the
-high-QPS path:
+#2410 owns the full benchmark snapshot and counter workflow. As a contract
+summary, healthy exact no-document rows must prove all of the following before
+claiming the high-QPS path:
 
 - `search_route_hnsw_search_pack/search=1`
 - `hnsw_search_pack_active/search=1`
@@ -38,10 +109,7 @@ boundary is proven by the benchmark shape plus the route/fallback counters above
 `Collection.SearchVectorIndexWithBuffer` must also report `0 B/op` and
 `0 allocs/op`. `Collection.SearchVectorIndex` no-document convenience rows
 should report `response_owned_result_alloc/op=1` and account for the small
-response-owned allocation separately. Filters, projections, debug-only stats,
-quantized modes, and document materialization are outside this exact no-document
-contract unless they have an explicitly separate fail-closed route and benchmark
-row.
+response-owned allocation separately.
 
 ## Benchmark command
 

@@ -23,6 +23,10 @@ directories when moving between branches.
 - [Vector typed-column guide](vector-search-typed-column.md) — place vector
   payloads in dense typed-column sections, keep metadata ownership explicit, and
   separate search/scoring from final document fetch.
+- [High-QPS collection vector-search guide](vector-search-high-qps-collection-api.md)
+  — choose between buffered no-document serving, response-owned convenience
+  calls, explicit materialization, and reusable searchers without overclaiming
+  beyond exact measured routes.
 
 ## Deeper specs
 
