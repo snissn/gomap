@@ -550,6 +550,315 @@ func TestVectorIndexSearcherSearchWithBufferHighQPSContractRejectsDocuments2361(
 	}
 }
 
+func TestSearchVectorIndexWithBufferMatchesSearcherSearchWithBuffer2362(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+
+	query := []float32{0.6, 0.4, 0}
+	searcherOpts := VectorIndexSearcherSearchOptions{Query: query, TopK: 3, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeFullDiagnostics}
+	var searcherBuffer VectorIndexSearchBuffer
+	want, err := searcher.SearchWithBuffer(searcherOpts, &searcherBuffer)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, want, def.Name, searcherOpts.TopK)
+
+	collectionOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeExact, TopK: searcherOpts.TopK, EfSearch: searcherOpts.EfSearch, MaxDecodedBlocks: 1, StatsMode: searcherOpts.StatsMode}
+	var collectionBuffer VectorIndexSearchBuffer
+	got, err := col.SearchVectorIndexWithBuffer(collectionOpts, &collectionBuffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, collectionOpts.TopK)
+	assertVectorIndexSearchResponsesEquivalentNoDocs2124(t, got, want)
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, got.Stats)
+	if len(collectionBuffer.results) != len(got.Results) || len(collectionBuffer.idBytes) == 0 {
+		t.Fatalf("buffer results=%d idBytes=%d want populated caller-owned result storage", len(collectionBuffer.results), len(collectionBuffer.idBytes))
+	}
+	if len(got.Results) == 0 || &got.Results[0] != &collectionBuffer.results[0] {
+		t.Fatalf("response results do not alias caller-owned result buffer")
+	}
+	if len(got.Results[0].ID) == 0 || &got.Results[0].ID[0] != &collectionBuffer.idBytes[0] {
+		t.Fatalf("response IDs do not alias caller-owned ID byte buffer")
+	}
+	for i, result := range got.Results {
+		if len(result.Document) != 0 || cap(result.ID) != len(result.ID) {
+			t.Fatalf("result[%d]=%+v id len/cap=%d/%d want no documents and cap-isolated ID bytes", i, result, len(result.ID), cap(result.ID))
+		}
+	}
+}
+
+func TestSearchVectorIndexWithBufferReuseGrowShrinkNoStaleIDs2362(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-long-a", vector: []float32{1, 0, 0}},
+		{id: "b", vector: []float32{0, 1, 0}},
+		{id: "cc", vector: []float32{0, 0, 1}},
+		{id: "dddd", vector: []float32{0.7, 0.3, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	growOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	for i := 0; i < 3; i++ {
+		got, err := col.SearchVectorIndexWithBuffer(growOpts, &buffer)
+		if err != nil {
+			t.Fatalf("SearchVectorIndexWithBuffer grow iteration %d: %v", i, err)
+		}
+		assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 3)
+		assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, rows, growOpts.Query, growOpts.TopK), false)
+		assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, got.Stats)
+		for j, result := range got.Results {
+			if cap(result.ID) != len(result.ID) {
+				t.Fatalf("grow iteration %d result[%d] id len/cap=%d/%d want cap isolated", i, j, len(result.ID), cap(result.ID))
+			}
+		}
+	}
+
+	if len(buffer.results) != 3 {
+		t.Fatalf("test setup buffer results=%d want 3 before shrink", len(buffer.results))
+	}
+	buffer.results[1].Document = []byte("stale-document")
+	buffer.results[2].Score = 99
+
+	shrinkOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	shrunk, err := col.SearchVectorIndexWithBuffer(shrinkOpts, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer shrink: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, shrunk, def.Name, 1)
+	assertVectorIndexSearchResultsV4(t, shrunk.Results, exactColumnGraphTopKForTest(t, rows, shrinkOpts.Query, shrinkOpts.TopK), false)
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, shrunk.Stats)
+	if gotID := string(shrunk.Results[0].ID); gotID != "b" {
+		t.Fatalf("shrunk top id=%q want b without stale bytes from longer prior IDs", gotID)
+	}
+	if cap(shrunk.Results[0].ID) != len(shrunk.Results[0].ID) {
+		t.Fatalf("shrunk id len/cap=%d/%d want cap isolated", len(shrunk.Results[0].ID), cap(shrunk.Results[0].ID))
+	}
+	allResults := buffer.results[:cap(buffer.results)]
+	for i := len(buffer.results); i < 3 && i < len(allResults); i++ {
+		if allResults[i].ID != nil || allResults[i].Ordinal != 0 || allResults[i].Score != 0 || allResults[i].Document != nil {
+			t.Fatalf("shrunk stale tail result[%d]=%+v want cleared", i, allResults[i])
+		}
+	}
+
+	regrown, err := col.SearchVectorIndexWithBuffer(growOpts, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer regrow: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, regrown, def.Name, 3)
+	assertVectorIndexSearchResultsV4(t, regrown.Results, exactColumnGraphTopKForTest(t, rows, growOpts.Query, growOpts.TopK), false)
+}
+
+func TestSearchVectorIndexWithBufferOpenScopedAllocationContract2362(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{0.7, 0.3, 0}},
+		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0.6, 0.4, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+
+	var buffer VectorIndexSearchBuffer
+	warm, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, warm, def.Name, opts.TopK)
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, warm.Stats)
+	resultCap, idCap := cap(buffer.results), cap(buffer.idBytes)
+	if resultCap < opts.TopK || idCap == 0 {
+		t.Fatalf("warm buffer caps results=%d idBytes=%d want reusable capacity", resultCap, idCap)
+	}
+
+	var sink int
+	bufferedAllocs := testing.AllocsPerRun(100, func() {
+		got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+		if err != nil {
+			panic(err)
+		}
+		if len(got.Results) != opts.TopK {
+			panic("unexpected SearchVectorIndexWithBuffer result count")
+		}
+		if cap(buffer.results) != resultCap || cap(buffer.idBytes) != idCap {
+			panic("SearchVectorIndexWithBuffer grew caller buffer after warmup")
+		}
+		sink += len(got.Results) + got.Results[0].Ordinal
+	})
+	ownedAllocs := testing.AllocsPerRun(100, func() {
+		got, err := col.SearchVectorIndex(opts)
+		if err != nil {
+			panic(err)
+		}
+		if len(got.Results) != opts.TopK {
+			panic("unexpected SearchVectorIndex result count")
+		}
+		sink += len(got.Results) + got.Results[0].Ordinal
+	})
+	if sink == 0 {
+		t.Fatal("allocation check did not consume results")
+	}
+	if bufferedAllocs >= ownedAllocs {
+		t.Fatalf("SearchVectorIndexWithBuffer allocs=%v want below response-owned SearchVectorIndex allocs=%v; remaining allocations are per-call open/prepare work for #2363", bufferedAllocs, ownedAllocs)
+	}
+}
+
+func TestSearchVectorIndexWithBufferParallelIndependentBuffers2362(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{0.7, 0.3, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	query := []float32{1, 0, 0}
+	topK := 2
+	want := exactColumnGraphTopKForTest(t, rows, query, topK)
+	const workers = 4
+	const iterations = 10
+	var wg sync.WaitGroup
+	errs := make(chan string, workers)
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			var buffer VectorIndexSearchBuffer
+			opts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: topK, EfSearch: len(rows), MaxDecodedBlocks: 1}
+			for i := 0; i < iterations; i++ {
+				got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+				if err != nil {
+					errs <- fmt.Sprintf("worker %d iteration %d SearchVectorIndexWithBuffer: %v", worker, i, err)
+					return
+				}
+				if len(got.Results) != len(want) {
+					errs <- fmt.Sprintf("worker %d iteration %d results=%d want %d", worker, i, len(got.Results), len(want))
+					return
+				}
+				if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(got.Stats) {
+					errs <- fmt.Sprintf("worker %d iteration %d stats=%+v want hnsw_search_pack_v1 no-document route", worker, i, got.Stats)
+					return
+				}
+				for j := range want {
+					if !bytes.Equal(got.Results[j].ID, want[j].ID) || math.Abs(got.Results[j].Score-want[j].Score) > 1e-6 {
+						errs <- fmt.Sprintf("worker %d iteration %d result[%d]=%+v want id=%q score=%v", worker, i, j, got.Results[j], want[j].ID, want[j].Score)
+						return
+					}
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestSearchVectorIndexWithBufferUnsupportedShapesFailClosed2362(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	base := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	var buffer VectorIndexSearchBuffer
+	valid, err := col.SearchVectorIndexWithBuffer(base, &buffer)
+	if err != nil {
+		t.Fatalf("valid SearchVectorIndexWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, valid, def.Name, 1)
+	if len(buffer.results) == 0 || len(buffer.idBytes) == 0 {
+		t.Fatalf("test setup buffer results=%d idBytes=%d want populated before unsupported cases", len(buffer.results), len(buffer.idBytes))
+	}
+
+	if _, err := col.SearchVectorIndexWithBuffer(base, nil); err == nil || !strings.Contains(err.Error(), "nil vector index search buffer") {
+		t.Fatalf("nil buffer err=%v want fail closed", err)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*VectorIndexSearchOptions)
+		wantErr string
+	}{
+		{name: "include_documents", mutate: func(opts *VectorIndexSearchOptions) { opts.IncludeDocuments = true }, wantErr: "IncludeDocuments"},
+		{name: "document_projection", mutate: func(opts *VectorIndexSearchOptions) { opts.DocumentFetchOptions.IncludePaths = []string{"did"} }, wantErr: "DocumentFetchOptions"},
+		{name: "document_integrity_option", mutate: func(opts *VectorIndexSearchOptions) {
+			opts.DocumentFetchOptions.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+		}, wantErr: "DocumentFetchOptions"},
+		{name: "filter", mutate: func(opts *VectorIndexSearchOptions) {
+			opts.Filter = func(DocumentRecord) (bool, error) { return true, nil }
+		}, wantErr: "filters"},
+		{name: "range_filter", mutate: func(opts *VectorIndexSearchOptions) {
+			opts.IndexRangeFilter = &VectorIndexRangeFilter{IndexName: "kind"}
+		}, wantErr: "filters"},
+		{name: "quantized_mode", mutate: func(opts *VectorIndexSearchOptions) {
+			opts.QueryMode = VectorIndexQueryModeQuantizedOnly
+			opts.QuantizedIndexName = "embedding.scalar_u8.fast"
+		}, wantErr: "only exact"},
+		{name: "quantized_option", mutate: func(opts *VectorIndexSearchOptions) { opts.QuantizedIndexName = "embedding.scalar_u8.fast" }, wantErr: "quantized"},
+		{name: "legacy_controls", mutate: func(opts *VectorIndexSearchOptions) { opts.FetchMultiplier = 2 }, wantErr: "legacy"},
+		{name: "benchmark_debug", mutate: func(opts *VectorIndexSearchOptions) { opts.StatsMode = VectorIndexSearchStatsModeBenchmarkDebug }, wantErr: "benchmark_debug"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := base
+			tt.mutate(&opts)
+			got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("SearchVectorIndexWithBuffer err=%v want substring %q", err, tt.wantErr)
+			}
+			if len(got.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+				t.Fatalf("unsupported shape left results: returned=%d bufferResults=%d idBytes=%d", len(got.Results), len(buffer.results), len(buffer.idBytes))
+			}
+			if _, err := col.SearchVectorIndexWithBuffer(base, &buffer); err != nil {
+				t.Fatalf("valid SearchVectorIndexWithBuffer after %s: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+func assertSearchVectorIndexWithBufferNoDocumentPackStats2362(tb testing.TB, stats VectorIndexSearchStats) {
+	tb.Helper()
+	if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(stats) {
+		tb.Fatalf("SearchVectorIndexWithBuffer stats=%+v want exact no-document hnsw_search_pack_v1 route", stats)
+	}
+	if stats.DocumentBytes != 0 || stats.DocumentOutputBytes != 0 || stats.DocumentRowRefStateFetches != 0 || stats.DocumentRowRefLookupFallbacks != 0 || stats.DocumentPointRowFetches != 0 || stats.DocumentJSONReconstructionRows != 0 {
+		tb.Fatalf("SearchVectorIndexWithBuffer document stats=%+v want no materialization", stats)
+	}
+}
+
 func assertSearchVectorIndexNoDocumentCurrentOneShotStats2361(tb testing.TB, stats VectorIndexSearchStats) {
 	tb.Helper()
 	if stats.DocumentsFetched != 0 ||

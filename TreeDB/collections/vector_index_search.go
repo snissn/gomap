@@ -524,20 +524,22 @@ type VectorIndexSearchResponse struct {
 	// Stats contains search and reader telemetry.
 	Stats VectorIndexSearchStats `json:"stats,omitempty"`
 	// Results contains top-k hits in descending score order. Search and
-	// SearchVectorIndex return response-owned slices; SearchWithBuffer returns a
-	// slice owned by the caller's VectorIndexSearchBuffer.
+	// SearchVectorIndex return response-owned slices; SearchWithBuffer and
+	// SearchVectorIndexWithBuffer return slices owned by the caller's
+	// VectorIndexSearchBuffer.
 	Results []VectorIndexSearchResult `json:"results,omitempty"`
 }
 
 // VectorIndexSearchBuffer is caller-owned reusable response storage for
-// VectorIndexSearcher.SearchWithBuffer. It is intended for steady-state
-// no-document searches that need to avoid per-call response allocation. Reuse a
-// warmed buffer to keep result-ID searches allocation-free.
+// VectorIndexSearcher.SearchWithBuffer and Collection.SearchVectorIndexWithBuffer.
+// It is intended for steady-state no-document searches that need to avoid
+// per-call response allocation. Reuse a warmed buffer to keep result-ID searches
+// allocation-free once open/prepared state is outside the measured boundary.
 //
 // A VectorIndexSearchBuffer is not safe for concurrent use. Do not reuse or
 // reset the same buffer while any caller still needs a response previously
 // returned from it. The response Results slice and each result ID returned by
-// SearchWithBuffer alias this buffer and remain valid only until the same
+// buffered search APIs alias this buffer and remain valid only until the same
 // buffer is reused or Reset is called. Parallel callers should use independent
 // searcher/buffer pairs per worker.
 type VectorIndexSearchBuffer struct {
@@ -546,7 +548,7 @@ type VectorIndexSearchBuffer struct {
 }
 
 // Reset clears the buffer's current response view while retaining reusable
-// capacity. Any response previously returned by SearchWithBuffer with this
+// capacity. Any response previously returned by a buffered search API with this
 // buffer must be considered invalid after Reset returns.
 func (b *VectorIndexSearchBuffer) Reset() {
 	if b == nil {
@@ -717,7 +719,10 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // reported through document counters. This method currently opens and closes a
 // searcher per call, so its no-document benchmarks are one-shot/convenience
 // baselines rather than the high-QPS target; compare route/open counters before
-// treating it as a serving hot path.
+// treating it as a serving hot path. Use SearchVectorIndexWithBuffer for the
+// collection-level caller-owned result-buffer seam, and OpenVectorIndexSearcher
+// plus SearchWithBuffer when callers can keep open/prepared state outside the
+// timed query boundary.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
@@ -751,6 +756,138 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 		response.Stats.DocumentAssetActiveHandles = counters.activeHandles
 	}
 	return response, err
+}
+
+// SearchVectorIndexWithBuffer searches a collection vector index through the
+// exact no-document high-QPS seam using caller-owned result storage. Returned
+// Results and result IDs alias buffer and remain valid only until buffer is
+// reused or Reset is called. The same buffer must not be reused concurrently;
+// parallel callers should use independent buffers.
+//
+// This method intentionally fails closed for document materialization,
+// projections, filters, quantized modes, benchmark-debug stats mode, missing or
+// invalid hnsw_search_pack_v1 state, and legacy/fallback routes. It currently
+// opens and closes a VectorIndexSearcher per call; that open/prepare allocation
+// and validation cost is still inside this collection-level seam until a
+// collection-owned prepared cache is introduced. Callers that already manage
+// reusable open state should prefer OpenVectorIndexSearcher plus
+// VectorIndexSearcher.SearchWithBuffer for the zero-allocation steady-state hot
+// path.
+func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
+		return VectorIndexSearchResponse{}, err
+	}
+	searcher, response, err := c.openVectorIndexSearcher(VectorIndexSearcherOptions{
+		IndexName:        opts.IndexName,
+		MaxDecodedBlocks: opts.MaxDecodedBlocks,
+	})
+	if err != nil {
+		buffer.Reset()
+		return response, err
+	}
+	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
+	if err != nil {
+		buffer.Reset()
+		_ = searcher.Close()
+		return response, err
+	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		buffer.Reset()
+		_ = searcher.Close()
+		return response, err
+	}
+	if _, routeStats, usePackRoute := searcher.hnswSearchPackSearchWithBufferRoute(queryMode, statsMode); !usePackRoute {
+		buffer.Reset()
+		response.Stats = VectorIndexSearchStats{}
+		routeStats.apply(&response.Stats)
+		_ = searcher.Close()
+		return response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
+	}
+	response, err = searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
+		Query:          opts.Query,
+		QueryMode:      opts.QueryMode,
+		TopK:           opts.TopK,
+		EfSearch:       opts.EfSearch,
+		StatsMode:      opts.StatsMode,
+		scoreBatchMode: opts.scoreBatchMode,
+	}, buffer)
+	if closeErr := searcher.Close(); err == nil && closeErr != nil {
+		buffer.Reset()
+		return response, closeErr
+	}
+	if err != nil {
+		return response, err
+	}
+	if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats) {
+		buffer.Reset()
+		response.Results = nil
+		return response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
+	}
+	return response, nil
+}
+
+func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) error {
+	if buffer == nil {
+		return errors.New("collections: nil vector index search buffer")
+	}
+	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
+		buffer.Reset()
+		return err
+	}
+	if opts.IncludeDocuments {
+		buffer.Reset()
+		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support IncludeDocuments")
+	}
+	if vectorIndexDocumentFetchOptionsNonZero(opts.DocumentFetchOptions) {
+		buffer.Reset()
+		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support DocumentFetchOptions")
+	}
+	if opts.Filter != nil || opts.IndexRangeFilter != nil {
+		buffer.Reset()
+		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support filters")
+	}
+	if opts.FetchMultiplier != 0 || opts.ExactFilterMaxDocs != 0 || opts.DisableExactFallback {
+		buffer.Reset()
+		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support legacy fallback/filter controls")
+	}
+	if opts.QueryMode != "" && opts.QueryMode != VectorIndexQueryModeExact {
+		buffer.Reset()
+		return fmt.Errorf("collections: vector index SearchVectorIndexWithBuffer supports only exact query mode, got %q", opts.QueryMode)
+	}
+	if opts.QuantizedIndexName != "" || opts.QuantizedRerankCandidates != 0 {
+		buffer.Reset()
+		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support quantized search options")
+	}
+	if opts.StatsMode == VectorIndexSearchStatsModeBenchmarkDebug {
+		buffer.Reset()
+		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support benchmark_debug stats mode")
+	}
+	if _, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode); err != nil {
+		buffer.Reset()
+		return err
+	}
+	return nil
+}
+
+func vectorIndexDocumentFetchOptionsNonZero(opts DocumentFetchOptions) bool {
+	return documentFetchOptionsHasProjection(opts) || opts.Format != "" || opts.ColumnAssetReadIntegrity != ""
+}
+
+func vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(stats VectorIndexSearchStats) bool {
+	return stats.SearchRouteHNSWSearchPack == 1 &&
+		stats.HNSWSearchPackActive == 1 &&
+		stats.HNSWSearchPackMissing == 0 &&
+		stats.HNSWSearchPackInvalid == 0 &&
+		stats.HNSWSearchPackStale == 0 &&
+		stats.HNSWSearchPackClosed == 0 &&
+		stats.HNSWSearchPackFallbacks == 0 &&
+		stats.SearchRouteColumnGraphPrepared == 0 &&
+		stats.SearchRouteColumnGraphFallback == 0 &&
+		stats.DocumentsFetched == 0 &&
+		stats.GraphRowFallbacks == 0 &&
+		stats.TypedColumnFallbacks == 0 &&
+		stats.VectorScratchDecodes == 0
 }
 
 // OpenVectorIndexSearcher opens a reusable search handle for steady-state

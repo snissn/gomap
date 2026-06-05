@@ -299,11 +299,12 @@ once prepared CSR adjacency is active.
 | `BenchmarkVectorSearchReusableBufferParallelTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferParallelV4` | Reusable-buffer path with one independent searcher and buffer per worker. |
 
 Use the reusable-buffer tier only for no-document callers that can honor the
-buffer lifetime contract. `VectorIndexSearcher.SearchWithBuffer` rejects
-`IncludeDocuments`; callers that fetch documents should continue using
-`Search`/`SearchVectorIndex` and report the document-fetch counters separately.
-A `VectorIndexSearchBuffer` is not concurrency-safe, and returned `Results`/`ID`
-slices are valid only until the same buffer is reused or reset.
+buffer lifetime contract. `VectorIndexSearcher.SearchWithBuffer` and
+`Collection.SearchVectorIndexWithBuffer` reject `IncludeDocuments`; callers that
+fetch documents should continue using `Search`/`SearchVectorIndex` and report the
+document-fetch counters separately. A `VectorIndexSearchBuffer` is not
+concurrency-safe, and returned `Results`/`ID` slices are valid only until the same
+buffer is reused or reset.
 
 Use the #2037 truth matrix when comparing legacy/direct graph-row controls,
 current TVIS/base typed-column routing, and combined prepared typed-column rows
@@ -359,9 +360,13 @@ baseline. Its current production comparison benchmark is
   `VectorIndexSearcher.SearchWithBuffer`; setup, inserts, rebuild, open, and
   warmup are outside the timed loop. Parallel rows use one searcher and one
   `VectorIndexSearchBuffer` per worker.
-- A future collection-level buffered row should mirror the `SearchWithBuffer`
-  no-document contract: exact mode, caller-owned buffer, no documents/projection,
-  no per-search open/setup, and the healthy `hnsw_search_pack_v1` route.
+- `TreeDB_CollectionSearchVectorIndexWithBuffer` times the collection-level
+  caller-owned result-buffer seam. It mirrors the `SearchWithBuffer`
+  no-document route contract: exact mode, caller-owned buffer, no
+  documents/projection, and the healthy `hnsw_search_pack_v1` route. Until the
+  collection-owned prepared cache lands, this seam still opens/closes per
+  operation; report `open_searcher_calls/op=1`, `open_setup_in_timed_loop=1`,
+  and attribute those remaining allocations to the cache follow-up.
 - `USearch_Search` / `USearch_SearchParallel` time the pure in-memory USearch Go
   binding with cosine/f32 HNSW.
 - Both sides use the same deterministic synthetic vector/query generator and the

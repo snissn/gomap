@@ -168,9 +168,10 @@ The initial API lives in `TreeDB/collections`:
 Native `column_graph` benchmark tiers are documented in
 `docs/guides/vector-search-typed-column.md#vector-search-benchmark-tiers`.
 Use that matrix to distinguish core graph search, existing public response-owned
-`Search`, reusable-buffer no-document `SearchWithBuffer`, parallel callers, and
-explicit document-fetch paths. Report `ops/sec` (`1e9 / ns/op`) with `ns/op`,
-`B/op`, `allocs/op`, and vector/adjacency direct-vs-scratch counters.
+`Search`, collection-level caller-buffered `SearchVectorIndexWithBuffer`,
+reusable-buffer no-document `SearchWithBuffer`, parallel callers, and explicit
+document-fetch paths. Report `ops/sec` (`1e9 / ns/op`) with `ns/op`, `B/op`,
+`allocs/op`, and vector/adjacency direct-vs-scratch counters.
 
 Smoke benchmark:
 
@@ -196,11 +197,14 @@ The script downloads and extracts a USearch Linux or macOS release package into
 writes results under `/tmp/gomap_vector_search_compare_*`. The canonical current
 production rows include
 `BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexNoDocsOneShot`
-as the current collection-level one-shot baseline, plus
-`.../TreeDB_SearchWithBuffer*` versus `.../USearch_Search*`: TreeDB's high-QPS
-comparison uses persisted `column_graph` through `Collection.OpenVectorIndexSearcher`
-plus `VectorIndexSearcher.SearchWithBuffer` with one searcher and one reusable
-buffer per worker, while USearch is a pure in-memory cosine/f32 HNSW baseline.
+as the current collection-level one-shot baseline,
+`.../TreeDB_CollectionSearchVectorIndexWithBuffer` as the collection-level
+caller-owned result-buffer seam with per-call open still inside the timed
+boundary, plus `.../TreeDB_SearchWithBuffer*` versus `.../USearch_Search*`:
+TreeDB's high-QPS comparison uses persisted `column_graph` through
+`Collection.OpenVectorIndexSearcher` plus `VectorIndexSearcher.SearchWithBuffer`
+with one searcher and one reusable buffer per worker, while USearch is a pure
+in-memory cosine/f32 HNSW baseline.
 Use `CPU_LIST=1,8` for c=1/c=8 evidence. Older `BenchmarkCollectionVectorIndex*`
 rows are historical controls, not the current high-QPS production fast path;
 one-shot `Collection.SearchVectorIndex` benchmarks include setup/open cost and
