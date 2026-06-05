@@ -114,6 +114,31 @@ func TestDeleteRangeNilVsEmptyBounds(t *testing.T) {
 }
 
 func TestBatchReplayPreservesDeleteRangeOrder(t *testing.T) {
+	t.Run("point-submission-order-and-duplicates", func(t *testing.T) {
+		db := openTestDB(t)
+		batch := db.NewBatch()
+		if err := batch.Put([]byte("b"), []byte("1")); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.Put([]byte("a"), []byte("1")); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.Put([]byte("b"), []byte("2")); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.Delete([]byte("a")); err != nil {
+			t.Fatal(err)
+		}
+		var rec replayRecorder
+		if err := batch.Replay(&rec); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"put:b=1", "put:a=1", "put:b=2", "delete:a"}
+		if !slices.Equal(rec.ops, want) {
+			t.Fatalf("replay ops=%v want %v", rec.ops, want)
+		}
+	})
+
 	t.Run("put-then-range-delete", func(t *testing.T) {
 		db := openTestDB(t)
 		batch := db.NewBatch()
@@ -259,6 +284,25 @@ func TestDBLevelDeleteRangeCallsPublicTreeDBDeleteRangeDirectly(t *testing.T) {
 	if strings.Contains(method, "NewBatch") {
 		t.Fatalf("Database.DeleteRange contains adapter-side batch path; body:\n%s", method)
 	}
+}
+
+type replayRecorder struct {
+	ops []string
+}
+
+func (r *replayRecorder) Put(key []byte, value []byte) error {
+	r.ops = append(r.ops, "put:"+string(key)+"="+string(value))
+	return nil
+}
+
+func (r *replayRecorder) Delete(key []byte) error {
+	r.ops = append(r.ops, "delete:"+string(key))
+	return nil
+}
+
+func (r *replayRecorder) DeleteRange(start, end []byte) error {
+	r.ops = append(r.ops, "delete-range:"+string(start)+".."+string(end))
+	return nil
 }
 
 func collectIteratorKeys(it interface {

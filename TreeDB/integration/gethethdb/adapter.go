@@ -17,7 +17,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	treedb "github.com/snissn/gomap/TreeDB"
-	treedbbatch "github.com/snissn/gomap/TreeDB/batch"
 )
 
 // Adapter errors are aliases to TreeDB errors so callers can use errors.Is.
@@ -368,6 +367,10 @@ type batchOp struct {
 	value []byte
 }
 
+func (b *Batch) recordOp(op batchOp) {
+	b.ops = append(b.ops, op)
+}
+
 func newClosedBatch(err error) *Batch {
 	if err == nil {
 		err = ErrClosed
@@ -381,13 +384,14 @@ func (b *Batch) Put(key []byte, value []byte) error {
 		return ErrClosed
 	}
 	if b.inner == nil {
-		b.ops = append(b.ops, batchOp{kind: batchOpPut, key: cloneBytes(key), value: cloneBytes(value)})
+		b.recordOp(batchOp{kind: batchOpPut, key: cloneBytes(key), value: cloneBytes(value)})
 		b.size += len(key) + len(value)
 		return nil
 	}
 	if err := b.inner.Set(key, value); err != nil {
 		return err
 	}
+	b.recordOp(batchOp{kind: batchOpPut, key: cloneBytes(key), value: cloneBytes(value)})
 	b.size += len(key) + len(value)
 	return nil
 }
@@ -398,13 +402,14 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrClosed
 	}
 	if b.inner == nil {
-		b.ops = append(b.ops, batchOp{kind: batchOpDelete, key: cloneBytes(key)})
+		b.recordOp(batchOp{kind: batchOpDelete, key: cloneBytes(key)})
 		b.size += len(key)
 		return nil
 	}
 	if err := b.inner.Delete(key); err != nil {
 		return err
 	}
+	b.recordOp(batchOp{kind: batchOpDelete, key: cloneBytes(key)})
 	b.size += len(key)
 	return nil
 }
@@ -415,13 +420,14 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 		return ErrClosed
 	}
 	if b.inner == nil {
-		b.ops = append(b.ops, batchOp{kind: batchOpDeleteRange, key: cloneBytes(start), value: cloneBytes(end)})
+		b.recordOp(batchOp{kind: batchOpDeleteRange, key: cloneBytes(start), value: cloneBytes(end)})
 		b.size += len(start) + len(end)
 		return nil
 	}
 	if err := b.inner.DeleteRange(start, end); err != nil {
 		return err
 	}
+	b.recordOp(batchOp{kind: batchOpDeleteRange, key: cloneBytes(start), value: cloneBytes(end)})
 	b.size += len(start) + len(end)
 	return nil
 }
@@ -475,7 +481,9 @@ func (b *Batch) Reset() {
 	}
 }
 
-// Replay replays the batch contents in recorded order.
+// Replay replays the batch contents in submitted order. TreeDB's internal
+// batch replay may compact or sort point-only batches, so the adapter keeps a
+// small copied operation log specifically for ethdb Replay semantics.
 func (b *Batch) Replay(w ethdb.KeyValueWriter) error {
 	if b == nil {
 		return nil
@@ -483,25 +491,7 @@ func (b *Batch) Replay(w ethdb.KeyValueWriter) error {
 	if w == nil {
 		return errors.New("gethethdb: nil replay writer")
 	}
-	if b.inner == nil {
-		return replayOps(b.ops, w)
-	}
-	return b.inner.Replay(func(entry treedbbatch.Entry) error {
-		switch entry.Type {
-		case treedbbatch.OpPut:
-			return w.Put(entry.Key, entry.Value)
-		case treedbbatch.OpDelete:
-			return w.Delete(entry.Key)
-		case treedbbatch.OpDeleteRange:
-			rangeDeleter, ok := w.(ethdb.KeyValueRangeDeleter)
-			if !ok {
-				return errors.New("ethdb.KeyValueWriter does not implement DeleteRange")
-			}
-			return rangeDeleter.DeleteRange(entry.Key, entry.Value)
-		default:
-			return fmt.Errorf("gethethdb: unknown TreeDB batch op %d", entry.Type)
-		}
-	})
+	return replayOps(b.ops, w)
 }
 
 func replayOps(ops []batchOp, w ethdb.KeyValueWriter) error {
