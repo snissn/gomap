@@ -50,13 +50,10 @@ type ColumnRetainedPayloadPath struct {
 // are absent from a retained payload body. It fails closed on malformed retained
 // payloads and on any declared path that remains present.
 func AuditColumnRetainedPayloadPathsAbsent(cfg ColumnStoreConfig, retained []byte, paths []string) (ColumnRetainedPayloadPathAudit, error) {
-	return AuditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, paths, nil)
+	return auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, paths, nil)
 }
 
-// AuditColumnRetainedPayloadPathsAbsentWithResolver is AuditColumnRetainedPayloadPathsAbsent
-// with an optional Template-v1 resolver for retained payloads stored in the
-// collection template root.
-func AuditColumnRetainedPayloadPathsAbsentWithResolver(cfg ColumnStoreConfig, retained []byte, paths []string, resolver templateV1Resolver) (ColumnRetainedPayloadPathAudit, error) {
+func auditColumnRetainedPayloadPathsAbsentWithResolver(cfg ColumnStoreConfig, retained []byte, paths []string, resolver templateV1Resolver) (ColumnRetainedPayloadPathAudit, error) {
 	policy := columnRetainedPayloadAuditPolicy(&cfg)
 	encoding, status := ColumnRetainedPayloadEncodingStatus(&cfg)
 	audit := ColumnRetainedPayloadPathAudit{
