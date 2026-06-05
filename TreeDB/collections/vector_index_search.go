@@ -408,12 +408,24 @@ type VectorIndexSearchStats struct {
 	HNSWSearchPackMissing uint64 `json:"hnsw_search_pack_missing,omitempty"`
 	// HNSWSearchPackInvalid reports that a hnsw_search_pack_v1 candidate was present but failed validation.
 	HNSWSearchPackInvalid uint64 `json:"hnsw_search_pack_invalid,omitempty"`
+	// HNSWSearchPackStale reports that a previously opened hnsw_search_pack_v1 handle is no longer live.
+	HNSWSearchPackStale uint64 `json:"hnsw_search_pack_stale,omitempty"`
+	// HNSWSearchPackClosed reports that the bound hnsw_search_pack_v1 view is closed.
+	HNSWSearchPackClosed uint64 `json:"hnsw_search_pack_closed,omitempty"`
 	// HNSWSearchPackFallbacks reports searches that fell back from hnsw_search_pack_v1 to an existing route.
 	HNSWSearchPackFallbacks uint64 `json:"hnsw_search_pack_fallbacks,omitempty"`
-	// HNSWSearchPackMmapDirect reports searches served from a direct mmap hnsw_search_pack_v1 view.
+	// HNSWSearchPackMmapDirect reports searches with a validated direct mmap hnsw_search_pack_v1 view bound to the searcher.
 	HNSWSearchPackMmapDirect uint64 `json:"hnsw_search_pack_mmap_direct,omitempty"`
-	// HNSWSearchPackHeapCopy reports searches served from a heap-copy hnsw_search_pack_v1 view.
+	// HNSWSearchPackHeapCopy reports searches with a validated heap-copy hnsw_search_pack_v1 view bound to the searcher.
 	HNSWSearchPackHeapCopy uint64 `json:"hnsw_search_pack_heap_copy,omitempty"`
+	// HNSWSearchPackOpenNanos reports the open/prepared-view time for the bound hnsw_search_pack_v1 view.
+	HNSWSearchPackOpenNanos uint64 `json:"hnsw_search_pack_open_nanos,omitempty"`
+	// HNSWSearchPackMappedBytes is the active mapped byte total backing the bound hnsw_search_pack_v1 view.
+	HNSWSearchPackMappedBytes uint64 `json:"hnsw_search_pack_mapped_bytes,omitempty"`
+	// HNSWSearchPackHeapCopyBytes is the active heap-copy byte total backing the bound hnsw_search_pack_v1 view.
+	HNSWSearchPackHeapCopyBytes uint64 `json:"hnsw_search_pack_heap_copy_bytes,omitempty"`
+	// HNSWSearchPackActiveHandles is the current active mappedresource handle count for the hnsw_search_pack_v1 view.
+	HNSWSearchPackActiveHandles int64 `json:"hnsw_search_pack_active_handles,omitempty"`
 
 	// BenchmarkDebugSearches reports searches collected with benchmark_debug graph-control-flow instrumentation.
 	BenchmarkDebugSearches uint64 `json:"benchmark_debug_searches,omitempty"`
@@ -579,13 +591,24 @@ type vectorIndexSearchRouteStats struct {
 	HNSWSearchPackActive           uint64
 	HNSWSearchPackMissing          uint64
 	HNSWSearchPackInvalid          uint64
+	HNSWSearchPackStale            uint64
+	HNSWSearchPackClosed           uint64
 	HNSWSearchPackFallbacks        uint64
 	HNSWSearchPackMmapDirect       uint64
 	HNSWSearchPackHeapCopy         uint64
+	HNSWSearchPackOpenNanos        uint64
+	HNSWSearchPackMappedBytes      uint64
+	HNSWSearchPackHeapCopyBytes    uint64
+	HNSWSearchPackActiveHandles    int64
 }
 
 func vectorIndexSearchRouteStatsForColumnGraphReader(reader *columnVectorGraphPhysicalRowReader) vectorIndexSearchRouteStats {
-	stats := vectorIndexSearchRouteStats{HNSWSearchPackMissing: 1}
+	stats := vectorIndexSearchRouteStats{}
+	if reader != nil {
+		stats.add(reader.hnswSearchPack.routeStats(reader.hnswSearchPackStatus, reader.hnswSearchPackOpenNanos))
+	} else {
+		stats.applyHNSWSearchPackStatus(columnHNSWSearchPackPreparedStatusMissing)
+	}
 	if reader != nil && reader.preparedSearch != nil && reader.preparedSearch.ready() {
 		stats.SearchRouteColumnGraphPrepared = 1
 		return stats
@@ -604,9 +627,15 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 	stats.HNSWSearchPackActive = r.HNSWSearchPackActive
 	stats.HNSWSearchPackMissing = r.HNSWSearchPackMissing
 	stats.HNSWSearchPackInvalid = r.HNSWSearchPackInvalid
+	stats.HNSWSearchPackStale = r.HNSWSearchPackStale
+	stats.HNSWSearchPackClosed = r.HNSWSearchPackClosed
 	stats.HNSWSearchPackFallbacks = r.HNSWSearchPackFallbacks
 	stats.HNSWSearchPackMmapDirect = r.HNSWSearchPackMmapDirect
 	stats.HNSWSearchPackHeapCopy = r.HNSWSearchPackHeapCopy
+	stats.HNSWSearchPackOpenNanos = r.HNSWSearchPackOpenNanos
+	stats.HNSWSearchPackMappedBytes = r.HNSWSearchPackMappedBytes
+	stats.HNSWSearchPackHeapCopyBytes = r.HNSWSearchPackHeapCopyBytes
+	stats.HNSWSearchPackActiveHandles = r.HNSWSearchPackActiveHandles
 }
 
 // SearchVectorIndex searches a collection vector index through the public
@@ -796,6 +825,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	response.Path = s.path
 	response.Status = s.status
 	if s.closed {
+		response.Stats = VectorIndexSearchStats{HNSWSearchPackClosed: 1}
 		return response, errors.New("collections: vector index searcher is closed")
 	}
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
@@ -953,6 +983,7 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	response.Path = s.path
 	response.Status = s.status
 	if s.closed {
+		response.Stats = VectorIndexSearchStats{HNSWSearchPackClosed: 1}
 		clear(previousResults)
 		return response, errors.New("collections: vector index searcher is closed")
 	}

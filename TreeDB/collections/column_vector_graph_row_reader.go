@@ -57,6 +57,9 @@ type columnVectorGraphPhysicalRowReader struct {
 	documentIDSource                    *columnVectorGraphDocumentIDStateSource
 	documentIDStateFallbackReason       typeddecode.Reason
 	quantizedAssetStatus                map[string]columnVectorGraphQuantizedAssetLoadStatus
+	hnswSearchPack                      *columnHNSWSearchPackPreparedView
+	hnswSearchPackStatus                columnHNSWSearchPackPreparedStatus
+	hnswSearchPackOpenNanos             uint64
 	preparedSearch                      *columnVectorGraphPreparedSearchView
 	sharedPreparedSearch                *columnVectorGraphSharedPreparedSearchRef
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
@@ -265,6 +268,13 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 			} else if fallbackReason != "" {
 				graphReader.typedVectorFallbackReason = fallbackReason
 			}
+		}
+		pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+		graphReader.hnswSearchPack = pack
+		graphReader.hnswSearchPackStatus = packStatus
+		graphReader.hnswSearchPackOpenNanos = packOpenNanos
+		if packErr != nil {
+			graphReader.hnswSearchPackStatus = columnHNSWSearchPackPreparedStatusInvalid
 		}
 		c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)
 	}
@@ -480,6 +490,12 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 			closeErr = err
 		}
 		r.documentIDSource = nil
+	}
+	if r.hnswSearchPack != nil {
+		if err := r.hnswSearchPack.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.hnswSearchPack = nil
 	}
 	r.preparedSearch = nil
 	if r.adjacencyLayerSources != nil {
