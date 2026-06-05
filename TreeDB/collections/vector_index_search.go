@@ -806,8 +806,12 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 			return response, err
 		}
 		response, err = prepared.SearchWithBuffer(opts, statsMode, buffer)
-		if err == nil && vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats) {
+		healthyPackRoute := vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats)
+		if err == nil && healthyPackRoute {
 			return response, nil
+		}
+		if err != nil && healthyPackRoute {
+			return response, err
 		}
 		lastResponse, lastErr = response, err
 		resetBufferedVectorIndexSearchResponse(&response, buffer)

@@ -902,6 +902,48 @@ func TestSearchVectorIndexWithBufferPreparedCacheReusesState2363(t *testing.T) {
 	}
 }
 
+func TestSearchVectorIndexWithBufferPreparedCacheKeepsWarmStateOnQueryError2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	before := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if before.Entries != 1 || before.CacheBuilds != 1 || before.ActiveHandles != 1 {
+		t.Fatalf("cache before bad query=%+v want one warmed entry", before)
+	}
+
+	badOpts := opts
+	badOpts.Query = []float32{1, 0}
+	bad, err := col.SearchVectorIndexWithBuffer(badOpts, &buffer)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
+		t.Fatalf("bad query response=%+v err=%v want query dimension mismatch", bad, err)
+	}
+	if len(bad.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("bad query left results response=%d bufferResults=%d idBytes=%d", len(bad.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	afterBad := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterBad.Entries != 1 || afterBad.CacheBuilds != before.CacheBuilds || afterBad.Invalidations != before.Invalidations || afterBad.ActiveHandles != 1 {
+		t.Fatalf("cache after bad query=%+v before=%+v want warm cache retained", afterBad, before)
+	}
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+		t.Fatalf("valid SearchVectorIndexWithBuffer after bad query: %v", err)
+	}
+	afterValid := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterValid.CacheBuilds != before.CacheBuilds || afterValid.CacheHits <= afterBad.CacheHits {
+		t.Fatalf("cache after valid retry=%+v afterBad=%+v want hit without rebuild", afterValid, afterBad)
+	}
+}
+
 func TestSearchVectorIndexWithBufferPreparedCacheInvalidatesOnMutationAndRefreshesAfterRebuild2363(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
