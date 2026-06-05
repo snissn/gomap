@@ -1382,7 +1382,7 @@ func columnAssetReachabilitySegmentPath(segmentDir, name string) string {
 }
 
 func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace string) bool {
-	return (ref.Kind == ColumnAssetKindTCS1PartImage || ref.Kind == ColumnAssetKindTCS1TypedColumnPart || ref.Kind == ColumnAssetKindTCS1AggregateMetadata || ref.Kind == ColumnAssetKindTCS1DictionaryCodes || ref.Kind == ColumnAssetKindTCS1Int64Values) &&
+	return (ref.Kind == ColumnAssetKindTCS1PartImage || ref.Kind == ColumnAssetKindTCS1TypedColumnPart || ref.Kind == ColumnAssetKindTCS1AggregateMetadata || ref.Kind == ColumnAssetKindTCS1DictionaryCodes || ref.Kind == ColumnAssetKindTCS1Int64Values || ref.Kind == ColumnAssetKindTCS1HNSWSearchPack) &&
 		ref.Namespace == namespace &&
 		ref.Generation != 0 &&
 		ref.PartID != 0 &&
@@ -1451,13 +1451,25 @@ func columnAssetReachabilityRangeDeterministicPaddingAlignment(kind ColumnAssetK
 		return int64ValuesDirectViewAssetAlignment
 	case ColumnAssetKindTCS1TypedColumnPart:
 		return typedColumnPartDirectViewAssetAlignment
+	case ColumnAssetKindTCS1HNSWSearchPack:
+		return int64(columnHNSWSearchPackVectorSectionAlignment)
 	default:
 		return 0
 	}
 }
 
+func columnAssetReachabilityMaxDeterministicPaddingAlignment() int64 {
+	maxAlignment := int64(typedColumnPartDirectViewAssetAlignment)
+	for _, alignment := range []int64{dictionaryCodesDirectViewAssetAlignment, int64ValuesDirectViewAssetAlignment, int64(columnHNSWSearchPackVectorSectionAlignment)} {
+		if alignment > maxAlignment {
+			maxAlignment = alignment
+		}
+	}
+	return maxAlignment
+}
+
 func columnAssetReachabilitySegmentRangeIsZero(path string, offset, length int64) bool {
-	if path == "" || offset < 0 || length <= 0 || length > int64(typedColumnPartDirectViewAssetAlignment-1) {
+	if path == "" || offset < 0 || length <= 0 || length > int64(columnAssetReachabilityMaxDeterministicPaddingAlignment()-1) {
 		return false
 	}
 	file, err := os.Open(path)

@@ -1462,6 +1462,38 @@ func TestColumnAssetReachabilityDirectViewPrefixPaddingIsKnown1895(t *testing.T)
 	}
 }
 
+func TestColumnAssetReachabilityHNSWSearchPackRefAndPaddingAreKnown2312(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := os.MkdirAll(namespace.SegmentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segment dir: %v", err)
+	}
+	const fileID = uint32(72)
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID)), make([]byte, 48), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	seed := ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: namespaceName, Generation: 72, PartID: 90, FileID: fileID, Offset: 0, Length: 1}
+	pack := ColumnAssetRef{Kind: ColumnAssetKindTCS1HNSWSearchPack, Namespace: namespaceName, Generation: 72, PartID: 91, FileID: fileID, Offset: 16, Length: 32}
+	input := columnAssetReachabilityInput{rootDir: root, collection: "events", namespace: namespaceName, detailed: true, segmentDetails: true}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{seed, pack}, ColumnAssetReachabilitySourceActiveManifest); err != nil {
+		t.Fatalf("add protected refs: %v", err)
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if !plan.Complete || plan.Segments.Protected != 1 || plan.Segments.Unknown != 0 || plan.Segments.BytesUnknown != 0 {
+		t.Fatalf("plan complete=%t segments=%+v want HNSW pack ref and 16-byte prefix padding known/protected", plan.Complete, plan.Segments)
+	}
+	if plan.Segments.BytesProtected != 48 || plan.Refs.BytesProtected != seed.Length+pack.Length {
+		t.Fatalf("protected segment bytes=%d ref bytes=%d want segment=48 refs=%d", plan.Segments.BytesProtected, plan.Refs.BytesProtected, seed.Length+pack.Length)
+	}
+}
+
 func TestColumnAssetReachabilityRewriteSegmentPrefixPaddingIsKnown1895(t *testing.T) {
 	root := t.TempDir()
 	const namespaceName = "events/column-assets"

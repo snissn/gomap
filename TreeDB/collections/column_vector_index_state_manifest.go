@@ -19,6 +19,8 @@ const (
 	columnVectorIndexStateAssetRoleRowRefs           = "row_refs"
 	columnVectorIndexStateAssetRoleDocumentIDs       = "document_ids"
 	columnVectorIndexStateAssetRoleQuantizedCodes    = "quantized_codes"
+	columnVectorIndexStateAssetRoleHNSWSearchPack    = "hnsw_search_pack"
+	columnVectorIndexStateHNSWSearchPackAssetID      = "hnsw_search_pack_v1"
 
 	columnVectorIndexStateLogicalTypeUint32List    = "uint32_list"
 	columnVectorIndexStateLogicalTypeInt64         = "int64"
@@ -26,12 +28,14 @@ const (
 	columnVectorIndexStateLogicalTypeFloat32Vector = "float32_vector"
 	columnVectorIndexStateLogicalTypeBytes         = "bytes"
 	columnVectorIndexStateLogicalTypeByteVector    = "byte_vector"
+	columnVectorIndexStateLogicalTypeSearchPack    = "hnsw_search_pack"
 	columnVectorIndexStateEncodingRawUint32List    = "raw_uint32_offsets_list"
 	columnVectorIndexStateEncodingRawInt64         = "raw_int64"
 	columnVectorIndexStateEncodingRawFloat32       = "raw_float32"
 	columnVectorIndexStateEncodingRawFloat32Vector = "raw_float32_vector"
 	columnVectorIndexStateEncodingRawBytesOffsets  = "raw_bytes_offsets"
 	columnVectorIndexStateEncodingRawFixedBytes    = "raw_fixed_bytes"
+	columnVectorIndexStateEncodingHNSWSearchPackV1 = "hnsw_search_pack_v1"
 )
 
 var columnVectorIndexStateRecordPrefixBytes = []byte(columnVectorIndexStateRecordPrefix)
@@ -349,6 +353,9 @@ func validateColumnVectorIndexStateAssetSnapshot(snapshot columnVectorIndexState
 	} else if !columnVectorIndexStateAssetRoleKnown(asset.Role) {
 		return fmt.Errorf("unknown role %q", asset.Role)
 	}
+	if asset.Role == columnVectorIndexStateAssetRoleHNSWSearchPack && asset.AssetID != columnVectorIndexStateHNSWSearchPackAssetID {
+		return fmt.Errorf("hnsw_search_pack asset id=%q want %q", asset.AssetID, columnVectorIndexStateHNSWSearchPackAssetID)
+	}
 	if asset.RowCount != snapshot.RowCount {
 		return fmt.Errorf("row_count=%d want vector-index row_count=%d", asset.RowCount, snapshot.RowCount)
 	}
@@ -358,8 +365,9 @@ func validateColumnVectorIndexStateAssetSnapshot(snapshot columnVectorIndexState
 	if err := validateColumnAssetRefForPlan(asset.Ref); err != nil {
 		return err
 	}
-	if asset.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
-		return fmt.Errorf("ref kind=%q want %q", asset.Ref.Kind, ColumnAssetKindTCS1TypedColumnPart)
+	wantKind := columnVectorIndexStateAssetRefKindContract(asset.Role)
+	if asset.Ref.Kind != wantKind {
+		return fmt.Errorf("ref kind=%q want %q", asset.Ref.Kind, wantKind)
 	}
 	if asset.Ref.Generation != snapshot.BaseManifestGeneration {
 		return fmt.Errorf("ref generation=%d want base manifest generation=%d", asset.Ref.Generation, snapshot.BaseManifestGeneration)
@@ -387,8 +395,19 @@ func columnVectorIndexStateAssetTypeContract(role string) (logicalType, physical
 		return columnVectorIndexStateLogicalTypeBytes, columnVectorIndexStateEncodingRawBytesOffsets, true
 	case columnVectorIndexStateAssetRoleQuantizedCodes:
 		return columnVectorIndexStateLogicalTypeByteVector, columnVectorIndexStateEncodingRawFixedBytes, true
+	case columnVectorIndexStateAssetRoleHNSWSearchPack:
+		return columnVectorIndexStateLogicalTypeSearchPack, columnVectorIndexStateEncodingHNSWSearchPackV1, true
 	default:
 		return "", "", false
+	}
+}
+
+func columnVectorIndexStateAssetRefKindContract(role string) ColumnAssetKind {
+	switch role {
+	case columnVectorIndexStateAssetRoleHNSWSearchPack:
+		return ColumnAssetKindTCS1HNSWSearchPack
+	default:
+		return ColumnAssetKindTCS1TypedColumnPart
 	}
 }
 
@@ -399,7 +418,8 @@ func columnVectorIndexStateAssetRoleKnown(role string) bool {
 		columnVectorIndexStateAssetRoleNormalizedVectors,
 		columnVectorIndexStateAssetRoleRowRefs,
 		columnVectorIndexStateAssetRoleDocumentIDs,
-		columnVectorIndexStateAssetRoleQuantizedCodes:
+		columnVectorIndexStateAssetRoleQuantizedCodes,
+		columnVectorIndexStateAssetRoleHNSWSearchPack:
 		return true
 	default:
 		return false
@@ -471,7 +491,7 @@ func columnVectorIndexStateMatchesGraph(state columnVectorIndexStateSnapshot, gr
 }
 
 func columnVectorIndexStateAssetRefMatchesManifest(asset columnVectorIndexStateAssetSnapshot, state columnVectorIndexStateSnapshot, cfg ColumnStoreConfig) bool {
-	return asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart &&
+	return asset.Ref.Kind == columnVectorIndexStateAssetRefKindContract(asset.Role) &&
 		asset.Ref.Namespace == cfg.AssetManager.Namespace &&
 		asset.Ref.Generation == state.BaseManifestGeneration &&
 		asset.RowCount == state.RowCount &&
