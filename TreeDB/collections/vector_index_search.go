@@ -734,14 +734,10 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 		return VectorIndexSearchResponse{}, err
 	}
 	if collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts) {
-		buffer := acquireCollectionSearchVectorIndexResponseBuffer()
-		response, err := c.SearchVectorIndexWithBuffer(opts, buffer)
+		response, err := c.searchVectorIndexPreparedNoDocumentOwned(opts)
 		if err == nil {
-			cloneBufferedVectorIndexSearchResponseResults(&response)
-			releaseCollectionSearchVectorIndexResponseBuffer(buffer)
 			return response, nil
 		}
-		releaseCollectionSearchVectorIndexResponseBuffer(buffer)
 		if !errors.Is(err, ErrVectorIndexSearchUnavailable) && !errors.Is(err, ErrIndexNotFound) {
 			return response, err
 		}
@@ -764,33 +760,55 @@ func releaseCollectionSearchVectorIndexResponseBuffer(buffer *VectorIndexSearchB
 	collectionSearchVectorIndexResponseBufferPool.Put(buffer)
 }
 
-func cloneBufferedVectorIndexSearchResponseResults(response *VectorIndexSearchResponse) {
-	if response == nil || len(response.Results) == 0 {
-		if response != nil {
-			response.Results = nil
-		}
-		return
+func (c *Collection) searchVectorIndexPreparedNoDocumentOwned(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
+	var response VectorIndexSearchResponse
+	if c == nil {
+		return response, errCollectionNil
 	}
-	idBytesLen := 0
-	for _, result := range response.Results {
-		idBytesLen += len(result.ID)
+	if c.db == nil {
+		return response, errCollectionDBNil
 	}
-	idBytes := make([]byte, idBytesLen)
-	results := make([]VectorIndexSearchResult, len(response.Results))
-	idOffset := 0
-	for i, result := range response.Results {
-		results[i] = result
-		if len(result.ID) > 0 {
-			idEnd := idOffset + len(result.ID)
-			copy(idBytes[idOffset:idEnd], result.ID)
-			results[i].ID = idBytes[idOffset:idEnd:idEnd]
-			idOffset = idEnd
-		}
-		if len(result.Document) > 0 {
-			results[i].Document = append([]byte(nil), result.Document...)
-		}
+	if err := c.flushBufferedWrites(); err != nil {
+		return response, err
 	}
-	response.Results = results
+	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
+	if err != nil {
+		return response, err
+	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		return response, err
+	}
+	if queryMode != columnVectorGraphNativeSearchQueryModeExact || !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
+		return response, fmt.Errorf("%w: vector index %q SearchVectorIndex requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
+	}
+	buffer := acquireCollectionSearchVectorIndexResponseBuffer()
+	var lastResponse VectorIndexSearchResponse
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		prepared, response, err := c.acquireCollectionVectorIndexPreparedSearch(opts)
+		if err != nil {
+			releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+			return response, err
+		}
+		response, err = prepared.SearchOwnedNoDocuments(opts, statsMode, &buffer.searchScratch)
+		healthyPackRoute := vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats)
+		if err == nil && healthyPackRoute {
+			releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+			return response, nil
+		}
+		if err != nil && healthyPackRoute {
+			releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+			return response, err
+		}
+		lastResponse, lastErr = response, err
+		c.invalidateCollectionVectorIndexPreparedSearch(opts.IndexName, prepared)
+	}
+	releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+	if lastErr != nil {
+		return lastResponse, lastErr
+	}
+	return lastResponse, fmt.Errorf("%w: vector index %q SearchVectorIndex requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
 }
 
 func collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts VectorIndexSearchOptions) bool {
@@ -1218,26 +1236,9 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if len(results) == 0 {
 		return response, nil
 	}
-	response.Results = make([]VectorIndexSearchResult, len(results))
-	idByteCount, err := vectorIndexSearchResultIDBytes(results)
+	response.Results, err = copyVectorIndexSearchResultsToOwned(results)
 	if err != nil {
 		return response, err
-	}
-	idBytes := make([]byte, idByteCount)
-	idOffset := 0
-	for i, result := range results {
-		if len(result.ID) > len(idBytes)-idOffset {
-			return response, errors.New("collections: vector index search result id byte accounting mismatch")
-		}
-		nextIDOffset := idOffset + len(result.ID)
-		id := idBytes[idOffset:nextIDOffset:nextIDOffset]
-		idOffset = nextIDOffset
-		copy(id, result.ID)
-		response.Results[i] = VectorIndexSearchResult{
-			ID:      id,
-			Ordinal: result.Ordinal,
-			Score:   result.Score,
-		}
 	}
 	if opts.IncludeDocuments {
 		if s.documentView == nil {
@@ -1419,6 +1420,34 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 		return response, err
 	}
 	return response, nil
+}
+
+func copyVectorIndexSearchResultsToOwned(results []columnVectorGraphNativeSearchResult) ([]VectorIndexSearchResult, error) {
+	if len(results) == 0 {
+		return nil, nil
+	}
+	idByteCount, err := vectorIndexSearchResultIDBytes(results)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]VectorIndexSearchResult, len(results))
+	idBytes := make([]byte, idByteCount)
+	idOffset := 0
+	for i, result := range results {
+		if len(result.ID) > len(idBytes)-idOffset {
+			return nil, errors.New("collections: vector index search result id byte accounting mismatch")
+		}
+		nextIDOffset := idOffset + len(result.ID)
+		id := idBytes[idOffset:nextIDOffset:nextIDOffset]
+		idOffset = nextIDOffset
+		copy(id, result.ID)
+		out[i] = VectorIndexSearchResult{
+			ID:      id,
+			Ordinal: result.Ordinal,
+			Score:   result.Score,
+		}
+	}
+	return out, nil
 }
 
 func copyVectorIndexSearchResultsToBuffer(results []columnVectorGraphNativeSearchResult, buffer *VectorIndexSearchBuffer, previousResults []VectorIndexSearchResult) ([]VectorIndexSearchResult, error) {

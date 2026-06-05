@@ -1574,10 +1574,74 @@ func TestSearchVectorIndexColumnGraphResultIDsAreCapacityIsolatedV4(t *testing.T
 		t.Fatalf("SearchVectorIndex: %v", err)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
+	if cap(got.Results) != len(got.Results) {
+		t.Fatalf("results len/cap=%d/%d want cap isolated", len(got.Results), cap(got.Results))
+	}
+	for i, result := range got.Results {
+		if cap(result.ID) != len(result.ID) {
+			t.Fatalf("result[%d] id len/cap=%d/%d want cap isolated", i, len(result.ID), cap(result.ID))
+		}
+	}
 	secondID := append([]byte(nil), got.Results[1].ID...)
 	_ = append(got.Results[0].ID, '!')
 	if !bytes.Equal(got.Results[1].ID, secondID) {
 		t.Fatalf("second result ID changed after appending to first result ID: got %q want %q", got.Results[1].ID, secondID)
+	}
+}
+
+func TestSearchVectorIndexColumnGraphNoDocumentResponseOwnedAfterReuse2404(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0.9, 0.1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	ownedOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+	owned, err := col.SearchVectorIndex(ownedOpts)
+	if err != nil {
+		t.Fatalf("SearchVectorIndex: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, owned, def.Name, 3)
+	assertSearchVectorIndexNoDocumentCurrentOneShotStats2361(t, owned.Stats)
+	if cap(owned.Results) != len(owned.Results) {
+		t.Fatalf("owned results len/cap=%d/%d want cap isolated", len(owned.Results), cap(owned.Results))
+	}
+	ownedIDs := make([][]byte, len(owned.Results))
+	ownedOrdinals := make([]int, len(owned.Results))
+	ownedScores := make([]float64, len(owned.Results))
+	for i, result := range owned.Results {
+		if cap(result.ID) != len(result.ID) {
+			t.Fatalf("owned result[%d] id len/cap=%d/%d want cap isolated", i, len(result.ID), cap(result.ID))
+		}
+		ownedIDs[i] = append([]byte(nil), result.ID...)
+		ownedOrdinals[i] = result.Ordinal
+		ownedScores[i] = result.Score
+	}
+
+	if _, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}); err != nil {
+		t.Fatalf("second SearchVectorIndex: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	buffered, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+	}
+	if len(buffered.Results) > 0 && len(buffered.Results[0].ID) > 0 {
+		buffered.Results[0].ID[0] = 'X'
+	}
+	if _, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 0, 1}, QueryMode: VectorIndexQueryModeExact, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil {
+		t.Fatalf("second SearchVectorIndexWithBuffer: %v", err)
+	}
+	for i := range owned.Results {
+		if !bytes.Equal(owned.Results[i].ID, ownedIDs[i]) || owned.Results[i].Ordinal != ownedOrdinals[i] || owned.Results[i].Score != ownedScores[i] {
+			t.Fatalf("owned result[%d]=%+v changed after later searches; want ID=%q ordinal=%d score=%v", i, owned.Results[i], ownedIDs[i], ownedOrdinals[i], ownedScores[i])
+		}
 	}
 }
 
@@ -2306,6 +2370,14 @@ func TestVectorIndexSearcherSearchWithBufferDoesNotMutateSearchResponse1961(t *t
 		t.Fatalf("Search: %v", err)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, owned, def.Name, 2)
+	if cap(owned.Results) != len(owned.Results) {
+		t.Fatalf("Search result len/cap=%d/%d want cap isolated", len(owned.Results), cap(owned.Results))
+	}
+	for i, result := range owned.Results {
+		if cap(result.ID) != len(result.ID) {
+			t.Fatalf("Search result[%d] id len/cap=%d/%d want cap isolated", i, len(result.ID), cap(result.ID))
+		}
+	}
 	ownedID := append([]byte(nil), owned.Results[0].ID...)
 
 	var buffer VectorIndexSearchBuffer
