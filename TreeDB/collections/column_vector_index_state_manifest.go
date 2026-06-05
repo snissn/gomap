@@ -353,6 +353,9 @@ func validateColumnVectorIndexStateAssetSnapshot(snapshot columnVectorIndexState
 	} else if !columnVectorIndexStateAssetRoleKnown(asset.Role) {
 		return fmt.Errorf("unknown role %q", asset.Role)
 	}
+	if asset.Role == columnVectorIndexStateAssetRoleHNSWSearchPack && asset.AssetID != columnVectorIndexStateHNSWSearchPackAssetID {
+		return fmt.Errorf("hnsw_search_pack asset id=%q want %q", asset.AssetID, columnVectorIndexStateHNSWSearchPackAssetID)
+	}
 	if asset.RowCount != snapshot.RowCount {
 		return fmt.Errorf("row_count=%d want vector-index row_count=%d", asset.RowCount, snapshot.RowCount)
 	}

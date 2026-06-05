@@ -223,6 +223,12 @@ func TestColumnHNSWSearchPackVectorIndexStateAssetContract2312(t *testing.T) {
 		t.Fatalf("scan refs=%+v want pack ref %+v", refs, ref)
 	}
 
+	wrongAssetID := state
+	wrongAssetID.Assets = append([]columnVectorIndexStateAssetSnapshot(nil), state.Assets...)
+	wrongAssetID.Assets[0].AssetID = "hnsw_search_pack_v0"
+	if _, err := encodeColumnVectorIndexStateRecord(wrongAssetID); err == nil || !strings.Contains(err.Error(), "asset id") {
+		t.Fatalf("wrong asset id encode err=%v want asset id failure", err)
+	}
 	wrongKind := state
 	wrongKind.Assets = append([]columnVectorIndexStateAssetSnapshot(nil), state.Assets...)
 	wrongKind.Assets[0].Ref.Kind = ColumnAssetKindTCS1TypedColumnPart
