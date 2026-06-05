@@ -321,18 +321,54 @@ def load_result_json(result_json: Path | None) -> Any | None:
     return json.loads(result_json.read_text())
 
 
+def compression_value_tokens(value: Any) -> set[str]:
+    tokens: set[str] = set()
+    if isinstance(value, str):
+        text = value.lower()
+        if "none" in text:
+            tokens.add("none")
+        for codec in ("lz4", "snappy", "zstd", "dict", "value_log_grouped_frame"):
+            if codec in text:
+                tokens.add(codec)
+        if "active_" in text:
+            tokens.add("active")
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key).lower()
+            if key_text == "none":
+                tokens.add("none")
+            for codec in ("lz4", "snappy", "zstd", "dict"):
+                if key_text == codec:
+                    tokens.add(codec)
+            tokens.update(compression_value_tokens(child))
+    elif isinstance(value, list):
+        for child in value:
+            tokens.update(compression_value_tokens(child))
+    return tokens
+
+
 def load_result_compression_summary(result_json: Path | None, data: Any | None = None) -> dict[str, Any] | None:
     if result_json is None:
         return None
     if data is None:
         data = load_result_json(result_json)
     fields = compression_fields(data)
-    raw = json.dumps(fields, sort_keys=True).lower()
-    silent_none = "requested=none" in raw or "actual=none" in raw or '"none"' in raw
+    active_tokens = {"active", "lz4", "snappy", "zstd", "dict", "value_log_grouped_frame"}
+    none_fields: list[dict[str, Any]] = []
+    active_fields: list[dict[str, Any]] = []
+    for field in fields:
+        tokens = compression_value_tokens(field.get("value"))
+        if "none" in tokens:
+            none_fields.append(field)
+        if tokens & active_tokens:
+            active_fields.append(field)
+    silent_none = bool(none_fields) and not active_fields
     return {
         "path": str(result_json),
         "compression_fields": fields,
         "silent_none_suspected": silent_none,
+        "compression_none_fields": none_fields,
+        "compression_active_fields": active_fields,
     }
 
 

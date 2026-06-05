@@ -169,6 +169,87 @@ class StorageAuditTest(unittest.TestCase):
         self.assertFalse(enriched["retained_payload_compression_inactive"])
         self.assertEqual(enriched["retained_payload_status_source"], "retained_payload_audit")
 
+    def test_result_compression_summary_accepts_mixed_active_and_intentional_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "result.json"
+            result.write_text(
+                json.dumps(
+                    {
+                        "storage": {
+                            "column_store_physical": {
+                                "typed_column_parts": [
+                                    {
+                                        "image": {
+                                            "columns_detail": [
+                                                {
+                                                    "column": "__treedb_primary_id",
+                                                    "requested_compression": "none",
+                                                    "actual_compression_mix": {"none": 2},
+                                                },
+                                                {
+                                                    "column": "did",
+                                                    "requested_compression": "lz4",
+                                                    "actual_compression_mix": {"lz4": 2},
+                                                },
+                                                {
+                                                    "column": "time_us",
+                                                    "requested_compression": "lz4",
+                                                    "actual_compression_mix": {"none": 2},
+                                                    "fallback_reasons": {"not_smaller": 2},
+                                                },
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "retained_payload_audit": {
+                            "retained_payload_compression": "value_log_grouped_frame",
+                            "retained_payload_compression_status": "active_value_log_auto_grouped_frame_non_column_retained_payload",
+                        },
+                    }
+                )
+            )
+
+            summary = audit.load_result_compression_summary(result)
+
+        self.assertFalse(summary["silent_none_suspected"])
+        self.assertGreater(len(summary["compression_none_fields"]), 0)
+        self.assertGreater(len(summary["compression_active_fields"]), 0)
+
+    def test_result_compression_summary_flags_all_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "result.json"
+            result.write_text(
+                json.dumps(
+                    {
+                        "storage": {
+                            "column_store_physical": {
+                                "typed_column_parts": [
+                                    {
+                                        "image": {
+                                            "columns_detail": [
+                                                {
+                                                    "column": "did",
+                                                    "requested_compression": "none",
+                                                    "actual_compression_mix": {"none": 2},
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                )
+            )
+
+            summary = audit.load_result_compression_summary(result)
+
+        self.assertTrue(summary["silent_none_suspected"])
+        self.assertGreater(len(summary["compression_none_fields"]), 0)
+        self.assertEqual(summary["compression_active_fields"], [])
+
     def test_retained_payload_audit_command_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / "fake_retained_audit.py"
