@@ -216,16 +216,19 @@ func benchDirectBatchDeleteRange(b *testing.B) {
 
 func benchDeleteRangeLoop(b *testing.B, preload func(prefix string) error, deleteRange func(start, end []byte) error) {
 	b.ReportAllocs()
+	b.StopTimer()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		prefix := fmt.Sprintf("dr/%08d/", i)
-		b.StopTimer()
 		if err := preload(prefix); err != nil {
 			b.Fatal(err)
 		}
 		start := []byte(prefix)
 		end := append([]byte(prefix), 0xff)
 		b.StartTimer()
-		if err := deleteRange(start, end); err != nil {
+		err := deleteRange(start, end)
+		b.StopTimer()
+		if err != nil {
 			b.Fatal(err)
 		}
 	}

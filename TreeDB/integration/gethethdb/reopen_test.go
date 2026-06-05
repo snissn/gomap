@@ -10,9 +10,13 @@ import (
 
 func openAtPath(t testing.TB, dir string) *Database {
 	t.Helper()
-	db, err := Open(dir, &OpenOptions{Profile: treedb.ProfileCommandWALRelaxed})
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+	// Force non-empty raw-KV values through the persistent value log so this
+	// adapter reopen test covers pointer-backed values, not just inline payloads.
+	opts.ValueLog.PointerThreshold = 1
+	db, err := OpenWithOptions(opts)
 	if err != nil {
-		t.Fatalf("Open(%s): %v", dir, err)
+		t.Fatalf("OpenWithOptions(%s): %v", dir, err)
 	}
 	return db
 }

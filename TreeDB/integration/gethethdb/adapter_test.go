@@ -56,6 +56,38 @@ func TestOpenRejectsWritableNonCommandWALOptions(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyMissingPathDoesNotCreateDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("precondition stat(%q) err=%v, want not exist", missing, err)
+	}
+	if db, err := Open(missing, &OpenOptions{ReadOnly: true}); err == nil {
+		_ = db.Close()
+		t.Fatal("read-only Open on missing path succeeded, want error")
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only Open created %q or returned unexpected stat err=%v", missing, err)
+	}
+}
+
+func TestOpenReadOnlyRejectsFilePathWithoutMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(path, []byte("not a TreeDB dir"), 0o644); err != nil {
+		t.Fatalf("write file path: %v", err)
+	}
+	if db, err := Open(path, &OpenOptions{ReadOnly: true}); err == nil {
+		_ = db.Close()
+		t.Fatal("read-only Open on file path succeeded, want error")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat file path after read-only Open: %v", err)
+	}
+	if info.IsDir() {
+		t.Fatalf("read-only Open converted file path %q into directory", path)
+	}
+}
+
 func TestNativeEmptyNilKeyAndNilValueParity(t *testing.T) {
 	db := openTestDB(t)
 

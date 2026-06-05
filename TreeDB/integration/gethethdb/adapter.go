@@ -62,7 +62,15 @@ func Open(path string, options *OpenOptions) (*Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
+	if opts.ReadOnly {
+		info, statErr := os.Stat(opts.Dir)
+		if statErr != nil {
+			return nil, fmt.Errorf("gethethdb: read-only TreeDB directory check: %w", statErr)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("gethethdb: read-only TreeDB path is not a directory: %s", opts.Dir)
+		}
+	} else if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
 		return nil, fmt.Errorf("gethethdb: create TreeDB directory: %w", err)
 	}
 	return OpenWithOptions(opts)
