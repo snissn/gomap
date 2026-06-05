@@ -27,6 +27,10 @@ directories when moving between branches.
   — choose between buffered no-document serving, response-owned convenience
   calls, explicit materialization, and reusable searchers without overclaiming
   beyond exact measured routes.
+- [TreeDB vs USearch vector benchmark workflow](vector-search-benchmark-workflow.md)
+  — reproduce the dated Tier S/Tier F comparison workflow, required fast-path
+  counters, USearch bootstrap, artifact directories, and profile capture without
+  blurring exact no-document rows with materialization or quantized evidence.
 
 ## Deeper specs
 
