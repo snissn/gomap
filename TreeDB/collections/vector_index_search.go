@@ -121,7 +121,8 @@ type VectorIndexSearchResult struct {
 
 // VectorIndexSearchStats reports search telemetry. Graph/search and reader
 // counters are per-search deltas unless the field starts with Open; Open*
-// counters describe the bound reader setup performed before Search.
+// counters describe bound reader setup performed before Search or collection-level
+// one-shot open/setup performed inside SearchVectorIndex.
 type VectorIndexSearchStats struct {
 	// GraphRows is the number of legacy physical graph rows resident in the bound reader. Healthy current typed-column search reports zero.
 	GraphRows uint64 `json:"graph_rows,omitempty"`
