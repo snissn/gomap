@@ -127,12 +127,13 @@ Grouped records (frames with `k>1`) embed a sub-record index inside `Length`
 When the grouped flag is set, the `Length` field packs:
 
 - **Grouped flag**: bit 30 (`0x4000_0000`)
-- **Sub-index** (0–127) within the grouped value-log record:
+- **Sub-index** (encoded range 0–255) within the grouped value-log record:
   - bits 29..26: sub-index bits 3..0
   - bit 31: sub-index bit 4
   - bits 25..24: sub-index bits 6..5
-- **Optional record-length hint**: low 24 bits (bits 23..0), storing the record length
-  excluding CRC (`HeaderSize-4 + ValueLen`) when it fits in 24 bits.
+  - bit 23: sub-index bit 7
+- **Optional record-length hint**: low 23 bits (bits 22..0), storing the record length
+  excluding CRC (`HeaderSize-4 + ValueLen`) when it fits in 23 bits.
 
 Notes:
 - The record-length hint is **best-effort**: if the record is larger than the

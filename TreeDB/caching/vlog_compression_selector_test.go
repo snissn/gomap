@@ -1038,6 +1038,19 @@ func TestChooseRetainedStorageFirstBlockCodec_ObservedBestOverridesBootstrap(t *
 	}
 }
 
+func TestChooseRetainedStorageFirstValueLogBlockWriteKUsesMaxFrameK(t *testing.T) {
+	db := &DB{}
+	l := &lane{}
+
+	records := valuelog.MaxFrameK + 64
+	rawPayloadBytes := records * 1024
+	got := db.chooseRetainedStorageFirstValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecZSTD)
+
+	if got != valuelog.MaxFrameK {
+		t.Fatalf("retained storage-first K=%d want max frame K=%d", got, valuelog.MaxFrameK)
+	}
+}
+
 func TestResolveVlogWriteMode_ThroughputPolicyBypassesSelectorForMediumPayload(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),

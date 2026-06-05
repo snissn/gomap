@@ -183,12 +183,13 @@ Grouped pointer sub-index bits:
 - low portion: bits `29..26`
 - extra bit: bit `31` contributes one sub-index bit
 - high portion: bits `25..24`
-- total sub-index range: `0..127`
+- top portion: bit `23`
+- total encoded sub-index range: `0..255`
 
 Record-length hint:
 
-- grouped pointers keep a best-effort 24-bit record-length hint.
-- max encodable grouped record length hint: `0x00ffffff`.
+- grouped pointers keep a best-effort 23-bit record-length hint.
+- max encodable grouped record length hint: `0x007fffff`.
 - if record is larger, hint is set to zero and reader uses record header length fields.
 
 ### 4.3 Packed on-disk `ValuePtr`
