@@ -13,15 +13,21 @@ Status:
 
 ## 1. Key Model
 
-- Keys are byte slices.
+- Raw KV keys and values are byte strings.
+- The empty point key is a valid raw KV key and sorts before every non-empty key.
+- A nil point key passed to raw KV point APIs is equivalent to the empty key.
+- A nil raw KV value passed to `Set`/batch `Set` is stored as a zero-length value.
 - Key order is lexicographic (`bytes.Compare` semantics).
 - The tree is ordered and range-addressable.
+- Collection/document APIs may keep separate non-empty logical ID contracts.
 
 ## 2. Read Contracts
 
 ### 2.1 `Get`
 
 - `Get(key)` returns `(value, nil)` when key exists.
+- `Get(nil)` is equivalent to `Get([]byte{})` for raw KV point reads.
+- A present zero-length value returns a non-nil zero-length byte slice.
 - `Get(key)` returns `(nil, nil)` when key is absent.
 - Returned bytes are safe copies.
 
@@ -67,6 +73,8 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 
 - `Set`, `Delete` are non-sync writes.
 - `SetSync`, `DeleteSync` request sync durability boundary subject to durability mode.
+- Point `Set`/`SetSync`/`Get`/`Has`/`Delete`/`DeleteSync` accept the empty key; nil point keys are canonicalized to the empty key.
+- Point `Set`/`SetSync` accept nil values and store them as zero-length values.
 - `Update`, `UpdateSync` are single-key read-modify-write helpers. The callback
   receives the current value as a safe copy, or `nil` when the key is absent, and
   returns `Set`, `Delete`, or `Noop` intent through `UpdateResult`.
@@ -82,8 +90,16 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 
 - `NewBatch` accumulates operations.
 - Batch `Set`, `Delete`, and `DeleteRange(start,end)` are applied in submission
-  order as one atomic write unit; range bounds are half-open `[start,end)`, with
-  nil bounds unbounded and empty/reversed bounded ranges treated as no-ops.
+  order as one atomic write unit.
+- Batch point `Set`/`Delete` accept empty/nil point keys with the same point-key
+  canonicalization as public raw KV point operations, and batch `Set` stores nil
+  values as zero-length values.
+- Batch `Replay` preserves empty keys and zero-length values.
+- `DeleteRange` bounds are half-open `[start,end)`, with nil bounds unbounded.
+  Empty concrete bounds remain concrete byte-string bounds; for example,
+  `[nil, []byte{})` is empty because the end is exclusive and the empty key is
+  the minimum key, while `[[]byte{}, end)` includes the empty key when `end` is
+  greater than empty. Empty/reversed bounded ranges are no-ops.
 - Cached batch `DeleteRange` uses a serialized materialization fallback and
   fails closed with `ErrBatchDeleteRangeTooLarge` if the bounded fallback cap is
   exceeded; the backend TreeDB path applies range deletes natively.
@@ -104,6 +120,7 @@ For WAL replay, commit-log batches are treated atomically at replay boundaries.
 - Range domain is half-open: `[start, end)`.
 - `nil` start means unbounded lower bound.
 - `nil` end means unbounded upper bound.
+- Non-nil empty bounds are concrete empty byte-string bounds, not unbounded sentinels.
 - If both bounds are non-nil and `start >= end`, iterator is immediately invalid.
 
 ### 4.3 Iterator lifetime

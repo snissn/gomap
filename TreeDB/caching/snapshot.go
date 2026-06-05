@@ -562,6 +562,7 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) 
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	key = normalizeRawKVPointKey(key)
 	if s == nil {
 		return dst, tree.ErrKeyNotFound
 	}
@@ -671,6 +672,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
+	key = normalizeRawKVPointKey(key)
 	snap, val, ptr, flags, found, source := s.lookupRootDomainSnapshotEntry(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
@@ -688,7 +690,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 					}
 					recordSnapshotRootDomainRead(source, true, len(out))
 					if len(out) == 0 {
-						return nil, nil
+						return []byte{}, nil
 					}
 					maybeRecordSnapshotGetCallerSample(len(out))
 					return ownedReadResult(out, scratch), nil
@@ -706,14 +708,14 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 			}
 			recordSnapshotRootDomainRead(source, true, len(out))
 			if len(out) == 0 {
-				return nil, nil
+				return []byte{}, nil
 			}
 			maybeRecordSnapshotGetCallerSample(len(out))
 			return ownedReadResult(out, scratch), nil
 		}
 		if len(val) == 0 {
 			recordSnapshotRootDomainRead(source, false, len(val))
-			return nil, nil
+			return []byte{}, nil
 		}
 		recordSnapshotRootDomainRead(source, false, len(val))
 		maybeRecordSnapshotGetCallerSample(len(val))
@@ -736,7 +738,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 		snapshotReadBackendHitsTotal.Add(1)
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return []byte{}, nil
 	}
 	if hotPathStatsEnabled {
 		snapshotReadBackendBytesTotal.Add(uint64(len(out)))
@@ -746,6 +748,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
+	key = normalizeRawKVPointKey(key)
 	snap, val, ptr, flags, found, source := s.lookupRootDomainSnapshotEntry(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
@@ -781,6 +784,7 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 // GetManyView calls fn once for each key with a read-only value view. Values
 // are valid only until fn returns and must be copied before retaining.
 func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
+	keys = normalizeRawKVPointKeys(keys)
 	if fn == nil {
 		return errors.New("caching snapshot: GetManyView nil callback")
 	}
@@ -812,6 +816,7 @@ func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
+	key = normalizeRawKVPointKey(key)
 	_, _, flags, found := s.lookupCachedRootDomainEntry(key)
 	if found {
 		return flags&node.FlagTombstone == 0, nil
@@ -827,6 +832,7 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 }
 
 func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
+	keys = normalizeRawKVPointKeys(keys)
 	out := make([]bool, len(keys))
 	if len(keys) == 0 {
 		return out, nil
@@ -1000,6 +1006,7 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 }
 
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
+	key = normalizeRawKVPointKey(key)
 	val, ptr, flags, found := s.lookupQueueEntry(key)
 	if found {
 		keyCopy := append([]byte(nil), key...)
@@ -1021,6 +1028,7 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 }
 
 func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
+	key = normalizeRawKVPointKey(key)
 	val, ptr, flags, found := s.lookupQueueEntry(key)
 	if found {
 		keyCopy := append([]byte(nil), key...)

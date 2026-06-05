@@ -1535,18 +1535,16 @@ func (t *Tree) appendLeafValueFromNode(n *node.Node, key []byte, out [][]byte, o
 // When the stored value is non-empty, Get returns an owned, mutable copy of
 // that value.
 //
-// If the key is missing or tombstoned, Get returns ErrKeyNotFound. For
-// compatibility with the long-standing TreeDB API, when the stored value is
-// zero-length but the key is present, Get returns (nil, nil).
+// If the key is missing or tombstoned, Get returns ErrKeyNotFound. When the
+// stored value is zero-length but the key is present, Get returns a non-nil
+// zero-length slice.
 func (t *Tree) Get(key []byte) ([]byte, error) {
 	out, err := t.GetAppend(key, nil)
 	if err != nil {
 		return nil, err
 	}
 	if len(out) == 0 {
-		// Preserve long-standing TreeDB API behavior: empty-but-present values
-		// return (nil, nil) instead of a 0-length slice.
-		return nil, nil
+		return []byte{}, nil
 	}
 	// GetAppend(key, nil) usually returns an exact-sized owned slice. Only copy
 	// when extra capacity would otherwise retain oversized backing arrays.

@@ -14,7 +14,7 @@ func bytesToStringNoCopy(b []byte) string {
 
 func stringToBytesNoCopy(s string) []byte {
 	if len(s) == 0 {
-		return nil
+		return []byte{}
 	}
 	return unsafe.Slice(unsafe.StringData(s), len(s))
 }

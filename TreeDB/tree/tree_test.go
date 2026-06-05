@@ -562,7 +562,7 @@ func TestTreeGet_UsesAppendReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 	}
 }
 
-func TestTreeGet_ZeroLengthValueReturnsNil(t *testing.T) {
+func TestTreeGet_ZeroLengthValueReturnsNonNilEmpty(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")
 	p, err := pager.Open(idxPath, 65536)
@@ -590,8 +590,8 @@ func TestTreeGet_ZeroLengthValueReturnsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if got != nil {
-		t.Fatalf("expected nil slice for zero-length value, got len=%d cap=%d", len(got), cap(got))
+	if got == nil || len(got) != 0 {
+		t.Fatalf("expected non-nil zero-length value, got %#v", got)
 	}
 }
 

@@ -186,6 +186,86 @@ func TestPublicCommandWALRawKVMethodMatrix(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALRawKVEmptyPointKeyAndZeroLengthValues(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+
+	if err := db.Set([]byte{}, []byte("value")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set empty key: %v", err)
+	}
+	if err := db.SetSync([]byte("zero-sync"), nil); err != nil {
+		_ = db.Close()
+		t.Fatalf("SetSync nil value: %v", err)
+	}
+	if err := db.Delete(nil); err != nil {
+		_ = db.Close()
+		t.Fatalf("Delete nil/empty key: %v", err)
+	}
+	if err := db.Set(nil, nil); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set nil key/value: %v", err)
+	}
+
+	b := db.NewBatch()
+	if err := b.Set([]byte{}, []byte("batch-empty")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set empty key: %v", err)
+	}
+	if err := b.Set([]byte("batch-zero"), nil); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set nil value: %v", err)
+	}
+	if err := b.Delete([]byte("zero-sync")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Delete zero-sync: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	assertPublicCommandWALFrames(t, db, 5)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true})
+	if err != nil {
+		t.Fatalf("reopen command WAL dir: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	requireRawKVValue(t, reopen, []byte{}, []byte("batch-empty"))
+	requireRawKVValue(t, reopen, nil, []byte("batch-empty"))
+	requireRawKVValue(t, reopen, []byte("batch-zero"), []byte{})
+	has, err := reopen.Has([]byte("zero-sync"))
+	if err != nil {
+		t.Fatalf("Has(zero-sync): %v", err)
+	}
+	if has {
+		t.Fatal("zero-sync exists after command-WAL batch delete")
+	}
+	if got := reopen.backend.State().AppliedCommandLSN; got < 5 {
+		t.Fatalf("AppliedCommandLSN=%d, want at least 5", got)
+	}
+}
+
 func TestPublicCommandWALRejectsUnsupportedCachedRawMutations(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),

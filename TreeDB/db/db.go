@@ -2570,18 +2570,19 @@ func (db *DB) Prune() {
 
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	return s.tree.Get(key)
+	return s.tree.Get(normalizeRawKVPointKey(key))
 }
 
 // GetAppend appends the value for key to dst and returns the grown slice.
 // If key is not found, it returns dst and tree.ErrKeyNotFound.
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
-	return s.tree.GetAppend(key, dst)
+	return s.tree.GetAppend(normalizeRawKVPointKey(key), dst)
 }
 
 // GetManyView calls fn once for each key with a read-only value view.
 // Values are valid until fn returns and must be copied before retaining.
 func (s *Snapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	keys = normalizeRawKVPointKeys(keys)
 	if s == nil || s.closed.Load() {
 		return ErrClosed
 	}
@@ -2591,15 +2592,15 @@ func (s *Snapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
 // The slice is valid until the snapshot is closed.
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
-	return s.tree.GetUnsafe(key)
+	return s.tree.GetUnsafe(normalizeRawKVPointKey(key))
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
-	return s.tree.Has(key)
+	return s.tree.Has(normalizeRawKVPointKey(key))
 }
 
 func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
-	return s.tree.HasMany(keys)
+	return s.tree.HasMany(normalizeRawKVPointKeys(keys))
 }
 
 func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
@@ -2608,7 +2609,7 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 
 // GetEntry returns the persisted leaf entry for key.
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
-	return s.tree.GetEntry(key)
+	return s.tree.GetEntry(normalizeRawKVPointKey(key))
 }
 
 // GetEntryExact is an alias for GetEntry.

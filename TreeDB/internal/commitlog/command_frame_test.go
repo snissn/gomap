@@ -83,6 +83,39 @@ func TestCommandWALRawKVBatchPreservesEmptySetValue(t *testing.T) {
 	}
 }
 
+func TestRawKVBatchPayloadBuilderPreservesEmptyPointKeyAndValue(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(2, 0); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	keyView, valueView, err := builder.AppendSet([]byte{}, []byte{})
+	if err != nil {
+		t.Fatalf("AppendSet empty key/value: %v", err)
+	}
+	if keyView == nil || len(keyView) != 0 || valueView == nil || len(valueView) != 0 {
+		t.Fatalf("AppendSet views key=%#v value=%#v, want non-nil empty views", keyView, valueView)
+	}
+	deleteKeyView, err := builder.AppendDelete([]byte{})
+	if err != nil {
+		t.Fatalf("AppendDelete empty key: %v", err)
+	}
+	if deleteKeyView == nil || len(deleteKeyView) != 0 {
+		t.Fatalf("AppendDelete key view=%#v, want non-nil empty view", deleteKeyView)
+	}
+	if _, _, err := builder.AppendSet([]byte("nil-value"), nil); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("AppendSet nil value error=%v, want ErrCorrupt", err)
+	}
+
+	ops, err := DecodeRawKVBatchPayload(builder.Payload())
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+	}
+	if len(ops) != 2 || ops[0].Op != RawKVOpSet || ops[0].Key == nil || len(ops[0].Key) != 0 || ops[0].Value == nil || len(ops[0].Value) != 0 ||
+		ops[1].Op != RawKVOpDelete || ops[1].Key == nil || len(ops[1].Key) != 0 {
+		t.Fatalf("decoded empty point-key ops mismatch: %+v", ops)
+	}
+}
+
 func TestCommandWALRawKVBatchZeroPayloadV3ScanDecode(t *testing.T) {
 	var builder RawKVBatchPayloadBuilder
 	if err := builder.ResetWithHint(2, 32); err != nil {

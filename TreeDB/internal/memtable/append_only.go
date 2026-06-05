@@ -358,6 +358,9 @@ func appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
 	if ent.keyInline {
 		return ent.inlineKey[:]
 	}
+	if ent.key == nil {
+		return []byte{}
+	}
 	return ent.key
 }
 

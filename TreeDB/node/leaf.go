@@ -95,6 +95,9 @@ func (n *Node) ensureKeyScratch(size int) []byte {
 	if size < 0 {
 		return nil
 	}
+	if size == 0 {
+		return []byte{}
+	}
 	if cap(n.keyScratch) < size {
 		nextCap := cap(n.keyScratch)
 		if nextCap < 64 {
