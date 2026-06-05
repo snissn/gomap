@@ -143,6 +143,17 @@ func TestSplitProfileTail_UsesKnownTests(t *testing.T) {
 	if dbTag != "treedb_vlog_off" {
 		t.Fatalf("unexpected db split: %q", dbTag)
 	}
+
+	testName, dbTag = splitProfileTail("batch_delete_range_treedb", map[string]struct{}{
+		"batch_delete_range": {},
+		"batch_delete":       {},
+	})
+	if testName != "batch_delete_range" {
+		t.Fatalf("unexpected batch_delete_range test split: %q", testName)
+	}
+	if dbTag != "treedb" {
+		t.Fatalf("unexpected batch_delete_range db split: %q", dbTag)
+	}
 }
 
 func TestParseAllocsProfileFilename(t *testing.T) {
@@ -157,6 +168,16 @@ func TestParseAllocsProfileFilename(t *testing.T) {
 	}
 	if got.DBTag != "treedb_vlog_off" {
 		t.Fatalf("unexpected db tag: %q", got.DBTag)
+	}
+
+	got, ok = parseAllocsProfileFilename("allocs_batch_delete_range_treedb.pprof", map[string]struct{}{
+		"batch_delete_range": {},
+	})
+	if !ok {
+		t.Fatalf("expected batch_delete_range allocs filename to parse")
+	}
+	if got.Test != "batch_delete_range" || got.DBTag != "treedb" {
+		t.Fatalf("unexpected batch_delete_range allocs parse: %+v", got)
 	}
 }
 

@@ -41,37 +41,41 @@ import (
 // --- Benchmark Runner ---
 
 var (
-	numKeys            = flag.Int("keys", 100000, "Number of keys")
-	keyShapeArg        = flag.String("key-shape", "be8", "Key generation shape for non-dataset 8-byte workloads (be8|be8_prefix4)")
-	valSize            = flag.Int("valsize", 128, "Value size in bytes")
-	valPattern         = flag.String("val-pattern", "zero", "Value pattern for write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)")
-	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
-	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
-	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
-	readWorkers        = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default GOMAXPROCS)")
-	readRequireHit     = flag.Bool("read-require-hit", false, "Fail read benchmarks on misses and validate value length matches -valsize")
-	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
-	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
-	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
-	keyScaleArg        = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
-	keysMin            = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
-	keysMax            = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
-	dbsArg             = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
-	dbsExcludeArg      = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
-	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, forkchoice->update_fork_choice")
-	formatArg          = flag.String("format", "table", "Output format: table or markdown")
-	suiteArg           = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
-	outDirArg          = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
-	keepDir            = flag.Bool("keep", false, "Keep data directories after run")
-	progress           = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
-	seed               = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
-	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
-	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
-	profileDir         = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
-	pathLabel          = flag.String("path-label", "", "Benchmark execution-path label required with -profile-dir (oracle|native-fastpath)")
-	allocsProfile      = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
-	allocsProfileTests = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
-	allocsProfileRate  = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
+	numKeys                   = flag.Int("keys", 100000, "Number of keys")
+	keyShapeArg               = flag.String("key-shape", "be8", "Key generation shape for non-dataset 8-byte workloads (be8|be8_prefix4)")
+	valSize                   = flag.Int("valsize", 128, "Value size in bytes")
+	valPattern                = flag.String("val-pattern", "zero", "Value pattern for write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)")
+	valPoolSize               = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
+	batchSize                 = flag.Int("batchsize", 8000, "Size of batches")
+	writeWorkers              = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
+	readWorkers               = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default GOMAXPROCS)")
+	readRequireHit            = flag.Bool("read-require-hit", false, "Fail read benchmarks on misses and validate value length matches -valsize")
+	rangeQueries              = flag.Int("range-queries", 200, "number of range queries")
+	rangeSpan                 = flag.Int("range-span", 100, "number of keys per range")
+	batchDeleteRangeWidth     = flag.Int("batch-delete-range-width", 100, "batch_delete_range: affected keys per DeleteRange call")
+	batchDeleteRangesPerBatch = flag.Int("batch-delete-ranges-per-batch", 100, "batch_delete_range: DeleteRange calls per batch commit")
+	batchDeleteRangeValidate  = flag.Bool("batch-delete-range-validate", false, "batch_delete_range: validate after measured deletes that loaded keys were removed")
+	batchDeleteRangeRefill    = flag.Bool("batch-delete-range-refill", false, "batch_delete_range: reload deleted keys after measured deletes/validation so later tests see the dense dataset")
+	keyCountsArg              = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
+	keyScaleArg               = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
+	keysMin                   = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
+	keysMax                   = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
+	dbsArg                    = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
+	dbsExcludeArg             = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
+	testArg                   = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,batch_delete_range,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, batch_range_delete->batch_delete_range, delete_range->batch_delete_range, forkchoice->update_fork_choice")
+	formatArg                 = flag.String("format", "table", "Output format: table or markdown")
+	suiteArg                  = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
+	outDirArg                 = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
+	keepDir                   = flag.Bool("keep", false, "Keep data directories after run")
+	progress                  = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
+	seed                      = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
+	cpuProfile                = flag.String("cpuprofile", "", "write cpu profile to file")
+	cpuProfileTestsArg        = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
+	profileDir                = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
+	pathLabel                 = flag.String("path-label", "", "Benchmark execution-path label required with -profile-dir (oracle|native-fastpath)")
+	allocsProfile             = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
+	allocsProfileTests        = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
+	allocsProfileRate         = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
 
 	blockProfile              = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
 	blockRate                 = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
@@ -108,6 +112,21 @@ func flagExplicit(name string) bool {
 
 const checkpointPostRunLabel = "post-run"
 
+const (
+	defaultBatchDeleteRangeWidth     = 100
+	defaultBatchDeleteRangesPerBatch = 100
+)
+
+func normalizeBatchDeleteRangeDimensions(width, rangesPerBatch int) (int, int) {
+	if width == 0 {
+		width = defaultBatchDeleteRangeWidth
+	}
+	if rangesPerBatch == 0 {
+		rangesPerBatch = defaultBatchDeleteRangesPerBatch
+	}
+	return width, rangesPerBatch
+}
+
 type DBInstance struct {
 	Name                         string
 	Wrapper                      kvstore.DB
@@ -117,16 +136,20 @@ type DBInstance struct {
 }
 
 type BenchConfig struct {
-	Keys          int
-	KeyShape      string
-	ValueSize     int
-	BatchSize     int
-	WriteWorkers  int
-	ReadWorkers   int
-	RangeQueries  int
-	RangeSpan     int
-	ValuePattern  string
-	ValuePoolSize int
+	Keys                      int
+	KeyShape                  string
+	ValueSize                 int
+	BatchSize                 int
+	WriteWorkers              int
+	ReadWorkers               int
+	RangeQueries              int
+	RangeSpan                 int
+	BatchDeleteRangeWidth     int
+	BatchDeleteRangesPerBatch int
+	BatchDeleteRangeValidate  bool
+	BatchDeleteRangeRefill    bool
+	ValuePattern              string
+	ValuePoolSize             int
 	// ReadRequireHit makes read benchmarks fail fast when a read misses.
 	// It is intended for correctness guardrails, not throughput reporting.
 	//
@@ -210,6 +233,7 @@ type BenchRun struct {
 	TreeDBPerf          map[string]map[string]treeDBPerfMetrics
 	TreeDBStats         map[string]map[string]string
 	DiskUsage           map[string]dirDiskUsage
+	BatchDeleteRange    map[string]map[string]batchDeleteRangeReport
 	CollectionWorkloads []benchprofCollectionWorkload
 }
 
@@ -273,13 +297,14 @@ type benchprofExport struct {
 }
 
 type benchprofExportRun struct {
-	Keys                int                                     `json:"keys"`
-	Profile             string                                  `json:"profile,omitempty"`
-	ExecutionPath       string                                  `json:"execution_path,omitempty"`
-	Results             map[string]map[string]float64           `json:"results,omitempty"`
-	TreeDBPerf          map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
-	TreeDBStats         map[string]map[string]string            `json:"treedb_stats,omitempty"`
-	CollectionWorkloads []benchprofCollectionWorkload           `json:"collection_workloads,omitempty"`
+	Keys                int                                          `json:"keys"`
+	Profile             string                                       `json:"profile,omitempty"`
+	ExecutionPath       string                                       `json:"execution_path,omitempty"`
+	Results             map[string]map[string]float64                `json:"results,omitempty"`
+	TreeDBPerf          map[string]map[string]treeDBPerfMetrics      `json:"treedb_perf,omitempty"`
+	TreeDBStats         map[string]map[string]string                 `json:"treedb_stats,omitempty"`
+	BatchDeleteRange    map[string]map[string]batchDeleteRangeReport `json:"batch_delete_range,omitempty"`
+	CollectionWorkloads []benchprofCollectionWorkload                `json:"collection_workloads,omitempty"`
 }
 
 type scanDiag struct {
@@ -340,6 +365,22 @@ type treeDBVlogRewriteReport struct {
 	BytesBefore    int64
 	BytesAfter     int64
 	RecordsCopied  int
+}
+
+type batchDeleteRangeReport struct {
+	Mode                 string  `json:"mode"`
+	LoadedKeys           int     `json:"loaded_keys"`
+	RangeWidth           int     `json:"range_width"`
+	RangesPerBatch       int     `json:"ranges_per_batch"`
+	RangeCount           int     `json:"range_count"`
+	AffectedKeys         int     `json:"affected_keys"`
+	AffectedKeysPerRange float64 `json:"affected_keys_per_range"`
+	ValueSize            int     `json:"value_size"`
+	DeleteDurationMS     float64 `json:"delete_duration_ms"`
+	RangeOpsPerSec       float64 `json:"range_ops_per_sec"`
+	AffectedKeysPerSec   float64 `json:"affected_keys_per_sec"`
+	Validation           string  `json:"validation"`
+	Refill               bool    `json:"refill"`
 }
 
 type benchKeyShape uint8
@@ -441,6 +482,8 @@ func main() {
 	if seedUsed == 0 {
 		seedUsed = time.Now().UnixNano()
 	}
+	selectedTests := normalizeTests(parseList(*testArg))
+	effectiveBatchDeleteRangeWidth, effectiveBatchDeleteRangesPerBatch := normalizeBatchDeleteRangeDimensions(*batchDeleteRangeWidth, *batchDeleteRangesPerBatch)
 
 	fmt.Fprintf(os.Stderr, "Unified Benchmark Runner\n")
 	fmt.Fprintf(os.Stderr, "========================\n")
@@ -455,9 +498,12 @@ func main() {
 	if *rangeQueries > 0 {
 		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
 	}
+	if contains(selectedTests, "batch_delete_range") {
+		fmt.Fprintf(os.Stderr, "             batch_delete_range_width=%d batch_delete_ranges_per_batch=%d validate=%t refill=%t\n",
+			effectiveBatchDeleteRangeWidth, effectiveBatchDeleteRangesPerBatch, *batchDeleteRangeValidate, *batchDeleteRangeRefill)
+	}
 	fmt.Fprintf(os.Stderr, "DBs:         %s\n", *dbsArg)
 	fmt.Fprintf(os.Stderr, "Tests:       %s\n", *testArg)
-	selectedTests := normalizeTests(parseList(*testArg))
 	selectedDBs := resolveDBs(*dbsArg, *dbsExcludeArg)
 	runsTreeDB := false
 	for _, name := range selectedDBs {
@@ -488,6 +534,10 @@ func main() {
 		ReadWorkers:                      effectiveReadWorkers,
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
+		BatchDeleteRangeWidth:            effectiveBatchDeleteRangeWidth,
+		BatchDeleteRangesPerBatch:        effectiveBatchDeleteRangesPerBatch,
+		BatchDeleteRangeValidate:         *batchDeleteRangeValidate,
+		BatchDeleteRangeRefill:           *batchDeleteRangeRefill,
 		ValuePattern:                     *valPattern,
 		ValuePoolSize:                    *valPoolSize,
 		ReadRequireHit:                   *readRequireHit,
@@ -773,6 +823,11 @@ func main() {
 		}
 		hasArtifacts := maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 		printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+		if details := strings.TrimSpace(renderBatchDeleteRangeReportsString(run.Instances, run.BatchDeleteRange)); details != "" {
+			fmt.Println()
+			fmt.Println("Batch DeleteRange Metrics")
+			fmt.Println(details)
+		}
 		if len(run.CheckpointDurations) > 0 {
 			fmt.Println()
 			printCheckpointDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations)
@@ -834,6 +889,11 @@ func main() {
 			fmt.Printf("\nkeys=%s valsize=%d batchsize=%d range-queries=%d range-span=%d\n\n",
 				formatInt(run.Config.Keys), run.Config.ValueSize, run.Config.BatchSize, run.Config.RangeQueries, run.Config.RangeSpan)
 			printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+			if details := strings.TrimSpace(renderBatchDeleteRangeReportsString(run.Instances, run.BatchDeleteRange)); details != "" {
+				fmt.Println()
+				fmt.Println("Batch DeleteRange Metrics")
+				fmt.Println(details)
+			}
 			if len(run.CheckpointDurations) > 0 {
 				fmt.Println()
 				printCheckpointDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations)
@@ -1266,6 +1326,30 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	return writeBenchprofArtifactsToPaths(filepath.Join(dir, "benchprof_results.json"), filepath.Join(dir, "benchprof_results.md"), executionPath, runs)
 }
 
+func benchprofJSONResults(results map[string]map[string]float64) map[string]map[string]float64 {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]float64, len(results))
+	for testName, perDB := range results {
+		if len(perDB) == 0 {
+			continue
+		}
+		clean := make(map[string]float64, len(perDB))
+		for dbName, value := range perDB {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				continue
+			}
+			clean[dbName] = value
+		}
+		out[testName] = clean
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string, runs []BenchRun) error {
 	jsonPath = strings.TrimSpace(jsonPath)
 	markdownPath = strings.TrimSpace(markdownPath)
@@ -1291,9 +1375,10 @@ func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string
 			Keys:                run.Config.Keys,
 			Profile:             strings.TrimSpace(run.Config.Profile),
 			ExecutionPath:       executionPath,
-			Results:             run.Results,
+			Results:             benchprofJSONResults(run.Results),
 			TreeDBPerf:          run.TreeDBPerf,
 			TreeDBStats:         selectedBenchprofTreeDBStats(run.TreeDBStats),
+			BatchDeleteRange:    run.BatchDeleteRange,
 			CollectionWorkloads: run.CollectionWorkloads,
 		})
 	}
@@ -2187,6 +2272,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if cfg.BatchSize <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid batchsize: %d", cfg.BatchSize)
 	}
+	cfg.BatchDeleteRangeWidth, cfg.BatchDeleteRangesPerBatch = normalizeBatchDeleteRangeDimensions(cfg.BatchDeleteRangeWidth, cfg.BatchDeleteRangesPerBatch)
+	if cfg.BatchDeleteRangeWidth < 0 || cfg.BatchDeleteRangesPerBatch < 0 {
+		return BenchRun{}, fmt.Errorf("invalid batch_delete_range settings: width=%d ranges_per_batch=%d", cfg.BatchDeleteRangeWidth, cfg.BatchDeleteRangesPerBatch)
+	}
 	if cfg.RangeQueries < 0 || cfg.RangeSpan < 0 {
 		return BenchRun{}, fmt.Errorf("invalid range settings: queries=%d span=%d", cfg.RangeQueries, cfg.RangeSpan)
 	}
@@ -2234,6 +2323,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	vacuumIndexBytes := make(map[string]map[string][2]uint64)
 	treeDBPerf := make(map[string]map[string]treeDBPerfMetrics)
 	snapshotPerfByTest := make(map[string]map[string]treeDBSnapshotPerfMetrics)
+	batchDeleteRangeReports := make(map[string]map[string]batchDeleteRangeReport)
 
 	// dataset_write_* mirrors op-geth's Write1M when -keys=1_000_000 and -valsize=32 (32B keys).
 	datasetKeySize := 32
@@ -2609,6 +2699,264 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		return float64(total) / time.Since(start).Seconds(), nil
+	}
+	recordBatchDeleteRangeReport := func(testName string, db kvstore.DB, report batchDeleteRangeReport) {
+		if db == nil {
+			return
+		}
+		perDB := batchDeleteRangeReports[testName]
+		if perDB == nil {
+			perDB = make(map[string]batchDeleteRangeReport)
+			batchDeleteRangeReports[testName] = perDB
+		}
+		perDB[db.Name()] = report
+	}
+	batchDeleteRangeMode := func(db kvstore.DB) string {
+		if reporter, ok := db.(kvstore.RangeDeleteModeReporter); ok {
+			mode := strings.TrimSpace(reporter.RangeDeleteMode())
+			if mode != "" {
+				return mode
+			}
+		}
+		return "unknown"
+	}
+	loadBatchDeleteRangeKeys := func(db kvstore.DB, batcher kvstore.Batcher, values [][]byte) error {
+		if len(values) == 0 {
+			return errors.New("batch_delete_range: empty value pool")
+		}
+		var k [8]byte
+		valPos := 0
+		for i := 0; i < cfg.Keys; i += cfg.BatchSize {
+			if i&8191 == 0 {
+				if err := guard.Checkpoint(); err != nil {
+					return err
+				}
+			}
+			batch, err := batcher.NewBatch()
+			if err != nil {
+				return fmt.Errorf("new load batch: %w", err)
+			}
+			end := i + cfg.BatchSize
+			if end > cfg.Keys {
+				end = cfg.Keys
+			}
+			for j := i; j < end; j++ {
+				encodeKey(k[:], uint64(j))
+				value := values[valPos%len(values)]
+				valPos++
+				if err := batch.Set(k[:], value); err != nil {
+					_ = batch.Close()
+					return fmt.Errorf("load set: %w", err)
+				}
+			}
+			if err := batch.Commit(); err != nil {
+				_ = batch.Close()
+				return fmt.Errorf("load commit: %w", err)
+			}
+			if err := batch.Close(); err != nil {
+				return fmt.Errorf("load close: %w", err)
+			}
+		}
+		if cp, ok := db.(checkpointer); ok {
+			if err := cp.Checkpoint(); err != nil {
+				return fmt.Errorf("load checkpoint: %w", err)
+			}
+		}
+		return nil
+	}
+	validateBatchDeleteRange := func(db kvstore.DB) error {
+		rs, ok := db.(kvstore.RangeScanner)
+		if !ok {
+			return fmt.Errorf("validation requires RangeScanner")
+		}
+		var startBuf, endBuf [8]byte
+		encodeKey(startBuf[:], 0)
+		encodeKey(endBuf[:], uint64(cfg.Keys))
+		iter, err := rs.Iterator(startBuf[:], endBuf[:])
+		if err != nil {
+			return fmt.Errorf("validation iterator: %w", err)
+		}
+		defer func() { _ = iter.Close() }()
+		if iter.Valid() {
+			key := iter.KeyCopy(nil)
+			return fmt.Errorf("validation found live key after DeleteRange: %x", key)
+		}
+		if err := iter.Error(); err != nil {
+			return fmt.Errorf("validation iterator error: %w", err)
+		}
+		return nil
+	}
+	type batchDeleteRangePrep struct {
+		checked   bool
+		supported bool
+		values    [][]byte
+	}
+	batchDeleteRangePreps := make(map[string]batchDeleteRangePrep)
+	probeBatchDeleteRange := func(batcher kvstore.Batcher) (bool, error) {
+		probeBatch, err := batcher.NewBatch()
+		if err != nil {
+			return false, fmt.Errorf("batch_delete_range: new batch probe: %w", err)
+		}
+		_, ok := probeBatch.(kvstore.BatchRangeDeleter)
+		if closeErr := probeBatch.Close(); closeErr != nil {
+			return false, fmt.Errorf("batch_delete_range: close probe: %w", closeErr)
+		}
+		return ok, nil
+	}
+	prepareBatchDeleteRange := func(db kvstore.DB) error {
+		name := db.Name()
+		if prep, ok := batchDeleteRangePreps[name]; ok && prep.checked {
+			return nil
+		}
+		prep := batchDeleteRangePrep{checked: true}
+		batcher, ok := db.(kvstore.Batcher)
+		if !ok {
+			batchDeleteRangePreps[name] = prep
+			return nil
+		}
+		supported, err := probeBatchDeleteRange(batcher)
+		if err != nil {
+			return err
+		}
+		prep.supported = supported
+		if !supported {
+			batchDeleteRangePreps[name] = prep
+			return nil
+		}
+		width := cfg.BatchDeleteRangeWidth
+		rangesPerBatch := cfg.BatchDeleteRangesPerBatch
+		if width <= 0 || rangesPerBatch <= 0 {
+			return fmt.Errorf("batch_delete_range requires positive width and ranges_per_batch (got width=%d ranges_per_batch=%d)", width, rangesPerBatch)
+		}
+		values, err := getWriteValuePool()
+		if err != nil {
+			return fmt.Errorf("batch_delete_range values: %w", err)
+		}
+		if err := loadBatchDeleteRangeKeys(db, batcher, values); err != nil {
+			return fmt.Errorf("batch_delete_range load: %w", err)
+		}
+		prep.values = values
+		batchDeleteRangePreps[name] = prep
+		return nil
+	}
+	runBatchDeleteRange := func(db kvstore.DB) (float64, error) {
+		prep, ok := batchDeleteRangePreps[db.Name()]
+		if !ok || !prep.checked {
+			if err := prepareBatchDeleteRange(db); err != nil {
+				return 0, err
+			}
+			prep = batchDeleteRangePreps[db.Name()]
+		}
+		if !prep.supported {
+			return math.NaN(), nil
+		}
+		batcher, ok := db.(kvstore.Batcher)
+		if !ok {
+			return math.NaN(), nil
+		}
+		width := cfg.BatchDeleteRangeWidth
+		rangesPerBatch := cfg.BatchDeleteRangesPerBatch
+		if width <= 0 || rangesPerBatch <= 0 {
+			return 0, fmt.Errorf("batch_delete_range requires positive width and ranges_per_batch (got width=%d ranges_per_batch=%d)", width, rangesPerBatch)
+		}
+
+		rangeCount := (cfg.Keys + width - 1) / width
+		if rangeCount <= 0 {
+			return math.NaN(), nil
+		}
+		mode := batchDeleteRangeMode(db)
+		pc := newPeriodicCheckpoint(cfg)
+		var startBuf, endBuf [8]byte
+		start := time.Now()
+		deletedRanges := 0
+		for r := 0; r < rangeCount; {
+			if r&8191 == 0 {
+				if err := guard.Checkpoint(); err != nil {
+					return 0, err
+				}
+			}
+			batch, err := batcher.NewBatch()
+			if err != nil {
+				return 0, fmt.Errorf("batch_delete_range: new batch: %w", err)
+			}
+			deleter, ok := batch.(kvstore.BatchRangeDeleter)
+			if !ok {
+				_ = batch.Close()
+				return math.NaN(), nil
+			}
+			batchRanges := 0
+			batchAffected := 0
+			for batchRanges < rangesPerBatch && r < rangeCount {
+				startIdx := r * width
+				endIdx := startIdx + width
+				if endIdx > cfg.Keys {
+					endIdx = cfg.Keys
+				}
+				encodeKey(startBuf[:], uint64(startIdx))
+				encodeKey(endBuf[:], uint64(endIdx))
+				if err := deleter.DeleteRange(startBuf[:], endBuf[:]); err != nil {
+					_ = batch.Close()
+					return 0, fmt.Errorf("batch_delete_range: delete range [%d,%d): %w", startIdx, endIdx, err)
+				}
+				batchRanges++
+				batchAffected += endIdx - startIdx
+				r++
+			}
+			if err := batch.Commit(); err != nil {
+				_ = batch.Close()
+				return 0, fmt.Errorf("batch_delete_range: commit: %w", err)
+			}
+			if err := batch.Close(); err != nil {
+				return 0, fmt.Errorf("batch_delete_range: close: %w", err)
+			}
+			deletedRanges += batchRanges
+			if err := pc.Add(db, batchRanges, int64(batchAffected)*8); err != nil {
+				return 0, fmt.Errorf("batch_delete_range checkpoint: %w", err)
+			}
+		}
+		duration := time.Since(start)
+		if duration <= 0 {
+			duration = time.Nanosecond
+		}
+		rangeOpsPerSec := float64(deletedRanges) / duration.Seconds()
+		affectedKeysPerSec := float64(cfg.Keys) / duration.Seconds()
+		validation := "not_run"
+		if cfg.BatchDeleteRangeValidate {
+			if err := validateBatchDeleteRange(db); err != nil {
+				return 0, fmt.Errorf("batch_delete_range validation: %w", err)
+			}
+			validation = "passed"
+		}
+		if cfg.BatchDeleteRangeRefill {
+			values := prep.values
+			if len(values) == 0 {
+				var err error
+				values, err = getWriteValuePool()
+				if err != nil {
+					return 0, fmt.Errorf("batch_delete_range refill values: %w", err)
+				}
+			}
+			if err := loadBatchDeleteRangeKeys(db, batcher, values); err != nil {
+				return 0, fmt.Errorf("batch_delete_range refill: %w", err)
+			}
+		}
+		report := batchDeleteRangeReport{
+			Mode:                 mode,
+			LoadedKeys:           cfg.Keys,
+			RangeWidth:           width,
+			RangesPerBatch:       rangesPerBatch,
+			RangeCount:           deletedRanges,
+			AffectedKeys:         cfg.Keys,
+			AffectedKeysPerRange: float64(cfg.Keys) / float64(deletedRanges),
+			ValueSize:            cfg.ValueSize,
+			DeleteDurationMS:     float64(duration.Nanoseconds()) / 1_000_000.0,
+			RangeOpsPerSec:       rangeOpsPerSec,
+			AffectedKeysPerSec:   affectedKeysPerSec,
+			Validation:           validation,
+			Refill:               cfg.BatchDeleteRangeRefill,
+		}
+		recordBatchDeleteRangeReport("batch_delete_range", db, report)
+		return rangeOpsPerSec, nil
 	}
 	recordSnapshotPerf := func(testName string, db kvstore.DB, perf treeDBSnapshotPerfMetrics) {
 		if db == nil {
@@ -2997,6 +3345,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
+		},
+		"batch_delete_range": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			return runBatchDeleteRange(db)
 		},
 		"batch_small_seq": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			batcher, ok := db.(kvstore.Batcher)
@@ -3913,6 +4264,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
+	// Keep destructive opt-in workloads that drain the dense keyspace out of the
+	// default `all` suite so later read/scan tests do not measure depleted data.
 	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_write_steady", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":                          "VACUUM (Index)",
@@ -3935,6 +4288,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"batch_write_steady":                    "Batch Write (Steady)",
 		"batch_random":                          "Batch Random",
 		"batch_delete":                          "Batch Delete",
+		"batch_delete_range":                    "Batch DeleteRange (ranges/s)",
 		"batch_small_seq":                       "Batch Small Seq",
 		"update_fork_choice":                    "Update ForkChoice (Batch CommitSync)",
 		"dataset_update_fork_choice":            "Update ForkChoice (Dataset Keys)",
@@ -3944,17 +4298,19 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	finalTestOrder := make([]string, 0)
 	if contains(testsToRun, "all") {
-		finalTestOrder = allTestOrder
-	} else {
-		for _, t := range testsToRun {
-			if t == "" {
-				continue
-			}
-			if _, ok := testFuncs[t]; !ok {
-				return BenchRun{}, fmt.Errorf("unknown test: %q", t)
-			}
-			finalTestOrder = append(finalTestOrder, t)
+		finalTestOrder = append(finalTestOrder, allTestOrder...)
+	}
+	for _, t := range testsToRun {
+		if t == "" || t == "all" {
+			continue
 		}
+		if _, ok := testFuncs[t]; !ok {
+			return BenchRun{}, fmt.Errorf("unknown test: %q", t)
+		}
+		if contains(finalTestOrder, t) {
+			continue
+		}
+		finalTestOrder = append(finalTestOrder, t)
 	}
 	if len(finalTestOrder) == 0 {
 		return BenchRun{}, fmt.Errorf("no tests selected")
@@ -4224,6 +4580,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		for _, inst := range instances {
 			if err := guard.Checkpoint(); err != nil {
 				return BenchRun{}, err
+			}
+			if testName == "batch_delete_range" {
+				if err := prepareBatchDeleteRange(inst.Wrapper); err != nil {
+					return BenchRun{}, fmt.Errorf("prepare %s on %s: %w", testName, inst.Name, err)
+				}
 			}
 
 			var treeStatsBefore treeDBSelectedStats
@@ -4584,6 +4945,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		TreeDBPerf:          treeDBPerf,
 		TreeDBStats:         treedbStats,
 		DiskUsage:           diskUsage,
+		BatchDeleteRange:    batchDeleteRangeReports,
 	}, nil
 }
 
@@ -5413,6 +5775,12 @@ func renderMarkdownSingle(run BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", run.Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", run.Config.RangeSpan))
+	if contains(run.TestOrder, "batch_delete_range") {
+		sb.WriteString(fmt.Sprintf("- batch-delete-range-width: %d\n", run.Config.BatchDeleteRangeWidth))
+		sb.WriteString(fmt.Sprintf("- batch-delete-ranges-per-batch: %d\n", run.Config.BatchDeleteRangesPerBatch))
+		sb.WriteString(fmt.Sprintf("- batch-delete-range-validate: %t\n", run.Config.BatchDeleteRangeValidate))
+		sb.WriteString(fmt.Sprintf("- batch-delete-range-refill: %t\n", run.Config.BatchDeleteRangeRefill))
+	}
 	if strings.TrimSpace(run.Config.ValuePattern) != "" {
 		sb.WriteString(fmt.Sprintf("- val-pattern: %s\n", strings.TrimSpace(run.Config.ValuePattern)))
 		sb.WriteString(fmt.Sprintf("- val-pool-size: %d\n", run.Config.ValuePoolSize))
@@ -5444,6 +5812,15 @@ func renderMarkdownSingle(run BenchRun) string {
 	table, _, _, _ := renderResultsTableStringWithLayout(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
 	sb.WriteString(table)
 	sb.WriteString("```\n")
+
+	if details := strings.TrimSpace(renderBatchDeleteRangeReportsString(run.Instances, run.BatchDeleteRange)); details != "" {
+		sb.WriteString("\n")
+		sb.WriteString("## Batch DeleteRange Metrics\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(details)
+		sb.WriteString("\n```")
+		sb.WriteString("\n")
+	}
 
 	if len(run.CheckpointDurations) > 0 {
 		sb.WriteString("\n")
@@ -5598,6 +5975,85 @@ func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, di
 		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func renderBatchDeleteRangeReportsString(instances []*DBInstance, reports map[string]map[string]batchDeleteRangeReport) string {
+	perDB := reports["batch_delete_range"]
+	if len(perDB) == 0 {
+		return ""
+	}
+	orderedNames := make([]string, 0, len(perDB))
+	seen := make(map[string]struct{}, len(perDB))
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		name := inst.Wrapper.Name()
+		if _, ok := perDB[name]; !ok {
+			continue
+		}
+		orderedNames = append(orderedNames, name)
+		seen[name] = struct{}{}
+	}
+	for name := range perDB {
+		if _, ok := seen[name]; !ok {
+			orderedNames = append(orderedNames, name)
+		}
+	}
+	sort.Strings(orderedNames[len(seen):])
+
+	headers := []string{"DB", "mode", "loaded", "width", "ranges/batch", "ranges", "affected", "range_ops/s", "affected_keys/s", "affected/range", "validation", "refill"}
+	rows := make([][]string, 0, len(orderedNames)+1)
+	rows = append(rows, headers)
+	for _, name := range orderedNames {
+		r := perDB[name]
+		rows = append(rows, []string{
+			name,
+			r.Mode,
+			formatInt(r.LoadedKeys),
+			formatInt(r.RangeWidth),
+			formatInt(r.RangesPerBatch),
+			formatInt(r.RangeCount),
+			formatInt(r.AffectedKeys),
+			formatFloat(r.RangeOpsPerSec),
+			formatFloat(r.AffectedKeysPerSec),
+			fmt.Sprintf("%.2f", r.AffectedKeysPerRange),
+			r.Validation,
+			strconv.FormatBool(r.Refill),
+		})
+	}
+	widths := make([]int, len(headers))
+	for _, row := range rows {
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+	var sb strings.Builder
+	for rowIdx, row := range rows {
+		for i, cell := range row {
+			if i > 0 {
+				sb.WriteString("  ")
+			}
+			if i == 0 || rowIdx == 0 || i == 1 || i >= 10 {
+				sb.WriteString(fmt.Sprintf("%-*s", widths[i], cell))
+			} else {
+				sb.WriteString(fmt.Sprintf("%*s", widths[i], cell))
+			}
+		}
+		sb.WriteByte('\n')
+		if rowIdx == 0 {
+			for i, width := range widths {
+				if i > 0 {
+					sb.WriteString("  ")
+				}
+				sb.WriteString(strings.Repeat("-", width))
+			}
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
 }
 
 type treeDBVlogSummaryMetric struct {
@@ -5890,6 +6346,12 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", runs[0].Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", runs[0].Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", runs[0].Config.RangeSpan))
+	if contains(runs[0].TestOrder, "batch_delete_range") {
+		sb.WriteString(fmt.Sprintf("- batch-delete-range-width: %d\n", runs[0].Config.BatchDeleteRangeWidth))
+		sb.WriteString(fmt.Sprintf("- batch-delete-ranges-per-batch: %d\n", runs[0].Config.BatchDeleteRangesPerBatch))
+		sb.WriteString(fmt.Sprintf("- batch-delete-range-validate: %t\n", runs[0].Config.BatchDeleteRangeValidate))
+		sb.WriteString(fmt.Sprintf("- batch-delete-range-refill: %t\n", runs[0].Config.BatchDeleteRangeRefill))
+	}
 	if strings.TrimSpace(runs[0].Config.ValuePattern) != "" {
 		sb.WriteString(fmt.Sprintf("- val-pattern: %s\n", strings.TrimSpace(runs[0].Config.ValuePattern)))
 		sb.WriteString(fmt.Sprintf("- val-pool-size: %d\n", runs[0].Config.ValuePoolSize))
@@ -5920,6 +6382,27 @@ func renderMarkdownSweep(runs []BenchRun) string {
 		sb.WriteString("\n\n")
 		sb.WriteString(renderMarkdownTestSweep(testName, runs, dbNames))
 		sb.WriteString("\n")
+	}
+
+	anyBatchDeleteRange := false
+	for _, run := range runs {
+		if strings.TrimSpace(renderBatchDeleteRangeReportsString(run.Instances, run.BatchDeleteRange)) != "" {
+			anyBatchDeleteRange = true
+			break
+		}
+	}
+	if anyBatchDeleteRange {
+		sb.WriteString("## Batch DeleteRange Metrics\n\n")
+		for _, run := range runs {
+			details := strings.TrimSpace(renderBatchDeleteRangeReportsString(run.Instances, run.BatchDeleteRange))
+			if details == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(details)
+			sb.WriteString("\n```\n\n")
+		}
 	}
 
 	// Best-effort disk usage reporting (end-of-run sizes) for all DBs.
@@ -6824,9 +7307,6 @@ func parseList(s string) []string {
 }
 
 func normalizeTests(list []string) []string {
-	if contains(list, "all") {
-		return list
-	}
 	seen := make(map[string]struct{}, len(list))
 	out := make([]string, 0, len(list))
 	for _, t := range list {
@@ -6863,6 +7343,8 @@ func normalizeTests(list []string) []string {
 			t = "batch_small_seq"
 		case "batch_write_ss":
 			t = "batch_write_steady"
+		case "batch_range_delete", "delete_range":
+			t = "batch_delete_range"
 		}
 		if t == "" {
 			continue

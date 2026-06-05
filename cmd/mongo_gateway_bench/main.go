@@ -2890,15 +2890,19 @@ func runTreeDBProfiledPhase(target *benchTarget, profiler *profileRecorder, name
 
 func runTreeDBProfiledPhaseWithDrain(target *benchTarget, profiler *profileRecorder, name string, drainAfter bool, run func() (phaseResult, error)) (phaseResult, error) {
 	before := collectLiveTreeDBStats(target)
+	var foregroundMillis float64
+	var drainElapsed time.Duration
 	result, err := runProfiledPhase(profiler, name, func() (phaseResult, error) {
 		result, err := run()
 		if err != nil {
 			return result, err
 		}
+		foregroundMillis = result.DurationMillis
 		if drainAfter {
-			drainElapsed, err := drainTreeDBCollectionsForPhase(target)
-			if err != nil {
-				return result, err
+			var drainErr error
+			drainElapsed, drainErr = drainTreeDBCollectionsForPhase(target)
+			if drainErr != nil {
+				return result, drainErr
 			}
 			addPhaseDuration(&result, drainElapsed)
 		}
@@ -2909,6 +2913,11 @@ func runTreeDBProfiledPhaseWithDrain(target *benchTarget, profiler *profileRecor
 	}
 	after := collectLiveTreeDBStats(target)
 	attachTreeDBPhaseStats(&result, before, after)
+	if drainAfter {
+		addTreeDBPhaseMetric(&result, "foreground_duration_ms", foregroundMillis)
+		addTreeDBPhaseMetric(&result, "settled_drain_duration_ms", durationMillis(drainElapsed))
+		addTreeDBPhaseMetric(&result, "settled_drain_included", 1)
+	}
 	return result, nil
 }
 
@@ -2927,10 +2936,24 @@ func addPhaseDuration(result *phaseResult, extra time.Duration) {
 	}
 	total := time.Duration(result.DurationMillis * float64(time.Millisecond))
 	total += extra
-	result.DurationMillis = float64(total.Microseconds()) / 1000.0
+	result.DurationMillis = durationMillis(total)
 	if result.Operations > 0 && total > 0 {
 		result.OpsPerSecond = float64(result.Operations) / total.Seconds()
 	}
+}
+
+func durationMillis(d time.Duration) float64 {
+	return float64(d.Microseconds()) / 1000.0
+}
+
+func addTreeDBPhaseMetric(result *phaseResult, name string, value float64) {
+	if result == nil || name == "" {
+		return
+	}
+	if result.TreeDBMetrics == nil {
+		result.TreeDBMetrics = make(map[string]float64, 3)
+	}
+	result.TreeDBMetrics[name] = value
 }
 
 func runIDFindPhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection) (phaseResult, error) {

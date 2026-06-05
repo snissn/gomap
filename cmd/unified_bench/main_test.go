@@ -361,6 +361,181 @@ func (it *scanViewOnlyIterator) ValueCopy(dst []byte) []byte {
 func (it *scanViewOnlyIterator) Error() error { return nil }
 func (it *scanViewOnlyIterator) Close() error { return nil }
 
+type batchDeleteRangeMemoryDB struct {
+	fixedNameDB
+	entries          map[string]scanViewEntry
+	deleteRangeCalls int
+	noopDeleteRange  bool
+	rangeDeleteMode  string
+	events           *[]string
+}
+
+type batchDeleteRangeMemoryBatch struct {
+	db      *batchDeleteRangeMemoryDB
+	sets    []scanViewEntry
+	deletes [][]byte
+	ranges  []batchDeleteRangeMemoryRange
+}
+
+type batchDeleteRangeMemoryRange struct {
+	start []byte
+	end   []byte
+}
+
+type batchDeleteRangeMemoryIterator struct {
+	entries []scanViewEntry
+	idx     int
+}
+
+type batchWithoutRangeDB struct {
+	fixedNameDB
+	newBatchCalls int
+	setCalls      int
+}
+
+type batchWithoutRangeBatch struct {
+	db *batchWithoutRangeDB
+}
+
+func newBatchDeleteRangeMemoryDB(name string) *batchDeleteRangeMemoryDB {
+	return &batchDeleteRangeMemoryDB{
+		fixedNameDB: fixedNameDB{name: name},
+		entries:     make(map[string]scanViewEntry),
+	}
+}
+
+func (d *batchDeleteRangeMemoryDB) Set(key, value []byte) error {
+	d.entries[string(key)] = scanViewEntry{key: append([]byte(nil), key...), value: append([]byte(nil), value...)}
+	return nil
+}
+
+func (d *batchDeleteRangeMemoryDB) Get(key []byte) ([]byte, error) {
+	entry, ok := d.entries[string(key)]
+	if !ok {
+		return nil, nil
+	}
+	return append([]byte(nil), entry.value...), nil
+}
+
+func (d *batchDeleteRangeMemoryDB) Delete(key []byte) error {
+	delete(d.entries, string(key))
+	return nil
+}
+
+func (d *batchDeleteRangeMemoryDB) NewBatch() (kvstore.Batch, error) {
+	return &batchDeleteRangeMemoryBatch{db: d}, nil
+}
+
+func (d *batchDeleteRangeMemoryDB) RangeDeleteMode() string {
+	if d.rangeDeleteMode != "" {
+		return d.rangeDeleteMode
+	}
+	return kvstore.RangeDeleteModeNative
+}
+
+func (d *batchDeleteRangeMemoryDB) Iterator(start, end []byte) (kvstore.Iterator, error) {
+	entries := make([]scanViewEntry, 0, len(d.entries))
+	for _, entry := range d.entries {
+		if start != nil && bytes.Compare(entry.key, start) < 0 {
+			continue
+		}
+		if end != nil && bytes.Compare(entry.key, end) >= 0 {
+			continue
+		}
+		entries = append(entries, scanViewEntry{key: append([]byte(nil), entry.key...), value: append([]byte(nil), entry.value...)})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].key, entries[j].key) < 0
+	})
+	return &batchDeleteRangeMemoryIterator{entries: entries}, nil
+}
+
+func (d *batchDeleteRangeMemoryDB) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
+	return nil, kvstore.ErrUnsupported
+}
+
+func (b *batchDeleteRangeMemoryBatch) Set(key, value []byte) error {
+	if b.db.events != nil {
+		*b.db.events = append(*b.db.events, "set")
+	}
+	b.sets = append(b.sets, scanViewEntry{key: append([]byte(nil), key...), value: append([]byte(nil), value...)})
+	return nil
+}
+
+func (b *batchDeleteRangeMemoryBatch) Delete(key []byte) error {
+	b.deletes = append(b.deletes, append([]byte(nil), key...))
+	return nil
+}
+
+func (b *batchDeleteRangeMemoryBatch) DeleteRange(start, end []byte) error {
+	b.db.deleteRangeCalls++
+	if b.db.events != nil {
+		*b.db.events = append(*b.db.events, "delete_range")
+	}
+	if b.db.noopDeleteRange {
+		return nil
+	}
+	b.ranges = append(b.ranges, batchDeleteRangeMemoryRange{
+		start: append([]byte(nil), start...),
+		end:   append([]byte(nil), end...),
+	})
+	return nil
+}
+
+func (b *batchDeleteRangeMemoryBatch) Commit() error {
+	for _, entry := range b.sets {
+		b.db.entries[string(entry.key)] = scanViewEntry{key: append([]byte(nil), entry.key...), value: append([]byte(nil), entry.value...)}
+	}
+	for _, key := range b.deletes {
+		delete(b.db.entries, string(key))
+	}
+	for _, r := range b.ranges {
+		for key, entry := range b.db.entries {
+			if r.start != nil && bytes.Compare(entry.key, r.start) < 0 {
+				continue
+			}
+			if r.end != nil && bytes.Compare(entry.key, r.end) >= 0 {
+				continue
+			}
+			delete(b.db.entries, key)
+		}
+	}
+	return nil
+}
+
+func (b *batchDeleteRangeMemoryBatch) CommitSync() error { return b.Commit() }
+func (b *batchDeleteRangeMemoryBatch) Close() error      { return nil }
+
+func (it *batchDeleteRangeMemoryIterator) Valid() bool { return it.idx < len(it.entries) }
+func (it *batchDeleteRangeMemoryIterator) Next()       { it.idx++ }
+func (it *batchDeleteRangeMemoryIterator) Key() []byte { return it.entries[it.idx].key }
+func (it *batchDeleteRangeMemoryIterator) Value() []byte {
+	return it.entries[it.idx].value
+}
+func (it *batchDeleteRangeMemoryIterator) KeyCopy(dst []byte) []byte {
+	return append(dst[:0], it.Key()...)
+}
+func (it *batchDeleteRangeMemoryIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.Value()...)
+}
+func (it *batchDeleteRangeMemoryIterator) Error() error { return nil }
+func (it *batchDeleteRangeMemoryIterator) Close() error { return nil }
+
+func (d *batchWithoutRangeDB) NewBatch() (kvstore.Batch, error) {
+	d.newBatchCalls++
+	return &batchWithoutRangeBatch{db: d}, nil
+}
+
+func (b *batchWithoutRangeBatch) Set(key, value []byte) error {
+	b.db.setCalls++
+	return nil
+}
+
+func (b *batchWithoutRangeBatch) Delete(key []byte) error { return nil }
+func (b *batchWithoutRangeBatch) Commit() error           { return nil }
+func (b *batchWithoutRangeBatch) CommitSync() error       { return nil }
+func (b *batchWithoutRangeBatch) Close() error            { return nil }
+
 type countingReadSnapshotDB struct {
 	getCalls               atomic.Int64
 	setCalls               atomic.Int64
@@ -619,6 +794,378 @@ func TestRunBenchmark_BatchWriteSteady_Smoke(t *testing.T) {
 	}
 	if math.IsNaN(got) || got <= 0 {
 		t.Fatalf("expected batch_write_steady > 0 for TreeDB, got %v", got)
+	}
+}
+
+func TestNormalizeTests_BatchDeleteRangeAliases(t *testing.T) {
+	got := normalizeTests(parseList("delete_range,batch_range_delete,batch_delete_range"))
+	want := []string{"batch_delete_range"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected len: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected normalize result: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestNormalizeTests_AllWithBatchDeleteRangeAlias(t *testing.T) {
+	got := normalizeTests(parseList("all,delete_range,batch_delete_range"))
+	want := []string{"all", "batch_delete_range"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected len: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected normalize result: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestRunBenchmark_BatchDeleteRange_UsesBatchCapabilityAndReports(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	const dbName = "batch_delete_range_memory"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("BatchDeleteRangeMemory")
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected test DB instance")
+	}
+	if !contains(run.TestOrder, "batch_delete_range") {
+		t.Fatalf("expected batch_delete_range in test order, got %v", run.TestOrder)
+	}
+	if got, want := db.deleteRangeCalls, 8; got != want {
+		t.Fatalf("DeleteRange calls=%d want %d", got, want)
+	}
+	gotResult := run.Results["batch_delete_range"][db.Name()]
+	if math.IsNaN(gotResult) || gotResult <= 0 {
+		t.Fatalf("expected batch_delete_range result > 0, got %v", gotResult)
+	}
+	report := run.BatchDeleteRange["batch_delete_range"][db.Name()]
+	if report.Mode != kvstore.RangeDeleteModeNative || report.LoadedKeys != 64 || report.RangeWidth != 8 || report.RangesPerBatch != 2 || report.RangeCount != 8 || report.AffectedKeys != 64 || report.ValueSize != 8 || report.Validation != "passed" {
+		t.Fatalf("unexpected batch_delete_range report: %+v", report)
+	}
+	if report.RangeOpsPerSec != gotResult || report.AffectedKeysPerSec <= report.RangeOpsPerSec {
+		t.Fatalf("unexpected throughput metrics: result=%v report=%+v", gotResult, report)
+	}
+}
+
+func TestRunBenchmark_BatchDeleteRangeDoesNotSuppressPreloadForEarlierReads(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	const dbName = "batch_delete_range_after_read"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("BatchDeleteRangeAfterRead")
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		ReadRequireHit:            true,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "random_read,batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil || db.deleteRangeCalls == 0 {
+		t.Fatalf("expected explicit batch_delete_range to run after preloaded read, db=%v", db)
+	}
+	got := run.Results["random_read"][db.Name()]
+	if math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected preloaded random_read > 0 before batch_delete_range, got %v", got)
+	}
+}
+
+func TestRunBenchmark_BatchDeleteRange_SkipsUnsupportedBeforeLoad(t *testing.T) {
+	var db *batchWithoutRangeDB
+	const dbName = "batch_without_range"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = &batchWithoutRangeDB{fixedNameDB: fixedNameDB{name: "BatchWithoutRange"}}
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected test DB instance")
+	}
+	if db.newBatchCalls != 1 {
+		t.Fatalf("expected only capability probe batch, got %d NewBatch calls", db.newBatchCalls)
+	}
+	if db.setCalls != 0 {
+		t.Fatalf("unsupported DeleteRange batch should not preload keys, got %d Set calls", db.setCalls)
+	}
+	if got := run.Results["batch_delete_range"][db.Name()]; !math.IsNaN(got) {
+		t.Fatalf("unsupported DeleteRange batch result=%v want NaN", got)
+	}
+	if report := run.BatchDeleteRange["batch_delete_range"][db.Name()]; report.Mode != "" {
+		t.Fatalf("unsupported DeleteRange batch should not report metrics, got %+v", report)
+	}
+}
+
+func TestRunBenchmark_BatchDeleteRange_WrappersSmoke(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      256,
+		ValueSize:                 16,
+		BatchSize:                 32,
+		BatchDeleteRangeWidth:     16,
+		BatchDeleteRangesPerBatch: 4,
+		BatchDeleteRangeValidate:  true,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    "treedb,pebble,leveldb",
+		TestsArg:                  "batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	wantModes := map[string]string{
+		"TreeDB":  kvstore.RangeDeleteModeNative,
+		"Pebble":  kvstore.RangeDeleteModeNative,
+		"LevelDB": kvstore.RangeDeleteModeFallbackIteratorDelete,
+	}
+	for dbName, wantMode := range wantModes {
+		got := run.Results["batch_delete_range"][dbName]
+		if math.IsNaN(got) || got <= 0 {
+			t.Fatalf("expected batch_delete_range > 0 for %s, got %v", dbName, got)
+		}
+		report := run.BatchDeleteRange["batch_delete_range"][dbName]
+		if report.Mode != wantMode {
+			t.Fatalf("%s mode=%q want %q (report=%+v)", dbName, report.Mode, wantMode, report)
+		}
+		if report.AffectedKeysPerSec <= 0 || report.RangeOpsPerSec <= 0 || report.Validation != "passed" {
+			t.Fatalf("%s missing throughput/validation report: %+v", dbName, report)
+		}
+	}
+}
+
+func TestRunBenchmark_BatchDeleteRangeValidationCatchesFailedDeletes(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	const dbName = "batch_delete_range_noop"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("BatchDeleteRangeNoop")
+		db.noopDeleteRange = true
+		return db, nil
+	})
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:                      32,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "batch_delete_range validation") || !strings.Contains(err.Error(), "live key") {
+		t.Fatalf("expected validation failure, got %v", err)
+	}
+	if db == nil || db.deleteRangeCalls == 0 {
+		t.Fatalf("expected DeleteRange to be attempted, db=%v", db)
+	}
+}
+
+func TestBatchDeleteRangeReportingVisibleInMarkdownAndJSON(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	const dbName = "batch_delete_range_reporting"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("BatchDeleteRangeReporting")
+		db.rangeDeleteMode = kvstore.RangeDeleteModeFallbackIteratorDelete
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+
+	md := renderMarkdownSingle(run)
+	for _, want := range []string{"Batch DeleteRange Metrics", "range_ops/s", "affected_keys/s", "fallback_iterator_delete", "batch-delete-range-width"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
+	}
+
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "benchprof_results.json")
+	mdPath := filepath.Join(dir, "benchprof_results.md")
+	if err := writeBenchprofArtifactsToPaths(jsonPath, mdPath, "native-fastpath", []BenchRun{run}); err != nil {
+		t.Fatalf("writeBenchprofArtifactsToPaths: %v", err)
+	}
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read json: %v", err)
+	}
+	for _, want := range []string{"\"batch_delete_range\"", "\"affected_keys_per_sec\"", "\"ranges_per_batch\"", "fallback_iterator_delete"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("json missing %q:\n%s", want, data)
+		}
+	}
+}
+
+func TestRunBenchmark_BatchDeleteRangeProfilesExcludePreload(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	var events []string
+	const dbName = "batch_delete_range_profile_excludes_preload"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("BatchDeleteRangeProfileExcludesPreload")
+		db.events = &events
+		return db, nil
+	})
+
+	profileTmpDir := t.TempDir()
+	newProfilePath := func(prefix string) (string, error) {
+		f, err := os.CreateTemp(profileTmpDir, prefix+"_*.pprof")
+		if err != nil {
+			return "", err
+		}
+		path := f.Name()
+		if err := f.Close(); err != nil {
+			_ = os.Remove(path)
+			return "", err
+		}
+		return path, nil
+	}
+	profileHooks := &benchmarkProfileHooks{
+		startCPUProfile: func(_ io.Writer) error {
+			events = append(events, "cpu_start")
+			return nil
+		},
+		stopCPUProfile: func() {
+			events = append(events, "cpu_stop")
+		},
+		writeAllocsSnapshotTemp: func(prefix string) (string, error) {
+			events = append(events, prefix)
+			return newProfilePath(prefix)
+		},
+		writeAllocsDeltaProfile: func(basePath, afterPath, outPath string) error {
+			events = append(events, "alloc_delta")
+			return nil
+		},
+	}
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+		CPUProfile:                filepath.Join(t.TempDir(), "cpu"),
+		AllocsProfile:             filepath.Join(t.TempDir(), "allocs"),
+		profileHooks:              profileHooks,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil || db.deleteRangeCalls == 0 {
+		t.Fatalf("expected DeleteRange calls, db=%v events=%v", db, events)
+	}
+
+	firstIndex := func(target string) int {
+		for i, event := range events {
+			if event == target {
+				return i
+			}
+		}
+		return -1
+	}
+	lastIndex := func(target string) int {
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i] == target {
+				return i
+			}
+		}
+		return -1
+	}
+	lastSet := lastIndex("set")
+	cpuStart := firstIndex("cpu_start")
+	allocBase := firstIndex("unified_bench_allocs_base")
+	firstDeleteRange := firstIndex("delete_range")
+	if lastSet < 0 || cpuStart < 0 || allocBase < 0 || firstDeleteRange < 0 {
+		t.Fatalf("missing expected events: %v", events)
+	}
+	if lastSet > cpuStart || lastSet > allocBase {
+		t.Fatalf("preload Set events should finish before profile starts/baselines, events=%v", events)
+	}
+	if firstDeleteRange < cpuStart || firstDeleteRange < allocBase {
+		t.Fatalf("DeleteRange should run after profile starts/baselines, events=%v", events)
 	}
 }
 
@@ -921,7 +1468,7 @@ func TestNormalizeTests_ReadRandomParallelAlias(t *testing.T) {
 	}
 }
 
-func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
+func TestRunBenchmark_AllExcludesBatchDeleteRangeAndIncludesRandomReadParallel(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
 		Keys:         2_000,
 		ValueSize:    16,
@@ -939,6 +1486,15 @@ func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
 		t.Fatalf("runBenchmark: %v", err)
 	}
 
+	if contains(run.TestOrder, "batch_delete_range") {
+		t.Fatalf("default all suite must not include destructive batch_delete_range before read/scan tests: %v", run.TestOrder)
+	}
+	for _, want := range []string{"random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"} {
+		if !contains(run.TestOrder, want) {
+			t.Fatalf("default all suite missing %s: %v", want, run.TestOrder)
+		}
+	}
+
 	for _, dbName := range []string{"TreeDB", "LevelDB"} {
 		got, ok := run.Results["random_read_parallel"][dbName]
 		if !ok {
@@ -954,6 +1510,64 @@ func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
 		}
 		if math.IsNaN(gotSnap) || gotSnap <= 0 {
 			t.Fatalf("expected random_read_parallel_acquire_snapshot > 0 for %s, got %v", dbName, gotSnap)
+		}
+	}
+}
+
+func TestRunBenchmark_AllWithExplicitBatchDeleteRangeRunsAfterReadScans(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	const dbName = "all_plus_batch_delete_range"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("AllPlusBatchDeleteRange")
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		ReadWorkers:               2,
+		RangeQueries:              8,
+		RangeSpan:                 4,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		DBsArg:                    dbName,
+		TestsArg:                  "all,batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil || db.deleteRangeCalls == 0 {
+		t.Fatalf("expected explicit batch_delete_range to run, db=%v", db)
+	}
+
+	deleteIdx := -1
+	for i, testName := range run.TestOrder {
+		if testName == "batch_delete_range" {
+			deleteIdx = i
+			break
+		}
+	}
+	if deleteIdx < 0 {
+		t.Fatalf("expected explicit batch_delete_range in order: %v", run.TestOrder)
+	}
+	for _, readScan := range []string{"random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"} {
+		idx := -1
+		for i, testName := range run.TestOrder {
+			if testName == readScan {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			t.Fatalf("missing %s in all suite: %v", readScan, run.TestOrder)
+		}
+		if idx > deleteIdx {
+			t.Fatalf("%s runs after destructive batch_delete_range: order=%v", readScan, run.TestOrder)
 		}
 	}
 }
@@ -2487,6 +3101,50 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if _, ok := runValue["treedb_stats"]; !ok {
 		t.Fatalf("expected treedb_stats in benchprof json, got: %#v", runValue)
+	}
+}
+
+func TestWriteBenchprofArtifacts_OmitsNaNResultsForJSON(t *testing.T) {
+	dir := t.TempDir()
+	run := BenchRun{
+		Config: BenchConfig{Keys: 10, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"batch_delete_range": {
+				"LevelDB":     500,
+				"Unsupported": math.NaN(),
+			},
+			"unsupported_only": {
+				"Unsupported": math.NaN(),
+			},
+		},
+	}
+	jsonPath := filepath.Join(dir, "benchprof_results.json")
+	mdPath := filepath.Join(dir, "benchprof_results.md")
+	if err := writeBenchprofArtifactsToPaths(jsonPath, mdPath, "native-fastpath", []BenchRun{run}); err != nil {
+		t.Fatalf("writeBenchprofArtifactsToPaths: %v", err)
+	}
+
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read json: %v", err)
+	}
+	var parsed benchprofExport
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal json: %v", err)
+	}
+	results := parsed.Runs[0].Results["batch_delete_range"]
+	if got := results["LevelDB"]; got != 500 {
+		t.Fatalf("LevelDB result=%v want 500", got)
+	}
+	if _, ok := results["Unsupported"]; ok {
+		t.Fatalf("NaN unsupported result should be omitted from JSON: %s", data)
+	}
+	unsupportedOnly, ok := parsed.Runs[0].Results["unsupported_only"]
+	if !ok {
+		t.Fatalf("all-NaN test key should be preserved for profile parsing: %s", data)
+	}
+	if len(unsupportedOnly) != 0 {
+		t.Fatalf("all-NaN test should export an empty result map, got %#v", unsupportedOnly)
 	}
 }
 
