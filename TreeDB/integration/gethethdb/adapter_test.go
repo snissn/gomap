@@ -119,6 +119,30 @@ func TestNativeEmptyNilKeyAndNilValueParity(t *testing.T) {
 	}
 }
 
+func TestGetMissingReturnsNotFoundAndZeroLengthValuesRemainReadable(t *testing.T) {
+	db := openTestDB(t)
+
+	if got, err := db.Get([]byte("missing")); !errors.Is(err, ErrNotFound) || got != nil {
+		t.Fatalf("Get missing got=%q err=%v, want ErrNotFound", got, err)
+	}
+	for _, key := range [][]byte{[]byte("nil-value"), []byte("empty-value")} {
+		var value []byte
+		if string(key) == "empty-value" {
+			value = []byte{}
+		}
+		if err := db.Put(key, value); err != nil {
+			t.Fatalf("Put %q: %v", key, err)
+		}
+		got, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get %q: %v", key, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("Get %q length=%d want 0", key, len(got))
+		}
+	}
+}
+
 func TestDeleteRangeNilVsEmptyBounds(t *testing.T) {
 	db := openTestDB(t)
 	for _, key := range [][]byte{nil, []byte("a"), []byte("b")} {

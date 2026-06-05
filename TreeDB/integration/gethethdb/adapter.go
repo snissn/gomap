@@ -189,21 +189,11 @@ func (d *Database) Get(key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, err := tdb.Get(key)
-	if err != nil || value != nil {
-		return value, err
-	}
-	// TreeDB's raw KV API can report a missing key as nil, nil for parity with
-	// gomap's kvstore adapters. Geth expects Get misses to return an error, while
-	// existing zero-length values must still return nil/empty with no error.
-	has, err := tdb.Has(key)
-	if err != nil {
-		return nil, err
-	}
-	if !has {
+	value, err := tdb.GetAppend(key, nil)
+	if errors.Is(err, treedb.ErrKeyNotFound) {
 		return nil, ErrNotFound
 	}
-	return value, nil
+	return value, err
 }
 
 // Put inserts the given value into the key-value data store.
