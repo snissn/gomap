@@ -17,6 +17,14 @@ func normalizeRawKVValue(value []byte) []byte {
 	return value
 }
 
+func cloneRawKVPointKey(key []byte) []byte {
+	key = normalizeRawKVPointKey(key)
+	if len(key) == 0 {
+		return rawKVEmptyPointKey
+	}
+	return append([]byte(nil), key...)
+}
+
 func normalizeRawKVPointKeys(keys [][]byte) [][]byte {
 	for i, key := range keys {
 		if key != nil {

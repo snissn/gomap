@@ -3,6 +3,8 @@ package caching
 import (
 	"bytes"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 func requireCachingRawKVValue(t *testing.T, db *DB, key []byte, want []byte) {
@@ -37,6 +39,42 @@ func TestRawKVParityKeyRangePreservesConcreteEmptyKey(t *testing.T) {
 	propagated.add(r.max)
 	if !propagated.valid || propagated.min == nil || len(propagated.min) != 0 || propagated.max == nil || len(propagated.max) != 0 {
 		t.Fatalf("propagated range = valid=%v min=%#v max=%#v, want non-nil empty bounds", propagated.valid, propagated.min, propagated.max)
+	}
+}
+
+func TestRawKVParitySnapshotGetEntryPreservesEmptyKeyAndValue(t *testing.T) {
+	db, backend := newCachedSnapshotPoolTestDB(t)
+	defer func() {
+		_ = db.Close()
+		_ = backend.Close()
+	}()
+
+	if err := db.Set(nil, nil); err != nil {
+		t.Fatalf("Set(nil,nil): %v", err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	for _, fn := range []struct {
+		name string
+		get  func([]byte) (node.LeafEntry, error)
+	}{
+		{"GetEntry", snap.GetEntry},
+		{"GetEntryExact", snap.GetEntryExact},
+	} {
+		entry, err := fn.get(nil)
+		if err != nil {
+			t.Fatalf("%s(nil): %v", fn.name, err)
+		}
+		if entry.Key == nil || len(entry.Key) != 0 {
+			t.Fatalf("%s key=%#v, want non-nil empty", fn.name, entry.Key)
+		}
+		if entry.Value == nil || len(entry.Value) != 0 {
+			t.Fatalf("%s value=%#v, want non-nil empty", fn.name, entry.Value)
+		}
 	}
 }
 

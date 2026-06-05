@@ -1005,17 +1005,23 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 	return out, nil
 }
 
+func snapshotRawKVLeafEntry(key []byte, val []byte, ptr page.ValuePtr, flags byte) node.LeafEntry {
+	if flags&(node.FlagPointer|node.FlagTombstone) == 0 {
+		val = normalizeRawKVValue(val)
+	}
+	return node.LeafEntry{
+		Key:      cloneRawKVPointKey(key),
+		Value:    val,
+		ValuePtr: ptr,
+		Flags:    flags,
+	}
+}
+
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	key = normalizeRawKVPointKey(key)
 	val, ptr, flags, found := s.lookupQueueEntry(key)
 	if found {
-		keyCopy := append([]byte(nil), key...)
-		return node.LeafEntry{
-			Key:      keyCopy,
-			Value:    val,
-			ValuePtr: ptr,
-			Flags:    flags,
-		}, nil
+		return snapshotRawKVLeafEntry(key, val, ptr, flags), nil
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
@@ -1031,13 +1037,7 @@ func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	key = normalizeRawKVPointKey(key)
 	val, ptr, flags, found := s.lookupQueueEntry(key)
 	if found {
-		keyCopy := append([]byte(nil), key...)
-		return node.LeafEntry{
-			Key:      keyCopy,
-			Value:    val,
-			ValuePtr: ptr,
-			Flags:    flags,
-		}, nil
+		return snapshotRawKVLeafEntry(key, val, ptr, flags), nil
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
