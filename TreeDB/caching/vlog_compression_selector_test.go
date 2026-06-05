@@ -990,6 +990,54 @@ func TestResolveVlogWriteMode_LargePayloadBalancedUsesObservedBetterBlockCodec(t
 	}
 }
 
+func TestChooseRetainedStorageFirstBlockCodec_DefaultBootstrapsZSTD(t *testing.T) {
+	l := &lane{}
+
+	got := chooseRetainedStorageFirstBlockCodec(l, valuelog.BlockCodecSnappy, vlogCompressionDefault)
+
+	if got != valuelog.BlockCodecZSTD {
+		t.Fatalf("retained storage-first bootstrap codec=%v want zstd", got)
+	}
+}
+
+func TestChooseRetainedStorageFirstBlockCodec_SingleConfiguredCodecHistoryKeepsZSTDBootstrap(t *testing.T) {
+	l := &lane{}
+	for i := 0; i < largePayloadBlockCodecMinSamples; i++ {
+		observeLaneVlogBlockRatio(l, valuelog.BlockCodecSnappy, 4096, 1800)
+	}
+
+	got := chooseRetainedStorageFirstBlockCodec(l, valuelog.BlockCodecSnappy, vlogCompressionAuto)
+
+	if got != valuelog.BlockCodecZSTD {
+		t.Fatalf("single-codec retained bootstrap codec=%v want zstd", got)
+	}
+}
+
+func TestChooseRetainedStorageFirstBlockCodec_ExplicitBlockKeepsConfiguredCodec(t *testing.T) {
+	l := &lane{}
+
+	got := chooseRetainedStorageFirstBlockCodec(l, valuelog.BlockCodecLZ4, vlogCompressionBlock)
+
+	if got != valuelog.BlockCodecLZ4 {
+		t.Fatalf("explicit block retained codec=%v want configured lz4", got)
+	}
+}
+
+func TestChooseRetainedStorageFirstBlockCodec_ObservedBestOverridesBootstrap(t *testing.T) {
+	l := &lane{}
+	for i := 0; i < largePayloadBlockCodecMinSamples; i++ {
+		observeLaneVlogBlockRatio(l, valuelog.BlockCodecSnappy, 4096, 3000)
+		observeLaneVlogBlockRatio(l, valuelog.BlockCodecLZ4, 4096, 1800)
+		observeLaneVlogBlockRatio(l, valuelog.BlockCodecZSTD, 4096, 2200)
+	}
+
+	got := chooseRetainedStorageFirstBlockCodec(l, valuelog.BlockCodecSnappy, vlogCompressionAuto)
+
+	if got != valuelog.BlockCodecLZ4 {
+		t.Fatalf("retained observed codec=%v want observed-best lz4", got)
+	}
+}
+
 func TestResolveVlogWriteMode_ThroughputPolicyBypassesSelectorForMediumPayload(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
