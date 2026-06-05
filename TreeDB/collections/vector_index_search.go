@@ -946,7 +946,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 	}
 	if queryMode != columnVectorGraphNativeSearchQueryModeExact || !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
 		buffer.Reset()
-		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
+		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires the exact no-document hnsw_search_pack_v1 route; unsupported query or stats options must use SearchVectorIndex or OpenVectorIndexSearcher", ErrVectorIndexSearchUnavailable, opts.IndexName)
 	}
 	var lastResponse VectorIndexSearchResponse
 	var lastErr error
@@ -971,7 +971,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 	if lastErr != nil {
 		return lastResponse, lastErr
 	}
-	return lastResponse, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
+	return lastResponse, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires a healthy exact no-document hnsw_search_pack_v1 route; rebuild the vector index or use SearchVectorIndex for the response-owned convenience path", ErrVectorIndexSearchUnavailable, opts.IndexName)
 }
 
 func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) error {
@@ -982,37 +982,80 @@ func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearch
 		buffer.Reset()
 		return err
 	}
+	if opts.MaxDecodedBlocks < 0 {
+		buffer.Reset()
+		return errors.New("collections: vector index search max_decoded_blocks cannot be negative")
+	}
 	if opts.IncludeDocuments {
 		buffer.Reset()
-		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support IncludeDocuments")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("IncludeDocuments=true", "this API returns no-document result IDs and scores only; use SearchVectorIndex with IncludeDocuments=true for materialization or run a separate document fetch after buffered search")
 	}
-	if vectorIndexDocumentFetchOptionsNonZero(opts.DocumentFetchOptions) {
+	if err := collectionVectorIndexWithBufferDocumentFetchOptionsError(opts.DocumentFetchOptions); err != nil {
 		buffer.Reset()
-		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support DocumentFetchOptions")
+		return err
 	}
-	if opts.Filter != nil || opts.IndexRangeFilter != nil {
+	if opts.Filter != nil {
 		buffer.Reset()
-		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support filters")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("Filter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use SearchVectorIndex for response-owned search or build a separate measured filtered path")
 	}
-	if opts.FetchMultiplier != 0 || opts.ExactFilterMaxDocs != 0 || opts.DisableExactFallback {
+	if opts.IndexRangeFilter != nil {
 		buffer.Reset()
-		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support legacy fallback/filter controls")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("IndexRangeFilter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use SearchVectorIndex for response-owned search or build a separate measured filtered path")
+	}
+	if opts.FetchMultiplier != 0 {
+		buffer.Reset()
+		return collectionVectorIndexWithBufferUnsupportedOptionError("FetchMultiplier", "the collection buffered route is pack-only and does not run legacy fallback or rerank controls")
+	}
+	if opts.ExactFilterMaxDocs != 0 {
+		buffer.Reset()
+		return collectionVectorIndexWithBufferUnsupportedOptionError("ExactFilterMaxDocs", "the collection buffered route is pack-only and does not run legacy fallback or filter controls")
+	}
+	if opts.DisableExactFallback {
+		buffer.Reset()
+		return collectionVectorIndexWithBufferUnsupportedOptionError("DisableExactFallback", "the collection buffered route already fails closed instead of falling back")
 	}
 	if opts.QueryMode != "" && opts.QueryMode != VectorIndexQueryModeExact {
 		buffer.Reset()
-		return fmt.Errorf("collections: vector index SearchVectorIndexWithBuffer supports only exact query mode, got %q", opts.QueryMode)
+		if opts.QueryMode == VectorIndexQueryModeQuantizedOnly || opts.QueryMode == VectorIndexQueryModeQuantizedRerank {
+			return collectionVectorIndexWithBufferUnsupportedOptionError(fmt.Sprintf("QueryMode=%q", opts.QueryMode), "collection buffered quantized search is not supported by this exact hnsw_search_pack_v1 route; use SearchVectorIndex or OpenVectorIndexSearcher plus SearchWithBuffer for supported quantized searches until a separate quantized buffered route is available")
+		}
+		return collectionVectorIndexWithBufferUnsupportedOptionError(fmt.Sprintf("QueryMode=%q", opts.QueryMode), "this API currently supports only exact/zero QueryMode on the no-document hnsw_search_pack_v1 route")
 	}
-	if opts.QuantizedIndexName != "" || opts.QuantizedRerankCandidates != 0 {
+	if opts.QuantizedIndexName != "" {
 		buffer.Reset()
-		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support quantized search options")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("QuantizedIndexName", "quantized collection buffered search is not supported by this exact route; use SearchVectorIndex or OpenVectorIndexSearcher plus SearchWithBuffer for supported quantized searches")
+	}
+	if opts.QuantizedRerankCandidates != 0 {
+		buffer.Reset()
+		return collectionVectorIndexWithBufferUnsupportedOptionError("QuantizedRerankCandidates", "quantized collection buffered rerank is not supported by this exact route; use SearchVectorIndex or OpenVectorIndexSearcher plus SearchWithBuffer for supported quantized searches")
 	}
 	if opts.StatsMode == VectorIndexSearchStatsModeBenchmarkDebug {
 		buffer.Reset()
-		return errors.New("collections: vector index SearchVectorIndexWithBuffer does not support benchmark_debug stats mode")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=benchmark_debug", "debug-only per-candidate/per-edge counters are outside the high-QPS buffered route; use SearchVectorIndex or OpenVectorIndexSearcher for diagnostic searches")
 	}
 	if _, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode); err != nil {
 		buffer.Reset()
-		return err
+		return collectionVectorIndexWithBufferUnsupportedOptionError(fmt.Sprintf("StatsMode=%q", opts.StatsMode), err.Error())
+	}
+	return nil
+}
+
+func collectionVectorIndexWithBufferUnsupportedOptionError(option, guidance string) error {
+	return fmt.Errorf("%w: vector index SearchVectorIndexWithBuffer unsupported option %s: %s", ErrVectorIndexSearchUnavailable, option, guidance)
+}
+
+func collectionVectorIndexWithBufferDocumentFetchOptionsError(opts DocumentFetchOptions) error {
+	if len(opts.IncludePaths) > 0 {
+		return collectionVectorIndexWithBufferUnsupportedOptionError("DocumentFetchOptions.IncludePaths", "document projection requires materialization; use SearchVectorIndex with IncludeDocuments=true or fetch documents in a separate phase")
+	}
+	if len(opts.ExcludePaths) > 0 {
+		return collectionVectorIndexWithBufferUnsupportedOptionError("DocumentFetchOptions.ExcludePaths", "document projection requires materialization; use SearchVectorIndex with IncludeDocuments=true or fetch documents in a separate phase")
+	}
+	if opts.Format != "" {
+		return collectionVectorIndexWithBufferUnsupportedOptionError("DocumentFetchOptions.Format", "document format selection applies only to materialization; use SearchVectorIndex with IncludeDocuments=true or fetch documents in a separate phase")
+	}
+	if opts.ColumnAssetReadIntegrity != "" {
+		return collectionVectorIndexWithBufferUnsupportedOptionError("DocumentFetchOptions.ColumnAssetReadIntegrity", "document read-integrity controls apply only to materialization; use SearchVectorIndex with IncludeDocuments=true or fetch documents in a separate phase")
 	}
 	return nil
 }
