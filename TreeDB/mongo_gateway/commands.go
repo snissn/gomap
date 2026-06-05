@@ -66,7 +66,7 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 
 	var col *collections.Collection
 	format := s.DefaultCollectionOptions.DocumentFormat
-	if existing, err := s.openCollectionCached(name); err == nil {
+	if existing, err := s.Collections.OpenCollection(name); err == nil {
 		col = existing
 		format = existing.MetaView().Options.DocumentFormat
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
@@ -866,7 +866,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.openCollectionCached(name)
+	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return marshalUpdateResponse(0, 0)
@@ -1714,7 +1714,7 @@ func (s *Server) deleteResponse(command wire.Document, sequences []wire.Document
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.openCollectionCached(name)
+	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return marshalDeleteResponse(0)
@@ -1867,7 +1867,7 @@ func (s *Server) createCollectionResponse(command wire.Document) (wire.Document,
 	if err := validateCreateCollectionCommand(command); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	if _, err := s.openCollectionCached(name); err == nil {
+	if _, err := s.Collections.OpenCollection(name); err == nil {
 		return marshalDocument(bson.D{
 			{Key: "ok", Value: 1.0},
 			{Key: "note", Value: "TreeDB Mongo gateway treats duplicate create as idempotent success"},
@@ -2015,7 +2015,8 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	}
 
 	createdAutomatically := false
-	col, err := s.openCollectionCached(name)
+	s.invalidateCollectionCache(name)
+	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		if !errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -2029,7 +2030,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			// If another request created the collection after our miss, fall
 			// through to the idempotent add-index path below.
 			createErr := err
-			col, err = s.openCollectionCached(name)
+			col, err = s.Collections.OpenCollection(name)
 			if err != nil {
 				return commandError(commandCodeBadValue, "BadValue", createErr.Error())
 			}
@@ -2128,7 +2129,8 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	col, err := s.openCollectionCached(name)
+	s.invalidateCollectionCache(name)
+	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeNamespaceNotFound, "NamespaceNotFound", "collection not found: "+db+"."+collection)
@@ -2931,7 +2933,7 @@ func rawDocumentsBatchLimit(docs []wire.Document, maxDocs int, maxBytes int) (in
 }
 
 func (s *Server) openOrCreateCollection(name string) (*collections.Collection, error) {
-	col, err := s.openCollectionCached(name)
+	col, err := s.Collections.OpenCollection(name)
 	if err == nil {
 		return col, nil
 	}
@@ -2939,7 +2941,7 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 		return nil, createErr
 	}
 	s.invalidateCollectionCache(name)
-	return s.openCollectionCached(name)
+	return s.Collections.OpenCollection(name)
 }
 
 func (s *Server) defaultCollectionMeta(name string) *collections.CollectionMeta {
