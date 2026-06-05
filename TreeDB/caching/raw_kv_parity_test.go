@@ -79,6 +79,34 @@ func TestRawKVParitySnapshotGetEntryPreservesEmptyKeyAndValue(t *testing.T) {
 	}
 }
 
+func TestRawKVParityCachedUpdateEmptyKeyNilValue(t *testing.T) {
+	db, backend := newCachedSnapshotPoolTestDB(t)
+	defer func() {
+		_ = db.Close()
+		_ = backend.Close()
+	}()
+
+	if err := db.Update(nil, func(old []byte) (backenddb.UpdateResult, error) {
+		if old != nil {
+			t.Fatalf("initial old=%#v want nil missing", old)
+		}
+		return backenddb.SetUpdate(nil), nil
+	}); err != nil {
+		t.Fatalf("Update(nil): %v", err)
+	}
+	requireCachingRawKVValue(t, db, []byte{}, []byte{})
+
+	if err := db.UpdateSync([]byte{}, func(old []byte) (backenddb.UpdateResult, error) {
+		if old == nil || len(old) != 0 {
+			t.Fatalf("old=%#v want non-nil empty", old)
+		}
+		return backenddb.SetUpdate([]byte("updated")), nil
+	}); err != nil {
+		t.Fatalf("UpdateSync(empty): %v", err)
+	}
+	requireCachingRawKVValue(t, db, nil, []byte("updated"))
+}
+
 func TestRawKVParityCachedEmptyKeyNilValue(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,
