@@ -21,7 +21,7 @@ const (
 const (
 	FrameVersion    = 1
 	FrameHeaderSize = 12
-	MaxFrameK       = 128
+	MaxFrameK       = 255
 )
 
 const (
