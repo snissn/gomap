@@ -546,8 +546,10 @@ Typed-column part descriptor column type codes are currently:
 descriptors must use `raw_bytes_offsets`, `fixed_width_elements=0`, and
 uncompressed split offsets/value sections whose values bytes are exact opaque
 payload bytes rather than text. Primitive scalar descriptors must use their
-matching `raw_*` encoding, `fixed_width_elements=0`, and uncompressed fixed-width
-payload sections (`rows * width` bytes). Dense numeric vector descriptors added
+matching `raw_*` encoding and `fixed_width_elements=0`; their `column_data`
+sections may request Snappy or LZ4 compression while individual codec blocks
+record the actual kept compression, including raw keep-if-smaller fallback.
+Dense numeric vector descriptors added
 by #1930 must use their matching raw vector encoding (`raw_uint8_vector`,
 `raw_int8_vector`, `raw_uint16_vector`, `raw_int16_vector`,
 `raw_uint32_vector`, `raw_int32_vector`, `raw_uint64_vector`,
@@ -564,6 +566,11 @@ matching `bits_per_element` (`1`, `2`, or `4`), zero unused high padding bits in
 the final byte of each row, and uncompressed row-major payload sections
 (`rows * ceil(elements_per_row * bits_per_element / 8)` bytes). Readers must
 fail closed on unknown type codes rather than guessing a payload shape.
+Current typed-column image version 4 directory entries carry per-section
+`raw_bytes` metadata for compressed sections. Row-locator and dictionary
+sections may use Snappy or LZ4 when the raw length is within the decoder cap;
+readers validate the raw byte count before decompression and fail closed on
+unsupported section compression.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:

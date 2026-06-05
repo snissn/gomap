@@ -202,7 +202,8 @@ Current section fields include:
 - `Category`, for byte accounting
 - `Column`, for column-owned sections
 - `Offset` and `Length`, byte range inside the image
-- optional `Rows`, `Granules`, `Blocks`, `Encoding`, and `Compression`
+- optional `Rows`, `Granules`, `Blocks`, `Encoding`, `Compression`, and
+  `RawBytes` for compressed sections
 
 Common section kinds:
 
@@ -401,6 +402,8 @@ Production compatibility asset shape:
 Typed-column part image shape:
 
 - dictionaries are stored in the `dictionaries` section
+- dictionary sections may be Snappy/LZ4-compressed in current typed-column image
+  version 4, with raw-byte metadata used for fail-closed decode validation
 - dictionary-encoded rows use low-cardinality integer code payloads in column
   data sections
 
@@ -454,6 +457,9 @@ Typed-column part image shape:
 - low-cardinality code bytes are column payload bytes inside a `column_data`
   section for that column
 - dictionary entries are in the `dictionaries` section
+- compact code blocks can use narrower integer encodings, and the column-data
+  section compression records the requested codec separately from each block's
+  actual keep-if-smaller result
 - codec blocks may be smaller or larger than granules, but JSONBench should
   normally start with one codec block per granule
 

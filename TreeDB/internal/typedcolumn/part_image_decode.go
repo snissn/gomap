@@ -12,7 +12,11 @@ import (
 
 const maxColumnPartImageStringBytes = 1 << 20
 
-const maxCompressedRowLocatorSectionRawBytes = 256 << 20
+const maxCompressedImageSectionRawBytes = 256 << 20
+
+const maxCompressedRowLocatorSectionRawBytes = maxCompressedImageSectionRawBytes
+
+const maxCompressedDictionarySectionRawBytes = maxCompressedImageSectionRawBytes
 
 const ColumnPartImageManifestHeaderBytes = 32
 
@@ -165,6 +169,10 @@ func parseColumnPartImage(data []byte, totalBytes int) (ColumnPartImage, error) 
 		if err != nil {
 			return ColumnPartImage{}, err
 		}
+		rawBytes, err := dec.u64()
+		if err != nil {
+			return ColumnPartImage{}, err
+		}
 		name, err := dec.str()
 		if err != nil {
 			return ColumnPartImage{}, err
@@ -193,8 +201,8 @@ func parseColumnPartImage(data []byte, totalBytes int) (ColumnPartImage, error) 
 		if int64(int(sectionRows)) != sectionRows || int64(int(granules)) != granules || int64(int(blocks)) != blocks {
 			return ColumnPartImage{}, fmt.Errorf("typedcolumn: section %s rows/granules/blocks exceed host int (%d,%d,%d)", kind, sectionRows, granules, blocks)
 		}
-		if uint64(int(offset)) != offset || uint64(int(length)) != length {
-			return ColumnPartImage{}, fmt.Errorf("typedcolumn: section %s offset=%d length=%d exceed host int", kind, offset, length)
+		if uint64(int(offset)) != offset || uint64(int(length)) != length || uint64(int(rawBytes)) != rawBytes {
+			return ColumnPartImage{}, fmt.Errorf("typedcolumn: section %s offset=%d length=%d raw_bytes=%d exceed host int", kind, offset, length, rawBytes)
 		}
 		section := ColumnPartImageSection{
 			Kind:        kind,
@@ -208,6 +216,7 @@ func parseColumnPartImage(data []byte, totalBytes int) (ColumnPartImage, error) 
 			Blocks:      int(blocks),
 			Encoding:    Encoding(encoding),
 			Compression: Compression(compression),
+			RawBytes:    int(rawBytes),
 		}
 		if err := validateImageSectionCompression(section); err != nil {
 			return ColumnPartImage{}, err
@@ -305,7 +314,7 @@ func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageR
 	if err := attachColumnPayloadsFromImage(image, columns); err != nil {
 		return nil, err
 	}
-	if err := applyImageSectionCompressionToColumns(image, columns); err != nil {
+	if err := restoreColumnDefinitionCompressionFromImageSections(image, columns); err != nil {
 		return nil, err
 	}
 	if opts.ValidateRowLocators {
@@ -835,18 +844,18 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 		}
 	}
 	if columnType == ColumnTypeFloat32 || columnType == ColumnTypeFloat64 || rawScalarWidthForColumnType(columnType) != 0 {
-		if block.Compression != CompressionNone {
-			return fmt.Errorf("typedcolumn: descriptor column %s block %d fixed-width compression=%s want %s", column, blockIndex, block.Compression, CompressionNone)
-		}
 		if block.RawBytes != maxRawBytes {
 			return fmt.Errorf("typedcolumn: descriptor column %s block %d fixed-width raw bytes=%d want %d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
 		}
 	}
+	if err := validateCompression(block.Compression); err != nil {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d compression=%s is unsupported", column, blockIndex, block.Compression)
+	}
 	if block.Compression == CompressionNone && block.StoredBytes != block.RawBytes {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d uncompressed stored bytes=%d raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
 	}
-	if block.Compression != CompressionNone && block.StoredBytes > block.RawBytes {
-		return fmt.Errorf("typedcolumn: descriptor column %s block %d compressed stored bytes=%d exceed raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
+	if block.Compression != CompressionNone && (block.StoredBytes <= 0 || block.StoredBytes >= block.RawBytes) {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d compressed stored bytes=%d raw bytes=%d want 0 < stored < raw", column, blockIndex, block.StoredBytes, block.RawBytes)
 	}
 	return nil
 }
@@ -1839,6 +1848,41 @@ func attachBytesColumnPayloadsFromImage(image ColumnPartImage, name string, colu
 	return nil
 }
 
+func restoreColumnDefinitionCompressionFromImageSections(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
+	for name, column := range columns {
+		if column.Definition.Encoding == EncodingRawUint32OffsetsList || column.Definition.Encoding == EncodingRawBytesOffsets {
+			continue
+		}
+		section, ok := image.columnDataSection(name)
+		if !ok {
+			return fmt.Errorf("typedcolumn: image missing column data section %s", name)
+		}
+		if section.Encoding != column.Definition.Encoding {
+			return fmt.Errorf("typedcolumn: image column %s section encoding=%s definition=%s", name, section.Encoding, column.Definition.Encoding)
+		}
+		for i, block := range column.Blocks {
+			if block.Descriptor.Encoding != section.Encoding {
+				return fmt.Errorf("typedcolumn: image column %s block %d encoding=%s section=%s", name, i, block.Descriptor.Encoding, section.Encoding)
+			}
+			switch section.Compression {
+			case CompressionNone:
+				if block.Descriptor.Compression != CompressionNone {
+					return fmt.Errorf("typedcolumn: image column %s block %d compression=%s section=%s", name, i, block.Descriptor.Compression, section.Compression)
+				}
+			case CompressionSnappy, CompressionLZ4:
+				if block.Descriptor.Compression != section.Compression && block.Descriptor.Compression != CompressionNone {
+					return fmt.Errorf("typedcolumn: image column %s block %d compression=%s section requested=%s", name, i, block.Descriptor.Compression, section.Compression)
+				}
+			default:
+				return fmt.Errorf("typedcolumn: image column %s section compression=%s is unsupported", name, section.Compression)
+			}
+		}
+		column.Definition.Compression = section.Compression
+		columns[name] = column
+	}
+	return nil
+}
+
 func validateColumnDataSectionsForColumns(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
 	required := make(map[string]ColumnPartColumn, len(columns))
 	for name, column := range columns {
@@ -1908,7 +1952,11 @@ func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
 	if len(sections) != 1 {
 		return nil, fmt.Errorf("typedcolumn: image has %d dictionary sections, want 1", len(sections))
 	}
-	dec := columnPartImageDecoder{data: i.sectionBytes(sections[0])}
+	dictionaryBytes, err := i.dictionarySectionBytes(sections[0])
+	if err != nil {
+		return nil, err
+	}
+	dec := columnPartImageDecoder{data: dictionaryBytes}
 	count, err := dec.u32()
 	if err != nil {
 		return nil, err
@@ -2390,7 +2438,7 @@ func (i ColumnPartImage) rowLocatorSectionBytes(section ColumnPartImageSection) 
 	if err != nil {
 		return nil, err
 	}
-	return i.sectionBytesWithKnownRawLength(section, rawBytes, "row locators")
+	return i.sectionBytesWithKnownRawLength(section, rawBytes, maxCompressedRowLocatorSectionRawBytes, "row locators")
 }
 
 func rowLocatorSectionRawBytes(rows int) (int, error) {
@@ -2408,7 +2456,15 @@ func rowLocatorSectionRawBytes(rows int) (int, error) {
 	return payloadBytes, nil
 }
 
-func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageSection, rawBytes int, label string) ([]byte, error) {
+func (i ColumnPartImage) dictionarySectionBytes(section ColumnPartImageSection) ([]byte, error) {
+	rawBytes := section.RawBytes
+	if rawBytes == 0 && section.Compression == CompressionNone {
+		rawBytes = section.Length
+	}
+	return i.sectionBytesWithKnownRawLength(section, rawBytes, maxCompressedDictionarySectionRawBytes, "dictionaries")
+}
+
+func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageSection, rawBytes int, maxRawBytes int, label string) ([]byte, error) {
 	payload := i.sectionBytes(section)
 	switch section.Compression {
 	case CompressionNone:
@@ -2417,8 +2473,11 @@ func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageS
 		}
 		return payload, nil
 	case CompressionSnappy:
-		if rawBytes > maxCompressedRowLocatorSectionRawBytes {
-			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d exceeds max=%d", label, rawBytes, maxCompressedRowLocatorSectionRawBytes)
+		if rawBytes <= 0 {
+			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d is invalid", label, rawBytes)
+		}
+		if rawBytes > maxRawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d exceeds max=%d", label, rawBytes, maxRawBytes)
 		}
 		decodedLen, err := snappy.DecodedLen(payload)
 		if err != nil {
@@ -2436,8 +2495,11 @@ func (i ColumnPartImage) sectionBytesWithKnownRawLength(section ColumnPartImageS
 		}
 		return out, nil
 	case CompressionLZ4:
-		if rawBytes > maxCompressedRowLocatorSectionRawBytes {
-			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d exceeds max=%d", label, rawBytes, maxCompressedRowLocatorSectionRawBytes)
+		if rawBytes <= 0 {
+			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d is invalid", label, rawBytes)
+		}
+		if rawBytes > maxRawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d exceeds max=%d", label, rawBytes, maxRawBytes)
 		}
 		out := make([]byte, rawBytes)
 		n, err := lz4.UncompressBlock(payload, out)
@@ -2491,9 +2553,49 @@ func (i ColumnPartImage) validateForRead() error {
 
 func validateImageSectionCompression(section ColumnPartImageSection) error {
 	switch section.Kind {
-	case ColumnPartImageSectionColumnData, ColumnPartImageSectionRowLocators:
+	case ColumnPartImageSectionColumnData:
 		switch section.Compression {
 		case CompressionNone, CompressionSnappy, CompressionLZ4:
+			return nil
+		default:
+			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported", section.Kind, section.Compression)
+		}
+	case ColumnPartImageSectionRowLocators:
+		switch section.Compression {
+		case CompressionNone:
+			if section.RawBytes != 0 && section.RawBytes != section.Length {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d length=%d for uncompressed section", section.Kind, section.RawBytes, section.Length)
+			}
+			return nil
+		case CompressionSnappy, CompressionLZ4:
+			rawBytes, err := rowLocatorSectionRawBytes(section.Rows)
+			if err != nil {
+				return err
+			}
+			if section.RawBytes != rawBytes {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d want %d", section.Kind, section.RawBytes, rawBytes)
+			}
+			if section.RawBytes > maxCompressedRowLocatorSectionRawBytes {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d exceeds max=%d", section.Kind, section.RawBytes, maxCompressedRowLocatorSectionRawBytes)
+			}
+			return nil
+		default:
+			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported", section.Kind, section.Compression)
+		}
+	case ColumnPartImageSectionDictionaries:
+		switch section.Compression {
+		case CompressionNone:
+			if section.RawBytes != 0 && section.RawBytes != section.Length {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d length=%d for uncompressed section", section.Kind, section.RawBytes, section.Length)
+			}
+			return nil
+		case CompressionSnappy, CompressionLZ4:
+			if section.RawBytes <= 0 {
+				return fmt.Errorf("typedcolumn: section %s compressed raw bytes=%d is invalid", section.Kind, section.RawBytes)
+			}
+			if section.RawBytes > maxCompressedDictionarySectionRawBytes {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d exceeds max=%d", section.Kind, section.RawBytes, maxCompressedDictionarySectionRawBytes)
+			}
 			return nil
 		default:
 			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported", section.Kind, section.Compression)
@@ -2526,7 +2628,7 @@ func validateImageSectionBounds(section ColumnPartImageSection, manifestBytes in
 }
 
 func validateImageSectionCount(sectionCount uint32, manifestBytes int, decodedManifestBytes int) error {
-	const minSectionDirectoryEntryBytes = 56
+	const minSectionDirectoryEntryBytes = 64
 	remainingManifestBytes := manifestBytes - decodedManifestBytes
 	if remainingManifestBytes < 0 {
 		return fmt.Errorf("typedcolumn: decoded manifest bytes=%d exceed manifest bytes=%d", decodedManifestBytes, manifestBytes)

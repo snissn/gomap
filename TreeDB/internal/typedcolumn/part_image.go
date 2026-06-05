@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const columnPartImageVersion uint16 = 3
+const columnPartImageVersion uint16 = 4
 
 const columnPartImageMagic uint32 = 0x4d494354 // "TCIM", little-endian on disk.
 
@@ -85,6 +85,7 @@ type ColumnPartImageSection struct {
 	Blocks      int                            `json:"blocks,omitempty"`
 	Encoding    Encoding                       `json:"encoding,omitempty"`
 	Compression Compression                    `json:"compression,omitempty"`
+	RawBytes    int                            `json:"raw_bytes,omitempty"`
 }
 
 type ColumnPartImageSectionByteAccounting struct {
@@ -201,6 +202,8 @@ func (i ColumnPartImage) SectionByteAccounting() []ColumnPartImageSectionByteAcc
 			} else {
 				rawBytes = 0
 			}
+		} else if section.RawBytes > 0 {
+			rawBytes = section.RawBytes
 		}
 		out = append(out, ColumnPartImageSectionByteAccounting{
 			Kind:        section.Kind,
@@ -850,12 +853,11 @@ func (b *columnPartImageBuilder) addDictionarySection() error {
 			enc.str(entry.Value)
 		}
 	}
-	b.appendSection(ColumnPartImageSection{
+	return b.appendSectionWithOptionalCompression(ColumnPartImageSection{
 		Kind:     ColumnPartImageSectionDictionaries,
 		Category: ColumnPartImageCategoryDictionaries,
 		Name:     "part_dictionaries",
-	}, enc.bytes())
-	return nil
+	}, enc.bytes(), b.opts.SectionCompression)
 }
 
 func (b *columnPartImageBuilder) addColumnDataSections() error {
@@ -1076,6 +1078,9 @@ func (b *columnPartImageBuilder) refreshLayoutContractSection(sections []ColumnP
 
 func (b *columnPartImageBuilder) appendSection(section ColumnPartImageSection, data []byte) {
 	section.Length = len(data)
+	if section.RawBytes == 0 && (section.Compression == CompressionNone || section.Kind != ColumnPartImageSectionColumnData) {
+		section.RawBytes = len(data)
+	}
 	b.sections = append(b.sections, columnPartImageSectionData{
 		section: section,
 		data:    data,
@@ -1092,17 +1097,23 @@ func (b *columnPartImageBuilder) appendSectionWithOptionalCompression(section Co
 		return fmt.Errorf("typedcolumn: compress section %s/%s: %w", section.Kind, section.Name, err)
 	}
 	section.Compression = selection.Actual
+	section.RawBytes = len(data)
 	b.appendSection(section, selection.Payload)
 	return nil
 }
 
 func canCompressImageSection(section ColumnPartImageSection, rawBytes int, compression Compression) bool {
-	if section.Kind != ColumnPartImageSectionRowLocators {
-		return false
-	}
 	switch compression {
 	case CompressionSnappy, CompressionLZ4:
-		return rawBytes <= maxCompressedRowLocatorSectionRawBytes
+		if rawBytes > maxCompressedImageSectionRawBytes {
+			return false
+		}
+		switch section.Kind {
+		case ColumnPartImageSectionRowLocators, ColumnPartImageSectionDictionaries:
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}
@@ -1184,6 +1195,7 @@ func encodeColumnPartImageManifest(part *ColumnPart, sections []ColumnPartImageS
 		enc.i64(int64(section.Blocks))
 		enc.u16(uint16(section.Encoding))
 		enc.u16(uint16(section.Compression))
+		enc.u64(uint64(section.RawBytes))
 		enc.str(section.Name)
 		enc.str(section.Column)
 	}

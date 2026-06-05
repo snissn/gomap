@@ -19,15 +19,15 @@ func (b *GranuleBuilder) BuildFloat32(values []float32) (EncodedGranule, error) 
 	if b.cfg.Encoding != 0 && b.cfg.Encoding != EncodingRawFloat32 {
 		return EncodedGranule{}, fmt.Errorf("typedcolumn: float32 encoding=%s want %s", b.cfg.Encoding, EncodingRawFloat32)
 	}
-	if b.cfg.Compression != CompressionNone {
-		return EncodedGranule{}, fmt.Errorf("typedcolumn: float32 raw sections require compression=none, got %s", b.cfg.Compression)
+	if err := validateCompression(b.cfg.Compression); err != nil {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: unsupported float32 compression %s", b.cfg.Compression)
 	}
 	raw, err := encodeFloat32Payload(b.raw[:0], values)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingRawFloat32, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingRawFloat32, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -48,15 +48,15 @@ func (b *GranuleBuilder) BuildFloat64(values []float64) (EncodedGranule, error) 
 	if b.cfg.Encoding != 0 && b.cfg.Encoding != EncodingRawFloat64 {
 		return EncodedGranule{}, fmt.Errorf("typedcolumn: float64 encoding=%s want %s", b.cfg.Encoding, EncodingRawFloat64)
 	}
-	if b.cfg.Compression != CompressionNone {
-		return EncodedGranule{}, fmt.Errorf("typedcolumn: float64 raw sections require compression=none, got %s", b.cfg.Compression)
+	if err := validateCompression(b.cfg.Compression); err != nil {
+		return EncodedGranule{}, fmt.Errorf("typedcolumn: unsupported float64 compression %s", b.cfg.Compression)
 	}
 	raw, err := encodeFloat64Payload(b.raw[:0], values)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingRawFloat64, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingRawFloat64, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}

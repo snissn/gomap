@@ -1,6 +1,8 @@
 package typedcolumn
 
 import (
+	"encoding/binary"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -67,6 +69,52 @@ func TestUint32CodeSelectionParityShapes(t *testing.T) {
 			}
 			if gotRows := gotSelection.AppendRows(nil); !equalCodeRows(gotRows, wantRows) {
 				t.Fatalf("SelectUint32CodesIn rows=%v want %v shape=%+v", gotRows, wantRows, gotSelection.Shape())
+			}
+		})
+	}
+}
+
+func TestUint32CodePayloadUsesCompactWidths2300(t *testing.T) {
+	cases := []struct {
+		name        string
+		codes       []uint32
+		cardinality uint32
+		width       byte
+	}{
+		{name: "one_byte", codes: []uint32{0, 1, 2, 1, 0}, cardinality: 3, width: 1},
+		{name: "two_byte", codes: []uint32{0, 255, 256, 1}, cardinality: 257, width: 2},
+		{name: "four_byte", codes: []uint32{0, 65535, 65536, 2}, cardinality: 65537, width: 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := NewGranuleBuilder(Config{Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone})
+			granule, err := builder.BuildUint32Codes(tc.codes, tc.cardinality)
+			if err != nil {
+				t.Fatalf("BuildUint32Codes: %v", err)
+			}
+			if len(granule.Payload) == 0 || granule.Payload[0] != tc.width {
+				t.Fatalf("payload width=%v want %d payload=%v", granule.Payload[:min(len(granule.Payload), 4)], tc.width, granule.Payload[:min(len(granule.Payload), 8)])
+			}
+			var varint [binary.MaxVarintLen64]byte
+			cardinalityBytes := binary.PutUvarint(varint[:], uint64(tc.cardinality))
+			wantRaw := 1 + cardinalityBytes + len(tc.codes)*int(tc.width)
+			if granule.RawBytes != wantRaw || granule.StoredBytes != wantRaw || len(granule.Payload) != wantRaw {
+				t.Fatalf("raw/stored/payload=%d/%d/%d want %d", granule.RawBytes, granule.StoredBytes, len(granule.Payload), wantRaw)
+			}
+			var reader GranuleReader
+			got, err := reader.DecodeUint32Codes(granule)
+			if err != nil {
+				t.Fatalf("DecodeUint32Codes: %v", err)
+			}
+			if !slices.Equal(got, tc.codes) {
+				t.Fatalf("DecodeUint32Codes=%v want %v", got, tc.codes)
+			}
+			count, err := reader.CountUint32Code(granule, mustCodeSelection(NewAllRowSelection(len(tc.codes))), tc.codes[len(tc.codes)-1])
+			if err != nil {
+				t.Fatalf("CountUint32Code: %v", err)
+			}
+			if count == 0 {
+				t.Fatalf("CountUint32Code for present code returned 0")
 			}
 		})
 	}
