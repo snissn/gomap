@@ -32,37 +32,30 @@ var (
 )
 
 type LevelDBBatch struct {
-	db  *leveldb.DB
-	ops []levelDBBatchOp
+	db       *leveldb.DB
+	batch    leveldb.Batch
+	pointOps int
+	ranges   []levelDBRangeOp
 }
 
-type levelDBBatchOpKind uint8
-
-const (
-	levelDBBatchSet levelDBBatchOpKind = iota
-	levelDBBatchDelete
-	levelDBBatchDeleteRange
-)
-
-type levelDBBatchOp struct {
-	kind         levelDBBatchOpKind
-	key, value   []byte
+type levelDBRangeOp struct {
 	start, limit []byte
 }
 
 func (b *LevelDBBatch) Set(key, value []byte) error {
-	b.ops = append(b.ops, levelDBBatchOp{
-		kind:  levelDBBatchSet,
-		key:   append([]byte(nil), key...),
-		value: append([]byte(nil), value...),
-	})
+	if len(b.ranges) > 0 {
+		return errors.New("leveldb: mixing point writes with DeleteRange in one batch is unsupported")
+	}
+	b.batch.Put(key, value)
+	b.pointOps++
 	return nil
 }
 func (b *LevelDBBatch) Delete(key []byte) error {
-	b.ops = append(b.ops, levelDBBatchOp{
-		kind: levelDBBatchDelete,
-		key:  append([]byte(nil), key...),
-	})
+	if len(b.ranges) > 0 {
+		return errors.New("leveldb: mixing point deletes with DeleteRange in one batch is unsupported")
+	}
+	b.batch.Delete(key)
+	b.pointOps++
 	return nil
 }
 func cloneLevelDBRangeBound(bound []byte) []byte {
@@ -75,8 +68,10 @@ func cloneLevelDBRangeBound(bound []byte) []byte {
 }
 
 func (b *LevelDBBatch) DeleteRange(start, end []byte) error {
-	b.ops = append(b.ops, levelDBBatchOp{
-		kind:  levelDBBatchDeleteRange,
+	if b.pointOps > 0 {
+		return errors.New("leveldb: mixing DeleteRange with point operations in one batch is unsupported")
+	}
+	b.ranges = append(b.ranges, levelDBRangeOp{
 		start: cloneLevelDBRangeBound(start),
 		limit: cloneLevelDBRangeBound(end),
 	})
@@ -89,34 +84,26 @@ func (b *LevelDBBatch) CommitSync() error {
 	return b.commit(&opt.WriteOptions{Sync: true})
 }
 func (b *LevelDBBatch) Close() error {
-	b.ops = nil
+	b.batch.Reset()
+	b.pointOps = 0
+	b.ranges = nil
 	return nil
 }
 
 func (b *LevelDBBatch) commit(writeOpts *opt.WriteOptions) error {
-	var batch leveldb.Batch
-	localKeys := make(map[string][]byte)
-	rememberLocalKey := func(key []byte) {
-		localKeys[string(key)] = append([]byte(nil), key...)
+	if len(b.ranges) == 0 {
+		return b.db.Write(&b.batch, writeOpts)
 	}
-	for _, op := range b.ops {
-		switch op.kind {
-		case levelDBBatchSet:
-			batch.Put(op.key, op.value)
-			rememberLocalKey(op.key)
-		case levelDBBatchDelete:
-			batch.Delete(op.key)
-			rememberLocalKey(op.key)
-		case levelDBBatchDeleteRange:
-			if err := b.appendDeleteRangeOps(&batch, op.start, op.limit, localKeys); err != nil {
-				return err
-			}
+	var batch leveldb.Batch
+	for _, r := range b.ranges {
+		if err := b.appendDeleteRangeOps(&batch, r.start, r.limit); err != nil {
+			return err
 		}
 	}
 	return b.db.Write(&batch, writeOpts)
 }
 
-func (b *LevelDBBatch) appendDeleteRangeOps(batch *leveldb.Batch, start, end []byte, localKeys map[string][]byte) error {
+func (b *LevelDBBatch) appendDeleteRangeOps(batch *leveldb.Batch, start, end []byte) error {
 	var slice *util.Range
 	if start != nil || end != nil {
 		slice = &util.Range{Start: start, Limit: end}
@@ -129,22 +116,7 @@ func (b *LevelDBBatch) appendDeleteRangeOps(batch *leveldb.Batch, start, end []b
 	if err := it.Error(); err != nil {
 		return err
 	}
-	for _, key := range localKeys {
-		if levelDBKeyInRange(key, start, end) {
-			batch.Delete(key)
-		}
-	}
 	return nil
-}
-
-func levelDBKeyInRange(key, start, end []byte) bool {
-	if start != nil && bytes.Compare(key, start) < 0 {
-		return false
-	}
-	if end != nil && bytes.Compare(key, end) >= 0 {
-		return false
-	}
-	return true
 }
 
 type LevelDBIterator struct {

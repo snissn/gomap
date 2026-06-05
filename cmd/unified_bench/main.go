@@ -1342,9 +1342,7 @@ func benchprofJSONResults(results map[string]map[string]float64) map[string]map[
 			}
 			clean[dbName] = value
 		}
-		if len(clean) > 0 {
-			out[testName] = clean
-		}
+		out[testName] = clean
 	}
 	if len(out) == 0 {
 		return nil
@@ -2788,19 +2786,71 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 		return nil
 	}
-	runBatchDeleteRange := func(db kvstore.DB) (float64, error) {
-		batcher, ok := db.(kvstore.Batcher)
-		if !ok {
-			return math.NaN(), nil
-		}
+	type batchDeleteRangePrep struct {
+		checked   bool
+		supported bool
+		values    [][]byte
+	}
+	batchDeleteRangePreps := make(map[string]batchDeleteRangePrep)
+	probeBatchDeleteRange := func(batcher kvstore.Batcher) (bool, error) {
 		probeBatch, err := batcher.NewBatch()
 		if err != nil {
-			return 0, fmt.Errorf("batch_delete_range: new batch probe: %w", err)
+			return false, fmt.Errorf("batch_delete_range: new batch probe: %w", err)
 		}
-		_, ok = probeBatch.(kvstore.BatchRangeDeleter)
+		_, ok := probeBatch.(kvstore.BatchRangeDeleter)
 		if closeErr := probeBatch.Close(); closeErr != nil {
-			return 0, fmt.Errorf("batch_delete_range: close probe: %w", closeErr)
+			return false, fmt.Errorf("batch_delete_range: close probe: %w", closeErr)
 		}
+		return ok, nil
+	}
+	prepareBatchDeleteRange := func(db kvstore.DB) error {
+		name := db.Name()
+		if prep, ok := batchDeleteRangePreps[name]; ok && prep.checked {
+			return nil
+		}
+		prep := batchDeleteRangePrep{checked: true}
+		batcher, ok := db.(kvstore.Batcher)
+		if !ok {
+			batchDeleteRangePreps[name] = prep
+			return nil
+		}
+		supported, err := probeBatchDeleteRange(batcher)
+		if err != nil {
+			return err
+		}
+		prep.supported = supported
+		if !supported {
+			batchDeleteRangePreps[name] = prep
+			return nil
+		}
+		width := cfg.BatchDeleteRangeWidth
+		rangesPerBatch := cfg.BatchDeleteRangesPerBatch
+		if width <= 0 || rangesPerBatch <= 0 {
+			return fmt.Errorf("batch_delete_range requires positive width and ranges_per_batch (got width=%d ranges_per_batch=%d)", width, rangesPerBatch)
+		}
+		values, err := getWriteValuePool()
+		if err != nil {
+			return fmt.Errorf("batch_delete_range values: %w", err)
+		}
+		if err := loadBatchDeleteRangeKeys(db, batcher, values); err != nil {
+			return fmt.Errorf("batch_delete_range load: %w", err)
+		}
+		prep.values = values
+		batchDeleteRangePreps[name] = prep
+		return nil
+	}
+	runBatchDeleteRange := func(db kvstore.DB) (float64, error) {
+		prep, ok := batchDeleteRangePreps[db.Name()]
+		if !ok || !prep.checked {
+			if err := prepareBatchDeleteRange(db); err != nil {
+				return 0, err
+			}
+			prep = batchDeleteRangePreps[db.Name()]
+		}
+		if !prep.supported {
+			return math.NaN(), nil
+		}
+		batcher, ok := db.(kvstore.Batcher)
 		if !ok {
 			return math.NaN(), nil
 		}
@@ -2808,13 +2858,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		rangesPerBatch := cfg.BatchDeleteRangesPerBatch
 		if width <= 0 || rangesPerBatch <= 0 {
 			return 0, fmt.Errorf("batch_delete_range requires positive width and ranges_per_batch (got width=%d ranges_per_batch=%d)", width, rangesPerBatch)
-		}
-		values, err := getWriteValuePool()
-		if err != nil {
-			return 0, fmt.Errorf("batch_delete_range values: %w", err)
-		}
-		if err := loadBatchDeleteRangeKeys(db, batcher, values); err != nil {
-			return 0, fmt.Errorf("batch_delete_range load: %w", err)
 		}
 
 		rangeCount := (cfg.Keys + width - 1) / width
@@ -2885,6 +2928,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			validation = "passed"
 		}
 		if cfg.BatchDeleteRangeRefill {
+			values := prep.values
+			if len(values) == 0 {
+				var err error
+				values, err = getWriteValuePool()
+				if err != nil {
+					return 0, fmt.Errorf("batch_delete_range refill values: %w", err)
+				}
+			}
 			if err := loadBatchDeleteRangeKeys(db, batcher, values); err != nil {
 				return 0, fmt.Errorf("batch_delete_range refill: %w", err)
 			}
@@ -4529,6 +4580,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		for _, inst := range instances {
 			if err := guard.Checkpoint(); err != nil {
 				return BenchRun{}, err
+			}
+			if testName == "batch_delete_range" {
+				if err := prepareBatchDeleteRange(inst.Wrapper); err != nil {
+					return BenchRun{}, fmt.Errorf("prepare %s on %s: %w", testName, inst.Name, err)
+				}
 			}
 
 			var treeStatsBefore treeDBSelectedStats

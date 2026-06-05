@@ -367,6 +367,7 @@ type batchDeleteRangeMemoryDB struct {
 	deleteRangeCalls int
 	noopDeleteRange  bool
 	rangeDeleteMode  string
+	events           *[]string
 }
 
 type batchDeleteRangeMemoryBatch struct {
@@ -454,6 +455,9 @@ func (d *batchDeleteRangeMemoryDB) ReverseIterator(start, end []byte) (kvstore.I
 }
 
 func (b *batchDeleteRangeMemoryBatch) Set(key, value []byte) error {
+	if b.db.events != nil {
+		*b.db.events = append(*b.db.events, "set")
+	}
 	b.sets = append(b.sets, scanViewEntry{key: append([]byte(nil), key...), value: append([]byte(nil), value...)})
 	return nil
 }
@@ -465,6 +469,9 @@ func (b *batchDeleteRangeMemoryBatch) Delete(key []byte) error {
 
 func (b *batchDeleteRangeMemoryBatch) DeleteRange(start, end []byte) error {
 	b.db.deleteRangeCalls++
+	if b.db.events != nil {
+		*b.db.events = append(*b.db.events, "delete_range")
+	}
 	if b.db.noopDeleteRange {
 		return nil
 	}
@@ -1062,6 +1069,103 @@ func TestBatchDeleteRangeReportingVisibleInMarkdownAndJSON(t *testing.T) {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("json missing %q:\n%s", want, data)
 		}
+	}
+}
+
+func TestRunBenchmark_BatchDeleteRangeProfilesExcludePreload(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	var events []string
+	const dbName = "batch_delete_range_profile_excludes_preload"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("BatchDeleteRangeProfileExcludesPreload")
+		db.events = &events
+		return db, nil
+	})
+
+	profileTmpDir := t.TempDir()
+	newProfilePath := func(prefix string) (string, error) {
+		f, err := os.CreateTemp(profileTmpDir, prefix+"_*.pprof")
+		if err != nil {
+			return "", err
+		}
+		path := f.Name()
+		if err := f.Close(); err != nil {
+			_ = os.Remove(path)
+			return "", err
+		}
+		return path, nil
+	}
+	profileHooks := &benchmarkProfileHooks{
+		startCPUProfile: func(_ io.Writer) error {
+			events = append(events, "cpu_start")
+			return nil
+		},
+		stopCPUProfile: func() {
+			events = append(events, "cpu_stop")
+		},
+		writeAllocsSnapshotTemp: func(prefix string) (string, error) {
+			events = append(events, prefix)
+			return newProfilePath(prefix)
+		},
+		writeAllocsDeltaProfile: func(basePath, afterPath, outPath string) error {
+			events = append(events, "alloc_delta")
+			return nil
+		},
+	}
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+		CPUProfile:                filepath.Join(t.TempDir(), "cpu"),
+		AllocsProfile:             filepath.Join(t.TempDir(), "allocs"),
+		profileHooks:              profileHooks,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil || db.deleteRangeCalls == 0 {
+		t.Fatalf("expected DeleteRange calls, db=%v events=%v", db, events)
+	}
+
+	firstIndex := func(target string) int {
+		for i, event := range events {
+			if event == target {
+				return i
+			}
+		}
+		return -1
+	}
+	lastIndex := func(target string) int {
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i] == target {
+				return i
+			}
+		}
+		return -1
+	}
+	lastSet := lastIndex("set")
+	cpuStart := firstIndex("cpu_start")
+	allocBase := firstIndex("unified_bench_allocs_base")
+	firstDeleteRange := firstIndex("delete_range")
+	if lastSet < 0 || cpuStart < 0 || allocBase < 0 || firstDeleteRange < 0 {
+		t.Fatalf("missing expected events: %v", events)
+	}
+	if lastSet > cpuStart || lastSet > allocBase {
+		t.Fatalf("preload Set events should finish before profile starts/baselines, events=%v", events)
+	}
+	if firstDeleteRange < cpuStart || firstDeleteRange < allocBase {
+		t.Fatalf("DeleteRange should run after profile starts/baselines, events=%v", events)
 	}
 }
 
@@ -3009,6 +3113,9 @@ func TestWriteBenchprofArtifacts_OmitsNaNResultsForJSON(t *testing.T) {
 				"LevelDB":     500,
 				"Unsupported": math.NaN(),
 			},
+			"unsupported_only": {
+				"Unsupported": math.NaN(),
+			},
 		},
 	}
 	jsonPath := filepath.Join(dir, "benchprof_results.json")
@@ -3031,6 +3138,13 @@ func TestWriteBenchprofArtifacts_OmitsNaNResultsForJSON(t *testing.T) {
 	}
 	if _, ok := results["Unsupported"]; ok {
 		t.Fatalf("NaN unsupported result should be omitted from JSON: %s", data)
+	}
+	unsupportedOnly, ok := parsed.Runs[0].Results["unsupported_only"]
+	if !ok {
+		t.Fatalf("all-NaN test key should be preserved for profile parsing: %s", data)
+	}
+	if len(unsupportedOnly) != 0 {
+		t.Fatalf("all-NaN test should export an empty result map, got %#v", unsupportedOnly)
 	}
 }
 

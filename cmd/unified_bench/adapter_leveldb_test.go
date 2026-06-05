@@ -9,16 +9,8 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/opt"
 )
 
-func TestLevelDBBatchDeleteRangeMixedOpsOrderedSemantics(t *testing.T) {
-	db, err := NewLevelDB(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewLevelDB: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	if err := db.Set([]byte("k0"), []byte("committed")); err != nil {
-		t.Fatalf("seed committed key: %v", err)
-	}
+func newLevelDBBatchForTest(t *testing.T, db kvstore.DB) *LevelDBBatch {
+	t.Helper()
 	batcher, ok := db.(kvstore.Batcher)
 	if !ok {
 		t.Fatalf("LevelDB wrapper missing Batcher")
@@ -27,36 +19,93 @@ func TestLevelDBBatchDeleteRangeMixedOpsOrderedSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBatch: %v", err)
 	}
-	defer func() { _ = batch.Close() }()
-	deleter, ok := batch.(kvstore.BatchRangeDeleter)
+	lb, ok := batch.(*LevelDBBatch)
 	if !ok {
-		t.Fatalf("LevelDB batch missing BatchRangeDeleter")
+		_ = batch.Close()
+		t.Fatalf("NewBatch returned %T, want *LevelDBBatch", batch)
 	}
+	t.Cleanup(func() { _ = lb.Close() })
+	return lb
+}
 
-	if err := batch.Set([]byte("k1"), []byte("before-range")); err != nil {
-		t.Fatalf("batch set before range: %v", err)
+func TestLevelDBBatchPointOpsUseDirectBatchPath(t *testing.T) {
+	db, err := NewLevelDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLevelDB: %v", err)
 	}
-	if err := deleter.DeleteRange([]byte("k"), []byte("l")); err != nil {
-		t.Fatalf("DeleteRange: %v", err)
+	defer func() { _ = db.Close() }()
+
+	batch := newLevelDBBatchForTest(t, db)
+	if err := batch.Set([]byte("set"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
 	}
-	if err := batch.Set([]byte("k2"), []byte("after-range")); err != nil {
-		t.Fatalf("batch set after range: %v", err)
+	if err := batch.Delete([]byte("delete")); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(batch.ranges) != 0 {
+		t.Fatalf("point-only batch should not buffer range ops, got %+v", batch.ranges)
+	}
+	if got := batch.batch.Len(); got != 2 {
+		t.Fatalf("direct leveldb.Batch len=%d, want 2", got)
 	}
 	if err := batch.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
+	val, err := db.Get([]byte("set"))
+	if err != nil {
+		t.Fatalf("get set key: %v", err)
+	}
+	if string(val) != "value" {
+		t.Fatalf("set key value=%q want value", val)
+	}
+}
 
+func TestLevelDBBatchDeleteRangeRangeOnlyAndRejectsMixedOps(t *testing.T) {
+	db, err := NewLevelDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLevelDB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for _, key := range [][]byte{[]byte("k0"), []byte("k1"), []byte("z0")} {
+		if err := db.Set(key, []byte("committed")); err != nil {
+			t.Fatalf("seed %q: %v", key, err)
+		}
+	}
+
+	batch := newLevelDBBatchForTest(t, db)
+	if err := batch.DeleteRange([]byte("k"), []byte("l")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	if err := batch.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 	for _, key := range [][]byte{[]byte("k0"), []byte("k1")} {
 		if val, err := db.Get(key); !errors.Is(err, leveldb.ErrNotFound) {
 			t.Fatalf("%q should be deleted by range, got value=%q err=%v", key, val, err)
 		}
 	}
-	val, err := db.Get([]byte("k2"))
-	if err != nil {
-		t.Fatalf("k2 should survive after-range set: %v", err)
+	if val, err := db.Get([]byte("z0")); err != nil || string(val) != "committed" {
+		t.Fatalf("z0 should survive, value=%q err=%v", val, err)
 	}
-	if string(val) != "after-range" {
-		t.Fatalf("k2 value=%q want after-range", val)
+
+	pointThenRange := newLevelDBBatchForTest(t, db)
+	if err := pointThenRange.Set([]byte("m0"), []byte("point")); err != nil {
+		t.Fatalf("Set before mixed range: %v", err)
+	}
+	if err := pointThenRange.DeleteRange([]byte("m"), []byte("n")); err == nil {
+		t.Fatalf("DeleteRange after point op should fail closed")
+	}
+
+	rangeThenPoint := newLevelDBBatchForTest(t, db)
+	if err := rangeThenPoint.DeleteRange([]byte("m"), []byte("n")); err != nil {
+		t.Fatalf("range setup: %v", err)
+	}
+	if err := rangeThenPoint.Set([]byte("m0"), []byte("point")); err == nil {
+		t.Fatalf("Set after DeleteRange should fail closed")
+	}
+	if err := rangeThenPoint.Delete([]byte("m1")); err == nil {
+		t.Fatalf("Delete after DeleteRange should fail closed")
 	}
 }
 
