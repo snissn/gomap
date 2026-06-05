@@ -477,7 +477,7 @@ func TestAppendValueLog_AutoBalancedForcePointerHighEntropyPayloadUsesGroupedBlo
 	}
 }
 
-func TestAppendValueLog_AutoBalancedForcePointerDictSelectorOffUsesGroupedBlockFrame(t *testing.T) {
+func TestAppendValueLog_AutoBalancedValueLogDictSelectorOffUsesGroupedBlockFrame(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value.log")
 	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
@@ -501,7 +501,7 @@ func TestAppendValueLog_AutoBalancedForcePointerDictSelectorOffUsesGroupedBlockF
 		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
 		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
 		valueLogBlockTargetBytes: 4096,
-		forceValueLogPointers:    true,
+		valueLogThreshold:        page.DefaultInlineThreshold,
 		lanes: []lane{
 			{id: 0, vlog: writer, vlogCompressionSelector: selector},
 		},
@@ -536,7 +536,7 @@ func TestAppendValueLog_AutoBalancedForcePointerDictSelectorOffUsesGroupedBlockF
 		t.Fatalf("frame K=%d want grouped K=%d", header.K, len(records))
 	}
 	if header.Flags&valuelog.FrameFlagCompressed == 0 {
-		t.Fatalf("expected storage-first forced-pointer dict-available batch to store a block-compressed frame")
+		t.Fatalf("expected storage-first value-log dict-available batch to store a block-compressed frame")
 	}
 	if header.DictID != 0 {
 		t.Fatalf("expected selector-off remap to store block frame without dict id, got %d", header.DictID)
@@ -546,7 +546,7 @@ func TestAppendValueLog_AutoBalancedForcePointerDictSelectorOffUsesGroupedBlockF
 		t.Fatalf("expected block write-mode observation")
 	}
 	if writeSnap.Frames[vlogWriteOff] != 0 {
-		t.Fatalf("expected no raw/off write-mode observation for storage-first forced-pointer dict path")
+		t.Fatalf("expected no raw/off write-mode observation for storage-first value-log dict path")
 	}
 }
 
@@ -886,6 +886,7 @@ func TestAppendValueLogOne_AutoHoldOffSkipsDictSampling(t *testing.T) {
 		closeCh:                 make(chan struct{}),
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
 		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
+		valueLogThreshold:       1 << 20,
 		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
 		valueLogDictTrainer:     tr,
 		lanes: []lane{

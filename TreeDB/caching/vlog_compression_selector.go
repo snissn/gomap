@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type vlogCompressionMode uint8
@@ -1428,14 +1429,29 @@ func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec)
 	return configured
 }
 
-func (db *DB) storageFirstForcePointerAuto(unitPayloadBytes int) bool {
-	if db == nil || !db.forceValueLogPointers {
+func (db *DB) storageFirstValueLogAuto(unitPayloadBytes int) bool {
+	if db == nil {
 		return false
 	}
 	if unitPayloadBytes < forcePointerAutoBlockMinPayloadBytes {
 		return false
 	}
-	return normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput {
+		return false
+	}
+	if db.forceValueLogPointers {
+		return true
+	}
+	threshold := db.valueLogThreshold
+	if threshold <= 0 {
+		threshold = page.DefaultInlineThreshold
+	}
+	return unitPayloadBytes > threshold
+}
+
+func (db *DB) storageFirstMediumValueLogAuto(unitPayloadBytes int) bool {
+	return db.storageFirstValueLogAuto(unitPayloadBytes) &&
+		unitPayloadBytes < largePayloadBlockTargetMinPayloadBytes
 }
 
 func (db *DB) preferLeafPageBlockCodec(l *lane, unitPayloadBytes int, configured valuelog.BlockCodec) (valuelog.BlockCodec, bool) {
@@ -1576,8 +1592,8 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 		if unitPayloadBytes <= 0 {
 			unitPayloadBytes = rawPayloadBytes
 		}
-		if dictID == 0 && db.storageFirstForcePointerAuto(unitPayloadBytes) {
-			return vlogWriteBlock, db.valueLogBlockCodec, false
+		if dictID == 0 && db.storageFirstValueLogAuto(unitPayloadBytes) {
+			return vlogWriteBlock, chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec), false
 		}
 		if dictID == 0 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && unitPayloadBytes >= throughputAutoBlockMinPayloadBytes {
 			return vlogWriteBlock, db.valueLogBlockCodec, false
@@ -1595,7 +1611,7 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
 		chosenMode, chosenCodec, probe := l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes, unitPayloadBytes)
-		if chosenMode == vlogWriteOff && db.storageFirstForcePointerAuto(unitPayloadBytes) {
+		if chosenMode == vlogWriteOff && db.storageFirstValueLogAuto(unitPayloadBytes) {
 			return vlogWriteBlock, chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec), probe
 		}
 		return chosenMode, chosenCodec, probe
@@ -1752,7 +1768,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	// collapse K on fallback paths.
 	useSelectorRatio := compressionMode == vlogCompressionAuto && l != nil && l.vlogCompressionSelector != nil
 	stableFastPath := compressionMode == vlogCompressionAuto &&
-		((db.forceValueLogPointers && avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes) ||
+		(db.storageFirstMediumValueLogAuto(avgPayloadBytes) ||
 			(normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && avgPayloadBytes >= throughputAutoBlockMinPayloadBytes))
 	if useSelectorRatio && !stableFastPath {
 		ratio, ratioSamples = l.vlogCompressionSelector.blockObservedRatioWithSamples(codec)
@@ -1769,8 +1785,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 			targetCompressedBytes = leafLogBlockTargetCompressedBytes
 		}
 	}
-	if db.forceValueLogPointers &&
-		avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes &&
+	if db.storageFirstMediumValueLogAuto(avgPayloadBytes) &&
 		ratioSamples == 0 &&
 		ratio >= 0.98 {
 		// Retained-payload value-log streams are expected to be JSON-like in the
@@ -1785,10 +1800,8 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		// forms grouped frames; normal observed ratios take over after writes.
 		ratio = 0.50
 	}
-	if db.forceValueLogPointers && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
-		if avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
-			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
-		}
+	if db.storageFirstMediumValueLogAuto(avgPayloadBytes) && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
+		targetCompressedBytes = forcePointerBlockTargetCompressedBytes
 	}
 	if avgPayloadBytes >= largePayloadBlockTargetMinPayloadBytes {
 		largePayloadTargetBytes := valuelog.NormalizeBlockTargetCompressedBytes(avgPayloadBytes * largePayloadBlockTargetMultiplier)

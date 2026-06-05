@@ -1063,12 +1063,12 @@ func TestResolveVlogWriteMode_ForcePointersLargeBypassesSelectorToConfiguredBloc
 	}
 }
 
-func TestResolveVlogWriteMode_StorageFirstForcePointersWithDictCannotSelectOff(t *testing.T) {
+func TestResolveVlogWriteMode_StorageFirstValueLogWithDictCannotSelectOff(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
 		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
 		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
-		forceValueLogPointers:   true,
+		valueLogThreshold:       page.DefaultInlineThreshold,
 	}
 	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
 	s.dwellBytes = 0
@@ -1081,18 +1081,19 @@ func TestResolveVlogWriteMode_StorageFirstForcePointersWithDictCannotSelectOff(t
 	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
 	l := &lane{vlogCompressionSelector: s}
 
-	mode, codec, probe := db.resolveVlogWriteMode(l, 7, forcePointerAutoBlockMinPayloadBytes*4, forcePointerAutoBlockMinPayloadBytes, false)
+	unitPayloadBytes := forcePointerAutoBlockMinPayloadBytes + 128
+	mode, codec, probe := db.resolveVlogWriteMode(l, 7, unitPayloadBytes*4, unitPayloadBytes, false)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
-		t.Fatalf("expected storage-first forced pointers to remap selector off to block, got mode=%v codec=%v probe=%t", mode, codec, probe)
+		t.Fatalf("expected storage-first value-log payload to remap selector off to block, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
 }
 
-func TestResolveVlogWriteMode_ThroughputForcePointersWithDictCanSelectOff(t *testing.T) {
+func TestResolveVlogWriteMode_ThroughputValueLogWithDictCanSelectOff(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
 		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
 		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
-		forceValueLogPointers:   true,
+		valueLogThreshold:       page.DefaultInlineThreshold,
 	}
 	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
 	s.dwellBytes = 0
@@ -1105,9 +1106,10 @@ func TestResolveVlogWriteMode_ThroughputForcePointersWithDictCanSelectOff(t *tes
 	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.2, samples: 16}
 	l := &lane{vlogCompressionSelector: s}
 
-	mode, _, probe := db.resolveVlogWriteMode(l, 7, forcePointerAutoBlockMinPayloadBytes*4, forcePointerAutoBlockMinPayloadBytes, false)
+	unitPayloadBytes := forcePointerAutoBlockMinPayloadBytes + 128
+	mode, _, probe := db.resolveVlogWriteMode(l, 7, unitPayloadBytes*4, unitPayloadBytes, false)
 	if mode != vlogWriteOff || probe {
-		t.Fatalf("expected throughput forced pointers to keep selector off, got mode=%v probe=%t", mode, probe)
+		t.Fatalf("expected throughput value-log payload to keep selector off, got mode=%v probe=%t", mode, probe)
 	}
 }
 
