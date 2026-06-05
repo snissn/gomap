@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -88,6 +89,121 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	}
 	if res.IndexStatsLoaded.LiveDocs != 128 {
 		t.Fatalf("loaded live docs=%d want 128", res.IndexStatsLoaded.LiveDocs)
+	}
+}
+
+func TestExecuteColumnGraphSearchProfileDirWritesProfiles(t *testing.T) {
+	profileDir := t.TempDir()
+	oldMemProfileRate := runtime.MemProfileRate
+	res, err := execute(context.Background(), config{
+		dir:                       t.TempDir(),
+		keepDir:                   true,
+		docs:                      64,
+		dimensions:                8,
+		queries:                   4,
+		searchConcurrency:         []int{2},
+		validateQueries:           0,
+		validateDocs:              0,
+		topK:                      3,
+		batchSize:                 16,
+		m:                         4,
+		efConstruction:            32,
+		efSearch:                  32,
+		valuePointerThreshold:     defaultValuePointerThreshold,
+		leafGenerationTarget:      defaultLeafGenerationTarget,
+		minRecall:                 0,
+		disableExactFallback:      true,
+		vectorIndexStrategy:       collections.VectorIndexStrategyColumnGraph,
+		vectorQueryMode:           collections.VectorIndexQueryModeQuantizedRerank,
+		quantizedIndexName:        defaultQuantizedIndexName,
+		quantizedRerankCandidates: 4,
+		searchProfileDir:          profileDir,
+	})
+	if err != nil {
+		t.Fatalf("execute with search profile dir: %v", err)
+	}
+	if runtime.MemProfileRate != oldMemProfileRate {
+		t.Fatalf("MemProfileRate=%d want restored %d", runtime.MemProfileRate, oldMemProfileRate)
+	}
+	if res.SearchProfileDir != profileDir {
+		t.Fatalf("search profile dir=%q want %q", res.SearchProfileDir, profileDir)
+	}
+	if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].Concurrency != 1 || res.SearchBenchmarks[1].Concurrency != 2 {
+		t.Fatalf("unexpected search benchmarks: %+v", res.SearchBenchmarks)
+	}
+	for _, concurrency := range []int{1, 2} {
+		for _, kind := range []string{"cpu", "heap", "allocs", "block", "mutex"} {
+			path := filepath.Join(profileDir, fmt.Sprintf("search_quantized_rerank_c%d_%s.pprof", concurrency, kind))
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat profile %s: %v", path, err)
+			}
+			if info.Size() == 0 {
+				t.Fatalf("profile %s is empty", path)
+			}
+		}
+	}
+}
+
+func TestExecuteMatrixSearchProfileDirUsesCaseSubdirectories(t *testing.T) {
+	profileDir := t.TempDir()
+	res, err := executeMatrix(context.Background(), config{
+		docs:                  48,
+		dimensions:            8,
+		queries:               2,
+		searchConcurrency:     []int{2},
+		validateQueries:       0,
+		validateDocs:          0,
+		topK:                  3,
+		batchSize:             16,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0,
+		disableExactFallback:  true,
+		vectorIndexStrategy:   collections.VectorIndexStrategyColumnGraph,
+		searchProfileDir:      filepath.Join(profileDir, "."),
+	})
+	if err != nil {
+		t.Fatalf("executeMatrix with search profile dir: %v", err)
+	}
+	if res.SearchProfileDir != profileDir {
+		t.Fatalf("matrix search profile dir=%q want %q", res.SearchProfileDir, profileDir)
+	}
+	if len(res.Cases) != 3 {
+		t.Fatalf("matrix cases=%d want 3", len(res.Cases))
+	}
+	for _, testCase := range res.Cases {
+		caseProfileDir := filepath.Join(profileDir, testCase.Name)
+		if testCase.Result.SearchProfileDir != caseProfileDir {
+			t.Fatalf("case %s profile dir=%q want %q", testCase.Name, testCase.Result.SearchProfileDir, caseProfileDir)
+		}
+		for _, concurrency := range []int{1, 2} {
+			for _, kind := range []string{"cpu", "heap", "allocs", "block", "mutex"} {
+				path := filepath.Join(caseProfileDir, fmt.Sprintf("search_exact_c%d_%s.pprof", concurrency, kind))
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatalf("stat profile %s: %v", path, err)
+				}
+				if info.Size() == 0 {
+					t.Fatalf("profile %s is empty", path)
+				}
+			}
+		}
+	}
+	entries, err := os.ReadDir(profileDir)
+	if err != nil {
+		t.Fatalf("read profile dir: %v", err)
+	}
+	if len(entries) != len(res.Cases) {
+		t.Fatalf("profile dir entries=%d want %d case directories", len(entries), len(res.Cases))
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			t.Fatalf("profile root entry %s is not a directory", entry.Name())
+		}
 	}
 }
 
@@ -604,6 +720,16 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 	if defaultCfg.validationExactSource != validationExactSourceTreeDB {
 		t.Fatalf("default validation exact source=%q want treedb", defaultCfg.validationExactSource)
 	}
+	profileCfg, err := parseConfig([]string{
+		"-vector-index-strategy", "column_graph",
+		"-search-profile-dir", filepath.Join("tmp", ".", "profiles"),
+	})
+	if err != nil {
+		t.Fatalf("parseConfig search profile dir: %v", err)
+	}
+	if profileCfg.searchProfileDir != filepath.Join("tmp", "profiles") {
+		t.Fatalf("search profile dir=%q want tmp/profiles", profileCfg.searchProfileDir)
+	}
 
 	for _, tc := range []struct {
 		name string
@@ -619,6 +745,11 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 			name: "invalid validation source",
 			args: []string{"-validation-exact-source", "pgvector"},
 			want: "unsupported -validation-exact-source",
+		},
+		{
+			name: "search profile dir requires column graph",
+			args: []string{"-search-profile-dir", filepath.Join("tmp", "profiles")},
+			want: "requires -vector-index-strategy column_graph",
 		},
 		{
 			name: "dataset validation source requires dataset dir",
