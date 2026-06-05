@@ -135,6 +135,67 @@ class StorageAuditTest(unittest.TestCase):
             ],
         )
 
+    def test_retained_status_enrichment_accepts_audit_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / "result.json"
+            result.write_text(json.dumps({"collection": "events"}))
+            status = audit.retained_status_summary(result)
+        self.assertTrue(status["retained_payload_encoding_status_missing"])
+        self.assertTrue(status["retained_payload_compression_status_missing"])
+
+        enriched = audit.enrich_retained_status_from_audit(
+            status,
+            {
+                "status": "passed",
+                "retained_payload_encoding": "template-v1",
+                "retained_payload_encoding_status": "active_template_v1_non_column_retained_payload",
+                "retained_payload_compression": "value_log_grouped_frame",
+                "retained_payload_compression_policy": "default_value_log_auto_storage_first",
+                "retained_payload_compression_status": "active_value_log_auto_grouped_frame_non_column_retained_payload",
+            },
+        )
+        self.assertFalse(enriched["retained_payload_encoding_status_missing"])
+        self.assertFalse(enriched["retained_payload_encoding_inactive"])
+        self.assertFalse(enriched["retained_payload_compression_status_missing"])
+        self.assertFalse(enriched["retained_payload_compression_inactive"])
+        self.assertEqual(enriched["retained_payload_status_source"], "retained_payload_audit")
+
+    def test_retained_payload_audit_command_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "fake_retained_audit.py"
+            script.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "print(json.dumps({"
+                "'status':'passed',"
+                "'collection':'events',"
+                "'checked_rows':2,"
+                "'retained_payload_bytes':123,"
+                "'retained_payload_encoding':'template-v1',"
+                "'retained_payload_encoding_status':'active_template_v1_non_column_retained_payload',"
+                "'retained_payload_compression':'value_log_grouped_frame',"
+                "'retained_payload_compression_policy':'default_value_log_auto_storage_first',"
+                "'retained_payload_compression_status':'active_value_log_auto_grouped_frame_non_column_retained_payload'"
+                "}))\n"
+            )
+            script.chmod(0o755)
+            args = type(
+                "Args",
+                (),
+                {
+                    "db_dir": str(Path(tmp) / "db"),
+                    "retained_payload_audit_cmd": str(script),
+                    "retained_payload_audit_limit": 0,
+                    "skip_retained_payload_audit": False,
+                },
+            )()
+            retained = audit.run_retained_payload_audit(args, {"collection": "events"}, {})
+
+        self.assertEqual(retained["status"], "passed")
+        self.assertTrue(retained["required_for_final_claim"])
+        self.assertEqual(retained["checked_rows"], 2)
+        self.assertIn("-paths", retained["command"])
+
     def test_resolve_main_dir_accepts_maindb(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             main = Path(tmp) / "maindb"

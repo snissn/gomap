@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Emit non-mutating TreeDB JSONBench storage compression audits.
 
-The audit is intentionally filesystem/frame-level. It does not mutate the DB,
-does not run compaction, and does not exclude durable TreeDB storage from the
-reported size basis. Command WAL remains a separate subtree so downstream
-reports can keep using durable bytes excluding only command WAL.
+The filesystem/frame-level checks do not mutate the DB, do not run compaction,
+and do not exclude durable TreeDB storage from the reported size basis. When a
+JSONBench result identifies a collection, the audit also runs a read-only
+retained-payload path check through TreeDB's collection decoder. Command WAL
+remains a separate subtree so downstream reports can keep using durable bytes
+excluding only command WAL.
 """
 
 from __future__ import annotations
@@ -13,7 +15,9 @@ import argparse
 import gzip
 import json
 import os
+import shlex
 import struct
+import subprocess
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -24,6 +28,13 @@ RECORD_HEADER_SIZE = 20
 FRAME_HEADER_SIZE = 12
 RECORD_FLAG_GROUPED = 1 << 0
 FRAME_FLAG_COMPRESSED = 1 << 0
+JSONBENCH_DECLARED_PATHS = [
+    "time_us",
+    "kind",
+    "did",
+    "commit.operation",
+    "commit.collection",
+]
 
 
 def resolve_main_dir(db_dir: Path) -> Path:
@@ -455,20 +466,145 @@ def retained_status_summary(result_json: Path | None, data: Any | None = None) -
     }
 
 
+def enrich_retained_status_from_audit(status: dict[str, Any], retained_audit: dict[str, Any]) -> dict[str, Any]:
+    if not retained_audit:
+        return status
+
+    def append_field(bucket: str, name: str) -> Any:
+        value = retained_audit.get(name)
+        if value is None:
+            return None
+        status.setdefault(bucket, []).append({"path": f"retained_payload_audit.{name}", "value": value})
+        return value
+
+    encoding = append_field("retained_payload_encoding_fields", "retained_payload_encoding")
+    encoding_status = append_field("retained_payload_encoding_status_fields", "retained_payload_encoding_status")
+    compression = append_field("retained_payload_compression_fields", "retained_payload_compression")
+    compression_policy = append_field("retained_payload_compression_fields", "retained_payload_compression_policy")
+    compression_status = append_field("retained_payload_compression_status_fields", "retained_payload_compression_status")
+
+    if encoding is not None and encoding_status is not None:
+        status["retained_payload_encoding_status_missing"] = False
+        status["retained_payload_encoding_inactive"] = retained_status_value_inactive(encoding) or retained_status_value_inactive(encoding_status)
+    if compression is not None and compression_policy is not None and compression_status is not None:
+        status["retained_payload_compression_status_missing"] = False
+        status["retained_payload_compression_inactive"] = (
+            retained_status_value_inactive(compression)
+            or retained_status_value_inactive(compression_policy)
+            or retained_status_value_inactive(compression_status)
+        )
+    if (
+        not status.get("retained_payload_encoding_status_missing")
+        and not status.get("retained_payload_encoding_inactive")
+        and not status.get("retained_payload_compression_status_missing")
+        and not status.get("retained_payload_compression_inactive")
+    ):
+        status["retained_payload_status_source"] = "retained_payload_audit"
+    return status
+
+
+def result_collection_name(data: Any | None) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    for key in ("collection", "collection_name"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for key in ("collection", "collection_name"):
+        for field in fields_named(data, {key}):
+            value = field.get("value")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
 def retained_payload_audit_stub(status: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "not_available_from_filesystem_audit",
         "required_for_final_claim": True,
         "reason": "path-aware retained-payload audit must decode retained rows and verify declared JSON paths are absent while reconstruction hash passes",
-        "declared_paths": [
-            "time_us",
-            "kind",
-            "did",
-            "commit.operation",
-            "commit.collection",
-        ],
+        "declared_paths": JSONBENCH_DECLARED_PATHS,
         "report_status": status,
     }
+
+
+def run_retained_payload_audit(args: argparse.Namespace, result_data: Any | None, retained_status: dict[str, Any]) -> dict[str, Any]:
+    if getattr(args, "skip_retained_payload_audit", False):
+        retained = retained_payload_audit_stub(retained_status)
+        retained["reason"] = "retained payload audit was explicitly skipped"
+        return retained
+    collection = result_collection_name(result_data)
+    if collection is None:
+        retained = retained_payload_audit_stub(retained_status)
+        retained["reason"] = "no collection name found in result.json; retained payload audit command was not run"
+        return retained
+
+    paths = JSONBENCH_DECLARED_PATHS
+    audit_cmd = getattr(args, "retained_payload_audit_cmd", None)
+    if audit_cmd:
+        command = shlex.split(audit_cmd)
+        cwd = None
+    else:
+        repo_root = Path(__file__).resolve().parent.parent
+        command = ["go", "run", "./cmd/treedb_retained_payload_audit"]
+        cwd = str(repo_root)
+    command.extend(
+        [
+            "-db-dir",
+            str(Path(args.db_dir).expanduser().resolve()),
+            "-collection",
+            collection,
+            "-paths",
+            ",".join(paths),
+        ]
+    )
+    limit = int(getattr(args, "retained_payload_audit_limit", 0) or 0)
+    if limit > 0:
+        command.extend(["-max-documents", str(limit)])
+
+    try:
+        completed = subprocess.run(command, cwd=cwd, check=False, text=True, capture_output=True)
+    except Exception as exc:  # pragma: no cover - defensive CLI failure path.
+        return {
+            "status": "failed",
+            "required_for_final_claim": True,
+            "reason": "retained payload audit command failed before producing JSON",
+            "declared_paths": paths,
+            "collection": collection,
+            "command": command,
+            "errors": [str(exc)],
+            "report_status": retained_status,
+        }
+
+    try:
+        retained = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {
+            "status": "failed",
+            "required_for_final_claim": True,
+            "reason": "retained payload audit command did not produce JSON",
+            "declared_paths": paths,
+            "collection": collection,
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-4000:],
+            "stderr": completed.stderr[-4000:],
+            "report_status": retained_status,
+        }
+    if not isinstance(retained, dict):
+        retained = {"status": "failed", "errors": ["retained payload audit JSON was not an object"]}
+    retained.setdefault("status", "failed" if completed.returncode else "passed")
+    retained.setdefault("collection", collection)
+    retained.setdefault("declared_paths", paths)
+    retained["required_for_final_claim"] = True
+    retained["command"] = command
+    retained["returncode"] = completed.returncode
+    if completed.stderr:
+        retained["stderr"] = completed.stderr[-4000:]
+    if completed.returncode != 0:
+        retained.setdefault("reason", "retained payload audit command returned non-zero")
+    retained["report_status"] = retained_status
+    return retained
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -542,7 +678,10 @@ def write_md(path: Path, report: dict[str, Any]) -> None:
             "",
             f"- status: `{retained['status']}`",
             f"- final claim requires path-aware retained payload audit: `{retained['required_for_final_claim']}`",
-            f"- reason: {retained['reason']}",
+            f"- reason: {retained.get('reason', 'n/a')}",
+            f"- checked rows: `{retained.get('checked_rows', 'n/a')}`",
+            f"- retained payload bytes: `{retained.get('retained_payload_bytes', 'n/a')}`",
+            f"- declared paths: `{', '.join(retained.get('declared_paths', []))}`",
             f"- retained encoding status missing: `{retained_status['retained_payload_encoding_status_missing']}`",
             f"- retained encoding inactive: `{retained_status['retained_payload_encoding_inactive']}`",
             f"- retained compression status missing: `{retained_status['retained_payload_compression_status_missing']}`",
@@ -557,6 +696,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     result_json = Path(args.result_json).expanduser().resolve() if args.result_json else None
     result_data = load_result_json(result_json) if result_json else None
     retained_status = retained_status_summary(result_json, result_data)
+    retained_audit = run_retained_payload_audit(args, result_data, retained_status)
+    retained_status = enrich_retained_status_from_audit(retained_status, retained_audit)
+    retained_audit["report_status"] = retained_status
     return {
         "schema": "treedb_jsonbench_storage_audit_v1",
         "db_dir": str(Path(args.db_dir).expanduser().resolve()),
@@ -566,7 +708,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "vlog_frame_audit": vlog_frame_audit(main_dir),
         "column_section_audit": column_section_audit(main_dir, args.gzip_level),
         "retained_payload_status_audit": retained_status,
-        "retained_payload_audit": retained_payload_audit_stub(retained_status),
+        "retained_payload_audit": retained_audit,
         "result_compression_summary": load_result_compression_summary(result_json, result_data),
     }
 
@@ -578,6 +720,9 @@ def main() -> int:
     parser.add_argument("--out-dir", help="Directory for audit JSON/Markdown artifacts")
     parser.add_argument("--gzip-level", type=int, default=6)
     parser.add_argument("--json-only", action="store_true", help="Print combined JSON to stdout")
+    parser.add_argument("--retained-payload-audit-cmd", help="Command used to run the retained-payload audit; defaults to go run ./cmd/treedb_retained_payload_audit")
+    parser.add_argument("--retained-payload-audit-limit", type=int, default=0, help="Maximum retained rows to audit; zero audits all rows")
+    parser.add_argument("--skip-retained-payload-audit", action="store_true", help="Skip the path-aware retained-payload audit")
     args = parser.parse_args()
 
     report = build_report(args)
