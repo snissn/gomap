@@ -95,10 +95,12 @@ reranked, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
 })
 ```
 
-`quantized_only` returns estimated scalar_u8 scores and should show zero exact
-vector/norm reads in stats. `quantized_rerank` keeps quantized traversal over the
-normalized `ef_search` pool, trims to `QuantizedRerankCandidates`, exact-reranks
-that shortlist, and returns exact cosine scores. See
+`quantized_only` returns estimated scalar_u8 scores and should report
+`search_route_quantized_only=1`, `quantized_scorer_active=1`, and zero exact
+vector/norm reads in stats. `quantized_rerank` reports
+`search_route_quantized_rerank=1`, keeps quantized traversal over the normalized
+`ef_search` pool, trims to `QuantizedRerankCandidates`, exact-reranks that
+shortlist, and returns exact cosine scores. See
 [`quantized-vector-index.md`](../spec/quantized-vector-index.md) for benchmark
 commands and current no-speedup caveats.
 

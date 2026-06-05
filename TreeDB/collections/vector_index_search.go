@@ -163,6 +163,30 @@ type VectorIndexSearchStats struct {
 	QuantizedRerankCandidates uint64 `json:"quantized_rerank_candidates,omitempty"`
 	// QuantizedRerankExactScoreCalls counts exact float32/norm score calls used by quantized_rerank.
 	QuantizedRerankExactScoreCalls uint64 `json:"quantized_rerank_exact_score_calls,omitempty"`
+	// QuantizedScorerActive reports that a validated quantized scorer served this search.
+	QuantizedScorerActive uint64 `json:"quantized_scorer_active,omitempty"`
+	// QuantizedAssetMissing reports that the selected quantized score-plane asset was absent.
+	QuantizedAssetMissing uint64 `json:"quantized_asset_missing,omitempty"`
+	// QuantizedAssetInvalid reports that the selected quantized score-plane asset failed validation or decode.
+	QuantizedAssetInvalid uint64 `json:"quantized_asset_invalid,omitempty"`
+	// QuantizedAssetStale reports that the selected quantized score-plane asset did not match the current graph/index identity.
+	QuantizedAssetStale uint64 `json:"quantized_asset_stale,omitempty"`
+	// QuantizedAssetClosed reports that the selected quantized score-plane asset was closed before use.
+	QuantizedAssetClosed uint64 `json:"quantized_asset_closed,omitempty"`
+	// QuantizedAssetUnavailable aggregates missing, invalid, stale, or closed quantized score-plane asset failures.
+	QuantizedAssetUnavailable uint64 `json:"quantized_asset_unavailable,omitempty"`
+	// QuantizedAssetMmapDirect reports searches with a validated direct mmap quantized score-plane asset bound to the searcher.
+	QuantizedAssetMmapDirect uint64 `json:"quantized_asset_mmap_direct,omitempty"`
+	// QuantizedAssetHeapCopy reports searches with a validated heap-copy quantized score-plane asset bound to the searcher.
+	QuantizedAssetHeapCopy uint64 `json:"quantized_asset_heap_copy,omitempty"`
+	// QuantizedAssetOpenNanos reports open/prepare time for the selected quantized score-plane asset.
+	QuantizedAssetOpenNanos uint64 `json:"quantized_asset_open_nanos,omitempty"`
+	// QuantizedAssetMappedBytes is the mapped byte total backing the selected quantized score-plane asset.
+	QuantizedAssetMappedBytes uint64 `json:"quantized_asset_mapped_bytes,omitempty"`
+	// QuantizedAssetHeapCopyBytes is the heap-copy byte total backing the selected quantized score-plane asset.
+	QuantizedAssetHeapCopyBytes uint64 `json:"quantized_asset_heap_copy_bytes,omitempty"`
+	// QuantizedAssetActiveHandles is the current active mappedresource handle count for the selected quantized score-plane asset.
+	QuantizedAssetActiveHandles int64 `json:"quantized_asset_active_handles,omitempty"`
 	// ScoreFloat64Fallbacks counts rare dot-product retries using float64 after a non-finite float32 dot.
 	ScoreFloat64Fallbacks uint64 `json:"score_float64_fallbacks,omitempty"`
 	// ExpansionFetches is the per-search count of adjacency row fetches for expanded nodes.
@@ -405,6 +429,10 @@ type VectorIndexSearchStats struct {
 	SearchRouteColumnGraphFallback uint64 `json:"search_route_column_graph_fallback,omitempty"`
 	// SearchRouteHNSWSearchPack reports that this search used the future hnsw_search_pack_v1 route.
 	SearchRouteHNSWSearchPack uint64 `json:"search_route_hnsw_search_pack,omitempty"`
+	// SearchRouteQuantizedOnly reports that this search used the codec-generic quantized-only route.
+	SearchRouteQuantizedOnly uint64 `json:"search_route_quantized_only,omitempty"`
+	// SearchRouteQuantizedRerank reports that this search used the codec-generic quantized-rerank route.
+	SearchRouteQuantizedRerank uint64 `json:"search_route_quantized_rerank,omitempty"`
 	// HNSWSearchPackActive reports that a validated hnsw_search_pack_v1 served this search.
 	HNSWSearchPackActive uint64 `json:"hnsw_search_pack_active,omitempty"`
 	// HNSWSearchPackMissing reports that no hnsw_search_pack_v1 was available for this searcher.
@@ -652,11 +680,36 @@ func vectorIndexSearchRouteStatsForHNSWSearchPackFastStatus(cached vectorIndexSe
 	return stats
 }
 
+func vectorIndexSearchRouteStatsForColumnGraphQuantized(cached vectorIndexSearchRouteStats) vectorIndexSearchRouteStats {
+	stats := cached
+	stats.SearchRouteHNSWSearchPack = 0
+	stats.clearHNSWSearchPackCounters()
+	if stats.SearchRouteColumnGraphPrepared == 0 && stats.SearchRouteColumnGraphFallback == 0 {
+		stats.SearchRouteColumnGraphFallback = 1
+	}
+	return stats
+}
+
+func vectorIndexSearchRouteStatsForQueryMode(cached vectorIndexSearchRouteStats, queryMode columnVectorGraphNativeSearchQueryMode) vectorIndexSearchRouteStats {
+	if queryMode.quantized() {
+		return vectorIndexSearchRouteStatsForColumnGraphQuantized(cached)
+	}
+	return cached
+}
+
 func (r *vectorIndexSearchRouteStats) clearHNSWSearchPackAvailability() {
 	if r == nil {
 		return
 	}
 	openNanos := r.HNSWSearchPackOpenNanos
+	r.clearHNSWSearchPackCounters()
+	r.HNSWSearchPackOpenNanos = openNanos
+}
+
+func (r *vectorIndexSearchRouteStats) clearHNSWSearchPackCounters() {
+	if r == nil {
+		return
+	}
 	r.HNSWSearchPackActive = 0
 	r.HNSWSearchPackMissing = 0
 	r.HNSWSearchPackInvalid = 0
@@ -665,7 +718,7 @@ func (r *vectorIndexSearchRouteStats) clearHNSWSearchPackAvailability() {
 	r.HNSWSearchPackFallbacks = 0
 	r.HNSWSearchPackMmapDirect = 0
 	r.HNSWSearchPackHeapCopy = 0
-	r.HNSWSearchPackOpenNanos = openNanos
+	r.HNSWSearchPackOpenNanos = 0
 	r.HNSWSearchPackMappedBytes = 0
 	r.HNSWSearchPackHeapCopyBytes = 0
 	r.HNSWSearchPackActiveHandles = 0
@@ -673,6 +726,9 @@ func (r *vectorIndexSearchRouteStats) clearHNSWSearchPackAvailability() {
 
 func (s *VectorIndexSearcher) hnswSearchPackSearchWithBufferRoute(queryMode columnVectorGraphNativeSearchQueryMode, statsMode columnVectorGraphNativeSearchStatsMode) (*columnHNSWSearchPackPreparedView, vectorIndexSearchRouteStats, bool) {
 	cached := s.routeStats
+	if queryMode.quantized() {
+		return nil, vectorIndexSearchRouteStatsForColumnGraphQuantized(cached), false
+	}
 	reader := s.reader
 	pack := (*columnHNSWSearchPackPreparedView)(nil)
 	status := columnHNSWSearchPackPreparedStatusMissing
@@ -1168,7 +1224,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	s.readerLast = readerStatsAfter
 	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
-	s.routeStats.apply(&response.Stats)
+	vectorIndexSearchRouteStatsForQueryMode(s.routeStats, queryMode).apply(&response.Stats)
 	if err != nil {
 		return response, err
 	}
@@ -1275,11 +1331,14 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 // per worker. IncludeDocuments is not supported by this reusable no-document
 // path.
 //
-// The high-QPS public contract for this path is exact/zero QueryMode with no
-// document projection and no document materialization. Healthy current-format
-// evidence should show hnsw_search_pack_v1 active and selected, zero document
-// fetches, zero graph-row fallback, zero typed-column vector fallback, and zero
-// vector scratch decodes.
+// The high-QPS exact public contract for this path is exact/zero QueryMode with
+// no document projection and no document materialization. Healthy exact
+// current-format evidence should show hnsw_search_pack_v1 active and selected,
+// zero document fetches, zero graph-row fallback, zero typed-column vector
+// fallback, and zero vector scratch decodes. Explicit quantized modes use the
+// column_graph quantized scorer route instead of hnsw_search_pack_v1 and must
+// fail closed with quantized_* asset counters when the selected score plane is
+// unavailable.
 //
 // On any error after a non-nil buffer is supplied, the buffer's reusable
 // result/id views are reset to length zero and the returned response has no
@@ -1605,6 +1664,18 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		QuantizedCodeBytesRead:                searchStats.QuantizedCodeBytesRead,
 		QuantizedRerankCandidates:             searchStats.QuantizedRerankCandidates,
 		QuantizedRerankExactScoreCalls:        searchStats.QuantizedRerankExactScoreCalls,
+		QuantizedScorerActive:                 searchStats.QuantizedScorerActive,
+		QuantizedAssetMissing:                 searchStats.QuantizedAssetMissing,
+		QuantizedAssetInvalid:                 searchStats.QuantizedAssetInvalid,
+		QuantizedAssetStale:                   searchStats.QuantizedAssetStale,
+		QuantizedAssetClosed:                  searchStats.QuantizedAssetClosed,
+		QuantizedAssetUnavailable:             searchStats.QuantizedAssetUnavailable,
+		QuantizedAssetMmapDirect:              searchStats.QuantizedAssetMmapDirect,
+		QuantizedAssetHeapCopy:                searchStats.QuantizedAssetHeapCopy,
+		QuantizedAssetOpenNanos:               searchStats.QuantizedAssetOpenNanos,
+		QuantizedAssetMappedBytes:             searchStats.QuantizedAssetMappedBytes,
+		QuantizedAssetHeapCopyBytes:           searchStats.QuantizedAssetHeapCopyBytes,
+		QuantizedAssetActiveHandles:           searchStats.QuantizedAssetActiveHandles,
 		ScoreFloat64Fallbacks:                 searchStats.ScoreFloat64Fallbacks,
 		ExpansionFetches:                      searchStats.ExpansionFetches,
 		ResultFetches:                         searchStats.ResultFetches,
@@ -1683,6 +1754,8 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		ResultIDStateValidationFailures:       searchStats.ResultIDStateValidationFailures,
 		PreparedGraphSearchViews:              searchStats.PreparedGraphSearchViews,
 		GraphRowFallbacks:                     searchStats.GraphRowFallbacks,
+		SearchRouteQuantizedOnly:              searchStats.SearchRouteQuantizedOnly,
+		SearchRouteQuantizedRerank:            searchStats.SearchRouteQuantizedRerank,
 		BenchmarkDebugSearches:                searchStats.BenchmarkDebugSearches,
 		NeighborTiles:                         searchStats.NeighborTiles,
 		NeighborTileNeighbors:                 searchStats.NeighborTileNeighbors,
