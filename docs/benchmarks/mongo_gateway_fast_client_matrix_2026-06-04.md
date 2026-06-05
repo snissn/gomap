@@ -49,7 +49,7 @@ Selected rows from that artifact:
 | mode | load ops/sec | `_id` read ops/sec | `email` read ops/sec | caveat |
 | --- | ---: | ---: | ---: | --- |
 | `direct_bench` | 299,777 | 2,026,834 | 230,846 | direct TreeDB storage/collection ceiling |
-| `raw-wire-tcp` | 283,472 | 276,187 | 65,365 | raw `_id`; indexed `email` coverage is addressed by #2338 |
+| `raw-wire-tcp` | 283,472 | 276,187 | 65,365 | baseline artifact predates raw-wire secondary-index find coverage |
 | `driver-command-raw` | 276,503 | 124,961 | 70,215 | benchmark-side raw command construction must stay labeled/prebuilt |
 | `native-wire-tcp` | 271,948 | 115,712 | 66,917 | native protocol, same collection/index hot path |
 | `driver-command` | 253,315 | 130,387 | 69,213 | bypasses part of ordinary CRUD helper overhead |

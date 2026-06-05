@@ -107,9 +107,11 @@ left unset, validation treats the driver default max pool size as 100 for
 `-mongo-min-pool-size` checks. `raw-wire-tcp` and
 `raw-wire-tcp-pipeline` open one fastclient connection per effective producer
 for the load phase, and `raw-wire` uses one in-process wire owner per effective
-producer. JSON output includes `effective_producers` and `producer_results` for
-the load phase plus `mongo_pool_stats_after_load` and `mongo_pool_stats_final`
-when the official driver pool is involved.
+producer. Raw-wire TreeDB modes use raw find commands for both `_id` and
+secondary-index `email` read phases so client-mode labels do not hide ordinary
+Mongo driver indexed-find overhead. JSON output includes `effective_producers`
+and `producer_results` for the load phase plus `mongo_pool_stats_after_load` and
+`mongo_pool_stats_final` when the official driver pool is involved.
 
 The TreeDB benchmark target defaults to the explicit benchmark-only no-WAL
 ceiling because the default cell creates secondary indexes. Use

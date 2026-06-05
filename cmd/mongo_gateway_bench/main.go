@@ -1656,22 +1656,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	result.Phases = append(result.Phases, idPhase)
 
 	if runEmailFindPhase(cfg) {
-		emailPhase, err := measureTreeDBProfiledPhase(target, profiler, "email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
-			for i := 0; i < cfg.Reads; i++ {
-				email := benchmarkEmail((i * 17) % cfg.Documents)
-				var out bson.M
-				begin := time.Now()
-				err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
-				sample(time.Since(begin))
-				if err != nil {
-					return err
-				}
-				if out["email"] != email {
-					return fmt.Errorf("email lookup returned email=%v want %s", out["email"], email)
-				}
-			}
-			return nil
-		})
+		emailPhase, err := runEmailFindBenchmarkPhase(ctx, cfg, target, profiler, coll)
 		if err != nil {
 			return nil, err
 		}
@@ -1741,6 +1726,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 			var concurrentReadPhase phaseResult
 			if readKind == concurrentReadKindID {
 				concurrentReadPhase, err = runConcurrentIDFindPhase(ctx, cfg, target, profiler, coll, concurrentReaders, phaseName)
+			} else if readKind == concurrentReadKindEmail {
+				concurrentReadPhase, err = runConcurrentEmailFindPhase(ctx, cfg, target, profiler, coll, concurrentReaders, phaseName)
 			} else {
 				concurrentReadPhase, err = measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
 					return runConcurrentOperations(ctx, concurrentReaders, cfg.ConcurrentReads, func(op int) error {
@@ -3003,6 +2990,54 @@ func runIDFindPhase(ctx context.Context, cfg config, target *benchTarget, profil
 	})
 }
 
+func runEmailFindBenchmarkPhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection) (phaseResult, error) {
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
+		if target == nil || target.server == nil {
+			return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
+		}
+		var requestID atomic.Int32
+		var scratch rawWireInProcessScratch
+		return measureTreeDBProfiledPhase(target, profiler, "email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+			for i := 0; i < cfg.Reads; i++ {
+				documentOrdinal := (i * 17) % cfg.Documents
+				if err := runTreeDBRawWireEmailFindOperation(ctx, cfg, target, &requestID, 1, documentOrdinal, sample, &scratch); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	if cfg.Target == "treedb" && (cfg.ClientMode == clientModeRawWireTCP || cfg.ClientMode == clientModeRawWireTCPPipeline) {
+		if target == nil || target.mongoAddr == "" {
+			return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
+		}
+		client, err := fastclient.Connect(ctx, target.mongoAddr)
+		if err != nil {
+			return phaseResult{}, err
+		}
+		defer func() { _ = client.Close() }()
+		var commandBuf []byte
+		return measureTreeDBProfiledPhase(target, profiler, "email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+			for i := 0; i < cfg.Reads; i++ {
+				var err error
+				commandBuf, err = runTreeDBRawWireTCPEmailFindOperation(ctx, cfg, client, (i*17)%cfg.Documents, sample, commandBuf)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	return measureTreeDBProfiledPhase(target, profiler, "email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+		for i := 0; i < cfg.Reads; i++ {
+			if err := runDriverEmailFindOperation(ctx, coll, cfg, (i*17)%cfg.Documents, sample); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func runConcurrentIDFindPhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int, phaseName string) (phaseResult, error) {
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
 		if target == nil || target.server == nil {
@@ -3056,6 +3091,59 @@ func runConcurrentIDFindPhase(ctx context.Context, cfg config, target *benchTarg
 	})
 }
 
+func runConcurrentEmailFindPhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int, phaseName string) (phaseResult, error) {
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
+		if target == nil || target.server == nil {
+			return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
+		}
+		var requestID atomic.Int32
+		scratches := make([]rawWireInProcessScratch, readers)
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentReads, func(worker, op int) error {
+				documentOrdinal := benchmarkDocumentOrdinal(op, 17, cfg.Documents)
+				return runTreeDBRawWireEmailFindOperation(ctx, cfg, target, &requestID, int64(worker+1), documentOrdinal, sample, &scratches[worker])
+			})
+		})
+	}
+	if cfg.Target == "treedb" && (cfg.ClientMode == clientModeRawWireTCP || cfg.ClientMode == clientModeRawWireTCPPipeline) {
+		if target == nil || target.mongoAddr == "" {
+			return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
+		}
+		clients := make([]*fastclient.Client, readers)
+		commandBufs := make([][]byte, readers)
+		for i := range clients {
+			client, err := fastclient.Connect(ctx, target.mongoAddr)
+			if err != nil {
+				for _, existing := range clients {
+					if existing != nil {
+						_ = existing.Close()
+					}
+				}
+				return phaseResult{}, err
+			}
+			clients[i] = client
+		}
+		defer func() {
+			for _, client := range clients {
+				_ = client.Close()
+			}
+		}()
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentReads, func(worker, op int) error {
+				documentOrdinal := benchmarkDocumentOrdinal(op, 17, cfg.Documents)
+				var err error
+				commandBufs[worker], err = runTreeDBRawWireTCPEmailFindOperation(ctx, cfg, clients[worker], documentOrdinal, sample, commandBufs[worker])
+				return err
+			})
+		})
+	}
+	return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, readers, cfg.ConcurrentReads, func(op int) error {
+			return runConcurrentReadOperation(ctx, coll, cfg, concurrentReadKindEmail, op, sample)
+		})
+	})
+}
+
 func runDriverIDFindOperation(ctx context.Context, coll *mongo.Collection, cfg config, documentOrdinal int, sample func(time.Duration)) error {
 	id := benchmarkIDForShape(cfg.DocumentShape, documentOrdinal)
 	filter := bson.D{{Key: "_id", Value: id}}
@@ -3089,6 +3177,21 @@ func runDriverIDFindOperation(ctx context.Context, coll *mongo.Collection, cfg c
 	}
 	if out["_id"] != id {
 		return fmt.Errorf("id lookup returned _id=%v want %s", out["_id"], id)
+	}
+	return nil
+}
+
+func runDriverEmailFindOperation(ctx context.Context, coll *mongo.Collection, cfg config, documentOrdinal int, sample func(time.Duration)) error {
+	email := benchmarkEmail(documentOrdinal)
+	var out bson.M
+	begin := time.Now()
+	err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
+	sample(time.Since(begin))
+	if err != nil {
+		return err
+	}
+	if out["email"] != email {
+		return fmt.Errorf("email lookup returned email=%v want %s", out["email"], email)
 	}
 	return nil
 }
@@ -3211,18 +3314,7 @@ func runConcurrentReadOperation(ctx context.Context, coll *mongo.Collection, cfg
 	case concurrentReadKindID:
 		return runDriverIDFindOperation(ctx, coll, cfg, benchmarkDocumentOrdinal(op, 17, cfg.Documents), sample)
 	case concurrentReadKindEmail:
-		email := benchmarkEmail(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
-		var out bson.M
-		begin := time.Now()
-		err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
-		sample(time.Since(begin))
-		if err != nil {
-			return err
-		}
-		if out["email"] != email {
-			return fmt.Errorf("concurrent email lookup returned email=%v want %s", out["email"], email)
-		}
-		return nil
+		return runDriverEmailFindOperation(ctx, coll, cfg, benchmarkDocumentOrdinal(op, 17, cfg.Documents), sample)
 	case concurrentReadKindRange:
 		minAge := rangeReadMinAge(op, cfg.Documents)
 		begin := time.Now()
@@ -3798,6 +3890,28 @@ func runTreeDBRawWireIDFindOperation(ctx context.Context, cfg config, target *be
 	return validateRawIDBatch(batch, id, cfg)
 }
 
+func runTreeDBRawWireEmailFindOperation(ctx context.Context, cfg config, target *benchTarget, requestID *atomic.Int32, cursorOwner int64, documentOrdinal int, sample func(time.Duration), scratch *rawWireInProcessScratch) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if scratch == nil {
+		scratch = &rawWireInProcessScratch{}
+	}
+	email := benchmarkEmail(documentOrdinal)
+	commandDoc, err := appendRawWireFindEmailCommand(scratch.commandBuf[:0], cfg.Database, cfg.Collection, email)
+	if err != nil {
+		return err
+	}
+	scratch.commandBuf = commandDoc
+	begin := time.Now()
+	batch, err := serveRawWireFind(target.server, requestID.Add(1), cursorOwner, commandDoc, scratch)
+	sample(time.Since(begin))
+	if err != nil {
+		return err
+	}
+	return validateRawEmailBatch(batch, email)
+}
+
 func runTreeDBRawWireTCPRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (phaseResult, error) {
 	if target == nil || target.mongoAddr == "" {
 		return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
@@ -3850,6 +3964,25 @@ func runTreeDBRawWireTCPIDFindOperation(ctx context.Context, cfg config, client 
 		sample(time.Since(begin))
 		sampled = true
 		return validateRawIDBatch(batch, id, cfg)
+	})
+	if !sampled {
+		sample(time.Since(begin))
+	}
+	return commandDoc, err
+}
+
+func runTreeDBRawWireTCPEmailFindOperation(ctx context.Context, cfg config, client *fastclient.Client, documentOrdinal int, sample func(time.Duration), commandBuf []byte) ([]byte, error) {
+	email := benchmarkEmail(documentOrdinal)
+	commandDoc, err := appendRawFindEmailCommand(commandBuf[:0], cfg.Database, cfg.Collection, email)
+	if err != nil {
+		return commandBuf, err
+	}
+	begin := time.Now()
+	sampled := false
+	err = client.FindRawBSONBorrowed(ctx, commandDoc, func(batch []bson.Raw) error {
+		sample(time.Since(begin))
+		sampled = true
+		return validateRawEmailBatch(batch, email)
 	})
 	if !sampled {
 		sample(time.Since(begin))
@@ -4261,10 +4394,23 @@ func appendRawWireFindIDCommand(dst []byte, database, collection string, id stri
 }
 
 func appendRawFindIDCommand(dst []byte, database, collection string, id string, projection string) (bson.Raw, error) {
+	return appendRawFindStringEqualityCommand(dst, database, collection, "_id", id, projection)
+}
+
+func appendRawWireFindEmailCommand(dst []byte, database, collection string, email string) (wire.Document, error) {
+	raw, err := appendRawFindEmailCommand(dst, database, collection, email)
+	return wire.Document(raw), err
+}
+
+func appendRawFindEmailCommand(dst []byte, database, collection string, email string) (bson.Raw, error) {
+	return appendRawFindStringEqualityCommand(dst, database, collection, "email", email, "")
+}
+
+func appendRawFindStringEqualityCommand(dst []byte, database, collection string, field string, value string, projection string) (bson.Raw, error) {
 	idx, doc := bsoncore.AppendDocumentStart(dst[:0])
 	doc = bsoncore.AppendStringElement(doc, "find", collection)
 	filterIdx, doc := bsoncore.AppendDocumentElementStart(doc, "filter")
-	doc = bsoncore.AppendStringElement(doc, "_id", id)
+	doc = bsoncore.AppendStringElement(doc, field, value)
 	var err error
 	doc, err = bsoncore.AppendDocumentEnd(doc, filterIdx)
 	if err != nil {
@@ -4518,6 +4664,17 @@ func validatePointReadRawDocument(doc bson.Raw, id string, cfg config) error {
 	}
 	if got, ok := doc.Lookup("_id").StringValueOK(); !ok || got != id {
 		return fmt.Errorf("raw id lookup returned _id=%v ok=%t want %s", got, ok, id)
+	}
+	return nil
+}
+
+func validateRawEmailBatch(batch []bson.Raw, email string) error {
+	if len(batch) != 1 {
+		return fmt.Errorf("raw email lookup returned %d documents want 1", len(batch))
+	}
+	got, ok := batch[0].Lookup("email").StringValueOK()
+	if !ok || got != email {
+		return fmt.Errorf("raw email lookup returned email=%v ok=%t want %s", got, ok, email)
 	}
 	return nil
 }
