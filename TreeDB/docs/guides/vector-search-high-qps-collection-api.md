@@ -1,7 +1,7 @@
 # TreeDB high-QPS collection vector search
 
 This guide summarizes the collection-level vector-search API boundary after the
-#2360 high-QPS work.
+`#2360` high-QPS work.
 
 ## API boundary
 
@@ -63,13 +63,28 @@ Canonical rows:
 
 ## Profile capture notes
 
-For focused CPU profiles of the response-owned no-document convenience row:
+For focused CPU profiles of the response-owned no-document convenience row,
+bootstrap USearch with `scripts/bench_vector_search_compare.sh` and reuse the
+host-specific include/library directories recorded in that run's README:
 
 ```sh
-USEARCH_ROOT=/tmp/usearch_2.25.2_macos_arm64/root
-export CGO_CFLAGS="-I$USEARCH_ROOT"
-export CGO_LDFLAGS="-L$USEARCH_ROOT -Wl,-rpath,$USEARCH_ROOT -lusearch_c"
-export DYLD_LIBRARY_PATH="$USEARCH_ROOT:${DYLD_LIBRARY_PATH:-}"
+RUN_DIR=/tmp/gomap_vector_search_compare_profile_bootstrap
+export RUN_DIR
+TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64 \
+  TREEDB_VECTOR_BENCH_M=16 TREEDB_VECTOR_BENCH_EF_CONSTRUCTION=128 \
+  TREEDB_VECTOR_BENCH_EF_SEARCH=128 TREEDB_VECTOR_BENCH_TOPK=10 \
+  TREEDB_VECTOR_BENCH_QUERIES=16 CPU_LIST=1 BENCHTIME=1x COUNT=1 \
+  BENCH_REGEX='BenchmarkCollectionVectorUSearchProductionCompare$' \
+  scripts/bench_vector_search_compare.sh
+
+USEARCH_INCLUDE_DIR=$(awk -F'`' '/USearch include dir:/ { print $2 }' "$RUN_DIR/README.md")
+USEARCH_LIB_DIR=$(awk -F'`' '/USearch lib dir:/ { print $2 }' "$RUN_DIR/README.md")
+export CGO_CFLAGS="-I$USEARCH_INCLUDE_DIR"
+export CGO_LDFLAGS="-L$USEARCH_LIB_DIR -Wl,-rpath,$USEARCH_LIB_DIR -lusearch_c"
+case "$(uname -s)" in
+  Linux) export LD_LIBRARY_PATH="$USEARCH_LIB_DIR:${LD_LIBRARY_PATH:-}" ;;
+  Darwin) export DYLD_LIBRARY_PATH="$USEARCH_LIB_DIR:${DYLD_LIBRARY_PATH:-}" ;;
+esac
 
 TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64 \
   TREEDB_VECTOR_BENCH_M=16 TREEDB_VECTOR_BENCH_EF_CONSTRUCTION=128 \
