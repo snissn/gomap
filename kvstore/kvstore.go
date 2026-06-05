@@ -124,6 +124,30 @@ type Batch interface {
 	Close() error
 }
 
+// BatchRangeDeleter is an optional batch capability for half-open range
+// deletion. Start is inclusive, end is exclusive; nil bounds mean unbounded
+// when the underlying engine supports that. Implementations that emulate range
+// deletion with iteration/point deletes should report that via
+// RangeDeleteModeReporter rather than claiming native parity.
+type BatchRangeDeleter interface {
+	DeleteRange(start, end []byte) error
+}
+
+const (
+	// RangeDeleteModeNative indicates the adapter uses an engine-native range
+	// deletion primitive for DeleteRange batches.
+	RangeDeleteModeNative = "native"
+	// RangeDeleteModeFallbackIteratorDelete indicates the adapter expands
+	// DeleteRange into iterator-driven point deletes.
+	RangeDeleteModeFallbackIteratorDelete = "fallback_iterator_delete"
+)
+
+// RangeDeleteModeReporter reports whether batch DeleteRange is native or a
+// fallback path for benchmark/reporting consumers.
+type RangeDeleteModeReporter interface {
+	RangeDeleteMode() string
+}
+
 // Batcher is an optional capability for batched writes.
 type Batcher interface {
 	NewBatch() (Batch, error)

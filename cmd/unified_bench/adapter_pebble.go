@@ -66,6 +66,10 @@ func (p *PebbleWrapper) Delete(key []byte) error {
 	return p.db.Delete(key, opts)
 }
 
+func (p *PebbleWrapper) RangeDeleteMode() string {
+	return kvstore.RangeDeleteModeNative
+}
+
 func (p *PebbleWrapper) Checkpoint() error {
 	return p.db.Flush()
 }
@@ -143,9 +147,12 @@ type PebbleBatch struct {
 
 func (b *PebbleBatch) Set(key, value []byte) error { return b.batch.Set(key, value, nil) }
 func (b *PebbleBatch) Delete(key []byte) error     { return b.batch.Delete(key, nil) }
-func (b *PebbleBatch) Commit() error               { return b.batch.Commit(pebble.NoSync) }
-func (b *PebbleBatch) CommitSync() error           { return b.batch.Commit(pebble.Sync) }
-func (b *PebbleBatch) Close() error                { return b.batch.Close() }
+func (b *PebbleBatch) DeleteRange(start, end []byte) error {
+	return b.batch.DeleteRange(start, end, nil)
+}
+func (b *PebbleBatch) Commit() error     { return b.batch.Commit(pebble.NoSync) }
+func (b *PebbleBatch) CommitSync() error { return b.batch.Commit(pebble.Sync) }
+func (b *PebbleBatch) Close() error      { return b.batch.Close() }
 
 func (p *PebbleWrapper) NewBatch() (kvstore.Batch, error) {
 	return &PebbleBatch{batch: p.db.NewBatch()}, nil

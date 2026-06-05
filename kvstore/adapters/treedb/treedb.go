@@ -286,6 +286,10 @@ func (d *DB) Delete(key []byte) error {
 	return d.DB.Delete(key)
 }
 
+func (d *DB) RangeDeleteMode() string {
+	return kvstore.RangeDeleteModeNative
+}
+
 func (d *DB) Has(key []byte) (bool, error) {
 	ok, err := d.DB.Has(key)
 	if errors.Is(err, treedb.ErrClosed) {
@@ -379,6 +383,10 @@ func (b *batch) Set(key, value []byte) error {
 
 func (b *batch) Delete(key []byte) error {
 	return b.b.Delete(key)
+}
+
+func (b *batch) DeleteRange(start, end []byte) error {
+	return b.b.DeleteRange(start, end)
 }
 
 // SetView records a Put without copying key/value bytes if supported by the

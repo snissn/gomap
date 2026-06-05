@@ -44,6 +44,18 @@ func (b *LevelDBBatch) Delete(key []byte) error {
 	b.batch.Delete(key)
 	return nil
 }
+func (b *LevelDBBatch) DeleteRange(start, end []byte) error {
+	var slice *util.Range
+	if start != nil || end != nil {
+		slice = &util.Range{Start: start, Limit: end}
+	}
+	it := b.db.NewIterator(slice, nil)
+	defer it.Release()
+	for ok := it.First(); ok; ok = it.Next() {
+		b.batch.Delete(append([]byte(nil), it.Key()...))
+	}
+	return it.Error()
+}
 func (b *LevelDBBatch) Commit() error {
 	return b.db.Write(b.batch, nil)
 }
@@ -207,7 +219,10 @@ func (l *LevelDBWrapper) GetMany(keys [][]byte) ([][]byte, error) {
 	return out, nil
 }
 func (l *LevelDBWrapper) Delete(k []byte) error { return l.db.Delete(k, nil) }
-func (l *LevelDBWrapper) Close() error          { return l.db.Close() }
+func (l *LevelDBWrapper) RangeDeleteMode() string {
+	return kvstore.RangeDeleteModeFallbackIteratorDelete
+}
+func (l *LevelDBWrapper) Close() error { return l.db.Close() }
 func (l *LevelDBWrapper) Checkpoint() error {
 	if l == nil || l.db == nil {
 		return nil

@@ -303,6 +303,7 @@ func customUsage() {
 func isWorkloadFlag(name string) bool {
 	switch name {
 	case "keys", "valsize", "batchsize", "range-queries", "range-span",
+		"batch-delete-range-width", "batch-delete-ranges-per-batch", "batch-delete-range-validate", "batch-delete-range-refill",
 		"keycounts", "keyscale", "keys-min", "keys-max", "key-shape", "dbs", "test",
 		"suite", "outdir", "keep", "progress", "seed", "settle-before-scans":
 		return true
