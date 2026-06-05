@@ -864,6 +864,42 @@ func TestRunBenchmark_BatchDeleteRange_UsesBatchCapabilityAndReports(t *testing.
 	}
 }
 
+func TestRunBenchmark_BatchDeleteRangeDoesNotSuppressPreloadForEarlierReads(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	const dbName = "batch_delete_range_after_read"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("BatchDeleteRangeAfterRead")
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		ReadRequireHit:            true,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "random_read,batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil || db.deleteRangeCalls == 0 {
+		t.Fatalf("expected explicit batch_delete_range to run after preloaded read, db=%v", db)
+	}
+	got := run.Results["random_read"][db.Name()]
+	if math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected preloaded random_read > 0 before batch_delete_range, got %v", got)
+	}
+}
+
 func TestRunBenchmark_BatchDeleteRange_SkipsUnsupportedBeforeLoad(t *testing.T) {
 	var db *batchWithoutRangeDB
 	const dbName = "batch_without_range"

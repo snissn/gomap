@@ -32,19 +32,82 @@ var (
 )
 
 type LevelDBBatch struct {
-	batch *leveldb.Batch
-	db    *leveldb.DB
+	db  *leveldb.DB
+	ops []levelDBBatchOp
+}
+
+type levelDBBatchOpKind uint8
+
+const (
+	levelDBBatchSet levelDBBatchOpKind = iota
+	levelDBBatchDelete
+	levelDBBatchDeleteRange
+)
+
+type levelDBBatchOp struct {
+	kind         levelDBBatchOpKind
+	key, value   []byte
+	start, limit []byte
 }
 
 func (b *LevelDBBatch) Set(key, value []byte) error {
-	b.batch.Put(key, value)
+	b.ops = append(b.ops, levelDBBatchOp{
+		kind:  levelDBBatchSet,
+		key:   append([]byte(nil), key...),
+		value: append([]byte(nil), value...),
+	})
 	return nil
 }
 func (b *LevelDBBatch) Delete(key []byte) error {
-	b.batch.Delete(key)
+	b.ops = append(b.ops, levelDBBatchOp{
+		kind: levelDBBatchDelete,
+		key:  append([]byte(nil), key...),
+	})
 	return nil
 }
 func (b *LevelDBBatch) DeleteRange(start, end []byte) error {
+	b.ops = append(b.ops, levelDBBatchOp{
+		kind:  levelDBBatchDeleteRange,
+		start: append([]byte(nil), start...),
+		limit: append([]byte(nil), end...),
+	})
+	return nil
+}
+func (b *LevelDBBatch) Commit() error {
+	return b.commit(nil)
+}
+func (b *LevelDBBatch) CommitSync() error {
+	return b.commit(&opt.WriteOptions{Sync: true})
+}
+func (b *LevelDBBatch) Close() error {
+	b.ops = nil
+	return nil
+}
+
+func (b *LevelDBBatch) commit(writeOpts *opt.WriteOptions) error {
+	var batch leveldb.Batch
+	localKeys := make(map[string][]byte)
+	rememberLocalKey := func(key []byte) {
+		localKeys[string(key)] = append([]byte(nil), key...)
+	}
+	for _, op := range b.ops {
+		switch op.kind {
+		case levelDBBatchSet:
+			batch.Put(op.key, op.value)
+			rememberLocalKey(op.key)
+		case levelDBBatchDelete:
+			batch.Delete(op.key)
+			rememberLocalKey(op.key)
+		case levelDBBatchDeleteRange:
+			if err := b.appendDeleteRangeOps(&batch, op.start, op.limit, localKeys); err != nil {
+				return err
+			}
+		}
+	}
+	return b.db.Write(&batch, writeOpts)
+}
+
+func (b *LevelDBBatch) appendDeleteRangeOps(batch *leveldb.Batch, start, end []byte, localKeys map[string][]byte) error {
 	var slice *util.Range
 	if start != nil || end != nil {
 		slice = &util.Range{Start: start, Limit: end}
@@ -52,19 +115,27 @@ func (b *LevelDBBatch) DeleteRange(start, end []byte) error {
 	it := b.db.NewIterator(slice, nil)
 	defer it.Release()
 	for ok := it.First(); ok; ok = it.Next() {
-		b.batch.Delete(append([]byte(nil), it.Key()...))
+		batch.Delete(append([]byte(nil), it.Key()...))
 	}
-	return it.Error()
-}
-func (b *LevelDBBatch) Commit() error {
-	return b.db.Write(b.batch, nil)
-}
-func (b *LevelDBBatch) CommitSync() error {
-	return b.db.Write(b.batch, &opt.WriteOptions{Sync: true})
-}
-func (b *LevelDBBatch) Close() error {
-	b.batch.Reset()
+	if err := it.Error(); err != nil {
+		return err
+	}
+	for _, key := range localKeys {
+		if levelDBKeyInRange(key, start, end) {
+			batch.Delete(key)
+		}
+	}
 	return nil
+}
+
+func levelDBKeyInRange(key, start, end []byte) bool {
+	if start != nil && bytes.Compare(key, start) < 0 {
+		return false
+	}
+	if end != nil && bytes.Compare(key, end) >= 0 {
+		return false
+	}
+	return true
 }
 
 type LevelDBIterator struct {
@@ -267,7 +338,7 @@ func (l *LevelDBWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, e
 	return &LevelDBIterator{it: it, reverse: true}, nil
 }
 func (l *LevelDBWrapper) NewBatch() (kvstore.Batch, error) {
-	return &LevelDBBatch{batch: new(leveldb.Batch), db: l.db}, nil
+	return &LevelDBBatch{db: l.db}, nil
 }
 
 func verifyRangeIteration(db kvstore.DB, rs kvstore.RangeScanner, prefix []byte, n int) (retErr error) {

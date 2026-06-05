@@ -4273,7 +4273,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"batch_write",
 		"batch_write_steady",
 		"batch_random",
-		"batch_delete_range",
 		"batch_small_seq",
 	)
 	needsExistingData := containsAny(finalTestOrder,
