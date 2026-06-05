@@ -565,16 +565,16 @@ func replayOps(ops []batchOp, w ethdb.KeyValueWriter) error {
 	return nil
 }
 
-// Close releases the underlying TreeDB batch when present. It is not part of
-// ethdb.Batch but is provided for integrations that want explicit disposal.
-func (b *Batch) Close() error {
+// Close releases the underlying TreeDB batch when present. It matches newer
+// geth ethdb.Batch interfaces and is harmless as an extra method for older
+// geth versions where Batch has no Close method.
+func (b *Batch) Close() {
 	if b == nil || b.inner == nil {
-		return nil
+		return
 	}
-	err := b.inner.Close()
+	_ = b.inner.Close()
 	b.inner = nil
 	b.closed = ErrClosed
-	return err
 }
 
 func cloneBytes(in []byte) []byte {
