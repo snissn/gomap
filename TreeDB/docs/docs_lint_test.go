@@ -269,6 +269,8 @@ func TestDocs_VectorHighQPSBenchmarkWorkflow2410(t *testing.T) {
 		"/tmp/gomap_2366_final_20260605_030355/tier_s_bench.log",
 		"/tmp/gomap_2366_final_20260605_030355/with_buffer_alloc_proof.log",
 		"The exact FP32 `hnsw_search_pack_v1` counters above are distinct from future quantized route counters",
+		"`TreeDB_SearchWithBufferParallel` for the actual c=8 concurrent profile",
+		"only raises `GOMAXPROCS`; it does not create concurrent benchmark workers",
 	} {
 		normalizedWant := strings.Join(strings.Fields(want), " ")
 		if !strings.Contains(doc, want) && !strings.Contains(normalizedDoc, normalizedWant) {

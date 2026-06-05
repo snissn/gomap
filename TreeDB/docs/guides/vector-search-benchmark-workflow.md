@@ -205,11 +205,17 @@ go tool pprof -top -alloc_space -nodecount=40 "$PROFILE_DIR/no_doc_c1_mem.pprof"
   > "$PROFILE_DIR/no_doc_c1_alloc_top.txt"
 ```
 
-Repeat with `-cpu=8` for the c=8 profile and change the benchmark suffix to
-`TreeDB_CollectionSearchVectorIndexWithBuffer` when proving the caller-owned
-buffer allocation ceiling. Go benchmark CPU profiles include fixture setup,
-rebuild, and package initialization work before the timed loop; use the route
-counters above to separate setup from steady-state query costs.
+Repeat with `-cpu=8` on `TreeDB_SearchWithBufferParallel` for the actual c=8
+concurrent profile; that subbenchmark uses `b.RunParallel` with one searcher and
+one caller-owned buffer per worker. Running `-cpu=8` against non-parallel
+subbenchmarks such as `TreeDB_CollectionSearchVectorIndexNoDocsOneShot` or
+`TreeDB_CollectionSearchVectorIndexWithBuffer` only raises `GOMAXPROCS`; it does
+not create concurrent benchmark workers. Use those non-parallel rows for
+single-goroutine response-owned or caller-owned allocation profiles, and use the
+parallel row for c=8 bottleneck/scaling evidence. Go benchmark CPU profiles
+include fixture setup, rebuild, and package initialization work before the timed
+loop; use the route counters above to separate setup from steady-state query
+costs.
 
 In healthy no-document rows, expected steady-state costs are HNSW pack traversal,
 dot/scoring, frontier/top-k maintenance, and final result-ID copy for
