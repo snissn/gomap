@@ -1000,6 +1000,19 @@ func TestChooseRetainedStorageFirstBlockCodec_DefaultBootstrapsZSTD(t *testing.T
 	}
 }
 
+func TestChooseRetainedStorageFirstBlockCodec_SingleConfiguredCodecHistoryKeepsZSTDBootstrap(t *testing.T) {
+	l := &lane{}
+	for i := 0; i < largePayloadBlockCodecMinSamples; i++ {
+		observeLaneVlogBlockRatio(l, valuelog.BlockCodecSnappy, 4096, 1800)
+	}
+
+	got := chooseRetainedStorageFirstBlockCodec(l, valuelog.BlockCodecSnappy, vlogCompressionAuto)
+
+	if got != valuelog.BlockCodecZSTD {
+		t.Fatalf("single-codec retained bootstrap codec=%v want zstd", got)
+	}
+}
+
 func TestChooseRetainedStorageFirstBlockCodec_ExplicitBlockKeepsConfiguredCodec(t *testing.T) {
 	l := &lane{}
 
