@@ -144,6 +144,7 @@ type matrixResult struct {
 	Dir               string             `json:"dir"`
 	KeptDir           bool               `json:"kept_dir"`
 	Profile           string             `json:"profile"`
+	SearchProfileDir  string             `json:"search_profile_dir,omitempty"`
 	Docs              int                `json:"docs"`
 	Dimensions        int                `json:"dimensions"`
 	Queries           int                `json:"queries"`
@@ -1157,6 +1158,9 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return matrixResult{}, err
 	}
+	if cfg.searchProfileDir != "" {
+		cfg.searchProfileDir = filepath.Clean(cfg.searchProfileDir)
+	}
 	root, err := normalizeDemoDir(cfg.dir)
 	if err != nil {
 		return matrixResult{}, err
@@ -1228,6 +1232,7 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		Dir:               root,
 		KeptDir:           cfg.keepDir || explicitRoot,
 		Profile:           string(cfg.profile),
+		SearchProfileDir:  cfg.searchProfileDir,
 		Docs:              cfg.docs,
 		Dimensions:        cfg.dimensions,
 		Queries:           cfg.queries,
@@ -1241,6 +1246,9 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		caseCfg.keepDir = true
 		caseCfg.compact = testCase.compact
 		caseCfg.dir = filepath.Join(root, testCase.name)
+		if cfg.searchProfileDir != "" {
+			caseCfg.searchProfileDir = filepath.Join(cfg.searchProfileDir, testCase.name)
+		}
 		caseCfg.indexOuterLeavesInValueLog = testCase.outerLeaves
 		if testCase.name == "index_db_outer_leaves" {
 			caseCfg.requireLeafVLogBytes = false
@@ -2546,6 +2554,9 @@ func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
 	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s query_mode=%s quantized_index_name=%s quantized_rerank_candidates=%d docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
 		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), resultQueryMode(res), res.QuantizedIndexName, res.QuantizedRerankCandidates, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	if res.SearchProfileDir != "" {
+		fmt.Fprintf(w, "search_profile_dir=%s\n", res.SearchProfileDir)
+	}
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_vector_index strategy=%s: %.3fs native_root_bytes=%d\n", resultStrategy(res), res.Rebuild.Seconds, res.NativeRootBytes)
@@ -2615,6 +2626,9 @@ func printMatrixText(w io.Writer, res matrixResult) {
 	fmt.Fprintf(w, "TreeDB vector search matrix\n")
 	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d search_concurrency=%s\n",
 		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, joinInts(res.SearchConcurrency))
+	if res.SearchProfileDir != "" {
+		fmt.Fprintf(w, "search_profile_dir=%s\n", res.SearchProfileDir)
+	}
 	for _, testCase := range res.Cases {
 		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
 		fmt.Fprintf(w, "%s\n", testCase.Description)
@@ -2623,6 +2637,9 @@ func printMatrixText(w io.Writer, res matrixResult) {
 			resultStrategy(testCase.Result),
 			resultSearchPath(testCase.Result),
 			resultQueryMode(testCase.Result))
+		if testCase.Result.SearchProfileDir != "" {
+			fmt.Fprintf(w, "search_profile_dir=%s\n", testCase.Result.SearchProfileDir)
+		}
 		fmt.Fprintf(w, "storage_after_compact_total=%d bytes (%.1f/doc)\n",
 			testCase.Result.StorageAfterCompact.TotalBytes,
 			testCase.Result.StorageAfterCompact.BytesPerDoc)

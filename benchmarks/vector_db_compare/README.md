@@ -117,9 +117,11 @@ Configuration:
 - `TREEDB_SEARCH_PROFILE_DIR`: optional top-level directory for TreeDB search
   profiles. When set, each TreeDB row passes a backend-specific subdirectory to
   `-search-profile-dir`; column_graph rows emit per-concurrency
-  `search_<mode>_c<N>_{cpu,heap,allocs,block,mutex}.pprof` files there. CPU
-  profiles are scoped to the search loop; the other files are runtime snapshots
-  for supporting diagnosis.
+  `search_<mode>_c<N>_{cpu,heap,allocs,block,mutex}.pprof` files there. If the
+  demo matrix mode is used, profiles are further nested under the matrix case
+  name (`<profile-dir>/<backend>/<matrix_case>/...`) so case artifacts are not
+  overwritten. CPU profiles are scoped to the search loop; the other files are
+  runtime snapshots for supporting diagnosis.
 - `TREEDB_QUANTIZED_INDEX_NAME`: scalar_u8 TreeDB quantized score-plane name.
   Defaults to `embedding.scalar_u8.fast`.
 - `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB quantized-rerank exact rerank

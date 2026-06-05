@@ -93,10 +93,13 @@ concurrency levels `2,4,8,16,32,64,128`; override those with `-queries` and
 Use `-search-profile-dir DIR` to write per-concurrency search profiles for the
 column_graph search stage. Each measured concurrency emits
 `search_<mode>_c<N>_cpu.pprof`, plus `heap`, `allocs`, `block`, and `mutex`
-runtime snapshots with the same prefix. CPU profiles are scoped to the measured
-search loop; the runtime snapshots are supporting diagnostics and can include
-process state outside the search loop. Profiling changes timings and should be
-used for bottleneck analysis, not as the comparison number to publish.
+runtime snapshots with the same prefix. In matrix mode, each storage case writes
+under `DIR/<matrix_case>/` (for example
+`DIR/leaf_vlog_after_compact/search_exact_c8_cpu.pprof`) so case artifacts are
+not overwritten. CPU profiles are scoped to the measured search loop; the
+runtime snapshots are supporting diagnostics and can include process state
+outside the search loop. Profiling changes timings and should be used for
+bottleneck analysis, not as the comparison number to publish.
 
 When `-dataset-dir` is used, `-queries` may truncate the exported query vector
 file but cannot exceed the manifest query count. `-validate-queries` is a recall

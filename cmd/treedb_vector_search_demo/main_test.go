@@ -145,6 +145,68 @@ func TestExecuteColumnGraphSearchProfileDirWritesProfiles(t *testing.T) {
 	}
 }
 
+func TestExecuteMatrixSearchProfileDirUsesCaseSubdirectories(t *testing.T) {
+	profileDir := t.TempDir()
+	res, err := executeMatrix(context.Background(), config{
+		docs:                  48,
+		dimensions:            8,
+		queries:               2,
+		searchConcurrency:     []int{2},
+		validateQueries:       0,
+		validateDocs:          0,
+		topK:                  3,
+		batchSize:             16,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0,
+		disableExactFallback:  true,
+		vectorIndexStrategy:   collections.VectorIndexStrategyColumnGraph,
+		searchProfileDir:      filepath.Join(profileDir, "."),
+	})
+	if err != nil {
+		t.Fatalf("executeMatrix with search profile dir: %v", err)
+	}
+	if res.SearchProfileDir != profileDir {
+		t.Fatalf("matrix search profile dir=%q want %q", res.SearchProfileDir, profileDir)
+	}
+	if len(res.Cases) != 3 {
+		t.Fatalf("matrix cases=%d want 3", len(res.Cases))
+	}
+	for _, testCase := range res.Cases {
+		caseProfileDir := filepath.Join(profileDir, testCase.Name)
+		if testCase.Result.SearchProfileDir != caseProfileDir {
+			t.Fatalf("case %s profile dir=%q want %q", testCase.Name, testCase.Result.SearchProfileDir, caseProfileDir)
+		}
+		for _, concurrency := range []int{1, 2} {
+			for _, kind := range []string{"cpu", "heap", "allocs", "block", "mutex"} {
+				path := filepath.Join(caseProfileDir, fmt.Sprintf("search_exact_c%d_%s.pprof", concurrency, kind))
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatalf("stat profile %s: %v", path, err)
+				}
+				if info.Size() == 0 {
+					t.Fatalf("profile %s is empty", path)
+				}
+			}
+		}
+	}
+	entries, err := os.ReadDir(profileDir)
+	if err != nil {
+		t.Fatalf("read profile dir: %v", err)
+	}
+	if len(entries) != len(res.Cases) {
+		t.Fatalf("profile dir entries=%d want %d case directories", len(entries), len(res.Cases))
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			t.Fatalf("profile root entry %s is not a directory", entry.Name())
+		}
+	}
+}
+
 func TestDemoCommandWALFormatConfigPreservesProfileKnobs(t *testing.T) {
 	cfg := demoCommandWALFormatConfig(demoBackendOptions(config{}, t.TempDir()))
 	if len(cfg.RequiredFeatures) != 1 || cfg.RequiredFeatures[0] != "command_wal_v1" {
