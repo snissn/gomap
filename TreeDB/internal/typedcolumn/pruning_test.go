@@ -55,6 +55,59 @@ func TestColumnPruningInt64ValueRowsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestColumnPruningCompressedImageSectionRoundTrip(t *testing.T) {
+	values := make([]int64, 8192)
+	for i := range values {
+		values[i] = int64(i % 8)
+	}
+	part := mustStatsTestPartWithBlockRows(t, values, EncodingDeltaVarint, 512)
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{
+		LayoutLogicalTypes: map[string]string{"id": "int64", "value": "int64"},
+		SectionCompression: CompressionLZ4,
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	section, ok, err := image.PruningMetadataSection()
+	if err != nil || !ok {
+		t.Fatalf("PruningMetadataSection ok=%v err=%v", ok, err)
+	}
+	if section.Compression != CompressionLZ4 || section.RawBytes <= section.Length {
+		t.Fatalf("pruning metadata section=%+v want kept lz4 compression", section)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	reopened, err := ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	index, ok := reopened.PruningMetadata.Int64Column("value")
+	if !ok {
+		t.Fatalf("reopened pruning metadata missing value column")
+	}
+	plan, err := index.PlanInt64Predicate(Int64PruningPredicate{Kind: Int64PruningPredicateEqual, Value: 3})
+	if err != nil {
+		t.Fatalf("PlanInt64Predicate: %v", err)
+	}
+	if got, want := plan.CandidateRows, len(values)/8; got != want {
+		t.Fatalf("candidate rows=%d want %d", got, want)
+	}
+
+	corrupt := parsed
+	corrupt.Sections = append([]ColumnPartImageSection(nil), parsed.Sections...)
+	for i := range corrupt.Sections {
+		if corrupt.Sections[i].Kind == ColumnPartImageSectionPruningMetadata {
+			corrupt.Sections[i].RawBytes--
+			break
+		}
+	}
+	if _, err := ColumnPartFromImage(corrupt); err == nil || !strings.Contains(err.Error(), "pruning metadata") {
+		t.Fatalf("ColumnPartFromImage corrupt pruning metadata err=%v want pruning metadata raw-length failure", err)
+	}
+}
+
 func TestColumnPruningAllPredicateDoesNotScanValueRows(t *testing.T) {
 	part := mustStatsTestPartWithBlockRows(t, []int64{3, 4, 5, 6}, EncodingRawInt64, 2)
 	index, ok := part.PruningMetadata.Int64Column("value")

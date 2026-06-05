@@ -812,15 +812,14 @@ func (b *columnPartImageBuilder) addPruningMetadataSection() error {
 	if len(data) == 0 {
 		return nil
 	}
-	b.appendSection(ColumnPartImageSection{
+	return b.appendSectionWithOptionalCompression(ColumnPartImageSection{
 		Kind:     ColumnPartImageSectionPruningMetadata,
 		Category: ColumnPartImageCategoryPruningMetadata,
 		Name:     "column_pruning",
 		Rows:     b.part.Descriptor.RowCount,
 		Granules: len(b.part.Descriptor.Granules),
 		Blocks:   countColumnBlocks(b.part.Descriptor),
-	}, data)
-	return nil
+	}, data, b.opts.SectionCompression)
 }
 
 func (b *columnPartImageBuilder) addDictionarySection() error {
@@ -1109,7 +1108,7 @@ func canCompressImageSection(section ColumnPartImageSection, rawBytes int, compr
 			return false
 		}
 		switch section.Kind {
-		case ColumnPartImageSectionRowLocators, ColumnPartImageSectionDictionaries:
+		case ColumnPartImageSectionRowLocators, ColumnPartImageSectionDictionaries, ColumnPartImageSectionPruningMetadata:
 			return true
 		default:
 			return false

@@ -611,10 +611,15 @@ func validateTypedColumnProductionPartColumnLayout(field TypedStorageField, colu
 }
 
 func validateTypedColumnProductionPrimaryColumnLayout(column typedcolumn.ColumnPartColumn) error {
-	if column.Definition.Name != typedColumnAdapterPrimaryIDColumn || column.Definition.Type != typedcolumn.ColumnTypeInt64 || column.Definition.Encoding != typedcolumn.EncodingRawInt64 || column.Definition.Compression != typedcolumn.CompressionNone {
-		return fmt.Errorf("%w: primary-id column %q type=%s encoding=%s compression=%s want type=%s encoding=%s compression=%s", errTypedColumnProductionLayoutUnsupported, column.Definition.Name, column.Definition.Type, column.Definition.Encoding, column.Definition.Compression, typedcolumn.ColumnTypeInt64, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone)
+	if column.Definition.Name != typedColumnAdapterPrimaryIDColumn || column.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return fmt.Errorf("%w: primary-id column %q type=%s want type=%s", errTypedColumnProductionLayoutUnsupported, column.Definition.Name, column.Definition.Type, typedcolumn.ColumnTypeInt64)
 	}
-	return validateTypedColumnProductionBlocks(typedColumnAdapterPrimaryIDColumn, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone, column.Blocks)
+	switch column.Definition.Encoding {
+	case typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint:
+	default:
+		return fmt.Errorf("%w: primary-id column %q encoding=%s is unsupported", errTypedColumnProductionLayoutUnsupported, column.Definition.Name, column.Definition.Encoding)
+	}
+	return validateTypedColumnProductionBlocks(typedColumnAdapterPrimaryIDColumn, column.Definition.Encoding, column.Definition.Compression, column.Blocks)
 }
 
 func validateTypedColumnProductionBlocks(label string, wantEncoding typedcolumn.Encoding, requestedCompression typedcolumn.Compression, blocks []typedcolumn.ColumnBlock) error {

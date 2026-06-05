@@ -477,7 +477,11 @@ func decodeColumnPruningSectionFromImage(image ColumnPartImage, desc ColumnPartD
 	if err != nil || !ok {
 		return ColumnPartPruning{}, err
 	}
-	pruning, err := DecodeColumnPartPruningSection(image.sectionBytes(section))
+	data, err := image.pruningMetadataSectionBytes(section)
+	if err != nil {
+		return ColumnPartPruning{}, err
+	}
+	pruning, err := DecodeColumnPartPruningSection(data)
 	if err != nil {
 		return ColumnPartPruning{}, err
 	}
@@ -485,6 +489,18 @@ func decodeColumnPruningSectionFromImage(image ColumnPartImage, desc ColumnPartD
 		return ColumnPartPruning{}, err
 	}
 	return pruning, nil
+}
+
+func DecodeColumnPartPruningImageSection(section ColumnPartImageSection, payload []byte) (ColumnPartPruning, error) {
+	rawBytes := section.RawBytes
+	if rawBytes == 0 && section.Compression == CompressionNone {
+		rawBytes = section.Length
+	}
+	data, err := sectionPayloadBytesWithKnownRawLength(section, payload, rawBytes, maxCompressedPruningMetadataSectionRawBytes, "pruning metadata")
+	if err != nil {
+		return ColumnPartPruning{}, err
+	}
+	return DecodeColumnPartPruningSection(data)
 }
 
 func DecodeColumnPartPruningSection(data []byte) (ColumnPartPruning, error) {
