@@ -1188,10 +1188,16 @@ func TestPublicCommandWALDeleteRangeReplaysUnappliedFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backend Open for manual command append: %v", err)
 	}
-	lsn, err := backend.AppendRawKVSingleCommandWAL(commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: []byte("b"), Value: []byte("d")}, true)
+	var payload commitlog.RawKVBatchPayloadBuilder
+	_ = payload.ResetWithHint(1, len("b")+len("d"))
+	if _, err := payload.AppendDeleteRange([]byte("b"), []byte("d")); err != nil {
+		_ = backend.Close()
+		t.Fatalf("AppendDeleteRange payload: %v", err)
+	}
+	lsn, err := backend.AppendRawKVBatchPayloadCommandWALTrusted(payload.Payload(), true)
 	if err != nil {
 		_ = backend.Close()
-		t.Fatalf("AppendRawKVSingleCommandWAL DeleteRange: %v", err)
+		t.Fatalf("AppendRawKVBatchPayloadCommandWALTrusted DeleteRange: %v", err)
 	}
 	if lsn <= baseApplied {
 		_ = backend.Close()

@@ -21211,6 +21211,11 @@ func (db *DB) DeleteRange(start, end []byte) error {
 // the range delete becomes visible in memory or durable backend roots. This is
 // for public command-WAL mode, where command WAL durability replaces the cached
 // redo log.
+//
+// appendCommand runs while delete serialization is active. It must not re-enter
+// the same caching DB or call methods that need the cache writer lock. It should
+// return quickly and handle any synchronization with other components itself;
+// long-blocking callbacks stall cached writers.
 func (db *DB) DeleteRangeAfterCommandWALAppend(start, end []byte, appendCommand func() error) error {
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
@@ -21530,6 +21535,9 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
+		// appendCommand runs while the cache writer is serialized. It must not
+		// re-enter this DB; see DeleteRangeAfterCommandWALAppend for the callback
+		// contract.
 		if err := appendCommandBeforeVisibility(); err != nil {
 			db.mu.Unlock()
 			return err
