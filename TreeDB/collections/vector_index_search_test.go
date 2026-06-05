@@ -1005,6 +1005,79 @@ func waitForCollectionVectorIndexPreparedSearchWaits2363(tb testing.TB, col *Col
 	tb.Fatalf("timed out waiting for collection prepared-search cache waits >= %d", waits)
 }
 
+func TestSearchVectorIndexWithBufferPreparedCacheDoesNotPublishDuringClose2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}, {id: "doc-b", vector: []float32{0, 1, 0}}}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var hookOnce sync.Once
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+	collectionVectorIndexPreparedSearchBuildHookForTest.fn = func(indexName string) {
+		if indexName != def.Name {
+			return
+		}
+		hookOnce.Do(func() {
+			close(started)
+			<-release
+		})
+	}
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	defer func() {
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+		collectionVectorIndexPreparedSearchBuildHookForTest.fn = nil
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	}()
+
+	searchDone := make(chan error, 1)
+	go func() {
+		var buffer VectorIndexSearchBuffer
+		_, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+		searchDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		_ = d.Close()
+		t.Fatal("timed out waiting for cache build to start")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && (col.manager == nil || !col.manager.isClosing()) {
+		time.Sleep(time.Millisecond)
+	}
+	if col.manager == nil || !col.manager.isClosing() {
+		close(release)
+		t.Fatal("timed out waiting for manager close to start")
+	}
+	close(release)
+	select {
+	case err := <-searchDone:
+		if !errors.Is(err, backenddb.ErrClosed) {
+			t.Fatalf("SearchVectorIndexWithBuffer during close err=%v want ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for search during close")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("DB Close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for DB close")
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 0 || snap.ActiveHandles != 0 {
+		t.Fatalf("cache after close race=%+v want no published prepared state", snap)
+	}
+}
+
 func TestSearchVectorIndexWithBufferPreparedCacheCloseReleasesHandles2363(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}, {id: "doc-b", vector: []float32{0, 1, 0}}}
 	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)

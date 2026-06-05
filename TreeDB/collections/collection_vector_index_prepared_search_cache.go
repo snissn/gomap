@@ -153,6 +153,10 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 
 		stored := false
 		c.vectorBufferedSearchMu.Lock()
+		closing := buildErr == nil && ((c.manager != nil && c.manager.isClosing()) || c.db == nil || c.db.IsClosing())
+		if closing {
+			buildErr = backenddb.ErrClosed
+		}
 		entry.prepared = prepared
 		entry.building = false
 		if c.vectorBufferedSearch[opts.IndexName] == entry {
