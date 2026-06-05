@@ -150,9 +150,11 @@ Healthy no-document fast-path evidence must include `ns/op`, `ops/sec`, `B/op`,
 
 The current one-shot baseline row should instead show the boundary explicitly,
 for example `open_searcher_calls/op=1`, `open_setup_in_timed_loop=1`,
-`search_route_column_graph_prepared/search=1`, and
-`search_route_hnsw_search_pack/search=0`, while still proving no documents or
-fallback/scratch decodes.
+`search_route_hnsw_search_pack/search=0`, and the selected one-shot
+`column_graph` route (`search_route_column_graph_prepared/search=1` on direct
+prepared platforms, or `search_route_column_graph_fallback/search=1` when the
+platform/source state requires the existing non-pack route), while still proving
+no documents or graph-row/typed-vector fallback/scratch decodes.
 
 ## Demo
 

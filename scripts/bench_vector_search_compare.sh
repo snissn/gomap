@@ -172,8 +172,9 @@ Canonical current production comparison:
   This row is a baseline and guardrail for future collection-level high-QPS work,
   not a success criterion. It should report \`docs_fetched/search=0\`, no
   graph-row fallback, no typed-column vector fallback, no vector scratch decode,
-  \`search_route_column_graph_prepared/search=1\`,
   \`search_route_hnsw_search_pack/search=0\`, pack availability/open evidence,
+  the selected one-shot \`column_graph\` route (prepared on direct-view
+  platforms, fallback on heap-copy/source-limited platforms),
   \`open_searcher_calls/op=1\`, and \`open_setup_in_timed_loop=1\`.
 - \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_SearchWithBuffer\`
   and \`.../TreeDB_SearchWithBufferParallel\` time the persisted TreeDB

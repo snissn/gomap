@@ -561,9 +561,7 @@ func assertSearchVectorIndexNoDocumentCurrentOneShotStats2361(tb testing.TB, sta
 		stats.DocumentJSONReconstructionRows != 0 {
 		tb.Fatalf("no-doc stats=%+v want zero document materialization counters", stats)
 	}
-	if stats.SearchRouteColumnGraphPrepared != 1 || stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphFallback != 0 {
-		tb.Fatalf("no-doc stats=%+v want current Collection.SearchVectorIndex one-shot column_graph route, not high-QPS pack route", stats)
-	}
+	assertSearchVectorIndexCurrentOneShotRoute2361(tb, "no-doc", stats)
 	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackOpenNanos == 0 {
 		tb.Fatalf("no-doc stats=%+v want hnsw_search_pack_v1 active/open evidence available for future high-QPS route", stats)
 	}
@@ -581,10 +579,18 @@ func assertSearchVectorIndexIncludeDocumentsStats2361(tb testing.TB, stats Vecto
 		stats.DocumentPointRowDecodes != uint64(results) {
 		tb.Fatalf("with-docs stats=%+v want vector-index row-ref state point fetches", stats)
 	}
-	if stats.SearchRouteColumnGraphPrepared != 1 || stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphFallback != 0 {
-		tb.Fatalf("with-docs stats=%+v want document materialization outside high-QPS pack route", stats)
-	}
+	assertSearchVectorIndexCurrentOneShotRoute2361(tb, "with-docs", stats)
 	assertVectorIndexSearchNoFallbackStats2361(tb, stats)
+}
+
+func assertSearchVectorIndexCurrentOneShotRoute2361(tb testing.TB, label string, stats VectorIndexSearchStats) {
+	tb.Helper()
+	if stats.SearchRouteHNSWSearchPack != 0 {
+		tb.Fatalf("%s stats=%+v want current Collection.SearchVectorIndex one-shot route, not high-QPS pack route", label, stats)
+	}
+	if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+		tb.Fatalf("%s stats=%+v want exactly one current Collection.SearchVectorIndex one-shot column_graph route", label, stats)
+	}
 }
 
 func assertVectorIndexSearchNoFallbackStats2361(tb testing.TB, stats VectorIndexSearchStats) {

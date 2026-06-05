@@ -257,10 +257,9 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 			b.Fatalf("measure SearchVectorIndex stats: %v", err)
 		}
 		stats := measured.Stats
-		if stats.SearchRouteColumnGraphPrepared != 1 ||
+		if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 ||
 			stats.SearchRouteHNSWSearchPack != 0 ||
 			stats.HNSWSearchPackActive != 1 ||
-			stats.SearchRouteColumnGraphFallback != 0 ||
 			stats.TypedColumnFallbacks != 0 ||
 			stats.VectorScratchDecodes != 0 ||
 			stats.GraphRowFallbacks != 0 ||
