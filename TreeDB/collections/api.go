@@ -10077,17 +10077,28 @@ func (c *Collection) insertBatchNoIndex(
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
+	var retainedDocuments [][]byte
+	var retainedTemplateRecords []templateV1Record
+	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
+		fullDocuments := make([][]byte, len(entries))
+		for i := range entries {
+			fullDocuments[i] = entries[i].document
+		}
+		prepared, err := prepareColumnRetainedPayloadStorageDocuments(*c.meta.Options.ColumnStore, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
+		if err != nil {
+			return nil, err
+		}
+		retainedDocuments = prepared.documents
+		retainedTemplateRecords = prepared.templateRecords
+	}
+
 	phaseStart = time.Now()
 	table := newCollectionRunTable(len(entries))
 	var rowRemainderBytes int64
 	for i := range entries {
 		storedDocument := entries[i].document
-		if columnStoreNeedsRetainedPayloadTransform(c.meta) {
-			storedDocument, err = columnRetainedPayloadFromJSONDocument(*c.meta.Options.ColumnStore, entries[i].document)
-			if err != nil {
-				resetCollectionRunTable(table)
-				return nil, err
-			}
+		if retainedDocuments != nil {
+			storedDocument = retainedDocuments[i]
 		}
 		rowRemainderBytes = saturatingAddNonNegativeInt64(rowRemainderBytes, int64(len(entries[i].id)+len(storedDocument)))
 		setCollectionRunValue(table, entries[i].id, storedDocument)
@@ -10108,25 +10119,57 @@ func (c *Collection) insertBatchNoIndex(
 	}()
 
 	publishStart := time.Now()
+	rootNames := []string{rootName}
+	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	ordered := []backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
 		Iter:          iter,
 		StoragePolicy: plannerOptions.dataStoragePolicy,
 	}}
+	var templateTables []memtable.Table
+	var templateIters []iterator.UnsafeIterator
+	defer func() {
+		for _, it := range templateIters {
+			_ = it.Close()
+		}
+		resetCollectionTables(templateTables)
+	}()
+	if len(retainedTemplateRecords) > 0 {
+		templatePlan := &insertBatchPlan{}
+		if err := (insertBatchPlanner{
+			collection:             c.meta.Name,
+			templateRoot:           collectionTemplateRootName(c.meta.Name),
+			options:                plannerOptions,
+			cloneTemplateRunValues: true,
+		}).emitTemplateRun(templatePlan, retainedTemplateRecords); err != nil {
+			return nil, err
+		}
+		for _, run := range templatePlan.runs {
+			templateTables = append(templateTables, run.table)
+			templateIter := run.table.NewIterator(nil, nil)
+			templateIters = append(templateIters, templateIter)
+			rootNames = append(rootNames, run.name)
+			baseRootIDs[run.name] = catalog.rootID(run.name)
+			ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+				BaseRoot:      catalog.rootID(run.name),
+				Iter:          templateIter,
+				StoragePolicy: run.storagePolicy,
+			})
+		}
+	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if columnStoreWriteEnabled(c.meta) {
 		var publishMeta CollectionMeta
 		var publishRootNames []string
-		columnBaseRootIDs := map[string]uint64{rootName: baseRoot}
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
 				meta:              c.meta,
 				catalog:           catalog,
 				baseCommitSeq:     baseCommitSeq,
 				baseSystemRoot:    baseSystemRoot,
-				rootNames:         []string{rootName},
-				baseRootIDs:       columnBaseRootIDs,
+				rootNames:         cloneColumnPublishRootNames(rootNames),
+				baseRootIDs:       cloneColumnPublishBaseRootIDs(baseRootIDs),
 				commandWALIntent:  commandWALIntent,
 				operation:         ColumnPublishOperationInsert,
 				documents:         columnWriteDocumentsFromNoIndexEntries(entries),
@@ -10142,7 +10185,7 @@ func (c *Collection) insertBatchNoIndex(
 		if len(rootIDs) != len(publishRootNames) {
 			return nil, unexpectedOrderedRootCountError(c.meta.Name, len(publishRootNames), len(rootIDs))
 		}
-		stats.Runs = 1
+		stats.Runs = len(rootNames)
 		nextCatalog := cloneCatalogWithRootUpdates(catalog, publishMeta, publishRootNames, rootIDs)
 		c.meta = publishMeta
 		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
@@ -10151,28 +10194,27 @@ func (c *Collection) insertBatchNoIndex(
 		return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 	}
 
-	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	if commandWALIntent != nil {
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 			})
 			return err
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		})
 	}
 	stats.Publish = time.Since(publishStart)
 	if err != nil {
 		return nil, err
 	}
-	if len(rootIDs) != 1 {
-		return nil, unexpectedOrderedRootCountError(c.meta.Name, 1, len(rootIDs))
+	if len(rootIDs) != len(rootNames) {
+		return nil, unexpectedOrderedRootCountError(c.meta.Name, len(rootNames), len(rootIDs))
 	}
-	stats.Runs = 1
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs)
+	stats.Runs = len(rootNames)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.setLastInsertStats(stats)
@@ -13275,6 +13317,20 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	if templateResolver != nil {
 		plannerOptions.templateResolver = templateResolver
 	}
+	var retainedPrimaryDocument []byte
+	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
+		prepared, err := prepareColumnRetainedPayloadStorageDocuments(*c.meta.Options.ColumnStore, [][]byte{document}, columnRetainedPayloadTemplateResolver(snap, catalog))
+		if err != nil {
+			_ = snap.Close()
+			return false, false, err
+		}
+		if len(prepared.documents) != 1 {
+			_ = snap.Close()
+			return false, false, errors.New("collections: update retained payload prepared unexpected document count")
+		}
+		retainedPrimaryDocument = prepared.documents[0]
+		templateRecords = append(templateRecords, prepared.templateRecords...)
+	}
 
 	if len(runtimes) > 0 {
 		phaseStart = updateBatchStatsNow(detailedStats)
@@ -13355,13 +13411,8 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	phaseStart = updateBatchStatsNow(detailedStats)
 	primaryDocument := document
 	var rowRemainderBytes int64
-	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
-		primaryDocument, err = columnRetainedPayloadFromJSONDocument(*c.meta.Options.ColumnStore, document)
-		if err != nil {
-			_ = snap.Close()
-			resetCollectionTables(deltaTables)
-			return false, false, err
-		}
+	if retainedPrimaryDocument != nil {
+		primaryDocument = retainedPrimaryDocument
 	}
 	rowRemainderBytes = int64(len(documentID) + len(primaryDocument))
 	primaryTable := newCollectionRunTable(1)
@@ -15351,15 +15402,24 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
 		templateV1CommandWALDocuments = collectionDocumentsFromBatchUpdateDocuments(changed, changedDocuments)
 	}
+	var retainedPrimaryDocuments [][]byte
+	if columnStoreNeedsRetainedPayloadTransform(meta) {
+		prepared, err := prepareColumnRetainedPayloadStorageDocuments(*meta.Options.ColumnStore, changedDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		if len(prepared.documents) != len(changed) {
+			_ = snap.Close()
+			return nil, errors.New("collections: update batch retained payload prepared unexpected document count")
+		}
+		retainedPrimaryDocuments = prepared.documents
+		templateRecords = append(templateRecords, prepared.templateRecords...)
+	}
 	for i := range changed {
 		changed[i].document = preparedDocuments[i]
-		if columnStoreNeedsRetainedPayloadTransform(meta) {
-			retained, err := columnRetainedPayloadFromJSONDocument(*meta.Options.ColumnStore, changed[i].document)
-			if err != nil {
-				_ = snap.Close()
-				return nil, updateBatchItemError(changed[i].itemIndex, err)
-			}
-			changed[i].primaryDocument = appendUpdateBatchPlanScratchDocument(scratch, retained)
+		if retainedPrimaryDocuments != nil {
+			changed[i].primaryDocument = appendUpdateBatchPlanScratchDocument(scratch, retainedPrimaryDocuments[i])
 			changed[i].hasPrimaryDocument = true
 		}
 		if len(runtimes) > 0 {
@@ -19386,6 +19446,7 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(columnStoreConfig)))
 	mergeScratch := make([]columnDeclaredValue, 0, len(columnStoreConfig.Columns))
+	retainedTemplateResolver := columnRetainedPayloadTemplateResolver(snap, catalog)
 	for _, record := range records {
 		for visiblePos < len(visibleRows) && bytes.Compare(visibleRows[visiblePos].ID, record.ID) < 0 {
 			visiblePos++
@@ -19401,7 +19462,7 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		if err != nil {
 			return false, err
 		}
-		reconstructed, err := reconstructColumnDocumentFromVisibleRowValues(columnStoreConfig, record.Document, visibleRows[visiblePos], fullValues)
+		_, reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(nil, columnStoreConfig, record.Document, visibleRows[visiblePos], fullValues, nil, nil, retainedTemplateResolver)
 		if err != nil {
 			return false, err
 		}
@@ -20566,7 +20627,7 @@ func findVectorIndex(indexes []VectorIndexDefinition, name string) (VectorIndexD
 
 func collectionRootNames(meta CollectionMeta) []string {
 	out := []string{collectionPrimaryRootName(meta.Name)}
-	if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+	if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 || columnStoreRetainedPayloadUsesTemplateV1(meta.Options.ColumnStore) {
 		out = append(out, collectionTemplateRootName(meta.Name))
 	}
 	if len(meta.Indexes) > 0 && persistIndexStateForDocumentFormat(meta.Options.DocumentFormat) {

@@ -31,7 +31,7 @@ func TestAuditColumnRetainedPayloadPathsAbsentJSONBenchPaths2354(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuditColumnRetainedPayloadPathsAbsent: %v audit=%+v retained=%s", err, audit, retained)
 	}
-	if audit.RetainedPayloadEncoding != ColumnRetainedPayloadEncodingJSON || audit.RetainedPayloadEncodingStatus == "" {
+	if audit.RetainedPayloadEncoding != string(ColumnRetainedPayloadEncodingTemplateV1) || audit.RetainedPayloadEncodingStatus == "" {
 		t.Fatalf("unexpected encoding status: %+v", audit)
 	}
 	if len(audit.Paths) != 5 {
@@ -45,7 +45,7 @@ func TestAuditColumnRetainedPayloadPathsAbsentJSONBenchPaths2354(t *testing.T) {
 }
 
 func TestAuditColumnRetainedPayloadPathsAbsentFailsClosed2354(t *testing.T) {
-	cfg := ColumnStoreConfig{Enabled: true, RetainedPayload: ColumnRetainedPayloadNonColumn}
+	cfg := ColumnStoreConfig{Enabled: true, RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON}
 	audit, err := AuditColumnRetainedPayloadPathsAbsent(cfg, []byte(`{"commit":{"operation":"create"},"payload":"kept"}`), []string{"commit.operation"})
 	if err == nil || !strings.Contains(err.Error(), "commit.operation") {
 		t.Fatalf("audit err=%v want commit.operation violation audit=%+v", err, audit)

@@ -33,8 +33,12 @@ func TestColumnStoreSuiteRetainedPayloadPreservesJSONNumbersM13C(t *testing.T) {
 	if bytes.Contains(retained, []byte("9.223")) {
 		t.Fatalf("retained payload used floating/scientific notation: %s", retained)
 	}
-	if !bytes.Contains(retained, []byte(`"payload_id":9223372036854775806`)) {
+	if !bytes.Contains(retained, []byte(`9223372036854775806`)) {
 		t.Fatalf("retained payload lost integer fidelity: %s", retained)
+	}
+	audit, err := collections.AuditColumnRetainedPayloadPathsAbsent(*cfg, retained, []string{"time_us", "kind", "did"})
+	if err != nil {
+		t.Fatalf("retained payload path audit: %v audit=%+v retained=%s", err, audit, retained)
 	}
 	if bytes.Contains(retained, []byte("time_us")) || bytes.Contains(retained, []byte("kind")) || bytes.Contains(retained, []byte("did")) {
 		t.Fatalf("retained payload still contains declared columns: %s", retained)
