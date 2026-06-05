@@ -505,6 +505,27 @@ func columnHNSWSearchPackSectionBytes(raw []byte, section columnHNSWSearchPackSe
 	return raw[int(section.Offset):int(section.Offset+section.Length)]
 }
 
+func (v *columnHNSWSearchPackPreparedView) fastStatus(defaultStatus columnHNSWSearchPackPreparedStatus) columnHNSWSearchPackPreparedStatus {
+	if v == nil {
+		if defaultStatus == "" {
+			return columnHNSWSearchPackPreparedStatusMissing
+		}
+		return defaultStatus
+	}
+	if v.closed.Load() {
+		return columnHNSWSearchPackPreparedStatusClosed
+	}
+	if v.handle == nil || v.handle.Released() {
+		return columnHNSWSearchPackPreparedStatusStale
+	}
+	switch v.status {
+	case columnHNSWSearchPackPreparedStatusDirect, columnHNSWSearchPackPreparedStatusHeap, columnHNSWSearchPackPreparedStatusInvalid, columnHNSWSearchPackPreparedStatusStale, columnHNSWSearchPackPreparedStatusClosed, columnHNSWSearchPackPreparedStatusMissing:
+		return v.status
+	default:
+		return columnHNSWSearchPackPreparedStatusInvalid
+	}
+}
+
 func (v *columnHNSWSearchPackPreparedView) validateLive() error {
 	if v == nil {
 		return columnHNSWSearchPackStatusError(columnHNSWSearchPackPreparedStatusMissing)

@@ -329,9 +329,15 @@ func TestColumnHNSWSearchPackReopenPreservesManifestIdentity2313(t *testing.T) {
 		t.Fatalf("SearchWithBuffer reopen: %v", err)
 	}
 	stats := response.Stats
-	if stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackMmapDirect+stats.HNSWSearchPackHeapCopy != 1 || stats.HNSWSearchPackOpenNanos == 0 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes == 0 {
-		t.Fatalf("reopen search stats=%+v want pack availability without route change", stats)
+	if stats.SearchRouteHNSWSearchPack != 1 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 0 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || stats.HNSWSearchPackMmapDirect+stats.HNSWSearchPackHeapCopy != 1 || stats.HNSWSearchPackOpenNanos == 0 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes == 0 {
+		t.Fatalf("reopen search stats=%+v want hnsw_search_pack_v1 route", stats)
 	}
+	fullOpts := VectorIndexSearcherSearchOptions{Query: []float32{1, 0, 0}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeFullDiagnostics}
+	fullResponse, err := searcher.SearchWithBuffer(fullOpts, &buf)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer reopen full stats: %v", err)
+	}
+	assertColumnHNSWSearchPackMatchesColumnGraphRoute2315(t, searcher, fullOpts, fullResponse)
 }
 
 func TestColumnHNSWSearchPackEmptyAndSingleRowFixtures2313(t *testing.T) {
@@ -394,7 +400,7 @@ func TestColumnHNSWSearchPackValidationRejectsMismatchedRefs2313(t *testing.T) {
 	}
 }
 
-func TestColumnHNSWSearchPackFallbackSearchPathStillUsable2313(t *testing.T) {
+func TestColumnHNSWSearchPackSearchPathServesSearchWithBuffer2313(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
@@ -419,11 +425,11 @@ func TestColumnHNSWSearchPackFallbackSearchPathStillUsable2313(t *testing.T) {
 		t.Fatalf("results=%d want 2", len(response.Results))
 	}
 	stats := response.Stats
-	if stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
-		t.Fatalf("route stats=%+v want existing column_graph route, no pack route", stats)
+	if stats.SearchRouteHNSWSearchPack != 1 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 0 {
+		t.Fatalf("route stats=%+v want hnsw_search_pack_v1 route", stats)
 	}
-	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackMissing != 0 || stats.HNSWSearchPackInvalid != 0 || stats.HNSWSearchPackMmapDirect+stats.HNSWSearchPackHeapCopy != 1 || stats.HNSWSearchPackOpenNanos == 0 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes == 0 {
-		t.Fatalf("pack stats=%+v want opened hnsw_search_pack_v1 view without search routing", stats)
+	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackMissing != 0 || stats.HNSWSearchPackInvalid != 0 || stats.HNSWSearchPackFallbacks != 0 || stats.HNSWSearchPackMmapDirect+stats.HNSWSearchPackHeapCopy != 1 || stats.HNSWSearchPackOpenNanos == 0 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes == 0 || stats.GraphRowFallbacks != 0 || stats.VectorScratchDecodes != 0 || stats.DocumentsFetched != 0 {
+		t.Fatalf("pack stats=%+v want healthy hnsw_search_pack_v1 search routing", stats)
 	}
 }
 
@@ -556,6 +562,117 @@ func TestColumnHNSWSearchPackPreparedViewSharedReadersRelease2314(t *testing.T) 
 	}
 	if stats := view.mappedResourceStats(); stats.ActiveHandles != 0 || !view.closed.Load() {
 		t.Fatalf("shared pack stats after final close=%+v closed=%v", stats, view.closed.Load())
+	}
+}
+
+func TestColumnHNSWSearchPackRouteMatchesColumnGraph2315(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+		{id: "doc-e", vector: []float32{0.5, 0.5, 0}},
+		{id: "doc-f", vector: []float32{0.2, 0.8, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	opts := VectorIndexSearcherSearchOptions{Query: []float32{1, 0.05, 0}, TopK: 4, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeFullDiagnostics}
+	var buffer VectorIndexSearchBuffer
+	packResponse, err := searcher.SearchWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer pack route: %v", err)
+	}
+	if packResponse.Stats.SearchRouteHNSWSearchPack != 1 || packResponse.Stats.HNSWSearchPackActive != 1 || packResponse.Stats.HNSWSearchPackFallbacks != 0 || packResponse.Stats.GraphRowFallbacks != 0 || packResponse.Stats.VectorScratchDecodes != 0 || packResponse.Stats.DocumentsFetched != 0 {
+		t.Fatalf("pack route stats=%+v", packResponse.Stats)
+	}
+	assertColumnHNSWSearchPackMatchesColumnGraphRoute2315(t, searcher, opts, packResponse)
+}
+
+func TestColumnHNSWSearchPackMissingAndStaleFallbackSearchWithBuffer2315(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearcherSearchOptions{Query: []float32{1, 0, 0}, TopK: 2, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}
+
+	missingSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher missing: %v", err)
+	}
+	missingSearcher.reader.hnswSearchPack = nil
+	missingSearcher.reader.hnswSearchPackStatus = columnHNSWSearchPackPreparedStatusMissing
+	missingSearcher.reader.hnswSearchPackOpenNanos = 0
+	var missingBuffer VectorIndexSearchBuffer
+	missingResponse, err := missingSearcher.SearchWithBuffer(opts, &missingBuffer)
+	if closeErr := missingSearcher.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("SearchWithBuffer missing pack fallback: %v", err)
+	}
+	if len(missingResponse.Results) != opts.TopK || missingResponse.Stats.SearchRouteHNSWSearchPack != 0 || missingResponse.Stats.SearchRouteColumnGraphPrepared+missingResponse.Stats.SearchRouteColumnGraphFallback != 1 || missingResponse.Stats.HNSWSearchPackMissing != 1 || missingResponse.Stats.HNSWSearchPackFallbacks != 1 {
+		t.Fatalf("missing fallback response=%+v stats=%+v", missingResponse.Results, missingResponse.Stats)
+	}
+
+	staleSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher stale: %v", err)
+	}
+	if staleSearcher.reader == nil || staleSearcher.reader.hnswSearchPack == nil || staleSearcher.reader.hnswSearchPack.handle == nil {
+		_ = staleSearcher.Close()
+		t.Fatal("stale test opened searcher without hnsw search pack handle")
+	}
+	if err := staleSearcher.reader.hnswSearchPack.handle.Release(); err != nil {
+		_ = staleSearcher.Close()
+		t.Fatalf("release pack handle for stale simulation: %v", err)
+	}
+	var staleBuffer VectorIndexSearchBuffer
+	staleResponse, err := staleSearcher.SearchWithBuffer(opts, &staleBuffer)
+	if closeErr := staleSearcher.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("SearchWithBuffer stale pack fallback: %v", err)
+	}
+	if len(staleResponse.Results) != opts.TopK || staleResponse.Stats.SearchRouteHNSWSearchPack != 0 || staleResponse.Stats.SearchRouteColumnGraphPrepared+staleResponse.Stats.SearchRouteColumnGraphFallback != 1 || staleResponse.Stats.HNSWSearchPackStale != 1 || staleResponse.Stats.HNSWSearchPackFallbacks != 1 {
+		t.Fatalf("stale fallback response=%+v stats=%+v", staleResponse.Results, staleResponse.Stats)
+	}
+}
+
+func assertColumnHNSWSearchPackMatchesColumnGraphRoute2315(tb testing.TB, searcher *VectorIndexSearcher, opts VectorIndexSearcherSearchOptions, packResponse VectorIndexSearchResponse) {
+	tb.Helper()
+	if searcher == nil || searcher.reader == nil {
+		tb.Fatal("nil searcher/reader for column_graph parity")
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	reference, referenceStats, err := searcher.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, EfSearch: opts.EfSearch, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &scratch)
+	if err != nil {
+		tb.Fatalf("reference SearchCosine: %v", err)
+	}
+	if len(packResponse.Results) != len(reference) {
+		tb.Fatalf("pack results=%d reference=%d", len(packResponse.Results), len(reference))
+	}
+	for i := range reference {
+		if packResponse.Results[i].Ordinal != reference[i].Ordinal || string(packResponse.Results[i].ID) != string(reference[i].ID) || math.Abs(packResponse.Results[i].Score-reference[i].Score) > 1e-5 {
+			tb.Fatalf("result[%d]=%+v reference ordinal=%d id=%q score=%v", i, packResponse.Results[i], reference[i].Ordinal, reference[i].ID, reference[i].Score)
+		}
+	}
+	if packResponse.Stats.Candidates != referenceStats.Candidates || packResponse.Stats.VisitedEdges != referenceStats.VisitedEdges {
+		tb.Fatalf("pack stats candidates/edges=(%d,%d) reference=(%d,%d) pack=%+v reference=%+v", packResponse.Stats.Candidates, packResponse.Stats.VisitedEdges, referenceStats.Candidates, referenceStats.VisitedEdges, packResponse.Stats, referenceStats)
 	}
 }
 

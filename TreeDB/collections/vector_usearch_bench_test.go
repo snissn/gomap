@@ -110,8 +110,8 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 			b.Fatalf("measure SearchWithBuffer stats: %v", err)
 		}
 		stats := measured.Stats
-		if stats.TypedColumnFallbacks != 0 || stats.VectorMmapDirectViews+stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 {
-			b.Fatalf("TreeDB production comparison stats=%+v want active typed-column vector source counters", stats)
+		if stats.SearchRouteHNSWSearchPack != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 || stats.GraphRowFallbacks != 0 || stats.DocumentsFetched != 0 {
+			b.Fatalf("TreeDB production comparison stats=%+v want active hnsw_search_pack_v1 route", stats)
 		}
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -170,8 +170,8 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 			b.Fatalf("measure SearchWithBuffer stats: %v", err)
 		}
 		stats := measured.Stats
-		if stats.TypedColumnFallbacks != 0 || stats.VectorMmapDirectViews+stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 {
-			b.Fatalf("TreeDB production parallel comparison stats=%+v want active typed-column vector source counters", stats)
+		if stats.SearchRouteHNSWSearchPack != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 || stats.GraphRowFallbacks != 0 || stats.DocumentsFetched != 0 {
+			b.Fatalf("TreeDB production parallel comparison stats=%+v want active hnsw_search_pack_v1 route", stats)
 		}
 		top1Got, top1Want := string(measured.Results[0].ID), vectorUSearchProductionDocID(queryDocIndexes[0])
 		var nextWorker atomic.Uint64

@@ -617,6 +617,72 @@ func vectorIndexSearchRouteStatsForColumnGraphReader(reader *columnVectorGraphPh
 	return stats
 }
 
+func vectorIndexSearchRouteStatsForColumnGraphSearchWithBufferFallback(cached vectorIndexSearchRouteStats) vectorIndexSearchRouteStats {
+	stats := cached
+	stats.SearchRouteHNSWSearchPack = 0
+	stats.HNSWSearchPackFallbacks = 1
+	return stats
+}
+
+func vectorIndexSearchRouteStatsForHNSWSearchPackRoute(cached vectorIndexSearchRouteStats) vectorIndexSearchRouteStats {
+	stats := cached
+	stats.SearchRouteColumnGraphPrepared = 0
+	stats.SearchRouteColumnGraphFallback = 0
+	stats.SearchRouteHNSWSearchPack = 1
+	return stats
+}
+
+func vectorIndexSearchRouteStatsForHNSWSearchPackFastStatus(cached vectorIndexSearchRouteStats, status columnHNSWSearchPackPreparedStatus) vectorIndexSearchRouteStats {
+	stats := cached
+	switch status {
+	case columnHNSWSearchPackPreparedStatusDirect, columnHNSWSearchPackPreparedStatusHeap:
+		return stats
+	}
+	stats.clearHNSWSearchPackAvailability()
+	stats.applyHNSWSearchPackStatus(status)
+	if status == columnHNSWSearchPackPreparedStatusMissing || status == "" {
+		stats.HNSWSearchPackFallbacks = 1
+	}
+	return stats
+}
+
+func (r *vectorIndexSearchRouteStats) clearHNSWSearchPackAvailability() {
+	if r == nil {
+		return
+	}
+	openNanos := r.HNSWSearchPackOpenNanos
+	r.HNSWSearchPackActive = 0
+	r.HNSWSearchPackMissing = 0
+	r.HNSWSearchPackInvalid = 0
+	r.HNSWSearchPackStale = 0
+	r.HNSWSearchPackClosed = 0
+	r.HNSWSearchPackFallbacks = 0
+	r.HNSWSearchPackMmapDirect = 0
+	r.HNSWSearchPackHeapCopy = 0
+	r.HNSWSearchPackOpenNanos = openNanos
+	r.HNSWSearchPackMappedBytes = 0
+	r.HNSWSearchPackHeapCopyBytes = 0
+	r.HNSWSearchPackActiveHandles = 0
+}
+
+func (s *VectorIndexSearcher) hnswSearchPackSearchWithBufferRoute(queryMode columnVectorGraphNativeSearchQueryMode, statsMode columnVectorGraphNativeSearchStatsMode) (*columnHNSWSearchPackPreparedView, vectorIndexSearchRouteStats, bool) {
+	cached := s.routeStats
+	reader := s.reader
+	pack := (*columnHNSWSearchPackPreparedView)(nil)
+	status := columnHNSWSearchPackPreparedStatusMissing
+	if reader != nil {
+		pack = reader.hnswSearchPack
+		status = pack.fastStatus(reader.hnswSearchPackStatus)
+	}
+	if status != columnHNSWSearchPackPreparedStatusDirect && status != columnHNSWSearchPackPreparedStatusHeap {
+		return nil, vectorIndexSearchRouteStatsForHNSWSearchPackFastStatus(cached, status), false
+	}
+	if queryMode != columnVectorGraphNativeSearchQueryModeExact || !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) || pack == nil {
+		return nil, vectorIndexSearchRouteStatsForColumnGraphSearchWithBufferFallback(cached), false
+	}
+	return pack, vectorIndexSearchRouteStatsForHNSWSearchPackRoute(cached), true
+}
+
 func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 	if stats == nil {
 		return
@@ -1009,6 +1075,31 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 		clear(previousResults)
 		return response, err
 	}
+	pack, routeStats, usePackRoute := s.hnswSearchPackSearchWithBufferRoute(queryMode, statsMode)
+	if usePackRoute {
+		results, searchStats, err := pack.searchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
+			TopK:                      opts.TopK,
+			EfSearch:                  opts.EfSearch,
+			ScoreBatchMode:            opts.scoreBatchMode,
+			StatsMode:                 statsMode,
+			QueryMode:                 queryMode,
+			QuantizedIndexName:        opts.QuantizedIndexName,
+			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
+		}, &s.scratch)
+		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+		routeStats.apply(&response.Stats)
+		if err != nil {
+			clear(previousResults)
+			return response, err
+		}
+		response.Results, err = copyVectorIndexSearchResultsToBuffer(results, buffer, previousResults)
+		if err != nil {
+			return response, err
+		}
+		return response, nil
+	}
+
+	fallbackRouteStats := routeStats
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
 		TopK:                      opts.TopK,
@@ -1023,19 +1114,27 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	s.readerLast = readerStatsAfter
 	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
-	s.routeStats.apply(&response.Stats)
+	fallbackRouteStats.apply(&response.Stats)
 	if err != nil {
 		clear(previousResults)
 		return response, err
 	}
+	response.Results, err = copyVectorIndexSearchResultsToBuffer(results, buffer, previousResults)
+	if err != nil {
+		return response, err
+	}
+	return response, nil
+}
+
+func copyVectorIndexSearchResultsToBuffer(results []columnVectorGraphNativeSearchResult, buffer *VectorIndexSearchBuffer, previousResults []VectorIndexSearchResult) ([]VectorIndexSearchResult, error) {
 	if len(results) == 0 {
 		clear(previousResults)
-		return response, nil
+		return nil, nil
 	}
 	idByteCount, err := vectorIndexSearchResultIDBytes(results)
 	if err != nil {
 		clear(previousResults)
-		return response, err
+		return nil, err
 	}
 	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, len(results))
 	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
@@ -1047,7 +1146,7 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 		if len(result.ID) > len(buffer.idBytes)-idOffset {
 			clear(previousResults)
 			buffer.Reset()
-			return response, errors.New("collections: vector index search result id byte accounting mismatch")
+			return nil, errors.New("collections: vector index search result id byte accounting mismatch")
 		}
 		nextIDOffset := idOffset + len(result.ID)
 		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
@@ -1059,8 +1158,7 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 			Score:   result.Score,
 		}
 	}
-	response.Results = buffer.results
-	return response, nil
+	return buffer.results, nil
 }
 
 func resizeVectorIndexSearchResultBuffer(dst []VectorIndexSearchResult, target int) []VectorIndexSearchResult {
