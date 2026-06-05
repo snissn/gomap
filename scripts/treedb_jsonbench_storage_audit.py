@@ -528,7 +528,12 @@ def retained_payload_audit_stub(status: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_retained_payload_audit(args: argparse.Namespace, result_data: Any | None, retained_status: dict[str, Any]) -> dict[str, Any]:
+def run_retained_payload_audit(
+    args: argparse.Namespace,
+    result_data: Any | None,
+    retained_status: dict[str, Any],
+    db_dir: Path | None = None,
+) -> dict[str, Any]:
     if getattr(args, "skip_retained_payload_audit", False):
         retained = retained_payload_audit_stub(retained_status)
         retained["reason"] = "retained payload audit was explicitly skipped"
@@ -540,6 +545,7 @@ def run_retained_payload_audit(args: argparse.Namespace, result_data: Any | None
         return retained
 
     paths = JSONBENCH_DECLARED_PATHS
+    audit_db_dir = Path(db_dir if db_dir is not None else args.db_dir).expanduser().resolve()
     audit_cmd = getattr(args, "retained_payload_audit_cmd", None)
     if audit_cmd:
         command = shlex.split(audit_cmd)
@@ -551,7 +557,7 @@ def run_retained_payload_audit(args: argparse.Namespace, result_data: Any | None
     command.extend(
         [
             "-db-dir",
-            str(Path(args.db_dir).expanduser().resolve()),
+            str(audit_db_dir),
             "-collection",
             collection,
             "-paths",
@@ -696,7 +702,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     result_json = Path(args.result_json).expanduser().resolve() if args.result_json else None
     result_data = load_result_json(result_json) if result_json else None
     retained_status = retained_status_summary(result_json, result_data)
-    retained_audit = run_retained_payload_audit(args, result_data, retained_status)
+    retained_audit = run_retained_payload_audit(args, result_data, retained_status, main_dir)
     retained_status = enrich_retained_status_from_audit(retained_status, retained_audit)
     retained_audit["report_status"] = retained_status
     return {

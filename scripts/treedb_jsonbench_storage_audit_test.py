@@ -189,12 +189,16 @@ class StorageAuditTest(unittest.TestCase):
                     "skip_retained_payload_audit": False,
                 },
             )()
-            retained = audit.run_retained_payload_audit(args, {"collection": "events"}, {})
+            main = Path(tmp) / "db" / "maindb"
+            main.mkdir(parents=True)
+            retained = audit.run_retained_payload_audit(args, {"collection": "events"}, {}, main)
 
         self.assertEqual(retained["status"], "passed")
         self.assertTrue(retained["required_for_final_claim"])
         self.assertEqual(retained["checked_rows"], 2)
         self.assertIn("-paths", retained["command"])
+        db_dir_index = retained["command"].index("-db-dir") + 1
+        self.assertEqual(retained["command"][db_dir_index], str(main.resolve()))
 
     def test_resolve_main_dir_accepts_maindb(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
