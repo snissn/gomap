@@ -201,14 +201,16 @@ Canonical current production comparison:
   vector/adjacency source-state counters, and candidate/visited-edge byte
   counters used by the HNSW search-pack stack.
 - \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexWithBuffer\`
-  times the new collection-level caller-owned result-buffer seam. It uses the
-  same exact no-document route contract as \`SearchWithBuffer\`: caller-owned
-  buffer, no documents/projection, no graph-row fallback, no vector scratch
-  decode, and \`search_route_hnsw_search_pack/search=1\` on healthy packs. Until
-  the collection-owned prepared cache lands, this row still opens/closes a
-  searcher per operation and should report \`open_searcher_calls/op=1\` and
-  \`open_setup_in_timed_loop=1\`; attribute those remaining allocations to the
-  cache follow-up rather than to response-owned result storage.
+  times the collection-level caller-owned result-buffer seam on a warmed
+  collection-owned prepared search-pack cache. It uses the same exact
+  no-document route contract as \`SearchWithBuffer\`: caller-owned buffer, no
+  documents/projection, no graph-row fallback, no vector scratch decode, and
+  \`search_route_hnsw_search_pack/search=1\` on healthy packs. Cache warmup/build
+  happens before the timed loop; the timed row should report
+  \`open_searcher_calls/op=0\`, \`open_setup_in_timed_loop=0\`,
+  \`response_owned_result_alloc/op=0\`, and collection prepared-cache metrics
+  such as \`collection_prepared_cache_builds\` and
+  \`collection_prepared_cache_hits\`.
 - \`.../USearch_Search\` and \`.../USearch_SearchParallel\` time the pure
   in-memory USearch Go binding baseline with cosine/f32 HNSW and the same
   synthetic vector/query generator, M, efConstruction, efSearch, topK, docs,

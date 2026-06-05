@@ -380,6 +380,16 @@ type Collection struct {
 	vectorPreparedSearchMisses uint64
 	vectorPreparedSearchWaits  uint64
 	vectorPreparedSearchBuilds uint64
+
+	vectorBufferedSearchMu            sync.Mutex
+	vectorBufferedSearch              map[string]*collectionVectorIndexPreparedSearchCacheEntry
+	vectorBufferedSearchHits          uint64
+	vectorBufferedSearchMisses        uint64
+	vectorBufferedSearchWaits         uint64
+	vectorBufferedSearchBuilds        uint64
+	vectorBufferedSearchInvalidations uint64
+	vectorBufferedSearchCloses        uint64
+	vectorBufferedSearchErrors        uint64
 }
 
 type CollectionRootOverlayCompactionStats struct {
@@ -1266,7 +1276,9 @@ func (m *CollectionManager) closeForBackend() error {
 		}
 	}()
 	m.stopUpdateCombiners()
-	return m.FlushAll()
+	cacheErr := m.closeCollectionVectorIndexPreparedSearchCaches()
+	flushErr := m.FlushAll()
+	return errors.Join(cacheErr, flushErr)
 }
 
 func (m *CollectionManager) isClosing() bool {
@@ -2999,6 +3011,23 @@ func (m *CollectionManager) registerCollectionHandle(collection *Collection) {
 	}
 	m.collectionsMu.Lock()
 	defer m.collectionsMu.Unlock()
+	m.registerCollectionHandleLocked(collection)
+}
+
+func (m *CollectionManager) registerCollectionHandleIfOpen(collection *Collection) bool {
+	if m == nil || collection == nil {
+		return false
+	}
+	m.collectionsMu.Lock()
+	defer m.collectionsMu.Unlock()
+	if m.isClosing() {
+		return false
+	}
+	m.registerCollectionHandleLocked(collection)
+	return true
+}
+
+func (m *CollectionManager) registerCollectionHandleLocked(collection *Collection) {
 	if m.collections == nil {
 		m.collections = make(map[*Collection]struct{})
 	}

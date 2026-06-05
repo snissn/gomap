@@ -543,8 +543,9 @@ type VectorIndexSearchResponse struct {
 // buffer is reused or Reset is called. Parallel callers should use independent
 // searcher/buffer pairs per worker.
 type VectorIndexSearchBuffer struct {
-	results []VectorIndexSearchResult
-	idBytes []byte
+	results       []VectorIndexSearchResult
+	idBytes       []byte
+	searchScratch columnVectorGraphNativeSearchScratch
 }
 
 // Reset clears the buffer's current response view while retaining reusable
@@ -766,64 +767,65 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 //
 // This method intentionally fails closed for document materialization,
 // projections, filters, quantized modes, benchmark-debug stats mode, missing or
-// invalid hnsw_search_pack_v1 state, and legacy/fallback routes. It currently
-// opens and closes a VectorIndexSearcher per call; that open/prepare allocation
-// and validation cost is still inside this collection-level seam until a
-// collection-owned prepared cache is introduced. Callers that already manage
-// reusable open state should prefer OpenVectorIndexSearcher plus
-// VectorIndexSearcher.SearchWithBuffer for the zero-allocation steady-state hot
-// path.
+// invalid hnsw_search_pack_v1 state, and legacy/fallback routes. Healthy current
+// hnsw_search_pack_v1 state is opened once into a collection-owned prepared
+// cache keyed by the current collection/vector-index manifest identity; steady
+// state searches reuse the prepared pack and caller-owned buffer/scratch instead
+// of opening a VectorIndexSearcher per call.
 func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
-	searcher, response, err := c.openVectorIndexSearcher(VectorIndexSearcherOptions{
-		IndexName:        opts.IndexName,
-		MaxDecodedBlocks: opts.MaxDecodedBlocks,
-	})
-	if err != nil {
+	if c == nil {
 		buffer.Reset()
-		return response, err
+		return VectorIndexSearchResponse{}, errCollectionNil
+	}
+	if c.db == nil {
+		buffer.Reset()
+		return VectorIndexSearchResponse{}, errCollectionDBNil
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		buffer.Reset()
+		return VectorIndexSearchResponse{}, err
 	}
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
 	if err != nil {
 		buffer.Reset()
-		_ = searcher.Close()
-		return response, err
+		return VectorIndexSearchResponse{}, err
 	}
 	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
 	if err != nil {
 		buffer.Reset()
-		_ = searcher.Close()
-		return response, err
+		return VectorIndexSearchResponse{}, err
 	}
-	if _, routeStats, usePackRoute := searcher.hnswSearchPackSearchWithBufferRoute(queryMode, statsMode); !usePackRoute {
+	if queryMode != columnVectorGraphNativeSearchQueryModeExact || !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
 		buffer.Reset()
-		response.Stats = VectorIndexSearchStats{}
-		routeStats.apply(&response.Stats)
-		_ = searcher.Close()
-		return response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
+		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
 	}
-	response, err = searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{
-		Query:          opts.Query,
-		QueryMode:      opts.QueryMode,
-		TopK:           opts.TopK,
-		EfSearch:       opts.EfSearch,
-		StatsMode:      opts.StatsMode,
-		scoreBatchMode: opts.scoreBatchMode,
-	}, buffer)
-	if closeErr := searcher.Close(); err == nil && closeErr != nil {
+	var lastResponse VectorIndexSearchResponse
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		prepared, response, err := c.acquireCollectionVectorIndexPreparedSearch(opts)
+		if err != nil {
+			buffer.Reset()
+			return response, err
+		}
+		response, err = prepared.SearchWithBuffer(opts, statsMode, buffer)
+		healthyPackRoute := vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats)
+		if err == nil && healthyPackRoute {
+			return response, nil
+		}
+		if err != nil && healthyPackRoute {
+			return response, err
+		}
+		lastResponse, lastErr = response, err
 		resetBufferedVectorIndexSearchResponse(&response, buffer)
-		return response, closeErr
+		c.invalidateCollectionVectorIndexPreparedSearch(opts.IndexName, prepared)
 	}
-	if err != nil {
-		return response, err
+	if lastErr != nil {
+		return lastResponse, lastErr
 	}
-	if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats) {
-		resetBufferedVectorIndexSearchResponse(&response, buffer)
-		return response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
-	}
-	return response, nil
+	return lastResponse, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
 }
 
 func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) error {

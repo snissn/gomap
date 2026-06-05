@@ -361,12 +361,12 @@ baseline. Its current production comparison benchmark is
   warmup are outside the timed loop. Parallel rows use one searcher and one
   `VectorIndexSearchBuffer` per worker.
 - `TreeDB_CollectionSearchVectorIndexWithBuffer` times the collection-level
-  caller-owned result-buffer seam. It mirrors the `SearchWithBuffer`
-  no-document route contract: exact mode, caller-owned buffer, no
-  documents/projection, and the healthy `hnsw_search_pack_v1` route. Until the
-  collection-owned prepared cache lands, this seam still opens/closes per
-  operation; report `open_searcher_calls/op=1`, `open_setup_in_timed_loop=1`,
-  and attribute those remaining allocations to the cache follow-up.
+  caller-owned result-buffer seam on a warmed collection-owned prepared cache.
+  It mirrors the `SearchWithBuffer` no-document route contract: exact mode,
+  caller-owned buffer, no documents/projection, and the healthy
+  `hnsw_search_pack_v1` route. Cache warmup/build happens outside the timed
+  loop; report `open_searcher_calls/op=0`, `open_setup_in_timed_loop=0`,
+  `response_owned_result_alloc/op=0`, and collection prepared-cache counters.
 - `USearch_Search` / `USearch_SearchParallel` time the pure in-memory USearch Go
   binding with cosine/f32 HNSW.
 - Both sides use the same deterministic synthetic vector/query generator and the

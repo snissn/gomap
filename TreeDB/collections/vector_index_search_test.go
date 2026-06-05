@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -722,8 +723,8 @@ func TestSearchVectorIndexWithBufferOpenScopedAllocationContract2362(t *testing.
 	if sink == 0 {
 		t.Fatal("allocation check did not consume results")
 	}
-	if bufferedAllocs >= ownedAllocs {
-		t.Fatalf("SearchVectorIndexWithBuffer allocs=%v want below response-owned SearchVectorIndex allocs=%v; remaining allocations are per-call open/prepare work for #2363", bufferedAllocs, ownedAllocs)
+	if bufferedAllocs != 0 {
+		t.Fatalf("SearchVectorIndexWithBuffer warmed-cache allocs=%v want 0; response-owned SearchVectorIndex allocs=%v", bufferedAllocs, ownedAllocs)
 	}
 }
 
@@ -782,6 +783,424 @@ func TestSearchVectorIndexWithBufferParallelIndependentBuffers2362(t *testing.T)
 	}
 }
 
+func TestSearchVectorIndexWithBufferPreparedCacheReusesState2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{0.7, 0.3, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+	var buffer VectorIndexSearchBuffer
+	warm, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, warm, def.Name, opts.TopK)
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, warm.Stats)
+	snap := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if snap.Entries != 1 || snap.BuildingEntries != 0 || snap.CacheBuilds != 1 || snap.CacheMisses != 1 || snap.ActiveHandles != 1 {
+		t.Fatalf("cache snapshot after warm=%+v want one built active prepared state", snap)
+	}
+	for i := 0; i < 5; i++ {
+		got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+		if err != nil {
+			t.Fatalf("cached SearchVectorIndexWithBuffer iteration %d: %v", i, err)
+		}
+		assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, got.Stats)
+		if got.Stats.HNSWSearchPackOpenNanos == 0 {
+			t.Fatalf("cached stats=%+v want cached open-time route stats retained", got.Stats)
+		}
+	}
+	after := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if after.Entries != 1 || after.CacheBuilds != 1 || after.CacheMisses != 1 || after.CacheHits < 5 || after.ActiveHandles != 1 {
+		t.Fatalf("cache snapshot after reuse=%+v want hits without rebuild", after)
+	}
+}
+
+func TestSearchVectorIndexWithBufferPreparedCacheKeepsWarmStateOnQueryError2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	before := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if before.Entries != 1 || before.CacheBuilds != 1 || before.ActiveHandles != 1 {
+		t.Fatalf("cache before bad query=%+v want one warmed entry", before)
+	}
+
+	badOpts := opts
+	badOpts.Query = []float32{1, 0}
+	bad, err := col.SearchVectorIndexWithBuffer(badOpts, &buffer)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
+		t.Fatalf("bad query response=%+v err=%v want query dimension mismatch", bad, err)
+	}
+	if len(bad.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("bad query left results response=%d bufferResults=%d idBytes=%d", len(bad.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	afterBad := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterBad.Entries != 1 || afterBad.CacheBuilds != before.CacheBuilds || afterBad.Invalidations != before.Invalidations || afterBad.ActiveHandles != 1 {
+		t.Fatalf("cache after bad query=%+v before=%+v want warm cache retained", afterBad, before)
+	}
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+		t.Fatalf("valid SearchVectorIndexWithBuffer after bad query: %v", err)
+	}
+	afterValid := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterValid.CacheBuilds != before.CacheBuilds || afterValid.CacheHits <= afterBad.CacheHits {
+		t.Fatalf("cache after valid retry=%+v afterBad=%+v want hit without rebuild", afterValid, afterBad)
+	}
+}
+
+func TestSearchVectorIndexWithBufferPreparedCacheInvalidatesOnMutationAndRefreshesAfterRebuild2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex initial: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	warmOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	warm, err := col.SearchVectorIndexWithBuffer(warmOpts, &buffer)
+	if err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, warm.Stats)
+	before := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if before.Entries != 1 || before.ActiveHandles != 1 || before.CacheBuilds != 1 {
+		t.Fatalf("cache before mutation=%+v want one active entry", before)
+	}
+
+	insertColumnGraphRebuildRowsV2A(t, col, []columnGraphRebuildInputRowV2A{{id: "doc-c", vector: []float32{0, 0, 1}}})
+	staleOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 0, 1}, TopK: 1, EfSearch: len(rows) + 1, MaxDecodedBlocks: 1}
+	stale, err := col.SearchVectorIndexWithBuffer(staleOpts, &buffer)
+	if err == nil {
+		t.Fatalf("stale SearchVectorIndexWithBuffer response=%+v err=nil want fail-closed error", stale)
+	}
+	if len(stale.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("stale search left results response=%d bufferResults=%d idBytes=%d", len(stale.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	afterStale := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterStale.ActiveHandles != 0 || afterStale.CacheBuilds < 2 || afterStale.Invalidations == 0 || afterStale.Errors == 0 {
+		t.Fatalf("cache after stale mutation=%+v want old entry invalidated and failed refresh recorded", afterStale)
+	}
+
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex refresh: %v", err)
+	}
+	refreshed, err := col.SearchVectorIndexWithBuffer(staleOpts, &buffer)
+	if err != nil {
+		t.Fatalf("refreshed SearchVectorIndexWithBuffer: %v", err)
+	}
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, refreshed.Stats)
+	if len(refreshed.Results) == 0 || string(refreshed.Results[0].ID) != "doc-c" {
+		t.Fatalf("refreshed top result=%+v want doc-c", refreshed.Results)
+	}
+	afterRefresh := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterRefresh.Entries != 1 || afterRefresh.ActiveHandles != 1 || afterRefresh.CacheBuilds < 3 {
+		t.Fatalf("cache after rebuild refresh=%+v want one refreshed active entry", afterRefresh)
+	}
+}
+
+func TestSearchVectorIndexWithBufferPreparedCacheWaitsForBuildingEntryAcrossCommitChange2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}, {id: "doc-b", vector: []float32{0, 1, 0}}}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var hookOnce sync.Once
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+	collectionVectorIndexPreparedSearchBuildHookForTest.fn = func(indexName string) {
+		if indexName != def.Name {
+			return
+		}
+		hookOnce.Do(func() {
+			close(started)
+			<-release
+		})
+	}
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	defer func() {
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+		collectionVectorIndexPreparedSearchBuildHookForTest.fn = nil
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	}()
+
+	runSearch := func(done chan<- error) {
+		var buffer VectorIndexSearchBuffer
+		got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+		if err != nil {
+			done <- err
+			return
+		}
+		if len(got.Results) != 1 || string(got.Results[0].ID) != "doc-a" {
+			done <- fmt.Errorf("results=%+v want doc-a", got.Results)
+			return
+		}
+		done <- nil
+	}
+
+	done := make(chan error, 3)
+	go runSearch(done)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first cache build to start")
+	}
+	go runSearch(done)
+	waitForCollectionVectorIndexPreparedSearchWaits2363(t, col, 1)
+
+	if _, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{Name: "other"}); err != nil {
+		t.Fatalf("CreateCollection other: %v", err)
+	}
+	go runSearch(done)
+	waitForCollectionVectorIndexPreparedSearchWaits2363(t, col, 2)
+	close(release)
+
+	for i := 0; i < 3; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("concurrent search %d: %v", i, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for concurrent search %d; building cache entry may not have signaled waiters", i)
+		}
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 1 || snap.BuildingEntries != 0 || snap.CacheWaits < 2 || snap.ActiveHandles != 1 {
+		t.Fatalf("cache snapshot=%+v want one ready entry and two recorded waits", snap)
+	}
+}
+
+func waitForCollectionVectorIndexPreparedSearchWaits2363(tb testing.TB, col *Collection, waits uint64) {
+	tb.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.CacheWaits >= waits {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	tb.Fatalf("timed out waiting for collection prepared-search cache waits >= %d", waits)
+}
+
+func TestSearchVectorIndexWithBufferPreparedCacheDoesNotPublishDuringClose2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}, {id: "doc-b", vector: []float32{0, 1, 0}}}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var hookOnce sync.Once
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+	collectionVectorIndexPreparedSearchBuildHookForTest.fn = func(indexName string) {
+		if indexName != def.Name {
+			return
+		}
+		hookOnce.Do(func() {
+			close(started)
+			<-release
+		})
+	}
+	collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	defer func() {
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Lock()
+		collectionVectorIndexPreparedSearchBuildHookForTest.fn = nil
+		collectionVectorIndexPreparedSearchBuildHookForTest.mu.Unlock()
+	}()
+
+	searchDone := make(chan error, 1)
+	go func() {
+		var buffer VectorIndexSearchBuffer
+		_, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+		searchDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		_ = d.Close()
+		t.Fatal("timed out waiting for cache build to start")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && (col.manager == nil || !col.manager.isClosing()) {
+		time.Sleep(time.Millisecond)
+	}
+	if col.manager == nil || !col.manager.isClosing() {
+		close(release)
+		t.Fatal("timed out waiting for manager close to start")
+	}
+	close(release)
+	select {
+	case err := <-searchDone:
+		if !errors.Is(err, backenddb.ErrClosed) {
+			t.Fatalf("SearchVectorIndexWithBuffer during close err=%v want ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for search during close")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("DB Close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for DB close")
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 0 || snap.ActiveHandles != 0 {
+		t.Fatalf("cache after close race=%+v want no published prepared state", snap)
+	}
+}
+
+func TestSearchVectorIndexWithBufferPreparedCacheCloseReleasesHandles2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}, {id: "doc-b", vector: []float32{0, 1, 0}}}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+		_ = d.Close()
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 1 || snap.ActiveHandles != 1 {
+		_ = d.Close()
+		t.Fatalf("cache before close=%+v want active handle", snap)
+	}
+	if err := col.closeCollectionVectorIndexPreparedSearchCache(); err != nil {
+		_ = d.Close()
+		t.Fatalf("close collection cache: %v", err)
+	}
+	if err := col.closeCollectionVectorIndexPreparedSearchCache(); err != nil {
+		_ = d.Close()
+		t.Fatalf("second close collection cache: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 0 || snap.ActiveHandles != 0 {
+		_ = d.Close()
+		t.Fatalf("cache after collection close=%+v want released", snap)
+	}
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+		_ = d.Close()
+		t.Fatalf("SearchVectorIndexWithBuffer after collection cache close: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 1 || snap.ActiveHandles != 1 {
+		_ = d.Close()
+		t.Fatalf("cache before manager flush=%+v want rebuilt active handle", snap)
+	}
+	if col.manager == nil {
+		_ = d.Close()
+		t.Fatal("test setup missing collection manager")
+	}
+	if err := col.manager.FlushAll(); err != nil {
+		_ = d.Close()
+		t.Fatalf("manager FlushAll with active prepared cache: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 1 || snap.ActiveHandles != 1 {
+		_ = d.Close()
+		t.Fatalf("cache after manager flush=%+v want still registered active handle", snap)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("DB Close: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 0 || snap.ActiveHandles != 0 {
+		t.Fatalf("cache after DB close=%+v want released by manager close hook", snap)
+	}
+	if err := col.closeCollectionVectorIndexPreparedSearchCache(); err != nil {
+		t.Fatalf("cache close after DB close: %v", err)
+	}
+}
+
+func TestSearchVectorIndexWithBufferPreparedCacheConcurrentSharedState2363(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{0.7, 0.3, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	query := []float32{1, 0, 0}
+	topK := 2
+	want := exactColumnGraphTopKForTest(t, rows, query, topK)
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: topK, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+	var warmBuffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &warmBuffer); err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	const workers = 4
+	const iterations = 20
+	var wg sync.WaitGroup
+	errs := make(chan string, workers)
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			var buffer VectorIndexSearchBuffer
+			for i := 0; i < iterations; i++ {
+				got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+				if err != nil {
+					errs <- fmt.Sprintf("worker %d iteration %d SearchVectorIndexWithBuffer: %v", worker, i, err)
+					return
+				}
+				if !vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(got.Stats) {
+					errs <- fmt.Sprintf("worker %d iteration %d stats=%+v want pack route", worker, i, got.Stats)
+					return
+				}
+				if len(got.Results) != len(want) || len(buffer.results) != len(want) || len(buffer.idBytes) == 0 {
+					errs <- fmt.Sprintf("worker %d iteration %d result/buffer lens got=%d/%d/%d want %d", worker, i, len(got.Results), len(buffer.results), len(buffer.idBytes), len(want))
+					return
+				}
+				for j := range want {
+					if !bytes.Equal(got.Results[j].ID, want[j].ID) || math.Abs(got.Results[j].Score-want[j].Score) > 1e-6 {
+						errs <- fmt.Sprintf("worker %d iteration %d result[%d]=%+v want id=%q score=%v", worker, i, j, got.Results[j], want[j].ID, want[j].Score)
+						return
+					}
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	snap := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if snap.Entries != 1 || snap.CacheBuilds != 1 || snap.CacheHits < workers*iterations || snap.ActiveHandles != 1 {
+		t.Fatalf("cache snapshot after concurrent search=%+v want one shared prepared state", snap)
+	}
+}
+
 func TestSearchVectorIndexWithBufferUnsupportedShapesFailClosed2362(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -805,6 +1224,17 @@ func TestSearchVectorIndexWithBufferUnsupportedShapesFailClosed2362(t *testing.T
 
 	if _, err := col.SearchVectorIndexWithBuffer(base, nil); err == nil || !strings.Contains(err.Error(), "nil vector index search buffer") {
 		t.Fatalf("nil buffer err=%v want fail closed", err)
+	}
+	var nilCollection *Collection
+	gotNilCollection, err := nilCollection.SearchVectorIndexWithBuffer(base, &buffer)
+	if !errors.Is(err, errCollectionNil) {
+		t.Fatalf("nil collection err=%v want errCollectionNil", err)
+	}
+	if len(gotNilCollection.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("nil collection left results: returned=%d bufferResults=%d idBytes=%d", len(gotNilCollection.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	if _, err := col.SearchVectorIndexWithBuffer(base, &buffer); err != nil {
+		t.Fatalf("valid SearchVectorIndexWithBuffer after nil collection: %v", err)
 	}
 
 	tests := []struct {
