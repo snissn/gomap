@@ -3,7 +3,6 @@ package collections
 import (
 	"bytes"
 	"errors"
-	"slices"
 	"sort"
 	"sync"
 	"unsafe"
@@ -280,7 +279,7 @@ func (t *freezeSortRunTable) applyStealEntryFuncOwned(ownerGeneration uint64, co
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.mustOwnedLocked(ownerGeneration)
-	t.entries = slices.Grow(t.entries, count)
+	t.entries = growFreezeSortRunEntries(t.entries, count)
 	for i := 0; i < count; i++ {
 		key, value, ptr, flags, err := emit(i)
 		if err != nil {
@@ -615,6 +614,28 @@ func (t *freezeSortRunTable) sortedLatestCopyLocked() []freezeSortRunEntry {
 func (t *freezeSortRunTable) sortAndCoalesceLocked() {
 	t.entries = sortAndCoalesceFreezeSortEntries(t.entries)
 	t.sizeBytes = freezeSortEntriesSize(t.entries)
+}
+
+func growFreezeSortRunEntries(entries []freezeSortRunEntry, count int) []freezeSortRunEntry {
+	// Indexed insert accumulators append many similarly-sized batches into the
+	// same mutable root table before publishing. Doubling here keeps append-copy
+	// work bounded for that steady-state path; slices.Grow follows the runtime's
+	// post-threshold growth curve and was visible in batch-insert allocation
+	// profiles as repeated root-run entry copies.
+	if count <= 0 || len(entries)+count <= cap(entries) {
+		return entries
+	}
+	needed := len(entries) + count
+	newCap := cap(entries) * 2
+	if newCap < needed {
+		newCap = needed
+	}
+	if newCap == 0 {
+		newCap = count
+	}
+	grown := make([]freezeSortRunEntry, len(entries), newCap)
+	copy(grown, entries)
+	return grown
 }
 
 func sortAndCoalesceFreezeSortEntries(entries []freezeSortRunEntry) []freezeSortRunEntry {

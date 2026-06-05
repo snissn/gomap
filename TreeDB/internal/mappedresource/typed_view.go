@@ -58,6 +58,18 @@ func ValidateDirectView(data []byte, opts DirectViewOptions) (int, error) {
 	return int(uintptr(len(data)) / opts.ElementSize), nil
 }
 
+// Uint16View exposes bytes as []uint16 after validation.
+func Uint16View(data []byte) ([]uint16, error) {
+	count, err := ValidateDirectView(data, DirectViewOptions{ElementSize: unsafe.Sizeof(uint16(0)), Alignment: unsafe.Alignof(uint16(0)), TypeName: "uint16", RequireLittleEndian: true})
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	return unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(data))), count), nil
+}
+
 // Int64View exposes bytes as []int64 after validation.
 func Int64View(data []byte) ([]int64, error) {
 	count, err := ValidateDirectView(data, DirectViewOptions{ElementSize: unsafe.Sizeof(int64(0)), Alignment: unsafe.Alignof(int64(0)), TypeName: "int64", RequireLittleEndian: true})
@@ -116,6 +128,18 @@ func Uint64View(data []byte) ([]uint64, error) {
 		return nil, nil
 	}
 	return unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(data))), count), nil
+}
+
+// Uint16View records direct-view success/failure in addition to validating.
+func (m *Manager) Uint16View(h *Handle) ([]uint16, error) {
+	data, err := liveHandleBytes(h)
+	if err != nil {
+		m.recordDirectView(err)
+		return nil, err
+	}
+	view, err := Uint16View(data)
+	m.recordDirectView(err)
+	return view, err
 }
 
 // Int64View records direct-view success/failure in addition to validating.

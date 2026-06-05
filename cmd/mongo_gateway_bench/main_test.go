@@ -1703,6 +1703,69 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	}
 }
 
+func TestTreeDBRawWireIndexedFindClientModeSmoke(t *testing.T) {
+	if testing.Short() {
+		t.Skip("raw-wire indexed find smoke skipped in short mode")
+	}
+	for _, mode := range []string{clientModeRawWire, clientModeRawWireTCP, clientModeRawWireTCPPipeline} {
+		t.Run(mode, func(t *testing.T) {
+			cfg, err := parseConfig([]string{
+				"-target", "treedb",
+				"-client-mode", mode,
+				"-documents", "96",
+				"-batch-size", "24",
+				"-reads", "12",
+				"-range-reads", "0",
+				"-updates", "0",
+				"-secondary-indexes", "2",
+				"-concurrent-read-kinds", "email",
+				"-concurrent-reader-sweep", "1,2",
+				"-concurrent-reads", "12",
+				"-treedb-document-format", string(collections.DocumentFormatBSON),
+				"-treedb-maintenance", treeDBMaintenanceNone,
+				"-prebuild-documents",
+				"-timeout", "0",
+				"-format", "json",
+			})
+			if err != nil {
+				t.Fatalf("parse %s indexed find config: %v", mode, err)
+			}
+			target, err := openTarget(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("open target: %v", err)
+			}
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := closeBenchTarget(cleanupCtx, target); err != nil {
+					t.Errorf("cleanup target: %v", err)
+				}
+			}()
+			result, err := runBenchmark(context.Background(), cfg, target, nil)
+			if err != nil {
+				t.Fatalf("run benchmark: %v", err)
+			}
+			phases := make(map[string]phaseResult, len(result.Phases))
+			for _, phase := range result.Phases {
+				phases[phase.Name] = phase
+			}
+			for _, name := range []string{
+				"email_find_one",
+				"concurrent_email_find_one_r1",
+				"concurrent_email_find_one_r2",
+			} {
+				phase, ok := phases[name]
+				if !ok {
+					t.Fatalf("phase %q missing from result: %+v", name, result.Phases)
+				}
+				if phase.SampledNsPerOp <= 0 || phase.OpsPerSecond <= 0 {
+					t.Fatalf("phase %q metrics missing: %+v", name, phase)
+				}
+			}
+		})
+	}
+}
+
 func TestTreeDBRangeClientModeSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("range client mode smoke skipped in short mode")

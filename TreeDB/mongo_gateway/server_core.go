@@ -82,22 +82,24 @@ type Server struct {
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
 
-	nextResponseID   atomic.Int32
-	nextConnectionID atomic.Int64
-	nextCursorID     atomic.Int64
-	cursorCount      atomic.Int64
-	connMu           sync.Mutex
-	conns            map[net.Conn]struct{}
-	listenerMu       sync.Mutex
-	listeners        map[net.Listener]struct{}
-	cursorMu         sync.Mutex
-	cursors          map[int64]*serverCursor
-	lastCursorReap   time.Time
-	updateMu         sync.Mutex
-	updateCoalescers map[string]*mongoUpdateCoalescer
-	insertMu         sync.Mutex
-	insertCoalescers map[string]*mongoInsertCoalescer
-	closed           atomic.Bool
+	nextResponseID    atomic.Int32
+	nextConnectionID  atomic.Int64
+	nextCursorID      atomic.Int64
+	cursorCount       atomic.Int64
+	connMu            sync.Mutex
+	conns             map[net.Conn]struct{}
+	listenerMu        sync.Mutex
+	listeners         map[net.Listener]struct{}
+	cursorMu          sync.Mutex
+	cursors           map[int64]*serverCursor
+	lastCursorReap    time.Time
+	collectionCacheMu sync.RWMutex
+	collectionCache   map[string]*collections.Collection
+	updateMu          sync.Mutex
+	updateCoalescers  map[string]*mongoUpdateCoalescer
+	insertMu          sync.Mutex
+	insertCoalescers  map[string]*mongoInsertCoalescer
+	closed            atomic.Bool
 }
 
 type serverCursor struct {
@@ -123,11 +125,51 @@ func NewServer() *Server {
 	return s
 }
 
+func (s *Server) openCollectionCached(name string) (*collections.Collection, error) {
+	if s == nil || s.Collections == nil {
+		return nil, collections.ErrCollectionNotFound
+	}
+	s.collectionCacheMu.RLock()
+	if col := s.collectionCache[name]; col != nil {
+		s.collectionCacheMu.RUnlock()
+		return col, nil
+	}
+	s.collectionCacheMu.RUnlock()
+
+	col, err := s.Collections.OpenCollection(name)
+	if err != nil {
+		return nil, err
+	}
+	s.collectionCacheMu.Lock()
+	if s.collectionCache == nil {
+		s.collectionCache = make(map[string]*collections.Collection)
+	}
+	if cached := s.collectionCache[name]; cached != nil {
+		col = cached
+	} else {
+		s.collectionCache[name] = col
+	}
+	s.collectionCacheMu.Unlock()
+	return col, nil
+}
+
+func (s *Server) invalidateCollectionCache(name string) {
+	if s == nil || name == "" {
+		return
+	}
+	s.collectionCacheMu.Lock()
+	delete(s.collectionCache, name)
+	s.collectionCacheMu.Unlock()
+}
+
 func (s *Server) Close() error {
 	if s == nil {
 		return nil
 	}
 	s.closed.Store(true)
+	s.collectionCacheMu.Lock()
+	clear(s.collectionCache)
+	s.collectionCacheMu.Unlock()
 	s.closeActiveListeners()
 	s.closeActiveConns()
 	s.closeUpdateCoalescers()

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -316,6 +318,20 @@ func TestColumnHNSWSearchPackReopenPreservesManifestIdentity2313(t *testing.T) {
 	state := columnVectorIndexStateFromRecords1987(t, records, def)
 	_, raw, pack := loadColumnHNSWSearchPackForTest2313(t, reopened, def, graph, state)
 	assertColumnHNSWSearchPackMatchesRebuild2313(t, pack, raw, def, graph, scanned)
+	searcher, err := reopenedCol.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher reopen: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	var buf VectorIndexSearchBuffer
+	response, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: []float32{1, 0, 0}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buf)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer reopen: %v", err)
+	}
+	stats := response.Stats
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackMmapDirect+stats.HNSWSearchPackHeapCopy != 1 || stats.HNSWSearchPackOpenNanos == 0 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes == 0 {
+		t.Fatalf("reopen search stats=%+v want pack availability without route change", stats)
+	}
 }
 
 func TestColumnHNSWSearchPackEmptyAndSingleRowFixtures2313(t *testing.T) {
@@ -403,8 +419,192 @@ func TestColumnHNSWSearchPackFallbackSearchPathStillUsable2313(t *testing.T) {
 		t.Fatalf("results=%d want 2", len(response.Results))
 	}
 	stats := response.Stats
-	if stats.SearchRouteHNSWSearchPack != 0 || stats.HNSWSearchPackActive != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
 		t.Fatalf("route stats=%+v want existing column_graph route, no pack route", stats)
+	}
+	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackMissing != 0 || stats.HNSWSearchPackInvalid != 0 || stats.HNSWSearchPackMmapDirect+stats.HNSWSearchPackHeapCopy != 1 || stats.HNSWSearchPackOpenNanos == 0 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes == 0 {
+		t.Fatalf("pack stats=%+v want opened hnsw_search_pack_v1 view without search routing", stats)
+	}
+}
+
+func TestColumnHNSWSearchPackPreparedViewContracts2314(t *testing.T) {
+	raw := testColumnHNSWSearchPackRaw2312(t)
+	base := testColumnHNSWSearchPackInput2312().BaseIdentity
+	view, handle := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, base)
+	if view.status != columnHNSWSearchPackPreparedStatusHeap || len(view.NormalizedVectors) != len(testColumnHNSWSearchPackInput2312().NormalizedVectors) || len(view.Levels) != 3 || len(view.AdjacencyLayers) != 2 || len(view.RowRefGenerations) != 3 || len(view.DocumentIDOffsets) != 4 || string(view.DocumentIDBytes) != "doc-adoc-bdoc-c" {
+		t.Fatalf("prepared view=%+v status=%s", view.Header, view.status)
+	}
+	stats := view.routeStats(columnHNSWSearchPackPreparedStatusMissing, 123)
+	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackHeapCopy != 1 || stats.HNSWSearchPackMappedBytes != 0 || stats.HNSWSearchPackHeapCopyBytes != uint64(len(raw)) || stats.HNSWSearchPackOpenNanos != 123 || stats.HNSWSearchPackActiveHandles != 1 {
+		t.Fatalf("heap route stats=%+v", stats)
+	}
+	if err := handle.Release(); err != nil {
+		t.Fatalf("release stale handle: %v", err)
+	}
+	if err := view.validateLive(); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("validate stale err=%v want stale", err)
+	}
+	staleStats := view.routeStats(columnHNSWSearchPackPreparedStatusMissing, 0)
+	if staleStats.HNSWSearchPackStale != 1 || staleStats.HNSWSearchPackFallbacks != 1 {
+		t.Fatalf("stale stats=%+v", staleStats)
+	}
+
+	closedView, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, base)
+	if err := closedView.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := closedView.validateLive(); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("validate closed err=%v want closed", err)
+	}
+	closedStats := closedView.routeStats(columnHNSWSearchPackPreparedStatusMissing, 0)
+	if closedStats.HNSWSearchPackClosed != 1 || closedStats.HNSWSearchPackFallbacks != 1 || closedView.mappedResourceStats().ActiveHandles != 0 {
+		t.Fatalf("closed stats=%+v manager=%+v", closedStats, closedView.mappedResourceStats())
+	}
+
+	bad := testColumnHNSWSearchPackMutateSectionPayload2312(raw, columnHNSWSearchPackSectionAdjacencyNeighbors, 0, func(payload []byte) {
+		binary.LittleEndian.PutUint32(payload, 99)
+	})
+	if _, _, err := testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(bad, mappedresource.SourceHeapCopy, base); err == nil || !strings.Contains(err.Error(), "neighbor ordinal") {
+		t.Fatalf("bad prepared view err=%v want neighbor ordinal", err)
+	}
+}
+
+func TestColumnHNSWSearchPackPreparedViewMappedFile2314(t *testing.T) {
+	raw := testColumnHNSWSearchPackRaw2312(t)
+	base := testColumnHNSWSearchPackInput2312().BaseIdentity
+	path := t.TempDir() + "/pack.tca"
+	fileRaw := append(make([]byte, int(columnHNSWSearchPackVectorSectionAlignment)), raw...)
+	if err := os.WriteFile(path, fileRaw, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	manager := mappedresource.NewManager()
+	key := testColumnHNSWSearchPackMappedResourceKey2314(int64(columnHNSWSearchPackVectorSectionAlignment), int64(len(raw)), page.Checksum(raw))
+	handle, err := manager.AcquireFileRange(key, testColumnHNSWSearchPackScope2314(), path, mappedresource.AcquireOptions{Reason: "mapped test", PreferMapped: true, AllowHeapCopy: true, ValidationMode: mappedresource.ValidationVerify, ResourcePath: path})
+	if err != nil {
+		t.Fatalf("AcquireFileRange: %v", err)
+	}
+	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: base})
+	if err != nil {
+		_ = handle.Release()
+		t.Fatalf("new prepared view: %v", err)
+	}
+	if handle.Source() == mappedresource.SourceMapped && view.status != columnHNSWSearchPackPreparedStatusDirect {
+		t.Fatalf("mapped source status=%s want direct", view.status)
+	}
+	if handle.Source() == mappedresource.SourceHeapCopy && view.status != columnHNSWSearchPackPreparedStatusHeap {
+		t.Fatalf("heap source status=%s want heap", view.status)
+	}
+	stats := view.routeStats(columnHNSWSearchPackPreparedStatusMissing, 0)
+	if stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackActiveHandles != 1 || stats.HNSWSearchPackMappedBytes+stats.HNSWSearchPackHeapCopyBytes != uint64(len(raw)) {
+		t.Fatalf("mapped file stats=%+v source=%s", stats, handle.Source())
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if manager.Stats().ActiveHandles != 0 {
+		t.Fatalf("manager stats after close=%+v", manager.Stats())
+	}
+}
+
+func TestColumnHNSWSearchPackPreparedViewSharedReadersRelease2314(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{0.5, 0.5, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	first, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher first: %v", err)
+	}
+	second, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		_ = first.Close()
+		t.Fatalf("OpenVectorIndexSearcher second: %v", err)
+	}
+	if first.reader == nil || second.reader == nil || first.reader.hnswSearchPack == nil || second.reader.hnswSearchPack == nil {
+		_ = second.Close()
+		_ = first.Close()
+		t.Fatalf("searchers missing prepared pack first=%+v second=%+v", first.reader, second.reader)
+	}
+	if first.reader.hnswSearchPack != second.reader.hnswSearchPack {
+		_ = second.Close()
+		_ = first.Close()
+		t.Skip("current platform did not admit shared prepared search; pack release remains covered by per-reader close")
+	}
+	view := first.reader.hnswSearchPack
+	if stats := view.mappedResourceStats(); stats.ActiveHandles != 1 {
+		_ = second.Close()
+		_ = first.Close()
+		t.Fatalf("shared pack stats before close=%+v want one handle", stats)
+	}
+	if err := first.Close(); err != nil {
+		_ = second.Close()
+		t.Fatalf("first Close: %v", err)
+	}
+	if stats := view.mappedResourceStats(); stats.ActiveHandles != 1 || view.closed.Load() {
+		_ = second.Close()
+		t.Fatalf("shared pack stats after first close=%+v closed=%v", stats, view.closed.Load())
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if stats := view.mappedResourceStats(); stats.ActiveHandles != 0 || !view.closed.Load() {
+		t.Fatalf("shared pack stats after final close=%+v closed=%v", stats, view.closed.Load())
+	}
+}
+
+func TestColumnHNSWSearchPackInvalidCandidateFallsBackToCurrentRoute2314(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	asset, _, _ := loadColumnHNSWSearchPackForTest2313(t, d, def, graph, state)
+	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), asset.Ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile pack: %v", err)
+	}
+	if _, err := file.WriteAt([]byte{'X'}, asset.Ref.Offset); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt pack WriteAt: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close corrupt pack file: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher with invalid pack: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	var buf VectorIndexSearchBuffer
+	response, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: []float32{1, 0, 0}, TopK: 2, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buf)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer with invalid pack: %v", err)
+	}
+	if len(response.Results) != 2 {
+		t.Fatalf("results=%d want 2", len(response.Results))
+	}
+	stats := response.Stats
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 || stats.HNSWSearchPackInvalid != 1 || stats.HNSWSearchPackFallbacks != 1 || stats.HNSWSearchPackActive != 0 {
+		t.Fatalf("stats=%+v want invalid pack counted while current route searches", stats)
 	}
 }
 
@@ -712,6 +912,44 @@ func reportColumnHNSWSearchPackStorageMetrics2313(b *testing.B, d *backenddb.DB,
 	return asset
 }
 
+func BenchmarkColumnHNSWSearchPackPreparedOpen2314(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	params := columnHNSWSearchPackRebuildBenchParamsFromEnv2313(b)
+	d, col, def := openColumnHNSWSearchPackRebuildBenchCollection2313(b, docs, dims, params)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(b, d, "docs", def)
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(b, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(b, records, def)
+	b.ReportAllocs()
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	var last vectorIndexSearchRouteStats
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		view, status, openNanos, err := col.openColumnHNSWSearchPackPreparedViewForReader("docs", *cfg, def, graph, state)
+		if err != nil {
+			b.Fatalf("openColumnHNSWSearchPackPreparedViewForReader: %v", err)
+		}
+		if status != columnHNSWSearchPackPreparedStatusDirect && status != columnHNSWSearchPackPreparedStatusHeap {
+			b.Fatalf("prepared status=%s want direct or heap", status)
+		}
+		last = view.routeStats(status, openNanos)
+		if err := view.Close(); err != nil {
+			b.Fatalf("Close prepared view: %v", err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(last.HNSWSearchPackOpenNanos), "hnsw_search_pack_open_ns")
+	b.ReportMetric(float64(last.HNSWSearchPackMappedBytes), "hnsw_search_pack_mapped_B")
+	b.ReportMetric(float64(last.HNSWSearchPackHeapCopyBytes), "hnsw_search_pack_heap_copy_B")
+	b.ReportMetric(float64(last.HNSWSearchPackMmapDirect), "hnsw_search_pack_mmap_direct/open")
+	b.ReportMetric(float64(last.HNSWSearchPackHeapCopy), "hnsw_search_pack_heap_copy/open")
+}
+
 func BenchmarkColumnHNSWSearchPackDecodeValidate2312(b *testing.B) {
 	raw := testColumnHNSWSearchPackRaw2312(b)
 	base := testColumnHNSWSearchPackInput2312().BaseIdentity
@@ -723,6 +961,55 @@ func BenchmarkColumnHNSWSearchPackDecodeValidate2312(b *testing.B) {
 			b.Fatalf("decodeColumnHNSWSearchPack: %v", err)
 		}
 	}
+}
+
+func testColumnHNSWSearchPackPreparedViewFromBytes2314(tb testing.TB, raw []byte, source mappedresource.Source, base columnHNSWSearchPackBaseIdentity) (*columnHNSWSearchPackPreparedView, *mappedresource.Handle) {
+	tb.Helper()
+	view, handle, err := testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(raw, source, base)
+	if err != nil {
+		tb.Fatalf("newColumnHNSWSearchPackPreparedViewFromHandle: %v", err)
+	}
+	return view, handle
+}
+
+func testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(raw []byte, source mappedresource.Source, base columnHNSWSearchPackBaseIdentity) (*columnHNSWSearchPackPreparedView, *mappedresource.Handle, error) {
+	manager := mappedresource.NewManager()
+	key := testColumnHNSWSearchPackMappedResourceKey2314(0, int64(len(raw)), page.Checksum(raw))
+	handle, err := manager.AcquireBytes(key, testColumnHNSWSearchPackScope2314(), source, raw, mappedresource.AcquireOptions{Reason: "prepared test", ValidationMode: mappedresource.ValidationVerify})
+	if err != nil {
+		return nil, nil, err
+	}
+	view, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: base})
+	if err != nil {
+		_ = handle.Release()
+		return nil, nil, err
+	}
+	return view, handle, nil
+}
+
+func testColumnHNSWSearchPackMappedResourceKey2314(offset, length int64, checksum uint32) mappedresource.Key {
+	return mappedresource.Key{
+		Class:      mappedresource.ClassTypedColumnAsset,
+		Namespace:  "docs_column_assets",
+		Kind:       string(ColumnAssetKindTCS1HNSWSearchPack),
+		Generation: 11,
+		PartID:     77,
+		FileID:     3,
+		Offset:     offset,
+		Length:     length,
+		Checksum:   uint64(checksum),
+		Version:    columnHNSWSearchPackVersionV1,
+		Encoding:   columnVectorIndexStateEncodingHNSWSearchPackV1,
+		Section: mappedresource.Section{
+			Kind:     columnVectorIndexStateAssetRoleHNSWSearchPack,
+			Category: string(ColumnAssetKindTCS1HNSWSearchPack),
+			Name:     columnVectorIndexStateHNSWSearchPackAssetID,
+		},
+	}
+}
+
+func testColumnHNSWSearchPackScope2314() mappedresource.Scope {
+	return mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: "hnsw-search-pack-test", Namespace: "docs_column_assets", Collection: "docs", Generation: 11, Reason: "test"}
 }
 
 func testColumnHNSWSearchPackInput2312() columnHNSWSearchPackBuildInput {

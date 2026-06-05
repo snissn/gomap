@@ -3112,6 +3112,16 @@ func (c *Collection) Meta() CollectionMeta {
 	return *c.meta.copy()
 }
 
+// MetaView returns the collection metadata without deep-copying slice fields.
+// The returned value is for read-only internal fast paths; callers must not
+// mutate Indexes, VectorIndexes, or other referenced fields.
+func (c *Collection) MetaView() CollectionMeta {
+	if c == nil {
+		return CollectionMeta{}
+	}
+	return c.meta
+}
+
 // SameCachedCatalog reports whether both handles are cached against the same
 // collection catalog state. For commit-agnostic catalog shapes, the system root
 // is the catalog identity; data-only commits can advance CommitSeq without

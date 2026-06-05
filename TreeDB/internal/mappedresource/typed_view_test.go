@@ -30,6 +30,23 @@ func TestDirectTypedViewsAcceptAlignedRanges(t *testing.T) {
 	key := testKey()
 	scope := testScope()
 
+	u16Bytes := alignedBytes(4, int(unsafe.Alignof(uint16(0))))
+	binary.LittleEndian.PutUint16(u16Bytes[0:2], 3)
+	binary.LittleEndian.PutUint16(u16Bytes[2:4], 5)
+	key.Length = int64(len(u16Bytes))
+	u16Handle, err := mgr.AcquireBytes(key, scope, SourceMapped, u16Bytes, AcquireOptions{Reason: "u16"})
+	if err != nil {
+		t.Fatalf("AcquireBytes u16: %v", err)
+	}
+	defer u16Handle.Release()
+	u16, err := mgr.Uint16View(u16Handle)
+	if err != nil {
+		t.Fatalf("Uint16View: %v", err)
+	}
+	if len(u16) != 2 || u16[0] != 3 || u16[1] != 5 {
+		t.Fatalf("Uint16View=%v", u16)
+	}
+
 	u32Bytes := alignedBytes(8, int(unsafe.Alignof(uint32(0))))
 	binary.LittleEndian.PutUint32(u32Bytes[0:4], 7)
 	binary.LittleEndian.PutUint32(u32Bytes[4:8], 11)
@@ -103,7 +120,7 @@ func TestDirectTypedViewsAcceptAlignedRanges(t *testing.T) {
 		t.Fatalf("Uint64View=%v", u64)
 	}
 
-	if stats := mgr.Stats(); stats.DirectViewSuccesses != 5 || stats.DirectViewFailures != 0 {
+	if stats := mgr.Stats(); stats.DirectViewSuccesses != 6 || stats.DirectViewFailures != 0 {
 		t.Fatalf("direct view stats=%+v", stats)
 	}
 }
