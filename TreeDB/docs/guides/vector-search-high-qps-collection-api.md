@@ -63,6 +63,26 @@ For lower-level serving, open `OpenVectorIndexSearcher` once per worker, warm
 `SearchWithBuffer` with that worker's own buffer, and close/reopen the searcher
 when the worker must move to a newer collection/vector-index generation.
 
+## Runnable exact buffered demo
+
+For an instructional smoke that builds a collection, checkpoints and reopens it,
+warms the prepared state, reuses a caller-owned buffer, times no-document
+searches, and prints top-k IDs/scores plus route guardrails, run:
+
+```sh
+GOWORK=off go run ./cmd/treedb_vector_highqps_demo \
+  -docs 1000 \
+  -dims 64 \
+  -queries 1000 \
+  -warmup-queries 16 \
+  -top-k 10
+```
+
+The demo is exact-only and intentionally excludes document materialization and
+quantized modes. It is not a benchmark replacement; use the
+[benchmark workflow](vector-search-benchmark-workflow.md) for performance
+evidence.
+
 ## Do not overclaim
 
 - Say TreeDB is close to USearch only for the warmed exact no-document parallel
