@@ -41,6 +41,28 @@ func TestValuePtrEncoding(t *testing.T) {
 	}
 }
 
+func TestValuePtrGroupedSubIndexUsesHighBit(t *testing.T) {
+	for _, subIndex := range []uint8{0, 15, 16, 31, 32, 64, 127, 128, 254, 255} {
+		ptr := ValuePtr{
+			Offset: 1024,
+			Length: ValuePtrMarkGrouped(ValuePtrGroupedMaxRecordLen, subIndex),
+			FileID: ValueLogFileID(1),
+		}
+		if !ValuePtrIsGrouped(ptr) {
+			t.Fatalf("subIndex=%d: pointer is not grouped", subIndex)
+		}
+		if ValuePtrIsCompressed(ptr) {
+			t.Fatalf("subIndex=%d: grouped pointer must not report compressed", subIndex)
+		}
+		if got := ValuePtrSubIndex(ptr); got != subIndex {
+			t.Fatalf("subIndex=%d: decoded sub-index=%d", subIndex, got)
+		}
+		if got := ValuePtrRecordLength(ptr); got != ValuePtrGroupedMaxRecordLen {
+			t.Fatalf("subIndex=%d: record length=%d want %d", subIndex, got, ValuePtrGroupedMaxRecordLen)
+		}
+	}
+}
+
 func TestLeafLogPtrFromValuePtrPreservesGroupedFlag(t *testing.T) {
 	original := ValuePtr{
 		Offset: 128,

@@ -1803,7 +1803,7 @@ func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
 	}
 }
 
-func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
+func TestReadAtGroupedLengthHintBit23Omitted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
 
@@ -1813,7 +1813,7 @@ func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
 	}
 
 	const fixedOverhead = uint32(headerWithoutCRC + FrameHeaderSize + 8 + 8)
-	const targetRecordLen = uint32(0x00800080) // grouped hint bit23 set, still <= 24-bit max
+	const targetRecordLen = uint32(0x00800080) // bit23 is now reserved for grouped sub-index expansion.
 	if targetRecordLen <= fixedOverhead {
 		_ = writer.Close()
 		t.Fatalf("invalid target record length: %d", targetRecordLen)
@@ -1829,17 +1829,9 @@ func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
 		_ = writer.Close()
 		t.Fatalf("expected grouped pointer")
 	}
-	if got, want := page.ValuePtrRecordLength(ptr), targetRecordLen; got != want {
+	if got := page.ValuePtrRecordLength(ptr); got != 0 {
 		_ = writer.Close()
-		t.Fatalf("expected grouped hint round-trip got=%d want=%d", got, want)
-	}
-
-	// Simulate a pointer whose grouped length hint has bit23 set.
-	legacyPtr := ptr
-	legacyPtr.Length = page.ValuePtrMarkGrouped(targetRecordLen, page.ValuePtrSubIndex(ptr))
-	if got, want := page.ValuePtrRecordLength(legacyPtr), targetRecordLen; got != want {
-		_ = writer.Close()
-		t.Fatalf("legacy decoded record length mismatch got=%d want=%d", got, want)
+		t.Fatalf("expected grouped length hint to be omitted, got %d", got)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -1851,7 +1843,7 @@ func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 
-	got, err := ReadAtWithDict(f, legacyPtr, true, nil, nil, nil, templ.DecodeOptions{})
+	got, err := ReadAtWithDict(f, ptr, true, nil, nil, nil, templ.DecodeOptions{})
 	if err != nil {
 		t.Fatalf("read at: %v", err)
 	}
