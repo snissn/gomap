@@ -3000,6 +3000,40 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 }
 
+func TestWriteBenchprofArtifacts_OmitsNaNResultsForJSON(t *testing.T) {
+	dir := t.TempDir()
+	run := BenchRun{
+		Config: BenchConfig{Keys: 10, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"batch_delete_range": {
+				"LevelDB":     500,
+				"Unsupported": math.NaN(),
+			},
+		},
+	}
+	jsonPath := filepath.Join(dir, "benchprof_results.json")
+	mdPath := filepath.Join(dir, "benchprof_results.md")
+	if err := writeBenchprofArtifactsToPaths(jsonPath, mdPath, "native-fastpath", []BenchRun{run}); err != nil {
+		t.Fatalf("writeBenchprofArtifactsToPaths: %v", err)
+	}
+
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read json: %v", err)
+	}
+	var parsed benchprofExport
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal json: %v", err)
+	}
+	results := parsed.Runs[0].Results["batch_delete_range"]
+	if got := results["LevelDB"]; got != 500 {
+		t.Fatalf("LevelDB result=%v want 500", got)
+	}
+	if _, ok := results["Unsupported"]; ok {
+		t.Fatalf("NaN unsupported result should be omitted from JSON: %s", data)
+	}
+}
+
 func TestComputeTreeDBPerfMetrics_SaturatesCounterRegression(t *testing.T) {
 	metrics := computeTreeDBPerfMetrics(
 		treeDBSelectedStats{

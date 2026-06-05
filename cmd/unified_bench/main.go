@@ -1326,6 +1326,32 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	return writeBenchprofArtifactsToPaths(filepath.Join(dir, "benchprof_results.json"), filepath.Join(dir, "benchprof_results.md"), executionPath, runs)
 }
 
+func benchprofJSONResults(results map[string]map[string]float64) map[string]map[string]float64 {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]float64, len(results))
+	for testName, perDB := range results {
+		if len(perDB) == 0 {
+			continue
+		}
+		clean := make(map[string]float64, len(perDB))
+		for dbName, value := range perDB {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				continue
+			}
+			clean[dbName] = value
+		}
+		if len(clean) > 0 {
+			out[testName] = clean
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string, runs []BenchRun) error {
 	jsonPath = strings.TrimSpace(jsonPath)
 	markdownPath = strings.TrimSpace(markdownPath)
@@ -1351,7 +1377,7 @@ func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string
 			Keys:                run.Config.Keys,
 			Profile:             strings.TrimSpace(run.Config.Profile),
 			ExecutionPath:       executionPath,
-			Results:             run.Results,
+			Results:             benchprofJSONResults(run.Results),
 			TreeDBPerf:          run.TreeDBPerf,
 			TreeDBStats:         selectedBenchprofTreeDBStats(run.TreeDBStats),
 			BatchDeleteRange:    run.BatchDeleteRange,
