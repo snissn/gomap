@@ -112,7 +112,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-force-value-pointers` TreeDB: force all values into the value log
 - `-treedb-value-log-threshold` TreeDB: inline-vs-pointer threshold
 - `-treedb-vlog-compression` TreeDB: value-log compression mode (`default|off|block|dict|auto`)
-- `-treedb-vlog-block-codec` TreeDB: block codec (`snappy|lz4`). When `-treedb-vlog-compression=auto`, this is the forced block-mode/default block codec, not proof that auto selected that codec; use the value-log codec summary and `treedb.cache.vlog_auto.*` stats for actual per-frame selection.
+- `-treedb-vlog-block-codec` TreeDB: block codec (`snappy|lz4|zstd`). When `-treedb-vlog-compression=auto`, this is the forced block-mode/default block codec, not proof that auto selected that codec; use the value-log codec summary and `treedb.cache.vlog_auto.*` stats for actual per-frame selection.
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-generation-policy` TreeDB: generation policy (`default|off|hot_warm_cold`)
 

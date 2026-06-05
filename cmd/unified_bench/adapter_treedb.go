@@ -63,7 +63,7 @@ var (
 	treedbVlogRawWritevMinAvgBytes        = flag.Int("treedb-vlog-raw-writev-min-avg-bytes", 0, "TreeDB: raw grouped-frame writev min average payload bytes/record (0=adaptive)")
 	treedbVlogRawWritevMinBatchRecs       = flag.Int("treedb-vlog-raw-writev-min-batch-records", 0, "TreeDB: raw grouped-frame writev min records/batch (0=default)")
 	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default=auto; values: off|block|dict|auto)")
-	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4)")
+	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4|zstd)")
 	treedbVlogAutoPolicy                  = flag.String("treedb-vlog-auto-policy", "balanced", "TreeDB: value-log auto policy (balanced|throughput|size)")
 	treedbVlogGenerationPolicy            = flag.String("treedb-vlog-generation-policy", "default", "TreeDB: value-log generation policy (default|off|hot_warm_cold)")
 	treedbVlogGenerationHotSegmentBytes   = flag.Int64("treedb-vlog-generation-hot-segment-bytes", 0, "TreeDB: generational hot segment target bytes (0=default)")
@@ -97,7 +97,7 @@ var (
 	treedbVlogDictFrameEncodeLevel        = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
 	treedbVlogDictFrameEntropyMode        = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
 	treedbVlogDictMode                    = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
-	treedbVlogCompressionVariant          = flag.String("treedb-vlog-compression-variant", "default", "TreeDB: value-log compression variant expansion for unified_bench (default|off|dict|block_snappy|block_lz4|auto|all). Overrides -treedb-vlog-dict when set.")
+	treedbVlogCompressionVariant          = flag.String("treedb-vlog-compression-variant", "default", "TreeDB: value-log compression variant expansion for unified_bench (default|off|dict|block_snappy|block_lz4|block_zstd|auto|all). Overrides -treedb-vlog-dict when set.")
 	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
@@ -127,6 +127,7 @@ func init() {
 	RegisterHiddenDB("treedb_vlog_dict", NewTreeDBVlogDict)
 	RegisterHiddenDB("treedb_vlog_block_snappy", NewTreeDBVlogBlockSnappy)
 	RegisterHiddenDB("treedb_vlog_block_lz4", NewTreeDBVlogBlockLZ4)
+	RegisterHiddenDB("treedb_vlog_block_zstd", NewTreeDBVlogBlockZSTD)
 	RegisterHiddenDB("treedb_vlog_auto", NewTreeDBVlogAuto)
 	RegisterHiddenDB("treedb_vlog_dict_off", NewTreeDBVlogDictOff)
 	RegisterHiddenDB("treedb_vlog_dict_on", NewTreeDBVlogDictOn)
@@ -259,8 +260,10 @@ func parseTreeDBVlogBlockCodec(s string) (treedb.ValueLogBlockCodec, error) {
 		return treedb.ValueLogBlockSnappy, nil
 	case "lz4":
 		return treedb.ValueLogBlockLZ4, nil
+	case "zstd":
+		return treedb.ValueLogBlockZSTD, nil
 	default:
-		return treedb.ValueLogBlockSnappy, fmt.Errorf("unsupported -treedb-vlog-block-codec=%q (expected snappy|lz4)", s)
+		return treedb.ValueLogBlockSnappy, fmt.Errorf("unsupported -treedb-vlog-block-codec=%q (expected snappy|lz4|zstd)", s)
 	}
 }
 
@@ -492,6 +495,8 @@ func formatTreeDBVlogBlockCodec(codec treedb.ValueLogBlockCodec) string {
 		return "snappy"
 	case treedb.ValueLogBlockLZ4:
 		return "lz4"
+	case treedb.ValueLogBlockZSTD:
+		return "zstd"
 	default:
 		return fmt.Sprintf("block_codec_%d", codec)
 	}
@@ -986,6 +991,22 @@ func NewTreeDBVlogBlockLZ4(dir string) (kvstore.DB, error) {
 		return nil, err
 	}
 	return wrapTreeDBAdapter(db, "TreeDB (vlog=block/lz4)"), nil
+}
+
+func NewTreeDBVlogBlockZSTD(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptions(dir)
+	if err != nil {
+		return nil, err
+	}
+	opts.ValueLog.Compression = treedb.ValueLogCompressionBlock
+	opts.ValueLog.BlockCodec = treedb.ValueLogBlockZSTD
+	setOptionalVlogAutotuneMode(&opts, 1)
+	setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return wrapTreeDBAdapter(db, "TreeDB (vlog=block/zstd)"), nil
 }
 
 func NewTreeDBVlogAuto(dir string) (kvstore.DB, error) {

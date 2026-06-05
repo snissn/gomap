@@ -13043,6 +13043,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	rawWriterInto := caps.rawInto
 	rawBufferedInto := caps.rawBuf
 	policySetter := caps.keep
+	compressionResetter := caps.reset
 	preparedAppender := caps.prepared
 	startSize = w.Size()
 
@@ -13061,6 +13062,20 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	autoSelectorMode := mode == vlogCompressionAuto
 	dictMode := mode == vlogCompressionDict
 	selectorEnabled := db.vlogSelectorEnabled(mode)
+	retainedStorageFirstBlockAttempt := func(plan *vlogBatchPlan) bool {
+		if plan == nil || plan.writeMode != vlogWriteBlock {
+			return false
+		}
+		if plan.start < 0 || plan.end > len(records) || plan.start >= plan.end {
+			return false
+		}
+		unitPayloadBytes := plan.rawBytes
+		if recordsInPlan := plan.end - plan.start; recordsInPlan > 0 {
+			unitPayloadBytes = plan.rawBytes / recordsInPlan
+		}
+		return db.storageFirstValueLogAuto(unitPayloadBytes) &&
+			valueLogRecordsLookRetainedJSONLike(records[plan.start:plan.end])
+	}
 
 	ptrs = getValueLogPtrsCap(len(records))
 	ptrs = ptrs[:len(records)]
@@ -13072,19 +13087,27 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if err != nil {
 			break
 		}
+		retainedStorageFirstAttempt := retainedStorageFirstBlockAttempt(plan)
+		forceBlockCompressionAttempt := plan.writeMode == vlogWriteBlock &&
+			(plan.probe || (selectorEnabled && (autoSelectorMode || dictMode)) || retainedStorageFirstAttempt)
+		resetBlockCompressionHints := plan.writeMode == vlogWriteBlock &&
+			(plan.probe || retainedStorageFirstAttempt)
 		if policySetter != nil {
 			ioNsPerStored := baseIoNsPerStored
 			encodeNsPerRaw := baseEncodeNsPerRaw
 			// In selector-driven modes, block candidate evaluation must observe
 			// real compressed output (not keep-policy short-circuits), same as
 			// explicit probes.
-			if plan.probe || (selectorEnabled && (autoSelectorMode || dictMode) && plan.writeMode == vlogWriteBlock) {
+			if forceBlockCompressionAttempt {
 				ioNsPerStored = 0
 				encodeNsPerRaw = 0
 			}
 			policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, keepSafetyMargin)
 		}
 		db.setVlogWriterMode(l, w, plan.writeMode, plan.blockCodec)
+		if resetBlockCompressionHints && compressionResetter != nil {
+			compressionResetter.ResetCompressionHints()
+		}
 		planStart := time.Now()
 		beforePlanSize := w.Size()
 		planStoredBytes := 0
@@ -14062,12 +14085,20 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	ioNsPerStoredForWriter := ioNsPerStored
 	encodeNsPerRawForWriter := encodeNsPerRaw
 	blockEvalBypass := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
-	if blockEvalBypass && finalWriteMode == vlogWriteBlock {
-		// Keep-policy bypass is required for fair selector-driven block
-		// evaluation; mode choice should rely on real frame outcomes.
+	retainedStorageFirstBlockAttempt := finalWriteMode == vlogWriteBlock &&
+		db.storageFirstValueLogAuto(selectorUnitPayloadBytes) &&
+		valueLogRecordsLookRetainedJSONLike(records)
+	forceBlockCompressionAttempt := finalWriteMode == vlogWriteBlock &&
+		(probeCompression || blockEvalBypass || retainedStorageFirstBlockAttempt)
+	if forceBlockCompressionAttempt {
+		// Keep-policy bypass is required for fair selector-driven and
+		// storage-first retained block evaluation; mode choice should rely on
+		// real frame outcomes.
 		ioNsPerStoredForWriter = 0
 		encodeNsPerRawForWriter = 0
 	}
+	resetBlockCompressionHints := finalWriteMode == vlogWriteBlock &&
+		(probeCompression || retainedStorageFirstBlockAttempt)
 
 	l.vlogMu.Lock()
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
@@ -14115,6 +14146,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	caps := l.vlogCaps
 	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 	policySetter := caps.keep
+	compressionResetter := caps.reset
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
 	rawWriterInto := caps.rawInto
@@ -14129,6 +14161,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	if policySetter != nil && !usePreparedDictFrames {
 		policySetter.SetKeepPolicy(ioNsPerStoredForWriter, encodeNsPerRawForWriter, safetyMargin)
+	}
+	if resetBlockCompressionHints && compressionResetter != nil && !usePreparedDictFrames {
+		compressionResetter.ResetCompressionHints()
 	}
 
 	storedPayloadBytes := 0
@@ -14169,6 +14204,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				}
 				caps = l.vlogCaps
 				db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+				compressionResetter = caps.reset
 				statsWriter = caps.stats
 				statsWriterInto = caps.statsInto
 				rawWriterInto = caps.rawInto
@@ -14284,6 +14320,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 					}
 					caps = l.vlogCaps
 					db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+					compressionResetter = caps.reset
+					if resetBlockCompressionHints && compressionResetter != nil {
+						compressionResetter.ResetCompressionHints()
+					}
 					statsWriter = caps.stats
 					statsWriterInto = caps.statsInto
 					hasStats = statsWriter != nil
@@ -14654,6 +14694,30 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	if finalWriteMode != vlogWriteBlock {
 		finalBlockCodec = db.valueLogBlockCodec
 	}
+	retainedStorageFirstBlockAttempt := finalWriteMode == vlogWriteBlock &&
+		db.storageFirstValueLogAuto(len(value)) &&
+		valueLogPayloadLooksRetainedJSONLike(value)
+	forceBlockCompressionAttempt := finalWriteMode == vlogWriteBlock &&
+		(probeCompression || mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode)) || retainedStorageFirstBlockAttempt)
+	resetBlockCompressionHints := finalWriteMode == vlogWriteBlock &&
+		(probeCompression || retainedStorageFirstBlockAttempt)
+	applyValueLogOneKeepPolicy := func(policySetter keepPolicySetter) {
+		if policySetter == nil {
+			return
+		}
+		snap := db.valueLogAutotuneMetrics.snapshot()
+		ioNsPerStored := snap.IoNsPerStoredByte
+		encodeNsPerRaw := snap.EncodeNsPerRawByte
+		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+			ioNsPerStored = 0
+			encodeNsPerRaw = 0
+		}
+		if forceBlockCompressionAttempt {
+			ioNsPerStored = 0
+			encodeNsPerRaw = 0
+		}
+		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
+	}
 	switch mode {
 	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSampleForLane(l, value)
@@ -14690,22 +14754,12 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			caps := l.vlogCaps
 			db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 			policySetter := caps.keep
+			compressionResetter := caps.reset
 			startSize := w.Size()
 
-			if policySetter != nil {
-				snap := db.valueLogAutotuneMetrics.snapshot()
-				ioNsPerStored := snap.IoNsPerStoredByte
-				encodeNsPerRaw := snap.EncodeNsPerRawByte
-				if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
-					ioNsPerStored = 0
-					encodeNsPerRaw = 0
-				}
-				if finalWriteMode == vlogWriteBlock &&
-					(mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))) {
-					ioNsPerStored = 0
-					encodeNsPerRaw = 0
-				}
-				policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
+			applyValueLogOneKeepPolicy(policySetter)
+			if resetBlockCompressionHints && compressionResetter != nil {
+				compressionResetter.ResetCompressionHints()
 			}
 
 			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
@@ -14868,24 +14922,14 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
+	compressionResetter := caps.reset
 	startSize := w.Size()
 	flushedBoundary := false
 	syncedBoundary := false
 
-	if policySetter != nil {
-		snap := db.valueLogAutotuneMetrics.snapshot()
-		ioNsPerStored := snap.IoNsPerStoredByte
-		encodeNsPerRaw := snap.EncodeNsPerRawByte
-		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
-			ioNsPerStored = 0
-			encodeNsPerRaw = 0
-		}
-		if finalWriteMode == vlogWriteBlock &&
-			(mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))) {
-			ioNsPerStored = 0
-			encodeNsPerRaw = 0
-		}
-		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
+	applyValueLogOneKeepPolicy(policySetter)
+	if resetBlockCompressionHints && compressionResetter != nil {
+		compressionResetter.ResetCompressionHints()
 	}
 
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}

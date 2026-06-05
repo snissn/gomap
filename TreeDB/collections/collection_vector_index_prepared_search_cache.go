@@ -151,8 +151,15 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		entry.response = buildResponse
 		entry.err = buildErr
 
+		if buildErr == nil && c.manager != nil && !c.manager.registerCollectionHandleIfOpen(c) {
+			buildErr = backenddb.ErrClosed
+		}
 		stored := false
 		c.vectorBufferedSearchMu.Lock()
+		closing := buildErr == nil && ((c.manager != nil && c.manager.isClosing()) || c.db == nil || c.db.IsClosing())
+		if closing {
+			buildErr = backenddb.ErrClosed
+		}
 		entry.prepared = prepared
 		entry.building = false
 		if c.vectorBufferedSearch[opts.IndexName] == entry {
@@ -171,9 +178,6 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		}
 		if buildErr != nil {
 			return nil, buildResponse, buildErr
-		}
-		if stored && c.manager != nil {
-			c.manager.registerCollectionHandle(c)
 		}
 		return prepared, buildResponse, nil
 	}

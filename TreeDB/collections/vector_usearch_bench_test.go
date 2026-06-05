@@ -824,15 +824,22 @@ func openVectorUSearchBenchmarkIndex(tb testing.TB, docs, dims, m, efConstructio
 
 func reportCollectionVectorIndexPreparedSearchBenchMetrics2363(b *testing.B, snap collectionVectorIndexPreparedSearchCacheSnapshot) {
 	b.Helper()
+	iterations := float64(b.N)
+	if iterations <= 0 {
+		iterations = 1
+	}
 	b.ReportMetric(float64(snap.Entries), "collection_prepared_cache_entries")
 	b.ReportMetric(float64(snap.BuildingEntries), "collection_prepared_cache_building_entries")
-	b.ReportMetric(float64(snap.CacheBuilds), "collection_prepared_cache_builds")
-	b.ReportMetric(float64(snap.CacheMisses), "collection_prepared_cache_misses")
-	b.ReportMetric(float64(snap.CacheHits), "collection_prepared_cache_hits")
-	b.ReportMetric(float64(snap.CacheWaits), "collection_prepared_cache_waits")
-	b.ReportMetric(float64(snap.Invalidations), "collection_prepared_cache_invalidations")
-	b.ReportMetric(float64(snap.Closes), "collection_prepared_cache_closes")
-	b.ReportMetric(float64(snap.Errors), "collection_prepared_cache_errors")
+	b.ReportMetric(float64(snap.CacheBuilds)/iterations, "collection_prepared_cache_builds/op")
+	b.ReportMetric(float64(snap.CacheMisses)/iterations, "collection_prepared_cache_misses/op")
+	b.ReportMetric(float64(snap.CacheHits)/iterations, "collection_prepared_cache_hits/op")
+	b.ReportMetric(float64(snap.CacheWaits)/iterations, "collection_prepared_cache_waits/op")
+	b.ReportMetric(float64(snap.Invalidations)/iterations, "collection_prepared_cache_invalidations/op")
+	b.ReportMetric(float64(snap.Closes)/iterations, "collection_prepared_cache_closes/op")
+	b.ReportMetric(float64(snap.Errors)/iterations, "collection_prepared_cache_errors/op")
+	if lookups := snap.CacheHits + snap.CacheMisses; lookups > 0 {
+		b.ReportMetric(float64(snap.CacheHits)/float64(lookups), "collection_prepared_cache_hit_ratio")
+	}
 	b.ReportMetric(float64(snap.ActiveHandles), "collection_prepared_active_handles")
 	b.ReportMetric(float64(snap.ActiveMappedBytes), "collection_prepared_mapped_B")
 	b.ReportMetric(float64(snap.ActiveHeapCopyBytes), "collection_prepared_heap_copy_B")

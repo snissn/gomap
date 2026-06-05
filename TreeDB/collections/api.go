@@ -3011,6 +3011,23 @@ func (m *CollectionManager) registerCollectionHandle(collection *Collection) {
 	}
 	m.collectionsMu.Lock()
 	defer m.collectionsMu.Unlock()
+	m.registerCollectionHandleLocked(collection)
+}
+
+func (m *CollectionManager) registerCollectionHandleIfOpen(collection *Collection) bool {
+	if m == nil || collection == nil {
+		return false
+	}
+	m.collectionsMu.Lock()
+	defer m.collectionsMu.Unlock()
+	if m.isClosing() {
+		return false
+	}
+	m.registerCollectionHandleLocked(collection)
+	return true
+}
+
+func (m *CollectionManager) registerCollectionHandleLocked(collection *Collection) {
 	if m.collections == nil {
 		m.collections = make(map[*Collection]struct{})
 	}

@@ -77,3 +77,59 @@ func TestColumnRetainedPayloadAuditDisabledDoesNotDefaultFull2354(t *testing.T) 
 		t.Fatalf("disabled audit encoding/status=%q/%q want none/not_configured", audit.RetainedPayloadEncoding, audit.RetainedPayloadEncodingStatus)
 	}
 }
+
+func TestColumnRetainedPayloadCompressionStatus2356(t *testing.T) {
+	cases := []struct {
+		name            string
+		cfg             *ColumnStoreConfig
+		wantCompression string
+		wantPolicy      string
+		wantStatus      string
+	}{
+		{
+			name:            "disabled",
+			cfg:             &ColumnStoreConfig{},
+			wantCompression: "none",
+			wantPolicy:      "not_configured",
+			wantStatus:      "not_configured",
+		},
+		{
+			name: "none",
+			cfg: &ColumnStoreConfig{
+				Enabled:         true,
+				RetainedPayload: ColumnRetainedPayloadNone,
+			},
+			wantCompression: "none",
+			wantPolicy:      "none",
+			wantStatus:      "inactive_no_retained_payload",
+		},
+		{
+			name: "full",
+			cfg: &ColumnStoreConfig{
+				Enabled:         true,
+				RetainedPayload: ColumnRetainedPayloadFull,
+			},
+			wantCompression: "value_log_grouped_frame",
+			wantPolicy:      "default_value_log_auto",
+			wantStatus:      "active_value_log_auto_grouped_frame_full_retained_payload",
+		},
+		{
+			name: "non_column",
+			cfg: &ColumnStoreConfig{
+				Enabled:         true,
+				RetainedPayload: ColumnRetainedPayloadNonColumn,
+			},
+			wantCompression: "value_log_grouped_frame",
+			wantPolicy:      "default_value_log_auto_storage_first",
+			wantStatus:      "active_value_log_auto_grouped_frame_non_column_retained_payload",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			compression, policy, status := ColumnRetainedPayloadCompressionStatus(tc.cfg)
+			if compression != tc.wantCompression || policy != tc.wantPolicy || status != tc.wantStatus {
+				t.Fatalf("compression/policy/status=%q/%q/%q want %q/%q/%q", compression, policy, status, tc.wantCompression, tc.wantPolicy, tc.wantStatus)
+			}
+		})
+	}
+}

@@ -63,9 +63,10 @@ func TestVlogCompressionSelector_ExplorationProbesDictWhenAvailable(t *testing.T
 	s.exploreRemaining = 64
 	s.dwellBytes = 0
 
-	// Warm both block candidates so dict remains the least-sampled candidate.
+	// Warm block candidates so dict remains the least-sampled candidate.
 	s.observe(vlogWriteBlock, valuelog.BlockCodecSnappy, 1024, 760, 900, false)
 	s.observe(vlogWriteBlock, valuelog.BlockCodecLZ4, 1024, 780, 920, false)
+	s.observe(vlogWriteBlock, valuelog.BlockCodecZSTD, 1024, 700, 880, false)
 
 	mode, _, probe := s.choose(true, 512, 512)
 	if !probe {
@@ -126,6 +127,24 @@ func TestDBSeedVlogCompressionSelectorsDictRatio(t *testing.T) {
 		if m.ratio > 0.12 {
 			t.Fatalf("lane %d: expected conservative seeded ratio <= 0.12, got %.3f", i, m.ratio)
 		}
+	}
+}
+
+func TestVlogCompressionSelector_SeededDictGetsRealExplorationBeforeUnsampledBlockCodecs(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoSize, 0, 0)
+	s.currentCandidate = vlogAutoCandidateBlockSnappy
+	s.exploreBytes = 64
+	s.exploreRemaining = 64
+	s.dwellBytes = 0
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.05, throughput: 0.90, samples: 8}
+	s.seedDictCandidate(0.01)
+
+	mode, _, probe := s.choose(true, 64, 4096)
+	if !probe {
+		t.Fatalf("expected seeded dict to force a real exploration probe")
+	}
+	if mode != vlogWriteDict {
+		t.Fatalf("expected dict exploration before unsampled block codecs, got %v", mode)
 	}
 }
 
@@ -778,6 +797,7 @@ func TestVlogCompressionSelector_ExplorationSkipsOffWhenCompressionStrong(t *tes
 	// Make snappy clearly dominated so off would be the only alternate candidate
 	// without skip logic.
 	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 1.20, throughput: 0.95, samples: 8}
+	s.metrics[vlogAutoCandidateBlockZSTD] = vlogCandidateMetrics{ratio: 1.10, throughput: 0.80, samples: 8}
 
 	mode, codec, probe := s.choose(false, 64, 64)
 	if probe {
@@ -796,6 +816,7 @@ func TestVlogCompressionSelector_ExplorationSkipsDominatedBlockCodec(t *testing.
 	s.dwellBytes = 0
 	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.12, throughput: 0.90, samples: 8}
 	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.26, throughput: 0.95, samples: 8}
+	s.metrics[vlogAutoCandidateBlockZSTD] = vlogCandidateMetrics{ratio: 0.30, throughput: 0.80, samples: 8}
 
 	mode, codec, probe := s.choose(false, 64, 64)
 	if probe {
@@ -814,6 +835,7 @@ func TestVlogCompressionSelector_ExplorationStopsAfterStrongBlockSignal(t *testi
 	s.dwellBytes = 0
 	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.10, throughput: 0.90, samples: 8}
 	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.22, throughput: 0.95, samples: 8}
+	s.metrics[vlogAutoCandidateBlockZSTD] = vlogCandidateMetrics{ratio: 0.24, throughput: 0.80, samples: 8}
 
 	mode, codec, probe := s.choose(false, 64, 64)
 	if probe {
@@ -848,6 +870,7 @@ func TestVlogCompressionSelector_ShouldSkipExploration_WhenAllAlternativesDomina
 	s.currentCandidate = vlogAutoCandidateBlockLZ4
 	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.013, throughput: 1.00, samples: 8}
 	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.047, throughput: 0.95, samples: 8}
+	s.metrics[vlogAutoCandidateBlockZSTD] = vlogCandidateMetrics{ratio: 0.051, throughput: 0.80, samples: 8}
 	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 8}
 	if !s.shouldSkipExploration(false) {
 		t.Fatalf("expected exploration skip when all alternatives are dominated")

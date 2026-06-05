@@ -72,7 +72,7 @@ func TestBuildTreeDBOptions_VlogCompressionBlockFlags(t *testing.T) {
 	}()
 
 	*treedbVlogCompression = "block"
-	*treedbVlogBlockCodec = "lz4"
+	*treedbVlogBlockCodec = "zstd"
 	*treedbVlogBlockTargetBytes = 8192
 	*treedbVlogIncompressibleHoldBytes = 2 << 20
 	*treedbVlogIncompressibleProbeBytes = 512 << 10
@@ -85,7 +85,7 @@ func TestBuildTreeDBOptions_VlogCompressionBlockFlags(t *testing.T) {
 	if opts.ValueLog.Compression != treedb.ValueLogCompressionBlock {
 		t.Fatalf("unexpected compression mode: %v", opts.ValueLog.Compression)
 	}
-	if opts.ValueLog.BlockCodec != treedb.ValueLogBlockLZ4 {
+	if opts.ValueLog.BlockCodec != treedb.ValueLogBlockZSTD {
 		t.Fatalf("unexpected block codec: %v", opts.ValueLog.BlockCodec)
 	}
 	if opts.ValueLog.BlockTargetCompressedBytes != 8192 {

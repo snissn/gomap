@@ -365,6 +365,8 @@ func formatValueLogBlockCodec(codec ValueLogBlockCodec) string {
 		return "snappy"
 	case ValueLogBlockLZ4:
 		return "lz4"
+	case ValueLogBlockZSTD:
+		return "zstd"
 	default:
 		return fmt.Sprintf("codec_%d", codec)
 	}
@@ -376,6 +378,8 @@ func parseValueLogBlockCodec(raw string) (ValueLogBlockCodec, bool) {
 		return ValueLogBlockSnappy, true
 	case "lz4":
 		return ValueLogBlockLZ4, true
+	case "zstd":
+		return ValueLogBlockZSTD, true
 	default:
 		return 0, false
 	}

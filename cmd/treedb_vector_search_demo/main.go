@@ -661,6 +661,8 @@ func demoValueLogBlockCodec(codec backenddb.ValueLogBlockCodec) string {
 		return "snappy"
 	case backenddb.ValueLogBlockLZ4:
 		return "lz4"
+	case backenddb.ValueLogBlockZSTD:
+		return "zstd"
 	default:
 		return fmt.Sprintf("codec_%d", codec)
 	}

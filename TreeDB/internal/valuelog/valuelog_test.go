@@ -2208,7 +2208,7 @@ func TestDecodeFrameValueBoundsRejectsCorruptInputs(t *testing.T) {
 }
 
 func TestValueLogBlockCodecRoundTrip(t *testing.T) {
-	codecs := []BlockCodec{BlockCodecSnappy, BlockCodecLZ4}
+	codecs := []BlockCodec{BlockCodecSnappy, BlockCodecLZ4, BlockCodecZSTD}
 	for _, codec := range codecs {
 		t.Run(fmt.Sprintf("codec_%d", codec), func(t *testing.T) {
 			dir := t.TempDir()

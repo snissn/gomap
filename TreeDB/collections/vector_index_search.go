@@ -779,6 +779,14 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
+	if c == nil {
+		buffer.Reset()
+		return VectorIndexSearchResponse{}, errCollectionNil
+	}
+	if c.db == nil {
+		buffer.Reset()
+		return VectorIndexSearchResponse{}, errCollectionDBNil
+	}
 	if err := c.flushBufferedWrites(); err != nil {
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err

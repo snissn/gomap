@@ -577,7 +577,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store JSON missing WAL-excluded durable storage field %s:\n%s", want, data)
 		}
 	}
-	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
+	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"retained_payload_compression"`, `"retained_payload_compression_policy"`, `"retained_payload_compression_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing reporting field %s:\n%s", want, data)
 		}
@@ -605,7 +605,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing WAL-excluded durable storage field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "retained payload", "retained encoding", "typed owner", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+	for _, want := range []string{"## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "retained payload", "retained encoding", "retained compression", "typed owner", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
 		}
@@ -3023,7 +3023,7 @@ func assertColumnStoreJSONBenchCellShapeM1955(t testing.TB, report columnStoreSu
 	}
 	byQueryMode := make(map[string]map[string]columnStoreJSONBenchCell)
 	for _, cell := range report.JSONBenchCells {
-		if cell.Query == "" || cell.CellLabel == "" || cell.SortLayout == "" || cell.PlanLabel == "" || cell.StorageSource == "" || cell.FallbackReason == "" || cell.ExecutionMode == "" || cell.MetadataDataScanPath == "" || cell.CompressionMode == "" || cell.MutationMode == "" || cell.RetainedPayloadPolicy == "" || cell.RetainedPayloadEncoding == "" || cell.RetainedPayloadEncodingStatus == "" || cell.TypedStorageOwner == "" || cell.RowCount != report.Rows || cell.ReconstructionStatus == "" || cell.FullDataCaveat == "" || cell.StorageAccountingCaveat == "" || cell.CompatibilityStatus == "" {
+		if cell.Query == "" || cell.CellLabel == "" || cell.SortLayout == "" || cell.PlanLabel == "" || cell.StorageSource == "" || cell.FallbackReason == "" || cell.ExecutionMode == "" || cell.MetadataDataScanPath == "" || cell.CompressionMode == "" || cell.MutationMode == "" || cell.RetainedPayloadPolicy == "" || cell.RetainedPayloadEncoding == "" || cell.RetainedPayloadEncodingStatus == "" || cell.RetainedPayloadCompression == "" || cell.RetainedPayloadCompressionPolicy == "" || cell.RetainedPayloadCompressionStatus == "" || cell.TypedStorageOwner == "" || cell.RowCount != report.Rows || cell.ReconstructionStatus == "" || cell.FullDataCaveat == "" || cell.StorageAccountingCaveat == "" || cell.CompatibilityStatus == "" {
 			t.Fatalf("incomplete JSONBench cell labels: %+v", cell)
 		}
 		if cell.FullDataCell {

@@ -14,25 +14,43 @@ import (
 func readFirstValueLogFrameHeader(t *testing.T, path string) valuelog.FrameHeader {
 	t.Helper()
 
+	return readValueLogFrameHeaderAt(t, path, 0)
+}
+
+func readValueLogFrameHeaderAt(t *testing.T, path string, index int) valuelog.FrameHeader {
+	t.Helper()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if len(data) < valuelog.HeaderSize {
-		t.Fatalf("value log too short: %d", len(data))
+	if index < 0 {
+		t.Fatalf("negative value-log frame index %d", index)
 	}
-	bodyLen := int(binary.LittleEndian.Uint32(data[16:20]))
-	if bodyLen < valuelog.FrameHeaderSize || valuelog.HeaderSize+bodyLen > len(data) {
-		t.Fatalf("invalid first value-log body length %d in file length %d", bodyLen, len(data))
+	frameIndex := 0
+	for pos := 0; pos < len(data); frameIndex++ {
+		if len(data)-pos < valuelog.HeaderSize {
+			t.Fatalf("truncated value-log frame header at offset %d in file length %d", pos, len(data))
+		}
+		bodyLen := int(binary.LittleEndian.Uint32(data[pos+16 : pos+20]))
+		end := pos + valuelog.HeaderSize + bodyLen
+		if bodyLen < valuelog.FrameHeaderSize || end > len(data) {
+			t.Fatalf("invalid value-log body length %d at offset %d in file length %d", bodyLen, pos, len(data))
+		}
+		header, rids, offsets, _, err := valuelog.DecodeFrame(data[pos+valuelog.HeaderSize : end])
+		if err != nil {
+			t.Fatalf("DecodeFrame: %v", err)
+		}
+		if len(rids) != int(header.K) || len(offsets) != int(header.K)+1 {
+			t.Fatalf("decoded frame cardinality mismatch: k=%d rids=%d offsets=%d", header.K, len(rids), len(offsets))
+		}
+		if frameIndex == index {
+			return header
+		}
+		pos = end
 	}
-	header, rids, offsets, _, err := valuelog.DecodeFrame(data[valuelog.HeaderSize : valuelog.HeaderSize+bodyLen])
-	if err != nil {
-		t.Fatalf("DecodeFrame: %v", err)
-	}
-	if len(rids) != int(header.K) || len(offsets) != int(header.K)+1 {
-		t.Fatalf("decoded frame cardinality mismatch: k=%d rids=%d offsets=%d", header.K, len(rids), len(offsets))
-	}
-	return header
+	t.Fatalf("value log has %d frames, want frame index %d", frameIndex, index)
+	return valuelog.FrameHeader{}
 }
 
 func TestResolveVlogWriteMode_DefaultUsesAutoBehavior(t *testing.T) {
@@ -401,6 +419,71 @@ func TestAppendValueLog_AutoForcePointerMediumPayloadUsesGroupedBlockFrame(t *te
 	}
 	if header.DictID != 0 {
 		t.Fatalf("expected no dict id for block-compressed retained payload, got %d", header.DictID)
+	}
+	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecSnappy {
+		t.Fatalf("block codec=%v want snappy", got)
+	}
+}
+
+func TestAppendValueLogOne_AutoForcePointerRetainedPayloadResetsBlockBackoff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value.log")
+	writer, err := valuelog.NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	writer.SetBlockCompression(valuelog.BlockCodecSnappy, true)
+
+	valueLen := forcePointerAutoBlockMinPayloadBytes + 4096
+	incompressible := make([]byte, valueLen)
+	x := uint32(0x9e3779b9)
+	for i := range incompressible {
+		x = x*1664525 + 1013904223
+		incompressible[i] = byte(x >> 24)
+	}
+	_, seedStats, err := writer.AppendOneFrameWithStats(0, nil, 1, incompressible)
+	if err != nil {
+		t.Fatalf("seed incompressible append: %v", err)
+	}
+	if !seedStats.Attempted || seedStats.Kept {
+		t.Fatalf("seed stats attempted=%v kept=%v, want attempted raw fallback", seedStats.Attempted, seedStats.Kept)
+	}
+
+	db := &DB{
+		closeCh:                  make(chan struct{}),
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockCodec:       valuelog.BlockCodecSnappy,
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+		lanes: []lane{
+			{id: 0, vlog: writer, vlogCompressionSelector: newVlogCompressionSelector(vlogAutoBalanced, 0, 0)},
+		},
+	}
+
+	chunk := []byte(`{"commit":{"operation":"create","collection":"app.bsky.feed.post"},"kind":"commit","did":"did:plc:storage-parity","text":"single-retained-json"}`)
+	retained := bytes.Repeat(chunk, valueLen/len(chunk)+1)
+	retained = retained[:valueLen]
+	ptr, _, err := db.appendValueLogOne(&db.lanes[0], 0, nil, 2, retained, journalDurabilityFlush)
+	if err != nil {
+		t.Fatalf("appendValueLogOne: %v", err)
+	}
+	if ptr == (page.ValuePtr{}) {
+		t.Fatalf("expected non-empty pointer")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	header := readValueLogFrameHeaderAt(t, path, 1)
+	if header.K != 1 {
+		t.Fatalf("frame K=%d want single frame", header.K)
+	}
+	if header.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected retained single write to reset block backoff and store a compressed frame")
+	}
+	if header.DictID != 0 {
+		t.Fatalf("expected no dict id for retained single write, got %d", header.DictID)
 	}
 	if got := valuelog.BlockCodec(header.Reserved); got != valuelog.BlockCodecSnappy {
 		t.Fatalf("block codec=%v want snappy", got)

@@ -95,12 +95,24 @@ def frame_mode(frame_flags: int, reserved: int, dict_id: int) -> str:
         return "grouped_block_snappy"
     if reserved == 2:
         return "grouped_block_lz4"
+    if reserved == 3:
+        return "grouped_block_zstd"
     if reserved == 0:
         return "grouped_block_none"
     return f"grouped_block_codec_{reserved}"
 
 
-def empty_mode_stats() -> dict[str, int]:
+def mode_codec(mode: str) -> str:
+    if mode == "raw_record" or mode == "grouped_raw":
+        return "raw"
+    if mode == "grouped_dict":
+        return "dict"
+    if mode.startswith("grouped_block_"):
+        return mode.removeprefix("grouped_block_")
+    return "unknown"
+
+
+def empty_mode_stats() -> dict[str, Any]:
     return {
         "frames": 0,
         "records": 0,
@@ -213,12 +225,25 @@ def scan_log_frames(log_dir: Path) -> dict[str, Any]:
     raw_mode_bytes = modes.get("raw_record", {}).get("raw_payload_bytes", 0) + modes.get(
         "grouped_raw", {}
     ).get("raw_payload_bytes", 0)
+    mode_rows: dict[str, dict[str, Any]] = {}
+    for name, mode_stats in sorted(modes.items()):
+        enriched = dict(mode_stats)
+        frames = enriched["frames"]
+        records = enriched["records"]
+        raw_bytes = enriched["raw_payload_bytes"]
+        stored_bytes = enriched["stored_payload_bytes"]
+        enriched["codec"] = mode_codec(name)
+        enriched["records_per_frame"] = (records / frames) if frames else None
+        enriched["raw_payload_bytes_per_frame"] = (raw_bytes / frames) if frames else None
+        enriched["stored_payload_bytes_per_frame"] = (stored_bytes / frames) if frames else None
+        enriched["stored_to_raw_ratio"] = (stored_bytes / raw_bytes) if raw_bytes else None
+        mode_rows[name] = enriched
     return {
         **stats,
         "stored_to_raw_ratio": (stored / raw) if raw else None,
         "raw_mode_payload_bytes": raw_mode_bytes,
         "raw_mode_payload_fraction": (raw_mode_bytes / raw) if raw else None,
-        "modes": dict(sorted(modes.items())),
+        "modes": mode_rows,
         "raw_frame_samples": samples,
     }
 
@@ -496,13 +521,10 @@ def write_md(path: Path, report: dict[str, Any]) -> None:
 
     for name in ("leaf_vlog", "value_vlog"):
         row = frame[name]
-        lines.extend(["", f"### {name} modes", "", "| mode | frames | records | raw payload | stored payload | stored/raw |", "|---|---:|---:|---:|---:|---:|"])
+        lines.extend(["", f"### {name} modes", "", "| mode | codec | frames | records | records/frame | raw payload | raw/frame | stored payload | stored/frame | stored/raw |", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"])
         for mode, stats in row["modes"].items():
-            ratio = None
-            if stats["raw_payload_bytes"]:
-                ratio = stats["stored_payload_bytes"] / stats["raw_payload_bytes"]
             lines.append(
-                f"| `{mode}` | {stats['frames']} | {stats['records']} | {stats['raw_payload_bytes']} | {stats['stored_payload_bytes']} | {ratio_text(ratio)} |"
+                f"| `{mode}` | `{stats['codec']}` | {stats['frames']} | {stats['records']} | {ratio_text(stats['records_per_frame'])} | {stats['raw_payload_bytes']} | {ratio_text(stats['raw_payload_bytes_per_frame'])} | {stats['stored_payload_bytes']} | {ratio_text(stats['stored_payload_bytes_per_frame'])} | {ratio_text(stats['stored_to_raw_ratio'])} |"
             )
 
     lines.extend(

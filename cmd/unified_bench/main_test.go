@@ -2107,8 +2107,8 @@ func TestRunBenchmark_CompressionVariantsAutoMatrix_Smoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runBenchmark: %v", err)
 	}
-	if len(run.Instances) != 7 {
-		t.Fatalf("expected 7 instances, got %d", len(run.Instances))
+	if len(run.Instances) != 8 {
+		t.Fatalf("expected 8 instances, got %d", len(run.Instances))
 	}
 
 	got := run.Results["batch_write"]
@@ -2117,6 +2117,7 @@ func TestRunBenchmark_CompressionVariantsAutoMatrix_Smoke(t *testing.T) {
 		"TreeDB (vlog=dict)",
 		"TreeDB (vlog=block/snappy)",
 		"TreeDB (vlog=block/lz4)",
+		"TreeDB (vlog=block/zstd)",
 		"TreeDB (vlog=auto)",
 		"LevelDB (block=off)",
 		"LevelDB (block=on)",
@@ -2270,6 +2271,7 @@ func TestParseTreeDBVlogCompressionVariant(t *testing.T) {
 		{in: "dict"},
 		{in: "block_snappy"},
 		{in: "block_lz4"},
+		{in: "block_zstd"},
 		{in: "auto"},
 		{in: "all"},
 		{in: "nope", wantErr: true},
@@ -2300,7 +2302,7 @@ func TestSelectedTreeDBVlogCompressionMode_DefaultTreeDBCountsAuto(t *testing.T)
 }
 
 func TestSelectedTreeDBVlogCompressionMode_VariantBlockDoesNotCountAuto(t *testing.T) {
-	mode, ok := selectedTreeDBVlogCompressionMode("treedb_vlog_block_lz4")
+	mode, ok := selectedTreeDBVlogCompressionMode("treedb_vlog_block_zstd")
 	if !ok || formatTreeDBVlogCompression(mode) != "block" {
 		t.Fatalf("selected mode ok=%t mode=%s, want block", ok, formatTreeDBVlogCompression(mode))
 	}
@@ -2513,7 +2515,7 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 	}
 
 	var file []byte
-	file = append(file, testTreeDBVLogFrame(t, 3, treeDBVlogScanBlockCodecLZ4, true, 300, 120)...)
+	file = append(file, testTreeDBVLogFrame(t, 3, treeDBVlogScanBlockCodecZSTD, true, 300, 120)...)
 	file = append(file, testTreeDBVLogFrame(t, 1, 0, false, 50, 50)...)
 	file = append(file, testTreeDBVLogUngroupedRecord(t, 4096)...)
 	if err := os.WriteFile(filepath.Join(leafDir, "value-l255-000001.log"), file, 0o644); err != nil {
@@ -2536,16 +2538,16 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 		"treedb.cache.vlog_payload_split.records.outer_leaf":     "4",
 		"treedb.cache.vlog_outer_leaf_codec.frames.unknown":      "1",
 		"treedb.cache.vlog_outer_leaf_codec.frames.legacy_page":  "1",
-		"treedb.cache.vlog_block.k.count.lz4":                    "1",
-		"treedb.cache.vlog_block.k.avg.lz4":                      "3.000",
-		"treedb.cache.vlog_block.k.max.lz4":                      "3",
-		"treedb.cache.vlog_block.k.bucket.lz4.le_4":              "1",
-		"treedb.cache.vlog_block.ratio.lz4":                      "0.400000",
-		"treedb.cache.vlog_auto.frames.block_lz4":                "1",
-		"treedb.cache.vlog_auto.bytes.block_lz4":                 "300",
+		"treedb.cache.vlog_block.k.count.zstd":                   "1",
+		"treedb.cache.vlog_block.k.avg.zstd":                     "3.000",
+		"treedb.cache.vlog_block.k.max.zstd":                     "3",
+		"treedb.cache.vlog_block.k.bucket.zstd.le_4":             "1",
+		"treedb.cache.vlog_block.ratio.zstd":                     "0.400000",
+		"treedb.cache.vlog_auto.frames.block_zstd":               "1",
+		"treedb.cache.vlog_auto.bytes.block_zstd":                "300",
 		"treedb.cache.vlog_auto.frames.off":                      "1",
 		"treedb.cache.vlog_auto.bytes.off":                       "50",
-		"treedb.cache.vlog_auto.frames_frac.block_lz4":           "0.500000",
+		"treedb.cache.vlog_auto.frames_frac.block_zstd":          "0.500000",
 		"treedb.cache.vlog_auto.frames_frac.off":                 "0.500000",
 	}
 	for key, wantValue := range want {

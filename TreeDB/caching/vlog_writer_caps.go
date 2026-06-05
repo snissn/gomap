@@ -9,6 +9,10 @@ type keepPolicySetter interface {
 	SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
 }
 
+type compressionHintResetter interface {
+	ResetCompressionHints()
+}
+
 type frameStatsWriter interface {
 	AppendFrameWithStats(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, valuelog.FrameStats, error)
 }
@@ -40,6 +44,7 @@ type blockCompressionSetter interface {
 type vlogWriterCaps struct {
 	writer    valueWriter
 	keep      keepPolicySetter
+	reset     compressionHintResetter
 	stats     frameStatsWriter
 	statsInto frameStatsWriterInto
 	rawInto   rawFrameBatchWriterInto
@@ -55,6 +60,9 @@ func computeVlogWriterCaps(w valueWriter) vlogWriterCaps {
 	caps.writer = w
 	if v, ok := any(w).(keepPolicySetter); ok {
 		caps.keep = v
+	}
+	if v, ok := any(w).(compressionHintResetter); ok {
+		caps.reset = v
 	}
 	if v, ok := any(w).(frameStatsWriter); ok {
 		caps.stats = v
