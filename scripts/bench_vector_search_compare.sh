@@ -211,6 +211,11 @@ Canonical current production comparison:
   \`response_owned_result_alloc/op=0\`, and collection prepared-cache metrics
   such as \`collection_prepared_cache_builds\` and
   \`collection_prepared_cache_hits\`.
+- \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexWithDocumentsOneShot\`
+  is the explicitly labeled with-documents/materialization row. It uses
+  \`IncludeDocuments=true\`, reports \`docs_fetched/search\`, document bytes,
+  output bytes, and document materializer sub-counters, and must not be included
+  in high-QPS no-document success claims.
 - \`.../USearch_Search\` and \`.../USearch_SearchParallel\` time the pure
   in-memory USearch Go binding baseline with cosine/f32 HNSW and the same
   synthetic vector/query generator, M, efConstruction, efSearch, topK, docs,

@@ -177,7 +177,10 @@ const (
 // exposes caller-owned result storage for the exact no-document hnsw_search_pack_v1
 // seam and reuses collection-owned prepared pack state on warmed healthy current
 // state; callers that need explicit snapshot lifetime control can still use a
-// reusable VectorIndexSearcher with VectorIndexSearcher.SearchWithBuffer.
+// reusable VectorIndexSearcher with VectorIndexSearcher.SearchWithBuffer. To
+// materialize documents after a no-document search, open a CollectionReadView
+// and call FetchDocumentsForVectorIndexSearchResults as an explicit, separately
+// measured fetch phase.
 type VectorIndexSearchOptions struct {
 	// IndexName is used by collection-level physical column_graph search.
 	IndexName string

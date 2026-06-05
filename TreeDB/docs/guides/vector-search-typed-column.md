@@ -301,10 +301,12 @@ once prepared CSR adjacency is active.
 Use the reusable-buffer tier only for no-document callers that can honor the
 buffer lifetime contract. `VectorIndexSearcher.SearchWithBuffer` and
 `Collection.SearchVectorIndexWithBuffer` reject `IncludeDocuments`; callers that
-fetch documents should continue using `Search`/`SearchVectorIndex` and report the
-document-fetch counters separately. A `VectorIndexSearchBuffer` is not
-concurrency-safe, and returned `Results`/`ID` slices are valid only until the same
-buffer is reused or reset.
+fetch documents should continue using `Search`/`SearchVectorIndex`, or run the
+no-document search first and explicitly call
+`CollectionReadView.FetchDocumentsForVectorIndexSearchResults` outside the ANN
+hot path. In either split shape, report the document-fetch counters separately.
+A `VectorIndexSearchBuffer` is not concurrency-safe, and returned `Results`/`ID`
+slices are valid only until the same buffer is reused or reset.
 
 Use the #2037 truth matrix when comparing legacy/direct graph-row controls,
 current TVIS/base typed-column routing, and combined prepared typed-column rows
@@ -367,6 +369,10 @@ baseline. Its current production comparison benchmark is
   `hnsw_search_pack_v1` route. Cache warmup/build happens outside the timed
   loop; report `open_searcher_calls/op=0`, `open_setup_in_timed_loop=0`,
   `response_owned_result_alloc/op=0`, and collection prepared-cache counters.
+- `TreeDB_CollectionSearchVectorIndexWithDocumentsOneShot` is an explicit
+  with-documents/materialization row. It reports `docs_fetched/search`, document
+  bytes/output bytes, and document fetch sub-counters; do not include it in
+  high-QPS no-document success claims.
 - `USearch_Search` / `USearch_SearchParallel` time the pure in-memory USearch Go
   binding with cosine/f32 HNSW.
 - Both sides use the same deterministic synthetic vector/query generator and the
@@ -434,7 +440,10 @@ Recommended service/query flow:
 2. Open a reusable `OpenVectorIndexSearcher` per worker for steady-state queries.
 3. Search/scoring phase returns top-k IDs and scores without full document fetch.
 4. Fetch full documents only for the final top-k results when the caller needs
-   them.
+   them, either by setting `IncludeDocuments=true` on an explicitly labeled
+   with-documents search row or by calling
+   `CollectionReadView.FetchDocumentsForVectorIndexSearchResults` as a separate
+   fetch/materialization phase.
 
 Do not compare a reusable-searcher benchmark to a one-shot public API benchmark
 without calling out setup/open cost. Do not compare a search-only benchmark to a

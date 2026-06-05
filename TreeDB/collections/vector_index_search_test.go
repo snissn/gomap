@@ -498,6 +498,85 @@ func TestSearchVectorIndexNoDocumentHighQPSContractBoundary2361(t *testing.T) {
 	}
 }
 
+func TestVectorIndexSearchNoDocumentSplitFetchDocuments2364(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	query := []float32{1, 0, 0}
+	opts := VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            query,
+		QueryMode:        VectorIndexQueryModeExact,
+		TopK:             2,
+		EfSearch:         len(rows),
+		MaxDecodedBlocks: 1,
+	}
+
+	var buffer VectorIndexSearchBuffer
+	noDocs, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer no-doc: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, noDocs, def.Name, opts.TopK)
+	assertVectorIndexSearchResultsV4(t, noDocs.Results, exactColumnGraphTopKForTest(t, rows, query, opts.TopK), false)
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, noDocs.Stats)
+	for i, result := range noDocs.Results {
+		if len(result.Document) != 0 {
+			t.Fatalf("no-doc result[%d] materialized document %q", i, result.Document)
+		}
+	}
+
+	withDocsOpts := opts
+	withDocsOpts.IncludeDocuments = true
+	withDocs, err := col.SearchVectorIndex(withDocsOpts)
+	if err != nil {
+		t.Fatalf("SearchVectorIndex IncludeDocuments: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, withDocs, def.Name, opts.TopK)
+	assertVectorIndexSearchResultsV4(t, withDocs.Results, exactColumnGraphTopKForTest(t, rows, query, opts.TopK), true)
+	assertSearchVectorIndexIncludeDocumentsStats2361(t, withDocs.Stats, len(withDocs.Results))
+
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	splitFetch, err := view.FetchDocumentsForVectorIndexSearchResults(noDocs.Results, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsForVectorIndexSearchResults: %v", err)
+	}
+	if splitFetch.Stats.DocumentsFetched != uint64(len(noDocs.Results)) || splitFetch.Stats.DocumentBytes == 0 || splitFetch.Stats.OutputBytes == 0 {
+		t.Fatalf("split fetch stats=%+v want separate document materialization counters", splitFetch.Stats)
+	}
+	if noDocs.Stats.DocumentsFetched != 0 || noDocs.Stats.DocumentBytes != 0 || noDocs.Stats.DocumentOutputBytes != 0 {
+		t.Fatalf("no-doc search stats changed after split fetch: %+v", noDocs.Stats)
+	}
+	if len(splitFetch.Results) != len(withDocs.Results) {
+		t.Fatalf("split fetch results=%d with-docs=%d", len(splitFetch.Results), len(withDocs.Results))
+	}
+	for i := range splitFetch.Results {
+		if !splitFetch.Results[i].Found {
+			t.Fatalf("split fetch result[%d] missing for id %q", i, noDocs.Results[i].ID)
+		}
+		if !bytes.Equal(splitFetch.Results[i].ID, withDocs.Results[i].ID) || !bytes.Equal(noDocs.Results[i].ID, withDocs.Results[i].ID) {
+			t.Fatalf("result[%d] IDs no-doc=%q split=%q with-docs=%q want same top-k order", i, noDocs.Results[i].ID, splitFetch.Results[i].ID, withDocs.Results[i].ID)
+		}
+		if !bytes.Equal(splitFetch.Results[i].Document, withDocs.Results[i].Document) {
+			t.Fatalf("result[%d] split document=%q with-docs=%q want same materialized document", i, splitFetch.Results[i].Document, withDocs.Results[i].Document)
+		}
+		assertVectorIndexSearchDocumentDIDV4(t, splitFetch.Results[i].Document, string(noDocs.Results[i].ID))
+	}
+}
+
 func TestVectorIndexSearcherSearchWithBufferHighQPSContractRejectsDocuments2361(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

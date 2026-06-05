@@ -354,6 +354,71 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 		reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
 	})
 
+	b.Run("TreeDB_CollectionSearchVectorIndexWithDocumentsOneShot", func(b *testing.B) {
+		timedOpts := VectorIndexSearchOptions{
+			IndexName:        def.Name,
+			Query:            queries[0],
+			QueryMode:        VectorIndexQueryModeExact,
+			TopK:             params.topK,
+			EfSearch:         params.efSearch,
+			IncludeDocuments: true,
+			MaxDecodedBlocks: 1,
+			StatsMode:        VectorIndexSearchStatsModeProduction,
+		}
+		warm, err := col.SearchVectorIndex(timedOpts)
+		if err != nil {
+			b.Fatalf("warm SearchVectorIndex IncludeDocuments: %v", err)
+		}
+		if len(warm.Results) == 0 || len(warm.Results[0].Document) == 0 {
+			b.Fatal("warm SearchVectorIndex IncludeDocuments returned no materialized documents")
+		}
+		top1Got, top1Want := string(warm.Results[0].ID), vectorUSearchProductionDocID(queryDocIndexes[0])
+		statsOpts := timedOpts
+		statsOpts.StatsMode = VectorIndexSearchStatsModeFullDiagnostics
+		measured, err := col.SearchVectorIndex(statsOpts)
+		if err != nil {
+			b.Fatalf("measure SearchVectorIndex IncludeDocuments stats: %v", err)
+		}
+		stats := measured.Stats
+		if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 ||
+			stats.SearchRouteHNSWSearchPack != 0 ||
+			stats.HNSWSearchPackActive != 1 ||
+			stats.TypedColumnFallbacks != 0 ||
+			stats.VectorScratchDecodes != 0 ||
+			stats.GraphRowFallbacks != 0 ||
+			stats.DocumentsFetched != uint64(len(measured.Results)) ||
+			stats.DocumentsFetched == 0 ||
+			stats.DocumentBytes == 0 ||
+			stats.DocumentOutputBytes == 0 {
+			b.Fatalf("TreeDB collection with-documents stats=%+v want explicit post-top-k document materialization row", stats)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			timedOpts.Query = queries[i%len(queries)]
+			got, err := col.SearchVectorIndex(timedOpts)
+			if err != nil {
+				b.Fatalf("SearchVectorIndex IncludeDocuments: %v", err)
+			}
+			if len(got.Results) == 0 || len(got.Results[0].Document) == 0 {
+				b.Fatal("SearchVectorIndex IncludeDocuments returned no materialized documents")
+			}
+			vectorSearchBenchSinkOrdinalV4 += got.Results[0].Ordinal
+		}
+		b.StopTimer()
+		reportVectorUSearchProductionTop1Metric(b, top1Got, top1Want)
+		reportVectorUSearchProductionCommonMetrics(b, docs, dims, params, len(queries))
+		reportVectorUSearchProductionTreeDBFootprintMetrics(b, status)
+		reportVectorIndexSearchStatsModeBenchMetric2126(b, params.statsMode())
+		b.ReportMetric(1, "reported_stats_mode_full_diagnostics")
+		b.ReportMetric(1, "collection_searchvectorindex_with_documents_one_shot")
+		b.ReportMetric(1, "document_fetch_in_timed_loop")
+		b.ReportMetric(1, "open_searcher_calls/op")
+		b.ReportMetric(1, "open_setup_in_timed_loop")
+		b.ReportMetric(1, "response_owned_result_alloc/op")
+		reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
+	})
+
 	b.Run("USearch_Search", func(b *testing.B) {
 		keys, _, err := index.Search(queries[0], uint(params.topK))
 		if err != nil {
