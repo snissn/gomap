@@ -93,8 +93,8 @@ func TestCommandWALRawEmptyPointKeyAndZeroLengthValueReplayReopen(t *testing.T) 
 		if err != nil {
 			t.Fatalf("Get(%q): %v", key, err)
 		}
-		if len(got) != 0 {
-			t.Fatalf("Get(%q) len=%d value=%q, want zero-length", key, len(got), got)
+		if got == nil || len(got) != 0 {
+			t.Fatalf("Get(%q)=%#v (len=%d), want non-nil zero-length", key, got, len(got))
 		}
 	}
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
