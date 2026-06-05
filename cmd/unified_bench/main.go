@@ -117,6 +117,16 @@ const (
 	defaultBatchDeleteRangesPerBatch = 100
 )
 
+func normalizeBatchDeleteRangeDimensions(width, rangesPerBatch int) (int, int) {
+	if width == 0 {
+		width = defaultBatchDeleteRangeWidth
+	}
+	if rangesPerBatch == 0 {
+		rangesPerBatch = defaultBatchDeleteRangesPerBatch
+	}
+	return width, rangesPerBatch
+}
+
 type DBInstance struct {
 	Name                         string
 	Wrapper                      kvstore.DB
@@ -473,6 +483,7 @@ func main() {
 		seedUsed = time.Now().UnixNano()
 	}
 	selectedTests := normalizeTests(parseList(*testArg))
+	effectiveBatchDeleteRangeWidth, effectiveBatchDeleteRangesPerBatch := normalizeBatchDeleteRangeDimensions(*batchDeleteRangeWidth, *batchDeleteRangesPerBatch)
 
 	fmt.Fprintf(os.Stderr, "Unified Benchmark Runner\n")
 	fmt.Fprintf(os.Stderr, "========================\n")
@@ -489,7 +500,7 @@ func main() {
 	}
 	if contains(selectedTests, "all") || contains(selectedTests, "batch_delete_range") {
 		fmt.Fprintf(os.Stderr, "             batch_delete_range_width=%d batch_delete_ranges_per_batch=%d validate=%t refill=%t\n",
-			*batchDeleteRangeWidth, *batchDeleteRangesPerBatch, *batchDeleteRangeValidate, *batchDeleteRangeRefill)
+			effectiveBatchDeleteRangeWidth, effectiveBatchDeleteRangesPerBatch, *batchDeleteRangeValidate, *batchDeleteRangeRefill)
 	}
 	fmt.Fprintf(os.Stderr, "DBs:         %s\n", *dbsArg)
 	fmt.Fprintf(os.Stderr, "Tests:       %s\n", *testArg)
@@ -523,8 +534,8 @@ func main() {
 		ReadWorkers:                      effectiveReadWorkers,
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
-		BatchDeleteRangeWidth:            *batchDeleteRangeWidth,
-		BatchDeleteRangesPerBatch:        *batchDeleteRangesPerBatch,
+		BatchDeleteRangeWidth:            effectiveBatchDeleteRangeWidth,
+		BatchDeleteRangesPerBatch:        effectiveBatchDeleteRangesPerBatch,
 		BatchDeleteRangeValidate:         *batchDeleteRangeValidate,
 		BatchDeleteRangeRefill:           *batchDeleteRangeRefill,
 		ValuePattern:                     *valPattern,
@@ -2237,12 +2248,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if cfg.BatchSize <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid batchsize: %d", cfg.BatchSize)
 	}
-	if cfg.BatchDeleteRangeWidth == 0 {
-		cfg.BatchDeleteRangeWidth = defaultBatchDeleteRangeWidth
-	}
-	if cfg.BatchDeleteRangesPerBatch == 0 {
-		cfg.BatchDeleteRangesPerBatch = defaultBatchDeleteRangesPerBatch
-	}
+	cfg.BatchDeleteRangeWidth, cfg.BatchDeleteRangesPerBatch = normalizeBatchDeleteRangeDimensions(cfg.BatchDeleteRangeWidth, cfg.BatchDeleteRangesPerBatch)
 	if cfg.BatchDeleteRangeWidth < 0 || cfg.BatchDeleteRangesPerBatch < 0 {
 		return BenchRun{}, fmt.Errorf("invalid batch_delete_range settings: width=%d ranges_per_batch=%d", cfg.BatchDeleteRangeWidth, cfg.BatchDeleteRangesPerBatch)
 	}
@@ -2758,6 +2764,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 	runBatchDeleteRange := func(db kvstore.DB) (float64, error) {
 		batcher, ok := db.(kvstore.Batcher)
+		if !ok {
+			return math.NaN(), nil
+		}
+		probeBatch, err := batcher.NewBatch()
+		if err != nil {
+			return 0, fmt.Errorf("batch_delete_range: new batch probe: %w", err)
+		}
+		_, ok = probeBatch.(kvstore.BatchRangeDeleter)
+		if closeErr := probeBatch.Close(); closeErr != nil {
+			return 0, fmt.Errorf("batch_delete_range: close probe: %w", closeErr)
+		}
 		if !ok {
 			return math.NaN(), nil
 		}

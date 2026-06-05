@@ -386,6 +386,16 @@ type batchDeleteRangeMemoryIterator struct {
 	idx     int
 }
 
+type batchWithoutRangeDB struct {
+	fixedNameDB
+	newBatchCalls int
+	setCalls      int
+}
+
+type batchWithoutRangeBatch struct {
+	db *batchWithoutRangeDB
+}
+
 func newBatchDeleteRangeMemoryDB(name string) *batchDeleteRangeMemoryDB {
 	return &batchDeleteRangeMemoryDB{
 		fixedNameDB: fixedNameDB{name: name},
@@ -503,6 +513,21 @@ func (it *batchDeleteRangeMemoryIterator) ValueCopy(dst []byte) []byte {
 }
 func (it *batchDeleteRangeMemoryIterator) Error() error { return nil }
 func (it *batchDeleteRangeMemoryIterator) Close() error { return nil }
+
+func (d *batchWithoutRangeDB) NewBatch() (kvstore.Batch, error) {
+	d.newBatchCalls++
+	return &batchWithoutRangeBatch{db: d}, nil
+}
+
+func (b *batchWithoutRangeBatch) Set(key, value []byte) error {
+	b.db.setCalls++
+	return nil
+}
+
+func (b *batchWithoutRangeBatch) Delete(key []byte) error { return nil }
+func (b *batchWithoutRangeBatch) Commit() error           { return nil }
+func (b *batchWithoutRangeBatch) CommitSync() error       { return nil }
+func (b *batchWithoutRangeBatch) Close() error            { return nil }
 
 type countingReadSnapshotDB struct {
 	getCalls               atomic.Int64
@@ -823,6 +848,48 @@ func TestRunBenchmark_BatchDeleteRange_UsesBatchCapabilityAndReports(t *testing.
 	}
 	if report.RangeOpsPerSec != gotResult || report.AffectedKeysPerSec <= report.RangeOpsPerSec {
 		t.Fatalf("unexpected throughput metrics: result=%v report=%+v", gotResult, report)
+	}
+}
+
+func TestRunBenchmark_BatchDeleteRange_SkipsUnsupportedBeforeLoad(t *testing.T) {
+	var db *batchWithoutRangeDB
+	const dbName = "batch_without_range"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = &batchWithoutRangeDB{fixedNameDB: fixedNameDB{name: "BatchWithoutRange"}}
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		RangeQueries:              0,
+		RangeSpan:                 0,
+		DBsArg:                    dbName,
+		TestsArg:                  "batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected test DB instance")
+	}
+	if db.newBatchCalls != 1 {
+		t.Fatalf("expected only capability probe batch, got %d NewBatch calls", db.newBatchCalls)
+	}
+	if db.setCalls != 0 {
+		t.Fatalf("unsupported DeleteRange batch should not preload keys, got %d Set calls", db.setCalls)
+	}
+	if got := run.Results["batch_delete_range"][db.Name()]; !math.IsNaN(got) {
+		t.Fatalf("unsupported DeleteRange batch result=%v want NaN", got)
+	}
+	if report := run.BatchDeleteRange["batch_delete_range"][db.Name()]; report.Mode != "" {
+		t.Fatalf("unsupported DeleteRange batch should not report metrics, got %+v", report)
 	}
 }
 
