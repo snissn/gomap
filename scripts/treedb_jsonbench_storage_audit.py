@@ -15,6 +15,7 @@ import argparse
 import gzip
 import json
 import os
+import re
 import shlex
 import struct
 import subprocess
@@ -347,6 +348,35 @@ def compression_value_tokens(value: Any) -> set[str]:
     return tokens
 
 
+def compression_metadata_only_field(field: dict[str, Any]) -> bool:
+    leaf = str(field.get("path", "")).lower().rsplit(".", 1)[-1]
+    return "requested" in leaf or "policy" in leaf
+
+
+def observed_compression_value_tokens(value: Any) -> set[str]:
+    if isinstance(value, str):
+        text = value.lower()
+        if "requested" in text:
+            pieces = [piece for piece in re.split(r"[;,]", text) if "requested" not in piece]
+            text = " ".join(pieces)
+        return compression_value_tokens(text)
+    if isinstance(value, dict):
+        tokens: set[str] = set()
+        for key, child in value.items():
+            key_text = str(key).lower()
+            if "requested" in key_text or "policy" in key_text:
+                continue
+            tokens.update(compression_value_tokens(key_text))
+            tokens.update(observed_compression_value_tokens(child))
+        return tokens
+    if isinstance(value, list):
+        tokens: set[str] = set()
+        for child in value:
+            tokens.update(observed_compression_value_tokens(child))
+        return tokens
+    return compression_value_tokens(value)
+
+
 def load_result_compression_summary(result_json: Path | None, data: Any | None = None) -> dict[str, Any] | None:
     if result_json is None:
         return None
@@ -360,7 +390,8 @@ def load_result_compression_summary(result_json: Path | None, data: Any | None =
         tokens = compression_value_tokens(field.get("value"))
         if "none" in tokens:
             none_fields.append(field)
-        if tokens & active_tokens:
+        observed_tokens = set() if compression_metadata_only_field(field) else observed_compression_value_tokens(field.get("value"))
+        if observed_tokens & active_tokens:
             active_fields.append(field)
     silent_none = bool(none_fields) and not active_fields
     return {
