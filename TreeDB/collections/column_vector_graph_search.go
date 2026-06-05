@@ -2757,9 +2757,7 @@ func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate co
 		top = append(top, columnVectorGraphSearchCandidate{})
 		s.top = top
 	}
-	for shift := len(top) - 1; shift > pos; shift-- {
-		top[shift] = top[shift-1]
-	}
+	copy(top[pos+1:], top[pos:len(top)-1])
 	top[pos] = candidate
 	return true
 }
