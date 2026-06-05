@@ -200,10 +200,15 @@ Canonical current production comparison:
   \`graph_row_fallbacks/search\`, score-batch fallback reason flags,
   vector/adjacency source-state counters, and candidate/visited-edge byte
   counters used by the HNSW search-pack stack.
-- Future collection-level buffered rows should use the same exact no-document
-  contract as \`SearchWithBuffer\`: caller-owned buffer, no documents/projection,
-  no graph-row fallback, no vector scratch decode, no per-search open/setup, and
-  \`search_route_hnsw_search_pack/search=1\` on healthy packs.
+- \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexWithBuffer\`
+  times the new collection-level caller-owned result-buffer seam. It uses the
+  same exact no-document route contract as \`SearchWithBuffer\`: caller-owned
+  buffer, no documents/projection, no graph-row fallback, no vector scratch
+  decode, and \`search_route_hnsw_search_pack/search=1\` on healthy packs. Until
+  the collection-owned prepared cache lands, this row still opens/closes a
+  searcher per operation and should report \`open_searcher_calls/op=1\` and
+  \`open_setup_in_timed_loop=1\`; attribute those remaining allocations to the
+  cache follow-up rather than to response-owned result storage.
 - \`.../USearch_Search\` and \`.../USearch_SearchParallel\` time the pure
   in-memory USearch Go binding baseline with cosine/f32 HNSW and the same
   synthetic vector/query generator, M, efConstruction, efSearch, topK, docs,

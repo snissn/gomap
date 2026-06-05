@@ -232,6 +232,68 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 		reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
 	})
 
+	b.Run("TreeDB_CollectionSearchVectorIndexWithBuffer", func(b *testing.B) {
+		timedOpts := VectorIndexSearchOptions{
+			IndexName:        def.Name,
+			Query:            queries[0],
+			QueryMode:        VectorIndexQueryModeExact,
+			TopK:             params.topK,
+			EfSearch:         params.efSearch,
+			MaxDecodedBlocks: 1,
+			StatsMode:        VectorIndexSearchStatsModeProduction,
+		}
+		var buffer VectorIndexSearchBuffer
+		warm, err := col.SearchVectorIndexWithBuffer(timedOpts, &buffer)
+		if err != nil {
+			b.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+		}
+		if len(warm.Results) == 0 {
+			b.Fatal("warm SearchVectorIndexWithBuffer returned no results")
+		}
+		top1Got, top1Want := string(warm.Results[0].ID), vectorUSearchProductionDocID(queryDocIndexes[0])
+		statsOpts := timedOpts
+		statsOpts.StatsMode = VectorIndexSearchStatsModeFullDiagnostics
+		measured, err := col.SearchVectorIndexWithBuffer(statsOpts, &buffer)
+		if err != nil {
+			b.Fatalf("measure SearchVectorIndexWithBuffer stats: %v", err)
+		}
+		stats := measured.Stats
+		if stats.SearchRouteHNSWSearchPack != 1 ||
+			stats.HNSWSearchPackActive != 1 ||
+			stats.HNSWSearchPackFallbacks != 0 ||
+			stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 0 ||
+			stats.TypedColumnFallbacks != 0 ||
+			stats.VectorScratchDecodes != 0 ||
+			stats.GraphRowFallbacks != 0 ||
+			stats.DocumentsFetched != 0 {
+			b.Fatalf("TreeDB collection buffered stats=%+v want exact no-document hnsw_search_pack_v1 route", stats)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			timedOpts.Query = queries[i%len(queries)]
+			got, err := col.SearchVectorIndexWithBuffer(timedOpts, &buffer)
+			if err != nil {
+				b.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+			}
+			if len(got.Results) == 0 {
+				b.Fatal("SearchVectorIndexWithBuffer returned no results")
+			}
+			vectorSearchBenchSinkOrdinalV4 += got.Results[0].Ordinal
+		}
+		b.StopTimer()
+		reportVectorUSearchProductionTop1Metric(b, top1Got, top1Want)
+		reportVectorUSearchProductionCommonMetrics(b, docs, dims, params, len(queries))
+		reportVectorUSearchProductionTreeDBFootprintMetrics(b, status)
+		reportVectorIndexSearchStatsModeBenchMetric2126(b, params.statsMode())
+		b.ReportMetric(1, "reported_stats_mode_full_diagnostics")
+		b.ReportMetric(1, "collection_searchvectorindex_with_buffer_seam")
+		b.ReportMetric(1, "open_searcher_calls/op")
+		b.ReportMetric(1, "open_setup_in_timed_loop")
+		b.ReportMetric(0, "response_owned_result_alloc/op")
+		reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
+	})
+
 	b.Run("TreeDB_CollectionSearchVectorIndexNoDocsOneShot", func(b *testing.B) {
 		timedOpts := VectorIndexSearchOptions{
 			IndexName:        def.Name,
