@@ -206,33 +206,36 @@ func (c *Collection) openCollectionVectorIndexPreparedSearch(opts VectorIndexSea
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, opts.IndexName)
 	if !ok {
-		return nil, response, ErrIndexNotFound
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires a declared vector index", ErrIndexNotFound, opts.IndexName)
 	}
 	response.IndexName = def.Name
 	response.Strategy = def.Strategy
 	switch def.Strategy {
 	case VectorIndexStrategyNativeRuntime:
 		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateNativeRuntime, Reason: VectorIndexReasonNativeRuntime}
-		return nil, response, fmt.Errorf("%w: vector index %q uses native_runtime; collection buffered search currently requires an explicit column_graph index", ErrVectorIndexSearchUnavailable, def.Name)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires an explicit column_graph index; native_runtime cannot serve the no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
 		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateColumnGraphUnavailable, Reason: VectorIndexReasonUnsupportedStrategy}
-		return nil, response, fmt.Errorf("%w: vector index %q uses unsupported strategy %q", ErrVectorIndexSearchUnavailable, def.Name, def.Strategy)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires column_graph strategy; got unsupported strategy %q", ErrVectorIndexSearchUnavailable, def.Name, def.Strategy)
 	}
 	if def.Metric != VectorMetricCosine {
 		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateColumnGraphUnavailable, Reason: VectorIndexReasonColumnGraphUnsupportedMetric}
-		return nil, response, fmt.Errorf("%w: column_graph vector index %q uses metric %q; native reader currently supports only %q", ErrVectorIndexSearchUnavailable, def.Name, def.Metric, VectorMetricCosine)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires cosine column_graph state; got metric %q", ErrVectorIndexSearchUnavailable, def.Name, def.Metric)
 	}
 
 	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(def.Name, snap)
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 		if statusErr != nil {
+			if errors.Is(statusErr, ErrIndexNotFound) {
+				return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires a declared vector index", ErrIndexNotFound, def.Name)
+			}
 			return nil, response, statusErr
 		}
 		status = failClosedColumnGraphReaderOpenStatus(def, status)
 		response.Status = status
-		return nil, response, fmt.Errorf("%w: column_graph %q is not loaded: state=%s reason=%s: %w", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason, err)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires loaded column_graph state: state=%s reason=%s", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason)
 	}
 	readerCatalog := view.Catalog
 	if readerCatalog == nil || readerCatalog.meta.Options.ColumnStore == nil {
@@ -248,16 +251,16 @@ func (c *Collection) openCollectionVectorIndexPreparedSearch(opts VectorIndexSea
 		return nil, response, err
 	}
 	if !columnVectorGraphDocumentIDStatePresent(view.VectorIndexState) {
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires vector-index document-id state for response IDs", ErrVectorIndexSearchUnavailable, def.Name)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	if err := validateColumnVectorGraphDocumentIDStateAssetPayload(c.db.ColumnAssetRootDir(), readerCatalog.meta.Name, *readerCatalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState); err != nil {
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires valid vector-index document-id state: %w", ErrVectorIndexSearchUnavailable, def.Name, err)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires valid vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReader(readerCatalog.meta.Name, *readerCatalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState)
 	if packErr != nil {
 		response.Stats = VectorIndexSearchStats{}
 		vectorIndexSearchRouteStatsForHNSWSearchPackFastStatus(vectorIndexSearchRouteStats{}, columnHNSWSearchPackPreparedStatusInvalid).apply(&response.Stats)
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires valid hnsw_search_pack_v1 state: %w", ErrVectorIndexSearchUnavailable, def.Name, packErr)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires valid hnsw_search_pack_v1 state; rebuild the vector index before using the buffered no-document route", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	if packStatus != columnHNSWSearchPackPreparedStatusDirect && packStatus != columnHNSWSearchPackPreparedStatusHeap {
 		if pack != nil {
@@ -265,7 +268,7 @@ func (c *Collection) openCollectionVectorIndexPreparedSearch(opts VectorIndexSea
 		}
 		response.Stats = VectorIndexSearchStats{}
 		vectorIndexSearchRouteStatsForHNSWSearchPackFastStatus(vectorIndexSearchRouteStats{}, packStatus).apply(&response.Stats)
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires healthy hnsw_search_pack_v1 state", ErrVectorIndexSearchUnavailable, def.Name)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires healthy hnsw_search_pack_v1 state; rebuild the vector index before using the buffered no-document route", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	routeStats := vectorIndexSearchRouteStatsForHNSWSearchPackRoute(pack.routeStats(packStatus, packOpenNanos))
 	return &collectionVectorIndexPreparedSearch{
