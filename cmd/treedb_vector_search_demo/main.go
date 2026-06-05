@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,6 +78,7 @@ type config struct {
 	disableExactFallback  bool
 	requireValueLogBytes  bool
 	requireLeafVLogBytes  bool
+	searchProfileDir      string
 	jsonOut               bool
 
 	indexOuterLeavesInValueLog *bool
@@ -105,6 +107,7 @@ type result struct {
 	ValidateQueries           int                               `json:"validate_queries"`
 	ValidateDocs              int                               `json:"validate_docs"`
 	ValidationExactSource     validationExactSource             `json:"validation_exact_source"`
+	SearchProfileDir          string                            `json:"search_profile_dir,omitempty"`
 	TopK                      int                               `json:"top_k"`
 	M                         int                               `json:"m"`
 	EfConstruction            int                               `json:"ef_construction"`
@@ -350,6 +353,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
 	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
 	fs.BoolVar(&cfg.requireLeafVLogBytes, "require-leaf-vlog-bytes", false, "Fail if compacted storage has no leaf value-log bytes")
+	fs.StringVar(&cfg.searchProfileDir, "search-profile-dir", "", "Write per-concurrency search CPU/heap/alloc/block/mutex profiles under this directory")
 	fs.BoolVar(&cfg.jsonOut, "json", false, "Emit JSON instead of text")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -426,6 +430,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.datasetDir != "" {
 		cfg.datasetDir = filepath.Clean(cfg.datasetDir)
+	}
+	if cfg.searchProfileDir != "" {
+		cfg.searchProfileDir = filepath.Clean(cfg.searchProfileDir)
 	}
 	if err := validateValidationExactSourceConfig(cfg); err != nil {
 		return config{}, err
@@ -848,6 +855,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		ValidateQueries:           cfg.validateQueries,
 		ValidateDocs:              cfg.validateDocs,
 		ValidationExactSource:     cfg.validationExactSource,
+		SearchProfileDir:          cfg.searchProfileDir,
 		TopK:                      cfg.topK,
 		M:                         cfg.m,
 		EfConstruction:            cfg.efConstruction,
@@ -2125,6 +2133,10 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 			atomic.AddUint64(&scoreBatchCandidatesTotal, response.Stats.ScoreBatchCandidates)
 		}
 	}
+	stopProfile, err := startColumnGraphSearchProfile(cfg, concurrency)
+	if err != nil {
+		return searchBenchmarkResult{}, err
+	}
 	startAll := time.Now()
 	if concurrency == 1 {
 		worker(searchers[0])
@@ -2141,6 +2153,11 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 		wg.Wait()
 	}
 	total := time.Since(startAll)
+	if stopProfile != nil {
+		if err := stopProfile(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	if firstErr != nil {
 		return searchBenchmarkResult{}, firstErr
 	}
@@ -2182,6 +2199,71 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 		ExactFallbacks:                    0,
 		DisableExactFallback:              cfg.disableExactFallback,
 	}, nil
+}
+
+func startColumnGraphSearchProfile(cfg config, concurrency int) (func() error, error) {
+	if cfg.searchProfileDir == "" {
+		return nil, nil
+	}
+	if err := os.MkdirAll(cfg.searchProfileDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create search profile dir: %w", err)
+	}
+	mode := string(normalizedVectorQueryMode(cfg.vectorQueryMode))
+	if mode == "" {
+		mode = "exact"
+	}
+	prefix := fmt.Sprintf("search_%s_c%d", mode, concurrency)
+	cpuFile, err := os.Create(filepath.Join(cfg.searchProfileDir, prefix+"_cpu.pprof"))
+	if err != nil {
+		return nil, fmt.Errorf("create search CPU profile: %w", err)
+	}
+	oldMemProfileRate := runtime.MemProfileRate
+	oldMutexProfileFraction := runtime.SetMutexProfileFraction(1)
+	runtime.MemProfileRate = 1
+	runtime.SetBlockProfileRate(1)
+	if err := pprof.StartCPUProfile(cpuFile); err != nil {
+		_ = cpuFile.Close()
+		restoreRuntimeSearchProfileSettings(oldMemProfileRate, oldMutexProfileFraction)
+		return nil, fmt.Errorf("start search CPU profile: %w", err)
+	}
+	return func() error {
+		pprof.StopCPUProfile()
+		var errs []error
+		if err := cpuFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close search CPU profile: %w", err))
+		}
+		runtime.GC()
+		for _, name := range []string{"heap", "allocs", "block", "mutex"} {
+			path := filepath.Join(cfg.searchProfileDir, prefix+"_"+name+".pprof")
+			if err := writeRuntimeProfile(path, name); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		restoreRuntimeSearchProfileSettings(oldMemProfileRate, oldMutexProfileFraction)
+		return errors.Join(errs...)
+	}, nil
+}
+
+func restoreRuntimeSearchProfileSettings(memProfileRate, mutexProfileFraction int) {
+	runtime.MemProfileRate = memProfileRate
+	runtime.SetBlockProfileRate(0)
+	runtime.SetMutexProfileFraction(mutexProfileFraction)
+}
+
+func writeRuntimeProfile(path, name string) error {
+	profile := pprof.Lookup(name)
+	if profile == nil {
+		return fmt.Errorf("runtime profile %q is unavailable", name)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %s profile: %w", name, err)
+	}
+	defer func() { _ = f.Close() }()
+	if err := profile.WriteTo(f, 0); err != nil {
+		return fmt.Errorf("write %s profile: %w", name, err)
+	}
+	return nil
 }
 
 func vectorIndexOptions(def collections.VectorIndexDefinition) collections.VectorIndexOptions {

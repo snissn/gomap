@@ -91,6 +91,55 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	}
 }
 
+func TestExecuteColumnGraphSearchProfileDirWritesProfiles(t *testing.T) {
+	profileDir := t.TempDir()
+	res, err := execute(context.Background(), config{
+		dir:                       t.TempDir(),
+		keepDir:                   true,
+		docs:                      64,
+		dimensions:                8,
+		queries:                   4,
+		searchConcurrency:         []int{2},
+		validateQueries:           0,
+		validateDocs:              0,
+		topK:                      3,
+		batchSize:                 16,
+		m:                         4,
+		efConstruction:            32,
+		efSearch:                  32,
+		valuePointerThreshold:     defaultValuePointerThreshold,
+		leafGenerationTarget:      defaultLeafGenerationTarget,
+		minRecall:                 0,
+		disableExactFallback:      true,
+		vectorIndexStrategy:       collections.VectorIndexStrategyColumnGraph,
+		vectorQueryMode:           collections.VectorIndexQueryModeQuantizedRerank,
+		quantizedIndexName:        defaultQuantizedIndexName,
+		quantizedRerankCandidates: 4,
+		searchProfileDir:          profileDir,
+	})
+	if err != nil {
+		t.Fatalf("execute with search profile dir: %v", err)
+	}
+	if res.SearchProfileDir != profileDir {
+		t.Fatalf("search profile dir=%q want %q", res.SearchProfileDir, profileDir)
+	}
+	if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].Concurrency != 1 || res.SearchBenchmarks[1].Concurrency != 2 {
+		t.Fatalf("unexpected search benchmarks: %+v", res.SearchBenchmarks)
+	}
+	for _, concurrency := range []int{1, 2} {
+		for _, kind := range []string{"cpu", "heap", "allocs", "block", "mutex"} {
+			path := filepath.Join(profileDir, fmt.Sprintf("search_quantized_rerank_c%d_%s.pprof", concurrency, kind))
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat profile %s: %v", path, err)
+			}
+			if info.Size() == 0 {
+				t.Fatalf("profile %s is empty", path)
+			}
+		}
+	}
+}
+
 func TestDemoCommandWALFormatConfigPreservesProfileKnobs(t *testing.T) {
 	cfg := demoCommandWALFormatConfig(demoBackendOptions(config{}, t.TempDir()))
 	if len(cfg.RequiredFeatures) != 1 || cfg.RequiredFeatures[0] != "command_wal_v1" {
@@ -603,6 +652,13 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 	}
 	if defaultCfg.validationExactSource != validationExactSourceTreeDB {
 		t.Fatalf("default validation exact source=%q want treedb", defaultCfg.validationExactSource)
+	}
+	profileCfg, err := parseConfig([]string{"-search-profile-dir", filepath.Join("tmp", ".", "profiles")})
+	if err != nil {
+		t.Fatalf("parseConfig search profile dir: %v", err)
+	}
+	if profileCfg.searchProfileDir != filepath.Join("tmp", "profiles") {
+		t.Fatalf("search profile dir=%q want tmp/profiles", profileCfg.searchProfileDir)
 	}
 
 	for _, tc := range []struct {
