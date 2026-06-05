@@ -2228,7 +2228,6 @@ func startColumnGraphSearchProfile(cfg config, concurrency int) (func() error, e
 		return nil, fmt.Errorf("create search CPU profile: %w", err)
 	}
 	oldMutexProfileFraction := runtime.SetMutexProfileFraction(1)
-	runtime.SetBlockProfileRate(1)
 	if err := pprof.StartCPUProfile(cpuFile); err != nil {
 		_ = cpuFile.Close()
 		restoreRuntimeSearchProfileSettings(oldMutexProfileFraction)
@@ -2253,7 +2252,6 @@ func startColumnGraphSearchProfile(cfg config, concurrency int) (func() error, e
 }
 
 func restoreRuntimeSearchProfileSettings(mutexProfileFraction int) {
-	runtime.SetBlockProfileRate(0)
 	runtime.SetMutexProfileFraction(mutexProfileFraction)
 }
 

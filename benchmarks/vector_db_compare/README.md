@@ -122,7 +122,9 @@ Configuration:
   name (`<profile-dir>/<backend>/<matrix_case>/...`) so case artifacts are not
   overwritten. CPU profiles are scoped to the search loop; the other files are
   runtime snapshots for supporting diagnosis. Heap and allocation profiles use
-  the Go runtime's current/default sampling rate.
+  the Go runtime's current/default sampling rate. Block profiles are emitted
+  from the runtime's current block profiler and may be empty unless block
+  profiling was already enabled.
 - `TREEDB_QUANTIZED_INDEX_NAME`: scalar_u8 TreeDB quantized score-plane name.
   Defaults to `embedding.scalar_u8.fast`.
 - `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB quantized-rerank exact rerank

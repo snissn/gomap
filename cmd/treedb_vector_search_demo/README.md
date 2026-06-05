@@ -100,8 +100,10 @@ not overwritten. CPU profiles are scoped to the measured search loop; the
 runtime snapshots are supporting diagnostics and can include process state
 outside the search loop. Heap and allocation profiles use the Go runtime's
 current sampling rate; the demo does not change `runtime.MemProfileRate` for a
-profile run. Profiling changes timings and should be used for bottleneck
-analysis, not as the comparison number to publish.
+profile run. Block profiles are emitted from the runtime's current block
+profiler and may be empty unless the caller/process already enabled block
+profiling. Profiling changes timings and should be used for bottleneck analysis,
+not as the comparison number to publish.
 
 When `-dataset-dir` is used, `-queries` may truncate the exported query vector
 file but cannot exceed the manifest query count. `-validate-queries` is a recall
