@@ -44,6 +44,17 @@ go test ./... -run 'TestCommandWALReopen|TestDatabaseSuite' -count=1
 go test ./... -bench 'BenchmarkAdapterVsDirect/(Put|Get|BatchWrite|Iterator|DeleteRange|BatchDeleteRange)' -benchtime=100x -count=1
 ```
 
-The module imports `github.com/ethereum/go-ethereum/ethdb` and currently uses a
-`replace` to validate against the `snissn/go-ethereum-nitro` fork while keeping
-the standard geth module import path.
+## Dependency strategy
+
+The module pins resolvable requirements at their declared module paths:
+
+- `github.com/ethereum/go-ethereum` for the standard `ethdb` interfaces.
+- `github.com/snissn/gomap` for TreeDB.
+
+No `replace` directive is required for normal consumers. When this adapter is
+imported from a geth fork whose module path is `github.com/ethereum/go-ethereum`
+(such as `snissn/go-ethereum-nitro`), the fork's main module supplies the
+`ethdb` package. If a downstream experiment needs a local gomap checkout or a
+newer untagged gomap commit, add the `github.com/snissn/gomap` replace in that
+experiment's main module or Go workspace rather than relying on this module to
+propagate replaces.

@@ -3,8 +3,8 @@ module github.com/snissn/gomap/TreeDB/integration/gethethdb
 go 1.25.0
 
 require (
-	github.com/ethereum/go-ethereum v0.0.0-20260416123035-49b38a638a91
-	github.com/snissn/gomap v0.0.0
+	github.com/ethereum/go-ethereum v1.16.9
+	github.com/snissn/gomap v0.0.0-20260605130228-58f3398da631
 )
 
 require (
@@ -16,9 +16,5 @@ require (
 	github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a // indirect
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
 )
-
-replace github.com/ethereum/go-ethereum => github.com/snissn/go-ethereum-nitro v0.0.0-20260416123035-49b38a638a91
-
-replace github.com/snissn/gomap => ../../..
