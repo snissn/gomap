@@ -369,6 +369,22 @@ func (b *Batch) recordOp(op batchOp) {
 	b.ops = append(b.ops, op)
 }
 
+func (b *Batch) applyOpToInner(op batchOp) error {
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	switch op.kind {
+	case batchOpPut:
+		return b.inner.Set(op.key, op.value)
+	case batchOpDelete:
+		return b.inner.Delete(op.key)
+	case batchOpDeleteRange:
+		return b.inner.DeleteRange(op.key, op.value)
+	default:
+		return fmt.Errorf("gethethdb: unknown batch op %d", op.kind)
+	}
+}
+
 func newClosedBatch(err error) *Batch {
 	if err == nil {
 		err = ErrClosed
@@ -450,7 +466,40 @@ func (b *Batch) Write() error {
 	if b.db == nil || b.db.closed.Load() {
 		return ErrClosed
 	}
-	return b.inner.Write()
+	if err := b.inner.Write(); err != nil {
+		return err
+	}
+	return b.rebuildInnerFromOps()
+}
+
+func (b *Batch) rebuildInnerFromOps() error {
+	if b == nil {
+		return ErrClosed
+	}
+	if b.db == nil || b.db.closed.Load() || b.db.db == nil {
+		b.closed = ErrClosed
+		return ErrClosed
+	}
+	if b.inner != nil {
+		if resetter, ok := b.inner.(interface{ Reset() }); ok {
+			resetter.Reset()
+		} else {
+			_ = b.inner.Close()
+			b.inner = b.db.db.NewBatchWithSize(len(b.ops))
+		}
+	} else {
+		b.inner = b.db.db.NewBatchWithSize(len(b.ops))
+	}
+	if b.inner == nil {
+		b.closed = ErrClosed
+		return ErrClosed
+	}
+	for _, op := range b.ops {
+		if err := b.applyOpToInner(op); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Reset resets the batch for reuse.

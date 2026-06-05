@@ -233,6 +233,62 @@ func TestBatchReplayPreservesDeleteRangeOrder(t *testing.T) {
 	})
 }
 
+func TestBatchWriteWithoutResetPreservesContents(t *testing.T) {
+	db := openTestDB(t)
+	batch := db.NewBatch()
+	if err := batch.Put([]byte("a"), []byte("1")); err != nil {
+		t.Fatal(err)
+	}
+	initialSize := batch.ValueSize()
+	if initialSize == 0 {
+		t.Fatal("initial ValueSize=0, want queued bytes")
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("first Write: %v", err)
+	}
+	assertValue(t, db, []byte("a"), []byte("1"))
+	if got := batch.ValueSize(); got != initialSize {
+		t.Fatalf("ValueSize after Write=%d want %d", got, initialSize)
+	}
+
+	if err := db.Delete([]byte("a")); err != nil {
+		t.Fatalf("external Delete: %v", err)
+	}
+	assertMissing(t, db, []byte("a"))
+	if err := batch.Write(); err != nil {
+		t.Fatalf("second Write without Reset: %v", err)
+	}
+	assertValue(t, db, []byte("a"), []byte("1"))
+
+	if err := batch.Put([]byte("b"), []byte("2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete([]byte("a")); err != nil {
+		t.Fatalf("second external Delete: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("third Write without Reset: %v", err)
+	}
+	assertValue(t, db, []byte("a"), []byte("1"))
+	assertValue(t, db, []byte("b"), []byte("2"))
+
+	batch.Reset()
+	if got := batch.ValueSize(); got != 0 {
+		t.Fatalf("ValueSize after Reset=%d want 0", got)
+	}
+	if err := db.Delete([]byte("a")); err != nil {
+		t.Fatalf("delete a after Reset: %v", err)
+	}
+	if err := db.Delete([]byte("b")); err != nil {
+		t.Fatalf("delete b after Reset: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("empty Write after Reset: %v", err)
+	}
+	assertMissing(t, db, []byte("a"))
+	assertMissing(t, db, []byte("b"))
+}
+
 func TestIteratorPrefixStart(t *testing.T) {
 	db := openTestDB(t)
 	for _, key := range []string{"ka1", "ka2", "ka3", "ka4", "ka5", "kb1"} {
