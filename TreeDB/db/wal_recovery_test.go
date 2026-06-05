@@ -228,6 +228,92 @@ func TestReplayInlineAppender_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
 	}
 }
 
+type replayInlineRIDReserveTestAppender struct {
+	next  uint64
+	calls []int
+}
+
+func (a *replayInlineRIDReserveTestAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	return nil, fmt.Errorf("AppendValues should not be called by stale replay appender")
+}
+
+func (a *replayInlineRIDReserveTestAppender) ReserveRIDs(count int) (uint64, error) {
+	if err := validateRewriteRIDCount(count); err != nil {
+		return 0, err
+	}
+	start := a.next
+	if err := validateRewriteRIDRange(start, count); err != nil {
+		return 0, err
+	}
+	a.next += uint64(count)
+	a.calls = append(a.calls, count)
+	return start, nil
+}
+
+func (a *replayInlineRIDReserveTestAppender) Flush() error { return nil }
+
+func (a *replayInlineRIDReserveTestAppender) Sync() error { return nil }
+
+func (a *replayInlineRIDReserveTestAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	return "", 0, false
+}
+
+func TestReplayInlineAppenderUsesCurrentRIDReserverWhenStaleM12A(t *testing.T) {
+	dir := t.TempDir()
+	if err := ensureStorageLayoutDirs(dir); err != nil {
+		t.Fatalf("ensureStorageLayoutDirs: %v", err)
+	}
+	db := &DB{
+		dir:                 dir,
+		valueLogCompression: ValueLogCompressionOff,
+	}
+	stale, err := newReplayInlineAppender(db, nil, nil)
+	if err != nil {
+		t.Fatalf("newReplayInlineAppender: %v", err)
+	}
+
+	active := &replayInlineRIDReserveTestAppender{next: 100}
+	db.SetValueLogAppender(active)
+
+	if _, err := stale.AppendValues([][]byte{[]byte("retained-value-1"), []byte("retained-value-2")}); err != nil {
+		_ = stale.close()
+		t.Fatalf("AppendValues: %v", err)
+	}
+	if _, err := stale.AppendLeafPage(bytes.Repeat([]byte("l"), page.PageSize)); err != nil {
+		_ = stale.close()
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := stale.close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if got, want := fmt.Sprint(active.calls), "[2 1]"; got != want {
+		t.Fatalf("ReserveRIDs calls=%s want %s", got, want)
+	}
+	valueSegments, err := listSegmentsInDir(ValueLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("list value segments: %v", err)
+	}
+	leafSegments, err := listSegmentsInDir(LeafLogDirPath(dir))
+	if err != nil {
+		t.Fatalf("list leaf segments: %v", err)
+	}
+	ridMap, err := scanValueLogSegments(append(valueSegments, leafSegments...), nil)
+	if err != nil {
+		t.Fatalf("scanValueLogSegments: %v", err)
+	}
+	for _, rid := range []uint64{100, 101, 102} {
+		if _, ok := ridMap[rid]; !ok {
+			t.Fatalf("rid %d missing from stale replay append rid map: %v", rid, ridMap)
+		}
+	}
+	for _, rid := range []uint64{1, 2, 3} {
+		if _, ok := ridMap[rid]; ok {
+			t.Fatalf("stale replay appender used local rid %d instead of active allocator", rid)
+		}
+	}
+}
+
 func TestReplayWALIntoBackend_IgnoresEmptyCommitSegments(t *testing.T) {
 	segments := []logSegment{
 		{path: "/tmp/empty-commit.log", size: 0, valueLog: false},

@@ -800,16 +800,27 @@ func (a *replayInlineAppender) AppendValues(values [][]byte) ([]page.ValuePtr, e
 	if a == nil {
 		return nil, fmt.Errorf("commitlog: replay value-log appender unavailable")
 	}
+	ptrs := make([]page.ValuePtr, len(values))
+	if len(values) == 0 {
+		return ptrs, nil
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	ptrs := make([]page.ValuePtr, len(values))
+	if a.writer == nil {
+		return nil, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	startRID, err := a.reserveAppendRIDsLocked(len(values))
+	if err != nil {
+		return nil, err
+	}
 	for i := range values {
-		ptr, err := a.appendLocked(values[i])
+		ptr, err := a.writer.appendValue(startRID+uint64(i), values[i])
 		if err != nil {
 			return nil, err
 		}
 		ptrs[i] = ptr
 	}
+	a.dirty = true
 	return ptrs, nil
 }
 
