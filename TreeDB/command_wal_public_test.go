@@ -301,10 +301,6 @@ func TestPublicCommandWALRejectsUnsupportedCachedRawMutations(t *testing.T) {
 	if updateSyncCalled {
 		t.Fatal("UpdateSync callback ran after command-WAL rejection")
 	}
-	if err := db.DeleteRange([]byte("a"), []byte("z")); !errors.Is(err, ErrCommandWALRejected) {
-		t.Fatalf("DeleteRange err=%v, want ErrCommandWALRejected", err)
-	}
-
 	got, err := db.Get([]byte("keep"))
 	if err != nil {
 		t.Fatalf("Get(keep): %v", err)
@@ -323,10 +319,7 @@ func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {
 	if stats["treedb.command_wal.stats_scan"] != "true" {
 		t.Fatalf("stats_scan=%q, want true", stats["treedb.command_wal.stats_scan"])
 	}
-	frames, err := strconv.ParseUint(stats["treedb.command_wal.frames"], 10, 64)
-	if err != nil {
-		t.Fatalf("parse command_wal.frames=%q: %v", stats["treedb.command_wal.frames"], err)
-	}
+	frames := publicCommandWALFrameCount(t, db)
 	if frames < minFrames {
 		t.Fatalf("command_wal.frames=%d, want at least %d", frames, minFrames)
 	}
@@ -337,6 +330,16 @@ func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {
 	if maxLSN < minFrames {
 		t.Fatalf("command_wal.max_lsn=%d, want at least %d", maxLSN, minFrames)
 	}
+}
+
+func publicCommandWALFrameCount(t *testing.T, db *DB) uint64 {
+	t.Helper()
+	stats := db.Stats()
+	frames, err := strconv.ParseUint(stats["treedb.command_wal.frames"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse command_wal.frames=%q: %v", stats["treedb.command_wal.frames"], err)
+	}
+	return frames
 }
 
 func TestPublicCommandWALLiveCountersDoNotRequireStatsScan(t *testing.T) {
@@ -1094,6 +1097,322 @@ func assertPublicCommandWALFramesB(b *testing.B, db *DB, minFrames uint64) {
 	}
 	if frames < minFrames {
 		b.Fatalf("command_wal.frames=%d, want at least %d", frames, minFrames)
+	}
+}
+
+func TestPublicCommandWALDeleteRangeCachedReopen(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}, {"c", "vc"}, {"d", "vd"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+	before := publicCommandWALFrameCount(t, db)
+	if err := db.DeleteRange([]byte("b"), []byte("d")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	if got := publicCommandWALFrameCount(t, db); got != before+1 {
+		t.Fatalf("command_wal.frames=%d, want %d after one DB-level DeleteRange", got, before+1)
+	}
+	for _, key := range []string{"b", "c"} {
+		has, err := db.Has([]byte(key))
+		if err != nil || has {
+			t.Fatalf("Has(%s)=(%t,%v), want false,nil before reopen", key, has, err)
+		}
+	}
+	requireRawKVValue(t, db, []byte("a"), []byte("va"))
+	requireRawKVValue(t, db, []byte("d"), []byte("vd"))
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	for _, key := range []string{"b", "c"} {
+		has, err := reopen.Has([]byte(key))
+		if err != nil || has {
+			t.Fatalf("Has(%s)=(%t,%v), want false,nil after replay", key, has, err)
+		}
+	}
+	requireRawKVValue(t, reopen, []byte("a"), []byte("va"))
+	requireRawKVValue(t, reopen, []byte("d"), []byte("vd"))
+	if got := reopen.backend.State().AppliedCommandLSN; got < before+1 {
+		t.Fatalf("AppliedCommandLSN=%d, want at least %d after reopen", got, before+1)
+	}
+}
+
+func TestPublicCommandWALDeleteRangeReplaysUnappliedFrame(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}, {"c", "vc"}, {"d", "vd"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			_ = db.Close()
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	baseApplied := db.backend.State().AppliedCommandLSN
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("backend Open for manual command append: %v", err)
+	}
+	lsn, err := backend.AppendRawKVSingleCommandWAL(commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: []byte("b"), Value: []byte("d")}, true)
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("AppendRawKVSingleCommandWAL DeleteRange: %v", err)
+	}
+	if lsn <= baseApplied {
+		_ = backend.Close()
+		t.Fatalf("DeleteRange frame lsn=%d, want > base applied %d", lsn, baseApplied)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatalf("backend Close after manual command append: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	for _, key := range []string{"b", "c"} {
+		has, err := reopen.Has([]byte(key))
+		if err != nil || has {
+			t.Fatalf("Has(%s)=(%t,%v), want false,nil after replay", key, has, err)
+		}
+	}
+	requireRawKVValue(t, reopen, []byte("a"), []byte("va"))
+	requireRawKVValue(t, reopen, []byte("d"), []byte("vd"))
+	if got := reopen.backend.State().AppliedCommandLSN; got < lsn {
+		t.Fatalf("AppliedCommandLSN=%d, want at least replayed lsn %d", got, lsn)
+	}
+}
+
+func TestPublicCommandWALDeleteRangeBoundsNoopFramesAndCheckpointLSN(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                          t.TempDir(),
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}, {"c", "vc"}, {"z", "vz"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+	baseFrames := publicCommandWALFrameCount(t, db)
+	for _, bounds := range []struct{ start, end []byte }{
+		{start: []byte("c"), end: []byte("c")},
+		{start: []byte("z"), end: []byte("a")},
+		{start: nil, end: []byte{}},
+	} {
+		if err := db.DeleteRange(bounds.start, bounds.end); err != nil {
+			t.Fatalf("noop DeleteRange(%q,%q): %v", bounds.start, bounds.end, err)
+		}
+		if got := publicCommandWALFrameCount(t, db); got != baseFrames {
+			t.Fatalf("noop DeleteRange(%q,%q) frames=%d, want unchanged %d", bounds.start, bounds.end, got, baseFrames)
+		}
+	}
+
+	if err := db.DeleteRange(nil, []byte("b")); err != nil {
+		t.Fatalf("DeleteRange nil,b: %v", err)
+	}
+	if got := publicCommandWALFrameCount(t, db); got != baseFrames+1 {
+		t.Fatalf("frames after lower-unbounded DeleteRange=%d, want %d", got, baseFrames+1)
+	}
+	for _, key := range []string{"a"} {
+		has, err := db.Has([]byte(key))
+		if err != nil || has {
+			t.Fatalf("Has(%s)=(%t,%v), want false,nil", key, has, err)
+		}
+	}
+	requireRawKVValue(t, db, []byte("b"), []byte("vb"))
+	requireRawKVValue(t, db, []byte("c"), []byte("vc"))
+	requireRawKVValue(t, db, []byte("z"), []byte("vz"))
+
+	if err := db.DeleteRange([]byte("z"), nil); err != nil {
+		t.Fatalf("DeleteRange z,nil: %v", err)
+	}
+	if got := publicCommandWALFrameCount(t, db); got != baseFrames+2 {
+		t.Fatalf("frames after upper-unbounded DeleteRange=%d, want %d", got, baseFrames+2)
+	}
+	has, err := db.Has([]byte("z"))
+	if err != nil || has {
+		t.Fatalf("Has(z)=(%t,%v), want false,nil", has, err)
+	}
+
+	first, last := db.publicCommandWALPendingRange()
+	if first == 0 || last != baseFrames+2 {
+		t.Fatalf("pending command WAL range=(%d,%d), want non-empty ending at %d", first, last, baseFrames+2)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != baseFrames+2 {
+		t.Fatalf("AppliedCommandLSN=%d, want %d", got, baseFrames+2)
+	}
+}
+
+func TestPublicCommandWALDeleteRangeFullRangeInMemoryCheckpoint(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                          t.TempDir(),
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+	before := publicCommandWALFrameCount(t, db)
+	if err := db.DeleteRange(nil, nil); err != nil {
+		t.Fatalf("DeleteRange nil,nil: %v", err)
+	}
+	if got := publicCommandWALFrameCount(t, db); got != before+1 {
+		t.Fatalf("frames after full-range DeleteRange=%d, want %d", got, before+1)
+	}
+	for _, key := range []string{"a", "b"} {
+		has, err := db.Has([]byte(key))
+		if err != nil || has {
+			t.Fatalf("Has(%s)=(%t,%v), want false,nil after full range", key, has, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != before+1 {
+		t.Fatalf("AppliedCommandLSN=%d, want %d", got, before+1)
+	}
+}
+
+func TestPublicCommandWALDeleteRangeSnapshotIsolation(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                          t.TempDir(),
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}, {"c", "vc"}, {"d", "vd"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	if err := db.DeleteRange([]byte("b"), []byte("d")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	for _, key := range []string{"b", "c"} {
+		has, err := snap.Has([]byte(key))
+		if err != nil || !has {
+			t.Fatalf("snapshot Has(%s)=(%t,%v), want true,nil", key, has, err)
+		}
+		has, err = db.Has([]byte(key))
+		if err != nil || has {
+			t.Fatalf("db Has(%s)=(%t,%v), want false,nil after DeleteRange", key, has, err)
+		}
+	}
+	requireRawKVValue(t, db, []byte("a"), []byte("va"))
+	requireRawKVValue(t, db, []byte("d"), []byte("vd"))
+}
+
+func TestPublicCommandWALDeleteRangeValueLogPointersReopen(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	for _, kv := range []struct{ k, v string }{{"a", "left-pointer-value"}, {"b", "deleted-pointer-value"}, {"c", "right-pointer-value"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			_ = db.Close()
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+	if err := db.DeleteRange([]byte("b"), []byte("c")); err != nil {
+		_ = db.Close()
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	requireRawKVValue(t, reopen, []byte("a"), []byte("left-pointer-value"))
+	requireRawKVValue(t, reopen, []byte("c"), []byte("right-pointer-value"))
+	has, err := reopen.Has([]byte("b"))
+	if err != nil || has {
+		t.Fatalf("Has(b)=(%t,%v), want false,nil", has, err)
 	}
 }
 

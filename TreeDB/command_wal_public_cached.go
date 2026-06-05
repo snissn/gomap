@@ -41,6 +41,18 @@ func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error 
 	return err
 }
 
+func (tdb *DB) appendPublicRawKVDeleteRangeCommand(start, end []byte, sync bool) error {
+	if tdb == nil || !tdb.commandWALCached || batch.IsDeleteRangeNoop(start, end) {
+		return nil
+	}
+	var payload commitlog.RawKVBatchPayloadBuilder
+	_ = payload.ResetWithHint(1, len(start)+len(end))
+	if _, err := payload.AppendDeleteRange(start, end); err != nil {
+		return err
+	}
+	return tdb.appendPublicRawKVCommandPayload(payload.Payload(), sync)
+}
+
 func (tdb *DB) recordPublicCommandWALPendingLSN(lsn uint64) {
 	if tdb == nil || lsn == 0 {
 		return

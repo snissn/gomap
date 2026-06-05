@@ -1619,7 +1619,21 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		return err
 	}
 	if db.commandWALCached {
-		return ErrCommandWALRejected
+		if batch.IsDeleteRangeNoop(start, end) {
+			return nil
+		}
+		appended := false
+		err := db.cached.DeleteRangeAfterCommandWALAppend(start, end, func() error {
+			if err := db.appendPublicRawKVDeleteRangeCommand(start, end, false); err != nil {
+				return err
+			}
+			appended = true
+			return nil
+		})
+		if err != nil && appended && db.backend != nil {
+			db.backend.MarkCommandWALRecoveryRequired()
+		}
+		return err
 	}
 	if db.cached != nil {
 		return db.cached.DeleteRange(start, end)

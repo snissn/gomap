@@ -21203,13 +21203,51 @@ func (db *DB) Delete(key []byte) error {
 // When WAL is disabled and the backend is empty, a full-range delete can be
 // satisfied by clearing the in-memory layers without enumerating keys.
 func (db *DB) DeleteRange(start, end []byte) error {
+	return db.deleteRange(start, end, nil)
+}
+
+// DeleteRangeAfterCommandWALAppend applies a range delete after appendCommand
+// succeeds. appendCommand runs after ordinary cached-mode preflight and before
+// the range delete becomes visible in memory or durable backend roots. This is
+// for public command-WAL mode, where command WAL durability replaces the cached
+// redo log.
+func (db *DB) DeleteRangeAfterCommandWALAppend(start, end []byte, appendCommand func() error) error {
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	if db != nil && !db.disableJournal {
+		return fmt.Errorf("cachingdb: command wal range deletes require disabled cached redo log")
+	}
+	return db.deleteRange(start, end, appendCommand)
+}
+
+func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err error) {
 	if db == nil {
 		return nil
 	}
-	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+	if batch.IsDeleteRangeNoop(start, end) {
 		return nil
 	}
+	if appendCommand != nil && !db.disableJournal {
+		return fmt.Errorf("cachingdb: command wal range deletes require disabled cached redo log")
+	}
 	db.waitForCheckpoint()
+	commandWALAppended := false
+	appendCommandBeforeVisibility := func() error {
+		if appendCommand == nil || commandWALAppended {
+			return nil
+		}
+		if err := appendCommand(); err != nil {
+			return err
+		}
+		commandWALAppended = true
+		return nil
+	}
+	defer func() {
+		if err != nil && commandWALAppended {
+			db.reportError(fmt.Errorf("cachingdb: post-command-wal delete range failed: %w", err))
+		}
+	}()
 
 	// Journal-enabled mode: do a snapshot scan and apply per-key deletes directly.
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
@@ -21357,7 +21395,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 	//
 	// This is safe only when we have no queued memtables and the mutable memtable
 	// is empty; otherwise we'd violate "newest wins" semantics.
-	if db.disableJournal {
+	if db.disableJournal && appendCommand == nil {
 		db.mu.Lock()
 		backendOnly := len(db.queue) == 0 && db.mutableBytes.Load() == 0
 		db.mu.Unlock()
@@ -21443,7 +21481,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// Fast path: if the backend is empty and the delete range covers all keys we
 		// currently have buffered in memory, just drop the in-memory state. This
 		// avoids iterator creation, merges, and per-key tombstones.
-		if coversAll && db.disableJournal && backendEmpty {
+		if coversAll && db.disableJournal && backendEmpty && appendCommand == nil {
 			curMode := db.currentMemtableMode()
 			nextMode := curMode
 			if db.memtableAdaptive {
@@ -21492,6 +21530,10 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
+		if err := appendCommandBeforeVisibility(); err != nil {
+			db.mu.Unlock()
+			return err
+		}
 		mutableRange := db.snapshotMutableRange()
 		coversInMemory := queryCoversRange(start, end, mutableRange)
 		for _, r := range db.queueRanges {
@@ -21505,7 +21547,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// in-memory keys, clear the in-memory layers and delete directly from the
 		// backend. This avoids building large tombstone sets and avoids per-key
 		// copies into an intermediate slice.
-		if coversInMemory {
+		if coversInMemory && appendCommand == nil {
 			curMode := db.currentMemtableMode()
 			nextMode := curMode
 			if db.memtableAdaptive {
