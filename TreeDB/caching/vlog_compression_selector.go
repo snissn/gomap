@@ -87,10 +87,10 @@ const (
 	// on a stable block codec path and let the frame preparer fall back to raw
 	// only when compressed bytes are not worth keeping.
 	forcePointerAutoBlockMinPayloadBytes = 512
-	// High-entropy forced-pointer streams should bypass compression even at the
-	// block fast-path threshold. This keeps auto mode close to off-mode on
-	// incompressible workloads without disabling block grouping for JSON-like
-	// retained payloads.
+	// High-entropy forced-pointer streams may bypass compression in explicit
+	// throughput policy. Balanced/size policy treats forced pointers as durable
+	// storage-first payloads and keeps them on block compression so retained JSON
+	// does not silently land as raw value-log frames.
 	forcePointerAutoRawBypassMinPayloadBytes = 512
 	forcePointerAutoRawBypassMaxPayloadBytes = 1024
 	// Larger grouped-frame targets reduce per-record compression overhead for
@@ -1593,6 +1593,9 @@ func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []value
 		return false
 	}
 	if dictID != 0 || !db.forceValueLogPointers || payloadKind != vlogPayloadKindSingleValue {
+		return false
+	}
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput {
 		return false
 	}
 	if unitPayloadBytes < forcePointerAutoRawBypassMinPayloadBytes ||

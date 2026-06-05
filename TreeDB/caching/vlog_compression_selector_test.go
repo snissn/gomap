@@ -1066,6 +1066,7 @@ func TestResolveVlogWriteMode_ForcePointersLargeBypassesSelectorToConfiguredBloc
 func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
 		forceValueLogPointers:   true,
 	}
 	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
@@ -1095,6 +1096,27 @@ func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.
 	}
 	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindOuterLeaf) {
 		t.Fatal("expected outer-leaf payloads to keep leaf-log compression selection")
+	}
+}
+
+func TestShouldBypassAutoRawValueCompression_BalancedForcePointerHighEntropyStaysEligible(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		forceValueLogPointers:   true,
+	}
+	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	records := []valuelog.Record{
+		{RID: 1, Value: value},
+		{RID: 2, Value: value},
+		{RID: 3, Value: value},
+	}
+
+	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected balanced force-pointer value batch to stay eligible for block compression")
 	}
 }
 
