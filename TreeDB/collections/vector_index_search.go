@@ -710,6 +710,14 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // rather than silently falling back or pretending to use column storage. When
 // availability or staleness checks fail, the returned response may still carry
 // the index status so callers can distinguish rebuild-needed/unavailable cases.
+//
+// With IncludeDocuments=false, SearchVectorIndex returns response-owned result
+// IDs and scores only and must not materialize documents. With
+// IncludeDocuments=true, document fetch happens after top-k selection and is
+// reported through document counters. This method currently opens and closes a
+// searcher per call, so its no-document benchmarks are one-shot/convenience
+// baselines rather than the high-QPS target; compare route/open counters before
+// treating it as a serving hot path.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
@@ -748,7 +756,8 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 // OpenVectorIndexSearcher opens a reusable search handle for steady-state
 // vector queries. Setup/open/decode cost is paid at open; Search then measures
 // graph traversal, vector scoring, top-k production, and optional post-top-k
-// document fetch.
+// document fetch. For the current exact no-document high-QPS contract, pair a
+// reusable searcher with SearchWithBuffer and a warmed caller-owned buffer.
 func (c *Collection) OpenVectorIndexSearcher(opts VectorIndexSearcherOptions) (*VectorIndexSearcher, error) {
 	searcher, _, err := c.openVectorIndexSearcher(opts)
 	return searcher, err
@@ -1028,6 +1037,12 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 // concurrently; parallel callers should use independent searcher/buffer pairs
 // per worker. IncludeDocuments is not supported by this reusable no-document
 // path.
+//
+// The high-QPS public contract for this path is exact/zero QueryMode with no
+// document projection and no document materialization. Healthy current-format
+// evidence should show hnsw_search_pack_v1 active and selected, zero document
+// fetches, zero graph-row fallback, zero typed-column vector fallback, and zero
+// vector scratch decodes.
 //
 // On any error after a non-nil buffer is supplied, the buffer's reusable
 // result/id views are reset to length zero and the returned response has no

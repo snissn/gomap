@@ -165,6 +165,16 @@ cat >"$RUN_DIR/README.md" <<EOF
 
 Canonical current production comparison:
 
+- \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexNoDocsOneShot\`
+  times today's public collection-level no-document convenience API. It calls
+  \`Collection.SearchVectorIndex\` once per operation, so setup/open/validation,
+  response-owned result allocation, and close are inside the timed boundary.
+  This row is a baseline and guardrail for future collection-level high-QPS work,
+  not a success criterion. It should report \`docs_fetched/search=0\`, no
+  graph-row fallback, no typed-column vector fallback, no vector scratch decode,
+  \`search_route_column_graph_prepared/search=1\`,
+  \`search_route_hnsw_search_pack/search=0\`, pack availability/open evidence,
+  \`open_searcher_calls/op=1\`, and \`open_setup_in_timed_loop=1\`.
 - \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_SearchWithBuffer\`
   and \`.../TreeDB_SearchWithBufferParallel\` time the persisted TreeDB
   no-document \`hnsw_search_pack_v1\` route through
@@ -189,6 +199,10 @@ Canonical current production comparison:
   \`graph_row_fallbacks/search\`, score-batch fallback reason flags,
   vector/adjacency source-state counters, and candidate/visited-edge byte
   counters used by the HNSW search-pack stack.
+- Future collection-level buffered rows should use the same exact no-document
+  contract as \`SearchWithBuffer\`: caller-owned buffer, no documents/projection,
+  no graph-row fallback, no vector scratch decode, no per-search open/setup, and
+  \`search_route_hnsw_search_pack/search=1\` on healthy packs.
 - \`.../USearch_Search\` and \`.../USearch_SearchParallel\` time the pure
   in-memory USearch Go binding baseline with cosine/f32 HNSW and the same
   synthetic vector/query generator, M, efConstruction, efSearch, topK, docs,
@@ -200,9 +214,8 @@ Legacy/control rows:
   vector-index controls. They are useful historical comparators but are not the
   current production no-document fast path.
 - \`BenchmarkCollectionVectorSearchExact\` is an exact scan control.
-- One-shot \`Collection.SearchVectorIndex\` benchmarks, when run separately, pay
-  setup/open costs per operation and should not be presented as the high-QPS
-  production fast path.
+- Other one-shot \`Collection.SearchVectorIndex\` benchmarks pay setup/open costs
+  per operation and should not be presented as the high-QPS production fast path.
 
 Data boundary: TreeDB stores generated float32 vectors through JSON collection
 inserts and rebuilds the persisted \`column_graph\` plus derived

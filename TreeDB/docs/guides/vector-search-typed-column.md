@@ -349,11 +349,19 @@ Use `scripts/bench_vector_search_compare.sh` for the optional external ANN
 baseline. Its current production comparison benchmark is
 `BenchmarkCollectionVectorUSearchProductionCompare`:
 
+- `TreeDB_CollectionSearchVectorIndexNoDocsOneShot` times today's public
+  collection-level no-document convenience API. It calls
+  `Collection.SearchVectorIndex` once per operation, so setup/open/validation,
+  response-owned result allocation, and close are inside the timed boundary. Use
+  this row as a baseline/guardrail only; it is not the high-QPS target.
 - `TreeDB_SearchWithBuffer` / `TreeDB_SearchWithBufferParallel` time persisted
   `column_graph` search through `Collection.OpenVectorIndexSearcher` and
   `VectorIndexSearcher.SearchWithBuffer`; setup, inserts, rebuild, open, and
   warmup are outside the timed loop. Parallel rows use one searcher and one
   `VectorIndexSearchBuffer` per worker.
+- A future collection-level buffered row should mirror the `SearchWithBuffer`
+  no-document contract: exact mode, caller-owned buffer, no documents/projection,
+  no per-search open/setup, and the healthy `hnsw_search_pack_v1` route.
 - `USearch_Search` / `USearch_SearchParallel` time the pure in-memory USearch Go
   binding with cosine/f32 HNSW.
 - Both sides use the same deterministic synthetic vector/query generator and the
@@ -373,9 +381,9 @@ TREEDB_VECTOR_BENCH_DOCS=10000 TREEDB_VECTOR_BENCH_DIMS=64 \
 
 Older `BenchmarkCollectionVectorIndex*` and graph-only rows remain useful
 historical controls, but they are not the current persisted production
-no-document fast path. One-shot `Collection.SearchVectorIndex` rows include
-setup/open cost per operation; do not use them as the high-QPS production
-comparator.
+no-document fast path. One-shot `Collection.SearchVectorIndex` rows, including
+`TreeDB_CollectionSearchVectorIndexNoDocsOneShot`, include setup/open cost per
+operation; do not use them as the high-QPS production comparator.
 
 The broader legacy/canonical matrix remains useful when comparing with older
 artifacts or when you also need one-shot open/setup names:

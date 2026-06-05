@@ -106,6 +106,54 @@ Use `SearchVectorIndex` for one-shot calls. It opens and closes the native reade
 per call, so it measures setup/open cost in addition to graph search. Use
 `OpenVectorIndexSearcher` when benchmarking or serving steady-state query load.
 
+## Collection-level no-document high-QPS contract (#2361)
+
+This is the public contract downstream collection API work must preserve before
+claiming high-QPS vector search:
+
+- Query shape: explicit `column_graph` vector index, cosine metric, exact/zero
+  `QueryMode`, `IncludeDocuments=false`, no `DocumentFetchOptions`, and no
+  legacy filter/range-filter semantics in the high-QPS timed boundary.
+- Result shape: return IDs/ordinals/scores only. Result/document ID bytes may be
+  response-owned for convenience APIs or caller-buffer-owned for buffered APIs;
+  document JSON must not be materialized unless `IncludeDocuments=true` is set
+  on an API that supports document fetch.
+- Serving state: raw collection vectors remain authoritative. The
+  `hnsw_search_pack_v1` is derived vector-index serving state; it is healthy
+  evidence only when validated against the current vector-index identity.
+- Preferred high-QPS route: exact no-document search through a validated
+  vector-index-owned `hnsw_search_pack_v1`, with reusable open/prepared state and
+  caller-owned buffers where the API exposes them.
+- Current baseline boundary: `Collection.SearchVectorIndex` is still a one-shot
+  convenience API. It opens/closes per call and owns response result buffers, so
+  its no-document benchmark row is a baseline/regression guardrail, not proof of
+  high-QPS success.
+- Document boundary: `IncludeDocuments=true` is an explicit post-top-k fetch
+  path. It must report document counters (`docs_fetched/search`, output bytes,
+  row-ref/point-fetch counters as applicable) and remains outside the
+  zero-allocation no-document contract.
+- Unsupported high-QPS shapes: document fetch, projection, non-exact quantized
+  modes, stale/missing packs, unsupported metrics/strategies, and future filter
+  shapes must fail closed or run through clearly labeled non-high-QPS
+  convenience/fallback rows with counters.
+
+Healthy no-document fast-path evidence must include `ns/op`, `ops/sec`, `B/op`,
+`allocs/op`, and route/fallback counters proving:
+
+- `search_route_hnsw_search_pack/search=1` and
+  `hnsw_search_pack_active/search=1`;
+- `docs_fetched/search=0`;
+- `graph_row_fallbacks/search=0`;
+- `typed_column_vector_fallbacks/search=0`;
+- `vector_scratch_decodes/search=0`;
+- no per-search open/setup/validation/decode bottleneck in the timed boundary.
+
+The current one-shot baseline row should instead show the boundary explicitly,
+for example `open_searcher_calls/op=1`, `open_setup_in_timed_loop=1`,
+`search_route_column_graph_prepared/search=1`, and
+`search_route_hnsw_search_pack/search=0`, while still proving no documents or
+fallback/scratch decodes.
+
 ## Demo
 
 Run a synthetic close/reopen demo:

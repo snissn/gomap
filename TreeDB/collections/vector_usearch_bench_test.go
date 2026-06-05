@@ -232,6 +232,66 @@ func BenchmarkCollectionVectorUSearchProductionCompare(b *testing.B) {
 		reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
 	})
 
+	b.Run("TreeDB_CollectionSearchVectorIndexNoDocsOneShot", func(b *testing.B) {
+		timedOpts := VectorIndexSearchOptions{
+			IndexName:        def.Name,
+			Query:            queries[0],
+			QueryMode:        VectorIndexQueryModeExact,
+			TopK:             params.topK,
+			EfSearch:         params.efSearch,
+			MaxDecodedBlocks: 1,
+			StatsMode:        VectorIndexSearchStatsModeProduction,
+		}
+		warm, err := col.SearchVectorIndex(timedOpts)
+		if err != nil {
+			b.Fatalf("warm SearchVectorIndex: %v", err)
+		}
+		if len(warm.Results) == 0 {
+			b.Fatal("warm SearchVectorIndex returned no results")
+		}
+		top1Got, top1Want := string(warm.Results[0].ID), vectorUSearchProductionDocID(queryDocIndexes[0])
+		statsOpts := timedOpts
+		statsOpts.StatsMode = VectorIndexSearchStatsModeFullDiagnostics
+		measured, err := col.SearchVectorIndex(statsOpts)
+		if err != nil {
+			b.Fatalf("measure SearchVectorIndex stats: %v", err)
+		}
+		stats := measured.Stats
+		if stats.SearchRouteColumnGraphPrepared != 1 ||
+			stats.SearchRouteHNSWSearchPack != 0 ||
+			stats.HNSWSearchPackActive != 1 ||
+			stats.SearchRouteColumnGraphFallback != 0 ||
+			stats.TypedColumnFallbacks != 0 ||
+			stats.VectorScratchDecodes != 0 ||
+			stats.GraphRowFallbacks != 0 ||
+			stats.DocumentsFetched != 0 {
+			b.Fatalf("TreeDB collection one-shot stats=%+v want current no-document SearchVectorIndex baseline with docs/fallback/decode counters clear and pack available but not selected", stats)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			timedOpts.Query = queries[i%len(queries)]
+			got, err := col.SearchVectorIndex(timedOpts)
+			if err != nil {
+				b.Fatalf("SearchVectorIndex: %v", err)
+			}
+			if len(got.Results) == 0 {
+				b.Fatal("SearchVectorIndex returned no results")
+			}
+			vectorSearchBenchSinkOrdinalV4 += got.Results[0].Ordinal
+		}
+		b.StopTimer()
+		reportVectorUSearchProductionTop1Metric(b, top1Got, top1Want)
+		reportVectorUSearchProductionCommonMetrics(b, docs, dims, params, len(queries))
+		reportVectorUSearchProductionTreeDBFootprintMetrics(b, status)
+		reportVectorIndexSearchStatsModeBenchMetric2126(b, params.statsMode())
+		b.ReportMetric(1, "reported_stats_mode_full_diagnostics")
+		b.ReportMetric(1, "collection_searchvectorindex_one_shot")
+		b.ReportMetric(1, "open_searcher_calls/op")
+		b.ReportMetric(1, "open_setup_in_timed_loop")
+		reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
+	})
+
 	b.Run("USearch_Search", func(b *testing.B) {
 		keys, _, err := index.Search(queries[0], uint(params.topK))
 		if err != nil {

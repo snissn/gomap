@@ -167,14 +167,25 @@ const (
 	VectorIndexQueryModeQuantizedRerank VectorIndexQueryMode = "quantized_rerank"
 )
 
-// VectorIndexSearchOptions configures one in-memory vector index search.
+// VectorIndexSearchOptions configures one vector index search.
+//
+// Collection-level high-QPS no-document searches are intentionally narrow: use
+// an explicit column_graph index, exact/zero QueryMode, IncludeDocuments=false,
+// no document projection, and no legacy filter fields. The current
+// Collection.SearchVectorIndex method is a response-owned one-shot convenience
+// boundary that opens a searcher per call; callers that need steady-state
+// high-QPS behavior should use a reusable VectorIndexSearcher and, for the
+// zero-allocation no-document path, VectorIndexSearcher.SearchWithBuffer until
+// a collection-level buffered route is added.
 type VectorIndexSearchOptions struct {
 	// IndexName is used by collection-level physical column_graph search.
 	IndexName string
 	// Query is used by collection-level physical column_graph search.
 	Query []float32
 	// QueryMode selects exact, quantized-only, or quantized-rerank search for
-	// collection column_graph APIs. The zero value is exact.
+	// collection column_graph APIs. The zero value is exact. Only exact/zero mode
+	// is in the collection-level no-document high-QPS contract; quantized modes are
+	// explicit score-plane paths with their own fail-closed semantics.
 	QueryMode VectorIndexQueryMode
 	// QuantizedIndexName selects the named derived score plane for quantized modes.
 	QuantizedIndexName string
