@@ -195,7 +195,7 @@ func TestSearchVectorIndexTypedColumnVectorReopenGeneration1782(t *testing.T) {
 		t.Fatalf("OpenCollection reopen: %v", err)
 	}
 	query := []float32{0, 0, 1}
-	got, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1})
+	got, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeBenchmarkDebug})
 	if err != nil {
 		t.Fatalf("SearchVectorIndex reopen: %v", err)
 	}

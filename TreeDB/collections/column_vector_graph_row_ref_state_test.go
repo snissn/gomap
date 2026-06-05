@@ -98,7 +98,7 @@ func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T)
 	if err != nil {
 		t.Fatalf("OpenCollection reopen: %v", err)
 	}
-	reopenedGot, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows)})
+	reopenedGot, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 2, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeBenchmarkDebug})
 	if err != nil {
 		t.Fatalf("SearchVectorIndex reopen: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestColumnVectorGraphRowRefStatePreservesOpaqueResultIDs1993(t *testing.T) 
 		_ = d.Close()
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
-	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: 2})
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 1, EfSearch: 2, StatsMode: VectorIndexSearchStatsModeBenchmarkDebug})
 	if err != nil {
 		_ = d.Close()
 		t.Fatalf("SearchVectorIndex: %v", err)

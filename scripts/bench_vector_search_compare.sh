@@ -166,16 +166,13 @@ cat >"$RUN_DIR/README.md" <<EOF
 Canonical current production comparison:
 
 - \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexNoDocsOneShot\`
-  times today's public collection-level no-document convenience API. It calls
-  \`Collection.SearchVectorIndex\` once per operation, so setup/open/validation,
-  response-owned result allocation, and close are inside the timed boundary.
-  This row is a baseline and guardrail for future collection-level high-QPS work,
-  not a success criterion. It should report \`docs_fetched/search=0\`, no
-  graph-row fallback, no typed-column vector fallback, no vector scratch decode,
-  \`search_route_hnsw_search_pack/search=0\`, pack availability/open evidence,
-  the selected one-shot \`column_graph\` route (prepared on direct-view
-  platforms, fallback on heap-copy/source-limited platforms),
-  \`open_searcher_calls/op=1\`, and \`open_setup_in_timed_loop=1\`.
+  times the public response-owned collection-level no-document convenience API.
+  Exact healthy calls use the collection-owned prepared \`hnsw_search_pack_v1\`
+  cache, so this row should report \`docs_fetched/search=0\`, no graph-row
+  fallback, no typed-column vector fallback, no vector scratch decode,
+  \`search_route_hnsw_search_pack/search=1\`, \`open_searcher_calls/op=0\`,
+  and \`open_setup_in_timed_loop=0\`. It still reports
+  \`response_owned_result_alloc/op=1\` and is not the zero-allocation target.
 - \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_SearchWithBuffer\`
   and \`.../TreeDB_SearchWithBufferParallel\` time the persisted TreeDB
   no-document \`hnsw_search_pack_v1\` route through
@@ -228,8 +225,9 @@ Legacy/control rows:
   vector-index controls. They are useful historical comparators but are not the
   current production no-document fast path.
 - \`BenchmarkCollectionVectorSearchExact\` is an exact scan control.
-- Other one-shot \`Collection.SearchVectorIndex\` benchmarks pay setup/open costs
-  per operation and should not be presented as the high-QPS production fast path.
+- With-document or unsupported one-shot \`Collection.SearchVectorIndex\`
+  benchmarks pay setup/open and/or materialization costs per operation and should
+  not be presented as the no-document high-QPS production fast path.
 
 Data boundary: TreeDB stores generated float32 vectors through JSON collection
 inserts and rebuilds the persisted \`column_graph\` plus derived

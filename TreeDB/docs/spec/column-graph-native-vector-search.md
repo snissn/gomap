@@ -102,13 +102,16 @@ response, _ := searcher.Search(collections.VectorIndexSearcherSearchOptions{
 fmt.Println(status.State, response.Path, response.Stats.RowFetches)
 ```
 
-Use `SearchVectorIndex` for response-owned one-shot calls. It opens and closes
-the native reader per call, so it measures setup/open cost in addition to graph
-search. Use `SearchVectorIndexWithBuffer` when collection-level code needs the
-exact no-document caller-owned result-buffer seam; healthy current
-`hnsw_search_pack_v1` state is prepared once in a collection-owned warmed cache.
-Use `OpenVectorIndexSearcher` plus `SearchWithBuffer` when callers need explicit
-snapshot/open lifetime control outside the hot loop.
+Use `SearchVectorIndex` for response-owned convenience calls. Exact
+no-document calls use the collection-owned prepared `hnsw_search_pack_v1` cache
+when healthy and own/copy the returned result storage for the response.
+With-document or unsupported shapes still use the one-shot reader path and report
+that setup/materialization cost. Use `SearchVectorIndexWithBuffer` when
+collection-level code needs the exact no-document caller-owned result-buffer
+seam; healthy current `hnsw_search_pack_v1` state is prepared once in a
+collection-owned warmed cache. Use `OpenVectorIndexSearcher` plus
+`SearchWithBuffer` when callers need explicit snapshot/open lifetime control
+outside the hot loop.
 
 ## Collection-level no-document high-QPS contract (#2361)
 
@@ -134,10 +137,11 @@ claiming high-QPS vector search:
   On warmed healthy current pack state, it reuses collection-owned prepared pack
   state and benchmark rows must report no per-search open/setup inside the timed
   boundary.
-- Current response-owned baseline boundary: `Collection.SearchVectorIndex` is
-  still a one-shot convenience API. It opens/closes per call and owns response
-  result buffers, so its no-document benchmark row is a baseline/regression
-  guardrail, not proof of high-QPS success.
+- Current response-owned convenience boundary: `Collection.SearchVectorIndex`
+  exact no-document calls use the same collection-owned prepared pack route when
+  healthy, but still allocate response-owned results/IDs. It is a convenience
+  fast route, not the zero-allocation target; use `SearchVectorIndexWithBuffer`
+  for the caller-owned-buffer target.
 - Document boundary: `IncludeDocuments=true` is an explicit post-top-k fetch
   path. It must report document counters (`docs_fetched/search`, output bytes,
   row-ref/point-fetch counters as applicable) and remains outside the
@@ -162,13 +166,13 @@ Healthy no-document fast-path evidence must include `ns/op`, `ops/sec`, `B/op`,
 - `vector_scratch_decodes/search=0`;
 - no per-search open/setup/validation/decode bottleneck in the timed boundary.
 
-The current one-shot baseline row should instead show the boundary explicitly,
-for example `open_searcher_calls/op=1`, `open_setup_in_timed_loop=1`,
-`search_route_hnsw_search_pack/search=0`, and the selected one-shot
-`column_graph` route (`search_route_column_graph_prepared/search=1` on direct
-prepared platforms, or `search_route_column_graph_fallback/search=1` when the
-platform/source state requires the existing non-pack route), while still proving
-no documents or graph-row/typed-vector fallback/scratch decodes.
+The response-owned no-document convenience row should show the cached pack route
+explicitly (`open_searcher_calls/op=0`, `open_setup_in_timed_loop=0`,
+`search_route_hnsw_search_pack/search=1`, documents/fallback/scratch counters at
+0) while separately reporting its response-owned result allocation. With-document
+one-shot rows should show `open_searcher_calls/op=1`,
+`open_setup_in_timed_loop=1`, document counters, and the selected non-pack
+`column_graph` route.
 
 ## Demo
 

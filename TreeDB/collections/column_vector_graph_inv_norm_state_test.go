@@ -102,7 +102,7 @@ func TestColumnGraphInvNormStateReopenSearchParityAndCounters1992(t *testing.T) 
 		t.Fatalf("state stats=%+v want healthy norm state without fallback", stateStats)
 	}
 
-	publicResponse, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 8, EfSearch: 24})
+	publicResponse, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 8, EfSearch: 24, StatsMode: VectorIndexSearchStatsModeBenchmarkDebug})
 	if err != nil {
 		t.Fatalf("SearchVectorIndex: %v", err)
 	}
