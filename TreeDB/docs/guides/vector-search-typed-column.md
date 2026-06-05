@@ -348,8 +348,10 @@ inverse norms including storage/rebuild cost.
 
 ## USearch comparison boundary
 
-Use `scripts/bench_vector_search_compare.sh` for the optional external ANN
-baseline. Its current production comparison benchmark is
+See `vector-search-high-qps-collection-api.md` for the final collection API
+boundary, route guardrails, and profile capture notes. Use
+`scripts/bench_vector_search_compare.sh` for the optional external ANN baseline.
+Its current production comparison benchmark is
 `BenchmarkCollectionVectorUSearchProductionCompare`:
 
 - `TreeDB_CollectionSearchVectorIndexNoDocsOneShot` times the public

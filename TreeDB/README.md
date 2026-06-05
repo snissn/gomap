@@ -211,6 +211,8 @@ Use `CPU_LIST=1,8` for c=1/c=8 evidence. Older `BenchmarkCollectionVectorIndex*`
 rows are historical controls, not the current high-QPS production fast path;
 with-documents `Collection.SearchVectorIndex` rows still include setup/open and
 materialization cost and should not be presented as the no-document fast path.
+See `TreeDB/docs/guides/vector-search-high-qps-collection-api.md` for the final
+collection API boundary, guardrail counters, and profile capture notes.
 Override `USEARCH_VERSION`, `USEARCH_ROOT`, `TREEDB_VECTOR_BENCH_DOCS`,
 `TREEDB_VECTOR_BENCH_DIMS`, `TREEDB_VECTOR_BENCH_M`,
 `TREEDB_VECTOR_BENCH_EF_CONSTRUCTION`, `TREEDB_VECTOR_BENCH_EF_SEARCH`,
