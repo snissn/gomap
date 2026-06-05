@@ -370,7 +370,7 @@ When grouped flag is set, payload starts with frame header:
 ```text
 u8  FrameVersion    // currently 1
 u8  FrameFlags      // bit0 = compressed
-u8  K               // 1..128
+u8  K               // 1..255
 u8  Reserved        // block codec id for compressed block frames with dictID=0
 u64 DictID
 u64 RID[K]
