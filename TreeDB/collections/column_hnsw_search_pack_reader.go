@@ -66,7 +66,16 @@ type columnHNSWSearchPackPreparedView struct {
 func (c *Collection) openColumnHNSWSearchPackPreparedViewForReader(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) (*columnHNSWSearchPackPreparedView, columnHNSWSearchPackPreparedStatus, uint64, error) {
 	start := time.Now()
 	view, status, err := c.openColumnHNSWSearchPackPreparedViewForReaderNoTimer(collection, cfg, def, graph, state)
-	openNanos := uint64(time.Since(start).Nanoseconds())
+	elapsedNanos := time.Since(start).Nanoseconds()
+	if elapsedNanos < 0 {
+		elapsedNanos = 0
+	}
+	openNanos := uint64(elapsedNanos)
+	if view != nil && openNanos == 0 {
+		// Windows timer granularity can report zero for tiny heap-copy test
+		// fixtures. Keep the status counter observable for any opened view.
+		openNanos = 1
+	}
 	if view != nil {
 		view.openNanos = openNanos
 	}
