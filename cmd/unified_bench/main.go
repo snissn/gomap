@@ -498,7 +498,7 @@ func main() {
 	if *rangeQueries > 0 {
 		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
 	}
-	if contains(selectedTests, "all") || contains(selectedTests, "batch_delete_range") {
+	if contains(selectedTests, "batch_delete_range") {
 		fmt.Fprintf(os.Stderr, "             batch_delete_range_width=%d batch_delete_ranges_per_batch=%d validate=%t refill=%t\n",
 			effectiveBatchDeleteRangeWidth, effectiveBatchDeleteRangesPerBatch, *batchDeleteRangeValidate, *batchDeleteRangeRefill)
 	}
@@ -4187,7 +4187,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_write_steady", "batch_random", "batch_delete", "batch_delete_range", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"}
+	// Keep destructive opt-in workloads that drain the dense keyspace out of the
+	// default `all` suite so later read/scan tests do not measure depleted data.
+	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_write_steady", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":                          "VACUUM (Index)",
 		"fragmentation_report_pre":              "Fragmentation Report (Pre-Settle)",
@@ -4219,17 +4221,19 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	finalTestOrder := make([]string, 0)
 	if contains(testsToRun, "all") {
-		finalTestOrder = allTestOrder
-	} else {
-		for _, t := range testsToRun {
-			if t == "" {
-				continue
-			}
-			if _, ok := testFuncs[t]; !ok {
-				return BenchRun{}, fmt.Errorf("unknown test: %q", t)
-			}
-			finalTestOrder = append(finalTestOrder, t)
+		finalTestOrder = append(finalTestOrder, allTestOrder...)
+	}
+	for _, t := range testsToRun {
+		if t == "" || t == "all" {
+			continue
 		}
+		if _, ok := testFuncs[t]; !ok {
+			return BenchRun{}, fmt.Errorf("unknown test: %q", t)
+		}
+		if contains(finalTestOrder, t) {
+			continue
+		}
+		finalTestOrder = append(finalTestOrder, t)
 	}
 	if len(finalTestOrder) == 0 {
 		return BenchRun{}, fmt.Errorf("no tests selected")
@@ -7222,9 +7226,6 @@ func parseList(s string) []string {
 }
 
 func normalizeTests(list []string) []string {
-	if contains(list, "all") {
-		return list
-	}
 	seen := make(map[string]struct{}, len(list))
 	out := make([]string, 0, len(list))
 	for _, t := range list {

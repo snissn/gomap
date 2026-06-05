@@ -803,6 +803,19 @@ func TestNormalizeTests_BatchDeleteRangeAliases(t *testing.T) {
 	}
 }
 
+func TestNormalizeTests_AllWithBatchDeleteRangeAlias(t *testing.T) {
+	got := normalizeTests(parseList("all,delete_range,batch_delete_range"))
+	want := []string{"all", "batch_delete_range"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected len: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected normalize result: got=%v want=%v", got, want)
+		}
+	}
+}
+
 func TestRunBenchmark_BatchDeleteRange_UsesBatchCapabilityAndReports(t *testing.T) {
 	var db *batchDeleteRangeMemoryDB
 	const dbName = "batch_delete_range_memory"
@@ -1315,7 +1328,7 @@ func TestNormalizeTests_ReadRandomParallelAlias(t *testing.T) {
 	}
 }
 
-func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
+func TestRunBenchmark_AllExcludesBatchDeleteRangeAndIncludesRandomReadParallel(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
 		Keys:         2_000,
 		ValueSize:    16,
@@ -1333,6 +1346,15 @@ func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
 		t.Fatalf("runBenchmark: %v", err)
 	}
 
+	if contains(run.TestOrder, "batch_delete_range") {
+		t.Fatalf("default all suite must not include destructive batch_delete_range before read/scan tests: %v", run.TestOrder)
+	}
+	for _, want := range []string{"random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"} {
+		if !contains(run.TestOrder, want) {
+			t.Fatalf("default all suite missing %s: %v", want, run.TestOrder)
+		}
+	}
+
 	for _, dbName := range []string{"TreeDB", "LevelDB"} {
 		got, ok := run.Results["random_read_parallel"][dbName]
 		if !ok {
@@ -1348,6 +1370,64 @@ func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
 		}
 		if math.IsNaN(gotSnap) || gotSnap <= 0 {
 			t.Fatalf("expected random_read_parallel_acquire_snapshot > 0 for %s, got %v", dbName, gotSnap)
+		}
+	}
+}
+
+func TestRunBenchmark_AllWithExplicitBatchDeleteRangeRunsAfterReadScans(t *testing.T) {
+	var db *batchDeleteRangeMemoryDB
+	const dbName = "all_plus_batch_delete_range"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = newBatchDeleteRangeMemoryDB("AllPlusBatchDeleteRange")
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:                      64,
+		ValueSize:                 8,
+		BatchSize:                 16,
+		ReadWorkers:               2,
+		RangeQueries:              8,
+		RangeSpan:                 4,
+		BatchDeleteRangeWidth:     8,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		DBsArg:                    dbName,
+		TestsArg:                  "all,batch_delete_range",
+		KeepDir:                   false,
+		Progress:                  false,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil || db.deleteRangeCalls == 0 {
+		t.Fatalf("expected explicit batch_delete_range to run, db=%v", db)
+	}
+
+	deleteIdx := -1
+	for i, testName := range run.TestOrder {
+		if testName == "batch_delete_range" {
+			deleteIdx = i
+			break
+		}
+	}
+	if deleteIdx < 0 {
+		t.Fatalf("expected explicit batch_delete_range in order: %v", run.TestOrder)
+	}
+	for _, readScan := range []string{"random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"} {
+		idx := -1
+		for i, testName := range run.TestOrder {
+			if testName == readScan {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			t.Fatalf("missing %s in all suite: %v", readScan, run.TestOrder)
+		}
+		if idx > deleteIdx {
+			t.Fatalf("%s runs after destructive batch_delete_range: order=%v", readScan, run.TestOrder)
 		}
 	}
 }
