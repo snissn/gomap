@@ -1,0 +1,105 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
+
+func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	var dbDir string
+	var collectionName string
+	var pathsCSV string
+	var maxDocuments int
+	flag.StringVar(&dbDir, "db-dir", "", "TreeDB DB directory")
+	flag.StringVar(&collectionName, "collection", "", "Collection name; defaults to the only collection")
+	flag.StringVar(&pathsCSV, "paths", "", "Comma-separated JSON paths to require absent; defaults to collection column paths")
+	flag.IntVar(&maxDocuments, "max-documents", 0, "Maximum retained rows to audit; zero audits all rows")
+	flag.Parse()
+
+	if strings.TrimSpace(dbDir) == "" {
+		return writeFailure("", errors.New("-db-dir is required"))
+	}
+	db, err := backenddb.Open(backenddb.Options{Dir: dbDir, ReadOnly: true, DisableBackgroundPrune: true})
+	if err != nil {
+		return writeFailure(collectionName, fmt.Errorf("open read-only DB: %w", err))
+	}
+	defer func() { _ = db.Close() }()
+
+	manager := collections.NewCollectionManager(db)
+	if strings.TrimSpace(collectionName) == "" {
+		metas, err := manager.ListCollections()
+		if err != nil {
+			return writeFailure("", fmt.Errorf("list collections: %w", err))
+		}
+		switch len(metas) {
+		case 0:
+			return writeFailure("", errors.New("no collections found"))
+		case 1:
+			collectionName = metas[0].Name
+		default:
+			names := make([]string, 0, len(metas))
+			for _, meta := range metas {
+				names = append(names, meta.Name)
+			}
+			return writeFailure("", fmt.Errorf("multiple collections found; pass -collection explicitly: %s", strings.Join(names, ", ")))
+		}
+	}
+	col, err := manager.OpenCollection(collectionName)
+	if err != nil {
+		return writeFailure(collectionName, fmt.Errorf("open collection: %w", err))
+	}
+	result, err := col.AuditRetainedPayloadDeclaredPathsAbsent(collections.ColumnRetainedPayloadCollectionAuditOptions{
+		Paths:        splitCSV(pathsCSV),
+		MaxDocuments: maxDocuments,
+	})
+	if err != nil {
+		writeResult(result)
+		return 1
+	}
+	writeResult(result)
+	return 0
+}
+
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func writeFailure(collectionName string, err error) int {
+	result := collections.ColumnRetainedPayloadCollectionAuditResult{
+		Collection: collectionName,
+		Status:     "failed",
+	}
+	if err != nil {
+		result.Errors = []string{err.Error()}
+	}
+	writeResult(result)
+	return 1
+}
+
+func writeResult(result collections.ColumnRetainedPayloadCollectionAuditResult) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(result)
+}

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // ColumnRetainedPayloadEncodingStatus reports the retained payload body encoding
@@ -66,6 +68,35 @@ type ColumnRetainedPayloadPath struct {
 	Present bool   `json:"present"`
 }
 
+// ColumnRetainedPayloadCollectionAuditOptions controls the retained-payload
+// path audit over the collection's persisted primary rows.
+type ColumnRetainedPayloadCollectionAuditOptions struct {
+	Paths        []string
+	MaxDocuments int
+}
+
+type ColumnRetainedPayloadCollectionPathViolation struct {
+	DocumentID string `json:"document_id"`
+	Path       string `json:"path"`
+}
+
+type ColumnRetainedPayloadCollectionAuditResult struct {
+	Collection                       string                                         `json:"collection"`
+	Status                           string                                         `json:"status"`
+	RetainedPayloadPolicy            ColumnRetainedPayloadPolicy                    `json:"retained_payload_policy"`
+	RetainedPayloadEncoding          string                                         `json:"retained_payload_encoding"`
+	RetainedPayloadEncodingStatus    string                                         `json:"retained_payload_encoding_status"`
+	RetainedPayloadCompression       string                                         `json:"retained_payload_compression"`
+	RetainedPayloadCompressionPolicy string                                         `json:"retained_payload_compression_policy"`
+	RetainedPayloadCompressionStatus string                                         `json:"retained_payload_compression_status"`
+	DeclaredPaths                    []string                                       `json:"declared_paths"`
+	CheckedRows                      int                                            `json:"checked_rows"`
+	RetainedPayloadBytes             int64                                          `json:"retained_payload_bytes"`
+	Truncated                        bool                                           `json:"truncated,omitempty"`
+	Violations                       []ColumnRetainedPayloadCollectionPathViolation `json:"violations,omitempty"`
+	Errors                           []string                                       `json:"errors,omitempty"`
+}
+
 // AuditColumnRetainedPayloadPathsAbsent verifies that declared typed JSON paths
 // are absent from a retained payload body. It fails closed on malformed retained
 // payloads and on any declared path that remains present.
@@ -88,6 +119,132 @@ func auditColumnRetainedPayloadPathsAbsentWithResolver(cfg ColumnStoreConfig, re
 		return audit, fmt.Errorf("collections: retained payload path audit: %w", err)
 	}
 
+	checked := normalizeColumnRetainedPayloadAuditPaths(paths)
+	for _, path := range checked {
+		present := columnJSONPathExists(obj, path)
+		audit.Paths = append(audit.Paths, ColumnRetainedPayloadPath{Path: path, Present: present})
+		if present {
+			audit.Violations = append(audit.Violations, path)
+		}
+	}
+	if len(audit.Violations) > 0 {
+		return audit, fmt.Errorf("collections: retained payload contains declared typed paths: %s", strings.Join(audit.Violations, ", "))
+	}
+	return audit, nil
+}
+
+// AuditRetainedPayloadDeclaredPathsAbsent scans persisted retained primary-row
+// bodies and verifies that declared typed-column paths were removed. It is
+// read-only: it does not flush buffered writes, publish roots, compact, or
+// mutate storage.
+func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetainedPayloadCollectionAuditOptions) (ColumnRetainedPayloadCollectionAuditResult, error) {
+	var result ColumnRetainedPayloadCollectionAuditResult
+	if c == nil {
+		return retainedPayloadCollectionAuditError(result, errCollectionNil)
+	}
+	result.Collection = c.collectionName()
+	if c.db == nil {
+		return retainedPayloadCollectionAuditError(result, errCollectionDBNil)
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return retainedPayloadCollectionAuditError(result, backenddb.ErrClosed)
+	}
+	defer func() { _ = snap.Close() }()
+
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return retainedPayloadCollectionAuditError(result, err)
+	}
+	cfgPtr := catalog.meta.Options.ColumnStore
+	if cfgPtr == nil || !cfgPtr.Enabled {
+		result.Status = "not_configured"
+		result.RetainedPayloadPolicy = columnRetainedPayloadAuditPolicy(cfgPtr)
+		result.RetainedPayloadEncoding, result.RetainedPayloadEncodingStatus = ColumnRetainedPayloadEncodingStatus(cfgPtr)
+		result.RetainedPayloadCompression, result.RetainedPayloadCompressionPolicy, result.RetainedPayloadCompressionStatus = ColumnRetainedPayloadCompressionStatus(cfgPtr)
+		return result, nil
+	}
+	cfg := cfgPtr.copy()
+	result.RetainedPayloadPolicy = columnRetainedPayloadAuditPolicy(&cfg)
+	result.RetainedPayloadEncoding, result.RetainedPayloadEncodingStatus = ColumnRetainedPayloadEncodingStatus(&cfg)
+	result.RetainedPayloadCompression, result.RetainedPayloadCompressionPolicy, result.RetainedPayloadCompressionStatus = ColumnRetainedPayloadCompressionStatus(&cfg)
+	result.DeclaredPaths = normalizeColumnRetainedPayloadAuditPaths(opts.Paths)
+	if len(result.DeclaredPaths) == 0 {
+		result.DeclaredPaths = columnRetainedPayloadAuditDeclaredPaths(cfg)
+	}
+	if result.RetainedPayloadPolicy == ColumnRetainedPayloadNone {
+		result.Status = "inactive_no_retained_payload"
+		return result, nil
+	}
+	if len(result.DeclaredPaths) == 0 {
+		result.Status = "no_declared_paths"
+		return result, nil
+	}
+
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
+	if err != nil {
+		return retainedPayloadCollectionAuditError(result, err)
+	}
+	if it == nil {
+		result.Status = "passed"
+		return result, nil
+	}
+	defer func() { _ = it.Close() }()
+
+	resolver := columnRetainedPayloadTemplateResolver(snap, catalog)
+	for it.Valid() {
+		if opts.MaxDocuments > 0 && result.CheckedRows >= opts.MaxDocuments {
+			result.Truncated = true
+			break
+		}
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		documentID := string(it.UnsafeKey())
+		retained := it.ValueCopy(nil)
+		result.CheckedRows++
+		result.RetainedPayloadBytes += int64(len(retained))
+		payloadAudit, auditErr := auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)
+		if auditErr != nil {
+			for _, path := range payloadAudit.Violations {
+				result.Violations = append(result.Violations, ColumnRetainedPayloadCollectionPathViolation{
+					DocumentID: documentID,
+					Path:       path,
+				})
+			}
+			return retainedPayloadCollectionAuditError(result, auditErr)
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return retainedPayloadCollectionAuditError(result, err)
+	}
+	if result.Truncated {
+		result.Status = "passed_sampled"
+	} else {
+		result.Status = "passed"
+	}
+	return result, nil
+}
+
+func retainedPayloadCollectionAuditError(result ColumnRetainedPayloadCollectionAuditResult, err error) (ColumnRetainedPayloadCollectionAuditResult, error) {
+	result.Status = "failed"
+	if err != nil {
+		result.Errors = append(result.Errors, err.Error())
+	}
+	return result, err
+}
+
+func columnRetainedPayloadAuditDeclaredPaths(cfg ColumnStoreConfig) []string {
+	paths := make([]string, 0, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		paths = append(paths, col.Path)
+	}
+	return normalizeColumnRetainedPayloadAuditPaths(paths)
+}
+
+func normalizeColumnRetainedPayloadAuditPaths(paths []string) []string {
 	checked := make([]string, 0, len(paths))
 	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
@@ -102,17 +259,7 @@ func auditColumnRetainedPayloadPathsAbsentWithResolver(cfg ColumnStoreConfig, re
 		checked = append(checked, path)
 	}
 	sort.Strings(checked)
-	for _, path := range checked {
-		present := columnJSONPathExists(obj, path)
-		audit.Paths = append(audit.Paths, ColumnRetainedPayloadPath{Path: path, Present: present})
-		if present {
-			audit.Violations = append(audit.Violations, path)
-		}
-	}
-	if len(audit.Violations) > 0 {
-		return audit, fmt.Errorf("collections: retained payload contains declared typed paths: %s", strings.Join(audit.Violations, ", "))
-	}
-	return audit, nil
+	return checked
 }
 
 func columnRetainedPayloadAuditPolicy(cfg *ColumnStoreConfig) ColumnRetainedPayloadPolicy {
