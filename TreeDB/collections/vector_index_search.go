@@ -856,7 +856,6 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	s.readerLast = readerStatsAfter
 	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
-	s.routeStats = vectorIndexSearchRouteStatsForColumnGraphReader(s.reader)
 	s.routeStats.apply(&response.Stats)
 	if err != nil {
 		return response, err
@@ -1024,7 +1023,6 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	s.readerLast = readerStatsAfter
 	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
-	s.routeStats = vectorIndexSearchRouteStatsForColumnGraphReader(s.reader)
 	s.routeStats.apply(&response.Stats)
 	if err != nil {
 		clear(previousResults)
