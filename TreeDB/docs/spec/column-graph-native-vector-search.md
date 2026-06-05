@@ -141,7 +141,11 @@ claiming high-QPS vector search:
 - Document boundary: `IncludeDocuments=true` is an explicit post-top-k fetch
   path. It must report document counters (`docs_fetched/search`, output bytes,
   row-ref/point-fetch counters as applicable) and remains outside the
-  zero-allocation no-document contract.
+  zero-allocation no-document contract. Callers that first run a no-document
+  search can also open a `CollectionReadView` and call
+  `FetchDocumentsForVectorIndexSearchResults` later; that helper returns a
+  separate `DocumentFetchResponse`/counter set and must be benchmarked as a
+  fetch/materialization row, not as ANN hot-path work.
 - Unsupported high-QPS shapes: document fetch, projection, non-exact quantized
   modes, stale/missing packs, unsupported metrics/strategies, and future filter
   shapes must fail closed or run through clearly labeled non-high-QPS

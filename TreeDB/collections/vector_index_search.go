@@ -723,7 +723,10 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // treating it as a serving hot path. Use SearchVectorIndexWithBuffer for the
 // collection-level caller-owned result-buffer seam, and OpenVectorIndexSearcher
 // plus SearchWithBuffer when callers can keep open/prepared state outside the
-// timed query boundary.
+// timed query boundary. Callers that want a split search/fetch shape can run a
+// no-document search first, then use
+// CollectionReadView.FetchDocumentsForVectorIndexSearchResults as a separate
+// materialization phase with separate counters.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
