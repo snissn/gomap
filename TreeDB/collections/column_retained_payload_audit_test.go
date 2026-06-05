@@ -58,3 +58,22 @@ func TestAuditColumnRetainedPayloadPathsAbsentFailsClosed2354(t *testing.T) {
 		t.Fatalf("malformed retained audit err=%v want invalid JSON failure", err)
 	}
 }
+
+func TestColumnRetainedPayloadAuditDisabledDoesNotDefaultFull2354(t *testing.T) {
+	cfg := ColumnStoreConfig{}
+	encoding, status := ColumnRetainedPayloadEncodingStatus(&cfg)
+	if encoding != ColumnRetainedPayloadEncodingNone || status != "not_configured" {
+		t.Fatalf("encoding/status=%q/%q want none/not_configured", encoding, status)
+	}
+
+	audit, err := AuditColumnRetainedPayloadPathsAbsent(cfg, []byte(`{}`), []string{"kind"})
+	if err != nil {
+		t.Fatalf("AuditColumnRetainedPayloadPathsAbsent disabled config: %v audit=%+v", err, audit)
+	}
+	if audit.RetainedPayloadPolicy != "" {
+		t.Fatalf("disabled audit policy=%q want empty policy", audit.RetainedPayloadPolicy)
+	}
+	if audit.RetainedPayloadEncoding != ColumnRetainedPayloadEncodingNone || audit.RetainedPayloadEncodingStatus != "not_configured" {
+		t.Fatalf("disabled audit encoding/status=%q/%q want none/not_configured", audit.RetainedPayloadEncoding, audit.RetainedPayloadEncodingStatus)
+	}
+}

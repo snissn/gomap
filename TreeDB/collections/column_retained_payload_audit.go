@@ -24,7 +24,7 @@ func ColumnRetainedPayloadEncodingStatus(cfg *ColumnStoreConfig) (encoding, stat
 	if cfg == nil || !cfg.Enabled {
 		return ColumnRetainedPayloadEncodingNone, "not_configured"
 	}
-	switch cfg.RetainedPayload {
+	switch columnRetainedPayloadAuditPolicy(cfg) {
 	case ColumnRetainedPayloadNone:
 		return ColumnRetainedPayloadEncodingNone, "inactive_no_retained_payload"
 	case ColumnRetainedPayloadNonColumn:
@@ -54,10 +54,7 @@ type ColumnRetainedPayloadPath struct {
 // are absent from a retained payload body. It fails closed on malformed retained
 // JSON and on any declared path that remains present.
 func AuditColumnRetainedPayloadPathsAbsent(cfg ColumnStoreConfig, retained []byte, paths []string) (ColumnRetainedPayloadPathAudit, error) {
-	policy := cfg.RetainedPayload
-	if policy == "" {
-		policy = ColumnRetainedPayloadFull
-	}
+	policy := columnRetainedPayloadAuditPolicy(&cfg)
 	encoding, status := ColumnRetainedPayloadEncodingStatus(&cfg)
 	audit := ColumnRetainedPayloadPathAudit{
 		RetainedPayloadPolicy:         policy,
@@ -103,6 +100,16 @@ func AuditColumnRetainedPayloadPathsAbsent(cfg ColumnStoreConfig, retained []byt
 		return audit, fmt.Errorf("collections: retained payload contains declared typed paths: %s", strings.Join(audit.Violations, ", "))
 	}
 	return audit, nil
+}
+
+func columnRetainedPayloadAuditPolicy(cfg *ColumnStoreConfig) ColumnRetainedPayloadPolicy {
+	if cfg == nil || !cfg.Enabled {
+		return ""
+	}
+	if cfg.RetainedPayload == "" {
+		return ColumnRetainedPayloadFull
+	}
+	return cfg.RetainedPayload
 }
 
 func columnJSONPathExists(obj map[string]any, path string) bool {
