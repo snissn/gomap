@@ -51,6 +51,7 @@ var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
 var ErrUnsafeOptions = fmt.Errorf("unsafe options require AllowUnsafe")
 var ErrMemtableFull = fmt.Errorf("memtable full")
+var ErrBatchDeleteRangeTooLarge = errors.New("cachingdb: batch DeleteRange materialization limit exceeded")
 var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
@@ -28044,6 +28045,7 @@ type Batch struct {
 	firstKey         []byte
 	lastKey          []byte
 	batchRange       keyRange
+	hasDeleteRanges  bool
 	commandWALAppend func() error
 }
 
@@ -28572,6 +28574,7 @@ func (b *Batch) Reset() {
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
+	b.hasDeleteRanges = false
 	b.maxEntries = 0
 	b.commandWALAppend = nil
 	if b.ptrValueIdxs != nil {
@@ -29087,6 +29090,36 @@ func (b *Batch) Delete(key []byte) error {
 	return nil
 }
 
+func (b *Batch) DeleteRange(start, end []byte) error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if batch.IsDeleteRangeNoop(start, end) {
+		return nil
+	}
+	var startCopy, endCopy []byte
+	if start != nil {
+		startCopy = b.cloneKey(start)
+	}
+	if end != nil {
+		endCopy = b.cloneKey(end)
+	}
+	if b.backend != nil {
+		single := [1]batch.Entry{{Type: batch.OpDeleteRange, Key: startCopy, Value: endCopy}}
+		if err := b.backend.SetOps(single[:]); err != nil {
+			return err
+		}
+		b.size += len(startCopy) + len(endCopy)
+		return nil
+	}
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDeleteRange, Key: startCopy, Value: endCopy})
+	b.noteEntryAppend()
+	b.size += len(startCopy) + len(endCopy)
+	b.hasDeleteRanges = true
+	b.streamEligible = false
+	return nil
+}
+
 // DeleteView records a Delete without copying key bytes. Callers must treat
 // key as immutable until the batch is written or closed.
 func (b *Batch) DeleteView(key []byte) error {
@@ -29139,14 +29172,28 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		return ErrBatchClosed
 	}
 	if b.backend != nil {
-		copied := make([]batch.Entry, len(ops))
-		for i, op := range ops {
+		copied := make([]batch.Entry, 0, len(ops))
+		for _, op := range ops {
 			copiedOp := op
+			if op.Type == batch.OpDeleteRange {
+				if batch.IsDeleteRangeNoop(op.Key, op.Value) {
+					continue
+				}
+				if op.Key != nil {
+					copiedOp.Key = b.cloneKey(op.Key)
+				}
+				if op.Value != nil {
+					copiedOp.Value = b.cloneKey(op.Value)
+				}
+				copied = append(copied, copiedOp)
+				b.size += len(copiedOp.Key) + len(copiedOp.Value)
+				continue
+			}
 			copiedOp.Key = b.cloneKey(op.Key)
 			if op.Value != nil {
 				copiedOp.Value = b.cloneValue(op.Value)
 			}
-			copied[i] = copiedOp
+			copied = append(copied, copiedOp)
 			b.size += len(copiedOp.Key) + len(copiedOp.Value)
 			b.batchRange.add(copiedOp.Key)
 		}
@@ -29154,6 +29201,23 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	}
 	for _, op := range ops {
 		copied := op
+		if op.Type == batch.OpDeleteRange {
+			if batch.IsDeleteRangeNoop(op.Key, op.Value) {
+				continue
+			}
+			if op.Key != nil {
+				copied.Key = b.cloneKey(op.Key)
+			}
+			if op.Value != nil {
+				copied.Value = b.cloneKey(op.Value)
+			}
+			b.entries = append(b.entries, copied)
+			b.noteEntryAppend()
+			b.size += len(copied.Key) + len(copied.Value)
+			b.hasDeleteRanges = true
+			b.streamEligible = false
+			continue
+		}
 		if op.Value != nil {
 			copied.Key, copied.Value = b.cloneKeyValue(op.Key, op.Value)
 		} else {
@@ -29195,8 +29259,11 @@ const (
 	// Keep retained batch-copy chunks bounded to 1MiB. Larger chunks are often
 	// underfilled in restore-heavy traffic and can disproportionately inflate
 	// peak RSS when multiple memtable views pin retired arenas.
-	batchCopyArenaMaxRetain     = 1 << 20
-	batchArenaTailCompactMinCap = 256 << 10
+	batchCopyArenaMaxRetain = 1 << 20
+
+	defaultCachedBatchDeleteRangeMaterializeMaxEntries  = 1 << 20
+	defaultCachedBatchDeleteRangeMaterializeMaxKeyBytes = 64 << 20
+	batchArenaTailCompactMinCap                         = 256 << 10
 	// Only compact tails with meaningful waste so we avoid churn on tiny chunks.
 	batchArenaTailCompactMinWaste = 256 << 10
 	// Under deferred-view pressure, compact earlier so retired memtable leases
@@ -29216,6 +29283,11 @@ const (
 	// batch-arena headroom to limit extra lease growth under that pressure.
 	batchArenaDeferredPressureThresholdBytes = int64(512 << 20)
 	batchArenaDeferredPressureHardCapDivisor = int64(2)
+)
+
+var (
+	cachedBatchDeleteRangeMaterializeMaxEntries  = defaultCachedBatchDeleteRangeMaterializeMaxEntries
+	cachedBatchDeleteRangeMaterializeMaxKeyBytes = defaultCachedBatchDeleteRangeMaterializeMaxKeyBytes
 )
 
 func batchCopyArenaInitCapForEntries(entries int) int {
@@ -29341,6 +29413,9 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 	defer func() {
 		b.commandWALAppend = prevAppend
 	}()
+	if b.hasDeleteRanges {
+		return b.writeRangeBatch(sync)
+	}
 	return b.writeRegular(sync)
 }
 
@@ -29349,6 +29424,10 @@ func (b *Batch) write(sync bool) error {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpoint()
+
+	if b.hasDeleteRanges {
+		return b.writeRangeBatch(sync)
+	}
 
 	if b.backend != nil {
 		var err error
@@ -29401,6 +29480,87 @@ func (b *Batch) write(sync bool) error {
 		return b.writeBypass(sync)
 	}
 	return b.writeRegular(sync)
+}
+
+func (b *Batch) writeRangeBatch(sync bool) error {
+	if b == nil || b.db == nil {
+		return backenddb.ErrClosed
+	}
+	if !b.hasDeleteRanges {
+		return b.write(sync)
+	}
+	points, ranges := batch.BuildApplyPlanFromEntries(b.entries, true)
+	if len(points) == 0 && len(ranges) == 0 {
+		b.updateBatchEntryHint()
+		b.updateBatchCopyHint()
+		b.Reset()
+		return nil
+	}
+
+	// Hold the writer gate across snapshot enumeration and publish. Without this,
+	// a concurrent cached write can slip between the scan and the materialized
+	// point-delete batch, producing a non-serializable mix of range-deleted old
+	// keys and surviving newly inserted keys.
+	b.db.writeMu.Lock()
+	writeMuHeld := true
+	unlockWriteMu := func() {
+		if writeMuHeld {
+			writeMuHeld = false
+			b.db.writeMu.Unlock()
+		}
+	}
+	defer unlockWriteMu()
+
+	materialized := make([]batch.Entry, 0, len(points))
+	deleteKeyBytes := 0
+	for _, r := range ranges {
+		it, err := b.db.Iterator(r.Start, r.End)
+		if err != nil {
+			return err
+		}
+		for it.Valid() {
+			key := it.Key()
+			if cachedBatchDeleteRangeMaterializeMaxEntries >= 0 && len(materialized) >= cachedBatchDeleteRangeMaterializeMaxEntries {
+				_ = it.Close()
+				return fmt.Errorf("%w: keys=%d limit=%d", ErrBatchDeleteRangeTooLarge, len(materialized)+1, cachedBatchDeleteRangeMaterializeMaxEntries)
+			}
+			deleteKeyBytes += len(key)
+			if cachedBatchDeleteRangeMaterializeMaxKeyBytes >= 0 && deleteKeyBytes > cachedBatchDeleteRangeMaterializeMaxKeyBytes {
+				_ = it.Close()
+				return fmt.Errorf("%w: key_bytes=%d limit=%d", ErrBatchDeleteRangeTooLarge, deleteKeyBytes, cachedBatchDeleteRangeMaterializeMaxKeyBytes)
+			}
+			materialized = append(materialized, batch.Entry{Type: batch.OpDelete, Key: append([]byte(nil), key...)})
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return err
+		}
+		if err := it.Close(); err != nil {
+			return err
+		}
+	}
+	materialized = append(materialized, points...)
+
+	origEntries := b.entries
+	origHasRanges := b.hasDeleteRanges
+	origStreamEligible := b.streamEligible
+	origHasViewOps := b.hasViewOps
+	b.entries = materialized
+	b.hasDeleteRanges = false
+	b.streamEligible = false
+	// Materialization reallocates and reorders entries, so any ptrValueIdxs still
+	// refer to the original entry indexes. Force the safe copy path for this write
+	// instead of retaining batch arenas by stale indexes.
+	b.hasViewOps = true
+	err := b.writeRegularLocked(sync, unlockWriteMu)
+	if err != nil {
+		b.entries = origEntries
+		b.hasDeleteRanges = origHasRanges
+		b.streamEligible = origStreamEligible
+		b.hasViewOps = origHasViewOps
+	}
+	return err
 }
 
 func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
@@ -29499,6 +29659,10 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 
 func (b *Batch) writeRegular(syncWrite bool) error {
 	b.db.writeMu.RLock()
+	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock)
+}
+
+func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	needRotate := false
 	needSyncBarrier := false
 	commandWALAppended := false
@@ -29594,7 +29758,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		over := b.db.shardExceedsLimit(shard, add)
 		shard.mu.Unlock()
 		if over {
-			b.db.writeMu.RUnlock()
+			unlockWriteMu()
 			return ErrMemtableFull
 		}
 	}
@@ -29705,7 +29869,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if needLaneForPointers || needLaneForJournal {
 		l, err := b.db.pickLane(durability == journalDurabilitySync, -1)
 		if err != nil {
-			b.db.writeMu.RUnlock()
+			unlockWriteMu()
 			return err
 		}
 		lane = l
@@ -29802,7 +29966,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			for _, laneID := range activeLaneIDs {
 				lb := &laneBatches[laneID]
 				if lb.err != nil {
-					b.db.writeMu.RUnlock()
+					unlockWriteMu()
 					return lb.err
 				}
 			}
@@ -29851,13 +30015,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			)
 			valueRecords, groups, outerArena, buildErr := b.db.buildOuterLeafValueRecords(keys, values)
 			if buildErr != nil {
-				b.db.writeMu.RUnlock()
+				unlockWriteMu()
 				return buildErr
 			}
 			if len(valueRecords) == 0 {
 				putValueLogRecordsNoClear(valueRecords)
 				putOuterLeafArena(outerArena)
-				b.db.writeMu.RUnlock()
+				unlockWriteMu()
 				return fmt.Errorf("cachingdb: empty value-log record set for %d eligible ops", eligibleCount)
 			}
 			defer putValueLogRecordsNoClear(valueRecords)
@@ -29869,7 +30033,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				if rids != nil {
 					group := groups[i]
 					if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {
-						b.db.writeMu.RUnlock()
+						unlockWriteMu()
 						return fmt.Errorf("cachingdb: value-log group out of range [%d,%d) len=%d", group.start, group.end, len(eligibleIdxs))
 					}
 					for srcPos := group.start; srcPos < group.end; srcPos++ {
@@ -29880,12 +30044,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			ptrs, buildErr = b.db.appendValueLogForRecords(lane, valueRecords, durability)
 			if buildErr != nil {
-				b.db.writeMu.RUnlock()
+				unlockWriteMu()
 				return buildErr
 			}
 			if len(ptrs) != len(groups) {
 				putValueLogPtrs(ptrs)
-				b.db.writeMu.RUnlock()
+				unlockWriteMu()
 				return fmt.Errorf("cachingdb: value-log pointer group count mismatch expected=%d got=%d", len(groups), len(ptrs))
 			}
 			defer putValueLogPtrs(ptrs)
@@ -29895,7 +30059,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				ptr := ptrs[i]
 				group := groups[i]
 				if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {
-					b.db.writeMu.RUnlock()
+					unlockWriteMu()
 					return fmt.Errorf("cachingdb: value-log pointer group out of range [%d,%d) len=%d", group.start, group.end, len(eligibleIdxs))
 				}
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
@@ -29926,7 +30090,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			var err error
 			handledZeroInline, err = b.db.appendWALZeroInlineEntries(lane, b.entries, seq, zeroInlineValueLen, durability)
 			if err != nil {
-				b.db.writeMu.RUnlock()
+				unlockWriteMu()
 				return err
 			}
 			if handledZeroInline {
@@ -29953,7 +30117,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			b.walBuf = records
 			if err := b.db.appendWALAssigned(lane, records, durability); err != nil {
-				b.db.writeMu.RUnlock()
+				unlockWriteMu()
 				return err
 			}
 		}
@@ -29961,7 +30125,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 	if b.commandWALAppend != nil {
 		if err := b.commandWALAppend(); err != nil {
-			b.db.writeMu.RUnlock()
+			unlockWriteMu()
 			return err
 		}
 		commandWALAppended = true
@@ -30200,7 +30364,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if allowBatchArenaBorrow && len(b.ptrValueIdxs) > 0 {
 		for _, idx := range b.ptrValueIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
-				b.db.writeMu.RUnlock()
+				unlockWriteMu()
 				return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
 			}
 			if b.entries[idx].Value == nil {
@@ -30209,7 +30373,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			retainPtrArena = true
 			shardIdx := shardIdxs[idx]
 			if shardIdx < 0 || shardIdx >= len(b.db.mutableShards) {
-				b.db.writeMu.RUnlock()
+				unlockWriteMu()
 				return fmt.Errorf("cachingdb: ptr value shard index %d out of range for entry %d", shardIdx, idx)
 			}
 			mt := b.db.mutableShards[shardIdx].mem
@@ -30229,7 +30393,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	} else {
 		putBatchArenas(ptrChunks)
 	}
-	b.db.writeMu.RUnlock()
+	unlockWriteMu()
 
 	if needRotate {
 		if err := b.db.maybeRotateMemtable(true); err != nil {

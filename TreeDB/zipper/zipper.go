@@ -1183,18 +1183,29 @@ func validateLoadedLeafLogNodeFrom(source string, data []byte) (node.Node, error
 // Returns the new root page ID, list of retired pages, and commit metrics.
 func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
 	var metrics adaptive.Metrics
-	ops := b.SortedEntries()
-	if len(ops) == 0 {
+	var ops []batch.Entry
+	var ranges []batch.DeleteRange
+	if b != nil && b.HasDeleteRanges() {
+		ops, ranges = b.ApplyPlan()
+	} else if b != nil {
+		ops = b.SortedEntries()
+	}
+	if len(ops) == 0 && len(ranges) == 0 {
 		return rootID, nil, metrics, nil
 	}
-	metrics.ZipperApplyOps = len(ops)
+	metrics.ZipperApplyOps = len(ops) + len(ranges)
 
 	scratch := z.acquireApplyScratch()
 	defer z.releaseApplyScratch(scratch)
 
 	// Underfull merge/rebalance maintenance is only beneficial when the batch
-	// includes deletes (can create empty/underfull pages).
+	// includes point deletes. Range deletes are applied by streaming affected
+	// spans without materializing point tombstones.
 	maintenance, deleteCount := z.shouldRunMaintenance(ops)
+	if len(ranges) > 0 {
+		maintenance = false
+		deleteCount = 0
+	}
 	var budget *maintenanceBudget
 	if maintenance && z.maintenanceOpsPerCoalesce > 0 {
 		budget = newMaintenanceBudget(len(ops), deleteCount, z.maintenanceOpsPerCoalesce)
@@ -1216,7 +1227,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	}
 
 	var retired []uint64
-	newRootRef, splits, err := z.writeRecursive(page.PageChildRef(rootID), ops, maintenance, budget, &metrics, nil, nil, &retired, scratch)
+	newRootRef, splits, err := z.writeRecursive(page.PageChildRef(rootID), ops, ranges, maintenance, budget, &metrics, nil, nil, &retired, scratch)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -1558,7 +1569,7 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive
 
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, error.
-func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64, scratch *mergeScratch) (page.ChildRef, []Split, error) {
+func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []batch.DeleteRange, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64, scratch *mergeScratch) (page.ChildRef, []Split, error) {
 	oldNode, oldFromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
 	if err != nil {
 		return page.ChildRef{}, nil, err
@@ -1596,7 +1607,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenanc
 				}
 			}()
 			builder.SetPageID(0)
-			return z.mergeLeaf(&oldNode, builder, ops, metrics, scratch, reuseOuterLeafPages)
+			return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, reuseOuterLeafPages)
 		}
 
 		// Pager-backed leaf.
@@ -1611,7 +1622,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenanc
 		builder := z.newPooledLeafBuilder(newData, ops)
 		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
-		return z.mergeLeaf(&oldNode, builder, ops, metrics, scratch, false)
+		return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, false)
 
 	case page.PageTypeInternal:
 		// Internal merge is always pager-backed.
@@ -1627,7 +1638,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenanc
 		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
 		builder.SetInternalFenceBounds(low, high)
-		nr, splits, err := z.mergeInternal(&oldNode, builder, ops, maintenance, budget, metrics, retired, low, high, scratch)
+		nr, splits, err := z.mergeInternal(&oldNode, builder, ops, ranges, maintenance, budget, metrics, retired, low, high, scratch)
 		if err != nil {
 			return page.ChildRef{}, nil, err
 		}
@@ -1654,7 +1665,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenanc
 	return page.ChildRef{}, nil, page.ErrInvalidPageType
 }
 
-func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool) (page.ChildRef, []Split, error) {
+func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool) (page.ChildRef, []Split, error) {
 	if metrics != nil {
 		metrics.ZipperLeafMerges++
 	}
@@ -1762,6 +1773,17 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		return nodeRef, nil
 	}
 
+	recordDeadPointer := func(flags byte, ptr page.ValuePtr) {
+		if flags&node.FlagPointer == 0 {
+			return
+		}
+		metrics.SlabDeadBytes += int(ptr.Length)
+		if metrics.SlabDeadBytesByFile == nil {
+			metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
+		}
+		metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
+	}
+
 	for {
 		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
 		var useBatch bool
@@ -1799,16 +1821,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			} else if cmp > 0 {
 				useBatch = true
 			} else {
-				// Equal: Update (Batch wins)
-				// The old entry is being overwritten or deleted.
-				// If it was a pointer, track it as dead bytes.
-				if f&node.FlagPointer != 0 {
-					metrics.SlabDeadBytes += int(ptr.Length)
-					if metrics.SlabDeadBytesByFile == nil {
-						metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
-					}
-					metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
-				}
+				// Equal: Update (Batch wins). The old entry is being overwritten
+				// or deleted; if it was a pointer, track it as dead bytes.
+				recordDeadPointer(f, ptr)
 
 				useBatch = true
 				oldIdx++ // Skip old
@@ -1863,6 +1878,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			oldIdx++
 			if flags&node.FlagTombstone != 0 {
 				continue // Skip tombstones
+			}
+			if batch.DeleteRangesContainKey(ranges, key) {
+				recordDeadPointer(flags, valPtr)
+				continue
 			}
 		}
 
@@ -2024,7 +2043,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	return rootNodeRef, splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, retired *[]uint64, low, high []byte, scratch *mergeScratch) (page.ChildRef, []Split, error) {
+func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, retired *[]uint64, low, high []byte, scratch *mergeScratch) (page.ChildRef, []Split, error) {
 	if metrics != nil {
 		metrics.ZipperInternalMerges++
 	}
@@ -2037,7 +2056,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	opIdx := 0
 
 	gomaxprocs := runtime.GOMAXPROCS(0)
-	useParallel := shouldUseParallelInternalMerge(int(count), len(ops), gomaxprocs, maintenance, ParallelMergePressureNormal)
+	useParallel := len(ranges) == 0 && shouldUseParallelInternalMerge(int(count), len(ops), gomaxprocs, maintenance, ParallelMergePressureNormal)
 	if useParallel && !maintenance {
 		pressure := z.parallelMergePressureLevel()
 		if pressure != ParallelMergePressureNormal {
@@ -2160,17 +2179,18 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				break
 			}
 			childOps := ops[startOpIdx:opIdx]
+			childRanges := deleteRangesForSpan(ranges, lowKey, childHigh)
 
 			newChildRef := curChild
 			var childSplits []Split
-			if len(childOps) > 0 {
-				newChildRef, childSplits, err = z.writeRecursive(curChild, childOps, maintenance, budget, metrics, lowKey, childHigh, retired, scratch)
+			if len(childOps) > 0 || len(childRanges) > 0 {
+				newChildRef, childSplits, err = z.writeRecursive(curChild, childOps, childRanges, maintenance, budget, metrics, lowKey, childHigh, retired, scratch)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
 			}
 
-			if len(childOps) == 0 {
+			if len(childOps) == 0 && len(childRanges) == 0 {
 				if err := appendExistingInternal(i, lowKey, newChildRef, firstEntry); err != nil {
 					return page.ChildRef{}, nil, err
 				}
@@ -2299,7 +2319,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				}
 				var childMetrics adaptive.Metrics
 				childRet := children[i].retired[:0]
-				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch)
+				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch)
 				if err != nil {
 					errOnce.Do(func() { firstErr = err })
 					continue
@@ -2330,7 +2350,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	} else {
 		for i := range children {
 			if len(children[i].ops) > 0 {
-				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, maintenance, budget, metrics, children[i].low, children[i].high, retired, scratch)
+				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, metrics, children[i].low, children[i].high, retired, scratch)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
@@ -2421,6 +2441,33 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	// builder finalized by caller.
 	return page.PageChildRef(builder.PageID()), splits, nil
+}
+
+func deleteRangesForSpan(ranges []batch.DeleteRange, low, high []byte) []batch.DeleteRange {
+	if len(ranges) == 0 {
+		return nil
+	}
+	start := -1
+	end := -1
+	for i, r := range ranges {
+		if batch.DeleteRangeOverlapsSpan(r, low, high) {
+			if start < 0 {
+				start = i
+			}
+			end = i + 1
+			continue
+		}
+		if start >= 0 {
+			break
+		}
+		if high != nil && r.Start != nil && bytes.Compare(r.Start, high) >= 0 {
+			break
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	return ranges[start:end]
 }
 
 func mergeMetrics(dst, src *adaptive.Metrics) {

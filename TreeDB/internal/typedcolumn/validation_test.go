@@ -31,8 +31,11 @@ func TestTypedColumnUncompressedRowLocatorRawBytesAreNotCompressedCapLimited1952
 	if !canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Rows: 1}, rowLocatorBytes+4, CompressionSnappy) {
 		t.Fatalf("canCompressImageSection rejected small compressed locator section")
 	}
-	if canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionDictionaries}, 128, CompressionSnappy) {
-		t.Fatalf("canCompressImageSection allowed unsupported dictionary section compression")
+	if !canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionDictionaries}, 128, CompressionSnappy) {
+		t.Fatalf("canCompressImageSection rejected small compressed dictionary section")
+	}
+	if canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionDictionaries}, maxCompressedDictionarySectionRawBytes+1, CompressionSnappy) {
+		t.Fatalf("canCompressImageSection allowed compressed dictionary above cap")
 	}
 	if canCompressImageSection(ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators, Rows: 1}, rowLocatorBytes+4, CompressionZSTD) {
 		t.Fatalf("canCompressImageSection allowed unsupported zstd locator compression")

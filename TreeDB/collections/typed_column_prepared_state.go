@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/golang/snappy"
+	"github.com/pierrec/lz4/v4"
 	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
+
+const maxTypedColumnPreparedCompressedDictionarySectionRawBytes = 256 << 20
 
 // typedColumnPreparedRangeReader is the caller-owned byte access boundary used
 // while preparing immutable typed-column state. It deliberately has no package
@@ -942,7 +946,11 @@ func typedColumnAttachPreparedDictionaries(part *typedColumnPreparedPartState, i
 	if readRange == nil {
 		return diag, errors.New("collections: typed-column prepared dictionaries require range reader")
 	}
-	raw, err := readRange(section.Offset, section.Length, true)
+	stored, err := readRange(section.Offset, section.Length, true)
+	if err != nil {
+		return diag, err
+	}
+	raw, err := decodeTypedColumnPreparedDictionarySectionBytes(section, stored)
 	if err != nil {
 		return diag, err
 	}
@@ -976,6 +984,60 @@ func typedColumnAttachPreparedDictionaries(part *typedColumnPreparedPartState, i
 		column.Dictionaries = dict
 	}
 	return diag, nil
+}
+
+func decodeTypedColumnPreparedDictionarySectionBytes(section typedcolumn.ColumnPartImageSection, stored []byte) ([]byte, error) {
+	rawBytes := section.RawBytes
+	if rawBytes == 0 && section.Compression == typedcolumn.CompressionNone {
+		rawBytes = len(stored)
+	}
+	switch section.Compression {
+	case typedcolumn.CompressionNone:
+		if len(stored) != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries section bytes=%d want raw bytes=%d", len(stored), rawBytes)
+		}
+		return stored, nil
+	case typedcolumn.CompressionSnappy:
+		if rawBytes <= 0 {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d is invalid", rawBytes)
+		}
+		if rawBytes > maxTypedColumnPreparedCompressedDictionarySectionRawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d exceeds max=%d", rawBytes, maxTypedColumnPreparedCompressedDictionarySectionRawBytes)
+		}
+		decodedLen, err := snappy.DecodedLen(stored)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries snappy decoded length: %w", err)
+		}
+		if decodedLen != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries snappy decoded length=%d want=%d", decodedLen, rawBytes)
+		}
+		out, err := snappy.Decode(make([]byte, decodedLen), stored)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries snappy decode: %w", err)
+		}
+		if len(out) != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries snappy decoded length=%d want=%d", len(out), rawBytes)
+		}
+		return out, nil
+	case typedcolumn.CompressionLZ4:
+		if rawBytes <= 0 {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d is invalid", rawBytes)
+		}
+		if rawBytes > maxTypedColumnPreparedCompressedDictionarySectionRawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d exceeds max=%d", rawBytes, maxTypedColumnPreparedCompressedDictionarySectionRawBytes)
+		}
+		out := make([]byte, rawBytes)
+		n, err := lz4.UncompressBlock(stored, out)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries lz4 decode: %w", err)
+		}
+		if n != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries lz4 decoded length=%d want=%d", n, rawBytes)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("collections: typed-column prepared dictionaries section compression=%s is unsupported", section.Compression)
+	}
 }
 
 type typedColumnPreparedDictionaryDecoder struct {

@@ -17,21 +17,29 @@ var (
 	ErrMissingValueReader = errors.New("value reader unavailable")
 )
 
-// OpType represents the type of operation (Put or Delete).
+// OpType represents the type of operation recorded in a batch.
 type OpType uint8
 
 const (
 	OpPut OpType = iota
 	OpDelete
+	OpDeleteRange
 )
 
 // Entry represents a single operation in the batch.
 type Entry struct {
 	Type     OpType
-	Key      []byte
-	Value    []byte        // For inline values
+	Key      []byte        // Put/Delete key, or DeleteRange start bound (nil means unbounded)
+	Value    []byte        // Inline value, or DeleteRange exclusive end bound (nil means unbounded)
 	ValuePtr page.ValuePtr // For large values
 	IsPtr    bool          // True if ValuePtr is valid
+}
+
+// DeleteRange describes a half-open range delete [Start, End). Nil Start or
+// End are unbounded on that side.
+type DeleteRange struct {
+	Start []byte
+	End   []byte
 }
 
 // ValueReader resolves value pointers for Replay callers that require full values.
@@ -44,6 +52,7 @@ type ValueReader interface {
 type Interface interface {
 	Set(key, value []byte) error
 	Delete(key []byte) error
+	DeleteRange(start, end []byte) error
 	SetOps(ops []Entry) error
 	Write() error
 	WriteSync() error
@@ -66,6 +75,7 @@ type Batch struct {
 	touchedValueLogSmallLen int
 	touchedValueLog         map[uint32]struct{}
 	hasValueLogPointers     bool
+	hasDeleteRanges         bool
 	sorted                  bool
 	compacted               bool
 	lastKey                 []byte
@@ -170,6 +180,14 @@ func (b *Batch) IsEmpty() bool {
 	return b == nil || len(b.entries) == 0
 }
 
+// Len returns the number of queued logical operations.
+func (b *Batch) Len() int {
+	if b == nil {
+		return 0
+	}
+	return len(b.entries)
+}
+
 func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		// Avoid holding onto key/value copies from previous uses.
@@ -182,6 +200,7 @@ func (b *Batch) resetLocked() {
 	b.touchedValueLog = nil
 	b.touchedValueLogSmallLen = 0
 	b.hasValueLogPointers = false
+	b.hasDeleteRanges = false
 	b.byteSize = 0
 	b.sorted = true
 	b.compacted = true
@@ -214,6 +233,7 @@ func (b *Batch) resetForPool() {
 	b.touchedValueLog = nil
 	b.touchedValueLogSmallLen = 0
 	b.hasValueLogPointers = false
+	b.hasDeleteRanges = false
 	b.sorted = true
 	b.compacted = true
 	b.lastKey = nil
@@ -684,6 +704,55 @@ func (b *Batch) Delete(key []byte) error {
 	return nil
 }
 
+// DeleteRange records a half-open range delete [start, end). Nil bounds are
+// unbounded. Empty or reversed bounded ranges are no-ops.
+func (b *Batch) DeleteRange(start, end []byte) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if IsDeleteRangeNoop(start, end) {
+		return nil
+	}
+	return b.deleteRangeInternal(start, end, true)
+}
+
+// DeleteRangeView records a range delete without copying bound bytes. Callers
+// must treat start/end as immutable until the batch is committed or closed.
+func (b *Batch) DeleteRangeView(start, end []byte) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if IsDeleteRangeNoop(start, end) {
+		return nil
+	}
+	return b.deleteRangeInternal(start, end, false)
+}
+
+func (b *Batch) deleteRangeInternal(start, end []byte, copyBounds bool) error {
+	var startCopy, endCopy []byte
+	if copyBounds {
+		if start != nil {
+			startCopy = b.arenaCopy(start)
+		}
+		if end != nil {
+			endCopy = b.arenaCopy(end)
+		}
+	} else {
+		startCopy = start
+		endCopy = end
+	}
+	b.entries = append(b.entries, Entry{
+		Type:  OpDeleteRange,
+		Key:   startCopy,
+		Value: endCopy,
+	})
+	b.byteSize += len(startCopy) + len(endCopy)
+	b.hasDeleteRanges = true
+	// Keep the point-entry sorted/compacted state intact for point-only batches;
+	// range batches use OrderedEntries/ApplyPlan instead of mutating this slice.
+	return nil
+}
+
 // Replay iterates over the batch entries.
 func (b *Batch) Replay(fn func(Entry) error) error {
 	for _, entry := range b.entries {
@@ -725,6 +794,15 @@ func (b *Batch) SetOps(ops []Entry) error {
 		b.compacted = false
 	}
 	for _, op := range ops {
+		if op.Type == OpDeleteRange {
+			if IsDeleteRangeNoop(op.Key, op.Value) {
+				continue
+			}
+			b.hasDeleteRanges = true
+			b.entries = append(b.entries, op)
+			b.byteSize += len(op.Key) + len(op.Value)
+			continue
+		}
 		if op.IsPtr {
 			if !page.IsValueLogFileID(op.ValuePtr.FileID) {
 				return fmt.Errorf("invalid value-log pointer in SetOps: file %d", op.ValuePtr.FileID)
@@ -746,6 +824,10 @@ func (b *Batch) SetOps(ops []Entry) error {
 // read-only. It remains valid only until the batch is mutated, reset, released,
 // or closed.
 func (b *Batch) SortedEntries() []Entry {
+	if b.hasDeleteRanges {
+		points, _ := b.ApplyPlan()
+		return points
+	}
 	if len(b.entries) == 0 {
 		b.sorted = true
 		b.compacted = true
@@ -790,6 +872,9 @@ func (b *Batch) SortedEntries() []Entry {
 func (b *Batch) Ops() map[string]Entry {
 	ops := make(map[string]Entry, len(b.entries))
 	for _, e := range b.entries {
+		if e.Type == OpDeleteRange {
+			continue
+		}
 		ops[string(e.Key)] = e
 	}
 	return ops
@@ -807,6 +892,99 @@ func (b *Batch) HasValueLogPointers() bool {
 		return false
 	}
 	return b.hasValueLogPointers
+}
+
+// HasDeleteRanges reports whether this batch contains any non-empty range
+// deletes. Point-only callers can keep using SortedEntries' compacted fast path.
+func (b *Batch) HasDeleteRanges() bool {
+	return b != nil && b.hasDeleteRanges
+}
+
+// OrderedEntries returns the submission-order operation stream. The returned
+// slice aliases batch-owned storage and must be treated as read-only.
+func (b *Batch) OrderedEntries() []Entry {
+	if b == nil || len(b.entries) == 0 {
+		return nil
+	}
+	return b.entries
+}
+
+// ApplyPlan canonicalizes an ordered mixed batch into sorted final point ops and
+// merged range tombstones over the base tree. The point-only SortedEntries path
+// remains allocation-free and is preferred when HasDeleteRanges is false.
+func (b *Batch) ApplyPlan() ([]Entry, []DeleteRange) {
+	if b == nil || len(b.entries) == 0 {
+		return nil, nil
+	}
+	if !b.hasDeleteRanges {
+		return b.SortedEntries(), nil
+	}
+	return BuildApplyPlanFromEntries(b.entries, true)
+}
+
+// BuildApplyPlanFromEntries canonicalizes an ordered mixed operation stream into
+// sorted final point ops and merged range tombstones over the base tree.
+func BuildApplyPlanFromEntries(entries []Entry, hasDeleteRanges bool) ([]Entry, []DeleteRange) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	if !hasDeleteRanges {
+		points := append([]Entry(nil), entries...)
+		sort.SliceStable(points, func(i, j int) bool {
+			return bytes.Compare(points[i].Key, points[j].Key) < 0
+		})
+		out := points[:0]
+		for i := 0; i < len(points); i++ {
+			if i+1 < len(points) && bytes.Equal(points[i].Key, points[i+1].Key) {
+				continue
+			}
+			out = append(out, points[i])
+		}
+		return out, nil
+	}
+	type pointCandidate struct {
+		entry Entry
+		seq   int
+	}
+	type sequencedRange struct {
+		rangeOp DeleteRange
+		seq     int
+	}
+	pointsByKey := make(map[string]pointCandidate)
+	ranges := make([]sequencedRange, 0, 4)
+	for seq, entry := range entries {
+		switch entry.Type {
+		case OpPut, OpDelete:
+			pointsByKey[string(entry.Key)] = pointCandidate{entry: entry, seq: seq}
+		case OpDeleteRange:
+			if IsDeleteRangeNoop(entry.Key, entry.Value) {
+				continue
+			}
+			ranges = append(ranges, sequencedRange{rangeOp: DeleteRange{Start: entry.Key, End: entry.Value}, seq: seq})
+		}
+	}
+	points := make([]Entry, 0, len(pointsByKey))
+	for _, point := range pointsByKey {
+		shadowed := false
+		for _, r := range ranges {
+			if r.seq > point.seq && DeleteRangeContainsKey(r.rangeOp, point.entry.Key) {
+				shadowed = true
+				break
+			}
+		}
+		if !shadowed {
+			points = append(points, point.entry)
+		}
+	}
+	sort.Slice(points, func(i, j int) bool {
+		return bytes.Compare(points[i].Key, points[j].Key) < 0
+	})
+	merged := make([]DeleteRange, 0, len(ranges))
+	for _, r := range ranges {
+		merged = append(merged, r.rangeOp)
+	}
+	merged = MergeDeleteRanges(merged)
+	return points, merged
 }
 
 // TouchedValueLogSegments reports the value-log segments that were touched by
@@ -865,4 +1043,121 @@ func (b *Batch) noteTouchedValueLogFileID(id uint32) {
 		b.touchedValueLogSmallLen = 0
 	}
 	b.touchedValueLog[id] = struct{}{}
+}
+
+// IsDeleteRangeNoop reports whether [start,end) cannot delete any valid TreeDB
+// key. Nil means unbounded; a non-nil end <= non-nil start is empty/reversed.
+func IsDeleteRangeNoop(start, end []byte) bool {
+	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+		return true
+	}
+	// TreeDB point keys cannot be empty. An unbounded-lower range ending at the
+	// empty byte string contains no valid keys.
+	return start == nil && end != nil && len(end) == 0
+}
+
+// DeleteRangeContainsKey reports whether key is inside r's half-open range.
+func DeleteRangeContainsKey(r DeleteRange, key []byte) bool {
+	if key == nil {
+		return false
+	}
+	if r.Start != nil && bytes.Compare(key, r.Start) < 0 {
+		return false
+	}
+	if r.End != nil && bytes.Compare(key, r.End) >= 0 {
+		return false
+	}
+	return true
+}
+
+// DeleteRangesContainKey reports whether key is covered by any merged or
+// unmerged range in ranges.
+func DeleteRangesContainKey(ranges []DeleteRange, key []byte) bool {
+	for _, r := range ranges {
+		if DeleteRangeContainsKey(r, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// MergeDeleteRanges returns sorted, non-overlapping ranges equivalent to the
+// union of ranges. It does not copy bound bytes; callers must keep them alive.
+func MergeDeleteRanges(ranges []DeleteRange) []DeleteRange {
+	if len(ranges) <= 1 {
+		if len(ranges) == 1 && IsDeleteRangeNoop(ranges[0].Start, ranges[0].End) {
+			return nil
+		}
+		return ranges
+	}
+	out := ranges[:0]
+	for _, r := range ranges {
+		if !IsDeleteRangeNoop(r.Start, r.End) {
+			out = append(out, r)
+		}
+	}
+	if len(out) <= 1 {
+		return out
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return compareRangeStarts(out[i].Start, out[j].Start) < 0
+	})
+	merged := out[:0]
+	cur := out[0]
+	for i := 1; i < len(out); i++ {
+		next := out[i]
+		if deleteRangesOverlapOrTouch(cur, next) {
+			cur.End = maxRangeEnd(cur.End, next.End)
+			continue
+		}
+		merged = append(merged, cur)
+		cur = next
+	}
+	merged = append(merged, cur)
+	return merged
+}
+
+func compareRangeStarts(a, b []byte) int {
+	if a == nil {
+		if b == nil {
+			return 0
+		}
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	return bytes.Compare(a, b)
+}
+
+func deleteRangesOverlapOrTouch(a, b DeleteRange) bool {
+	if a.End == nil || b.Start == nil {
+		return true
+	}
+	return bytes.Compare(b.Start, a.End) <= 0
+}
+
+func maxRangeEnd(a, b []byte) []byte {
+	if a == nil || b == nil {
+		return nil
+	}
+	if bytes.Compare(a, b) >= 0 {
+		return a
+	}
+	return b
+}
+
+// DeleteRangeOverlapsSpan reports whether r intersects the half-open child span
+// [low, high). Nil high means unbounded upper; nil r bounds are unbounded.
+func DeleteRangeOverlapsSpan(r DeleteRange, low, high []byte) bool {
+	if IsDeleteRangeNoop(r.Start, r.End) {
+		return false
+	}
+	if r.End != nil && low != nil && bytes.Compare(r.End, low) <= 0 {
+		return false
+	}
+	if high != nil && r.Start != nil && bytes.Compare(r.Start, high) >= 0 {
+		return false
+	}
+	return true
 }

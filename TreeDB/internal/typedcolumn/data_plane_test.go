@@ -464,11 +464,11 @@ func manifestEntryForSection(t *testing.T, image ColumnPartImage, sectionIndex i
 	}
 	off := 32
 	for i := 0; i <= sectionIndex; i++ {
-		if off+56 > image.ManifestBytes {
+		if off+64 > image.ManifestBytes {
 			t.Fatalf("manifest entry %d offset=%d exceeds manifest=%d", i, off, image.ManifestBytes)
 		}
 		entry := manifestEntryOffsets{kind: off, category: off + 2, offset: off + 4, length: off + 12}
-		off += 2 + 2 + 8 + 8 + 8 + 8 + 8 + 2 + 2
+		off += 2 + 2 + 8 + 8 + 8 + 8 + 8 + 2 + 2 + 8
 		nameLen := int(binary.LittleEndian.Uint32(image.Bytes[off:]))
 		off += 4 + nameLen
 		columnLen := int(binary.LittleEndian.Uint32(image.Bytes[off:]))

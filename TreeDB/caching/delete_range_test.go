@@ -3,7 +3,9 @@ package caching
 import (
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
@@ -291,5 +293,208 @@ func TestCachingDB_DeleteRange_WALFlushesOnlySelectedLane(t *testing.T) {
 	}
 	if totalSyncs != 0 {
 		t.Fatalf("expected no WAL sync calls for non-sync DeleteRange, got %d", totalSyncs)
+	}
+}
+
+func TestCachingBatchDeleteRangeSerializesScanAndPublish(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.Set([]byte("b"), []byte("old"))
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 20, JournalLanes: 1})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	rangeBatch := db.NewBatch()
+	if err := rangeBatch.DeleteRange([]byte("a"), []byte("d")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	rangeDone := make(chan error, 1)
+	go func() {
+		rangeDone <- rangeBatch.Write()
+		_ = rangeBatch.Close()
+	}()
+
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("range batch did not start backend iterator")
+	}
+
+	writerDone := make(chan error, 1)
+	go func() {
+		b := db.NewBatch()
+		defer b.Close()
+		if err := b.Set([]byte("b"), []byte("updated")); err != nil {
+			writerDone <- err
+			return
+		}
+		if err := b.Set([]byte("c"), []byte("new")); err != nil {
+			writerDone <- err
+			return
+		}
+		writerDone <- b.Write()
+	}()
+
+	select {
+	case err := <-writerDone:
+		t.Fatalf("concurrent writer completed before blocked range scan published: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(backend.iteratorBlockCh)
+	select {
+	case err := <-rangeDone:
+		if err != nil {
+			t.Fatalf("range batch Write: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for range batch")
+	}
+	select {
+	case err := <-writerDone:
+		if err != nil {
+			t.Fatalf("concurrent writer: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for concurrent writer")
+	}
+
+	if val, err := db.Get([]byte("b")); err != nil || string(val) != "updated" {
+		t.Fatalf("b=(%q,%v), want updated", val, err)
+	}
+	if val, err := db.Get([]byte("c")); err != nil || string(val) != "new" {
+		t.Fatalf("c=(%q,%v), want new", val, err)
+	}
+}
+
+func TestCachingBatchDeleteRangeMaterializationCapFailsClosed(t *testing.T) {
+	oldEntries := cachedBatchDeleteRangeMaterializeMaxEntries
+	oldBytes := cachedBatchDeleteRangeMaterializeMaxKeyBytes
+	cachedBatchDeleteRangeMaterializeMaxEntries = 2
+	cachedBatchDeleteRangeMaterializeMaxKeyBytes = defaultCachedBatchDeleteRangeMaterializeMaxKeyBytes
+	defer func() {
+		cachedBatchDeleteRangeMaterializeMaxEntries = oldEntries
+		cachedBatchDeleteRangeMaterializeMaxKeyBytes = oldBytes
+	}()
+
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	for _, kv := range []struct{ k, v string }{{"a", "1"}, {"b", "2"}, {"c", "3"}} {
+		backend.Set([]byte(kv.k), []byte(kv.v))
+	}
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 20, JournalLanes: 1})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	b := db.NewBatch()
+	defer b.Close()
+	if err := b.DeleteRange([]byte("a"), []byte("z")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	if err := b.Write(); !errors.Is(err, ErrBatchDeleteRangeTooLarge) {
+		t.Fatalf("Write err=%v, want ErrBatchDeleteRangeTooLarge", err)
+	}
+	for _, kv := range []struct{ k, v string }{{"a", "1"}, {"b", "2"}, {"c", "3"}} {
+		val, err := db.Get([]byte(kv.k))
+		if err != nil || string(val) != kv.v {
+			t.Fatalf("%s=(%q,%v), want %q", kv.k, val, err, kv.v)
+		}
+	}
+}
+
+func TestCachingBatchDeleteRangeBackendBatchUsesSetOpsBridge(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.Set([]byte("a"), []byte("1"))
+	backend.Set([]byte("b"), []byte("2"))
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	b := db.NewBatch()
+	defer b.Close()
+	b.backend = backend.NewBatch()
+	if err := b.Set([]byte("c"), []byte("3")); err != nil {
+		t.Fatalf("backend Set: %v", err)
+	}
+	if err := b.DeleteRange([]byte("a"), []byte("c")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	if b.hasDeleteRanges {
+		t.Fatalf("backend-backed DeleteRange should not switch to cached materialization")
+	}
+	if len(b.entries) != 0 {
+		t.Fatalf("backend-backed DeleteRange queued %d cached entries", len(b.entries))
+	}
+
+	backend.mu.RLock()
+	lastOps := append([]batch.Entry(nil), backend.lastOps...)
+	backend.mu.RUnlock()
+	if len(lastOps) != 1 || lastOps[0].Type != batch.OpDeleteRange || string(lastOps[0].Key) != "a" || string(lastOps[0].Value) != "c" {
+		t.Fatalf("last backend SetOps=%+v, want single DeleteRange [a,c)", lastOps)
+	}
+
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	backend.mu.RLock()
+	_, hasA := backend.data["a"]
+	_, hasB := backend.data["b"]
+	gotC := string(backend.data["c"])
+	backend.mu.RUnlock()
+	if hasA || hasB || gotC != "3" {
+		t.Fatalf("backend data after bridged range: hasA=%t hasB=%t c=%q, want only c=3", hasA, hasB, gotC)
+	}
+}
+
+func TestCachingBatchDeleteRangeMixedOrder(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 20, JournalLanes: 1})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}, {"c", "vc"}, {"d", "vd"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			t.Fatalf("Set %s: %v", kv.k, err)
+		}
+	}
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("b"), []byte("shadowed")); err != nil {
+		t.Fatalf("batch Set shadowed: %v", err)
+	}
+	if err := b.DeleteRange([]byte("a"), []byte("d")); err != nil {
+		t.Fatalf("batch DeleteRange: %v", err)
+	}
+	if err := b.Set([]byte("c"), []byte("after")); err != nil {
+		t.Fatalf("batch Set after: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("batch Write: %v", err)
+	}
+	_ = b.Close()
+
+	if val, err := db.Get([]byte("a")); err != nil || val != nil {
+		t.Fatalf("a=(%q,%v), want missing", val, err)
+	}
+	if val, err := db.Get([]byte("b")); err != nil || val != nil {
+		t.Fatalf("b=(%q,%v), want missing", val, err)
+	}
+	if val, err := db.Get([]byte("c")); err != nil || string(val) != "after" {
+		t.Fatalf("c=(%q,%v), want after", val, err)
+	}
+	if val, err := db.Get([]byte("d")); err != nil || string(val) != "vd" {
+		t.Fatalf("d=(%q,%v), want vd", val, err)
 	}
 }

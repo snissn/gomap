@@ -91,7 +91,7 @@ func (b *GranuleBuilder) BuildUint64(values []uint64) (EncodedGranule, error) {
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingRawUint64, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingRawUint64, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -125,7 +125,7 @@ func (b *GranuleBuilder) buildRawInt8(values []int8, encoding Encoding, name str
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -146,7 +146,7 @@ func (b *GranuleBuilder) buildRawUint8(values []uint8, encoding Encoding, name s
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -167,7 +167,7 @@ func (b *GranuleBuilder) buildRawInt16(values []int16, encoding Encoding, name s
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -188,7 +188,7 @@ func (b *GranuleBuilder) buildRawUint16(values []uint16, encoding Encoding, name
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -212,7 +212,7 @@ func (b *GranuleBuilder) buildRawInt32(values []int32, encoding Encoding, name s
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -233,7 +233,7 @@ func (b *GranuleBuilder) buildRawUint32(values []uint32, encoding Encoding, name
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, CompressionNone)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, encoding, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -256,8 +256,8 @@ func validateRawScalarBuildConfig(cfg Config, want Encoding, name string) error 
 	if cfg.Encoding != 0 && cfg.Encoding != want {
 		return fmt.Errorf("typedcolumn: %s encoding=%s want %s", name, cfg.Encoding, want)
 	}
-	if cfg.Compression != CompressionNone {
-		return fmt.Errorf("typedcolumn: %s raw sections require compression=none, got %s", name, cfg.Compression)
+	if err := validateCompression(cfg.Compression); err != nil {
+		return fmt.Errorf("typedcolumn: unsupported %s compression %s", name, cfg.Compression)
 	}
 	return nil
 }

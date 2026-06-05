@@ -497,7 +497,7 @@ func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIte
 	return it.Error()
 }
 
-func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry) (*valueLogRefDelta, error) {
+func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange) (*valueLogRefDelta, error) {
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil, nil
 	}
@@ -509,13 +509,32 @@ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint6
 		return delta, nil
 	}
 	tr := tree.New(p, nil, rootID)
-	for i := range entries {
-		oldFileID, oldRef, err := lookupValueLogRefAtKey(tr, entries[i].Key)
-		if err != nil {
+	for _, r := range ranges {
+		it := tr.IteratorWithOptions(r.Start, r.End, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		for it.Valid() {
+			_, ptr, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+				delta.add(ptr.FileID, -1)
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
 			return nil, err
 		}
-		if oldRef {
-			delta.add(oldFileID, -1)
+		if err := it.Close(); err != nil {
+			return nil, err
+		}
+	}
+	for i := range entries {
+		if !batchpkg.DeleteRangesContainKey(ranges, entries[i].Key) {
+			oldFileID, oldRef, err := lookupValueLogRefAtKey(tr, entries[i].Key)
+			if err != nil {
+				return nil, err
+			}
+			if oldRef {
+				delta.add(oldFileID, -1)
+			}
 		}
 		if entries[i].Type == batchpkg.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
 			delta.add(entries[i].ValuePtr.FileID, 1)

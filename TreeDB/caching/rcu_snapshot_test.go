@@ -642,6 +642,8 @@ func (b *noAllocBatch) Set(key, value []byte) error { return nil }
 
 func (b *noAllocBatch) Delete(key []byte) error { return nil }
 
+func (b *noAllocBatch) DeleteRange(start, end []byte) error { return nil }
+
 func (b *noAllocBatch) SetOps(ops []batch.Entry) error { return nil }
 
 func (b *noAllocBatch) Write() error { return nil }

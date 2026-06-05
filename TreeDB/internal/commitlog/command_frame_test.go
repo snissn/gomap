@@ -1046,6 +1046,7 @@ func TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder(t *testing.T) {
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
 		{Op: RawKVOpDelete, Key: []byte("bravo")},
 		{Op: RawKVOpSetRID, Key: []byte("charlie"), RID: 42},
+		{Op: RawKVOpDeleteRange, Key: nil, Value: []byte("delta")},
 	} {
 		want, err := EncodeRawKVBatchPayload([]RawKVOperation{op})
 		if err != nil {
@@ -1065,6 +1066,7 @@ func TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder(t *testing.T) {
 	for _, op := range []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
 		{Op: RawKVOpDelete, Key: []byte("bravo")},
+		{Op: RawKVOpDeleteRange, Key: []byte("charlie"), Value: nil},
 	} {
 		payload, err := EncodeRawKVSingleOperationPayload(op)
 		if err != nil {
@@ -1469,5 +1471,82 @@ func assertGoldenHex(t *testing.T, name string, got []byte) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("golden %s mismatch\ngot  %s\nwant %s", name, hex.EncodeToString(got), hex.EncodeToString(want))
+	}
+}
+
+func TestCommandWALRawKVBatchDeleteRangeEncodeDecodeScan(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("a"), Value: []byte("1")},
+		{Op: RawKVOpDeleteRange, Key: nil, Value: []byte("c")},
+		{Op: RawKVOpDeleteRange, Key: []byte("x"), Value: nil},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	var scanned []RawKVOperation
+	if err := ScanRawKVBatchPayload(payload, func(op RawKVOp, key, value []byte) error {
+		scanned = append(scanned, RawKVOperation{Op: op, Key: cloneBytesPreserveEmpty(key), Value: cloneBytesPreserveEmpty(value)})
+		return nil
+	}); err != nil {
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	decoded, err := DecodeRawKVBatchPayload(payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+	}
+	for name, ops := range map[string][]RawKVOperation{"scanned": scanned, "decoded": decoded} {
+		if len(ops) != 3 {
+			t.Fatalf("%s ops=%d want 3", name, len(ops))
+		}
+		if ops[1].Op != RawKVOpDeleteRange || ops[1].Key != nil || !bytes.Equal(ops[1].Value, []byte("c")) {
+			t.Fatalf("%s op[1]=%+v", name, ops[1])
+		}
+		if ops[2].Op != RawKVOpDeleteRange || !bytes.Equal(ops[2].Key, []byte("x")) || ops[2].Value != nil {
+			t.Fatalf("%s op[2]=%+v", name, ops[2])
+		}
+	}
+}
+
+func TestCommandWALRawKVBatchDeleteRangeRejectsEmptyReversed(t *testing.T) {
+	bad := []RawKVOperation{
+		{Op: RawKVOpDeleteRange, Key: []byte("b"), Value: []byte("b")},
+		{Op: RawKVOpDeleteRange, Key: []byte("z"), Value: []byte("a")},
+		{Op: RawKVOpDeleteRange, Key: nil, Value: []byte{}},
+	}
+	for _, op := range bad {
+		if _, err := EncodeRawKVBatchPayload([]RawKVOperation{op}); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("EncodeRawKVBatchPayload(%+v) err=%v want ErrCorrupt", op, err)
+		}
+	}
+}
+
+func TestCommandWALRawKVBatchDeleteRangeMalformedDecodeFailsClosed(t *testing.T) {
+	makePayload := func(startLen, endLen uint32, startBytes, endBytes []byte) []byte {
+		payload := make([]byte, rawKVBatchHeaderSize+rawKVOpHeaderSize+len(startBytes)+len(endBytes))
+		binary.LittleEndian.PutUint16(payload[0:2], rawKVBatchPayloadVersion)
+		binary.LittleEndian.PutUint32(payload[2:6], 1)
+		off := rawKVBatchHeaderSize
+		payload[off] = byte(RawKVOpDeleteRange)
+		binary.LittleEndian.PutUint32(payload[off+1:off+5], startLen)
+		binary.LittleEndian.PutUint32(payload[off+5:off+9], endLen)
+		off += rawKVOpHeaderSize
+		copy(payload[off:], startBytes)
+		off += len(startBytes)
+		copy(payload[off:], endBytes)
+		return payload
+	}
+
+	cases := map[string][]byte{
+		"nil-start-empty-end":  makePayload(rawKVNilRangeBoundLenUint32, 0, nil, nil),
+		"reversed-bounds":      makePayload(1, 1, []byte("z"), []byte("a")),
+		"sentinel-extra-bytes": makePayload(rawKVNilRangeBoundLenUint32, rawKVNilRangeBoundLenUint32, []byte("x"), nil),
+	}
+	for name, payload := range cases {
+		if err := ScanRawKVBatchPayload(payload, nil); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("%s ScanRawKVBatchPayload err=%v want ErrCorrupt", name, err)
+		}
+		if _, err := DecodeRawKVBatchPayload(payload); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("%s DecodeRawKVBatchPayload err=%v want ErrCorrupt", name, err)
+		}
 	}
 }

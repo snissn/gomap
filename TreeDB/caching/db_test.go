@@ -694,6 +694,17 @@ func (b *MockBatch) Delete(key []byte) error {
 	b.mb.mu.Unlock()
 	return nil
 }
+func (b *MockBatch) DeleteRange(start, end []byte) error {
+	b.mb.mu.Lock()
+	defer b.mb.mu.Unlock()
+	for k := range b.mb.data {
+		kb := []byte(k)
+		if batch.DeleteRangeContainsKey(batch.DeleteRange{Start: start, End: end}, kb) {
+			delete(b.mb.data, k)
+		}
+	}
+	return nil
+}
 func (b *MockBatch) SetOps(ops []batch.Entry) error {
 	if err := b.mb.getSetOpsErr(); err != nil {
 		return err
@@ -705,7 +716,13 @@ func (b *MockBatch) SetOps(ops []batch.Entry) error {
 		if b.mb.setOpsInlineValueLimit > 0 && op.Type == batch.OpPut && !op.IsPtr && len(op.Value) > b.mb.setOpsInlineValueLimit {
 			return batch.ErrValueTooLarge
 		}
-		if op.Type == batch.OpDelete {
+		if op.Type == batch.OpDeleteRange {
+			for k := range b.mb.data {
+				if batch.DeleteRangeContainsKey(batch.DeleteRange{Start: op.Key, End: op.Value}, []byte(k)) {
+					delete(b.mb.data, k)
+				}
+			}
+		} else if op.Type == batch.OpDelete {
 			delete(b.mb.data, string(op.Key))
 		} else {
 			valCopy := make([]byte, len(op.Value))

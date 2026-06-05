@@ -546,8 +546,10 @@ Typed-column part descriptor column type codes are currently:
 descriptors must use `raw_bytes_offsets`, `fixed_width_elements=0`, and
 uncompressed split offsets/value sections whose values bytes are exact opaque
 payload bytes rather than text. Primitive scalar descriptors must use their
-matching `raw_*` encoding, `fixed_width_elements=0`, and uncompressed fixed-width
-payload sections (`rows * width` bytes). Dense numeric vector descriptors added
+matching `raw_*` encoding and `fixed_width_elements=0`; their `column_data`
+sections may request Snappy or LZ4 compression while individual codec blocks
+record the actual kept compression, including raw keep-if-smaller fallback.
+Dense numeric vector descriptors added
 by #1930 must use their matching raw vector encoding (`raw_uint8_vector`,
 `raw_int8_vector`, `raw_uint16_vector`, `raw_int16_vector`,
 `raw_uint32_vector`, `raw_int32_vector`, `raw_uint64_vector`,
@@ -564,6 +566,11 @@ matching `bits_per_element` (`1`, `2`, or `4`), zero unused high padding bits in
 the final byte of each row, and uncompressed row-major payload sections
 (`rows * ceil(elements_per_row * bits_per_element / 8)` bytes). Readers must
 fail closed on unknown type codes rather than guessing a payload shape.
+Current typed-column image version 4 directory entries carry per-section
+`raw_bytes` metadata for compressed sections. Row-locator and dictionary
+sections may use Snappy or LZ4 when the raw length is within the decoder cap;
+readers validate the raw byte count before decompression and fail closed on
+unsupported section compression.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
@@ -937,16 +944,21 @@ u32 OpCount
 Op[OpCount]
 
 Op:
-u8  Op             // 1=set, 2=delete
-u32 KeyLen
-u32 ValueLen
-bytes Key[KeyLen]
-bytes Value[ValueLen]
+u8  Op             // 1=set, 2=delete, 3=set-by-value-log-RID, 4=delete-range
+u32 KeyLen          // for delete-range: StartLen, or 0xffffffff for nil/unbounded
+u32 ValueLen        // for delete-range: EndLen, or 0xffffffff for nil/unbounded
+bytes Key[KeyLen]   // omitted when delete-range StartLen is 0xffffffff
+bytes Value[ValueLen] // omitted when delete-range EndLen is 0xffffffff
 ```
 
 A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
-`ValueLen=0`.
+`ValueLen=0`. Delete-range operations use half-open `[start,end)` semantics;
+nil start/end bounds are unbounded and are encoded with the `0xffffffff` length
+sentinel. Malformed delete-range payloads (for example bounded `start >= end` or
+extra bytes after a nil-bound sentinel) fail closed as corrupt. Public APIs treat
+empty or reversed range deletes as no-ops and do not emit dangerous command-WAL
+mutations for them.
 
 Writers may use compact all-zero set payload variants when every operation is a
 set with the same non-empty zero-filled value length:

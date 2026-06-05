@@ -3196,9 +3196,18 @@ func columnStoreSectionCompressionAttribution(section collections.ColumnStoreTyp
 			compressionDurationSource = "row_locator_section_compression_nanos_not_persisted"
 			decompressionDurationSource = "row_locator_section_decompression_not_separated_from_part_image_decode"
 		}
+	} else if section.Category == "dictionaries" {
+		if requested != columnStoreCompressionNoneLabel && actual == columnStoreCompressionNoneLabel {
+			supportReason = "dictionary section compression was requested but keep-if-smaller admission stored the raw section"
+			compressionDurationSource = "dictionary_section_compression_nanos_not_persisted"
+		} else if actual != columnStoreCompressionNoneLabel {
+			supportReason = "dictionary section compressed under benchmark-relaxed typed compression opt-in"
+			compressionDurationSource = "dictionary_section_compression_nanos_not_persisted"
+			decompressionDurationSource = "dictionary_section_decompression_not_separated_from_part_image_decode"
+		}
 	} else if requested != columnStoreCompressionNoneLabel {
 		supportState = columnStoreCompressionSupportDeferred
-		supportReason = "dictionary/pruning section compression is deferred because current section metadata does not carry raw length for all requested codecs"
+		supportReason = "section compression is deferred for this section category"
 		compressionDurationSource = "deferred_section_compression_not_run"
 		decompressionDurationSource = "deferred_section_decompression_not_run"
 	}

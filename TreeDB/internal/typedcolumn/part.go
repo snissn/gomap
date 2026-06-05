@@ -880,18 +880,12 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.Encoding != EncodingRawFloat32 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported float32 encoding %s for %s", def.Encoding, def.Name)
 		}
-		if def.Compression != CompressionNone {
-			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32 column %s requires uncompressed raw sections", def.Name)
-		}
 	case ColumnTypeFloat64:
 		if def.Encoding == 0 {
 			def.Encoding = EncodingRawFloat64
 		}
 		if def.Encoding != EncodingRawFloat64 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported float64 encoding %s for %s", def.Encoding, def.Name)
-		}
-		if def.Compression != CompressionNone {
-			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float64 column %s requires uncompressed raw sections", def.Name)
 		}
 	case ColumnTypeInt8, ColumnTypeUint8, ColumnTypeInt16, ColumnTypeUint16, ColumnTypeInt32, ColumnTypeUint32, ColumnTypeUint64, ColumnTypeFloat16, ColumnTypeBFloat16:
 		want := rawScalarEncodingForColumnType(def.Type)
@@ -906,9 +900,6 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		}
 		if def.FixedWidthElements != 0 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: %s column %s requires fixed_width_elements=0", def.Type, def.Name)
-		}
-		if def.Compression != CompressionNone {
-			return ColumnDefinition{}, fmt.Errorf("typedcolumn: %s column %s requires uncompressed raw sections", def.Type, def.Name)
 		}
 	case ColumnTypeFloat32Vector:
 		if def.FixedWidthElements <= 0 {
