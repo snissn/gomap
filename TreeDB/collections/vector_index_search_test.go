@@ -1058,9 +1058,9 @@ func TestVectorIndexSearcherSearchWithBufferRouteStatsAndNoDocumentBoundary2311(
 	if packVectorViews == 0 || stats.VectorScratchDecodes != 0 || stats.TypedColumnFallbacks != 0 || stats.NormBytesRead != 0 || stats.NormScratchDecodes != 0 {
 		t.Fatalf("vector source stats=%+v want pack normalized-vector dot path without norm/scratch fallback", stats)
 	}
-	adjacencyTypedSourceViews := stats.AdjacencyPreparedCSRDirectViews + stats.AdjacencyPreparedCSRMmapDirectViews + stats.AdjacencyTypedListDirectViews + stats.AdjacencyTypedListMmapDirectViews + stats.AdjacencyTypedListHeapCopyTypedViews
-	if adjacencyTypedSourceViews == 0 || stats.AdjacencyScratchDecodes != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencySourceFallbacks != 0 {
-		t.Fatalf("adjacency source stats=%+v want typed-column adjacency source without legacy/scratch fallback", stats)
+	packAdjacencyViews := stats.AdjacencyDirectViews + stats.AdjacencyMmapDirectViews + stats.AdjacencyHeapCopyTypedViews + stats.AdjacencyPreparedCSRDirectViews + stats.AdjacencyPreparedCSRMmapDirectViews
+	if packAdjacencyViews == 0 || stats.AdjacencyScratchDecodes != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencySourceFallbacks != 0 {
+		t.Fatalf("adjacency source stats=%+v want pack CSR adjacency source without legacy/scratch fallback", stats)
 	}
 	if stats.ResultIDTypedBytesState == 0 || stats.RowRefStateResultRefs == 0 || stats.ResultIDGraphFallbacks != 0 {
 		t.Fatalf("identity stats=%+v want vector-index row-ref/document-id state without graph-row fallback", stats)
