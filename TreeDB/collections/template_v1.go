@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 	"sort"
@@ -32,6 +33,7 @@ const (
 	templateV1KindString
 	templateV1KindObject
 	templateV1KindArray
+	templateV1KindJSONNumber
 
 	templateV1MaxArrayElements uint64 = 1 << 20
 	templateV1ArrayPreallocCap        = 4096
@@ -960,8 +962,17 @@ func (e *TemplateV1Encoder) encodeStoredDocumentWithLearnedTemplates(root []byte
 }
 
 func EncodeTemplateV1DocumentJSON(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
 	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("collections: template-v1 JSON input: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = errors.New("trailing JSON value")
+		}
 		return nil, fmt.Errorf("collections: template-v1 JSON input: %w", err)
 	}
 	obj, ok := decoded.(map[string]any)
@@ -972,6 +983,18 @@ func EncodeTemplateV1DocumentJSON(raw []byte) ([]byte, error) {
 }
 
 func templateV1StoredDocumentJSON(raw []byte, resolver templateV1Resolver) ([]byte, error) {
+	obj, err := templateV1StoredDocumentObject(raw, resolver)
+	if err != nil {
+		return nil, err
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func templateV1StoredDocumentObject(raw []byte, resolver templateV1Resolver) (map[string]any, error) {
 	root, err := parseTemplateV1StoredDocument(raw)
 	if err != nil {
 		return nil, err
@@ -984,11 +1007,7 @@ func templateV1StoredDocumentJSON(raw []byte, resolver templateV1Resolver) ([]by
 	if pos != len(root.values) {
 		return nil, errors.New("collections: trailing template-v1 object values")
 	}
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+	return obj, nil
 }
 
 func decodeTemplateV1ObjectFields(id uint64, raw []byte, pos *int, resolver templateV1Resolver) (map[string]any, error) {
@@ -1030,6 +1049,8 @@ func decodeTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) (a
 		v := math.Float64frombits(binary.BigEndian.Uint64(raw[*pos:]))
 		*pos += 8
 		return v, nil
+	case templateV1KindJSONNumber:
+		return readTemplateV1JSONNumber(raw, pos)
 	case templateV1KindString:
 		n, err := readTemplateV1Uvarint(raw, pos)
 		if err != nil {
@@ -1217,6 +1238,11 @@ func (s *templateV1BuildState) appendKnownIDValue(dst []byte, raw []byte, pos *i
 		}
 		*pos += 8
 		return append(dst, raw[start:*pos]...), nil
+	case templateV1KindJSONNumber:
+		if _, err := readTemplateV1JSONNumber(raw, pos); err != nil {
+			return nil, err
+		}
+		return append(dst, raw[start:*pos]...), nil
 	case templateV1KindString:
 		n, err := readTemplateV1Uvarint(raw, pos)
 		if err != nil {
@@ -1375,6 +1401,58 @@ func (s *templateV1BuildState) appendObjectValue(dst []byte, obj map[string]any)
 	return dst, nil
 }
 
+func appendTemplateV1JSONNumber(dst []byte, n json.Number) ([]byte, error) {
+	if err := validateTemplateV1JSONNumber(n); err != nil {
+		return nil, err
+	}
+	literal := n.String()
+	dst = append(dst, templateV1KindJSONNumber)
+	dst = appendTemplateV1Uvarint(dst, uint64(len(literal)))
+	return append(dst, literal...), nil
+}
+
+func validateTemplateV1JSONNumber(n json.Number) error {
+	if n.String() == "" {
+		return errors.New("collections: empty template-v1 JSON number")
+	}
+	if _, err := json.Marshal(n); err != nil {
+		return fmt.Errorf("collections: invalid template-v1 JSON number %q: %w", n.String(), err)
+	}
+	return nil
+}
+
+func readTemplateV1JSONNumber(raw []byte, pos *int) (json.Number, error) {
+	n, err := readTemplateV1Uvarint(raw, pos)
+	if err != nil {
+		return "", err
+	}
+	if n > uint64(len(raw)-*pos) {
+		return "", errors.New("collections: malformed template-v1 JSON number")
+	}
+	valueEnd := *pos + int(n)
+	value := json.Number(string(raw[*pos:valueEnd]))
+	*pos = valueEnd
+	if err := validateTemplateV1JSONNumber(value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func templateV1JSONNumberString(raw []byte) (string, bool, error) {
+	if len(raw) == 0 || raw[0] != templateV1KindJSONNumber {
+		return "", false, nil
+	}
+	pos := 1
+	n, err := readTemplateV1JSONNumber(raw, &pos)
+	if err != nil {
+		return "", true, err
+	}
+	if pos != len(raw) {
+		return "", true, errors.New("collections: trailing template-v1 JSON number bytes")
+	}
+	return n.String(), true, nil
+}
+
 func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error) {
 	switch v := value.(type) {
 	case nil:
@@ -1394,17 +1472,13 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 		binary.BigEndian.PutUint64(scratch[:], math.Float64bits(v))
 		return append(dst, scratch[:]...), nil
 	case int:
-		return s.appendValue(dst, float64(v))
+		return appendTemplateV1JSONNumber(dst, json.Number(strconv.FormatInt(int64(v), 10)))
 	case int64:
-		return s.appendValue(dst, float64(v))
+		return appendTemplateV1JSONNumber(dst, json.Number(strconv.FormatInt(v, 10)))
 	case uint64:
-		return s.appendValue(dst, float64(v))
+		return appendTemplateV1JSONNumber(dst, json.Number(strconv.FormatUint(v, 10)))
 	case json.Number:
-		f, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return nil, err
-		}
-		return s.appendValue(dst, f)
+		return appendTemplateV1JSONNumber(dst, v)
 	case []any:
 		dst = append(dst, templateV1KindArray)
 		dst = appendTemplateV1Uvarint(dst, uint64(len(v)))
@@ -1620,6 +1694,11 @@ func templateV1ValueNeedsHashConversion(raw []byte, pos *int) (bool, error) {
 		}
 		*pos += 8
 		return false, nil
+	case templateV1KindJSONNumber:
+		if _, err := readTemplateV1JSONNumber(raw, pos); err != nil {
+			return false, err
+		}
+		return false, nil
 	case templateV1KindString:
 		n, err := readTemplateV1Uvarint(raw, pos)
 		if err != nil {
@@ -1667,6 +1746,11 @@ func appendTemplateV1ConvertedValue(dst []byte, raw []byte, pos *int, resolver t
 			return nil, learned, errors.New("collections: malformed template-v1 number")
 		}
 		*pos += 8
+		return append(dst, raw[start:*pos]...), learned, nil
+	case templateV1KindJSONNumber:
+		if _, err := readTemplateV1JSONNumber(raw, pos); err != nil {
+			return nil, learned, err
+		}
 		return append(dst, raw[start:*pos]...), learned, nil
 	case templateV1KindString:
 		n, err := readTemplateV1Uvarint(raw, pos)
@@ -1819,6 +1903,11 @@ func appendTemplateV1RootFieldIndexValues(state orderedDocumentIndexState, field
 			return errors.New("collections: malformed template-v1 number")
 		}
 		*pos += 8
+		return appendTemplateV1RawIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, raw[valueStart:*pos], opts, encoder)
+	case templateV1KindJSONNumber:
+		if _, err := readTemplateV1JSONNumber(raw, pos); err != nil {
+			return err
+		}
 		return appendTemplateV1RawIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, raw[valueStart:*pos], opts, encoder)
 	case templateV1KindString:
 		n, err := readTemplateV1Uvarint(raw, pos)
@@ -2097,25 +2186,49 @@ func appendTemplateV1IndexScalar(dst []byte, valueType IndexValueType, raw []byt
 			return dst, nil, fmt.Errorf("collections: indexed template-v1 value for type %q must be bool, got kind %d", valueType, raw[0])
 		}
 	case IndexValueInt64:
-		if raw[0] != templateV1KindFloat64 {
+		switch raw[0] {
+		case templateV1KindFloat64:
+			if len(raw) != 1+8 {
+				return dst, nil, errors.New("collections: malformed template-v1 number")
+			}
+			i, err := exactFloat64AsInt64(math.Float64frombits(binary.BigEndian.Uint64(raw[1:])))
+			if err != nil {
+				return dst, nil, err
+			}
+			dst = appendIndexInt64Component(dst, i)
+		case templateV1KindJSONNumber:
+			literal, ok, err := templateV1JSONNumberString(raw)
+			if err != nil || !ok {
+				return dst, nil, err
+			}
+			i, err := parseJSONInt64IndexValue(literal)
+			if err != nil {
+				return dst, nil, err
+			}
+			dst = appendIndexInt64Component(dst, i)
+		default:
 			return dst, nil, fmt.Errorf("collections: indexed template-v1 value for type %q must be number, got kind %d", valueType, raw[0])
 		}
-		if len(raw) != 1+8 {
-			return dst, nil, errors.New("collections: malformed template-v1 number")
-		}
-		i, err := exactFloat64AsInt64(math.Float64frombits(binary.BigEndian.Uint64(raw[1:])))
-		if err != nil {
-			return dst, nil, err
-		}
-		dst = appendIndexInt64Component(dst, i)
 	case IndexValueDouble:
-		if raw[0] != templateV1KindFloat64 {
+		switch raw[0] {
+		case templateV1KindFloat64:
+			if len(raw) != 1+8 {
+				return dst, nil, errors.New("collections: malformed template-v1 number")
+			}
+			dst = appendIndexDoubleComponent(dst, math.Float64frombits(binary.BigEndian.Uint64(raw[1:])))
+		case templateV1KindJSONNumber:
+			literal, ok, err := templateV1JSONNumberString(raw)
+			if err != nil || !ok {
+				return dst, nil, err
+			}
+			d, err := parseJSONDoubleIndexValue(literal)
+			if err != nil {
+				return dst, nil, err
+			}
+			dst = appendIndexDoubleComponent(dst, d)
+		default:
 			return dst, nil, fmt.Errorf("collections: indexed template-v1 value for type %q must be number, got kind %d", valueType, raw[0])
 		}
-		if len(raw) != 1+8 {
-			return dst, nil, errors.New("collections: malformed template-v1 number")
-		}
-		dst = appendIndexDoubleComponent(dst, math.Float64frombits(binary.BigEndian.Uint64(raw[1:])))
 	default:
 		return dst, nil, fmt.Errorf("collections: unsupported index value type %q", valueType)
 	}
@@ -2137,6 +2250,9 @@ func skipTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) erro
 		}
 		*pos += 8
 		return nil
+	case templateV1KindJSONNumber:
+		_, err := readTemplateV1JSONNumber(raw, pos)
+		return err
 	case templateV1KindString:
 		n, err := readTemplateV1Uvarint(raw, pos)
 		if err != nil {

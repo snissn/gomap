@@ -924,6 +924,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
 	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
+	retainedTemplateResolver := columnRetainedPayloadTemplateResolver(v.snapshot, v.catalog)
 	var rowScratch columnPhysicalRowReaderScratch
 	var documentArena []byte
 	for i := range out.Results {
@@ -968,7 +969,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 			return out, err
 		}
 		var document []byte
-		documentArena, document, err = reconstructColumnDocumentFromVisibleRowValuesProjectedInto(documentArena, cfg, retained[i], row, fullValues, projection, &out.Stats)
+		documentArena, document, err = reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(documentArena, cfg, retained[i], row, fullValues, projection, &out.Stats, retainedTemplateResolver)
 		if err != nil {
 			return out, err
 		}
@@ -1028,6 +1029,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
 	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
+	retainedTemplateResolver := columnRetainedPayloadTemplateResolver(v.snapshot, v.catalog)
 	var documentArena []byte
 	for i := range out.Results {
 		if !out.Results[i].Found {
@@ -1072,7 +1074,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 			return out, err
 		}
 		var document []byte
-		documentArena, document, err = reconstructColumnDocumentFromVisibleRowValuesProjectedInto(documentArena, cfg, retained[i], row, fullValues, projection, &out.Stats)
+		documentArena, document, err = reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(documentArena, cfg, retained[i], row, fullValues, projection, &out.Stats, retainedTemplateResolver)
 		if err != nil {
 			return out, err
 		}

@@ -753,11 +753,12 @@ func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha","nested":{"keep":true}}`))
 
 	raw := readRawPrimaryDocumentForTestM13C(t, reopen, "events", []byte("e1"))
-	if strings.Contains(string(raw), "time_us") || strings.Contains(string(raw), "kind") || strings.Contains(string(raw), "did") {
-		t.Fatalf("raw retained payload still duplicates declared fields: %s", raw)
+	retainedJSON := readRawRetainedPayloadJSONForTestM13C(t, reopen, "events", raw)
+	if strings.Contains(string(retainedJSON), "time_us") || strings.Contains(string(retainedJSON), "kind") || strings.Contains(string(retainedJSON), "did") {
+		t.Fatalf("raw retained payload still duplicates declared fields: %s", retainedJSON)
 	}
-	if !strings.Contains(string(raw), "payload") {
-		t.Fatalf("raw retained payload lost non-column field: %s", raw)
+	if !strings.Contains(string(retainedJSON), "payload") {
+		t.Fatalf("raw retained payload lost non-column field: %s", retainedJSON)
 	}
 }
 
@@ -1025,11 +1026,44 @@ func TestColumnStoreReconstructionPreservesMissingNullableColumnsM13C(t *testing
 	}
 }
 
-func TestColumnStoreReconstructionFailsClosedOnScalarAncestorM13C(t *testing.T) {
+func TestColumnStoreReconstructionPreservesRetainedJSONNumberLiteralM13C(t *testing.T) {
 	cfg := ColumnStoreConfig{
 		Enabled:         true,
 		RetainedPayload: ColumnRetainedPayloadNonColumn,
 		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+		Columns: []ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString},
+			{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+		},
+	}
+	doc := []byte(`{"time_us":9223372036854775807,"kind":"like","did":"d1","payload_id":9223372036854775806}`)
+	retained, err := columnRetainedPayloadFromJSONDocument(cfg, doc)
+	if err != nil {
+		t.Fatalf("columnRetainedPayloadFromJSONDocument: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(cfg, []columnWriteDocument{{
+		ID:       []byte("e1"),
+		Document: doc,
+	}})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	got, err := reconstructColumnJSONDocument(cfg, retained, rows[0].Values)
+	if err != nil {
+		t.Fatalf("reconstructColumnJSONDocument: %v", err)
+	}
+	if strings.Contains(string(got), "9.223") || !strings.Contains(string(got), `"payload_id":9223372036854775806`) {
+		t.Fatalf("reconstructed JSON number fidelity lost: %s", got)
+	}
+}
+
+func TestColumnStoreReconstructionFailsClosedOnScalarAncestorM13C(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled:                 true,
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
 		Columns: []ColumnStoreColumn{
 			{Name: "nested", Path: "a.b", ValueType: ColumnStoreValueString, Nullable: true},
 		},
@@ -1095,8 +1129,9 @@ func TestColumnStoreScanDocumentsReconstructsRetainedPayloadM13C(t *testing.T) {
 	assertJSONEqualM13C(t, records[0].Document, []byte(`{"time_us":3,"kind":"share","did":"d1","payload":"alpha2"}`))
 
 	raw := readRawPrimaryDocumentForTestM13C(t, reopen, "events", []byte("e1"))
-	if strings.Contains(string(raw), "time_us") || strings.Contains(string(raw), "kind") || strings.Contains(string(raw), "did") {
-		t.Fatalf("raw retained payload still duplicates declared fields: %s", raw)
+	retainedJSON := readRawRetainedPayloadJSONForTestM13C(t, reopen, "events", raw)
+	if strings.Contains(string(retainedJSON), "time_us") || strings.Contains(string(retainedJSON), "kind") || strings.Contains(string(retainedJSON), "did") {
+		t.Fatalf("raw retained payload still duplicates declared fields: %s", retainedJSON)
 	}
 }
 
@@ -1469,11 +1504,12 @@ func TestColumnStoreRandomizedMutationOracleM13C(t *testing.T) {
 		}
 		assertJSONEqualM13C(t, got, doc.JSON())
 		raw := readRawPrimaryDocumentForTestM13C(t, reopen, "events", []byte(id))
-		if strings.Contains(string(raw), "time_us") || strings.Contains(string(raw), "kind") || strings.Contains(string(raw), "did") {
-			t.Fatalf("raw retained payload for %s duplicates declared fields: %s", id, raw)
+		retainedJSON := readRawRetainedPayloadJSONForTestM13C(t, reopen, "events", raw)
+		if strings.Contains(string(retainedJSON), "time_us") || strings.Contains(string(retainedJSON), "kind") || strings.Contains(string(retainedJSON), "did") {
+			t.Fatalf("raw retained payload for %s duplicates declared fields: %s", id, retainedJSON)
 		}
-		if !strings.Contains(string(raw), "payload") {
-			t.Fatalf("raw retained payload for %s lost retained field: %s", id, raw)
+		if !strings.Contains(string(retainedJSON), "payload") {
+			t.Fatalf("raw retained payload for %s lost retained field: %s", id, retainedJSON)
 		}
 	}
 	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
@@ -1524,8 +1560,9 @@ func TestColumnStoreReplayReconstructsRetainedPayloadM13C(t *testing.T) {
 	}
 	assertJSONEqualM13C(t, got, []byte(`{"time_us":2,"kind":"share","did":"d1","payload":"beta"}`))
 	raw := readRawPrimaryDocumentForTestM13C(t, reopen, "events", []byte("e1"))
-	if strings.Contains(string(raw), "time_us") || strings.Contains(string(raw), "kind") || strings.Contains(string(raw), "did") || !strings.Contains(string(raw), "payload") {
-		t.Fatalf("replayed raw retained payload=%s, want retained-only payload", raw)
+	retainedJSON := readRawRetainedPayloadJSONForTestM13C(t, reopen, "events", raw)
+	if strings.Contains(string(retainedJSON), "time_us") || strings.Contains(string(retainedJSON), "kind") || strings.Contains(string(retainedJSON), "did") || !strings.Contains(string(retainedJSON), "payload") {
+		t.Fatalf("replayed raw retained payload=%s, want retained-only payload", retainedJSON)
 	}
 	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
 	if err != nil {
@@ -1887,6 +1924,32 @@ func readRawPrimaryDocumentForTestM13C(t *testing.T, d *backenddb.DB, collection
 		t.Fatalf("raw primary document %q not found", string(id))
 	}
 	return raw
+}
+
+func readRawRetainedPayloadJSONForTestM13C(t *testing.T, d *backenddb.DB, collection string, raw []byte) []byte {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collection)
+	if err != nil {
+		t.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("collection %q not found", collection)
+	}
+	cfg := catalog.meta.Options.ColumnStore.copy()
+	obj, err := decodeColumnRetainedPayloadObject(cfg, raw, columnRetainedPayloadTemplateResolver(snap, catalog))
+	if err != nil {
+		t.Fatalf("decode raw retained payload: %v raw=%q", err, raw)
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatalf("marshal raw retained payload: %v", err)
+	}
+	return out
 }
 
 type columnStoreOracleDocM13C struct {

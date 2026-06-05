@@ -39,7 +39,7 @@ type columnDocumentReconstructionDiagnostics struct {
 	ReconstructionNanos  int64
 }
 
-func columnRetainedPayloadFromJSONDocument(cfg ColumnStoreConfig, document []byte) ([]byte, error) {
+func columnRetainedPayloadJSONFromJSONDocument(cfg ColumnStoreConfig, document []byte) ([]byte, error) {
 	switch cfg.RetainedPayload {
 	case ColumnRetainedPayloadFull:
 		return bytes.Clone(document), nil
@@ -60,6 +60,72 @@ func columnRetainedPayloadFromJSONDocument(cfg ColumnStoreConfig, document []byt
 		return out, nil
 	default:
 		return nil, fmt.Errorf("collections: unsupported retained payload policy %q", cfg.RetainedPayload)
+	}
+}
+
+func columnRetainedPayloadFromJSONDocument(cfg ColumnStoreConfig, document []byte) ([]byte, error) {
+	retained, err := columnRetainedPayloadJSONFromJSONDocument(cfg, document)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingTemplateV1 {
+		encoded, err := EncodeTemplateV1DocumentJSON(retained)
+		if err != nil {
+			return nil, fmt.Errorf("collections: encode template-v1 retained payload: %w", err)
+		}
+		return encoded, nil
+	}
+	return retained, nil
+}
+
+type columnRetainedPayloadStorageDocuments struct {
+	documents       [][]byte
+	templateRecords []templateV1Record
+}
+
+func prepareColumnRetainedPayloadStorageDocuments(cfg ColumnStoreConfig, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {
+	out := columnRetainedPayloadStorageDocuments{documents: make([][]byte, len(documents))}
+	if len(documents) == 0 {
+		return out, nil
+	}
+	retainedJSON := make([][]byte, len(documents))
+	for i, document := range documents {
+		retained, err := columnRetainedPayloadJSONFromJSONDocument(cfg, document)
+		if err != nil {
+			return columnRetainedPayloadStorageDocuments{}, err
+		}
+		retainedJSON[i] = retained
+	}
+	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingTemplateV1 {
+		encoded := make([][]byte, len(retainedJSON))
+		for i, retained := range retainedJSON {
+			next, err := EncodeTemplateV1DocumentJSON(retained)
+			if err != nil {
+				return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: encode template-v1 retained payload: %w", err)
+			}
+			encoded[i] = next
+		}
+		prepared, records, _, _, err := prepareTemplateV1InsertDocuments(encoded, fallback, false, false)
+		if err != nil {
+			return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: prepare template-v1 retained payload: %w", err)
+		}
+		out.documents = prepared
+		out.templateRecords = records
+		return out, nil
+	}
+	out.documents = retainedJSON
+	return out, nil
+}
+
+func columnRetainedPayloadTemplateResolver(snap *backenddb.Snapshot, catalog *collectionCatalog) templateV1Resolver {
+	if snap == nil || catalog == nil || !columnStoreRetainedPayloadUsesTemplateV1(catalog.meta.Options.ColumnStore) {
+		return nil
+	}
+	return &templateV1SnapshotResolver{
+		snap:   snap,
+		rootID: catalog.rootID(collectionTemplateRootName(catalog.meta.Name)),
+		byID:   make(map[uint64]*templateV1Template),
+		byHash: make(map[[32]byte]*templateV1Template),
 	}
 }
 
@@ -118,7 +184,7 @@ func (c *Collection) reconstructColumnDocumentAtSnapshotWithDiagnostics(snap *ba
 	if err != nil {
 		return nil, diag, err
 	}
-	out, err := reconstructColumnDocumentFromVisibleRowValues(cfg, retained, row, fullValues)
+	_, out, err := reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(nil, cfg, retained, row, fullValues, nil, nil, columnRetainedPayloadTemplateResolver(snap, catalog))
 	if err != nil {
 		return nil, diag, err
 	}
@@ -148,11 +214,15 @@ func reconstructColumnDocumentFromVisibleRowValuesProjected(cfg ColumnStoreConfi
 }
 
 func reconstructColumnDocumentFromVisibleRowValuesProjectedInto(arena []byte, cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, []byte, error) {
+	return reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(arena, cfg, retained, row, values, projection, stats, nil)
+}
+
+func reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(arena []byte, cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats, resolver templateV1Resolver) ([]byte, []byte, error) {
 	start := len(arena)
 	if row.Deleted {
 		return arena[:start], nil, errors.New("collections: column reconstruction latest physical row is deleted")
 	}
-	arena, doc, err := reconstructColumnJSONDocumentProjectedInto(arena, cfg, retained, values, projection, stats)
+	arena, doc, err := reconstructColumnJSONDocumentProjectedIntoWithResolver(arena, cfg, retained, values, projection, stats, resolver)
 	if err != nil {
 		return arena[:start], nil, err
 	}
@@ -212,6 +282,42 @@ func mergeColumnReconstructionValuesProjectedInto(cfg ColumnStoreConfig, rowValu
 	return values, nil
 }
 
+func decodeColumnRetainedPayloadObject(cfg ColumnStoreConfig, retained []byte, resolver templateV1Resolver) (map[string]any, error) {
+	trimmed := bytes.TrimSpace(retained)
+	if len(trimmed) == 0 {
+		return make(map[string]any), nil
+	}
+	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingTemplateV1 {
+		obj, err := decodeTemplateV1RetainedPayloadObject(trimmed, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("collections: decode template-v1 retained payload: %w", err)
+		}
+		return obj, nil
+	}
+	return decodeColumnJSONObject(trimmed)
+}
+
+func decodeTemplateV1RetainedPayloadObject(retained []byte, resolver templateV1Resolver) (map[string]any, error) {
+	switch {
+	case hasTemplateV1Magic(retained, templateV1StoredMagic):
+		if resolver == nil {
+			return nil, errTemplateV1MissingResolver
+		}
+		return templateV1StoredDocumentObject(retained, resolver)
+	case hasTemplateV1Magic(retained, templateV1InputMagic), hasTemplateV1Magic(retained, templateV1InsertDocumentMagic):
+		prepared, _, _, preparedResolver, err := prepareTemplateV1InsertDocuments([][]byte{retained}, resolver, false, false)
+		if err != nil {
+			return nil, err
+		}
+		if len(prepared) != 1 {
+			return nil, errors.New("collections: template-v1 retained payload prepared unexpected document count")
+		}
+		return templateV1StoredDocumentObject(prepared[0], preparedResolver)
+	default:
+		return nil, errors.New("collections: retained payload is not template-v1 encoded")
+	}
+}
+
 func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue) ([]byte, error) {
 	return reconstructColumnJSONDocumentProjected(cfg, retained, values, nil, nil)
 }
@@ -222,17 +328,15 @@ func reconstructColumnJSONDocumentProjected(cfg ColumnStoreConfig, retained []by
 }
 
 func reconstructColumnJSONDocumentProjectedInto(arena []byte, cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, []byte, error) {
+	return reconstructColumnJSONDocumentProjectedIntoWithResolver(arena, cfg, retained, values, projection, stats, nil)
+}
+
+func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats, resolver templateV1Resolver) ([]byte, []byte, error) {
 	start := len(arena)
 	projectionActive := projection.active()
-	var obj map[string]any
-	var err error
-	if len(bytes.TrimSpace(retained)) == 0 {
-		obj = make(map[string]any)
-	} else {
-		obj, err = decodeColumnJSONObject(retained)
-		if err != nil {
-			return arena[:start], nil, err
-		}
+	obj, err := decodeColumnRetainedPayloadObject(cfg, retained, resolver)
+	if err != nil {
+		return arena[:start], nil, err
 	}
 	if len(values) != len(cfg.Columns) {
 		return arena[:start], nil, fmt.Errorf("collections: column reconstruction values=%d columns=%d", len(values), len(cfg.Columns))

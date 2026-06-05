@@ -123,10 +123,24 @@ const (
 
 type ColumnRetainedPayloadPolicy string
 
+type ColumnRetainedPayloadEncoding string
+
 const (
 	ColumnRetainedPayloadNonColumn ColumnRetainedPayloadPolicy = "non-column"
 	ColumnRetainedPayloadFull      ColumnRetainedPayloadPolicy = "full"
 	ColumnRetainedPayloadNone      ColumnRetainedPayloadPolicy = "none"
+
+	// ColumnRetainedPayloadEncodingJSON records retained payload bodies stored as
+	// JSON objects after applying the retained-payload policy.
+	ColumnRetainedPayloadEncodingJSON = "json"
+	// ColumnRetainedPayloadEncodingTemplateV1 records retained payload bodies
+	// stored as Template-v1 documents with templates in the collection template root.
+	ColumnRetainedPayloadEncodingTemplateV1 = "template-v1"
+	// ColumnRetainedPayloadEncodingNone records that no retained body is active.
+	ColumnRetainedPayloadEncodingNone = "none"
+	// ColumnRetainedPayloadEncodingUnavailable is a reporting sentinel for
+	// unsupported or unrecognized retained-payload encoding metadata.
+	ColumnRetainedPayloadEncodingUnavailable = "unavailable"
 )
 
 type ColumnReconstructionPolicy string
@@ -209,6 +223,7 @@ type ColumnStoreConfig struct {
 	SortKey                                []ColumnSortKey                   `json:"sort_key,omitempty"`
 	AggregateMetadata                      []ColumnAggregateMetadata         `json:"aggregate_metadata,omitempty"`
 	RetainedPayload                        ColumnRetainedPayloadPolicy       `json:"retained_payload,omitempty"`
+	RetainedPayloadEncoding                ColumnRetainedPayloadEncoding     `json:"retained_payload_encoding,omitempty"`
 	Reconstruction                         ColumnReconstructionPolicy        `json:"reconstruction,omitempty"`
 	AssetManager                           *ColumnAssetManagerConfig         `json:"asset_manager,omitempty"`
 	ManifestRoot                           *ColumnManifestRootDescriptor     `json:"manifest_root,omitempty"`
@@ -448,6 +463,9 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 	if out.RetainedPayload == "" {
 		out.RetainedPayload = ColumnRetainedPayloadNonColumn
 	}
+	if out.RetainedPayloadEncoding == "" {
+		out.RetainedPayloadEncoding = defaultColumnRetainedPayloadEncoding(out.RetainedPayload)
+	}
 	if out.Reconstruction == "" {
 		out.Reconstruction = ColumnReconstructionRetainedPayloadAndColumns
 	}
@@ -518,6 +536,57 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 	}
 	out.SchemaHash = hashColumnStoreSchema(&out)
 	return &out, nil
+}
+
+func defaultColumnRetainedPayloadEncoding(policy ColumnRetainedPayloadPolicy) ColumnRetainedPayloadEncoding {
+	switch policy {
+	case ColumnRetainedPayloadNone:
+		return ColumnRetainedPayloadEncodingNone
+	case ColumnRetainedPayloadFull:
+		return ColumnRetainedPayloadEncodingJSON
+	case ColumnRetainedPayloadNonColumn:
+		return ColumnRetainedPayloadEncodingTemplateV1
+	default:
+		return ColumnRetainedPayloadEncodingUnavailable
+	}
+}
+
+func validateColumnRetainedPayloadEncoding(policy ColumnRetainedPayloadPolicy, encoding ColumnRetainedPayloadEncoding) error {
+	switch policy {
+	case ColumnRetainedPayloadNone:
+		if encoding == ColumnRetainedPayloadEncodingNone {
+			return nil
+		}
+		return fmt.Errorf("collections: retained payload policy %q requires encoding %q, got %q", policy, ColumnRetainedPayloadEncodingNone, encoding)
+	case ColumnRetainedPayloadFull:
+		if encoding == ColumnRetainedPayloadEncodingJSON {
+			return nil
+		}
+		return fmt.Errorf("collections: retained payload policy %q requires encoding %q, got %q", policy, ColumnRetainedPayloadEncodingJSON, encoding)
+	case ColumnRetainedPayloadNonColumn:
+		switch encoding {
+		case ColumnRetainedPayloadEncodingJSON, ColumnRetainedPayloadEncodingTemplateV1:
+			return nil
+		default:
+			return fmt.Errorf("collections: retained payload policy %q does not support encoding %q", policy, encoding)
+		}
+	default:
+		return fmt.Errorf("collections: unsupported retained payload policy %q", policy)
+	}
+}
+
+func columnRetainedPayloadEffectiveEncoding(cfg *ColumnStoreConfig) ColumnRetainedPayloadEncoding {
+	if cfg == nil {
+		return ColumnRetainedPayloadEncodingNone
+	}
+	if cfg.RetainedPayloadEncoding != "" {
+		return cfg.RetainedPayloadEncoding
+	}
+	return defaultColumnRetainedPayloadEncoding(cfg.RetainedPayload)
+}
+
+func columnStoreRetainedPayloadUsesTemplateV1(cfg *ColumnStoreConfig) bool {
+	return cfg != nil && cfg.Enabled && cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingTemplateV1
 }
 
 func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
@@ -786,6 +855,9 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 	case ColumnRetainedPayloadNonColumn, ColumnRetainedPayloadFull, ColumnRetainedPayloadNone:
 	default:
 		return fmt.Errorf("collections: unsupported retained payload policy %q", cfg.RetainedPayload)
+	}
+	if err := validateColumnRetainedPayloadEncoding(cfg.RetainedPayload, cfg.RetainedPayloadEncoding); err != nil {
+		return err
 	}
 	switch cfg.Reconstruction {
 	case ColumnReconstructionRetainedPayloadAndColumns:
@@ -1155,6 +1227,7 @@ func columnStoreConfigEmpty(cfg ColumnStoreConfig) bool {
 		len(cfg.SortKey) == 0 &&
 		len(cfg.AggregateMetadata) == 0 &&
 		cfg.RetainedPayload == "" &&
+		cfg.RetainedPayloadEncoding == "" &&
 		cfg.Reconstruction == "" &&
 		cfg.AssetManager == nil &&
 		cfg.ManifestRoot == nil &&
@@ -1238,6 +1311,7 @@ func columnStoreConfigEqual(a, b *ColumnStoreConfig) bool {
 	}
 	if a.Enabled != b.Enabled ||
 		a.RetainedPayload != b.RetainedPayload ||
+		a.RetainedPayloadEncoding != b.RetainedPayloadEncoding ||
 		a.Reconstruction != b.Reconstruction ||
 		a.ControlRootStoragePolicy != b.ControlRootStoragePolicy ||
 		a.RecoveryAuthoritativeAppliedCommandLSN != b.RecoveryAuthoritativeAppliedCommandLSN ||
@@ -1308,6 +1382,7 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 	}
 	var d xxhash.Digest
 	writeHashString(&d, string(cfg.RetainedPayload))
+	writeHashString(&d, string(cfg.RetainedPayloadEncoding))
 	writeHashString(&d, string(cfg.Reconstruction))
 	writeHashString(&d, string(cfg.ControlRootStoragePolicy))
 	writeHashString(&d, string(cfg.TypedColumnCompression))
