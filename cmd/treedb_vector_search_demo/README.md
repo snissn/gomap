@@ -98,8 +98,10 @@ under `DIR/<matrix_case>/` (for example
 `DIR/leaf_vlog_after_compact/search_exact_c8_cpu.pprof`) so case artifacts are
 not overwritten. CPU profiles are scoped to the measured search loop; the
 runtime snapshots are supporting diagnostics and can include process state
-outside the search loop. Profiling changes timings and should be used for
-bottleneck analysis, not as the comparison number to publish.
+outside the search loop. Heap and allocation profiles use the Go runtime's
+current sampling rate; the demo does not change `runtime.MemProfileRate` for a
+profile run. Profiling changes timings and should be used for bottleneck
+analysis, not as the comparison number to publish.
 
 When `-dataset-dir` is used, `-queries` may truncate the exported query vector
 file but cannot exceed the manifest query count. `-validate-queries` is a recall

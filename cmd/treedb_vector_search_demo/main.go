@@ -774,10 +774,6 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return result{}, err
 	}
-	restoreMemProfileRate := configureSearchMemoryProfileRate(cfg)
-	if restoreMemProfileRate != nil {
-		defer restoreMemProfileRate()
-	}
 	work, err := loadWorkload(&cfg)
 	if err != nil {
 		return result{}, err
@@ -2254,17 +2250,6 @@ func startColumnGraphSearchProfile(cfg config, concurrency int) (func() error, e
 		restoreRuntimeSearchProfileSettings(oldMutexProfileFraction)
 		return errors.Join(errs...)
 	}, nil
-}
-
-func configureSearchMemoryProfileRate(cfg config) func() {
-	if cfg.searchProfileDir == "" || cfg.vectorIndexStrategy != collections.VectorIndexStrategyColumnGraph {
-		return nil
-	}
-	oldMemProfileRate := runtime.MemProfileRate
-	runtime.MemProfileRate = 1
-	return func() {
-		runtime.MemProfileRate = oldMemProfileRate
-	}
 }
 
 func restoreRuntimeSearchProfileSettings(mutexProfileFraction int) {
