@@ -202,7 +202,7 @@ func (s *Server) maxFindBatchBytes() int {
 }
 
 func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
-	idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.Meta(), plan, s.maxFindScanDocuments())
+	idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.MetaView(), plan, s.maxFindScanDocuments())
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -246,7 +246,7 @@ func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, m
 }
 
 func (s *Server) findCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, error) {
-	meta := col.Meta()
+	meta := col.MetaView()
 	maxDocuments := s.maxFindScanDocuments()
 	var primaryDocs []wire.Document
 	primarySet := false
@@ -292,7 +292,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 }
 
 func (s *Server) findUnsortedScanDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
-	if plan.sort.field != "" || findPlanHasDirectCandidate(col.Meta(), plan.predicates) {
+	if plan.sort.field != "" || findPlanHasDirectCandidate(col.MetaView(), plan.predicates) {
 		return nil, false, nil
 	}
 	maxDocuments := s.maxFindScanDocuments()
@@ -388,7 +388,7 @@ func storedDocumentMatchesPredicatesForCollection(col *collections.Collection, s
 	if col == nil {
 		return storedDocumentMatchesPredicates(stored, predicates)
 	}
-	switch col.Meta().Options.DocumentFormat {
+	switch col.MetaView().Options.DocumentFormat {
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
 		return storedDocumentMatchesPredicates(stored, predicates)
 	case collections.DocumentFormatBSON:

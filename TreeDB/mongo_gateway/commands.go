@@ -68,7 +68,7 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 	format := s.DefaultCollectionOptions.DocumentFormat
 	if existing, err := s.Collections.OpenCollection(name); err == nil {
 		col = existing
-		format = existing.Meta().Options.DocumentFormat
+		format = existing.MetaView().Options.DocumentFormat
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -81,7 +81,7 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-		if actualFormat := col.Meta().Options.DocumentFormat; actualFormat != format {
+		if actualFormat := col.MetaView().Options.DocumentFormat; actualFormat != format {
 			ids, stored, err = prepareInsertDocuments(documents, actualFormat)
 			if err != nil {
 				return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -667,7 +667,7 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 		return findResponsePayload{document: doc}, err
 	}
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollectionCached(name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
 		doc, err := marshalCursorResponse(db, collection, bson.A{})
 		return findResponsePayload{document: doc}, err
@@ -695,7 +695,7 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		return payload, nil
 	}
 	if !plan.projection.present {
-		idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.Meta(), plan, s.maxFindScanDocuments())
+		idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.MetaView(), plan, s.maxFindScanDocuments())
 		if err != nil {
 			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 			return findResponsePayload{document: doc}, err
@@ -1114,7 +1114,7 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 	if err != nil {
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
-	updatedKey, encoded, err := prepareInsertDocument(updated, col.Meta().Options.DocumentFormat)
+	updatedKey, encoded, err := prepareInsertDocument(updated, col.MetaView().Options.DocumentFormat)
 	if err != nil {
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
@@ -1539,7 +1539,7 @@ func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) b
 	if len(batch) == 0 || batch[0].col == nil {
 		return false
 	}
-	meta := batch[0].col.Meta()
+	meta := batch[0].col.MetaView()
 	for _, req := range batch {
 		if !mongoUpdateCanUseBatchMeta(meta, req.item) {
 			return false
@@ -1559,7 +1559,7 @@ func mongoUpdateItemsCanUseBatch(col *collections.Collection, updates []mongoUpd
 	if col == nil {
 		return false
 	}
-	meta := col.Meta()
+	meta := col.MetaView()
 	for _, update := range updates {
 		if !mongoUpdateCanUseBatchMeta(meta, update) {
 			return false
@@ -1572,7 +1572,7 @@ func mongoUpdateCanUseBatch(col *collections.Collection, update mongoUpdateItem)
 	if col == nil {
 		return false
 	}
-	return mongoUpdateCanUseBatchMeta(col.Meta(), update)
+	return mongoUpdateCanUseBatchMeta(col.MetaView(), update)
 }
 
 func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoUpdateItem) bool {
@@ -1595,7 +1595,7 @@ func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collection
 	if col == nil {
 		return collections.DocumentFormatDefault
 	}
-	format := col.Meta().Options.DocumentFormat
+	format := col.MetaView().Options.DocumentFormat
 	if format == collections.DocumentFormatDefault {
 		return collections.DocumentFormatJSON
 	}
@@ -1878,6 +1878,7 @@ func (s *Server) createCollectionResponse(command wire.Document) (wire.Document,
 	if _, err := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	s.invalidateCollectionCache(name)
 	return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 }
 
@@ -2014,6 +2015,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	}
 
 	createdAutomatically := false
+	s.invalidateCollectionCache(name)
 	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		if !errors.Is(err, collections.ErrCollectionNotFound) {
@@ -2023,6 +2025,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		meta.Indexes = scalarDefs
 		meta.VectorIndexes = vectorDefs
 		created, err := s.Collections.CreateCollection(meta)
+		s.invalidateCollectionCache(name)
 		if err != nil {
 			// If another request created the collection after our miss, fall
 			// through to the idempotent add-index path below.
@@ -2040,8 +2043,8 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			})
 		}
 	}
-	numBefore := int32(1 + len(col.Meta().Indexes) + len(col.Meta().VectorIndexes))
-	meta := col.Meta()
+	numBefore := int32(1 + len(col.MetaView().Indexes) + len(col.MetaView().VectorIndexes))
+	meta := col.MetaView()
 	if err := validateCreateIndexesCrossKindNames(meta, scalarDefs, vectorDefs); err != nil {
 		return commandError(commandCodeDuplicateKey, "DuplicateKey", err.Error())
 	}
@@ -2072,6 +2075,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		}
 		meta = *next
 	}
+	s.invalidateCollectionCache(name)
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "createdCollectionAutomatically", Value: createdAutomatically},
@@ -2096,14 +2100,14 @@ func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, erro
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollectionCached(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeNamespaceNotFound, "NamespaceNotFound", "collection not found: "+db+"."+collection)
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return marshalCursorResponse(db, collection, mongoIndexDocuments(col.Meta()))
+	return marshalCursorResponse(db, collection, mongoIndexDocuments(col.MetaView()))
 }
 
 func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, error) {
@@ -2125,6 +2129,7 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	s.invalidateCollectionCache(name)
 	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
@@ -2132,7 +2137,7 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	metaBefore := col.Meta()
+	metaBefore := col.MetaView()
 	before := int32(1 + len(metaBefore.Indexes) + len(metaBefore.VectorIndexes))
 	names, all, err := dropIndexNames(command)
 	if err != nil {
@@ -2172,6 +2177,7 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 			}
 		}
 	}
+	s.invalidateCollectionCache(name)
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "nIndexesWas", Value: before},
@@ -2934,6 +2940,7 @@ func (s *Server) openOrCreateCollection(name string) (*collections.Collection, e
 	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
 		return nil, createErr
 	}
+	s.invalidateCollectionCache(name)
 	return s.Collections.OpenCollection(name)
 }
 
@@ -3269,7 +3276,7 @@ func storedDocumentMaterializerForCollection(col *collections.Collection) (*coll
 	if col == nil {
 		return nil, nil
 	}
-	switch col.Meta().Options.DocumentFormat {
+	switch col.MetaView().Options.DocumentFormat {
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
 		return nil, nil
 	default:
