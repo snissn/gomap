@@ -279,13 +279,20 @@ def compression_fields(data: Any, prefix: str = "") -> list[dict[str, Any]]:
     return out
 
 
-def load_result_compression_summary(result_json: Path | None) -> dict[str, Any] | None:
+def load_result_json(result_json: Path | None) -> Any | None:
     if result_json is None:
         return None
-    data = json.loads(result_json.read_text())
+    return json.loads(result_json.read_text())
+
+
+def load_result_compression_summary(result_json: Path | None, data: Any | None = None) -> dict[str, Any] | None:
+    if result_json is None:
+        return None
+    if data is None:
+        data = load_result_json(result_json)
     fields = compression_fields(data)
-    raw = json.dumps(fields, sort_keys=True)
-    silent_none = "requested=none" in raw or "actual=none" in raw
+    raw = json.dumps(fields, sort_keys=True).lower()
+    silent_none = "requested=none" in raw or "actual=none" in raw or '"none"' in raw
     return {
         "path": str(result_json),
         "compression_fields": fields,
@@ -293,7 +300,63 @@ def load_result_compression_summary(result_json: Path | None) -> dict[str, Any] 
     }
 
 
-def retained_payload_audit_stub() -> dict[str, Any]:
+def fields_named(data: Any, names: set[str], prefix: str = "") -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if str(key) in names:
+                out.append({"path": path, "value": value})
+            out.extend(fields_named(value, names, path))
+    elif isinstance(data, list):
+        for idx, value in enumerate(data):
+            out.extend(fields_named(value, names, f"{prefix}[{idx}]"))
+    return out
+
+
+def retained_status_summary(result_json: Path | None, data: Any | None = None) -> dict[str, Any]:
+    if result_json is None:
+        return {
+            "path": None,
+            "retained_payload_encoding_status_missing": True,
+            "retained_payload_encoding_inactive": True,
+            "retained_payload_compression_status_missing": True,
+            "retained_payload_compression_inactive": True,
+            "reason": "no result.json supplied; retained encoding/compression status cannot be proven active",
+        }
+    if data is None:
+        data = load_result_json(result_json)
+    encoding_fields = fields_named(data, {"retained_payload_encoding"})
+    encoding_status_fields = fields_named(data, {"retained_payload_encoding_status"})
+    compression_fields = fields_named(
+        data,
+        {"retained_payload_compression", "retained_payload_compression_policy"},
+    )
+    compression_status_fields = fields_named(data, {"retained_payload_compression_status"})
+
+    def inactive(fields: list[dict[str, Any]]) -> bool:
+        if not fields:
+            return True
+        for field in fields:
+            value = str(field.get("value", "")).lower()
+            if value == "" or "inactive" in value or value in {"none", "not_configured"}:
+                return True
+        return False
+
+    return {
+        "path": str(result_json),
+        "retained_payload_encoding_fields": encoding_fields,
+        "retained_payload_encoding_status_fields": encoding_status_fields,
+        "retained_payload_encoding_status_missing": not encoding_fields or not encoding_status_fields,
+        "retained_payload_encoding_inactive": inactive(encoding_fields) or inactive(encoding_status_fields),
+        "retained_payload_compression_fields": compression_fields,
+        "retained_payload_compression_status_fields": compression_status_fields,
+        "retained_payload_compression_status_missing": not compression_fields or not compression_status_fields,
+        "retained_payload_compression_inactive": inactive(compression_fields) or inactive(compression_status_fields),
+    }
+
+
+def retained_payload_audit_stub(status: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "not_available_from_filesystem_audit",
         "required_for_final_claim": True,
@@ -305,6 +368,7 @@ def retained_payload_audit_stub() -> dict[str, Any]:
             "commit.operation",
             "commit.collection",
         ],
+        "report_status": status,
     }
 
 
@@ -323,6 +387,7 @@ def write_md(path: Path, report: dict[str, Any]) -> None:
     frame = report["vlog_frame_audit"]
     column = report["column_section_audit"]
     retained = report["retained_payload_audit"]
+    retained_status = report["retained_payload_status_audit"]
     lines = [
         "# TreeDB JSONBench Storage Compression Audit",
         "",
@@ -382,6 +447,10 @@ def write_md(path: Path, report: dict[str, Any]) -> None:
             f"- status: `{retained['status']}`",
             f"- final claim requires path-aware retained payload audit: `{retained['required_for_final_claim']}`",
             f"- reason: {retained['reason']}",
+            f"- retained encoding status missing: `{retained_status['retained_payload_encoding_status_missing']}`",
+            f"- retained encoding inactive: `{retained_status['retained_payload_encoding_inactive']}`",
+            f"- retained compression status missing: `{retained_status['retained_payload_compression_status_missing']}`",
+            f"- retained compression inactive: `{retained_status['retained_payload_compression_inactive']}`",
         ]
     )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -390,6 +459,8 @@ def write_md(path: Path, report: dict[str, Any]) -> None:
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     main_dir = resolve_main_dir(Path(args.db_dir))
     result_json = Path(args.result_json).expanduser().resolve() if args.result_json else None
+    result_data = load_result_json(result_json) if result_json else None
+    retained_status = retained_status_summary(result_json, result_data)
     return {
         "schema": "treedb_jsonbench_storage_audit_v1",
         "db_dir": str(Path(args.db_dir).expanduser().resolve()),
@@ -398,8 +469,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "gzip_oracle": gzip_oracle(main_dir, args.gzip_level),
         "vlog_frame_audit": vlog_frame_audit(main_dir),
         "column_section_audit": column_section_audit(main_dir, args.gzip_level),
-        "retained_payload_audit": retained_payload_audit_stub(),
-        "result_compression_summary": load_result_compression_summary(result_json),
+        "retained_payload_status_audit": retained_status,
+        "retained_payload_audit": retained_payload_audit_stub(retained_status),
+        "result_compression_summary": load_result_compression_summary(result_json, result_data),
     }
 
 
@@ -424,6 +496,7 @@ def main() -> int:
     write_json(out_dir / "gzip_oracle.json", report["gzip_oracle"])
     write_json(out_dir / "vlog_frame_audit.json", report["vlog_frame_audit"])
     write_json(out_dir / "column_section_audit.json", report["column_section_audit"])
+    write_json(out_dir / "retained_payload_status_audit.json", report["retained_payload_status_audit"])
     write_json(out_dir / "retained_payload_audit.json", report["retained_payload_audit"])
     print(out_dir / "compression_audit.json")
     return 0
