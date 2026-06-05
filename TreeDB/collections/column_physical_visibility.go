@@ -221,7 +221,7 @@ func (c *Collection) latestColumnPhysicalVisibleRowAtSnapshot(
 
 type columnPhysicalVisibilityIndex struct {
 	rows        []columnPhysicalVisibleRow
-	byHash      map[uint64]int
+	byHash      map[uint64][]int
 	bytesArena  []byte
 	valuesArena []columnDeclaredValue
 }
@@ -234,8 +234,7 @@ const (
 func (idx *columnPhysicalVisibilityIndex) upsert(row columnPhysicalScanRowView) {
 	hash := columnPhysicalQueryHashBytes(row.ID)
 	if idx.byHash != nil {
-		if posPlusOne := idx.byHash[hash]; posPlusOne != 0 {
-			pos := posPlusOne - 1
+		for _, pos := range idx.byHash[hash] {
 			if bytes.Equal(idx.rows[pos].ID, row.ID) {
 				if columnPhysicalScanRowViewNewer(row, idx.rows[pos]) {
 					idx.assignColumnPhysicalVisibleRow(&idx.rows[pos], row)
@@ -244,23 +243,13 @@ func (idx *columnPhysicalVisibilityIndex) upsert(row columnPhysicalScanRowView) 
 			}
 		}
 	}
-	for pos := range idx.rows {
-		if bytes.Equal(idx.rows[pos].ID, row.ID) {
-			if columnPhysicalScanRowViewNewer(row, idx.rows[pos]) {
-				idx.assignColumnPhysicalVisibleRow(&idx.rows[pos], row)
-			}
-			return
-		}
-	}
 	if idx.byHash == nil {
-		idx.byHash = make(map[uint64]int, 1024)
+		idx.byHash = make(map[uint64][]int, 1024)
 	}
 	idx.rows = append(idx.rows, columnPhysicalVisibleRow{ID: idx.cloneBytes(row.ID)})
 	pos := len(idx.rows) - 1
 	idx.assignColumnPhysicalVisibleRow(&idx.rows[pos], row)
-	if idx.byHash[hash] == 0 {
-		idx.byHash[hash] = pos + 1
-	}
+	idx.byHash[hash] = append(idx.byHash[hash], pos)
 }
 
 func (idx *columnPhysicalVisibilityIndex) assignColumnPhysicalVisibleRow(dst *columnPhysicalVisibleRow, row columnPhysicalScanRowView) {
