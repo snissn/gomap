@@ -1,6 +1,6 @@
 # unified_bench
 
-Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger, and LevelDB.
+Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Pebble, Badger, and LevelDB.
 
 ## Run
 
@@ -41,6 +41,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `batch_write` — Batch Write
 - `batch_random` — Batch Random
 - `batch_delete` — Batch Delete
+- `batch_delete_range` — Batch DeleteRange (dense ordered range-delete batches; result table is DeleteRange calls/sec)
 - `delete_rand` — Random Delete
 - `random_read` — Random Read
 - `random_read_parallel` — Random Read (Parallel aggregate throughput)
@@ -56,6 +57,8 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - Any `GetMany`/`Get` error fails the test.
 - Missing keys are not treated as benchmark-fatal by default (adapter/API contract). Use `-read-require-hit` to fail fast on misses and validate value lengths.
 
+`batch_delete_range` loads dense sortable 8-byte keys before timing, excludes that load/checkpoint phase from delete timing, then commits configured DeleteRange calls in batches. The main result table reports DeleteRange calls/sec; the `Batch DeleteRange Metrics` section and `benchprof_results.json` also report affected keys/sec, loaded key count, range width, ranges per batch, value size, validation status, and whether each adapter path is native or fallback. TreeDB and Pebble are reported as `native`; LevelDB is `fallback_iterator_delete` because it expands each range into iterator-driven point deletes and should not be treated as native range-delete parity. Because this workload deletes the dense `[0, keys)` keyspace, it is opt-in and is not part of the default `-test all` order; run `-test batch_delete_range` or `-test all,batch_delete_range` when you want it.
+
 ## Common flags
 
 - `-profile` benchmark profile preset (see `cmd/unified_bench/profiles.go`):
@@ -64,7 +67,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
   - `fast` (benchmark-runner no-sync preset; TreeDB currently maps this to a legacy no-WAL compatibility bundle with the Celestia-aligned auto/snappy/balanced value-log compression defaults; unsafe)
   - `wal_on_fast` (benchmark-runner relaxed-WAL preset; TreeDB currently maps this to a legacy compatibility bundle with the same compression defaults; unsafe)
   - These names are unified-bench presets shared across database adapters, not the public TreeDB server profile vocabulary. Public TreeDB servers should use `command_wal_durable`, `command_wal_relaxed`, or explicit benchmark-only `bench`.
-- `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb`
+- `-dbs` (`all` or CSV): `hashdb,btree,treedb,pebble,badger,leveldb`
   - Hidden TreeDB variants can be selected explicitly, including
     `treedb_public_command_wal` (alias `treedb_cached_command_wal`) for the
     public cached `command_wal_v1` path,
@@ -86,6 +89,10 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
   - Note: dataset-write generation now uses the same normalized behavior as other write tests (legacy pattern names are accepted as aliases, but generation is unified under `makeValuePool`). Reusable dataset key/value fixtures for `dataset_write_*` and `dataset_read_random` are materialized before per-test CPU/allocation/contention profiles and runtime traces start, so those artifacts represent the measured DB loops rather than fixture setup.
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-batchsize` batch size (default 8000)
+- `-batch-delete-range-width` affected keys per `batch_delete_range` DeleteRange call (default 100)
+- `-batch-delete-ranges-per-batch` DeleteRange calls per `batch_delete_range` batch commit (default 100)
+- `-batch-delete-range-validate` validate after measured deletes that loaded dense keys were removed (excluded from delete timing)
+- `-batch-delete-range-refill` reload deleted dense keys after measured deletes/validation so later tests see the dataset (excluded from delete timing)
 - `-read-workers` number of goroutines for `random_read_parallel` and `random_read_parallel_acquire_snapshot` (default `GOMAXPROCS`)
 - `-read-require-hit` fail read benchmarks (`random_read*`, `random_read_batch`) on misses and validate value length matches `-valsize`
 - `-range-queries` number of prefix/range queries (default 200)

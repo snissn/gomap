@@ -32,26 +32,90 @@ var (
 )
 
 type LevelDBBatch struct {
-	batch *leveldb.Batch
-	db    *leveldb.DB
+	db       *leveldb.DB
+	batch    leveldb.Batch
+	pointOps int
+	ranges   []levelDBRangeOp
+}
+
+type levelDBRangeOp struct {
+	start, limit []byte
 }
 
 func (b *LevelDBBatch) Set(key, value []byte) error {
+	if len(b.ranges) > 0 {
+		return errors.New("leveldb: mixing point writes with DeleteRange in one batch is unsupported")
+	}
 	b.batch.Put(key, value)
+	b.pointOps++
 	return nil
 }
 func (b *LevelDBBatch) Delete(key []byte) error {
+	if len(b.ranges) > 0 {
+		return errors.New("leveldb: mixing point deletes with DeleteRange in one batch is unsupported")
+	}
 	b.batch.Delete(key)
+	b.pointOps++
+	return nil
+}
+func cloneLevelDBRangeBound(bound []byte) []byte {
+	if bound == nil {
+		return nil
+	}
+	clone := make([]byte, len(bound))
+	copy(clone, bound)
+	return clone
+}
+
+func (b *LevelDBBatch) DeleteRange(start, end []byte) error {
+	if b.pointOps > 0 {
+		return errors.New("leveldb: mixing DeleteRange with point operations in one batch is unsupported")
+	}
+	b.ranges = append(b.ranges, levelDBRangeOp{
+		start: cloneLevelDBRangeBound(start),
+		limit: cloneLevelDBRangeBound(end),
+	})
 	return nil
 }
 func (b *LevelDBBatch) Commit() error {
-	return b.db.Write(b.batch, nil)
+	return b.commit(nil)
 }
 func (b *LevelDBBatch) CommitSync() error {
-	return b.db.Write(b.batch, &opt.WriteOptions{Sync: true})
+	return b.commit(&opt.WriteOptions{Sync: true})
 }
 func (b *LevelDBBatch) Close() error {
 	b.batch.Reset()
+	b.pointOps = 0
+	b.ranges = nil
+	return nil
+}
+
+func (b *LevelDBBatch) commit(writeOpts *opt.WriteOptions) error {
+	if len(b.ranges) == 0 {
+		return b.db.Write(&b.batch, writeOpts)
+	}
+	var batch leveldb.Batch
+	for _, r := range b.ranges {
+		if err := b.appendDeleteRangeOps(&batch, r.start, r.limit); err != nil {
+			return err
+		}
+	}
+	return b.db.Write(&batch, writeOpts)
+}
+
+func (b *LevelDBBatch) appendDeleteRangeOps(batch *leveldb.Batch, start, end []byte) error {
+	var slice *util.Range
+	if start != nil || end != nil {
+		slice = &util.Range{Start: start, Limit: end}
+	}
+	it := b.db.NewIterator(slice, nil)
+	defer it.Release()
+	for ok := it.First(); ok; ok = it.Next() {
+		batch.Delete(append([]byte(nil), it.Key()...))
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -207,7 +271,10 @@ func (l *LevelDBWrapper) GetMany(keys [][]byte) ([][]byte, error) {
 	return out, nil
 }
 func (l *LevelDBWrapper) Delete(k []byte) error { return l.db.Delete(k, nil) }
-func (l *LevelDBWrapper) Close() error          { return l.db.Close() }
+func (l *LevelDBWrapper) RangeDeleteMode() string {
+	return kvstore.RangeDeleteModeFallbackIteratorDelete
+}
+func (l *LevelDBWrapper) Close() error { return l.db.Close() }
 func (l *LevelDBWrapper) Checkpoint() error {
 	if l == nil || l.db == nil {
 		return nil
@@ -252,7 +319,7 @@ func (l *LevelDBWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, e
 	return &LevelDBIterator{it: it, reverse: true}, nil
 }
 func (l *LevelDBWrapper) NewBatch() (kvstore.Batch, error) {
-	return &LevelDBBatch{batch: new(leveldb.Batch), db: l.db}, nil
+	return &LevelDBBatch{db: l.db}, nil
 }
 
 func verifyRangeIteration(db kvstore.DB, rs kvstore.RangeScanner, prefix []byte, n int) (retErr error) {
