@@ -38,6 +38,7 @@ const (
 	treeDBVlogCompressionVariantDict
 	treeDBVlogCompressionVariantBlockSnappy
 	treeDBVlogCompressionVariantBlockLZ4
+	treeDBVlogCompressionVariantBlockZSTD
 	treeDBVlogCompressionVariantAuto
 	treeDBVlogCompressionVariantAll
 )
@@ -54,12 +55,14 @@ func parseTreeDBVlogCompressionVariant(flagName, s string) (treeDBVlogCompressio
 		return treeDBVlogCompressionVariantBlockSnappy, nil
 	case "block_lz4", "block-lz4", "lz4":
 		return treeDBVlogCompressionVariantBlockLZ4, nil
+	case "block_zstd", "block-zstd", "zstd":
+		return treeDBVlogCompressionVariantBlockZSTD, nil
 	case "auto":
 		return treeDBVlogCompressionVariantAuto, nil
 	case "all", "both", "matrix":
 		return treeDBVlogCompressionVariantAll, nil
 	default:
-		return treeDBVlogCompressionVariantDefault, fmt.Errorf("unsupported -%s=%q (expected default|off|dict|block_snappy|block_lz4|auto|all)", flagName, s)
+		return treeDBVlogCompressionVariantDefault, fmt.Errorf("unsupported -%s=%q (expected default|off|dict|block_snappy|block_lz4|block_zstd|auto|all)", flagName, s)
 	}
 }
 
@@ -73,6 +76,8 @@ func treeDBVlogCompressionVariantNames(v treeDBVlogCompressionVariant) []string 
 		return []string{"treedb_vlog_block_snappy"}
 	case treeDBVlogCompressionVariantBlockLZ4:
 		return []string{"treedb_vlog_block_lz4"}
+	case treeDBVlogCompressionVariantBlockZSTD:
+		return []string{"treedb_vlog_block_zstd"}
 	case treeDBVlogCompressionVariantAuto:
 		return []string{"treedb_vlog_auto"}
 	case treeDBVlogCompressionVariantAll:
@@ -81,6 +86,7 @@ func treeDBVlogCompressionVariantNames(v treeDBVlogCompressionVariant) []string 
 			"treedb_vlog_dict",
 			"treedb_vlog_block_snappy",
 			"treedb_vlog_block_lz4",
+			"treedb_vlog_block_zstd",
 			"treedb_vlog_auto",
 		}
 	default:

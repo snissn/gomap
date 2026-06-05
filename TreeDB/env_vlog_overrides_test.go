@@ -55,11 +55,22 @@ func TestApplyEnvMaintenanceOverrides_VlogAutoPolicy(t *testing.T) {
 }
 
 func TestApplyEnvMaintenanceOverrides_VlogBlockCodec(t *testing.T) {
-	opts := Options{}
-	t.Setenv(envVlogBlockCodec, "lz4")
-	applyEnvMaintenanceOverrides(&opts)
-	if got := opts.ValueLog.BlockCodec; got != ValueLogBlockLZ4 {
-		t.Fatalf("expected block codec=lz4, got %v", got)
+	cases := []struct {
+		env  string
+		want ValueLogBlockCodec
+	}{
+		{env: "lz4", want: ValueLogBlockLZ4},
+		{env: "zstd", want: ValueLogBlockZSTD},
+	}
+	for _, tc := range cases {
+		t.Run(tc.env, func(t *testing.T) {
+			opts := Options{}
+			t.Setenv(envVlogBlockCodec, tc.env)
+			applyEnvMaintenanceOverrides(&opts)
+			if got := opts.ValueLog.BlockCodec; got != tc.want {
+				t.Fatalf("expected block codec=%s, got %v", tc.env, got)
+			}
+		})
 	}
 }
 

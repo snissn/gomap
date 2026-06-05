@@ -44,11 +44,12 @@ const (
 	vlogAutoCandidateDict
 	vlogAutoCandidateBlockSnappy
 	vlogAutoCandidateBlockLZ4
+	vlogAutoCandidateBlockZSTD
 )
 
-const vlogAutoCandidateCount = int(vlogAutoCandidateBlockLZ4) + 1
+const vlogAutoCandidateCount = int(vlogAutoCandidateBlockZSTD) + 1
 
-const vlogBlockCodecCount = 2
+const vlogBlockCodecCount = 3
 
 const vlogBlockKBucketCount = 8
 
@@ -72,8 +73,9 @@ const (
 )
 
 var (
-	vlogAutoCandidatesNoDict   = [...]vlogAutoCandidate{vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4}
-	vlogAutoCandidatesWithDict = [...]vlogAutoCandidate{vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateDict}
+	vlogAutoCandidatesNoDict   = [...]vlogAutoCandidate{vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD}
+	vlogAutoCandidatesWithDict = [...]vlogAutoCandidate{vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD, vlogAutoCandidateDict}
+	vlogSelectorBlockCodecs    = [...]valuelog.BlockCodec{valuelog.BlockCodecSnappy, valuelog.BlockCodecLZ4, valuelog.BlockCodecZSTD}
 )
 
 const (
@@ -94,9 +96,14 @@ const (
 	// does not silently land as raw value-log frames.
 	forcePointerAutoRawBypassMinPayloadBytes = 512
 	forcePointerAutoRawBypassMaxPayloadBytes = 1024
+	// Storage-first retained value-log streams should write larger grouped
+	// compressed frames by policy, not by incidental selector history. JSONBench
+	// retained payloads are JSON/template-v1-like and benefit from batching
+	// enough rows for block codecs to exploit cross-record repetition.
+	storageFirstRetainedValueLogBlockTargetCompressedBytes = 256 << 10
 	// Larger grouped-frame targets reduce per-record compression overhead for
-	// large forced-pointer streams.
-	forcePointerBlockTargetCompressedBytes = 32 << 10
+	// forced-pointer/storage-first streams.
+	forcePointerBlockTargetCompressedBytes = storageFirstRetainedValueLogBlockTargetCompressedBytes
 	forcePointerBlockBootstrapRatio        = 0.50
 	// Live leaf-log frames are a read-path structure as well as a write/storage
 	// structure. Keep grouping modest so cold point reads do not repeatedly decode
@@ -142,6 +149,8 @@ func normalizeVlogBlockCodec(v uint8) valuelog.BlockCodec {
 		return valuelog.BlockCodecSnappy
 	case 1:
 		return valuelog.BlockCodecLZ4
+	case 2:
+		return valuelog.BlockCodecZSTD
 	default:
 		return valuelog.BlockCodecSnappy
 	}
@@ -151,6 +160,8 @@ func normalizeSelectorBlockCodec(codec valuelog.BlockCodec) valuelog.BlockCodec 
 	switch codec {
 	case valuelog.BlockCodecLZ4:
 		return valuelog.BlockCodecLZ4
+	case valuelog.BlockCodecZSTD:
+		return valuelog.BlockCodecZSTD
 	default:
 		return valuelog.BlockCodecSnappy
 	}
@@ -160,16 +171,22 @@ func vlogBlockCodecIndex(codec valuelog.BlockCodec) int {
 	switch normalizeSelectorBlockCodec(codec) {
 	case valuelog.BlockCodecLZ4:
 		return 1
+	case valuelog.BlockCodecZSTD:
+		return 2
 	default:
 		return 0
 	}
 }
 
 func vlogBlockCodecSuffix(idx int) string {
-	if idx == 1 {
+	switch idx {
+	case 1:
 		return "lz4"
+	case 2:
+		return "zstd"
+	default:
+		return "snappy"
 	}
-	return "snappy"
 }
 
 func vlogBlockKBucketIndex(k int) int {
@@ -239,7 +256,8 @@ type vlogCompressionSelector struct {
 
 	incompressibleStreak uint8
 
-	metrics [vlogAutoCandidateCount]vlogCandidateMetrics
+	metrics          [vlogAutoCandidateCount]vlogCandidateMetrics
+	seededCandidates [vlogAutoCandidateCount]bool
 
 	bytesByCandidate  [vlogAutoCandidateCount]uint64
 	framesByCandidate [vlogAutoCandidateCount]uint64
@@ -276,6 +294,7 @@ func (s *vlogCompressionSelector) seedDictCandidate(ratio float64) {
 		m.samples = 1
 	}
 	s.metrics[vlogAutoCandidateDict] = m
+	s.seededCandidates[vlogAutoCandidateDict] = true
 }
 
 func (s *vlogCompressionSelector) normalizeLargePayloadCandidate(c vlogAutoCandidate, unitPayloadBytes int) vlogAutoCandidate {
@@ -286,11 +305,23 @@ func (s *vlogCompressionSelector) normalizeLargePayloadCandidate(c vlogAutoCandi
 		return c
 	}
 	if unitPayloadBytes >= 1024 && c == vlogAutoCandidateBlockSnappy {
-		lz4 := s.metric(vlogAutoCandidateBlockLZ4)
-		// When lz4 is already producing very small output, keep large-payload
-		// streams on lz4 to avoid ratio regressions from exploratory snappy frames.
-		if lz4.samples >= 4 && (lz4.ratio <= 0.02 || (unitPayloadBytes >= 512 && lz4.ratio <= 0.05)) {
-			return vlogAutoCandidateBlockLZ4
+		best := c
+		bestRatio := 1.0
+		for _, candidate := range []vlogAutoCandidate{vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD} {
+			m := s.metric(candidate)
+			if m.samples < 4 {
+				continue
+			}
+			if m.ratio < bestRatio {
+				best = candidate
+				bestRatio = m.ratio
+			}
+		}
+		// When a stronger block codec is already producing very small output, keep
+		// large-payload streams on it to avoid ratio regressions from exploratory
+		// snappy frames.
+		if best != c && (bestRatio <= 0.02 || (unitPayloadBytes >= 512 && bestRatio <= 0.05)) {
+			return best
 		}
 	}
 	return c
@@ -304,12 +335,13 @@ func (s *vlogCompressionSelector) shouldPreferLargePayloadDict(dictAvailable boo
 	if dict.samples < largePayloadDictPreferMinSamples {
 		return false
 	}
-	snappy := s.metric(vlogAutoCandidateBlockSnappy)
-	lz4 := s.metric(vlogAutoCandidateBlockLZ4)
-	bestBlock := snappy
-	if lz4.samples > bestBlock.samples ||
-		(lz4.samples == bestBlock.samples && (lz4.ratio < bestBlock.ratio || (lz4.ratio == bestBlock.ratio && lz4.throughput > bestBlock.throughput))) {
-		bestBlock = lz4
+	bestBlock := s.metric(vlogAutoCandidateBlockSnappy)
+	for _, candidate := range []vlogAutoCandidate{vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD} {
+		block := s.metric(candidate)
+		if block.samples > bestBlock.samples ||
+			(block.samples == bestBlock.samples && (block.ratio < bestBlock.ratio || (block.ratio == bestBlock.ratio && block.throughput > bestBlock.throughput))) {
+			bestBlock = block
+		}
 	}
 
 	strongAbsolute := dict.ratio <= largePayloadDictPreferAbsRatioMax
@@ -345,6 +377,8 @@ func (c vlogAutoCandidate) suffix() string {
 		return "block_snappy"
 	case vlogAutoCandidateBlockLZ4:
 		return "block_lz4"
+	case vlogAutoCandidateBlockZSTD:
+		return "block_zstd"
 	default:
 		return "unknown"
 	}
@@ -354,6 +388,8 @@ func blockCandidateFromCodec(codec valuelog.BlockCodec) vlogAutoCandidate {
 	switch normalizeSelectorBlockCodec(codec) {
 	case valuelog.BlockCodecLZ4:
 		return vlogAutoCandidateBlockLZ4
+	case valuelog.BlockCodecZSTD:
+		return vlogAutoCandidateBlockZSTD
 	default:
 		return vlogAutoCandidateBlockSnappy
 	}
@@ -376,6 +412,8 @@ func candidateWriteMode(c vlogAutoCandidate, seed valuelog.BlockCodec) (vlogComp
 		return vlogWriteDict, normalizeSelectorBlockCodec(seed)
 	case vlogAutoCandidateBlockLZ4:
 		return vlogWriteBlock, valuelog.BlockCodecLZ4
+	case vlogAutoCandidateBlockZSTD:
+		return vlogWriteBlock, valuelog.BlockCodecZSTD
 	case vlogAutoCandidateBlockSnappy:
 		return vlogWriteBlock, valuelog.BlockCodecSnappy
 	default:
@@ -718,6 +756,9 @@ func (s *vlogCompressionSelector) metric(c vlogAutoCandidate) vlogCandidateMetri
 		case vlogAutoCandidateBlockLZ4:
 			m.ratio = 0.92
 			m.throughput = 0.95
+		case vlogAutoCandidateBlockZSTD:
+			m.ratio = 0.89
+			m.throughput = 0.88
 		default:
 			m.ratio = 0.93
 			m.throughput = 0.97
@@ -884,10 +925,14 @@ func (s *vlogCompressionSelector) preferredExplorationCandidate(dictAvailable bo
 			continue
 		}
 		m := s.metric(c)
+		samples := m.samples
+		if c == vlogAutoCandidateDict && s.seededCandidates[vlogAutoCandidateDict] {
+			samples = 0
+		}
 		score := s.candidateScore(c)
-		if !found || m.samples < bestSamples || (m.samples == bestSamples && score > bestScore) {
+		if !found || samples < bestSamples || (samples == bestSamples && score > bestScore) {
 			best = c
-			bestSamples = m.samples
+			bestSamples = samples
 			bestScore = score
 			found = true
 		}
@@ -899,7 +944,7 @@ func (s *vlogCompressionSelector) preferredExplorationCandidate(dictAvailable bo
 }
 
 func isBlockCandidate(c vlogAutoCandidate) bool {
-	return c == vlogAutoCandidateBlockSnappy || c == vlogAutoCandidateBlockLZ4
+	return c == vlogAutoCandidateBlockSnappy || c == vlogAutoCandidateBlockLZ4 || c == vlogAutoCandidateBlockZSTD
 }
 
 func (s *vlogCompressionSelector) skipExplorationCandidate(current vlogAutoCandidate, currentMetric vlogCandidateMetrics, candidate vlogAutoCandidate) bool {
@@ -1012,6 +1057,7 @@ func newVlogCompressionSelectorWithSeed(policy vlogAutoPolicy, holdBytes, probeB
 			vlogAutoCandidateDict:        {ratio: 0.92, throughput: 0.90},
 			vlogAutoCandidateBlockSnappy: {ratio: 0.93, throughput: 0.97},
 			vlogAutoCandidateBlockLZ4:    {ratio: 0.92, throughput: 0.95},
+			vlogAutoCandidateBlockZSTD:   {ratio: 0.89, throughput: 0.88},
 		},
 	}
 }
@@ -1134,17 +1180,17 @@ func (s *vlogCompressionSelector) shouldSkipExploration(dictAvailable bool) bool
 	if currentMetric.samples < 4 || currentMetric.ratio > 0.25 {
 		return false
 	}
-	// Keep exploration on until both block codecs have initial signal.
+	// Keep exploration on until every block codec has initial signal.
 	if isBlockCandidate(current) {
-		snappySamples := s.metric(vlogAutoCandidateBlockSnappy).samples
-		lz4Samples := s.metric(vlogAutoCandidateBlockLZ4).samples
-		if snappySamples == 0 || lz4Samples == 0 {
-			return false
+		for _, candidate := range []vlogAutoCandidate{vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD} {
+			if s.metric(candidate).samples == 0 {
+				return false
+			}
 		}
 	}
 	// If dict is available but still unsampled, allow occasional exploration so
 	// auto can still discover dict wins.
-	if dictAvailable && s.metric(vlogAutoCandidateDict).samples == 0 {
+	if dictAvailable && (s.metric(vlogAutoCandidateDict).samples == 0 || s.seededCandidates[vlogAutoCandidateDict]) {
 		return false
 	}
 	cands := s.availableCandidates(dictAvailable)
@@ -1190,6 +1236,7 @@ func (s *vlogCompressionSelector) observe(mode vlogCompressionWriteMode, blockCo
 		m.samples = throughputSamples
 	}
 	s.metrics[candidate] = m
+	s.seededCandidates[candidate] = false
 	s.bytesByCandidate[candidate] += uint64(rawPayloadBytes)
 	s.framesByCandidate[candidate]++
 
@@ -1263,16 +1310,24 @@ func (s *vlogCompressionSelector) blockObservedRatioWithSamples(codec valuelog.B
 	if m.samples > 0 {
 		return m.ratio, m.samples
 	}
-	// Fall back to whichever block codec has the stronger signal.
-	snappy := s.metric(vlogAutoCandidateBlockSnappy)
-	lz4 := s.metric(vlogAutoCandidateBlockLZ4)
-	if snappy.samples == 0 && lz4.samples == 0 {
+	// Fall back to whichever block codec has the strongest signal.
+	best := vlogCandidateMetrics{}
+	bestSet := false
+	for _, candidate := range []vlogAutoCandidate{vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD} {
+		block := s.metric(candidate)
+		if block.samples == 0 {
+			continue
+		}
+		if !bestSet || block.samples > best.samples ||
+			(block.samples == best.samples && (block.ratio < best.ratio || (block.ratio == best.ratio && block.throughput > best.throughput))) {
+			best = block
+			bestSet = true
+		}
+	}
+	if !bestSet {
 		return 0.92, 0
 	}
-	if snappy.samples >= lz4.samples {
-		return snappy.ratio, snappy.samples
-	}
-	return lz4.ratio, lz4.samples
+	return best.ratio, best.samples
 }
 
 func (s *vlogCompressionSelector) snapshot() vlogCompressionSelectorStats {
@@ -1306,18 +1361,20 @@ func (s *vlogCompressionSelector) allowDictSampling(writeMode vlogCompressionWri
 	if s.currentCandidate == vlogAutoCandidateOff && (s.holdRemaining > 0 || s.incompressibleStreak >= 2) {
 		return false
 	}
-	snappy := s.metrics[vlogAutoCandidateBlockSnappy]
-	lz4 := s.metrics[vlogAutoCandidateBlockLZ4]
-	blockSamples := snappy.samples + lz4.samples
+	blockSamples := uint64(0)
+	for _, candidate := range []vlogAutoCandidate{vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD} {
+		blockSamples += s.metrics[candidate].samples
+	}
 	if blockSamples < 4 {
 		return false
 	}
 	bestRatio := 1.0
-	if snappy.samples > 0 {
-		bestRatio = normalizeMetricRatio(snappy.ratio)
-	}
-	if lz4.samples > 0 {
-		r := normalizeMetricRatio(lz4.ratio)
+	for _, candidate := range []vlogAutoCandidate{vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD} {
+		block := s.metrics[candidate]
+		if block.samples == 0 {
+			continue
+		}
+		r := normalizeMetricRatio(block.ratio)
 		if r < bestRatio {
 			bestRatio = r
 		}
@@ -1402,29 +1459,26 @@ func laneVlogBlockObservedRatioWithSamples(l *lane, codec valuelog.BlockCodec) (
 
 func chooseLargePayloadNoDictBlockCodec(l *lane, configured valuelog.BlockCodec) valuelog.BlockCodec {
 	configured = normalizeSelectorBlockCodec(configured)
-	snappyRatio, snappySamples := laneVlogBlockObservedRatioWithSamples(l, valuelog.BlockCodecSnappy)
-	lz4Ratio, lz4Samples := laneVlogBlockObservedRatioWithSamples(l, valuelog.BlockCodecLZ4)
-
-	switch {
-	case snappySamples < largePayloadBlockCodecMinSamples && lz4Samples < largePayloadBlockCodecMinSamples:
-		return configured
-	case snappySamples >= largePayloadBlockCodecMinSamples && lz4Samples < largePayloadBlockCodecMinSamples:
-		return valuelog.BlockCodecSnappy
-	case lz4Samples >= largePayloadBlockCodecMinSamples && snappySamples < largePayloadBlockCodecMinSamples:
-		return valuelog.BlockCodecLZ4
+	bestCodec := configured
+	bestRatio := 1.0
+	bestSamples := uint64(0)
+	found := false
+	for _, codec := range vlogSelectorBlockCodecs {
+		ratio, samples := laneVlogBlockObservedRatioWithSamples(l, codec)
+		if samples < largePayloadBlockCodecMinSamples {
+			continue
+		}
+		if !found ||
+			ratio+largePayloadBlockCodecTieMargin < bestRatio ||
+			(math.Abs(ratio-bestRatio) <= largePayloadBlockCodecTieMargin && samples > bestSamples) {
+			bestCodec = codec
+			bestRatio = ratio
+			bestSamples = samples
+			found = true
+		}
 	}
-
-	if snappyRatio+largePayloadBlockCodecTieMargin < lz4Ratio {
-		return valuelog.BlockCodecSnappy
-	}
-	if lz4Ratio+largePayloadBlockCodecTieMargin < snappyRatio {
-		return valuelog.BlockCodecLZ4
-	}
-	if snappySamples > lz4Samples {
-		return valuelog.BlockCodecSnappy
-	}
-	if lz4Samples > snappySamples {
-		return valuelog.BlockCodecLZ4
+	if found {
+		return bestCodec
 	}
 	return configured
 }
@@ -1653,6 +1707,9 @@ func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []value
 		len(records) == 0 {
 		return false
 	}
+	if db.storageFirstValueLogAuto(unitPayloadBytes) && valueLogRecordsLookRetainedJSONLike(records) {
+		return false
+	}
 	checks := [3]int{0, len(records) / 2, len(records) - 1}
 	checked := 0
 	prev := -1
@@ -1670,6 +1727,44 @@ func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []value
 		}
 	}
 	return checked > 0
+}
+
+func valueLogRecordsLookRetainedJSONLike(records []valuelog.Record) bool {
+	if len(records) == 0 {
+		return false
+	}
+	checks := [3]int{0, len(records) / 2, len(records) - 1}
+	checked := 0
+	prev := -1
+	for _, idx := range checks {
+		if idx < 0 || idx >= len(records) || idx == prev {
+			continue
+		}
+		prev = idx
+		checked++
+		if !valueLogPayloadLooksRetainedJSONLike(records[idx].Value) {
+			return false
+		}
+	}
+	return checked > 0
+}
+
+func valueLogPayloadLooksRetainedJSONLike(value []byte) bool {
+	for i, b := range value {
+		switch b {
+		case ' ', '\n', '\r', '\t':
+			continue
+		case '{', '[':
+			return true
+		case 'T':
+			return len(value)-i >= 4 &&
+				(value[i] == 'T' && value[i+1] == 'D' && value[i+2] == '1') &&
+				(value[i+3] == 'D' || value[i+3] == 'I' || value[i+3] == 'H')
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
@@ -1788,7 +1883,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	// collapse K on fallback paths.
 	useSelectorRatio := compressionMode == vlogCompressionAuto && l != nil && l.vlogCompressionSelector != nil
 	stableFastPath := compressionMode == vlogCompressionAuto &&
-		(db.storageFirstMediumValueLogAuto(avgPayloadBytes) ||
+		(db.storageFirstValueLogAuto(avgPayloadBytes) ||
 			(normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && avgPayloadBytes >= throughputAutoBlockMinPayloadBytes))
 	if useSelectorRatio && !stableFastPath {
 		ratio, ratioSamples = l.vlogCompressionSelector.blockObservedRatioWithSamples(codec)
@@ -1805,10 +1900,10 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 			targetCompressedBytes = leafLogBlockTargetCompressedBytes
 		}
 	}
-	if db.storageFirstMediumValueLogAuto(avgPayloadBytes) &&
+	if db.storageFirstValueLogAuto(avgPayloadBytes) &&
 		ratioSamples == 0 &&
 		ratio >= 0.98 {
-		// Retained-payload value-log streams are expected to be JSON-like in the
+		// Storage-owned retained payload streams are expected to be JSON-like in the
 		// storage-parity workload. Bootstrap grouped frames on the first batch so
 		// compression can exploit cross-record repetition before lane ratios exist.
 		ratio = forcePointerBlockBootstrapRatio
@@ -1820,7 +1915,7 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		// forms grouped frames; normal observed ratios take over after writes.
 		ratio = 0.50
 	}
-	if db.storageFirstMediumValueLogAuto(avgPayloadBytes) && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
+	if db.storageFirstValueLogAuto(avgPayloadBytes) && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
 		targetCompressedBytes = forcePointerBlockTargetCompressedBytes
 	}
 	if avgPayloadBytes >= largePayloadBlockTargetMinPayloadBytes {

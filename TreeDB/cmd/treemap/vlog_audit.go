@@ -500,6 +500,8 @@ func groupedFrameModeName(h valuelog.FrameHeader) string {
 		return "grouped_block_snappy"
 	case valuelog.BlockCodecLZ4:
 		return "grouped_block_lz4"
+	case valuelog.BlockCodecZSTD:
+		return "grouped_block_zstd"
 	case valuelog.BlockCodecNone:
 		return "grouped_block_none"
 	default:

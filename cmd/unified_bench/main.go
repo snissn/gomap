@@ -1565,6 +1565,7 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_auto.frames.dict",
 		"treedb.cache.vlog_auto.frames.block_snappy",
 		"treedb.cache.vlog_auto.frames.block_lz4",
+		"treedb.cache.vlog_auto.frames.block_zstd",
 		"treedb.cache.vlog_auto.probe_attempts",
 		"treedb.cache.vlog_auto.probe_successes",
 		"treedb.cache.vlog_auto.hold_enters",
@@ -5000,7 +5001,7 @@ func selectedTreeDBVlogCompressionMode(dbName string) (treedb.ValueLogCompressio
 	switch strings.ToLower(strings.TrimSpace(dbName)) {
 	case "treedb_vlog_off", "treedb_vlog_dict_off":
 		return treedb.ValueLogCompressionOff, true
-	case "treedb_vlog_block_snappy", "treedb_vlog_block_lz4":
+	case "treedb_vlog_block_snappy", "treedb_vlog_block_lz4", "treedb_vlog_block_zstd":
 		return treedb.ValueLogCompressionBlock, true
 	case "treedb_vlog_dict":
 		return treedb.ValueLogCompressionDict, true
@@ -5149,6 +5150,7 @@ const (
 	treeDBVlogScanFrameFlagCompressed = 1 << 0
 	treeDBVlogScanBlockCodecSnappy    = 1
 	treeDBVlogScanBlockCodecLZ4       = 2
+	treeDBVlogScanBlockCodecZSTD      = 3
 	treeDBVlogScanMaxFrameK           = 128
 
 	treeDBVlogScanOuterLeafCodecHeaderOffset = 5
@@ -5365,6 +5367,9 @@ func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto b
 		case treeDBVlogScanBlockCodecLZ4:
 			blockCodec = "lz4"
 			autoCandidate = "block_lz4"
+		case treeDBVlogScanBlockCodecZSTD:
+			blockCodec = "zstd"
+			autoCandidate = "block_zstd"
 		case treeDBVlogScanBlockCodecSnappy:
 			blockCodec = "snappy"
 			autoCandidate = "block_snappy"
@@ -5383,7 +5388,7 @@ func (s *treeDBVlogCodecScanStats) observeValueLogFrame(body []byte, countAuto b
 	if countAuto && autoCandidate != "" {
 		s.addCounters(s.AutoCandidates, autoCandidate, k, rawPayloadBytes, storedPayloadBytes)
 	}
-	if writeMode == "block" && (blockCodec == "snappy" || blockCodec == "lz4") {
+	if writeMode == "block" && (blockCodec == "snappy" || blockCodec == "lz4" || blockCodec == "zstd") {
 		s.BlockKCount[blockCodec]++
 		s.BlockKSum[blockCodec] += uint64(k)
 		if uint64(k) > s.BlockKMax[blockCodec] {
@@ -5507,7 +5512,7 @@ func (s *treeDBVlogCodecScanStats) treeDBStats() map[string]string {
 		}
 	}
 
-	for _, codec := range []string{"snappy", "lz4"} {
+	for _, codec := range []string{"snappy", "lz4", "zstd"} {
 		count := s.BlockKCount[codec]
 		if count == 0 {
 			continue
@@ -6081,18 +6086,21 @@ func renderTreeDBVlogCodecSummaryString(instances []*DBInstance, treeStats map[s
 			{label: "dict", key: "treedb.cache.vlog_auto.frames.dict"},
 			{label: "block_snappy", key: "treedb.cache.vlog_auto.frames.block_snappy"},
 			{label: "block_lz4", key: "treedb.cache.vlog_auto.frames.block_lz4"},
+			{label: "block_zstd", key: "treedb.cache.vlog_auto.frames.block_zstd"},
 		})
 		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.bytes", []treeDBVlogSummaryMetric{
 			{label: "off", key: "treedb.cache.vlog_auto.bytes.off"},
 			{label: "dict", key: "treedb.cache.vlog_auto.bytes.dict"},
 			{label: "block_snappy", key: "treedb.cache.vlog_auto.bytes.block_snappy"},
 			{label: "block_lz4", key: "treedb.cache.vlog_auto.bytes.block_lz4"},
+			{label: "block_zstd", key: "treedb.cache.vlog_auto.bytes.block_zstd"},
 		})
 		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.frames_frac", []treeDBVlogSummaryMetric{
 			{label: "off", key: "treedb.cache.vlog_auto.frames_frac.off"},
 			{label: "dict", key: "treedb.cache.vlog_auto.frames_frac.dict"},
 			{label: "block_snappy", key: "treedb.cache.vlog_auto.frames_frac.block_snappy"},
 			{label: "block_lz4", key: "treedb.cache.vlog_auto.frames_frac.block_lz4"},
+			{label: "block_zstd", key: "treedb.cache.vlog_auto.frames_frac.block_zstd"},
 		})
 		appendTreeDBVlogSummaryLine(&dbSB, stats, "vlog_auto.probes", []treeDBVlogSummaryMetric{
 			{label: "attempts", key: "treedb.cache.vlog_auto.probe_attempts"},
@@ -6169,6 +6177,7 @@ func appendTreeDBLeafScanVlogSummaryLines(sb *strings.Builder, stats map[string]
 		{label: "dict", key: "treedb.cache.vlog_leaf_scan.auto.frames.dict"},
 		{label: "block_snappy", key: "treedb.cache.vlog_leaf_scan.auto.frames.block_snappy"},
 		{label: "block_lz4", key: "treedb.cache.vlog_leaf_scan.auto.frames.block_lz4"},
+		{label: "block_zstd", key: "treedb.cache.vlog_leaf_scan.auto.frames.block_zstd"},
 	})
 	for _, mode := range []string{"off", "block", "dict"} {
 		appendTreeDBVlogSummaryLine(sb, stats, "vlog_leaf_scan.write_mode."+mode, []treeDBVlogSummaryMetric{

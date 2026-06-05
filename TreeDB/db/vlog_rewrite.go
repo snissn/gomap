@@ -389,6 +389,8 @@ func valuelogBlockCodecFromDB(codec ValueLogBlockCodec) valuelog.BlockCodec {
 	switch codec {
 	case ValueLogBlockLZ4:
 		return valuelog.BlockCodecLZ4
+	case ValueLogBlockZSTD:
+		return valuelog.BlockCodecZSTD
 	default:
 		return valuelog.BlockCodecSnappy
 	}

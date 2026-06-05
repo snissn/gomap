@@ -820,7 +820,7 @@ const (
 	// plumbing new CLI flags through multiple repos.
 	envVlogCompression      = "TREEDB_VLOG_COMPRESSION"        // auto|dict|block|off
 	envVlogAutoPolicy       = "TREEDB_VLOG_AUTO_POLICY"        // balanced|throughput|size
-	envVlogBlockCodec       = "TREEDB_VLOG_BLOCK_CODEC"        // snappy|lz4
+	envVlogBlockCodec       = "TREEDB_VLOG_BLOCK_CODEC"        // snappy|lz4|zstd
 	envVlogBlockTargetBytes = "TREEDB_VLOG_BLOCK_TARGET_BYTES" // int (compressed target bytes)
 
 	// Value-log dictionary compression knobs (cached mode).
@@ -911,6 +911,8 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 			opts.ValueLog.BlockCodec = ValueLogBlockSnappy
 		case "lz4":
 			opts.ValueLog.BlockCodec = ValueLogBlockLZ4
+		case "zstd":
+			opts.ValueLog.BlockCodec = ValueLogBlockZSTD
 		}
 	}
 	if v, ok := envInt(envVlogBlockTargetBytes); ok {

@@ -413,6 +413,7 @@ type ValueLogBlockCodec uint8
 const (
 	ValueLogBlockSnappy ValueLogBlockCodec = iota
 	ValueLogBlockLZ4
+	ValueLogBlockZSTD
 )
 
 // ValueLogAutoPolicy controls auto-mode dict vs block selection bias.
@@ -1288,7 +1289,7 @@ func validateOptions(opts Options) error {
 		return fmt.Errorf("treedb: invalid value-log compression mode %d", opts.ValueLog.Compression)
 	}
 	switch opts.ValueLog.BlockCodec {
-	case ValueLogBlockSnappy, ValueLogBlockLZ4:
+	case ValueLogBlockSnappy, ValueLogBlockLZ4, ValueLogBlockZSTD:
 	default:
 		return fmt.Errorf("treedb: invalid value-log block codec %d", opts.ValueLog.BlockCodec)
 	}

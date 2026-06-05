@@ -174,6 +174,7 @@ func TestParseBenchBlockCodec(t *testing.T) {
 	}{
 		{in: "snappy", want: "snappy", wantID: treedb.ValueLogBlockSnappy},
 		{in: "lz4", want: "lz4", wantID: treedb.ValueLogBlockLZ4},
+		{in: "zstd", want: "zstd", wantID: treedb.ValueLogBlockZSTD},
 		{in: "bad", wantErr: true},
 	}
 	for _, tc := range cases {
