@@ -409,6 +409,15 @@ func (c *Collection) invalidateCollectionVectorIndexPreparedSearch(indexName str
 	}
 }
 
+func (c *Collection) hasCollectionVectorIndexPreparedSearchCacheEntries() bool {
+	if c == nil {
+		return false
+	}
+	c.vectorBufferedSearchMu.Lock()
+	defer c.vectorBufferedSearchMu.Unlock()
+	return len(c.vectorBufferedSearch) > 0
+}
+
 func (c *Collection) closeCollectionVectorIndexPreparedSearchCache() error {
 	if c == nil {
 		return nil
@@ -446,6 +455,9 @@ func (c *Collection) closeCollectionVectorIndexPreparedSearchCache() error {
 		if entry != nil && entry.prepared != nil {
 			closeErr = errors.Join(closeErr, entry.prepared.Close())
 		}
+	}
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() {
+		c.manager.unregisterCollectionHandle(c)
 	}
 	return closeErr
 }
