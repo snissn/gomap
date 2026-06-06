@@ -78,9 +78,10 @@ type Plan struct {
 	signs            []float64
 }
 
-// Workspace holds reusable scratch for Encode and EncodeQuery. Query values
-// returned by EncodeQuery alias this workspace and remain valid until the next
-// EncodeQuery call using the same Workspace.
+// Workspace holds reusable scratch for Encode, EncodeQuery, and query byte-table
+// preparation. Query values returned by EncodeQuery alias query-specific
+// workspace buffers and remain valid until the next EncodeQuery call using the
+// same Workspace.
 type Workspace struct {
 	work         []float64
 	queryBits    []byte
@@ -102,6 +103,70 @@ type Query struct {
 	AbsWeights     []float32
 	WeightSum      float32
 	CodeDimensions int
+}
+
+// ByteMismatchTableEntries is the number of per-byte XOR masks in a query-local
+// mismatch-weight table.
+const ByteMismatchTableEntries = 256
+
+// PrepareQueryByteMismatchWeights builds query-local byte/XOR mask tables for
+// the v1 weighted sign-dot scorer. The returned slice aliases ws and remains
+// valid until the next operation that reuses the same workspace scratch.
+func PrepareQueryByteMismatchWeights(query Query, ws *Workspace) ([]float64, float64, bool) {
+	if query.CodeDimensions <= 0 || len(query.AbsWeights) < query.CodeDimensions || len(query.SignBits) == 0 {
+		return nil, 0, false
+	}
+	bytesPerCode := (query.CodeDimensions + 7) / 8
+	if len(query.SignBits) != bytesPerCode {
+		return nil, 0, false
+	}
+	if ws == nil {
+		ws = &Workspace{}
+	}
+	entries := bytesPerCode * ByteMismatchTableEntries
+	if cap(ws.work) < entries {
+		ws.work = make([]float64, entries)
+	} else {
+		ws.work = ws.work[:entries]
+	}
+	var queryWeightSum float64
+	var byteWeights [8]float64
+	for byteIdx := 0; byteIdx < bytesPerCode; byteIdx++ {
+		validBits := query.CodeDimensions - byteIdx*8
+		if validBits > 8 {
+			validBits = 8
+		}
+		if validBits <= 0 {
+			return nil, 0, false
+		}
+		for bit := 0; bit < validBits; bit++ {
+			weight := float64(query.AbsWeights[byteIdx*8+bit])
+			if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
+				return nil, 0, false
+			}
+			byteWeights[bit] = weight
+			queryWeightSum += weight
+		}
+		for bit := validBits; bit < len(byteWeights); bit++ {
+			byteWeights[bit] = 0
+		}
+		base := byteIdx * ByteMismatchTableEntries
+		ws.work[base] = 0
+		for mask := 1; mask < ByteMismatchTableEntries; mask++ {
+			leastBit := mask & -mask
+			ws.work[base+mask] = ws.work[base+(mask^leastBit)] + byteWeights[bits.TrailingZeros8(uint8(leastBit))]
+		}
+	}
+	if queryWeightSum <= 0 || math.IsNaN(queryWeightSum) || math.IsInf(queryWeightSum, 0) {
+		return nil, 0, false
+	}
+	return ws.work, queryWeightSum, true
+}
+
+// QueryByteMismatchWeightsValid reports whether weights has the shape returned
+// by PrepareQueryByteMismatchWeights for query.
+func QueryByteMismatchWeightsValid(query Query, weights []float64, queryWeightSum float64) bool {
+	return query.CodeDimensions > 0 && len(query.SignBits) == (query.CodeDimensions+7)/8 && len(weights) == len(query.SignBits)*ByteMismatchTableEntries && queryWeightSum > 0 && !math.IsNaN(queryWeightSum) && !math.IsInf(queryWeightSum, 0)
 }
 
 // NewPlan validates dimensions, derives code shape, and precomputes the v1
