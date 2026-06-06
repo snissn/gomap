@@ -46,6 +46,60 @@ func TestOpenDefaultsToCommandWALDurable(t *testing.T) {
 	}
 }
 
+func TestOpenDefaultsUseGethSizedCommandWALSegments(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "treedb")
+	opts, err := resolveTreeDBOptions(dir, nil)
+	if err != nil {
+		t.Fatalf("resolve default options: %v", err)
+	}
+	if got := opts.WALMaxSegmentBytes; got != defaultGethCommandWALMaxSegmentBytes {
+		t.Fatalf("default WALMaxSegmentBytes=%d want %d", got, defaultGethCommandWALMaxSegmentBytes)
+	}
+
+	custom := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	custom.WALMaxSegmentBytes = 1024
+	opts, err = resolveTreeDBOptions(dir, &OpenOptions{Options: &custom})
+	if err != nil {
+		t.Fatalf("resolve custom options: %v", err)
+	}
+	if got := opts.WALMaxSegmentBytes; got != 1024 {
+		t.Fatalf("explicit WALMaxSegmentBytes=%d want preserved 1024", got)
+	}
+}
+
+func TestOpenWithOptionsAppliesGethSizedCommandWALSegments(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, filepath.Join(t.TempDir(), "treedb"))
+	opts.WALMaxSegmentBytes = 0
+	db, err := OpenWithOptions(opts)
+	if err != nil {
+		t.Fatalf("OpenWithOptions: %v", err)
+	}
+	defer db.Close()
+	if got := db.walMaxSegmentBytes; got != defaultGethCommandWALMaxSegmentBytes {
+		t.Fatalf("OpenWithOptions WALMaxSegmentBytes=%d want %d", got, defaultGethCommandWALMaxSegmentBytes)
+	}
+}
+
+func TestOpenWithOptionsAppliesGethSizedWALSegmentsBeforeReadOnlyFormatActivation(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "treedb")
+	writable, err := Open(dir, nil)
+	if err != nil {
+		t.Fatalf("Open writable: %v", err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("close writable: %v", err)
+	}
+
+	readOnly, err := OpenWithOptions(treedb.Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("OpenWithOptions read-only: %v", err)
+	}
+	defer readOnly.Close()
+	if got := readOnly.walMaxSegmentBytes; got != defaultGethCommandWALMaxSegmentBytes {
+		t.Fatalf("read-only WALMaxSegmentBytes=%d want %d", got, defaultGethCommandWALMaxSegmentBytes)
+	}
+}
+
 func TestOpenRejectsWritableNonCommandWALOptions(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileBench, filepath.Join(t.TempDir(), "treedb"))
 	if _, err := OpenWithOptions(opts); err == nil {
