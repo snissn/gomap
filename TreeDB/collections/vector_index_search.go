@@ -1069,6 +1069,7 @@ func (c *Collection) searchVectorIndexPreparedNoDocumentOwned(opts VectorIndexSe
 			return response, err
 		}
 		lastResponse, lastErr = response, err
+		lastResponse.Results = nil
 		c.invalidateCollectionVectorIndexPreparedSearch(slot, prepared)
 	}
 	releaseCollectionSearchVectorIndexResponseBuffer(buffer)
@@ -1239,6 +1240,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 			return response, err
 		}
 		lastResponse, lastErr = response, err
+		lastResponse.Results = nil
 		resetBufferedVectorIndexSearchResponse(&response, buffer)
 		c.invalidateCollectionVectorIndexPreparedSearch(slot, prepared)
 	}
