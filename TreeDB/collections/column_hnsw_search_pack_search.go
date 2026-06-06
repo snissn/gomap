@@ -136,7 +136,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 			}
 			continue
 		}
-		if columnVectorGraphLayer0SearchShouldStop(candidate, scratch.top, efSearch) {
+		if columnHNSWSearchPackLayer0SearchShouldStop(candidate, scratch.top, efSearch) {
 			break
 		}
 		adjacency, err := v.adjacencyLayerForOrdinal(candidate.ordinal, 0, &stats)
@@ -176,9 +176,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
-	if len(scratch.top) > topK {
-		scratch.top = scratch.top[:topK]
-	}
+	columnHNSWSearchPackSelectBestTop(scratch, topK)
 	if opts.OmitResultMaterialization {
 		for _, candidate := range scratch.top {
 			scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{Ordinal: candidate.ordinal, Score: candidate.score})
@@ -262,10 +260,143 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisited(normalize
 		(*visitedCandidates)++
 	}
 	candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}
-	if scratch.insertTop(topK, candidate) {
+	if columnHNSWSearchPackInsertTop(scratch, topK, candidate) {
 		scratch.pushFrontier(candidate)
 	}
 	return nil
+}
+
+// columnHNSWSearchPackLayer0SearchShouldStop is the search-pack equivalent of
+// columnVectorGraphLayer0SearchShouldStop for the exact-pack top set, which is
+// maintained as a worst-at-root heap during traversal.
+func columnHNSWSearchPackLayer0SearchShouldStop(candidate columnVectorGraphSearchCandidate, top []columnVectorGraphSearchCandidate, efSearch int) bool {
+	if efSearch <= 0 || len(top) < efSearch {
+		return false
+	}
+	return candidate.score < top[0].score
+}
+
+// columnHNSWSearchPackInsertTop keeps the retained exact-pack candidates as a
+// worst-at-root heap. It returns true only when candidate enters the retained
+// set, preserving the existing rule that retained candidates are queued for
+// frontier expansion.
+func columnHNSWSearchPackInsertTop(scratch *columnVectorGraphNativeSearchScratch, limit int, candidate columnVectorGraphSearchCandidate) bool {
+	if limit <= 0 || scratch == nil {
+		return false
+	}
+	top := scratch.top
+	n := len(top)
+	if n < limit {
+		top = append(top, columnVectorGraphSearchCandidate{})
+		scratch.top = top
+		columnHNSWSearchPackTopHeapSiftUp(top, n, candidate)
+		return true
+	}
+	if !columnVectorGraphSearchCandidateBetter(candidate, top[0]) {
+		return false
+	}
+	columnHNSWSearchPackTopHeapSiftDown(top, 0, candidate)
+	return true
+}
+
+func columnHNSWSearchPackCandidateWorse(left, right columnVectorGraphSearchCandidate) bool {
+	if left.score == right.score {
+		return left.ordinal > right.ordinal
+	}
+	return left.score < right.score
+}
+
+func columnHNSWSearchPackTopHeapSiftUp(top []columnVectorGraphSearchCandidate, idx int, candidate columnVectorGraphSearchCandidate) {
+	for idx > 0 {
+		parent := (idx - 1) / columnVectorGraphNativeFrontierHeapFanout
+		parentCandidate := top[parent]
+		if !columnHNSWSearchPackCandidateWorse(candidate, parentCandidate) {
+			break
+		}
+		top[idx] = parentCandidate
+		idx = parent
+	}
+	top[idx] = candidate
+}
+
+func columnHNSWSearchPackTopHeapSiftDown(top []columnVectorGraphSearchCandidate, idx int, candidate columnVectorGraphSearchCandidate) {
+	n := len(top)
+	for {
+		firstChild := idx*columnVectorGraphNativeFrontierHeapFanout + 1
+		if firstChild >= n {
+			break
+		}
+		child := firstChild
+		childCandidate := top[firstChild]
+		if next := firstChild + 1; next < n && columnHNSWSearchPackCandidateWorse(top[next], childCandidate) {
+			child = next
+			childCandidate = top[next]
+		}
+		if next := firstChild + 2; next < n && columnHNSWSearchPackCandidateWorse(top[next], childCandidate) {
+			child = next
+			childCandidate = top[next]
+		}
+		if next := firstChild + 3; next < n && columnHNSWSearchPackCandidateWorse(top[next], childCandidate) {
+			child = next
+			childCandidate = top[next]
+		}
+		if !columnHNSWSearchPackCandidateWorse(childCandidate, candidate) {
+			break
+		}
+		top[idx] = childCandidate
+		idx = child
+	}
+	top[idx] = candidate
+}
+
+// columnHNSWSearchPackSelectBestTop converts the retained heap into the final
+// best-to-worst result prefix. When topK is smaller than efSearch, it reuses the
+// frontier scratch as the temporary sorted prefix to avoid hot-path allocation.
+func columnHNSWSearchPackSelectBestTop(scratch *columnVectorGraphNativeSearchScratch, topK int) {
+	if scratch == nil || topK <= 0 || len(scratch.top) == 0 {
+		return
+	}
+	top := scratch.top
+	if len(top) <= topK {
+		columnHNSWSearchPackSortTop(top)
+		return
+	}
+	selected := scratch.frontier[:0]
+	if cap(selected) < topK {
+		columnHNSWSearchPackSortTop(top)
+		scratch.top = top[:topK]
+		return
+	}
+	for _, candidate := range top {
+		n := len(selected)
+		if n >= topK && !columnVectorGraphSearchCandidateBetter(candidate, selected[n-1]) {
+			continue
+		}
+		pos := n
+		for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, selected[pos-1]) {
+			pos--
+		}
+		if n < topK {
+			selected = append(selected, columnVectorGraphSearchCandidate{})
+			n++
+		}
+		for shift := n - 1; shift > pos; shift-- {
+			selected[shift] = selected[shift-1]
+		}
+		selected[pos] = candidate
+	}
+	copy(top[:len(selected)], selected)
+	scratch.top = top[:len(selected)]
+	scratch.frontier = selected
+}
+
+func columnHNSWSearchPackSortTop(top []columnVectorGraphSearchCandidate) {
+	for n := len(top); n > 1; n-- {
+		worst := top[0]
+		last := top[n-1]
+		top[n-1] = worst
+		columnHNSWSearchPackTopHeapSiftDown(top[:n-1], 0, last)
+	}
 }
 
 func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(normalizedQuery []float32, rowIDs []uint32, topK int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64) error {
@@ -284,7 +415,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 			}
 			for i, rowID := range rowIDs {
 				candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: float64(dots[i])}
-				if scratch.insertTop(topK, candidate) {
+				if columnHNSWSearchPackInsertTop(scratch, topK, candidate) {
 					scratch.pushFrontier(candidate)
 				}
 			}
@@ -301,7 +432,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 	}
 	for i, rowID := range rowIDs {
 		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scores[i]}
-		if scratch.insertTop(topK, candidate) {
+		if columnHNSWSearchPackInsertTop(scratch, topK, candidate) {
 			scratch.pushFrontier(candidate)
 		}
 	}
