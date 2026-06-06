@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -188,9 +189,11 @@ func TestVectorIndexSearcherRabitQQuantizedSearchWithBuffer2451(t *testing.T) {
 
 	var collectionBuffer VectorIndexSearchBuffer
 	collectionGot, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: q.Name, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1}, &collectionBuffer)
-	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "does not yet support rabitq_1bit") || len(collectionGot.Results) != 0 {
-		t.Fatalf("collection SearchVectorIndexWithBuffer rabitq response=%+v err=%v want scoped unsupported fail-closed", collectionGot, err)
+	if err != nil {
+		t.Fatalf("collection rabitq quantized_only SearchVectorIndexWithBuffer: %v", err)
 	}
+	assertVectorIndexSearchResultsV4(t, collectionGot.Results, rabitqQuantizedTopKForTest2451(t, rows, query, 3), false)
+	assertRabitQQuantizedOnlyStats2451(t, collectionGot.Stats, plan.BytesPerCode())
 
 	rerankedAll, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: q.Name, QuantizedRerankCandidates: len(rows), TopK: 2, EfSearch: len(rows)}, &buffer)
 	if err != nil {
@@ -208,6 +211,307 @@ func TestVectorIndexSearcherRabitQQuantizedSearchWithBuffer2451(t *testing.T) {
 		t.Fatalf("rabitq quantized_rerank short results=%d want 2", len(rerankedShort.Results))
 	}
 	assertRabitQQuantizedRerankStats2451(t, rerankedShort.Stats, shortlist, def.Dimensions, plan.BytesPerCode())
+}
+
+func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.5, 0.5, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+		{id: "doc-e", vector: []float32{-0.25, 0.75, 0.125}},
+	}
+	query := []float32{0.2, 0.9, 0.1}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	q := def.QuantizedIndexes[0]
+	plan, err := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("rabitq.NewPlan: %v", err)
+	}
+
+	quantizedOnlyOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: q.Name, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+	var buffer VectorIndexSearchBuffer
+	quantizedOnly, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("SearchVectorIndexWithBuffer rabitq quantized_only: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, quantizedOnly, def.Name, quantizedOnlyOpts.TopK)
+	assertVectorIndexSearchResultsV4(t, quantizedOnly.Results, rabitqQuantizedTopKForTest2451(t, rows, query, quantizedOnlyOpts.TopK), false)
+	assertCollectionBufferedRabitQQuantizedRouteStats2452(t, quantizedOnly.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, quantizedOnlyOpts, def.Dimensions, plan.BytesPerCode())
+	if len(buffer.results) != quantizedOnlyOpts.TopK || len(buffer.idBytes) == 0 || &quantizedOnly.Results[0] != &buffer.results[0] || &quantizedOnly.Results[0].ID[0] != &buffer.idBytes[0] {
+		_ = d.Close()
+		t.Fatalf("rabitq quantized_only response does not alias caller-owned buffer: results=%d idBytes=%d", len(buffer.results), len(buffer.idBytes))
+	}
+	warmSnap := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if warmSnap.Entries != 1 || warmSnap.CacheBuilds != 1 || warmSnap.CacheMisses != 1 {
+		_ = d.Close()
+		t.Fatalf("cache after rabitq quantized warm=%+v want one prepared entry", warmSnap)
+	}
+
+	for i := 0; i < 3; i++ {
+		got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
+		if err != nil {
+			_ = d.Close()
+			t.Fatalf("cached rabitq quantized_only iteration %d: %v", i, err)
+		}
+		assertCollectionBufferedRabitQQuantizedRouteStats2452(t, got.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, quantizedOnlyOpts, def.Dimensions, plan.BytesPerCode())
+	}
+	afterOnly := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterOnly.Entries != 1 || afterOnly.CacheBuilds != warmSnap.CacheBuilds || afterOnly.CacheHits < warmSnap.CacheHits+3 {
+		_ = d.Close()
+		t.Fatalf("cache after rabitq quantized_only reuse=%+v warm=%+v want hits without rebuild", afterOnly, warmSnap)
+	}
+
+	rerankOpts := quantizedOnlyOpts
+	rerankOpts.QueryMode = VectorIndexQueryModeQuantizedRerank
+	rerankOpts.QuantizedRerankCandidates = len(rows)
+	rerankOpts.TopK = 2
+	reranked, err := col.SearchVectorIndexWithBuffer(rerankOpts, &buffer)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("SearchVectorIndexWithBuffer rabitq quantized_rerank: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, reranked, def.Name, rerankOpts.TopK)
+	assertVectorIndexSearchResultsV4(t, reranked.Results, exactColumnGraphTopKForTest(t, rows, query, rerankOpts.TopK), false)
+	assertCollectionBufferedRabitQQuantizedRouteStats2452(t, reranked.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, rerankOpts, def.Dimensions, plan.BytesPerCode())
+	afterRerank := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterRerank.Entries != 1 || afterRerank.CacheBuilds != afterOnly.CacheBuilds || afterRerank.CacheHits <= afterOnly.CacheHits {
+		_ = d.Close()
+		t.Fatalf("cache after rabitq quantized_rerank=%+v afterOnly=%+v want shared prepared entry", afterRerank, afterOnly)
+	}
+
+	quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
+		got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
+		if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
+			panic("unexpected rabitq quantized_only SearchVectorIndexWithBuffer allocation probe result")
+		}
+	})
+	if quantizedOnlyAllocs != 0 {
+		_ = d.Close()
+		t.Fatalf("rabitq quantized_only SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", quantizedOnlyAllocs)
+	}
+	rerankAllocs := testing.AllocsPerRun(100, func() {
+		got, err := col.SearchVectorIndexWithBuffer(rerankOpts, &buffer)
+		if err != nil || len(got.Results) != rerankOpts.TopK {
+			panic("unexpected rabitq quantized_rerank SearchVectorIndexWithBuffer allocation probe result")
+		}
+	})
+	if rerankAllocs != 0 {
+		_ = d.Close()
+		t.Fatalf("rabitq quantized_rerank SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
+	}
+
+	beforeClose := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if beforeClose.Entries != 1 || beforeClose.ActiveHandles == 0 {
+		_ = d.Close()
+		t.Fatalf("cache before close=%+v want active rabitq quantized entry", beforeClose)
+	}
+	if err := col.closeCollectionVectorIndexPreparedSearchCache(); err != nil {
+		_ = d.Close()
+		t.Fatalf("close collection cache: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 0 || snap.ActiveHandles != 0 {
+		_ = d.Close()
+		t.Fatalf("cache after collection close=%+v want released", snap)
+	}
+	if _, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer); err != nil {
+		_ = d.Close()
+		t.Fatalf("SearchVectorIndexWithBuffer after rabitq cache close: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 1 || snap.ActiveHandles == 0 {
+		_ = d.Close()
+		t.Fatalf("cache after rabitq rebuild=%+v want active entry", snap)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("DB Close: %v", err)
+	}
+	if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 0 || snap.ActiveHandles != 0 {
+		t.Fatalf("cache after DB close=%+v want released by manager close hook", snap)
+	}
+}
+
+func TestCollectionSearchVectorIndexWithBufferRabitQFailClosedAndQueryErrors2452(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	q := def.QuantizedIndexes[0]
+	plan, err := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
+	if err != nil {
+		t.Fatalf("rabitq.NewPlan: %v", err)
+	}
+	base := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: q.Name, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(base, &buffer); err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	beforeBadQuery := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if beforeBadQuery.Entries != 1 || beforeBadQuery.CacheBuilds != 1 || beforeBadQuery.ActiveHandles == 0 {
+		t.Fatalf("cache before bad rabitq query=%+v want warmed entry", beforeBadQuery)
+	}
+	badQuery := base
+	badQuery.Query = []float32{1, 0}
+	bad, err := col.SearchVectorIndexWithBuffer(badQuery, &buffer)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
+		t.Fatalf("bad rabitq query response=%+v err=%v want dimension mismatch", bad, err)
+	}
+	if len(bad.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("bad rabitq query left results response=%d bufferResults=%d idBytes=%d", len(bad.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	afterBadQuery := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterBadQuery.Entries != 1 || afterBadQuery.CacheBuilds != beforeBadQuery.CacheBuilds || afterBadQuery.Invalidations != beforeBadQuery.Invalidations || afterBadQuery.ActiveHandles == 0 {
+		t.Fatalf("cache after bad rabitq query=%+v before=%+v want healthy prepared state retained", afterBadQuery, beforeBadQuery)
+	}
+	valid, err := col.SearchVectorIndexWithBuffer(base, &buffer)
+	if err != nil {
+		t.Fatalf("valid rabitq SearchVectorIndexWithBuffer after bad query: %v", err)
+	}
+	assertCollectionBufferedRabitQQuantizedRouteStats2452(t, valid.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, base, def.Dimensions, plan.BytesPerCode())
+
+	for _, tc := range []struct {
+		name   string
+		mode   VectorIndexQueryMode
+		health columnVectorGraphQuantizedAssetHealth
+		mutate func(map[string]columnVectorGraphQuantizedAssetLoadStatus, string, columnVectorGraphQuantizedAssetLoadStatus)
+	}{
+		{
+			name:   "missing",
+			mode:   VectorIndexQueryModeQuantizedOnly,
+			health: columnVectorGraphQuantizedAssetHealthMissing,
+			mutate: func(status map[string]columnVectorGraphQuantizedAssetLoadStatus, qName string, original columnVectorGraphQuantizedAssetLoadStatus) {
+				delete(status, qName)
+			},
+		},
+		{
+			name:   "invalid",
+			mode:   VectorIndexQueryModeQuantizedOnly,
+			health: columnVectorGraphQuantizedAssetHealthInvalid,
+			mutate: func(status map[string]columnVectorGraphQuantizedAssetLoadStatus, qName string, original columnVectorGraphQuantizedAssetLoadStatus) {
+				original.Prepared = nil
+				original.RabitQPlan = nil
+				original.Health = columnVectorGraphQuantizedAssetHealthInvalid
+				original.Err = fmt.Errorf("%w: checksum mismatch", errColumnVectorGraphQuantizedAssetInvalid)
+				status[qName] = original
+			},
+		},
+		{
+			name:   "stale",
+			mode:   VectorIndexQueryModeQuantizedRerank,
+			health: columnVectorGraphQuantizedAssetHealthStale,
+			mutate: func(status map[string]columnVectorGraphQuantizedAssetLoadStatus, qName string, original columnVectorGraphQuantizedAssetLoadStatus) {
+				original.Prepared = nil
+				original.RabitQPlan = nil
+				original.Health = columnVectorGraphQuantizedAssetHealthStale
+				original.Err = fmt.Errorf("%w: base graph identity mismatch", errColumnVectorGraphQuantizedAssetStale)
+				status[qName] = original
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := base
+			opts.QueryMode = tc.mode
+			if tc.mode == VectorIndexQueryModeQuantizedRerank {
+				opts.QuantizedRerankCandidates = 1
+			}
+			if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+				t.Fatalf("warm %s SearchVectorIndexWithBuffer: %v", tc.name, err)
+			}
+			mutateCachedCollectionQuantizedAssetStatus2415(t, col, opts, tc.mutate)
+			got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+			if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+				t.Fatalf("SearchVectorIndexWithBuffer err=%v want ErrVectorIndexSearchUnavailable", err)
+			}
+			if len(got.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+				t.Fatalf("unavailable rabitq response results=%d buffer.results=%d idBytes=%d want fail-closed empty", len(got.Results), len(buffer.results), len(buffer.idBytes))
+			}
+			assertQuantizedUnavailableGuardrailStats2416(t, got.Stats, columnVectorGraphNativeSearchQueryModeFromPublic2415(tc.mode), tc.health)
+			if got.Stats.SearchRouteHNSWSearchPack != 0 || got.Stats.HNSWSearchPackFallbacks != 0 || got.Stats.PreparedScoreCalls != 0 || got.Stats.QuantizedScoreCalls != 0 || got.Stats.VectorBytesRead != 0 || got.Stats.NormBytesRead != 0 || got.Stats.OpenSearcherCalls != 0 || got.Stats.OpenSetupInTimedLoop != 0 {
+				t.Fatalf("unavailable rabitq stats=%+v want fail-closed without exact fallback/open", got.Stats)
+			}
+			afterFailure := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+			if afterFailure.Entries != 0 || afterFailure.ActiveHandles != 0 {
+				t.Fatalf("cache after rabitq fail-closed asset=%+v want invalidated closed entry", afterFailure)
+			}
+			recovered, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+			if err != nil {
+				t.Fatalf("SearchVectorIndexWithBuffer after rabitq fail-closed rebuild: %v", err)
+			}
+			assertCollectionBufferedRabitQQuantizedRouteStats2452(t, recovered.Stats, columnVectorGraphNativeSearchQueryModeFromPublic2415(tc.mode), opts, def.Dimensions, plan.BytesPerCode())
+		})
+	}
+}
+
+func TestCollectionVectorIndexPreparedQuantizedSearchCacheKeyRabitQIdentity2452(t *testing.T) {
+	makeKey := func(t *testing.T, q QuantizedVectorIndexDefinition) string {
+		t.Helper()
+		def := columnGraphRebuildVectorIndexDefinitionV2A(3, 3)
+		def.QuantizedIndexes = []QuantizedVectorIndexDefinition{q}
+		def, err := normalizeVectorIndexDefinition(def)
+		if err != nil {
+			t.Fatalf("normalizeVectorIndexDefinition: %v", err)
+		}
+		q = def.QuantizedIndexes[0]
+		graphRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "ns", Generation: 7, PartID: 11, FileID: 13, Offset: 17, Length: 19, Checksum: 23}
+		graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: 29, BaseManifestChecksum: 31, BaseSchemaHash: 37, GraphSchemaHash: 41, RowCount: 5, AssetRef: graphRef, AssetBytes: graphRef.Length}
+		logicalType, physicalEncoding := columnVectorGraphQuantizedAssetStateType(q)
+		asset := columnVectorIndexStateAssetSnapshot{Role: columnVectorIndexStateAssetRoleQuantizedCodes, AssetID: columnVectorGraphQuantizedAssetID(q), LogicalType: logicalType, PhysicalEncoding: physicalEncoding, RowCount: graph.RowCount, SourceSchemaHash: 43, AssetBytes: 47, Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: "ns", Generation: graph.BaseManifestGeneration, PartID: 53, FileID: 59, Offset: 61, Length: 67, Checksum: 71}}
+		state := columnVectorIndexStateSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, RowCount: graph.RowCount, BaseManifestGeneration: graph.BaseManifestGeneration, BaseManifestChecksum: graph.BaseManifestChecksum, BaseSchemaHash: graph.BaseSchemaHash, AdjacencyLayerCount: graph.AdjacencyLayerCount, Assets: []columnVectorIndexStateAssetSnapshot{asset}}
+		key, err := collectionVectorIndexPreparedQuantizedSearchCacheKey("docs", "ns", def, graph, state, q.Name, 1)
+		if err != nil {
+			t.Fatalf("collectionVectorIndexPreparedQuantizedSearchCacheKey %s: %v", q.Codec, err)
+		}
+		return key
+	}
+
+	scalarKey := makeKey(t, QuantizedVectorIndexDefinition{Name: columnGraphScalarU8QuantizedBenchIndexName1926, Codec: QuantizedVectorCodecScalarU8})
+	rabitqKey := makeKey(t, QuantizedVectorIndexDefinition{Name: columnGraphRabitQQuantizedIndexName2450, Codec: rabitq.CodecName})
+	if scalarKey == rabitqKey {
+		t.Fatalf("scalar_u8 and rabitq cache keys are equal: %q", scalarKey)
+	}
+	if !strings.Contains(scalarKey, "codec=scalar_u8|version=1|codec_config_hash=0|codec_config=|code_dimensions=3|code_width_bits=8|") || !strings.Contains(scalarKey, "asset_id=quantized/embedding.scalar_u8.fast/codes") {
+		t.Fatalf("scalar cache key missing codec/version/config/asset identity: %s", scalarKey)
+	}
+	wantRabitQIdentity := fmt.Sprintf("codec=%s|version=%d|codec_config_hash=%d|codec_config=%x|code_dimensions=4|code_width_bits=%d|", rabitq.CodecName, rabitq.CodecVersion, rabitq.DefaultConfig().Hash64(), rabitq.DefaultConfig().CanonicalBytes(), rabitq.CodeWidthBits)
+	if !strings.Contains(rabitqKey, wantRabitQIdentity) || !strings.Contains(rabitqKey, "asset_id=quantized/embedding.rabitq_1bit.fast/packed_codes") {
+		t.Fatalf("rabitq cache key missing codec/version/config/asset identity: %s want identity %s", rabitqKey, wantRabitQIdentity)
+	}
+}
+
+func assertCollectionBufferedRabitQQuantizedRouteStats2452(tb testing.TB, stats VectorIndexSearchStats, mode columnVectorGraphNativeSearchQueryMode, opts VectorIndexSearchOptions, dims int, bytesPerCode int) {
+	tb.Helper()
+	if bytesPerCode <= 0 {
+		tb.Fatalf("rabitq bytes_per_code=%d", bytesPerCode)
+	}
+	if !vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats, mode, opts, dims) {
+		tb.Fatalf("collection buffered rabitq stats=%+v want healthy no-document quantized route", stats)
+	}
+	if stats.OpenSearcherCalls != 0 || stats.OpenSetupInTimedLoop != 0 || stats.ResponseOwnedResultAllocs != 0 {
+		tb.Fatalf("collection buffered rabitq boundary stats=%+v want no one-shot open/setup or response-owned allocation signal", stats)
+	}
+	switch mode {
+	case columnVectorGraphNativeSearchQueryModeQuantizedOnly:
+		assertRabitQQuantizedOnlyStats2451(tb, stats, bytesPerCode)
+	case columnVectorGraphNativeSearchQueryModeQuantizedRerank:
+		shortlist := opts.QuantizedRerankCandidates
+		if shortlist == 0 {
+			shortlist = opts.EfSearch
+		}
+		assertRabitQQuantizedRerankStats2451(tb, stats, shortlist, dims, bytesPerCode)
+	default:
+		tb.Fatalf("unexpected rabitq query mode %s", mode.String())
+	}
 }
 
 func TestColumnGraphRabitQQuantizedScorerMatchesOracle2451(t *testing.T) {

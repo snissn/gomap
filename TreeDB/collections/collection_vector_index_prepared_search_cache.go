@@ -7,7 +7,6 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
-	"github.com/snissn/gomap/TreeDB/internal/rabitq"
 )
 
 type collectionVectorIndexPreparedSearchFamily uint8
@@ -468,10 +467,6 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(reader, routeStats, opts.QuantizedIndexName, queryMode)
 		return nil, response, err
 	}
-	if qdef, ok := findQuantizedVectorIndex(def, opts.QuantizedIndexName); ok && qdef.Codec == rabitq.CodecName {
-		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(reader, routeStats, opts.QuantizedIndexName, queryMode)
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer collection buffered quantized route does not yet support rabitq_1bit; use VectorIndexSearcher.SearchWithBuffer for lower-level rabitq_1bit search", ErrVectorIndexSearchUnavailable, def.Name)
-	}
 	key, err := collectionVectorIndexPreparedQuantizedSearchCacheKey(readerCatalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState, opts.QuantizedIndexName, opts.MaxDecodedBlocks)
 	if err != nil {
 		return nil, response, err
@@ -554,7 +549,12 @@ func collectionVectorIndexPreparedQuantizedSearchCacheKey(collection string, nam
 	if !ok {
 		return "", fmt.Errorf("%w: %w: vector index %q quantized index %q has no quantized score-plane asset", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetMissing, def.Name, quantizedIndexName)
 	}
-	return fmt.Sprintf("collection_buffered_quantized_v1|family=quantized|q=%s|codec=%s|version=%d|max_decoded_blocks=%d|asset_id=%s|asset_schema=%d|asset_bytes=%d|asset_ref=%+v|%s", qdef.Name, qdef.Codec, qdef.Version, maxDecodedBlocks, asset.AssetID, asset.SourceSchemaHash, asset.AssetBytes, columnVectorGraphQuantizedAssetRefIdentity(asset.Ref), base), nil
+	refIdentity := columnVectorGraphQuantizedAssetRefIdentity(asset.Ref)
+	schema, err := columnVectorGraphQuantizedAssetSchema(def, graph, qdef, asset, refIdentity)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w: vector index %q quantized index %q cache key schema identity: %v", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, def.Name, quantizedIndexName, err)
+	}
+	return fmt.Sprintf("collection_buffered_quantized_v1|family=quantized|q=%s|codec=%s|version=%d|codec_config_hash=%d|codec_config=%x|code_dimensions=%d|code_width_bits=%d|max_decoded_blocks=%d|asset_id=%s|asset_schema=%d|asset_bytes=%d|asset_ref=%+v|%s", qdef.Name, qdef.Codec, qdef.Version, schema.Codec.ConfigHash, schema.Codec.Config, schema.CodeDimensions, schema.CodeWidthBits, maxDecodedBlocks, asset.AssetID, asset.SourceSchemaHash, asset.AssetBytes, refIdentity, base), nil
 }
 
 func (p *collectionVectorIndexPreparedSearch) readyForCurrentSearch() bool {
