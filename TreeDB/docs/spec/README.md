@@ -110,6 +110,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1926 scalar_u8 quantized score-plane semantics, fail-closed query
     modes, exact rerank behavior, benchmark/storage evidence, and future-work
     boundaries.
+- `TreeDB/docs/spec/rabitq-1bit-v1.md`
+  - issue #2449 `rabitq_1bit` v1 codec identity, packed-bit storage shape,
+    deterministic reference rotation, query/scoring oracle APIs, and non-goals.
 - `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
   - issue #2036 role-specific prepared runtime-view and admission policy for
     current-format typed-column graph search.
