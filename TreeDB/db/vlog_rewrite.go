@@ -3423,6 +3423,11 @@ type rewriteWriter struct {
 	pendingDictRecords []valuelog.Record
 	pendingDictPtrs    []page.ValuePtr
 	pendingDictDst     []page.ValuePtr
+
+	leafCompactScratch []byte
+	leafCompactArena   []byte
+	leafBatchRecords   []valuelog.Record
+	leafBatchValuePtrs []page.ValuePtr
 }
 
 type rewriteTemplateClass uint8
@@ -3713,9 +3718,14 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 	encodedLeafPage := leafPage
 	if w.leafPagesUseCompactPayload() {
 		var err error
-		encodedLeafPage, _, err = valuelog.MaybeCompactLeafLogPayload(leafPage)
+		encodedLeafPage, _, err = valuelog.MaybeCompactLeafLogPayloadTo(w.leafCompactScratch[:0], leafPage)
 		if err != nil {
 			return page.LeafLogPtr{}, err
+		}
+		if cap(encodedLeafPage) > page.PageSize*2 {
+			w.leafCompactScratch = nil
+		} else {
+			w.leafCompactScratch = encodedLeafPage[:0]
 		}
 	}
 	if w.leafDir != "" {
@@ -3790,7 +3800,12 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 	if err := w.ensureLeafWriter(); err != nil {
 		return nil, err
 	}
-	records := make([]valuelog.Record, len(leafPages))
+	if cap(w.leafBatchRecords) < len(leafPages) {
+		w.leafBatchRecords = make([]valuelog.Record, len(leafPages))
+	}
+	records := w.leafBatchRecords[:len(leafPages)]
+	clear(records)
+	w.leafCompactArena = w.leafCompactArena[:0]
 	rawPayloadBytes := 0
 	dictID := uint64(0)
 	var dict []byte
@@ -3806,7 +3821,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 		encodedLeafPage := leafPage
 		if w.leafPagesUseCompactPayload() {
 			var err error
-			encodedLeafPage, _, err = valuelog.MaybeCompactLeafLogPayload(leafPage)
+			w.leafCompactArena, encodedLeafPage, _, err = valuelog.MaybeAppendCompactLeafLogPayloadTo(w.leafCompactArena, leafPage)
 			if err != nil {
 				return nil, err
 			}
@@ -3844,7 +3859,10 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 	if err := w.maybeRotateLeafForEstimate(rewriteDictFrameRecordLen(rawPayloadBytes, len(records))); err != nil {
 		return nil, err
 	}
-	valuePtrs := make([]page.ValuePtr, len(records))
+	if cap(w.leafBatchValuePtrs) < len(records) {
+		w.leafBatchValuePtrs = make([]page.ValuePtr, len(records))
+	}
+	valuePtrs := w.leafBatchValuePtrs[:len(records)]
 	valuePtrs, _, err := w.leafW.AppendFrameWithStatsInto(dictID, dict, records, valuePtrs)
 	if err != nil {
 		return nil, err
