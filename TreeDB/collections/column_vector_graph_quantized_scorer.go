@@ -241,6 +241,8 @@ type columnVectorGraphRabitQQuantizedScorer struct {
 	indexName                     string
 	plan                          *rabitq.Plan
 	query                         rabitq.Query
+	queryWeightSum                float64
+	queryByteMismatchWeights      []float64
 	codeRows                      quantizedasset.CodeRowView
 	codePayload                   []byte
 	codeCountPayload              []byte
@@ -319,7 +321,11 @@ func (r *columnVectorGraphPhysicalRowReader) prepareRabitQQuantizedScorer(mode c
 	if err != nil {
 		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q rabitq_1bit query encode: %v", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, err)
 	}
-	return columnVectorGraphRabitQQuantizedScorer{indexName: indexName, plan: plan, query: encodedQuery, codeRows: codeRows, codePayload: codePayload, codeCountPayload: codeCountPayload, quantizedDotProductInvPayload: qdpInvPayload, bytesPerCode: plan.BytesPerCode(), codeDimensions: plan.CodeDimensions()}, nil
+	queryByteMismatchWeights, queryWeightSum, ok := rabitq.PrepareQueryByteMismatchWeights(encodedQuery, &scratch.quantizedRabitQWorkspace)
+	if !ok {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q rabitq_1bit query byte tables unavailable", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName)
+	}
+	return columnVectorGraphRabitQQuantizedScorer{indexName: indexName, plan: plan, query: encodedQuery, queryWeightSum: queryWeightSum, queryByteMismatchWeights: queryByteMismatchWeights, codeRows: codeRows, codePayload: codePayload, codeCountPayload: codeCountPayload, quantizedDotProductInvPayload: qdpInvPayload, bytesPerCode: plan.BytesPerCode(), codeDimensions: plan.CodeDimensions()}, nil
 }
 
 func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
@@ -370,7 +376,7 @@ func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinals(ordinals []int, d
 }
 
 func (s *columnVectorGraphRabitQQuantizedScorer) validate() error {
-	if s == nil || s.plan == nil || !s.codeRows.Valid() || s.bytesPerCode <= 0 || s.codeDimensions <= 0 || len(s.codePayload) != s.codeRows.Rows()*s.bytesPerCode || len(s.codeCountPayload) != s.codeRows.Rows()*4 || len(s.quantizedDotProductInvPayload) != s.codeRows.Rows()*4 || !rabitqQueryShapeValidForPlan(s.query, s.plan) {
+	if s == nil || s.plan == nil || !s.codeRows.Valid() || s.bytesPerCode <= 0 || s.codeDimensions <= 0 || len(s.codePayload) != s.codeRows.Rows()*s.bytesPerCode || len(s.codeCountPayload) != s.codeRows.Rows()*4 || len(s.quantizedDotProductInvPayload) != s.codeRows.Rows()*4 || !rabitqQueryShapeValidForPlan(s.query, s.plan) || !rabitq.QueryByteMismatchWeightsValid(s.query, s.queryByteMismatchWeights, s.queryWeightSum) {
 		return fmt.Errorf("%w: column_graph quantized rabitq_1bit scorer is unavailable", ErrVectorIndexSearchUnavailable)
 	}
 	return nil
@@ -396,7 +402,7 @@ func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinalUnchecked(ordinal i
 		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit code_count ordinal=%d value=%d exceeds code_dimensions=%d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, codeCount, s.codeDimensions)
 	}
 	qdpInv := math.Float32frombits(binary.LittleEndian.Uint32(s.quantizedDotProductInvPayload[sideStart : sideStart+4]))
-	score, ok := rabitqQuantizedCosineScore(s.query, code, qdpInv)
+	score, ok := rabitqQuantizedCosineScoreWithByteTables(s.query, code, qdpInv, s.queryByteMismatchWeights, s.queryWeightSum)
 	if !ok {
 		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit score ordinal=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, ordinal)
 	}
@@ -416,6 +422,23 @@ func (s *columnVectorGraphRabitQQuantizedScorer) recordScoreStats(stats *columnV
 
 func rabitqQueryShapeValidForPlan(query rabitq.Query, plan *rabitq.Plan) bool {
 	return plan != nil && query.CodeDimensions == plan.CodeDimensions() && len(query.SignBits) == plan.BytesPerCode() && len(query.AbsWeights) == plan.CodeDimensions() && query.WeightSum > 0 && !math.IsNaN(float64(query.WeightSum)) && !math.IsInf(float64(query.WeightSum), 0)
+}
+
+func rabitqQuantizedCosineScoreWithByteTables(query rabitq.Query, code []byte, quantizedDotProductInv float32, byteMismatchWeights []float64, queryWeightSum float64) (float64, bool) {
+	if !rabitq.QueryByteMismatchWeightsValid(query, byteMismatchWeights, queryWeightSum) || len(code) != len(query.SignBits) || quantizedDotProductInv <= 0 || math.IsNaN(float64(quantizedDotProductInv)) || math.IsInf(float64(quantizedDotProductInv), 0) {
+		return 0, false
+	}
+	var mismatchWeight float64
+	for byteIdx, candidateByte := range code {
+		xorMask := candidateByte ^ query.SignBits[byteIdx]
+		mismatchWeight += byteMismatchWeights[byteIdx*rabitq.ByteMismatchTableEntries+int(xorMask)]
+	}
+	weightedSignDot := queryWeightSum - 2*mismatchWeight
+	score := weightedSignDot / (float64(quantizedDotProductInv) * float64(query.CodeDimensions))
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		return 0, false
+	}
+	return score, true
 }
 
 func rabitqQuantizedCosineScore(query rabitq.Query, code []byte, quantizedDotProductInv float32) (float64, bool) {
