@@ -632,14 +632,27 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 		clear(previousResults)
 		return response, statsModeErr
 	}
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.closed || p.searcher == nil || p.searcher.closed || p.searcher.reader == nil {
 		clear(previousResults)
 		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(nil, p.routeStats, opts.QuantizedIndexName, queryMode)
 		response.Stats.QuantizedAssetUnavailable = 1
 		response.Stats.QuantizedAssetClosed = 1
 		return response, fmt.Errorf("%w: vector index %q collection buffered quantized prepared state is closed", ErrVectorIndexSearchUnavailable, p.indexName)
+	}
+	if opts.TopK == 0 || p.searcher.reader.RowCount() == 0 {
+		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(p.searcher.reader, p.routeStats, opts.QuantizedIndexName, queryMode)
+		if len(opts.Query) != p.dimensions {
+			clear(previousResults)
+			return response, fmt.Errorf("collections: column_graph %q query dims=%d want %d: %w", p.indexName, len(opts.Query), p.dimensions, errColumnVectorGraphNativeSearchQueryDimensionMismatch)
+		}
+		if err := p.searcher.reader.validateQuantizedNativeSearchOptions(queryMode, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, QuantizedIndexName: opts.QuantizedIndexName, QuantizedRerankCandidates: opts.QuantizedRerankCandidates}); err != nil {
+			clear(previousResults)
+			return response, err
+		}
+		clear(previousResults)
+		return response, nil
 	}
 	results, searchStats, err := p.searcher.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
 		TopK:                      opts.TopK,

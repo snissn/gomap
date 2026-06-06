@@ -668,6 +668,35 @@ func TestSearchVectorIndexWithBufferQuantizedOnlyAndRerank2415(t *testing.T) {
 	if afterPolicyChange.Entries != 1 || afterPolicyChange.CacheBuilds != afterOnly.CacheBuilds || afterPolicyChange.CacheHits <= afterRerank.CacheHits {
 		t.Fatalf("cache after rerank policy change=%+v afterRerank=%+v want query-policy hit without rebuild", afterPolicyChange, afterRerank)
 	}
+
+	emptyOnlyOpts := quantizedOnlyOpts
+	emptyOnlyOpts.TopK = 0
+	emptyOnly, err := col.SearchVectorIndexWithBuffer(emptyOnlyOpts, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer quantized_only topK=0: %v", err)
+	}
+	if len(emptyOnly.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("quantized_only topK=0 results=%d bufferResults=%d idBytes=%d want empty buffered response", len(emptyOnly.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	assertCollectionBufferedQuantizedRouteStats2415(t, emptyOnly.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, emptyOnlyOpts, def.Dimensions)
+	badEmptyOnlyOpts := emptyOnlyOpts
+	badEmptyOnlyOpts.Query = []float32{1, 0}
+	badEmptyOnly, err := col.SearchVectorIndexWithBuffer(badEmptyOnlyOpts, &buffer)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
+		t.Fatalf("SearchVectorIndexWithBuffer quantized_only topK=0 bad dims response=%+v err=%v want dimension mismatch", badEmptyOnly, err)
+	}
+	emptyRerankOpts := rerankOpts
+	emptyRerankOpts.TopK = 0
+	emptyRerankOpts.QuantizedRerankCandidates = 0
+	emptyRerank, err := col.SearchVectorIndexWithBuffer(emptyRerankOpts, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer quantized_rerank topK=0: %v", err)
+	}
+	if len(emptyRerank.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+		t.Fatalf("quantized_rerank topK=0 results=%d bufferResults=%d idBytes=%d want empty buffered response", len(emptyRerank.Results), len(buffer.results), len(buffer.idBytes))
+	}
+	assertCollectionBufferedQuantizedRouteStats2415(t, emptyRerank.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, emptyRerankOpts, def.Dimensions)
+
 	quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
 		got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
 		if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {

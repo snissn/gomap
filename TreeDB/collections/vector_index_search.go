@@ -1144,7 +1144,11 @@ func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats VectorIndex
 	if stats.SearchRouteColumnGraphPrepared != 1 || stats.SearchRouteColumnGraphFallback != 0 {
 		return false
 	}
-	if stats.QuantizedScorerActive != 1 || stats.QuantizedAssetUnavailable != 0 || stats.QuantizedAssetMissing != 0 || stats.QuantizedAssetInvalid != 0 || stats.QuantizedAssetStale != 0 || stats.QuantizedAssetClosed != 0 {
+	emptySearch := opts.TopK == 0 || stats.CandidateRows == 0
+	if !emptySearch && stats.QuantizedScorerActive != 1 {
+		return false
+	}
+	if stats.QuantizedAssetUnavailable != 0 || stats.QuantizedAssetMissing != 0 || stats.QuantizedAssetInvalid != 0 || stats.QuantizedAssetStale != 0 || stats.QuantizedAssetClosed != 0 {
 		return false
 	}
 	if stats.QuantizedAssetHeapCopy+stats.QuantizedAssetMmapDirect != 1 || stats.QuantizedAssetHeapCopyBytes+stats.QuantizedAssetMappedBytes == 0 {
@@ -1153,7 +1157,6 @@ func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats VectorIndex
 	if stats.DocumentsFetched != 0 || stats.DocumentBytes != 0 || stats.DocumentOutputBytes != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
 		return false
 	}
-	emptySearch := opts.TopK == 0 || stats.CandidateRows == 0
 	if !emptySearch && (stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead == 0) {
 		return false
 	}
