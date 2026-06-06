@@ -1,0 +1,228 @@
+# TreeDB `rabitq_1bit` Profile Gate
+
+Use this workflow for Sublane A of the RaBitQ performance lane (#2476 and
+successors). It builds on the quantized buffered per-row profiling workflow from
+#2465 while making the `rabitq_1bit` evidence contract explicit.
+
+This gate is measurement-only. It must not be bundled with scorer/search runtime
+optimization, storage format changes, codec identity changes, asset identity
+changes, fail-closed behavior changes, or `rabitq_1bit` v1 score/LSB-first bit
+order changes.
+
+## What this gate proves
+
+The workflow captures isolated lower-level and collection buffered rows for the
+1024 row / 128 dimension / `topK=10` / `efSearch=128` fixture used by the
+current quantized search benchmarks. It records:
+
+- same-host baseline and candidate commit identity;
+- `ns/op`, `ops/sec`, `B/op`, `allocs/op`, and recall@K;
+- route, exact-read, asset-unavailable, fallback, and cache counters;
+- `quantized_code_B/search`, `quantized_code_B/vector`, and
+  `quantized_asset_B/vector`;
+- CPU and allocation profiles for selected c=1/c=8 rows.
+
+Smoke runs validate benchmark shape and counters only. They are not speedup or
+promotion evidence.
+
+## Script
+
+```sh
+scripts/treedb_rabitq_1bit_profile_gate.sh
+```
+
+Default selection:
+
+- `ROWS=claim_core`: RaBitQ `quantized_only` c=1/c=8 lower-level and collection
+  rows plus scalar_u8 `quantized_only` c=1/c=8 guardrail rows.
+- `PROFILE_ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8`:
+  CPU/alloc profiles for the required RaBitQ collection buffered target rows.
+- `BENCHTIME=100000x`, `TIMING_COUNT=5`, `PROFILE_COUNT=1`.
+
+Useful selectors for `ROWS` and `PROFILE_ROWS` are comma-separated and ORed:
+
+- `claim_core`, `claim_rerank`, `all`;
+- `rabitq`, `rabitq_only`, `rabitq_rerank`;
+- `scalar_guardrail`, `scalar_only`, `scalar_rerank`;
+- `lower`, `collection`, `quantized_only`, `rerank32`, `c1`, `c8`;
+- exact row IDs from the table below.
+
+Use `DRY_RUN=true` to write context, matrix, row directories, and exact commands
+without running Go benchmarks.
+
+## Row and artifact names
+
+Each selected row gets a directory named by `row_id` under `RUN_DIR`.
+
+| row id | codec | API boundary | mode | c | benchmark regex |
+| --- | --- | --- | --- | ---: | --- |
+| `rabitq_lower_quantized_only_c1` | `rabitq_1bit` | `VectorIndexSearcher.SearchWithBuffer` | `quantized_only` | 1 | `^BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451$/^route=quantized_only$/^c=1$` |
+| `rabitq_lower_quantized_only_c8` | `rabitq_1bit` | `VectorIndexSearcher.SearchWithBuffer` | `quantized_only` | 8 | `^BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451$/^route=quantized_only$/^c=8$` |
+| `rabitq_collection_quantized_only_c1` | `rabitq_1bit` | `Collection.SearchVectorIndexWithBuffer` | `quantized_only` | 1 | `^BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452$/^route=quantized_only$/^c=1$` |
+| `rabitq_collection_quantized_only_c8` | `rabitq_1bit` | `Collection.SearchVectorIndexWithBuffer` | `quantized_only` | 8 | `^BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452$/^route=quantized_only$/^c=8$` |
+| `rabitq_lower_quantized_rerank32_c1` | `rabitq_1bit` | `VectorIndexSearcher.SearchWithBuffer` | `quantized_rerank/candidates=32` | 1 | `^BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451$/^route=quantized_rerank$/^candidates=32$/^c=1$` |
+| `rabitq_lower_quantized_rerank32_c8` | `rabitq_1bit` | `VectorIndexSearcher.SearchWithBuffer` | `quantized_rerank/candidates=32` | 8 | `^BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451$/^route=quantized_rerank$/^candidates=32$/^c=8$` |
+| `rabitq_collection_quantized_rerank32_c1` | `rabitq_1bit` | `Collection.SearchVectorIndexWithBuffer` | `quantized_rerank/candidates=32` | 1 | `^BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452$/^route=quantized_rerank$/^candidates=32$/^c=1$` |
+| `rabitq_collection_quantized_rerank32_c8` | `rabitq_1bit` | `Collection.SearchVectorIndexWithBuffer` | `quantized_rerank/candidates=32` | 8 | `^BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452$/^route=quantized_rerank$/^candidates=32$/^c=8$` |
+| `scalar_lower_quantized_only_c1` / `c8` | `scalar_u8` | lower-level guardrail | `quantized_only` | 1/8 | `BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414` subrows |
+| `scalar_collection_quantized_only_c1` / `c8` | `scalar_u8` | collection guardrail | `quantized_only` | 1/8 | `BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415` subrows |
+| `scalar_*_quantized_rerank32_c1` / `c8` | `scalar_u8` | rerank guardrail when rerank is in scope | `quantized_rerank/candidates=32` | 1/8 | scalar_u8 rerank subrows |
+
+Primary artifacts:
+
+- `context.txt`: branch, commit, Go version/env, `GOMAXPROCS`, `GOWORK`, uptime,
+  git status, and visible competing benchmark/test processes.
+- `matrix.tsv`: selected row IDs, codec, layer, mode, c, rerank candidates,
+  profile selection, and regex.
+- `summary.md` / `summary.tsv`: median timing, throughput, allocation, recall,
+  byte/counter summaries, and guardrail status.
+- `<row>/bench_timing.txt`: unprofiled timing/counter output. Use this for
+  tables.
+- `<row>/bench_profile.txt`: profiled benchmark output for profiled rows.
+- `<row>/cpu.pprof`, `<row>/allocs.pprof`, `<row>/cpu_top.txt`,
+  `<row>/allocs_top.txt`: required CPU/allocation artifacts for profiled rows.
+- `<row>/block.pprof`, `<row>/mutex.pprof`, top summaries, and
+  `<row>/pprof_lists/*.txt`: supporting attribution.
+
+Recommended raw directory naming:
+
+```sh
+/tmp/gomap_rabitq_1bit_<baseline|candidate>_<branch>_<shortsha>_$(date +%Y%m%d_%H%M%S)
+```
+
+## Smoke and dry-run commands
+
+Dry-run script validation:
+
+```sh
+DRY_RUN=true ROWS=rabitq_collection_quantized_only_c1 \
+  scripts/treedb_rabitq_1bit_profile_gate.sh
+```
+
+Tiny smoke for one row:
+
+```sh
+RUN_DIR=/tmp/gomap_rabitq_1bit_smoke_$(date +%Y%m%d_%H%M%S) \
+  ROWS=rabitq_collection_quantized_only_c1 \
+  BENCHTIME=1000x TIMING_COUNT=1 RUN_PROFILES=false \
+  GOMAXPROCS=8 GOWORK=off \
+  scripts/treedb_rabitq_1bit_profile_gate.sh
+```
+
+Issue-level smoke matrix (shape/counters only; no speed claim):
+
+```sh
+GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^(BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926)$' \
+  -benchmem -benchtime=100x -count=3
+```
+
+## Claim-quality same-host baseline/candidate workflow
+
+Run baseline and candidate on the same host, with the same Go toolchain,
+`GOMAXPROCS`, `GOWORK`, row selection, timing/profile counts, fixture, and as
+little wall-clock separation as practical. Record both branch and full commit
+SHA from each `context.txt`.
+
+Baseline:
+
+```sh
+BASE=/tmp/gomap_rabitq_1bit_baseline_main_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)
+RUN_DIR="$BASE" \
+  ROWS=claim_core \
+  PROFILE_ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8 \
+  BENCHTIME=100000x TIMING_COUNT=5 PROFILE_COUNT=1 \
+  GOMAXPROCS=8 GOWORK=off \
+  scripts/treedb_rabitq_1bit_profile_gate.sh
+```
+
+Candidate:
+
+```sh
+CAND=/tmp/gomap_rabitq_1bit_candidate_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)
+RUN_DIR="$CAND" BASELINE_DIR="$BASE" \
+  ROWS=claim_core \
+  PROFILE_ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8 \
+  BENCHTIME=100000x TIMING_COUNT=5 PROFILE_COUNT=1 \
+  GOMAXPROCS=8 GOWORK=off \
+  scripts/treedb_rabitq_1bit_profile_gate.sh
+```
+
+When rerank scorer/read behavior is in scope, include rerank rows and profiles:
+
+```sh
+ROWS=claim_rerank \
+PROFILE_ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8,rabitq_collection_quantized_rerank32_c1,rabitq_collection_quantized_rerank32_c8 \
+  scripts/treedb_rabitq_1bit_profile_gate.sh
+```
+
+If lower-level scorer-only evidence is the claim, keep lower-level RaBitQ c=1/c=8
+rows in the timing table. Collection rows must still be present so lower-level
+wins that regress the collection seam are no-promote.
+
+## Summary table conventions
+
+Use `summary.tsv` or `summary.md` to report medians from unprofiled timing rows.
+PR or issue evidence should include at least:
+
+| field | rule |
+| --- | --- |
+| baseline/candidate identity | branch, full SHA, Go version, OS/arch, `GOMAXPROCS`, fixture |
+| timing/allocation | `ns/op`, `ops/sec`, `B/op`, `allocs/op` |
+| quality | recall@K versus exact, c=1 and c=8 shown separately |
+| bytes | `quantized_code_B/search`, `quantized_code_B/vector`, `quantized_asset_B/vector`, exact vector/norm bytes for rerank |
+| route counters | `search_route_quantized_only/search`, `search_route_quantized_rerank/search`, `search_route_column_graph_prepared/search` |
+| failure/fallback counters | document fetches, graph/typed/scratch/float64 fallbacks, quantized asset missing/invalid/stale/closed/unavailable |
+| collection seam | cache hits/misses/waits/errors, `open_setup_in_timed_loop=0`, `open_searcher_calls/op=0` |
+| profiles | `cpu_top.txt` and `allocs_top.txt` summaries for c=1/c=8 target rows |
+
+## Guardrails
+
+A row is not promotable unless its raw benchmark output and generated summary
+show:
+
+- `0 B/op` and `0 allocs/op` for steady-state buffered search;
+- `docs_fetched/search=0`, no graph-row fallback, no typed-column fallback, no
+  scratch decode, and no float64 scorer fallback;
+- selected quantized asset counters do not report missing, invalid, stale,
+  closed, or unavailable assets;
+- `quantized_only` has zero exact vector/norm bytes, zero exact rerank score
+  calls, and zero prepared exact score calls;
+- `quantized_rerank/candidates=32` exact vector/norm bytes and exact score calls
+  stay bounded by the shortlist;
+- c=1 and c=8 both preserve recall and route counters;
+- scalar_u8 guardrail rows stay allocation-free and do not materially regress
+  when shared code is touched.
+
+### Exact FP32 guardrail guidance for shared code
+
+If a PR touches shared traversal, frontier/top-k, collection prepared cache,
+row-ref/result-ID finalization, search buffer shapes, or result materialization,
+RaBitQ and scalar_u8 rows are not enough. Add exact FP32 rows from the active
+vector-search gate for that boundary (for example the #2445/#2399 HNSW-pack or
+Tier-S exact rows), and report them in the same before/after table. Exact rows
+must prove default FP32 behavior is unchanged, retain exact route/fallback
+counters, avoid new allocations, and keep vector/norm byte reads within the
+expected exact-search boundary. Do not hide exact regressions behind RaBitQ-only
+wins.
+
+## Quiet-host and no-promote policy
+
+Read `context.txt` before using a run for claims. Reject and rerun if it shows
+high load, competing benchmark/test processes, thermal throttling suspicion, or
+large unexplained per-row variance. Run baseline and candidate adjacent in time
+on the same host.
+
+Promotion is blocked by any material regression in target or guardrail rows:
+
+- c=1 improves but c=8 regresses, or vice versa;
+- lower-level improves but collection buffered search regresses;
+- RaBitQ improves but scalar_u8 or exact FP32 shared guardrails regress;
+- allocations leave `0 B/op` / `0 allocs/op`;
+- recall, route, exact-read, fallback, or asset-unavailable counters regress;
+- evidence is mixed, noisy, unrepeatable, or current-only.
+
+Mixed/noisy/regressing candidates are **no-promote**. Leave a durable issue/PR
+comment with raw artifact paths and do not request AI reviewers for performance
+promotion until same-host evidence is coherent.
