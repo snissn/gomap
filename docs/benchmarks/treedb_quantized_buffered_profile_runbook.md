@@ -46,10 +46,10 @@ ROWS=lower_quantized_only_c1 BENCHTIME=100000x TIMING_COUNT=5 PROFILE_COUNT=1 \
   scripts/treedb_quantized_buffered_row_profiles.sh
 ```
 
-Smoke check for script/report changes:
+Smoke check for script/report changes (use enough fixed iterations for guardrail counters such as `B/op` to remain stable):
 
 ```sh
-ROWS=lower_quantized_only_c1 BENCHTIME=10x TIMING_COUNT=1 PROFILE_COUNT=1 \
+ROWS=lower_quantized_only_c1 BENCHTIME=1000x TIMING_COUNT=1 PROFILE_COUNT=1 \
   scripts/treedb_quantized_buffered_row_profiles.sh
 ```
 
@@ -71,6 +71,7 @@ Each row directory contains:
 - `bench_timing.txt`: unprofiled timing/guardrail output.
 - `bench_profile.txt`: profiled benchmark output for the same row.
 - `cpu.pprof`, `allocs.pprof`, `block.pprof`, `mutex.pprof`.
+- `collections.test`: test binary emitted by Go profiling flags for later raw-profile analysis.
 - `cpu_top.txt`, `allocs_top.txt`, `block_top.txt`, `mutex_top.txt`.
 - `pprof_lists/*.txt`: line-level CPU excerpts.
 

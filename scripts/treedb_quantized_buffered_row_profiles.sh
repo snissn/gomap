@@ -151,6 +151,7 @@ run_row() {
 	local block_profile="$row_dir/block.pprof"
 	local mutex_profile="$row_dir/mutex.pprof"
 	local lists_dir="$row_dir/pprof_lists"
+	local test_binary="$row_dir/collections.test"
 
 	mkdir -p "$row_dir" "$lists_dir"
 	{
@@ -163,7 +164,7 @@ run_row() {
 	} >"$row_dir/row.env"
 
 	local timing_cmd=(go test ./TreeDB/collections -run '^$' -bench "$bench_regex" -benchmem -benchtime "$TIMING_BENCHTIME" -count "$TIMING_COUNT")
-	local profile_cmd=(go test ./TreeDB/collections -run '^$' -bench "$bench_regex" -benchmem -benchtime "$PROFILE_BENCHTIME" -count "$PROFILE_COUNT" -cpuprofile "$cpu_profile" -memprofile "$alloc_profile" -blockprofile "$block_profile" -mutexprofile "$mutex_profile")
+	local profile_cmd=(go test ./TreeDB/collections -run '^$' -bench "$bench_regex" -benchmem -benchtime "$PROFILE_BENCHTIME" -count "$PROFILE_COUNT" -o "$test_binary" -cpuprofile "$cpu_profile" -memprofile "$alloc_profile" -blockprofile "$block_profile" -mutexprofile "$mutex_profile")
 
 	{
 		printf 'GOMAXPROCS=%q GOWORK=%q ' "$GOMAXPROCS_VALUE" "$GOWORK_VALUE"
@@ -218,6 +219,7 @@ Artifacts:
 - \`bench_timing.txt\`: unprofiled per-row timing/guardrail output.
 - \`bench_profile.txt\`: profiled per-row benchmark output.
 - \`cpu.pprof\`, \`allocs.pprof\`, \`block.pprof\`, \`mutex.pprof\`.
+- \`collections.test\`: test binary emitted by Go profiling flags for later raw-profile analysis.
 - \`cpu_top.txt\`, \`allocs_top.txt\`, \`block_top.txt\`, \`mutex_top.txt\`.
 - \`pprof_lists/*.txt\`: line-level CPU excerpts for configured target frames.
 
@@ -482,7 +484,7 @@ with open(os.path.join(root, "summary.md"), "w", encoding="utf-8") as out:
             )
         )
     out.write("\n## Artifact layout\n\n")
-    out.write("Each row directory contains `bench_timing.txt`, `bench_profile.txt`, `cpu.pprof`, `allocs.pprof`, `block.pprof`, `mutex.pprof`, top files, and `pprof_lists/*.txt`.\n")
+    out.write("Each row directory contains `bench_timing.txt`, `bench_profile.txt`, `cpu.pprof`, `allocs.pprof`, `block.pprof`, `mutex.pprof`, `collections.test`, top files, and `pprof_lists/*.txt`.\n")
 PY
 
 if [[ -n "$BASELINE_DIR" ]]; then
@@ -524,6 +526,7 @@ Primary files:
 - \`<row>/bench_timing.txt\`: unprofiled benchmark output for the selected row.
 - \`<row>/bench_profile.txt\`: profiled benchmark output for the selected row.
 - \`<row>/cpu.pprof\`, \`<row>/allocs.pprof\`, \`<row>/block.pprof\`, \`<row>/mutex.pprof\`.
+- \`<row>/collections.test\`: test binary emitted by Go profiling flags for later raw-profile analysis.
 - \`<row>/cpu_top.txt\`, \`<row>/allocs_top.txt\`, \`<row>/block_top.txt\`, \`<row>/mutex_top.txt\`.
 - \`<row>/pprof_lists/*.txt\`: line-level CPU excerpts for target frames.
 
