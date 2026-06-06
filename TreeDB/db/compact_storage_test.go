@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1038,6 +1039,40 @@ func TestCompactStorageKeepsPackedLeafSourcesUntilIndexVacuum(t *testing.T) {
 	}
 	if !stats.FullyCompacted {
 		t.Fatalf("FullyCompacted=false debt=%+v", stats.RemainingDebt)
+	}
+}
+
+func TestCompactStorageWindowsKeepsPackedLeafSourcesWhenIndexVacuumUnsupported(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("index vacuum is supported on this platform")
+	}
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "k", 2048, 'a')
+	path1, _ := currentLeafSegmentOrFatal(t, leafLog)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, d, "z", 32, 'z')
+	d.SetLeafPageLog(nil)
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{LeafPackMaxPasses: 4})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	indexVacuumSkipped := false
+	for _, phase := range stats.Phases {
+		if phase.Name == "index-vacuum" && phase.Skipped {
+			indexVacuumSkipped = true
+			break
+		}
+	}
+	if !indexVacuumSkipped {
+		t.Fatalf("index-vacuum was not skipped on windows: %+v", stats.Phases)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("leaf source removed after skipped index-vacuum: %v", err)
 	}
 }
 

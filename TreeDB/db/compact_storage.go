@@ -394,8 +394,13 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}); err != nil {
 		return stats, err
 	}
-	if err := releaseIndexVacuumLeafGuard(); err != nil {
-		return stats, err
+	// If index vacuum was unsupported, keep the guard through settle/final audit;
+	// otherwise settle leaf GC could delete retiring sources before any vacuum
+	// cloned away the old leaf-log references.
+	if !indexVacuumSkipped {
+		if err := releaseIndexVacuumLeafGuard(); err != nil {
+			return stats, err
+		}
 	}
 
 	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked); err != nil {
