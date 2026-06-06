@@ -336,6 +336,47 @@ func (p *collectionVectorIndexPreparedSearch) responseForSearch() VectorIndexSea
 	return response
 }
 
+func (p *collectionVectorIndexPreparedSearch) SearchOwnedNoDocuments(opts VectorIndexSearchOptions, statsMode columnVectorGraphNativeSearchStatsMode, scratch *columnVectorGraphNativeSearchScratch) (VectorIndexSearchResponse, error) {
+	response := p.responseForSearch()
+	if p == nil {
+		return response, errors.New("collections: nil collection vector index prepared search")
+	}
+	var localScratch columnVectorGraphNativeSearchScratch
+	if scratch == nil {
+		scratch = &localScratch
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed || p.pack == nil {
+		response.Stats = VectorIndexSearchStats{HNSWSearchPackClosed: 1, HNSWSearchPackFallbacks: 1}
+		return response, errColumnHNSWSearchPackPreparedViewClosed
+	}
+	status := p.pack.fastStatus(p.packStatus)
+	if status != columnHNSWSearchPackPreparedStatusDirect && status != columnHNSWSearchPackPreparedStatusHeap {
+		routeStats := collectionVectorIndexPreparedSearchRouteStatsForUnavailable(p.routeStats, status)
+		routeStats.apply(&response.Stats)
+		return response, columnHNSWSearchPackStatusError(status)
+	}
+	results, searchStats, err := p.pack.searchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
+		TopK:           opts.TopK,
+		EfSearch:       opts.EfSearch,
+		ScoreBatchMode: opts.scoreBatchMode,
+		StatsMode:      statsMode,
+		QueryMode:      columnVectorGraphNativeSearchQueryModeExact,
+	}, scratch)
+	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+	p.routeStats.apply(&response.Stats)
+	if err != nil {
+		return response, err
+	}
+	response.Results, err = copyVectorIndexSearchResultsToOwned(results)
+	if err != nil {
+		return response, err
+	}
+	markVectorIndexSearchResponseOwnedResultAllocs(&response)
+	return response, nil
+}
+
 func (p *collectionVectorIndexPreparedSearch) SearchWithBuffer(opts VectorIndexSearchOptions, statsMode columnVectorGraphNativeSearchStatsMode, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
 	previousResults := buffer.results
 	buffer.resetView()

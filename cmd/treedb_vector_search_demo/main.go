@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,6 +78,7 @@ type config struct {
 	disableExactFallback  bool
 	requireValueLogBytes  bool
 	requireLeafVLogBytes  bool
+	searchProfileDir      string
 	jsonOut               bool
 
 	indexOuterLeavesInValueLog *bool
@@ -105,6 +107,7 @@ type result struct {
 	ValidateQueries           int                               `json:"validate_queries"`
 	ValidateDocs              int                               `json:"validate_docs"`
 	ValidationExactSource     validationExactSource             `json:"validation_exact_source"`
+	SearchProfileDir          string                            `json:"search_profile_dir,omitempty"`
 	TopK                      int                               `json:"top_k"`
 	M                         int                               `json:"m"`
 	EfConstruction            int                               `json:"ef_construction"`
@@ -141,6 +144,7 @@ type matrixResult struct {
 	Dir               string             `json:"dir"`
 	KeptDir           bool               `json:"kept_dir"`
 	Profile           string             `json:"profile"`
+	SearchProfileDir  string             `json:"search_profile_dir,omitempty"`
 	Docs              int                `json:"docs"`
 	Dimensions        int                `json:"dimensions"`
 	Queries           int                `json:"queries"`
@@ -350,6 +354,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
 	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
 	fs.BoolVar(&cfg.requireLeafVLogBytes, "require-leaf-vlog-bytes", false, "Fail if compacted storage has no leaf value-log bytes")
+	fs.StringVar(&cfg.searchProfileDir, "search-profile-dir", "", "Write per-concurrency column_graph search CPU/heap/alloc/block/mutex profiles under this directory")
 	fs.BoolVar(&cfg.jsonOut, "json", false, "Emit JSON instead of text")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -426,6 +431,12 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.datasetDir != "" {
 		cfg.datasetDir = filepath.Clean(cfg.datasetDir)
+	}
+	if cfg.searchProfileDir != "" {
+		cfg.searchProfileDir = filepath.Clean(cfg.searchProfileDir)
+		if cfg.vectorIndexStrategy != collections.VectorIndexStrategyColumnGraph {
+			return config{}, errors.New("-search-profile-dir requires -vector-index-strategy column_graph")
+		}
 	}
 	if err := validateValidationExactSourceConfig(cfg); err != nil {
 		return config{}, err
@@ -850,6 +861,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		ValidateQueries:           cfg.validateQueries,
 		ValidateDocs:              cfg.validateDocs,
 		ValidationExactSource:     cfg.validationExactSource,
+		SearchProfileDir:          cfg.searchProfileDir,
 		TopK:                      cfg.topK,
 		M:                         cfg.m,
 		EfConstruction:            cfg.efConstruction,
@@ -1145,6 +1157,9 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return matrixResult{}, err
 	}
+	if cfg.searchProfileDir != "" {
+		cfg.searchProfileDir = filepath.Clean(cfg.searchProfileDir)
+	}
 	root, err := normalizeDemoDir(cfg.dir)
 	if err != nil {
 		return matrixResult{}, err
@@ -1216,6 +1231,7 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		Dir:               root,
 		KeptDir:           cfg.keepDir || explicitRoot,
 		Profile:           string(cfg.profile),
+		SearchProfileDir:  cfg.searchProfileDir,
 		Docs:              cfg.docs,
 		Dimensions:        cfg.dimensions,
 		Queries:           cfg.queries,
@@ -1229,6 +1245,9 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		caseCfg.keepDir = true
 		caseCfg.compact = testCase.compact
 		caseCfg.dir = filepath.Join(root, testCase.name)
+		if cfg.searchProfileDir != "" {
+			caseCfg.searchProfileDir = filepath.Join(cfg.searchProfileDir, testCase.name)
+		}
 		caseCfg.indexOuterLeavesInValueLog = testCase.outerLeaves
 		if testCase.name == "index_db_outer_leaves" {
 			caseCfg.requireLeafVLogBytes = false
@@ -2127,6 +2146,10 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 			atomic.AddUint64(&scoreBatchCandidatesTotal, response.Stats.ScoreBatchCandidates)
 		}
 	}
+	stopProfile, err := startColumnGraphSearchProfile(cfg, concurrency)
+	if err != nil {
+		return searchBenchmarkResult{}, err
+	}
 	startAll := time.Now()
 	if concurrency == 1 {
 		worker(searchers[0])
@@ -2143,6 +2166,11 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 		wg.Wait()
 	}
 	total := time.Since(startAll)
+	if stopProfile != nil {
+		if err := stopProfile(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	if firstErr != nil {
 		return searchBenchmarkResult{}, firstErr
 	}
@@ -2184,6 +2212,73 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 		ExactFallbacks:                    0,
 		DisableExactFallback:              cfg.disableExactFallback,
 	}, nil
+}
+
+func startColumnGraphSearchProfile(cfg config, concurrency int) (func() error, error) {
+	if cfg.searchProfileDir == "" {
+		return nil, nil
+	}
+	if err := os.MkdirAll(cfg.searchProfileDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create search profile dir: %w", err)
+	}
+	mode := string(normalizedVectorQueryMode(cfg.vectorQueryMode))
+	if mode == "" {
+		mode = "exact"
+	}
+	prefix := fmt.Sprintf("search_%s_c%d", mode, concurrency)
+	cpuFile, err := os.Create(filepath.Join(cfg.searchProfileDir, prefix+"_cpu.pprof"))
+	if err != nil {
+		return nil, fmt.Errorf("create search CPU profile: %w", err)
+	}
+	oldMutexProfileFraction := runtime.SetMutexProfileFraction(1)
+	if err := pprof.StartCPUProfile(cpuFile); err != nil {
+		_ = cpuFile.Close()
+		restoreRuntimeSearchProfileSettings(oldMutexProfileFraction)
+		return nil, fmt.Errorf("start search CPU profile: %w", err)
+	}
+	return func() error {
+		pprof.StopCPUProfile()
+		var errs []error
+		if err := cpuFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close search CPU profile: %w", err))
+		}
+		runtime.GC()
+		for _, name := range []string{"heap", "allocs", "block", "mutex"} {
+			path := filepath.Join(cfg.searchProfileDir, prefix+"_"+name+".pprof")
+			if err := writeRuntimeProfile(path, name); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		restoreRuntimeSearchProfileSettings(oldMutexProfileFraction)
+		return errors.Join(errs...)
+	}, nil
+}
+
+func restoreRuntimeSearchProfileSettings(mutexProfileFraction int) {
+	runtime.SetMutexProfileFraction(mutexProfileFraction)
+}
+
+func writeRuntimeProfile(path, name string) error {
+	profile := pprof.Lookup(name)
+	if profile == nil {
+		return fmt.Errorf("runtime profile %q is unavailable", name)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %s profile: %w", name, err)
+	}
+	writeErr := profile.WriteTo(f, 0)
+	closeErr := f.Close()
+	if writeErr != nil && closeErr != nil {
+		return errors.Join(fmt.Errorf("write %s profile: %w", name, writeErr), fmt.Errorf("close %s profile: %w", name, closeErr))
+	}
+	if writeErr != nil {
+		return fmt.Errorf("write %s profile: %w", name, writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %s profile: %w", name, closeErr)
+	}
+	return nil
 }
 
 func vectorIndexOptions(def collections.VectorIndexDefinition) collections.VectorIndexOptions {
@@ -2445,6 +2540,9 @@ func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
 	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s query_mode=%s quantized_index_name=%s quantized_rerank_candidates=%d docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
 		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), resultQueryMode(res), res.QuantizedIndexName, res.QuantizedRerankCandidates, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	if res.SearchProfileDir != "" {
+		fmt.Fprintf(w, "search_profile_dir=%s\n", res.SearchProfileDir)
+	}
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_vector_index strategy=%s: %.3fs native_root_bytes=%d\n", resultStrategy(res), res.Rebuild.Seconds, res.NativeRootBytes)
@@ -2514,6 +2612,9 @@ func printMatrixText(w io.Writer, res matrixResult) {
 	fmt.Fprintf(w, "TreeDB vector search matrix\n")
 	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d search_concurrency=%s\n",
 		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, joinInts(res.SearchConcurrency))
+	if res.SearchProfileDir != "" {
+		fmt.Fprintf(w, "search_profile_dir=%s\n", res.SearchProfileDir)
+	}
 	for _, testCase := range res.Cases {
 		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
 		fmt.Fprintf(w, "%s\n", testCase.Description)
@@ -2522,6 +2623,9 @@ func printMatrixText(w io.Writer, res matrixResult) {
 			resultStrategy(testCase.Result),
 			resultSearchPath(testCase.Result),
 			resultQueryMode(testCase.Result))
+		if testCase.Result.SearchProfileDir != "" {
+			fmt.Fprintf(w, "search_profile_dir=%s\n", testCase.Result.SearchProfileDir)
+		}
 		fmt.Fprintf(w, "storage_after_compact_total=%d bytes (%.1f/doc)\n",
 			testCase.Result.StorageAfterCompact.TotalBytes,
 			testCase.Result.StorageAfterCompact.BytesPerDoc)

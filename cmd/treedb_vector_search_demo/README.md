@@ -90,6 +90,23 @@ The matrix search stage defaults to 10,000 ANN queries per lane and parallel
 concurrency levels `2,4,8,16,32,64,128`; override those with `-queries` and
 `-search-concurrency`.
 
+Use `-search-profile-dir DIR` with `-vector-index-strategy column_graph` to
+write per-concurrency profiles for the column_graph search stage. Native
+`native_runtime` search profiling is not implemented, so the flag is rejected
+unless the column_graph strategy is selected. Each measured concurrency emits
+`search_<mode>_c<N>_cpu.pprof`, plus `heap`, `allocs`, `block`, and `mutex`
+runtime snapshots with the same prefix. In matrix mode, each storage case writes
+under `DIR/<matrix_case>/` (for example
+`DIR/leaf_vlog_after_compact/search_exact_c8_cpu.pprof`) so case artifacts are
+not overwritten. CPU profiles are scoped to the measured search loop; the
+runtime snapshots are supporting diagnostics and can include process state
+outside the search loop. Heap and allocation profiles use the Go runtime's
+current sampling rate; the demo does not change `runtime.MemProfileRate` for a
+profile run. Block profiles are emitted from the runtime's current block
+profiler and may be empty unless the caller/process already enabled block
+profiling. Profiling changes timings and should be used for bottleneck analysis,
+not as the comparison number to publish.
+
 When `-dataset-dir` is used, `-queries` may truncate the exported query vector
 file but cannot exceed the manifest query count. `-validate-queries` is a recall
 sample size and is clamped to the exported query count. Recall validation uses
@@ -135,6 +152,8 @@ Useful flags:
   run.
 - `-disable-exact-fallback=false`: allow exact fallback during benchmark
   searches.
+- `-search-profile-dir DIR`: write per-concurrency column_graph search profiles
+  under `DIR`; requires `-vector-index-strategy column_graph`.
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
   queries; set `-min-recall=0` when disabling validation with
   `-validate-queries=0`.
