@@ -84,6 +84,29 @@ reads with one writer measured 2.96M reader ops/sec and 44.3k writer docs/sec.
 Source:
 [June 4 collection concurrency report](docs/benchmarks/collections_concurrency_main_2026-06-04.md).
 
+### Vector Search Serving Workload
+
+Dated Tier S exact-FP32 no-document snapshot: Apple M3 (`darwin/arm64`),
+2026-06-05, commit `2feb1f0e35459d1b3d044008203d0c8afcf5630f`, `10000`
+documents, `64` dimensions, `M=16`, `efConstruction=128`, `efSearch=128`,
+`topK=10`, query stream length `16`, `BENCHTIME=1000x`, and `COUNT=3`. TreeDB
+rows use warmed persisted `column_graph` / `hnsw_search_pack_v1` no-document
+routes. USearch rows are pure in-memory external ANN baselines, not
+persistence-equivalent storage rows.
+
+| row | cpu | median ns/op | derived ops/sec | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| TreeDB `Collection.SearchVectorIndexWithBuffer` | 1 | 43,049 | 23,229 | 0 | 0 |
+| TreeDB `OpenVectorIndexSearcher` + `SearchWithBuffer` parallel row | 8 | 8,610 | 116,144 | 0 | 0 |
+| USearch `Search` | 1 | 30,065 | 33,261 | 136 | 3 |
+| USearch `SearchParallel` | 8 | 6,906 | 144,802 | 139 | 3 |
+
+Source and reproduction workflow:
+[TreeDB vs USearch vector benchmark workflow](TreeDB/docs/guides/vector-search-benchmark-workflow.md).
+API chooser, route guardrails, and runnable exact-only demo:
+[high-QPS collection vector-search guide](TreeDB/docs/guides/vector-search-high-qps-collection-api.md)
+and [`cmd/treedb_vector_highqps_demo`](cmd/treedb_vector_highqps_demo/README.md).
+
 ### TreeDB Mongo Gateway Client-Shape Workload
 
 Gateway-shaped BSON documents, `200000` documents, batch size `1000`,
@@ -221,10 +244,13 @@ Current YCSB status and rerun commands:
 - `docs/benchmarks/ycsb_latest_main_2026-06-03.md`
 - `scripts/ycsb_compare_mongodb_treedb.sh`
 
-Collection and engine benchmark runbooks:
+Collection, vector-search, and engine benchmark runbooks:
 
 - `docs/benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md`
 - `docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md`
+- `TreeDB/docs/guides/vector-search-high-qps-collection-api.md`
+- `TreeDB/docs/guides/vector-search-benchmark-workflow.md`
+- `cmd/treedb_vector_highqps_demo/README.md`
 - `docs/benchmarks/treedb_canonical_benchmark_runbook.md`
 - `docs/benchmarks/collections_canonical_benchmark.md`
 - `cmd/unified_bench/README.md`
