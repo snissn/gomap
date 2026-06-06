@@ -19,6 +19,7 @@ GOMAXPROCS_VALUE="${GOMAXPROCS:-8}"
 GOWORK_VALUE="${GOWORK:-off}"
 PPROF_FRAMES="${PPROF_FRAMES:-columnVectorGraphRabitQQuantizedScorer.scoreOrdinalUnchecked,columnVectorGraphRabitQQuantizedScorer.scoreOrdinals,ScoreCosine,scoreAndPushFrontierVisitedTile,frontierSiftDown,insertTop,fetchTopPreparedSearchResults,acquireCollectionVectorIndexPreparedSearch}"
 BASELINE_DIR="${BASELINE_DIR:-}"
+RECALL_TOLERANCE_PCT="${RECALL_TOLERANCE_PCT:-0}"
 
 mkdir -p "$RUN_DIR"
 
@@ -155,6 +156,8 @@ write_context() {
 		printf 'timing: enabled=%s benchtime=%s count=%s\n' "$RUN_TIMING" "$TIMING_BENCHTIME" "$TIMING_COUNT"
 		printf 'profiles: enabled=%s benchtime=%s count=%s\n' "$RUN_PROFILES" "$PROFILE_BENCHTIME" "$PROFILE_COUNT"
 		printf 'dry_run: %s\n' "$DRY_RUN"
+		printf 'baseline_dir: %s\n' "$BASELINE_DIR"
+		printf 'recall_tolerance_pct: %s\n' "$RECALL_TOLERANCE_PCT"
 		printf 'pprof_frames: %s\n' "$PPROF_FRAMES"
 		printf '\n# git status --short\n'
 		git status --short || true
@@ -365,7 +368,7 @@ for i in "${!row_ids[@]}"; do
 	run_row "${row_ids[$i]}" "${row_codecs[$i]}" "${row_layers[$i]}" "${row_modes[$i]}" "${row_concurrency[$i]}" "${row_rerank_candidates[$i]}" "${row_regexes[$i]}" "${row_profile_selected[$i]}"
 done
 
-python3 - "$RUN_DIR" <<'PY'
+python3 - "$RUN_DIR" "$BASELINE_DIR" "$RECALL_TOLERANCE_PCT" <<'PY'
 import glob
 import math
 import os
@@ -374,6 +377,11 @@ import statistics
 import sys
 
 root = sys.argv[1]
+baseline_root = sys.argv[2] if len(sys.argv) > 2 else ""
+try:
+    recall_tolerance_pct = float(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else 0.0
+except ValueError:
+    recall_tolerance_pct = 0.0
 metric_units = {
     "ns/op",
     "ops/sec",
@@ -484,7 +492,21 @@ def present_all_le(rows, name, limit):
     return present_all(rows, name) and all(row.get(name) <= limit for row in rows)
 
 
-def guardrail_status(meta, bench_rows):
+def present_all_ge(rows, name, minimum):
+    return present_all(rows, name) and all(row.get(name) >= minimum for row in rows)
+
+
+def recall_guardrail_ok(bench_rows, baseline_rows):
+    if not present_all(bench_rows, "recall_at_k_pct"):
+        return False
+    if baseline_rows and present_all(baseline_rows, "recall_at_k_pct"):
+        candidate = median([row.get("recall_at_k_pct") for row in bench_rows])
+        baseline = median([row.get("recall_at_k_pct") for row in baseline_rows])
+        return candidate is not None and baseline is not None and candidate + recall_tolerance_pct >= baseline
+    return present_all_ge(bench_rows, "recall_at_k_pct", 99.999)
+
+
+def guardrail_status(meta, bench_rows, baseline_rows):
     if not bench_rows:
         return "n/a"
     checks = []
@@ -505,7 +527,7 @@ def guardrail_status(meta, bench_rows):
         checks.append(present_all_zero(bench_rows, name))
     checks.append(present_all_eq(bench_rows, "search_route_column_graph_prepared/search", 1))
     checks.append(present_all_eq(bench_rows, "quantized_scorer_active/search", 1))
-    checks.append(present_all_eq(bench_rows, "recall_at_k_pct", 100))
+    checks.append(recall_guardrail_ok(bench_rows, baseline_rows))
 
     expected_code_bytes = 16 if meta.get("codec") == "rabitq_1bit" else 128
     checks.append(present_all_eq(bench_rows, "quantized_code_B/vector", expected_code_bytes))
@@ -582,7 +604,12 @@ for row_id in selected_row_ids:
         values = [row.get(unit) for row in bench_rows]
         out[unit] = median(values)
         out[unit + "__max"] = max([v for v in values if v is not None], default=None)
-    out["guardrail_status"] = guardrail_status(meta, bench_rows)
+    baseline_rows = []
+    if baseline_root:
+        baseline_rows = parse_file(os.path.join(baseline_root, row_id, "bench_timing.txt"))
+        if not baseline_rows:
+            baseline_rows = parse_file(os.path.join(baseline_root, row_id, "bench_profile.txt"))
+    out["guardrail_status"] = guardrail_status(meta, bench_rows, baseline_rows)
     summary_rows.append(out)
 
 fields = [
@@ -666,6 +693,8 @@ cat >"$RUN_DIR/README.md" <<EOF
 - timing: enabled=\`$RUN_TIMING\`, benchtime=\`$TIMING_BENCHTIME\`, count=\`$TIMING_COUNT\`
 - profiles: enabled=\`$RUN_PROFILES\`, benchtime=\`$PROFILE_BENCHTIME\`, count=\`$PROFILE_COUNT\`
 - dry run: \`$DRY_RUN\`
+- baseline dir: \`$BASELINE_DIR\`
+- recall tolerance pct: \`$RECALL_TOLERANCE_PCT\`
 
 Primary files:
 

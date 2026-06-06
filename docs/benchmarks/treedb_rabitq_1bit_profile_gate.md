@@ -2,7 +2,7 @@
 
 Use this workflow for Sublane A of the RaBitQ performance lane (#2476 and
 successors). It builds on the quantized buffered per-row profiling workflow from
-#2465 while making the `rabitq_1bit` evidence contract explicit.
+issue #2465 while making the `rabitq_1bit` evidence contract explicit.
 
 This gate is measurement-only. It must not be bundled with scorer/search runtime
 optimization, storage format changes, codec identity changes, asset identity
@@ -38,6 +38,7 @@ Default selection:
 - `PROFILE_ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8`:
   CPU/alloc profiles for the required RaBitQ collection buffered target rows.
 - `BENCHTIME=100000x`, `TIMING_COUNT=5`, `PROFILE_COUNT=1`.
+- `RECALL_TOLERANCE_PCT=0`: when `BASELINE_DIR` is set, candidate median recall must be at least the matching baseline row's median recall minus this tolerance for the row guardrail to pass.
 
 Useful selectors for `ROWS` and `PROFILE_ROWS` are comma-separated and ORed:
 
