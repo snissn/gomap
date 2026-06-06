@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"path/filepath"
+	"slices"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -53,6 +54,36 @@ func MaybeCompactLeafLogPayloadTo(dst, leafPage []byte) ([]byte, bool, error) {
 	sum := page.CalculateChecksumWithZeroGap(prefix, page.PageSize-prefixLen-suffixLen, suffix)
 	binary.LittleEndian.PutUint32(prefix[8:12], sum)
 	return payload, true, nil
+}
+
+func MaybeAppendCompactLeafLogPayloadTo(dst, leafPage []byte) ([]byte, []byte, bool, error) {
+	if len(leafPage) != page.PageSize {
+		return dst, leafPage, false, nil
+	}
+	prefixLen, suffixLen, err := node.LeafPageLiveBounds(leafPage)
+	if err != nil {
+		return dst, leafPage, false, nil
+	}
+	compactLen := compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
+	if compactLen >= len(leafPage) {
+		return dst, leafPage, false, nil
+	}
+
+	start := len(dst)
+	dst = slices.Grow(dst, compactLen)
+	dst = dst[:start+compactLen]
+	payload := dst[start:]
+	suffixStart := len(leafPage) - suffixLen
+	copy(payload[:len(compactLeafPagePayloadMagic)], compactLeafPagePayloadMagic[:])
+	binary.LittleEndian.PutUint16(payload[len(compactLeafPagePayloadMagic):len(compactLeafPagePayloadMagic)+2], uint16(prefixLen))
+	binary.LittleEndian.PutUint16(payload[len(compactLeafPagePayloadMagic)+2:compactLeafPagePayloadHeaderSize], uint16(suffixLen))
+	prefix := payload[compactLeafPagePayloadHeaderSize : compactLeafPagePayloadHeaderSize+prefixLen]
+	suffix := payload[compactLeafPagePayloadHeaderSize+prefixLen:]
+	copy(prefix, leafPage[:prefixLen])
+	copy(suffix, leafPage[suffixStart:])
+	sum := page.CalculateChecksumWithZeroGap(prefix, page.PageSize-prefixLen-suffixLen, suffix)
+	binary.LittleEndian.PutUint32(prefix[8:12], sum)
+	return dst, payload, true, nil
 }
 
 func compactLeafLogPayloadBounds(payload []byte) (prefixLen, suffixLen int, decoded bool, err error) {
