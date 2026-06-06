@@ -121,7 +121,8 @@ type VectorIndexSearchResult struct {
 
 // VectorIndexSearchStats reports search telemetry. Graph/search and reader
 // counters are per-search deltas unless the field starts with Open; Open*
-// counters describe the bound reader setup performed before Search.
+// counters describe bound reader setup performed before Search or collection-level
+// one-shot open/setup performed inside SearchVectorIndex.
 type VectorIndexSearchStats struct {
 	// GraphRows is the number of legacy physical graph rows resident in the bound reader. Healthy current typed-column search reports zero.
 	GraphRows uint64 `json:"graph_rows,omitempty"`
@@ -427,7 +428,7 @@ type VectorIndexSearchStats struct {
 	SearchRouteColumnGraphPrepared uint64 `json:"search_route_column_graph_prepared,omitempty"`
 	// SearchRouteColumnGraphFallback reports that this search used the column_graph compatibility/fallback route instead of the prepared route.
 	SearchRouteColumnGraphFallback uint64 `json:"search_route_column_graph_fallback,omitempty"`
-	// SearchRouteHNSWSearchPack reports that this search used the future hnsw_search_pack_v1 route.
+	// SearchRouteHNSWSearchPack reports that this search used the exact FP32 hnsw_search_pack_v1 route.
 	SearchRouteHNSWSearchPack uint64 `json:"search_route_hnsw_search_pack,omitempty"`
 	// SearchRouteQuantizedOnly reports that this search used the codec-generic quantized-only route.
 	SearchRouteQuantizedOnly uint64 `json:"search_route_quantized_only,omitempty"`
@@ -457,6 +458,20 @@ type VectorIndexSearchStats struct {
 	HNSWSearchPackHeapCopyBytes uint64 `json:"hnsw_search_pack_heap_copy_bytes,omitempty"`
 	// HNSWSearchPackActiveHandles is the current active mappedresource handle count for the hnsw_search_pack_v1 view.
 	HNSWSearchPackActiveHandles int64 `json:"hnsw_search_pack_active_handles,omitempty"`
+	// HNSWSearchPackCacheHits reports collection-level prepared hnsw_search_pack_v1 cache hits for this public search call.
+	HNSWSearchPackCacheHits uint64 `json:"hnsw_search_pack_cache_hits,omitempty"`
+	// HNSWSearchPackCacheMisses reports collection-level prepared hnsw_search_pack_v1 cache misses/build admissions for this public search call.
+	HNSWSearchPackCacheMisses uint64 `json:"hnsw_search_pack_cache_misses,omitempty"`
+	// HNSWSearchPackCacheWaits reports waits behind an in-flight collection-level hnsw_search_pack_v1 cache build for this public search call.
+	HNSWSearchPackCacheWaits uint64 `json:"hnsw_search_pack_cache_waits,omitempty"`
+	// HNSWSearchPackCacheBuilds reports collection-level prepared hnsw_search_pack_v1 cache builds started by this public search call.
+	HNSWSearchPackCacheBuilds uint64 `json:"hnsw_search_pack_cache_builds,omitempty"`
+	// OpenSearcherCalls reports collection-level SearchVectorIndex calls that entered the one-shot VectorIndexSearcher open/setup boundary.
+	OpenSearcherCalls uint64 `json:"open_searcher_calls,omitempty"`
+	// OpenSetupInTimedLoop reports collection-level SearchVectorIndex calls whose one-shot open/setup work is part of the call boundary.
+	OpenSetupInTimedLoop uint64 `json:"open_setup_in_timed_loop,omitempty"`
+	// ResponseOwnedResultAllocs reports response-owned result storage creation by Search or SearchVectorIndex. Buffered APIs leave this zero.
+	ResponseOwnedResultAllocs uint64 `json:"response_owned_result_allocs,omitempty"`
 
 	// BenchmarkDebugSearches reports searches collected with benchmark_debug graph-control-flow instrumentation.
 	BenchmarkDebugSearches uint64 `json:"benchmark_debug_searches,omitempty"`
@@ -559,6 +574,199 @@ type VectorIndexSearchResponse struct {
 	// SearchVectorIndexWithBuffer return slices owned by the caller's
 	// VectorIndexSearchBuffer.
 	Results []VectorIndexSearchResult `json:"results,omitempty"`
+}
+
+// VectorIndexSearchRouteKind is a compact route summary derived from public
+// search stats. The exact hnsw_search_pack_v1 route is intentionally distinct
+// from codec-generic quantized routes and must not be used for quantized route
+// claims.
+type VectorIndexSearchRouteKind string
+
+const (
+	// VectorIndexSearchRouteUnknown reports that stats did not identify a search route.
+	VectorIndexSearchRouteUnknown VectorIndexSearchRouteKind = "unknown"
+	// VectorIndexSearchRouteExactHNSWSearchPackV1 reports the exact FP32 hnsw_search_pack_v1 route.
+	VectorIndexSearchRouteExactHNSWSearchPackV1 VectorIndexSearchRouteKind = "exact_hnsw_search_pack_v1"
+	// VectorIndexSearchRouteQuantizedOnly reports the codec-generic quantized-only route.
+	VectorIndexSearchRouteQuantizedOnly VectorIndexSearchRouteKind = "quantized_only"
+	// VectorIndexSearchRouteQuantizedRerank reports the codec-generic quantized-rerank route.
+	VectorIndexSearchRouteQuantizedRerank VectorIndexSearchRouteKind = "quantized_rerank"
+	// VectorIndexSearchRouteColumnGraphPrepared reports the prepared column_graph route.
+	VectorIndexSearchRouteColumnGraphPrepared VectorIndexSearchRouteKind = "column_graph_prepared"
+	// VectorIndexSearchRouteColumnGraphFallback reports the column_graph compatibility/fallback route.
+	VectorIndexSearchRouteColumnGraphFallback VectorIndexSearchRouteKind = "column_graph_fallback"
+)
+
+// VectorIndexSearchHNSWSearchPackStatus summarizes exact hnsw_search_pack_v1
+// health from public search stats. It is exact FP32 pack state, not quantized
+// scorer or quantized asset state.
+type VectorIndexSearchHNSWSearchPackStatus string
+
+const (
+	// VectorIndexSearchHNSWSearchPackStatusNone reports no hnsw_search_pack_v1 observation.
+	VectorIndexSearchHNSWSearchPackStatusNone VectorIndexSearchHNSWSearchPackStatus = "none"
+	// VectorIndexSearchHNSWSearchPackStatusActive reports a validated active hnsw_search_pack_v1 view.
+	VectorIndexSearchHNSWSearchPackStatusActive VectorIndexSearchHNSWSearchPackStatus = "active"
+	// VectorIndexSearchHNSWSearchPackStatusMissing reports no available hnsw_search_pack_v1 state.
+	VectorIndexSearchHNSWSearchPackStatusMissing VectorIndexSearchHNSWSearchPackStatus = "missing"
+	// VectorIndexSearchHNSWSearchPackStatusInvalid reports invalid hnsw_search_pack_v1 state.
+	VectorIndexSearchHNSWSearchPackStatusInvalid VectorIndexSearchHNSWSearchPackStatus = "invalid"
+	// VectorIndexSearchHNSWSearchPackStatusStale reports stale hnsw_search_pack_v1 state.
+	VectorIndexSearchHNSWSearchPackStatusStale VectorIndexSearchHNSWSearchPackStatus = "stale"
+	// VectorIndexSearchHNSWSearchPackStatusClosed reports a closed hnsw_search_pack_v1 view.
+	VectorIndexSearchHNSWSearchPackStatusClosed VectorIndexSearchHNSWSearchPackStatus = "closed"
+)
+
+// VectorIndexSearchFallbackReason summarizes why a search did not remain on the
+// preferred exact no-document route. Values are low-cardinality and derived from
+// counters; no logging or map allocation is required.
+type VectorIndexSearchFallbackReason string
+
+const (
+	// VectorIndexSearchFallbackReasonNone reports no observed fallback reason.
+	VectorIndexSearchFallbackReasonNone VectorIndexSearchFallbackReason = "none"
+	// VectorIndexSearchFallbackReasonHNSWSearchPackMissing reports fallback because exact pack state was missing.
+	VectorIndexSearchFallbackReasonHNSWSearchPackMissing VectorIndexSearchFallbackReason = "hnsw_search_pack_missing"
+	// VectorIndexSearchFallbackReasonHNSWSearchPackInvalid reports fallback because exact pack state was invalid.
+	VectorIndexSearchFallbackReasonHNSWSearchPackInvalid VectorIndexSearchFallbackReason = "hnsw_search_pack_invalid"
+	// VectorIndexSearchFallbackReasonHNSWSearchPackStale reports fallback because exact pack state was stale.
+	VectorIndexSearchFallbackReasonHNSWSearchPackStale VectorIndexSearchFallbackReason = "hnsw_search_pack_stale"
+	// VectorIndexSearchFallbackReasonHNSWSearchPackClosed reports fallback because exact pack state was closed.
+	VectorIndexSearchFallbackReasonHNSWSearchPackClosed VectorIndexSearchFallbackReason = "hnsw_search_pack_closed"
+	// VectorIndexSearchFallbackReasonHNSWSearchPackUnavailable reports a generic exact pack fallback without a more specific status.
+	VectorIndexSearchFallbackReasonHNSWSearchPackUnavailable VectorIndexSearchFallbackReason = "hnsw_search_pack_unavailable"
+	// VectorIndexSearchFallbackReasonColumnGraphFallback reports the column_graph compatibility/fallback route.
+	VectorIndexSearchFallbackReasonColumnGraphFallback VectorIndexSearchFallbackReason = "column_graph_fallback"
+	// VectorIndexSearchFallbackReasonGraphRowFallback reports legacy graph-row fallback activity.
+	VectorIndexSearchFallbackReasonGraphRowFallback VectorIndexSearchFallbackReason = "graph_row_fallback"
+	// VectorIndexSearchFallbackReasonTypedColumnVectorFallback reports typed-column vector fallback activity.
+	VectorIndexSearchFallbackReasonTypedColumnVectorFallback VectorIndexSearchFallbackReason = "typed_column_vector_fallback"
+	// VectorIndexSearchFallbackReasonVectorScratchDecode reports vector scratch/fallback decode activity.
+	VectorIndexSearchFallbackReasonVectorScratchDecode VectorIndexSearchFallbackReason = "vector_scratch_decode"
+)
+
+// VectorIndexSearchDiagnostics is a compact allocation-free value summary for
+// route/status and no-document guardrail checks. It is derived from
+// VectorIndexSearchStats; callers that need full counters should inspect Stats.
+type VectorIndexSearchDiagnostics struct {
+	Route                         VectorIndexSearchRouteKind            `json:"route"`
+	HNSWSearchPackStatus          VectorIndexSearchHNSWSearchPackStatus `json:"hnsw_search_pack_status"`
+	FallbackReason                VectorIndexSearchFallbackReason       `json:"fallback_reason"`
+	NoDocumentGuardrailsOK        bool                                  `json:"no_document_guardrails_ok"`
+	ExactHNSWSearchPackNoDocRoute bool                                  `json:"exact_hnsw_search_pack_no_doc_route"`
+	DocumentsFetched              uint64                                `json:"docs_fetched,omitempty"`
+	GraphRowFallbacks             uint64                                `json:"graph_row_fallbacks,omitempty"`
+	TypedColumnVectorFallbacks    uint64                                `json:"typed_column_vector_fallbacks,omitempty"`
+	VectorScratchDecodes          uint64                                `json:"vector_scratch_decodes,omitempty"`
+	OpenSearcherCalls             uint64                                `json:"open_searcher_calls,omitempty"`
+	OpenSetupInTimedLoop          uint64                                `json:"open_setup_in_timed_loop,omitempty"`
+	ResponseOwnedResultAllocs     uint64                                `json:"response_owned_result_allocs,omitempty"`
+	HNSWSearchPackCacheHits       uint64                                `json:"hnsw_search_pack_cache_hits,omitempty"`
+	HNSWSearchPackCacheMisses     uint64                                `json:"hnsw_search_pack_cache_misses,omitempty"`
+	HNSWSearchPackCacheWaits      uint64                                `json:"hnsw_search_pack_cache_waits,omitempty"`
+	HNSWSearchPackCacheBuilds     uint64                                `json:"hnsw_search_pack_cache_builds,omitempty"`
+}
+
+// Diagnostics returns a compact route/status summary for the response.
+func (r VectorIndexSearchResponse) Diagnostics() VectorIndexSearchDiagnostics {
+	return r.Stats.Diagnostics()
+}
+
+// Diagnostics returns a compact route/status summary derived from the stats.
+func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
+	return VectorIndexSearchDiagnostics{
+		Route:                         s.RouteKind(),
+		HNSWSearchPackStatus:          s.HNSWSearchPackStatus(),
+		FallbackReason:                s.FallbackReason(),
+		NoDocumentGuardrailsOK:        s.NoDocumentGuardrailsOK(),
+		ExactHNSWSearchPackNoDocRoute: s.ExactHNSWSearchPackNoDocumentRoute(),
+		DocumentsFetched:              s.DocumentsFetched,
+		GraphRowFallbacks:             s.GraphRowFallbacks,
+		TypedColumnVectorFallbacks:    s.TypedColumnFallbacks,
+		VectorScratchDecodes:          s.VectorScratchDecodes,
+		OpenSearcherCalls:             s.OpenSearcherCalls,
+		OpenSetupInTimedLoop:          s.OpenSetupInTimedLoop,
+		ResponseOwnedResultAllocs:     s.ResponseOwnedResultAllocs,
+		HNSWSearchPackCacheHits:       s.HNSWSearchPackCacheHits,
+		HNSWSearchPackCacheMisses:     s.HNSWSearchPackCacheMisses,
+		HNSWSearchPackCacheWaits:      s.HNSWSearchPackCacheWaits,
+		HNSWSearchPackCacheBuilds:     s.HNSWSearchPackCacheBuilds,
+	}
+}
+
+// RouteKind reports the low-cardinality route selected for this search.
+func (s VectorIndexSearchStats) RouteKind() VectorIndexSearchRouteKind {
+	switch {
+	case s.SearchRouteQuantizedOnly > 0:
+		return VectorIndexSearchRouteQuantizedOnly
+	case s.SearchRouteQuantizedRerank > 0:
+		return VectorIndexSearchRouteQuantizedRerank
+	case s.SearchRouteHNSWSearchPack > 0:
+		return VectorIndexSearchRouteExactHNSWSearchPackV1
+	case s.SearchRouteColumnGraphPrepared > 0:
+		return VectorIndexSearchRouteColumnGraphPrepared
+	case s.SearchRouteColumnGraphFallback > 0:
+		return VectorIndexSearchRouteColumnGraphFallback
+	default:
+		return VectorIndexSearchRouteUnknown
+	}
+}
+
+// HNSWSearchPackStatus reports exact hnsw_search_pack_v1 health for this search.
+func (s VectorIndexSearchStats) HNSWSearchPackStatus() VectorIndexSearchHNSWSearchPackStatus {
+	switch {
+	case s.HNSWSearchPackActive > 0:
+		return VectorIndexSearchHNSWSearchPackStatusActive
+	case s.HNSWSearchPackClosed > 0:
+		return VectorIndexSearchHNSWSearchPackStatusClosed
+	case s.HNSWSearchPackStale > 0:
+		return VectorIndexSearchHNSWSearchPackStatusStale
+	case s.HNSWSearchPackInvalid > 0:
+		return VectorIndexSearchHNSWSearchPackStatusInvalid
+	case s.HNSWSearchPackMissing > 0:
+		return VectorIndexSearchHNSWSearchPackStatusMissing
+	default:
+		return VectorIndexSearchHNSWSearchPackStatusNone
+	}
+}
+
+// FallbackReason reports the first low-cardinality fallback reason visible in stats.
+func (s VectorIndexSearchStats) FallbackReason() VectorIndexSearchFallbackReason {
+	switch {
+	case s.HNSWSearchPackClosed > 0:
+		return VectorIndexSearchFallbackReasonHNSWSearchPackClosed
+	case s.HNSWSearchPackStale > 0:
+		return VectorIndexSearchFallbackReasonHNSWSearchPackStale
+	case s.HNSWSearchPackInvalid > 0:
+		return VectorIndexSearchFallbackReasonHNSWSearchPackInvalid
+	case s.HNSWSearchPackMissing > 0:
+		return VectorIndexSearchFallbackReasonHNSWSearchPackMissing
+	case s.HNSWSearchPackFallbacks > 0:
+		return VectorIndexSearchFallbackReasonHNSWSearchPackUnavailable
+	case s.GraphRowFallbacks > 0:
+		return VectorIndexSearchFallbackReasonGraphRowFallback
+	case s.TypedColumnFallbacks > 0:
+		return VectorIndexSearchFallbackReasonTypedColumnVectorFallback
+	case s.VectorScratchDecodes > 0:
+		return VectorIndexSearchFallbackReasonVectorScratchDecode
+	case s.SearchRouteColumnGraphFallback > 0:
+		return VectorIndexSearchFallbackReasonColumnGraphFallback
+	default:
+		return VectorIndexSearchFallbackReasonNone
+	}
+}
+
+// NoDocumentGuardrailsOK reports whether shared no-document guardrail counters are clear.
+func (s VectorIndexSearchStats) NoDocumentGuardrailsOK() bool {
+	return s.DocumentsFetched == 0 &&
+		s.GraphRowFallbacks == 0 &&
+		s.TypedColumnFallbacks == 0 &&
+		s.VectorScratchDecodes == 0
+}
+
+// ExactHNSWSearchPackNoDocumentRoute reports the exact FP32 no-document pack route guardrail.
+func (s VectorIndexSearchStats) ExactHNSWSearchPackNoDocumentRoute() bool {
+	return vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(s)
 }
 
 // VectorIndexSearchBuffer is caller-owned reusable response storage for
@@ -842,12 +1050,14 @@ func (c *Collection) searchVectorIndexPreparedNoDocumentOwned(opts VectorIndexSe
 	var lastResponse VectorIndexSearchResponse
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		prepared, response, err := c.acquireCollectionVectorIndexPreparedSearch(opts)
+		prepared, response, acquireStats, err := c.acquireCollectionVectorIndexPreparedSearch(opts)
 		if err != nil {
 			releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+			acquireStats.apply(&response.Stats)
 			return response, err
 		}
 		response, err = prepared.SearchOwnedNoDocuments(opts, statsMode, &buffer.searchScratch)
+		acquireStats.apply(&response.Stats)
 		healthyPackRoute := vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats)
 		if err == nil && healthyPackRoute {
 			releaseCollectionSearchVectorIndexResponseBuffer(buffer)
@@ -865,6 +1075,20 @@ func (c *Collection) searchVectorIndexPreparedNoDocumentOwned(opts VectorIndexSe
 		return lastResponse, lastErr
 	}
 	return lastResponse, fmt.Errorf("%w: vector index %q SearchVectorIndex requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
+}
+
+func markVectorIndexSearchResponseOwnedResultAllocs(response *VectorIndexSearchResponse) {
+	if response != nil && len(response.Results) > 0 {
+		response.Stats.ResponseOwnedResultAllocs = 1
+	}
+}
+
+func markCollectionVectorIndexOneShotOpenSetup(stats *VectorIndexSearchStats) {
+	if stats == nil {
+		return
+	}
+	stats.OpenSearcherCalls = 1
+	stats.OpenSetupInTimedLoop = 1
 }
 
 func collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts VectorIndexSearchOptions) bool {
@@ -897,6 +1121,7 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 		MaxDecodedBlocks: opts.MaxDecodedBlocks,
 	})
 	if err != nil {
+		markCollectionVectorIndexOneShotOpenSetup(&response.Stats)
 		return response, err
 	}
 	response, err = searcher.Search(VectorIndexSearcherSearchOptions{
@@ -911,6 +1136,7 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 		StatsMode:                 opts.StatsMode,
 		scoreBatchMode:            opts.scoreBatchMode,
 	})
+	markCollectionVectorIndexOneShotOpenSetup(&response.Stats)
 	documentView := searcher.documentView
 	if closeErr := searcher.Close(); err == nil && closeErr != nil {
 		return response, closeErr
@@ -969,12 +1195,14 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 	var lastResponse VectorIndexSearchResponse
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		prepared, response, err := c.acquireCollectionVectorIndexPreparedSearch(opts)
+		prepared, response, acquireStats, err := c.acquireCollectionVectorIndexPreparedSearch(opts)
 		if err != nil {
 			buffer.Reset()
+			acquireStats.apply(&response.Stats)
 			return response, err
 		}
 		response, err = prepared.SearchWithBuffer(opts, statsMode, buffer)
+		acquireStats.apply(&response.Stats)
 		healthyPackRoute := vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(response.Stats)
 		if err == nil && healthyPackRoute {
 			return response, nil
@@ -1296,6 +1524,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if err != nil {
 		return response, err
 	}
+	markVectorIndexSearchResponseOwnedResultAllocs(&response)
 	if opts.IncludeDocuments {
 		if s.documentView == nil {
 			s.documentView = newCollectionReadViewAtSnapshot(s.collection, s.snapshot, s.catalog, false, mappedresource.ScopePreparedSearch)

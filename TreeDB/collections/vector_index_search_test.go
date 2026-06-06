@@ -266,6 +266,10 @@ func assertExactVectorIndexSearchHasNoQuantizedRouteStats2416(tb testing.TB, sta
 
 func assertQuantizedOnlyGuardrailStats2416(tb testing.TB, stats VectorIndexSearchStats, dims int) {
 	tb.Helper()
+	diag := stats.Diagnostics()
+	if diag.Route != VectorIndexSearchRouteQuantizedOnly || diag.HNSWSearchPackStatus != VectorIndexSearchHNSWSearchPackStatusNone || diag.ExactHNSWSearchPackNoDocRoute {
+		tb.Fatalf("quantized_only diagnostics=%+v want codec-generic quantized route without exact hnsw_search_pack_v1 status", diag)
+	}
 	if stats.SearchRouteQuantizedOnly != 1 || stats.SearchRouteQuantizedRerank != 0 || stats.QuantizedScorerActive != 1 {
 		tb.Fatalf("quantized_only route stats=%+v want quantized-only scorer route", stats)
 	}
@@ -291,6 +295,10 @@ func assertQuantizedOnlyGuardrailStats2416(tb testing.TB, stats VectorIndexSearc
 
 func assertQuantizedRerankNoDocumentGuardrailStats2416(tb testing.TB, stats VectorIndexSearchStats, shortlist int) {
 	tb.Helper()
+	diag := stats.Diagnostics()
+	if diag.Route != VectorIndexSearchRouteQuantizedRerank || diag.HNSWSearchPackStatus != VectorIndexSearchHNSWSearchPackStatusNone || diag.ExactHNSWSearchPackNoDocRoute {
+		tb.Fatalf("quantized_rerank diagnostics=%+v want codec-generic quantized route without exact hnsw_search_pack_v1 status", diag)
+	}
 	if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 || stats.QuantizedScorerActive != 1 {
 		tb.Fatalf("quantized_rerank route stats=%+v want quantized-rerank scorer route", stats)
 	}
@@ -313,11 +321,21 @@ func assertQuantizedRerankNoDocumentGuardrailStats2416(tb testing.TB, stats Vect
 
 func assertQuantizedUnavailableGuardrailStats2416(tb testing.TB, stats VectorIndexSearchStats, mode columnVectorGraphNativeSearchQueryMode, health columnVectorGraphQuantizedAssetHealth) {
 	tb.Helper()
+	diag := stats.Diagnostics()
+	if diag.HNSWSearchPackStatus != VectorIndexSearchHNSWSearchPackStatusNone || diag.ExactHNSWSearchPackNoDocRoute {
+		tb.Fatalf("unavailable quantized diagnostics=%+v want no exact hnsw_search_pack_v1 route/status", diag)
+	}
 	if mode == columnVectorGraphNativeSearchQueryModeQuantizedOnly {
+		if diag.Route != VectorIndexSearchRouteQuantizedOnly {
+			tb.Fatalf("unavailable quantized_only diagnostics=%+v want quantized-only route", diag)
+		}
 		if stats.SearchRouteQuantizedOnly != 1 || stats.SearchRouteQuantizedRerank != 0 {
 			tb.Fatalf("unavailable quantized_only stats=%+v want quantized-only route", stats)
 		}
 	} else if mode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		if diag.Route != VectorIndexSearchRouteQuantizedRerank {
+			tb.Fatalf("unavailable quantized_rerank diagnostics=%+v want quantized-rerank route", diag)
+		}
 		if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 {
 			tb.Fatalf("unavailable quantized_rerank stats=%+v want quantized-rerank route", stats)
 		}
@@ -1810,6 +1828,180 @@ func TestResetBufferedVectorIndexSearchResponseClearsReturnedResults2362(t *test
 	}
 	if len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
 		t.Fatalf("buffer results=%d idBytes=%d want reset view", len(buffer.results), len(buffer.idBytes))
+	}
+}
+
+func TestVectorIndexSearchDiagnosticsExactPackRoute2407(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, TopK: 2, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+	var buffer VectorIndexSearchBuffer
+	first, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("first SearchVectorIndexWithBuffer: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, first, def.Name, opts.TopK)
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, first.Stats)
+	assertVectorIndexSearchDiagnostics2407(t, first.Diagnostics(), VectorIndexSearchRouteExactHNSWSearchPackV1, VectorIndexSearchHNSWSearchPackStatusActive, VectorIndexSearchFallbackReasonNone, true, true)
+	if first.Stats.HNSWSearchPackCacheMisses != 1 || first.Stats.HNSWSearchPackCacheBuilds != 1 || first.Stats.HNSWSearchPackCacheHits != 0 || first.Stats.HNSWSearchPackCacheWaits != 0 {
+		t.Fatalf("first cache stats=%+v want one exact-pack cache miss/build", first.Stats)
+	}
+	if first.Stats.OpenSearcherCalls != 0 || first.Stats.OpenSetupInTimedLoop != 0 || first.Stats.ResponseOwnedResultAllocs != 0 {
+		t.Fatalf("first boundary stats=%+v want buffered route with no one-shot open or response-owned allocation signal", first.Stats)
+	}
+
+	second, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("second SearchVectorIndexWithBuffer: %v", err)
+	}
+	assertSearchVectorIndexWithBufferNoDocumentPackStats2362(t, second.Stats)
+	if second.Stats.HNSWSearchPackCacheHits != 1 || second.Stats.HNSWSearchPackCacheMisses != 0 || second.Stats.HNSWSearchPackCacheBuilds != 0 {
+		t.Fatalf("second cache stats=%+v want one exact-pack cache hit", second.Stats)
+	}
+
+	owned, err := col.SearchVectorIndex(opts)
+	if err != nil {
+		t.Fatalf("SearchVectorIndex no-doc convenience: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, owned, def.Name, opts.TopK)
+	assertVectorIndexSearchDiagnostics2407(t, owned.Diagnostics(), VectorIndexSearchRouteExactHNSWSearchPackV1, VectorIndexSearchHNSWSearchPackStatusActive, VectorIndexSearchFallbackReasonNone, true, true)
+	if owned.Stats.ResponseOwnedResultAllocs != 1 || owned.Stats.OpenSearcherCalls != 0 || owned.Stats.OpenSetupInTimedLoop != 0 || owned.Stats.HNSWSearchPackCacheHits != 1 {
+		t.Fatalf("owned no-doc stats=%+v want response-owned allocation signal, no one-shot open, and exact-pack cache hit", owned.Stats)
+	}
+
+	withDocsOpts := opts
+	withDocsOpts.IncludeDocuments = true
+	withDocs, err := col.SearchVectorIndex(withDocsOpts)
+	if err != nil {
+		t.Fatalf("SearchVectorIndex with docs: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, withDocs, def.Name, opts.TopK)
+	assertVectorIndexSearchColumnGraphDiagnostics2407(t, withDocs.Diagnostics(), VectorIndexSearchHNSWSearchPackStatusActive, false, VectorIndexSearchFallbackReasonNone, VectorIndexSearchFallbackReasonColumnGraphFallback)
+	if withDocs.Stats.OpenSearcherCalls != 1 || withDocs.Stats.OpenSetupInTimedLoop != 1 || withDocs.Stats.ResponseOwnedResultAllocs != 1 || withDocs.Stats.DocumentsFetched != uint64(len(withDocs.Results)) {
+		t.Fatalf("with-docs stats=%+v want one-shot open/setup, response-owned result allocation, and document fetch signal", withDocs.Stats)
+	}
+}
+
+func TestVectorIndexSearchDiagnosticsHNSWPackMissingFallback2407(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	if searcher.reader == nil {
+		t.Fatal("test setup missing physical row reader")
+	}
+	if searcher.reader.hnswSearchPack != nil {
+		if err := searcher.reader.hnswSearchPack.Close(); err != nil {
+			t.Fatalf("close test hnsw pack: %v", err)
+		}
+		searcher.reader.hnswSearchPack = nil
+	}
+	searcher.reader.hnswSearchPackStatus = columnHNSWSearchPackPreparedStatusMissing
+	searcher.routeStats = vectorIndexSearchRouteStatsForColumnGraphReader(searcher.reader)
+
+	var buffer VectorIndexSearchBuffer
+	got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: []float32{1, 0, 0}, TopK: 1, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer with missing pack fallback: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 1)
+	assertVectorIndexSearchColumnGraphDiagnostics2407(t, got.Diagnostics(), VectorIndexSearchHNSWSearchPackStatusMissing, true, VectorIndexSearchFallbackReasonHNSWSearchPackMissing)
+	if got.Stats.SearchRouteHNSWSearchPack != 0 || got.Stats.HNSWSearchPackFallbacks != 1 || got.Stats.GraphRowFallbacks != 0 || got.Stats.TypedColumnFallbacks != 0 || got.Stats.VectorScratchDecodes != 0 {
+		t.Fatalf("fallback stats=%+v want column_graph prepared fallback because exact hnsw pack is missing", got.Stats)
+	}
+}
+
+func TestVectorIndexSearchDiagnosticsHelperStatuses2407(t *testing.T) {
+	tests := []struct {
+		name     string
+		stats    VectorIndexSearchStats
+		status   VectorIndexSearchHNSWSearchPackStatus
+		fallback VectorIndexSearchFallbackReason
+	}{
+		{name: "active", stats: VectorIndexSearchStats{SearchRouteHNSWSearchPack: 1, HNSWSearchPackActive: 1}, status: VectorIndexSearchHNSWSearchPackStatusActive, fallback: VectorIndexSearchFallbackReasonNone},
+		{name: "missing", stats: VectorIndexSearchStats{SearchRouteColumnGraphPrepared: 1, HNSWSearchPackMissing: 1, HNSWSearchPackFallbacks: 1}, status: VectorIndexSearchHNSWSearchPackStatusMissing, fallback: VectorIndexSearchFallbackReasonHNSWSearchPackMissing},
+		{name: "invalid", stats: VectorIndexSearchStats{HNSWSearchPackInvalid: 1, HNSWSearchPackFallbacks: 1}, status: VectorIndexSearchHNSWSearchPackStatusInvalid, fallback: VectorIndexSearchFallbackReasonHNSWSearchPackInvalid},
+		{name: "stale", stats: VectorIndexSearchStats{HNSWSearchPackStale: 1, HNSWSearchPackFallbacks: 1}, status: VectorIndexSearchHNSWSearchPackStatusStale, fallback: VectorIndexSearchFallbackReasonHNSWSearchPackStale},
+		{name: "closed", stats: VectorIndexSearchStats{HNSWSearchPackClosed: 1, HNSWSearchPackFallbacks: 1}, status: VectorIndexSearchHNSWSearchPackStatusClosed, fallback: VectorIndexSearchFallbackReasonHNSWSearchPackClosed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diag := tt.stats.Diagnostics()
+			if diag.HNSWSearchPackStatus != tt.status || diag.FallbackReason != tt.fallback {
+				t.Fatalf("diagnostics=%+v want status=%q fallback=%q", diag, tt.status, tt.fallback)
+			}
+		})
+	}
+
+}
+
+func TestVectorIndexSearchDiagnosticsQuantizedRouteKinds2407(t *testing.T) {
+	tests := []struct {
+		name  string
+		stats VectorIndexSearchStats
+		route VectorIndexSearchRouteKind
+	}{
+		{
+			name:  "quantized_only_prioritizes_codec_generic_route",
+			stats: VectorIndexSearchStats{SearchRouteColumnGraphPrepared: 1, SearchRouteQuantizedOnly: 1, QuantizedScoreCalls: 3, QuantizedScorerActive: 1},
+			route: VectorIndexSearchRouteQuantizedOnly,
+		},
+		{
+			name:  "quantized_rerank_prioritizes_codec_generic_route",
+			stats: VectorIndexSearchStats{SearchRouteColumnGraphFallback: 1, SearchRouteQuantizedRerank: 1, QuantizedScoreCalls: 3, QuantizedRerankExactScoreCalls: 2, QuantizedScorerActive: 1},
+			route: VectorIndexSearchRouteQuantizedRerank,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diag := tt.stats.Diagnostics()
+			if diag.Route != tt.route || diag.ExactHNSWSearchPackNoDocRoute || diag.HNSWSearchPackStatus != VectorIndexSearchHNSWSearchPackStatusNone {
+				t.Fatalf("diagnostics=%+v want route=%q without exact hnsw_search_pack_v1 route/status", diag, tt.route)
+			}
+		})
+	}
+}
+
+func assertVectorIndexSearchDiagnostics2407(tb testing.TB, got VectorIndexSearchDiagnostics, route VectorIndexSearchRouteKind, packStatus VectorIndexSearchHNSWSearchPackStatus, fallback VectorIndexSearchFallbackReason, noDocOK bool, exactPackNoDoc bool) {
+	tb.Helper()
+	if got.Route != route || got.HNSWSearchPackStatus != packStatus || got.FallbackReason != fallback || got.NoDocumentGuardrailsOK != noDocOK || got.ExactHNSWSearchPackNoDocRoute != exactPackNoDoc {
+		tb.Fatalf("diagnostics=%+v want route=%q pack=%q fallback=%q noDocOK=%v exactPackNoDoc=%v", got, route, packStatus, fallback, noDocOK, exactPackNoDoc)
+	}
+}
+
+func assertVectorIndexSearchColumnGraphDiagnostics2407(tb testing.TB, got VectorIndexSearchDiagnostics, packStatus VectorIndexSearchHNSWSearchPackStatus, noDocOK bool, fallbackReasons ...VectorIndexSearchFallbackReason) {
+	tb.Helper()
+	if got.Route != VectorIndexSearchRouteColumnGraphPrepared && got.Route != VectorIndexSearchRouteColumnGraphFallback {
+		tb.Fatalf("diagnostics=%+v want column_graph prepared or fallback route", got)
+	}
+	fallbackOK := len(fallbackReasons) == 0
+	for _, want := range fallbackReasons {
+		if got.FallbackReason == want {
+			fallbackOK = true
+			break
+		}
+	}
+	if got.HNSWSearchPackStatus != packStatus || !fallbackOK || got.NoDocumentGuardrailsOK != noDocOK || got.ExactHNSWSearchPackNoDocRoute {
+		tb.Fatalf("diagnostics=%+v want column_graph pack=%q fallback in %v noDocOK=%v exactPackNoDoc=false", got, packStatus, fallbackReasons, noDocOK)
 	}
 }
 
@@ -4575,6 +4767,14 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.HNSWSearchPackMappedBytes), "hnsw_search_pack_mapped_B")
 	b.ReportMetric(float64(stats.HNSWSearchPackHeapCopyBytes), "hnsw_search_pack_heap_copy_B")
 	b.ReportMetric(float64(stats.HNSWSearchPackActiveHandles), "hnsw_search_pack_active_handles")
+	// Collection prepared-cache hit/miss/build/wait counters are intentionally
+	// omitted here: this generic reporter consumes one pre-timer sample, and some
+	// collection benchmarks sample the initial miss/build while their timed loops
+	// measure steady-state hits. Public per-call stats and diagnostics still
+	// expose hnsw_search_pack_cache_* directly for focused tests and callers.
+	b.ReportMetric(float64(stats.OpenSearcherCalls), "open_searcher_calls/search")
+	b.ReportMetric(float64(stats.OpenSetupInTimedLoop), "open_setup_in_timed_loop/search")
+	b.ReportMetric(float64(stats.ResponseOwnedResultAllocs), "response_owned_result_allocs/search")
 	scoreBatchFallbackReasonScalar := 0.0
 	if stats.ScoreBatchScalarFallbackCalls > 0 {
 		scoreBatchFallbackReasonScalar = 1

@@ -50,6 +50,23 @@ type collectionVectorIndexPreparedSearchCacheSnapshot struct {
 	Errors                     uint64
 }
 
+type collectionVectorIndexPreparedSearchAcquireStats struct {
+	HNSWSearchPackCacheHits   uint64
+	HNSWSearchPackCacheMisses uint64
+	HNSWSearchPackCacheWaits  uint64
+	HNSWSearchPackCacheBuilds uint64
+}
+
+func (s collectionVectorIndexPreparedSearchAcquireStats) apply(stats *VectorIndexSearchStats) {
+	if stats == nil {
+		return
+	}
+	stats.HNSWSearchPackCacheHits += s.HNSWSearchPackCacheHits
+	stats.HNSWSearchPackCacheMisses += s.HNSWSearchPackCacheMisses
+	stats.HNSWSearchPackCacheWaits += s.HNSWSearchPackCacheWaits
+	stats.HNSWSearchPackCacheBuilds += s.HNSWSearchPackCacheBuilds
+}
+
 var collectionVectorIndexPreparedSearchBuildHookForTest struct {
 	mu sync.Mutex
 	fn func(indexName string)
@@ -64,26 +81,27 @@ func callCollectionVectorIndexPreparedSearchBuildHookForTest(indexName string) {
 	}
 }
 
-func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndexSearchOptions) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error) {
+func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndexSearchOptions) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, collectionVectorIndexPreparedSearchAcquireStats, error) {
 	var response VectorIndexSearchResponse
+	var acquireStats collectionVectorIndexPreparedSearchAcquireStats
 	if err := ValidateIndexName(opts.IndexName); err != nil {
-		return nil, response, err
+		return nil, response, acquireStats, err
 	}
 	if opts.MaxDecodedBlocks < 0 {
-		return nil, response, errors.New("collections: vector index search max_decoded_blocks cannot be negative")
+		return nil, response, acquireStats, errors.New("collections: vector index search max_decoded_blocks cannot be negative")
 	}
 	if c == nil {
-		return nil, response, errCollectionNil
+		return nil, response, acquireStats, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, response, errCollectionDBNil
+		return nil, response, acquireStats, errCollectionDBNil
 	}
 	if c.manager != nil && c.manager.isClosing() {
-		return nil, response, backenddb.ErrClosed
+		return nil, response, acquireStats, backenddb.ErrClosed
 	}
 	commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
 	if commitSeq == 0 || systemRoot == 0 || c.db.IsClosing() {
-		return nil, response, backenddb.ErrClosed
+		return nil, response, acquireStats, backenddb.ErrClosed
 	}
 
 	for {
@@ -96,11 +114,12 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		if entry != nil && entry.building {
 			ready := entry.ready
 			c.vectorBufferedSearchWaits++
+			acquireStats.HNSWSearchPackCacheWaits++
 			c.vectorBufferedSearchMu.Unlock()
 			<-ready
 			commitSeq, systemRoot = dbCommitSeqAndSystemRoot(c.db)
 			if commitSeq == 0 || systemRoot == 0 || c.db.IsClosing() {
-				return nil, response, backenddb.ErrClosed
+				return nil, response, acquireStats, backenddb.ErrClosed
 			}
 			continue
 		}
@@ -111,13 +130,14 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 				response = entry.response
 				err := entry.err
 				c.vectorBufferedSearchMu.Unlock()
-				return nil, response, err
+				return nil, response, acquireStats, err
 			}
 			prepared := entry.prepared
 			c.vectorBufferedSearchHits++
+			acquireStats.HNSWSearchPackCacheHits++
 			c.vectorBufferedSearchMu.Unlock()
 			if prepared != nil && prepared.readyForCurrentSearch() {
-				return prepared, prepared.responseForSearch(), nil
+				return prepared, prepared.responseForSearch(), acquireStats, nil
 			}
 			c.invalidateCollectionVectorIndexPreparedSearch(opts.IndexName, prepared)
 			continue
@@ -136,6 +156,8 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 		c.vectorBufferedSearch[opts.IndexName] = entry
 		c.vectorBufferedSearchMisses++
 		c.vectorBufferedSearchBuilds++
+		acquireStats.HNSWSearchPackCacheMisses++
+		acquireStats.HNSWSearchPackCacheBuilds++
 		c.vectorBufferedSearchMu.Unlock()
 
 		if oldPrepared != nil {
@@ -177,9 +199,9 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndex
 			_ = prepared.Close()
 		}
 		if buildErr != nil {
-			return nil, buildResponse, buildErr
+			return nil, buildResponse, acquireStats, buildErr
 		}
-		return prepared, buildResponse, nil
+		return prepared, buildResponse, acquireStats, nil
 	}
 }
 
@@ -351,6 +373,7 @@ func (p *collectionVectorIndexPreparedSearch) SearchOwnedNoDocuments(opts Vector
 	if err != nil {
 		return response, err
 	}
+	markVectorIndexSearchResponseOwnedResultAllocs(&response)
 	return response, nil
 }
 
