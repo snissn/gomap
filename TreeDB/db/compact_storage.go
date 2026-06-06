@@ -394,9 +394,6 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}); err != nil {
 		return stats, err
 	}
-	// If index vacuum was unsupported, keep the guard through settle/final audit;
-	// otherwise settle leaf GC could delete retiring sources before any vacuum
-	// cloned away the old leaf-log references.
 	if !indexVacuumSkipped {
 		if err := releaseIndexVacuumLeafGuard(); err != nil {
 			return stats, err
@@ -405,6 +402,14 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 
 	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked); err != nil {
 		return stats, err
+	}
+	// If index vacuum was unsupported, release after settle leaf GC has observed
+	// the pinned generations, but before value-log cleanup/final audit so the
+	// guard's snapshot does not keep unrelated zero-byte segments pinned.
+	if indexVacuumSkipped {
+		if err := releaseIndexVacuumLeafGuard(); err != nil {
+			return stats, err
+		}
 	}
 
 	if opts.DisableZeroByteValueLogCleanup {
