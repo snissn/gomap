@@ -6,7 +6,8 @@
 // Row-major batch dot wrappers accept flat []float32 payloads and ordinal/row-id
 // tiles directly. They validate full-row shapes, leave dst unchanged for invalid
 // shapes, and report whether a platform batch SIMD kernel or a non-batch
-// fallback handled the call. Scalar_u8 helpers expose centered int16 query
-// layouts and indexed row-major byte-code dot kernels while keeping callers
-// allocation-free.
+// fallback handled the call. Prevalidated row-id wrappers are reserved for hot
+// paths that have already checked row bounds while composing an adjacency tile.
+// Scalar_u8 helpers expose centered int16 query layouts and indexed row-major
+// byte-code dot kernels while keeping callers allocation-free.
 package vectorops
