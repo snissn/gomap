@@ -9,6 +9,11 @@ const scalarU8DotBatchOptimizedAvailable = true
 const (
 	dotScalarU8CenteredIndexedARM64MinDims = 16
 	dotScalarU8CenteredIndexedARM64MinRows = 1
+	// The bounded int32-accumulation kernel sums at most ceil(dims/32) products
+	// per vector lane. Each q*row product is bounded by 255*255, so this conservative
+	// limit keeps per-lane raw sums below int32 max while covering TreeDB's common
+	// 128/256/768-dimensional vector-search shapes.
+	dotScalarU8CenteredIndexedARM64Int32MaxDims = 32768
 )
 
 func dotScalarU8CenteredIndexedOptimizedEligible(rows, dims int) bool {
@@ -33,7 +38,12 @@ func DotScalarU8CenteredIndexed(dst []int64, codes []byte, query ScalarU8Centere
 		return scalarU8DotBatchStatus(rows, false)
 	}
 	queryValues := query.values[:dims]
-	dotScalarU8CenteredIndexedARM64(dst, codes, queryValues, rowIDs, dims, rows, query.CenteredSum())
+	querySum := query.CenteredSum()
+	if dims <= dotScalarU8CenteredIndexedARM64Int32MaxDims {
+		dotScalarU8CenteredIndexedARM64Int32(dst, codes, queryValues, rowIDs, dims, rows, querySum)
+	} else {
+		dotScalarU8CenteredIndexedARM64(dst, codes, queryValues, rowIDs, dims, rows, querySum)
+	}
 	return scalarU8DotBatchStatus(rows, true)
 }
 
@@ -42,3 +52,9 @@ func DotScalarU8CenteredIndexed(dst []int64, codes []byte, query ScalarU8Centere
 // rows before calling. querySum is sum(query[:dims]); the kernel computes
 // sum(q*(2*row-255)) as 2*sum(q*row)-255*querySum.
 func dotScalarU8CenteredIndexedARM64(dst []int64, codes []byte, query []ScalarU8CenteredCode, rowIDs []uint32, dims int, rows int, querySum int64)
+
+// dotScalarU8CenteredIndexedARM64Int32 computes rows indexed scalar_u8 centered
+// dot products for bounded dimensions whose per-lane int32 partial sums cannot
+// overflow. The Go wrapper must validate all slice lengths, row IDs, dims, and
+// rows before calling.
+func dotScalarU8CenteredIndexedARM64Int32(dst []int64, codes []byte, query []ScalarU8CenteredCode, rowIDs []uint32, dims int, rows int, querySum int64)
