@@ -23,6 +23,12 @@ padding already certified by typed-column layout validation. Float side arrays a
 non-null `float32` / `raw_float32`; integer side arrays are non-null `uint32` /
 `raw_uint32` or `uint64` / `raw_uint64` where a wider identifier is required.
 
+The `rabitq_1bit` v1 contract in `rabitq-1bit-v1.md` chooses
+`RolePackedCodes` / `packed_bit_vector` for one-bit code rows, with
+`CodeDimensions=next_power_of_two(VectorDimensions)`, `CodeWidthBits=1`,
+TreeDB LSB-first bit order, and zero high-bit padding. Its required side arrays
+are `code_count` (`uint32`) and `quantized_dot_product_inv` (`float32`).
+
 ## Query-mode guardrail
 
 Collection vector-index metadata can declare named `scalar_u8` v1 quantized
