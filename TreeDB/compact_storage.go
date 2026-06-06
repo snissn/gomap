@@ -96,9 +96,12 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	finishValueLogFence()
 	fenceActive = false
 	if db.cached != nil && len(stats.ValueLogRewrite.SourceFileIDsUnreferenced) > 0 {
-		if _, err := db.cached.ReclaimObservedValueLogSources(ctx, stats.ValueLogRewrite.SourceFileIDsUnreferenced); err != nil {
+		reclaimStats, err := db.cached.ReclaimObservedValueLogSources(ctx, stats.ValueLogRewrite.SourceFileIDsUnreferenced)
+		if err != nil {
 			return out, err
 		}
+		stats.ValueLogRewrite.SourceSegmentsReclaimed = reclaimStats.ObservedSourceSegmentsDeleted
+		stats.ValueLogRewrite.SourceBytesReclaimed = reclaimStats.ObservedSourceBytesDeleted
 	}
 	success = true
 	return CompactStorageStats(stats), nil
