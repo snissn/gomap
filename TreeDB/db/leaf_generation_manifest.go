@@ -227,8 +227,46 @@ func (m *leafGenerationManifest) currentGenerationMaxRecoveredSeq() uint32 {
 	if idx < 0 {
 		return 0
 	}
+	return maxLeafGenerationFileSeq(m.Generations[idx].FileIDs)
+}
+
+func (m *leafGenerationManifest) maxNonDeletedRecoveredSeq() uint32 {
+	if m == nil {
+		return 0
+	}
 	maxSeq := uint32(0)
-	for _, rawFileID := range m.Generations[idx].FileIDs {
+	for i := range m.Generations {
+		gen := m.Generations[i]
+		if gen.State == leafGenerationStateDeleted {
+			continue
+		}
+		if seq := maxLeafGenerationFileSeq(gen.FileIDs); seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	return maxSeq
+}
+
+func (m *leafGenerationManifest) hasNonDeletedFileID(fileID uint32) bool {
+	if m == nil || fileID == 0 {
+		return false
+	}
+	for _, gen := range m.Generations {
+		if gen.State == leafGenerationStateDeleted {
+			continue
+		}
+		for _, existing := range gen.FileIDs {
+			if existing == fileID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func maxLeafGenerationFileSeq(fileIDs []uint32) uint32 {
+	maxSeq := uint32(0)
+	for _, rawFileID := range fileIDs {
 		if rawFileID == 0 {
 			continue
 		}
@@ -531,7 +569,16 @@ func (db *DB) stagedLeafGenerationManifestWithPending(base *leafGenerationManife
 		if len(batch) == 0 {
 			return nil
 		}
-		_, changed, err := noteLeafGenerationWritableFileIDsInManifest(working, batch, batchCommitSeq)
+		registrable, err := db.filterLeafGenerationRegistrableRawFileIDs(working, batch)
+		if err != nil {
+			return err
+		}
+		if len(registrable) == 0 {
+			batch = batch[:0]
+			batchCommitSeq = 0
+			return nil
+		}
+		_, changed, err := noteLeafGenerationWritableFileIDsInManifest(working, registrable, batchCommitSeq)
 		if err != nil {
 			return err
 		}
@@ -563,7 +610,10 @@ func (db *DB) stagedLeafGenerationManifestWithPending(base *leafGenerationManife
 	if err := flushBatch(); err != nil {
 		return base, false, err
 	}
-	return working, changedAny, nil
+	if !changedAny {
+		return base, false, nil
+	}
+	return working, true, nil
 }
 
 func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint64) error {
@@ -577,7 +627,14 @@ func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint
 	}
 	nextManifest := db.leafGenerationManifest.clone()
 	db.mu.Unlock()
-	sealedFileIDs, changedAny, err := noteLeafGenerationWritableFileIDsInManifest(nextManifest, fileIDs, commitSeq)
+	registrable, err := db.filterLeafGenerationRegistrableRawFileIDs(nextManifest, fileIDs)
+	if err != nil {
+		return err
+	}
+	if len(registrable) == 0 {
+		return nil
+	}
+	sealedFileIDs, changedAny, err := noteLeafGenerationWritableFileIDsInManifest(nextManifest, registrable, commitSeq)
 	if err != nil {
 		return err
 	}
@@ -752,6 +809,108 @@ func bootstrapLeafGenerationManifestFromDir(leafDir string, commitSeq uint64) (*
 	return manifest, nil
 }
 
+func pruneMissingLeafGenerationManifestFileIDs(manifest *leafGenerationManifest, diskFiles map[uint32]struct{}, commitSeq uint64) bool {
+	if manifest == nil {
+		return false
+	}
+	changed := false
+	for i := range manifest.Generations {
+		gen := &manifest.Generations[i]
+		if gen.State == leafGenerationStateDeleted {
+			continue
+		}
+		if len(gen.FileIDs) == 0 {
+			continue
+		}
+		kept := gen.FileIDs[:0]
+		for _, rawFileID := range gen.FileIDs {
+			if rawFileID == 0 {
+				changed = true
+				continue
+			}
+			if _, ok := diskFiles[rawFileID]; !ok {
+				changed = true
+				continue
+			}
+			kept = append(kept, rawFileID)
+		}
+		if len(kept) != len(gen.FileIDs) {
+			changed = true
+		}
+		gen.FileIDs = append([]uint32(nil), kept...)
+		if gen.State != leafGenerationStateWritable && len(gen.FileIDs) == 0 {
+			gen.State = leafGenerationStateDeleted
+			if commitSeq > gen.DeletedCommitSeq {
+				gen.DeletedCommitSeq = commitSeq
+			}
+			if commitSeq > gen.PublishedCommitSeq {
+				gen.PublishedCommitSeq = commitSeq
+			}
+			changed = true
+		}
+	}
+	return changed
+}
+
+func leafGenerationRawFileExists(rootDir string, rawFileID uint32) (bool, error) {
+	if rootDir == "" || rawFileID == 0 {
+		return false, nil
+	}
+	path := leafGenerationFallbackPath(rootDir, rawFileID)
+	if path == "" {
+		return false, nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (db *DB) filterLeafGenerationRegistrableRawFileIDs(manifest *leafGenerationManifest, fileIDs []uint32) ([]uint32, error) {
+	if db == nil || manifest == nil || len(fileIDs) == 0 {
+		return nil, nil
+	}
+	maxSeq := manifest.maxNonDeletedRecoveredSeq()
+	out := make([]uint32, 0, len(fileIDs))
+	seen := make(map[uint32]struct{}, len(fileIDs))
+	for _, rawFileID := range fileIDs {
+		if rawFileID == 0 {
+			continue
+		}
+		if _, ok := seen[rawFileID]; ok {
+			continue
+		}
+		seen[rawFileID] = struct{}{}
+		if manifest.hasNonDeletedFileID(rawFileID) {
+			continue
+		}
+		exists, err := leafGenerationRawFileExists(db.dir, rawFileID)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			continue
+		}
+		_, seq := valuelog.DecodeSegmentID(rawFileID)
+		if maxSeq != 0 && seq <= maxSeq {
+			continue
+		}
+		out = append(out, rawFileID)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		_, seqI := valuelog.DecodeSegmentID(out[i])
+		_, seqJ := valuelog.DecodeSegmentID(out[j])
+		if seqI != seqJ {
+			return seqI < seqJ
+		}
+		return out[i] < out[j]
+	})
+	return out, nil
+}
+
 func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenerationManifest, commitSeq uint64) (*leafGenerationManifest, bool, error) {
 	if manifest == nil {
 		return nil, false, nil
@@ -760,17 +919,16 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	if err != nil {
 		return nil, false, err
 	}
-	if len(files) == 0 {
-		return manifest, false, nil
-	}
 	diskFiles := make(map[uint32]struct{}, len(files))
 	for _, file := range files {
 		if file.rawFileID != 0 {
 			diskFiles[file.rawFileID] = struct{}{}
 		}
 	}
-	seen := make(map[uint32]struct{}, len(manifest.Generations))
-	for _, gen := range manifest.Generations {
+	reconciled := manifest.clone()
+	changedAny := pruneMissingLeafGenerationManifestFileIDs(reconciled, diskFiles, commitSeq)
+	seen := make(map[uint32]struct{}, len(reconciled.Generations))
+	for _, gen := range reconciled.Generations {
 		if gen.State == leafGenerationStateDeleted {
 			// A deleted record for a file that is still on disk is retry state for a
 			// pending zombie delete. Keep it seen so reconciliation does not resurrect
@@ -793,9 +951,7 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 			seen[rawFileID] = struct{}{}
 		}
 	}
-	reconciled := manifest.clone()
-	changedAny := false
-	currentSeq := reconciled.currentGenerationMaxRecoveredSeq()
+	currentSeq := reconciled.maxNonDeletedRecoveredSeq()
 	for _, file := range files {
 		if _, ok := seen[file.rawFileID]; ok {
 			continue
@@ -820,6 +976,9 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	}
 	if !changedAny {
 		return manifest, false, nil
+	}
+	if err := validateLeafGenerationManifest(reconciled); err != nil {
+		return nil, false, err
 	}
 	return reconciled, true, nil
 }
@@ -855,4 +1014,34 @@ func loadOrCreateLeafGenerationManifest(leafDir string, commitSeq uint64, readOn
 		return nil, err
 	}
 	return manifest.clone(), nil
+}
+
+func (db *DB) reconcileLeafGenerationManifestWithDirInPlace(commitSeq uint64) (bool, error) {
+	if db == nil || db.readOnly || !db.indexOuterLeavesInValueLog {
+		return false, nil
+	}
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	return db.reconcileLeafGenerationManifestWithDirLocked(commitSeq)
+}
+
+func (db *DB) reconcileLeafGenerationManifestWithDirLocked(commitSeq uint64) (bool, error) {
+	if db == nil || db.readOnly || db.leafGenerationManifest == nil {
+		return false, nil
+	}
+	leafDir := LeafLogDirPath(db.dir)
+	reconciled, changed, err := reconcileLeafGenerationManifestWithDir(leafDir, db.leafGenerationManifest, commitSeq)
+	if err != nil || !changed {
+		return false, err
+	}
+	if err := saveLeafGenerationManifest(leafDir, reconciled); err != nil {
+		return false, err
+	}
+	db.mu.Lock()
+	db.leafGenerationManifest = reconciled
+	db.mu.Unlock()
+	if err := db.publishLeafGenerationState(false); err != nil {
+		return false, err
+	}
+	return true, nil
 }

@@ -15,6 +15,63 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestCompactStorageRepairsMissingCurrentLeafGenerationFile(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	leafDir := LeafLogDirPath(dir)
+	_, fileID18 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 18)
+	_, fileID19 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 19)
+	_, fileID20 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 20)
+	fileID17, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 17)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	raw17 := page.ValueLogSegmentID(fileID17)
+	raw18 := page.ValueLogSegmentID(fileID18)
+	raw19 := page.ValueLogSegmentID(fileID19)
+	raw20 := page.ValueLogSegmentID(fileID20)
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		CurrentGenerationID: 3,
+		NextGenerationID:    4,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateSealed, FileIDs: []uint32{raw18}, CreatedCommitSeq: 10, SealedCommitSeq: 20, PublishedCommitSeq: 20},
+			{GenerationID: 2, State: leafGenerationStateSealed, FileIDs: []uint32{raw19}, CreatedCommitSeq: 21, SealedCommitSeq: 30, PublishedCommitSeq: 30},
+			{GenerationID: 3, State: leafGenerationStateWritable, FileIDs: []uint32{raw17}, CreatedCommitSeq: 31, PublishedCommitSeq: 31},
+		},
+	}
+	db.writeMu.Lock()
+	db.leafGenerationManifest = manifest
+	db.writeMu.Unlock()
+	if err := db.publishLeafGenerationState(false); err != nil {
+		t.Fatalf("publishLeafGenerationState: %v", err)
+	}
+	if _, err := db.CompactStoragePlan(context.Background(), CompactStorageOptions{Mode: CompactStorageFull}); err != nil {
+		t.Fatalf("CompactStoragePlan with stale missing leaf generation: %v", err)
+	}
+	if _, err := db.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageFull}); err != nil {
+		t.Fatalf("CompactStorage with stale missing leaf generation: %v", err)
+	}
+
+	view := db.currentLeafGenerationView()
+	if _, ok := view.FileToGeneration[raw17]; ok {
+		t.Fatalf("missing raw file %d still visible after CompactStorage", raw17)
+	}
+	if _, ok := view.FileToGeneration[raw20]; !ok {
+		t.Fatalf("existing writable raw file %d missing after CompactStorage", raw20)
+	}
+	for rawFileID := range view.FileToGeneration {
+		if exists, err := leafGenerationRawFileExists(dir, rawFileID); err != nil || !exists {
+			t.Fatalf("view references missing raw file %d: exists=%v err=%v", rawFileID, exists, err)
+		}
+	}
+}
+
 func TestCompactStorageDeletesZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{

@@ -3,8 +3,10 @@ package db
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/bits"
+	"os"
 	"sort"
 	"sync"
 
@@ -880,6 +882,9 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 		persist := gen.State == leafGenerationStateSealed
 		idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(fileID, snap.state.ValueLogSet, persist)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return leafGenerationLiveScanStats{}, err
 		}
 		fileStates = append(fileStates, leafGenerationScanFileState{
