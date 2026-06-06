@@ -20,6 +20,7 @@ type collectionVectorIndexPreparedSearchCacheSlot struct {
 	family             collectionVectorIndexPreparedSearchFamily
 	indexName          string
 	quantizedIndexName string
+	maxDecodedBlocks   int
 }
 
 type collectionVectorIndexPreparedSearchCacheEntry struct {
@@ -105,7 +106,7 @@ func callCollectionVectorIndexPreparedSearchBuildHookForTest(indexName string) {
 
 func collectionVectorIndexPreparedSearchCacheSlotForOptions(opts VectorIndexSearchOptions, queryMode columnVectorGraphNativeSearchQueryMode) collectionVectorIndexPreparedSearchCacheSlot {
 	if queryMode.quantized() {
-		return collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyQuantized, indexName: opts.IndexName, quantizedIndexName: opts.QuantizedIndexName}
+		return collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyQuantized, indexName: opts.IndexName, quantizedIndexName: opts.QuantizedIndexName, maxDecodedBlocks: opts.MaxDecodedBlocks}
 	}
 	return collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyExactHNSWPack, indexName: opts.IndexName}
 }
@@ -466,7 +467,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(reader, routeStats, opts.QuantizedIndexName, queryMode)
 		return nil, response, err
 	}
-	key, err := collectionVectorIndexPreparedQuantizedSearchCacheKey(readerCatalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState, opts.QuantizedIndexName)
+	key, err := collectionVectorIndexPreparedQuantizedSearchCacheKey(readerCatalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState, opts.QuantizedIndexName, opts.MaxDecodedBlocks)
 	if err != nil {
 		return nil, response, err
 	}
@@ -535,7 +536,7 @@ func collectionVectorIndexPreparedQuantizedValidationStats(reader *columnVectorG
 	return stats
 }
 
-func collectionVectorIndexPreparedQuantizedSearchCacheKey(collection string, namespace string, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, quantizedIndexName string) (string, error) {
+func collectionVectorIndexPreparedQuantizedSearchCacheKey(collection string, namespace string, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, quantizedIndexName string, maxDecodedBlocks int) (string, error) {
 	base, err := columnVectorGraphSharedPreparedSearchCacheKey(collection, namespace, def, graph, state)
 	if err != nil {
 		return "", err
@@ -548,7 +549,7 @@ func collectionVectorIndexPreparedQuantizedSearchCacheKey(collection string, nam
 	if !ok {
 		return "", fmt.Errorf("%w: %w: vector index %q quantized index %q has no quantized score-plane asset", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetMissing, def.Name, quantizedIndexName)
 	}
-	return fmt.Sprintf("collection_buffered_quantized_v1|family=quantized|q=%s|codec=%s|version=%d|asset_id=%s|asset_schema=%d|asset_bytes=%d|asset_ref=%+v|%s", qdef.Name, qdef.Codec, qdef.Version, asset.AssetID, asset.SourceSchemaHash, asset.AssetBytes, columnVectorGraphQuantizedAssetRefIdentity(asset.Ref), base), nil
+	return fmt.Sprintf("collection_buffered_quantized_v1|family=quantized|q=%s|codec=%s|version=%d|max_decoded_blocks=%d|asset_id=%s|asset_schema=%d|asset_bytes=%d|asset_ref=%+v|%s", qdef.Name, qdef.Codec, qdef.Version, maxDecodedBlocks, asset.AssetID, asset.SourceSchemaHash, asset.AssetBytes, columnVectorGraphQuantizedAssetRefIdentity(asset.Ref), base), nil
 }
 
 func (p *collectionVectorIndexPreparedSearch) readyForCurrentSearch() bool {

@@ -926,6 +926,43 @@ func TestSearchVectorIndexWithBufferQuantizedQueryErrorsKeepPreparedState2415(t 
 	}
 }
 
+func TestSearchVectorIndexWithBufferQuantizedMaxDecodedBlocksCacheSlot2415(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	base := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: def.QuantizedIndexes[0].Name, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(base, &buffer); err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer MaxDecodedBlocks=1: %v", err)
+	}
+	afterFirst := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterFirst.Entries != 1 || afterFirst.CacheBuilds != 1 {
+		t.Fatalf("cache after MaxDecodedBlocks=1=%+v want one built entry", afterFirst)
+	}
+	second := base
+	second.MaxDecodedBlocks = 2
+	if _, err := col.SearchVectorIndexWithBuffer(second, &buffer); err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer MaxDecodedBlocks=2: %v", err)
+	}
+	afterSecond := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+	if afterSecond.Entries != 2 || afterSecond.CacheBuilds != 2 {
+		t.Fatalf("cache after MaxDecodedBlocks=2=%+v want distinct quantized cache entry", afterSecond)
+	}
+	mode, err := normalizeVectorIndexSearchQueryMode(base.QueryMode, base.QuantizedIndexName, base.QuantizedRerankCandidates, base.TopK)
+	if err != nil {
+		t.Fatalf("normalize query mode: %v", err)
+	}
+	if slotA, slotB := collectionVectorIndexPreparedSearchCacheSlotForOptions(base, mode), collectionVectorIndexPreparedSearchCacheSlotForOptions(second, mode); slotA == slotB {
+		t.Fatalf("quantized cache slots are equal for MaxDecodedBlocks=1 and 2: %+v", slotA)
+	}
+}
+
 func TestSearchVectorIndexWithBufferQuantizedUnsupportedShapesAndLifecycle2415(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
