@@ -22,20 +22,22 @@ const (
 	columnVectorIndexStateAssetRoleHNSWSearchPack    = "hnsw_search_pack"
 	columnVectorIndexStateHNSWSearchPackAssetID      = "hnsw_search_pack_v1"
 
-	columnVectorIndexStateLogicalTypeUint32List    = "uint32_list"
-	columnVectorIndexStateLogicalTypeInt64         = "int64"
-	columnVectorIndexStateLogicalTypeFloat32       = "float32"
-	columnVectorIndexStateLogicalTypeFloat32Vector = "float32_vector"
-	columnVectorIndexStateLogicalTypeBytes         = "bytes"
-	columnVectorIndexStateLogicalTypeByteVector    = "byte_vector"
-	columnVectorIndexStateLogicalTypeSearchPack    = "hnsw_search_pack"
-	columnVectorIndexStateEncodingRawUint32List    = "raw_uint32_offsets_list"
-	columnVectorIndexStateEncodingRawInt64         = "raw_int64"
-	columnVectorIndexStateEncodingRawFloat32       = "raw_float32"
-	columnVectorIndexStateEncodingRawFloat32Vector = "raw_float32_vector"
-	columnVectorIndexStateEncodingRawBytesOffsets  = "raw_bytes_offsets"
-	columnVectorIndexStateEncodingRawFixedBytes    = "raw_fixed_bytes"
-	columnVectorIndexStateEncodingHNSWSearchPackV1 = "hnsw_search_pack_v1"
+	columnVectorIndexStateLogicalTypeUint32List      = "uint32_list"
+	columnVectorIndexStateLogicalTypeInt64           = "int64"
+	columnVectorIndexStateLogicalTypeFloat32         = "float32"
+	columnVectorIndexStateLogicalTypeFloat32Vector   = "float32_vector"
+	columnVectorIndexStateLogicalTypeBytes           = "bytes"
+	columnVectorIndexStateLogicalTypeByteVector      = "byte_vector"
+	columnVectorIndexStateLogicalTypePackedBitVector = "packed_bit_vector"
+	columnVectorIndexStateLogicalTypeSearchPack      = "hnsw_search_pack"
+	columnVectorIndexStateEncodingRawUint32List      = "raw_uint32_offsets_list"
+	columnVectorIndexStateEncodingRawInt64           = "raw_int64"
+	columnVectorIndexStateEncodingRawFloat32         = "raw_float32"
+	columnVectorIndexStateEncodingRawFloat32Vector   = "raw_float32_vector"
+	columnVectorIndexStateEncodingRawBytesOffsets    = "raw_bytes_offsets"
+	columnVectorIndexStateEncodingRawFixedBytes      = "raw_fixed_bytes"
+	columnVectorIndexStateEncodingRawPackedBitVector = "raw_packed_bit_vector"
+	columnVectorIndexStateEncodingHNSWSearchPackV1   = "hnsw_search_pack_v1"
 )
 
 var columnVectorIndexStateRecordPrefixBytes = []byte(columnVectorIndexStateRecordPrefix)
@@ -346,7 +348,11 @@ func validateColumnVectorIndexStateAssetSnapshot(snapshot columnVectorIndexState
 	if asset.Role == "" || asset.AssetID == "" || asset.LogicalType == "" || asset.PhysicalEncoding == "" {
 		return errors.New("missing role, asset id, logical type, or physical encoding")
 	}
-	if logical, encoding, strict := columnVectorIndexStateAssetTypeContract(asset.Role); strict {
+	if asset.Role == columnVectorIndexStateAssetRoleQuantizedCodes {
+		if !columnVectorIndexStateQuantizedAssetTypeEncodingKnown(asset.LogicalType, asset.PhysicalEncoding) {
+			return fmt.Errorf("role=%q type/encoding=(%q,%q) want one of (%q,%q), (%q,%q)", asset.Role, asset.LogicalType, asset.PhysicalEncoding, columnVectorIndexStateLogicalTypeByteVector, columnVectorIndexStateEncodingRawFixedBytes, columnVectorIndexStateLogicalTypePackedBitVector, columnVectorIndexStateEncodingRawPackedBitVector)
+		}
+	} else if logical, encoding, strict := columnVectorIndexStateAssetTypeContract(asset.Role); strict {
 		if asset.LogicalType != logical || asset.PhysicalEncoding != encoding {
 			return fmt.Errorf("role=%q type/encoding=(%q,%q) want (%q,%q)", asset.Role, asset.LogicalType, asset.PhysicalEncoding, logical, encoding)
 		}
@@ -379,6 +385,11 @@ func validateColumnVectorIndexStateAssetSnapshot(snapshot columnVectorIndexState
 		return fmt.Errorf("asset bytes=%d does not match ref length=%d", asset.AssetBytes, asset.Ref.Length)
 	}
 	return nil
+}
+
+func columnVectorIndexStateQuantizedAssetTypeEncodingKnown(logicalType, physicalEncoding string) bool {
+	return (logicalType == columnVectorIndexStateLogicalTypeByteVector && physicalEncoding == columnVectorIndexStateEncodingRawFixedBytes) ||
+		(logicalType == columnVectorIndexStateLogicalTypePackedBitVector && physicalEncoding == columnVectorIndexStateEncodingRawPackedBitVector)
 }
 
 func columnVectorIndexStateAssetTypeContract(role string) (logicalType, physicalEncoding string, strict bool) {

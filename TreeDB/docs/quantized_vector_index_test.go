@@ -63,7 +63,7 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 			"must not be relabeled",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "storage-format.md"): {
-			"declared scalar quantized code score planes",
+			"declared quantized code score planes",
 			"quantized/<name>/codes",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "verification.md"): {

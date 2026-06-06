@@ -78,7 +78,7 @@ TMP_RESULTS_MD="/tmp/$(basename "${OUT_DIR}").md"
 cat > "${HELPER_DIR}/go.mod" <<GOMOD
 module matrixdb
 
-go 1.25.5
+go 1.26
 
 require (
 	github.com/cockroachdb/pebble v1.1.5

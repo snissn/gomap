@@ -1,15 +1,18 @@
 # Quantized Vector Index Score Planes (#1926)
 
 Status: pre-alpha scalar `scalar_u8` v1 score-plane closeout for explicit
-TreeDB `column_graph` query modes. Exact/default behavior remains the
-production baseline. Non-scalar codecs such as BRQ, RaBitQ, PQ/OPQ, and SIMD
-popcount variants are future work and are not part of this scalar closeout.
+TreeDB `column_graph` query modes plus durable `rabitq_1bit` v1 asset
+publication/prepare. Exact/default behavior remains the production baseline. The
+`rabitq_1bit` v1 contract and pure-Go oracle are specified separately in
+`rabitq-1bit-v1.md`; RaBitQ search integration and SIMD/popcount acceleration
+remain follow-up work.
 
 ## User-visible query modes
 
 `VectorIndexDefinition.QuantizedIndexes` declares one or more named derived score
 planes for a `column_graph` vector index. Current normalized declarations default
-to `codec="scalar_u8"` and `version=1`.
+to `codec="scalar_u8"` and `version=1`; they also accept explicit
+`codec="rabitq_1bit", version=1` declarations.
 
 Search uses an explicit mode:
 
@@ -43,10 +46,27 @@ asset ref/checksum identity). For cosine, persisted scalar_u8 codes are built
 from inverse-norm-normalized vector components so equivalent directions encode to
 the same row.
 
-The logical code payload is one byte per dimension. The typed-column asset also
-contains part headers, primary-id/sort-key metadata, layout certification, and
-padding, so benchmark evidence must report both logical `quantized_code_B/vector`
-and actual `quantized_asset_B/vector`.
+Each declared `rabitq_1bit` v1 score plane also rebuilds one TVIS
+vector-index-state asset, with role `quantized_codes`, asset id
+`quantized/<name>/packed_codes`, logical type `packed_bit_vector`, and physical
+encoding `raw_packed_bit_vector`. Its typed-column part stores:
+
+- `packed_codes`: `quantizedasset.RolePackedCodes` backed by
+  `packed_bit_vector` / `raw_packed_bit_vector`, LSB-first with zero high-bit
+  padding;
+- `code_count`: `uint32` / `raw_uint32` side array;
+- `quantized_dot_product_inv`: `float32` / `raw_float32` side array.
+
+For RaBitQ, `CodeDimensions=next_power_of_two(VectorDimensions)` and logical code
+bytes per vector are `ceil(CodeDimensions/8)`. The typed-column schema identity
+includes the canonical RaBitQ config hash, and prepare validates the config
+bytes/hash, base graph identity, row count, typed-column schema/ref/checksum,
+packed shape/padding, `code_count`, and positive finite
+`quantized_dot_product_inv` before returning prepared readers.
+
+Typed-column assets also contain part headers, primary-id/sort-key metadata,
+layout certification, and padding, so benchmark evidence must report both
+logical `quantized_code_B/vector` and actual `quantized_asset_B/vector`.
 
 ## Fail-closed behavior
 
@@ -55,10 +75,12 @@ asset, row count, dimensions, metric, source schema, base graph identity, asset
 ref identity, and typed-column layout before traversal/scoring. Missing, stale,
 corrupt, mismatched, unsupported, or unprepared assets return
 `ErrVectorIndexSearchUnavailable`; they must not fall back to exact traversal or
-document reconstruction. Fail-closed stats use codec-generic counters such as
-`quantized_asset_missing`, `quantized_asset_invalid`, `quantized_asset_stale`,
-and `quantized_asset_unavailable`. Exact mode rejects quantized-mode fields so
-callers do not accidentally depend on no-op options.
+document reconstruction. RaBitQ declarations currently load and validate assets,
+but explicit RaBitQ quantized searches still return `ErrVectorIndexSearchUnavailable`
+until the scorer issue lands. Fail-closed stats use codec-generic counters such
+as `quantized_asset_missing`, `quantized_asset_invalid`,
+`quantized_asset_stale`, and `quantized_asset_unavailable`. Exact mode rejects
+quantized-mode fields so callers do not accidentally depend on no-op options.
 
 ## Benchmark and storage evidence
 
@@ -119,10 +141,16 @@ shortlist reads for `quantized_rerank`, and storage/rebuild accounting. It does
 
 ## Future work boundaries
 
-Future quantization work should be separate from this scalar score-plane closeout:
+Future quantization work should be separate from this scalar score-plane and
+RaBitQ asset closeout:
 
-- BRQ/RaBitQ/PQ/OPQ/residual-PQ codecs and packed popcount scorers need their
-  own codec specs, tests, recall sweeps, and benchmark gates.
+- RaBitQ search integration, recall/storage sweeps, and SIMD acceleration must
+  follow the `rabitq-1bit-v1.md` contract and prove parity with its pure-Go
+  oracle before production use. RaBitQ go-highway dependency/toolchain readiness
+  is tracked separately in
+  [rabitq-go-highway-readiness.md](rabitq-go-highway-readiness.md).
+- BRQ/PQ/OPQ/residual-PQ codecs and other packed popcount scorers need their own
+  codec specs, tests, recall sweeps, and benchmark gates.
 - Batch scorer kernels, SIMD/popcount integration, graph control-flow changes,
   block-planner/windowing changes, and traversal scheduling changes are not part
   of #1926 scalar acceptance. They must not be smuggled into scalar docs or used

@@ -250,6 +250,46 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if opts.Mode == CompactStorageExhaustive && db.indexOuterLeavesInValueLog && compactLeafLog == nil && db.leafPageLog != nil {
 		return stats, fmt.Errorf("treedb: exhaustive compact requires an internally-owned leaf page log; close or clear the installed leaf page log before compacting")
 	}
+
+	// Leaf-pack/GC can make pre-compact leaf generations unreachable before
+	// index-vacuum has cloned the current index. Keep a public snapshot pinned
+	// through vacuum so those source leaf-log files remain readable.
+	var indexVacuumLeafGuard *Snapshot
+	if db.indexOuterLeavesInValueLog {
+		indexVacuumLeafGuard = db.AcquireSnapshot()
+		if indexVacuumLeafGuard == nil {
+			return stats, ErrClosed
+		}
+		defer func() {
+			if indexVacuumLeafGuard != nil {
+				_ = indexVacuumLeafGuard.Close()
+			}
+		}()
+	}
+	releaseIndexVacuumLeafGuard := func() error {
+		if indexVacuumLeafGuard == nil {
+			return nil
+		}
+		err := indexVacuumLeafGuard.Close()
+		indexVacuumLeafGuard = nil
+		return err
+	}
+	releaseIndexVacuumLeafGuardValueLogPin := func() error {
+		if indexVacuumLeafGuard == nil || !indexVacuumLeafGuard.vlogPinned {
+			return nil
+		}
+		if indexVacuumLeafGuard.state == nil || indexVacuumLeafGuard.vlogManager == nil {
+			return nil
+		}
+		set := indexVacuumLeafGuard.state.ValueLogSet
+		if set == nil {
+			return nil
+		}
+		err := indexVacuumLeafGuard.vlogManager.Release(set)
+		indexVacuumLeafGuard.vlogPinned = false
+		return err
+	}
+
 	if err := db.runCompactStoragePhase(&stats, "value-log-rewrite", func() error {
 		protectedPaths := compactStorageOnlineRewriteProtectedPaths(opts)
 		protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
@@ -369,9 +409,22 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}); err != nil {
 		return stats, err
 	}
+	if !indexVacuumSkipped {
+		if err := releaseIndexVacuumLeafGuard(); err != nil {
+			return stats, err
+		}
+	}
 
 	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked); err != nil {
 		return stats, err
+	}
+	// If index vacuum was unsupported, keep leaf-generation pins through final
+	// audit, but drop the unrelated value-log set pin before value-log cleanup so
+	// zero-byte value_vlog segments are not kept alive by this guard.
+	if indexVacuumSkipped {
+		if err := releaseIndexVacuumLeafGuardValueLogPin(); err != nil {
+			return stats, err
+		}
 	}
 
 	if opts.DisableZeroByteValueLogCleanup {

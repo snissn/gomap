@@ -23,34 +23,54 @@ padding already certified by typed-column layout validation. Float side arrays a
 non-null `float32` / `raw_float32`; integer side arrays are non-null `uint32` /
 `raw_uint32` or `uint64` / `raw_uint64` where a wider identifier is required.
 
+The `rabitq_1bit` v1 contract in `rabitq-1bit-v1.md` chooses
+`RolePackedCodes` / `packed_bit_vector` for one-bit code rows, with
+`CodeDimensions=next_power_of_two(VectorDimensions)`, `CodeWidthBits=1`,
+TreeDB LSB-first bit order, and zero high-bit padding. Its required side arrays
+are `code_count` (`uint32`) and `quantized_dot_product_inv` (`float32`).
+
 ## Query-mode guardrail
 
-Collection vector-index metadata can declare named `scalar_u8` v1 quantized
-score planes under `VectorIndexDefinition.QuantizedIndexes`. Public search
-options expose explicit `exact`, `quantized_only`, and `quantized_rerank` query
-modes. The zero/default mode remains exact.
+Collection vector-index metadata can declare named `scalar_u8` v1 and
+`rabitq_1bit` v1 quantized score planes under
+`VectorIndexDefinition.QuantizedIndexes`. Public search options expose explicit
+`exact`, `quantized_only`, and `quantized_rerank` query modes. The zero/default
+mode remains exact. As of #2450, `rabitq_1bit` assets are built, persisted, and
+prepared/validated, but they are not consumed by search; explicit RaBitQ
+quantized query modes still fail closed until the scorer issues land.
 
 The #1926 scalar lifecycle builds and loads `scalar_u8` v1 `codes` assets for
 declared `column_graph` quantized indexes. For the current cosine
 `column_graph` metric, scalar_u8 codes are encoded from inverse-norm-normalized
 vector components so equivalent directions persist the same score-plane rows.
-Rebuild emits one dense fixed-byte typed-column part per declared quantized index
-in graph ordinal order, records it in vector-index state as `quantized_codes`
-with asset id
-`quantized/<name>/codes`, and validates the prepared asset against the base graph
-generation/checksum/schema identity on open. Quantized modes validate the
-selected name/options and asset load status before graph traversal/scoring. The
-`scalar_u8` v1 `quantized_only` scorer consumes the prepared `codes` reader and
-scores normalized query/candidate code rows. `quantized_rerank` uses the same
-selected scalar_u8 scorer for graph traversal/candidate collection, then exact
-scores only the resulting quantized shortlist by graph ordinal through the
-authoritative `float32_vector`/inverse-norm score path and returns final topK in
-exact cosine-score order. `QuantizedRerankCandidates` bounds that shortlist;
-zero uses the normalized `ef_search` candidate set, and non-zero values below
-`TopK` are rejected. Quantized modes must not silently return exact results when
-selected assets are missing, stale, mismatched, or unprepared. Exact mode rejects
-quantized-only fields so future callers do not accidentally rely on no-op
-options.
+Rebuild emits one dense fixed-byte typed-column part per declared scalar
+quantized index in graph ordinal order, records it in vector-index state as
+`quantized_codes` with asset id `quantized/<name>/codes`, and validates the
+prepared asset against the base graph generation/checksum/schema identity on
+open.
+
+The #2450 RaBitQ asset lifecycle builds one typed-column part per declared
+`rabitq_1bit` v1 score plane, also in graph ordinal order. The vector-index-state
+asset role remains `quantized_codes`, but the asset id is
+`quantized/<name>/packed_codes`, the state logical type/encoding are
+`packed_bit_vector` / `raw_packed_bit_vector`, and the part contains three
+required role columns: `packed_codes`, `code_count`, and
+`quantized_dot_product_inv`. The RaBitQ codec descriptor records canonical config
+bytes plus FNV-1a config hash; the generated typed-column schema hash includes
+that config hash so stale/config-mismatched assets fail closed before prepare.
+
+Quantized modes validate the selected name/options and asset load status before
+graph traversal/scoring. The `scalar_u8` v1 `quantized_only` scorer consumes the
+prepared `codes` reader and scores normalized query/candidate code rows.
+`quantized_rerank` uses the same selected scalar_u8 scorer for graph
+traversal/candidate collection, then exact scores only the resulting quantized
+shortlist by graph ordinal through the authoritative `float32_vector`/inverse-norm
+score path and returns final topK in exact cosine-score order.
+`QuantizedRerankCandidates` bounds that shortlist; zero uses the normalized
+`ef_search` candidate set, and non-zero values below `TopK` are rejected.
+Quantized modes must not silently return exact results when selected assets are
+missing, stale, mismatched, or unprepared. Exact mode rejects quantized-only
+fields so future callers do not accidentally rely on no-op options.
 
 ## Fail-closed validation
 

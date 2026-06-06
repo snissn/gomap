@@ -707,8 +707,11 @@ func attachScalarU8QuantizedAssetForReader1926(tb testing.TB, reader *columnVect
 	if err != nil {
 		tb.Fatalf("ParseColumnPartImage: %v", err)
 	}
-	asset := columnVectorIndexStateAssetSnapshot{SourceSchemaHash: sourceCfg.SchemaHash, AssetBytes: int64(len(payload))}
-	schema := columnVectorGraphQuantizedAssetSchema(def, reader.graph, q, asset, quantizedasset.AssetRefIdentity{})
+	asset := columnVectorIndexStateAssetSnapshot{SourceSchemaHash: sourceCfg.SchemaHash, AssetBytes: int64(len(payload)), LogicalType: columnVectorIndexStateLogicalTypeByteVector, PhysicalEncoding: columnVectorIndexStateEncodingRawFixedBytes}
+	schema, err := columnVectorGraphQuantizedAssetSchema(def, reader.graph, q, asset, quantizedasset.AssetRefIdentity{})
+	if err != nil {
+		tb.Fatalf("columnVectorGraphQuantizedAssetSchema: %v", err)
+	}
 	prepared, err := quantizedasset.Prepare(quantizedasset.PrepareRequest{
 		Schema: schema,
 		Expected: quantizedasset.ExpectedSchema{

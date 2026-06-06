@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -936,6 +937,9 @@ func TestCompactStorageHoldsMaintenanceLockAcrossPhases(t *testing.T) {
 }
 
 func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("index vacuum is unsupported on Windows; skipped-vacuum guard intentionally keeps leaf sources pinned")
+	}
 	d, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "k", 64, 'a')
@@ -996,6 +1000,82 @@ func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) 
 				t.Fatalf("dead generation file %d still present in manifest: %+v", rawFileID1, manifest.Generations)
 			}
 		}
+	}
+}
+
+func TestCompactStorageKeepsPackedLeafSourcesUntilIndexVacuum(t *testing.T) {
+	d, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "k", 2048, 'a')
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, d, "z", 32, 'z')
+	d.SetLeafPageLog(nil)
+
+	sawLeafGC := false
+	d.compactStorageAfterPhase = func(name string) {
+		if name != "leaf-generation-gc" {
+			return
+		}
+		sawLeafGC = true
+		if _, err := os.Stat(path1); err != nil {
+			t.Fatalf("pre-vacuum leaf segment removed: %v", err)
+		}
+		manifest := loadLeafGenerationManifestOrFatal(t, dir)
+		gen := findLeafGenerationByFileID(t, manifest, rawFileID1)
+		if got, want := gen.State, leafGenerationStateRetiring; got != want {
+			t.Fatalf("generation state after leaf gc=%q want %q manifest=%+v", got, want, manifest.Generations)
+		}
+	}
+	t.Cleanup(func() { d.compactStorageAfterPhase = nil })
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{LeafPackMaxPasses: 4})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if !sawLeafGC {
+		t.Fatal("leaf-generation-gc phase hook did not run")
+	}
+	if !stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=false debt=%+v", stats.RemainingDebt)
+	}
+}
+
+func TestCompactStorageWindowsKeepsPackedLeafSourcesWhenIndexVacuumUnsupported(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("index vacuum is supported on this platform")
+	}
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "k", 2048, 'a')
+	path1, _ := currentLeafSegmentOrFatal(t, leafLog)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, d, "z", 32, 'z')
+	d.SetLeafPageLog(nil)
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{LeafPackMaxPasses: 4})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	indexVacuumSkipped := false
+	for _, phase := range stats.Phases {
+		if phase.Name == "index-vacuum" && phase.Skipped {
+			indexVacuumSkipped = true
+			break
+		}
+	}
+	if !indexVacuumSkipped {
+		t.Fatalf("index-vacuum was not skipped on windows: %+v", stats.Phases)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("leaf source removed after skipped index-vacuum: %v", err)
 	}
 }
 
