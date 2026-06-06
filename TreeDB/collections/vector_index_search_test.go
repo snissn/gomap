@@ -4640,10 +4640,11 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.HNSWSearchPackMappedBytes), "hnsw_search_pack_mapped_B")
 	b.ReportMetric(float64(stats.HNSWSearchPackHeapCopyBytes), "hnsw_search_pack_heap_copy_B")
 	b.ReportMetric(float64(stats.HNSWSearchPackActiveHandles), "hnsw_search_pack_active_handles")
-	b.ReportMetric(float64(stats.HNSWSearchPackCacheHits), "hnsw_search_pack_cache_hits/search")
-	b.ReportMetric(float64(stats.HNSWSearchPackCacheMisses), "hnsw_search_pack_cache_misses/search")
-	b.ReportMetric(float64(stats.HNSWSearchPackCacheWaits), "hnsw_search_pack_cache_waits/search")
-	b.ReportMetric(float64(stats.HNSWSearchPackCacheBuilds), "hnsw_search_pack_cache_builds/search")
+	// Collection prepared-cache hit/miss/build/wait counters are intentionally
+	// omitted here: this generic reporter consumes one pre-timer sample, and some
+	// collection benchmarks sample the initial miss/build while their timed loops
+	// measure steady-state hits. Public per-call stats and diagnostics still
+	// expose hnsw_search_pack_cache_* directly for focused tests and callers.
 	b.ReportMetric(float64(stats.OpenSearcherCalls), "open_searcher_calls/search")
 	b.ReportMetric(float64(stats.OpenSetupInTimedLoop), "open_setup_in_timed_loop/search")
 	b.ReportMetric(float64(stats.ResponseOwnedResultAllocs), "response_owned_result_allocs/search")
