@@ -8,8 +8,40 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestLeafGenerationPlan_SkipsUnreferencedMissingManifestFile(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	fileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 17)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	rawFileID := page.ValueLogSegmentID(fileID)
+	manifest := db.leafGenerationManifest.clone()
+	manifest.Generations[manifest.currentGenerationIndex()].FileIDs = []uint32{rawFileID}
+	db.writeMu.Lock()
+	db.leafGenerationManifest = manifest
+	db.writeMu.Unlock()
+	if err := db.publishLeafGenerationState(false); err != nil {
+		t.Fatalf("publishLeafGenerationState: %v", err)
+	}
+
+	plan, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan with stale missing manifest file: %v", err)
+	}
+	entry := findLeafGenerationPlanEntry(t, plan, manifest.CurrentGenerationID)
+	if got, want := entry.BytesTotal, int64(0); got != want {
+		t.Fatalf("BytesTotal=%d, want %d", got, want)
+	}
+}
 
 func findLeafGenerationPlanEntry(t *testing.T, plan LeafGenerationPlan, generationID uint64) LeafGenerationPlanGeneration {
 	t.Helper()
