@@ -867,7 +867,7 @@ func TestSearchVectorIndexWithBufferQuantizedAssetUnavailableFailClosed2415(t *t
 				t.Fatalf("unavailable response results=%d buffer.results=%d idBytes=%d want fail-closed empty", len(got.Results), len(buffer.results), len(buffer.idBytes))
 			}
 			assertQuantizedUnavailableGuardrailStats2416(t, got.Stats, columnVectorGraphNativeSearchQueryModeFromPublic2415(tc.mode), tc.health)
-			if got.Stats.SearchRouteHNSWSearchPack != 0 || got.Stats.HNSWSearchPackActive != 0 || got.Stats.SearchRouteColumnGraphFallback != 0 {
+			if got.Stats.SearchRouteHNSWSearchPack != 0 || got.Stats.HNSWSearchPackActive != 0 {
 				t.Fatalf("unavailable stats=%+v want no exact hnsw route/fallback", got.Stats)
 			}
 			afterFailure := col.collectionVectorIndexPreparedSearchCacheSnapshot()

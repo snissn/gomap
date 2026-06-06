@@ -1373,7 +1373,7 @@ func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats VectorIndex
 	if stats.SearchRouteHNSWSearchPack != 0 || stats.HNSWSearchPackActive != 0 || stats.HNSWSearchPackMissing != 0 || stats.HNSWSearchPackInvalid != 0 || stats.HNSWSearchPackStale != 0 || stats.HNSWSearchPackClosed != 0 || stats.HNSWSearchPackFallbacks != 0 {
 		return false
 	}
-	if stats.SearchRouteColumnGraphPrepared != 1 || stats.SearchRouteColumnGraphFallback != 0 {
+	if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
 		return false
 	}
 	emptySearch := opts.TopK == 0 || stats.CandidateRows == 0
