@@ -63,6 +63,10 @@ func columnGraphScalarU8QuantizedCollectionWithBufferBenchCases2415() []columnGr
 	}
 }
 
+func columnGraphRabitQQuantizedCollectionWithBufferBenchCases2452() []columnGraphScalarU8QuantizedCollectionWithBufferBenchCase2415 {
+	return columnGraphScalarU8QuantizedCollectionWithBufferBenchCases2415()
+}
+
 func BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926(b *testing.B) {
 	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
 	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
@@ -199,6 +203,31 @@ func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2
 	}
 }
 
+func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452(b *testing.B) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	fixture := openColumnGraphRabitQQuantizedBenchFixture2451(b, shape)
+	defer fixture.close()
+	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
+
+	for _, tc := range columnGraphRabitQQuantizedCollectionWithBufferBenchCases2452() {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			opts := VectorIndexSearchOptions{
+				IndexName:                 fixture.definition.Name,
+				Query:                     fixture.query,
+				QueryMode:                 tc.mode,
+				QuantizedIndexName:        columnGraphRabitQQuantizedIndexName2450,
+				QuantizedRerankCandidates: tc.rerankCandidates,
+				TopK:                      fixture.shape.topK,
+				EfSearch:                  fixture.shape.efSearch,
+				MaxDecodedBlocks:          1,
+				StatsMode:                 VectorIndexSearchStatsModeProduction,
+			}
+			runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
+		})
+	}
+}
+
 func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearchOptions, concurrency int, exactIDs map[string]struct{}, exactCount int) {
 	b.Helper()
 	if concurrency <= 0 {
@@ -301,16 +330,16 @@ func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, 
 	}
 	cacheBeforeTimed := fixture.collection.collectionVectorIndexPreparedSearchCacheSnapshot()
 	b.ReportAllocs()
+	b.ResetTimer()
+	close(start)
+	wg.Wait()
+	b.StopTimer()
 	b.ReportMetric(float64(concurrency), "concurrency")
 	b.ReportMetric(1, "collection_searchvectorindex_with_buffer_seam")
 	b.ReportMetric(1, "collection_buffered_quantized_row")
 	b.ReportMetric(0, "open_searcher_calls/op")
 	b.ReportMetric(0, "open_setup_in_timed_loop")
 	b.ReportMetric(1, "reported_stats_mode_production")
-	b.ResetTimer()
-	close(start)
-	wg.Wait()
-	b.StopTimer()
 	if errValue := firstErr.Load(); errValue != nil {
 		b.Fatalf("%s", errValue.(string))
 	}
