@@ -25,7 +25,12 @@ ranked by exact cosine over the trimmed quantized candidate set; they are not a
 silent full-exact search. Quantized route counters identify the selected query
 mode and may be reported alongside the `column_graph` prepared physical route;
 `hnsw_search_pack_v1` route/active/fallback counters remain zero for quantized
-search.
+search. No-document buffered serving is available through both lower-level
+`VectorIndexSearcher.SearchWithBuffer` and collection-level
+`Collection.SearchVectorIndexWithBuffer` when `QueryMode` and
+`QuantizedIndexName` select an explicit quantized mode; document materialization,
+projections, filters, and benchmark-debug stats remain outside this buffered
+collection route.
 
 ## Durable asset model
 
@@ -64,15 +69,17 @@ rebuild/storage overhead:
 ```sh
 GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^Benchmark(ColumnGraphScalarU8Quantized(ScorePlanes|RebuildStorage)1926|VectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414)$' \
+  -bench '^Benchmark(ColumnGraphScalarU8Quantized(ScorePlanes|RebuildStorage)1926|VectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|CollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415)$' \
   -benchmem -benchtime=500ms -count=3
 ```
 
 `BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926` emits the per-query rows;
 `BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414`
-emits explicit lower-level buffered `VectorIndexSearcher.SearchWithBuffer` rows
-for `route=quantized_only/c=1`, `route=quantized_only/c=8`,
-`route=quantized_rerank/candidates=32/c=1`, and
+emits explicit lower-level buffered `VectorIndexSearcher.SearchWithBuffer` rows;
+`BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415`
+emits collection-level buffered `Collection.SearchVectorIndexWithBuffer` rows;
+both buffered benchmark families include `route=quantized_only/c=1`,
+`route=quantized_only/c=8`, `route=quantized_rerank/candidates=32/c=1`, and
 `route=quantized_rerank/candidates=32/c=8`; and
 `BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926` emits rebuild/storage
 rows. The score-plane and buffered rows report `ns/op`, `ops/sec`, `B/op`,
