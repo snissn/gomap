@@ -222,10 +222,24 @@ func prepareColumnVectorGraphRabitQQuantizedCodesPayload(collection string, base
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
 	}
-	primaryIDs := make([]int64, len(rows))
-	codes := make([]byte, len(rows)*plan.BytesPerCode())
-	codeCounts := make([]uint32, len(rows))
-	qdpInv := make([]float32, len(rows))
+	rowCount := len(rows)
+	if _, err := checkedColumnVectorGraphQuantizedRowBytes(rowCount, 8, "rabitq_1bit primary_id"); err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	codesBytes, err := checkedColumnVectorGraphQuantizedRowBytes(rowCount, plan.BytesPerCode(), "rabitq_1bit codes")
+	if err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	if _, err := checkedColumnVectorGraphQuantizedRowBytes(rowCount, 4, "rabitq_1bit code_count"); err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	if _, err := checkedColumnVectorGraphQuantizedRowBytes(rowCount, 4, "rabitq_1bit quantized_dot_product_inv"); err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	primaryIDs := make([]int64, rowCount)
+	codes := make([]byte, codesBytes)
+	codeCounts := make([]uint32, rowCount)
+	qdpInv := make([]float32, rowCount)
 	var ws rabitq.Workspace
 	var codeScratch []byte
 	for rowIdx, row := range rows {
@@ -239,7 +253,7 @@ func prepareColumnVectorGraphRabitQQuantizedCodesPayload(collection string, base
 		codeCounts[rowIdx] = encoded.CodeCount
 		qdpInv[rowIdx] = encoded.QuantizedDotProductInv
 	}
-	packedRows, err := typedcolumn.NewPackedUintRows(len(rows), plan.CodeDimensions(), rabitq.CodeWidthBits, codes)
+	packedRows, err := typedcolumn.NewPackedUintRows(rowCount, plan.CodeDimensions(), rabitq.CodeWidthBits, codes)
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
 	}
@@ -280,7 +294,7 @@ func prepareColumnVectorGraphRabitQQuantizedCodesPayload(collection string, base
 		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
 		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
 	}, typedcolumn.Batch{
-		Rows: len(rows),
+		Rows: rowCount,
 		Columns: map[string][]int64{
 			typedColumnAdapterPrimaryIDColumn: primaryIDs,
 		},
@@ -307,8 +321,8 @@ func prepareColumnVectorGraphRabitQQuantizedCodesPayload(collection string, base
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
 	}
-	if image.Rows != len(rows) || image.PartID != partID {
-		return nil, ColumnStoreConfig{}, fmt.Errorf("collections: column_graph rabitq quantized asset image rows/part=(%d,%d) want (%d,%d)", image.Rows, image.PartID, len(rows), partID)
+	if image.Rows != rowCount || image.PartID != partID {
+		return nil, ColumnStoreConfig{}, fmt.Errorf("collections: column_graph rabitq quantized asset image rows/part=(%d,%d) want (%d,%d)", image.Rows, image.PartID, rowCount, partID)
 	}
 	return image.Bytes, sourceCfg, nil
 }
@@ -394,6 +408,16 @@ func columnVectorGraphQuantizedCodesColumnStoreConfig(collection string, base Co
 		return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q typed-column config: %w", q.Name, err)
 	}
 	return *cfg, nil
+}
+
+func checkedColumnVectorGraphQuantizedRowBytes(rowCount, bytesPerRow int, label string) (int, error) {
+	if rowCount < 0 || bytesPerRow < 0 {
+		return 0, fmt.Errorf("collections: column_graph quantized asset %s negative row byte count rows=%d bytes_per_row=%d", label, rowCount, bytesPerRow)
+	}
+	if rowCount != 0 && bytesPerRow > math.MaxInt/rowCount {
+		return 0, fmt.Errorf("collections: column_graph quantized asset %s bytes overflow rows=%d bytes_per_row=%d", label, rowCount, bytesPerRow)
+	}
+	return rowCount * bytesPerRow, nil
 }
 
 func buildColumnVectorGraphScalarU8Codes(def VectorIndexDefinition, rows []columnVectorGraphAssetRow) ([]byte, error) {

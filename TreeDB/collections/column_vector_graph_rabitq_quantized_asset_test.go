@@ -32,6 +32,30 @@ func TestVectorIndexQuantizedDefinitionNormalizationRabitQ2450(t *testing.T) {
 	}
 }
 
+func TestColumnGraphRabitQQuantizedAssetRowBytesOverflow2450(t *testing.T) {
+	plan, err := rabitq.NewPlan(128, rabitq.DefaultConfig())
+	if err != nil {
+		t.Fatalf("rabitq.NewPlan: %v", err)
+	}
+	if got, err := checkedColumnVectorGraphQuantizedRowBytes(3, plan.BytesPerCode(), "rabitq_1bit codes"); err != nil || got != 3*plan.BytesPerCode() {
+		t.Fatalf("checked rabitq code bytes got=%d err=%v", got, err)
+	}
+	for _, tc := range []struct {
+		name        string
+		rowCount    int
+		bytesPerRow int
+	}{
+		{name: "codes", rowCount: math.MaxInt/plan.BytesPerCode() + 1, bytesPerRow: plan.BytesPerCode()},
+		{name: "primary_id", rowCount: math.MaxInt/8 + 1, bytesPerRow: 8},
+		{name: "code_count", rowCount: math.MaxInt/4 + 1, bytesPerRow: 4},
+		{name: "quantized_dot_product_inv", rowCount: math.MaxInt/4 + 1, bytesPerRow: 4},
+	} {
+		if _, err := checkedColumnVectorGraphQuantizedRowBytes(tc.rowCount, tc.bytesPerRow, "rabitq_1bit "+tc.name); err == nil || !strings.Contains(err.Error(), "bytes overflow") {
+			t.Fatalf("checked rabitq %s overflow err=%v want bytes overflow", tc.name, err)
+		}
+	}
+}
+
 func TestColumnGraphRabitQQuantizedAssetRebuildPrepareReopen2450(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, -1}},
