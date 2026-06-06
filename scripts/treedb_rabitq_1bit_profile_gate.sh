@@ -542,13 +542,23 @@ def guardrail_status(meta, bench_rows):
         checks.append(exact_read_ok)
     return "pass" if all(checks) else "check"
 
+selected_row_ids = []
+matrix_path = os.path.join(root, "matrix.tsv")
+if os.path.exists(matrix_path):
+    with open(matrix_path, "r", encoding="utf-8", errors="replace") as handle:
+        for line_number, line in enumerate(handle):
+            if line_number == 0:
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if fields and fields[0]:
+                selected_row_ids.append(fields[0])
+
 summary_rows = []
-for row_dir in sorted(glob.glob(os.path.join(root, "*"))):
-    if not os.path.isdir(row_dir):
-        continue
-    row_id = os.path.basename(row_dir)
+for row_id in selected_row_ids:
+    row_dir = os.path.join(root, row_id)
     env_path = os.path.join(row_dir, "row.env")
     if not os.path.exists(env_path):
+        summary_rows.append({"row_id": row_id, "source": "row.env", "status": "missing row.env", "guardrail_status": "n/a"})
         continue
     meta = {}
     with open(env_path, "r", encoding="utf-8", errors="replace") as handle:

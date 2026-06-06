@@ -52,7 +52,7 @@ without running Go benchmarks.
 
 ## Row and artifact names
 
-Each selected row gets a directory named by `row_id` under `RUN_DIR`.
+Each selected row gets a directory named by `row_id` under `RUN_DIR`. Use a fresh `RUN_DIR` for claim-quality runs; the generated summary is limited to the current `matrix.tsv` rows, but stale directories from reused run roots should still be treated as archival clutter, not current evidence.
 
 | row id | codec | API boundary | mode | c | benchmark regex |
 | --- | --- | --- | --- | ---: | --- |
