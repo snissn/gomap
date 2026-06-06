@@ -1202,7 +1202,11 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	}
 	if raw.RawTreeDBJSON.Enabled {
 		fmt.Fprintf(&b, "Raw TreeDB key/value JSON detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; reclaimed rewrite source files `%d`; reclaimed rewrite source bytes `%d`; raw JSON payload bytes before TreeDB storage `%d`.\n\n", raw.RawTreeDBJSON.BeforeCompactBytes, raw.RawTreeDBJSON.BeforeCompactFiles, raw.RawTreeDBJSON.AfterCompactBytes, raw.RawTreeDBJSON.AfterCompactFiles, raw.RawTreeDBJSON.CompactionDuration, raw.RawTreeDBJSON.RewriteDuration, raw.RawTreeDBJSON.RewriteRecordsCopied, raw.RawTreeDBJSON.RewriteValueBytes, raw.RawTreeDBJSON.RewriteSourceBytes, raw.RawTreeDBJSON.RewriteReclaimFiles, raw.RawTreeDBJSON.RewriteReclaimBytes, raw.RawTreeDBJSON.RawDocumentBytes)
-		fmt.Fprintf(&b, "Raw TreeDB key/value JSON uses the public cached key/value write path. In the inspected run, value-log rewrite produced a dictionary-compressed rewrite segment, but the original ingest value-log segments remained classified as active and therefore stayed in the measured directory footprint. Treat this row as a cached raw-key/value retention fixture, not as the lower bound for compressed raw JSON bytes.\n\n")
+		if raw.RawTreeDBJSON.RewriteReclaimBytes > 0 {
+			fmt.Fprintf(&b, "Raw TreeDB key/value JSON uses the public cached key/value write path. Value-log rewrite reclaimed the observed source segments reported above, so this row's post-rewrite footprint excludes those old ingest source bytes.\n\n")
+		} else if raw.RawTreeDBJSON.RewriteSourceBytes > 0 {
+			fmt.Fprintf(&b, "Raw TreeDB key/value JSON uses the public cached key/value write path. In the inspected run, value-log rewrite produced a dictionary-compressed rewrite segment, but the original ingest value-log segments remained classified as active and therefore stayed in the measured directory footprint. Treat this row as a cached raw-key/value retention fixture, not as the lower bound for compressed raw JSON bytes.\n\n")
+		}
 	}
 	fmt.Fprintf(&b, "The table below is one-column-at-a-time storage for the experimental granule codecs. It picks the smallest stored byte count observed for each derived `int64` column across raw, delta-varint, snappy, and lz4 combinations.\n\n")
 	fmt.Fprintf(&b, "| Column | Best codec | Stored bytes | Ratio vs int64 values | Ratio vs ClickHouse total |\n")

@@ -48,6 +48,57 @@ func TestRemainingJSONDocumentRemovesClickHouseTypedPaths(t *testing.T) {
 	}
 }
 
+func TestWriteMarkdownRawTreeDBJSONReclaimText(t *testing.T) {
+	raw := comparisonRaw{
+		DataPath:   "fixture.json.gz",
+		Limit:      1,
+		Rows:       1,
+		Files:      []string{"fixture.json.gz"},
+		InputBytes: 1,
+		ClickHouseLocal: clickHouseResult{
+			TotalSize: 100,
+			DataSize:  90,
+			IndexSize: 10,
+		},
+		RawTreeDBJSON: remainingTreeDBResult{
+			Enabled:              true,
+			BeforeCompactBytes:   10,
+			BeforeCompactFiles:   1,
+			AfterCompactBytes:    5,
+			AfterCompactFiles:    1,
+			RewriteSourceBytes:   4,
+			RewriteReclaimFiles:  1,
+			RewriteReclaimBytes:  4,
+			RawDocumentBytes:     10,
+			CompactedBytesPerRow: 5,
+		},
+	}
+	path := filepath.Join(t.TempDir(), "report.md")
+	writeMarkdown(path, raw)
+	md, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(md)
+	if !strings.Contains(text, "Value-log rewrite reclaimed the observed source segments reported above") {
+		t.Fatalf("markdown did not describe reclaimed raw TreeDB JSON sources:\n%s", text)
+	}
+	if strings.Contains(text, "stayed in the measured directory footprint") {
+		t.Fatalf("markdown printed stale retention caveat despite reclaimed sources:\n%s", text)
+	}
+
+	raw.RawTreeDBJSON.RewriteReclaimFiles = 0
+	raw.RawTreeDBJSON.RewriteReclaimBytes = 0
+	writeMarkdown(path, raw)
+	md, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(md), "stayed in the measured directory footprint") {
+		t.Fatalf("markdown did not preserve retention caveat when source bytes were not reclaimed:\n%s", md)
+	}
+}
+
 func TestRemainingBSONDocumentRemovesClickHouseTypedPaths(t *testing.T) {
 	raw := []byte(`{"did":"did:plc:1","time_us":1732206349000167,"kind":"commit","commit":{"rev":"r1","operation":"create","collection":"app.bsky.feed.post","rkey":"k1","record":{"text":"hello"}}}`)
 	encoded, err := remainingBSONDocument(raw, remainingShapeClickHouseTyped)
