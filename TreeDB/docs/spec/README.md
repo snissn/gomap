@@ -119,6 +119,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     recap, exact/scalar_u8/RaBitQ benchmark workflow, representative recall /
     storage / performance rows, profile artifact requirements, and #2453
     no-acceleration caveat.
+- `TreeDB/docs/spec/rabitq-performance-lane-closeout-2482.md`
+  - issue #2482 RaBitQ performance-lane closeout for #2476/#2477 promoted
+    Sublane A evidence, #2478/#2479 no-promote decisions, `rabitq_1bit` v1
+    hard invariants, scalar/exact guardrail interpretation, and #2480/#2481 deferred Sublane B status.
 - `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
   - issue #2036 role-specific prepared runtime-view and admission policy for
     current-format typed-column graph search.
