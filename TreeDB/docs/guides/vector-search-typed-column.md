@@ -20,7 +20,7 @@ changes.
 | Adjacency list | typed-column `uint32_list` assets owned by vector-index state | `raw_uint32_offsets_list` is the physical encoding for HNSW adjacency state. Legacy `column_graph` adjacency direct sources and the `adjacency_layout: "uint32_offsets_list"` selector are quarantined compatibility only; new graph builds should not publish those graph-specific source assets or legacy graph row adjacency payloads. |
 | Ordinal-to-base-row references | vector-index state `row_refs` assets (`int64` / `raw_int64`) | Search uses row-ref state to map HNSW ordinals to base rows and to materialize documents without an ID-to-row-ref locator lookup. |
 | Returned opaque document IDs | vector-index state `document_ids` asset (`bytes` / `raw_bytes_offsets`) | Exact arbitrary binary IDs are opaque bytes state. Legacy graph row ID bytes are compatibility or quarantine fallback only. |
-| Optional scalar quantized score plane | vector-index state `quantized_codes` asset (`byte_vector` / `raw_fixed_bytes`) | Declared `scalar_u8` score planes are derived assets for explicit `quantized_only` and `quantized_rerank` modes. They are not authoritative vector storage and fail closed when missing, stale, mismatched, or unprepared. |
+| Optional quantized score planes | vector-index state `quantized_codes` assets (`byte_vector` / `raw_fixed_bytes` for `scalar_u8`, `packed_bit_vector` / `raw_packed_bit_vector` plus side arrays for `rabitq_1bit`) | Declared score planes are derived assets for explicit `quantized_only` and `quantized_rerank` modes. They are not authoritative vector storage and fail closed when missing, stale, mismatched, unsupported, or unprepared. |
 
 Best practice: keep vector payloads out of retained JSON for search-heavy
 workloads when the typed-column vector section is the intended search data plane.
@@ -56,6 +56,10 @@ meta := &collections.CollectionMeta{
         Strategy:   collections.VectorIndexStrategyColumnGraph,
         QuantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
             Name: "embedding.scalar_u8.fast", // codec/version default to scalar_u8 v1
+        }, {
+            Name:  "embedding.rabitq_1bit.fast",
+            Codec: "rabitq_1bit",
+            Version: 1,
         }},
     }},
 }
@@ -74,7 +78,7 @@ Ownership rules:
 ## Optional quantized query modes
 
 The default/zero query mode is exact and preserves current prepared float32
-scoring. To use a declared scalar score plane, select it explicitly:
+scoring. To use a declared scalar_u8 or RaBitQ score plane, select it explicitly:
 
 ```go
 estimated, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
@@ -95,14 +99,15 @@ reranked, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
 })
 ```
 
-`quantized_only` returns estimated scalar_u8 scores and should report
+`quantized_only` returns estimated selected-codec scores and should report
 `search_route_quantized_only=1`, `quantized_scorer_active=1`, and zero exact
 vector/norm reads in stats. `quantized_rerank` reports
 `search_route_quantized_rerank=1`, keeps quantized traversal over the normalized
 `ef_search` pool, trims to `QuantizedRerankCandidates`, exact-reranks that
 shortlist, and returns exact cosine scores. See
-[`quantized-vector-index.md`](../spec/quantized-vector-index.md) for benchmark
-commands and current no-speedup caveats.
+[`quantized-vector-index.md`](../spec/quantized-vector-index.md) and
+[`rabitq-closeout-2454.md`](../spec/rabitq-closeout-2454.md) for benchmark
+commands, RaBitQ storage/recall evidence, and current no-speedup caveats.
 
 ## Retained-payload final-fetch policy
 
@@ -467,7 +472,7 @@ counters.
 | Row+column COW maintenance uses shared reachability and active mappedresource pin protection for typed assets; vector graph bytes remain derived, not authoritative. | [#1788](https://github.com/snissn/gomap/issues/1788), parent [#1736](https://github.com/snissn/gomap/issues/1736), [maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Nullable/missing vector and adjacency typed-column support remains staged/fail-closed. | See typed-column adapter/spec caveats and follow-up roadmap. |
 | Graph-search prepared-view admission is tiered by generic typed-column optimized-consumer capability. | See [typed-column optimized-consumer capabilities](../spec/typed-column-optimized-consumer-capabilities.md), [prepared graph-search runtime views](../spec/typed-column-graph-search-prepared-views.md), and the [#2044 admission table](../spec/typed-column-graph-search-admission.md); #2046 owns reusable direct-view certifiers. |
-| Scalar quantized score planes are behavior/storage evidence, not a speedup claim. | See the [#1926 quantized score-plane spec](../spec/quantized-vector-index.md). BRQ/RaBitQ/PQ codecs, SIMD/popcount, batch/control-flow, and windowing optimizations are future work. |
+| `scalar_u8` and pure-Go `rabitq_1bit` score planes are behavior/storage/recall evidence, not a speedup claim or universal replacement. | See the [#1926/#2454 quantized score-plane spec](../spec/quantized-vector-index.md) and [RaBitQ closeout](../spec/rabitq-closeout-2454.md). BRQ/PQ/OPQ/residual codecs, accelerated RaBitQ backends, batch/control-flow, and windowing optimizations are future work. |
 
 ## Best practices
 

@@ -1,9 +1,11 @@
 # TreeDB `rabitq_1bit` v1 Codec Contract (#2449)
 
-Status: pre-alpha design/contract gate, pure-Go reference oracle, and durable
-asset storage contract. The #2450 asset path publishes and prepares
-`rabitq_1bit` typed-column assets; search/scoring, SIMD backends, and exact FP32
-/ `scalar_u8` behavior changes remain out of scope.
+Status: pre-alpha design/contract gate, pure-Go reference oracle, durable
+asset storage contract, and landed pure-Go search/scoring contract for explicit
+quantized query modes. The #2450 asset path publishes and prepares
+`rabitq_1bit` typed-column assets; #2451/#2452 consume them in lower-level and
+collection-level buffered search. SIMD/go-highway acceleration did not land in
+#2453 and must not be claimed for v1.
 
 ## Identity
 
@@ -149,9 +151,10 @@ asset/scorer PRs; it is not a production speed claim.
   unit-L2 vectors and the orthonormal v1 rotation.
 
 The package is allocation-disciplined when callers reuse `Workspace` and code
-buffers, but it is a reference/oracle implementation. SIMD/go-highway backends
-belong to #2453 and must prove parity with these APIs before being used by
-search.
+buffers. TreeDB's current `rabitq_1bit` scorer uses this weighted sign-dot v1
+contract in pure Go. SIMD/go-highway backends were investigated in #2453 but did
+not land; future accelerated or approximate backends must prove parity or define
+a new explicit codec/score contract before being used by search.
 
 ## Durable TreeDB asset shape (#2450)
 
@@ -170,14 +173,38 @@ encoding, compression, direct-view certification, row count, section length,
 asset ref/checksum, zero packed padding, code-count parity, positive finite
 `quantized_dot_product_inv`, codec config bytes/hash, and base graph identity.
 Missing, stale, corrupt, config-mismatched, schema-mismatched, or checksum-mismatched
-assets fail closed before any future scorer can consume row readers.
+assets fail closed before the search scorer can consume row readers.
+
+## Search/query modes (#2451/#2452)
+
+A declared `QuantizedVectorIndexDefinition{Codec:"rabitq_1bit", Version:1}` can
+be selected by explicit `quantized_only` or `quantized_rerank` modes on both
+`VectorIndexSearcher.SearchWithBuffer` and collection-level
+`Collection.SearchVectorIndexWithBuffer` no-document buffered paths.
+
+- `quantized_only` traverses and ranks with the prepared RaBitQ scorer and must
+  report zero exact vector/norm reads, zero exact rerank calls, and no document
+  materialization.
+- `quantized_rerank` traverses with RaBitQ over the normalized `ef_search`
+  candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks only that
+  shortlist through the authoritative float32 path, and reports exact
+  vector/norm bytes plus `quantized_rerank_exact_score_calls/search` equal to
+  the shortlist.
+- Missing, stale, corrupt, mismatched, unsupported, or closed RaBitQ assets fail
+  closed with `ErrVectorIndexSearchUnavailable` and codec-generic quantized
+  asset counters. There is no silent exact fallback.
+
+The closeout benchmark workflow and representative exact/scalar_u8/RaBitQ rows
+are recorded in [`rabitq-closeout-2454.md`](rabitq-closeout-2454.md).
 
 ## Non-goals and boundaries
 
-- No collection/search scorer integration and no public route/counter changes.
 - No changes to exact/default FP32 search or `scalar_u8` score-plane behavior.
+- No go-highway accelerated RaBitQ backend landed in this stack; #2453 is
+  no-land/not-planned for the current weighted scorer and durable asset shape.
 - No multi-bit RaBitQ, PQ/OPQ, IVF, or graph topology changes.
-- No dependency on CockroachDB, Antfly, AGPL, cgo, or go-highway code.
+- No dependency on CockroachDB, Antfly, AGPL, cgo, or production go-highway code.
+- No claim that RaBitQ universally replaces exact FP32 or scalar_u8.
 
 ## Required evidence
 
@@ -192,4 +219,6 @@ The #2449 reference package tests cover:
 - zero steady-state allocations after warmup for encode/query/score.
 
 `BenchmarkReferenceScoreCosine2449` is an optional microbenchmark for the pure-Go
-reference scorer only. It must not be cited as production RaBitQ search speed.
+reference scorer only. Production TreeDB search evidence must cite the #2451
+lower-level buffered rows, the #2452 collection buffered rows, and the #2454
+closeout matrix rather than this oracle microbenchmark.

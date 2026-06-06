@@ -38,15 +38,17 @@ routes keep default scalar scoring. This policy does not change traversal
 semantics, frontier behavior, candidate order/tie behavior, `ef_search`, `topK`,
 result ordering, or persistent formats.
 
-Explicit #1926 quantized modes are documented in
-[`quantized-vector-index.md`](quantized-vector-index.md). The zero/default query
-mode remains exact. `quantized_only` uses a selected prepared `scalar_u8` score
-plane and returns estimated scores without exact vector/norm reads.
-`quantized_rerank` traverses with the same quantized scorer over the normalized
-`ef_search` candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks
-that shortlist by graph ordinal through the authoritative float32 vector/norm
-path, and returns exact cosine scores. Missing, stale, mismatched, or unprepared
-quantized assets fail closed; quantized modes must not hide an exact fallback.
+Explicit #1926/#2454 quantized modes are documented in
+[`quantized-vector-index.md`](quantized-vector-index.md) and the RaBitQ closeout
+workflow is in [`rabitq-closeout-2454.md`](rabitq-closeout-2454.md). The
+zero/default query mode remains exact. `quantized_only` uses a selected prepared
+`scalar_u8` or pure-Go `rabitq_1bit` score plane and returns estimated scores
+without exact vector/norm reads. `quantized_rerank` traverses with the selected
+quantized scorer over the normalized `ef_search` candidate pool, trims to
+`QuantizedRerankCandidates`, exact-reranks that shortlist by graph ordinal
+through the authoritative float32 vector/norm path, and returns exact cosine
+scores. Missing, stale, mismatched, unsupported, closed, or unprepared quantized
+assets fail closed; quantized modes must not hide an exact fallback.
 
 ## Quickstart
 
@@ -150,10 +152,13 @@ claiming high-QPS vector search:
   `FetchDocumentsForVectorIndexSearchResults` later; that helper returns a
   separate `DocumentFetchResponse`/counter set and must be benchmarked as a
   fetch/materialization row, not as ANN hot-path work.
-- Unsupported high-QPS shapes: document fetch, projection, non-exact quantized
-  modes, stale/missing packs, unsupported metrics/strategies, and future filter
-  shapes must fail closed or run through clearly labeled non-high-QPS
-  convenience/fallback rows with counters.
+- Unsupported exact-pack high-QPS shapes: document fetch, projection, non-exact
+  quantized modes, stale/missing packs, unsupported metrics/strategies, and
+  future filter shapes must fail closed or run through clearly labeled
+  non-high-QPS convenience/fallback rows with counters. Collection-level
+  buffered quantized rows are supported by their own `quantized_only` /
+  `quantized_rerank` benchmarks and must not be relabeled as exact
+  `hnsw_search_pack_v1` rows.
 
 Healthy no-document fast-path evidence must include `ns/op`, `ops/sec`, `B/op`,
 `allocs/op`, and route/fallback counters proving:
@@ -243,14 +248,14 @@ GOWORK=off go test ./TreeDB/collections \
 
 The stable row labels and prepared typed-column placeholders are defined in
 [`typed-column-graph-search-benchmark-matrix.md`](typed-column-graph-search-benchmark-matrix.md).
-Use the #1926 scalar score-plane benchmark when collecting exact vs
-`quantized_only` vs `quantized_rerank` evidence:
+Use the #1926/#2454 quantized score-plane matrix when collecting exact FP32,
+scalar_u8, and pure-Go RaBitQ evidence:
 
 ```sh
 GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^BenchmarkColumnGraphScalarU8Quantized(ScorePlanes|RebuildStorage)1926$' \
-  -benchmem -benchtime=500ms -count=3
+  -bench '^(BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926|BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450)$' \
+  -benchmem -benchtime=100x -count=3
 ```
 
 Use the legacy/canonical benchmark set when comparing with older artifacts:
