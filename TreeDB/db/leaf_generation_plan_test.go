@@ -12,7 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func TestLeafGenerationPlan_SkipsUnreferencedMissingManifestFile(t *testing.T) {
+func TestLeafGenerationPlan_ReportsZeroBytesForMissingManifestFile(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
