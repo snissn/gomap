@@ -867,8 +867,20 @@ func TestSearchVectorIndexWithBufferQuantizedAssetUnavailableFailClosed2415(t *t
 				t.Fatalf("unavailable response results=%d buffer.results=%d idBytes=%d want fail-closed empty", len(got.Results), len(buffer.results), len(buffer.idBytes))
 			}
 			assertQuantizedUnavailableGuardrailStats2416(t, got.Stats, columnVectorGraphNativeSearchQueryModeFromPublic2415(tc.mode), tc.health)
-			if got.Stats.SearchRouteHNSWSearchPack != 0 || got.Stats.HNSWSearchPackActive != 0 {
-				t.Fatalf("unavailable stats=%+v want no exact hnsw route/fallback", got.Stats)
+			if got.Stats.SearchRouteHNSWSearchPack != 0 ||
+				got.Stats.HNSWSearchPackActive != 0 ||
+				got.Stats.HNSWSearchPackMissing != 0 ||
+				got.Stats.HNSWSearchPackInvalid != 0 ||
+				got.Stats.HNSWSearchPackStale != 0 ||
+				got.Stats.HNSWSearchPackClosed != 0 ||
+				got.Stats.HNSWSearchPackFallbacks != 0 ||
+				got.Stats.HNSWSearchPackMmapDirect != 0 ||
+				got.Stats.HNSWSearchPackHeapCopy != 0 ||
+				got.Stats.HNSWSearchPackOpenNanos != 0 ||
+				got.Stats.HNSWSearchPackMappedBytes != 0 ||
+				got.Stats.HNSWSearchPackHeapCopyBytes != 0 ||
+				got.Stats.HNSWSearchPackActiveHandles != 0 {
+				t.Fatalf("unavailable stats=%+v want no exact hnsw route/fallback telemetry", got.Stats)
 			}
 			afterFailure := col.collectionVectorIndexPreparedSearchCacheSnapshot()
 			if afterFailure.Entries != 0 || afterFailure.ActiveHandles != 0 {
