@@ -365,6 +365,18 @@ type columnVectorGraphNativeSearchStats struct {
 	QuantizedCodeBytesRead               uint64
 	QuantizedRerankCandidates            uint64
 	QuantizedRerankExactScoreCalls       uint64
+	QuantizedScorerActive                uint64
+	QuantizedAssetMissing                uint64
+	QuantizedAssetInvalid                uint64
+	QuantizedAssetStale                  uint64
+	QuantizedAssetClosed                 uint64
+	QuantizedAssetUnavailable            uint64
+	QuantizedAssetMmapDirect             uint64
+	QuantizedAssetHeapCopy               uint64
+	QuantizedAssetOpenNanos              uint64
+	QuantizedAssetMappedBytes            uint64
+	QuantizedAssetHeapCopyBytes          uint64
+	QuantizedAssetActiveHandles          int64
 	ScoreFloat64Fallbacks                uint64
 	BlockViewHits                        uint64
 	BlockViewMisses                      uint64
@@ -434,6 +446,8 @@ type columnVectorGraphNativeSearchStats struct {
 	ResultIDStateValidationFailures      uint64
 	PreparedGraphSearchViews             uint64
 	GraphRowFallbacks                    uint64
+	SearchRouteQuantizedOnly             uint64
+	SearchRouteQuantizedRerank           uint64
 
 	WavefrontSearches        uint64
 	WavefrontWidth           uint64
@@ -1258,8 +1272,16 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if err != nil {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search query mode: %w", r.def.Name, err)
 	}
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedOnly {
+		stats.SearchRouteQuantizedOnly = 1
+	} else if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		stats.SearchRouteQuantizedRerank = 1
+	}
+	if queryMode.quantized() {
+		r.populateQuantizedAssetSearchStats(opts.QuantizedIndexName, &stats)
+	}
 	if err := r.validateQuantizedNativeSearchOptions(queryMode, opts); err != nil {
-		return nil, columnVectorGraphNativeSearchStats{}, err
+		return nil, stats, err
 	}
 	rowCount := r.RowCount()
 	topK := opts.TopK
@@ -1390,9 +1412,11 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if queryMode.quantized() {
 		plan.quantizedScorer, err = r.prepareScalarU8QuantizedScorer(queryMode, opts.QuantizedIndexName, query, queryInvNorm, scratch)
 		if err != nil {
+			recordColumnVectorGraphQuantizedAssetErrorStats(&stats, err)
 			return nil, stats, err
 		}
 		plan.quantizedScorerActive = true
+		stats.QuantizedScorerActive = 1
 	}
 	plan.scoreBatchMode = columnVectorGraphScoreBatchModeForSearchPlan(opts.ScoreBatchMode, plan)
 	if traversalMode == columnVectorGraphNativeSearchTraversalModeWavefront {
