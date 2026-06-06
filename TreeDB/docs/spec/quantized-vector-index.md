@@ -22,7 +22,10 @@ Search uses an explicit mode:
 `QuantizedRerankCandidates=0` means the normalized `ef_search` candidate set.
 Non-zero values must be at least `TopK`. Returned `quantized_rerank` results are
 ranked by exact cosine over the trimmed quantized candidate set; they are not a
-silent full-exact search.
+silent full-exact search. Quantized route counters identify the selected query
+mode and may be reported alongside the `column_graph` prepared physical route;
+`hnsw_search_pack_v1` route/active/fallback counters remain zero for quantized
+search.
 
 ## Durable asset model
 
@@ -47,8 +50,10 @@ asset, row count, dimensions, metric, source schema, base graph identity, asset
 ref identity, and typed-column layout before traversal/scoring. Missing, stale,
 corrupt, mismatched, unsupported, or unprepared assets return
 `ErrVectorIndexSearchUnavailable`; they must not fall back to exact traversal or
-document reconstruction. Exact mode rejects quantized-mode fields so callers do
-not accidentally depend on no-op options.
+document reconstruction. Fail-closed stats use codec-generic counters such as
+`quantized_asset_missing`, `quantized_asset_invalid`, `quantized_asset_stale`,
+and `quantized_asset_unavailable`. Exact mode rejects quantized-mode fields so
+callers do not accidentally depend on no-op options.
 
 ## Benchmark and storage evidence
 
@@ -67,6 +72,8 @@ GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
 `BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926` emits rebuild/storage
 rows. The score-plane rows report `ns/op`, `ops/sec`, `B/op`, `allocs/op`,
 `recall_at_k_pct` versus exact-mode topK on the same fixture,
+`search_route_quantized_only/search`, `search_route_quantized_rerank/search`,
+`quantized_scorer_active/search`, `quantized_asset_unavailable/search`,
 `candidates/search`, `quantized_rerank_candidates/search`,
 `quantized_rerank_exact_score_calls/search`, `quantized_code_B/search`,
 `vector_B/search`, `norm_B/search`, logical code bytes/vector, and actual

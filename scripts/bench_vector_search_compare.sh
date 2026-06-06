@@ -196,7 +196,14 @@ Canonical current production comparison:
   \`hnsw_search_pack_heap_copy_B\`, \`docs_fetched/search\`,
   \`graph_row_fallbacks/search\`, score-batch fallback reason flags,
   vector/adjacency source-state counters, and candidate/visited-edge byte
-  counters used by the HNSW search-pack stack.
+  counters used by the HNSW search-pack stack. Quantized benchmark rows should
+  use codec-generic route/asset counters such as
+  \`search_route_quantized_only/search\`,
+  \`search_route_quantized_rerank/search\`, \`quantized_scorer_active/search\`,
+  \`quantized_asset_unavailable/search\`, \`quantized_asset_invalid/search\`,
+  \`quantized_asset_stale/search\`, \`quantized_asset_open_ns\`,
+  \`quantized_asset_mapped_B\`, and \`quantized_asset_heap_copy_B\`; scalar_u8
+  names are reserved for scalar_u8-specific benchmark labels and internals.
 - \`BenchmarkCollectionVectorUSearchProductionCompare/TreeDB_CollectionSearchVectorIndexWithBuffer\`
   times the collection-level caller-owned result-buffer seam on a warmed
   collection-owned prepared search-pack cache. It uses the same exact
