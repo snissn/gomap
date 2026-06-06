@@ -319,7 +319,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreOrdinal(normalizedQuery []float3
 	}
 	vector := v.NormalizedVectors[start:end]
 	score := float64(vectorDotProductFloat32(normalizedQuery[:v.Header.Dimensions], vector))
-	optimized := scoreBatchMode != columnVectorGraphScoreBatchModeScalar && vectorops.DotFloat32OptimizedAvailable()
+	optimized := scoreBatchMode != columnVectorGraphScoreBatchModeScalar && vectorops.DotFloat32OptimizedEligible(v.Header.Dimensions)
 	recordColumnHNSWSearchPackScoreBatchStats(stats, 1, optimized, !optimized)
 	v.recordScoreStats(stats, 1)
 	_ = scratch
@@ -355,7 +355,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 		}
 		dst[i] = score
 	}
-	optimized := len(rowIDs) == 1 && scoreBatchMode != columnVectorGraphScoreBatchModeScalar && vectorops.DotFloat32OptimizedAvailable()
+	optimized := len(rowIDs) == 1 && scoreBatchMode != columnVectorGraphScoreBatchModeScalar && vectorops.DotFloat32OptimizedEligible(v.Header.Dimensions)
 	recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), optimized, !optimized)
 	v.recordScoreStats(stats, len(rowIDs))
 	return dst, nil

@@ -81,9 +81,18 @@ func TestDotFloat32OptimizedAvailabilityMatchesImplementation(t *testing.T) {
 		if optimized {
 			t.Fatalf("DotFloat32OptimizedAvailable=true for scalar implementation")
 		}
+		if DotFloat32OptimizedEligible(1024) {
+			t.Fatalf("DotFloat32OptimizedEligible=true for scalar implementation")
+		}
 	default:
 		if !optimized {
 			t.Fatalf("DotFloat32OptimizedAvailable=false for optimized implementation %q", DotFloat32Implementation())
+		}
+		if DotFloat32OptimizedEligible(0) || DotFloat32OptimizedEligible(1) {
+			t.Fatalf("DotFloat32OptimizedEligible accepted tiny dot for implementation %q", DotFloat32Implementation())
+		}
+		if !DotFloat32OptimizedEligible(1024) {
+			t.Fatalf("DotFloat32OptimizedEligible rejected large dot for implementation %q", DotFloat32Implementation())
 		}
 	}
 }
