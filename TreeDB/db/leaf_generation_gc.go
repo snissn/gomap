@@ -113,6 +113,23 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		}
 		stats.GenerationsTotal++
 		if gen.State == leafGenerationStateDeleted {
+			// Zombie state is in-memory only. After a reopen, deleted manifest records
+			// whose files are still present must be marked zombie again so deletion is
+			// retried, unless another active generation has legitimately reused the ID.
+			seenFiles := make(map[uint32]struct{}, len(gen.FileIDs))
+			for _, fileID := range gen.FileIDs {
+				if fileID == 0 {
+					continue
+				}
+				if _, seen := seenFiles[fileID]; seen {
+					continue
+				}
+				seenFiles[fileID] = struct{}{}
+				if activeFileRefs[fileID] > 0 {
+					continue
+				}
+				zombieFileIDs[page.ValueLogFileID(fileID)] = struct{}{}
+			}
 			continue
 		}
 		if gen.State == leafGenerationStateWritable {
@@ -196,6 +213,8 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			return stats, err
 		}
 		db.leafGenerationManifest = manifest
+	}
+	if intermediateChanged || len(zombieFileIDs) > 0 {
 		if err := db.publishLeafGenerationState(len(zombieFileIDs) > 0); err != nil {
 			return stats, err
 		}

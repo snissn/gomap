@@ -355,7 +355,7 @@ func TestLoadOrCreateLeafGenerationManifest_BootstrapsExistingLeafFiles(t *testi
 	}
 }
 
-func TestReconcileLeafGenerationManifestWithDir_IgnoresDeletedGenerationDuplicates(t *testing.T) {
+func TestReconcileLeafGenerationManifestWithDir_PreservesDeletedGenerationFilePresentOnDisk(t *testing.T) {
 	leafDir := t.TempDir()
 	_, fileID := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
 	rawFileID := page.ValueLogSegmentID(fileID)
@@ -373,12 +373,45 @@ func TestReconcileLeafGenerationManifestWithDir_IgnoresDeletedGenerationDuplicat
 	if err != nil {
 		t.Fatalf("reconcileLeafGenerationManifestWithDir: %v", err)
 	}
-	if !changed {
-		t.Fatal("expected reconcile to register file only present in deleted generation")
+	if changed {
+		t.Fatal("expected reconcile to preserve pending-deleted on-disk file without re-registering it")
 	}
-	current := reconciled.Generations[reconciled.currentGenerationIndex()]
-	if got, want := current.FileIDs, []uint32{rawFileID}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("current FileIDs=%v, want %v", got, want)
+	if reconciled != manifest {
+		t.Fatal("expected unchanged reconcile to return original manifest")
+	}
+	current := manifest.Generations[manifest.currentGenerationIndex()]
+	if len(current.FileIDs) != 0 {
+		t.Fatalf("current FileIDs=%v, want empty while deleted file is pending cleanup", current.FileIDs)
+	}
+}
+
+func TestLeafGenerationManifest_AppendRecoveredSealedGenerationFileID_IgnoresDeletedGenerationDuplicates(t *testing.T) {
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		CurrentGenerationID: 2,
+		NextGenerationID:    3,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateDeleted, FileIDs: []uint32{77}, CreatedCommitSeq: 10, DeletedCommitSeq: 20, PublishedCommitSeq: 20},
+			{GenerationID: 2, State: leafGenerationStateWritable, CreatedCommitSeq: 30, PublishedCommitSeq: 30},
+		},
+	}
+
+	changed, err := manifest.appendRecoveredSealedGenerationFileID(77, 99)
+	if err != nil {
+		t.Fatalf("appendRecoveredSealedGenerationFileID: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected deleted duplicate file recovery to append a sealed generation")
+	}
+	if got, want := len(manifest.Generations), 3; got != want {
+		t.Fatalf("len(Generations)=%d, want %d", got, want)
+	}
+	recovered := manifest.Generations[2]
+	if got, want := recovered.State, leafGenerationStateSealed; got != want {
+		t.Fatalf("recovered.State=%q, want %q", got, want)
+	}
+	if got, want := recovered.FileIDs, []uint32{77}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("recovered.FileIDs=%v, want %v", got, want)
 	}
 }
 

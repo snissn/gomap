@@ -253,6 +253,69 @@ func TestLeafGenerationGC_DoesNotZombieSharedActiveFileID(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationGC_RetriesDeletedGenerationFileAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open initial: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close initial: %v", err)
+	}
+
+	path, fileID := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 1)
+	rawFileID := page.ValueLogSegmentID(fileID)
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		CurrentGenerationID: 2,
+		NextGenerationID:    3,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateDeleted, FileIDs: []uint32{rawFileID}, CreatedCommitSeq: 1, DeletedCommitSeq: 2, PublishedCommitSeq: 2},
+			{GenerationID: 2, State: leafGenerationStateWritable, CreatedCommitSeq: 3, PublishedCommitSeq: 3},
+		},
+	}
+	if err := saveLeafGenerationManifest(LeafLogDirPath(dir), manifest); err != nil {
+		t.Fatalf("save manifest: %v", err)
+	}
+
+	db, err = Open(opts)
+	if err != nil {
+		t.Fatalf("Open with pending deleted leaf file: %v", err)
+	}
+	defer closeNoErr(t, db)
+	current := db.leafGenerationManifest.Generations[db.leafGenerationManifest.currentGenerationIndex()]
+	if len(current.FileIDs) != 0 {
+		t.Fatalf("current FileIDs=%v, want empty; pending-deleted file should not be resurrected", current.FileIDs)
+	}
+
+	stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if got, want := stats.GenerationsDeleted, 1; got != want {
+		t.Fatalf("GenerationsDeleted=%d, want %d (stats=%+v)", got, want, stats)
+	}
+	if got, want := stats.FilesDeleted, 1; got != want {
+		t.Fatalf("FilesDeleted=%d, want %d (stats=%+v)", got, want, stats)
+	}
+	if err := waitForPathRemoval(path, 5*time.Second); err != nil {
+		t.Fatalf("waitForPathRemoval(%s): %v", path, err)
+	}
+	manifestAfter := loadLeafGenerationManifestOrFatal(t, dir)
+	if len(manifestAfter.Generations) != 1 {
+		t.Fatalf("len(Gens)=%d, want only writable generation after pruning: %+v", len(manifestAfter.Generations), manifestAfter.Generations)
+	}
+	if gen := manifestAfter.Generations[0]; gen.State != leafGenerationStateWritable || gen.GenerationID != 2 {
+		t.Fatalf("remaining generation=%+v, want writable generation 2", gen)
+	}
+}
+
 func TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 

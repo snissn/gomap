@@ -937,6 +937,9 @@ func TestCompactStorageHoldsMaintenanceLockAcrossPhases(t *testing.T) {
 }
 
 func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("index vacuum is unsupported on Windows; skipped-vacuum guard intentionally keeps leaf sources pinned")
+	}
 	d, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "k", 64, 'a')

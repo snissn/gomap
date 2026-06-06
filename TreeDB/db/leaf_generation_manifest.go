@@ -188,6 +188,9 @@ func (m *leafGenerationManifest) appendRecoveredSealedGenerationFileID(fileID ui
 		return false, errors.New("treedb: leaf generation file_id must be non-zero")
 	}
 	for _, gen := range m.Generations {
+		if gen.State == leafGenerationStateDeleted {
+			continue
+		}
 		for _, existing := range gen.FileIDs {
 			if existing == fileID {
 				return false, nil
@@ -760,9 +763,27 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	if len(files) == 0 {
 		return manifest, false, nil
 	}
+	diskFiles := make(map[uint32]struct{}, len(files))
+	for _, file := range files {
+		if file.rawFileID != 0 {
+			diskFiles[file.rawFileID] = struct{}{}
+		}
+	}
 	seen := make(map[uint32]struct{}, len(manifest.Generations))
 	for _, gen := range manifest.Generations {
 		if gen.State == leafGenerationStateDeleted {
+			// A deleted record for a file that is still on disk is retry state for a
+			// pending zombie delete. Keep it seen so reconciliation does not resurrect
+			// the orphan into an active generation. Missing deleted files are ignored so
+			// the raw file ID can be reused and registered by subsequent writes.
+			for _, rawFileID := range gen.FileIDs {
+				if rawFileID == 0 {
+					continue
+				}
+				if _, ok := diskFiles[rawFileID]; ok {
+					seen[rawFileID] = struct{}{}
+				}
+			}
 			continue
 		}
 		for _, rawFileID := range gen.FileIDs {
