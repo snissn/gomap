@@ -100,8 +100,8 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		if err != nil {
 			return out, err
 		}
-		stats.ValueLogRewrite.SourceSegmentsReclaimed = reclaimStats.ObservedSourceSegmentsDeleted
-		stats.ValueLogRewrite.SourceBytesReclaimed = reclaimStats.ObservedSourceBytesDeleted
+		stats.ValueLogRewrite.SourceSegmentsReclaimed += reclaimStats.ObservedSourceSegmentsDeleted
+		stats.ValueLogRewrite.SourceBytesReclaimed += reclaimStats.ObservedSourceBytesDeleted
 	}
 	success = true
 	return CompactStorageStats(stats), nil

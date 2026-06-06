@@ -2000,17 +2000,22 @@ func TestValueLogRewriteOnline_ExplicitSourceDoesNotDeleteActiveSegment(t *testi
 func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{
+	opts := Options{
 		Dir: dir,
 		ValueLog: ValueLogOptions{
 			PointerThreshold: 1,
 			ForcePointers:    true,
 		},
-	})
+	}
+	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
 
 	want := bytes.Repeat([]byte("rewrite-active-source|"), 64)
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 210_000, 1, func(_ int) []byte {
@@ -2077,6 +2082,28 @@ func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value mismatch after observed reclaim")
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after observed reclaim: %v", err)
+	}
+	db = nil
+	if _, err := os.Stat(sourcePath); !os.IsNotExist(err) {
+		t.Fatalf("expected active source to stay removed after close, err=%v", err)
+	}
+	db, err = Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after observed reclaim: %v", err)
+	}
+	if _, err := os.Stat(sourcePath); !os.IsNotExist(err) {
+		t.Fatalf("expected active source to stay removed after reopen, err=%v", err)
+	}
+	got, err = db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get after reopen observed reclaim: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen observed reclaim")
 	}
 }
 

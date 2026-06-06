@@ -110,8 +110,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if err != nil {
 			return ValueLogRewriteStats{}, err
 		}
-		stats.SourceSegmentsReclaimed = reclaimStats.ObservedSourceSegmentsDeleted
-		stats.SourceBytesReclaimed = reclaimStats.ObservedSourceBytesDeleted
+		stats.SourceSegmentsReclaimed += reclaimStats.ObservedSourceSegmentsDeleted
+		stats.SourceBytesReclaimed += reclaimStats.ObservedSourceBytesDeleted
 	}
 	success = true
 	return ValueLogRewriteStats(stats), nil
