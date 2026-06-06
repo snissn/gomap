@@ -173,8 +173,10 @@ func wrapWithOptions(db *treedb.DB, opts treedb.Options) *Database {
 
 // Database implements ethdb.KeyValueStore on top of TreeDB.
 type Database struct {
-	db                 *treedb.DB
-	compactStorage     compactStorageFunc
+	db             *treedb.DB
+	compactStorage compactStorageFunc
+	// walMaxSegmentBytes records the effective adapter WAL cap for tests and
+	// future diagnostics. Wrap cannot infer this for already-open handles.
 	walMaxSegmentBytes int64
 	closed             atomic.Bool
 }
