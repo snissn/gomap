@@ -147,6 +147,51 @@ func TestMaybeCompactLeafLogPayload_SparseLeafRoundTrips(t *testing.T) {
 	requireLeafPagesLogicallyEqual(t, leaf, decoded)
 }
 
+func TestMaybeAppendCompactLeafLogPayloadTo_AppendsStablePayloads(t *testing.T) {
+	leafA := buildSparseLeafPageForPayloadTest(t)
+	leafB := buildSparseLeafPageForPayloadTest(t)
+	copy(leafB[page.PageSize-16:], []byte("different-leaf-b"))
+
+	var arena []byte
+	arena, payloadA, compacted, err := MaybeAppendCompactLeafLogPayloadTo(arena, leafA)
+	if err != nil {
+		t.Fatalf("MaybeAppendCompactLeafLogPayloadTo(A): %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected leaf A to compact")
+	}
+	payloadAStable := append([]byte(nil), payloadA...)
+
+	arena, payloadB, compacted, err := MaybeAppendCompactLeafLogPayloadTo(arena, leafB)
+	if err != nil {
+		t.Fatalf("MaybeAppendCompactLeafLogPayloadTo(B): %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected leaf B to compact")
+	}
+	if !bytes.Equal(payloadA, payloadAStable) {
+		t.Fatal("payload A changed after appending payload B")
+	}
+
+	decodedA, _, decoded, err := decodeCompactLeafLogPayloadTo(payloadA, nil)
+	if err != nil {
+		t.Fatalf("decode A: %v", err)
+	}
+	if !decoded {
+		t.Fatal("expected payload A to decode")
+	}
+	requireLeafPagesLogicallyEqual(t, leafA, decodedA)
+
+	decodedB, _, decoded, err := decodeCompactLeafLogPayloadTo(payloadB, nil)
+	if err != nil {
+		t.Fatalf("decode B: %v", err)
+	}
+	if !decoded {
+		t.Fatal("expected payload B to decode")
+	}
+	requireLeafPagesLogicallyEqual(t, leafB, decodedB)
+}
+
 func TestDecodeCompactLeafLogPayloadTo_AliasedDstRoundTrips(t *testing.T) {
 	leaf := buildSparseLeafPageForPayloadTest(t)
 
