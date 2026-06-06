@@ -1011,22 +1011,8 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	for _, rowScratch := range []*columnPhysicalRowReaderScratch{&s.scoreScratch, &s.expandScratch, &s.resultScratch} {
 		prepareColumnVectorGraphNativeRowScratch(rowScratch, dimensions, degree)
 	}
-	s.visitMarks = resizeColumnVectorGraphNativeUint64Scratch(s.visitMarks, rowCount)
-	s.visitEpoch++
-	if s.visitEpoch == 0 {
-		clear(s.visitMarks)
-		s.visitEpoch = 1
-	}
-	frontierCap := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
-	s.frontier = resizeColumnVectorGraphNativeCandidateScratch(s.frontier, frontierCap)
-	topCandidateCap := efSearch
-	if topCandidateCap > rowCount {
-		topCandidateCap = rowCount
-	}
-	if topCandidateCap < topK {
-		topCandidateCap = topK
-	}
-	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, topCandidateCap)
+	s.prepareVisitEpoch(rowCount)
+	s.prepareCandidateQueues(rowCount, degree, topK, efSearch)
 	s.results = resizeColumnVectorGraphNativeResultScratch(s.results, topK)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
 	s.resultIDViews = resizeColumnVectorGraphNativeIDBuffersScratch(s.resultIDViews, topK)
@@ -1041,6 +1027,57 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, scoreTileCapacity)
 	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, wavefrontWidth)
 	return nil
+}
+
+func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, vectorStride, degree, topK, efSearch int) error {
+	if s == nil {
+		return errColumnVectorGraphNativeSearchScratchRequired
+	}
+	if rowCount < 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 search received negative sizing input: rowCount=%d vectorStride=%d degree=%d topK=%d efSearch=%d", rowCount, vectorStride, degree, topK, efSearch)
+	}
+	clearColumnVectorGraphNativeRowScratchViews(&s.scoreScratch)
+	clearColumnVectorGraphNativeRowScratchViews(&s.expandScratch)
+	clearColumnVectorGraphNativeRowScratchViews(&s.resultScratch)
+	s.scoreScratch.Float32Values = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreScratch.Float32Values, vectorStride)
+	s.prepareVisitEpoch(rowCount)
+	s.prepareCandidateQueues(rowCount, degree, topK, efSearch)
+	s.results = resizeColumnVectorGraphNativeResultScratch(s.results, topK)
+	s.resultIDViews = resizeColumnVectorGraphNativeIDBuffersScratch(s.resultIDViews, topK)
+	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
+	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
+	s.resultRowRefs = resizeColumnVectorGraphNativeRowRefScratch(s.resultRowRefs, topK)
+	s.resultHasRefs = resizeColumnVectorGraphNativeBoolScratch(s.resultHasRefs, topK)
+	s.scoreTileScores = resizeColumnVectorGraphNativeFloat64Scratch(s.scoreTileScores, degree)
+	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, degree)
+	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, degree)
+	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, 0)
+	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, 0)
+	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, 0)
+	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, 0)
+	return nil
+}
+
+func (s *columnVectorGraphNativeSearchScratch) prepareVisitEpoch(rowCount int) {
+	s.visitMarks = resizeColumnVectorGraphNativeUint64Scratch(s.visitMarks, rowCount)
+	s.visitEpoch++
+	if s.visitEpoch == 0 {
+		clear(s.visitMarks)
+		s.visitEpoch = 1
+	}
+}
+
+func (s *columnVectorGraphNativeSearchScratch) prepareCandidateQueues(rowCount, degree, topK, efSearch int) {
+	frontierCap := columnVectorGraphNativeSearchFrontierCapacity(rowCount, degree, topK, efSearch)
+	s.frontier = resizeColumnVectorGraphNativeCandidateScratch(s.frontier, frontierCap)
+	topCandidateCap := efSearch
+	if topCandidateCap > rowCount {
+		topCandidateCap = rowCount
+	}
+	if topCandidateCap < topK {
+		topCandidateCap = topK
+	}
+	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, topCandidateCap)
 }
 
 func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch, dimensions, degree int) {
@@ -1058,6 +1095,22 @@ func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch,
 	if cap(s.Uint32Values) < degree {
 		s.Uint32Values = make([]uint32, 0, degree)
 	} else {
+		s.Uint32Values = s.Uint32Values[:0]
+	}
+}
+
+func clearColumnVectorGraphNativeRowScratchViews(s *columnPhysicalRowReaderScratch) {
+	if s == nil {
+		return
+	}
+	if len(s.Values) > 0 {
+		clear(s.Values)
+		s.Values = s.Values[:0]
+	}
+	if len(s.Float32Values) > 0 {
+		s.Float32Values = s.Float32Values[:0]
+	}
+	if len(s.Uint32Values) > 0 {
 		s.Uint32Values = s.Uint32Values[:0]
 	}
 }
