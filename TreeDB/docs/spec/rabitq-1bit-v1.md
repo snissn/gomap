@@ -194,8 +194,12 @@ be selected by explicit `quantized_only` or `quantized_rerank` modes on both
   closed with `ErrVectorIndexSearchUnavailable` and codec-generic quantized
   asset counters. There is no silent exact fallback.
 
-The closeout benchmark workflow and representative exact/scalar_u8/RaBitQ rows
-are recorded in [`rabitq-closeout-2454.md`](rabitq-closeout-2454.md).
+The landed-stack closeout benchmark workflow and representative exact/scalar_u8/RaBitQ rows
+are recorded in [`rabitq-closeout-2454.md`](rabitq-closeout-2454.md). The later
+#2482 performance-lane closeout, including the semantics-preserving #2477
+query-byte-table scorer evidence and #2478/#2479 no-promote decisions, is
+recorded in
+[`rabitq-performance-lane-closeout-2482.md`](rabitq-performance-lane-closeout-2482.md).
 
 ## Non-goals and boundaries
 

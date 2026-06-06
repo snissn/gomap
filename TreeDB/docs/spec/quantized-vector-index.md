@@ -7,7 +7,10 @@ default behavior remains the production baseline. The `rabitq_1bit` v1 codec and
 bit/storage contract are specified separately in
 [`rabitq-1bit-v1.md`](rabitq-1bit-v1.md); the RaBitQ closeout benchmark workflow
 and representative matrix are in
-[`rabitq-closeout-2454.md`](rabitq-closeout-2454.md).
+[`rabitq-closeout-2454.md`](rabitq-closeout-2454.md). The later #2482
+RaBitQ performance-lane closeout for the #2477 semantics-preserving query
+byte-table scorer, no-promote decisions, and deferred future-codec work is in
+[`rabitq-performance-lane-closeout-2482.md`](rabitq-performance-lane-closeout-2482.md).
 
 ## User-visible query modes
 
@@ -147,8 +150,11 @@ RaBitQ go-highway acceleration did not land for this stack. The #2453
 investigation found that go-highway's fast bit-product kernel is not compatible
 with TreeDB's exact weighted RaBitQ cosine scorer and durable LSB-first packed
 asset contract without semantic changes or a more complex bit-plane/residual
-scorer. Do not report an accelerated RaBitQ row unless a future issue lands one
-with parity tests, same-fixture benchmarks, and profiles.
+scorer. The #2477 query-byte-table scorer is the promoted semantics-preserving
+`rabitq_1bit` v1 performance update and is summarized in
+[`rabitq-performance-lane-closeout-2482.md`](rabitq-performance-lane-closeout-2482.md);
+it does not change storage, bit order, score formula, codec/asset identity, or fail-closed behavior. Do not report an accelerated RaBitQ row unless a future
+issue lands one with parity tests, same-fixture benchmarks, and profiles.
 
 Future quantization work should be separate from this scalar/RaBitQ closeout:
 

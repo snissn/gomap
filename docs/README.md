@@ -53,6 +53,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 - **[TreeDB Fast Mongo/Native Client-Shape Matrix](benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md)**: Standard fast-client Mongo gateway/native/direct benchmark contract and baseline interpretation.
 - **[TreeDB Quantized Buffered Per-Row Profiling](benchmarks/treedb_quantized_buffered_profile_runbook.md)**: Isolated quantized search profile rows for downstream optimization gates.
 - **[TreeDB `rabitq_1bit` Profile Gate](benchmarks/treedb_rabitq_1bit_profile_gate.md)**: Same-host RaBitQ baseline/candidate workflow, guardrails, profile artifacts, and no-promote rules.
+- **[TreeDB RaBitQ Performance Lane Closeout](../TreeDB/docs/spec/rabitq-performance-lane-closeout-2482.md)**: Final Sublane A promoted/no-promote evidence and deferred Sublane B status for the RaBitQ performance lane.
 - **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
 - **[BenchProf](../cmd/benchprof/README.md)**: Analysis tool for CPU/alloc/block/mutex profiles and ops/sec outputs.
 - **[Redis Protocol Benchmarking](REDIS_PROTOCOL_BENCHMARKING.md)**: Preferred way to measure Redis wrapper throughput.

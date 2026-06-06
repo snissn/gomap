@@ -137,3 +137,76 @@ func TestDocs_RaBitQCloseout2454(t *testing.T) {
 		}
 	}
 }
+
+func TestDocs_RaBitQPerformanceLaneCloseout2482(t *testing.T) {
+	treeRoot, repoRoot := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "rabitq-performance-lane-closeout-2482.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rabitq performance lane closeout spec: %v", err)
+	}
+	text := string(data)
+	normalized := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"# TreeDB RaBitQ performance lane closeout (#2482)",
+		"closes **Sublane A**, the `rabitq_1bit` v1 performance sweep",
+		"**Sublane B** remains deferred to open follow-ups #2480 and #2481",
+		"`rabitq_1bit` v1 durable storage layout",
+		"LSB-first bit order",
+		"weighted sign-dot score formula",
+		"durable asset identity",
+		"codec name/version/config identity",
+		"fail-closed behavior",
+		"semantics-preserving #2477 query-byte-table scorer evidence",
+		"/tmp/gomap_2477_final2_baseline_main_435a1c06_20260606_112457",
+		"/tmp/gomap_2477_final2_candidate_17857e779_20260606_112935",
+		"/tmp/gomap_2477_interleaved_scalar_lower_qonly_c8_20260606_114454",
+		"lower `quantized_only`, c=1",
+		"collection `quantized_rerank` candidates=32, c=8",
+		"search_route_quantized_only/search=1",
+		"search_route_quantized_rerank/search=1",
+		"fallback / unavailable counters `0`",
+		"vector/norm `16,384/128`, exact calls `32`",
+		"code B/search",
+		"asset B/vector",
+		"Scalar guardrail row",
+		"Exact FP32 `hnsw_search_pack_v1` rows were not required for #2477",
+		"no code PR or AI review was opened",
+		"No future codec has been selected yet",
+	} {
+		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
+			t.Fatalf("rabitq performance lane closeout missing %q", want)
+		}
+	}
+
+	checks := map[string][]string{
+		filepath.Join(treeRoot, "docs", "spec", "README.md"): {
+			"rabitq-performance-lane-closeout-2482.md",
+			"#2480/#2481 deferred Sublane B status",
+		},
+		filepath.Join(treeRoot, "docs", "spec", "rabitq-1bit-v1.md"): {
+			"rabitq-performance-lane-closeout-2482.md",
+			"#2478/#2479 no-promote decisions",
+		},
+		filepath.Join(treeRoot, "docs", "spec", "quantized-vector-index.md"): {
+			"rabitq-performance-lane-closeout-2482.md",
+			"does not change storage, bit order, score formula, codec/asset identity, or fail-closed behavior",
+		},
+		filepath.Join(repoRoot, "docs", "README.md"): {
+			"TreeDB RaBitQ Performance Lane Closeout",
+			"rabitq-performance-lane-closeout-2482.md",
+		},
+	}
+	for path, wants := range checks {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(data)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing #2482 closeout link text %q", path, want)
+			}
+		}
+	}
+}
