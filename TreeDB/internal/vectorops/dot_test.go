@@ -74,6 +74,20 @@ func TestDotFloat32SpecialValues1790(t *testing.T) {
 	}
 }
 
+func TestDotFloat32OptimizedAvailabilityMatchesImplementation(t *testing.T) {
+	optimized := DotFloat32OptimizedAvailable()
+	switch DotFloat32Implementation() {
+	case "scalar":
+		if optimized {
+			t.Fatalf("DotFloat32OptimizedAvailable=true for scalar implementation")
+		}
+	default:
+		if !optimized {
+			t.Fatalf("DotFloat32OptimizedAvailable=false for optimized implementation %q", DotFloat32Implementation())
+		}
+	}
+}
+
 func TestDotFloat32ZeroAllocs1790(t *testing.T) {
 	left := dotTestVector1790(257, 3)
 	right := dotTestVector1790(257, 5)

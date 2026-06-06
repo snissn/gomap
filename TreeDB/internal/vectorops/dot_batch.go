@@ -68,11 +68,11 @@ func dotFloat32StridedRows(dst []float32, rowCount int) int {
 }
 
 func dotFloat32IndexedShapeOK(base []float32, query []float32, rowIDs []uint32, dims, rows int) bool {
+	if !dotFloat32IndexedPrevalidatedShapeOK(base, query, dims, rows) {
+		return false
+	}
 	if rows == 0 {
 		return true
-	}
-	if dims <= 0 || len(query) < dims || len(base) < dims {
-		return false
 	}
 	maxRow := uint64((len(base) - dims) / dims)
 	for i := 0; i < rows; i++ {
@@ -81,6 +81,13 @@ func dotFloat32IndexedShapeOK(base []float32, query []float32, rowIDs []uint32, 
 		}
 	}
 	return true
+}
+
+func dotFloat32IndexedPrevalidatedShapeOK(base []float32, query []float32, dims, rows int) bool {
+	if rows == 0 {
+		return true
+	}
+	return dims > 0 && len(query) >= dims && len(base) >= dims
 }
 
 func dotFloat32StridedShapeOK(base []float32, query []float32, rows, dims, stride int) bool {
