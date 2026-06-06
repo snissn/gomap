@@ -472,7 +472,7 @@ counters.
 | Row+column COW maintenance uses shared reachability and active mappedresource pin protection for typed assets; vector graph bytes remain derived, not authoritative. | [#1788](https://github.com/snissn/gomap/issues/1788), parent [#1736](https://github.com/snissn/gomap/issues/1736), [maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Nullable/missing vector and adjacency typed-column support remains staged/fail-closed. | See typed-column adapter/spec caveats and follow-up roadmap. |
 | Graph-search prepared-view admission is tiered by generic typed-column optimized-consumer capability. | See [typed-column optimized-consumer capabilities](../spec/typed-column-optimized-consumer-capabilities.md), [prepared graph-search runtime views](../spec/typed-column-graph-search-prepared-views.md), and the [#2044 admission table](../spec/typed-column-graph-search-admission.md); #2046 owns reusable direct-view certifiers. |
-| Scalar quantized score planes are behavior/storage evidence, not a speedup claim. | See the [#1926 quantized score-plane spec](../spec/quantized-vector-index.md). BRQ/RaBitQ/PQ codecs, SIMD/popcount, batch/control-flow, and windowing optimizations are future work. |
+| `scalar_u8` and pure-Go `rabitq_1bit` score planes are behavior/storage/recall evidence, not a speedup claim or universal replacement. | See the [#1926/#2454 quantized score-plane spec](../spec/quantized-vector-index.md) and [RaBitQ closeout](../spec/rabitq-closeout-2454.md). BRQ/PQ/OPQ/residual codecs, accelerated RaBitQ backends, batch/control-flow, and windowing optimizations are future work. |
 
 ## Best practices
 

@@ -82,6 +82,8 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 		filepath.Join(treeRoot, "docs", "guides", "vector-search-typed-column.md"): {
 			"Optional quantized query modes",
 			"quantized-vector-index.md",
+			"pure-Go `rabitq_1bit` score planes are behavior/storage/recall evidence",
+			"BRQ/PQ/OPQ/residual codecs, accelerated RaBitQ backends",
 		},
 	}
 	for path, wants := range checks {
