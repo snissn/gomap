@@ -96,7 +96,7 @@ func OpenWithOptions(opts treedb.Options) (*Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Wrap(tdb), nil
+	return wrapWithOptions(tdb, opts), nil
 }
 
 func resolveTreeDBOptions(path string, options *OpenOptions) (treedb.Options, error) {
@@ -162,11 +162,18 @@ func Wrap(db *treedb.DB) *Database {
 	return &Database{db: db, compactStorage: runCompactStorageFull}
 }
 
+func wrapWithOptions(db *treedb.DB, opts treedb.Options) *Database {
+	wrapped := Wrap(db)
+	wrapped.walMaxSegmentBytes = opts.WALMaxSegmentBytes
+	return wrapped
+}
+
 // Database implements ethdb.KeyValueStore on top of TreeDB.
 type Database struct {
-	db             *treedb.DB
-	compactStorage compactStorageFunc
-	closed         atomic.Bool
+	db                 *treedb.DB
+	compactStorage     compactStorageFunc
+	walMaxSegmentBytes int64
+	closed             atomic.Bool
 }
 
 var _ ethdb.KeyValueStore = (*Database)(nil)

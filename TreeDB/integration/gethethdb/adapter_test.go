@@ -67,6 +67,19 @@ func TestOpenDefaultsUseGethSizedCommandWALSegments(t *testing.T) {
 	}
 }
 
+func TestOpenWithOptionsAppliesGethSizedCommandWALSegments(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, filepath.Join(t.TempDir(), "treedb"))
+	opts.WALMaxSegmentBytes = 0
+	db, err := OpenWithOptions(opts)
+	if err != nil {
+		t.Fatalf("OpenWithOptions: %v", err)
+	}
+	defer db.Close()
+	if got := db.walMaxSegmentBytes; got != defaultGethCommandWALMaxSegmentBytes {
+		t.Fatalf("OpenWithOptions WALMaxSegmentBytes=%d want %d", got, defaultGethCommandWALMaxSegmentBytes)
+	}
+}
+
 func TestOpenRejectsWritableNonCommandWALOptions(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileBench, filepath.Join(t.TempDir(), "treedb"))
 	if _, err := OpenWithOptions(opts); err == nil {
