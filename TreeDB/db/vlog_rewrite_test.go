@@ -1997,6 +1997,116 @@ func TestValueLogRewriteOnline_ExplicitSourceDoesNotDeleteActiveSegment(t *testi
 	}
 }
 
+func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(t *testing.T) {
+	dir := t.TempDir()
+
+	opts := Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
+	want := bytes.Repeat([]byte("rewrite-active-source|"), 64)
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 210_000, 1, func(_ int) []byte {
+		return want
+	})
+	sourceID := ptrs[0].FileID
+	sourcePath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write pointer key: %v", err)
+	}
+	closeNoErr(t, b)
+
+	rewriteStats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{sourceID},
+		BatchSize:     1,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if !slices.Equal(rewriteStats.SourceFileIDsUnreferenced, []uint32{sourceID}) {
+		t.Fatalf("unreferenced source ids=%v want [%d]", rewriteStats.SourceFileIDsUnreferenced, sourceID)
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		t.Fatalf("rewrite should leave active source for explicit observed reclaim, stat=%v", err)
+	}
+
+	activeStats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            rewriteStats.SourceFileIDsUnreferenced,
+		ObservedSourceAssumeUnreferenced: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogGC without active reclaim: %v", err)
+	}
+	if activeStats.ObservedSourceSegmentsActive != 1 || activeStats.ObservedSourceSegmentsDeleted != 0 {
+		t.Fatalf("observed active source should remain without reclaim option: %+v", activeStats)
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		t.Fatalf("active source should remain without reclaim option, stat=%v", err)
+	}
+
+	reclaimStats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            rewriteStats.SourceFileIDsUnreferenced,
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogGC with active reclaim: %v", err)
+	}
+	if reclaimStats.ObservedSourceSegmentsDeleted != 1 || reclaimStats.ObservedSourceBytesDeleted <= 0 {
+		t.Fatalf("observed active source was not reclaimed: %+v", reclaimStats)
+	}
+	if _, err := os.Stat(sourcePath); !os.IsNotExist(err) {
+		t.Fatalf("expected active source to be removed after observed reclaim, err=%v", err)
+	}
+	got, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get after observed reclaim: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after observed reclaim")
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after observed reclaim: %v", err)
+	}
+	db = nil
+	if _, err := os.Stat(sourcePath); !os.IsNotExist(err) {
+		t.Fatalf("expected active source to stay removed after close, err=%v", err)
+	}
+	db, err = Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after observed reclaim: %v", err)
+	}
+	if _, err := os.Stat(sourcePath); !os.IsNotExist(err) {
+		t.Fatalf("expected active source to stay removed after reopen, err=%v", err)
+	}
+	got, err = db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get after reopen observed reclaim: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen observed reclaim")
+	}
+}
+
 func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 	dir := t.TempDir()
 

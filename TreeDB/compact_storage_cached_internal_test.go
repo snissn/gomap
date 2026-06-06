@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -233,10 +234,20 @@ func TestCachedValueLogRewriteOnlinePreservesRetainedObservedSourcesAndReclaimsL
 	if len(stats.SourceFileIDsUnreferenced) == 0 {
 		t.Fatalf("rewrite reported no unreferenced source IDs")
 	}
+	if stats.SourceSegmentsReclaimed == 0 || stats.SourceBytesReclaimed == 0 {
+		if runtime.GOOS != "windows" {
+			t.Fatalf("cached rewrite did not report reclaimed observed sources: %+v", stats)
+		}
+		t.Logf("windows delayed observed-source unlink after cached rewrite: %+v", stats)
+	}
 
 	retained := make(map[string]struct{})
 	for _, path := range db.cached.ValueLogRetainedPaths() {
 		retained[path] = struct{}{}
+	}
+	protected := make(map[string]struct{})
+	for _, path := range db.cached.ValueLogProtectedPaths() {
+		protected[path] = struct{}{}
 	}
 	for _, segment := range source {
 		if _, ok := retained[segment.path]; ok {
@@ -246,6 +257,13 @@ func TestCachedValueLogRewriteOnlinePreservesRetainedObservedSourcesAndReclaimsL
 			continue
 		}
 		if _, err := os.Stat(segment.path); !os.IsNotExist(err) {
+			if runtime.GOOS == "windows" && stats.SourceSegmentsReclaimed == 0 {
+				if _, protected := protected[segment.path]; protected {
+					t.Fatalf("unreclaimed observed source %s is still cached-protected after reclaim: err=%v", segment.path, err)
+				}
+				t.Logf("windows left unprotected observed source on disk for deferred unlink: %s", segment.path)
+				continue
+			}
 			t.Fatalf("unretained source segment %s retained after observed-source reclaim: err=%v", segment.path, err)
 		}
 	}
@@ -264,6 +282,72 @@ func TestCachedValueLogRewriteOnlinePreservesRetainedObservedSourcesAndReclaimsL
 		if !bytes.Equal(got, want) {
 			t.Fatalf("value mismatch for %x: got %dB want %dB", []byte(key), len(got), len(want))
 		}
+	}
+}
+
+func TestCachedObservedSourceReclaimRevalidatesLateCachedWrite(t *testing.T) {
+	dir := t.TempDir()
+	opts := cachedRewriteReclaimTestOptions(dir)
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for i := 0; i < 16; i++ {
+		if err := db.Set(cachedRewriteReclaimKey(i), cachedRewriteReclaimValue(i)); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	source := listValueLogSegmentFiles(t, backenddb.ValueLogDirPath(dir))
+	if len(source) == 0 {
+		t.Fatalf("expected value-log source segments")
+	}
+	sourceIDs := make([]uint32, 0, len(source))
+	for _, segment := range source {
+		sourceIDs = append(sourceIDs, segment.id)
+	}
+
+	rewriteStats, err := db.backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+		SourceFileIDs: sourceIDs,
+		BatchSize:     64,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("backend ValueLogRewriteOnline: %v", err)
+	}
+	if len(rewriteStats.SourceFileIDsUnreferenced) == 0 {
+		t.Fatalf("rewrite reported no unreferenced source IDs")
+	}
+
+	lateKey := []byte("late-cached-write")
+	lateValue := bytes.Repeat([]byte("late-write-references-observed-source|"), 128)
+	if err := db.Set(lateKey, lateValue); err != nil {
+		t.Fatalf("late set: %v", err)
+	}
+
+	reclaimStats, err := db.cached.ReclaimObservedValueLogSources(context.Background(), rewriteStats.SourceFileIDsUnreferenced)
+	if err != nil {
+		t.Fatalf("ReclaimObservedValueLogSources: %v", err)
+	}
+	if reclaimStats.ObservedSourceSegmentsDeleted != 0 || reclaimStats.ObservedSourceBytesDeleted != 0 {
+		t.Fatalf("reclaimed source that was re-referenced by late cached write: %+v", reclaimStats)
+	}
+	for _, segment := range source {
+		if _, err := os.Stat(segment.path); err != nil {
+			t.Fatalf("late-referenced observed source %s was removed: %v", segment.path, err)
+		}
+	}
+	got, err := db.Get(lateKey)
+	if err != nil {
+		t.Fatalf("get late key after reclaim: %v", err)
+	}
+	if !bytes.Equal(got, lateValue) {
+		t.Fatalf("late value mismatch: got %dB want %dB", len(got), len(lateValue))
 	}
 }
 

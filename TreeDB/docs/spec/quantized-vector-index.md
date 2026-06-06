@@ -124,7 +124,9 @@ Future quantization work should be separate from this scalar score-plane closeou
 
 - RaBitQ durable assets, search integration, recall/storage sweeps, and SIMD
   acceleration must follow the `rabitq-1bit-v1.md` contract and prove parity with
-  its pure-Go oracle before production use.
+  its pure-Go oracle before production use. RaBitQ go-highway dependency/toolchain
+  readiness is tracked separately in
+  [rabitq-go-highway-readiness.md](rabitq-go-highway-readiness.md).
 - BRQ/PQ/OPQ/residual-PQ codecs and other packed popcount scorers need their own
   codec specs, tests, recall sweeps, and benchmark gates.
 - Batch scorer kernels, SIMD/popcount integration, graph control-flow changes,

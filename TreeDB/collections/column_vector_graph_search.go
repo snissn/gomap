@@ -1577,11 +1577,11 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 					// Keep the steady-state visited check/mark loop free of
 					// benchmark-debug counter branches; the debug path below
 					// preserves the #2271 counter contract.
+					if countLoopEdges {
+						loopEdgeVisits += uint64(len(adjacency))
+					}
 					if !hasCandidateRows {
 						for i, neighbor := range adjacency {
-							if countLoopEdges {
-								loopEdgeVisits++
-							}
 							if uint64(neighbor) >= rowCount64 {
 								return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 							}
@@ -1594,9 +1594,6 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 						}
 					} else {
 						for i, neighbor := range adjacency {
-							if countLoopEdges {
-								loopEdgeVisits++
-							}
 							if uint64(neighbor) >= rowCount64 {
 								return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 							}
@@ -1660,8 +1657,11 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				}
 				continue
 			}
+			if debugStats == nil && debugCounters == nil && countLoopEdges {
+				loopEdgeVisits += uint64(len(adjacency))
+			}
 			for i, neighbor := range adjacency {
-				if countLoopEdges {
+				if countLoopEdges && (debugStats != nil || debugCounters != nil) {
 					loopEdgeVisits++
 				}
 				if debugStats != nil {

@@ -71,7 +71,7 @@ TMP_RESULTS_MD="/tmp/$(basename "${OUT_DIR}").md"
 cat > "${HELPER_DIR}/go.mod" <<GOMOD
 module comparedb
 
-go 1.25.5
+go 1.26
 
 require (
 	github.com/cosmos/cosmos-db v0.0.0
