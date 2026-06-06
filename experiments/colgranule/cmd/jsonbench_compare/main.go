@@ -377,36 +377,28 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 	}
 	if len(sourceFileIDs) > 0 {
 		rewriteStart := time.Now()
-		rewriteDB, rewriteCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+		rewriteDB, err := treedb.Open(opts)
 		if err != nil {
 			return out, fmt.Errorf("open remaining TreeDB for value-log rewrite: %w", err)
 		}
-		rewriteStats, rewriteErr := rewriteDB.ValueLogRewriteOnline(ctx, backenddb.ValueLogRewriteOnlineOptions{
+		rewriteStats, rewriteErr := rewriteDB.ValueLogRewriteOnline(ctx, treedb.ValueLogRewriteOnlineOptions{
 			SourceFileIDs: sourceFileIDs,
 			BatchSize:     16_000,
 			SyncEachBatch: true,
 		})
-		var reclaimStats backenddb.ValueLogGCStats
-		var reclaimErr error
-		if rewriteErr == nil {
-			reclaimStats, reclaimErr = reclaimUnreferencedRewriteSources(ctx, rewriteDB, rewriteStats.SourceFileIDsUnreferenced)
-		}
-		rewriteCleanupErr := rewriteCleanup()
+		rewriteCloseErr := rewriteDB.Close()
 		if rewriteErr != nil {
 			return out, fmt.Errorf("rewrite remaining TreeDB value log: %w", rewriteErr)
 		}
-		if reclaimErr != nil {
-			return out, fmt.Errorf("reclaim rewritten remaining TreeDB value-log sources: %w", reclaimErr)
-		}
-		if rewriteCleanupErr != nil {
-			return out, fmt.Errorf("close remaining TreeDB rewrite handle: %w", rewriteCleanupErr)
+		if rewriteCloseErr != nil {
+			return out, fmt.Errorf("close remaining TreeDB rewrite handle: %w", rewriteCloseErr)
 		}
 		out.RewriteDuration = time.Since(rewriteStart).Seconds()
 		out.RewriteRecordsCopied = rewriteStats.ValueRecordsCopied
 		out.RewriteValueBytes = rewriteStats.ValueBytesCopied
 		out.RewriteSourceBytes = rewriteStats.SourceBytesRequested
-		out.RewriteReclaimFiles = reclaimStats.ObservedSourceSegmentsDeleted
-		out.RewriteReclaimBytes = reclaimStats.ObservedSourceBytesDeleted
+		out.RewriteReclaimFiles = rewriteStats.SourceSegmentsReclaimed
+		out.RewriteReclaimBytes = rewriteStats.SourceBytesReclaimed
 	}
 	after, afterFiles, err := directoryUsage(dbDir)
 	if err != nil {
@@ -416,22 +408,6 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 	out.AfterCompactFiles = afterFiles
 	out.CompactedBytesPerRow = float64(after) / float64(out.Rows)
 	return out, nil
-}
-
-type observedRewriteSourceReclaimer interface {
-	ValueLogGC(context.Context, backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
-}
-
-func reclaimUnreferencedRewriteSources(ctx context.Context, db observedRewriteSourceReclaimer, sourceFileIDs []uint32) (backenddb.ValueLogGCStats, error) {
-	var zero backenddb.ValueLogGCStats
-	if db == nil || len(sourceFileIDs) == 0 {
-		return zero, nil
-	}
-	return db.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
-		ObservedSourceFileIDs:            sourceFileIDs,
-		ObservedSourceAssumeUnreferenced: true,
-		ObservedSourceReclaimActive:      true,
-	})
 }
 
 func measureRawJSONTreeDB(ctx context.Context, files []string, rows int, dbDir string) (remainingTreeDBResult, error) {
@@ -533,6 +509,8 @@ func measureRawJSONTreeDB(ctx context.Context, files []string, rows int, dbDir s
 		out.RewriteRecordsCopied = rewriteStats.ValueRecordsCopied
 		out.RewriteValueBytes = rewriteStats.ValueBytesCopied
 		out.RewriteSourceBytes = rewriteStats.SourceBytesRequested
+		out.RewriteReclaimFiles = rewriteStats.SourceSegmentsReclaimed
+		out.RewriteReclaimBytes = rewriteStats.SourceBytesReclaimed
 	}
 	if err := validateRawJSONTreeDB(files, rows, dbDir); err != nil {
 		return out, err

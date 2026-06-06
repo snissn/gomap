@@ -233,6 +233,9 @@ func TestCachedValueLogRewriteOnlinePreservesRetainedObservedSourcesAndReclaimsL
 	if len(stats.SourceFileIDsUnreferenced) == 0 {
 		t.Fatalf("rewrite reported no unreferenced source IDs")
 	}
+	if stats.SourceSegmentsReclaimed == 0 || stats.SourceBytesReclaimed == 0 {
+		t.Fatalf("cached rewrite did not report reclaimed observed sources: %+v", stats)
+	}
 
 	retained := make(map[string]struct{})
 	for _, path := range db.cached.ValueLogRetainedPaths() {

@@ -106,9 +106,12 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return ValueLogRewriteStats{}, err
 	}
 	if db.cached != nil && len(stats.SourceFileIDsUnreferenced) > 0 {
-		if err := db.cached.ReclaimObservedValueLogSources(ctx, stats.SourceFileIDsUnreferenced); err != nil {
+		reclaimStats, err := db.cached.ReclaimObservedValueLogSources(ctx, stats.SourceFileIDsUnreferenced)
+		if err != nil {
 			return ValueLogRewriteStats{}, err
 		}
+		stats.SourceSegmentsReclaimed = reclaimStats.ObservedSourceSegmentsDeleted
+		stats.SourceBytesReclaimed = reclaimStats.ObservedSourceBytesDeleted
 	}
 	success = true
 	return ValueLogRewriteStats(stats), nil

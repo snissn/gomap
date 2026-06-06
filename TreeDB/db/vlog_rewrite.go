@@ -101,6 +101,14 @@ type ValueLogRewriteStats struct {
 	// SourceFileIDsUnreferenced records which selected source segments became
 	// fully unreferenced after cleanup.
 	SourceFileIDsUnreferenced []uint32
+	// SourceSegmentsReclaimed is the number of unreferenced source segments
+	// deleted by a caller-managed reclaim path after rewrite. Backend rewrite
+	// itself leaves this zero when active/protected segment safety prevents
+	// immediate deletion.
+	SourceSegmentsReclaimed int
+	// SourceBytesReclaimed is the number of unreferenced source bytes deleted by
+	// a caller-managed reclaim path after rewrite.
+	SourceBytesReclaimed int64
 
 	TemplateRecordsAttempted int
 	TemplateRecordsKept      int

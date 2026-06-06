@@ -4594,14 +4594,15 @@ func (db *DB) ValueLogInUsePaths() []string {
 // ReclaimObservedValueLogSources rotates cached writers past rewrite-selected
 // source segments and reclaims storage classes that backend rewrite already
 // proved obsolete.
-func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) error {
+func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) (backenddb.ValueLogGCStats, error) {
+	var stats backenddb.ValueLogGCStats
 	if db == nil || len(ids) == 0 {
-		return nil
+		return stats, nil
 	}
 	gcer, hasValueLogGC := db.backend.(backendValueLogGCer)
 	leafGcer, hasLeafGenerationGC := db.backend.(backendLeafGenerationGCRunner)
 	if !hasValueLogGC && !hasLeafGenerationGC {
-		return nil
+		return stats, nil
 	}
 	seen := make(map[uint32]struct{}, len(ids))
 	observed := make([]uint32, 0, len(ids))
@@ -4616,38 +4617,77 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 		observed = append(observed, id)
 	}
 	if len(observed) == 0 {
-		return nil
+		return stats, nil
 	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return stats, err
 	}
 	if err := db.Checkpoint(); err != nil {
-		return err
+		return stats, err
 	}
-	if err := db.rotateObservedValueLogSources(ctx, seen); err != nil {
-		return err
+	finishFence, err := db.BeginValueLogMaintenanceFence(ctx)
+	if err != nil {
+		return stats, err
 	}
-	db.runRetainedValueLogPruneInline(true, seen)
+	defer finishFence()
+	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+		if err := refresher.RefreshValueLogSet(); err != nil {
+			return stats, err
+		}
+	}
+	pruneStats, _ := db.runRetainedValueLogPruneInline(true, seen)
+	pruneReclaimedSegments := pruneStats.ObservedSourceRemovedSegments + pruneStats.ObservedSourceZombieMarkedSegments
+	pruneReclaimedBytes := pruneStats.ObservedSourceRemovedBytes + pruneStats.ObservedSourceZombieMarkedBytes
+	if pruneReclaimedSegments > 0 {
+		stats.SegmentsDeleted += pruneReclaimedSegments
+		stats.ObservedSourceSegmentsDeleted += pruneReclaimedSegments
+	}
+	if pruneReclaimedBytes > 0 {
+		stats.BytesDeleted += pruneReclaimedBytes
+		stats.ObservedSourceBytesDeleted += pruneReclaimedBytes
+	}
 
 	if hasValueLogGC {
-		opts := db.valueLogGCOptions(false)
+		opts := db.valueLogGCOptionsForObservedSources(false, seen)
 		opts.ObservedSourceFileIDs = observed
 		opts.ObservedSourceAssumeUnreferenced = true
 		opts.ObservedSourceReclaimActive = true
-		if _, err := gcer.ValueLogGC(ctx, opts); err != nil {
-			return err
+		gcStats, err := gcer.ValueLogGC(ctx, opts)
+		if err != nil {
+			return stats, err
 		}
+		gcStats.SegmentsDeleted += stats.SegmentsDeleted
+		gcStats.BytesDeleted += stats.BytesDeleted
+		gcStats.ObservedSourceSegmentsDeleted += stats.ObservedSourceSegmentsDeleted
+		gcStats.ObservedSourceBytesDeleted += stats.ObservedSourceBytesDeleted
+		stats = gcStats
+	}
+	if stats.ObservedSourceSegmentsDeleted > 0 {
+		db.cleanupMissingObservedValueLogRetains(seen)
 	}
 	if hasLeafGenerationGC {
 		if _, err := leafGcer.LeafGenerationGC(ctx, db.leafGenerationGCOptions()); err != nil {
-			return err
+			return stats, err
 		}
 	}
-	return nil
+	return stats, nil
+}
+
+func (db *DB) cleanupMissingObservedValueLogRetains(observed map[uint32]struct{}) {
+	if db == nil || len(observed) == 0 {
+		return
+	}
+	for _, path := range db.valueOnlyLogPaths(db.valueLogRetainedPaths()) {
+		if id, ok := valueLogFileIDForPath(path); ok {
+			if _, keep := observed[id]; keep {
+				db.cleanupMissingRetainedValueLog(path)
+			}
+		}
+	}
 }
 
 // BeginValueLogMaintenanceFence blocks cached writers and rotates current
@@ -4751,6 +4791,49 @@ func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
 		ProtectedInUsePaths:    inUse,
 		ProtectedRetainedPaths: retained,
 	}
+}
+
+func (db *DB) valueLogGCOptionsForObservedSources(dryRun bool, observed map[uint32]struct{}) backenddb.ValueLogGCOptions {
+	retained, inUse, _ := db.valueLogGCProtectedPathSets()
+	if len(observed) > 0 {
+		retained = filterObservedValueLogPaths(retained, observed)
+		inUse = filterObservedValueLogPaths(inUse, observed)
+	}
+	merged := mergeUniqueNonEmptyStrings(retained, inUse)
+	return backenddb.ValueLogGCOptions{
+		DryRun:                 dryRun,
+		ProtectedPaths:         merged,
+		ProtectedInUsePaths:    inUse,
+		ProtectedRetainedPaths: retained,
+	}
+}
+
+func filterObservedValueLogPaths(paths []string, observed map[uint32]struct{}) []string {
+	if len(paths) == 0 || len(observed) == 0 {
+		return paths
+	}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if id, ok := valueLogFileIDForPath(path); ok {
+			if _, drop := observed[id]; drop {
+				continue
+			}
+		}
+		out = append(out, path)
+	}
+	return out
+}
+
+func valueLogFileIDForPath(path string) (uint32, bool) {
+	laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+	if !ok || !valueLog || laneID < 0 || seq < 0 {
+		return 0, false
+	}
+	id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 func (db *DB) leafGenerationGCOptions() backenddb.LeafGenerationGCOptions {

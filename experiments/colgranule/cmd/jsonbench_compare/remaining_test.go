@@ -382,6 +382,16 @@ func validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t *t
 	if result.Rows != ds.Rows {
 		t.Fatalf("measured rows=%d want %d", result.Rows, ds.Rows)
 	}
+	if result.RewriteRecordsCopied == 0 {
+		t.Fatalf("remaining measurement copied no value-log records: %+v", result)
+	}
+	if result.RewriteReclaimFiles == 0 || result.RewriteReclaimBytes == 0 {
+		t.Fatalf("remaining measurement did not reclaim rewritten sources through cached fence path: %+v", result)
+	}
+	sourcePath := filepath.Join(dbDir, "maindb", "value_vlog", "value-l0-000001.log")
+	if _, err := os.Stat(sourcePath); !os.IsNotExist(err) {
+		t.Fatalf("cached retained rewrite left source segment %s after reclaim: %v", sourcePath, err)
+	}
 	validateStoredRemainingCollectionReconstructsJSONBenchRows(t, source, ds, imagePart, dbDir, collections.DocumentFormatTemplateV1)
 }
 
