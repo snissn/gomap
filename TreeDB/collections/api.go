@@ -382,7 +382,7 @@ type Collection struct {
 	vectorPreparedSearchBuilds uint64
 
 	vectorBufferedSearchMu            sync.Mutex
-	vectorBufferedSearch              map[string]*collectionVectorIndexPreparedSearchCacheEntry
+	vectorBufferedSearch              map[collectionVectorIndexPreparedSearchCacheSlot]*collectionVectorIndexPreparedSearchCacheEntry
 	vectorBufferedSearchHits          uint64
 	vectorBufferedSearchMisses        uint64
 	vectorBufferedSearchWaits         uint64

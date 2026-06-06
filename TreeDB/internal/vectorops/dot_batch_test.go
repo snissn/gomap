@@ -55,6 +55,72 @@ func TestDotFloat32IndexedParity(t *testing.T) {
 	}
 }
 
+func TestDotFloat32IndexedPrevalidatedParity(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		dims   int
+		rowIDs []uint32
+	}{
+		{name: "short_dims_tail", dims: 7, rowIDs: []uint32{0, 1, 2, 3, 4}},
+		{name: "contiguous_batch", dims: 64, rowIDs: []uint32{0, 1, 2, 3}},
+		{name: "scattered_batch", dims: 128, rowIDs: []uint32{12, 2, 9, 0, 7, 3, 15, 1, 6, 10, 4, 14, 5}},
+		{name: "duplicates", dims: 63, rowIDs: []uint32{3, 3, 1, 7, 1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseRows := maxRowID(tc.rowIDs) + 1
+			base := dotBatchTestBase(baseRows, tc.dims, tc.dims)
+			query := dotBatchTestVector(tc.dims, 47)
+			got := make([]float32, len(tc.rowIDs))
+
+			status := DotFloat32IndexedPrevalidated(got, base, query, tc.rowIDs, tc.dims)
+			if status.Invalid {
+				t.Fatalf("DotFloat32IndexedPrevalidated rejected valid prevalidated shape: %+v", status)
+			}
+			if status.Rows != len(tc.rowIDs) {
+				t.Fatalf("status.Rows=%d want %d", status.Rows, len(tc.rowIDs))
+			}
+			if status.Rows > 0 && status.Optimized == status.Fallback {
+				t.Fatalf("optimized/fallback status mismatch: %+v", status)
+			}
+
+			want := make([]float32, len(tc.rowIDs))
+			dotFloat32IndexedScalar(want, base, query, tc.rowIDs, tc.dims, len(tc.rowIDs))
+			assertFloat32SliceNear(t, got, want, tc.dims)
+		})
+	}
+}
+
+func TestDotFloat32IndexedPrevalidatedInvalidShapesLeaveDestinationUnchanged(t *testing.T) {
+	t.Parallel()
+
+	base := dotBatchTestBase(2, 4, 4)
+	query := dotBatchTestVector(4, 53)
+	cases := []struct {
+		name  string
+		base  []float32
+		query []float32
+		dims  int
+	}{
+		{name: "zero_dims", base: base, query: query, dims: 0},
+		{name: "short_query", base: base, query: query[:3], dims: 4},
+		{name: "short_base", base: base[:3], query: query, dims: 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := []float32{-31, -32, -33}
+			before := append([]float32(nil), dst...)
+			status := DotFloat32IndexedPrevalidated(dst, tc.base, tc.query, []uint32{0, 1}, tc.dims)
+			if !status.Invalid || status.Rows != 0 || status.Optimized || status.Fallback {
+				t.Fatalf("status=%+v want invalid without writes", status)
+			}
+			assertFloat32SliceExact(t, dst, before)
+		})
+	}
+}
+
 func TestDotFloat32StridedParity(t *testing.T) {
 	t.Parallel()
 
@@ -273,6 +339,36 @@ func BenchmarkDotFloat32IndexedWrapper(b *testing.B) {
 			dst := make([]float32, tc.rows)
 			benchmarkDotFloat32BatchCall(b, tc.dims, tc.rows, func() DotFloat32BatchStatus {
 				return DotFloat32Indexed(dst, base, query, rowIDs, tc.dims)
+			}, dst)
+		})
+	}
+}
+
+func BenchmarkDotFloat32IndexedPrevalidatedWrapper(b *testing.B) {
+	cases := []struct {
+		name      string
+		dims      int
+		rows      int
+		scattered bool
+	}{
+		{name: "dims16_rows4_contiguous_fallback", dims: 16, rows: 4},
+		{name: "dims64_rows4_contiguous", dims: 64, rows: 4},
+		{name: "dims64_rows13_scattered", dims: 64, rows: 13, scattered: true},
+		{name: "dims128_rows32_scattered", dims: 128, rows: 32, scattered: true},
+		{name: "dims768_rows13_scattered", dims: 768, rows: 13, scattered: true},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			baseRows := tc.rows
+			if tc.scattered {
+				baseRows = tc.rows*4 + 17
+			}
+			base := dotBatchTestBase(baseRows, tc.dims, tc.dims)
+			query := dotBatchTestVector(tc.dims, 39)
+			rowIDs := dotBatchTestRowIDs(tc.rows, baseRows, tc.scattered)
+			dst := make([]float32, tc.rows)
+			benchmarkDotFloat32BatchCall(b, tc.dims, tc.rows, func() DotFloat32BatchStatus {
+				return DotFloat32IndexedPrevalidated(dst, base, query, rowIDs, tc.dims)
 			}, dst)
 		})
 	}
