@@ -34,10 +34,11 @@ type OpenOptions struct {
 	// durability through TreeDB command WAL.
 	Profile treedb.Profile
 
-	// Options, when non-nil, supplies the exact TreeDB options to use. Open copies
-	// the struct, forces Dir to the Open path when path is non-empty, applies
-	// ReadOnly/KeepRecent/MemtableMode overrides below, and still requires
-	// CommandWAL for writable opens.
+	// Options, when non-nil, supplies TreeDB options to use. Open copies the
+	// struct, forces Dir to the Open path when path is non-empty, applies
+	// ReadOnly/KeepRecent/MemtableMode overrides below, applies geth-safe command
+	// WAL defaults for zero-valued knobs, and still requires CommandWAL for
+	// writable opens.
 	Options *treedb.Options
 
 	// ReadOnly opens the TreeDB directory read-only.
