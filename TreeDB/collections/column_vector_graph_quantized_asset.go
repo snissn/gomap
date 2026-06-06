@@ -54,6 +54,7 @@ type columnVectorGraphQuantizedAssetLoadStatus struct {
 	Definition    QuantizedVectorIndexDefinition
 	Asset         columnVectorIndexStateAssetSnapshot
 	Prepared      *quantizedasset.Prepared
+	RabitQPlan    *rabitq.Plan
 	Err           error
 	Health        columnVectorGraphQuantizedAssetHealth
 	OpenNanos     uint64
@@ -570,6 +571,17 @@ func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, c
 			status.Health = columnVectorGraphQuantizedAssetHealthFromError(err)
 		} else {
 			status.Prepared = prepared
+			if q.Codec == rabitq.CodecName {
+				plan, planErr := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
+				if planErr != nil {
+					status.Prepared = nil
+					status.Err = fmt.Errorf("%w: quantized asset %q rabitq_1bit plan: %v", errColumnVectorGraphQuantizedAssetInvalid, q.Name, planErr)
+					status.Health = columnVectorGraphQuantizedAssetHealthInvalid
+					out[q.Name] = status
+					continue
+				}
+				status.RabitQPlan = plan
+			}
 			status.Health = columnVectorGraphQuantizedAssetHealthHeapCopy
 			if asset.AssetBytes > 0 {
 				status.HeapCopyBytes = uint64(asset.AssetBytes)
