@@ -80,7 +80,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	if degree <= math.MaxInt/2 {
 		degree *= 2
 	}
-	if err := scratch.prepare(rowCount, v.Header.VectorStride, degree, topK, efSearch, degree, 0); err != nil {
+	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 search scratch prepare: %w", err)
 	}
 	queryInvNorm, err := columnVectorGraphInvNorm(query)
@@ -227,8 +227,6 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayer(normalizedQuery 
 		if len(adjacency) == 0 {
 			continue
 		}
-		scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(adjacency))
-		tile := scratch.scoreTileRowIDs[:0]
 		for i, neighbor := range adjacency {
 			if countLoopEdges && loopEdgeVisits != nil {
 				(*loopEdgeVisits)++
@@ -236,17 +234,13 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayer(normalizedQuery 
 			if uint64(neighbor) >= uint64(v.Header.Rows) {
 				return 0, fmt.Errorf("collections: hnsw_search_pack_v1 ordinal=%d layer=%d adjacency[%d]=%d outside row_count=%d: %w", best, layer, i, neighbor, v.Header.Rows, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
-			tile = append(tile, neighbor)
 		}
-		if len(tile) == 0 {
-			continue
-		}
-		scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(tile))
-		scores, err := v.scoreRowIDs(normalizedQuery, tile, scratch.scoreTileScores, scoreBatchMode, scratch, stats)
+		scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(adjacency))
+		scores, err := v.scoreRowIDs(normalizedQuery, adjacency, scratch.scoreTileScores, scoreBatchMode, scratch, stats)
 		if err != nil {
 			return 0, err
 		}
-		for i, neighborRowID := range tile {
+		for i, neighborRowID := range adjacency {
 			neighborOrdinal := int(neighborRowID)
 			score := scores[i]
 			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
@@ -277,6 +271,25 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisited(normalize
 func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(normalizedQuery []float32, rowIDs []uint32, topK int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64) error {
 	if len(rowIDs) == 0 {
 		return nil
+	}
+	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride {
+		scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
+		dots := scratch.scoreTileDots[:len(rowIDs)]
+		status := vectorops.DotFloat32Indexed(dots, v.NormalizedVectors, normalizedQuery[:v.Header.VectorStride], rowIDs, v.Header.VectorStride)
+		if !status.Invalid && status.Rows == len(rowIDs) {
+			recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), status.Optimized, status.Fallback)
+			v.recordScoreStats(stats, len(rowIDs))
+			if visitedCandidates != nil {
+				*visitedCandidates += uint64(len(rowIDs))
+			}
+			for i, rowID := range rowIDs {
+				candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: float64(dots[i])}
+				if scratch.insertTop(topK, candidate) {
+					scratch.pushFrontier(candidate)
+				}
+			}
+			return nil
+		}
 	}
 	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(rowIDs))
 	scores, err := v.scoreRowIDs(normalizedQuery, rowIDs, scratch.scoreTileScores, scoreBatchMode, scratch, stats)
