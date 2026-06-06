@@ -447,8 +447,13 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		}
 	}()
 
+	preparedReady := collectionVectorIndexPreparedQuantizedReaderReady(reader)
 	routeStats := vectorIndexSearchRouteStatsForColumnGraphQuantized(vectorIndexSearchRouteStatsForColumnGraphReader(reader))
-	if reader.preparedSearch == nil || !reader.preparedSearch.ready() || routeStats.SearchRouteColumnGraphPrepared != 1 || routeStats.SearchRouteColumnGraphFallback != 0 {
+	if preparedReady && reader.RowCount() == 0 {
+		routeStats.SearchRouteColumnGraphPrepared = 1
+		routeStats.SearchRouteColumnGraphFallback = 0
+	}
+	if !preparedReady || routeStats.SearchRouteColumnGraphPrepared != 1 || routeStats.SearchRouteColumnGraphFallback != 0 {
 		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(reader, routeStats, opts.QuantizedIndexName, queryMode)
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires healthy prepared column_graph state; rebuild the vector index before using the collection buffered quantized route", ErrVectorIndexSearchUnavailable, def.Name)
 	}
@@ -487,6 +492,19 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		searcher:           searcher,
 		routeStats:         routeStats,
 	}, response, nil
+}
+
+func collectionVectorIndexPreparedQuantizedReaderReady(reader *columnVectorGraphPhysicalRowReader) bool {
+	if reader == nil || reader.def.Dimensions <= 0 {
+		return false
+	}
+	if reader.RowCount() == 0 {
+		return true
+	}
+	if reader.preparedSearch == nil {
+		return false
+	}
+	return reader.preparedSearch.ready()
 }
 
 func collectionVectorIndexPreparedSearchSnapshotCacheKey(base string, commitSeq, systemRoot uint64) string {

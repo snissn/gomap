@@ -746,6 +746,44 @@ func TestSearchVectorIndexWithBufferQuantizedOnlyAndRerank2415(t *testing.T) {
 	}
 }
 
+func TestSearchVectorIndexWithBufferQuantizedEmptyCollection2415(t *testing.T) {
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, nil)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	qName := def.QuantizedIndexes[0].Name
+	query := []float32{1, 0, 0}
+	var buffer VectorIndexSearchBuffer
+	for _, tc := range []struct {
+		name             string
+		mode             VectorIndexQueryMode
+		route            columnVectorGraphNativeSearchQueryMode
+		rerankCandidates int
+	}{
+		{name: "quantized_only", mode: VectorIndexQueryModeQuantizedOnly, route: columnVectorGraphNativeSearchQueryModeQuantizedOnly},
+		{name: "quantized_rerank", mode: VectorIndexQueryModeQuantizedRerank, route: columnVectorGraphNativeSearchQueryModeQuantizedRerank, rerankCandidates: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: tc.mode, QuantizedIndexName: qName, QuantizedRerankCandidates: tc.rerankCandidates, TopK: 3, EfSearch: 8, MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+			got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+			if err != nil {
+				t.Fatalf("SearchVectorIndexWithBuffer empty %s: %v", tc.name, err)
+			}
+			if len(got.Results) != 0 || len(buffer.results) != 0 || len(buffer.idBytes) != 0 {
+				t.Fatalf("empty %s results=%d bufferResults=%d idBytes=%d want empty buffered response", tc.name, len(got.Results), len(buffer.results), len(buffer.idBytes))
+			}
+			assertCollectionBufferedQuantizedRouteStats2415(t, got.Stats, tc.route, opts, def.Dimensions)
+			badOpts := opts
+			badOpts.Query = []float32{1, 0}
+			bad, err := col.SearchVectorIndexWithBuffer(badOpts, &buffer)
+			if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
+				t.Fatalf("SearchVectorIndexWithBuffer empty bad dims response=%+v err=%v want dimension mismatch", bad, err)
+			}
+		})
+	}
+}
+
 func TestSearchVectorIndexWithBufferQuantizedAssetUnavailableFailClosed2415(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
