@@ -549,7 +549,12 @@ func collectionVectorIndexPreparedQuantizedSearchCacheKey(collection string, nam
 	if !ok {
 		return "", fmt.Errorf("%w: %w: vector index %q quantized index %q has no quantized score-plane asset", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetMissing, def.Name, quantizedIndexName)
 	}
-	return fmt.Sprintf("collection_buffered_quantized_v1|family=quantized|q=%s|codec=%s|version=%d|max_decoded_blocks=%d|asset_id=%s|asset_schema=%d|asset_bytes=%d|asset_ref=%+v|%s", qdef.Name, qdef.Codec, qdef.Version, maxDecodedBlocks, asset.AssetID, asset.SourceSchemaHash, asset.AssetBytes, columnVectorGraphQuantizedAssetRefIdentity(asset.Ref), base), nil
+	refIdentity := columnVectorGraphQuantizedAssetRefIdentity(asset.Ref)
+	schema, err := columnVectorGraphQuantizedAssetSchema(def, graph, qdef, asset, refIdentity)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w: vector index %q quantized index %q cache key schema identity: %v", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, def.Name, quantizedIndexName, err)
+	}
+	return fmt.Sprintf("collection_buffered_quantized_v1|family=quantized|q=%s|codec=%s|version=%d|codec_config_hash=%d|codec_config=%x|code_dimensions=%d|code_width_bits=%d|max_decoded_blocks=%d|asset_id=%s|asset_schema=%d|asset_bytes=%d|asset_ref=%+v|%s", qdef.Name, qdef.Codec, qdef.Version, schema.Codec.ConfigHash, schema.Codec.Config, schema.CodeDimensions, schema.CodeWidthBits, maxDecodedBlocks, asset.AssetID, asset.SourceSchemaHash, asset.AssetBytes, refIdentity, base), nil
 }
 
 func (p *collectionVectorIndexPreparedSearch) readyForCurrentSearch() bool {

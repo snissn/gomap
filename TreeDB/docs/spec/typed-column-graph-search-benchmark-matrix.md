@@ -25,24 +25,25 @@ For smoke validation, `-benchtime=1x -count=1` is acceptable, but publish only
 full runs for performance claims. Use the same hardware, fixture, Go version,
 `GOMAXPROCS`, and command when comparing commits.
 
-The #1926 scalar quantized score-plane closeout has its own mode-comparison
-harness because it compares exact/default scoring, `quantized_only`, and
-`quantized_rerank` within the current `column_graph` route rather than comparing
-legacy/current source paths:
+The #1926/#2454 quantized score-plane closeout has its own mode-comparison
+harness because it compares exact/default scoring, scalar_u8, and pure-Go
+`rabitq_1bit` `quantized_only` / `quantized_rerank` rows within the current
+`column_graph` route rather than comparing legacy/current source paths:
 
 ```sh
 GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^BenchmarkColumnGraphScalarU8Quantized(ScorePlanes|RebuildStorage)1926$' \
-  -benchmem -benchtime=500ms -count=3
+  -bench '^(BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926|BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450)$' \
+  -benchmem -benchtime=100x -count=3
 ```
 
 Those rows report `ns/op`, `ops/sec`, `B/op`, `allocs/op`, `recall_at_k_pct`,
 `candidates/search`, `quantized_rerank_candidates/search`,
 `quantized_rerank_exact_score_calls/search`, `quantized_code_B/search`,
 `vector_B/search`, `norm_B/search`, `quantized_asset_B/vector`, and rebuild
-storage metrics. They are scalar score-plane evidence and must not be relabeled
-as batch/control-flow/windowing speedup evidence.
+storage metrics. They are quantized score-plane evidence and must not be relabeled
+as batch/control-flow/windowing speedup evidence; #2454 also records that
+RaBitQ go-highway acceleration did not land.
 
 ## Stable row labels
 

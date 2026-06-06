@@ -385,6 +385,56 @@ func TestReconcileLeafGenerationManifestWithDir_PreservesDeletedGenerationFilePr
 	}
 }
 
+func TestReconcileLeafGenerationManifestWithDir_DropsMissingCurrentWritableFile(t *testing.T) {
+	leafDir := t.TempDir()
+	_, fileID18 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 18)
+	_, fileID19 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 19)
+	_, fileID20 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 20)
+	fileID17, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 17)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	raw17 := page.ValueLogSegmentID(fileID17)
+	raw18 := page.ValueLogSegmentID(fileID18)
+	raw19 := page.ValueLogSegmentID(fileID19)
+	raw20 := page.ValueLogSegmentID(fileID20)
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		CurrentGenerationID: 3,
+		NextGenerationID:    4,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateSealed, FileIDs: []uint32{raw18}, CreatedCommitSeq: 10, SealedCommitSeq: 20, PublishedCommitSeq: 20},
+			{GenerationID: 2, State: leafGenerationStateSealed, FileIDs: []uint32{raw19}, CreatedCommitSeq: 21, SealedCommitSeq: 30, PublishedCommitSeq: 30},
+			{GenerationID: 3, State: leafGenerationStateWritable, FileIDs: []uint32{raw17}, CreatedCommitSeq: 31, PublishedCommitSeq: 31},
+		},
+	}
+
+	reconciled, changed, err := reconcileLeafGenerationManifestWithDir(leafDir, manifest, 99)
+	if err != nil {
+		t.Fatalf("reconcileLeafGenerationManifestWithDir: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected reconcile to drop missing current file and recover writable tail")
+	}
+	view := newLeafGenerationView(reconciled)
+	if _, ok := view.FileToGeneration[raw17]; ok {
+		t.Fatalf("missing raw file %d still present in generation view", raw17)
+	}
+	if got, want := view.FileToGeneration[raw18], uint64(1); got != want {
+		t.Fatalf("raw18 generation=%d, want %d", got, want)
+	}
+	if got, want := view.FileToGeneration[raw19], uint64(2); got != want {
+		t.Fatalf("raw19 generation=%d, want %d", got, want)
+	}
+	if got, want := view.FileToGeneration[raw20], uint64(3); got != want {
+		t.Fatalf("raw20 generation=%d, want %d", got, want)
+	}
+	current := reconciled.Generations[reconciled.currentGenerationIndex()]
+	if got, want := current.FileIDs, []uint32{raw20}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("current FileIDs=%v, want %v", got, want)
+	}
+}
+
 func TestLeafGenerationManifest_AppendRecoveredSealedGenerationFileID_IgnoresDeletedGenerationDuplicates(t *testing.T) {
 	manifest := &leafGenerationManifest{
 		Version:             leafGenerationManifestVersion,
@@ -763,6 +813,56 @@ func TestStagedLeafGenerationManifestWithPending_ReflectsQueuedWritableFiles(t *
 	liveCurrent := db.leafGenerationManifest.Generations[db.leafGenerationManifest.currentGenerationIndex()]
 	if got, want := liveCurrent.FileIDs, []uint32{page.ValueLogSegmentID(fileID1)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("live current FileIDs=%v, want %v", got, want)
+	}
+}
+
+func TestStagedLeafGenerationManifestWithPending_IgnoresStaleMissingOlderFile(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	_, fileID18 := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 18)
+	_, fileID19 := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 19)
+	if err := db.noteLeafGenerationWritableFileID(fileID18, 55); err != nil {
+		t.Fatalf("noteLeafGenerationWritableFileID first: %v", err)
+	}
+	if err := db.noteLeafGenerationWritableFileID(fileID19, 89); err != nil {
+		t.Fatalf("noteLeafGenerationWritableFileID second: %v", err)
+	}
+
+	fileID17, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 17)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	raw17 := page.ValueLogSegmentID(fileID17)
+	raw19 := page.ValueLogSegmentID(fileID19)
+	db.queueLeafGenerationWritableFileID(fileID17)
+
+	staged, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, 144)
+	if err != nil {
+		t.Fatalf("stagedLeafGenerationManifestWithPending: %v", err)
+	}
+	if changed {
+		t.Fatalf("expected stale missing file %d to be ignored", raw17)
+	}
+	if staged != db.leafGenerationManifest {
+		t.Fatal("expected unchanged staging to return the live manifest")
+	}
+	if err := db.noteLeafGenerationPendingFileIDs(0, 144); err != nil {
+		t.Fatalf("noteLeafGenerationPendingFileIDs: %v", err)
+	}
+	if len(db.leafGenerationPendingFileIDs) != 0 {
+		t.Fatalf("pending file IDs after stale drain=%v, want empty", db.leafGenerationPendingFileIDs)
+	}
+	current := db.leafGenerationManifest.Generations[db.leafGenerationManifest.currentGenerationIndex()]
+	if got, want := current.FileIDs, []uint32{raw19}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("current FileIDs=%v, want %v", got, want)
+	}
+	if view := db.currentLeafGenerationView(); view.FileToGeneration[raw17] != 0 {
+		t.Fatalf("stale raw file %d became visible in current view", raw17)
 	}
 }
 

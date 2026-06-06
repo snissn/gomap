@@ -42,7 +42,7 @@ type columnVectorGraphSearchPlan struct {
 	singleOrdinalRange    bool
 	scoreSource           columnVectorGraphSearchSource
 	preparedSearch        *columnVectorGraphPreparedSearchView
-	quantizedScorer       columnVectorGraphScalarU8QuantizedScorer
+	quantizedScorer       columnVectorGraphQuantizedScorer
 	quantizedScorerActive bool
 	scoreBatchMode        columnVectorGraphScoreBatchMode
 	hits                  uint64
@@ -83,7 +83,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlanInternal(reader 
 	}
 	plan.physicalReader = physicalReader
 	plan.preparedSearch = nil
-	plan.quantizedScorer = columnVectorGraphScalarU8QuantizedScorer{}
+	plan.quantizedScorer = columnVectorGraphQuantizedScorer{}
 	plan.quantizedScorerActive = false
 	plan.hits = 0
 	plan.misses = 0

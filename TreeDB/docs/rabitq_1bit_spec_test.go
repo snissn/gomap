@@ -30,8 +30,9 @@ func TestDocs_RaBitQ1BitV1Spec2449(t *testing.T) {
 		"score = weighted_sign_dot / (quantized_dot_product_inv * CodeDimensions)",
 		"`Plan.Encode` emits `EncodedVector{Code, CodeCount, QuantizedDotProductInv}`",
 		"Durable TreeDB asset shape (#2450)",
-		"No collection/search scorer integration and no public route/counter changes",
-		"must not be cited as production RaBitQ search speed",
+		"Search/query modes (#2451/#2452)",
+		"No go-highway accelerated RaBitQ backend landed",
+		"Production TreeDB search evidence must cite the #2451 lower-level buffered rows",
 	} {
 		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("rabitq spec missing %q", want)
@@ -44,12 +45,14 @@ func TestDocs_RaBitQ1BitV1LinkedOwners2449(t *testing.T) {
 	checks := map[string][]string{
 		filepath.Join(treeRoot, "docs", "spec", "README.md"): {
 			"rabitq-1bit-v1.md",
+			"rabitq-closeout-2454.md",
 			"`rabitq_1bit` v1 codec identity",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "quantized-vector-index.md"): {
 			"rabitq-1bit-v1.md",
-			"durable `rabitq_1bit` v1 asset",
-			"SIMD/popcount acceleration",
+			"rabitq-closeout-2454.md",
+			"`rabitq_1bit` v1 score plane",
+			"SIMD/popcount integration",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "quantized-asset-schema.md"): {
 			"rabitq-1bit-v1.md",
@@ -60,6 +63,11 @@ func TestDocs_RaBitQ1BitV1LinkedOwners2449(t *testing.T) {
 			"`rabitq_1bit` v1 score planes",
 			"`quantized/<name>/packed_codes`",
 			"`packed_bit_vector` over `raw_packed_bit_vector`",
+		},
+		filepath.Join(treeRoot, "docs", "spec", "rabitq-closeout-2454.md"): {
+			"RaBitQ pure-Go",
+			"go-highway acceleration",
+			"BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452",
 		},
 	}
 	for path, wants := range checks {

@@ -1198,6 +1198,42 @@ func TestCollectionSearchVectorIndexWithBufferQuantizedBenchmarkRows2415(t *test
 	}
 }
 
+func TestCollectionSearchVectorIndexWithBufferRabitQBenchmarkRows2452(t *testing.T) {
+	cases := columnGraphRabitQQuantizedCollectionWithBufferBenchCases2452()
+	if len(cases) != 4 {
+		t.Fatalf("benchmark cases=%d want four collection c=1/c=8 rabitq SearchVectorIndexWithBuffer rows", len(cases))
+	}
+	seen := make(map[string]columnGraphScalarU8QuantizedCollectionWithBufferBenchCase2415, len(cases))
+	for _, tc := range cases {
+		if tc.mode != VectorIndexQueryModeQuantizedOnly && tc.mode != VectorIndexQueryModeQuantizedRerank {
+			t.Fatalf("case %+v is not an explicit collection buffered rabitq quantized row", tc)
+		}
+		if tc.concurrency != 1 && tc.concurrency != 8 {
+			t.Fatalf("case %+v has unsupported concurrency; want c=1 or c=8", tc)
+		}
+		if _, ok := seen[tc.name]; ok {
+			t.Fatalf("duplicate benchmark case name %q", tc.name)
+		}
+		seen[tc.name] = tc
+	}
+	for _, name := range []string{
+		"route=quantized_only/c=1",
+		"route=quantized_only/c=8",
+		"route=quantized_rerank/candidates=32/c=1",
+		"route=quantized_rerank/candidates=32/c=8",
+	} {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("missing collection rabitq benchmark case %q in %+v", name, cases)
+		}
+	}
+	if seen["route=quantized_only/c=1"].rerankCandidates != 0 || seen["route=quantized_only/c=8"].rerankCandidates != 0 {
+		t.Fatalf("quantized_only collection rabitq benchmark rows must not configure rerank candidates: %+v", cases)
+	}
+	if seen["route=quantized_rerank/candidates=32/c=1"].rerankCandidates != 32 || seen["route=quantized_rerank/candidates=32/c=8"].rerankCandidates != 32 {
+		t.Fatalf("quantized_rerank collection rabitq benchmark rows must configure candidates=32: %+v", cases)
+	}
+}
+
 func TestNativeRuntimeVectorIndexRejectsQuantizedQueryMode1926(t *testing.T) {
 	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding_idx", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
 	if err != nil {

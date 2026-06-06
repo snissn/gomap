@@ -111,8 +111,14 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     modes, exact rerank behavior, benchmark/storage evidence, and future-work
     boundaries.
 - `TreeDB/docs/spec/rabitq-1bit-v1.md`
-  - issue #2449 `rabitq_1bit` v1 codec identity, packed-bit storage shape,
-    deterministic reference rotation, query/scoring oracle APIs, and non-goals.
+  - issue #2449/#2451/#2452 `rabitq_1bit` v1 codec identity, packed-bit
+    storage shape, deterministic reference rotation, pure-Go query/scoring APIs,
+    search-mode guardrails, and non-goals.
+- `TreeDB/docs/spec/rabitq-closeout-2454.md`
+  - issue #2454 RaBitQ closeout for user-visible query modes, asset/storage
+    recap, exact/scalar_u8/RaBitQ benchmark workflow, representative recall /
+    storage / performance rows, profile artifact requirements, and #2453
+    no-acceleration caveat.
 - `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
   - issue #2036 role-specific prepared runtime-view and admission policy for
     current-format typed-column graph search.

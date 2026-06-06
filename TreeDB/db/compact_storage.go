@@ -220,6 +220,16 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	stats.Before = before
 
+	if !opts.DryRun && db.indexOuterLeavesInValueLog {
+		commitSeq := uint64(1)
+		if state := db.State(); state != nil && state.CommitSeq != 0 {
+			commitSeq = state.CommitSeq
+		}
+		if _, err := db.reconcileLeafGenerationManifestWithDirInPlace(commitSeq); err != nil {
+			return stats, err
+		}
+	}
+
 	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats, !maintenanceLocked, nil)
 	if err != nil {
 		return stats, err

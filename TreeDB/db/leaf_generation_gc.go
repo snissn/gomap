@@ -67,6 +67,13 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	if err := db.valueLogManager.Refresh(); err != nil {
 		return stats, err
 	}
+	commitSeq := uint64(1)
+	if state := db.State(); state != nil && state.CommitSeq != 0 {
+		commitSeq = state.CommitSeq
+	}
+	if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {
+		return stats, err
+	}
 
 	manifest := db.leafGenerationManifest.clone()
 	if manifest == nil {
