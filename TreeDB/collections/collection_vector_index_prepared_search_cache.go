@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rabitq"
 )
 
 type collectionVectorIndexPreparedSearchFamily uint8
@@ -466,6 +467,10 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 	if err := reader.validateQuantizedNativeSearchOptions(queryMode, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, QuantizedIndexName: opts.QuantizedIndexName, QuantizedRerankCandidates: opts.QuantizedRerankCandidates}); err != nil {
 		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(reader, routeStats, opts.QuantizedIndexName, queryMode)
 		return nil, response, err
+	}
+	if qdef, ok := findQuantizedVectorIndex(def, opts.QuantizedIndexName); ok && qdef.Codec == rabitq.CodecName {
+		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(reader, routeStats, opts.QuantizedIndexName, queryMode)
+		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer collection buffered quantized route does not yet support rabitq_1bit; use VectorIndexSearcher.SearchWithBuffer for lower-level rabitq_1bit search", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	key, err := collectionVectorIndexPreparedQuantizedSearchCacheKey(readerCatalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState, opts.QuantizedIndexName, opts.MaxDecodedBlocks)
 	if err != nil {

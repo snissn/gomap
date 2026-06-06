@@ -1,13 +1,84 @@
 package collections
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
+	"github.com/snissn/gomap/TreeDB/internal/rabitq"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
 
 const columnVectorGraphScalarU8CodeScale = 255.0 * 255.0
+
+type columnVectorGraphQuantizedScorerKind uint8
+
+const (
+	columnVectorGraphQuantizedScorerKindNone columnVectorGraphQuantizedScorerKind = iota
+	columnVectorGraphQuantizedScorerKindScalarU8
+	columnVectorGraphQuantizedScorerKindRabitQ1Bit
+)
+
+type columnVectorGraphQuantizedScorer struct {
+	kind     columnVectorGraphQuantizedScorerKind
+	scalarU8 columnVectorGraphScalarU8QuantizedScorer
+	rabitq   columnVectorGraphRabitQQuantizedScorer
+}
+
+func (r *columnVectorGraphPhysicalRowReader) prepareQuantizedScorer(mode columnVectorGraphNativeSearchQueryMode, indexName string, query []float32, queryInvNorm float32, scratch *columnVectorGraphNativeSearchScratch) (columnVectorGraphQuantizedScorer, error) {
+	if r == nil {
+		return columnVectorGraphQuantizedScorer{}, errNilColumnVectorGraphPhysicalRowReader
+	}
+	qdef, ok := findQuantizedVectorIndex(r.def, indexName)
+	if !ok {
+		return columnVectorGraphQuantizedScorer{}, fmt.Errorf("%w: column_graph %q quantized index %q is not declared", ErrVectorIndexSearchUnavailable, r.def.Name, indexName)
+	}
+	switch qdef.Codec {
+	case QuantizedVectorCodecScalarU8:
+		scorer, err := r.prepareScalarU8QuantizedScorer(mode, indexName, query, queryInvNorm, scratch)
+		if err != nil {
+			return columnVectorGraphQuantizedScorer{}, err
+		}
+		return columnVectorGraphQuantizedScorer{kind: columnVectorGraphQuantizedScorerKindScalarU8, scalarU8: scorer}, nil
+	case rabitq.CodecName:
+		scorer, err := r.prepareRabitQQuantizedScorer(mode, indexName, query, scratch)
+		if err != nil {
+			return columnVectorGraphQuantizedScorer{}, err
+		}
+		return columnVectorGraphQuantizedScorer{kind: columnVectorGraphQuantizedScorerKindRabitQ1Bit, rabitq: scorer}, nil
+	default:
+		return columnVectorGraphQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q codec/version=(%q,%d) is unsupported", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, qdef.Codec, qdef.Version)
+	}
+}
+
+func (s *columnVectorGraphQuantizedScorer) scoreOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if s == nil {
+		return 0, fmt.Errorf("%w: column_graph quantized scorer is unavailable", ErrVectorIndexSearchUnavailable)
+	}
+	switch s.kind {
+	case columnVectorGraphQuantizedScorerKindScalarU8:
+		return s.scalarU8.scoreOrdinal(ordinal, scratch, stats)
+	case columnVectorGraphQuantizedScorerKindRabitQ1Bit:
+		return s.rabitq.scoreOrdinal(ordinal, scratch, stats)
+	default:
+		return 0, fmt.Errorf("%w: column_graph quantized scorer is unavailable", ErrVectorIndexSearchUnavailable)
+	}
+}
+
+func (s *columnVectorGraphQuantizedScorer) scoreOrdinals(ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	if s == nil {
+		return dst[:0], fmt.Errorf("%w: column_graph quantized scorer is unavailable", ErrVectorIndexSearchUnavailable)
+	}
+	switch s.kind {
+	case columnVectorGraphQuantizedScorerKindScalarU8:
+		return s.scalarU8.scoreOrdinals(ordinals, dst, scratch, stats)
+	case columnVectorGraphQuantizedScorerKindRabitQ1Bit:
+		return s.rabitq.scoreOrdinals(ordinals, dst, scratch, stats)
+	default:
+		return dst[:0], fmt.Errorf("%w: column_graph quantized scorer is unavailable", ErrVectorIndexSearchUnavailable)
+	}
+}
 
 type columnVectorGraphScalarU8QuantizedScorer struct {
 	indexName   string
@@ -164,6 +235,211 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) recordScoreStats(stats *colum
 	stats.CandidateFetches += count64
 	stats.QuantizedScoreCalls += count64
 	stats.QuantizedCodeBytesRead += count64 * uint64(s.dims)
+}
+
+type columnVectorGraphRabitQQuantizedScorer struct {
+	indexName                     string
+	plan                          *rabitq.Plan
+	query                         rabitq.Query
+	codeRows                      quantizedasset.CodeRowView
+	codePayload                   []byte
+	codeCountPayload              []byte
+	quantizedDotProductInvPayload []byte
+	bytesPerCode                  int
+	codeDimensions                int
+}
+
+func (r *columnVectorGraphPhysicalRowReader) prepareRabitQQuantizedScorer(mode columnVectorGraphNativeSearchQueryMode, indexName string, query []float32, scratch *columnVectorGraphNativeSearchScratch) (columnVectorGraphRabitQQuantizedScorer, error) {
+	if r == nil {
+		return columnVectorGraphRabitQQuantizedScorer{}, errNilColumnVectorGraphPhysicalRowReader
+	}
+	status, ok := r.quantizedAssetStatus[indexName]
+	if !ok {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q has no prepared quantized score-plane asset", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetMissing, r.def.Name, mode.String(), indexName)
+	}
+	if status.Err != nil {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q score-plane asset unavailable: %w", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, status.Err)
+	}
+	if status.Prepared == nil {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q has no prepared quantized score-plane asset", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetMissing, r.def.Name, mode.String(), indexName)
+	}
+	qdef, ok := findQuantizedVectorIndex(r.def, indexName)
+	if !ok {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: column_graph %q quantized index %q is not declared", ErrVectorIndexSearchUnavailable, r.def.Name, indexName)
+	}
+	if status.Definition != qdef {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q prepared definition mismatch", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetStale, r.def.Name, mode.String(), indexName)
+	}
+	if qdef.Codec != rabitq.CodecName || qdef.Version != rabitq.CodecVersion {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q codec/version=(%q,%d) is not rabitq_1bit v%d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, qdef.Codec, qdef.Version, rabitq.CodecVersion)
+	}
+	if r.def.Metric != VectorMetricCosine {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q metric %q is unsupported for rabitq_1bit scorer", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, r.def.Metric)
+	}
+	if len(query) != r.def.Dimensions {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("collections: column_graph %q query dims=%d want %d: %w", r.def.Name, len(query), r.def.Dimensions, errColumnVectorGraphNativeSearchQueryDimensionMismatch)
+	}
+	if scratch == nil {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("collections: column_graph %q: %w", r.def.Name, errColumnVectorGraphNativeSearchScratchRequired)
+	}
+	prepared := status.Prepared
+	if prepared.Rows() != r.RowCount() {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q prepared rows=%d want graph rows=%d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetStale, r.def.Name, mode.String(), indexName, prepared.Rows(), r.RowCount())
+	}
+	plan := status.RabitQPlan
+	if plan == nil || plan.VectorDimensions() != r.def.Dimensions {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q rabitq_1bit plan unavailable", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName)
+	}
+	codeRows, ok := prepared.CodeRowView(quantizedasset.RolePackedCodes)
+	if !ok {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q packed code row view unavailable", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName)
+	}
+	if codeRows.Rows() != r.RowCount() {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q packed code row view rows=%d want graph rows=%d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetStale, r.def.Name, mode.String(), indexName, codeRows.Rows(), r.RowCount())
+	}
+	if bytesPerRow := codeRows.BytesPerRow(); bytesPerRow != plan.BytesPerCode() {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q packed code bytes_per_row=%d want %d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, bytesPerRow, plan.BytesPerCode())
+	}
+	if elements := codeRows.ElementsPerRow(); elements != plan.CodeDimensions() {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q packed code elements_per_row=%d want %d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, elements, plan.CodeDimensions())
+	}
+	codePayload, ok := codeRows.PayloadBytes()
+	if !ok || len(codePayload) != r.RowCount()*plan.BytesPerCode() {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q packed code payload bytes=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, len(codePayload), ok, r.RowCount()*plan.BytesPerCode())
+	}
+	codeCountPayload, ok := prepared.Uint32Payload(quantizedasset.RoleCodeCount)
+	if !ok || len(codeCountPayload) != r.RowCount()*4 {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q code_count payload bytes=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, len(codeCountPayload), ok, r.RowCount()*4)
+	}
+	qdpInvPayload, ok := prepared.Float32Payload(quantizedasset.RoleQuantizedDotProductInv)
+	if !ok || len(qdpInvPayload) != r.RowCount()*4 {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q quantized_dot_product_inv payload bytes=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, len(qdpInvPayload), ok, r.RowCount()*4)
+	}
+	encodedQuery, err := plan.EncodeQuery(query, &scratch.quantizedRabitQWorkspace)
+	if err != nil {
+		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q rabitq_1bit query encode: %v", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, err)
+	}
+	return columnVectorGraphRabitQQuantizedScorer{indexName: indexName, plan: plan, query: encodedQuery, codeRows: codeRows, codePayload: codePayload, codeCountPayload: codeCountPayload, quantizedDotProductInvPayload: qdpInvPayload, bytesPerCode: plan.BytesPerCode(), codeDimensions: plan.CodeDimensions()}, nil
+}
+
+func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if err := s.validate(); err != nil {
+		return 0, err
+	}
+	if scratch == nil {
+		return 0, fmt.Errorf("collections: column_graph quantized rabitq_1bit scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
+	}
+	score, err := s.scoreOrdinalUnchecked(ordinal)
+	if err != nil {
+		return 0, err
+	}
+	if stats != nil {
+		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
+		s.recordScoreStats(stats, 1)
+	}
+	return score, nil
+}
+
+func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinals(ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	if cap(dst) < len(ordinals) {
+		dst = make([]float64, len(ordinals))
+	} else {
+		dst = dst[:len(ordinals)]
+	}
+	if len(ordinals) == 0 {
+		return dst, nil
+	}
+	if err := s.validate(); err != nil {
+		return dst[:0], err
+	}
+	if scratch == nil {
+		return dst[:0], fmt.Errorf("collections: column_graph quantized rabitq_1bit scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
+	}
+	for i, ordinal := range ordinals {
+		score, err := s.scoreOrdinalUnchecked(ordinal)
+		if err != nil {
+			return dst[:i], err
+		}
+		dst[i] = score
+	}
+	if stats != nil {
+		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
+		s.recordScoreStats(stats, len(ordinals))
+	}
+	return dst, nil
+}
+
+func (s *columnVectorGraphRabitQQuantizedScorer) validate() error {
+	if s == nil || s.plan == nil || !s.codeRows.Valid() || s.bytesPerCode <= 0 || s.codeDimensions <= 0 || len(s.codePayload) != s.codeRows.Rows()*s.bytesPerCode || len(s.codeCountPayload) != s.codeRows.Rows()*4 || len(s.quantizedDotProductInvPayload) != s.codeRows.Rows()*4 || !rabitqQueryShapeValidForPlan(s.query, s.plan) {
+		return fmt.Errorf("%w: column_graph quantized rabitq_1bit scorer is unavailable", ErrVectorIndexSearchUnavailable)
+	}
+	return nil
+}
+
+func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinalUnchecked(ordinal int) (float64, error) {
+	rows := s.codeRows.Rows()
+	if ordinal < 0 || ordinal >= rows {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit code row ordinal=%d unavailable want rows=%d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, rows)
+	}
+	start := ordinal * s.bytesPerCode
+	end := start + s.bytesPerCode
+	if start < 0 || end < start || end > len(s.codePayload) {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit code row ordinal=%d range [%d,%d) outside payload=%d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, start, end, len(s.codePayload))
+	}
+	sideStart := ordinal * 4
+	if sideStart < 0 || sideStart > len(s.codeCountPayload)-4 || sideStart > len(s.quantizedDotProductInvPayload)-4 {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit side row ordinal=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, ordinal)
+	}
+	code := s.codePayload[start:end]
+	codeCount := binary.LittleEndian.Uint32(s.codeCountPayload[sideStart : sideStart+4])
+	if codeCount > uint32(s.codeDimensions) {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit code_count ordinal=%d value=%d exceeds code_dimensions=%d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, codeCount, s.codeDimensions)
+	}
+	qdpInv := math.Float32frombits(binary.LittleEndian.Uint32(s.quantizedDotProductInvPayload[sideStart : sideStart+4]))
+	score, ok := rabitqQuantizedCosineScore(s.query, code, qdpInv)
+	if !ok {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit score ordinal=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, ordinal)
+	}
+	return score, nil
+}
+
+func (s *columnVectorGraphRabitQQuantizedScorer) recordScoreStats(stats *columnVectorGraphNativeSearchStats, count int) {
+	if stats == nil || count <= 0 {
+		return
+	}
+	count64 := uint64(count)
+	stats.VisitedNodes += count64
+	stats.CandidateFetches += count64
+	stats.QuantizedScoreCalls += count64
+	stats.QuantizedCodeBytesRead += count64 * uint64(s.bytesPerCode)
+}
+
+func rabitqQueryShapeValidForPlan(query rabitq.Query, plan *rabitq.Plan) bool {
+	return plan != nil && query.CodeDimensions == plan.CodeDimensions() && len(query.SignBits) == plan.BytesPerCode() && len(query.AbsWeights) == plan.CodeDimensions() && query.WeightSum > 0 && !math.IsNaN(float64(query.WeightSum)) && !math.IsInf(float64(query.WeightSum), 0)
+}
+
+func rabitqQuantizedCosineScore(query rabitq.Query, code []byte, quantizedDotProductInv float32) (float64, bool) {
+	if query.CodeDimensions <= 0 || len(query.AbsWeights) < query.CodeDimensions || len(query.SignBits) == 0 || len(code) != len(query.SignBits) || quantizedDotProductInv <= 0 || math.IsNaN(float64(quantizedDotProductInv)) || math.IsInf(float64(quantizedDotProductInv), 0) {
+		return 0, false
+	}
+	var weightedSignDot float64
+	for i, weight32 := range query.AbsWeights[:query.CodeDimensions] {
+		weight := float64(weight32)
+		if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
+			return 0, false
+		}
+		mask := byte(1 << uint(i&7))
+		if (code[i>>3]&mask != 0) == (query.SignBits[i>>3]&mask != 0) {
+			weightedSignDot += weight
+		} else {
+			weightedSignDot -= weight
+		}
+	}
+	score := weightedSignDot / (float64(quantizedDotProductInv) * float64(query.CodeDimensions))
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		return 0, false
+	}
+	return score, true
 }
 
 func scalarU8CenteredQuantizedCosineScore(query vectorops.ScalarU8CenteredQuery, row []byte) (float64, bool) {

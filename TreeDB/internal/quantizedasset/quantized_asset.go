@@ -856,28 +856,50 @@ func (p *Prepared) CodeRowBytes(role Role, ordinal int) ([]byte, bool) {
 
 // Float32 returns a scalar side-array value for role/ordinal.
 func (p *Prepared) Float32(role Role, ordinal int) (float32, bool) {
-	col, ok := p.preparedColumn(role)
-	if !ok || col.kind != preparedColumnScalarFloat32 || !col.validOrdinal(ordinal) {
+	payload, ok := p.Float32Payload(role)
+	if !ok || ordinal < 0 || ordinal >= len(payload)/4 {
 		return 0, false
 	}
 	start := ordinal * 4
-	if start < 0 || start > len(col.payload)-4 {
-		return 0, false
+	return math.Float32frombits(binary.LittleEndian.Uint32(payload[start : start+4])), true
+}
+
+// Float32Payload returns the immutable little-endian scalar float32 payload for
+// role. The slice aliases prepared image bytes and must be treated as read-only.
+func (p *Prepared) Float32Payload(role Role) ([]byte, bool) {
+	col, ok := p.preparedColumn(role)
+	if !ok || col.kind != preparedColumnScalarFloat32 || col.rows < 0 {
+		return nil, false
 	}
-	return math.Float32frombits(binary.LittleEndian.Uint32(col.payload[start : start+4])), true
+	want, err := checkedMul(col.rows, 4)
+	if err != nil || len(col.payload) != want {
+		return nil, false
+	}
+	return col.payload, true
 }
 
 // Uint32 returns a uint32 scalar side-array value for role/ordinal.
 func (p *Prepared) Uint32(role Role, ordinal int) (uint32, bool) {
-	col, ok := p.preparedColumn(role)
-	if !ok || col.kind != preparedColumnScalarUint32 || !col.validOrdinal(ordinal) {
+	payload, ok := p.Uint32Payload(role)
+	if !ok || ordinal < 0 || ordinal >= len(payload)/4 {
 		return 0, false
 	}
 	start := ordinal * 4
-	if start < 0 || start > len(col.payload)-4 {
-		return 0, false
+	return binary.LittleEndian.Uint32(payload[start : start+4]), true
+}
+
+// Uint32Payload returns the immutable little-endian scalar uint32 payload for
+// role. The slice aliases prepared image bytes and must be treated as read-only.
+func (p *Prepared) Uint32Payload(role Role) ([]byte, bool) {
+	col, ok := p.preparedColumn(role)
+	if !ok || col.kind != preparedColumnScalarUint32 || col.rows < 0 {
+		return nil, false
 	}
-	return binary.LittleEndian.Uint32(col.payload[start : start+4]), true
+	want, err := checkedMul(col.rows, 4)
+	if err != nil || len(col.payload) != want {
+		return nil, false
+	}
+	return col.payload, true
 }
 
 // Uint64 returns a uint64 scalar side-array value for role/ordinal.

@@ -110,8 +110,13 @@ func TestColumnGraphRabitQQuantizedAssetRebuildPrepareReopen2450(t *testing.T) {
 		t.Fatalf("reader Close: %v", err)
 	}
 
-	if _, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: q.Name, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}); !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "not scalar_u8") {
-		t.Fatalf("rabitq quantized_only err=%v want fail-closed unavailable without exact fallback", err)
+	quantized, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: q.Name, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("rabitq quantized_only SearchVectorIndex: %v", err)
+	}
+	assertVectorIndexSearchResultsV4(t, quantized.Results, rabitqQuantizedTopKForTest2451(t, rows, []float32{1, 0, 0}, 1), false)
+	if quantized.Stats.QuantizedScoreCalls == 0 || quantized.Stats.PreparedScoreCalls != 0 || quantized.Stats.VectorBytesRead != 0 || quantized.Stats.NormBytesRead != 0 {
+		t.Fatalf("rabitq quantized stats=%+v want code scoring without exact vector/norm scoring", quantized.Stats)
 	}
 	if exact, err := col.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1}); err != nil || len(exact.Results) != 1 {
 		t.Fatalf("exact SearchVectorIndex results=%d err=%v", len(exact.Results), err)
@@ -139,6 +144,275 @@ func TestColumnGraphRabitQQuantizedAssetRebuildPrepareReopen2450(t *testing.T) {
 		t.Fatalf("reopened reader rabitq status=%+v", reopenedStatus)
 	}
 	assertPreparedRabitQRows2450(t, reopenedStatus.Prepared, def, scannedRows)
+}
+
+func TestVectorIndexSearcherRabitQQuantizedSearchWithBuffer2451(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.5, 0.5, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+		{id: "doc-e", vector: []float32{-0.25, 0.75, 0.125}},
+	}
+	query := []float32{0.2, 0.9, 0.1}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	q := def.QuantizedIndexes[0]
+	plan, err := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
+	if err != nil {
+		t.Fatalf("rabitq.NewPlan: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+
+	if _, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeExact, QuantizedIndexName: q.Name, TopK: 1, EfSearch: len(rows)}, &buffer); err == nil || !strings.Contains(err.Error(), "exact") {
+		t.Fatalf("exact SearchWithBuffer with rabitq index err=%v want exact quantized-option rejection", err)
+	}
+	if _, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QuantizedRerankCandidates: 2, TopK: 1, EfSearch: len(rows)}, &buffer); err == nil || !strings.Contains(err.Error(), "exact") || !strings.Contains(err.Error(), "rerank") {
+		t.Fatalf("default exact SearchWithBuffer with rerank candidates err=%v want exact quantized-option rejection", err)
+	}
+
+	quantizedOnly, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: q.Name, TopK: 3, EfSearch: len(rows)}, &buffer)
+	if err != nil {
+		t.Fatalf("rabitq quantized_only SearchWithBuffer: %v", err)
+	}
+	assertVectorIndexSearchResultsV4(t, quantizedOnly.Results, rabitqQuantizedTopKForTest2451(t, rows, query, 3), false)
+	assertRabitQQuantizedOnlyStats2451(t, quantizedOnly.Stats, plan.BytesPerCode())
+
+	var collectionBuffer VectorIndexSearchBuffer
+	collectionGot, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: q.Name, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1}, &collectionBuffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "does not yet support rabitq_1bit") || len(collectionGot.Results) != 0 {
+		t.Fatalf("collection SearchVectorIndexWithBuffer rabitq response=%+v err=%v want scoped unsupported fail-closed", collectionGot, err)
+	}
+
+	rerankedAll, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: q.Name, QuantizedRerankCandidates: len(rows), TopK: 2, EfSearch: len(rows)}, &buffer)
+	if err != nil {
+		t.Fatalf("rabitq quantized_rerank all SearchWithBuffer: %v", err)
+	}
+	assertVectorIndexSearchResultsV4(t, rerankedAll.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
+	assertRabitQQuantizedRerankStats2451(t, rerankedAll.Stats, len(rows), def.Dimensions, plan.BytesPerCode())
+
+	const shortlist = 3
+	rerankedShort, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: q.Name, QuantizedRerankCandidates: shortlist, TopK: 2, EfSearch: len(rows)}, &buffer)
+	if err != nil {
+		t.Fatalf("rabitq quantized_rerank short SearchWithBuffer: %v", err)
+	}
+	if len(rerankedShort.Results) != 2 {
+		t.Fatalf("rabitq quantized_rerank short results=%d want 2", len(rerankedShort.Results))
+	}
+	assertRabitQQuantizedRerankStats2451(t, rerankedShort.Stats, shortlist, def.Dimensions, plan.BytesPerCode())
+}
+
+func TestColumnGraphRabitQQuantizedScorerMatchesOracle2451(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, -1}},
+		{id: "doc-b", vector: []float32{0.5, -0.5, 0.25}},
+		{id: "doc-c", vector: []float32{-0.25, 0.75, 0.125}},
+		{id: "doc-d", vector: []float32{0.1, 0.2, 0.95}},
+	}
+	query := []float32{0.15, -0.35, 0.75}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	q := def.QuantizedIndexes[0]
+	status := reader.quantizedAssetStatus[q.Name]
+	if status.Prepared == nil || status.RabitQPlan == nil || status.Err != nil {
+		t.Fatalf("rabitq prepared status=%+v", status)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	scorer, err := reader.prepareRabitQQuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, q.Name, query, &scratch)
+	if err != nil {
+		t.Fatalf("prepareRabitQQuantizedScorer: %v", err)
+	}
+	ordinals := []int{0, 1, 2, 3}
+	var stats columnVectorGraphNativeSearchStats
+	scores, err := scorer.scoreOrdinals(ordinals, nil, &scratch, &stats)
+	if err != nil {
+		t.Fatalf("scoreOrdinals: %v", err)
+	}
+	oracleQuery, err := status.RabitQPlan.EncodeQuery(query, &rabitq.Workspace{})
+	if err != nil {
+		t.Fatalf("oracle EncodeQuery: %v", err)
+	}
+	view, ok := status.Prepared.CodeRowView(quantizedasset.RolePackedCodes)
+	if !ok {
+		t.Fatal("prepared packed code view unavailable")
+	}
+	for i, ordinal := range ordinals {
+		code, ok := view.RowBytes(ordinal)
+		if !ok {
+			t.Fatalf("row %d code unavailable", ordinal)
+		}
+		codeCount, ok := status.Prepared.Uint32(quantizedasset.RoleCodeCount, ordinal)
+		if !ok {
+			t.Fatalf("row %d code_count unavailable", ordinal)
+		}
+		qdpInv, ok := status.Prepared.Float32(quantizedasset.RoleQuantizedDotProductInv, ordinal)
+		if !ok {
+			t.Fatalf("row %d qdp unavailable", ordinal)
+		}
+		want, err := status.RabitQPlan.ScoreCosine(oracleQuery, code, codeCount, qdpInv)
+		if err != nil {
+			t.Fatalf("oracle ScoreCosine ordinal=%d: %v", ordinal, err)
+		}
+		if math.Abs(scores[i]-want) > 1e-9 {
+			t.Fatalf("ordinal=%d score=%v want oracle=%v", ordinal, scores[i], want)
+		}
+	}
+	if stats.QuantizedScoreCalls != uint64(len(ordinals)) || stats.QuantizedCodeBytesRead != uint64(len(ordinals)*status.RabitQPlan.BytesPerCode()) || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 {
+		t.Fatalf("rabitq scorer stats=%+v want packed code reads only", stats)
+	}
+	_, err = scorer.scoreOrdinals([]int{0, len(rows)}, scores[:0], &scratch, &columnVectorGraphNativeSearchStats{})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "ordinal=4") {
+		t.Fatalf("invalid ordinal err=%v want fail-closed unavailable", err)
+	}
+	if _, err = scorer.scoreOrdinals(ordinals, scores[:0], nil, &columnVectorGraphNativeSearchStats{}); !errors.Is(err, errColumnVectorGraphNativeSearchScratchRequired) {
+		t.Fatalf("nil scratch err=%v want scratch required", err)
+	}
+
+	_, err = scorer.scoreOrdinals(ordinals, scores[:0], &scratch, &columnVectorGraphNativeSearchStats{})
+	if err != nil {
+		t.Fatalf("warm scoreOrdinals: %v", err)
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, err := scorer.scoreOrdinals(ordinals, scores[:0], &scratch, &columnVectorGraphNativeSearchStats{})
+		if err != nil {
+			panic(err)
+		}
+		columnPhysicalScanBenchSum += int64(got[0] * 1_000_000)
+	})
+	if allocs != 0 {
+		t.Fatalf("steady-state rabitq scoreOrdinals allocs/run=%v want 0", allocs)
+	}
+}
+
+func TestVectorIndexSearcherRabitQQuantizedFailClosedStats2451(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	query := []float32{1, 0, 0}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	q := def.QuantizedIndexes[0]
+	cases := []struct {
+		name   string
+		status *columnVectorGraphQuantizedAssetLoadStatus
+		health columnVectorGraphQuantizedAssetHealth
+	}{
+		{name: "missing_status", health: columnVectorGraphQuantizedAssetHealthMissing},
+		{name: "missing_asset", status: &columnVectorGraphQuantizedAssetLoadStatus{Definition: q, Err: errColumnVectorGraphQuantizedAssetMissing}, health: columnVectorGraphQuantizedAssetHealthMissing},
+		{name: "invalid_asset", status: &columnVectorGraphQuantizedAssetLoadStatus{Definition: q, Err: errColumnVectorGraphQuantizedAssetInvalid}, health: columnVectorGraphQuantizedAssetHealthInvalid},
+		{name: "stale_asset", status: &columnVectorGraphQuantizedAssetLoadStatus{Definition: q, Err: errColumnVectorGraphQuantizedAssetStale}, health: columnVectorGraphQuantizedAssetHealthStale},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+			if err != nil {
+				t.Fatalf("OpenVectorIndexSearcher: %v", err)
+			}
+			defer func() { _ = searcher.Close() }()
+			if tc.status == nil {
+				delete(searcher.reader.quantizedAssetStatus, q.Name)
+			} else {
+				searcher.reader.quantizedAssetStatus[q.Name] = *tc.status
+			}
+			var buffer VectorIndexSearchBuffer
+			got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: q.Name, TopK: 1, EfSearch: len(rows)}, &buffer)
+			if !errors.Is(err, ErrVectorIndexSearchUnavailable) || len(got.Results) != 0 {
+				t.Fatalf("SearchWithBuffer response=%+v err=%v want fail-closed unavailable", got, err)
+			}
+			assertQuantizedUnavailableGuardrailStats2416(t, got.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, tc.health)
+			if got.Stats.QuantizedScoreCalls != 0 || got.Stats.PreparedScoreCalls != 0 || got.Stats.VectorBytesRead != 0 || got.Stats.NormBytesRead != 0 {
+				t.Fatalf("fail-closed stats=%+v want no scoring or exact fallback", got.Stats)
+			}
+		})
+	}
+}
+
+func assertRabitQQuantizedOnlyStats2451(tb testing.TB, stats VectorIndexSearchStats, bytesPerCode int) {
+	tb.Helper()
+	if stats.SearchRouteQuantizedOnly != 1 || stats.SearchRouteQuantizedRerank != 0 || stats.QuantizedScorerActive != 1 {
+		tb.Fatalf("rabitq quantized_only route stats=%+v", stats)
+	}
+	if stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead != stats.QuantizedScoreCalls*uint64(bytesPerCode) {
+		tb.Fatalf("rabitq quantized_only code stats=%+v bytes_per_code=%d", stats, bytesPerCode)
+	}
+	if stats.PreparedScoreCalls != 0 || stats.QuantizedRerankCandidates != 0 || stats.QuantizedRerankExactScoreCalls != 0 || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 || stats.DocumentsFetched != 0 {
+		tb.Fatalf("rabitq quantized_only exact/doc stats=%+v want none", stats)
+	}
+}
+
+func assertRabitQQuantizedRerankStats2451(tb testing.TB, stats VectorIndexSearchStats, shortlist int, dims int, bytesPerCode int) {
+	tb.Helper()
+	if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 || stats.QuantizedScorerActive != 1 {
+		tb.Fatalf("rabitq quantized_rerank route stats=%+v", stats)
+	}
+	if stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead != stats.QuantizedScoreCalls*uint64(bytesPerCode) {
+		tb.Fatalf("rabitq quantized_rerank code stats=%+v bytes_per_code=%d", stats, bytesPerCode)
+	}
+	if stats.QuantizedRerankCandidates != uint64(shortlist) || stats.QuantizedRerankExactScoreCalls != uint64(shortlist) {
+		tb.Fatalf("rabitq quantized_rerank exact calls stats=%+v shortlist=%d", stats, shortlist)
+	}
+	if stats.VectorBytesRead != uint64(shortlist*dims*4) || stats.NormBytesRead != uint64(shortlist*4) {
+		tb.Fatalf("rabitq quantized_rerank exact bytes stats=%+v want vector=%d norm=%d", stats, shortlist*dims*4, shortlist*4)
+	}
+	if stats.DocumentsFetched != 0 {
+		tb.Fatalf("rabitq quantized_rerank stats=%+v want no documents", stats)
+	}
+}
+
+func rabitqQuantizedTopKForTest2451(tb testing.TB, rows []columnGraphRebuildInputRowV2A, query []float32, topK int) []columnVectorGraphNativeSearchResult {
+	tb.Helper()
+	if len(rows) == 0 || topK <= 0 {
+		return nil
+	}
+	plan, err := rabitq.NewPlan(len(query), rabitq.DefaultConfig())
+	if err != nil {
+		tb.Fatalf("rabitq.NewPlan: %v", err)
+	}
+	var ws rabitq.Workspace
+	encodedQuery, err := plan.EncodeQuery(query, &ws)
+	if err != nil {
+		tb.Fatalf("rabitq EncodeQuery: %v", err)
+	}
+	var top []columnVectorGraphSearchCandidate
+	var codeScratch []byte
+	for ordinal, row := range rows {
+		encoded, err := plan.Encode(codeScratch, row.vector, &ws)
+		if err != nil {
+			tb.Fatalf("rabitq Encode row %d: %v", ordinal, err)
+		}
+		codeScratch = encoded.Code
+		score, err := plan.ScoreEncoded(encodedQuery, encoded)
+		if err != nil {
+			tb.Fatalf("rabitq ScoreEncoded row %d: %v", ordinal, err)
+		}
+		top = insertColumnGraphTopForTest(top, topK, columnVectorGraphSearchCandidate{ordinal: ordinal, score: score})
+	}
+	out := make([]columnVectorGraphNativeSearchResult, len(top))
+	for i, candidate := range top {
+		out[i] = columnVectorGraphNativeSearchResult{Ordinal: candidate.ordinal, ID: []byte(rows[candidate.ordinal].id), Score: candidate.score}
+	}
+	return out
 }
 
 func TestColumnGraphRabitQQuantizedAssetFailClosed2450(t *testing.T) {
