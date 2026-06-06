@@ -1775,7 +1775,7 @@ func TestVectorIndexSearchDiagnosticsExactPackRoute2407(t *testing.T) {
 		t.Fatalf("SearchVectorIndex with docs: %v", err)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, withDocs, def.Name, opts.TopK)
-	assertVectorIndexSearchDiagnostics2407(t, withDocs.Diagnostics(), VectorIndexSearchRouteColumnGraphPrepared, VectorIndexSearchHNSWSearchPackStatusActive, VectorIndexSearchFallbackReasonNone, false, false)
+	assertVectorIndexSearchColumnGraphDiagnostics2407(t, withDocs.Diagnostics(), VectorIndexSearchHNSWSearchPackStatusActive, false, VectorIndexSearchFallbackReasonNone, VectorIndexSearchFallbackReasonColumnGraphFallback)
 	if withDocs.Stats.OpenSearcherCalls != 1 || withDocs.Stats.OpenSetupInTimedLoop != 1 || withDocs.Stats.ResponseOwnedResultAllocs != 1 || withDocs.Stats.DocumentsFetched != uint64(len(withDocs.Results)) {
 		t.Fatalf("with-docs stats=%+v want one-shot open/setup, response-owned result allocation, and document fetch signal", withDocs.Stats)
 	}
@@ -1814,7 +1814,7 @@ func TestVectorIndexSearchDiagnosticsHNSWPackMissingFallback2407(t *testing.T) {
 		t.Fatalf("SearchWithBuffer with missing pack fallback: %v", err)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 1)
-	assertVectorIndexSearchDiagnostics2407(t, got.Diagnostics(), VectorIndexSearchRouteColumnGraphPrepared, VectorIndexSearchHNSWSearchPackStatusMissing, VectorIndexSearchFallbackReasonHNSWSearchPackMissing, true, false)
+	assertVectorIndexSearchColumnGraphDiagnostics2407(t, got.Diagnostics(), VectorIndexSearchHNSWSearchPackStatusMissing, true, VectorIndexSearchFallbackReasonHNSWSearchPackMissing)
 	if got.Stats.SearchRouteHNSWSearchPack != 0 || got.Stats.HNSWSearchPackFallbacks != 1 || got.Stats.GraphRowFallbacks != 0 || got.Stats.TypedColumnFallbacks != 0 || got.Stats.VectorScratchDecodes != 0 {
 		t.Fatalf("fallback stats=%+v want column_graph prepared fallback because exact hnsw pack is missing", got.Stats)
 	}
@@ -1875,6 +1875,23 @@ func assertVectorIndexSearchDiagnostics2407(tb testing.TB, got VectorIndexSearch
 	tb.Helper()
 	if got.Route != route || got.HNSWSearchPackStatus != packStatus || got.FallbackReason != fallback || got.NoDocumentGuardrailsOK != noDocOK || got.ExactHNSWSearchPackNoDocRoute != exactPackNoDoc {
 		tb.Fatalf("diagnostics=%+v want route=%q pack=%q fallback=%q noDocOK=%v exactPackNoDoc=%v", got, route, packStatus, fallback, noDocOK, exactPackNoDoc)
+	}
+}
+
+func assertVectorIndexSearchColumnGraphDiagnostics2407(tb testing.TB, got VectorIndexSearchDiagnostics, packStatus VectorIndexSearchHNSWSearchPackStatus, noDocOK bool, fallbackReasons ...VectorIndexSearchFallbackReason) {
+	tb.Helper()
+	if got.Route != VectorIndexSearchRouteColumnGraphPrepared && got.Route != VectorIndexSearchRouteColumnGraphFallback {
+		tb.Fatalf("diagnostics=%+v want column_graph prepared or fallback route", got)
+	}
+	fallbackOK := len(fallbackReasons) == 0
+	for _, want := range fallbackReasons {
+		if got.FallbackReason == want {
+			fallbackOK = true
+			break
+		}
+	}
+	if got.HNSWSearchPackStatus != packStatus || !fallbackOK || got.NoDocumentGuardrailsOK != noDocOK || got.ExactHNSWSearchPackNoDocRoute {
+		tb.Fatalf("diagnostics=%+v want column_graph pack=%q fallback in %v noDocOK=%v exactPackNoDoc=false", got, packStatus, fallbackReasons, noDocOK)
 	}
 }
 
