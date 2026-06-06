@@ -180,6 +180,12 @@ func TestColumnGraphRabitQQuantizedAssetFailClosed2450(t *testing.T) {
 		t.Fatalf("stale type err=%v want stale type/encoding", err)
 	}
 
+	staleRowCount := asset
+	staleRowCount.RowCount++
+	if _, err := loadColumnVectorGraphQuantizedAsset(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, q, staleRowCount); !errors.Is(err, errColumnVectorGraphQuantizedAssetStale) || !strings.Contains(err.Error(), "row_count") {
+		t.Fatalf("stale row_count err=%v want stale row_count", err)
+	}
+
 	badVersion := q
 	badVersion.Version++
 	if _, err := loadColumnVectorGraphQuantizedAsset(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, badVersion, asset); !errors.Is(err, errColumnVectorGraphQuantizedAssetInvalid) || !strings.Contains(err.Error(), "version") {

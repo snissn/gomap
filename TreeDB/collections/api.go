@@ -20456,6 +20456,8 @@ func normalizeQuantizedVectorIndexDefinitions(def VectorIndexDefinition) ([]Quan
 			if q.Version != rabitq.CodecVersion {
 				return nil, fmt.Errorf("collections: vector index %q quantized index %q rabitq_1bit version=%d is unsupported", def.Name, q.Name, q.Version)
 			}
+		default:
+			return nil, fmt.Errorf("collections: vector index %q quantized index %q codec %q missing version validation", def.Name, q.Name, q.Codec)
 		}
 		out[i] = q
 	}

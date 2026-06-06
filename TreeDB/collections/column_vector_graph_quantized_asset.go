@@ -155,6 +155,9 @@ func prepareColumnVectorGraphScalarU8QuantizedCodesPayload(collection string, ba
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
 	}
+	if _, err := checkedColumnVectorGraphQuantizedRowBytes(len(rows), 8, "scalar_u8 primary_id"); err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
 	primaryIDs := make([]int64, len(rows))
 	for rowIdx := range primaryIDs {
 		primaryIDs[rowIdx] = int64(rowIdx)
@@ -714,6 +717,9 @@ func loadColumnVectorGraphQuantizedAsset(rootDir, collection string, cfg ColumnS
 	}
 	if asset.SourceSchemaHash != sourceCfg.SchemaHash {
 		return nil, fmt.Errorf("%w: quantized asset %q schema_hash=%d want %d", errColumnVectorGraphQuantizedAssetStale, q.Name, asset.SourceSchemaHash, sourceCfg.SchemaHash)
+	}
+	if asset.RowCount != graph.RowCount {
+		return nil, fmt.Errorf("%w: quantized asset %q row_count=%d want graph row_count=%d", errColumnVectorGraphQuantizedAssetStale, q.Name, asset.RowCount, graph.RowCount)
 	}
 	if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
 		return nil, fmt.Errorf("%w: quantized asset %q unavailable: %v", errColumnVectorGraphQuantizedAssetMissing, q.Name, err)
