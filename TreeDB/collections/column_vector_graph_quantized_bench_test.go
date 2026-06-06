@@ -45,6 +45,22 @@ func columnGraphScalarU8QuantizedSearchWithBufferBenchCases2414() []columnGraphS
 	}
 }
 
+type columnGraphScalarU8QuantizedCollectionWithBufferBenchCase2415 struct {
+	name             string
+	mode             VectorIndexQueryMode
+	rerankCandidates int
+	concurrency      int
+}
+
+func columnGraphScalarU8QuantizedCollectionWithBufferBenchCases2415() []columnGraphScalarU8QuantizedCollectionWithBufferBenchCase2415 {
+	return []columnGraphScalarU8QuantizedCollectionWithBufferBenchCase2415{
+		{name: "route=quantized_only/c=1", mode: VectorIndexQueryModeQuantizedOnly, concurrency: 1},
+		{name: "route=quantized_only/c=8", mode: VectorIndexQueryModeQuantizedOnly, concurrency: 8},
+		{name: "route=quantized_rerank/candidates=32/c=1", mode: VectorIndexQueryModeQuantizedRerank, rerankCandidates: 32, concurrency: 1},
+		{name: "route=quantized_rerank/candidates=32/c=8", mode: VectorIndexQueryModeQuantizedRerank, rerankCandidates: 32, concurrency: 8},
+	}
+}
+
 func BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926(b *testing.B) {
 	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
 	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
@@ -130,6 +146,233 @@ func BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer241
 			}
 			runColumnGraphScalarU8QuantizedSearchWithBufferBench2414(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
 		})
+	}
+}
+
+func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415(b *testing.B) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
+	defer fixture.close()
+	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
+
+	for _, tc := range columnGraphScalarU8QuantizedCollectionWithBufferBenchCases2415() {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			opts := VectorIndexSearchOptions{
+				IndexName:                 fixture.definition.Name,
+				Query:                     fixture.query,
+				QueryMode:                 tc.mode,
+				QuantizedIndexName:        columnGraphScalarU8QuantizedBenchIndexName1926,
+				QuantizedRerankCandidates: tc.rerankCandidates,
+				TopK:                      fixture.shape.topK,
+				EfSearch:                  fixture.shape.efSearch,
+				MaxDecodedBlocks:          1,
+				StatsMode:                 VectorIndexSearchStatsModeProduction,
+			}
+			runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
+		})
+	}
+}
+
+func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearchOptions, concurrency int, exactIDs map[string]struct{}, exactCount int) {
+	b.Helper()
+	if concurrency <= 0 {
+		b.Fatalf("concurrency=%d must be positive", concurrency)
+	}
+	type benchWorker struct {
+		buffer VectorIndexSearchBuffer
+		stats  VectorIndexSearchStats
+		sink   int64
+	}
+	if err := fixture.collection.closeCollectionVectorIndexPreparedSearchCache(); err != nil {
+		b.Fatalf("close collection prepared cache before benchmark row: %v", err)
+	}
+	workers := make([]benchWorker, concurrency)
+	for i := range workers {
+		warmOpts := opts
+		warmOpts.Query = fixture.query
+		warm, err := fixture.collection.SearchVectorIndexWithBuffer(warmOpts, &workers[i].buffer)
+		if err != nil {
+			b.Fatalf("warm SearchVectorIndexWithBuffer worker %d: %v", i, err)
+		}
+		if len(warm.Results) == 0 {
+			b.Fatalf("warm SearchVectorIndexWithBuffer worker %d returned no results", i)
+		}
+		assertColumnGraphScalarU8QuantizedCollectionWithBufferGuardrails2415(b, warm.Stats, opts, fixture.definition.Dimensions)
+	}
+	statsOpts := opts
+	statsOpts.StatsMode = VectorIndexSearchStatsModeFullDiagnostics
+	measured, err := fixture.collection.SearchVectorIndexWithBuffer(statsOpts, &workers[0].buffer)
+	if err != nil {
+		b.Fatalf("measure SearchVectorIndexWithBuffer stats: %v", err)
+	}
+	assertColumnGraphScalarU8QuantizedCollectionWithBufferGuardrails2415(b, measured.Stats, statsOpts, fixture.definition.Dimensions)
+	ensureColumnGraphScalarU8QuantizedCollectionReaderPool2415(b, fixture.collection, opts, concurrency)
+	warmRecall := columnGraphScalarU8QuantizedBenchmarkRecallAtK1926(measured.Results, exactIDs, exactCount)
+
+	var next atomic.Uint64
+	var sink atomic.Int64
+	var failed atomic.Bool
+	var firstErr atomic.Value
+	recordErr := func(format string, args ...any) {
+		if failed.CompareAndSwap(false, true) {
+			firstErr.Store(fmt.Sprintf(format, args...))
+		}
+	}
+	var wg sync.WaitGroup
+	ready := make(chan struct{}, len(workers))
+	start := make(chan struct{})
+	wg.Add(len(workers))
+	for i := range workers {
+		worker := &workers[i]
+		go func() {
+			defer wg.Done()
+			localOpts := opts
+			localOpts.Query = fixture.query
+			for warmIter := 0; warmIter < 16; warmIter++ {
+				if warm, err := fixture.collection.SearchVectorIndexWithBuffer(localOpts, &worker.buffer); err != nil {
+					recordErr("goroutine warm SearchVectorIndexWithBuffer: %v", err)
+					break
+				} else if len(warm.Results) == 0 {
+					recordErr("goroutine warm SearchVectorIndexWithBuffer returned no results")
+					break
+				}
+			}
+			ready <- struct{}{}
+			<-start
+			var localStats VectorIndexSearchStats
+			var localSink int64
+			for {
+				iteration := int(next.Add(1)) - 1
+				if iteration >= b.N {
+					break
+				}
+				if failed.Load() {
+					continue
+				}
+				response, err := fixture.collection.SearchVectorIndexWithBuffer(localOpts, &worker.buffer)
+				if err != nil {
+					recordErr("SearchVectorIndexWithBuffer: %v", err)
+					continue
+				}
+				if len(response.Results) == 0 {
+					recordErr("SearchVectorIndexWithBuffer returned no results")
+					continue
+				}
+				localSink += int64(response.Results[0].Ordinal)
+				addColumnGraphScalarU8QuantizedBenchmarkStats1926(&localStats, response.Stats)
+			}
+			worker.stats = localStats
+			worker.sink = localSink
+		}()
+	}
+	for range workers {
+		<-ready
+	}
+	if errValue := firstErr.Load(); errValue != nil {
+		close(start)
+		wg.Wait()
+		b.Fatalf("%s", errValue.(string))
+	}
+	cacheBeforeTimed := fixture.collection.collectionVectorIndexPreparedSearchCacheSnapshot()
+	b.ReportAllocs()
+	b.ReportMetric(float64(concurrency), "concurrency")
+	b.ReportMetric(1, "collection_searchvectorindex_with_buffer_seam")
+	b.ReportMetric(1, "collection_buffered_quantized_row")
+	b.ReportMetric(0, "open_searcher_calls/op")
+	b.ReportMetric(0, "open_setup_in_timed_loop")
+	b.ReportMetric(1, "reported_stats_mode_production")
+	b.ResetTimer()
+	close(start)
+	wg.Wait()
+	b.StopTimer()
+	if errValue := firstErr.Load(); errValue != nil {
+		b.Fatalf("%s", errValue.(string))
+	}
+	var stats VectorIndexSearchStats
+	for i := range workers {
+		addColumnGraphScalarU8QuantizedBenchmarkStats1926(&stats, workers[i].stats)
+		sink.Add(workers[i].sink)
+	}
+	columnPhysicalScanBenchSum += sink.Load()
+	recallSum := warmRecall * float64(b.N)
+	reportCollectionVectorIndexPreparedSearchBenchMetrics2415(b, cacheBeforeTimed, fixture.collection.collectionVectorIndexPreparedSearchCacheSnapshot())
+	reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b, fixture, stats, recallSum)
+}
+
+func ensureColumnGraphScalarU8QuantizedCollectionReaderPool2415(b *testing.B, col *Collection, opts VectorIndexSearchOptions, concurrency int) {
+	b.Helper()
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		b.Fatalf("normalize collection quantized benchmark query mode: %v", err)
+	}
+	prepared, _, _, err := col.acquireCollectionVectorIndexPreparedSearch(opts)
+	if err != nil {
+		b.Fatalf("acquire collection quantized prepared search for reader-pool warmup: %v", err)
+	}
+	prepared.mu.RLock()
+	defer prepared.mu.RUnlock()
+	if prepared.closed || prepared.searcher == nil || prepared.searcher.closed || prepared.searcher.snapshot == nil {
+		b.Fatalf("collection quantized prepared search is not ready for reader-pool warmup")
+	}
+	for {
+		prepared.quantizedReadersMu.Lock()
+		have := len(prepared.quantizedReaders)
+		prepared.quantizedReadersMu.Unlock()
+		if have >= concurrency {
+			return
+		}
+		reader, _, err := prepared.openCollectionVectorIndexPreparedQuantizedReader(opts, queryMode)
+		if err != nil {
+			b.Fatalf("open collection quantized prepared reader %d/%d: %v", have+1, concurrency, err)
+		}
+		prepared.quantizedReadersMu.Lock()
+		idx := len(prepared.quantizedReaders)
+		prepared.quantizedReaders = append(prepared.quantizedReaders, reader)
+		prepared.quantizedAvailableReaders = append(prepared.quantizedAvailableReaders, idx)
+		prepared.quantizedReadersMu.Unlock()
+	}
+}
+
+func reportCollectionVectorIndexPreparedSearchBenchMetrics2415(b *testing.B, before, after collectionVectorIndexPreparedSearchCacheSnapshot) {
+	b.Helper()
+	iterations := float64(b.N)
+	if iterations <= 0 {
+		iterations = 1
+	}
+	cacheBuilds := after.CacheBuilds - before.CacheBuilds
+	cacheMisses := after.CacheMisses - before.CacheMisses
+	cacheHits := after.CacheHits - before.CacheHits
+	cacheWaits := after.CacheWaits - before.CacheWaits
+	invalidations := after.Invalidations - before.Invalidations
+	closes := after.Closes - before.Closes
+	errors := after.Errors - before.Errors
+	b.ReportMetric(float64(after.Entries), "collection_prepared_cache_entries")
+	b.ReportMetric(float64(after.BuildingEntries), "collection_prepared_cache_building_entries")
+	b.ReportMetric(float64(cacheBuilds)/iterations, "collection_prepared_cache_builds/op")
+	b.ReportMetric(float64(cacheMisses)/iterations, "collection_prepared_cache_misses/op")
+	b.ReportMetric(float64(cacheHits)/iterations, "collection_prepared_cache_hits/op")
+	b.ReportMetric(float64(cacheWaits)/iterations, "collection_prepared_cache_waits/op")
+	b.ReportMetric(float64(invalidations)/iterations, "collection_prepared_cache_invalidations/op")
+	b.ReportMetric(float64(closes)/iterations, "collection_prepared_cache_closes/op")
+	b.ReportMetric(float64(errors)/iterations, "collection_prepared_cache_errors/op")
+	if lookups := cacheHits + cacheMisses; lookups > 0 {
+		b.ReportMetric(float64(cacheHits)/float64(lookups), "collection_prepared_cache_hit_ratio")
+	}
+	b.ReportMetric(float64(after.ActiveHandles), "collection_prepared_active_handles")
+	b.ReportMetric(float64(after.ActiveMappedBytes), "collection_prepared_mapped_B")
+	b.ReportMetric(float64(after.ActiveHeapCopyBytes), "collection_prepared_heap_copy_B")
+	b.ReportMetric(float64(after.ActiveDerivedMetadataBytes), "collection_prepared_derived_metadata_B")
+}
+
+func assertColumnGraphScalarU8QuantizedCollectionWithBufferGuardrails2415(tb testing.TB, stats VectorIndexSearchStats, opts VectorIndexSearchOptions, dims int) {
+	tb.Helper()
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		tb.Fatalf("normalize query mode: %v", err)
+	}
+	if !vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats, queryMode, opts, dims) {
+		tb.Fatalf("Collection.SearchVectorIndexWithBuffer quantized stats=%+v want no-document quantized route", stats)
 	}
 }
 

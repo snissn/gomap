@@ -1046,6 +1046,7 @@ func (c *Collection) searchVectorIndexPreparedNoDocumentOwned(opts VectorIndexSe
 	if queryMode != columnVectorGraphNativeSearchQueryModeExact || !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
 		return response, fmt.Errorf("%w: vector index %q SearchVectorIndex requires exact no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, opts.IndexName)
 	}
+	slot := collectionVectorIndexPreparedSearchCacheSlotForOptions(opts, queryMode)
 	buffer := acquireCollectionSearchVectorIndexResponseBuffer()
 	var lastResponse VectorIndexSearchResponse
 	var lastErr error
@@ -1068,7 +1069,8 @@ func (c *Collection) searchVectorIndexPreparedNoDocumentOwned(opts VectorIndexSe
 			return response, err
 		}
 		lastResponse, lastErr = response, err
-		c.invalidateCollectionVectorIndexPreparedSearch(opts.IndexName, prepared)
+		lastResponse.Results = nil
+		c.invalidateCollectionVectorIndexPreparedSearch(slot, prepared)
 	}
 	releaseCollectionSearchVectorIndexResponseBuffer(buffer)
 	if lastErr != nil {
@@ -1149,19 +1151,22 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 	return response, err
 }
 
-// SearchVectorIndexWithBuffer searches a collection vector index through the
-// exact no-document high-QPS seam using caller-owned result storage. Returned
-// Results and result IDs alias buffer and remain valid only until buffer is
-// reused or Reset is called. The same buffer must not be reused concurrently;
-// parallel callers should use independent buffers.
+// SearchVectorIndexWithBuffer searches a collection vector index through a
+// no-document high-QPS seam using caller-owned result storage. Returned Results
+// and result IDs alias buffer and remain valid only until buffer is reused or
+// Reset is called. The same buffer must not be reused concurrently; parallel
+// callers should use independent buffers.
 //
-// This method intentionally fails closed for document materialization,
-// projections, filters, quantized modes, benchmark-debug stats mode, missing or
-// invalid hnsw_search_pack_v1 state, and legacy/fallback routes. Healthy current
-// hnsw_search_pack_v1 state is opened once into a collection-owned prepared
-// cache keyed by the current collection/vector-index manifest identity; steady
-// state searches reuse the prepared pack and caller-owned buffer/scratch instead
-// of opening a VectorIndexSearcher per call.
+// This method supports exact/zero QueryMode through the exact
+// hnsw_search_pack_v1 route, and explicit quantized_only / quantized_rerank
+// modes through a collection-owned prepared quantized route selected by
+// QuantizedIndexName. It intentionally fails closed for document materialization,
+// projections, filters, benchmark-debug stats mode, missing or invalid prepared
+// assets, stale route identities, and legacy/fallback routes. Healthy prepared
+// state is opened once into the collection cache keyed by the current
+// collection/vector-index/score-plane manifest identity; steady-state searches
+// reuse that prepared state and caller-owned result buffer instead of opening a
+// VectorIndexSearcher per call.
 func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return VectorIndexSearchResponse{}, err
@@ -1188,9 +1193,33 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err
 	}
-	if queryMode != columnVectorGraphNativeSearchQueryModeExact || !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
+	if queryMode == columnVectorGraphNativeSearchQueryModeExact && !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
 		buffer.Reset()
-		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires the exact no-document hnsw_search_pack_v1 route; unsupported query or stats options must use SearchVectorIndex or OpenVectorIndexSearcher", ErrVectorIndexSearchUnavailable, opts.IndexName)
+		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires the exact no-document hnsw_search_pack_v1 route for the selected stats mode; unsupported stats options must use SearchVectorIndex or OpenVectorIndexSearcher", ErrVectorIndexSearchUnavailable, opts.IndexName)
+	}
+	slot := collectionVectorIndexPreparedSearchCacheSlotForOptions(opts, queryMode)
+	if queryMode.quantized() {
+		prepared, response, acquireStats, err := c.acquireCollectionVectorIndexPreparedSearch(opts)
+		if err != nil {
+			buffer.Reset()
+			acquireStats.apply(&response.Stats)
+			return response, err
+		}
+		response, err = prepared.SearchQuantizedWithBuffer(opts, buffer)
+		acquireStats.apply(&response.Stats)
+		healthyQuantizedRoute := vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(response.Stats, queryMode, opts, prepared.dimensions)
+		if err == nil && healthyQuantizedRoute {
+			return response, nil
+		}
+		if err != nil {
+			if errors.Is(err, ErrVectorIndexSearchUnavailable) && !healthyQuantizedRoute {
+				c.invalidateCollectionVectorIndexPreparedSearch(slot, prepared)
+			}
+			return response, err
+		}
+		resetBufferedVectorIndexSearchResponse(&response, buffer)
+		c.invalidateCollectionVectorIndexPreparedSearch(slot, prepared)
+		return response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized route did not satisfy no-document quantized guardrails; rebuild the vector index", ErrVectorIndexSearchUnavailable, opts.IndexName)
 	}
 	var lastResponse VectorIndexSearchResponse
 	var lastErr error
@@ -1211,8 +1240,9 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 			return response, err
 		}
 		lastResponse, lastErr = response, err
+		lastResponse.Results = nil
 		resetBufferedVectorIndexSearchResponse(&response, buffer)
-		c.invalidateCollectionVectorIndexPreparedSearch(opts.IndexName, prepared)
+		c.invalidateCollectionVectorIndexPreparedSearch(slot, prepared)
 	}
 	if lastErr != nil {
 		return lastResponse, lastErr
@@ -1260,20 +1290,17 @@ func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearch
 		buffer.Reset()
 		return collectionVectorIndexWithBufferUnsupportedOptionError("DisableExactFallback", "the collection buffered route already fails closed instead of falling back")
 	}
-	if opts.QueryMode != "" && opts.QueryMode != VectorIndexQueryModeExact {
+	if opts.QueryMode != "" && opts.QueryMode != VectorIndexQueryModeExact && opts.QueryMode != VectorIndexQueryModeQuantizedOnly && opts.QueryMode != VectorIndexQueryModeQuantizedRerank {
 		buffer.Reset()
-		if opts.QueryMode == VectorIndexQueryModeQuantizedOnly || opts.QueryMode == VectorIndexQueryModeQuantizedRerank {
-			return collectionVectorIndexWithBufferUnsupportedOptionError(fmt.Sprintf("QueryMode=%q", opts.QueryMode), "collection buffered quantized search is not supported by this exact hnsw_search_pack_v1 route; use SearchVectorIndex or OpenVectorIndexSearcher plus SearchWithBuffer for supported quantized searches until a separate quantized buffered route is available")
-		}
-		return collectionVectorIndexWithBufferUnsupportedOptionError(fmt.Sprintf("QueryMode=%q", opts.QueryMode), "this API currently supports only exact/zero QueryMode on the no-document hnsw_search_pack_v1 route")
+		return collectionVectorIndexWithBufferUnsupportedOptionError(fmt.Sprintf("QueryMode=%q", opts.QueryMode), "this API supports exact/zero, quantized_only, or quantized_rerank QueryMode on no-document buffered routes")
 	}
-	if opts.QuantizedIndexName != "" {
+	if (opts.QueryMode == "" || opts.QueryMode == VectorIndexQueryModeExact) && opts.QuantizedIndexName != "" {
 		buffer.Reset()
-		return collectionVectorIndexWithBufferUnsupportedOptionError("QuantizedIndexName", "quantized collection buffered search is not supported by this exact route; use SearchVectorIndex or OpenVectorIndexSearcher plus SearchWithBuffer for supported quantized searches")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("QuantizedIndexName", "exact collection buffered search cannot select a quantized index; set QueryMode=quantized_only or QueryMode=quantized_rerank for the quantized no-document route")
 	}
-	if opts.QuantizedRerankCandidates != 0 {
+	if (opts.QueryMode == "" || opts.QueryMode == VectorIndexQueryModeExact) && opts.QuantizedRerankCandidates != 0 {
 		buffer.Reset()
-		return collectionVectorIndexWithBufferUnsupportedOptionError("QuantizedRerankCandidates", "quantized collection buffered rerank is not supported by this exact route; use SearchVectorIndex or OpenVectorIndexSearcher plus SearchWithBuffer for supported quantized searches")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("QuantizedRerankCandidates", "exact collection buffered search cannot set quantized rerank candidates; set QueryMode=quantized_rerank with QuantizedIndexName for the quantized no-document route")
 	}
 	if opts.StatsMode == VectorIndexSearchStatsModeBenchmarkDebug {
 		buffer.Reset()
@@ -1282,6 +1309,10 @@ func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearch
 	if _, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode); err != nil {
 		buffer.Reset()
 		return collectionVectorIndexWithBufferUnsupportedOptionError(fmt.Sprintf("StatsMode=%q", opts.StatsMode), err.Error())
+	}
+	if _, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK); err != nil {
+		buffer.Reset()
+		return collectionVectorIndexWithBufferUnsupportedOptionError("QueryMode/QuantizedIndexName", err.Error())
 	}
 	return nil
 }
@@ -1333,6 +1364,69 @@ func vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(stats VectorIndexSearc
 		stats.GraphRowFallbacks == 0 &&
 		stats.TypedColumnFallbacks == 0 &&
 		stats.VectorScratchDecodes == 0
+}
+
+func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats VectorIndexSearchStats, queryMode columnVectorGraphNativeSearchQueryMode, opts VectorIndexSearchOptions, dimensions int) bool {
+	if !queryMode.quantized() {
+		return false
+	}
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.HNSWSearchPackActive != 0 || stats.HNSWSearchPackMissing != 0 || stats.HNSWSearchPackInvalid != 0 || stats.HNSWSearchPackStale != 0 || stats.HNSWSearchPackClosed != 0 || stats.HNSWSearchPackFallbacks != 0 {
+		return false
+	}
+	if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+		return false
+	}
+	emptySearch := opts.TopK == 0 || stats.CandidateRows == 0
+	if !emptySearch && stats.QuantizedScorerActive != 1 {
+		return false
+	}
+	if stats.QuantizedAssetUnavailable != 0 || stats.QuantizedAssetMissing != 0 || stats.QuantizedAssetInvalid != 0 || stats.QuantizedAssetStale != 0 || stats.QuantizedAssetClosed != 0 {
+		return false
+	}
+	if stats.QuantizedAssetHeapCopy+stats.QuantizedAssetMmapDirect != 1 || stats.QuantizedAssetHeapCopyBytes+stats.QuantizedAssetMappedBytes == 0 {
+		return false
+	}
+	if stats.DocumentsFetched != 0 || stats.DocumentBytes != 0 || stats.DocumentOutputBytes != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
+		return false
+	}
+	if !emptySearch && (stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead == 0) {
+		return false
+	}
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedOnly {
+		return stats.SearchRouteQuantizedOnly == 1 &&
+			stats.SearchRouteQuantizedRerank == 0 &&
+			stats.PreparedScoreCalls == 0 &&
+			stats.QuantizedRerankCandidates == 0 &&
+			stats.QuantizedRerankExactScoreCalls == 0 &&
+			stats.VectorBytesRead == 0 &&
+			stats.NormBytesRead == 0
+	}
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 {
+			return false
+		}
+		if emptySearch {
+			return stats.PreparedScoreCalls == 0 && stats.QuantizedRerankCandidates == 0 && stats.QuantizedRerankExactScoreCalls == 0 && stats.VectorBytesRead == 0 && stats.NormBytesRead == 0
+		}
+		if stats.QuantizedRerankCandidates == 0 || stats.QuantizedRerankExactScoreCalls != stats.QuantizedRerankCandidates {
+			return false
+		}
+		if opts.QuantizedRerankCandidates > 0 && stats.QuantizedRerankCandidates > uint64(opts.QuantizedRerankCandidates) {
+			return false
+		}
+		if stats.VectorBytesRead == 0 || stats.NormBytesRead == 0 {
+			return false
+		}
+		if dimensions > 0 {
+			maxVectorBytes := stats.QuantizedRerankCandidates * uint64(dimensions) * 4
+			maxNormBytes := stats.QuantizedRerankCandidates * 4
+			if stats.VectorBytesRead > maxVectorBytes || stats.NormBytesRead > maxNormBytes {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // OpenVectorIndexSearcher opens a reusable search handle for steady-state
