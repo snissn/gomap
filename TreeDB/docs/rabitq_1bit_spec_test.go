@@ -29,8 +29,8 @@ func TestDocs_RaBitQ1BitV1Spec2449(t *testing.T) {
 		"`quantized_dot_product_inv`: `1 / sum(abs(rotated_data[i]))` (`float32`)",
 		"score = weighted_sign_dot / (quantized_dot_product_inv * CodeDimensions)",
 		"`Plan.Encode` emits `EncodedVector{Code, CodeCount, QuantizedDotProductInv}`",
-		"No typed-column asset publication in this issue",
-		"No collection/search integration and no public route/counter changes",
+		"Durable TreeDB asset shape (#2450)",
+		"No collection/search scorer integration and no public route/counter changes",
 		"must not be cited as production RaBitQ search speed",
 	} {
 		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
@@ -48,8 +48,8 @@ func TestDocs_RaBitQ1BitV1LinkedOwners2449(t *testing.T) {
 		},
 		filepath.Join(treeRoot, "docs", "spec", "quantized-vector-index.md"): {
 			"rabitq-1bit-v1.md",
-			"durable RaBitQ assets, search",
-			"SIMD/popcount acceleration remain follow-up work",
+			"durable `rabitq_1bit` v1 asset",
+			"SIMD/popcount acceleration",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "quantized-asset-schema.md"): {
 			"rabitq-1bit-v1.md",

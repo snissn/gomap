@@ -1,9 +1,9 @@
 # TreeDB `rabitq_1bit` v1 Codec Contract (#2449)
 
-Status: pre-alpha design/contract gate and pure-Go reference oracle. This spec
-chooses the durable code shape for later RaBitQ assets and scorers. It does not
-publish typed-column assets, change collection search, add a SIMD backend, or
-change exact FP32 / `scalar_u8` behavior.
+Status: pre-alpha design/contract gate, pure-Go reference oracle, and durable
+asset storage contract. The #2450 asset path publishes and prepares
+`rabitq_1bit` typed-column assets; search/scoring, SIMD backends, and exact FP32
+/ `scalar_u8` behavior changes remain out of scope.
 
 ## Identity
 
@@ -29,7 +29,10 @@ remain schema identity fields rather than config bytes.
 ## Storage shape decision
 
 V1 stores data codes as `quantizedasset.RolePackedCodes` (`packed_codes`) backed
-by typed-column `packed_bit_vector` / `raw_packed_bit_vector` rows.
+by typed-column `packed_bit_vector` / `raw_packed_bit_vector` rows. In
+vector-index state, each declared RaBitQ score plane is one `quantized_codes`
+asset with id `quantized/<name>/packed_codes`; the asset's primary state
+logical type/encoding are `packed_bit_vector` / `raw_packed_bit_vector`.
 
 - `VectorDimensions` is the authoritative float32 source dimensionality.
 - `CodeDimensions = next_power_of_two(VectorDimensions)` for the padded FWHT
@@ -61,7 +64,7 @@ For a finite non-zero vector `x` with `VectorDimensions=d`:
 
 Zero vectors, non-finite values, dimension mismatches, invalid padding,
 side-array mismatches, and out-of-range `quantized_dot_product_inv` values fail
-closed in the reference APIs.
+closed in the reference APIs and in TreeDB asset prepare validation.
 
 The deterministic rotation is fully specified by the reference code and these
 constants so future non-Go or accelerated implementations can reproduce v1:
@@ -150,10 +153,28 @@ buffers, but it is a reference/oracle implementation. SIMD/go-highway backends
 belong to #2453 and must prove parity with these APIs before being used by
 search.
 
+## Durable TreeDB asset shape (#2450)
+
+For each declared `QuantizedVectorIndexDefinition{Codec:"rabitq_1bit", Version:1}`
+on a cosine `column_graph` vector index, rebuild writes one typed-column part in
+graph ordinal order. The part contains:
+
+| Role | Column | Type / encoding | Shape |
+| --- | --- | --- | --- |
+| `packed_codes` | `packed_codes` | `packed_bit_vector` / `raw_packed_bit_vector` | `Rows=graph.RowCount`, `ElementsPerRow=CodeDimensions`, `BitsPerElement=1` |
+| `code_count` | `code_count` | `uint32` / `raw_uint32` | one scalar per graph ordinal |
+| `quantized_dot_product_inv` | `quantized_dot_product_inv` | `float32` / `raw_float32` | one scalar per graph ordinal |
+
+Prepare requires all three roles, checks typed-column logical/physical type,
+encoding, compression, direct-view certification, row count, section length,
+asset ref/checksum, zero packed padding, code-count parity, positive finite
+`quantized_dot_product_inv`, codec config bytes/hash, and base graph identity.
+Missing, stale, corrupt, config-mismatched, schema-mismatched, or checksum-mismatched
+assets fail closed before any future scorer can consume row readers.
+
 ## Non-goals and boundaries
 
-- No typed-column asset publication in this issue.
-- No collection/search integration and no public route/counter changes.
+- No collection/search scorer integration and no public route/counter changes.
 - No changes to exact/default FP32 search or `scalar_u8` score-plane behavior.
 - No multi-bit RaBitQ, PQ/OPQ, IVF, or graph topology changes.
 - No dependency on CockroachDB, Antfly, AGPL, cgo, or go-highway code.
