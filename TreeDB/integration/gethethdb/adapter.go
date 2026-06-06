@@ -49,6 +49,8 @@ type OpenOptions struct {
 	MemtableMode string
 }
 
+const defaultGethCommandWALMaxSegmentBytes int64 = 256 << 20
+
 // DefaultOpenOptions returns the production-oriented adapter defaults.
 func DefaultOpenOptions() OpenOptions {
 	return OpenOptions{Profile: treedb.ProfileCommandWALDurable}
@@ -78,8 +80,11 @@ func Open(path string, options *OpenOptions) (*Database, error) {
 }
 
 // OpenWithOptions opens TreeDB with caller-supplied options and wraps it as an
-// ethdb.KeyValueStore. Writable options must enable TreeDB command WAL.
+// ethdb.KeyValueStore. Writable options must enable TreeDB command WAL. When
+// WALMaxSegmentBytes is left at zero, the adapter applies a geth-sized command
+// WAL frame cap so large skeleton-header batches fit in one durable frame.
 func OpenWithOptions(opts treedb.Options) (*Database, error) {
+	applyGethCommandWALDefaults(&opts)
 	if strings.TrimSpace(opts.Dir) == "" {
 		return nil, errors.New("gethethdb: TreeDB options Dir must be non-empty")
 	}
@@ -128,7 +133,19 @@ func resolveTreeDBOptions(path string, options *OpenOptions) (treedb.Options, er
 	if !opts.ReadOnly && !opts.CommandWAL {
 		return treedb.Options{}, errors.New("gethethdb: writable TreeDB ethdb adapter requires command WAL")
 	}
+	applyGethCommandWALDefaults(&opts)
 	return opts, nil
+}
+
+func applyGethCommandWALDefaults(opts *treedb.Options) {
+	if opts == nil || !opts.CommandWAL || opts.WALMaxSegmentBytes != 0 {
+		return
+	}
+	// Geth beacon skeleton sync can commit the whole 131,072-header scratch
+	// window in one ethdb batch. Its encoded raw-KV command WAL payload is larger
+	// than TreeDB's generic 64MiB commitlog default, so use a geth adapter default
+	// with enough headroom while preserving explicit caller overrides.
+	opts.WALMaxSegmentBytes = defaultGethCommandWALMaxSegmentBytes
 }
 
 type compactStorageFunc func(context.Context, *treedb.DB) error
