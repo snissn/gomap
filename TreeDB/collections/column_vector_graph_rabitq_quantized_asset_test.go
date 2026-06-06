@@ -232,6 +232,103 @@ func TestColumnGraphRabitQQuantizedAssetFailClosed2450(t *testing.T) {
 	}
 }
 
+func BenchmarkColumnGraphQuantizedAssetBuildPrepare2450(b *testing.B) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 256, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	rows := columnGraphRebuildSyntheticRowsV2A(shape.rows, shape.dims)
+	assetRows := make([]columnVectorGraphAssetRow, len(rows))
+	for i, row := range rows {
+		assetRows[i] = columnGraphQuantizedAssetRow1926(b, row.id, row.vector)
+	}
+	base, err := normalizeColumnStoreConfig("docs", columnGraphRebuildColumnStoreConfigV2A(shape.dims))
+	if err != nil {
+		b.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	baseGraph := columnGraphRebuildVectorIndexDefinitionV2A(shape.dims, shape.m)
+	cases := []struct {
+		name string
+		q    QuantizedVectorIndexDefinition
+	}{
+		{name: "scalar_u8", q: QuantizedVectorIndexDefinition{Name: columnGraphScalarU8QuantizedBenchIndexName1926, Codec: QuantizedVectorCodecScalarU8}},
+		{name: "rabitq_1bit", q: QuantizedVectorIndexDefinition{Name: columnGraphRabitQQuantizedIndexName2450, Codec: rabitq.CodecName}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		def := baseGraph
+		def.QuantizedIndexes = []QuantizedVectorIndexDefinition{tc.q}
+		def, err = normalizeVectorIndexDefinition(def)
+		if err != nil {
+			b.Fatalf("normalizeVectorIndexDefinition %s: %v", tc.name, err)
+		}
+		q := def.QuantizedIndexes[0]
+		payload, sourceCfg, err := prepareColumnVectorGraphQuantizedCodesPayload("docs", *base, def, q, 245000, assetRows)
+		if err != nil {
+			b.Fatalf("warm build %s: %v", tc.name, err)
+		}
+		graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: 1, BaseManifestChecksum: 2, BaseSchemaHash: base.SchemaHash, GraphSchemaHash: 3, RowCount: len(assetRows)}
+		logicalCodeBytes := float64(def.Dimensions)
+		if q.Codec == rabitq.CodecName {
+			plan, err := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
+			if err != nil {
+				b.Fatalf("rabitq.NewPlan: %v", err)
+			}
+			logicalCodeBytes = float64(plan.BytesPerCode())
+		}
+		b.Run("build/"+tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ReportMetric(float64(len(payload))/float64(len(assetRows)), "asset_B/vector")
+			b.ReportMetric(logicalCodeBytes, "logical_code_B/vector")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				got, gotCfg, err := prepareColumnVectorGraphQuantizedCodesPayload("docs", *base, def, q, uint64(245001+i), assetRows)
+				if err != nil {
+					b.Fatalf("build %s: %v", tc.name, err)
+				}
+				columnPhysicalScanBenchSum += int64(len(got)) + int64(gotCfg.SchemaHash&0xffff)
+			}
+		})
+		b.Run("prepare/"+tc.name, func(b *testing.B) {
+			asset := columnVectorIndexStateAssetSnapshot{SourceSchemaHash: sourceCfg.SchemaHash, AssetBytes: int64(len(payload))}
+			asset.LogicalType, asset.PhysicalEncoding = columnVectorGraphQuantizedAssetStateType(q)
+			b.ReportAllocs()
+			b.ReportMetric(float64(len(payload))/float64(len(assetRows)), "asset_B/vector")
+			b.ReportMetric(logicalCodeBytes, "logical_code_B/vector")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				image, err := typedcolumn.ParseColumnPartImage(payload)
+				if err != nil {
+					b.Fatalf("ParseColumnPartImage %s: %v", tc.name, err)
+				}
+				schema, err := columnVectorGraphQuantizedAssetSchema(def, graph, q, asset, quantizedasset.AssetRefIdentity{})
+				if err != nil {
+					b.Fatalf("schema %s: %v", tc.name, err)
+				}
+				prepared, err := quantizedasset.Prepare(quantizedasset.PrepareRequest{
+					Schema: schema,
+					Expected: quantizedasset.ExpectedSchema{
+						Metric:           schema.Metric,
+						VectorDimensions: schema.VectorDimensions,
+						CodeDimensions:   schema.CodeDimensions,
+						CodeWidthBits:    schema.CodeWidthBits,
+						RowCount:         schema.RowCount,
+						OrdinalOrder:     schema.OrdinalOrder,
+						Codec:            schema.Codec,
+						BaseGraph:        schema.BaseGraph,
+						RequiredRoles:    columnVectorGraphQuantizedRequiredRoles(q),
+					},
+					Parts: []quantizedasset.PartImageSource{{Image: image, AssetBytes: asset.AssetBytes, SourceSchemaHash: asset.SourceSchemaHash}},
+				})
+				if err != nil {
+					b.Fatalf("Prepare %s: %v", tc.name, err)
+				}
+				if err := validateColumnVectorGraphQuantizedPreparedAsset(def, q, prepared); err != nil {
+					b.Fatalf("validate prepared %s: %v", tc.name, err)
+				}
+				columnPhysicalScanBenchSum += int64(prepared.Rows())
+			}
+		})
+	}
+}
+
 func BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450(b *testing.B) {
 	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 256, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
 	_, d, col, def, _ := openColumnGraphRabitQQuantizedBenchCollection2450(b, shape)
