@@ -23,6 +23,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rabitq"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -20439,15 +20440,24 @@ func normalizeQuantizedVectorIndexDefinitions(def VectorIndexDefinition) ([]Quan
 		switch q.Codec {
 		case "":
 			q.Codec = QuantizedVectorCodecScalarU8
-		case QuantizedVectorCodecScalarU8:
+		case QuantizedVectorCodecScalarU8, rabitq.CodecName:
 		default:
 			return nil, fmt.Errorf("collections: vector index %q quantized index %q codec %q is unsupported", def.Name, q.Name, q.Codec)
 		}
 		if q.Version == 0 {
 			q.Version = 1
 		}
-		if q.Version != 1 {
-			return nil, fmt.Errorf("collections: vector index %q quantized index %q scalar_u8 version=%d is unsupported", def.Name, q.Name, q.Version)
+		switch q.Codec {
+		case QuantizedVectorCodecScalarU8:
+			if q.Version != 1 {
+				return nil, fmt.Errorf("collections: vector index %q quantized index %q scalar_u8 version=%d is unsupported", def.Name, q.Name, q.Version)
+			}
+		case rabitq.CodecName:
+			if q.Version != rabitq.CodecVersion {
+				return nil, fmt.Errorf("collections: vector index %q quantized index %q rabitq_1bit version=%d is unsupported", def.Name, q.Name, q.Version)
+			}
+		default:
+			return nil, fmt.Errorf("collections: vector index %q quantized index %q codec %q missing version validation", def.Name, q.Name, q.Codec)
 		}
 		out[i] = q
 	}

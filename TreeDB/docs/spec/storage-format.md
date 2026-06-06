@@ -730,13 +730,17 @@ asset roles include adjacency (`uint32_list` over
 `raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
 optional normalized vectors (`float32_vector` over `raw_float32_vector`), row
 references (`int64` over `raw_int64`), exact returned document IDs (`bytes`
-over `raw_bytes_offsets`), and quantized code assets (`quantized_codes` role,
-`byte_vector` over `raw_fixed_bytes`, asset IDs `quantized/<name>/codes`) for
-declared scalar_u8 score planes. The active manifest checksum includes
-the control record, but the record's base checksum excludes vector-index derived
-records so stale-state checks compare against authoritative collection data. See
-`vector-index-state-manifest.md` and `vector-index-row-ref-state-1993.md` for
-validation and fail-closed rules.
+over `raw_bytes_offsets`), and quantized code assets (`quantized_codes` role).
+Declared scalar_u8 score planes use `byte_vector` over `raw_fixed_bytes` with
+asset IDs `quantized/<name>/codes`. Declared `rabitq_1bit` v1 score planes use
+`packed_bit_vector` over `raw_packed_bit_vector` with asset IDs
+`quantized/<name>/packed_codes`; their typed-column part contains the
+`packed_codes`, `code_count`, and `quantized_dot_product_inv` roles described in
+`quantized-vector-index.md` and `rabitq-1bit-v1.md`. The active manifest
+checksum includes the control record, but the record's base checksum excludes
+vector-index derived records so stale-state checks compare against authoritative
+collection data. See `vector-index-state-manifest.md` and
+`vector-index-row-ref-state-1993.md` for validation and fail-closed rules.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
@@ -1154,15 +1158,18 @@ deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
 collection vector-index rebuild path for the named index. For explicit
 `column_graph` indexes, that path rebuilds any legacy row graph asset only for
 compatibility, publishes inverse norms, HNSW adjacency, base row references,
-returned document IDs, and declared scalar quantized code score planes as
-vector-index state assets, and records vector-index control identity in the
-`TVIS` state record. Quantized assets use role `quantized_codes` and asset ids
-`quantized/<name>/codes`; query modes that select them fail closed when matching
-state is absent or stale. Old adjacency-source refs are `#1989-quarantined`
-compatibility. Current graph manifests may still contain row graph refs and
-legacy layer-source trailer refs for compatibility; new derived-state refs belong
-in vector-index state. Replay outcomes that are
-defined no-ops, such as a strategy/config drift status that no longer requires a
+returned document IDs, and declared quantized code score planes as vector-index
+state assets, and records vector-index control identity in the `TVIS` state
+record. Quantized assets use role `quantized_codes`; scalar_u8 assets use asset
+ids `quantized/<name>/codes` with `byte_vector` / `raw_fixed_bytes`, while
+`rabitq_1bit` v1 assets use asset ids `quantized/<name>/packed_codes` with
+`packed_bit_vector` / `raw_packed_bit_vector`. Query modes that select
+quantized assets fail closed when matching state is absent or stale. Old
+adjacency-source refs are `#1989-quarantined` compatibility. Current graph
+manifests may still contain row graph refs and legacy layer-source trailer refs
+for compatibility; new derived-state refs belong in vector-index state. Replay
+outcomes that are defined no-ops, such as a strategy/config drift status that no
+longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and
 undefined replay outcomes fail closed before advancing `AppliedCommandLSN`.
