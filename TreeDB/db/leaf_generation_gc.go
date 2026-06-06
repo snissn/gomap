@@ -99,6 +99,7 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	snap = nil
 	intermediateChanged := false
 	zombieFileIDs := make(map[uint32]struct{})
+	activeFileRefs := leafGenerationActiveFileRefCounts(manifest)
 	for i := range manifest.Generations {
 		gen := &manifest.Generations[i]
 		genBytes := int64(0)
@@ -112,6 +113,23 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		}
 		stats.GenerationsTotal++
 		if gen.State == leafGenerationStateDeleted {
+			// Zombie state is in-memory only. After a reopen, deleted manifest records
+			// whose files are still present must be marked zombie again so deletion is
+			// retried, unless another active generation has legitimately reused the ID.
+			seenFiles := make(map[uint32]struct{}, len(gen.FileIDs))
+			for _, fileID := range gen.FileIDs {
+				if fileID == 0 {
+					continue
+				}
+				if _, seen := seenFiles[fileID]; seen {
+					continue
+				}
+				seenFiles[fileID] = struct{}{}
+				if activeFileRefs[fileID] > 0 {
+					continue
+				}
+				zombieFileIDs[page.ValueLogFileID(fileID)] = struct{}{}
+			}
 			continue
 		}
 		if gen.State == leafGenerationStateWritable {
@@ -152,8 +170,24 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			if bytes := loadGenBytes(); bytes > 0 {
 				stats.BytesDeleted += bytes
 			}
+			seenFiles := make(map[uint32]struct{}, len(gen.FileIDs))
 			for _, fileID := range gen.FileIDs {
 				if fileID == 0 {
+					continue
+				}
+				if _, seen := seenFiles[fileID]; seen {
+					continue
+				}
+				seenFiles[fileID] = struct{}{}
+				// Malformed legacy manifests may mention a physical leaf segment in
+				// more than one active generation. Deleting this generation must not
+				// unlink a segment another active generation still references, but it
+				// should still reclaim the file when this pass deletes the final active
+				// reference.
+				if activeFileRefs[fileID] > 0 {
+					activeFileRefs[fileID]--
+				}
+				if activeFileRefs[fileID] > 0 {
 					continue
 				}
 				zombieFileIDs[page.ValueLogFileID(fileID)] = struct{}{}
@@ -179,6 +213,8 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			return stats, err
 		}
 		db.leafGenerationManifest = manifest
+	}
+	if intermediateChanged || len(zombieFileIDs) > 0 {
 		if err := db.publishLeafGenerationState(len(zombieFileIDs) > 0); err != nil {
 			return stats, err
 		}
@@ -199,6 +235,30 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	}
 	db.leafGenerationManifest = manifest
 	return stats, nil
+}
+
+func leafGenerationActiveFileRefCounts(manifest *leafGenerationManifest) map[uint32]int {
+	counts := make(map[uint32]int)
+	if manifest == nil {
+		return counts
+	}
+	for _, gen := range manifest.Generations {
+		if gen.State == leafGenerationStateDeleted {
+			continue
+		}
+		seen := make(map[uint32]struct{}, len(gen.FileIDs))
+		for _, fileID := range gen.FileIDs {
+			if fileID == 0 {
+				continue
+			}
+			if _, ok := seen[fileID]; ok {
+				continue
+			}
+			seen[fileID] = struct{}{}
+			counts[fileID]++
+		}
+	}
+	return counts
 }
 
 func collectLiveLeafGenerationIDs(ctx context.Context, snap *Snapshot, protectedRootIDs, protectedSystemRootIDs []uint64) (map[uint64]struct{}, error) {
