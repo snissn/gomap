@@ -330,16 +330,16 @@ func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, 
 	}
 	cacheBeforeTimed := fixture.collection.collectionVectorIndexPreparedSearchCacheSnapshot()
 	b.ReportAllocs()
+	b.ResetTimer()
+	close(start)
+	wg.Wait()
+	b.StopTimer()
 	b.ReportMetric(float64(concurrency), "concurrency")
 	b.ReportMetric(1, "collection_searchvectorindex_with_buffer_seam")
 	b.ReportMetric(1, "collection_buffered_quantized_row")
 	b.ReportMetric(0, "open_searcher_calls/op")
 	b.ReportMetric(0, "open_setup_in_timed_loop")
 	b.ReportMetric(1, "reported_stats_mode_production")
-	b.ResetTimer()
-	close(start)
-	wg.Wait()
-	b.StopTimer()
 	if errValue := firstErr.Load(); errValue != nil {
 		b.Fatalf("%s", errValue.(string))
 	}
