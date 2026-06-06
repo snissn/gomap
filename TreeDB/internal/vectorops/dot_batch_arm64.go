@@ -28,6 +28,27 @@ func DotFloat32Indexed(dst []float32, base []float32, query []float32, rowIDs []
 	if !dotFloat32IndexedShapeOK(base, query, rowIDs, dims, rows) {
 		return dotFloat32BatchInvalidStatus()
 	}
+	return dotFloat32IndexedPrevalidated(dst, base, query, rowIDs, dims, rows)
+}
+
+// DotFloat32IndexedPrevalidated writes dot products for row-major base rows
+// selected by rowIDs whose bounds were already checked by the caller. It still
+// validates the non-indexed shape (dst/row count, dims, base/query minimum
+// length) but intentionally skips scanning rowIDs so hot graph-search paths that
+// already validated adjacency ordinals do not pay that check twice. Passing an
+// out-of-range row ID violates this function's contract.
+func DotFloat32IndexedPrevalidated(dst []float32, base []float32, query []float32, rowIDs []uint32, dims int) DotFloat32BatchStatus {
+	rows := dotFloat32IndexedRows(dst, rowIDs)
+	if rows == 0 {
+		return DotFloat32BatchStatus{}
+	}
+	if !dotFloat32IndexedPrevalidatedShapeOK(base, query, dims, rows) {
+		return dotFloat32BatchInvalidStatus()
+	}
+	return dotFloat32IndexedPrevalidated(dst, base, query, rowIDs, dims, rows)
+}
+
+func dotFloat32IndexedPrevalidated(dst []float32, base []float32, query []float32, rowIDs []uint32, dims, rows int) DotFloat32BatchStatus {
 	if !dotFloat32IndexedOptimizedEligible(rows, dims) {
 		dotFloat32IndexedScalar(dst, base, query, rowIDs, dims, rows)
 		return dotFloat32BatchStatus(rows, false)
