@@ -2,8 +2,9 @@
 
 Status: pre-alpha scalar `scalar_u8` v1 score-plane closeout for explicit
 TreeDB `column_graph` query modes. Exact/default behavior remains the
-production baseline. Non-scalar codecs such as BRQ, RaBitQ, PQ/OPQ, and SIMD
-popcount variants are future work and are not part of this scalar closeout.
+production baseline. The `rabitq_1bit` v1 contract and pure-Go oracle are now
+specified separately in `rabitq-1bit-v1.md`; durable RaBitQ assets, search
+integration, and SIMD/popcount acceleration remain follow-up work.
 
 ## User-visible query modes
 
@@ -121,8 +122,11 @@ shortlist reads for `quantized_rerank`, and storage/rebuild accounting. It does
 
 Future quantization work should be separate from this scalar score-plane closeout:
 
-- BRQ/RaBitQ/PQ/OPQ/residual-PQ codecs and packed popcount scorers need their
-  own codec specs, tests, recall sweeps, and benchmark gates.
+- RaBitQ durable assets, search integration, recall/storage sweeps, and SIMD
+  acceleration must follow the `rabitq-1bit-v1.md` contract and prove parity with
+  its pure-Go oracle before production use.
+- BRQ/PQ/OPQ/residual-PQ codecs and other packed popcount scorers need their own
+  codec specs, tests, recall sweeps, and benchmark gates.
 - Batch scorer kernels, SIMD/popcount integration, graph control-flow changes,
   block-planner/windowing changes, and traversal scheduling changes are not part
   of #1926 scalar acceptance. They must not be smuggled into scalar docs or used
