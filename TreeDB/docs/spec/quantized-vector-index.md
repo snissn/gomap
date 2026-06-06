@@ -122,7 +122,9 @@ shortlist reads for `quantized_rerank`, and storage/rebuild accounting. It does
 Future quantization work should be separate from this scalar score-plane closeout:
 
 - BRQ/RaBitQ/PQ/OPQ/residual-PQ codecs and packed popcount scorers need their
-  own codec specs, tests, recall sweeps, and benchmark gates.
+  own codec specs, tests, recall sweeps, and benchmark gates. RaBitQ go-highway
+  dependency/toolchain readiness is tracked separately in
+  [rabitq-go-highway-readiness.md](rabitq-go-highway-readiness.md).
 - Batch scorer kernels, SIMD/popcount integration, graph control-flow changes,
   block-planner/windowing changes, and traversal scheduling changes are not part
   of #1926 scalar acceptance. They must not be smuggled into scalar docs or used

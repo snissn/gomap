@@ -12,7 +12,7 @@
 
 ## Requirements
 
-- Go `1.25+` (see `go.mod`)
+- Go `1.26+` (see `go.mod`; older local Go installations should use `GOTOOLCHAIN=auto` or install Go 1.26)
 - Linux/macOS recommended (TreeDB uses `mmap`)
 
 ## Local Workflow

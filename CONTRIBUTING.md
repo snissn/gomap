@@ -14,7 +14,7 @@ This repo is a dev playground for two storage engines (HashDB + TreeDB) and benc
 
 ## Requirements
 
-- Go `1.25+` (see `go.mod`)
+- Go `1.26+` (see `go.mod`; CI installs the version declared there)
 - Linux/macOS recommended (TreeDB is Unix-focused due to mmap/locking specifics)
 
 ## Common Commands
@@ -32,7 +32,7 @@ This repo is a dev playground for two storage engines (HashDB + TreeDB) and benc
 
 ## CI
 
-GitHub Actions runs:
+GitHub Actions runs with `actions/setup-go` using the root `go.mod` as the version file.
 
 - Root module `go vet` + `go test ./...` (Linux + macOS)
 - TreeDB `go vet` + `go test ./...` (Linux + macOS)
