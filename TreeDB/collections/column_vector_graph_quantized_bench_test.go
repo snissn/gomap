@@ -317,9 +317,23 @@ func addColumnGraphScalarU8QuantizedBenchmarkStats1926(dst *VectorIndexSearchSta
 	dst.QuantizedCodeBytesRead += src.QuantizedCodeBytesRead
 	dst.QuantizedRerankCandidates += src.QuantizedRerankCandidates
 	dst.QuantizedRerankExactScoreCalls += src.QuantizedRerankExactScoreCalls
+	dst.QuantizedScorerActive += src.QuantizedScorerActive
+	dst.QuantizedAssetMissing += src.QuantizedAssetMissing
+	dst.QuantizedAssetInvalid += src.QuantizedAssetInvalid
+	dst.QuantizedAssetStale += src.QuantizedAssetStale
+	dst.QuantizedAssetClosed += src.QuantizedAssetClosed
+	dst.QuantizedAssetUnavailable += src.QuantizedAssetUnavailable
+	dst.QuantizedAssetMmapDirect += src.QuantizedAssetMmapDirect
+	dst.QuantizedAssetHeapCopy += src.QuantizedAssetHeapCopy
+	dst.QuantizedAssetOpenNanos += src.QuantizedAssetOpenNanos
+	dst.QuantizedAssetMappedBytes += src.QuantizedAssetMappedBytes
+	dst.QuantizedAssetHeapCopyBytes += src.QuantizedAssetHeapCopyBytes
+	dst.QuantizedAssetActiveHandles += src.QuantizedAssetActiveHandles
 	dst.ScoreFloat64Fallbacks += src.ScoreFloat64Fallbacks
 	dst.PreparedGraphSearchViews += src.PreparedGraphSearchViews
 	dst.GraphRowFallbacks += src.GraphRowFallbacks
+	dst.SearchRouteQuantizedOnly += src.SearchRouteQuantizedOnly
+	dst.SearchRouteQuantizedRerank += src.SearchRouteQuantizedRerank
 	dst.TypedColumnFallbacks += src.TypedColumnFallbacks
 	dst.AdjacencyLegacyFallbacks += src.AdjacencyLegacyFallbacks
 	dst.AdjacencySourceFallbacks += src.AdjacencySourceFallbacks
@@ -424,9 +438,23 @@ func reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b *testing.B, fixtu
 	b.ReportMetric(float64(stats.QuantizedCodeBytesRead)/denom, "quantized_code_B/search")
 	b.ReportMetric(float64(stats.QuantizedRerankCandidates)/denom, "quantized_rerank_candidates/search")
 	b.ReportMetric(float64(stats.QuantizedRerankExactScoreCalls)/denom, "quantized_rerank_exact_score_calls/search")
+	b.ReportMetric(float64(stats.QuantizedScorerActive)/denom, "quantized_scorer_active/search")
+	b.ReportMetric(float64(stats.QuantizedAssetMissing)/denom, "quantized_asset_missing/search")
+	b.ReportMetric(float64(stats.QuantizedAssetInvalid)/denom, "quantized_asset_invalid/search")
+	b.ReportMetric(float64(stats.QuantizedAssetStale)/denom, "quantized_asset_stale/search")
+	b.ReportMetric(float64(stats.QuantizedAssetClosed)/denom, "quantized_asset_closed/search")
+	b.ReportMetric(float64(stats.QuantizedAssetUnavailable)/denom, "quantized_asset_unavailable/search")
+	b.ReportMetric(float64(stats.QuantizedAssetMmapDirect)/denom, "quantized_asset_mmap_direct/search")
+	b.ReportMetric(float64(stats.QuantizedAssetHeapCopy)/denom, "quantized_asset_heap_copy/search")
+	b.ReportMetric(float64(stats.QuantizedAssetOpenNanos)/denom, "quantized_asset_open_ns")
+	b.ReportMetric(float64(stats.QuantizedAssetMappedBytes)/denom, "quantized_asset_mapped_B")
+	b.ReportMetric(float64(stats.QuantizedAssetHeapCopyBytes)/denom, "quantized_asset_heap_copy_B")
+	b.ReportMetric(float64(stats.QuantizedAssetActiveHandles)/denom, "quantized_asset_active_handles")
 	b.ReportMetric(float64(stats.ScoreFloat64Fallbacks)/denom, "score_float64_fallbacks/search")
 	b.ReportMetric(float64(stats.PreparedGraphSearchViews)/denom, "prepared_graph_search_views/search")
 	b.ReportMetric(float64(stats.GraphRowFallbacks)/denom, "graph_row_fallbacks/search")
+	b.ReportMetric(float64(stats.SearchRouteQuantizedOnly)/denom, "search_route_quantized_only/search")
+	b.ReportMetric(float64(stats.SearchRouteQuantizedRerank)/denom, "search_route_quantized_rerank/search")
 	b.ReportMetric(float64(stats.TypedColumnFallbacks)/denom, "typed_column_vector_fallbacks/search")
 	b.ReportMetric(float64(stats.AdjacencyLegacyFallbacks)/denom, "adjacency_legacy_fallbacks/search")
 	b.ReportMetric(float64(stats.AdjacencySourceFallbacks)/denom, "adjacency_source_fallbacks/search")
