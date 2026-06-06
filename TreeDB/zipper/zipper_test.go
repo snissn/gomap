@@ -144,11 +144,12 @@ func (s *memoryLeafPageStore) resetObservations() {
 }
 
 type batchMemoryLeafPageStore struct {
-	next        uint32
-	pages       map[page.LeafLogPtr][]byte
-	batchLens   []int
-	singleCalls int
-	readCalls   int
+	next           uint32
+	pages          map[page.LeafLogPtr][]byte
+	batchLens      []int
+	singleCalls    int
+	readCalls      int
+	discardAppends bool
 }
 
 func newBatchMemoryLeafPageStore() *batchMemoryLeafPageStore {
@@ -162,7 +163,9 @@ func (s *batchMemoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLog
 	}
 	ptr := page.LeafLogPtr{FileID: 1, Offset: uint64(s.next), RecordLengthHint: page.PageSize}
 	s.next += page.PageSize + 32
-	s.pages[ptr] = append([]byte(nil), leafPage...)
+	if !s.discardAppends {
+		s.pages[ptr] = append([]byte(nil), leafPage...)
+	}
 	return ptr, nil
 }
 
@@ -177,7 +180,9 @@ func (s *batchMemoryLeafPageStore) AppendLeafPages(leafPages [][]byte) ([]page.L
 	for i, leafPage := range leafPages {
 		ptr := page.LeafLogPtr{FileID: 1, Offset: offset, RecordLengthHint: page.ValuePtrMarkGrouped(page.PageSize, uint8(i)), SubIndex: uint16(i)}
 		ptrs[i] = ptr
-		s.pages[ptr] = append([]byte(nil), leafPage...)
+		if !s.discardAppends {
+			s.pages[ptr] = append([]byte(nil), leafPage...)
+		}
 	}
 	return ptrs, nil
 }
@@ -197,6 +202,24 @@ func (s *batchMemoryLeafPageStore) ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 	}
 	s.readCalls++
 	return append([]byte(nil), data...), nil
+}
+
+func (s *batchMemoryLeafPageStore) ReadUnsafeToWithCacheHit(ptr page.ValuePtr, dst []byte) ([]byte, bool, bool, error) {
+	leafPtr, err := page.LeafLogPtrFromValuePtr(ptr)
+	if err != nil {
+		return nil, false, false, err
+	}
+	data, ok := s.pages[leafPtr]
+	if !ok {
+		return nil, false, false, io.EOF
+	}
+	s.readCalls++
+	if cap(dst) >= len(data) {
+		out := dst[:len(data)]
+		copy(out, data)
+		return out, true, false, nil
+	}
+	return append([]byte(nil), data...), false, false, nil
 }
 
 func (s *batchMemoryLeafPageStore) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error) {
@@ -1122,5 +1145,94 @@ func BenchmarkMergeLeafOuterLeafBatchScratch(b *testing.B) {
 		if err != nil {
 			b.Fatalf("mergeLeaf: %v", err)
 		}
+	}
+}
+
+func BenchmarkZipperApplyOuterLeafRandomOverwrite(b *testing.B) {
+	const (
+		keyCount  = 1 << 16
+		batchSize = 8192
+		valueSize = 128
+	)
+
+	dir := b.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer p.Close()
+
+	z := New(p, &MockAllocator{p: p})
+	z.SetOuterLeavesInValueLog(true)
+	store := newBatchMemoryLeafPageStore()
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID, err := p.Alloc(1)
+	if err != nil {
+		b.Fatalf("alloc root: %v", err)
+	}
+	data, err := p.Get(rootID)
+	if err != nil {
+		b.Fatalf("get root: %v", err)
+	}
+	root := node.NewNode(data)
+	root.SetPageID(rootID)
+	root.SetType(page.PageTypeLeaf)
+	root.UpdateChecksum()
+
+	keys := make([][]byte, keyCount)
+	loadValue := bytes.Repeat([]byte{'v'}, valueSize)
+	loadBatch := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	for i := 0; i < keyCount; i++ {
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, uint64(i))
+		keys[i] = key
+		loadBatch.Set(key, loadValue)
+	}
+	rootID, _, _, err = z.Apply(rootID, loadBatch)
+	loadBatch.Close()
+	if err != nil {
+		b.Fatalf("initial apply: %v", err)
+	}
+
+	updateValue := bytes.Repeat([]byte{'u'}, valueSize)
+	updateBatch := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	for i := 0; i < batchSize; i++ {
+		idx := (i*7919 + 17) & (keyCount - 1)
+		updateBatch.Set(keys[idx], updateValue)
+	}
+	updateBatch.SortedEntries()
+	defer updateBatch.Close()
+
+	store.discardAppends = true
+	store.readCalls = 0
+
+	var leafMerges, leafLogLoads, leafLogWrites, leafBytesRead, leafBytesWritten int64
+	b.ReportAllocs()
+	b.SetBytes(int64(batchSize * (8 + valueSize)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, metrics, err := z.Apply(rootID, updateBatch)
+		if err != nil {
+			b.Fatalf("apply overwrite batch: %v", err)
+		}
+		leafMerges += int64(metrics.ZipperLeafMerges)
+		leafLogLoads += int64(metrics.ZipperLeafLogNodeLoads)
+		leafLogWrites += int64(metrics.ZipperLeafLogPagesWritten)
+		leafBytesRead += int64(metrics.ZipperLeafLogNodeBytesRead)
+		leafBytesWritten += int64(metrics.ZipperLeafLogPageBytesWritten)
+	}
+	b.StopTimer()
+
+	n := float64(b.N)
+	if n > 0 {
+		b.ReportMetric(float64(batchSize), "batch_ops/op")
+		b.ReportMetric(float64(leafMerges)/n, "leaf_merges/op")
+		b.ReportMetric(float64(leafLogLoads)/n, "leaflog_loads/op")
+		b.ReportMetric(float64(leafLogWrites)/n, "leaflog_writes/op")
+		b.ReportMetric(float64(leafBytesRead)/n, "leaflog_read_B/op")
+		b.ReportMetric(float64(leafBytesWritten)/n, "leaflog_write_B/op")
+		b.ReportMetric(float64(store.readCalls)/n, "store_reads/op")
 	}
 }
