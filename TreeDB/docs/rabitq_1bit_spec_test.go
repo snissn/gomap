@@ -56,6 +56,11 @@ func TestDocs_RaBitQ1BitV1LinkedOwners2449(t *testing.T) {
 			"RolePackedCodes",
 			"CodeWidthBits=1",
 		},
+		filepath.Join(treeRoot, "docs", "spec", "storage-format.md"): {
+			"`rabitq_1bit` v1 score planes",
+			"`quantized/<name>/packed_codes`",
+			"`packed_bit_vector` over `raw_packed_bit_vector`",
+		},
 	}
 	for path, wants := range checks {
 		data, err := os.ReadFile(path)
