@@ -355,6 +355,33 @@ func TestLoadOrCreateLeafGenerationManifest_BootstrapsExistingLeafFiles(t *testi
 	}
 }
 
+func TestReconcileLeafGenerationManifestWithDir_IgnoresDeletedGenerationDuplicates(t *testing.T) {
+	leafDir := t.TempDir()
+	_, fileID := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
+	rawFileID := page.ValueLogSegmentID(fileID)
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		CurrentGenerationID: 2,
+		NextGenerationID:    3,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateDeleted, FileIDs: []uint32{rawFileID}, CreatedCommitSeq: 10, DeletedCommitSeq: 20, PublishedCommitSeq: 20},
+			{GenerationID: 2, State: leafGenerationStateWritable, CreatedCommitSeq: 30, PublishedCommitSeq: 30},
+		},
+	}
+
+	reconciled, changed, err := reconcileLeafGenerationManifestWithDir(leafDir, manifest, 99)
+	if err != nil {
+		t.Fatalf("reconcileLeafGenerationManifestWithDir: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected reconcile to register file only present in deleted generation")
+	}
+	current := reconciled.Generations[reconciled.currentGenerationIndex()]
+	if got, want := current.FileIDs, []uint32{rawFileID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("current FileIDs=%v, want %v", got, want)
+	}
+}
+
 func TestLoadOrCreateLeafGenerationManifest_RecoversUnknownLeafFilesPreservesWritableTail(t *testing.T) {
 	leafDir := t.TempDir()
 	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)

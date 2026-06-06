@@ -762,6 +762,9 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	}
 	seen := make(map[uint32]struct{}, len(manifest.Generations))
 	for _, gen := range manifest.Generations {
+		if gen.State == leafGenerationStateDeleted {
+			continue
+		}
 		for _, rawFileID := range gen.FileIDs {
 			if rawFileID == 0 {
 				continue
