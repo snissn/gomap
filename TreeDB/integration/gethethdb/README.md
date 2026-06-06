@@ -20,7 +20,8 @@ Primary APIs:
 opens reject non-command-WAL TreeDB options; this adapter is intended for geth
 persistent hot-KV durability/recovery through TreeDB command WAL. When callers
 leave `WALMaxSegmentBytes` at zero, the adapter uses a 256 MiB command-WAL frame
-cap so geth's large beacon skeleton-header batches fit in one durable frame.
+cap so geth's large beacon skeleton-header batches fit in one durable frame,
+including read-only inspection of an existing command-WAL directory.
 
 ## Semantics
 

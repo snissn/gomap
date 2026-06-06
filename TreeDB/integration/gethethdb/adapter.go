@@ -36,8 +36,8 @@ type OpenOptions struct {
 
 	// Options, when non-nil, supplies TreeDB options to use. Open copies the
 	// struct, forces Dir to the Open path when path is non-empty, applies
-	// ReadOnly/KeepRecent/MemtableMode overrides below, applies geth-safe command
-	// WAL defaults for zero-valued knobs, and still requires CommandWAL for
+	// ReadOnly/KeepRecent/MemtableMode overrides below, applies geth-safe WAL
+	// sizing defaults for zero-valued knobs, and still requires CommandWAL for
 	// writable opens.
 	Options *treedb.Options
 
@@ -82,8 +82,9 @@ func Open(path string, options *OpenOptions) (*Database, error) {
 
 // OpenWithOptions opens TreeDB with caller-supplied options and wraps it as an
 // ethdb.KeyValueStore. Writable options must enable TreeDB command WAL. When
-// WALMaxSegmentBytes is left at zero, the adapter applies a geth-sized command
-// WAL frame cap so large skeleton-header batches fit in one durable frame.
+// WALMaxSegmentBytes is left at zero, the adapter applies a geth-sized WAL frame
+// cap before open so command-WAL activation from persisted format config also
+// uses the larger cap.
 func OpenWithOptions(opts treedb.Options) (*Database, error) {
 	applyGethCommandWALDefaults(&opts)
 	if strings.TrimSpace(opts.Dir) == "" {
@@ -139,13 +140,15 @@ func resolveTreeDBOptions(path string, options *OpenOptions) (treedb.Options, er
 }
 
 func applyGethCommandWALDefaults(opts *treedb.Options) {
-	if opts == nil || !opts.CommandWAL || opts.WALMaxSegmentBytes != 0 {
+	if opts == nil || opts.WALMaxSegmentBytes != 0 {
 		return
 	}
 	// Geth beacon skeleton sync can commit the whole 131,072-header scratch
 	// window in one ethdb batch. Its encoded raw-KV command WAL payload is larger
 	// than TreeDB's generic 64MiB commitlog default, so use a geth adapter default
-	// with enough headroom while preserving explicit caller overrides.
+	// with enough headroom while preserving explicit caller overrides. Apply this
+	// before open even when CommandWAL is false because an existing DB can activate
+	// command WAL from its persisted format config during read-only inspection.
 	opts.WALMaxSegmentBytes = defaultGethCommandWALMaxSegmentBytes
 }
 

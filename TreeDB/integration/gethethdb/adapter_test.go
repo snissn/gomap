@@ -80,6 +80,26 @@ func TestOpenWithOptionsAppliesGethSizedCommandWALSegments(t *testing.T) {
 	}
 }
 
+func TestOpenWithOptionsAppliesGethSizedWALSegmentsBeforeReadOnlyFormatActivation(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "treedb")
+	writable, err := Open(dir, nil)
+	if err != nil {
+		t.Fatalf("Open writable: %v", err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("close writable: %v", err)
+	}
+
+	readOnly, err := OpenWithOptions(treedb.Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("OpenWithOptions read-only: %v", err)
+	}
+	defer readOnly.Close()
+	if got := readOnly.walMaxSegmentBytes; got != defaultGethCommandWALMaxSegmentBytes {
+		t.Fatalf("read-only WALMaxSegmentBytes=%d want %d", got, defaultGethCommandWALMaxSegmentBytes)
+	}
+}
+
 func TestOpenRejectsWritableNonCommandWALOptions(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileBench, filepath.Join(t.TempDir(), "treedb"))
 	if _, err := OpenWithOptions(opts); err == nil {
