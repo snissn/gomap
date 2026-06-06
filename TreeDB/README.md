@@ -138,7 +138,43 @@ fields and search them without making ANN storage the source of truth. Canonical
 documents and embeddings remain in TreeDB primary storage; vector indexes keep
 stable collection document IDs and exact-rerank candidates from canonical rows.
 
-The initial API lives in `TreeDB/collections`:
+Current entry points:
+
+| Goal | Entry point | Boundary |
+| --- | --- | --- |
+| High-QPS no-document collection serving | `Collection.SearchVectorIndexWithBuffer` | Caller-owned `VectorIndexSearchBuffer`; exact `IncludeDocuments=false`; warm the `hnsw_search_pack_v1` prepared route before serving. |
+| Convenience no-document calls | `Collection.SearchVectorIndex` with `IncludeDocuments=false` | Response-owned results/IDs; healthy exact calls use the cached no-document route but intentionally allocate result storage. |
+| Reusable low-level workers | `Collection.OpenVectorIndexSearcher` + `VectorIndexSearcher.SearchWithBuffer` | One opened searcher and one reusable buffer per worker; caller owns searcher/snapshot lifetime. |
+| Search plus materialization | `Collection.SearchVectorIndex` with `IncludeDocuments=true` | Explicit with-document path; report document-fetch/materialization counters separately from no-document rows. |
+| Quantized score planes | Explicit `quantized_only` / `quantized_rerank` modes | Separate codec-generic follow-up path; not the exact high-QPS demo route or no-document `hnsw_search_pack_v1` claim. |
+
+Exact-only runnable demo from the repository root:
+
+```sh
+GOWORK=off go run ./cmd/treedb_vector_highqps_demo \
+  -docs 1000 \
+  -dims 64 \
+  -queries 1000 \
+  -warmup-queries 16 \
+  -top-k 10 \
+  -m 16 \
+  -ef-construction 128 \
+  -ef-search 128
+```
+
+Use
+[`TreeDB/docs/guides/vector-search-high-qps-collection-api.md`](docs/guides/vector-search-high-qps-collection-api.md)
+for the API chooser and buffer lifetime caveats,
+[`TreeDB/docs/guides/vector-search-benchmark-workflow.md`](docs/guides/vector-search-benchmark-workflow.md)
+for the canonical Tier S/Tier F workflow and guardrail counters, and
+[`cmd/treedb_vector_highqps_demo/README.md`](../cmd/treedb_vector_highqps_demo/README.md)
+for demo output interpretation. The exact demo intentionally excludes document
+materialization and quantized modes. Healthy exact no-document rows prove
+`search_route_hnsw_search_pack/search=1`,
+`hnsw_search_pack_active/search=1`, `docs_fetched/search=0`, zero fallback and
+scratch counters, and no per-query collection open/setup in timed loops.
+
+Additional collection vector APIs and diagnostics live in `TreeDB/collections`:
 
 - `Collection.SearchVectorsExact` scans live rows and returns exact top-k
   results for cosine, squared L2, or inner-product distance.
@@ -150,9 +186,12 @@ The initial API lives in `TreeDB/collections`:
 - `BenchmarkCollectionVectorIndexBuild` and
   `BenchmarkCollectionVectorUSearchBuild` isolate index build cost from query
   latency for TreeDB and the optional USearch comparator.
-- `VectorIndexOptions.Encoding` can be set to `VectorIndexEncodingInt8` to keep
-  an ANN-side scalar-quantized vector copy. This reduces index vector memory and
-  snapshot size while preserving full-precision canonical rows for exact rerank.
+- Declared quantized score planes use explicit `quantized_only` or
+  `quantized_rerank` query modes with codec-generic `quantized_*` route,
+  validation, and fail-closed counters. Scalar `scalar_u8` evidence is a
+  behavior/storage baseline, not a current speedup claim; keep it separate from
+  the exact no-document high-QPS path and demo. See
+  [`TreeDB/docs/spec/quantized-vector-index.md`](docs/spec/quantized-vector-index.md).
 - `VectorIndex.SaveSnapshot` and `Collection.LoadVectorIndexSnapshot` persist
   immutable index epochs under `vector_indexes/<collection>/<index>/` with a
   manifest plus checksum-verified node, edge, tombstone, and docmap files.
