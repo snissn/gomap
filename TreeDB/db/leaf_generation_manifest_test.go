@@ -176,6 +176,29 @@ func TestLeafGenerationManifest_RegisterCurrentGenerationFileID_DedupesAcrossGen
 	}
 }
 
+func TestLeafGenerationManifest_RegisterCurrentGenerationFileID_IgnoresDeletedGenerationDuplicates(t *testing.T) {
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		CurrentGenerationID: 2,
+		NextGenerationID:    3,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateDeleted, FileIDs: []uint32{77}, CreatedCommitSeq: 10, DeletedCommitSeq: 20, PublishedCommitSeq: 20},
+			{GenerationID: 2, State: leafGenerationStateWritable, CreatedCommitSeq: 30, PublishedCommitSeq: 30},
+		},
+	}
+
+	changed, err := manifest.registerCurrentGenerationFileID(77, 99)
+	if err != nil {
+		t.Fatalf("registerCurrentGenerationFileID deleted duplicate: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected deleted duplicate file registration to update current generation")
+	}
+	if got, want := manifest.Generations[1].FileIDs, []uint32{77}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("current FileIDs=%v, want %v", got, want)
+	}
+}
+
 func TestLeafGenerationManifest_RegisterCurrentGenerationFileID_RollsGenerationOnNewFile(t *testing.T) {
 	manifest := newLeafGenerationManifest(10)
 	if _, err := manifest.registerCurrentGenerationFileID(77, 44); err != nil {
