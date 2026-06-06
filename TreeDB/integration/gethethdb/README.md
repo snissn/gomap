@@ -30,9 +30,13 @@ persistent hot-KV durability/recovery through TreeDB command WAL.
 - `NewIterator(prefix, start)` iterates `prefix` keys starting at
   `prefix || start`.
 - `SyncKeyValue` maps to `TreeDB.DB.Checkpoint()`.
-- `Compact` maps to TreeDB's current whole-index `CompactIndex()` primitive;
-  geth's range arguments are accepted for interface compatibility but do not
-  narrow the TreeDB compaction.
+- `Compact(nil, nil)` maps to TreeDB's high-level `CompactStorage` full-storage
+  compaction sequence.
+- Bounded `Compact(start, limit)` calls with non-nil `limit` are accepted as
+  advisory no-ops because TreeDB does not currently expose geth-style
+  range-scoped compaction. A nil `limit` also handles the final tail range in
+  geth's 16/256-range compaction sweeps and runs one full TreeDB storage
+  compaction.
 
 ## Validation
 

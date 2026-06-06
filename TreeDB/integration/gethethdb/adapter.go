@@ -8,6 +8,7 @@
 package gethethdb
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -130,16 +131,24 @@ func resolveTreeDBOptions(path string, options *OpenOptions) (treedb.Options, er
 	return opts, nil
 }
 
+type compactStorageFunc func(context.Context, *treedb.DB) error
+
+func runCompactStorageFull(ctx context.Context, tdb *treedb.DB) error {
+	_, err := tdb.CompactStorage(ctx, treedb.CompactStorageOptions{Mode: treedb.CompactStorageFull})
+	return err
+}
+
 // Wrap adapts an already-open TreeDB handle. The caller owns the handle through
 // the returned Database; Close closes the wrapped TreeDB handle.
 func Wrap(db *treedb.DB) *Database {
-	return &Database{db: db}
+	return &Database{db: db, compactStorage: runCompactStorageFull}
 }
 
 // Database implements ethdb.KeyValueStore on top of TreeDB.
 type Database struct {
-	db     *treedb.DB
-	closed atomic.Bool
+	db             *treedb.DB
+	compactStorage compactStorageFunc
+	closed         atomic.Bool
 }
 
 var _ ethdb.KeyValueStore = (*Database)(nil)
@@ -301,15 +310,27 @@ func (d *Database) NewIterator(prefix []byte, start []byte) ethdb.Iterator {
 	return &Iterator{inner: inner}
 }
 
-// Compact compacts TreeDB's index. TreeDB's public compaction primitive is
-// currently whole-index, so start/limit are accepted for ethdb compatibility but
-// not used to narrow the compaction.
+// Compact accepts geth ethdb compaction requests.
+//
+// TreeDB currently has no range-scoped compaction equivalent to geth's
+// LevelDB/Pebble range compaction. Bounded ranges are therefore treated as
+// advisory no-ops so geth range sweeps do not multiply full-storage compaction
+// cost. A nil limit represents either geth's whole-DB request (nil, nil) or the
+// final tail range in geth range sweeps, and runs TreeDB's high-level storage
+// compaction entrypoint.
 func (d *Database) Compact(start []byte, limit []byte) error {
 	tdb, err := d.tree()
 	if err != nil {
 		return err
 	}
-	return tdb.CompactIndex()
+	if limit != nil {
+		return nil
+	}
+	compactStorage := d.compactStorage
+	if compactStorage == nil {
+		compactStorage = runCompactStorageFull
+	}
+	return compactStorage(context.Background(), tdb)
 }
 
 func iteratorLowerBound(prefix, start []byte) []byte {
