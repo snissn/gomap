@@ -241,8 +241,8 @@ func (p *Plan) ScoreCosine(query Query, code []byte, codeCount uint32, quantized
 	if err := p.ValidateQuery(query); err != nil {
 		return 0, err
 	}
-	if quantizedDotProductInv <= 0 || math.IsNaN(float64(quantizedDotProductInv)) || math.IsInf(float64(quantizedDotProductInv), 0) {
-		return 0, fmt.Errorf("%w: invalid quantized_dot_product_inv=%v", ErrDegenerateVector, quantizedDotProductInv)
+	if err := p.ValidateQuantizedDotProductInv(quantizedDotProductInv); err != nil {
+		return 0, err
 	}
 	var weightedSignDot float64
 	for i, weight32 := range query.AbsWeights[:p.codeDimensions] {
@@ -295,6 +295,26 @@ func (p *Plan) CountCodeBits(code []byte) uint32 {
 		count += bits.OnesCount8(code[full] & mask)
 	}
 	return uint32(count)
+}
+
+// ValidateQuantizedDotProductInv verifies the finite side-array range implied by
+// unit-L2 vectors and an orthonormal rotation: L1(rotated) is in
+// [1, sqrt(CodeDimensions)], so its inverse is in [1/sqrt(CodeDimensions), 1]
+// modulo float32 rounding tolerance.
+func (p *Plan) ValidateQuantizedDotProductInv(value float32) error {
+	if p == nil || p.codeDimensions <= 0 {
+		return fmt.Errorf("%w: nil or invalid plan", ErrInvalidConfig)
+	}
+	fv := float64(value)
+	if value <= 0 || math.IsNaN(fv) || math.IsInf(fv, 0) {
+		return fmt.Errorf("%w: invalid quantized_dot_product_inv=%v", ErrDegenerateVector, value)
+	}
+	minValue := p.invSqrtCodeDims
+	const tolerance = 1e-5
+	if fv < minValue-tolerance || fv > 1+tolerance {
+		return fmt.Errorf("%w: quantized_dot_product_inv=%v outside valid range [%v,%v]", ErrDegenerateVector, value, minValue, 1.0)
+	}
+	return nil
 }
 
 // ValidateQuery verifies query shape, sign-bit padding, finite non-negative

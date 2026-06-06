@@ -230,6 +230,8 @@ func TestScoreCosineFailsClosedOnMalformedSideInputs2449(t *testing.T) {
 		{name: "code_count", mut: func(_ *Query, e *EncodedVector) { e.CodeCount++ }, want: ErrDimensionMismatch},
 		{name: "zero_qdp_inv", mut: func(_ *Query, e *EncodedVector) { e.QuantizedDotProductInv = 0 }, want: ErrDegenerateVector},
 		{name: "nan_qdp_inv", mut: func(_ *Query, e *EncodedVector) { e.QuantizedDotProductInv = float32(math.NaN()) }, want: ErrDegenerateVector},
+		{name: "tiny_qdp_inv", mut: func(_ *Query, e *EncodedVector) { e.QuantizedDotProductInv = math.SmallestNonzeroFloat32 }, want: ErrDegenerateVector},
+		{name: "large_qdp_inv", mut: func(_ *Query, e *EncodedVector) { e.QuantizedDotProductInv = 1.25 }, want: ErrDegenerateVector},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			badQuery := query

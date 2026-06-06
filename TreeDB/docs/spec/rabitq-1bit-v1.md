@@ -56,9 +56,12 @@ For a finite non-zero vector `x` with `VectorDimensions=d`:
 6. Emit side arrays:
    - `code_count`: number of set logical code bits (`uint32`).
    - `quantized_dot_product_inv`: `1 / sum(abs(rotated_data[i]))` (`float32`).
+     Because the rotated data vector has unit L2 norm, valid values are in the
+     range `[1/sqrt(CodeDimensions), 1]` modulo float32 rounding tolerance.
 
-Zero vectors, non-finite values, dimension mismatches, invalid padding, and
-side-array mismatches fail closed in the reference APIs.
+Zero vectors, non-finite values, dimension mismatches, invalid padding,
+side-array mismatches, and out-of-range `quantized_dot_product_inv` values fail
+closed in the reference APIs.
 
 The deterministic rotation is fully specified by the reference code and these
 constants so future non-Go or accelerated implementations can reproduce v1:
@@ -139,6 +142,8 @@ asset/scorer PRs; it is not a production speed claim.
 - `Plan.ValidateCode` checks row width, padding, and `code_count`.
 - `Plan.ValidateQuery` checks query shape, sign-bit padding, finite non-negative
   weights, and finite positive weight sums before scoring exported query inputs.
+- `Plan.ValidateQuantizedDotProductInv` checks the side-array range implied by
+  unit-L2 vectors and the orthonormal v1 rotation.
 
 The package is allocation-disciplined when callers reuse `Workspace` and code
 buffers, but it is a reference/oracle implementation. SIMD/go-highway backends
@@ -161,7 +166,7 @@ The #2449 reference package tests cover:
 - LSB-first bit order and zero padding validation;
 - zero/degenerate vector fail-closed behavior;
 - malformed scorer side-input failures for query weights, query padding,
-  `code_count`, and `quantized_dot_product_inv`;
+  `code_count`, and missing/out-of-range `quantized_dot_product_inv`;
 - pure-Go scorer sanity versus exact cosine on deterministic fixtures;
 - zero steady-state allocations after warmup for encode/query/score.
 
