@@ -1048,13 +1048,25 @@ func mutateCachedCollectionQuantizedAssetStatus2415(tb testing.TB, col *Collecti
 	col.vectorBufferedSearchMu.Lock()
 	entry := col.vectorBufferedSearch[slot]
 	col.vectorBufferedSearchMu.Unlock()
-	if entry == nil || entry.prepared == nil || entry.prepared.searcher == nil || entry.prepared.searcher.reader == nil {
+	if entry == nil || entry.prepared == nil || entry.prepared.searcher == nil {
 		tb.Fatalf("missing cached prepared quantized entry for slot %+v", slot)
 	}
 	prepared := entry.prepared
 	prepared.mu.Lock()
 	defer prepared.mu.Unlock()
-	status := prepared.searcher.reader.quantizedAssetStatus
+	prepared.quantizedReadersMu.Lock()
+	defer prepared.quantizedReadersMu.Unlock()
+	var reader *columnVectorGraphPhysicalRowReader
+	for _, candidate := range prepared.quantizedReaders {
+		if candidate != nil {
+			reader = candidate
+			break
+		}
+	}
+	if reader == nil {
+		tb.Fatalf("cached prepared quantized entry has no pooled reader for slot %+v", slot)
+	}
+	status := reader.quantizedAssetStatus
 	if status == nil {
 		tb.Fatalf("cached prepared quantized entry has nil asset status")
 	}

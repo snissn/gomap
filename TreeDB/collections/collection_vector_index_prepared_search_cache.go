@@ -47,6 +47,11 @@ type collectionVectorIndexPreparedSearch struct {
 	pack       *columnHNSWSearchPackPreparedView
 	packStatus columnHNSWSearchPackPreparedStatus
 	searcher   *VectorIndexSearcher
+
+	quantizedReadersMu        sync.Mutex
+	quantizedReaders          []*columnVectorGraphPhysicalRowReader
+	quantizedAvailableReaders []int
+
 	routeStats vectorIndexSearchRouteStats
 	closed     bool
 }
@@ -474,23 +479,23 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		status:     response.Status,
 		snapshot:   snap,
 		catalog:    reader.catalog,
-		reader:     reader,
-		readerLast: reader.Stats(),
 		routeStats: routeStats,
 	}
 	closeSnapOnErr = false
 	closeReaderOnErr = false
 	return &collectionVectorIndexPreparedSearch{
-		key:                key,
-		family:             collectionVectorIndexPreparedSearchFamilyQuantized,
-		indexName:          def.Name,
-		quantizedIndexName: opts.QuantizedIndexName,
-		dimensions:         def.Dimensions,
-		commitSeq:          snapshotCommitSeq(snap),
-		systemRoot:         snapshotSystemRoot(snap),
-		response:           response,
-		searcher:           searcher,
-		routeStats:         routeStats,
+		key:                       key,
+		family:                    collectionVectorIndexPreparedSearchFamilyQuantized,
+		indexName:                 def.Name,
+		quantizedIndexName:        opts.QuantizedIndexName,
+		dimensions:                def.Dimensions,
+		commitSeq:                 snapshotCommitSeq(snap),
+		systemRoot:                snapshotSystemRoot(snap),
+		response:                  response,
+		searcher:                  searcher,
+		quantizedReaders:          []*columnVectorGraphPhysicalRowReader{reader},
+		quantizedAvailableReaders: []int{0},
+		routeStats:                routeStats,
 	}, response, nil
 }
 
@@ -553,7 +558,13 @@ func (p *collectionVectorIndexPreparedSearch) readyForCurrentSearch() bool {
 	}
 	switch p.family {
 	case collectionVectorIndexPreparedSearchFamilyQuantized:
-		return p.searcher != nil && !p.searcher.closed && p.searcher.reader != nil
+		if p.searcher == nil || p.searcher.closed || p.searcher.snapshot == nil {
+			return false
+		}
+		p.quantizedReadersMu.Lock()
+		ready := len(p.quantizedReaders) > 0
+		p.quantizedReadersMu.Unlock()
+		return ready
 	default:
 		if p.pack == nil {
 			return false
@@ -673,29 +684,43 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 		clear(previousResults)
 		return response, statsModeErr
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.closed || p.searcher == nil || p.searcher.closed || p.searcher.reader == nil {
+	p.mu.RLock()
+	if p.closed || p.searcher == nil || p.searcher.closed || p.searcher.snapshot == nil {
+		p.mu.RUnlock()
 		clear(previousResults)
 		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(nil, p.routeStats, opts.QuantizedIndexName, queryMode)
 		response.Stats.QuantizedAssetUnavailable = 1
 		response.Stats.QuantizedAssetClosed = 1
 		return response, fmt.Errorf("%w: vector index %q collection buffered quantized prepared state is closed", ErrVectorIndexSearchUnavailable, p.indexName)
 	}
-	if opts.TopK == 0 || p.searcher.reader.RowCount() == 0 {
-		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(p.searcher.reader, p.routeStats, opts.QuantizedIndexName, queryMode)
+	reader, readerIndex, checkoutStats, checkoutErr := p.checkoutCollectionVectorIndexPreparedQuantizedReader(opts, queryMode)
+	if checkoutErr != nil {
+		p.mu.RUnlock()
+		clear(previousResults)
+		response.Stats = checkoutStats
+		if response.Stats.SearchRouteQuantizedOnly == 0 && response.Stats.SearchRouteQuantizedRerank == 0 {
+			response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(nil, p.routeStats, opts.QuantizedIndexName, queryMode)
+		}
+		return response, checkoutErr
+	}
+	defer func() {
+		p.returnCollectionVectorIndexPreparedQuantizedReader(readerIndex)
+		p.mu.RUnlock()
+	}()
+	if opts.TopK == 0 || reader.RowCount() == 0 {
+		response.Stats = collectionVectorIndexPreparedQuantizedValidationStats(reader, p.routeStats, opts.QuantizedIndexName, queryMode)
 		if len(opts.Query) != p.dimensions {
 			clear(previousResults)
 			return response, fmt.Errorf("collections: column_graph %q query dims=%d want %d: %w", p.indexName, len(opts.Query), p.dimensions, errColumnVectorGraphNativeSearchQueryDimensionMismatch)
 		}
-		if err := p.searcher.reader.validateQuantizedNativeSearchOptions(queryMode, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, QuantizedIndexName: opts.QuantizedIndexName, QuantizedRerankCandidates: opts.QuantizedRerankCandidates}); err != nil {
+		if err := reader.validateQuantizedNativeSearchOptions(queryMode, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, QuantizedIndexName: opts.QuantizedIndexName, QuantizedRerankCandidates: opts.QuantizedRerankCandidates}); err != nil {
 			clear(previousResults)
 			return response, err
 		}
 		clear(previousResults)
 		return response, nil
 	}
-	results, searchStats, err := p.searcher.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
+	results, searchStats, err := reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
 		TopK:                      opts.TopK,
 		EfSearch:                  opts.EfSearch,
 		ScoreBatchMode:            opts.scoreBatchMode,
@@ -715,6 +740,62 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 		return response, err
 	}
 	return response, nil
+}
+
+func (p *collectionVectorIndexPreparedSearch) checkoutCollectionVectorIndexPreparedQuantizedReader(opts VectorIndexSearchOptions, queryMode columnVectorGraphNativeSearchQueryMode) (*columnVectorGraphPhysicalRowReader, int, VectorIndexSearchStats, error) {
+	p.quantizedReadersMu.Lock()
+	if n := len(p.quantizedAvailableReaders); n > 0 {
+		idx := p.quantizedAvailableReaders[n-1]
+		p.quantizedAvailableReaders = p.quantizedAvailableReaders[:n-1]
+		if idx >= 0 && idx < len(p.quantizedReaders) && p.quantizedReaders[idx] != nil {
+			reader := p.quantizedReaders[idx]
+			p.quantizedReadersMu.Unlock()
+			return reader, idx, VectorIndexSearchStats{}, nil
+		}
+	}
+	p.quantizedReadersMu.Unlock()
+
+	reader, stats, err := p.openCollectionVectorIndexPreparedQuantizedReader(opts, queryMode)
+	if err != nil {
+		return nil, -1, stats, err
+	}
+	p.quantizedReadersMu.Lock()
+	idx := len(p.quantizedReaders)
+	p.quantizedReaders = append(p.quantizedReaders, reader)
+	p.quantizedReadersMu.Unlock()
+	return reader, idx, VectorIndexSearchStats{}, nil
+}
+
+func (p *collectionVectorIndexPreparedSearch) returnCollectionVectorIndexPreparedQuantizedReader(idx int) {
+	if idx < 0 {
+		return
+	}
+	p.quantizedReadersMu.Lock()
+	if idx < len(p.quantizedReaders) && p.quantizedReaders[idx] != nil {
+		p.quantizedAvailableReaders = append(p.quantizedAvailableReaders, idx)
+	}
+	p.quantizedReadersMu.Unlock()
+}
+
+func (p *collectionVectorIndexPreparedSearch) openCollectionVectorIndexPreparedQuantizedReader(opts VectorIndexSearchOptions, queryMode columnVectorGraphNativeSearchQueryMode) (*columnVectorGraphPhysicalRowReader, VectorIndexSearchStats, error) {
+	if p == nil || p.searcher == nil || p.searcher.collection == nil || p.searcher.snapshot == nil {
+		return nil, collectionVectorIndexPreparedQuantizedValidationStats(nil, vectorIndexSearchRouteStats{}, opts.QuantizedIndexName, queryMode), backenddb.ErrClosed
+	}
+	reader, err := p.searcher.collection.openColumnVectorGraphPhysicalRowReaderAtSnapshot(p.indexName, p.searcher.snapshot, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks})
+	if err != nil {
+		return nil, collectionVectorIndexPreparedQuantizedValidationStats(nil, p.routeStats, opts.QuantizedIndexName, queryMode), err
+	}
+	if !collectionVectorIndexPreparedQuantizedReaderReady(reader) {
+		stats := collectionVectorIndexPreparedQuantizedValidationStats(reader, p.routeStats, opts.QuantizedIndexName, queryMode)
+		_ = reader.Close()
+		return nil, stats, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires healthy prepared column_graph state; rebuild the vector index before using the collection buffered quantized route", ErrVectorIndexSearchUnavailable, p.indexName)
+	}
+	if err := reader.validateQuantizedNativeSearchOptions(queryMode, columnVectorGraphNativeSearchOptions{TopK: opts.TopK, QuantizedIndexName: opts.QuantizedIndexName, QuantizedRerankCandidates: opts.QuantizedRerankCandidates}); err != nil {
+		stats := collectionVectorIndexPreparedQuantizedValidationStats(reader, p.routeStats, opts.QuantizedIndexName, queryMode)
+		_ = reader.Close()
+		return nil, stats, err
+	}
+	return reader, VectorIndexSearchStats{}, nil
 }
 
 func collectionVectorIndexPreparedSearchRouteStatsForUnavailable(cached vectorIndexSearchRouteStats, status columnHNSWSearchPackPreparedStatus) vectorIndexSearchRouteStats {
@@ -740,6 +821,16 @@ func (p *collectionVectorIndexPreparedSearch) Close() error {
 		err = errors.Join(err, p.pack.Close())
 		p.pack = nil
 	}
+	p.quantizedReadersMu.Lock()
+	for i, reader := range p.quantizedReaders {
+		if reader != nil {
+			err = errors.Join(err, reader.Close())
+			p.quantizedReaders[i] = nil
+		}
+	}
+	p.quantizedReaders = nil
+	p.quantizedAvailableReaders = nil
+	p.quantizedReadersMu.Unlock()
 	if p.searcher != nil {
 		err = errors.Join(err, p.searcher.Close())
 		p.searcher = nil
@@ -771,7 +862,38 @@ func (p *collectionVectorIndexPreparedSearch) stats() mappedresource.Stats {
 			add(reader.hnswSearchPack.manager.Stats())
 		}
 	}
+	p.quantizedReadersMu.Lock()
+	seenSharedPrepared := make(map[*columnVectorGraphSharedPreparedSearch]struct{})
+	for _, reader := range p.quantizedReaders {
+		addCollectionVectorIndexPreparedQuantizedAssetStats(&out, reader, p.quantizedIndexName)
+		if reader == nil {
+			continue
+		}
+		if reader.sharedPreparedSearch != nil && reader.sharedPreparedSearch.holder != nil {
+			holder := reader.sharedPreparedSearch.holder
+			if _, ok := seenSharedPrepared[holder]; !ok {
+				seenSharedPrepared[holder] = struct{}{}
+				add(holder.stats())
+			}
+		} else if reader.hnswSearchPack != nil && reader.hnswSearchPack.manager != nil {
+			add(reader.hnswSearchPack.manager.Stats())
+		}
+	}
+	p.quantizedReadersMu.Unlock()
 	return out
+}
+
+func addCollectionVectorIndexPreparedQuantizedAssetStats(out *mappedresource.Stats, reader *columnVectorGraphPhysicalRowReader, quantizedIndexName string) {
+	if out == nil || reader == nil || quantizedIndexName == "" {
+		return
+	}
+	status, ok := reader.quantizedAssetStatus[quantizedIndexName]
+	if !ok {
+		return
+	}
+	out.ActiveHandles += status.ActiveHandles
+	out.ActiveMappedBytes += int64(status.MappedBytes)
+	out.ActiveHeapCopyBytes += int64(status.HeapCopyBytes)
 }
 
 func (c *Collection) invalidateCollectionVectorIndexPreparedSearch(slot collectionVectorIndexPreparedSearchCacheSlot, prepared *collectionVectorIndexPreparedSearch) {

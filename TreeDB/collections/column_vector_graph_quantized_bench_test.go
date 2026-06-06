@@ -207,6 +207,7 @@ func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, 
 		b.Fatalf("measure SearchVectorIndexWithBuffer stats: %v", err)
 	}
 	assertColumnGraphScalarU8QuantizedCollectionWithBufferGuardrails2415(b, measured.Stats, statsOpts, fixture.definition.Dimensions)
+	ensureColumnGraphScalarU8QuantizedCollectionReaderPool2415(b, fixture.collection, opts, concurrency)
 	warmRecall := columnGraphScalarU8QuantizedBenchmarkRecallAtK1926(measured.Results, exactIDs, exactCount)
 
 	var next atomic.Uint64
@@ -297,6 +298,40 @@ func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, 
 	recallSum := warmRecall * float64(b.N)
 	reportCollectionVectorIndexPreparedSearchBenchMetrics2415(b, cacheBeforeTimed, fixture.collection.collectionVectorIndexPreparedSearchCacheSnapshot())
 	reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b, fixture, stats, recallSum)
+}
+
+func ensureColumnGraphScalarU8QuantizedCollectionReaderPool2415(b *testing.B, col *Collection, opts VectorIndexSearchOptions, concurrency int) {
+	b.Helper()
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		b.Fatalf("normalize collection quantized benchmark query mode: %v", err)
+	}
+	prepared, _, _, err := col.acquireCollectionVectorIndexPreparedSearch(opts)
+	if err != nil {
+		b.Fatalf("acquire collection quantized prepared search for reader-pool warmup: %v", err)
+	}
+	prepared.mu.RLock()
+	defer prepared.mu.RUnlock()
+	if prepared.closed || prepared.searcher == nil || prepared.searcher.closed || prepared.searcher.snapshot == nil {
+		b.Fatalf("collection quantized prepared search is not ready for reader-pool warmup")
+	}
+	for {
+		prepared.quantizedReadersMu.Lock()
+		have := len(prepared.quantizedReaders)
+		prepared.quantizedReadersMu.Unlock()
+		if have >= concurrency {
+			return
+		}
+		reader, _, err := prepared.openCollectionVectorIndexPreparedQuantizedReader(opts, queryMode)
+		if err != nil {
+			b.Fatalf("open collection quantized prepared reader %d/%d: %v", have+1, concurrency, err)
+		}
+		prepared.quantizedReadersMu.Lock()
+		idx := len(prepared.quantizedReaders)
+		prepared.quantizedReaders = append(prepared.quantizedReaders, reader)
+		prepared.quantizedAvailableReaders = append(prepared.quantizedAvailableReaders, idx)
+		prepared.quantizedReadersMu.Unlock()
+	}
 }
 
 func reportCollectionVectorIndexPreparedSearchBenchMetrics2415(b *testing.B, before, after collectionVectorIndexPreparedSearchCacheSnapshot) {
