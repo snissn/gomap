@@ -274,6 +274,21 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		indexVacuumLeafGuard = nil
 		return err
 	}
+	releaseIndexVacuumLeafGuardValueLogPin := func() error {
+		if indexVacuumLeafGuard == nil || !indexVacuumLeafGuard.vlogPinned {
+			return nil
+		}
+		if indexVacuumLeafGuard.state == nil || indexVacuumLeafGuard.vlogManager == nil {
+			return nil
+		}
+		set := indexVacuumLeafGuard.state.ValueLogSet
+		if set == nil {
+			return nil
+		}
+		err := indexVacuumLeafGuard.vlogManager.Release(set)
+		indexVacuumLeafGuard.vlogPinned = false
+		return err
+	}
 
 	if err := db.runCompactStoragePhase(&stats, "value-log-rewrite", func() error {
 		protectedPaths := compactStorageOnlineRewriteProtectedPaths(opts)
@@ -403,11 +418,11 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked); err != nil {
 		return stats, err
 	}
-	// If index vacuum was unsupported, release after settle leaf GC has observed
-	// the pinned generations, but before value-log cleanup/final audit so the
-	// guard's snapshot does not keep unrelated zero-byte segments pinned.
+	// If index vacuum was unsupported, keep leaf-generation pins through final
+	// audit, but drop the unrelated value-log set pin before value-log cleanup so
+	// zero-byte value_vlog segments are not kept alive by this guard.
 	if indexVacuumSkipped {
-		if err := releaseIndexVacuumLeafGuard(); err != nil {
+		if err := releaseIndexVacuumLeafGuardValueLogPin(); err != nil {
 			return stats, err
 		}
 	}
