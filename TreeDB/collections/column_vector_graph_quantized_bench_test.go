@@ -1,6 +1,9 @@
 package collections
 
 import (
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -24,6 +27,22 @@ type columnGraphScalarU8QuantizedBenchFixture1926 struct {
 	query               []float32
 	shape               columnGraphScalarU8QuantizedBenchShape1926
 	quantizedAssetBytes int64
+}
+
+type columnGraphScalarU8QuantizedSearchWithBufferBenchCase2414 struct {
+	name             string
+	mode             VectorIndexQueryMode
+	rerankCandidates int
+	concurrency      int
+}
+
+func columnGraphScalarU8QuantizedSearchWithBufferBenchCases2414() []columnGraphScalarU8QuantizedSearchWithBufferBenchCase2414 {
+	return []columnGraphScalarU8QuantizedSearchWithBufferBenchCase2414{
+		{name: "route=quantized_only/c=1", mode: VectorIndexQueryModeQuantizedOnly, concurrency: 1},
+		{name: "route=quantized_only/c=8", mode: VectorIndexQueryModeQuantizedOnly, concurrency: 8},
+		{name: "route=quantized_rerank/candidates=32/c=1", mode: VectorIndexQueryModeQuantizedRerank, rerankCandidates: 32, concurrency: 1},
+		{name: "route=quantized_rerank/candidates=32/c=8", mode: VectorIndexQueryModeQuantizedRerank, rerankCandidates: 32, concurrency: 8},
+	}
 }
 
 func BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926(b *testing.B) {
@@ -88,6 +107,138 @@ func BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926(b *testing.B) {
 			b.StopTimer()
 			reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b, fixture, stats, recallSum)
 		})
+	}
+}
+
+func BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414(b *testing.B) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
+	defer fixture.close()
+	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
+
+	for _, tc := range columnGraphScalarU8QuantizedSearchWithBufferBenchCases2414() {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			opts := VectorIndexSearcherSearchOptions{
+				Query:                     fixture.query,
+				QueryMode:                 tc.mode,
+				QuantizedIndexName:        columnGraphScalarU8QuantizedBenchIndexName1926,
+				QuantizedRerankCandidates: tc.rerankCandidates,
+				TopK:                      fixture.shape.topK,
+				EfSearch:                  fixture.shape.efSearch,
+				StatsMode:                 VectorIndexSearchStatsModeProduction,
+			}
+			runColumnGraphScalarU8QuantizedSearchWithBufferBench2414(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
+		})
+	}
+}
+
+func runColumnGraphScalarU8QuantizedSearchWithBufferBench2414(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearcherSearchOptions, concurrency int, exactIDs map[string]struct{}, exactCount int) {
+	b.Helper()
+	if concurrency <= 0 {
+		b.Fatalf("concurrency=%d must be positive", concurrency)
+	}
+	type benchWorker struct {
+		searcher *VectorIndexSearcher
+		buffer   VectorIndexSearchBuffer
+		stats    VectorIndexSearchStats
+		sink     int64
+	}
+	workers := make([]benchWorker, concurrency)
+	for i := range workers {
+		searcher, err := fixture.collection.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: fixture.definition.Name, MaxDecodedBlocks: 1})
+		if err != nil {
+			b.Fatalf("OpenVectorIndexSearcher worker %d: %v", i, err)
+		}
+		defer func(searcher *VectorIndexSearcher) { _ = searcher.Close() }(searcher)
+		workers[i].searcher = searcher
+		warm, err := searcher.SearchWithBuffer(opts, &workers[i].buffer)
+		if err != nil {
+			b.Fatalf("warm SearchWithBuffer worker %d: %v", i, err)
+		}
+		if len(warm.Results) == 0 {
+			b.Fatalf("warm SearchWithBuffer worker %d returned no results", i)
+		}
+		assertColumnGraphScalarU8QuantizedSearchWithBufferGuardrails2414(b, warm.Stats, opts, fixture.definition.Dimensions)
+	}
+	warmRecall := columnGraphScalarU8QuantizedBenchmarkRecallAtK1926(workers[0].buffer.results, exactIDs, exactCount)
+
+	var next atomic.Uint64
+	var sink atomic.Int64
+	var failed atomic.Bool
+	var firstErr atomic.Value
+	recordErr := func(format string, args ...any) {
+		if failed.CompareAndSwap(false, true) {
+			firstErr.Store(fmt.Sprintf(format, args...))
+		}
+	}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(len(workers))
+	for i := range workers {
+		worker := &workers[i]
+		go func() {
+			defer wg.Done()
+			<-start
+			var localStats VectorIndexSearchStats
+			var localSink int64
+			for {
+				iteration := int(next.Add(1)) - 1
+				if iteration >= b.N {
+					break
+				}
+				if failed.Load() {
+					continue
+				}
+				response, err := worker.searcher.SearchWithBuffer(opts, &worker.buffer)
+				if err != nil {
+					recordErr("SearchWithBuffer: %v", err)
+					continue
+				}
+				if len(response.Results) == 0 {
+					recordErr("SearchWithBuffer returned no results")
+					continue
+				}
+				localSink += int64(response.Results[0].Ordinal)
+				addColumnGraphScalarU8QuantizedBenchmarkStats1926(&localStats, response.Stats)
+			}
+			worker.stats = localStats
+			worker.sink = localSink
+		}()
+	}
+	b.ReportAllocs()
+	b.ReportMetric(float64(concurrency), "concurrency")
+	b.ReportMetric(1, "searchwithbuffer_buffered_row")
+	b.ReportMetric(1, "reported_stats_mode_production")
+	b.ResetTimer()
+	close(start)
+	wg.Wait()
+	b.StopTimer()
+	if errValue := firstErr.Load(); errValue != nil {
+		b.Fatalf("%s", errValue.(string))
+	}
+	var stats VectorIndexSearchStats
+	for i := range workers {
+		addColumnGraphScalarU8QuantizedBenchmarkStats1926(&stats, workers[i].stats)
+		sink.Add(workers[i].sink)
+	}
+	columnPhysicalScanBenchSum += sink.Load()
+	recallSum := warmRecall * float64(b.N)
+	reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b, fixture, stats, recallSum)
+}
+
+func assertColumnGraphScalarU8QuantizedSearchWithBufferGuardrails2414(tb testing.TB, stats VectorIndexSearchStats, opts VectorIndexSearcherSearchOptions, dims int) {
+	tb.Helper()
+	switch opts.QueryMode {
+	case VectorIndexQueryModeQuantizedOnly:
+		assertQuantizedOnlyGuardrailStats2416(tb, stats, dims)
+	case VectorIndexQueryModeQuantizedRerank:
+		assertQuantizedRerankNoDocumentGuardrailStats2416(tb, stats, opts.QuantizedRerankCandidates)
+	default:
+		tb.Fatalf("unexpected SearchWithBuffer benchmark query mode %q", opts.QueryMode)
+	}
+	if stats.DocumentsFetched != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
+		tb.Fatalf("SearchWithBuffer buffered guardrails stats=%+v want no docs/materialization/fallback/scratch", stats)
 	}
 }
 
@@ -305,6 +456,7 @@ func addColumnGraphScalarU8QuantizedBenchmarkStats1926(dst *VectorIndexSearchSta
 	dst.CandidateFetches += src.CandidateFetches
 	dst.ExpansionFetches += src.ExpansionFetches
 	dst.ResultFetches += src.ResultFetches
+	dst.DocumentsFetched += src.DocumentsFetched
 	dst.ScoreBatchCalls += src.ScoreBatchCalls
 	dst.ScoreBatchCandidates += src.ScoreBatchCandidates
 	if src.ScoreBatchMaxTileSize > dst.ScoreBatchMaxTileSize {
@@ -332,9 +484,25 @@ func addColumnGraphScalarU8QuantizedBenchmarkStats1926(dst *VectorIndexSearchSta
 	dst.ScoreFloat64Fallbacks += src.ScoreFloat64Fallbacks
 	dst.PreparedGraphSearchViews += src.PreparedGraphSearchViews
 	dst.GraphRowFallbacks += src.GraphRowFallbacks
+	dst.SearchRouteColumnGraphPrepared += src.SearchRouteColumnGraphPrepared
+	dst.SearchRouteColumnGraphFallback += src.SearchRouteColumnGraphFallback
+	dst.SearchRouteHNSWSearchPack += src.SearchRouteHNSWSearchPack
 	dst.SearchRouteQuantizedOnly += src.SearchRouteQuantizedOnly
 	dst.SearchRouteQuantizedRerank += src.SearchRouteQuantizedRerank
+	dst.HNSWSearchPackActive += src.HNSWSearchPackActive
+	dst.HNSWSearchPackMissing += src.HNSWSearchPackMissing
+	dst.HNSWSearchPackInvalid += src.HNSWSearchPackInvalid
+	dst.HNSWSearchPackStale += src.HNSWSearchPackStale
+	dst.HNSWSearchPackClosed += src.HNSWSearchPackClosed
+	dst.HNSWSearchPackFallbacks += src.HNSWSearchPackFallbacks
+	dst.HNSWSearchPackMmapDirect += src.HNSWSearchPackMmapDirect
+	dst.HNSWSearchPackHeapCopy += src.HNSWSearchPackHeapCopy
+	dst.HNSWSearchPackOpenNanos += src.HNSWSearchPackOpenNanos
+	dst.HNSWSearchPackMappedBytes += src.HNSWSearchPackMappedBytes
+	dst.HNSWSearchPackHeapCopyBytes += src.HNSWSearchPackHeapCopyBytes
+	dst.HNSWSearchPackActiveHandles += src.HNSWSearchPackActiveHandles
 	dst.TypedColumnFallbacks += src.TypedColumnFallbacks
+	dst.VectorScratchDecodes += src.VectorScratchDecodes
 	dst.AdjacencyLegacyFallbacks += src.AdjacencyLegacyFallbacks
 	dst.AdjacencySourceFallbacks += src.AdjacencySourceFallbacks
 	dst.ResultIDGraphFallbacks += src.ResultIDGraphFallbacks
@@ -425,6 +593,7 @@ func reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b *testing.B, fixtu
 	b.ReportMetric(float64(stats.CandidateFetches)/denom, "candidate_fetches/search")
 	b.ReportMetric(float64(stats.ExpansionFetches)/denom, "expansion_fetches/search")
 	b.ReportMetric(float64(stats.ResultFetches)/denom, "result_fetches/search")
+	b.ReportMetric(float64(stats.DocumentsFetched)/denom, "docs_fetched/search")
 	b.ReportMetric(float64(stats.VectorBytesRead)/denom, "vector_B/search")
 	b.ReportMetric(float64(stats.NormBytesRead)/denom, "norm_B/search")
 	b.ReportMetric(float64(stats.AdjacencyBytesRead)/denom, "adjacency_B/search")
@@ -453,9 +622,25 @@ func reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b *testing.B, fixtu
 	b.ReportMetric(float64(stats.ScoreFloat64Fallbacks)/denom, "score_float64_fallbacks/search")
 	b.ReportMetric(float64(stats.PreparedGraphSearchViews)/denom, "prepared_graph_search_views/search")
 	b.ReportMetric(float64(stats.GraphRowFallbacks)/denom, "graph_row_fallbacks/search")
+	b.ReportMetric(float64(stats.SearchRouteColumnGraphPrepared)/denom, "search_route_column_graph_prepared/search")
+	b.ReportMetric(float64(stats.SearchRouteColumnGraphFallback)/denom, "search_route_column_graph_fallback/search")
+	b.ReportMetric(float64(stats.SearchRouteHNSWSearchPack)/denom, "search_route_hnsw_search_pack/search")
 	b.ReportMetric(float64(stats.SearchRouteQuantizedOnly)/denom, "search_route_quantized_only/search")
 	b.ReportMetric(float64(stats.SearchRouteQuantizedRerank)/denom, "search_route_quantized_rerank/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackActive)/denom, "hnsw_search_pack_active/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackMissing)/denom, "hnsw_search_pack_missing/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackInvalid)/denom, "hnsw_search_pack_invalid/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackStale)/denom, "hnsw_search_pack_stale/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackClosed)/denom, "hnsw_search_pack_closed/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackFallbacks)/denom, "hnsw_search_pack_fallbacks/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackMmapDirect)/denom, "hnsw_search_pack_mmap_direct/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackHeapCopy)/denom, "hnsw_search_pack_heap_copy/search")
+	b.ReportMetric(float64(stats.HNSWSearchPackOpenNanos)/denom, "hnsw_search_pack_open_ns")
+	b.ReportMetric(float64(stats.HNSWSearchPackMappedBytes)/denom, "hnsw_search_pack_mapped_B")
+	b.ReportMetric(float64(stats.HNSWSearchPackHeapCopyBytes)/denom, "hnsw_search_pack_heap_copy_B")
+	b.ReportMetric(float64(stats.HNSWSearchPackActiveHandles)/denom, "hnsw_search_pack_active_handles")
 	b.ReportMetric(float64(stats.TypedColumnFallbacks)/denom, "typed_column_vector_fallbacks/search")
+	b.ReportMetric(float64(stats.VectorScratchDecodes)/denom, "vector_scratch_decodes/search")
 	b.ReportMetric(float64(stats.AdjacencyLegacyFallbacks)/denom, "adjacency_legacy_fallbacks/search")
 	b.ReportMetric(float64(stats.AdjacencySourceFallbacks)/denom, "adjacency_source_fallbacks/search")
 	b.ReportMetric(float64(stats.ResultIDGraphFallbacks)/denom, "result_id_graph_fallbacks/search")
