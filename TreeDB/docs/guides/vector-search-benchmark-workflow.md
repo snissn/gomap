@@ -224,3 +224,22 @@ dot/scoring, frontier/top-k maintenance, and final result-ID copy for
 response-owned convenience calls. Dominant document/JSON materialization,
 graph-row fallback, typed-column vector fallback, per-query open/prepare, or
 allocation/GC costs are blocking evidence for a no-document fast-row claim.
+
+### Parallel scaling profile interpretation
+
+Use the `TreeDB_SearchWithBufferParallel` row, not a serial row with only
+`-cpu=8`, when classifying c=8+ reusable-buffer scaling. The parallel row must
+show one opened searcher and one `VectorIndexSearchBuffer` per worker,
+`parallel_workers=<GOMAXPROCS>`, `0 B/op`, `0 allocs/op`, and the no-document
+route counters above. Treat the profile as evidence of avoidable contention only
+when the steady-state timed branch shows material time in shared locks, atomics,
+resource-manager lookups, collection prepared-cache synchronization, per-query
+open/setup, or response-owned allocation/GC.
+
+When the c=8 profile is instead dominated by
+`columnHNSWSearchPackPreparedView.searchCosine`, `vectorops.DotFloat32Indexed` /
+platform SIMD kernels, `insertTop`, `pushFrontier`, `popFrontier`, or
+frontier/top-k heap maintenance, classify the remaining gap as traversal,
+scoring, or ranking-kernel work. Keep that follow-up in the exact FP32
+optimization lane, and hand SIMD/scoring-kernel work to #2403 instead of mixing
+it into a parallel-contention PR.

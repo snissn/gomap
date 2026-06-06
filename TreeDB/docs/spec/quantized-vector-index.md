@@ -64,14 +64,19 @@ rebuild/storage overhead:
 ```sh
 GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^BenchmarkColumnGraphScalarU8Quantized(ScorePlanes|RebuildStorage)1926$' \
+  -bench '^Benchmark(ColumnGraphScalarU8Quantized(ScorePlanes|RebuildStorage)1926|VectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414)$' \
   -benchmem -benchtime=500ms -count=3
 ```
 
 `BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926` emits the per-query rows;
+`BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414`
+emits explicit lower-level buffered `VectorIndexSearcher.SearchWithBuffer` rows
+for `route=quantized_only/c=1`, `route=quantized_only/c=8`,
+`route=quantized_rerank/candidates=32/c=1`, and
+`route=quantized_rerank/candidates=32/c=8`; and
 `BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926` emits rebuild/storage
-rows. The score-plane rows report `ns/op`, `ops/sec`, `B/op`, `allocs/op`,
-`recall_at_k_pct` versus exact-mode topK on the same fixture,
+rows. The score-plane and buffered rows report `ns/op`, `ops/sec`, `B/op`,
+`allocs/op`, `recall_at_k_pct` versus exact-mode topK on the same fixture,
 `search_route_quantized_only/search`, `search_route_quantized_rerank/search`,
 `quantized_scorer_active/search`, `quantized_asset_unavailable/search`,
 `candidates/search`, `quantized_rerank_candidates/search`,
