@@ -4626,6 +4626,14 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
+	// Rotate cached writers off any observed source before the final checkpoint.
+	// The checkpoint can then publish late cached writes, and the revalidation
+	// below prevents active reclaim if those writes re-reference a source.
+	finishRotateFence, err := db.BeginValueLogMaintenanceFence(ctx)
+	if err != nil {
+		return stats, err
+	}
+	finishRotateFence()
 	if err := db.Checkpoint(); err != nil {
 		return stats, err
 	}
@@ -4639,7 +4647,15 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 			return stats, err
 		}
 	}
-	pruneStats, _ := db.runRetainedValueLogPruneInline(true, seen)
+	reclaimIDs, err := db.revalidateUnreferencedObservedValueLogSources(ctx, gcer, observed)
+	if err != nil {
+		return stats, err
+	}
+	reclaimSeen := make(map[uint32]struct{}, len(reclaimIDs))
+	for _, id := range reclaimIDs {
+		reclaimSeen[id] = struct{}{}
+	}
+	pruneStats, _ := db.runRetainedValueLogPruneInline(true, reclaimSeen)
 	pruneReclaimedSegments := pruneStats.ObservedSourceRemovedSegments + pruneStats.ObservedSourceZombieMarkedSegments
 	pruneReclaimedBytes := pruneStats.ObservedSourceRemovedBytes + pruneStats.ObservedSourceZombieMarkedBytes
 	if pruneReclaimedSegments > 0 {
@@ -4651,9 +4667,9 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 		stats.ObservedSourceBytesDeleted += pruneReclaimedBytes
 	}
 
-	if hasValueLogGC {
-		opts := db.valueLogGCOptionsForObservedSources(false, seen)
-		opts.ObservedSourceFileIDs = observed
+	if hasValueLogGC && len(reclaimIDs) > 0 {
+		opts := db.valueLogGCOptionsForObservedSources(false, reclaimSeen)
+		opts.ObservedSourceFileIDs = reclaimIDs
 		opts.ObservedSourceAssumeUnreferenced = true
 		opts.ObservedSourceReclaimActive = true
 		gcStats, err := gcer.ValueLogGC(ctx, opts)
@@ -4675,6 +4691,36 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 		}
 	}
 	return stats, nil
+}
+
+func (db *DB) revalidateUnreferencedObservedValueLogSources(ctx context.Context, gcer backendValueLogGCer, observed []uint32) ([]uint32, error) {
+	if db == nil || gcer == nil || len(observed) == 0 {
+		return nil, nil
+	}
+	opts := db.valueLogGCOptions(false)
+	opts.DryRun = true
+	opts.ObservedSourceFileIDs = observed
+	audit, err := gcer.ValueLogGC(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if audit.ObservedSourceSegmentsReferenced == 0 {
+		return observed, nil
+	}
+	out := make([]uint32, 0, len(observed))
+	for _, id := range observed {
+		opts := db.valueLogGCOptions(false)
+		opts.DryRun = true
+		opts.ObservedSourceFileIDs = []uint32{id}
+		audit, err := gcer.ValueLogGC(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		if audit.ObservedSourceSegments > 0 && audit.ObservedSourceSegmentsReferenced == 0 {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 func (db *DB) cleanupMissingObservedValueLogRetains(observed map[uint32]struct{}) {

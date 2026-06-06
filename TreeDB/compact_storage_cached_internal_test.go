@@ -270,6 +270,72 @@ func TestCachedValueLogRewriteOnlinePreservesRetainedObservedSourcesAndReclaimsL
 	}
 }
 
+func TestCachedObservedSourceReclaimRevalidatesLateCachedWrite(t *testing.T) {
+	dir := t.TempDir()
+	opts := cachedRewriteReclaimTestOptions(dir)
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for i := 0; i < 16; i++ {
+		if err := db.Set(cachedRewriteReclaimKey(i), cachedRewriteReclaimValue(i)); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	source := listValueLogSegmentFiles(t, backenddb.ValueLogDirPath(dir))
+	if len(source) == 0 {
+		t.Fatalf("expected value-log source segments")
+	}
+	sourceIDs := make([]uint32, 0, len(source))
+	for _, segment := range source {
+		sourceIDs = append(sourceIDs, segment.id)
+	}
+
+	rewriteStats, err := db.backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+		SourceFileIDs: sourceIDs,
+		BatchSize:     64,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("backend ValueLogRewriteOnline: %v", err)
+	}
+	if len(rewriteStats.SourceFileIDsUnreferenced) == 0 {
+		t.Fatalf("rewrite reported no unreferenced source IDs")
+	}
+
+	lateKey := []byte("late-cached-write")
+	lateValue := bytes.Repeat([]byte("late-write-references-observed-source|"), 128)
+	if err := db.Set(lateKey, lateValue); err != nil {
+		t.Fatalf("late set: %v", err)
+	}
+
+	reclaimStats, err := db.cached.ReclaimObservedValueLogSources(context.Background(), rewriteStats.SourceFileIDsUnreferenced)
+	if err != nil {
+		t.Fatalf("ReclaimObservedValueLogSources: %v", err)
+	}
+	if reclaimStats.ObservedSourceSegmentsDeleted != 0 || reclaimStats.ObservedSourceBytesDeleted != 0 {
+		t.Fatalf("reclaimed source that was re-referenced by late cached write: %+v", reclaimStats)
+	}
+	for _, segment := range source {
+		if _, err := os.Stat(segment.path); err != nil {
+			t.Fatalf("late-referenced observed source %s was removed: %v", segment.path, err)
+		}
+	}
+	got, err := db.Get(lateKey)
+	if err != nil {
+		t.Fatalf("get late key after reclaim: %v", err)
+	}
+	if !bytes.Equal(got, lateValue) {
+		t.Fatalf("late value mismatch: got %dB want %dB", len(got), len(lateValue))
+	}
+}
+
 func TestBackendValueLogRewriteReclaimsLeafGenerationDebt(t *testing.T) {
 	dir := t.TempDir()
 	opts := cachedRewriteReclaimTestOptions(dir)
