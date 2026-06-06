@@ -210,6 +210,49 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationGC_DoesNotZombieSharedActiveFileID(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	path, fileID := createLeafGenerationTestSegment(t, LeafLogDirPath(db.dir), rewriteLeafLogLaneID, 1)
+	rawFileID := page.ValueLogSegmentID(fileID)
+	if err := db.valueLogManager.Refresh(); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	manifest := &leafGenerationManifest{
+		Version:             leafGenerationManifestVersion,
+		CurrentGenerationID: 2,
+		NextGenerationID:    3,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateSealed, FileIDs: []uint32{rawFileID}, CreatedCommitSeq: 1, SealedCommitSeq: 1, PublishedCommitSeq: 1},
+			{GenerationID: 2, State: leafGenerationStateWritable, FileIDs: []uint32{rawFileID}, CreatedCommitSeq: 2, PublishedCommitSeq: 2},
+		},
+	}
+	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+		t.Fatalf("save manifest: %v", err)
+	}
+	db.mu.Lock()
+	db.leafGenerationManifest = manifest
+	db.mu.Unlock()
+	if err := db.publishLeafGenerationState(true); err != nil {
+		t.Fatalf("publish leaf state: %v", err)
+	}
+
+	stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if got, want := stats.GenerationsEligible, 1; got != want {
+		t.Fatalf("GenerationsEligible=%d want %d stats=%+v", got, want, stats)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("shared active segment was removed: %v", err)
+	}
+	manifestAfter := loadLeafGenerationManifestOrFatal(t, db.dir)
+	gen := findLeafGenerationByFileID(t, manifestAfter, rawFileID)
+	if gen.GenerationID != 1 || gen.State != leafGenerationStateDeleted {
+		t.Fatalf("first shared generation not marked deleted: %+v manifest=%+v", gen, manifestAfter.Generations)
+	}
+}
+
 func TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 

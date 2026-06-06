@@ -90,9 +90,11 @@ func (m *leafGenerationManifest) registerCurrentGenerationFileID(fileID uint32, 
 	if gen.State != leafGenerationStateWritable {
 		return false, fmt.Errorf("treedb: current generation %d is not writable (state=%q)", gen.GenerationID, gen.State)
 	}
-	for _, existing := range gen.FileIDs {
-		if existing == fileID {
-			return false, nil
+	for _, existingGen := range m.Generations {
+		for _, existing := range existingGen.FileIDs {
+			if existing == fileID {
+				return false, nil
+			}
 		}
 	}
 	if len(gen.FileIDs) == 0 {

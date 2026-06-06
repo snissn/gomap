@@ -999,6 +999,48 @@ func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) 
 	}
 }
 
+func TestCompactStorageKeepsPackedLeafSourcesUntilIndexVacuum(t *testing.T) {
+	d, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "k", 2048, 'a')
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "k", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, d, "z", 32, 'z')
+	d.SetLeafPageLog(nil)
+
+	sawLeafGC := false
+	d.compactStorageAfterPhase = func(name string) {
+		if name != "leaf-generation-gc" {
+			return
+		}
+		sawLeafGC = true
+		if _, err := os.Stat(path1); err != nil {
+			t.Fatalf("pre-vacuum leaf segment removed: %v", err)
+		}
+		manifest := loadLeafGenerationManifestOrFatal(t, dir)
+		gen := findLeafGenerationByFileID(t, manifest, rawFileID1)
+		if got, want := gen.State, leafGenerationStateRetiring; got != want {
+			t.Fatalf("generation state after leaf gc=%q want %q manifest=%+v", got, want, manifest.Generations)
+		}
+	}
+	t.Cleanup(func() { d.compactStorageAfterPhase = nil })
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{LeafPackMaxPasses: 4})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if !sawLeafGC {
+		t.Fatal("leaf-generation-gc phase hook did not run")
+	}
+	if !stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=false debt=%+v", stats.RemainingDebt)
+	}
+}
+
 func TestCompactStoragePlan_ProtectedRootIDsKeepDetachedLeafGenerationLive(t *testing.T) {
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
