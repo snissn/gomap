@@ -542,6 +542,116 @@ func TestVectorIndexSearcherQuantizedAssetUnavailableCounters2416(t *testing.T) 
 	}
 }
 
+func TestVectorIndexSearcherQuantizedSearchAndSearchWithBufferParity2414(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+
+	query := []float32{0.8, 0.2, 0}
+	for _, tc := range []struct {
+		name             string
+		mode             VectorIndexQueryMode
+		rerankCandidates int
+		assertStats      func(testing.TB, VectorIndexSearchStats)
+	}{
+		{
+			name: "quantized_only",
+			mode: VectorIndexQueryModeQuantizedOnly,
+			assertStats: func(tb testing.TB, stats VectorIndexSearchStats) {
+				assertQuantizedOnlyGuardrailStats2416(tb, stats, def.Dimensions)
+			},
+		},
+		{
+			name:             "quantized_rerank",
+			mode:             VectorIndexQueryModeQuantizedRerank,
+			rerankCandidates: 4,
+			assertStats: func(tb testing.TB, stats VectorIndexSearchStats) {
+				assertQuantizedRerankNoDocumentGuardrailStats2416(tb, stats, 4)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := VectorIndexSearcherSearchOptions{
+				Query:                     query,
+				QueryMode:                 tc.mode,
+				QuantizedIndexName:        def.QuantizedIndexes[0].Name,
+				QuantizedRerankCandidates: tc.rerankCandidates,
+				TopK:                      3,
+				EfSearch:                  len(rows),
+				StatsMode:                 VectorIndexSearchStatsModeProduction,
+			}
+			owned, err := searcher.Search(opts)
+			if err != nil {
+				t.Fatalf("Search: %v", err)
+			}
+			assertColumnGraphSearchResponseLoadedV4(t, owned, def.Name, opts.TopK)
+			tc.assertStats(t, owned.Stats)
+
+			var buffer VectorIndexSearchBuffer
+			buffered, err := searcher.SearchWithBuffer(opts, &buffer)
+			if err != nil {
+				t.Fatalf("SearchWithBuffer: %v", err)
+			}
+			assertColumnGraphSearchResponseLoadedV4(t, buffered, def.Name, opts.TopK)
+			assertVectorIndexSearchResponsesEquivalentNoDocs2124(t, buffered, owned)
+			tc.assertStats(t, buffered.Stats)
+			if len(buffer.results) != opts.TopK || len(buffer.idBytes) == 0 || &buffered.Results[0] != &buffer.results[0] {
+				t.Fatalf("buffered results do not use caller-owned buffer: results=%d idBytes=%d", len(buffer.results), len(buffer.idBytes))
+			}
+		})
+	}
+}
+
+func TestVectorIndexSearcherQuantizedSearchWithBufferBenchmarkRows2414(t *testing.T) {
+	cases := columnGraphScalarU8QuantizedSearchWithBufferBenchCases2414()
+	if len(cases) != 4 {
+		t.Fatalf("benchmark cases=%d want four c=1/c=8 quantized SearchWithBuffer rows", len(cases))
+	}
+	seen := make(map[string]columnGraphScalarU8QuantizedSearchWithBufferBenchCase2414, len(cases))
+	for _, tc := range cases {
+		if tc.mode != VectorIndexQueryModeQuantizedOnly && tc.mode != VectorIndexQueryModeQuantizedRerank {
+			t.Fatalf("case %+v is not an explicit quantized SearchWithBuffer row", tc)
+		}
+		if tc.concurrency != 1 && tc.concurrency != 8 {
+			t.Fatalf("case %+v has unsupported concurrency; want c=1 or c=8", tc)
+		}
+		if _, ok := seen[tc.name]; ok {
+			t.Fatalf("duplicate benchmark case name %q", tc.name)
+		}
+		seen[tc.name] = tc
+	}
+	for _, name := range []string{
+		"route=quantized_only/c=1",
+		"route=quantized_only/c=8",
+		"route=quantized_rerank/candidates=32/c=1",
+		"route=quantized_rerank/candidates=32/c=8",
+	} {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("missing benchmark case %q in %+v", name, cases)
+		}
+	}
+	if seen["route=quantized_only/c=1"].rerankCandidates != 0 || seen["route=quantized_only/c=8"].rerankCandidates != 0 {
+		t.Fatalf("quantized_only benchmark rows must not configure rerank candidates: %+v", cases)
+	}
+	if seen["route=quantized_rerank/candidates=32/c=1"].rerankCandidates != 32 || seen["route=quantized_rerank/candidates=32/c=8"].rerankCandidates != 32 {
+		t.Fatalf("quantized_rerank benchmark rows must configure candidates=32: %+v", cases)
+	}
+}
+
 func TestNativeRuntimeVectorIndexRejectsQuantizedQueryMode1926(t *testing.T) {
 	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding_idx", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
 	if err != nil {

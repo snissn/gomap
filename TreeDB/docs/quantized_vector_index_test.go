@@ -23,6 +23,7 @@ func TestDocs_QuantizedVectorIndex1926Closeout(t *testing.T) {
 		"`QuantizedRerankCandidates=0` means the normalized `ef_search` candidate set",
 		"Missing, stale, corrupt, mismatched, unsupported, or unprepared assets return `ErrVectorIndexSearchUnavailable`",
 		"BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926",
+		"BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414",
 		"BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926",
 		"recall_at_k_pct",
 		"quantized_code_B/search",
