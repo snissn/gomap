@@ -1,7 +1,8 @@
 # RaBitQ go-highway readiness (#2448)
 
-Status: dependency/toolchain readiness only. This note does not define TreeDB
-RaBitQ storage, codec behavior, search APIs, or production scoring.
+Status: dependency/toolchain readiness plus #2453 no-land closeout. This note
+does not define TreeDB RaBitQ storage, codec behavior, search APIs, or
+production scoring, and it does not claim that go-highway acceleration is active.
 
 ## Decision
 
@@ -27,9 +28,9 @@ or install Go 1.26 directly.
   - `rabitq.BitProduct`
   - `rabitq.CodeWidth`
 
-The root module imports go-highway only in a small test smoke surface today.
-Future production backend wiring belongs to the RaBitQ acceleration follow-up,
-not this readiness issue.
+The root module imports go-highway only in a small test smoke surface today. The
+#2453 acceleration follow-up investigated production backend wiring and closed as
+no-land/not-planned for this stack.
 
 ## Build notes
 
@@ -39,6 +40,24 @@ upstream docs; ARM64 NEON is available without a special build flag. TreeDB does
 not enable production RaBitQ scoring in this issue, so these build notes are
 future-backend input rather than a runtime feature guarantee.
 
+## #2453 no-land decision
+
+The go-highway bit-product kernel is fast in isolation, but its RaBitQ package
+shape does not match TreeDB's v1 contract:
+
+- TreeDB stores durable LSB-first `packed_bit_vector` rows plus `code_count` and
+  `quantized_dot_product_inv` side arrays.
+- TreeDB's scorer uses exact float32 query absolute weights in the weighted
+  sign-dot estimator from `rabitq-1bit-v1.md`.
+- The go-highway candidate path expects a different bit/word and quantized-weight
+  shape. Using it for TreeDB v1 would require lossy query-weight quantization or
+  many residual/bit-plane passes, violating #2453's no-semantic-change and
+  maintainability gates.
+
+Therefore #2454 closeout tables must include only `RaBitQ pure-Go` rows. Do not
+publish a `RaBitQ accelerated` row unless a future issue lands a compatible
+backend with parity tests, same-fixture before/after benchmarks, and profiles.
+
 ## Boundaries
 
 - Do not copy CockroachDB, Antfly/ELv2, AGPL, or C++ RaBitQLib code into this
@@ -47,6 +66,7 @@ future-backend input rather than a runtime feature guarantee.
 - Do not make the pure-Go RaBitQ reference/spec work depend on go-highway.
 - Do not reinterpret existing scalar_u8 quantized benchmark evidence as RaBitQ
   evidence.
+- Do not overclaim go-highway readiness as landed RaBitQ acceleration.
 
 ## Local smoke command
 

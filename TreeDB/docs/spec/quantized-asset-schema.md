@@ -35,9 +35,9 @@ Collection vector-index metadata can declare named `scalar_u8` v1 and
 `rabitq_1bit` v1 quantized score planes under
 `VectorIndexDefinition.QuantizedIndexes`. Public search options expose explicit
 `exact`, `quantized_only`, and `quantized_rerank` query modes. The zero/default
-mode remains exact. As of #2450, `rabitq_1bit` assets are built, persisted, and
-prepared/validated, but they are not consumed by search; explicit RaBitQ
-quantized query modes still fail closed until the scorer issues land.
+mode remains exact. As of #2451/#2452, `rabitq_1bit` assets are built,
+persisted, prepared/validated, and consumed by the pure-Go RaBitQ scorer in
+lower-level and collection-level buffered no-document search.
 
 The #1926 scalar lifecycle builds and loads `scalar_u8` v1 `codes` assets for
 declared `column_graph` quantized indexes. For the current cosine
@@ -61,11 +61,14 @@ that config hash so stale/config-mismatched assets fail closed before prepare.
 
 Quantized modes validate the selected name/options and asset load status before
 graph traversal/scoring. The `scalar_u8` v1 `quantized_only` scorer consumes the
-prepared `codes` reader and scores normalized query/candidate code rows.
-`quantized_rerank` uses the same selected scalar_u8 scorer for graph
-traversal/candidate collection, then exact scores only the resulting quantized
-shortlist by graph ordinal through the authoritative `float32_vector`/inverse-norm
-score path and returns final topK in exact cosine-score order.
+prepared `codes` reader and scores normalized query/candidate code rows. The
+`rabitq_1bit` v1 `quantized_only` scorer consumes the prepared `packed_codes`,
+`code_count`, and `quantized_dot_product_inv` readers and scores with the
+weighted sign-dot estimator specified in `rabitq-1bit-v1.md`.
+`quantized_rerank` uses the selected codec scorer for graph traversal/candidate
+collection, then exact scores only the resulting quantized shortlist by graph
+ordinal through the authoritative `float32_vector`/inverse-norm score path and
+returns final topK in exact cosine-score order.
 `QuantizedRerankCandidates` bounds that shortlist; zero uses the normalized
 `ef_search` candidate set, and non-zero values below `TopK` are rejected.
 Quantized modes must not silently return exact results when selected assets are
@@ -122,4 +125,8 @@ representative asset/column bytes per vector. The end-to-end #1926 collection
 harnesses `BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926` and
 `BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926` report exact vs
 `quantized_only` vs `quantized_rerank` latency/allocation/recall counters plus
-actual scalar_u8 code-asset bytes per vector.
+actual scalar_u8 code-asset bytes per vector. The #2454 closeout adds RaBitQ
+pure-Go lower-level and collection buffered rows plus
+`BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450`, reporting RaBitQ
+logical code bytes/vector, actual asset bytes/vector, exact-read counters, route
+counters, and profile artifacts for c=1/c=8 collection rows.

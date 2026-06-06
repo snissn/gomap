@@ -929,11 +929,12 @@ Coverage:
 Invariant:
 - Exact/default `column_graph` search remains authoritative float32-vector
   scoring unless callers explicitly select a named quantized score plane.
-- `quantized_only` returns estimated scalar_u8 scores and must not read exact
-  vectors or norms during scoring.
-- `quantized_rerank` uses quantized traversal over the normalized `ef_search`
-  candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks only that
-  shortlist by graph ordinal, and returns exact cosine scores.
+- `quantized_only` returns estimated scalar_u8 or pure-Go `rabitq_1bit` scores
+  from the selected named score plane and must not read exact vectors or norms
+  during scoring.
+- `quantized_rerank` uses the selected quantized traversal over the normalized
+  `ef_search` candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks
+  only that shortlist by graph ordinal, and returns exact cosine scores.
 - Missing, stale, mismatched, unsupported, or unprepared quantized assets fail
   closed with no hidden exact fallback.
 
@@ -944,6 +945,11 @@ Coverage:
     scalar_u8 asset build/prepare/reopen, quantized_only score semantics,
     quantized_rerank exact shortlist ranking, normalized `ef_search` traversal
     before trim, multiple quantized indexes, concurrency, and fail-closed asset
+    validation.
+  - `TreeDB/collections/column_vector_graph_rabitq_quantized_asset_test.go`
+    covers `rabitq_1bit` asset build/prepare/reopen, pure-Go scorer parity,
+    lower-level and collection buffered quantized search, exact-read guardrails,
+    cache/lifecycle behavior, allocation guardrails, and fail-closed asset
     validation.
   - `TreeDB/collections/vector_index_search_test.go` covers public exact,
     quantized_only, quantized_rerank, searcher buffer, and missing-name behavior.
@@ -957,6 +963,12 @@ Coverage:
     bytes, fallback counters, and asset bytes/vector on one fixture.
   - `BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926` reports rebuild
     cost and storage/asset bytes for exact assets versus scalar_u8 assets.
+  - `BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451`,
+    `BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452`,
+    and `BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450` report pure-Go
+    RaBitQ lower-level/collection buffered search, c=1/c=8 concurrency rows,
+    logical code bytes/vector, actual asset bytes/vector, exact-read counters,
+    recall@K, and storage overhead for #2454 closeout.
 
 ## 13. Native Wire Protocol
 
