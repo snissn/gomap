@@ -221,10 +221,13 @@ maintained text roots.
 
 ## Follow-up execution plan
 
-Later #1764 milestones will:
+The #2503 hybrid seam now exposes
+`Collection.SearchHybridTextCandidates(HybridTextQuery)` as a candidate-only
+adapter over `SearchText`; it requests no full documents and reuses the shared
+hybrid candidate/stat vocabulary.
 
-- expose a candidate-only lexical adapter for the #2503 hybrid seam without full
-  document fetch;
+Later text-search milestones will:
+
 - add gateway/query-language integration;
 - add phrase/proximity/highlighting/stemming/trigram/fuzzy search only after
   explicit storage/query contracts land.
