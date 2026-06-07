@@ -81,7 +81,12 @@ func (f *Filter) validateAt(path string) error {
 		if len(f.Conditions) != 0 {
 			return serviceErrorf(CodeInvalidRequest, "%s: leaf operator %q cannot set conditions", path, f.Operator)
 		}
-		if op == filterOpIn || op == filterOpNotIn {
+		switch op {
+		case filterOpGT, filterOpGTE, filterOpLT, filterOpLTE:
+			if !isComparableFilterValue(f.Value) {
+				return serviceErrorf(CodeInvalidRequest, "%s: operator %q requires a numeric or string value", path, f.Operator)
+			}
+		case filterOpIn, filterOpNotIn:
 			if _, ok := filterListValues(f.Value); !ok {
 				return serviceErrorf(CodeInvalidRequest, "%s: operator %q requires an array value", path, f.Operator)
 			}
@@ -230,6 +235,14 @@ func lookupPath(root map[string]any, path string) (any, bool) {
 		}
 	}
 	return current, true
+}
+
+func isComparableFilterValue(value any) bool {
+	if _, ok := numberAsFloat64(value); ok {
+		return true
+	}
+	_, ok := value.(string)
+	return ok
 }
 
 func compareFilterValues(left, right any) (int, error) {

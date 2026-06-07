@@ -41,6 +41,10 @@ func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
 	if ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "array") {
 		t.Fatalf("unsupported in operand err=%v code=%s", err, ErrorCodeOf(err))
 	}
+	_, err = svc.CountDocuments(ctx, "docs", CountDocumentsRequest{Filter: &Filter{Field: "meta.version", Operator: ">", Value: []any{1.0}}})
+	if ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "numeric or string") {
+		t.Fatalf("unsupported comparison operand on empty index err=%v code=%s", err, ErrorCodeOf(err))
+	}
 }
 
 func TestServiceUpsertDeleteCountFilterRoundTrip(t *testing.T) {

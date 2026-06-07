@@ -49,6 +49,8 @@ func TestFilterRejectsMalformedShapes(t *testing.T) {
 		{name: "and no conditions", filter: Filter{Operator: "AND"}},
 		{name: "not two conditions", filter: Filter{Operator: "NOT", Conditions: []Filter{{Field: "meta.repo", Operator: "==", Value: "gomap"}, {Field: "meta.repo", Operator: "==", Value: "other"}}}},
 		{name: "leaf conditions", filter: Filter{Field: "meta.repo", Operator: "==", Value: "gomap", Conditions: []Filter{{Field: "meta.language", Operator: "==", Value: "go"}}}},
+		{name: "comparison array", filter: Filter{Field: "meta.version", Operator: ">", Value: []any{1.0}}},
+		{name: "comparison bool", filter: Filter{Field: "meta.version", Operator: "<=", Value: true}},
 		{name: "embedding", filter: Filter{Field: "embedding", Operator: "==", Value: []any{1.0, 0.0}}},
 	}
 	for _, tt := range tests {
