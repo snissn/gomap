@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	collectionMetaVersion        = 3
+	collectionMetaVersion        = 4
 	maxCollectionMutationRetries = 64
 	// Bound stale buffered-read replans so a writer under constant buffered
 	// pressure eventually falls back to a publish boundary or outer retry.
@@ -904,6 +904,7 @@ type CollectionMeta struct {
 	Options       CollectionOptions       `json:"options,omitempty"`
 	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
 	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
+	TextIndexes   []TextIndexDefinition   `json:"text_indexes,omitempty"`
 }
 
 type collectionMetaDisk struct {
@@ -912,6 +913,7 @@ type collectionMetaDisk struct {
 	Options       CollectionOptions       `json:"options,omitempty"`
 	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
 	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
+	TextIndexes   []TextIndexDefinition   `json:"text_indexes,omitempty"`
 }
 
 type collectionCatalog struct {
@@ -3145,7 +3147,7 @@ func (c *Collection) Meta() CollectionMeta {
 
 // MetaView returns the collection metadata without deep-copying slice fields.
 // The returned value is for read-only internal fast paths; callers must not
-// mutate Indexes, VectorIndexes, or other referenced fields.
+// mutate Indexes, VectorIndexes, TextIndexes, or other referenced fields.
 func (c *Collection) MetaView() CollectionMeta {
 	if c == nil {
 		return CollectionMeta{}
@@ -3450,6 +3452,7 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 		Options:       baseMeta.Options,
 		Indexes:       baseMeta.Indexes,
 		VectorIndexes: nextIndexes,
+		TextIndexes:   baseMeta.TextIndexes,
 	})
 	if err != nil {
 		return nil, err
@@ -3566,6 +3569,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		Options:       baseMeta.Options,
 		Indexes:       nextIndexes,
 		VectorIndexes: baseMeta.VectorIndexes,
+		TextIndexes:   baseMeta.TextIndexes,
 	})
 	if err != nil {
 		return nil, err
@@ -3608,13 +3612,16 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
+	if err := rejectTextIndexWriteUnavailable(c.meta, "Insert"); err != nil {
+		return nil, err
+	}
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, err
 	}
 	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationInsert); err != nil {
 		return nil, err
 	}
-	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && !c.db.CommandWALEnabled() {
+	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && len(c.meta.TextIndexes) == 0 && !c.db.CommandWALEnabled() {
 		if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -9074,6 +9081,10 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 		return nil, err, true
 	}
 	meta := catalog.meta
+	if err := rejectTextIndexWriteUnavailable(meta, "InsertBatch"); err != nil {
+		closePlanningSnapshot()
+		return nil, err, true
+	}
 	if len(meta.Indexes) == 0 {
 		closePlanningSnapshot()
 		return nil, nil, false
@@ -9255,6 +9266,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	meta := catalog.meta
 	c.meta = meta
+	if err := rejectTextIndexWriteUnavailable(meta, "InsertBatch"); err != nil {
+		closePlanningSnapshot()
+		return nil, err
+	}
 	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -9321,6 +9336,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		meta = catalog.meta
 		c.meta = meta
+		if err := rejectTextIndexWriteUnavailable(meta, "InsertBatch"); err != nil {
+			closePlanningSnapshot()
+			return nil, err
+		}
 		plannerOptions, err = collectionPlannerOptionsForDB(c.db, meta)
 		if err != nil {
 			closePlanningSnapshot()
@@ -9366,6 +9385,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 					return nil, err
 				}
 				c.meta = meta
+				if err := rejectTextIndexWriteUnavailable(meta, "InsertBatch"); err != nil {
+					closePlanningSnapshot()
+					return nil, err
+				}
 				plannerOptions.learnTemplateIDs = templateEncoder != nil
 				plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 				commandWALNoIndexBufferedMode = c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
@@ -10319,6 +10342,9 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return false, err
 	}
+	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteDocument"); err != nil {
+		return false, err
+	}
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
@@ -10372,6 +10398,9 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		return 0, errCollectionDBNil
 	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
+		return 0, err
+	}
+	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteBatch"); err != nil {
 		return 0, err
 	}
 	for i, id := range documentIDs {
@@ -10451,6 +10480,10 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		return 0, err
 	}
 	c.meta = catalog.meta
+	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteBatch"); err != nil {
+		_ = snap.Close()
+		return 0, err
+	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -10697,6 +10730,10 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		return false, err
 	}
 	c.meta = catalog.meta
+	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteDocument"); err != nil {
+		_ = snap.Close()
+		return false, err
+	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -10935,6 +10972,9 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
+	if err := rejectTextIndexWriteUnavailable(c.meta, "Update"); err != nil {
+		return false, false, err
+	}
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return false, false, err
 	}
@@ -11096,6 +11136,9 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 		return nil, false, errCollectionDBNil
 	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, false, err
+	}
+	if err := rejectTextIndexWriteUnavailable(c.meta, "UpdateBatch"); err != nil {
 		return nil, false, err
 	}
 	if len(items) == 0 {
@@ -13270,6 +13313,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, err
 	}
 	c.meta = catalog.meta
+	if err := rejectTextIndexWriteUnavailable(c.meta, "Update"); err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -15169,6 +15216,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		return nil, err
 	}
 	meta := catalog.meta
+	if err := rejectTextIndexWriteUnavailable(meta, "UpdateBatch"); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
 	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -20174,6 +20225,7 @@ func encodeNormalizedCollectionMeta(meta CollectionMeta) ([]byte, error) {
 		Options:       meta.Options,
 		Indexes:       meta.Indexes,
 		VectorIndexes: meta.VectorIndexes,
+		TextIndexes:   meta.TextIndexes,
 	})
 }
 
@@ -20190,6 +20242,7 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 		Options:       disk.Options,
 		Indexes:       disk.Indexes,
 		VectorIndexes: disk.VectorIndexes,
+		TextIndexes:   disk.TextIndexes,
 	})
 }
 
@@ -20283,13 +20336,35 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[vectorIndexes[i].Name] = struct{}{}
 	}
 	meta.VectorIndexes = vectorIndexes
+	textIndexes := copyTextIndexDefinitions(meta.TextIndexes)
+	for i := range textIndexes {
+		normalized, err := normalizeTextIndexDefinition(textIndexes[i])
+		if err != nil {
+			name := textIndexes[i].Name
+			if name == "" {
+				name = "<unnamed>"
+			}
+			return CollectionMeta{}, fmt.Errorf("collections: invalid text index %q: %w", name, err)
+		}
+		textIndexes[i] = normalized
+	}
+	sort.SliceStable(textIndexes, func(i, j int) bool {
+		return textIndexes[i].Name < textIndexes[j].Name
+	})
+	for i := range textIndexes {
+		if _, ok := seen[textIndexes[i].Name]; ok {
+			return CollectionMeta{}, fmt.Errorf("collections: duplicate index %q", textIndexes[i].Name)
+		}
+		seen[textIndexes[i].Name] = struct{}{}
+	}
+	meta.TextIndexes = textIndexes
 	if meta.Options.DisableIndexedWriteMemtables {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
 		meta.Options.BufferedIndexedOverlayRoots = false
-	} else if len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 {
+	} else if len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
@@ -20484,6 +20559,7 @@ func (m CollectionMeta) copy() *CollectionMeta {
 		Options:       copyCollectionOptions(m.Options),
 		Indexes:       append([]IndexDefinition(nil), m.Indexes...),
 		VectorIndexes: copyVectorIndexDefinitions(m.VectorIndexes),
+		TextIndexes:   copyTextIndexDefinitions(m.TextIndexes),
 	}
 }
 
@@ -20521,7 +20597,8 @@ func collectionMetaValuesEqual(a, b CollectionMeta) bool {
 	if a.Name != b.Name ||
 		!collectionOptionsEqual(a.Options, b.Options) ||
 		len(a.Indexes) != len(b.Indexes) ||
-		len(a.VectorIndexes) != len(b.VectorIndexes) {
+		len(a.VectorIndexes) != len(b.VectorIndexes) ||
+		len(a.TextIndexes) != len(b.TextIndexes) {
 		return false
 	}
 	for i := range a.Indexes {
@@ -20531,6 +20608,11 @@ func collectionMetaValuesEqual(a, b CollectionMeta) bool {
 	}
 	for i := range a.VectorIndexes {
 		if !vectorIndexDefinitionValuesEqual(a.VectorIndexes[i], b.VectorIndexes[i]) {
+			return false
+		}
+	}
+	for i := range a.TextIndexes {
+		if !textIndexDefinitionValuesEqual(a.TextIndexes[i], b.TextIndexes[i]) {
 			return false
 		}
 	}
@@ -20575,11 +20657,15 @@ func addVectorIndexToCollectionMeta(meta CollectionMeta, def VectorIndexDefiniti
 	if _, ok := findVectorIndex(meta.VectorIndexes, def.Name); ok {
 		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
 	}
+	if _, ok := findTextIndex(meta.TextIndexes, def.Name); ok {
+		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
 	candidate := CollectionMeta{
 		Name:          meta.Name,
 		Options:       meta.Options,
 		Indexes:       append([]IndexDefinition(nil), meta.Indexes...),
 		VectorIndexes: append(append([]VectorIndexDefinition(nil), meta.VectorIndexes...), def),
+		TextIndexes:   copyTextIndexDefinitions(meta.TextIndexes),
 	}
 	normalized, err := normalizeCollectionMeta(candidate)
 	if err != nil {
@@ -20602,11 +20688,15 @@ func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (Collect
 	if _, ok := findVectorIndex(meta.VectorIndexes, def.Name); ok {
 		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
 	}
+	if _, ok := findTextIndex(meta.TextIndexes, def.Name); ok {
+		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
 	candidate := CollectionMeta{
 		Name:          meta.Name,
 		Options:       meta.Options,
 		Indexes:       append(append([]IndexDefinition(nil), meta.Indexes...), def),
 		VectorIndexes: append([]VectorIndexDefinition(nil), meta.VectorIndexes...),
+		TextIndexes:   copyTextIndexDefinitions(meta.TextIndexes),
 	}
 	normalized, err := normalizeCollectionMeta(candidate)
 	if err != nil {
@@ -20729,6 +20819,9 @@ func collectionRootNames(meta CollectionMeta) []string {
 	}
 	for _, idx := range meta.VectorIndexes {
 		out = append(out, collectionVectorIndexRootName(meta.Name, idx.Name))
+	}
+	for _, idx := range meta.TextIndexes {
+		out = append(out, collectionTextRootNames(meta.Name, idx.Name)...)
 	}
 	return out
 }
