@@ -75,7 +75,7 @@ func (f *Filter) validateAt(path string) error {
 		if field == "" {
 			return serviceErrorf(CodeInvalidRequest, "%s: field is required for operator %q", path, f.Operator)
 		}
-		if strings.HasPrefix(field, "embedding") || strings.HasPrefix(field, "meta.embedding.") {
+		if field == "embedding" {
 			return serviceErrorf(CodeInvalidRequest, "%s: embedding filters are unsupported; filter metadata fields instead", path)
 		}
 		if len(f.Conditions) != 0 {
