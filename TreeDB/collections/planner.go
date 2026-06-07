@@ -99,6 +99,7 @@ type insertBatchPlan struct {
 	allUniqueProbeRunsBuilt    bool
 	templateRecords            []templateV1Record
 	templateLearned            []templateV1LearnedTemplate
+	templateResolver           templateV1Resolver
 	stats                      insertBatchPlanStats
 }
 
@@ -296,6 +297,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		allUniqueProbeRunsBuilt:    allUniqueProbeRunsBuilt,
 		templateRecords:            templateRecords,
 		templateLearned:            templateLearned,
+		templateResolver:           templateResolver,
 		stats:                      insertBatchPlanStats{CollectionInsertStats: stats},
 	}
 	if p.directBufferedRuns {

@@ -199,8 +199,8 @@ func TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection stale: %v", err)
 	}
-	if _, err := col.Insert([]byte("d2"), []byte(`{"body":"blocked"}`)); !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("Insert with text index err=%v want ErrTextIndexUnavailable", err)
+	if _, err := col.Insert([]byte("d2"), []byte(`{"body":"maintained before drop"}`)); err != nil {
+		t.Fatalf("Insert with text index before drop: %v", err)
 	}
 
 	meta, err := col.DropTextIndex("lexical")
@@ -216,10 +216,10 @@ func TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard(t *testing.T) {
 	assertTextRootCleared(t, d, collectionTextIndexRootName("docs", "lexical"))
 	assertTextRootCleared(t, d, collectionTextStateRootName("docs", "lexical"))
 	assertTextRootCleared(t, d, collectionTextStatsRootName("docs", "lexical"))
-	if _, err := col.Insert([]byte("d2"), []byte(`{"body":"allowed after drop"}`)); err != nil {
+	if _, err := col.Insert([]byte("d3"), []byte(`{"body":"allowed after drop"}`)); err != nil {
 		t.Fatalf("Insert after DropTextIndex: %v", err)
 	}
-	if _, err := stale.Insert([]byte("d3"), []byte(`{"body":"stale handle allowed after drop"}`)); err != nil {
+	if _, err := stale.Insert([]byte("d4"), []byte(`{"body":"stale handle allowed after drop"}`)); err != nil {
 		t.Fatalf("stale Insert after DropTextIndex: %v", err)
 	}
 }
@@ -272,12 +272,19 @@ func TestCreateTextIndexFlushesBufferedWritesFromOtherManagers(t *testing.T) {
 	if err := writer.Flush(); err != nil {
 		t.Fatalf("writer Flush after CreateTextIndex: %v", err)
 	}
-	if _, err := writer.Insert([]byte("d-after"), []byte(`{"body":"must not bypass"}`)); !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("writer Insert after CreateTextIndex err=%v want ErrTextIndexUnavailable", err)
+	if _, err := writer.Insert([]byte("d-after"), []byte(`{"body":"maintained after create"}`)); err != nil {
+		t.Fatalf("writer Insert after CreateTextIndex: %v", err)
+	}
+	stats, err = creator.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats after writer insert: %v", err)
+	}
+	if stats.Documents != 2 || stats.StateEntries != 2 || stats.PostingEntries != 6 {
+		t.Fatalf("storage stats after writer insert=%+v want docs=2 state=2 postings=6", stats)
 	}
 }
 
-func TestCreateTextIndexRejectsWritesFromStaleHandles(t *testing.T) {
+func TestCreateTextIndexMaintainsWritesFromStaleHandles(t *testing.T) {
 	d := openTextTestDB(t)
 	defer func() { _ = d.Close() }()
 	mgr := NewCollectionManager(d)
@@ -298,15 +305,15 @@ func TestCreateTextIndexRejectsWritesFromStaleHandles(t *testing.T) {
 	if _, _, err := fresh.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
-	if _, err := stale.Insert([]byte("d2"), []byte(`{"body":"must not bypass"}`)); !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("stale Insert after CreateTextIndex err=%v want ErrTextIndexUnavailable", err)
+	if _, err := stale.Insert([]byte("d2"), []byte(`{"body":"maintained stale handle"}`)); err != nil {
+		t.Fatalf("stale Insert after CreateTextIndex: %v", err)
 	}
 	stats, err := fresh.TextIndexStorageStats("lexical")
 	if err != nil {
 		t.Fatalf("TextIndexStorageStats: %v", err)
 	}
-	if stats.Documents != 1 || stats.StateEntries != 1 {
-		t.Fatalf("stats after stale rejected insert=%+v want one backfilled document", stats)
+	if stats.Documents != 2 || stats.StateEntries != 2 || stats.PostingEntries != 5 {
+		t.Fatalf("stats after stale maintained insert=%+v want two maintained documents", stats)
 	}
 }
 

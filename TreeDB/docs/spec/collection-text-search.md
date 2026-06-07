@@ -1,6 +1,6 @@
-# Collection Text Search Contract (M0-M2)
+# Collection Text Search Contract (M0-M3)
 
-Status: PR2 storage/backfill slice for issue #1764. TreeDB collections are
+Status: PR3 mutation-maintenance slice for issue #1764. TreeDB collections are
 pre-alpha; these text-search storage formats are versioned and may change before
 stabilization, but malformed or unsupported versions must fail closed.
 
@@ -21,12 +21,13 @@ stabilization, but malformed or unsupported versions must fail closed.
   over existing documents and publishes roots plus metadata atomically.
 - `DropTextIndex` removes metadata and clears the text root descriptors.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
+- Insert, delete, update, and batch write paths maintain postings, text-state,
+  and corpus/term/field stats for declared text indexes.
 - `SearchText(TextSearchOptions)` query-shape validation that fails closed before
   scanning because ranked text search execution is not implemented yet.
 
 Not implemented yet:
 
-- insert/update/delete mutation maintenance for declared text indexes;
 - BM25/BM25F scoring and ranked SearchText execution;
 - phrase/proximity/highlighting/stemming/trigram/fuzzy search;
 - query-vector syntax, gateway integration, or hybrid text+vector executor integration.
@@ -121,8 +122,9 @@ repeated field_count:
     uvarint offset_count   | repeated (uvarint start, uvarint end)
 ```
 
-Backfill writes a text-state entry for every scanned document so later M3
-mutation maintenance can diff or decrement document-level accounting.
+Backfill and insert maintenance write a text-state entry for every indexed
+document so update/delete maintenance can diff or decrement document-level
+accounting without re-reading old document payloads.
 
 ### Text-stats root
 
@@ -179,22 +181,29 @@ terms are analyzed with the declared index analyzer.
 
 `SearchText` currently returns `ErrTextIndexUnavailable` for non-empty analyzed
 queries against an existing text index. This is intentional: normal text queries
-MUST be indexed, bounded, and ranked from postings; M2 does not implement the
+MUST be indexed, bounded, and ranked from postings; M3 does not implement the
 ranked executor and must not fall back to scan-and-rank. Empty analyzed queries
 return an empty result set.
 
-## Fail-closed write behavior
+## Mutation maintenance
 
-Collections that declare text indexes reject insert/update/delete operations with
-`ErrTextIndexUnavailable` until M3 lands durable postings/text-state/stats
-mutation maintenance. This prevents silent divergence between primary documents
-and text metadata.
+Text-indexed insert paths analyze the stored document, set one text-state entry,
+set one posting per `(term, documentID)`, and increment corpus/term/field stats.
+Delete paths load the text-state entry, delete the document's postings and
+state, and decrement stats. Update paths load old text-state, analyze the new
+stored document, replace postings/state, and apply a stats delta. Stats entries
+whose counts drop to zero are deleted; the corpus stats entry remains with the
+current document count.
+
+M3 keeps text-indexed writes on immediate root-publish paths rather than staging
+new text deltas in buffered write domains. Existing buffered writes are drained
+by `CreateTextIndex` before backfill, and `Flush`/`Checkpoint`/reopen preserve
+maintained text roots.
 
 ## Follow-up execution plan
 
 Later #1764 milestones will:
 
-- maintain postings, text-state, and stats on insert/update/delete;
 - range-scan postings by analyzed term;
 - bound the candidate set;
 - score candidates from persisted stats with BM25/BM25F-style field weighting;

@@ -3624,14 +3624,6 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
-	if len(c.meta.TextIndexes) != 0 {
-		unlockSchema := c.lockCollectionSchemaRead()
-		err := c.refreshTextIndexWriteGuard("Insert")
-		unlockSchema()
-		if err != nil {
-			return nil, err
-		}
-	}
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, err
 	}
@@ -3831,10 +3823,6 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		return nil, errCollectionNotFound
 	}
 	c.meta = catalog.meta
-	if err := rejectTextIndexWriteUnavailable(catalog.meta, "Insert"); err != nil {
-		domain.mu.Unlock()
-		return nil, err
-	}
 	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
 		domain.mu.Unlock()
 		return nil, err
@@ -3843,7 +3831,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		domain.mu.Unlock()
 		return nil, err
 	}
-	if indexed || len(catalog.meta.VectorIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
+	if indexed || len(catalog.meta.VectorIndexes) > 0 || len(catalog.meta.TextIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
 		return c.insertOneViaBatch(id, document)
 	}
@@ -3889,7 +3877,7 @@ func (c *Collection) canBufferCommandWALNoIndexInsertBatch(meta CollectionMeta, 
 	if !c.db.CommandWALEnabled() || c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed {
 		return false
 	}
-	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || columnStoreWriteEnabled(meta) {
+	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 || columnStoreWriteEnabled(meta) {
 		return false
 	}
 	switch normalizedDocumentFormat(format) {
@@ -3907,7 +3895,7 @@ func (c *Collection) canUseCommandWALIndexedInsertBuffer(meta CollectionMeta, fo
 	if !c.db.CommandWALEnabled() || c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed {
 		return false
 	}
-	if len(meta.VectorIndexes) != 0 || columnStoreWriteEnabled(meta) {
+	if len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 || columnStoreWriteEnabled(meta) {
 		return false
 	}
 	if !c.shouldBufferIndexedInserts(meta) {
@@ -4399,7 +4387,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 }
 
 func (c *Collection) shouldBufferIndexedInserts(meta CollectionMeta) bool {
-	return c != nil && c.writeDomain != nil && meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
+	return c != nil && c.writeDomain != nil && meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0 && len(meta.TextIndexes) == 0
 }
 
 func (c *Collection) shouldBufferIndexedDeletes(meta CollectionMeta) bool {
@@ -4407,6 +4395,7 @@ func (c *Collection) shouldBufferIndexedDeletes(meta CollectionMeta) bool {
 		c.writeDomain != nil &&
 		meta.Options.BufferedIndexedWrites &&
 		len(meta.Indexes) > 0 &&
+		len(meta.TextIndexes) == 0 &&
 		!collectionMetaHasSecondaryUniqueIndex(meta)
 }
 
@@ -8866,11 +8855,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	c.meta = catalog.meta
-	if err := rejectTextIndexWriteUnavailable(c.meta, "Insert"); err != nil {
-		_ = snap.Close()
-		return nil, err
-	}
-	if len(c.meta.Indexes) > 0 || len(c.meta.VectorIndexes) > 0 {
+	if len(c.meta.Indexes) > 0 || len(c.meta.VectorIndexes) > 0 || len(c.meta.TextIndexes) > 0 {
 		_ = snap.Close()
 		return c.insertOneViaBatch(id, document)
 	}
@@ -9112,10 +9097,6 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 		return nil, err, true
 	}
 	meta := catalog.meta
-	if err := rejectTextIndexWriteUnavailable(meta, "InsertBatch"); err != nil {
-		closePlanningSnapshot()
-		return nil, err, true
-	}
 	if len(meta.Indexes) == 0 {
 		closePlanningSnapshot()
 		return nil, nil, false
@@ -9251,6 +9232,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	if !commandWALActive &&
 		c.canBufferNoIndexInsertBatchAck() &&
 		len(c.meta.Indexes) == 0 &&
+		len(c.meta.TextIndexes) == 0 &&
 		canBufferNoIndexInsertBatchFormat(c.meta.Options.DocumentFormat, trustedValidBSON) {
 		skipInitialNoIndexFlush = true
 	}
@@ -9297,10 +9279,6 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	meta := catalog.meta
 	c.meta = meta
-	if err := rejectTextIndexWriteUnavailable(meta, "InsertBatch"); err != nil {
-		closePlanningSnapshot()
-		return nil, err
-	}
 	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -9331,7 +9309,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	if skipInitialNoIndexFlush &&
-		(len(meta.Indexes) != 0 || !canBufferNoIndexInsertBatchFormat(plannerOptions.documentFormat, trustedValidBSON)) {
+		(len(meta.Indexes) != 0 || len(meta.TextIndexes) != 0 || !canBufferNoIndexInsertBatchFormat(plannerOptions.documentFormat, trustedValidBSON)) {
 		catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndex)
 		if err != nil {
 			return nil, err
@@ -9367,10 +9345,6 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		meta = catalog.meta
 		c.meta = meta
-		if err := rejectTextIndexWriteUnavailable(meta, "InsertBatch"); err != nil {
-			closePlanningSnapshot()
-			return nil, err
-		}
 		plannerOptions, err = collectionPlannerOptionsForDB(c.db, meta)
 		if err != nil {
 			closePlanningSnapshot()
@@ -9416,10 +9390,6 @@ func (c *Collection) insertBatchOnceWithLockState(
 					return nil, err
 				}
 				c.meta = meta
-				if err := rejectTextIndexWriteUnavailable(meta, "InsertBatch"); err != nil {
-					closePlanningSnapshot()
-					return nil, err
-				}
 				plannerOptions.learnTemplateIDs = templateEncoder != nil
 				plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 				commandWALNoIndexBufferedMode = c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
@@ -9433,6 +9403,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	if !commandWALActive &&
 		len(meta.Indexes) == 0 &&
+		len(meta.TextIndexes) == 0 &&
 		c.canBufferNoIndexInsertBatchAck() &&
 		canBufferNoIndexInsertBatchFormat(plannerOptions.documentFormat, trustedValidBSON) {
 		if resultIDs, buffered, err := c.bufferNoIndexInsertBatch(c.writeDomain, catalog, snap, plannerOptions, ids, documents, execOpts); buffered {
@@ -9460,6 +9431,9 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	keepDirectBufferedInsertPlanningLocked := directBufferedInsertAccumulators && shouldKeepDirectBufferedInsertPlanningLocked(plannerOptions, len(documents), mutationLockWait)
 	unlockForPlanning := shouldUnlockInsertPlanning(plannerOptions, indexedMemtablesEnabled, bufferIndexedInserts, keepDirectBufferedInsertPlanningLocked)
+	if len(meta.TextIndexes) > 0 {
+		unlockForPlanning = false
+	}
 	preflightPersistedConflicts := false
 	preflight := insertBatchPreflight{}
 	if unlockForPlanning {
@@ -9502,6 +9476,13 @@ func (c *Collection) insertBatchOnceWithLockState(
 		plan.stats.BufferedIndexedBatches = 1
 	} else if indexedMemtablesEnabled {
 		plan.stats.BufferedIndexedBypassBatches = 1
+	}
+	if len(meta.TextIndexes) > 0 {
+		if err := appendTextIndexInsertPlanDeltas(snap, catalog, plannerOptions, plan); err != nil {
+			closePlanningSnapshot()
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
 	}
 	if !insertBatchPlanHasRootWork(plan) {
 		closePlanningSnapshot()
@@ -10286,6 +10267,33 @@ func (c *Collection) insertBatchNoIndex(
 			})
 		}
 	}
+	var textTables []memtable.Table
+	var textIters []iterator.UnsafeIterator
+	defer func() {
+		for _, it := range textIters {
+			_ = it.Close()
+		}
+		resetCollectionTables(textTables)
+	}()
+	if len(c.meta.TextIndexes) > 0 {
+		textRootNames := make([]string, 0, len(c.meta.TextIndexes)*3)
+		textBaseRootIDs := make(map[string]uint64, len(c.meta.TextIndexes)*3)
+		textPolicies := make([]backenddb.OrderedRootStoragePolicy, 0, len(c.meta.TextIndexes)*3)
+		if err := appendTextIndexNoIndexInsertDeltas(snap, catalog, plannerOptions, entries, &textRootNames, textBaseRootIDs, &textPolicies, &textTables); err != nil {
+			return nil, err
+		}
+		for i, textRootName := range textRootNames {
+			textIter := textTables[i].NewIterator(nil, nil)
+			textIters = append(textIters, textIter)
+			rootNames = append(rootNames, textRootName)
+			baseRootIDs[textRootName] = textBaseRootIDs[textRootName]
+			ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+				BaseRoot:      textBaseRootIDs[textRootName],
+				Iter:          textIter,
+				StoragePolicy: textPolicies[i],
+			})
+		}
+	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if columnStoreWriteEnabled(c.meta) {
@@ -10375,9 +10383,6 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := c.refreshTextIndexWriteGuard("DeleteDocument"); err != nil {
-		return false, err
-	}
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
@@ -10435,9 +10440,6 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := c.refreshTextIndexWriteGuard("DeleteBatch"); err != nil {
-		return 0, err
-	}
 	for i, id := range documentIDs {
 		if len(id) == 0 {
 			return 0, fmt.Errorf("collections: document id cannot be empty at index %d", i)
@@ -10515,10 +10517,6 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		return 0, err
 	}
 	c.meta = catalog.meta
-	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteBatch"); err != nil {
-		_ = snap.Close()
-		return 0, err
-	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -10563,8 +10561,9 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	}
 
 	type existingDelete struct {
-		id    []byte
-		state documentIndexState
+		id       []byte
+		state    documentIndexState
+		document []byte
 	}
 	existing := make([]existingDelete, 0, len(documentIDs))
 	for _, documentID := range documentIDs {
@@ -10588,6 +10587,9 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 			continue
 		}
 		item := existingDelete{id: documentID}
+		if len(c.meta.TextIndexes) > 0 {
+			item.document = bytes.Clone(entry.Value)
+		}
 		if len(runtimes) > 0 {
 			item.state, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, plannerOptions)
 			if err != nil {
@@ -10661,7 +10663,19 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		}
 	}
 
-	if !commandWALActive {
+	fallbackDocuments := make([][]byte, 0, len(existing))
+	if len(c.meta.TextIndexes) > 0 {
+		for _, item := range existing {
+			fallbackDocuments = append(fallbackDocuments, item.document)
+		}
+		if err := appendTextIndexDeleteDeltas(snap, catalog, plannerOptions, deleteIDs, fallbackDocuments, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+			_ = snap.Close()
+			resetCollectionTables(deltaTables)
+			return 0, err
+		}
+	}
+
+	if !commandWALActive && len(c.meta.TextIndexes) == 0 {
 		if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, len(existing)); buffered || err != nil {
 			_ = snap.Close()
 			if err != nil {
@@ -10765,10 +10779,6 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		return false, err
 	}
 	c.meta = catalog.meta
-	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteDocument"); err != nil {
-		_ = snap.Close()
-		return false, err
-	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -10891,7 +10901,14 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
-	if !commandWALActive {
+	if len(c.meta.TextIndexes) > 0 {
+		if err := appendTextIndexDeleteDeltas(snap, catalog, plannerOptions, [][]byte{documentID}, [][]byte{entry.Value}, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+			_ = snap.Close()
+			resetCollectionTables(deltaTables)
+			return false, err
+		}
+	}
+	if !commandWALActive && len(c.meta.TextIndexes) == 0 {
 		if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, 1); buffered || err != nil {
 			_ = snap.Close()
 			if err != nil {
@@ -11009,9 +11026,6 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := c.refreshTextIndexWriteGuard("Update"); err != nil {
-		return false, false, err
-	}
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return false, false, err
 	}
@@ -11177,9 +11191,6 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := c.refreshTextIndexWriteGuard("UpdateBatch"); err != nil {
-		return nil, false, err
-	}
 	if len(items) == 0 {
 		c.setLastUpdateStats(CollectionUpdateStats{})
 		return nil, true, nil
@@ -13352,10 +13363,6 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, err
 	}
 	c.meta = catalog.meta
-	if err := rejectTextIndexWriteUnavailable(c.meta, "Update"); err != nil {
-		_ = snap.Close()
-		return false, false, err
-	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -13374,7 +13381,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		Indexes: len(c.meta.Indexes),
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
-	primaryOnlyUpdate := len(c.meta.Indexes) == 0
+	primaryOnlyUpdate := len(c.meta.Indexes) == 0 && len(c.meta.TextIndexes) == 0
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
@@ -13540,10 +13547,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		}
 	}
 
-	rootNames := make([]string, 0, 2+len(runtimes))
-	baseRootIDs := make(map[string]uint64, 2+len(runtimes))
-	policies := make([]backenddb.OrderedRootStoragePolicy, 0, 2+len(runtimes))
-	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
+	rootNames := make([]string, 0, 2+len(runtimes)+len(c.meta.TextIndexes)*3)
+	baseRootIDs := make(map[string]uint64, 2+len(runtimes)+len(c.meta.TextIndexes)*3)
+	policies := make([]backenddb.OrderedRootStoragePolicy, 0, 2+len(runtimes)+len(c.meta.TextIndexes)*3)
+	deltaTables := make([]memtable.Table, 0, 2+len(runtimes)+len(c.meta.TextIndexes)*3)
 
 	if len(templateRecords) > 0 {
 		phaseStart = updateBatchStatsNow(detailedStats)
@@ -13675,6 +13682,14 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 			}
 		}
 		stats.SecondaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
+	}
+	if len(c.meta.TextIndexes) > 0 {
+		textChanged := []preparedBatchUpdate{{documentID: documentID, document: document}}
+		if err := appendTextIndexUpdateDeltas(snap, catalog, plannerOptions, textChanged, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+			_ = snap.Close()
+			resetCollectionTables(deltaTables)
+			return false, false, err
+		}
 	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
@@ -14408,6 +14423,9 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 		return false
 	}
 	if columnStoreNeedsRetainedPayloadTransform(meta) {
+		return false
+	}
+	if len(meta.TextIndexes) != 0 {
 		return false
 	}
 	if len(meta.Indexes) == 0 {
@@ -15255,10 +15273,6 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		return nil, err
 	}
 	meta := catalog.meta
-	if err := rejectTextIndexWriteUnavailable(meta, "UpdateBatch"); err != nil {
-		_ = snap.Close()
-		return nil, err
-	}
 	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -15279,6 +15293,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	retainedPayloadTransform := columnStoreNeedsRetainedPayloadTransform(meta)
 	canBufferIndexedUpdateBatch := !retainedPayloadTransform &&
 		len(meta.Indexes) > 0 &&
+		len(meta.TextIndexes) == 0 &&
 		(!collectionMetaHasSecondaryUniqueIndex(meta) ||
 			mode == updateBatchModeNoSecondaryUniqueIndexes ||
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges)
@@ -15935,6 +15950,15 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			delete(secondaryTables, rootName)
 		}
 		stats.SecondaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
+	}
+	if len(meta.TextIndexes) > 0 {
+		if err := appendTextIndexUpdateDeltas(snap, catalog, plannerOptions, changed, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		for len(uniqueSecondary) < len(rootNames) {
+			uniqueSecondary = append(uniqueSecondary, -1)
+		}
 	}
 
 	// Tables moved into deltaTables are nil/deleted above; only unused scratch

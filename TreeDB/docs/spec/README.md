@@ -84,9 +84,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     durability-boundary semantics.
 - `TreeDB/docs/spec/collection-text-search.md`
   - collection-native text index metadata, analyzer, root naming/policies,
-    versioned postings/text-state/text-stats storage, backfill/drop, query
-    shape, and fail-closed behavior before mutation maintenance/search execution
-    lands.
+    versioned postings/text-state/text-stats storage, backfill/drop, write-path
+    maintenance, and fail-closed query-shape behavior before ranked search
+    execution lands.
 - `TreeDB/docs/spec/write-path-and-durability.md`
   - write pipeline and durability semantics for all durability modes.
 - `TreeDB/docs/spec/recovery.md`

@@ -4,15 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // ErrTextIndexUnavailable reports that a declared collection text index cannot
-// yet be used for mutation maintenance or search execution. Early #1764
-// milestones land metadata/analyzer/storage contracts before write-path
-// maintenance and ranked query execution; write/search paths fail closed instead
-// of silently diverging, scanning, or returning incomplete text-index results.
+// yet be used for search execution. #1764 M3 maintains postings/text-state/stats
+// on writes, but ranked query execution remains fail-closed instead of silently
+// scanning or returning incomplete text-index results.
 var ErrTextIndexUnavailable = errors.New("collections: text index unavailable")
 
 // TextAnalyzer names a collection text analyzer. The zero value normalizes to
@@ -25,8 +22,8 @@ const (
 
 // TextIndexDefinition declares a persistent collection-native inverted index.
 // M2 stores and validates metadata plus versioned postings/text-state/stats
-// storage; mutation maintenance and SearchText execution land in later #1764
-// milestones.
+// storage. #1764 M3 maintains these roots on writes; SearchText execution lands
+// in a later milestone.
 type TextIndexDefinition struct {
 	Name             string            `json:"name"`
 	Fields           []TextIndexField  `json:"fields"`
@@ -154,42 +151,4 @@ func collectionTextRootNames(collection, indexName string) []string {
 		collectionTextStateRootName(collection, indexName),
 		collectionTextStatsRootName(collection, indexName),
 	}
-}
-
-func rejectTextIndexWriteUnavailable(meta CollectionMeta, operation string) error {
-	if len(meta.TextIndexes) == 0 {
-		return nil
-	}
-	if operation == "" {
-		operation = "write"
-	}
-	return fmt.Errorf("%w: collection %q has %d declared text index(es); %s requires postings/text-state/stats maintenance that is not implemented in this milestone", ErrTextIndexUnavailable, meta.Name, len(meta.TextIndexes), operation)
-}
-
-func (c *Collection) refreshTextIndexWriteGuard(operation string) error {
-	if c == nil {
-		return errCollectionNil
-	}
-	if err := rejectTextIndexWriteUnavailable(c.meta, operation); !errors.Is(err, ErrTextIndexUnavailable) {
-		return err
-	}
-	if c.db == nil {
-		return errCollectionDBNil
-	}
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		return err
-	}
-	if catalog == nil {
-		return errCollectionNotFound
-	}
-	c.meta = catalog.meta
-	c.rememberCatalog(snap, catalog)
-	c.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
-	return rejectTextIndexWriteUnavailable(catalog.meta, operation)
 }
