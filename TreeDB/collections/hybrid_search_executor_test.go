@@ -33,6 +33,7 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 		TopK:             3,
 		Text:             &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
 		Vector:           &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 4, EfSearch: 5, QueryMode: VectorIndexQueryModeExact},
+		ScalarFilter:     &HybridScalarFilter{IndexName: "city", Value: "sea"},
 		IncludeDocuments: true,
 		DocumentFetchOptions: DocumentFetchOptions{
 			ExcludePaths: []string{"embedding"},
@@ -43,8 +44,8 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SearchHybrid: %v", err)
 	}
-	if got.Plan.FinalTopK != opts.TopK || got.Plan.TextCandidateLimit != 4 || got.Plan.VectorCandidateLimit != 4 || got.Plan.ScalarFilterStrategy != HybridScalarFilterStrategyUnionFusion || got.Plan.FusionMethod != HybridFusionMethodRRF {
-		t.Fatalf("plan=%+v want bounded union-fusion RRF plan", got.Plan)
+	if got.Plan.FinalTopK != opts.TopK || got.Plan.TextCandidateLimit != 4 || got.Plan.VectorCandidateLimit != 4 || got.Plan.ScalarFilterStrategy != HybridScalarFilterStrategyPrefilter || got.Plan.FusionMethod != HybridFusionMethodRRF {
+		t.Fatalf("plan=%+v want bounded prefilter RRF plan", got.Plan)
 	}
 	if got.Snapshot.Consistency != HybridConsistencyCurrentSnapshot || got.Snapshot.CommitSeq == 0 || got.Snapshot.SystemRootPageID == 0 {
 		t.Fatalf("snapshot=%+v want current snapshot identity", got.Snapshot)
@@ -59,18 +60,26 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 		t.Fatalf("top sources=%+v want text+vector overlap attribution", got.Results[0].Sources)
 	}
 	for _, result := range got.Results {
-		if !result.DocumentFound || len(result.Document) == 0 || bytes.Contains(result.Document, []byte("embedding")) {
-			t.Fatalf("result=%+v want bounded fetched document respecting projection", result)
+		if string(result.ID) == "doc-filtered" {
+			t.Fatalf("scalar-filtered document reached results: %+v", got.Results)
+		}
+		if !result.DocumentFound || len(result.Document) == 0 || bytes.Contains(result.Document, []byte("embedding")) || !bytes.Contains(result.Document, []byte(`"city":"sea"`)) {
+			t.Fatalf("result=%+v want bounded fetched sea document respecting projection", result)
 		}
 	}
 	if len(got.Candidates) == 0 {
 		t.Fatalf("debug candidates missing")
 	}
+	for _, candidate := range got.Candidates {
+		if string(candidate.ID) == "doc-filtered" {
+			t.Fatalf("prefiltered debug candidate escaped scalar allow-set: %+v", got.Candidates)
+		}
+	}
 	if got.Stats.TextCandidatesReturned == 0 || got.Stats.VectorCandidatesReturned == 0 || got.Stats.CandidatesFused != uint64(len(got.Candidates)) || got.Stats.FusionBoth == 0 {
 		t.Fatalf("stats=%+v want text/vector/fusion counters", got.Stats)
 	}
-	if got.Stats.ScalarPrefilterIDs != 0 || got.Stats.ScalarFilterRejected != 0 || got.Stats.DocumentsFetched != uint64(len(got.Results)) || got.Stats.DocumentsFetched > uint64(opts.TopK) || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 {
-		t.Fatalf("stats=%+v want bounded final fetch only", got.Stats)
+	if got.Stats.ScalarPrefilterIDs != 4 || got.Stats.ScalarFilterRejected == 0 || got.Stats.DocumentsFetched != uint64(len(got.Results)) || got.Stats.DocumentsFetched > uint64(opts.TopK) || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 {
+		t.Fatalf("stats=%+v want scalar filtering and bounded final fetch only", got.Stats)
 	}
 
 	noDocsOpts := opts
@@ -323,6 +332,7 @@ func BenchmarkSearchHybridExecutor2505(b *testing.B) {
 		TopK:             10,
 		Text:             &HybridTextQuery{IndexName: "lexical", Query: "refund policy", CandidateLimit: 32},
 		Vector:           &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0.1, 0.05}, CandidateLimit: 32, EfSearch: 64},
+		ScalarFilter:     &HybridScalarFilter{IndexName: "city", Value: "city-rare"},
 		IncludeDocuments: true,
 		DocumentFetchOptions: DocumentFetchOptions{
 			ExcludePaths: []string{"embedding"},
@@ -356,6 +366,7 @@ func BenchmarkSearchHybridExecutor2505(b *testing.B) {
 	b.ReportMetric(float64(sink.Stats.CandidatesFused), "candidates_fused/search")
 	b.ReportMetric(float64(sink.Stats.DocumentsFetched), "docs_fetched/search")
 	b.ReportMetric(float64(sink.Stats.FusionBoth), "fusion_both/search")
+	b.ReportMetric(float64(sink.Stats.ScalarFilterRejected), "scalar_rejected/search")
 }
 
 func openHybridSearchExecutorFixture2505(tb testing.TB, rows []hybridSearchExecutorFixtureRow2505) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
@@ -366,11 +377,18 @@ func openHybridSearchExecutorFixture2505(tb testing.TB, rows []hybridSearchExecu
 	}
 	d := openCollectionCommandWALDB(tb, dir)
 	def := columnGraphRebuildVectorIndexDefinitionV2A(3, 4)
+	cfg := columnGraphRebuildColumnStoreConfigV2A(3)
+	cfg.RetainedPayload = ColumnRetainedPayloadFull
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingJSON
 	meta := CollectionMeta{
 		Name: "docs",
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatJSON,
-			ColumnStore:    columnGraphRebuildColumnStoreConfigV2A(3),
+			ColumnStore:    cfg,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "score", Field: "score", ValueType: IndexValueInt64},
 		},
 		VectorIndexes: []VectorIndexDefinition{def},
 		TextIndexes:   []TextIndexDefinition{{Name: "lexical", Fields: []TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}, StorePositions: true}},
