@@ -2,7 +2,7 @@
 
 #include "textflag.h"
 
-// func dotScalarU8CenteredIndexedAMD64(dst []int64, codes []byte, query []ScalarU8CenteredCode, rowIDs []uint32, dims int, rows int, querySum int64)
+// func dotScalarU8CenteredIndexedAMD64SSE2(dst []int64, codes []byte, query []ScalarU8CenteredCode, rowIDs []uint32, dims int, rows int, querySum int64)
 //
 // Preconditions are checked by the Go wrapper: rows <= len(dst,rowIDs), dims > 0,
 // len(query) >= dims, and every row ID addresses a full row in codes. querySum
@@ -10,7 +10,7 @@
 // signed 32-bit vector accumulation cannot overflow. It computes centered scores
 // as:
 //   sum(q * (2*row - 255)) == 2*sum(q*row) - 255*querySum.
-TEXT ·dotScalarU8CenteredIndexedAMD64(SB), NOSPLIT, $0-120
+TEXT ·dotScalarU8CenteredIndexedAMD64SSE2(SB), NOSPLIT, $0-120
 	MOVQ dst_base+0(FP), DI
 	MOVQ codes_base+24(FP), SI
 	MOVQ query_base+48(FP), R8
@@ -92,4 +92,106 @@ scalaru8_amd64_store:
 	JMP scalaru8_amd64_row_loop
 
 scalaru8_amd64_done:
+	RET
+
+// func dotScalarU8CenteredIndexedAMD64AVX2(dst []int64, codes []byte, query []ScalarU8CenteredCode, rowIDs []uint32, dims int, rows int, querySum int64)
+//
+// Preconditions are checked by the Go wrapper: rows <= len(dst,rowIDs), dims > 0,
+// len(query) >= dims, every row ID addresses a full row in codes, the CPU has
+// AVX2, and dims <= 32768 so signed int32 vector accumulation cannot overflow.
+// It computes centered scores as:
+//   sum(q * (2*row - 255)) == 2*sum(q*row) - 255*querySum.
+TEXT ·dotScalarU8CenteredIndexedAMD64AVX2(SB), NOSPLIT, $0-120
+	MOVQ dst_base+0(FP), DI
+	MOVQ codes_base+24(FP), SI
+	MOVQ query_base+48(FP), R8
+	MOVQ rowIDs_base+72(FP), R9
+	MOVQ dims+96(FP), R10
+	MOVQ rows+104(FP), R11
+	MOVQ querySum+112(FP), R12
+
+scalaru8_amd64_avx2_row_loop:
+	TESTQ R11, R11
+	JZ scalaru8_amd64_avx2_done
+
+	MOVL (R9), AX                // row ID; MOVL zero-extends on amd64
+	ADDQ $4, R9
+	IMULQ R10, AX                // byte offset = rowID*dims
+	LEAQ (SI)(AX*1), BX          // row pointer
+	MOVQ R8, CX                  // query pointer
+	MOVQ R10, DX                 // remaining dims for scalar tail mask
+	XORQ R13, R13                // raw scalar accumulator after vector reduction
+	VPXOR Y0, Y0, Y0             // packed int32 accumulator
+
+	MOVQ DX, AX
+	SHRQ $5, AX                  // 32 dimensions per AVX2 iteration
+	JZ scalaru8_amd64_avx2_tail16
+
+scalaru8_amd64_avx2_loop32:
+	// Widen 32 row bytes to two uint16 YMM vectors and multiply by the matching
+	// 32 int16 centered query values. VPMADDWD reduces adjacent products to int32.
+	VPMOVZXBW (BX), Y1
+	VPMOVZXBW 16(BX), Y2
+	VMOVDQU (CX), Y3
+	VMOVDQU 32(CX), Y4
+	VPMADDWD Y3, Y1, Y1
+	VPMADDWD Y4, Y2, Y2
+	VPADDD Y1, Y0, Y0
+	VPADDD Y2, Y0, Y0
+	ADDQ $32, BX
+	ADDQ $64, CX
+	DECQ AX
+	JNZ scalaru8_amd64_avx2_loop32
+
+scalaru8_amd64_avx2_tail16:
+	ANDQ $31, DX
+	CMPQ DX, $16
+	JL scalaru8_amd64_avx2_reduce
+	VPMOVZXBW (BX), Y1
+	VMOVDQU (CX), Y3
+	VPMADDWD Y3, Y1, Y1
+	VPADDD Y1, Y0, Y0
+	ADDQ $16, BX
+	ADDQ $32, CX
+	SUBQ $16, DX
+
+scalaru8_amd64_avx2_reduce:
+	// Horizontal signed int32 reduction of Y0 into R13.
+	VEXTRACTI128 $1, Y0, X1
+	VPADDD X1, X0, X0
+	VPSRLDQ $8, X0, X1
+	VPADDD X1, X0, X0
+	VPSRLDQ $4, X0, X1
+	VPADDD X1, X0, X0
+	VMOVQ X0, AX
+	MOVLQSX AX, AX
+	ADDQ AX, R13
+
+	TESTQ DX, DX
+	JZ scalaru8_amd64_avx2_store
+
+scalaru8_amd64_avx2_scalar_tail:
+	MOVBQZX (BX), AX
+	MOVWQSX (CX), R14
+	IMULQ R14, AX
+	ADDQ AX, R13
+	INCQ BX
+	ADDQ $2, CX
+	DECQ DX
+	JNZ scalaru8_amd64_avx2_scalar_tail
+
+scalaru8_amd64_avx2_store:
+	// centeredScore = 2*rawSum - 255*querySum.
+	LEAQ (R13)(R13*1), AX
+	MOVQ R12, R14
+	SHLQ $8, R14
+	SUBQ R12, R14
+	SUBQ R14, AX
+	MOVQ AX, (DI)
+	ADDQ $8, DI
+	DECQ R11
+	JMP scalaru8_amd64_avx2_row_loop
+
+scalaru8_amd64_avx2_done:
+	VZEROUPPER
 	RET

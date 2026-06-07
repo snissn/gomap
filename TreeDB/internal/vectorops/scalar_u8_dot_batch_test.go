@@ -258,7 +258,7 @@ func BenchmarkDotScalarU8CenteredIndexedScalar(b *testing.B) {
 
 func benchmarkDotScalarU8CenteredIndexedMatrix(b *testing.B, impl string, call func(dst []int64, codes []byte, query ScalarU8CenteredQuery, rowIDs []uint32, dims, rows int) ScalarU8DotBatchStatus) {
 	b.Helper()
-	dimsCases := []int{32, 64, 128, 256, 768}
+	dimsCases := []int{32, 64, 128, 256, 768, 1536}
 	rowCases := []int{1, 2, 8, 16, 64}
 	for _, dims := range dimsCases {
 		for _, rows := range rowCases {
