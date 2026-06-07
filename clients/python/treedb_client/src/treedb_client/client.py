@@ -7,8 +7,8 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping, Sequence
-from typing import Any, Optional, Union
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Optional, TypeVar, Union
 
 from .errors import (
     InvalidRequestError,
@@ -30,6 +30,7 @@ from .models import (
 )
 
 DocumentLike = Union[Document, Mapping[str, Any]]
+_ResponseT = TypeVar("_ResponseT")
 
 
 class TreeDBClient:
@@ -89,7 +90,7 @@ class TreeDBClient:
         request: dict[str, Any] = {"documents": [_document_for_write(doc) for doc in documents]}
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "upsert"), request)
-        return UpsertDocumentsResponse.from_dict(_expect_mapping(payload, "upsert response"))
+        return _parse_response("upsert response", UpsertDocumentsResponse.from_dict, payload)
 
     def delete_documents(
         self,
@@ -107,7 +108,7 @@ class TreeDBClient:
         request: dict[str, Any] = {"ids": _list_of_strings(ids, "ids")}
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "delete"), request)
-        return DeleteDocumentsResponse.from_dict(_expect_mapping(payload, "delete response"))
+        return _parse_response("delete response", DeleteDocumentsResponse.from_dict, payload)
 
     def delete_by_filter(
         self,
@@ -127,7 +128,7 @@ class TreeDBClient:
         request: dict[str, Any] = {"filter": normalized}
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "delete"), request)
-        return DeleteDocumentsResponse.from_dict(_expect_mapping(payload, "delete response"))
+        return _parse_response("delete response", DeleteDocumentsResponse.from_dict, payload)
 
     def count_documents(
         self,
@@ -142,7 +143,7 @@ class TreeDBClient:
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "count"), request)
-        return CountDocumentsResponse.from_dict(_expect_mapping(payload, "count response"))
+        return _parse_response("count response", CountDocumentsResponse.from_dict, payload)
 
     def filter_documents(
         self,
@@ -160,7 +161,7 @@ class TreeDBClient:
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "filter"), request)
-        return FilterDocumentsResponse.from_dict(_expect_mapping(payload, "filter response"))
+        return _parse_response("filter response", FilterDocumentsResponse.from_dict, payload)
 
     def query_by_embedding(
         self,
@@ -182,7 +183,7 @@ class TreeDBClient:
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "search", "vector"), request)
-        return DenseVectorSearchResponse.from_dict(_expect_mapping(payload, "vector search response"))
+        return _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
 
     def _index_path(self, index: str, *parts: str) -> str:
         encoded = urllib.parse.quote(index, safe="")
@@ -276,8 +277,8 @@ def _normalize_timeout(timeout: Optional[float]) -> Optional[float]:
 def _add_expected_generation(request: dict[str, Any], expected_generation: Optional[int]) -> None:
     if expected_generation is None:
         return
-    if isinstance(expected_generation, bool) or not isinstance(expected_generation, int) or expected_generation < 0:
-        raise InvalidRequestError("invalid_request", "expected_generation must be a non-negative integer")
+    if isinstance(expected_generation, bool) or not isinstance(expected_generation, int) or expected_generation <= 0:
+        raise InvalidRequestError("invalid_request", "expected_generation must be a positive integer")
     request["expected_generation"] = expected_generation
 
 
@@ -313,7 +314,28 @@ def _index_from_envelope(payload: Any) -> IndexInfo:
     index = envelope.get("index")
     if not isinstance(index, Mapping):
         raise TreeDBProtocolError("index response is missing index object")
-    return IndexInfo.from_dict(index)
+    return _parse_mapping("index response", IndexInfo.from_dict, index)
+
+
+def _parse_response(
+    label: str,
+    parser: Callable[[Mapping[str, Any]], _ResponseT],
+    payload: Any,
+) -> _ResponseT:
+    return _parse_mapping(label, parser, _expect_mapping(payload, label))
+
+
+def _parse_mapping(
+    label: str,
+    parser: Callable[[Mapping[str, Any]], _ResponseT],
+    payload: Mapping[str, Any],
+) -> _ResponseT:
+    try:
+        return parser(payload)
+    except TreeDBProtocolError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TreeDBProtocolError(f"{label} is malformed: {exc}") from exc
 
 
 def _expect_mapping(payload: Any, label: str) -> Mapping[str, Any]:

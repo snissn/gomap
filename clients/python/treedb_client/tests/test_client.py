@@ -14,6 +14,7 @@ from treedb_client import (
     InvalidRequestError,
     TreeDBClient,
     TreeDBConfigError,
+    TreeDBProtocolError,
     TreeDBTimeoutError,
     UnsupportedError,
 )
@@ -115,6 +116,15 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(json_body(server.records[0]), {"name": "docs", "dimension": 2, "metric": "cosine"})
             self.assertEqual(server.records[0]["headers"]["Content-Type"], "application/json")
 
+    def test_malformed_index_response_maps_to_protocol_error(self) -> None:
+        malformed_index = dict(SAMPLE_INDEX)
+        del malformed_index["dimension"]
+        with FixtureServer({("POST", "/v1/indexes"): (200, {"index": malformed_index}, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            with self.assertRaisesRegex(TreeDBProtocolError, "index response is malformed"):
+                client.create_index("docs", 2)
+
     def test_base_url_path_prefix_is_preserved(self) -> None:
         with FixtureServer({("GET", "/api/v1/health"): (200, {"ok": True}, 0)}, prefix="/api") as server:
             client = TreeDBClient(server.base_url + "/", timeout=1)
@@ -185,6 +195,12 @@ class TreeDBClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(InvalidRequestError, "not a single string"):
             client.delete_documents("docs", "doc-1")  # type: ignore[arg-type]
+
+    def test_expected_generation_zero_is_rejected_before_http(self) -> None:
+        client = TreeDBClient("http://127.0.0.1:9", timeout=1)
+
+        with self.assertRaisesRegex(InvalidRequestError, "positive integer"):
+            client.count_documents("docs", expected_generation=0)
 
     def test_service_error_mapping(self) -> None:
         route = "/v1/indexes/missing/documents/count"
