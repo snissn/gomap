@@ -3810,6 +3810,10 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		return nil, errCollectionNotFound
 	}
 	c.meta = catalog.meta
+	if err := rejectTextIndexWriteUnavailable(catalog.meta, "Insert"); err != nil {
+		domain.mu.Unlock()
+		return nil, err
+	}
 	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
 		domain.mu.Unlock()
 		return nil, err
@@ -8841,6 +8845,10 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	c.meta = catalog.meta
+	if err := rejectTextIndexWriteUnavailable(c.meta, "Insert"); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
 	if len(c.meta.Indexes) > 0 || len(c.meta.VectorIndexes) > 0 {
 		_ = snap.Close()
 		return c.insertOneViaBatch(id, document)

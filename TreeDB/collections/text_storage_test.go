@@ -216,6 +216,39 @@ func TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard(t *testing.T) {
 	}
 }
 
+func TestCreateTextIndexRejectsWritesFromStaleHandles(t *testing.T) {
+	d := openTextTestDB(t)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection stale: %v", err)
+	}
+	fresh, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection fresh: %v", err)
+	}
+	if _, err := stale.Insert([]byte("d1"), []byte(`{"body":"before text"}`)); err != nil {
+		t.Fatalf("stale setup Insert: %v", err)
+	}
+	if _, _, err := fresh.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if _, err := stale.Insert([]byte("d2"), []byte(`{"body":"must not bypass"}`)); !errors.Is(err, ErrTextIndexUnavailable) {
+		t.Fatalf("stale Insert after CreateTextIndex err=%v want ErrTextIndexUnavailable", err)
+	}
+	stats, err := fresh.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats: %v", err)
+	}
+	if stats.Documents != 1 || stats.StateEntries != 1 {
+		t.Fatalf("stats after stale rejected insert=%+v want one backfilled document", stats)
+	}
+}
+
 func TestTextIndexStorageStatsFailsClosedOnMalformedRoot(t *testing.T) {
 	d := openTextTestDB(t)
 	defer func() { _ = d.Close() }()
