@@ -192,7 +192,7 @@ PR or issue evidence should include at least:
 | baseline/candidate identity | branch, full SHA, Go version, OS/arch, `GOMAXPROCS`, fixture |
 | timing/allocation | `ns/op`, `ops/sec`, `B/op`, `allocs/op` |
 | quality | recall@K versus exact, c=1 and c=8 shown separately |
-| bytes | `quantized_code_B/search`, `quantized_code_B/vector` (shape-aware: scalar_u8=`dims`, RaBitQ=`ceil(dims/8)`), `quantized_asset_B/vector`, exact vector/norm bytes for rerank |
+| bytes | `quantized_code_B/search`, `quantized_code_B/vector` (shape-aware: scalar_u8=`dims`, RaBitQ=`ceil(next_power_of_two(dims)/8)`), `quantized_asset_B/vector`, exact vector/norm bytes for rerank |
 | route counters | `search_route_quantized_only/search`, `search_route_quantized_rerank/search`, `search_route_column_graph_prepared/search` |
 | failure/fallback counters | document fetches, graph/typed/scratch/float64 fallbacks, quantized asset missing/invalid/stale/closed/unavailable |
 | collection seam | cache hits/misses/waits/errors, `open_setup_in_timed_loop=0`, `open_searcher_calls/op=0` |

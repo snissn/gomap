@@ -661,7 +661,13 @@ def guardrail_status(meta, bench_rows, baseline_rows):
     if fixture_dims <= 0:
         dims_median = median([row.get("dims") for row in bench_rows])
         fixture_dims = int(dims_median or 0)
-    expected_code_bytes = (fixture_dims + 7) // 8 if meta.get("codec") == "rabitq_1bit" else fixture_dims
+    if meta.get("codec") == "rabitq_1bit":
+        code_dims = 1
+        while code_dims < fixture_dims:
+            code_dims *= 2
+        expected_code_bytes = (code_dims + 7) // 8
+    else:
+        expected_code_bytes = fixture_dims
     checks.append(expected_code_bytes > 0 and present_all_eq(bench_rows, "quantized_code_B/vector", expected_code_bytes))
     checks.append(present_all(bench_rows, "quantized_asset_B/vector"))
 
