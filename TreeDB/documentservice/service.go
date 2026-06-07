@@ -96,6 +96,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	ids := make([]string, 0, len(prepared))
 	insertIDs := make([][]byte, 0, len(prepared))
 	insertDocs := make([][]byte, 0, len(prepared))
+	inserts := make([]preparedDocument, 0, len(prepared))
 	updates := make([]preparedDocument, 0)
 	for _, doc := range prepared {
 		if err := ctxErr(ctx); err != nil {
@@ -109,34 +110,48 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		if current == nil {
 			insertIDs = append(insertIDs, []byte(doc.id))
 			insertDocs = append(insertDocs, doc.raw)
+			inserts = append(inserts, doc)
 			continue
 		}
 		updates = append(updates, doc)
 	}
 	inserted := 0
+	updated := 0
 	if len(insertIDs) > 0 {
-		if _, err := col.InsertBatch(insertIDs, insertDocs); err != nil {
+		if _, err := col.InsertBatch(insertIDs, insertDocs); err == nil {
+			inserted = len(insertIDs)
+		} else if collections.IsDuplicateKeyError(err) {
+			// Upsert is a service contract, while Collection.InsertBatch is an
+			// insert-only primitive. If another request inserts one of these IDs
+			// between the read preflight and InsertBatch, fall back per item to
+			// replace-or-insert semantics instead of leaking ErrDocumentExists.
+			for _, doc := range inserts {
+				wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, true)
+				if err != nil {
+					return UpsertDocumentsResponse{}, err
+				}
+				if wasInserted {
+					inserted++
+				}
+				if wasUpdated {
+					updated++
+				}
+			}
+		} else {
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "insert documents failed", err)
 		}
-		inserted = len(insertIDs)
 	}
-	updated := 0
 	for _, doc := range updates {
-		if err := ctxErr(ctx); err != nil {
+		wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, false)
+		if err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
-		matched, err := col.Replace([]byte(doc.id), doc.raw)
-		if err != nil {
-			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "replace document failed", err)
-		}
-		if !matched {
-			if _, err := col.InsertBatch([][]byte{[]byte(doc.id)}, [][]byte{doc.raw}); err != nil {
-				return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "insert raced replacement failed", err)
-			}
+		if wasInserted {
 			inserted++
-			continue
 		}
-		updated++
+		if wasUpdated {
+			updated++
+		}
 	}
 	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids}, nil
 }
@@ -389,6 +404,33 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 type preparedDocument struct {
 	id  string
 	raw []byte
+}
+
+func upsertPreparedDocument(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool) (inserted bool, updated bool, err error) {
+	const maxAttempts = 4
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := ctxErr(ctx); err != nil {
+			return false, false, err
+		}
+		if preferInsert {
+			if _, err := col.InsertBatch([][]byte{[]byte(doc.id)}, [][]byte{doc.raw}); err == nil {
+				return true, false, nil
+			} else if !collections.IsDuplicateKeyError(err) {
+				return false, false, wrapServiceError(CodeInternal, "insert document failed", err)
+			}
+			preferInsert = false
+			continue
+		}
+		matched, err := col.Replace([]byte(doc.id), doc.raw)
+		if err != nil {
+			return false, false, wrapServiceError(CodeInternal, "replace document failed", err)
+		}
+		if matched {
+			return false, true, nil
+		}
+		preferInsert = true
+	}
+	return false, false, serviceErrorf(CodeConflict, "document %q changed concurrently during upsert", doc.id)
 }
 
 func prepareDocumentsForWrite(documents []Document, info IndexInfo) ([]preparedDocument, error) {

@@ -2,9 +2,11 @@ package documentservice
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -105,6 +107,95 @@ func TestServiceUpsertDeleteCountFilterRoundTrip(t *testing.T) {
 	count, err = svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
 	if err != nil || count.Count != 1 {
 		t.Fatalf("final count=%+v err=%v", count, err)
+	}
+}
+
+func TestServiceUpsertInsertRaceFallsBackToReplace(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	col, _, err := svc.openIndex(ctx, "docs", 0)
+	if err != nil {
+		t.Fatalf("openIndex: %v", err)
+	}
+	first, err := prepareDocumentsForWrite([]Document{{ID: "race", Content: "first", Embedding: []float32{1, 0}}}, info)
+	if err != nil {
+		t.Fatalf("prepare first: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte(first[0].id)}, [][]byte{first[0].raw}); err != nil {
+		t.Fatalf("InsertBatch first: %v", err)
+	}
+	raced, err := prepareDocumentsForWrite([]Document{{ID: "race", Content: "winner", Embedding: []float32{0, 1}, Meta: map[string]any{"repo": "gomap"}}}, info)
+	if err != nil {
+		t.Fatalf("prepare raced: %v", err)
+	}
+	inserted, updated, err := upsertPreparedDocument(ctx, col, raced[0], true)
+	if err != nil {
+		t.Fatalf("upsertPreparedDocument raced insert: %v", err)
+	}
+	if inserted || !updated {
+		t.Fatalf("inserted=%v updated=%v, want replace fallback", inserted, updated)
+	}
+	listed, err := svc.FilterDocuments(ctx, "docs", FilterDocumentsRequest{ReturnEmbedding: true})
+	if err != nil {
+		t.Fatalf("FilterDocuments: %v", err)
+	}
+	if len(listed.Documents) != 1 || listed.Documents[0].Content != "winner" || !reflect.DeepEqual(listed.Documents[0].Embedding, []float32{0, 1}) {
+		t.Fatalf("listed after raced upsert=%+v", listed)
+	}
+}
+
+func TestServiceConcurrentSameIDUpsertsSucceed(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	const workers = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{
+				ID:        "same-id",
+				Content:   fmt.Sprintf("writer-%02d", i),
+				Embedding: []float32{1, float32(i + 1)},
+				Meta:      map[string]any{"writer": float64(i)},
+			}}})
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent upsert returned error: %v", err)
+	}
+	count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil {
+		t.Fatalf("CountDocuments: %v", err)
+	}
+	if count.Count != 1 {
+		t.Fatalf("count=%d want 1", count.Count)
+	}
+	search, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 1, ReturnEmbedding: true})
+	if err != nil {
+		t.Fatalf("SearchDenseVector: %v", err)
+	}
+	if len(search.Documents) != 1 || search.Documents[0].ID != "same-id" || len(search.Documents[0].Embedding) != 2 {
+		t.Fatalf("search after concurrent upsert=%+v", search)
 	}
 }
 
