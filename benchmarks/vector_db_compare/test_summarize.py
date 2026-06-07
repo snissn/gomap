@@ -14,11 +14,12 @@ summarize = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(summarize)
 
 
-def result(backend: str, query_mode: str = "") -> dict:
+def result(backend: str, query_mode: str = "", quantized_codec: str = "") -> dict:
     row = {
         "concurrency": 1,
         "queries": 4,
         "query_mode": query_mode,
+        "quantized_codec": quantized_codec,
         "total_duration_nanos": 1000,
         "avg_nanos": 250,
         "avg_micros": 0.25,
@@ -70,6 +71,7 @@ def result(backend: str, query_mode: str = "") -> dict:
         "backend": backend,
         "engine": backend,
         "query_mode": query_mode,
+        "quantized_codec": quantized_codec,
         "docs": 64,
         "dimensions": 8,
         "queries": 4,
@@ -89,8 +91,9 @@ class SummaryRenderTests(unittest.TestCase):
         rendered = summarize.render(
             [
                 result("treedb_column_graph", "exact"),
-                result("treedb_column_graph_quantized_only", "quantized_only"),
-                result("treedb_column_graph_quantized_rerank", "quantized_rerank"),
+                result("treedb_column_graph_scalar_u8_quantized_only", "quantized_only", "scalar_u8"),
+                result("treedb_column_graph_rabitq_1bit_quantized_only", "quantized_only", "rabitq_1bit"),
+                result("treedb_column_graph_rabitq_1bit_quantized_rerank", "quantized_rerank", "rabitq_1bit"),
                 {
                     **result("pgvector"),
                     "build": {"seconds": 0.25},
@@ -100,16 +103,18 @@ class SummaryRenderTests(unittest.TestCase):
         )
         self.assertIn("| Backend | Search mode | Insert |", rendered)
         self.assertIn("| TreeDB column-store graph HNSW | exact/default |", rendered)
-        self.assertIn("| TreeDB column-store graph HNSW | quantized_only |", rendered)
-        self.assertIn("| TreeDB column-store graph HNSW | quantized_rerank |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | scalar_u8 quantized_only |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | rabitq_1bit quantized_only |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | rabitq_1bit quantized_rerank |", rendered)
         self.assertIn("| PostgreSQL+pgvector HNSW | full-vector HNSW |", rendered)
         self.assertIn("## TreeDB Search Counters", rendered)
-        self.assertIn("| TreeDB column-store graph HNSW | quantized_only | 1 | 32.0 | 40.0 | 5120.0 | 0.0 | 0.0 | 0.0 | 0.0 |", rendered)
-        self.assertIn("| TreeDB column-store graph HNSW | quantized_rerank | 1 | 32.0 | 40.0 | 5120.0 | 16.0 | 16.0 | 128.0 | 32.0 |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | scalar_u8 quantized_only | 1 | 32.0 | 40.0 | 5120.0 | 0.0 | 0.0 | 0.0 | 0.0 |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | rabitq_1bit quantized_rerank | 1 | 32.0 | 40.0 | 5120.0 | 16.0 | 16.0 | 128.0 | 32.0 |", rendered)
         self.assertIn("## TreeDB Search Guardrails", rendered)
         self.assertIn("| TreeDB column-store graph HNSW | exact/default | 1 | 0.0 | 0.0 | 1.0 | 0.0 | 0.0 |", rendered)
-        self.assertIn("| TreeDB column-store graph HNSW | quantized_only | 1 | 0.0 | 0.0 | 0.0 | 1.0 | 0.0 |", rendered)
-        self.assertIn("| TreeDB column-store graph HNSW | quantized_rerank | 1 | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | scalar_u8 quantized_only | 1 | 0.0 | 0.0 | 0.0 | 1.0 | 0.0 |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | rabitq_1bit quantized_only | 1 | 0.0 | 0.0 | 0.0 | 1.0 | 0.0 |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | rabitq_1bit quantized_rerank | 1 | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 |", rendered)
         self.assertIn("PostgreSQL+pgvector is not quantized", rendered)
 
 

@@ -18,16 +18,23 @@ M="${M:-16}"
 EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
 TREEDB_COLUMN_GRAPH_EF_SEARCH="${TREEDB_COLUMN_GRAPH_EF_SEARCH:-}"
+TREEDB_QUANTIZED_CODEC="${TREEDB_QUANTIZED_CODEC:-scalar_u8}"
 TREEDB_QUANTIZED_INDEX_NAME="${TREEDB_QUANTIZED_INDEX_NAME:-embedding.scalar_u8.fast}"
+TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME="${TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME:-$TREEDB_QUANTIZED_INDEX_NAME}"
+TREEDB_RABITQ_QUANTIZED_INDEX_NAME="${TREEDB_RABITQ_QUANTIZED_INDEX_NAME:-embedding.rabitq_1bit.fast}"
 DEFAULT_TREEDB_QUANTIZED_RERANK_CANDIDATES=32
 if [[ "$TOP_K" =~ ^[0-9]+$ ]] && ((TOP_K > DEFAULT_TREEDB_QUANTIZED_RERANK_CANDIDATES)); then
 	DEFAULT_TREEDB_QUANTIZED_RERANK_CANDIDATES="$TOP_K"
 fi
 TREEDB_QUANTIZED_RERANK_CANDIDATES="${TREEDB_QUANTIZED_RERANK_CANDIDATES:-$DEFAULT_TREEDB_QUANTIZED_RERANK_CANDIDATES}"
+TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES="${TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES:-$TREEDB_QUANTIZED_RERANK_CANDIDATES}"
 MIN_RECALL="${MIN_RECALL:-0.95}"
 TREEDB_QUANTIZED_MIN_RECALL="${TREEDB_QUANTIZED_MIN_RECALL:-0}"
 TREEDB_QUANTIZED_ONLY_MIN_RECALL="${TREEDB_QUANTIZED_ONLY_MIN_RECALL:-$TREEDB_QUANTIZED_MIN_RECALL}"
 TREEDB_QUANTIZED_RERANK_MIN_RECALL="${TREEDB_QUANTIZED_RERANK_MIN_RECALL:-$TREEDB_QUANTIZED_MIN_RECALL}"
+TREEDB_RABITQ_QUANTIZED_MIN_RECALL="${TREEDB_RABITQ_QUANTIZED_MIN_RECALL:-$TREEDB_QUANTIZED_MIN_RECALL}"
+TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL="${TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL:-$TREEDB_RABITQ_QUANTIZED_MIN_RECALL}"
+TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL="${TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL:-$TREEDB_RABITQ_QUANTIZED_MIN_RECALL}"
 VALIDATE_DOCS="${VALIDATE_DOCS:-16}"
 TREEDB_COMPACT="${TREEDB_COMPACT:-}"
 TREEDB_COMPACT_SYNC_EACH_PHASE="${TREEDB_COMPACT_SYNC_EACH_PHASE:-}"
@@ -86,18 +93,31 @@ validate_backends() {
 	for backend in "${raw[@]}"; do
 		backend="${backend//[[:space:]]/}"
 		case "$backend" in
-			treedb|treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank|vectorlite|pgvector|mongodb)
+			treedb|treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank|treedb_column_graph_scalar_u8_quantized_only|treedb_column_graph_scalar_u8_quantized_rerank|treedb_column_graph_rabitq_1bit_quantized_only|treedb_column_graph_rabitq_1bit_quantized_rerank|vectorlite|pgvector|mongodb)
 				;;
 			"")
 				echo "empty backend in BACKENDS=$BACKENDS" >&2
 				exit 1
 				;;
 			*)
-				echo "unknown backend: $backend (known: treedb,treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank,vectorlite,pgvector,mongodb)" >&2
+				echo "unknown backend: $backend (known: treedb,treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank,treedb_column_graph_scalar_u8_quantized_only,treedb_column_graph_scalar_u8_quantized_rerank,treedb_column_graph_rabitq_1bit_quantized_only,treedb_column_graph_rabitq_1bit_quantized_rerank,vectorlite,pgvector,mongodb)" >&2
 				exit 1
 				;;
 		esac
 	done
+}
+
+validate_treedb_quantized_codec() {
+	local codec="$1"
+	local source="$2"
+	case "$codec" in
+		scalar_u8|rabitq_1bit)
+			;;
+		*)
+			echo "$source must be scalar_u8 or rabitq_1bit, got: $codec" >&2
+			exit 1
+			;;
+	esac
 }
 
 validate_backend_configuration() {
@@ -105,6 +125,9 @@ validate_backend_configuration() {
 		echo "mongodb backend requested, but MONGODB_VECTOR_URI is empty" >&2
 		echo "Set MONGODB_VECTOR_URI to an Atlas or local Atlas Vector Search deployment, or remove mongodb from BACKENDS." >&2
 		exit 1
+	fi
+	if contains_backend treedb_column_graph_quantized_only || contains_backend treedb_column_graph_quantized_rerank; then
+		validate_treedb_quantized_codec "$TREEDB_QUANTIZED_CODEC" TREEDB_QUANTIZED_CODEC
 	fi
 }
 
@@ -188,7 +211,7 @@ fi
 treedb_profile_args=()
 treedb_search_profile_backend_supported() {
 	case "$1" in
-		treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank)
+		treedb_column_graph|treedb_column_graph_quantized_only|treedb_column_graph_quantized_rerank|treedb_column_graph_scalar_u8_quantized_only|treedb_column_graph_scalar_u8_quantized_rerank|treedb_column_graph_rabitq_1bit_quantized_only|treedb_column_graph_rabitq_1bit_quantized_rerank)
 			return 0
 			;;
 		*)
@@ -223,8 +246,11 @@ cat >"$RUN_DIR/README.md" <<EOF
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
 - TreeDB column_graph efSearch: \`$TREEDB_COLUMN_GRAPH_EF_SEARCH\`
 - minimum recall: \`$MIN_RECALL\`
-- TreeDB quantized index/rerank candidates: \`$TREEDB_QUANTIZED_INDEX_NAME / $TREEDB_QUANTIZED_RERANK_CANDIDATES\`
+- TreeDB legacy quantized codec/index/rerank candidates: \`$TREEDB_QUANTIZED_CODEC / $TREEDB_QUANTIZED_INDEX_NAME / $TREEDB_QUANTIZED_RERANK_CANDIDATES\`
+- TreeDB scalar_u8 quantized index: \`$TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME\`
+- TreeDB RaBitQ quantized index/rerank candidates: \`$TREEDB_RABITQ_QUANTIZED_INDEX_NAME / $TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES\`
 - TreeDB quantized-only/rerank minimum recall: \`$TREEDB_QUANTIZED_ONLY_MIN_RECALL / $TREEDB_QUANTIZED_RERANK_MIN_RECALL\`
+- TreeDB RaBitQ quantized-only/rerank minimum recall: \`$TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL / $TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL\`
 - TreeDB storage/validation knobs:
   - \`VALIDATE_DOCS=$VALIDATE_DOCS\`
   - \`TREEDB_COMPACT=${TREEDB_COMPACT:-<unset>}\`
@@ -242,8 +268,9 @@ This run compares persistent database-tier ANN search:
 - TreeDB native persisted HNSW through \`cmd/treedb_vector_search_demo\`
 - TreeDB column-store graph exact/default search through
   \`cmd/treedb_vector_search_demo -vector-index-strategy column_graph\`
-- TreeDB column-store graph scalar_u8 quantized modes through explicit
-  \`-vector-query-mode quantized_only|quantized_rerank\` demo flags
+- TreeDB column-store graph scalar_u8 and rabitq_1bit quantized modes through
+  explicit \`-vector-query-mode quantized_only|quantized_rerank\`,
+  \`-quantized-codec\`, and \`-quantized-index-name\` demo flags
 - SQLite+Vectorlite HNSW through Python's \`sqlite3\` and the \`vectorlite-py\`
   loadable extension
 - PostgreSQL+pgvector HNSW through a PostgreSQL server
@@ -339,16 +366,26 @@ if contains_backend treedb_column_graph; then
 	result_args+=(--result "$RUN_DIR/treedb_column_graph.json")
 fi
 
-if contains_backend treedb_column_graph_quantized_only; then
-	echo "running TreeDB column-store graph scalar_u8 quantized_only benchmark"
-	treedb_profile_args_for_backend treedb_column_graph_quantized_only
+run_treedb_column_graph_quantized() {
+	local backend="$1"
+	local mode="$2"
+	local codec="$3"
+	local index_name="$4"
+	local rerank_candidates="$5"
+	local min_recall="$6"
+	local output_name="$7"
+	local quantized_args=(-vector-query-mode "$mode" -quantized-codec "$codec" -quantized-index-name "$index_name")
+	if [[ "$mode" == "quantized_rerank" ]]; then
+		quantized_args+=(-quantized-rerank-candidates "$rerank_candidates")
+	fi
+	echo "running TreeDB column-store graph $codec $mode benchmark"
+	treedb_profile_args_for_backend "$backend"
 	GOWORK=off go run ./cmd/treedb_vector_search_demo \
 		-matrix=false \
 		-vector-index-strategy column_graph \
-		-vector-query-mode quantized_only \
-		-quantized-index-name "$TREEDB_QUANTIZED_INDEX_NAME" \
+		"${quantized_args[@]}" \
 		-dataset-dir "$RUN_DIR/dataset" \
-		-dir "$RUN_DIR/treedb_column_graph_quantized_only" \
+		-dir "$RUN_DIR/$output_name" \
 		-keep-dir \
 		-docs "$DOCS" \
 		-dims "$DIMS" \
@@ -361,37 +398,75 @@ if contains_backend treedb_column_graph_quantized_only; then
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
 		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
-		-min-recall "$TREEDB_QUANTIZED_ONLY_MIN_RECALL" \
-		-json >"$RUN_DIR/treedb_column_graph_quantized_only.json"
-	result_args+=(--result "$RUN_DIR/treedb_column_graph_quantized_only.json")
+		-min-recall "$min_recall" \
+		-json >"$RUN_DIR/$output_name.json"
+	result_args+=(--result "$RUN_DIR/$output_name.json")
+}
+
+if contains_backend treedb_column_graph_quantized_only; then
+	run_treedb_column_graph_quantized \
+		treedb_column_graph_quantized_only \
+		quantized_only \
+		"$TREEDB_QUANTIZED_CODEC" \
+		"$TREEDB_QUANTIZED_INDEX_NAME" \
+		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
+		"$TREEDB_QUANTIZED_ONLY_MIN_RECALL" \
+		treedb_column_graph_quantized_only
 fi
 
 if contains_backend treedb_column_graph_quantized_rerank; then
-	echo "running TreeDB column-store graph scalar_u8 quantized_rerank benchmark"
-	treedb_profile_args_for_backend treedb_column_graph_quantized_rerank
-	GOWORK=off go run ./cmd/treedb_vector_search_demo \
-		-matrix=false \
-		-vector-index-strategy column_graph \
-		-vector-query-mode quantized_rerank \
-		-quantized-index-name "$TREEDB_QUANTIZED_INDEX_NAME" \
-		-quantized-rerank-candidates "$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
-		-dataset-dir "$RUN_DIR/dataset" \
-		-dir "$RUN_DIR/treedb_column_graph_quantized_rerank" \
-		-keep-dir \
-		-docs "$DOCS" \
-		-dims "$DIMS" \
-		-queries "$QUERIES" \
-		-search-concurrency "$SEARCH_CONCURRENCY" \
-		-validate-queries "$VALIDATE_QUERIES" \
-		${treedb_storage_args[@]+"${treedb_storage_args[@]}"} \
-		${treedb_profile_args[@]+"${treedb_profile_args[@]}"} \
-		-top-k "$TOP_K" \
-		-m "$M" \
-		-ef-construction "$EF_CONSTRUCTION" \
-		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
-		-min-recall "$TREEDB_QUANTIZED_RERANK_MIN_RECALL" \
-		-json >"$RUN_DIR/treedb_column_graph_quantized_rerank.json"
-	result_args+=(--result "$RUN_DIR/treedb_column_graph_quantized_rerank.json")
+	run_treedb_column_graph_quantized \
+		treedb_column_graph_quantized_rerank \
+		quantized_rerank \
+		"$TREEDB_QUANTIZED_CODEC" \
+		"$TREEDB_QUANTIZED_INDEX_NAME" \
+		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
+		"$TREEDB_QUANTIZED_RERANK_MIN_RECALL" \
+		treedb_column_graph_quantized_rerank
+fi
+
+if contains_backend treedb_column_graph_scalar_u8_quantized_only; then
+	run_treedb_column_graph_quantized \
+		treedb_column_graph_scalar_u8_quantized_only \
+		quantized_only \
+		scalar_u8 \
+		"$TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME" \
+		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
+		"$TREEDB_QUANTIZED_ONLY_MIN_RECALL" \
+		treedb_column_graph_scalar_u8_quantized_only
+fi
+
+if contains_backend treedb_column_graph_scalar_u8_quantized_rerank; then
+	run_treedb_column_graph_quantized \
+		treedb_column_graph_scalar_u8_quantized_rerank \
+		quantized_rerank \
+		scalar_u8 \
+		"$TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME" \
+		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
+		"$TREEDB_QUANTIZED_RERANK_MIN_RECALL" \
+		treedb_column_graph_scalar_u8_quantized_rerank
+fi
+
+if contains_backend treedb_column_graph_rabitq_1bit_quantized_only; then
+	run_treedb_column_graph_quantized \
+		treedb_column_graph_rabitq_1bit_quantized_only \
+		quantized_only \
+		rabitq_1bit \
+		"$TREEDB_RABITQ_QUANTIZED_INDEX_NAME" \
+		"$TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES" \
+		"$TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL" \
+		treedb_column_graph_rabitq_1bit_quantized_only
+fi
+
+if contains_backend treedb_column_graph_rabitq_1bit_quantized_rerank; then
+	run_treedb_column_graph_quantized \
+		treedb_column_graph_rabitq_1bit_quantized_rerank \
+		quantized_rerank \
+		rabitq_1bit \
+		"$TREEDB_RABITQ_QUANTIZED_INDEX_NAME" \
+		"$TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES" \
+		"$TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL" \
+		treedb_column_graph_rabitq_1bit_quantized_rerank
 fi
 
 if contains_backend vectorlite; then
