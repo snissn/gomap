@@ -5167,8 +5167,8 @@ const (
 	retainedPruneStatusNoCandidates
 	retainedPruneStatusForegroundAbort
 	retainedPruneStatusCloseAbort
-	retainedPruneStatusBudgetAbort
 	retainedPruneStatusError
+	retainedPruneStatusBudgetAbort
 )
 
 func retainedPruneStatusString(status uint32) string {
