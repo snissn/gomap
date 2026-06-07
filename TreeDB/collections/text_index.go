@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // ErrTextIndexUnavailable reports that a declared collection text index cannot
@@ -162,4 +164,32 @@ func rejectTextIndexWriteUnavailable(meta CollectionMeta, operation string) erro
 		operation = "write"
 	}
 	return fmt.Errorf("%w: collection %q has %d declared text index(es); %s requires postings/text-state/stats maintenance that is not implemented in this milestone", ErrTextIndexUnavailable, meta.Name, len(meta.TextIndexes), operation)
+}
+
+func (c *Collection) refreshTextIndexWriteGuard(operation string) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if err := rejectTextIndexWriteUnavailable(c.meta, operation); !errors.Is(err, ErrTextIndexUnavailable) {
+		return err
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return err
+	}
+	if catalog == nil {
+		return errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	c.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
+	return rejectTextIndexWriteUnavailable(catalog.meta, operation)
 }

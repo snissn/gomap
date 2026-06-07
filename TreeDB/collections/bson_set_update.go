@@ -59,7 +59,7 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := rejectTextIndexWriteUnavailable(c.meta, "UpdateBSONSet"); err != nil {
+	if err := c.refreshTextIndexWriteGuard("UpdateBSONSet"); err != nil {
 		return false, false, err
 	}
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
@@ -162,7 +162,7 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := rejectTextIndexWriteUnavailable(c.meta, "UpdateBSONSetBatch"); err != nil {
+	if err := c.refreshTextIndexWriteGuard("UpdateBSONSetBatch"); err != nil {
 		return nil, false, err
 	}
 	if err := c.validateBSONSetDocumentFormat(); err != nil {

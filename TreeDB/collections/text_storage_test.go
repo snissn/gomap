@@ -194,6 +194,11 @@ func TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard(t *testing.T) {
 	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
+	staleMgr := NewCollectionManager(d)
+	stale, err := staleMgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection stale: %v", err)
+	}
 	if _, err := col.Insert([]byte("d2"), []byte(`{"body":"blocked"}`)); !errors.Is(err, ErrTextIndexUnavailable) {
 		t.Fatalf("Insert with text index err=%v want ErrTextIndexUnavailable", err)
 	}
@@ -213,6 +218,9 @@ func TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard(t *testing.T) {
 	assertTextRootCleared(t, d, collectionTextStatsRootName("docs", "lexical"))
 	if _, err := col.Insert([]byte("d2"), []byte(`{"body":"allowed after drop"}`)); err != nil {
 		t.Fatalf("Insert after DropTextIndex: %v", err)
+	}
+	if _, err := stale.Insert([]byte("d3"), []byte(`{"body":"stale handle allowed after drop"}`)); err != nil {
+		t.Fatalf("stale Insert after DropTextIndex: %v", err)
 	}
 }
 

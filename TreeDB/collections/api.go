@@ -3624,8 +3624,13 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
-	if err := rejectTextIndexWriteUnavailable(c.meta, "Insert"); err != nil {
-		return nil, err
+	if len(c.meta.TextIndexes) != 0 {
+		unlockSchema := c.lockCollectionSchemaRead()
+		err := c.refreshTextIndexWriteGuard("Insert")
+		unlockSchema()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, err
@@ -10370,7 +10375,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteDocument"); err != nil {
+	if err := c.refreshTextIndexWriteGuard("DeleteDocument"); err != nil {
 		return false, err
 	}
 	if len(documentID) == 0 {
@@ -10430,7 +10435,7 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteBatch"); err != nil {
+	if err := c.refreshTextIndexWriteGuard("DeleteBatch"); err != nil {
 		return 0, err
 	}
 	for i, id := range documentIDs {
@@ -11004,7 +11009,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := rejectTextIndexWriteUnavailable(c.meta, "Update"); err != nil {
+	if err := c.refreshTextIndexWriteGuard("Update"); err != nil {
 		return false, false, err
 	}
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
@@ -11172,7 +11177,7 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
-	if err := rejectTextIndexWriteUnavailable(c.meta, "UpdateBatch"); err != nil {
+	if err := c.refreshTextIndexWriteGuard("UpdateBatch"); err != nil {
 		return nil, false, err
 	}
 	if len(items) == 0 {
