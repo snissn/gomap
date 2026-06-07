@@ -1,15 +1,18 @@
 # TreeDB high-QPS collection vector search
 
 This guide summarizes the collection-level vector-search API boundary after the
-`#2360` high-QPS work. It owns the API-selection and caveat guidance from #2406;
-benchmark snapshots and full counter workflow are documented separately by
-#2410.
+#2483 closeout. It owns the API-selection and caveat guidance from #2406 and now
+keeps exact FP32, `scalar_u8`, `rabitq_1bit`, and prototype `brq_1bit` evidence
+separate. Benchmark snapshots and full counter workflow are documented by the
+[benchmark workflow](vector-search-benchmark-workflow.md) and the
+[#2483 closeout index](../spec/vector-search-closeout-2483.md).
 
 ## Choosing a vector search API
 
 | User goal | API | Result ownership | Document/materialization boundary | Notes |
 | --- | --- | --- | --- | --- |
-| Production high-QPS exact no-document serving through the collection API | `Collection.SearchVectorIndexWithBuffer` | caller-owned `VectorIndexSearchBuffer` | `IncludeDocuments=false`; document fetch/projection/filter/fallback controls rejected | Primary collection-level fast path. Warm the collection-owned prepared `hnsw_search_pack_v1` state before the timed/serving loop; steady state targets `0 B/op`, `0 allocs/op`. |
+| Production high-QPS exact no-document serving through the collection API | `Collection.SearchVectorIndexWithBuffer` | caller-owned `VectorIndexSearchBuffer` | `IncludeDocuments=false`; document fetch/projection/filter/fallback controls rejected | Primary exact collection-level fast path. Warm the collection-owned prepared `hnsw_search_pack_v1` state before the timed/serving loop; steady state targets `0 B/op`, `0 allocs/op`. |
+| Collection-level buffered quantized serving for supported score planes | `Collection.SearchVectorIndexWithBuffer` with `QueryMode=quantized_only` or `quantized_rerank` and `QuantizedIndexName` | caller-owned `VectorIndexSearchBuffer` | `IncludeDocuments=false`; document materialization remains separate | Separate route state from exact FP32. Current collection evidence covers `scalar_u8` and `rabitq_1bit`; `quantized_only` reads no exact vectors/norms, while `quantized_rerank` exact-reads only the shortlist. |
 | Simple no-document call when per-call result allocation is acceptable | `Collection.SearchVectorIndex` with `IncludeDocuments=false` | response-owned results/IDs | no documents materialized | Convenience route. Healthy exact calls use the cached `hnsw_search_pack_v1` route, but returned result/ID storage is response-owned and intentionally allocates. |
 | Search and materialize documents in the same call | `Collection.SearchVectorIndex` with `IncludeDocuments=true` | response-owned results/documents | with-document materialization is part of the call | explicit materialization path. Do not mix these rows into no-document high-QPS claims; report document fetch counters separately. |
 | Search first, fetch top-k documents later | `CollectionReadView.FetchDocumentsForVectorIndexSearchResults` after a no-document search | response-owned documents | separate fetch/materialization phase | Use when a service can keep ANN search no-document and fetch only selected top-k IDs later. Buffered-search results alias the caller buffer, so do not reuse/reset the buffer until this fetch returns. |
@@ -59,6 +62,11 @@ for query := range queries {
 }
 ```
 
+For quantized collection serving, use the same buffered API with an explicit
+`QueryMode` and `QuantizedIndexName`. Keep `scalar_u8`, `rabitq_1bit`, and
+`brq_1bit` evidence separate: #2487 covers collection-level `scalar_u8` and
+`rabitq_1bit`; #2507 adds lower-level prototype `brq_1bit` rows only.
+
 For lower-level serving, open `OpenVectorIndexSearcher` once per worker, warm
 `SearchWithBuffer` with that worker's own buffer, and close/reopen the searcher
 when the worker must move to a newer collection/vector-index generation.
@@ -85,29 +93,30 @@ evidence.
 
 ## Do not overclaim
 
-- Say TreeDB is close to USearch only for the warmed exact no-document parallel
-  buffered serving route measured in the #2360/#2379 snapshot: Apple M3
-  (`darwin/arm64`), 2026-06-05, commit
-  `2feb1f0e35459d1b3d044008203d0c8afcf5630f`, Tier S fixture (10k docs,
-  64 dims, M=16, efConstruction=128, efSearch=128, topK=10, query stream
-  length 16, `BENCHTIME=1000x`, `COUNT=3`, `CPU_LIST=1,8`). USearch in that
-  comparison is a pure in-memory external ANN baseline, not TreeDB persistent
-  storage.
+- Do not turn dated fixture rows into general parity claims. The #2487 exact
+  snapshot reports TreeDB and USearch rows on an Apple M3 (`darwin/arm64`) at
+  commit `32e143240dbffb24172e0ec91c5565ea7c84328a` under moderate host load;
+  use it as current-main route evidence, not a universal ranking.
 - With-document search is a different materialization path. It includes final
   document fetch/reconstruction work and must not be mixed into no-document
   high-QPS claims.
 - Filters, projections, debug-only stats, and quantized modes are outside the
-  exact FP32 `hnsw_search_pack_v1` no-document success claim unless a separate
-  fail-closed route row and benchmark/counter evidence are published.
-- Collection-level buffered quantized search support is unavailable/planned
-  follow-up until #2415 lands. Keep any low-level quantized search evidence
-  separate from exact FP32 `hnsw_search_pack_v1` route claims.
+  exact FP32 `hnsw_search_pack_v1` no-document success claim. Quantized modes
+  must use their own route rows, fail-closed counters, exact-read bounds, recall,
+  code/asset bytes, and allocation evidence.
+- Quantized collection buffered search is supported as a separate route state for
+  accepted `scalar_u8` and `rabitq_1bit` rows. The `brq_1bit` #2507 work is a
+  lower-level prototype with its own benchmark evidence and no promotion claim.
+  Future scale-sensitive positioning should consume #2494 crossover synthesis or
+  say explicitly that crossover evidence is pending.
 
 ## Required no-document route counters
 
-#2410 owns the full benchmark snapshot and counter workflow. As a contract
-summary, healthy exact no-document rows must prove all of the following before
-claiming the high-QPS path:
+#2410 owns the historical benchmark workflow, while
+[`vector-search-closeout-2483.md`](../spec/vector-search-closeout-2483.md)
+indexes the current accepted evidence. As a contract summary, healthy exact
+no-document rows must prove all of the following before claiming the exact
+high-QPS path:
 
 - `search_route_hnsw_search_pack/search=1`
 - `hnsw_search_pack_active/search=1`
@@ -130,6 +139,21 @@ boundary is proven by the benchmark shape plus the route/fallback counters above
 `0 allocs/op`. `Collection.SearchVectorIndex` no-document convenience rows
 should report `response_owned_result_alloc/op=1` and account for the small
 response-owned allocation separately.
+
+Quantized no-document rows must additionally prove their own route state:
+
+- `search_route_quantized_only/search=1` or
+  `search_route_quantized_rerank/search=1`
+- `quantized_scorer_active/search=1`
+- `quantized_asset_unavailable/search=0`
+- `docs_fetched/search=0`
+- qonly rows: `vector_B/search=0`, `norm_B/search=0`, and
+  `quantized_rerank_exact_score_calls/search=0`
+- rerank rows: `quantized_rerank_candidates/search` and
+  `quantized_rerank_exact_score_calls/search` bounded to the configured
+  shortlist
+- codec/storage evidence such as `quantized_code_B/vector`,
+  `quantized_asset_B/vector`, recall@K, `B/op`, and `allocs/op`
 
 ## Benchmark command
 

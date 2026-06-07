@@ -2,10 +2,11 @@
 
 Status: pre-alpha closeout for the #2475 RaBitQ performance lane. This note
 closes **Sublane A**, the `rabitq_1bit` v1 performance sweep, including the
-semantics-preserving #2477 query-byte-table scorer evidence, and records that
-**Sublane B** remains deferred to open follow-ups #2480 and #2481. It is a
-benchmark/evidence boundary, not a runtime feature change and not a claim that
-RaBitQ universally replaces exact FP32 or `scalar_u8`.
+semantics-preserving #2477 query-byte-table scorer evidence. At the original
+#2482 closeout, **Sublane B** was deferred; it has since completed through #2480
+and #2481 with a separate `brq_1bit` v1 contract/prototype. This file remains a
+benchmark/evidence boundary, not a claim that RaBitQ universally replaces exact
+FP32 or `scalar_u8`.
 
 ## Scope and hard invariants
 
@@ -36,12 +37,12 @@ fallback behavior.
 | #2477 | Merged in PR #2485 | merge `77d9f371832f2dbb51c02084f8c1876118eeca06`; final baseline `/tmp/gomap_2477_final2_baseline_main_435a1c06_20260606_112457`; final candidate `/tmp/gomap_2477_final2_candidate_17857e779_20260606_112935`; scalar interleaved guardrail `/tmp/gomap_2477_interleaved_scalar_lower_qonly_c8_20260606_114454` | Promoted the query byte-table scorer with strong same-host RaBitQ wins and unchanged allocation/recall/exact-read/route/fallback counters. |
 | #2478 | Closed no-entry / no-promote | <https://github.com/snissn/gomap/issues/2478#issuecomment-4640631624> | Post-#2477 profiles did not show packed-code reader/stride/bounds/accessor overhead as a material bottleneck, so no code PR or AI review was opened. |
 | #2479 | Closed skipped / no-promote | <https://github.com/snissn/gomap/issues/2479#issuecomment-4640644622> | Post-#2477/#2478 evidence did not show a credible batching/windowing opportunity, so no experiment branch, code PR, or AI review was opened. |
-| #2480 | Open / deferred | <https://github.com/snissn/gomap/issues/2480> | Future codec design/spec gate. No future codec has been selected yet. |
-| #2481 | Open / hard-blocked | <https://github.com/snissn/gomap/issues/2481> | Future codec prototype. It must not start until #2480 selects an explicit codec contract. |
+| #2480 | Merged in PR #2488 | merge `206a8fb3e5243de1b094e52746907771fee640ed`; spec [`brq-1bit-v1.md`](brq-1bit-v1.md) | Selected the separate `brq_1bit` v1 future-codec contract. It does not reinterpret `rabitq_1bit` v1. |
+| #2481 | Completed via PR #2489 and PR #2507 | #2489 merge `f2016198b8d00824021b8e05420f1e939f751df7`; #2507 merge `8e7377cc995ffc928ac99a42ed8aec769f8f72fb`; BRQ artifacts `/tmp/2481_runtime_bench_20260606_165236` | Added BRQ oracle goldens, then lower-level BRQ asset/search runtime. This is prototype evidence, not a RaBitQ Sublane A promotion claim. |
 
-#2482 can close when this closeout is merged because it records Sublane A's
-promoted and no-promote outcomes and reports Sublane B accurately as deferred.
-The parent tracker #2475 may remain open for #2480/#2481.
+#2482 closed when this closeout was merged because it recorded Sublane A's
+promoted and no-promote outcomes. #2483 later reconciled Sublane B completion in
+[`vector-search-closeout-2483.md`](vector-search-closeout-2483.md).
 
 ## Evidence boundary
 
@@ -166,12 +167,14 @@ The runbook labels this as smoke/shape evidence only. Representative medians:
 
 ## Future work status
 
-Sublane B is not complete in this closeout. #2480 is open as the future
-RaBitQ/BRQ codec design/spec gate. #2481 is open and hard-blocked on #2480; it
-must not implement assets or search until #2480 selects an explicit codec name,
-version, storage shape, score semantics, oracle tests, recall gates, benchmark
-matrix, and fail-closed validation plan.
+Sublane B is complete for design/prototype purposes: #2480 selected the
+`brq_1bit` v1 contract and #2481 landed oracle plus lower-level runtime support.
+BRQ remains a separate prototype route with its own evidence and counters; it is
+not part of the #2477 RaBitQ promotion and not a universal speedup claim. Future
+scale-sensitive positioning should consume #2494 crossover synthesis when it is
+available.
 
-Any future estimator, popcount/BRQ shape, or multi-bit RaBitQ variant that
-differs from `rabitq_1bit` v1 must use a new codec identity/version. It must not
-reinterpret `rabitq_1bit` v1 storage, bit order, or score semantics for speed.
+Any future estimator, popcount/BRQ shape beyond v1, or multi-bit RaBitQ variant
+that differs from `rabitq_1bit` v1 must use a new codec identity/version. It
+must not reinterpret `rabitq_1bit` v1 storage, bit order, or score semantics for
+speed.

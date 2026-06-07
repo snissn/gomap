@@ -24,13 +24,14 @@ directories when moving between branches.
   payloads in dense typed-column sections, keep metadata ownership explicit, and
   separate search/scoring from final document fetch.
 - [High-QPS collection vector-search guide](vector-search-high-qps-collection-api.md)
-  — choose between buffered no-document serving, response-owned convenience
-  calls, explicit materialization, and reusable searchers without overclaiming
-  beyond exact measured routes.
+  — choose between exact buffered no-document serving, quantized route states,
+  response-owned convenience calls, explicit materialization, and reusable searchers
+  without overclaiming beyond measured routes.
 - [TreeDB vs USearch vector benchmark workflow](vector-search-benchmark-workflow.md)
   — reproduce the dated Tier S/Tier F comparison workflow, required fast-path
-  counters, USearch bootstrap, artifact directories, and profile capture without
-  blurring exact no-document rows with materialization or quantized evidence.
+  counters, USearch bootstrap, artifact directories, profile capture, and the
+  #2483 closeout link without blurring exact no-document rows with
+  materialization or quantized evidence.
 
 ## Deeper specs
 

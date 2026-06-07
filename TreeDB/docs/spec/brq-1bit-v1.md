@@ -1,13 +1,15 @@
-# TreeDB `brq_1bit` v1 Future Codec Contract (#2480)
+# TreeDB `brq_1bit` v1 Codec Contract (#2480/#2481)
 
-Status: pre-alpha **selected future-codec contract** for #2480. This is a
-specification gate for #2481 prototype work; it is not current runtime behavior,
-does not publish assets/search by itself, and does not claim a throughput win.
+Status: pre-alpha **selected codec contract** for #2480 and lower-level runtime
+prototype for #2481. The spec gate landed first; #2481 subsequently added oracle
+goldens plus lower-level durable asset/search support. This document still does
+not claim a throughput win or production promotion for BRQ.
 
 ## Decision
 
-Issue #2480 selects `brq_1bit` version `1` as the single future codec candidate
-to prototype next. `brq_1bit` is a TreeDB-owned bit-product binary quantizer: it
+Issue #2480 selected `brq_1bit` version `1` as the single codec candidate for
+#2481, and #2481 landed the first lower-level prototype. `brq_1bit` is a
+TreeDB-owned bit-product binary quantizer: it
 keeps one durable sign bit per rotated data dimension, makes query-weight
 quantization explicit, and labels returned quantized scores as approximate
 `brq_1bit` estimates. It exists because the #2453 go-highway probe showed that a
@@ -25,10 +27,11 @@ Any `brq_1bit` implementation must use the new identity below.
   are clean-room TreeDB design/spec text.
 - `github.com/ajroetker/go-highway` v0.0.12 was evaluated for #2453. Its module
   and RaBitQ package are Apache-2.0 and may be used only as an optional kernel
-  dependency with normal notices if #2481 proves compatibility and value.
+  dependency with normal notices if future BRQ acceleration proves compatibility
+  and value.
 - The upstream go-highway `QuantizeVectors` MSB-first word output is not TreeDB
-  durable storage. A future implementation must either write the TreeDB layout
-  directly or transcode before persisting assets.
+  durable storage. Any future accelerated implementation must either write the
+  TreeDB layout directly or transcode before persisting assets.
 - Do not copy code from CockroachDB Software License, ELv2, AGPL, Antfly, or
   incompatible C++ RaBitQ/BRQ libraries. Papers may be cited for algorithmic
   background, but production code must be clean-room or from compatible
@@ -215,9 +218,11 @@ codec-generic quantized asset unavailable/invalid/stale/closed counters. There i
 no silent exact fallback. Exact/default mode continues to reject quantized-only
 fields.
 
-## Required oracle and golden tests before #2481 assets/search
+## Required oracle and golden/runtime tests
 
-Issue #2481 must land oracle/spec coverage before durable assets or production search:
+Issue #2481 landed oracle/spec coverage before durable asset/search support, and
+#2507 added lower-level runtime tests for the same contract. Required coverage
+includes:
 
 - canonical config bytes and `Config.Hash64` golden;
 - rotation metadata, code dimensions, row bytes, and seed golden;
@@ -240,18 +245,21 @@ Issue #2481 must land oracle/spec coverage before durable assets or production s
 `brq_1bit` is selected only as a prototype candidate. It may be closed
 no-promote if the gates below are not met.
 
-Required matrix versus exact FP32, `scalar_u8`, and `rabitq_1bit`:
+Required matrix versus exact FP32, `scalar_u8`, and `rabitq_1bit` for the
+current lower-level prototype:
 
 ```sh
 GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^(BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphBRQQuantized2481|BenchmarkColumnGraphBRQQuantizedRebuildStorage2481|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926|BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450)$' \
+  -bench '^(BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481|BenchmarkColumnGraphBRQQuantizedRebuildStorage2481|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926|BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450)$' \
   -benchmem -benchtime=100000x -count=5
 ```
 
-Rows must include lower-level and collection `quantized_only` plus
-`quantized_rerank/candidates=32` at c=1/c=8, with the same fixture and same-host
-baseline/candidate discipline used by the RaBitQ profile gate. Report `ns/op`,
+The #2507 artifact root is `/tmp/2481_runtime_bench_20260606_165236`; a full
+collection-level BRQ promotion matrix remains future work. Rows must include
+lower-level `quantized_only` plus `quantized_rerank/candidates=32` at c=1/c=8,
+with the same fixture and same-host baseline/candidate discipline used by the
+RaBitQ profile gate. Report `ns/op`,
 `ops/sec`, `B/op`, `allocs/op`, recall@K versus exact, exact vector/norm bytes,
 exact rerank calls, route/fallback/unavailable counters, `quantized_code_B/search`,
 logical code bytes/vector, actual asset bytes/vector, graph total storage, and
@@ -272,15 +280,16 @@ Promotion gates:
   asset bytes/vector should stay within the same order as `rabitq_1bit` unless a
   measured trade-off is accepted.
 - A speedup claim requires same-host BRQ rows to beat optimized `rabitq_1bit` for
-  both c=1 and c=8 lower-level and collection `quantized_only` rows, with no
-  scalar_u8/exact guardrail regressions where shared code is touched.
+  both c=1 and c=8 rows in the relevant lower-level and collection serving
+  shapes, with no scalar_u8/exact guardrail regressions where shared code is
+  touched.
 - Compactness-only or mixed/noisy/regressing evidence must be documented as
   no-promote and must not be presented as acceleration.
 
 ## Public counter and label requirements
 
-Future search stats/benchmarks must keep the existing generic quantized counters
-and add BRQ-specific visibility when this codec is selected:
+Search stats/benchmarks keep the existing generic quantized counters and add
+BRQ-specific visibility when this codec is selected:
 
 - `quantized_score_codec_brq_1bit/search=1`;
 - `brq_1bit_query_weight_bits/search=4`;
@@ -306,7 +315,9 @@ than attempting complex migration scaffolding.
 
 ## #2481 dependency status
 
-A complete `brq_1bit` v1 contract unblocks #2481 only for a lower-level-first
-prototype after this spec is merged or explicitly accepted as the recorded #2480
-contract. #2481 must not implement production assets/search for any other codec
-name/version and must not change `rabitq_1bit` v1 semantics.
+The `brq_1bit` v1 contract unblocked #2481. #2481 completed in two steps: PR
+#2489 added internal oracle/golden coverage, and PR #2507 added lower-level BRQ
+quantized asset/search runtime with fail-closed validation, exact-read guardrails,
+zero-allocation warmed buffered rows, and benchmark evidence. The implementation
+must not change `rabitq_1bit` v1 semantics, and broader promotion/crossover
+claims remain future work.

@@ -37,11 +37,13 @@ func TestDocs_VectorHighQPSCollectionAPIGuide2406(t *testing.T) {
 		"## Do not overclaim",
 		"Apple M3",
 		"`darwin/arm64`",
-		"`2feb1f0e35459d1b3d044008203d0c8afcf5630f`",
+		"`32e143240dbffb24172e0ec91c5565ea7c84328a`",
 		"With-document search is a different materialization path",
 		"Filters, projections, debug-only stats, and quantized modes are outside",
-		"Collection-level buffered quantized search support is unavailable/planned",
-		"#2410 owns the full benchmark snapshot and counter workflow",
+		"Collection-level buffered quantized serving for supported score planes",
+		"Quantized collection buffered search is supported as a separate route state",
+		"vector-search-closeout-2483.md",
+		"#2494 crossover synthesis",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("%s missing #2406 high-QPS API guidance %q", guidePath, want)
@@ -52,7 +54,7 @@ func TestDocs_VectorHighQPSCollectionAPIGuide2406(t *testing.T) {
 		"TreeDB beats USearch",
 		"TreeDB is faster than USearch",
 		"Collection.SearchVectorIndex` is the zero-allocation target",
-		"Collection-level buffered quantized search is supported",
+		"Collection-level buffered quantized search support is unavailable/planned",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("%s contains overclaim %q", guidePath, forbidden)

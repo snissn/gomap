@@ -734,9 +734,10 @@ over `raw_bytes_offsets`), and quantized code assets (`quantized_codes` role).
 Declared scalar_u8 score planes use `byte_vector` over `raw_fixed_bytes` with
 asset IDs `quantized/<name>/codes`. Declared `rabitq_1bit` v1 score planes use
 `packed_bit_vector` over `raw_packed_bit_vector` with asset IDs
-`quantized/<name>/packed_codes`; their typed-column part contains the
-`packed_codes`, `code_count`, and `quantized_dot_product_inv` roles described in
-`quantized-vector-index.md` and `rabitq-1bit-v1.md`. The active manifest
+`quantized/<name>/packed_codes`; prototype `brq_1bit` v1 score planes use asset
+IDs `quantized/<name>/brq_1bit/packed_codes`. Their typed-column parts contain
+the `packed_codes`, `code_count`, and `quantized_dot_product_inv` roles described
+in `quantized-vector-index.md`, `rabitq-1bit-v1.md`, and `brq-1bit-v1.md`. The active manifest
 checksum includes the control record, but the record's base checksum excludes
 vector-index derived records so stale-state checks compare against authoritative
 collection data. See `vector-index-state-manifest.md` and
@@ -1162,9 +1163,11 @@ returned document IDs, and declared quantized code score planes as vector-index
 state assets, and records vector-index control identity in the `TVIS` state
 record. Quantized assets use role `quantized_codes`; scalar_u8 assets use asset
 ids `quantized/<name>/codes` with `byte_vector` / `raw_fixed_bytes`, while
-`rabitq_1bit` v1 assets use asset ids `quantized/<name>/packed_codes` with
-`packed_bit_vector` / `raw_packed_bit_vector`. Query modes that select
-quantized assets fail closed when matching state is absent or stale. Old
+`rabitq_1bit` v1 assets use asset ids `quantized/<name>/packed_codes` and
+prototype `brq_1bit` v1 assets use asset ids
+`quantized/<name>/brq_1bit/packed_codes` with `packed_bit_vector` /
+`raw_packed_bit_vector`. Query modes that select quantized assets fail closed
+when matching state is absent or stale. Old
 adjacency-source refs are `#1989-quarantined` compatibility. Current graph
 manifests may still contain row graph refs and legacy layer-source trailer refs
 for compatibility; new derived-state refs belong in vector-index state. Replay
