@@ -4,8 +4,8 @@ This benchmark compares persistent database-tier ANN search:
 
 - TreeDB native persisted HNSW via `cmd/treedb_vector_search_demo`
 - TreeDB `column_graph` full-vector exact/default HNSW via the same demo
-- TreeDB `column_graph` scalar_u8 `quantized_only` and `quantized_rerank`
-  query modes via explicit demo flags
+- TreeDB `column_graph` scalar_u8 and rabitq_1bit `quantized_only` and
+  `quantized_rerank` query modes via explicit demo flags
 - SQLite with the Vectorlite loadable extension, backed by hnswlib/HNSW
 - PostgreSQL with pgvector full-vector HNSW
 - MongoDB Vector Search HNSW when pointed at Atlas or a local Atlas deployment
@@ -26,8 +26,8 @@ scripts/bench_vector_db_compare.sh
 ```
 
 The default backend set is `treedb,vectorlite`. Add `treedb_column_graph`, the
-TreeDB quantized aliases, `pgvector`, or `mongodb` to `BACKENDS` when those
-paths or external services are needed.
+TreeDB scalar_u8/RaBitQ quantized aliases, `pgvector`, or `mongodb` to
+`BACKENDS` when those paths or external services are needed.
 
 Useful overrides:
 
@@ -42,19 +42,21 @@ SEARCH_CONCURRENCY=2,4,8,16,32,64,128 \
 scripts/bench_vector_db_compare.sh
 ```
 
-TreeDB exact vs quantized column-graph comparison:
+TreeDB exact vs scalar_u8/RaBitQ quantized column-graph comparison:
 
 ```sh
 RUN_DIR=/tmp/vector_db_compare_quantized \
-BACKENDS=treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank,pgvector \
+BACKENDS=treedb_column_graph,treedb_column_graph_scalar_u8_quantized_only,treedb_column_graph_scalar_u8_quantized_rerank,treedb_column_graph_rabitq_1bit_quantized_only,treedb_column_graph_rabitq_1bit_quantized_rerank,pgvector \
 DOCS=10000 \
 DIMS=128 \
 QUERIES=10000 \
 VALIDATE_QUERIES=64 \
 TOP_K=10 \
 EF_SEARCH=128 \
-TREEDB_QUANTIZED_INDEX_NAME=embedding.scalar_u8.fast \
+TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME=embedding.scalar_u8.fast \
+TREEDB_RABITQ_QUANTIZED_INDEX_NAME=embedding.rabitq_1bit.fast \
 TREEDB_QUANTIZED_RERANK_CANDIDATES=32 \
+TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES=32 \
 TREEDB_QUANTIZED_MIN_RECALL=0 \
 scripts/bench_vector_db_compare.sh
 ```
@@ -72,12 +74,26 @@ Backends:
 - `treedb`: runs the TreeDB native persisted vector index benchmark.
 - `treedb_column_graph`: runs TreeDB `column_graph` exact/default full-vector
   graph search.
-- `treedb_column_graph_quantized_only`: runs TreeDB `column_graph` with a named
-  scalar_u8 score plane and `query_mode=quantized_only`.
-- `treedb_column_graph_quantized_rerank`: runs TreeDB `column_graph` with a
-  named scalar_u8 score plane and `query_mode=quantized_rerank`, exact-reranking
-  `TREEDB_QUANTIZED_RERANK_CANDIDATES` candidates (or the demo's normalized
-  `ef_search` set when set to `0`).
+- `treedb_column_graph_quantized_only`: compatibility alias for a TreeDB
+  `column_graph` quantized-only row using `TREEDB_QUANTIZED_CODEC` and
+  `TREEDB_QUANTIZED_INDEX_NAME` (defaults to scalar_u8).
+- `treedb_column_graph_quantized_rerank`: compatibility alias for a TreeDB
+  `column_graph` quantized-rerank row using `TREEDB_QUANTIZED_CODEC` and
+  `TREEDB_QUANTIZED_INDEX_NAME` (defaults to scalar_u8).
+- `treedb_column_graph_scalar_u8_quantized_only`: runs TreeDB `column_graph`
+  with a named scalar_u8 score plane and `query_mode=quantized_only`.
+- `treedb_column_graph_scalar_u8_quantized_rerank`: runs TreeDB `column_graph`
+  with a named scalar_u8 score plane and `query_mode=quantized_rerank`,
+  exact-reranking `TREEDB_QUANTIZED_RERANK_CANDIDATES` candidates (or the
+  demo's normalized `ef_search` set when set to `0`).
+- `treedb_column_graph_rabitq_1bit_quantized_only`: runs TreeDB `column_graph`
+  with a named RaBitQ `rabitq_1bit` score plane and
+  `query_mode=quantized_only`.
+- `treedb_column_graph_rabitq_1bit_quantized_rerank`: runs TreeDB
+  `column_graph` with a named RaBitQ `rabitq_1bit` score plane and
+  `query_mode=quantized_rerank`, exact-reranking
+  `TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES` candidates (or the demo's
+  normalized `ef_search` set when set to `0`).
 - `vectorlite`: runs SQLite+Vectorlite with its persisted HNSW sidecar file.
 - `pgvector`: runs PostgreSQL+pgvector full-vector HNSW. If `PGVECTOR_DSN` is not set, the
   runner starts a temporary `pgvector/pgvector:pg16` Docker container. The
@@ -131,17 +147,30 @@ Configuration:
   the Go runtime's current/default sampling rate. Block profiles are emitted
   from the runtime's current block profiler and may be empty unless block
   profiling was already enabled.
-- `TREEDB_QUANTIZED_INDEX_NAME`: scalar_u8 TreeDB quantized score-plane name.
-  Defaults to `embedding.scalar_u8.fast`.
-- `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB quantized-rerank exact rerank
-  candidate limit. Defaults to `max(32, TOP_K)`; set `0` to use the normalized
-  efSearch set.
+- `TREEDB_QUANTIZED_CODEC`: codec for the compatibility quantized aliases.
+  Defaults to `scalar_u8`; set to `rabitq_1bit` only when deliberately using the
+  generic aliases for RaBitQ.
+- `TREEDB_QUANTIZED_INDEX_NAME`: score-plane name for the compatibility
+  quantized aliases. Defaults to `embedding.scalar_u8.fast`.
+- `TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME`: scalar_u8 score-plane name for the
+  explicit scalar_u8 aliases. Defaults to `TREEDB_QUANTIZED_INDEX_NAME`.
+- `TREEDB_RABITQ_QUANTIZED_INDEX_NAME`: RaBitQ score-plane name for the
+  explicit RaBitQ aliases. Defaults to `embedding.rabitq_1bit.fast`.
+- `TREEDB_QUANTIZED_RERANK_CANDIDATES`: TreeDB scalar_u8/compat quantized-rerank
+  exact rerank candidate limit. Defaults to `max(32, TOP_K)`; set `0` to use the
+  normalized efSearch set.
+- `TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES`: TreeDB RaBitQ quantized-rerank
+  exact rerank candidate limit. Defaults to `TREEDB_QUANTIZED_RERANK_CANDIDATES`.
 - `TREEDB_QUANTIZED_MIN_RECALL`: recall gate for both TreeDB quantized rows.
   Defaults to `0`, so comparisons report quantized recall instead of failing
   before rendering; set a positive value to enforce a quantized recall floor.
 - `TREEDB_QUANTIZED_ONLY_MIN_RECALL` and
-  `TREEDB_QUANTIZED_RERANK_MIN_RECALL`: optional per-mode overrides for
-  `TREEDB_QUANTIZED_MIN_RECALL`.
+  `TREEDB_QUANTIZED_RERANK_MIN_RECALL`: optional scalar_u8/compat per-mode
+  overrides for `TREEDB_QUANTIZED_MIN_RECALL`.
+- `TREEDB_RABITQ_QUANTIZED_MIN_RECALL`,
+  `TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL`, and
+  `TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL`: optional RaBitQ recall gates;
+  default to the corresponding generic quantized gates.
 - `PGVECTOR_DSN`: external PostgreSQL DSN. If empty and `pgvector` is enabled,
   the runner starts Docker unless `PGVECTOR_DOCKER=false`.
 - `PGVECTOR_DOCKER`, `PGVECTOR_IMAGE`, `PGVECTOR_MAX_CONNECTIONS`: automatic
@@ -162,8 +191,12 @@ The runner writes:
 - `dataset/`: TreeDB-owned synthetic vectors and manifest
 - `treedb.json`: TreeDB native benchmark result
 - `treedb_column_graph.json`: TreeDB column_graph exact/default result when enabled
-- `treedb_column_graph_quantized_only.json`: TreeDB scalar_u8 quantized-only result when enabled
-- `treedb_column_graph_quantized_rerank.json`: TreeDB scalar_u8 quantized-rerank result when enabled
+- `treedb_column_graph_quantized_only.json`: compatibility quantized-only result when enabled
+- `treedb_column_graph_quantized_rerank.json`: compatibility quantized-rerank result when enabled
+- `treedb_column_graph_scalar_u8_quantized_only.json`: TreeDB scalar_u8 quantized-only result when enabled
+- `treedb_column_graph_scalar_u8_quantized_rerank.json`: TreeDB scalar_u8 quantized-rerank result when enabled
+- `treedb_column_graph_rabitq_1bit_quantized_only.json`: TreeDB RaBitQ quantized-only result when enabled
+- `treedb_column_graph_rabitq_1bit_quantized_rerank.json`: TreeDB RaBitQ quantized-rerank result when enabled
 - `vectorlite.json`: SQLite+Vectorlite benchmark result
 - `pgvector.json`: PostgreSQL+pgvector full-vector HNSW benchmark result when enabled
 - `mongodb.json`: MongoDB Vector Search benchmark result when enabled

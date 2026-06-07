@@ -29,19 +29,22 @@ import (
 )
 
 const (
-	defaultDocs                  = 10000
-	defaultDimensions            = 64
-	defaultQueries               = 10000
-	defaultSearchConcurrency     = "2,4,8,16,32,64,128"
-	defaultTopK                  = 10
-	defaultBatchSize             = 512
-	defaultM                     = 16
-	defaultEfConstruct           = 128
-	defaultEfSearch              = 128
-	defaultValuePointerThreshold = 1024
-	defaultLeafGenerationTarget  = 4 << 20
-	defaultQuantizedIndexName    = "embedding.scalar_u8.fast"
-	nativeRuntimeSnapshotPath    = collections.VectorIndexSearchPath("native_runtime_snapshot")
+	defaultDocs                     = 10000
+	defaultDimensions               = 64
+	defaultQueries                  = 10000
+	defaultSearchConcurrency        = "2,4,8,16,32,64,128"
+	defaultTopK                     = 10
+	defaultBatchSize                = 512
+	defaultM                        = 16
+	defaultEfConstruct              = 128
+	defaultEfSearch                 = 128
+	defaultValuePointerThreshold    = 1024
+	defaultLeafGenerationTarget     = 4 << 20
+	defaultQuantizedCodec           = collections.QuantizedVectorCodecScalarU8
+	defaultQuantizedIndexName       = "embedding.scalar_u8.fast"
+	defaultRabitQQuantizedIndexName = "embedding.rabitq_1bit.fast"
+	quantizedVectorCodecRabitQ1Bit  = "rabitq_1bit"
+	nativeRuntimeSnapshotPath       = collections.VectorIndexSearchPath("native_runtime_snapshot")
 )
 
 type validationExactSource string
@@ -84,6 +87,7 @@ type config struct {
 	indexOuterLeavesInValueLog *bool
 	vectorIndexStrategy        collections.VectorIndexStrategy
 	vectorQueryMode            collections.VectorIndexQueryMode
+	quantizedCodec             string
 	quantizedIndexName         string
 	quantizedRerankCandidates  int
 }
@@ -94,6 +98,7 @@ type result struct {
 	VectorIndexStrategy       collections.VectorIndexStrategy   `json:"vector_index_strategy"`
 	VectorIndexSearchPath     collections.VectorIndexSearchPath `json:"vector_index_search_path,omitempty"`
 	QueryMode                 collections.VectorIndexQueryMode  `json:"query_mode"`
+	QuantizedCodec            string                            `json:"quantized_codec"`
 	QuantizedIndexName        string                            `json:"quantized_index_name"`
 	QuantizedRerankCandidates int                               `json:"quantized_rerank_candidates"`
 	Dir                       string                            `json:"dir"`
@@ -181,6 +186,7 @@ type searchBenchmarkResult struct {
 	Concurrency                       int                              `json:"concurrency"`
 	Queries                           int                              `json:"queries"`
 	QueryMode                         collections.VectorIndexQueryMode `json:"query_mode"`
+	QuantizedCodec                    string                           `json:"quantized_codec"`
 	QuantizedIndexName                string                           `json:"quantized_index_name"`
 	QuantizedRerankCandidates         int                              `json:"quantized_rerank_candidates"`
 	TotalDurationNanos                int64                            `json:"total_duration_nanos"`
@@ -366,7 +372,8 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&vectorIndexStrategyRaw, "vector-index-strategy", vectorIndexStrategyRaw, "TreeDB vector index strategy: native_runtime or column_graph")
 	fs.StringVar(&vectorQueryModeRaw, "vector-query-mode", vectorQueryModeRaw, "TreeDB vector query mode: exact, quantized_only, or quantized_rerank")
 	fs.StringVar(&validationExactSourceRaw, "validation-exact-source", validationExactSourceRaw, "Exact baseline source for recall validation: treedb or dataset")
-	fs.StringVar(&cfg.quantizedIndexName, "quantized-index-name", cfg.quantizedIndexName, "Named scalar_u8 quantized index to use for column_graph quantized query modes, for example "+defaultQuantizedIndexName)
+	fs.StringVar(&cfg.quantizedCodec, "quantized-codec", cfg.quantizedCodec, "Quantized codec for column_graph quantized query modes: scalar_u8 or rabitq_1bit; empty defaults to scalar_u8 for quantized modes")
+	fs.StringVar(&cfg.quantizedIndexName, "quantized-index-name", cfg.quantizedIndexName, "Named quantized index to use for column_graph quantized query modes, for example "+defaultQuantizedIndexName+" or "+defaultRabitQQuantizedIndexName)
 	fs.IntVar(&cfg.quantizedRerankCandidates, "quantized-rerank-candidates", cfg.quantizedRerankCandidates, "Candidate limit exact-reranked by column_graph quantized_rerank mode; 0 uses the normalized ef_search set")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
@@ -413,6 +420,9 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.vectorQueryMode = queryMode
+	if err := applyQuantizedConfigDefaults(&cfg); err != nil {
+		return config{}, err
+	}
 	validationExactSource, err := parseValidationExactSource(validationExactSourceRaw)
 	if err != nil {
 		return config{}, err
@@ -529,12 +539,40 @@ func validateValidationExactSourceConfig(cfg config) error {
 	return nil
 }
 
+func applyQuantizedConfigDefaults(cfg *config) error {
+	codec, err := parseQuantizedCodec(cfg.quantizedCodec)
+	if err != nil {
+		return err
+	}
+	cfg.quantizedCodec = codec
+	if vectorQueryModeIsQuantized(normalizedVectorQueryMode(cfg.vectorQueryMode)) && cfg.quantizedCodec == "" {
+		cfg.quantizedCodec = defaultQuantizedCodec
+	}
+	return nil
+}
+
+func parseQuantizedCodec(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return "", nil
+	case collections.QuantizedVectorCodecScalarU8:
+		return collections.QuantizedVectorCodecScalarU8, nil
+	case quantizedVectorCodecRabitQ1Bit:
+		return quantizedVectorCodecRabitQ1Bit, nil
+	default:
+		return "", fmt.Errorf("unsupported -quantized-codec %q; allowed: %s,%s", raw, collections.QuantizedVectorCodecScalarU8, quantizedVectorCodecRabitQ1Bit)
+	}
+}
+
 func validateVectorQueryConfig(cfg config) error {
 	mode := normalizedVectorQueryMode(cfg.vectorQueryMode)
 	if cfg.quantizedRerankCandidates < 0 {
 		return errors.New("-quantized-rerank-candidates cannot be negative")
 	}
 	if !vectorQueryModeIsQuantized(mode) {
+		if cfg.quantizedCodec != "" {
+			return errors.New("-quantized-codec requires -vector-query-mode quantized_only or quantized_rerank")
+		}
 		if cfg.quantizedIndexName != "" {
 			return errors.New("-quantized-index-name requires -vector-query-mode quantized_only or quantized_rerank")
 		}
@@ -545,6 +583,12 @@ func validateVectorQueryConfig(cfg config) error {
 	}
 	if cfg.vectorIndexStrategy != collections.VectorIndexStrategyColumnGraph {
 		return errors.New("quantized vector query modes require -vector-index-strategy column_graph")
+	}
+	if cfg.quantizedCodec == "" {
+		return errors.New("-quantized-codec is required for quantized vector query modes")
+	}
+	if _, err := parseQuantizedCodec(cfg.quantizedCodec); err != nil {
+		return err
 	}
 	if cfg.quantizedIndexName == "" {
 		return errors.New("-quantized-index-name is required for quantized vector query modes")
@@ -733,18 +777,36 @@ func resultBackendForStrategy(strategy collections.VectorIndexStrategy) string {
 	return "treedb"
 }
 
-func resultBackendForQuery(strategy collections.VectorIndexStrategy, mode collections.VectorIndexQueryMode) string {
+func resultBackendForQuery(strategy collections.VectorIndexStrategy, mode collections.VectorIndexQueryMode, quantizedCodec string) string {
 	if strategy != collections.VectorIndexStrategyColumnGraph {
 		return resultBackendForStrategy(strategy)
 	}
 	switch normalizedVectorQueryMode(mode) {
 	case collections.VectorIndexQueryModeQuantizedOnly:
-		return "treedb_column_graph_quantized_only"
+		return "treedb_column_graph_" + quantizedBackendCodecLabel(quantizedCodec) + "_quantized_only"
 	case collections.VectorIndexQueryModeQuantizedRerank:
-		return "treedb_column_graph_quantized_rerank"
+		return "treedb_column_graph_" + quantizedBackendCodecLabel(quantizedCodec) + "_quantized_rerank"
 	default:
 		return "treedb_column_graph"
 	}
+}
+
+func quantizedBackendCodecLabel(codec string) string {
+	switch codec {
+	case collections.QuantizedVectorCodecScalarU8:
+		return collections.QuantizedVectorCodecScalarU8
+	case quantizedVectorCodecRabitQ1Bit:
+		return quantizedVectorCodecRabitQ1Bit
+	default:
+		return "quantized"
+	}
+}
+
+func effectiveQuantizedCodec(cfg config) string {
+	if vectorQueryModeIsQuantized(normalizedVectorQueryMode(cfg.vectorQueryMode)) {
+		return cfg.quantizedCodec
+	}
+	return ""
 }
 
 func effectiveQuantizedIndexName(cfg config) string {
@@ -803,6 +865,9 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	cfg.validationExactSource = validationExactSource
 	if err := validateValidationExactSourceConfig(cfg); err != nil {
+		return result{}, err
+	}
+	if err := applyQuantizedConfigDefaults(&cfg); err != nil {
 		return result{}, err
 	}
 	if err := validateVectorQueryConfig(cfg); err != nil {
@@ -873,15 +938,16 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if vectorQueryModeIsQuantized(cfg.vectorQueryMode) {
 		def.QuantizedIndexes = []collections.QuantizedVectorIndexDefinition{{
 			Name:    cfg.quantizedIndexName,
-			Codec:   collections.QuantizedVectorCodecScalarU8,
+			Codec:   cfg.quantizedCodec,
 			Version: 1,
 		}}
 	}
 	res := result{
-		Backend:                   resultBackendForQuery(def.Strategy, cfg.vectorQueryMode),
+		Backend:                   resultBackendForQuery(def.Strategy, cfg.vectorQueryMode, cfg.quantizedCodec),
 		Engine:                    "treedb",
 		VectorIndexStrategy:       def.Strategy,
 		QueryMode:                 normalizedVectorQueryMode(cfg.vectorQueryMode),
+		QuantizedCodec:            effectiveQuantizedCodec(cfg),
 		QuantizedIndexName:        effectiveQuantizedIndexName(cfg),
 		QuantizedRerankCandidates: effectiveQuantizedRerankCandidates(cfg),
 		Dir:                       dir,
@@ -2278,6 +2344,7 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 		Concurrency:                       concurrency,
 		Queries:                           len(queries),
 		QueryMode:                         normalizedVectorQueryMode(cfg.vectorQueryMode),
+		QuantizedCodec:                    effectiveQuantizedCodec(cfg),
 		QuantizedIndexName:                effectiveQuantizedIndexName(cfg),
 		QuantizedRerankCandidates:         effectiveQuantizedRerankCandidates(cfg),
 		TotalDurationNanos:                total.Nanoseconds(),
@@ -2636,8 +2703,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s query_mode=%s quantized_index_name=%s quantized_rerank_candidates=%d docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
-		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), resultQueryMode(res), res.QuantizedIndexName, res.QuantizedRerankCandidates, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s query_mode=%s quantized_codec=%s quantized_index_name=%s quantized_rerank_candidates=%d docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
+		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), resultQueryMode(res), res.QuantizedCodec, res.QuantizedIndexName, res.QuantizedRerankCandidates, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
 	if res.SearchProfileDir != "" {
 		fmt.Fprintf(w, "search_profile_dir=%s\n", res.SearchProfileDir)
 	}
@@ -2729,11 +2796,12 @@ func printMatrixText(w io.Writer, res matrixResult) {
 	for _, testCase := range res.Cases {
 		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
 		fmt.Fprintf(w, "%s\n", testCase.Description)
-		fmt.Fprintf(w, "backend=%s vector_index_strategy=%s vector_index_search_path=%s query_mode=%s\n",
+		fmt.Fprintf(w, "backend=%s vector_index_strategy=%s vector_index_search_path=%s query_mode=%s quantized_codec=%s\n",
 			resultBackend(testCase.Result),
 			resultStrategy(testCase.Result),
 			resultSearchPath(testCase.Result),
-			resultQueryMode(testCase.Result))
+			resultQueryMode(testCase.Result),
+			testCase.Result.QuantizedCodec)
 		if testCase.Result.SearchProfileDir != "" {
 			fmt.Fprintf(w, "search_profile_dir=%s\n", testCase.Result.SearchProfileDir)
 		}
@@ -2768,7 +2836,7 @@ func resultBackend(res result) string {
 	if res.Backend != "" {
 		return res.Backend
 	}
-	return resultBackendForStrategy(resultStrategy(res))
+	return resultBackendForQuery(resultStrategy(res), resultQueryMode(res), res.QuantizedCodec)
 }
 
 func resultStrategy(res result) collections.VectorIndexStrategy {
@@ -2794,10 +2862,11 @@ func resultQueryMode(res result) collections.VectorIndexQueryMode {
 
 func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
 	for _, bench := range benchmarks {
-		fmt.Fprintf(w, "search concurrency=%d queries=%d query_mode=%s avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d avg_candidates=%.1f avg_quantized_score_calls=%.1f avg_quantized_code_bytes=%.1f avg_quantized_rerank_candidates=%.1f avg_quantized_rerank_exact_score_calls=%.1f avg_vector_bytes=%.1f avg_norm_bytes=%.1f",
+		fmt.Fprintf(w, "search concurrency=%d queries=%d query_mode=%s quantized_codec=%s avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d avg_candidates=%.1f avg_quantized_score_calls=%.1f avg_quantized_code_bytes=%.1f avg_quantized_rerank_candidates=%.1f avg_quantized_rerank_exact_score_calls=%.1f avg_vector_bytes=%.1f avg_norm_bytes=%.1f",
 			bench.Concurrency,
 			bench.Queries,
 			bench.QueryMode,
+			bench.QuantizedCodec,
 			bench.AvgMicros,
 			float64(bench.P50Nanos)/1000,
 			float64(bench.P95Nanos)/1000,
