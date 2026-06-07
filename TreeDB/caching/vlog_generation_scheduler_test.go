@@ -7735,8 +7735,11 @@ func TestVlogGenerationRewrite_IneffectiveBackoffExpires(t *testing.T) {
 	}
 }
 
-func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t *testing.T) {
+func TestCheckpoint_KickHotDebtOnlyGuardCanBeDisabled(t *testing.T) {
+	// Keep an emergency rollback knob for live experiments that need the legacy
+	// checkpoint-kick behavior.
 	disableVlogGenerationLoop(t)
+	t.Setenv(envDisableVlogGenerationCheckpointKickHotDebtOnly, "1")
 
 	dir := t.TempDir()
 
@@ -7817,7 +7820,6 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 
 func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanDuringRecentForegroundActivity(t *testing.T) {
 	disableVlogGenerationLoop(t)
-	t.Setenv(envEnableVlogGenerationCheckpointKickHotDebtOnly, "1")
 
 	dir := t.TempDir()
 
@@ -7863,7 +7865,6 @@ func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanDuringRecentForegroundActivity(
 
 func TestCheckpoint_KickHotDebtOnlyWakeRunsAfterForegroundQuiets(t *testing.T) {
 	disableVlogGenerationLoop(t)
-	t.Setenv(envEnableVlogGenerationCheckpointKickHotDebtOnly, "1")
 
 	dir := t.TempDir()
 
@@ -8045,7 +8046,6 @@ func TestCheckpoint_KicksQueuedRewriteDebtBelowTriggerFloor(t *testing.T) {
 
 func TestCheckpoint_KickHotDebtOnlyStillRunsQueuedRewriteDebtDuringRecentForegroundActivity(t *testing.T) {
 	disableVlogGenerationLoop(t)
-	t.Setenv(envEnableVlogGenerationCheckpointKickHotDebtOnly, "1")
 
 	dir := t.TempDir()
 

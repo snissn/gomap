@@ -209,11 +209,11 @@ Additional reporting:
   - Allows rewrite planning/execution before the first explicit checkpoint.
   - Default is disabled to avoid adding early restore contention.
   - Use for controlled `run_celestia` experiments when `maintenance.skip.before_first_checkpoint` dominates and live rewrite never starts.
-- `TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1`
+- `TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1`
   - WAL-off only.
-  - During checkpoint-kick maintenance, skips starting a fresh rewrite plan while foreground activity is hot and rewrite queue debt is empty.
-  - Still allows queued rewrite debt (and deferred-due passes) to run.
-  - Default is disabled.
+  - By default, checkpoint-kick maintenance skips starting a fresh rewrite plan while foreground activity is hot and rewrite queue debt is empty.
+  - Queued rewrite debt and deferred-due passes still run.
+  - Set this disable knob only for controlled rollback experiments that need the legacy checkpoint-kick fresh-plan behavior.
 - Optional debt-drain cap overrides (for controlled experiments):
   - `TREEDB_VLOG_GENERATION_REWRITE_RESUME_MAX_SEGMENTS`
   - `TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS`
