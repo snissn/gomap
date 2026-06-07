@@ -31,6 +31,7 @@ dev = [
 
 [project.urls]
 Source = "https://github.com/snissn/gomap"
+Documentation = "https://github.com/snissn/gomap/tree/main/clients/python/treedb_haystack"
 Issues = "https://github.com/snissn/gomap/issues"
 
 [tool.setuptools.packages.find]
