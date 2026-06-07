@@ -459,7 +459,7 @@ func TestCollectPublishedRootValueLogLiveIDsUntil_SkipsCurrentPublishedSystemDes
 	reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
 	err = db.collectPublishedRootValueLogLiveIDsUntil(context.Background(), backend.Pager(), reader, &publishedRootSet{
 		system: publishedRootRef{rootID: systemRootID},
-	}, state.RootPageID, state.SystemRootPageID, nil, map[uint32]struct{}{}, 0)
+	}, state.RootPageID, state.SystemRootPageID, nil, map[uint32]struct{}{}, 0, nil)
 	if err != nil {
 		t.Fatalf("collectPublishedRootValueLogLiveIDsUntil: %v", err)
 	}

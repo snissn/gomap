@@ -5031,11 +5031,76 @@ func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
 	return current > lastWrite
 }
 
+type retainedPruneStatus uint32
+
+const (
+	retainedPruneStatusNone retainedPruneStatus = iota
+	retainedPruneStatusRunning
+	retainedPruneStatusCompleted
+	retainedPruneStatusNoCandidates
+	retainedPruneStatusForegroundAbort
+	retainedPruneStatusCloseAbort
+	retainedPruneStatusError
+)
+
+func retainedPruneStatusString(status uint32) string {
+	switch retainedPruneStatus(status) {
+	case retainedPruneStatusRunning:
+		return "running"
+	case retainedPruneStatusCompleted:
+		return "completed"
+	case retainedPruneStatusNoCandidates:
+		return "no_candidates"
+	case retainedPruneStatusForegroundAbort:
+		return "foreground_abort"
+	case retainedPruneStatusCloseAbort:
+		return "close_abort"
+	case retainedPruneStatusError:
+		return "error"
+	default:
+		return "none"
+	}
+}
+
+type retainedPruneMode uint32
+
+const (
+	retainedPruneModeNone retainedPruneMode = iota
+	retainedPruneModeNoCandidates
+	retainedPruneModeObservedSourceFastPath
+	retainedPruneModeFullLiveIDScan
+)
+
+func retainedPruneModeString(mode uint32) string {
+	switch retainedPruneMode(mode) {
+	case retainedPruneModeNoCandidates:
+		return "no_candidates"
+	case retainedPruneModeObservedSourceFastPath:
+		return "observed_source_fast_path"
+	case retainedPruneModeFullLiveIDScan:
+		return "full_live_id_scan"
+	default:
+		return "none"
+	}
+}
+
+type valueLogLiveIDScanStats struct {
+	Records             int64
+	ValuePointerRecords int64
+	OuterLeafRecords    int64
+	OuterLeafBytes      int64
+	NestedValuePointers int64
+}
+
 func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 	return db.collectValueLogLiveIDsUntil(0)
 }
 
 func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{}, error) {
+	return db.collectValueLogLiveIDsUntilWithStats(lastWrite, nil)
+}
+
+func (db *DB) collectValueLogLiveIDsUntilWithStats(lastWrite int64, scanStats *valueLogLiveIDScanStats) (map[uint32]struct{}, error) {
 	if db == nil || !db.valueLogEnabled() {
 		return make(map[uint32]struct{}), nil
 	}
@@ -5066,13 +5131,13 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					return nil, err
 				}
 				if state.RootPageID != 0 {
-					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
+					if err := db.collectIteratorValueLogLiveIDsUntilWithStats(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite, scanStats); err != nil {
 						_ = snap.Close()
 						return nil, err
 					}
 				}
 				if state.SystemRootPageID != 0 {
-					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
+					if err := db.collectIteratorValueLogLiveIDsUntilWithStats(tree.New(p, reader, state.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite, scanStats); err != nil {
 						_ = snap.Close()
 						return nil, err
 					}
@@ -5099,7 +5164,7 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, err
 				}
-				if err := db.collectPublishedRootValueLogLiveIDsUntil(leafCtx, p, reader, publishedRoots, state.RootPageID, state.SystemRootPageID, maintenanceRootIDs, live, lastWrite); err != nil {
+				if err := db.collectPublishedRootValueLogLiveIDsUntil(leafCtx, p, reader, publishedRoots, state.RootPageID, state.SystemRootPageID, maintenanceRootIDs, live, lastWrite, scanStats); err != nil {
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
@@ -5126,14 +5191,14 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 	if err != nil {
 		return nil, err
 	}
-	if err := db.collectIteratorValueLogLiveIDsUntil(it, live, lastWrite); err != nil {
+	if err := db.collectIteratorValueLogLiveIDsUntilWithStats(it, live, lastWrite, scanStats); err != nil {
 		return nil, err
 	}
 
 	return live, nil
 }
 
-func (db *DB) collectPublishedRootValueLogLiveIDsUntil(ctx context.Context, p *pager.Pager, reader tree.SlabReader, published *publishedRootSet, userRootID, systemRootID uint64, maintenanceRootIDs []uint64, live map[uint32]struct{}, lastWrite int64) error {
+func (db *DB) collectPublishedRootValueLogLiveIDsUntil(ctx context.Context, p *pager.Pager, reader tree.SlabReader, published *publishedRootSet, userRootID, systemRootID uint64, maintenanceRootIDs []uint64, live map[uint32]struct{}, lastWrite int64, scanStats *valueLogLiveIDScanStats) error {
 	if db == nil || p == nil || reader == nil || live == nil {
 		return nil
 	}
@@ -5150,7 +5215,7 @@ func (db *DB) collectPublishedRootValueLogLiveIDsUntil(ctx context.Context, p *p
 			return nil
 		}
 		seenRoots[rootID] = struct{}{}
-		if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, rootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
+		if err := db.collectIteratorValueLogLiveIDsUntilWithStats(tree.New(p, reader, rootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite, scanStats); err != nil {
 			return err
 		}
 		if db.foregroundWritesResumedSince(lastWrite) {
@@ -5195,6 +5260,10 @@ func (db *DB) collectIteratorValueLogLiveIDs(it iterator.UnsafeIterator, live ma
 }
 
 func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, live map[uint32]struct{}, lastWrite int64) error {
+	return db.collectIteratorValueLogLiveIDsUntilWithStats(it, live, lastWrite, nil)
+}
+
+func (db *DB) collectIteratorValueLogLiveIDsUntilWithStats(it iterator.UnsafeIterator, live map[uint32]struct{}, lastWrite int64, scanStats *valueLogLiveIDScanStats) error {
 	if it == nil {
 		return nil
 	}
@@ -5205,10 +5274,16 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 		if seen > 0 && seen&foregroundWriteResumeCheckMask == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
 		}
+		if scanStats != nil {
+			scanStats.Records++
+		}
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
-			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live, &outerLeafReadScratch); err != nil {
+			if scanStats != nil {
+				scanStats.ValuePointerRecords++
+			}
+			if err := db.collectNestedValueLogLiveIDsFromOuterLeafWithStats(ptr, live, &outerLeafReadScratch, scanStats); err != nil {
 				return err
 			}
 		}
@@ -5227,6 +5302,10 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 const nestedOuterLeafReadScratchDefaultCap = 64 << 10
 
 func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live map[uint32]struct{}, readScratch *[]byte) error {
+	return db.collectNestedValueLogLiveIDsFromOuterLeafWithStats(ptr, live, readScratch, nil)
+}
+
+func (db *DB) collectNestedValueLogLiveIDsFromOuterLeafWithStats(ptr page.ValuePtr, live map[uint32]struct{}, readScratch *[]byte, scanStats *valueLogLiveIDScanStats) error {
 	if db == nil || len(live) == 0 || db.valueLogReader == nil {
 		return nil
 	}
@@ -5258,6 +5337,10 @@ func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live 
 	if !outerleaf.HasMagic(raw) {
 		return nil
 	}
+	if scanStats != nil {
+		scanStats.OuterLeafRecords++
+		scanStats.OuterLeafBytes += int64(len(raw))
+	}
 	block, err := outerleaf.DecodeBlockLeaseWithVerify(raw, false)
 	if err != nil {
 		return nil
@@ -5279,6 +5362,9 @@ func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live 
 			return fmt.Errorf("cachingdb: invalid nested blob pointer file %d", typed[i].BlobPtr.FileID)
 		}
 		live[typed[i].BlobPtr.FileID] = struct{}{}
+		if scanStats != nil {
+			scanStats.NestedValuePointers++
+		}
 	}
 	return nil
 }
@@ -5366,15 +5452,149 @@ type retainedValueLogPruneStats struct {
 	ObservedSourceParseSkippedBytes    int64
 	ObservedSourceZombieMarkedSegments int
 	ObservedSourceZombieMarkedBytes    int64
+	Mode                               retainedPruneMode
+	ScanStats                          valueLogLiveIDScanStats
+	ElapsedNanos                       int64
 	AbortedForegroundWrites            bool
+	ScanError                          bool
 	RetriedWithoutWriteGate            bool
 	RetrySucceeded                     bool
+}
+
+func retainedPruneStatusForStats(pruneStats retainedValueLogPruneStats) retainedPruneStatus {
+	if pruneStats.AbortedForegroundWrites {
+		return retainedPruneStatusForegroundAbort
+	}
+	if pruneStats.ScanError {
+		return retainedPruneStatusError
+	}
+	if pruneStats.Mode == retainedPruneModeNoCandidates {
+		return retainedPruneStatusNoCandidates
+	}
+	return retainedPruneStatusCompleted
+}
+
+func (db *DB) observeRetainedValueLogPruneStart(force bool, observedSourceIDs int, inline bool, start time.Time) {
+	if db == nil {
+		return
+	}
+	db.retainedValueLogPruneLastStatus.Store(uint32(retainedPruneStatusRunning))
+	db.retainedValueLogPruneLastMode.Store(uint32(retainedPruneModeNone))
+	db.retainedValueLogPruneLastForce.Store(force)
+	db.retainedValueLogPruneLastStartUnixNano.Store(start.UnixNano())
+	db.retainedValueLogPruneLastElapsedNanos.Store(0)
+	db.retainedValueLogPruneLastScanRecords.Store(0)
+	db.retainedValueLogPruneLastScanValuePointerRecords.Store(0)
+	db.retainedValueLogPruneLastScanOuterLeafRecords.Store(0)
+	db.retainedValueLogPruneLastScanOuterLeafBytes.Store(0)
+	db.retainedValueLogPruneLastScanNestedValuePointers.Store(0)
+	db.debugVlogMaintf(
+		"retained_prune_start force=%t inline=%t observed_source_ids=%d closed_bytes=%d pressure_bytes=%d",
+		force,
+		inline,
+		observedSourceIDs,
+		db.valueLogRetainedClosedBytes.Load(),
+		db.retainedPrunePressureBytes(),
+	)
+}
+
+func (db *DB) observeRetainedValueLogPruneCloseAbort(force bool, inline bool, elapsed time.Duration) {
+	if db == nil {
+		return
+	}
+	db.retainedValueLogPruneLastStatus.Store(uint32(retainedPruneStatusCloseAbort))
+	db.retainedValueLogPruneLastMode.Store(uint32(retainedPruneModeNone))
+	db.retainedValueLogPruneLastForce.Store(force)
+	db.retainedValueLogPruneLastElapsedNanos.Store(int64(elapsed))
+	db.retainedValueLogPruneCloseAbortRuns.Add(1)
+	if elapsed > 0 {
+		observeDurationNanos(&db.retainedValueLogPruneTotalNanos, &db.retainedValueLogPruneMaxNanos, elapsed)
+	}
+	db.debugVlogMaintf("retained_prune_abort reason=close force=%t inline=%t elapsed_ms=%.3f", force, inline, float64(elapsed)/float64(time.Millisecond))
 }
 
 func (db *DB) observeRetainedValueLogPruneStats(pruneStats retainedValueLogPruneStats) {
 	if db == nil {
 		return
 	}
+	status := retainedPruneStatusForStats(pruneStats)
+	db.retainedValueLogPruneLastStatus.Store(uint32(status))
+	db.retainedValueLogPruneLastMode.Store(uint32(pruneStats.Mode))
+	if pruneStats.ElapsedNanos > 0 {
+		db.retainedValueLogPruneLastElapsedNanos.Store(pruneStats.ElapsedNanos)
+		observeDurationNanos(&db.retainedValueLogPruneTotalNanos, &db.retainedValueLogPruneMaxNanos, time.Duration(pruneStats.ElapsedNanos))
+	} else {
+		db.retainedValueLogPruneLastElapsedNanos.Store(0)
+	}
+	db.retainedValueLogPruneLastScanRecords.Store(pruneStats.ScanStats.Records)
+	db.retainedValueLogPruneLastScanValuePointerRecords.Store(pruneStats.ScanStats.ValuePointerRecords)
+	db.retainedValueLogPruneLastScanOuterLeafRecords.Store(pruneStats.ScanStats.OuterLeafRecords)
+	db.retainedValueLogPruneLastScanOuterLeafBytes.Store(pruneStats.ScanStats.OuterLeafBytes)
+	db.retainedValueLogPruneLastScanNestedValuePointers.Store(pruneStats.ScanStats.NestedValuePointers)
+	if status != retainedPruneStatusForegroundAbort && status != retainedPruneStatusCloseAbort && status != retainedPruneStatusError {
+		db.retainedValueLogPruneCompletedRuns.Add(1)
+	}
+	if status == retainedPruneStatusError {
+		db.retainedValueLogPruneErrorRuns.Add(1)
+	}
+	if pruneStats.Mode == retainedPruneModeNoCandidates {
+		db.retainedValueLogPruneNoCandidateRuns.Add(1)
+	}
+	if pruneStats.Mode == retainedPruneModeObservedSourceFastPath {
+		db.retainedValueLogPruneObservedSourceFastPathRuns.Add(1)
+	}
+	if pruneStats.Mode == retainedPruneModeFullLiveIDScan {
+		db.retainedValueLogPruneFullLiveIDScanRuns.Add(1)
+	}
+	if pruneStats.ScanStats.Records > 0 {
+		db.retainedValueLogPruneScanRecordsTotal.Add(uint64(pruneStats.ScanStats.Records))
+	}
+	if pruneStats.ScanStats.ValuePointerRecords > 0 {
+		db.retainedValueLogPruneScanValuePointerRecordsTotal.Add(uint64(pruneStats.ScanStats.ValuePointerRecords))
+	}
+	if pruneStats.ScanStats.OuterLeafRecords > 0 {
+		db.retainedValueLogPruneScanOuterLeafRecordsTotal.Add(uint64(pruneStats.ScanStats.OuterLeafRecords))
+	}
+	if pruneStats.ScanStats.OuterLeafBytes > 0 {
+		db.retainedValueLogPruneScanOuterLeafBytesTotal.Add(uint64(pruneStats.ScanStats.OuterLeafBytes))
+	}
+	if pruneStats.ScanStats.NestedValuePointers > 0 {
+		db.retainedValueLogPruneScanNestedValuePointersTotal.Add(uint64(pruneStats.ScanStats.NestedValuePointers))
+	}
+	debugEvent := "end"
+	debugReason := "none"
+	if status == retainedPruneStatusForegroundAbort || status == retainedPruneStatusError {
+		debugEvent = "abort"
+		debugReason = retainedPruneStatusString(uint32(status))
+	}
+	db.debugVlogMaintf(
+		"retained_prune_%s reason=%s status=%s mode=%s force=%t elapsed_ms=%.3f candidates=%d candidate_bytes=%d removed_segments=%d removed_bytes=%d zombie_marked_segments=%d zombie_marked_bytes=%d live_skipped_segments=%d live_skipped_bytes=%d in_use_skipped_segments=%d parse_skipped_segments=%d observed_source_segments=%d observed_source_candidate_segments=%d observed_source_removed_segments=%d observed_source_zombie_marked_segments=%d scan_records=%d scan_value_pointer_records=%d scan_outer_leaf_records=%d scan_outer_leaf_bytes=%d scan_nested_value_pointers=%d",
+		debugEvent,
+		debugReason,
+		retainedPruneStatusString(uint32(status)),
+		retainedPruneModeString(uint32(pruneStats.Mode)),
+		db.retainedValueLogPruneLastForce.Load(),
+		float64(pruneStats.ElapsedNanos)/float64(time.Millisecond),
+		pruneStats.CandidateSegments,
+		pruneStats.CandidateBytes,
+		pruneStats.RemovedSegments,
+		pruneStats.RemovedBytes,
+		pruneStats.ZombieMarkedSegments,
+		pruneStats.ZombieMarkedBytes,
+		pruneStats.LiveSkippedSegments,
+		pruneStats.LiveSkippedBytes,
+		pruneStats.InUseSkippedSegments,
+		pruneStats.ParseSkippedSegments,
+		pruneStats.ObservedSourceSegments,
+		pruneStats.ObservedSourceCandidateSegments,
+		pruneStats.ObservedSourceRemovedSegments,
+		pruneStats.ObservedSourceZombieMarkedSegments,
+		pruneStats.ScanStats.Records,
+		pruneStats.ScanStats.ValuePointerRecords,
+		pruneStats.ScanStats.OuterLeafRecords,
+		pruneStats.ScanStats.OuterLeafBytes,
+		pruneStats.ScanStats.NestedValuePointers,
+	)
 	db.retainedValueLogPruneLastObservedSourceSegments.Store(int64(pruneStats.ObservedSourceSegments))
 	db.retainedValueLogPruneLastObservedSourceBytes.Store(pruneStats.ObservedSourceBytes)
 	db.retainedValueLogPruneLastObservedSourceCandidateSegments.Store(int64(pruneStats.ObservedSourceCandidateSegments))
@@ -5509,6 +5729,7 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 	}
 	paths := db.valueOnlyLogPaths(db.valueLogRetainedPaths())
 	if len(paths) == 0 {
+		out.Mode = retainedPruneModeNoCandidates
 		return out
 	}
 
@@ -5580,6 +5801,7 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 		candidatePaths = append(candidatePaths, candidate)
 	}
 	if len(candidatePaths) == 0 {
+		out.Mode = retainedPruneModeNoCandidates
 		return out
 	}
 
@@ -5589,6 +5811,7 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 	// classified them as retained-protected blockers). In that case, prune only
 	// the observed IDs and avoid an expensive full pointer scan.
 	if force && len(observedSourceIDs) > 0 {
+		out.Mode = retainedPruneModeObservedSourceFastPath
 		removed := false
 		marked := false
 		for _, candidate := range candidatePaths {
@@ -5685,12 +5908,14 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 		return out
 	}
 
-	liveIDs, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
+	out.Mode = retainedPruneModeFullLiveIDScan
+	liveIDs, err := db.collectValueLogLiveIDsUntilWithStats(db.lastForegroundWriteUnixNano.Load(), &out.ScanStats)
 	if err != nil {
 		if errors.Is(err, errForegroundWritesResumed) {
 			out.AbortedForegroundWrites = true
 			return out
 		}
+		out.ScanError = true
 		db.reportError(fmt.Errorf("cachingdb: failed to scan value-log pointers: %w", err))
 		return out
 	}
@@ -6161,6 +6386,7 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 	if db.closing.Load() {
 		db.retainedValueLogPruneScheduleSkipClosing.Add(1)
 		db.retainedPruneMu.Unlock()
+		db.observeRetainedValueLogPruneCloseAbort(force, false, 0)
 		return
 	}
 	if db.retainedPruneDone != nil {
@@ -6224,6 +6450,7 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		for db.checkpointing.Load() || db.maintenanceActive.Load() {
 			if db.closing.Load() {
 				db.checkpointMu.Unlock()
+				db.observeRetainedValueLogPruneCloseAbort(effectiveForce, false, 0)
 				return
 			}
 			db.checkpointCond.Wait()
@@ -6246,7 +6473,9 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		}
 		db.retainedValueLogPruneLastUnixNano.Store(now.UnixNano())
 		observedSourceIDs := db.takeRetainedPruneObservedSourceIDs()
+		db.observeRetainedValueLogPruneStart(effectiveForce, len(observedSourceIDs), false, now)
 		pruneStats := db.pruneRetainedValueLogsWithObserved(effectiveForce, observedSourceIDs)
+		pruneStats.ElapsedNanos = time.Since(now).Nanoseconds()
 		db.observeRetainedValueLogPruneStats(pruneStats)
 		if len(observedSourceIDs) > 0 && (pruneStats.ObservedSourceZombieMarkedSegments > 0 || pruneStats.ObservedSourceRemovedSegments > 0) {
 			// When a retained prune processes rewrite-observed source segments,
@@ -6296,7 +6525,12 @@ func (db *DB) runRetainedValueLogPruneInline(force bool, observedSourceIDs map[u
 		return out, false
 	}
 	db.retainedPruneMu.Lock()
-	if db.closing.Load() || db.retainedPruneDone != nil {
+	if db.closing.Load() {
+		db.retainedPruneMu.Unlock()
+		db.observeRetainedValueLogPruneCloseAbort(force, true, 0)
+		return out, false
+	}
+	if db.retainedPruneDone != nil {
 		db.retainedPruneMu.Unlock()
 		return out, false
 	}
@@ -6321,7 +6555,9 @@ func (db *DB) runRetainedValueLogPruneInline(force bool, observedSourceIDs map[u
 		db.retainedValueLogPruneForcedRuns.Add(1)
 	}
 	db.retainedValueLogPruneLastUnixNano.Store(nowPrune.UnixNano())
+	db.observeRetainedValueLogPruneStart(force, len(observedSourceIDs), true, nowPrune)
 	out = db.pruneRetainedValueLogsWithObserved(force, observedSourceIDs)
+	out.ElapsedNanos = time.Since(nowPrune).Nanoseconds()
 	db.observeRetainedValueLogPruneStats(out)
 	return out, true
 }
@@ -7275,9 +7511,32 @@ type DB struct {
 	activeForegroundIterators                                    atomic.Int64
 	retainedPruneLastStartUnixNano                               atomic.Int64
 	retainedValueLogPruneLastUnixNano                            atomic.Int64
+	retainedValueLogPruneLastStatus                              atomic.Uint32
+	retainedValueLogPruneLastMode                                atomic.Uint32
+	retainedValueLogPruneLastForce                               atomic.Bool
+	retainedValueLogPruneLastStartUnixNano                       atomic.Int64
+	retainedValueLogPruneLastElapsedNanos                        atomic.Int64
+	retainedValueLogPruneTotalNanos                              atomic.Uint64
+	retainedValueLogPruneMaxNanos                                atomic.Uint64
 	retainedValueLogPruneRuns                                    atomic.Uint64
 	retainedValueLogPruneForcedRuns                              atomic.Uint64
+	retainedValueLogPruneCompletedRuns                           atomic.Uint64
+	retainedValueLogPruneNoCandidateRuns                         atomic.Uint64
+	retainedValueLogPruneObservedSourceFastPathRuns              atomic.Uint64
+	retainedValueLogPruneFullLiveIDScanRuns                      atomic.Uint64
+	retainedValueLogPruneErrorRuns                               atomic.Uint64
+	retainedValueLogPruneCloseAbortRuns                          atomic.Uint64
 	retainedValueLogPruneForegroundAbortRuns                     atomic.Uint64
+	retainedValueLogPruneLastScanRecords                         atomic.Int64
+	retainedValueLogPruneLastScanValuePointerRecords             atomic.Int64
+	retainedValueLogPruneLastScanOuterLeafRecords                atomic.Int64
+	retainedValueLogPruneLastScanOuterLeafBytes                  atomic.Int64
+	retainedValueLogPruneLastScanNestedValuePointers             atomic.Int64
+	retainedValueLogPruneScanRecordsTotal                        atomic.Uint64
+	retainedValueLogPruneScanValuePointerRecordsTotal            atomic.Uint64
+	retainedValueLogPruneScanOuterLeafRecordsTotal               atomic.Uint64
+	retainedValueLogPruneScanOuterLeafBytesTotal                 atomic.Uint64
+	retainedValueLogPruneScanNestedValuePointersTotal            atomic.Uint64
 	retainedValueLogPruneRemovedSegments                         atomic.Uint64
 	retainedValueLogPruneRemovedBytes                            atomic.Uint64
 	retainedValueLogPruneInUseSkippedSegments                    atomic.Uint64
@@ -26731,11 +26990,40 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.process.memory.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
+	db.retainedPruneMu.Lock()
+	retainedPruneInflight := db.retainedPruneDone != nil
+	retainedPruneActive := db.retainedPruneRunningDone != nil
+	db.retainedPruneMu.Unlock()
 	stats["treedb.cache.vlog_retained_prune.closed_bytes"] = fmt.Sprintf("%d", db.valueLogRetainedClosedBytes.Load())
 	stats["treedb.cache.vlog_retained_prune.last_unix_nano"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastUnixNano.Load())
+	stats["treedb.cache.vlog_retained_prune.last_start_unix_nano"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastStartUnixNano.Load())
+	stats["treedb.cache.vlog_retained_prune.last_status"] = retainedPruneStatusString(db.retainedValueLogPruneLastStatus.Load())
+	stats["treedb.cache.vlog_retained_prune.last_mode"] = retainedPruneModeString(db.retainedValueLogPruneLastMode.Load())
+	stats["treedb.cache.vlog_retained_prune.last_force"] = fmt.Sprintf("%t", db.retainedValueLogPruneLastForce.Load())
+	stats["treedb.cache.vlog_retained_prune.active"] = fmt.Sprintf("%t", retainedPruneActive)
+	stats["treedb.cache.vlog_retained_prune.inflight"] = fmt.Sprintf("%t", retainedPruneInflight)
+	stats["treedb.cache.vlog_retained_prune.last_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneLastElapsedNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.vlog_retained_prune.total_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneTotalNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.vlog_retained_prune.max_elapsed_ms"] = fmt.Sprintf("%.3f", float64(db.retainedValueLogPruneMaxNanos.Load())/float64(time.Millisecond))
 	stats["treedb.cache.vlog_retained_prune.runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneRuns.Load())
 	stats["treedb.cache.vlog_retained_prune.forced_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneForcedRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.completed_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneCompletedRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.no_candidate_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneNoCandidateRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.observed_source_fast_path_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneObservedSourceFastPathRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.full_live_id_scan_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneFullLiveIDScanRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.error_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneErrorRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.close_abort_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneCloseAbortRuns.Load())
 	stats["treedb.cache.vlog_retained_prune.foreground_abort_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneForegroundAbortRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.last_scan.records"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastScanRecords.Load())
+	stats["treedb.cache.vlog_retained_prune.last_scan.value_pointer_records"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastScanValuePointerRecords.Load())
+	stats["treedb.cache.vlog_retained_prune.last_scan.outer_leaf_records"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastScanOuterLeafRecords.Load())
+	stats["treedb.cache.vlog_retained_prune.last_scan.outer_leaf_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastScanOuterLeafBytes.Load())
+	stats["treedb.cache.vlog_retained_prune.last_scan.nested_value_pointers"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastScanNestedValuePointers.Load())
+	stats["treedb.cache.vlog_retained_prune.scan.records_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneScanRecordsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.scan.value_pointer_records_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneScanValuePointerRecordsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.scan.outer_leaf_records_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneScanOuterLeafRecordsTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.scan.outer_leaf_bytes_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneScanOuterLeafBytesTotal.Load())
+	stats["treedb.cache.vlog_retained_prune.scan.nested_value_pointers_total"] = fmt.Sprintf("%d", db.retainedValueLogPruneScanNestedValuePointersTotal.Load())
 	stats["treedb.cache.vlog_retained_prune.removed_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneRemovedSegments.Load())
 	stats["treedb.cache.vlog_retained_prune.removed_bytes"] = fmt.Sprintf("%d", db.retainedValueLogPruneRemovedBytes.Load())
 	stats["treedb.cache.vlog_retained_prune.in_use_skipped_segments"] = fmt.Sprintf("%d", db.retainedValueLogPruneInUseSkippedSegments.Load())
