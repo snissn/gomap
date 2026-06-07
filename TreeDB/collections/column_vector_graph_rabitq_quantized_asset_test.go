@@ -1259,7 +1259,7 @@ func openColumnGraphRabitQQuantizedBenchCollection2450(tb testing.TB, shape colu
 		tb.Fatalf("OpenCollection: %v", err)
 	}
 	rows := columnGraphRebuildSyntheticRowsV2A(shape.rows, shape.dims)
-	insertColumnGraphRebuildRowsV2A(tb, col, rows)
+	insertColumnGraphScalarU8QuantizedBenchRows1926(tb, col, shape, rows)
 	return dir, d, col, def, rows
 }
 

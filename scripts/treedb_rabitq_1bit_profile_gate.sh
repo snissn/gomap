@@ -5,11 +5,18 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 RUN_DIR="${RUN_DIR:-/tmp/gomap_rabitq_1bit_profile_gate_$(date +%Y%m%d_%H%M%S)}"
+SHAPE="${SHAPE:-1024x128}"
+BENCH_ROWS="${BENCH_ROWS:-}"
+BENCH_DIMS="${BENCH_DIMS:-}"
+BENCH_M="${BENCH_M:-16}"
+BENCH_TOP_K="${BENCH_TOP_K:-10}"
+BENCH_EF_SEARCH="${BENCH_EF_SEARCH:-128}"
+BENCH_QUERY_ORDINAL="${BENCH_QUERY_ORDINAL:-37}"
 ROWS="${ROWS:-claim_core}"
 PROFILE_ROWS="${PROFILE_ROWS:-rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8}"
-BENCHTIME="${BENCHTIME:-100000x}"
-TIMING_BENCHTIME="${TIMING_BENCHTIME:-$BENCHTIME}"
-PROFILE_BENCHTIME="${PROFILE_BENCHTIME:-$BENCHTIME}"
+BENCHTIME="${BENCHTIME:-}"
+TIMING_BENCHTIME="${TIMING_BENCHTIME:-}"
+PROFILE_BENCHTIME="${PROFILE_BENCHTIME:-}"
 TIMING_COUNT="${TIMING_COUNT:-5}"
 PROFILE_COUNT="${PROFILE_COUNT:-1}"
 RUN_TIMING="${RUN_TIMING:-true}"
@@ -44,6 +51,99 @@ quote_cmd() {
 		first=0
 	done
 	printf '\n'
+}
+
+parse_shape_token() {
+	local raw=$1
+	local normalized rows rows_suffix dims dims_suffix
+	normalized=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+	normalized=${normalized//_x_/x}
+	normalized=${normalized//_/}
+	case "$normalized" in
+		""|default|claimcore)
+			printf '1024 128\n'
+			return 0
+			;;
+	esac
+	if [[ "$normalized" =~ ^([0-9]+)(k?)x([0-9]+)(k?)$ ]]; then
+		rows=${BASH_REMATCH[1]}
+		rows_suffix=${BASH_REMATCH[2]}
+		dims=${BASH_REMATCH[3]}
+		dims_suffix=${BASH_REMATCH[4]}
+		if [[ "$rows_suffix" == "k" ]]; then
+			rows=$((rows * 1000))
+		fi
+		if [[ "$dims_suffix" == "k" ]]; then
+			dims=$((dims * 1000))
+		fi
+		printf '%s %s\n' "$rows" "$dims"
+		return 0
+	fi
+	printf 'unsupported SHAPE=%q (want default, 1024x128, 10k_x_1536, or <rows>x<dims>)\n' "$raw" >&2
+	return 2
+}
+
+require_positive_int() {
+	local name=$1 value=$2
+	if ! [[ "$value" =~ ^[0-9]+$ ]] || ((value <= 0)); then
+		printf '%s=%q must be a positive integer\n' "$name" "$value" >&2
+		return 2
+	fi
+}
+
+require_nonnegative_int() {
+	local name=$1 value=$2
+	if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+		printf '%s=%q must be a non-negative integer\n' "$name" "$value" >&2
+		return 2
+	fi
+}
+
+resolve_bench_shape() {
+	local parsed shape_rows shape_dims
+	parsed=$(parse_shape_token "$SHAPE")
+	read -r shape_rows shape_dims <<<"$parsed"
+	BENCH_ROWS="${BENCH_ROWS:-$shape_rows}"
+	BENCH_DIMS="${BENCH_DIMS:-$shape_dims}"
+	require_positive_int BENCH_ROWS "$BENCH_ROWS"
+	require_positive_int BENCH_DIMS "$BENCH_DIMS"
+	require_positive_int BENCH_M "$BENCH_M"
+	require_positive_int BENCH_TOP_K "$BENCH_TOP_K"
+	require_positive_int BENCH_EF_SEARCH "$BENCH_EF_SEARCH"
+	require_nonnegative_int BENCH_QUERY_ORDINAL "$BENCH_QUERY_ORDINAL"
+	if ((BENCH_TOP_K > BENCH_ROWS)); then
+		printf 'BENCH_TOP_K=%s exceeds BENCH_ROWS=%s\n' "$BENCH_TOP_K" "$BENCH_ROWS" >&2
+		return 2
+	fi
+	if ((BENCH_QUERY_ORDINAL >= BENCH_ROWS)); then
+		printf 'BENCH_QUERY_ORDINAL=%s out of range for BENCH_ROWS=%s\n' "$BENCH_QUERY_ORDINAL" "$BENCH_ROWS" >&2
+		return 2
+	fi
+	if [[ "$BENCH_ROWS" == "10000" && "$BENCH_DIMS" == "1536" ]]; then
+		SHAPE_LABEL=10k_x_1536
+	else
+		SHAPE_LABEL="${BENCH_ROWS}x${BENCH_DIMS}"
+	fi
+	if [[ -z "$BENCHTIME" ]]; then
+		if [[ "$SHAPE_LABEL" == "10k_x_1536" ]]; then
+			BENCHTIME=1000x
+		else
+			BENCHTIME=100000x
+		fi
+	fi
+	TIMING_BENCHTIME="${TIMING_BENCHTIME:-$BENCHTIME}"
+	PROFILE_BENCHTIME="${PROFILE_BENCHTIME:-$BENCHTIME}"
+}
+
+write_go_test_env_prefix() {
+	printf 'GOMAXPROCS=%q GOWORK=%q ' "$GOMAXPROCS_VALUE" "$GOWORK_VALUE"
+	printf 'TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_SHAPE=%q ' "$SHAPE"
+	printf 'TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_ROWS=%q ' "$BENCH_ROWS"
+	printf 'TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_DIMS=%q ' "$BENCH_DIMS"
+	printf 'TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_M=%q ' "$BENCH_M"
+	printf 'TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_TOP_K=%q ' "$BENCH_TOP_K"
+	printf 'TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_EF_SEARCH=%q ' "$BENCH_EF_SEARCH"
+	printf 'TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_QUERY_ORDINAL=%q ' "$BENCH_QUERY_ORDINAL"
 }
 
 write_pprof_top() {
@@ -134,6 +234,8 @@ selected_by_list() {
 	return 1
 }
 
+resolve_bench_shape
+
 write_context() {
 	local dest=$1
 	{
@@ -151,6 +253,9 @@ write_context() {
 		printf '\n'
 		printf 'GOMAXPROCS: %s\n' "$GOMAXPROCS_VALUE"
 		printf 'GOWORK: %s\n' "$GOWORK_VALUE"
+		printf 'shape: %s\n' "$SHAPE_LABEL"
+		printf 'shape_selector: %s\n' "$SHAPE"
+		printf 'fixture: rows=%s dims=%s m=%s topK=%s efSearch=%s queryOrdinal=%s\n' "$BENCH_ROWS" "$BENCH_DIMS" "$BENCH_M" "$BENCH_TOP_K" "$BENCH_EF_SEARCH" "$BENCH_QUERY_ORDINAL"
 		printf 'rows: %s\n' "$ROWS"
 		printf 'profile_rows: %s\n' "$PROFILE_ROWS"
 		printf 'timing: enabled=%s benchtime=%s count=%s\n' "$RUN_TIMING" "$TIMING_BENCHTIME" "$TIMING_COUNT"
@@ -173,7 +278,16 @@ write_context() {
 run_go_test() {
 	local outfile=$1
 	shift
-	GOMAXPROCS="$GOMAXPROCS_VALUE" GOWORK="$GOWORK_VALUE" "$@" 2>&1 | tee "$outfile"
+	GOMAXPROCS="$GOMAXPROCS_VALUE" \
+		GOWORK="$GOWORK_VALUE" \
+		TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_SHAPE="$SHAPE" \
+		TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_ROWS="$BENCH_ROWS" \
+		TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_DIMS="$BENCH_DIMS" \
+		TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_M="$BENCH_M" \
+		TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_TOP_K="$BENCH_TOP_K" \
+		TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_EF_SEARCH="$BENCH_EF_SEARCH" \
+		TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_QUERY_ORDINAL="$BENCH_QUERY_ORDINAL" \
+		"$@" 2>&1 | tee "$outfile"
 }
 
 run_row() {
@@ -210,18 +324,25 @@ run_row() {
 		printf 'profile_selected=%s\n' "$profile_selected"
 		printf 'profile_captured=%s\n' "$profile_captured"
 		printf 'bench_regex=%s\n' "$bench_regex"
-		printf 'fixture=1024 rows / 128 dims / topK=10 / efSearch=128 / queryOrdinal=37\n'
+		printf 'shape=%s\n' "$SHAPE_LABEL"
+		printf 'fixture_rows=%s\n' "$BENCH_ROWS"
+		printf 'fixture_dims=%s\n' "$BENCH_DIMS"
+		printf 'fixture_m=%s\n' "$BENCH_M"
+		printf 'fixture_top_k=%s\n' "$BENCH_TOP_K"
+		printf 'fixture_ef_search=%s\n' "$BENCH_EF_SEARCH"
+		printf 'fixture_query_ordinal=%s\n' "$BENCH_QUERY_ORDINAL"
+		printf 'fixture=%s rows / %s dims / topK=%s / efSearch=%s / queryOrdinal=%s\n' "$BENCH_ROWS" "$BENCH_DIMS" "$BENCH_TOP_K" "$BENCH_EF_SEARCH" "$BENCH_QUERY_ORDINAL"
 	} >"$row_dir/row.env"
 
 	local timing_cmd=(go test ./TreeDB/collections -run '^$' -bench "$bench_regex" -benchmem -benchtime "$TIMING_BENCHTIME" -count "$TIMING_COUNT")
 	local profile_cmd=(go test ./TreeDB/collections -run '^$' -bench "$bench_regex" -benchmem -benchtime "$PROFILE_BENCHTIME" -count "$PROFILE_COUNT" -o "$test_binary" -cpuprofile "$cpu_profile" -memprofile "$alloc_profile" -blockprofile "$block_profile" -mutexprofile "$mutex_profile")
 
 	{
-		printf 'GOMAXPROCS=%q GOWORK=%q ' "$GOMAXPROCS_VALUE" "$GOWORK_VALUE"
+		write_go_test_env_prefix
 		quote_cmd "${timing_cmd[@]}"
 	} >"$row_dir/command_timing.txt"
 	{
-		printf 'GOMAXPROCS=%q GOWORK=%q ' "$GOMAXPROCS_VALUE" "$GOWORK_VALUE"
+		write_go_test_env_prefix
 		quote_cmd "${profile_cmd[@]}"
 	} >"$row_dir/command_profile.txt"
 
@@ -273,7 +394,7 @@ run_row() {
 - concurrency: \`$concurrency\`
 - rerank candidates: \`$rerank_candidates\`
 - benchmark regex: \`$bench_regex\`
-- fixture: 1024 rows / 128 dims / \`topK=10\` / \`efSearch=128\` / query ordinal 37
+- fixture: \`$SHAPE_LABEL\` ($BENCH_ROWS rows / $BENCH_DIMS dims / \`topK=$BENCH_TOP_K\` / \`efSearch=$BENCH_EF_SEARCH\` / query ordinal $BENCH_QUERY_ORDINAL)
 - timing command: \`$(tr '\n' ' ' <"$row_dir/command_timing.txt")\`
 - profile command: \`$(tr '\n' ' ' <"$row_dir/command_profile.txt")\`
 - profile selected: \`$profile_selected\`
@@ -358,9 +479,9 @@ fi
 write_context "$RUN_DIR/context.txt"
 
 {
-	printf 'row_id\tcodec\tlayer\tmode\tconcurrency\trerank_candidates\tprofile_selected\tbench_regex\n'
+	printf 'row_id\tcodec\tlayer\tmode\tconcurrency\trerank_candidates\tprofile_selected\tshape\tfixture_rows\tfixture_dims\tfixture_top_k\tfixture_ef_search\tbench_regex\n'
 	for i in "${!row_ids[@]}"; do
-		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${row_ids[$i]}" "${row_codecs[$i]}" "${row_layers[$i]}" "${row_modes[$i]}" "${row_concurrency[$i]}" "${row_rerank_candidates[$i]}" "${row_profile_selected[$i]}" "${row_regexes[$i]}"
+		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${row_ids[$i]}" "${row_codecs[$i]}" "${row_layers[$i]}" "${row_modes[$i]}" "${row_concurrency[$i]}" "${row_rerank_candidates[$i]}" "${row_profile_selected[$i]}" "$SHAPE_LABEL" "$BENCH_ROWS" "$BENCH_DIMS" "$BENCH_TOP_K" "$BENCH_EF_SEARCH" "${row_regexes[$i]}"
 	done
 } >"$RUN_DIR/matrix.tsv"
 
@@ -383,6 +504,10 @@ try:
 except ValueError:
     recall_tolerance_pct = 0.0
 metric_units = {
+    "rows",
+    "dims",
+    "top_k",
+    "ef_search",
     "ns/op",
     "ops/sec",
     "B/op",
@@ -529,8 +654,21 @@ def guardrail_status(meta, bench_rows, baseline_rows):
     checks.append(present_all_eq(bench_rows, "quantized_scorer_active/search", 1))
     checks.append(recall_guardrail_ok(bench_rows, baseline_rows))
 
-    expected_code_bytes = 16 if meta.get("codec") == "rabitq_1bit" else 128
-    checks.append(present_all_eq(bench_rows, "quantized_code_B/vector", expected_code_bytes))
+    try:
+        fixture_dims = int(meta.get("fixture_dims") or 0)
+    except ValueError:
+        fixture_dims = 0
+    if fixture_dims <= 0:
+        dims_median = median([row.get("dims") for row in bench_rows])
+        fixture_dims = int(dims_median or 0)
+    if meta.get("codec") == "rabitq_1bit":
+        code_dims = 1
+        while code_dims < fixture_dims:
+            code_dims *= 2
+        expected_code_bytes = (code_dims + 7) // 8
+    else:
+        expected_code_bytes = fixture_dims
+    checks.append(expected_code_bytes > 0 and present_all_eq(bench_rows, "quantized_code_B/vector", expected_code_bytes))
     checks.append(present_all(bench_rows, "quantized_asset_B/vector"))
 
     mode = meta.get("mode", "")
@@ -613,8 +751,8 @@ for row_id in selected_row_ids:
     summary_rows.append(out)
 
 fields = [
-    "row_id", "codec", "layer", "mode", "concurrency", "rerank_candidates", "profile_selected", "profile_captured", "source", "status", "guardrail_status",
-    "ns/op", "ops/sec", "B/op", "allocs/op", "recall_at_k_pct",
+    "row_id", "codec", "layer", "mode", "concurrency", "rerank_candidates", "profile_selected", "profile_captured", "shape", "fixture_rows", "fixture_dims", "source", "status", "guardrail_status",
+    "rows", "dims", "top_k", "ef_search", "ns/op", "ops/sec", "B/op", "allocs/op", "recall_at_k_pct",
     "docs_fetched/search", "vector_B/search", "norm_B/search", "quantized_code_B/search", "quantized_code_B/vector", "quantized_asset_B/vector",
     "quantized_rerank_candidates/search", "quantized_rerank_exact_score_calls/search", "prepared_score_calls/search",
     "graph_row_fallbacks/search", "typed_column_vector_fallbacks/search", "vector_scratch_decodes/search", "score_float64_fallbacks/search",
@@ -632,12 +770,13 @@ with open(os.path.join(root, "summary.md"), "w", encoding="utf-8") as out:
     out.write("# TreeDB rabitq_1bit profile gate summary\n\n")
     out.write("This report is generated from isolated benchmark subrows. ")
     out.write("Guardrail status checks allocation, document/materialization, fallback, asset-unavailable, route, recall, code-byte, and exact-read constraints from benchmark counters.\n\n")
-    out.write("| row | codec | layer | mode | c | ns/op | ops/sec | B/op | allocs/op | recall@K % | code B/search | code B/vector | asset B/vector | vector B/search | norm B/search | rerank exact calls/search | guardrails | profile captured |\n")
-    out.write("| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n")
+    out.write("| row | shape | codec | layer | mode | c | ns/op | ops/sec | B/op | allocs/op | recall@K % | code B/search | code B/vector | asset B/vector | vector B/search | norm B/search | rerank exact calls/search | guardrails | profile captured |\n")
+    out.write("| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n")
     for row in summary_rows:
         out.write(
-            "| {row_id} | {codec} | {layer} | {mode} | {c} | {ns} | {ops} | {bop} | {allocs} | {recall} | {code_search} | {code_vector} | {asset_vector} | {vec} | {norm} | {rerank} | {guard} | {profiled} |\n".format(
+            "| {row_id} | {shape} | {codec} | {layer} | {mode} | {c} | {ns} | {ops} | {bop} | {allocs} | {recall} | {code_search} | {code_vector} | {asset_vector} | {vec} | {norm} | {rerank} | {guard} | {profiled} |\n".format(
                 row_id=row.get("row_id", ""),
+                shape=row.get("shape", ""),
                 codec=row.get("codec", ""),
                 layer=row.get("layer", ""),
                 mode=row.get("mode", ""),
@@ -688,6 +827,7 @@ cat >"$RUN_DIR/README.md" <<EOF
 - commit: \`$(git rev-parse HEAD)\`
 - GOMAXPROCS: \`$GOMAXPROCS_VALUE\`
 - GOWORK: \`$GOWORK_VALUE\`
+- shape: \`$SHAPE_LABEL\` ($BENCH_ROWS rows / $BENCH_DIMS dims / topK=$BENCH_TOP_K / efSearch=$BENCH_EF_SEARCH / queryOrdinal=$BENCH_QUERY_ORDINAL)
 - selected rows: \`$ROWS\`
 - profile rows: \`$PROFILE_ROWS\`
 - timing: enabled=\`$RUN_TIMING\`, benchtime=\`$TIMING_BENCHTIME\`, count=\`$TIMING_COUNT\`
