@@ -190,12 +190,19 @@ func (acc *hybridFusionAccumulator) finalize(sourceOrder hybridFusionSourceOrder
 
 func (acc *hybridFusionAccumulator) includeContribution(contribution HybridSourceContribution, sourceOrder hybridFusionSourceOrder) {
 	acc.fusedScore += contribution.FusionScore
+	acc.contributionCount++
+
+	contributionSourceOrder := hybridFusionSourceOrderMissing
+	if rank, err := hybridFusionSourceRank(contribution.Source, sourceOrder); err == nil {
+		contributionSourceOrder = rank
+	}
 	if acc.bestRank == 0 || contribution.SourceRank < acc.bestRank {
 		acc.bestRank = contribution.SourceRank
+		acc.bestSourceOrder = contributionSourceOrder
+		return
 	}
-	acc.contributionCount++
-	if rank, err := hybridFusionSourceRank(contribution.Source, sourceOrder); err == nil && rank < acc.bestSourceOrder {
-		acc.bestSourceOrder = rank
+	if contribution.SourceRank == acc.bestRank && contributionSourceOrder < acc.bestSourceOrder {
+		acc.bestSourceOrder = contributionSourceOrder
 	}
 }
 

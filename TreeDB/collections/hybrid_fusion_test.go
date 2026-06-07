@@ -181,6 +181,35 @@ func TestHybridRRFFusionStableTiesSourceOrderAndIDBytes(t *testing.T) {
 	}
 }
 
+func TestHybridRRFFusionTieUsesBestRankedContributionSourceOrder(t *testing.T) {
+	candidates := []HybridSearchCandidate{
+		// The two documents have equal fused score, equal best rank, and equal
+		// contributing-source count. The source-order tie breaker must use the
+		// source that supplied the best-ranked contribution, not just the earliest
+		// source among all contributions.
+		hybridFusionCandidate("a-vector-best", HybridCandidateSourceVector, 1, 1, HybridScoreKindVectorSimilarity),
+		hybridFusionCandidate("a-vector-best", HybridCandidateSourceText, 2, 1, HybridScoreKindBM25),
+		hybridFusionCandidate("z-text-best", HybridCandidateSourceText, 1, 1, HybridScoreKindBM25),
+		hybridFusionCandidate("z-text-best", HybridCandidateSourceVector, 2, 1, HybridScoreKindVectorSimilarity),
+	}
+
+	results, _, err := FuseHybridSearchCandidates(candidates, HybridFusionOptions{}, 2)
+	if err != nil {
+		t.Fatalf("FuseHybridSearchCandidates default source order: %v", err)
+	}
+	if got := []string{string(results[0].ID), string(results[1].ID)}; got[0] != "z-text-best" || got[1] != "a-vector-best" {
+		t.Fatalf("default best-ranked source tie order=%v want text-best before vector-best", got)
+	}
+
+	results, _, err = FuseHybridSearchCandidates(candidates, HybridFusionOptions{SourceOrder: []HybridCandidateSource{HybridCandidateSourceVector, HybridCandidateSourceText}}, 2)
+	if err != nil {
+		t.Fatalf("FuseHybridSearchCandidates custom source order: %v", err)
+	}
+	if got := []string{string(results[0].ID), string(results[1].ID)}; got[0] != "a-vector-best" || got[1] != "z-text-best" {
+		t.Fatalf("custom best-ranked source tie order=%v want vector-best before text-best", got)
+	}
+}
+
 func TestHybridRRFFusionTopKAndCandidateBounds(t *testing.T) {
 	candidates := []HybridSearchCandidate{
 		hybridFusionCandidate("d1", HybridCandidateSourceText, 1, 1, HybridScoreKindBM25),
