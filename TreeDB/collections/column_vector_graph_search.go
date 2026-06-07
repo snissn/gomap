@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/internal/brq"
 	"github.com/snissn/gomap/TreeDB/internal/rabitq"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
@@ -378,6 +379,10 @@ type columnVectorGraphNativeSearchStats struct {
 	QuantizedAssetMappedBytes            uint64
 	QuantizedAssetHeapCopyBytes          uint64
 	QuantizedAssetActiveHandles          int64
+	QuantizedScoreCodecBRQ1Bit           uint64
+	BRQ1BitQueryWeightBits               uint64
+	BRQ1BitBitProductPasses              uint64
+	BRQ1BitQueryWeightScale              float64
 	ScoreFloat64Fallbacks                uint64
 	BlockViewHits                        uint64
 	BlockViewMisses                      uint64
@@ -996,6 +1001,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	quantizedQueryCodes      []byte
 	quantizedQueryCentered   []vectorops.ScalarU8CenteredCode
 	quantizedRabitQWorkspace rabitq.Workspace
+	quantizedBRQWorkspace    brq.Workspace
 	wavefrontCandidates      []columnVectorGraphSearchCandidate
 	searchPlan               columnVectorGraphSearchPlan
 }

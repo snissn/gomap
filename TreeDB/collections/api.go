@@ -20,6 +20,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/brq"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -20440,7 +20441,7 @@ func normalizeQuantizedVectorIndexDefinitions(def VectorIndexDefinition) ([]Quan
 		switch q.Codec {
 		case "":
 			q.Codec = QuantizedVectorCodecScalarU8
-		case QuantizedVectorCodecScalarU8, rabitq.CodecName:
+		case QuantizedVectorCodecScalarU8, rabitq.CodecName, brq.CodecName:
 		default:
 			return nil, fmt.Errorf("collections: vector index %q quantized index %q codec %q is unsupported", def.Name, q.Name, q.Codec)
 		}
@@ -20455,6 +20456,10 @@ func normalizeQuantizedVectorIndexDefinitions(def VectorIndexDefinition) ([]Quan
 		case rabitq.CodecName:
 			if q.Version != rabitq.CodecVersion {
 				return nil, fmt.Errorf("collections: vector index %q quantized index %q rabitq_1bit version=%d is unsupported", def.Name, q.Name, q.Version)
+			}
+		case brq.CodecName:
+			if q.Version != brq.CodecVersion {
+				return nil, fmt.Errorf("collections: vector index %q quantized index %q brq_1bit version=%d is unsupported", def.Name, q.Name, q.Version)
 			}
 		default:
 			return nil, fmt.Errorf("collections: vector index %q quantized index %q codec %q missing version validation", def.Name, q.Name, q.Codec)

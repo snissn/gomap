@@ -109,7 +109,7 @@ func TestVectorIndexQuantizedDefinitionNormalization1926(t *testing.T) {
 				Strategy:   VectorIndexStrategyColumnGraph,
 				QuantizedIndexes: []QuantizedVectorIndexDefinition{{
 					Name:  "q",
-					Codec: "brq_1bit",
+					Codec: "unsupported_quantizer",
 				}},
 			},
 			want: "unsupported",
