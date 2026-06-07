@@ -128,6 +128,23 @@ func TestSearchTextMissingIndexUnsupportedSyntaxAndTruncationM4(t *testing.T) {
 	}
 }
 
+func TestSearchTextSeesUnflushedTextIndexedInsertM4(t *testing.T) {
+	d := openTextTestDB(t)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchM4Collection(t, d, []TextIndexField{{Field: "body"}})
+	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"visible without caller flush"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	got, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "visible", TopK: 10})
+	if err != nil {
+		t.Fatalf("SearchText: %v", err)
+	}
+	if len(got.Results) != 1 || string(got.Results[0].DocumentID) != "d1" || got.Stats.FullDocumentScanFallbacks != 0 {
+		t.Fatalf("SearchText response=%+v want just-written text-indexed document without explicit Flush", got)
+	}
+}
+
 func TestSearchTextTombstonedPostingsConsumeScanBudgetM4(t *testing.T) {
 	d := openTextTestDB(t)
 	defer func() { _ = d.Close() }()

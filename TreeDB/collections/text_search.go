@@ -138,6 +138,9 @@ func (c *Collection) SearchText(opts TextSearchOptions) (TextSearchResponse, err
 	if _, err := normalizeTextSearchOperator(opts.Operator); err != nil {
 		return response, err
 	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return response, err
+	}
 
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {

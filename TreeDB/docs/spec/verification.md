@@ -232,6 +232,7 @@ Coverage:
   - `TestSearchTextANDOROperatorsM4`
   - `TestSearchTextFieldWeightAffectsRankingM4`
   - `TestSearchTextMissingIndexUnsupportedSyntaxAndTruncationM4`
+  - `TestSearchTextSeesUnflushedTextIndexedInsertM4`
   - `TestSearchTextTombstonedPostingsConsumeScanBudgetM4`
   - `TestSearchTextFailClosedWrapsStorageCorruptionM4`
   - `TestSearchTextTopKBoundsDocumentFetchM4`
