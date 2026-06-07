@@ -4,15 +4,15 @@
 Reduce `run_celestia` sync wall-time regression from live value-log maintenance while preserving on-disk size gains.
 
 ## Change Under Test
-Candidate enables:
+Candidate enabled the then-experimental hot-debt-only checkpoint-kick guard:
 
-- `TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1`
+- historical env: `TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1`
+- current default: the guard is enabled by default; use `TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1` only for rollback experiments.
 
 Behavior:
 
 - In WAL-off checkpoint-kick path, if foreground is hot and rewrite queue is empty, skip starting a fresh rewrite plan.
 - Queued rewrite debt and deferred-due maintenance still run.
-- Default behavior remains unchanged unless this env flag is set.
 
 ## Commands
 Both campaigns used fixed trust/target and a single interleaved pair (`MAX_PAIRS=1`) with offline rewrite enabled.
@@ -30,7 +30,7 @@ Common env (both variants):
 Variant-specific env:
 
 - `main`: `LOCAL_GOMAP_DIR=/tmp/gomap_ab_base_20260328162444`
-- `hot_debt_only`: `LOCAL_GOMAP_DIR=/home/mikers/dev/snissn/gomap-phasehook-active` + `TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1`
+- `hot_debt_only`: `LOCAL_GOMAP_DIR=/home/mikers/dev/snissn/gomap-phasehook-active` + historical `TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1`
 
 Harness:
 

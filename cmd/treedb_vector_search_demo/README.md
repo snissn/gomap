@@ -32,12 +32,13 @@ timing projected documents without embeddings.
 
 For `-vector-index-strategy column_graph`, the demo can also select explicit
 TreeDB query modes with `-vector-query-mode exact|quantized_only|quantized_rerank`.
-Quantized modes declare a named `scalar_u8` score plane on the TreeDB vector
-index, build it during `RebuildVectorIndex`, validate recall against exact
-full-vector ground truth, and report per-search quantized counters. They do not
-change exact/default behavior and do not affect PostgreSQL+pgvector comparator
-semantics in the external harness. The `column_graph` JSON/text search rows
-also report no-document guardrail counters such as `avg_documents_fetched`,
+Quantized modes declare a named `scalar_u8` or `rabitq_1bit` score plane on the
+TreeDB vector index, build it during `RebuildVectorIndex`, validate recall
+against exact full-vector ground truth, and report per-search quantized
+counters. They do not change exact/default behavior and do not affect
+PostgreSQL+pgvector comparator semantics in the external harness. The
+`column_graph` JSON/text search rows also report no-document guardrail counters
+such as `avg_documents_fetched`,
 `avg_response_owned_result_allocs`, and route/fallback averages so profile runs
 can distinguish buffered search-loop cost from response-owned convenience or
 document-materialization paths.
@@ -68,13 +69,14 @@ GOWORK=off go run ./cmd/treedb_vector_search_demo \
   -json
 ```
 
-TreeDB column_graph quantized-rerank example:
+TreeDB column_graph scalar_u8 quantized-rerank example:
 
 ```sh
 GOWORK=off go run ./cmd/treedb_vector_search_demo \
   -matrix=false \
   -vector-index-strategy column_graph \
   -vector-query-mode quantized_rerank \
+  -quantized-codec scalar_u8 \
   -quantized-index-name embedding.scalar_u8.fast \
   -quantized-rerank-candidates 32 \
   -docs 10000 \
@@ -97,6 +99,27 @@ Use `-matrix=false` to run only the single 1560-style case; add
 The matrix search stage defaults to 10,000 ANN queries per lane and parallel
 concurrency levels `2,4,8,16,32,64,128`; override those with `-queries` and
 `-search-concurrency`.
+
+TreeDB column_graph RaBitQ quantized-only example:
+
+```sh
+GOWORK=off go run ./cmd/treedb_vector_search_demo \
+  -matrix=false \
+  -vector-index-strategy column_graph \
+  -vector-query-mode quantized_only \
+  -quantized-codec rabitq_1bit \
+  -quantized-index-name embedding.rabitq_1bit.fast \
+  -docs 10000 \
+  -dims 1536 \
+  -queries 10000 \
+  -validate-queries 64 \
+  -top-k 10 \
+  -m 16 \
+  -ef-construction 128 \
+  -ef-search 128 \
+  -min-recall 0 \
+  -json
+```
 
 Use `-search-profile-dir DIR` with `-vector-index-strategy column_graph` to
 write per-concurrency profiles for the column_graph search stage. Native
@@ -173,9 +196,14 @@ Useful flags:
 - `-vector-query-mode exact|quantized_only|quantized_rerank`: select the
   column_graph score plane. The default is `exact`; quantized modes require
   `column_graph` and a quantized index name.
-- `-quantized-index-name NAME`: named scalar_u8 score plane for quantized modes
-  (for example `embedding.scalar_u8.fast`). Exact mode rejects this flag so it
-  cannot accidentally declare quantized assets.
+- `-quantized-codec scalar_u8|rabitq_1bit`: quantized score-plane codec for
+  quantized modes. Empty defaults to `scalar_u8` when a quantized query mode is
+  selected. Exact mode rejects this flag so it cannot accidentally declare
+  quantized assets.
+- `-quantized-index-name NAME`: named quantized score plane for quantized modes
+  (for example `embedding.scalar_u8.fast` or `embedding.rabitq_1bit.fast`).
+  Exact mode rejects this flag so it cannot accidentally declare quantized
+  assets.
 - `-quantized-rerank-candidates N`: exact-rerank candidate limit for
   `quantized_rerank`; `0` uses the normalized `ef_search` candidate set.
 - `-json`: emit the full result object for scripts.

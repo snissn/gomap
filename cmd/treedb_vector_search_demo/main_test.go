@@ -407,7 +407,25 @@ func TestExecuteColumnGraphSearchPath(t *testing.T) {
 }
 
 func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
-	for _, tc := range []struct {
+	codecCases := []struct {
+		name             string
+		codec            string
+		indexName        string
+		wantBackendCodec string
+	}{
+		{
+			name:             "scalar_u8_default",
+			indexName:        defaultQuantizedIndexName,
+			wantBackendCodec: collections.QuantizedVectorCodecScalarU8,
+		},
+		{
+			name:             "rabitq_1bit",
+			codec:            quantizedVectorCodecRabitQ1Bit,
+			indexName:        defaultRabitQQuantizedIndexName,
+			wantBackendCodec: quantizedVectorCodecRabitQ1Bit,
+		},
+	}
+	modeCases := []struct {
 		name        string
 		mode        collections.VectorIndexQueryMode
 		rerank      int
@@ -460,54 +478,69 @@ func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
 				}
 			},
 		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			res, err := execute(context.Background(), config{
-				dir:                       t.TempDir(),
-				keepDir:                   true,
-				docs:                      96,
-				dimensions:                8,
-				queries:                   4,
-				searchConcurrency:         []int{2},
-				validateQueries:           2,
-				validateDocs:              2,
-				topK:                      3,
-				batchSize:                 32,
-				m:                         4,
-				efConstruction:            32,
-				efSearch:                  32,
-				valuePointerThreshold:     defaultValuePointerThreshold,
-				leafGenerationTarget:      defaultLeafGenerationTarget,
-				minRecall:                 0,
-				disableExactFallback:      true,
-				vectorIndexStrategy:       collections.VectorIndexStrategyColumnGraph,
-				vectorQueryMode:           tc.mode,
-				quantizedIndexName:        defaultQuantizedIndexName,
-				quantizedRerankCandidates: tc.rerank,
+	}
+	for _, codecCase := range codecCases {
+		for _, tc := range modeCases {
+			t.Run(codecCase.name+"/"+tc.name, func(t *testing.T) {
+				res, err := execute(context.Background(), config{
+					dir:                       t.TempDir(),
+					keepDir:                   true,
+					docs:                      96,
+					dimensions:                8,
+					queries:                   4,
+					searchConcurrency:         []int{2},
+					validateQueries:           2,
+					validateDocs:              2,
+					topK:                      3,
+					batchSize:                 32,
+					m:                         4,
+					efConstruction:            32,
+					efSearch:                  32,
+					valuePointerThreshold:     defaultValuePointerThreshold,
+					leafGenerationTarget:      defaultLeafGenerationTarget,
+					minRecall:                 0,
+					disableExactFallback:      true,
+					vectorIndexStrategy:       collections.VectorIndexStrategyColumnGraph,
+					vectorQueryMode:           tc.mode,
+					quantizedCodec:            codecCase.codec,
+					quantizedIndexName:        codecCase.indexName,
+					quantizedRerankCandidates: tc.rerank,
+				})
+				if err != nil {
+					t.Fatalf("execute %s/%s: %v", codecCase.name, tc.name, err)
+				}
+				wantBackend := "treedb_column_graph_" + codecCase.wantBackendCodec + "_" + tc.name
+				if res.Backend != wantBackend {
+					t.Fatalf("backend=%q want %s", res.Backend, wantBackend)
+				}
+				if res.QueryMode != tc.mode || res.QuantizedCodec != codecCase.wantBackendCodec {
+					t.Fatalf("query config mode=%q codec=%q", res.QueryMode, res.QuantizedCodec)
+				}
+				if res.QuantizedIndexName != codecCase.indexName || res.QuantizedRerankCandidates != tc.rerank {
+					t.Fatalf("quantized config name=%q rerank=%d", res.QuantizedIndexName, res.QuantizedRerankCandidates)
+				}
+				if res.Search.ExactFallbacks != 0 || !res.Search.DisableExactFallback {
+					t.Fatalf("quantized row did not stay fail-closed: %+v", res.Search)
+				}
+				if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].QueryMode != tc.mode || res.SearchBenchmarks[1].QueryMode != tc.mode || res.SearchBenchmarks[0].QuantizedCodec != codecCase.wantBackendCodec || res.SearchBenchmarks[1].QuantizedCodec != codecCase.wantBackendCodec {
+					t.Fatalf("search benchmark modes/codecs not threaded: %+v", res.SearchBenchmarks)
+				}
+				if requireFloat64Metric(t, res.Search.AvgResponseOwnedResultAllocs, "avg_response_owned_result_allocs") != 0 || requireFloat64Metric(t, res.Search.AvgDocumentsFetched, "avg_documents_fetched") != 0 {
+					t.Fatalf("quantized benchmark should use no-doc buffered results: %+v", res.Search)
+				}
+				if requireFloat64Metric(t, res.Search.AvgGraphRowFallbacks, "avg_graph_row_fallbacks") != 0 || requireFloat64Metric(t, res.Search.AvgTypedColumnFallbacks, "avg_typed_column_fallbacks") != 0 || requireFloat64Metric(t, res.Search.AvgVectorScratchDecodes, "avg_vector_scratch_decodes") != 0 {
+					t.Fatalf("unexpected quantized fallback counters: %+v", res.Search)
+				}
+				var out bytes.Buffer
+				printText(&out, res)
+				for _, want := range []string{"backend=" + wantBackend, "quantized_codec=" + codecCase.wantBackendCodec, "quantized_index_name=" + codecCase.indexName} {
+					if !strings.Contains(out.String(), want) {
+						t.Fatalf("text output missing %q:\n%s", want, out.String())
+					}
+				}
+				tc.assertStats(t, res)
 			})
-			if err != nil {
-				t.Fatalf("execute %s: %v", tc.name, err)
-			}
-			if res.Backend != "treedb_column_graph_"+tc.name {
-				t.Fatalf("backend=%q want treedb_column_graph_%s", res.Backend, tc.name)
-			}
-			if res.QueryMode != tc.mode {
-				t.Fatalf("query_mode=%q want %q", res.QueryMode, tc.mode)
-			}
-			if res.QuantizedIndexName != defaultQuantizedIndexName || res.QuantizedRerankCandidates != tc.rerank {
-				t.Fatalf("quantized config name=%q rerank=%d", res.QuantizedIndexName, res.QuantizedRerankCandidates)
-			}
-			if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].QueryMode != tc.mode || res.SearchBenchmarks[1].QueryMode != tc.mode {
-				t.Fatalf("search benchmark modes not threaded: %+v", res.SearchBenchmarks)
-			}
-			if requireFloat64Metric(t, res.Search.AvgResponseOwnedResultAllocs, "avg_response_owned_result_allocs") != 0 || requireFloat64Metric(t, res.Search.AvgDocumentsFetched, "avg_documents_fetched") != 0 {
-				t.Fatalf("quantized benchmark should use no-doc buffered results: %+v", res.Search)
-			}
-			if requireFloat64Metric(t, res.Search.AvgGraphRowFallbacks, "avg_graph_row_fallbacks") != 0 || requireFloat64Metric(t, res.Search.AvgTypedColumnFallbacks, "avg_typed_column_fallbacks") != 0 || requireFloat64Metric(t, res.Search.AvgVectorScratchDecodes, "avg_vector_scratch_decodes") != 0 {
-				t.Fatalf("unexpected quantized fallback counters: %+v", res.Search)
-			}
-			tc.assertStats(t, res)
-		})
+		}
 	}
 }
 
@@ -738,14 +771,28 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 		"-matrix=false",
 		"-vector-index-strategy", "column_graph",
 		"-vector-query-mode", "quantized_rerank",
-		"-quantized-index-name", defaultQuantizedIndexName,
+		"-quantized-codec", " RaBiTQ_1BiT ",
+		"-quantized-index-name", defaultRabitQQuantizedIndexName,
 		"-quantized-rerank-candidates", "32",
 	})
 	if err != nil {
 		t.Fatalf("parseConfig quantized_rerank: %v", err)
 	}
-	if cfg.vectorQueryMode != collections.VectorIndexQueryModeQuantizedRerank || cfg.quantizedIndexName != defaultQuantizedIndexName || cfg.quantizedRerankCandidates != 32 {
+	if cfg.vectorQueryMode != collections.VectorIndexQueryModeQuantizedRerank || cfg.quantizedCodec != quantizedVectorCodecRabitQ1Bit || cfg.quantizedIndexName != defaultRabitQQuantizedIndexName || cfg.quantizedRerankCandidates != 32 {
 		t.Fatalf("parsed quantized config=%+v", cfg)
+	}
+	defaultCodecCfg, err := parseConfig([]string{
+		"-matrix=false",
+		"-vector-index-strategy", "column_graph",
+		"-vector-query-mode", "quantized_only",
+		"-quantized-index-name", defaultQuantizedIndexName,
+		"-min-recall", "0",
+	})
+	if err != nil {
+		t.Fatalf("parseConfig default quantized codec: %v", err)
+	}
+	if defaultCodecCfg.quantizedCodec != defaultQuantizedCodec {
+		t.Fatalf("default quantized codec=%q want %q", defaultCodecCfg.quantizedCodec, defaultQuantizedCodec)
 	}
 
 	datasetCfg, err := parseConfig([]string{
@@ -812,9 +859,19 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 			want: "-quantized-index-name is required",
 		},
 		{
+			name: "exact rejects quantized codec",
+			args: []string{"-vector-query-mode", "exact", "-quantized-codec", quantizedVectorCodecRabitQ1Bit},
+			want: "-quantized-codec requires",
+		},
+		{
 			name: "exact rejects quantized name",
 			args: []string{"-vector-query-mode", "exact", "-quantized-index-name", defaultQuantizedIndexName},
 			want: "-quantized-index-name requires",
+		},
+		{
+			name: "rejects unsupported quantized codec",
+			args: []string{"-vector-index-strategy", "column_graph", "-vector-query-mode", "quantized_only", "-quantized-codec", "binary_quantize", "-quantized-index-name", defaultQuantizedIndexName},
+			want: "unsupported -quantized-codec",
 		},
 		{
 			name: "quantized only rejects rerank candidates",

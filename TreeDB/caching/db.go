@@ -2058,11 +2058,12 @@ const (
 	// 0 keeps legacy behavior (no iterator-sample gate).
 	envAdaptiveBTreeMinIteratorSamples = "TREEDB_ADAPTIVE_BTREE_MIN_ITERATOR_SAMPLES"
 	// Generational maintenance toggles (forensics / isolation).
-	envDisableVlogGenerationRewrite        = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
-	envDisableVlogGenerationGC             = "TREEDB_DISABLE_VLOG_GENERATION_GC"
-	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
-	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
-	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	envDisableVlogGenerationRewrite                   = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
+	envDisableVlogGenerationGC                        = "TREEDB_DISABLE_VLOG_GENERATION_GC"
+	envDisableVlogGenerationVacuum                    = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
+	envDisableVlogGenerationLoop                      = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
+	envDisableVlogGenerationCheckpointKick            = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	envDisableVlogGenerationCheckpointKickHotDebtOnly = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY"
 	// Experimental immutable-leaf maintenance hook. Disabled by default until
 	// the cached scheduler policy and dwell behavior are validated.
 	envEnableLeafGenerationPackMaintenance                     = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
@@ -2084,11 +2085,9 @@ const (
 	envVlogGenerationHotSegmentTargetBytes  = "TREEDB_VLOG_GENERATION_HOT_SEGMENT_TARGET_BYTES"
 	envVlogGenerationWarmSegmentTargetBytes = "TREEDB_VLOG_GENERATION_WARM_SEGMENT_TARGET_BYTES"
 	envVlogGenerationColdSegmentTargetBytes = "TREEDB_VLOG_GENERATION_COLD_SEGMENT_TARGET_BYTES"
-	// Experimental WAL-off checkpoint-kick guard: when enabled, avoid starting
-	// fresh rewrite planning during hot foreground activity. Queued rewrite debt
-	// (or deferred maintenance due) remains eligible so resumable progress is not
-	// starved.
-	envEnableVlogGenerationCheckpointKickHotDebtOnly = "TREEDB_ENABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY"
+	// WAL-off checkpoint-kick guard: by default, avoid starting fresh rewrite
+	// planning during hot foreground activity. Queued rewrite debt (or deferred
+	// maintenance due) remains eligible so resumable progress is not starved.
 	// Experimental WAL-off override: allow rewrite planning/execution before the
 	// first explicit checkpoint. Disabled by default because it can add restore
 	// contention during early state-sync.
@@ -20184,6 +20183,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	now := time.Now()
 	rewriteDisabled := envBool(envDisableVlogGenerationRewrite)
 	rewriteQueueLen := 0
+	rewriteQueueEligibleLen := 0
 	if !rewriteDisabled {
 		rewriteQueue, qerr := db.currentVlogGenerationRewriteQueue()
 		if qerr != nil {
@@ -20194,19 +20194,33 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 			return
 		}
 		rewriteQueueLen = len(rewriteQueue)
+		rewriteQueueEligibleLen = rewriteQueueLen
+		if rewriteQueueLen > 0 {
+			rewriteQueueEligible, _, qerr := db.currentVlogGenerationRewriteEligible(now)
+			if qerr != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: load eligible generational rewrite queue for checkpoint kick: %w", qerr))
+				}
+				return
+			}
+			rewriteQueueEligibleLen = len(rewriteQueueEligible)
+		}
 	}
-	if envBool(envEnableVlogGenerationCheckpointKickHotDebtOnly) && !rewriteDisabled {
+	if !envBool(envDisableVlogGenerationCheckpointKickHotDebtOnly) && !rewriteDisabled {
 		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
-		if !quiet && rewriteQueueLen == 0 && !db.vlogGenerationDeferredMaintenanceDue(now) {
+		deferredDue := db.vlogGenerationDeferredMaintenanceDue(now)
+		if !quiet && rewriteQueueEligibleLen == 0 && !deferredDue {
 			db.vlogGenerationCheckpointKickSkippedHotNoDebt.Add(1)
 			db.scheduleVlogGenerationCheckpointKickHotNoDebtWake()
 			db.debugVlogMaintf(
-				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t hot_no_debt_wake_running=%t",
+				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d eligible_queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t hot_no_debt_wake_running=%t",
 				quiet,
 				rewriteQueueLen,
+				rewriteQueueEligibleLen,
 				db.vlogGenerationCheckpointKickPending.Load(),
 				db.vlogGenerationDeferredMaintenancePending.Load(),
-				db.vlogGenerationDeferredMaintenanceDue(now),
+				deferredDue,
 				db.vlogGenerationCheckpointKickHotNoDebtWakeRunning.Load(),
 			)
 			return
