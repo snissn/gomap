@@ -7,10 +7,10 @@ import (
 )
 
 // ErrTextIndexUnavailable reports that a declared collection text index cannot
-// yet be used for persistent maintenance or search. PR1 for #1764 intentionally
-// lands metadata/analyzer/query contracts before postings/text-state/stats
-// storage; write/search paths fail closed instead of silently scanning or
-// returning incomplete text-index results.
+// yet be used for mutation maintenance or search execution. Early #1764
+// milestones land metadata/analyzer/storage contracts before write-path
+// maintenance and ranked query execution; write/search paths fail closed instead
+// of silently diverging, scanning, or returning incomplete text-index results.
 var ErrTextIndexUnavailable = errors.New("collections: text index unavailable")
 
 // TextAnalyzer names a collection text analyzer. The zero value normalizes to
@@ -22,8 +22,9 @@ const (
 )
 
 // TextIndexDefinition declares a persistent collection-native inverted index.
-// PR1 stores and validates metadata only; postings, text-state, stats, mutation
-// maintenance, and SearchText execution land in later #1764 milestones.
+// M2 stores and validates metadata plus versioned postings/text-state/stats
+// storage; mutation maintenance and SearchText execution land in later #1764
+// milestones.
 type TextIndexDefinition struct {
 	Name             string            `json:"name"`
 	Fields           []TextIndexField  `json:"fields"`

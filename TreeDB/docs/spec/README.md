@@ -83,8 +83,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - indexed collection write-domain visibility, async flush, backpressure, and
     durability-boundary semantics.
 - `TreeDB/docs/spec/collection-text-search.md`
-  - collection-native text index metadata, analyzer, root naming, query shape,
-    and PR1 fail-closed behavior before postings/text-state/stats storage lands.
+  - collection-native text index metadata, analyzer, root naming/policies,
+    versioned postings/text-state/text-stats storage, backfill/drop, query
+    shape, and fail-closed behavior before mutation maintenance/search execution
+    lands.
 - `TreeDB/docs/spec/write-path-and-durability.md`
   - write pipeline and durability semantics for all durability modes.
 - `TreeDB/docs/spec/recovery.md`

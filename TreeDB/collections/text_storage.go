@@ -1,0 +1,578 @@
+package collections
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+)
+
+var ErrTextIndexStorageCorrupt = errors.New("collections: malformed text index storage")
+
+const (
+	textPostingKeyVersion byte = 1
+	textStateKeyVersion   byte = 1
+	textStatsKeyVersion   byte = 1
+
+	textPostingValueVersion byte = 1
+	textStateValueVersion   byte = 1
+	textStatsValueVersion   byte = 1
+
+	textStatsKeyKindCorpus byte = 1
+	textStatsKeyKindTerm   byte = 2
+	textStatsKeyKindField  byte = 3
+)
+
+type textTokenOffset struct {
+	Start uint32
+	End   uint32
+}
+
+type textPostingValue struct {
+	TermFrequency uint32
+	Fields        []textPostingFieldValue
+}
+
+type textPostingFieldValue struct {
+	Field     string
+	Frequency uint32
+	Positions []uint32
+	Offsets   []textTokenOffset
+}
+
+type textDocumentStateValue struct {
+	Fields []textDocumentFieldState
+}
+
+type textDocumentFieldState struct {
+	Field  string
+	Length uint32
+	Terms  []textDocumentTermState
+}
+
+type textDocumentTermState struct {
+	Term      string
+	Frequency uint32
+	Positions []uint32
+	Offsets   []textTokenOffset
+}
+
+type textStatsCorpusValue struct {
+	DocumentCount uint64
+}
+
+type textStatsTermValue struct {
+	DocumentFrequency  uint64
+	TotalTermFrequency uint64
+}
+
+type textStatsFieldValue struct {
+	DocumentCount   uint64
+	TotalTokenCount uint64
+}
+
+func encodeTextPostingKey(term string, documentID []byte) []byte {
+	out := make([]byte, 0, 1+binary.MaxVarintLen64+len(term)+len(documentID))
+	out = append(out, textPostingKeyVersion)
+	out = appendTextUvarint(out, uint64(len(term)))
+	out = append(out, term...)
+	out = append(out, documentID...)
+	return out
+}
+
+func encodeTextPostingTermPrefix(term string) []byte {
+	out := make([]byte, 0, 1+binary.MaxVarintLen64+len(term))
+	out = append(out, textPostingKeyVersion)
+	out = appendTextUvarint(out, uint64(len(term)))
+	out = append(out, term...)
+	return out
+}
+
+func decodeTextPostingKey(raw []byte) (string, []byte, error) {
+	if len(raw) == 0 {
+		return "", nil, errMalformedTextStorage("empty postings key")
+	}
+	if raw[0] != textPostingKeyVersion {
+		return "", nil, errUnsupportedTextStorageVersion("postings key", raw[0])
+	}
+	cur := textCursor{buf: raw[1:]}
+	termBytes, err := cur.readBytes()
+	if err != nil {
+		return "", nil, errMalformedTextStorage("postings key term: %v", err)
+	}
+	if cur.remaining() == 0 {
+		return "", nil, errMalformedTextStorage("postings key missing document id")
+	}
+	return string(termBytes), bytes.Clone(cur.buf[cur.pos:]), nil
+}
+
+func encodeTextStateKey(documentID []byte) []byte {
+	out := make([]byte, 0, 1+len(documentID))
+	out = append(out, textStateKeyVersion)
+	out = append(out, documentID...)
+	return out
+}
+
+func decodeTextStateKey(raw []byte) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, errMalformedTextStorage("empty text-state key")
+	}
+	if raw[0] != textStateKeyVersion {
+		return nil, errUnsupportedTextStorageVersion("text-state key", raw[0])
+	}
+	if len(raw) == 1 {
+		return nil, errMalformedTextStorage("text-state key missing document id")
+	}
+	return bytes.Clone(raw[1:]), nil
+}
+
+func encodeTextStatsCorpusKey() []byte {
+	return []byte{textStatsKeyVersion, textStatsKeyKindCorpus}
+}
+
+func encodeTextStatsTermKey(term string) []byte {
+	out := []byte{textStatsKeyVersion, textStatsKeyKindTerm}
+	out = appendTextBytes(out, []byte(term))
+	return out
+}
+
+func encodeTextStatsFieldKey(field string) []byte {
+	out := []byte{textStatsKeyVersion, textStatsKeyKindField}
+	out = appendTextBytes(out, []byte(field))
+	return out
+}
+
+type textStatsKey struct {
+	Kind  byte
+	Value string
+}
+
+func decodeTextStatsKey(raw []byte) (textStatsKey, error) {
+	if len(raw) < 2 {
+		return textStatsKey{}, errMalformedTextStorage("short text-stats key")
+	}
+	if raw[0] != textStatsKeyVersion {
+		return textStatsKey{}, errUnsupportedTextStorageVersion("text-stats key", raw[0])
+	}
+	key := textStatsKey{Kind: raw[1]}
+	cur := textCursor{buf: raw[2:]}
+	switch key.Kind {
+	case textStatsKeyKindCorpus:
+		if cur.remaining() != 0 {
+			return textStatsKey{}, errMalformedTextStorage("corpus text-stats key has trailing bytes")
+		}
+	case textStatsKeyKindTerm, textStatsKeyKindField:
+		value, err := cur.readBytes()
+		if err != nil {
+			return textStatsKey{}, errMalformedTextStorage("text-stats key value: %v", err)
+		}
+		if cur.remaining() != 0 {
+			return textStatsKey{}, errMalformedTextStorage("text-stats key has trailing bytes")
+		}
+		key.Value = string(value)
+	default:
+		return textStatsKey{}, errMalformedTextStorage("unsupported text-stats key kind %d", key.Kind)
+	}
+	return key, nil
+}
+
+func encodeTextPostingValue(value textPostingValue) []byte {
+	fields := append([]textPostingFieldValue(nil), value.Fields...)
+	sort.SliceStable(fields, func(i, j int) bool { return fields[i].Field < fields[j].Field })
+	out := []byte{textPostingValueVersion}
+	out = appendTextUvarint(out, uint64(value.TermFrequency))
+	out = appendTextUvarint(out, uint64(len(fields)))
+	for _, field := range fields {
+		out = appendTextString(out, field.Field)
+		out = appendTextUvarint(out, uint64(field.Frequency))
+		out = appendTextUint32Slice(out, field.Positions)
+		out = appendTextOffsetSlice(out, field.Offsets)
+	}
+	return out
+}
+
+func decodeTextPostingValue(raw []byte) (textPostingValue, error) {
+	if len(raw) == 0 {
+		return textPostingValue{}, errMalformedTextStorage("empty postings value")
+	}
+	if raw[0] != textPostingValueVersion {
+		return textPostingValue{}, errUnsupportedTextStorageVersion("postings value", raw[0])
+	}
+	cur := textCursor{buf: raw[1:]}
+	freq, err := cur.readUvarint()
+	if err != nil {
+		return textPostingValue{}, errMalformedTextStorage("postings value frequency: %v", err)
+	}
+	fieldCount, err := cur.readUvarint()
+	if err != nil {
+		return textPostingValue{}, errMalformedTextStorage("postings value field count: %v", err)
+	}
+	value := textPostingValue{TermFrequency: checkedTextUint32(freq)}
+	if uint64(value.TermFrequency) != freq {
+		return textPostingValue{}, errMalformedTextStorage("postings value frequency overflows uint32")
+	}
+	if fieldCount > uint64(cur.remaining()+1) {
+		return textPostingValue{}, errMalformedTextStorage("postings value field count too large")
+	}
+	value.Fields = make([]textPostingFieldValue, 0, fieldCount)
+	for i := uint64(0); i < fieldCount; i++ {
+		field, err := cur.readString()
+		if err != nil {
+			return textPostingValue{}, errMalformedTextStorage("postings value field[%d] name: %v", i, err)
+		}
+		fieldFreq, err := cur.readUvarint()
+		if err != nil {
+			return textPostingValue{}, errMalformedTextStorage("postings value field[%d] frequency: %v", i, err)
+		}
+		positions, err := cur.readUint32Slice()
+		if err != nil {
+			return textPostingValue{}, errMalformedTextStorage("postings value field[%d] positions: %v", i, err)
+		}
+		offsets, err := cur.readOffsetSlice()
+		if err != nil {
+			return textPostingValue{}, errMalformedTextStorage("postings value field[%d] offsets: %v", i, err)
+		}
+		if uint64(checkedTextUint32(fieldFreq)) != fieldFreq {
+			return textPostingValue{}, errMalformedTextStorage("postings value field[%d] frequency overflows uint32", i)
+		}
+		if len(offsets) != 0 && len(offsets) != len(positions) {
+			return textPostingValue{}, errMalformedTextStorage("postings value field[%d] offsets/positions length mismatch", i)
+		}
+		value.Fields = append(value.Fields, textPostingFieldValue{
+			Field:     field,
+			Frequency: uint32(fieldFreq),
+			Positions: positions,
+			Offsets:   offsets,
+		})
+	}
+	if cur.remaining() != 0 {
+		return textPostingValue{}, errMalformedTextStorage("postings value trailing bytes")
+	}
+	return value, nil
+}
+
+func encodeTextDocumentStateValue(value textDocumentStateValue) []byte {
+	fields := append([]textDocumentFieldState(nil), value.Fields...)
+	sort.SliceStable(fields, func(i, j int) bool { return fields[i].Field < fields[j].Field })
+	out := []byte{textStateValueVersion}
+	out = appendTextUvarint(out, uint64(len(fields)))
+	for _, field := range fields {
+		terms := append([]textDocumentTermState(nil), field.Terms...)
+		sort.SliceStable(terms, func(i, j int) bool { return terms[i].Term < terms[j].Term })
+		out = appendTextString(out, field.Field)
+		out = appendTextUvarint(out, uint64(field.Length))
+		out = appendTextUvarint(out, uint64(len(terms)))
+		for _, term := range terms {
+			out = appendTextString(out, term.Term)
+			out = appendTextUvarint(out, uint64(term.Frequency))
+			out = appendTextUint32Slice(out, term.Positions)
+			out = appendTextOffsetSlice(out, term.Offsets)
+		}
+	}
+	return out
+}
+
+func decodeTextDocumentStateValue(raw []byte) (textDocumentStateValue, error) {
+	if len(raw) == 0 {
+		return textDocumentStateValue{}, errMalformedTextStorage("empty text-state value")
+	}
+	if raw[0] != textStateValueVersion {
+		return textDocumentStateValue{}, errUnsupportedTextStorageVersion("text-state value", raw[0])
+	}
+	cur := textCursor{buf: raw[1:]}
+	fieldCount, err := cur.readUvarint()
+	if err != nil {
+		return textDocumentStateValue{}, errMalformedTextStorage("text-state field count: %v", err)
+	}
+	if fieldCount > uint64(cur.remaining()+1) {
+		return textDocumentStateValue{}, errMalformedTextStorage("text-state field count too large")
+	}
+	value := textDocumentStateValue{Fields: make([]textDocumentFieldState, 0, fieldCount)}
+	for i := uint64(0); i < fieldCount; i++ {
+		fieldName, err := cur.readString()
+		if err != nil {
+			return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] name: %v", i, err)
+		}
+		length, err := cur.readUvarint()
+		if err != nil {
+			return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] length: %v", i, err)
+		}
+		if uint64(checkedTextUint32(length)) != length {
+			return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] length overflows uint32", i)
+		}
+		termCount, err := cur.readUvarint()
+		if err != nil {
+			return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term count: %v", i, err)
+		}
+		if termCount > uint64(cur.remaining()+1) {
+			return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term count too large", i)
+		}
+		field := textDocumentFieldState{Field: fieldName, Length: uint32(length), Terms: make([]textDocumentTermState, 0, termCount)}
+		for j := uint64(0); j < termCount; j++ {
+			termName, err := cur.readString()
+			if err != nil {
+				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] name: %v", i, j, err)
+			}
+			freq, err := cur.readUvarint()
+			if err != nil {
+				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] frequency: %v", i, j, err)
+			}
+			if uint64(checkedTextUint32(freq)) != freq {
+				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] frequency overflows uint32", i, j)
+			}
+			positions, err := cur.readUint32Slice()
+			if err != nil {
+				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] positions: %v", i, j, err)
+			}
+			offsets, err := cur.readOffsetSlice()
+			if err != nil {
+				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] offsets: %v", i, j, err)
+			}
+			if len(offsets) != 0 && len(offsets) != len(positions) {
+				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] offsets/positions length mismatch", i, j)
+			}
+			field.Terms = append(field.Terms, textDocumentTermState{
+				Term:      termName,
+				Frequency: uint32(freq),
+				Positions: positions,
+				Offsets:   offsets,
+			})
+		}
+		value.Fields = append(value.Fields, field)
+	}
+	if cur.remaining() != 0 {
+		return textDocumentStateValue{}, errMalformedTextStorage("text-state value trailing bytes")
+	}
+	return value, nil
+}
+
+func encodeTextStatsCorpusValue(value textStatsCorpusValue) []byte {
+	out := []byte{textStatsValueVersion}
+	out = appendTextUvarint(out, value.DocumentCount)
+	return out
+}
+
+func decodeTextStatsCorpusValue(raw []byte) (textStatsCorpusValue, error) {
+	cur, err := textStatsValueCursor(raw, "corpus")
+	if err != nil {
+		return textStatsCorpusValue{}, err
+	}
+	documents, err := cur.readUvarint()
+	if err != nil {
+		return textStatsCorpusValue{}, errMalformedTextStorage("text-stats corpus document count: %v", err)
+	}
+	if cur.remaining() != 0 {
+		return textStatsCorpusValue{}, errMalformedTextStorage("text-stats corpus trailing bytes")
+	}
+	return textStatsCorpusValue{DocumentCount: documents}, nil
+}
+
+func encodeTextStatsTermValue(value textStatsTermValue) []byte {
+	out := []byte{textStatsValueVersion}
+	out = appendTextUvarint(out, value.DocumentFrequency)
+	out = appendTextUvarint(out, value.TotalTermFrequency)
+	return out
+}
+
+func decodeTextStatsTermValue(raw []byte) (textStatsTermValue, error) {
+	cur, err := textStatsValueCursor(raw, "term")
+	if err != nil {
+		return textStatsTermValue{}, err
+	}
+	df, err := cur.readUvarint()
+	if err != nil {
+		return textStatsTermValue{}, errMalformedTextStorage("text-stats term document frequency: %v", err)
+	}
+	tf, err := cur.readUvarint()
+	if err != nil {
+		return textStatsTermValue{}, errMalformedTextStorage("text-stats term total frequency: %v", err)
+	}
+	if cur.remaining() != 0 {
+		return textStatsTermValue{}, errMalformedTextStorage("text-stats term trailing bytes")
+	}
+	return textStatsTermValue{DocumentFrequency: df, TotalTermFrequency: tf}, nil
+}
+
+func encodeTextStatsFieldValue(value textStatsFieldValue) []byte {
+	out := []byte{textStatsValueVersion}
+	out = appendTextUvarint(out, value.DocumentCount)
+	out = appendTextUvarint(out, value.TotalTokenCount)
+	return out
+}
+
+func decodeTextStatsFieldValue(raw []byte) (textStatsFieldValue, error) {
+	cur, err := textStatsValueCursor(raw, "field")
+	if err != nil {
+		return textStatsFieldValue{}, err
+	}
+	documents, err := cur.readUvarint()
+	if err != nil {
+		return textStatsFieldValue{}, errMalformedTextStorage("text-stats field document count: %v", err)
+	}
+	tokens, err := cur.readUvarint()
+	if err != nil {
+		return textStatsFieldValue{}, errMalformedTextStorage("text-stats field token count: %v", err)
+	}
+	if cur.remaining() != 0 {
+		return textStatsFieldValue{}, errMalformedTextStorage("text-stats field trailing bytes")
+	}
+	return textStatsFieldValue{DocumentCount: documents, TotalTokenCount: tokens}, nil
+}
+
+func textStatsValueCursor(raw []byte, name string) (textCursor, error) {
+	if len(raw) == 0 {
+		return textCursor{}, errMalformedTextStorage("empty text-stats %s value", name)
+	}
+	if raw[0] != textStatsValueVersion {
+		return textCursor{}, errUnsupportedTextStorageVersion("text-stats "+name+" value", raw[0])
+	}
+	return textCursor{buf: raw[1:]}, nil
+}
+
+func appendTextBytes(dst []byte, value []byte) []byte {
+	dst = appendTextUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
+func appendTextString(dst []byte, value string) []byte {
+	return appendTextBytes(dst, []byte(value))
+}
+
+func appendTextUvarint(dst []byte, value uint64) []byte {
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(buf[:], value)
+	return append(dst, buf[:n]...)
+}
+
+func appendTextUint32Slice(dst []byte, values []uint32) []byte {
+	dst = appendTextUvarint(dst, uint64(len(values)))
+	for _, value := range values {
+		dst = appendTextUvarint(dst, uint64(value))
+	}
+	return dst
+}
+
+func appendTextOffsetSlice(dst []byte, values []textTokenOffset) []byte {
+	dst = appendTextUvarint(dst, uint64(len(values)))
+	for _, value := range values {
+		dst = appendTextUvarint(dst, uint64(value.Start))
+		dst = appendTextUvarint(dst, uint64(value.End))
+	}
+	return dst
+}
+
+type textCursor struct {
+	buf []byte
+	pos int
+}
+
+func (c *textCursor) remaining() int {
+	if c == nil || c.pos >= len(c.buf) {
+		return 0
+	}
+	return len(c.buf) - c.pos
+}
+
+func (c *textCursor) readUvarint() (uint64, error) {
+	if c == nil || c.pos >= len(c.buf) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	value, n := binary.Uvarint(c.buf[c.pos:])
+	if n == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	if n < 0 {
+		return 0, errors.New("varint overflow")
+	}
+	c.pos += n
+	return value, nil
+}
+
+func (c *textCursor) readBytes() ([]byte, error) {
+	length, err := c.readUvarint()
+	if err != nil {
+		return nil, err
+	}
+	if length > uint64(c.remaining()) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	start := c.pos
+	c.pos += int(length)
+	return c.buf[start:c.pos], nil
+}
+
+func (c *textCursor) readString() (string, error) {
+	value, err := c.readBytes()
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
+}
+
+func (c *textCursor) readUint32Slice() ([]uint32, error) {
+	count, err := c.readUvarint()
+	if err != nil {
+		return nil, err
+	}
+	if count > uint64(c.remaining()+1) {
+		return nil, errors.New("count too large")
+	}
+	out := make([]uint32, 0, count)
+	for i := uint64(0); i < count; i++ {
+		value, err := c.readUvarint()
+		if err != nil {
+			return nil, err
+		}
+		if uint64(checkedTextUint32(value)) != value {
+			return nil, errors.New("uint32 overflow")
+		}
+		out = append(out, uint32(value))
+	}
+	return out, nil
+}
+
+func (c *textCursor) readOffsetSlice() ([]textTokenOffset, error) {
+	count, err := c.readUvarint()
+	if err != nil {
+		return nil, err
+	}
+	if count > uint64(c.remaining()+1) {
+		return nil, errors.New("count too large")
+	}
+	out := make([]textTokenOffset, 0, count)
+	for i := uint64(0); i < count; i++ {
+		start, err := c.readUvarint()
+		if err != nil {
+			return nil, err
+		}
+		end, err := c.readUvarint()
+		if err != nil {
+			return nil, err
+		}
+		if uint64(checkedTextUint32(start)) != start || uint64(checkedTextUint32(end)) != end {
+			return nil, errors.New("uint32 overflow")
+		}
+		if end < start {
+			return nil, errors.New("offset end before start")
+		}
+		out = append(out, textTokenOffset{Start: uint32(start), End: uint32(end)})
+	}
+	return out, nil
+}
+
+func checkedTextUint32(value uint64) uint32 {
+	return uint32(value)
+}
+
+func errMalformedTextStorage(format string, args ...any) error {
+	if len(args) == 0 {
+		return fmt.Errorf("%w: %s", ErrTextIndexStorageCorrupt, format)
+	}
+	return fmt.Errorf("%w: %s", ErrTextIndexStorageCorrupt, fmt.Sprintf(format, args...))
+}
+
+func errUnsupportedTextStorageVersion(component string, version byte) error {
+	return fmt.Errorf("%w: unsupported %s version %d", ErrTextIndexStorageCorrupt, component, version)
+}
