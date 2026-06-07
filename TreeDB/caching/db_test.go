@@ -43,6 +43,7 @@ type MockBackend struct {
 	registerValueLogErr    error
 	markValueLogZombieErr  error
 	markValueLogZombieID   uint32
+	pointerEntries         map[string]page.ValuePtr
 	setOpsInlineValueLimit int
 	fragReport             map[string]string
 	fragErr                error
@@ -638,6 +639,12 @@ func (it *MockIterator) UnsafeValue() []byte {
 }
 
 func (it *MockIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	it.backend.mu.RLock()
+	ptr, ok := it.backend.pointerEntries[it.keys[it.idx]]
+	it.backend.mu.RUnlock()
+	if ok {
+		return nil, ptr, node.FlagPointer
+	}
 	return it.UnsafeValue(), page.ValuePtr{}, 0
 }
 
@@ -2457,6 +2464,166 @@ func TestRetainedValueLogPruneDiagnostics_CloseAbort(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_retained_prune.last_force"]; got != "true" {
 		t.Fatalf("last_force=%q want true", got)
+	}
+}
+
+func TestRetainedValueLogPruneCloseCancelsNestedLiveIDScan(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.Set([]byte("ptr"), []byte("value"))
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+
+	retainedPath, fileID := seedRetainedPruneSegment(t, cache, 404, 2<<30)
+	backend.mu.Lock()
+	backend.pointerEntries = map[string]page.ValuePtr{
+		"ptr": {FileID: fileID, Length: 1},
+	}
+	backend.mu.Unlock()
+
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	cache.testRetainedPruneScanHook = func(ctx context.Context, phase string) error {
+		if phase != "nested_outer_leaf_before_read" {
+			return nil
+		}
+		startedOnce.Do(func() { close(started) })
+		<-ctx.Done()
+		return retainedPruneContextErr(ctx)
+	}
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+	cache.scheduleRetainedValueLogPruneForce()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		_ = cache.Close()
+		t.Fatalf("retained prune did not enter nested live-ID scan")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- cache.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Close did not cancel retained prune")
+	}
+
+	if _, err := os.Stat(retainedPath); err != nil {
+		t.Fatalf("retained path removed after close-canceled prune: %v", err)
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.last_status"]; got != "close_abort" {
+		t.Fatalf("last_status=%q want close_abort", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_mode"]; got != "full_live_id_scan" {
+		t.Fatalf("last_mode=%q want full_live_id_scan", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.close_abort_runs"]; got != "1" {
+		t.Fatalf("close_abort_runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.completed_runs"]; got != "0" {
+		t.Fatalf("completed_runs=%q want 0", got)
+	}
+}
+
+func TestRetainedValueLogPruneCancellationSkipsUnprovenReclaim(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.Set([]byte("ptr"), []byte("value"))
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	retainedPath, fileID := seedRetainedPruneSegment(t, cache, 405, 2<<30)
+	backend.mu.Lock()
+	backend.pointerEntries = map[string]page.ValuePtr{
+		"ptr": {FileID: fileID, Length: 1},
+	}
+	backend.mu.Unlock()
+
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	cache.testRetainedPruneScanHook = func(ctx context.Context, phase string) error {
+		if phase != "nested_outer_leaf_before_read" {
+			return nil
+		}
+		startedOnce.Do(func() { close(started) })
+		<-ctx.Done()
+		return retainedPruneContextErr(ctx)
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	done := make(chan struct {
+		stats retainedValueLogPruneStats
+		ran   bool
+	}, 1)
+	go func() {
+		stats, ran := cache.runRetainedValueLogPruneInlineWithContext(ctx, false, nil)
+		done <- struct {
+			stats retainedValueLogPruneStats
+			ran   bool
+		}{stats: stats, ran: ran}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		cancel(errRetainedPruneCloseCanceled)
+		t.Fatalf("retained prune did not enter nested live-ID scan")
+	}
+	cancel(errRetainedPruneCloseCanceled)
+
+	var result struct {
+		stats retainedValueLogPruneStats
+		ran   bool
+	}
+	select {
+	case result = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("retained prune did not exit after cancellation")
+	}
+	if !result.ran {
+		t.Fatalf("inline retained prune did not run")
+	}
+	if !result.stats.AbortedClose {
+		t.Fatalf("AbortedClose=false want true")
+	}
+	if result.stats.RemovedSegments != 0 || result.stats.ZombieMarkedSegments != 0 {
+		t.Fatalf("canceled prune reclaimed segments: removed=%d zombie=%d", result.stats.RemovedSegments, result.stats.ZombieMarkedSegments)
+	}
+	if _, err := os.Stat(retainedPath); err != nil {
+		t.Fatalf("retained path removed after canceled prune: %v", err)
+	}
+	if !cache.valueLogRetained(retainedPath) {
+		t.Fatalf("retained path unmarked after canceled prune")
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.last_status"]; got != "close_abort" {
+		t.Fatalf("last_status=%q want close_abort", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_mode"]; got != "full_live_id_scan" {
+		t.Fatalf("last_mode=%q want full_live_id_scan", got)
 	}
 }
 
