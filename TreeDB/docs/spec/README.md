@@ -123,6 +123,11 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #2482 RaBitQ performance-lane closeout for #2476/#2477 promoted
     Sublane A evidence, #2478/#2479 no-promote decisions, `rabitq_1bit` v1
     hard invariants, scalar/exact guardrail interpretation, and #2480/#2481 deferred Sublane B status.
+- `TreeDB/docs/spec/brq-1bit-v1.md`
+  - issue #2480 selected future-codec contract for `brq_1bit` v1, including the
+    new codec identity/version, durable packed-code schema, LSB0 word view,
+    query `uint4` bit-product score semantics, fail-closed validation plan,
+    oracle/golden test requirements, public counter names, and #2481 gates.
 - `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
   - issue #2036 role-specific prepared runtime-view and admission policy for
     current-format typed-column graph search.
@@ -308,8 +313,9 @@ typed-column maintenance behavior is recorded in
 policy is owned by `typed-column-schema-evolution.md`, optimized-consumer tier
 classification is owned by `typed-column-optimized-consumer-capabilities.md`,
 quantized asset role descriptors and ordinal-reader contracts are owned by
-`quantized-asset-schema.md`, graph-search prepared runtime-view shapes and
-hot-loop boundaries are owned by
+`quantized-asset-schema.md`; `brq-1bit-v1.md` owns the selected #2480 future
+`brq_1bit` codec contract until any #2481 prototype updates it; graph-search
+prepared runtime-view shapes and hot-loop boundaries are owned by
 `typed-column-graph-search-prepared-views.md`, graph-search optimized-state
 readiness/admission status is owned by
 `typed-column-graph-search-admission.md`, #1886 direct-view closeout evidence is owned by
