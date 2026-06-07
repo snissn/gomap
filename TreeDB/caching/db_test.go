@@ -2433,6 +2433,91 @@ func TestRetainedValueLogPruneDiagnostics_ForegroundAbort(t *testing.T) {
 	}
 }
 
+func TestRetainedValueLogPruneBudgetAbortSkipsUnprovenReclaim(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.Set([]byte("ptr"), []byte("value"))
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	retainedPath, fileID := seedRetainedPruneSegment(t, cache, 406, 2<<30)
+	backend.mu.Lock()
+	backend.pointerEntries = map[string]page.ValuePtr{
+		"ptr": {FileID: fileID, Length: 1},
+	}
+	backend.mu.Unlock()
+
+	cache.retainedPruneFullLiveIDScanBudget = 50 * time.Millisecond
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	cache.testRetainedPruneScanHook = func(ctx context.Context, phase string) error {
+		if phase != "iterator_record" {
+			return nil
+		}
+		startedOnce.Do(func() { close(started) })
+		<-ctx.Done()
+		return retainedPruneContextErr(ctx)
+	}
+
+	cache.scheduleRetainedValueLogPruneForce()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("retained prune did not enter budgeted full live-ID scan")
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		cache.waitForRetainedValueLogPrune()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("budgeted retained prune did not finish")
+	}
+
+	if _, err := os.Stat(retainedPath); err != nil {
+		t.Fatalf("retained path removed after budget-aborted prune: %v", err)
+	}
+	if !cache.valueLogRetained(retainedPath) {
+		t.Fatalf("retained path unmarked after budget-aborted prune")
+	}
+
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.last_status"]; got != "budget_abort" {
+		t.Fatalf("last_status=%q want budget_abort", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_mode"]; got != "full_live_id_scan" {
+		t.Fatalf("last_mode=%q want full_live_id_scan", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.budget_abort_runs"]; got != "1" {
+		t.Fatalf("budget_abort_runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.completed_runs"]; got != "0" {
+		t.Fatalf("completed_runs=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.removed_segments"]; got != "0" {
+		t.Fatalf("removed_segments=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.zombie_marked_segments"]; got != "0" {
+		t.Fatalf("zombie_marked_segments=%q want 0", got)
+	}
+}
+
 func TestRetainedValueLogPruneDiagnostics_CloseAbort(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

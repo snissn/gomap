@@ -5019,8 +5019,9 @@ type backendPointerProjectionIterator interface {
 }
 
 var (
-	errForegroundWritesResumed    = errors.New("cachingdb: foreground writes resumed")
-	errRetainedPruneCloseCanceled = errors.New("cachingdb: retained prune canceled by close")
+	errForegroundWritesResumed         = errors.New("cachingdb: foreground writes resumed")
+	errRetainedPruneCloseCanceled      = errors.New("cachingdb: retained prune canceled by close")
+	errRetainedPruneScanBudgetExceeded = errors.New("cachingdb: retained prune live-ID scan budget exceeded")
 )
 
 func retainedPruneContextErr(ctx context.Context) error {
@@ -5052,17 +5053,18 @@ func (db *DB) retainedPruneLiveIDScanContext(parent context.Context, lastWrite i
 	if parent == nil {
 		parent = context.Background()
 	}
-	var timeoutCancel context.CancelFunc
-	base := parent
+	ctx, cancelCause := context.WithCancelCause(parent)
+	var timeoutTimer *time.Timer
 	if timeout > 0 {
-		base, timeoutCancel = context.WithTimeout(parent, timeout)
+		timeoutTimer = time.AfterFunc(timeout, func() {
+			cancelCause(errRetainedPruneScanBudgetExceeded)
+		})
 	}
-	ctx, cancelCause := context.WithCancelCause(base)
 	cancel := func() {
-		cancelCause(context.Canceled)
-		if timeoutCancel != nil {
-			timeoutCancel()
+		if timeoutTimer != nil {
+			timeoutTimer.Stop()
 		}
+		cancelCause(context.Canceled)
 	}
 	if db == nil {
 		return ctx, cancel
@@ -5125,6 +5127,10 @@ func (db *DB) observeRetainedPruneAbortError(out *retainedValueLogPruneStats, er
 		out.AbortedForegroundWrites = true
 		return true
 	}
+	if errors.Is(err, errRetainedPruneScanBudgetExceeded) {
+		out.AbortedScanBudget = true
+		return true
+	}
 	return false
 }
 
@@ -5162,6 +5168,7 @@ const (
 	retainedPruneStatusForegroundAbort
 	retainedPruneStatusCloseAbort
 	retainedPruneStatusError
+	retainedPruneStatusBudgetAbort
 )
 
 func retainedPruneStatusString(status uint32) string {
@@ -5176,6 +5183,8 @@ func retainedPruneStatusString(status uint32) string {
 		return "foreground_abort"
 	case retainedPruneStatusCloseAbort:
 		return "close_abort"
+	case retainedPruneStatusBudgetAbort:
+		return "budget_abort"
 	case retainedPruneStatusError:
 		return "error"
 	default:
@@ -5226,6 +5235,10 @@ func (db *DB) collectValueLogLiveIDsUntilWithStats(lastWrite int64, scanStats *v
 }
 
 func (db *DB) collectValueLogLiveIDsUntilWithContext(ctx context.Context, lastWrite int64, scanStats *valueLogLiveIDScanStats) (map[uint32]struct{}, error) {
+	return db.collectValueLogLiveIDsUntilWithContextAndTimeout(ctx, lastWrite, scanStats, 0)
+}
+
+func (db *DB) collectValueLogLiveIDsUntilWithContextAndTimeout(ctx context.Context, lastWrite int64, scanStats *valueLogLiveIDScanStats, timeout time.Duration) (map[uint32]struct{}, error) {
 	if db == nil || !db.valueLogEnabled() {
 		return make(map[uint32]struct{}), nil
 	}
@@ -5237,7 +5250,7 @@ func (db *DB) collectValueLogLiveIDsUntilWithContext(ctx context.Context, lastWr
 			return nil, err
 		}
 	}
-	ctx, cancel := db.retainedPruneLiveIDScanContext(ctx, lastWrite, 0)
+	ctx, cancel := db.retainedPruneLiveIDScanContext(ctx, lastWrite, timeout)
 	defer cancel()
 	live := make(map[uint32]struct{})
 	if snapper, ok := db.backend.(interface{ AcquireSnapshot() *backenddb.Snapshot }); ok {
@@ -5626,9 +5639,14 @@ type retainedValueLogPruneStats struct {
 	ElapsedNanos                       int64
 	AbortedClose                       bool
 	AbortedForegroundWrites            bool
+	AbortedScanBudget                  bool
 	ScanError                          bool
 	RetriedWithoutWriteGate            bool
 	RetrySucceeded                     bool
+}
+
+type retainedValueLogPruneRunOptions struct {
+	fullLiveIDScanBudget time.Duration
 }
 
 func retainedPruneStatusForStats(pruneStats retainedValueLogPruneStats) retainedPruneStatus {
@@ -5637,6 +5655,9 @@ func retainedPruneStatusForStats(pruneStats retainedValueLogPruneStats) retained
 	}
 	if pruneStats.AbortedForegroundWrites {
 		return retainedPruneStatusForegroundAbort
+	}
+	if pruneStats.AbortedScanBudget {
+		return retainedPruneStatusBudgetAbort
 	}
 	if pruneStats.ScanError {
 		return retainedPruneStatusError
@@ -5704,7 +5725,10 @@ func (db *DB) observeRetainedValueLogPruneStats(pruneStats retainedValueLogPrune
 	db.retainedValueLogPruneLastScanOuterLeafRecords.Store(pruneStats.ScanStats.OuterLeafRecords)
 	db.retainedValueLogPruneLastScanOuterLeafBytes.Store(pruneStats.ScanStats.OuterLeafBytes)
 	db.retainedValueLogPruneLastScanNestedValuePointers.Store(pruneStats.ScanStats.NestedValuePointers)
-	if status != retainedPruneStatusForegroundAbort && status != retainedPruneStatusCloseAbort && status != retainedPruneStatusError {
+	if status != retainedPruneStatusForegroundAbort &&
+		status != retainedPruneStatusCloseAbort &&
+		status != retainedPruneStatusBudgetAbort &&
+		status != retainedPruneStatusError {
 		db.retainedValueLogPruneCompletedRuns.Add(1)
 	}
 	if status == retainedPruneStatusError {
@@ -5712,6 +5736,9 @@ func (db *DB) observeRetainedValueLogPruneStats(pruneStats retainedValueLogPrune
 	}
 	if status == retainedPruneStatusCloseAbort {
 		db.retainedValueLogPruneCloseAbortRuns.Add(1)
+	}
+	if status == retainedPruneStatusBudgetAbort {
+		db.retainedValueLogPruneBudgetAbortRuns.Add(1)
 	}
 	if pruneStats.Mode == retainedPruneModeNoCandidates {
 		db.retainedValueLogPruneNoCandidateRuns.Add(1)
@@ -5746,6 +5773,9 @@ func (db *DB) observeRetainedValueLogPruneStats(pruneStats retainedValueLogPrune
 	case retainedPruneStatusCloseAbort:
 		debugEvent = "abort"
 		debugReason = "close"
+	case retainedPruneStatusBudgetAbort:
+		debugEvent = "abort"
+		debugReason = retainedPruneStatusString(uint32(status))
 	case retainedPruneStatusError:
 		debugEvent = "abort"
 		debugReason = retainedPruneStatusString(uint32(status))
@@ -5910,6 +5940,10 @@ func (db *DB) pruneRetainedValueLogsWithObserved(force bool, observedSourceIDs m
 }
 
 func (db *DB) pruneRetainedValueLogsWithObservedContext(ctx context.Context, force bool, observedSourceIDs map[uint32]struct{}) retainedValueLogPruneStats {
+	return db.pruneRetainedValueLogsWithObservedContextOptions(ctx, force, observedSourceIDs, retainedValueLogPruneRunOptions{})
+}
+
+func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Context, force bool, observedSourceIDs map[uint32]struct{}, runOpts retainedValueLogPruneRunOptions) retainedValueLogPruneStats {
 	var out retainedValueLogPruneStats
 	if ctx == nil {
 		ctx = context.Background()
@@ -6124,7 +6158,13 @@ func (db *DB) pruneRetainedValueLogsWithObservedContext(ctx context.Context, for
 	}
 
 	out.Mode = retainedPruneModeFullLiveIDScan
-	liveIDs, err := db.collectValueLogLiveIDsUntilWithContext(ctx, db.lastForegroundWriteUnixNano.Load(), &out.ScanStats)
+	lastWrite := db.lastForegroundWriteUnixNano.Load()
+	liveIDs, err := db.collectValueLogLiveIDsUntilWithContextAndTimeout(
+		ctx,
+		lastWrite,
+		&out.ScanStats,
+		runOpts.fullLiveIDScanBudget,
+	)
 	if err != nil {
 		if db.observeRetainedPruneAbortError(&out, err) {
 			return out
@@ -6304,6 +6344,20 @@ func (db *DB) retainedPrunePressureBytes() int64 {
 		pressure = retainedPrunePressureFloorBytes
 	}
 	return pressure
+}
+
+func (db *DB) retainedPruneBackgroundFullLiveIDScanBudget() time.Duration {
+	if db == nil {
+		return 0
+	}
+	budget := db.retainedPruneFullLiveIDScanBudget
+	if budget < 0 {
+		return 0
+	}
+	if budget == 0 {
+		return retainedPruneDefaultFullLiveIDScanBudget
+	}
+	return budget
 }
 
 func (db *DB) shouldScheduleRetainedValueLogPrune() bool {
@@ -6712,7 +6766,9 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		db.retainedValueLogPruneLastUnixNano.Store(now.UnixNano())
 		observedSourceIDs := db.takeRetainedPruneObservedSourceIDs()
 		db.observeRetainedValueLogPruneStart(effectiveForce, len(observedSourceIDs), false, now)
-		pruneStats := db.pruneRetainedValueLogsWithObservedContext(pruneCtx, effectiveForce, observedSourceIDs)
+		pruneStats := db.pruneRetainedValueLogsWithObservedContextOptions(pruneCtx, effectiveForce, observedSourceIDs, retainedValueLogPruneRunOptions{
+			fullLiveIDScanBudget: db.retainedPruneBackgroundFullLiveIDScanBudget(),
+		})
 		pruneStats.ElapsedNanos = time.Since(now).Nanoseconds()
 		db.observeRetainedValueLogPruneStats(pruneStats)
 		if len(observedSourceIDs) > 0 && (pruneStats.ObservedSourceZombieMarkedSegments > 0 || pruneStats.ObservedSourceRemovedSegments > 0) {
@@ -7793,6 +7849,7 @@ type DB struct {
 	retainedValueLogPruneErrorRuns                               atomic.Uint64
 	retainedValueLogPruneCloseAbortRuns                          atomic.Uint64
 	retainedValueLogPruneForegroundAbortRuns                     atomic.Uint64
+	retainedValueLogPruneBudgetAbortRuns                         atomic.Uint64
 	retainedValueLogPruneLastScanRecords                         atomic.Int64
 	retainedValueLogPruneLastScanValuePointerRecords             atomic.Int64
 	retainedValueLogPruneLastScanOuterLeafRecords                atomic.Int64
@@ -7853,6 +7910,7 @@ type DB struct {
 	retainedValueLogPruneWriteGateRetries                        atomic.Uint64
 	retainedValueLogPruneWriteGateRetrySuccesses                 atomic.Uint64
 	retainedPruneForceRequested                                  atomic.Bool
+	retainedPruneFullLiveIDScanBudget                            time.Duration
 	retainedPruneObservedMu                                      sync.Mutex
 	retainedPruneObservedSourceIDs                               map[uint32]struct{}
 	vlogGenerationObservedGCMu                                   sync.Mutex
@@ -8299,6 +8357,10 @@ const (
 	// reclaim. Require a meaningfully idle window before starting it so hot
 	// write workloads do not pay for a large scan between active phases.
 	retainedPruneQuietWindow = 15 * time.Second
+	// Opportunistic retained-prune full live-ID scans run during geth/Sepolia
+	// lulls. Keep the default short so a stale foreground-quiet signal cannot
+	// consume unbounded CPU/I/O; explicit maintenance uses an unbudgeted path.
+	retainedPruneDefaultFullLiveIDScanBudget = 2 * time.Second
 	// Retained-path prune is opportunistic reclaim. Do not restart a full live-ID
 	// scan on every periodic checkpoint during a hot workload.
 	retainedPruneMinInterval = 30 * time.Second
@@ -27284,6 +27346,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_prune.error_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneErrorRuns.Load())
 	stats["treedb.cache.vlog_retained_prune.close_abort_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneCloseAbortRuns.Load())
 	stats["treedb.cache.vlog_retained_prune.foreground_abort_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneForegroundAbortRuns.Load())
+	stats["treedb.cache.vlog_retained_prune.budget_abort_runs"] = fmt.Sprintf("%d", db.retainedValueLogPruneBudgetAbortRuns.Load())
 	stats["treedb.cache.vlog_retained_prune.last_scan.records"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastScanRecords.Load())
 	stats["treedb.cache.vlog_retained_prune.last_scan.value_pointer_records"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastScanValuePointerRecords.Load())
 	stats["treedb.cache.vlog_retained_prune.last_scan.outer_leaf_records"] = fmt.Sprintf("%d", db.retainedValueLogPruneLastScanOuterLeafRecords.Load())
