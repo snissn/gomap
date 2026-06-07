@@ -249,6 +249,14 @@ Issue `#2503` candidate-only paths should consume this contract as follows:
 - both adapters preserve stable document ID bytes, one-based source rank,
   source/index name, and source counters.
 
+The first partial #2503 vector-only split exposes
+`Collection.SearchHybridVectorCandidates(HybridVectorQuery)`. It returns a
+`HybridCandidateResponse` containing vector-source `HybridSearchCandidate`
+values and shared `HybridSearchStats`, and it fails closed if the backing vector
+path is unavailable or reports document materialization. This split does not
+implement lexical candidates; text remains blocked on #1764 ranked `SearchText`
+results/counters.
+
 Issue `#2504` fusion primitives should implement the RRF formula and deterministic tie
 policy above over slices of `HybridSearchCandidate`. The helper surface is
 `FuseHybridSearchCandidates(candidates, fusion, topK)`, which returns bounded
