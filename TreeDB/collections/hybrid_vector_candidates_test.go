@@ -56,6 +56,78 @@ func TestSearchHybridVectorCandidatesNoDocumentsStableIDs2503(t *testing.T) {
 	}
 }
 
+func TestSearchHybridVectorCandidatesUnsupportedShapesFailClosed2503(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	base := HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 2, EfSearch: 2}
+	tests := []struct {
+		name   string
+		mutate func(*HybridVectorQuery)
+	}{
+		{name: "invalid_query_mode", mutate: func(q *HybridVectorQuery) { q.QueryMode = VectorIndexQueryMode("future_mode") }},
+		{name: "zero_exact_with_quantized_index", mutate: func(q *HybridVectorQuery) { q.QuantizedIndexName = "embedding.scalar_u8.fast" }},
+		{name: "explicit_exact_with_quantized_index", mutate: func(q *HybridVectorQuery) {
+			q.QueryMode = VectorIndexQueryModeExact
+			q.QuantizedIndexName = "embedding.scalar_u8.fast"
+		}},
+		{name: "exact_with_quantized_rerank_candidates", mutate: func(q *HybridVectorQuery) {
+			q.QueryMode = VectorIndexQueryModeExact
+			q.QuantizedRerankCandidates = 8
+		}},
+		{name: "quantized_only_missing_index_name", mutate: func(q *HybridVectorQuery) { q.QueryMode = VectorIndexQueryModeQuantizedOnly }},
+		{name: "valid_looking_quantized_only", mutate: func(q *HybridVectorQuery) {
+			q.QueryMode = VectorIndexQueryModeQuantizedOnly
+			q.QuantizedIndexName = "embedding.scalar_u8.fast"
+		}},
+		{name: "quantized_only_with_rerank_candidates", mutate: func(q *HybridVectorQuery) {
+			q.QueryMode = VectorIndexQueryModeQuantizedOnly
+			q.QuantizedIndexName = "embedding.scalar_u8.fast"
+			q.QuantizedRerankCandidates = 8
+		}},
+		{name: "quantized_rerank_missing_index_name", mutate: func(q *HybridVectorQuery) { q.QueryMode = VectorIndexQueryModeQuantizedRerank }},
+		{name: "quantized_rerank_negative_candidates", mutate: func(q *HybridVectorQuery) {
+			q.QueryMode = VectorIndexQueryModeQuantizedRerank
+			q.QuantizedIndexName = "embedding.scalar_u8.fast"
+			q.QuantizedRerankCandidates = -1
+		}},
+		{name: "quantized_rerank_candidates_below_limit", mutate: func(q *HybridVectorQuery) {
+			q.QueryMode = VectorIndexQueryModeQuantizedRerank
+			q.QuantizedIndexName = "embedding.scalar_u8.fast"
+			q.QuantizedRerankCandidates = 1
+		}},
+		{name: "valid_looking_quantized_rerank", mutate: func(q *HybridVectorQuery) {
+			q.QueryMode = VectorIndexQueryModeQuantizedRerank
+			q.QuantizedIndexName = "embedding.scalar_u8.fast"
+			q.QuantizedRerankCandidates = q.CandidateLimit
+		}},
+		{name: "negative_ef_search", mutate: func(q *HybridVectorQuery) { q.EfSearch = -1 }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := base
+			tc.mutate(&opts)
+			got, err := col.SearchHybridVectorCandidates(opts)
+			if !errors.Is(err, ErrHybridSearchUnsupported) {
+				t.Fatalf("SearchHybridVectorCandidates err=%v want ErrHybridSearchUnsupported", err)
+			}
+			if errors.Is(err, ErrHybridSearchIndexUnavailable) {
+				t.Fatalf("SearchHybridVectorCandidates err=%v must not wrap ErrHybridSearchIndexUnavailable for unsupported shape", err)
+			}
+			if len(got.Candidates) != 0 || got.Stats.FailClosed != 1 || got.Stats.FailClosedReason != HybridFailClosedReasonUnsupported {
+				t.Fatalf("response=%+v want unsupported fail-closed stats and no candidates", got)
+			}
+			if got.Stats.DocumentsFetched != 0 || got.Stats.DocumentsMissing != 0 || got.Stats.FullDocumentScanFallbacks != 0 {
+				t.Fatalf("stats=%+v want no document fetch or fallback on unsupported vector candidate shape", got.Stats)
+			}
+		})
+	}
+}
+
 func TestSearchHybridVectorCandidatesMissingIndexFailsClosed2503(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}}
 	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
@@ -163,9 +235,6 @@ func BenchmarkSearchHybridVectorCandidates2503(b *testing.B) {
 	}
 	b.StopTimer()
 	hybridVectorCandidateBenchmarkSink2503 = sink
-	if elapsed := b.Elapsed(); elapsed > 0 {
-		b.ReportMetric(float64(b.N)/elapsed.Seconds(), "ops/sec")
-	}
 	b.ReportMetric(float64(sink.Stats.VectorCandidatesReturned), "candidates/search")
 	b.ReportMetric(float64(sink.Stats.VectorCandidatesExamined), "examined/search")
 	b.ReportMetric(float64(sink.Stats.VectorEdgesVisited), "edges/search")

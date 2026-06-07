@@ -31,12 +31,14 @@ func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (Hybr
 	if c.db == nil {
 		return HybridCandidateResponse{}, errCollectionDBNil
 	}
-	if query.CandidateLimit < 0 {
-		response := HybridCandidateResponse{Stats: HybridSearchStats{FailClosed: 1, FailClosedReason: HybridFailClosedReasonUnsupported}}
-		return response, fmt.Errorf("%w: vector candidate limit cannot be negative", ErrHybridSearchUnsupported)
+	requested := query.CandidateLimit
+	if err := validateHybridVectorCandidateQuery(query); err != nil {
+		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
+		response.Stats.FailClosed = 1
+		response.Stats.FailClosedReason = HybridFailClosedReasonUnsupported
+		return response, err
 	}
 
-	requested := query.CandidateLimit
 	opts := VectorIndexSearchOptions{
 		IndexName:                 query.IndexName,
 		Query:                     query.Query,
@@ -58,6 +60,25 @@ func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (Hybr
 	}
 
 	return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
+}
+
+func validateHybridVectorCandidateQuery(query HybridVectorQuery) error {
+	if query.CandidateLimit < 0 {
+		return fmt.Errorf("%w: vector candidate limit cannot be negative", ErrHybridSearchUnsupported)
+	}
+	if query.EfSearch < 0 {
+		return fmt.Errorf("%w: vector candidate ef_search cannot be negative", ErrHybridSearchUnsupported)
+	}
+	if query.QueryMode != "" && query.QueryMode != VectorIndexQueryModeExact {
+		return fmt.Errorf("%w: vector candidate query mode %q is unsupported by the vector-only #2503 split", ErrHybridSearchUnsupported, query.QueryMode)
+	}
+	if query.QuantizedIndexName != "" {
+		return fmt.Errorf("%w: vector candidate quantized index %q is unsupported by the vector-only #2503 split", ErrHybridSearchUnsupported, query.QuantizedIndexName)
+	}
+	if query.QuantizedRerankCandidates != 0 {
+		return fmt.Errorf("%w: vector candidate quantized rerank candidates are unsupported by the vector-only #2503 split", ErrHybridSearchUnsupported)
+	}
+	return nil
 }
 
 func hybridVectorCandidatesFromSearchResponse(requested int, vectorIndexName string, vectorResponse VectorIndexSearchResponse) (HybridCandidateResponse, error) {
