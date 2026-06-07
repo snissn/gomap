@@ -16,6 +16,7 @@ from treedb_client import (
     TreeDBConfigError,
     TreeDBProtocolError,
     TreeDBTimeoutError,
+    TreeDBTransportError,
     UnsupportedError,
 )
 
@@ -236,6 +237,17 @@ class TreeDBClientTests(unittest.TestCase):
 
             with self.assertRaises(TreeDBTimeoutError):
                 client.health()
+
+    def test_peer_reset_maps_to_transport_error(self) -> None:
+        class ResettingOpener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise ConnectionResetError("connection reset by peer")
+
+        client = TreeDBClient("http://127.0.0.1:9", timeout=1)
+        client._opener = ResettingOpener()  # type: ignore[attr-defined]
+
+        with self.assertRaisesRegex(TreeDBTransportError, "connection reset"):
+            client.health()
 
 
 if __name__ == "__main__":

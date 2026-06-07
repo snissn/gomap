@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import urllib.error
@@ -219,6 +220,8 @@ class TreeDBClient:
             raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc.reason}") from exc
         except (socket.timeout, TimeoutError) as exc:
             raise TreeDBTimeoutError(f"TreeDB request to {url} timed out after {self.timeout} seconds") from exc
+        except (http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
+            raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
 
     def _decode_success(self, status_code: int, body: bytes) -> Any:
         decoded = _decode_json_body(body, status_code=status_code)
