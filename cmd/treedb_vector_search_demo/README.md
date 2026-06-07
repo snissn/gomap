@@ -21,10 +21,14 @@ Each case:
 
 The benchmark search phase is a no-document ANN/search-throughput boundary:
 serial and parallel search metrics return IDs/scores and do not time final
-document fetch, reconstruction, projection, or serialization. Document reads in
-validation are correctness checks, not the preferred vector response-shape
-evidence; use `ProjectionOrientedVectorDocumentFetchPreset` in collection/vector
-APIs when timing projected documents without embeddings.
+document fetch, reconstruction, projection, or serialization. For
+`column_graph` rows, the timed search loop uses caller-owned reusable result
+buffers and excludes response-owned convenience allocation. Native-runtime rows
+remain on the native-runtime benchmark path and should not be read as buffered
+zero-allocation evidence. Document reads in validation are correctness checks,
+not the preferred vector response-shape evidence; use
+`ProjectionOrientedVectorDocumentFetchPreset` in collection/vector APIs when
+timing projected documents without embeddings.
 
 For `-vector-index-strategy column_graph`, the demo can also select explicit
 TreeDB query modes with `-vector-query-mode exact|quantized_only|quantized_rerank`.
@@ -32,7 +36,11 @@ Quantized modes declare a named `scalar_u8` score plane on the TreeDB vector
 index, build it during `RebuildVectorIndex`, validate recall against exact
 full-vector ground truth, and report per-search quantized counters. They do not
 change exact/default behavior and do not affect PostgreSQL+pgvector comparator
-semantics in the external harness.
+semantics in the external harness. The `column_graph` JSON/text search rows
+also report no-document guardrail counters such as `avg_documents_fetched`,
+`avg_response_owned_result_allocs`, and route/fallback averages so profile runs
+can distinguish buffered search-loop cost from response-owned convenience or
+document-materialization paths.
 
 `CompactStorageFull` is intentionally used instead of manually chaining
 maintenance calls. It is TreeDB's canonical full storage compaction path:

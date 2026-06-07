@@ -233,6 +233,49 @@ def render(results: list[dict[str, Any]]) -> str:
                 )
             )
         lines.append("")
+    guardrail_fields = [
+        "avg_documents_fetched",
+        "avg_response_owned_result_allocs",
+        "avg_search_route_hnsw_search_pack",
+        "avg_search_route_quantized_only",
+        "avg_search_route_quantized_rerank",
+        "avg_search_route_column_graph_prepared",
+        "avg_search_route_column_graph_fallback",
+        "avg_graph_row_fallbacks",
+        "avg_typed_column_fallbacks",
+        "avg_vector_scratch_decodes",
+    ]
+    guardrail_rows = [
+        (result, row)
+        for result in results
+        if str(result.get("backend") or "treedb").startswith("treedb")
+        for row in result.get("search_benchmarks", [])
+        if any(field in row for field in guardrail_fields)
+    ]
+    if guardrail_rows:
+        lines.append("## TreeDB Search Guardrails")
+        lines.append("")
+        lines.append("| Backend | Search mode | Concurrency | Avg docs fetched | Avg response-owned allocs | Route hnsw_pack | Route qonly | Route qrerank | Route prepared | Route fallback | Graph fallbacks | Typed-column fallbacks | Vector scratch decodes |")
+        lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for result, row in guardrail_rows:
+            lines.append(
+                "| {backend} | {mode} | {concurrency} | {docs:.1f} | {owned:.1f} | {hnsw:.1f} | {qonly:.1f} | {qrerank:.1f} | {prepared:.1f} | {fallback:.1f} | {graph:.1f} | {typed:.1f} | {scratch:.1f} |".format(
+                    backend=backend_name(result),
+                    mode=search_row_mode(result, row),
+                    concurrency=row["concurrency"],
+                    docs=float(row.get("avg_documents_fetched", 0)),
+                    owned=float(row.get("avg_response_owned_result_allocs", 0)),
+                    hnsw=float(row.get("avg_search_route_hnsw_search_pack", 0)),
+                    qonly=float(row.get("avg_search_route_quantized_only", 0)),
+                    qrerank=float(row.get("avg_search_route_quantized_rerank", 0)),
+                    prepared=float(row.get("avg_search_route_column_graph_prepared", 0)),
+                    fallback=float(row.get("avg_search_route_column_graph_fallback", 0)),
+                    graph=float(row.get("avg_graph_row_fallbacks", 0)),
+                    typed=float(row.get("avg_typed_column_fallbacks", 0)),
+                    scratch=float(row.get("avg_vector_scratch_decodes", 0)),
+                )
+            )
+        lines.append("")
     lines.append("## Notes")
     lines.append("")
     lines.append("- sqlite-vec is intentionally not used here because upstream sqlite-vec is brute-force today; ANN support is tracked as future work.")

@@ -11,9 +11,11 @@ order changes.
 
 ## What this gate proves
 
-The workflow captures isolated lower-level and collection buffered rows for the
-1024 row / 128 dimension / `topK=10` / `efSearch=128` fixture used by the
-current quantized search benchmarks. It records:
+The workflow captures isolated lower-level and collection buffered rows for a
+shape-parameterized quantized-search fixture. The default remains the historical
+1024 row / 128 dimension / `topK=10` / `efSearch=128` fixture, and
+`SHAPE=10k_x_1536` selects the high-dimensional profile contract needed by
+#2515. It records:
 
 - same-host baseline and candidate commit identity;
 - `ns/op`, `ops/sec`, `B/op`, `allocs/op`, and recall@K;
@@ -33,11 +35,16 @@ scripts/treedb_rabitq_1bit_profile_gate.sh
 
 Default selection:
 
+- `SHAPE=1024x128`: the historical fixed gate shape. Set `SHAPE=10k_x_1536`
+  for the #2515 high-dimensional contract. The underlying benchmark also
+  accepts `BENCH_ROWS`, `BENCH_DIMS`, `BENCH_M`, `BENCH_TOP_K`,
+  `BENCH_EF_SEARCH`, and `BENCH_QUERY_ORDINAL` overrides.
 - `ROWS=claim_core`: RaBitQ `quantized_only` c=1/c=8 lower-level and collection
   rows plus scalar_u8 `quantized_only` c=1/c=8 guardrail rows.
 - `PROFILE_ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8`:
   CPU/alloc profiles for the required RaBitQ collection buffered target rows.
-- `BENCHTIME=100000x`, `TIMING_COUNT=5`, `PROFILE_COUNT=1`.
+- `BENCHTIME=100000x` for the default shape, `BENCHTIME=1000x` for
+  `SHAPE=10k_x_1536`, `TIMING_COUNT=5`, `PROFILE_COUNT=1`.
 - `RECALL_TOLERANCE_PCT=0`: when `BASELINE_DIR` is set, candidate median recall must be at least the matching baseline row's median recall minus this tolerance for the row guardrail to pass.
 
 Useful selectors for `ROWS` and `PROFILE_ROWS` are comma-separated and ORed:
@@ -71,10 +78,11 @@ Each selected row gets a directory named by `row_id` under `RUN_DIR`. Use a fres
 
 Primary artifacts:
 
-- `context.txt`: branch, commit, Go version/env, `GOMAXPROCS`, `GOWORK`, uptime,
-  git status, and visible competing benchmark/test processes.
+- `context.txt`: branch, commit, Go version/env, `GOMAXPROCS`, `GOWORK`, shape,
+  fixture knobs, uptime, git status, and visible competing benchmark/test
+  processes.
 - `matrix.tsv`: selected row IDs, codec, layer, mode, c, rerank candidates,
-  profile selection, and regex.
+  profile selection, shape, fixture knobs, and regex.
 - `summary.md` / `summary.tsv`: median timing, throughput, allocation, recall,
   byte/counter summaries, and guardrail status.
 - `<row>/bench_timing.txt`: unprofiled timing/counter output. Use this for
@@ -117,6 +125,18 @@ GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
   -bench '^(BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926)$' \
   -benchmem -benchtime=100x -count=3
+```
+
+#2515 `10k_x_1536` RaBitQ collection profile smoke/contract path:
+
+```sh
+RUN_DIR=/tmp/gomap_rabitq_1bit_10k_x_1536_$(date +%Y%m%d_%H%M%S) \
+  SHAPE=10k_x_1536 \
+  ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8,rabitq_collection_quantized_rerank32_c1,rabitq_collection_quantized_rerank32_c8 \
+  PROFILE_ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8,rabitq_collection_quantized_rerank32_c1,rabitq_collection_quantized_rerank32_c8 \
+  TIMING_COUNT=1 PROFILE_COUNT=1 BENCHTIME=1000x \
+  GOMAXPROCS=8 GOWORK=off \
+  scripts/treedb_rabitq_1bit_profile_gate.sh
 ```
 
 ## Claim-quality same-host baseline/candidate workflow
@@ -172,7 +192,7 @@ PR or issue evidence should include at least:
 | baseline/candidate identity | branch, full SHA, Go version, OS/arch, `GOMAXPROCS`, fixture |
 | timing/allocation | `ns/op`, `ops/sec`, `B/op`, `allocs/op` |
 | quality | recall@K versus exact, c=1 and c=8 shown separately |
-| bytes | `quantized_code_B/search`, `quantized_code_B/vector`, `quantized_asset_B/vector`, exact vector/norm bytes for rerank |
+| bytes | `quantized_code_B/search`, `quantized_code_B/vector` (shape-aware: scalar_u8=`dims`, RaBitQ=`ceil(next_power_of_two(dims)/8)`), `quantized_asset_B/vector`, exact vector/norm bytes for rerank |
 | route counters | `search_route_quantized_only/search`, `search_route_quantized_rerank/search`, `search_route_column_graph_prepared/search` |
 | failure/fallback counters | document fetches, graph/typed/scratch/float64 fallbacks, quantized asset missing/invalid/stale/closed/unavailable |
 | collection seam | cache hits/misses/waits/errors, `open_setup_in_timed_loop=0`, `open_searcher_calls/op=0` |

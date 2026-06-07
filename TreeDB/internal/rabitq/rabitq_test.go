@@ -370,6 +370,85 @@ func TestReferenceKernelsNoAllocAfterWarm2449(t *testing.T) {
 	}
 }
 
+func TestPrepareQueryByteMismatchWeightsCacheRefreshes2519(t *testing.T) {
+	plan, err := NewPlan(1536, DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+	queryVec := rabitqVectorForTest2519(plan.VectorDimensions(), 17)
+	changedQueryVec := rabitqVectorForTest2519(plan.VectorDimensions(), 31)
+
+	var ws Workspace
+	query, err := plan.EncodeQuery(queryVec, &ws)
+	if err != nil {
+		t.Fatalf("EncodeQuery: %v", err)
+	}
+	tables, weightSum, ok := PrepareQueryByteMismatchWeights(query, &ws)
+	if !ok {
+		t.Fatal("PrepareQueryByteMismatchWeights initial failed")
+	}
+	if !ws.queryByteMismatchCacheValid || ws.queryByteMismatchCodeDims != plan.CodeDimensions() || len(ws.queryByteMismatchWeights) != len(tables) || weightSum <= 0 {
+		t.Fatalf("cache not populated: valid=%v codeDims=%d table=%d weightSum=%v", ws.queryByteMismatchCacheValid, ws.queryByteMismatchCodeDims, len(ws.queryByteMismatchWeights), weightSum)
+	}
+	firstTable := tables
+	firstTableCopy := append([]float64(nil), tables...)
+	firstWeightSum := weightSum
+
+	queryAgain, err := plan.EncodeQuery(queryVec, &ws)
+	if err != nil {
+		t.Fatalf("EncodeQuery again: %v", err)
+	}
+	tablesAgain, weightSumAgain, ok := PrepareQueryByteMismatchWeights(queryAgain, &ws)
+	if !ok {
+		t.Fatal("PrepareQueryByteMismatchWeights cached failed")
+	}
+	if len(firstTable) == 0 || len(tablesAgain) == 0 || &firstTable[0] != &tablesAgain[0] || weightSumAgain != firstWeightSum {
+		t.Fatalf("cache miss for repeated query: first_ptr=%p again_ptr=%p first_sum=%v again_sum=%v", &firstTable[0], &tablesAgain[0], firstWeightSum, weightSumAgain)
+	}
+
+	badQuery := queryAgain
+	badQuery.AbsWeights = append([]float32(nil), queryAgain.AbsWeights...)
+	badQuery.AbsWeights[9] = -1
+	if _, _, ok := PrepareQueryByteMismatchWeights(badQuery, &ws); ok {
+		t.Fatal("PrepareQueryByteMismatchWeights bad query unexpectedly succeeded")
+	}
+	if ws.queryByteMismatchCacheValid {
+		t.Fatal("failed prepare left byte-table cache marked valid")
+	}
+	queryAfterFailure, err := plan.EncodeQuery(queryVec, &ws)
+	if err != nil {
+		t.Fatalf("EncodeQuery after failure: %v", err)
+	}
+	tablesAfterFailure, weightSumAfterFailure, ok := PrepareQueryByteMismatchWeights(queryAfterFailure, &ws)
+	if !ok {
+		t.Fatal("PrepareQueryByteMismatchWeights after failed prepare failed")
+	}
+	if weightSumAfterFailure != firstWeightSum || !equalFloat64Slice(tablesAfterFailure, firstTableCopy) {
+		t.Fatalf("cache rebuild after failed prepare mismatch: got_sum=%v want_sum=%v", weightSumAfterFailure, firstWeightSum)
+	}
+
+	changedQuery, err := plan.EncodeQuery(changedQueryVec, &ws)
+	if err != nil {
+		t.Fatalf("EncodeQuery changed: %v", err)
+	}
+	changedTables, changedWeightSum, ok := PrepareQueryByteMismatchWeights(changedQuery, &ws)
+	if !ok {
+		t.Fatal("PrepareQueryByteMismatchWeights changed failed")
+	}
+	var independentWS Workspace
+	independentQuery, err := plan.EncodeQuery(changedQueryVec, &independentWS)
+	if err != nil {
+		t.Fatalf("EncodeQuery independent changed: %v", err)
+	}
+	wantTables, wantWeightSum, ok := PrepareQueryByteMismatchWeights(independentQuery, &independentWS)
+	if !ok {
+		t.Fatal("PrepareQueryByteMismatchWeights independent changed failed")
+	}
+	if changedWeightSum != wantWeightSum || !equalFloat64Slice(changedTables, wantTables) {
+		t.Fatalf("changed query cache refresh mismatch: got_sum=%v want_sum=%v", changedWeightSum, wantWeightSum)
+	}
+}
+
 func BenchmarkReferenceScoreCosine2449(b *testing.B) {
 	plan, err := NewPlan(128, DefaultConfig())
 	if err != nil {
@@ -402,6 +481,30 @@ func BenchmarkReferenceScoreCosine2449(b *testing.B) {
 		score += s
 	}
 	rabitqScoreSink += score
+}
+
+func rabitqVectorForTest2519(dims int, seed uint64) []float32 {
+	v := make([]float32, dims)
+	for i := range v {
+		x := math.Sin(float64((i+1)*int(seed+3))*0.731) + 0.5*math.Cos(float64((i+5)*int(seed+11))*0.173)
+		if x == 0 {
+			x = float64(i+1) * 0.001
+		}
+		v[i] = float32(x)
+	}
+	return v
+}
+
+func equalFloat64Slice(a, b []float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func exactCosineForTest2449(a, b []float32) float64 {
