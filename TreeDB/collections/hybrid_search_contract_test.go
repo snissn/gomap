@@ -147,13 +147,13 @@ func TestHybridSearchCandidateAndResultShape2502(t *testing.T) {
 	}
 }
 
-func TestSearchHybridStubFailsClosed2502(t *testing.T) {
+func TestSearchHybridValidationFailsClosed2502(t *testing.T) {
 	response, err := (&Collection{db: &backenddb.DB{}}).SearchHybrid(HybridSearchOptions{TopK: 10})
 	if !errors.Is(err, ErrHybridSearchUnsupported) {
 		t.Fatalf("SearchHybrid err=%v want ErrHybridSearchUnsupported", err)
 	}
 	if len(response.Results) != 0 || response.Stats.FailClosed != 1 || response.Stats.FailClosedReason != HybridFailClosedReasonUnsupported || response.Stats.FullDocumentScanFallbacks != 0 {
-		t.Fatalf("SearchHybrid response=%+v want fail-closed stub with no scan fallback", response)
+		t.Fatalf("SearchHybrid response=%+v want fail-closed unsupported shape with no scan fallback", response)
 	}
 
 	nilResponse, err := (*Collection)(nil).SearchHybrid(HybridSearchOptions{})

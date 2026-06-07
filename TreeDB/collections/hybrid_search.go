@@ -1,9 +1,6 @@
 package collections
 
-import (
-	"errors"
-	"fmt"
-)
+import "errors"
 
 // Hybrid-search errors are fail-closed sentinels. Implementations may wrap them
 // with source/index-specific detail, but must not silently scan all documents or
@@ -269,17 +266,17 @@ type HybridSearchResponse struct {
 	Results    []HybridSearchResult    `json:"results,omitempty"`
 }
 
-// SearchHybrid is the reserved collection-level hybrid search entry point. The
-// #2505 executor will implement it; until then it fails closed so callers cannot
-// accidentally depend on a scan-all-documents fallback.
+// SearchHybrid executes a bounded hybrid search over optional text and vector
+// candidate sources, an optional scalar-index filter, deterministic rank fusion,
+// and optional final top-k document materialization. It fails closed instead of
+// scanning primary documents when a requested source/filter/fetch path is
+// unavailable or unsupported.
 func (c *Collection) SearchHybrid(opts HybridSearchOptions) (HybridSearchResponse, error) {
-	_ = opts
 	if c == nil {
 		return HybridSearchResponse{}, errCollectionNil
 	}
 	if c.db == nil {
 		return HybridSearchResponse{}, errCollectionDBNil
 	}
-	response := HybridSearchResponse{Stats: HybridSearchStats{FailClosed: 1, FailClosedReason: HybridFailClosedReasonUnsupported}}
-	return response, fmt.Errorf("%w: SearchHybrid executor is deferred to issue #2505", ErrHybridSearchUnsupported)
+	return c.searchHybrid(opts)
 }
