@@ -57,6 +57,22 @@ func TestIdentityRotationAndShape2481(t *testing.T) {
 	if CodeWidthBits != 1 || QueryWeightBits != 4 {
 		t.Fatalf("widths code=%d query=%d", CodeWidthBits, QueryWeightBits)
 	}
+	metaPlan, err := NewPlan(5, Config{Seed: 0x0123456789abcdef})
+	if err != nil {
+		t.Fatalf("NewPlan metadata: %v", err)
+	}
+	wantPerm := []int{6, 2, 4, 1, 0, 3, 7, 5}
+	for i, want := range wantPerm {
+		if got := metaPlan.perm[i]; got != want {
+			t.Fatalf("rotation perm[%d]=%d want %d", i, got, want)
+		}
+	}
+	wantSigns := []float64{-1, 1, 1, -1, -1, -1, 1, 1}
+	for i, want := range wantSigns {
+		if got := metaPlan.signs[i]; got != want {
+			t.Fatalf("rotation signs[%d]=%v want %v", i, got, want)
+		}
+	}
 	if BitOrder != "lsb0" || WordOrder != "little_endian_uint64" || ScoreLabel != "brq_1bit_estimated_cosine_q4" {
 		t.Fatalf("unexpected bit/word/score labels: %q %q %q", BitOrder, WordOrder, ScoreLabel)
 	}
@@ -144,7 +160,7 @@ func TestEncodeQueryAndScoreGolden2481(t *testing.T) {
 	if got := query.Weights; string(got) != string(wantWeights) {
 		t.Fatalf("query.Weights=%v want %v", got, wantWeights)
 	}
-	if got, want := math.Float32bits(query.QueryWeightScale), uint32(0x3d265f2f); got != want {
+	if got, want := math.Float64bits(query.QueryWeightScale), uint64(0x3fa4cbe5efaba9f6); got != want {
 		t.Fatalf("QueryWeightScale bits=%#x want %#x", got, want)
 	}
 	if got, want := query.QueryWeightSumInt, uint32(56); got != want {
@@ -164,8 +180,8 @@ func TestEncodeQueryAndScoreGolden2481(t *testing.T) {
 	if ScoreLabel != "brq_1bit_estimated_cosine_q4" {
 		t.Fatalf("ScoreLabel=%q", ScoreLabel)
 	}
-	if math.Abs(score-(-0.592816395324689)) > 1e-12 {
-		t.Fatalf("score=%.15f want %.15f", score, -0.592816395324689)
+	if math.Abs(score-(-0.592816421950027)) > 1e-12 {
+		t.Fatalf("score=%.15f want %.15f", score, -0.592816421950027)
 	}
 	if score != slow {
 		t.Fatalf("bit-product score %.17g differs from slow %.17g", score, slow)
@@ -231,8 +247,8 @@ func TestBitProductFormulaParity2481(t *testing.T) {
 	if score != manual || score != slow {
 		t.Fatalf("score parity failed score=%.17g manual=%.17g slow=%.17g", score, manual, slow)
 	}
-	if math.Abs(score-(-0.663334448546277)) > 1e-12 {
-		t.Fatalf("score=%.15f want %.15f", score, -0.663334448546277)
+	if math.Abs(score-(-0.663334471054573)) > 1e-12 {
+		t.Fatalf("score=%.15f want %.15f", score, -0.663334471054573)
 	}
 }
 
@@ -324,7 +340,7 @@ func TestScoreFailsClosedOnMalformedSideInputs2481(t *testing.T) {
 		{name: "weight_sum", mut: func(q *Query, _ *EncodedVector) { q.QueryWeightSumInt++ }, want: ErrDimensionMismatch},
 		{name: "negative_weight_sum", mut: func(q *Query, _ *EncodedVector) { q.NegativeWeightSumInt++ }, want: ErrDimensionMismatch},
 		{name: "zero_scale", mut: func(q *Query, _ *EncodedVector) { q.QueryWeightScale = 0 }, want: ErrDegenerateVector},
-		{name: "nan_scale", mut: func(q *Query, _ *EncodedVector) { q.QueryWeightScale = float32(math.NaN()) }, want: ErrDegenerateVector},
+		{name: "nan_scale", mut: func(q *Query, _ *EncodedVector) { q.QueryWeightScale = math.NaN() }, want: ErrDegenerateVector},
 		{name: "sign_padding", mut: func(q *Query, _ *EncodedVector) {
 			q.SignBits = append([]byte(nil), q.SignBits...)
 			q.SignBits[0] |= 0x80

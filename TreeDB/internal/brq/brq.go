@@ -129,7 +129,7 @@ type Query struct {
 	NegQ2                []byte
 	NegQ4                []byte
 	NegQ8                []byte
-	QueryWeightScale     float32
+	QueryWeightScale     float64
 	QueryWeightSumInt    uint32
 	NegativeWeightSumInt uint32
 	CodeDimensions       int
@@ -302,7 +302,7 @@ func (p *Plan) EncodeQuery(query []float32, ws *Workspace) (Query, error) {
 		NegQ2:                ws.negQ2,
 		NegQ4:                ws.negQ4,
 		NegQ8:                ws.negQ8,
-		QueryWeightScale:     float32(maxAbs / 15),
+		QueryWeightScale:     maxAbs / 15,
 		QueryWeightSumInt:    weightSum,
 		NegativeWeightSumInt: negativeWeightSum,
 		CodeDimensions:       p.codeDimensions,
@@ -359,12 +359,17 @@ func (p *Plan) BitProduct(code, q1, q2, q4, q8 []byte) (uint32, error) {
 	if p == nil || p.codeDimensions <= 0 || p.bytesPerCode <= 0 {
 		return 0, fmt.Errorf("%w: nil or invalid plan", ErrInvalidConfig)
 	}
-	for name, row := range map[string][]byte{"code": code, "q1": q1, "q2": q2, "q4": q4, "q8": q8} {
-		if len(row) != p.bytesPerCode {
-			return 0, fmt.Errorf("%w: %s bytes=%d want %d", ErrDimensionMismatch, name, len(row), p.bytesPerCode)
+	for _, input := range []struct {
+		name string
+		row  []byte
+	}{
+		{"code", code}, {"q1", q1}, {"q2", q2}, {"q4", q4}, {"q8", q8},
+	} {
+		if len(input.row) != p.bytesPerCode {
+			return 0, fmt.Errorf("%w: %s bytes=%d want %d", ErrDimensionMismatch, input.name, len(input.row), p.bytesPerCode)
 		}
-		if err := validatePadding(row, p.codeDimensions); err != nil {
-			return 0, fmt.Errorf("%w: %s padding: %v", ErrDimensionMismatch, name, err)
+		if err := validatePadding(input.row, p.codeDimensions); err != nil {
+			return 0, fmt.Errorf("%w: %s padding: %v", ErrDimensionMismatch, input.name, err)
 		}
 	}
 	return bitProductNoValidate(code, q1, q2, q4, q8), nil
@@ -453,7 +458,7 @@ func (p *Plan) ValidateQuery(q Query) error {
 	if len(q.Weights) != p.codeDimensions {
 		return fmt.Errorf("%w: query weights=%d want %d", ErrDimensionMismatch, len(q.Weights), p.codeDimensions)
 	}
-	if q.QueryWeightScale <= 0 || math.IsNaN(float64(q.QueryWeightScale)) || math.IsInf(float64(q.QueryWeightScale), 0) {
+	if q.QueryWeightScale <= 0 || math.IsNaN(q.QueryWeightScale) || math.IsInf(q.QueryWeightScale, 0) {
 		return fmt.Errorf("%w: invalid query_weight_scale=%v", ErrDegenerateVector, q.QueryWeightScale)
 	}
 	var sum uint32
