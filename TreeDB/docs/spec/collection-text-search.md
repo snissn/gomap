@@ -1,6 +1,6 @@
-# Collection Text Search Contract (M0-M3)
+# Collection Text Search Contract (M0-M4)
 
-Status: PR3 mutation-maintenance slice for issue #1764. TreeDB collections are
+Status: PR4 ranked SearchText slice for issue #1764. TreeDB collections are
 pre-alpha; these text-search storage formats are versioned and may change before
 stabilization, but malformed or unsupported versions must fail closed.
 
@@ -23,12 +23,13 @@ stabilization, but malformed or unsupported versions must fail closed.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
 - Insert, delete, update, and batch write paths maintain postings, text-state,
   and corpus/term/field stats for declared text indexes.
-- `SearchText(TextSearchOptions)` query-shape validation that fails closed before
-  scanning because ranked text search execution is not implemented yet.
+- `SearchText(TextSearchOptions)` executes bounded postings range scans, applies
+  simple term `AND`/`OR` semantics, scores candidates with BM25F-style field
+  weighting from persisted stats/text-state, and fetches documents only for final
+  top-K results when requested.
 
 Not implemented yet:
 
-- BM25/BM25F scoring and ranked SearchText execution;
 - phrase/proximity/highlighting/stemming/trigram/fuzzy search;
 - query-vector syntax, gateway integration, or hybrid text+vector executor integration.
 
@@ -170,6 +171,8 @@ type TextSearchOptions struct {
     Query                string
     Operator             TextSearchOperator // "or" default, or "and"
     TopK                 int
+    CandidateLimit       int // optional candidate budget before scoring
+    MaxPostingsScanned   int // optional postings scan budget
     IncludeDocuments     bool
     DocumentFetchOptions DocumentFetchOptions
 }
@@ -179,11 +182,27 @@ The parser accepts whitespace-separated terms and optional explicit `AND` or
 `OR` separators. Mixed `AND`/`OR`, phrases, and grouped syntax fail closed. Query
 terms are analyzed with the declared index analyzer.
 
-`SearchText` currently returns `ErrTextIndexUnavailable` for non-empty analyzed
-queries against an existing text index. This is intentional: normal text queries
-MUST be indexed, bounded, and ranked from postings; M3 does not implement the
-ranked executor and must not fall back to scan-and-rank. Empty analyzed queries
-return an empty result set.
+`SearchText` normalizes duplicate analyzed terms, range-scans the postings root
+by encoded term prefix, builds a bounded unique-document candidate set, and
+scores candidates from postings + text-state + text-stats. It does not scan or
+rank all collection documents. If candidate or postings budgets are exceeded, it
+returns `ErrTextIndexUnavailable` with truncation/fail-closed counters rather
+than returning silently incomplete rankings. Empty analyzed queries return an
+empty result set.
+
+Results expose response-owned document IDs, source index name, one-based lexical
+rank, higher-is-better BM25F score, score kind `bm25f`, matched terms/fields, and
+optional final documents. Documents are fetched only after top-K ranking, so
+`DocumentsFetched <= TopK` for successful searches.
+
+`TextSearchStats` includes text/hybrid-compatible counters:
+`text_candidates_requested`, `text_candidates_returned`,
+`text_postings_scanned`, `text_candidates_scored`, `documents_fetched`,
+`documents_missing`, `full_document_scan_fallbacks`, `truncated`, `fail_closed`,
+and `fail_closed_reason`, plus text-only aliases and scan/score/fetch timing
+fields. `TextCandidatesScored` counts the full bounded scored candidate set;
+`TextCandidatesReturned` counts ranked results/candidates actually returned after
+TopK truncation.
 
 ## Mutation maintenance
 
@@ -204,7 +223,8 @@ maintained text roots.
 
 Later #1764 milestones will:
 
-- range-scan postings by analyzed term;
-- bound the candidate set;
-- score candidates from persisted stats with BM25/BM25F-style field weighting;
-- fetch full documents only for final top-K results.
+- expose a candidate-only lexical adapter for the #2503 hybrid seam without full
+  document fetch;
+- add gateway/query-language integration;
+- add phrase/proximity/highlighting/stemming/trigram/fuzzy search only after
+  explicit storage/query contracts land.

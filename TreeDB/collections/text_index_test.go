@@ -263,7 +263,7 @@ func TestCollectionTextRootStoragePolicies(t *testing.T) {
 	}
 }
 
-func TestCollectionTextIndexedWritesMaintainStorageAndSearchFailsClosed(t *testing.T) {
+func TestCollectionTextIndexedWritesMaintainStorageAndSearchRanks(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -295,11 +295,14 @@ func TestCollectionTextIndexedWritesMaintainStorageAndSearchFailsClosed(t *testi
 	}
 
 	response, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund AND policy", TopK: 10})
-	if !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("SearchText err=%v want ErrTextIndexUnavailable", err)
+	if err != nil {
+		t.Fatalf("SearchText: %v", err)
 	}
-	if response.Stats.QueryTerms != 2 || response.Stats.DocumentsFetched != 0 || !response.Stats.Unavailable {
-		t.Fatalf("SearchText stats=%+v want terms=2 fetched=0 unavailable", response.Stats)
+	if len(response.Results) != 1 || string(response.Results[0].DocumentID) != "d1" || response.Results[0].Rank != 1 || response.Results[0].Score <= 0 {
+		t.Fatalf("SearchText results=%+v want ranked d1", response.Results)
+	}
+	if response.Stats.QueryTerms != 2 || response.Stats.TextPostingsScanned != 2 || response.Stats.TextCandidatesScored != 1 || response.Stats.DocumentsFetched != 0 || response.Stats.FailClosed != 0 {
+		t.Fatalf("SearchText stats=%+v want indexed search counters", response.Stats)
 	}
 	if _, err := col.SearchText(TextSearchOptions{IndexName: "missing", Query: "refund", TopK: 10}); !errors.Is(err, ErrIndexNotFound) {
 		t.Fatalf("SearchText missing err=%v want ErrIndexNotFound", err)

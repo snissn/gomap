@@ -9,8 +9,7 @@ import (
 
 // CreateTextIndex adds a collection-native text index and backfills persistent
 // postings, text-state, and text-stats roots from the current documents. Write
-// paths maintain those roots after creation; SearchText execution remains
-// fail-closed until a later #1764 milestone.
+// paths maintain those roots after creation, and SearchText ranks from them.
 func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, TextIndexBackfillStats, error) {
 	var emptyStats TextIndexBackfillStats
 	if c == nil {
@@ -193,8 +192,8 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 }
 
 // TextIndexStorageStats validates and summarizes persistent text roots for a
-// declared text index. It is a storage/accounting helper; SearchText execution
-// remains unavailable until later milestones.
+// declared text index. It is a storage/accounting helper for the roots that
+// SearchText also validates while scanning and scoring.
 func (c *Collection) TextIndexStorageStats(indexName string) (TextIndexStorageStats, error) {
 	var stats TextIndexStorageStats
 	if err := ValidateIndexName(indexName); err != nil {
