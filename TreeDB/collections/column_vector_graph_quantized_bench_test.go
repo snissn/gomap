@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/brq"
 	"github.com/snissn/gomap/TreeDB/internal/rabitq"
 )
 
@@ -174,6 +175,29 @@ func BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451(
 				StatsMode:                 VectorIndexSearchStatsModeProduction,
 			}
 			runColumnGraphRabitQQuantizedSearchWithBufferBench2451(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
+		})
+	}
+}
+
+func BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481(b *testing.B) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	fixture := openColumnGraphBRQQuantizedBenchFixture2481(b, shape)
+	defer fixture.close()
+	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
+
+	for _, tc := range columnGraphScalarU8QuantizedSearchWithBufferBenchCases2414() {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			opts := VectorIndexSearcherSearchOptions{
+				Query:                     fixture.query,
+				QueryMode:                 tc.mode,
+				QuantizedIndexName:        columnGraphBRQQuantizedIndexName2481,
+				QuantizedRerankCandidates: tc.rerankCandidates,
+				TopK:                      fixture.shape.topK,
+				EfSearch:                  fixture.shape.efSearch,
+				StatsMode:                 VectorIndexSearchStatsModeProduction,
+			}
+			runColumnGraphBRQQuantizedSearchWithBufferBench2481(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
 		})
 	}
 }
@@ -692,6 +716,162 @@ func assertColumnGraphRabitQQuantizedSearchWithBufferGuardrails2451(tb testing.T
 	}
 }
 
+func runColumnGraphBRQQuantizedSearchWithBufferBench2481(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearcherSearchOptions, concurrency int, exactIDs map[string]struct{}, exactCount int) {
+	b.Helper()
+	if concurrency <= 0 {
+		b.Fatalf("concurrency=%d must be positive", concurrency)
+	}
+	type benchWorker struct {
+		searcher *VectorIndexSearcher
+		buffer   VectorIndexSearchBuffer
+		stats    VectorIndexSearchStats
+		sink     int64
+	}
+	workers := make([]benchWorker, concurrency)
+	for i := range workers {
+		searcher, err := fixture.collection.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: fixture.definition.Name, MaxDecodedBlocks: 1})
+		if err != nil {
+			b.Fatalf("OpenVectorIndexSearcher worker %d: %v", i, err)
+		}
+		defer func(searcher *VectorIndexSearcher) { _ = searcher.Close() }(searcher)
+		workers[i].searcher = searcher
+		warm, err := searcher.SearchWithBuffer(opts, &workers[i].buffer)
+		if err != nil {
+			b.Fatalf("warm brq SearchWithBuffer worker %d: %v", i, err)
+		}
+		if len(warm.Results) == 0 {
+			b.Fatalf("warm brq SearchWithBuffer worker %d returned no results", i)
+		}
+		assertColumnGraphBRQQuantizedSearchWithBufferGuardrails2481(b, warm.Stats, opts, fixture.definition.Dimensions, fixture.quantizedCodeBytesPerVector)
+	}
+	warmRecall := columnGraphScalarU8QuantizedBenchmarkRecallAtK1926(workers[0].buffer.results, exactIDs, exactCount)
+
+	var next atomic.Uint64
+	var sink atomic.Int64
+	var failed atomic.Bool
+	var firstErr atomic.Value
+	recordErr := func(format string, args ...any) {
+		if failed.CompareAndSwap(false, true) {
+			firstErr.Store(fmt.Sprintf(format, args...))
+		}
+	}
+	var wg sync.WaitGroup
+	ready := make(chan struct{}, len(workers))
+	start := make(chan struct{})
+	wg.Add(len(workers))
+	for i := range workers {
+		worker := &workers[i]
+		go func() {
+			defer wg.Done()
+			for warmIter := 0; warmIter < 8; warmIter++ {
+				response, err := worker.searcher.SearchWithBuffer(opts, &worker.buffer)
+				if err != nil {
+					recordErr("brq goroutine warm SearchWithBuffer: %v", err)
+					break
+				}
+				if len(response.Results) == 0 {
+					recordErr("brq goroutine warm SearchWithBuffer returned no results")
+					break
+				}
+			}
+			ready <- struct{}{}
+			<-start
+			if failed.Load() {
+				return
+			}
+			var localStats VectorIndexSearchStats
+			var localSink int64
+			for {
+				iteration := int(next.Add(1)) - 1
+				if iteration >= b.N {
+					break
+				}
+				if failed.Load() {
+					continue
+				}
+				response, err := worker.searcher.SearchWithBuffer(opts, &worker.buffer)
+				if err != nil {
+					recordErr("brq SearchWithBuffer: %v", err)
+					continue
+				}
+				if len(response.Results) == 0 {
+					recordErr("brq SearchWithBuffer returned no results")
+					continue
+				}
+				localSink += int64(response.Results[0].Ordinal)
+				addColumnGraphScalarU8QuantizedBenchmarkStats1926(&localStats, response.Stats)
+			}
+			worker.stats = localStats
+			worker.sink = localSink
+		}()
+	}
+	for range workers {
+		<-ready
+	}
+	if errValue := firstErr.Load(); errValue != nil {
+		close(start)
+		wg.Wait()
+		b.Fatalf("%s", errValue.(string))
+	}
+	b.ReportAllocs()
+	b.ReportMetric(float64(concurrency), "concurrency")
+	b.ReportMetric(1, "searchwithbuffer_buffered_row")
+	b.ReportMetric(1, "brq_1bit_row")
+	b.ReportMetric(1, "reported_stats_mode_production")
+	b.ResetTimer()
+	close(start)
+	wg.Wait()
+	b.StopTimer()
+	if errValue := firstErr.Load(); errValue != nil {
+		b.Fatalf("%s", errValue.(string))
+	}
+	var stats VectorIndexSearchStats
+	for i := range workers {
+		addColumnGraphScalarU8QuantizedBenchmarkStats1926(&stats, workers[i].stats)
+		sink.Add(workers[i].sink)
+	}
+	columnPhysicalScanBenchSum += sink.Load()
+	recallSum := warmRecall * float64(b.N)
+	reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b, fixture, stats, recallSum)
+}
+
+func assertColumnGraphBRQQuantizedSearchWithBufferGuardrails2481(tb testing.TB, stats VectorIndexSearchStats, opts VectorIndexSearcherSearchOptions, dims int, bytesPerCode int) {
+	tb.Helper()
+	if bytesPerCode <= 0 {
+		tb.Fatalf("brq bytes_per_code=%d", bytesPerCode)
+	}
+	switch opts.QueryMode {
+	case VectorIndexQueryModeQuantizedOnly:
+		if stats.SearchRouteQuantizedOnly != 1 || stats.SearchRouteQuantizedRerank != 0 || stats.QuantizedScorerActive != 1 {
+			tb.Fatalf("brq quantized_only route stats=%+v", stats)
+		}
+		if stats.PreparedScoreCalls != 0 || stats.QuantizedRerankExactScoreCalls != 0 || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 {
+			tb.Fatalf("brq quantized_only exact stats=%+v want none", stats)
+		}
+	case VectorIndexQueryModeQuantizedRerank:
+		if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 || stats.QuantizedScorerActive != 1 {
+			tb.Fatalf("brq quantized_rerank route stats=%+v", stats)
+		}
+		if stats.QuantizedRerankCandidates != uint64(opts.QuantizedRerankCandidates) || stats.QuantizedRerankExactScoreCalls != uint64(opts.QuantizedRerankCandidates) {
+			tb.Fatalf("brq quantized_rerank stats=%+v want shortlist=%d", stats, opts.QuantizedRerankCandidates)
+		}
+		if stats.VectorBytesRead != uint64(opts.QuantizedRerankCandidates*dims*4) || stats.NormBytesRead != uint64(opts.QuantizedRerankCandidates*4) {
+			tb.Fatalf("brq quantized_rerank exact bytes stats=%+v want vector=%d norm=%d", stats, opts.QuantizedRerankCandidates*dims*4, opts.QuantizedRerankCandidates*4)
+		}
+	default:
+		tb.Fatalf("unexpected brq SearchWithBuffer benchmark query mode %q", opts.QueryMode)
+	}
+	if stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead != stats.QuantizedScoreCalls*uint64(bytesPerCode) {
+		tb.Fatalf("brq quantized code stats=%+v bytes_per_code=%d", stats, bytesPerCode)
+	}
+	if stats.QuantizedScoreCodecBRQ1Bit != 1 || stats.BRQ1BitQueryWeightBits != brq.QueryWeightBits || stats.BRQ1BitBitProductPasses != stats.QuantizedScoreCalls*2 || stats.BRQ1BitQueryWeightScale <= 0 {
+		tb.Fatalf("brq codec stats=%+v", stats)
+	}
+	if stats.DocumentsFetched != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
+		tb.Fatalf("brq SearchWithBuffer buffered guardrails stats=%+v want no docs/materialization/fallback/scratch", stats)
+	}
+}
+
 func BenchmarkColumnGraphScalarU8QuantizedTraversalCounters2271(b *testing.B) {
 	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
 	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
@@ -791,6 +971,31 @@ func BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926(b *testing.B) {
 	}
 }
 
+func BenchmarkColumnGraphBRQQuantizedRebuildStorage2481(b *testing.B) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 256, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	_, d, col, def, _ := openColumnGraphBRQQuantizedBenchCollection2481(b, shape)
+	defer func() { _ = d.Close() }()
+	b.ReportAllocs()
+	reportColumnGraphScalarU8QuantizedBenchShapeMetrics1926(b, shape)
+	b.ReportMetric(1, "quantized_indexes")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		status, err := col.RebuildVectorIndex(def.Name)
+		if err != nil {
+			b.Fatalf("RebuildVectorIndex: %v", err)
+		}
+		if !status.Loaded || status.RebuildNeeded {
+			b.Fatalf("status=%+v, want loaded", status)
+		}
+		columnGraphRebuildBenchSinkV2A = status
+	}
+	b.StopTimer()
+	if elapsed := b.Elapsed().Seconds(); elapsed > 0 {
+		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
+	}
+	reportColumnGraphBRQQuantizedStorageMetrics2481(b, d, def, shape)
+}
+
 func openColumnGraphScalarU8QuantizedBenchFixture1926(tb testing.TB, shape columnGraphScalarU8QuantizedBenchShape1926, quantized bool) columnGraphScalarU8QuantizedBenchFixture1926 {
 	tb.Helper()
 	_, d, col, def, rows := openColumnGraphScalarU8QuantizedBenchCollection1926(tb, shape, quantized)
@@ -845,6 +1050,75 @@ func openColumnGraphRabitQQuantizedBenchFixture2451(tb testing.TB, shape columnG
 		quantizedAssetBytes:         columnGraphQuantizedAssetBytesForName2451(tb, d, def, columnGraphRabitQQuantizedIndexName2450),
 		quantizedCodeBytesPerVector: plan.BytesPerCode(),
 	}
+}
+
+func openColumnGraphBRQQuantizedBenchFixture2481(tb testing.TB, shape columnGraphScalarU8QuantizedBenchShape1926) columnGraphScalarU8QuantizedBenchFixture1926 {
+	tb.Helper()
+	_, d, col, def, rows := openColumnGraphBRQQuantizedBenchCollection2481(tb, shape)
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(tb, status, def.Name)
+	if shape.queryOrdinal < 0 || shape.queryOrdinal >= len(rows) {
+		_ = d.Close()
+		tb.Fatalf("query ordinal=%d out of range rows=%d", shape.queryOrdinal, len(rows))
+	}
+	plan, err := brq.NewPlan(shape.dims, brq.DefaultConfig())
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("brq.NewPlan: %v", err)
+	}
+	return columnGraphScalarU8QuantizedBenchFixture1926{
+		close:                       func() { _ = d.Close() },
+		collection:                  col,
+		definition:                  def,
+		query:                       append([]float32(nil), rows[shape.queryOrdinal].vector...),
+		shape:                       shape,
+		quantizedAssetBytes:         columnGraphQuantizedAssetBytesForName2451(tb, d, def, columnGraphBRQQuantizedIndexName2481),
+		quantizedCodeBytesPerVector: plan.BytesPerCode(),
+	}
+}
+
+func openColumnGraphBRQQuantizedBenchCollection2481(tb testing.TB, shape columnGraphScalarU8QuantizedBenchShape1926) (string, *backenddb.DB, *Collection, VectorIndexDefinition, []columnGraphRebuildInputRowV2A) {
+	tb.Helper()
+	if shape.rows <= 0 || shape.dims <= 0 {
+		tb.Fatalf("invalid benchmark shape rows=%d dims=%d", shape.rows, shape.dims)
+	}
+	dir := tb.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		tb.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(tb, dir)
+	def := columnGraphRebuildVectorIndexDefinitionV2A(shape.dims, shape.m)
+	def.QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: columnGraphBRQQuantizedIndexName2481, Codec: brq.CodecName}}
+	var err error
+	def, err = normalizeVectorIndexDefinition(def)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("normalizeVectorIndexDefinition: %v", err)
+	}
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    columnGraphRebuildColumnStoreConfigV2A(shape.dims),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	rows := columnGraphRebuildSyntheticRowsV2A(shape.rows, shape.dims)
+	insertColumnGraphRebuildRowsV2A(tb, col, rows)
+	return dir, d, col, def, rows
 }
 
 func openColumnGraphScalarU8QuantizedBenchCollection1926(tb testing.TB, shape columnGraphScalarU8QuantizedBenchShape1926, quantized bool) (string, *backenddb.DB, *Collection, VectorIndexDefinition, []columnGraphRebuildInputRowV2A) {
@@ -961,6 +1235,10 @@ func addColumnGraphScalarU8QuantizedBenchmarkStats1926(dst *VectorIndexSearchSta
 	dst.QuantizedAssetMappedBytes += src.QuantizedAssetMappedBytes
 	dst.QuantizedAssetHeapCopyBytes += src.QuantizedAssetHeapCopyBytes
 	dst.QuantizedAssetActiveHandles += src.QuantizedAssetActiveHandles
+	dst.QuantizedScoreCodecBRQ1Bit += src.QuantizedScoreCodecBRQ1Bit
+	dst.BRQ1BitQueryWeightBits += src.BRQ1BitQueryWeightBits
+	dst.BRQ1BitBitProductPasses += src.BRQ1BitBitProductPasses
+	dst.BRQ1BitQueryWeightScale += src.BRQ1BitQueryWeightScale
 	dst.ScoreFloat64Fallbacks += src.ScoreFloat64Fallbacks
 	dst.PreparedGraphSearchViews += src.PreparedGraphSearchViews
 	dst.GraphRowFallbacks += src.GraphRowFallbacks
@@ -1099,6 +1377,10 @@ func reportColumnGraphScalarU8QuantizedScorePlaneMetrics1926(b *testing.B, fixtu
 	b.ReportMetric(float64(stats.QuantizedAssetMappedBytes)/denom, "quantized_asset_mapped_B")
 	b.ReportMetric(float64(stats.QuantizedAssetHeapCopyBytes)/denom, "quantized_asset_heap_copy_B")
 	b.ReportMetric(float64(stats.QuantizedAssetActiveHandles)/denom, "quantized_asset_active_handles")
+	b.ReportMetric(float64(stats.QuantizedScoreCodecBRQ1Bit)/denom, "quantized_score_codec_brq_1bit/search")
+	b.ReportMetric(float64(stats.BRQ1BitQueryWeightBits)/denom, "brq_1bit_query_weight_bits/search")
+	b.ReportMetric(float64(stats.BRQ1BitBitProductPasses)/denom, "brq_1bit_bitproduct_passes/search")
+	b.ReportMetric(stats.BRQ1BitQueryWeightScale/denom, "brq_1bit_query_weight_scale/search")
 	b.ReportMetric(float64(stats.ScoreFloat64Fallbacks)/denom, "score_float64_fallbacks/search")
 	b.ReportMetric(float64(stats.PreparedGraphSearchViews)/denom, "prepared_graph_search_views/search")
 	b.ReportMetric(float64(stats.GraphRowFallbacks)/denom, "graph_row_fallbacks/search")
@@ -1224,6 +1506,40 @@ func reportColumnGraphScalarU8QuantizedStorageMetrics1926(b *testing.B, d *backe
 	b.ReportMetric(float64(quantizedBytes), "quantized_asset_B/op")
 	if shape.rows > 0 {
 		b.ReportMetric(float64(quantizedBytes)/float64(shape.rows), "quantized_asset_B/vector")
+	}
+}
+
+func reportColumnGraphBRQQuantizedStorageMetrics2481(b *testing.B, d *backenddb.DB, def VectorIndexDefinition, shape columnGraphScalarU8QuantizedBenchShape1926) {
+	b.Helper()
+	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(b, d, "docs", def)
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(b, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(b, records, def)
+	b.ReportMetric(float64(graph.AssetBytes), "graph_asset_B/op")
+	b.ReportMetric(float64(columnVectorIndexStateAssetsStorageBytes(state)), "state_assets_B/op")
+	b.ReportMetric(float64(columnVectorGraphStorageBytesWithState(graph, state)), "graph_total_storage_B/op")
+	plan, err := brq.NewPlan(shape.dims, brq.DefaultConfig())
+	if err != nil {
+		b.Fatalf("brq.NewPlan: %v", err)
+	}
+	b.ReportMetric(float64(plan.BytesPerCode()), "quantized_code_B/vector")
+	b.ReportMetric(float64(shape.dims*4), "exact_vector_B/vector")
+	b.ReportMetric(4, "exact_norm_B/vector")
+	b.ReportMetric(float64(shape.dims*4+4), "exact_vector_norm_B/vector")
+	var quantizedAssets int
+	var quantizedBytes int64
+	for _, asset := range state.Assets {
+		if asset.Role == columnVectorIndexStateAssetRoleQuantizedCodes {
+			quantizedAssets++
+			quantizedBytes += asset.AssetBytes
+		}
+	}
+	b.ReportMetric(float64(quantizedAssets), "quantized_assets/op")
+	b.ReportMetric(float64(quantizedBytes), "quantized_asset_B/op")
+	if shape.rows > 0 {
+		b.ReportMetric(float64(quantizedBytes)/float64(shape.rows), "quantized_asset_B/vector")
+	}
+	if want := (plan.CodeDimensions() + 7) / 8; want != plan.BytesPerCode() {
+		b.Fatalf("logical code bytes mismatch got ceil=%d bytes=%d", want, plan.BytesPerCode())
 	}
 }
 

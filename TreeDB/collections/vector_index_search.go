@@ -113,7 +113,7 @@ type VectorIndexSearchResult struct {
 	Ordinal int `json:"ordinal"`
 	// Score is the result score for the selected query mode: exact/default and
 	// quantized_rerank return authoritative float32 cosine scores, while
-	// quantized_only returns the scalar_u8 estimated cosine score.
+	// quantized_only returns the selected codec's estimated cosine score.
 	Score float64 `json:"score"`
 	// Document is populated only when IncludeDocuments is true.
 	Document []byte `json:"document,omitempty"`
@@ -188,6 +188,14 @@ type VectorIndexSearchStats struct {
 	QuantizedAssetHeapCopyBytes uint64 `json:"quantized_asset_heap_copy_bytes,omitempty"`
 	// QuantizedAssetActiveHandles is the current active mappedresource handle count for the selected quantized score-plane asset.
 	QuantizedAssetActiveHandles int64 `json:"quantized_asset_active_handles,omitempty"`
+	// QuantizedScoreCodecBRQ1Bit reports searches served by the brq_1bit quantized scorer.
+	QuantizedScoreCodecBRQ1Bit uint64 `json:"quantized_score_codec_brq_1bit,omitempty"`
+	// BRQ1BitQueryWeightBits reports the runtime query-weight bit width for brq_1bit searches.
+	BRQ1BitQueryWeightBits uint64 `json:"brq_1bit_query_weight_bits,omitempty"`
+	// BRQ1BitBitProductPasses counts logical brq_1bit bit-product passes used by scorer calls.
+	BRQ1BitBitProductPasses uint64 `json:"brq_1bit_bitproduct_passes,omitempty"`
+	// BRQ1BitQueryWeightScale reports the query-local uint4 weight scale for brq_1bit searches.
+	BRQ1BitQueryWeightScale float64 `json:"brq_1bit_query_weight_scale,omitempty"`
 	// ScoreFloat64Fallbacks counts rare dot-product retries using float64 after a non-finite float32 dot.
 	ScoreFloat64Fallbacks uint64 `json:"score_float64_fallbacks,omitempty"`
 	// ExpansionFetches is the per-search count of adjacency row fetches for expanded nodes.
@@ -2071,6 +2079,10 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		QuantizedAssetMappedBytes:             searchStats.QuantizedAssetMappedBytes,
 		QuantizedAssetHeapCopyBytes:           searchStats.QuantizedAssetHeapCopyBytes,
 		QuantizedAssetActiveHandles:           searchStats.QuantizedAssetActiveHandles,
+		QuantizedScoreCodecBRQ1Bit:            searchStats.QuantizedScoreCodecBRQ1Bit,
+		BRQ1BitQueryWeightBits:                searchStats.BRQ1BitQueryWeightBits,
+		BRQ1BitBitProductPasses:               searchStats.BRQ1BitBitProductPasses,
+		BRQ1BitQueryWeightScale:               searchStats.BRQ1BitQueryWeightScale,
 		ScoreFloat64Fallbacks:                 searchStats.ScoreFloat64Fallbacks,
 		ExpansionFetches:                      searchStats.ExpansionFetches,
 		ResultFetches:                         searchStats.ResultFetches,

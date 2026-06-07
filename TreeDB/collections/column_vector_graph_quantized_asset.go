@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/brq"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 	"github.com/snissn/gomap/TreeDB/internal/rabitq"
@@ -18,6 +19,7 @@ const (
 	columnVectorGraphQuantizedCodeCountColumnName            = "code_count"
 	columnVectorGraphQuantizedDotProductInvColumnName        = "quantized_dot_product_inv"
 	columnVectorGraphQuantizedRabitQPathConfigHashFormat     = "%s_quantized_rabitq_1bit_%016x_%s"
+	columnVectorGraphQuantizedBRQPathConfigHashFormat        = "%s_quantized_brq_1bit_%016x_%s"
 	columnVectorGraphQuantizedScalarU8UnsupportedVersionText = "scalar_u8 version=%d is unsupported"
 )
 
@@ -55,6 +57,7 @@ type columnVectorGraphQuantizedAssetLoadStatus struct {
 	Asset         columnVectorIndexStateAssetSnapshot
 	Prepared      *quantizedasset.Prepared
 	RabitQPlan    *rabitq.Plan
+	BRQPlan       *brq.Plan
 	Err           error
 	Health        columnVectorGraphQuantizedAssetHealth
 	OpenNanos     uint64
@@ -65,6 +68,8 @@ type columnVectorGraphQuantizedAssetLoadStatus struct {
 
 func columnVectorGraphQuantizedAssetID(q QuantizedVectorIndexDefinition) string {
 	switch q.Codec {
+	case brq.CodecName:
+		return "quantized/" + q.Name + "/brq_1bit/packed_codes"
 	case rabitq.CodecName:
 		return "quantized/" + q.Name + "/packed_codes"
 	default:
@@ -146,6 +151,11 @@ func prepareColumnVectorGraphQuantizedCodesPayload(collection string, base Colum
 			return nil, ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q rabitq_1bit version=%d is unsupported", q.Name, q.Version)
 		}
 		return prepareColumnVectorGraphRabitQQuantizedCodesPayload(collection, base, def, q, partID, rows)
+	case brq.CodecName:
+		if q.Version != brq.CodecVersion {
+			return nil, ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q brq_1bit version=%d is unsupported", q.Name, q.Version)
+		}
+		return prepareColumnVectorGraphBRQQuantizedCodesPayload(collection, base, def, q, partID, rows)
 	default:
 		return nil, ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q codec %q is unsupported", q.Name, q.Codec)
 	}
@@ -331,6 +341,123 @@ func prepareColumnVectorGraphRabitQQuantizedCodesPayload(collection string, base
 	return image.Bytes, sourceCfg, nil
 }
 
+func prepareColumnVectorGraphBRQQuantizedCodesPayload(collection string, base ColumnStoreConfig, def VectorIndexDefinition, q QuantizedVectorIndexDefinition, partID uint64, rows []columnVectorGraphAssetRow) ([]byte, ColumnStoreConfig, error) {
+	if def.Metric != VectorMetricCosine {
+		return nil, ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q metric %q is unsupported for brq_1bit", q.Name, def.Metric)
+	}
+	sourceCfg, err := columnVectorGraphQuantizedCodesColumnStoreConfig(collection, base, def, q)
+	if err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	plan, err := brq.NewPlan(def.Dimensions, brq.DefaultConfig())
+	if err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	rowCount := len(rows)
+	if _, err := checkedColumnVectorGraphQuantizedRowBytes(rowCount, 8, "brq_1bit primary_id"); err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	codesBytes, err := checkedColumnVectorGraphQuantizedRowBytes(rowCount, plan.BytesPerCode(), "brq_1bit codes")
+	if err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	if _, err := checkedColumnVectorGraphQuantizedRowBytes(rowCount, 4, "brq_1bit code_count"); err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	if _, err := checkedColumnVectorGraphQuantizedRowBytes(rowCount, 4, "brq_1bit quantized_dot_product_inv"); err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	primaryIDs := make([]int64, rowCount)
+	codes := make([]byte, codesBytes)
+	codeCounts := make([]uint32, rowCount)
+	qdpInv := make([]float32, rowCount)
+	var ws brq.Workspace
+	var codeScratch []byte
+	for rowIdx, row := range rows {
+		primaryIDs[rowIdx] = int64(rowIdx)
+		encoded, err := plan.Encode(codeScratch, row.Vector, &ws)
+		if err != nil {
+			return nil, ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q brq_1bit row %d encode: %w", q.Name, rowIdx, err)
+		}
+		codeScratch = encoded.Code
+		copy(codes[rowIdx*plan.BytesPerCode():(rowIdx+1)*plan.BytesPerCode()], encoded.Code)
+		codeCounts[rowIdx] = encoded.CodeCount
+		qdpInv[rowIdx] = encoded.QuantizedDotProductInv
+	}
+	packedRows, err := typedcolumn.NewPackedUintRows(rowCount, plan.CodeDimensions(), brq.CodeWidthBits, codes)
+	if err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
+		SchemaVersion: uint32(sourceCfg.SchemaHash),
+		SchemaMode:    typedcolumn.ColumnSchemaFixed,
+		Columns: []typedcolumn.ColumnDefinition{
+			columnVectorGraphQuantizedPrimaryIDColumnDefinition(),
+			{
+				Name:               columnVectorGraphQuantizedPackedCodesColumnName,
+				Type:               typedcolumn.ColumnTypePackedBitVector,
+				Encoding:           typedcolumn.EncodingRawPackedBitVector,
+				FixedWidthElements: plan.CodeDimensions(),
+				BitsPerElement:     brq.CodeWidthBits,
+				Compression:        typedcolumn.CompressionNone,
+				CompressionSet:     true,
+				StatsDisabled:      true,
+			},
+			{
+				Name:           columnVectorGraphQuantizedCodeCountColumnName,
+				Type:           typedcolumn.ColumnTypeUint32,
+				Encoding:       typedcolumn.EncodingRawUint32,
+				Compression:    typedcolumn.CompressionNone,
+				CompressionSet: true,
+				StatsDisabled:  true,
+			},
+			{
+				Name:           columnVectorGraphQuantizedDotProductInvColumnName,
+				Type:           typedcolumn.ColumnTypeFloat32,
+				Encoding:       typedcolumn.EncodingRawFloat32,
+				Compression:    typedcolumn.CompressionNone,
+				CompressionSet: true,
+				StatsDisabled:  true,
+			},
+		},
+		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
+		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
+		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
+		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
+	}, typedcolumn.Batch{
+		Rows: rowCount,
+		Columns: map[string][]int64{
+			typedColumnAdapterPrimaryIDColumn: primaryIDs,
+		},
+		PackedUintColumns: map[string]typedcolumn.PackedUintRows{
+			columnVectorGraphQuantizedPackedCodesColumnName: packedRows,
+		},
+		Uint32Columns: map[string][]uint32{
+			columnVectorGraphQuantizedCodeCountColumnName: codeCounts,
+		},
+		Float32Columns: map[string][]float32{
+			columnVectorGraphQuantizedDotProductInvColumnName: qdpInv,
+		},
+	})
+	if err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{
+		LayoutLogicalTypes: map[string]string{
+			columnVectorGraphQuantizedPackedCodesColumnName:   string(columnsemantics.LogicalPackedBitVector),
+			columnVectorGraphQuantizedCodeCountColumnName:     string(columnsemantics.LogicalUint32),
+			columnVectorGraphQuantizedDotProductInvColumnName: string(columnsemantics.LogicalFloat32),
+		},
+	})
+	if err != nil {
+		return nil, ColumnStoreConfig{}, err
+	}
+	if image.Rows != rowCount || image.PartID != partID {
+		return nil, ColumnStoreConfig{}, fmt.Errorf("collections: column_graph brq quantized asset image rows/part=(%d,%d) want (%d,%d)", image.Rows, image.PartID, rowCount, partID)
+	}
+	return image.Bytes, sourceCfg, nil
+}
+
 func columnVectorGraphQuantizedPrimaryIDColumnDefinition() typedcolumn.ColumnDefinition {
 	return typedcolumn.ColumnDefinition{
 		Name:           typedColumnAdapterPrimaryIDColumn,
@@ -390,6 +517,39 @@ func columnVectorGraphQuantizedCodesColumnStoreConfig(collection string, base Co
 			{
 				Name:               columnVectorGraphQuantizedDotProductInvColumnName,
 				Path:               fmt.Sprintf(columnVectorGraphQuantizedRabitQPathConfigHashFormat, def.Field, cfgHash, columnVectorGraphQuantizedDotProductInvColumnName),
+				Owner:              TypedStorageOwnerColumnPart,
+				ValueType:          ColumnStoreValueFloat32,
+				FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian,
+			},
+		}
+	case brq.CodecName:
+		if q.Version != brq.CodecVersion {
+			return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q brq_1bit version=%d is unsupported", q.Name, q.Version)
+		}
+		plan, err := brq.NewPlan(def.Dimensions, brq.DefaultConfig())
+		if err != nil {
+			return ColumnStoreConfig{}, err
+		}
+		cfgHash := brq.DefaultConfig().Hash64()
+		columns = []ColumnStoreColumn{
+			{
+				Name:           columnVectorGraphQuantizedPackedCodesColumnName,
+				Path:           fmt.Sprintf(columnVectorGraphQuantizedBRQPathConfigHashFormat, def.Field, cfgHash, columnVectorGraphQuantizedPackedCodesColumnName),
+				Owner:          TypedStorageOwnerColumnPart,
+				ValueType:      ColumnStoreValuePackedBitVector,
+				ElementsPerRow: plan.CodeDimensions(),
+				BitsPerElement: brq.CodeWidthBits,
+			},
+			{
+				Name:               columnVectorGraphQuantizedCodeCountColumnName,
+				Path:               fmt.Sprintf(columnVectorGraphQuantizedBRQPathConfigHashFormat, def.Field, cfgHash, columnVectorGraphQuantizedCodeCountColumnName),
+				Owner:              TypedStorageOwnerColumnPart,
+				ValueType:          ColumnStoreValueUint32,
+				FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian,
+			},
+			{
+				Name:               columnVectorGraphQuantizedDotProductInvColumnName,
+				Path:               fmt.Sprintf(columnVectorGraphQuantizedBRQPathConfigHashFormat, def.Field, cfgHash, columnVectorGraphQuantizedDotProductInvColumnName),
 				Owner:              TypedStorageOwnerColumnPart,
 				ValueType:          ColumnStoreValueFloat32,
 				FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian,
@@ -466,7 +626,7 @@ func columnVectorGraphScalarU8Code(value float32) byte {
 
 func columnVectorGraphQuantizedAssetStateType(q QuantizedVectorIndexDefinition) (logicalType, physicalEncoding string) {
 	switch q.Codec {
-	case rabitq.CodecName:
+	case brq.CodecName, rabitq.CodecName:
 		return columnVectorIndexStateLogicalTypePackedBitVector, columnVectorIndexStateEncodingRawPackedBitVector
 	default:
 		return columnVectorIndexStateLogicalTypeByteVector, columnVectorIndexStateEncodingRawFixedBytes
@@ -598,7 +758,8 @@ func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, c
 			status.Health = columnVectorGraphQuantizedAssetHealthFromError(err)
 		} else {
 			status.Prepared = prepared
-			if q.Codec == rabitq.CodecName {
+			switch q.Codec {
+			case rabitq.CodecName:
 				plan, planErr := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
 				if planErr != nil {
 					status.Prepared = nil
@@ -608,6 +769,16 @@ func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, c
 					continue
 				}
 				status.RabitQPlan = plan
+			case brq.CodecName:
+				plan, planErr := brq.NewPlan(def.Dimensions, brq.DefaultConfig())
+				if planErr != nil {
+					status.Prepared = nil
+					status.Err = fmt.Errorf("%w: quantized asset %q brq_1bit plan: %v", errColumnVectorGraphQuantizedAssetInvalid, q.Name, planErr)
+					status.Health = columnVectorGraphQuantizedAssetHealthInvalid
+					out[q.Name] = status
+					continue
+				}
+				status.BRQPlan = plan
 			}
 			status.Health = columnVectorGraphQuantizedAssetHealthHeapCopy
 			if asset.AssetBytes > 0 {
@@ -775,7 +946,7 @@ func loadColumnVectorGraphQuantizedAsset(rootDir, collection string, cfg ColumnS
 
 func columnVectorGraphQuantizedRequiredRoles(q QuantizedVectorIndexDefinition) []quantizedasset.Role {
 	switch q.Codec {
-	case rabitq.CodecName:
+	case brq.CodecName, rabitq.CodecName:
 		return []quantizedasset.Role{quantizedasset.RolePackedCodes, quantizedasset.RoleCodeCount, quantizedasset.RoleQuantizedDotProductInv}
 	default:
 		return []quantizedasset.Role{quantizedasset.RoleCodes}
@@ -789,13 +960,25 @@ func validateColumnVectorGraphQuantizedPreparedAsset(def VectorIndexDefinition, 
 	if prepared.Rows() < 0 {
 		return fmt.Errorf("prepared rows=%d", prepared.Rows())
 	}
-	if q.Codec != rabitq.CodecName {
+	switch q.Codec {
+	case rabitq.CodecName:
+		plan, err := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
+		if err != nil {
+			return err
+		}
+		return validateColumnVectorGraphRabitQPreparedAsset(prepared, plan)
+	case brq.CodecName:
+		plan, err := brq.NewPlan(def.Dimensions, brq.DefaultConfig())
+		if err != nil {
+			return err
+		}
+		return validateColumnVectorGraphBRQPreparedAsset(prepared, plan)
+	default:
 		return nil
 	}
-	plan, err := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
-	if err != nil {
-		return err
-	}
+}
+
+func validateColumnVectorGraphRabitQPreparedAsset(prepared *quantizedasset.Prepared, plan *rabitq.Plan) error {
 	if prepared.Rows() == 0 {
 		return nil
 	}
@@ -824,6 +1007,40 @@ func validateColumnVectorGraphQuantizedPreparedAsset(def VectorIndexDefinition, 
 		}
 		if err := plan.ValidateQuantizedDotProductInv(qdp); err != nil {
 			return fmt.Errorf("rabitq_1bit quantized_dot_product_inv ordinal=%d: %w", ordinal, err)
+		}
+	}
+	return nil
+}
+
+func validateColumnVectorGraphBRQPreparedAsset(prepared *quantizedasset.Prepared, plan *brq.Plan) error {
+	if prepared.Rows() == 0 {
+		return nil
+	}
+	codeRows, ok := prepared.CodeRowView(quantizedasset.RolePackedCodes)
+	if !ok {
+		return errors.New("brq_1bit packed code row view unavailable")
+	}
+	if codeRows.Rows() != prepared.Rows() || codeRows.BytesPerRow() != plan.BytesPerCode() || codeRows.ElementsPerRow() != plan.CodeDimensions() {
+		return fmt.Errorf("brq_1bit packed code shape rows/bytes/elements=(%d,%d,%d) want (%d,%d,%d)", codeRows.Rows(), codeRows.BytesPerRow(), codeRows.ElementsPerRow(), prepared.Rows(), plan.BytesPerCode(), plan.CodeDimensions())
+	}
+	for ordinal := 0; ordinal < prepared.Rows(); ordinal++ {
+		code, ok := codeRows.RowBytes(ordinal)
+		if !ok {
+			return fmt.Errorf("brq_1bit code row ordinal=%d unavailable", ordinal)
+		}
+		count, ok := prepared.Uint32(quantizedasset.RoleCodeCount, ordinal)
+		if !ok {
+			return fmt.Errorf("brq_1bit code_count ordinal=%d unavailable", ordinal)
+		}
+		if err := plan.ValidateCode(code, count); err != nil {
+			return fmt.Errorf("brq_1bit code ordinal=%d: %w", ordinal, err)
+		}
+		qdp, ok := prepared.Float32(quantizedasset.RoleQuantizedDotProductInv, ordinal)
+		if !ok {
+			return fmt.Errorf("brq_1bit quantized_dot_product_inv ordinal=%d unavailable", ordinal)
+		}
+		if err := plan.ValidateQuantizedDotProductInv(qdp); err != nil {
+			return fmt.Errorf("brq_1bit quantized_dot_product_inv ordinal=%d: %w", ordinal, err)
 		}
 	}
 	return nil
@@ -892,6 +1109,56 @@ func columnVectorGraphQuantizedAssetSchema(def VectorIndexDefinition, graph colu
 				ElementsPerRow:   plan.CodeDimensions(),
 				BytesPerRow:      plan.BytesPerCode(),
 				BitsPerElement:   rabitq.CodeWidthBits,
+				SourceSchemaHash: asset.SourceSchemaHash,
+				AssetBytes:       asset.AssetBytes,
+				Ref:              ref,
+			},
+			{
+				Role:             quantizedasset.RoleCodeCount,
+				Column:           columnVectorGraphQuantizedCodeCountColumnName,
+				Required:         true,
+				LogicalType:      string(columnsemantics.LogicalUint32),
+				Type:             typedcolumn.ColumnTypeUint32,
+				Encoding:         typedcolumn.EncodingRawUint32,
+				SourceSchemaHash: asset.SourceSchemaHash,
+				AssetBytes:       asset.AssetBytes,
+				Ref:              ref,
+			},
+			{
+				Role:             quantizedasset.RoleQuantizedDotProductInv,
+				Column:           columnVectorGraphQuantizedDotProductInvColumnName,
+				Required:         true,
+				LogicalType:      string(columnsemantics.LogicalFloat32),
+				Type:             typedcolumn.ColumnTypeFloat32,
+				Encoding:         typedcolumn.EncodingRawFloat32,
+				SourceSchemaHash: asset.SourceSchemaHash,
+				AssetBytes:       asset.AssetBytes,
+				Ref:              ref,
+			},
+		}
+	case brq.CodecName:
+		if q.Version != brq.CodecVersion {
+			return quantizedasset.SchemaDescriptor{}, fmt.Errorf("brq_1bit version=%d is unsupported", q.Version)
+		}
+		plan, err := brq.NewPlan(def.Dimensions, brq.DefaultConfig())
+		if err != nil {
+			return quantizedasset.SchemaDescriptor{}, err
+		}
+		cfg := brq.DefaultConfig()
+		schema.CodeDimensions = plan.CodeDimensions()
+		schema.CodeWidthBits = brq.CodeWidthBits
+		schema.Codec = quantizedasset.CodecDescriptor{Name: brq.CodecName, Version: brq.CodecVersion, ConfigHash: cfg.Hash64(), Config: cfg.CanonicalBytes()}
+		schema.Columns = []quantizedasset.ColumnDescriptor{
+			{
+				Role:             quantizedasset.RolePackedCodes,
+				Column:           columnVectorGraphQuantizedPackedCodesColumnName,
+				Required:         true,
+				LogicalType:      string(columnsemantics.LogicalPackedBitVector),
+				Type:             typedcolumn.ColumnTypePackedBitVector,
+				Encoding:         typedcolumn.EncodingRawPackedBitVector,
+				ElementsPerRow:   plan.CodeDimensions(),
+				BytesPerRow:      plan.BytesPerCode(),
+				BitsPerElement:   brq.CodeWidthBits,
 				SourceSchemaHash: asset.SourceSchemaHash,
 				AssetBytes:       asset.AssetBytes,
 				Ref:              ref,
