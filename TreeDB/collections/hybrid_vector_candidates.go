@@ -5,19 +5,8 @@ import (
 	"fmt"
 )
 
-// HybridCandidateResponse is returned by candidate-only source adapters. The
-// adapters are pre-fusion and pre-final-fetch: Candidates contains source hits
-// only, and Stats reports candidate-generation counters in the shared hybrid
-// vocabulary.
-type HybridCandidateResponse struct {
-	Stats      HybridSearchStats       `json:"stats,omitempty"`
-	Candidates []HybridSearchCandidate `json:"candidates,omitempty"`
-}
-
 // SearchHybridVectorCandidates adapts an existing collection vector-index
-// search into the shared hybrid candidate shape. This is the vector-only #2503
-// split; lexical/text candidates remain blocked on the #1764 ranked SearchText
-// API/counters.
+// search into the shared hybrid candidate shape.
 //
 // Candidate generation is no-document by construction: it uses
 // SearchVectorIndexWithBuffer with IncludeDocuments=false, copies stable result
@@ -70,7 +59,7 @@ func validateHybridVectorCandidateQuery(query HybridVectorQuery) error {
 		return fmt.Errorf("%w: vector candidate ef_search cannot be negative", ErrHybridSearchUnsupported)
 	}
 	if query.QueryMode != "" && query.QueryMode != VectorIndexQueryModeExact {
-		return fmt.Errorf("%w: vector candidate query mode %q is unsupported by the vector-only #2503 split", ErrHybridSearchUnsupported, query.QueryMode)
+		return fmt.Errorf("%w: vector candidate query mode %q is unsupported by the vector candidate adapter", ErrHybridSearchUnsupported, query.QueryMode)
 	}
 	if query.QuantizedIndexName != "" {
 		return fmt.Errorf("%w: vector candidate quantized index %q is unsupported by the vector-only #2503 split", ErrHybridSearchUnsupported, query.QuantizedIndexName)
@@ -179,14 +168,4 @@ func hybridVectorCandidateError(err error, indexName string) error {
 		return fmt.Errorf("%w: vector index %q candidate generation unavailable: %w", ErrHybridSearchIndexUnavailable, indexName, err)
 	}
 	return fmt.Errorf("%w: vector index %q candidate generation unsupported: %w", ErrHybridSearchUnsupported, indexName, err)
-}
-
-func hybridMaxUint64(values ...uint64) uint64 {
-	var max uint64
-	for _, value := range values {
-		if value > max {
-			max = value
-		}
-	}
-	return max
 }
