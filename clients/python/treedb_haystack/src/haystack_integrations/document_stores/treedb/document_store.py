@@ -140,6 +140,7 @@ class TreeDBDocumentStore:
             return 0
 
         with self._write_lock:
+            input_count = len(docs)
             docs = _deduplicate_input_documents(docs, policy)
             if policy in {DuplicatePolicy.FAIL, DuplicatePolicy.SKIP}:
                 existing_ids = self._existing_document_ids([doc.id for doc in docs])
@@ -167,6 +168,8 @@ class TreeDBDocumentStore:
                     "the MVP service does not provide atomic create-if-absent writes"
                 )
                 raise DocumentStoreError(msg)
+            if policy == DuplicatePolicy.OVERWRITE:
+                return input_count
             return response.upserted
 
     def delete_documents(self, document_ids: Sequence[str]) -> None:

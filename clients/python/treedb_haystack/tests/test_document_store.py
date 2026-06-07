@@ -103,6 +103,19 @@ def test_write_documents_overwrite_policy_does_not_preflight_duplicates() -> Non
     assert client.upsert_calls[-1] == ["same"]
 
 
+def test_overwrite_policy_reports_input_count_for_duplicate_batch_ids() -> None:
+    store, client = make_store()
+
+    written = store.write_documents(
+        [haystack_doc("same", [1, 0, 0], version=1), haystack_doc("same", [0, 1, 0], version=2)],
+        policy=DuplicatePolicy.OVERWRITE,
+    )
+
+    assert written == 2
+    assert client.upsert_calls[-1] == ["same"]
+    assert store.filter_documents({"field": "id", "operator": "==", "value": "same"})[0].meta["version"] == 2
+
+
 def test_default_duplicate_policy_uses_service_upsert() -> None:
     store, client = make_store()
 
