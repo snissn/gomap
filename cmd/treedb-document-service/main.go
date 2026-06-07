@@ -18,6 +18,13 @@ import (
 )
 
 func main() {
+	exitCode := 0
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
+
 	addr := flag.String("addr", "127.0.0.1:7120", "HTTP address to listen on")
 	dataDir := flag.String("dir", "/tmp/treedb-document-service", "TreeDB data directory")
 	profile := flag.String("profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp)
@@ -54,7 +61,9 @@ func main() {
 	fmt.Printf("TreeDB data directory: %s\n", *dataDir)
 	fmt.Printf("TreeDB profile: %s\n", normalizedProfile)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("Server error: %v", err)
+		log.Printf("Server error: %v", err)
+		exitCode = 1
+		return
 	}
 }
 

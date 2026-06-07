@@ -26,6 +26,35 @@ func TestFilterBooleanOperatorsAndMetadataPaths(t *testing.T) {
 	}
 }
 
+func TestFilterAllowsEmbeddingNamedMetadataPaths(t *testing.T) {
+	doc := Document{ID: "doc-1", Content: "hello", Meta: map[string]any{
+		"embedding_model":    "text-embedding-3-small",
+		"embedding_provider": "openai",
+		"embedding": map[string]any{
+			"model":    "text-embedding-3-small",
+			"provider": "openai",
+		},
+	}}
+	tests := []Filter{
+		{Field: "embedding_model", Operator: "==", Value: "text-embedding-3-small"},
+		{Field: "embedding_provider", Operator: "==", Value: "openai"},
+		{Field: "meta.embedding_model", Operator: "==", Value: "text-embedding-3-small"},
+		{Field: "meta.embedding.provider", Operator: "==", Value: "openai"},
+		{Field: "embedding.model", Operator: "==", Value: "text-embedding-3-small"},
+	}
+	for _, filter := range tests {
+		t.Run(filter.Field, func(t *testing.T) {
+			if err := filter.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			ok, err := matchFilter(&filter, doc)
+			if err != nil || !ok {
+				t.Fatalf("match=%v err=%v", ok, err)
+			}
+		})
+	}
+}
+
 func TestFilterMissingFieldDoesNotMatch(t *testing.T) {
 	filter := &Filter{Field: "meta.missing", Operator: "!=", Value: "x"}
 	if err := filter.Validate(); err != nil {

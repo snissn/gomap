@@ -3,6 +3,7 @@ package documentservice
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -43,6 +44,38 @@ func TestHTTPDefaultMaxBodyBytesDoesNotMutateHandler(t *testing.T) {
 	postJSON(t, handler, "/v1/indexes", CreateIndexRequest{Name: "docs", Dimension: 2}, http.StatusOK, nil)
 	if handler.MaxBodyBytes != 0 {
 		t.Fatalf("MaxBodyBytes mutated to %d, want zero", handler.MaxBodyBytes)
+	}
+}
+
+func TestHTTPWriteJSONEncodeErrorKeepsErrorShape(t *testing.T) {
+	rr := httptest.NewRecorder()
+	writeJSON(rr, http.StatusOK, map[string]any{"bad": make(chan int)})
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInternal)
+}
+
+func TestHTTPL2LargeFiniteEmbeddingsReturnFiniteScore(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+
+	postJSON(t, handler, "/v1/indexes", CreateIndexRequest{Name: "l2docs", Dimension: 1, Metric: "l2"}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/l2docs/documents/upsert", UpsertDocumentsRequest{Documents: []Document{{
+		ID:        "large",
+		Embedding: []float32{-3e38},
+	}}}, http.StatusOK, nil)
+
+	var search DenseVectorSearchResponse
+	postJSON(t, handler, "/v1/indexes/l2docs/search/vector", DenseVectorSearchRequest{QueryEmbedding: []float32{3e38}, TopK: 1}, http.StatusOK, &search)
+	if len(search.Documents) != 1 || search.Documents[0].Score == nil {
+		t.Fatalf("search=%+v", search)
+	}
+	score := *search.Documents[0].Score
+	if math.IsInf(score, 0) || math.IsNaN(score) {
+		t.Fatalf("score=%v, want finite", score)
 	}
 }
 
