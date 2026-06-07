@@ -17,11 +17,11 @@ const (
 	TextSearchOperatorAND TextSearchOperator = "and"
 )
 
-const textSearchUnavailableStorage = "text_index_storage_unimplemented"
+const textSearchUnavailableExecution = "text_search_execution_unimplemented"
 
 // TextSearchOptions configures collection-native lexical search. PR1 validates
-// the query shape and fails closed before scanning because postings/state/stats
-// storage is not implemented yet.
+// the query shape and fails closed before scanning because ranked text search
+// execution is not implemented yet.
 type TextSearchOptions struct {
 	IndexName            string
 	Query                string
@@ -62,7 +62,7 @@ type TextSearchResponse struct {
 }
 
 // SearchText validates the declared text index and query shape, then fails
-// closed until the persistent postings/text-state/stats search path lands in a
+// closed until ranked postings/text-state/stats search execution lands in a
 // later #1764 milestone. It never scans/ranks all collection documents.
 func (c *Collection) SearchText(opts TextSearchOptions) (TextSearchResponse, error) {
 	var response TextSearchResponse
@@ -109,8 +109,8 @@ func (c *Collection) SearchText(opts TextSearchOptions) (TextSearchResponse, err
 		return response, nil
 	}
 	response.Stats.Unavailable = true
-	response.Stats.UnavailableReason = textSearchUnavailableStorage
-	return response, fmt.Errorf("%w: collection %q text index %q has no persistent postings/text-state/stats storage yet", ErrTextIndexUnavailable, catalog.meta.Name, idx.Name)
+	response.Stats.UnavailableReason = textSearchUnavailableExecution
+	return response, fmt.Errorf("%w: collection %q text index %q search execution is not implemented yet", ErrTextIndexUnavailable, catalog.meta.Name, idx.Name)
 }
 
 func normalizeTextSearchOperator(op TextSearchOperator) (TextSearchOperator, error) {

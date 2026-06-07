@@ -192,12 +192,16 @@ matrix:
 - `data_outer=false,index_outer=false` (fast/control),
 - `data_outer=false,index_outer=true` (low-priority compatibility cell).
 
-## 11.1 Collection Text Search Metadata And Analyzer
+## 11.1 Collection Text Search Metadata, Storage, And Analyzer
 
 Invariant:
-- Collection text index metadata persists through reopen, root names are stable,
-  the simple analyzer is deterministic, and text-indexed writes/search fail
-  closed until persistent postings/text-state/stats maintenance lands.
+- Collection text index metadata persists through reopen, root names/policies are
+  stable, versioned postings/text-state/text-stats encodings fail closed on
+  malformed data, CreateTextIndex drains buffered writes across collection
+  managers before taking its backfill snapshot, DropTextIndex clears
+  metadata/root descriptors, the simple analyzer is deterministic, and
+  text-indexed writes/search fail closed until mutation maintenance/search
+  execution lands.
 
 Coverage:
 - `TreeDB/collections/text_index_test.go`:
@@ -205,7 +209,16 @@ Coverage:
   - `TestCollectionTextIndexMetadataValidateAndReopen`
   - `TestCollectionTextIndexMetadataRejectsInvalidDefinitions`
   - `TestCollectionTextRootNames`
+  - `TestCollectionTextRootStoragePolicies`
   - `TestCollectionTextIndexedOperationsFailClosedUntilStorageLands`
+- `TreeDB/collections/text_storage_test.go`:
+  - `TestTextStorageCodecsRoundTripAndFailClosed`
+  - `TestCollectionCreateTextIndexBackfillsReopensAndReportsStorage`
+  - `TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard`
+  - `TestCreateTextIndexFlushesBufferedWritesFromOtherManagers`
+  - `TestCreateTextIndexRejectsWritesFromStaleHandles`
+  - `TestTextIndexStorageStatsFailsClosedOnMalformedRoot`
+  - `BenchmarkCreateTextIndexBackfill`
 
 ## 11.5 Planned User-Command WAL Durability Gate
 
