@@ -461,6 +461,12 @@ func (p *Plan) ValidateQuery(q Query) error {
 	if q.QueryWeightScale <= 0 || math.IsNaN(q.QueryWeightScale) || math.IsInf(q.QueryWeightScale, 0) {
 		return fmt.Errorf("%w: invalid query_weight_scale=%v", ErrDegenerateVector, q.QueryWeightScale)
 	}
+	minScale := p.invSqrtCodeDims / 15
+	maxScale := 1.0 / 15.0
+	const scaleTolerance = 1e-12
+	if q.QueryWeightScale < minScale-scaleTolerance || q.QueryWeightScale > maxScale+scaleTolerance {
+		return fmt.Errorf("%w: query_weight_scale=%v outside valid range [%v,%v]", ErrDegenerateVector, q.QueryWeightScale, minScale, maxScale)
+	}
 	var sum uint32
 	var negSum uint32
 	for i, weight := range q.Weights {

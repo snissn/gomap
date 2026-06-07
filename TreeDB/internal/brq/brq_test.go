@@ -341,6 +341,8 @@ func TestScoreFailsClosedOnMalformedSideInputs2481(t *testing.T) {
 		{name: "negative_weight_sum", mut: func(q *Query, _ *EncodedVector) { q.NegativeWeightSumInt++ }, want: ErrDimensionMismatch},
 		{name: "zero_scale", mut: func(q *Query, _ *EncodedVector) { q.QueryWeightScale = 0 }, want: ErrDegenerateVector},
 		{name: "nan_scale", mut: func(q *Query, _ *EncodedVector) { q.QueryWeightScale = math.NaN() }, want: ErrDegenerateVector},
+		{name: "tiny_scale", mut: func(q *Query, _ *EncodedVector) { q.QueryWeightScale = math.SmallestNonzeroFloat64 }, want: ErrDegenerateVector},
+		{name: "large_scale", mut: func(q *Query, _ *EncodedVector) { q.QueryWeightScale = 1 }, want: ErrDegenerateVector},
 		{name: "sign_padding", mut: func(q *Query, _ *EncodedVector) {
 			q.SignBits = append([]byte(nil), q.SignBits...)
 			q.SignBits[0] |= 0x80
