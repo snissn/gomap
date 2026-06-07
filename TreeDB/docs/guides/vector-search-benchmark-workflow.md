@@ -6,6 +6,14 @@ post-#2360 TreeDB collection vector-search docs stack. It is a dated exact-FP32
 or matches USearch outside the stated fixture, hardware, commit, route, and
 counters.
 
+For the #2483 final vector docs closeout, use
+[`vector-search-closeout-2483.md`](../spec/vector-search-closeout-2483.md) as the
+current route/evidence index. It incorporates the #2487 unified current-main
+snapshot for exact FP32, `scalar_u8`, and `rabitq_1bit`, plus the #2507
+prototype `brq_1bit` lower-level evidence. The scale-sensitive crossover
+campaign (#2490-#2494) is still pending, so final exact-vs-quantized-vs-USearch
+positioning must either consume #2494 or say that crossover evidence is pending.
+
 ## Current performance snapshot: Tier S exact no-document comparison
 
 Current public numbers should cite this exact snapshot until a newer #2399 or

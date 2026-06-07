@@ -107,9 +107,13 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     `column_graph` vector indexes that search through the native physical column
     row reader.
 - `TreeDB/docs/spec/quantized-vector-index.md`
-  - issue #1926 scalar_u8 quantized score-plane semantics, fail-closed query
-    modes, exact rerank behavior, benchmark/storage evidence, and future-work
-    boundaries.
+  - issue #1926/#2454/#2481 scalar_u8, `rabitq_1bit`, and prototype
+    `brq_1bit` quantized score-plane semantics, fail-closed query modes, exact
+    rerank behavior, benchmark/storage evidence, and future-work boundaries.
+- `TreeDB/docs/spec/vector-search-closeout-2483.md`
+  - issue #2483 final vector-search docs closeout index for accepted exact FP32,
+    scalar_u8, RaBitQ, and BRQ evidence, #2487 snapshot rows, no-promote
+    caveats, and #2494 crossover-pending status.
 - `TreeDB/docs/spec/rabitq-1bit-v1.md`
   - issue #2449/#2451/#2452 `rabitq_1bit` v1 codec identity, packed-bit
     storage shape, deterministic reference rotation, pure-Go query/scoring APIs,
@@ -122,12 +126,14 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/rabitq-performance-lane-closeout-2482.md`
   - issue #2482 RaBitQ performance-lane closeout for #2476/#2477 promoted
     Sublane A evidence, #2478/#2479 no-promote decisions, `rabitq_1bit` v1
-    hard invariants, scalar/exact guardrail interpretation, and #2480/#2481 deferred Sublane B status.
+    hard invariants, scalar/exact guardrail interpretation, and later #2480/#2481
+    completed Sublane B status.
 - `TreeDB/docs/spec/brq-1bit-v1.md`
-  - issue #2480 selected future-codec contract for `brq_1bit` v1, including the
-    new codec identity/version, durable packed-code schema, LSB0 word view,
-    query `uint4` bit-product score semantics, fail-closed validation plan,
-    oracle/golden test requirements, public counter names, and #2481 gates.
+  - issue #2480/#2481 selected codec contract and lower-level prototype for
+    `brq_1bit` v1, including the new codec identity/version, durable packed-code
+    schema, LSB0 word view, query `uint4` bit-product score semantics,
+    fail-closed validation plan, oracle/golden/runtime test requirements, public
+    counter names, and promotion gates.
 - `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`
   - issue #2036 role-specific prepared runtime-view and admission policy for
     current-format typed-column graph search.
@@ -313,8 +319,8 @@ typed-column maintenance behavior is recorded in
 policy is owned by `typed-column-schema-evolution.md`, optimized-consumer tier
 classification is owned by `typed-column-optimized-consumer-capabilities.md`,
 quantized asset role descriptors and ordinal-reader contracts are owned by
-`quantized-asset-schema.md`; `brq-1bit-v1.md` owns the selected #2480 future
-`brq_1bit` codec contract until any #2481 prototype updates it; graph-search
+`quantized-asset-schema.md`; `brq-1bit-v1.md` owns the selected #2480/#2481
+`brq_1bit` codec contract and lower-level prototype boundary; graph-search
 prepared runtime-view shapes and hot-loop boundaries are owned by
 `typed-column-graph-search-prepared-views.md`, graph-search optimized-state
 readiness/admission status is owned by

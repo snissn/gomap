@@ -929,9 +929,9 @@ Coverage:
 Invariant:
 - Exact/default `column_graph` search remains authoritative float32-vector
   scoring unless callers explicitly select a named quantized score plane.
-- `quantized_only` returns estimated scalar_u8 or pure-Go `rabitq_1bit` scores
-  from the selected named score plane and must not read exact vectors or norms
-  during scoring.
+- `quantized_only` returns estimated scalar_u8, pure-Go `rabitq_1bit`, or
+  prototype `brq_1bit` scores from the selected named score plane and must not
+  read exact vectors or norms during scoring.
 - `quantized_rerank` uses the selected quantized traversal over the normalized
   `ef_search` candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks
   only that shortlist by graph ordinal, and returns exact cosine scores.
@@ -951,6 +951,10 @@ Coverage:
     lower-level and collection buffered quantized search, exact-read guardrails,
     cache/lifecycle behavior, allocation guardrails, and fail-closed asset
     validation.
+  - `TreeDB/collections/column_vector_graph_brq_quantized_asset_test.go` covers
+    `brq_1bit` definition normalization, asset build/prepare/reopen, oracle
+    parity, lower-level buffered quantized search, exact-read guardrails,
+    allocation guardrails, BRQ counters, and fail-closed asset validation.
   - `TreeDB/collections/vector_index_search_test.go` covers public exact,
     quantized_only, quantized_rerank, searcher buffer, and missing-name behavior.
   - `TreeDB/internal/quantizedasset/quantized_asset_test.go` covers prepared
@@ -969,6 +973,11 @@ Coverage:
     RaBitQ lower-level/collection buffered search, c=1/c=8 concurrency rows,
     logical code bytes/vector, actual asset bytes/vector, exact-read counters,
     recall@K, and storage overhead for #2454 closeout.
+  - `BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481`
+    and `BenchmarkColumnGraphBRQQuantizedRebuildStorage2481` report prototype
+    BRQ lower-level buffered search, BRQ-specific counters, exact-read
+    guardrails, logical code bytes/vector, asset bytes/vector, recall@K, and
+    rebuild/storage overhead.
 
 ## 13. Native Wire Protocol
 

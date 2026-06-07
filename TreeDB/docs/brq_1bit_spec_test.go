@@ -18,6 +18,7 @@ func TestDocs_BRQ1BitV1Spec2480(t *testing.T) {
 	normalized := strings.Join(strings.Fields(text), " ")
 	for _, want := range []string{
 		"`brq_1bit` version `1`",
+		"lower-level runtime prototype for #2481",
 		"MUST NOT reinterpret or mutate `rabitq_1bit` v1",
 		"License survey and implementation boundary",
 		"Default seed | `0x6272713162697401`",
@@ -35,7 +36,7 @@ func TestDocs_BRQ1BitV1Spec2480(t *testing.T) {
 		"canonical config bytes and `Config.Hash64` golden",
 		"Recall, storage, and performance gates",
 		"`quantized_score_codec_brq_1bit/search=1`",
-		"A complete `brq_1bit` v1 contract unblocks #2481",
+		"#2507 added lower-level BRQ quantized asset/search runtime",
 	} {
 		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("brq spec missing %q", want)
@@ -58,7 +59,7 @@ func TestDocs_BRQ1BitV1LinkedOwners2480(t *testing.T) {
 		},
 		filepath.Join(treeRoot, "docs", "spec", "quantized-asset-schema.md"): {
 			"brq-1bit-v1.md",
-			"future `brq_1bit` v1 contract",
+			"`brq_1bit` v1 contract/prototype",
 			"runtime query `uint4` bit-product score semantics",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "rabitq-1bit-v1.md"): {

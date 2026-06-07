@@ -206,9 +206,9 @@ recorded in
 - No changes to exact/default FP32 search or `scalar_u8` score-plane behavior.
 - No go-highway accelerated RaBitQ backend landed in this stack; #2453 is
   no-land/not-planned for the current weighted scorer and durable asset shape.
-- No multi-bit RaBitQ, BRQ bit-product, PQ/OPQ, IVF, or graph topology changes;
-  the future `brq_1bit` v1 candidate is specified separately in
-  [`brq-1bit-v1.md`](brq-1bit-v1.md) under a new codec identity/version.
+- No multi-bit RaBitQ, BRQ bit-product, PQ/OPQ, IVF, or graph topology changes
+  are part of `rabitq_1bit` v1; the separate `brq_1bit` v1 contract/prototype is
+  specified in [`brq-1bit-v1.md`](brq-1bit-v1.md) under a new codec identity/version.
 - No dependency on CockroachDB, Antfly, AGPL, cgo, or production go-highway code.
 - No claim that RaBitQ universally replaces exact FP32 or scalar_u8.
 

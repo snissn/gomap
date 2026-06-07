@@ -25,17 +25,22 @@ func TestDocs_QuantizedVectorIndex1926Closeout(t *testing.T) {
 		"BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926",
 		"BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414",
 		"BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451",
+		"BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481",
 		"BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415",
 		"BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452",
 		"Collection.SearchVectorIndexWithBuffer",
 		"BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926",
 		"BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450",
+		"BenchmarkColumnGraphBRQQuantizedRebuildStorage2481",
+		"brq_1bit_estimated_cosine_q4",
+		"quantized_score_codec_brq_1bit/search=1",
 		"recall_at_k_pct",
 		"quantized_code_B/search",
 		"vector_B/search",
 		"norm_B/search",
 		"quantized_asset_B/vector",
 		"rabitq-closeout-2454.md",
+		"vector-search-closeout-2483.md",
 		"RaBitQ go-highway acceleration did not land",
 		"does **not** claim a current speedup",
 		"Batch scorer kernels, SIMD/popcount integration, graph control-flow changes, block-planner/windowing changes",
@@ -52,6 +57,7 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 		filepath.Join(treeRoot, "docs", "spec", "README.md"): {
 			"quantized-vector-index.md",
 			"rabitq-closeout-2454.md",
+			"vector-search-closeout-2483.md",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "column-graph-native-vector-search.md"): {
 			"quantized-vector-index.md",
@@ -60,6 +66,7 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 		},
 		filepath.Join(treeRoot, "docs", "spec", "quantized-asset-schema.md"): {
 			"quantized-vector-index.md",
+			"prototype `brq_1bit` v1",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "typed-column-graph-search-admission.md"): {
 			"BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926",
@@ -82,8 +89,8 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 		filepath.Join(treeRoot, "docs", "guides", "vector-search-typed-column.md"): {
 			"Optional quantized query modes",
 			"quantized-vector-index.md",
-			"pure-Go `rabitq_1bit` score planes are behavior/storage/recall evidence",
-			"BRQ/PQ/OPQ/residual codecs, accelerated RaBitQ backends",
+			"prototype `brq_1bit` score planes are behavior/storage/recall evidence",
+			"PQ/OPQ/residual codecs, accelerated RaBitQ backends",
 		},
 	}
 	for path, wants := range checks {
@@ -95,6 +102,62 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 		for _, want := range wants {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing quantized vector index closeout text %q", path, want)
+			}
+		}
+	}
+}
+
+func TestDocs_VectorSearchCloseout2483(t *testing.T) {
+	treeRoot, repoRoot := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "vector-search-closeout-2483.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read vector search closeout: %v", err)
+	}
+	text := string(data)
+	normalized := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"# TreeDB vector search closeout guidance (#2483)",
+		"#2487 unified current-main snapshot",
+		"#2507 added lower-level BRQ asset/search runtime",
+		"#2494 crossover evidence is pending",
+		"TreeDB_SearchWithBufferParallel",
+		"collection `quantized_only`, c=8",
+		"rabitq_1bit",
+		"brq_1bit_estimated_cosine_q4",
+		"/tmp/2481_runtime_bench_20260606_165236",
+		"quantized_score_codec_brq_1bit/search=1",
+	} {
+		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
+			t.Fatalf("vector search closeout missing %q", want)
+		}
+	}
+	for path, wants := range map[string][]string{
+		filepath.Join(treeRoot, "docs", "guides", "vector-search-high-qps-collection-api.md"): {
+			"vector-search-closeout-2483.md",
+			"Quantized collection buffered search is supported as a separate route state",
+		},
+		filepath.Join(treeRoot, "docs", "guides", "vector-search-benchmark-workflow.md"): {
+			"vector-search-closeout-2483.md",
+			"#2494",
+		},
+		filepath.Join(treeRoot, "docs", "spec", "README.md"): {
+			"vector-search-closeout-2483.md",
+			"#2494 crossover-pending status",
+		},
+		filepath.Join(repoRoot, "docs", "README.md"): {
+			"TreeDB Vector Search Closeout",
+			"vector-search-closeout-2483.md",
+		},
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(data)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing #2483 closeout link text %q", path, want)
 			}
 		}
 	}
@@ -150,7 +213,7 @@ func TestDocs_RaBitQPerformanceLaneCloseout2482(t *testing.T) {
 	for _, want := range []string{
 		"# TreeDB RaBitQ performance lane closeout (#2482)",
 		"closes **Sublane A**, the `rabitq_1bit` v1 performance sweep",
-		"**Sublane B** remains deferred to open follow-ups #2480 and #2481",
+		"**Sublane B** was deferred; it has since completed through #2480",
 		"`rabitq_1bit` v1 durable storage layout",
 		"LSB-first bit order",
 		"weighted sign-dot score formula",
@@ -172,7 +235,8 @@ func TestDocs_RaBitQPerformanceLaneCloseout2482(t *testing.T) {
 		"Scalar guardrail row",
 		"Exact FP32 `hnsw_search_pack_v1` rows were not required for #2477",
 		"no code PR or AI review was opened",
-		"No future codec has been selected yet",
+		"Sublane B is complete for design/prototype purposes",
+		"#2507 merge `8e7377cc995ffc928ac99a42ed8aec769f8f72fb`",
 	} {
 		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("rabitq performance lane closeout missing %q", want)
@@ -182,7 +246,7 @@ func TestDocs_RaBitQPerformanceLaneCloseout2482(t *testing.T) {
 	checks := map[string][]string{
 		filepath.Join(treeRoot, "docs", "spec", "README.md"): {
 			"rabitq-performance-lane-closeout-2482.md",
-			"#2480/#2481 deferred Sublane B status",
+			"completed Sublane B status",
 		},
 		filepath.Join(treeRoot, "docs", "spec", "rabitq-1bit-v1.md"): {
 			"rabitq-performance-lane-closeout-2482.md",
@@ -195,6 +259,7 @@ func TestDocs_RaBitQPerformanceLaneCloseout2482(t *testing.T) {
 		filepath.Join(repoRoot, "docs", "README.md"): {
 			"TreeDB RaBitQ Performance Lane Closeout",
 			"rabitq-performance-lane-closeout-2482.md",
+			"TreeDB Vector Search Closeout",
 		},
 	}
 	for path, wants := range checks {

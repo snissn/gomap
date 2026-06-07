@@ -42,13 +42,15 @@ Explicit #1926/#2454 quantized modes are documented in
 [`quantized-vector-index.md`](quantized-vector-index.md) and the RaBitQ closeout
 workflow is in [`rabitq-closeout-2454.md`](rabitq-closeout-2454.md). The
 zero/default query mode remains exact. `quantized_only` uses a selected prepared
-`scalar_u8` or pure-Go `rabitq_1bit` score plane and returns estimated scores
-without exact vector/norm reads. `quantized_rerank` traverses with the selected
-quantized scorer over the normalized `ef_search` candidate pool, trims to
-`QuantizedRerankCandidates`, exact-reranks that shortlist by graph ordinal
-through the authoritative float32 vector/norm path, and returns exact cosine
-scores. Missing, stale, mismatched, unsupported, closed, or unprepared quantized
-assets fail closed; quantized modes must not hide an exact fallback.
+`scalar_u8`, pure-Go `rabitq_1bit`, or prototype `brq_1bit` score plane and
+returns estimated scores without exact vector/norm reads. `quantized_rerank`
+traverses with the selected quantized scorer over the normalized `ef_search`
+candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks that
+shortlist by graph ordinal through the authoritative float32 vector/norm path,
+and returns exact cosine scores. Missing, stale, mismatched, unsupported,
+closed, or unprepared quantized assets fail closed; quantized modes must not hide
+an exact fallback. #2483 summarizes current exact/scalar/RaBitQ/BRQ evidence in
+[`vector-search-closeout-2483.md`](vector-search-closeout-2483.md).
 
 ## Quickstart
 

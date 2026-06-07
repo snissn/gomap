@@ -28,19 +28,21 @@ The `rabitq_1bit` v1 contract in `rabitq-1bit-v1.md` chooses
 `CodeDimensions=next_power_of_two(VectorDimensions)`, `CodeWidthBits=1`,
 TreeDB LSB-first bit order, and zero high-bit padding. Its required side arrays
 are `code_count` (`uint32`) and `quantized_dot_product_inv` (`float32`). The
-future `brq_1bit` v1 contract in `brq-1bit-v1.md` deliberately uses a new codec
-identity and asset id while reusing the same one-bit data-code roles plus
+`brq_1bit` v1 contract/prototype in `brq-1bit-v1.md` deliberately uses a new
+codec identity and asset id while reusing the same one-bit data-code roles plus
 explicit runtime query `uint4` bit-product score semantics.
 
 ## Query-mode guardrail
 
-Collection vector-index metadata can declare named `scalar_u8` v1 and
-`rabitq_1bit` v1 quantized score planes under
+Collection vector-index metadata can declare named `scalar_u8` v1,
+`rabitq_1bit` v1, and prototype `brq_1bit` v1 quantized score planes under
 `VectorIndexDefinition.QuantizedIndexes`. Public search options expose explicit
 `exact`, `quantized_only`, and `quantized_rerank` query modes. The zero/default
 mode remains exact. As of #2451/#2452, `rabitq_1bit` assets are built,
 persisted, prepared/validated, and consumed by the pure-Go RaBitQ scorer in
-lower-level and collection-level buffered no-document search.
+lower-level and collection-level buffered no-document search. As of #2507,
+`brq_1bit` assets and lower-level `SearchWithBuffer` scoring are available as a
+prototype route with separate counters.
 
 The #1926 scalar lifecycle builds and loads `scalar_u8` v1 `codes` assets for
 declared `column_graph` quantized indexes. For the current cosine
@@ -58,9 +60,11 @@ asset role remains `quantized_codes`, but the asset id is
 `quantized/<name>/packed_codes`, the state logical type/encoding are
 `packed_bit_vector` / `raw_packed_bit_vector`, and the part contains three
 required role columns: `packed_codes`, `code_count`, and
-`quantized_dot_product_inv`. The RaBitQ codec descriptor records canonical config
-bytes plus FNV-1a config hash; the generated typed-column schema hash includes
-that config hash so stale/config-mismatched assets fail closed before prepare.
+`quantized_dot_product_inv`. #2507 uses the same role columns for `brq_1bit` but
+with asset id `quantized/<name>/brq_1bit/packed_codes` and BRQ config identity.
+The codec descriptor records canonical config bytes plus FNV-1a config hash; the
+generated typed-column schema hash includes that config hash so
+stale/config-mismatched assets fail closed before prepare.
 
 Quantized modes validate the selected name/options and asset load status before
 graph traversal/scoring. The `scalar_u8` v1 `quantized_only` scorer consumes the
