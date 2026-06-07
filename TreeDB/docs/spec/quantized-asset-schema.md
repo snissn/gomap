@@ -27,7 +27,10 @@ The `rabitq_1bit` v1 contract in `rabitq-1bit-v1.md` chooses
 `RolePackedCodes` / `packed_bit_vector` for one-bit code rows, with
 `CodeDimensions=next_power_of_two(VectorDimensions)`, `CodeWidthBits=1`,
 TreeDB LSB-first bit order, and zero high-bit padding. Its required side arrays
-are `code_count` (`uint32`) and `quantized_dot_product_inv` (`float32`).
+are `code_count` (`uint32`) and `quantized_dot_product_inv` (`float32`). The
+future `brq_1bit` v1 contract in `brq-1bit-v1.md` deliberately uses a new codec
+identity and asset id while reusing the same one-bit data-code roles plus
+explicit runtime query `uint4` bit-product score semantics.
 
 ## Query-mode guardrail
 

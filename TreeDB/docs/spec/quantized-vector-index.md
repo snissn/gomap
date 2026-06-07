@@ -158,8 +158,12 @@ issue lands one with parity tests, same-fixture benchmarks, and profiles.
 
 Future quantization work should be separate from this scalar/RaBitQ closeout:
 
-- BRQ/PQ/OPQ/residual-PQ codecs and other packed popcount scorers need their own
-  codec specs, tests, recall sweeps, and benchmark gates.
+- [`brq-1bit-v1.md`](brq-1bit-v1.md) is the selected #2480 future-codec
+  contract for a bit-product `brq_1bit` v1 prototype. It uses a new codec
+  identity/version, explicit query `uint4` score label, validation plan, and
+  promotion gates; it is not current behavior until #2481 lands support.
+- PQ/OPQ/residual-PQ codecs and other packed popcount scorers still need their
+  own codec specs, tests, recall sweeps, and benchmark gates.
 - Batch scorer kernels, SIMD/popcount integration, graph control-flow changes,
   block-planner/windowing changes, and traversal scheduling changes are not part
   of #1926/#2454 acceptance. They must not be smuggled into quantized docs or
