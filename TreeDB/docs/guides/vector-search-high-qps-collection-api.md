@@ -112,7 +112,7 @@ evidence.
 
 ## Required no-document route counters
 
-#2410 owns the historical benchmark workflow, while
+Issue #2410 owns the historical benchmark workflow, while
 [`vector-search-closeout-2483.md`](../spec/vector-search-closeout-2483.md)
 indexes the current accepted evidence. As a contract summary, healthy exact
 no-document rows must prove all of the following before claiming the exact
