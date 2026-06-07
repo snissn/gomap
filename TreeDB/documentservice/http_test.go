@@ -46,6 +46,16 @@ func TestHTTPDefaultMaxBodyBytesDoesNotMutateHandler(t *testing.T) {
 	}
 }
 
+func TestHTTPWriteJSONEncodeErrorKeepsErrorShape(t *testing.T) {
+	rr := httptest.NewRecorder()
+	writeJSON(rr, http.StatusOK, map[string]any{"bad": make(chan int)})
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInternal)
+}
+
 func TestHTTPDocumentVectorRoundTrip(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
