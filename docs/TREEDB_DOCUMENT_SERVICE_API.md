@@ -20,6 +20,15 @@ go run ./cmd/treedb-document-service \
 The command opens TreeDB with the selected public profile and serves the routes
 below. `GET /v1/health` returns the current `contract_version`.
 
+A Haystack-free sync Python client for this contract lives in
+[`clients/python/treedb_client`](../clients/python/treedb_client/README.md).
+Run its stdlib unit tests with:
+
+```sh
+cd clients/python/treedb_client
+PYTHONPATH=src python3 -m unittest discover -s tests
+```
+
 ## Scope and honesty
 
 Supported now:
