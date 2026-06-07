@@ -9,6 +9,7 @@ from haystack.document_stores.types import DuplicatePolicy
 from haystack.errors import FilterError
 from treedb_client import Document as TreeDBDocument
 from treedb_client import InvalidFilterError as TreeDBInvalidFilterError
+from treedb_client import InvalidRequestError as TreeDBInvalidRequestError
 
 import _support  # noqa: F401
 from fakes import FakeTreeDBClient
@@ -185,21 +186,40 @@ def test_to_dict_from_dict_round_trip_without_network() -> None:
     assert restored.ensure_index is False
 
 
-def test_invalid_service_filter_error_maps_to_haystack_filter_error() -> None:
+def test_invalid_filters_map_to_haystack_filter_error_without_scan_fallback() -> None:
+    store, client = make_store()
+
+    with pytest.raises(FilterError, match="numeric or string"):
+        store.count_documents({"field": "meta.version", "operator": ">", "value": []})
+    assert client.count_calls == []
+
     class InvalidFilterClient(FakeTreeDBClient):
-        def count_documents(self, *args: object, **kwargs: object) -> object:
+        def filter_documents(self, *args: object, **kwargs: object) -> object:
             raise TreeDBInvalidFilterError("unsupported filter operator 'contains'")
 
-    store = TreeDBDocumentStore(
+    invalid_filter_store = TreeDBDocumentStore(
         base_url="http://fake-treedb",
         index="docs",
         embedding_dimension=3,
         ensure_index=False,
         client=InvalidFilterClient(),  # type: ignore[arg-type]
     )
-
     with pytest.raises(FilterError, match="unsupported filter operator"):
-        store.count_documents({"field": "meta.repo", "operator": "contains", "value": "gomap"})
+        invalid_filter_store.filter_documents({"field": "meta.repo", "operator": "==", "value": "gomap"})
+
+    class ServiceRejectedFilterClient(FakeTreeDBClient):
+        def delete_by_filter(self, *args: object, **kwargs: object) -> object:
+            raise TreeDBInvalidRequestError("invalid_request", "filter comparisons require numeric operands")
+
+    service_rejected_filter_store = TreeDBDocumentStore(
+        base_url="http://fake-treedb",
+        index="docs",
+        embedding_dimension=3,
+        ensure_index=False,
+        client=ServiceRejectedFilterClient(),  # type: ignore[arg-type]
+    )
+    with pytest.raises(FilterError, match="filter comparisons"):
+        service_rejected_filter_store.delete_by_filter({"field": "meta.version", "operator": "==", "value": 1})
 
 
 def test_recreate_index_and_delete_empty_filter_fail_honestly() -> None:

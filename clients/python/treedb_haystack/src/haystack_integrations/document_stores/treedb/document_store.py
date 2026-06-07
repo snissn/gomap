@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Optional, TypeVar, Union
@@ -13,8 +14,9 @@ from haystack.document_stores.errors import DocumentStoreError, DuplicateDocumen
 from haystack.document_stores.types import DuplicatePolicy
 from haystack.errors import FilterError
 from treedb_client import Document as TreeDBDocument
-from treedb_client import IndexInfo, TreeDBClient, TreeDBClientError
+from treedb_client import IndexInfo, TreeDBClient, TreeDBClientError, normalize_filter
 from treedb_client import InvalidFilterError as TreeDBInvalidFilterError
+from treedb_client import InvalidRequestError as TreeDBInvalidRequestError
 
 FilterLike = Mapping[str, Any]
 _T = TypeVar("_T")
@@ -88,11 +90,12 @@ class TreeDBDocumentStore:
     def count_documents(self, filters: Optional[FilterLike] = None) -> int:
         """Return the number of documents matching `filters`, or all documents."""
 
+        prepared_filter = _prepare_filter(filters)
         response = self._client_call(
             "count documents",
             lambda: self.client.count_documents(
                 self.index,
-                _empty_filter_to_none(filters),
+                prepared_filter,
                 expected_generation=self._expected_generation(),
             ),
         )
@@ -101,11 +104,12 @@ class TreeDBDocumentStore:
     def filter_documents(self, filters: Optional[FilterLike] = None) -> list[HaystackDocument]:
         """Return documents matching `filters` using TreeDB service-side filtering."""
 
+        prepared_filter = _prepare_filter(filters)
         response = self._client_call(
             "filter documents",
             lambda: self.client.filter_documents(
                 self.index,
-                _empty_filter_to_none(filters),
+                prepared_filter,
                 return_embedding=self.return_embedding,
                 expected_generation=self._expected_generation(),
             ),
@@ -174,11 +178,15 @@ class TreeDBDocumentStore:
         if not filters:
             msg = "delete_by_filter requires a non-empty filter; delete-all is not supported by this MVP"
             raise FilterError(msg)
+        prepared_filter = _prepare_filter(filters)
+        if prepared_filter is None:
+            msg = "delete_by_filter requires a non-empty filter; delete-all is not supported by this MVP"
+            raise FilterError(msg)
         response = self._client_call(
             "delete documents by filter",
             lambda: self.client.delete_by_filter(
                 self.index,
-                filters,
+                prepared_filter,
                 expected_generation=self._expected_generation(),
             ),
         )
@@ -199,13 +207,14 @@ class TreeDBDocumentStore:
     ) -> list[HaystackDocument]:
         """Run dense-vector search through the TreeDB service."""
 
+        prepared_filter = _prepare_filter(filters)
         response = self._client_call(
             "query by embedding",
             lambda: self.client.query_by_embedding(
                 self.index,
                 query_embedding=query_embedding,
                 top_k=top_k,
-                filter=_empty_filter_to_none(filters),
+                filter=prepared_filter,
                 return_embedding=self.return_embedding if return_embedding is None else bool(return_embedding),
                 expected_generation=self._expected_generation(),
             ),
@@ -277,6 +286,11 @@ class TreeDBDocumentStore:
             return fn()
         except TreeDBInvalidFilterError as exc:
             raise FilterError(str(exc)) from exc
+        except TreeDBInvalidRequestError as exc:
+            if _looks_like_filter_error(exc):
+                raise FilterError(str(exc)) from exc
+            msg = f"TreeDB {label} failed: {exc}"
+            raise DocumentStoreError(msg) from exc
         except TreeDBClientError as exc:
             msg = f"TreeDB {label} failed: {exc}"
             raise DocumentStoreError(msg) from exc
@@ -383,10 +397,42 @@ def _deduplicate_input_documents(
     return list(by_id.values())
 
 
-def _empty_filter_to_none(filters: Optional[FilterLike]) -> Optional[FilterLike]:
+def _prepare_filter(filters: Optional[FilterLike]) -> Optional[dict[str, Any]]:
     if isinstance(filters, Mapping) and len(filters) == 0:
         return None
-    return filters
+    try:
+        normalized = normalize_filter(filters)
+    except TreeDBInvalidFilterError as exc:
+        raise FilterError(str(exc)) from exc
+    if normalized is not None:
+        _validate_filter_semantics(normalized, "filter")
+    return normalized
+
+
+def _validate_filter_semantics(filter_node: Mapping[str, Any], path: str) -> None:
+    operator = str(filter_node.get("operator", "")).upper()
+    if operator in {"AND", "OR", "NOT"}:
+        conditions = filter_node.get("conditions", [])
+        for i, condition in enumerate(conditions):
+            if isinstance(condition, Mapping):
+                _validate_filter_semantics(condition, f"{path}.conditions[{i}]")
+        return
+    if operator in {">", ">=", "<", "<="} and not _is_filter_comparison_value(filter_node.get("value")):
+        msg = f"{path}: operator {operator!r} requires a numeric or string value"
+        raise FilterError(msg)
+
+
+def _is_filter_comparison_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return math.isfinite(float(value))
+    return isinstance(value, str)
+
+
+def _looks_like_filter_error(exc: TreeDBInvalidRequestError) -> bool:
+    message = str(exc).lower()
+    return any(token in message for token in ("filter", "operator", "conditions", "field is required"))
 
 
 def _normalize_similarity(similarity: str) -> str:
