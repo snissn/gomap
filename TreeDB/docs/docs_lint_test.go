@@ -468,6 +468,46 @@ func TestDocs_SpecManifestFilesExist(t *testing.T) {
 	}
 }
 
+func TestDocs_HybridSearchContract2502(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "hybrid-search-contract.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	doc := string(data)
+	normalizedDoc := strings.Join(strings.Fields(doc), " ")
+	for _, want := range []string{
+		"Collection.SearchHybrid(HybridSearchOptions)",
+		"HybridSearchCandidate",
+		"HybridSearchStats",
+		"ErrHybridSearchUnsupported",
+		"ErrHybridSearchIndexUnavailable",
+		"ErrHybridSearchStaleIndex",
+		"higher-is-better",
+		"reciprocal-rank fusion",
+		"fused_score_best_rank_source_order_id",
+		"prefilter",
+		"postfilter",
+		"text_first",
+		"vector_first",
+		"union_fusion",
+		"current_snapshot",
+		"bound_snapshot",
+		"full_document_scan_fallbacks",
+		"documents_fetched",
+		"#1764",
+		"#2503",
+		"#2504",
+		"#2505",
+	} {
+		normalizedWant := strings.Join(strings.Fields(want), " ")
+		if !strings.Contains(doc, want) && !strings.Contains(normalizedDoc, normalizedWant) {
+			t.Fatalf("%s missing hybrid contract wording %q", path, want)
+		}
+	}
+}
+
 func TestDocs_NativeWireRaftLocalWALSeparation(t *testing.T) {
 	treeRoot, _ := repoRoots(t)
 	paths := []string{
