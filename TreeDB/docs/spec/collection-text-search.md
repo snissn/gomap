@@ -61,6 +61,15 @@ Validation rules:
 - Text index names share the collection-wide index namespace with scalar and
   vector indexes.
 
+Root storage policies:
+
+- `TextIndexDefinition.StoragePolicy` applies to the postings root
+  `<collection>/text-index/<indexName>`.
+- `<collection>/text-state/<indexName>` and
+  `<collection>/text-stats/<indexName>` use
+  `CollectionOptions.IndexStateStoragePolicy`, matching existing index-state and
+  vector-index maintenance roots.
+
 ## Query shape
 
 ```go

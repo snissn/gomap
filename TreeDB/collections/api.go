@@ -19772,6 +19772,14 @@ func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, roo
 			return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
 		}
 	}
+	for _, idx := range meta.TextIndexes {
+		switch rootName {
+		case collectionTextIndexRootName(meta.Name, idx.Name):
+			return backendRootStoragePolicy(idx.StoragePolicy)
+		case collectionTextStateRootName(meta.Name, idx.Name), collectionTextStatsRootName(meta.Name, idx.Name):
+			return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
+		}
+	}
 	return backenddb.OrderedRootStorageDefault, fmt.Errorf("collections: unknown collection root %q for %q", rootName, meta.Name)
 }
 

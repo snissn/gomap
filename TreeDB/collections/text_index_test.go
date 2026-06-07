@@ -211,6 +211,58 @@ func TestCollectionTextRootNames(t *testing.T) {
 	}
 }
 
+func TestCollectionTextRootStoragePolicies(t *testing.T) {
+	meta, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			IndexStateStoragePolicy: RootStorageFast,
+		},
+		TextIndexes: []TextIndexDefinition{{
+			Name:          "lexical",
+			Fields:        []TextIndexField{{Field: "body"}},
+			StoragePolicy: RootStorageCompressed,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("normalize metadata: %v", err)
+	}
+	cases := []struct {
+		name string
+		root string
+		want backenddb.OrderedRootStoragePolicy
+	}{
+		{
+			name: "postings honor text index storage policy",
+			root: collectionTextIndexRootName("docs", "lexical"),
+			want: backenddb.OrderedRootStorageValueLogLeaves,
+		},
+		{
+			name: "state uses index state storage policy",
+			root: collectionTextStateRootName("docs", "lexical"),
+			want: backenddb.OrderedRootStoragePagerLeaves,
+		},
+		{
+			name: "stats uses index state storage policy",
+			root: collectionTextStatsRootName("docs", "lexical"),
+			want: backenddb.OrderedRootStoragePagerLeaves,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := collectionRootStoragePolicyForDB(nil, meta, tc.root)
+			if err != nil {
+				t.Fatalf("collectionRootStoragePolicyForDB(%q): %v", tc.root, err)
+			}
+			if got != tc.want {
+				t.Fatalf("policy=%v want %v", got, tc.want)
+			}
+		})
+	}
+	if _, err := collectionRootStoragePolicyForDB(nil, meta, collectionTextIndexRootName("docs", "missing")); err == nil || !strings.Contains(err.Error(), "unknown collection root") {
+		t.Fatalf("missing text root err=%v want unknown collection root", err)
+	}
+}
+
 func TestCollectionTextIndexedOperationsFailClosedUntilStorageLands(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
