@@ -106,6 +106,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - user-facing quickstart, benchmark matrix, demo, and caveats for explicit
     `column_graph` vector indexes that search through the native physical column
     row reader.
+- `TreeDB/docs/spec/hybrid-search-contract.md`
+  - issue #2502 hybrid lexical + vector search contract for query/options,
+    shared candidates/results, rank fusion, scalar filter strategy vocabulary,
+    snapshot/epoch consistency, counters, and fail-closed behavior.
 - `TreeDB/docs/spec/quantized-vector-index.md`
   - issue #1926/#2454/#2481 scalar_u8, `rabitq_1bit`, and prototype
     `brq_1bit` quantized score-plane semantics, fail-closed query modes, exact
