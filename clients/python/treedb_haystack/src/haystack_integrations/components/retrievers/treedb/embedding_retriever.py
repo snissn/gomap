@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Optional, Union
 
 from haystack import component, default_from_dict, default_to_dict
@@ -43,7 +44,7 @@ class TreeDBEmbeddingRetriever:
             raise ValueError(msg)
 
         self.document_store = document_store
-        self.filters = filters or None
+        self.filters = copy.deepcopy(filters) if filters else None
         self.top_k = int(top_k)
         self.return_embedding = return_embedding
         self.filter_policy = (
@@ -91,8 +92,8 @@ class TreeDBEmbeddingRetriever:
 
         effective_filters = apply_filter_policy(
             filter_policy=self.filter_policy,
-            init_filters=self.filters,
-            runtime_filters=filters,
+            init_filters=copy.deepcopy(self.filters),
+            runtime_filters=copy.deepcopy(filters),
         )
         effective_top_k = self.top_k if top_k is None else int(top_k)
         if effective_top_k <= 0:

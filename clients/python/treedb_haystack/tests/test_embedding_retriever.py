@@ -107,6 +107,31 @@ def test_filter_policy_merge_combines_init_and_runtime_filters() -> None:
     }
 
 
+def test_filter_policy_merge_does_not_mutate_init_filters() -> None:
+    store, client = make_populated_store()
+    init_filters = {
+        "operator": "AND",
+        "conditions": [{"field": "meta.category", "operator": "==", "value": "A"}],
+    }
+    retriever = TreeDBEmbeddingRetriever(
+        document_store=store,
+        filters=init_filters,
+        top_k=3,
+        filter_policy=FilterPolicy.MERGE,
+    )
+
+    first = retriever.run(
+        query_embedding=[1.0, 0.0, 0.0],
+        filters={"field": "meta.rank", "operator": ">=", "value": 3},
+    )
+    second = retriever.run(query_embedding=[1.0, 0.0, 0.0])
+
+    assert [doc.id for doc in first["documents"]] == ["gamma"]
+    assert [doc.id for doc in second["documents"]] == ["alpha", "gamma"]
+    assert retriever.filters == init_filters
+    assert client.query_calls[-1]["filter"] == init_filters
+
+
 def test_to_dict_from_dict_round_trip() -> None:
     client = FakeTreeDBClient()
     store = TreeDBDocumentStore(
