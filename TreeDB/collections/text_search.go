@@ -327,7 +327,7 @@ func scanTextSearchPostingsTerm(
 	stats *TextSearchStats,
 ) (bool, error) {
 	prefix := encodeTextPostingTermPrefix(term)
-	it, err := collectionIteratorAtCatalogRoot(snap, catalog, postingsRootName, prefix, textSearchPrefixEnd(prefix), false)
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, postingsRootName, prefix, textSearchPrefixEnd(prefix), true)
 	if err != nil {
 		return false, err
 	}
@@ -338,7 +338,7 @@ func scanTextSearchPostingsTerm(
 		return false, nil
 	}
 	defer func() { _ = it.Close() }()
-	var postingsForTerm uint64
+	var livePostingsForTerm uint64
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, prefix) {
@@ -349,6 +349,7 @@ func scanTextSearchPostingsTerm(
 			stats.FailClosedReason = textSearchFailClosedPostingsLimit
 			return true, nil
 		}
+		stats.TextPostingsScanned++
 		if it.IsDeleted() {
 			it.Next()
 			continue
@@ -367,8 +368,7 @@ func scanTextSearchPostingsTerm(
 		if termStats.DocumentFrequency == 0 {
 			return false, errMalformedTextStorage("postings exist for term %q with zero document frequency", term)
 		}
-		stats.TextPostingsScanned++
-		postingsForTerm++
+		livePostingsForTerm++
 		keyString := string(documentID)
 		candidate := candidates[keyString]
 		if candidate == nil {
@@ -402,8 +402,8 @@ func scanTextSearchPostingsTerm(
 	if err := it.Error(); err != nil {
 		return false, err
 	}
-	if postingsForTerm != termStats.DocumentFrequency {
-		return false, errMalformedTextStorage("text-stats term %q document frequency %d does not match postings %d", term, termStats.DocumentFrequency, postingsForTerm)
+	if livePostingsForTerm != termStats.DocumentFrequency {
+		return false, errMalformedTextStorage("text-stats term %q document frequency %d does not match live postings %d", term, termStats.DocumentFrequency, livePostingsForTerm)
 	}
 	return false, nil
 }
@@ -532,7 +532,13 @@ func textSearchFailClosed(response TextSearchResponse, reason string, err error)
 	if response.Stats.CandidatesScored == 0 {
 		response.Stats.CandidatesScored = response.Stats.TextCandidatesScored
 	}
-	return response, err
+	if err == nil {
+		return response, fmt.Errorf("%w: %s", ErrTextIndexUnavailable, reason)
+	}
+	if errors.Is(err, ErrTextIndexUnavailable) {
+		return response, err
+	}
+	return response, fmt.Errorf("%w: %w", ErrTextIndexUnavailable, err)
 }
 
 func normalizeTextSearchCandidateLimit(topK, requested int) int {

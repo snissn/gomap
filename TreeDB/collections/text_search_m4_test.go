@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func TestSearchTextSingleTermRankedSearchM4(t *testing.T) {
@@ -127,6 +128,45 @@ func TestSearchTextMissingIndexUnsupportedSyntaxAndTruncationM4(t *testing.T) {
 	}
 }
 
+func TestSearchTextTombstonedPostingsConsumeScanBudgetM4(t *testing.T) {
+	d := openTextTestDB(t)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchM4Collection(t, d, []TextIndexField{{Field: "body"}})
+	if _, err := col.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{
+		[]byte(`{"body":"refund"}`),
+		[]byte(`{"body":"refund"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	publishTextPostingOverlayTombstone(t, d, "docs", "lexical", "refund", []byte("a"))
+
+	got, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 1, MaxPostingsScanned: 1})
+	if !errors.Is(err, ErrTextIndexUnavailable) {
+		t.Fatalf("SearchText err=%v want ErrTextIndexUnavailable", err)
+	}
+	if got.Stats.TextPostingsScanned != 1 || !got.Stats.Truncated || got.Stats.FailClosedReason != textSearchFailClosedPostingsLimit {
+		t.Fatalf("stats=%+v want tombstoned posting charged to scan budget", got.Stats)
+	}
+}
+
+func TestSearchTextFailClosedWrapsStorageCorruptionM4(t *testing.T) {
+	d := openTextTestDB(t)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchM4Collection(t, d, []TextIndexField{{Field: "body"}})
+	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"refund policy"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	corruptTextRootValue(t, d, "docs", collectionTextStatsRootName("docs", "lexical"), encodeTextStatsCorpusKey(), []byte{99})
+
+	got, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 1})
+	if !errors.Is(err, ErrTextIndexUnavailable) || !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("SearchText err=%v want ErrTextIndexUnavailable and ErrTextIndexStorageCorrupt", err)
+	}
+	if got.Stats.FailClosed != 1 || got.Stats.FailClosedReason != textSearchFailClosedStorageCorrupt || !got.Stats.Unavailable {
+		t.Fatalf("stats=%+v want storage-corrupt fail-closed", got.Stats)
+	}
+}
+
 func TestSearchTextTopKBoundsDocumentFetchM4(t *testing.T) {
 	d := openTextTestDB(t)
 	defer func() { _ = d.Close() }()
@@ -160,6 +200,12 @@ func TestSearchTextReopenParityM4(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	firstClosed := false
+	defer func() {
+		if !firstClosed {
+			_ = d.Close()
+		}
+	}()
 	col := createTextSearchM4Collection(t, d, []TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}})
 	if _, err := col.InsertBatch([][]byte{[]byte("d1"), []byte("d2")}, [][]byte{
 		[]byte(`{"title":"refund","body":"policy refund"}`),
@@ -177,6 +223,7 @@ func TestSearchTextReopenParityM4(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+	firstClosed = true
 	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -257,6 +304,34 @@ func BenchmarkSearchTextM4(b *testing.B) {
 			b.ReportMetric(float64(last.Stats.CandidateScoreNanos), "candidate_score_ns/search")
 			b.ReportMetric(float64(last.Stats.DocumentFetchNanos), "document_fetch_ns/search")
 		})
+	}
+}
+
+func publishTextPostingOverlayTombstone(t *testing.T, d *backenddb.DB, collection, indexName, term string, documentID []byte) {
+	t.Helper()
+	rootName := collectionTextIndexRootName(collection, indexName)
+	table := newCollectionRunTable(1)
+	table.DeleteSteal(encodeTextPostingKey(term, documentID))
+	table.Freeze()
+	defer resetCollectionRunTable(table)
+	iter := table.NewIterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+	_, rootIDs, err := d.PublishOrderedRootGroupWithSystemBuilder([]backenddb.OrderedRootPublishInput{{BaseRoot: 0, Iter: iter}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("unexpected overlay root ids %d", len(rootIDs))
+		}
+		snap := d.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = snap.Close() }()
+		return buildSystemTargetIterator(snap, map[string][]byte{systemCollectionRootOverlayKey(rootName): encodeRootIDList([]uint64{rootIDs[0]})})
+	})
+	if err != nil {
+		t.Fatalf("publish text posting overlay tombstone: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("overlay root ids=%d want 1", len(rootIDs))
 	}
 }
 
