@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import copy
+
 import pytest
 from haystack import Document as HaystackDocument
 from haystack import Pipeline
@@ -150,12 +153,14 @@ def test_to_dict_from_dict_round_trip() -> None:
     )
 
     serialized = retriever.to_dict()
+    original = copy.deepcopy(serialized)
 
     assert serialized["type"] == (
         "haystack_integrations.components.retrievers.treedb.embedding_retriever.TreeDBEmbeddingRetriever"
     )
     assert serialized["init_parameters"]["filter_policy"] == "merge"
     restored = TreeDBEmbeddingRetriever.from_dict(serialized)
+    assert serialized == original
     assert restored.top_k == 5
     assert restored.filter_policy == FilterPolicy.MERGE
     assert restored.return_embedding is True
@@ -171,6 +176,24 @@ def test_pipeline_wiring_runs_retriever_component() -> None:
     result = pipeline.run({"retriever": {"query_embedding": [1.0, 0.0, 0.0]}})
 
     assert [doc.id for doc in result["retriever"]["documents"]] == ["alpha"]
+
+
+def test_run_async_returns_documents_without_calling_sync_path_on_event_loop() -> None:
+    store, _ = make_populated_store()
+    retriever = TreeDBEmbeddingRetriever(document_store=store, top_k=1)
+
+    result = asyncio.run(retriever.run_async(query_embedding=[1.0, 0.0, 0.0]))
+
+    assert [doc.id for doc in result["documents"]] == ["alpha"]
+
+
+def test_fake_cosine_handles_zero_norm_vectors_for_tests() -> None:
+    store, _ = make_populated_store()
+    retriever = TreeDBEmbeddingRetriever(document_store=store, top_k=3)
+
+    result = retriever.run(query_embedding=[0.0, 0.0, 0.0])
+
+    assert [doc.score for doc in result["documents"]] == [0.0, 0.0, 0.0]
 
 
 def test_run_rejects_non_positive_top_k() -> None:

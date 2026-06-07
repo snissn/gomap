@@ -62,15 +62,15 @@ class TreeDBDocumentStore:
         if recreate_index:
             msg = "recreate_index is not supported by the TreeDB document service MVP"
             raise DocumentStoreError(msg)
-        if embedding_dimension <= 0:
-            msg = "embedding_dimension must be positive"
+        if isinstance(embedding_dimension, bool) or not isinstance(embedding_dimension, int) or embedding_dimension <= 0:
+            msg = "embedding_dimension must be a positive integer"
             raise ValueError(msg)
         if client is None and not base_url:
             msg = "base_url is required when client is not supplied"
             raise ValueError(msg)
 
         self.index = index
-        self.embedding_dimension = int(embedding_dimension)
+        self.embedding_dimension = embedding_dimension
         self.similarity = _normalize_similarity(similarity)
         self.return_embedding = bool(return_embedding)
         self.ensure_index = bool(ensure_index)

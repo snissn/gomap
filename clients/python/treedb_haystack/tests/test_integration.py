@@ -32,7 +32,7 @@ class TreeDBServiceProcess:
     def __init__(self, repo_root: Path, data_dir: str) -> None:
         self.repo_root = repo_root
         self.data_dir = data_dir
-        self.addr = _free_addr()
+        self.addr = ""
         self.log = tempfile.NamedTemporaryFile("w+", prefix="treedb_haystack_service_", suffix=".log", delete=False)
         self.proc: Optional[subprocess.Popen[str]] = None
 
@@ -41,6 +41,22 @@ class TreeDBServiceProcess:
         return f"http://{self.addr}"
 
     def start(self) -> None:
+        last_error: Optional[AssertionError] = None
+        for attempt in range(5):
+            self.addr = _free_addr()
+            log_before = self.read_log()
+            try:
+                self._start_once()
+                return
+            except AssertionError as exc:
+                last_error = exc
+                attempt_log = self.read_log()[len(log_before) :].lower()
+                if "address already in use" not in attempt_log or attempt == 4:
+                    raise
+                self._terminate_process()
+        raise AssertionError(f"service did not start after retrying address allocation: {last_error}")
+
+    def _start_once(self) -> None:
         cmd = [
             "go",
             "run",
@@ -75,6 +91,15 @@ class TreeDBServiceProcess:
         raise AssertionError(f"service did not become healthy: {last_error}; log={self.read_log()}")
 
     def stop(self) -> None:
+        self._terminate_process()
+        log_name = self.log.name
+        self.log.close()
+        try:
+            os.unlink(log_name)
+        except OSError:
+            pass
+
+    def _terminate_process(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
             try:
                 if hasattr(os, "killpg"):
@@ -88,12 +113,6 @@ class TreeDBServiceProcess:
                 else:
                     self.proc.kill()
                 self.proc.wait(timeout=5)
-        log_name = self.log.name
-        self.log.close()
-        try:
-            os.unlink(log_name)
-        except OSError:
-            pass
 
     def read_log(self) -> str:
         self.log.flush()
@@ -165,6 +184,8 @@ def test_haystack_store_retriever_pipeline_and_reopen_smoke() -> None:
                 return_embedding=True,
                 timeout=5,
             )
+            assert store.count_documents({"field": "meta.repo", "operator": "==", "value": "snissn/gomap"}) == 2
+            assert [doc.id for doc in store.filter_documents({"field": "meta.language", "operator": "==", "value": "go"})] == ["a"]
             result = TreeDBEmbeddingRetriever(document_store=store, top_k=1).run(query_embedding=[1.0, 0.0, 0.0])
             assert result["documents"][0].id == "a"
             assert result["documents"][0].embedding == [1.0, 0.0, 0.0]

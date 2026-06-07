@@ -162,6 +162,16 @@ def test_conversion_functions_preserve_haystack_fields_without_aliasing_meta() -
     assert back.score == 0.75
 
 
+@pytest.mark.parametrize("bad_dimension", [0, -1, True, 3.5, "3"])
+def test_constructor_rejects_non_positive_or_non_integer_embedding_dimension(bad_dimension: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        TreeDBDocumentStore(
+            base_url="http://127.0.0.1:7120",
+            embedding_dimension=bad_dimension,  # type: ignore[arg-type]
+            ensure_index=False,
+        )
+
+
 def test_to_dict_from_dict_round_trip_without_network() -> None:
     store = TreeDBDocumentStore(
         base_url="http://127.0.0.1:7120",

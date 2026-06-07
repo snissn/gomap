@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from typing import Any, Optional, Union
 
@@ -67,11 +68,14 @@ class TreeDBEmbeddingRetriever:
     def from_dict(cls, data: dict[str, Any]) -> "TreeDBEmbeddingRetriever":
         """Deserialize a retriever from `to_dict()` output."""
 
-        doc_store_params = data["init_parameters"]["document_store"]
-        data["init_parameters"]["document_store"] = TreeDBDocumentStore.from_dict(doc_store_params)
-        if filter_policy := data["init_parameters"].get("filter_policy"):
-            data["init_parameters"]["filter_policy"] = FilterPolicy.from_str(filter_policy)
-        return default_from_dict(cls, data)
+        payload = copy.deepcopy(data)
+        init_parameters = payload["init_parameters"]
+        init_parameters["document_store"] = TreeDBDocumentStore.from_dict(init_parameters["document_store"])
+        if filter_policy := init_parameters.get("filter_policy"):
+            init_parameters["filter_policy"] = (
+                filter_policy if isinstance(filter_policy, FilterPolicy) else FilterPolicy.from_str(filter_policy)
+            )
+        return default_from_dict(cls, payload)
 
     @component.output_types(documents=list[Document])
     def run(
@@ -118,10 +122,12 @@ class TreeDBEmbeddingRetriever:
     ) -> dict[str, list[Document]]:
         """Asynchronously retrieve documents.
 
-        The TreeDB client MVP is synchronous, so this delegates to `run()`.
+        The TreeDB client MVP is synchronous, so this runs `run()` in a worker
+        thread rather than blocking the asyncio event loop.
         """
 
-        return self.run(
+        return await asyncio.to_thread(
+            self.run,
             query_embedding=query_embedding,
             filters=filters,
             top_k=top_k,

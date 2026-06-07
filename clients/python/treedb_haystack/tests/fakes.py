@@ -253,4 +253,6 @@ def _cosine(query: list[float], embedding: list[float]) -> float:
     dot = sum(float(q) * float(e) for q, e in zip(query, embedding, strict=True))
     q_norm = math.sqrt(sum(float(q) * float(q) for q in query))
     e_norm = math.sqrt(sum(float(e) * float(e) for e in embedding))
+    if q_norm == 0.0 or e_norm == 0.0:
+        return 0.0
     return dot / (q_norm * e_norm)
