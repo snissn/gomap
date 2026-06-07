@@ -270,12 +270,12 @@ type HybridSearchResponse struct {
 // accidentally depend on a scan-all-documents fallback.
 func (c *Collection) SearchHybrid(opts HybridSearchOptions) (HybridSearchResponse, error) {
 	_ = opts
-	response := HybridSearchResponse{Stats: HybridSearchStats{FailClosed: 1, FailClosedReason: HybridFailClosedReasonUnsupported}}
 	if c == nil {
-		return response, errCollectionNil
+		return HybridSearchResponse{}, errCollectionNil
 	}
 	if c.db == nil {
-		return response, errCollectionDBNil
+		return HybridSearchResponse{}, errCollectionDBNil
 	}
+	response := HybridSearchResponse{Stats: HybridSearchStats{FailClosed: 1, FailClosedReason: HybridFailClosedReasonUnsupported}}
 	return response, fmt.Errorf("%w: SearchHybrid executor is deferred to issue #2505", ErrHybridSearchUnsupported)
 }

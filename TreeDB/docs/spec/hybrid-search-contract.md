@@ -24,7 +24,7 @@ It does **not** implement the text index (#1764), vector optimizations
 hybrid search MUST NOT scan or fetch every document as a fallback.
 
 Text-only and vector-only APIs/benchmarks remain separate evidence lanes:
-#1764 owns indexed lexical `SearchText`/BM25/BM25F behavior, and the existing
+Issue `#1764` owns indexed lexical `SearchText`/BM25/BM25F behavior, and the existing
 vector API/evidence owns vector-only search. Hybrid benchmarks must measure the
 combined executor separately from those single-source paths.
 
@@ -135,7 +135,7 @@ means use `60`.
 
 `HybridFusionTiePolicyScoreBestRankSourceID`
 (`fused_score_best_rank_source_order_id`) is the deterministic total order for
-#2504 to implement:
+Issue `#2504` to implement:
 
 1. higher `FusedScore` first;
 2. lower best contributing `SourceRank` first;
@@ -218,7 +218,7 @@ source paths report fail-closed reasons such as `text_index_unavailable`,
 
 ## Dependencies on #1764 text-search milestones
 
-#1764 remains the owner of text-only indexed lexical search. Hybrid work depends
+Issue `#1764` remains the owner of text-only indexed lexical search. Hybrid work depends
 on #1764 exposing, by or after its M4/M6 seams:
 
 - persistent text index metadata/analyzers/postings/state/stats;
@@ -233,13 +233,13 @@ on #1764 exposing, by or after its M4/M6 seams:
 - document fetch only for final text-only results, with a candidate-only seam for
   hybrid adapters.
 
-#1764 should not invent alternative hybrid candidate/result/counter names. It
+Issue `#1764` should not invent alternative hybrid candidate/result/counter names. It
 may keep text-specific public types, but the candidate-only handoff to #2503
 should convert or directly emit `HybridSearchCandidate`-compatible data.
 
 ## Handoff to #2503 and #2504
 
-#2503 candidate-only paths should consume this contract as follows:
+Issue `#2503` candidate-only paths should consume this contract as follows:
 
 - text candidate adapters return `HybridSearchCandidate` with `Source=text`,
   `ScoreKind=bm25` or `bm25f`, and zero full-document fetches;
@@ -248,10 +248,10 @@ should convert or directly emit `HybridSearchCandidate`-compatible data.
 - both adapters preserve stable document ID bytes, one-based source rank,
   source/index name, and source counters.
 
-#2504 fusion primitives should implement the RRF formula and deterministic tie
+Issue `#2504` fusion primitives should implement the RRF formula and deterministic tie
 policy above over slices of `HybridSearchCandidate`, returning fused result or
 source-contribution values without opening storage, fetching documents, or
 consulting text/vector indexes.
 
-#2505 owns the executor that binds scalar filtering, source candidate APIs,
+Issue `#2505` owns the executor that binds scalar filtering, source candidate APIs,
 fusion, and bounded final document fetch under the snapshot/epoch contract.

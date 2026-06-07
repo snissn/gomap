@@ -156,8 +156,19 @@ func TestSearchHybridStubFailsClosed2502(t *testing.T) {
 		t.Fatalf("SearchHybrid response=%+v want fail-closed stub with no scan fallback", response)
 	}
 
-	_, err = (*Collection)(nil).SearchHybrid(HybridSearchOptions{})
+	nilResponse, err := (*Collection)(nil).SearchHybrid(HybridSearchOptions{})
 	if !errors.Is(err, errCollectionNil) {
 		t.Fatalf("nil SearchHybrid err=%v want errCollectionNil", err)
+	}
+	if nilResponse.Stats.FailClosed != 0 || nilResponse.Stats.FailClosedReason != "" {
+		t.Fatalf("nil SearchHybrid response=%+v want zero stats for receiver validation failure", nilResponse)
+	}
+
+	nilDBResponse, err := (&Collection{}).SearchHybrid(HybridSearchOptions{})
+	if !errors.Is(err, errCollectionDBNil) {
+		t.Fatalf("nil db SearchHybrid err=%v want errCollectionDBNil", err)
+	}
+	if nilDBResponse.Stats.FailClosed != 0 || nilDBResponse.Stats.FailClosedReason != "" {
+		t.Fatalf("nil db SearchHybrid response=%+v want zero stats for db validation failure", nilDBResponse)
 	}
 }
