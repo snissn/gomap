@@ -22,6 +22,7 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 - **[Tuning](TREEDB_TUNING.md)**: Configuration knobs for performance.
 - **[Typed-Storage Guides](../TreeDB/docs/guides/README.md)**: Collection layout quickstarts, typed-storage benchmark/profile guide, and vector typed-column guidance.
 - **[Document Service API](TREEDB_DOCUMENT_SERVICE_API.md)**: Pre-alpha Haystack-style HTTP/JSON contract for documents, metadata filters, and exact dense-vector search.
+- **[Python Document Service Client](../clients/python/treedb_client/README.md)**: Haystack-free sync Python client for the document service.
 
 ## ⚡ HashDB
 
