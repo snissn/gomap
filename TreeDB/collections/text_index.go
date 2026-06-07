@@ -7,9 +7,10 @@ import (
 )
 
 // ErrTextIndexUnavailable reports that a declared collection text index cannot
-// yet be used for search execution. #1764 M3 maintains postings/text-state/stats
-// on writes, but ranked query execution remains fail-closed instead of silently
-// scanning or returning incomplete text-index results.
+// safely serve a requested text-search operation. Ranked SearchText executes from
+// postings in #1764 M4, but bounded candidate-generation guardrails still fail
+// closed instead of silently scanning all documents or returning incomplete text
+// rankings.
 var ErrTextIndexUnavailable = errors.New("collections: text index unavailable")
 
 // TextAnalyzer names a collection text analyzer. The zero value normalizes to
@@ -22,8 +23,8 @@ const (
 
 // TextIndexDefinition declares a persistent collection-native inverted index.
 // M2 stores and validates metadata plus versioned postings/text-state/stats
-// storage. #1764 M3 maintains these roots on writes; SearchText execution lands
-// in a later milestone.
+// storage, M3 maintains these roots on writes, and M4 ranks SearchText results
+// from bounded postings scans.
 type TextIndexDefinition struct {
 	Name             string            `json:"name"`
 	Fields           []TextIndexField  `json:"fields"`

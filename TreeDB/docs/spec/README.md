@@ -85,8 +85,8 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/collection-text-search.md`
   - collection-native text index metadata, analyzer, root naming/policies,
     versioned postings/text-state/text-stats storage, backfill/drop, write-path
-    maintenance, and fail-closed query-shape behavior before ranked search
-    execution lands.
+    maintenance, bounded SearchText postings scans, BM25F-style ranking,
+    top-K document fetch, and fail-closed search guardrails.
 - `TreeDB/docs/spec/write-path-and-durability.md`
   - write pipeline and durability semantics for all durability modes.
 - `TreeDB/docs/spec/recovery.md`

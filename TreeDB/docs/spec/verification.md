@@ -201,8 +201,9 @@ Invariant:
   managers before taking its backfill snapshot, insert/delete/update/batch paths
   maintain postings/text-state/text-stats across flush/checkpoint/reopen,
   DropTextIndex clears metadata/root descriptors, the simple analyzer is
-  deterministic, and text search execution fails closed until ranked query
-  execution lands.
+  deterministic, and SearchText uses bounded postings scans plus BM25F-style
+  ranking with top-K-bounded document fetch and fail-closed truncation/storage
+  counters.
 
 Coverage:
 - `TreeDB/collections/text_index_test.go`:
@@ -211,7 +212,7 @@ Coverage:
   - `TestCollectionTextIndexMetadataRejectsInvalidDefinitions`
   - `TestCollectionTextRootNames`
   - `TestCollectionTextRootStoragePolicies`
-  - `TestCollectionTextIndexedWritesMaintainStorageAndSearchFailsClosed`
+  - `TestCollectionTextIndexedWritesMaintainStorageAndSearchRanks`
 - `TreeDB/collections/text_storage_test.go`:
   - `TestTextStorageCodecsRoundTripAndFailClosed`
   - `TestCollectionCreateTextIndexBackfillsReopensAndReportsStorage`
@@ -226,6 +227,17 @@ Coverage:
   - `TestTextIndexMaintenanceUpdateRemovesOldAndAddsNewTerms`
   - `TestTextIndexMaintenanceBatchInsertUpdateDelete`
   - `TestTextIndexMaintenanceBufferedCreateFlushCheckpointReopen`
+- `TreeDB/collections/text_search_m4_test.go`:
+  - `TestSearchTextSingleTermRankedSearchM4`
+  - `TestSearchTextANDOROperatorsM4`
+  - `TestSearchTextFieldWeightAffectsRankingM4`
+  - `TestSearchTextMissingIndexUnsupportedSyntaxAndTruncationM4`
+  - `TestSearchTextSeesUnflushedTextIndexedInsertM4`
+  - `TestSearchTextTombstonedPostingsConsumeScanBudgetM4`
+  - `TestSearchTextFailClosedWrapsStorageCorruptionM4`
+  - `TestSearchTextTopKBoundsDocumentFetchM4`
+  - `TestSearchTextReopenParityM4`
+  - `BenchmarkSearchTextM4`
 
 ## 11.5 Planned User-Command WAL Durability Gate
 
