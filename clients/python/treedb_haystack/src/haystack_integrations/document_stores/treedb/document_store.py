@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
+import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Optional, TypeVar, Union
@@ -79,6 +80,7 @@ class TreeDBDocumentStore:
         self.client = client if client is not None else TreeDBClient(str(base_url), timeout=timeout)
         self.base_url = str(base_url or getattr(self.client, "base_url", ""))
         self.index_info: Optional[IndexInfo] = None
+        self._write_lock = threading.Lock()
 
         if self.ensure_index:
             self.index_info = self._client_call(
@@ -119,14 +121,17 @@ class TreeDBDocumentStore:
     def write_documents(
         self,
         documents: Iterable[HaystackDocument],
-        policy: Union[DuplicatePolicy, str] = DuplicatePolicy.FAIL,
+        policy: Union[DuplicatePolicy, str] = DuplicatePolicy.OVERWRITE,
     ) -> int:
         """Write embedded Haystack documents to TreeDB.
 
-        `DuplicatePolicy.OVERWRITE` maps directly to TreeDB's upsert endpoint.
+        `DuplicatePolicy.OVERWRITE` maps directly to TreeDB's atomic upsert endpoint.
         `DuplicatePolicy.FAIL` and `DuplicatePolicy.SKIP` first ask the service
         for existing IDs with an `id in [...]` filter; they do not scan all
-        documents client-side.
+        documents client-side. TreeDB's MVP service has no create-only write,
+        so these two policies are best-effort under separate concurrent clients;
+        if a race is detected via an unexpected update response, the store raises
+        `DocumentStoreError` instead of silently reporting success.
         """
 
         docs = _validate_haystack_documents(documents)
@@ -134,28 +139,35 @@ class TreeDBDocumentStore:
         if not docs:
             return 0
 
-        docs = _deduplicate_input_documents(docs, policy)
-        if policy in {DuplicatePolicy.FAIL, DuplicatePolicy.SKIP}:
-            existing_ids = self._existing_document_ids([doc.id for doc in docs])
-            if existing_ids and policy == DuplicatePolicy.FAIL:
-                ids = ", ".join(sorted(existing_ids))
-                msg = f"Document(s) with id(s) already exist in TreeDB index {self.index!r}: {ids}"
-                raise DuplicateDocumentError(msg)
-            if existing_ids and policy == DuplicatePolicy.SKIP:
-                docs = [doc for doc in docs if doc.id not in existing_ids]
-                if not docs:
-                    return 0
+        with self._write_lock:
+            docs = _deduplicate_input_documents(docs, policy)
+            if policy in {DuplicatePolicy.FAIL, DuplicatePolicy.SKIP}:
+                existing_ids = self._existing_document_ids([doc.id for doc in docs])
+                if existing_ids and policy == DuplicatePolicy.FAIL:
+                    ids = ", ".join(sorted(existing_ids))
+                    msg = f"Document(s) with id(s) already exist in TreeDB index {self.index!r}: {ids}"
+                    raise DuplicateDocumentError(msg)
+                if existing_ids and policy == DuplicatePolicy.SKIP:
+                    docs = [doc for doc in docs if doc.id not in existing_ids]
+                    if not docs:
+                        return 0
 
-        treedb_docs = [haystack_document_to_treedb_document(doc) for doc in docs]
-        response = self._client_call(
-            "upsert documents",
-            lambda: self.client.upsert_documents(
-                self.index,
-                treedb_docs,
-                expected_generation=self._expected_generation(),
-            ),
-        )
-        return response.upserted
+            treedb_docs = [haystack_document_to_treedb_document(doc) for doc in docs]
+            response = self._client_call(
+                "upsert documents",
+                lambda: self.client.upsert_documents(
+                    self.index,
+                    treedb_docs,
+                    expected_generation=self._expected_generation(),
+                ),
+            )
+            if policy in {DuplicatePolicy.FAIL, DuplicatePolicy.SKIP} and response.updated:
+                msg = (
+                    f"TreeDB duplicate policy {policy.value!r} detected a concurrent update after preflight; "
+                    "the MVP service does not provide atomic create-if-absent writes"
+                )
+                raise DocumentStoreError(msg)
+            return response.upserted
 
     def delete_documents(self, document_ids: Sequence[str]) -> None:
         """Delete explicit document IDs through the TreeDB service."""
@@ -353,12 +365,12 @@ def _validate_document_ids(document_ids: Sequence[str]) -> list[str]:
 
 def _normalize_duplicate_policy(policy: Union[DuplicatePolicy, str]) -> DuplicatePolicy:
     if isinstance(policy, DuplicatePolicy):
-        return DuplicatePolicy.FAIL if policy == DuplicatePolicy.NONE else policy
+        return DuplicatePolicy.OVERWRITE if policy == DuplicatePolicy.NONE else policy
     if isinstance(policy, str):
         lowered = policy.strip().lower()
         for candidate in DuplicatePolicy:
             if candidate.value == lowered:
-                return DuplicatePolicy.FAIL if candidate == DuplicatePolicy.NONE else candidate
+                return DuplicatePolicy.OVERWRITE if candidate == DuplicatePolicy.NONE else candidate
     msg = f"unsupported duplicate policy {policy!r}"
     raise ValueError(msg)
 

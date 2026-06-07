@@ -98,9 +98,14 @@ local scans.
 
 ## Duplicate and filter policies
 
-- `DuplicatePolicy.OVERWRITE` maps to TreeDB service upsert.
+- `DuplicatePolicy.OVERWRITE` maps to TreeDB service upsert and is the default
+  because upsert is the only atomic write primitive in the MVP service.
 - `DuplicatePolicy.FAIL` and `DuplicatePolicy.SKIP` check existing IDs with a
-  server-side `id in [...]` filter before writing.
+  server-side `id in [...]` filter before writing. They avoid client-side full
+  scans, but they are best-effort across separate concurrent clients because the
+  current service has no create-if-absent endpoint. If TreeDB reports an
+  unexpected update after the preflight, the store raises `DocumentStoreError`
+  rather than silently reporting success.
 - `TreeDBEmbeddingRetriever` supports Haystack `FilterPolicy.REPLACE` and
   `FilterPolicy.MERGE` via Haystack's `apply_filter_policy` helper.
 

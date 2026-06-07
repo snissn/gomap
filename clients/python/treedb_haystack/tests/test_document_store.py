@@ -103,6 +103,37 @@ def test_write_documents_overwrite_policy_does_not_preflight_duplicates() -> Non
     assert client.upsert_calls[-1] == ["same"]
 
 
+def test_default_duplicate_policy_uses_service_upsert() -> None:
+    store, client = make_store()
+
+    assert store.write_documents([haystack_doc("default", [1, 0, 0])]) == 1
+
+    assert client.filter_calls == []
+    assert client.upsert_calls[-1] == ["default"]
+
+
+def test_fail_and_skip_detect_concurrent_update_race() -> None:
+    class RacingClient(FakeTreeDBClient):
+        def upsert_documents(self, index: str, documents: list[TreeDBDocument], **kwargs: object) -> object:
+            self.documents[documents[0].id] = TreeDBDocument(
+                id=documents[0].id,
+                content="racing writer",
+                embedding=[0.0, 1.0, 0.0],
+            )
+            return super().upsert_documents(index, documents, **kwargs)
+
+    for policy in (DuplicatePolicy.FAIL, DuplicatePolicy.SKIP):
+        store = TreeDBDocumentStore(
+            base_url="http://fake-treedb",
+            index="docs",
+            embedding_dimension=3,
+            client=RacingClient(),  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(DocumentStoreError, match="concurrent update"):
+            store.write_documents([haystack_doc(f"race-{policy.value}", [1, 0, 0])], policy=policy)
+
+
 def test_write_documents_rejects_unembedded_sparse_or_blob_documents() -> None:
     store, _ = make_store()
 
