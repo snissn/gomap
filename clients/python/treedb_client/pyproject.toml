@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "treedb-client"
+version = "0.1.0"
+description = "Sync Python client for the pre-alpha TreeDB document service"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "gomap contributors" }]
+license = { text = "See repository license" }
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+treedb_client = ["py.typed"]
