@@ -22,7 +22,9 @@ shape-parameterized quantized-search fixture. The default remains the historical
 - route, exact-read, asset-unavailable, fallback, and cache counters;
 - `quantized_code_B/search`, `quantized_code_B/vector`, and
   `quantized_asset_B/vector`;
-- CPU and allocation profiles for selected c=1/c=8 rows.
+- CPU and allocation profiles for selected c=1/c=8 rows. By default these
+  use benchmark-controlled search-loop hooks that start after fixture setup,
+  vector-index rebuild, collection prepared-cache warmup, and worker warmup.
 
 Smoke runs validate benchmark shape and counters only. They are not speedup or
 promotion evidence.
@@ -45,6 +47,13 @@ Default selection:
   CPU/alloc profiles for the required RaBitQ collection buffered target rows.
 - `BENCHTIME=100000x` for the default shape, `BENCHTIME=1000x` for
   `SHAPE=10k_x_1536`, `TIMING_COUNT=5`, `PROFILE_COUNT=1`.
+- `PROFILE_SCOPE=search_loop`: default clean pprof mode. The script sets
+  `TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_CPU_PROFILE_PATH`,
+  `TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_ALLOCS_PROFILE_PATH`, and
+  `TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_ALLOCS_BASE_PROFILE_PATH` for one isolated
+  benchmark subrow and does **not** pass Go's test-level `-cpuprofile` /
+  `-memprofile` flags. Use `PROFILE_SCOPE=go_test` only for the legacy
+  compatibility mode that includes setup/rebuild attribution.
 - `RECALL_TOLERANCE_PCT=0`: when `BASELINE_DIR` is set, candidate median recall must be at least the matching baseline row's median recall minus this tolerance for the row guardrail to pass.
 
 Useful selectors for `ROWS` and `PROFILE_ROWS` are comma-separated and ORed:
@@ -90,8 +99,16 @@ Primary artifacts:
 - `<row>/bench_profile.txt`: profiled benchmark output for profiled rows.
 - `<row>/cpu.pprof`, `<row>/allocs.pprof`, `<row>/cpu_top.txt`,
   `<row>/allocs_top.txt`: required CPU/allocation artifacts for profiled rows.
-- `<row>/block.pprof`, `<row>/mutex.pprof`, top summaries, and
-  `<row>/pprof_lists/*.txt`: supporting attribution.
+  In the default `PROFILE_SCOPE=search_loop`, these exclude setup/rebuild and
+  cover only the timed search loop. `allocs.pprof` is generated as a diff of
+  `<row>/allocs_raw.pprof` minus `<row>/allocs_base.pprof`, so fixture setup and
+  rebuild allocations are removed; it is expected to be empty or
+  runtime-noise-only when the row remains `0 B/op`, `0 allocs/op`.
+- `<row>/allocs_base.pprof`, `<row>/allocs_raw.pprof`: supporting profiles for
+  `PROFILE_SCOPE=search_loop` allocation diffing.
+- `<row>/block.pprof`, `<row>/mutex.pprof`, top summaries: emitted only by
+  `PROFILE_SCOPE=go_test` legacy mode.
+- `<row>/pprof_lists/*.txt`: supporting line-level CPU attribution.
 
 Recommended raw directory naming:
 
@@ -131,13 +148,18 @@ GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
 
 ```sh
 RUN_DIR=/tmp/gomap_rabitq_1bit_10k_x_1536_$(date +%Y%m%d_%H%M%S) \
+  BENCHMARK_LOCK=/tmp/gomap_2538_benchmark.lock \
+  PROFILE_SCOPE=search_loop \
   SHAPE=10k_x_1536 \
   ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8,rabitq_collection_quantized_rerank32_c1,rabitq_collection_quantized_rerank32_c8 \
   PROFILE_ROWS=rabitq_collection_quantized_only_c1,rabitq_collection_quantized_only_c8,rabitq_collection_quantized_rerank32_c1,rabitq_collection_quantized_rerank32_c8 \
   TIMING_COUNT=1 PROFILE_COUNT=1 BENCHTIME=1000x \
   GOMAXPROCS=8 GOWORK=off \
-  scripts/treedb_rabitq_1bit_profile_gate.sh
+  lockf /tmp/gomap_2538_benchmark.lock scripts/treedb_rabitq_1bit_profile_gate.sh
 ```
+
+On Linux hosts, use `flock /tmp/gomap_2538_benchmark.lock -c '<same env-prefixed command>'`
+if `lockf` is unavailable.
 
 ## Claim-quality same-host baseline/candidate workflow
 
