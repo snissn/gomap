@@ -61,7 +61,11 @@ scripts/bench_vector_db_compare.sh
 
 The quantized comparison leaves TreeDB quantized recall as an observation by
 setting `TREEDB_QUANTIZED_MIN_RECALL=0`; full-vector TreeDB/pgvector rows still
-use `MIN_RECALL` (default `0.95`) as their recall gate.
+use `MIN_RECALL` (default `0.95`) as their recall gate. TreeDB `column_graph`
+search timings are no-document buffered rows: they return IDs/scores, exclude
+document fetch/materialization, and expose guardrail counters such as
+`avg_response_owned_result_allocs`, `avg_documents_fetched`, and route/fallback
+averages in the demo JSON.
 
 Backends:
 
