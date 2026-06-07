@@ -153,8 +153,10 @@ Boolean filters use `conditions`:
 Supported operators are `AND`, `OR`, `NOT`, `==`, `!=`, `>`, `>=`, `<`, `<=`,
 `in`, and `not in`. The client also accepts common Haystack-style aliases such
 as `$eq`, `$gte`, `$in`, and `$nin`, then sends the documented service operator.
-Unsupported operators and embedding-field filters raise `InvalidFilterError`.
-The client does not broaden unsupported filters into local document scans.
+Unsupported operators and the top-level `embedding` field filter raise
+`InvalidFilterError`; embedding-named metadata paths such as
+`meta.embedding.provider` are allowed. The client does not broaden unsupported
+filters into local document scans.
 
 ## Error mapping
 

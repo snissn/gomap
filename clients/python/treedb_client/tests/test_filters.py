@@ -49,11 +49,19 @@ class FilterConversionTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidFilterError, "requires an array"):
             normalize_filter({"field": "meta.repo", "operator": "in", "value": "gomap"})
 
-    def test_embedding_filters_are_rejected(self) -> None:
-        for field in ("embedding", "embedding.0", "meta.embedding.value"):
-            with self.subTest(field=field):
-                with self.assertRaisesRegex(InvalidFilterError, "embedding filters are unsupported"):
-                    normalize_filter({"field": field, "operator": "==", "value": [1.0, 0.0]})
+    def test_top_level_embedding_filter_is_rejected(self) -> None:
+        with self.assertRaisesRegex(InvalidFilterError, "embedding filters are unsupported"):
+            normalize_filter({"field": "embedding", "operator": "==", "value": [1.0, 0.0]})
+
+    def test_embedding_named_metadata_paths_are_allowed(self) -> None:
+        self.assertEqual(
+            normalize_filter({"field": "meta.embedding.provider", "operator": "==", "value": "openai"}),
+            {"field": "meta.embedding.provider", "operator": "==", "value": "openai"},
+        )
+        self.assertEqual(
+            normalize_filter({"field": "embedding.model", "operator": "==", "value": "text-embedding-3-small"}),
+            {"field": "embedding.model", "operator": "==", "value": "text-embedding-3-small"},
+        )
 
     def test_unknown_filter_keys_are_rejected_before_http(self) -> None:
         with self.assertRaisesRegex(InvalidFilterError, "unsupported field"):

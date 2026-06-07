@@ -141,7 +141,7 @@ def _normalize_leaf(raw: Dict[str, Any], operator: str, path: str) -> Dict[str, 
     if not isinstance(field, str) or not field.strip():
         raise InvalidFilterError(f"{path}: field is required for operator {operator!r}")
     field = field.strip()
-    if field == "embedding" or field.startswith("embedding.") or field.startswith("meta.embedding."):
+    if field == "embedding":
         raise InvalidFilterError(f"{path}: embedding filters are unsupported; filter metadata fields instead")
     if "value" not in raw:
         raise InvalidFilterError(f"{path}: value is required for operator {operator!r}")
