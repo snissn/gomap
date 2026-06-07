@@ -82,6 +82,20 @@ result = pipeline.run({"retriever": {"query_embedding": [1.0, 0.0, 0.0]}})
 print(result["retriever"]["documents"][0].id)
 ```
 
+## Runnable examples
+
+Example scripts live in [`examples/`](examples/):
+
+- [`basic_ingest_retrieve.py`](examples/basic_ingest_retrieve.py) writes two embedded Haystack documents and retrieves one through a `Pipeline`.
+- [`code_search_metadata.py`](examples/code_search_metadata.py) demonstrates code-search metadata fields such as `repo`, `path`, `language`, `symbol`, `start_line`, `end_line`, and `chunk_kind` with service-side filters.
+
+After starting `cmd/treedb-document-service`, run them from the repository root with the local packages installed:
+
+```sh
+python clients/python/treedb_haystack/examples/basic_ingest_retrieve.py
+python clients/python/treedb_haystack/examples/code_search_metadata.py
+```
+
 ## Filters
 
 Filters use the TreeDB service/Haystack v2 filter AST and are executed by the
@@ -133,6 +147,14 @@ cd clients/python/treedb_haystack
 PYTHONPATH=src:../treedb_client/src python -m compileall -q src tests
 python -m mypy -p haystack_integrations.document_stores.treedb -p haystack_integrations.components.retrievers.treedb
 ```
+
+## Haystack integrations listing
+
+A listing draft for the Haystack integrations index is prepared in the
+`snissn/haystack-integrations` fork on branch `treedb-listing` as
+`integrations/treedb.md`. It uses the gomap repository URL instead of a PyPI URL
+until package publication is finalized. Open the upstream listing PR after the
+installation/release URLs are stable.
 
 ## Scope and non-goals
 
