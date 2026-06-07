@@ -72,9 +72,12 @@ class RabitQProfileGateScriptTest(unittest.TestCase):
         row_readme = (row_dir / "README.md").read_text(encoding="utf-8")
         self.assertIn("PROFILE_SCOPE=search_loop", row_readme)
         self.assertIn("start after fixture", row_readme)
+        self.assertIn("allocs_diff_raw.pprof", row_readme)
+        self.assertIn("pprof-writer noise", row_readme)
 
         context = (run_dir / "context.txt").read_text(encoding="utf-8")
         self.assertIn("profile_scope: search_loop", context)
+        self.assertIn("alloc_profile_ignore:", context)
         self.assertIn("benchmark_lock: /tmp/gomap_2538_benchmark.lock", context)
 
         summary_header = (run_dir / "summary.tsv").read_text(encoding="utf-8").splitlines()[0]

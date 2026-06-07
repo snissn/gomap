@@ -34,6 +34,7 @@ HOT_ALLOCS_PROFILE_ENV=TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_ALLOCS_PROFILE_PATH
 HOT_ALLOCS_BASE_PROFILE_ENV=TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_ALLOCS_BASE_PROFILE_PATH
 HOT_MEM_PROFILE_RATE_ENV=TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_MEM_PROFILE_RATE
 HOT_MEM_PROFILE_RATE="${HOT_MEM_PROFILE_RATE:-${TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_MEM_PROFILE_RATE:-1}}"
+ALLOC_PROFILE_IGNORE="${ALLOC_PROFILE_IGNORE:-runtime/pprof|compress/gzip|github.com/snissn/gomap/TreeDB/collections\\.\\(\\*columnGraphQuantizedSearchLoopProfileHook2541\\)|github.com/snissn/gomap/TreeDB/collections\\.writeColumnGraphQuantizedHotProfile2541|github.com/snissn/gomap/TreeDB/collections\\.createColumnGraphQuantizedHotProfileFile2541|time\\.Sleep|sync\\.\\(\\*WaitGroup\\)\\.Wait}"
 
 mkdir -p "$RUN_DIR"
 
@@ -219,6 +220,27 @@ write_pprof_diff() {
 	rm -f "$dest.err"
 }
 
+write_pprof_filtered() {
+	local src=$1
+	local dest=$2
+	local ignore=$3
+	if [[ ! -s "$src" ]]; then
+		printf 'profile %s is missing or empty\n' "$src" >&2
+		return 1
+	fi
+	if [[ -z "$ignore" ]]; then
+		cp "$src" "$dest"
+		return 0
+	fi
+	if ! go tool pprof -proto -ignore="$ignore" "$src" >"$dest.tmp" 2>"$dest.err"; then
+		cat "$dest.err" >&2
+		rm -f "$dest.tmp" "$dest.err"
+		return 1
+	fi
+	mv "$dest.tmp" "$dest"
+	rm -f "$dest.err"
+}
+
 matches_selector() {
 	local selector=$1
 	local id=$2
@@ -298,6 +320,7 @@ write_context() {
 		printf 'profiles: enabled=%s benchtime=%s count=%s\n' "$RUN_PROFILES" "$PROFILE_BENCHTIME" "$PROFILE_COUNT"
 		printf 'profile_scope: %s\n' "$PROFILE_SCOPE"
 		printf 'hot_profile_env: %s %s %s %s=%s\n' "$HOT_CPU_PROFILE_ENV" "$HOT_ALLOCS_PROFILE_ENV" "$HOT_ALLOCS_BASE_PROFILE_ENV" "$HOT_MEM_PROFILE_RATE_ENV" "$HOT_MEM_PROFILE_RATE"
+		printf 'alloc_profile_ignore: %s\n' "$ALLOC_PROFILE_IGNORE"
 		printf 'dry_run: %s\n' "$DRY_RUN"
 		printf 'benchmark_lock: %s\n' "$BENCHMARK_LOCK"
 		printf 'baseline_dir: %s\n' "$BASELINE_DIR"
@@ -372,6 +395,7 @@ run_row() {
 	local alloc_profile="$row_dir/allocs.pprof"
 	local alloc_base_profile="$row_dir/allocs_base.pprof"
 	local alloc_raw_profile="$row_dir/allocs_raw.pprof"
+	local alloc_diff_raw_profile="$row_dir/allocs_diff_raw.pprof"
 	local block_profile="$row_dir/block.pprof"
 	local mutex_profile="$row_dir/mutex.pprof"
 	local lists_dir="$row_dir/pprof_lists"
@@ -447,7 +471,8 @@ run_row() {
 					printf 'missing search-loop allocs baseline profile %s\n' "$alloc_base_profile" >&2
 					exit 1
 				fi
-				write_pprof_diff "$alloc_base_profile" "$alloc_raw_profile" "$alloc_profile"
+				write_pprof_diff "$alloc_base_profile" "$alloc_raw_profile" "$alloc_diff_raw_profile"
+				write_pprof_filtered "$alloc_diff_raw_profile" "$alloc_profile" "$ALLOC_PROFILE_IGNORE"
 			else
 				run_go_test "$profile_txt" "${profile_cmd[@]}"
 			fi
@@ -498,8 +523,8 @@ Artifacts:
 
 - \`bench_timing.txt\`: unprofiled per-row timing/guardrail output.
 - \`bench_profile.txt\`: profiled benchmark output when this row is in \`PROFILE_ROWS\` and \`RUN_PROFILES=true\`.
-- \`cpu.pprof\`, \`allocs.pprof\`: CPU/allocation profiles when \`profile_captured=true\`; for \`PROFILE_SCOPE=search_loop\`, \`allocs.pprof\` is a diff of \`allocs_raw.pprof\` minus \`allocs_base.pprof\` so setup allocations are removed.
-- \`allocs_base.pprof\`, \`allocs_raw.pprof\`: supporting allocation profiles emitted only for \`PROFILE_SCOPE=search_loop\`.
+- \`cpu.pprof\`, \`allocs.pprof\`: CPU/allocation profiles when \`profile_captured=true\`; for \`PROFILE_SCOPE=search_loop\`, \`allocs.pprof\` is \`allocs_diff_raw.pprof\` filtered by \`ALLOC_PROFILE_IGNORE\` so setup allocations and pprof-writer noise are removed.
+- \`allocs_base.pprof\`, \`allocs_raw.pprof\`, \`allocs_diff_raw.pprof\`: supporting allocation profiles emitted only for \`PROFILE_SCOPE=search_loop\`.
 - \`block.pprof\`, \`mutex.pprof\`: emitted only for \`PROFILE_SCOPE=go_test\`.
 - \`collections.test\`: test binary emitted by \`go test -o\` when \`profile_captured=true\`.
 - \`cpu_top.txt\`, \`allocs_top.txt\`, \`block_top.txt\`, \`mutex_top.txt\`.
@@ -900,7 +925,7 @@ with open(os.path.join(root, "summary.md"), "w", encoding="utf-8") as out:
             )
         )
     out.write("\n## Artifact layout\n\n")
-    out.write("Each selected row directory contains `bench_timing.txt`, `bench_profile.txt`, command files, a row README, top summaries, and CPU/alloc pprof files when `profile_captured=true` (`allocs_base.pprof`/`allocs_raw.pprof` support `PROFILE_SCOPE=search_loop`; `block.pprof`/`mutex.pprof` only for `PROFILE_SCOPE=go_test`).\n")
+    out.write("Each selected row directory contains `bench_timing.txt`, `bench_profile.txt`, command files, a row README, top summaries, and CPU/alloc pprof files when `profile_captured=true` (`allocs_base.pprof`/`allocs_raw.pprof`/`allocs_diff_raw.pprof` support `PROFILE_SCOPE=search_loop`; `block.pprof`/`mutex.pprof` only for `PROFILE_SCOPE=go_test`).\n")
 PY
 
 if [[ -n "$BASELINE_DIR" ]]; then
@@ -948,8 +973,8 @@ Primary files:
 - \`summary.md\`, \`summary.tsv\`: per-row timing medians and guardrail counter summary.
 - \`<row>/bench_timing.txt\`: unprofiled benchmark output for the selected row.
 - \`<row>/bench_profile.txt\`: profiled benchmark output for rows selected by \`PROFILE_ROWS\`.
-- \`<row>/cpu.pprof\`, \`<row>/allocs.pprof\`: CPU/allocation profiles when \`profile_captured=true\`; for \`PROFILE_SCOPE=search_loop\`, \`allocs.pprof\` is a diff of \`allocs_raw.pprof\` minus \`allocs_base.pprof\` so setup allocations are removed.
-- \`<row>/allocs_base.pprof\`, \`<row>/allocs_raw.pprof\`: supporting allocation profiles emitted only for \`PROFILE_SCOPE=search_loop\`.
+- \`<row>/cpu.pprof\`, \`<row>/allocs.pprof\`: CPU/allocation profiles when \`profile_captured=true\`; for \`PROFILE_SCOPE=search_loop\`, \`allocs.pprof\` is \`allocs_diff_raw.pprof\` filtered by \`ALLOC_PROFILE_IGNORE\` so setup allocations and pprof-writer noise are removed.
+- \`<row>/allocs_base.pprof\`, \`<row>/allocs_raw.pprof\`, \`<row>/allocs_diff_raw.pprof\`: supporting allocation profiles emitted only for \`PROFILE_SCOPE=search_loop\`.
 - \`<row>/block.pprof\`, \`<row>/mutex.pprof\`: emitted only for \`PROFILE_SCOPE=go_test\`.
 - \`<row>/collections.test\`: test binary emitted by \`go test -o\` when \`profile_captured=true\`.
 - \`<row>/cpu_top.txt\`, \`<row>/allocs_top.txt\`, \`<row>/block_top.txt\`, \`<row>/mutex_top.txt\`.

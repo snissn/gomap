@@ -55,6 +55,8 @@ Default selection:
   `-memprofile` flags. `PROFILE_SCOPE=search_loop` rejects non-RaBitQ profile
   rows up front; use `PROFILE_SCOPE=go_test` only for the legacy compatibility
   mode that includes setup/rebuild attribution or for scalar guardrail profiles.
+- `ALLOC_PROFILE_IGNORE`: optional pprof regexp used only by `PROFILE_SCOPE=search_loop`
+  to filter allocation-profile writer frames from the diffed `allocs.pprof`.
 - `RECALL_TOLERANCE_PCT=0`: when `BASELINE_DIR` is set, candidate median recall must be at least the matching baseline row's median recall minus this tolerance for the row guardrail to pass.
 
 Useful selectors for `ROWS` and `PROFILE_ROWS` are comma-separated and ORed:
@@ -101,12 +103,14 @@ Primary artifacts:
 - `<row>/cpu.pprof`, `<row>/allocs.pprof`, `<row>/cpu_top.txt`,
   `<row>/allocs_top.txt`: required CPU/allocation artifacts for profiled rows.
   In the default `PROFILE_SCOPE=search_loop`, these exclude setup/rebuild and
-  cover only the timed search loop. `allocs.pprof` is generated as a diff of
-  `<row>/allocs_raw.pprof` minus `<row>/allocs_base.pprof`, so fixture setup and
-  rebuild allocations are removed; it is expected to be empty or
+  cover only the timed search loop. `allocs.pprof` is generated from
+  `<row>/allocs_raw.pprof` minus `<row>/allocs_base.pprof`, then filtered with
+  `ALLOC_PROFILE_IGNORE` to remove allocation-profile writer noise such as
+  `runtime/pprof` and `compress/gzip`; it is expected to be empty or
   runtime-noise-only when the row remains `0 B/op`, `0 allocs/op`.
-- `<row>/allocs_base.pprof`, `<row>/allocs_raw.pprof`: supporting profiles for
-  `PROFILE_SCOPE=search_loop` allocation diffing.
+- `<row>/allocs_base.pprof`, `<row>/allocs_raw.pprof`,
+  `<row>/allocs_diff_raw.pprof`: supporting profiles for `PROFILE_SCOPE=search_loop`
+  allocation diffing and filter audits.
 - `<row>/block.pprof`, `<row>/mutex.pprof`, top summaries: emitted only by
   `PROFILE_SCOPE=go_test` legacy mode.
 - `<row>/pprof_lists/*.txt`: supporting line-level CPU attribution.
