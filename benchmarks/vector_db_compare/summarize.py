@@ -88,7 +88,15 @@ def backend_name(result: dict[str, Any]) -> str:
     backend = result.get("backend")
     if backend in (None, "", "treedb"):
         return "TreeDB native HNSW"
-    if backend in ("treedb_column_graph", "treedb_column_graph_quantized_only", "treedb_column_graph_quantized_rerank"):
+    if backend in (
+        "treedb_column_graph",
+        "treedb_column_graph_quantized_only",
+        "treedb_column_graph_quantized_rerank",
+        "treedb_column_graph_scalar_u8_quantized_only",
+        "treedb_column_graph_scalar_u8_quantized_rerank",
+        "treedb_column_graph_rabitq_1bit_quantized_only",
+        "treedb_column_graph_rabitq_1bit_quantized_rerank",
+    ):
         return "TreeDB column-store graph HNSW"
     if backend == "sqlite_vectorlite":
         return "SQLite+Vectorlite HNSW"
@@ -99,6 +107,35 @@ def backend_name(result: dict[str, Any]) -> str:
     raise ValueError(f"unknown backend {backend!r}")
 
 
+def quantized_codec(result: dict[str, Any], row: dict[str, Any] | None = None) -> str:
+    if row:
+        codec = str(row.get("quantized_codec") or "").strip()
+        if codec:
+            return codec
+    codec = str(result.get("quantized_codec") or "").strip()
+    if codec:
+        return codec
+    backend = str(result.get("backend") or "")
+    if "rabitq_1bit" in backend:
+        return "rabitq_1bit"
+    if "scalar_u8" in backend:
+        return "scalar_u8"
+    index_name = str(result.get("quantized_index_name") or "")
+    if "rabitq_1bit" in index_name:
+        return "rabitq_1bit"
+    if "scalar_u8" in index_name:
+        return "scalar_u8"
+    if backend in ("treedb_column_graph_quantized_only", "treedb_column_graph_quantized_rerank"):
+        return "scalar_u8"
+    return ""
+
+
+def label_quantized_mode(mode: str, codec: str) -> str:
+    if mode in ("quantized_only", "quantized_rerank") and codec:
+        return f"{codec} {mode}"
+    return mode
+
+
 def search_mode(result: dict[str, Any]) -> str:
     backend = result.get("backend")
     mode = str(result.get("query_mode") or "").strip()
@@ -106,10 +143,10 @@ def search_mode(result: dict[str, Any]) -> str:
         return "exact/default" if mode in ("", "exact") else mode
     if backend == "treedb_column_graph":
         return "exact/default" if mode in ("", "exact") else mode
-    if backend == "treedb_column_graph_quantized_only":
-        return mode or "quantized_only"
-    if backend == "treedb_column_graph_quantized_rerank":
-        return mode or "quantized_rerank"
+    if backend in ("treedb_column_graph_quantized_only", "treedb_column_graph_scalar_u8_quantized_only", "treedb_column_graph_rabitq_1bit_quantized_only"):
+        return label_quantized_mode(mode or "quantized_only", quantized_codec(result))
+    if backend in ("treedb_column_graph_quantized_rerank", "treedb_column_graph_scalar_u8_quantized_rerank", "treedb_column_graph_rabitq_1bit_quantized_rerank"):
+        return label_quantized_mode(mode or "quantized_rerank", quantized_codec(result))
     if backend == "pgvector":
         return "full-vector HNSW"
     if backend in ("sqlite_vectorlite", "mongodb_vector_search"):
@@ -124,7 +161,7 @@ def search_row_mode(result: dict[str, Any], row: dict[str, Any]) -> str:
     mode = str(row.get("query_mode") or result.get("query_mode") or "").strip()
     if backend in (None, "", "treedb", "treedb_column_graph") and mode in ("", "exact"):
         return "exact/default"
-    return mode or search_mode(result)
+    return label_quantized_mode(mode, quantized_codec(result, row)) or search_mode(result)
 
 
 def result_label(result: dict[str, Any]) -> str:
@@ -155,7 +192,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     lines.append("# Vector Database Benchmark")
     lines.append("")
-    lines.append("All reported systems use persistent database files or server-side durable storage, close/reopen or reconnect before validation/search, cosine distance, HNSW ANN search, and the same TreeDB-exported vectors and query set. TreeDB quantized rows are explicit TreeDB column_graph scalar_u8 query modes; PostgreSQL+pgvector remains a full-vector HNSW anchor.")
+    lines.append("All reported systems use persistent database files or server-side durable storage, close/reopen or reconnect before validation/search, cosine distance, HNSW ANN search, and the same TreeDB-exported vectors and query set. TreeDB quantized rows are explicit TreeDB column_graph query modes with named scalar_u8 or rabitq_1bit score planes; PostgreSQL+pgvector remains a full-vector HNSW anchor.")
     lines.append("")
     lines.append("## Build, Recall, Storage")
     lines.append("")
@@ -285,7 +322,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("- MongoDB is included only when run against a MongoDB Vector Search deployment, such as Atlas or local Atlas with `mongot`; plain `mongod` is not a vector-search comparator.")
     lines.append("- MongoDB storage marked with `*` uses `collStats` collection storage and ordinary index bytes; MongoDB Vector Search index bytes are not exposed by this harness.")
     lines.append("- TreeDB storage uses the post-close, post-index-vacuum retained datastore when reported by `treedb_vector_search_demo`; raw pre-close and pre-vacuum storage fields remain in the JSON.")
-    lines.append("- TreeDB quantized rows declare a named scalar_u8 score plane and select it through explicit `query_mode`; exact/default TreeDB rows do not declare or use quantized assets.")
+    lines.append("- TreeDB quantized rows declare a named quantized score plane (`scalar_u8` or `rabitq_1bit`) and select it through explicit `query_mode`; exact/default TreeDB rows do not declare or use quantized assets.")
     lines.append("- Memory columns are intentionally separated: TreeDB reports native vector-index memory when available, while Python-backed comparator harnesses report whole benchmark process max RSS.")
     lines.append("")
     return "\n".join(lines)

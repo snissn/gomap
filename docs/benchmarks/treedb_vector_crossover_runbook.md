@@ -127,11 +127,11 @@ RUN_ROOT=${RUN_ROOT:-/tmp/gomap_2490_vector_crossover_$(date +%Y%m%d_%H%M%S)}
 run_scalar_db_fixture() {
   local id=$1 docs=$2 dims=$3
   RUN_DIR="$RUN_ROOT/db_compare/$id" \
-  BACKENDS=treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank \
+  BACKENDS=treedb_column_graph,treedb_column_graph_scalar_u8_quantized_only,treedb_column_graph_scalar_u8_quantized_rerank \
   DOCS="$docs" DIMS="$dims" QUERIES=10000 VALIDATE_QUERIES=64 \
   TOP_K=10 M=16 EF_CONSTRUCTION=128 EF_SEARCH=128 \
   SEARCH_CONCURRENCY=8 \
-  TREEDB_QUANTIZED_INDEX_NAME=embedding.scalar_u8.fast \
+  TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME=embedding.scalar_u8.fast \
   TREEDB_QUANTIZED_RERANK_CANDIDATES=32 \
   TREEDB_QUANTIZED_MIN_RECALL=0 \
   scripts/bench_vector_db_compare.sh
@@ -157,15 +157,28 @@ RUN_DIR="$RUN_ROOT/scalar_u8_fixed_profile" ROWS=all \
 
 ## RaBitQ `rabitq_1bit` command contract
 
-Current checked-in RaBitQ Go benchmark/profile rows are fixed at 1024x128. Do
-not silently present them as the larger fixture matrix. Until a separate harness
-change adds scale parameters for `rabitq_1bit`, the contract is:
+For database-tier scale fixtures, use the persistent DB comparison harness with
+explicit RaBitQ aliases so these rows stay separate from scalar_u8 evidence:
 
-1. Run the fixed RaBitQ gate to prove route/counter/profile health on current
-   main.
-2. Mark larger RaBitQ fixture cells as `unavailable: no checked-in scale-matrix
-   RaBitQ harness` unless a separate approved harness PR exists.
-3. Never substitute future-codec or no-promote rows for current `rabitq_1bit` v1.
+```sh
+RUN_ROOT=${RUN_ROOT:-/tmp/gomap_2490_vector_crossover_$(date +%Y%m%d_%H%M%S)}
+
+run_rabitq_db_fixture() {
+  local id=$1 docs=$2 dims=$3
+  RUN_DIR="$RUN_ROOT/db_compare_rabitq/$id" \
+  BACKENDS=treedb_column_graph,treedb_column_graph_rabitq_1bit_quantized_only,treedb_column_graph_rabitq_1bit_quantized_rerank \
+  DOCS="$docs" DIMS="$dims" QUERIES=10000 VALIDATE_QUERIES=64 \
+  TOP_K=10 M=16 EF_CONSTRUCTION=128 EF_SEARCH=128 \
+  SEARCH_CONCURRENCY=8 \
+  TREEDB_RABITQ_QUANTIZED_INDEX_NAME=embedding.rabitq_1bit.fast \
+  TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES=32 \
+  TREEDB_RABITQ_QUANTIZED_MIN_RECALL=0 \
+  scripts/bench_vector_db_compare.sh
+}
+```
+
+For RaBitQ scorer/profile attribution only, use the fixed profile gate. Never
+substitute future-codec or no-promote rows for current `rabitq_1bit` v1:
 
 ```sh
 RUN_ROOT=${RUN_ROOT:-/tmp/gomap_2490_vector_crossover_$(date +%Y%m%d_%H%M%S)}
@@ -189,11 +202,11 @@ RUN_ROOT=${RUN_ROOT:-/tmp/gomap_2490_vector_crossover_$(date +%Y%m%d_%H%M%S)}
 run_pgvector_fixture() {
   local id=$1 docs=$2 dims=$3
   RUN_DIR="$RUN_ROOT/db_compare_pgvector/$id" \
-  BACKENDS=treedb_column_graph,treedb_column_graph_quantized_only,treedb_column_graph_quantized_rerank,pgvector \
+  BACKENDS=treedb_column_graph,treedb_column_graph_scalar_u8_quantized_only,treedb_column_graph_scalar_u8_quantized_rerank,pgvector \
   DOCS="$docs" DIMS="$dims" QUERIES=10000 VALIDATE_QUERIES=64 \
   TOP_K=10 M=16 EF_CONSTRUCTION=128 EF_SEARCH=128 \
   SEARCH_CONCURRENCY=8 \
-  TREEDB_QUANTIZED_INDEX_NAME=embedding.scalar_u8.fast \
+  TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME=embedding.scalar_u8.fast \
   TREEDB_QUANTIZED_RERANK_CANDIDATES=32 \
   TREEDB_QUANTIZED_MIN_RECALL=0 \
   scripts/bench_vector_db_compare.sh
