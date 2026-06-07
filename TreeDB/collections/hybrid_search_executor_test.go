@@ -183,6 +183,18 @@ func TestSearchHybridScalarFilterRangeAndFailClosed2505(t *testing.T) {
 		t.Fatalf("postfilter stats=%+v want bounded fused-result checks", postfiltered.Stats)
 	}
 
+	empty, err := col.SearchHybrid(HybridSearchOptions{
+		TopK:         2,
+		Text:         &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
+		ScalarFilter: &HybridScalarFilter{IndexName: "city", Value: "does-not-exist"},
+	})
+	if err != nil {
+		t.Fatalf("SearchHybrid empty scalar match: %v", err)
+	}
+	if len(empty.Results) != 0 || empty.Stats.FailClosed != 0 || empty.Stats.FailClosedReason != "" || empty.Stats.ScalarPrefilterIDs != 0 || empty.Stats.ScalarFilterMatched != 0 || empty.Stats.ScalarFilterRejected != 4 {
+		t.Fatalf("empty scalar response=%+v want no results without fail-closed", empty)
+	}
+
 	broad, err := col.SearchHybrid(HybridSearchOptions{
 		TopK:         1,
 		Text:         &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 1},
@@ -205,6 +217,17 @@ func TestSearchHybridScalarFilterRangeAndFailClosed2505(t *testing.T) {
 	}
 	if missing.Stats.FailClosed != 1 || missing.Stats.FailClosedReason != HybridFailClosedReasonScalarFilterUnbounded || missing.Stats.FullDocumentScanFallbacks != 0 {
 		t.Fatalf("missing scalar response=%+v want fail-closed scalar reason and no fallback", missing)
+	}
+}
+
+func TestHybridCandidateErrorFailClosedReasonSourceAware2505(t *testing.T) {
+	textErr := hybridCandidateSourceError{source: HybridCandidateSourceText, err: fmt.Errorf("%w: text unavailable without stats", ErrHybridSearchIndexUnavailable)}
+	if got := hybridCandidateErrorFailClosedReason(textErr); got != HybridFailClosedReasonTextIndexUnavailable {
+		t.Fatalf("text source fallback reason=%q want %q", got, HybridFailClosedReasonTextIndexUnavailable)
+	}
+	vectorErr := hybridCandidateSourceError{source: HybridCandidateSourceVector, err: fmt.Errorf("%w: vector unavailable without stats", ErrHybridSearchIndexUnavailable)}
+	if got := hybridCandidateErrorFailClosedReason(vectorErr); got != HybridFailClosedReasonVectorIndexUnavailable {
+		t.Fatalf("vector source fallback reason=%q want %q", got, HybridFailClosedReasonVectorIndexUnavailable)
 	}
 }
 

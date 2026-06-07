@@ -240,9 +240,16 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 		limit = plan.topK
 	}
 	filter := plan.scalarFilter
+	exists, err := c.hybridScalarIndexExists(filter.IndexName)
+	if err != nil {
+		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+	}
+	if !exists {
+		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar filter index %q is unavailable", ErrHybridSearchIndexUnavailable, filter.IndexName)
+	}
+
 	var ids [][]byte
 	var truncated bool
-	var err error
 	if filter.Range != nil {
 		rangeOpts := *filter.Range
 		rangeOpts.Limit = limit
@@ -254,7 +261,7 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	if ids == nil {
-		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar filter index %q is unavailable", ErrHybridSearchIndexUnavailable, filter.IndexName)
+		ids = [][]byte{}
 	}
 	if truncated {
 		stats := HybridSearchStats{Truncated: 1}
@@ -271,6 +278,32 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 	return set, stats, nil
 }
 
+func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
+	if err := ValidateIndexName(indexName); err != nil {
+		return false, err
+	}
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
+	}
+	_, ok := findIndex(catalog.meta.Indexes, indexName)
+	return ok, nil
+}
+
 func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
 	var stats HybridSearchStats
@@ -281,7 +314,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan) ([]H
 		response, err := c.SearchHybridTextCandidates(*plan.text)
 		hybridMergeStats(&stats, response.Stats)
 		if err != nil {
-			return err
+			return hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
 		}
 		out = append(out, response.Candidates...)
 		return nil
@@ -293,7 +326,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan) ([]H
 		response, err := c.SearchHybridVectorCandidates(*plan.vector)
 		hybridMergeStats(&stats, response.Stats)
 		if err != nil {
-			return err
+			return hybridCandidateSourceError{source: HybridCandidateSourceVector, err: err}
 		}
 		out = append(out, response.Candidates...)
 		return nil
@@ -515,17 +548,40 @@ func hybridStatsFailClosedReason(stats HybridSearchStats, fallback HybridFailClo
 	return fallback
 }
 
+type hybridCandidateSourceError struct {
+	source HybridCandidateSource
+	err    error
+}
+
+func (e hybridCandidateSourceError) Error() string {
+	if e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e hybridCandidateSourceError) Unwrap() error { return e.err }
+
 func hybridCandidateErrorFailClosedReason(err error) HybridFailClosedReason {
 	switch {
 	case err == nil:
 		return HybridFailClosedReasonNone
+	case errors.Is(err, ErrHybridSearchStaleIndex):
+		return HybridFailClosedReasonSnapshotMismatch
 	case errors.Is(err, ErrHybridSearchIndexUnavailable):
+		var sourceErr hybridCandidateSourceError
+		if errors.As(err, &sourceErr) {
+			switch sourceErr.source {
+			case HybridCandidateSourceText:
+				return HybridFailClosedReasonTextIndexUnavailable
+			case HybridCandidateSourceVector:
+				return HybridFailClosedReasonVectorIndexUnavailable
+			}
+		}
 		if errors.Is(err, ErrIndexNotFound) {
 			return HybridFailClosedReasonTextIndexUnavailable
 		}
 		return HybridFailClosedReasonVectorIndexUnavailable
-	case errors.Is(err, ErrHybridSearchStaleIndex):
-		return HybridFailClosedReasonSnapshotMismatch
 	default:
 		return HybridFailClosedReasonUnsupported
 	}
