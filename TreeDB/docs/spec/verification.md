@@ -192,6 +192,21 @@ matrix:
 - `data_outer=false,index_outer=false` (fast/control),
 - `data_outer=false,index_outer=true` (low-priority compatibility cell).
 
+## 11.1 Collection Text Search Metadata And Analyzer
+
+Invariant:
+- Collection text index metadata persists through reopen, root names are stable,
+  the simple analyzer is deterministic, and text-indexed writes/search fail
+  closed until persistent postings/text-state/stats maintenance lands.
+
+Coverage:
+- `TreeDB/collections/text_index_test.go`:
+  - `TestTextAnalyzerSimpleFixtures`
+  - `TestCollectionTextIndexMetadataValidateAndReopen`
+  - `TestCollectionTextIndexMetadataRejectsInvalidDefinitions`
+  - `TestCollectionTextRootNames`
+  - `TestCollectionTextIndexedOperationsFailClosedUntilStorageLands`
+
 ## 11.5 Planned User-Command WAL Durability Gate
 
 This section owns the canonical planned test matrix for the user-command WAL

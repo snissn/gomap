@@ -2140,16 +2140,19 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 	var normBytesTotal uint64
 	var preparedScoreCallsTotal uint64
 	var scoreBatchCandidatesTotal uint64
-	var documentsFetchedTotal uint64
-	var responseOwnedResultAllocsTotal uint64
-	var searchRouteHNSWSearchPackTotal uint64
-	var searchRouteQuantizedOnlyTotal uint64
-	var searchRouteQuantizedRerankTotal uint64
-	var searchRouteColumnGraphPreparedTotal uint64
-	var searchRouteColumnGraphFallbackTotal uint64
-	var graphRowFallbacksTotal uint64
-	var typedColumnFallbacksTotal uint64
-	var vectorScratchDecodesTotal uint64
+	type columnGraphGuardrailTotals struct {
+		documentsFetched               uint64
+		responseOwnedResultAllocs      uint64
+		searchRouteHNSWSearchPack      uint64
+		searchRouteQuantizedOnly       uint64
+		searchRouteQuantizedRerank     uint64
+		searchRouteColumnGraphPrepared uint64
+		searchRouteColumnGraphFallback uint64
+		graphRowFallbacks              uint64
+		typedColumnFallbacks           uint64
+		vectorScratchDecodes           uint64
+	}
+	guardrailTotals := make([]columnGraphGuardrailTotals, concurrency)
 	var errMu sync.Mutex
 	var firstErr error
 	setErr := func(err error) {
@@ -2159,7 +2162,13 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 			firstErr = err
 		}
 	}
-	worker := func(searcher *collections.VectorIndexSearcher, buffer *collections.VectorIndexSearchBuffer) {
+	worker := func(searcher *collections.VectorIndexSearcher, buffer *collections.VectorIndexSearchBuffer, totals *columnGraphGuardrailTotals) {
+		var local columnGraphGuardrailTotals
+		defer func() {
+			if totals != nil {
+				*totals = local
+			}
+		}()
 		for {
 			i := int(next.Add(1) - 1)
 			if i >= len(queries) {
@@ -2189,16 +2198,16 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 			atomic.AddUint64(&normBytesTotal, response.Stats.NormBytesRead)
 			atomic.AddUint64(&preparedScoreCallsTotal, response.Stats.PreparedScoreCalls)
 			atomic.AddUint64(&scoreBatchCandidatesTotal, response.Stats.ScoreBatchCandidates)
-			atomic.AddUint64(&documentsFetchedTotal, response.Stats.DocumentsFetched)
-			atomic.AddUint64(&responseOwnedResultAllocsTotal, response.Stats.ResponseOwnedResultAllocs)
-			atomic.AddUint64(&searchRouteHNSWSearchPackTotal, response.Stats.SearchRouteHNSWSearchPack)
-			atomic.AddUint64(&searchRouteQuantizedOnlyTotal, response.Stats.SearchRouteQuantizedOnly)
-			atomic.AddUint64(&searchRouteQuantizedRerankTotal, response.Stats.SearchRouteQuantizedRerank)
-			atomic.AddUint64(&searchRouteColumnGraphPreparedTotal, response.Stats.SearchRouteColumnGraphPrepared)
-			atomic.AddUint64(&searchRouteColumnGraphFallbackTotal, response.Stats.SearchRouteColumnGraphFallback)
-			atomic.AddUint64(&graphRowFallbacksTotal, response.Stats.GraphRowFallbacks)
-			atomic.AddUint64(&typedColumnFallbacksTotal, response.Stats.TypedColumnFallbacks)
-			atomic.AddUint64(&vectorScratchDecodesTotal, response.Stats.VectorScratchDecodes)
+			local.documentsFetched += response.Stats.DocumentsFetched
+			local.responseOwnedResultAllocs += response.Stats.ResponseOwnedResultAllocs
+			local.searchRouteHNSWSearchPack += response.Stats.SearchRouteHNSWSearchPack
+			local.searchRouteQuantizedOnly += response.Stats.SearchRouteQuantizedOnly
+			local.searchRouteQuantizedRerank += response.Stats.SearchRouteQuantizedRerank
+			local.searchRouteColumnGraphPrepared += response.Stats.SearchRouteColumnGraphPrepared
+			local.searchRouteColumnGraphFallback += response.Stats.SearchRouteColumnGraphFallback
+			local.graphRowFallbacks += response.Stats.GraphRowFallbacks
+			local.typedColumnFallbacks += response.Stats.TypedColumnFallbacks
+			local.vectorScratchDecodes += response.Stats.VectorScratchDecodes
 		}
 	}
 	stopProfile, err := startColumnGraphSearchProfile(cfg, concurrency)
@@ -2207,16 +2216,17 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 	}
 	startAll := time.Now()
 	if concurrency == 1 {
-		worker(searchers[0], &buffers[0])
+		worker(searchers[0], &buffers[0], &guardrailTotals[0])
 	} else {
 		var wg sync.WaitGroup
 		wg.Add(concurrency)
 		for i := 0; i < concurrency; i++ {
 			searcher := searchers[i]
 			buffer := &buffers[i]
+			totals := &guardrailTotals[i]
 			go func() {
 				defer wg.Done()
-				worker(searcher, buffer)
+				worker(searcher, buffer, totals)
 			}()
 		}
 		wg.Wait()
@@ -2239,6 +2249,28 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 	opsPerSecond := 0.0
 	if total > 0 {
 		opsPerSecond = float64(len(queries)) / total.Seconds()
+	}
+	var documentsFetchedTotal uint64
+	var responseOwnedResultAllocsTotal uint64
+	var searchRouteHNSWSearchPackTotal uint64
+	var searchRouteQuantizedOnlyTotal uint64
+	var searchRouteQuantizedRerankTotal uint64
+	var searchRouteColumnGraphPreparedTotal uint64
+	var searchRouteColumnGraphFallbackTotal uint64
+	var graphRowFallbacksTotal uint64
+	var typedColumnFallbacksTotal uint64
+	var vectorScratchDecodesTotal uint64
+	for _, totals := range guardrailTotals {
+		documentsFetchedTotal += totals.documentsFetched
+		responseOwnedResultAllocsTotal += totals.responseOwnedResultAllocs
+		searchRouteHNSWSearchPackTotal += totals.searchRouteHNSWSearchPack
+		searchRouteQuantizedOnlyTotal += totals.searchRouteQuantizedOnly
+		searchRouteQuantizedRerankTotal += totals.searchRouteQuantizedRerank
+		searchRouteColumnGraphPreparedTotal += totals.searchRouteColumnGraphPrepared
+		searchRouteColumnGraphFallbackTotal += totals.searchRouteColumnGraphFallback
+		graphRowFallbacksTotal += totals.graphRowFallbacks
+		typedColumnFallbacksTotal += totals.typedColumnFallbacks
+		vectorScratchDecodesTotal += totals.vectorScratchDecodes
 	}
 	queryCount := float64(len(queries))
 	avgQuantizedRerankCandidates := float64(quantizedRerankCandidatesTotal) / queryCount
