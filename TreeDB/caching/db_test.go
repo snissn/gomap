@@ -2209,6 +2209,257 @@ func seedRetainedPrunePressure(cache *DB, retainedPath string, size int64) {
 	cache.valueLogRetainedClosedBytes.Add(size - prev)
 }
 
+func seedRetainedPruneSegment(t *testing.T, cache *DB, seq uint32, retainedBytes int64) (string, uint32) {
+	t.Helper()
+	fileID, err := valuelog.EncodeFileID(0, seq)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	valueDir := cache.valueLogDir
+	if valueDir == "" {
+		valueDir = filepath.Join(cache.dir, "value_vlog")
+	}
+	retainedPath := filepath.Join(valueDir, valueLogName(0, int(seq)))
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("r"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, retainedBytes)
+	return retainedPath, fileID
+}
+
+func TestRetainedValueLogPruneDiagnostics_NoCandidates(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	pruneStats, ran := cache.runRetainedValueLogPruneInline(false, nil)
+	if !ran {
+		t.Fatalf("inline retained prune did not run")
+	}
+	if pruneStats.Mode != retainedPruneModeNoCandidates {
+		t.Fatalf("Mode=%s want no_candidates", retainedPruneModeString(uint32(pruneStats.Mode)))
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.last_status"]; got != "no_candidates" {
+		t.Fatalf("last_status=%q want no_candidates", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_mode"]; got != "no_candidates" {
+		t.Fatalf("last_mode=%q want no_candidates", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.no_candidate_runs"]; got != "1" {
+		t.Fatalf("no_candidate_runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.completed_runs"]; got != "1" {
+		t.Fatalf("completed_runs=%q want 1", got)
+	}
+}
+
+func TestRetainedValueLogPruneDiagnostics_FullLiveScan(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.Set([]byte("a"), []byte("1"))
+	backend.Set([]byte("b"), []byte("2"))
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	seedRetainedPruneSegment(t, cache, 401, 2<<30)
+	pruneStats, ran := cache.runRetainedValueLogPruneInline(false, nil)
+	if !ran {
+		t.Fatalf("inline retained prune did not run")
+	}
+	if pruneStats.Mode != retainedPruneModeFullLiveIDScan {
+		t.Fatalf("Mode=%s want full_live_id_scan", retainedPruneModeString(uint32(pruneStats.Mode)))
+	}
+	if pruneStats.ScanStats.Records != 2 {
+		t.Fatalf("scan records=%d want 2", pruneStats.ScanStats.Records)
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.last_status"]; got != "completed" {
+		t.Fatalf("last_status=%q want completed", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_mode"]; got != "full_live_id_scan" {
+		t.Fatalf("last_mode=%q want full_live_id_scan", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.full_live_id_scan_runs"]; got != "1" {
+		t.Fatalf("full_live_id_scan_runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.observed_source_fast_path_runs"]; got != "0" {
+		t.Fatalf("observed_source_fast_path_runs=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_scan.records"]; got != "2" {
+		t.Fatalf("last_scan.records=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.scan.records_total"]; got != "2" {
+		t.Fatalf("scan.records_total=%q want 2", got)
+	}
+}
+
+func TestRetainedValueLogPruneDiagnostics_ObservedSourceFastPath(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	_, fileID := seedRetainedPruneSegment(t, cache, 402, 2<<30)
+	pruneStats, ran := cache.runRetainedValueLogPruneInline(true, map[uint32]struct{}{fileID: {}})
+	if !ran {
+		t.Fatalf("inline retained prune did not run")
+	}
+	if pruneStats.Mode != retainedPruneModeObservedSourceFastPath {
+		t.Fatalf("Mode=%s want observed_source_fast_path", retainedPruneModeString(uint32(pruneStats.Mode)))
+	}
+	backend.mu.RLock()
+	iteratorCalls := backend.iteratorCalls
+	backend.mu.RUnlock()
+	if iteratorCalls != 0 {
+		t.Fatalf("iteratorCalls=%d want 0 for observed-source fast path", iteratorCalls)
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.last_status"]; got != "completed" {
+		t.Fatalf("last_status=%q want completed", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_mode"]; got != "observed_source_fast_path" {
+		t.Fatalf("last_mode=%q want observed_source_fast_path", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_force"]; got != "true" {
+		t.Fatalf("last_force=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.observed_source_fast_path_runs"]; got != "1" {
+		t.Fatalf("observed_source_fast_path_runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.full_live_id_scan_runs"]; got != "0" {
+		t.Fatalf("full_live_id_scan_runs=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_scan.records"]; got != "0" {
+		t.Fatalf("last_scan.records=%q want 0", got)
+	}
+}
+
+func TestRetainedValueLogPruneDiagnostics_ForegroundAbort(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	seedRetainedPruneSegment(t, cache, 403, 2<<30)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+	done := make(chan retainedValueLogPruneStats, 1)
+	go func() {
+		pruneStats, _ := cache.runRetainedValueLogPruneInline(false, nil)
+		done <- pruneStats
+	}()
+	<-backend.iteratorStartedCh
+	cache.lastForegroundWriteUnixNano.Add(1)
+	close(backend.iteratorBlockCh)
+	pruneStats := <-done
+	if !pruneStats.AbortedForegroundWrites {
+		t.Fatalf("AbortedForegroundWrites=false want true")
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.last_status"]; got != "foreground_abort" {
+		t.Fatalf("last_status=%q want foreground_abort", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_mode"]; got != "full_live_id_scan" {
+		t.Fatalf("last_mode=%q want full_live_id_scan", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.foreground_abort_runs"]; got != "1" {
+		t.Fatalf("foreground_abort_runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.completed_runs"]; got != "0" {
+		t.Fatalf("completed_runs=%q want 0", got)
+	}
+}
+
+func TestRetainedValueLogPruneDiagnostics_CloseAbort(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	cache.closing.Store(true)
+	_, ran := cache.runRetainedValueLogPruneInline(true, nil)
+	cache.closing.Store(false)
+	if ran {
+		t.Fatalf("inline retained prune ran while closing")
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.last_status"]; got != "close_abort" {
+		t.Fatalf("last_status=%q want close_abort", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.close_abort_runs"]; got != "1" {
+		t.Fatalf("close_abort_runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.last_force"]; got != "true" {
+		t.Fatalf("last_force=%q want true", got)
+	}
+}
+
 func TestCheckpoint_SchedulesRetainedValueLogPruneAsynchronously(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
