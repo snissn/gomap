@@ -227,6 +227,11 @@ func TestHybridRRFFusionRejectsUnsupportedOptions(t *testing.T) {
 		t.Fatalf("unsupported tie err=%v want ErrHybridSearchUnsupported", err)
 	}
 
+	_, _, err = FuseHybridSearchCandidates(nil, HybridFusionOptions{SourceOrder: []HybridCandidateSource{HybridCandidateSource("image")}}, 1)
+	if !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Fatalf("bad source order on empty candidates err=%v want ErrHybridSearchUnsupported", err)
+	}
+
 	_, _, err = FuseHybridSearchCandidates([]HybridSearchCandidate{hybridFusionCandidate("d1", HybridCandidateSourceText, 1, 1, HybridScoreKindBM25)}, HybridFusionOptions{SourceOrder: []HybridCandidateSource{HybridCandidateSource("image")}}, 1)
 	if !errors.Is(err, ErrHybridSearchUnsupported) {
 		t.Fatalf("bad source order err=%v want ErrHybridSearchUnsupported", err)

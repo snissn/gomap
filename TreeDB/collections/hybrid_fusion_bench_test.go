@@ -3,7 +3,6 @@ package collections
 import (
 	"fmt"
 	"testing"
-	"time"
 )
 
 var (
@@ -22,7 +21,6 @@ func BenchmarkHybridRRFFusion(b *testing.B) {
 			}
 			b.ReportAllocs()
 			b.ResetTimer()
-			start := time.Now()
 			for i := 0; i < b.N; i++ {
 				results, stats, err := FuseHybridSearchCandidates(candidates, HybridFusionOptions{}, topK)
 				if err != nil {
@@ -30,9 +28,6 @@ func BenchmarkHybridRRFFusion(b *testing.B) {
 				}
 				hybridFusionBenchmarkResults = results
 				hybridFusionBenchmarkStats = stats
-			}
-			if elapsed := time.Since(start); elapsed > 0 {
-				b.ReportMetric(float64(b.N)/elapsed.Seconds(), "ops/sec")
 			}
 		})
 	}

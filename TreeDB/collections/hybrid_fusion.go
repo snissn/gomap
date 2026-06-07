@@ -45,14 +45,14 @@ func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion Hybri
 		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid fusion rrf_k must be non-negative", ErrHybridSearchUnsupported)
 	}
 
-	stats := HybridSearchStats{CandidatesFused: uint64(len(candidates))}
-	if len(candidates) == 0 {
-		return nil, stats, nil
-	}
-
 	sourceOrder, err := normalizeHybridFusionSourceOrder(fusion.SourceOrder)
 	if err != nil {
 		return nil, HybridSearchStats{}, err
+	}
+
+	stats := HybridSearchStats{CandidatesFused: uint64(len(candidates))}
+	if len(candidates) == 0 {
+		return nil, stats, nil
 	}
 	accByID := make(map[string]int, len(candidates))
 	accumulators := make([]hybridFusionAccumulator, 0, len(candidates))
