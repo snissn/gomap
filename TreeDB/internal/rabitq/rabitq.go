@@ -1,6 +1,7 @@
 package rabitq
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -86,6 +87,13 @@ type Workspace struct {
 	work         []float64
 	queryBits    []byte
 	queryWeights []float32
+
+	queryByteMismatchWeights    []float64
+	queryByteMismatchSignBits   []byte
+	queryByteMismatchAbsWeights []float32
+	queryByteMismatchCodeDims   int
+	queryByteMismatchWeightSum  float64
+	queryByteMismatchCacheValid bool
 }
 
 // EncodedVector contains the data-code row and side-array values produced by
@@ -120,14 +128,21 @@ func PrepareQueryByteMismatchWeights(query Query, ws *Workspace) ([]float64, flo
 	if len(query.SignBits) != bytesPerCode {
 		return nil, 0, false
 	}
+	cacheable := ws != nil
 	if ws == nil {
 		ws = &Workspace{}
 	}
 	entries := bytesPerCode * ByteMismatchTableEntries
-	if cap(ws.work) < entries {
-		ws.work = make([]float64, entries)
+	if cacheable && ws.queryByteMismatchCacheMatches(query, bytesPerCode, entries) {
+		return ws.queryByteMismatchWeights, ws.queryByteMismatchWeightSum, true
+	}
+	if cacheable {
+		ws.queryByteMismatchCacheValid = false
+	}
+	if cap(ws.queryByteMismatchWeights) < entries {
+		ws.queryByteMismatchWeights = make([]float64, entries)
 	} else {
-		ws.work = ws.work[:entries]
+		ws.queryByteMismatchWeights = ws.queryByteMismatchWeights[:entries]
 	}
 	var queryWeightSum float64
 	var byteWeights [8]float64
@@ -151,16 +166,63 @@ func PrepareQueryByteMismatchWeights(query Query, ws *Workspace) ([]float64, flo
 			byteWeights[bit] = 0
 		}
 		base := byteIdx * ByteMismatchTableEntries
-		ws.work[base] = 0
+		ws.queryByteMismatchWeights[base] = 0
 		for mask := 1; mask < ByteMismatchTableEntries; mask++ {
 			leastBit := mask & -mask
-			ws.work[base+mask] = ws.work[base+(mask^leastBit)] + byteWeights[bits.TrailingZeros8(uint8(leastBit))]
+			ws.queryByteMismatchWeights[base+mask] = ws.queryByteMismatchWeights[base+(mask^leastBit)] + byteWeights[bits.TrailingZeros8(uint8(leastBit))]
 		}
 	}
 	if queryWeightSum <= 0 || math.IsNaN(queryWeightSum) || math.IsInf(queryWeightSum, 0) {
 		return nil, 0, false
 	}
-	return ws.work, queryWeightSum, true
+	if cacheable {
+		ws.rememberQueryByteMismatchCache(query, queryWeightSum)
+	}
+	return ws.queryByteMismatchWeights, queryWeightSum, true
+}
+
+func (ws *Workspace) queryByteMismatchCacheMatches(query Query, bytesPerCode, entries int) bool {
+	return ws != nil &&
+		ws.queryByteMismatchCacheValid &&
+		ws.queryByteMismatchCodeDims == query.CodeDimensions &&
+		len(ws.queryByteMismatchWeights) == entries &&
+		len(ws.queryByteMismatchSignBits) == bytesPerCode &&
+		len(ws.queryByteMismatchAbsWeights) == query.CodeDimensions &&
+		bytes.Equal(ws.queryByteMismatchSignBits, query.SignBits) &&
+		equalFloat32Slice(ws.queryByteMismatchAbsWeights, query.AbsWeights[:query.CodeDimensions]) &&
+		ws.queryByteMismatchWeightSum > 0 &&
+		!math.IsNaN(ws.queryByteMismatchWeightSum) &&
+		!math.IsInf(ws.queryByteMismatchWeightSum, 0)
+}
+
+func (ws *Workspace) rememberQueryByteMismatchCache(query Query, queryWeightSum float64) {
+	if cap(ws.queryByteMismatchSignBits) < len(query.SignBits) {
+		ws.queryByteMismatchSignBits = make([]byte, len(query.SignBits))
+	} else {
+		ws.queryByteMismatchSignBits = ws.queryByteMismatchSignBits[:len(query.SignBits)]
+	}
+	copy(ws.queryByteMismatchSignBits, query.SignBits)
+	if cap(ws.queryByteMismatchAbsWeights) < query.CodeDimensions {
+		ws.queryByteMismatchAbsWeights = make([]float32, query.CodeDimensions)
+	} else {
+		ws.queryByteMismatchAbsWeights = ws.queryByteMismatchAbsWeights[:query.CodeDimensions]
+	}
+	copy(ws.queryByteMismatchAbsWeights, query.AbsWeights[:query.CodeDimensions])
+	ws.queryByteMismatchCodeDims = query.CodeDimensions
+	ws.queryByteMismatchWeightSum = queryWeightSum
+	ws.queryByteMismatchCacheValid = true
+}
+
+func equalFloat32Slice(a, b []float32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // QueryByteMismatchWeightsValid reports whether weights has the shape returned
