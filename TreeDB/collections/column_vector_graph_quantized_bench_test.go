@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,7 +37,167 @@ const (
 	columnGraphScalarU8QuantizedBenchTopKEnv1926         = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_TOP_K"
 	columnGraphScalarU8QuantizedBenchEfSearchEnv1926     = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_EF_SEARCH"
 	columnGraphScalarU8QuantizedBenchQueryOrdinalEnv1926 = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_QUERY_ORDINAL"
+
+	columnGraphQuantizedHotCPUProfilePathEnv2541        = "TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_CPU_PROFILE_PATH"
+	columnGraphQuantizedHotAllocsProfilePathEnv2541     = "TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_ALLOCS_PROFILE_PATH"
+	columnGraphQuantizedHotAllocsBaseProfilePathEnv2541 = "TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_ALLOCS_BASE_PROFILE_PATH"
+	columnGraphQuantizedHotMemProfileRateEnv2541        = "TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_MEM_PROFILE_RATE"
+	defaultColumnGraphQuantizedHotMemProfileRate2541    = 1
 )
+
+func init() {
+	if strings.TrimSpace(os.Getenv(columnGraphQuantizedHotAllocsProfilePathEnv2541)) != "" {
+		runtime.MemProfileRate = 0
+	}
+}
+
+type columnGraphQuantizedSearchLoopProfileHook2541 struct {
+	cpuPath              string
+	allocsPath           string
+	allocsBasePath       string
+	oldMemProfileRate    int
+	memProfileRate       int
+	memProfileSuppressed bool
+	restored             bool
+}
+
+func newColumnGraphQuantizedSearchLoopProfileHook2541(b *testing.B) *columnGraphQuantizedSearchLoopProfileHook2541 {
+	b.Helper()
+
+	hook := &columnGraphQuantizedSearchLoopProfileHook2541{
+		cpuPath:        strings.TrimSpace(os.Getenv(columnGraphQuantizedHotCPUProfilePathEnv2541)),
+		allocsPath:     strings.TrimSpace(os.Getenv(columnGraphQuantizedHotAllocsProfilePathEnv2541)),
+		allocsBasePath: strings.TrimSpace(os.Getenv(columnGraphQuantizedHotAllocsBaseProfilePathEnv2541)),
+		memProfileRate: defaultColumnGraphQuantizedHotMemProfileRate2541,
+	}
+	if !hook.enabled() {
+		return hook
+	}
+	if hook.allocsPath != "" {
+		if raw := strings.TrimSpace(os.Getenv(columnGraphQuantizedHotMemProfileRateEnv2541)); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value <= 0 {
+				b.Fatalf("%s=%q must be a positive integer", columnGraphQuantizedHotMemProfileRateEnv2541, raw)
+			}
+			hook.memProfileRate = value
+		}
+		hook.oldMemProfileRate = runtime.MemProfileRate
+		runtime.MemProfileRate = 0
+		hook.memProfileSuppressed = true
+		runtime.GC()
+	}
+	return hook
+}
+
+func (hook *columnGraphQuantizedSearchLoopProfileHook2541) enabled() bool {
+	return hook != nil && (hook.cpuPath != "" || hook.allocsPath != "")
+}
+
+func (hook *columnGraphQuantizedSearchLoopProfileHook2541) finish() {
+	if hook == nil || !hook.memProfileSuppressed || hook.restored {
+		return
+	}
+	runtime.MemProfileRate = hook.oldMemProfileRate
+	hook.restored = true
+}
+
+func (hook *columnGraphQuantizedSearchLoopProfileHook2541) start(b *testing.B) func() {
+	b.Helper()
+	if !hook.enabled() {
+		return func() {}
+	}
+	if hook.allocsPath != "" {
+		runtime.GC()
+		if hook.allocsBasePath != "" {
+			// Serialize the baseline at the same sampling rate used for the raw
+			// search-loop profile. Go pprof scales sampled allocations using the
+			// current runtime.MemProfileRate at WriteTo time; using a different rate
+			// here would leave setup samples in the later raw-minus-base diff when
+			// HOT_MEM_PROFILE_RATE is greater than 1.
+			func() {
+				runtime.MemProfileRate = hook.memProfileRate
+				defer func() {
+					runtime.MemProfileRate = 0
+				}()
+				writeColumnGraphQuantizedHotProfile2541(b, "allocs", hook.allocsBasePath)
+			}()
+		}
+	}
+
+	var cpuFile *os.File
+	if hook.cpuPath != "" {
+		cpuFile = createColumnGraphQuantizedHotProfileFile2541(b, hook.cpuPath, "cpu")
+		if err := pprof.StartCPUProfile(cpuFile); err != nil {
+			_ = cpuFile.Close()
+			b.Fatalf("start search-loop CPU profile: %v; do not also pass go test -cpuprofile", err)
+		}
+	}
+	if hook.allocsPath != "" {
+		runtime.MemProfileRate = hook.memProfileRate
+	}
+
+	stopped := false
+	return func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		if hook.allocsPath != "" {
+			// Keep the collection sampling rate in effect until allocs WriteTo
+			// completes. The pprof writer scales sampled allocations using the
+			// current runtime.MemProfileRate, so disabling sampling before the raw
+			// profile is serialized underreports runs that use rates greater than 1.
+			// The harness filters pprof-writer noise from the published allocs.pprof
+			// while retaining allocs_diff_raw.pprof for auditability.
+			runtime.MemProfileRate = hook.memProfileRate
+			defer func() {
+				runtime.MemProfileRate = 0
+			}()
+		}
+		if cpuFile != nil {
+			pprof.StopCPUProfile()
+			if err := cpuFile.Close(); err != nil {
+				b.Errorf("close search-loop CPU profile: %v", err)
+			}
+		}
+		if hook.allocsPath != "" {
+			runtime.GC()
+			runtime.GC()
+			writeColumnGraphQuantizedHotProfile2541(b, "allocs", hook.allocsPath)
+		}
+	}
+}
+
+func createColumnGraphQuantizedHotProfileFile2541(b *testing.B, path, kind string) *os.File {
+	b.Helper()
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatalf("create search-loop %s profile dir: %v", kind, err)
+		}
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		b.Fatalf("create search-loop %s profile: %v", kind, err)
+	}
+	return file
+}
+
+func writeColumnGraphQuantizedHotProfile2541(b *testing.B, name, path string) {
+	b.Helper()
+	file := createColumnGraphQuantizedHotProfileFile2541(b, path, name)
+	defer func() {
+		if err := file.Close(); err != nil {
+			b.Errorf("close search-loop %s profile: %v", name, err)
+		}
+	}()
+	profile := pprof.Lookup(name)
+	if profile == nil {
+		b.Fatalf("runtime profile %q is unavailable", name)
+	}
+	if err := profile.WriteTo(file, 0); err != nil {
+		b.Fatalf("write search-loop %s profile: %v", name, err)
+	}
+}
 
 func defaultColumnGraphScalarU8QuantizedBenchShape1926() columnGraphScalarU8QuantizedBenchShape1926 {
 	return columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
@@ -380,6 +543,8 @@ func BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer241
 }
 
 func BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451(b *testing.B) {
+	hotProfile := newColumnGraphQuantizedSearchLoopProfileHook2541(b)
+	defer hotProfile.finish()
 	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphRabitQQuantizedBenchFixture2451(b, shape)
 	defer fixture.close()
@@ -397,7 +562,7 @@ func BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451(
 				EfSearch:                  fixture.shape.efSearch,
 				StatsMode:                 VectorIndexSearchStatsModeProduction,
 			}
-			runColumnGraphRabitQQuantizedSearchWithBufferBench2451(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
+			runColumnGraphRabitQQuantizedSearchWithBufferBench2451(b, fixture, opts, tc.concurrency, exactIDs, exactCount, hotProfile)
 		})
 	}
 }
@@ -445,12 +610,14 @@ func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2
 				MaxDecodedBlocks:          1,
 				StatsMode:                 VectorIndexSearchStatsModeProduction,
 			}
-			runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
+			runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b, fixture, opts, tc.concurrency, exactIDs, exactCount, nil)
 		})
 	}
 }
 
 func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452(b *testing.B) {
+	hotProfile := newColumnGraphQuantizedSearchLoopProfileHook2541(b)
+	defer hotProfile.finish()
 	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphRabitQQuantizedBenchFixture2451(b, shape)
 	defer fixture.close()
@@ -470,12 +637,12 @@ func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized245
 				MaxDecodedBlocks:          1,
 				StatsMode:                 VectorIndexSearchStatsModeProduction,
 			}
-			runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b, fixture, opts, tc.concurrency, exactIDs, exactCount)
+			runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b, fixture, opts, tc.concurrency, exactIDs, exactCount, hotProfile)
 		})
 	}
 }
 
-func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearchOptions, concurrency int, exactIDs map[string]struct{}, exactCount int) {
+func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearchOptions, concurrency int, exactIDs map[string]struct{}, exactCount int, hotProfile *columnGraphQuantizedSearchLoopProfileHook2541) {
 	b.Helper()
 	if concurrency <= 0 {
 		b.Fatalf("concurrency=%d must be positive", concurrency)
@@ -577,10 +744,19 @@ func runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b *testing.B, 
 	}
 	cacheBeforeTimed := fixture.collection.collectionVectorIndexPreparedSearchCacheSnapshot()
 	b.ReportAllocs()
+	stopHotProfile := hotProfile.start(b)
+	hotProfileActive := hotProfile.enabled()
+	defer func() {
+		if hotProfileActive {
+			stopHotProfile()
+		}
+	}()
 	b.ResetTimer()
 	close(start)
 	wg.Wait()
 	b.StopTimer()
+	stopHotProfile()
+	hotProfileActive = false
 	b.ReportMetric(float64(concurrency), "concurrency")
 	b.ReportMetric(1, "collection_searchvectorindex_with_buffer_seam")
 	b.ReportMetric(1, "collection_buffered_quantized_row")
@@ -786,7 +962,7 @@ func assertColumnGraphScalarU8QuantizedSearchWithBufferGuardrails2414(tb testing
 	}
 }
 
-func runColumnGraphRabitQQuantizedSearchWithBufferBench2451(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearcherSearchOptions, concurrency int, exactIDs map[string]struct{}, exactCount int) {
+func runColumnGraphRabitQQuantizedSearchWithBufferBench2451(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearcherSearchOptions, concurrency int, exactIDs map[string]struct{}, exactCount int, hotProfile *columnGraphQuantizedSearchLoopProfileHook2541) {
 	b.Helper()
 	if concurrency <= 0 {
 		b.Fatalf("concurrency=%d must be positive", concurrency)
@@ -888,10 +1064,19 @@ func runColumnGraphRabitQQuantizedSearchWithBufferBench2451(b *testing.B, fixtur
 	b.ReportMetric(1, "searchwithbuffer_buffered_row")
 	b.ReportMetric(1, "rabitq_1bit_row")
 	b.ReportMetric(1, "reported_stats_mode_production")
+	stopHotProfile := hotProfile.start(b)
+	hotProfileActive := hotProfile.enabled()
+	defer func() {
+		if hotProfileActive {
+			stopHotProfile()
+		}
+	}()
 	b.ResetTimer()
 	close(start)
 	wg.Wait()
 	b.StopTimer()
+	stopHotProfile()
+	hotProfileActive = false
 	if errValue := firstErr.Load(); errValue != nil {
 		b.Fatalf("%s", errValue.(string))
 	}
