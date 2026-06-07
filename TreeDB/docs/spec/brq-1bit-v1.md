@@ -6,8 +6,8 @@ does not publish assets/search by itself, and does not claim a throughput win.
 
 ## Decision
 
-#2480 selects `brq_1bit` version `1` as the single future codec candidate to
-prototype next. `brq_1bit` is a TreeDB-owned bit-product binary quantizer: it
+Issue #2480 selects `brq_1bit` version `1` as the single future codec candidate
+to prototype next. `brq_1bit` is a TreeDB-owned bit-product binary quantizer: it
 keeps one durable sign bit per rotated data dimension, makes query-weight
 quantization explicit, and labels returned quantized scores as approximate
 `brq_1bit` estimates. It exists because the #2453 go-highway probe showed that a
@@ -217,7 +217,7 @@ fields.
 
 ## Required oracle and golden tests before #2481 assets/search
 
-#2481 must land oracle/spec coverage before durable assets or production search:
+Issue #2481 must land oracle/spec coverage before durable assets or production search:
 
 - canonical config bytes and `Config.Hash64` golden;
 - rotation metadata, code dimensions, row bytes, and seed golden;
