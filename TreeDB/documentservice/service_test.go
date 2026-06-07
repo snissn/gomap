@@ -203,6 +203,65 @@ func TestServiceConcurrentSameIDUpsertsSucceed(t *testing.T) {
 	}
 }
 
+func TestServiceConcurrentFilterDeleteAndUpsertPreservesReplacement(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+
+	for i := 0; i < 25; i++ {
+		id := fmt.Sprintf("race-%02d", i)
+		if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{
+			ID:        id,
+			Content:   "matching before delete",
+			Embedding: []float32{1, 0},
+			Meta:      map[string]any{"repo": "gomap"},
+		}}}); err != nil {
+			t.Fatalf("initial UpsertDocuments: %v", err)
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{Filter: &Filter{Field: "meta.repo", Operator: "==", Value: "gomap"}})
+			errs <- err
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{
+				ID:        id,
+				Content:   "replacement should survive",
+				Embedding: []float32{0, 1},
+				Meta:      map[string]any{"repo": "other"},
+			}}})
+			errs <- err
+		}()
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("concurrent delete/upsert error: %v", err)
+			}
+		}
+
+		listed, err := svc.FilterDocuments(ctx, "docs", FilterDocumentsRequest{Filter: &Filter{Field: "id", Operator: "==", Value: id}})
+		if err != nil {
+			t.Fatalf("FilterDocuments final: %v", err)
+		}
+		if len(listed.Documents) != 1 || listed.Documents[0].Meta["repo"] != "other" {
+			t.Fatalf("final document for %s=%+v, want surviving replacement", id, listed.Documents)
+		}
+	}
+}
+
 func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

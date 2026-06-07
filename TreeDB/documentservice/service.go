@@ -9,6 +9,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -19,6 +20,7 @@ const maxServiceScanDocuments = int(^uint(0) >> 1)
 // Service maps the document/search contract onto TreeDB collections.
 type Service struct {
 	manager *collections.CollectionManager
+	writeMu sync.Mutex
 }
 
 // New returns a document/search service backed by manager.
@@ -93,6 +95,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	ids := make([]string, 0, len(prepared))
 	insertIDs := make([][]byte, 0, len(prepared))
 	insertDocs := make([][]byte, 0, len(prepared))
@@ -165,6 +170,9 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	if len(req.IDs) > 0 && req.Filter != nil {
 		return DeleteDocumentsResponse{}, serviceError(CodeInvalidRequest, "delete accepts either ids or filter, not both")
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	var ids []string
 	if len(req.IDs) > 0 {
 		ids, err = validateDocumentIDs(req.IDs)
@@ -593,7 +601,7 @@ func scoreEmbedding(query, document []float32, metric Metric) (float64, error) {
 	case MetricL2:
 		var sum float64
 		for i := range query {
-			delta := float64(query[i] - document[i])
+			delta := float64(query[i]) - float64(document[i])
 			sum += delta * delta
 		}
 		return -sum, nil
