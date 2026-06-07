@@ -8,9 +8,9 @@ import (
 )
 
 // CreateTextIndex adds a collection-native text index and backfills persistent
-// postings, text-state, and text-stats roots from the current documents. It
-// does not enable mutation maintenance or SearchText execution; those paths
-// remain fail-closed until later #1764 milestones.
+// postings, text-state, and text-stats roots from the current documents. Write
+// paths maintain those roots after creation; SearchText execution remains
+// fail-closed until a later #1764 milestone.
 func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, TextIndexBackfillStats, error) {
 	var emptyStats TextIndexBackfillStats
 	if c == nil {

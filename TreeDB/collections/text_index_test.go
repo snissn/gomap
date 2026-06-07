@@ -263,7 +263,7 @@ func TestCollectionTextRootStoragePolicies(t *testing.T) {
 	}
 }
 
-func TestCollectionTextIndexedOperationsFailClosedUntilStorageLands(t *testing.T) {
+func TestCollectionTextIndexedWritesMaintainStorageAndSearchFailsClosed(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -283,21 +283,15 @@ func TestCollectionTextIndexedOperationsFailClosedUntilStorageLands(t *testing.T
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	if _, err := col.InsertBatch([][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)}); !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("InsertBatch err=%v want ErrTextIndexUnavailable", err)
+	if _, err := col.InsertBatch([][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
 	}
-	if _, err := col.DeleteDocument([]byte("d1")); !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("DeleteDocument err=%v want ErrTextIndexUnavailable", err)
+	storage, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats: %v", err)
 	}
-	if _, _, err := col.Update([]byte("d1"), func(current []byte) ([]byte, bool, error) {
-		return current, false, nil
-	}); !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("Update err=%v want ErrTextIndexUnavailable", err)
-	}
-	if _, err := col.UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("d1"), Update: func(current []byte) ([]byte, bool, error) {
-		return current, false, nil
-	}}}); !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("UpdateBatch err=%v want ErrTextIndexUnavailable", err)
+	if storage.Documents != 1 || storage.StateEntries != 1 || storage.PostingEntries != 2 {
+		t.Fatalf("storage stats after maintained insert=%+v want docs=1 state=1 postings=2", storage)
 	}
 
 	response, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund AND policy", TopK: 10})
