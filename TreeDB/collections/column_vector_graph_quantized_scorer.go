@@ -416,7 +416,7 @@ func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinalUnchecked(ordinal i
 		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit code_count ordinal=%d value=%d exceeds code_dimensions=%d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, codeCount, s.codeDimensions)
 	}
 	qdpInv := math.Float32frombits(binary.LittleEndian.Uint32(s.quantizedDotProductInvPayload[sideStart : sideStart+4]))
-	score, ok := rabitqQuantizedCosineScoreWithByteTables(s.query, code, qdpInv, s.queryByteMismatchWeights, s.queryWeightSum)
+	score, ok := rabitqQuantizedCosineScoreWithByteTablesPrevalidated(s.query, code, qdpInv, s.queryByteMismatchWeights, s.queryWeightSum)
 	if !ok {
 		return 0, fmt.Errorf("%w: column_graph quantized index %q rabitq_1bit score ordinal=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, ordinal)
 	}
@@ -656,11 +656,17 @@ func rabitqQuantizedCosineScoreWithByteTables(query rabitq.Query, code []byte, q
 	if !rabitq.QueryByteMismatchWeightsValid(query, byteMismatchWeights, queryWeightSum) || len(code) != len(query.SignBits) || quantizedDotProductInv <= 0 || math.IsNaN(float64(quantizedDotProductInv)) || math.IsInf(float64(quantizedDotProductInv), 0) {
 		return 0, false
 	}
-	var mismatchWeight float64
-	for byteIdx, candidateByte := range code {
-		xorMask := candidateByte ^ query.SignBits[byteIdx]
-		mismatchWeight += byteMismatchWeights[byteIdx*rabitq.ByteMismatchTableEntries+int(xorMask)]
+	return rabitqQuantizedCosineScoreWithByteTablesPrevalidated(query, code, quantizedDotProductInv, byteMismatchWeights, queryWeightSum)
+}
+
+// rabitqQuantizedCosineScoreWithByteTablesPrevalidated is the hot-loop form for
+// callers that already validated the query shape and byte mismatch table. It
+// still checks per-row code/qdp side inputs so corrupted row data fails closed.
+func rabitqQuantizedCosineScoreWithByteTablesPrevalidated(query rabitq.Query, code []byte, quantizedDotProductInv float32, byteMismatchWeights []float64, queryWeightSum float64) (float64, bool) {
+	if len(code) != len(query.SignBits) || quantizedDotProductInv <= 0 || math.IsNaN(float64(quantizedDotProductInv)) || math.IsInf(float64(quantizedDotProductInv), 0) {
+		return 0, false
 	}
+	mismatchWeight := rabitqByteTableMismatchWeight(query.SignBits, code, byteMismatchWeights)
 	weightedSignDot := queryWeightSum - 2*mismatchWeight
 	score := weightedSignDot / (float64(quantizedDotProductInv) * float64(query.CodeDimensions))
 	if math.IsNaN(score) || math.IsInf(score, 0) {
