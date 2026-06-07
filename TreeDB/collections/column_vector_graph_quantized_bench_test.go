@@ -1,7 +1,11 @@
 package collections
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,6 +24,225 @@ type columnGraphScalarU8QuantizedBenchShape1926 struct {
 	topK         int
 	efSearch     int
 	queryOrdinal int
+}
+
+const (
+	columnGraphScalarU8QuantizedBenchShapeEnv1926        = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_SHAPE"
+	columnGraphScalarU8QuantizedBenchRowsEnv1926         = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_ROWS"
+	columnGraphScalarU8QuantizedBenchDimsEnv1926         = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_DIMS"
+	columnGraphScalarU8QuantizedBenchMEnv1926            = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_M"
+	columnGraphScalarU8QuantizedBenchTopKEnv1926         = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_TOP_K"
+	columnGraphScalarU8QuantizedBenchEfSearchEnv1926     = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_EF_SEARCH"
+	columnGraphScalarU8QuantizedBenchQueryOrdinalEnv1926 = "TREEDB_COLUMN_GRAPH_QUANTIZED_BENCH_QUERY_ORDINAL"
+)
+
+func defaultColumnGraphScalarU8QuantizedBenchShape1926() columnGraphScalarU8QuantizedBenchShape1926 {
+	return columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+}
+
+func columnGraphScalarU8QuantizedBenchShapeFromEnv1926(tb testing.TB) columnGraphScalarU8QuantizedBenchShape1926 {
+	tb.Helper()
+	shape, err := columnGraphScalarU8QuantizedBenchShapeFromEnvValues1926(os.Getenv)
+	if err != nil {
+		tb.Fatalf("column graph quantized benchmark shape: %v", err)
+	}
+	return shape
+}
+
+func columnGraphScalarU8QuantizedBenchShapeFromEnvValues1926(getenv func(string) string) (columnGraphScalarU8QuantizedBenchShape1926, error) {
+	shape := defaultColumnGraphScalarU8QuantizedBenchShape1926()
+	if rawShape := strings.TrimSpace(getenv(columnGraphScalarU8QuantizedBenchShapeEnv1926)); rawShape != "" {
+		rows, dims, err := parseColumnGraphScalarU8QuantizedBenchShapeToken1926(rawShape)
+		if err != nil {
+			return shape, err
+		}
+		shape.rows = rows
+		shape.dims = dims
+	}
+	if err := applyPositiveColumnGraphScalarU8QuantizedBenchEnv1926(getenv, columnGraphScalarU8QuantizedBenchRowsEnv1926, "rows", &shape.rows); err != nil {
+		return shape, err
+	}
+	if err := applyPositiveColumnGraphScalarU8QuantizedBenchEnv1926(getenv, columnGraphScalarU8QuantizedBenchDimsEnv1926, "dims", &shape.dims); err != nil {
+		return shape, err
+	}
+	if err := applyPositiveColumnGraphScalarU8QuantizedBenchEnv1926(getenv, columnGraphScalarU8QuantizedBenchMEnv1926, "m", &shape.m); err != nil {
+		return shape, err
+	}
+	if err := applyPositiveColumnGraphScalarU8QuantizedBenchEnv1926(getenv, columnGraphScalarU8QuantizedBenchTopKEnv1926, "topK", &shape.topK); err != nil {
+		return shape, err
+	}
+	if err := applyPositiveColumnGraphScalarU8QuantizedBenchEnv1926(getenv, columnGraphScalarU8QuantizedBenchEfSearchEnv1926, "efSearch", &shape.efSearch); err != nil {
+		return shape, err
+	}
+	if err := applyNonNegativeColumnGraphScalarU8QuantizedBenchEnv1926(getenv, columnGraphScalarU8QuantizedBenchQueryOrdinalEnv1926, "queryOrdinal", &shape.queryOrdinal); err != nil {
+		return shape, err
+	}
+	if shape.topK > shape.rows {
+		return shape, fmt.Errorf("topK=%d exceeds rows=%d", shape.topK, shape.rows)
+	}
+	if shape.queryOrdinal >= shape.rows {
+		return shape, fmt.Errorf("queryOrdinal=%d out of range rows=%d", shape.queryOrdinal, shape.rows)
+	}
+	return shape, nil
+}
+
+func parseColumnGraphScalarU8QuantizedBenchShapeToken1926(raw string) (int, int, error) {
+	defaultShape := defaultColumnGraphScalarU8QuantizedBenchShape1926()
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if normalized == "" || normalized == "default" || normalized == "claim_core" {
+		return defaultShape.rows, defaultShape.dims, nil
+	}
+	normalized = strings.ReplaceAll(normalized, "_x_", "x")
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	parts := strings.Split(normalized, "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unsupported %s=%q (want default, 1024x128, 10k_x_1536, or <rows>x<dims>)", columnGraphScalarU8QuantizedBenchShapeEnv1926, raw)
+	}
+	rows, err := parseColumnGraphScalarU8QuantizedBenchPositiveToken1926(parts[0], "rows", true)
+	if err != nil {
+		return 0, 0, fmt.Errorf("unsupported %s=%q: %w", columnGraphScalarU8QuantizedBenchShapeEnv1926, raw, err)
+	}
+	dims, err := parseColumnGraphScalarU8QuantizedBenchPositiveToken1926(parts[1], "dims", true)
+	if err != nil {
+		return 0, 0, fmt.Errorf("unsupported %s=%q: %w", columnGraphScalarU8QuantizedBenchShapeEnv1926, raw, err)
+	}
+	return rows, dims, nil
+}
+
+func parseColumnGraphScalarU8QuantizedBenchPositiveToken1926(raw, name string, allowK bool) (int, error) {
+	token := strings.TrimSpace(strings.ToLower(raw))
+	multiplier := 1
+	if strings.HasSuffix(token, "k") {
+		if !allowK {
+			return 0, fmt.Errorf("%s token %q may not use k suffix", name, raw)
+		}
+		multiplier = 1000
+		token = strings.TrimSuffix(token, "k")
+	}
+	value, err := strconv.Atoi(token)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s token %q must be a positive integer", name, raw)
+	}
+	maxInt := int(^uint(0) >> 1)
+	if value > maxInt/multiplier {
+		return 0, fmt.Errorf("%s token %q overflows int", name, raw)
+	}
+	return value * multiplier, nil
+}
+
+func applyPositiveColumnGraphScalarU8QuantizedBenchEnv1926(getenv func(string) string, envName, field string, target *int) error {
+	raw := strings.TrimSpace(getenv(envName))
+	if raw == "" {
+		return nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fmt.Errorf("%s=%q must be a positive integer for %s", envName, raw, field)
+	}
+	*target = value
+	return nil
+}
+
+func applyNonNegativeColumnGraphScalarU8QuantizedBenchEnv1926(getenv func(string) string, envName, field string, target *int) error {
+	raw := strings.TrimSpace(getenv(envName))
+	if raw == "" {
+		return nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return fmt.Errorf("%s=%q must be a non-negative integer for %s", envName, raw, field)
+	}
+	*target = value
+	return nil
+}
+
+func columnGraphScalarU8QuantizedBenchInsertBatchSize1926(shape columnGraphScalarU8QuantizedBenchShape1926) int {
+	if shape.rows <= 1024 && shape.dims <= 128 {
+		return max(shape.rows, 1)
+	}
+	return 64
+}
+
+func insertColumnGraphScalarU8QuantizedBenchRows1926(tb testing.TB, col *Collection, shape columnGraphScalarU8QuantizedBenchShape1926, rows []columnGraphRebuildInputRowV2A) {
+	tb.Helper()
+	batchSize := columnGraphScalarU8QuantizedBenchInsertBatchSize1926(shape)
+	for start := 0; start < len(rows); start += batchSize {
+		end := min(start+batchSize, len(rows))
+		ids := make([][]byte, end-start)
+		docs := make([][]byte, end-start)
+		for i, row := range rows[start:end] {
+			raw, err := json.Marshal(map[string]any{
+				"time_us":   int64(start + i + 1),
+				"kind":      "vector",
+				"did":       row.id,
+				"embedding": row.vector,
+			})
+			if err != nil {
+				tb.Fatalf("json.Marshal row %q: %v", row.id, err)
+			}
+			ids[i] = []byte(row.id)
+			docs[i] = raw
+		}
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			tb.Fatalf("InsertBatch rows [%d,%d): %v", start, end, err)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		tb.Fatalf("Flush: %v", err)
+	}
+}
+
+func TestColumnGraphScalarU8QuantizedBenchShapeFromEnvValues1926(t *testing.T) {
+	defaultShape := defaultColumnGraphScalarU8QuantizedBenchShape1926()
+	cases := []struct {
+		name    string
+		env     map[string]string
+		want    columnGraphScalarU8QuantizedBenchShape1926
+		wantErr string
+	}{
+		{name: "default", want: defaultShape},
+		{name: "named 10k x 1536", env: map[string]string{columnGraphScalarU8QuantizedBenchShapeEnv1926: "10k_x_1536"}, want: columnGraphScalarU8QuantizedBenchShape1926{rows: 10000, dims: 1536, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}},
+		{name: "generic shape", env: map[string]string{columnGraphScalarU8QuantizedBenchShapeEnv1926: "2048x256"}, want: columnGraphScalarU8QuantizedBenchShape1926{rows: 2048, dims: 256, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}},
+		{name: "explicit overrides", env: map[string]string{
+			columnGraphScalarU8QuantizedBenchShapeEnv1926:        "10k_x_1536",
+			columnGraphScalarU8QuantizedBenchRowsEnv1926:         "4096",
+			columnGraphScalarU8QuantizedBenchDimsEnv1926:         "384",
+			columnGraphScalarU8QuantizedBenchMEnv1926:            "12",
+			columnGraphScalarU8QuantizedBenchTopKEnv1926:         "7",
+			columnGraphScalarU8QuantizedBenchEfSearchEnv1926:     "96",
+			columnGraphScalarU8QuantizedBenchQueryOrdinalEnv1926: "5",
+		}, want: columnGraphScalarU8QuantizedBenchShape1926{rows: 4096, dims: 384, m: 12, topK: 7, efSearch: 96, queryOrdinal: 5}},
+		{name: "bad shape", env: map[string]string{columnGraphScalarU8QuantizedBenchShapeEnv1926: "wide"}, wantErr: "unsupported"},
+		{name: "topk exceeds rows", env: map[string]string{columnGraphScalarU8QuantizedBenchRowsEnv1926: "4", columnGraphScalarU8QuantizedBenchTopKEnv1926: "5"}, wantErr: "topK=5 exceeds rows=4"},
+		{name: "query ordinal out of range", env: map[string]string{columnGraphScalarU8QuantizedBenchRowsEnv1926: "4", columnGraphScalarU8QuantizedBenchTopKEnv1926: "3", columnGraphScalarU8QuantizedBenchQueryOrdinalEnv1926: "4"}, wantErr: "queryOrdinal=4 out of range rows=4"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := columnGraphScalarU8QuantizedBenchShapeFromEnvValues1926(func(key string) string { return tc.env[key] })
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err=%v want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("shape=%+v want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestColumnGraphScalarU8QuantizedBenchInsertBatchSize1926(t *testing.T) {
+	if got := columnGraphScalarU8QuantizedBenchInsertBatchSize1926(defaultColumnGraphScalarU8QuantizedBenchShape1926()); got != 1024 {
+		t.Fatalf("default batch size=%d want 1024", got)
+	}
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 10000, dims: 1536, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	if got := columnGraphScalarU8QuantizedBenchInsertBatchSize1926(shape); got != 64 {
+		t.Fatalf("large-shape batch size=%d want 64", got)
+	}
 }
 
 type columnGraphScalarU8QuantizedBenchFixture1926 struct {
@@ -69,7 +292,7 @@ func columnGraphRabitQQuantizedCollectionWithBufferBenchCases2452() []columnGrap
 }
 
 func BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
 	defer fixture.close()
 	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
@@ -134,7 +357,7 @@ func BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926(b *testing.B) {
 }
 
 func BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
 	defer fixture.close()
 	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
@@ -157,7 +380,7 @@ func BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer241
 }
 
 func BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphRabitQQuantizedBenchFixture2451(b, shape)
 	defer fixture.close()
 	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
@@ -180,7 +403,7 @@ func BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451(
 }
 
 func BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphBRQQuantizedBenchFixture2481(b, shape)
 	defer fixture.close()
 	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
@@ -203,7 +426,7 @@ func BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481(b *
 }
 
 func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
 	defer fixture.close()
 	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
@@ -228,7 +451,7 @@ func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2
 }
 
 func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphRabitQQuantizedBenchFixture2451(b, shape)
 	defer fixture.close()
 	exactIDs, exactCount := columnGraphScalarU8QuantizedBenchmarkExactIDs1926(b, fixture)
@@ -873,7 +1096,7 @@ func assertColumnGraphBRQQuantizedSearchWithBufferGuardrails2481(tb testing.TB, 
 }
 
 func BenchmarkColumnGraphScalarU8QuantizedTraversalCounters2271(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 1024, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
 	defer fixture.close()
 
@@ -1117,7 +1340,7 @@ func openColumnGraphBRQQuantizedBenchCollection2481(tb testing.TB, shape columnG
 		tb.Fatalf("OpenCollection: %v", err)
 	}
 	rows := columnGraphRebuildSyntheticRowsV2A(shape.rows, shape.dims)
-	insertColumnGraphRebuildRowsV2A(tb, col, rows)
+	insertColumnGraphScalarU8QuantizedBenchRows1926(tb, col, shape, rows)
 	return dir, d, col, def, rows
 }
 
@@ -1159,7 +1382,7 @@ func openColumnGraphScalarU8QuantizedBenchCollection1926(tb testing.TB, shape co
 		tb.Fatalf("OpenCollection: %v", err)
 	}
 	rows := columnGraphRebuildSyntheticRowsV2A(shape.rows, shape.dims)
-	insertColumnGraphRebuildRowsV2A(tb, col, rows)
+	insertColumnGraphScalarU8QuantizedBenchRows1926(tb, col, shape, rows)
 	return dir, d, col, def, rows
 }
 
