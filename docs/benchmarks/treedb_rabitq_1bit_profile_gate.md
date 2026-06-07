@@ -55,6 +55,11 @@ Default selection:
   `-memprofile` flags. `PROFILE_SCOPE=search_loop` rejects non-RaBitQ profile
   rows up front; use `PROFILE_SCOPE=go_test` only for the legacy compatibility
   mode that includes setup/rebuild attribution or for scalar guardrail profiles.
+- `HOT_MEM_PROFILE_RATE=1`: allocation sampling rate used during the timed
+  search loop and preserved while `allocs_raw.pprof` is serialized so Go pprof
+  scales sampled allocations correctly. Raise it only to reduce allocation
+  profiling overhead; the guardrail timing row remains the source of truth for
+  `B/op` and `allocs/op`.
 - `ALLOC_PROFILE_IGNORE`: optional pprof regexp used only by `PROFILE_SCOPE=search_loop`
   to filter allocation-profile writer frames from the diffed `allocs.pprof`.
 - `RECALL_TOLERANCE_PCT=0`: when `BASELINE_DIR` is set, candidate median recall must be at least the matching baseline row's median recall minus this tolerance for the row guardrail to pass.

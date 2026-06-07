@@ -534,8 +534,11 @@ Use unprofiled \`bench_timing.txt\` rows for \`ns/op\`, \`B/op\`, and
 \`allocs/op\`. With \`PROFILE_SCOPE=search_loop\`, \`cpu.pprof\` and
 \`allocs.pprof\` come from benchmark-controlled hooks that start after fixture
 setup, vector-index rebuild, collection prepared-cache warmup, and worker
-warmup. With \`PROFILE_SCOPE=go_test\`, Go's test-level profiling flags include
-that setup/rebuild work and are kept only as a compatibility fallback.
+warmup. \`HOT_MEM_PROFILE_RATE\` is preserved while \`allocs_raw.pprof\` is written
+so Go pprof scales sampled allocations correctly before the harness filters the
+published \`allocs.pprof\`. With \`PROFILE_SCOPE=go_test\`, Go's test-level
+profiling flags include that setup/rebuild work and are kept only as a
+compatibility fallback.
 EOF
 }
 
@@ -975,6 +978,7 @@ Primary files:
 - \`<row>/bench_profile.txt\`: profiled benchmark output for rows selected by \`PROFILE_ROWS\`.
 - \`<row>/cpu.pprof\`, \`<row>/allocs.pprof\`: CPU/allocation profiles when \`profile_captured=true\`; for \`PROFILE_SCOPE=search_loop\`, \`allocs.pprof\` is \`allocs_diff_raw.pprof\` filtered by \`ALLOC_PROFILE_IGNORE\` so setup allocations and pprof-writer noise are removed.
 - \`<row>/allocs_base.pprof\`, \`<row>/allocs_raw.pprof\`, \`<row>/allocs_diff_raw.pprof\`: supporting allocation profiles emitted only for \`PROFILE_SCOPE=search_loop\`.
+  \`HOT_MEM_PROFILE_RATE\` is preserved while \`allocs_raw.pprof\` is written so Go pprof scales sampled allocations correctly before the published \`allocs.pprof\` filter runs.
 - \`<row>/block.pprof\`, \`<row>/mutex.pprof\`: emitted only for \`PROFILE_SCOPE=go_test\`.
 - \`<row>/collections.test\`: test binary emitted by \`go test -o\` when \`profile_captured=true\`.
 - \`<row>/cpu_top.txt\`, \`<row>/allocs_top.txt\`, \`<row>/block_top.txt\`, \`<row>/mutex_top.txt\`.

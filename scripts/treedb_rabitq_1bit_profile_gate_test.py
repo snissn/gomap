@@ -74,6 +74,8 @@ class RabitQProfileGateScriptTest(unittest.TestCase):
         self.assertIn("start after fixture", row_readme)
         self.assertIn("allocs_diff_raw.pprof", row_readme)
         self.assertIn("pprof-writer noise", row_readme)
+        self.assertIn("HOT_MEM_PROFILE_RATE", row_readme)
+        self.assertIn("scales sampled allocations", row_readme)
 
         context = (run_dir / "context.txt").read_text(encoding="utf-8")
         self.assertIn("profile_scope: search_loop", context)

@@ -109,7 +109,18 @@ func (hook *columnGraphQuantizedSearchLoopProfileHook2541) start(b *testing.B) f
 	if hook.allocsPath != "" {
 		runtime.GC()
 		if hook.allocsBasePath != "" {
-			writeColumnGraphQuantizedHotProfile2541(b, "allocs", hook.allocsBasePath)
+			// Serialize the baseline at the same sampling rate used for the raw
+			// search-loop profile. Go pprof scales sampled allocations using the
+			// current runtime.MemProfileRate at WriteTo time; using a different rate
+			// here would leave setup samples in the later raw-minus-base diff when
+			// HOT_MEM_PROFILE_RATE is greater than 1.
+			func() {
+				runtime.MemProfileRate = hook.memProfileRate
+				defer func() {
+					runtime.MemProfileRate = 0
+				}()
+				writeColumnGraphQuantizedHotProfile2541(b, "allocs", hook.allocsBasePath)
+			}()
 		}
 	}
 
@@ -132,7 +143,16 @@ func (hook *columnGraphQuantizedSearchLoopProfileHook2541) start(b *testing.B) f
 		}
 		stopped = true
 		if hook.allocsPath != "" {
-			runtime.MemProfileRate = 0
+			// Keep the collection sampling rate in effect until allocs WriteTo
+			// completes. The pprof writer scales sampled allocations using the
+			// current runtime.MemProfileRate, so disabling sampling before the raw
+			// profile is serialized underreports runs that use rates greater than 1.
+			// The harness filters pprof-writer noise from the published allocs.pprof
+			// while retaining allocs_diff_raw.pprof for auditability.
+			runtime.MemProfileRate = hook.memProfileRate
+			defer func() {
+				runtime.MemProfileRate = 0
+			}()
 		}
 		if cpuFile != nil {
 			pprof.StopCPUProfile()
