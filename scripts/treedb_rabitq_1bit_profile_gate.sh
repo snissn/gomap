@@ -527,6 +527,10 @@ add_row() {
 		if selected_by_list "$PROFILE_ROWS" "$id" "$codec" "$layer" "$mode" "$concurrency"; then
 			profile_selected=true
 		fi
+		if [[ "$PROFILE_SCOPE" == "search_loop" && "$profile_selected" == "true" && "$codec" != "rabitq_1bit" ]]; then
+			printf 'PROFILE_SCOPE=search_loop only supports rabitq_1bit profile rows; row %s uses codec=%s. Set PROFILE_SCOPE=go_test or remove this row from PROFILE_ROWS.\n' "$id" "$codec" >&2
+			exit 2
+		fi
 		row_ids+=("$id")
 		row_codecs+=("$codec")
 		row_layers+=("$layer")

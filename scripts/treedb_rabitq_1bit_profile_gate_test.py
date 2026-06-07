@@ -94,6 +94,31 @@ class RabitQProfileGateScriptTest(unittest.TestCase):
         row_env = (row_dir / "row.env").read_text(encoding="utf-8")
         self.assertIn("profile_scope=go_test", row_env)
 
+    def test_search_loop_rejects_scalar_profile_rows_before_work(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gomap_rabitq_profile_gate_test_") as tmp:
+            env = os.environ.copy()
+            env.update(
+                {
+                    "RUN_DIR": tmp,
+                    "DRY_RUN": "true",
+                    "PROFILE_SCOPE": "search_loop",
+                    "ROWS": "scalar_collection_quantized_only_c1",
+                    "PROFILE_ROWS": "scalar_collection_quantized_only_c1",
+                    "GOWORK": "off",
+                }
+            )
+            result = subprocess.run(
+                [str(SCRIPT)],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("PROFILE_SCOPE=search_loop only supports rabitq_1bit", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

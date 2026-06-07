@@ -51,9 +51,10 @@ Default selection:
   `TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_CPU_PROFILE_PATH`,
   `TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_ALLOCS_PROFILE_PATH`, and
   `TREEDB_COLUMN_GRAPH_QUANTIZED_HOT_ALLOCS_BASE_PROFILE_PATH` for one isolated
-  benchmark subrow and does **not** pass Go's test-level `-cpuprofile` /
-  `-memprofile` flags. Use `PROFILE_SCOPE=go_test` only for the legacy
-  compatibility mode that includes setup/rebuild attribution.
+  RaBitQ benchmark subrow and does **not** pass Go's test-level `-cpuprofile` /
+  `-memprofile` flags. `PROFILE_SCOPE=search_loop` rejects non-RaBitQ profile
+  rows up front; use `PROFILE_SCOPE=go_test` only for the legacy compatibility
+  mode that includes setup/rebuild attribution or for scalar guardrail profiles.
 - `RECALL_TOLERANCE_PCT=0`: when `BASELINE_DIR` is set, candidate median recall must be at least the matching baseline row's median recall minus this tolerance for the row guardrail to pass.
 
 Useful selectors for `ROWS` and `PROFILE_ROWS` are comma-separated and ORed:
