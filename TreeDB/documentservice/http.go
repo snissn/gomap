@@ -28,8 +28,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, serviceError(CodeIndexUnavailable, "document service is unavailable"))
 		return
 	}
-	if h.MaxBodyBytes <= 0 {
-		h.MaxBodyBytes = defaultMaxRequestBytes
+	maxBodyBytes := h.MaxBodyBytes
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = defaultMaxRequestBytes
 	}
 	parts := splitPath(r.URL.Path)
 	if len(parts) == 2 && parts[0] == "v1" && parts[1] == "health" {
@@ -46,7 +47,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req CreateIndexRequest
-		if !h.decodeJSON(w, r, &req) {
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
 			return
 		}
 		info, err := h.Service.CreateIndex(r.Context(), req)
@@ -81,22 +82,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(parts) == 5 && parts[3] == "documents" {
-			h.serveDocumentOperation(w, r, index, parts[4])
+			h.serveDocumentOperation(w, r, index, parts[4], maxBodyBytes)
 			return
 		}
 		if len(parts) == 5 && parts[3] == "search" {
-			h.serveSearchOperation(w, r, index, parts[4])
+			h.serveSearchOperation(w, r, index, parts[4], maxBodyBytes)
 			return
 		}
 	}
 	writeError(w, serviceErrorf(CodeInvalidRequest, "unknown document service route %q", r.URL.Path))
 }
 
-func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request, index, op string) {
+func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request, index, op string, maxBodyBytes int64) {
 	switch op {
 	case "upsert":
 		var req UpsertDocumentsRequest
-		if !h.decodeJSON(w, r, &req) {
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
 			return
 		}
 		res, err := h.Service.UpsertDocuments(r.Context(), index, req)
@@ -107,7 +108,7 @@ func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusOK, res)
 	case "delete":
 		var req DeleteDocumentsRequest
-		if !h.decodeJSON(w, r, &req) {
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
 			return
 		}
 		res, err := h.Service.DeleteDocuments(r.Context(), index, req)
@@ -118,7 +119,7 @@ func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusOK, res)
 	case "count":
 		var req CountDocumentsRequest
-		if !h.decodeJSON(w, r, &req) {
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
 			return
 		}
 		res, err := h.Service.CountDocuments(r.Context(), index, req)
@@ -129,7 +130,7 @@ func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusOK, res)
 	case "filter":
 		var req FilterDocumentsRequest
-		if !h.decodeJSON(w, r, &req) {
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
 			return
 		}
 		res, err := h.Service.FilterDocuments(r.Context(), index, req)
@@ -143,11 +144,11 @@ func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request,
 	}
 }
 
-func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, index, op string) {
+func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, index, op string, maxBodyBytes int64) {
 	switch op {
 	case "vector":
 		var req DenseVectorSearchRequest
-		if !h.decodeJSON(w, r, &req) {
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
 			return
 		}
 		res, err := h.Service.SearchDenseVector(r.Context(), index, req)
@@ -165,8 +166,8 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 	}
 }
 
-func (h *Handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	body := http.MaxBytesReader(w, r.Body, h.MaxBodyBytes)
+func (h *Handler) decodeJSON(w http.ResponseWriter, r *http.Request, maxBodyBytes int64, dst any) bool {
+	body := http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	defer func() { _ = body.Close() }()
 	dec := json.NewDecoder(body)
 	dec.UseNumber()

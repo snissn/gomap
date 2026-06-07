@@ -35,6 +35,17 @@ func TestHTTPMalformedJSONAndUnsupportedSearchFailClosed(t *testing.T) {
 	}
 }
 
+func TestHTTPDefaultMaxBodyBytesDoesNotMutateHandler(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := &Handler{Service: svc}
+
+	postJSON(t, handler, "/v1/indexes", CreateIndexRequest{Name: "docs", Dimension: 2}, http.StatusOK, nil)
+	if handler.MaxBodyBytes != 0 {
+		t.Fatalf("MaxBodyBytes mutated to %d, want zero", handler.MaxBodyBytes)
+	}
+}
+
 func TestHTTPDocumentVectorRoundTrip(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
