@@ -204,7 +204,8 @@ counter families:
 - scalar: `scalar_prefilter_ids`, `scalar_postfilter_checks`,
   `scalar_filter_matched`, `scalar_filter_rejected`;
 - fusion/finalization: `candidates_fused`, `candidates_after_fusion`,
-  `candidates_after_filter`, `truncated`;
+  `fusion_text_only`, `fusion_vector_only`, `fusion_both`,
+  `fusion_duplicate_candidates`, `candidates_after_filter`, `truncated`;
 - final fetch: `documents_fetched`, `documents_missing`;
 - guardrails: `full_document_scan_fallbacks`, `fail_closed`, and
   `fail_closed_reason`.
@@ -249,9 +250,10 @@ Issue `#2503` candidate-only paths should consume this contract as follows:
   source/index name, and source counters.
 
 Issue `#2504` fusion primitives should implement the RRF formula and deterministic tie
-policy above over slices of `HybridSearchCandidate`, returning fused result or
-source-contribution values without opening storage, fetching documents, or
-consulting text/vector indexes.
+policy above over slices of `HybridSearchCandidate`. The helper surface is
+`FuseHybridSearchCandidates(candidates, fusion, topK)`, which returns bounded
+`HybridSearchResult` values and fusion counters without opening storage,
+fetching documents, or consulting text/vector indexes.
 
 Issue `#2505` owns the executor that binds scalar filtering, source candidate APIs,
 fusion, and bounded final document fetch under the snapshot/epoch contract.

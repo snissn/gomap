@@ -246,6 +246,10 @@ type HybridSearchStats struct {
 	ScalarFilterRejected      uint64                 `json:"scalar_filter_rejected,omitempty"`
 	CandidatesFused           uint64                 `json:"candidates_fused,omitempty"`
 	CandidatesAfterFusion     uint64                 `json:"candidates_after_fusion,omitempty"`
+	FusionTextOnly            uint64                 `json:"fusion_text_only,omitempty"`
+	FusionVectorOnly          uint64                 `json:"fusion_vector_only,omitempty"`
+	FusionBoth                uint64                 `json:"fusion_both,omitempty"`
+	FusionDuplicateCandidates uint64                 `json:"fusion_duplicate_candidates,omitempty"`
 	CandidatesAfterFilter     uint64                 `json:"candidates_after_filter,omitempty"`
 	DocumentsFetched          uint64                 `json:"documents_fetched,omitempty"`
 	DocumentsMissing          uint64                 `json:"documents_missing,omitempty"`
