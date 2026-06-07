@@ -22,9 +22,12 @@ func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, 
 	if c.db.CommandWALEnabled() {
 		return nil, emptyStats, fmt.Errorf("%w: collection catalog text index mutation is rejected under command_wal_v1 until catalog text index commands are supported", backenddb.ErrCommandWALRejected)
 	}
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, emptyStats, err
+	}
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
 		return nil, emptyStats, err
 	}
 
@@ -118,9 +121,12 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 	if c.db.CommandWALEnabled() {
 		return nil, fmt.Errorf("%w: collection catalog text index mutation is rejected under command_wal_v1 until catalog text index commands are supported", backenddb.ErrCommandWALRejected)
 	}
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
 		return nil, err
 	}
 

@@ -216,6 +216,59 @@ func TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard(t *testing.T) {
 	}
 }
 
+func TestCreateTextIndexFlushesBufferedWritesFromOtherManagers(t *testing.T) {
+	d := openTextTestDB(t)
+	defer func() { _ = d.Close() }()
+	writerMgr := NewCollectionManager(d)
+	if _, err := writerMgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	writer, err := writerMgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection writer: %v", err)
+	}
+	creatorMgr := NewCollectionManager(d)
+	creator, err := creatorMgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection creator: %v", err)
+	}
+
+	if _, err := writer.Insert([]byte("d-buffered"), []byte(`{"body":"buffered refund policy"}`)); err != nil {
+		t.Fatalf("writer buffered Insert: %v", err)
+	}
+	if got, err := creator.Get([]byte("d-buffered")); err != nil {
+		t.Fatalf("creator Get before CreateTextIndex: %v", err)
+	} else if got != nil {
+		t.Fatalf("setup write was already published; expected buffered write from separate manager, got %q", got)
+	}
+
+	_, backfill, err := creator.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}})
+	if err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if backfill.DocumentsScanned != 1 || backfill.StateEntries != 1 || backfill.PostingEntries != 3 {
+		t.Fatalf("backfill stats=%+v want one flushed buffered document", backfill)
+	}
+	stats, err := creator.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats: %v", err)
+	}
+	if stats.Documents != 1 || stats.StateEntries != 1 || stats.PostingEntries != 3 {
+		t.Fatalf("storage stats=%+v want one flushed buffered document", stats)
+	}
+	if got, err := creator.Get([]byte("d-buffered")); err != nil {
+		t.Fatalf("creator Get after CreateTextIndex: %v", err)
+	} else if !bytes.Contains(got, []byte("buffered refund")) {
+		t.Fatalf("flushed document after CreateTextIndex=%q", got)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("writer Flush after CreateTextIndex: %v", err)
+	}
+	if _, err := writer.Insert([]byte("d-after"), []byte(`{"body":"must not bypass"}`)); !errors.Is(err, ErrTextIndexUnavailable) {
+		t.Fatalf("writer Insert after CreateTextIndex err=%v want ErrTextIndexUnavailable", err)
+	}
+}
+
 func TestCreateTextIndexRejectsWritesFromStaleHandles(t *testing.T) {
 	d := openTextTestDB(t)
 	defer func() { _ = d.Close() }()

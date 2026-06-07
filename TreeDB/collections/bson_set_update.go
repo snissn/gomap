@@ -57,6 +57,8 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	if err := rejectTextIndexWriteUnavailable(c.meta, "UpdateBSONSet"); err != nil {
 		return false, false, err
 	}
@@ -158,6 +160,8 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, false, err
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	if err := rejectTextIndexWriteUnavailable(c.meta, "UpdateBSONSetBatch"); err != nil {
 		return nil, false, err
 	}

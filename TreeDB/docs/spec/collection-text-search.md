@@ -144,10 +144,12 @@ Values use `u8 value_version=1` followed by:
 
 ## Create/backfill/drop
 
-`CreateTextIndex` is a schema barrier: pending writes are flushed, the primary
-root is scanned, analyzed text is encoded into the three text roots, and root
-IDs plus metadata are published in one commit. It rejects command-WAL catalog
-mutation mode until text-index catalog commands are added.
+`CreateTextIndex` is a schema barrier: pending writes from all registered
+collection managers/write domains for the collection are drained before the
+backfill snapshot is taken, new document writes wait behind the barrier, the
+primary root is scanned, analyzed text is encoded into the three text roots,
+and root IDs plus metadata are published in one commit. It rejects command-WAL
+catalog mutation mode until text-index catalog commands are added.
 
 Backfill extracts string fields and arrays of strings from JSON-materialized
 documents. Non-string text fields are skipped. Collections with retained column

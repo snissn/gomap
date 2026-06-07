@@ -1087,6 +1087,7 @@ type collectionWriteDomain struct {
 	primaryRoot              uint64
 	storagePolicy            backenddb.OrderedRootStoragePolicy
 	commandWALCoordinator    atomic.Pointer[collectionCommandWALCoordinator]
+	schemaCoordinator        *collectionSchemaCoordinator
 	table                    memtable.Table
 	indexedPublishingUnits   []indexedFlushUnit
 	indexedFlushUnits        []indexedFlushUnit
@@ -2617,17 +2618,28 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 	if m.domains == nil {
 		m.domains = make(map[string]*collectionWriteDomain)
 	}
+	schemaCoord := collectionSchemaCoordinatorForDBCollection(m.db, name)
 	if domain := m.domains[name]; domain != nil {
 		if domain.commandWALCoordinator.Load() == nil {
 			domain.commandWALCoordinator.Store(m.commandWALCoordinator)
+		}
+		if domain.schemaCoordinator == nil {
+			domain.schemaCoordinator = schemaCoord
+			if schemaCoord != nil {
+				schemaCoord.registerDomain(domain)
+			}
 		}
 		return domain
 	}
 	domain := &collectionWriteDomain{
 		updateCombineShards: defaultCollectionUpdateCombineShards,
+		schemaCoordinator:   schemaCoord,
 	}
 	domain.commandWALCoordinator.Store(m.commandWALCoordinator)
 	domain.updateBatchDetailedStats.Store(m.updateBatchDetailedStats.Load())
+	if schemaCoord != nil {
+		schemaCoord.registerDomain(domain)
+	}
 	m.domains[name] = domain
 	return domain
 }
@@ -3622,6 +3634,8 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && len(c.meta.TextIndexes) == 0 && !c.db.CommandWALEnabled() {
+		unlockSchema := c.lockCollectionSchemaRead()
+		defer unlockSchema()
 		if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -3654,6 +3668,8 @@ func (c *Collection) Flush() error {
 	if c.db == nil {
 		return errCollectionDBNil
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	if c.writeDomain != nil {
 		unlockMutation := c.lockMutation()
 		c.writeDomain.waitIndexedAsyncFlush()
@@ -9004,6 +9020,8 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 
 	return retryInsertBatchMutation(func() ([][]byte, error) {
 		return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
@@ -10350,6 +10368,8 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return false, err
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteDocument"); err != nil {
 		return false, err
 	}
@@ -10408,6 +10428,8 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return 0, err
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	if err := rejectTextIndexWriteUnavailable(c.meta, "DeleteBatch"); err != nil {
 		return 0, err
 	}
@@ -10980,6 +11002,8 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	if err := rejectTextIndexWriteUnavailable(c.meta, "Update"); err != nil {
 		return false, false, err
 	}
@@ -11146,6 +11170,8 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, false, err
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	if err := rejectTextIndexWriteUnavailable(c.meta, "UpdateBatch"); err != nil {
 		return nil, false, err
 	}

@@ -197,8 +197,9 @@ matrix:
 Invariant:
 - Collection text index metadata persists through reopen, root names/policies are
   stable, versioned postings/text-state/text-stats encodings fail closed on
-  malformed data, CreateTextIndex backfills existing documents, DropTextIndex
-  clears metadata/root descriptors, the simple analyzer is deterministic, and
+  malformed data, CreateTextIndex drains buffered writes across collection
+  managers before taking its backfill snapshot, DropTextIndex clears
+  metadata/root descriptors, the simple analyzer is deterministic, and
   text-indexed writes/search fail closed until mutation maintenance/search
   execution lands.
 
@@ -214,6 +215,8 @@ Coverage:
   - `TestTextStorageCodecsRoundTripAndFailClosed`
   - `TestCollectionCreateTextIndexBackfillsReopensAndReportsStorage`
   - `TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard`
+  - `TestCreateTextIndexFlushesBufferedWritesFromOtherManagers`
+  - `TestCreateTextIndexRejectsWritesFromStaleHandles`
   - `TestTextIndexStorageStatsFailsClosedOnMalformedRoot`
   - `BenchmarkCreateTextIndexBackfill`
 
