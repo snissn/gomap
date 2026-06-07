@@ -200,8 +200,42 @@ type searchBenchmarkResult struct {
 	AvgNormBytes                      float64                          `json:"avg_norm_bytes"`
 	AvgPreparedScoreCalls             float64                          `json:"avg_prepared_score_calls"`
 	AvgScoreBatchCandidates           float64                          `json:"avg_score_batch_candidates"`
+	AvgDocumentsFetched               *float64                         `json:"avg_documents_fetched,omitempty"`
+	AvgResponseOwnedResultAllocs      *float64                         `json:"avg_response_owned_result_allocs,omitempty"`
+	AvgSearchRouteHNSWSearchPack      *float64                         `json:"avg_search_route_hnsw_search_pack,omitempty"`
+	AvgSearchRouteQuantizedOnly       *float64                         `json:"avg_search_route_quantized_only,omitempty"`
+	AvgSearchRouteQuantizedRerank     *float64                         `json:"avg_search_route_quantized_rerank,omitempty"`
+	AvgSearchRouteColumnGraphPrepared *float64                         `json:"avg_search_route_column_graph_prepared,omitempty"`
+	AvgSearchRouteColumnGraphFallback *float64                         `json:"avg_search_route_column_graph_fallback,omitempty"`
+	AvgGraphRowFallbacks              *float64                         `json:"avg_graph_row_fallbacks,omitempty"`
+	AvgTypedColumnFallbacks           *float64                         `json:"avg_typed_column_fallbacks,omitempty"`
+	AvgVectorScratchDecodes           *float64                         `json:"avg_vector_scratch_decodes,omitempty"`
 	ExactFallbacks                    int                              `json:"exact_fallbacks"`
 	DisableExactFallback              bool                             `json:"disable_exact_fallback"`
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
+}
+
+func float64Value(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func searchBenchmarkHasGuardrailMetrics(bench searchBenchmarkResult) bool {
+	return bench.AvgDocumentsFetched != nil ||
+		bench.AvgResponseOwnedResultAllocs != nil ||
+		bench.AvgSearchRouteHNSWSearchPack != nil ||
+		bench.AvgSearchRouteQuantizedOnly != nil ||
+		bench.AvgSearchRouteQuantizedRerank != nil ||
+		bench.AvgSearchRouteColumnGraphPrepared != nil ||
+		bench.AvgSearchRouteColumnGraphFallback != nil ||
+		bench.AvgGraphRowFallbacks != nil ||
+		bench.AvgTypedColumnFallbacks != nil ||
+		bench.AvgVectorScratchDecodes != nil
 }
 
 type storageReport struct {
@@ -2093,6 +2127,7 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 			_ = searcher.Close()
 		}
 	}()
+	buffers := make([]collections.VectorIndexSearchBuffer, concurrency)
 
 	latencies := make([]int64, len(queries))
 	var next atomic.Int64
@@ -2105,6 +2140,16 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 	var normBytesTotal uint64
 	var preparedScoreCallsTotal uint64
 	var scoreBatchCandidatesTotal uint64
+	var documentsFetchedTotal uint64
+	var responseOwnedResultAllocsTotal uint64
+	var searchRouteHNSWSearchPackTotal uint64
+	var searchRouteQuantizedOnlyTotal uint64
+	var searchRouteQuantizedRerankTotal uint64
+	var searchRouteColumnGraphPreparedTotal uint64
+	var searchRouteColumnGraphFallbackTotal uint64
+	var graphRowFallbacksTotal uint64
+	var typedColumnFallbacksTotal uint64
+	var vectorScratchDecodesTotal uint64
 	var errMu sync.Mutex
 	var firstErr error
 	setErr := func(err error) {
@@ -2114,14 +2159,14 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 			firstErr = err
 		}
 	}
-	worker := func(searcher *collections.VectorIndexSearcher) {
+	worker := func(searcher *collections.VectorIndexSearcher, buffer *collections.VectorIndexSearchBuffer) {
 		for {
 			i := int(next.Add(1) - 1)
 			if i >= len(queries) {
 				return
 			}
 			start := time.Now()
-			response, err := searcher.Search(columnGraphSearchOptions(queries[i], cfg))
+			response, err := searcher.SearchWithBuffer(columnGraphSearchOptions(queries[i], cfg), buffer)
 			if err != nil {
 				setErr(err)
 				return
@@ -2144,6 +2189,16 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 			atomic.AddUint64(&normBytesTotal, response.Stats.NormBytesRead)
 			atomic.AddUint64(&preparedScoreCallsTotal, response.Stats.PreparedScoreCalls)
 			atomic.AddUint64(&scoreBatchCandidatesTotal, response.Stats.ScoreBatchCandidates)
+			atomic.AddUint64(&documentsFetchedTotal, response.Stats.DocumentsFetched)
+			atomic.AddUint64(&responseOwnedResultAllocsTotal, response.Stats.ResponseOwnedResultAllocs)
+			atomic.AddUint64(&searchRouteHNSWSearchPackTotal, response.Stats.SearchRouteHNSWSearchPack)
+			atomic.AddUint64(&searchRouteQuantizedOnlyTotal, response.Stats.SearchRouteQuantizedOnly)
+			atomic.AddUint64(&searchRouteQuantizedRerankTotal, response.Stats.SearchRouteQuantizedRerank)
+			atomic.AddUint64(&searchRouteColumnGraphPreparedTotal, response.Stats.SearchRouteColumnGraphPrepared)
+			atomic.AddUint64(&searchRouteColumnGraphFallbackTotal, response.Stats.SearchRouteColumnGraphFallback)
+			atomic.AddUint64(&graphRowFallbacksTotal, response.Stats.GraphRowFallbacks)
+			atomic.AddUint64(&typedColumnFallbacksTotal, response.Stats.TypedColumnFallbacks)
+			atomic.AddUint64(&vectorScratchDecodesTotal, response.Stats.VectorScratchDecodes)
 		}
 	}
 	stopProfile, err := startColumnGraphSearchProfile(cfg, concurrency)
@@ -2152,15 +2207,16 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 	}
 	startAll := time.Now()
 	if concurrency == 1 {
-		worker(searchers[0])
+		worker(searchers[0], &buffers[0])
 	} else {
 		var wg sync.WaitGroup
 		wg.Add(concurrency)
 		for i := 0; i < concurrency; i++ {
 			searcher := searchers[i]
+			buffer := &buffers[i]
 			go func() {
 				defer wg.Done()
-				worker(searcher)
+				worker(searcher, buffer)
 			}()
 		}
 		wg.Wait()
@@ -2209,6 +2265,16 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 		AvgNormBytes:                      float64(normBytesTotal) / queryCount,
 		AvgPreparedScoreCalls:             float64(preparedScoreCallsTotal) / queryCount,
 		AvgScoreBatchCandidates:           float64(scoreBatchCandidatesTotal) / queryCount,
+		AvgDocumentsFetched:               float64Ptr(float64(documentsFetchedTotal) / queryCount),
+		AvgResponseOwnedResultAllocs:      float64Ptr(float64(responseOwnedResultAllocsTotal) / queryCount),
+		AvgSearchRouteHNSWSearchPack:      float64Ptr(float64(searchRouteHNSWSearchPackTotal) / queryCount),
+		AvgSearchRouteQuantizedOnly:       float64Ptr(float64(searchRouteQuantizedOnlyTotal) / queryCount),
+		AvgSearchRouteQuantizedRerank:     float64Ptr(float64(searchRouteQuantizedRerankTotal) / queryCount),
+		AvgSearchRouteColumnGraphPrepared: float64Ptr(float64(searchRouteColumnGraphPreparedTotal) / queryCount),
+		AvgSearchRouteColumnGraphFallback: float64Ptr(float64(searchRouteColumnGraphFallbackTotal) / queryCount),
+		AvgGraphRowFallbacks:              float64Ptr(float64(graphRowFallbacksTotal) / queryCount),
+		AvgTypedColumnFallbacks:           float64Ptr(float64(typedColumnFallbacksTotal) / queryCount),
+		AvgVectorScratchDecodes:           float64Ptr(float64(vectorScratchDecodesTotal) / queryCount),
 		ExactFallbacks:                    0,
 		DisableExactFallback:              cfg.disableExactFallback,
 	}, nil
@@ -2581,6 +2647,19 @@ func printText(w io.Writer, res result) {
 		res.Search.AvgQuantizedRerankExactScoreCalls,
 		res.Search.AvgVectorBytes,
 		res.Search.AvgNormBytes)
+	if searchBenchmarkHasGuardrailMetrics(res.Search) {
+		fmt.Fprintf(w, "avg_documents_fetched=%.1f avg_response_owned_result_allocs=%.1f avg_route_hnsw_search_pack=%.1f avg_route_quantized_only=%.1f avg_route_quantized_rerank=%.1f avg_route_column_graph_prepared=%.1f avg_route_column_graph_fallback=%.1f avg_graph_row_fallbacks=%.1f avg_typed_column_fallbacks=%.1f avg_vector_scratch_decodes=%.1f\n",
+			float64Value(res.Search.AvgDocumentsFetched),
+			float64Value(res.Search.AvgResponseOwnedResultAllocs),
+			float64Value(res.Search.AvgSearchRouteHNSWSearchPack),
+			float64Value(res.Search.AvgSearchRouteQuantizedOnly),
+			float64Value(res.Search.AvgSearchRouteQuantizedRerank),
+			float64Value(res.Search.AvgSearchRouteColumnGraphPrepared),
+			float64Value(res.Search.AvgSearchRouteColumnGraphFallback),
+			float64Value(res.Search.AvgGraphRowFallbacks),
+			float64Value(res.Search.AvgTypedColumnFallbacks),
+			float64Value(res.Search.AvgVectorScratchDecodes))
+	}
 	fmt.Fprintf(w, "\nParallel Search Benchmark\n")
 	printSearchBenchmarks(w, res.SearchBenchmarks)
 	fmt.Fprintf(w, "\nStorage\n")
@@ -2683,7 +2762,7 @@ func resultQueryMode(res result) collections.VectorIndexQueryMode {
 
 func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
 	for _, bench := range benchmarks {
-		fmt.Fprintf(w, "search concurrency=%d queries=%d query_mode=%s avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d avg_candidates=%.1f avg_quantized_score_calls=%.1f avg_quantized_code_bytes=%.1f avg_quantized_rerank_candidates=%.1f avg_quantized_rerank_exact_score_calls=%.1f avg_vector_bytes=%.1f avg_norm_bytes=%.1f\n",
+		fmt.Fprintf(w, "search concurrency=%d queries=%d query_mode=%s avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d avg_candidates=%.1f avg_quantized_score_calls=%.1f avg_quantized_code_bytes=%.1f avg_quantized_rerank_candidates=%.1f avg_quantized_rerank_exact_score_calls=%.1f avg_vector_bytes=%.1f avg_norm_bytes=%.1f",
 			bench.Concurrency,
 			bench.Queries,
 			bench.QueryMode,
@@ -2700,6 +2779,20 @@ func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
 			bench.AvgQuantizedRerankExactScoreCalls,
 			bench.AvgVectorBytes,
 			bench.AvgNormBytes)
+		if searchBenchmarkHasGuardrailMetrics(bench) {
+			fmt.Fprintf(w, " avg_documents_fetched=%.1f avg_response_owned_result_allocs=%.1f avg_route_hnsw_search_pack=%.1f avg_route_quantized_only=%.1f avg_route_quantized_rerank=%.1f avg_route_column_graph_prepared=%.1f avg_route_column_graph_fallback=%.1f avg_graph_row_fallbacks=%.1f avg_typed_column_fallbacks=%.1f avg_vector_scratch_decodes=%.1f",
+				float64Value(bench.AvgDocumentsFetched),
+				float64Value(bench.AvgResponseOwnedResultAllocs),
+				float64Value(bench.AvgSearchRouteHNSWSearchPack),
+				float64Value(bench.AvgSearchRouteQuantizedOnly),
+				float64Value(bench.AvgSearchRouteQuantizedRerank),
+				float64Value(bench.AvgSearchRouteColumnGraphPrepared),
+				float64Value(bench.AvgSearchRouteColumnGraphFallback),
+				float64Value(bench.AvgGraphRowFallbacks),
+				float64Value(bench.AvgTypedColumnFallbacks),
+				float64Value(bench.AvgVectorScratchDecodes))
+		}
+		fmt.Fprintln(w)
 	}
 }
 
