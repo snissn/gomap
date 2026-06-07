@@ -18,6 +18,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
+func requireFloat64Metric(t *testing.T, value *float64, name string) float64 {
+	t.Helper()
+	if value == nil {
+		t.Fatalf("missing %s metric", name)
+	}
+	return *value
+}
+
 func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	res, err := execute(context.Background(), config{
 		dir:                   t.TempDir(),
@@ -382,6 +390,20 @@ func TestExecuteColumnGraphSearchPath(t *testing.T) {
 	if res.Search.Queries != 4 || res.Search.ExactFallbacks != 0 {
 		t.Fatalf("unexpected column_graph search result: %+v", res.Search)
 	}
+	if requireFloat64Metric(t, res.Search.AvgResponseOwnedResultAllocs, "avg_response_owned_result_allocs") != 0 || requireFloat64Metric(t, res.Search.AvgDocumentsFetched, "avg_documents_fetched") != 0 {
+		t.Fatalf("column_graph benchmark should use no-doc buffered results: %+v", res.Search)
+	}
+	if requireFloat64Metric(t, res.Search.AvgSearchRouteHNSWSearchPack, "avg_search_route_hnsw_search_pack") != 1 || requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedOnly, "avg_search_route_quantized_only") != 0 || requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedRerank, "avg_search_route_quantized_rerank") != 0 {
+		t.Fatalf("unexpected exact column_graph route counters: %+v", res.Search)
+	}
+	if requireFloat64Metric(t, res.Search.AvgGraphRowFallbacks, "avg_graph_row_fallbacks") != 0 || requireFloat64Metric(t, res.Search.AvgTypedColumnFallbacks, "avg_typed_column_fallbacks") != 0 || requireFloat64Metric(t, res.Search.AvgVectorScratchDecodes, "avg_vector_scratch_decodes") != 0 {
+		t.Fatalf("unexpected exact column_graph fallback counters: %+v", res.Search)
+	}
+	var out bytes.Buffer
+	printText(&out, res)
+	if !strings.Contains(out.String(), "avg_response_owned_result_allocs=0.0") {
+		t.Fatalf("column_graph text output missing buffered guardrails:\n%s", out.String())
+	}
 }
 
 func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
@@ -402,6 +424,12 @@ func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
 				if res.Search.AvgQuantizedRerankCandidates != 0 || res.Search.AvgQuantizedRerankExactScoreCalls != 0 {
 					t.Fatalf("quantized_only unexpectedly reranked: %+v", res.Search)
 				}
+				if res.Search.AvgVectorBytes != 0 || res.Search.AvgNormBytes != 0 {
+					t.Fatalf("quantized_only unexpectedly read exact vectors/norms: %+v", res.Search)
+				}
+				if requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedOnly, "avg_search_route_quantized_only") != 1 || requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedRerank, "avg_search_route_quantized_rerank") != 0 || requireFloat64Metric(t, res.Search.AvgSearchRouteHNSWSearchPack, "avg_search_route_hnsw_search_pack") != 0 {
+					t.Fatalf("quantized_only route counters not isolated: %+v", res.Search)
+				}
 			},
 		},
 		{
@@ -416,8 +444,19 @@ func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
 				if res.Search.AvgQuantizedRerankCandidates <= 0 || res.Search.AvgQuantizedRerankExactScoreCalls <= 0 {
 					t.Fatalf("quantized_rerank stats missing exact rerank: %+v", res.Search)
 				}
+				if res.Search.AvgQuantizedRerankExactScoreCalls > float64(res.QuantizedRerankCandidates) {
+					t.Fatalf("quantized_rerank exact score calls exceeded limit: %+v", res.Search)
+				}
 				if res.Search.AvgVectorBytes <= 0 || res.Search.AvgNormBytes <= 0 {
 					t.Fatalf("quantized_rerank stats missing exact vector/norm reads: %+v", res.Search)
+				}
+				maxVectorBytes := float64(res.QuantizedRerankCandidates * res.Dimensions * 4)
+				maxNormBytes := float64(res.QuantizedRerankCandidates * 4)
+				if res.Search.AvgVectorBytes > maxVectorBytes || res.Search.AvgNormBytes > maxNormBytes {
+					t.Fatalf("quantized_rerank exact reads exceeded rerank bound: %+v", res.Search)
+				}
+				if requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedOnly, "avg_search_route_quantized_only") != 0 || requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedRerank, "avg_search_route_quantized_rerank") != 1 || requireFloat64Metric(t, res.Search.AvgSearchRouteHNSWSearchPack, "avg_search_route_hnsw_search_pack") != 0 {
+					t.Fatalf("quantized_rerank route counters not isolated: %+v", res.Search)
 				}
 			},
 		},
@@ -460,6 +499,12 @@ func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
 			}
 			if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].QueryMode != tc.mode || res.SearchBenchmarks[1].QueryMode != tc.mode {
 				t.Fatalf("search benchmark modes not threaded: %+v", res.SearchBenchmarks)
+			}
+			if requireFloat64Metric(t, res.Search.AvgResponseOwnedResultAllocs, "avg_response_owned_result_allocs") != 0 || requireFloat64Metric(t, res.Search.AvgDocumentsFetched, "avg_documents_fetched") != 0 {
+				t.Fatalf("quantized benchmark should use no-doc buffered results: %+v", res.Search)
+			}
+			if requireFloat64Metric(t, res.Search.AvgGraphRowFallbacks, "avg_graph_row_fallbacks") != 0 || requireFloat64Metric(t, res.Search.AvgTypedColumnFallbacks, "avg_typed_column_fallbacks") != 0 || requireFloat64Metric(t, res.Search.AvgVectorScratchDecodes, "avg_vector_scratch_decodes") != 0 {
+				t.Fatalf("unexpected quantized fallback counters: %+v", res.Search)
 			}
 			tc.assertStats(t, res)
 		})

@@ -33,6 +33,16 @@ def result(backend: str, query_mode: str = "") -> dict:
         "avg_quantized_rerank_exact_score_calls": 0,
         "avg_vector_bytes": 128,
         "avg_norm_bytes": 32,
+        "avg_documents_fetched": 0,
+        "avg_response_owned_result_allocs": 0,
+        "avg_search_route_hnsw_search_pack": 1,
+        "avg_search_route_quantized_only": 0,
+        "avg_search_route_quantized_rerank": 0,
+        "avg_search_route_column_graph_prepared": 0,
+        "avg_search_route_column_graph_fallback": 0,
+        "avg_graph_row_fallbacks": 0,
+        "avg_typed_column_fallbacks": 0,
+        "avg_vector_scratch_decodes": 0,
     }
     if query_mode == "quantized_only":
         row.update(
@@ -41,6 +51,8 @@ def result(backend: str, query_mode: str = "") -> dict:
                 "avg_quantized_code_bytes": 5120,
                 "avg_vector_bytes": 0,
                 "avg_norm_bytes": 0,
+                "avg_search_route_hnsw_search_pack": 0,
+                "avg_search_route_quantized_only": 1,
             }
         )
     if query_mode == "quantized_rerank":
@@ -50,6 +62,8 @@ def result(backend: str, query_mode: str = "") -> dict:
                 "avg_quantized_code_bytes": 5120,
                 "avg_quantized_rerank_candidates": 16,
                 "avg_quantized_rerank_exact_score_calls": 16,
+                "avg_search_route_hnsw_search_pack": 0,
+                "avg_search_route_quantized_rerank": 1,
             }
         )
     return {
@@ -92,6 +106,10 @@ class SummaryRenderTests(unittest.TestCase):
         self.assertIn("## TreeDB Search Counters", rendered)
         self.assertIn("| TreeDB column-store graph HNSW | quantized_only | 1 | 32.0 | 40.0 | 5120.0 | 0.0 | 0.0 | 0.0 | 0.0 |", rendered)
         self.assertIn("| TreeDB column-store graph HNSW | quantized_rerank | 1 | 32.0 | 40.0 | 5120.0 | 16.0 | 16.0 | 128.0 | 32.0 |", rendered)
+        self.assertIn("## TreeDB Search Guardrails", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | exact/default | 1 | 0.0 | 0.0 | 1.0 | 0.0 | 0.0 |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | quantized_only | 1 | 0.0 | 0.0 | 0.0 | 1.0 | 0.0 |", rendered)
+        self.assertIn("| TreeDB column-store graph HNSW | quantized_rerank | 1 | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 |", rendered)
         self.assertIn("PostgreSQL+pgvector is not quantized", rendered)
 
 
