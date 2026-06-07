@@ -20183,6 +20183,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	now := time.Now()
 	rewriteDisabled := envBool(envDisableVlogGenerationRewrite)
 	rewriteQueueLen := 0
+	rewriteQueueEligibleLen := 0
 	if !rewriteDisabled {
 		rewriteQueue, qerr := db.currentVlogGenerationRewriteQueue()
 		if qerr != nil {
@@ -20193,17 +20194,30 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 			return
 		}
 		rewriteQueueLen = len(rewriteQueue)
+		rewriteQueueEligibleLen = rewriteQueueLen
+		if rewriteQueueLen > 0 {
+			rewriteQueueEligible, _, qerr := db.currentVlogGenerationRewriteEligible(now)
+			if qerr != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: load eligible generational rewrite queue for checkpoint kick: %w", qerr))
+				}
+				return
+			}
+			rewriteQueueEligibleLen = len(rewriteQueueEligible)
+		}
 	}
 	if !envBool(envDisableVlogGenerationCheckpointKickHotDebtOnly) && !rewriteDisabled {
 		quiet := db.foregroundActivityQuietFor(now, vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 		deferredDue := db.vlogGenerationDeferredMaintenanceDue(now)
-		if !quiet && rewriteQueueLen == 0 && !deferredDue {
+		if !quiet && rewriteQueueEligibleLen == 0 && !deferredDue {
 			db.vlogGenerationCheckpointKickSkippedHotNoDebt.Add(1)
 			db.scheduleVlogGenerationCheckpointKickHotNoDebtWake()
 			db.debugVlogMaintf(
-				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t hot_no_debt_wake_running=%t",
+				"checkpoint_kick_skip reason=foreground_hot_no_debt quiet=%t queue_len=%d eligible_queue_len=%d checkpoint_pending=%t deferred_pending=%t deferred_due=%t hot_no_debt_wake_running=%t",
 				quiet,
 				rewriteQueueLen,
+				rewriteQueueEligibleLen,
 				db.vlogGenerationCheckpointKickPending.Load(),
 				db.vlogGenerationDeferredMaintenancePending.Load(),
 				deferredDue,

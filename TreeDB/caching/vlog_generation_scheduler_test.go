@@ -7863,6 +7863,57 @@ func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanDuringRecentForegroundActivity(
 	}
 }
 
+func TestCheckpoint_KickHotDebtOnlySkipsFreshPlanWhenQueuedDebtCooling(t *testing.T) {
+	disableVlogGenerationLoop(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{22},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+	if err := db.setVlogGenerationRewriteQueue([]uint32{11}); err != nil {
+		t.Fatalf("seed rewrite queue: %v", err)
+	}
+	if err := db.recordVlogGenerationRewritePenalty([]uint32{11}, time.Now().Add(time.Minute), 64); err != nil {
+		t.Fatalf("record rewrite penalty: %v", err)
+	}
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+
+	time.Sleep(150 * time.Millisecond)
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls=%d want 0 while queued debt is cooling", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want 0 while queued debt is cooling", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "0" {
+		t.Fatalf("checkpoint kick runs=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.skipped_hot_no_debt"]; got != "1" {
+		t.Fatalf("checkpoint kick skipped_hot_no_debt=%q want 1", got)
+	}
+}
+
 func TestCheckpoint_KickHotDebtOnlyWakeRunsAfterForegroundQuiets(t *testing.T) {
 	disableVlogGenerationLoop(t)
 
