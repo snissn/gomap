@@ -1,0 +1,238 @@
+package documentservice
+
+import (
+	"context"
+	"math"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
+
+func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 0}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("CreateIndex dimension err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2, Metric: "manhattan"}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("CreateIndex metric err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "missing", Content: "missing embedding"}}}); ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "embedding") {
+		t.Fatalf("missing embedding err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "bad", Embedding: []float32{1}}}}); ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "dimension") {
+		t.Fatalf("dimension mismatch err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	_, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{Filter: &Filter{Field: "meta.repo", Operator: "LIKE", Value: "gomap"}})
+	if ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "unsupported filter operator") {
+		t.Fatalf("unsupported filter err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	_, err = svc.CountDocuments(ctx, "docs", CountDocumentsRequest{Filter: &Filter{Field: "meta.repo", Operator: "in", Value: "gomap"}})
+	if ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "array") {
+		t.Fatalf("unsupported in operand err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+func TestServiceUpsertDeleteCountFilterRoundTrip(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	upsert, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "a", Content: "alpha", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap", "language": "go", "start_line": 10.0, "tags": []any{"core", "api"}}},
+		{ID: "b", Content: "beta", Embedding: []float32{0, 1}, Meta: map[string]any{"repo": "gomap", "language": "python", "start_line": 30.0}},
+		{ID: "c", Content: "gamma", Embedding: []float32{0.7, 0.7}, Meta: map[string]any{"repo": "other", "language": "go", "start_line": 50.0}},
+	}})
+	if err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	if upsert.Upserted != 3 || upsert.Inserted != 3 || upsert.Updated != 0 || !reflect.DeepEqual(upsert.IDs, []string{"a", "b", "c"}) {
+		t.Fatalf("upsert=%+v", upsert)
+	}
+	if upsert.Index.Generation != info.Generation {
+		t.Fatalf("generation changed: upsert=%d create=%d", upsert.Index.Generation, info.Generation)
+	}
+	count, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil || count.Count != 3 {
+		t.Fatalf("count all=%+v err=%v", count, err)
+	}
+	filteredCount, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{Filter: &Filter{Operator: "AND", Conditions: []Filter{
+		{Field: "meta.repo", Operator: "==", Value: "gomap"},
+		{Field: "meta.start_line", Operator: ">=", Value: 20.0},
+	}}})
+	if err != nil || filteredCount.Count != 1 {
+		t.Fatalf("filtered count=%+v err=%v", filteredCount, err)
+	}
+	listed, err := svc.FilterDocuments(ctx, "docs", FilterDocumentsRequest{Filter: &Filter{Field: "meta.language", Operator: "in", Value: []any{"go"}}, ReturnEmbedding: false})
+	if err != nil {
+		t.Fatalf("FilterDocuments: %v", err)
+	}
+	if listed.MatchedCount != 2 || len(listed.Documents) != 2 || listed.Documents[0].ID != "a" || listed.Documents[1].ID != "c" {
+		t.Fatalf("listed=%+v", listed)
+	}
+	if listed.Documents[0].Embedding != nil {
+		t.Fatalf("embedding returned despite return_embedding=false: %+v", listed.Documents[0].Embedding)
+	}
+	if _, ok := listed.Documents[0].Meta["repo"]; !ok {
+		t.Fatalf("metadata missing from listed document: %+v", listed.Documents[0].Meta)
+	}
+	updated, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Content: "alpha updated", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap", "language": "go", "start_line": 11.0}}}})
+	if err != nil {
+		t.Fatalf("Upsert update: %v", err)
+	}
+	if updated.Inserted != 0 || updated.Updated != 1 {
+		t.Fatalf("updated=%+v", updated)
+	}
+	deleted, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{IDs: []string{"b"}})
+	if err != nil || deleted.Deleted != 1 || !reflect.DeepEqual(deleted.IDs, []string{"b"}) {
+		t.Fatalf("delete id=%+v err=%v", deleted, err)
+	}
+	deleted, err = svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{Filter: &Filter{Field: "meta.repo", Operator: "!=", Value: "gomap"}})
+	if err != nil || deleted.Deleted != 1 || !reflect.DeepEqual(deleted.IDs, []string{"c"}) {
+		t.Fatalf("delete filter=%+v err=%v", deleted, err)
+	}
+	count, err = svc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil || count.Count != 1 {
+		t.Fatalf("final count=%+v err=%v", count, err)
+	}
+}
+
+func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "doc-a", Content: "a", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap", "path": "a.go"}},
+		{ID: "doc-aa", Content: "aa", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap", "path": "aa.go"}},
+		{ID: "doc-b", Content: "b", Embedding: []float32{0.8, 0.2}, Meta: map[string]any{"repo": "gomap", "path": "b.go"}},
+		{ID: "doc-c", Content: "c", Embedding: []float32{0, 1}, Meta: map[string]any{"repo": "other", "path": "c.go"}},
+	}})
+	if err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	res, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 3, Filter: &Filter{Field: "meta.repo", Operator: "==", Value: "gomap"}, ReturnEmbedding: false})
+	if err != nil {
+		t.Fatalf("SearchDenseVector: %v", err)
+	}
+	if !res.Exact || res.Candidates != 3 || len(res.Documents) != 3 {
+		t.Fatalf("search response=%+v", res)
+	}
+	gotIDs := []string{res.Documents[0].ID, res.Documents[1].ID, res.Documents[2].ID}
+	wantIDs := []string{"doc-a", "doc-aa", "doc-b"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("ids=%v want %v", gotIDs, wantIDs)
+	}
+	if res.Documents[0].Score == nil || math.Abs(*res.Documents[0].Score-1) > 1e-6 || res.Documents[1].Score == nil || math.Abs(*res.Documents[1].Score-1) > 1e-6 {
+		t.Fatalf("top scores=%v %v", res.Documents[0].Score, res.Documents[1].Score)
+	}
+	if res.Documents[2].Score == nil || *res.Documents[2].Score >= 1 || *res.Documents[2].Score <= 0.9 {
+		t.Fatalf("third score=%v", res.Documents[2].Score)
+	}
+	if res.Documents[0].Embedding != nil {
+		t.Fatalf("embedding returned despite return_embedding=false")
+	}
+	if res.Documents[0].Meta["path"] != "a.go" {
+		t.Fatalf("metadata=%+v", res.Documents[0].Meta)
+	}
+	withEmbedding, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ReturnEmbedding: true})
+	if err != nil {
+		t.Fatalf("SearchDenseVector echo: %v", err)
+	}
+	if !reflect.DeepEqual(withEmbedding.Documents[0].Embedding, []float32{1, 0}) {
+		t.Fatalf("embedding echo=%v", withEmbedding.Documents[0].Embedding)
+	}
+}
+
+func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	svc := New(collections.NewCollectionManager(db))
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		_ = db.Close()
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "persist", Content: "persistent", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap"}}}}); err != nil {
+		_ = db.Close()
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer reopened.Close()
+	reopenedSvc := New(collections.NewCollectionManager(reopened))
+	count, err := reopenedSvc.CountDocuments(ctx, "docs", CountDocumentsRequest{})
+	if err != nil || count.Count != 1 {
+		t.Fatalf("reopened count=%+v err=%v", count, err)
+	}
+	search, err := reopenedSvc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ReturnEmbedding: true})
+	if err != nil {
+		t.Fatalf("reopened search: %v", err)
+	}
+	if len(search.Documents) != 1 || search.Documents[0].ID != "persist" || !reflect.DeepEqual(search.Documents[0].Embedding, []float32{1, 0}) {
+		t.Fatalf("reopened search=%+v", search)
+	}
+}
+
+func TestServiceErrorCasesDimensionStaleUnavailable(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	if _, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1}, TopK: 1}); ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "dimension") {
+		t.Fatalf("query dimension err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.CountDocuments(ctx, "docs", CountDocumentsRequest{ExpectedGeneration: info.Generation + 1}); ErrorCodeOf(err) != CodeIndexStale {
+		t.Fatalf("stale err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.CountDocuments(ctx, "missing", CountDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexNotFound {
+		t.Fatalf("missing err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "raw", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}}); err != nil {
+		t.Fatalf("CreateCollection raw: %v", err)
+	}
+	if _, err := svc.CountDocuments(ctx, "raw", CountDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("unavailable err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+func newTestService(t *testing.T) (*Service, *backenddb.DB) {
+	t.Helper()
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	return New(collections.NewCollectionManager(db)), db
+}

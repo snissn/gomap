@@ -70,7 +70,11 @@ make that visible instead of implying the optimized path was used.
 
 ## Vector/RAG quickstart
 
-See also `cmd/treedb_vector_demo/README.md`.
+See also `cmd/treedb_vector_demo/README.md` and the pre-alpha
+[TreeDB Document Service API](TREEDB_DOCUMENT_SERVICE_API.md) for the
+Haystack-style HTTP/JSON contract. The document service's filtered dense search
+uses exact scoring as a correctness/MVP path; it is not the high-QPS
+`column_graph` ANN route described below.
 
 `cmd/treedb_vector_demo` creates a fresh TreeDB directory, declares a collection,
 loads deterministic JSON fixtures, publishes embeddings as typed-column dense
