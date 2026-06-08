@@ -206,6 +206,9 @@ func BenchmarkSearchHybridCloseout2506(b *testing.B) {
 								if got.Stats.DocumentsFetched > uint64(budget.topK) {
 									b.Fatalf("stats=%+v fetched more than topK=%d", got.Stats, budget.topK)
 								}
+								if !mode.includeDocuments && got.Stats.DocumentsFetched != 0 {
+									b.Fatalf("stats=%+v fetched documents in no-doc mode", got.Stats)
+								}
 								sink = got
 							}
 							b.StopTimer()
