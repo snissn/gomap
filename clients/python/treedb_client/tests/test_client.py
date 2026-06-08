@@ -310,6 +310,15 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(body["vector_candidate_limit"], 30)
             self.assertEqual(body["return_embedding"], False)
 
+    def test_hybrid_search_requires_query_or_embedding_before_http(self) -> None:
+        client = TreeDBClient("http://127.0.0.1:9", timeout=1)
+
+        with self.assertRaises(InvalidRequestError) as caught:
+            client.search_hybrid("docs", top_k=1)
+
+        self.assertEqual(caught.exception.code, "invalid_request")
+        self.assertIn("query or query_embedding", caught.exception.message)
+
     def test_keyword_and_hybrid_service_errors_propagate(self) -> None:
         routes = {
             ("POST", "/v1/indexes/docs/search/keyword"): (

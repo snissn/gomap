@@ -248,6 +248,8 @@ class TreeDBClient:
         with `UnsupportedError`; there is no client-side text/vector fallback.
         """
 
+        if not query and query_embedding is None:
+            raise InvalidRequestError("invalid_request", "search_hybrid requires query or query_embedding")
         _validate_expected_generation(expected_generation)
         request = HybridSearchRequest(
             expected_generation=expected_generation,
