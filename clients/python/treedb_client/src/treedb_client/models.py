@@ -71,6 +71,51 @@ def _copy_meta(value: Any, label: str) -> Dict[str, Any]:
     return copy.deepcopy(dict(value))
 
 
+def _copy_extra(data: Mapping[str, Any], allowed: Sequence[str]) -> Dict[str, Any]:
+    allowed_set = set(allowed)
+    return copy.deepcopy({str(key): value for key, value in data.items() if key not in allowed_set})
+
+
+def _merge_extra(out: Dict[str, Any], extra: Mapping[str, Any]) -> Dict[str, Any]:
+    for key, value in extra.items():
+        if key not in out:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _as_optional_str_default(value: Any, label: str) -> str:
+    if value is None:
+        return ""
+    return _as_str(value, label)
+
+
+def _as_optional_int_default(value: Any, label: str) -> int:
+    if value is None:
+        return 0
+    return _as_int(value, label)
+
+
+def _as_optional_bool_default(value: Any, label: str) -> bool:
+    if value is None:
+        return False
+    return _as_bool(value, label)
+
+
+def _float_list(value: Any, label: str) -> list[float]:
+    parsed = _optional_float_list(value, label)
+    if parsed is None:
+        return []
+    return parsed
+
+
+def _filter_to_dict(filter_value: Any) -> Optional[Dict[str, Any]]:
+    if filter_value is None:
+        return None
+    from .filters import normalize_filter
+
+    return normalize_filter(filter_value)
+
+
 @dataclass
 class Document:
     """Haystack-compatible document shape used by the TreeDB service.
@@ -121,37 +166,50 @@ class IndexCapabilities:
     metadata_filters: bool
     keyword_search: bool
     hybrid_search: bool
+    keyword_metadata_filters: bool = False
+    hybrid_metadata_filters: bool = False
+    extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "IndexCapabilities":
         data = _as_mapping(data, "index.capabilities")
-        _reject_unknown(
-            data,
-            [
-                "dense_vector_search",
-                "exact_dense_scoring",
-                "metadata_filters",
-                "keyword_search",
-                "hybrid_search",
-            ],
-            "index.capabilities",
-        )
+        allowed = [
+            "dense_vector_search",
+            "exact_dense_scoring",
+            "metadata_filters",
+            "keyword_search",
+            "hybrid_search",
+            "keyword_metadata_filters",
+            "hybrid_metadata_filters",
+        ]
         return cls(
             dense_vector_search=_as_bool(data.get("dense_vector_search", False), "index.capabilities.dense_vector_search"),
             exact_dense_scoring=_as_bool(data.get("exact_dense_scoring", False), "index.capabilities.exact_dense_scoring"),
             metadata_filters=_as_bool(data.get("metadata_filters", False), "index.capabilities.metadata_filters"),
             keyword_search=_as_bool(data.get("keyword_search", False), "index.capabilities.keyword_search"),
             hybrid_search=_as_bool(data.get("hybrid_search", False), "index.capabilities.hybrid_search"),
+            keyword_metadata_filters=_as_bool(
+                data.get("keyword_metadata_filters", False), "index.capabilities.keyword_metadata_filters"
+            ),
+            hybrid_metadata_filters=_as_bool(
+                data.get("hybrid_metadata_filters", False), "index.capabilities.hybrid_metadata_filters"
+            ),
+            extra=_copy_extra(data, allowed),
         )
 
-    def to_dict(self) -> Dict[str, bool]:
-        return {
-            "dense_vector_search": self.dense_vector_search,
-            "exact_dense_scoring": self.exact_dense_scoring,
-            "metadata_filters": self.metadata_filters,
-            "keyword_search": self.keyword_search,
-            "hybrid_search": self.hybrid_search,
-        }
+    def to_dict(self) -> Dict[str, Any]:
+        return _merge_extra(
+            {
+                "dense_vector_search": self.dense_vector_search,
+                "exact_dense_scoring": self.exact_dense_scoring,
+                "metadata_filters": self.metadata_filters,
+                "keyword_search": self.keyword_search,
+                "hybrid_search": self.hybrid_search,
+                "keyword_metadata_filters": self.keyword_metadata_filters,
+                "hybrid_metadata_filters": self.hybrid_metadata_filters,
+            },
+            self.extra,
+        )
 
 
 @dataclass(frozen=True)
@@ -164,46 +222,60 @@ class IndexInfo:
     embedding_field: str
     document_type: str
     capabilities: IndexCapabilities
+    vector_index_name: str = ""
+    text_field: str = ""
+    text_index_name: str = ""
+    extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "IndexInfo":
         data = _as_mapping(data, "index")
-        _reject_unknown(
-            data,
-            [
-                "name",
-                "dimension",
-                "metric",
-                "generation",
-                "contract_version",
-                "embedding_field",
-                "document_type",
-                "capabilities",
-            ],
-            "index",
-        )
+        allowed = [
+            "name",
+            "dimension",
+            "metric",
+            "generation",
+            "contract_version",
+            "embedding_field",
+            "vector_index_name",
+            "text_field",
+            "text_index_name",
+            "document_type",
+            "capabilities",
+        ]
+        embedding_field = _as_str(data["embedding_field"], "index.embedding_field")
         return cls(
             name=_as_str(data["name"], "index.name"),
             dimension=_as_int(data["dimension"], "index.dimension"),
             metric=_as_str(data["metric"], "index.metric"),
             generation=_as_int(data["generation"], "index.generation"),
             contract_version=_as_str(data["contract_version"], "index.contract_version"),
-            embedding_field=_as_str(data["embedding_field"], "index.embedding_field"),
+            embedding_field=embedding_field,
+            vector_index_name=_as_optional_str_default(data.get("vector_index_name", embedding_field), "index.vector_index_name"),
+            text_field=_as_optional_str_default(data.get("text_field", ""), "index.text_field"),
+            text_index_name=_as_optional_str_default(data.get("text_index_name", ""), "index.text_index_name"),
             document_type=_as_str(data["document_type"], "index.document_type"),
             capabilities=IndexCapabilities.from_dict(data.get("capabilities", {})),
+            extra=_copy_extra(data, allowed),
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "dimension": self.dimension,
-            "metric": self.metric,
-            "generation": self.generation,
-            "contract_version": self.contract_version,
-            "embedding_field": self.embedding_field,
-            "document_type": self.document_type,
-            "capabilities": self.capabilities.to_dict(),
-        }
+        return _merge_extra(
+            {
+                "name": self.name,
+                "dimension": self.dimension,
+                "metric": self.metric,
+                "generation": self.generation,
+                "contract_version": self.contract_version,
+                "embedding_field": self.embedding_field,
+                "vector_index_name": self.vector_index_name,
+                "text_field": self.text_field,
+                "text_index_name": self.text_index_name,
+                "document_type": self.document_type,
+                "capabilities": self.capabilities.to_dict(),
+            },
+            self.extra,
+        )
 
 
 @dataclass(frozen=True)
@@ -288,4 +360,405 @@ class DenseVectorSearchResponse:
             metric=_as_str(data["metric"], "metric"),
             exact=_as_bool(data["exact"], "exact"),
             candidates=_as_int(data["candidates"], "candidates"),
+        )
+
+
+@dataclass(frozen=True)
+class KeywordSearchRequest:
+    """Request payload for `POST /v1/indexes/{index}/search/keyword`."""
+
+    query: str
+    top_k: int
+    expected_generation: Optional[int] = None
+    operator: Optional[str] = None
+    candidate_limit: Optional[int] = None
+    max_postings_scanned: Optional[int] = None
+    filter: Any = None
+    return_embedding: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "query": _as_str(self.query, "keyword request.query"),
+            "top_k": _as_int(self.top_k, "keyword request.top_k"),
+            "return_embedding": _as_bool(self.return_embedding, "keyword request.return_embedding"),
+        }
+        if self.expected_generation is not None:
+            out["expected_generation"] = _as_int(self.expected_generation, "keyword request.expected_generation")
+        if self.operator is not None:
+            out["operator"] = _as_str(self.operator, "keyword request.operator")
+        if self.candidate_limit is not None:
+            out["candidate_limit"] = _as_int(self.candidate_limit, "keyword request.candidate_limit")
+        if self.max_postings_scanned is not None:
+            out["max_postings_scanned"] = _as_int(self.max_postings_scanned, "keyword request.max_postings_scanned")
+        normalized_filter = _filter_to_dict(self.filter)
+        if normalized_filter is not None:
+            out["filter"] = normalized_filter
+        return out
+
+
+@dataclass(frozen=True)
+class KeywordSearchStats:
+    query_terms: int = 0
+    candidates_requested: int = 0
+    candidates_returned: int = 0
+    postings_scanned: int = 0
+    candidates_scored: int = 0
+    documents_fetched: int = 0
+    documents_missing: int = 0
+    full_document_scan_fallbacks: int = 0
+    postings_scan_nanos: int = 0
+    candidate_score_nanos: int = 0
+    document_fetch_nanos: int = 0
+    truncated: bool = False
+    fail_closed: int = 0
+    fail_closed_reason: str = ""
+    unavailable: bool = False
+    unavailable_reason: str = ""
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "KeywordSearchStats":
+        data = _as_mapping(data, "keyword stats")
+        allowed = [
+            "query_terms",
+            "candidates_requested",
+            "candidates_returned",
+            "postings_scanned",
+            "candidates_scored",
+            "documents_fetched",
+            "documents_missing",
+            "full_document_scan_fallbacks",
+            "postings_scan_nanos",
+            "candidate_score_nanos",
+            "document_fetch_nanos",
+            "truncated",
+            "fail_closed",
+            "fail_closed_reason",
+            "unavailable",
+            "unavailable_reason",
+        ]
+        return cls(
+            query_terms=_as_optional_int_default(data.get("query_terms"), "keyword stats.query_terms"),
+            candidates_requested=_as_optional_int_default(data.get("candidates_requested"), "keyword stats.candidates_requested"),
+            candidates_returned=_as_optional_int_default(data.get("candidates_returned"), "keyword stats.candidates_returned"),
+            postings_scanned=_as_optional_int_default(data.get("postings_scanned"), "keyword stats.postings_scanned"),
+            candidates_scored=_as_optional_int_default(data.get("candidates_scored"), "keyword stats.candidates_scored"),
+            documents_fetched=_as_optional_int_default(data.get("documents_fetched"), "keyword stats.documents_fetched"),
+            documents_missing=_as_optional_int_default(data.get("documents_missing"), "keyword stats.documents_missing"),
+            full_document_scan_fallbacks=_as_optional_int_default(
+                data.get("full_document_scan_fallbacks"), "keyword stats.full_document_scan_fallbacks"
+            ),
+            postings_scan_nanos=_as_optional_int_default(data.get("postings_scan_nanos"), "keyword stats.postings_scan_nanos"),
+            candidate_score_nanos=_as_optional_int_default(data.get("candidate_score_nanos"), "keyword stats.candidate_score_nanos"),
+            document_fetch_nanos=_as_optional_int_default(data.get("document_fetch_nanos"), "keyword stats.document_fetch_nanos"),
+            truncated=_as_optional_bool_default(data.get("truncated"), "keyword stats.truncated"),
+            fail_closed=_as_optional_int_default(data.get("fail_closed"), "keyword stats.fail_closed"),
+            fail_closed_reason=_as_optional_str_default(data.get("fail_closed_reason"), "keyword stats.fail_closed_reason"),
+            unavailable=_as_optional_bool_default(data.get("unavailable"), "keyword stats.unavailable"),
+            unavailable_reason=_as_optional_str_default(data.get("unavailable_reason"), "keyword stats.unavailable_reason"),
+            extra=_copy_extra(data, allowed),
+        )
+
+
+@dataclass(frozen=True)
+class KeywordSearchResponse:
+    index: IndexInfo
+    documents: list[Document]
+    text_index: str
+    stats: KeywordSearchStats
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "KeywordSearchResponse":
+        data = _as_mapping(data, "keyword search response")
+        allowed = ["index", "documents", "text_index", "stats"]
+        return cls(
+            index=IndexInfo.from_dict(data["index"]),
+            documents=[Document.from_dict(item) for item in data.get("documents", [])],
+            text_index=_as_str(data["text_index"], "keyword response.text_index"),
+            stats=KeywordSearchStats.from_dict(data.get("stats", {})),
+            extra=_copy_extra(data, allowed),
+        )
+
+
+@dataclass(frozen=True)
+class HybridFusionOptions:
+    """Deterministic hybrid fusion request options."""
+
+    method: Optional[str] = None
+    rrf_k: Optional[int] = None
+    tie_policy: Optional[str] = None
+    source_order: Optional[Sequence[str]] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "HybridFusionOptions":
+        data = _as_mapping(data, "hybrid fusion")
+        allowed = ["method", "rrf_k", "tie_policy", "source_order"]
+        source_order = None
+        if "source_order" in data and data.get("source_order") is not None:
+            raw_source_order = data.get("source_order")
+            if isinstance(raw_source_order, (str, bytes, bytearray)) or not isinstance(raw_source_order, Sequence):
+                raise TypeError("hybrid fusion.source_order must be a sequence of strings")
+            source_order = [_as_str(item, "hybrid fusion.source_order[]") for item in raw_source_order]
+        return cls(
+            method=_as_optional_str_default(data.get("method"), "hybrid fusion.method") or None,
+            rrf_k=None if "rrf_k" not in data or data.get("rrf_k") is None else _as_int(data.get("rrf_k"), "hybrid fusion.rrf_k"),
+            tie_policy=_as_optional_str_default(data.get("tie_policy"), "hybrid fusion.tie_policy") or None,
+            source_order=source_order,
+            extra=_copy_extra(data, allowed),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if self.method is not None:
+            out["method"] = _as_str(self.method, "hybrid fusion.method")
+        if self.rrf_k is not None:
+            out["rrf_k"] = _as_int(self.rrf_k, "hybrid fusion.rrf_k")
+        if self.tie_policy is not None:
+            out["tie_policy"] = _as_str(self.tie_policy, "hybrid fusion.tie_policy")
+        if self.source_order is not None:
+            if isinstance(self.source_order, (str, bytes, bytearray)) or not isinstance(self.source_order, Sequence):
+                raise TypeError("hybrid fusion.source_order must be a sequence of strings")
+            out["source_order"] = [_as_str(item, "hybrid fusion.source_order[]") for item in self.source_order]
+        return _merge_extra(out, self.extra)
+
+
+@dataclass(frozen=True)
+class HybridSearchRequest:
+    """Request payload for `POST /v1/indexes/{index}/search/hybrid`."""
+
+    top_k: int
+    expected_generation: Optional[int] = None
+    query: Optional[str] = None
+    query_embedding: Optional[Sequence[float]] = None
+    candidate_limit: Optional[int] = None
+    text_candidate_limit: Optional[int] = None
+    vector_candidate_limit: Optional[int] = None
+    ef_search: Optional[int] = None
+    fusion: Any = None
+    filter: Any = None
+    return_embedding: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "top_k": _as_int(self.top_k, "hybrid request.top_k"),
+            "return_embedding": _as_bool(self.return_embedding, "hybrid request.return_embedding"),
+        }
+        if self.expected_generation is not None:
+            out["expected_generation"] = _as_int(self.expected_generation, "hybrid request.expected_generation")
+        if self.query is not None:
+            out["query"] = _as_str(self.query, "hybrid request.query")
+        if self.query_embedding is not None:
+            out["query_embedding"] = _float_list(self.query_embedding, "hybrid request.query_embedding")
+        if self.candidate_limit is not None:
+            out["candidate_limit"] = _as_int(self.candidate_limit, "hybrid request.candidate_limit")
+        if self.text_candidate_limit is not None:
+            out["text_candidate_limit"] = _as_int(self.text_candidate_limit, "hybrid request.text_candidate_limit")
+        if self.vector_candidate_limit is not None:
+            out["vector_candidate_limit"] = _as_int(self.vector_candidate_limit, "hybrid request.vector_candidate_limit")
+        if self.ef_search is not None:
+            out["ef_search"] = _as_int(self.ef_search, "hybrid request.ef_search")
+        if self.fusion is not None:
+            if isinstance(self.fusion, HybridFusionOptions):
+                out["fusion"] = self.fusion.to_dict()
+            elif isinstance(self.fusion, Mapping):
+                out["fusion"] = HybridFusionOptions.from_dict(self.fusion).to_dict()
+            else:
+                raise TypeError("hybrid request.fusion must be HybridFusionOptions or a mapping")
+        normalized_filter = _filter_to_dict(self.filter)
+        if normalized_filter is not None:
+            out["filter"] = normalized_filter
+        return out
+
+
+@dataclass(frozen=True)
+class HybridSearchPlan:
+    scalar_filter_strategy: str = ""
+    fusion_method: str = ""
+    fusion_tie_policy: str = ""
+    text_candidate_limit: int = 0
+    vector_candidate_limit: int = 0
+    final_top_k: int = 0
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "HybridSearchPlan":
+        data = _as_mapping(data, "hybrid plan")
+        allowed = [
+            "scalar_filter_strategy",
+            "fusion_method",
+            "fusion_tie_policy",
+            "text_candidate_limit",
+            "vector_candidate_limit",
+            "final_top_k",
+        ]
+        return cls(
+            scalar_filter_strategy=_as_optional_str_default(data.get("scalar_filter_strategy"), "hybrid plan.scalar_filter_strategy"),
+            fusion_method=_as_optional_str_default(data.get("fusion_method"), "hybrid plan.fusion_method"),
+            fusion_tie_policy=_as_optional_str_default(data.get("fusion_tie_policy"), "hybrid plan.fusion_tie_policy"),
+            text_candidate_limit=_as_optional_int_default(data.get("text_candidate_limit"), "hybrid plan.text_candidate_limit"),
+            vector_candidate_limit=_as_optional_int_default(data.get("vector_candidate_limit"), "hybrid plan.vector_candidate_limit"),
+            final_top_k=_as_optional_int_default(data.get("final_top_k"), "hybrid plan.final_top_k"),
+            extra=_copy_extra(data, allowed),
+        )
+
+
+@dataclass(frozen=True)
+class HybridSearchSnapshot:
+    consistency: str = ""
+    commit_seq: int = 0
+    system_root_page_id: int = 0
+    collection_generation: int = 0
+    text_index_epoch: int = 0
+    vector_index_epoch: int = 0
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "HybridSearchSnapshot":
+        data = _as_mapping(data, "hybrid snapshot")
+        allowed = [
+            "consistency",
+            "commit_seq",
+            "system_root_page_id",
+            "collection_generation",
+            "text_index_epoch",
+            "vector_index_epoch",
+        ]
+        return cls(
+            consistency=_as_optional_str_default(data.get("consistency"), "hybrid snapshot.consistency"),
+            commit_seq=_as_optional_int_default(data.get("commit_seq"), "hybrid snapshot.commit_seq"),
+            system_root_page_id=_as_optional_int_default(data.get("system_root_page_id"), "hybrid snapshot.system_root_page_id"),
+            collection_generation=_as_optional_int_default(data.get("collection_generation"), "hybrid snapshot.collection_generation"),
+            text_index_epoch=_as_optional_int_default(data.get("text_index_epoch"), "hybrid snapshot.text_index_epoch"),
+            vector_index_epoch=_as_optional_int_default(data.get("vector_index_epoch"), "hybrid snapshot.vector_index_epoch"),
+            extra=_copy_extra(data, allowed),
+        )
+
+
+@dataclass(frozen=True)
+class HybridSearchStats:
+    text_candidates_requested: int = 0
+    text_candidates_returned: int = 0
+    text_postings_scanned: int = 0
+    text_candidates_scored: int = 0
+    vector_candidates_requested: int = 0
+    vector_candidates_returned: int = 0
+    vector_candidates_examined: int = 0
+    vector_edges_visited: int = 0
+    scalar_prefilter_ids: int = 0
+    scalar_postfilter_checks: int = 0
+    scalar_filter_matched: int = 0
+    scalar_filter_rejected: int = 0
+    candidates_fused: int = 0
+    candidates_after_fusion: int = 0
+    fusion_text_only: int = 0
+    fusion_vector_only: int = 0
+    fusion_both: int = 0
+    fusion_duplicate_candidates: int = 0
+    candidates_after_filter: int = 0
+    documents_fetched: int = 0
+    documents_missing: int = 0
+    full_document_scan_fallbacks: int = 0
+    truncated: int = 0
+    fail_closed: int = 0
+    fail_closed_reason: str = ""
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "HybridSearchStats":
+        data = _as_mapping(data, "hybrid stats")
+        allowed = [
+            "text_candidates_requested",
+            "text_candidates_returned",
+            "text_postings_scanned",
+            "text_candidates_scored",
+            "vector_candidates_requested",
+            "vector_candidates_returned",
+            "vector_candidates_examined",
+            "vector_edges_visited",
+            "scalar_prefilter_ids",
+            "scalar_postfilter_checks",
+            "scalar_filter_matched",
+            "scalar_filter_rejected",
+            "candidates_fused",
+            "candidates_after_fusion",
+            "fusion_text_only",
+            "fusion_vector_only",
+            "fusion_both",
+            "fusion_duplicate_candidates",
+            "candidates_after_filter",
+            "documents_fetched",
+            "documents_missing",
+            "full_document_scan_fallbacks",
+            "truncated",
+            "fail_closed",
+            "fail_closed_reason",
+        ]
+        return cls(
+            text_candidates_requested=_as_optional_int_default(data.get("text_candidates_requested"), "hybrid stats.text_candidates_requested"),
+            text_candidates_returned=_as_optional_int_default(data.get("text_candidates_returned"), "hybrid stats.text_candidates_returned"),
+            text_postings_scanned=_as_optional_int_default(data.get("text_postings_scanned"), "hybrid stats.text_postings_scanned"),
+            text_candidates_scored=_as_optional_int_default(data.get("text_candidates_scored"), "hybrid stats.text_candidates_scored"),
+            vector_candidates_requested=_as_optional_int_default(
+                data.get("vector_candidates_requested"), "hybrid stats.vector_candidates_requested"
+            ),
+            vector_candidates_returned=_as_optional_int_default(
+                data.get("vector_candidates_returned"), "hybrid stats.vector_candidates_returned"
+            ),
+            vector_candidates_examined=_as_optional_int_default(
+                data.get("vector_candidates_examined"), "hybrid stats.vector_candidates_examined"
+            ),
+            vector_edges_visited=_as_optional_int_default(data.get("vector_edges_visited"), "hybrid stats.vector_edges_visited"),
+            scalar_prefilter_ids=_as_optional_int_default(data.get("scalar_prefilter_ids"), "hybrid stats.scalar_prefilter_ids"),
+            scalar_postfilter_checks=_as_optional_int_default(
+                data.get("scalar_postfilter_checks"), "hybrid stats.scalar_postfilter_checks"
+            ),
+            scalar_filter_matched=_as_optional_int_default(data.get("scalar_filter_matched"), "hybrid stats.scalar_filter_matched"),
+            scalar_filter_rejected=_as_optional_int_default(data.get("scalar_filter_rejected"), "hybrid stats.scalar_filter_rejected"),
+            candidates_fused=_as_optional_int_default(data.get("candidates_fused"), "hybrid stats.candidates_fused"),
+            candidates_after_fusion=_as_optional_int_default(data.get("candidates_after_fusion"), "hybrid stats.candidates_after_fusion"),
+            fusion_text_only=_as_optional_int_default(data.get("fusion_text_only"), "hybrid stats.fusion_text_only"),
+            fusion_vector_only=_as_optional_int_default(data.get("fusion_vector_only"), "hybrid stats.fusion_vector_only"),
+            fusion_both=_as_optional_int_default(data.get("fusion_both"), "hybrid stats.fusion_both"),
+            fusion_duplicate_candidates=_as_optional_int_default(
+                data.get("fusion_duplicate_candidates"), "hybrid stats.fusion_duplicate_candidates"
+            ),
+            candidates_after_filter=_as_optional_int_default(data.get("candidates_after_filter"), "hybrid stats.candidates_after_filter"),
+            documents_fetched=_as_optional_int_default(data.get("documents_fetched"), "hybrid stats.documents_fetched"),
+            documents_missing=_as_optional_int_default(data.get("documents_missing"), "hybrid stats.documents_missing"),
+            full_document_scan_fallbacks=_as_optional_int_default(
+                data.get("full_document_scan_fallbacks"), "hybrid stats.full_document_scan_fallbacks"
+            ),
+            truncated=_as_optional_int_default(data.get("truncated"), "hybrid stats.truncated"),
+            fail_closed=_as_optional_int_default(data.get("fail_closed"), "hybrid stats.fail_closed"),
+            fail_closed_reason=_as_optional_str_default(data.get("fail_closed_reason"), "hybrid stats.fail_closed_reason"),
+            extra=_copy_extra(data, allowed),
+        )
+
+
+@dataclass(frozen=True)
+class HybridSearchResponse:
+    index: IndexInfo
+    documents: list[Document]
+    text_index: str = ""
+    vector_index: str = ""
+    plan: HybridSearchPlan = field(default_factory=HybridSearchPlan)
+    snapshot: HybridSearchSnapshot = field(default_factory=HybridSearchSnapshot)
+    stats: HybridSearchStats = field(default_factory=HybridSearchStats)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "HybridSearchResponse":
+        data = _as_mapping(data, "hybrid search response")
+        allowed = ["index", "documents", "text_index", "vector_index", "plan", "snapshot", "stats"]
+        return cls(
+            index=IndexInfo.from_dict(data["index"]),
+            documents=[Document.from_dict(item) for item in data.get("documents", [])],
+            text_index=_as_optional_str_default(data.get("text_index"), "hybrid response.text_index"),
+            vector_index=_as_optional_str_default(data.get("vector_index"), "hybrid response.vector_index"),
+            plan=HybridSearchPlan.from_dict(data.get("plan", {})),
+            snapshot=HybridSearchSnapshot.from_dict(data.get("snapshot", {})),
+            stats=HybridSearchStats.from_dict(data.get("stats", {})),
+            extra=_copy_extra(data, allowed),
         )
