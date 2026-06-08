@@ -1,8 +1,9 @@
 # TreeDB Hybrid Search Contract (#2502)
 
-Status: design gate for the #2501 hybrid lexical + vector search stack. TreeDB
-is pre-alpha, so this API/contract may change, but downstream work should treat
-this note as the current source of truth until a later PR updates it.
+Status: design contract plus initial #2505 collection executor for the #2501
+hybrid lexical + vector search stack. TreeDB is pre-alpha, so this API/contract
+may change, but downstream work should treat this note as the current source of
+truth until a later PR updates it.
 
 Parent tracker: <https://github.com/snissn/gomap/issues/2501>.
 
@@ -20,8 +21,9 @@ scalar/metadata filters
 ```
 
 It does **not** implement the text index (#1764), vector optimizations
-(#2490/#2475 lanes), gateway syntax, or the hybrid executor (#2505). Normal
-hybrid search MUST NOT scan or fetch every document as a fallback.
+(#2490/#2475 lanes), gateway syntax, or reranking beyond deterministic rank
+fusion. The initial hybrid executor is implemented by #2505. Normal hybrid
+search MUST NOT scan or fetch every document as a fallback.
 
 Text-only and vector-only APIs/benchmarks remain separate evidence lanes:
 Issue `#1764` owns indexed lexical `SearchText`/BM25/BM25F behavior, and the existing
@@ -41,9 +43,9 @@ The collection package now reserves these names for downstream implementation:
 - fail-closed errors: `ErrHybridSearchUnsupported`,
   `ErrHybridSearchIndexUnavailable`, and `ErrHybridSearchStaleIndex`.
 
-`SearchHybrid` is only a fail-closed stub until #2505 implements the executor.
-It exists so #1764/#2503/#2504/#2505 have stable names to target without
-inventing incompatible seams.
+`SearchHybrid` now routes through the #2505 bounded executor. Unsupported query
+shapes and unavailable sources still fail closed so callers cannot accidentally
+depend on a scan-all-documents fallback.
 
 ## Query contract
 
@@ -62,7 +64,9 @@ inventing incompatible seams.
   - No document materialization knobs are present on the vector clause; hybrid
     materialization is a final bounded phase.
 - `ScalarFilter *HybridScalarFilter`: bounded scalar-index filter. Equality uses
-  `Value`; ranges use `Range *IndexRangeOptions`.
+  `Value`; ranges use `Range *IndexRangeOptions`. The #2505 executor serves
+  these filters only from existing secondary indexes and fails closed when the
+  bounded lookup truncates or the index is absent.
 - `ScalarFilterStrategy`: one of `prefilter`, `postfilter`, `text_first`,
   `vector_first`, or `union_fusion`.
 - `Fusion`: deterministic fusion options. The first supported method is
@@ -272,4 +276,18 @@ policy above over slices of `HybridSearchCandidate`. The helper surface is
 fetching documents, or consulting text/vector indexes.
 
 Issue `#2505` owns the executor that binds scalar filtering, source candidate APIs,
-fusion, and bounded final document fetch under the snapshot/epoch contract.
+fusion, and bounded final document fetch under the snapshot/epoch contract. The
+initial executor uses the #2503 text/vector candidate adapters, #2504 RRF fusion,
+secondary-index-only scalar filtering, and final document materialization only
+after fusion/filter/top-k selection. Scalar equality uses
+`FindByIndexValueLimit`; scalar ranges use `FindByIndexRange` with an explicit
+executor limit derived from the final top-k and source candidate budgets. If the
+scalar lookup truncates before the executor can build a complete allow-set, the
+query fails closed with `scalar_filter_unbounded`. In this initial executor,
+`prefilter`, `text_first`, `vector_first`, and `union_fusion` are bounded
+planning/reporting labels unless a source API can accept an ID restriction; the
+executor still builds the scalar allow-set before source generation and applies
+it before fusion for non-`postfilter` strategies. `bound_snapshot` remains
+reserved for a future explicit read-view/searcher API; the current executor
+supports `current_snapshot` and fails closed on root/commit changes observed
+between bounded phases.
