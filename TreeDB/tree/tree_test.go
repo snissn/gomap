@@ -12,6 +12,64 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
+func TestTreePointLookupAllowsDeepValidInternalChain(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatalf("open pager: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	const internalDepth = 64
+	pageIDs := make([]uint64, internalDepth+1)
+	for i := range pageIDs {
+		id, err := p.Alloc(1)
+		if err != nil {
+			t.Fatalf("alloc page %d: %v", i, err)
+		}
+		pageIDs[i] = id
+	}
+
+	key := []byte("k")
+	want := []byte("deep-value")
+	leafData, err := p.GetForWrite(pageIDs[internalDepth])
+	if err != nil {
+		t.Fatalf("get leaf: %v", err)
+	}
+	leaf := node.NewBuilder(leafData, page.PageTypeLeaf)
+	leaf.SetPageID(pageIDs[internalDepth])
+	if err := leaf.AddLeafEntry(key, want, 0, page.ValuePtr{}); err != nil {
+		t.Fatalf("add leaf entry: %v", err)
+	}
+	leaf.FinishNoNode()
+
+	for i := internalDepth - 1; i >= 0; i-- {
+		data, err := p.GetForWrite(pageIDs[i])
+		if err != nil {
+			t.Fatalf("get internal %d: %v", i, err)
+		}
+		b := node.NewBuilder(data, page.PageTypeInternal)
+		b.SetPageID(pageIDs[i])
+		if err := b.AddInternalChild([]byte{}, pageIDs[i+1]); err != nil {
+			t.Fatalf("add internal child %d: %v", i, err)
+		}
+		b.FinishNoNode()
+	}
+
+	tr := New(p, panicValueReader{}, pageIDs[0])
+	got, err := tr.Get(key)
+	if err != nil {
+		t.Fatalf("Get deep key: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Get deep key=%q want %q", got, want)
+	}
+	ok, err := tr.Has(key)
+	if err != nil || !ok {
+		t.Fatalf("Has deep key ok=%v err=%v", ok, err)
+	}
+}
+
 func newTreeWithLeafLogRoot(t *testing.T, sr SlabReader, key []byte, ptr page.LeafLogPtr) (*Tree, func()) {
 	t.Helper()
 	dir := t.TempDir()

@@ -48,7 +48,14 @@ type ProbeFallbackStats struct {
 	FallbackItems uint64
 }
 
-const getManyLeafGroupMinKeys = 64
+const (
+	getManyLeafGroupMinKeys = 64
+	// maxTraversalDepth is a corruption guard for point/probe tree walks. Some
+	// valid geth/TreeDB datasets can currently contain tall left-edge internal
+	// chains produced by repeated root splits, so keep this comfortably above the
+	// historical 50-page cap while still bounding malformed cycles.
+	maxTraversalDepth = 1024
+)
 
 var treeGetAppendInlineHitsTotal atomic.Uint64
 var treeGetAppendInlineBytesTotal atomic.Uint64
@@ -547,7 +554,7 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 		verifyAlways = t.pager.VerifyOnRead()
 	}
 
-	for depth := 0; depth < 50; depth++ {
+	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
 		if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
 			return node.LeafEntry{}, err
@@ -622,7 +629,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 		verifyAlways = t.pager.VerifyOnRead()
 	}
 
-	for depth := 0; depth < 50; depth++ {
+	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var (
 			n                node.Node
 			leafScratch      *leafRefPageScratch
@@ -1289,7 +1296,7 @@ func (t *Tree) findLeafRefForGetMany(key []byte, verifyAlways bool) (page.ChildR
 		return page.ChildRef{}, false, errors.New("missing tree")
 	}
 	currRef := page.PageChildRef(t.rootPageID)
-	for depth := 0; depth < 50; depth++ {
+	for depth := 0; depth < maxTraversalDepth; depth++ {
 		if currRef.Kind == page.ChildRefLeafLog {
 			return currRef, true, nil
 		}
@@ -1563,7 +1570,7 @@ func (t *Tree) Has(key []byte) (bool, error) {
 		verifyAlways = t.pager.VerifyOnRead()
 	}
 
-	for depth := 0; depth < 50; depth++ {
+	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
 		if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
 			return false, err
