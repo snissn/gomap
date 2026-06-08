@@ -214,6 +214,11 @@ Additional reporting:
   - By default, checkpoint-kick maintenance skips starting a fresh rewrite plan while foreground activity is hot and rewrite queue debt is empty.
   - Queued rewrite debt and deferred-due passes still run.
   - Set this disable knob only for controlled rollback experiments that need the legacy checkpoint-kick fresh-plan behavior.
+- Periodic rewrite-plan scan budget:
+  - By default, periodic/background fresh rewrite planning is bounded by a short internal deadline so scheduled live-byte scans cannot monopolize foreground-heavy restore/sync windows.
+  - Explicit/checkpoint/deferred rewrite debt paths keep their wider planning contexts.
+  - `TREEDB_DISABLE_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET=1` disables the budget for controlled rollback experiments.
+  - `TREEDB_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET_MS` overrides the internal budget in milliseconds for diagnostics.
 - Optional debt-drain cap overrides (for controlled experiments):
   - `TREEDB_VLOG_GENERATION_REWRITE_RESUME_MAX_SEGMENTS`
   - `TREEDB_VLOG_GENERATION_REWRITE_DEBT_DRAIN_MAX_SEGMENTS`
