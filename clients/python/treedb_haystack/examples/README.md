@@ -22,9 +22,14 @@ In another shell with the same virtual environment:
 
 ```sh
 python clients/python/treedb_haystack/examples/basic_ingest_retrieve.py
+python clients/python/treedb_haystack/examples/keyword_hybrid_retrieve.py
 python clients/python/treedb_haystack/examples/code_search_metadata.py
 ```
 
-Both scripts use small deterministic embeddings and exact TreeDB service-backed
-dense retrieval. They do not exercise or claim keyword/hybrid search support.
-Use `--base-url` and `--index` to point at a different service or isolate runs.
+The scripts use small deterministic embeddings and TreeDB service-backed
+retrieval. `basic_ingest_retrieve.py` and `code_search_metadata.py` use exact
+dense retrieval; `keyword_hybrid_retrieve.py` uses the TreeDB keyword and hybrid
+service routes. Keyword/hybrid metadata filters are intentionally not used
+because the current service fails those filters closed with `unsupported` until
+bounded scalar filter mapping is available. Use `--base-url` and `--index` to
+point at a different service or isolate runs.
