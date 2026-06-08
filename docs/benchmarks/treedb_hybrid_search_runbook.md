@@ -51,6 +51,7 @@ Benchmark rows cover:
 ```sh
 OUT=/tmp/gomap_2506_hybrid_closeout_$(date +%Y%m%d_%H%M%S)
 mkdir -p "$OUT"
+set -o pipefail
 
 GOWORK=off \
 TREEDB_HYBRID_BENCH_DOCS=256 \
@@ -73,6 +74,7 @@ larger `-benchtime` and run under the quietest available host conditions.
 ```sh
 OUT=${OUT:-/tmp/gomap_2506_hybrid_closeout_$(date +%Y%m%d_%H%M%S)}
 mkdir -p "$OUT"
+set -o pipefail
 BENCH='^BenchmarkSearchHybridCloseout2506/mode_hybrid_fetch_topk/topK_10/candidates_64/filter_rare_06pct$'
 
 GOWORK=off \
