@@ -265,6 +265,22 @@ currently trips Go's cgo pointer checks on this toolchain; set
 `RUN_UNSAFE_USEARCH_FILTERED=true` only when you explicitly want that benchmark
 with `GODEBUG=cgocheck=0`.
 
+Recent `10k x 1536` external snapshot, using TreeDB DB-demo no-document search,
+USearch f32 HNSW, and PostgreSQL+pgvector HNSW with `M=16`,
+`efConstruction=128`, `efSearch=128`, and `topK=10`:
+
+| system | recall@10 | c=1 avg / QPS | c=8 avg / QPS |
+| --- | ---: | ---: | ---: |
+| TreeDB exact FP32 | 0.9859 | 418 µs / 2,391 | 852 µs / 9,386 |
+| TreeDB scalar_u8 rerank32 | 0.9828 | 165 µs / 6,072 | 511 µs / 15,571 |
+| USearch f32 HNSW | 0.8938 | 725 µs / 1,380 | 160 µs / 6,259 |
+| PostgreSQL+pgvector HNSW | 0.9859 | 2.67 ms / 374 | 4.29 ms / 1,864 |
+
+Full context, commands, guardrails, and caveats are in
+`../docs/benchmarks/treedb_vector_external_compare_2026-06-08.md`. The USearch
+row is an in-memory library comparator, not a persistent DB/server row, and its
+averages are from batch searches with `threads=1/8`.
+
 The tiny BERT embedding demo in `../examples/vector_search/tiny_bert/` is a
 caller-side fixture/demo; TreeDB core does not generate embeddings. Export it
 with `--output-jsonl` and set `TREEDB_VECTOR_BENCH_JSONL` to run

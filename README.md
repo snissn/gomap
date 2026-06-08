@@ -153,6 +153,24 @@ semantics match.
 Source:
 [June 4 fast Mongo/native client-shape matrix](docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md).
 
+### Vector Search External Snapshot
+
+Local Apple M3 snapshot for `10k x 1536` vectors, `topK=10`, `M=16`,
+`efConstruction=128`, and `efSearch=128`. TreeDB rows use DB-demo no-document
+search; USearch is an in-memory library comparator; pgvector is a PostgreSQL
+server HNSW comparator.
+
+| system | recall@10 | c=1 avg / QPS | c=8 avg / QPS |
+| --- | ---: | ---: | ---: |
+| TreeDB exact FP32 | 0.9859 | 418 µs / 2,391 | 852 µs / 9,386 |
+| TreeDB scalar_u8 rerank32 | 0.9828 | 165 µs / 6,072 | 511 µs / 15,571 |
+| USearch f32 HNSW | 0.8938 | 725 µs / 1,380 | 160 µs / 6,259 |
+| PostgreSQL+pgvector HNSW | 0.9859 | 2.67 ms / 374 | 4.29 ms / 1,864 |
+
+USearch c=1/c=8 averages are from batch searches with `threads=1/8`, while
+TreeDB and pgvector report per-query latency samples. Source and caveats:
+[June 8 vector external comparison](docs/benchmarks/treedb_vector_external_compare_2026-06-08.md).
+
 ### `application.db` Offline Density Workload
 
 Offline compacted-size comparison from the June 2 Celestia `application.db`
