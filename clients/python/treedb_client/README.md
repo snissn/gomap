@@ -17,15 +17,16 @@ Supported by the base client:
 - delete by server-side metadata filter
 - count/filter/list documents
 - exact dense-vector search with optional metadata filters and embedding echo
-- typed dataclasses for documents, index metadata, responses, and errors
+- ranked keyword search over the service `content` text index
+- TreeDB-native hybrid text/vector search with deterministic RRF fusion options
+- typed dataclasses for documents, index metadata, keyword/hybrid requests and responses, stats, plan/snapshot, fusion options, and errors
 - Haystack-style filter conversion/validation without a Haystack dependency
 
 Not supported:
 
-- keyword search
-- hybrid search
+- metadata filters on keyword/hybrid routes (the service fails them closed with `unsupported`/HTTP 501)
 - async client APIs
-- client-side scans to emulate unsupported TreeDB behavior
+- client-side scans or text/vector fallbacks to emulate unsupported TreeDB behavior
 
 TreeDB and this client are pre-alpha; APIs may change with the service contract.
 
@@ -128,6 +129,34 @@ results = client.query_by_embedding(
 
 for doc in results.documents:
     print(doc.id, doc.score, doc.meta.get("path"))
+
+keyword = client.search_keyword(
+    "docs",
+    query="dense scoring filters",
+    top_k=5,
+    operator="or",
+    candidate_limit=1000,
+    max_postings_scanned=100000,
+)
+
+hybrid = client.search_hybrid(
+    "docs",
+    query="dense scoring filters",
+    query_embedding=[0.1, 0.2, 0.3],
+    top_k=5,
+    text_candidate_limit=100,
+    vector_candidate_limit=100,
+    ef_search=64,
+    fusion={
+        "method": "rrf",
+        "rrf_k": 60,
+        "tie_policy": "fused_score_best_rank_source_order_id",
+        "source_order": ["text", "vector"],
+    },
+)
+
+for doc in hybrid.documents:
+    print(doc.id, doc.score, doc.meta.get("_treedb_search"))
 ```
 
 ## Filters
@@ -157,6 +186,11 @@ Unsupported operators and the top-level `embedding` field filter raise
 `InvalidFilterError`; embedding-named metadata paths such as
 `meta.embedding.provider` are allowed. The client does not broaden unsupported
 filters into local document scans.
+
+This filter AST is supported by document count/filter/delete and exact dense
+vector search. Keyword and hybrid methods will serialize a valid filter if you
+provide one, but the current service contract rejects keyword/hybrid filters with
+`UnsupportedError` (`unsupported`/HTTP 501) after validating the filter shape.
 
 ## Error mapping
 

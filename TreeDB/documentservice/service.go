@@ -50,18 +50,29 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	if err != nil {
 		return IndexInfo{}, err
 	}
+	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
+	vectorStrategy := collections.VectorIndexStrategyNativeRuntime
+	if metric == MetricCosine {
+		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
+		vectorStrategy = collections.VectorIndexStrategyColumnGraph
+	}
 	meta := &collections.CollectionMeta{
-		Name: req.Name,
-		Options: collections.CollectionOptions{
-			DocumentFormat: collections.DocumentFormatJSON,
-		},
+		Name:    req.Name,
+		Options: options,
 		VectorIndexes: []collections.VectorIndexDefinition{{
 			Name:             defaultVectorIndexName,
 			Field:            defaultEmbeddingField,
 			Metric:           collectionMetric,
 			Dimensions:       req.Dimension,
 			Encoding:         collections.VectorIndexEncodingFloat32,
-			Strategy:         collections.VectorIndexStrategyNativeRuntime,
+			Strategy:         vectorStrategy,
+			SchemaGeneration: 1,
+		}},
+		TextIndexes: []collections.TextIndexDefinition{{
+			Name:             defaultTextIndexName,
+			Fields:           []collections.TextIndexField{{Field: defaultTextField}},
+			Analyzer:         collections.TextAnalyzerSimple,
+			StorePositions:   true,
 			SchemaGeneration: 1,
 		}},
 	}
@@ -156,6 +167,11 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		if wasUpdated {
 			updated++
+		}
+	}
+	if inserted > 0 && updated == 0 {
+		if err := rebuildServiceVectorIndex(ctx, col); err != nil {
+			return UpsertDocumentsResponse{}, err
 		}
 	}
 	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids}, nil
@@ -329,14 +345,125 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	return DenseVectorSearchResponse{Index: info, Documents: docs, Metric: info.Metric, Exact: true, Candidates: candidateCount}, nil
 }
 
-// SearchKeyword intentionally fails closed until TreeDB ranked text execution is implemented.
-func (s *Service) SearchKeyword(context.Context, string, json.RawMessage) error {
-	return serviceError(CodeUnsupported, "keyword search is not implemented; TreeDB text search currently fails closed and the service does not scan documents as a fallback")
+// SearchKeyword runs ranked lexical search over the service content text index.
+func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSearchRequest) (KeywordSearchResponse, error) {
+	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
+	if err != nil {
+		return KeywordSearchResponse{}, err
+	}
+	if req.TopK <= 0 {
+		return KeywordSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
+	}
+	operator, err := normalizeKeywordSearchOperator(req.Operator)
+	if err != nil {
+		return KeywordSearchResponse{}, err
+	}
+	if req.CandidateLimit < 0 || req.MaxPostingsScanned < 0 {
+		return KeywordSearchResponse{}, serviceError(CodeInvalidRequest, "candidate_limit and max_postings_scanned must be non-negative")
+	}
+	if req.Filter != nil {
+		if err := req.Filter.Validate(); err != nil {
+			return KeywordSearchResponse{}, err
+		}
+		return KeywordSearchResponse{}, serviceError(CodeUnsupported, "metadata filters are not supported for keyword search yet; the service will not scan documents as a fallback")
+	}
+
+	textResponse, err := col.SearchText(collections.TextSearchOptions{
+		IndexName:            defaultTextIndexName,
+		Query:                req.Query,
+		Operator:             operator,
+		TopK:                 req.TopK,
+		CandidateLimit:       req.CandidateLimit,
+		MaxPostingsScanned:   req.MaxPostingsScanned,
+		IncludeDocuments:     true,
+		DocumentFetchOptions: serviceDocumentFetchOptions(req.ReturnEmbedding),
+	})
+	response := KeywordSearchResponse{Index: info, TextIndex: defaultTextIndexName, Stats: keywordStatsFromCollection(textResponse.Stats)}
+	if err != nil {
+		return response, mapKeywordSearchError(err)
+	}
+	docs, err := documentsFromTextSearchResults(textResponse.Results, req.ReturnEmbedding)
+	if err != nil {
+		return response, err
+	}
+	response.Documents = docs
+	return response, nil
 }
 
-// SearchHybrid intentionally fails closed until TreeDB hybrid execution is implemented.
-func (s *Service) SearchHybrid(context.Context, string, json.RawMessage) error {
-	return serviceError(CodeUnsupported, "hybrid search is not implemented; the service does not run text/hybrid document-scan fallbacks")
+// SearchHybrid runs collection-native hybrid retrieval with text and/or vector sources.
+func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSearchRequest) (HybridSearchResponse, error) {
+	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
+	if err != nil {
+		return HybridSearchResponse{}, err
+	}
+	if req.TopK <= 0 {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
+	}
+	if !info.Capabilities.HybridSearch {
+		return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph vector index and content text index")
+	}
+	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.EfSearch < 0 {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits and ef_search must be non-negative")
+	}
+	if req.Filter != nil {
+		if err := req.Filter.Validate(); err != nil {
+			return HybridSearchResponse{}, err
+		}
+		return HybridSearchResponse{}, serviceError(CodeUnsupported, "metadata filters are not supported for hybrid search yet; the service will not scan documents as a fallback")
+	}
+
+	hasText := strings.TrimSpace(req.Query) != ""
+	hasVector := len(req.QueryEmbedding) > 0
+	if !hasText && !hasVector {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid search requires query, query_embedding, or both")
+	}
+
+	opts := collections.HybridSearchOptions{
+		TopK:                 req.TopK,
+		Fusion:               req.Fusion,
+		IncludeDocuments:     true,
+		DocumentFetchOptions: serviceDocumentFetchOptions(req.ReturnEmbedding),
+	}
+	response := HybridSearchResponse{Index: info}
+	if hasText {
+		limit := req.TextCandidateLimit
+		if limit == 0 {
+			limit = req.CandidateLimit
+		}
+		opts.Text = &collections.HybridTextQuery{IndexName: defaultTextIndexName, Query: req.Query, CandidateLimit: limit}
+		response.TextIndex = defaultTextIndexName
+	}
+	if hasVector {
+		if err := validateEmbedding("query_embedding", req.QueryEmbedding, info.Dimension, info.Metric); err != nil {
+			return HybridSearchResponse{}, err
+		}
+		limit := req.VectorCandidateLimit
+		if limit == 0 {
+			limit = req.CandidateLimit
+		}
+		opts.Vector = &collections.HybridVectorQuery{
+			IndexName:      defaultVectorIndexName,
+			Query:          append([]float32(nil), req.QueryEmbedding...),
+			CandidateLimit: limit,
+			EfSearch:       req.EfSearch,
+			QueryMode:      collections.VectorIndexQueryModeExact,
+		}
+		response.VectorIndex = defaultVectorIndexName
+	}
+
+	hybridResponse, err := col.SearchHybrid(opts)
+	response.Plan = hybridResponse.Plan
+	response.Snapshot = hybridResponse.Snapshot
+	response.Stats = hybridResponse.Stats
+	if err != nil {
+		return response, mapHybridSearchError(err)
+	}
+	docs, err := documentsFromHybridSearchResults(hybridResponse.Results, hybridResponse.Plan, req.ReturnEmbedding)
+	if err != nil {
+		return response, err
+	}
+	response.Documents = docs
+	return response, nil
 }
 
 func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration uint64) (*collections.Collection, IndexInfo, error) {
@@ -371,42 +498,97 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	if format != collections.DocumentFormatJSON {
 		return IndexInfo{}, serviceErrorf(CodeIndexUnavailable, "collection %q is not a document service JSON index", meta.Name)
 	}
-	var def collections.VectorIndexDefinition
-	found := false
-	for _, candidate := range meta.VectorIndexes {
-		if candidate.Name == defaultVectorIndexName || candidate.Field == defaultEmbeddingField {
-			def = candidate
-			found = true
-			break
-		}
-	}
-	if !found {
-		return IndexInfo{}, serviceErrorf(CodeIndexUnavailable, "collection %q does not expose the service embedding index", meta.Name)
-	}
-	if def.Field != defaultEmbeddingField {
-		return IndexInfo{}, serviceErrorf(CodeIndexUnavailable, "collection %q uses unsupported embedding field %q", meta.Name, def.Field)
-	}
-	if def.Dimensions <= 0 {
-		return IndexInfo{}, serviceErrorf(CodeIndexUnavailable, "collection %q has invalid embedding dimensions", meta.Name)
-	}
-	metric, err := metricFromCollection(def.Metric)
+	vectorDef, err := serviceVectorIndexDefinition(meta)
 	if err != nil {
 		return IndexInfo{}, err
 	}
-	generation := def.SchemaGeneration
+	textDef, err := serviceTextIndexDefinition(meta)
+	if err != nil {
+		return IndexInfo{}, err
+	}
+	metric, err := metricFromCollection(vectorDef.Metric)
+	if err != nil {
+		return IndexInfo{}, err
+	}
+	generation := vectorDef.SchemaGeneration
+	if textDef.SchemaGeneration > generation {
+		generation = textDef.SchemaGeneration
+	}
 	if generation == 0 {
 		generation = 1
 	}
+	hybridSearch := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	return IndexInfo{
 		Name:            meta.Name,
-		Dimension:       def.Dimensions,
+		Dimension:       vectorDef.Dimensions,
 		Metric:          metric,
 		Generation:      generation,
 		ContractVersion: ContractVersion,
 		EmbeddingField:  defaultEmbeddingField,
+		VectorIndexName: vectorDef.Name,
+		TextField:       defaultTextField,
+		TextIndexName:   textDef.Name,
 		DocumentType:    defaultCollectionDocType,
-		Capabilities:    indexCapabilities(),
+		Capabilities:    indexCapabilities(hybridSearch),
 	}, nil
+}
+
+func serviceVectorIndexDefinition(meta collections.CollectionMeta) (collections.VectorIndexDefinition, error) {
+	for _, candidate := range meta.VectorIndexes {
+		if candidate.Name == defaultVectorIndexName {
+			if candidate.Field != defaultEmbeddingField {
+				return collections.VectorIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q uses unsupported embedding field %q", meta.Name, candidate.Field)
+			}
+			if candidate.Dimensions <= 0 {
+				return collections.VectorIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q has invalid embedding dimensions", meta.Name)
+			}
+			if candidate.Encoding != collections.VectorIndexEncodingFloat32 {
+				return collections.VectorIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q uses unsupported vector index encoding %s", meta.Name, candidate.Encoding.String())
+			}
+			if candidate.Strategy != collections.VectorIndexStrategyNativeRuntime && candidate.Strategy != collections.VectorIndexStrategyColumnGraph {
+				return collections.VectorIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q uses unsupported vector index strategy %q", meta.Name, candidate.Strategy)
+			}
+			return candidate, nil
+		}
+	}
+	return collections.VectorIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q does not expose the service vector index %q", meta.Name, defaultVectorIndexName)
+}
+
+func serviceTextIndexDefinition(meta collections.CollectionMeta) (collections.TextIndexDefinition, error) {
+	for _, candidate := range meta.TextIndexes {
+		if candidate.Name != defaultTextIndexName {
+			continue
+		}
+		if candidate.Analyzer != collections.TextAnalyzerSimple {
+			return collections.TextIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q text index %q uses unsupported analyzer %q", meta.Name, defaultTextIndexName, candidate.Analyzer)
+		}
+		if len(candidate.Fields) != 1 || candidate.Fields[0].Field != defaultTextField {
+			return collections.TextIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q text index %q must cover only field %q", meta.Name, defaultTextIndexName, defaultTextField)
+		}
+		if candidate.Fields[0].Weight != 1 {
+			return collections.TextIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q text index %q uses unsupported content weight %g", meta.Name, defaultTextIndexName, candidate.Fields[0].Weight)
+		}
+		if !candidate.StorePositions || candidate.StoreOffsets {
+			return collections.TextIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q text index %q uses unsupported position/offset storage", meta.Name, defaultTextIndexName)
+		}
+		return candidate, nil
+	}
+	return collections.TextIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q does not expose the service text index %q", meta.Name, defaultTextIndexName)
+}
+
+func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
+	return &collections.ColumnStoreConfig{
+		Enabled: true,
+		Columns: []collections.ColumnStoreColumn{{
+			Name:       defaultEmbeddingField,
+			Path:       defaultEmbeddingField,
+			Owner:      collections.TypedStorageOwnerColumnPart,
+			ValueType:  collections.ColumnStoreValueFloat32Vector,
+			VectorDims: dimension,
+		}},
+		RetainedPayload:         collections.ColumnRetainedPayloadFull,
+		RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingJSON,
+	}
 }
 
 type preparedDocument struct {
@@ -619,6 +801,256 @@ func scoreEmbedding(query, document []float32, metric Metric) (float64, error) {
 type scoredDocument struct {
 	document Document
 	score    float64
+}
+
+func serviceDocumentFetchOptions(returnEmbedding bool) collections.DocumentFetchOptions {
+	opts := collections.DocumentFetchOptions{Format: collections.DocumentFormatJSON}
+	if !returnEmbedding {
+		opts.ExcludePaths = []string{defaultEmbeddingField}
+	}
+	return opts
+}
+
+func normalizeKeywordSearchOperator(op collections.TextSearchOperator) (collections.TextSearchOperator, error) {
+	switch strings.TrimSpace(strings.ToLower(string(op))) {
+	case "", string(collections.TextSearchOperatorOR):
+		return collections.TextSearchOperatorOR, nil
+	case string(collections.TextSearchOperatorAND):
+		return collections.TextSearchOperatorAND, nil
+	default:
+		return "", serviceErrorf(CodeInvalidRequest, "unsupported keyword operator %q", op)
+	}
+}
+
+func keywordStatsFromCollection(stats collections.TextSearchStats) KeywordSearchStats {
+	return KeywordSearchStats{
+		QueryTerms:                stats.QueryTerms,
+		CandidatesRequested:       stats.TextCandidatesRequested,
+		CandidatesReturned:        stats.TextCandidatesReturned,
+		PostingsScanned:           maxUint64(stats.TextPostingsScanned, stats.PostingsScanned),
+		CandidatesScored:          maxUint64(stats.TextCandidatesScored, stats.CandidatesScored),
+		DocumentsFetched:          stats.DocumentsFetched,
+		DocumentsMissing:          stats.DocumentsMissing,
+		FullDocumentScanFallbacks: stats.FullDocumentScanFallbacks,
+		PostingsScanNanos:         stats.PostingsScanNanos,
+		CandidateScoreNanos:       stats.CandidateScoreNanos,
+		DocumentFetchNanos:        stats.DocumentFetchNanos,
+		Truncated:                 stats.Truncated,
+		FailClosed:                stats.FailClosed,
+		FailClosedReason:          stats.FailClosedReason,
+		Unavailable:               stats.Unavailable,
+		UnavailableReason:         stats.UnavailableReason,
+	}
+}
+
+func documentsFromTextSearchResults(results []collections.TextSearchResult, returnEmbedding bool) ([]Document, error) {
+	docs := make([]Document, 0, len(results))
+	for _, result := range results {
+		if len(result.Document) == 0 {
+			return nil, serviceErrorf(CodeIndexUnavailable, "keyword result document %q was not fetched", string(result.DocumentID))
+		}
+		doc, err := decodeStoredDocument(result.DocumentID, result.Document)
+		if err != nil {
+			return nil, err
+		}
+		if !returnEmbedding {
+			doc.Embedding = nil
+		}
+		doc.Score = scorePtr(result.Score)
+		attachSearchMeta(&doc, keywordSearchMeta(result))
+		docs = append(docs, doc)
+	}
+	if docs == nil {
+		docs = []Document{}
+	}
+	return docs, nil
+}
+
+func documentsFromHybridSearchResults(results []collections.HybridSearchResult, plan collections.HybridSearchPlan, returnEmbedding bool) ([]Document, error) {
+	docs := make([]Document, 0, len(results))
+	for _, result := range results {
+		if !result.DocumentFound || len(result.Document) == 0 {
+			return nil, serviceErrorf(CodeIndexUnavailable, "hybrid result document %q was not fetched", string(result.ID))
+		}
+		doc, err := decodeStoredDocument(result.ID, result.Document)
+		if err != nil {
+			return nil, err
+		}
+		if !returnEmbedding {
+			doc.Embedding = nil
+		}
+		doc.Score = scorePtr(result.FusedScore)
+		attachSearchMeta(&doc, hybridSearchMeta(result, plan))
+		docs = append(docs, doc)
+	}
+	if docs == nil {
+		docs = []Document{}
+	}
+	return docs, nil
+}
+
+func keywordSearchMeta(result collections.TextSearchResult) map[string]any {
+	meta := map[string]any{
+		"type":           "keyword",
+		"text_index":     result.IndexName,
+		"rank":           result.Rank,
+		"score_kind":     string(result.ScoreKind),
+		"matched_terms":  append([]string(nil), result.MatchedTerms...),
+		"matched_fields": append([]string(nil), result.MatchedFields...),
+	}
+	if len(result.TextMatches) > 0 {
+		meta["text_matches"] = textSearchMatchesMeta(result.TextMatches)
+	}
+	return meta
+}
+
+func hybridSearchMeta(result collections.HybridSearchResult, plan collections.HybridSearchPlan) map[string]any {
+	meta := map[string]any{
+		"type":              "hybrid",
+		"rank":              result.Rank,
+		"fusion_method":     string(plan.FusionMethod),
+		"fusion_tie_policy": string(plan.FusionTiePolicy),
+		"fused_score":       result.FusedScore,
+	}
+	if len(result.Sources) > 0 {
+		sources := make([]map[string]any, len(result.Sources))
+		for i, source := range result.Sources {
+			sourceMeta := map[string]any{
+				"source":       string(source.Source),
+				"index_name":   source.IndexName,
+				"source_rank":  source.SourceRank,
+				"score":        source.Score,
+				"score_kind":   string(source.ScoreKind),
+				"fusion_score": source.FusionScore,
+			}
+			if len(source.TextMatches) > 0 {
+				sourceMeta["text_matches"] = hybridTextMatchesMeta(source.TextMatches)
+			}
+			sources[i] = sourceMeta
+		}
+		meta["sources"] = sources
+	}
+	return meta
+}
+
+func textSearchMatchesMeta(matches []collections.TextSearchMatch) []map[string]any {
+	out := make([]map[string]any, len(matches))
+	for i, match := range matches {
+		out[i] = map[string]any{"field": match.Field, "terms": append([]string(nil), match.Terms...)}
+	}
+	return out
+}
+
+func hybridTextMatchesMeta(matches []collections.HybridTextMatch) []map[string]any {
+	out := make([]map[string]any, len(matches))
+	for i, match := range matches {
+		out[i] = map[string]any{"field": match.Field, "terms": append([]string(nil), match.Terms...)}
+	}
+	return out
+}
+
+func attachSearchMeta(doc *Document, meta map[string]any) {
+	if doc.Meta == nil {
+		doc.Meta = map[string]any{}
+	}
+	doc.Meta[searchMetaKey] = meta
+}
+
+func rebuildServiceVectorIndex(ctx context.Context, col *collections.Collection) error {
+	if err := ctxErr(ctx); err != nil {
+		return err
+	}
+	if col == nil {
+		return serviceError(CodeIndexUnavailable, "index collection is unavailable")
+	}
+	def, err := serviceVectorIndexDefinition(col.Meta())
+	if err != nil {
+		return err
+	}
+	if def.Strategy != collections.VectorIndexStrategyColumnGraph {
+		return nil
+	}
+	if _, err := col.RebuildVectorIndex(defaultVectorIndexName); err != nil {
+		if serviceVectorRebuildUnsupportedAfterMutation(err) {
+			// Column-graph vector rebuild is currently insert-only for this row-ref
+			// state. Preserve write/upsert semantics and let subsequent hybrid vector
+			// searches fail closed as stale/unavailable instead of scanning.
+			return nil
+		}
+		return mapCollectionMaintenanceError("rebuild service vector index", err)
+	}
+	return nil
+}
+
+func serviceVectorRebuildUnsupportedAfterMutation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "requires insert-only base physical refs")
+}
+
+func mapKeywordSearchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var serviceErr *Error
+	if errors.As(err, &serviceErr) {
+		return err
+	}
+	if errors.Is(err, collections.ErrTextIndexUnavailable) || errors.Is(err, collections.ErrIndexNotFound) {
+		return wrapServiceError(CodeIndexUnavailable, "keyword text index is unavailable", err)
+	}
+	if errors.Is(err, backenddb.ErrClosed) {
+		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
+	}
+	return wrapServiceError(CodeInvalidRequest, "keyword search request is invalid or unsupported", err)
+}
+
+func mapHybridSearchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var serviceErr *Error
+	if errors.As(err, &serviceErr) {
+		return err
+	}
+	if errors.Is(err, collections.ErrHybridSearchStaleIndex) {
+		return wrapServiceError(CodeIndexStale, "hybrid search index snapshot is stale", err)
+	}
+	if errors.Is(err, collections.ErrHybridSearchIndexUnavailable) || errors.Is(err, collections.ErrIndexNotFound) {
+		return wrapServiceError(CodeIndexUnavailable, "hybrid search index is unavailable", err)
+	}
+	if errors.Is(err, collections.ErrHybridSearchUnsupported) {
+		return wrapServiceError(CodeUnsupported, "hybrid search request is unsupported", err)
+	}
+	if errors.Is(err, backenddb.ErrClosed) {
+		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
+	}
+	return wrapServiceError(CodeInternal, "hybrid search failed", err)
+}
+
+func mapCollectionMaintenanceError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var serviceErr *Error
+	if errors.As(err, &serviceErr) {
+		return err
+	}
+	if errors.Is(err, collections.ErrIndexNotFound) || errors.Is(err, collections.ErrHybridSearchIndexUnavailable) {
+		return wrapServiceError(CodeIndexUnavailable, operation+" failed", err)
+	}
+	if errors.Is(err, backenddb.ErrClosed) {
+		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
+	}
+	return wrapServiceError(CodeInternal, operation+" failed", err)
+}
+
+func maxUint64(values ...uint64) uint64 {
+	var max uint64
+	for _, value := range values {
+		if value > max {
+			max = value
+		}
+	}
+	return max
 }
 
 func cloneMeta(in map[string]any) map[string]any {

@@ -10,7 +10,10 @@ from typing import Any, Dict, Tuple
 import _support  # noqa: F401
 from treedb_client import (
     Document,
+    HybridFusionOptions,
     IndexNotFoundError,
+    IndexStaleError,
+    IndexUnavailableError,
     InvalidRequestError,
     TreeDBClient,
     TreeDBConfigError,
@@ -28,13 +31,18 @@ SAMPLE_INDEX = {
     "generation": 1,
     "contract_version": "treedb-document-service/v1alpha1",
     "embedding_field": "embedding",
+    "vector_index_name": "embedding",
+    "text_field": "content",
+    "text_index_name": "content",
     "document_type": "treedb_document_service_v1",
     "capabilities": {
         "dense_vector_search": True,
         "exact_dense_scoring": True,
         "metadata_filters": True,
-        "keyword_search": False,
-        "hybrid_search": False,
+        "keyword_search": True,
+        "hybrid_search": True,
+        "keyword_metadata_filters": False,
+        "hybrid_metadata_filters": False,
     },
 }
 
@@ -190,6 +198,162 @@ class TreeDBClientTests(unittest.TestCase):
 
             delete_body = json_body(server.records[-1])
             self.assertEqual(delete_body["filter"], {"field": "meta.repo", "operator": "==", "value": "gomap"})
+
+    def test_keyword_search_serializes_request_and_parses_response(self) -> None:
+        route = "/v1/indexes/docs/search/keyword"
+        response = {
+            "index": SAMPLE_INDEX,
+            "text_index": "content",
+            "documents": [
+                {
+                    "id": "doc-1",
+                    "content": "refund policy text",
+                    "meta": {"_treedb_search": {"type": "keyword", "rank": 1}},
+                    "score": 3.12,
+                }
+            ],
+            "stats": {"query_terms": 2, "candidates_returned": 1, "documents_fetched": 1, "new_counter": 7},
+        }
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            result = client.search_keyword(
+                "docs",
+                "refund policy",
+                5,
+                operator="and",
+                candidate_limit=100,
+                max_postings_scanned=1000,
+                return_embedding=True,
+                expected_generation=2,
+            )
+
+            self.assertEqual(result.text_index, "content")
+            self.assertEqual(result.documents[0].id, "doc-1")
+            self.assertEqual(result.documents[0].score, 3.12)
+            self.assertEqual(result.documents[0].meta["_treedb_search"]["type"], "keyword")
+            self.assertEqual(result.stats.query_terms, 2)
+            self.assertEqual(result.stats.extra["new_counter"], 7)
+            self.assertTrue(result.index.capabilities.keyword_search)
+            body = json_body(server.records[0])
+            self.assertEqual(
+                body,
+                {
+                    "query": "refund policy",
+                    "top_k": 5,
+                    "return_embedding": True,
+                    "expected_generation": 2,
+                    "operator": "and",
+                    "candidate_limit": 100,
+                    "max_postings_scanned": 1000,
+                },
+            )
+
+    def test_hybrid_search_serializes_fusion_and_parses_response(self) -> None:
+        route = "/v1/indexes/docs/search/hybrid"
+        response = {
+            "index": SAMPLE_INDEX,
+            "text_index": "content",
+            "vector_index": "embedding",
+            "documents": [
+                {
+                    "id": "doc-1",
+                    "content": "refund policy text",
+                    "meta": {"_treedb_search": {"type": "hybrid", "sources": [{"source": "text"}]}},
+                    "score": 0.0325,
+                }
+            ],
+            "plan": {
+                "fusion_method": "rrf",
+                "fusion_tie_policy": "fused_score_best_rank_source_order_id",
+                "text_candidate_limit": 25,
+                "vector_candidate_limit": 30,
+                "final_top_k": 5,
+            },
+            "snapshot": {"consistency": "current_snapshot", "commit_seq": 9},
+            "stats": {"text_candidates_returned": 3, "vector_candidates_returned": 4, "fusion_both": 1, "documents_fetched": 5},
+        }
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            result = client.search_hybrid(
+                "docs",
+                query="refund policy",
+                query_embedding=[0.1, 0.2],
+                top_k=5,
+                candidate_limit=50,
+                text_candidate_limit=25,
+                vector_candidate_limit=30,
+                ef_search=64,
+                fusion=HybridFusionOptions(
+                    method="rrf",
+                    rrf_k=60,
+                    tie_policy="fused_score_best_rank_source_order_id",
+                    source_order=["text", "vector"],
+                ),
+                return_embedding=False,
+                expected_generation=2,
+            )
+
+            self.assertEqual(result.text_index, "content")
+            self.assertEqual(result.vector_index, "embedding")
+            self.assertEqual(result.plan.fusion_method, "rrf")
+            self.assertEqual(result.plan.final_top_k, 5)
+            self.assertEqual(result.snapshot.consistency, "current_snapshot")
+            self.assertEqual(result.stats.fusion_both, 1)
+            self.assertEqual(result.documents[0].meta["_treedb_search"]["type"], "hybrid")
+            body = json_body(server.records[0])
+            self.assertEqual(body["query_embedding"], [0.1, 0.2])
+            self.assertEqual(body["fusion"]["source_order"], ["text", "vector"])
+            self.assertEqual(body["fusion"]["tie_policy"], "fused_score_best_rank_source_order_id")
+            self.assertEqual(body["text_candidate_limit"], 25)
+            self.assertEqual(body["vector_candidate_limit"], 30)
+            self.assertEqual(body["return_embedding"], False)
+
+    def test_hybrid_search_requires_query_or_embedding_before_http(self) -> None:
+        client = TreeDBClient("http://127.0.0.1:9", timeout=1)
+
+        with self.assertRaises(InvalidRequestError) as caught:
+            client.search_hybrid("docs", top_k=1)
+
+        self.assertEqual(caught.exception.code, "invalid_request")
+        self.assertIn("query or query_embedding", caught.exception.message)
+
+    def test_keyword_and_hybrid_service_errors_propagate(self) -> None:
+        routes = {
+            ("POST", "/v1/indexes/docs/search/keyword"): (
+                501,
+                {"error": {"code": "unsupported", "message": "keyword filters unsupported"}},
+                0,
+            ),
+            ("POST", "/v1/indexes/missing/search/keyword"): (
+                404,
+                {"error": {"code": "index_not_found", "message": "missing"}},
+                0,
+            ),
+            ("POST", "/v1/indexes/stale/search/hybrid"): (
+                409,
+                {"error": {"code": "index_stale", "message": "stale"}},
+                0,
+            ),
+            ("POST", "/v1/indexes/unavailable/search/hybrid"): (
+                503,
+                {"error": {"code": "index_unavailable", "message": "text/vector unavailable"}},
+                0,
+            ),
+        }
+        with FixtureServer(routes) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            with self.assertRaises(UnsupportedError):
+                client.search_keyword("docs", "refund", 1, filter={"field": "meta.repo", "operator": "$eq", "value": "gomap"})
+            self.assertEqual(json_body(server.records[-1])["filter"], {"field": "meta.repo", "operator": "==", "value": "gomap"})
+            with self.assertRaises(IndexNotFoundError):
+                client.search_keyword("missing", "refund", 1)
+            with self.assertRaises(IndexStaleError):
+                client.search_hybrid("stale", query="refund", top_k=1)
+            with self.assertRaises(IndexUnavailableError):
+                client.search_hybrid("unavailable", query_embedding=[1.0, 0.0], top_k=1)
 
     def test_delete_documents_rejects_bare_string_ids_before_http(self) -> None:
         client = TreeDBClient("http://127.0.0.1:9", timeout=1)

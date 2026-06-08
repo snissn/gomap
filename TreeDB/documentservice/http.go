@@ -158,9 +158,27 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 		}
 		writeJSON(w, http.StatusOK, res)
 	case "keyword":
-		writeError(w, h.Service.SearchKeyword(r.Context(), index, nil))
+		var req KeywordSearchRequest
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
+			return
+		}
+		res, err := h.Service.SearchKeyword(r.Context(), index, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 	case "hybrid":
-		writeError(w, h.Service.SearchHybrid(r.Context(), index, nil))
+		var req HybridSearchRequest
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
+			return
+		}
+		res, err := h.Service.SearchHybrid(r.Context(), index, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 	default:
 		writeError(w, serviceErrorf(CodeInvalidRequest, "unknown search operation %q", op))
 	}
