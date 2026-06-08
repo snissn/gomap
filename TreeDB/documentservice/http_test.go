@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestHTTPMalformedJSONAndUnsupportedSearchFailClosed(t *testing.T) {
+func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
@@ -22,18 +22,38 @@ func TestHTTPMalformedJSONAndUnsupportedSearchFailClosed(t *testing.T) {
 	}
 	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeMalformedJSON)
 
-	if _, err := svc.CreateIndex(req.Context(), CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
-		t.Fatalf("CreateIndex: %v", err)
+	postJSON(t, handler, "/v1/indexes", CreateIndexRequest{Name: "docs", Dimension: 2}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/docs/documents/upsert", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "shared", Content: "refund refund", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap"}},
+		{ID: "vector", Content: "shipping", Embedding: []float32{0.99, 0.01}, Meta: map[string]any{"repo": "gomap"}},
+	}}, http.StatusOK, nil)
+
+	var keyword KeywordSearchResponse
+	postJSON(t, handler, "/v1/indexes/docs/search/keyword", KeywordSearchRequest{Query: "refund", TopK: 1}, http.StatusOK, &keyword)
+	if len(keyword.Documents) != 1 || keyword.Documents[0].ID != "shared" || keyword.Documents[0].Score == nil {
+		t.Fatalf("keyword response=%+v", keyword)
 	}
-	for _, path := range []string{"/v1/indexes/docs/search/keyword", "/v1/indexes/docs/search/hybrid"} {
-		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"query":"refund"}`))
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		if rr.Code != http.StatusNotImplemented {
-			t.Fatalf("%s status=%d body=%s", path, rr.Code, rr.Body.String())
-		}
-		assertHTTPErrorCode(t, rr.Body.Bytes(), CodeUnsupported)
+
+	var hybrid HybridSearchResponse
+	postJSON(t, handler, "/v1/indexes/docs/search/hybrid", HybridSearchRequest{Query: "refund", QueryEmbedding: []float32{1, 0}, TopK: 2, EfSearch: 4}, http.StatusOK, &hybrid)
+	if len(hybrid.Documents) == 0 || hybrid.Documents[0].ID != "shared" || hybrid.Documents[0].Score == nil {
+		t.Fatalf("hybrid response=%+v", hybrid)
 	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/indexes/docs/search/keyword", bytes.NewBufferString(`{"query":"refund","top_k":1,"filter":{"field":"meta.repo","operator":"==","value":"gomap"}}`))
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("keyword filter status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeUnsupported)
+	req = httptest.NewRequest(http.MethodPost, "/v1/indexes/docs/search/hybrid", bytes.NewBufferString(`{"query":"refund","top_k":1,"filter":{"field":"meta.repo","operator":"==","value":"gomap"}}`))
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("hybrid filter status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeUnsupported)
 }
 
 func TestHTTPDefaultMaxBodyBytesDoesNotMutateHandler(t *testing.T) {
