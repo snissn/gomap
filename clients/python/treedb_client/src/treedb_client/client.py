@@ -26,7 +26,12 @@ from .models import (
     DenseVectorSearchResponse,
     Document,
     FilterDocumentsResponse,
+    HybridFusionOptions,
+    HybridSearchRequest,
+    HybridSearchResponse,
     IndexInfo,
+    KeywordSearchRequest,
+    KeywordSearchResponse,
     UpsertDocumentsResponse,
 )
 
@@ -186,6 +191,80 @@ class TreeDBClient:
         payload = self._request("POST", self._index_path(index, "search", "vector"), request)
         return _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
 
+    def search_keyword(
+        self,
+        index: str,
+        query: str,
+        top_k: int,
+        *,
+        operator: Optional[str] = None,
+        candidate_limit: Optional[int] = None,
+        max_postings_scanned: Optional[int] = None,
+        filter: Optional[FilterLike] = None,
+        return_embedding: bool = False,
+        expected_generation: Optional[int] = None,
+    ) -> KeywordSearchResponse:
+        """Run ranked keyword search through the TreeDB service.
+
+        Metadata filters are serialized and sent only when provided, but the
+        current service contract fails keyword filters closed with
+        `UnsupportedError`; the client never scans locally as a fallback.
+        """
+
+        _validate_expected_generation(expected_generation)
+        request = KeywordSearchRequest(
+            expected_generation=expected_generation,
+            query=query,
+            top_k=top_k,
+            operator=operator,
+            candidate_limit=candidate_limit,
+            max_postings_scanned=max_postings_scanned,
+            filter=filter,
+            return_embedding=return_embedding,
+        ).to_dict()
+        payload = self._request("POST", self._index_path(index, "search", "keyword"), request)
+        return _parse_response("keyword search response", KeywordSearchResponse.from_dict, payload)
+
+    def search_hybrid(
+        self,
+        index: str,
+        *,
+        query: Optional[str] = None,
+        query_embedding: Optional[Sequence[float]] = None,
+        top_k: int,
+        candidate_limit: Optional[int] = None,
+        text_candidate_limit: Optional[int] = None,
+        vector_candidate_limit: Optional[int] = None,
+        ef_search: Optional[int] = None,
+        fusion: Optional[Union[HybridFusionOptions, Mapping[str, Any]]] = None,
+        filter: Optional[FilterLike] = None,
+        return_embedding: bool = False,
+        expected_generation: Optional[int] = None,
+    ) -> HybridSearchResponse:
+        """Run TreeDB collection-native hybrid text/vector search.
+
+        At least one of `query` or `query_embedding` must be supplied by the
+        caller/service. Metadata filters currently fail closed on the service
+        with `UnsupportedError`; there is no client-side text/vector fallback.
+        """
+
+        _validate_expected_generation(expected_generation)
+        request = HybridSearchRequest(
+            expected_generation=expected_generation,
+            query=query,
+            query_embedding=query_embedding,
+            top_k=top_k,
+            candidate_limit=candidate_limit,
+            text_candidate_limit=text_candidate_limit,
+            vector_candidate_limit=vector_candidate_limit,
+            ef_search=ef_search,
+            fusion=fusion,
+            filter=filter,
+            return_embedding=return_embedding,
+        ).to_dict()
+        payload = self._request("POST", self._index_path(index, "search", "hybrid"), request)
+        return _parse_response("hybrid search response", HybridSearchResponse.from_dict, payload)
+
     def _index_path(self, index: str, *parts: str) -> str:
         encoded = urllib.parse.quote(index, safe="")
         suffix = "/".join(urllib.parse.quote(part, safe="") for part in parts)
@@ -277,12 +356,17 @@ def _normalize_timeout(timeout: Optional[float]) -> Optional[float]:
     return value
 
 
-def _add_expected_generation(request: dict[str, Any], expected_generation: Optional[int]) -> None:
+def _validate_expected_generation(expected_generation: Optional[int]) -> None:
     if expected_generation is None:
         return
     if isinstance(expected_generation, bool) or not isinstance(expected_generation, int) or expected_generation <= 0:
         raise InvalidRequestError("invalid_request", "expected_generation must be a positive integer")
-    request["expected_generation"] = expected_generation
+
+
+def _add_expected_generation(request: dict[str, Any], expected_generation: Optional[int]) -> None:
+    _validate_expected_generation(expected_generation)
+    if expected_generation is not None:
+        request["expected_generation"] = expected_generation
 
 
 def _add_filter(request: dict[str, Any], filter_value: Optional[FilterLike]) -> None:
