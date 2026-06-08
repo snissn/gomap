@@ -5,11 +5,13 @@ pre-alpha HTTP/JSON document service. It provides:
 
 - `haystack_integrations.document_stores.treedb.TreeDBDocumentStore`
 - `haystack_integrations.components.retrievers.treedb.TreeDBEmbeddingRetriever`
+- `haystack_integrations.components.retrievers.treedb.TreeDBKeywordRetriever`
+- `haystack_integrations.components.retrievers.treedb.TreeDBHybridRetriever`
 
-The MVP supports embedded Haystack `Document` writes and exact dense-vector
-retrieval through the TreeDB document service. It intentionally does **not**
-expose keyword or hybrid retrieval, and it never scans documents client-side to
-emulate unsupported filters or search modes.
+The integration supports embedded Haystack `Document` writes, exact dense-vector
+retrieval, ranked keyword retrieval, and TreeDB-native hybrid text/vector
+retrieval through the TreeDB document service. It never scans documents
+client-side to emulate unsupported filters or search modes.
 
 Service contract: [`docs/TREEDB_DOCUMENT_SERVICE_API.md`](../../../docs/TREEDB_DOCUMENT_SERVICE_API.md)
 
@@ -47,7 +49,11 @@ go run ./cmd/treedb-document-service \
 ```python
 from haystack import Document, Pipeline
 from haystack.document_stores.types import DuplicatePolicy
-from haystack_integrations.components.retrievers.treedb import TreeDBEmbeddingRetriever
+from haystack_integrations.components.retrievers.treedb import (
+    TreeDBEmbeddingRetriever,
+    TreeDBHybridRetriever,
+    TreeDBKeywordRetriever,
+)
 from haystack_integrations.document_stores.treedb import TreeDBDocumentStore
 
 store = TreeDBDocumentStore(
@@ -68,7 +74,7 @@ store.write_documents(
         ),
         Document(
             id="doc-b",
-            content="Keyword and hybrid retrieval are future work.",
+            content="Keyword and hybrid retrieval run through TreeDB service indexes.",
             embedding=[0.0, 1.0, 0.0],
             meta={"repo": "snissn/gomap", "language": "docs"},
         ),
@@ -76,23 +82,44 @@ store.write_documents(
     policy=DuplicatePolicy.OVERWRITE,
 )
 
-pipeline = Pipeline()
-pipeline.add_component("retriever", TreeDBEmbeddingRetriever(document_store=store, top_k=1))
-result = pipeline.run({"retriever": {"query_embedding": [1.0, 0.0, 0.0]}})
-print(result["retriever"]["documents"][0].id)
+embedding_pipeline = Pipeline()
+embedding_pipeline.add_component("retriever", TreeDBEmbeddingRetriever(document_store=store, top_k=1))
+embedding_result = embedding_pipeline.run({"retriever": {"query_embedding": [1.0, 0.0, 0.0]}})
+print(embedding_result["retriever"]["documents"][0].id)
+
+keyword_pipeline = Pipeline()
+keyword_pipeline.add_component("retriever", TreeDBKeywordRetriever(document_store=store, top_k=1))
+keyword_result = keyword_pipeline.run({"retriever": {"query": "TreeDB service indexes"}})
+print(keyword_result["retriever"]["documents"][0].id)
+
+hybrid_pipeline = Pipeline()
+hybrid_pipeline.add_component(
+    "retriever",
+    TreeDBHybridRetriever(
+        document_store=store,
+        top_k=1,
+        fusion={"method": "rrf", "rrf_k": 60, "source_order": ["text", "vector"]},
+    ),
+)
+hybrid_result = hybrid_pipeline.run(
+    {"retriever": {"query": "TreeDB service indexes", "query_embedding": [1.0, 0.0, 0.0]}}
+)
+print(hybrid_result["retriever"]["documents"][0].id)
 ```
 
 ## Runnable examples
 
 Example scripts live in [`examples/`](examples/):
 
-- [`basic_ingest_retrieve.py`](examples/basic_ingest_retrieve.py) writes two embedded Haystack documents and retrieves one through a `Pipeline`.
-- [`code_search_metadata.py`](examples/code_search_metadata.py) demonstrates code-search metadata fields such as `repo`, `path`, `language`, `symbol`, `start_line`, `end_line`, and `chunk_kind` with service-side filters.
+- [`basic_ingest_retrieve.py`](examples/basic_ingest_retrieve.py) writes two embedded Haystack documents and retrieves one through an embedding `Pipeline`.
+- [`keyword_hybrid_retrieve.py`](examples/keyword_hybrid_retrieve.py) demonstrates keyword and hybrid retrievers over the same TreeDB index.
+- [`code_search_metadata.py`](examples/code_search_metadata.py) demonstrates code-search metadata fields such as `repo`, `path`, `language`, `symbol`, `start_line`, `end_line`, and `chunk_kind` with service-side embedding filters.
 
 After starting `cmd/treedb-document-service`, run them from the repository root with the local packages installed:
 
 ```sh
 python clients/python/treedb_haystack/examples/basic_ingest_retrieve.py
+python clients/python/treedb_haystack/examples/keyword_hybrid_retrieve.py
 python clients/python/treedb_haystack/examples/code_search_metadata.py
 ```
 
@@ -110,6 +137,13 @@ Boolean filters use `conditions`. Supported operators are `AND`, `OR`, `NOT`,
 closed through the base `treedb-client`; this package does not broaden them into
 local scans.
 
+Metadata filters are currently supported by document count/filter/delete and
+exact dense-vector retrieval. If filters are supplied to `TreeDBKeywordRetriever`
+or `TreeDBHybridRetriever`, Haystack `FilterPolicy` is still honored and the
+filter is sent to TreeDB, but the current TreeDB keyword/hybrid routes fail
+closed with `unsupported` until TreeDB exposes bounded scalar filter mapping for
+those routes. The retrievers do not fetch and filter documents client-side.
+
 ## Duplicate and filter policies
 
 - `DuplicatePolicy.OVERWRITE` maps to TreeDB service upsert and is the default
@@ -120,7 +154,8 @@ local scans.
   current service has no create-if-absent endpoint. If TreeDB reports an
   unexpected update after the preflight, the store raises `DocumentStoreError`
   rather than silently reporting success.
-- `TreeDBEmbeddingRetriever` supports Haystack `FilterPolicy.REPLACE` and
+- `TreeDBEmbeddingRetriever`, `TreeDBKeywordRetriever`, and
+  `TreeDBHybridRetriever` support Haystack `FilterPolicy.REPLACE` and
   `FilterPolicy.MERGE` via Haystack's `apply_filter_policy` helper.
 
 ## Run tests
@@ -159,5 +194,7 @@ installation/release URLs are stable.
 ## Scope and non-goals
 
 TreeDB's service-backed dense-vector search is an exact correctness/MVP path. It
-is not advertised as ANN throughput work, and this package does not implement
-keyword, sparse, or hybrid retrievers.
+is not advertised as ANN throughput work. Keyword and hybrid retrievers delegate
+to TreeDB's service indexes; this package does not implement sparse retrieval,
+client-side keyword scans, client-side fusion fallbacks, or code-symbol graph
+retrieval.

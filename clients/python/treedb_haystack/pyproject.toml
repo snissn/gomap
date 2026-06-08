@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "treedb-haystack"
 version = "0.1.0"
-description = "Haystack DocumentStore and embedding retriever for TreeDB"
+description = "Haystack DocumentStore and TreeDB retrievers"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "gomap contributors" }]
