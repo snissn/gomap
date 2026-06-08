@@ -65,6 +65,8 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - storage-mode decision guide, aggregate benchmark/profile commands, counter interpretation, troubleshooting, and playbooks.
 - `TreeDB/docs/guides/vector-search-typed-column.md`
   - dense vector typed-column placement, column graph demo/benchmarks, search-vs-fetch timing boundaries, and caveats.
+- `TreeDB/docs/guides/hybrid-search.md`
+  - user-facing `SearchHybrid` index creation and query examples, mode-selection guidance, counters, and caveats.
 
 ### Canonical specs
 

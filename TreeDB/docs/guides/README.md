@@ -32,6 +32,9 @@ directories when moving between branches.
   counters, USearch bootstrap, artifact directories, profile capture, and the
   #2483 closeout link without blurring exact no-document rows with
   materialization or quantized evidence.
+- [Hybrid search guide](hybrid-search.md) — create text, vector, and scalar
+  indexes for `SearchHybrid`, issue bounded hybrid queries, interpret counters,
+  and keep score-fusion/analyzer/vector-route/reranking caveats explicit.
 
 ## Deeper specs
 
