@@ -60,25 +60,6 @@ headline until the canonical exhaustive fixture covers that format.
 Source:
 [June 4 exhaustive-compact two-index insert rerun](docs/benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md).
 
-### Indexed Text/Vector/Hybrid Insert And Search Workload
-
-Current-context #2564 benchmark on an active Apple M3 laptop, `256` JSON
-documents, scalar indexes on `tenant`/`region`, a `lexical` title/body text
-index, and an exact cosine column graph (`dims=16`, `M=8`). The insert row times
-`InsertBatch` + `Flush` + `RebuildVectorIndex`; search rows build/index the
-fixture before timing and then time the search API call only.
-
-| row | timed boundary | ns/op avg | ops/sec | B/op | allocs/op | key counters |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| Indexed insert/readiness | 256-doc batch insert + flush + vector rebuild | 79,928,531 | 12.5 ops/sec / 3,202.9 docs/sec | 11,014,446 | 113,174 | 174,590 insert ns/doc; 137,618 vector rebuild ns/doc |
-| Text candidates | `SearchHybridTextCandidates`, no docs | 275,850 | 3,625.2 | 425,584 | 7,591 | 64 text candidates; 0 docs fetched; 0 fail/fallback |
-| Vector candidates | `SearchHybridVectorCandidates`, no docs | 20,475 | 48,840.0 | 36,408 | 82 | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
-| Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 328,450 | 3,044.6 | 514,723 | 7,791 | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
-| Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 546,853 | 1,828.6 | 572,528 | 8,768 | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
-
-Source, command, artifact paths, host-load caveats, and reproduction workflow:
-[TreeDB indexed insertion/search benchmark](docs/benchmarks/treedb_index_insert_search_benchmarks.md).
-
 ### Collection Read And Lookup Workload
 
 Two secondary indexes, April 27 collection/SQLite matrix.
@@ -184,6 +165,25 @@ rerun.
 
 Source:
 [June 2 density rerun](docs/benchmarks/application_db_engine_matrix_2026-06-02.md).
+
+### Indexed Text/Vector/Hybrid Insert And Search Workload
+
+Current-context #2564 benchmark on an active Apple M3 laptop, `256` JSON
+documents, scalar indexes on `tenant`/`region`, a `lexical` title/body text
+index, and an exact cosine column graph (`dims=16`, `M=8`). The insert row times
+`InsertBatch` + `Flush` + `RebuildVectorIndex`; search rows build/index the
+fixture before timing and then time the search API call only.
+
+| row | timed boundary | ns/op avg | ops/sec | B/op | allocs/op | key counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Indexed insert/readiness | 256-doc batch insert + flush + vector rebuild | 79,928,531 | 12.5 ops/sec / 3,202.9 docs/sec | 11,014,446 | 113,174 | 174,590 insert ns/doc; 137,618 vector rebuild ns/doc |
+| Text candidates | `SearchHybridTextCandidates`, no docs | 275,850 | 3,625.2 | 425,584 | 7,591 | 64 text candidates; 0 docs fetched; 0 fail/fallback |
+| Vector candidates | `SearchHybridVectorCandidates`, no docs | 20,475 | 48,840.0 | 36,408 | 82 | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
+| Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 328,450 | 3,044.6 | 514,723 | 7,791 | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
+| Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 546,853 | 1,828.6 | 572,528 | 8,768 | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
+
+Source, command, artifact paths, host-load caveats, and reproduction workflow:
+[TreeDB indexed insertion/search benchmark](docs/benchmarks/treedb_index_insert_search_benchmarks.md).
 
 ## What TreeDB Provides
 
