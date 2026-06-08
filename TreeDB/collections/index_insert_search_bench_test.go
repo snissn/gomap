@@ -226,7 +226,6 @@ func benchmarkIndexInsertBatch2564(b *testing.B, docs, dims, m int) {
 
 		b.StopTimer()
 		_ = fixture.db.Close()
-		b.StartTimer()
 	}
 	b.StopTimer()
 	indexInsertSearchReportFixtureMetrics2564(b, docs, dims, 64, 10)
