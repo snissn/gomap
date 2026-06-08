@@ -197,14 +197,17 @@ def test_hybrid_filters_fail_closed_through_service_without_scan_fallback() -> N
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "run_kwargs"),
     [
-        IndexNotFoundError("index_not_found", "missing vector index"),
-        IndexStaleError("index_stale", "stale hybrid snapshot"),
-        IndexUnavailableError("index_unavailable", "vector index unavailable"),
+        (IndexNotFoundError("index_not_found", "missing text index"), {"query": "policy"}),
+        (IndexNotFoundError("index_not_found", "missing vector index"), {"query_embedding": [1.0, 0.0, 0.0]}),
+        (IndexStaleError("index_stale", "stale hybrid snapshot"), {"query": "policy"}),
+        (IndexUnavailableError("index_unavailable", "vector index unavailable"), {"query_embedding": [1.0, 0.0, 0.0]}),
     ],
 )
-def test_hybrid_service_index_errors_fail_closed_without_empty_success(error: Exception) -> None:
+def test_hybrid_service_index_errors_fail_closed_without_empty_success(
+    error: Exception, run_kwargs: dict[str, object]
+) -> None:
     class ErrorClient(FakeTreeDBClient):
         def search_hybrid(self, *args: object, **kwargs: object) -> object:
             raise error
@@ -218,7 +221,7 @@ def test_hybrid_service_index_errors_fail_closed_without_empty_success(error: Ex
     retriever = TreeDBHybridRetriever(document_store=store)
 
     with pytest.raises(DocumentStoreError, match=str(error).split(": ", 1)[-1]):
-        retriever.run(query_embedding=[1.0, 0.0, 0.0])
+        retriever.run(**run_kwargs)  # type: ignore[arg-type]
 
 
 def test_hybrid_to_dict_from_dict_round_trip() -> None:
