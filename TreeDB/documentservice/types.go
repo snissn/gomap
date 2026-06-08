@@ -13,7 +13,10 @@ const (
 
 	defaultEmbeddingField    = "embedding"
 	defaultVectorIndexName   = "embedding"
+	defaultTextField         = "content"
+	defaultTextIndexName     = "content"
 	defaultCollectionDocType = "treedb_document_service_v1"
+	searchMetaKey            = "_treedb_search"
 )
 
 // Metric selects the dense-vector score function. Scores returned by the
@@ -37,11 +40,13 @@ type Document struct {
 
 // IndexCapabilities describes the supported operations for one service index.
 type IndexCapabilities struct {
-	DenseVectorSearch bool `json:"dense_vector_search"`
-	ExactDenseScoring bool `json:"exact_dense_scoring"`
-	MetadataFilters   bool `json:"metadata_filters"`
-	KeywordSearch     bool `json:"keyword_search"`
-	HybridSearch      bool `json:"hybrid_search"`
+	DenseVectorSearch      bool `json:"dense_vector_search"`
+	ExactDenseScoring      bool `json:"exact_dense_scoring"`
+	MetadataFilters        bool `json:"metadata_filters"`
+	KeywordSearch          bool `json:"keyword_search"`
+	HybridSearch           bool `json:"hybrid_search"`
+	KeywordMetadataFilters bool `json:"keyword_metadata_filters"`
+	HybridMetadataFilters  bool `json:"hybrid_metadata_filters"`
 }
 
 // IndexInfo is returned by create/open and echoed by operation responses.
@@ -52,6 +57,9 @@ type IndexInfo struct {
 	Generation      uint64            `json:"generation"`
 	ContractVersion string            `json:"contract_version"`
 	EmbeddingField  string            `json:"embedding_field"`
+	VectorIndexName string            `json:"vector_index_name"`
+	TextField       string            `json:"text_field"`
+	TextIndexName   string            `json:"text_index_name"`
 	DocumentType    string            `json:"document_type"`
 	Capabilities    IndexCapabilities `json:"capabilities"`
 }
@@ -139,6 +147,73 @@ type DenseVectorSearchResponse struct {
 	Candidates int        `json:"candidates"`
 }
 
+// KeywordSearchRequest runs ranked lexical search over the service content text
+// index. Metadata filters intentionally fail closed for keyword search in this
+// pre-alpha contract; the service never scans documents as a fallback.
+type KeywordSearchRequest struct {
+	ExpectedGeneration uint64                         `json:"expected_generation,omitempty"`
+	Query              string                         `json:"query"`
+	TopK               int                            `json:"top_k"`
+	Operator           collections.TextSearchOperator `json:"operator,omitempty"`
+	CandidateLimit     int                            `json:"candidate_limit,omitempty"`
+	MaxPostingsScanned int                            `json:"max_postings_scanned,omitempty"`
+	Filter             *Filter                        `json:"filter,omitempty"`
+	ReturnEmbedding    bool                           `json:"return_embedding,omitempty"`
+}
+
+type KeywordSearchResponse struct {
+	Index     IndexInfo          `json:"index"`
+	Documents []Document         `json:"documents"`
+	TextIndex string             `json:"text_index"`
+	Stats     KeywordSearchStats `json:"stats"`
+}
+
+type KeywordSearchStats struct {
+	QueryTerms                int    `json:"query_terms,omitempty"`
+	CandidatesRequested       uint64 `json:"candidates_requested,omitempty"`
+	CandidatesReturned        uint64 `json:"candidates_returned,omitempty"`
+	PostingsScanned           uint64 `json:"postings_scanned,omitempty"`
+	CandidatesScored          uint64 `json:"candidates_scored,omitempty"`
+	DocumentsFetched          uint64 `json:"documents_fetched,omitempty"`
+	DocumentsMissing          uint64 `json:"documents_missing,omitempty"`
+	FullDocumentScanFallbacks uint64 `json:"full_document_scan_fallbacks,omitempty"`
+	PostingsScanNanos         uint64 `json:"postings_scan_nanos,omitempty"`
+	CandidateScoreNanos       uint64 `json:"candidate_score_nanos,omitempty"`
+	DocumentFetchNanos        uint64 `json:"document_fetch_nanos,omitempty"`
+	Truncated                 bool   `json:"truncated,omitempty"`
+	FailClosed                uint64 `json:"fail_closed,omitempty"`
+	FailClosedReason          string `json:"fail_closed_reason,omitempty"`
+	Unavailable               bool   `json:"unavailable,omitempty"`
+	UnavailableReason         string `json:"unavailable_reason,omitempty"`
+}
+
+// HybridSearchRequest runs collection-native text/vector hybrid retrieval. At
+// least one of Query or QueryEmbedding must be supplied. Metadata filters fail
+// closed for now unless the service grows a bounded scalar-index mapping.
+type HybridSearchRequest struct {
+	ExpectedGeneration   uint64                          `json:"expected_generation,omitempty"`
+	Query                string                          `json:"query,omitempty"`
+	QueryEmbedding       []float32                       `json:"query_embedding,omitempty"`
+	TopK                 int                             `json:"top_k"`
+	TextCandidateLimit   int                             `json:"text_candidate_limit,omitempty"`
+	VectorCandidateLimit int                             `json:"vector_candidate_limit,omitempty"`
+	CandidateLimit       int                             `json:"candidate_limit,omitempty"`
+	EfSearch             int                             `json:"ef_search,omitempty"`
+	Fusion               collections.HybridFusionOptions `json:"fusion,omitempty"`
+	Filter               *Filter                         `json:"filter,omitempty"`
+	ReturnEmbedding      bool                            `json:"return_embedding,omitempty"`
+}
+
+type HybridSearchResponse struct {
+	Index       IndexInfo                        `json:"index"`
+	Documents   []Document                       `json:"documents"`
+	TextIndex   string                           `json:"text_index,omitempty"`
+	VectorIndex string                           `json:"vector_index,omitempty"`
+	Plan        collections.HybridSearchPlan     `json:"plan,omitempty"`
+	Snapshot    collections.HybridSearchSnapshot `json:"snapshot,omitempty"`
+	Stats       collections.HybridSearchStats    `json:"stats,omitempty"`
+}
+
 func normalizeMetric(metric Metric) (Metric, error) {
 	switch strings.TrimSpace(strings.ToLower(string(metric))) {
 	case "", string(MetricCosine):
@@ -182,13 +257,15 @@ func metricFromCollection(metric collections.VectorMetric) (Metric, error) {
 	}
 }
 
-func indexCapabilities() IndexCapabilities {
+func indexCapabilities(hybridSearch bool) IndexCapabilities {
 	return IndexCapabilities{
-		DenseVectorSearch: true,
-		ExactDenseScoring: true,
-		MetadataFilters:   true,
-		KeywordSearch:     false,
-		HybridSearch:      false,
+		DenseVectorSearch:      true,
+		ExactDenseScoring:      true,
+		MetadataFilters:        true,
+		KeywordSearch:          true,
+		HybridSearch:           hybridSearch,
+		KeywordMetadataFilters: false,
+		HybridMetadataFilters:  false,
 	}
 }
 

@@ -311,10 +311,254 @@ func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *test
 	}
 }
 
+func TestServiceKeywordSearchRankedLexicalResultsAndTieOrder(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if !info.Capabilities.KeywordSearch || !info.Capabilities.HybridSearch || info.TextIndexName != defaultTextIndexName || info.VectorIndexName != defaultVectorIndexName || info.Capabilities.KeywordMetadataFilters || info.Capabilities.HybridMetadataFilters {
+		t.Fatalf("index capabilities/info=%+v", info)
+	}
+	_, err = svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "doc-best", Content: "refund refund refund policy", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap", "path": "best.go"}},
+		{ID: "doc-ok", Content: "refund shipping", Embedding: []float32{0, 1}, Meta: map[string]any{"repo": "gomap", "path": "ok.go"}},
+		{ID: "doc-other", Content: "shipping update", Embedding: []float32{0.5, 0.5}, Meta: map[string]any{"repo": "other"}},
+		{ID: "tie-a", Content: "tie term", Embedding: []float32{1, 1}},
+		{ID: "tie-b", Content: "tie term", Embedding: []float32{1, -1}},
+	}})
+	if err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	res, err := svc.SearchKeyword(ctx, "docs", KeywordSearchRequest{Query: "refund", TopK: 2})
+	if err != nil {
+		t.Fatalf("SearchKeyword: %v", err)
+	}
+	if len(res.Documents) != 2 || res.Documents[0].ID != "doc-best" || res.Documents[1].ID != "doc-ok" {
+		t.Fatalf("keyword ids=%v want doc-best/doc-ok response=%+v", documentIDs(res.Documents), res)
+	}
+	if res.Documents[0].Score == nil || res.Documents[1].Score == nil || *res.Documents[0].Score <= *res.Documents[1].Score {
+		t.Fatalf("keyword scores=%v %v want ranked lexical scores", res.Documents[0].Score, res.Documents[1].Score)
+	}
+	if res.Documents[0].Embedding != nil || res.Documents[0].Meta["path"] != "best.go" {
+		t.Fatalf("keyword document mapping=%+v", res.Documents[0])
+	}
+	meta := searchMeta(t, res.Documents[0])
+	if meta["type"] != "keyword" || meta["text_index"] != defaultTextIndexName || meta["rank"] != 1 {
+		t.Fatalf("keyword explanation meta=%+v", meta)
+	}
+	if res.Stats.CandidatesReturned != 2 || res.Stats.PostingsScanned == 0 || res.Stats.FullDocumentScanFallbacks != 0 || res.Stats.FailClosed != 0 {
+		t.Fatalf("keyword stats=%+v", res.Stats)
+	}
+
+	ties, err := svc.SearchKeyword(ctx, "docs", KeywordSearchRequest{Query: "tie", TopK: 2})
+	if err != nil {
+		t.Fatalf("SearchKeyword ties: %v", err)
+	}
+	if got := documentIDs(ties.Documents); !reflect.DeepEqual(got, []string{"tie-a", "tie-b"}) {
+		t.Fatalf("tie ids=%v want stable ID order", got)
+	}
+	if limited, err := svc.SearchKeyword(ctx, "docs", KeywordSearchRequest{Query: "refund", TopK: 2, CandidateLimit: 1}); ErrorCodeOf(err) != CodeIndexUnavailable || limited.Stats.FailClosed == 0 {
+		t.Fatalf("keyword candidate-limit response=%+v err=%v code=%s", limited, err, ErrorCodeOf(err))
+	}
+}
+
+func TestServiceHybridSearchTextVectorAndOverlap(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	_, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "shared", Content: "refund refund", Embedding: []float32{1, 0}, Meta: map[string]any{"kind": "shared"}},
+		{ID: "text", Content: "refund policy", Embedding: []float32{0, 1}, Meta: map[string]any{"kind": "text"}},
+		{ID: "vector", Content: "shipping update", Embedding: []float32{0.99, 0.01}, Meta: map[string]any{"kind": "vector"}},
+		{ID: "background", Content: "other", Embedding: []float32{0, 1}, Meta: map[string]any{"kind": "background"}},
+	}})
+	if err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+
+	textOnly, err := svc.SearchHybrid(ctx, "docs", HybridSearchRequest{Query: "refund", TopK: 2, TextCandidateLimit: 3})
+	if err != nil {
+		t.Fatalf("SearchHybrid text-only: %v", err)
+	}
+	if len(textOnly.Documents) != 2 || textOnly.Stats.VectorCandidatesReturned != 0 {
+		t.Fatalf("text-only response=%+v stats=%+v", textOnly, textOnly.Stats)
+	}
+	if !searchMetaHasOnlySource(t, textOnly.Documents[0], "text") {
+		t.Fatalf("text-only meta=%+v", searchMeta(t, textOnly.Documents[0]))
+	}
+
+	vectorOnly, err := svc.SearchHybrid(ctx, "docs", HybridSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, VectorCandidateLimit: 3, EfSearch: 8})
+	if err != nil {
+		t.Fatalf("SearchHybrid vector-only: %v", err)
+	}
+	if len(vectorOnly.Documents) != 2 || vectorOnly.Documents[0].ID != "shared" || vectorOnly.Stats.TextCandidatesReturned != 0 || vectorOnly.Stats.VectorCandidatesReturned == 0 {
+		t.Fatalf("vector-only response=%+v stats=%+v", vectorOnly, vectorOnly.Stats)
+	}
+	if !searchMetaHasOnlySource(t, vectorOnly.Documents[0], "vector") {
+		t.Fatalf("vector-only meta=%+v", searchMeta(t, vectorOnly.Documents[0]))
+	}
+
+	overlap, err := svc.SearchHybrid(ctx, "docs", HybridSearchRequest{Query: "refund", QueryEmbedding: []float32{1, 0}, TopK: 3, TextCandidateLimit: 3, VectorCandidateLimit: 3, EfSearch: 8})
+	if err != nil {
+		t.Fatalf("SearchHybrid overlap: %v", err)
+	}
+	if len(overlap.Documents) != 3 || overlap.Documents[0].ID != "shared" || overlap.Documents[0].Score == nil {
+		t.Fatalf("overlap response=%+v", overlap)
+	}
+	meta := searchMeta(t, overlap.Documents[0])
+	if meta["type"] != "hybrid" || meta["fusion_method"] != string(collections.HybridFusionMethodRRF) || !searchMetaHasSources(meta, "text", "vector") {
+		t.Fatalf("overlap explanation meta=%+v", meta)
+	}
+	if overlap.Stats.FusionBoth == 0 || overlap.Stats.FullDocumentScanFallbacks != 0 || overlap.Stats.FailClosed != 0 || overlap.Plan.FusionMethod != collections.HybridFusionMethodRRF {
+		t.Fatalf("overlap stats=%+v plan=%+v", overlap.Stats, overlap.Plan)
+	}
+}
+
+func TestServiceKeywordHybridFiltersAndMissingIndexesFailClosed(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Content: "refund", Embedding: []float32{1, 0}, Meta: map[string]any{"repo": "gomap"}}}}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	filter := &Filter{Field: "meta.repo", Operator: "==", Value: "gomap"}
+	if _, err := svc.SearchKeyword(ctx, "docs", KeywordSearchRequest{Query: "refund", TopK: 1, Filter: filter}); ErrorCodeOf(err) != CodeUnsupported {
+		t.Fatalf("keyword filter err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.SearchHybrid(ctx, "docs", HybridSearchRequest{Query: "refund", TopK: 1, Filter: filter}); ErrorCodeOf(err) != CodeUnsupported {
+		t.Fatalf("hybrid filter err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Content: "refund updated", Embedding: []float32{0, 1}, Meta: map[string]any{"repo": "gomap"}}}}); err != nil {
+		t.Fatalf("stale vector UpsertDocuments: %v", err)
+	}
+	if _, err := svc.SearchHybrid(ctx, "docs", HybridSearchRequest{QueryEmbedding: []float32{0, 1}, TopK: 1, EfSearch: 4}); ErrorCodeOf(err) != CodeIndexUnavailable && ErrorCodeOf(err) != CodeIndexStale {
+		t.Fatalf("stale vector err=%v code=%s", err, ErrorCodeOf(err))
+	}
+
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "notext",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatJSON,
+			ColumnStore:    serviceColumnStoreConfig(2),
+		},
+		VectorIndexes: []collections.VectorIndexDefinition{{
+			Name:       defaultVectorIndexName,
+			Field:      defaultEmbeddingField,
+			Metric:     collections.VectorMetricCosine,
+			Dimensions: 2,
+			Strategy:   collections.VectorIndexStrategyColumnGraph,
+		}},
+	}); err != nil {
+		t.Fatalf("CreateCollection notext: %v", err)
+	}
+	if _, err := svc.SearchKeyword(ctx, "notext", KeywordSearchRequest{Query: "refund", TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("missing text err=%v code=%s", err, ErrorCodeOf(err))
+	}
+
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name:    "novector",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+		TextIndexes: []collections.TextIndexDefinition{{
+			Name:   defaultTextIndexName,
+			Fields: []collections.TextIndexField{{Field: defaultTextField}},
+		}},
+	}); err != nil {
+		t.Fatalf("CreateCollection novector: %v", err)
+	}
+	if _, err := svc.SearchHybrid(ctx, "novector", HybridSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("missing vector err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+func TestServiceNonCosineHybridCapabilityFailsClosedButDenseAndKeywordWork(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "l2docs", Dimension: 2, Metric: MetricL2})
+	if err != nil {
+		t.Fatalf("CreateIndex l2docs: %v", err)
+	}
+	if info.Capabilities.HybridSearch {
+		t.Fatalf("l2 capabilities=%+v want hybrid_search=false", info.Capabilities)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "l2docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Content: "refund", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("UpsertDocuments l2docs: %v", err)
+	}
+	keyword, err := svc.SearchKeyword(ctx, "l2docs", KeywordSearchRequest{Query: "refund", TopK: 1})
+	if err != nil || len(keyword.Documents) != 1 || keyword.Documents[0].ID != "a" {
+		t.Fatalf("SearchKeyword l2docs=%+v err=%v", keyword, err)
+	}
+	dense, err := svc.SearchDenseVector(ctx, "l2docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
+	if err != nil || len(dense.Documents) != 1 || dense.Documents[0].ID != "a" {
+		t.Fatalf("SearchDenseVector l2docs=%+v err=%v", dense, err)
+	}
+	if _, err := svc.SearchHybrid(ctx, "l2docs", HybridSearchRequest{Query: "refund", TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("SearchHybrid l2 err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+func TestServiceOpenedIncompatibleTextVectorSchemasFailClosed(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	mgr := collections.NewCollectionManager(db)
+	baseVector := collections.VectorIndexDefinition{
+		Name:       defaultVectorIndexName,
+		Field:      defaultEmbeddingField,
+		Metric:     collections.VectorMetricCosine,
+		Dimensions: 2,
+		Encoding:   collections.VectorIndexEncodingFloat32,
+		Strategy:   collections.VectorIndexStrategyNativeRuntime,
+	}
+	baseText := collections.TextIndexDefinition{
+		Name:           defaultTextIndexName,
+		Fields:         []collections.TextIndexField{{Field: defaultTextField}},
+		Analyzer:       collections.TextAnalyzerSimple,
+		StorePositions: true,
+	}
+	badText := baseText
+	badText.Fields = []collections.TextIndexField{{Field: defaultTextField}, {Field: "title"}}
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name:          "badtext",
+		Options:       collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+		VectorIndexes: []collections.VectorIndexDefinition{baseVector},
+		TextIndexes:   []collections.TextIndexDefinition{badText},
+	}); err != nil {
+		t.Fatalf("CreateCollection badtext: %v", err)
+	}
+	if _, err := svc.OpenIndex(ctx, "badtext"); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("bad text schema err=%v code=%s", err, ErrorCodeOf(err))
+	}
+
+	badVector := baseVector
+	badVector.Encoding = collections.VectorIndexEncodingInt8
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name:          "badvector",
+		Options:       collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+		VectorIndexes: []collections.VectorIndexDefinition{badVector},
+		TextIndexes:   []collections.TextIndexDefinition{baseText},
+	}); err != nil {
+		t.Fatalf("CreateCollection badvector: %v", err)
+	}
+	if _, err := svc.OpenIndex(ctx, "badvector"); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("bad vector schema err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
 func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	db, err := backenddb.Open(testBackendOptions(dir))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -334,7 +578,7 @@ func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}
-	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	reopened, err := backenddb.Open(testBackendOptions(dir))
 	if err != nil {
 		t.Fatalf("reopen db: %v", err)
 	}
@@ -382,11 +626,67 @@ func TestServiceErrorCasesDimensionStaleUnavailable(t *testing.T) {
 	}
 }
 
+func documentIDs(docs []Document) []string {
+	ids := make([]string, len(docs))
+	for i := range docs {
+		ids[i] = docs[i].ID
+	}
+	return ids
+}
+
+func searchMeta(t *testing.T, doc Document) map[string]any {
+	t.Helper()
+	meta, ok := doc.Meta[searchMetaKey].(map[string]any)
+	if !ok {
+		t.Fatalf("document %q missing %s metadata: %+v", doc.ID, searchMetaKey, doc.Meta)
+	}
+	return meta
+}
+
+func searchMetaHasOnlySource(t *testing.T, doc Document, source string) bool {
+	t.Helper()
+	return searchMetaHasSources(searchMeta(t, doc), source)
+}
+
+func searchMetaHasSources(meta map[string]any, sources ...string) bool {
+	rawSources, ok := meta["sources"].([]map[string]any)
+	if !ok {
+		return false
+	}
+	if len(rawSources) != len(sources) {
+		return false
+	}
+	want := make(map[string]bool, len(sources))
+	for _, source := range sources {
+		want[source] = false
+	}
+	for _, raw := range rawSources {
+		source, ok := raw["source"].(string)
+		if !ok {
+			return false
+		}
+		if _, exists := want[source]; !exists {
+			return false
+		}
+		want[source] = true
+	}
+	for _, found := range want {
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func newTestService(t *testing.T) (*Service, *backenddb.DB) {
 	t.Helper()
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	return New(collections.NewCollectionManager(db)), db
+}
+
+func testBackendOptions(dir string) backenddb.Options {
+	return backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true}
 }
