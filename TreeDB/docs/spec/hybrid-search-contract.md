@@ -28,7 +28,10 @@ search MUST NOT scan or fetch every document as a fallback.
 Text-only and vector-only APIs/benchmarks remain separate evidence lanes:
 Issue `#1764` owns indexed lexical `SearchText`/BM25/BM25F behavior, and the existing
 vector API/evidence owns vector-only search. Hybrid benchmarks must measure the
-combined executor separately from those single-source paths.
+combined executor separately from those single-source paths. Issue `#2506`
+adds the same-fixture closeout runbook in
+`docs/benchmarks/treedb_hybrid_search_runbook.md` and the user-facing guide in
+`TreeDB/docs/guides/hybrid-search.md`.
 
 ## Public naming direction
 
