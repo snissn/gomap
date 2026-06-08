@@ -26,10 +26,10 @@ _T = TypeVar("_T")
 class TreeDBDocumentStore:
     """A Haystack DocumentStore backed by the TreeDB document service.
 
-    The store delegates filtering, deletion, and dense-vector search to TreeDB's
-    HTTP service through `treedb-client`. It intentionally exposes only the dense
-    embedding MVP: no keyword, sparse, or hybrid retrievers are implemented here,
-    and unsupported filters are not emulated with client-side document scans.
+    The store delegates filtering, deletion, dense-vector search, keyword search,
+    and hybrid search to TreeDB's HTTP service through `treedb-client`.
+    Unsupported filters and search modes are not emulated with client-side
+    document scans.
     """
 
     def __init__(
@@ -229,6 +229,72 @@ class TreeDBDocumentStore:
                 self.index,
                 query_embedding=query_embedding,
                 top_k=top_k,
+                filter=prepared_filter,
+                return_embedding=self.return_embedding if return_embedding is None else bool(return_embedding),
+                expected_generation=self._expected_generation(),
+            ),
+        )
+        return [treedb_document_to_haystack_document(doc) for doc in response.documents]
+
+    def _search_keyword(
+        self,
+        *,
+        query: str,
+        filters: Optional[FilterLike] = None,
+        top_k: int = 10,
+        operator: Optional[str] = None,
+        candidate_limit: Optional[int] = None,
+        max_postings_scanned: Optional[int] = None,
+        return_embedding: Optional[bool] = None,
+    ) -> list[HaystackDocument]:
+        """Run TreeDB ranked keyword search through the service."""
+
+        prepared_filter = _prepare_filter(filters)
+        response = self._client_call(
+            "keyword search",
+            lambda: self.client.search_keyword(
+                self.index,
+                query,
+                top_k,
+                operator=operator,
+                candidate_limit=candidate_limit,
+                max_postings_scanned=max_postings_scanned,
+                filter=prepared_filter,
+                return_embedding=self.return_embedding if return_embedding is None else bool(return_embedding),
+                expected_generation=self._expected_generation(),
+            ),
+        )
+        return [treedb_document_to_haystack_document(doc) for doc in response.documents]
+
+    def _search_hybrid(
+        self,
+        *,
+        query: Optional[str] = None,
+        query_embedding: Optional[Sequence[float]] = None,
+        filters: Optional[FilterLike] = None,
+        top_k: int = 10,
+        candidate_limit: Optional[int] = None,
+        text_candidate_limit: Optional[int] = None,
+        vector_candidate_limit: Optional[int] = None,
+        ef_search: Optional[int] = None,
+        fusion: Optional[Any] = None,
+        return_embedding: Optional[bool] = None,
+    ) -> list[HaystackDocument]:
+        """Run TreeDB hybrid text/vector search through the service."""
+
+        prepared_filter = _prepare_filter(filters)
+        response = self._client_call(
+            "hybrid search",
+            lambda: self.client.search_hybrid(
+                self.index,
+                query=query,
+                query_embedding=query_embedding,
+                top_k=top_k,
+                candidate_limit=candidate_limit,
+                text_candidate_limit=text_candidate_limit,
+                vector_candidate_limit=vector_candidate_limit,
+                ef_search=ef_search,
+                fusion=fusion,
                 filter=prepared_filter,
                 return_embedding=self.return_embedding if return_embedding is None else bool(return_embedding),
                 expected_generation=self._expected_generation(),
