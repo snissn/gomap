@@ -130,6 +130,49 @@ func TestEncodeQueryScoreGolden2449(t *testing.T) {
 	}
 }
 
+func TestScoreCosineV1ScoringIdentity2560(t *testing.T) {
+	plan, err := NewPlan(9, Config{Seed: 0x2560}) // CodeDimensions=16, no packed-byte padding.
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+	query := Query{
+		SignBits:       []byte{0b1010_0101, 0b0011_1100},
+		AbsWeights:     []float32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		WeightSum:      136,
+		CodeDimensions: 16,
+	}
+	code := []byte{0b1010_0001, 0b0010_1101}
+	qdpInv := float32(0.5)
+
+	got, err := plan.ScoreCosine(query, code, plan.CountCodeBits(code), qdpInv)
+	if err != nil {
+		t.Fatalf("ScoreCosine: %v", err)
+	}
+	var weightedSignDot float64
+	for i, weight32 := range query.AbsWeights {
+		mask := byte(1 << uint(i&7))
+		if (code[i>>3]&mask != 0) == (query.SignBits[i>>3]&mask != 0) {
+			weightedSignDot += float64(weight32)
+		} else {
+			weightedSignDot -= float64(weight32)
+		}
+	}
+	want := weightedSignDot / (float64(qdpInv) * float64(query.CodeDimensions))
+	if math.Abs(got-want) > 1e-12 {
+		t.Fatalf("ScoreCosine=%0.17g want v1 weighted sign-dot formula %0.17g", got, want)
+	}
+	if math.Abs(got-10.75) > 1e-12 {
+		t.Fatalf("ScoreCosine=%0.17g want golden 10.75", got)
+	}
+
+	badQuery := query
+	badQuery.AbsWeights = append([]float32(nil), query.AbsWeights...)
+	badQuery.AbsWeights[0] *= 2
+	if _, err := plan.ScoreCosine(badQuery, code, plan.CountCodeBits(code), qdpInv); !errors.Is(err, ErrDimensionMismatch) {
+		t.Fatalf("ScoreCosine with calibrated weights but stale WeightSum err=%v want %v", err, ErrDimensionMismatch)
+	}
+}
+
 func TestPackedCodeBitOrderAndPadding2449(t *testing.T) {
 	plan, err := NewPlan(3, Config{Seed: 0x2449}) // CodeDimensions=4, one physical byte with four high padding bits.
 	if err != nil {
