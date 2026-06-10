@@ -2064,6 +2064,8 @@ const (
 	envDisableVlogGenerationLoop                      = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick            = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
 	envDisableVlogGenerationCheckpointKickHotDebtOnly = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY"
+	envDisableVlogGenerationPeriodicRewritePlanBudget = "TREEDB_DISABLE_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET"
+	envVlogGenerationPeriodicRewritePlanBudgetMillis  = "TREEDB_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET_MS"
 	// Experimental immutable-leaf maintenance hook. Disabled by default until
 	// the cached scheduler policy and dwell behavior are validated.
 	envEnableLeafGenerationPackMaintenance                     = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
@@ -8352,6 +8354,11 @@ const (
 	// and should only run when the foreground has been quiet for a meaningfully
 	// longer window than lightweight maintenance.
 	vlogGenerationMaintenanceQuietWindow = 15 * time.Second
+	// Periodic rewrite planning is best-effort background maintenance. Keep its
+	// fresh-plan live-byte estimate bounded so a scheduled pass cannot monopolize
+	// foreground-heavy restore/sync windows. Explicit/checkpoint/deferred debt
+	// paths keep their existing wider contexts.
+	vlogGenerationPeriodicRewritePlanBudget = 2 * time.Second
 	// Retained-path prune performs a full live-ID scan and is pure best-effort
 	// reclaim. Require a meaningfully idle window before starting it so hot
 	// write workloads do not pay for a large scan between active phases.
@@ -11503,6 +11510,11 @@ func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogG
 			return context.WithTimeout(context.Background(), timeout)
 		}
 		return context.WithCancel(context.Background())
+	}
+	if vlogGenerationIsPeriodicSource(opts) {
+		if budget := vlogGenerationPeriodicRewritePlanBudgetDuration(); budget > 0 && (timeout <= 0 || timeout > budget) {
+			timeout = budget
+		}
 	}
 	return db.foregroundVlogMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
@@ -17671,6 +17683,21 @@ func vlogGenerationIsStageConfirmSource(opts vlogGenerationMaintenanceOptions) b
 
 func vlogGenerationIsQueueSource(opts vlogGenerationMaintenanceOptions) bool {
 	return opts.debugSource == "rewrite_queue_pending"
+}
+
+func vlogGenerationIsPeriodicSource(opts vlogGenerationMaintenanceOptions) bool {
+	return opts.debugSource == "" && !opts.bypassQuiet
+}
+
+func vlogGenerationPeriodicRewritePlanBudgetDuration() time.Duration {
+	if envBool(envDisableVlogGenerationPeriodicRewritePlanBudget) {
+		return 0
+	}
+	budgetMillis := envUint64(envVlogGenerationPeriodicRewritePlanBudgetMillis, uint64(vlogGenerationPeriodicRewritePlanBudget/time.Millisecond))
+	if budgetMillis == 0 {
+		return 0
+	}
+	return time.Duration(budgetMillis) * time.Millisecond
 }
 
 func vlogGenerationIsAgeBlockedSource(opts vlogGenerationMaintenanceOptions) bool {

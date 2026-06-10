@@ -2408,6 +2408,102 @@ func TestLeafGenerationPackMaintenance_SkipsWithinMinInterval(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewritePlanContext_BudgetsPeriodicFreshPlans(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envVlogGenerationPeriodicRewritePlanBudgetMillis, "25")
+	db := &DB{closeCh: make(chan struct{})}
+
+	ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, vlogGenerationMaintenanceOptions{})
+	deadline, ok := ctx.Deadline()
+	cancel()
+	if !ok {
+		t.Fatal("periodic rewrite plan context missing deadline")
+	}
+	if ttl := time.Until(deadline); ttl <= 0 || ttl > time.Second {
+		t.Fatalf("periodic rewrite plan ttl=%s want budgeted", ttl)
+	}
+
+	ctx, cancel = db.vlogGenerationRewritePlanContext(30*time.Second, vlogGenerationMaintenanceOptions{
+		bypassQuiet: true,
+	})
+	deadline, ok = ctx.Deadline()
+	cancel()
+	if !ok {
+		t.Fatal("bypass rewrite plan context missing deadline")
+	}
+	if ttl := time.Until(deadline); ttl < 20*time.Second {
+		t.Fatalf("bypass rewrite plan ttl=%s want unbudgeted 30s context", ttl)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicFreshPlanBudgetCancelsLongPlan(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envVlogGenerationPeriodicRewritePlanBudgetMillis, "25")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	planner := &timedRewritePlannerBackend{
+		DB:        backend,
+		planStart: make(chan struct{}),
+		planDelay: time.Second,
+	}
+	db, err := Open(dir, planner, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec: 1024,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), make([]byte, 2048)); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+
+	done := make(chan struct{})
+	go func() {
+		db.maybeRunVlogGenerationMaintenance(false)
+		close(done)
+	}()
+	select {
+	case <-planner.planStart:
+	case <-time.After(schedulerTestWait(t)):
+		t.Fatal("timed out waiting for periodic rewrite plan")
+	}
+	select {
+	case <-done:
+	case <-time.After(schedulerTestWait(t)):
+		t.Fatal("periodic rewrite plan did not stop after budget")
+	}
+	completed, canceled := planner.recordedPlanOutcomes()
+	if completed != 0 || canceled != 1 {
+		t.Fatalf("plan outcomes completed=%d canceled=%d want 0/1", completed, canceled)
+	}
+	if got := db.Stats()["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "1" {
+		t.Fatalf("plan_canceled=%q want 1", got)
+	}
+}
+
 func TestVlogGenerationMaintenance_PeriodicPassRunsLeafPackWhenEnabled(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
