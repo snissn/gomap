@@ -68,6 +68,26 @@ func TestTreePointLookupAllowsDeepValidInternalChain(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Has deep key ok=%v err=%v", ok, err)
 	}
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("close pager: %v", err)
+	}
+	p, err = pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatalf("reopen pager: %v", err)
+	}
+	tr = New(p, panicValueReader{}, pageIDs[0])
+	got, err = tr.Get(key)
+	if err != nil {
+		t.Fatalf("Get deep key after reopen: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Get deep key after reopen=%q want %q", got, want)
+	}
+	ok, err = tr.Has(key)
+	if err != nil || !ok {
+		t.Fatalf("Has deep key after reopen ok=%v err=%v", ok, err)
+	}
 }
 
 func newTreeWithLeafLogRoot(t *testing.T, sr SlabReader, key []byte, ptr page.LeafLogPtr) (*Tree, func()) {
