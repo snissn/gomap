@@ -626,6 +626,131 @@ func TestServiceErrorCasesDimensionStaleUnavailable(t *testing.T) {
 	}
 }
 
+func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	vectorOptions := &BenchmarkVectorIndexOptions{
+		Strategy: collections.VectorIndexStrategyColumnGraph,
+		M:        4,
+		EfSearch: 8,
+		QuantizedIndexes: []QuantizedIndexInfo{{
+			Name:  "embedding.scalar_u8.fast",
+			Codec: collections.QuantizedVectorCodecScalarU8,
+		}},
+	}
+
+	reset, err := svc.ResetIndex(ctx, "bench", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: vectorOptions})
+	if err != nil {
+		t.Fatalf("ResetIndex create: %v", err)
+	}
+	if !reset.Created || reset.Reset || reset.Index.VectorStrategy != collections.VectorIndexStrategyColumnGraph || !reset.Index.Capabilities.BenchmarkLifecycle || !reset.Index.Capabilities.ExactColumnGraphSearch || !reset.Index.Capabilities.ScalarU8QuantizedRerank {
+		t.Fatalf("reset create response=%+v capabilities=%+v", reset, reset.Index.Capabilities)
+	}
+	loadBenchmarkDocs(t, svc, "bench", []Document{
+		{ID: "old-a", Content: "old alpha", Embedding: []float32{1, 0}},
+		{ID: "old-b", Content: "old beta", Embedding: []float32{0, 1}},
+	})
+	optimize, err := svc.OptimizeIndex(ctx, "bench", OptimizeIndexRequest{})
+	if err != nil {
+		t.Fatalf("OptimizeIndex first: %v", err)
+	}
+	if !optimize.Status.Loaded || optimize.Status.RebuildNeeded {
+		t.Fatalf("optimize status=%+v", optimize.Status)
+	}
+	exact, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, EfSearch: 8})
+	if err != nil {
+		t.Fatalf("SearchBenchmarkVector exact: %v", err)
+	}
+	if !exact.NoDocuments || exact.QueryMode != BenchmarkVectorQueryModeExact || len(exact.Results) != 2 || exact.Results[0].ID != "old-a" || exact.Stats.DocumentsFetched != 0 || exact.Diagnostics.Route != collections.VectorIndexSearchRouteExactHNSWSearchPackV1 || !exact.Diagnostics.NoDocumentGuardrailsOK {
+		t.Fatalf("exact benchmark response=%+v stats=%+v diagnostics=%+v", exact, exact.Stats, exact.Diagnostics)
+	}
+	reranked, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, EfSearch: 8, QueryMode: BenchmarkVectorQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.fast", QuantizedRerankCandidates: 32})
+	if err != nil {
+		t.Fatalf("SearchBenchmarkVector quantized_rerank: %v", err)
+	}
+	if reranked.Diagnostics.Route != collections.VectorIndexSearchRouteQuantizedRerank || reranked.Stats.QuantizedScorerActive != 1 || reranked.Stats.QuantizedRerankExactScoreCalls == 0 || reranked.Stats.DocumentsFetched != 0 {
+		t.Fatalf("quantized_rerank response=%+v stats=%+v diagnostics=%+v", reranked, reranked.Stats, reranked.Diagnostics)
+	}
+
+	if _, err := svc.ResetIndex(ctx, "bench", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: vectorOptions}); ErrorCodeOf(err) != CodeUnsupported {
+		t.Fatalf("ResetIndex existing column_graph err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+func TestServiceBenchmarkResetDeletesCompatibleNativeIndex(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	vectorOptions := &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}
+	if _, err := svc.ResetIndex(ctx, "nativebench", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: vectorOptions}); err != nil {
+		t.Fatalf("ResetIndex create native: %v", err)
+	}
+	loadBenchmarkDocs(t, svc, "nativebench", []Document{
+		{ID: "old-a", Content: "old alpha", Embedding: []float32{1, 0}},
+		{ID: "old-b", Content: "old beta", Embedding: []float32{0, 1}},
+	})
+	reset, err := svc.ResetIndex(ctx, "nativebench", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: vectorOptions})
+	if err != nil {
+		t.Fatalf("ResetIndex existing native: %v", err)
+	}
+	if reset.Created || !reset.Reset || reset.DroppedDocuments != 2 {
+		t.Fatalf("reset existing native response=%+v", reset)
+	}
+	count, err := svc.CountDocuments(ctx, "nativebench", CountDocumentsRequest{})
+	if err != nil || count.Count != 0 {
+		t.Fatalf("count after native reset=%+v err=%v", count, err)
+	}
+}
+
+func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "bench", Dimension: 2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}})
+	if err != nil {
+		t.Fatalf("CreateIndex bench: %v", err)
+	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 4}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("missing assets err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{ExpectedGeneration: info.Generation + 1, QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 4}); ErrorCodeOf(err) != CodeIndexStale {
+		t.Fatalf("stale generation err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, QueryMode: "future_mode"}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("unsupported query mode err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	loadBenchmarkDocs(t, svc, "bench", []Document{{ID: "a", Embedding: []float32{1, 0}}})
+	if _, err := svc.OptimizeIndex(ctx, "bench", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex bench: %v", err)
+	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, QueryMode: BenchmarkVectorQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.missing", QuantizedRerankCandidates: 32}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("unsupported/missing quantized err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	dense, err := svc.SearchDenseVector(ctx, "bench", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
+	if err != nil || !dense.Exact || len(dense.Documents) != 1 || dense.Documents[0].ID != "a" {
+		t.Fatalf("dense exact fallback contract changed dense=%+v err=%v", dense, err)
+	}
+
+	l2Info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "l2bench", Dimension: 2, Metric: MetricL2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}})
+	if err != nil {
+		t.Fatalf("CreateIndex l2bench: %v", err)
+	}
+	if l2Info.Capabilities.NoDocumentVectorSearch {
+		t.Fatalf("l2 capabilities=%+v want no_document_vector_search=false", l2Info.Capabilities)
+	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "l2bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("unsupported metric/strategy err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+func loadBenchmarkDocs(t *testing.T, svc *Service, index string, docs []Document) {
+	t.Helper()
+	if _, err := svc.UpsertDocuments(context.Background(), index, UpsertDocumentsRequest{Documents: docs}); err != nil {
+		t.Fatalf("UpsertDocuments %s: %v", index, err)
+	}
+}
+
 func documentIDs(docs []Document) []string {
 	ids := make([]string, len(docs))
 	for i := range docs {

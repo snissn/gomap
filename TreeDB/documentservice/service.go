@@ -50,11 +50,13 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	if err != nil {
 		return IndexInfo{}, err
 	}
+	vectorOptions, err := benchmarkVectorIndexOptionsForCreate(metric, req.VectorIndexOptions)
+	if err != nil {
+		return IndexInfo{}, err
+	}
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
-	vectorStrategy := collections.VectorIndexStrategyNativeRuntime
-	if metric == MetricCosine {
+	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
-		vectorStrategy = collections.VectorIndexStrategyColumnGraph
 	}
 	meta := &collections.CollectionMeta{
 		Name:    req.Name,
@@ -64,9 +66,13 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 			Field:            defaultEmbeddingField,
 			Metric:           collectionMetric,
 			Dimensions:       req.Dimension,
+			M:                vectorOptions.m,
+			EfConstruction:   vectorOptions.efConstruction,
+			EfSearch:         vectorOptions.efSearch,
 			Encoding:         collections.VectorIndexEncodingFloat32,
-			Strategy:         vectorStrategy,
+			Strategy:         vectorOptions.strategy,
 			SchemaGeneration: 1,
+			QuantizedIndexes: vectorOptions.quantizedIndexes,
 		}},
 		TextIndexes: []collections.TextIndexDefinition{{
 			Name:             defaultTextIndexName,
@@ -345,6 +351,154 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	return DenseVectorSearchResponse{Index: info, Documents: docs, Metric: info.Metric, Exact: true, Candidates: candidateCount}, nil
 }
 
+// ResetIndex creates a missing benchmark index or clears an existing compatible
+// non-column_graph index when drop_old is requested. Column_graph benchmark
+// indexes intentionally fail closed for in-place reset: rebuilding those assets
+// after delete/reinsert tombstones is not the fresh insert-only load boundary
+// VectorDBBench needs. Managed benchmark runs should use a fresh data directory;
+// external shared services should use a unique index name per run.
+func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRequest) (ResetIndexResponse, error) {
+	if err := ctxErr(ctx); err != nil {
+		return ResetIndexResponse{}, err
+	}
+	if err := collections.ValidateCollectionName(index); err != nil {
+		return ResetIndexResponse{}, wrapServiceError(CodeInvalidRequest, "invalid index name", err)
+	}
+	existingCol, existingInfo, err := s.openIndex(ctx, index, 0)
+	if err != nil {
+		if ErrorCodeOf(err) != CodeIndexNotFound {
+			return ResetIndexResponse{}, err
+		}
+		info, err := s.CreateIndex(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions})
+		if err != nil {
+			return ResetIndexResponse{}, err
+		}
+		return ResetIndexResponse{Index: info, Created: true, Reset: false, DropOld: req.DropOld, DroppedDocuments: 0}, nil
+	}
+	if !req.DropOld {
+		return ResetIndexResponse{}, serviceErrorf(CodeConflict, "index %q already exists and drop_old=false", index)
+	}
+	if req.Dimension == 0 {
+		req.Dimension = existingInfo.Dimension
+	}
+	if req.Metric == "" {
+		req.Metric = existingInfo.Metric
+	}
+	if existingInfo.Capabilities.ColumnGraphVectorSearch {
+		return ResetIndexResponse{}, serviceErrorf(CodeUnsupported, "drop_old reset for column_graph benchmark index %q requires a fresh data directory or unique index name", index)
+	}
+	if _, err := s.CreateIndex(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions}); err != nil {
+		return ResetIndexResponse{}, err
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	ids, err := s.collectMatchingIDs(ctx, existingCol, nil)
+	if err != nil {
+		return ResetIndexResponse{}, err
+	}
+	if len(ids) > 0 {
+		deleteIDs := make([][]byte, len(ids))
+		for i, id := range ids {
+			deleteIDs[i] = []byte(id)
+		}
+		if _, err := existingCol.DeleteBatch(deleteIDs); err != nil {
+			return ResetIndexResponse{}, mapCollectionMaintenanceError("reset index", err)
+		}
+	}
+	_, info, err := s.openIndex(ctx, index, 0)
+	if err != nil {
+		return ResetIndexResponse{}, err
+	}
+	return ResetIndexResponse{Index: info, Created: false, Reset: true, DropOld: req.DropOld, DroppedDocuments: len(ids)}, nil
+}
+
+// OptimizeIndex rebuilds service vector assets after a benchmark load phase.
+func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
+	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
+	if err != nil {
+		return OptimizeIndexResponse{}, err
+	}
+	vectorIndexName := strings.TrimSpace(req.VectorIndexName)
+	if vectorIndexName == "" {
+		vectorIndexName = info.VectorIndexName
+	}
+	if vectorIndexName != info.VectorIndexName {
+		return OptimizeIndexResponse{}, serviceErrorf(CodeInvalidRequest, "unsupported vector_index_name %q", req.VectorIndexName)
+	}
+	status, err := col.RebuildVectorIndex(vectorIndexName)
+	if err != nil {
+		return OptimizeIndexResponse{}, mapCollectionMaintenanceError("optimize vector index", err)
+	}
+	return OptimizeIndexResponse{Index: info, VectorIndexName: vectorIndexName, Status: vectorIndexMaintenanceStatus(status)}, nil
+}
+
+// SearchBenchmarkVector runs fail-closed no-document vector-index benchmark
+// search. It never materializes documents and never falls back to exact dense
+// document scanning.
+func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req BenchmarkVectorSearchRequest) (BenchmarkVectorSearchResponse, error) {
+	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
+	if err != nil {
+		return BenchmarkVectorSearchResponse{}, err
+	}
+	if !info.Capabilities.NoDocumentVectorSearch {
+		return BenchmarkVectorSearchResponse{}, serviceError(CodeIndexUnavailable, "no-document vector-index search requires a cosine column_graph index")
+	}
+	if req.TopK <= 0 {
+		return BenchmarkVectorSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
+	}
+	if req.EfSearch < 0 || req.QuantizedRerankCandidates < 0 {
+		return BenchmarkVectorSearchResponse{}, serviceError(CodeInvalidRequest, "ef_search and quantized_rerank_candidates must be non-negative")
+	}
+	if err := validateEmbedding("query_embedding", req.QueryEmbedding, info.Dimension, info.Metric); err != nil {
+		return BenchmarkVectorSearchResponse{}, err
+	}
+	vectorIndexName := strings.TrimSpace(req.VectorIndexName)
+	if vectorIndexName == "" {
+		vectorIndexName = info.VectorIndexName
+	}
+	if vectorIndexName != info.VectorIndexName {
+		return BenchmarkVectorSearchResponse{}, serviceErrorf(CodeInvalidRequest, "unsupported vector_index_name %q", req.VectorIndexName)
+	}
+	queryMode, collectionQueryMode, err := normalizeBenchmarkVectorQueryMode(req.QueryMode)
+	if err != nil {
+		return BenchmarkVectorSearchResponse{}, err
+	}
+	var buffer collections.VectorIndexSearchBuffer
+	search, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
+		IndexName:                 vectorIndexName,
+		Query:                     append([]float32(nil), req.QueryEmbedding...),
+		QueryMode:                 collectionQueryMode,
+		QuantizedIndexName:        req.QuantizedIndexName,
+		QuantizedRerankCandidates: req.QuantizedRerankCandidates,
+		TopK:                      req.TopK,
+		EfSearch:                  req.EfSearch,
+		StatsMode:                 req.StatsMode,
+	}, &buffer)
+	if err != nil {
+		return BenchmarkVectorSearchResponse{}, mapVectorIndexSearchError("benchmark vector search", err)
+	}
+	if err := validateBenchmarkVectorSearchRoute(queryMode, req, search); err != nil {
+		return BenchmarkVectorSearchResponse{}, err
+	}
+	results := benchmarkVectorSearchResults(search.Results)
+	if results == nil {
+		results = []BenchmarkVectorSearchResult{}
+	}
+	return BenchmarkVectorSearchResponse{
+		Index:                     info,
+		Results:                   results,
+		Metric:                    info.Metric,
+		VectorIndexName:           vectorIndexName,
+		QueryMode:                 queryMode,
+		QuantizedIndexName:        req.QuantizedIndexName,
+		QuantizedRerankCandidates: req.QuantizedRerankCandidates,
+		NoDocuments:               true,
+		Stats:                     search.Stats,
+		Diagnostics:               search.Diagnostics(),
+	}, nil
+}
+
 // SearchKeyword runs ranked lexical search over the service content text index.
 func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSearchRequest) (KeywordSearchResponse, error) {
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
@@ -519,17 +673,22 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	}
 	hybridSearch := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	return IndexInfo{
-		Name:            meta.Name,
-		Dimension:       vectorDef.Dimensions,
-		Metric:          metric,
-		Generation:      generation,
-		ContractVersion: ContractVersion,
-		EmbeddingField:  defaultEmbeddingField,
-		VectorIndexName: vectorDef.Name,
-		TextField:       defaultTextField,
-		TextIndexName:   textDef.Name,
-		DocumentType:    defaultCollectionDocType,
-		Capabilities:    indexCapabilities(hybridSearch),
+		Name:                 meta.Name,
+		Dimension:            vectorDef.Dimensions,
+		Metric:               metric,
+		Generation:           generation,
+		ContractVersion:      ContractVersion,
+		EmbeddingField:       defaultEmbeddingField,
+		VectorIndexName:      vectorDef.Name,
+		VectorStrategy:       vectorDef.Strategy,
+		VectorM:              vectorDef.M,
+		VectorEfConstruction: vectorDef.EfConstruction,
+		VectorEfSearch:       vectorDef.EfSearch,
+		QuantizedIndexes:     quantizedIndexInfos(vectorDef),
+		TextField:            defaultTextField,
+		TextIndexName:        textDef.Name,
+		DocumentType:         defaultCollectionDocType,
+		Capabilities:         indexCapabilities(vectorDef, hybridSearch),
 	}, nil
 }
 
@@ -574,6 +733,78 @@ func serviceTextIndexDefinition(meta collections.CollectionMeta) (collections.Te
 		return candidate, nil
 	}
 	return collections.TextIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q does not expose the service text index %q", meta.Name, defaultTextIndexName)
+}
+
+type normalizedBenchmarkVectorIndexOptions struct {
+	strategy         collections.VectorIndexStrategy
+	m                int
+	efConstruction   int
+	efSearch         int
+	quantizedIndexes []collections.QuantizedVectorIndexDefinition
+}
+
+func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIndexOptions) (normalizedBenchmarkVectorIndexOptions, error) {
+	out := normalizedBenchmarkVectorIndexOptions{strategy: collections.VectorIndexStrategyNativeRuntime}
+	if metric == MetricCosine {
+		out.strategy = collections.VectorIndexStrategyColumnGraph
+	}
+	if opts == nil {
+		return out, nil
+	}
+	if opts.M < 0 || opts.EfConstruction < 0 || opts.EfSearch < 0 {
+		return normalizedBenchmarkVectorIndexOptions{}, serviceError(CodeInvalidRequest, "vector index m, ef_construction, and ef_search must be non-negative")
+	}
+	out.m = opts.M
+	out.efConstruction = opts.EfConstruction
+	out.efSearch = opts.EfSearch
+	if opts.Strategy != "" {
+		switch opts.Strategy {
+		case collections.VectorIndexStrategyNativeRuntime, collections.VectorIndexStrategyColumnGraph:
+			out.strategy = opts.Strategy
+		default:
+			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "unsupported vector index strategy %q", opts.Strategy)
+		}
+	} else if len(opts.QuantizedIndexes) > 0 {
+		out.strategy = collections.VectorIndexStrategyColumnGraph
+	}
+	if out.strategy == collections.VectorIndexStrategyColumnGraph && metric != MetricCosine {
+		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector index strategy %q requires metric %q", out.strategy, MetricCosine)
+	}
+	if len(opts.QuantizedIndexes) > 0 && out.strategy != collections.VectorIndexStrategyColumnGraph {
+		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized vector indexes require strategy %q", collections.VectorIndexStrategyColumnGraph)
+	}
+	if len(opts.QuantizedIndexes) == 0 {
+		return out, nil
+	}
+	out.quantizedIndexes = make([]collections.QuantizedVectorIndexDefinition, len(opts.QuantizedIndexes))
+	seen := make(map[string]struct{}, len(opts.QuantizedIndexes))
+	for i, q := range opts.QuantizedIndexes {
+		if q.Name == "" {
+			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector_index_options.quantized_indexes[%d].name is required", i)
+		}
+		if err := collections.ValidateIndexName(q.Name); err != nil {
+			return normalizedBenchmarkVectorIndexOptions{}, wrapServiceError(CodeInvalidRequest, fmt.Sprintf("vector_index_options.quantized_indexes[%d].name is invalid", i), err)
+		}
+		if _, ok := seen[q.Name]; ok {
+			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "duplicate quantized index %q", q.Name)
+		}
+		seen[q.Name] = struct{}{}
+		switch q.Codec {
+		case "":
+			q.Codec = collections.QuantizedVectorCodecScalarU8
+		case collections.QuantizedVectorCodecScalarU8, "rabitq_1bit", "brq_1bit":
+		default:
+			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized index %q codec %q is unsupported", q.Name, q.Codec)
+		}
+		if q.Version == 0 {
+			q.Version = 1
+		}
+		if q.Version > 1 {
+			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized index %q version=%d is unsupported", q.Name, q.Version)
+		}
+		out.quantizedIndexes[i] = collections.QuantizedVectorIndexDefinition{Name: q.Name, Codec: q.Codec, Version: q.Version}
+	}
+	return out, nil
 }
 
 func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
@@ -811,6 +1042,106 @@ func serviceDocumentFetchOptions(returnEmbedding bool) collections.DocumentFetch
 	return opts
 }
 
+func vectorIndexMaintenanceStatus(status collections.VectorIndexStatus) VectorIndexMaintenanceStatus {
+	return VectorIndexMaintenanceStatus{
+		Name:             status.Name,
+		Strategy:         status.Strategy,
+		State:            status.State,
+		Reason:           status.Reason,
+		Loaded:           status.Loaded,
+		RebuildNeeded:    status.RebuildNeeded,
+		RootID:           status.RootID,
+		NativeRootLoaded: status.NativeRootLoaded,
+		NativeRootBytes:  status.NativeRootBytes,
+		DurationNanos:    status.Duration.Nanoseconds(),
+	}
+}
+
+func normalizeBenchmarkVectorQueryMode(mode BenchmarkVectorQueryMode) (BenchmarkVectorQueryMode, collections.VectorIndexQueryMode, error) {
+	switch mode {
+	case "", BenchmarkVectorQueryModeExact:
+		return BenchmarkVectorQueryModeExact, collections.VectorIndexQueryModeExact, nil
+	case BenchmarkVectorQueryModeQuantizedOnly:
+		return BenchmarkVectorQueryModeQuantizedOnly, collections.VectorIndexQueryModeQuantizedOnly, nil
+	case BenchmarkVectorQueryModeQuantizedRerank:
+		return BenchmarkVectorQueryModeQuantizedRerank, collections.VectorIndexQueryModeQuantizedRerank, nil
+	default:
+		return "", "", serviceErrorf(CodeInvalidRequest, "unsupported benchmark vector query_mode %q", mode)
+	}
+}
+
+func benchmarkVectorSearchResults(results []collections.VectorIndexSearchResult) []BenchmarkVectorSearchResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]BenchmarkVectorSearchResult, len(results))
+	for i, result := range results {
+		out[i] = BenchmarkVectorSearchResult{ID: string(result.ID), Ordinal: result.Ordinal, Score: result.Score}
+	}
+	return out
+}
+
+func validateBenchmarkVectorSearchRoute(mode BenchmarkVectorQueryMode, req BenchmarkVectorSearchRequest, response collections.VectorIndexSearchResponse) error {
+	diag := response.Diagnostics()
+	stats := response.Stats
+	if !diag.NoDocumentGuardrailsOK || stats.DocumentsFetched != 0 || stats.DocumentBytes != 0 || stats.DocumentOutputBytes != 0 {
+		return serviceErrorf(CodeIndexUnavailable, "benchmark vector search left the no-document route: diagnostics=%+v", diag)
+	}
+	switch mode {
+	case BenchmarkVectorQueryModeExact:
+		if diag.Route != collections.VectorIndexSearchRouteExactHNSWSearchPackV1 || !diag.ExactHNSWSearchPackNoDocRoute || diag.FallbackReason != collections.VectorIndexSearchFallbackReasonNone {
+			return serviceErrorf(CodeIndexUnavailable, "exact benchmark vector search did not use the exact no-document hnsw_search_pack_v1 route: diagnostics=%+v", diag)
+		}
+	case BenchmarkVectorQueryModeQuantizedOnly, BenchmarkVectorQueryModeQuantizedRerank:
+		if err := validateBenchmarkQuantizedVectorSearchRoute(mode, req, response); err != nil {
+			return err
+		}
+	default:
+		return serviceErrorf(CodeInvalidRequest, "unsupported benchmark vector query_mode %q", mode)
+	}
+	return nil
+}
+
+func validateBenchmarkQuantizedVectorSearchRoute(mode BenchmarkVectorQueryMode, req BenchmarkVectorSearchRequest, response collections.VectorIndexSearchResponse) error {
+	diag := response.Diagnostics()
+	stats := response.Stats
+	emptySearch := len(response.Results) == 0 && stats.CandidateRows == 0
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.HNSWSearchPackFallbacks != 0 {
+		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector search touched exact hnsw_search_pack route counters: diagnostics=%+v", diag)
+	}
+	if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector search did not use one column_graph route: diagnostics=%+v", diag)
+	}
+	if stats.QuantizedAssetUnavailable != 0 || stats.QuantizedAssetMissing != 0 || stats.QuantizedAssetInvalid != 0 || stats.QuantizedAssetStale != 0 || stats.QuantizedAssetClosed != 0 {
+		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector asset is unavailable: diagnostics=%+v", diag)
+	}
+	if !emptySearch && stats.QuantizedScorerActive != 1 {
+		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector search did not activate a quantized scorer: diagnostics=%+v", diag)
+	}
+	if !emptySearch && stats.QuantizedScoreCalls == 0 {
+		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector search did not report quantized score calls: diagnostics=%+v", diag)
+	}
+	switch mode {
+	case BenchmarkVectorQueryModeQuantizedOnly:
+		if diag.Route != collections.VectorIndexSearchRouteQuantizedOnly || stats.SearchRouteQuantizedOnly != 1 || stats.SearchRouteQuantizedRerank != 0 || stats.QuantizedRerankCandidates != 0 || stats.QuantizedRerankExactScoreCalls != 0 || stats.PreparedScoreCalls != 0 {
+			return serviceErrorf(CodeIndexUnavailable, "quantized_only benchmark vector search did not stay on the quantized-only route: diagnostics=%+v", diag)
+		}
+	case BenchmarkVectorQueryModeQuantizedRerank:
+		if diag.Route != collections.VectorIndexSearchRouteQuantizedRerank || stats.SearchRouteQuantizedRerank != 1 || stats.SearchRouteQuantizedOnly != 0 {
+			return serviceErrorf(CodeIndexUnavailable, "quantized_rerank benchmark vector search did not use the quantized-rerank route: diagnostics=%+v", diag)
+		}
+		if !emptySearch {
+			if stats.QuantizedRerankCandidates == 0 || stats.QuantizedRerankExactScoreCalls != stats.QuantizedRerankCandidates || stats.VectorBytesRead == 0 || stats.NormBytesRead == 0 {
+				return serviceErrorf(CodeIndexUnavailable, "quantized_rerank benchmark vector search did not report exact rerank counters: diagnostics=%+v", diag)
+			}
+			if req.QuantizedRerankCandidates > 0 && stats.QuantizedRerankCandidates > uint64(req.QuantizedRerankCandidates) {
+				return serviceErrorf(CodeIndexUnavailable, "quantized_rerank benchmark vector search exceeded requested rerank candidates: got %d want <= %d", stats.QuantizedRerankCandidates, req.QuantizedRerankCandidates)
+			}
+		}
+	}
+	return nil
+}
+
 func normalizeKeywordSearchOperator(op collections.TextSearchOperator) (collections.TextSearchOperator, error) {
 	switch strings.TrimSpace(strings.ToLower(string(op))) {
 	case "", string(collections.TextSearchOperatorOR):
@@ -1024,6 +1355,23 @@ func mapHybridSearchError(err error) error {
 		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
 	}
 	return wrapServiceError(CodeInternal, "hybrid search failed", err)
+}
+
+func mapVectorIndexSearchError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var serviceErr *Error
+	if errors.As(err, &serviceErr) {
+		return err
+	}
+	if errors.Is(err, collections.ErrVectorIndexSearchUnavailable) || errors.Is(err, collections.ErrIndexNotFound) {
+		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed", err)
+	}
+	if errors.Is(err, backenddb.ErrClosed) {
+		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
+	}
+	return wrapServiceError(CodeInternal, operation+" failed", err)
 }
 
 func mapCollectionMaintenanceError(operation string, err error) error {

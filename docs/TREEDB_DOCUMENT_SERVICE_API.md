@@ -144,6 +144,13 @@ Responses include:
     "contract_version": "treedb-document-service/v1alpha1",
     "embedding_field": "embedding",
     "vector_index_name": "embedding",
+    "vector_strategy": "column_graph",
+    "vector_m": 16,
+    "vector_ef_construction": 128,
+    "vector_ef_search": 64,
+    "quantized_indexes": [
+      {"name": "embedding.scalar_u8.fast", "codec": "scalar_u8", "version": 1}
+    ],
     "text_field": "content",
     "text_index_name": "content",
     "document_type": "treedb_document_service_v1",
@@ -154,7 +161,16 @@ Responses include:
       "keyword_search": true,
       "hybrid_search": true,
       "keyword_metadata_filters": false,
-      "hybrid_metadata_filters": false
+      "hybrid_metadata_filters": false,
+      "benchmark_lifecycle": true,
+      "vector_index_maintenance": true,
+      "no_document_vector_search": true,
+      "column_graph_vector_search": true,
+      "exact_column_graph_search": true,
+      "quantized_vector_search": true,
+      "quantized_rerank": true,
+      "scalar_u8_quantized_rerank": true,
+      "rabitq_1bit_experimental": false
     }
   }
 }
@@ -273,6 +289,101 @@ document count/filter/delete and exact dense-vector search. Keyword and hybrid
 requests validate the shape and then fail closed with `unsupported` when any
 filter is supplied.
 
+
+## Benchmark lifecycle and no-document vector-index search
+
+These routes exist for external benchmark adapters such as VectorDBBench. They
+are deliberately separate from Haystack's exact dense-vector route: they time the
+TreeDB service/vector-index boundary and never broaden unsupported ANN or
+quantized modes into exact document scans. VDBBench rows that use these routes
+include Python/client/service overhead and are not native Go `B/op` or
+`allocs/op` evidence.
+
+Create a benchmark-shaped index by passing `vector_index_options` to
+`POST /v1/indexes` or to the reset route when the index is missing:
+
+```json
+{
+  "name": "bench",
+  "dimension": 1536,
+  "metric": "cosine",
+  "vector_index_options": {
+    "strategy": "column_graph",
+    "m": 16,
+    "ef_construction": 128,
+    "ef_search": 64,
+    "quantized_indexes": [
+      {"name": "embedding.scalar_u8.fast", "codec": "scalar_u8", "version": 1}
+    ]
+  }
+}
+```
+
+`codec=scalar_u8` plus `query_mode=quantized_rerank` is the exact-like
+quantized benchmark lane; rerank32 is the baseline evidence target when
+`quantized_rerank_candidates` is set to `32`. `rabitq_1bit`/`brq_1bit` may be
+declared for experimental compact rows, but the v1 codec semantics and recall
+caveats are unchanged.
+
+Reset/create for benchmark harnesses:
+
+```http
+POST /v1/indexes/{index}/reset
+```
+
+```json
+{
+  "dimension": 1536,
+  "metric": "cosine",
+  "drop_old": true,
+  "vector_index_options": {"strategy": "column_graph"}
+}
+```
+
+If `{index}` is missing, the route creates it. If `{index}` already exists and
+`drop_old=false`, it returns `conflict`. Existing `column_graph` benchmark
+indexes fail closed with `unsupported` for in-place `drop_old` reset; managed
+benchmark runs should use a fresh data directory, and shared external services
+should use a unique index name per run. This avoids adding a broad durable
+collection-truncate/WAL format just for benchmark reset and preserves TreeDB's
+insert-only graph rebuild boundary. Compatible non-`column_graph` indexes may be
+cleared with existing document deletes.
+
+Optimize/rebuild after load:
+
+```http
+POST /v1/indexes/{index}/optimize
+```
+
+```json
+{"vector_index_name": "embedding", "expected_generation": 1}
+```
+
+No-document vector-index benchmark search:
+
+```http
+POST /v1/indexes/{index}/search/vector-index
+```
+
+```json
+{
+  "query_embedding": [0.1, 0.2, 0.3],
+  "top_k": 10,
+  "ef_search": 64,
+  "query_mode": "quantized_rerank",
+  "quantized_index_name": "embedding.scalar_u8.fast",
+  "quantized_rerank_candidates": 32
+}
+```
+
+Supported `query_mode` values are `exact`, `quantized_only`, and
+`quantized_rerank`. Quantized modes require a declared quantized index name and
+fail closed when assets are missing, invalid, stale, or unavailable. Responses
+include result IDs/scores plus TreeDB stats/diagnostics so benchmark adapters can
+assert no-document guardrails: no documents fetched, no exact fallback for
+quantized modes, quantized scorer active, and rerank exact reads bounded by the
+requested shortlist.
+
 ## Dense-vector search
 
 ```http
@@ -306,7 +417,7 @@ Response:
 }
 ```
 
-Tie order is deterministic: higher score first, then document ID ascending.
+Tie order is deterministic: higher score first, then document ID ascending. This route remains exact dense document scoring for TreeDB's Python and Haystack clients; it is not the `column_graph` ANN/no-document benchmark route.
 
 ## Keyword search
 

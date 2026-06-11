@@ -19,6 +19,9 @@ from .errors import (
 )
 from .filters import Filter, InvalidFilterError, normalize_filter
 from .models import (
+    BenchmarkVectorIndexOptions,
+    BenchmarkVectorSearchResponse,
+    BenchmarkVectorSearchResult,
     CountDocumentsResponse,
     DeleteDocumentsResponse,
     DenseVectorSearchResponse,
@@ -35,10 +38,17 @@ from .models import (
     KeywordSearchRequest,
     KeywordSearchResponse,
     KeywordSearchStats,
+    OptimizeIndexResponse,
+    QuantizedIndexInfo,
+    ResetIndexResponse,
     UpsertDocumentsResponse,
+    VectorIndexMaintenanceStatus,
 )
 
 __all__ = [
+    "BenchmarkVectorIndexOptions",
+    "BenchmarkVectorSearchResponse",
+    "BenchmarkVectorSearchResult",
     "ConflictError",
     "CountDocumentsResponse",
     "DeleteDocumentsResponse",
@@ -64,6 +74,9 @@ __all__ = [
     "KeywordSearchResponse",
     "KeywordSearchStats",
     "MalformedJSONError",
+    "OptimizeIndexResponse",
+    "QuantizedIndexInfo",
+    "ResetIndexResponse",
     "TreeDBClient",
     "TreeDBClientError",
     "TreeDBConfigError",
@@ -73,5 +86,6 @@ __all__ = [
     "TreeDBTransportError",
     "UnsupportedError",
     "UpsertDocumentsResponse",
+    "VectorIndexMaintenanceStatus",
     "normalize_filter",
 ]

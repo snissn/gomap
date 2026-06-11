@@ -9,12 +9,14 @@ from typing import Any, Dict, Tuple
 
 import _support  # noqa: F401
 from treedb_client import (
+    BenchmarkVectorIndexOptions,
     Document,
     HybridFusionOptions,
     IndexNotFoundError,
     IndexStaleError,
     IndexUnavailableError,
     InvalidRequestError,
+    QuantizedIndexInfo,
     TreeDBClient,
     TreeDBConfigError,
     TreeDBProtocolError,
@@ -32,6 +34,11 @@ SAMPLE_INDEX = {
     "contract_version": "treedb-document-service/v1alpha1",
     "embedding_field": "embedding",
     "vector_index_name": "embedding",
+    "vector_strategy": "column_graph",
+    "vector_m": 16,
+    "vector_ef_construction": 128,
+    "vector_ef_search": 64,
+    "quantized_indexes": [{"name": "embedding.scalar_u8.fast", "codec": "scalar_u8", "version": 1}],
     "text_field": "content",
     "text_index_name": "content",
     "document_type": "treedb_document_service_v1",
@@ -43,6 +50,15 @@ SAMPLE_INDEX = {
         "hybrid_search": True,
         "keyword_metadata_filters": False,
         "hybrid_metadata_filters": False,
+        "benchmark_lifecycle": True,
+        "vector_index_maintenance": True,
+        "no_document_vector_search": True,
+        "column_graph_vector_search": True,
+        "exact_column_graph_search": True,
+        "quantized_vector_search": True,
+        "quantized_rerank": True,
+        "scalar_u8_quantized_rerank": True,
+        "rabitq_1bit_experimental": False,
     },
 }
 
@@ -198,6 +214,78 @@ class TreeDBClientTests(unittest.TestCase):
 
             delete_body = json_body(server.records[-1])
             self.assertEqual(delete_body["filter"], {"field": "meta.repo", "operator": "==", "value": "gomap"})
+
+
+    def test_benchmark_lifecycle_and_vector_index_search_methods(self) -> None:
+        reset_route = "/v1/indexes/bench/reset"
+        optimize_route = "/v1/indexes/bench/optimize"
+        search_route = "/v1/indexes/bench/search/vector-index"
+        routes = {
+            ("POST", reset_route): (
+                200,
+                {"index": SAMPLE_INDEX, "created": True, "reset": False, "drop_old": True, "dropped_documents": 0},
+                0,
+            ),
+            ("POST", optimize_route): (
+                200,
+                {
+                    "index": SAMPLE_INDEX,
+                    "vector_index_name": "embedding",
+                    "status": {"name": "embedding", "strategy": "column_graph", "state": "column_graph_loaded", "loaded": True},
+                },
+                0,
+            ),
+            ("POST", search_route): (
+                200,
+                {
+                    "index": SAMPLE_INDEX,
+                    "results": [{"id": "doc-1", "ordinal": 1, "score": 0.98}],
+                    "metric": "cosine",
+                    "vector_index_name": "embedding",
+                    "query_mode": "quantized_rerank",
+                    "quantized_index_name": "embedding.scalar_u8.fast",
+                    "quantized_rerank_candidates": 32,
+                    "no_documents": True,
+                    "stats": {"documents_fetched": 0, "quantized_rerank_exact_score_calls": 32},
+                    "diagnostics": {"route": "quantized_rerank"},
+                },
+                0,
+            ),
+        }
+        with FixtureServer(routes) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            reset = client.reset_index(
+                "bench",
+                dimension=2,
+                drop_old=True,
+                vector_index_options=BenchmarkVectorIndexOptions(
+                    strategy="column_graph",
+                    m=16,
+                    ef_construction=128,
+                    ef_search=64,
+                    quantized_indexes=[QuantizedIndexInfo(name="embedding.scalar_u8.fast")],
+                ),
+            )
+            optimize = client.optimize_index("bench", expected_generation=1)
+            search = client.search_vector_index(
+                "bench",
+                [1, 0],
+                1,
+                query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.fast",
+                quantized_rerank_candidates=32,
+            )
+
+            self.assertTrue(reset.created)
+            self.assertTrue(optimize.status.loaded)
+            self.assertEqual(search.query_mode, "quantized_rerank")
+            self.assertEqual(search.results[0].id, "doc-1")
+            reset_body = json_body(server.records[0])
+            self.assertEqual(reset_body["vector_index_options"]["strategy"], "column_graph")
+            self.assertEqual(reset_body["vector_index_options"]["quantized_indexes"][0]["codec"], "scalar_u8")
+            self.assertEqual(json_body(server.records[1]), {"expected_generation": 1})
+            self.assertEqual(json_body(server.records[2])["quantized_rerank_candidates"], 32)
 
     def test_keyword_search_serializes_request_and_parses_response(self) -> None:
         route = "/v1/indexes/docs/search/keyword"

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
@@ -118,6 +120,55 @@ func TestHTTPDocumentVectorRoundTrip(t *testing.T) {
 	postJSON(t, handler, "/v1/indexes/docs/search/vector", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ReturnEmbedding: true}, http.StatusOK, &search)
 	if len(search.Documents) != 1 || search.Documents[0].ID != "a" || len(search.Documents[0].Embedding) != 2 || search.Documents[0].Score == nil {
 		t.Fatalf("search=%+v", search)
+	}
+}
+
+func TestHTTPBenchmarkLifecycleRoutesAndExactVectorShape(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+
+	var reset ResetIndexResponse
+	postJSON(t, handler, "/v1/indexes/bench/reset", ResetIndexRequest{
+		Dimension: 2,
+		DropOld:   true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []QuantizedIndexInfo{{
+				Name:  "embedding.scalar_u8.fast",
+				Codec: collections.QuantizedVectorCodecScalarU8,
+			}},
+		},
+	}, http.StatusOK, &reset)
+	if !reset.Index.Capabilities.BenchmarkLifecycle || !reset.Index.Capabilities.NoDocumentVectorSearch || !reset.Index.Capabilities.ScalarU8QuantizedRerank {
+		t.Fatalf("reset capabilities=%+v", reset.Index.Capabilities)
+	}
+	postJSON(t, handler, "/v1/indexes/bench/documents/upsert", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "a", Content: "alpha", Embedding: []float32{1, 0}},
+		{ID: "b", Content: "beta", Embedding: []float32{0, 1}},
+	}}, http.StatusOK, nil)
+	var optimize OptimizeIndexResponse
+	postJSON(t, handler, "/v1/indexes/bench/optimize", OptimizeIndexRequest{}, http.StatusOK, &optimize)
+	if !optimize.Status.Loaded || optimize.VectorIndexName != defaultVectorIndexName {
+		t.Fatalf("optimize=%+v", optimize)
+	}
+	var benchmark BenchmarkVectorSearchResponse
+	postJSON(t, handler, "/v1/indexes/bench/search/vector-index", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8}, http.StatusOK, &benchmark)
+	if !benchmark.NoDocuments || len(benchmark.Results) != 1 || benchmark.Results[0].ID != "a" || benchmark.Stats.DocumentsFetched != 0 {
+		t.Fatalf("benchmark vector response=%+v stats=%+v", benchmark, benchmark.Stats)
+	}
+
+	var exactShape map[string]any
+	postJSON(t, handler, "/v1/indexes/bench/search/vector", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1}, http.StatusOK, &exactShape)
+	for _, unexpected := range []string{"results", "stats", "diagnostics", "no_documents", "query_mode"} {
+		if _, ok := exactShape[unexpected]; ok {
+			t.Fatalf("exact /search/vector included benchmark field %q in shape=%+v", unexpected, exactShape)
+		}
+	}
+	for _, required := range []string{"index", "documents", "metric", "exact", "candidates"} {
+		if _, ok := exactShape[required]; !ok {
+			t.Fatalf("exact /search/vector missing field %q in shape=%+v", required, exactShape)
+		}
 	}
 }
 

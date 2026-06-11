@@ -81,6 +81,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, serviceErrorf(CodeInvalidRequest, "method %s is not allowed for %s", r.Method, r.URL.Path))
 			return
 		}
+		if len(parts) == 4 {
+			h.serveIndexOperation(w, r, index, parts[3], maxBodyBytes)
+			return
+		}
 		if len(parts) == 5 && parts[3] == "documents" {
 			h.serveDocumentOperation(w, r, index, parts[4], maxBodyBytes)
 			return
@@ -91,6 +95,35 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeError(w, serviceErrorf(CodeInvalidRequest, "unknown document service route %q", r.URL.Path))
+}
+
+func (h *Handler) serveIndexOperation(w http.ResponseWriter, r *http.Request, index, op string, maxBodyBytes int64) {
+	switch op {
+	case "reset":
+		var req ResetIndexRequest
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
+			return
+		}
+		res, err := h.Service.ResetIndex(r.Context(), index, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	case "optimize":
+		var req OptimizeIndexRequest
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
+			return
+		}
+		res, err := h.Service.OptimizeIndex(r.Context(), index, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	default:
+		writeError(w, serviceErrorf(CodeInvalidRequest, "unknown index operation %q", op))
+	}
 }
 
 func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request, index, op string, maxBodyBytes int64) {
@@ -174,6 +207,17 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 			return
 		}
 		res, err := h.Service.SearchHybrid(r.Context(), index, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	case "vector-index":
+		var req BenchmarkVectorSearchRequest
+		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
+			return
+		}
+		res, err := h.Service.SearchBenchmarkVector(r.Context(), index, req)
 		if err != nil {
 			writeError(w, err)
 			return
