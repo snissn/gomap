@@ -17,13 +17,17 @@ Supported by the base client:
 - delete by server-side metadata filter
 - count/filter/list documents
 - exact dense-vector search with optional metadata filters and embedding echo
+- benchmark lifecycle helpers for reset/create, vector-index optimize/rebuild, and fail-closed no-document vector-index search
+- explicit scalar_u8 + rerank benchmark request fields (`query_mode="quantized_rerank"`, quantized index name, rerank candidate count)
 - ranked keyword search over the service `content` text index
 - TreeDB-native hybrid text/vector search with deterministic RRF fusion options
-- typed dataclasses for documents, index metadata, keyword/hybrid requests and responses, stats, plan/snapshot, fusion options, and errors
+- typed dataclasses for documents, index metadata, benchmark vector options/responses, keyword/hybrid requests and responses, stats, plan/snapshot, fusion options, and errors
 - Haystack-style filter conversion/validation without a Haystack dependency
 
 Not supported:
 
+- using benchmark no-document vector-index routes as Haystack/exact dense-search evidence
+- in-place `drop_old` reset for existing `column_graph` benchmark indexes; use a fresh data directory or unique index name
 - metadata filters on keyword/hybrid routes (the service fails them closed with `unsupported`/HTTP 501)
 - async client APIs
 - client-side scans or text/vector fallbacks to emulate unsupported TreeDB behavior
@@ -82,7 +86,7 @@ go run ./cmd/treedb-document-service \
 ## Example
 
 ```python
-from treedb_client import Document, Filter, TreeDBClient
+from treedb_client import BenchmarkVectorIndexOptions, Document, Filter, QuantizedIndexInfo, TreeDBClient
 
 client = TreeDBClient("http://127.0.0.1:7120", timeout=5)
 
@@ -129,6 +133,33 @@ results = client.query_by_embedding(
 
 for doc in results.documents:
     print(doc.id, doc.score, doc.meta.get("path"))
+
+# VectorDBBench-style no-document vector-index route. This is separate from
+# query_by_embedding above; it fails closed rather than falling back to exact
+# document scans. Managed benchmark runs should use a fresh TreeDB data dir.
+# Omit metric when preserving an existing index's metric; pass it when creating
+# or enforcing a benchmark schema.
+client.reset_index(
+    "bench_run_001",
+    dimension=3,
+    metric="cosine",
+    drop_old=True,
+    vector_index_options=BenchmarkVectorIndexOptions(
+        strategy="column_graph",
+        quantized_indexes=[QuantizedIndexInfo(name="embedding.scalar_u8.fast")],
+    ),
+)
+client.upsert_documents("bench_run_001", [Document(id="a", embedding=[0.1, 0.2, 0.3])])
+client.optimize_index("bench_run_001")
+bench = client.search_vector_index(
+    "bench_run_001",
+    query_embedding=[0.1, 0.2, 0.3],
+    top_k=1,
+    query_mode="quantized_rerank",
+    quantized_index_name="embedding.scalar_u8.fast",
+    quantized_rerank_candidates=32,
+)
+print(bench.results[0].id, bench.no_documents, bench.diagnostics.get("route"))
 
 keyword = client.search_keyword(
     "docs",

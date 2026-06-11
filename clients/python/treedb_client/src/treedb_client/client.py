@@ -21,6 +21,8 @@ from .errors import (
 )
 from .filters import FilterLike, InvalidFilterError, normalize_filter
 from .models import (
+    BenchmarkVectorIndexOptions,
+    BenchmarkVectorSearchResponse,
     CountDocumentsResponse,
     DeleteDocumentsResponse,
     DenseVectorSearchResponse,
@@ -32,10 +34,13 @@ from .models import (
     IndexInfo,
     KeywordSearchRequest,
     KeywordSearchResponse,
+    OptimizeIndexResponse,
+    ResetIndexResponse,
     UpsertDocumentsResponse,
 )
 
 DocumentLike = Union[Document, Mapping[str, Any]]
+VectorIndexOptionsLike = Union[BenchmarkVectorIndexOptions, Mapping[str, Any]]
 _ResponseT = TypeVar("_ResponseT")
 
 
@@ -60,23 +65,77 @@ class TreeDBClient:
             raise TreeDBProtocolError("health response must be a JSON object")
         return payload
 
-    def create_index(self, name: str, dimension: int, metric: Optional[str] = "cosine") -> IndexInfo:
+    def create_index(
+        self,
+        name: str,
+        dimension: int,
+        metric: Optional[str] = "cosine",
+        *,
+        vector_index_options: Optional[VectorIndexOptionsLike] = None,
+    ) -> IndexInfo:
         """Create or idempotently open a compatible document index."""
 
         request: dict[str, Any] = {"name": name, "dimension": dimension}
-        if metric:
-            request["metric"] = metric
+        _add_optional_non_empty_string(request, "metric", metric, "metric")
+        _add_vector_index_options(request, vector_index_options)
         payload = self._request("POST", "/v1/indexes", request)
         return _index_from_envelope(payload)
 
-    def ensure_index(self, name: str, dimension: int, metric: Optional[str] = "cosine") -> IndexInfo:
+    def ensure_index(
+        self,
+        name: str,
+        dimension: int,
+        metric: Optional[str] = "cosine",
+        *,
+        vector_index_options: Optional[VectorIndexOptionsLike] = None,
+    ) -> IndexInfo:
         """Ensure a compatible index exists.
 
         The service's create route is idempotent for compatible existing indexes
         and returns `conflict` for incompatible schemas.
         """
 
-        return self.create_index(name, dimension, metric)
+        return self.create_index(name, dimension, metric, vector_index_options=vector_index_options)
+
+    def reset_index(
+        self,
+        index: str,
+        *,
+        dimension: int,
+        metric: Optional[str] = None,
+        drop_old: bool = False,
+        vector_index_options: Optional[VectorIndexOptionsLike] = None,
+    ) -> ResetIndexResponse:
+        """Create or reset a benchmark index through the service lifecycle route.
+
+        Existing column_graph benchmark indexes fail closed on the service when
+        `drop_old=True`; managed benchmark runs should use a fresh data directory
+        or a unique index name to preserve TreeDB's insert-only graph rebuild
+        boundary. Omit `metric` to preserve an existing index's metric; pass it
+        when creating a missing index or when compatibility should be enforced.
+        """
+
+        request: dict[str, Any] = {"dimension": dimension, "drop_old": bool(drop_old)}
+        _add_optional_non_empty_string(request, "metric", metric, "metric")
+        _add_vector_index_options(request, vector_index_options)
+        payload = self._request("POST", self._index_path(index, "reset"), request)
+        return _parse_response("reset index response", ResetIndexResponse.from_dict, payload)
+
+    def optimize_index(
+        self,
+        index: str,
+        *,
+        vector_index_name: Optional[str] = None,
+        expected_generation: Optional[int] = None,
+    ) -> OptimizeIndexResponse:
+        """Rebuild service vector assets after a benchmark load phase."""
+
+        request: dict[str, Any] = {}
+        _add_expected_generation(request, expected_generation)
+        if vector_index_name:
+            request["vector_index_name"] = vector_index_name
+        payload = self._request("POST", self._index_path(index, "optimize"), request)
+        return _parse_response("optimize index response", OptimizeIndexResponse.from_dict, payload)
 
     def open_index(self, name: str) -> IndexInfo:
         """Open/read metadata for an existing index."""
@@ -190,6 +249,44 @@ class TreeDBClient:
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "search", "vector"), request)
         return _parse_response("vector search response", DenseVectorSearchResponse.from_dict, payload)
+
+    def search_vector_index(
+        self,
+        index: str,
+        query_embedding: Sequence[float],
+        top_k: int,
+        *,
+        vector_index_name: Optional[str] = None,
+        ef_search: Optional[int] = None,
+        query_mode: Optional[str] = None,
+        quantized_index_name: Optional[str] = None,
+        quantized_rerank_candidates: Optional[int] = None,
+        stats_mode: Optional[str] = None,
+        expected_generation: Optional[int] = None,
+    ) -> BenchmarkVectorSearchResponse:
+        """Run fail-closed no-document vector-index benchmark search.
+
+        This calls `/search/vector-index`, not the exact dense `/search/vector`
+        route used by Haystack. Quantized modes must be explicit and are not
+        emulated by client-side or service-side exact fallback.
+        """
+
+        request: dict[str, Any] = {
+            "query_embedding": [float(value) for value in query_embedding],
+            "top_k": top_k,
+        }
+        _add_expected_generation(request, expected_generation)
+        if vector_index_name:
+            request["vector_index_name"] = vector_index_name
+        if ef_search is not None:
+            request["ef_search"] = int(ef_search)
+        _add_optional_non_empty_string(request, "query_mode", query_mode, "query_mode")
+        _add_optional_non_empty_string(request, "quantized_index_name", quantized_index_name, "quantized_index_name")
+        if quantized_rerank_candidates is not None:
+            request["quantized_rerank_candidates"] = int(quantized_rerank_candidates)
+        _add_optional_non_empty_string(request, "stats_mode", stats_mode, "stats_mode")
+        payload = self._request("POST", self._index_path(index, "search", "vector-index"), request)
+        return _parse_response("benchmark vector search response", BenchmarkVectorSearchResponse.from_dict, payload)
 
     def search_keyword(
         self,
@@ -371,10 +468,30 @@ def _add_expected_generation(request: dict[str, Any], expected_generation: Optio
         request["expected_generation"] = expected_generation
 
 
+def _add_optional_non_empty_string(request: dict[str, Any], key: str, value: Optional[str], label: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or value.strip() == "":
+        raise InvalidRequestError("invalid_request", f"{label} must be a non-empty string when provided")
+    request[key] = value
+
+
 def _add_filter(request: dict[str, Any], filter_value: Optional[FilterLike]) -> None:
     normalized = normalize_filter(filter_value)
     if normalized is not None:
         request["filter"] = normalized
+
+
+def _add_vector_index_options(request: dict[str, Any], options: Optional[VectorIndexOptionsLike]) -> None:
+    if options is None:
+        return
+    if isinstance(options, BenchmarkVectorIndexOptions):
+        request["vector_index_options"] = options.to_dict()
+        return
+    if isinstance(options, Mapping):
+        request["vector_index_options"] = BenchmarkVectorIndexOptions.from_dict(options).to_dict()
+        return
+    raise InvalidRequestError("invalid_request", "vector_index_options must be BenchmarkVectorIndexOptions, mapping, or None")
 
 
 def _document_for_write(document: DocumentLike) -> Mapping[str, Any]:

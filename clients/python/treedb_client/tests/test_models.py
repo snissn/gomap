@@ -4,6 +4,8 @@ import unittest
 
 import _support  # noqa: F401
 from treedb_client import (
+    BenchmarkVectorIndexOptions,
+    BenchmarkVectorSearchResponse,
     Document,
     HybridFusionOptions,
     HybridSearchPlan,
@@ -13,6 +15,7 @@ from treedb_client import (
     IndexInfo,
     KeywordSearchRequest,
     KeywordSearchResponse,
+    QuantizedIndexInfo,
 )
 
 
@@ -105,6 +108,65 @@ class IndexModelTests(unittest.TestCase):
 
         self.assertEqual(capabilities.extra["future_capability"], "kept")
         self.assertEqual(capabilities.to_dict()["future_capability"], "kept")
+
+
+
+    def test_benchmark_vector_models_round_trip_scalar_u8_rerank(self) -> None:
+        options = BenchmarkVectorIndexOptions(
+            strategy="column_graph",
+            m=16,
+            ef_construction=128,
+            ef_search=64,
+            quantized_indexes=[QuantizedIndexInfo(name="embedding.scalar_u8.fast")],
+        )
+
+        self.assertEqual(
+            options.to_dict(),
+            {
+                "strategy": "column_graph",
+                "m": 16,
+                "ef_construction": 128,
+                "ef_search": 64,
+                "quantized_indexes": [{"name": "embedding.scalar_u8.fast", "codec": "scalar_u8", "version": 1}],
+            },
+        )
+
+        response = BenchmarkVectorSearchResponse.from_dict(
+            {
+                "index": {
+                    **_sample_index(),
+                    "vector_strategy": "column_graph",
+                    "quantized_indexes": [{"name": "embedding.scalar_u8.fast", "codec": "scalar_u8", "version": 1}],
+                    "capabilities": {
+                        **_sample_index()["capabilities"],
+                        "no_document_vector_search": True,
+                        "quantized_rerank": True,
+                        "scalar_u8_quantized_rerank": True,
+                    },
+                },
+                "results": [{"id": "doc-1", "ordinal": 7, "score": 0.99}],
+                "metric": "cosine",
+                "vector_index_name": "embedding",
+                "query_mode": "quantized_rerank",
+                "quantized_index_name": "embedding.scalar_u8.fast",
+                "quantized_rerank_candidates": 32,
+                "no_documents": True,
+                "stats": {"documents_fetched": 0, "quantized_rerank_exact_score_calls": 32},
+                "diagnostics": {"route": "quantized_rerank"},
+            }
+        )
+
+        self.assertEqual(response.query_mode, "quantized_rerank")
+        self.assertEqual(response.quantized_rerank_candidates, 32)
+        self.assertEqual(response.results[0].id, "doc-1")
+        self.assertTrue(response.index.capabilities.scalar_u8_quantized_rerank)
+        self.assertEqual(response.index.quantized_indexes[0].name, "embedding.scalar_u8.fast")
+
+    def test_benchmark_vector_options_preserve_explicit_zero_values(self) -> None:
+        options = BenchmarkVectorIndexOptions.from_dict({"m": 0, "ef_construction": 0, "ef_search": 0})
+
+        self.assertEqual(options.to_dict(), {"m": 0, "ef_construction": 0, "ef_search": 0})
+        self.assertEqual(BenchmarkVectorIndexOptions().to_dict(), {})
 
 
 class KeywordHybridModelTests(unittest.TestCase):

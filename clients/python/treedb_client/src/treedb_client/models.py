@@ -168,6 +168,15 @@ class IndexCapabilities:
     hybrid_search: bool
     keyword_metadata_filters: bool = False
     hybrid_metadata_filters: bool = False
+    benchmark_lifecycle: bool = False
+    vector_index_maintenance: bool = False
+    no_document_vector_search: bool = False
+    column_graph_vector_search: bool = False
+    exact_column_graph_search: bool = False
+    quantized_vector_search: bool = False
+    quantized_rerank: bool = False
+    scalar_u8_quantized_rerank: bool = False
+    rabitq_1bit_experimental: bool = False
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -181,6 +190,15 @@ class IndexCapabilities:
             "hybrid_search",
             "keyword_metadata_filters",
             "hybrid_metadata_filters",
+            "benchmark_lifecycle",
+            "vector_index_maintenance",
+            "no_document_vector_search",
+            "column_graph_vector_search",
+            "exact_column_graph_search",
+            "quantized_vector_search",
+            "quantized_rerank",
+            "scalar_u8_quantized_rerank",
+            "rabitq_1bit_experimental",
         ]
         return cls(
             dense_vector_search=_as_bool(data.get("dense_vector_search", False), "index.capabilities.dense_vector_search"),
@@ -193,6 +211,29 @@ class IndexCapabilities:
             ),
             hybrid_metadata_filters=_as_bool(
                 data.get("hybrid_metadata_filters", False), "index.capabilities.hybrid_metadata_filters"
+            ),
+            benchmark_lifecycle=_as_bool(data.get("benchmark_lifecycle", False), "index.capabilities.benchmark_lifecycle"),
+            vector_index_maintenance=_as_bool(
+                data.get("vector_index_maintenance", False), "index.capabilities.vector_index_maintenance"
+            ),
+            no_document_vector_search=_as_bool(
+                data.get("no_document_vector_search", False), "index.capabilities.no_document_vector_search"
+            ),
+            column_graph_vector_search=_as_bool(
+                data.get("column_graph_vector_search", False), "index.capabilities.column_graph_vector_search"
+            ),
+            exact_column_graph_search=_as_bool(
+                data.get("exact_column_graph_search", False), "index.capabilities.exact_column_graph_search"
+            ),
+            quantized_vector_search=_as_bool(
+                data.get("quantized_vector_search", False), "index.capabilities.quantized_vector_search"
+            ),
+            quantized_rerank=_as_bool(data.get("quantized_rerank", False), "index.capabilities.quantized_rerank"),
+            scalar_u8_quantized_rerank=_as_bool(
+                data.get("scalar_u8_quantized_rerank", False), "index.capabilities.scalar_u8_quantized_rerank"
+            ),
+            rabitq_1bit_experimental=_as_bool(
+                data.get("rabitq_1bit_experimental", False), "index.capabilities.rabitq_1bit_experimental"
             ),
             extra=_copy_extra(data, allowed),
         )
@@ -207,9 +248,83 @@ class IndexCapabilities:
                 "hybrid_search": self.hybrid_search,
                 "keyword_metadata_filters": self.keyword_metadata_filters,
                 "hybrid_metadata_filters": self.hybrid_metadata_filters,
+                "benchmark_lifecycle": self.benchmark_lifecycle,
+                "vector_index_maintenance": self.vector_index_maintenance,
+                "no_document_vector_search": self.no_document_vector_search,
+                "column_graph_vector_search": self.column_graph_vector_search,
+                "exact_column_graph_search": self.exact_column_graph_search,
+                "quantized_vector_search": self.quantized_vector_search,
+                "quantized_rerank": self.quantized_rerank,
+                "scalar_u8_quantized_rerank": self.scalar_u8_quantized_rerank,
+                "rabitq_1bit_experimental": self.rabitq_1bit_experimental,
             },
             self.extra,
         )
+
+
+@dataclass(frozen=True)
+class QuantizedIndexInfo:
+    name: str
+    codec: str = "scalar_u8"
+    version: int = 1
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "QuantizedIndexInfo":
+        data = _as_mapping(data, "quantized index")
+        _reject_unknown(data, ["name", "codec", "version"], "quantized index")
+        return cls(
+            name=_as_str(data["name"], "quantized index.name"),
+            codec=_as_optional_str_default(data.get("codec"), "quantized index.codec") or "scalar_u8",
+            version=_as_optional_int_default(data.get("version"), "quantized index.version") or 1,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"name": self.name, "codec": self.codec, "version": self.version}
+
+
+@dataclass(frozen=True)
+class BenchmarkVectorIndexOptions:
+    strategy: str = ""
+    m: Optional[int] = None
+    ef_construction: Optional[int] = None
+    ef_search: Optional[int] = None
+    quantized_indexes: Sequence[QuantizedIndexInfo | Mapping[str, Any]] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "BenchmarkVectorIndexOptions":
+        data = _as_mapping(data, "vector index options")
+        _reject_unknown(data, ["strategy", "m", "ef_construction", "ef_search", "quantized_indexes"], "vector index options")
+        raw_quantized = data.get("quantized_indexes", [])
+        if isinstance(raw_quantized, (str, bytes, bytearray)) or not isinstance(raw_quantized, Sequence):
+            raise TypeError("vector index options.quantized_indexes must be a sequence")
+        return cls(
+            strategy=_as_optional_str_default(data.get("strategy"), "vector index options.strategy"),
+            m=None if "m" not in data or data.get("m") is None else _as_int(data.get("m"), "vector index options.m"),
+            ef_construction=None
+            if "ef_construction" not in data or data.get("ef_construction") is None
+            else _as_int(data.get("ef_construction"), "vector index options.ef_construction"),
+            ef_search=None
+            if "ef_search" not in data or data.get("ef_search") is None
+            else _as_int(data.get("ef_search"), "vector index options.ef_search"),
+            quantized_indexes=[QuantizedIndexInfo.from_dict(item) for item in raw_quantized],
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if self.strategy:
+            out["strategy"] = self.strategy
+        if self.m is not None:
+            out["m"] = _as_int(self.m, "vector index options.m")
+        if self.ef_construction is not None:
+            out["ef_construction"] = _as_int(self.ef_construction, "vector index options.ef_construction")
+        if self.ef_search is not None:
+            out["ef_search"] = _as_int(self.ef_search, "vector index options.ef_search")
+        if self.quantized_indexes:
+            out["quantized_indexes"] = [
+                item.to_dict() if isinstance(item, QuantizedIndexInfo) else QuantizedIndexInfo.from_dict(item).to_dict()
+                for item in self.quantized_indexes
+            ]
+        return out
 
 
 @dataclass(frozen=True)
@@ -223,6 +338,11 @@ class IndexInfo:
     document_type: str
     capabilities: IndexCapabilities
     vector_index_name: str = ""
+    vector_strategy: str = ""
+    vector_m: int = 0
+    vector_ef_construction: int = 0
+    vector_ef_search: int = 0
+    quantized_indexes: list[QuantizedIndexInfo] = field(default_factory=list)
     text_field: str = ""
     text_index_name: str = ""
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -238,6 +358,11 @@ class IndexInfo:
             "contract_version",
             "embedding_field",
             "vector_index_name",
+            "vector_strategy",
+            "vector_m",
+            "vector_ef_construction",
+            "vector_ef_search",
+            "quantized_indexes",
             "text_field",
             "text_index_name",
             "document_type",
@@ -252,6 +377,13 @@ class IndexInfo:
             contract_version=_as_str(data["contract_version"], "index.contract_version"),
             embedding_field=embedding_field,
             vector_index_name=_as_optional_str_default(data.get("vector_index_name", embedding_field), "index.vector_index_name"),
+            vector_strategy=_as_optional_str_default(data.get("vector_strategy", ""), "index.vector_strategy"),
+            vector_m=_as_optional_int_default(data.get("vector_m"), "index.vector_m"),
+            vector_ef_construction=_as_optional_int_default(
+                data.get("vector_ef_construction"), "index.vector_ef_construction"
+            ),
+            vector_ef_search=_as_optional_int_default(data.get("vector_ef_search"), "index.vector_ef_search"),
+            quantized_indexes=[QuantizedIndexInfo.from_dict(item) for item in data.get("quantized_indexes", [])],
             text_field=_as_optional_str_default(data.get("text_field", ""), "index.text_field"),
             text_index_name=_as_optional_str_default(data.get("text_index_name", ""), "index.text_index_name"),
             document_type=_as_str(data["document_type"], "index.document_type"),
@@ -269,6 +401,11 @@ class IndexInfo:
                 "contract_version": self.contract_version,
                 "embedding_field": self.embedding_field,
                 "vector_index_name": self.vector_index_name,
+                "vector_strategy": self.vector_strategy,
+                "vector_m": self.vector_m,
+                "vector_ef_construction": self.vector_ef_construction,
+                "vector_ef_search": self.vector_ef_search,
+                "quantized_indexes": [item.to_dict() for item in self.quantized_indexes],
                 "text_field": self.text_field,
                 "text_index_name": self.text_index_name,
                 "document_type": self.document_type,
@@ -360,6 +497,156 @@ class DenseVectorSearchResponse:
             metric=_as_str(data["metric"], "metric"),
             exact=_as_bool(data["exact"], "exact"),
             candidates=_as_int(data["candidates"], "candidates"),
+        )
+
+
+@dataclass(frozen=True)
+class ResetIndexResponse:
+    index: IndexInfo
+    created: bool
+    reset: bool
+    drop_old: bool
+    dropped_documents: int
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ResetIndexResponse":
+        data = _as_mapping(data, "reset index response")
+        return cls(
+            index=IndexInfo.from_dict(data["index"]),
+            created=_as_bool(data.get("created", False), "reset response.created"),
+            reset=_as_bool(data.get("reset", False), "reset response.reset"),
+            drop_old=_as_bool(data.get("drop_old", False), "reset response.drop_old"),
+            dropped_documents=_as_int(data.get("dropped_documents", 0), "reset response.dropped_documents"),
+        )
+
+
+@dataclass(frozen=True)
+class VectorIndexMaintenanceStatus:
+    name: str = ""
+    strategy: str = ""
+    state: str = ""
+    reason: str = ""
+    loaded: bool = False
+    rebuild_needed: bool = False
+    root_id: int = 0
+    native_root_loaded: bool = False
+    native_root_bytes: int = 0
+    duration_nanos: int = 0
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "VectorIndexMaintenanceStatus":
+        data = _as_mapping(data, "vector index maintenance status")
+        allowed = [
+            "name",
+            "strategy",
+            "state",
+            "reason",
+            "loaded",
+            "rebuild_needed",
+            "root_id",
+            "native_root_loaded",
+            "native_root_bytes",
+            "duration_nanos",
+        ]
+        return cls(
+            name=_as_optional_str_default(data.get("name"), "maintenance status.name"),
+            strategy=_as_optional_str_default(data.get("strategy"), "maintenance status.strategy"),
+            state=_as_optional_str_default(data.get("state"), "maintenance status.state"),
+            reason=_as_optional_str_default(data.get("reason"), "maintenance status.reason"),
+            loaded=_as_optional_bool_default(data.get("loaded"), "maintenance status.loaded"),
+            rebuild_needed=_as_optional_bool_default(data.get("rebuild_needed"), "maintenance status.rebuild_needed"),
+            root_id=_as_optional_int_default(data.get("root_id"), "maintenance status.root_id"),
+            native_root_loaded=_as_optional_bool_default(
+                data.get("native_root_loaded"), "maintenance status.native_root_loaded"
+            ),
+            native_root_bytes=_as_optional_int_default(
+                data.get("native_root_bytes"), "maintenance status.native_root_bytes"
+            ),
+            duration_nanos=_as_optional_int_default(data.get("duration_nanos"), "maintenance status.duration_nanos"),
+            extra=_copy_extra(data, allowed),
+        )
+
+
+@dataclass(frozen=True)
+class OptimizeIndexResponse:
+    index: IndexInfo
+    vector_index_name: str
+    status: VectorIndexMaintenanceStatus
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "OptimizeIndexResponse":
+        data = _as_mapping(data, "optimize index response")
+        return cls(
+            index=IndexInfo.from_dict(data["index"]),
+            vector_index_name=_as_str(data["vector_index_name"], "optimize response.vector_index_name"),
+            status=VectorIndexMaintenanceStatus.from_dict(data.get("status", {})),
+        )
+
+
+@dataclass(frozen=True)
+class BenchmarkVectorSearchResult:
+    id: str
+    ordinal: int
+    score: float
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "BenchmarkVectorSearchResult":
+        data = _as_mapping(data, "benchmark vector search result")
+        return cls(
+            id=_as_str(data["id"], "benchmark result.id"),
+            ordinal=_as_int(data.get("ordinal", 0), "benchmark result.ordinal"),
+            score=_optional_float(data.get("score", 0.0), "benchmark result.score") or 0.0,
+        )
+
+
+@dataclass(frozen=True)
+class BenchmarkVectorSearchResponse:
+    index: IndexInfo
+    results: list[BenchmarkVectorSearchResult]
+    metric: str
+    vector_index_name: str
+    query_mode: str
+    quantized_index_name: str = ""
+    quantized_rerank_candidates: int = 0
+    no_documents: bool = False
+    stats: Dict[str, Any] = field(default_factory=dict)
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "BenchmarkVectorSearchResponse":
+        data = _as_mapping(data, "benchmark vector search response")
+        allowed = [
+            "index",
+            "results",
+            "metric",
+            "vector_index_name",
+            "query_mode",
+            "quantized_index_name",
+            "quantized_rerank_candidates",
+            "no_documents",
+            "stats",
+            "diagnostics",
+        ]
+        stats = data.get("stats", {})
+        diagnostics = data.get("diagnostics", {})
+        return cls(
+            index=IndexInfo.from_dict(data["index"]),
+            results=[BenchmarkVectorSearchResult.from_dict(item) for item in data.get("results", [])],
+            metric=_as_str(data["metric"], "benchmark response.metric"),
+            vector_index_name=_as_str(data["vector_index_name"], "benchmark response.vector_index_name"),
+            query_mode=_as_str(data["query_mode"], "benchmark response.query_mode"),
+            quantized_index_name=_as_optional_str_default(
+                data.get("quantized_index_name"), "benchmark response.quantized_index_name"
+            ),
+            quantized_rerank_candidates=_as_optional_int_default(
+                data.get("quantized_rerank_candidates"), "benchmark response.quantized_rerank_candidates"
+            ),
+            no_documents=_as_optional_bool_default(data.get("no_documents"), "benchmark response.no_documents"),
+            stats=dict(_as_mapping(stats, "benchmark response.stats")),
+            diagnostics=dict(_as_mapping(diagnostics, "benchmark response.diagnostics")),
+            extra=_copy_extra(data, allowed),
         )
 
 

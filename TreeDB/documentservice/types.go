@@ -40,36 +40,70 @@ type Document struct {
 
 // IndexCapabilities describes the supported operations for one service index.
 type IndexCapabilities struct {
-	DenseVectorSearch      bool `json:"dense_vector_search"`
-	ExactDenseScoring      bool `json:"exact_dense_scoring"`
-	MetadataFilters        bool `json:"metadata_filters"`
-	KeywordSearch          bool `json:"keyword_search"`
-	HybridSearch           bool `json:"hybrid_search"`
-	KeywordMetadataFilters bool `json:"keyword_metadata_filters"`
-	HybridMetadataFilters  bool `json:"hybrid_metadata_filters"`
+	DenseVectorSearch       bool `json:"dense_vector_search"`
+	ExactDenseScoring       bool `json:"exact_dense_scoring"`
+	MetadataFilters         bool `json:"metadata_filters"`
+	KeywordSearch           bool `json:"keyword_search"`
+	HybridSearch            bool `json:"hybrid_search"`
+	KeywordMetadataFilters  bool `json:"keyword_metadata_filters"`
+	HybridMetadataFilters   bool `json:"hybrid_metadata_filters"`
+	BenchmarkLifecycle      bool `json:"benchmark_lifecycle"`
+	VectorIndexMaintenance  bool `json:"vector_index_maintenance"`
+	NoDocumentVectorSearch  bool `json:"no_document_vector_search"`
+	ColumnGraphVectorSearch bool `json:"column_graph_vector_search"`
+	ExactColumnGraphSearch  bool `json:"exact_column_graph_search"`
+	QuantizedVectorSearch   bool `json:"quantized_vector_search"`
+	QuantizedRerank         bool `json:"quantized_rerank"`
+	ScalarU8QuantizedRerank bool `json:"scalar_u8_quantized_rerank"`
+	RabitQ1BitExperimental  bool `json:"rabitq_1bit_experimental"`
+}
+
+// QuantizedIndexInfo describes a declared quantized score plane attached to the
+// service vector index.
+type QuantizedIndexInfo struct {
+	Name    string `json:"name"`
+	Codec   string `json:"codec"`
+	Version uint32 `json:"version"`
 }
 
 // IndexInfo is returned by create/open and echoed by operation responses.
 type IndexInfo struct {
-	Name            string            `json:"name"`
-	Dimension       int               `json:"dimension"`
-	Metric          Metric            `json:"metric"`
-	Generation      uint64            `json:"generation"`
-	ContractVersion string            `json:"contract_version"`
-	EmbeddingField  string            `json:"embedding_field"`
-	VectorIndexName string            `json:"vector_index_name"`
-	TextField       string            `json:"text_field"`
-	TextIndexName   string            `json:"text_index_name"`
-	DocumentType    string            `json:"document_type"`
-	Capabilities    IndexCapabilities `json:"capabilities"`
+	Name                 string                          `json:"name"`
+	Dimension            int                             `json:"dimension"`
+	Metric               Metric                          `json:"metric"`
+	Generation           uint64                          `json:"generation"`
+	ContractVersion      string                          `json:"contract_version"`
+	EmbeddingField       string                          `json:"embedding_field"`
+	VectorIndexName      string                          `json:"vector_index_name"`
+	VectorStrategy       collections.VectorIndexStrategy `json:"vector_strategy"`
+	VectorM              int                             `json:"vector_m,omitempty"`
+	VectorEfConstruction int                             `json:"vector_ef_construction,omitempty"`
+	VectorEfSearch       int                             `json:"vector_ef_search,omitempty"`
+	QuantizedIndexes     []QuantizedIndexInfo            `json:"quantized_indexes,omitempty"`
+	TextField            string                          `json:"text_field"`
+	TextIndexName        string                          `json:"text_index_name"`
+	DocumentType         string                          `json:"document_type"`
+	Capabilities         IndexCapabilities               `json:"capabilities"`
+}
+
+// BenchmarkVectorIndexOptions configures the service-owned collection vector
+// index for benchmark lifecycle setups. Omitted fields preserve the legacy
+// create-index defaults used by treedb-client and treedb-haystack.
+type BenchmarkVectorIndexOptions struct {
+	Strategy         collections.VectorIndexStrategy `json:"strategy,omitempty"`
+	M                int                             `json:"m,omitempty"`
+	EfConstruction   int                             `json:"ef_construction,omitempty"`
+	EfSearch         int                             `json:"ef_search,omitempty"`
+	QuantizedIndexes []QuantizedIndexInfo            `json:"quantized_indexes,omitempty"`
 }
 
 // CreateIndexRequest creates or opens a service index. Existing compatible
 // indexes are returned idempotently; incompatible existing collections fail.
 type CreateIndexRequest struct {
-	Name      string `json:"name"`
-	Dimension int    `json:"dimension"`
-	Metric    Metric `json:"metric,omitempty"`
+	Name               string                       `json:"name"`
+	Dimension          int                          `json:"dimension"`
+	Metric             Metric                       `json:"metric,omitempty"`
+	VectorIndexOptions *BenchmarkVectorIndexOptions `json:"vector_index_options,omitempty"`
 }
 
 // UpsertDocumentsRequest writes or replaces service documents.
@@ -145,6 +179,96 @@ type DenseVectorSearchResponse struct {
 	Metric     Metric     `json:"metric"`
 	Exact      bool       `json:"exact"`
 	Candidates int        `json:"candidates"`
+}
+
+// ResetIndexRequest creates a missing benchmark index or clears an existing
+// compatible non-column_graph index when DropOld is true. Column_graph benchmark
+// reset fails closed for existing indexes; use a fresh data directory or unique
+// index name to preserve the insert-only load boundary required by graph assets.
+type ResetIndexRequest struct {
+	Dimension          int                          `json:"dimension"`
+	Metric             Metric                       `json:"metric,omitempty"`
+	DropOld            bool                         `json:"drop_old,omitempty"`
+	VectorIndexOptions *BenchmarkVectorIndexOptions `json:"vector_index_options,omitempty"`
+}
+
+type ResetIndexResponse struct {
+	Index            IndexInfo `json:"index"`
+	Created          bool      `json:"created"`
+	Reset            bool      `json:"reset"`
+	DropOld          bool      `json:"drop_old"`
+	DroppedDocuments int       `json:"dropped_documents"`
+}
+
+// OptimizeIndexRequest rebuilds service vector assets after benchmark load.
+type OptimizeIndexRequest struct {
+	ExpectedGeneration uint64 `json:"expected_generation,omitempty"`
+	VectorIndexName    string `json:"vector_index_name,omitempty"`
+}
+
+type VectorIndexMaintenanceStatus struct {
+	Name             string                          `json:"name"`
+	Strategy         collections.VectorIndexStrategy `json:"strategy"`
+	State            collections.VectorIndexState    `json:"state"`
+	Reason           collections.VectorIndexReason   `json:"reason"`
+	Loaded           bool                            `json:"loaded"`
+	RebuildNeeded    bool                            `json:"rebuild_needed"`
+	RootID           uint64                          `json:"root_id,omitempty"`
+	NativeRootLoaded bool                            `json:"native_root_loaded,omitempty"`
+	NativeRootBytes  int64                           `json:"native_root_bytes,omitempty"`
+	DurationNanos    int64                           `json:"duration_nanos,omitempty"`
+}
+
+type OptimizeIndexResponse struct {
+	Index           IndexInfo                    `json:"index"`
+	VectorIndexName string                       `json:"vector_index_name"`
+	Status          VectorIndexMaintenanceStatus `json:"status"`
+}
+
+// BenchmarkVectorQueryMode selects the no-document vector-index benchmark score
+// plane. The legacy /search/vector route does not accept these modes and remains
+// exact dense document scoring.
+type BenchmarkVectorQueryMode string
+
+const (
+	BenchmarkVectorQueryModeExact           BenchmarkVectorQueryMode = "exact"
+	BenchmarkVectorQueryModeQuantizedOnly   BenchmarkVectorQueryMode = "quantized_only"
+	BenchmarkVectorQueryModeQuantizedRerank BenchmarkVectorQueryMode = "quantized_rerank"
+)
+
+// BenchmarkVectorSearchRequest runs fail-closed no-document vector-index search
+// through Collection.SearchVectorIndexWithBuffer. Quantized modes require an
+// explicit quantized index name; quantized_rerank may bound exact rerank with
+// QuantizedRerankCandidates (rerank32 is the benchmark baseline when set to 32).
+type BenchmarkVectorSearchRequest struct {
+	ExpectedGeneration        uint64                                 `json:"expected_generation,omitempty"`
+	VectorIndexName           string                                 `json:"vector_index_name,omitempty"`
+	QueryEmbedding            []float32                              `json:"query_embedding"`
+	TopK                      int                                    `json:"top_k"`
+	EfSearch                  int                                    `json:"ef_search,omitempty"`
+	QueryMode                 BenchmarkVectorQueryMode               `json:"query_mode,omitempty"`
+	QuantizedIndexName        string                                 `json:"quantized_index_name,omitempty"`
+	QuantizedRerankCandidates int                                    `json:"quantized_rerank_candidates,omitempty"`
+	StatsMode                 collections.VectorIndexSearchStatsMode `json:"stats_mode,omitempty"`
+}
+
+type BenchmarkVectorSearchResult struct {
+	ID      string  `json:"id"`
+	Ordinal int     `json:"ordinal"`
+	Score   float64 `json:"score"`
+}
+
+type BenchmarkVectorSearchResponse struct {
+	Index                     IndexInfo                                `json:"index"`
+	Results                   []BenchmarkVectorSearchResult            `json:"results"`
+	Metric                    Metric                                   `json:"metric"`
+	VectorIndexName           string                                   `json:"vector_index_name"`
+	QueryMode                 BenchmarkVectorQueryMode                 `json:"query_mode"`
+	QuantizedIndexName        string                                   `json:"quantized_index_name,omitempty"`
+	QuantizedRerankCandidates int                                      `json:"quantized_rerank_candidates,omitempty"`
+	NoDocuments               bool                                     `json:"no_documents"`
+	Stats                     collections.VectorIndexSearchStats       `json:"stats"`
+	Diagnostics               collections.VectorIndexSearchDiagnostics `json:"diagnostics"`
 }
 
 // KeywordSearchRequest runs ranked lexical search over the service content text
@@ -257,16 +381,47 @@ func metricFromCollection(metric collections.VectorMetric) (Metric, error) {
 	}
 }
 
-func indexCapabilities(hybridSearch bool) IndexCapabilities {
+func indexCapabilities(vectorDef collections.VectorIndexDefinition, hybridSearch bool) IndexCapabilities {
+	columnGraph := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
+	quantized := columnGraph && len(vectorDef.QuantizedIndexes) > 0
 	return IndexCapabilities{
-		DenseVectorSearch:      true,
-		ExactDenseScoring:      true,
-		MetadataFilters:        true,
-		KeywordSearch:          true,
-		HybridSearch:           hybridSearch,
-		KeywordMetadataFilters: false,
-		HybridMetadataFilters:  false,
+		DenseVectorSearch:       true,
+		ExactDenseScoring:       true,
+		MetadataFilters:         true,
+		KeywordSearch:           true,
+		HybridSearch:            hybridSearch,
+		KeywordMetadataFilters:  false,
+		HybridMetadataFilters:   false,
+		BenchmarkLifecycle:      true,
+		VectorIndexMaintenance:  true,
+		NoDocumentVectorSearch:  columnGraph,
+		ColumnGraphVectorSearch: columnGraph,
+		ExactColumnGraphSearch:  columnGraph,
+		QuantizedVectorSearch:   quantized,
+		QuantizedRerank:         quantized,
+		ScalarU8QuantizedRerank: columnGraph && quantizedIndexCodecDeclared(vectorDef, collections.QuantizedVectorCodecScalarU8),
+		RabitQ1BitExperimental:  columnGraph && quantizedIndexCodecDeclared(vectorDef, "rabitq_1bit"),
 	}
+}
+
+func quantizedIndexInfos(def collections.VectorIndexDefinition) []QuantizedIndexInfo {
+	if len(def.QuantizedIndexes) == 0 {
+		return nil
+	}
+	out := make([]QuantizedIndexInfo, len(def.QuantizedIndexes))
+	for i, q := range def.QuantizedIndexes {
+		out[i] = QuantizedIndexInfo{Name: q.Name, Codec: q.Codec, Version: q.Version}
+	}
+	return out
+}
+
+func quantizedIndexCodecDeclared(def collections.VectorIndexDefinition, codec string) bool {
+	for _, q := range def.QuantizedIndexes {
+		if q.Codec == codec {
+			return true
+		}
+	}
+	return false
 }
 
 func scorePtr(score float64) *float64 {
