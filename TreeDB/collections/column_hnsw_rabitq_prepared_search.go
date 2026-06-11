@@ -94,6 +94,7 @@ func (r *columnVectorGraphPhysicalRowReader) searchRabitQCosinePreparedHNSWPack(
 	}
 	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
 		traversalOpts.OmitResultMaterialization = true
+		traversalOpts.SuppressOmittedResultMaterialization = true
 	}
 	results, searchStats, err := pack.searchCosinePreparedScorePlane(query, traversalOpts, scratch, &scratch.preparedQuantizedPlane)
 	applyColumnVectorGraphQuantizedBaseStats(&searchStats, stats)
