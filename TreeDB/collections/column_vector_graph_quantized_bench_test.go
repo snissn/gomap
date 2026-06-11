@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"runtime/pprof"
 	"strconv"
@@ -496,6 +497,25 @@ func TestColumnGraphQuantizedProductionBenchShapeFromEnvValues2591(t *testing.T)
 	}
 	if shape.rows != 4 || shape.queryCount != 4 {
 		t.Fatalf("clamped production shape=%+v want rows=4 queryCount=4", shape)
+	}
+}
+
+func TestColumnGraphScalarU8QuantizedBenchQueriesHonorMultiQueryOrdinal2591(t *testing.T) {
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 8, dims: 2, m: 4, efConstruction: 4, topK: 2, efSearch: 4, queryOrdinal: 3, queryCount: 3}
+	rows := make([]columnGraphRebuildInputRowV2A, shape.rows)
+	for i := range rows {
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("doc-%d", i), vector: []float32{float32(i), float32(i + 1)}}
+	}
+
+	queries, ordinals := columnGraphScalarU8QuantizedBenchQueries1926(t, shape, rows)
+	wantOrdinals := []int{3, 2, 1}
+	if !reflect.DeepEqual(ordinals, wantOrdinals) {
+		t.Fatalf("query ordinals=%v want %v", ordinals, wantOrdinals)
+	}
+	for i, ordinal := range wantOrdinals {
+		if !reflect.DeepEqual(queries[i], rows[ordinal].vector) {
+			t.Fatalf("query %d=%v want row %d vector %v", i, queries[i], ordinal, rows[ordinal].vector)
+		}
 	}
 }
 
@@ -2183,11 +2203,8 @@ func columnGraphScalarU8QuantizedBenchQueries1926(tb testing.TB, shape columnGra
 	ordinals := make([]int, shape.queryCount)
 	for i := range queries {
 		ordinal := shape.queryOrdinal
-		if shape.queryCount > 1 {
-			ordinal = 0
-			if shape.rows > 1 {
-				ordinal = (shape.rows/3 + i*7919) % shape.rows
-			}
+		if shape.queryCount > 1 && len(rows) > 0 {
+			ordinal = (shape.queryOrdinal + i*7919) % len(rows)
 		}
 		if ordinal < 0 || ordinal >= len(rows) {
 			tb.Fatalf("query ordinal=%d out of range rows=%d", ordinal, len(rows))
