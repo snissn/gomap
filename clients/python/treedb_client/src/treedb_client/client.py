@@ -76,8 +76,7 @@ class TreeDBClient:
         """Create or idempotently open a compatible document index."""
 
         request: dict[str, Any] = {"name": name, "dimension": dimension}
-        if metric:
-            request["metric"] = metric
+        _add_optional_non_empty_string(request, "metric", metric, "metric")
         _add_vector_index_options(request, vector_index_options)
         payload = self._request("POST", "/v1/indexes", request)
         return _index_from_envelope(payload)
@@ -117,8 +116,7 @@ class TreeDBClient:
         """
 
         request: dict[str, Any] = {"dimension": dimension, "drop_old": bool(drop_old)}
-        if metric:
-            request["metric"] = metric
+        _add_optional_non_empty_string(request, "metric", metric, "metric")
         _add_vector_index_options(request, vector_index_options)
         payload = self._request("POST", self._index_path(index, "reset"), request)
         return _parse_response("reset index response", ResetIndexResponse.from_dict, payload)
@@ -282,14 +280,11 @@ class TreeDBClient:
             request["vector_index_name"] = vector_index_name
         if ef_search is not None:
             request["ef_search"] = int(ef_search)
-        if query_mode:
-            request["query_mode"] = query_mode
-        if quantized_index_name:
-            request["quantized_index_name"] = quantized_index_name
+        _add_optional_non_empty_string(request, "query_mode", query_mode, "query_mode")
+        _add_optional_non_empty_string(request, "quantized_index_name", quantized_index_name, "quantized_index_name")
         if quantized_rerank_candidates is not None:
             request["quantized_rerank_candidates"] = int(quantized_rerank_candidates)
-        if stats_mode:
-            request["stats_mode"] = stats_mode
+        _add_optional_non_empty_string(request, "stats_mode", stats_mode, "stats_mode")
         payload = self._request("POST", self._index_path(index, "search", "vector-index"), request)
         return _parse_response("benchmark vector search response", BenchmarkVectorSearchResponse.from_dict, payload)
 
@@ -471,6 +466,14 @@ def _add_expected_generation(request: dict[str, Any], expected_generation: Optio
     _validate_expected_generation(expected_generation)
     if expected_generation is not None:
         request["expected_generation"] = expected_generation
+
+
+def _add_optional_non_empty_string(request: dict[str, Any], key: str, value: Optional[str], label: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or value.strip() == "":
+        raise InvalidRequestError("invalid_request", f"{label} must be a non-empty string when provided")
+    request[key] = value
 
 
 def _add_filter(request: dict[str, Any], filter_value: Optional[FilterLike]) -> None:

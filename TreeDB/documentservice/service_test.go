@@ -640,6 +640,17 @@ func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T)
 		}},
 	}
 
+	brqOptions := &BenchmarkVectorIndexOptions{
+		Strategy: collections.VectorIndexStrategyColumnGraph,
+		QuantizedIndexes: []QuantizedIndexInfo{{
+			Name:  "embedding.brq_1bit.experimental",
+			Codec: "brq_1bit",
+		}},
+	}
+	if _, err := svc.ResetIndex(ctx, "bench_brq", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: brqOptions}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("ResetIndex brq_1bit err=%v code=%s", err, ErrorCodeOf(err))
+	}
+
 	reset, err := svc.ResetIndex(ctx, "bench", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: vectorOptions})
 	if err != nil {
 		t.Fatalf("ResetIndex create: %v", err)

@@ -321,9 +321,9 @@ Create a benchmark-shaped index by passing `vector_index_options` to
 
 `codec=scalar_u8` plus `query_mode=quantized_rerank` is the exact-like
 quantized benchmark lane; rerank32 is the baseline evidence target when
-`quantized_rerank_candidates` is set to `32`. `rabitq_1bit`/`brq_1bit` may be
-declared for experimental compact rows, but the v1 codec semantics and recall
-caveats are unchanged.
+`quantized_rerank_candidates` is set to `32`. `rabitq_1bit` may be declared
+for experimental compact rows, but the v1 codec semantics and recall caveats
+are unchanged.
 
 Reset/create for benchmark harnesses:
 

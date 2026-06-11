@@ -364,6 +364,9 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	if err := collections.ValidateCollectionName(index); err != nil {
 		return ResetIndexResponse{}, wrapServiceError(CodeInvalidRequest, "invalid index name", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	existingCol, existingInfo, err := s.openIndex(ctx, index, 0)
 	if err != nil {
 		if ErrorCodeOf(err) != CodeIndexNotFound {
@@ -384,15 +387,13 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	if req.Metric == "" {
 		req.Metric = existingInfo.Metric
 	}
-	if existingInfo.Capabilities.ColumnGraphVectorSearch {
+	if existingInfo.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
 		return ResetIndexResponse{}, serviceErrorf(CodeUnsupported, "drop_old reset for column_graph benchmark index %q requires a fresh data directory or unique index name", index)
 	}
 	if _, err := s.CreateIndex(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions}); err != nil {
 		return ResetIndexResponse{}, err
 	}
 
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	ids, err := s.collectMatchingIDs(ctx, existingCol, nil)
 	if err != nil {
 		return ResetIndexResponse{}, err
@@ -798,7 +799,9 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 		switch q.Codec {
 		case "":
 			q.Codec = collections.QuantizedVectorCodecScalarU8
-		case collections.QuantizedVectorCodecScalarU8, "rabitq_1bit", "brq_1bit":
+		case collections.QuantizedVectorCodecScalarU8, "rabitq_1bit":
+		case "brq_1bit":
+			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector index quantized_indexes[%d].codec %q is not supported by the document service benchmark contract", i, q.Codec)
 		default:
 			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized index %q codec %q is unsupported", q.Name, q.Codec)
 		}

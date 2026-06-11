@@ -288,6 +288,18 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(json_body(server.records[1]), {"expected_generation": 1})
             self.assertEqual(json_body(server.records[2])["quantized_rerank_candidates"], 32)
 
+    def test_empty_optional_benchmark_fields_fail_closed_locally(self) -> None:
+        client = TreeDBClient("http://127.0.0.1:1", timeout=1)
+
+        with self.assertRaisesRegex(InvalidRequestError, "metric"):
+            client.create_index("docs", 2, metric="")
+        with self.assertRaisesRegex(InvalidRequestError, "metric"):
+            client.reset_index("docs", dimension=2, metric="")
+        with self.assertRaisesRegex(InvalidRequestError, "query_mode"):
+            client.search_vector_index("docs", [1, 0], 1, query_mode="")
+        with self.assertRaisesRegex(InvalidRequestError, "stats_mode"):
+            client.search_vector_index("docs", [1, 0], 1, stats_mode="")
+
     def test_keyword_search_serializes_request_and_parses_response(self) -> None:
         route = "/v1/indexes/docs/search/keyword"
         response = {

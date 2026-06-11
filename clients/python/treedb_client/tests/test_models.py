@@ -162,6 +162,12 @@ class IndexModelTests(unittest.TestCase):
         self.assertTrue(response.index.capabilities.scalar_u8_quantized_rerank)
         self.assertEqual(response.index.quantized_indexes[0].name, "embedding.scalar_u8.fast")
 
+    def test_benchmark_vector_options_preserve_explicit_zero_values(self) -> None:
+        options = BenchmarkVectorIndexOptions.from_dict({"m": 0, "ef_construction": 0, "ef_search": 0})
+
+        self.assertEqual(options.to_dict(), {"m": 0, "ef_construction": 0, "ef_search": 0})
+        self.assertEqual(BenchmarkVectorIndexOptions().to_dict(), {})
+
 
 class KeywordHybridModelTests(unittest.TestCase):
     def test_keyword_request_serializes_supported_fields_and_filter(self) -> None:

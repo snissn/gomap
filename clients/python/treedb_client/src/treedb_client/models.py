@@ -285,9 +285,9 @@ class QuantizedIndexInfo:
 @dataclass(frozen=True)
 class BenchmarkVectorIndexOptions:
     strategy: str = ""
-    m: int = 0
-    ef_construction: int = 0
-    ef_search: int = 0
+    m: Optional[int] = None
+    ef_construction: Optional[int] = None
+    ef_search: Optional[int] = None
     quantized_indexes: Sequence[QuantizedIndexInfo | Mapping[str, Any]] = field(default_factory=list)
 
     @classmethod
@@ -299,9 +299,13 @@ class BenchmarkVectorIndexOptions:
             raise TypeError("vector index options.quantized_indexes must be a sequence")
         return cls(
             strategy=_as_optional_str_default(data.get("strategy"), "vector index options.strategy"),
-            m=_as_optional_int_default(data.get("m"), "vector index options.m"),
-            ef_construction=_as_optional_int_default(data.get("ef_construction"), "vector index options.ef_construction"),
-            ef_search=_as_optional_int_default(data.get("ef_search"), "vector index options.ef_search"),
+            m=None if "m" not in data or data.get("m") is None else _as_int(data.get("m"), "vector index options.m"),
+            ef_construction=None
+            if "ef_construction" not in data or data.get("ef_construction") is None
+            else _as_int(data.get("ef_construction"), "vector index options.ef_construction"),
+            ef_search=None
+            if "ef_search" not in data or data.get("ef_search") is None
+            else _as_int(data.get("ef_search"), "vector index options.ef_search"),
             quantized_indexes=[QuantizedIndexInfo.from_dict(item) for item in raw_quantized],
         )
 
@@ -309,11 +313,11 @@ class BenchmarkVectorIndexOptions:
         out: Dict[str, Any] = {}
         if self.strategy:
             out["strategy"] = self.strategy
-        if self.m:
+        if self.m is not None:
             out["m"] = _as_int(self.m, "vector index options.m")
-        if self.ef_construction:
+        if self.ef_construction is not None:
             out["ef_construction"] = _as_int(self.ef_construction, "vector index options.ef_construction")
-        if self.ef_search:
+        if self.ef_search is not None:
             out["ef_search"] = _as_int(self.ef_search, "vector index options.ef_search")
         if self.quantized_indexes:
             out["quantized_indexes"] = [
