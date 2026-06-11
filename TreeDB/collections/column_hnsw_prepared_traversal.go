@@ -430,3 +430,47 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTilePrepar
 	}
 	return nil
 }
+
+func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalCandidates(query []float32, topK int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	if v == nil {
+		return errColumnHNSWSearchPackSearchUnavailable
+	}
+	if scratch == nil {
+		return errColumnVectorGraphNativeSearchScratchRequired
+	}
+	if len(scratch.top) == 0 || topK <= 0 {
+		scratch.top = scratch.top[:0]
+		return nil
+	}
+	if len(scratch.top) < topK {
+		topK = len(scratch.top)
+	}
+	n := len(scratch.top)
+	scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, n)
+	ordinals := scratch.scoreTileOrdinals[:0]
+	for _, candidate := range scratch.top {
+		ordinals = append(ordinals, candidate.ordinal)
+	}
+	var exactPlane columnHNSWPreparedExactFP32ScorePlane
+	if err := exactPlane.prepareForHNSWPreparedTraversal(v, query, columnHNSWPreparedTraversalOptions{ScoreBatchMode: scoreBatchMode}, scratch); err != nil {
+		return err
+	}
+	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, n)
+	exactScores, err := exactPlane.scoreOrdinals(ordinals, scratch.scoreTileScores, scratch, stats)
+	if err != nil {
+		return err
+	}
+	if len(exactScores) != n {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal exact rerank scored %d candidates want %d", len(exactScores), n)
+	}
+	if stats != nil {
+		stats.QuantizedRerankCandidates += uint64(n)
+		stats.QuantizedRerankExactScoreCalls += uint64(n)
+	}
+	scratch.top = scratch.top[:0]
+	for i, ordinal := range ordinals {
+		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: exactScores[i]}
+		scratch.insertTop(topK, candidate)
+	}
+	return nil
+}
