@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 )
 
 var ErrTextIndexStorageCorrupt = errors.New("collections: malformed text index storage")
@@ -101,6 +101,17 @@ type textStatsTermValue struct {
 type textStatsFieldValue struct {
 	DocumentCount   uint64
 	TotalTokenCount uint64
+}
+
+func compareTextStrings(a, b string) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func encodeTextPostingKey(term string, documentID []byte) []byte {
@@ -227,9 +238,19 @@ func decodeTextStatsKey(raw []byte) (textStatsKey, error) {
 }
 
 func encodeTextPostingValue(value textPostingValue) []byte {
-	fields := append([]textPostingFieldValue(nil), value.Fields...)
-	sort.SliceStable(fields, func(i, j int) bool { return fields[i].Field < fields[j].Field })
-	out := []byte{textPostingValueVersion}
+	fields := value.Fields
+	if len(fields) > 1 {
+		var stack [4]textPostingFieldValue
+		if len(fields) <= len(stack) {
+			fields = stack[:len(fields)]
+			copy(fields, value.Fields)
+		} else {
+			fields = append([]textPostingFieldValue(nil), value.Fields...)
+		}
+		slices.SortFunc(fields, func(a, b textPostingFieldValue) int { return compareTextStrings(a.Field, b.Field) })
+	}
+	out := make([]byte, 0, encodedTextPostingValueLen(value, fields))
+	out = append(out, textPostingValueVersion)
 	out = appendTextUvarint(out, uint64(value.TermFrequency))
 	out = appendTextUvarint(out, uint64(len(fields)))
 	for _, field := range fields {
@@ -356,13 +377,32 @@ func decodeTextPostingValueForSearch(raw []byte, fieldNames []string) (textSearc
 }
 
 func encodeTextDocumentStateValue(value textDocumentStateValue) []byte {
-	fields := append([]textDocumentFieldState(nil), value.Fields...)
-	sort.SliceStable(fields, func(i, j int) bool { return fields[i].Field < fields[j].Field })
-	out := []byte{textStateValueVersion}
+	fields := value.Fields
+	if len(fields) > 1 {
+		var stack [4]textDocumentFieldState
+		if len(fields) <= len(stack) {
+			fields = stack[:len(fields)]
+			copy(fields, value.Fields)
+		} else {
+			fields = append([]textDocumentFieldState(nil), value.Fields...)
+		}
+		slices.SortFunc(fields, func(a, b textDocumentFieldState) int { return compareTextStrings(a.Field, b.Field) })
+	}
+	out := make([]byte, 0, encodedTextDocumentStateValueLen(fields))
+	out = append(out, textStateValueVersion)
 	out = appendTextUvarint(out, uint64(len(fields)))
 	for _, field := range fields {
-		terms := append([]textDocumentTermState(nil), field.Terms...)
-		sort.SliceStable(terms, func(i, j int) bool { return terms[i].Term < terms[j].Term })
+		terms := field.Terms
+		if len(terms) > 1 {
+			var stack [16]textDocumentTermState
+			if len(terms) <= len(stack) {
+				terms = stack[:len(terms)]
+				copy(terms, field.Terms)
+			} else {
+				terms = append([]textDocumentTermState(nil), field.Terms...)
+			}
+			slices.SortFunc(terms, func(a, b textDocumentTermState) int { return compareTextStrings(a.Term, b.Term) })
+		}
 		out = appendTextString(out, field.Field)
 		out = appendTextUvarint(out, uint64(field.Length))
 		out = appendTextUvarint(out, uint64(len(terms)))
@@ -535,7 +575,8 @@ func textDocumentFieldLengthByName(fields []textDocumentFieldLength, name string
 }
 
 func encodeTextStatsCorpusValue(value textStatsCorpusValue) []byte {
-	out := []byte{textStatsValueVersion}
+	out := make([]byte, 0, 1+textUvarintLen(value.DocumentCount))
+	out = append(out, textStatsValueVersion)
 	out = appendTextUvarint(out, value.DocumentCount)
 	return out
 }
@@ -556,7 +597,8 @@ func decodeTextStatsCorpusValue(raw []byte) (textStatsCorpusValue, error) {
 }
 
 func encodeTextStatsTermValue(value textStatsTermValue) []byte {
-	out := []byte{textStatsValueVersion}
+	out := make([]byte, 0, 1+textUvarintLen(value.DocumentFrequency)+textUvarintLen(value.TotalTermFrequency))
+	out = append(out, textStatsValueVersion)
 	out = appendTextUvarint(out, value.DocumentFrequency)
 	out = appendTextUvarint(out, value.TotalTermFrequency)
 	return out
@@ -582,7 +624,8 @@ func decodeTextStatsTermValue(raw []byte) (textStatsTermValue, error) {
 }
 
 func encodeTextStatsFieldValue(value textStatsFieldValue) []byte {
-	out := []byte{textStatsValueVersion}
+	out := make([]byte, 0, 1+textUvarintLen(value.DocumentCount)+textUvarintLen(value.TotalTokenCount))
+	out = append(out, textStatsValueVersion)
 	out = appendTextUvarint(out, value.DocumentCount)
 	out = appendTextUvarint(out, value.TotalTokenCount)
 	return out
@@ -615,6 +658,63 @@ func textStatsValueCursor(raw []byte, name string) (textCursor, error) {
 		return textCursor{}, errUnsupportedTextStorageVersion("text-stats "+name+" value", raw[0])
 	}
 	return textCursor{buf: raw[1:]}, nil
+}
+
+func encodedTextPostingValueLen(value textPostingValue, fields []textPostingFieldValue) int {
+	n := 1 + textUvarintLen(uint64(value.TermFrequency)) + textUvarintLen(uint64(len(fields)))
+	for _, field := range fields {
+		n += encodedTextStringLen(field.Field)
+		n += textUvarintLen(uint64(field.Frequency))
+		n += encodedTextUint32SliceLen(field.Positions)
+		n += encodedTextOffsetSliceLen(field.Offsets)
+	}
+	return n
+}
+
+func encodedTextDocumentStateValueLen(fields []textDocumentFieldState) int {
+	n := 1 + textUvarintLen(uint64(len(fields)))
+	for _, field := range fields {
+		n += encodedTextStringLen(field.Field)
+		n += textUvarintLen(uint64(field.Length))
+		n += textUvarintLen(uint64(len(field.Terms)))
+		for _, term := range field.Terms {
+			n += encodedTextStringLen(term.Term)
+			n += textUvarintLen(uint64(term.Frequency))
+			n += encodedTextUint32SliceLen(term.Positions)
+			n += encodedTextOffsetSliceLen(term.Offsets)
+		}
+	}
+	return n
+}
+
+func encodedTextStringLen(value string) int {
+	return textUvarintLen(uint64(len(value))) + len(value)
+}
+
+func encodedTextUint32SliceLen(values []uint32) int {
+	n := textUvarintLen(uint64(len(values)))
+	for _, value := range values {
+		n += textUvarintLen(uint64(value))
+	}
+	return n
+}
+
+func encodedTextOffsetSliceLen(values []textTokenOffset) int {
+	n := textUvarintLen(uint64(len(values)))
+	for _, value := range values {
+		n += textUvarintLen(uint64(value.Start))
+		n += textUvarintLen(uint64(value.End))
+	}
+	return n
+}
+
+func textUvarintLen(value uint64) int {
+	n := 1
+	for value >= 0x80 {
+		value >>= 7
+		n++
+	}
+	return n
 }
 
 func appendTextBytes(dst []byte, value []byte) []byte {

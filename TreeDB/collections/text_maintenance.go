@@ -106,11 +106,11 @@ func appendSingleTextIndexMutationDeltas(
 			statsDelta.addState(oldState, -1)
 		}
 		if mutation.setNew {
-			newState, err := analyzeTextIndexStoredDocument(def, mutation.newDocument, opts)
+			newState, newAnalysis, err := analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
 			if err != nil {
 				return err
 			}
-			addTextPostingsForDocument(postingsTable, mutation.documentID, textAnalysisFromDocumentState(newState))
+			addTextPostingsForDocument(postingsTable, mutation.documentID, newAnalysis)
 			stateTable.SetSteal(encodeTextStateKey(mutation.documentID), encodeTextDocumentStateValue(newState))
 			statsDelta.addState(newState, 1)
 		}
@@ -149,15 +149,20 @@ func appendTextRootDelta(rootNames *[]string, baseRootIDs map[string]uint64, pol
 }
 
 func analyzeTextIndexStoredDocument(def TextIndexDefinition, document []byte, opts collectionOptions) (textDocumentStateValue, error) {
+	state, _, err := analyzeTextIndexStoredDocumentWithAnalysis(def, document, opts)
+	return state, err
+}
+
+func analyzeTextIndexStoredDocumentWithAnalysis(def TextIndexDefinition, document []byte, opts collectionOptions) (textDocumentStateValue, textAnalyzedDocument, error) {
 	jsonDocument, err := materializeTextBackfillDocumentJSON(document, opts)
 	if err != nil {
-		return textDocumentStateValue{}, err
+		return textDocumentStateValue{}, textAnalyzedDocument{}, err
 	}
 	analysis, err := analyzeTextIndexDocument(def, jsonDocument)
 	if err != nil {
-		return textDocumentStateValue{}, err
+		return textDocumentStateValue{}, textAnalyzedDocument{}, err
 	}
-	return textDocumentStateValueFromAnalysis(analysis), nil
+	return textDocumentStateValueFromAnalysis(analysis), analysis, nil
 }
 
 func loadTextDocumentStateForMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, documentID, fallbackDocument []byte, opts collectionOptions) (textDocumentStateValue, error) {

@@ -2286,6 +2286,72 @@ func TestColumnDeclaredExtractionJSONBenchShapeM12A(t *testing.T) {
 	}
 }
 
+func TestColumnDeclaredExtractionJSONRootFastPathAndNestedFallbackM2589(t *testing.T) {
+	rootCfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Dictionary: true},
+			{Name: "maybe", Path: "maybe", ValueType: ColumnStoreValueString, Nullable: true},
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+		},
+		SortKey: []ColumnSortKey{{Column: "time_us"}},
+	}
+	rootNormalized, err := normalizeColumnStoreConfig("events", rootCfg)
+	if err != nil {
+		t.Fatalf("normalize root column store: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*rootNormalized, []columnWriteDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":7,"kind":"li\u006be","maybe":null,"embedding":[1,2.5,-3]}`)},
+		{ID: []byte("e2"), Document: []byte(`{"time_us":8,"kind":"post","embedding":[0,0,1]}`)},
+	})
+	if err != nil {
+		t.Fatalf("extract root fast path: %v", err)
+	}
+	if len(rows) != 2 || len(rows[0].Values) != len(rootNormalized.Columns) {
+		t.Fatalf("unexpected root fast-path rows: %+v", rows)
+	}
+	values := rows[0].Values
+	if values[0].Int64 != 7 || values[1].String != "like" {
+		t.Fatalf("row0 scalar values=%+v want decoded int64/string", values[:2])
+	}
+	if !values[2].Present || !values[2].Null {
+		t.Fatalf("row0 nullable null=%+v want present null", values[2])
+	}
+	if got := values[3].Float32Vector; len(got) != 3 || got[0] != 1 || got[1] != 2.5 || got[2] != -3 {
+		t.Fatalf("row0 vector=%v want [1 2.5 -3]", got)
+	}
+	if rows[1].Values[2].Present || !rows[1].Values[2].Null {
+		t.Fatalf("row1 nullable missing=%+v want absent null", rows[1].Values[2])
+	}
+	if _, err := extractColumnDeclaredRowsFromJSONDocuments(*rootNormalized, []columnWriteDocument{{ID: []byte("bad"), Document: []byte(`{"time_us":1,"kind":"bad","embedding":[1,2,3]}{}`)}}); err == nil || !errors.Is(err, ErrColumnDeclaredValueUnsupported) {
+		t.Fatalf("extract root trailing JSON err=%v want ErrColumnDeclaredValueUnsupported", err)
+	}
+
+	nestedCfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			{Name: "repo_id", Path: "commit.repo_id", ValueType: ColumnStoreValueInt64},
+		},
+		SortKey: []ColumnSortKey{{Column: "time_us"}},
+	}
+	nestedNormalized, err := normalizeColumnStoreConfig("events", nestedCfg)
+	if err != nil {
+		t.Fatalf("normalize nested column store: %v", err)
+	}
+	nestedRows, err := extractColumnDeclaredRowsFromJSONDocuments(*nestedNormalized, []columnWriteDocument{{
+		ID:       []byte("evt-1"),
+		Document: []byte(`{"time_us":11,"commit.repo_id":99,"commit":{"repo_id":42}}`),
+	}})
+	if err != nil {
+		t.Fatalf("extract nested fallback: %v", err)
+	}
+	if got := nestedRows[0].Values[1].Int64; got != 42 {
+		t.Fatalf("nested commit.repo_id=%d want 42 from nested object, not literal dotted root", got)
+	}
+}
+
 func TestColumnManifestBinaryRecordsAndGCEnumerableAssetRefsM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)

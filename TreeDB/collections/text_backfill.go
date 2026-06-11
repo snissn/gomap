@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/buger/jsonparser"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/tidwall/gjson"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -190,6 +193,9 @@ func materializeTextBackfillDocumentJSON(document []byte, opts collectionOptions
 }
 
 func analyzeTextIndexDocument(def TextIndexDefinition, jsonDocument []byte) (textAnalyzedDocument, error) {
+	if out, ok, err := analyzeTextIndexDocumentJSONRootFastPath(def, jsonDocument); ok || err != nil {
+		return out, err
+	}
 	var decoded any
 	decoder := json.NewDecoder(bytes.NewReader(jsonDocument))
 	decoder.UseNumber()
@@ -216,28 +222,156 @@ func analyzeTextIndexDocument(def TextIndexDefinition, jsonDocument []byte) (tex
 		if !ok {
 			continue
 		}
-		tokens, err := AnalyzeText(def.Analyzer, text)
+		field, ok, err := analyzeTextIndexField(def, fieldDef.Field, text)
 		if err != nil {
 			return textAnalyzedDocument{}, err
 		}
-		field := textAnalyzedField{Field: fieldDef.Field, Length: uint32(len(tokens)), Terms: make(map[string]*textAnalyzedTerm)}
-		for _, token := range tokens {
-			term := field.Terms[token.Term]
-			if term == nil {
-				term = &textAnalyzedTerm{Term: token.Term}
-				field.Terms[token.Term] = term
-			}
-			term.Frequency++
-			if def.StorePositions {
-				term.Positions = append(term.Positions, uint32(token.Position))
-			}
-			if def.StoreOffsets {
-				term.Offsets = append(term.Offsets, textTokenOffset{Start: uint32(token.StartOffset), End: uint32(token.EndOffset)})
-			}
+		if ok {
+			out.Fields = append(out.Fields, field)
 		}
-		out.Fields = append(out.Fields, field)
 	}
 	return out, nil
+}
+
+func analyzeTextIndexDocumentJSONRootFastPath(def TextIndexDefinition, jsonDocument []byte) (textAnalyzedDocument, bool, error) {
+	if len(def.Fields) == 0 {
+		return textAnalyzedDocument{}, true, nil
+	}
+	for _, fieldDef := range def.Fields {
+		if fieldDef.Field == "" || strings.Contains(fieldDef.Field, ".") {
+			return textAnalyzedDocument{}, false, nil
+		}
+	}
+	if !gjson.ValidBytes(jsonDocument) {
+		return textAnalyzedDocument{}, true, errors.New("collections: text index extraction requires JSON document: invalid JSON")
+	}
+	if !jsonDocumentLooksObject(jsonDocument) {
+		return textAnalyzedDocument{}, true, errors.New("collections: text index extraction requires JSON object document")
+	}
+
+	var stackValues [8]jsonParserIndexValue
+	values := stackValues[:]
+	if len(def.Fields) > len(stackValues) {
+		values = make([]jsonParserIndexValue, len(def.Fields))
+	} else {
+		values = values[:len(def.Fields)]
+	}
+	if err := jsonparser.ObjectEach(jsonDocument, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+		for i, fieldDef := range def.Fields {
+			if string(key) == fieldDef.Field {
+				values[i] = jsonParserIndexValue{raw: value, valueType: dataType}
+			}
+		}
+		return nil
+	}); err != nil {
+		return textAnalyzedDocument{}, true, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
+	}
+
+	out := textAnalyzedDocument{Fields: make([]textAnalyzedField, 0, len(def.Fields))}
+	var scratch []byte
+	for i, fieldDef := range def.Fields {
+		text, ok, err := textIndexFieldTextFromJSONParser(values[i], &scratch)
+		if err != nil {
+			return textAnalyzedDocument{}, true, err
+		}
+		if !ok {
+			continue
+		}
+		field, ok, err := analyzeTextIndexField(def, fieldDef.Field, text)
+		if err != nil {
+			return textAnalyzedDocument{}, true, err
+		}
+		if ok {
+			out.Fields = append(out.Fields, field)
+		}
+	}
+	return out, true, nil
+}
+
+func textIndexFieldTextFromJSONParser(value jsonParserIndexValue, scratch *[]byte) (string, bool, error) {
+	switch value.valueType {
+	case jsonparser.NotExist, jsonparser.Null:
+		return "", false, nil
+	case jsonparser.String:
+		unescaped, err := textJSONParserStringBytes(value.raw, scratch)
+		if err != nil {
+			return "", false, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
+		}
+		return string(unescaped), true, nil
+	case jsonparser.Array:
+		var builder strings.Builder
+		found := false
+		var parseErr error
+		_, err := jsonparser.ArrayEach(value.raw, func(elem []byte, dataType jsonparser.ValueType, _ int, elemErr error) {
+			if parseErr != nil {
+				return
+			}
+			if elemErr != nil {
+				parseErr = elemErr
+				return
+			}
+			if dataType != jsonparser.String {
+				return
+			}
+			unescaped, err := textJSONParserStringBytes(elem, scratch)
+			if err != nil {
+				parseErr = err
+				return
+			}
+			if found {
+				builder.WriteByte(' ')
+			}
+			builder.Write(unescaped)
+			found = true
+		})
+		if err != nil {
+			return "", false, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
+		}
+		if parseErr != nil {
+			return "", false, fmt.Errorf("collections: text index extraction requires JSON document: %w", parseErr)
+		}
+		if !found {
+			return "", false, nil
+		}
+		return builder.String(), true, nil
+	default:
+		return "", false, nil
+	}
+}
+
+func textJSONParserStringBytes(raw []byte, scratch *[]byte) ([]byte, error) {
+	if bytes.IndexByte(raw, '\\') == -1 {
+		return raw, nil
+	}
+	unescaped, err := jsonparser.Unescape(raw, (*scratch)[:0])
+	if err != nil {
+		return nil, err
+	}
+	*scratch = unescaped[:0]
+	return unescaped, nil
+}
+
+func analyzeTextIndexField(def TextIndexDefinition, fieldName, text string) (textAnalyzedField, bool, error) {
+	tokens, err := AnalyzeText(def.Analyzer, text)
+	if err != nil {
+		return textAnalyzedField{}, false, err
+	}
+	field := textAnalyzedField{Field: fieldName, Length: uint32(len(tokens)), Terms: make(map[string]*textAnalyzedTerm)}
+	for _, token := range tokens {
+		term := field.Terms[token.Term]
+		if term == nil {
+			term = &textAnalyzedTerm{Term: token.Term}
+			field.Terms[token.Term] = term
+		}
+		term.Frequency++
+		if def.StorePositions {
+			term.Positions = append(term.Positions, uint32(token.Position))
+		}
+		if def.StoreOffsets {
+			term.Offsets = append(term.Offsets, textTokenOffset{Start: uint32(token.StartOffset), End: uint32(token.EndOffset)})
+		}
+	}
+	return field, true, nil
 }
 
 func textIndexFieldText(value any) (string, bool) {
@@ -268,18 +402,18 @@ func textDocumentStateValueFromAnalysis(analysis textAnalyzedDocument) textDocum
 			terms = append(terms, textDocumentTermState{
 				Term:      analyzedTerm.Term,
 				Frequency: analyzedTerm.Frequency,
-				Positions: append([]uint32(nil), analyzedTerm.Positions...),
-				Offsets:   append([]textTokenOffset(nil), analyzedTerm.Offsets...),
+				Positions: analyzedTerm.Positions,
+				Offsets:   analyzedTerm.Offsets,
 			})
 		}
-		sort.SliceStable(terms, func(i, j int) bool { return terms[i].Term < terms[j].Term })
+		slices.SortFunc(terms, func(a, b textDocumentTermState) int { return compareTextStrings(a.Term, b.Term) })
 		state.Fields = append(state.Fields, textDocumentFieldState{
 			Field:  analyzedField.Field,
 			Length: analyzedField.Length,
 			Terms:  terms,
 		})
 	}
-	sort.SliceStable(state.Fields, func(i, j int) bool { return state.Fields[i].Field < state.Fields[j].Field })
+	slices.SortFunc(state.Fields, func(a, b textDocumentFieldState) int { return compareTextStrings(a.Field, b.Field) })
 	return state
 }
 
@@ -287,21 +421,18 @@ func addTextPostingsForDocument(table memtable.Table, documentID []byte, analysi
 	if table == nil {
 		return 0, 0
 	}
-	byTerm := make(map[string]*textPostingValue)
+	byTerm := make(map[string]textPostingValue)
 	for _, field := range analysis.Fields {
 		for _, term := range field.Terms {
 			posting := byTerm[term.Term]
-			if posting == nil {
-				posting = &textPostingValue{}
-				byTerm[term.Term] = posting
-			}
 			posting.TermFrequency += term.Frequency
 			posting.Fields = append(posting.Fields, textPostingFieldValue{
 				Field:     field.Field,
 				Frequency: term.Frequency,
-				Positions: append([]uint32(nil), term.Positions...),
-				Offsets:   append([]textTokenOffset(nil), term.Offsets...),
+				Positions: term.Positions,
+				Offsets:   term.Offsets,
 			})
+			byTerm[term.Term] = posting
 		}
 	}
 	terms := make([]string, 0, len(byTerm))
@@ -312,7 +443,7 @@ func addTextPostingsForDocument(table memtable.Table, documentID []byte, analysi
 	var bytesWritten uint64
 	for _, term := range terms {
 		key := encodeTextPostingKey(term, documentID)
-		value := encodeTextPostingValue(*byTerm[term])
+		value := encodeTextPostingValue(byTerm[term])
 		table.SetSteal(key, value)
 		bytesWritten += uint64(len(key) + len(value))
 	}
