@@ -87,12 +87,14 @@ func (r *columnVectorGraphPhysicalRowReader) searchRabitQCosinePreparedHNSWPack(
 	traversalOpts := columnHNSWPreparedTraversalOptions{
 		TopK:                      opts.TopK,
 		EfSearch:                  opts.EfSearch,
-		RetainedCandidateLimit:    opts.QuantizedRerankCandidates,
+		RetainedCandidateLimit:    0,
 		ScoreBatchMode:            opts.ScoreBatchMode,
 		StatsMode:                 traversalStatsMode,
 		OmitResultMaterialization: opts.OmitResultMaterialization,
 	}
+	rerankCandidateLimit := 0
 	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
+		rerankCandidateLimit = opts.QuantizedRerankCandidates
 		traversalOpts.OmitResultMaterialization = true
 		traversalOpts.SuppressOmittedResultMaterialization = true
 	}
@@ -104,6 +106,9 @@ func (r *columnVectorGraphPhysicalRowReader) searchRabitQCosinePreparedHNSWPack(
 	}
 	if queryMode != columnVectorGraphNativeSearchQueryModeQuantizedRerank {
 		return results, searchStats, nil
+	}
+	if rerankCandidateLimit > 0 && len(scratch.top) > rerankCandidateLimit {
+		scratch.top = scratch.top[:rerankCandidateLimit]
 	}
 	if err := pack.exactRerankPreparedTraversalCandidates(query, opts.TopK, opts.ScoreBatchMode, scratch, &searchStats); err != nil {
 		return nil, searchStats, err

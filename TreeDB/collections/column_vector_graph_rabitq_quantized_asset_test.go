@@ -279,6 +279,78 @@ func TestRabitQPreparedHNSWSearchPackRouteParity2587(t *testing.T) {
 	}
 }
 
+func TestRabitQPreparedHNSWSearchPackRerankPreservesEfTraversal2587(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.95, 0.05, 0}},
+		{id: "doc-c", vector: []float32{0.85, 0.15, 0}},
+		{id: "doc-d", vector: []float32{0.75, 0.25, 0}},
+		{id: "doc-e", vector: []float32{0.65, 0.35, 0}},
+		{id: "doc-f", vector: []float32{0.55, 0.45, 0}},
+		{id: "doc-g", vector: []float32{0.45, 0.55, 0}},
+		{id: "doc-h", vector: []float32{0.35, 0.65, 0}},
+	}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	packSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher pack: %v", err)
+	}
+	defer func() { _ = packSearcher.Close() }()
+	fallbackSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher fallback: %v", err)
+	}
+	defer func() { _ = fallbackSearcher.Close() }()
+	if fallbackSearcher.reader == nil || fallbackSearcher.reader.hnswSearchPack == nil {
+		t.Fatalf("fallback searcher missing reader or prepared pack")
+	}
+	fallbackSearcher.reader.hnswSearchPack = nil
+
+	opts := VectorIndexSearcherSearchOptions{
+		Query:                     []float32{0.7, 0.3, 0},
+		QueryMode:                 VectorIndexQueryModeQuantizedRerank,
+		QuantizedIndexName:        def.QuantizedIndexes[0].Name,
+		QuantizedRerankCandidates: 4,
+		TopK:                      3,
+		EfSearch:                  len(rows),
+		StatsMode:                 VectorIndexSearchStatsModeProduction,
+	}
+	var packBuffer, fallbackBuffer VectorIndexSearchBuffer
+	packResults, err := packSearcher.SearchWithBuffer(opts, &packBuffer)
+	if err != nil {
+		t.Fatalf("pack SearchWithBuffer: %v", err)
+	}
+	fallbackResults, err := fallbackSearcher.SearchWithBuffer(opts, &fallbackBuffer)
+	if err != nil {
+		t.Fatalf("fallback SearchWithBuffer: %v", err)
+	}
+	for name, stats := range map[string]VectorIndexSearchStats{"pack": packResults.Stats, "fallback": fallbackResults.Stats} {
+		if stats.DocumentsFetched != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
+			t.Fatalf("%s stats=%+v want no document/fallback guardrail counters", name, stats)
+		}
+		if stats.QuantizedRerankExactScoreCalls != uint64(opts.QuantizedRerankCandidates) || stats.PreparedScoreCalls != uint64(opts.QuantizedRerankCandidates) {
+			t.Fatalf("%s stats=%+v want rerank shortlist=%d", name, stats, opts.QuantizedRerankCandidates)
+		}
+	}
+	if packResults.Stats.Candidates != fallbackResults.Stats.Candidates || packResults.Stats.VisitedEdges != fallbackResults.Stats.VisitedEdges || packResults.Stats.QuantizedScoreCalls != fallbackResults.Stats.QuantizedScoreCalls || packResults.Stats.QuantizedRerankExactScoreCalls != fallbackResults.Stats.QuantizedRerankExactScoreCalls {
+		t.Fatalf("pack stats=%+v fallback stats=%+v want same efSearch traversal and rerank counters", packResults.Stats, fallbackResults.Stats)
+	}
+	if len(packResults.Results) != len(fallbackResults.Results) {
+		t.Fatalf("pack results=%d fallback results=%d", len(packResults.Results), len(fallbackResults.Results))
+	}
+	for i := range packResults.Results {
+		got := packResults.Results[i]
+		want := fallbackResults.Results[i]
+		if got.Ordinal != want.Ordinal || !bytes.Equal(got.ID, want.ID) || math.Abs(got.Score-want.Score) > 1e-6 {
+			t.Fatalf("result[%d] pack=%+v fallback=%+v", i, got, want)
+		}
+	}
+}
+
 func TestCollectionSearchVectorIndexWithBufferRabitQConcurrentPreparedPack2587(t *testing.T) {
 	rows := make([]columnGraphRebuildInputRowV2A, 32)
 	for i := range rows {
