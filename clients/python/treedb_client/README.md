@@ -149,7 +149,11 @@ client.reset_index(
         quantized_indexes=[QuantizedIndexInfo(name="embedding.scalar_u8.fast")],
     ),
 )
-client.upsert_documents("bench_run_001", [Document(id="a", embedding=[0.1, 0.2, 0.3])])
+client.upsert_documents(
+    "bench_run_001",
+    [Document(id="a", embedding=[0.1, 0.2, 0.3])],
+    defer_vector_index_rebuild=True,
+)
 client.optimize_index("bench_run_001")
 bench = client.search_vector_index(
     "bench_run_001",

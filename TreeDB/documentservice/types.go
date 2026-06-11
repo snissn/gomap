@@ -110,6 +110,9 @@ type CreateIndexRequest struct {
 type UpsertDocumentsRequest struct {
 	ExpectedGeneration uint64     `json:"expected_generation,omitempty"`
 	Documents          []Document `json:"documents"`
+	// DeferVectorIndexRebuild lets benchmark loaders bulk-insert documents and
+	// rebuild service vector assets once via OptimizeIndex after the load phase.
+	DeferVectorIndexRebuild bool `json:"defer_vector_index_rebuild,omitempty"`
 }
 
 type UpsertDocumentsResponse struct {

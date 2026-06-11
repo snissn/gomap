@@ -743,7 +743,12 @@ func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
 	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, StatsMode: collections.VectorIndexSearchStatsMode("future")}); ErrorCodeOf(err) != CodeInvalidRequest {
 		t.Fatalf("unknown stats_mode err=%v code=%s", err, ErrorCodeOf(err))
 	}
-	loadBenchmarkDocs(t, svc, "bench", []Document{{ID: "a", Embedding: []float32{1, 0}}})
+	if _, err := svc.UpsertDocuments(ctx, "bench", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("deferred UpsertDocuments bench: %v", err)
+	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 4}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("pre-optimize benchmark vector search err=%v code=%s", err, ErrorCodeOf(err))
+	}
 	if _, err := svc.OptimizeIndex(ctx, "bench", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex bench: %v", err)
 	}
