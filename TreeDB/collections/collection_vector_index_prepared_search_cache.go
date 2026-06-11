@@ -730,15 +730,30 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 		clear(previousResults)
 		return response, nil
 	}
-	results, searchStats, err := reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
-		TopK:                      opts.TopK,
-		EfSearch:                  opts.EfSearch,
-		ScoreBatchMode:            opts.scoreBatchMode,
-		StatsMode:                 statsMode,
-		QueryMode:                 queryMode,
-		QuantizedIndexName:        opts.QuantizedIndexName,
-		QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
-	}, &buffer.searchScratch)
+	var results []columnVectorGraphNativeSearchResult
+	var searchStats columnVectorGraphNativeSearchStats
+	var err error
+	if pack, ok := collectionScalarU8PreparedTraversalPackForReader(reader, queryMode, statsMode, opts.QuantizedIndexName); ok {
+		results, searchStats, err = reader.SearchCosineScalarU8PreparedTraversal(pack, opts.Query, columnVectorGraphNativeSearchOptions{
+			TopK:                      opts.TopK,
+			EfSearch:                  opts.EfSearch,
+			ScoreBatchMode:            opts.scoreBatchMode,
+			StatsMode:                 statsMode,
+			QueryMode:                 queryMode,
+			QuantizedIndexName:        opts.QuantizedIndexName,
+			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
+		}, &buffer.searchScratch)
+	} else {
+		results, searchStats, err = reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
+			TopK:                      opts.TopK,
+			EfSearch:                  opts.EfSearch,
+			ScoreBatchMode:            opts.scoreBatchMode,
+			StatsMode:                 statsMode,
+			QueryMode:                 queryMode,
+			QuantizedIndexName:        opts.QuantizedIndexName,
+			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
+		}, &buffer.searchScratch)
+	}
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
 	p.routeStats.apply(&response.Stats)
 	if err != nil {

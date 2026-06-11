@@ -80,7 +80,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	if degree <= math.MaxInt/2 {
 		degree *= 2
 	}
-	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch); err != nil {
+	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 search scratch prepare: %w", err)
 	}
 	queryInvNorm, err := columnVectorGraphInvNorm(query)

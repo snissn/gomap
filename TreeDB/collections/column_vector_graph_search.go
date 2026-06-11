@@ -1002,6 +1002,8 @@ type columnVectorGraphNativeSearchScratch struct {
 	quantizedQueryCentered   []vectorops.ScalarU8CenteredCode
 	quantizedRabitQWorkspace rabitq.Workspace
 	quantizedBRQWorkspace    brq.Workspace
+	preparedQuantizedPlane   columnHNSWPreparedQuantizedScorePlane
+	preparedTraversalStats   columnVectorGraphNativeSearchStats
 	wavefrontCandidates      []columnVectorGraphSearchCandidate
 	searchPlan               columnVectorGraphSearchPlan
 }
@@ -1037,12 +1039,12 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	return nil
 }
 
-func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, vectorStride, degree, topK, efSearch int) error {
+func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, vectorStride, degree, topK, efSearch, ordinalTileCapacity, quantizedDotCapacity int) error {
 	if s == nil {
 		return errColumnVectorGraphNativeSearchScratchRequired
 	}
-	if rowCount < 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 {
-		return fmt.Errorf("collections: hnsw_search_pack_v1 search received negative sizing input: rowCount=%d vectorStride=%d degree=%d topK=%d efSearch=%d", rowCount, vectorStride, degree, topK, efSearch)
+	if rowCount < 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 || ordinalTileCapacity < 0 || quantizedDotCapacity < 0 {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 search received negative sizing input: rowCount=%d vectorStride=%d degree=%d topK=%d efSearch=%d ordinalTileCapacity=%d quantizedDotCapacity=%d", rowCount, vectorStride, degree, topK, efSearch, ordinalTileCapacity, quantizedDotCapacity)
 	}
 	clearColumnVectorGraphNativeRowScratchViews(&s.scoreScratch)
 	clearColumnVectorGraphNativeRowScratchViews(&s.expandScratch)
@@ -1060,8 +1062,8 @@ func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, v
 	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, degree)
 	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, degree)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, 0)
-	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, 0)
-	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, 0)
+	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, ordinalTileCapacity)
+	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, quantizedDotCapacity)
 	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, 0)
 	return nil
 }
