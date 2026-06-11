@@ -20,11 +20,6 @@ type columnVectorGraphPhysicalRowReaderOptions struct {
 	// latency of the existing single heap-copy path on platforms where mmap-backed
 	// random row access is slower.
 	UseResourceQuantizedAssets bool
-	// ForceQuantizedAssetHeapCopy keeps the resource-backed scalar_u8 asset in one
-	// shared heap copy instead of an mmap/direct view. Prepared collection search
-	// uses this on platforms where direct mmap random-row scoring regresses the hot
-	// path while still avoiding per-reader heap copies.
-	ForceQuantizedAssetHeapCopy bool
 	// SkipQuantizedAssets lets a prepared collection search attach an already
 	// validated shared scalar_u8 asset instead of re-opening one per reader.
 	SkipQuantizedAssets bool
@@ -73,7 +68,6 @@ type columnVectorGraphPhysicalRowReader struct {
 	documentIDStateFallbackReason       typeddecode.Reason
 	quantizedAssetStatus                map[string]columnVectorGraphQuantizedAssetLoadStatus
 	useResourceQuantizedAssets          bool
-	forceQuantizedAssetHeapCopy         bool
 	skipQuantizedAssets                 bool
 	hnswSearchPack                      *columnHNSWSearchPackPreparedView
 	hnswSearchPackStatus                columnHNSWSearchPackPreparedStatus
@@ -141,14 +135,13 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		}
 	}
 	graphReader := &columnVectorGraphPhysicalRowReader{
-		def:                         def,
-		graph:                       graph,
-		catalog:                     catalog,
-		reader:                      reader,
-		quantizedAssetStatus:        make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
-		useResourceQuantizedAssets:  opts.UseResourceQuantizedAssets,
-		forceQuantizedAssetHeapCopy: opts.ForceQuantizedAssetHeapCopy,
-		skipQuantizedAssets:         opts.SkipQuantizedAssets,
+		def:                        def,
+		graph:                      graph,
+		catalog:                    catalog,
+		reader:                     reader,
+		quantizedAssetStatus:       make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
+		useResourceQuantizedAssets: opts.UseResourceQuantizedAssets,
+		skipQuantizedAssets:        opts.SkipQuantizedAssets,
 	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != "" {
 		key, keyErr := columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)

@@ -751,7 +751,7 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedReadersShareQuantizedAsset26
 		name      string
 		forceHeap bool
 	}{
-		{name: "mmap_or_platform_fallback"},
+		{name: "default_mmap_direct_when_supported"},
 		{name: "forced_heap_fallback", forceHeap: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -780,7 +780,7 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedReadersShareQuantizedAsset26
 				t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
 			}
 			assertCollectionBufferedQuantizedRouteStats2415(t, warm.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, opts, def.Dimensions)
-			expectMmapDirect := !tc.forceHeap && columnVectorGraphQuantizedAssetMmapExpectedForTest2621() && !collectionVectorIndexPreparedScalarU8QuantizedAssetForceHeapCopy()
+			expectMmapDirect := !tc.forceHeap && columnVectorGraphQuantizedAssetMmapExpectedForTest2621()
 			if expectMmapDirect {
 				if warm.Stats.QuantizedAssetMmapDirect != 1 || warm.Stats.QuantizedAssetHeapCopy != 0 || warm.Stats.QuantizedAssetMappedBytes == 0 || warm.Stats.QuantizedAssetHeapCopyBytes != 0 {
 					t.Fatalf("warm scalar_u8 stats=%+v want mmap/direct quantized asset", warm.Stats)

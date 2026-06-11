@@ -3,7 +3,6 @@ package collections
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -438,7 +437,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires valid vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 
-	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(def.Name, snap, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks, UseResourceQuantizedAssets: true, ForceQuantizedAssetHeapCopy: collectionVectorIndexPreparedScalarU8QuantizedAssetForceHeapCopy()})
+	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(def.Name, snap, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks, UseResourceQuantizedAssets: true})
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 		if statusErr != nil {
@@ -564,14 +563,6 @@ func promoteCollectionVectorIndexPreparedScalarU8QuantizedAssets(reader *columnV
 
 func collectionVectorIndexPreparedQuantizedAssetShareable(status columnVectorGraphQuantizedAssetLoadStatus) bool {
 	return status.Definition.Codec == QuantizedVectorCodecScalarU8 && status.Prepared != nil && status.Err == nil && status.resource != nil
-}
-
-func collectionVectorIndexPreparedScalarU8QuantizedAssetForceHeapCopy() bool {
-	// On Apple silicon, mmap-backed scalar_u8 random row scoring was measured as a
-	// material regression versus heap bytes. Use one shared resource-managed heap
-	// copy for prepared collection readers on that platform; other mmap-capable
-	// platforms can still use direct mapped views.
-	return runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
 }
 
 func (p *collectionVectorIndexPreparedSearch) hasSharedQuantizedAsset(name string) bool {
@@ -874,7 +865,7 @@ func (p *collectionVectorIndexPreparedSearch) openCollectionVectorIndexPreparedQ
 	if p == nil || p.searcher == nil || p.searcher.collection == nil || p.searcher.snapshot == nil {
 		return nil, collectionVectorIndexPreparedQuantizedValidationStats(nil, vectorIndexSearchRouteStats{}, opts.QuantizedIndexName, queryMode), backenddb.ErrClosed
 	}
-	readerOpts := columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks, UseResourceQuantizedAssets: true, ForceQuantizedAssetHeapCopy: collectionVectorIndexPreparedScalarU8QuantizedAssetForceHeapCopy()}
+	readerOpts := columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks, UseResourceQuantizedAssets: true}
 	if p.hasSharedQuantizedAsset(opts.QuantizedIndexName) {
 		readerOpts.SkipQuantizedAssets = true
 	}

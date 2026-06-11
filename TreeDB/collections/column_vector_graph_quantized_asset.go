@@ -788,10 +788,10 @@ func (c *Collection) prepareColumnVectorGraphQuantizedAssetsForReader(graphReade
 	if c == nil || c.db == nil || graphReader == nil || graphReader.skipQuantizedAssets || graphReader.catalog == nil || graphReader.catalog.meta.Options.ColumnStore == nil || len(graphReader.def.QuantizedIndexes) == 0 || !view.VectorIndexStateFound {
 		return
 	}
-	graphReader.quantizedAssetStatus = loadColumnVectorGraphQuantizedAssetsForReader(c.db.ColumnAssetRootDir(), graphReader.catalog.meta.Name, *graphReader.catalog.meta.Options.ColumnStore, graphReader.def, graphReader.graph, view.VectorIndexState, graphReader.useResourceQuantizedAssets, graphReader.forceQuantizedAssetHeapCopy)
+	graphReader.quantizedAssetStatus = loadColumnVectorGraphQuantizedAssetsForReader(c.db.ColumnAssetRootDir(), graphReader.catalog.meta.Name, *graphReader.catalog.meta.Options.ColumnStore, graphReader.def, graphReader.graph, view.VectorIndexState, graphReader.useResourceQuantizedAssets)
 }
 
-func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, useResourceScalarU8 bool, forceScalarU8HeapCopy bool) map[string]columnVectorGraphQuantizedAssetLoadStatus {
+func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, useResourceScalarU8 bool) map[string]columnVectorGraphQuantizedAssetLoadStatus {
 	if len(def.QuantizedIndexes) == 0 {
 		return nil
 	}
@@ -809,7 +809,7 @@ func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, c
 		status.Asset = asset
 		start := time.Now()
 		if q.Codec == QuantizedVectorCodecScalarU8 && useResourceScalarU8 {
-			loaded, err := loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection, cfg, def, graph, q, asset, forceScalarU8HeapCopy)
+			loaded, err := loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection, cfg, def, graph, q, asset)
 			status = loaded
 			status.OpenNanos = uint64(time.Since(start).Nanoseconds())
 			if err != nil {
@@ -1022,14 +1022,14 @@ func prepareColumnVectorGraphQuantizedAssetFromImage(def VectorIndexDefinition, 
 	return prepared, nil
 }
 
-func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, asset columnVectorIndexStateAssetSnapshot, forceHeapCopy bool) (columnVectorGraphQuantizedAssetLoadStatus, error) {
+func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, asset columnVectorIndexStateAssetSnapshot) (columnVectorGraphQuantizedAssetLoadStatus, error) {
 	status := columnVectorGraphQuantizedAssetLoadStatus{Definition: q, Asset: asset}
 	if err := validateColumnVectorGraphQuantizedAssetLoadInputs(rootDir, collection, cfg, def, graph, q, asset); err != nil {
 		status.Err = err
 		status.Health = columnVectorGraphQuantizedAssetHealthFromError(err)
 		return status, err
 	}
-	raw, resource, source, err := readColumnVectorGraphQuantizedAssetResourceBytes(rootDir, asset.Ref, forceHeapCopy)
+	raw, resource, source, err := readColumnVectorGraphQuantizedAssetResourceBytes(rootDir, asset.Ref)
 	if err != nil {
 		status.Err = fmt.Errorf("%w: quantized asset %q read: %v", errColumnVectorGraphQuantizedAssetInvalid, q.Name, err)
 		status.Health = columnVectorGraphQuantizedAssetHealthInvalid
@@ -1069,13 +1069,13 @@ func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection strin
 	return status, nil
 }
 
-func readColumnVectorGraphQuantizedAssetResourceBytes(rootDir string, ref ColumnAssetRef, forceHeapCopy bool) ([]byte, *columnVectorGraphQuantizedAssetResource, mappedresource.Source, error) {
+func readColumnVectorGraphQuantizedAssetResourceBytes(rootDir string, ref ColumnAssetRef) ([]byte, *columnVectorGraphQuantizedAssetResource, mappedresource.Source, error) {
 	readCache, err := newColumnPhysicalAssetReadCache(rootDir, ref.Namespace)
 	if err != nil {
 		return nil, nil, "", err
 	}
 	readCache.returnViews = true
-	readCache.forceReadAtFallback = forceHeapCopy || columnVectorGraphQuantizedAssetForceReadAtFallbackForTest.Load()
+	readCache.forceReadAtFallback = columnVectorGraphQuantizedAssetForceReadAtFallbackForTest.Load()
 	reader, err := readCache.fileForRef(ref)
 	if err != nil {
 		_ = readCache.close()
