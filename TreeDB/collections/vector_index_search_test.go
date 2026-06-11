@@ -767,6 +767,10 @@ func TestScalarU8QuantizedPreparedTraversalPackRouteWhenAdjacencyClosed2586(t *t
 	if searcher.reader == nil || searcher.reader.hnswSearchPack == nil || searcher.reader.adjacencyLayerSources == nil {
 		t.Fatalf("searcher missing prepared pack or adjacency state")
 	}
+	packStatus := searcher.reader.hnswSearchPack.fastStatus(searcher.reader.hnswSearchPackStatus)
+	if packStatus != columnHNSWSearchPackPreparedStatusDirect && packStatus != columnHNSWSearchPackPreparedStatusHeap {
+		t.Fatalf("searcher prepared pack status=%s", packStatus)
+	}
 	if err := searcher.reader.adjacencyLayerSources.Close(); err != nil {
 		t.Fatalf("close adjacency sources: %v", err)
 	}
@@ -781,9 +785,7 @@ func TestScalarU8QuantizedPreparedTraversalPackRouteWhenAdjacencyClosed2586(t *t
 	}
 	assertVectorIndexSearchResultsV4(t, quantizedOnly.Results, scalarU8QuantizedTopKForTest1926(t, rows, query, 3), false)
 	assertQuantizedOnlyGuardrailStats2416(t, quantizedOnly.Stats, def.Dimensions)
-	if quantizedOnly.Stats.AdjacencyPreparedCSRDirectViews == 0 || quantizedOnly.Stats.AdjacencySourceFallbacks != 0 {
-		t.Fatalf("quantized_only stats=%+v want pack CSR adjacency with no source fallback", quantizedOnly.Stats)
-	}
+	assertScalarU8PreparedTraversalPackAdjacencyStats2586(t, quantizedOnly.Stats, packStatus, "quantized_only")
 
 	reranked, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: qName, QuantizedRerankCandidates: len(rows), TopK: 3, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 	if err != nil {
@@ -791,8 +793,9 @@ func TestScalarU8QuantizedPreparedTraversalPackRouteWhenAdjacencyClosed2586(t *t
 	}
 	assertVectorIndexSearchResultsV4(t, reranked.Results, exactColumnGraphTopKForTest(t, rows, query, 3), false)
 	assertQuantizedRerankNoDocumentGuardrailStats2416(t, reranked.Stats, len(rows))
-	if reranked.Stats.AdjacencyPreparedCSRDirectViews == 0 || reranked.Stats.QuantizedRerankExactScoreCalls != uint64(len(rows)) {
-		t.Fatalf("quantized_rerank stats=%+v want pack CSR traversal and exact rerank shortlist", reranked.Stats)
+	assertScalarU8PreparedTraversalPackAdjacencyStats2586(t, reranked.Stats, packStatus, "quantized_rerank")
+	if reranked.Stats.QuantizedRerankExactScoreCalls != uint64(len(rows)) {
+		t.Fatalf("quantized_rerank stats=%+v want exact rerank shortlist", reranked.Stats)
 	}
 }
 
@@ -822,8 +825,8 @@ func TestScalarU8QuantizedPreparedTraversalRerankPreservesEfTraversal2586(t *tes
 		t.Fatalf("OpenVectorIndexSearcher fallback: %v", err)
 	}
 	defer func() { _ = fallbackSearcher.Close() }()
-	if fallbackSearcher.reader == nil || fallbackSearcher.reader.hnswSearchPack == nil || fallbackSearcher.reader.preparedSearch == nil {
-		t.Fatalf("fallback searcher missing prepared state")
+	if fallbackSearcher.reader == nil || fallbackSearcher.reader.hnswSearchPack == nil {
+		t.Fatalf("fallback searcher missing reader or prepared pack")
 	}
 	fallbackSearcher.reader.hnswSearchPack = nil
 
@@ -883,9 +886,14 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedTraversalPackRouteWhenAdjace
 	if err != nil || len(warm.Results) != quantizedOnlyOpts.TopK {
 		t.Fatalf("warm SearchVectorIndexWithBuffer results=%d err=%v", len(warm.Results), err)
 	}
+	packStatus := columnHNSWSearchPackPreparedStatusMissing
 	mutateCachedCollectionQuantizedReader2586(t, col, quantizedOnlyOpts, func(reader *columnVectorGraphPhysicalRowReader) {
 		if reader.hnswSearchPack == nil || reader.adjacencyLayerSources == nil {
 			t.Fatalf("cached reader missing prepared pack or adjacency state")
+		}
+		packStatus = reader.hnswSearchPack.fastStatus(reader.hnswSearchPackStatus)
+		if packStatus != columnHNSWSearchPackPreparedStatusDirect && packStatus != columnHNSWSearchPackPreparedStatusHeap {
+			t.Fatalf("cached prepared pack status=%s", packStatus)
 		}
 		if err := reader.adjacencyLayerSources.Close(); err != nil {
 			t.Fatalf("close cached adjacency sources: %v", err)
@@ -900,9 +908,7 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedTraversalPackRouteWhenAdjace
 	assertVectorIndexSearchResultsV4(t, quantizedOnly.Results, scalarU8QuantizedTopKForTest1926(t, rows, query, quantizedOnlyOpts.TopK), false)
 	assertQuantizedOnlyGuardrailStats2416(t, quantizedOnly.Stats, def.Dimensions)
 	assertCollectionBufferedQuantizedRouteStats2415(t, quantizedOnly.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, quantizedOnlyOpts, def.Dimensions)
-	if quantizedOnly.Stats.AdjacencyPreparedCSRDirectViews == 0 || quantizedOnly.Stats.AdjacencySourceFallbacks != 0 {
-		t.Fatalf("collection quantized_only stats=%+v want pack CSR adjacency with no source fallback", quantizedOnly.Stats)
-	}
+	assertScalarU8PreparedTraversalPackAdjacencyStats2586(t, quantizedOnly.Stats, packStatus, "collection quantized_only")
 
 	rerankOpts := quantizedOnlyOpts
 	rerankOpts.QueryMode = VectorIndexQueryModeQuantizedRerank
@@ -914,8 +920,9 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedTraversalPackRouteWhenAdjace
 	assertVectorIndexSearchResultsV4(t, reranked.Results, exactColumnGraphTopKForTest(t, rows, query, rerankOpts.TopK), false)
 	assertQuantizedRerankNoDocumentGuardrailStats2416(t, reranked.Stats, rerankOpts.QuantizedRerankCandidates)
 	assertCollectionBufferedQuantizedRouteStats2415(t, reranked.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, rerankOpts, def.Dimensions)
-	if reranked.Stats.AdjacencyPreparedCSRDirectViews == 0 || reranked.Stats.QuantizedRerankExactScoreCalls != uint64(rerankOpts.QuantizedRerankCandidates) {
-		t.Fatalf("collection quantized_rerank stats=%+v want pack CSR traversal and exact rerank shortlist", reranked.Stats)
+	assertScalarU8PreparedTraversalPackAdjacencyStats2586(t, reranked.Stats, packStatus, "collection quantized_rerank")
+	if reranked.Stats.QuantizedRerankExactScoreCalls != uint64(rerankOpts.QuantizedRerankCandidates) {
+		t.Fatalf("collection quantized_rerank stats=%+v want exact rerank shortlist", reranked.Stats)
 	}
 }
 
@@ -1257,6 +1264,25 @@ func assertCollectionBufferedQuantizedRouteStats2415(tb testing.TB, stats Vector
 	tb.Helper()
 	if !vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats, mode, opts, dims) {
 		tb.Fatalf("collection buffered quantized stats=%+v want healthy no-document quantized route", stats)
+	}
+}
+
+func assertScalarU8PreparedTraversalPackAdjacencyStats2586(tb testing.TB, stats VectorIndexSearchStats, packStatus columnHNSWSearchPackPreparedStatus, label string) {
+	tb.Helper()
+	if stats.AdjacencySourceFallbacks != 0 {
+		tb.Fatalf("%s stats=%+v want pack traversal with no source fallback", label, stats)
+	}
+	switch packStatus {
+	case columnHNSWSearchPackPreparedStatusDirect:
+		if stats.AdjacencyPreparedCSRDirectViews == 0 {
+			tb.Fatalf("%s stats=%+v want direct pack CSR adjacency", label, stats)
+		}
+	case columnHNSWSearchPackPreparedStatusHeap:
+		if stats.AdjacencyHeapCopyTypedViews == 0 {
+			tb.Fatalf("%s stats=%+v want heap-copy pack adjacency", label, stats)
+		}
+	default:
+		tb.Fatalf("%s unexpected pack status=%s", label, packStatus)
 	}
 }
 
