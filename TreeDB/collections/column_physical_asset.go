@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/buger/jsonparser"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -117,6 +119,9 @@ type columnPhysicalAsset struct {
 }
 
 func extractColumnDeclaredRowsFromJSONDocuments(cfg ColumnStoreConfig, docs []columnWriteDocument) ([]columnDeclaredRow, error) {
+	if rows, ok, err := extractColumnDeclaredRowsFromRootJSONDocumentsFastPath(cfg, docs); ok || err != nil {
+		return rows, err
+	}
 	rows := make([]columnDeclaredRow, 0, len(docs))
 	for docIdx, doc := range docs {
 		decoder := json.NewDecoder(bytes.NewReader(doc.Document))
@@ -151,6 +156,154 @@ func extractColumnDeclaredRowsFromJSONDocuments(cfg ColumnStoreConfig, docs []co
 		})
 	}
 	return rows, nil
+}
+
+func extractColumnDeclaredRowsFromRootJSONDocumentsFastPath(cfg ColumnStoreConfig, docs []columnWriteDocument) ([]columnDeclaredRow, bool, error) {
+	for _, col := range cfg.Columns {
+		if col.Path == "" || strings.Contains(col.Path, ".") || !columnDeclaredJSONParserValueSupported(col.ValueType) {
+			return nil, false, nil
+		}
+	}
+	rows := make([]columnDeclaredRow, 0, len(docs))
+	for docIdx, doc := range docs {
+		if !gjson.ValidBytes(doc.Document) {
+			return nil, true, fmt.Errorf("%w: document[%d] invalid JSON: invalid JSON", ErrColumnDeclaredValueUnsupported, docIdx)
+		}
+		if !jsonDocumentLooksObject(doc.Document) {
+			return nil, true, fmt.Errorf("%w: document[%d] root is not object", ErrColumnDeclaredValueUnsupported, docIdx)
+		}
+		valuesRaw := make([]jsonParserIndexValue, len(cfg.Columns))
+		if err := jsonparser.ObjectEach(doc.Document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+			for colIdx, col := range cfg.Columns {
+				if string(key) == col.Path {
+					valuesRaw[colIdx] = jsonParserIndexValue{raw: value, valueType: dataType}
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, true, fmt.Errorf("%w: document[%d] invalid JSON: %v", ErrColumnDeclaredValueUnsupported, docIdx, err)
+		}
+		values := make([]columnDeclaredValue, len(cfg.Columns))
+		var scratch []byte
+		for colIdx, col := range cfg.Columns {
+			value, err := convertColumnDeclaredJSONParserValue(col, valuesRaw[colIdx], &scratch)
+			if err != nil {
+				return nil, true, fmt.Errorf("%w: document[%d] column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, docIdx, colIdx, col.Name, err)
+			}
+			values[colIdx] = value
+		}
+		rows = append(rows, columnDeclaredRow{
+			ID:     bytes.Clone(doc.ID),
+			Values: values,
+		})
+	}
+	return rows, true, nil
+}
+
+func columnDeclaredJSONParserValueSupported(valueType ColumnStoreValueType) bool {
+	switch valueType {
+	case ColumnStoreValueInt64, ColumnStoreValueString, ColumnStoreValueFloat32Vector:
+		return true
+	default:
+		return false
+	}
+}
+
+func convertColumnDeclaredJSONParserValue(col ColumnStoreColumn, raw jsonParserIndexValue, scratch *[]byte) (columnDeclaredValue, error) {
+	exists := raw.valueType != jsonparser.NotExist
+	value := columnDeclaredValue{Type: col.ValueType, Present: exists}
+	if !exists || raw.valueType == jsonparser.Null {
+		if col.Nullable {
+			value.Null = true
+			return value, nil
+		}
+		return columnDeclaredValue{}, errors.New("missing non-null declared value")
+	}
+	switch col.ValueType {
+	case ColumnStoreValueInt64:
+		v, err := parseColumnJSONParserInt64(raw)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Int64 = v
+	case ColumnStoreValueString:
+		if raw.valueType != jsonparser.String {
+			return columnDeclaredValue{}, fmt.Errorf("expected string got %s", raw.valueType)
+		}
+		unescaped, err := columnJSONParserStringBytes(raw.raw, scratch)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.String = string(unescaped)
+	case ColumnStoreValueFloat32Vector:
+		values, err := convertColumnJSONParserFloat32Vector(raw, columnStoreFloat32VectorElementsPerRow(col))
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Float32Vector = values
+	default:
+		return columnDeclaredValue{}, fmt.Errorf("unsupported declared value type %q", col.ValueType)
+	}
+	return value, nil
+}
+
+func columnJSONParserStringBytes(raw []byte, scratch *[]byte) ([]byte, error) {
+	if bytes.IndexByte(raw, '\\') == -1 {
+		return raw, nil
+	}
+	unescaped, err := jsonparser.Unescape(raw, (*scratch)[:0])
+	if err != nil {
+		return nil, err
+	}
+	*scratch = unescaped[:0]
+	return unescaped, nil
+}
+
+func parseColumnJSONParserInt64(raw jsonParserIndexValue) (int64, error) {
+	if raw.valueType != jsonparser.Number {
+		return 0, fmt.Errorf("expected int64 number got %s", raw.valueType)
+	}
+	return strconv.ParseInt(string(raw.raw), 10, 64)
+}
+
+func convertColumnJSONParserFloat32Vector(raw jsonParserIndexValue, dims int) ([]float32, error) {
+	if raw.valueType != jsonparser.Array {
+		return nil, fmt.Errorf("expected float32_vector array got %s", raw.valueType)
+	}
+	if dims <= 0 {
+		return nil, fmt.Errorf("invalid float32_vector dims %d", dims)
+	}
+	out := make([]float32, 0, dims)
+	var parseErr error
+	_, err := jsonparser.ArrayEach(raw.raw, func(elem []byte, dataType jsonparser.ValueType, idx int, elemErr error) {
+		if parseErr != nil {
+			return
+		}
+		if elemErr != nil {
+			parseErr = fmt.Errorf("float32_vector[%d]: %w", idx, elemErr)
+			return
+		}
+		if dataType != jsonparser.Number {
+			parseErr = fmt.Errorf("float32_vector[%d] expected number got %s", idx, dataType)
+			return
+		}
+		v, err := strconv.ParseFloat(string(elem), 32)
+		if err != nil {
+			parseErr = fmt.Errorf("float32_vector[%d]: %w", idx, err)
+			return
+		}
+		out = append(out, float32(v))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if len(out) != dims {
+		return nil, fmt.Errorf("float32_vector length=%d want dims=%d", len(out), dims)
+	}
+	return out, nil
 }
 
 func lookupColumnJSONPath(obj map[string]any, path string) (any, bool) {
