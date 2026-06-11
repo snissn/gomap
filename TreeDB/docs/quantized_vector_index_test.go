@@ -163,6 +163,73 @@ func TestDocs_VectorSearchCloseout2483(t *testing.T) {
 	}
 }
 
+func TestDocs_QuantizedPreparedHNSWCloseout2588(t *testing.T) {
+	treeRoot, repoRoot := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "quantized-prepared-hnsw-closeout-2588.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read quantized prepared HNSW closeout: %v", err)
+	}
+	text := string(data)
+	normalized := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"# TreeDB quantized prepared HNSW fast-path closeout (#2588)",
+		"#2591 | #2592 | promoted",
+		"#2585 | #2593 | promoted",
+		"#2586 | #2596 | promoted",
+		"#2587 | #2606 | promoted",
+		"/tmp/issue2587_10k768_final2_20260611_000046.txt",
+		"exact_fp32 | SearchWithBuffer | 1 | 24917",
+		"scalar_u8 | CollectionSearchVectorIndexWithBuffer quantized_rerank cand=32 | 8",
+		"rabitq_1bit | CollectionSearchVectorIndexWithBuffer quantized_rerank cand=32 | 8",
+		"All hot rows are `0 B/op`, `0 allocs/op`",
+		"no statistically significant exact FP32 regressions",
+		"/tmp/issue2588_scalar_profiles_20260611_004414",
+		"/tmp/issue2587_profiles_final2b_20260611_000238",
+		"rabitq_1bit` quantized modes use prepared `hnsw_search_pack_v1` traversal",
+		"must not be relabeled as exact FP32",
+		"did **not** change `rabitq_1bit` v1 storage, LSB bit order, high-bit padding, weighted sign-dot score formula",
+		"QuantizedRerankCandidates` limits only the exact rerank shortlist",
+	} {
+		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
+			t.Fatalf("quantized prepared HNSW closeout missing %q", want)
+		}
+	}
+	for path, wants := range map[string][]string{
+		filepath.Join(treeRoot, "docs", "spec", "README.md"): {
+			"quantized-prepared-hnsw-closeout-2588.md",
+			"#2591 10k x 768 gate rows",
+		},
+		filepath.Join(repoRoot, "docs", "README.md"): {
+			"TreeDB Quantized Prepared HNSW Closeout",
+			"quantized-prepared-hnsw-closeout-2588.md",
+		},
+		filepath.Join(treeRoot, "docs", "spec", "quantized-vector-index.md"): {
+			"quantized-prepared-hnsw-closeout-2588.md",
+			"rabitq_1bit` reports `search_route_hnsw_search_pack/search=1`",
+		},
+		filepath.Join(treeRoot, "docs", "spec", "column-graph-native-vector-search.md"): {
+			"quantized-prepared-hnsw-closeout-2588.md",
+			"rabitq_1bit` quantized rows may use prepared",
+		},
+		filepath.Join(treeRoot, "docs", "spec", "rabitq-1bit-v1.md"): {
+			"quantized-prepared-hnsw-closeout-2588.md",
+			"search_route_hnsw_search_pack/search=1",
+		},
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(data)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing #2588 closeout link text %q", path, want)
+			}
+		}
+	}
+}
+
 func TestDocs_RaBitQCloseout2454(t *testing.T) {
 	treeRoot, _ := repoRoots(t)
 	path := filepath.Join(treeRoot, "docs", "spec", "rabitq-closeout-2454.md")

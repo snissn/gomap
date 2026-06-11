@@ -182,9 +182,11 @@ be selected by explicit `quantized_only` or `quantized_rerank` modes on both
 `VectorIndexSearcher.SearchWithBuffer` and collection-level
 `Collection.SearchVectorIndexWithBuffer` no-document buffered paths.
 
-- `quantized_only` traverses and ranks with the prepared RaBitQ scorer and must
-  report zero exact vector/norm reads, zero exact rerank calls, and no document
-  materialization.
+- `quantized_only` traverses and ranks with the prepared RaBitQ scorer. Current
+  #2587 code uses prepared `hnsw_search_pack_v1` traversal with a RaBitQ score
+  plane, so it reports both the quantized route counter and
+  `search_route_hnsw_search_pack/search=1`; it must still report zero exact
+  vector/norm reads, zero exact rerank calls, and no document materialization.
 - `quantized_rerank` traverses with RaBitQ over the normalized `ef_search`
   candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks only that
   shortlist through the authoritative float32 path, and reports exact
@@ -200,6 +202,9 @@ are recorded in [`rabitq-closeout-2454.md`](rabitq-closeout-2454.md). The later
 query-byte-table scorer evidence and #2478/#2479 no-promote decisions, is
 recorded in
 [`rabitq-performance-lane-closeout-2482.md`](rabitq-performance-lane-closeout-2482.md).
+The #2584/#2588 prepared fast-path closeout, including the `rabitq_1bit`
+prepared pack traversal promotion and exact FP32 guardrail evidence, is recorded
+in [`quantized-prepared-hnsw-closeout-2588.md`](quantized-prepared-hnsw-closeout-2588.md).
 
 ## Non-goals and boundaries
 
