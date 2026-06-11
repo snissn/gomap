@@ -23,7 +23,7 @@ The only successful numbers below are from a small TreeDB custom smoke
 | `#2599` harness / route-proof sidecar | `#2605` merged as `7f66890467f96e7460ed6eeec29fdee81e61acac` | Complete. Harness contract merged. | `/tmp/treedb_vdbbench_2599_final_20260610_221336` | Foundation only: proves artifact capture and route-proof schema. |
 | `#2600` TreeDB-only baseline | `#2608` merged as `d8c2442adec53711fa2e69c78a4df06dc6512a17` | Full `Performance1536D50K` blocked by TreeDB durable load runtime; smaller custom smoke completed. | `/tmp/treedb_vdbbench_2600_serial_20260610_224155`; `/tmp/treedb_vdbbench_2600_custom_smoke_20260610_235005` | Blocker evidence plus smoke-only appendix. No full baseline row. |
 | `#2601` server comparator rows | `#2607` open/draft at `ad4090b89c2b483a448052cdce6812689e52b3df` | Blocked. pgvector setup/dry-run passed; full pgvector load failed with Docker/PostgreSQL `pg_wal` no-space. | `/tmp/treedb_vdbbench_2601_pgvector_setup_script_20260610_225302`; `/tmp/treedb_vdbbench_2601_pgvector_20260610_223212`; `/tmp/treedb_vdbbench_2601_pgvector_full_20260610_234701` | Setup/blocker evidence only. No comparator row. |
-| `#2602` final/expanded matrix report | this report on `snissn/2602-manager` | Interim closeout for a blocked campaign. | `docs/benchmarks/treedb_vectordbbench_campaign_2026-06-11.md` | Documents incomplete status and rerun plan. |
+| `#2602` final/expanded matrix report | `#2609` from `snissn/2602-manager` | Interim closeout for a blocked campaign. | `docs/benchmarks/treedb_vectordbbench_campaign_2026-06-11.md` | Documents incomplete status and rerun plan. |
 
 ## Matrix rows requested vs. captured
 
