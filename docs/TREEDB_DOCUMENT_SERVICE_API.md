@@ -382,7 +382,9 @@ fail closed when assets are missing, invalid, stale, or unavailable. Responses
 include result IDs/scores plus TreeDB stats/diagnostics so benchmark adapters can
 assert no-document guardrails: no documents fetched, no exact fallback for
 quantized modes, quantized scorer active, and rerank exact reads bounded by the
-requested shortlist.
+requested shortlist. Reproducible VectorDBBench setup commands and smoke evidence
+are documented in
+[`docs/benchmarks/treedb_vectordbbench_runbook_2026-06-11.md`](benchmarks/treedb_vectordbbench_runbook_2026-06-11.md).
 
 ## Dense-vector search
 

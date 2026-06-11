@@ -152,6 +152,11 @@ USearch c=1/c=8 averages are from batch searches with `threads=1/8`, while
 TreeDB and pgvector report per-query latency samples. Source and caveats:
 [June 8 vector external comparison](docs/benchmarks/treedb_vector_external_compare_2026-06-08.md).
 
+TreeDB is also wired into `snissn/vectordbbench` through the document service.
+Those rows measure Python/client/HTTP/service overhead and are separate from
+native Go `0 B/op` no-document evidence; see the
+[TreeDB VectorDBBench runbook](docs/benchmarks/treedb_vectordbbench_runbook_2026-06-11.md).
+
 ### `application.db` Offline Density Workload
 
 Offline compacted-size comparison from the June 2 Celestia `application.db`
