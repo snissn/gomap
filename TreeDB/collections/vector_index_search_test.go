@@ -779,6 +779,14 @@ func TestScalarU8QuantizedPreparedTraversalPackRouteWhenAdjacencyClosed2586(t *t
 	query := []float32{0.8, 0.2, 0}
 	qName := def.QuantizedIndexes[0].Name
 	var buffer VectorIndexSearchBuffer
+	badTopK0, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: []float32{0.8, 0.2}, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: qName, TopK: 0, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
+		t.Fatalf("quantized_only topK=0 bad dims response=%+v err=%v want dimension mismatch", badTopK0, err)
+	}
+	badRerankTopK0, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: []float32{0.8, 0.2}, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: qName, TopK: 0, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
+		t.Fatalf("quantized_rerank topK=0 bad dims response=%+v err=%v want dimension mismatch", badRerankTopK0, err)
+	}
 	quantizedOnly, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: qName, TopK: 3, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 	if err != nil {
 		t.Fatalf("quantized_only SearchWithBuffer with closed prepared adjacency: %v", err)

@@ -68,6 +68,9 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosineScalarU8PreparedTravers
 	if pack.Header.Rows != rowCount || pack.Header.Dimensions != r.def.Dimensions {
 		return nil, setupStats, fmt.Errorf("%w: column_graph %q hnsw_search_pack_v1 shape rows/dims=(%d,%d) want (%d,%d)", errColumnHNSWPreparedQuantizedTraversalUnavailable, r.def.Name, pack.Header.Rows, pack.Header.Dimensions, rowCount, r.def.Dimensions)
 	}
+	if len(query) != r.def.Dimensions {
+		return nil, setupStats, fmt.Errorf("collections: column_graph %q hnsw prepared quantized traversal query dims=%d want %d: %w", r.def.Name, len(query), r.def.Dimensions, errColumnVectorGraphNativeSearchQueryDimensionMismatch)
+	}
 	topK := opts.TopK
 	if topK < 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search top_k cannot be negative: %w", r.def.Name, errColumnVectorGraphNativeSearchTopKNegative)
