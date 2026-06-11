@@ -239,7 +239,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if opts.OmitResultMaterialization && !opts.SuppressOmittedResultMaterialization {
 		resultScratchK = retainedCandidateLimit
 	}
-	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, resultScratchK, retainedCandidateLimit); err != nil {
+	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, resultScratchK, retainedCandidateLimit, degree, degree); err != nil {
 		return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal scratch prepare: %w", err)
 	}
 	if err := scorePlane.prepareForHNSWPreparedTraversal(v, query, opts, scratch); err != nil {
