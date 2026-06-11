@@ -61,7 +61,7 @@ func setupTwoLevelTree(b *testing.B) (*Tree, *pager.Pager) {
 func getNoCache(p *pager.Pager, sr SlabReader, root uint64, key []byte) ([]byte, error) {
 	currID := root
 
-	for depth := 0; depth < 50; depth++ {
+	for depth := 0; depth < maxTraversalDepth; depth++ {
 		data, err := p.Get(currID)
 		if err != nil {
 			return nil, err
