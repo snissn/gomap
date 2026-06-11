@@ -1002,6 +1002,8 @@ type columnVectorGraphNativeSearchScratch struct {
 	quantizedQueryCentered   []vectorops.ScalarU8CenteredCode
 	quantizedRabitQWorkspace rabitq.Workspace
 	quantizedBRQWorkspace    brq.Workspace
+	preparedQuantizedPlane   columnHNSWPreparedQuantizedScorePlane
+	preparedTraversalStats   columnVectorGraphNativeSearchStats
 	wavefrontCandidates      []columnVectorGraphSearchCandidate
 	searchPlan               columnVectorGraphSearchPlan
 }
@@ -1059,9 +1061,9 @@ func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, v
 	s.scoreTileScores = resizeColumnVectorGraphNativeFloat64Scratch(s.scoreTileScores, degree)
 	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, degree)
 	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, degree)
+	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, degree)
+	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, degree)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, 0)
-	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, 0)
-	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, 0)
 	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, 0)
 	return nil
 }
