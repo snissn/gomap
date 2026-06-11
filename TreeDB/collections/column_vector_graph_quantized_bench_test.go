@@ -560,6 +560,13 @@ func TestColumnGraphQuantizedProductionGateRouteAssertions2591(t *testing.T) {
 		t.Fatalf("rabitq_1bit SearchWithBuffer results=%d err=%v", len(rabitqOnly.Results), err)
 	}
 	assertColumnGraphRabitQQuantizedSearchWithBufferGuardrails2451(t, rabitqOnly.Stats, rabitqOnlyOpts, rabitqFixture.definition.Dimensions, rabitqFixture.quantizedCodeBytesPerVector)
+	buffer.Reset()
+	rabitqRerankOpts := VectorIndexSearchOptions{IndexName: rabitqFixture.definition.Name, Query: query, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: columnGraphRabitQQuantizedIndexName2450, QuantizedRerankCandidates: 32, TopK: shape.topK, EfSearch: shape.efSearch, MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeFullDiagnostics}
+	rabitqRerank, err := rabitqFixture.collection.SearchVectorIndexWithBuffer(rabitqRerankOpts, &buffer)
+	if err != nil || len(rabitqRerank.Results) == 0 {
+		t.Fatalf("rabitq_1bit collection rerank results=%d err=%v", len(rabitqRerank.Results), err)
+	}
+	assertCollectionBufferedRabitQQuantizedRouteStats2452(t, rabitqRerank.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, rabitqRerankOpts, rabitqFixture.definition.Dimensions, rabitqFixture.quantizedCodeBytesPerVector)
 }
 
 func TestColumnGraphQuantizedProductionGateMissingAssetFailClosed2591(t *testing.T) {
@@ -734,7 +741,7 @@ func BenchmarkCollectionVectorQuantizedProductionGate2591(b *testing.B) {
 					StatsMode:                 VectorIndexSearchStatsModeProduction,
 				}
 				runColumnGraphQuantizedProductionCollectionWithBuffer2591(b, fixture, opts, tc.concurrency, exactSets, func(tb testing.TB, stats VectorIndexSearchStats, opts VectorIndexSearchOptions) {
-					assertColumnGraphScalarU8QuantizedCollectionWithBufferGuardrails2415(tb, stats, opts, fixture.definition.Dimensions)
+					assertCollectionBufferedRabitQQuantizedRouteStats2452(tb, stats, columnVectorGraphNativeSearchQueryModeFromPublic2415(opts.QueryMode), opts, fixture.definition.Dimensions, fixture.quantizedCodeBytesPerVector)
 				}, "rabitq_1bit_row", hotProfile)
 			})
 		}
