@@ -8,13 +8,14 @@ Base for this closeout branch: `origin/main` at
 
 This campaign did **not** produce a claim-quality expanded VectorDBBench matrix.
 The full TreeDB `Performance1536D50K` durable baseline did not complete load on
-this host, and the pgvector comparator did not produce a valid row. This report
-therefore records the attempt, exact artifacts, blockers, and rerun guidance. It
-must not be used for README headline performance claims or TreeDB-vs-pgvector
-comparisons.
+this host, and the full Docker/pgvector comparator did not produce a valid row.
+This report therefore records the attempt, exact artifacts, blockers, and rerun
+guidance. It must not be used for README headline performance claims or
+TreeDB-vs-pgvector full-matrix comparisons.
 
-The only successful numbers below are from a small TreeDB custom smoke
-(`512 x 1536`) and are labeled as functional harness/route proof only.
+The only successful numbers below are from small `512 x 1536` custom smokes for
+TreeDB and local PostgreSQL/pgvector. They are labeled as functional
+harness/route/setup proof only.
 
 ## Issue / PR stack state
 
@@ -22,7 +23,7 @@ The only successful numbers below are from a small TreeDB custom smoke
 | --- | --- | --- | --- | --- |
 | `#2599` harness / route-proof sidecar | `#2605` merged as `7f66890467f96e7460ed6eeec29fdee81e61acac` | Complete. Harness contract merged. | `/tmp/treedb_vdbbench_2599_final_20260610_221336` | Foundation only: proves artifact capture and route-proof schema. |
 | `#2600` TreeDB-only baseline | `#2608` merged as `d8c2442adec53711fa2e69c78a4df06dc6512a17` | Full `Performance1536D50K` blocked by TreeDB durable load runtime; smaller custom smoke completed. | `/tmp/treedb_vdbbench_2600_serial_20260610_224155`; `/tmp/treedb_vdbbench_2600_custom_smoke_20260610_235005` | Blocker evidence plus smoke-only appendix. No full baseline row. |
-| `#2601` server comparator rows | `#2607` open/draft at `ad4090b89c2b483a448052cdce6812689e52b3df` | Blocked. pgvector setup/dry-run passed; full pgvector load failed with Docker/PostgreSQL `pg_wal` no-space. | `/tmp/treedb_vdbbench_2601_pgvector_setup_script_20260610_225302`; `/tmp/treedb_vdbbench_2601_pgvector_20260610_223212`; `/tmp/treedb_vdbbench_2601_pgvector_full_20260610_234701` | Setup/blocker evidence only. No comparator row. |
+| `#2601` server comparator rows | `#2607` updated after the blocked report | Docker pgvector setup/dry-run passed; full Docker pgvector load failed with `pg_wal` no-space; local PostgreSQL/pgvector custom smoke completed. | `/tmp/treedb_vdbbench_2601_pgvector_setup_script_20260610_225302`; `/tmp/treedb_vdbbench_2601_pgvector_20260610_223212`; `/tmp/treedb_vdbbench_2601_pgvector_full_20260610_234701`; `/tmp/treedb_vdbbench_2601_pgvector_local_custom_20260611_014219` | Full-row blocker evidence plus custom-smoke comparator row. No full comparator row. |
 | `#2602` final/expanded matrix report | `#2609` from `snissn/2602-manager` | Interim closeout for a blocked campaign. | `docs/benchmarks/treedb_vectordbbench_campaign_2026-06-11.md` | Documents incomplete status and rerun plan. |
 
 ## Matrix rows requested vs. captured
@@ -31,7 +32,8 @@ The only successful numbers below are from a small TreeDB custom smoke
 | --- | --- | --- | --- |
 | TreeDB exact FP32 | `Performance1536D50K`, COSINE, `k=10`, concurrency `1,8,32`, `30s`, `m=16`, `efConstruction=128`, `efSearch=128`, `command_wal_durable` | Exact row hit VDBBench's `3600s` load timeout. | No. |
 | TreeDB scalar_u8 rerank32 | Same case, `quantized_rerank_candidates=32` | Intentionally stopped after the exact row timed out. | No. |
-| pgvector HNSW | Same case and HNSW parameters through PostgreSQL/pgvector | Setup/dry-run passed; full load failed with `pg_wal/xlogtemp.156`: no space left on device. | No. |
+| pgvector HNSW | Same case and HNSW parameters through PostgreSQL/pgvector | Docker setup/dry-run passed; full Docker load failed with `pg_wal/xlogtemp.156`: no space left on device. | No. |
+| pgvector HNSW local custom smoke | `PerformanceCustomDataset`, `512 x 1536`, COSINE, `k=10`, concurrency `1,8`, `10s`, local PostgreSQL/pgvector | Completed with result label `:)`. | Smoke-only; not a full comparative row. |
 | Qdrant/server comparators | Optional after pgvector | Not run. | No. |
 | RaBitQ | Optional experimental TreeDB lane | Not run in this campaign. RaBitQ remains experimental-only. | No. |
 
@@ -272,6 +274,29 @@ are invalid as comparator evidence. Valid evidence from this artifact is limited
 to startup/version/health logs, VDBBench dry-run/full command shape, and the
 exact storage blocker.
 
+### Local pgvector custom smoke: functional only, not claim-quality
+
+Artifact root:
+
+- `/tmp/treedb_vdbbench_2601_pgvector_local_custom_20260611_014219`
+- marker: `/tmp/treedb_vdbbench_2601_pgvector_local_custom_20260611_014219/LOCAL_CUSTOM_SMOKE.md`
+- result summary: `/tmp/treedb_vdbbench_2601_pgvector_local_custom_20260611_014219/result_summary.json`
+- result JSON: `/tmp/treedb_vdbbench_2601_pgvector_local_custom_20260611_014219/vdbbench-results/PgVector/result_20260611_pgvector-hnsw-2601-local-custom_pgvector.json`
+
+This run used local Homebrew PostgreSQL `18.4` plus pgvector `0.8.2` on loopback
+instead of Docker, with the same custom `512 x 1536` dataset used by the #2600
+TreeDB custom smoke. It completed successfully and is useful as small server
+comparator setup proof only.
+
+| row | load_s | insert_s | optimize_s | recall | NDCG | serial p95_s | serial p99_s | conc | QPS | conc p95_s | conc p99_s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pgvector HNSW local custom | 2.0156 | 0.8104 | 1.2052 | 1.0 | 1.0 | 0.0018 | 0.0051 | 1 | 990.2530 | 0.001065 | 0.001239 |
+| pgvector HNSW local custom | 2.0156 | 0.8104 | 1.2052 | 1.0 | 1.0 | 0.0018 | 0.0051 | 8 | 4608.7741 | 0.002742 | 0.005455 |
+
+Do not compare this smoke row against full TreeDB `Performance1536D50K` rows,
+because those full TreeDB rows did not complete in #2600. It also does not
+replace the requested full `Performance1536D50K` pgvector comparator row.
+
 ## What this campaign proves vs. does not prove
 
 Proved:
@@ -282,13 +307,15 @@ Proved:
   custom dataset and can prove vector-index/no-document routes.
 - pgvector HNSW setup can start locally and VDBBench can resolve the intended
   `pgvectorhnsw` command in dry-run mode.
+- Local PostgreSQL/pgvector can complete a bounded `512 x 1536` custom
+  VDBBench smoke row.
 
 Not proved:
 
 - No full TreeDB `Performance1536D50K` exact or scalar_u8 baseline row exists.
-- No pgvector comparator row exists.
+- No full `Performance1536D50K` pgvector comparator row exists.
 - No TreeDB-vs-pgvector, TreeDB-vs-Qdrant, TreeDB-vs-USearch, or TreeDB-vs-RaBitQ
-  comparative performance claim is supported by this campaign.
+  full-matrix comparative performance claim is supported by this campaign.
 - No native Go allocation or per-operation benchmark conclusion follows from
   any VDBBench artifact here.
 
