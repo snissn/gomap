@@ -464,6 +464,9 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	if err != nil {
 		return BenchmarkVectorSearchResponse{}, err
 	}
+	if err := validateBenchmarkVectorSearchRequestShape(queryMode, req); err != nil {
+		return BenchmarkVectorSearchResponse{}, err
+	}
 	var buffer collections.VectorIndexSearchBuffer
 	search, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
 		IndexName:                 vectorIndexName,
@@ -1079,6 +1082,29 @@ func benchmarkVectorSearchResults(results []collections.VectorIndexSearchResult)
 		out[i] = BenchmarkVectorSearchResult{ID: string(result.ID), Ordinal: result.Ordinal, Score: result.Score}
 	}
 	return out
+}
+
+func validateBenchmarkVectorSearchRequestShape(mode BenchmarkVectorQueryMode, req BenchmarkVectorSearchRequest) error {
+	switch mode {
+	case BenchmarkVectorQueryModeExact:
+		if req.QuantizedIndexName != "" || req.QuantizedRerankCandidates != 0 {
+			return serviceError(CodeInvalidRequest, "exact benchmark vector search does not accept quantized_index_name or quantized_rerank_candidates")
+		}
+	case BenchmarkVectorQueryModeQuantizedOnly:
+		if req.QuantizedIndexName == "" {
+			return serviceError(CodeInvalidRequest, "quantized_only benchmark vector search requires quantized_index_name")
+		}
+		if req.QuantizedRerankCandidates != 0 {
+			return serviceError(CodeInvalidRequest, "quantized_only benchmark vector search does not accept quantized_rerank_candidates")
+		}
+	case BenchmarkVectorQueryModeQuantizedRerank:
+		if req.QuantizedIndexName == "" {
+			return serviceError(CodeInvalidRequest, "quantized_rerank benchmark vector search requires quantized_index_name")
+		}
+	default:
+		return serviceErrorf(CodeInvalidRequest, "unsupported benchmark vector query_mode %q", mode)
+	}
+	return nil
 }
 
 func validateBenchmarkVectorSearchRoute(mode BenchmarkVectorQueryMode, req BenchmarkVectorSearchRequest, response collections.VectorIndexSearchResponse) error {
