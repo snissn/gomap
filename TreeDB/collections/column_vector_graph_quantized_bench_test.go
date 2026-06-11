@@ -675,7 +675,7 @@ func BenchmarkCollectionVectorQuantizedProductionGate2591(b *testing.B) {
 				}
 				runColumnGraphQuantizedProductionSearchWithBuffer2591(b, fixture, opts, tc.concurrency, exactSets, func(tb testing.TB, stats VectorIndexSearchStats, opts VectorIndexSearcherSearchOptions) {
 					assertColumnGraphScalarU8QuantizedSearchWithBufferGuardrails2414(tb, stats, opts, fixture.definition.Dimensions)
-				}, "scalar_u8_row")
+				}, "scalar_u8_row", nil)
 			})
 		}
 		for _, tc := range columnGraphScalarU8QuantizedCollectionWithBufferBenchCases2415() {
@@ -717,7 +717,7 @@ func BenchmarkCollectionVectorQuantizedProductionGate2591(b *testing.B) {
 				}
 				runColumnGraphQuantizedProductionSearchWithBuffer2591(b, fixture, opts, tc.concurrency, exactSets, func(tb testing.TB, stats VectorIndexSearchStats, opts VectorIndexSearcherSearchOptions) {
 					assertColumnGraphRabitQQuantizedSearchWithBufferGuardrails2451(tb, stats, opts, fixture.definition.Dimensions, fixture.quantizedCodeBytesPerVector)
-				}, "rabitq_1bit_row")
+				}, "rabitq_1bit_row", hotProfile)
 			})
 		}
 		for _, tc := range columnGraphRabitQQuantizedCollectionWithBufferBenchCases2452() {
@@ -780,7 +780,7 @@ func runColumnGraphQuantizedProductionExactSearchWithBuffer2591(b *testing.B, fi
 	runColumnGraphQuantizedProductionSearchWithBufferLoop2591(b, fixture, workers, baseOpts, queries, exactSets, warmRecall, "exact_fp32_row", nil)
 }
 
-func runColumnGraphQuantizedProductionSearchWithBuffer2591(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearcherSearchOptions, concurrency int, exactSets []columnGraphScalarU8QuantizedBenchmarkExactSet1926, assertStats func(testing.TB, VectorIndexSearchStats, VectorIndexSearcherSearchOptions), rowMetric string) {
+func runColumnGraphQuantizedProductionSearchWithBuffer2591(b *testing.B, fixture columnGraphScalarU8QuantizedBenchFixture1926, opts VectorIndexSearcherSearchOptions, concurrency int, exactSets []columnGraphScalarU8QuantizedBenchmarkExactSet1926, assertStats func(testing.TB, VectorIndexSearchStats, VectorIndexSearcherSearchOptions), rowMetric string, hotProfile *columnGraphQuantizedSearchLoopProfileHook2541) {
 	b.Helper()
 	if concurrency <= 0 {
 		b.Fatalf("concurrency=%d must be positive", concurrency)
@@ -806,7 +806,7 @@ func runColumnGraphQuantizedProductionSearchWithBuffer2591(b *testing.B, fixture
 		assertStats(b, warm.Stats, warmOpts)
 	}
 	warmRecall := columnGraphQuantizedProductionWarmRecallSearchWithBuffer2591(b, workers[0].searcher, &workers[0].buffer, opts, queries, exactSets, assertStats)
-	runColumnGraphQuantizedProductionSearchWithBufferLoop2591(b, fixture, workers, opts, queries, exactSets, warmRecall, rowMetric, nil)
+	runColumnGraphQuantizedProductionSearchWithBufferLoop2591(b, fixture, workers, opts, queries, exactSets, warmRecall, rowMetric, hotProfile)
 }
 
 func columnGraphQuantizedProductionWarmRecallSearchWithBuffer2591(b *testing.B, searcher *VectorIndexSearcher, buffer *VectorIndexSearchBuffer, opts VectorIndexSearcherSearchOptions, queries [][]float32, exactSets []columnGraphScalarU8QuantizedBenchmarkExactSet1926, assertStats func(testing.TB, VectorIndexSearchStats, VectorIndexSearcherSearchOptions)) float64 {
