@@ -35,6 +35,9 @@ EF_SEARCH=${EF_SEARCH:-128}
 DB_LABEL=${DB_LABEL:-pgvector-hnsw-2601-${stamp}}
 TASK_LABEL=${TASK_LABEL:-$DB_LABEL}
 VDBBENCH_TIMEOUT=${VDBBENCH_TIMEOUT:-36000}
+# Optional additional VectorDBBench CLI args, parsed with Python shlex so
+# custom-case runs can pass quoted descriptions without changing this script.
+VDBBENCH_EXTRA_ARGS=${VDBBENCH_EXTRA_ARGS:-}
 
 if [[ -z "$VECTORDBBENCH_DIR" ]]; then
   echo "VECTORDBBENCH_DIR is required (path to snissn/vectordbbench checkout)" >&2
@@ -210,6 +213,7 @@ PY
   echo "ef_construction=$EF_CONSTRUCTION"
   echo "ef_search=$EF_SEARCH"
   echo "run_full=$RUN_FULL"
+  echo "vdbbench_extra_args=$VDBBENCH_EXTRA_ARGS"
 } > "$OUT/context.txt"
 
 docker image inspect "$IMAGE" > "$OUT/pgvector_image_inspect.json" 2>&1 || true
@@ -273,6 +277,17 @@ docker exec "$CONTAINER_NAME" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_E
 docker exec "$CONTAINER_NAME" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "select version(); select extname || '=' || extversion from pg_extension where extname='vector'; show shared_buffers; show maintenance_work_mem; show max_parallel_workers;" > "$OUT/pgvector_versions.txt" 2> "$OUT/pgvector_versions.stderr.txt"
 docker logs "$CONTAINER_NAME" > "$OUT/logs/pgvector_container_before_vdbbench.log" 2>&1 || true
 
+extra_args=()
+if [[ -n "$VDBBENCH_EXTRA_ARGS" ]]; then
+  mapfile -t extra_args < <(python3 - "$VDBBENCH_EXTRA_ARGS" <<'PY'
+import shlex
+import sys
+for arg in shlex.split(sys.argv[1]):
+    print(arg)
+PY
+)
+fi
+
 common_cmd=(
   uv run --no-sync
   --with click --with pydantic --with pyyaml --with environs
@@ -295,6 +310,7 @@ common_cmd=(
   --concurrency-duration "$CONCURRENCY_DURATION"
   --db-label "$DB_LABEL"
   --task-label "$TASK_LABEL"
+  "${extra_args[@]}"
 )
 export PYTHONPATH="$VECTORDBBENCH_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export RESULTS_LOCAL_DIR="$OUT/vdbbench-results"
