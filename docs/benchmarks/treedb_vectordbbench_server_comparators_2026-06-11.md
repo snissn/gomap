@@ -1,7 +1,7 @@
 # TreeDB VectorDBBench Server Comparator Setup (2026-06-11)
 
-Issue: `snissn/gomap#2601`. Parent tracker: `#2598`. Stacked on
-`snissn/gomap#2605` / `snissn/2599-manager`.
+Issue: `snissn/gomap#2601`. Parent tracker: `#2598`. Built on the
+merged `snissn/gomap#2605` harness (`7f66890467f96e7460ed6eeec29fdee81e61acac`).
 
 This note is a **setup/runbook and abort record**, not a comparator result
 report. No pgvector/Qdrant latency, QPS, recall, load, or index-build number in
