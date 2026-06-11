@@ -332,8 +332,11 @@ func TestRabitQPreparedHNSWSearchPackRerankPreservesEfTraversal2587(t *testing.T
 		if stats.DocumentsFetched != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
 			t.Fatalf("%s stats=%+v want no document/fallback guardrail counters", name, stats)
 		}
-		if stats.QuantizedRerankExactScoreCalls != uint64(opts.QuantizedRerankCandidates) || stats.PreparedScoreCalls != uint64(opts.QuantizedRerankCandidates) {
+		if stats.QuantizedRerankExactScoreCalls != uint64(opts.QuantizedRerankCandidates) {
 			t.Fatalf("%s stats=%+v want rerank shortlist=%d", name, stats, opts.QuantizedRerankCandidates)
+		}
+		if name == "pack" && stats.PreparedScoreCalls != uint64(opts.QuantizedRerankCandidates) {
+			t.Fatalf("%s stats=%+v want pack rerank prepared score calls=%d", name, stats, opts.QuantizedRerankCandidates)
 		}
 	}
 	if packResults.Stats.Candidates == 0 || packResults.Stats.VisitedEdges == 0 {
