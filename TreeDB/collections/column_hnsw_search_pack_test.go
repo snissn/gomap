@@ -1,8 +1,10 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -594,6 +596,136 @@ func TestColumnHNSWSearchPackRouteMatchesColumnGraph2315(t *testing.T) {
 		t.Fatalf("pack route stats=%+v", packResponse.Stats)
 	}
 	assertColumnHNSWSearchPackMatchesColumnGraphRoute2315(t, searcher, opts, packResponse)
+}
+
+func TestColumnHNSWPreparedTraversalScorePlaneSeam2585(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	if searcher.reader == nil || searcher.reader.hnswSearchPack == nil {
+		t.Fatal("searcher missing hnsw_search_pack_v1 prepared view")
+	}
+	pack := searcher.reader.hnswSearchPack
+	query := []float32{1, 0.05, 0}
+	nativeOpts := columnVectorGraphNativeSearchOptions{TopK: 3, EfSearch: len(rows), StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics, QueryMode: columnVectorGraphNativeSearchQueryModeExact}
+	var packScratch columnVectorGraphNativeSearchScratch
+	packResults, packStats, err := pack.searchCosine(query, nativeOpts, &packScratch)
+	if err != nil {
+		t.Fatalf("pack searchCosine exact: %v", err)
+	}
+	var exactScratch columnVectorGraphNativeSearchScratch
+	exactPlane := &columnHNSWPreparedExactFP32ScorePlane{}
+	exactResults, exactStats, err := pack.searchCosinePreparedScorePlane(query, columnHNSWPreparedTraversalOptions{TopK: 3, EfSearch: len(rows), StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &exactScratch, exactPlane)
+	if err != nil {
+		t.Fatalf("prepared traversal exact score plane: %v", err)
+	}
+	assertColumnHNSWPreparedTraversalResultsMatch2585(t, exactResults, packResults)
+	if exactPlane.kind() != columnHNSWPreparedTraversalScorePlaneKindExactFP32 || exactStats.PreparedScoreCalls == 0 || exactStats.QuantizedScoreCalls != 0 || exactStats.Candidates != packStats.Candidates || exactStats.VisitedEdges != packStats.VisitedEdges {
+		t.Fatalf("exact seam stats=%+v pack=%+v kind=%s", exactStats, packStats, exactPlane.kind())
+	}
+
+	var quantizedScratch columnVectorGraphNativeSearchScratch
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		t.Fatalf("columnVectorGraphInvNorm query: %v", err)
+	}
+	scorer, err := searcher.reader.prepareQuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, &quantizedScratch)
+	if err != nil {
+		t.Fatalf("prepareQuantizedScorer: %v", err)
+	}
+	quantizedPlane := &columnHNSWPreparedQuantizedScorePlane{scorer: &scorer}
+	quantizedResults, quantizedStats, err := pack.searchCosinePreparedScorePlane(query, columnHNSWPreparedTraversalOptions{TopK: 3, EfSearch: len(rows), StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &quantizedScratch, quantizedPlane)
+	if err != nil {
+		t.Fatalf("prepared traversal quantized score plane: %v", err)
+	}
+	if len(quantizedResults) != 3 {
+		t.Fatalf("quantized seam results=%d want 3: %+v", len(quantizedResults), quantizedResults)
+	}
+	if quantizedPlane.kind() != columnHNSWPreparedTraversalScorePlaneKindQuantized || quantizedStats.QuantizedScoreCalls == 0 || quantizedStats.PreparedScoreCalls != 0 || quantizedStats.VectorBytesRead != 0 || quantizedStats.NormBytesRead != 0 || quantizedStats.GraphRowFallbacks != 0 {
+		t.Fatalf("quantized seam stats=%+v kind=%s want explicit quantized scoring without exact fallback", quantizedStats, quantizedPlane.kind())
+	}
+	if _, _, err := pack.searchCosinePreparedScorePlane(query, columnHNSWPreparedTraversalOptions{TopK: 1, EfSearch: len(rows)}, &columnVectorGraphNativeSearchScratch{}, nil); !errors.Is(err, errColumnHNSWPreparedTraversalScorePlaneUnavailable) {
+		t.Fatalf("nil score plane err=%v want explicit score-plane failure", err)
+	}
+}
+
+func TestColumnHNSWSearchPackExactRouteAndQuantizedFailClosed2585(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	query := []float32{1, 0, 0}
+	var buffer VectorIndexSearchBuffer
+	exact, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeExact, TopK: 2, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil {
+		t.Fatalf("exact SearchWithBuffer: %v", err)
+	}
+	if exact.Stats.RouteKind() != VectorIndexSearchRouteExactHNSWSearchPackV1 || exact.Stats.SearchRouteHNSWSearchPack != 1 || exact.Stats.HNSWSearchPackActive != 1 || exact.Stats.SearchRouteQuantizedOnly+exact.Stats.SearchRouteQuantizedRerank != 0 || exact.Stats.QuantizedScorerActive != 0 {
+		t.Fatalf("exact route stats=%+v want unchanged hnsw_search_pack_v1 route", exact.Stats)
+	}
+	quantizedOpts := VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: def.QuantizedIndexes[0].Name, TopK: 2, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}
+	quantized, err := searcher.SearchWithBuffer(quantizedOpts, &buffer)
+	if err != nil {
+		t.Fatalf("quantized SearchWithBuffer: %v", err)
+	}
+	assertQuantizedOnlyGuardrailStats2416(t, quantized.Stats, def.Dimensions)
+
+	if searcher.reader == nil || searcher.reader.quantizedAssetStatus == nil {
+		t.Fatal("searcher missing quantized asset status")
+	}
+	qName := def.QuantizedIndexes[0].Name
+	originalStatus := searcher.reader.quantizedAssetStatus[qName]
+	delete(searcher.reader.quantizedAssetStatus, qName)
+	missingOnly, onlyErr := searcher.SearchWithBuffer(quantizedOpts, &buffer)
+	rerankOpts := VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: qName, QuantizedRerankCandidates: 2, TopK: 2, EfSearch: len(rows), StatsMode: VectorIndexSearchStatsModeProduction}
+	missingRerank, rerankErr := searcher.SearchWithBuffer(rerankOpts, &buffer)
+	searcher.reader.quantizedAssetStatus[qName] = originalStatus
+	if !errors.Is(onlyErr, ErrVectorIndexSearchUnavailable) || len(missingOnly.Results) != 0 {
+		t.Fatalf("missing quantized_only asset response=%+v err=%v want fail-closed unavailable", missingOnly, onlyErr)
+	}
+	assertQuantizedUnavailableGuardrailStats2416(t, missingOnly.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, columnVectorGraphQuantizedAssetHealthMissing)
+	if !errors.Is(rerankErr, ErrVectorIndexSearchUnavailable) || len(missingRerank.Results) != 0 {
+		t.Fatalf("missing quantized_rerank asset response=%+v err=%v want fail-closed unavailable", missingRerank, rerankErr)
+	}
+	assertQuantizedUnavailableGuardrailStats2416(t, missingRerank.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, columnVectorGraphQuantizedAssetHealthMissing)
+}
+
+func assertColumnHNSWPreparedTraversalResultsMatch2585(tb testing.TB, got, want []columnVectorGraphNativeSearchResult) {
+	tb.Helper()
+	if len(got) != len(want) {
+		tb.Fatalf("results=%d want %d got=%+v want=%+v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i].Ordinal != want[i].Ordinal || !bytes.Equal(got[i].ID, want[i].ID) || math.Abs(got[i].Score-want[i].Score) > 1e-6 {
+			tb.Fatalf("result[%d]=%+v want %+v", i, got[i], want[i])
+		}
+	}
 }
 
 func TestColumnHNSWSearchPackMissingAndStaleFallbackSearchWithBuffer2315(t *testing.T) {
