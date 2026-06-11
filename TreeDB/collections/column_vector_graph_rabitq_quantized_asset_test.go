@@ -336,6 +336,9 @@ func TestRabitQPreparedHNSWSearchPackRerankPreservesEfTraversal2587(t *testing.T
 			t.Fatalf("%s stats=%+v want rerank shortlist=%d", name, stats, opts.QuantizedRerankCandidates)
 		}
 	}
+	if packResults.Stats.Candidates == 0 || packResults.Stats.VisitedEdges == 0 {
+		t.Fatalf("pack stats=%+v want production traversal counters", packResults.Stats)
+	}
 	if packResults.Stats.Candidates != fallbackResults.Stats.Candidates || packResults.Stats.VisitedEdges != fallbackResults.Stats.VisitedEdges || packResults.Stats.QuantizedScoreCalls != fallbackResults.Stats.QuantizedScoreCalls || packResults.Stats.QuantizedRerankExactScoreCalls != fallbackResults.Stats.QuantizedRerankExactScoreCalls {
 		t.Fatalf("pack stats=%+v fallback stats=%+v want same efSearch traversal and rerank counters", packResults.Stats, fallbackResults.Stats)
 	}
