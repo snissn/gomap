@@ -15,7 +15,9 @@ these artifacts is public-claim quality.
   shape.
 - The first full pgvector attempt was aborted because it overlapped with the
   #2600 TreeDB-only full baseline. Treat that artifact as contention-tainted.
-- Wait for a no-concurrent-benchmark window before running a full comparator.
+- A later no-concurrent full pgvector attempt reached VDBBench but failed during
+  PostgreSQL insert with `pg_wal/xlogtemp.*: No space left on device`; no
+  comparator row is captured yet.
 
 ## Artifact roots
 
@@ -23,6 +25,7 @@ these artifacts is public-claim quality.
 | --- | --- | --- |
 | `/tmp/treedb_vdbbench_2601_pgvector_20260610_223212` | aborted/contention-tainted | Setup, versions, health, dry-run, and abort logs only. Do not report benchmark metrics. |
 | `/tmp/treedb_vdbbench_2601_pgvector_setup_script_20260610_225302` | setup smoke | Script validation: container health + VDBBench dry-run, no full benchmark. |
+| `/tmp/treedb_vdbbench_2601_pgvector_full_20260610_234701` | failed/no-space | Attempted full pgvector row; load failed with PostgreSQL `pg_wal` no-space error. Do not report metrics. |
 
 Key aborted-artifact marker:
 
@@ -69,14 +72,24 @@ process is visible unless `ALLOW_CONCURRENT_BENCHMARKS=true` is explicitly set.
 It records Docker/image/version context, health checks, VDBBench command output,
 results, and container logs under `OUT`.
 
-## Aborted full attempt caveat
+## Failed/aborted full-attempt caveats
 
 The aborted artifact loaded 50K vectors and began pgvector HNSW index creation,
 but the coordinator terminated it to avoid overlap with #2600. VDBBench then
 wrote a failed result JSON with zero metrics and `label = x`. That JSON is
 retained only as abort evidence.
 
-Do not compare it against TreeDB, Qdrant, USearch, Faiss, or any other lane.
+The later no-concurrent full attempt failed during pgvector load with:
+
+```text
+could not write to file "pg_wal/xlogtemp.156": No space left on device
+```
+
+It also wrote a failed result JSON with `label = x` and zero metrics. The
+artifact is useful for setup/blocker evidence only.
+
+Do not compare either failed artifact against TreeDB, Qdrant, USearch, Faiss,
+or any other lane.
 
 ## Next comparator
 

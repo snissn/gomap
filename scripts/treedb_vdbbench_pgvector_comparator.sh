@@ -148,6 +148,43 @@ run_logged() {
   return "$rc"
 }
 
+validate_full_result() {
+  python3 - "$OUT" <<'PY'
+import json
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+out = Path(sys.argv[1])
+results = sorted((out / 'vdbbench-results' / 'PgVector').glob('result_*_pgvector.json'))
+if not results:
+    status = 'failed_missing_result_json'
+    reason = 'VDBBench command completed without a PgVector result JSON'
+else:
+    data = json.loads(results[-1].read_text())
+    failed = [item for item in data.get('results', []) if item.get('label') != ':)']
+    if not failed:
+        sys.exit(0)
+    first = failed[0]
+    metrics = first.get('metrics') or {}
+    status = 'failed_vdbbench_case'
+    reason = (
+        f"VDBBench result label={first.get('label')!r}; "
+        f"max_load_count={metrics.get('max_load_count')} qps={metrics.get('qps')}"
+    )
+manifest = {
+    'schema_version': 'treedb-vdbbench-pgvector-comparator/v1',
+    'status': status,
+    'reason': reason,
+    'generated_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
+    'artifact_root': str(out),
+    'claim_quality': 'none; failed VDBBench cases are not comparator evidence',
+}
+(out / 'status_manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+print(reason, file=sys.stderr)
+sys.exit(1)
+PY
+}
+
 {
   echo "artifact_root=$OUT"
   echo "generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -283,6 +320,7 @@ assert_no_other_vdbbench
 
 docker logs "$CONTAINER_NAME" > "$OUT/logs/pgvector_container_after_vdbbench.log" 2>&1 || true
 docker exec "$CONTAINER_NAME" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from vdbbench_table_test; select pg_size_pretty(pg_total_relation_size('vdbbench_table_test')); select pg_size_pretty(pg_indexes_size('vdbbench_table_test'));" > "$OUT/pgvector_postrun_table_stats.txt" 2> "$OUT/pgvector_postrun_table_stats.stderr.txt" || true
+validate_full_result
 write_status complete "full pgvectorhnsw VDBBench run completed"
 echo "artifact_root=$OUT"
 echo "status=complete"
