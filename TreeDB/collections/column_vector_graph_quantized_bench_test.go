@@ -1796,6 +1796,9 @@ func assertColumnGraphRabitQQuantizedSearchWithBufferGuardrails2451(tb testing.T
 		if stats.SearchRouteQuantizedOnly != 1 || stats.SearchRouteQuantizedRerank != 0 || stats.QuantizedScorerActive != 1 {
 			tb.Fatalf("rabitq quantized_only route stats=%+v", stats)
 		}
+		if stats.SearchRouteHNSWSearchPack != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || stats.SearchRouteColumnGraphPrepared != 0 || stats.SearchRouteColumnGraphFallback != 0 {
+			tb.Fatalf("rabitq quantized_only route stats=%+v want prepared hnsw_search_pack_v1 score-plane traversal", stats)
+		}
 		if stats.PreparedScoreCalls != 0 || stats.QuantizedRerankExactScoreCalls != 0 || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 {
 			tb.Fatalf("rabitq quantized_only exact stats=%+v want none", stats)
 		}
@@ -1803,11 +1806,14 @@ func assertColumnGraphRabitQQuantizedSearchWithBufferGuardrails2451(tb testing.T
 		if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 || stats.QuantizedScorerActive != 1 {
 			tb.Fatalf("rabitq quantized_rerank route stats=%+v", stats)
 		}
+		if stats.SearchRouteHNSWSearchPack != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || stats.SearchRouteColumnGraphPrepared != 0 || stats.SearchRouteColumnGraphFallback != 0 {
+			tb.Fatalf("rabitq quantized_rerank route stats=%+v want prepared hnsw_search_pack_v1 score-plane traversal", stats)
+		}
 		if stats.QuantizedRerankCandidates != uint64(opts.QuantizedRerankCandidates) || stats.QuantizedRerankExactScoreCalls != uint64(opts.QuantizedRerankCandidates) {
 			tb.Fatalf("rabitq quantized_rerank stats=%+v want shortlist=%d", stats, opts.QuantizedRerankCandidates)
 		}
-		if stats.VectorBytesRead != uint64(opts.QuantizedRerankCandidates*dims*4) || stats.NormBytesRead != uint64(opts.QuantizedRerankCandidates*4) {
-			tb.Fatalf("rabitq quantized_rerank exact bytes stats=%+v want vector=%d norm=%d", stats, opts.QuantizedRerankCandidates*dims*4, opts.QuantizedRerankCandidates*4)
+		if stats.VectorBytesRead != uint64(opts.QuantizedRerankCandidates*dims*4) || stats.NormBytesRead != 0 {
+			tb.Fatalf("rabitq quantized_rerank exact bytes stats=%+v want prepared-pack vector=%d norm=0", stats, opts.QuantizedRerankCandidates*dims*4)
 		}
 	default:
 		tb.Fatalf("unexpected rabitq SearchWithBuffer benchmark query mode %q", opts.QueryMode)

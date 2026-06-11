@@ -12,6 +12,9 @@ accepted benchmark boundaries are summarized in
 RaBitQ performance-lane closeout for the #2477 semantics-preserving query
 byte-table scorer, no-promote decisions, and later Sublane B outcome is in
 [`rabitq-performance-lane-closeout-2482.md`](rabitq-performance-lane-closeout-2482.md).
+The #2584/#2588 prepared HNSW fast-path closeout for `scalar_u8` and
+`rabitq_1bit` route promotion, exact FP32 guardrails, and 10k x 768 evidence is
+in [`quantized-prepared-hnsw-closeout-2588.md`](quantized-prepared-hnsw-closeout-2588.md).
 
 ## User-visible query modes
 
@@ -33,9 +36,12 @@ Search uses an explicit mode:
 Non-zero values must be at least `TopK`. Returned `quantized_rerank` results are
 ranked by exact cosine over the trimmed quantized candidate set; they are not a
 silent full-exact search. Quantized route counters identify the selected query
-mode and may be reported alongside the `column_graph` prepared physical route;
-`hnsw_search_pack_v1` route/active/fallback counters remain zero for quantized
-search. No-document buffered serving is available through both lower-level
+mode and may be reported alongside a codec-specific physical route: `scalar_u8`
+currently reports the `column_graph` prepared physical route, while
+`rabitq_1bit` reports `search_route_hnsw_search_pack/search=1` when its score
+plane uses prepared `hnsw_search_pack_v1` traversal. This RaBitQ pack traversal
+is still a quantized route and must not be relabeled as exact FP32 search.
+No-document buffered serving is available through both lower-level
 `VectorIndexSearcher.SearchWithBuffer` and collection-level
 `Collection.SearchVectorIndexWithBuffer` when `QueryMode` and
 `QuantizedIndexName` select an explicit quantized mode; document materialization,

@@ -125,6 +125,11 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #2483 final vector-search docs closeout index for accepted exact FP32,
     scalar_u8, RaBitQ, and BRQ evidence, #2487 snapshot rows, no-promote
     caveats, and #2494 crossover-pending status.
+- `TreeDB/docs/spec/quantized-prepared-hnsw-closeout-2588.md`
+  - issue #2588 closeout for the #2584 prepared HNSW quantized fast-path stack,
+    including #2591 10k x 768 gate rows, exact FP32 guardrails, promoted
+    `scalar_u8` prepared traversal, and promoted `rabitq_1bit` prepared pack
+    traversal evidence.
 - `TreeDB/docs/spec/rabitq-1bit-v1.md`
   - issue #2449/#2451/#2452 `rabitq_1bit` v1 codec identity, packed-bit
     storage shape, deterministic reference rotation, pure-Go query/scoring APIs,
