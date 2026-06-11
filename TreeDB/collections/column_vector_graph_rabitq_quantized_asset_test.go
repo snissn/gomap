@@ -317,7 +317,7 @@ func TestRabitQPreparedHNSWSearchPackRerankPreservesEfTraversal2587(t *testing.T
 		QuantizedRerankCandidates: 4,
 		TopK:                      3,
 		EfSearch:                  len(rows),
-		StatsMode:                 VectorIndexSearchStatsModeProduction,
+		StatsMode:                 VectorIndexSearchStatsModeFullDiagnostics,
 	}
 	var packBuffer, fallbackBuffer VectorIndexSearchBuffer
 	packResults, err := packSearcher.SearchWithBuffer(opts, &packBuffer)
@@ -335,6 +335,9 @@ func TestRabitQPreparedHNSWSearchPackRerankPreservesEfTraversal2587(t *testing.T
 		if stats.QuantizedRerankExactScoreCalls != uint64(opts.QuantizedRerankCandidates) || stats.PreparedScoreCalls != uint64(opts.QuantizedRerankCandidates) {
 			t.Fatalf("%s stats=%+v want rerank shortlist=%d", name, stats, opts.QuantizedRerankCandidates)
 		}
+	}
+	if packResults.Stats.Candidates == 0 || packResults.Stats.VisitedEdges == 0 {
+		t.Fatalf("pack stats=%+v want production traversal counters", packResults.Stats)
 	}
 	if packResults.Stats.Candidates != fallbackResults.Stats.Candidates || packResults.Stats.VisitedEdges != fallbackResults.Stats.VisitedEdges || packResults.Stats.QuantizedScoreCalls != fallbackResults.Stats.QuantizedScoreCalls || packResults.Stats.QuantizedRerankExactScoreCalls != fallbackResults.Stats.QuantizedRerankExactScoreCalls {
 		t.Fatalf("pack stats=%+v fallback stats=%+v want same efSearch traversal and rerank counters", packResults.Stats, fallbackResults.Stats)
