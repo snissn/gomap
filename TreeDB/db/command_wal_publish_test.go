@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -46,6 +47,167 @@ func TestCommandWALAppliedCommandLSNMetaFieldRoundTrip(t *testing.T) {
 	defer reopen.Close()
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("reopen AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCommandWALAppliedLSNOnlyPublishPreservesValueLogRefTracker(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                    dir,
+		DisableBackgroundPrune: true,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 10_000, 4, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i)}, 4096)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	for i := range ptrs {
+		if err := b.SetPointer([]byte(fmt.Sprintf("k%d", i)), ptrs[i]); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	beforeSeq := db.currentCommitSeq()
+	beforeRefs, ok := db.valueLogRefTracker.referencedSet(beforeSeq)
+	if !ok {
+		t.Fatalf("expected ref tracker valid before applied-LSN publish at seq=%d", beforeSeq)
+	}
+	if len(beforeRefs) == 0 {
+		t.Fatalf("expected value-log refs before applied-LSN publish")
+	}
+
+	state := db.State()
+	if state == nil {
+		t.Fatal("missing state")
+	}
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, state.AppliedCommandLSN+1, []CommandWALLSNRange{{First: state.AppliedCommandLSN + 1, Last: state.AppliedCommandLSN + 1}}, false); err != nil {
+		t.Fatalf("publish applied LSN only: %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if afterSeq != beforeSeq+1 {
+		t.Fatalf("commit seq after applied-LSN publish=%d, want %d", afterSeq, beforeSeq+1)
+	}
+	afterRefs, ok := db.valueLogRefTracker.referencedSet(afterSeq)
+	if !ok {
+		t.Fatalf("expected ref tracker to remain valid after applied-LSN publish at seq=%d", afterSeq)
+	}
+	if !reflect.DeepEqual(afterRefs, beforeRefs) {
+		t.Fatalf("ref tracker changed after applied-LSN publish: before=%v after=%v", beforeRefs, afterRefs)
+	}
+
+	metaPath := db.valueLogRefCountsPath()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read ref-count metadata: %v", err)
+	}
+	disk, err := decodeValueLogRefCounts(data)
+	if err != nil {
+		t.Fatalf("decode ref-count metadata: %v", err)
+	}
+	if disk.commitSeq != afterSeq {
+		t.Fatalf("metadata seq after close=%d, want %d", disk.commitSeq, afterSeq)
+	}
+}
+
+func TestPublishCommandWALNoopPreservesValueLogRefTracker(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 20_000, 4, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('v' + i)}, 4096)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	for i := range ptrs {
+		if err := b.SetPointer([]byte(fmt.Sprintf("k%d", i)), ptrs[i]); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	beforeSeq := db.currentCommitSeq()
+	beforeApplied := db.State().AppliedCommandLSN
+	beforeRefs, ok := db.valueLogRefTracker.referencedSet(beforeSeq)
+	if !ok {
+		t.Fatalf("expected ref tracker valid before command-WAL no-op at seq=%d", beforeSeq)
+	}
+	if len(beforeRefs) == 0 {
+		t.Fatalf("expected value-log refs before command-WAL no-op")
+	}
+
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewTrustedCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewTrustedCommandWALIntent: %v", err)
+	}
+	if err := db.PublishCommandWALNoop(intent, false); err != nil {
+		t.Fatalf("PublishCommandWALNoop: %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if afterSeq != beforeSeq+1 {
+		t.Fatalf("commit seq after command-WAL no-op=%d, want %d", afterSeq, beforeSeq+1)
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeApplied+1 {
+		t.Fatalf("AppliedCommandLSN after command-WAL no-op=%d, want %d", got, beforeApplied+1)
+	}
+	afterRefs, ok := db.valueLogRefTracker.referencedSet(afterSeq)
+	if !ok {
+		t.Fatalf("expected ref tracker to remain valid after command-WAL no-op at seq=%d", afterSeq)
+	}
+	if !reflect.DeepEqual(afterRefs, beforeRefs) {
+		t.Fatalf("ref tracker changed after command-WAL no-op: before=%v after=%v", beforeRefs, afterRefs)
+	}
+
+	metaPath := db.valueLogRefCountsPath()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read ref-count metadata: %v", err)
+	}
+	disk, err := decodeValueLogRefCounts(data)
+	if err != nil {
+		t.Fatalf("decode ref-count metadata: %v", err)
+	}
+	if disk.commitSeq != afterSeq {
+		t.Fatalf("metadata seq after close=%d, want %d", disk.commitSeq, afterSeq)
 	}
 }
 

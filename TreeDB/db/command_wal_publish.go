@@ -34,6 +34,16 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 
+	db.mu.RLock()
+	baseSeq := db.meta.CommitSeq
+	rootsUnchanged := newRootID == db.meta.UserRootPageID && sysRootID == db.meta.SystemRootPageID
+	db.mu.RUnlock()
+
+	var vlogRefDelta *valueLogRefDelta
+	if rootsUnchanged {
+		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+	}
+
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID,
 		sysRootID,
@@ -42,7 +52,7 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 		adaptive.Metrics{},
 		nil,
 		false,
-		nil,
+		vlogRefDelta,
 		nil,
 		nil,
 		finalizeCommitOptions{
@@ -52,6 +62,9 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 		},
 	)
 	if err != nil {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
 		return err
 	}
 	db.finalizeCommitPostWork(post)
