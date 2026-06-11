@@ -617,11 +617,16 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		return err
 	}
 	db.mu.RLock()
+	baseSeq := db.meta.CommitSeq
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, nil, nil, nil, commandWALFinalizeOptionsForPublicIntent(intent))
+	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(intent))
 	if err != nil {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
 		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
 		db.commitMu.Unlock()
 		return err
