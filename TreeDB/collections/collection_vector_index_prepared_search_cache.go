@@ -742,7 +742,11 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 	var results []columnVectorGraphNativeSearchResult
 	var searchStats columnVectorGraphNativeSearchStats
 	var err error
-	if reader.rabitqHNSWSearchPackPreparedRouteEligible(queryMode, opts.QuantizedIndexName, statsMode) {
+	if pack, ok := collectionScalarU8PreparedTraversalPackForReader(reader, queryMode, statsMode, opts.QuantizedIndexName); ok {
+		results, searchStats, err = reader.SearchCosineScalarU8PreparedTraversal(pack, opts.Query, searchOpts, &buffer.searchScratch)
+		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+		p.routeStats.apply(&response.Stats)
+	} else if reader.rabitqHNSWSearchPackPreparedRouteEligible(queryMode, opts.QuantizedIndexName, statsMode) {
 		results, searchStats, err = reader.searchRabitQCosinePreparedHNSWPack(opts.Query, searchOpts, &buffer.searchScratch)
 		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
 		if err != nil && searchStats.QuantizedScorerActive == 0 && searchStats.QuantizedScoreCalls == 0 {
@@ -755,6 +759,7 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
 		p.routeStats.apply(&response.Stats)
 	}
+
 	if err != nil {
 		clear(previousResults)
 		return response, err

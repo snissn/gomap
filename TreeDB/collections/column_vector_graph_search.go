@@ -979,34 +979,33 @@ type columnVectorGraphSearchCandidate struct {
 // It is not concurrency-safe. Parallel searches over immutable graph assets are
 // valid with one reader and one scratch per worker.
 type columnVectorGraphNativeSearchScratch struct {
-	scoreScratch                         columnPhysicalRowReaderScratch
-	expandScratch                        columnPhysicalRowReaderScratch
-	resultScratch                        columnPhysicalRowReaderScratch
-	visitMarks                           []uint64
-	visitEpoch                           uint64
-	frontier                             []columnVectorGraphSearchCandidate
-	top                                  []columnVectorGraphSearchCandidate
-	results                              []columnVectorGraphNativeSearchResult
-	idBuffers                            [][]byte
-	resultIDViews                        [][]byte
-	resultOrder                          []int
-	resultOrdinals                       []int
-	resultRowRefs                        []DocumentRowRef
-	resultHasRefs                        []bool
-	scoreTileOrdinals                    []int
-	scoreTileScores                      []float64
-	scoreTileRowIDs                      []uint32
-	scoreTileDots                        []float32
-	scoreTileQuantizedDots               []int64
-	quantizedQueryCodes                  []byte
-	quantizedQueryCentered               []vectorops.ScalarU8CenteredCode
-	quantizedRabitQWorkspace             rabitq.Workspace
-	quantizedBRQWorkspace                brq.Workspace
-	preparedTraversalQuantizedScorer     columnVectorGraphQuantizedScorer
-	preparedTraversalQuantizedScorePlane columnHNSWPreparedQuantizedScorePlane
-	preparedTraversalStats               columnVectorGraphNativeSearchStats
-	wavefrontCandidates                  []columnVectorGraphSearchCandidate
-	searchPlan                           columnVectorGraphSearchPlan
+	scoreScratch             columnPhysicalRowReaderScratch
+	expandScratch            columnPhysicalRowReaderScratch
+	resultScratch            columnPhysicalRowReaderScratch
+	visitMarks               []uint64
+	visitEpoch               uint64
+	frontier                 []columnVectorGraphSearchCandidate
+	top                      []columnVectorGraphSearchCandidate
+	results                  []columnVectorGraphNativeSearchResult
+	idBuffers                [][]byte
+	resultIDViews            [][]byte
+	resultOrder              []int
+	resultOrdinals           []int
+	resultRowRefs            []DocumentRowRef
+	resultHasRefs            []bool
+	scoreTileOrdinals        []int
+	scoreTileScores          []float64
+	scoreTileRowIDs          []uint32
+	scoreTileDots            []float32
+	scoreTileQuantizedDots   []int64
+	quantizedQueryCodes      []byte
+	quantizedQueryCentered   []vectorops.ScalarU8CenteredCode
+	quantizedRabitQWorkspace rabitq.Workspace
+	quantizedBRQWorkspace    brq.Workspace
+	preparedQuantizedPlane   columnHNSWPreparedQuantizedScorePlane
+	preparedTraversalStats   columnVectorGraphNativeSearchStats
+	wavefrontCandidates      []columnVectorGraphSearchCandidate
+	searchPlan               columnVectorGraphSearchPlan
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth int) error {
@@ -1040,12 +1039,12 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	return nil
 }
 
-func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, vectorStride, degree, topK, efSearch int) error {
+func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, vectorStride, degree, topK, efSearch, ordinalTileCapacity, quantizedDotCapacity int) error {
 	if s == nil {
 		return errColumnVectorGraphNativeSearchScratchRequired
 	}
-	if rowCount < 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 {
-		return fmt.Errorf("collections: hnsw_search_pack_v1 search received negative sizing input: rowCount=%d vectorStride=%d degree=%d topK=%d efSearch=%d", rowCount, vectorStride, degree, topK, efSearch)
+	if rowCount < 0 || vectorStride < 0 || degree < 0 || topK < 0 || efSearch < 0 || ordinalTileCapacity < 0 || quantizedDotCapacity < 0 {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 search received negative sizing input: rowCount=%d vectorStride=%d degree=%d topK=%d efSearch=%d ordinalTileCapacity=%d quantizedDotCapacity=%d", rowCount, vectorStride, degree, topK, efSearch, ordinalTileCapacity, quantizedDotCapacity)
 	}
 	clearColumnVectorGraphNativeRowScratchViews(&s.scoreScratch)
 	clearColumnVectorGraphNativeRowScratchViews(&s.expandScratch)
@@ -1063,8 +1062,8 @@ func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, v
 	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, degree)
 	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, degree)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, 0)
-	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, degree)
-	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, 0)
+	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, ordinalTileCapacity)
+	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, quantizedDotCapacity)
 	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, 0)
 	return nil
 }

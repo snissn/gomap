@@ -75,20 +75,27 @@ func (r *columnVectorGraphPhysicalRowReader) searchRabitQCosinePreparedHNSWPack(
 		recordColumnVectorGraphQuantizedAssetErrorStats(&stats, err)
 		return nil, stats, err
 	}
-	scratch.preparedTraversalQuantizedScorer = columnVectorGraphQuantizedScorer{kind: columnVectorGraphQuantizedScorerKindRabitQ1Bit, rabitq: scorer}
-	scratch.preparedTraversalQuantizedScorePlane.scorer = &scratch.preparedTraversalQuantizedScorer
+	scratch.searchPlan.quantizedScorer = columnVectorGraphQuantizedScorer{kind: columnVectorGraphQuantizedScorerKindRabitQ1Bit, rabitq: scorer}
+	scratch.preparedQuantizedPlane.scorer = &scratch.searchPlan.quantizedScorer
+	traversalStatsMode := opts.StatsMode.normalized()
+	if traversalStatsMode == columnVectorGraphNativeSearchStatsModeMinimal {
+		// Preserve the existing quantized route counter contract in production mode:
+		// candidate/edge counters are part of the quantized traversal evidence even
+		// though exact FP32 pack search can omit them for minimal stats.
+		traversalStatsMode = columnVectorGraphNativeSearchStatsModeFullDiagnostics
+	}
 	traversalOpts := columnHNSWPreparedTraversalOptions{
 		TopK:                      opts.TopK,
 		EfSearch:                  opts.EfSearch,
 		RetainedCandidateLimit:    opts.QuantizedRerankCandidates,
 		ScoreBatchMode:            opts.ScoreBatchMode,
-		StatsMode:                 opts.StatsMode,
+		StatsMode:                 traversalStatsMode,
 		OmitResultMaterialization: opts.OmitResultMaterialization,
 	}
 	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
 		traversalOpts.OmitResultMaterialization = true
 	}
-	results, searchStats, err := pack.searchCosinePreparedScorePlane(query, traversalOpts, scratch, &scratch.preparedTraversalQuantizedScorePlane)
+	results, searchStats, err := pack.searchCosinePreparedScorePlane(query, traversalOpts, scratch, &scratch.preparedQuantizedPlane)
 	applyColumnVectorGraphQuantizedBaseStats(&searchStats, stats)
 	searchStats.QuantizedScorerActive = 1
 	if err != nil {

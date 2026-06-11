@@ -962,6 +962,13 @@ func (s *VectorIndexSearcher) hnswSearchPackSearchWithBufferRoute(queryMode colu
 	return pack, vectorIndexSearchRouteStatsForHNSWSearchPackRoute(cached), true
 }
 
+func (s *VectorIndexSearcher) scalarU8PreparedTraversalSearchWithBufferRoute(queryMode columnVectorGraphNativeSearchQueryMode, statsMode columnVectorGraphNativeSearchStatsMode, quantizedIndexName string) (*columnHNSWSearchPackPreparedView, bool) {
+	if s == nil {
+		return nil, false
+	}
+	return collectionScalarU8PreparedTraversalPackForReader(s.reader, queryMode, statsMode, quantizedIndexName)
+}
+
 func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 	if stats == nil {
 		return
@@ -1815,6 +1822,29 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	pack, routeStats, usePackRoute := s.hnswSearchPackSearchWithBufferRoute(queryMode, statsMode)
 	if usePackRoute {
 		results, searchStats, err := pack.searchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
+			TopK:                      opts.TopK,
+			EfSearch:                  opts.EfSearch,
+			ScoreBatchMode:            opts.scoreBatchMode,
+			StatsMode:                 statsMode,
+			QueryMode:                 queryMode,
+			QuantizedIndexName:        opts.QuantizedIndexName,
+			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
+		}, &s.scratch)
+		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+		routeStats.apply(&response.Stats)
+		if err != nil {
+			clear(previousResults)
+			return response, err
+		}
+		response.Results, err = copyVectorIndexSearchResultsToBuffer(results, buffer, previousResults)
+		if err != nil {
+			return response, err
+		}
+		return response, nil
+	}
+
+	if pack, ok := s.scalarU8PreparedTraversalSearchWithBufferRoute(queryMode, statsMode, opts.QuantizedIndexName); ok {
+		results, searchStats, err := s.reader.SearchCosineScalarU8PreparedTraversal(pack, opts.Query, columnVectorGraphNativeSearchOptions{
 			TopK:                      opts.TopK,
 			EfSearch:                  opts.EfSearch,
 			ScoreBatchMode:            opts.scoreBatchMode,

@@ -148,4 +148,4 @@ does not already show it.
 - Vector-only crossover context: #2490, especially #2492/#2493/#2494. Preserve
   the no-universal-claim/load caveats from those issue comments.
 - User-facing hybrid examples: `TreeDB/docs/guides/hybrid-search.md`.
-- Indexed insertion/search lifecycle rows: `docs/benchmarks/treedb_index_insert_search_benchmarks.md`.
+- Indexed insertion/search lifecycle rows and #2589 optimized allocation closeout evidence: `docs/benchmarks/treedb_index_insert_search_benchmarks.md`.

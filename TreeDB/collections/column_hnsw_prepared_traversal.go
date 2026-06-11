@@ -43,6 +43,10 @@ type columnHNSWPreparedTraversalOptions struct {
 	// result IDs or row refs from the pack. Future quantized rerank callers can use
 	// this to collect an explicit score-plane shortlist before exact reranking.
 	OmitResultMaterialization bool
+	// SuppressOmittedResultMaterialization keeps the retained candidates in
+	// scratch.top for internal rerank callers without also appending ordinal-only
+	// results that the caller will immediately discard.
+	SuppressOmittedResultMaterialization bool
 }
 
 // columnHNSWPreparedTraversalScorePlane is the explicit scoring seam for the
@@ -163,17 +167,16 @@ func (p *columnHNSWPreparedQuantizedScorePlane) scoreOrdinals(ordinals []int, ds
 }
 
 func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query []float32, opts columnHNSWPreparedTraversalOptions, scratch *columnVectorGraphNativeSearchScratch, scorePlane columnHNSWPreparedTraversalScorePlane) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
-	var zeroStats columnVectorGraphNativeSearchStats
 	if v == nil {
-		return nil, zeroStats, errColumnHNSWSearchPackSearchUnavailable
+		return nil, columnVectorGraphNativeSearchStats{}, errColumnHNSWSearchPackSearchUnavailable
 	}
 	switch status := v.fastStatus(""); status {
 	case columnHNSWSearchPackPreparedStatusDirect, columnHNSWSearchPackPreparedStatusHeap:
 	default:
-		return nil, zeroStats, columnHNSWSearchPackStatusError(status)
+		return nil, columnVectorGraphNativeSearchStats{}, columnHNSWSearchPackStatusError(status)
 	}
 	if scratch == nil {
-		return nil, zeroStats, errColumnVectorGraphNativeSearchScratchRequired
+		return nil, columnVectorGraphNativeSearchStats{}, errColumnVectorGraphNativeSearchScratchRequired
 	}
 	stats := &scratch.preparedTraversalStats
 	*stats = columnVectorGraphNativeSearchStats{}
@@ -232,11 +235,11 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if degree <= math.MaxInt/2 {
 		degree *= 2
 	}
-	resultCapacity := topK
-	if opts.OmitResultMaterialization {
-		resultCapacity = retainedCandidateLimit
+	resultScratchK := topK
+	if opts.OmitResultMaterialization && !opts.SuppressOmittedResultMaterialization {
+		resultScratchK = retainedCandidateLimit
 	}
-	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, resultCapacity, retainedCandidateLimit); err != nil {
+	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, resultScratchK, retainedCandidateLimit, degree, degree); err != nil {
 		return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal scratch prepare: %w", err)
 	}
 	if err := scorePlane.prepareForHNSWPreparedTraversal(v, query, opts, scratch); err != nil {
@@ -294,12 +297,12 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 		if len(adjacency) == 0 {
 			continue
 		}
+		if countLoopEdges {
+			loopEdgeVisits += uint64(len(adjacency))
+		}
 		scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
 		tile := scratch.scoreTileOrdinals[:0]
 		for i, neighbor := range adjacency {
-			if countLoopEdges {
-				loopEdgeVisits++
-			}
 			if uint64(neighbor) >= rowCount64 {
 				return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
@@ -327,6 +330,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if opts.OmitResultMaterialization {
 		if len(scratch.top) > retainedCandidateLimit {
 			scratch.top = scratch.top[:retainedCandidateLimit]
+		}
+		if opts.SuppressOmittedResultMaterialization {
+			return scratch.results, *stats, nil
 		}
 		for _, candidate := range scratch.top {
 			scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{Ordinal: candidate.ordinal, Score: candidate.score})
@@ -358,12 +364,12 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 		if len(adjacency) == 0 {
 			continue
 		}
+		if countLoopEdges && loopEdgeVisits != nil {
+			*loopEdgeVisits += uint64(len(adjacency))
+		}
 		scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
 		tile := scratch.scoreTileOrdinals[:0]
 		for i, neighbor := range adjacency {
-			if countLoopEdges && loopEdgeVisits != nil {
-				(*loopEdgeVisits)++
-			}
 			if uint64(neighbor) >= uint64(v.Header.Rows) {
 				return 0, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal ordinal=%d layer=%d adjacency[%d]=%d outside row_count=%d: %w", best, layer, i, neighbor, v.Header.Rows, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}

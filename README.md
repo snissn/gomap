@@ -173,21 +173,27 @@ Source:
 
 ### Indexed Text/Vector/Hybrid Insert And Search Workload
 
-Current-context #2564 benchmark on an active Apple M3 laptop, `256` JSON
-documents, scalar indexes on `tenant`/`region`, a `lexical` title/body text
-index, and an exact cosine column graph (`dims=16`, `M=8`). The insert row times
-`InsertBatch` + `Flush` + `RebuildVectorIndex`; search rows build/index the
-fixture before timing and then time the search API call only.
+The #2589 optimized context rows use the #2564 fixture on an active Apple M3 laptop:
+`256` JSON documents, scalar indexes on `tenant`/`region`, a `lexical`
+title/body text index, and an exact cosine column graph (`dims=16`, `M=8`). The
+insert row times `InsertBatch` + `Flush` + `RebuildVectorIndex`; search rows
+build/index the fixture before timing and then time the search API call only.
+Original #2564 rows remain in the linked runbook for context; treat these as
+same-host/context evidence, not universal throughput claims.
 
-| row | timed boundary | ns/op avg | ops/sec | B/op | allocs/op | key counters |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| Indexed insert/readiness | 256-doc batch insert + flush + vector rebuild | 79,928,531 | 12.5 ops/sec / 3,202.9 docs/sec | 11,014,446 | 113,174 | 174,590 insert ns/doc; 137,618 vector rebuild ns/doc |
-| Text candidates | `SearchHybridTextCandidates`, no docs | 275,850 | 3,625.2 | 425,584 | 7,591 | 64 text candidates; 0 docs fetched; 0 fail/fallback |
-| Vector candidates | `SearchHybridVectorCandidates`, no docs | 20,475 | 48,840.0 | 36,408 | 82 | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
-| Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 328,450 | 3,044.6 | 514,723 | 7,791 | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
-| Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 546,853 | 1,828.6 | 572,528 | 8,768 | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
+| row | timed boundary | ns/op median | ops/sec | B/op | allocs/op | allocation delta vs #2564 context | key counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| Indexed insert/readiness | 256-doc batch insert + flush + vector rebuild | 68,588,625 | 14.58 ops/sec / 3,732.4 docs/sec | 7,902,142 | 31,953 | B/op -28.3%; allocs/op -71.8% | 141,939 insert ns/doc; 130,717 vector rebuild ns/doc |
+| Text candidates | `SearchHybridTextCandidates`, no docs | 140,917 | 7,096.38 | 109,298 | 878 | B/op -74.3%; allocs/op -88.4% | 64 text candidates; 0 docs fetched; 0 fail/fallback |
+| Vector candidates | `SearchHybridVectorCandidates`, no docs | 20,584 | 48,582.60 | 36,408 | 82 | B/op 0.0%; allocs/op 0.0% | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
+| Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 163,924 | 6,100.41 | 198,426 | 1,078 | B/op -61.4%; allocs/op -86.2% | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
+| Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 377,382 | 2,649.83 | 256,232 | 2,055 | B/op -55.2%; allocs/op -76.6% | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
 
-Source, command, artifact paths, host-load caveats, and reproduction workflow:
+The strict same-host M4 paired insert/readiness delta was B/op -28.2%,
+allocs/op -71.8%, and ns/op +0.8%. Remaining allocation floors include DB
+open/commitlog setup in profiles plus value-log append buffers, typed-column
+image builders, text analysis/posting construction, and vector rebuild state.
+Source, commands, artifact paths, guardrails, and caveats:
 [TreeDB indexed insertion/search benchmark](docs/benchmarks/treedb_index_insert_search_benchmarks.md).
 
 ## What TreeDB Provides
