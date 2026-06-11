@@ -32,6 +32,34 @@ func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
 	}
 }
 
+func TestValueLogRefTracker_DisabledForOuterLeavesSkipsStaleMetadata(t *testing.T) {
+	dir := t.TempDir()
+	stale := []byte("stale ref-count metadata from an older build")
+	metaPath := filepath.Join(dir, valueLogRefCountsFileName)
+	if err := os.WriteFile(metaPath, stale, 0o644); err != nil {
+		t.Fatalf("write stale metadata: %v", err)
+	}
+
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if db.valueLogRefTracker != nil {
+		t.Fatal("outer-leaf value-log mode should leave incremental ref tracker disabled")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	after, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read stale metadata: %v", err)
+	}
+	if !bytes.Equal(after, stale) {
+		t.Fatalf("stale metadata was unexpectedly rebuilt on open")
+	}
+}
+
 func TestValueOnlyValueLogFiles_KeepsReservedLaneInPrimaryValueLog(t *testing.T) {
 	dir := t.TempDir()
 	id, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 1)

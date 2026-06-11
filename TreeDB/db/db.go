@@ -1429,7 +1429,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	db := &DB{
 		valueLogManager:                vm,
-		valueLogRefTracker:             newValueLogRefTracker(),
+		valueLogRefTracker:             newValueLogRefTrackerForOptions(opts),
 		lock:                           lock,
 		adaptive:                       adaptiveCtrl,
 		keepRecent:                     opts.KeepRecent,

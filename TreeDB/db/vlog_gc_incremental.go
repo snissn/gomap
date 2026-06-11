@@ -180,6 +180,18 @@ func newValueLogRefTracker() *valueLogRefTracker {
 	}
 }
 
+func newValueLogRefTrackerForOptions(opts Options) *valueLogRefTracker {
+	if opts.IndexOuterLeavesInValueLog {
+		// The incremental tracker currently follows logical value-pointer deltas.
+		// Outer-leaf mode also rewrites physical leaf-page references in the value
+		// log, so commits cannot keep these counts exact without a broader delta.
+		// Leave the tracker disabled and let GC/rewrite planning do explicit reachability
+		// scans instead of forcing every open to rebuild stale metadata.
+		return nil
+	}
+	return newValueLogRefTracker()
+}
+
 func (t *valueLogRefTracker) canTrack(baseSeq uint64) bool {
 	if t == nil {
 		return false
