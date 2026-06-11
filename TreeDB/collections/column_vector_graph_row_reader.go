@@ -13,6 +13,16 @@ type columnVectorGraphPhysicalRowReaderOptions struct {
 	// MaxDecodedBlocks is the maximum number of decoded column blocks retained
 	// in the reader cache. Zero uses the underlying row reader default.
 	MaxDecodedBlocks int
+	// UseResourceQuantizedAssets loads scalar_u8 quantized assets through a
+	// mapped-resource-backed handle so prepared collection readers can share one
+	// immutable asset instead of retaining one heap copy per reader. Standalone
+	// OpenVectorIndexSearcher readers leave this off to preserve the hot search
+	// latency of the existing single heap-copy path on platforms where mmap-backed
+	// random row access is slower.
+	UseResourceQuantizedAssets bool
+	// SkipQuantizedAssets lets a prepared collection search attach an already
+	// validated shared scalar_u8 asset instead of re-opening one per reader.
+	SkipQuantizedAssets bool
 	// detachCatalog copies immutable catalog metadata for readers returned after
 	// their assembly snapshot closes.
 	detachCatalog bool
@@ -57,6 +67,8 @@ type columnVectorGraphPhysicalRowReader struct {
 	documentIDSource                    *columnVectorGraphDocumentIDStateSource
 	documentIDStateFallbackReason       typeddecode.Reason
 	quantizedAssetStatus                map[string]columnVectorGraphQuantizedAssetLoadStatus
+	useResourceQuantizedAssets          bool
+	skipQuantizedAssets                 bool
 	hnswSearchPack                      *columnHNSWSearchPackPreparedView
 	hnswSearchPackStatus                columnHNSWSearchPackPreparedStatus
 	hnswSearchPackOpenNanos             uint64
@@ -123,11 +135,13 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		}
 	}
 	graphReader := &columnVectorGraphPhysicalRowReader{
-		def:                  def,
-		graph:                graph,
-		catalog:              catalog,
-		reader:               reader,
-		quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
+		def:                        def,
+		graph:                      graph,
+		catalog:                    catalog,
+		reader:                     reader,
+		quantizedAssetStatus:       make(map[string]columnVectorGraphQuantizedAssetLoadStatus),
+		useResourceQuantizedAssets: opts.UseResourceQuantizedAssets,
+		skipQuantizedAssets:        opts.SkipQuantizedAssets,
 	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 && catalog != nil && view.VectorIndexStateFound && view.AssetNamespace != "" {
 		key, keyErr := columnVectorGraphSharedPreparedSearchCacheKey(catalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
@@ -136,7 +150,7 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			return nil, keyErr
 		}
 		shared, err := c.acquireColumnVectorGraphSharedPreparedSearch(key, func() (*columnVectorGraphSharedPreparedSearch, error) {
-			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog, quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus)}
+			buildReader := &columnVectorGraphPhysicalRowReader{def: def, graph: graph, catalog: catalog, quantizedAssetStatus: make(map[string]columnVectorGraphQuantizedAssetLoadStatus), skipQuantizedAssets: true}
 			success := false
 			defer func() {
 				if !success {
@@ -169,7 +183,9 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			_ = graphReader.Close()
 			return nil, errors.Join(err, releaseErr)
 		}
-		c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)
+		if !graphReader.skipQuantizedAssets {
+			c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)
+		}
 		return graphReader, nil
 	}
 	if err := c.prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(graphReader, snap, view); err != nil {
@@ -276,7 +292,9 @@ func (c *Collection) prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot(
 		if packErr != nil {
 			graphReader.hnswSearchPackStatus = columnHNSWSearchPackPreparedStatusInvalid
 		}
-		c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)
+		if !graphReader.skipQuantizedAssets {
+			c.prepareColumnVectorGraphQuantizedAssetsForReader(graphReader, view)
+		}
 	}
 	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 {
 		if graphReader.invNormSource == nil {
@@ -498,6 +516,12 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 		r.hnswSearchPack = nil
 	}
 	r.preparedSearch = nil
+	if r.quantizedAssetStatus != nil {
+		if err := closeColumnVectorGraphQuantizedAssetLoadStatuses(r.quantizedAssetStatus); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.quantizedAssetStatus = nil
+	}
 	if r.adjacencyLayerSources != nil {
 		if err := r.adjacencyLayerSources.Close(); closeErr == nil && err != nil {
 			closeErr = err

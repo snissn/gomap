@@ -52,6 +52,7 @@ type collectionVectorIndexPreparedSearch struct {
 	quantizedReadersMu        sync.Mutex
 	quantizedReaders          []*columnVectorGraphPhysicalRowReader
 	quantizedAvailableReaders []int
+	sharedQuantizedAssets     map[string]columnVectorGraphQuantizedAssetLoadStatus
 
 	routeStats vectorIndexSearchRouteStats
 	closed     bool
@@ -436,7 +437,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires valid vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 
-	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(def.Name, snap, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks})
+	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(def.Name, snap, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks, UseResourceQuantizedAssets: true})
 	if err != nil {
 		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 		if statusErr != nil {
@@ -472,6 +473,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		return nil, response, err
 	}
 	key = collectionVectorIndexPreparedSearchSnapshotCacheKey(key, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
+	sharedQuantizedAssets := promoteCollectionVectorIndexPreparedScalarU8QuantizedAssets(reader)
 	searcher := &VectorIndexSearcher{
 		collection: c,
 		indexName:  response.IndexName,
@@ -496,6 +498,7 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 		searcher:                  searcher,
 		quantizedReaders:          []*columnVectorGraphPhysicalRowReader{reader},
 		quantizedAvailableReaders: []int{0},
+		sharedQuantizedAssets:     sharedQuantizedAssets,
 		routeStats:                routeStats,
 	}, response, nil
 }
@@ -534,6 +537,58 @@ func collectionVectorIndexPreparedQuantizedValidationStats(reader *columnVectorG
 	stats := vectorIndexSearchStatsFromInternal(internal, columnPhysicalRowReaderStats{})
 	routeStats.apply(&stats)
 	return stats
+}
+
+func promoteCollectionVectorIndexPreparedScalarU8QuantizedAssets(reader *columnVectorGraphPhysicalRowReader) map[string]columnVectorGraphQuantizedAssetLoadStatus {
+	if reader == nil || len(reader.quantizedAssetStatus) == 0 {
+		return nil
+	}
+	var out map[string]columnVectorGraphQuantizedAssetLoadStatus
+	for name, status := range reader.quantizedAssetStatus {
+		if !collectionVectorIndexPreparedQuantizedAssetShareable(status) {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]columnVectorGraphQuantizedAssetLoadStatus, 1)
+		}
+		shared := status
+		shared.ownsResource = true
+		attached := status
+		attached.ownsResource = false
+		reader.quantizedAssetStatus[name] = attached
+		out[name] = shared
+	}
+	return out
+}
+
+func collectionVectorIndexPreparedQuantizedAssetShareable(status columnVectorGraphQuantizedAssetLoadStatus) bool {
+	return status.Definition.Codec == QuantizedVectorCodecScalarU8 && status.Prepared != nil && status.Err == nil && status.resource != nil
+}
+
+func (p *collectionVectorIndexPreparedSearch) hasSharedQuantizedAsset(name string) bool {
+	if p == nil || name == "" || len(p.sharedQuantizedAssets) == 0 {
+		return false
+	}
+	status, ok := p.sharedQuantizedAssets[name]
+	return ok && collectionVectorIndexPreparedQuantizedAssetShareable(status)
+}
+
+func (p *collectionVectorIndexPreparedSearch) attachSharedQuantizedAssets(reader *columnVectorGraphPhysicalRowReader) error {
+	if p == nil || reader == nil || len(p.sharedQuantizedAssets) == 0 {
+		return nil
+	}
+	if reader.quantizedAssetStatus == nil {
+		reader.quantizedAssetStatus = make(map[string]columnVectorGraphQuantizedAssetLoadStatus, len(p.sharedQuantizedAssets))
+	}
+	for name, status := range p.sharedQuantizedAssets {
+		if !collectionVectorIndexPreparedQuantizedAssetShareable(status) {
+			return fmt.Errorf("%w: quantized asset %q shared prepared resource is closed", errColumnVectorGraphQuantizedAssetClosed, name)
+		}
+		attached := status
+		attached.ownsResource = false
+		reader.quantizedAssetStatus[name] = attached
+	}
+	return nil
 }
 
 func collectionVectorIndexPreparedQuantizedSearchCacheKey(collection string, namespace string, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot, quantizedIndexName string, maxDecodedBlocks int) (string, error) {
@@ -810,9 +865,22 @@ func (p *collectionVectorIndexPreparedSearch) openCollectionVectorIndexPreparedQ
 	if p == nil || p.searcher == nil || p.searcher.collection == nil || p.searcher.snapshot == nil {
 		return nil, collectionVectorIndexPreparedQuantizedValidationStats(nil, vectorIndexSearchRouteStats{}, opts.QuantizedIndexName, queryMode), backenddb.ErrClosed
 	}
-	reader, err := p.searcher.collection.openColumnVectorGraphPhysicalRowReaderAtSnapshot(p.indexName, p.searcher.snapshot, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks})
+	readerOpts := columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: opts.MaxDecodedBlocks, UseResourceQuantizedAssets: true}
+	if p.hasSharedQuantizedAsset(opts.QuantizedIndexName) {
+		readerOpts.SkipQuantizedAssets = true
+	}
+	reader, err := p.searcher.collection.openColumnVectorGraphPhysicalRowReaderAtSnapshot(p.indexName, p.searcher.snapshot, readerOpts)
 	if err != nil {
 		return nil, collectionVectorIndexPreparedQuantizedValidationStats(nil, p.routeStats, opts.QuantizedIndexName, queryMode), err
+	}
+	if readerOpts.SkipQuantizedAssets {
+		if err := p.attachSharedQuantizedAssets(reader); err != nil {
+			_ = reader.Close()
+			stats := collectionVectorIndexPreparedQuantizedValidationStats(nil, p.routeStats, opts.QuantizedIndexName, queryMode)
+			stats.QuantizedAssetUnavailable = 1
+			stats.QuantizedAssetClosed = 1
+			return nil, stats, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode shared quantized asset is closed: %w", ErrVectorIndexSearchUnavailable, p.indexName, err)
+		}
 	}
 	if !collectionVectorIndexPreparedQuantizedReaderReady(reader) {
 		stats := collectionVectorIndexPreparedQuantizedValidationStats(reader, p.routeStats, opts.QuantizedIndexName, queryMode)
@@ -860,6 +928,10 @@ func (p *collectionVectorIndexPreparedSearch) Close() error {
 	p.quantizedReaders = nil
 	p.quantizedAvailableReaders = nil
 	p.quantizedReadersMu.Unlock()
+	if p.sharedQuantizedAssets != nil {
+		err = errors.Join(err, closeColumnVectorGraphQuantizedAssetLoadStatuses(p.sharedQuantizedAssets))
+		p.sharedQuantizedAssets = nil
+	}
 	if p.searcher != nil {
 		err = errors.Join(err, p.searcher.Close())
 		p.searcher = nil
@@ -893,8 +965,9 @@ func (p *collectionVectorIndexPreparedSearch) stats() mappedresource.Stats {
 	}
 	p.quantizedReadersMu.Lock()
 	seenSharedPrepared := make(map[*columnVectorGraphSharedPreparedSearch]struct{})
+	seenQuantizedResources := make(map[*columnVectorGraphQuantizedAssetResource]struct{})
 	for _, reader := range p.quantizedReaders {
-		addCollectionVectorIndexPreparedQuantizedAssetStats(&out, reader, p.quantizedIndexName)
+		addCollectionVectorIndexPreparedQuantizedAssetStats(&out, reader, p.quantizedIndexName, seenQuantizedResources)
 		if reader == nil {
 			continue
 		}
@@ -912,13 +985,19 @@ func (p *collectionVectorIndexPreparedSearch) stats() mappedresource.Stats {
 	return out
 }
 
-func addCollectionVectorIndexPreparedQuantizedAssetStats(out *mappedresource.Stats, reader *columnVectorGraphPhysicalRowReader, quantizedIndexName string) {
+func addCollectionVectorIndexPreparedQuantizedAssetStats(out *mappedresource.Stats, reader *columnVectorGraphPhysicalRowReader, quantizedIndexName string, seen map[*columnVectorGraphQuantizedAssetResource]struct{}) {
 	if out == nil || reader == nil || quantizedIndexName == "" {
 		return
 	}
 	status, ok := reader.quantizedAssetStatus[quantizedIndexName]
 	if !ok {
 		return
+	}
+	if status.resource != nil && seen != nil {
+		if _, ok := seen[status.resource]; ok {
+			return
+		}
+		seen[status.resource] = struct{}{}
 	}
 	out.ActiveHandles += status.ActiveHandles
 	out.ActiveMappedBytes += int64(status.MappedBytes)
