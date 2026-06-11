@@ -58,7 +58,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 - **[TreeDB `rabitq_1bit` Profile Gate](benchmarks/treedb_rabitq_1bit_profile_gate.md)**: Same-host RaBitQ baseline/candidate workflow, guardrails, profile artifacts, and no-promote rules.
 - **[TreeDB Vector Crossover Benchmark Runbook](benchmarks/treedb_vector_crossover_runbook.md)**: Scale-matrix command contract for exact FP32, scalar_u8, RaBitQ, USearch, and pgvector crossover evidence.
 - **[TreeDB Hybrid Search Benchmark Runbook](benchmarks/treedb_hybrid_search_runbook.md)**: Same-fixture text-only, vector-only, and hybrid executor benchmark commands, counters, profile capture, and #2506 evidence requirements.
-- **[TreeDB Indexed Insertion/Search Benchmark](benchmarks/treedb_index_insert_search_benchmarks.md)**: Collection scalar/text/vector indexed insert, vector rebuild, and search benchmark commands, counters, and #2564 current-context evidence.
+- **[TreeDB Indexed Insertion/Search Benchmark](benchmarks/treedb_index_insert_search_benchmarks.md)**: Collection scalar/text/vector indexed insert, vector rebuild, and search benchmark commands, counters, #2564 original context, and #2589 optimized allocation closeout evidence.
 - **[TreeDB RaBitQ Performance Lane Closeout](../TreeDB/docs/spec/rabitq-performance-lane-closeout-2482.md)**: Final Sublane A promoted/no-promote evidence and later Sublane B outcome for the RaBitQ performance lane.
 - **[TreeDB Vector Search Closeout](../TreeDB/docs/spec/vector-search-closeout-2483.md)**: Exact FP32, scalar_u8, RaBitQ, and BRQ route-boundary/evidence index with #2487 snapshot caveats and #2494 crossover-pending status.
 - **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
