@@ -281,6 +281,13 @@ Full context, commands, guardrails, and caveats are in
 row is an in-memory library comparator, not a persistent DB/server row, and its
 averages are from batch searches with `threads=1/8`.
 
+TreeDB's VectorDBBench integration uses the document service and the shared
+`treedb-client` Python package. It exposes separate exact FP32,
+scalar_u8-rerank32, and experimental RaBitQ rows while keeping Haystack's
+`/search/vector` route as exact dense document scoring. Those rows include
+Python/client/HTTP/service overhead and are not native Go allocation evidence;
+see `../docs/benchmarks/treedb_vectordbbench_runbook_2026-06-11.md`.
+
 The tiny BERT embedding demo in `../examples/vector_search/tiny_bert/` is a
 caller-side fixture/demo; TreeDB core does not generate embeddings. Export it
 with `--output-jsonl` and set `TREEDB_VECTOR_BENCH_JSONL` to run
