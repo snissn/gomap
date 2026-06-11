@@ -35,6 +35,36 @@ type textPostingValue struct {
 	Fields        []textPostingFieldValue
 }
 
+type textSearchPostingValue struct {
+	TermFrequency uint32
+	fields        [2]textSearchPostingFieldValue
+	overflow      []textSearchPostingFieldValue
+	fieldsN       int
+}
+
+type textSearchPostingFieldValue struct {
+	Field     string
+	Frequency uint32
+}
+
+func (v *textSearchPostingValue) addField(field textSearchPostingFieldValue) {
+	if v.fieldsN < len(v.fields) {
+		v.fields[v.fieldsN] = field
+	} else {
+		v.overflow = append(v.overflow, field)
+	}
+	v.fieldsN++
+}
+
+func (v textSearchPostingValue) fieldCount() int { return v.fieldsN }
+
+func (v textSearchPostingValue) fieldAt(i int) textSearchPostingFieldValue {
+	if i < len(v.fields) {
+		return v.fields[i]
+	}
+	return v.overflow[i-len(v.fields)]
+}
+
 type textPostingFieldValue struct {
 	Field     string
 	Frequency uint32
@@ -108,11 +138,29 @@ func decodeTextPostingKey(raw []byte) (string, []byte, error) {
 	return string(termBytes), bytes.Clone(cur.buf[cur.pos:]), nil
 }
 
+func decodeTextPostingKeyDocumentIDForPrefix(raw, prefix []byte) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, errMalformedTextStorage("empty postings key")
+	}
+	if !bytes.HasPrefix(raw, prefix) {
+		return nil, errMalformedTextStorage("postings key outside requested term prefix")
+	}
+	if len(raw) == len(prefix) {
+		return nil, errMalformedTextStorage("postings key missing document id")
+	}
+	return raw[len(prefix):], nil
+}
+
 func encodeTextStateKey(documentID []byte) []byte {
 	out := make([]byte, 0, 1+len(documentID))
 	out = append(out, textStateKeyVersion)
 	out = append(out, documentID...)
 	return out
+}
+
+func appendTextStateKeyString(dst []byte, documentID string) []byte {
+	dst = append(dst, textStateKeyVersion)
+	return append(dst, documentID...)
 }
 
 func decodeTextStateKey(raw []byte) ([]byte, error) {
@@ -253,6 +301,60 @@ func decodeTextPostingValue(raw []byte) (textPostingValue, error) {
 	return value, nil
 }
 
+func decodeTextPostingValueForSearch(raw []byte, fieldNames []string) (textSearchPostingValue, error) {
+	if len(raw) == 0 {
+		return textSearchPostingValue{}, errMalformedTextStorage("empty postings value")
+	}
+	if raw[0] != textPostingValueVersion {
+		return textSearchPostingValue{}, errUnsupportedTextStorageVersion("postings value", raw[0])
+	}
+	cur := textCursor{buf: raw[1:]}
+	freq, err := cur.readUvarint()
+	if err != nil {
+		return textSearchPostingValue{}, errMalformedTextStorage("postings value frequency: %v", err)
+	}
+	fieldCount, err := cur.readUvarint()
+	if err != nil {
+		return textSearchPostingValue{}, errMalformedTextStorage("postings value field count: %v", err)
+	}
+	value := textSearchPostingValue{TermFrequency: checkedTextUint32(freq)}
+	if uint64(value.TermFrequency) != freq {
+		return textSearchPostingValue{}, errMalformedTextStorage("postings value frequency overflows uint32")
+	}
+	if fieldCount > uint64(cur.remaining()+1) {
+		return textSearchPostingValue{}, errMalformedTextStorage("postings value field count too large")
+	}
+	for i := uint64(0); i < fieldCount; i++ {
+		field, err := cur.readStringIntern(fieldNames)
+		if err != nil {
+			return textSearchPostingValue{}, errMalformedTextStorage("postings value field[%d] name: %v", i, err)
+		}
+		fieldFreq, err := cur.readUvarint()
+		if err != nil {
+			return textSearchPostingValue{}, errMalformedTextStorage("postings value field[%d] frequency: %v", i, err)
+		}
+		positions, err := cur.skipUint32Slice()
+		if err != nil {
+			return textSearchPostingValue{}, errMalformedTextStorage("postings value field[%d] positions: %v", i, err)
+		}
+		offsets, err := cur.skipOffsetSlice()
+		if err != nil {
+			return textSearchPostingValue{}, errMalformedTextStorage("postings value field[%d] offsets: %v", i, err)
+		}
+		if uint64(checkedTextUint32(fieldFreq)) != fieldFreq {
+			return textSearchPostingValue{}, errMalformedTextStorage("postings value field[%d] frequency overflows uint32", i)
+		}
+		if offsets != 0 && offsets != positions {
+			return textSearchPostingValue{}, errMalformedTextStorage("postings value field[%d] offsets/positions length mismatch", i)
+		}
+		value.addField(textSearchPostingFieldValue{Field: field, Frequency: uint32(fieldFreq)})
+	}
+	if cur.remaining() != 0 {
+		return textSearchPostingValue{}, errMalformedTextStorage("postings value trailing bytes")
+	}
+	return value, nil
+}
+
 func encodeTextDocumentStateValue(value textDocumentStateValue) []byte {
 	fields := append([]textDocumentFieldState(nil), value.Fields...)
 	sort.SliceStable(fields, func(i, j int) bool { return fields[i].Field < fields[j].Field })
@@ -346,6 +448,90 @@ func decodeTextDocumentStateValue(raw []byte) (textDocumentStateValue, error) {
 		return textDocumentStateValue{}, errMalformedTextStorage("text-state value trailing bytes")
 	}
 	return value, nil
+}
+
+type textDocumentFieldLength struct {
+	Field  string
+	Length uint32
+}
+
+func decodeTextDocumentStateFieldLengths(raw []byte, dst []textDocumentFieldLength, fieldNames []string) ([]textDocumentFieldLength, error) {
+	if len(raw) == 0 {
+		return nil, errMalformedTextStorage("empty text-state value")
+	}
+	if raw[0] != textStateValueVersion {
+		return nil, errUnsupportedTextStorageVersion("text-state value", raw[0])
+	}
+	cur := textCursor{buf: raw[1:]}
+	fieldCount, err := cur.readUvarint()
+	if err != nil {
+		return nil, errMalformedTextStorage("text-state field count: %v", err)
+	}
+	if fieldCount > uint64(cur.remaining()+1) {
+		return nil, errMalformedTextStorage("text-state field count too large")
+	}
+	if uint64(cap(dst)) < fieldCount {
+		dst = make([]textDocumentFieldLength, 0, fieldCount)
+	} else {
+		dst = dst[:0]
+	}
+	for i := uint64(0); i < fieldCount; i++ {
+		fieldName, err := cur.readStringIntern(fieldNames)
+		if err != nil {
+			return nil, errMalformedTextStorage("text-state field[%d] name: %v", i, err)
+		}
+		length, err := cur.readUvarint()
+		if err != nil {
+			return nil, errMalformedTextStorage("text-state field[%d] length: %v", i, err)
+		}
+		if uint64(checkedTextUint32(length)) != length {
+			return nil, errMalformedTextStorage("text-state field[%d] length overflows uint32", i)
+		}
+		termCount, err := cur.readUvarint()
+		if err != nil {
+			return nil, errMalformedTextStorage("text-state field[%d] term count: %v", i, err)
+		}
+		if termCount > uint64(cur.remaining()+1) {
+			return nil, errMalformedTextStorage("text-state field[%d] term count too large", i)
+		}
+		dst = append(dst, textDocumentFieldLength{Field: fieldName, Length: uint32(length)})
+		for j := uint64(0); j < termCount; j++ {
+			if _, err := cur.readBytes(); err != nil {
+				return nil, errMalformedTextStorage("text-state field[%d] term[%d] name: %v", i, j, err)
+			}
+			freq, err := cur.readUvarint()
+			if err != nil {
+				return nil, errMalformedTextStorage("text-state field[%d] term[%d] frequency: %v", i, j, err)
+			}
+			if uint64(checkedTextUint32(freq)) != freq {
+				return nil, errMalformedTextStorage("text-state field[%d] term[%d] frequency overflows uint32", i, j)
+			}
+			positions, err := cur.skipUint32Slice()
+			if err != nil {
+				return nil, errMalformedTextStorage("text-state field[%d] term[%d] positions: %v", i, j, err)
+			}
+			offsets, err := cur.skipOffsetSlice()
+			if err != nil {
+				return nil, errMalformedTextStorage("text-state field[%d] term[%d] offsets: %v", i, j, err)
+			}
+			if offsets != 0 && offsets != positions {
+				return nil, errMalformedTextStorage("text-state field[%d] term[%d] offsets/positions length mismatch", i, j)
+			}
+		}
+	}
+	if cur.remaining() != 0 {
+		return nil, errMalformedTextStorage("text-state value trailing bytes")
+	}
+	return dst, nil
+}
+
+func textDocumentFieldLengthByName(fields []textDocumentFieldLength, name string) (uint32, bool) {
+	for _, field := range fields {
+		if field.Field == name {
+			return field.Length, true
+		}
+	}
+	return 0, false
 }
 
 func encodeTextStatsCorpusValue(value textStatsCorpusValue) []byte {
@@ -511,6 +697,31 @@ func (c *textCursor) readString() (string, error) {
 	return string(value), nil
 }
 
+func (c *textCursor) readStringIntern(interns []string) (string, error) {
+	value, err := c.readBytes()
+	if err != nil {
+		return "", err
+	}
+	for _, intern := range interns {
+		if textBytesEqualString(value, intern) {
+			return intern, nil
+		}
+	}
+	return string(value), nil
+}
+
+func textBytesEqualString(value []byte, intern string) bool {
+	if len(value) != len(intern) {
+		return false
+	}
+	for i, b := range value {
+		if intern[i] != b {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *textCursor) readUint32Slice() ([]uint32, error) {
 	count, err := c.readUvarint()
 	if err != nil {
@@ -531,6 +742,26 @@ func (c *textCursor) readUint32Slice() ([]uint32, error) {
 		out = append(out, uint32(value))
 	}
 	return out, nil
+}
+
+func (c *textCursor) skipUint32Slice() (uint64, error) {
+	count, err := c.readUvarint()
+	if err != nil {
+		return 0, err
+	}
+	if count > uint64(c.remaining()+1) {
+		return 0, errors.New("count too large")
+	}
+	for i := uint64(0); i < count; i++ {
+		value, err := c.readUvarint()
+		if err != nil {
+			return 0, err
+		}
+		if uint64(checkedTextUint32(value)) != value {
+			return 0, errors.New("uint32 overflow")
+		}
+	}
+	return count, nil
 }
 
 func (c *textCursor) readOffsetSlice() ([]textTokenOffset, error) {
@@ -560,6 +791,33 @@ func (c *textCursor) readOffsetSlice() ([]textTokenOffset, error) {
 		out = append(out, textTokenOffset{Start: uint32(start), End: uint32(end)})
 	}
 	return out, nil
+}
+
+func (c *textCursor) skipOffsetSlice() (uint64, error) {
+	count, err := c.readUvarint()
+	if err != nil {
+		return 0, err
+	}
+	if count > uint64(c.remaining()+1) {
+		return 0, errors.New("count too large")
+	}
+	for i := uint64(0); i < count; i++ {
+		start, err := c.readUvarint()
+		if err != nil {
+			return 0, err
+		}
+		end, err := c.readUvarint()
+		if err != nil {
+			return 0, err
+		}
+		if uint64(checkedTextUint32(start)) != start || uint64(checkedTextUint32(end)) != end {
+			return 0, errors.New("uint32 overflow")
+		}
+		if end < start {
+			return 0, errors.New("offset end before start")
+		}
+	}
+	return count, nil
 }
 
 func checkedTextUint32(value uint64) uint32 {

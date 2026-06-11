@@ -106,16 +106,79 @@ type TextSearchResponse struct {
 	Stats     TextSearchStats
 }
 
+type textSearchCandidatePosting struct {
+	term    string
+	posting textSearchPostingValue
+}
+
 type textSearchCandidate struct {
-	documentID []byte
-	postings   map[string]textPostingValue
-	matches    map[string]map[string]struct{}
+	documentID string
+	postings   [2]textSearchCandidatePosting
+	overflow   []textSearchCandidatePosting
+	postingsN  int
 	score      float64
 }
+
+func (c *textSearchCandidate) postingCount() int {
+	if c == nil {
+		return 0
+	}
+	return c.postingsN
+}
+
+func (c *textSearchCandidate) postingForTerm(term string) (textSearchPostingValue, bool) {
+	if c == nil {
+		return textSearchPostingValue{}, false
+	}
+	for i := 0; i < c.postingsN; i++ {
+		entry := c.postingAt(i)
+		if entry.term == term {
+			return entry.posting, true
+		}
+	}
+	return textSearchPostingValue{}, false
+}
+
+func (c *textSearchCandidate) addPosting(term string, posting textSearchPostingValue) {
+	for i := 0; i < c.postingsN; i++ {
+		if c.postingAt(i).term == term {
+			if i < len(c.postings) {
+				c.postings[i].posting = posting
+			} else {
+				c.overflow[i-len(c.postings)].posting = posting
+			}
+			return
+		}
+	}
+	if c.postingsN < len(c.postings) {
+		c.postings[c.postingsN] = textSearchCandidatePosting{term: term, posting: posting}
+	} else {
+		c.overflow = append(c.overflow, textSearchCandidatePosting{term: term, posting: posting})
+	}
+	c.postingsN++
+}
+
+func (c *textSearchCandidate) postingAt(i int) textSearchCandidatePosting {
+	if i < len(c.postings) {
+		return c.postings[i]
+	}
+	return c.overflow[i-len(c.postings)]
+}
+
+type textSearchResultMode uint8
+
+const (
+	textSearchResultFull textSearchResultMode = iota
+	textSearchResultTextMatchesOnly
+)
 
 // SearchText executes a bounded postings-backed lexical search for a declared
 // collection text index. It never scans/ranks all collection documents.
 func (c *Collection) SearchText(opts TextSearchOptions) (TextSearchResponse, error) {
+	return c.searchText(opts, textSearchResultFull)
+}
+
+func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchResultMode) (TextSearchResponse, error) {
 	var response TextSearchResponse
 	if c == nil {
 		return response, errCollectionNil
@@ -174,7 +237,7 @@ func (c *Collection) SearchText(opts TextSearchOptions) (TextSearchResponse, err
 	maxPostingsScanned := normalizeTextSearchMaxPostingsScanned(candidateLimit, len(terms), opts.MaxPostingsScanned)
 	response.Stats.TextCandidatesRequested = uint64(candidateLimit)
 
-	return executeTextSearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, response)
+	return executeTextSearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, resultMode, response)
 }
 
 func executeTextSearchAtSnapshot(
@@ -186,6 +249,7 @@ func executeTextSearchAtSnapshot(
 	terms []string,
 	operator TextSearchOperator,
 	candidateLimit, maxPostingsScanned int,
+	resultMode textSearchResultMode,
 	response TextSearchResponse,
 ) (TextSearchResponse, error) {
 	statsRootName := collectionTextStatsRootName(catalog.meta.Name, idx.Name)
@@ -203,7 +267,9 @@ func executeTextSearchAtSnapshot(
 	}
 	fieldStats := make(map[string]textStatsFieldValue, len(idx.Fields))
 	fieldWeights := make(map[string]float64, len(idx.Fields))
+	fieldNames := make([]string, 0, len(idx.Fields))
 	for _, field := range idx.Fields {
+		fieldNames = append(fieldNames, field.Field)
 		statsValue, err := readTextStatsFieldAtRoot(snap, catalog, statsRootName, field.Field)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
@@ -222,7 +288,7 @@ func executeTextSearchAtSnapshot(
 	postingsRootName := collectionTextIndexRootName(catalog.meta.Name, idx.Name)
 	for i, term := range scanTerms {
 		allowNewCandidates := operator != TextSearchOperatorAND || i == 0
-		truncated, err := scanTextSearchPostingsTerm(snap, catalog, postingsRootName, term, termStats[term], candidates, allowNewCandidates, candidateLimit, maxPostingsScanned, &response.Stats)
+		truncated, err := scanTextSearchPostingsTerm(snap, catalog, postingsRootName, term, termStats[term], candidates, allowNewCandidates, candidateLimit, maxPostingsScanned, fieldNames, &response.Stats)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -242,7 +308,7 @@ func executeTextSearchAtSnapshot(
 
 	if operator == TextSearchOperatorAND {
 		for key, candidate := range candidates {
-			if len(candidate.postings) != len(terms) {
+			if candidate.postingCount() != len(terms) {
 				delete(candidates, key)
 			}
 		}
@@ -255,19 +321,22 @@ func executeTextSearchAtSnapshot(
 	scoreStart := time.Now()
 	scored := make([]*textSearchCandidate, 0, len(candidates))
 	stateRootName := collectionTextStateRootName(catalog.meta.Name, idx.Name)
+	var stateKeyScratch []byte
+	var fieldLengthScratch []textDocumentFieldLength
 	for _, candidate := range candidates {
-		stateRaw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, stateRootName, encodeTextStateKey(candidate.documentID), nil)
+		stateKeyScratch = appendTextStateKeyString(stateKeyScratch[:0], candidate.documentID)
+		stateRaw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, stateRootName, stateKeyScratch, nil)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
 		if !found {
-			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("missing text-state for collection %q index %q document %q", catalog.meta.Name, idx.Name, string(candidate.documentID)))
+			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("missing text-state for collection %q index %q document %q", catalog.meta.Name, idx.Name, candidate.documentID))
 		}
-		state, err := decodeTextDocumentStateValue(stateRaw)
+		fieldLengthScratch, err = decodeTextDocumentStateFieldLengths(stateRaw, fieldLengthScratch[:0], fieldNames)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
-		score, err := scoreTextSearchCandidate(candidate, terms, corpus, termStats, fieldStats, fieldWeights, state)
+		score, err := scoreTextSearchCandidate(candidate, terms, corpus, termStats, fieldStats, fieldWeights, fieldLengthScratch)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -282,7 +351,7 @@ func executeTextSearchAtSnapshot(
 		if scored[i].score != scored[j].score {
 			return scored[i].score > scored[j].score
 		}
-		return bytes.Compare(scored[i].documentID, scored[j].documentID) < 0
+		return scored[i].documentID < scored[j].documentID
 	})
 	if len(scored) > opts.TopK {
 		scored = scored[:opts.TopK]
@@ -290,9 +359,15 @@ func executeTextSearchAtSnapshot(
 	response.Stats.TextCandidatesReturned = uint64(len(scored))
 	response.Results = make([]TextSearchResult, len(scored))
 	for i, candidate := range scored {
-		matchedTerms, matchedFields, matches := textSearchCandidateMatches(candidate)
+		var matchedTerms, matchedFields []string
+		var matches []TextSearchMatch
+		if resultMode == textSearchResultTextMatchesOnly {
+			matches = textSearchCandidateTextMatches(candidate)
+		} else {
+			matchedTerms, matchedFields, matches = textSearchCandidateMatches(candidate)
+		}
 		response.Results[i] = TextSearchResult{
-			DocumentID:    bytes.Clone(candidate.documentID),
+			DocumentID:    []byte(candidate.documentID),
 			IndexName:     idx.Name,
 			Rank:          i + 1,
 			Score:         candidate.score,
@@ -313,7 +388,7 @@ func executeTextSearchAtSnapshot(
 
 func pruneTextSearchANDCandidates(candidates map[string]*textSearchCandidate, term string) {
 	for key, candidate := range candidates {
-		if _, ok := candidate.postings[term]; !ok {
+		if _, ok := candidate.postingForTerm(term); !ok {
 			delete(candidates, key)
 		}
 	}
@@ -327,6 +402,7 @@ func scanTextSearchPostingsTerm(
 	candidates map[string]*textSearchCandidate,
 	allowNewCandidates bool,
 	candidateLimit, maxPostingsScanned int,
+	fieldNames []string,
 	stats *TextSearchStats,
 ) (bool, error) {
 	prefix := encodeTextPostingTermPrefix(term)
@@ -357,14 +433,11 @@ func scanTextSearchPostingsTerm(
 			it.Next()
 			continue
 		}
-		decodedTerm, documentID, err := decodeTextPostingKey(key)
+		documentID, err := decodeTextPostingKeyDocumentIDForPrefix(key, prefix)
 		if err != nil {
 			return false, err
 		}
-		if decodedTerm != term {
-			return false, errMalformedTextStorage("postings key term %q outside scan term %q", decodedTerm, term)
-		}
-		posting, err := decodeTextPostingValue(it.ValueCopy(nil))
+		posting, err := decodeTextPostingValueForSearch(it.UnsafeValue(), fieldNames)
 		if err != nil {
 			return false, err
 		}
@@ -384,22 +457,10 @@ func scanTextSearchPostingsTerm(
 				stats.FailClosedReason = textSearchFailClosedCandidateLimit
 				return true, nil
 			}
-			candidate = &textSearchCandidate{
-				documentID: bytes.Clone(documentID),
-				postings:   make(map[string]textPostingValue),
-				matches:    make(map[string]map[string]struct{}),
-			}
+			candidate = &textSearchCandidate{documentID: keyString}
 			candidates[keyString] = candidate
 		}
-		candidate.postings[term] = posting
-		for _, field := range posting.Fields {
-			terms := candidate.matches[field.Field]
-			if terms == nil {
-				terms = make(map[string]struct{})
-				candidate.matches[field.Field] = terms
-			}
-			terms[term] = struct{}{}
-		}
+		candidate.addPosting(term, posting)
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
@@ -411,18 +472,14 @@ func scanTextSearchPostingsTerm(
 	return false, nil
 }
 
-func scoreTextSearchCandidate(candidate *textSearchCandidate, terms []string, corpus textStatsCorpusValue, termStats map[string]textStatsTermValue, fieldStats map[string]textStatsFieldValue, fieldWeights map[string]float64, state textDocumentStateValue) (float64, error) {
+func scoreTextSearchCandidate(candidate *textSearchCandidate, terms []string, corpus textStatsCorpusValue, termStats map[string]textStatsTermValue, fieldStats map[string]textStatsFieldValue, fieldWeights map[string]float64, fieldLengths []textDocumentFieldLength) (float64, error) {
 	if corpus.DocumentCount == 0 {
 		return 0, errMalformedTextStorage("text-stats corpus document count is zero with search candidates")
-	}
-	fieldLengths := make(map[string]uint32, len(state.Fields))
-	for _, field := range state.Fields {
-		fieldLengths[field.Field] = field.Length
 	}
 	corpusDocuments := float64(corpus.DocumentCount)
 	var score float64
 	for _, term := range terms {
-		posting, ok := candidate.postings[term]
+		posting, ok := candidate.postingForTerm(term)
 		if !ok {
 			continue
 		}
@@ -433,7 +490,8 @@ func scoreTextSearchCandidate(candidate *textSearchCandidate, terms []string, co
 		df := float64(stats.DocumentFrequency)
 		idf := math.Log(1 + (corpusDocuments-df+0.5)/(df+0.5))
 		var combinedTF float64
-		for _, fieldPosting := range posting.Fields {
+		for fieldIdx := 0; fieldIdx < posting.fieldCount(); fieldIdx++ {
+			fieldPosting := posting.fieldAt(fieldIdx)
 			weight, ok := fieldWeights[fieldPosting.Field]
 			if !ok {
 				return 0, errMalformedTextStorage("posting references undeclared text field %q", fieldPosting.Field)
@@ -442,7 +500,7 @@ func scoreTextSearchCandidate(candidate *textSearchCandidate, terms []string, co
 			if statsValue.DocumentCount == 0 || statsValue.TotalTokenCount == 0 {
 				return 0, errMalformedTextStorage("missing text-stats field accounting for %q", fieldPosting.Field)
 			}
-			fieldLength, ok := fieldLengths[fieldPosting.Field]
+			fieldLength, ok := textDocumentFieldLengthByName(fieldLengths, fieldPosting.Field)
 			if !ok {
 				return 0, errMalformedTextStorage("missing text-state field length for %q", fieldPosting.Field)
 			}
@@ -494,31 +552,105 @@ func fetchTextSearchResultDocuments(c *Collection, snap *backenddb.Snapshot, cat
 	return nil
 }
 
+type textSearchMatchPair struct {
+	field string
+	term  string
+}
+
+func textSearchCandidateTextMatches(candidate *textSearchCandidate) []TextSearchMatch {
+	_, _, matches := textSearchCandidateMatchDetails(candidate, false)
+	return matches
+}
+
 func textSearchCandidateMatches(candidate *textSearchCandidate) ([]string, []string, []TextSearchMatch) {
-	fields := make([]string, 0, len(candidate.matches))
-	termSet := make(map[string]struct{})
-	for field, terms := range candidate.matches {
-		fields = append(fields, field)
-		for term := range terms {
-			termSet[term] = struct{}{}
+	return textSearchCandidateMatchDetails(candidate, true)
+}
+
+func textSearchCandidateMatchDetails(candidate *textSearchCandidate, includeLegacyLists bool) ([]string, []string, []TextSearchMatch) {
+	var inline [8]textSearchMatchPair
+	pairs := inline[:0]
+	for postingIdx := 0; postingIdx < candidate.postingCount(); postingIdx++ {
+		entry := candidate.postingAt(postingIdx)
+		for fieldIdx := 0; fieldIdx < entry.posting.fieldCount(); fieldIdx++ {
+			field := entry.posting.fieldAt(fieldIdx)
+			if len(pairs) == cap(pairs) {
+				grown := make([]textSearchMatchPair, len(pairs), len(pairs)*2)
+				copy(grown, pairs)
+				pairs = grown
+			}
+			pairs = append(pairs, textSearchMatchPair{field: field.Field, term: entry.term})
 		}
 	}
-	sort.Strings(fields)
-	matchedTerms := make([]string, 0, len(termSet))
-	for term := range termSet {
-		matchedTerms = append(matchedTerms, term)
+	if len(pairs) == 0 {
+		return nil, nil, nil
 	}
-	sort.Strings(matchedTerms)
-	matches := make([]TextSearchMatch, 0, len(fields))
-	for _, field := range fields {
-		terms := make([]string, 0, len(candidate.matches[field]))
-		for term := range candidate.matches[field] {
-			terms = append(terms, term)
+	sortTextSearchMatchPairs(pairs)
+	unique := pairs[:0]
+	for _, pair := range pairs {
+		if len(unique) > 0 && unique[len(unique)-1] == pair {
+			continue
 		}
-		sort.Strings(terms)
+		unique = append(unique, pair)
+	}
+
+	matches := make([]TextSearchMatch, 0, len(unique))
+	var matchedFields []string
+	var matchedTerms []string
+	if includeLegacyLists {
+		matchedFields = make([]string, 0, len(unique))
+		matchedTerms = make([]string, 0, len(unique))
+	}
+	for i := 0; i < len(unique); {
+		field := unique[i].field
+		j := i + 1
+		for j < len(unique) && unique[j].field == field {
+			j++
+		}
+		terms := make([]string, 0, j-i)
+		for _, pair := range unique[i:j] {
+			terms = append(terms, pair.term)
+			if includeLegacyLists && !textSearchStringSliceContains(matchedTerms, pair.term) {
+				matchedTerms = append(matchedTerms, pair.term)
+			}
+		}
 		matches = append(matches, TextSearchMatch{Field: field, Terms: terms})
+		if includeLegacyLists {
+			matchedFields = append(matchedFields, field)
+		}
+		i = j
 	}
-	return matchedTerms, fields, matches
+	if includeLegacyLists {
+		sort.Strings(matchedTerms)
+	}
+	return matchedTerms, matchedFields, matches
+}
+
+func sortTextSearchMatchPairs(pairs []textSearchMatchPair) {
+	for i := 1; i < len(pairs); i++ {
+		current := pairs[i]
+		j := i - 1
+		for j >= 0 && textSearchMatchPairLess(current, pairs[j]) {
+			pairs[j+1] = pairs[j]
+			j--
+		}
+		pairs[j+1] = current
+	}
+}
+
+func textSearchMatchPairLess(a, b textSearchMatchPair) bool {
+	if a.field != b.field {
+		return a.field < b.field
+	}
+	return a.term < b.term
+}
+
+func textSearchStringSliceContains(values []string, value string) bool {
+	for _, existing := range values {
+		if existing == value {
+			return true
+		}
+	}
+	return false
 }
 
 func textSearchFailClosed(response TextSearchResponse, reason string, err error) (TextSearchResponse, error) {

@@ -1,14 +1,13 @@
 package collections
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 )
 
 // SearchHybridTextCandidates adapts collection-native ranked text search into
 // the shared hybrid candidate shape. It is candidate-only: it requests no
-// documents from SearchText, copies stable result IDs into response-owned
+// documents from SearchText, reuses response-owned result IDs for response-owned
 // HybridSearchCandidate values, assigns one-based source ranks, preserves text
 // match attribution, and fails closed if the backing text path reports any full
 // document materialization or scan fallback.
@@ -27,12 +26,12 @@ func (c *Collection) SearchHybridTextCandidates(query HybridTextQuery) (HybridCa
 		return response, err
 	}
 
-	textResponse, err := c.SearchText(TextSearchOptions{
+	textResponse, err := c.searchText(TextSearchOptions{
 		IndexName:        query.IndexName,
 		Query:            query.Query,
 		TopK:             requested,
 		IncludeDocuments: false,
-	})
+	}, textSearchResultTextMatchesOnly)
 	if err != nil {
 		response := HybridCandidateResponse{Stats: hybridTextCandidateStatsFromSearch(requested, textResponse.Stats, 0)}
 		response.Stats.FailClosed = 1
@@ -64,7 +63,7 @@ func hybridTextCandidatesFromSearchResponse(requested int, textIndexName string,
 	}
 	candidates := make([]HybridSearchCandidate, len(textResponse.Results))
 	for i, result := range textResponse.Results {
-		id := bytes.Clone(result.DocumentID)
+		id := result.DocumentID
 		id = id[:len(id):len(id)]
 		rank := result.Rank
 		if rank <= 0 {
@@ -136,7 +135,10 @@ func hybridTextMatchesFromSearchResult(result TextSearchResult) []HybridTextMatc
 	}
 	matches := make([]HybridTextMatch, len(result.TextMatches))
 	for i, match := range result.TextMatches {
-		terms := append([]string(nil), match.Terms...)
+		terms := match.Terms
+		if len(terms) > 0 {
+			terms = terms[:len(terms):len(terms)]
+		}
 		matches[i] = HybridTextMatch{Field: match.Field, Terms: terms}
 	}
 	return matches

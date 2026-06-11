@@ -34,12 +34,24 @@ func TestTextStorageCodecsRoundTripAndFailClosed(t *testing.T) {
 			Offsets:   []textTokenOffset{{Start: 0, End: 6}, {Start: 14, End: 20}, {Start: 30, End: 36}},
 		}},
 	}
-	decodedPosting, err := decodeTextPostingValue(encodeTextPostingValue(posting))
+	encodedPosting := encodeTextPostingValue(posting)
+	decodedPosting, err := decodeTextPostingValue(encodedPosting)
 	if err != nil {
 		t.Fatalf("decode postings value: %v", err)
 	}
 	if decodedPosting.TermFrequency != 3 || len(decodedPosting.Fields) != 1 || decodedPosting.Fields[0].Field != "body" || !slices.Equal(decodedPosting.Fields[0].Positions, []uint32{0, 2, 5}) {
 		t.Fatalf("decoded postings=%+v", decodedPosting)
+	}
+	searchPosting, err := decodeTextPostingValueForSearch(encodedPosting, []string{"body"})
+	if err != nil {
+		t.Fatalf("decode search postings value: %v", err)
+	}
+	if searchPosting.TermFrequency != decodedPosting.TermFrequency || searchPosting.fieldCount() != len(decodedPosting.Fields) {
+		t.Fatalf("search posting=%+v decoded=%+v", searchPosting, decodedPosting)
+	}
+	searchField := searchPosting.fieldAt(0)
+	if searchField.Field != decodedPosting.Fields[0].Field || searchField.Frequency != decodedPosting.Fields[0].Frequency {
+		t.Fatalf("search field=%+v decoded=%+v", searchField, decodedPosting.Fields[0])
 	}
 
 	state := textDocumentStateValue{Fields: []textDocumentFieldState{{
@@ -52,12 +64,43 @@ func TestTextStorageCodecsRoundTripAndFailClosed(t *testing.T) {
 			Offsets:   []textTokenOffset{{Start: 0, End: 6}, {Start: 21, End: 27}},
 		}},
 	}}}
-	decodedState, err := decodeTextDocumentStateValue(encodeTextDocumentStateValue(state))
+	encodedState := encodeTextDocumentStateValue(state)
+	decodedState, err := decodeTextDocumentStateValue(encodedState)
 	if err != nil {
 		t.Fatalf("decode text-state value: %v", err)
 	}
 	if len(decodedState.Fields) != 1 || decodedState.Fields[0].Terms[0].Term != "refund" || decodedState.Fields[0].Terms[0].Frequency != 2 {
 		t.Fatalf("decoded state=%+v", decodedState)
+	}
+	fieldLengths, err := decodeTextDocumentStateFieldLengths(encodedState, nil, []string{"body"})
+	if err != nil {
+		t.Fatalf("decode search text-state field lengths: %v", err)
+	}
+	if len(fieldLengths) != len(decodedState.Fields) || fieldLengths[0].Field != decodedState.Fields[0].Field || fieldLengths[0].Length != decodedState.Fields[0].Length {
+		t.Fatalf("field lengths=%+v decoded=%+v", fieldLengths, decodedState.Fields)
+	}
+
+	malformedPosting := textPostingValue{TermFrequency: 1, Fields: []textPostingFieldValue{{
+		Field:     "body",
+		Frequency: 1,
+		Positions: []uint32{1, 2},
+		Offsets:   []textTokenOffset{{Start: 0, End: 1}},
+	}}}
+	if _, err := decodeTextPostingValueForSearch(encodeTextPostingValue(malformedPosting), []string{"body"}); !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("decode malformed search posting err=%v want ErrTextIndexStorageCorrupt", err)
+	}
+	malformedState := textDocumentStateValue{Fields: []textDocumentFieldState{{
+		Field:  "body",
+		Length: 2,
+		Terms: []textDocumentTermState{{
+			Term:      "refund",
+			Frequency: 1,
+			Positions: []uint32{1, 2},
+			Offsets:   []textTokenOffset{{Start: 0, End: 1}},
+		}},
+	}}}
+	if _, err := decodeTextDocumentStateFieldLengths(encodeTextDocumentStateValue(malformedState), nil, []string{"body"}); !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("decode malformed search state err=%v want ErrTextIndexStorageCorrupt", err)
 	}
 
 	for _, tc := range []struct {
