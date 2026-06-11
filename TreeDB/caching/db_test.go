@@ -163,7 +163,7 @@ func TestTailValueLogSegmentsByLane(t *testing.T) {
 	}
 }
 
-func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
+func TestOpenSeedsRIDFromTailValueLogSegments(t *testing.T) {
 	dir := t.TempDir()
 	valueDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(valueDir, 0o700); err != nil {
@@ -190,10 +190,11 @@ func TestOpenSeedsRIDFromAllValueLogSegments(t *testing.T) {
 		}
 	}
 
-	// Older segment contains a higher RID than the newest segment.
+	// RID allocation is monotonic, so Open only needs the newest non-empty
+	// segment in each lane to recover the allocator high-watermark.
 	const expectedMaxRID = uint64(100)
-	writeSegment(1, expectedMaxRID)
-	writeSegment(2, 10)
+	writeSegment(1, 10)
+	writeSegment(2, expectedMaxRID)
 
 	backend := NewMockBackend()
 	db, err := Open(dir, backend, Options{
