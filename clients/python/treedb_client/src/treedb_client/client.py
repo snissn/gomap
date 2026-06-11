@@ -149,11 +149,14 @@ class TreeDBClient:
         documents: Sequence[DocumentLike],
         *,
         expected_generation: Optional[int] = None,
+        defer_vector_index_rebuild: bool = False,
     ) -> UpsertDocumentsResponse:
         """Write or replace documents in an index."""
 
         request: dict[str, Any] = {"documents": [_document_for_write(doc) for doc in documents]}
         _add_expected_generation(request, expected_generation)
+        if defer_vector_index_rebuild:
+            request["defer_vector_index_rebuild"] = True
         payload = self._request("POST", self._index_path(index, "documents", "upsert"), request)
         return _parse_response("upsert response", UpsertDocumentsResponse.from_dict, payload)
 

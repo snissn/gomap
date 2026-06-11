@@ -167,11 +167,13 @@ class TreeDBClientTests(unittest.TestCase):
                 "docs",
                 [Document(id="a", content="alpha", embedding=[1, 0], meta={"repo": "gomap"}, score=0.5)],
                 expected_generation=1,
+                defer_vector_index_rebuild=True,
             )
 
             self.assertEqual(result.upserted, 1)
             body = json_body(server.records[0])
             self.assertEqual(body["expected_generation"], 1)
+            self.assertEqual(body["defer_vector_index_rebuild"], True)
             self.assertNotIn("score", body["documents"][0])
             self.assertEqual(body["documents"][0]["embedding"], [1.0, 0.0])
 

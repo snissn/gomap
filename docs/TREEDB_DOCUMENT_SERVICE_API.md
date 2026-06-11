@@ -349,6 +349,12 @@ collection-truncate/WAL format just for benchmark reset and preserves TreeDB's
 insert-only graph rebuild boundary. Compatible non-`column_graph` indexes may be
 cleared with existing document deletes.
 
+Bulk loaders may pass `"defer_vector_index_rebuild": true` on document upserts
+to avoid rebuilding column-graph vector assets after every inserted batch.
+When rebuild is deferred, `/search/vector-index` fails closed until optimize has
+built the assets for the loaded documents. The exact document route
+`/search/vector` remains readable from stored documents before optimize.
+
 Optimize/rebuild after load:
 
 ```http

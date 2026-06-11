@@ -175,7 +175,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			updated++
 		}
 	}
-	if inserted > 0 && updated == 0 {
+	if inserted > 0 && updated == 0 && !req.DeferVectorIndexRebuild {
 		if err := rebuildServiceVectorIndex(ctx, col); err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
