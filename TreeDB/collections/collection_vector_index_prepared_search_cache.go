@@ -730,32 +730,36 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 		clear(previousResults)
 		return response, nil
 	}
+	searchOpts := columnVectorGraphNativeSearchOptions{
+		TopK:                      opts.TopK,
+		EfSearch:                  opts.EfSearch,
+		ScoreBatchMode:            opts.scoreBatchMode,
+		StatsMode:                 statsMode,
+		QueryMode:                 queryMode,
+		QuantizedIndexName:        opts.QuantizedIndexName,
+		QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
+	}
 	var results []columnVectorGraphNativeSearchResult
 	var searchStats columnVectorGraphNativeSearchStats
 	var err error
 	if pack, ok := collectionScalarU8PreparedTraversalPackForReader(reader, queryMode, statsMode, opts.QuantizedIndexName); ok {
-		results, searchStats, err = reader.SearchCosineScalarU8PreparedTraversal(pack, opts.Query, columnVectorGraphNativeSearchOptions{
-			TopK:                      opts.TopK,
-			EfSearch:                  opts.EfSearch,
-			ScoreBatchMode:            opts.scoreBatchMode,
-			StatsMode:                 statsMode,
-			QueryMode:                 queryMode,
-			QuantizedIndexName:        opts.QuantizedIndexName,
-			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
-		}, &buffer.searchScratch)
+		results, searchStats, err = reader.SearchCosineScalarU8PreparedTraversal(pack, opts.Query, searchOpts, &buffer.searchScratch)
+		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+		p.routeStats.apply(&response.Stats)
+	} else if reader.rabitqHNSWSearchPackPreparedRouteEligible(queryMode, opts.QuantizedIndexName, statsMode) {
+		results, searchStats, err = reader.searchRabitQCosinePreparedHNSWPack(opts.Query, searchOpts, &buffer.searchScratch)
+		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+		if err != nil && searchStats.QuantizedScorerActive == 0 && searchStats.QuantizedScoreCalls == 0 {
+			p.routeStats.apply(&response.Stats)
+		} else {
+			vectorIndexSearchRouteStatsForHNSWSearchPackRoute(reader.hnswSearchPack.routeStats(reader.hnswSearchPackStatus, reader.hnswSearchPackOpenNanos)).apply(&response.Stats)
+		}
 	} else {
-		results, searchStats, err = reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
-			TopK:                      opts.TopK,
-			EfSearch:                  opts.EfSearch,
-			ScoreBatchMode:            opts.scoreBatchMode,
-			StatsMode:                 statsMode,
-			QueryMode:                 queryMode,
-			QuantizedIndexName:        opts.QuantizedIndexName,
-			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
-		}, &buffer.searchScratch)
+		results, searchStats, err = reader.SearchCosine(opts.Query, searchOpts, &buffer.searchScratch)
+		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+		p.routeStats.apply(&response.Stats)
 	}
-	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
-	p.routeStats.apply(&response.Stats)
+
 	if err != nil {
 		clear(previousResults)
 		return response, err

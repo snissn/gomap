@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -211,6 +212,228 @@ func TestVectorIndexSearcherRabitQQuantizedSearchWithBuffer2451(t *testing.T) {
 		t.Fatalf("rabitq quantized_rerank short results=%d want 2", len(rerankedShort.Results))
 	}
 	assertRabitQQuantizedRerankStats2451(t, rerankedShort.Stats, shortlist, def.Dimensions, plan.BytesPerCode())
+}
+
+func TestRabitQPreparedHNSWSearchPackRouteParity2587(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.7, 0.2, 0.1}},
+		{id: "doc-c", vector: []float32{0.1, 0.8, 0.2}},
+		{id: "doc-d", vector: []float32{0, 0.1, 0.9}},
+		{id: "doc-e", vector: []float32{-0.2, 0.4, 0.7}},
+		{id: "doc-f", vector: []float32{0.3, -0.4, 0.6}},
+		{id: "doc-g", vector: []float32{-0.5, 0.1, 0.7}},
+		{id: "doc-h", vector: []float32{0.2, 0.5, -0.4}},
+	}
+	query := []float32{0.25, 0.7, -0.1}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	qName := def.QuantizedIndexes[0].Name
+	cases := []struct {
+		name      string
+		mode      VectorIndexQueryMode
+		topK      int
+		rerank    int
+		wantExact bool
+	}{
+		{name: "quantized_only", mode: VectorIndexQueryModeQuantizedOnly, topK: 4},
+		{name: "quantized_rerank_all", mode: VectorIndexQueryModeQuantizedRerank, topK: 3, rerank: len(rows), wantExact: true},
+		{name: "quantized_rerank_shortlist", mode: VectorIndexQueryModeQuantizedRerank, topK: 3, rerank: 5, wantExact: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			legacyOpts := columnVectorGraphNativeSearchOptions{TopK: tc.topK, EfSearch: len(rows), QueryMode: columnVectorGraphNativeSearchQueryModeFromPublic2415(tc.mode), QuantizedIndexName: qName, QuantizedRerankCandidates: tc.rerank}
+			var legacyScratch columnVectorGraphNativeSearchScratch
+			legacy, legacyStats, err := searcher.reader.SearchCosine(query, legacyOpts, &legacyScratch)
+			if err != nil {
+				t.Fatalf("legacy SearchCosine: %v", err)
+			}
+			var buffer VectorIndexSearchBuffer
+			got, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: tc.mode, QuantizedIndexName: qName, QuantizedRerankCandidates: tc.rerank, TopK: tc.topK, EfSearch: len(rows)}, &buffer)
+			if err != nil {
+				t.Fatalf("SearchWithBuffer prepared pack route: %v", err)
+			}
+			assertRabitQPreparedPackResultsMatch2587(t, got.Results, legacy)
+			if got.Stats.SearchRouteHNSWSearchPack != 1 || got.Stats.HNSWSearchPackActive != 1 || got.Stats.SearchRouteColumnGraphPrepared+got.Stats.SearchRouteColumnGraphFallback != 0 {
+				t.Fatalf("prepared pack route stats=%+v", got.Stats)
+			}
+			if got.Stats.QuantizedScoreCalls != legacyStats.QuantizedScoreCalls || got.Stats.QuantizedCodeBytesRead != legacyStats.QuantizedCodeBytesRead {
+				t.Fatalf("quantized scorer counters got=%+v legacy=%+v", got.Stats, legacyStats)
+			}
+			if tc.wantExact {
+				if got.Stats.QuantizedRerankCandidates != uint64(tc.rerank) || got.Stats.QuantizedRerankExactScoreCalls != uint64(tc.rerank) || got.Stats.PreparedScoreCalls != uint64(tc.rerank) {
+					t.Fatalf("rerank counters=%+v want shortlist=%d", got.Stats, tc.rerank)
+				}
+			} else if got.Stats.PreparedScoreCalls != 0 || got.Stats.VectorBytesRead != 0 || got.Stats.NormBytesRead != 0 {
+				t.Fatalf("quantized_only exact counters=%+v want zero", got.Stats)
+			}
+		})
+	}
+}
+
+func TestRabitQPreparedHNSWSearchPackRerankPreservesEfTraversal2587(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.95, 0.05, 0}},
+		{id: "doc-c", vector: []float32{0.85, 0.15, 0}},
+		{id: "doc-d", vector: []float32{0.75, 0.25, 0}},
+		{id: "doc-e", vector: []float32{0.65, 0.35, 0}},
+		{id: "doc-f", vector: []float32{0.55, 0.45, 0}},
+		{id: "doc-g", vector: []float32{0.45, 0.55, 0}},
+		{id: "doc-h", vector: []float32{0.35, 0.65, 0}},
+	}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	packSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher pack: %v", err)
+	}
+	defer func() { _ = packSearcher.Close() }()
+	fallbackSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher fallback: %v", err)
+	}
+	defer func() { _ = fallbackSearcher.Close() }()
+	if fallbackSearcher.reader == nil || fallbackSearcher.reader.hnswSearchPack == nil {
+		t.Fatalf("fallback searcher missing reader or prepared pack")
+	}
+	fallbackSearcher.reader.hnswSearchPack = nil
+
+	opts := VectorIndexSearcherSearchOptions{
+		Query:                     []float32{0.7, 0.3, 0},
+		QueryMode:                 VectorIndexQueryModeQuantizedRerank,
+		QuantizedIndexName:        def.QuantizedIndexes[0].Name,
+		QuantizedRerankCandidates: 4,
+		TopK:                      3,
+		EfSearch:                  len(rows),
+		StatsMode:                 VectorIndexSearchStatsModeProduction,
+	}
+	var packBuffer, fallbackBuffer VectorIndexSearchBuffer
+	packResults, err := packSearcher.SearchWithBuffer(opts, &packBuffer)
+	if err != nil {
+		t.Fatalf("pack SearchWithBuffer: %v", err)
+	}
+	fallbackResults, err := fallbackSearcher.SearchWithBuffer(opts, &fallbackBuffer)
+	if err != nil {
+		t.Fatalf("fallback SearchWithBuffer: %v", err)
+	}
+	for name, stats := range map[string]VectorIndexSearchStats{"pack": packResults.Stats, "fallback": fallbackResults.Stats} {
+		if stats.DocumentsFetched != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
+			t.Fatalf("%s stats=%+v want no document/fallback guardrail counters", name, stats)
+		}
+		if stats.QuantizedRerankExactScoreCalls != uint64(opts.QuantizedRerankCandidates) {
+			t.Fatalf("%s stats=%+v want rerank shortlist=%d", name, stats, opts.QuantizedRerankCandidates)
+		}
+		if name == "pack" && stats.PreparedScoreCalls != uint64(opts.QuantizedRerankCandidates) {
+			t.Fatalf("pack stats=%+v want prepared rerank shortlist=%d", stats, opts.QuantizedRerankCandidates)
+		}
+	}
+	if packResults.Stats.Candidates == 0 || packResults.Stats.VisitedEdges == 0 {
+		t.Fatalf("pack stats=%+v want production traversal counters", packResults.Stats)
+	}
+	if packResults.Stats.Candidates != fallbackResults.Stats.Candidates || packResults.Stats.VisitedEdges != fallbackResults.Stats.VisitedEdges || packResults.Stats.QuantizedScoreCalls != fallbackResults.Stats.QuantizedScoreCalls || packResults.Stats.QuantizedRerankExactScoreCalls != fallbackResults.Stats.QuantizedRerankExactScoreCalls {
+		t.Fatalf("pack stats=%+v fallback stats=%+v want same efSearch traversal and rerank counters", packResults.Stats, fallbackResults.Stats)
+	}
+	if len(packResults.Results) != len(fallbackResults.Results) {
+		t.Fatalf("pack results=%d fallback results=%d", len(packResults.Results), len(fallbackResults.Results))
+	}
+	for i := range packResults.Results {
+		got := packResults.Results[i]
+		want := fallbackResults.Results[i]
+		if got.Ordinal != want.Ordinal || !bytes.Equal(got.ID, want.ID) || math.Abs(got.Score-want.Score) > 1e-6 {
+			t.Fatalf("result[%d] pack=%+v fallback=%+v", i, got, want)
+		}
+	}
+}
+
+func TestCollectionSearchVectorIndexWithBufferRabitQConcurrentPreparedPack2587(t *testing.T) {
+	rows := make([]columnGraphRebuildInputRowV2A, 32)
+	for i := range rows {
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("doc-%02d", i), vector: rabitqTestVector2477(3, uint64(i+1))}
+	}
+	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	qName := def.QuantizedIndexes[0].Name
+	warmOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: rabitqTestVector2477(3, 100), QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: qName, TopK: 4, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+	var warmBuffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(warmOpts, &warmBuffer); err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	const workers = 8
+	const iterations = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	for worker := 0; worker < workers; worker++ {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var buffer VectorIndexSearchBuffer
+			for iter := 0; iter < iterations; iter++ {
+				query := rabitqTestVector2477(3, uint64(1000+worker*iterations+iter))
+				opts := warmOpts
+				opts.Query = query
+				if iter%2 == 1 {
+					opts.QueryMode = VectorIndexQueryModeQuantizedRerank
+					opts.QuantizedRerankCandidates = 8
+				} else {
+					opts.QueryMode = VectorIndexQueryModeQuantizedOnly
+					opts.QuantizedRerankCandidates = 0
+				}
+				got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+				if err != nil {
+					errCh <- fmt.Errorf("worker=%d iter=%d: %w", worker, iter, err)
+					return
+				}
+				if len(got.Results) != opts.TopK || got.Stats.SearchRouteHNSWSearchPack != 1 || got.Stats.HNSWSearchPackActive != 1 || got.Stats.QuantizedScorerActive != 1 || got.Stats.QuantizedScoreCalls == 0 {
+					errCh <- fmt.Errorf("worker=%d iter=%d stats=%+v results=%d", worker, iter, got.Stats, len(got.Results))
+					return
+				}
+				if opts.QueryMode == VectorIndexQueryModeQuantizedOnly {
+					if got.Stats.PreparedScoreCalls != 0 || got.Stats.VectorBytesRead != 0 || got.Stats.NormBytesRead != 0 {
+						errCh <- fmt.Errorf("worker=%d iter=%d quantized_only exact counters=%+v", worker, iter, got.Stats)
+						return
+					}
+				} else if got.Stats.QuantizedRerankExactScoreCalls != uint64(opts.QuantizedRerankCandidates) || got.Stats.PreparedScoreCalls != uint64(opts.QuantizedRerankCandidates) {
+					errCh <- fmt.Errorf("worker=%d iter=%d rerank counters=%+v", worker, iter, got.Stats)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func assertRabitQPreparedPackResultsMatch2587(tb testing.TB, got []VectorIndexSearchResult, want []columnVectorGraphNativeSearchResult) {
+	tb.Helper()
+	if len(got) != len(want) {
+		tb.Fatalf("results=%d want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Ordinal != want[i].Ordinal || !bytes.Equal(got[i].ID, want[i].ID) || math.Abs(got[i].Score-want[i].Score) > 1e-6 {
+			tb.Fatalf("result[%d]=%+v want ordinal=%d id=%q score=%v", i, got[i], want[i].Ordinal, want[i].ID, want[i].Score)
+		}
+	}
 }
 
 func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) {
@@ -657,6 +880,9 @@ func assertRabitQQuantizedOnlyStats2451(tb testing.TB, stats VectorIndexSearchSt
 	if stats.SearchRouteQuantizedOnly != 1 || stats.SearchRouteQuantizedRerank != 0 || stats.QuantizedScorerActive != 1 {
 		tb.Fatalf("rabitq quantized_only route stats=%+v", stats)
 	}
+	if stats.SearchRouteHNSWSearchPack != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || stats.SearchRouteColumnGraphPrepared != 0 || stats.SearchRouteColumnGraphFallback != 0 {
+		tb.Fatalf("rabitq quantized_only route stats=%+v want prepared hnsw_search_pack_v1 score-plane traversal", stats)
+	}
 	if stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead != stats.QuantizedScoreCalls*uint64(bytesPerCode) {
 		tb.Fatalf("rabitq quantized_only code stats=%+v bytes_per_code=%d", stats, bytesPerCode)
 	}
@@ -670,14 +896,17 @@ func assertRabitQQuantizedRerankStats2451(tb testing.TB, stats VectorIndexSearch
 	if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 || stats.QuantizedScorerActive != 1 {
 		tb.Fatalf("rabitq quantized_rerank route stats=%+v", stats)
 	}
+	if stats.SearchRouteHNSWSearchPack != 1 || stats.HNSWSearchPackActive != 1 || stats.HNSWSearchPackFallbacks != 0 || stats.SearchRouteColumnGraphPrepared != 0 || stats.SearchRouteColumnGraphFallback != 0 {
+		tb.Fatalf("rabitq quantized_rerank route stats=%+v want prepared hnsw_search_pack_v1 score-plane traversal", stats)
+	}
 	if stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead != stats.QuantizedScoreCalls*uint64(bytesPerCode) {
 		tb.Fatalf("rabitq quantized_rerank code stats=%+v bytes_per_code=%d", stats, bytesPerCode)
 	}
 	if stats.QuantizedRerankCandidates != uint64(shortlist) || stats.QuantizedRerankExactScoreCalls != uint64(shortlist) {
 		tb.Fatalf("rabitq quantized_rerank exact calls stats=%+v shortlist=%d", stats, shortlist)
 	}
-	if stats.VectorBytesRead != uint64(shortlist*dims*4) || stats.NormBytesRead != uint64(shortlist*4) {
-		tb.Fatalf("rabitq quantized_rerank exact bytes stats=%+v want vector=%d norm=%d", stats, shortlist*dims*4, shortlist*4)
+	if stats.VectorBytesRead != uint64(shortlist*dims*4) || stats.NormBytesRead != 0 {
+		tb.Fatalf("rabitq quantized_rerank exact bytes stats=%+v want prepared-pack vector=%d norm=0", stats, shortlist*dims*4)
 	}
 	if stats.DocumentsFetched != 0 {
 		tb.Fatalf("rabitq quantized_rerank stats=%+v want no documents", stats)
