@@ -663,6 +663,71 @@ func TestColumnHNSWPreparedTraversalScorePlaneSeam2585(t *testing.T) {
 	}
 }
 
+func TestColumnHNSWPreparedTraversalOmitReturnsRetainedShortlist2585(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0.7, 0.3, 0}},
+		{id: "doc-d", vector: []float32{0.4, 0.6, 0}},
+		{id: "doc-e", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	if searcher.reader == nil || searcher.reader.hnswSearchPack == nil {
+		t.Fatal("searcher missing hnsw_search_pack_v1 prepared view")
+	}
+	pack := searcher.reader.hnswSearchPack
+	query := []float32{1, 0.05, 0}
+	const (
+		topK     = 2
+		retained = 4
+	)
+	opts := columnHNSWPreparedTraversalOptions{
+		TopK:                      topK,
+		EfSearch:                  len(rows),
+		RetainedCandidateLimit:    retained,
+		StatsMode:                 columnVectorGraphNativeSearchStatsModeFullDiagnostics,
+		OmitResultMaterialization: true,
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	shortlist, _, err := pack.searchCosinePreparedScorePlane(query, opts, &scratch, &columnHNSWPreparedExactFP32ScorePlane{})
+	if err != nil {
+		t.Fatalf("prepared traversal omitted shortlist: %v", err)
+	}
+	if len(shortlist) != retained {
+		t.Fatalf("omitted shortlist results=%d want retained=%d: %+v", len(shortlist), retained, shortlist)
+	}
+	for i, result := range shortlist {
+		if result.ID != nil || result.HasRowRef || len(result.RowRef.DocumentID) != 0 {
+			t.Fatalf("omitted shortlist result[%d]=%+v unexpectedly materialized ID/row ref", i, result)
+		}
+	}
+
+	var materializedScratch columnVectorGraphNativeSearchScratch
+	materializedOpts := opts
+	materializedOpts.OmitResultMaterialization = false
+	materialized, _, err := pack.searchCosinePreparedScorePlane(query, materializedOpts, &materializedScratch, &columnHNSWPreparedExactFP32ScorePlane{})
+	if err != nil {
+		t.Fatalf("prepared traversal materialized results: %v", err)
+	}
+	if len(materialized) != topK {
+		t.Fatalf("materialized results=%d want top_k=%d: %+v", len(materialized), topK, materialized)
+	}
+	for i, result := range materialized {
+		if len(result.ID) == 0 {
+			t.Fatalf("materialized result[%d]=%+v missing ID", i, result)
+		}
+	}
+}
+
 func TestColumnHNSWSearchPackExactRouteAndQuantizedFailClosed2585(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

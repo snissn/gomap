@@ -314,14 +314,17 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
-	if len(scratch.top) > topK {
-		scratch.top = scratch.top[:topK]
-	}
 	if opts.OmitResultMaterialization {
+		if len(scratch.top) > retainedCandidateLimit {
+			scratch.top = scratch.top[:retainedCandidateLimit]
+		}
 		for _, candidate := range scratch.top {
 			scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{Ordinal: candidate.ordinal, Score: candidate.score})
 		}
 		return scratch.results, stats, nil
+	}
+	if len(scratch.top) > topK {
+		scratch.top = scratch.top[:topK]
 	}
 	if err := v.fetchTopSearchResults(scratch, &stats); err != nil {
 		return nil, stats, err
