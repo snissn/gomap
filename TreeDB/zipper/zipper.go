@@ -1227,7 +1227,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	}
 
 	var retired []uint64
-	newRootRef, splits, err := z.writeRecursive(page.PageChildRef(rootID), ops, ranges, maintenance, budget, &metrics, nil, nil, &retired, scratch)
+	newRootRef, splits, err := z.writeRecursive(page.PageChildRef(rootID), ops, ranges, maintenance, budget, &metrics, nil, nil, &retired, scratch, true)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -1569,7 +1569,7 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive
 
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, error.
-func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []batch.DeleteRange, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64, scratch *mergeScratch) (page.ChildRef, []Split, error) {
+func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []batch.DeleteRange, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64, scratch *mergeScratch, isRoot bool) (page.ChildRef, []Split, error) {
 	oldNode, oldFromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
 	if err != nil {
 		return page.ChildRef{}, nil, err
@@ -1646,11 +1646,12 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 		metrics.IndexWriteBytes += page.PageSize
 		recordZipperInternalPageWrite(metrics)
 
-		// If this internal page collapsed to a single child and produced no splits,
-		// skip writing the redundant level by returning the child directly.
-		// This helps delete-heavy workloads shrink tree height without requiring
-		// an explicit vacuum.
-		if len(splits) == 0 && n.Count() == 1 {
+		// If the root collapsed to a single child and produced no splits, skip
+		// writing the redundant level by returning the child directly. Only the
+		// root may shrink this way: collapsing a non-root internal page would give
+		// its parent a shorter child subtree than its siblings, violating B+Tree
+		// height balance and allowing repeated root splits to build tall spines.
+		if len(splits) == 0 && n.Count() == 1 && isRoot {
 			childRef, err := n.GetInternalChildRef(0)
 			if err == nil && childRef.Kind == page.ChildRefPage {
 				if retired != nil {
@@ -2184,7 +2185,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			newChildRef := curChild
 			var childSplits []Split
 			if len(childOps) > 0 || len(childRanges) > 0 {
-				newChildRef, childSplits, err = z.writeRecursive(curChild, childOps, childRanges, maintenance, budget, metrics, lowKey, childHigh, retired, scratch)
+				newChildRef, childSplits, err = z.writeRecursive(curChild, childOps, childRanges, maintenance, budget, metrics, lowKey, childHigh, retired, scratch, false)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
@@ -2319,7 +2320,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				}
 				var childMetrics adaptive.Metrics
 				childRet := children[i].retired[:0]
-				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch)
+				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch, false)
 				if err != nil {
 					errOnce.Do(func() { firstErr = err })
 					continue
@@ -2350,7 +2351,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	} else {
 		for i := range children {
 			if len(children[i].ops) > 0 {
-				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, metrics, children[i].low, children[i].high, retired, scratch)
+				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, metrics, children[i].low, children[i].high, retired, scratch, false)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
