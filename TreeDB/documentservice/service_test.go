@@ -726,6 +726,12 @@ func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
 	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, QueryMode: BenchmarkVectorQueryModeQuantizedOnly, QuantizedRerankCandidates: 32}); ErrorCodeOf(err) != CodeInvalidRequest {
 		t.Fatalf("quantized_only invalid shape err=%v code=%s", err, ErrorCodeOf(err))
 	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, StatsMode: collections.VectorIndexSearchStatsModeBenchmarkDebug}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("benchmark_debug stats_mode err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, StatsMode: collections.VectorIndexSearchStatsMode("future")}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("unknown stats_mode err=%v code=%s", err, ErrorCodeOf(err))
+	}
 	loadBenchmarkDocs(t, svc, "bench", []Document{{ID: "a", Embedding: []float32{1, 0}}})
 	if _, err := svc.OptimizeIndex(ctx, "bench", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex bench: %v", err)

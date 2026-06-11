@@ -450,6 +450,9 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	if req.EfSearch < 0 || req.QuantizedRerankCandidates < 0 {
 		return BenchmarkVectorSearchResponse{}, serviceError(CodeInvalidRequest, "ef_search and quantized_rerank_candidates must be non-negative")
 	}
+	if err := validateBenchmarkVectorStatsMode(req.StatsMode); err != nil {
+		return BenchmarkVectorSearchResponse{}, err
+	}
 	if err := validateEmbedding("query_embedding", req.QueryEmbedding, info.Dimension, info.Metric); err != nil {
 		return BenchmarkVectorSearchResponse{}, err
 	}
@@ -1082,6 +1085,20 @@ func benchmarkVectorSearchResults(results []collections.VectorIndexSearchResult)
 		out[i] = BenchmarkVectorSearchResult{ID: string(result.ID), Ordinal: result.Ordinal, Score: result.Score}
 	}
 	return out
+}
+
+func validateBenchmarkVectorStatsMode(mode collections.VectorIndexSearchStatsMode) error {
+	switch mode {
+	case collections.VectorIndexSearchStatsModeDefault,
+		collections.VectorIndexSearchStatsModeMinimal,
+		collections.VectorIndexSearchStatsModeProduction,
+		collections.VectorIndexSearchStatsModeFullDiagnostics:
+		return nil
+	case collections.VectorIndexSearchStatsModeBenchmarkDebug:
+		return serviceError(CodeInvalidRequest, "benchmark vector search does not support benchmark_debug stats_mode")
+	default:
+		return serviceErrorf(CodeInvalidRequest, "unsupported benchmark vector stats_mode %q", mode)
+	}
 }
 
 func validateBenchmarkVectorSearchRequestShape(mode BenchmarkVectorQueryMode, req BenchmarkVectorSearchRequest) error {
