@@ -95,11 +95,11 @@ func (db *DB) installCommandWALValueLogAppender() error {
 	if err != nil {
 		return err
 	}
-	ridMap, err := scanValueLogSegments(segments, db.valueLogDictLookup)
+	nextRID, err := nextReplayAppenderRIDStart(segments)
 	if err != nil {
 		return err
 	}
-	appender, err := newReplayInlineAppender(db, segments, ridMap)
+	appender, err := newReplayInlineAppenderWithNextRID(db, segments, nextRID)
 	if err != nil {
 		return err
 	}

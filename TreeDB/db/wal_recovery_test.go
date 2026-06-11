@@ -12,6 +12,62 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestNextReplayAppenderRIDStartScansLatestValueLogSegmentPerLane(t *testing.T) {
+	dir := t.TempDir()
+	older := writeRIDStartValueLogSegment(t, dir, 2, 1, 10)
+	latest := writeRIDStartValueLogSegment(t, dir, 2, 2, 200)
+	leafLatest := writeRIDStartValueLogSegment(t, dir, rewriteLeafLogLaneID, 1, 150)
+	ignoredCommit := logSegment{lane: 2, seq: 99, path: filepath.Join(dir, "commit.log")}
+
+	gotLatest := latestValueLogSegmentsByLane([]logSegment{older, latest, leafLatest, ignoredCommit})
+	if len(gotLatest) != 2 {
+		t.Fatalf("latest segments len=%d want 2", len(gotLatest))
+	}
+	if gotLatest[0].lane != 2 || gotLatest[0].seq != 2 {
+		t.Fatalf("lane 2 latest=%+v want seq 2", gotLatest[0])
+	}
+	if gotLatest[1].lane != int(rewriteLeafLogLaneID) || gotLatest[1].seq != 1 {
+		t.Fatalf("leaf lane latest=%+v want seq 1", gotLatest[1])
+	}
+
+	next, err := nextReplayAppenderRIDStart([]logSegment{older, latest, leafLatest, ignoredCommit})
+	if err != nil {
+		t.Fatalf("nextReplayAppenderRIDStart: %v", err)
+	}
+	if next != 201 {
+		t.Fatalf("next RID=%d want 201", next)
+	}
+}
+
+func writeRIDStartValueLogSegment(t *testing.T, dir string, lane uint32, seq uint32, maxRID uint64) logSegment {
+	t.Helper()
+	fileID, err := valuelog.EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("fileID: %v", err)
+	}
+	path := valueLogSegmentPath(t, dir, fileID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir segment dir: %v", err)
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("writer: %v", err)
+	}
+	for _, rid := range []uint64{maxRID - 1, maxRID} {
+		if _, err := w.Append(0, nil, rid, []byte("value")); err != nil {
+			t.Fatalf("append rid %d: %v", rid, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat segment: %v", err)
+	}
+	return logSegment{lane: int(lane), seq: uint64(seq), path: path, size: info.Size(), valueLog: true, fileID: fileID}
+}
+
 func TestNewReplayInlineAppender_PackedValuePtrCapsSegmentSize(t *testing.T) {
 	db := &DB{
 		dir:                 t.TempDir(),
