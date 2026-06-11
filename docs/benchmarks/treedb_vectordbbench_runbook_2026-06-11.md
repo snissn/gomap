@@ -4,6 +4,10 @@ This note documents the TreeDB VectorDBBench integration after the service and
 adapter stack merged. It is a reproducibility/runbook document plus a functional
 smoke artifact. It is **not** claim-quality latency/QPS evidence.
 
+For the repeatable artifact harness and route-proof sidecar contract used by
+follow-up benchmark issues, see
+[`treedb_vectordbbench_artifact_harness.md`](treedb_vectordbbench_artifact_harness.md).
+
 ## Merged Stack
 
 | issue | PR | merge commit | scope |
