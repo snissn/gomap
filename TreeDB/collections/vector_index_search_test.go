@@ -825,6 +825,7 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedReadersShareQuantizedAsset26
 			}
 
 			var shared *columnVectorGraphQuantizedAssetResource
+			var sharedStatus columnVectorGraphQuantizedAssetLoadStatus
 			var assetBytes int64
 			for i, reader := range prepared.quantizedReaders {
 				status, ok := reader.quantizedAssetStatus[qName]
@@ -836,12 +837,16 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedReadersShareQuantizedAsset26
 				}
 				if shared == nil {
 					shared = status.resource
+					sharedStatus = status
 				} else if status.resource != shared {
 					t.Fatalf("reader %d scalar_u8 resource=%p want shared %p", i, status.resource, shared)
 				}
 				if status.Asset.AssetBytes > assetBytes {
 					assetBytes = status.Asset.AssetBytes
 				}
+			}
+			if shared == nil || shared.manager == nil {
+				t.Fatalf("shared scalar_u8 resource=%p want resource manager", shared)
 			}
 			if assetBytes <= 0 {
 				t.Fatalf("scalar_u8 asset bytes=%d want positive", assetBytes)
@@ -850,12 +855,24 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedReadersShareQuantizedAsset26
 			if snap.Entries != 1 || snap.ActiveHandles == 0 {
 				t.Fatalf("prepared cache snapshot=%+v want one active quantized entry", snap)
 			}
+			scalarStats := shared.manager.Stats()
+			if scalarStats.ActiveHandles != 1 {
+				t.Fatalf("shared scalar_u8 manager stats=%+v want one active scalar asset handle", scalarStats)
+			}
 			if expectMmapDirect {
-				if snap.ActiveHeapCopyBytes != 0 || snap.ActiveMappedBytes < assetBytes {
-					t.Fatalf("prepared cache snapshot=%+v asset_bytes=%d want mmap/direct scalar_u8 with no heap copy", snap, assetBytes)
+				if sharedStatus.Health != columnVectorGraphQuantizedAssetHealthMmapDirect || sharedStatus.MappedBytes < uint64(assetBytes) || sharedStatus.HeapCopyBytes != 0 {
+					t.Fatalf("shared scalar_u8 status=%+v asset_bytes=%d want mmap/direct scalar_u8 with no heap copy", sharedStatus, assetBytes)
 				}
-			} else if snap.ActiveHeapCopyBytes <= 0 || snap.ActiveHeapCopyBytes > assetBytes {
-				t.Fatalf("prepared cache snapshot=%+v asset_bytes=%d want at most one shared heap scalar_u8 asset", snap, assetBytes)
+				if scalarStats.ActiveMappedBytes < assetBytes || scalarStats.ActiveHeapCopyBytes != 0 {
+					t.Fatalf("shared scalar_u8 manager stats=%+v asset_bytes=%d want mmap/direct scalar_u8 with no heap copy", scalarStats, assetBytes)
+				}
+			} else {
+				if sharedStatus.Health != columnVectorGraphQuantizedAssetHealthHeapCopy || sharedStatus.HeapCopyBytes < uint64(assetBytes) || sharedStatus.MappedBytes != 0 {
+					t.Fatalf("shared scalar_u8 status=%+v asset_bytes=%d want one shared heap-copy scalar_u8 asset", sharedStatus, assetBytes)
+				}
+				if scalarStats.ActiveHeapCopyBytes < assetBytes || scalarStats.ActiveMappedBytes != 0 {
+					t.Fatalf("shared scalar_u8 manager stats=%+v asset_bytes=%d want one shared heap-copy scalar_u8 asset", scalarStats, assetBytes)
+				}
 			}
 		})
 	}
