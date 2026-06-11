@@ -50,11 +50,10 @@ type ProbeFallbackStats struct {
 
 const (
 	getManyLeafGroupMinKeys = 64
-	// maxTraversalDepth is a corruption guard for point/probe tree walks. Some
-	// valid geth/TreeDB datasets can currently contain tall left-edge internal
-	// chains produced by repeated root splits, so keep this comfortably above the
-	// historical 50-page cap while still bounding malformed cycles.
-	maxTraversalDepth = 1024
+	// maxTraversalDepth is a corruption guard for point/probe tree walks. Healthy
+	// B+Tree roots should be much shallower; hitting this limit indicates a cycle
+	// or structural balance bug that should be investigated rather than masked.
+	maxTraversalDepth = 50
 )
 
 var treeGetAppendInlineHitsTotal atomic.Uint64
