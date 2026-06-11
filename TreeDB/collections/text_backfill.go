@@ -249,7 +249,13 @@ func analyzeTextIndexDocumentJSONRootFastPath(def TextIndexDefinition, jsonDocum
 		return textAnalyzedDocument{}, true, errors.New("collections: text index extraction requires JSON object document")
 	}
 
-	values := make([]jsonParserIndexValue, len(def.Fields))
+	var stackValues [8]jsonParserIndexValue
+	values := stackValues[:]
+	if len(def.Fields) > len(stackValues) {
+		values = make([]jsonParserIndexValue, len(def.Fields))
+	} else {
+		values = values[:len(def.Fields)]
+	}
 	if err := jsonparser.ObjectEach(jsonDocument, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
 		for i, fieldDef := range def.Fields {
 			if string(key) == fieldDef.Field {

@@ -123,6 +123,78 @@ func TestTextStorageCodecsRoundTripAndFailClosed(t *testing.T) {
 	}
 }
 
+func TestTextIndexAnalysisJSONFastPathAndNestedFallbackM2589(t *testing.T) {
+	rootDef := TextIndexDefinition{
+		Name:           "lexical",
+		Fields:         []TextIndexField{{Field: "title"}, {Field: "body"}, {Field: "tags"}},
+		StorePositions: true,
+		StoreOffsets:   true,
+	}
+	analysis, err := analyzeTextIndexDocument(rootDef, []byte(`{"title":"Refund\nPolicy","body":["HTTP_500","refund",17,null],"tags":["alpha",""],"nested":{"body":"ignored"}}`))
+	if err != nil {
+		t.Fatalf("analyze root fast path: %v", err)
+	}
+	if len(analysis.Fields) != 3 {
+		t.Fatalf("root analysis fields=%+v want title/body/tags", analysis.Fields)
+	}
+	body := requireAnalyzedFieldM2589(t, analysis, "body")
+	if body.Length != 2 {
+		t.Fatalf("body length=%d want 2", body.Length)
+	}
+	http := requireAnalyzedTermM2589(t, body, "http_500")
+	if http.Frequency != 1 || !slices.Equal(http.Positions, []uint32{0}) || len(http.Offsets) != 1 {
+		t.Fatalf("http_500 term=%+v want one positioned term", http)
+	}
+	if got := requireAnalyzedTermM2589(t, requireAnalyzedFieldM2589(t, analysis, "title"), "policy").Frequency; got != 1 {
+		t.Fatalf("title policy frequency=%d want 1", got)
+	}
+	if got := requireAnalyzedFieldM2589(t, analysis, "tags").Length; got != 1 {
+		t.Fatalf("tags length=%d want 1", got)
+	}
+
+	nestedDef := TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "nested.body"}}, StorePositions: true}
+	nested, err := analyzeTextIndexDocument(nestedDef, []byte(`{"nested":{"body":["Deep","Refund"]},"nested.body":"literal should not win"}`))
+	if err != nil {
+		t.Fatalf("analyze nested fallback: %v", err)
+	}
+	nestedField := requireAnalyzedFieldM2589(t, nested, "nested.body")
+	if nestedField.Length != 2 {
+		t.Fatalf("nested field length=%d want 2", nestedField.Length)
+	}
+	requireAnalyzedTermM2589(t, nestedField, "deep")
+	requireAnalyzedTermM2589(t, nestedField, "refund")
+	if _, ok := nestedField.Terms["literal"]; ok {
+		t.Fatalf("nested fallback indexed literal dotted root field: %+v", nestedField.Terms)
+	}
+
+	if _, err := analyzeTextIndexDocument(rootDef, []byte(`{"body":"ok"}{}`)); err == nil {
+		t.Fatal("root fast path accepted trailing JSON value")
+	}
+	if _, err := analyzeTextIndexDocument(rootDef, []byte(`[{"body":"ok"}]`)); err == nil {
+		t.Fatal("root fast path accepted non-object JSON document")
+	}
+}
+
+func requireAnalyzedFieldM2589(t *testing.T, analysis textAnalyzedDocument, field string) textAnalyzedField {
+	t.Helper()
+	for _, got := range analysis.Fields {
+		if got.Field == field {
+			return got
+		}
+	}
+	t.Fatalf("missing analyzed field %q in %+v", field, analysis.Fields)
+	return textAnalyzedField{}
+}
+
+func requireAnalyzedTermM2589(t *testing.T, field textAnalyzedField, term string) *textAnalyzedTerm {
+	t.Helper()
+	got := field.Terms[term]
+	if got == nil {
+		t.Fatalf("missing analyzed term %q in field %+v", term, field)
+	}
+	return got
+}
+
 func TestCollectionCreateTextIndexBackfillsReopensAndReportsStorage(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

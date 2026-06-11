@@ -172,7 +172,13 @@ func extractColumnDeclaredRowsFromRootJSONDocumentsFastPath(cfg ColumnStoreConfi
 		if !jsonDocumentLooksObject(doc.Document) {
 			return nil, true, fmt.Errorf("%w: document[%d] root is not object", ErrColumnDeclaredValueUnsupported, docIdx)
 		}
-		valuesRaw := make([]jsonParserIndexValue, len(cfg.Columns))
+		var stackValues [8]jsonParserIndexValue
+		valuesRaw := stackValues[:]
+		if len(cfg.Columns) > len(stackValues) {
+			valuesRaw = make([]jsonParserIndexValue, len(cfg.Columns))
+		} else {
+			valuesRaw = valuesRaw[:len(cfg.Columns)]
+		}
 		if err := jsonparser.ObjectEach(doc.Document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
 			for colIdx, col := range cfg.Columns {
 				if string(key) == col.Path {
