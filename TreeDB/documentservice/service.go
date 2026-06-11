@@ -1152,11 +1152,25 @@ func validateBenchmarkQuantizedVectorSearchRoute(mode BenchmarkVectorQueryMode, 
 	diag := response.Diagnostics()
 	stats := response.Stats
 	emptySearch := len(response.Results) == 0 && stats.CandidateRows == 0
-	if stats.SearchRouteHNSWSearchPack != 0 || stats.HNSWSearchPackFallbacks != 0 {
-		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector search touched exact hnsw_search_pack route counters: diagnostics=%+v", diag)
-	}
-	if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
-		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector search did not use one column_graph route: diagnostics=%+v", diag)
+	columnGraphRoute := stats.SearchRouteHNSWSearchPack == 0 &&
+		stats.HNSWSearchPackActive == 0 &&
+		stats.HNSWSearchPackMissing == 0 &&
+		stats.HNSWSearchPackInvalid == 0 &&
+		stats.HNSWSearchPackStale == 0 &&
+		stats.HNSWSearchPackClosed == 0 &&
+		stats.HNSWSearchPackFallbacks == 0 &&
+		stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback == 1
+	packRoute := stats.SearchRouteHNSWSearchPack == 1 &&
+		stats.HNSWSearchPackActive == 1 &&
+		stats.HNSWSearchPackMissing == 0 &&
+		stats.HNSWSearchPackInvalid == 0 &&
+		stats.HNSWSearchPackStale == 0 &&
+		stats.HNSWSearchPackClosed == 0 &&
+		stats.HNSWSearchPackFallbacks == 0 &&
+		stats.SearchRouteColumnGraphPrepared == 0 &&
+		stats.SearchRouteColumnGraphFallback == 0
+	if !columnGraphRoute && !packRoute {
+		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector search did not use a prepared column_graph or quantized hnsw_search_pack route: diagnostics=%+v", diag)
 	}
 	if stats.QuantizedAssetUnavailable != 0 || stats.QuantizedAssetMissing != 0 || stats.QuantizedAssetInvalid != 0 || stats.QuantizedAssetStale != 0 || stats.QuantizedAssetClosed != 0 {
 		return serviceErrorf(CodeIndexUnavailable, "quantized benchmark vector asset is unavailable: diagnostics=%+v", diag)
@@ -1177,7 +1191,7 @@ func validateBenchmarkQuantizedVectorSearchRoute(mode BenchmarkVectorQueryMode, 
 			return serviceErrorf(CodeIndexUnavailable, "quantized_rerank benchmark vector search did not use the quantized-rerank route: diagnostics=%+v", diag)
 		}
 		if !emptySearch {
-			if stats.QuantizedRerankCandidates == 0 || stats.QuantizedRerankExactScoreCalls != stats.QuantizedRerankCandidates || stats.VectorBytesRead == 0 || stats.NormBytesRead == 0 {
+			if stats.QuantizedRerankCandidates == 0 || stats.QuantizedRerankExactScoreCalls != stats.QuantizedRerankCandidates || stats.VectorBytesRead == 0 || (!packRoute && stats.NormBytesRead == 0) {
 				return serviceErrorf(CodeIndexUnavailable, "quantized_rerank benchmark vector search did not report exact rerank counters: diagnostics=%+v", diag)
 			}
 			if req.QuantizedRerankCandidates > 0 && stats.QuantizedRerankCandidates > uint64(req.QuantizedRerankCandidates) {
