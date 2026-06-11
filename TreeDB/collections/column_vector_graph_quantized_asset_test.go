@@ -94,7 +94,7 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 		t.Fatalf("row2 codes=%v ok=%v", row2, ok)
 	}
 
-	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1, UseResourceQuantizedAssets: true})
 	if err != nil {
 		t.Fatalf("open reader: %v", err)
 	}
@@ -102,6 +102,15 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	if loaded.Prepared == nil || loaded.Err != nil {
 		_ = reader.Close()
 		t.Fatalf("reader quantized status=%+v", loaded)
+	}
+	if columnVectorGraphQuantizedAssetMmapExpectedForTest2621() {
+		if loaded.Health != columnVectorGraphQuantizedAssetHealthMmapDirect || loaded.MappedBytes == 0 || loaded.HeapCopyBytes != 0 {
+			_ = reader.Close()
+			t.Fatalf("reader scalar_u8 status=%+v want mmap/direct without heap copy", loaded)
+		}
+	} else if loaded.Health != columnVectorGraphQuantizedAssetHealthHeapCopy || loaded.HeapCopyBytes == 0 {
+		_ = reader.Close()
+		t.Fatalf("reader scalar_u8 status=%+v want heap-copy fallback", loaded)
 	}
 	if err := reader.Close(); err != nil {
 		t.Fatalf("reader Close: %v", err)
@@ -119,7 +128,7 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	if err != nil {
 		t.Fatalf("OpenCollection reopen: %v", err)
 	}
-	reopenedReader, err := reopenedCol.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	reopenedReader, err := reopenedCol.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1, UseResourceQuantizedAssets: true})
 	if err != nil {
 		t.Fatalf("open reader reopen: %v", err)
 	}
@@ -127,6 +136,13 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	reopenedStatus := reopenedReader.quantizedAssetStatus[def.QuantizedIndexes[0].Name]
 	if reopenedStatus.Prepared == nil || reopenedStatus.Err != nil {
 		t.Fatalf("reopened reader quantized status=%+v", reopenedStatus)
+	}
+	if columnVectorGraphQuantizedAssetMmapExpectedForTest2621() {
+		if reopenedStatus.Health != columnVectorGraphQuantizedAssetHealthMmapDirect || reopenedStatus.MappedBytes == 0 || reopenedStatus.HeapCopyBytes != 0 {
+			t.Fatalf("reopened scalar_u8 status=%+v want mmap/direct without heap copy", reopenedStatus)
+		}
+	} else if reopenedStatus.Health != columnVectorGraphQuantizedAssetHealthHeapCopy || reopenedStatus.HeapCopyBytes == 0 {
+		t.Fatalf("reopened scalar_u8 status=%+v want heap-copy fallback", reopenedStatus)
 	}
 	quantized, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: def.QuantizedIndexes[0].Name, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1})
 	if err != nil {

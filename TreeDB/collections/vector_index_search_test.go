@@ -746,6 +746,130 @@ func TestSearchVectorIndexWithBufferQuantizedOnlyAndRerank2415(t *testing.T) {
 	}
 }
 
+func TestSearchVectorIndexWithBufferScalarU8PreparedReadersShareQuantizedAsset2621(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		forceHeap bool
+	}{
+		{name: "mmap_or_platform_fallback"},
+		{name: "forced_heap_fallback", forceHeap: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.forceHeap {
+				columnVectorGraphQuantizedAssetForceReadAtFallbackForTest.Store(true)
+				defer columnVectorGraphQuantizedAssetForceReadAtFallbackForTest.Store(false)
+			}
+			rows := []columnGraphRebuildInputRowV2A{
+				{id: "doc-a", vector: []float32{1, 0, 0}},
+				{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+				{id: "doc-c", vector: []float32{0, 1, 0}},
+				{id: "doc-d", vector: []float32{0, 0, 1}},
+				{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+			}
+			_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+			defer func() { _ = d.Close() }()
+			if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+				t.Fatalf("RebuildVectorIndex: %v", err)
+			}
+
+			qName := def.QuantizedIndexes[0].Name
+			opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0.8, 0.2, 0}, QueryMode: VectorIndexQueryModeQuantizedOnly, QuantizedIndexName: qName, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
+			var buffer VectorIndexSearchBuffer
+			warm, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+			if err != nil {
+				t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+			}
+			assertCollectionBufferedQuantizedRouteStats2415(t, warm.Stats, columnVectorGraphNativeSearchQueryModeQuantizedOnly, opts, def.Dimensions)
+			expectMmapDirect := !tc.forceHeap && columnVectorGraphQuantizedAssetMmapExpectedForTest2621() && !collectionVectorIndexPreparedScalarU8QuantizedAssetForceHeapCopy()
+			if expectMmapDirect {
+				if warm.Stats.QuantizedAssetMmapDirect != 1 || warm.Stats.QuantizedAssetHeapCopy != 0 || warm.Stats.QuantizedAssetMappedBytes == 0 || warm.Stats.QuantizedAssetHeapCopyBytes != 0 {
+					t.Fatalf("warm scalar_u8 stats=%+v want mmap/direct quantized asset", warm.Stats)
+				}
+			} else if warm.Stats.QuantizedAssetHeapCopy != 1 || warm.Stats.QuantizedAssetMmapDirect != 0 || warm.Stats.QuantizedAssetHeapCopyBytes == 0 {
+				t.Fatalf("warm scalar_u8 stats=%+v want one heap-copy fallback quantized asset", warm.Stats)
+			}
+
+			queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+			if err != nil {
+				t.Fatalf("normalize query mode: %v", err)
+			}
+			prepared, _, _, err := col.acquireCollectionVectorIndexPreparedSearch(opts)
+			if err != nil {
+				t.Fatalf("acquire prepared search: %v", err)
+			}
+			checkedOut := make([]int, 0, 8)
+			defer func() {
+				for _, idx := range checkedOut {
+					prepared.returnCollectionVectorIndexPreparedQuantizedReader(idx)
+				}
+				if err := col.closeCollectionVectorIndexPreparedSearchCache(); err != nil {
+					t.Fatalf("close prepared cache: %v", err)
+				}
+				if snap := col.collectionVectorIndexPreparedSearchCacheSnapshot(); snap.Entries != 0 || snap.ActiveHandles != 0 || snap.ActiveHeapCopyBytes != 0 || snap.ActiveMappedBytes != 0 {
+					t.Fatalf("cache after close=%+v want released quantized/shared handles", snap)
+				}
+			}()
+
+			for i := 0; i < 8; i++ {
+				reader, idx, stats, err := prepared.checkoutCollectionVectorIndexPreparedQuantizedReader(opts, queryMode)
+				if err != nil {
+					t.Fatalf("checkout reader %d stats=%+v err=%v", i, stats, err)
+				}
+				if reader == nil {
+					t.Fatalf("checkout reader %d returned nil", i)
+				}
+				checkedOut = append(checkedOut, idx)
+			}
+			if got := len(prepared.quantizedReaders); got != 8 {
+				t.Fatalf("prepared quantized readers=%d want 8", got)
+			}
+
+			var shared *columnVectorGraphQuantizedAssetResource
+			var assetBytes int64
+			for i, reader := range prepared.quantizedReaders {
+				status, ok := reader.quantizedAssetStatus[qName]
+				if !ok || status.Prepared == nil || status.Err != nil || status.resource == nil {
+					t.Fatalf("reader %d scalar_u8 status=%+v ok=%v want shared healthy resource", i, status, ok)
+				}
+				if status.ownsResource {
+					t.Fatalf("reader %d owns shared scalar_u8 resource; prepared cache owner should hold the resource", i)
+				}
+				if shared == nil {
+					shared = status.resource
+				} else if status.resource != shared {
+					t.Fatalf("reader %d scalar_u8 resource=%p want shared %p", i, status.resource, shared)
+				}
+				if status.Asset.AssetBytes > assetBytes {
+					assetBytes = status.Asset.AssetBytes
+				}
+			}
+			if assetBytes <= 0 {
+				t.Fatalf("scalar_u8 asset bytes=%d want positive", assetBytes)
+			}
+			snap := col.collectionVectorIndexPreparedSearchCacheSnapshot()
+			if snap.Entries != 1 || snap.ActiveHandles == 0 {
+				t.Fatalf("prepared cache snapshot=%+v want one active quantized entry", snap)
+			}
+			if expectMmapDirect {
+				if snap.ActiveHeapCopyBytes != 0 || snap.ActiveMappedBytes < assetBytes {
+					t.Fatalf("prepared cache snapshot=%+v asset_bytes=%d want mmap/direct scalar_u8 with no heap copy", snap, assetBytes)
+				}
+			} else if snap.ActiveHeapCopyBytes <= 0 || snap.ActiveHeapCopyBytes > assetBytes {
+				t.Fatalf("prepared cache snapshot=%+v asset_bytes=%d want at most one shared heap scalar_u8 asset", snap, assetBytes)
+			}
+		})
+	}
+}
+
+func columnVectorGraphQuantizedAssetMmapExpectedForTest2621() bool {
+	switch runtime.GOOS {
+	case "darwin", "linux", "freebsd", "netbsd", "openbsd":
+		return true
+	default:
+		return false
+	}
+}
+
 func TestScalarU8QuantizedPreparedTraversalPackRouteWhenAdjacencyClosed2586(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
