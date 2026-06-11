@@ -664,6 +664,62 @@ func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_IncrementalTrackerPersistsOnClose(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 25_000, 3, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})
+	b := db.NewBatch().(*Batch)
+	for i := range ptrs {
+		if err := b.SetPointer([]byte(fmt.Sprintf("k%02d", i)), ptrs[i]); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	seq := db.currentCommitSeq()
+	if _, ok := db.valueLogRefTracker.referencedSet(seq); !ok {
+		t.Fatalf("expected dirty incremental tracker for seq=%d", seq)
+	}
+	metaPath := db.valueLogRefCountsPath()
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	disk, err := decodeValueLogRefCounts(data)
+	if err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if disk.commitSeq != seq {
+		t.Fatalf("metadata seq mismatch after close: got=%d want=%d", disk.commitSeq, seq)
+	}
+	if got := disk.counts[ptrs[0].FileID]; got != uint64(len(ptrs)) {
+		t.Fatalf("metadata file refcount mismatch: got=%d want=%d", got, len(ptrs))
+	}
+
+	db, err = Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); !ok {
+		t.Fatalf("expected persisted tracker to load on reopen")
+	}
+}
+
 func TestValueLogGC_IncrementalCounterRollbackOnFailedCommit(t *testing.T) {
 	dir := t.TempDir()
 

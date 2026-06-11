@@ -1805,6 +1805,11 @@ func (db *DB) Close() error {
 	db.closing.Store(true)
 	db.stopCommitCombiner()
 	db.pruner.Stop()
+	if db.valueLogRefTracker != nil {
+		if err := db.persistValueLogRefTracker(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if db.ghostManager != nil {
 		db.ghostManager.stop()
 	}
