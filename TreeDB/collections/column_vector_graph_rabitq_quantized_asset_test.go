@@ -841,7 +841,7 @@ func TestColumnGraphRabitQQuantizedAssetFailClosed2450(t *testing.T) {
 }
 
 func BenchmarkColumnGraphQuantizedAssetBuildPrepare2450(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 256, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 256, dims: 128, m: 16, efConstruction: 128, topK: 10, efSearch: 128, queryOrdinal: 37, queryCount: 1}
 	rows := columnGraphRebuildSyntheticRowsV2A(shape.rows, shape.dims)
 	assetRows := make([]columnVectorGraphAssetRow, len(rows))
 	for i, row := range rows {
@@ -938,7 +938,7 @@ func BenchmarkColumnGraphQuantizedAssetBuildPrepare2450(b *testing.B) {
 }
 
 func BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450(b *testing.B) {
-	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 256, dims: 128, m: 16, topK: 10, efSearch: 128, queryOrdinal: 37}
+	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 256, dims: 128, m: 16, efConstruction: 128, topK: 10, efSearch: 128, queryOrdinal: 37, queryCount: 1}
 	_, d, col, def, _ := openColumnGraphRabitQQuantizedBenchCollection2450(b, shape)
 	defer func() { _ = d.Close() }()
 	b.ReportAllocs()
@@ -1233,7 +1233,7 @@ func openColumnGraphRabitQQuantizedBenchCollection2450(tb testing.TB, shape colu
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(tb, dir)
-	def := columnGraphRebuildVectorIndexDefinitionV2A(shape.dims, shape.m)
+	def := columnGraphScalarU8QuantizedBenchVectorIndexDefinition1926(tb, shape)
 	def.QuantizedIndexes = []QuantizedVectorIndexDefinition{{Name: columnGraphRabitQQuantizedIndexName2450, Codec: rabitq.CodecName}}
 	var err error
 	def, err = normalizeVectorIndexDefinition(def)
