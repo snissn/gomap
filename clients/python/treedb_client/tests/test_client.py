@@ -282,6 +282,7 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(search.query_mode, "quantized_rerank")
             self.assertEqual(search.results[0].id, "doc-1")
             reset_body = json_body(server.records[0])
+            self.assertNotIn("metric", reset_body)
             self.assertEqual(reset_body["vector_index_options"]["strategy"], "column_graph")
             self.assertEqual(reset_body["vector_index_options"]["quantized_indexes"][0]["codec"], "scalar_u8")
             self.assertEqual(json_body(server.records[1]), {"expected_generation": 1})

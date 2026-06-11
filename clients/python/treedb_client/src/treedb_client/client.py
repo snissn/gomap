@@ -103,7 +103,7 @@ class TreeDBClient:
         index: str,
         *,
         dimension: int,
-        metric: Optional[str] = "cosine",
+        metric: Optional[str] = None,
         drop_old: bool = False,
         vector_index_options: Optional[VectorIndexOptionsLike] = None,
     ) -> ResetIndexResponse:
@@ -112,7 +112,8 @@ class TreeDBClient:
         Existing column_graph benchmark indexes fail closed on the service when
         `drop_old=True`; managed benchmark runs should use a fresh data directory
         or a unique index name to preserve TreeDB's insert-only graph rebuild
-        boundary.
+        boundary. Omit `metric` to preserve an existing index's metric; pass it
+        when creating a missing index or when compatibility should be enforced.
         """
 
         request: dict[str, Any] = {"dimension": dimension, "drop_old": bool(drop_old)}

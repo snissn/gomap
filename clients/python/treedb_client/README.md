@@ -137,6 +137,8 @@ for doc in results.documents:
 # VectorDBBench-style no-document vector-index route. This is separate from
 # query_by_embedding above; it fails closed rather than falling back to exact
 # document scans. Managed benchmark runs should use a fresh TreeDB data dir.
+# Omit metric when preserving an existing index's metric; pass it when creating
+# or enforcing a benchmark schema.
 client.reset_index(
     "bench_run_001",
     dimension=3,
