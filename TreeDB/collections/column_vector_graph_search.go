@@ -979,31 +979,34 @@ type columnVectorGraphSearchCandidate struct {
 // It is not concurrency-safe. Parallel searches over immutable graph assets are
 // valid with one reader and one scratch per worker.
 type columnVectorGraphNativeSearchScratch struct {
-	scoreScratch             columnPhysicalRowReaderScratch
-	expandScratch            columnPhysicalRowReaderScratch
-	resultScratch            columnPhysicalRowReaderScratch
-	visitMarks               []uint64
-	visitEpoch               uint64
-	frontier                 []columnVectorGraphSearchCandidate
-	top                      []columnVectorGraphSearchCandidate
-	results                  []columnVectorGraphNativeSearchResult
-	idBuffers                [][]byte
-	resultIDViews            [][]byte
-	resultOrder              []int
-	resultOrdinals           []int
-	resultRowRefs            []DocumentRowRef
-	resultHasRefs            []bool
-	scoreTileOrdinals        []int
-	scoreTileScores          []float64
-	scoreTileRowIDs          []uint32
-	scoreTileDots            []float32
-	scoreTileQuantizedDots   []int64
-	quantizedQueryCodes      []byte
-	quantizedQueryCentered   []vectorops.ScalarU8CenteredCode
-	quantizedRabitQWorkspace rabitq.Workspace
-	quantizedBRQWorkspace    brq.Workspace
-	wavefrontCandidates      []columnVectorGraphSearchCandidate
-	searchPlan               columnVectorGraphSearchPlan
+	scoreScratch                         columnPhysicalRowReaderScratch
+	expandScratch                        columnPhysicalRowReaderScratch
+	resultScratch                        columnPhysicalRowReaderScratch
+	visitMarks                           []uint64
+	visitEpoch                           uint64
+	frontier                             []columnVectorGraphSearchCandidate
+	top                                  []columnVectorGraphSearchCandidate
+	results                              []columnVectorGraphNativeSearchResult
+	idBuffers                            [][]byte
+	resultIDViews                        [][]byte
+	resultOrder                          []int
+	resultOrdinals                       []int
+	resultRowRefs                        []DocumentRowRef
+	resultHasRefs                        []bool
+	scoreTileOrdinals                    []int
+	scoreTileScores                      []float64
+	scoreTileRowIDs                      []uint32
+	scoreTileDots                        []float32
+	scoreTileQuantizedDots               []int64
+	quantizedQueryCodes                  []byte
+	quantizedQueryCentered               []vectorops.ScalarU8CenteredCode
+	quantizedRabitQWorkspace             rabitq.Workspace
+	quantizedBRQWorkspace                brq.Workspace
+	preparedTraversalQuantizedScorer     columnVectorGraphQuantizedScorer
+	preparedTraversalQuantizedScorePlane columnHNSWPreparedQuantizedScorePlane
+	preparedTraversalStats               columnVectorGraphNativeSearchStats
+	wavefrontCandidates                  []columnVectorGraphSearchCandidate
+	searchPlan                           columnVectorGraphSearchPlan
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch, scoreTileCapacity, wavefrontWidth int) error {
@@ -1060,7 +1063,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, v
 	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, degree)
 	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, degree)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, 0)
-	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, 0)
+	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, degree)
 	s.scoreTileQuantizedDots = resizeColumnVectorGraphNativeInt64Scratch(s.scoreTileQuantizedDots, 0)
 	s.wavefrontCandidates = resizeColumnVectorGraphNativeCandidateScratch(s.wavefrontCandidates, 0)
 	return nil

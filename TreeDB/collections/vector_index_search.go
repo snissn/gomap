@@ -586,8 +586,9 @@ type VectorIndexSearchResponse struct {
 
 // VectorIndexSearchRouteKind is a compact route summary derived from public
 // search stats. The exact hnsw_search_pack_v1 route is intentionally distinct
-// from codec-generic quantized routes and must not be used for quantized route
-// claims.
+// from codec-generic quantized route kinds; a quantized search may still report
+// SearchRouteHNSWSearchPack when a codec-specific score plane uses pack
+// traversal, but RouteKind remains quantized.
 type VectorIndexSearchRouteKind string
 
 const (
@@ -605,9 +606,9 @@ const (
 	VectorIndexSearchRouteColumnGraphFallback VectorIndexSearchRouteKind = "column_graph_fallback"
 )
 
-// VectorIndexSearchHNSWSearchPackStatus summarizes exact hnsw_search_pack_v1
-// health from public search stats. It is exact FP32 pack state, not quantized
-// scorer or quantized asset state.
+// VectorIndexSearchHNSWSearchPackStatus summarizes hnsw_search_pack_v1 health
+// from public search stats. It describes the pack traversal asset itself; codec
+// route kind and quantized score-plane health remain separate counters.
 type VectorIndexSearchHNSWSearchPackStatus string
 
 const (
@@ -1168,13 +1169,14 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 // This method supports exact/zero QueryMode through the exact
 // hnsw_search_pack_v1 route, and explicit quantized_only / quantized_rerank
 // modes through a collection-owned prepared quantized route selected by
-// QuantizedIndexName. It intentionally fails closed for document materialization,
-// projections, filters, benchmark-debug stats mode, missing or invalid prepared
-// assets, stale route identities, and legacy/fallback routes. Healthy prepared
-// state is opened once into the collection cache keyed by the current
-// collection/vector-index/score-plane manifest identity; steady-state searches
-// reuse that prepared state and caller-owned result buffer instead of opening a
-// VectorIndexSearcher per call.
+// QuantizedIndexName; rabitq_1bit uses the prepared hnsw_search_pack_v1
+// score-plane traversal when eligible. It intentionally fails closed for
+// document materialization, projections, filters, benchmark-debug stats mode,
+// missing or invalid prepared assets, stale route identities, and
+// legacy/fallback routes. Healthy prepared state is opened once into the
+// collection cache keyed by the current collection/vector-index/score-plane
+// manifest identity; steady-state searches reuse that prepared state and
+// caller-owned result buffer instead of opening a VectorIndexSearcher per call.
 func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
 	if err := validateCollectionVectorIndexSearchWithBufferOptions(opts, buffer); err != nil {
 		return VectorIndexSearchResponse{}, err
@@ -1359,7 +1361,10 @@ func vectorIndexDocumentFetchOptionsNonZero(opts DocumentFetchOptions) bool {
 }
 
 func vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(stats VectorIndexSearchStats) bool {
-	return stats.SearchRouteHNSWSearchPack == 1 &&
+	return stats.SearchRouteQuantizedOnly == 0 &&
+		stats.SearchRouteQuantizedRerank == 0 &&
+		stats.QuantizedScorerActive == 0 &&
+		stats.SearchRouteHNSWSearchPack == 1 &&
 		stats.HNSWSearchPackActive == 1 &&
 		stats.HNSWSearchPackMissing == 0 &&
 		stats.HNSWSearchPackInvalid == 0 &&
@@ -1378,10 +1383,24 @@ func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats VectorIndex
 	if !queryMode.quantized() {
 		return false
 	}
-	if stats.SearchRouteHNSWSearchPack != 0 || stats.HNSWSearchPackActive != 0 || stats.HNSWSearchPackMissing != 0 || stats.HNSWSearchPackInvalid != 0 || stats.HNSWSearchPackStale != 0 || stats.HNSWSearchPackClosed != 0 || stats.HNSWSearchPackFallbacks != 0 {
-		return false
-	}
-	if stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback != 1 {
+	columnGraphRoute := stats.SearchRouteHNSWSearchPack == 0 &&
+		stats.HNSWSearchPackActive == 0 &&
+		stats.HNSWSearchPackMissing == 0 &&
+		stats.HNSWSearchPackInvalid == 0 &&
+		stats.HNSWSearchPackStale == 0 &&
+		stats.HNSWSearchPackClosed == 0 &&
+		stats.HNSWSearchPackFallbacks == 0 &&
+		stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback == 1
+	packRoute := stats.SearchRouteHNSWSearchPack == 1 &&
+		stats.HNSWSearchPackActive == 1 &&
+		stats.HNSWSearchPackMissing == 0 &&
+		stats.HNSWSearchPackInvalid == 0 &&
+		stats.HNSWSearchPackStale == 0 &&
+		stats.HNSWSearchPackClosed == 0 &&
+		stats.HNSWSearchPackFallbacks == 0 &&
+		stats.SearchRouteColumnGraphPrepared == 0 &&
+		stats.SearchRouteColumnGraphFallback == 0
+	if !columnGraphRoute && !packRoute {
 		return false
 	}
 	emptySearch := opts.TopK == 0 || stats.CandidateRows == 0
@@ -1422,7 +1441,10 @@ func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats VectorIndex
 		if opts.QuantizedRerankCandidates > 0 && stats.QuantizedRerankCandidates > uint64(opts.QuantizedRerankCandidates) {
 			return false
 		}
-		if stats.VectorBytesRead == 0 || stats.NormBytesRead == 0 {
+		if stats.VectorBytesRead == 0 {
+			return false
+		}
+		if stats.NormBytesRead == 0 && stats.SearchRouteHNSWSearchPack == 0 {
 			return false
 		}
 		if dimensions > 0 {
@@ -1711,7 +1733,8 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 // current-format evidence should show hnsw_search_pack_v1 active and selected,
 // zero document fetches, zero graph-row fallback, zero typed-column vector
 // fallback, and zero vector scratch decodes. Explicit quantized modes use the
-// column_graph quantized scorer route instead of hnsw_search_pack_v1 and must
+// column_graph quantized scorer route; rabitq_1bit uses the prepared
+// hnsw_search_pack_v1 score-plane traversal when eligible. Quantized modes must
 // fail closed with quantized_* asset counters when the selected score plane is
 // unavailable.
 //
@@ -1761,6 +1784,34 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 		clear(previousResults)
 		return response, err
 	}
+	if s.reader != nil && s.reader.rabitqHNSWSearchPackPreparedRouteEligible(queryMode, opts.QuantizedIndexName, statsMode) {
+		packRouteStats := vectorIndexSearchRouteStatsForHNSWSearchPackRoute(s.routeStats)
+		results, searchStats, err := s.reader.searchRabitQCosinePreparedHNSWPack(opts.Query, columnVectorGraphNativeSearchOptions{
+			TopK:                      opts.TopK,
+			EfSearch:                  opts.EfSearch,
+			ScoreBatchMode:            opts.scoreBatchMode,
+			StatsMode:                 statsMode,
+			QueryMode:                 queryMode,
+			QuantizedIndexName:        opts.QuantizedIndexName,
+			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
+		}, &s.scratch)
+		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+		if err != nil && searchStats.QuantizedScorerActive == 0 && searchStats.QuantizedScoreCalls == 0 {
+			vectorIndexSearchRouteStatsForColumnGraphQuantized(s.routeStats).apply(&response.Stats)
+		} else {
+			packRouteStats.apply(&response.Stats)
+		}
+		if err != nil {
+			clear(previousResults)
+			return response, err
+		}
+		response.Results, err = copyVectorIndexSearchResultsToBuffer(results, buffer, previousResults)
+		if err != nil {
+			return response, err
+		}
+		return response, nil
+	}
+
 	pack, routeStats, usePackRoute := s.hnswSearchPackSearchWithBufferRoute(queryMode, statsMode)
 	if usePackRoute {
 		results, searchStats, err := pack.searchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
