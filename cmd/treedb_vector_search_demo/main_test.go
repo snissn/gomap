@@ -445,8 +445,17 @@ func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
 				if res.Search.AvgVectorBytes != 0 || res.Search.AvgNormBytes != 0 {
 					t.Fatalf("quantized_only unexpectedly read exact vectors/norms: %+v", res.Search)
 				}
-				if requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedOnly, "avg_search_route_quantized_only") != 1 || requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedRerank, "avg_search_route_quantized_rerank") != 0 || requireFloat64Metric(t, res.Search.AvgSearchRouteHNSWSearchPack, "avg_search_route_hnsw_search_pack") != 0 {
-					t.Fatalf("quantized_only route counters not isolated: %+v", res.Search)
+				wantPackRoute := res.QuantizedCodec == quantizedVectorCodecRabitQ1Bit
+				if requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedOnly, "avg_search_route_quantized_only") != 1 || requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedRerank, "avg_search_route_quantized_rerank") != 0 {
+					t.Fatalf("quantized_only query-mode route counters not isolated: %+v", res.Search)
+				}
+				if got := requireFloat64Metric(t, res.Search.AvgSearchRouteHNSWSearchPack, "avg_search_route_hnsw_search_pack"); (got == 1) != wantPackRoute {
+					t.Fatalf("quantized_only pack route=%v want_pack=%v stats=%+v", got, wantPackRoute, res.Search)
+				}
+				if wantPackRoute {
+					if requireFloat64Metric(t, res.Search.AvgSearchRouteColumnGraphPrepared, "avg_search_route_column_graph_prepared") != 0 || requireFloat64Metric(t, res.Search.AvgSearchRouteColumnGraphFallback, "avg_search_route_column_graph_fallback") != 0 {
+						t.Fatalf("rabitq quantized_only should use pack route only: %+v", res.Search)
+					}
 				}
 			},
 		},
@@ -465,16 +474,35 @@ func TestExecuteColumnGraphQuantizedModes(t *testing.T) {
 				if res.Search.AvgQuantizedRerankExactScoreCalls > float64(res.QuantizedRerankCandidates) {
 					t.Fatalf("quantized_rerank exact score calls exceeded limit: %+v", res.Search)
 				}
-				if res.Search.AvgVectorBytes <= 0 || res.Search.AvgNormBytes <= 0 {
-					t.Fatalf("quantized_rerank stats missing exact vector/norm reads: %+v", res.Search)
+				if res.Search.AvgVectorBytes <= 0 {
+					t.Fatalf("quantized_rerank stats missing exact vector reads: %+v", res.Search)
+				}
+				wantPackRoute := res.QuantizedCodec == quantizedVectorCodecRabitQ1Bit
+				if wantPackRoute {
+					if res.Search.AvgNormBytes != 0 {
+						t.Fatalf("rabitq quantized_rerank should rerank from pack vectors without norm reads: %+v", res.Search)
+					}
+				} else if res.Search.AvgNormBytes <= 0 {
+					t.Fatalf("quantized_rerank stats missing exact norm reads: %+v", res.Search)
 				}
 				maxVectorBytes := float64(res.QuantizedRerankCandidates * res.Dimensions * 4)
 				maxNormBytes := float64(res.QuantizedRerankCandidates * 4)
+				if wantPackRoute {
+					maxNormBytes = 0
+				}
 				if res.Search.AvgVectorBytes > maxVectorBytes || res.Search.AvgNormBytes > maxNormBytes {
 					t.Fatalf("quantized_rerank exact reads exceeded rerank bound: %+v", res.Search)
 				}
-				if requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedOnly, "avg_search_route_quantized_only") != 0 || requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedRerank, "avg_search_route_quantized_rerank") != 1 || requireFloat64Metric(t, res.Search.AvgSearchRouteHNSWSearchPack, "avg_search_route_hnsw_search_pack") != 0 {
-					t.Fatalf("quantized_rerank route counters not isolated: %+v", res.Search)
+				if requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedOnly, "avg_search_route_quantized_only") != 0 || requireFloat64Metric(t, res.Search.AvgSearchRouteQuantizedRerank, "avg_search_route_quantized_rerank") != 1 {
+					t.Fatalf("quantized_rerank query-mode route counters not isolated: %+v", res.Search)
+				}
+				if got := requireFloat64Metric(t, res.Search.AvgSearchRouteHNSWSearchPack, "avg_search_route_hnsw_search_pack"); (got == 1) != wantPackRoute {
+					t.Fatalf("quantized_rerank pack route=%v want_pack=%v stats=%+v", got, wantPackRoute, res.Search)
+				}
+				if wantPackRoute {
+					if requireFloat64Metric(t, res.Search.AvgSearchRouteColumnGraphPrepared, "avg_search_route_column_graph_prepared") != 0 || requireFloat64Metric(t, res.Search.AvgSearchRouteColumnGraphFallback, "avg_search_route_column_graph_fallback") != 0 {
+						t.Fatalf("rabitq quantized_rerank should use pack route only: %+v", res.Search)
+					}
 				}
 			},
 		},
