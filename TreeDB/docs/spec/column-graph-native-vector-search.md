@@ -50,7 +50,9 @@ shortlist by graph ordinal through the authoritative float32 vector/norm path,
 and returns exact cosine scores. Missing, stale, mismatched, unsupported,
 closed, or unprepared quantized assets fail closed; quantized modes must not hide
 an exact fallback. #2483 summarizes current exact/scalar/RaBitQ/BRQ evidence in
-[`vector-search-closeout-2483.md`](vector-search-closeout-2483.md).
+[`vector-search-closeout-2483.md`](vector-search-closeout-2483.md); #2588
+summarizes the promoted `scalar_u8` and `rabitq_1bit` prepared fast paths in
+[`quantized-prepared-hnsw-closeout-2588.md`](quantized-prepared-hnsw-closeout-2588.md).
 
 ## Quickstart
 
@@ -160,7 +162,10 @@ claiming high-QPS vector search:
   non-high-QPS convenience/fallback rows with counters. Collection-level
   buffered quantized rows are supported by their own `quantized_only` /
   `quantized_rerank` benchmarks and must not be relabeled as exact
-  `hnsw_search_pack_v1` rows.
+  `hnsw_search_pack_v1` rows. `rabitq_1bit` quantized rows may use prepared
+  `hnsw_search_pack_v1` traversal, but their query-mode counters remain
+  quantized and their closeout evidence lives in
+  `quantized-prepared-hnsw-closeout-2588.md`.
 
 Healthy no-document fast-path evidence must include `ns/op`, `ops/sec`, `B/op`,
 `allocs/op`, and route/fallback counters proving:
