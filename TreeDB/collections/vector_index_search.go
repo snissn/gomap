@@ -1791,7 +1791,31 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 		clear(previousResults)
 		return response, err
 	}
-	if s.reader != nil && s.reader.rabitqHNSWSearchPackPreparedRouteEligible(queryMode, opts.QuantizedIndexName, statsMode) {
+	pack, routeStats, usePackRoute := s.hnswSearchPackSearchWithBufferRoute(queryMode, statsMode)
+	if usePackRoute {
+		results, searchStats, err := pack.searchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
+			TopK:                      opts.TopK,
+			EfSearch:                  opts.EfSearch,
+			ScoreBatchMode:            opts.scoreBatchMode,
+			StatsMode:                 statsMode,
+			QueryMode:                 queryMode,
+			QuantizedIndexName:        opts.QuantizedIndexName,
+			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
+		}, &s.scratch)
+		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
+		routeStats.apply(&response.Stats)
+		if err != nil {
+			clear(previousResults)
+			return response, err
+		}
+		response.Results, err = copyVectorIndexSearchResultsToBuffer(results, buffer, previousResults)
+		if err != nil {
+			return response, err
+		}
+		return response, nil
+	}
+
+	if s.reader.rabitqHNSWSearchPackPreparedRouteEligible(queryMode, opts.QuantizedIndexName, statsMode) {
 		packRouteStats := vectorIndexSearchRouteStatsForHNSWSearchPackRoute(s.routeStats)
 		results, searchStats, err := s.reader.searchRabitQCosinePreparedHNSWPack(opts.Query, columnVectorGraphNativeSearchOptions{
 			TopK:                      opts.TopK,
@@ -1808,30 +1832,6 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 		} else {
 			packRouteStats.apply(&response.Stats)
 		}
-		if err != nil {
-			clear(previousResults)
-			return response, err
-		}
-		response.Results, err = copyVectorIndexSearchResultsToBuffer(results, buffer, previousResults)
-		if err != nil {
-			return response, err
-		}
-		return response, nil
-	}
-
-	pack, routeStats, usePackRoute := s.hnswSearchPackSearchWithBufferRoute(queryMode, statsMode)
-	if usePackRoute {
-		results, searchStats, err := pack.searchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
-			TopK:                      opts.TopK,
-			EfSearch:                  opts.EfSearch,
-			ScoreBatchMode:            opts.scoreBatchMode,
-			StatsMode:                 statsMode,
-			QueryMode:                 queryMode,
-			QuantizedIndexName:        opts.QuantizedIndexName,
-			QuantizedRerankCandidates: opts.QuantizedRerankCandidates,
-		}, &s.scratch)
-		response.Stats = vectorIndexSearchStatsFromInternal(searchStats, columnPhysicalRowReaderStats{})
-		routeStats.apply(&response.Stats)
 		if err != nil {
 			clear(previousResults)
 			return response, err
