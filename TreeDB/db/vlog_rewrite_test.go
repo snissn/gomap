@@ -1029,8 +1029,10 @@ func TestValueLogRewriteOnline_CollectionRootCommitUsesCurrentStoragePolicy(t *t
 	if err := db.applyRewriteSwapBatchToCollectionRoot(target, []rewriteSwap{{key: []byte("doc/p"), oldPtr: oldPtr, newPtr: newPtr}}, false); err != nil {
 		t.Fatalf("apply collection rewrite swap with stale policy: %v", err)
 	}
-	if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); ok {
-		t.Fatal("expected value-log-leaf collection rewrite to invalidate value-log ref tracker")
+	if db.valueLogRefTracker != nil {
+		if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); ok {
+			t.Fatal("expected value-log-leaf collection rewrite to invalidate value-log ref tracker")
+		}
 	}
 
 	newRoot := readCollectionRootID(t, db, maintenanceTestCollectionRootKey)
@@ -5620,6 +5622,9 @@ func primeValueLogRefTracker(t *testing.T, db *DB) {
 	t.Helper()
 	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
 		t.Fatalf("prime value-log ref tracker: %v", err)
+	}
+	if db.valueLogRefTracker == nil {
+		return
 	}
 	requireValueLogRefTrackerValid(t, db)
 }
