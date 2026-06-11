@@ -103,7 +103,7 @@ Context:
 
 - optimized head: `acb2db4f433a81851cb3bdfc6eac546bd0df4218`, merged to `main` as `24df4d192eb0db512c0eaf6ff555ee915b614b39` via #2595 after the #2590 text/hybrid allocation PR;
 - branch for final artifact: `snissn/2589-insert-alloc-manager`;
-- benchmark output reports `goos=darwin`, `goarch=arm64`, CPU `Apple M3`;
+- Go/toolchain: `go1.26.0 darwin/arm64`; benchmark output reports `goos=darwin`, `goarch=arm64`, CPU `Apple M3`;
 - active laptop/Orca environment caveats still apply. Treat these rows as same-host/context benchmark evidence, not universal speedup claims.
 
 Primary command:
