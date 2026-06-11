@@ -79,6 +79,10 @@ func (p *columnHNSWPreparedExactFP32ScorePlane) prepareForHNSWPreparedTraversal(
 	if cap(scratch.scoreScratch.Float32Values) < pack.Header.VectorStride {
 		scratch.scoreScratch.Float32Values = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreScratch.Float32Values, pack.Header.VectorStride)
 	}
+	// The exact score plane intentionally borrows scoreScratch.Float32Values
+	// for the normalized query. Pack scoring methods must treat this slice as
+	// read-only while the plane is active and use scoreTile* fields for staging;
+	// allocating a per-query copy would violate the zero-allocation seam contract.
 	normalizedQuery := scratch.scoreScratch.Float32Values[:pack.Header.VectorStride]
 	for i := 0; i < pack.Header.Dimensions; i++ {
 		normalizedQuery[i] = query[i] * queryInvNorm
@@ -117,7 +121,7 @@ func (p *columnHNSWPreparedExactFP32ScorePlane) scoreOrdinals(ordinals []int, ds
 	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(ordinals))
 	rowIDs := scratch.scoreTileRowIDs[:len(ordinals)]
 	for i, ordinal := range ordinals {
-		if ordinal < 0 || ordinal >= p.pack.Header.Rows || uint64(ordinal) > uint64(^uint32(0)) {
+		if ordinal < 0 || ordinal >= p.pack.Header.Rows || uint64(ordinal) > math.MaxUint32 {
 			return dst[:i], fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal exact ordinal=%d outside row_count=%d", ordinal, p.pack.Header.Rows)
 		}
 		rowIDs[i] = uint32(ordinal)
@@ -366,6 +370,7 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 		}
 		for i, neighborOrdinal := range tile {
 			score := scores[i]
+			// Keep exact-pack tie handling stable with the current route.
 			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
 				best = neighborOrdinal
 				bestScore = score
