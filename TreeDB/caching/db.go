@@ -10220,8 +10220,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
-	// Until we persist nextRID separately, opening must recover the max on-disk
-	// RID here rather than risk reusing low RIDs after a clean reopen.
+	// RID allocation is monotonic, so each lane's latest non-empty value-log
+	// segment contains that lane's high-watermark. Scanning only those tail
+	// segments avoids a full value-log pass during clean geth restarts while still
+	// seeding the allocator above every valid on-disk RID produced by this path.
 	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
 	if err != nil {
 		return nil, err
@@ -31505,7 +31507,7 @@ func listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir string) (segme
 
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
-	for _, seg := range segments {
+	for _, seg := range tailValueLogSegmentsByLane(segments) {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
 		}
