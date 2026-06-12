@@ -120,7 +120,7 @@ M1 root contents:
 | `text-v2-docid` | documentID key -> `{ordinal,generation,flags}`; tombstone flag marks deleted/currently non-ranking documentIDs. |
 | `text-v2-docmap` | ordinal block key -> sorted ordinal-to-documentID entries with generation/tombstone flags for final ID materialization and stale-generation checks. |
 | `text-v2-terms` | corpus stats, field stats for BM25F average length, and term stats shell (`df`, `ttf`, posting block count placeholder). |
-| `text-v2-posting-blocks` | format-only in M1; #2625 owns posting block payloads. |
+| `text-v2-posting-blocks` | M2 posting-block keys are `(term, blockStartOrdinal, blockID)` under the normal collection root; values contain compressed scoring postings and block summaries. |
 | `text-v2-norm-blocks` | ordinal block key -> packed per-field token lengths with generation/tombstone flags, sufficient for BM25F field-length/norm inputs without per-candidate text-state lookup. |
 | `text-v2-positions` | format-only in M1; later lazy detail/position milestones own payloads. |
 | `text-v2-generations` | index status record: root/stats/docmap/norm/term generations, next ordinal, live documents, deleted/tombstoned ordinals. |
@@ -133,6 +133,61 @@ status generation and live document count, while per-term stats carry a
 non-zero generation bounded by the term/status generation so unchanged terms can
 remain valid across root-state updates. BM25F average-length inputs are read
 from one published root set.
+
+## M2 posting block format (#2625)
+
+M2 assigns the compressed scoring-block contract for the reserved
+`text-v2-posting-blocks` root. Posting blocks are still ordinary B-tree records
+inside that collection root; there are no external posting files, typed assets,
+legacy large-value side stores, or private text-block GC records. The root uses
+the text index storage policy: cache-local blocks are targeted at about 128
+postings and <=16 KiB
+encoded payloads, while unusually large values use the existing TreeDB
+value-log/leaf-log pointer path when the root policy selects it. Those pointers
+remain reachable through the collection root descriptor and normal maintenance
+root scanning.
+
+Posting block keys have a term prefix plus block identity:
+
+```text
+textV2KeyVersion | postingBlockKind | len(term) | term | big-endian blockStartOrdinal | big-endian blockID
+```
+
+`blockStartOrdinal` is the first document ordinal in the value and `blockID` is
+non-zero. The ordering lets iterators range-scan one term with a prefix and see
+blocks in increasing ordinal/block identity order. `blockID` gives later M3/M7
+writers room for append-only delta/micro blocks and rewrite generations without
+rewriting one giant high-df value. Expected lifecycle: sealed blocks are the
+stable compact representation, micro/delta blocks absorb small writes for
+high-df terms, and later merge/rewrite tooling replaces old block keys through
+ordinary collection-root deltas so physical reclamation remains normal TreeDB
+root/value-log/leaf maintenance.
+
+Posting block values are versioned and fail closed. Each value stores:
+
+- block kind: sealed, delta, or micro;
+- block identity (`blockStartOrdinal`, `blockID`) repeated for key/value
+  validation;
+- exact summary: first/last ordinal, doc count, max total term frequency, and
+  max per-field term-frequency lanes;
+- `UpperBoundKind=BM25FLaneMax`, meaning the per-field maxima are admissible
+  BM25F upper-bound inputs for non-negative BM25F weights. A later scorer may
+  combine those maxima with term IDF and the most favorable valid norm/length
+  assumptions to get a safe (possibly loose) block upper bound. If a future
+  scorer cannot compute or validate such an admissible bound for a query, it
+  must treat the block as unskippable and fall back to exhaustive scoring;
+- entries encoded as strictly-increasing document-ordinal deltas, document
+  generation, term frequency, and one term-frequency lane per indexed field.
+
+Positions and offsets are deliberately absent from the scoring block. Future
+lazy match-detail/position lanes belong in `text-v2-positions` or another
+explicit format, not in the hot scoring value.
+
+M2 provides codecs, builders, storage validation, and streaming/range iterators
+that reuse entry scratch while scanning a block. It does not route
+`SearchText`/`SearchHybrid` through v2 posting blocks and does not make ordinary
+v2 backfill/mutations emit active posting blocks before the M3 streaming write
+pipeline can maintain update/delete/tombstone correctness.
 
 ## Current v1 path inventory
 
