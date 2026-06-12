@@ -6672,6 +6672,9 @@ func runGethHotKVSuite(baseCfg BenchConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run}) {
+		runBenchprof(*profileDir)
+	}
 
 	var sb strings.Builder
 	sb.WriteString("# unified_bench suite: geth_hot_kv\n\n")
