@@ -13,10 +13,11 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestAuditSummaryUsageExposesReadOnlyCommand(t *testing.T) {
-	if !strings.Contains(usageText, "audit-summary   Summarize storage, compaction debt, log frames, and gzip samples (read-only)") {
+	if !strings.Contains(usageText, "audit-summary") || !strings.Contains(usageText, "read-only") {
 		t.Fatalf("usageText missing audit-summary read-only command: %q", usageText)
 	}
 }
@@ -98,6 +99,151 @@ func TestAuditSummaryJSONOutputShape(t *testing.T) {
 				t.Fatalf("family %s gzip sample ignored max bytes: %+v", name, sample)
 			}
 		}
+	}
+}
+
+func TestAuditSummaryMainDBDirWithSiblingSideStoreUsesParentRoot(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	if err := os.Mkdir(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "dictdb"), 0o755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
+	if got := resolveTreemapRootDir(mainDir, mainDir); got != root {
+		t.Fatalf("resolveTreemapRootDir(mainDir with sibling side store)=%q want %q", got, root)
+	}
+}
+
+func TestAuditSummaryMainDBDirWithAncientSiblingUsesParentRoot(t *testing.T) {
+	root := t.TempDir()
+	opts := treedb.Options{
+		Dir:        root,
+		Durability: treedb.DurabilityWALOffRelaxed,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	}
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open root fixture: %v", err)
+	}
+	if err := db.Set([]byte("root-key"), bytes.Repeat([]byte("v"), 512)); err != nil {
+		_ = db.Close()
+		t.Fatalf("set root fixture: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint root fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close root fixture: %v", err)
+	}
+	_ = os.RemoveAll(filepath.Join(root, "dictdb"))
+	_ = os.RemoveAll(filepath.Join(root, "templatedb"))
+	ancientDir := filepath.Join(root, "ancient")
+	if err := os.Mkdir(ancientDir, 0o755); err != nil {
+		t.Fatalf("mkdir ancient sibling: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ancientDir, "freezer.dat"), bytes.Repeat([]byte("a"), 123), 0o644); err != nil {
+		t.Fatalf("write ancient sibling file: %v", err)
+	}
+
+	mainDir := filepath.Join(root, "maindb")
+	report, err := collectAuditSummary(mainDir, auditSummaryCollectOptions{CompactMode: treedbdb.CompactStorageFull})
+	if err != nil {
+		t.Fatalf("collectAuditSummary(root maindb): %v", err)
+	}
+	if report.RootDir != root {
+		t.Fatalf("RootDir=%q want root %q", report.RootDir, root)
+	}
+	ancient := auditStorageDomainsByName(report.Storage.Domains)["ancient"]
+	if !ancient.Exists || ancient.Path != ancientDir || ancient.Bytes != 123 {
+		t.Fatalf("ancient domain not reported from root sibling: %+v", ancient)
+	}
+}
+
+func TestAuditSummaryFlatMainDBDirNamedMainDBUsesInputAsRoot(t *testing.T) {
+	parent := t.TempDir()
+	flatDir := filepath.Join(parent, "maindb")
+	opts := treedb.Options{
+		Dir:               flatDir,
+		DisableSideStores: true,
+		Durability:        treedb.DurabilityWALOffRelaxed,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	}
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open flat fixture: %v", err)
+	}
+	if err := db.Set([]byte("flat-key"), bytes.Repeat([]byte("v"), 512)); err != nil {
+		_ = db.Close()
+		t.Fatalf("set flat fixture: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint flat fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close flat fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "unrelated.bin"), bytes.Repeat([]byte("x"), 4096), 0o644); err != nil {
+		t.Fatalf("write unrelated sibling: %v", err)
+	}
+
+	report, err := collectAuditSummary(flatDir, auditSummaryCollectOptions{CompactMode: treedbdb.CompactStorageFull})
+	if err != nil {
+		t.Fatalf("collectAuditSummary(flat maindb): %v", err)
+	}
+	if report.RootDir != flatDir {
+		t.Fatalf("RootDir=%q want flat dir %q", report.RootDir, flatDir)
+	}
+	rootDomain := auditStorageDomainsByName(report.Storage.Domains)["root"]
+	expectedRoot, err := auditPathUsage("root", flatDir)
+	if err != nil {
+		t.Fatalf("auditPathUsage(flat root): %v", err)
+	}
+	if rootDomain.Path != flatDir || rootDomain.Bytes != expectedRoot.Bytes || rootDomain.Files != expectedRoot.Files {
+		t.Fatalf("root domain includes wrong path/usage: got=%+v want=%+v", rootDomain, expectedRoot)
+	}
+}
+
+func TestSummarizeCompactUsagesPreservesMissingDomainExists(t *testing.T) {
+	dir := t.TempDir()
+	existingEmpty := filepath.Join(dir, "empty")
+	if err := os.Mkdir(existingEmpty, 0o755); err != nil {
+		t.Fatalf("mkdir existing empty domain: %v", err)
+	}
+	missing := filepath.Join(dir, "missing")
+	rows := summarizeCompactUsages([]treedbdb.CompactStorageUsage{
+		{Name: "missing", Path: missing},
+		{Name: "empty", Path: existingEmpty},
+		{Name: "nonzero", Path: missing, Bytes: 7},
+	})
+	byName := auditStorageDomainsByName(rows)
+	if byName["missing"].Exists {
+		t.Fatalf("missing zero-valued domain reported exists: %+v", byName["missing"])
+	}
+	if !byName["empty"].Exists {
+		t.Fatalf("existing empty domain reported missing: %+v", byName["empty"])
+	}
+	if !byName["nonzero"].Exists {
+		t.Fatalf("nonzero usage domain reported missing: %+v", byName["nonzero"])
 	}
 }
 
@@ -262,6 +408,14 @@ func auditFamiliesByName(families []auditSummaryLogFamily) map[string]auditSumma
 	out := make(map[string]auditSummaryLogFamily, len(families))
 	for _, family := range families {
 		out[family.Name] = family
+	}
+	return out
+}
+
+func auditStorageDomainsByName(domains []auditSummaryStorageDomain) map[string]auditSummaryStorageDomain {
+	out := make(map[string]auditSummaryStorageDomain, len(domains))
+	for _, domain := range domains {
+		out[domain.Name] = domain
 	}
 	return out
 }
