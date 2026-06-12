@@ -159,14 +159,25 @@ bench = client.search_vector_index(
     "bench_run_001",
     query_embedding=[0.1, 0.2, 0.3],
     top_k=1,
-    # Optional high-QPS request encoding: "f32_le_b64" sends the query as
-    # base64 little-endian float32 bytes instead of a JSON float array.
+    # Optional high-QPS JSON-compatible encoding: "f32_le_b64" sends the query
+    # as base64 little-endian float32 bytes instead of a JSON float array.
     query_embedding_encoding="f32_le_b64",
     query_mode="quantized_rerank",
     quantized_index_name="embedding.scalar_u8.fast",
     quantized_rerank_candidates=32,
 )
 print(bench.results[0].id, bench.no_documents, bench.diagnostics.get("route"))
+
+# Best-case single-query HTTP request lane: raw little-endian float32 bytes to
+# /search/vector-index:binary. This is exact-only and separate from batch APIs.
+bench_binary = client.search_vector_index(
+    "bench_run_001",
+    query_embedding=[0.1, 0.2, 0.3],
+    top_k=1,
+    query_embedding_encoding="f32_le",
+    query_mode="exact",
+)
+print(bench_binary.results[0].id, bench_binary.no_documents, bench_binary.diagnostics.get("route"))
 
 keyword = client.search_keyword(
     "docs",

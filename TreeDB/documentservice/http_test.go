@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -240,12 +241,68 @@ func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
 	}
 }
 
+func TestHTTPBenchmarkVectorSearchBinaryF32LE(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+
+	postJSON(t, handler, "/v1/indexes/bench_binary/reset", ResetIndexRequest{
+		Dimension: 2,
+		DropOld:   true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+		},
+	}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/bench_binary/documents/upsert", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "a", Content: "alpha", Embedding: []float32{1, 0}},
+		{ID: "b", Content: "beta", Embedding: []float32{0, 1}},
+	}, DeferVectorIndexRebuild: true}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/bench_binary/optimize", OptimizeIndexRequest{}, http.StatusOK, nil)
+
+	var jsonResponse BenchmarkVectorSearchResponse
+	postJSON(t, handler, "/v1/indexes/bench_binary/search/vector-index", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8}, http.StatusOK, &jsonResponse)
+	assertExactBenchmarkNoDocumentRoute(t, jsonResponse)
+
+	rawQuery := encodeFloat32LERawForTest([]float32{1, 0})
+	var binaryResponse BenchmarkVectorSearchResponse
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&vector_index_name=embedding", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusOK, &binaryResponse)
+	assertExactBenchmarkNoDocumentRoute(t, binaryResponse)
+	if len(binaryResponse.Results) != 1 || len(jsonResponse.Results) != 1 || binaryResponse.Results[0].ID != jsonResponse.Results[0].ID || binaryResponse.Results[0].Score != jsonResponse.Results[0].Score {
+		t.Fatalf("binary response results=%+v, json results=%+v", binaryResponse.Results, jsonResponse.Results)
+	}
+	var binaryOptionsResponse BenchmarkVectorSearchResponse
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&expected_generation="+strconv.FormatUint(jsonResponse.Index.Generation, 10)+"&stats_mode=full_diagnostics", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusOK, &binaryOptionsResponse)
+	assertExactBenchmarkNoDocumentRoute(t, binaryOptionsResponse)
+
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", rawQuery, "application/octet-stream", http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", []byte{1, 2, 3}, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", encodeFloat32LERawForTest([]float32{1, 0, 0}), benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=quantized_rerank", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&quantized_index_name=embedding.scalar_u8.fast", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", nil, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+
+	smallBodyHandler := NewHandler(svc)
+	smallBodyHandler.MaxBodyBytes = int64(len(rawQuery) - 1)
+	postBinaryVectorSearch(t, smallBodyHandler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+}
+
+func assertExactBenchmarkNoDocumentRoute(t *testing.T, response BenchmarkVectorSearchResponse) {
+	t.Helper()
+	if !response.NoDocuments || response.Stats.DocumentsFetched != 0 || response.Diagnostics.Route != collections.VectorIndexSearchRouteExactHNSWSearchPackV1 || response.Diagnostics.FallbackReason != collections.VectorIndexSearchFallbackReasonNone || !response.Diagnostics.ExactHNSWSearchPackNoDocRoute || !response.Diagnostics.NoDocumentGuardrailsOK {
+		t.Fatalf("benchmark vector response left exact no-document route: no_documents=%v stats=%+v diagnostics=%+v", response.NoDocuments, response.Stats, response.Diagnostics)
+	}
+}
+
 func encodeFloat32LEBase64ForTest(values []float32) string {
+	return base64.StdEncoding.EncodeToString(encodeFloat32LERawForTest(values))
+}
+
+func encodeFloat32LERawForTest(values []float32) []byte {
 	raw := make([]byte, len(values)*4)
 	for i, value := range values {
 		binary.LittleEndian.PutUint32(raw[i*4:], math.Float32bits(value))
 	}
-	return base64.StdEncoding.EncodeToString(raw)
+	return raw
 }
 
 func postJSON(t *testing.T, handler http.Handler, path string, body any, wantStatus int, out any) {
@@ -255,6 +312,24 @@ func postJSON(t *testing.T, handler http.Handler, path string, body any, wantSta
 		t.Fatalf("marshal body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != wantStatus {
+		t.Fatalf("POST %s status=%d want %d body=%s", path, rr.Code, wantStatus, rr.Body.String())
+	}
+	if out != nil {
+		if err := json.Unmarshal(rr.Body.Bytes(), out); err != nil {
+			t.Fatalf("decode response: %v body=%s", err, rr.Body.String())
+		}
+	}
+}
+
+func postBinaryVectorSearch(t *testing.T, handler http.Handler, path string, body []byte, contentType string, wantStatus int, out any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != wantStatus {

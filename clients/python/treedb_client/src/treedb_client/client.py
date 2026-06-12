@@ -43,6 +43,7 @@ from .models import (
 
 DocumentLike = Union[Document, Mapping[str, Any]]
 VectorIndexOptionsLike = Union[BenchmarkVectorIndexOptions, Mapping[str, Any]]
+BINARY_VECTOR_SEARCH_F32LE_CONTENT_TYPE = "application/vnd.treedb.vector-search.f32le"
 _ResponseT = TypeVar("_ResponseT")
 
 
@@ -277,6 +278,27 @@ class TreeDBClient:
         emulated by client-side or service-side exact fallback.
         """
 
+        if query_embedding_encoding == "f32_le":
+            query = _encode_f32_le_bytes(query_embedding)
+            params = _binary_vector_index_query_params(
+                top_k=top_k,
+                vector_index_name=vector_index_name,
+                ef_search=ef_search,
+                query_mode=query_mode,
+                quantized_index_name=quantized_index_name,
+                quantized_rerank_candidates=quantized_rerank_candidates,
+                stats_mode=stats_mode,
+                expected_generation=expected_generation,
+            )
+            payload = self._request_bytes(
+                "POST",
+                self._index_path(index, "search") + "/vector-index:binary",
+                query,
+                BINARY_VECTOR_SEARCH_F32LE_CONTENT_TYPE,
+                query_params=params,
+            )
+            return _parse_response("benchmark vector search response", BenchmarkVectorSearchResponse.from_dict, payload)
+
         request: dict[str, Any] = {"top_k": top_k}
         _add_query_embedding(request, query_embedding, query_embedding_encoding)
         _add_expected_generation(request, expected_generation)
@@ -376,7 +398,6 @@ class TreeDBClient:
         return f"/v1/indexes/{encoded}"
 
     def _request(self, method: str, path: str, body: Optional[Mapping[str, Any]] = None) -> Any:
-        url = self.base_url + path
         data: Optional[bytes] = None
         headers = {"Accept": "application/json"}
         if body is not None:
@@ -385,7 +406,25 @@ class TreeDBClient:
             except (TypeError, ValueError) as exc:
                 raise InvalidRequestError("invalid_request", f"request payload is not JSON-serializable: {exc}") from exc
             headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        return self._send_request(method, path, data, headers)
+
+    def _request_bytes(
+        self,
+        method: str,
+        path: str,
+        body: bytes,
+        content_type: str,
+        *,
+        query_params: Optional[Sequence[tuple[str, str]]] = None,
+    ) -> Any:
+        if query_params:
+            path = path + "?" + urllib.parse.urlencode(query_params)
+        headers = {"Accept": "application/json", "Content-Type": content_type}
+        return self._send_request(method, path, body, headers)
+
+    def _send_request(self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str]) -> Any:
+        url = self.base_url + path
+        request = urllib.request.Request(url, data=data, headers=dict(headers), method=method)
         try:
             with self._opener.open(request, timeout=self.timeout) as response:
                 response_body = response.read()
@@ -487,7 +526,7 @@ def _add_query_embedding(request: dict[str, Any], query_embedding: Sequence[floa
     if encoding == "f32_le_b64":
         request["query_embedding_f32_le_b64"] = _encode_f32_le_base64(query_embedding)
         return
-    raise InvalidRequestError("invalid_request", "query_embedding_encoding must be 'json' or 'f32_le_b64'")
+    raise InvalidRequestError("invalid_request", "query_embedding_encoding must be 'json', 'f32_le_b64', or 'f32_le'")
 
 
 def _coerce_query_embedding_floats(values: Sequence[float]) -> list[float]:
@@ -500,9 +539,46 @@ def _coerce_query_embedding_floats(values: Sequence[float]) -> list[float]:
 
 
 def _encode_f32_le_base64(values: Sequence[float]) -> str:
+    return base64.b64encode(_encode_f32_le_bytes(values)).decode("ascii")
+
+
+def _encode_f32_le_bytes(values: Sequence[float]) -> bytes:
     floats = _coerce_query_embedding_floats(values)
-    payload = struct.pack(f"<{len(floats)}f", *floats) if floats else b""
-    return base64.b64encode(payload).decode("ascii")
+    return struct.pack(f"<{len(floats)}f", *floats) if floats else b""
+
+
+def _binary_vector_index_query_params(
+    *,
+    top_k: int,
+    vector_index_name: Optional[str],
+    ef_search: Optional[int],
+    query_mode: Optional[str],
+    quantized_index_name: Optional[str],
+    quantized_rerank_candidates: Optional[int],
+    stats_mode: Optional[str],
+    expected_generation: Optional[int],
+) -> list[tuple[str, str]]:
+    if query_mode is not None and query_mode != "exact":
+        raise InvalidRequestError("invalid_request", "f32_le binary vector-index search supports query_mode='exact' only")
+    if quantized_index_name is not None or quantized_rerank_candidates is not None:
+        raise InvalidRequestError("invalid_request", "f32_le binary vector-index search does not support quantized options")
+    _validate_expected_generation(expected_generation)
+    params = [("top_k", str(int(top_k))), ("query_mode", "exact")]
+    if ef_search is not None:
+        params.append(("ef_search", str(int(ef_search))))
+    _add_binary_optional_non_empty_string(params, "vector_index_name", vector_index_name, "vector_index_name")
+    _add_binary_optional_non_empty_string(params, "stats_mode", stats_mode, "stats_mode")
+    if expected_generation is not None:
+        params.append(("expected_generation", str(expected_generation)))
+    return params
+
+
+def _add_binary_optional_non_empty_string(params: list[tuple[str, str]], key: str, value: Optional[str], label: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or value.strip() == "":
+        raise InvalidRequestError("invalid_request", f"{label} must be a non-empty string when provided")
+    params.append((key, value))
 
 
 def _add_filter(request: dict[str, Any], filter_value: Optional[FilterLike]) -> None:

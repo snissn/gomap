@@ -3,14 +3,21 @@ package documentservice
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
+	"strconv"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 var benchmarkVectorSearchBase64FieldNeedle = []byte(`"query_embedding_f32_le_b64"`)
 
 const benchmarkVectorSearchDecodePeekBytes = 512
+const benchmarkVectorSearchBinaryContentType = "application/vnd.treedb.vector-search.f32le"
 
 func (h *Handler) decodeBenchmarkVectorSearchRequest(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (BenchmarkVectorSearchRequest, bool) {
 	body := http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -47,6 +54,182 @@ func (h *Handler) decodeBenchmarkVectorSearchRequest(w http.ResponseWriter, r *h
 		return BenchmarkVectorSearchRequest{}, false
 	}
 	return req, true
+}
+
+func (h *Handler) decodeBenchmarkVectorSearchBinaryRequest(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (BenchmarkVectorSearchRequest, bool) {
+	if err := validateBenchmarkVectorSearchBinaryContentType(r.Header.Get("Content-Type")); err != nil {
+		writeError(w, err)
+		return BenchmarkVectorSearchRequest{}, false
+	}
+	req, err := parseBenchmarkVectorSearchBinaryQuery(r.URL.Query())
+	if err != nil {
+		writeError(w, err)
+		return BenchmarkVectorSearchRequest{}, false
+	}
+	raw, err := readBenchmarkVectorSearchBinaryBody(w, r, maxBodyBytes)
+	if err != nil {
+		writeError(w, err)
+		return BenchmarkVectorSearchRequest{}, false
+	}
+	if len(raw) == 0 {
+		writeError(w, serviceError(CodeInvalidRequest, "binary vector search request body must contain at least one float32"))
+		return BenchmarkVectorSearchRequest{}, false
+	}
+	query, err := decodeBenchmarkVectorQueryEmbeddingF32LERawWithLabel(raw, "binary vector search request body")
+	if err != nil {
+		writeError(w, err)
+		return BenchmarkVectorSearchRequest{}, false
+	}
+	req.QueryEmbedding = query
+	return req, true
+}
+
+func validateBenchmarkVectorSearchBinaryContentType(header string) error {
+	mediaType, params, err := mime.ParseMediaType(header)
+	if err != nil || mediaType != benchmarkVectorSearchBinaryContentType || len(params) != 0 {
+		return serviceErrorf(CodeInvalidRequest, "Content-Type must be %s", benchmarkVectorSearchBinaryContentType)
+	}
+	return nil
+}
+
+func readBenchmarkVectorSearchBinaryBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) ([]byte, error) {
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = defaultMaxRequestBytes
+	}
+	if r.ContentLength > maxBodyBytes {
+		return nil, serviceErrorf(CodeInvalidRequest, "binary vector search request body exceeds %d bytes", maxBodyBytes)
+	}
+	if r.ContentLength >= 0 && r.ContentLength%4 != 0 {
+		return nil, serviceErrorf(CodeInvalidRequest, "binary vector search request body byte length %d is not a multiple of 4", r.ContentLength)
+	}
+	body := http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	defer func() { _ = body.Close() }()
+	if r.ContentLength >= 0 {
+		raw := make([]byte, int(r.ContentLength))
+		if len(raw) == 0 {
+			return raw, nil
+		}
+		if _, err := io.ReadFull(body, raw); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				return nil, serviceErrorf(CodeInvalidRequest, "binary vector search request body exceeds %d bytes", maxBodyBytes)
+			}
+			return nil, wrapServiceError(CodeInvalidRequest, "read binary vector search request body failed", err)
+		}
+		return raw, nil
+	}
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, serviceErrorf(CodeInvalidRequest, "binary vector search request body exceeds %d bytes", maxBodyBytes)
+		}
+		return nil, wrapServiceError(CodeInvalidRequest, "read binary vector search request body failed", err)
+	}
+	return raw, nil
+}
+
+func parseBenchmarkVectorSearchBinaryQuery(values url.Values) (BenchmarkVectorSearchRequest, error) {
+	var req BenchmarkVectorSearchRequest
+	for key := range values {
+		switch key {
+		case "top_k", "ef_search", "query_mode", "vector_index_name", "expected_generation", "stats_mode":
+		default:
+			return req, serviceErrorf(CodeInvalidRequest, "unsupported binary vector search query parameter %q", key)
+		}
+	}
+	topK, ok, err := parseRequiredBenchmarkVectorSearchIntParam(values, "top_k")
+	if err != nil {
+		return req, err
+	}
+	if !ok {
+		return req, serviceError(CodeInvalidRequest, "top_k query parameter is required")
+	}
+	if topK <= 0 {
+		return req, serviceError(CodeInvalidRequest, "top_k must be positive")
+	}
+	req.TopK = topK
+	if efSearch, ok, err := parseRequiredBenchmarkVectorSearchIntParam(values, "ef_search"); err != nil {
+		return req, err
+	} else if ok {
+		if efSearch < 0 {
+			return req, serviceError(CodeInvalidRequest, "ef_search must be non-negative")
+		}
+		req.EfSearch = efSearch
+	}
+	queryMode, ok, err := singleBenchmarkVectorSearchQueryValue(values, "query_mode")
+	if err != nil {
+		return req, err
+	}
+	if ok {
+		if queryMode != string(BenchmarkVectorQueryModeExact) {
+			return req, serviceErrorf(CodeInvalidRequest, "binary vector search supports query_mode=%q only", BenchmarkVectorQueryModeExact)
+		}
+	}
+	req.QueryMode = BenchmarkVectorQueryModeExact
+	vectorIndexName, ok, err := singleBenchmarkVectorSearchQueryValue(values, "vector_index_name")
+	if err != nil {
+		return req, err
+	}
+	if ok {
+		req.VectorIndexName = vectorIndexName
+	}
+	expectedGeneration, ok, err := parseBenchmarkVectorSearchUint64Param(values, "expected_generation")
+	if err != nil {
+		return req, err
+	}
+	if ok {
+		if expectedGeneration == 0 {
+			return req, serviceError(CodeInvalidRequest, "expected_generation must be positive")
+		}
+		req.ExpectedGeneration = expectedGeneration
+	}
+	statsMode, ok, err := singleBenchmarkVectorSearchQueryValue(values, "stats_mode")
+	if err != nil {
+		return req, err
+	}
+	if ok {
+		req.StatsMode = collections.VectorIndexSearchStatsMode(statsMode)
+	}
+	return req, nil
+}
+
+func parseRequiredBenchmarkVectorSearchIntParam(values url.Values, name string) (int, bool, error) {
+	value, ok, err := singleBenchmarkVectorSearchQueryValue(values, name)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, true, wrapServiceError(CodeInvalidRequest, "invalid "+name+" query parameter", err)
+	}
+	return parsed, true, nil
+}
+
+func parseBenchmarkVectorSearchUint64Param(values url.Values, name string) (uint64, bool, error) {
+	value, ok, err := singleBenchmarkVectorSearchQueryValue(values, name)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, true, wrapServiceError(CodeInvalidRequest, "invalid "+name+" query parameter", err)
+	}
+	return parsed, true, nil
+}
+
+func singleBenchmarkVectorSearchQueryValue(values url.Values, name string) (string, bool, error) {
+	items, ok := values[name]
+	if !ok {
+		return "", false, nil
+	}
+	if len(items) != 1 {
+		return "", true, serviceErrorf(CodeInvalidRequest, "%s query parameter must be supplied exactly once", name)
+	}
+	if items[0] == "" {
+		return "", true, serviceErrorf(CodeInvalidRequest, "%s query parameter must be non-empty", name)
+	}
+	return items[0], true, nil
 }
 
 func decodeBenchmarkVectorSearchJSON(raw []byte) (BenchmarkVectorSearchRequest, error) {
