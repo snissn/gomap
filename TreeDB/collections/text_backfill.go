@@ -47,6 +47,7 @@ type TextIndexStorageStats struct {
 	Version           TextIndexVersion
 	V2DocIDEntries    uint64
 	V2DocMapBlocks    uint64
+	V2PostingBlocks   uint64
 	V2NormBlocks      uint64
 	V2TermStats       uint64
 	V2FormatRecords   uint64
@@ -1080,6 +1081,27 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 				}
 			}
 			stats.V2NormBlocks++
+		case family == textV2RootFamilyPostingBlocks:
+			postingKey, err := decodeTextV2PostingBlockKey(key)
+			if err != nil {
+				return err
+			}
+			block, err := decodeTextV2PostingBlockValue(value)
+			if err != nil {
+				return err
+			}
+			if block.BlockStart != postingKey.BlockStart || block.BlockID != postingKey.BlockID {
+				return errMalformedTextStorage("text-v2 posting block key/value mismatch")
+			}
+			if len(block.Summary.MaxFieldTermFrequencies) != len(def.Fields) {
+				return errMalformedTextStorage("text-v2 posting block field lanes mismatch")
+			}
+			for _, entry := range block.Entries {
+				if entry.Ordinal >= status.NextOrdinal || entry.Generation > status.RootGeneration {
+					return errMalformedTextStorage("text-v2 posting block entry outside status snapshot")
+				}
+			}
+			stats.V2PostingBlocks++
 		case family == textV2RootFamilyTerms:
 			statsKey, err := decodeTextV2StatsKey(key)
 			if err != nil {
@@ -1126,7 +1148,7 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			}
 			stats.V2TermStats++
 			stats.StatsEntries++
-		case family == textV2RootFamilyPostingBlocks || family == textV2RootFamilyPositions || family == textV2RootFamilyGenerations:
+		case family == textV2RootFamilyPositions || family == textV2RootFamilyGenerations:
 			return errMalformedTextStorage("unsupported text-v2 root %q entry key %x", rootName, key)
 		default:
 			return errMalformedTextStorage("unsupported text-v2 root %q family %s", rootName, family)

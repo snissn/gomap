@@ -141,6 +141,98 @@ Collection document payload encodings are defined separately in
 template-v1 collections store compact `TD1D` primary documents and persist the
 template ID map in the collection-local `<collection>/templates` ordered root.
 
+## 3.3 Collection Text Index Root Payloads
+
+Collection text-index roots are ordinary ordered roots whose keys and values are
+stored inline in B-tree leaves or, when the root storage policy selects it, as
+existing value-log/split-leaf-log pointer-backed leaf values. Text roots do not
+own a separate physical file class or GC domain.
+
+The v1 text root payload contract is documented in
+`collection-text-search.md`. The v2 production contract and rollout boundaries
+are documented in `collection-text-v2-contract.md`; this section records the
+canonical durable key/value bytes that have landed for the M2 posting-block
+family. All integer varints below are Go `binary.PutUvarint` encodings unless
+noted otherwise.
+
+Text-v2 posting-block root name:
+
+```text
+<collection>/text-v2-posting-blocks/<indexName>
+```
+
+Posting-block keys sort by term, then first ordinal, then block identity:
+
+```text
+u8  KeyVersion = 2
+u8  KeyKind    = 0x21  // text-v2 posting block
+uvarint TermLen
+bytes Term[TermLen]
+u64 BlockStartOrdinalBE
+u64 BlockIDBE
+```
+
+`BlockStartOrdinalBE` and `BlockIDBE` are non-zero. The key prefix through the
+term bytes is the range-scan prefix for a single term. `BlockStartOrdinalBE` is
+the first document ordinal stored in the value. `BlockIDBE` is non-zero and lets
+future delta/micro-block writers and rewrite tooling publish multiple ordinary
+root records for the same high-document-frequency term without rewriting one
+large value per mutation.
+
+Posting-block values contain scoring postings only; positions and offsets are
+absent and belong to a separate positions lane if enabled by a later format.
+
+```text
+u8      ValueVersion  = 1
+uvarint FormatVersion = 1
+u8      BlockKind     // 1=sealed, 2=delta, 3=micro
+u8      Flags         // currently 0
+uvarint BlockStartOrdinal
+uvarint BlockID
+
+// exact summary / upper-bound metadata
+uvarint FirstOrdinal
+uvarint LastOrdinal
+uvarint DocCount
+uvarint MaxTermFrequency
+uvarint FieldCount
+uvarint MaxFieldTermFrequency[FieldCount]
+u8      UpperBoundKind // 1=BM25F lane maxima
+uvarint EntryCount
+
+// repeated EntryCount times
+uvarint OrdinalDelta  // from previous ordinal; previous starts at BlockStartOrdinal-1
+uvarint Generation
+u8      EntryFlags    // currently 0
+uvarint TermFrequency
+uvarint FieldTermFrequency[FieldCount]
+```
+
+Required validation/fail-closed invariants:
+
+- `FormatVersion`, `ValueVersion`, key version, known kinds, and zero flags must
+  be checked before use.
+- `BlockStartOrdinal`, `BlockID`, `FirstOrdinal`, `LastOrdinal`, `DocCount`,
+  `EntryCount`, and every entry `Generation`/`TermFrequency` are non-zero.
+- key `(BlockStartOrdinal, BlockID)` must match the value identity.
+- `FirstOrdinal == BlockStartOrdinal`, ordinals are strictly increasing, and a
+  builder must reject duplicate document ordinals globally before splitting
+  postings into blocks so duplicates cannot straddle block boundaries.
+- `DocCount == EntryCount` and must not exceed the implementation maximum
+  posting count per block.
+- `FieldCount` is the text index field count. Every posting has exactly that
+  many field-frequency lanes, and the lane sum equals `TermFrequency`.
+- `MaxTermFrequency`, `MaxFieldTermFrequency`, first/last ordinal, and doc count
+  must exactly summarize the decoded entries.
+- `UpperBoundKind=1` records per-field lane maxima that are admissible BM25F
+  upper-bound inputs for non-negative BM25F weights. A future scorer that cannot
+  compute/validate an admissible block bound for a query must treat the block as
+  unskippable and score exhaustively.
+- Unsupported versions, flags, kinds, malformed varints, trailing bytes,
+  key/value identity mismatches, field-count mismatches, corrupt summaries, or
+  status generation/ordinal bounds violations make the root corrupt for text-v2
+  inspection and must fail closed.
+
 ## 4. Value Pointer Encoding (`page.ValuePtr`)
 
 Base struct:
