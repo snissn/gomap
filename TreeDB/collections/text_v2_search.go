@@ -184,11 +184,12 @@ func executeTextV2SearchAtSnapshot(
 	}
 
 	candidates := make(map[uint64]*textV2SearchCandidate)
+	cache := textV2SearchBlockCache{}
 	scanTerms := orderTextV2SearchScanTerms(terms, operator, ctx.termStats)
 	scanStart := time.Now()
 	for i, term := range scanTerms {
 		allowNewCandidates := operator != TextSearchOperatorAND || i == 0
-		truncated, err := scanTextV2SearchPostingBlocksTerm(snap, catalog, ctx, term, candidates, allowNewCandidates, candidateLimit, maxPostingsScanned, &response.Stats)
+		truncated, err := scanTextV2SearchPostingBlocksTerm(snap, catalog, ctx, &cache, term, candidates, allowNewCandidates, candidateLimit, maxPostingsScanned, &response.Stats)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -211,7 +212,6 @@ func executeTextV2SearchAtSnapshot(
 	}
 
 	scoreStart := time.Now()
-	cache := textV2SearchBlockCache{}
 	scored := make([]*textV2SearchCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		norm, ok, err := cache.normEntry(snap, catalog, ctx, candidate.ordinal, &response.Stats)
@@ -399,6 +399,7 @@ func scanTextV2SearchPostingBlocksTerm(
 	snap *backenddb.Snapshot,
 	catalog *collectionCatalog,
 	ctx *textV2SearchContext,
+	cache *textV2SearchBlockCache,
 	term string,
 	candidates map[uint64]*textV2SearchCandidate,
 	allowNewCandidates bool,
@@ -467,10 +468,17 @@ func scanTextV2SearchPostingBlocksTerm(
 				return false, errMalformedTextStorage("text-v2 posting entry outside status snapshot")
 			}
 			candidate := candidates[entry.Ordinal]
+			if candidate == nil && !allowNewCandidates {
+				continue
+			}
+			current, err := textV2SearchPostingEntryCurrent(snap, catalog, ctx, cache, entry, stats)
+			if err != nil {
+				return false, err
+			}
+			if !current {
+				continue
+			}
 			if candidate == nil {
-				if !allowNewCandidates {
-					continue
-				}
 				if candidateLimit > 0 && len(candidates) >= candidateLimit {
 					stats.Truncated = true
 					stats.FailClosedReason = textSearchFailClosedCandidateLimit
@@ -496,6 +504,20 @@ func scanTextV2SearchPostingBlocksTerm(
 		return false, errMalformedTextStorage("text-v2 term %q posting block count %d does not match scanned blocks %d", term, termStats.PostingBlockCount, blocksVisited)
 	}
 	return false, nil
+}
+
+func textV2SearchPostingEntryCurrent(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, cache *textV2SearchBlockCache, entry textV2PostingBlockEntry, stats *TextSearchStats) (bool, error) {
+	if cache == nil {
+		return false, errMalformedTextStorage("text-v2 search cache is nil")
+	}
+	norm, ok, err := cache.normEntry(snap, catalog, ctx, entry.Ordinal, stats)
+	if err != nil || !ok {
+		return false, err
+	}
+	if norm.tombstoned() || norm.Generation != entry.Generation {
+		return false, nil
+	}
+	return true, nil
 }
 
 func pruneTextV2SearchANDCandidates(candidates map[uint64]*textV2SearchCandidate, term string) {

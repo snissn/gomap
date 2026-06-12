@@ -127,6 +127,31 @@ func TestTextV2SearchSkipsStaleGenerationsAndTombstones2627(t *testing.T) {
 	}
 }
 
+func TestTextV2SearchStalePostingsDoNotConsumeCandidateBudget2627(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1"), []byte("d2")}, [][]byte{
+		[]byte(`{"body":"refund stale"}`),
+		[]byte(`{"body":"refund live"}`),
+	})
+	if _, _, err := col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"body":"updated only"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update d1 away from refund: %v", err)
+	}
+
+	got, err := col.searchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10, CandidateLimit: 1, MaxPostingsScanned: 64}, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("refund search with stale-before-live posting and candidateLimit=1: %v", err)
+	}
+	if len(got.Results) != 1 || string(got.Results[0].DocumentID) != "d2" {
+		t.Fatalf("results=%+v want only live d2", got.Results)
+	}
+	if got.Stats.FailClosed != 0 || got.Stats.TextCandidatesScored != 1 || got.Stats.TextCandidatesReturned != 1 {
+		t.Fatalf("stats=%+v want one scored/returned candidate without fail-closed", got.Stats)
+	}
+}
+
 func TestTextV2SearchFailClosedOnMissingAndCorruptRoots2627(t *testing.T) {
 	t.Run("missing docmap descriptor", func(t *testing.T) {
 		d := openTextV2TestDB(t, t.TempDir(), false)
