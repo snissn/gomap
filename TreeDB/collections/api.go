@@ -5046,9 +5046,15 @@ type collectionPointerizedRunEntry struct {
 }
 
 const (
-	collectionPointerizeBatchMaxValues = 1024
-	collectionPointerizeBatchMaxBytes  = 4 << 20
+	collectionPointerizeBatchMaxValues           = 1024
+	collectionPointerizeBatchMaxBytes            = 4 << 20
+	collectionRetainedTemplatePackMinBatchValues = 16
 )
+
+type collectionPointerizeOptions struct {
+	inlineThresholdForKey        func([]byte) int
+	packRetainedTemplateV1Values bool
+}
 
 func collectionRunTableHasStableUnsafeSlices(table memtable.Table) bool {
 	stable, ok := table.(memtable.StableUnsafeIteratorTable)
@@ -5056,11 +5062,14 @@ func collectionRunTableHasStableUnsafeSlices(table memtable.Table) bool {
 }
 
 func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) (memtable.Table, bool, error) {
-	return pointerizeCollectionRunTableValuesWithResolver(db, table, nil)
+	return pointerizeCollectionRunTableValuesWithOptions(db, table, collectionPointerizeOptions{})
 }
 
 func pointerizeCollectionRunTableValuesForRoot(db *backenddb.DB, meta CollectionMeta, rootName string, table memtable.Table) (memtable.Table, bool, error) {
-	return pointerizeCollectionRunTableValuesWithResolver(db, table, collectionValueLogInlineThresholdResolverForRoot(db, meta, rootName))
+	return pointerizeCollectionRunTableValuesWithOptions(db, table, collectionPointerizeOptions{
+		inlineThresholdForKey:        collectionValueLogInlineThresholdResolverForRoot(db, meta, rootName),
+		packRetainedTemplateV1Values: collectionRootStoresRetainedPayloadBodies(meta, rootName) && columnStoreRetainedPayloadUsesTemplateV1(meta.Options.ColumnStore),
+	})
 }
 
 func collectionValueLogInlineThresholdResolverForRoot(db *backenddb.DB, meta CollectionMeta, rootName string) func([]byte) int {
@@ -5096,10 +5105,11 @@ func collectionRootStoresRetainedPayloadBodies(meta CollectionMeta, rootName str
 	}
 }
 
-func pointerizeCollectionRunTableValuesWithResolver(db *backenddb.DB, table memtable.Table, inlineThresholdForKey func([]byte) int) (memtable.Table, bool, error) {
+func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memtable.Table, opts collectionPointerizeOptions) (memtable.Table, bool, error) {
 	if db == nil || table == nil || !db.HasValueLogAppender() {
 		return table, false, nil
 	}
+	inlineThresholdForKey := opts.inlineThresholdForKey
 	if inlineThresholdForKey == nil {
 		inlineThresholdForKey = db.InlineThresholdForKey
 	}
@@ -5138,7 +5148,7 @@ func pointerizeCollectionRunTableValuesWithResolver(db *backenddb.DB, table memt
 		if len(batchValues) == 0 {
 			return nil
 		}
-		ptrs, err := db.AppendValueLogValues(batchValues)
+		ptrs, err := appendCollectionPointerizedBatchValues(db, batchValues, opts.packRetainedTemplateV1Values)
 		if err != nil {
 			return err
 		}
@@ -5209,6 +5219,78 @@ func pointerizeCollectionRunTableValuesWithResolver(db *backenddb.DB, table memt
 	}
 	out.Freeze()
 	return out, true, nil
+}
+
+func appendCollectionPointerizedBatchValues(db *backenddb.DB, values [][]byte, packRetainedTemplateV1 bool) ([]page.ValuePtr, error) {
+	if !packRetainedTemplateV1 || len(values) < collectionRetainedTemplatePackMinBatchValues {
+		return db.AppendValueLogValues(values)
+	}
+	order, ok := collectionRetainedTemplateV1PackOrder(values)
+	if !ok {
+		return db.AppendValueLogValues(values)
+	}
+	packed := make([][]byte, len(values))
+	for i, sourceIdx := range order {
+		packed[i] = values[sourceIdx]
+	}
+	packedPtrs, err := db.AppendValueLogValues(packed)
+	if err != nil {
+		return nil, err
+	}
+	if len(packedPtrs) != len(values) {
+		return packedPtrs, nil
+	}
+	ptrs := make([]page.ValuePtr, len(values))
+	for packedIdx, sourceIdx := range order {
+		ptrs[sourceIdx] = packedPtrs[packedIdx]
+	}
+	return ptrs, nil
+}
+
+func collectionRetainedTemplateV1PackOrder(values [][]byte) ([]int, bool) {
+	if len(values) < 2 {
+		return nil, false
+	}
+	type valueTemplate struct {
+		index      int
+		templateID uint64
+	}
+	order := make([]valueTemplate, len(values))
+	distinct := false
+	var firstID uint64
+	for i, value := range values {
+		root, err := parseTemplateV1StoredDocument(value)
+		if err != nil {
+			return nil, false
+		}
+		if i == 0 {
+			firstID = root.templateID
+		} else if root.templateID != firstID {
+			distinct = true
+		}
+		order[i] = valueTemplate{
+			index:      i,
+			templateID: root.templateID,
+		}
+	}
+	if !distinct {
+		return nil, false
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return order[i].templateID < order[j].templateID
+	})
+	out := make([]int, len(order))
+	changed := false
+	for i := range order {
+		out[i] = order[i].index
+		if out[i] != i {
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+	return out, true
 }
 
 func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, meta CollectionMeta, plan *insertBatchPlan) ([]memtable.Table, error) {

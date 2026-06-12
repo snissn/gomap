@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -203,6 +204,117 @@ func TestColumnRetainedPayloadLeafLogSyntheticShrink(t *testing.T) {
 	t.Logf("synthetic leaf_vlog bytes: retained=%d row_baseline=%d shrink=%.1f%%", retainedLeafBytes, rowLeafBytes, 100*(1-float64(retainedLeafBytes)/float64(rowLeafBytes)))
 }
 
+func TestColumnRetainedPayloadTemplateV1PointerizePacksByTemplateID(t *testing.T) {
+	const docs = 32
+	stored := retainedPlacementTemplateV1StoredDocuments(t, docs)
+	table := newCollectionRunTable(docs)
+	for i := 0; i < docs; i++ {
+		table.SetEntrySteal([]byte(fmt.Sprintf("doc-%06d", i)), bytes.Clone(stored[i]), page.ValuePtr{}, node.FlagInline)
+	}
+	table.Freeze()
+
+	db := &backenddb.DB{}
+	appender := &retainedPlacementTemplatePackAppender{}
+	db.SetValueLogAppender(appender)
+	defer db.SetValueLogAppender(nil)
+
+	cfg := &ColumnStoreConfig{
+		Enabled:                 true,
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingTemplateV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	meta := CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}
+	out, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, collectionPrimaryRootName("events"), table)
+	if err != nil {
+		t.Fatalf("pointerizeCollectionRunTableValuesForRoot: %v", err)
+	}
+	if !pointerized {
+		t.Fatalf("pointerizeCollectionRunTableValuesForRoot did not pointerize retained payloads")
+	}
+	if len(appender.values) != docs {
+		t.Fatalf("appended values=%d want %d", len(appender.values), docs)
+	}
+
+	lastTemplateID := uint64(0)
+	transitions := 0
+	for i, value := range appender.values {
+		root, err := parseTemplateV1StoredDocument(value)
+		if err != nil {
+			t.Fatalf("appended value %d parse template-v1 stored document: %v", i, err)
+		}
+		if i > 0 && root.templateID != lastTemplateID {
+			transitions++
+			if root.templateID < lastTemplateID {
+				t.Fatalf("appended template ids are not grouped/sorted at %d: got %d after %d", i, root.templateID, lastTemplateID)
+			}
+		}
+		lastTemplateID = root.templateID
+	}
+	if transitions != 1 {
+		t.Fatalf("template packing transitions=%d want 1 for two alternating templates", transitions)
+	}
+
+	ptrOffsetByDocument := make(map[int]uint64, docs)
+	for appendedIdx, value := range appender.values {
+		sourceIdx := -1
+		for i := range stored {
+			if bytes.Equal(value, stored[i]) {
+				sourceIdx = i
+				break
+			}
+		}
+		if sourceIdx < 0 {
+			t.Fatalf("appended value %d did not match any source document", appendedIdx)
+		}
+		ptrOffsetByDocument[sourceIdx] = uint64(appendedIdx + 1)
+	}
+	for i := 0; i < docs; i++ {
+		key := []byte(fmt.Sprintf("doc-%06d", i))
+		value, ptr, flags, found := out.GetEntry(key)
+		if !found {
+			t.Fatalf("pointerized table missing %q", key)
+		}
+		if len(value) != 0 || flags&node.FlagPointer == 0 {
+			t.Fatalf("pointerized entry %q value_len=%d flags=%#x want pointer-only", key, len(value), flags)
+		}
+		if ptr.Offset != ptrOffsetByDocument[i] {
+			t.Fatalf("pointerized entry %q offset=%d want appended offset %d", key, ptr.Offset, ptrOffsetByDocument[i])
+		}
+	}
+}
+
+func TestColumnRetainedPayloadTemplateV1PackingImprovesGroupedBlockStorage(t *testing.T) {
+	const docs = 128
+	stored := retainedPlacementTemplateV1CompressibleStoredDocuments(t, docs)
+	order, ok := collectionRetainedTemplateV1PackOrder(stored)
+	if !ok {
+		t.Fatalf("collectionRetainedTemplateV1PackOrder returned no packing order for interleaved templates")
+	}
+	packed := make([][]byte, len(stored))
+	for packedIdx, sourceIdx := range order {
+		packed[packedIdx] = stored[sourceIdx]
+	}
+
+	mixedStats := retainedPlacementTemplateV1BlockFrameStats(t, stored)
+	packedStats := retainedPlacementTemplateV1BlockFrameStats(t, packed)
+	if !mixedStats.Kept || !packedStats.Kept {
+		t.Fatalf("block compression not kept: mixed=%+v packed=%+v", mixedStats, packedStats)
+	}
+	if packedStats.RawPayloadBytes != mixedStats.RawPayloadBytes {
+		t.Fatalf("raw payload bytes changed: mixed=%d packed=%d", mixedStats.RawPayloadBytes, packedStats.RawPayloadBytes)
+	}
+	if packedStats.StoredPayloadBytes >= mixedStats.StoredPayloadBytes {
+		t.Fatalf("packed template-v1 frame stored bytes=%d want below mixed=%d", packedStats.StoredPayloadBytes, mixedStats.StoredPayloadBytes)
+	}
+	shrinkPct := 100 * (1 - float64(packedStats.StoredPayloadBytes)/float64(mixedStats.StoredPayloadBytes))
+	if shrinkPct < 2 {
+		t.Fatalf("packed template-v1 frame shrink %.2f%% below guardrail: mixed=%d packed=%d", shrinkPct, mixedStats.StoredPayloadBytes, packedStats.StoredPayloadBytes)
+	}
+	t.Logf("template-v1 retained grouped-block bytes: mixed=%d packed=%d shrink=%.2f%%",
+		mixedStats.StoredPayloadBytes, packedStats.StoredPayloadBytes, shrinkPct)
+}
+
 func enableColumnRetainedPlacementCommandWAL(t testing.TB, dir string) {
 	t.Helper()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -371,4 +483,128 @@ func filesUnderDirContain(t testing.TB, dir string, needle []byte) bool {
 		t.Fatalf("walk %s: %v", dir, err)
 	}
 	return found
+}
+
+type retainedPlacementTemplatePackAppender struct {
+	values [][]byte
+}
+
+func (a *retainedPlacementTemplatePackAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	ptrs := make([]page.ValuePtr, len(values))
+	for i, value := range values {
+		a.values = append(a.values, bytes.Clone(value))
+		ptrs[i] = page.ValuePtr{
+			Offset: uint64(len(a.values)),
+			Length: uint32(len(value)),
+			FileID: page.ValueLogFileID(1),
+		}
+	}
+	return ptrs, nil
+}
+
+func (*retainedPlacementTemplatePackAppender) Flush() error { return nil }
+
+func (*retainedPlacementTemplatePackAppender) Sync() error { return nil }
+
+func (*retainedPlacementTemplatePackAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	return "", 0, false
+}
+
+func retainedPlacementTemplateV1StoredDocuments(t testing.TB, count int) [][]byte {
+	t.Helper()
+	encoded := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		var raw []byte
+		if i%2 == 0 {
+			raw = []byte(fmt.Sprintf(`{"payload":"even-%06d","shape_even":%d}`, i, i))
+		} else {
+			raw = []byte(fmt.Sprintf(`{"payload":"odd-%06d","shape_odd":%d,"extra":"%s"}`, i, i, strings.Repeat("x", i%5+1)))
+		}
+		doc, err := EncodeTemplateV1DocumentJSON(raw)
+		if err != nil {
+			t.Fatalf("EncodeTemplateV1DocumentJSON %d: %v", i, err)
+		}
+		encoded[i] = doc
+	}
+	prepared, _, _, _, err := prepareTemplateV1InsertDocuments(encoded, nil, false, false)
+	if err != nil {
+		t.Fatalf("prepareTemplateV1InsertDocuments: %v", err)
+	}
+	if len(prepared) != count {
+		t.Fatalf("prepared documents=%d want %d", len(prepared), count)
+	}
+	return prepared
+}
+
+func retainedPlacementTemplateV1CompressibleStoredDocuments(t testing.TB, count int) [][]byte {
+	t.Helper()
+	encoded := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		var raw []byte
+		switch i % 4 {
+		case 0:
+			raw = []byte(fmt.Sprintf(
+				`{"tenant":"store-a","event":"checkout","cart":"%s","amount":%d,"sku":"sku-a-%03d","coupon":"%s"}`,
+				strings.Repeat("cart-line-price-tax-", 28),
+				1000+i,
+				i%11,
+				strings.Repeat("save-a-", 10),
+			))
+		case 1:
+			raw = []byte(fmt.Sprintf(
+				`{"tenant":"store-b","event":"impression","campaign":"%s","slot":%d,"creative":"creative-b-%03d","visible":%t}`,
+				strings.Repeat("homepage-banner-source-", 26),
+				i%13,
+				i%7,
+				i%3 == 0,
+			))
+		case 2:
+			raw = []byte(fmt.Sprintf(
+				`{"tenant":"store-c","event":"fulfillment","route":"%s","warehouse":"wh-c-%02d","items":%d,"late":%t}`,
+				strings.Repeat("zone-carrier-sort-", 30),
+				i%5,
+				i%19,
+				i%4 == 0,
+			))
+		default:
+			raw = []byte(fmt.Sprintf(
+				`{"tenant":"store-d","event":"support","case":"case-d-%06d","topic":"%s","priority":%d,"agent":"agent-d-%02d"}`,
+				i,
+				strings.Repeat("refund-chat-transcript-", 24),
+				i%4,
+				i%9,
+			))
+		}
+		doc, err := EncodeTemplateV1DocumentJSON(raw)
+		if err != nil {
+			t.Fatalf("EncodeTemplateV1DocumentJSON compressible %d: %v", i, err)
+		}
+		encoded[i] = doc
+	}
+	prepared, _, _, _, err := prepareTemplateV1InsertDocuments(encoded, nil, false, false)
+	if err != nil {
+		t.Fatalf("prepareTemplateV1InsertDocuments compressible: %v", err)
+	}
+	if len(prepared) != count {
+		t.Fatalf("prepared compressible documents=%d want %d", len(prepared), count)
+	}
+	return prepared
+}
+
+func retainedPlacementTemplateV1BlockFrameStats(t testing.TB, values [][]byte) valuelog.FrameStats {
+	t.Helper()
+	records := make([]valuelog.Record, len(values))
+	for i, value := range values {
+		records[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
+	}
+	writer := valuelog.NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	writer.SetBlockCompression(valuelog.BlockCodecZSTD, true)
+	_, stats, err := writer.AppendFrameWithStats(0, nil, records)
+	if err != nil {
+		t.Fatalf("AppendFrameWithStats: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close frame writer: %v", err)
+	}
+	return stats
 }
