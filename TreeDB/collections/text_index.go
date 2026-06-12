@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // ErrTextIndexUnavailable reports that a declared collection text index cannot
@@ -291,12 +293,23 @@ func (c *Collection) TextIndexStatus(indexName string) (TextIndexStatus, error) 
 	if err := ValidateIndexName(indexName); err != nil {
 		return TextIndexStatus{}, err
 	}
-	meta := c.MetaView()
-	idx, ok := findTextIndex(meta.TextIndexes, indexName)
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return TextIndexStatus{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return TextIndexStatus{}, err
+	}
+	if catalog == nil {
+		return TextIndexStatus{}, errCollectionNotFound
+	}
+	idx, ok := findTextIndex(catalog.meta.TextIndexes, indexName)
 	if !ok {
 		return TextIndexStatus{}, ErrIndexNotFound
 	}
-	return textIndexStatusForDefinition(meta.Name, idx), nil
+	return textIndexStatusForDefinition(catalog.meta.Name, idx), nil
 }
 
 func textIndexStatusForDefinition(collection string, def TextIndexDefinition) TextIndexStatus {

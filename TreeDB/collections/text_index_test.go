@@ -292,6 +292,45 @@ func TestCollectionTextIndexStatusAPI2623(t *testing.T) {
 	}
 }
 
+func TestCollectionTextIndexStatusUsesCurrentCatalog2623(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	staleCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection stale: %v", err)
+	}
+	freshCol, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection fresh: %v", err)
+	}
+	if _, err := staleCol.TextIndexStatus("lexical"); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("pre-create TextIndexStatus err=%v want ErrIndexNotFound", err)
+	}
+	if _, _, err := freshCol.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	status, err := staleCol.TextIndexStatus("lexical")
+	if err != nil {
+		t.Fatalf("stale handle TextIndexStatus after create: %v", err)
+	}
+	if !status.Ready || status.Name != "lexical" || len(status.ActiveRootNames) != 3 {
+		t.Fatalf("status after create=%+v want current ready index", status)
+	}
+	if _, err := freshCol.DropTextIndex("lexical"); err != nil {
+		t.Fatalf("DropTextIndex: %v", err)
+	}
+	if _, err := staleCol.TextIndexStatus("lexical"); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("stale handle TextIndexStatus after drop err=%v want ErrIndexNotFound", err)
+	}
+}
+
 func TestCollectionTextRootStoragePolicies(t *testing.T) {
 	meta, err := normalizeCollectionMeta(CollectionMeta{
 		Name: "docs",
