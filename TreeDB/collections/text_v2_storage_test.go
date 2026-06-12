@@ -391,6 +391,27 @@ func TestTextV2StorageFailsClosedOnVersionMismatchAndStatsNormInconsistency2624(
 	if _, err := col3.TextIndexStorageStats("lexical"); !errors.Is(err, ErrTextIndexStorageCorrupt) {
 		t.Fatalf("corrupt norm generation err=%v want ErrTextIndexStorageCorrupt", err)
 	}
+
+	d4 := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d4.Close() }()
+	mgr4 := NewCollectionManager(d4)
+	if _, err := mgr4.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection 4: %v", err)
+	}
+	col4, err := mgr4.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection 4: %v", err)
+	}
+	if _, err := col4.Insert([]byte("d1"), []byte(`{"body":"refund policy"}`)); err != nil {
+		t.Fatalf("Insert 4: %v", err)
+	}
+	if _, _, err := col4.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex 4: %v", err)
+	}
+	clearTextRootDescriptor2624(t, d4, collectionTextV2DocMapRootName("docs", "lexical"))
+	if _, err := col4.TextIndexStorageStats("lexical"); !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("missing docmap root err=%v want ErrTextIndexStorageCorrupt", err)
+	}
 }
 
 func TestTextV2FieldStatsFailClosedOnMissingUnknownAndOutOfRange2624(t *testing.T) {
@@ -630,6 +651,23 @@ func deleteTextRootValue2624(t *testing.T, d *backenddb.DB, collection, rootName
 	}
 	if len(rootIDs) != 1 {
 		t.Fatalf("rootIDs=%d want 1", len(rootIDs))
+	}
+}
+
+func clearTextRootDescriptor2624(t *testing.T, d *backenddb.DB, rootName string) {
+	t.Helper()
+	current := d.AcquireSnapshot()
+	if current == nil {
+		t.Fatal("snapshot nil")
+	}
+	defer func() { _ = current.Close() }()
+	iter, err := buildSystemTargetIterator(current, map[string][]byte{systemCollectionRootKey(rootName): encodeRootID(0)})
+	if err != nil {
+		t.Fatalf("build cleared root descriptor %q: %v", rootName, err)
+	}
+	defer func() { _ = iter.Close() }()
+	if _, err := d.PublishSystemRootIterator(iter); err != nil {
+		t.Fatalf("publish cleared root descriptor %q: %v", rootName, err)
 	}
 }
 

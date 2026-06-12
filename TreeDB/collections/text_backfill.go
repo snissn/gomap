@@ -979,8 +979,11 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return errMalformedTextStorage("missing text-v2 root %q", rootName)
 	}
-	if err != nil || it == nil {
+	if err != nil {
 		return err
+	}
+	if it == nil {
+		return errMalformedTextStorage("missing text-v2 root %q", rootName)
 	}
 	defer func() { _ = it.Close() }()
 	formatSeen := false

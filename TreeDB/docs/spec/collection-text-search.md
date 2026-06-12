@@ -22,7 +22,9 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
 - `CreateTextIndex` backfills persistent v1 postings/text-state/text-stats roots
   or explicit v2 doc ordinal/docmap/term-stat/norm/status roots over existing
   documents and publishes roots plus metadata atomically.
-- `DropTextIndex` removes metadata and clears the text root descriptors.
+- `DropTextIndex` removes metadata and clears all v1 and v2 text root
+  descriptors for that index, including v1 postings/text-state/text-stats roots
+  and explicit v2 doc ordinal/docmap/term-stat/norm/status roots.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
 - Insert, delete, update, and batch write paths maintain v1 postings/text-state
   and stats for v1 text indexes. For explicit v2 indexes, M1 maintains only the
