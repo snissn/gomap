@@ -25,6 +25,7 @@ func TestHarnessPreservesIntegratedGethWorkloadShape(t *testing.T) {
 		"key-shape",
 		"value-shape",
 		"batch-target-bytes",
+		"pathWithin(cfg.WorkDir, cfg.ProfileDir)",
 		"DeleteRange keys/sec",
 	} {
 		if !strings.Contains(src, want) {

@@ -139,7 +139,7 @@ func main() {
 	} else if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		fatalf("create workdir %s: %v", cfg.WorkDir, err)
 	}
-	if !cfg.Keep && !pathWithin(cfg.WorkDir, *outPath) {
+	if !cfg.Keep && !pathWithin(cfg.WorkDir, *outPath) && !pathWithin(cfg.WorkDir, cfg.ProfileDir) {
 		defer os.RemoveAll(cfg.WorkDir)
 	}
 	if cfg.ProfileDir != "" {
