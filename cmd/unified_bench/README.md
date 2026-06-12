@@ -191,6 +191,7 @@ explicitly deferred.
 - `-checkpoint-every-ops` force a best-effort durability checkpoint every N ops during write-heavy tests (DBs that support `Checkpoint()`)
 - `-checkpoint-every-bytes` force a best-effort durability checkpoint every N approx bytes during write-heavy tests (DBs that support `Checkpoint()`)
 - `-suite` named suite:
+  - `geth_hot_kv` — 30k-key raw-KV proxy for geth/Nitro hot database behavior: sequential point write, random read, full iteration, and dense `DeleteRange`; defaults to `treedb_public_command_wal,pebble,leveldb` with random 128-byte values and reports a compact #2392-style summary. Use `scripts/treedb_geth_hot_kv_bench.sh` for the standard unified-bench wrapper. For the integrated geth `node.OpenDatabase` / `ethdb` benchmark and key/value/batch matrix, use `benchmarks/geth_hot_kv/testdata/treedb_nitro_soak.go` via `scripts/treedb_geth_hot_kv_matrix.sh`.
   - `readme` — generates the README graphs + sweep tables
   - `churn` — churn + settled scans (`treedb,leveldb`)
   - `churnvacuum` — churn + settled scans, then index compaction and scan again

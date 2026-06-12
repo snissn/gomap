@@ -616,6 +616,12 @@ func main() {
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
 	if suite != "" {
 		switch suite {
+		case "geth_hot_kv", "geth-hot-kv":
+			out, err := runGethHotKVSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("geth_hot_kv suite: %v", err)
+			}
+			fmt.Print(out)
 		case "readme":
 			out, err := runReadmeSuite(baseCfg)
 			if err != nil {
@@ -6629,6 +6635,120 @@ func formatMarkdownValue(f float64) string {
 }
 
 func formatInt(v int) string { return formatFloat(float64(v)) }
+
+func runGethHotKVSuite(baseCfg BenchConfig) (string, error) {
+	// Small geth/Nitro-like hot-KV proxy matching the #2392 comparison shape:
+	// sequential point writes, point reads, full ordered iteration, then dense DeleteRange.
+	// TreeDB uses the public cached command-WAL path by default so the workload is
+	// closer to downstream geth/Nitro persistence than the raw cached benchmark.
+	cfg := baseCfg
+	cfg.Progress = false
+	if !flagExplicit("keys") {
+		cfg.Keys = 30_000
+	}
+	if !flagExplicit("dbs") {
+		cfg.DBsArg = "treedb_public_command_wal,pebble,leveldb"
+	}
+	if !flagExplicit("test") {
+		cfg.TestsArg = "sequential_write,random_read,full_scan,batch_delete_range"
+	}
+	if !flagExplicit("val-pattern") {
+		cfg.ValuePattern = "random"
+	}
+	if !flagExplicit("batch-delete-range-width") {
+		cfg.BatchDeleteRangeWidth = 100
+	}
+	if !flagExplicit("batch-delete-ranges-per-batch") {
+		cfg.BatchDeleteRangesPerBatch = 100
+	}
+	if !flagExplicit("batch-delete-range-validate") {
+		cfg.BatchDeleteRangeValidate = true
+	}
+	if !flagExplicit("read-require-hit") {
+		cfg.ReadRequireHit = true
+	}
+
+	run, err := runBenchmark(cfg)
+	if err != nil {
+		return "", err
+	}
+	if maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run}) {
+		runBenchprof(*profileDir)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# unified_bench suite: geth_hot_kv\n\n")
+	sb.WriteString("This is a small raw-KV proxy for geth/Nitro hot database behavior: sequential point writes, random point reads, full ordered iteration, then dense `DeleteRange`. It is not a full geth node sync benchmark.\n\n")
+	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
+	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
+	sb.WriteString(fmt.Sprintf("- val-pattern: %s\n", run.Config.ValuePattern))
+	sb.WriteString(fmt.Sprintf("- dbs: %s\n", run.Config.DBsArg))
+	sb.WriteString(fmt.Sprintf("- tests: %s\n", run.Config.TestsArg))
+	sb.WriteString(fmt.Sprintf("- batch-delete-range-width: %d\n", run.Config.BatchDeleteRangeWidth))
+	sb.WriteString(fmt.Sprintf("- batch-delete-ranges-per-batch: %d\n", run.Config.BatchDeleteRangesPerBatch))
+	sb.WriteString(fmt.Sprintf("- seed: %d\n\n", run.Config.SeedUsed))
+	sb.WriteString("## Compact summary\n\n")
+	sb.WriteString("`write ops/sec` uses `sequential_write` when present, falling back to `batch_write` for custom test overrides. `DeleteRange keys/sec` uses affected keys/sec, not range calls/sec. `size bytes` is end-of-run directory usage after the DeleteRange phase has closed the DB.\n\n")
+	sb.WriteString(renderGethHotKVSummary(run))
+	sb.WriteString("\n## Full unified_bench report\n\n")
+	sb.WriteString(renderMarkdownSingle(run))
+	return sb.String(), nil
+}
+
+func renderGethHotKVSummary(run BenchRun) string {
+	var sb strings.Builder
+	sb.WriteString("| engine | write ops/sec | read ops/sec | iterate keys/sec | DeleteRange keys/sec | size bytes |\n")
+	sb.WriteString("|---|---:|---:|---:|---:|---:|\n")
+	for _, inst := range run.Instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		name := inst.Wrapper.Name()
+		writeOps := math.NaN()
+		if byDB := run.Results["sequential_write"]; byDB != nil {
+			writeOps = byDB[name]
+		}
+		if math.IsNaN(writeOps) {
+			if byDB := run.Results["batch_write"]; byDB != nil {
+				writeOps = byDB[name]
+			}
+		}
+		readOps := math.NaN()
+		if byDB := run.Results["random_read"]; byDB != nil {
+			readOps = byDB[name]
+		}
+		iterOps := math.NaN()
+		if byDB := run.Results["full_scan"]; byDB != nil {
+			iterOps = byDB[name]
+		}
+		deleteKeysOps := math.NaN()
+		if byDB := run.BatchDeleteRange["batch_delete_range"]; byDB != nil {
+			if report, ok := byDB[name]; ok {
+				deleteKeysOps = report.AffectedKeysPerSec
+			}
+		}
+		sizeBytes := math.NaN()
+		if usage, ok := run.DiskUsage[name]; ok {
+			sizeBytes = float64(usage.TotalBytes)
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s |\n",
+			gethHotKVSummaryEngineName(name),
+			formatMarkdownValue(writeOps),
+			formatMarkdownValue(readOps),
+			formatMarkdownValue(iterOps),
+			formatMarkdownValue(deleteKeysOps),
+			formatMarkdownValue(sizeBytes),
+		))
+	}
+	return sb.String()
+}
+
+func gethHotKVSummaryEngineName(name string) string {
+	if name == "TreeDB (public cached command_wal_v1)" {
+		return "TreeDB"
+	}
+	return name
+}
 
 func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 	outDir := strings.TrimSpace(*outDirArg)

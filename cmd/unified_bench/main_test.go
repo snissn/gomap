@@ -1072,6 +1072,98 @@ func TestBatchDeleteRangeReportingVisibleInMarkdownAndJSON(t *testing.T) {
 	}
 }
 
+func TestRenderGethHotKVSummary(t *testing.T) {
+	const treeName = "TreeDB (public cached command_wal_v1)"
+	run := BenchRun{
+		Instances: []*DBInstance{
+			{Wrapper: &fixedNameDB{name: treeName}},
+			{Wrapper: &fixedNameDB{name: "Pebble"}},
+		},
+		Results: map[string]map[string]float64{
+			"sequential_write": {treeName: 1000, "Pebble": 2000},
+			"random_read":      {treeName: 3000, "Pebble": 4000},
+			"full_scan":        {treeName: 5000, "Pebble": 6000},
+		},
+		BatchDeleteRange: map[string]map[string]batchDeleteRangeReport{
+			"batch_delete_range": {
+				treeName: {AffectedKeysPerSec: 7000},
+				"Pebble": {AffectedKeysPerSec: 8000},
+			},
+		},
+		DiskUsage: map[string]dirDiskUsage{
+			treeName: {TotalBytes: 9000},
+			"Pebble": {TotalBytes: 10000},
+		},
+	}
+
+	out := renderGethHotKVSummary(run)
+	for _, want := range []string{
+		"| engine | write ops/sec | read ops/sec | iterate keys/sec | DeleteRange keys/sec | size bytes |",
+		"| TreeDB | 1,000 | 3,000 | 5,000 | 7,000 | 9,000 |",
+		"| Pebble | 2,000 | 4,000 | 6,000 | 8,000 | 10,000 |",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("summary missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunGethHotKVSuiteWritesBenchprofArtifacts(t *testing.T) {
+	const dbName = "geth_hot_kv_artifacts_memory"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		return newBatchDeleteRangeMemoryDB("GethHotKVArtifactsMemory"), nil
+	})
+
+	oldProfileDir := *profileDir
+	oldPathLabel := *pathLabel
+	oldExplicit := explicitFlags
+	defer func() {
+		*profileDir = oldProfileDir
+		*pathLabel = oldPathLabel
+		explicitFlags = oldExplicit
+	}()
+
+	dir := t.TempDir()
+	*profileDir = dir
+	*pathLabel = "native-fastpath"
+	explicitFlags = map[string]bool{
+		"keys":                          true,
+		"dbs":                           true,
+		"test":                          true,
+		"val-pattern":                   true,
+		"batch-delete-range-width":      true,
+		"batch-delete-ranges-per-batch": true,
+		"batch-delete-range-validate":   true,
+		"read-require-hit":              true,
+	}
+
+	out, err := runGethHotKVSuite(BenchConfig{
+		Keys:                      16,
+		ValueSize:                 8,
+		BatchSize:                 8,
+		ValuePattern:              "random",
+		DBsArg:                    dbName,
+		TestsArg:                  "sequential_write,random_read,full_scan,batch_delete_range",
+		BatchDeleteRangeWidth:     4,
+		BatchDeleteRangesPerBatch: 2,
+		BatchDeleteRangeValidate:  true,
+		ReadRequireHit:            true,
+		SeedUsed:                  1,
+	})
+	if err != nil {
+		t.Fatalf("runGethHotKVSuite: %v", err)
+	}
+	if !strings.Contains(out, "# unified_bench suite: geth_hot_kv") {
+		t.Fatalf("suite output missing title:\n%s", out)
+	}
+	for _, name := range []string{"benchprof_results.json", "benchprof_results.md"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s: %v", path, err)
+		}
+	}
+}
+
 func TestRunBenchmark_BatchDeleteRangeProfilesExcludePreload(t *testing.T) {
 	var db *batchDeleteRangeMemoryDB
 	var events []string
