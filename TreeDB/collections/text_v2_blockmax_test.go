@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strings"
 	"testing"
@@ -152,6 +153,86 @@ func TestTextV2ScalarFilterPruningEmptyRareBroad2628(t *testing.T) {
 	}
 }
 
+func TestTextV2HybridUnionFusionPreservesUnfilteredTextRanks2628(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "docs",
+		Indexes: []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	ids, docs := textV2HybridUnionFusionDocs2628(384)
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	textQuery := HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4}
+	unfilteredText, err := col.SearchHybridTextCandidates(textQuery)
+	if err != nil {
+		t.Fatalf("SearchHybridTextCandidates unfiltered: %v", err)
+	}
+	unfilteredRank := hybridCandidateSourceRank2628(t, unfilteredText.Candidates, "doc-000002", HybridCandidateSourceText)
+	if unfilteredRank != 3 {
+		t.Fatalf("unfiltered text candidates=%+v want doc-000002 at source rank 3", unfilteredText.Candidates)
+	}
+
+	baseOpts := HybridSearchOptions{
+		TopK: 1,
+		Text: &textQuery,
+		ScalarFilter: &HybridScalarFilter{
+			IndexName: "tenant",
+			Value:     "tenant-rare",
+		},
+	}
+	unionOpts := baseOpts
+	unionOpts.ScalarFilterStrategy = HybridScalarFilterStrategyUnionFusion
+	union, err := col.SearchHybrid(unionOpts)
+	if err != nil {
+		t.Fatalf("SearchHybrid union_fusion scalar: %v", err)
+	}
+	if union.Plan.ScalarFilterStrategy != HybridScalarFilterStrategyUnionFusion || len(union.Results) != 1 || string(union.Results[0].ID) != "doc-000002" {
+		t.Fatalf("union_fusion response=%+v want rare doc with explicit union_fusion", union)
+	}
+	unionText := hybridResultSourceContribution2628(t, union.Results[0], HybridCandidateSourceText)
+	if unionText.SourceRank != unfilteredRank {
+		t.Fatalf("union_fusion text source rank=%d want unfiltered rank %d; result=%+v", unionText.SourceRank, unfilteredRank, union.Results[0])
+	}
+	wantTextFusion := 1 / float64(HybridFusionDefaultRRFK+unfilteredRank)
+	if math.Abs(unionText.FusionScore-wantTextFusion) > 1e-12 {
+		t.Fatalf("union_fusion text contribution=%+v want fusion score %.12f", unionText, wantTextFusion)
+	}
+	if math.Abs(union.Results[0].FusedScore-wantTextFusion) > 1e-12 {
+		t.Fatalf("union_fusion fused score=%.12f want %.12f from unfiltered text rank result=%+v", union.Results[0].FusedScore, wantTextFusion, union.Results[0])
+	}
+
+	prefilter, err := col.SearchHybrid(baseOpts)
+	if err != nil {
+		t.Fatalf("SearchHybrid default prefilter scalar: %v", err)
+	}
+	if prefilter.Plan.ScalarFilterStrategy != HybridScalarFilterStrategyPrefilter || len(prefilter.Results) != 1 || string(prefilter.Results[0].ID) != "doc-000002" {
+		t.Fatalf("prefilter response=%+v want rare doc with default prefilter", prefilter)
+	}
+	prefilterText := hybridResultSourceContribution2628(t, prefilter.Results[0], HybridCandidateSourceText)
+	if prefilterText.SourceRank != 1 {
+		t.Fatalf("prefilter text source rank=%d want rank within scalar-pruned text source; result=%+v", prefilterText.SourceRank, prefilter.Results[0])
+	}
+	if prefilter.Stats.ScalarPrefilterIDs != 1 || prefilter.Stats.TextPostingBlocksSkipped == 0 || prefilter.Stats.TextCandidatesScored != 1 || prefilter.Stats.TextCandidatesScored >= union.Stats.TextCandidatesScored {
+		t.Fatalf("prefilter stats=%+v union stats=%+v want scalar text pruning counters only for prefilter", prefilter.Stats, union.Stats)
+	}
+}
+
 func TestTextV2BlockMaxCorruptMetadataFailsClosed2628(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
@@ -210,6 +291,52 @@ func textV2BlockMaxScalarDocs2628(count int) ([][]byte, [][]byte) {
 		docs[i] = []byte(fmt.Sprintf(`{"title":"%s","body":"%s","tenant":"%s"}`, strings.TrimSpace(title), strings.TrimSpace(body), tenant))
 	}
 	return ids, docs
+}
+
+func textV2HybridUnionFusionDocs2628(count int) ([][]byte, [][]byte) {
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		ids[i] = []byte(fmt.Sprintf("doc-%06d", i))
+		tenant := "tenant-broad"
+		if i == 2 {
+			tenant = "tenant-rare"
+		}
+		titleRepeats := 1
+		switch i {
+		case 0:
+			titleRepeats = 48
+		case 1:
+			titleRepeats = 24
+		case 2:
+			titleRepeats = 6
+		}
+		title := strings.TrimSpace(strings.Repeat("refund ", titleRepeats))
+		docs[i] = []byte(fmt.Sprintf(`{"title":%q,"tenant":%q}`, title, tenant))
+	}
+	return ids, docs
+}
+
+func hybridCandidateSourceRank2628(tb testing.TB, candidates []HybridSearchCandidate, id string, source HybridCandidateSource) int {
+	tb.Helper()
+	for _, candidate := range candidates {
+		if string(candidate.ID) == id && candidate.Source == source {
+			return candidate.SourceRank
+		}
+	}
+	tb.Fatalf("missing %s candidate %q in %+v", source, id, candidates)
+	return 0
+}
+
+func hybridResultSourceContribution2628(tb testing.TB, result HybridSearchResult, source HybridCandidateSource) HybridSourceContribution {
+	tb.Helper()
+	for _, contribution := range result.Sources {
+		if contribution.Source == source {
+			return contribution
+		}
+	}
+	tb.Fatalf("missing %s contribution in result %+v", source, result)
+	return HybridSourceContribution{}
 }
 
 func textV2RandomTerms2628(rng *rand.Rand, terms []string, count int) string {

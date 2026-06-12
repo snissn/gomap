@@ -47,9 +47,9 @@ func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchRespons
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
-	candidateAllowSet := allowSet
-	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
-		candidateAllowSet = nil
+	var candidateAllowSet hybridScalarAllowSet
+	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
+		candidateAllowSet = allowSet
 	}
 	candidates, candidateStats, err := c.hybridSearchCandidates(plan, candidateAllowSet)
 	hybridMergeStats(&response.Stats, candidateStats)
