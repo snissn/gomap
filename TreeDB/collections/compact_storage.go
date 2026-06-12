@@ -41,13 +41,14 @@ func (c *Collection) CompactStorage(ctx context.Context, opts CompactStorageOpti
 		stats.Storage = storage
 		return stats, err
 	}
-	rootStats, err := c.CompactRootOverlays(ctx)
+	rootResult, err := c.compactRootOverlays(ctx)
 	if err != nil {
 		return stats, err
 	}
 	stats.RootOverlays = map[string]CollectionRootOverlayCompactionStats{
-		c.meta.Name: rootStats,
+		c.meta.Name: rootResult.stats,
 	}
+	opts = compactStorageOptionsWithCollectionRootProtection(opts, rootResult)
 	storage, err := c.db.CompactStorage(ctx, backenddb.CompactStorageOptions(opts))
 	if err != nil {
 		return stats, err
@@ -86,6 +87,7 @@ func (m *CollectionManager) CompactStorage(ctx context.Context, opts CompactStor
 		return stats, err
 	}
 	stats.RootOverlays = make(map[string]CollectionRootOverlayCompactionStats, len(metas))
+	rootResults := make([]collectionRootOverlayCompactionResult, 0, len(metas))
 	for _, meta := range metas {
 		if err := ctx.Err(); err != nil {
 			return stats, err
@@ -94,16 +96,49 @@ func (m *CollectionManager) CompactStorage(ctx context.Context, opts CompactStor
 		if err != nil {
 			return stats, err
 		}
-		rootStats, err := collection.CompactRootOverlays(ctx)
+		rootResult, err := collection.compactRootOverlays(ctx)
 		if err != nil {
 			return stats, err
 		}
-		stats.RootOverlays[meta.Name] = rootStats
+		stats.RootOverlays[meta.Name] = rootResult.stats
+		rootResults = append(rootResults, rootResult)
 	}
+	opts = compactStorageOptionsWithCollectionRootProtection(opts, rootResults...)
 	storage, err := m.db.CompactStorage(ctx, backenddb.CompactStorageOptions(opts))
 	if err != nil {
 		return stats, err
 	}
 	stats.Storage = storage
 	return stats, nil
+}
+
+func compactStorageOptionsWithCollectionRootProtection(opts CompactStorageOptions, results ...collectionRootOverlayCompactionResult) CompactStorageOptions {
+	for _, result := range results {
+		if result.systemRootID != 0 {
+			opts.LeafGenerationProtectedSystemRootIDs = appendCollectionCompactStorageProtectedRootIDs(
+				opts.LeafGenerationProtectedSystemRootIDs,
+				[]uint64{result.systemRootID},
+			)
+		}
+	}
+	return opts
+}
+
+func appendCollectionCompactStorageProtectedRootIDs(dst []uint64, src []uint64) []uint64 {
+	for _, rootID := range src {
+		if rootID == 0 {
+			continue
+		}
+		seen := false
+		for _, existing := range dst {
+			if existing == rootID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			dst = append(dst, rootID)
+		}
+	}
+	return dst
 }
