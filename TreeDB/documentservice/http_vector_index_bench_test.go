@@ -1,6 +1,7 @@
 package documentservice
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -19,6 +20,7 @@ func BenchmarkBenchmarkVectorSearchDecode(b *testing.B) {
 	query := benchmarkVectorQuery(1536)
 	jsonPayload := benchmarkVectorSearchJSONPayload(query)
 	b64Payload := benchmarkVectorSearchF32LEBase64Payload(query)
+	rawPayload := encodeFloat32LERawForTest(query)
 	encoded := encodeFloat32LEBase64ForTest(query)
 
 	b.Run("json_float_array_request", func(b *testing.B) {
@@ -65,6 +67,17 @@ func BenchmarkBenchmarkVectorSearchDecode(b *testing.B) {
 			benchmarkVectorDecodeSink = req
 		}
 	})
+	b.Run("raw_f32le_request", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(rawPayload)))
+		for i := 0; i < b.N; i++ {
+			query, err := decodeBenchmarkVectorQueryEmbeddingF32LERawWithLabel(rawPayload, "binary vector search request body")
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkVectorDecodeSink = BenchmarkVectorSearchRequest{QueryEmbedding: query, TopK: 10, EfSearch: 128, QueryMode: BenchmarkVectorQueryModeExact}
+		}
+	})
 }
 
 func BenchmarkBenchmarkVectorSearchHTTPPredecodedRequest(b *testing.B) {
@@ -72,15 +85,13 @@ func BenchmarkBenchmarkVectorSearchHTTPPredecodedRequest(b *testing.B) {
 	b.Cleanup(func() { _ = db.Close() })
 	ctx := b.Context()
 	index := "bench_http_predecoded"
-	createBenchmarkColumnGraphIndex(b, svc, index)
-	loadBenchmarkDocsDeferred(b, svc, index, []Document{
-		{ID: "a", Content: "alpha", Embedding: []float32{1, 0}},
-		{ID: "b", Content: "beta", Embedding: []float32{0, 1}},
-	})
+	query := benchmarkVectorQuery(1536)
+	createBenchmarkColumnGraphIndexWithDimension(b, svc, index, len(query))
+	loadBenchmarkDocsDeferred(b, svc, index, benchmarkVectorDocumentsForQuery(query))
 	if _, err := svc.OptimizeIndex(ctx, index, OptimizeIndexRequest{}); err != nil {
 		b.Fatalf("OptimizeIndex: %v", err)
 	}
-	request := BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8}
+	request := BenchmarkVectorSearchRequest{QueryEmbedding: query, TopK: 1, EfSearch: 8}
 	httpRequest := httptest.NewRequest(http.MethodPost, "/v1/indexes/bench_http_predecoded/search/vector-index", nil)
 
 	b.ReportAllocs()
@@ -97,6 +108,54 @@ func BenchmarkBenchmarkVectorSearchHTTPPredecodedRequest(b *testing.B) {
 		}
 		benchmarkVectorResponseSink = response
 	}
+}
+
+func BenchmarkBenchmarkVectorSearchHTTPHandler(b *testing.B) {
+	svc, db := newTestService(b)
+	b.Cleanup(func() { _ = db.Close() })
+	ctx := b.Context()
+	index := "bench_http_handler"
+	query := benchmarkVectorQuery(1536)
+	createBenchmarkColumnGraphIndexWithDimension(b, svc, index, len(query))
+	loadBenchmarkDocsDeferred(b, svc, index, benchmarkVectorDocumentsForQuery(query))
+	if _, err := svc.OptimizeIndex(ctx, index, OptimizeIndexRequest{}); err != nil {
+		b.Fatalf("OptimizeIndex: %v", err)
+	}
+	handler := NewHandler(svc)
+	b64Payload, err := json.Marshal(BenchmarkVectorSearchRequest{QueryEmbeddingF32LEBase64: encodeFloat32LEBase64ForTest(query), TopK: 1, EfSearch: 8})
+	if err != nil {
+		b.Fatal(err)
+	}
+	rawPayload := encodeFloat32LERawForTest(query)
+
+	b.Run("json_f32_b64", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(b64Payload)))
+		for i := 0; i < b.N; i++ {
+			req := httptest.NewRequest(http.MethodPost, "/v1/indexes/bench_http_handler/search/vector-index", bytes.NewReader(b64Payload))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusOK {
+				b.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			benchmarkVectorBytesSink = rr.Body.Bytes()
+		}
+	})
+	b.Run("raw_f32le_binary", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(rawPayload)))
+		for i := 0; i < b.N; i++ {
+			req := httptest.NewRequest(http.MethodPost, "/v1/indexes/bench_http_handler/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", bytes.NewReader(rawPayload))
+			req.Header.Set("Content-Type", benchmarkVectorSearchBinaryContentType)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusOK {
+				b.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			benchmarkVectorBytesSink = rr.Body.Bytes()
+		}
+	})
 }
 
 func BenchmarkBenchmarkVectorSearchResponseEncode(b *testing.B) {
@@ -138,6 +197,25 @@ func benchmarkVectorQuery(dim int) []float32 {
 		query[i] = float32(math.Sin(float64(i+1)) * 0.01)
 	}
 	return query
+}
+
+func benchmarkVectorDocumentsForQuery(query []float32) []Document {
+	first := append([]float32(nil), query...)
+	second := make([]float32, len(query))
+	for i, value := range query {
+		second[i] = -value
+	}
+	return []Document{
+		{ID: "a", Content: "alpha", Embedding: first},
+		{ID: "b", Content: "beta", Embedding: second},
+	}
+}
+
+func createBenchmarkColumnGraphIndexWithDimension(t testing.TB, svc *Service, index string, dimension int) {
+	t.Helper()
+	if _, err := svc.ResetIndex(t.Context(), index, ResetIndexRequest{Dimension: dimension, Metric: MetricCosine, DropOld: true, VectorIndexOptions: benchmarkColumnGraphOptions()}); err != nil {
+		t.Fatalf("ResetIndex %s create: %v", index, err)
+	}
 }
 
 func benchmarkVectorSearchJSONPayload(query []float32) []byte {

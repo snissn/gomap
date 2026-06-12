@@ -395,7 +395,25 @@ exactly one of `query_embedding` or `query_embedding_f32_le_b64`:
 }
 ```
 
-Supported `query_mode` values are `exact`, `quantized_only`, and
+For best-case single-query HTTP request measurements, the binary endpoint
+accepts raw little-endian float32 query bytes and returns the same response shape
+as `/search/vector-index`:
+
+```http
+POST /v1/indexes/{index}/search/vector-index:binary?top_k=10&ef_search=128&query_mode=exact
+Content-Type: application/vnd.treedb.vector-search.f32le
+```
+
+Only the raw query vector is carried in the binary body. Supported query
+parameters are `top_k` (required), `ef_search`, `query_mode` (`exact` only for
+this endpoint), `vector_index_name`, `expected_generation`, and `stats_mode`.
+Unsupported or invalid query parameters fail closed. The endpoint rejects the
+wrong content type, bodies larger than the service body cap, byte lengths that
+are not a multiple of four, empty bodies, and dimension mismatches before search.
+It is a single-query HTTP lane, not a batch API, and it does not change the
+dense `/search/vector` route.
+
+Supported JSON `query_mode` values are `exact`, `quantized_only`, and
 `quantized_rerank`. Quantized modes require a declared quantized index name and
 fail closed when assets are missing, invalid, stale, or unavailable. Responses
 include result IDs/scores plus TreeDB stats/diagnostics so benchmark adapters can

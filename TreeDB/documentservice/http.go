@@ -223,6 +223,17 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
+	case "vector-index:binary":
+		req, ok := h.decodeBenchmarkVectorSearchBinaryRequest(w, r, maxBodyBytes)
+		if !ok {
+			return
+		}
+		res, err := h.Service.SearchBenchmarkVector(r.Context(), index, req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 	default:
 		writeError(w, serviceErrorf(CodeInvalidRequest, "unknown search operation %q", op))
 	}

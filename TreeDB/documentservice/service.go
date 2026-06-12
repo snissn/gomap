@@ -1370,8 +1370,12 @@ func decodeBenchmarkVectorQueryEmbeddingF32LEBase64Bytes(encoded []byte) ([]floa
 }
 
 func decodeBenchmarkVectorQueryEmbeddingF32LERaw(raw []byte) ([]float32, error) {
+	return decodeBenchmarkVectorQueryEmbeddingF32LERawWithLabel(raw, "query_embedding_f32_le_b64 decoded")
+}
+
+func decodeBenchmarkVectorQueryEmbeddingF32LERawWithLabel(raw []byte, label string) ([]float32, error) {
 	if len(raw)%4 != 0 {
-		return nil, serviceErrorf(CodeInvalidRequest, "query_embedding_f32_le_b64 decoded byte length %d is not a multiple of 4", len(raw))
+		return nil, serviceErrorf(CodeInvalidRequest, "%s byte length %d is not a multiple of 4", label, len(raw))
 	}
 	query := make([]float32, len(raw)/4)
 	for i := range query {
