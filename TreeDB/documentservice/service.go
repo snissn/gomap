@@ -1341,7 +1341,7 @@ func normalizeBenchmarkVectorQueryEmbedding(req *BenchmarkVectorSearchRequest) e
 	if encoded == "" {
 		return nil
 	}
-	if len(req.QueryEmbedding) > 0 {
+	if req.QueryEmbedding != nil {
 		return serviceError(CodeInvalidRequest, "benchmark vector search accepts either query_embedding or query_embedding_f32_le_b64, not both")
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)

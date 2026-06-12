@@ -495,7 +495,7 @@ def _encode_f32_le_base64(values: Sequence[float]) -> str:
         raise InvalidRequestError("invalid_request", "query_embedding must be a sequence of floats")
     try:
         floats = [float(value) for value in values]
-    except TypeError as exc:
+    except (TypeError, ValueError) as exc:
         raise InvalidRequestError("invalid_request", "query_embedding must be a sequence of floats") from exc
     payload = struct.pack(f"<{len(floats)}f", *floats) if floats else b""
     return base64.b64encode(payload).decode("ascii")

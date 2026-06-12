@@ -208,6 +208,11 @@ func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
 		"top_k":                      1,
 	}, http.StatusBadRequest, nil)
 	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
+		"query_embedding":            []float32{},
+		"query_embedding_f32_le_b64": encodeFloat32LEBase64ForTest([]float32{1, 0}),
+		"top_k":                      1,
+	}, http.StatusBadRequest, nil)
+	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
 		"query_embedding_f32_le_b64": "not-base64",
 		"top_k":                      1,
 	}, http.StatusBadRequest, nil)

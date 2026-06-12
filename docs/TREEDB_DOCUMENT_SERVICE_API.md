@@ -388,7 +388,7 @@ exactly one of `query_embedding` or `query_embedding_f32_le_b64`:
 
 ```json
 {
-  "query_embedding_f32_le_b64": "AACAPwAAAAAAAAAAAAA=",
+  "query_embedding_f32_le_b64": "AACAPwAAAAAAAAAA",
   "top_k": 10,
   "ef_search": 64,
   "query_mode": "exact"
