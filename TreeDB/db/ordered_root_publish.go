@@ -334,6 +334,32 @@ func (db *DB) orderedRootZipperForOptionsWithAllocator(idx *indexGen, opts order
 	return z, nil
 }
 
+func (db *DB) orderedRootRewriteZipperForOptionsWithAllocator(idx *indexGen, opts orderedRootPublishOptions, alloc zipper.PageAllocator, state *DBState) (*zipper.Zipper, error) {
+	z, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
+	if err != nil {
+		return nil, err
+	}
+	if idx != nil && z == idx.zipper {
+		// Value-log rewrite walks and rewrites leaf-log-backed trees while leaf-log
+		// segments may be replaced/GCed. Do not let the process-wide leaf page read
+		// cache feed stale entries back into the rewrite zipper; use an uncached
+		// state-pinned reader for the duration of the maintenance apply instead.
+		z = idx.zipper.CloneWithAllocator(alloc)
+	}
+	z.SetLeafPageReader(db.rewriteLeafPageReaderForState(state))
+	return z, nil
+}
+
+func (db *DB) rewriteLeafPageReaderForState(state *DBState) zipper.LeafPageReader {
+	if state != nil && state.ValueLogSet != nil {
+		return newValueReader(state.ValueLogSet)
+	}
+	if db != nil && db.valueLogManager != nil {
+		return db.valueLogManager
+	}
+	return nil
+}
+
 func (db *DB) orderedRootOptionsUseDefaultZipper(opts orderedRootPublishOptions) bool {
 	if db == nil {
 		return false

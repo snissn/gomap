@@ -2862,6 +2862,9 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectCreateCollectionTextV2Indexes(normalized); err != nil {
+		return nil, err
+	}
 	return m.createCollectionWithCommandWALIntent(normalized, nil)
 }
 
@@ -19918,6 +19921,15 @@ func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, roo
 		}
 	}
 	for _, idx := range meta.TextIndexes {
+		if idx.Version == TextIndexVersionV2 {
+			switch rootName {
+			case collectionTextV2DocMapRootName(meta.Name, idx.Name), collectionTextV2PostingBlocksRootName(meta.Name, idx.Name), collectionTextV2NormBlocksRootName(meta.Name, idx.Name), collectionTextV2PositionsRootName(meta.Name, idx.Name):
+				return backendRootStoragePolicy(idx.StoragePolicy)
+			case collectionTextV2DocIDRootName(meta.Name, idx.Name), collectionTextV2TermsRootName(meta.Name, idx.Name), collectionTextV2GenerationsRootName(meta.Name, idx.Name):
+				return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
+			}
+			continue
+		}
 		switch rootName {
 		case collectionTextIndexRootName(meta.Name, idx.Name):
 			return backendRootStoragePolicy(idx.StoragePolicy)
@@ -20974,7 +20986,7 @@ func collectionRootNames(meta CollectionMeta) []string {
 		out = append(out, collectionVectorIndexRootName(meta.Name, idx.Name))
 	}
 	for _, idx := range meta.TextIndexes {
-		out = append(out, collectionTextRootNames(meta.Name, idx.Name)...)
+		out = append(out, collectionTextRootNamesForDefinition(meta.Name, idx)...)
 	}
 	return out
 }

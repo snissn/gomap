@@ -56,6 +56,21 @@ GOWORK=off go test ./TreeDB/collections \
   | tee "$OUT/index_insert_search_guardrail.txt"
 ```
 
+M4 also exposes explicit-v2 #2564-shape score-only rows. The v2 text rows use the
+same synthetic #2564 documents and scalar distribution but create the v2 text
+index after insert, because inline v2 metadata is intentionally rejected; the
+existing command-WAL/vector guardrail rows remain the vector no-regression lane.
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkIndexInsertSearch2564/(search_text_v2_candidates_no_docs|search_hybrid_v2_no_docs_scalar_filter|search_vector_candidates_no_docs)$' \
+  -benchmem \
+  -benchtime=5x \
+  -count=3 \
+  | tee "$OUT/index_insert_search_v2_guardrail.txt"
+```
+
 Indexed insert/readiness row:
 
 ```sh
@@ -76,14 +91,22 @@ Measured boundaries:
 
 - `insert_batch_no_text`: `InsertBatch` on the same JSON fixture without text
   indexes; setup excludes DB/collection creation.
-- `insert_batch_text_indexed`: `InsertBatch` with a declared text index; setup
-  excludes DB/collection creation.
-- `create_text_index_backfill`: `CreateTextIndex` over already inserted primary
-  documents; setup excludes primary insert.
-- `update_batch_text_indexed`: `UpdateBatch` replacements with maintained text
-  roots; setup excludes initial insert.
-- `delete_batch_text_indexed`: `DeleteBatch` with maintained text roots; setup
-  excludes initial insert.
+- `insert_batch_text_indexed`: v1 `InsertBatch` with a declared text index;
+  setup excludes DB/collection creation.
+- `insert_batch_text_v2_indexed`: explicit v2 `InsertBatch` after empty-index
+  `CreateTextIndex` setup; setup excludes DB/collection/index creation.
+- `create_text_index_backfill`: v1 `CreateTextIndex` over already inserted
+  primary documents; setup excludes primary insert.
+- `create_text_v2_index_backfill`: explicit v2 `CreateTextIndex` over already
+  inserted primary documents; setup excludes primary insert.
+- `update_batch_text_indexed`: v1 `UpdateBatch` replacements with maintained
+  text roots; setup excludes initial insert.
+- `update_batch_text_v2_indexed`: explicit v2 `UpdateBatch` replacements with
+  maintained micro-block/docmap/norm roots; setup excludes initial insert.
+- `delete_batch_text_indexed`: v1 `DeleteBatch` with maintained text roots;
+  setup excludes initial insert.
+- `delete_batch_text_v2_indexed`: explicit v2 `DeleteBatch` with generation and
+  tombstone maintenance; setup excludes initial insert.
 
 Command:
 
@@ -101,9 +124,16 @@ go test ./TreeDB/collections \
 
 Report text write counters:
 
-- `posting_entries/op`, `state_entries/op`, `stats_entries/op`;
+- `posting_entries/op`, `state_entries/op`, `stats_entries/op` for v1 rows;
+- `v2_docid_entries/op`, `v2_docmap_blocks/op`, `v2_posting_blocks/op`,
+  `v2_norm_blocks/op`, and `v2_term_stats/op` for v2 rows;
+- `posting_blocks/doc`, `high_df_posting_blocks/op`,
+  `high_df_posting_blocks/doc`, and `rewritten_blocks/doc` (M3 rewrite count is `0`);
 - `index_entries/doc` for live text-root entries after the operation;
-- `write_amp_entries/doc` for estimated text-root entry writes emitted by the operation;
+- `write_amp_entries/doc` for estimated text-root entry writes emitted by the
+  operation. For maintained v2 insert/update/delete rows this is the emitted
+  root-delta estimate (docID/docmap/norm/term-status/posting-block deltas plus
+  the status generation), not the net post-mutation root size;
 - `index_bytes/doc`.
 
 ## New text search scale rows
@@ -151,11 +181,41 @@ go test ./TreeDB/collections \
 Report text search counters:
 
 - `postings_scanned/search`;
-- `posting_blocks_visited/search` and `posting_blocks_skipped/search` (v1 = 0);
+- `posting_blocks_visited/search` and `posting_blocks_skipped/search` (v1 = 0; M4 v2 exhaustive search reports visited blocks and skipped=0);
 - `candidates_scored/search`;
 - `state_lookups/search` and `norm_lookups/search`;
 - `match_details/search`;
 - `docs_fetched/search`, `full_doc_fallbacks/search`, `fail_closed/search`.
+
+M4 (#2627) adds an explicit v2 score-only search benchmark with the same corpus
+and query cases. It creates a v2 index with `CreateTextIndex`, scans compressed
+posting blocks under one snapshot, scores from norm/docmap blocks, and asserts
+`state_lookups=0`, `match_details=0`, and `docs_fetched=0`:
+
+```sh
+GOWORK=off \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2ScoreSearchScale2627/docs_(256|10000)/' \
+  -benchmem \
+  -benchtime=3x \
+  -count=3 \
+  | tee "$OUT/text_v2_score_search_scale_256_10k.txt"
+```
+
+>=100k local artifact:
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_RUN_100K=1 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2ScoreSearchScale2627/docs_100000/' \
+  -benchmem \
+  -benchtime=1x \
+  -count=1 \
+  | tee "$OUT/text_v2_score_search_scale_100k.txt"
+```
 
 ## Concurrent serving/load row
 

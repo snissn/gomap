@@ -29,6 +29,7 @@ const (
 	textSearchFailClosedPostingsLimit  = "postings_scan_limit_exceeded"
 	textSearchFailClosedStorageCorrupt = "text_index_storage_corrupt"
 	textSearchFailClosedDocumentFetch  = "document_fetch_unavailable"
+	textSearchFailClosedV2Unavailable  = "text_v2_search_unavailable"
 )
 
 const (
@@ -233,7 +234,11 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	if err != nil {
 		return response, err
 	}
-	terms = uniqueTextSearchTerms(terms)
+	if idx.Version == TextIndexVersionV2 {
+		terms = uniqueSortedTextSearchTerms(terms)
+	} else {
+		terms = uniqueTextSearchTerms(terms)
+	}
 	response.Stats.QueryTerms = len(terms)
 	if len(terms) == 0 {
 		response.Results = []TextSearchResult{}
@@ -242,6 +247,9 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	candidateLimit := normalizeTextSearchCandidateLimit(opts.TopK, opts.CandidateLimit)
 	maxPostingsScanned := normalizeTextSearchMaxPostingsScanned(candidateLimit, len(terms), opts.MaxPostingsScanned)
 	response.Stats.TextCandidatesRequested = uint64(candidateLimit)
+	if idx.Version == TextIndexVersionV2 {
+		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, resultMode, response)
+	}
 
 	return executeTextSearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, resultMode, response)
 }
@@ -736,6 +744,14 @@ func uniqueTextSearchTerms(terms []string) []string {
 	return out
 }
 
+func uniqueSortedTextSearchTerms(terms []string) []string {
+	out := uniqueTextSearchTerms(terms)
+	if len(out) > 1 {
+		sort.Strings(out)
+	}
+	return out
+}
+
 func orderTextSearchScanTerms(terms []string, operator TextSearchOperator, stats map[string]textStatsTermValue) []string {
 	out := append([]string(nil), terms...)
 	if operator == TextSearchOperatorAND {
@@ -808,15 +824,15 @@ func parseTextSearchQuery(analyzer TextAnalyzer, query string, requested TextSea
 			expectTerm = true
 			continue
 		}
-		tokens, err := AnalyzeText(analyzer, part)
-		if err != nil {
+		before := len(terms)
+		if err := AnalyzeTextToSink(analyzer, part, TextTokenSinkFunc(func(token TextToken) error {
+			terms = append(terms, token.Term)
+			return nil
+		})); err != nil {
 			return nil, "", err
 		}
-		if len(tokens) == 0 {
+		if len(terms) == before {
 			continue
-		}
-		for _, token := range tokens {
-			terms = append(terms, token.Term)
 		}
 		expectTerm = false
 	}

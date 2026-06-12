@@ -2629,7 +2629,7 @@ func (db *DB) applyRewriteSwapsToRootLocked(idx *indexGen, state *DBState, rootI
 	}
 	noteRewriteSwapTouchedSegments(b, swaps)
 	touched := append([]uint32(nil), b.TouchedValueLogSegments()...)
-	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
+	rootZipper, err := db.orderedRootRewriteZipperForOptionsWithAllocator(idx, opts, idx.allocator, state)
 	if err != nil {
 		releaseValueLogRefDelta(vlogRefDelta)
 		return rootID, nil, metrics, nil, nil, false, err
@@ -2751,6 +2751,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
+	z.SetLeafPageReader(db.rewriteLeafPageReaderForState(state))
 	newRoot, retired, metrics, err := z.Apply(rootID, b)
 	if err != nil {
 		freeErr := tracker.FreeAll()
@@ -2841,7 +2842,9 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	noteRewriteSwapTouchedSegments(b, swaps)
 	touchedValueLogSegments := b.TouchedValueLogSegments()
 
-	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
+	z := idx.zipper.CloneWithAllocator(idx.allocator)
+	z.SetLeafPageReader(db.rewriteLeafPageReaderForState(state))
+	newRoot, retired, metrics, err := z.Apply(rootID, b)
 	if err != nil {
 		return err
 	}

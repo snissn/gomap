@@ -19,12 +19,17 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
     uses `CollectionOptions.IndexStateStoragePolicy`.
 - `simple` analyzer: Unicode lowercase tokenization over letters, digits, and
   `_` so code-ish identifiers such as `HTTP_500` remain searchable.
-- `CreateTextIndex` backfills persistent postings/text-state/text-stats roots
-  over existing documents and publishes roots plus metadata atomically.
-- `DropTextIndex` removes metadata and clears the text root descriptors.
+- `CreateTextIndex` backfills persistent v1 postings/text-state/text-stats roots
+  or explicit v2 doc ordinal/docmap/term-stat/norm/status roots over existing
+  documents and publishes roots plus metadata atomically.
+- `DropTextIndex` removes metadata and clears all v1 and v2 text root
+  descriptors for that index, including v1 postings/text-state/text-stats roots
+  and explicit v2 doc ordinal/docmap/term-stat/norm/status roots.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
-- Insert, delete, update, and batch write paths maintain postings, text-state,
-  and corpus/term/field stats for declared text indexes.
+- Insert, delete, update, and batch write paths maintain v1 postings/text-state
+  and stats for v1 text indexes. For explicit v2 indexes, M1 maintains only the
+  root-state shell: ordinals/generations, tombstones, docmap/norm blocks, and
+  stats metadata. Full compressed-posting writes remain a later milestone.
 - `SearchText(TextSearchOptions)` executes bounded postings range scans, applies
   simple term `AND`/`OR` semantics, scores candidates with BM25F-style field
   weighting from persisted stats/text-state, and fetches documents only for final
@@ -66,8 +71,13 @@ Validation rules:
   non-negative.
 - Analyzer `""` normalizes to `"simple"`; other analyzers fail closed until
   implemented.
-- Version `""` normalizes to `"v1"`; `"v2"` is reserved by the #2623 contract
-  and currently fails closed until text-v2 roots land.
+- Version `""` normalizes to `"v1"`; `"v2"` explicitly selects the #2624
+  B-tree-native root format. V2 root state is created with `CreateTextIndex`;
+  declaring v2 text indexes directly in `CreateCollection` is rejected to avoid
+  metadata without root descriptors/status records. V2 root state can be
+  maintained, but `TextIndexStatus` remains non-readable/non-writable for the
+  full v2 path and v2 search remains fail-closed until the later executor/write
+  pipeline milestones.
 - Rollout `""` normalizes to `"primary"`; `"shadow"`, `"dual_write"`, and
   `"disabled"` are reserved and currently fail closed until the matching v2
   rollout implementation lands.

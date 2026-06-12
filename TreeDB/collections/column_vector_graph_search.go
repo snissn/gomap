@@ -1002,6 +1002,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	quantizedRabitQWorkspace rabitq.Workspace
 	quantizedBRQWorkspace    brq.Workspace
 	preparedQuantizedPlane   columnHNSWPreparedQuantizedScorePlane
+	preparedScalarU8Plane    columnHNSWPreparedScalarU8ScorePlane
 	preparedTraversalStats   columnVectorGraphNativeSearchStats
 	wavefrontCandidates      []columnVectorGraphSearchCandidate
 	searchPlan               columnVectorGraphSearchPlan

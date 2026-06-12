@@ -112,6 +112,49 @@ func collectionVectorIndexPreparedSearchCacheSlotForOptions(opts VectorIndexSear
 	return collectionVectorIndexPreparedSearchCacheSlot{family: collectionVectorIndexPreparedSearchFamilyExactHNSWPack, indexName: opts.IndexName}
 }
 
+// WarmVectorIndexPreparedSearch opens and retains the collection-level prepared
+// vector-index search state for opts without executing a query. It is intended
+// for service lifecycle boundaries, such as optimize, that need the first
+// request after a rebuild to reuse already-prepared no-document search assets.
+func (c *Collection) WarmVectorIndexPreparedSearch(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
+	var response VectorIndexSearchResponse
+	if opts.IncludeDocuments {
+		return response, errors.New("collections: vector index WarmVectorIndexPreparedSearch does not support IncludeDocuments")
+	}
+	if documentFetchOptionsHasProjection(opts.DocumentFetchOptions) {
+		return response, errors.New("collections: vector index warm prepared search document projection requires IncludeDocuments")
+	}
+	if c == nil {
+		return response, errCollectionNil
+	}
+	if c.db == nil {
+		return response, errCollectionDBNil
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return response, err
+	}
+	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
+	if err != nil {
+		return response, err
+	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		return response, err
+	}
+	if queryMode == columnVectorGraphNativeSearchQueryModeExact && !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
+		return response, fmt.Errorf("%w: vector index %q WarmVectorIndexPreparedSearch requires the exact no-document hnsw_search_pack_v1 route for the selected stats mode", ErrVectorIndexSearchUnavailable, opts.IndexName)
+	}
+	prepared, response, acquireStats, err := c.acquireCollectionVectorIndexPreparedSearch(opts)
+	if err != nil {
+		acquireStats.apply(&response.Stats)
+		return response, err
+	}
+	response = prepared.responseForSearch()
+	prepared.routeStats.apply(&response.Stats)
+	acquireStats.apply(&response.Stats)
+	return response, nil
+}
+
 func (c *Collection) acquireCollectionVectorIndexPreparedSearch(opts VectorIndexSearchOptions) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, collectionVectorIndexPreparedSearchAcquireStats, error) {
 	var response VectorIndexSearchResponse
 	var acquireStats collectionVectorIndexPreparedSearchAcquireStats
@@ -1039,6 +1082,14 @@ func (c *Collection) hasCollectionVectorIndexPreparedSearchCacheEntries() bool {
 	c.vectorBufferedSearchMu.Lock()
 	defer c.vectorBufferedSearchMu.Unlock()
 	return len(c.vectorBufferedSearch) > 0
+}
+
+// CloseVectorIndexPreparedSearchCache releases prepared no-document vector-index
+// search state retained by this collection handle. Callers that cache collection
+// handles across requests should use it when invalidating the handle for a
+// service-level lifecycle boundary.
+func (c *Collection) CloseVectorIndexPreparedSearchCache() error {
+	return c.closeCollectionVectorIndexPreparedSearchCache()
 }
 
 func (c *Collection) closeCollectionVectorIndexPreparedSearchCache() error {

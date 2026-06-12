@@ -38,7 +38,7 @@ type TextIndexDefinition struct {
     Name    string
     Fields  []TextIndexField
     Analyzer TextAnalyzer
-    Version TextIndexVersion     // "v1" default today, "v2" reserved
+    Version TextIndexVersion     // "v1" default today, explicit "v2" supports M4 score-only reads
     Rollout TextIndexRolloutMode // "primary" default today
     // existing position/offset/storage/schema fields...
 }
@@ -47,13 +47,18 @@ type TextIndexDefinition struct {
 `TextIndexVersion` values:
 
 - `""` / `"v1"`: current per-`(term, documentID)` text index.
-- `"v2"`: reserved v2 physical contract. Until M1+ implements v2 roots,
-  metadata validation fails closed with `ErrTextIndexUnavailable`; it must not
-  silently fall back to v1.
+- `"v2"`: explicit v2 physical contract. M1-M3 root-state creation and
+  writable posting/norm/docmap maintenance are supported. As of M4 (#2627),
+  explicit v2 indexes are readable for exhaustive score-only BM25F serving over
+  posting blocks and packed norms; unsupported future rollout/detailed modes
+  still fail closed and v2 must not silently fall back to v1.
 
 `TextIndexRolloutMode` values:
 
-- `""` / `"primary"`: active read/write path. Today this is v1 only.
+- `""` / `"primary"`: active production read/write path. V1 remains the default
+  readable/searchable path. Explicit v2 indexes are writable as of M3 and
+  readable as of M4 for score-only BM25F serving over v2 posting/norm/docmap
+  roots. Match details/positions remain deferred to #2629.
 - `"shadow"`: future v2 build/validate without serving reads.
 - `"dual_write"`: future v1+v2 mutation maintenance with explicit read choice.
 - `"disabled"`: future metadata-present but non-serving/non-writing state.
@@ -88,6 +93,157 @@ For collection `docs` and index `lexical`, v2 root descriptors are reserved as:
 M1/M2 may define the exact key/value encodings, but these roots remain normal
 TreeDB collection roots. Pointer-backed values must use `value_vlog`, not a new
 text asset store.
+
+## M1 root/key/value format (#2624)
+
+M1 assigns the first concrete v2 root format. Every v2 root contains a versioned
+format record. Explicit `TextIndexVersionV2` creation through `CreateTextIndex`
+publishes all seven v2 root descriptors through the normal collection-root
+system records. Declaring a v2 text index directly in `CreateCollection` is
+rejected because it would create metadata without the required root status
+records. After M3, explicit v2 indexes maintain durable v2 roots and posting
+blocks for create/backfill/insert/update/delete. As of M4, `TextIndexStatus`
+reports `readable=true` and `writable=true` for explicit v2 indexes: query
+routing serves exhaustive score-only BM25F from v2 posting blocks, packed norm
+blocks, and docmap blocks. Detailed match/position materialization is not yet
+implemented; v2 result rows intentionally carry document ID, rank, score, and
+score kind only unless the caller explicitly asks for bounded final document
+fetch. There is no fallback to v1 for requested v2.
+
+Stable M1 ordinal semantics:
+
+- document ordinals are `uint64`, start at `1`, and are assigned in deterministic
+  documentID/primary-key order for backfill and mutation batches;
+- `0` is invalid and reserved;
+- ordinals are never reused. Reinsert after delete receives a fresh ordinal;
+- updates keep the ordinal and increment the document generation;
+- deletes increment generation and leave tombstoned docID/docmap/norm records so
+  later postings can reject stale `(ordinal,generation)` matches after reopen.
+
+M1 root contents:
+
+| Root | Key/value records |
+| --- | --- |
+| `text-v2-docid` | documentID key -> `{ordinal,generation,flags}`; tombstone flag marks deleted/currently non-ranking documentIDs. |
+| `text-v2-docmap` | ordinal block key -> sorted ordinal-to-documentID entries with generation/tombstone flags for final ID materialization and stale-generation checks. |
+| `text-v2-terms` | corpus stats, field stats for BM25F average length, and term stats shell (`df`, `ttf`, posting block count placeholder). |
+| `text-v2-posting-blocks` | M2 posting-block keys are `(term, blockStartOrdinal, blockID)` under the normal collection root; values contain compressed scoring postings and block summaries. |
+| `text-v2-norm-blocks` | ordinal block key -> packed per-field token lengths with generation/tombstone flags, sufficient for BM25F field-length/norm inputs without per-candidate text-state lookup. |
+| `text-v2-positions` | format-only in M1; later lazy detail/position milestones own payloads. |
+| `text-v2-generations` | index status record: root/stats/docmap/norm/term generations, next ordinal, live documents, deleted/tombstoned ordinals. |
+
+All v2 decoders check the key/value version, root family, block bounds, strict
+ordinal ordering, supported flags, field counts, status-generation bounds, and
+trailing bytes. Unsupported versions or malformed records return
+`ErrTextIndexStorageCorrupt`. Corpus and field stats are validated against the
+status generation and live document count, while per-term stats carry a
+non-zero generation bounded by the term/status generation so unchanged terms can
+remain valid across root-state updates. BM25F average-length inputs are read
+from one published root set.
+
+## M2 posting block format (#2625)
+
+M2 assigns the compressed scoring-block contract for the reserved
+`text-v2-posting-blocks` root. Posting blocks are still ordinary B-tree records
+inside that collection root; there are no external posting files, typed assets,
+legacy large-value side stores, or private text-block GC records. The root uses
+the text index storage policy: cache-local blocks are targeted at about 128
+postings and <=16 KiB
+encoded payloads, while unusually large values use the existing TreeDB
+value-log/leaf-log pointer path when the root policy selects it. Those pointers
+remain reachable through the collection root descriptor and normal maintenance
+root scanning.
+
+Posting block keys have a term prefix plus block identity:
+
+```text
+textV2KeyVersion | postingBlockKind | len(term) | term | big-endian blockStartOrdinal | big-endian blockID
+```
+
+`blockStartOrdinal` is the first document ordinal in the value and `blockID` is
+non-zero. The ordering lets iterators range-scan one term with a prefix and see
+blocks in increasing ordinal/block identity order. `blockID` gives later M3/M7
+writers room for append-only delta/micro blocks and rewrite generations without
+rewriting one giant high-df value. Expected lifecycle: sealed blocks are the
+stable compact representation, micro/delta blocks absorb small writes for
+high-df terms, and later merge/rewrite tooling replaces old block keys through
+ordinary collection-root deltas so physical reclamation remains normal TreeDB
+root/value-log/leaf maintenance.
+
+Posting block values are versioned and fail closed. Each value stores:
+
+- block kind: sealed, delta, or micro;
+- block identity (`blockStartOrdinal`, `blockID`) repeated for key/value
+  validation;
+- exact summary: first/last ordinal, doc count, max total term frequency, and
+  max per-field term-frequency lanes;
+- `UpperBoundKind=BM25FLaneMax`, meaning the per-field maxima are admissible
+  BM25F upper-bound inputs for non-negative BM25F weights. A later scorer may
+  combine those maxima with term IDF and the most favorable valid norm/length
+  assumptions to get a safe (possibly loose) block upper bound. If a future
+  scorer cannot compute or validate such an admissible bound for a query, it
+  must treat the block as unskippable and fall back to exhaustive scoring;
+- entries encoded as strictly-increasing document-ordinal deltas, document
+  generation, term frequency, and one term-frequency lane per indexed field.
+
+Positions and offsets are deliberately absent from the scoring block. Future
+lazy match-detail/position lanes belong in `text-v2-positions` or another
+explicit format, not in the hot scoring value.
+
+M2 provides codecs, builders, storage validation, and streaming/range iterators
+that reuse entry scratch while scanning a block. It does not route
+`SearchText`/`SearchHybrid` through v2 posting blocks.
+
+## M3 streaming write path (#2626)
+
+M3 makes explicit `TextIndexVersionV2` indexes writable. The write path uses a
+streaming analyzer sink and compact per-field/per-document term accumulators,
+avoiding the previous token
+slice allocation in the hot analyzer path. Backfill emits sealed posting blocks;
+maintained insert/update writes emit append-friendly micro blocks with
+`blockID` in a mutation-generation namespace (currently the high-bit block ID
+range ORed with the next text-v2 root generation, fixed for every micro chunk
+in that generation because `blockStart` already distinguishes chunks) so
+repeated updates of a high-document-frequency term do not rewrite or collide
+with old term state.
+Deletes do not emit posting tombstone blocks; instead docID/docmap/norm
+generations and tombstone flags advance so later readers reject stale
+`(ordinal,generation)` entries until
+M7 rewrite/merge compacts old blocks.
+
+M3 maintains term `PostingBlockCount` alongside live `df`/`ttf` stats. A term may
+retain zero live `df`/`ttf` with non-zero historical posting blocks until normal
+TreeDB root maintenance and later text rewrite/merge remove stale blocks. All
+posting, norm, docmap, docID, term, and status records remain ordinary collection
+root values and continue to use existing value-log/leaf maintenance paths.
+
+## M4 score-only search executor (#2627)
+
+M4 enables explicit v2 indexes for exhaustive score-only BM25F serving. The
+executor analyzes query terms through the streaming analyzer sink, de-duplicates
+and deterministically orders v2 terms, opens posting-block iterators for every
+query term under one TreeDB snapshot, scans posting-block entries, and scores
+current candidates using packed norm blocks and term/field stats from the same
+published v2 root set. It performs no per-candidate v1 text-state root lookup in
+the normal path.
+
+Visibility is generation-based: posting entries whose `(ordinal,generation)` do
+not match the current norm/docmap generation or that map to tombstoned ordinals
+are ignored, so append-only historical blocks from updates/deletes are safe until
+later rewrite/merge compacts them. Doc IDs for ranking tie-breaks and final IDs
+come from v2 docmap blocks. Snapshot-local norm/docmap caches are bounded by the
+number of ordinal blocks touched by the query and are discarded after the search;
+no shared cross-snapshot cache is introduced.
+
+M4 is deliberately exhaustive. It reports `posting_blocks_visited`, keeps
+`posting_blocks_skipped=0`, and does not implement WAND/BMW or scalar pruning;
+those are owned by #2628. V2 candidate generation reports
+`docs_fetched=0`, `match_details_built=0`, `state_lookups=0`, norm-block read
+counts, postings decoded, blocks visited, and candidates scored. Detailed match
+and position materialization remains deferred to #2629. Public v2 `SearchText`
+rows therefore return score-only text results (document ID, rank, score, score
+kind, and optional bounded final documents when `IncludeDocuments` is true), with
+empty match-detail fields by contract.
 
 ## Current v1 path inventory
 
@@ -162,8 +318,9 @@ Required fixture scales:
 
 Required query and serving shapes:
 
-- common-term, rare-term, multi-term AND/OR, scalar-filtered, score-only, and
-  detailed-match rows;
+- common-term, rare-term, multi-term AND/OR, scalar-filtered, and score-only
+  rows; detailed-match rows are required once #2629 enables v2 detail
+  materialization, while M4 rows must assert empty match-detail output;
 - isolated text write, backfill, update, and delete rows with `-benchmem`;
 - current #2589 indexed insert/search guardrail matrix on the latest base;
 - concurrent serving/load row with reader concurrency, p50/p95/p99 latency,
@@ -187,12 +344,14 @@ coordinator explicitly accepts them with profile-backed rationale.
 
 ## Rollout/fail-closed requirements for later milestones
 
-- M1 may enable v2 root creation only after version mismatch/corruption,
-  reopen, root publication, and value-log reachability tests land.
+- M1 enables v2 root creation only with version mismatch/corruption, reopen,
+  root publication, and value-log reachability tests.
 - M2/M3 must prove posting/norm/docmap payloads remain ordinary B-tree values or
   existing `value_vlog` pointers reachable from collection root descriptors.
-- M4+ search must be score-only by default for candidate generation and must
-  materialize match details only when requested/final.
+- M4 search must be score-only for candidate generation and public v2
+  `SearchText` rows, with optional bounded final document fetch only. #2629 owns
+  any later detailed match/position materialization; until then detailed modes
+  remain intentionally empty/fail-closed rather than falling back to v1.
 - M5 block skipping must be exact: upper bounds are admissible and results match
   exhaustive scoring. Approximate ranking requires a separate mode/tracker.
 - M7 default-switch or old-path retirement must include v1/v2 coexistence,

@@ -117,6 +117,71 @@ func BenchmarkIndexInsertSearch2564(b *testing.B) {
 		indexInsertSearchCandidateSink2564 = sink
 	})
 
+	b.Run("search_text_v2_candidates_no_docs", func(b *testing.B) {
+		v2Fixture := openIndexInsertSearchInsertedTextV2Fixture2564(b, docs, dims, m)
+		defer func() { _ = v2Fixture.db.Close() }()
+		opts := HybridTextQuery{IndexName: hybridCloseoutTextIndexName2506, Query: "refund policy", CandidateLimit: 64}
+		warm, err := v2Fixture.col.SearchHybridTextCandidates(opts)
+		if err != nil {
+			b.Fatalf("warm v2 SearchHybridTextCandidates: %v", err)
+		}
+		if warm.Stats.DocumentsFetched != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.FailClosed != 0 || warm.Stats.TextStateLookups != 0 || warm.Stats.TextMatchDetailsBuilt != 0 {
+			b.Fatalf("warm v2 text stats=%+v want score-only no document/state/match-detail work", warm.Stats)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		var sink HybridCandidateResponse
+		for i := 0; i < b.N; i++ {
+			got, err := v2Fixture.col.SearchHybridTextCandidates(opts)
+			if err != nil {
+				b.Fatalf("v2 SearchHybridTextCandidates: %v", err)
+			}
+			if got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 || got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
+				b.Fatalf("v2 text stats=%+v want score-only no document/state/match-detail work", got.Stats)
+			}
+			sink = got
+		}
+		b.StopTimer()
+		indexInsertSearchReportFixtureMetrics2564(b, docs, dims, 64, 10)
+		indexInsertSearchReportCandidateStats2564(b, sink)
+		indexInsertSearchCandidateSink2564 = sink
+	})
+
+	b.Run("search_hybrid_v2_no_docs_scalar_filter", func(b *testing.B) {
+		v2Fixture := openIndexInsertSearchInsertedTextV2Fixture2564(b, docs, dims, m)
+		defer func() { _ = v2Fixture.db.Close() }()
+		opts := HybridSearchOptions{
+			TopK:         10,
+			Text:         &HybridTextQuery{IndexName: hybridCloseoutTextIndexName2506, Query: "refund policy", CandidateLimit: 64},
+			ScalarFilter: &HybridScalarFilter{IndexName: hybridCloseoutTenantIndexName2506, Value: "tenant-rare-06pct"},
+		}
+		warm, err := v2Fixture.col.SearchHybrid(opts)
+		if err != nil {
+			b.Fatalf("warm v2 SearchHybrid: %v", err)
+		}
+		if warm.Stats.FailClosed != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.DocumentsFetched != 0 || warm.Stats.TextStateLookups != 0 || warm.Stats.TextMatchDetailsBuilt != 0 {
+			b.Fatalf("warm v2 hybrid stats=%+v want no-doc score-only text path", warm.Stats)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		var sink HybridSearchResponse
+		for i := 0; i < b.N; i++ {
+			got, err := v2Fixture.col.SearchHybrid(opts)
+			if err != nil {
+				b.Fatalf("v2 SearchHybrid: %v", err)
+			}
+			if got.Stats.FailClosed != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.DocumentsFetched != 0 || got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
+				b.Fatalf("v2 hybrid stats=%+v want no-doc score-only text path", got.Stats)
+			}
+			sink = got
+		}
+		b.StopTimer()
+		indexInsertSearchReportFixtureMetrics2564(b, docs, dims, 64, opts.TopK)
+		b.ReportMetric(hybridCloseoutTenantSelectivity2506(v2Fixture.rows, "tenant-rare-06pct"), "filter_selectivity_pct")
+		hybridCloseoutReportStats2506(b, sink)
+		indexInsertSearchHybridSink2564 = sink
+	})
+
 	b.Run("search_vector_candidates_no_docs", func(b *testing.B) {
 		opts := HybridVectorQuery{IndexName: searchFixture.def.Name, Query: queryVector, CandidateLimit: 64, EfSearch: 128, QueryMode: VectorIndexQueryModeExact}
 		warm, err := searchFixture.col.SearchHybridVectorCandidates(opts)
@@ -261,13 +326,35 @@ func openIndexInsertSearchInsertedFixture2564(tb testing.TB, docs, dims, m int) 
 
 func openIndexInsertSearchEmptyFixture2564(tb testing.TB, dir string, docs, dims, m int) indexInsertSearchFixture2564 {
 	tb.Helper()
+	textDef := TextIndexDefinition{
+		Name: hybridCloseoutTextIndexName2506,
+		Fields: []TextIndexField{
+			{Field: "title", Weight: 3},
+			{Field: "body"},
+		},
+		StorePositions: true,
+	}
+	return openIndexInsertSearchEmptyFixtureWithTextDefinition2564(tb, dir, docs, dims, m, &textDef, true)
+}
+
+func openIndexInsertSearchEmptyFixtureWithTextDefinition2564(tb testing.TB, dir string, docs, dims, m int, textDef *TextIndexDefinition, commandWAL bool) indexInsertSearchFixture2564 {
+	tb.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		tb.Fatalf("MkdirAll: %v", err)
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
-		tb.Fatalf("SaveFormatConfig: %v", err)
+	var db *backenddb.DB
+	if commandWAL {
+		if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+			tb.Fatalf("SaveFormatConfig: %v", err)
+		}
+		db = openCollectionCommandWALDB(tb, dir)
+	} else {
+		var err error
+		db, err = backenddb.Open(backenddb.Options{Dir: dir})
+		if err != nil {
+			tb.Fatalf("open db: %v", err)
+		}
 	}
-	db := openCollectionCommandWALDB(tb, dir)
 	def := columnGraphRebuildVectorIndexDefinitionV2A(dims, m)
 	cfg := columnGraphRebuildColumnStoreConfigV2A(dims)
 	cfg.RetainedPayload = ColumnRetainedPayloadFull
@@ -283,14 +370,9 @@ func openIndexInsertSearchEmptyFixture2564(tb testing.TB, dir string, docs, dims
 			{Name: "region", Field: "region", ValueType: IndexValueString},
 		},
 		VectorIndexes: []VectorIndexDefinition{def},
-		TextIndexes: []TextIndexDefinition{{
-			Name: hybridCloseoutTextIndexName2506,
-			Fields: []TextIndexField{
-				{Field: "title", Weight: 3},
-				{Field: "body"},
-			},
-			StorePositions: true,
-		}},
+	}
+	if textDef != nil {
+		meta.TextIndexes = []TextIndexDefinition{*textDef}
 	}
 	if _, err := NewCollectionManager(db).CreateCollection(&meta); err != nil {
 		_ = db.Close()
@@ -304,6 +386,61 @@ func openIndexInsertSearchEmptyFixture2564(tb testing.TB, dir string, docs, dims
 	rows := makeHybridCloseoutRows2506(docs, dims)
 	ids, rawDocs := indexInsertSearchRawDocs2564(tb, rows)
 	return indexInsertSearchFixture2564{db: db, col: col, def: def, rows: rows, ids: ids, rawDocs: rawDocs}
+}
+
+func openIndexInsertSearchInsertedTextV2Fixture2564(tb testing.TB, docs, dims, m int) indexInsertSearchFixture2564 {
+	tb.Helper()
+	dir := tb.TempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		tb.Fatalf("MkdirAll: %v", err)
+	}
+	db, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		tb.Fatalf("open db: %v", err)
+	}
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+		Indexes: []IndexDefinition{
+			{Name: hybridCloseoutTenantIndexName2506, Field: "tenant", ValueType: IndexValueString},
+			{Name: "region", Field: "region", ValueType: IndexValueString},
+		},
+	}
+	if _, err := NewCollectionManager(db).CreateCollection(&meta); err != nil {
+		_ = db.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(db).OpenCollection("docs")
+	if err != nil {
+		_ = db.Close()
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	rows := makeHybridCloseoutRows2506(docs, dims)
+	ids, rawDocs := indexInsertSearchRawDocs2564(tb, rows)
+	fixture := indexInsertSearchFixture2564{db: db, col: col, rows: rows, ids: ids, rawDocs: rawDocs}
+	if _, err := fixture.col.InsertBatch(fixture.ids, fixture.rawDocs); err != nil {
+		_ = fixture.db.Close()
+		tb.Fatalf("InsertBatch: %v", err)
+	}
+	textDef := TextIndexDefinition{
+		Name:    hybridCloseoutTextIndexName2506,
+		Version: TextIndexVersionV2,
+		Fields: []TextIndexField{
+			{Field: "title", Weight: 3},
+			{Field: "body"},
+		},
+	}
+	if _, _, err := fixture.col.CreateTextIndex(textDef); err != nil {
+		_ = fixture.db.Close()
+		tb.Fatalf("CreateTextIndex v2: %v", err)
+	}
+	if err := fixture.col.Flush(); err != nil {
+		_ = fixture.db.Close()
+		tb.Fatalf("Flush: %v", err)
+	}
+	return fixture
 }
 
 func indexInsertSearchRawDocs2564(tb testing.TB, rows []hybridCloseoutFixtureRow2506) ([][]byte, [][]byte) {
