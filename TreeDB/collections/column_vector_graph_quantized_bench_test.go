@@ -1287,6 +1287,8 @@ func BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481(b *
 }
 
 func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415(b *testing.B) {
+	hotProfile := newColumnGraphQuantizedSearchLoopProfileHook2541(b)
+	defer hotProfile.finish()
 	shape := columnGraphScalarU8QuantizedBenchShapeFromEnv1926(b)
 	fixture := openColumnGraphScalarU8QuantizedBenchFixture1926(b, shape, true)
 	defer fixture.close()
@@ -1306,7 +1308,7 @@ func BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2
 				MaxDecodedBlocks:          1,
 				StatsMode:                 VectorIndexSearchStatsModeProduction,
 			}
-			runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b, fixture, opts, tc.concurrency, exactIDs, exactCount, nil)
+			runColumnGraphScalarU8QuantizedCollectionWithBufferBench2415(b, fixture, opts, tc.concurrency, exactIDs, exactCount, hotProfile)
 		})
 	}
 }

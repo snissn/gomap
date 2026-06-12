@@ -55,12 +55,19 @@ func dotScalarU8CenteredIndexedRows(dst []int64, rowIDs []uint32) int {
 	return rows
 }
 
-func dotScalarU8CenteredIndexedShapeOK(codes []byte, query ScalarU8CenteredQuery, rowIDs []uint32, dims, rows int) bool {
+func dotScalarU8CenteredIndexedBasicShapeOK(codes []byte, query ScalarU8CenteredQuery, dims, rows int) bool {
 	if rows == 0 {
 		return true
 	}
-	if dims <= 0 || !query.ValidForDims(dims) || len(codes) < dims {
+	return dims > 0 && query.ValidForDims(dims) && len(codes) >= dims
+}
+
+func dotScalarU8CenteredIndexedShapeOK(codes []byte, query ScalarU8CenteredQuery, rowIDs []uint32, dims, rows int) bool {
+	if !dotScalarU8CenteredIndexedBasicShapeOK(codes, query, dims, rows) {
 		return false
+	}
+	if rows == 0 {
+		return true
 	}
 	maxRow := uint64((len(codes) - dims) / dims)
 	for i := 0; i < rows; i++ {

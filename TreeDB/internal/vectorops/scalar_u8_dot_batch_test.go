@@ -64,6 +64,31 @@ func TestDotScalarU8CenteredIndexedParity(t *testing.T) {
 	}
 }
 
+func TestDotScalarU8CenteredIndexedPrevalidatedParity(t *testing.T) {
+	t.Parallel()
+
+	const dims = 128
+	rowIDs := []uint32{12, 2, 9, 0, 7, 3, 15, 1, 6, 10, 4, 14, 5}
+	codes := scalarU8DotBatchTestCodes(16, dims)
+	query := scalarU8DotBatchTestQuery(t, dims, 19)
+	got := make([]int64, len(rowIDs))
+	status := DotScalarU8CenteredIndexedPrevalidated(got, codes, query, rowIDs, dims)
+	if status.Invalid || status.Rows != len(rowIDs) {
+		t.Fatalf("prevalidated status=%+v want rows=%d", status, len(rowIDs))
+	}
+	want := make([]int64, len(rowIDs))
+	dotScalarU8CenteredIndexedScalar(want, codes, query, rowIDs, dims, len(rowIDs))
+	assertInt64SliceExact(t, got, want)
+
+	badQuery := ScalarU8CenteredQuery{}
+	before := append([]int64(nil), got...)
+	badStatus := DotScalarU8CenteredIndexedPrevalidated(got, codes, badQuery, rowIDs, dims)
+	if !badStatus.Invalid || badStatus.Rows != 0 {
+		t.Fatalf("prevalidated invalid status=%+v want invalid", badStatus)
+	}
+	assertInt64SliceExact(t, got, before)
+}
+
 func TestDotScalarU8CenteredIndexedOptimizedStatusAndFallback(t *testing.T) {
 	t.Parallel()
 

@@ -47,6 +47,32 @@ func DotScalarU8CenteredIndexed(dst []int64, codes []byte, query ScalarU8Centere
 	return scalarU8DotBatchStatus(rows, true)
 }
 
+// DotScalarU8CenteredIndexedPrevalidated is the trusted-call variant of
+// DotScalarU8CenteredIndexed for hot paths that already proved every row ID is
+// within the row-major code payload. It still validates the basic slice/query
+// shape but deliberately skips the per-call rowID bounds scan.
+func DotScalarU8CenteredIndexedPrevalidated(dst []int64, codes []byte, query ScalarU8CenteredQuery, rowIDs []uint32, dims int) ScalarU8DotBatchStatus {
+	rows := dotScalarU8CenteredIndexedRows(dst, rowIDs)
+	if rows == 0 {
+		return ScalarU8DotBatchStatus{}
+	}
+	if !dotScalarU8CenteredIndexedBasicShapeOK(codes, query, dims, rows) {
+		return scalarU8DotBatchInvalidStatus()
+	}
+	if !dotScalarU8CenteredIndexedOptimizedEligible(rows, dims) {
+		dotScalarU8CenteredIndexedScalar(dst, codes, query, rowIDs, dims, rows)
+		return scalarU8DotBatchStatus(rows, false)
+	}
+	queryValues := query.values[:dims]
+	querySum := query.CenteredSum()
+	if dims <= dotScalarU8CenteredIndexedARM64Int32MaxDims {
+		dotScalarU8CenteredIndexedARM64Int32(dst, codes, queryValues, rowIDs, dims, rows, querySum)
+	} else {
+		dotScalarU8CenteredIndexedARM64(dst, codes, queryValues, rowIDs, dims, rows, querySum)
+	}
+	return scalarU8DotBatchStatus(rows, true)
+}
+
 // dotScalarU8CenteredIndexedARM64 computes rows indexed scalar_u8 centered dot
 // products. The Go wrapper must validate all slice lengths, row IDs, dims, and
 // rows before calling. querySum is sum(query[:dims]); the kernel computes

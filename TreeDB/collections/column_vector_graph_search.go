@@ -998,7 +998,6 @@ type columnVectorGraphNativeSearchScratch struct {
 	scoreTileRowIDs          []uint32
 	scoreTileDots            []float32
 	scoreTileQuantizedDots   []int64
-	quantizedQueryCodes      []byte
 	quantizedQueryCentered   []vectorops.ScalarU8CenteredCode
 	quantizedRabitQWorkspace rabitq.Workspace
 	quantizedBRQWorkspace    brq.Workspace
@@ -1214,13 +1213,6 @@ func resizeColumnVectorGraphNativeInt64Scratch(dst []int64, target int) []int64 
 func resizeColumnVectorGraphNativeFloat64Scratch(dst []float64, target int) []float64 {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		return make([]float64, 0, target)
-	}
-	return dst[:0]
-}
-
-func resizeColumnVectorGraphNativeByteScratch(dst []byte, target int) []byte {
-	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
-		return make([]byte, 0, target)
 	}
 	return dst[:0]
 }
