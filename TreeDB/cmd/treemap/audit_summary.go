@@ -483,13 +483,28 @@ func summarizeCompactUsages(usages []treedbdb.CompactStorageUsage) []auditSummar
 		out = append(out, auditSummaryStorageDomain{
 			Name:          usage.Name,
 			Path:          usage.Path,
-			Exists:        true,
+			Exists:        compactUsageExists(usage),
 			Bytes:         usage.Bytes,
 			Files:         usage.Files,
 			ZeroByteFiles: usage.ZeroByteFiles,
 		})
 	}
 	return out
+}
+
+func compactUsageExists(usage treedbdb.CompactStorageUsage) bool {
+	if usage.Bytes != 0 || usage.Files != 0 || usage.ZeroByteFiles != 0 {
+		return true
+	}
+	if strings.TrimSpace(usage.Path) == "" {
+		return false
+	}
+	if _, err := os.Stat(usage.Path); err == nil {
+		return true
+	} else if os.IsNotExist(err) {
+		return false
+	}
+	return true
 }
 
 func summarizeAuditDebt(debt treedbdb.CompactStorageDebt) auditSummaryDebt {
@@ -770,14 +785,15 @@ func gzipFilePrefix(path string, maxBytes int64) (int64, int64, error) {
 		reader = &io.LimitedReader{R: f, N: maxBytes}
 	}
 	inputBytes, copyErr := io.Copy(zw, reader)
-	closeErr := zw.Close()
-	if copyErr != nil {
+	closeErr := zw.Close() // Always close, even when io.Copy fails; copyErr still wins below.
+	switch {
+	case copyErr != nil:
 		return 0, 0, copyErr
-	}
-	if closeErr != nil {
+	case closeErr != nil:
 		return 0, 0, closeErr
+	default:
+		return inputBytes, counter.N, nil
 	}
-	return inputBytes, counter.N, nil
 }
 
 type countingWriter struct {

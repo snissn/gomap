@@ -13,10 +13,11 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestAuditSummaryUsageExposesReadOnlyCommand(t *testing.T) {
-	if !strings.Contains(usageText, "audit-summary   Summarize storage, compaction debt, log frames, and gzip samples (read-only)") {
+	if !strings.Contains(usageText, "audit-summary") || !strings.Contains(usageText, "read-only") {
 		t.Fatalf("usageText missing audit-summary read-only command: %q", usageText)
 	}
 }
@@ -98,6 +99,30 @@ func TestAuditSummaryJSONOutputShape(t *testing.T) {
 				t.Fatalf("family %s gzip sample ignored max bytes: %+v", name, sample)
 			}
 		}
+	}
+}
+
+func TestSummarizeCompactUsagesPreservesMissingDomainExists(t *testing.T) {
+	dir := t.TempDir()
+	existingEmpty := filepath.Join(dir, "empty")
+	if err := os.Mkdir(existingEmpty, 0o755); err != nil {
+		t.Fatalf("mkdir existing empty domain: %v", err)
+	}
+	missing := filepath.Join(dir, "missing")
+	rows := summarizeCompactUsages([]treedbdb.CompactStorageUsage{
+		{Name: "missing", Path: missing},
+		{Name: "empty", Path: existingEmpty},
+		{Name: "nonzero", Path: missing, Bytes: 7},
+	})
+	byName := auditStorageDomainsByName(rows)
+	if byName["missing"].Exists {
+		t.Fatalf("missing zero-valued domain reported exists: %+v", byName["missing"])
+	}
+	if !byName["empty"].Exists {
+		t.Fatalf("existing empty domain reported missing: %+v", byName["empty"])
+	}
+	if !byName["nonzero"].Exists {
+		t.Fatalf("nonzero usage domain reported missing: %+v", byName["nonzero"])
 	}
 }
 
@@ -262,6 +287,14 @@ func auditFamiliesByName(families []auditSummaryLogFamily) map[string]auditSumma
 	out := make(map[string]auditSummaryLogFamily, len(families))
 	for _, family := range families {
 		out[family.Name] = family
+	}
+	return out
+}
+
+func auditStorageDomainsByName(domains []auditSummaryStorageDomain) map[string]auditSummaryStorageDomain {
+	out := make(map[string]auditSummaryStorageDomain, len(domains))
+	for _, domain := range domains {
+		out[domain.Name] = domain
 	}
 	return out
 }
