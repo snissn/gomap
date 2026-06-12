@@ -56,6 +56,21 @@ GOWORK=off go test ./TreeDB/collections \
   | tee "$OUT/index_insert_search_guardrail.txt"
 ```
 
+M4 also exposes explicit-v2 #2564-shape score-only rows. The v2 text rows use the
+same synthetic #2564 documents and scalar distribution but create the v2 text
+index after insert, because inline v2 metadata is intentionally rejected; the
+existing command-WAL/vector guardrail rows remain the vector no-regression lane.
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkIndexInsertSearch2564/(search_text_v2_candidates_no_docs|search_hybrid_v2_no_docs_scalar_filter|search_vector_candidates_no_docs)$' \
+  -benchmem \
+  -benchtime=5x \
+  -count=3 \
+  | tee "$OUT/index_insert_search_v2_guardrail.txt"
+```
+
 Indexed insert/readiness row:
 
 ```sh
@@ -166,11 +181,41 @@ go test ./TreeDB/collections \
 Report text search counters:
 
 - `postings_scanned/search`;
-- `posting_blocks_visited/search` and `posting_blocks_skipped/search` (v1 = 0);
+- `posting_blocks_visited/search` and `posting_blocks_skipped/search` (v1 = 0; M4 v2 exhaustive search reports visited blocks and skipped=0);
 - `candidates_scored/search`;
 - `state_lookups/search` and `norm_lookups/search`;
 - `match_details/search`;
 - `docs_fetched/search`, `full_doc_fallbacks/search`, `fail_closed/search`.
+
+M4 (#2627) adds an explicit v2 score-only search benchmark with the same corpus
+and query cases. It creates a v2 index with `CreateTextIndex`, scans compressed
+posting blocks under one snapshot, scores from norm/docmap blocks, and asserts
+`state_lookups=0`, `match_details=0`, and `docs_fetched=0`:
+
+```sh
+GOWORK=off \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2ScoreSearchScale2627/docs_(256|10000)/' \
+  -benchmem \
+  -benchtime=3x \
+  -count=3 \
+  | tee "$OUT/text_v2_score_search_scale_256_10k.txt"
+```
+
+>=100k local artifact:
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_RUN_100K=1 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2ScoreSearchScale2627/docs_100000/' \
+  -benchmem \
+  -benchtime=1x \
+  -count=1 \
+  | tee "$OUT/text_v2_score_search_scale_100k.txt"
+```
 
 ## Concurrent serving/load row
 
