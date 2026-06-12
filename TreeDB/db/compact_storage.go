@@ -52,8 +52,8 @@ type CompactStorageOptions struct {
 	// preserving retained paths that are independently proven unreachable.
 	ValueLogFencedProtectedPathsFunc func() []string
 
-	// Leaf-generation pack knobs. Defaults are intentionally bounded to keep a
-	// single compaction request finite while still draining ordinary debt.
+	// Leaf-generation pack knobs. Non-exhaustive defaults keep copy bytes per
+	// pass finite while still draining ordinary debt.
 	LeafGenerationProtectedRootIDs []uint64
 	// LeafGenerationProtectedSystemRootIDs are system roots whose collection
 	// descriptors should be expanded into additional protected leaf-generation
@@ -657,7 +657,11 @@ func normalizeCompactStorageOptions(opts CompactStorageOptions) CompactStorageOp
 		case CompactStorageExhaustive:
 			opts.LeafPackMaxGenerationsPerPass = 0
 		default:
-			opts.LeafPackMaxGenerationsPerPass = 64
+			// Full compaction is already bounded by LeafPackMaxBytesToCopyPerPass.
+			// Do not add an arbitrary generation-count cap: large copied-state audits
+			// can have many small dead leaf generations where the old 64-generation
+			// cap stopped a pass before the byte budget was necessarily exhausted.
+			opts.LeafPackMaxGenerationsPerPass = 0
 		}
 	}
 	if opts.LeafPackMaxBytesToCopyPerPass < 0 {
