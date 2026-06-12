@@ -203,23 +203,11 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosineScalarU8PreparedTravers
 	}
 
 	// The pack traversal retained the quantized candidate set in scratch.top without
-	// reading result IDs/row refs. Rerank only the configured shortlist with the
-	// existing exact FP32 scorer so vector/norm read and exact-call counters stay
-	// bounded by QuantizedRerankCandidates.
+	// reading result IDs/row refs. Rerank only the configured shortlist through the
+	// prepared pack's exact FP32 row-ID scorer; do not build the generic native
+	// search plan or re-enter the row-reader scorer stack on this prepared route.
 	scratch.results = scratch.results[:0]
-	plan, err := scratch.prepareSearchPlanForNativeSearch(r)
-	if err != nil {
-		return nil, stats, err
-	}
-	plan.scoreBatchMode = columnVectorGraphScoreBatchModeForSearchPlan(opts.ScoreBatchMode, plan)
-	var singleBlockView *columnVectorGraphBlockView
-	if plan.physicalReader != nil && len(plan.physicalReader.ranges) == 1 && (plan.scoreSource.vectorKind == columnVectorGraphSearchVectorSourceGraphRows || plan.scoreSource.normKind == columnVectorGraphSearchNormSourceGraphRows) {
-		singleBlockView, err = plan.blockViewForAssetOrdinal(0)
-		if err != nil {
-			return nil, stats, err
-		}
-	}
-	if err := r.exactRerankQuantizedCandidates(plan, singleBlockView, query, queryInvNorm, topK, rerankCandidateLimit, scratch, &stats); err != nil {
+	if err := pack.exactRerankPreparedTraversalRowIDCandidates(query, topK, rerankCandidateLimit, opts.ScoreBatchMode, scratch, &stats); err != nil {
 		return nil, stats, err
 	}
 	if opts.OmitResultMaterialization {

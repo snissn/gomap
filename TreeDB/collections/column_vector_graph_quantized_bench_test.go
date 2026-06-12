@@ -1651,7 +1651,7 @@ func assertColumnGraphScalarU8QuantizedSearchWithBufferGuardrails2414(tb testing
 	case VectorIndexQueryModeQuantizedOnly:
 		assertQuantizedOnlyGuardrailStats2416(tb, stats, dims)
 	case VectorIndexQueryModeQuantizedRerank:
-		assertQuantizedRerankNoDocumentGuardrailStats2416(tb, stats, opts.QuantizedRerankCandidates)
+		assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(tb, stats, opts.QuantizedRerankCandidates, dims)
 	default:
 		tb.Fatalf("unexpected SearchWithBuffer benchmark query mode %q", opts.QueryMode)
 	}

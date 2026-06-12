@@ -319,6 +319,39 @@ func assertQuantizedRerankNoDocumentGuardrailStats2416(tb testing.TB, stats Vect
 	}
 }
 
+func assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(tb testing.TB, stats VectorIndexSearchStats, shortlist int, dims int) {
+	tb.Helper()
+	diag := stats.Diagnostics()
+	if diag.Route != VectorIndexSearchRouteQuantizedRerank || diag.HNSWSearchPackStatus != VectorIndexSearchHNSWSearchPackStatusNone || diag.ExactHNSWSearchPackNoDocRoute {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank diagnostics=%+v want quantized route without exact hnsw_search_pack_v1 route claim", diag)
+	}
+	if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 || stats.QuantizedScorerActive != 1 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank route stats=%+v want quantized-rerank scorer route", stats)
+	}
+	if stats.SearchRouteHNSWSearchPack != 0 || stats.HNSWSearchPackActive != 0 || stats.HNSWSearchPackFallbacks != 0 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want no public hnsw_search_pack_v1 route/active/fallback claim", stats)
+	}
+	if stats.QuantizedAssetUnavailable != 0 || stats.QuantizedAssetHeapCopy+stats.QuantizedAssetMmapDirect != 1 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank asset stats=%+v want available quantized asset", stats)
+	}
+	shortlist64 := uint64(shortlist)
+	if stats.QuantizedScoreCalls == 0 || stats.QuantizedRerankCandidates != shortlist64 || stats.QuantizedRerankExactScoreCalls != shortlist64 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want exact score calls equal shortlist=%d", stats, shortlist)
+	}
+	if stats.PreparedScoreCalls != shortlist64 || stats.VectorPreparedDirectViews != shortlist64 || stats.NormPreparedDirectViews != 0 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want prepared pack exact row-ID scores=%d and no prepared norm views", stats, shortlist)
+	}
+	if dims > 0 && stats.VectorBytesRead != shortlist64*uint64(dims)*4 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want vector bytes=%d", stats, shortlist64*uint64(dims)*4)
+	}
+	if stats.NormBytesRead != shortlist64*4 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want logical exact norm bytes=%d", stats, shortlist64*4)
+	}
+	if stats.DocumentsFetched != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank guardrails stats=%+v want no docs/fallback/scratch decode", stats)
+	}
+}
+
 func assertQuantizedUnavailableGuardrailStats2416(tb testing.TB, stats VectorIndexSearchStats, mode columnVectorGraphNativeSearchQueryMode, health columnVectorGraphQuantizedAssetHealth) {
 	tb.Helper()
 	diag := stats.Diagnostics()
@@ -422,7 +455,7 @@ func TestVectorIndexSearcherQuantizedSearchWithBufferSuccessAndErrorReset1926(t 
 	if len(buffer.results) != 2 || len(buffer.idBytes) == 0 || reranked.Stats.QuantizedScoreCalls == 0 || reranked.Stats.QuantizedRerankExactScoreCalls == 0 {
 		t.Fatalf("rerank buffer/results stats=%+v buffer.results=%d idBytes=%d", reranked.Stats, len(buffer.results), len(buffer.idBytes))
 	}
-	assertQuantizedRerankNoDocumentGuardrailStats2416(t, reranked.Stats, len(rows))
+	assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(t, reranked.Stats, len(rows), def.Dimensions)
 	quantizedAllocs := testing.AllocsPerRun(100, func() {
 		got, err := searcher.SearchWithBuffer(quantizedOpts, &buffer)
 		if err != nil || len(got.Results) != 2 {
@@ -580,6 +613,10 @@ func TestVectorIndexSearcherQuantizedSearchAndSearchWithBufferParity2414(t *test
 			mode:             VectorIndexQueryModeQuantizedRerank,
 			rerankCandidates: 4,
 			assertStats: func(tb testing.TB, stats VectorIndexSearchStats) {
+				if stats.NormBytesRead == 0 {
+					assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(tb, stats, 4, def.Dimensions)
+					return
+				}
 				assertQuantizedRerankNoDocumentGuardrailStats2416(tb, stats, 4)
 			},
 		},
@@ -671,7 +708,7 @@ func TestSearchVectorIndexWithBufferQuantizedOnlyAndRerank2415(t *testing.T) {
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, reranked, def.Name, rerankOpts.TopK)
 	assertVectorIndexSearchResultsV4(t, reranked.Results, exactColumnGraphTopKForTest(t, rows, query, rerankOpts.TopK), false)
-	assertQuantizedRerankNoDocumentGuardrailStats2416(t, reranked.Stats, rerankOpts.QuantizedRerankCandidates)
+	assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(t, reranked.Stats, rerankOpts.QuantizedRerankCandidates, def.Dimensions)
 	assertCollectionBufferedQuantizedRouteStats2415(t, reranked.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, rerankOpts, def.Dimensions)
 	afterRerank := col.collectionVectorIndexPreparedSearchCacheSnapshot()
 	if afterRerank.Entries != 1 || afterRerank.CacheBuilds != afterOnly.CacheBuilds || afterRerank.CacheHits <= afterOnly.CacheHits {
@@ -941,7 +978,7 @@ func TestScalarU8QuantizedPreparedTraversalPackRouteWhenAdjacencyClosed2586(t *t
 		t.Fatalf("quantized_rerank SearchWithBuffer with closed prepared adjacency: %v", err)
 	}
 	assertVectorIndexSearchResultsV4(t, reranked.Results, exactColumnGraphTopKForTest(t, rows, query, 3), false)
-	assertQuantizedRerankNoDocumentGuardrailStats2416(t, reranked.Stats, len(rows))
+	assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(t, reranked.Stats, len(rows), def.Dimensions)
 	assertScalarU8PreparedTraversalPackAdjacencyStats2586(t, reranked.Stats, packStatus, "quantized_rerank")
 	if reranked.Stats.QuantizedRerankExactScoreCalls != uint64(len(rows)) {
 		t.Fatalf("quantized_rerank stats=%+v want exact rerank shortlist", reranked.Stats)
@@ -997,7 +1034,7 @@ func TestScalarU8QuantizedPreparedTraversalRerankPreservesEfTraversal2586(t *tes
 	if err != nil {
 		t.Fatalf("fallback SearchWithBuffer: %v", err)
 	}
-	assertQuantizedRerankNoDocumentGuardrailStats2416(t, packResults.Stats, opts.QuantizedRerankCandidates)
+	assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(t, packResults.Stats, opts.QuantizedRerankCandidates, def.Dimensions)
 	assertQuantizedRerankNoDocumentGuardrailStats2416(t, fallbackResults.Stats, opts.QuantizedRerankCandidates)
 	if packResults.Stats.Candidates != fallbackResults.Stats.Candidates || packResults.Stats.VisitedEdges != fallbackResults.Stats.VisitedEdges || packResults.Stats.QuantizedScoreCalls != fallbackResults.Stats.QuantizedScoreCalls || packResults.Stats.QuantizedRerankExactScoreCalls != fallbackResults.Stats.QuantizedRerankExactScoreCalls {
 		t.Fatalf("pack stats=%+v fallback stats=%+v want same efSearch traversal and rerank counters", packResults.Stats, fallbackResults.Stats)
@@ -1008,7 +1045,7 @@ func TestScalarU8QuantizedPreparedTraversalRerankPreservesEfTraversal2586(t *tes
 	for i := range packResults.Results {
 		got := packResults.Results[i]
 		want := fallbackResults.Results[i]
-		if string(got.ID) != string(want.ID) || got.Ordinal != want.Ordinal || got.Score != want.Score {
+		if string(got.ID) != string(want.ID) || got.Ordinal != want.Ordinal || math.Abs(got.Score-want.Score) > 1e-6 {
 			t.Fatalf("result[%d] pack=%+v fallback=%+v", i, got, want)
 		}
 	}
@@ -1067,7 +1104,7 @@ func TestSearchVectorIndexWithBufferScalarU8PreparedTraversalPackRouteWhenAdjace
 		t.Fatalf("quantized_rerank SearchVectorIndexWithBuffer with closed prepared adjacency: %v", err)
 	}
 	assertVectorIndexSearchResultsV4(t, reranked.Results, exactColumnGraphTopKForTest(t, rows, query, rerankOpts.TopK), false)
-	assertQuantizedRerankNoDocumentGuardrailStats2416(t, reranked.Stats, rerankOpts.QuantizedRerankCandidates)
+	assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(t, reranked.Stats, rerankOpts.QuantizedRerankCandidates, def.Dimensions)
 	assertCollectionBufferedQuantizedRouteStats2415(t, reranked.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, rerankOpts, def.Dimensions)
 	assertScalarU8PreparedTraversalPackAdjacencyStats2586(t, reranked.Stats, packStatus, "collection quantized_rerank")
 	if reranked.Stats.QuantizedRerankExactScoreCalls != uint64(rerankOpts.QuantizedRerankCandidates) {

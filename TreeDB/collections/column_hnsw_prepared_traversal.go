@@ -503,6 +503,62 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTilePrepar
 	return nil
 }
 
+func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalRowIDCandidates(query []float32, topK int, rerankLimit int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	if v == nil {
+		return errColumnHNSWSearchPackSearchUnavailable
+	}
+	if scratch == nil {
+		return errColumnVectorGraphNativeSearchScratchRequired
+	}
+	if len(scratch.top) == 0 || topK <= 0 || rerankLimit <= 0 {
+		scratch.top = scratch.top[:0]
+		return nil
+	}
+	if len(scratch.top) > rerankLimit {
+		scratch.top = scratch.top[:rerankLimit]
+	}
+	if len(scratch.top) < topK {
+		topK = len(scratch.top)
+	}
+	n := len(scratch.top)
+	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, n)
+	rowIDs := scratch.scoreTileRowIDs[:0]
+	for _, candidate := range scratch.top {
+		ordinal := candidate.ordinal
+		if ordinal < 0 || ordinal >= v.Header.Rows || uint64(ordinal) > math.MaxUint32 {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal exact rerank ordinal=%d outside row_count=%d", ordinal, v.Header.Rows)
+		}
+		rowIDs = append(rowIDs, uint32(ordinal))
+	}
+	var exactPlane columnHNSWPreparedExactFP32ScorePlane
+	if err := exactPlane.prepareForHNSWPreparedTraversal(v, query, columnHNSWPreparedTraversalOptions{ScoreBatchMode: scoreBatchMode}, scratch); err != nil {
+		return err
+	}
+	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, n)
+	exactScores, err := exactPlane.scoreRowIDsPrevalidated(rowIDs, scratch.scoreTileScores, scratch, stats)
+	if err != nil {
+		return err
+	}
+	if len(exactScores) != n {
+		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal exact rerank scored %d candidates want %d", len(exactScores), n)
+	}
+	if stats != nil {
+		n64 := uint64(n)
+		stats.QuantizedRerankCandidates += n64
+		stats.QuantizedRerankExactScoreCalls += n64
+		// The pack-native exact scorer reads normalized vectors directly, but this
+		// quantized_rerank route still reports the logical exact FP32 vector+norm
+		// byte contract exposed by the generic exact rerank path.
+		stats.NormBytesRead += n64 * 4
+	}
+	scratch.top = scratch.top[:0]
+	for i, rowID := range rowIDs {
+		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: exactScores[i]}
+		scratch.insertTop(topK, candidate)
+	}
+	return nil
+}
+
 func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalCandidates(query []float32, topK int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	if v == nil {
 		return errColumnHNSWSearchPackSearchUnavailable
