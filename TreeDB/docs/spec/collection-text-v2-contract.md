@@ -79,7 +79,10 @@ status, benchmark, and downgrade/fail-closed tests.
 - fail-closed reason when unavailable;
 - active v1 roots and reserved v2 roots;
 - required counter names;
-- rewrite/merge state and TreeDB physical reclamation path.
+- lightweight rewrite/merge readiness (`ready` for explicit v2) and TreeDB
+  physical reclamation path. Full storage validation and detailed
+  `rewrite_merge_pending`/`compacted` state are reported by
+  `TextIndexStorageStats` so health/status calls do not scan large roots.
 
 ## Reserved v2 root families
 
@@ -327,6 +330,53 @@ mode by default. `HybridTextQuery.IncludeTextMatches=true` opts into compact
 field/term summaries for the bounded requested text candidate set; default hybrid
 candidate generation emits no `TextMatches` and keeps `docs_fetched=0`,
 `state_lookups=0`, and `match_details_built=0`.
+
+## M7 rewrite/merge hardening and rollout decision (#2630)
+
+M7 adds explicit logical rewrite/merge maintenance for text-v2 indexes through
+`Collection.RewriteTextIndex(indexName, TextIndexRewriteOptions)`. The rewrite
+runs entirely through ordinary TreeDB collection roots: it scans the
+`text-v2-posting-blocks` root under one snapshot, keeps only postings whose
+`(ordinal,generation)` still match current docmap/norm entries, rewrites retained
+postings into sealed posting blocks, deletes obsolete micro/delta/stale block
+keys, updates term posting-block counts, and publishes the new generation/status
+record as an ordered-root delta. Deleted-document docID/docmap/norm tombstones
+are purged after stale postings are removed, unless explicitly disabled by the
+maintenance option. Optional positions/offset entries remain in the normal
+`text-v2-positions` root; update/delete maintenance already removes stale
+position payloads, and rewrite validates detailed serving by preserving current
+scoring postings.
+
+This is logical text maintenance, not a private physical GC subsystem. Obsolete
+inline or pointer-backed block payloads become unreachable only by normal root
+publication and snapshot release; physical bytes are reclaimed by existing
+TreeDB maintenance (`ValueLogGC`, value-log rewrite, leaf-generation pack/GC,
+index vacuum, and `CompactStorage`). Text-v2 roots still have no standalone
+posting files/assets and no separate text-block GC domain.
+
+Readiness/status exposes lightweight rewrite readiness without scanning large
+roots:
+
+- `ready` is the static explicit-v2 `TextIndexStatus` state;
+- `rewrite_merge_pending` is reported by `TextIndexStorageStats` when
+  deleted-document tombstones, micro blocks, or delta blocks remain;
+- `compacted` is reported by `TextIndexStorageStats` after rewrite has published
+  sealed blocks and removed tombstones.
+
+`TextIndexStorageStats` performs full v2 storage inspection, reports
+sealed/delta/micro posting-block counts, and fail-closes on malformed v2 storage
+instead of declaring the inspected state ready.
+
+Default-selection decision for #2630: v2 remains an explicit opt-in
+(`TextIndexVersionV2`) while the production default stays v1. The reason is not a
+storage blocker—v2 roots now have rewrite/merge lifecycle tooling and normal
+TreeDB reclamation participation—but rollout still lacks an atomic
+`CreateCollection` inline-v2 bootstrap/default-switch path and final full-matrix
+acceptance under coordinator policy. The old per-`(term,documentID)` v1 path is
+therefore retained as the compatibility/default path; explicit v2 indexes are the
+B-tree-native production candidate path. A future default-switch PR must update
+`normalizeTextIndexVersion`, `CreateCollection` root bootstrap, docs, and the
+benchmark matrix together.
 
 ## Current v1 path inventory
 

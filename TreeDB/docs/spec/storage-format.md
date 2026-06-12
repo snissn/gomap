@@ -303,6 +303,29 @@ entries present for an index without `StorePositions` make the text-v2 positions
 lane corrupt and must fail closed when inspected or when detailed materialization
 needs the affected payload.
 
+### Text-v2 rewrite/merge records
+
+Text-v2 rewrite/merge maintenance does not introduce another durable file or GC
+format. `Collection.RewriteTextIndex` publishes ordinary ordered-root deltas to
+existing v2 roots:
+
+- old posting-block keys are deleted or overwritten in
+  `<collection>/text-v2-posting-blocks/<indexName>`;
+- retained live postings are written as sealed posting-block values with the
+  same key/value format above;
+- term `PostingBlockCount` values are updated or removed in
+  `<collection>/text-v2-terms/<indexName>`;
+- deleted-document docID/docmap/norm tombstones can be removed from their normal
+  roots after stale postings are gone;
+- `<collection>/text-v2-generations/<indexName>` receives a new status record
+  with an advanced root/term and, when tombstones are purged, docmap/norm
+  generation.
+
+Consequently, old inline values or `value_vlog`/leaf-log pointer-backed payloads
+are reclaimed only by normal TreeDB reachability and maintenance after snapshots
+that can still see the old roots have released. There is no text-block GC
+manifest, side file, or asset namespace.
+
 ## 4. Value Pointer Encoding (`page.ValuePtr`)
 
 Base struct:

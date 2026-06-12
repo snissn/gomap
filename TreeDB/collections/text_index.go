@@ -365,6 +365,7 @@ func textIndexStatusForDefinition(collection string, def TextIndexDefinition) Te
 		status.Readable = true
 		status.Writable = true
 		status.ActiveRootNames = collectionTextV2RootNames(collection, def.Name)
+		status.RewriteMergeState = TextIndexRewriteMergeStateReady
 		return status
 	}
 	if version != TextIndexVersionV1 {
