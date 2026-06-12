@@ -83,7 +83,12 @@ type TextSearchStats struct {
 	TextCandidatesRequested   uint64
 	TextCandidatesReturned    uint64
 	TextPostingsScanned       uint64
+	TextPostingBlocksVisited  uint64
+	TextPostingBlocksSkipped  uint64
 	TextCandidatesScored      uint64
+	TextStateLookups          uint64
+	TextNormLookups           uint64
+	TextMatchDetailsBuilt     uint64
 	PostingsScanned           uint64
 	CandidatesScored          uint64
 	DocumentsFetched          uint64
@@ -170,6 +175,7 @@ type textSearchResultMode uint8
 const (
 	textSearchResultFull textSearchResultMode = iota
 	textSearchResultTextMatchesOnly
+	textSearchResultScoreOnly
 )
 
 // SearchText executes a bounded postings-backed lexical search for a declared
@@ -325,6 +331,7 @@ func executeTextSearchAtSnapshot(
 	var fieldLengthScratch []textDocumentFieldLength
 	for _, candidate := range candidates {
 		stateKeyScratch = appendTextStateKeyString(stateKeyScratch[:0], candidate.documentID)
+		response.Stats.TextStateLookups++
 		stateRaw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, stateRootName, stateKeyScratch, nil)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
@@ -332,6 +339,7 @@ func executeTextSearchAtSnapshot(
 		if !found {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("missing text-state for collection %q index %q document %q", catalog.meta.Name, idx.Name, candidate.documentID))
 		}
+		response.Stats.TextNormLookups++
 		fieldLengthScratch, err = decodeTextDocumentStateFieldLengths(stateRaw, fieldLengthScratch[:0], fieldNames)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
@@ -361,10 +369,14 @@ func executeTextSearchAtSnapshot(
 	for i, candidate := range scored {
 		var matchedTerms, matchedFields []string
 		var matches []TextSearchMatch
-		if resultMode == textSearchResultTextMatchesOnly {
+		switch resultMode {
+		case textSearchResultScoreOnly:
+		case textSearchResultTextMatchesOnly:
 			matches = textSearchCandidateTextMatches(candidate)
-		} else {
+			response.Stats.TextMatchDetailsBuilt++
+		default:
 			matchedTerms, matchedFields, matches = textSearchCandidateMatches(candidate)
+			response.Stats.TextMatchDetailsBuilt++
 		}
 		response.Results[i] = TextSearchResult{
 			DocumentID:    []byte(candidate.documentID),
