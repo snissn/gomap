@@ -102,6 +102,20 @@ func TestAuditSummaryJSONOutputShape(t *testing.T) {
 	}
 }
 
+func TestAuditSummaryMainDBDirWithSiblingSideStoreUsesParentRoot(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	if err := os.Mkdir(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "dictdb"), 0o755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
+	if got := resolveTreemapRootDir(mainDir, mainDir); got != root {
+		t.Fatalf("resolveTreemapRootDir(mainDir with sibling side store)=%q want %q", got, root)
+	}
+}
+
 func TestAuditSummaryMainDBDirWithAncientSiblingUsesParentRoot(t *testing.T) {
 	root := t.TempDir()
 	opts := treedb.Options{
