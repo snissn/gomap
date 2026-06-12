@@ -238,7 +238,7 @@ func TestTextV2PostingBlocksReachValueLogMaintenance2625(t *testing.T) {
 	d, closeDB := openTextV2PostingBlockCompressedDB2625(t, dir)
 	col := createTextV2PostingBlockCollection2625(t, d, 32, RootStorageCompressed)
 	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
-	blockKey := encodeTextV2PostingBlockKey("refund", 1, 1)
+	blockKey := firstTextV2PostingBlockKeyForTerm2626(t, d, "docs", rootName, "refund")
 	before := textV2ReadRootBytes2624(t, d, "docs", rootName, blockKey)
 	if stats, err := col.TextIndexStorageStats("lexical"); err != nil || stats.V2PostingBlocks == 0 {
 		t.Fatalf("TextIndexStorageStats before GC=%+v err=%v want emitted posting blocks", stats, err)
@@ -268,6 +268,26 @@ func TestTextV2PostingBlocksReachValueLogMaintenance2625(t *testing.T) {
 	if stats.V2PostingBlocks == 0 {
 		t.Fatalf("reopened posting blocks=%d want emitted blocks", stats.V2PostingBlocks)
 	}
+}
+
+func firstTextV2PostingBlockKeyForTerm2626(t *testing.T, d *backenddb.DB, collection, rootName, term string) []byte {
+	t.Helper()
+	stop := errors.New("posting block located")
+	var blockKey []byte
+	var scanErr error
+	withTextCatalog(t, d, collection, func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		scanErr = scanTextV2PostingBlocksForTerm(snap, catalog, rootName, term, func(key textV2PostingBlockKey, _ textV2PostingBlockSummary, _ *textV2PostingBlockEntryScanner) error {
+			blockKey = encodeTextV2PostingBlockKey(key.Term, key.BlockStart, key.BlockID)
+			return stop
+		})
+	})
+	if scanErr != nil && !errors.Is(scanErr, stop) {
+		t.Fatalf("scan posting blocks for %q: %v", term, scanErr)
+	}
+	if len(blockKey) == 0 {
+		t.Fatalf("posting block for %q not found", term)
+	}
+	return blockKey
 }
 
 func TestTextV2PostingBlocksEmittedByBackfillAndMutations2626(t *testing.T) {
@@ -763,7 +783,7 @@ func TestTextV2WritePathPostingBlocksGCCompactReopen2626(t *testing.T) {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
 	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
-	blockKey := encodeTextV2PostingBlockKey("refund", 1, 1)
+	blockKey := firstTextV2PostingBlockKeyForTerm2626(t, d, "docs", rootName, "refund")
 	postingBefore := textV2ReadRootBytes2624(t, d, "docs", rootName, blockKey)
 	normBefore := textV2ReadNormBlockBytes2624(t, d, "docs", "lexical", 1)
 	docMapBefore := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2DocMapRootName("docs", "lexical"), encodeTextV2BlockKey(1))

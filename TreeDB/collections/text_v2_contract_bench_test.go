@@ -128,6 +128,7 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 		docsPerBatch = 1
 	}
 	ids, docs := textV2ContractDocuments2623(docsPerBatch, "insert")
+	insertTermEntries := textV2ContractUniqueTermStatsEntries2626(b, docs)
 
 	b.Run("insert_batch_no_text", func(b *testing.B) {
 		b.ReportAllocs()
@@ -196,7 +197,7 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 			}
 			lastStats = textV2ContractStorageStats2623(b, col)
 			highDFBlocks = textV2ContractTermPostingBlockCount2626(b, col, "refund")
-			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, lastStats.V2TermStats)
+			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, insertTermEntries)
 			_ = d.Close()
 		}
 		b.ReportMetric(float64(docsPerBatch), "docs/op")
@@ -300,6 +301,7 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 
 	b.Run("update_batch_text_v2_indexed", func(b *testing.B) {
 		_, updatedDocs := textV2ContractDocuments2623(docsPerBatch, "update")
+		updateTermEntries := textV2ContractUniqueTermStatsEntries2626(b, docs, updatedDocs)
 		var lastStats TextIndexStorageStats
 		var writeAmpEntries uint64
 		var highDFBlocks uint64
@@ -336,7 +338,7 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 			}
 			lastStats = textV2ContractStorageStats2623(b, col)
 			highDFBlocks = textV2ContractTermPostingBlockCount2626(b, col, "refund")
-			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, lastStats.V2TermStats)
+			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, updateTermEntries)
 			_ = d.Close()
 		}
 		b.ReportMetric(float64(docsPerBatch), "docs/op")
@@ -406,7 +408,7 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 			}
 			lastStats = textV2ContractStorageStats2623(b, col)
 			highDFBlocks = textV2ContractTermPostingBlockCount2626(b, col, "refund")
-			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, lastStats.V2TermStats)
+			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, insertTermEntries)
 			_ = d.Close()
 		}
 		b.ReportMetric(float64(docsPerBatch), "docs/op")
@@ -724,7 +726,27 @@ func textV2ContractTermPostingBlockCount2626(tb testing.TB, col *Collection, ter
 	return stats.PostingBlockCount
 }
 
-func textV2ContractV2MutationRootDeltaEntries2626(docs int, before, after TextIndexStorageStats, termEntries uint64) uint64 {
+func textV2ContractUniqueTermStatsEntries2626(tb testing.TB, batches ...[][]byte) uint64 {
+	tb.Helper()
+	seen := make(map[string]struct{})
+	def := textV2ContractV2IndexDefinition2626()
+	for _, batch := range batches {
+		for _, doc := range batch {
+			analysis, err := analyzeTextIndexDocument(def, doc)
+			if err != nil {
+				tb.Fatalf("analyze benchmark document: %v", err)
+			}
+			for _, field := range analysis.Fields {
+				for term := range field.Terms {
+					seen[term] = struct{}{}
+				}
+			}
+		}
+	}
+	return uint64(len(seen))
+}
+
+func textV2ContractV2MutationRootDeltaEntries2626(docs int, before, after TextIndexStorageStats, termStatEntries uint64) uint64 {
 	docEntries := uint64(maxTextV2ContractInt2623(docs, 0))
 	docMapBlocks := after.V2DocMapBlocks
 	if docMapBlocks == 0 {
@@ -738,9 +760,9 @@ func textV2ContractV2MutationRootDeltaEntries2626(docs int, before, after TextIn
 	if after.V2PostingBlocks > before.V2PostingBlocks {
 		postingBlocks = after.V2PostingBlocks - before.V2PostingBlocks
 	}
-	// V2 mutation writes include docID/docmap/norm roots, term-stat deltas,
-	// appended posting blocks (for inserts/updates), and the status generation.
-	return docEntries + docMapBlocks + normBlocks + postingBlocks + termEntries + 1
+	// V2 mutation writes include docID/docmap/norm roots, term-stat rows touched
+	// by the mutated documents, appended posting blocks, and the status generation.
+	return docEntries + docMapBlocks + normBlocks + postingBlocks + termStatEntries + 1
 }
 
 func textV2ContractStorageEntryCount2623(stats TextIndexStorageStats) uint64 {
