@@ -4,6 +4,12 @@ import "fmt"
 
 var errColumnHNSWPreparedQuantizedTraversalUnavailable = fmt.Errorf("%w: scalar_u8 hnsw prepared quantized traversal unavailable", ErrVectorIndexSearchUnavailable)
 
+// columnHNSWPreparedScalarU8RawDotTraversalEnabled gates the scalar_u8 raw-dot
+// prepared traversal seam. The seam is kept off by default until the remaining
+// adapter-overhead follow-ups can make the raw-dot path performance-neutral or
+// better across qonly/rerank production rows.
+const columnHNSWPreparedScalarU8RawDotTraversalEnabled = false
+
 type columnHNSWPreparedScalarU8ScorePlane struct {
 	scorer columnVectorGraphScalarU8QuantizedScorer
 	ready  bool
@@ -46,11 +52,32 @@ func (p *columnHNSWPreparedScalarU8ScorePlane) scoreRowIDsPrevalidated(rowIDs []
 	return p.scorer.scoreRowIDsPrevalidated(rowIDs, dst, scratch, stats)
 }
 
+func (p *columnHNSWPreparedScalarU8ScorePlane) scoreRawDotOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int64, error) {
+	if p == nil || !p.ready {
+		return 0, errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.scoreRawDotOrdinal(ordinal, scratch, stats)
+}
+
+func (p *columnHNSWPreparedScalarU8ScorePlane) scoreRawDotRowIDsPrevalidated(rowIDs []uint32, dst []int64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]int64, error) {
+	if p == nil || !p.ready {
+		return dst[:0], errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.scoreRawDotRowIDsPrevalidated(rowIDs, dst, scratch, stats)
+}
+
 func (p *columnHNSWPreparedScalarU8ScorePlane) scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
 	if p == nil || !p.ready {
 		return 0, errColumnHNSWPreparedTraversalScorePlaneUnavailable
 	}
 	return p.scorer.scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs, topK, scratch, stats)
+}
+
+func (p *columnHNSWPreparedScalarU8ScorePlane) scoreAndPushRawDotFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+	if p == nil || !p.ready {
+		return 0, errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.scoreAndPushRawDotFrontierVisitedRowIDsPrevalidated(rowIDs, topK, scratch, stats)
 }
 
 func collectionScalarU8PreparedTraversalPackForReader(reader *columnVectorGraphPhysicalRowReader, queryMode columnVectorGraphNativeSearchQueryMode, statsMode columnVectorGraphNativeSearchStatsMode, quantizedIndexName string) (*columnHNSWSearchPackPreparedView, bool) {
@@ -192,7 +219,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosineScalarU8PreparedTravers
 		OmitResultMaterialization:            opts.OmitResultMaterialization || queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank,
 		SuppressOmittedResultMaterialization: queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank,
 	}
-	results, stats, err := pack.searchCosinePreparedScorePlane(query, packOpts, scratch, &scratch.preparedScalarU8Plane)
+	var results []columnVectorGraphNativeSearchResult
+	var stats columnVectorGraphNativeSearchStats
+	if columnHNSWPreparedScalarU8RawDotTraversalEnabled {
+		results, stats, err = pack.searchCosinePreparedRawDotTraversal(query, packOpts, scratch, &scratch.preparedScalarU8Plane)
+	} else {
+		results, stats, err = pack.searchCosinePreparedScorePlane(query, packOpts, scratch, &scratch.preparedScalarU8Plane)
+	}
 	columnVectorGraphApplyQuantizedPreparedTraversalSetupStats(&stats, setupStats)
 	r.populateScalarU8PreparedTraversalSearchStats(&stats)
 	if err != nil {

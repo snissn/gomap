@@ -226,23 +226,11 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDPrevalidated(rowID 
 }
 
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDPrepared(rowID uint32, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
-	if scratch == nil {
-		return 0, fmt.Errorf("collections: column_graph quantized scalar_u8 scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
+	dot, err := s.scoreRawDotRowIDPrepared(rowID, scratch, stats)
+	if err != nil {
+		return 0, err
 	}
-	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, 1)
-	rowIDs := scratch.scoreTileRowIDs[:1]
-	rowIDs[0] = rowID
-	scratch.scoreTileQuantizedDots = ensureColumnVectorGraphNativeInt64Scratch(scratch.scoreTileQuantizedDots, 1)
-	dots := scratch.scoreTileQuantizedDots[:1]
-	status := vectorops.DotScalarU8CenteredIndexedPrevalidated(dots, s.codePayload, s.centeredQuery, rowIDs, s.dims)
-	if status.Invalid || status.Rows != 1 {
-		return 0, fmt.Errorf("%w: column_graph quantized index %q scalar_u8 score invalid status=%+v rows=%d want 1", ErrVectorIndexSearchUnavailable, s.indexName, status, status.Rows)
-	}
-	if stats != nil {
-		recordColumnVectorGraphScoreBatchStats(stats, status.Rows, status.Optimized, status.Fallback)
-		s.recordScoreStats(stats, status.Rows)
-	}
-	return scalarU8QuantizedCosineScoreFromDot(dots[0]), nil
+	return scalarU8QuantizedCosineScoreFromDot(dot), nil
 }
 
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDsPrevalidated(rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
@@ -261,17 +249,79 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDsPrevalidated(rowID
 }
 
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDsPrepared(rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
-	if scratch == nil {
-		return dst[:0], fmt.Errorf("collections: column_graph quantized scalar_u8 scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
+	var dotScratch []int64
+	if scratch != nil {
+		dotScratch = scratch.scoreTileQuantizedDots
 	}
-	scratch.scoreTileQuantizedDots = ensureColumnVectorGraphNativeInt64Scratch(scratch.scoreTileQuantizedDots, len(rowIDs))
-	dots := scratch.scoreTileQuantizedDots[:len(rowIDs)]
-	status := vectorops.DotScalarU8CenteredIndexedPrevalidated(dots, s.codePayload, s.centeredQuery, rowIDs, s.dims)
-	if status.Invalid || status.Rows != len(rowIDs) {
-		return dst[:0], fmt.Errorf("%w: column_graph quantized index %q scalar_u8 batch score invalid status=%+v rows=%d want %d", ErrVectorIndexSearchUnavailable, s.indexName, status, status.Rows, len(rowIDs))
+	dots, err := s.scoreRawDotRowIDsPrepared(rowIDs, dotScratch, scratch, stats)
+	if err != nil {
+		return dst[:0], err
 	}
 	for i, dot := range dots {
 		dst[i] = scalarU8QuantizedCosineScoreFromDot(dot)
+	}
+	return dst, nil
+}
+
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRawDotOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int64, error) {
+	if err := s.validatePrepared(); err != nil {
+		return 0, err
+	}
+	rows := s.codeRows.Rows()
+	if ordinal < 0 || ordinal >= rows || uint64(ordinal) > uint64(^uint32(0)) {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q code row ordinal=%d unavailable len=0 ok=false want %d", ErrVectorIndexSearchUnavailable, s.indexName, ordinal, s.dims)
+	}
+	return s.scoreRawDotRowIDPrepared(uint32(ordinal), scratch, stats)
+}
+
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRawDotRowIDPrepared(rowID uint32, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int64, error) {
+	if scratch == nil {
+		return 0, fmt.Errorf("collections: column_graph quantized scalar_u8 scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
+	}
+	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, 1)
+	rowIDs := scratch.scoreTileRowIDs[:1]
+	rowIDs[0] = rowID
+	scratch.scoreTileQuantizedDots = ensureColumnVectorGraphNativeInt64Scratch(scratch.scoreTileQuantizedDots, 1)
+	dots, err := s.scoreRawDotRowIDsPrepared(rowIDs, scratch.scoreTileQuantizedDots, scratch, stats)
+	if err != nil {
+		return 0, err
+	}
+	return dots[0], nil
+}
+
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRawDotRowIDsPrevalidated(rowIDs []uint32, dst []int64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]int64, error) {
+	if cap(dst) < len(rowIDs) {
+		if scratch != nil {
+			scratch.scoreTileQuantizedDots = ensureColumnVectorGraphNativeInt64Scratch(scratch.scoreTileQuantizedDots, len(rowIDs))
+			dst = scratch.scoreTileQuantizedDots[:len(rowIDs)]
+		} else {
+			dst = make([]int64, len(rowIDs))
+		}
+	} else {
+		dst = dst[:len(rowIDs)]
+	}
+	if len(rowIDs) == 0 {
+		return dst, nil
+	}
+	if err := s.validatePrepared(); err != nil {
+		return dst[:0], err
+	}
+	return s.scoreRawDotRowIDsPrepared(rowIDs, dst, scratch, stats)
+}
+
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRawDotRowIDsPrepared(rowIDs []uint32, dst []int64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]int64, error) {
+	if scratch == nil {
+		return dst[:0], fmt.Errorf("collections: column_graph quantized scalar_u8 scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
+	}
+	if cap(dst) < len(rowIDs) {
+		scratch.scoreTileQuantizedDots = ensureColumnVectorGraphNativeInt64Scratch(scratch.scoreTileQuantizedDots, len(rowIDs))
+		dst = scratch.scoreTileQuantizedDots[:len(rowIDs)]
+	} else {
+		dst = dst[:len(rowIDs)]
+	}
+	status := vectorops.DotScalarU8CenteredIndexedPrevalidated(dst, s.codePayload, s.centeredQuery, rowIDs, s.dims)
+	if status.Invalid || status.Rows != len(rowIDs) {
+		return dst[:0], fmt.Errorf("%w: column_graph quantized index %q scalar_u8 batch score invalid status=%+v rows=%d want %d", ErrVectorIndexSearchUnavailable, s.indexName, status, status.Rows, len(rowIDs))
 	}
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, status.Rows, status.Optimized, status.Fallback)
@@ -284,26 +334,39 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreAndPushFrontierVisitedRo
 	if len(rowIDs) == 0 {
 		return 0, nil
 	}
-	if err := s.validatePrepared(); err != nil {
+	var dotScratch []int64
+	if scratch != nil {
+		dotScratch = scratch.scoreTileQuantizedDots
+	}
+	dots, err := s.scoreRawDotRowIDsPrevalidated(rowIDs, dotScratch, scratch, stats)
+	if err != nil {
 		return 0, err
 	}
-	if scratch == nil {
-		return 0, fmt.Errorf("collections: column_graph quantized scalar_u8 scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
-	}
-	scratch.scoreTileQuantizedDots = ensureColumnVectorGraphNativeInt64Scratch(scratch.scoreTileQuantizedDots, len(rowIDs))
-	dots := scratch.scoreTileQuantizedDots[:len(rowIDs)]
-	status := vectorops.DotScalarU8CenteredIndexedPrevalidated(dots, s.codePayload, s.centeredQuery, rowIDs, s.dims)
-	if status.Invalid || status.Rows != len(rowIDs) {
-		return 0, fmt.Errorf("%w: column_graph quantized index %q scalar_u8 batch score invalid status=%+v rows=%d want %d", ErrVectorIndexSearchUnavailable, s.indexName, status, status.Rows, len(rowIDs))
-	}
-	if stats != nil {
-		recordColumnVectorGraphScoreBatchStats(stats, status.Rows, status.Optimized, status.Fallback)
-	}
-	s.recordScoreStats(stats, status.Rows)
 	for i, rowID := range rowIDs {
 		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scalarU8QuantizedCosineScoreFromDot(dots[i])}
 		if scratch.insertTop(topK, candidate) {
 			scratch.pushFrontier(candidate)
+		}
+	}
+	return len(rowIDs), nil
+}
+
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreAndPushRawDotFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+	if len(rowIDs) == 0 {
+		return 0, nil
+	}
+	var dotScratch []int64
+	if scratch != nil {
+		dotScratch = scratch.scoreTileQuantizedDots
+	}
+	dots, err := s.scoreRawDotRowIDsPrevalidated(rowIDs, dotScratch, scratch, stats)
+	if err != nil {
+		return 0, err
+	}
+	for i, rowID := range rowIDs {
+		candidate := columnVectorGraphRawDotSearchCandidate{ordinal: int(rowID), dot: dots[i]}
+		if scratch.insertRawDotTop(topK, candidate) {
+			scratch.pushRawDotFrontier(candidate)
 		}
 	}
 	return len(rowIDs), nil
