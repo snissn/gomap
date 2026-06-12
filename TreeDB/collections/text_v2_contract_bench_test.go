@@ -479,6 +479,7 @@ func BenchmarkTextV2ScoreSearchScale2627(b *testing.B) {
 					if warm.Stats.DocumentsFetched != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.FailClosed != 0 || warm.Stats.TextStateLookups != 0 || warm.Stats.TextMatchDetailsBuilt != 0 {
 						b.Fatalf("warm v2 stats=%+v want score-only zero-doc/no-state/no-match search", warm.Stats)
 					}
+					textV2ContractAssertSearchHit2627(b, "warm", warm)
 					b.ReportAllocs()
 					b.ResetTimer()
 					var sink TextSearchResponse
@@ -490,6 +491,7 @@ func BenchmarkTextV2ScoreSearchScale2627(b *testing.B) {
 						if got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 || got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
 							b.Fatalf("v2 stats=%+v want score-only zero-doc/no-state/no-match search", got.Stats)
 						}
+						textV2ContractAssertSearchHit2627(b, "timed", got)
 						sink = got
 					}
 					b.StopTimer()
@@ -579,6 +581,13 @@ func BenchmarkTextV2ContractConcurrentServing2623(b *testing.B) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	b.ReportMetric(float64(ms.HeapAlloc), "steady_heap_bytes")
+}
+
+func textV2ContractAssertSearchHit2627(b *testing.B, phase string, response TextSearchResponse) {
+	b.Helper()
+	if len(response.Results) == 0 && response.Stats.TextCandidatesScored == 0 {
+		b.Fatalf("%s v2 search returned no hits: %+v", phase, response.Stats)
+	}
 }
 
 func textV2ContractRunSearch2623(col *Collection, tc textV2ContractSearchCase2623) (TextSearchResponse, error) {

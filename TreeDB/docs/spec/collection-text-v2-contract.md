@@ -38,7 +38,7 @@ type TextIndexDefinition struct {
     Name    string
     Fields  []TextIndexField
     Analyzer TextAnalyzer
-    Version TextIndexVersion     // "v1" default today, "v2" reserved
+    Version TextIndexVersion     // "v1" default today, explicit "v2" supports M4 score-only reads
     Rollout TextIndexRolloutMode // "primary" default today
     // existing position/offset/storage/schema fields...
 }
@@ -318,8 +318,9 @@ Required fixture scales:
 
 Required query and serving shapes:
 
-- common-term, rare-term, multi-term AND/OR, scalar-filtered, score-only, and
-  detailed-match rows;
+- common-term, rare-term, multi-term AND/OR, scalar-filtered, and score-only
+  rows; detailed-match rows are required once #2629 enables v2 detail
+  materialization, while M4 rows must assert empty match-detail output;
 - isolated text write, backfill, update, and delete rows with `-benchmem`;
 - current #2589 indexed insert/search guardrail matrix on the latest base;
 - concurrent serving/load row with reader concurrency, p50/p95/p99 latency,
@@ -347,8 +348,10 @@ coordinator explicitly accepts them with profile-backed rationale.
   root publication, and value-log reachability tests.
 - M2/M3 must prove posting/norm/docmap payloads remain ordinary B-tree values or
   existing `value_vlog` pointers reachable from collection root descriptors.
-- M4+ search must be score-only by default for candidate generation and must
-  materialize match details only when requested/final.
+- M4 search must be score-only for candidate generation and public v2
+  `SearchText` rows, with optional bounded final document fetch only. #2629 owns
+  any later detailed match/position materialization; until then detailed modes
+  remain intentionally empty/fail-closed rather than falling back to v1.
 - M5 block skipping must be exact: upper bounds are admissible and results match
   exhaustive scoring. Approximate ranking requires a separate mode/tracker.
 - M7 default-switch or old-path retirement must include v1/v2 coexistence,

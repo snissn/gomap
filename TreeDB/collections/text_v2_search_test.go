@@ -85,6 +85,36 @@ func TestTextV2HybridTextCandidatesNoDocCounters2627(t *testing.T) {
 	}
 }
 
+func TestTextV2SearchIncludeDocumentsFetchesOnlyTopK2627(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title", Weight: 4}, {Field: "body"}}}, [][]byte{[]byte("d1"), []byte("d2"), []byte("d3")}, [][]byte{
+		[]byte(`{"title":"refund","body":"refund policy"}`),
+		[]byte(`{"title":"plain","body":"refund"}`),
+		[]byte(`{"title":"shipping","body":"policy"}`),
+	})
+
+	got, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 1, CandidateLimit: 8, IncludeDocuments: true})
+	if err != nil {
+		t.Fatalf("SearchText IncludeDocuments v2: %v", err)
+	}
+	if len(got.Results) != 1 || len(got.Results[0].Document) == 0 {
+		t.Fatalf("results=%+v want one materialized topK document", got.Results)
+	}
+	if !bytes.Contains(got.Results[0].Document, []byte("refund")) {
+		t.Fatalf("document=%s want fetched refund document", got.Results[0].Document)
+	}
+	if len(got.Results[0].TextMatches) != 0 || len(got.Results[0].MatchedTerms) != 0 || len(got.Results[0].MatchedFields) != 0 {
+		t.Fatalf("result=%+v want v2 M4 score-only match details", got.Results[0])
+	}
+	if got.Stats.DocumentsFetched == 0 || got.Stats.DocumentsFetched > uint64(len(got.Results)) || got.Stats.DocumentsFetched > 1 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 {
+		t.Fatalf("stats=%+v want bounded topK document fetch only", got.Stats)
+	}
+	if got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
+		t.Fatalf("stats=%+v want score-only v2 search despite final fetch", got.Stats)
+	}
+}
+
 func TestTextV2SearchSkipsStaleGenerationsAndTombstones2627(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
