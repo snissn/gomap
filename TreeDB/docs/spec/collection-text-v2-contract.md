@@ -53,9 +53,9 @@ type TextIndexDefinition struct {
 
 `TextIndexRolloutMode` values:
 
-- `""` / `"primary"`: active production read/write path. Today this is v1 only;
-  explicit v2 indexes can maintain M1 root-state shells, but status remains
-  fail-closed/non-readable/non-writable for the full v2 executor/write pipeline.
+- `""` / `"primary"`: active production read/write path. V1 remains the default
+  readable/searchable path. Explicit v2 indexes are writable as of M3, but v2
+  search remains fail-closed/non-readable until the v2 executor milestones land.
 - `"shadow"`: future v2 build/validate without serving reads.
 - `"dual_write"`: future v1+v2 mutation maintenance with explicit read choice.
 - `"disabled"`: future metadata-present but non-serving/non-writing state.
