@@ -77,6 +77,7 @@ class StorageAuditTest(unittest.TestCase):
         self.assertTrue(report["retained_payload_status_audit"]["retained_payload_compression_status_missing"])
         leaf = report["vlog_frame_audit"]["leaf_vlog"]
         value = report["vlog_frame_audit"]["value_vlog"]
+        class_map = report["storage_parity_class_map"]
         self.assertEqual(leaf["modes"]["grouped_block_lz4"]["raw_payload_bytes"], 300)
         self.assertEqual(leaf["modes"]["grouped_block_zstd"]["codec"], "zstd")
         self.assertEqual(leaf["modes"]["grouped_block_zstd"]["records_per_frame"], 2)
@@ -85,6 +86,8 @@ class StorageAuditTest(unittest.TestCase):
         self.assertEqual(value["modes"]["raw_record"]["raw_payload_bytes"], len(b"raw-json-payload"))
         self.assertEqual(value["modes"]["grouped_block_snappy"]["stored_payload_bytes"], 25)
         self.assertGreater(value["raw_mode_payload_fraction"], 0)
+        self.assertEqual(class_map["totals"]["value_vlog_bytes"], value["file_bytes"])
+        self.assertEqual(class_map["issue_targets"]["#2662"]["target_bytes"], 65_000_000)
 
     def test_retained_status_summary_detects_recorded_encoding_and_missing_compression(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -431,6 +434,65 @@ class StorageAuditTest(unittest.TestCase):
         self.assertEqual(column["section_summary"]["by_category"][0]["category"], "dictionaries")
         self.assertEqual(column["section_summary"]["by_compression"][0]["compression"], "none")
         self.assertEqual(column["section_summary"]["sections"][0]["part_id"], 7)
+
+    def test_storage_parity_class_map_splits_clickhouse_comparable_classes(self) -> None:
+        class_map = audit.storage_parity_class_map(
+            {
+                "subtrees": [
+                    {"subtree": ".", "raw_bytes": 210},
+                    {"subtree": "value_vlog", "raw_bytes": 118},
+                    {"subtree": "leaf_vlog", "raw_bytes": 9},
+                    {"subtree": "column_assets", "raw_bytes": 52},
+                    {"subtree": "index.db", "raw_bytes": 5},
+                    {"subtree": "wal", "raw_bytes": 7},
+                ]
+            },
+            {
+                "value_vlog": {"raw_payload_bytes": 257, "stored_payload_bytes": 106},
+                "leaf_vlog": {"raw_payload_bytes": 34, "stored_payload_bytes": 8},
+            },
+            {
+                "active_referenced_asset_bytes": 52,
+                "active_typed_column_part_bytes": 35,
+                "physical_accounting": {
+                    "totals": {
+                        "referenced_asset_bytes": 52,
+                        "typed_column_part_bytes": 35,
+                        "row_asset_bytes": 17,
+                    }
+                },
+                "section_summary": {
+                    "by_category": [
+                        {"category": "declared_columns", "sections": 2, "bytes": 8, "raw_bytes": 20, "stored_bytes": 8},
+                        {"category": "dictionaries", "sections": 1, "bytes": 18, "raw_bytes": 28, "stored_bytes": 18},
+                        {"category": "pruning_metadata", "sections": 1, "bytes": 4, "raw_bytes": 6, "stored_bytes": 4},
+                        {"category": "marks", "sections": 1, "bytes": 2, "raw_bytes": 2, "stored_bytes": 2},
+                        {"category": "column_stats", "sections": 1, "bytes": 3, "raw_bytes": 3, "stored_bytes": 3},
+                        {"category": "layout_contract", "sections": 1, "bytes": 1, "raw_bytes": 1, "stored_bytes": 1},
+                        {"category": "descriptor", "sections": 1, "bytes": 1, "raw_bytes": 1, "stored_bytes": 1},
+                        {"category": "manifest", "sections": 1, "bytes": 1, "raw_bytes": 1, "stored_bytes": 1},
+                        {"category": "padding", "sections": 1, "bytes": 1, "raw_bytes": 1, "stored_bytes": 1},
+                        {"category": "locators", "sections": 1, "bytes": 2, "raw_bytes": 30, "stored_bytes": 2},
+                    ]
+                },
+            },
+            {"status": "passed", "retained_payload_bytes": 257},
+        )
+
+        by_class = {row["class"]: row for row in class_map["classes"]}
+        self.assertEqual(class_map["totals"]["durable_bytes_wal_excluded"], 203)
+        self.assertEqual(class_map["totals"]["maindb_root_misc_bytes"], 19)
+        self.assertEqual(class_map["issue_targets"]["#2662"]["current_bytes"], 118)
+        self.assertEqual(class_map["issue_targets"]["#2663"]["current_bytes"], 52)
+        self.assertEqual(by_class["retained_semantic_json_payload_store"]["logical_payload_bytes"], 257)
+        self.assertEqual(by_class["retained_semantic_json_payload_store"]["file_overhead_bytes"], 12)
+        self.assertEqual(by_class["declared_scalar_column_values"]["bytes"], 8)
+        self.assertEqual(by_class["typed_string_dictionaries"]["bytes"], 18)
+        self.assertEqual(by_class["pruning_mark_and_stats_metadata"]["bytes"], 9)
+        self.assertEqual(by_class["column_format_descriptor_metadata"]["bytes"], 4)
+        self.assertEqual(by_class["column_row_compat_assets"]["bytes"], 17)
+        self.assertEqual(by_class["column_locators"]["raw_bytes"], 30)
+        self.assertEqual(class_map["clickhouse_reference"]["bytes_on_disk"], 101_786_238)
 
     def test_resolve_main_dir_accepts_maindb(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
