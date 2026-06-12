@@ -60,6 +60,27 @@ func TestScalarU8CenteredQueryParity2258(t *testing.T) {
 	}
 }
 
+func TestScalarU8CenteredQueryFromCentered2258(t *testing.T) {
+	centered := []ScalarU8CenteredCode{-255, -1, 255}
+	var sum int64
+	for _, value := range centered {
+		sum += int64(value)
+	}
+	query, scratch, ok := PrepareScalarU8CenteredQueryFromCentered(centered, len(centered), sum)
+	if !ok || !query.ValidForDims(len(centered)) || len(scratch) != len(centered) {
+		t.Fatalf("PrepareScalarU8CenteredQueryFromCentered ok=%v query=%+v scratch_len=%d", ok, query, len(scratch))
+	}
+	if got := query.CenteredSum(); got != sum {
+		t.Fatalf("query.CenteredSum()=%d want cached sum %d", got, sum)
+	}
+	for i, want := range centered {
+		got, ok := query.Value(i)
+		if !ok || got != want {
+			t.Fatalf("query.Value(%d)=%d ok=%v want %d", i, got, ok, want)
+		}
+	}
+}
+
 func TestScalarU8CenteredQueryRejectsInvalidShapes2258(t *testing.T) {
 	codes := []byte{1, 2, 3}
 	validScratch := make([]ScalarU8CenteredCode, 0, len(codes))
@@ -81,6 +102,23 @@ func TestScalarU8CenteredQueryRejectsInvalidShapes2258(t *testing.T) {
 			query, scratch, ok := PrepareScalarU8CenteredQuery(tc.dst, tc.codes, tc.dims)
 			if ok || query.Valid() || len(scratch) != 0 {
 				t.Fatalf("PrepareScalarU8CenteredQuery ok=%v query=%+v scratch_len=%d want invalid", ok, query, len(scratch))
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name   string
+		values []ScalarU8CenteredCode
+		dims   int
+	}{
+		{name: "zero_dims", values: make([]ScalarU8CenteredCode, 0), dims: 0},
+		{name: "negative_dims", values: make([]ScalarU8CenteredCode, 0), dims: -1},
+		{name: "short_values", values: make([]ScalarU8CenteredCode, 2), dims: 3},
+		{name: "long_values", values: make([]ScalarU8CenteredCode, 4), dims: 3},
+	} {
+		t.Run("from_centered/"+tc.name, func(t *testing.T) {
+			query, scratch, ok := PrepareScalarU8CenteredQueryFromCentered(tc.values, tc.dims, 0)
+			if ok || query.Valid() || len(scratch) != 0 {
+				t.Fatalf("PrepareScalarU8CenteredQueryFromCentered ok=%v query=%+v scratch_len=%d want invalid", ok, query, len(scratch))
 			}
 		})
 	}

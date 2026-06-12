@@ -23,3 +23,19 @@ func DotScalarU8CenteredIndexed(dst []int64, codes []byte, query ScalarU8Centere
 	dotScalarU8CenteredIndexedScalar(dst, codes, query, rowIDs, dims, rows)
 	return scalarU8DotBatchStatus(rows, false)
 }
+
+// DotScalarU8CenteredIndexedPrevalidated is the trusted-call variant of
+// DotScalarU8CenteredIndexed for hot paths that already proved every row ID is
+// within the row-major code payload. It still validates the basic slice/query
+// shape but deliberately skips the per-call rowID bounds scan.
+func DotScalarU8CenteredIndexedPrevalidated(dst []int64, codes []byte, query ScalarU8CenteredQuery, rowIDs []uint32, dims int) ScalarU8DotBatchStatus {
+	rows := dotScalarU8CenteredIndexedRows(dst, rowIDs)
+	if rows == 0 {
+		return ScalarU8DotBatchStatus{}
+	}
+	if !dotScalarU8CenteredIndexedBasicShapeOK(codes, query, dims, rows) {
+		return scalarU8DotBatchInvalidStatus()
+	}
+	dotScalarU8CenteredIndexedScalar(dst, codes, query, rowIDs, dims, rows)
+	return scalarU8DotBatchStatus(rows, false)
+}

@@ -230,10 +230,13 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare scorer: %v", err)
 	}
-	if len(scorer.queryCode) != def.Dimensions || !scorer.centeredQuery.ValidForDims(def.Dimensions) {
-		t.Fatalf("scorer query_code_len=%d centered=%+v dims=%d", len(scorer.queryCode), scorer.centeredQuery, def.Dimensions)
+	if !scorer.centeredQuery.ValidForDims(def.Dimensions) {
+		t.Fatalf("scorer centered=%+v dims=%d", scorer.centeredQuery, def.Dimensions)
 	}
-	for i, code := range scorer.queryCode {
+	queryCodes := make([]byte, len(query))
+	for i, value := range query {
+		code := columnVectorGraphScalarU8Code(value * queryInvNorm)
+		queryCodes[i] = code
 		want := vectorops.ScalarU8CenteredValue(code)
 		got, ok := scorer.centeredQuery.Value(i)
 		if !ok || got != want {
@@ -249,7 +252,7 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 		t.Fatalf("scoreOrdinal: %v", err)
 	}
 	var legacyDot int64
-	for i, qc := range scorer.queryCode {
+	for i, qc := range queryCodes {
 		q := int64(2*int(qc) - 255)
 		c := int64(2*int(row[i]) - 255)
 		legacyDot += q * c
@@ -814,6 +817,37 @@ func TestColumnGraphScalarU8QuantizedAssetBuildNormalizesCosineRows1926(t *testi
 	if !bytes.Equal(codes[:2], codes[2:]) || !bytes.Equal(codes[:2], []byte{255, 128}) {
 		t.Fatalf("codes=%v want equivalent cosine directions encoded identically as [255 128]", codes)
 	}
+}
+
+func TestColumnGraphScalarU8CodeMatchesRoundReference2642(t *testing.T) {
+	cases := []float32{
+		float32(math.NaN()), float32(math.Inf(-1)), -10, -1.01, -1, -0.999, -0.99607843,
+		-0.5, -0.003921569, 0, 0.003921569, 0.5, 0.99607843, 0.999, 1, 1.01, 10, float32(math.Inf(1)),
+	}
+	for i := -512; i <= 512; i++ {
+		cases = append(cases, float32(i)/255)
+	}
+	for _, value := range cases {
+		got := columnVectorGraphScalarU8Code(value)
+		want := columnVectorGraphScalarU8CodeRoundReference2642(value)
+		if got != want {
+			t.Fatalf("columnVectorGraphScalarU8Code(%g)=%d want round reference %d", value, got, want)
+		}
+	}
+}
+
+func columnVectorGraphScalarU8CodeRoundReference2642(value float32) byte {
+	if math.IsNaN(float64(value)) {
+		return 0
+	}
+	scaled := math.Round((float64(value) + 1.0) * 127.5)
+	if scaled < 0 {
+		return 0
+	}
+	if scaled > 255 {
+		return 255
+	}
+	return byte(scaled)
 }
 
 func TestColumnGraphQuantizedAssetValidationFailClosedWhenUnavailable1926(t *testing.T) {

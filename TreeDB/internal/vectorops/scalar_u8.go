@@ -73,7 +73,18 @@ func PrepareScalarU8CenteredQuery(dst []ScalarU8CenteredCode, codes []byte, dims
 		dst[i] = centered
 		sum += int64(centered)
 	}
-	return ScalarU8CenteredQuery{values: dst, sum: sum, sumDims: dims, sumValid: true}, dst, true
+	return PrepareScalarU8CenteredQueryFromCentered(dst, dims, sum)
+}
+
+// PrepareScalarU8CenteredQueryFromCentered returns a validated query view over
+// caller-filled centered values. The caller must provide the exact sum of
+// values[:dims]; SIMD batch kernels use it to preserve the scalar_u8 centered
+// scoring identity without rescanning the query on each score batch.
+func PrepareScalarU8CenteredQueryFromCentered(values []ScalarU8CenteredCode, dims int, sum int64) (query ScalarU8CenteredQuery, scratch []ScalarU8CenteredCode, ok bool) {
+	if dims <= 0 || len(values) != dims {
+		return ScalarU8CenteredQuery{}, values[:0], false
+	}
+	return ScalarU8CenteredQuery{values: values, sum: sum, sumDims: dims, sumValid: true}, values, true
 }
 
 // ScalarU8CenteredDot computes the integer dot product between a centered query
