@@ -1010,7 +1010,7 @@ func populateTextV2SearchResultMatchesFromCandidate(snap *backenddb.Snapshot, ca
 	}
 	includeLegacy := resultMode == textSearchResultFull
 	matchedTerms, matchedFields, matches := textV2SearchCandidateMatchDetails(candidate, ctx, candidate.generation, includeLegacy)
-	if idx.StorePositions {
+	if resultMode == textSearchResultFull && idx.StorePositions {
 		for postingIdx := 0; postingIdx < candidate.postingCount(); postingIdx++ {
 			entry := candidate.postingAt(postingIdx)
 			if entry.value.generation != candidate.generation {
@@ -1039,7 +1039,7 @@ func populateTextV2SearchResultMatchesFromTopCandidate(snap *backenddb.Snapshot,
 	}
 	includeLegacy := resultMode == textSearchResultFull
 	matchedTerms, matchedFields, matches := textV2SearchPostingMatchDetails(candidate.term, candidate.posting, ctx, includeLegacy)
-	if idx.StorePositions {
+	if resultMode == textSearchResultFull && idx.StorePositions {
 		if err := validateTextV2PositionPostingAtSnapshot(snap, catalog, ctx, idx, candidate.ordinal, candidate.generation, candidate.term, candidate.posting); err != nil {
 			return err
 		}

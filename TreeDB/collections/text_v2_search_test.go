@@ -139,8 +139,8 @@ func TestTextV2SearchResultModesAndTopKLazyDetails2629(t *testing.T) {
 	if len(detailed.Results) != 1 || !bytes.Equal(detailed.Results[0].DocumentID, scoreOnly.Results[0].DocumentID) {
 		t.Fatalf("detailed results=%+v scoreOnly=%+v want same top result", detailed.Results, scoreOnly.Results)
 	}
-	if detailed.Stats.TextCandidatesScored <= detailed.Stats.TextMatchDetailsBuilt || detailed.Stats.TextMatchDetailsBuilt != uint64(len(detailed.Results)) {
-		t.Fatalf("detailed stats=%+v want details bounded to returned topK, not all scored candidates", detailed.Stats)
+	if detailed.Stats.TextMatchDetailsBuilt != uint64(len(detailed.Results)) || detailed.Stats.TextMatchDetailsBuilt > detailed.Stats.TextCandidatesScored {
+		t.Fatalf("detailed stats=%+v want details bounded to returned topK and scored candidates", detailed.Stats)
 	}
 	if len(detailed.Results[0].TextMatches) == 0 || !slicesEqualStrings(detailed.Results[0].MatchedTerms, []string{"refund"}) || len(detailed.Results[0].MatchedFields) == 0 {
 		t.Fatalf("detailed result=%+v want field/term attribution", detailed.Results[0])
@@ -198,6 +198,14 @@ func TestTextV2PositionsLaneCorruptionFailsClosedOnlyForDetailedMode2629(t *test
 	scoreOnly, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "unique2629", TopK: 1, ResultMode: TextSearchResultModeScoreOnly})
 	if err != nil || len(scoreOnly.Results) != 1 || scoreOnly.Stats.TextMatchDetailsBuilt != 0 || scoreOnly.Stats.DocumentsFetched != 0 {
 		t.Fatalf("score-only after corruption response=%+v err=%v want no position-lane read", scoreOnly, err)
+	}
+	compact, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "unique2629", TopK: 1, ResultMode: TextSearchResultModeCompact})
+	if err != nil || len(compact.Results) != 1 || len(compact.Results[0].TextMatches) == 0 || compact.Stats.TextMatchDetailsBuilt != 1 || compact.Stats.DocumentsFetched != 0 {
+		t.Fatalf("compact after corruption response=%+v err=%v want scoring-posting attribution without position-lane read", compact, err)
+	}
+	hybridCompact, err := col.SearchHybridTextCandidates(HybridTextQuery{IndexName: "lexical", Query: "unique2629", CandidateLimit: 1, IncludeTextMatches: true})
+	if err != nil || len(hybridCompact.Candidates) != 1 || len(hybridCompact.Candidates[0].TextMatches) == 0 || hybridCompact.Stats.TextMatchDetailsBuilt != 1 || hybridCompact.Stats.DocumentsFetched != 0 || hybridCompact.Stats.FullDocumentScanFallbacks != 0 {
+		t.Fatalf("hybrid compact after corruption response=%+v err=%v want zero-doc compact attribution without position-lane read", hybridCompact, err)
 	}
 	detailed, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "unique2629", TopK: 1, IncludeDocuments: true})
 	if !errors.Is(err, ErrTextIndexUnavailable) || !errors.Is(err, ErrTextIndexStorageCorrupt) {
