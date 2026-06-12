@@ -1072,6 +1072,42 @@ func TestBatchDeleteRangeReportingVisibleInMarkdownAndJSON(t *testing.T) {
 	}
 }
 
+func TestRenderGethHotKVSummary(t *testing.T) {
+	const treeName = "TreeDB (public cached command_wal_v1)"
+	run := BenchRun{
+		Instances: []*DBInstance{
+			{Wrapper: &fixedNameDB{name: treeName}},
+			{Wrapper: &fixedNameDB{name: "Pebble"}},
+		},
+		Results: map[string]map[string]float64{
+			"sequential_write": {treeName: 1000, "Pebble": 2000},
+			"random_read":      {treeName: 3000, "Pebble": 4000},
+			"full_scan":        {treeName: 5000, "Pebble": 6000},
+		},
+		BatchDeleteRange: map[string]map[string]batchDeleteRangeReport{
+			"batch_delete_range": {
+				treeName: {AffectedKeysPerSec: 7000},
+				"Pebble": {AffectedKeysPerSec: 8000},
+			},
+		},
+		DiskUsage: map[string]dirDiskUsage{
+			treeName: {TotalBytes: 9000},
+			"Pebble": {TotalBytes: 10000},
+		},
+	}
+
+	out := renderGethHotKVSummary(run)
+	for _, want := range []string{
+		"| engine | write ops/sec | read ops/sec | iterate keys/sec | DeleteRange keys/sec | size bytes |",
+		"| TreeDB | 1,000 | 3,000 | 5,000 | 7,000 | 9,000 |",
+		"| Pebble | 2,000 | 4,000 | 6,000 | 8,000 | 10,000 |",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("summary missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRunBenchmark_BatchDeleteRangeProfilesExcludePreload(t *testing.T) {
 	var db *batchDeleteRangeMemoryDB
 	var events []string
