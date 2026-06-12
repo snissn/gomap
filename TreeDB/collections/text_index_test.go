@@ -95,7 +95,7 @@ func assertTextIndexMetadataNormalized(t *testing.T, meta CollectionMeta) {
 		t.Fatalf("text indexes=%d want 1: %+v", len(meta.TextIndexes), meta.TextIndexes)
 	}
 	idx := meta.TextIndexes[0]
-	if idx.Name != "lexical" || idx.Analyzer != TextAnalyzerSimple || idx.StoragePolicy != RootStorageCompressed {
+	if idx.Name != "lexical" || idx.Analyzer != TextAnalyzerSimple || idx.Version != TextIndexVersionV1 || idx.Rollout != TextIndexRolloutPrimary || idx.StoragePolicy != RootStorageCompressed {
 		t.Fatalf("text index metadata=%+v", idx)
 	}
 	if len(idx.Fields) != 2 {
@@ -142,6 +142,16 @@ func TestCollectionTextIndexMetadataRejectsInvalidDefinitions(t *testing.T) {
 			name: "offsets require positions",
 			meta: CollectionMeta{Name: "docs", TextIndexes: []TextIndexDefinition{{Name: "text", StoreOffsets: true, Fields: []TextIndexField{{Field: "body"}}}}},
 			want: "store_offsets requires store_positions",
+		},
+		{
+			name: "v2 version reserved fail closed",
+			meta: CollectionMeta{Name: "docs", TextIndexes: []TextIndexDefinition{{Name: "text", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}}},
+			want: "text index version \"v2\" is reserved",
+		},
+		{
+			name: "shadow rollout reserved fail closed",
+			meta: CollectionMeta{Name: "docs", TextIndexes: []TextIndexDefinition{{Name: "text", Rollout: TextIndexRolloutShadow, Fields: []TextIndexField{{Field: "body"}}}}},
+			want: "text index rollout mode \"shadow\" is reserved",
 		},
 		{
 			name: "negative weight",
@@ -208,6 +218,77 @@ func TestCollectionTextRootNames(t *testing.T) {
 	}
 	if slices.Contains(roots, collectionSecondaryRootName("docs", "lexical")) || slices.Contains(roots, collectionVectorIndexRootName("docs", "lexical")) {
 		t.Fatalf("text root set included scalar/vector root: %q", roots)
+	}
+}
+
+func TestCollectionTextV2RootNamesAndStatusContract2623(t *testing.T) {
+	meta, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "docs",
+		TextIndexes: []TextIndexDefinition{{
+			Name:   "lexical",
+			Fields: []TextIndexField{{Field: "body"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("normalize metadata: %v", err)
+	}
+	status := textIndexStatusForDefinition(meta.Name, meta.TextIndexes[0])
+	if status.Version != TextIndexVersionV1 || status.Rollout != TextIndexRolloutPrimary || !status.Ready || !status.Readable || !status.Writable || status.FailClosed {
+		t.Fatalf("status=%+v want active v1 primary", status)
+	}
+	wantActive := collectionTextRootNames("docs", "lexical")
+	if !slices.Equal(status.ActiveRootNames, wantActive) {
+		t.Fatalf("active roots=%q want %q", status.ActiveRootNames, wantActive)
+	}
+	wantV2 := []string{
+		"docs/text-v2-docid/lexical",
+		"docs/text-v2-docmap/lexical",
+		"docs/text-v2-terms/lexical",
+		"docs/text-v2-posting-blocks/lexical",
+		"docs/text-v2-norm-blocks/lexical",
+		"docs/text-v2-positions/lexical",
+		"docs/text-v2-generations/lexical",
+	}
+	if !slices.Equal(status.ReservedV2RootNames, wantV2) {
+		t.Fatalf("v2 roots=%q want %q", status.ReservedV2RootNames, wantV2)
+	}
+	for _, want := range []string{"postings_scanned", "posting_blocks_visited", "state_lookups", "norm_lookups", "docs_fetched", "match_details_built", "scalar_filter_selectivity", "fail_closed", "write_amplification", "index_bytes_per_doc", "rewrite_merge_state"} {
+		if !slices.Contains(status.RequiredCounterNames, want) {
+			t.Fatalf("required counters=%q missing %q", status.RequiredCounterNames, want)
+		}
+	}
+	unsupported := textIndexStatusForDefinition("docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Rollout: TextIndexRolloutPrimary})
+	if !unsupported.FailClosed || unsupported.Ready || unsupported.Readable || unsupported.Writable || unsupported.FailClosedReason != "text_index_version_unavailable" {
+		t.Fatalf("unsupported status=%+v want fail-closed v2", unsupported)
+	}
+}
+
+func TestCollectionTextIndexStatusAPI2623(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:        "docs",
+		TextIndexes: []TextIndexDefinition{{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	status, err := col.TextIndexStatus("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStatus: %v", err)
+	}
+	if !status.Ready || status.Version != TextIndexVersionV1 || status.PhysicalReclamationPath != TextIndexPhysicalReclamationTreeDB {
+		t.Fatalf("status=%+v want active v1 TreeDB reclamation", status)
+	}
+	if _, err := col.TextIndexStatus("missing"); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("missing TextIndexStatus err=%v want ErrIndexNotFound", err)
 	}
 }
 
@@ -301,7 +382,7 @@ func TestCollectionTextIndexedWritesMaintainStorageAndSearchRanks(t *testing.T) 
 	if len(response.Results) != 1 || string(response.Results[0].DocumentID) != "d1" || response.Results[0].Rank != 1 || response.Results[0].Score <= 0 {
 		t.Fatalf("SearchText results=%+v want ranked d1", response.Results)
 	}
-	if response.Stats.QueryTerms != 2 || response.Stats.TextPostingsScanned != 2 || response.Stats.TextCandidatesScored != 1 || response.Stats.DocumentsFetched != 0 || response.Stats.FailClosed != 0 {
+	if response.Stats.QueryTerms != 2 || response.Stats.TextPostingsScanned != 2 || response.Stats.TextCandidatesScored != 1 || response.Stats.TextStateLookups != 1 || response.Stats.TextNormLookups != 1 || response.Stats.TextMatchDetailsBuilt != 1 || response.Stats.DocumentsFetched != 0 || response.Stats.FailClosed != 0 {
 		t.Fatalf("SearchText stats=%+v want indexed search counters", response.Stats)
 	}
 	if _, err := col.SearchText(TextSearchOptions{IndexName: "missing", Query: "refund", TopK: 10}); !errors.Is(err, ErrIndexNotFound) {

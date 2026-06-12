@@ -2,7 +2,9 @@
 
 Status: PR4 ranked SearchText slice for issue #1764. TreeDB collections are
 pre-alpha; these text-search storage formats are versioned and may change before
-stabilization, but malformed or unsupported versions must fail closed.
+stabilization, but malformed or unsupported versions must fail closed. The
+text-v2 production contract, rollout vocabulary, reserved roots, and benchmark
+matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
 
 ## Implemented scope
 
@@ -40,6 +42,8 @@ type TextIndexDefinition struct {
     Name             string
     Fields           []TextIndexField
     Analyzer          TextAnalyzer
+    Version           TextIndexVersion
+    Rollout           TextIndexRolloutMode
     StorePositions    bool
     StoreOffsets      bool
     StoragePolicy     RootStoragePolicy
@@ -62,6 +66,11 @@ Validation rules:
   non-negative.
 - Analyzer `""` normalizes to `"simple"`; other analyzers fail closed until
   implemented.
+- Version `""` normalizes to `"v1"`; `"v2"` is reserved by the #2623 contract
+  and currently fails closed until text-v2 roots land.
+- Rollout `""` normalizes to `"primary"`; `"shadow"`, `"dual_write"`, and
+  `"disabled"` are reserved and currently fail closed until the matching v2
+  rollout implementation lands.
 - `StoreOffsets` requires `StorePositions` in this first format.
 - Text index names share the collection-wide index namespace with scalar and
   vector indexes.
@@ -197,10 +206,13 @@ optional final documents. Documents are fetched only after top-K ranking, so
 
 `TextSearchStats` includes text/hybrid-compatible counters:
 `text_candidates_requested`, `text_candidates_returned`,
-`text_postings_scanned`, `text_candidates_scored`, `documents_fetched`,
+`text_postings_scanned`, `text_posting_blocks_visited`,
+`text_posting_blocks_skipped`, `text_candidates_scored`, `text_state_lookups`,
+`text_norm_lookups`, `text_match_details_built`, `documents_fetched`,
 `documents_missing`, `full_document_scan_fallbacks`, `truncated`, `fail_closed`,
 and `fail_closed_reason`, plus text-only aliases and scan/score/fetch timing
-fields. `TextCandidatesScored` counts the full bounded scored candidate set;
+fields. v1 reports posting-block counters as zero; v2 PRs must populate them.
+`TextCandidatesScored` counts the full bounded scored candidate set;
 `TextCandidatesReturned` counts ranked results/candidates actually returned after
 TopK truncation.
 

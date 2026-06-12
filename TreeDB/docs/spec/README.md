@@ -89,6 +89,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     versioned postings/text-state/text-stats storage, backfill/drop, write-path
     maintenance, bounded SearchText postings scans, BM25F-style ranking,
     top-K document fetch, and fail-closed search guardrails.
+- `TreeDB/docs/spec/collection-text-v2-contract.md`
+  - issue #2623 text-v2 production contract: B-tree-native storage boundaries,
+    v1/v2 version and rollout vocabulary, reserved v2 roots, required counters,
+    production benchmark matrix, target envelope, and fail-closed rollout gates.
 - `TreeDB/docs/spec/write-path-and-durability.md`
   - write pipeline and durability semantics for all durability modes.
 - `TreeDB/docs/spec/recovery.md`
