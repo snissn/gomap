@@ -181,13 +181,15 @@ func appendSingleTextV2IndexMutationDeltas(
 	termsRootName := collectionTextV2TermsRootName(catalog.meta.Name, def.Name)
 	postingBlocksRootName := collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name)
 	normRootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
+	positionsRootName := collectionTextV2PositionsRootName(catalog.meta.Name, def.Name)
 	docIDTable := newCollectionRunTable(len(orderedMutations))
 	docMapTable := newCollectionRunTable(0)
 	termsTable := newCollectionRunTable(0)
 	postingBlocksTable := newCollectionRunTable(0)
 	normTable := newCollectionRunTable(0)
+	positionsTable := newCollectionRunTable(0)
 	generationsTable := newCollectionRunTable(1)
-	deltaOwned := []memtable.Table{docIDTable, docMapTable, termsTable, postingBlocksTable, normTable, generationsTable}
+	deltaOwned := []memtable.Table{docIDTable, docMapTable, termsTable, postingBlocksTable, normTable, positionsTable, generationsTable}
 	success := false
 	defer func() {
 		if !success {
@@ -206,7 +208,6 @@ func appendSingleTextV2IndexMutationDeltas(
 	if nextGeneration == 0 {
 		return errMalformedTextStorage("text-v2 root generation overflow")
 	}
-	analysisDef := textV2ScoringAnalysisDefinition(def)
 
 	for _, mutation := range orderedMutations {
 		if len(mutation.documentID) == 0 {
@@ -228,13 +229,13 @@ func appendSingleTextV2IndexMutationDeltas(
 			if err != nil {
 				return err
 			}
-			oldState, err = analyzeTextIndexStoredDocument(analysisDef, oldDocument, opts)
+			oldState, err = analyzeTextIndexStoredDocument(def, oldDocument, opts)
 			if err != nil {
 				return err
 			}
 		}
 		if mutation.setNew {
-			newState, newAnalysis, err = analyzeTextIndexStoredDocumentWithAnalysis(analysisDef, mutation.newDocument, opts)
+			newState, newAnalysis, err = analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
 			if err != nil {
 				return err
 			}
@@ -289,8 +290,14 @@ func appendSingleTextV2IndexMutationDeltas(
 		if err := upsertTextV2NormMutation(snap, catalog, normRootName, normBlocks, nextDoc, lengths); err != nil {
 			return err
 		}
+		if mutation.deleteOld {
+			deleteTextV2PositionEntriesForDocument(positionsTable, def, current.Ordinal, oldState)
+		}
 		if mutation.setNew {
 			if err := postingBuilder.addDocument(def, nextDoc.Ordinal, nextDoc.Generation, newAnalysis); err != nil {
+				return err
+			}
+			if _, _, err := addTextV2PositionEntriesForDocument(positionsTable, def, nextDoc.Ordinal, nextDoc.Generation, newAnalysis); err != nil {
 				return err
 			}
 		}
@@ -354,6 +361,9 @@ func appendSingleTextV2IndexMutationDeltas(
 		return err
 	}
 	if err := appendIfNonEmpty(normRootName, normTable); err != nil {
+		return err
+	}
+	if err := appendIfNonEmpty(positionsRootName, positionsTable); err != nil {
 		return err
 	}
 	if err := appendIfNonEmpty(generationsRootName, generationsTable); err != nil {

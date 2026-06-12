@@ -242,6 +242,67 @@ Required validation/fail-closed invariants:
   summaries, or status generation/ordinal bounds violations make the root
   corrupt for text-v2 inspection and must fail closed.
 
+Text-v2 optional positions root name:
+
+```text
+<collection>/text-v2-positions/<indexName>
+```
+
+The positions root is format-only unless the text index was created with
+`StorePositions=true`. It remains an ordinary ordered root using the text index
+root storage policy; inline values and value-log pointer-backed values are
+managed by normal TreeDB root/value-log maintenance. Posting scoring blocks do
+not contain positions or offsets.
+
+Position keys identify one current-or-historical document ordinal and term:
+
+```text
+u8  KeyVersion = 2
+u8  KeyKind    = 0x22  // text-v2 position/detail payload
+u64 OrdinalBE
+uvarint TermLen
+bytes Term[TermLen]
+```
+
+Position values are versioned and fail closed:
+
+```text
+u8      ValueVersion  = 1
+uvarint FormatVersion = 1
+uvarint Ordinal
+uvarint Generation
+uvarint TermLen
+bytes   Term[TermLen]
+uvarint FieldEntryCount
+
+// repeated FieldEntryCount times, sorted by field index
+uvarint FieldIndex
+uvarint FieldTermFrequency
+uvarint PositionCount
+uvarint Positions[PositionCount]
+uvarint OffsetCount
+repeated OffsetCount: uvarint Start, uvarint End
+```
+
+Validation invariants:
+
+- key/value ordinal and term must match, and ordinal/generation must be non-zero
+  and within the text-v2 status snapshot;
+- field indexes are strictly increasing and within the index field list;
+- `FieldTermFrequency` is non-zero, `PositionCount == FieldTermFrequency`, and
+  positions are strictly increasing within each field;
+- offsets are absent when `StoreOffsets=false`, or have exactly one
+  non-negative `end >= start` offset per position when `StoreOffsets=true`;
+- detailed/compact materialization validates only returned final results, while
+  score-only search does not read this lane.
+
+Unsupported versions, malformed varints, trailing bytes, missing final-result
+payloads for positions-enabled indexes, generation/key/value mismatches, field
+frequency mismatches with the scoring posting, corrupt positions/offsets, or
+entries present for an index without `StorePositions` make the text-v2 positions
+lane corrupt and must fail closed when inspected or when detailed materialization
+needs the affected payload.
+
 ## 4. Value Pointer Encoding (`page.ValuePtr`)
 
 Base struct:

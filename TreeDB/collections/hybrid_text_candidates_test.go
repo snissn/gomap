@@ -28,15 +28,26 @@ func TestSearchHybridTextCandidatesNoDocumentsStableIDs2503(t *testing.T) {
 		t.Fatalf("SearchHybridTextCandidates: %v", err)
 	}
 
-	assertHybridTextCandidateBasics2503(t, got.Candidates, "lexical")
+	assertHybridTextCandidateBasics2503(t, got.Candidates, "lexical", false)
 	if len(got.Candidates) != 2 {
 		t.Fatalf("candidates=%d want 2", len(got.Candidates))
 	}
 	if string(got.Candidates[0].ID) != "d1" || string(got.Candidates[1].ID) != "d2" || got.Candidates[0].Score <= got.Candidates[1].Score {
 		t.Fatalf("candidates=%+v want d1 above d2 by BM25F", got.Candidates)
 	}
-	if got.Candidates[0].TextMatches[0].Field != "body" || !slicesEqualStrings(got.Candidates[0].TextMatches[0].Terms, []string{"refund"}) {
-		t.Fatalf("candidate[0] matches=%+v want body/refund attribution", got.Candidates[0].TextMatches)
+	if len(got.Candidates[0].TextMatches) != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
+		t.Fatalf("candidate[0] matches=%+v stats=%+v want default score-only hybrid text candidates", got.Candidates[0].TextMatches, got.Stats)
+	}
+	explicitMatches, err := col.SearchHybridTextCandidates(HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 2, IncludeTextMatches: true})
+	if err != nil {
+		t.Fatalf("SearchHybridTextCandidates IncludeTextMatches: %v", err)
+	}
+	assertHybridTextCandidateBasics2503(t, explicitMatches.Candidates, "lexical", true)
+	if explicitMatches.Candidates[0].TextMatches[0].Field != "body" || !slicesEqualStrings(explicitMatches.Candidates[0].TextMatches[0].Terms, []string{"refund"}) {
+		t.Fatalf("explicit candidate[0] matches=%+v want body/refund attribution", explicitMatches.Candidates[0].TextMatches)
+	}
+	if explicitMatches.Stats.TextMatchDetailsBuilt != uint64(len(explicitMatches.Candidates)) || explicitMatches.Stats.DocumentsFetched != 0 || explicitMatches.Stats.FullDocumentScanFallbacks != 0 {
+		t.Fatalf("explicit stats=%+v want bounded opt-in match details and no docs", explicitMatches.Stats)
 	}
 	if got.Stats.TextCandidatesRequested != uint64(opts.CandidateLimit) || got.Stats.TextCandidatesReturned != 2 || got.Stats.TextPostingsScanned != 2 || got.Stats.TextCandidatesScored != 2 {
 		t.Fatalf("stats=%+v want requested=2 returned=2 postings=2 scored=2", got.Stats)
@@ -224,7 +235,7 @@ func TestHybridTextCandidatesRejectDocumentMaterialization2503(t *testing.T) {
 	}
 }
 
-func assertHybridTextCandidateBasics2503(tb testing.TB, got []HybridSearchCandidate, indexName string) {
+func assertHybridTextCandidateBasics2503(tb testing.TB, got []HybridSearchCandidate, indexName string, wantMatches bool) {
 	tb.Helper()
 	for i, candidate := range got {
 		if candidate.Source != HybridCandidateSourceText || candidate.IndexName != indexName || candidate.SourceRank != i+1 || candidate.ScoreKind != HybridScoreKindBM25F {
@@ -236,8 +247,11 @@ func assertHybridTextCandidateBasics2503(tb testing.TB, got []HybridSearchCandid
 		if len(candidate.ID) == 0 || cap(candidate.ID) != len(candidate.ID) {
 			tb.Fatalf("candidate[%d] id len/cap=%d/%d want response-owned cap-isolated stable ID", i, len(candidate.ID), cap(candidate.ID))
 		}
-		if len(candidate.TextMatches) == 0 {
+		if wantMatches && len(candidate.TextMatches) == 0 {
 			tb.Fatalf("candidate[%d]=%+v want text match attribution", i, candidate)
+		}
+		if !wantMatches && len(candidate.TextMatches) != 0 {
+			tb.Fatalf("candidate[%d]=%+v want score-only text candidate", i, candidate)
 		}
 	}
 }

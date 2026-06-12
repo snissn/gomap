@@ -60,6 +60,8 @@ depend on a scan-all-documents fallback.
   - `IndexName`: text index name.
   - `Query`: text-query string. Grammar/analyzer semantics are owned by #1764.
   - `CandidateLimit`: lexical candidate budget before fusion.
+  - `IncludeTextMatches`: optional compact field/term attribution. The zero
+    value keeps text candidate generation score-only.
 - `Vector *HybridVectorQuery`: vector candidate source.
   - `IndexName`, `Query`, `EfSearch`, `QueryMode`, `QuantizedIndexName`, and
     `QuantizedRerankCandidates` mirror the existing vector-index vocabulary.
@@ -98,8 +100,8 @@ Every `HybridSearchCandidate` MUST carry:
 - `SourceRank`: one-based rank within that source result list;
 - `Score`: source-native score after conversion to the shared orientation;
 - `ScoreKind`: `bm25`, `bm25f`, or `vector_similarity`;
-- `TextMatches`: matched text fields/terms where the lexical source can provide
-  them.
+- `TextMatches`: matched text fields/terms only when the lexical source was
+  explicitly asked to include compact match summaries.
 
 Final `HybridSearchResult` values carry:
 

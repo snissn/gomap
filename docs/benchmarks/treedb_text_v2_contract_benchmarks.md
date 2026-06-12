@@ -127,7 +127,7 @@ Report text write counters:
 
 - `posting_entries/op`, `state_entries/op`, `stats_entries/op` for v1 rows;
 - `v2_docid_entries/op`, `v2_docmap_blocks/op`, `v2_posting_blocks/op`,
-  `v2_norm_blocks/op`, and `v2_term_stats/op` for v2 rows;
+  `v2_norm_blocks/op`, `v2_position_entries/op`, and `v2_term_stats/op` for v2 rows;
 - `posting_blocks/doc`, `high_df_posting_blocks/op`,
   `high_df_posting_blocks/doc`, and `rewritten_blocks/doc` (M3 rewrite count is `0`);
 - `index_entries/doc` for live text-root entries after the operation;
@@ -262,6 +262,44 @@ Report the same text counters as the search scale rows, especially
 `posting_blocks_skipped/search`, `candidates_scored/search`,
 `threshold_updates/search`, and `blockmax_fallbacks/search`.
 
+## M6 lazy details rows
+
+Benchmark name: `BenchmarkTextV2LazyDetails2629`.
+
+This row compares the exact same explicit-v2 common-term fixture in score-only
+mode and detailed mode. The score-only subbenchmark must keep
+`match_details/search=0`, `docs_fetched/search=0`, and `state_lookups/search=0`.
+The detailed subbenchmark must keep `docs_fetched/search=0` and
+`state_lookups/search=0`, with `match_details/search == topk/search` (or the
+returned result count when fewer than top-K results exist), proving detail work is
+bounded to final results rather than all scored candidates.
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_LAZY_DETAILS_DOCS=10000 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2LazyDetails2629/(score_only|detailed_topk)$' \
+  -benchmem \
+  -benchtime=5x \
+  -count=3 \
+  | tee "$OUT/text_v2_lazy_details_10k.txt"
+```
+
+Optional larger local artifact:
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_LAZY_DETAILS_DOCS=100000 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2LazyDetails2629/(score_only|detailed_topk)$' \
+  -benchmem \
+  -benchtime=1x \
+  -count=1 \
+  | tee "$OUT/text_v2_lazy_details_100k.txt"
+```
+
 ## Concurrent serving/load row
 
 Benchmark names: `BenchmarkTextV2ContractConcurrentServing2623` for the M0
@@ -363,8 +401,11 @@ go tool pprof -top "$OUT/text_write_mem.pprof" > "$OUT/text_write_mem_top.txt"
 Known current v1 hot spots to look for include `executeTextSearchAtSnapshot`,
 `scanTextSearchPostingsTerm`, `collectionGetAppendAtCatalogRoot`,
 `decodeTextDocumentStateFieldLengths`, `textSearchCandidateMatchDetails`,
-`appendTextIndex*Deltas`, `analyzeTextIndexField`, `addTextPostingsForDocument`,
-and text posting/state/stats encoders.
+`hybridTextMatchesFromSearchResult`, `appendTextIndex*Deltas`,
+`analyzeTextIndexField`, `addTextPostingsForDocument`, and text
+posting/state/stats encoders. After M6, default hybrid candidate rows should no
+longer allocate `textSearchCandidateMatchDetails` / `hybridTextMatchesFromSearchResult`
+work unless `IncludeTextMatches` is explicitly enabled.
 
 ## Interpreting M0 rows
 

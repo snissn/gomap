@@ -18,6 +18,7 @@ type textV2SearchContext struct {
 	termsRootName         string
 	postingBlocksRootName string
 	normBlocksRootName    string
+	positionsRootName     string
 	docMapRootName        string
 	status                textV2IndexStatusValue
 	corpus                textV2CorpusStatsValue
@@ -52,6 +53,7 @@ func (p textV2SearchPostingValue) fieldFrequency(i int) uint32 {
 
 type textV2SearchCandidate struct {
 	ordinal    uint64
+	generation uint64
 	documentID []byte
 	postings   [2]textV2SearchCandidatePosting
 	overflow   []textV2SearchCandidatePosting
@@ -193,8 +195,12 @@ func (s *textV2SearchOrdinalAllowSet) intersects(first, last uint64) bool {
 
 type textV2SearchTopCandidate struct {
 	ordinal    uint64
+	generation uint64
 	documentID []byte
 	score      float64
+	term       string
+	posting    textV2SearchPostingValue
+	hasPosting bool
 }
 
 type textV2SearchTopK struct {
@@ -332,6 +338,7 @@ func executeTextV2SearchAtSnapshot(
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
+		candidate.generation = norm.Generation
 		candidate.documentID = append(candidate.documentID[:0], docMap.DocumentID...)
 		candidate.score = score
 		scored = append(scored, candidate)
@@ -355,16 +362,19 @@ func executeTextV2SearchAtSnapshot(
 	}
 	response.Stats.TextCandidatesReturned = uint64(len(scored))
 	response.Results = make([]TextSearchResult, len(scored))
-	_ = resultMode // v2 detailed match materialization is deferred to #2629; M4 returns score-only rows.
 	for i, candidate := range scored {
 		id := append([]byte(nil), candidate.documentID...)
-		response.Results[i] = TextSearchResult{
+		result := TextSearchResult{
 			DocumentID: id,
 			IndexName:  idx.Name,
 			Rank:       i + 1,
 			Score:      candidate.score,
 			ScoreKind:  HybridScoreKindBM25F,
 		}
+		if err := populateTextV2SearchResultMatchesFromCandidate(snap, catalog, ctx, idx, candidate, resultMode, &result, &response.Stats); err != nil {
+			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+		}
+		response.Results[i] = result
 	}
 	if opts.IncludeDocuments && len(response.Results) > 0 {
 		if err := fetchTextSearchResultDocuments(c, snap, catalog, opts, &response); err != nil {
@@ -414,6 +424,7 @@ func newTextV2SearchContext(snap *backenddb.Snapshot, catalog *collectionCatalog
 		termsRootName:         termsRootName,
 		postingBlocksRootName: collectionTextV2PostingBlocksRootName(catalog.meta.Name, idx.Name),
 		normBlocksRootName:    collectionTextV2NormBlocksRootName(catalog.meta.Name, idx.Name),
+		positionsRootName:     collectionTextV2PositionsRootName(catalog.meta.Name, idx.Name),
 		docMapRootName:        collectionTextV2DocMapRootName(catalog.meta.Name, idx.Name),
 		status:                status,
 		corpus:                corpus,
@@ -656,7 +667,13 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
 			beforeThreshold, beforeReady := top.threshold()
-			top.add(textV2SearchTopCandidate{ordinal: entry.Ordinal, documentID: docMap.DocumentID, score: score})
+			topCandidate := textV2SearchTopCandidate{ordinal: entry.Ordinal, generation: entry.Generation, documentID: docMap.DocumentID, score: score}
+			if resultMode != textSearchResultScoreOnly {
+				topCandidate.term = term
+				topCandidate.posting = posting
+				topCandidate.hasPosting = true
+			}
+			top.add(topCandidate)
 			response.Stats.TextCandidatesScored++
 			afterThreshold, afterReady := top.threshold()
 			if afterReady && (!beforeReady || afterThreshold > beforeThreshold) {
@@ -684,15 +701,18 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 	}
 	response.Stats.TextCandidatesReturned = uint64(len(top.candidates))
 	response.Results = make([]TextSearchResult, len(top.candidates))
-	_ = resultMode // v2 detailed match materialization is deferred to #2629; M5 remains score-only.
 	for i, candidate := range top.candidates {
-		response.Results[i] = TextSearchResult{
+		result := TextSearchResult{
 			DocumentID: append([]byte(nil), candidate.documentID...),
 			IndexName:  idx.Name,
 			Rank:       i + 1,
 			Score:      candidate.score,
 			ScoreKind:  HybridScoreKindBM25F,
 		}
+		if err := populateTextV2SearchResultMatchesFromTopCandidate(snap, catalog, ctx, idx, candidate, resultMode, &result, &response.Stats); err != nil {
+			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+		}
+		response.Results[i] = result
 	}
 	if opts.IncludeDocuments && len(response.Results) > 0 {
 		if err := fetchTextSearchResultDocuments(c, snap, catalog, opts, &response); err != nil {
@@ -982,6 +1002,111 @@ func scoreTextV2SearchCandidate(candidate *textV2SearchCandidate, terms []string
 		}
 	}
 	return score, nil
+}
+
+func populateTextV2SearchResultMatchesFromCandidate(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, idx TextIndexDefinition, candidate *textV2SearchCandidate, resultMode textSearchResultMode, result *TextSearchResult, stats *TextSearchStats) error {
+	if resultMode == textSearchResultScoreOnly || candidate == nil || result == nil {
+		return nil
+	}
+	includeLegacy := resultMode == textSearchResultFull
+	matchedTerms, matchedFields, matches := textV2SearchCandidateMatchDetails(candidate, ctx, candidate.generation, includeLegacy)
+	if resultMode == textSearchResultFull && idx.StorePositions {
+		for postingIdx := 0; postingIdx < candidate.postingCount(); postingIdx++ {
+			entry := candidate.postingAt(postingIdx)
+			if entry.value.generation != candidate.generation {
+				continue
+			}
+			if err := validateTextV2PositionPostingAtSnapshot(snap, catalog, ctx, idx, candidate.ordinal, candidate.generation, entry.term, entry.value); err != nil {
+				return err
+			}
+		}
+	}
+	result.MatchedTerms = matchedTerms
+	result.MatchedFields = matchedFields
+	result.TextMatches = matches
+	if stats != nil {
+		stats.TextMatchDetailsBuilt++
+	}
+	return nil
+}
+
+func populateTextV2SearchResultMatchesFromTopCandidate(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, idx TextIndexDefinition, candidate textV2SearchTopCandidate, resultMode textSearchResultMode, result *TextSearchResult, stats *TextSearchStats) error {
+	if resultMode == textSearchResultScoreOnly || result == nil {
+		return nil
+	}
+	if !candidate.hasPosting || candidate.posting.generation != candidate.generation {
+		return errMalformedTextStorage("text-v2 top candidate missing detail posting for ordinal %d", candidate.ordinal)
+	}
+	includeLegacy := resultMode == textSearchResultFull
+	matchedTerms, matchedFields, matches := textV2SearchPostingMatchDetails(candidate.term, candidate.posting, ctx, includeLegacy)
+	if resultMode == textSearchResultFull && idx.StorePositions {
+		if err := validateTextV2PositionPostingAtSnapshot(snap, catalog, ctx, idx, candidate.ordinal, candidate.generation, candidate.term, candidate.posting); err != nil {
+			return err
+		}
+	}
+	result.MatchedTerms = matchedTerms
+	result.MatchedFields = matchedFields
+	result.TextMatches = matches
+	if stats != nil {
+		stats.TextMatchDetailsBuilt++
+	}
+	return nil
+}
+
+func textV2SearchCandidateMatchDetails(candidate *textV2SearchCandidate, ctx *textV2SearchContext, generation uint64, includeLegacyLists bool) ([]string, []string, []TextSearchMatch) {
+	var inline [8]textSearchMatchPair
+	pairs := inline[:0]
+	if candidate == nil || ctx == nil {
+		return nil, nil, nil
+	}
+	for postingIdx := 0; postingIdx < candidate.postingCount(); postingIdx++ {
+		entry := candidate.postingAt(postingIdx)
+		if entry.value.generation != generation {
+			continue
+		}
+		pairs = appendTextV2PostingMatchPairs(pairs, entry.term, entry.value, ctx)
+	}
+	return textSearchMatchDetailsFromPairs(pairs, includeLegacyLists)
+}
+
+func textV2SearchPostingMatchDetails(term string, posting textV2SearchPostingValue, ctx *textV2SearchContext, includeLegacyLists bool) ([]string, []string, []TextSearchMatch) {
+	var inline [8]textSearchMatchPair
+	pairs := appendTextV2PostingMatchPairs(inline[:0], term, posting, ctx)
+	return textSearchMatchDetailsFromPairs(pairs, includeLegacyLists)
+}
+
+func appendTextV2PostingMatchPairs(pairs []textSearchMatchPair, term string, posting textV2SearchPostingValue, ctx *textV2SearchContext) []textSearchMatchPair {
+	if ctx == nil {
+		return pairs
+	}
+	for fieldIdx, field := range ctx.fieldNames {
+		if posting.fieldFrequency(fieldIdx) == 0 {
+			continue
+		}
+		pairs = appendTextSearchMatchPair(pairs, textSearchMatchPair{field: field, term: term})
+	}
+	return pairs
+}
+
+func validateTextV2PositionPostingAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, idx TextIndexDefinition, ordinal, generation uint64, term string, posting textV2SearchPostingValue) error {
+	if ctx == nil {
+		return errMalformedTextStorage("text-v2 position validation missing search context")
+	}
+	raw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, ctx.positionsRootName, encodeTextV2PositionKey(ordinal, term), nil)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errMalformedTextStorage("missing text-v2 position entry for ordinal %d term %q", ordinal, term)
+	}
+	value, err := decodeTextV2PositionValue(raw)
+	if err != nil {
+		return err
+	}
+	if value.Ordinal != ordinal || value.Generation != generation || value.Term != term {
+		return errMalformedTextStorage("text-v2 position key/value identity mismatch for ordinal %d term %q", ordinal, term)
+	}
+	return validateTextV2PositionValueMatchesPosting(value, idx, posting)
 }
 
 func decodeTextV2SearchNormBlock(raw []byte) (textV2SearchNormBlock, error) {

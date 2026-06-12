@@ -238,8 +238,8 @@ func TestCollectionCreateTextV2IndexBackfillsOrdinalsNormsStatsAndReopens2624(t 
 	if err != nil {
 		t.Fatalf("v2 SearchText: %v", err)
 	}
-	if len(search.Results) != 1 || string(search.Results[0].DocumentID) != "d1" || len(search.Results[0].TextMatches) != 0 || search.Stats.TextMatchDetailsBuilt != 0 || search.Stats.TextStateLookups != 0 {
-		t.Fatalf("v2 SearchText response=%+v want score-only d1 without match/state work", search)
+	if len(search.Results) != 1 || string(search.Results[0].DocumentID) != "d1" || len(search.Results[0].TextMatches) == 0 || search.Stats.TextMatchDetailsBuilt != uint64(len(search.Results)) || search.Stats.TextStateLookups != 0 {
+		t.Fatalf("v2 SearchText response=%+v want lazy detailed d1 without text-state work", search)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
