@@ -831,7 +831,7 @@ func searchMetaHasSources(meta map[string]any, sources ...string) bool {
 	return true
 }
 
-func newTestService(t *testing.T) (*Service, *backenddb.DB) {
+func newTestService(t testing.TB) (*Service, *backenddb.DB) {
 	t.Helper()
 	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
 	if err != nil {

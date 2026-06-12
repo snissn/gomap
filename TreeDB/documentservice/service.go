@@ -3,6 +3,8 @@ package documentservice
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -545,6 +547,9 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 		return BenchmarkVectorSearchResponse{}, serviceError(CodeInvalidRequest, "ef_search and quantized_rerank_candidates must be non-negative")
 	}
 	if err := validateBenchmarkVectorStatsMode(req.StatsMode); err != nil {
+		return BenchmarkVectorSearchResponse{}, err
+	}
+	if err := normalizeBenchmarkVectorQueryEmbedding(&req); err != nil {
 		return BenchmarkVectorSearchResponse{}, err
 	}
 	if err := validateEmbedding("query_embedding", req.QueryEmbedding, info.Dimension, info.Metric); err != nil {
@@ -1326,6 +1331,32 @@ func validateBenchmarkVectorStatsMode(mode collections.VectorIndexSearchStatsMod
 	default:
 		return serviceErrorf(CodeInvalidRequest, "unsupported benchmark vector stats_mode %q", mode)
 	}
+}
+
+func normalizeBenchmarkVectorQueryEmbedding(req *BenchmarkVectorSearchRequest) error {
+	if req == nil {
+		return nil
+	}
+	encoded := strings.TrimSpace(req.QueryEmbeddingF32LEBase64)
+	if encoded == "" {
+		return nil
+	}
+	if len(req.QueryEmbedding) > 0 {
+		return serviceError(CodeInvalidRequest, "benchmark vector search accepts either query_embedding or query_embedding_f32_le_b64, not both")
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return wrapServiceError(CodeInvalidRequest, "decode query_embedding_f32_le_b64 failed", err)
+	}
+	if len(raw)%4 != 0 {
+		return serviceErrorf(CodeInvalidRequest, "query_embedding_f32_le_b64 decoded byte length %d is not a multiple of 4", len(raw))
+	}
+	query := make([]float32, len(raw)/4)
+	for i := range query {
+		query[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
+	}
+	req.QueryEmbedding = query
+	return nil
 }
 
 func validateBenchmarkVectorSearchRequestShape(mode BenchmarkVectorQueryMode, req BenchmarkVectorSearchRequest) error {

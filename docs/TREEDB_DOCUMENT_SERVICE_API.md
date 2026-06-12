@@ -382,6 +382,19 @@ POST /v1/indexes/{index}/search/vector-index
 }
 ```
 
+For high-QPS clients that already hold float32 query vectors, the same route
+also accepts a typed little-endian float32 payload encoded as base64. Supply
+exactly one of `query_embedding` or `query_embedding_f32_le_b64`:
+
+```json
+{
+  "query_embedding_f32_le_b64": "AACAPwAAAAAAAAAAAAA=",
+  "top_k": 10,
+  "ef_search": 64,
+  "query_mode": "exact"
+}
+```
+
 Supported `query_mode` values are `exact`, `quantized_only`, and
 `quantized_rerank`. Quantized modes require a declared quantized index name and
 fail closed when assets are missing, invalid, stale, or unavailable. Responses

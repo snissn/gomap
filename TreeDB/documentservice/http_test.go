@@ -2,6 +2,8 @@ package documentservice
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -170,6 +172,57 @@ func TestHTTPBenchmarkLifecycleRoutesAndExactVectorShape(t *testing.T) {
 			t.Fatalf("exact /search/vector missing field %q in shape=%+v", required, exactShape)
 		}
 	}
+}
+
+func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+
+	postJSON(t, handler, "/v1/indexes/bench_b64/reset", ResetIndexRequest{
+		Dimension: 2,
+		DropOld:   true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+		},
+	}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/bench_b64/documents/upsert", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "a", Content: "alpha", Embedding: []float32{1, 0}},
+		{ID: "b", Content: "beta", Embedding: []float32{0, 1}},
+	}, DeferVectorIndexRebuild: true}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/bench_b64/optimize", OptimizeIndexRequest{}, http.StatusOK, nil)
+
+	var benchmark BenchmarkVectorSearchResponse
+	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
+		"query_embedding_f32_le_b64": encodeFloat32LEBase64ForTest([]float32{1, 0}),
+		"top_k":                      1,
+		"ef_search":                  8,
+	}, http.StatusOK, &benchmark)
+	if !benchmark.NoDocuments || len(benchmark.Results) != 1 || benchmark.Results[0].ID != "a" || benchmark.Stats.DocumentsFetched != 0 {
+		t.Fatalf("benchmark vector response=%+v stats=%+v", benchmark, benchmark.Stats)
+	}
+
+	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
+		"query_embedding":            []float32{1, 0},
+		"query_embedding_f32_le_b64": encodeFloat32LEBase64ForTest([]float32{1, 0}),
+		"top_k":                      1,
+	}, http.StatusBadRequest, nil)
+	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
+		"query_embedding_f32_le_b64": "not-base64",
+		"top_k":                      1,
+	}, http.StatusBadRequest, nil)
+	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
+		"query_embedding_f32_le_b64": base64.StdEncoding.EncodeToString([]byte{1, 2}),
+		"top_k":                      1,
+	}, http.StatusBadRequest, nil)
+}
+
+func encodeFloat32LEBase64ForTest(values []float32) string {
+	raw := make([]byte, len(values)*4)
+	for i, value := range values {
+		binary.LittleEndian.PutUint32(raw[i*4:], math.Float32bits(value))
+	}
+	return base64.StdEncoding.EncodeToString(raw)
 }
 
 func postJSON(t *testing.T, handler http.Handler, path string, body any, wantStatus int, out any) {
