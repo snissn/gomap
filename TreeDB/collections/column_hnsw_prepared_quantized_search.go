@@ -4,6 +4,55 @@ import "fmt"
 
 var errColumnHNSWPreparedQuantizedTraversalUnavailable = fmt.Errorf("%w: scalar_u8 hnsw prepared quantized traversal unavailable", ErrVectorIndexSearchUnavailable)
 
+type columnHNSWPreparedScalarU8ScorePlane struct {
+	scorer columnVectorGraphScalarU8QuantizedScorer
+	ready  bool
+}
+
+func (p *columnHNSWPreparedScalarU8ScorePlane) kind() columnHNSWPreparedTraversalScorePlaneKind {
+	return columnHNSWPreparedTraversalScorePlaneKindQuantized
+}
+
+func (p *columnHNSWPreparedScalarU8ScorePlane) prepareForHNSWPreparedTraversal(pack *columnHNSWSearchPackPreparedView, query []float32, opts columnHNSWPreparedTraversalOptions, scratch *columnVectorGraphNativeSearchScratch) error {
+	_ = opts
+	_ = scratch
+	if p == nil || !p.ready || pack == nil {
+		return errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	if len(query) != pack.Header.Dimensions || p.scorer.dims != pack.Header.Dimensions || p.scorer.codeRows.Rows() != pack.Header.Rows {
+		return errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.validatePrepared()
+}
+
+func (p *columnHNSWPreparedScalarU8ScorePlane) scoreOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if p == nil || !p.ready {
+		return 0, errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.scoreOrdinal(ordinal, scratch, stats)
+}
+
+func (p *columnHNSWPreparedScalarU8ScorePlane) scoreOrdinals(ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	if p == nil || !p.ready {
+		return dst[:0], errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.scoreOrdinals(ordinals, dst, scratch, stats)
+}
+
+func (p *columnHNSWPreparedScalarU8ScorePlane) scoreRowIDsPrevalidated(rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	if p == nil || !p.ready {
+		return dst[:0], errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.scoreRowIDsPrevalidated(rowIDs, dst, scratch, stats)
+}
+
+func (p *columnHNSWPreparedScalarU8ScorePlane) scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+	if p == nil || !p.ready {
+		return 0, errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs, topK, scratch, stats)
+}
+
 func collectionScalarU8PreparedTraversalPackForReader(reader *columnVectorGraphPhysicalRowReader, queryMode columnVectorGraphNativeSearchQueryMode, statsMode columnVectorGraphNativeSearchStatsMode, quantizedIndexName string) (*columnHNSWSearchPackPreparedView, bool) {
 	if reader == nil || !queryMode.quantized() || !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
 		return nil, false
@@ -115,13 +164,14 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosineScalarU8PreparedTravers
 			rerankCandidateLimit = rowCount
 		}
 	}
-	scorer, err := r.prepareQuantizedScorer(queryMode, opts.QuantizedIndexName, query, queryInvNorm, scratch)
+	scratch.preparedScalarU8Plane.ready = false
+	scorer, err := r.prepareScalarU8QuantizedScorer(queryMode, opts.QuantizedIndexName, query, queryInvNorm, scratch)
 	if err != nil {
 		recordColumnVectorGraphQuantizedAssetErrorStats(&setupStats, err)
 		return nil, setupStats, err
 	}
-	scratch.searchPlan.quantizedScorer = scorer
-	scratch.preparedQuantizedPlane.scorer = &scratch.searchPlan.quantizedScorer
+	scratch.preparedScalarU8Plane.scorer = scorer
+	scratch.preparedScalarU8Plane.ready = true
 	setupStats.QuantizedScorerActive = 1
 	if r.preparedSearch != nil && r.preparedSearch.ready() {
 		setupStats.PreparedGraphSearchViews = 1
@@ -142,7 +192,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosineScalarU8PreparedTravers
 		OmitResultMaterialization:            opts.OmitResultMaterialization || queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank,
 		SuppressOmittedResultMaterialization: queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank,
 	}
-	results, stats, err := pack.searchCosinePreparedScorePlane(query, packOpts, scratch, &scratch.preparedQuantizedPlane)
+	results, stats, err := pack.searchCosinePreparedScorePlane(query, packOpts, scratch, &scratch.preparedScalarU8Plane)
 	columnVectorGraphApplyQuantizedPreparedTraversalSetupStats(&stats, setupStats)
 	r.populateScalarU8PreparedTraversalSearchStats(&stats)
 	if err != nil {

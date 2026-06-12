@@ -663,6 +663,205 @@ func TestColumnHNSWPreparedTraversalScorePlaneSeam2585(t *testing.T) {
 	}
 }
 
+type testColumnHNSWPreparedTraversalRowIDScorePlane2653 struct {
+	rows           int
+	singleCalls    int
+	genericBatches int
+	rowIDBatches   int
+	fusedBatches   int
+}
+
+func (p *testColumnHNSWPreparedTraversalRowIDScorePlane2653) kind() columnHNSWPreparedTraversalScorePlaneKind {
+	return columnHNSWPreparedTraversalScorePlaneKindQuantized
+}
+
+func (p *testColumnHNSWPreparedTraversalRowIDScorePlane2653) prepareForHNSWPreparedTraversal(pack *columnHNSWSearchPackPreparedView, query []float32, opts columnHNSWPreparedTraversalOptions, scratch *columnVectorGraphNativeSearchScratch) error {
+	_ = query
+	_ = opts
+	_ = scratch
+	if pack == nil {
+		return errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	p.rows = pack.Header.Rows
+	return nil
+}
+
+func (p *testColumnHNSWPreparedTraversalRowIDScorePlane2653) scoreOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	_ = scratch
+	_ = stats
+	p.singleCalls++
+	return p.score(uint32(ordinal)), nil
+}
+
+func (p *testColumnHNSWPreparedTraversalRowIDScorePlane2653) scoreOrdinals(ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	_ = scratch
+	_ = stats
+	p.genericBatches++
+	if cap(dst) < len(ordinals) {
+		dst = make([]float64, len(ordinals))
+	} else {
+		dst = dst[:len(ordinals)]
+	}
+	for i, ordinal := range ordinals {
+		dst[i] = p.score(uint32(ordinal))
+	}
+	return dst, nil
+}
+
+func (p *testColumnHNSWPreparedTraversalRowIDScorePlane2653) scoreRowIDsPrevalidated(rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	_ = scratch
+	_ = stats
+	p.rowIDBatches++
+	if cap(dst) < len(rowIDs) {
+		dst = make([]float64, len(rowIDs))
+	} else {
+		dst = dst[:len(rowIDs)]
+	}
+	for i, rowID := range rowIDs {
+		dst[i] = p.score(rowID)
+	}
+	return dst, nil
+}
+
+func (p *testColumnHNSWPreparedTraversalRowIDScorePlane2653) scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+	_ = stats
+	p.fusedBatches++
+	for _, rowID := range rowIDs {
+		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: p.score(rowID)}
+		if scratch.insertTop(topK, candidate) {
+			scratch.pushFrontier(candidate)
+		}
+	}
+	return len(rowIDs), nil
+}
+
+func (p *testColumnHNSWPreparedTraversalRowIDScorePlane2653) score(rowID uint32) float64 {
+	return float64(p.rows - int(rowID))
+}
+
+func TestColumnHNSWPreparedTraversalUsesRowIDScorePlane2653(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	if searcher.reader == nil || searcher.reader.hnswSearchPack == nil {
+		t.Fatal("searcher missing hnsw_search_pack_v1 prepared view")
+	}
+	plane := &testColumnHNSWPreparedTraversalRowIDScorePlane2653{}
+	var scratch columnVectorGraphNativeSearchScratch
+	results, _, err := searcher.reader.hnswSearchPack.searchCosinePreparedScorePlane(
+		[]float32{1, 0.05, 0},
+		columnHNSWPreparedTraversalOptions{TopK: 3, EfSearch: len(rows), StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics},
+		&scratch,
+		plane,
+	)
+	if err != nil {
+		t.Fatalf("prepared traversal rowID score plane: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("results=%d want 3: %+v", len(results), results)
+	}
+	if plane.rowIDBatches+plane.fusedBatches == 0 || plane.fusedBatches == 0 {
+		t.Fatalf("rowID score plane was not used: rowIDBatches=%d fusedBatches=%d singleCalls=%d", plane.rowIDBatches, plane.fusedBatches, plane.singleCalls)
+	}
+	if plane.genericBatches != 0 {
+		t.Fatalf("generic ordinal score plane batches=%d want 0 when rowID seam is available", plane.genericBatches)
+	}
+}
+
+func TestColumnHNSWPreparedScalarU8RouteUsesTypedRowIDScorePlane2653(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	if searcher.reader == nil || searcher.reader.hnswSearchPack == nil {
+		t.Fatal("searcher missing hnsw_search_pack_v1 prepared view")
+	}
+
+	query := []float32{0.8, 0.2, 0}
+	qName := def.QuantizedIndexes[0].Name
+	opts := columnVectorGraphNativeSearchOptions{
+		TopK:               3,
+		EfSearch:           len(rows),
+		QueryMode:          columnVectorGraphNativeSearchQueryModeQuantizedOnly,
+		QuantizedIndexName: qName,
+		StatsMode:          columnVectorGraphNativeSearchStatsModeFullDiagnostics,
+	}
+	var routeScratch columnVectorGraphNativeSearchScratch
+	results, stats, err := searcher.reader.SearchCosineScalarU8PreparedTraversal(searcher.reader.hnswSearchPack, query, opts, &routeScratch)
+	if err != nil {
+		t.Fatalf("SearchCosineScalarU8PreparedTraversal: %v", err)
+	}
+	want := scalarU8QuantizedTopKForTest1926(t, rows, query, opts.TopK)
+	if len(results) != len(want) {
+		t.Fatalf("scalar_u8 route results=%d want %d: %+v", len(results), len(want), results)
+	}
+	for i := range want {
+		if !bytes.Equal(results[i].ID, want[i].ID) || math.Abs(results[i].Score-want[i].Score) > 1e-6 {
+			t.Fatalf("scalar_u8 route result[%d]=%+v want id=%q ordinal=%d score=%v", i, results[i], want[i].ID, want[i].Ordinal, want[i].Score)
+		}
+	}
+	if stats.SearchRouteQuantizedOnly != 1 || stats.SearchRouteQuantizedRerank != 0 || stats.QuantizedScorerActive != 1 || stats.PreparedScoreCalls != 0 || stats.QuantizedScoreCalls == 0 {
+		t.Fatalf("scalar_u8 route stats=%+v want typed quantized-only scoring without exact scoring", stats)
+	}
+	if !routeScratch.preparedScalarU8Plane.ready {
+		t.Fatalf("scalar_u8 route did not arm typed prepared score plane")
+	}
+	rowIDPlane, ok := any(&routeScratch.preparedScalarU8Plane).(columnHNSWPreparedTraversalRowIDScorePlane)
+	if !ok {
+		t.Fatalf("scalar_u8 prepared score plane does not implement direct rowID seam")
+	}
+	if routeScratch.preparedQuantizedPlane.scorer != nil || routeScratch.searchPlan.quantizedScorer.kind != columnVectorGraphQuantizedScorerKindNone {
+		t.Fatalf("scalar_u8 route populated generic quantized scorer scratch: prepared=%p kind=%d", routeScratch.preparedQuantizedPlane.scorer, routeScratch.searchPlan.quantizedScorer.kind)
+	}
+
+	rowIDs := []uint32{0, 1, 4}
+	ordinals := []int{0, 1, 4}
+	var rowIDScratch, ordinalScratch columnVectorGraphNativeSearchScratch
+	rowScores, err := rowIDPlane.scoreRowIDsPrevalidated(rowIDs, nil, &rowIDScratch, nil)
+	if err != nil {
+		t.Fatalf("scoreRowIDsPrevalidated: %v", err)
+	}
+	ordinalScores, err := routeScratch.preparedScalarU8Plane.scoreOrdinals(ordinals, nil, &ordinalScratch, nil)
+	if err != nil {
+		t.Fatalf("scoreOrdinals: %v", err)
+	}
+	if len(rowScores) != len(ordinalScores) {
+		t.Fatalf("rowID scores=%d ordinal scores=%d", len(rowScores), len(ordinalScores))
+	}
+	for i := range rowScores {
+		if rowScores[i] != ordinalScores[i] {
+			t.Fatalf("score[%d] rowID=%v ordinal=%v", i, rowScores[i], ordinalScores[i])
+		}
+	}
+}
+
 func TestColumnHNSWPreparedTraversalOmitReturnsRetainedShortlist2585(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
