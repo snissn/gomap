@@ -79,7 +79,10 @@ status, benchmark, and downgrade/fail-closed tests.
 - fail-closed reason when unavailable;
 - active v1 roots and reserved v2 roots;
 - required counter names;
-- rewrite/merge state and TreeDB physical reclamation path.
+- lightweight rewrite/merge readiness (`ready` for explicit v2) and TreeDB
+  physical reclamation path. Full storage validation and detailed
+  `rewrite_merge_pending`/`compacted` state are reported by
+  `TextIndexStorageStats` so health/status calls do not scan large roots.
 
 ## Reserved v2 root families
 
@@ -351,16 +354,18 @@ TreeDB maintenance (`ValueLogGC`, value-log rewrite, leaf-generation pack/GC,
 index vacuum, and `CompactStorage`). Text-v2 roots still have no standalone
 posting files/assets and no separate text-block GC domain.
 
-Readiness/status now exposes rewrite state:
+Readiness/status exposes lightweight rewrite readiness without scanning large
+roots:
 
-- `rewrite_merge_pending` when deleted-document tombstones, micro blocks, or
-  delta blocks remain;
-- `compacted` after rewrite has published sealed blocks and removed tombstones;
-- `ready` as the static explicit-v2 status before storage inspection.
+- `ready` is the static explicit-v2 `TextIndexStatus` state;
+- `rewrite_merge_pending` is reported by `TextIndexStorageStats` when
+  deleted-document tombstones, micro blocks, or delta blocks remain;
+- `compacted` is reported by `TextIndexStorageStats` after rewrite has published
+  sealed blocks and removed tombstones.
 
-`TextIndexStorageStats` reports sealed/delta/micro posting-block counts and the
-same rewrite state. Storage corruption during v2 status inspection reports a
-fail-closed status reason instead of declaring the index ready.
+`TextIndexStorageStats` performs full v2 storage inspection, reports
+sealed/delta/micro posting-block counts, and fail-closes on malformed v2 storage
+instead of declaring the inspected state ready.
 
 Default-selection decision for #2630: v2 remains an explicit opt-in
 (`TextIndexVersionV2`) while the production default stays v1. The reason is not a

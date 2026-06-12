@@ -334,20 +334,7 @@ func (c *Collection) TextIndexStatus(indexName string) (TextIndexStatus, error) 
 	if !ok {
 		return TextIndexStatus{}, ErrIndexNotFound
 	}
-	status := textIndexStatusForDefinition(catalog.meta.Name, idx)
-	if idx.Version == TextIndexVersionV2 && status.Ready && status.Rollout == TextIndexRolloutPrimary {
-		storage, err := inspectTextV2IndexStorage(snap, catalog, idx)
-		if err != nil {
-			status.Ready = false
-			status.Readable = false
-			status.Writable = false
-			status.FailClosed = true
-			status.FailClosedReason = "text_v2_storage_corrupt"
-			return status, nil
-		}
-		status.RewriteMergeState = storage.V2RewriteMergeState
-	}
-	return status, nil
+	return textIndexStatusForDefinition(catalog.meta.Name, idx), nil
 }
 
 func textIndexStatusForDefinition(collection string, def TextIndexDefinition) TextIndexStatus {

@@ -76,8 +76,8 @@ func TestTextV2RewriteMergePurgesStaleTombstonesPositionsAndReopens2630(t *testi
 	if afterStats.V2PostingBlocks >= beforeStats.V2PostingBlocks {
 		t.Fatalf("posting blocks before=%d after=%d want coalesced fewer blocks", beforeStats.V2PostingBlocks, afterStats.V2PostingBlocks)
 	}
-	if status, err := col.TextIndexStatus("lexical"); err != nil || status.RewriteMergeState != TextIndexRewriteMergeStateCompacted || status.FailClosed {
-		t.Fatalf("TextIndexStatus after=%+v err=%v want compacted ready", status, err)
+	if status, err := col.TextIndexStatus("lexical"); err != nil || status.RewriteMergeState != TextIndexRewriteMergeStateReady || status.FailClosed {
+		t.Fatalf("TextIndexStatus after=%+v err=%v want lightweight ready", status, err)
 	}
 
 	refund, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10})
@@ -415,7 +415,7 @@ func TestTextV2CoexistenceAndDefaultSelection2630(t *testing.T) {
 	if v1Status.Version != TextIndexVersionV1 || !v1Status.Ready || !slicesEqualStrings(v1Status.ActiveRootNames, collectionTextRootNames("docs", "lexical_v1")) {
 		t.Fatalf("v1 status=%+v want default v1 roots", v1Status)
 	}
-	if v2Status.Version != TextIndexVersionV2 || !v2Status.Ready || v2Status.RewriteMergeState != TextIndexRewriteMergeStateCompacted || !slicesEqualStrings(v2Status.ActiveRootNames, collectionTextV2RootNames("docs", "lexical_v2")) {
+	if v2Status.Version != TextIndexVersionV2 || !v2Status.Ready || v2Status.RewriteMergeState != TextIndexRewriteMergeStateReady || !slicesEqualStrings(v2Status.ActiveRootNames, collectionTextV2RootNames("docs", "lexical_v2")) {
 		t.Fatalf("v2 status=%+v want explicit v2 roots", v2Status)
 	}
 	v1, err := col.SearchText(TextSearchOptions{IndexName: "lexical_v1", Query: "refund", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
