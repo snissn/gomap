@@ -339,13 +339,13 @@ func assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(tb test
 		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want exact score calls equal shortlist=%d", stats, shortlist)
 	}
 	if stats.PreparedScoreCalls != shortlist64 || stats.VectorPreparedDirectViews != shortlist64 || stats.NormPreparedDirectViews != 0 {
-		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want prepared pack exact row-ID scores=%d and no prepared norm reads", stats, shortlist)
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want prepared pack exact row-ID scores=%d and no prepared norm views", stats, shortlist)
 	}
 	if dims > 0 && stats.VectorBytesRead != shortlist64*uint64(dims)*4 {
 		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want vector bytes=%d", stats, shortlist64*uint64(dims)*4)
 	}
-	if stats.NormBytesRead != 0 {
-		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want normalized-vector pack rerank with no norm reads", stats)
+	if stats.NormBytesRead != shortlist64*4 {
+		tb.Fatalf("scalar_u8 pack-native quantized_rerank stats=%+v want logical exact norm bytes=%d", stats, shortlist64*4)
 	}
 	if stats.DocumentsFetched != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
 		tb.Fatalf("scalar_u8 pack-native quantized_rerank guardrails stats=%+v want no docs/fallback/scratch decode", stats)

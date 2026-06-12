@@ -905,8 +905,8 @@ func TestColumnHNSWPreparedScalarU8RerankUsesPackNativeRowIDExactScorer2657(t *t
 	if stats.QuantizedRerankCandidates != uint64(len(rows)) || stats.QuantizedRerankExactScoreCalls != uint64(len(rows)) {
 		t.Fatalf("scalar_u8 prepared rerank stats=%+v want shortlist=%d", stats, len(rows))
 	}
-	if stats.PreparedScoreCalls != uint64(len(rows)) || stats.VectorBytesRead != uint64(len(rows)*def.Dimensions*4) || stats.NormBytesRead != 0 {
-		t.Fatalf("scalar_u8 prepared rerank stats=%+v want pack-native exact row-ID vector reads and no norm reads", stats)
+	if stats.PreparedScoreCalls != uint64(len(rows)) || stats.VectorBytesRead != uint64(len(rows)*def.Dimensions*4) || stats.NormBytesRead != uint64(len(rows)*4) {
+		t.Fatalf("scalar_u8 prepared rerank stats=%+v want pack-native exact row-ID vector reads and logical norm bytes", stats)
 	}
 	if routeScratch.searchPlan.reader != nil || routeScratch.searchPlan.physicalReader != nil || routeScratch.searchPlan.preparedSearch != nil || routeScratch.searchPlan.quantizedScorer.kind != columnVectorGraphQuantizedScorerKindNone {
 		t.Fatalf("scalar_u8 prepared rerank populated generic native search plan: %+v", routeScratch.searchPlan)

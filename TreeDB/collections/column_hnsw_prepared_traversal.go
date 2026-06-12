@@ -543,8 +543,13 @@ func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalRowIDCand
 		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal exact rerank scored %d candidates want %d", len(exactScores), n)
 	}
 	if stats != nil {
-		stats.QuantizedRerankCandidates += uint64(n)
-		stats.QuantizedRerankExactScoreCalls += uint64(n)
+		n64 := uint64(n)
+		stats.QuantizedRerankCandidates += n64
+		stats.QuantizedRerankExactScoreCalls += n64
+		// The pack-native exact scorer reads normalized vectors directly, but this
+		// quantized_rerank route still reports the logical exact FP32 vector+norm
+		// byte contract exposed by the generic exact rerank path.
+		stats.NormBytesRead += n64 * 4
 	}
 	scratch.top = scratch.top[:0]
 	for i, rowID := range rowIDs {
