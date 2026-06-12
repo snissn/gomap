@@ -279,6 +279,7 @@ func TestHTTPBenchmarkVectorSearchBinaryF32LE(t *testing.T) {
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", encodeFloat32LERawForTest([]float32{1, 0, 0}), benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=quantized_rerank", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&quantized_index_name=embedding.scalar_u8.fast", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearchWithRawQuery(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary", "top_k=1&ef_search=%zz", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", nil, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 
 	smallBodyHandler := NewHandler(svc)
@@ -327,13 +328,25 @@ func postJSON(t *testing.T, handler http.Handler, path string, body any, wantSta
 func postBinaryVectorSearch(t *testing.T, handler http.Handler, path string, body []byte, contentType string, wantStatus int, out any) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	serveBinaryVectorSearchRequest(t, handler, req, path, contentType, wantStatus, out)
+}
+
+func postBinaryVectorSearchWithRawQuery(t *testing.T, handler http.Handler, path, rawQuery string, body []byte, contentType string, wantStatus int, out any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req.URL.RawQuery = rawQuery
+	serveBinaryVectorSearchRequest(t, handler, req, path+"?"+rawQuery, contentType, wantStatus, out)
+}
+
+func serveBinaryVectorSearchRequest(t *testing.T, handler http.Handler, req *http.Request, label string, contentType string, wantStatus int, out any) {
+	t.Helper()
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != wantStatus {
-		t.Fatalf("POST %s status=%d want %d body=%s", path, rr.Code, wantStatus, rr.Body.String())
+		t.Fatalf("POST %s status=%d want %d body=%s", label, rr.Code, wantStatus, rr.Body.String())
 	}
 	if out != nil {
 		if err := json.Unmarshal(rr.Body.Bytes(), out); err != nil {

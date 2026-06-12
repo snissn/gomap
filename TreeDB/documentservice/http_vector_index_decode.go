@@ -61,7 +61,7 @@ func (h *Handler) decodeBenchmarkVectorSearchBinaryRequest(w http.ResponseWriter
 		writeError(w, err)
 		return BenchmarkVectorSearchRequest{}, false
 	}
-	req, err := parseBenchmarkVectorSearchBinaryQuery(r.URL.Query())
+	req, err := parseBenchmarkVectorSearchBinaryRawQuery(r.URL.RawQuery)
 	if err != nil {
 		writeError(w, err)
 		return BenchmarkVectorSearchRequest{}, false
@@ -127,6 +127,14 @@ func readBenchmarkVectorSearchBinaryBody(w http.ResponseWriter, r *http.Request,
 		return nil, wrapServiceError(CodeInvalidRequest, "read binary vector search request body failed", err)
 	}
 	return raw, nil
+}
+
+func parseBenchmarkVectorSearchBinaryRawQuery(raw string) (BenchmarkVectorSearchRequest, error) {
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return BenchmarkVectorSearchRequest{}, wrapServiceError(CodeInvalidRequest, "invalid binary vector search query parameters", err)
+	}
+	return parseBenchmarkVectorSearchBinaryQuery(values)
 }
 
 func parseBenchmarkVectorSearchBinaryQuery(values url.Values) (BenchmarkVectorSearchRequest, error) {
