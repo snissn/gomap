@@ -48,17 +48,32 @@ run_dir=${RUN_DIR:-}
 geth_repo=${GETH_REPO:-}
 profile_dir=${PROFILE_DIR:-}
 
+require_value() {
+  if [[ $# -lt 2 || "${2:-}" == -* ]]; then
+    echo "missing value for $1" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+abs_path() {
+  python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$1"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)
+      require_value "$@"
       run_dir=$2
       shift 2
       ;;
     --geth-repo)
+      require_value "$@"
       geth_repo=$2
       shift 2
       ;;
     --profile-dir)
+      require_value "$@"
       profile_dir=$2
       shift 2
       ;;
@@ -78,6 +93,7 @@ if [[ -z "$geth_repo" ]]; then
   echo "GETH_REPO or --geth-repo is required" >&2
   exit 2
 fi
+geth_repo=$(abs_path "$geth_repo")
 if [[ ! -d "$geth_repo" ]]; then
   echo "GETH_REPO does not exist: $geth_repo" >&2
   exit 2
@@ -88,6 +104,10 @@ if [[ ! -f "$geth_repo/go.mod" ]]; then
 fi
 if [[ -z "$run_dir" ]]; then
   run_dir="${TMPDIR:-/tmp}/treedb_geth_hot_kv_matrix_$(date -u +%Y%m%dT%H%M%SZ)"
+fi
+run_dir=$(abs_path "$run_dir")
+if [[ -n "$profile_dir" ]]; then
+  profile_dir=$(abs_path "$profile_dir")
 fi
 mkdir -p "$run_dir"
 
@@ -176,6 +196,9 @@ with open(tsv_path, 'a') as out:
             json_path,
         ]) + '\n')
 PY
+        if [[ "$keep" != "true" ]]; then
+          rm -rf "$workdir"
+        fi
       done
     done
   done

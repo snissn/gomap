@@ -13,7 +13,7 @@ func TestHarnessPreservesIntegratedGethWorkloadShape(t *testing.T) {
 	}
 	src := string(blob)
 	for _, want := range []string{
-		"node.OpenDatabase",
+		"OpenDatabase(\"chaindata\"",
 		"DBEngine: engine",
 		"db.NewBatch()",
 		"batch.Put",

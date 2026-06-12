@@ -7,7 +7,7 @@ adapters.
 ## Command
 
 ```sh
-GETH_REPO=/Users/michaelseiler/dev/snissn/go-ethereum \
+GETH_REPO=/path/to/go-ethereum \
 RUN_DIR=/tmp/geth_hotkv_matrix_30k_20260612T192600Z \
 KEYS=30000 \
 READS=12000 \
@@ -21,9 +21,9 @@ BATCH_TARGET_BYTES=102400,1048576 \
 
 Context:
 
-- go-ethereum checkout: `/Users/michaelseiler/dev/snissn/go-ethereum`
-- go-ethereum head: `6371ea5ca750`
-- Matrix artifact dir: `/tmp/geth_hotkv_matrix_30k_20260612T192600Z`
+- go-ethereum checkout: `/path/to/go-ethereum`
+- go-ethereum head used for this run: `6371ea5ca750`
+- Matrix artifact dir used for this run: `/tmp/geth_hotkv_matrix_30k_20260612T192600Z`
 - `size bytes` is loaded DB size after write/read/iterate and before the
   destructive DeleteRange phase.
 - `post-delete bytes` is measured after DeleteRange close/reopen verification.

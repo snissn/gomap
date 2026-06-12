@@ -103,6 +103,7 @@ func main() {
 	var enginesCSV string
 	var profileEnginesCSV string
 	cfg := config{}
+	createdTempWorkDir := false
 	flag.IntVar(&cfg.N, "n", 30000, "number of hot KV records")
 	flag.IntVar(&cfg.Reads, "reads", 12000, "number of deterministic random point reads")
 	flag.StringVar(&enginesCSV, "engines", "pebble,leveldb,treedb", "comma-separated db.engine values")
@@ -136,10 +137,11 @@ func main() {
 		if err != nil {
 			fatalf("create workdir: %v", err)
 		}
+		createdTempWorkDir = true
 	} else if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		fatalf("create workdir %s: %v", cfg.WorkDir, err)
 	}
-	if !cfg.Keep && !pathWithin(cfg.WorkDir, *outPath) && !pathWithin(cfg.WorkDir, cfg.ProfileDir) {
+	if !cfg.Keep && createdTempWorkDir && !pathWithin(cfg.WorkDir, *outPath) && !pathWithin(cfg.WorkDir, cfg.ProfileDir) {
 		defer os.RemoveAll(cfg.WorkDir)
 	}
 	if cfg.ProfileDir != "" {
