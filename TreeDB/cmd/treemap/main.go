@@ -39,6 +39,7 @@ Commands:
   checkpoint       Force a durable checkpoint (requires -rw)
   checkpoint-bench Write workload then checkpoint (requires -rw)
   compact-plan    Preview full storage compaction debt without mutating storage
+  audit-summary   Summarize storage, compaction debt, log frames, and gzip samples (read-only)
   compact         Run full storage compaction (requires -rw; use -scope=index for legacy index-only compaction)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-audit      Advanced: audit value-log filesystem, GC, and rewrite-plan state (read-only by default)
@@ -97,6 +98,8 @@ func main() {
 		runCheckpointBench(dir, args)
 	case "compact-plan":
 		runCompactPlan(dir, args)
+	case "audit-summary":
+		runAuditSummary(dir, args)
 	case "compact":
 		runCompact(dir, args)
 	case "vacuum":
