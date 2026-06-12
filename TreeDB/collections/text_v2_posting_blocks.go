@@ -247,6 +247,9 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 	}
 	sorted := cloneTextV2PostingBlockEntries(entries)
 	slices.SortFunc(sorted, func(a, b textV2PostingBlockEntry) int { return compareUint64(a.Ordinal, b.Ordinal) })
+	if err := validateTextV2PostingBlockBuilderEntries(sorted, fieldCount); err != nil {
+		return nil, err
+	}
 	out := make([]textV2PostingBlockKV, 0, (len(sorted)+int(target)-1)/int(target))
 	for start := 0; start < len(sorted); {
 		chunkLen := min(int(target), len(sorted)-start)
@@ -610,6 +613,30 @@ func scanTextV2PostingBlocksForTerm(
 		it.Next()
 	}
 	return it.Error()
+}
+
+func validateTextV2PostingBlockBuilderEntries(entries []textV2PostingBlockEntry, fieldCount uint32) error {
+	var prev uint64
+	for i, entry := range entries {
+		if entry.Ordinal == 0 || entry.Generation == 0 || entry.TermFrequency == 0 {
+			return errMalformedTextStorage("text-v2 posting block entry[%d] invalid ordinal/generation/frequency", i)
+		}
+		if i > 0 && entry.Ordinal == prev {
+			return errMalformedTextStorage("text-v2 posting block duplicate ordinal %d", entry.Ordinal)
+		}
+		if len(entry.FieldFrequencies) != int(fieldCount) {
+			return errMalformedTextStorage("text-v2 posting block entry[%d] field count %d want %d", i, len(entry.FieldFrequencies), fieldCount)
+		}
+		var fieldSum uint64
+		for _, fieldTF := range entry.FieldFrequencies {
+			fieldSum += uint64(fieldTF)
+		}
+		if fieldSum != uint64(entry.TermFrequency) {
+			return errMalformedTextStorage("text-v2 posting block entry[%d] field frequencies sum %d does not match term frequency %d", i, fieldSum, entry.TermFrequency)
+		}
+		prev = entry.Ordinal
+	}
+	return nil
 }
 
 func newTextV2PostingBlockValue(kind textV2PostingBlockKind, entries []textV2PostingBlockEntry, fieldCount uint32, blockID uint64) (textV2PostingBlockValue, error) {

@@ -111,6 +111,15 @@ func TestTextV2PostingBlockCodecRoundTripAndFailClosed2625(t *testing.T) {
 	}
 }
 
+func TestTextV2PostingBlockBuilderRejectsDuplicateOrdinalAcrossDefaultBoundary2625(t *testing.T) {
+	entries := syntheticTextV2PostingEntries2625(int(textV2PostingBlockTargetPostings)+1, 2)
+	entries[textV2PostingBlockTargetPostings].Ordinal = uint64(textV2PostingBlockTargetPostings)
+	_, err := buildTextV2PostingBlockKVs("refund", entries, 2, textV2PostingBlockBuildOptions{})
+	if !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("duplicate boundary ordinal err=%v want ErrTextIndexStorageCorrupt", err)
+	}
+}
+
 func TestTextV2PostingBlockIteratorOrderAcrossTerms2625(t *testing.T) {
 	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
