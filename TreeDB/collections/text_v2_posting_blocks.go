@@ -96,6 +96,7 @@ type textV2PostingBlockBuildOptions struct {
 	Kind              textV2PostingBlockKind
 	TargetPostings    uint32
 	BlockIDStart      uint64
+	FixedBlockID      bool
 	InlineTargetBytes int
 }
 
@@ -276,10 +277,12 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 			Block: block,
 		})
 		start += chunkLen
-		if blockID == math.MaxUint64 {
-			return nil, errMalformedTextStorage("text-v2 posting block id overflow")
+		if !opts.FixedBlockID {
+			if blockID == math.MaxUint64 {
+				return nil, errMalformedTextStorage("text-v2 posting block id overflow")
+			}
+			blockID++
 		}
-		blockID++
 	}
 	return out, nil
 }

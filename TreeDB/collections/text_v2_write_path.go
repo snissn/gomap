@@ -149,7 +149,7 @@ func buildTextV2PostingBatchTable(table memtable.Table, builder *textV2PostingBa
 	var blocksWritten int
 	var bytesWritten uint64
 	for _, term := range terms {
-		blocks, err := buildTextV2PostingBlockKVs(term, builder.byTerm[term], builder.fieldCount, textV2PostingBlockBuildOptions{Kind: kind, TargetPostings: targetPostings, BlockIDStart: blockIDStart})
+		blocks, err := buildTextV2PostingBlockKVs(term, builder.byTerm[term], builder.fieldCount, textV2PostingBlockBuildOptions{Kind: kind, TargetPostings: targetPostings, BlockIDStart: blockIDStart, FixedBlockID: kind == textV2PostingBlockKindMicro})
 		if err != nil {
 			return 0, 0, nil, err
 		}

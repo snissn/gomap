@@ -196,8 +196,10 @@ compact per-field/per-document term accumulators, avoiding the previous token
 slice allocation in the hot analyzer path. Backfill emits sealed posting blocks;
 maintained insert/update writes emit append-friendly micro blocks with
 `blockID` in a mutation-generation namespace (currently the high-bit block ID
-range ORed with the next text-v2 root generation) so repeated updates of a
-high-document-frequency term do not rewrite or collide with old term state.
+range ORed with the next text-v2 root generation, fixed for every micro chunk
+in that generation because `blockStart` already distinguishes chunks) so
+repeated updates of a high-document-frequency term do not rewrite or collide
+with old term state.
 Deletes do not emit posting tombstone blocks; instead docID/docmap/norm
 generations and tombstone flags advance so later readers reject stale
 `(ordinal,generation)` entries until

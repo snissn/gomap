@@ -504,6 +504,89 @@ func TestTextV2WritePathMutationBlockIDsDoNotOverwriteSealedBlocks2626(t *testin
 	}
 }
 
+func TestTextV2WritePathMutationMicroBlockIDsDoNotOverwritePriorMicroChunks2626(t *testing.T) {
+	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	docs := int(2*textV2PostingBlockMicroPostings) + 1
+	ids := make([][]byte, docs)
+	values := make([][]byte, docs)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%06d", i+1))
+		values[i] = []byte(`{"body":"refund"}`)
+	}
+	if _, err := col.InsertBatch(ids, values); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
+	secondMicroStart := uint64(textV2PostingBlockMicroPostings) + 1
+	firstMutationBlockID, err := textV2PostingBlockMutationBlockIDStart(2)
+	if err != nil {
+		t.Fatalf("first mutation block id: %v", err)
+	}
+	priorMicroKey := encodeTextV2PostingBlockKey("refund", secondMicroStart, firstMutationBlockID)
+	priorMicroBefore := textV2ReadRootBytes2624(t, d, "docs", rootName, priorMicroKey)
+	if _, _, err := col.Update(ids[textV2PostingBlockMicroPostings], func([]byte) ([]byte, bool, error) {
+		return []byte(`{"body":"refund refund changed"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update second micro chunk start doc: %v", err)
+	}
+	priorMicroAfter := textV2ReadRootBytes2624(t, d, "docs", rootName, priorMicroKey)
+	if !bytes.Equal(priorMicroBefore, priorMicroAfter) {
+		t.Fatalf("prior micro posting block at second chunk start was overwritten by later mutation")
+	}
+	secondMutationBlockID, err := textV2PostingBlockMutationBlockIDStart(3)
+	if err != nil {
+		t.Fatalf("second mutation block id: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	var refundBlocks int
+	var sawPriorMicro bool
+	var sawLaterMicro bool
+	if err := scanTextV2PostingBlocksForTerm(snap, catalog, rootName, "refund", func(key textV2PostingBlockKey, _ textV2PostingBlockSummary, scanner *textV2PostingBlockEntryScanner) error {
+		refundBlocks++
+		if key.BlockStart == secondMicroStart && key.BlockID == firstMutationBlockID {
+			sawPriorMicro = true
+		}
+		if key.BlockStart == secondMicroStart && key.BlockID == secondMutationBlockID {
+			sawLaterMicro = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan refund posting blocks: %v", err)
+	}
+	if !sawPriorMicro || !sawLaterMicro {
+		t.Fatalf("second micro start prior=%v later=%v refundBlocks=%d", sawPriorMicro, sawLaterMicro, refundBlocks)
+	}
+	termStatsRaw := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2TermsRootName("docs", "lexical"), encodeTextV2TermStatsKey("refund"))
+	termStats, err := decodeTextV2TermStatsValue(termStatsRaw)
+	if err != nil {
+		t.Fatalf("decode refund term stats: %v", err)
+	}
+	if termStats.PostingBlockCount != uint64(refundBlocks) {
+		t.Fatalf("refund posting block count=%d want scanned blocks %d", termStats.PostingBlockCount, refundBlocks)
+	}
+}
+
 func TestTextV2WritePathSnapshotVisibility2626(t *testing.T) {
 	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
