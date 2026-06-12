@@ -167,8 +167,8 @@ func TestTextV2PostingBlockIteratorOrderAcrossTerms2625(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TextIndexStorageStats: %v", err)
 	}
-	if stats.V2PostingBlocks != 4 {
-		t.Fatalf("posting blocks=%d want 4", stats.V2PostingBlocks)
+	if stats.V2PostingBlocks < 4 {
+		t.Fatalf("posting blocks=%d want at least manually inserted blocks", stats.V2PostingBlocks)
 	}
 }
 
@@ -238,26 +238,15 @@ func TestTextV2PostingBlocksReachValueLogMaintenance2625(t *testing.T) {
 	d, closeDB := openTextV2PostingBlockCompressedDB2625(t, dir)
 	col := createTextV2PostingBlockCollection2625(t, d, 32, RootStorageCompressed)
 	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
-	entries := make([]textV2PostingBlockEntry, 0, 32)
-	for i := uint64(1); i <= 32; i++ {
-		entries = append(entries, textV2PostingBlockEntry{Ordinal: i, Generation: 1, TermFrequency: 3, FieldFrequencies: []uint32{2, 1}})
-	}
-	blocks, err := buildTextV2PostingBlockKVs("refund", entries, 2, textV2PostingBlockBuildOptions{TargetPostings: 64})
-	if err != nil {
-		t.Fatalf("build blocks: %v", err)
-	}
-	if len(blocks) != 1 {
-		t.Fatalf("blocks=%d want 1", len(blocks))
-	}
-	corruptTextRootValue(t, d, "docs", rootName, blocks[0].Key, blocks[0].Value)
-	before := textV2ReadRootBytes2624(t, d, "docs", rootName, blocks[0].Key)
-	if stats, err := col.TextIndexStorageStats("lexical"); err != nil || stats.V2PostingBlocks != 1 {
-		t.Fatalf("TextIndexStorageStats before GC=%+v err=%v want one posting block", stats, err)
+	blockKey := encodeTextV2PostingBlockKey("refund", 1, 1)
+	before := textV2ReadRootBytes2624(t, d, "docs", rootName, blockKey)
+	if stats, err := col.TextIndexStorageStats("lexical"); err != nil || stats.V2PostingBlocks == 0 {
+		t.Fatalf("TextIndexStorageStats before GC=%+v err=%v want emitted posting blocks", stats, err)
 	}
 	if _, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
-	if after := textV2ReadRootBytes2624(t, d, "docs", rootName, blocks[0].Key); !bytes.Equal(after, before) {
+	if after := textV2ReadRootBytes2624(t, d, "docs", rootName, blockKey); !bytes.Equal(after, before) {
 		t.Fatalf("posting block changed after ValueLogGC")
 	}
 	if err := closeDB(); err != nil {
@@ -265,7 +254,7 @@ func TestTextV2PostingBlocksReachValueLogMaintenance2625(t *testing.T) {
 	}
 	reopened, closeReopened := openTextV2PostingBlockCompressedDB2625(t, dir)
 	defer func() { _ = closeReopened() }()
-	if after := textV2ReadRootBytes2624(t, reopened, "docs", rootName, blocks[0].Key); !bytes.Equal(after, before) {
+	if after := textV2ReadRootBytes2624(t, reopened, "docs", rootName, blockKey); !bytes.Equal(after, before) {
 		t.Fatalf("posting block not reachable after reopen/GC")
 	}
 	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
@@ -276,12 +265,12 @@ func TestTextV2PostingBlocksReachValueLogMaintenance2625(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopened TextIndexStorageStats: %v", err)
 	}
-	if stats.V2PostingBlocks != 1 {
-		t.Fatalf("reopened posting blocks=%d want 1", stats.V2PostingBlocks)
+	if stats.V2PostingBlocks == 0 {
+		t.Fatalf("reopened posting blocks=%d want emitted blocks", stats.V2PostingBlocks)
 	}
 }
 
-func TestTextV2PostingBlocksNotEmittedByBackfillOrMutationsBeforeM32625(t *testing.T) {
+func TestTextV2PostingBlocksEmittedByBackfillAndMutations2626(t *testing.T) {
 	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
 	col := createTextV2PostingBlockCollection2625(t, d, 2, RootStorageFast)
@@ -289,9 +278,10 @@ func TestTextV2PostingBlocksNotEmittedByBackfillOrMutationsBeforeM32625(t *testi
 	if err != nil {
 		t.Fatalf("TextIndexStorageStats after backfill: %v", err)
 	}
-	if stats.V2PostingBlocks != 0 {
-		t.Fatalf("v2 posting blocks after M2 backfill=%d want 0 until M3", stats.V2PostingBlocks)
+	if stats.V2PostingBlocks == 0 {
+		t.Fatalf("v2 posting blocks after M3 backfill=%d want emitted blocks", stats.V2PostingBlocks)
 	}
+	backfillBlocks := stats.V2PostingBlocks
 	if _, _, err := col.Update([]byte("doc-000001"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"body":"refund updated","title":"updated"}`), true, nil
 	}); err != nil {
@@ -307,8 +297,394 @@ func TestTextV2PostingBlocksNotEmittedByBackfillOrMutationsBeforeM32625(t *testi
 	if err != nil {
 		t.Fatalf("TextIndexStorageStats after mutations: %v", err)
 	}
-	if stats.V2PostingBlocks != 0 {
-		t.Fatalf("v2 posting blocks after M2 mutations=%d want 0 until M3", stats.V2PostingBlocks)
+	if stats.V2PostingBlocks <= backfillBlocks {
+		t.Fatalf("v2 posting blocks after M3 mutations=%d want > backfill %d", stats.V2PostingBlocks, backfillBlocks)
+	}
+}
+
+func TestTextV2WritePathBackfillPostingParity2626(t *testing.T) {
+	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	ids := [][]byte{[]byte("d1"), []byte("d2"), []byte("d3")}
+	docs := [][]byte{
+		[]byte(`{"body":"refund refund policy","title":"Refund"}`),
+		[]byte(`{"body":"shipping policy","title":"Policy"}`),
+		[]byte(`{"body":"refund shipping refund","title":"Shipping refund"}`),
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, backfill, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}, {Field: "title", Weight: 2}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	} else if backfill.V2PostingBlocks == 0 {
+		t.Fatalf("backfill=%+v want emitted posting blocks", backfill)
+	}
+	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
+	got := make(map[uint64]textV2PostingParityPosting2625)
+	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		err = scanTextV2PostingBlocksForTerm(snap, catalog, rootName, "refund", func(key textV2PostingBlockKey, summary textV2PostingBlockSummary, scanner *textV2PostingBlockEntryScanner) error {
+			if key.Term != "refund" || summary.DocCount == 0 {
+				return fmt.Errorf("bad refund block key=%+v summary=%+v", key, summary)
+			}
+			var entry textV2PostingBlockEntry
+			for scanner.Next(&entry) {
+				got[entry.Ordinal] = textV2PostingParityPosting2625{tf: entry.TermFrequency, fields: append([]uint32(nil), entry.FieldFrequencies...)}
+			}
+			return scanner.Err()
+		})
+		termRaw := textRootValue(t, snap, catalog, collectionTextV2TermsRootName("docs", "lexical"), encodeTextV2TermStatsKey("refund"))
+		term, decodeErr := decodeTextV2TermStatsValue(termRaw)
+		if decodeErr != nil {
+			t.Fatalf("decode refund term: %v", decodeErr)
+		}
+		if term.DocumentFrequency != 2 || term.TotalTermFrequency != 6 || term.PostingBlockCount == 0 {
+			t.Fatalf("refund term=%+v want df=2 tf=6 block count", term)
+		}
+	})
+	if err != nil {
+		t.Fatalf("scan refund: %v", err)
+	}
+	want := map[uint64]textV2PostingParityPosting2625{
+		1: {tf: 3, fields: []uint32{2, 1}},
+		3: {tf: 3, fields: []uint32{2, 1}},
+	}
+	if !postingParityEqual2625(got, want) {
+		t.Fatalf("refund postings=%+v want %+v", got, want)
+	}
+}
+
+func TestTextV2WritePathMutationsAppendMicroBlocksAndReopen2626(t *testing.T) {
+	dir := t.TempDir()
+	d := openTextV2PostingBlockDB2625(t, dir, false)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	def := TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}
+	if _, _, err := col.CreateTextIndex(def); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("d1"), []byte("d2")}, [][]byte{[]byte(`{"body":"refund policy"}`), []byte(`{"body":"refund shipping"}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	insertStats, err := col.TextIndexStorageStats("lexical")
+	if err != nil || insertStats.V2PostingBlocks == 0 {
+		t.Fatalf("stats after insert=%+v err=%v want posting blocks", insertStats, err)
+	}
+	if _, _, err := col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"body":"refund updated refund"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("d2")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened := openTextV2PostingBlockDB2625(t, dir, false)
+	defer func() { _ = reopened.Close() }()
+	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
+	var generations []uint64
+	withTextCatalog(t, reopened, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		d1 := textV2DocIDRootValue(t, snap, catalog, "docs", "lexical", []byte("d1"))
+		d2 := textV2DocIDRootValue(t, snap, catalog, "docs", "lexical", []byte("d2"))
+		if d1.Ordinal != 1 || d1.Generation != 2 || d1.tombstoned() {
+			t.Fatalf("d1=%+v want generation 2 live", d1)
+		}
+		if d2.Ordinal != 2 || d2.Generation != 2 || !d2.tombstoned() {
+			t.Fatalf("d2=%+v want generation 2 tombstone", d2)
+		}
+		err = scanTextV2PostingBlocksForTerm(snap, catalog, rootName, "refund", func(key textV2PostingBlockKey, summary textV2PostingBlockSummary, scanner *textV2PostingBlockEntryScanner) error {
+			if key.BlockID < 2 || summary.DocCount == 0 {
+				return fmt.Errorf("bad mutation block key=%+v summary=%+v", key, summary)
+			}
+			var entry textV2PostingBlockEntry
+			for scanner.Next(&entry) {
+				if entry.Ordinal == 1 {
+					generations = append(generations, entry.Generation)
+				}
+			}
+			return scanner.Err()
+		})
+	})
+	if err != nil {
+		t.Fatalf("scan refund after reopen: %v", err)
+	}
+	slices.Sort(generations)
+	if !slices.Equal(generations, []uint64{1, 2}) {
+		t.Fatalf("d1 refund generations=%v want stale+current generations", generations)
+	}
+}
+
+func TestTextV2WritePathMutationBlockIDsDoNotOverwriteSealedBlocks2626(t *testing.T) {
+	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	docs := int(textV2PostingBlockTargetPostings) + 1
+	ids := make([][]byte, docs)
+	values := make([][]byte, docs)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%06d", i+1))
+		values[i] = []byte(`{"body":"refund"}`)
+	}
+	if _, err := col.InsertBatch(ids, values); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
+	secondBlockStart := uint64(textV2PostingBlockTargetPostings) + 1
+	sealedKey := encodeTextV2PostingBlockKey("refund", secondBlockStart, 2)
+	sealedBefore := textV2ReadRootBytes2624(t, d, "docs", rootName, sealedKey)
+	if _, _, err := col.Update(ids[textV2PostingBlockTargetPostings], func([]byte) ([]byte, bool, error) {
+		return []byte(`{"body":"refund refund changed"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update second block start doc: %v", err)
+	}
+	sealedAfter := textV2ReadRootBytes2624(t, d, "docs", rootName, sealedKey)
+	if !bytes.Equal(sealedBefore, sealedAfter) {
+		t.Fatalf("sealed posting block at second block start was overwritten by mutation")
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	var refundBlocks int
+	var sawSealedSecondBlock bool
+	var sawMutationSecondBlock bool
+	if err := scanTextV2PostingBlocksForTerm(snap, catalog, rootName, "refund", func(key textV2PostingBlockKey, _ textV2PostingBlockSummary, scanner *textV2PostingBlockEntryScanner) error {
+		refundBlocks++
+		if key.BlockStart == secondBlockStart && key.BlockID == 2 {
+			sawSealedSecondBlock = true
+		}
+		if key.BlockStart == secondBlockStart && key.BlockID >= textV2PostingBlockMutationIDBase {
+			sawMutationSecondBlock = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan refund posting blocks: %v", err)
+	}
+	if !sawSealedSecondBlock || !sawMutationSecondBlock {
+		t.Fatalf("second block start sealed=%v mutation=%v refundBlocks=%d", sawSealedSecondBlock, sawMutationSecondBlock, refundBlocks)
+	}
+	termStatsRaw := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2TermsRootName("docs", "lexical"), encodeTextV2TermStatsKey("refund"))
+	termStats, err := decodeTextV2TermStatsValue(termStatsRaw)
+	if err != nil {
+		t.Fatalf("decode refund term stats: %v", err)
+	}
+	if termStats.PostingBlockCount != uint64(refundBlocks) {
+		t.Fatalf("refund posting block count=%d want scanned blocks %d", termStats.PostingBlockCount, refundBlocks)
+	}
+}
+
+func TestTextV2WritePathSnapshotVisibility2626(t *testing.T) {
+	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	def := TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}
+	if _, _, err := col.CreateTextIndex(def); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"refund policy"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog before update: %v", err)
+	}
+	before, err := inspectTextV2IndexStorage(snap, catalog, def)
+	if err != nil {
+		t.Fatalf("inspect before: %v", err)
+	}
+	if _, _, err := col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"body":"refund updated"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	after, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("stats after: %v", err)
+	}
+	oldView, err := inspectTextV2IndexStorage(snap, catalog, def)
+	if err != nil {
+		t.Fatalf("inspect old snapshot: %v", err)
+	}
+	if oldView.V2PostingBlocks != before.V2PostingBlocks || after.V2PostingBlocks <= before.V2PostingBlocks {
+		t.Fatalf("snapshot before=%+v old=%+v after=%+v", before, oldView, after)
+	}
+	var updatedBlocks int
+	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
+	if err := scanTextV2PostingBlocksForTerm(snap, catalog, rootName, "updated", func(textV2PostingBlockKey, textV2PostingBlockSummary, *textV2PostingBlockEntryScanner) error {
+		updatedBlocks++
+		return nil
+	}); err != nil {
+		t.Fatalf("scan old updated term: %v", err)
+	}
+	if updatedBlocks != 0 {
+		t.Fatalf("old snapshot saw %d updated-term posting blocks", updatedBlocks)
+	}
+}
+
+func TestTextV2WritePathDeleteSnapshotVisibility2626(t *testing.T) {
+	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	def := TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}
+	if _, _, err := col.CreateTextIndex(def); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"refund policy"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog before delete: %v", err)
+	}
+	before, err := inspectTextV2IndexStorage(snap, catalog, def)
+	if err != nil {
+		t.Fatalf("inspect before: %v", err)
+	}
+	beforeDoc := textV2DocIDRootValue(t, snap, catalog, "docs", "lexical", []byte("d1"))
+	if beforeDoc.Ordinal != 1 || beforeDoc.Generation != 1 || beforeDoc.tombstoned() {
+		t.Fatalf("snapshot before doc=%+v want live generation 1", beforeDoc)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("d1")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	after, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("stats after delete: %v", err)
+	}
+	oldView, err := inspectTextV2IndexStorage(snap, catalog, def)
+	if err != nil {
+		t.Fatalf("inspect old snapshot after delete: %v", err)
+	}
+	oldDoc := textV2DocIDRootValue(t, snap, catalog, "docs", "lexical", []byte("d1"))
+	if oldView.V2LiveDocuments != before.V2LiveDocuments || oldView.V2DeletedDocs != before.V2DeletedDocs || oldDoc.tombstoned() {
+		t.Fatalf("old snapshot before=%+v old=%+v oldDoc=%+v", before, oldView, oldDoc)
+	}
+	if after.V2LiveDocuments != 0 || after.V2DeletedDocs != 1 || after.V2PostingBlocks != before.V2PostingBlocks {
+		t.Fatalf("after delete stats=%+v before=%+v want tombstone without posting rewrite", after, before)
+	}
+	withTextCatalog(t, d, "docs", func(current *backenddb.Snapshot, currentCatalog *collectionCatalog) {
+		currentDoc := textV2DocIDRootValue(t, current, currentCatalog, "docs", "lexical", []byte("d1"))
+		if currentDoc.Ordinal != 1 || currentDoc.Generation != 2 || !currentDoc.tombstoned() {
+			t.Fatalf("current doc=%+v want tombstone generation 2", currentDoc)
+		}
+	})
+}
+
+func TestTextV2WritePathPostingBlocksGCCompactReopen2626(t *testing.T) {
+	dir := t.TempDir()
+	d := openTextV2TestDB(t, dir, true)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	ids := make([][]byte, 48)
+	docs := make([][]byte, 48)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%03d", i+1))
+		docs[i] = []byte(fmt.Sprintf(`{"body":"refund refund policy common common %d","title":"ticket %d"}`, i, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}, {Field: "title"}}, StoragePolicy: RootStorageFast}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
+	blockKey := encodeTextV2PostingBlockKey("refund", 1, 1)
+	postingBefore := textV2ReadRootBytes2624(t, d, "docs", rootName, blockKey)
+	normBefore := textV2ReadNormBlockBytes2624(t, d, "docs", "lexical", 1)
+	docMapBefore := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2DocMapRootName("docs", "lexical"), encodeTextV2BlockKey(1))
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if _, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if _, err := d.CompactStorage(context.Background(), backenddb.CompactStorageOptions{}); err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := textV2ReadRootBytes2624(t, d, "docs", rootName, blockKey); !bytes.Equal(got, postingBefore) {
+		t.Fatalf("posting block changed after GC/compact")
+	}
+	if got := textV2ReadNormBlockBytes2624(t, d, "docs", "lexical", 1); !bytes.Equal(got, normBefore) {
+		t.Fatalf("norm block changed after GC/compact")
+	}
+	if got := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2DocMapRootName("docs", "lexical"), encodeTextV2BlockKey(1)); !bytes.Equal(got, docMapBefore) {
+		t.Fatalf("docmap block changed after GC/compact")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened := openTextV2TestDB(t, dir, true)
+	defer func() { _ = reopened.Close() }()
+	if got := textV2ReadRootBytes2624(t, reopened, "docs", rootName, blockKey); !bytes.Equal(got, postingBefore) {
+		t.Fatalf("posting block not reachable after reopen")
+	}
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	if stats, err := reopenedCol.TextIndexStorageStats("lexical"); err != nil || stats.V2PostingBlocks == 0 || stats.V2NormBlocks == 0 || stats.V2DocMapBlocks == 0 {
+		t.Fatalf("reopened stats=%+v err=%v want v2 roots", stats, err)
 	}
 }
 

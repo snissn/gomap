@@ -362,6 +362,7 @@ func textIndexStatusForDefinition(collection string, def TextIndexDefinition) Te
 	}
 	if version == TextIndexVersionV2 {
 		status.Ready = true
+		status.Writable = true
 		status.FailClosed = true
 		status.FailClosedReason = "text_v2_search_unavailable"
 		status.ActiveRootNames = collectionTextV2RootNames(collection, def.Name)

@@ -76,14 +76,22 @@ Measured boundaries:
 
 - `insert_batch_no_text`: `InsertBatch` on the same JSON fixture without text
   indexes; setup excludes DB/collection creation.
-- `insert_batch_text_indexed`: `InsertBatch` with a declared text index; setup
-  excludes DB/collection creation.
-- `create_text_index_backfill`: `CreateTextIndex` over already inserted primary
-  documents; setup excludes primary insert.
-- `update_batch_text_indexed`: `UpdateBatch` replacements with maintained text
-  roots; setup excludes initial insert.
-- `delete_batch_text_indexed`: `DeleteBatch` with maintained text roots; setup
-  excludes initial insert.
+- `insert_batch_text_indexed`: v1 `InsertBatch` with a declared text index;
+  setup excludes DB/collection creation.
+- `insert_batch_text_v2_indexed`: explicit v2 `InsertBatch` after empty-index
+  `CreateTextIndex` setup; setup excludes DB/collection/index creation.
+- `create_text_index_backfill`: v1 `CreateTextIndex` over already inserted
+  primary documents; setup excludes primary insert.
+- `create_text_v2_index_backfill`: explicit v2 `CreateTextIndex` over already
+  inserted primary documents; setup excludes primary insert.
+- `update_batch_text_indexed`: v1 `UpdateBatch` replacements with maintained
+  text roots; setup excludes initial insert.
+- `update_batch_text_v2_indexed`: explicit v2 `UpdateBatch` replacements with
+  maintained micro-block/docmap/norm roots; setup excludes initial insert.
+- `delete_batch_text_indexed`: v1 `DeleteBatch` with maintained text roots;
+  setup excludes initial insert.
+- `delete_batch_text_v2_indexed`: explicit v2 `DeleteBatch` with generation and
+  tombstone maintenance; setup excludes initial insert.
 
 Command:
 
@@ -101,9 +109,16 @@ go test ./TreeDB/collections \
 
 Report text write counters:
 
-- `posting_entries/op`, `state_entries/op`, `stats_entries/op`;
+- `posting_entries/op`, `state_entries/op`, `stats_entries/op` for v1 rows;
+- `v2_docid_entries/op`, `v2_docmap_blocks/op`, `v2_posting_blocks/op`,
+  `v2_norm_blocks/op`, and `v2_term_stats/op` for v2 rows;
+- `posting_blocks/doc`, `high_df_posting_blocks/op`,
+  `high_df_posting_blocks/doc`, and `rewritten_blocks/doc` (M3 rewrite count is `0`);
 - `index_entries/doc` for live text-root entries after the operation;
-- `write_amp_entries/doc` for estimated text-root entry writes emitted by the operation;
+- `write_amp_entries/doc` for estimated text-root entry writes emitted by the
+  operation. For maintained v2 insert/update/delete rows this is the emitted
+  root-delta estimate (docID/docmap/norm/term-status/posting-block deltas plus
+  the status generation), not the net post-mutation root size;
 - `index_bytes/doc`.
 
 ## New text search scale rows

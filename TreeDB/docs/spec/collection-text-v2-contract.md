@@ -98,10 +98,11 @@ format record. Explicit `TextIndexVersionV2` creation through `CreateTextIndex`
 publishes all seven v2 root descriptors through the normal collection-root
 system records. Declaring a v2 text index directly in `CreateCollection` is
 rejected because it would create metadata without the required root status
-records. V2 search is still fail-closed until the later executor milestones;
-`TextIndexStatus` reports `readable=false` and `writable=false` for v2 so the M1
-root-state maintenance shell is not advertised as the full M3+ write pipeline.
-There is no fallback to v1 for requested v2.
+records. V2 search is still fail-closed until the later executor milestones.
+After M3, `TextIndexStatus` reports `readable=false` and `writable=true` for
+explicit v2 indexes: create/backfill/insert/update/delete maintain durable v2
+roots and posting blocks, but query routing still does not serve from v2. There
+is no fallback to v1 for requested v2.
 
 Stable M1 ordinal semantics:
 
@@ -185,9 +186,28 @@ explicit format, not in the hot scoring value.
 
 M2 provides codecs, builders, storage validation, and streaming/range iterators
 that reuse entry scratch while scanning a block. It does not route
-`SearchText`/`SearchHybrid` through v2 posting blocks and does not make ordinary
-v2 backfill/mutations emit active posting blocks before the M3 streaming write
-pipeline can maintain update/delete/tombstone correctness.
+`SearchText`/`SearchHybrid` through v2 posting blocks.
+
+## M3 streaming write path (#2626)
+
+M3 makes explicit `TextIndexVersionV2` indexes writable while keeping v2 search
+fail-closed until #2627. The write path uses a streaming analyzer sink and
+compact per-field/per-document term accumulators, avoiding the previous token
+slice allocation in the hot analyzer path. Backfill emits sealed posting blocks;
+maintained insert/update writes emit append-friendly micro blocks with
+`blockID` in a mutation-generation namespace (currently the high-bit block ID
+range ORed with the next text-v2 root generation) so repeated updates of a
+high-document-frequency term do not rewrite or collide with old term state.
+Deletes do not emit posting tombstone blocks; instead docID/docmap/norm
+generations and tombstone flags advance so later readers reject stale
+`(ordinal,generation)` entries until
+M7 rewrite/merge compacts old blocks.
+
+M3 maintains term `PostingBlockCount` alongside live `df`/`ttf` stats. A term may
+retain zero live `df`/`ttf` with non-zero historical posting blocks until normal
+TreeDB root maintenance and later text rewrite/merge remove stale blocks. All
+posting, norm, docmap, docID, term, and status records remain ordinary collection
+root values and continue to use existing value-log/leaf maintenance paths.
 
 ## Current v1 path inventory
 

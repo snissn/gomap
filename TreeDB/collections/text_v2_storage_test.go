@@ -192,8 +192,8 @@ func TestCollectionCreateTextV2IndexBackfillsOrdinalsNormsStatsAndReopens2624(t 
 	if err != nil {
 		t.Fatalf("TextIndexStatus: %v", err)
 	}
-	if status.Version != TextIndexVersionV2 || !status.Ready || status.Readable || status.Writable || status.FailClosedReason != "text_v2_search_unavailable" {
-		t.Fatalf("status=%+v want v2 root-ready/full-search-write fail-closed", status)
+	if status.Version != TextIndexVersionV2 || !status.Ready || status.Readable || !status.Writable || status.FailClosedReason != "text_v2_search_unavailable" {
+		t.Fatalf("status=%+v want v2 root-ready/writable/search fail-closed", status)
 	}
 	if !slices.Equal(status.ActiveRootNames, collectionTextV2RootNames("docs", "lexical")) {
 		t.Fatalf("active roots=%q", status.ActiveRootNames)

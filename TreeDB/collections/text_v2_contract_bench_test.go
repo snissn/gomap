@@ -172,6 +172,38 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 		textV2ContractReportWriteStats2623(b, docsPerBatch, lastStats, textV2ContractStorageEntryCount2623(lastStats))
 	})
 
+	b.Run("insert_batch_text_v2_indexed", func(b *testing.B) {
+		var lastStats TextIndexStorageStats
+		var writeAmpEntries uint64
+		var highDFBlocks uint64
+		b.ReportAllocs()
+		b.ReportMetric(float64(docsPerBatch), "docs/op")
+		b.ResetTimer()
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			d := openTextV2ContractDB2623(b)
+			col := createTextV2ContractCollection2623(b, d, false)
+			if _, _, err := col.CreateTextIndex(textV2ContractV2IndexDefinition2626()); err != nil {
+				b.Fatalf("CreateTextIndex v2 setup: %v", err)
+			}
+			beforeStats := textV2ContractStorageStats2623(b, col)
+			batchIDs := textV2ContractCloneIDsWithIteration2623(ids, i)
+			b.StartTimer()
+			_, err := col.InsertBatch(batchIDs, docs)
+			b.StopTimer()
+			if err != nil {
+				b.Fatalf("InsertBatch text-v2-indexed: %v", err)
+			}
+			lastStats = textV2ContractStorageStats2623(b, col)
+			highDFBlocks = textV2ContractTermPostingBlockCount2626(b, col, "refund")
+			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, lastStats.V2TermStats)
+			_ = d.Close()
+		}
+		b.ReportMetric(float64(docsPerBatch), "docs/op")
+		textV2ContractReportWriteStats2623(b, docsPerBatch, lastStats, writeAmpEntries)
+		textV2ContractReportHighDFBlocks2626(b, docsPerBatch, highDFBlocks)
+	})
+
 	b.Run("create_text_index_backfill", func(b *testing.B) {
 		var lastStats TextIndexBackfillStats
 		b.ReportAllocs()
@@ -196,6 +228,35 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 		}
 		b.ReportMetric(float64(docsPerBatch), "docs/op")
 		textV2ContractReportBackfillStats2623(b, docsPerBatch, lastStats)
+	})
+
+	b.Run("create_text_v2_index_backfill", func(b *testing.B) {
+		var lastStats TextIndexBackfillStats
+		var highDFBlocks uint64
+		b.ReportAllocs()
+		b.ReportMetric(float64(docsPerBatch), "docs/op")
+		b.ResetTimer()
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			d := openTextV2ContractDB2623(b)
+			col := createTextV2ContractCollection2623(b, d, false)
+			batchIDs := textV2ContractCloneIDsWithIteration2623(ids, i)
+			if _, err := col.InsertBatch(batchIDs, docs); err != nil {
+				b.Fatalf("InsertBatch setup: %v", err)
+			}
+			b.StartTimer()
+			_, stats, err := col.CreateTextIndex(textV2ContractV2IndexDefinition2626())
+			b.StopTimer()
+			if err != nil {
+				b.Fatalf("CreateTextIndex v2 backfill: %v", err)
+			}
+			lastStats = stats
+			highDFBlocks = textV2ContractTermPostingBlockCount2626(b, col, "refund")
+			_ = d.Close()
+		}
+		b.ReportMetric(float64(docsPerBatch), "docs/op")
+		textV2ContractReportBackfillStats2623(b, docsPerBatch, lastStats)
+		textV2ContractReportHighDFBlocks2626(b, docsPerBatch, highDFBlocks)
 	})
 
 	b.Run("update_batch_text_indexed", func(b *testing.B) {
@@ -237,6 +298,52 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 		textV2ContractReportWriteStats2623(b, docsPerBatch, lastStats, writeAmpEntries)
 	})
 
+	b.Run("update_batch_text_v2_indexed", func(b *testing.B) {
+		_, updatedDocs := textV2ContractDocuments2623(docsPerBatch, "update")
+		var lastStats TextIndexStorageStats
+		var writeAmpEntries uint64
+		var highDFBlocks uint64
+		b.ReportAllocs()
+		b.ReportMetric(float64(docsPerBatch), "docs/op")
+		b.ResetTimer()
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			d := openTextV2ContractDB2623(b)
+			col := createTextV2ContractCollection2623(b, d, false)
+			if _, _, err := col.CreateTextIndex(textV2ContractV2IndexDefinition2626()); err != nil {
+				b.Fatalf("CreateTextIndex v2 setup: %v", err)
+			}
+			batchIDs := textV2ContractCloneIDsWithIteration2623(ids, i)
+			if _, err := col.InsertBatch(batchIDs, docs); err != nil {
+				b.Fatalf("InsertBatch setup: %v", err)
+			}
+			beforeStats := textV2ContractStorageStats2623(b, col)
+			updates := make([]UpdateBatchItem, docsPerBatch)
+			for j := 0; j < docsPerBatch; j++ {
+				replacement := bytes.Clone(updatedDocs[j])
+				updates[j] = UpdateBatchItem{DocumentID: batchIDs[j], Update: func(current []byte) ([]byte, bool, error) {
+					return replacement, true, nil
+				}}
+			}
+			b.StartTimer()
+			results, err := col.UpdateBatch(updates)
+			b.StopTimer()
+			if err != nil {
+				b.Fatalf("UpdateBatch text-v2-indexed: %v", err)
+			}
+			if len(results) != docsPerBatch {
+				b.Fatalf("UpdateBatch results=%d want %d", len(results), docsPerBatch)
+			}
+			lastStats = textV2ContractStorageStats2623(b, col)
+			highDFBlocks = textV2ContractTermPostingBlockCount2626(b, col, "refund")
+			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, lastStats.V2TermStats)
+			_ = d.Close()
+		}
+		b.ReportMetric(float64(docsPerBatch), "docs/op")
+		textV2ContractReportWriteStats2623(b, docsPerBatch, lastStats, writeAmpEntries)
+		textV2ContractReportHighDFBlocks2626(b, docsPerBatch, highDFBlocks)
+	})
+
 	b.Run("delete_batch_text_indexed", func(b *testing.B) {
 		var lastStats TextIndexStorageStats
 		var writeAmpEntries uint64
@@ -267,6 +374,44 @@ func BenchmarkTextV2ContractWritePaths2623(b *testing.B) {
 		}
 		b.ReportMetric(float64(docsPerBatch), "docs/op")
 		textV2ContractReportWriteStats2623(b, docsPerBatch, lastStats, writeAmpEntries)
+	})
+
+	b.Run("delete_batch_text_v2_indexed", func(b *testing.B) {
+		var lastStats TextIndexStorageStats
+		var writeAmpEntries uint64
+		var highDFBlocks uint64
+		b.ReportAllocs()
+		b.ReportMetric(float64(docsPerBatch), "docs/op")
+		b.ResetTimer()
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			d := openTextV2ContractDB2623(b)
+			col := createTextV2ContractCollection2623(b, d, false)
+			if _, _, err := col.CreateTextIndex(textV2ContractV2IndexDefinition2626()); err != nil {
+				b.Fatalf("CreateTextIndex v2 setup: %v", err)
+			}
+			batchIDs := textV2ContractCloneIDsWithIteration2623(ids, i)
+			if _, err := col.InsertBatch(batchIDs, docs); err != nil {
+				b.Fatalf("InsertBatch setup: %v", err)
+			}
+			beforeStats := textV2ContractStorageStats2623(b, col)
+			b.StartTimer()
+			deleted, err := col.DeleteBatch(batchIDs)
+			b.StopTimer()
+			if err != nil {
+				b.Fatalf("DeleteBatch text-v2-indexed: %v", err)
+			}
+			if deleted != docsPerBatch {
+				b.Fatalf("DeleteBatch deleted=%d want %d", deleted, docsPerBatch)
+			}
+			lastStats = textV2ContractStorageStats2623(b, col)
+			highDFBlocks = textV2ContractTermPostingBlockCount2626(b, col, "refund")
+			writeAmpEntries = textV2ContractV2MutationRootDeltaEntries2626(docsPerBatch, beforeStats, lastStats, lastStats.V2TermStats)
+			_ = d.Close()
+		}
+		b.ReportMetric(float64(docsPerBatch), "docs/op")
+		textV2ContractReportWriteStats2623(b, docsPerBatch, lastStats, writeAmpEntries)
+		textV2ContractReportHighDFBlocks2626(b, docsPerBatch, highDFBlocks)
 	})
 }
 
@@ -464,6 +609,16 @@ func textV2ContractIndexDefinition2623() TextIndexDefinition {
 	}
 }
 
+func textV2ContractV2IndexDefinition2626() TextIndexDefinition {
+	def := textV2ContractIndexDefinition2623()
+	def.Version = TextIndexVersionV2
+	// M3 writes scoring postings/norms/docmaps only; lazy positions are owned by
+	// #2629, so the v2 write-path benchmark excludes v1 position payload work.
+	def.StorePositions = false
+	def.StoreOffsets = false
+	return def
+}
+
 func textV2ContractDocuments2623(count int, label string) ([][]byte, [][]byte) {
 	ids := make([][]byte, count)
 	docs := make([][]byte, count)
@@ -495,27 +650,103 @@ func textV2ContractStorageStats2623(tb testing.TB, col *Collection) TextIndexSto
 func textV2ContractReportBackfillStats2623(b *testing.B, docs int, stats TextIndexBackfillStats) {
 	b.Helper()
 	entries := uint64(stats.PostingEntries + stats.StateEntries + stats.StatsEntries)
+	v2Entries := uint64(stats.V2DocIDEntries + stats.V2DocMapBlocks + stats.V2PostingBlocks + stats.V2NormBlocks + stats.V2TermStats + stats.V2FormatRecords + stats.V2StatusRecords)
+	if v2Entries > 0 {
+		entries = v2Entries
+	}
+	docsDivisor := float64(maxTextV2ContractInt2623(docs, 1))
 	b.ReportMetric(float64(stats.DocumentsScanned), "docs_scanned/op")
 	b.ReportMetric(float64(stats.PostingEntries), "posting_entries/op")
 	b.ReportMetric(float64(stats.StateEntries), "state_entries/op")
 	b.ReportMetric(float64(stats.StatsEntries), "stats_entries/op")
-	b.ReportMetric(float64(entries)/float64(maxTextV2ContractInt2623(docs, 1)), "index_entries/doc")
-	b.ReportMetric(float64(entries)/float64(maxTextV2ContractInt2623(docs, 1)), "write_amp_entries/doc")
-	b.ReportMetric(float64(stats.EncodedBytes)/float64(maxTextV2ContractInt2623(docs, 1)), "index_bytes/doc")
+	b.ReportMetric(float64(stats.V2DocIDEntries), "v2_docid_entries/op")
+	b.ReportMetric(float64(stats.V2DocMapBlocks), "v2_docmap_blocks/op")
+	b.ReportMetric(float64(stats.V2PostingBlocks), "v2_posting_blocks/op")
+	b.ReportMetric(float64(stats.V2NormBlocks), "v2_norm_blocks/op")
+	b.ReportMetric(float64(stats.V2TermStats), "v2_term_stats/op")
+	b.ReportMetric(float64(stats.V2PostingBlocks)/docsDivisor, "posting_blocks/doc")
+	b.ReportMetric(0, "rewritten_blocks/doc")
+	b.ReportMetric(float64(entries)/docsDivisor, "index_entries/doc")
+	b.ReportMetric(float64(entries)/docsDivisor, "write_amp_entries/doc")
+	b.ReportMetric(float64(stats.EncodedBytes)/docsDivisor, "index_bytes/doc")
 }
 
 func textV2ContractReportWriteStats2623(b *testing.B, docs int, stats TextIndexStorageStats, writeAmpEntries uint64) {
 	b.Helper()
 	entries := textV2ContractStorageEntryCount2623(stats)
+	docsDivisor := float64(maxTextV2ContractInt2623(docs, 1))
 	b.ReportMetric(float64(stats.PostingEntries), "posting_entries/op")
 	b.ReportMetric(float64(stats.StateEntries), "state_entries/op")
 	b.ReportMetric(float64(stats.StatsEntries), "stats_entries/op")
-	b.ReportMetric(float64(entries)/float64(maxTextV2ContractInt2623(docs, 1)), "index_entries/doc")
-	b.ReportMetric(float64(writeAmpEntries)/float64(maxTextV2ContractInt2623(docs, 1)), "write_amp_entries/doc")
-	b.ReportMetric(float64(stats.EncodedBytes)/float64(maxTextV2ContractInt2623(docs, 1)), "index_bytes/doc")
+	b.ReportMetric(float64(stats.V2DocIDEntries), "v2_docid_entries/op")
+	b.ReportMetric(float64(stats.V2DocMapBlocks), "v2_docmap_blocks/op")
+	b.ReportMetric(float64(stats.V2PostingBlocks), "v2_posting_blocks/op")
+	b.ReportMetric(float64(stats.V2NormBlocks), "v2_norm_blocks/op")
+	b.ReportMetric(float64(stats.V2TermStats), "v2_term_stats/op")
+	b.ReportMetric(float64(stats.V2PostingBlocks)/docsDivisor, "posting_blocks/doc")
+	b.ReportMetric(0, "rewritten_blocks/doc")
+	b.ReportMetric(float64(entries)/docsDivisor, "index_entries/doc")
+	b.ReportMetric(float64(writeAmpEntries)/docsDivisor, "write_amp_entries/doc")
+	b.ReportMetric(float64(stats.EncodedBytes)/docsDivisor, "index_bytes/doc")
+}
+
+func textV2ContractReportHighDFBlocks2626(b *testing.B, docs int, blocks uint64) {
+	b.Helper()
+	b.ReportMetric(float64(blocks), "high_df_posting_blocks/op")
+	b.ReportMetric(float64(blocks)/float64(maxTextV2ContractInt2623(docs, 1)), "high_df_posting_blocks/doc")
+}
+
+func textV2ContractTermPostingBlockCount2626(tb testing.TB, col *Collection, term string) uint64 {
+	tb.Helper()
+	if col == nil || col.db == nil {
+		return 0
+	}
+	snap := col.db.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatalf("snapshot nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		tb.Fatalf("catalog snapshot: %v", err)
+	}
+	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionTextV2TermsRootName(catalog.meta.Name, textV2ContractIndexName2623), encodeTextV2TermStatsKey(term), nil)
+	if err != nil {
+		tb.Fatalf("term stats %q: %v", term, err)
+	}
+	if !ok {
+		return 0
+	}
+	stats, err := decodeTextV2TermStatsValue(raw)
+	if err != nil {
+		tb.Fatalf("decode term stats %q: %v", term, err)
+	}
+	return stats.PostingBlockCount
+}
+
+func textV2ContractV2MutationRootDeltaEntries2626(docs int, before, after TextIndexStorageStats, termEntries uint64) uint64 {
+	docEntries := uint64(maxTextV2ContractInt2623(docs, 0))
+	docMapBlocks := after.V2DocMapBlocks
+	if docMapBlocks == 0 {
+		docMapBlocks = before.V2DocMapBlocks
+	}
+	normBlocks := after.V2NormBlocks
+	if normBlocks == 0 {
+		normBlocks = before.V2NormBlocks
+	}
+	var postingBlocks uint64
+	if after.V2PostingBlocks > before.V2PostingBlocks {
+		postingBlocks = after.V2PostingBlocks - before.V2PostingBlocks
+	}
+	// V2 mutation writes include docID/docmap/norm roots, term-stat deltas,
+	// appended posting blocks (for inserts/updates), and the status generation.
+	return docEntries + docMapBlocks + normBlocks + postingBlocks + termEntries + 1
 }
 
 func textV2ContractStorageEntryCount2623(stats TextIndexStorageStats) uint64 {
+	if stats.Version == TextIndexVersionV2 || stats.V2FormatRecords > 0 {
+		return stats.V2DocIDEntries + stats.V2DocMapBlocks + stats.V2PostingBlocks + stats.V2NormBlocks + stats.V2TermStats + stats.V2FormatRecords + stats.V2StatusRecords
+	}
 	return stats.PostingEntries + stats.StateEntries + stats.StatsEntries
 }
 

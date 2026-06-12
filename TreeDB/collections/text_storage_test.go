@@ -152,6 +152,14 @@ func TestTextIndexAnalysisJSONFastPathAndNestedFallbackM2589(t *testing.T) {
 		t.Fatalf("tags length=%d want 1", got)
 	}
 
+	escapedRoot, err := analyzeTextIndexDocument(rootDef, []byte(`{"bo\u0064y":"Escaped Refund"}`))
+	if err != nil {
+		t.Fatalf("analyze escaped root key: %v", err)
+	}
+	if got := requireAnalyzedTermM2589(t, requireAnalyzedFieldM2589(t, escapedRoot, "body"), "escaped").Frequency; got != 1 {
+		t.Fatalf("escaped-key body frequency=%d want 1", got)
+	}
+
 	nestedDef := TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "nested.body"}}, StorePositions: true}
 	nested, err := analyzeTextIndexDocument(nestedDef, []byte(`{"nested":{"body":["Deep","Refund"]},"nested.body":"literal should not win"}`))
 	if err != nil {
