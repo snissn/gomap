@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"math"
 	"slices"
 
@@ -13,7 +14,9 @@ import (
 const (
 	textV2KeyKindPostingBlock byte = 0x21
 
-	textV2PostingBlockValueVersion byte = 1
+	textV2PostingBlockValueVersionV1 byte = 1
+	textV2PostingBlockValueVersion   byte = 2
+	textV2PostingBlockChecksumBytes       = 4
 
 	// textV2PostingBlockTargetPostings keeps ordinary sealed blocks small enough
 	// to stay cache-local in B-tree leaves. The root storage policy still owns the
@@ -187,6 +190,9 @@ func encodeTextV2PostingBlockValue(value textV2PostingBlockValue) []byte {
 		}
 		prev = entry.Ordinal
 	}
+	var checksum [textV2PostingBlockChecksumBytes]byte
+	binary.BigEndian.PutUint32(checksum[:], crc32.ChecksumIEEE(out))
+	out = append(out, checksum[:]...)
 	return out
 }
 
@@ -288,16 +294,17 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 }
 
 type textV2PostingBlockEntryScanner struct {
-	block           textV2PostingBlockValue
-	cur             textCursor
-	remaining       uint32
-	seen            uint32
-	prevOrdinal     uint64
-	fieldScratch    []uint32
-	computed        textV2PostingBlockSummary
-	computedFieldTF []uint32
-	err             error
-	finished        bool
+	block            textV2PostingBlockValue
+	cur              textCursor
+	remaining        uint32
+	seen             uint32
+	prevOrdinal      uint64
+	fieldScratch     []uint32
+	computed         textV2PostingBlockSummary
+	computedFieldTF  []uint32
+	checksumVerified bool
+	err              error
+	finished         bool
 }
 
 func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2PostingBlockEntryScanner, error) {
@@ -307,10 +314,25 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 	if len(raw) > textV2PostingBlockMaxValueBytes {
 		return nil, errMalformedTextStorage("text-v2 posting block value bytes %d exceed max %d", len(raw), textV2PostingBlockMaxValueBytes)
 	}
-	if raw[0] != textV2PostingBlockValueVersion {
+	valueVersion := raw[0]
+	if valueVersion != textV2PostingBlockValueVersion && valueVersion != textV2PostingBlockValueVersionV1 {
 		return nil, errUnsupportedTextStorageVersion("text-v2 posting block value", raw[0])
 	}
-	cur := textCursor{buf: raw[1:]}
+	payloadEnd := len(raw)
+	checksumVerified := false
+	if valueVersion == textV2PostingBlockValueVersion {
+		if len(raw) <= textV2PostingBlockChecksumBytes {
+			return nil, errMalformedTextStorage("short text-v2 posting block checksum")
+		}
+		payloadEnd -= textV2PostingBlockChecksumBytes
+		wantChecksum := binary.BigEndian.Uint32(raw[payloadEnd:])
+		gotChecksum := crc32.ChecksumIEEE(raw[:payloadEnd])
+		if gotChecksum != wantChecksum {
+			return nil, errMalformedTextStorage("text-v2 posting block checksum mismatch")
+		}
+		checksumVerified = true
+	}
+	cur := textCursor{buf: raw[1:payloadEnd]}
 	formatVersion, err := cur.readUvarint()
 	if err != nil {
 		return nil, errMalformedTextStorage("text-v2 posting block format version: %v", err)
@@ -425,11 +447,12 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 				UpperBoundKind:          upperBoundKind,
 			},
 		},
-		cur:             cur,
-		remaining:       docCount,
-		prevOrdinal:     blockStart - 1,
-		fieldScratch:    scratch[:fieldCount],
-		computedFieldTF: make([]uint32, fieldCount),
+		cur:              cur,
+		remaining:        docCount,
+		prevOrdinal:      blockStart - 1,
+		fieldScratch:     scratch[:fieldCount],
+		computedFieldTF:  make([]uint32, fieldCount),
+		checksumVerified: checksumVerified,
 	}, nil
 }
 
@@ -447,6 +470,10 @@ func (s *textV2PostingBlockEntryScanner) Block() textV2PostingBlockValue {
 	block := s.block
 	block.Summary = cloneTextV2PostingBlockSummary(block.Summary)
 	return block
+}
+
+func (s *textV2PostingBlockEntryScanner) ChecksumVerified() bool {
+	return s != nil && s.checksumVerified
 }
 
 func (s *textV2PostingBlockEntryScanner) Next(dst *textV2PostingBlockEntry) bool {
@@ -720,7 +747,7 @@ func estimateTextV2PostingBlockValueLen(value textV2PostingBlockValue, entries [
 	for _, entry := range entries {
 		n += 3*binary.MaxVarintLen64 + 1 + len(entry.FieldFrequencies)*binary.MaxVarintLen64
 	}
-	return n + len(value.Summary.MaxFieldTermFrequencies)
+	return n + len(value.Summary.MaxFieldTermFrequencies) + textV2PostingBlockChecksumBytes
 }
 
 func cloneTextV2PostingBlockEntries(entries []textV2PostingBlockEntry) []textV2PostingBlockEntry {

@@ -47,7 +47,11 @@ func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchRespons
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
-	candidates, candidateStats, err := c.hybridSearchCandidates(plan)
+	candidateAllowSet := allowSet
+	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
+		candidateAllowSet = nil
+	}
+	candidates, candidateStats, err := c.hybridSearchCandidates(plan, candidateAllowSet)
 	hybridMergeStats(&response.Stats, candidateStats)
 	if err != nil {
 		return hybridSearchFailClosed(response, hybridStatsFailClosedReason(candidateStats, hybridCandidateErrorFailClosedReason(err)), err)
@@ -305,14 +309,14 @@ func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
 	return ok, nil
 }
 
-func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan) ([]HybridSearchCandidate, HybridSearchStats, error) {
+func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
 	var stats HybridSearchStats
 	runText := func() error {
 		if plan.text == nil {
 			return nil
 		}
-		response, err := c.SearchHybridTextCandidates(*plan.text)
+		response, err := c.searchHybridTextCandidates(*plan.text, allowSet)
 		hybridMergeStats(&stats, response.Stats)
 		if err != nil {
 			return hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
@@ -483,6 +487,8 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.TextPostingsScanned += src.TextPostingsScanned
 	dst.TextPostingBlocksVisited += src.TextPostingBlocksVisited
 	dst.TextPostingBlocksSkipped += src.TextPostingBlocksSkipped
+	dst.TextBlockMaxFallbacks += src.TextBlockMaxFallbacks
+	dst.TextBlockMaxThresholds += src.TextBlockMaxThresholds
 	dst.TextCandidatesScored += src.TextCandidatesScored
 	dst.TextStateLookups += src.TextStateLookups
 	dst.TextNormLookups += src.TextNormLookups

@@ -17,10 +17,11 @@ Include all of the following in PR bodies/issues:
 - baseline commit/branch and candidate commit/branch;
 - dataset shape and measured boundary;
 - `ns/op`, derived `ops/sec`, `B/op`, `allocs/op`, and before/after delta;
-- domain counters: postings scanned, posting blocks visited/skipped, candidates
-  scored, state/norm lookups, docs fetched, match details built, scalar filter
-  selectivity, fail-closed count/reason, write amplification, index bytes/doc,
-  and rewrite/merge state when applicable.
+- domain counters: postings scanned, posting blocks visited/skipped,
+  block-max fallbacks, threshold updates, candidates scored, state/norm lookups,
+  docs fetched, match details built, scalar filter selectivity, fail-closed
+  count/reason, write amplification, index bytes/doc, and rewrite/merge state
+  when applicable.
 
 Candidate-generation rows must keep `docs_fetched/search=0` and
 `full_doc_fallbacks/search=0`. Final-fetch rows must keep
@@ -181,7 +182,8 @@ go test ./TreeDB/collections \
 Report text search counters:
 
 - `postings_scanned/search`;
-- `posting_blocks_visited/search` and `posting_blocks_skipped/search` (v1 = 0; M4 v2 exhaustive search reports visited blocks and skipped=0);
+- `posting_blocks_visited/search` and `posting_blocks_skipped/search` (v1 = 0; M4 v2 exhaustive search reports visited blocks and skipped=0; M5 v2 block-max reports decoded versus skipped blocks);
+- `blockmax_fallbacks/search` and `threshold_updates/search`;
 - `candidates_scored/search`;
 - `state_lookups/search` and `norm_lookups/search`;
 - `match_details/search`;
@@ -190,7 +192,9 @@ Report text search counters:
 M4 (#2627) adds an explicit v2 score-only search benchmark with the same corpus
 and query cases. It creates a v2 index with `CreateTextIndex`, scans compressed
 posting blocks under one snapshot, scores from norm/docmap blocks, and asserts
-`state_lookups=0`, `match_details=0`, and `docs_fetched=0`:
+`state_lookups=0`, `match_details=0`, and `docs_fetched=0`. As of M5 (#2628),
+single-term common rows use exact block-max skipping while multi-term rows report
+exact exhaustive `blockmax_fallbacks/search`:
 
 ```sh
 GOWORK=off \
@@ -217,11 +221,54 @@ go test ./TreeDB/collections \
   | tee "$OUT/text_v2_score_search_scale_100k.txt"
 ```
 
+## M5 block-max common-term rows
+
+Benchmark name: `BenchmarkTextV2BlockMaxCommonTerm2628`.
+
+This row runs the M5 exact single-term common top-K path against the explicit v2
+fixture and includes an in-process `exhaustive_common_topk` comparison with
+block-max disabled. The measured boundary is `SearchText` score-only candidate
+generation: no full documents, no v1 text-state lookups, and no match-detail
+builds.
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_BLOCKMAX_DOCS=10000 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' \
+  -benchmem \
+  -benchtime=5x \
+  -count=3 \
+  | tee "$OUT/text_v2_blockmax_common_10k.txt"
+```
+
+Required >=100k local artifact command for #2628:
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_BLOCKMAX_DOCS=100000 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' \
+  -benchmem \
+  -benchtime=1x \
+  -count=1 \
+  | tee "$OUT/text_v2_blockmax_common_100k.txt"
+```
+
+Report the same text counters as the search scale rows, especially
+`postings_scanned/search`, `posting_blocks_visited/search`,
+`posting_blocks_skipped/search`, `candidates_scored/search`,
+`threshold_updates/search`, and `blockmax_fallbacks/search`.
+
 ## Concurrent serving/load row
 
-Benchmark name: `BenchmarkTextV2ContractConcurrentServing2623`.
+Benchmark names: `BenchmarkTextV2ContractConcurrentServing2623` for the M0
+contract row and `BenchmarkTextV2BlockMaxConcurrentServing2628` for the M5 v2
+block-max serving row.
 
-The row serves warmed `SearchHybridTextCandidates` calls concurrently and reports
+The rows serve warmed candidate-generation calls concurrently and report
 p50/p95/p99 latency, steady-state heap, reader concurrency, and whether mixed
 write/snapshot churn was enabled. M0's default row uses read-only snapshot churn
 `0`; later implementation PRs should add a mixed write/snapshot-churn variant
@@ -240,11 +287,27 @@ go test ./TreeDB/collections \
   | tee "$OUT/text_v2_concurrent_serving.txt"
 ```
 
+M5 v2 block-max concurrent row:
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_BLOCKMAX_CONCURRENT_DOCS=10000 \
+TREEDB_TEXT_V2_BLOCKMAX_CONCURRENT_READERS=8 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2BlockMaxConcurrentServing2628$' \
+  -benchmem \
+  -benchtime=200x \
+  -count=3 \
+  | tee "$OUT/text_v2_blockmax_concurrent_serving.txt"
+```
+
 Counters include `p50_ns/search`, `p95_ns/search`, `p99_ns/search`,
 `steady_heap_bytes`, `readers`, `cache_warm`, and
-`mixed_write_snapshot_churn`.
+`mixed_write_snapshot_churn` where the row exposes it. The M5 row must also show
+non-zero `posting_blocks_skipped/search` in the warm stats or fail the benchmark.
 
-## Profiles for current v1 hot spots
+## Profiles for current v1 hot spots and M5 block-max path
 
 Search CPU/alloc profile:
 
@@ -261,6 +324,23 @@ GOWORK=off go test ./TreeDB/collections \
   | tee "$OUT/text_search_profile_bench.txt"
 go tool pprof -top "$OUT/text_search_cpu.pprof" > "$OUT/text_search_cpu_top.txt"
 go tool pprof -top "$OUT/text_search_mem.pprof" > "$OUT/text_search_mem_top.txt"
+```
+
+M5 block-max CPU profile for common terms:
+
+```sh
+BENCH='^BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk$'
+GOWORK=off TREEDB_TEXT_V2_BLOCKMAX_DOCS=100000 go test ./TreeDB/collections \
+  -run '^$' \
+  -bench "$BENCH" \
+  -benchmem \
+  -benchtime=3x \
+  -count=1 \
+  -cpuprofile "$OUT/text_v2_blockmax_cpu.pprof" \
+  -memprofile "$OUT/text_v2_blockmax_mem.pprof" \
+  | tee "$OUT/text_v2_blockmax_profile_bench.txt"
+go tool pprof -top "$OUT/text_v2_blockmax_cpu.pprof" > "$OUT/text_v2_blockmax_cpu_top.txt"
+go tool pprof -top "$OUT/text_v2_blockmax_mem.pprof" > "$OUT/text_v2_blockmax_mem_top.txt"
 ```
 
 Write CPU/alloc profile:

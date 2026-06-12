@@ -12,6 +12,10 @@ import (
 // match attribution, and fails closed if the backing text path reports any full
 // document materialization or scan fallback.
 func (c *Collection) SearchHybridTextCandidates(query HybridTextQuery) (HybridCandidateResponse, error) {
+	return c.searchHybridTextCandidates(query, nil)
+}
+
+func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
 	if c == nil {
 		return HybridCandidateResponse{}, errCollectionNil
 	}
@@ -27,10 +31,11 @@ func (c *Collection) SearchHybridTextCandidates(query HybridTextQuery) (HybridCa
 	}
 
 	textResponse, err := c.searchText(TextSearchOptions{
-		IndexName:        query.IndexName,
-		Query:            query.Query,
-		TopK:             requested,
-		IncludeDocuments: false,
+		IndexName:                query.IndexName,
+		Query:                    query.Query,
+		TopK:                     requested,
+		IncludeDocuments:         false,
+		textV2AllowedDocumentIDs: allowSet,
 	}, textSearchResultTextMatchesOnly)
 	if err != nil {
 		response := HybridCandidateResponse{Stats: hybridTextCandidateStatsFromSearch(requested, textResponse.Stats, 0)}
@@ -100,6 +105,8 @@ func hybridTextCandidateStatsFromSearch(requested int, textStats TextSearchStats
 		TextPostingsScanned:       hybridMaxUint64(textStats.TextPostingsScanned, textStats.PostingsScanned),
 		TextPostingBlocksVisited:  textStats.TextPostingBlocksVisited,
 		TextPostingBlocksSkipped:  textStats.TextPostingBlocksSkipped,
+		TextBlockMaxFallbacks:     textStats.TextBlockMaxFallbacks,
+		TextBlockMaxThresholds:    textStats.TextBlockMaxThresholds,
 		TextCandidatesScored:      textCandidatesScored,
 		TextStateLookups:          textStats.TextStateLookups,
 		TextNormLookups:           textStats.TextNormLookups,
