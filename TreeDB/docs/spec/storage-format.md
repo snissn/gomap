@@ -579,8 +579,8 @@ pruning-metadata sections may use Snappy or LZ4 when the raw length is within
 the decoder cap; readers validate the raw byte count before decompression and
 fail closed on unsupported section compression.
 
-The `row_locator_contiguous` physical encoding value (`34`) and
-`dictionary_dense` physical encoding value (`35`) are durable TCIM section
+The `row_locator_contiguous` physical encoding value (`37`) and
+`dictionary_dense` physical encoding value (`38`) are durable TCIM section
 encodings. They must appear only on their matching section kinds and must not be
 advertised as declared-column payload codecs or direct-view certification
 targets.
