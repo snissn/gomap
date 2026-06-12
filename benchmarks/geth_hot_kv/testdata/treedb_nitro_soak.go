@@ -66,6 +66,20 @@ type phaseResult struct {
 	OpsPerSec      float64 `json:"ops_per_sec"`
 }
 
+type memStatsDelta struct {
+	Phase             string `json:"phase"`
+	Engine            string `json:"engine"`
+	TotalAllocBytes   uint64 `json:"total_alloc_bytes"`
+	Mallocs           uint64 `json:"mallocs"`
+	Frees             uint64 `json:"frees"`
+	HeapAllocBefore   uint64 `json:"heap_alloc_before"`
+	HeapAllocAfter    uint64 `json:"heap_alloc_after"`
+	HeapObjectsBefore uint64 `json:"heap_objects_before"`
+	HeapObjectsAfter  uint64 `json:"heap_objects_after"`
+	PauseTotalNs      uint64 `json:"pause_total_ns"`
+	NumGCDelta        uint32 `json:"num_gc_delta"`
+}
+
 type runResult struct {
 	Engine                string                 `json:"engine"`
 	DBPath                string                 `json:"db_path"`
@@ -665,6 +679,9 @@ func (p phaseProfiler) time(phase string, fn func() (int, error)) (phaseResult, 
 		if err != nil {
 			return phaseResult{}, err
 		}
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
 		if err := pprof.StartCPUProfile(f); err != nil {
 			_ = f.Close()
 			return phaseResult{}, err
@@ -673,10 +690,12 @@ func (p phaseProfiler) time(phase string, fn func() (int, error)) (phaseResult, 
 		ops, runErr := fn()
 		elapsed := time.Since(start)
 		pprof.StopCPUProfile()
+		runtime.ReadMemStats(&after)
 		if err := f.Close(); err != nil && runErr == nil {
 			runErr = err
 		}
-		writeRuntimeProfile(filepath.Join(p.cfg.ProfileDir, fmt.Sprintf("allocs_%s_%s.pprof", phase, p.engine)), "allocs")
+		writeMemStatsDelta(filepath.Join(p.cfg.ProfileDir, fmt.Sprintf("memstats_%s_%s.json", phase, p.engine)), phase, p.engine, before, after)
+		writeRuntimeProfile(filepath.Join(p.cfg.ProfileDir, fmt.Sprintf("allocs_cumulative_%s_%s.pprof", phase, p.engine)), "allocs")
 		return phaseResult{DurationMillis: elapsed.Milliseconds(), Ops: ops, OpsPerSec: perSec(ops, elapsed)}, runErr
 	}
 	start := time.Now()
@@ -695,6 +714,30 @@ func (p phaseProfiler) shouldProfile() bool {
 		}
 	}
 	return false
+}
+
+func writeMemStatsDelta(path, phase, engine string, before, after runtime.MemStats) {
+	delta := memStatsDelta{
+		Phase:             phase,
+		Engine:            engine,
+		TotalAllocBytes:   after.TotalAlloc - before.TotalAlloc,
+		Mallocs:           after.Mallocs - before.Mallocs,
+		Frees:             after.Frees - before.Frees,
+		HeapAllocBefore:   before.HeapAlloc,
+		HeapAllocAfter:    after.HeapAlloc,
+		HeapObjectsBefore: before.HeapObjects,
+		HeapObjectsAfter:  after.HeapObjects,
+		PauseTotalNs:      after.PauseTotalNs - before.PauseTotalNs,
+		NumGCDelta:        after.NumGC - before.NumGC,
+	}
+	blob, err := json.MarshalIndent(delta, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memstats %s: %v\n", path, err)
+		return
+	}
+	if err := os.WriteFile(path, append(blob, '\n'), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "memstats %s: %v\n", path, err)
+	}
 }
 
 func writeRuntimeProfile(path, name string) {

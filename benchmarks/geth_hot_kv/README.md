@@ -73,5 +73,7 @@ PROFILE_DIR=/tmp/geth_hotkv_profiles \
 ```
 
 Profile artifacts are written per phase, for example
-`cpu_write_treedb.pprof`, `allocs_read_treedb.pprof`, `block.pprof`, and
-`mutex.pprof`.
+`cpu_write_treedb.pprof`, `memstats_read_treedb.json`,
+`allocs_cumulative_read_treedb.pprof`, `block.pprof`, and `mutex.pprof`.
+Allocation pprof files are explicitly labeled cumulative; use the `memstats_*`
+JSON files for phase-local allocation deltas.
