@@ -484,6 +484,8 @@ func indexInsertSearchReportCandidateStats2564(b *testing.B, response HybridCand
 	b.ReportMetric(float64(response.Stats.TextPostingsScanned), "text_postings/search")
 	b.ReportMetric(float64(response.Stats.TextPostingBlocksVisited), "posting_blocks_visited/search")
 	b.ReportMetric(float64(response.Stats.TextPostingBlocksSkipped), "posting_blocks_skipped/search")
+	b.ReportMetric(float64(response.Stats.TextBlockMaxFallbacks), "blockmax_fallbacks/search")
+	b.ReportMetric(float64(response.Stats.TextBlockMaxThresholds), "threshold_updates/search")
 	b.ReportMetric(float64(response.Stats.TextCandidatesScored), "text_scored/search")
 	b.ReportMetric(float64(response.Stats.TextStateLookups), "text_state_lookups/search")
 	b.ReportMetric(float64(response.Stats.TextNormLookups), "text_norm_lookups/search")

@@ -8,10 +8,15 @@ import (
 // SearchHybridTextCandidates adapts collection-native ranked text search into
 // the shared hybrid candidate shape. It is candidate-only: it requests no
 // documents from SearchText, reuses response-owned result IDs for response-owned
-// HybridSearchCandidate values, assigns one-based source ranks, preserves text
-// match attribution, and fails closed if the backing text path reports any full
-// document materialization or scan fallback.
+// HybridSearchCandidate values, assigns one-based source ranks, and fails closed
+// if the backing text path reports any full document materialization or scan
+// fallback. Match attribution is opt-in through HybridTextQuery.IncludeTextMatches;
+// the default candidate path is score-only.
 func (c *Collection) SearchHybridTextCandidates(query HybridTextQuery) (HybridCandidateResponse, error) {
+	return c.searchHybridTextCandidates(query, nil)
+}
+
+func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
 	if c == nil {
 		return HybridCandidateResponse{}, errCollectionNil
 	}
@@ -26,12 +31,17 @@ func (c *Collection) SearchHybridTextCandidates(query HybridTextQuery) (HybridCa
 		return response, err
 	}
 
+	resultMode := textSearchResultScoreOnly
+	if query.IncludeTextMatches {
+		resultMode = textSearchResultTextMatchesOnly
+	}
 	textResponse, err := c.searchText(TextSearchOptions{
-		IndexName:        query.IndexName,
-		Query:            query.Query,
-		TopK:             requested,
-		IncludeDocuments: false,
-	}, textSearchResultTextMatchesOnly)
+		IndexName:                query.IndexName,
+		Query:                    query.Query,
+		TopK:                     requested,
+		IncludeDocuments:         false,
+		textV2AllowedDocumentIDs: allowSet,
+	}, resultMode)
 	if err != nil {
 		response := HybridCandidateResponse{Stats: hybridTextCandidateStatsFromSearch(requested, textResponse.Stats, 0)}
 		response.Stats.FailClosed = 1
@@ -100,6 +110,8 @@ func hybridTextCandidateStatsFromSearch(requested int, textStats TextSearchStats
 		TextPostingsScanned:       hybridMaxUint64(textStats.TextPostingsScanned, textStats.PostingsScanned),
 		TextPostingBlocksVisited:  textStats.TextPostingBlocksVisited,
 		TextPostingBlocksSkipped:  textStats.TextPostingBlocksSkipped,
+		TextBlockMaxFallbacks:     textStats.TextBlockMaxFallbacks,
+		TextBlockMaxThresholds:    textStats.TextBlockMaxThresholds,
 		TextCandidatesScored:      textCandidatesScored,
 		TextStateLookups:          textStats.TextStateLookups,
 		TextNormLookups:           textStats.TextNormLookups,

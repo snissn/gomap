@@ -27,15 +27,16 @@ type TextIndexBackfillStats struct {
 	StatsEntries     int
 	EncodedBytes     uint64
 
-	V2DocIDEntries   int
-	V2DocMapBlocks   int
-	V2PostingBlocks  int
-	V2NormBlocks     int
-	V2TermStats      int
-	V2FormatRecords  int
-	V2StatusRecords  int
-	V2NextOrdinal    uint64
-	V2RootGeneration uint64
+	V2DocIDEntries    int
+	V2DocMapBlocks    int
+	V2PostingBlocks   int
+	V2NormBlocks      int
+	V2PositionEntries int
+	V2TermStats       int
+	V2FormatRecords   int
+	V2StatusRecords   int
+	V2NextOrdinal     uint64
+	V2RootGeneration  uint64
 }
 
 // TextIndexStorageStats reports durable text-root contents after validation.
@@ -51,6 +52,7 @@ type TextIndexStorageStats struct {
 	V2DocMapBlocks    uint64
 	V2PostingBlocks   uint64
 	V2NormBlocks      uint64
+	V2PositionEntries uint64
 	V2TermStats       uint64
 	V2FormatRecords   uint64
 	V2StatusRecords   uint64
@@ -302,7 +304,6 @@ func buildCreateTextV2IndexBackfillPlan(
 	}
 
 	fieldNames := textV2FieldNames(def)
-	analysisDef := textV2ScoringAnalysisDefinition(def)
 	for _, rootName := range rootNames {
 		family, ok := textV2RootFamilyForName(catalog.meta.Name, def.Name, rootName)
 		if !ok {
@@ -327,6 +328,7 @@ func buildCreateTextV2IndexBackfillPlan(
 	termsRootName := collectionTextV2TermsRootName(catalog.meta.Name, def.Name)
 	postingBlocksRootName := collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name)
 	normRootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
+	positionsRootName := collectionTextV2PositionsRootName(catalog.meta.Name, def.Name)
 	generationsRootName := collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name)
 	docMapBlocks := make(map[uint64]*textV2DocMapBlockValue)
 	normBlocks := make(map[uint64]*textV2NormBlockValue)
@@ -358,7 +360,7 @@ func buildCreateTextV2IndexBackfillPlan(
 					resetAll()
 					return nil, err
 				}
-				analysis, err := analyzeTextIndexDocument(analysisDef, jsonDocument)
+				analysis, err := analyzeTextIndexDocument(def, jsonDocument)
 				if err != nil {
 					resetAll()
 					return nil, err
@@ -394,6 +396,13 @@ func buildCreateTextV2IndexBackfillPlan(
 					resetAll()
 					return nil, err
 				}
+				positionEntries, positionBytes, err := addTextV2PositionEntriesForDocument(tables[positionsRootName], def, ordinal, generation, analysis)
+				if err != nil {
+					resetAll()
+					return nil, err
+				}
+				plan.stats.V2PositionEntries += positionEntries
+				plan.stats.EncodedBytes += positionBytes
 				acc.addDocument(analysis)
 				plan.stats.DocumentsScanned++
 				it.Next()
@@ -1265,7 +1274,16 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			}
 			stats.V2TermStats++
 			stats.StatsEntries++
-		case family == textV2RootFamilyPositions || family == textV2RootFamilyGenerations:
+		case family == textV2RootFamilyPositions:
+			position, err := decodeTextV2PositionValue(value)
+			if err != nil {
+				return err
+			}
+			if err := validateTextV2PositionEntryAtSnapshot(snap, catalog, def, key, position, status); err != nil {
+				return err
+			}
+			stats.V2PositionEntries++
+		case family == textV2RootFamilyGenerations:
 			return errMalformedTextStorage("unsupported text-v2 root %q entry key %x", rootName, key)
 		default:
 			return errMalformedTextStorage("unsupported text-v2 root %q family %s", rootName, family)

@@ -37,12 +37,30 @@ const (
 	textSearchBM25B  = 0.75
 )
 
+// TextSearchResultMode controls how much lexical match attribution is
+// materialized for returned results. The zero value keeps the historical
+// SearchText behavior: detailed field/term summaries for final top-K results.
+type TextSearchResultMode string
+
+const (
+	TextSearchResultModeDefault   TextSearchResultMode = ""
+	TextSearchResultModeDetailed  TextSearchResultMode = "detailed"
+	TextSearchResultModeCompact   TextSearchResultMode = "compact"
+	TextSearchResultModeScoreOnly TextSearchResultMode = "score_only"
+)
+
 // TextSearchOptions configures collection-native lexical search.
 type TextSearchOptions struct {
 	IndexName string
 	Query     string
 	Operator  TextSearchOperator
 	TopK      int
+	// ResultMode controls optional match-detail materialization. The zero value
+	// is detailed for API compatibility. Score-only returns IDs/ranks/scores
+	// without match summaries; compact returns TextMatches only; detailed returns
+	// TextMatches plus legacy MatchedTerms/MatchedFields. Document fetching remains
+	// controlled solely by IncludeDocuments.
+	ResultMode TextSearchResultMode
 	// CandidateLimit bounds the number of unique document candidates generated
 	// from postings before scoring. The zero value uses an implementation default
 	// derived from TopK. When the limit is exceeded, SearchText fails closed rather
@@ -53,6 +71,13 @@ type TextSearchOptions struct {
 	MaxPostingsScanned   int
 	IncludeDocuments     bool
 	DocumentFetchOptions DocumentFetchOptions
+
+	// textV2AllowedDocumentIDs is an internal, snapshot-bound scalar prefilter
+	// allow-set used by hybrid search. It is intentionally unexported so public
+	// text search cannot accidentally bind to a scalar index outside the hybrid
+	// snapshot checks.
+	textV2AllowedDocumentIDs hybridScalarAllowSet
+	textV2DisableBlockMax    bool
 }
 
 // TextSearchMatch carries matched field/term attribution for a lexical result.
@@ -86,6 +111,8 @@ type TextSearchStats struct {
 	TextPostingsScanned       uint64
 	TextPostingBlocksVisited  uint64
 	TextPostingBlocksSkipped  uint64
+	TextBlockMaxFallbacks     uint64
+	TextBlockMaxThresholds    uint64
 	TextCandidatesScored      uint64
 	TextStateLookups          uint64
 	TextNormLookups           uint64
@@ -179,10 +206,27 @@ const (
 	textSearchResultScoreOnly
 )
 
+func normalizeTextSearchResultMode(mode TextSearchResultMode) (textSearchResultMode, error) {
+	switch mode {
+	case TextSearchResultModeDefault, TextSearchResultModeDetailed:
+		return textSearchResultFull, nil
+	case TextSearchResultModeCompact:
+		return textSearchResultTextMatchesOnly, nil
+	case TextSearchResultModeScoreOnly:
+		return textSearchResultScoreOnly, nil
+	default:
+		return 0, fmt.Errorf("collections: unsupported text search result mode %q", mode)
+	}
+}
+
 // SearchText executes a bounded postings-backed lexical search for a declared
 // collection text index. It never scans/ranks all collection documents.
 func (c *Collection) SearchText(opts TextSearchOptions) (TextSearchResponse, error) {
-	return c.searchText(opts, textSearchResultFull)
+	resultMode, err := normalizeTextSearchResultMode(opts.ResultMode)
+	if err != nil {
+		return TextSearchResponse{}, err
+	}
+	return c.searchText(opts, resultMode)
 }
 
 func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchResultMode) (TextSearchResponse, error) {
@@ -593,14 +637,26 @@ func textSearchCandidateMatchDetails(candidate *textSearchCandidate, includeLega
 		entry := candidate.postingAt(postingIdx)
 		for fieldIdx := 0; fieldIdx < entry.posting.fieldCount(); fieldIdx++ {
 			field := entry.posting.fieldAt(fieldIdx)
-			if len(pairs) == cap(pairs) {
-				grown := make([]textSearchMatchPair, len(pairs), len(pairs)*2)
-				copy(grown, pairs)
-				pairs = grown
-			}
-			pairs = append(pairs, textSearchMatchPair{field: field.Field, term: entry.term})
+			pairs = appendTextSearchMatchPair(pairs, textSearchMatchPair{field: field.Field, term: entry.term})
 		}
 	}
+	return textSearchMatchDetailsFromPairs(pairs, includeLegacyLists)
+}
+
+func appendTextSearchMatchPair(pairs []textSearchMatchPair, pair textSearchMatchPair) []textSearchMatchPair {
+	if len(pairs) == cap(pairs) {
+		newCap := len(pairs) * 2
+		if newCap == 0 {
+			newCap = 4
+		}
+		grown := make([]textSearchMatchPair, len(pairs), newCap)
+		copy(grown, pairs)
+		pairs = grown
+	}
+	return append(pairs, pair)
+}
+
+func textSearchMatchDetailsFromPairs(pairs []textSearchMatchPair, includeLegacyLists bool) ([]string, []string, []TextSearchMatch) {
 	if len(pairs) == 0 {
 		return nil, nil, nil
 	}

@@ -384,6 +384,8 @@ func TextIndexV2RequiredCounterNames() []string {
 		"postings_scanned",
 		"posting_blocks_visited",
 		"posting_blocks_skipped",
+		"blockmax_fallbacks",
+		"threshold_updates",
 		"candidates_scored",
 		"state_lookups",
 		"norm_lookups",

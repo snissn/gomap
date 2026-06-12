@@ -4789,6 +4789,109 @@ func TestCollectionCompactRootOverlaysFoldsIntoBaseRoots(t *testing.T) {
 	}
 }
 
+func TestCollectionCompactStorageProtectsFoldedRootIDs(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			DisableBufferedIndexedAsyncFlush: true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if _, _, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"sea"}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("update city: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush overlays: %v", err)
+	}
+
+	result, err := col.compactRootOverlays(context.Background())
+	if err != nil {
+		t.Fatalf("compact root overlays: %v", err)
+	}
+	if result.stats.Roots == 0 || result.stats.OverlayRoots == 0 {
+		t.Fatalf("compact result stats=%+v want nonzero roots and overlays", result.stats)
+	}
+	if len(result.rootIDs) == 0 {
+		t.Fatal("compact result rootIDs=0 want folded roots protected")
+	}
+	if result.systemRootID == 0 {
+		t.Fatal("compact result systemRootID=0 want published system root protected")
+	}
+
+	opts := compactStorageOptionsWithCollectionRootProtection(CompactStorageOptions{}, result)
+	for _, rootID := range result.rootIDs {
+		if got := countCompactStorageProtectedRootID(opts.LeafGenerationProtectedRootIDs, rootID); got != 0 {
+			t.Fatalf("direct protected root id %d occurrences=%d in %v want 0", rootID, got, opts.LeafGenerationProtectedRootIDs)
+		}
+	}
+	if got := countCompactStorageProtectedRootID(opts.LeafGenerationProtectedSystemRootIDs, result.systemRootID); got != 1 {
+		t.Fatalf("protected system root id %d occurrences=%d in %v want 1", result.systemRootID, got, opts.LeafGenerationProtectedSystemRootIDs)
+	}
+	if _, err := db.CompactStoragePlan(context.Background(), backenddb.CompactStorageOptions(opts)); err != nil {
+		t.Fatalf("CompactStoragePlan with folded-root protection: %v", err)
+	}
+}
+
+func TestCompactStorageOptionsWithCollectionRootProtectionMergesDistinctRoots(t *testing.T) {
+	opts := compactStorageOptionsWithCollectionRootProtection(CompactStorageOptions{
+		LeafGenerationProtectedRootIDs:       []uint64{1, 2},
+		LeafGenerationProtectedSystemRootIDs: []uint64{10},
+	},
+		collectionRootOverlayCompactionResult{
+			rootIDs:      []uint64{0, 2, 3},
+			systemRootID: 10,
+		},
+		collectionRootOverlayCompactionResult{
+			rootIDs:      []uint64{3, 4},
+			systemRootID: 11,
+		},
+		collectionRootOverlayCompactionResult{},
+	)
+	if want := []uint64{1, 2}; !reflect.DeepEqual(opts.LeafGenerationProtectedRootIDs, want) {
+		t.Fatalf("protected root ids=%v want %v", opts.LeafGenerationProtectedRootIDs, want)
+	}
+	if want := []uint64{10, 11}; !reflect.DeepEqual(opts.LeafGenerationProtectedSystemRootIDs, want) {
+		t.Fatalf("protected system root ids=%v want %v", opts.LeafGenerationProtectedSystemRootIDs, want)
+	}
+}
+
+func countCompactStorageProtectedRootID(ids []uint64, want uint64) int {
+	var count int
+	for _, id := range ids {
+		if id == want {
+			count++
+		}
+	}
+	return count
+}
+
 func TestCollectionCompactStorageFoldsRootsAndCleansStorage(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)

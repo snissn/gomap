@@ -183,7 +183,7 @@ Posting-block values contain scoring postings only; positions and offsets are
 absent and belong to a separate positions lane if enabled by a later format.
 
 ```text
-u8      ValueVersion  = 1
+u8      ValueVersion  = 2
 uvarint FormatVersion = 1
 u8      BlockKind     // 1=sealed, 2=delta, 3=micro
 u8      Flags         // currently 0
@@ -206,7 +206,14 @@ uvarint Generation
 u8      EntryFlags    // currently 0
 uvarint TermFrequency
 uvarint FieldTermFrequency[FieldCount]
+
+u32 PayloadCRC32BE // IEEE CRC-32 over all preceding value bytes, including ValueVersion
 ```
+
+`ValueVersion=1` blocks from the M2/M4 pre-M5 format did not carry the trailing
+checksum. Current decoders can still read them for exact exhaustive validation,
+but M5 block-max skipping requires the checksum-protected `ValueVersion=2`
+payload before trusting summary bytes for skip decisions.
 
 Required validation/fail-closed invariants:
 
@@ -222,16 +229,79 @@ Required validation/fail-closed invariants:
   posting count per block.
 - `FieldCount` is the text index field count. Every posting has exactly that
   many field-frequency lanes, and the lane sum equals `TermFrequency`.
+- `PayloadCRC32BE` must match the preceding value bytes before a reader may use
+  summary metadata for block-max skip decisions.
 - `MaxTermFrequency`, `MaxFieldTermFrequency`, first/last ordinal, and doc count
   must exactly summarize the decoded entries.
 - `UpperBoundKind=1` records per-field lane maxima that are admissible BM25F
   upper-bound inputs for non-negative BM25F weights. A future scorer that cannot
   compute/validate an admissible block bound for a query must treat the block as
   unskippable and score exhaustively.
-- Unsupported versions, flags, kinds, malformed varints, trailing bytes,
-  key/value identity mismatches, field-count mismatches, corrupt summaries, or
-  status generation/ordinal bounds violations make the root corrupt for text-v2
-  inspection and must fail closed.
+- Unsupported versions, checksum mismatches, flags, kinds, malformed varints,
+  trailing bytes, key/value identity mismatches, field-count mismatches, corrupt
+  summaries, or status generation/ordinal bounds violations make the root
+  corrupt for text-v2 inspection and must fail closed.
+
+Text-v2 optional positions root name:
+
+```text
+<collection>/text-v2-positions/<indexName>
+```
+
+The positions root is format-only unless the text index was created with
+`StorePositions=true`. It remains an ordinary ordered root using the text index
+root storage policy; inline values and value-log pointer-backed values are
+managed by normal TreeDB root/value-log maintenance. Posting scoring blocks do
+not contain positions or offsets.
+
+Position keys identify one current-or-historical document ordinal and term:
+
+```text
+u8  KeyVersion = 2
+u8  KeyKind    = 0x22  // text-v2 position/detail payload
+u64 OrdinalBE
+uvarint TermLen
+bytes Term[TermLen]
+```
+
+Position values are versioned and fail closed:
+
+```text
+u8      ValueVersion  = 1
+uvarint FormatVersion = 1
+uvarint Ordinal
+uvarint Generation
+uvarint TermLen
+bytes   Term[TermLen]
+uvarint FieldEntryCount
+
+// repeated FieldEntryCount times, sorted by field index
+uvarint FieldIndex
+uvarint FieldTermFrequency
+uvarint PositionCount
+uvarint Positions[PositionCount]
+uvarint OffsetCount
+repeated OffsetCount: uvarint Start, uvarint End
+```
+
+Validation invariants:
+
+- key/value ordinal and term must match, and ordinal/generation must be non-zero
+  and within the text-v2 status snapshot;
+- field indexes are strictly increasing and within the index field list;
+- `FieldTermFrequency` is non-zero, `PositionCount == FieldTermFrequency`, and
+  positions are strictly increasing within each field;
+- offsets are absent when `StoreOffsets=false`, or have exactly one
+  non-negative `end >= start` offset per position when `StoreOffsets=true`;
+- detailed/compact materialization validates only returned final results, while
+  score-only search does not read this lane.
+
+Unsupported versions, malformed varints, trailing bytes, missing final-result
+payloads for positions-enabled indexes, generation/key/value mismatches, field
+frequency mismatches with the scoring posting, corrupt positions/offsets, or
+entries present for an index without `StorePositions` make the text-v2 positions
+lane corrupt and must fail closed when inspected or when detailed materialization
+needs the affected payload.
 
 ## 4. Value Pointer Encoding (`page.ValuePtr`)
 
@@ -670,6 +740,79 @@ Current typed-column image version 4 directory entries carry per-section
 pruning-metadata sections may use Snappy or LZ4 when the raw length is within
 the decoder cap; readers validate the raw byte count before decompression and
 fail closed on unsupported section compression.
+
+The `row_locator_contiguous` physical encoding value (`37`) and
+`dictionary_dense` physical encoding value (`38`) are durable TCIM section
+encodings. They must appear only on their matching section kinds and must not be
+advertised as declared-column payload codecs or direct-view certification
+targets.
+
+`row_locators` sections with encoding `0` use the legacy raw payload:
+
+```text
+u32 count
+repeated count times:
+  i64 primary_id
+  u64 part_id
+  u32 part_row
+  u32 granule_ordinal
+  u32 row_in_granule
+  u32 reserved_zero
+```
+
+`row_locators` sections with encoding `row_locator_contiguous` use exactly 32
+bytes:
+
+```text
+u32 magic = 0x54434c52  // "RLCT" little-endian bytes
+u16 version = 1
+u16 reserved_zero
+u64 part_id
+u64 row_count
+i64 base_primary_id
+```
+
+Readers validate the payload length, magic, version, reserved field, descriptor
+part id, descriptor row count, section row count, primary-id range, and granule
+row coverage, then synthesize one locator for each descriptor row:
+`primary_id = base_primary_id + part_row`. Sparse primary IDs, mismatched
+part IDs, mismatched row counts, invalid descriptor granules, unsupported
+encodings, or unsupported compression fail closed. Writers must fall back to the
+legacy raw locator payload when the part is not contiguous by physical row.
+
+`dictionaries` sections with encoding `0` use the legacy raw payload:
+
+```text
+u32 dictionary_count
+repeated dictionary_count times:
+  str dictionary_name     // u32 byte length followed by UTF-8 bytes
+  u32 entry_count
+  repeated entry_count times:
+    i64 code
+    str value             // u32 byte length followed by UTF-8 bytes
+```
+
+`dictionaries` sections with encoding `dictionary_dense` use:
+
+```text
+u32 magic = 0x54434944  // "DICT" little-endian bytes
+u16 version = 1
+u16 reserved_zero
+u32 dictionary_count
+repeated dictionary_count times:
+  str dictionary_name
+  u32 entry_count
+  repeated entry_count times:
+    str value
+```
+
+Dense dictionary codes are implied by entry ordinal (`0..entry_count-1`).
+Readers validate the magic, version, reserved field, duplicate dictionary names,
+duplicate values, declared low-cardinality cardinality, and descriptor code
+coverage before the dictionary is trusted. Writers may use
+`dictionary_dense` only for dense code maps and only when the final stored
+payload is smaller than the raw candidate after the configured section
+compression policy.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:

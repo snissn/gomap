@@ -1,8 +1,9 @@
 # Collection Text Index v2 Contract (M0 / #2623)
 
-Status: M0 design gate for #2622. This document fixes the production contract,
-rollout vocabulary, storage boundaries, counters, and benchmark gates that later
-text-v2 implementation PRs must satisfy before they can claim readiness.
+Status: M0 design gate plus M1-M6 landed behavior for #2622. This document fixes
+production contract, rollout vocabulary, storage boundaries, counters, and
+benchmark gates that later text-v2 implementation PRs must satisfy before they
+can claim readiness.
 
 TreeDB remains pre-alpha, so on-disk formats may change, but unsupported or
 corrupt text-v2 formats must fail closed. Later milestones may refine binary
@@ -38,7 +39,7 @@ type TextIndexDefinition struct {
     Name    string
     Fields  []TextIndexField
     Analyzer TextAnalyzer
-    Version TextIndexVersion     // "v1" default today, explicit "v2" supports M4 score-only reads
+    Version TextIndexVersion     // "v1" default today, explicit "v2" supports v2 BM25F reads
     Rollout TextIndexRolloutMode // "primary" default today
     // existing position/offset/storage/schema fields...
 }
@@ -48,17 +49,21 @@ type TextIndexDefinition struct {
 
 - `""` / `"v1"`: current per-`(term, documentID)` text index.
 - `"v2"`: explicit v2 physical contract. M1-M3 root-state creation and
-  writable posting/norm/docmap maintenance are supported. As of M4 (#2627),
-  explicit v2 indexes are readable for exhaustive score-only BM25F serving over
-  posting blocks and packed norms; unsupported future rollout/detailed modes
-  still fail closed and v2 must not silently fall back to v1.
+  writable posting/norm/docmap maintenance are supported. As of M4/M5, explicit
+  v2 indexes are readable for score-only BM25F serving over posting blocks and
+  packed norms with exact single-term block-max skipping. As of M6 (#2629),
+  `SearchText` can lazily materialize compact/detailed field-term summaries for
+  returned final results without v1 text-state lookups or full-document fetch.
+  Unsupported future rollout modes still fail closed and v2 must not silently
+  fall back to v1.
 
 `TextIndexRolloutMode` values:
 
 - `""` / `"primary"`: active production read/write path. V1 remains the default
   readable/searchable path. Explicit v2 indexes are writable as of M3 and
-  readable as of M4 for score-only BM25F serving over v2 posting/norm/docmap
-  roots. Match details/positions remain deferred to #2629.
+  readable as of M4/M5 for BM25F serving over v2 posting/norm/docmap roots.
+  M6 adds lazy compact/detailed field-term summaries for final results and an
+  optional positions/offset payload lane for `StorePositions` indexes.
 - `"shadow"`: future v2 build/validate without serving reads.
 - `"dual_write"`: future v1+v2 mutation maintenance with explicit read choice.
 - `"disabled"`: future metadata-present but non-serving/non-writing state.
@@ -104,11 +109,10 @@ rejected because it would create metadata without the required root status
 records. After M3, explicit v2 indexes maintain durable v2 roots and posting
 blocks for create/backfill/insert/update/delete. As of M4, `TextIndexStatus`
 reports `readable=true` and `writable=true` for explicit v2 indexes: query
-routing serves exhaustive score-only BM25F from v2 posting blocks, packed norm
-blocks, and docmap blocks. Detailed match/position materialization is not yet
-implemented; v2 result rows intentionally carry document ID, rank, score, and
-score kind only unless the caller explicitly asks for bounded final document
-fetch. There is no fallback to v1 for requested v2.
+routing serves BM25F from v2 posting blocks, packed norm blocks, and docmap
+blocks. As of M6, score-only result mode still carries only document ID, rank,
+score, and score kind; compact/detailed modes build field-term summaries only
+for returned final results. There is no fallback to v1 for requested v2.
 
 Stable M1 ordinal semantics:
 
@@ -129,7 +133,7 @@ M1 root contents:
 | `text-v2-terms` | corpus stats, field stats for BM25F average length, and term stats shell (`df`, `ttf`, posting block count placeholder). |
 | `text-v2-posting-blocks` | M2 posting-block keys are `(term, blockStartOrdinal, blockID)` under the normal collection root; values contain compressed scoring postings and block summaries. |
 | `text-v2-norm-blocks` | ordinal block key -> packed per-field token lengths with generation/tombstone flags, sufficient for BM25F field-length/norm inputs without per-candidate text-state lookup. |
-| `text-v2-positions` | format-only in M1; later lazy detail/position milestones own payloads. |
+| `text-v2-positions` | optional M6 lazy payload entries keyed by `(ordinal, term)` for `StorePositions` indexes; format-only when positions are disabled. |
 | `text-v2-generations` | index status record: root/stats/docmap/norm/term generations, next ordinal, live documents, deleted/tombstoned ordinals. |
 
 All v2 decoders check the key/value version, root family, block bounds, strict
@@ -170,7 +174,10 @@ high-df terms, and later merge/rewrite tooling replaces old block keys through
 ordinary collection-root deltas so physical reclamation remains normal TreeDB
 root/value-log/leaf maintenance.
 
-Posting block values are versioned and fail closed. Each value stores:
+Posting block values are versioned and fail closed. As of M5, newly written
+values include a checksum over the encoded block payload so block-max search can
+trust summary bytes before deciding to skip entry decoding; checksum mismatch is
+text-v2 storage corruption. Each value stores:
 
 - block kind: sealed, delta, or micro;
 - block identity (`blockStartOrdinal`, `blockID`) repeated for key/value
@@ -186,9 +193,9 @@ Posting block values are versioned and fail closed. Each value stores:
 - entries encoded as strictly-increasing document-ordinal deltas, document
   generation, term frequency, and one term-frequency lane per indexed field.
 
-Positions and offsets are deliberately absent from the scoring block. Future
-lazy match-detail/position lanes belong in `text-v2-positions` or another
-explicit format, not in the hot scoring value.
+Positions and offsets are deliberately absent from the scoring block. M6 stores
+optional lazy position/offset payloads in `text-v2-positions` for indexes created
+with `StorePositions`; the hot scoring value remains unchanged.
 
 M2 provides codecs, builders, storage validation, and streaming/range iterators
 that reuse entry scratch while scanning a block. It does not route
@@ -237,13 +244,89 @@ no shared cross-snapshot cache is introduced.
 
 M4 is deliberately exhaustive. It reports `posting_blocks_visited`, keeps
 `posting_blocks_skipped=0`, and does not implement WAND/BMW or scalar pruning;
-those are owned by #2628. V2 candidate generation reports
+those are owned by #2628. V2 score-only candidate generation reports
 `docs_fetched=0`, `match_details_built=0`, `state_lookups=0`, norm-block read
-counts, postings decoded, blocks visited, and candidates scored. Detailed match
-and position materialization remains deferred to #2629. Public v2 `SearchText`
-rows therefore return score-only text results (document ID, rank, score, score
-kind, and optional bounded final documents when `IncludeDocuments` is true), with
-empty match-detail fields by contract.
+counts, postings decoded, blocks visited, and candidates scored. M6 later adds
+lazy compact/detailed materialization for final results; score-only mode remains
+empty by contract.
+
+## M5 block-max skipping and scalar pruning (#2628)
+
+M5 adds an exact block-max path for the common single-term v2 BM25F top-K shape.
+The executor maintains an exact top-K threshold while scanning posting blocks in
+term/ordinal order. A block is skipped only when all of the following hold:
+
+- the posting-block value carries the checksum-protected v2 block payload;
+- the block summary has supported `UpperBoundKind=BM25FLaneMax` metadata with one
+  max term-frequency lane per indexed field;
+- the computed block upper bound is strictly lower than the current Kth score.
+
+Strict comparison is required for deterministic tie handling: equal upper bounds
+remain unskipped because a later document with the same score but a smaller
+DocumentID could still displace the current tail.
+
+The admissible BM25F bound is intentionally conservative. Field weights are
+validated finite and non-negative. For every field with term frequency `tf`,
+BM25F normalization divides by `1-b + b*(fieldLength/avgLength)`. Since
+`fieldLength >= 0`, `avgLength > 0`, and `b=0.75`, the denominator is at least
+`1-b`. Therefore each posting's field contribution is bounded by the block's
+`maxFieldTF/(1-b)` lane, the weighted sum is an upper bound on combined TF, and
+the BM25 saturation function is monotone for non-negative combined TF. Applying
+the term IDF to that saturated combined-TF bound gives an admissible per-block
+score upper bound. Stale generations and tombstoned ordinals can only make this
+bound looser.
+
+Multi-term OR/AND queries remain exact by falling back to the M4 exhaustive
+scorer until a fuller WAND/BMW doc-at-a-time algorithm lands. Fallbacks are
+reported with `blockmax_fallbacks/search`. Threshold raises are reported with
+`threshold_updates/search`. The fallback scorer still uses scalar ordinal
+pruning where safe.
+
+M5 also threads hybrid scalar prefilters into v2 text candidate generation. The
+hybrid planner's bounded scalar-index document-ID allow-set is translated through
+the `text-v2-docid` root into an ordinal allow-set under the same snapshot
+checks. Empty filters return no text candidates without traversing postings;
+rare filters can skip posting blocks whose ordinal ranges do not intersect the
+allow-set; broad filters remain exact and may decode more blocks. This path
+fetches zero full documents and treats missing/tombstoned scalar-filtered docID
+mappings as text-v2 storage corruption.
+
+## M6 lazy match details and positions (#2629)
+
+M6 defines result modes for `SearchText`:
+
+- `score_only`: document ID, rank, score, and score kind only;
+- `compact`: `TextMatches` field/term summaries only;
+- `detailed` / zero value: `TextMatches` plus legacy `MatchedTerms` and
+  `MatchedFields` for API compatibility.
+
+V2 match summaries are materialized after final top-K selection. The score-only
+search and hybrid candidate hot paths do not build match summaries, do not read
+v1 text-state, and do not fetch full documents. `SearchText` with
+`IncludeDocuments=true` still fetches documents only after final ranking and
+remains bounded by returned top-K.
+
+For exhaustive multi-term v2 search, final-result summaries are reconstructed
+from the already-scored final candidates' term/field-frequency lanes. For the
+single-term block-max path, compact posting detail is retained only for the
+bounded top-K heap so final summaries do not require a full posting rescan. The
+`text-v2-posting-blocks` scoring format is unchanged.
+
+If a v2 index is created with `StorePositions`, M6 writes optional
+`text-v2-positions` entries keyed by `(ordinal, term)`. Values contain the
+current document generation, term, per-field term frequency, positions, and
+optional offsets. Detailed/compact materialization validates these entries for
+returned final results and fails closed on missing, corrupt, mismatched, or
+unsupported payloads; score-only mode does not read the lane. Update/delete
+maintenance removes old position entries through ordinary root deltas before
+writing any replacement entries, so physical reclamation remains normal TreeDB
+root/value-log maintenance. There is no standalone text-block GC.
+
+`SearchHybridTextCandidates` and the text leg of `SearchHybrid` use score-only
+mode by default. `HybridTextQuery.IncludeTextMatches=true` opts into compact
+field/term summaries for the bounded requested text candidate set; default hybrid
+candidate generation emits no `TextMatches` and keeps `docs_fetched=0`,
+`state_lookups=0`, and `match_details_built=0`.
 
 ## Current v1 path inventory
 
@@ -285,8 +368,10 @@ PRs can compare one vocabulary.
 | Counter | Required meaning |
 | --- | --- |
 | `postings_scanned` / `text_postings/search` | postings or posting entries decoded/scanned |
-| `posting_blocks_visited` | v2 posting blocks decoded/considered |
-| `posting_blocks_skipped` | exact block-max/WAND/BMW skips; zero for v1 |
+| `posting_blocks_visited` | v2 posting blocks decoded/scored (skipped blocks are counted separately) |
+| `posting_blocks_skipped` | exact scalar-pruning or block-max/WAND/BMW skips; zero for v1 |
+| `blockmax_fallbacks` | v2 query shapes or metadata states that used exact exhaustive scoring instead of block-max skipping |
+| `threshold_updates` | top-K threshold raises observed by exact block-max/BMW serving |
 | `candidates_scored` | candidates with BM25/BM25F score computed |
 | `state_lookups` | v1 text-state lookups or v2 equivalent metadata lookups |
 | `norm_lookups` | field-length/norm lookups or block reads |
@@ -319,10 +404,11 @@ Required fixture scales:
 Required query and serving shapes:
 
 - common-term, rare-term, multi-term AND/OR, scalar-filtered, and score-only
-  rows; detailed-match rows are required once #2629 enables v2 detail
-  materialization, while M4 rows must assert empty match-detail output;
+  rows; M6 detailed-match rows must prove `match_details_built` is bounded by
+  returned top-K/requested final results while score-only rows keep it zero;
 - isolated text write, backfill, update, and delete rows with `-benchmem`;
 - current #2589 indexed insert/search guardrail matrix on the latest base;
+- M6 lazy detail rows comparing score-only versus detailed top-K materialization;
 - concurrent serving/load row with reader concurrency, p50/p95/p99 latency,
   steady-state memory, cache warm/cold boundary, and optional mixed write or
   snapshot churn.
@@ -348,10 +434,10 @@ coordinator explicitly accepts them with profile-backed rationale.
   root publication, and value-log reachability tests.
 - M2/M3 must prove posting/norm/docmap payloads remain ordinary B-tree values or
   existing `value_vlog` pointers reachable from collection root descriptors.
-- M4 search must be score-only for candidate generation and public v2
-  `SearchText` rows, with optional bounded final document fetch only. #2629 owns
-  any later detailed match/position materialization; until then detailed modes
-  remain intentionally empty/fail-closed rather than falling back to v1.
+- M4/M5 search must keep score-only candidate generation zero-doc and
+  zero-match-detail. M6 public v2 `SearchText` detailed/compact modes must build
+  match summaries only for returned final results, and optional bounded final
+  document fetch remains a separate post-ranking phase.
 - M5 block skipping must be exact: upper bounds are admissible and results match
   exhaustive scoring. Approximate ranking requires a separate mode/tracker.
 - M7 default-switch or old-path retirement must include v1/v2 coexistence,
