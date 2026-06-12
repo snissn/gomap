@@ -579,6 +579,79 @@ pruning-metadata sections may use Snappy or LZ4 when the raw length is within
 the decoder cap; readers validate the raw byte count before decompression and
 fail closed on unsupported section compression.
 
+The `row_locator_contiguous` physical encoding value (`34`) and
+`dictionary_dense` physical encoding value (`35`) are durable TCIM section
+encodings. They must appear only on their matching section kinds and must not be
+advertised as declared-column payload codecs or direct-view certification
+targets.
+
+`row_locators` sections with encoding `0` use the legacy raw payload:
+
+```text
+u32 count
+repeated count times:
+  i64 primary_id
+  u64 part_id
+  u32 part_row
+  u32 granule_ordinal
+  u32 row_in_granule
+  u32 reserved_zero
+```
+
+`row_locators` sections with encoding `row_locator_contiguous` use exactly 32
+bytes:
+
+```text
+u32 magic = 0x54434c52  // "RLCT" little-endian bytes
+u16 version = 1
+u16 reserved_zero
+u64 part_id
+u64 row_count
+i64 base_primary_id
+```
+
+Readers validate the payload length, magic, version, reserved field, descriptor
+part id, descriptor row count, section row count, primary-id range, and granule
+row coverage, then synthesize one locator for each descriptor row:
+`primary_id = base_primary_id + part_row`. Sparse primary IDs, mismatched
+part IDs, mismatched row counts, invalid descriptor granules, unsupported
+encodings, or unsupported compression fail closed. Writers must fall back to the
+legacy raw locator payload when the part is not contiguous by physical row.
+
+`dictionaries` sections with encoding `0` use the legacy raw payload:
+
+```text
+u32 dictionary_count
+repeated dictionary_count times:
+  str dictionary_name     // u32 byte length followed by UTF-8 bytes
+  u32 entry_count
+  repeated entry_count times:
+    i64 code
+    str value             // u32 byte length followed by UTF-8 bytes
+```
+
+`dictionaries` sections with encoding `dictionary_dense` use:
+
+```text
+u32 magic = 0x54434944  // "DICT" little-endian bytes
+u16 version = 1
+u16 reserved_zero
+u32 dictionary_count
+repeated dictionary_count times:
+  str dictionary_name
+  u32 entry_count
+  repeated entry_count times:
+    str value
+```
+
+Dense dictionary codes are implied by entry ordinal (`0..entry_count-1`).
+Readers validate the magic, version, reserved field, duplicate dictionary names,
+duplicate values, declared low-cardinality cardinality, and descriptor code
+coverage before the dictionary is trusted. Writers may use
+`dictionary_dense` only for dense code maps and only when the final stored
+payload is smaller than the raw candidate after the configured section
+compression policy.
+
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
 
