@@ -21,6 +21,9 @@ func run() (code int) {
 	var collectionName string
 	var pathsCSV string
 	var maxDocuments int
+	var shapeStats bool
+	var shapeMaxDepth int
+	var shapeMaxPaths int
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			code = writeFailure(collectionName, fmt.Errorf("retained payload audit panic: %v", recovered))
@@ -30,6 +33,9 @@ func run() (code int) {
 	flag.StringVar(&collectionName, "collection", "", "Collection name; defaults to the only collection")
 	flag.StringVar(&pathsCSV, "paths", "", "Comma-separated JSON paths to require absent; defaults to collection column paths")
 	flag.IntVar(&maxDocuments, "max-documents", 0, "Maximum retained rows to audit; zero audits all rows")
+	flag.BoolVar(&shapeStats, "shape-stats", false, "Include decoded retained-payload path/value shape stats")
+	flag.IntVar(&shapeMaxDepth, "shape-max-depth", 8, "Maximum retained-payload shape traversal depth; zero means unlimited")
+	flag.IntVar(&shapeMaxPaths, "shape-max-paths", 128, "Maximum retained-payload shape path/kind rows to emit; zero means unlimited")
 	flag.Parse()
 
 	if strings.TrimSpace(dbDir) == "" {
@@ -65,8 +71,11 @@ func run() (code int) {
 		return writeFailure(collectionName, fmt.Errorf("open collection: %w", err))
 	}
 	result, err := col.AuditRetainedPayloadDeclaredPathsAbsent(collections.ColumnRetainedPayloadCollectionAuditOptions{
-		Paths:        splitCSV(pathsCSV),
-		MaxDocuments: maxDocuments,
+		Paths:             splitCSV(pathsCSV),
+		MaxDocuments:      maxDocuments,
+		IncludeShapeStats: shapeStats,
+		ShapeMaxDepth:     shapeMaxDepth,
+		ShapeMaxPaths:     shapeMaxPaths,
 	})
 	if err != nil {
 		writeResult(result)
