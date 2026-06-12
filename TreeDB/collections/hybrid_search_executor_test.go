@@ -385,6 +385,10 @@ func BenchmarkSearchHybridExecutor2505(b *testing.B) {
 	b.StopTimer()
 	hybridSearchExecutorBenchmarkSink2505 = sink
 	b.ReportMetric(float64(sink.Stats.TextCandidatesReturned), "text_candidates/search")
+	b.ReportMetric(float64(sink.Stats.TextPostingsScanned), "text_postings/search")
+	b.ReportMetric(float64(sink.Stats.TextStateLookups), "text_state_lookups/search")
+	b.ReportMetric(float64(sink.Stats.TextNormLookups), "text_norm_lookups/search")
+	b.ReportMetric(float64(sink.Stats.TextMatchDetailsBuilt), "text_match_details/search")
 	b.ReportMetric(float64(sink.Stats.VectorCandidatesReturned), "vector_candidates/search")
 	b.ReportMetric(float64(sink.Stats.CandidatesFused), "candidates_fused/search")
 	b.ReportMetric(float64(sink.Stats.DocumentsFetched), "docs_fetched/search")

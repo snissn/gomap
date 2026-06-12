@@ -294,6 +294,11 @@ func BenchmarkSearchHybridTextCandidates2503(b *testing.B) {
 	hybridTextCandidateBenchmarkSink2503 = sink
 	b.ReportMetric(float64(sink.Stats.TextCandidatesReturned), "candidates/search")
 	b.ReportMetric(float64(sink.Stats.TextPostingsScanned), "postings_scanned/search")
+	b.ReportMetric(float64(sink.Stats.TextPostingBlocksVisited), "posting_blocks_visited/search")
+	b.ReportMetric(float64(sink.Stats.TextPostingBlocksSkipped), "posting_blocks_skipped/search")
 	b.ReportMetric(float64(sink.Stats.TextCandidatesScored), "candidates_scored/search")
+	b.ReportMetric(float64(sink.Stats.TextStateLookups), "state_lookups/search")
+	b.ReportMetric(float64(sink.Stats.TextNormLookups), "norm_lookups/search")
+	b.ReportMetric(float64(sink.Stats.TextMatchDetailsBuilt), "match_details/search")
 	b.ReportMetric(float64(sink.Stats.DocumentsFetched), "docs_fetched/search")
 }

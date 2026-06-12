@@ -89,6 +89,7 @@ func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchRespons
 			return hybridSearchFailClosed(response, reason, err)
 		}
 	}
+	hybridSetScalarFilterSelectivity(&response.Stats)
 	return response, nil
 }
 
@@ -480,7 +481,12 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.TextCandidatesRequested += src.TextCandidatesRequested
 	dst.TextCandidatesReturned += src.TextCandidatesReturned
 	dst.TextPostingsScanned += src.TextPostingsScanned
+	dst.TextPostingBlocksVisited += src.TextPostingBlocksVisited
+	dst.TextPostingBlocksSkipped += src.TextPostingBlocksSkipped
 	dst.TextCandidatesScored += src.TextCandidatesScored
+	dst.TextStateLookups += src.TextStateLookups
+	dst.TextNormLookups += src.TextNormLookups
+	dst.TextMatchDetailsBuilt += src.TextMatchDetailsBuilt
 	dst.VectorCandidatesRequested += src.VectorCandidatesRequested
 	dst.VectorCandidatesReturned += src.VectorCandidatesReturned
 	dst.VectorCandidatesExamined += src.VectorCandidatesExamined
@@ -489,6 +495,9 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.ScalarPostfilterChecks += src.ScalarPostfilterChecks
 	dst.ScalarFilterMatched += src.ScalarFilterMatched
 	dst.ScalarFilterRejected += src.ScalarFilterRejected
+	if src.ScalarFilterSelectivityPPM != 0 {
+		dst.ScalarFilterSelectivityPPM = src.ScalarFilterSelectivityPPM
+	}
 	dst.CandidatesFused += src.CandidatesFused
 	dst.CandidatesAfterFusion += src.CandidatesAfterFusion
 	dst.FusionTextOnly += src.FusionTextOnly
@@ -504,6 +513,17 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	if dst.FailClosedReason == "" || dst.FailClosedReason == HybridFailClosedReasonNone {
 		dst.FailClosedReason = src.FailClosedReason
 	}
+}
+
+func hybridSetScalarFilterSelectivity(stats *HybridSearchStats) {
+	if stats == nil {
+		return
+	}
+	total := stats.ScalarFilterMatched + stats.ScalarFilterRejected
+	if total == 0 {
+		return
+	}
+	stats.ScalarFilterSelectivityPPM = stats.ScalarFilterMatched * 1_000_000 / total
 }
 
 func hybridMergeDocumentFetchStats(dst *HybridSearchStats, src DocumentMaterializationStats) {
