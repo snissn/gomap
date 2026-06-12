@@ -213,8 +213,8 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 		}
 		writeJSON(w, http.StatusOK, res)
 	case "vector-index":
-		var req BenchmarkVectorSearchRequest
-		if !h.decodeJSON(w, r, maxBodyBytes, &req) {
+		req, ok := h.decodeBenchmarkVectorSearchRequest(w, r, maxBodyBytes)
+		if !ok {
 			return
 		}
 		res, err := h.Service.SearchBenchmarkVector(r.Context(), index, req)

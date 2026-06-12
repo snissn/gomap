@@ -194,14 +194,14 @@ func benchmarkColumnGraphOptions() *BenchmarkVectorIndexOptions {
 	return &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: 4, EfSearch: 8}
 }
 
-func createBenchmarkColumnGraphIndex(t *testing.T, svc *Service, index string) {
+func createBenchmarkColumnGraphIndex(t testing.TB, svc *Service, index string) {
 	t.Helper()
 	if _, err := svc.ResetIndex(context.Background(), index, ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: benchmarkColumnGraphOptions()}); err != nil {
 		t.Fatalf("ResetIndex %s create: %v", index, err)
 	}
 }
 
-func loadBenchmarkDocsDeferred(t *testing.T, svc *Service, index string, docs []Document) {
+func loadBenchmarkDocsDeferred(t testing.TB, svc *Service, index string, docs []Document) {
 	t.Helper()
 	if _, err := svc.UpsertDocuments(context.Background(), index, UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
 		t.Fatalf("UpsertDocuments %s deferred: %v", index, err)

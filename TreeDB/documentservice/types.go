@@ -246,7 +246,8 @@ const (
 type BenchmarkVectorSearchRequest struct {
 	ExpectedGeneration        uint64                                 `json:"expected_generation,omitempty"`
 	VectorIndexName           string                                 `json:"vector_index_name,omitempty"`
-	QueryEmbedding            []float32                              `json:"query_embedding"`
+	QueryEmbedding            []float32                              `json:"query_embedding,omitempty"`
+	QueryEmbeddingF32LEBase64 string                                 `json:"query_embedding_f32_le_b64,omitempty"`
 	TopK                      int                                    `json:"top_k"`
 	EfSearch                  int                                    `json:"ef_search,omitempty"`
 	QueryMode                 BenchmarkVectorQueryMode               `json:"query_mode,omitempty"`

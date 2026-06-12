@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import struct
 import threading
 import time
 import unittest
@@ -281,14 +283,25 @@ class TreeDBClientTests(unittest.TestCase):
 
             self.assertTrue(reset.created)
             self.assertTrue(optimize.status.loaded)
+            b64_search = client.search_vector_index(
+                "bench",
+                [1, 0],
+                1,
+                query_embedding_encoding="f32_le_b64",
+            )
+
             self.assertEqual(search.query_mode, "quantized_rerank")
             self.assertEqual(search.results[0].id, "doc-1")
+            self.assertEqual(b64_search.results[0].id, "doc-1")
             reset_body = json_body(server.records[0])
             self.assertNotIn("metric", reset_body)
             self.assertEqual(reset_body["vector_index_options"]["strategy"], "column_graph")
             self.assertEqual(reset_body["vector_index_options"]["quantized_indexes"][0]["codec"], "scalar_u8")
             self.assertEqual(json_body(server.records[1]), {"expected_generation": 1})
             self.assertEqual(json_body(server.records[2])["quantized_rerank_candidates"], 32)
+            b64_body = json_body(server.records[3])
+            self.assertNotIn("query_embedding", b64_body)
+            self.assertEqual(struct.unpack("<2f", base64.b64decode(b64_body["query_embedding_f32_le_b64"])), (1.0, 0.0))
 
     def test_empty_optional_benchmark_fields_fail_closed_locally(self) -> None:
         client = TreeDBClient("http://127.0.0.1:1", timeout=1)
@@ -301,6 +314,12 @@ class TreeDBClientTests(unittest.TestCase):
             client.search_vector_index("docs", [1, 0], 1, query_mode="")
         with self.assertRaisesRegex(InvalidRequestError, "stats_mode"):
             client.search_vector_index("docs", [1, 0], 1, stats_mode="")
+        with self.assertRaisesRegex(InvalidRequestError, "query_embedding_encoding"):
+            client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="binary")
+        with self.assertRaisesRegex(InvalidRequestError, "query_embedding"):
+            client.search_vector_index("docs", ["not-a-number"], 1, query_embedding_encoding="f32_le_b64")
+        with self.assertRaisesRegex(InvalidRequestError, "query_embedding"):
+            client.search_vector_index("docs", ["not-a-number"], 1, query_embedding_encoding="json")
 
     def test_keyword_search_serializes_request_and_parses_response(self) -> None:
         route = "/v1/indexes/docs/search/keyword"

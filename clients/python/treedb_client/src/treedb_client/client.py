@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import socket
+import struct
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -266,6 +268,7 @@ class TreeDBClient:
         quantized_rerank_candidates: Optional[int] = None,
         stats_mode: Optional[str] = None,
         expected_generation: Optional[int] = None,
+        query_embedding_encoding: str = "json",
     ) -> BenchmarkVectorSearchResponse:
         """Run fail-closed no-document vector-index benchmark search.
 
@@ -274,10 +277,8 @@ class TreeDBClient:
         emulated by client-side or service-side exact fallback.
         """
 
-        request: dict[str, Any] = {
-            "query_embedding": [float(value) for value in query_embedding],
-            "top_k": top_k,
-        }
+        request: dict[str, Any] = {"top_k": top_k}
+        _add_query_embedding(request, query_embedding, query_embedding_encoding)
         _add_expected_generation(request, expected_generation)
         if vector_index_name:
             request["vector_index_name"] = vector_index_name
@@ -477,6 +478,31 @@ def _add_optional_non_empty_string(request: dict[str, Any], key: str, value: Opt
     if not isinstance(value, str) or value.strip() == "":
         raise InvalidRequestError("invalid_request", f"{label} must be a non-empty string when provided")
     request[key] = value
+
+
+def _add_query_embedding(request: dict[str, Any], query_embedding: Sequence[float], encoding: str) -> None:
+    if encoding == "json":
+        request["query_embedding"] = _coerce_query_embedding_floats(query_embedding)
+        return
+    if encoding == "f32_le_b64":
+        request["query_embedding_f32_le_b64"] = _encode_f32_le_base64(query_embedding)
+        return
+    raise InvalidRequestError("invalid_request", "query_embedding_encoding must be 'json' or 'f32_le_b64'")
+
+
+def _coerce_query_embedding_floats(values: Sequence[float]) -> list[float]:
+    if isinstance(values, (str, bytes, bytearray)):
+        raise InvalidRequestError("invalid_request", "query_embedding must be a sequence of floats")
+    try:
+        return [float(value) for value in values]
+    except (TypeError, ValueError) as exc:
+        raise InvalidRequestError("invalid_request", "query_embedding must be a sequence of floats") from exc
+
+
+def _encode_f32_le_base64(values: Sequence[float]) -> str:
+    floats = _coerce_query_embedding_floats(values)
+    payload = struct.pack(f"<{len(floats)}f", *floats) if floats else b""
+    return base64.b64encode(payload).decode("ascii")
 
 
 def _add_filter(request: dict[str, Any], filter_value: Optional[FilterLike]) -> None:

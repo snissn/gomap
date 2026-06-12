@@ -159,6 +159,9 @@ bench = client.search_vector_index(
     "bench_run_001",
     query_embedding=[0.1, 0.2, 0.3],
     top_k=1,
+    # Optional high-QPS request encoding: "f32_le_b64" sends the query as
+    # base64 little-endian float32 bytes instead of a JSON float array.
+    query_embedding_encoding="f32_le_b64",
     query_mode="quantized_rerank",
     quantized_index_name="embedding.scalar_u8.fast",
     quantized_rerank_candidates=32,
