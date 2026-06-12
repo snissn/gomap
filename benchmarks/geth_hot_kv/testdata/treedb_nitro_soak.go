@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -768,5 +767,3 @@ func max(a, b int) int {
 	}
 	return b
 }
-
-var _ io.Closer
