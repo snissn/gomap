@@ -116,9 +116,19 @@ func (f *File) readAtAppendGroupedRecordBatch(ptrs []page.ValuePtr, dst [][]byte
 	if _, err := f.File.ReadAt(header[:], start); err != nil {
 		return err
 	}
+	if header[4] != Version || header[5]&recordFlagGrouped == 0 {
+		return ErrCorrupt
+	}
 	valueLen := binary.LittleEndian.Uint32(header[16:20])
 	if recordSizeExceedsMax(valueLen) {
 		return ErrRecordTooLarge
+	}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	first := ptrs[0]
+	for _, ptr := range ptrs {
+		if ptr.FileID != first.FileID || ptr.Offset != first.Offset || !page.ValuePtrIsGrouped(ptr) || !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+			return ErrCorrupt
+		}
 	}
 	payloadScratch := getDecodeScratch(int(valueLen))
 	payload := payloadScratch[:int(valueLen)]
