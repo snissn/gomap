@@ -45,7 +45,9 @@ func main() {
 	defer func() { _ = cleanup() }()
 
 	manager := collections.NewCollectionManager(database)
-	handler := documentservice.NewHandler(documentservice.New(manager))
+	service := documentservice.New(manager)
+	defer func() { _ = service.Close() }()
+	handler := documentservice.NewHandler(service)
 	server := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
