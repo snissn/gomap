@@ -102,6 +102,60 @@ func TestAuditSummaryJSONOutputShape(t *testing.T) {
 	}
 }
 
+func TestAuditSummaryMainDBDirWithAncientSiblingUsesParentRoot(t *testing.T) {
+	root := t.TempDir()
+	opts := treedb.Options{
+		Dir:        root,
+		Durability: treedb.DurabilityWALOffRelaxed,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	}
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open root fixture: %v", err)
+	}
+	if err := db.Set([]byte("root-key"), bytes.Repeat([]byte("v"), 512)); err != nil {
+		_ = db.Close()
+		t.Fatalf("set root fixture: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint root fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close root fixture: %v", err)
+	}
+	_ = os.RemoveAll(filepath.Join(root, "dictdb"))
+	_ = os.RemoveAll(filepath.Join(root, "templatedb"))
+	ancientDir := filepath.Join(root, "ancient")
+	if err := os.Mkdir(ancientDir, 0o755); err != nil {
+		t.Fatalf("mkdir ancient sibling: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ancientDir, "freezer.dat"), bytes.Repeat([]byte("a"), 123), 0o644); err != nil {
+		t.Fatalf("write ancient sibling file: %v", err)
+	}
+
+	mainDir := filepath.Join(root, "maindb")
+	report, err := collectAuditSummary(mainDir, auditSummaryCollectOptions{CompactMode: treedbdb.CompactStorageFull})
+	if err != nil {
+		t.Fatalf("collectAuditSummary(root maindb): %v", err)
+	}
+	if report.RootDir != root {
+		t.Fatalf("RootDir=%q want root %q", report.RootDir, root)
+	}
+	ancient := auditStorageDomainsByName(report.Storage.Domains)["ancient"]
+	if !ancient.Exists || ancient.Path != ancientDir || ancient.Bytes != 123 {
+		t.Fatalf("ancient domain not reported from root sibling: %+v", ancient)
+	}
+}
+
 func TestAuditSummaryFlatMainDBDirNamedMainDBUsesInputAsRoot(t *testing.T) {
 	parent := t.TempDir()
 	flatDir := filepath.Join(parent, "maindb")

@@ -653,8 +653,8 @@ func resolveTreemapRootDir(inputDir, mainDir string) string {
 		return clean
 	}
 	parent := filepath.Dir(mainDir)
-	for _, sideStore := range []string{"dictdb", "templatedb"} {
-		if info, err := os.Stat(filepath.Join(parent, sideStore)); err == nil && info.IsDir() {
+	for _, rootSibling := range []string{"dictdb", "templatedb", "ancient"} {
+		if info, err := os.Stat(filepath.Join(parent, rootSibling)); err == nil && info.IsDir() {
 			return parent
 		}
 	}
