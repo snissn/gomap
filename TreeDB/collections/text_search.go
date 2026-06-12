@@ -29,6 +29,7 @@ const (
 	textSearchFailClosedPostingsLimit  = "postings_scan_limit_exceeded"
 	textSearchFailClosedStorageCorrupt = "text_index_storage_corrupt"
 	textSearchFailClosedDocumentFetch  = "document_fetch_unavailable"
+	textSearchFailClosedV2Unavailable  = "text_v2_search_unavailable"
 )
 
 const (
@@ -228,6 +229,9 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 		return response, ErrIndexNotFound
 	}
 	response.IndexName = idx.Name
+	if idx.Version == TextIndexVersionV2 {
+		return textSearchFailClosed(response, textSearchFailClosedV2Unavailable, ErrTextIndexUnavailable)
+	}
 
 	terms, operator, err := parseTextSearchQuery(idx.Analyzer, opts.Query, opts.Operator)
 	if err != nil {

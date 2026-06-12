@@ -77,6 +77,9 @@ func appendSingleTextIndexMutationDeltas(
 	policies *[]backenddb.OrderedRootStoragePolicy,
 	deltaTables *[]memtable.Table,
 ) error {
+	if def.Version == TextIndexVersionV2 {
+		return appendSingleTextV2IndexMutationDeltas(snap, catalog, opts, def, mutations, rootNames, baseRootIDs, policies, deltaTables)
+	}
 	postingsRootName := collectionTextIndexRootName(catalog.meta.Name, def.Name)
 	stateRootName := collectionTextStateRootName(catalog.meta.Name, def.Name)
 	statsRootName := collectionTextStatsRootName(catalog.meta.Name, def.Name)
@@ -146,6 +149,391 @@ func appendTextRootDelta(rootNames *[]string, baseRootIDs map[string]uint64, pol
 	baseRootIDs[rootName] = baseRootID
 	*policies = append(*policies, policy)
 	*deltaTables = append(*deltaTables, table)
+}
+
+func appendSingleTextV2IndexMutationDeltas(
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	opts collectionOptions,
+	def TextIndexDefinition,
+	mutations []textDocumentMutation,
+	rootNames *[]string,
+	baseRootIDs map[string]uint64,
+	policies *[]backenddb.OrderedRootStoragePolicy,
+	deltaTables *[]memtable.Table,
+) error {
+	generationsRootName := collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name)
+	status, ok, err := readTextV2StatusAtRoot(snap, catalog, generationsRootName)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errMalformedTextStorage("missing text-v2 status for collection %q index %q", catalog.meta.Name, def.Name)
+	}
+	orderedMutations := append([]textDocumentMutation(nil), mutations...)
+	sort.Slice(orderedMutations, func(i, j int) bool {
+		return bytes.Compare(orderedMutations[i].documentID, orderedMutations[j].documentID) < 0
+	})
+
+	docIDRootName := collectionTextV2DocIDRootName(catalog.meta.Name, def.Name)
+	docMapRootName := collectionTextV2DocMapRootName(catalog.meta.Name, def.Name)
+	termsRootName := collectionTextV2TermsRootName(catalog.meta.Name, def.Name)
+	normRootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
+	docIDTable := newCollectionRunTable(len(orderedMutations))
+	docMapTable := newCollectionRunTable(0)
+	termsTable := newCollectionRunTable(0)
+	normTable := newCollectionRunTable(0)
+	generationsTable := newCollectionRunTable(1)
+	deltaOwned := []memtable.Table{docIDTable, docMapTable, termsTable, normTable, generationsTable}
+	success := false
+	defer func() {
+		if !success {
+			resetCollectionTables(deltaOwned)
+		}
+	}()
+
+	docMapBlocks := make(map[uint64]*textV2DocMapBlockValue)
+	normBlocks := make(map[uint64]*textV2NormBlockValue)
+	statsDelta := textStatsDelta{}
+	nextOrdinal := status.NextOrdinal
+	liveDocuments := status.LiveDocuments
+	deletedDocuments := status.DeletedDocuments
+	nextGeneration := status.RootGeneration + 1
+	if nextGeneration == 0 {
+		return errMalformedTextStorage("text-v2 root generation overflow")
+	}
+
+	for _, mutation := range orderedMutations {
+		if len(mutation.documentID) == 0 {
+			return errors.New("collections: text-v2 index maintenance document id cannot be empty")
+		}
+		current, hasCurrent, err := readTextV2DocIDAtRoot(snap, catalog, docIDRootName, mutation.documentID)
+		if err != nil {
+			return err
+		}
+
+		var oldState textDocumentStateValue
+		var newState textDocumentStateValue
+		if mutation.deleteOld {
+			if !hasCurrent || current.tombstoned() {
+				return errMalformedTextStorage("missing live text-v2 ordinal for delete collection %q index %q document %q", catalog.meta.Name, def.Name, string(mutation.documentID))
+			}
+			oldDocument, err := loadTextV2StoredDocumentForMutation(snap, catalog, mutation.documentID, mutation.oldDocument)
+			if err != nil {
+				return err
+			}
+			oldState, err = analyzeTextIndexStoredDocument(def, oldDocument, opts)
+			if err != nil {
+				return err
+			}
+		}
+		if mutation.setNew {
+			newState, _, err = analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
+			if err != nil {
+				return err
+			}
+		}
+
+		var nextDoc textV2DocIDValue
+		switch {
+		case mutation.deleteOld && mutation.setNew:
+			nextDoc = textV2DocIDValue{Ordinal: current.Ordinal, Generation: current.Generation + 1}
+			if nextDoc.Generation == 0 {
+				return errMalformedTextStorage("text-v2 generation overflow for document %q", string(mutation.documentID))
+			}
+			statsDelta.addState(oldState, -1)
+			statsDelta.addState(newState, 1)
+		case mutation.deleteOld:
+			nextDoc = textV2DocIDValue{Ordinal: current.Ordinal, Generation: current.Generation + 1, Flags: textV2DocFlagTombstone}
+			if nextDoc.Generation == 0 {
+				return errMalformedTextStorage("text-v2 generation overflow for document %q", string(mutation.documentID))
+			}
+			statsDelta.addState(oldState, -1)
+			if liveDocuments == 0 {
+				return errMalformedTextStorage("text-v2 live document underflow")
+			}
+			liveDocuments--
+			deletedDocuments++
+		case mutation.setNew:
+			if hasCurrent && !current.tombstoned() {
+				return errMalformedTextStorage("live text-v2 ordinal already exists for insert collection %q index %q document %q", catalog.meta.Name, def.Name, string(mutation.documentID))
+			}
+			nextDoc = textV2DocIDValue{Ordinal: nextOrdinal, Generation: 1}
+			if nextDoc.Ordinal == 0 {
+				return errMalformedTextStorage("text-v2 ordinal overflow")
+			}
+			nextOrdinal++
+			if nextOrdinal == 0 {
+				return errMalformedTextStorage("text-v2 next ordinal overflow")
+			}
+			statsDelta.addState(newState, 1)
+			liveDocuments++
+		default:
+			continue
+		}
+
+		docIDTable.SetSteal(encodeTextV2DocIDKey(mutation.documentID), encodeTextV2DocIDValue(nextDoc))
+		if err := upsertTextV2DocMapMutation(snap, catalog, docMapRootName, docMapBlocks, nextDoc, mutation.documentID); err != nil {
+			return err
+		}
+		lengths := textV2FieldLengthsFromState(def, newState)
+		if nextDoc.tombstoned() {
+			lengths = textV2FieldLengthsFromState(def, oldState)
+		}
+		if err := upsertTextV2NormMutation(snap, catalog, normRootName, normBlocks, nextDoc, lengths); err != nil {
+			return err
+		}
+	}
+
+	for _, blockStart := range sortedTextV2BlockStarts(docMapBlocks) {
+		block := docMapBlocks[blockStart]
+		docMapTable.SetSteal(encodeTextV2BlockKey(blockStart), encodeTextV2DocMapBlockValue(*block))
+	}
+	for _, blockStart := range sortedTextV2BlockStarts(normBlocks) {
+		block := normBlocks[blockStart]
+		normTable.SetSteal(encodeTextV2BlockKey(blockStart), encodeTextV2NormBlockValue(*block))
+	}
+	if err := buildTextV2StatsDeltaTable(snap, catalog, def, termsRootName, statsDelta, nextGeneration, termsTable); err != nil {
+		return err
+	}
+	nextStatus := textV2IndexStatusValue{
+		FormatVersion:    textV2FormatVersion,
+		RootGeneration:   nextGeneration,
+		StatsGeneration:  nextGeneration,
+		DocMapGeneration: nextGeneration,
+		NormGeneration:   nextGeneration,
+		TermGeneration:   nextGeneration,
+		NextOrdinal:      nextOrdinal,
+		LiveDocuments:    liveDocuments,
+		DeletedDocuments: deletedDocuments,
+	}
+	generationsTable.SetSteal(encodeTextV2StatusKey(), encodeTextV2IndexStatusValue(nextStatus))
+
+	appendIfNonEmpty := func(rootName string, table memtable.Table) error {
+		if table == nil || table.Len() == 0 {
+			return nil
+		}
+		table.Freeze()
+		policy, err := collectionRootStoragePolicyForDB(nil, catalog.meta, rootName)
+		if err != nil {
+			return err
+		}
+		appendTextRootDelta(rootNames, baseRootIDs, policies, deltaTables, rootName, catalog.rootID(rootName), policy, table)
+		return nil
+	}
+	if err := appendIfNonEmpty(docIDRootName, docIDTable); err != nil {
+		return err
+	}
+	if err := appendIfNonEmpty(docMapRootName, docMapTable); err != nil {
+		return err
+	}
+	if err := appendIfNonEmpty(termsRootName, termsTable); err != nil {
+		return err
+	}
+	if err := appendIfNonEmpty(normRootName, normTable); err != nil {
+		return err
+	}
+	if err := appendIfNonEmpty(generationsRootName, generationsTable); err != nil {
+		return err
+	}
+	success = true
+	return nil
+}
+
+func readTextV2DocIDAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, documentID []byte) (textV2DocIDValue, bool, error) {
+	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2DocIDKey(documentID), nil)
+	if err != nil || !ok {
+		return textV2DocIDValue{}, ok, err
+	}
+	value, err := decodeTextV2DocIDValue(raw)
+	return value, true, err
+}
+
+func loadTextV2StoredDocumentForMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, documentID, fallback []byte) ([]byte, error) {
+	if fallback != nil {
+		return fallback, nil
+	}
+	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	if catalog.primaryRootName != "" {
+		primaryRootName = catalog.primaryRootName
+	}
+	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, documentID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errMalformedTextStorage("missing primary document for text-v2 mutation document %q", string(documentID))
+	}
+	return raw, nil
+}
+
+func upsertTextV2DocMapMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2DocMapBlockValue, doc textV2DocIDValue, documentID []byte) error {
+	blockStart := textV2OrdinalBlockStart(doc.Ordinal, textV2DefaultDocMapBlockSize)
+	block, err := loadTextV2DocMapMutationBlock(snap, catalog, rootName, blocks, blockStart)
+	if err != nil {
+		return err
+	}
+	block.upsert(textV2DocMapEntry{Ordinal: doc.Ordinal, Generation: doc.Generation, Flags: doc.Flags, DocumentID: documentID})
+	return nil
+}
+
+func loadTextV2DocMapMutationBlock(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2DocMapBlockValue, blockStart uint64) (*textV2DocMapBlockValue, error) {
+	if block := blocks[blockStart]; block != nil {
+		return block, nil
+	}
+	block := &textV2DocMapBlockValue{BlockStart: blockStart, BlockSize: textV2DefaultDocMapBlockSize}
+	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2BlockKey(blockStart), nil)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		decoded, err := decodeTextV2DocMapBlockValue(raw)
+		if err != nil {
+			return nil, err
+		}
+		block = &decoded
+	}
+	blocks[blockStart] = block
+	return block, nil
+}
+
+func upsertTextV2NormMutation(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2NormBlockValue, doc textV2DocIDValue, fieldLengths []uint32) error {
+	blockStart := textV2OrdinalBlockStart(doc.Ordinal, textV2DefaultNormBlockSize)
+	block, err := loadTextV2NormMutationBlock(snap, catalog, rootName, blocks, blockStart, uint32(len(fieldLengths)))
+	if err != nil {
+		return err
+	}
+	block.upsert(textV2NormBlockEntry{Ordinal: doc.Ordinal, Generation: doc.Generation, Flags: doc.Flags, FieldLengths: fieldLengths})
+	return nil
+}
+
+func loadTextV2NormMutationBlock(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, blocks map[uint64]*textV2NormBlockValue, blockStart uint64, fieldCount uint32) (*textV2NormBlockValue, error) {
+	if block := blocks[blockStart]; block != nil {
+		return block, nil
+	}
+	block := &textV2NormBlockValue{BlockStart: blockStart, BlockSize: textV2DefaultNormBlockSize, FieldCount: fieldCount}
+	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2BlockKey(blockStart), nil)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		decoded, err := decodeTextV2NormBlockValue(raw)
+		if err != nil {
+			return nil, err
+		}
+		block = &decoded
+	}
+	blocks[blockStart] = block
+	return block, nil
+}
+
+func textV2FieldLengthsFromState(def TextIndexDefinition, state textDocumentStateValue) []uint32 {
+	byField := make(map[string]uint32, len(state.Fields))
+	for _, field := range state.Fields {
+		byField[field.Field] = field.Length
+	}
+	lengths := make([]uint32, 0, len(def.Fields))
+	for _, field := range def.Fields {
+		lengths = append(lengths, byField[field.Field])
+	}
+	return lengths
+}
+
+func buildTextV2StatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, rootName string, delta textStatsDelta, generation uint64, table memtable.Table) error {
+	if table == nil {
+		return nil
+	}
+	currentCorpus, err := readTextV2CorpusStatsAtRoot(snap, catalog, rootName)
+	if err != nil {
+		return err
+	}
+	nextDocuments, err := applySignedTextDelta(currentCorpus.DocumentCount, delta.Documents, "text-v2 corpus document count")
+	if err != nil {
+		return err
+	}
+	table.SetSteal(encodeTextV2CorpusStatsKey(), encodeTextV2CorpusStatsValue(textV2CorpusStatsValue{StatsGeneration: generation, DocumentCount: nextDocuments}))
+
+	for _, fieldDef := range def.Fields {
+		field := fieldDef.Field
+		current, err := readTextV2FieldStatsAtRoot(snap, catalog, rootName, field)
+		if err != nil {
+			return err
+		}
+		fieldDelta := delta.Fields[field]
+		docs, err := applySignedTextDelta(current.DocumentCount, fieldDelta.DocumentCount, "text-v2 field document count")
+		if err != nil {
+			return err
+		}
+		tokens, err := applySignedTextDelta(current.TotalTokenCount, fieldDelta.TotalTokenCount, "text-v2 field token count")
+		if err != nil {
+			return err
+		}
+		table.SetSteal(encodeTextV2FieldStatsKey(field), encodeTextV2FieldStatsValue(textV2FieldStatsValue{StatsGeneration: generation, DocumentCount: docs, TotalTokenCount: tokens}))
+	}
+
+	terms := make([]string, 0, len(delta.Terms))
+	for term, termDelta := range delta.Terms {
+		if termDelta.DocumentFrequency == 0 && termDelta.TotalTermFrequency == 0 {
+			continue
+		}
+		terms = append(terms, term)
+	}
+	sort.Strings(terms)
+	for _, term := range terms {
+		termDelta := delta.Terms[term]
+		current, err := readTextV2TermStatsAtRoot(snap, catalog, rootName, term)
+		if err != nil {
+			return err
+		}
+		df, err := applySignedTextDelta(current.DocumentFrequency, termDelta.DocumentFrequency, "text-v2 term document frequency")
+		if err != nil {
+			return err
+		}
+		tf, err := applySignedTextDelta(current.TotalTermFrequency, termDelta.TotalTermFrequency, "text-v2 term total frequency")
+		if err != nil {
+			return err
+		}
+		key := encodeTextV2TermStatsKey(term)
+		if df == 0 && tf == 0 {
+			table.DeleteSteal(key)
+		} else {
+			table.SetSteal(key, encodeTextV2TermStatsValue(textV2TermStatsValue{StatsGeneration: generation, DocumentFrequency: df, TotalTermFrequency: tf, PostingBlockCount: current.PostingBlockCount}))
+		}
+	}
+	return nil
+}
+
+func readTextV2CorpusStatsAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string) (textV2CorpusStatsValue, error) {
+	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2CorpusStatsKey(), nil)
+	if err != nil {
+		return textV2CorpusStatsValue{}, err
+	}
+	if !ok {
+		return textV2CorpusStatsValue{}, errMalformedTextStorage("missing text-v2 corpus stats in root %q", rootName)
+	}
+	return decodeTextV2CorpusStatsValue(raw)
+}
+
+func readTextV2TermStatsAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, term string) (textV2TermStatsValue, error) {
+	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2TermStatsKey(term), nil)
+	if err != nil {
+		return textV2TermStatsValue{}, err
+	}
+	if !ok {
+		return textV2TermStatsValue{}, nil
+	}
+	return decodeTextV2TermStatsValue(raw)
+}
+
+func readTextV2FieldStatsAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, field string) (textV2FieldStatsValue, error) {
+	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2FieldStatsKey(field), nil)
+	if err != nil {
+		return textV2FieldStatsValue{}, err
+	}
+	if !ok {
+		return textV2FieldStatsValue{}, errMalformedTextStorage("missing text-v2 field stats %q in root %q", field, rootName)
+	}
+	return decodeTextV2FieldStatsValue(raw)
 }
 
 func analyzeTextIndexStoredDocument(def TextIndexDefinition, document []byte, opts collectionOptions) (textDocumentStateValue, error) {

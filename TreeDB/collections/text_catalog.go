@@ -8,8 +8,10 @@ import (
 )
 
 // CreateTextIndex adds a collection-native text index and backfills persistent
-// postings, text-state, and text-stats roots from the current documents. Write
-// paths maintain those roots after creation, and SearchText ranks from them.
+// roots from the current documents. V1 indexes backfill postings, text-state,
+// and text-stats roots. Explicit v2 indexes backfill document ordinals, docmap,
+// term/stat shells, packed norms, and status/format roots; SearchText remains
+// fail-closed for v2 until the v2 executor lands.
 func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, TextIndexBackfillStats, error) {
 	var emptyStats TextIndexBackfillStats
 	if c == nil {
@@ -105,8 +107,8 @@ func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, 
 	return newMeta.copy(), plan.stats, nil
 }
 
-// DropTextIndex removes text index metadata and clears the persistent
-// postings/text-state/text-stats root descriptors for the index.
+// DropTextIndex removes text index metadata and clears the persistent v1 and
+// v2 text root descriptors for the index.
 func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 	if err := ValidateIndexName(name); err != nil {
 		return nil, err
@@ -176,7 +178,7 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 	if err != nil {
 		return nil, err
 	}
-	clearedRootNames := collectionTextRootNames(baseMeta.Name, name)
+	clearedRootNames := collectionTextAllRootNames(baseMeta.Name, name)
 	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
 		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, clearedRootNames)
 	})

@@ -47,13 +47,15 @@ type TextIndexDefinition struct {
 `TextIndexVersion` values:
 
 - `""` / `"v1"`: current per-`(term, documentID)` text index.
-- `"v2"`: reserved v2 physical contract. Until M1+ implements v2 roots,
-  metadata validation fails closed with `ErrTextIndexUnavailable`; it must not
-  silently fall back to v1.
+- `"v2"`: explicit v2 physical contract. M1 root-state creation is supported,
+  but v2 search/rollout behavior remains fail-closed until later milestones; it
+  must not silently fall back to v1.
 
 `TextIndexRolloutMode` values:
 
-- `""` / `"primary"`: active read/write path. Today this is v1 only.
+- `""` / `"primary"`: active production read/write path. Today this is v1 only;
+  explicit v2 indexes can maintain M1 root-state shells, but status remains
+  fail-closed/non-readable/non-writable for the full v2 executor/write pipeline.
 - `"shadow"`: future v2 build/validate without serving reads.
 - `"dual_write"`: future v1+v2 mutation maintenance with explicit read choice.
 - `"disabled"`: future metadata-present but non-serving/non-writing state.
@@ -88,6 +90,49 @@ For collection `docs` and index `lexical`, v2 root descriptors are reserved as:
 M1/M2 may define the exact key/value encodings, but these roots remain normal
 TreeDB collection roots. Pointer-backed values must use `value_vlog`, not a new
 text asset store.
+
+## M1 root/key/value format (#2624)
+
+M1 assigns the first concrete v2 root format. Every v2 root contains a versioned
+format record. Explicit `TextIndexVersionV2` creation through `CreateTextIndex`
+publishes all seven v2 root descriptors through the normal collection-root
+system records. Declaring a v2 text index directly in `CreateCollection` is
+rejected because it would create metadata without the required root status
+records. V2 search is still fail-closed until the later executor milestones;
+`TextIndexStatus` reports `readable=false` and `writable=false` for v2 so the M1
+root-state maintenance shell is not advertised as the full M3+ write pipeline.
+There is no fallback to v1 for requested v2.
+
+Stable M1 ordinal semantics:
+
+- document ordinals are `uint64`, start at `1`, and are assigned in deterministic
+  documentID/primary-key order for backfill and mutation batches;
+- `0` is invalid and reserved;
+- ordinals are never reused. Reinsert after delete receives a fresh ordinal;
+- updates keep the ordinal and increment the document generation;
+- deletes increment generation and leave tombstoned docID/docmap/norm records so
+  later postings can reject stale `(ordinal,generation)` matches after reopen.
+
+M1 root contents:
+
+| Root | Key/value records |
+| --- | --- |
+| `text-v2-docid` | documentID key -> `{ordinal,generation,flags}`; tombstone flag marks deleted/currently non-ranking documentIDs. |
+| `text-v2-docmap` | ordinal block key -> sorted ordinal-to-documentID entries with generation/tombstone flags for final ID materialization and stale-generation checks. |
+| `text-v2-terms` | corpus stats, field stats for BM25F average length, and term stats shell (`df`, `ttf`, posting block count placeholder). |
+| `text-v2-posting-blocks` | format-only in M1; #2625 owns posting block payloads. |
+| `text-v2-norm-blocks` | ordinal block key -> packed per-field token lengths with generation/tombstone flags, sufficient for BM25F field-length/norm inputs without per-candidate text-state lookup. |
+| `text-v2-positions` | format-only in M1; later lazy detail/position milestones own payloads. |
+| `text-v2-generations` | index status record: root/stats/docmap/norm/term generations, next ordinal, live documents, deleted/tombstoned ordinals. |
+
+All v2 decoders check the key/value version, root family, block bounds, strict
+ordinal ordering, supported flags, field counts, status-generation bounds, and
+trailing bytes. Unsupported versions or malformed records return
+`ErrTextIndexStorageCorrupt`. Corpus and field stats are validated against the
+status generation and live document count, while per-term stats carry a
+non-zero generation bounded by the term/status generation so unchanged terms can
+remain valid across root-state updates. BM25F average-length inputs are read
+from one published root set.
 
 ## Current v1 path inventory
 
@@ -187,8 +232,8 @@ coordinator explicitly accepts them with profile-backed rationale.
 
 ## Rollout/fail-closed requirements for later milestones
 
-- M1 may enable v2 root creation only after version mismatch/corruption,
-  reopen, root publication, and value-log reachability tests land.
+- M1 enables v2 root creation only with version mismatch/corruption, reopen,
+  root publication, and value-log reachability tests.
 - M2/M3 must prove posting/norm/docmap payloads remain ordinary B-tree values or
   existing `value_vlog` pointers reachable from collection root descriptors.
 - M4+ search must be score-only by default for candidate generation and must
