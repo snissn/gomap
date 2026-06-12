@@ -563,14 +563,26 @@ def _binary_vector_index_query_params(
     if quantized_index_name is not None or quantized_rerank_candidates is not None:
         raise InvalidRequestError("invalid_request", "f32_le binary vector-index search does not support quantized options")
     _validate_expected_generation(expected_generation)
-    params = [("top_k", str(int(top_k))), ("query_mode", "exact")]
+    top_k_value = _validate_binary_int_query_param(top_k, "top_k", minimum=1)
+    params = [("top_k", str(top_k_value)), ("query_mode", "exact")]
     if ef_search is not None:
-        params.append(("ef_search", str(int(ef_search))))
+        ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
+        params.append(("ef_search", str(ef_search_value)))
     _add_binary_optional_non_empty_string(params, "vector_index_name", vector_index_name, "vector_index_name")
     _add_binary_optional_non_empty_string(params, "stats_mode", stats_mode, "stats_mode")
     if expected_generation is not None:
         params.append(("expected_generation", str(expected_generation)))
     return params
+
+
+def _validate_binary_int_query_param(value: Any, label: str, *, minimum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidRequestError("invalid_request", f"{label} must be an integer")
+    if value < minimum:
+        if minimum == 1:
+            raise InvalidRequestError("invalid_request", f"{label} must be a positive integer")
+        raise InvalidRequestError("invalid_request", f"{label} must be a non-negative integer")
+    return value
 
 
 def _add_binary_optional_non_empty_string(params: list[tuple[str, str]], key: str, value: Optional[str], label: str) -> None:

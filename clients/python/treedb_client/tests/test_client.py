@@ -347,6 +347,14 @@ class TreeDBClientTests(unittest.TestCase):
             client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="f32_le", query_mode="quantized_rerank")
         with self.assertRaisesRegex(InvalidRequestError, "quantized"):
             client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="f32_le", quantized_index_name="embedding.scalar_u8.fast")
+        for bad_top_k in (True, 1.9, 0):
+            with self.subTest(bad_top_k=bad_top_k):
+                with self.assertRaisesRegex(InvalidRequestError, "top_k"):
+                    client.search_vector_index("docs", [1, 0], bad_top_k, query_embedding_encoding="f32_le")
+        for bad_ef_search in (True, 1.9, -1):
+            with self.subTest(bad_ef_search=bad_ef_search):
+                with self.assertRaisesRegex(InvalidRequestError, "ef_search"):
+                    client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="f32_le", ef_search=bad_ef_search)
         with self.assertRaisesRegex(InvalidRequestError, "query_embedding"):
             client.search_vector_index("docs", ["not-a-number"], 1, query_embedding_encoding="f32_le_b64")
         with self.assertRaisesRegex(InvalidRequestError, "query_embedding"):
