@@ -170,7 +170,10 @@ high-df terms, and later merge/rewrite tooling replaces old block keys through
 ordinary collection-root deltas so physical reclamation remains normal TreeDB
 root/value-log/leaf maintenance.
 
-Posting block values are versioned and fail closed. Each value stores:
+Posting block values are versioned and fail closed. As of M5, newly written
+values include a checksum over the encoded block payload so block-max search can
+trust summary bytes before deciding to skip entry decoding; checksum mismatch is
+text-v2 storage corruption. Each value stores:
 
 - block kind: sealed, delta, or micro;
 - block identity (`blockStartOrdinal`, `blockID`) repeated for key/value
@@ -245,6 +248,47 @@ rows therefore return score-only text results (document ID, rank, score, score
 kind, and optional bounded final documents when `IncludeDocuments` is true), with
 empty match-detail fields by contract.
 
+## M5 block-max skipping and scalar pruning (#2628)
+
+M5 adds an exact block-max path for the common single-term v2 BM25F top-K shape.
+The executor maintains an exact top-K threshold while scanning posting blocks in
+term/ordinal order. A block is skipped only when all of the following hold:
+
+- the posting-block value carries the checksum-protected v2 block payload;
+- the block summary has supported `UpperBoundKind=BM25FLaneMax` metadata with one
+  max term-frequency lane per indexed field;
+- the computed block upper bound is strictly lower than the current Kth score.
+
+Strict comparison is required for deterministic tie handling: equal upper bounds
+remain unskipped because a later document with the same score but a smaller
+DocumentID could still displace the current tail.
+
+The admissible BM25F bound is intentionally conservative. Field weights are
+validated finite and non-negative. For every field with term frequency `tf`,
+BM25F normalization divides by `1-b + b*(fieldLength/avgLength)`. Since
+`fieldLength >= 0`, `avgLength > 0`, and `b=0.75`, the denominator is at least
+`1-b`. Therefore each posting's field contribution is bounded by the block's
+`maxFieldTF/(1-b)` lane, the weighted sum is an upper bound on combined TF, and
+the BM25 saturation function is monotone for non-negative combined TF. Applying
+the term IDF to that saturated combined-TF bound gives an admissible per-block
+score upper bound. Stale generations and tombstoned ordinals can only make this
+bound looser.
+
+Multi-term OR/AND queries remain exact by falling back to the M4 exhaustive
+scorer until a fuller WAND/BMW doc-at-a-time algorithm lands. Fallbacks are
+reported with `blockmax_fallbacks/search`. Threshold raises are reported with
+`threshold_updates/search`. The fallback scorer still uses scalar ordinal
+pruning where safe.
+
+M5 also threads hybrid scalar prefilters into v2 text candidate generation. The
+hybrid planner's bounded scalar-index document-ID allow-set is translated through
+the `text-v2-docid` root into an ordinal allow-set under the same snapshot
+checks. Empty filters return no text candidates without traversing postings;
+rare filters can skip posting blocks whose ordinal ranges do not intersect the
+allow-set; broad filters remain exact and may decode more blocks. This path
+fetches zero full documents and treats missing/tombstoned scalar-filtered docID
+mappings as text-v2 storage corruption.
+
 ## Current v1 path inventory
 
 Current write/backfill hot path:
@@ -285,8 +329,10 @@ PRs can compare one vocabulary.
 | Counter | Required meaning |
 | --- | --- |
 | `postings_scanned` / `text_postings/search` | postings or posting entries decoded/scanned |
-| `posting_blocks_visited` | v2 posting blocks decoded/considered |
-| `posting_blocks_skipped` | exact block-max/WAND/BMW skips; zero for v1 |
+| `posting_blocks_visited` | v2 posting blocks decoded/scored (skipped blocks are counted separately) |
+| `posting_blocks_skipped` | exact scalar-pruning or block-max/WAND/BMW skips; zero for v1 |
+| `blockmax_fallbacks` | v2 query shapes or metadata states that used exact exhaustive scoring instead of block-max skipping |
+| `threshold_updates` | top-K threshold raises observed by exact block-max/BMW serving |
 | `candidates_scored` | candidates with BM25/BM25F score computed |
 | `state_lookups` | v1 text-state lookups or v2 equivalent metadata lookups |
 | `norm_lookups` | field-length/norm lookups or block reads |

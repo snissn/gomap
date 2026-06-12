@@ -53,6 +53,13 @@ type TextSearchOptions struct {
 	MaxPostingsScanned   int
 	IncludeDocuments     bool
 	DocumentFetchOptions DocumentFetchOptions
+
+	// textV2AllowedDocumentIDs is an internal, snapshot-bound scalar prefilter
+	// allow-set used by hybrid search. It is intentionally unexported so public
+	// text search cannot accidentally bind to a scalar index outside the hybrid
+	// snapshot checks.
+	textV2AllowedDocumentIDs hybridScalarAllowSet
+	textV2DisableBlockMax    bool
 }
 
 // TextSearchMatch carries matched field/term attribution for a lexical result.
@@ -86,6 +93,8 @@ type TextSearchStats struct {
 	TextPostingsScanned       uint64
 	TextPostingBlocksVisited  uint64
 	TextPostingBlocksSkipped  uint64
+	TextBlockMaxFallbacks     uint64
+	TextBlockMaxThresholds    uint64
 	TextCandidatesScored      uint64
 	TextStateLookups          uint64
 	TextNormLookups           uint64

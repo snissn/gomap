@@ -183,7 +183,7 @@ Posting-block values contain scoring postings only; positions and offsets are
 absent and belong to a separate positions lane if enabled by a later format.
 
 ```text
-u8      ValueVersion  = 1
+u8      ValueVersion  = 2
 uvarint FormatVersion = 1
 u8      BlockKind     // 1=sealed, 2=delta, 3=micro
 u8      Flags         // currently 0
@@ -206,7 +206,14 @@ uvarint Generation
 u8      EntryFlags    // currently 0
 uvarint TermFrequency
 uvarint FieldTermFrequency[FieldCount]
+
+u32 PayloadCRC32BE // IEEE CRC-32 over all preceding value bytes, including ValueVersion
 ```
+
+`ValueVersion=1` blocks from the M2/M4 pre-M5 format did not carry the trailing
+checksum. Current decoders can still read them for exact exhaustive validation,
+but M5 block-max skipping requires the checksum-protected `ValueVersion=2`
+payload before trusting summary bytes for skip decisions.
 
 Required validation/fail-closed invariants:
 
@@ -222,16 +229,18 @@ Required validation/fail-closed invariants:
   posting count per block.
 - `FieldCount` is the text index field count. Every posting has exactly that
   many field-frequency lanes, and the lane sum equals `TermFrequency`.
+- `PayloadCRC32BE` must match the preceding value bytes before a reader may use
+  summary metadata for block-max skip decisions.
 - `MaxTermFrequency`, `MaxFieldTermFrequency`, first/last ordinal, and doc count
   must exactly summarize the decoded entries.
 - `UpperBoundKind=1` records per-field lane maxima that are admissible BM25F
   upper-bound inputs for non-negative BM25F weights. A future scorer that cannot
   compute/validate an admissible block bound for a query must treat the block as
   unskippable and score exhaustively.
-- Unsupported versions, flags, kinds, malformed varints, trailing bytes,
-  key/value identity mismatches, field-count mismatches, corrupt summaries, or
-  status generation/ordinal bounds violations make the root corrupt for text-v2
-  inspection and must fail closed.
+- Unsupported versions, checksum mismatches, flags, kinds, malformed varints,
+  trailing bytes, key/value identity mismatches, field-count mismatches, corrupt
+  summaries, or status generation/ordinal bounds violations make the root
+  corrupt for text-v2 inspection and must fail closed.
 
 ## 4. Value Pointer Encoding (`page.ValuePtr`)
 

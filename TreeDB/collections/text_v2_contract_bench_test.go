@@ -47,6 +47,8 @@ func TestTextV2ContractBenchmarkMatrix2623(t *testing.T) {
 		"postings_scanned",
 		"posting_blocks_visited",
 		"posting_blocks_skipped",
+		"blockmax_fallbacks",
+		"threshold_updates",
 		"candidates_scored",
 		"state_lookups",
 		"norm_lookups",
@@ -505,6 +507,155 @@ func BenchmarkTextV2ScoreSearchScale2627(b *testing.B) {
 	}
 }
 
+func BenchmarkTextV2BlockMaxCommonTerm2628(b *testing.B) {
+	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_BLOCKMAX_DOCS", 10_000)
+	if docs < int(textV2PostingBlockTargetPostings)*3 {
+		docs = int(textV2PostingBlockTargetPostings) * 3
+	}
+	d, col := openTextV2BlockMaxBenchFixture2628(b, docs)
+	defer func() { _ = d.Close() }()
+	opts := TextSearchOptions{IndexName: textV2ContractIndexName2623, Query: "refund", TopK: 10, CandidateLimit: docs, MaxPostingsScanned: docs * 2}
+	modes := []struct {
+		name       string
+		disableBMW bool
+	}{
+		{name: "blockmax_common_topk"},
+		{name: "exhaustive_common_topk", disableBMW: true},
+	}
+	for _, mode := range modes {
+		mode := mode
+		b.Run(mode.name, func(b *testing.B) {
+			runOpts := opts
+			runOpts.textV2DisableBlockMax = mode.disableBMW
+			warm, err := col.searchText(runOpts, textSearchResultScoreOnly)
+			if err != nil {
+				b.Fatalf("warm search: %v", err)
+			}
+			if len(warm.Results) == 0 || warm.Stats.DocumentsFetched != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.FailClosed != 0 || warm.Stats.TextStateLookups != 0 || warm.Stats.TextMatchDetailsBuilt != 0 {
+				b.Fatalf("warm stats=%+v results=%d want score-only zero-doc blockmax search", warm.Stats, len(warm.Results))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			var sink TextSearchResponse
+			for i := 0; i < b.N; i++ {
+				got, err := col.searchText(runOpts, textSearchResultScoreOnly)
+				if err != nil {
+					b.Fatalf("SearchText: %v", err)
+				}
+				if len(got.Results) == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 || got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
+					b.Fatalf("stats=%+v results=%d want score-only zero-doc blockmax search", got.Stats, len(got.Results))
+				}
+				sink = got
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(docs), "docs_fixture")
+			b.ReportMetric(float64(opts.TopK), "topk/search")
+			textV2ContractReportTextStats2623(b, sink)
+		})
+	}
+}
+
+func BenchmarkTextV2BlockMaxConcurrentServing2628(b *testing.B) {
+	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_BLOCKMAX_CONCURRENT_DOCS", 10_000)
+	readers := textV2ContractEnvInt2623("TREEDB_TEXT_V2_BLOCKMAX_CONCURRENT_READERS", 4)
+	if docs < int(textV2PostingBlockTargetPostings)*3 {
+		docs = int(textV2PostingBlockTargetPostings) * 3
+	}
+	if readers < 1 {
+		readers = 1
+	}
+	d, col := openTextV2BlockMaxBenchFixture2628(b, docs)
+	defer func() { _ = d.Close() }()
+	opts := TextSearchOptions{IndexName: textV2ContractIndexName2623, Query: "refund", TopK: 10, CandidateLimit: docs, MaxPostingsScanned: docs * 2}
+	warm, err := col.searchText(opts, textSearchResultScoreOnly)
+	if err != nil {
+		b.Fatalf("warm blockmax search: %v", err)
+	}
+	if warm.Stats.TextPostingBlocksSkipped == 0 || warm.Stats.DocumentsFetched != 0 || warm.Stats.FailClosed != 0 {
+		b.Fatalf("warm stats=%+v want skipped score-only search", warm.Stats)
+	}
+	durations := make([]int64, b.N)
+	b.ReportAllocs()
+	b.ResetTimer()
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	next := 0
+	var nextMu sync.Mutex
+	for worker := 0; worker < readers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				nextMu.Lock()
+				idx := next
+				next++
+				nextMu.Unlock()
+				if idx >= b.N {
+					return
+				}
+				start := time.Now()
+				got, err := col.searchText(opts, textSearchResultScoreOnly)
+				durations[idx] = time.Since(start).Nanoseconds()
+				if err != nil || got.Stats.TextPostingBlocksSkipped == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 {
+					errMu.Lock()
+					if firstErr == nil {
+						if err != nil {
+							firstErr = err
+						} else {
+							firstErr = fmt.Errorf("unexpected stats: %+v", got.Stats)
+						}
+					}
+					errMu.Unlock()
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	b.StopTimer()
+	if firstErr != nil {
+		b.Fatalf("concurrent blockmax search: %v", firstErr)
+	}
+	b.ReportMetric(float64(docs), "docs_fixture")
+	b.ReportMetric(float64(readers), "readers")
+	b.ReportMetric(1, "cache_warm")
+	if len(durations) > 0 {
+		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+		b.ReportMetric(float64(textV2ContractPercentile2623(durations, 50)), "p50_ns/search")
+		b.ReportMetric(float64(textV2ContractPercentile2623(durations, 95)), "p95_ns/search")
+		b.ReportMetric(float64(textV2ContractPercentile2623(durations, 99)), "p99_ns/search")
+	}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	b.ReportMetric(float64(ms.HeapAlloc), "steady_heap_bytes")
+}
+
+func openTextV2BlockMaxBenchFixture2628(tb testing.TB, docs int) (*backenddb.DB, *Collection) {
+	tb.Helper()
+	d := openTextV2ContractDB2623(tb)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	ids, rawDocs := textV2BlockMaxFixtureDocs2628(docs, maxTextV2ContractInt2623(16, docs/8))
+	if _, err := col.InsertBatch(ids, rawDocs); err != nil {
+		_ = d.Close()
+		tb.Fatalf("InsertBatch fixture: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(textV2ContractV2IndexDefinition2626()); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateTextIndex v2 fixture: %v", err)
+	}
+	return d, col
+}
+
 func BenchmarkTextV2ContractConcurrentServing2623(b *testing.B) {
 	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_CONCURRENT_DOCS", 256)
 	readers := textV2ContractEnvInt2623("TREEDB_TEXT_V2_CONCURRENT_READERS", 4)
@@ -850,6 +1001,8 @@ func textV2ContractReportTextStats2623(b *testing.B, response TextSearchResponse
 	b.ReportMetric(float64(stats.TextPostingsScanned), "postings_scanned/search")
 	b.ReportMetric(float64(stats.TextPostingBlocksVisited), "posting_blocks_visited/search")
 	b.ReportMetric(float64(stats.TextPostingBlocksSkipped), "posting_blocks_skipped/search")
+	b.ReportMetric(float64(stats.TextBlockMaxFallbacks), "blockmax_fallbacks/search")
+	b.ReportMetric(float64(stats.TextBlockMaxThresholds), "threshold_updates/search")
 	b.ReportMetric(float64(stats.TextCandidatesScored), "candidates_scored/search")
 	b.ReportMetric(float64(stats.TextStateLookups), "state_lookups/search")
 	b.ReportMetric(float64(stats.TextNormLookups), "norm_lookups/search")

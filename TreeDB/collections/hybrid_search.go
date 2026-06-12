@@ -234,6 +234,8 @@ type HybridSearchStats struct {
 	TextPostingsScanned        uint64                 `json:"text_postings_scanned,omitempty"`
 	TextPostingBlocksVisited   uint64                 `json:"text_posting_blocks_visited,omitempty"`
 	TextPostingBlocksSkipped   uint64                 `json:"text_posting_blocks_skipped,omitempty"`
+	TextBlockMaxFallbacks      uint64                 `json:"text_block_max_fallbacks,omitempty"`
+	TextBlockMaxThresholds     uint64                 `json:"text_block_max_thresholds,omitempty"`
 	TextCandidatesScored       uint64                 `json:"text_candidates_scored,omitempty"`
 	TextStateLookups           uint64                 `json:"text_state_lookups,omitempty"`
 	TextNormLookups            uint64                 `json:"text_norm_lookups,omitempty"`
