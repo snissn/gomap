@@ -72,6 +72,16 @@ type columnHNSWPreparedTraversalRowIDScorePlane interface {
 	scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error)
 }
 
+// columnHNSWPreparedTraversalRawDotScorePlane is the scalar_u8-only ordering
+// seam for prepared traversal. It keeps raw centered dot products in the
+// frontier/top-k queues and converts to public float64 scores only when leaving
+// traversal for result materialization, exact rerank, or a generic score seam.
+type columnHNSWPreparedTraversalRawDotScorePlane interface {
+	scoreRawDotOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int64, error)
+	scoreRawDotRowIDsPrevalidated(rowIDs []uint32, dst []int64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]int64, error)
+	scoreAndPushRawDotFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error)
+}
+
 type columnHNSWPreparedExactFP32ScorePlane struct {
 	pack            *columnHNSWSearchPackPreparedView
 	normalizedQuery []float32
