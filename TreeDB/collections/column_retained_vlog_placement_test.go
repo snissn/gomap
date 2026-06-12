@@ -315,6 +315,26 @@ func TestColumnRetainedPayloadTemplateV1PackingImprovesGroupedBlockStorage(t *te
 		mixedStats.StoredPayloadBytes, packedStats.StoredPayloadBytes, shrinkPct)
 }
 
+func TestColumnRetainedPayloadTemplateV1PackedAppendMismatchFailsClosed(t *testing.T) {
+	const docs = 32
+	stored := retainedPlacementTemplateV1StoredDocuments(t, docs)
+	db := &backenddb.DB{}
+	appender := &retainedPlacementTemplatePackMismatchedAppender{}
+	db.SetValueLogAppender(appender)
+	defer db.SetValueLogAppender(nil)
+
+	ptrs, err := appendCollectionPointerizedBatchValues(db, stored, true)
+	if err == nil {
+		t.Fatalf("appendCollectionPointerizedBatchValues returned nil error for mismatched pointer count")
+	}
+	if len(ptrs) != 0 {
+		t.Fatalf("appendCollectionPointerizedBatchValues returned %d ptrs on mismatch", len(ptrs))
+	}
+	if len(appender.values) != docs {
+		t.Fatalf("appended values=%d want %d", len(appender.values), docs)
+	}
+}
+
 func enableColumnRetainedPlacementCommandWAL(t testing.TB, dir string) {
 	t.Helper()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -508,6 +528,18 @@ func (*retainedPlacementTemplatePackAppender) Sync() error { return nil }
 
 func (*retainedPlacementTemplatePackAppender) CurrentValueLogSegment() (string, uint32, bool) {
 	return "", 0, false
+}
+
+type retainedPlacementTemplatePackMismatchedAppender struct {
+	retainedPlacementTemplatePackAppender
+}
+
+func (a *retainedPlacementTemplatePackMismatchedAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	ptrs, err := a.retainedPlacementTemplatePackAppender.AppendValues(values)
+	if err != nil || len(ptrs) == 0 {
+		return ptrs, err
+	}
+	return ptrs[:len(ptrs)-1], nil
 }
 
 func retainedPlacementTemplateV1StoredDocuments(t testing.TB, count int) [][]byte {

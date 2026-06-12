@@ -5238,7 +5238,7 @@ func appendCollectionPointerizedBatchValues(db *backenddb.DB, values [][]byte, p
 		return nil, err
 	}
 	if len(packedPtrs) != len(values) {
-		return packedPtrs, nil
+		return nil, fmt.Errorf("collections: retained template-v1 packed append returned %d ptrs for %d values", len(packedPtrs), len(values))
 	}
 	ptrs := make([]page.ValuePtr, len(values))
 	for packedIdx, sourceIdx := range order {
