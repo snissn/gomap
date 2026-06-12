@@ -1115,10 +1115,12 @@ func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byt
 		dst = dst[:len(ptrs)]
 	}
 	var (
-		fileID uint32
-		f      *File
+		fileID    uint32
+		f         *File
+		verifyCRC = !s.disableReadChecksum
 	)
-	for i, ptr := range ptrs {
+	for i := 0; i < len(ptrs); {
+		ptr := ptrs[i]
 		if i == 0 || ptr.FileID != fileID {
 			next, ok := s.Files[ptr.FileID]
 			if !ok {
@@ -1127,11 +1129,25 @@ func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byt
 			fileID = ptr.FileID
 			f = next
 		}
+		if verifyCRC {
+			runEnd := groupedRecordBatchRun(ptrs, i)
+			if runEnd-i > 1 {
+				ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					i = runEnd
+					continue
+				}
+			}
+		}
 		var err error
-		dst[i], err = f.ReadUnsafeAppend(ptr, !s.disableReadChecksum, dst[i][:0])
+		dst[i], err = f.ReadUnsafeAppend(ptr, verifyCRC, dst[i][:0])
 		if err != nil {
 			return nil, err
 		}
+		i++
 	}
 	return dst, nil
 }
@@ -1680,10 +1696,12 @@ func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][
 		dst = dst[:len(ptrs)]
 	}
 	var (
-		fileID uint32
-		f      *File
+		fileID    uint32
+		f         *File
+		verifyCRC = !m.disableReadChecksum
 	)
-	for i, ptr := range ptrs {
+	for i := 0; i < len(ptrs); {
+		ptr := ptrs[i]
 		if i == 0 || ptr.FileID != fileID {
 			next, err := m.fileFor(ptr.FileID)
 			if err != nil {
@@ -1692,11 +1710,25 @@ func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][
 			fileID = ptr.FileID
 			f = next
 		}
+		if verifyCRC {
+			runEnd := groupedRecordBatchRun(ptrs, i)
+			if runEnd-i > 1 {
+				ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					i = runEnd
+					continue
+				}
+			}
+		}
 		var err error
-		dst[i], err = f.ReadUnsafeAppend(ptr, !m.disableReadChecksum, dst[i][:0])
+		dst[i], err = f.ReadUnsafeAppend(ptr, verifyCRC, dst[i][:0])
 		if err != nil {
 			return nil, err
 		}
+		i++
 	}
 	return dst, nil
 }
