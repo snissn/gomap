@@ -460,6 +460,49 @@ func BenchmarkTextV2ContractSearchScale2623(b *testing.B) {
 	}
 }
 
+func BenchmarkTextV2ScoreSearchScale2627(b *testing.B) {
+	for _, docs := range textV2ContractSearchCorpusSizes2623() {
+		docs := docs
+		b.Run(fmt.Sprintf("docs_%d", docs), func(b *testing.B) {
+			if docs >= 100_000 && !textV2ContractLargeCorpusEnabled2623() {
+				b.Skip("set TREEDB_TEXT_V2_RUN_100K=1 or TREEDB_TEXT_V2_SEARCH_DOCS to run the >=100k local artifact row")
+			}
+			d, col := openTextV2ContractV2SearchFixture2627(b, docs)
+			defer func() { _ = d.Close() }()
+			for _, tc := range textV2ContractSearchCases2623(docs) {
+				tc := tc
+				b.Run(tc.name, func(b *testing.B) {
+					warm, err := textV2ContractRunSearch2623(col, tc)
+					if err != nil {
+						b.Fatalf("warm v2 search: %v", err)
+					}
+					if warm.Stats.DocumentsFetched != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.FailClosed != 0 || warm.Stats.TextStateLookups != 0 || warm.Stats.TextMatchDetailsBuilt != 0 {
+						b.Fatalf("warm v2 stats=%+v want score-only zero-doc/no-state/no-match search", warm.Stats)
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					var sink TextSearchResponse
+					for i := 0; i < b.N; i++ {
+						got, err := textV2ContractRunSearch2623(col, tc)
+						if err != nil {
+							b.Fatalf("v2 SearchText: %v", err)
+						}
+						if got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 || got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
+							b.Fatalf("v2 stats=%+v want score-only zero-doc/no-state/no-match search", got.Stats)
+						}
+						sink = got
+					}
+					b.StopTimer()
+					b.ReportMetric(float64(docs), "docs_fixture")
+					b.ReportMetric(float64(tc.candidateLimit), "candidate_budget/search")
+					b.ReportMetric(float64(tc.maxPostings), "max_postings/search")
+					textV2ContractReportTextStats2623(b, sink)
+				})
+			}
+		})
+	}
+}
+
 func BenchmarkTextV2ContractConcurrentServing2623(b *testing.B) {
 	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_CONCURRENT_DOCS", 256)
 	readers := textV2ContractEnvInt2623("TREEDB_TEXT_V2_CONCURRENT_READERS", 4)
@@ -574,6 +617,22 @@ func openTextV2ContractSearchFixture2623(tb testing.TB, docs int) (*backenddb.DB
 	if _, err := col.InsertBatch(ids, rawDocs); err != nil {
 		_ = d.Close()
 		tb.Fatalf("InsertBatch fixture: %v", err)
+	}
+	return d, col
+}
+
+func openTextV2ContractV2SearchFixture2627(tb testing.TB, docs int) (*backenddb.DB, *Collection) {
+	tb.Helper()
+	d := openTextV2ContractDB2623(tb)
+	col := createTextV2ContractCollection2623(tb, d, false)
+	ids, rawDocs := textV2ContractDocuments2623(docs, "search")
+	if _, err := col.InsertBatch(ids, rawDocs); err != nil {
+		_ = d.Close()
+		tb.Fatalf("InsertBatch v2 fixture: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(textV2ContractV2IndexDefinition2626()); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateTextIndex v2 fixture: %v", err)
 	}
 	return d, col
 }

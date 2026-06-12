@@ -258,8 +258,8 @@ func TestCollectionTextV2RootNamesAndStatusContract2623(t *testing.T) {
 		}
 	}
 	v2Status := textIndexStatusForDefinition("docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Rollout: TextIndexRolloutPrimary})
-	if !v2Status.FailClosed || !v2Status.Ready || v2Status.Readable || !v2Status.Writable || v2Status.FailClosedReason != "text_v2_search_unavailable" {
-		t.Fatalf("v2 status=%+v want root-ready/writable/search-fail-closed v2", v2Status)
+	if v2Status.FailClosed || !v2Status.Ready || !v2Status.Readable || !v2Status.Writable || v2Status.FailClosedReason != "" {
+		t.Fatalf("v2 status=%+v want root-ready/readable/writable score-only v2", v2Status)
 	}
 	if !slices.Equal(v2Status.ActiveRootNames, wantV2) {
 		t.Fatalf("v2 active roots=%q want %q", v2Status.ActiveRootNames, wantV2)
