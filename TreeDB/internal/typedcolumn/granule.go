@@ -68,6 +68,10 @@ const (
 	EncodingRawPackedBitVector
 	EncodingRawPackedUint2Vector
 	EncodingRawPackedUint4Vector
+
+	// Section-level row locator encoding for contiguous primary IDs. This is
+	// not a column granule codec.
+	EncodingRowLocatorContiguous
 )
 
 func (e Encoding) String() string {
@@ -144,6 +148,8 @@ func (e Encoding) String() string {
 		return "raw_packed_uint2_vector"
 	case EncodingRawPackedUint4Vector:
 		return "raw_packed_uint4_vector"
+	case EncodingRowLocatorContiguous:
+		return "row_locator_contiguous"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}

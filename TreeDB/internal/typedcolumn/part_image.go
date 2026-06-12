@@ -15,6 +15,12 @@ const columnPartImageMagic uint32 = 0x4d494354 // "TCIM", little-endian on disk.
 
 const columnPartImageSectionAlignment = 8
 
+const (
+	rowLocatorContiguousMagic        uint32 = 0x54434c52 // "RLCT", little-endian on disk.
+	rowLocatorContiguousVersion      uint16 = 1
+	rowLocatorContiguousPayloadBytes        = 32
+)
+
 type ColumnPartImageSectionKind string
 
 const (
@@ -709,6 +715,12 @@ func (b *columnPartImageBuilder) addRowLocatorsSection() error {
 	if err := validateDecodedRowLocators(b.part.Descriptor, b.part.Descriptor.PartID, b.part.Locators); err != nil {
 		return err
 	}
+	section := ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionRowLocators,
+		Category: ColumnPartImageCategoryLocators,
+		Name:     "primary_id_locators",
+		Rows:     len(b.part.Locators),
+	}
 	primaryIDs := make([]int64, 0, len(b.part.Locators))
 	for primaryID := range b.part.Locators {
 		primaryIDs = append(primaryIDs, primaryID)
@@ -721,6 +733,12 @@ func (b *columnPartImageBuilder) addRowLocatorsSection() error {
 	if err != nil {
 		return err
 	}
+	if compact, ok, err := encodeContiguousRowLocatorSection(b.part.Descriptor, b.part.Locators, payloadBytes); err != nil {
+		return err
+	} else if ok {
+		section.Encoding = EncodingRowLocatorContiguous
+		return b.appendSectionWithOptionalCompression(section, compact, b.opts.SectionCompression)
+	}
 	enc := columnPartImageEncoder{buf: make([]byte, 0, payloadBytes)}
 	enc.u32(uint32(len(primaryIDs)))
 	for _, primaryID := range primaryIDs {
@@ -732,13 +750,49 @@ func (b *columnPartImageBuilder) addRowLocatorsSection() error {
 		enc.u32(uint32(locator.RowInGranule))
 		enc.u32(0)
 	}
-	section := ColumnPartImageSection{
-		Kind:     ColumnPartImageSectionRowLocators,
-		Category: ColumnPartImageCategoryLocators,
-		Name:     "primary_id_locators",
-		Rows:     len(primaryIDs),
-	}
 	return b.appendSectionWithOptionalCompression(section, enc.bytes(), b.opts.SectionCompression)
+}
+
+func encodeContiguousRowLocatorSection(desc ColumnPartDescriptor, locators map[int64]RowLocator, rawPayloadBytes int) ([]byte, bool, error) {
+	if len(locators) != desc.RowCount || rawPayloadBytes <= rowLocatorContiguousPayloadBytes {
+		return nil, false, nil
+	}
+	base, ok := contiguousRowLocatorBase(locators)
+	if !ok {
+		return nil, false, nil
+	}
+	if desc.RowCount > 0 && base > math.MaxInt64-int64(desc.RowCount-1) {
+		return nil, false, fmt.Errorf("typedcolumn: contiguous row locator base=%d rows=%d exceeds int64 primary id range", base, desc.RowCount)
+	}
+	for primaryID, locator := range locators {
+		expectedPrimaryID := base + int64(locator.PartRow)
+		if primaryID != expectedPrimaryID || locator.PrimaryID != expectedPrimaryID {
+			return nil, false, nil
+		}
+	}
+	var enc columnPartImageEncoder
+	enc.u32(rowLocatorContiguousMagic)
+	enc.u16(rowLocatorContiguousVersion)
+	enc.u16(0)
+	enc.u64(desc.PartID)
+	enc.u64(uint64(desc.RowCount))
+	enc.i64(base)
+	return enc.bytes(), true, nil
+}
+
+func contiguousRowLocatorBase(locators map[int64]RowLocator) (int64, bool) {
+	if len(locators) == 0 {
+		return 0, true
+	}
+	for primaryID, locator := range locators {
+		if locator.PartRow == 0 {
+			if locator.PrimaryID != primaryID {
+				return 0, false
+			}
+			return primaryID, true
+		}
+	}
+	return 0, false
 }
 
 func (b *columnPartImageBuilder) addAggregateMetadataSections() error {

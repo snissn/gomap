@@ -248,8 +248,8 @@ func TestTypedColumnProductionCompressionPolicyDefaultsDurable2297(t *testing.T)
 				continue
 			}
 			foundLocatorSection = true
-			if section.Compression != string(ColumnStoreTypedColumnCompressionLZ4) || section.RawBytes <= section.StoredBytes || section.StoredBytes != section.Bytes {
-				t.Fatalf("row locator section=%+v want kept LZ4 section compression", section)
+			if section.Compression != typedcolumn.CompressionNone.String() || section.RawBytes <= section.StoredBytes || section.StoredBytes != section.Bytes || section.Bytes > 64 {
+				t.Fatalf("row locator section=%+v want compact uncompressed section below logical raw bytes", section)
 			}
 		}
 	}
@@ -257,7 +257,7 @@ func TestTypedColumnProductionCompressionPolicyDefaultsDurable2297(t *testing.T)
 		t.Fatalf("missing production LZ4 compression detail in %+v", accounting.TypedColumnParts)
 	}
 	if !foundLocatorSection {
-		t.Fatalf("missing compressed row locator section in %+v", accounting.TypedColumnParts)
+		t.Fatalf("missing compact row locator section in %+v", accounting.TypedColumnParts)
 	}
 	if !foundPruningSection {
 		t.Fatalf("missing compressed pruning metadata section in %+v", accounting.TypedColumnParts)
@@ -358,7 +358,7 @@ func TestTypedColumnAdapterOptInLocatorSectionCompression1952(t *testing.T) {
 			field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 			rows := make([]typedColumnAdapterRow, 4096)
 			for i := range rows {
-				rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i % 4)}}}
+				rows[i] = typedColumnAdapterRow{PrimaryID: int64((i + 1) * 10), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i % 4)}}}
 			}
 			part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 256, Fields: []TypedStorageField{field}, SectionCompression: compression, SectionCompressionSet: true}, rows)
 			if err != nil {
@@ -466,7 +466,7 @@ func TestTypedColumnAdapterCompressedLocatorCorruptionFailsClosed1952(t *testing
 			field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 			rows := make([]typedColumnAdapterRow, 1024)
 			for i := range rows {
-				rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}}}
+				rows[i] = typedColumnAdapterRow{PrimaryID: int64((i + 1) * 10), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}}}
 			}
 			part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 128, Fields: []TypedStorageField{field}, SectionCompression: compression, SectionCompressionSet: true}, rows)
 			if err != nil {
@@ -495,7 +495,7 @@ func TestTypedColumnAdapterCompressedLocatorRowMismatchFailsClosed1952(t *testin
 	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 	rows := make([]typedColumnAdapterRow, 256)
 	for i := range rows {
-		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}}}
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64((i + 1) * 10), Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}}}
 	}
 	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 64, Fields: []TypedStorageField{field}, SectionCompression: typedcolumn.CompressionLZ4, SectionCompressionSet: true}, rows)
 	if err != nil {

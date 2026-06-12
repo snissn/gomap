@@ -164,6 +164,91 @@ func TestTypedColumnTransplantRowLocatorRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTypedColumnTransplantContiguousRowLocatorEncoding2396(t *testing.T) {
+	part := mustTransplantPart(t, 239601, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	image := mustTransplantImage(t, part)
+	section := mustValidationSection(t, image, ColumnPartImageSectionRowLocators)
+	if section.Encoding != EncodingRowLocatorContiguous {
+		t.Fatalf("row locator section encoding=%s want %s", section.Encoding, EncodingRowLocatorContiguous)
+	}
+	rawBytes, err := rowLocatorSectionRawBytes(image.Rows)
+	if err != nil {
+		t.Fatalf("rowLocatorSectionRawBytes: %v", err)
+	}
+	if section.Length >= rawBytes {
+		t.Fatalf("compact row locator bytes=%d want below legacy raw=%d", section.Length, rawBytes)
+	}
+	if section.RawBytes != rowLocatorContiguousPayloadBytes || section.Length != rowLocatorContiguousPayloadBytes {
+		t.Fatalf("compact section raw/length=(%d,%d) want %d", section.RawBytes, section.Length, rowLocatorContiguousPayloadBytes)
+	}
+	accounting := image.SectionByteAccounting()
+	found := false
+	for _, sectionAccounting := range accounting {
+		if sectionAccounting.Kind != ColumnPartImageSectionRowLocators {
+			continue
+		}
+		found = true
+		if sectionAccounting.RawBytes != rawBytes || sectionAccounting.StoredBytes != rowLocatorContiguousPayloadBytes {
+			t.Fatalf("locator accounting=%+v want logical raw=%d stored=%d", sectionAccounting, rawBytes, rowLocatorContiguousPayloadBytes)
+		}
+	}
+	if !found {
+		t.Fatalf("missing row locator accounting in %+v", accounting)
+	}
+	reconstructed, err := ColumnPartFromImage(image)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	for primaryID, wantRow := range map[int64]int{1: 0, 6: 5} {
+		locator, ok := reconstructed.LocatePrimaryID(primaryID)
+		if !ok {
+			t.Fatalf("missing locator for primary id %d", primaryID)
+		}
+		if locator.PartID != part.Descriptor.PartID || locator.PartRow != wantRow {
+			t.Fatalf("locator for primary id %d=%+v want part=%d row=%d", primaryID, locator, part.Descriptor.PartID, wantRow)
+		}
+	}
+}
+
+func TestTypedColumnTransplantRowLocatorRawFallbackForSparsePrimaryIDs2396(t *testing.T) {
+	batch := transplantTestBatch()
+	batch.Columns["id"] = []int64{30, 10, 20, 60, 40, 50}
+	part := mustTransplantPart(t, 239602, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), batch)
+	image := mustTransplantImage(t, part)
+	section := mustValidationSection(t, image, ColumnPartImageSectionRowLocators)
+	if section.Encoding != 0 {
+		t.Fatalf("row locator section encoding=%s want legacy raw fallback", section.Encoding)
+	}
+	rawBytes, err := rowLocatorSectionRawBytes(image.Rows)
+	if err != nil {
+		t.Fatalf("rowLocatorSectionRawBytes: %v", err)
+	}
+	if section.Length != rawBytes {
+		t.Fatalf("raw fallback section bytes=%d want %d", section.Length, rawBytes)
+	}
+	reconstructed, err := ColumnPartFromImage(image)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	if locator, ok := reconstructed.LocatePrimaryID(60); !ok || locator.PartRow != 5 {
+		t.Fatalf("locator for sparse primary id 60=%+v ok=%v want row 5", locator, ok)
+	}
+}
+
+func TestTypedColumnTransplantContiguousRowLocatorCorruptionFailsClosed2396(t *testing.T) {
+	part := mustTransplantPart(t, 239603, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	image := mustTransplantImage(t, part)
+	section := mustValidationSection(t, image, ColumnPartImageSectionRowLocators)
+	if section.Encoding != EncodingRowLocatorContiguous {
+		t.Fatalf("row locator section encoding=%s want %s", section.Encoding, EncodingRowLocatorContiguous)
+	}
+	corrupt := cloneColumnPartImageBytes(image)
+	binary.LittleEndian.PutUint16(corrupt.Bytes[section.Offset+6:section.Offset+8], 1)
+	if _, err := ColumnPartFromImage(corrupt); err == nil || !strings.Contains(err.Error(), "contiguous row locator reserved") {
+		t.Fatalf("ColumnPartFromImage corrupt compact locator err=%v want reserved fail-closed", err)
+	}
+}
+
 func TestTypedColumnTransplantPartSetLatestVisibleRows(t *testing.T) {
 	opts := transplantTestOptions([]SortKeyColumn{{Column: "id"}})
 	base := mustTransplantPart(t, 201, opts, Batch{Columns: map[string][]int64{
