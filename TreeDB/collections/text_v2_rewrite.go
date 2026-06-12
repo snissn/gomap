@@ -568,8 +568,21 @@ func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collection
 
 func (p *textV2RewritePlan) purgeTextV2Tombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue) (bool, error) {
 	purgedOrdinals, err := p.purgeTextV2DocIDTombstones(snap, catalog, def, status)
-	if err != nil || len(purgedOrdinals) == 0 {
+	if err != nil {
 		return false, err
+	}
+	// A delete followed by an insert with the same document ID overwrites the
+	// docID tombstone with the new live ordinal. The old ordinal is still
+	// tombstoned in docmap/norm blocks and still contributes to DeletedDocuments,
+	// so tombstone discovery must include those ordinal-keyed sidecars too.
+	if err := collectTextV2DocMapTombstoneOrdinals(snap, catalog, def, status, purgedOrdinals); err != nil {
+		return false, err
+	}
+	if err := collectTextV2NormTombstoneOrdinals(snap, catalog, def, status, purgedOrdinals); err != nil {
+		return false, err
+	}
+	if len(purgedOrdinals) == 0 {
+		return false, nil
 	}
 	if err := p.purgeTextV2DocMapTombstones(snap, catalog, def, purgedOrdinals); err != nil {
 		return false, err
@@ -616,6 +629,88 @@ func (p *textV2RewritePlan) purgeTextV2DocIDTombstones(snap *backenddb.Snapshot,
 		it.Next()
 	}
 	return purged, it.Error()
+}
+
+func collectTextV2DocMapTombstoneOrdinals(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue, out map[uint64]struct{}) error {
+	rootName := collectionTextV2DocMapRootName(catalog.meta.Name, def.Name)
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
+	if err != nil || it == nil {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		key := it.UnsafeKey()
+		if bytes.Equal(key, encodeTextV2FormatKey()) {
+			it.Next()
+			continue
+		}
+		blockStart, err := decodeTextV2BlockKey(key)
+		if err != nil {
+			return err
+		}
+		block, err := decodeTextV2DocMapBlockValue(it.ValueCopy(nil))
+		if err != nil {
+			return err
+		}
+		if block.BlockStart != blockStart || block.BlockSize != textV2DefaultDocMapBlockSize {
+			return errMalformedTextStorage("text-v2 docmap tombstone collection block key/value mismatch")
+		}
+		for _, entry := range block.Entries {
+			if entry.Ordinal >= status.NextOrdinal || entry.Generation > status.DocMapGeneration {
+				return errMalformedTextStorage("text-v2 docmap tombstone collection entry outside status snapshot")
+			}
+			if entry.tombstoned() {
+				out[entry.Ordinal] = struct{}{}
+			}
+		}
+		it.Next()
+	}
+	return it.Error()
+}
+
+func collectTextV2NormTombstoneOrdinals(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue, out map[uint64]struct{}) error {
+	rootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
+	if err != nil || it == nil {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		key := it.UnsafeKey()
+		if bytes.Equal(key, encodeTextV2FormatKey()) {
+			it.Next()
+			continue
+		}
+		blockStart, err := decodeTextV2BlockKey(key)
+		if err != nil {
+			return err
+		}
+		block, err := decodeTextV2NormBlockValue(it.ValueCopy(nil))
+		if err != nil {
+			return err
+		}
+		if block.BlockStart != blockStart || block.BlockSize != textV2DefaultNormBlockSize || block.FieldCount != uint32(len(def.Fields)) {
+			return errMalformedTextStorage("text-v2 norm tombstone collection block key/value mismatch")
+		}
+		for _, entry := range block.Entries {
+			if entry.Ordinal >= status.NextOrdinal || entry.Generation > status.NormGeneration {
+				return errMalformedTextStorage("text-v2 norm tombstone collection entry outside status snapshot")
+			}
+			if entry.tombstoned() {
+				out[entry.Ordinal] = struct{}{}
+			}
+		}
+		it.Next()
+	}
+	return it.Error()
 }
 
 func (p *textV2RewritePlan) purgeTextV2DocMapTombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, purged map[uint64]struct{}) error {

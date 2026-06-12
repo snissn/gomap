@@ -120,6 +120,70 @@ func TestTextV2RewriteMergePurgesStaleTombstonesPositionsAndReopens2630(t *testi
 	}
 }
 
+func TestTextV2RewritePurgesSameIDReinsertTombstones2630(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("same"), []byte(`{"body":"old tombstone token"}`)); err != nil {
+		t.Fatalf("Insert same old: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("same")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch same deleted=%d err=%v", deleted, err)
+	}
+	if _, err := col.Insert([]byte("same"), []byte(`{"body":"live replacement token"}`)); err != nil {
+		t.Fatalf("Insert same replacement: %v", err)
+	}
+
+	beforeStats, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats before: %v", err)
+	}
+	if beforeStats.V2DeletedDocs != 1 || beforeStats.V2RewriteMergeState != TextIndexRewriteMergeStatePending {
+		t.Fatalf("before stats=%+v want one overwritten tombstone pending", beforeStats)
+	}
+	old, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "old", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(old.Results) != 0 {
+		t.Fatalf("old before rewrite response=%+v err=%v want no deleted result", old, err)
+	}
+	live, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "live", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(live.Results) != 1 || string(live.Results[0].DocumentID) != "same" {
+		t.Fatalf("live before rewrite response=%+v err=%v want replacement", live, err)
+	}
+
+	stats, err := col.RewriteTextIndex("lexical", TextIndexRewriteOptions{TargetPostingsPerBlock: 8})
+	if err != nil {
+		t.Fatalf("RewriteTextIndex: %v", err)
+	}
+	if stats.TombstoneDocIDEntriesPurged != 0 || stats.TombstoneDocMapEntriesPurged != 1 || stats.TombstoneNormEntriesPurged != 1 {
+		t.Fatalf("rewrite stats=%+v want same-ID tombstone purged from docmap/norm without docID tombstone", stats)
+	}
+	afterStats, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats after: %v", err)
+	}
+	if afterStats.V2DeletedDocs != 0 || afterStats.V2RewriteMergeState != TextIndexRewriteMergeStateCompacted {
+		t.Fatalf("after stats=%+v want compacted tombstone-free status", afterStats)
+	}
+	oldAfter, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "old", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(oldAfter.Results) != 0 {
+		t.Fatalf("old after rewrite response=%+v err=%v want no deleted result", oldAfter, err)
+	}
+	liveAfter, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "live", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(liveAfter.Results) != 1 || string(liveAfter.Results[0].DocumentID) != "same" {
+		t.Fatalf("live after rewrite response=%+v err=%v want replacement", liveAfter, err)
+	}
+}
+
 func TestTextV2RewriteSnapshotBoundAndConcurrentServing2630(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
