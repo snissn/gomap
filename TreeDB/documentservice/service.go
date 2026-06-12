@@ -491,6 +491,9 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 
 // OptimizeIndex rebuilds service vector assets after a benchmark load phase.
 func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return OptimizeIndexResponse{}, err
@@ -503,8 +506,6 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 		return OptimizeIndexResponse{}, serviceErrorf(CodeInvalidRequest, "unsupported vector_index_name %q", req.VectorIndexName)
 	}
 
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	if err := s.invalidateBenchmarkSearchCache(index); err != nil {
 		return OptimizeIndexResponse{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache before optimize failed", err)
 	}
