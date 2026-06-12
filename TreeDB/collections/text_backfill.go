@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/buger/jsonparser"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -28,6 +29,7 @@ type TextIndexBackfillStats struct {
 
 	V2DocIDEntries   int
 	V2DocMapBlocks   int
+	V2PostingBlocks  int
 	V2NormBlocks     int
 	V2TermStats      int
 	V2FormatRecords  int
@@ -47,6 +49,7 @@ type TextIndexStorageStats struct {
 	Version           TextIndexVersion
 	V2DocIDEntries    uint64
 	V2DocMapBlocks    uint64
+	V2PostingBlocks   uint64
 	V2NormBlocks      uint64
 	V2TermStats       uint64
 	V2FormatRecords   uint64
@@ -81,6 +84,73 @@ type textAnalyzedTerm struct {
 	Frequency uint32
 	Positions []uint32
 	Offsets   []textTokenOffset
+}
+
+const textTermAccumulatorInlineTerms = 8
+
+type textTermAccumulator struct {
+	storePositions bool
+	storeOffsets   bool
+	length         uint32
+	inline         [textTermAccumulatorInlineTerms]textAnalyzedTerm
+	terms          []textAnalyzedTerm
+	lookup         map[string]int
+}
+
+func newTextTermAccumulator(storePositions, storeOffsets bool) textTermAccumulator {
+	acc := textTermAccumulator{storePositions: storePositions, storeOffsets: storeOffsets}
+	acc.terms = acc.inline[:0]
+	return acc
+}
+
+func (a *textTermAccumulator) AddTextToken(token TextToken) error {
+	a.addToken(token)
+	return nil
+}
+
+func (a *textTermAccumulator) addToken(token TextToken) {
+	idx := -1
+	if a.lookup != nil {
+		if found, ok := a.lookup[token.Term]; ok {
+			idx = found
+		}
+	} else {
+		for i := range a.terms {
+			if a.terms[i].Term == token.Term {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		idx = len(a.terms)
+		a.terms = append(a.terms, textAnalyzedTerm{Term: token.Term})
+		if a.lookup != nil {
+			a.lookup[token.Term] = idx
+		} else if len(a.terms) > textTermAccumulatorInlineTerms {
+			a.lookup = make(map[string]int, len(a.terms)*2)
+			for i := range a.terms {
+				a.lookup[a.terms[i].Term] = i
+			}
+		}
+	}
+	term := &a.terms[idx]
+	term.Frequency++
+	if a.storePositions {
+		term.Positions = append(term.Positions, uint32(token.Position))
+	}
+	if a.storeOffsets {
+		term.Offsets = append(term.Offsets, textTokenOffset{Start: uint32(token.StartOffset), End: uint32(token.EndOffset)})
+	}
+	a.length++
+}
+
+func (a *textTermAccumulator) termsMap() map[string]*textAnalyzedTerm {
+	out := make(map[string]*textAnalyzedTerm, len(a.terms))
+	for i := range a.terms {
+		out[a.terms[i].Term] = &a.terms[i]
+	}
+	return out
 }
 
 type textBackfillStatsAccumulator struct {
@@ -232,6 +302,7 @@ func buildCreateTextV2IndexBackfillPlan(
 	}
 
 	fieldNames := textV2FieldNames(def)
+	analysisDef := textV2ScoringAnalysisDefinition(def)
 	for _, rootName := range rootNames {
 		family, ok := textV2RootFamilyForName(catalog.meta.Name, def.Name, rootName)
 		if !ok {
@@ -254,10 +325,12 @@ func buildCreateTextV2IndexBackfillPlan(
 	docIDRootName := collectionTextV2DocIDRootName(catalog.meta.Name, def.Name)
 	docMapRootName := collectionTextV2DocMapRootName(catalog.meta.Name, def.Name)
 	termsRootName := collectionTextV2TermsRootName(catalog.meta.Name, def.Name)
+	postingBlocksRootName := collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name)
 	normRootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
 	generationsRootName := collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name)
 	docMapBlocks := make(map[uint64]*textV2DocMapBlockValue)
 	normBlocks := make(map[uint64]*textV2NormBlockValue)
+	var postingBuilder textV2PostingBatchBuilder
 	acc := textBackfillStatsAccumulator{
 		Terms:  make(map[string]*textStatsTermValue),
 		Fields: make(map[string]*textStatsFieldValue),
@@ -285,7 +358,7 @@ func buildCreateTextV2IndexBackfillPlan(
 					resetAll()
 					return nil, err
 				}
-				analysis, err := analyzeTextIndexDocument(def, jsonDocument)
+				analysis, err := analyzeTextIndexDocument(analysisDef, jsonDocument)
 				if err != nil {
 					resetAll()
 					return nil, err
@@ -317,6 +390,10 @@ func buildCreateTextV2IndexBackfillPlan(
 				}
 				normBlock.upsert(textV2NormBlockEntry{Ordinal: ordinal, Generation: generation, FieldLengths: fieldLengths})
 
+				if err := postingBuilder.addDocument(def, ordinal, generation, analysis); err != nil {
+					resetAll()
+					return nil, err
+				}
 				acc.addDocument(analysis)
 				plan.stats.DocumentsScanned++
 				it.Next()
@@ -343,7 +420,15 @@ func buildCreateTextV2IndexBackfillPlan(
 		plan.stats.EncodedBytes += uint64(len(key) + len(value))
 	}
 
-	statsEntries, statsBytes := addTextV2StatsEntries(tables[termsRootName], acc, def, 1)
+	postingBlocks, postingBytes, postingBlockCounts, err := buildTextV2PostingBatchTable(tables[postingBlocksRootName], &postingBuilder, textV2PostingBlockKindSealed, textV2PostingBlockTargetPostings, 1)
+	if err != nil {
+		resetAll()
+		return nil, err
+	}
+	plan.stats.V2PostingBlocks = postingBlocks
+	plan.stats.EncodedBytes += postingBytes
+
+	statsEntries, statsBytes := addTextV2StatsEntries(tables[termsRootName], acc, def, 1, postingBlockCounts)
 	plan.stats.V2TermStats = statsEntries
 	plan.stats.StatsEntries = statsEntries
 	plan.stats.EncodedBytes += statsBytes
@@ -463,8 +548,11 @@ func analyzeTextIndexDocumentJSONRootFastPath(def TextIndexDefinition, jsonDocum
 		values = values[:len(def.Fields)]
 	}
 	if err := jsonparser.ObjectEach(jsonDocument, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+		// jsonparser.ObjectEach already returns decoded object keys. Unescaping here
+		// would treat literal backslashes as JSON escapes (for example `a\\q` ->
+		// `a\q` -> invalid `\q`) and could reject unrelated top-level fields.
 		for i, fieldDef := range def.Fields {
-			if string(key) == fieldDef.Field {
+			if textBytesEqualString(key, fieldDef.Field) {
 				values[i] = jsonParserIndexValue{raw: value, valueType: dataType}
 			}
 		}
@@ -558,26 +646,55 @@ func textJSONParserStringBytes(raw []byte, scratch *[]byte) ([]byte, error) {
 }
 
 func analyzeTextIndexField(def TextIndexDefinition, fieldName, text string) (textAnalyzedField, bool, error) {
-	tokens, err := AnalyzeText(def.Analyzer, text)
-	if err != nil {
+	acc := newTextTermAccumulator(def.StorePositions, def.StoreOffsets)
+	if err := analyzeTextToTermAccumulator(def.Analyzer, text, &acc); err != nil {
 		return textAnalyzedField{}, false, err
 	}
-	field := textAnalyzedField{Field: fieldName, Length: uint32(len(tokens)), Terms: make(map[string]*textAnalyzedTerm)}
-	for _, token := range tokens {
-		term := field.Terms[token.Term]
-		if term == nil {
-			term = &textAnalyzedTerm{Term: token.Term}
-			field.Terms[token.Term] = term
-		}
-		term.Frequency++
-		if def.StorePositions {
-			term.Positions = append(term.Positions, uint32(token.Position))
-		}
-		if def.StoreOffsets {
-			term.Offsets = append(term.Offsets, textTokenOffset{Start: uint32(token.StartOffset), End: uint32(token.EndOffset)})
-		}
-	}
+	field := textAnalyzedField{Field: fieldName, Length: acc.length, Terms: acc.termsMap()}
 	return field, true, nil
+}
+
+func analyzeTextToTermAccumulator(analyzer TextAnalyzer, text string, acc *textTermAccumulator) error {
+	normalized, err := normalizeTextAnalyzer(analyzer)
+	if err != nil {
+		return err
+	}
+	switch normalized {
+	case TextAnalyzerSimple:
+		analyzeSimpleTextToTermAccumulator(text, acc)
+		return nil
+	default:
+		return fmt.Errorf("unsupported analyzer %q", normalized)
+	}
+}
+
+func analyzeSimpleTextToTermAccumulator(text string, acc *textTermAccumulator) {
+	var builder strings.Builder
+	start := -1
+	position := 0
+	flush := func(end int) {
+		if start < 0 {
+			return
+		}
+		term := builder.String()
+		if term != "" {
+			acc.addToken(TextToken{Term: term, Position: position, StartOffset: start, EndOffset: end})
+			position++
+		}
+		builder.Reset()
+		start = -1
+	}
+	for offset, r := range text {
+		if simpleTextTokenRune(r) {
+			if start < 0 {
+				start = offset
+			}
+			builder.WriteRune(unicode.ToLower(r))
+			continue
+		}
+		flush(offset)
+	}
+	flush(len(text))
 }
 
 func textIndexFieldText(value any) (string, bool) {
@@ -719,7 +836,7 @@ func addTextStatsEntries(table memtable.Table, acc textBackfillStatsAccumulator)
 	return entries, bytesWritten
 }
 
-func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulator, def TextIndexDefinition, generation uint64) (int, uint64) {
+func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulator, def TextIndexDefinition, generation uint64, postingBlockCounts map[string]uint64) (int, uint64) {
 	if table == nil {
 		return 0, 0
 	}
@@ -745,6 +862,7 @@ func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulato
 			StatsGeneration:    generation,
 			DocumentFrequency:  stats.DocumentFrequency,
 			TotalTermFrequency: stats.TotalTermFrequency,
+			PostingBlockCount:  postingBlockCounts[term],
 		}))
 	}
 	seenFields := make(map[string]struct{}, len(def.Fields))
@@ -1080,6 +1198,27 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 				}
 			}
 			stats.V2NormBlocks++
+		case family == textV2RootFamilyPostingBlocks:
+			postingKey, err := decodeTextV2PostingBlockKey(key)
+			if err != nil {
+				return err
+			}
+			block, err := decodeTextV2PostingBlockValue(value)
+			if err != nil {
+				return err
+			}
+			if block.BlockStart != postingKey.BlockStart || block.BlockID != postingKey.BlockID {
+				return errMalformedTextStorage("text-v2 posting block key/value mismatch")
+			}
+			if len(block.Summary.MaxFieldTermFrequencies) != len(def.Fields) {
+				return errMalformedTextStorage("text-v2 posting block field lanes mismatch")
+			}
+			for _, entry := range block.Entries {
+				if entry.Ordinal >= status.NextOrdinal || entry.Generation > status.RootGeneration {
+					return errMalformedTextStorage("text-v2 posting block entry outside status snapshot")
+				}
+			}
+			stats.V2PostingBlocks++
 		case family == textV2RootFamilyTerms:
 			statsKey, err := decodeTextV2StatsKey(key)
 			if err != nil {
@@ -1126,7 +1265,7 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			}
 			stats.V2TermStats++
 			stats.StatsEntries++
-		case family == textV2RootFamilyPostingBlocks || family == textV2RootFamilyPositions || family == textV2RootFamilyGenerations:
+		case family == textV2RootFamilyPositions || family == textV2RootFamilyGenerations:
 			return errMalformedTextStorage("unsupported text-v2 root %q entry key %x", rootName, key)
 		default:
 			return errMalformedTextStorage("unsupported text-v2 root %q family %s", rootName, family)

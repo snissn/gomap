@@ -62,6 +62,16 @@ type columnHNSWPreparedTraversalScorePlane interface {
 	scoreOrdinals(ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error)
 }
 
+// columnHNSWPreparedTraversalRowIDScorePlane is the direct row-ID scoring seam
+// for prepared-pack traversal. Callers must validate every row ID against the
+// pack row count before invoking these methods. That lets scalar_u8 mirror the
+// exact FP32 pack route by scoring adjacency []uint32 directly instead of
+// staging through []int ordinals and the codec-generic quantized scorer.
+type columnHNSWPreparedTraversalRowIDScorePlane interface {
+	scoreRowIDsPrevalidated(rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error)
+	scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error)
+}
+
 type columnHNSWPreparedExactFP32ScorePlane struct {
 	pack            *columnHNSWSearchPackPreparedView
 	normalizedQuery []float32
@@ -130,7 +140,25 @@ func (p *columnHNSWPreparedExactFP32ScorePlane) scoreOrdinals(ordinals []int, ds
 		}
 		rowIDs[i] = uint32(ordinal)
 	}
+	return p.scoreRowIDsPrevalidated(rowIDs, dst, scratch, stats)
+}
+
+func (p *columnHNSWPreparedExactFP32ScorePlane) scoreRowIDsPrevalidated(rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	if p == nil || p.pack == nil || len(p.normalizedQuery) < p.pack.Header.VectorStride {
+		return dst[:0], errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
 	return p.pack.scoreRowIDs(p.normalizedQuery, rowIDs, dst, p.scoreBatchMode, scratch, stats)
+}
+
+func (p *columnHNSWPreparedExactFP32ScorePlane) scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+	if p == nil || p.pack == nil || len(p.normalizedQuery) < p.pack.Header.VectorStride {
+		return 0, errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	var visited uint64
+	if err := p.pack.scoreAndPushFrontierVisitedTile(p.normalizedQuery, rowIDs, topK, p.scoreBatchMode, scratch, stats, &visited); err != nil {
+		return int(visited), err
+	}
+	return int(visited), nil
 }
 
 type columnHNSWPreparedQuantizedScorePlane struct {
@@ -245,6 +273,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if err := scorePlane.prepareForHNSWPreparedTraversal(v, query, opts, scratch); err != nil {
 		return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal %s score plane: %w", scorePlane.kind(), err)
 	}
+	rowIDScorePlane, _ := scorePlane.(columnHNSWPreparedTraversalRowIDScorePlane)
 	countLoopEdges := !statsMode.minimal()
 	var loopEdgeVisits uint64
 	var visitedCandidates uint64
@@ -257,7 +286,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 		return nil, *stats, err
 	}
 	for layer := maxLayer; layer > 0; layer-- {
-		entryOrdinal, err = v.greedyNearestAtLayerPreparedScorePlane(scorePlane, entryOrdinal, layer, scratch, stats, countLoopEdges, &loopEdgeVisits)
+		entryOrdinal, err = v.greedyNearestAtLayerPreparedScorePlane(scorePlane, rowIDScorePlane, entryOrdinal, layer, scratch, stats, countLoopEdges, &loopEdgeVisits)
 		if err != nil {
 			return nil, *stats, err
 		}
@@ -299,6 +328,29 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 		}
 		if countLoopEdges {
 			loopEdgeVisits += uint64(len(adjacency))
+		}
+		if rowIDScorePlane != nil {
+			scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(adjacency))
+			tile := scratch.scoreTileRowIDs[:0]
+			for i, neighbor := range adjacency {
+				if uint64(neighbor) >= rowCount64 {
+					return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+				}
+				neighborOrdinal := int(neighbor)
+				if visitMarks[neighborOrdinal] == visitEpoch {
+					continue
+				}
+				visitMarks[neighborOrdinal] = visitEpoch
+				tile = append(tile, neighbor)
+			}
+			if len(tile) != 0 {
+				scored, err := rowIDScorePlane.scoreAndPushFrontierVisitedRowIDsPrevalidated(tile, retainedCandidateLimit, scratch, stats)
+				if err != nil {
+					return nil, *stats, err
+				}
+				visitedCandidates += uint64(scored)
+			}
+			continue
 		}
 		scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
 		tile := scratch.scoreTileOrdinals[:0]
@@ -348,7 +400,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	return scratch.results, *stats, nil
 }
 
-func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlane(scorePlane columnHNSWPreparedTraversalScorePlane, entryOrdinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64) (int, error) {
+func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlane(scorePlane columnHNSWPreparedTraversalScorePlane, rowIDScorePlane columnHNSWPreparedTraversalRowIDScorePlane, entryOrdinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64) (int, error) {
 	best := entryOrdinal
 	bestScore, err := scorePlane.scoreOrdinal(best, scratch, stats)
 	if err != nil {
@@ -367,12 +419,32 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 		if countLoopEdges && loopEdgeVisits != nil {
 			*loopEdgeVisits += uint64(len(adjacency))
 		}
-		scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
-		tile := scratch.scoreTileOrdinals[:0]
 		for i, neighbor := range adjacency {
 			if uint64(neighbor) >= uint64(v.Header.Rows) {
 				return 0, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal ordinal=%d layer=%d adjacency[%d]=%d outside row_count=%d: %w", best, layer, i, neighbor, v.Header.Rows, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
+		}
+		if rowIDScorePlane != nil {
+			scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(adjacency))
+			scores, err := rowIDScorePlane.scoreRowIDsPrevalidated(adjacency, scratch.scoreTileScores, scratch, stats)
+			if err != nil {
+				return 0, err
+			}
+			for i, neighbor := range adjacency {
+				neighborOrdinal := int(neighbor)
+				score := scores[i]
+				// Keep exact-pack tie handling stable with the current route.
+				if score > bestScore || (score == bestScore && neighborOrdinal < best) {
+					best = neighborOrdinal
+					bestScore = score
+					changed = true
+				}
+			}
+			continue
+		}
+		scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
+		tile := scratch.scoreTileOrdinals[:0]
+		for _, neighbor := range adjacency {
 			tile = append(tile, int(neighbor))
 		}
 		scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(tile))

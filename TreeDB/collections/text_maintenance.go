@@ -18,9 +18,10 @@ type textDocumentMutation struct {
 }
 
 type textStatsDelta struct {
-	Documents int64
-	Terms     map[string]textStatsTermDelta
-	Fields    map[string]textStatsFieldDelta
+	Documents     int64
+	Terms         map[string]textStatsTermDelta
+	Fields        map[string]textStatsFieldDelta
+	PostingBlocks map[string]int64
 }
 
 type textStatsTermDelta struct {
@@ -178,13 +179,15 @@ func appendSingleTextV2IndexMutationDeltas(
 	docIDRootName := collectionTextV2DocIDRootName(catalog.meta.Name, def.Name)
 	docMapRootName := collectionTextV2DocMapRootName(catalog.meta.Name, def.Name)
 	termsRootName := collectionTextV2TermsRootName(catalog.meta.Name, def.Name)
+	postingBlocksRootName := collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name)
 	normRootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
 	docIDTable := newCollectionRunTable(len(orderedMutations))
 	docMapTable := newCollectionRunTable(0)
 	termsTable := newCollectionRunTable(0)
+	postingBlocksTable := newCollectionRunTable(0)
 	normTable := newCollectionRunTable(0)
 	generationsTable := newCollectionRunTable(1)
-	deltaOwned := []memtable.Table{docIDTable, docMapTable, termsTable, normTable, generationsTable}
+	deltaOwned := []memtable.Table{docIDTable, docMapTable, termsTable, postingBlocksTable, normTable, generationsTable}
 	success := false
 	defer func() {
 		if !success {
@@ -194,6 +197,7 @@ func appendSingleTextV2IndexMutationDeltas(
 
 	docMapBlocks := make(map[uint64]*textV2DocMapBlockValue)
 	normBlocks := make(map[uint64]*textV2NormBlockValue)
+	var postingBuilder textV2PostingBatchBuilder
 	statsDelta := textStatsDelta{}
 	nextOrdinal := status.NextOrdinal
 	liveDocuments := status.LiveDocuments
@@ -202,6 +206,7 @@ func appendSingleTextV2IndexMutationDeltas(
 	if nextGeneration == 0 {
 		return errMalformedTextStorage("text-v2 root generation overflow")
 	}
+	analysisDef := textV2ScoringAnalysisDefinition(def)
 
 	for _, mutation := range orderedMutations {
 		if len(mutation.documentID) == 0 {
@@ -214,6 +219,7 @@ func appendSingleTextV2IndexMutationDeltas(
 
 		var oldState textDocumentStateValue
 		var newState textDocumentStateValue
+		var newAnalysis textAnalyzedDocument
 		if mutation.deleteOld {
 			if !hasCurrent || current.tombstoned() {
 				return errMalformedTextStorage("missing live text-v2 ordinal for delete collection %q index %q document %q", catalog.meta.Name, def.Name, string(mutation.documentID))
@@ -222,13 +228,13 @@ func appendSingleTextV2IndexMutationDeltas(
 			if err != nil {
 				return err
 			}
-			oldState, err = analyzeTextIndexStoredDocument(def, oldDocument, opts)
+			oldState, err = analyzeTextIndexStoredDocument(analysisDef, oldDocument, opts)
 			if err != nil {
 				return err
 			}
 		}
 		if mutation.setNew {
-			newState, _, err = analyzeTextIndexStoredDocumentWithAnalysis(def, mutation.newDocument, opts)
+			newState, newAnalysis, err = analyzeTextIndexStoredDocumentWithAnalysis(analysisDef, mutation.newDocument, opts)
 			if err != nil {
 				return err
 			}
@@ -283,6 +289,11 @@ func appendSingleTextV2IndexMutationDeltas(
 		if err := upsertTextV2NormMutation(snap, catalog, normRootName, normBlocks, nextDoc, lengths); err != nil {
 			return err
 		}
+		if mutation.setNew {
+			if err := postingBuilder.addDocument(def, nextDoc.Ordinal, nextDoc.Generation, newAnalysis); err != nil {
+				return err
+			}
+		}
 	}
 
 	for _, blockStart := range sortedTextV2BlockStarts(docMapBlocks) {
@@ -293,6 +304,15 @@ func appendSingleTextV2IndexMutationDeltas(
 		block := normBlocks[blockStart]
 		normTable.SetSteal(encodeTextV2BlockKey(blockStart), encodeTextV2NormBlockValue(*block))
 	}
+	mutationBlockIDStart, err := textV2PostingBlockMutationBlockIDStart(nextGeneration)
+	if err != nil {
+		return err
+	}
+	_, _, postingBlockCounts, err := buildTextV2PostingBatchTable(postingBlocksTable, &postingBuilder, textV2PostingBlockKindMicro, textV2PostingBlockMicroPostings, mutationBlockIDStart)
+	if err != nil {
+		return err
+	}
+	statsDelta.addPostingBlocks(postingBlockCounts)
 	if err := buildTextV2StatsDeltaTable(snap, catalog, def, termsRootName, statsDelta, nextGeneration, termsTable); err != nil {
 		return err
 	}
@@ -328,6 +348,9 @@ func appendSingleTextV2IndexMutationDeltas(
 		return err
 	}
 	if err := appendIfNonEmpty(termsRootName, termsTable); err != nil {
+		return err
+	}
+	if err := appendIfNonEmpty(postingBlocksRootName, postingBlocksTable); err != nil {
 		return err
 	}
 	if err := appendIfNonEmpty(normRootName, normTable); err != nil {
@@ -471,11 +494,21 @@ func buildTextV2StatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCat
 		table.SetSteal(encodeTextV2FieldStatsKey(field), encodeTextV2FieldStatsValue(textV2FieldStatsValue{StatsGeneration: generation, DocumentCount: docs, TotalTokenCount: tokens}))
 	}
 
-	terms := make([]string, 0, len(delta.Terms))
+	termSet := make(map[string]struct{}, len(delta.Terms)+len(delta.PostingBlocks))
 	for term, termDelta := range delta.Terms {
 		if termDelta.DocumentFrequency == 0 && termDelta.TotalTermFrequency == 0 {
 			continue
 		}
+		termSet[term] = struct{}{}
+	}
+	for term, blockDelta := range delta.PostingBlocks {
+		if blockDelta == 0 {
+			continue
+		}
+		termSet[term] = struct{}{}
+	}
+	terms := make([]string, 0, len(termSet))
+	for term := range termSet {
 		terms = append(terms, term)
 	}
 	sort.Strings(terms)
@@ -493,11 +526,15 @@ func buildTextV2StatsDeltaTable(snap *backenddb.Snapshot, catalog *collectionCat
 		if err != nil {
 			return err
 		}
+		blocks, err := applySignedTextDelta(current.PostingBlockCount, delta.PostingBlocks[term], "text-v2 term posting block count")
+		if err != nil {
+			return err
+		}
 		key := encodeTextV2TermStatsKey(term)
-		if df == 0 && tf == 0 {
+		if df == 0 && tf == 0 && blocks == 0 {
 			table.DeleteSteal(key)
 		} else {
-			table.SetSteal(key, encodeTextV2TermStatsValue(textV2TermStatsValue{StatsGeneration: generation, DocumentFrequency: df, TotalTermFrequency: tf, PostingBlockCount: current.PostingBlockCount}))
+			table.SetSteal(key, encodeTextV2TermStatsValue(textV2TermStatsValue{StatsGeneration: generation, DocumentFrequency: df, TotalTermFrequency: tf, PostingBlockCount: blocks}))
 		}
 	}
 	return nil
@@ -638,6 +675,18 @@ func (d *textStatsDelta) addState(state textDocumentStateValue, sign int64) {
 		termDelta.DocumentFrequency += sign
 		termDelta.TotalTermFrequency += signedTextDeltaUint64(freq, sign)
 		d.Terms[term] = termDelta
+	}
+}
+
+func (d *textStatsDelta) addPostingBlocks(blockCounts map[string]uint64) {
+	if len(blockCounts) == 0 {
+		return
+	}
+	if d.PostingBlocks == nil {
+		d.PostingBlocks = make(map[string]int64, len(blockCounts))
+	}
+	for term, count := range blockCounts {
+		d.PostingBlocks[term] += signedTextDeltaUint64(count, 1)
 	}
 }
 

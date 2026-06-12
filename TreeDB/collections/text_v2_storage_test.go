@@ -192,8 +192,8 @@ func TestCollectionCreateTextV2IndexBackfillsOrdinalsNormsStatsAndReopens2624(t 
 	if err != nil {
 		t.Fatalf("TextIndexStatus: %v", err)
 	}
-	if status.Version != TextIndexVersionV2 || !status.Ready || status.Readable || status.Writable || status.FailClosedReason != "text_v2_search_unavailable" {
-		t.Fatalf("status=%+v want v2 root-ready/full-search-write fail-closed", status)
+	if status.Version != TextIndexVersionV2 || !status.Ready || !status.Readable || !status.Writable || status.FailClosed || status.FailClosedReason != "" {
+		t.Fatalf("status=%+v want v2 root-ready/readable/writable score-only", status)
 	}
 	if !slices.Equal(status.ActiveRootNames, collectionTextV2RootNames("docs", "lexical")) {
 		t.Fatalf("active roots=%q", status.ActiveRootNames)
@@ -234,8 +234,12 @@ func TestCollectionCreateTextV2IndexBackfillsOrdinalsNormsStatsAndReopens2624(t 
 			t.Fatalf("refund term=%+v want df=1 tf=3", term)
 		}
 	})
-	if _, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10}); !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("v2 SearchText err=%v want ErrTextIndexUnavailable", err)
+	search, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10})
+	if err != nil {
+		t.Fatalf("v2 SearchText: %v", err)
+	}
+	if len(search.Results) != 1 || string(search.Results[0].DocumentID) != "d1" || len(search.Results[0].TextMatches) != 0 || search.Stats.TextMatchDetailsBuilt != 0 || search.Stats.TextStateLookups != 0 {
+		t.Fatalf("v2 SearchText response=%+v want score-only d1 without match/state work", search)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
