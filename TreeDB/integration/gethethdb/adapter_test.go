@@ -368,7 +368,10 @@ func TestIteratorNextAfterExhaustionIsIdempotent(t *testing.T) {
 		}
 	}
 	it := db.NewIterator(nil, nil)
-	got := collectIteratorKeys(it)
+	var got []string
+	for it.Next() {
+		got = append(got, string(it.Key()))
+	}
 	if want := []string{"a", "b", "c"}; !slices.Equal(got, want) {
 		t.Fatalf("iterator keys=%v want %v", got, want)
 	}
