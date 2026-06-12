@@ -24,9 +24,9 @@ const (
 )
 
 // TextIndexVersion selects the physical text-index contract. The zero value
-// normalizes to TextIndexVersionV1 until v2 roots are implemented by the text v2
-// stack. TextIndexVersionV2 is reserved by the M0 contract and currently fails
-// closed during metadata validation rather than silently falling back to v1.
+// normalizes to TextIndexVersionV1. TextIndexVersionV2 is an explicit opt-in to
+// the B-tree-native root format; unsupported v2 read/rollout behavior fails
+// closed rather than silently falling back to v1.
 type TextIndexVersion string
 
 const (
@@ -86,7 +86,7 @@ func normalizeTextIndexVersion(version TextIndexVersion) (TextIndexVersion, erro
 	case TextIndexVersionDefault, TextIndexVersionV1:
 		return TextIndexVersionV1, nil
 	case TextIndexVersionV2:
-		return "", fmt.Errorf("%w: text index version %q is reserved until text v2 roots land", ErrTextIndexUnavailable, version)
+		return TextIndexVersionV2, nil
 	default:
 		return "", fmt.Errorf("unsupported text index version %q", version)
 	}
@@ -198,6 +198,15 @@ func findTextIndex(indexes []TextIndexDefinition, name string) (TextIndexDefinit
 	return TextIndexDefinition{}, false
 }
 
+func rejectCreateCollectionTextV2Indexes(meta CollectionMeta) error {
+	for _, idx := range meta.TextIndexes {
+		if idx.Version == TextIndexVersionV2 {
+			return fmt.Errorf("%w: CreateCollection with text index version %q requires CreateTextIndex so v2 root descriptors and status records are published atomically", ErrTextIndexUnavailable, idx.Version)
+		}
+	}
+	return nil
+}
+
 func collectionTextIndexRootName(collection, indexName string) string {
 	return collection + "/text-index/" + indexName
 }
@@ -216,6 +225,22 @@ func collectionTextRootNames(collection, indexName string) []string {
 		collectionTextStateRootName(collection, indexName),
 		collectionTextStatsRootName(collection, indexName),
 	}
+}
+
+func collectionTextRootNamesForDefinition(collection string, def TextIndexDefinition) []string {
+	version := def.Version
+	if version == TextIndexVersionDefault {
+		version = TextIndexVersionV1
+	}
+	if version == TextIndexVersionV2 {
+		return collectionTextV2RootNames(collection, def.Name)
+	}
+	return collectionTextRootNames(collection, def.Name)
+}
+
+func collectionTextAllRootNames(collection, indexName string) []string {
+	roots := collectionTextRootNames(collection, indexName)
+	return append(roots, collectionTextV2RootNames(collection, indexName)...)
 }
 
 func collectionTextV2DocIDRootName(collection, indexName string) string {
@@ -330,14 +355,21 @@ func textIndexStatusForDefinition(collection string, def TextIndexDefinition) Te
 		RewriteMergeState:       TextIndexRewriteMergeStateNotApplicable,
 		PhysicalReclamationPath: TextIndexPhysicalReclamationTreeDB,
 	}
-	if version != TextIndexVersionV1 {
-		status.FailClosed = true
-		status.FailClosedReason = "text_index_version_unavailable"
-		return status
-	}
 	if rollout != TextIndexRolloutPrimary {
 		status.FailClosed = true
 		status.FailClosedReason = "text_index_rollout_mode_unavailable"
+		return status
+	}
+	if version == TextIndexVersionV2 {
+		status.Ready = true
+		status.FailClosed = true
+		status.FailClosedReason = "text_v2_search_unavailable"
+		status.ActiveRootNames = collectionTextV2RootNames(collection, def.Name)
+		return status
+	}
+	if version != TextIndexVersionV1 {
+		status.FailClosed = true
+		status.FailClosedReason = "text_index_version_unavailable"
 		return status
 	}
 	status.Ready = true

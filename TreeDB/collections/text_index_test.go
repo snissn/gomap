@@ -144,9 +144,9 @@ func TestCollectionTextIndexMetadataRejectsInvalidDefinitions(t *testing.T) {
 			want: "store_offsets requires store_positions",
 		},
 		{
-			name: "v2 version reserved fail closed",
-			meta: CollectionMeta{Name: "docs", TextIndexes: []TextIndexDefinition{{Name: "text", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}}},
-			want: "text index version \"v2\" is reserved",
+			name: "bad version",
+			meta: CollectionMeta{Name: "docs", TextIndexes: []TextIndexDefinition{{Name: "text", Version: TextIndexVersion("v3"), Fields: []TextIndexField{{Field: "body"}}}}},
+			want: "unsupported text index version",
 		},
 		{
 			name: "shadow rollout reserved fail closed",
@@ -257,9 +257,12 @@ func TestCollectionTextV2RootNamesAndStatusContract2623(t *testing.T) {
 			t.Fatalf("required counters=%q missing %q", status.RequiredCounterNames, want)
 		}
 	}
-	unsupported := textIndexStatusForDefinition("docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Rollout: TextIndexRolloutPrimary})
-	if !unsupported.FailClosed || unsupported.Ready || unsupported.Readable || unsupported.Writable || unsupported.FailClosedReason != "text_index_version_unavailable" {
-		t.Fatalf("unsupported status=%+v want fail-closed v2", unsupported)
+	v2Status := textIndexStatusForDefinition("docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Rollout: TextIndexRolloutPrimary})
+	if !v2Status.FailClosed || !v2Status.Ready || v2Status.Readable || v2Status.Writable || v2Status.FailClosedReason != "text_v2_search_unavailable" {
+		t.Fatalf("v2 status=%+v want root-ready/full-search-write-fail-closed v2", v2Status)
+	}
+	if !slices.Equal(v2Status.ActiveRootNames, wantV2) {
+		t.Fatalf("v2 active roots=%q want %q", v2Status.ActiveRootNames, wantV2)
 	}
 }
 
@@ -332,7 +335,7 @@ func TestCollectionTextIndexStatusUsesCurrentCatalog2623(t *testing.T) {
 }
 
 func TestCollectionTextRootStoragePolicies(t *testing.T) {
-	meta, err := normalizeCollectionMeta(CollectionMeta{
+	metaV1, err := normalizeCollectionMeta(CollectionMeta{
 		Name: "docs",
 		Options: CollectionOptions{
 			IndexStateStoragePolicy: RootStorageFast,
@@ -344,32 +347,69 @@ func TestCollectionTextRootStoragePolicies(t *testing.T) {
 		}},
 	})
 	if err != nil {
-		t.Fatalf("normalize metadata: %v", err)
+		t.Fatalf("normalize v1 metadata: %v", err)
+	}
+	metaV2, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			IndexStateStoragePolicy: RootStorageFast,
+		},
+		TextIndexes: []TextIndexDefinition{{
+			Name:          "lexical",
+			Version:       TextIndexVersionV2,
+			Fields:        []TextIndexField{{Field: "body"}},
+			StoragePolicy: RootStorageCompressed,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("normalize v2 metadata: %v", err)
 	}
 	cases := []struct {
 		name string
+		meta CollectionMeta
 		root string
 		want backenddb.OrderedRootStoragePolicy
 	}{
 		{
 			name: "postings honor text index storage policy",
+			meta: metaV1,
 			root: collectionTextIndexRootName("docs", "lexical"),
 			want: backenddb.OrderedRootStorageValueLogLeaves,
 		},
 		{
 			name: "state uses index state storage policy",
+			meta: metaV1,
 			root: collectionTextStateRootName("docs", "lexical"),
 			want: backenddb.OrderedRootStoragePagerLeaves,
 		},
 		{
 			name: "stats uses index state storage policy",
+			meta: metaV1,
 			root: collectionTextStatsRootName("docs", "lexical"),
+			want: backenddb.OrderedRootStoragePagerLeaves,
+		},
+		{
+			name: "v2 docmap honors text index storage policy",
+			meta: metaV2,
+			root: collectionTextV2DocMapRootName("docs", "lexical"),
+			want: backenddb.OrderedRootStorageValueLogLeaves,
+		},
+		{
+			name: "v2 norm blocks honor text index storage policy",
+			meta: metaV2,
+			root: collectionTextV2NormBlocksRootName("docs", "lexical"),
+			want: backenddb.OrderedRootStorageValueLogLeaves,
+		},
+		{
+			name: "v2 generations use index state storage policy",
+			meta: metaV2,
+			root: collectionTextV2GenerationsRootName("docs", "lexical"),
 			want: backenddb.OrderedRootStoragePagerLeaves,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := collectionRootStoragePolicyForDB(nil, meta, tc.root)
+			got, err := collectionRootStoragePolicyForDB(nil, tc.meta, tc.root)
 			if err != nil {
 				t.Fatalf("collectionRootStoragePolicyForDB(%q): %v", tc.root, err)
 			}
@@ -378,8 +418,11 @@ func TestCollectionTextRootStoragePolicies(t *testing.T) {
 			}
 		})
 	}
-	if _, err := collectionRootStoragePolicyForDB(nil, meta, collectionTextIndexRootName("docs", "missing")); err == nil || !strings.Contains(err.Error(), "unknown collection root") {
+	if _, err := collectionRootStoragePolicyForDB(nil, metaV1, collectionTextIndexRootName("docs", "missing")); err == nil || !strings.Contains(err.Error(), "unknown collection root") {
 		t.Fatalf("missing text root err=%v want unknown collection root", err)
+	}
+	if _, err := collectionRootStoragePolicyForDB(nil, metaV1, collectionTextV2DocMapRootName("docs", "lexical")); err == nil || !strings.Contains(err.Error(), "unknown collection root") {
+		t.Fatalf("v1 v2-root policy err=%v want unknown collection root", err)
 	}
 }
 
