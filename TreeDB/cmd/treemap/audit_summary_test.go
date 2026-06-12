@@ -102,6 +102,59 @@ func TestAuditSummaryJSONOutputShape(t *testing.T) {
 	}
 }
 
+func TestAuditSummaryFlatMainDBDirNamedMainDBUsesInputAsRoot(t *testing.T) {
+	parent := t.TempDir()
+	flatDir := filepath.Join(parent, "maindb")
+	opts := treedb.Options{
+		Dir:               flatDir,
+		DisableSideStores: true,
+		Durability:        treedb.DurabilityWALOffRelaxed,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	}
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open flat fixture: %v", err)
+	}
+	if err := db.Set([]byte("flat-key"), bytes.Repeat([]byte("v"), 512)); err != nil {
+		_ = db.Close()
+		t.Fatalf("set flat fixture: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint flat fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close flat fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "unrelated.bin"), bytes.Repeat([]byte("x"), 4096), 0o644); err != nil {
+		t.Fatalf("write unrelated sibling: %v", err)
+	}
+
+	report, err := collectAuditSummary(flatDir, auditSummaryCollectOptions{CompactMode: treedbdb.CompactStorageFull})
+	if err != nil {
+		t.Fatalf("collectAuditSummary(flat maindb): %v", err)
+	}
+	if report.RootDir != flatDir {
+		t.Fatalf("RootDir=%q want flat dir %q", report.RootDir, flatDir)
+	}
+	rootDomain := auditStorageDomainsByName(report.Storage.Domains)["root"]
+	expectedRoot, err := auditPathUsage("root", flatDir)
+	if err != nil {
+		t.Fatalf("auditPathUsage(flat root): %v", err)
+	}
+	if rootDomain.Path != flatDir || rootDomain.Bytes != expectedRoot.Bytes || rootDomain.Files != expectedRoot.Files {
+		t.Fatalf("root domain includes wrong path/usage: got=%+v want=%+v", rootDomain, expectedRoot)
+	}
+}
+
 func TestSummarizeCompactUsagesPreservesMissingDomainExists(t *testing.T) {
 	dir := t.TempDir()
 	existingEmpty := filepath.Join(dir, "empty")
