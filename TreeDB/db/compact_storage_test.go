@@ -1457,6 +1457,49 @@ func TestCompactStorageExhaustiveRefusesExternalLeafPageLog(t *testing.T) {
 	}
 }
 
+func TestCompactStorageFullLeafPackDefaultUsesByteBudgetNotGenerationCap(t *testing.T) {
+	opts := normalizeCompactStorageOptions(CompactStorageOptions{})
+	if opts.Mode != CompactStorageFull {
+		t.Fatalf("Mode=%q want full", opts.Mode)
+	}
+	if opts.LeafPackMaxGenerationsPerPass != 0 {
+		t.Fatalf("LeafPackMaxGenerationsPerPass=%d want 0 (byte-budget only)", opts.LeafPackMaxGenerationsPerPass)
+	}
+	if opts.LeafPackMaxBytesToCopyPerPass != 1<<30 {
+		t.Fatalf("LeafPackMaxBytesToCopyPerPass=%d want %d", opts.LeafPackMaxBytesToCopyPerPass, int64(1<<30))
+	}
+
+	plan := LeafGenerationPlan{Admission: leafGenerationPlanAdmissionEligible}
+	for i := 0; i < 96; i++ {
+		plan.Candidates = append(plan.Candidates, LeafGenerationPlanGeneration{
+			GenerationID: uint64(i + 1),
+			BytesTotal:   3,
+			BytesLive:    1,
+			BytesDead:    2,
+			BytesToCopy:  1,
+			LivePages:    1,
+		})
+	}
+
+	gens, bytes, err := compactStorageLeafPackDebtFromPlan(plan, compactStorageLeafPackFromPlanOptions(opts, nil, nil))
+	if err != nil {
+		t.Fatalf("compactStorageLeafPackDebtFromPlan default: %v", err)
+	}
+	if gens != 96 || bytes != 192 {
+		t.Fatalf("default full leaf-pack debt gens=%d bytes=%d want 96/192", gens, bytes)
+	}
+
+	capped := opts
+	capped.LeafPackMaxGenerationsPerPass = 64
+	gens, bytes, err = compactStorageLeafPackDebtFromPlan(plan, compactStorageLeafPackFromPlanOptions(capped, nil, nil))
+	if err != nil {
+		t.Fatalf("compactStorageLeafPackDebtFromPlan capped: %v", err)
+	}
+	if gens != 64 || bytes != 128 {
+		t.Fatalf("explicit capped leaf-pack debt gens=%d bytes=%d want 64/128", gens, bytes)
+	}
+}
+
 func TestCompactStorageNormalizeExhaustiveForcesUnboundedLeafPack(t *testing.T) {
 	opts := normalizeCompactStorageOptions(CompactStorageOptions{Mode: CompactStorageExhaustive})
 	if opts.Mode != CompactStorageExhaustive {
