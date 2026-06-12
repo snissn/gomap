@@ -771,7 +771,7 @@ func selectGzipSampleCandidates(segments []valueLogSegmentAudit, sampleCount int
 	return selected
 }
 
-func gzipFilePrefix(path string, maxBytes int64) (int64, int64, error) {
+func gzipFilePrefix(path string, maxBytes int64) (inputBytes int64, gzipBytes int64, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, 0, err
@@ -780,20 +780,29 @@ func gzipFilePrefix(path string, maxBytes int64) (int64, int64, error) {
 
 	var counter countingWriter
 	zw := gzip.NewWriter(&counter)
+	defer func() {
+		closeErr := zw.Close()
+		if err != nil {
+			return
+		}
+		if closeErr != nil {
+			inputBytes = 0
+			gzipBytes = 0
+			err = closeErr
+			return
+		}
+		gzipBytes = counter.N
+	}()
+
 	var reader io.Reader = f
 	if maxBytes > 0 {
 		reader = &io.LimitedReader{R: f, N: maxBytes}
 	}
-	inputBytes, copyErr := io.Copy(zw, reader)
-	closeErr := zw.Close() // Always close, even when io.Copy fails; copyErr still wins below.
-	switch {
-	case copyErr != nil:
-		return 0, 0, copyErr
-	case closeErr != nil:
-		return 0, 0, closeErr
-	default:
-		return inputBytes, counter.N, nil
+	inputBytes, err = io.Copy(zw, reader)
+	if err != nil {
+		return 0, 0, err
 	}
+	return inputBytes, 0, nil
 }
 
 type countingWriter struct {
