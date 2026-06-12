@@ -986,6 +986,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	visitEpoch               uint64
 	frontier                 []columnVectorGraphSearchCandidate
 	top                      []columnVectorGraphSearchCandidate
+	rawDot                   *columnVectorGraphRawDotSearchScratch
 	results                  []columnVectorGraphNativeSearchResult
 	idBuffers                [][]byte
 	resultIDViews            [][]byte
