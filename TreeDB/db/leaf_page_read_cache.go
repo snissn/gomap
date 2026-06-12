@@ -135,6 +135,9 @@ type leafPageReadCache struct {
 	buckets []leafPageReadCacheBucket
 	ways    int
 
+	// disabled temporarily bypasses all cache reads and writes during storage
+	// maintenance/compaction so stale leaf-log pages are not served while value-log
+	// rewrite/GC and leaf-generation pack/GC mutate underlying storage.
 	disabled atomic.Bool
 
 	hits      atomic.Uint64
