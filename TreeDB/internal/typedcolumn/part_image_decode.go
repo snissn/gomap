@@ -2047,6 +2047,25 @@ func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
 	if err != nil {
 		return nil, err
 	}
+	var out map[string]map[string]int64
+	switch sections[0].Encoding {
+	case 0:
+		out, err = decodeRawDictionarySection(dictionaryBytes)
+	case EncodingDictionaryDense:
+		out, err = decodeDenseDictionarySection(dictionaryBytes)
+	default:
+		return nil, fmt.Errorf("typedcolumn: dictionaries encoding=%s is unsupported", sections[0].Encoding)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := i.validateDictionariesForDescriptor(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func decodeRawDictionarySection(dictionaryBytes []byte) (map[string]map[string]int64, error) {
 	dec := columnPartImageDecoder{data: dictionaryBytes}
 	count, err := dec.u32()
 	if err != nil {
@@ -2098,7 +2117,69 @@ func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
 	if err := dec.finish(); err != nil {
 		return nil, err
 	}
-	if err := i.validateDictionariesForDescriptor(out); err != nil {
+	return out, nil
+}
+
+func decodeDenseDictionarySection(dictionaryBytes []byte) (map[string]map[string]int64, error) {
+	dec := columnPartImageDecoder{data: dictionaryBytes}
+	magic, err := dec.u32()
+	if err != nil {
+		return nil, err
+	}
+	if magic != dictionaryDenseMagic {
+		return nil, fmt.Errorf("typedcolumn: invalid dense dictionary magic 0x%x", magic)
+	}
+	version, err := dec.u16()
+	if err != nil {
+		return nil, err
+	}
+	if version != dictionaryDenseVersion {
+		return nil, fmt.Errorf("typedcolumn: unsupported dense dictionary version %d", version)
+	}
+	if reserved, err := dec.u16(); err != nil {
+		return nil, err
+	} else if reserved != 0 {
+		return nil, fmt.Errorf("typedcolumn: dense dictionary reserved=%d want 0", reserved)
+	}
+	count, err := dec.u32()
+	if err != nil {
+		return nil, err
+	}
+	total, err := dec.boundedCount(count, 8, "dictionaries")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]map[string]int64, total)
+	for idx := 0; idx < total; idx++ {
+		name, err := dec.str()
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := out[name]; exists {
+			return nil, fmt.Errorf("typedcolumn: duplicate dictionary %s", name)
+		}
+		entryCount, err := dec.u32()
+		if err != nil {
+			return nil, err
+		}
+		entries, err := dec.boundedCount(entryCount, 4, "dictionary entries")
+		if err != nil {
+			return nil, err
+		}
+		values := make(map[string]int64, entries)
+		for j := 0; j < entries; j++ {
+			value, err := dec.str()
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := values[value]; exists {
+				return nil, fmt.Errorf("typedcolumn: duplicate dictionary value %s in %s", value, name)
+			}
+			values[value] = int64(j)
+		}
+		out[name] = values
+	}
+	if err := dec.finish(); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -2559,6 +2640,11 @@ func rowLocatorSectionRawBytes(rows int) (int, error) {
 }
 
 func (i ColumnPartImage) dictionarySectionBytes(section ColumnPartImageSection) ([]byte, error) {
+	switch section.Encoding {
+	case 0, EncodingDictionaryDense:
+	default:
+		return nil, fmt.Errorf("typedcolumn: dictionaries encoding=%s is unsupported", section.Encoding)
+	}
 	rawBytes := section.RawBytes
 	if rawBytes == 0 && section.Compression == CompressionNone {
 		rawBytes = section.Length
@@ -2699,10 +2785,11 @@ func validateImageSectionCompression(section ColumnPartImageSection) error {
 		default:
 			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported", section.Kind, section.Compression)
 		}
-	case ColumnPartImageSectionDictionaries, ColumnPartImageSectionPruningMetadata:
-		maxRawBytes := maxCompressedDictionarySectionRawBytes
-		if section.Kind == ColumnPartImageSectionPruningMetadata {
-			maxRawBytes = maxCompressedPruningMetadataSectionRawBytes
+	case ColumnPartImageSectionDictionaries:
+		switch section.Encoding {
+		case 0, EncodingDictionaryDense:
+		default:
+			return fmt.Errorf("typedcolumn: dictionaries encoding=%s is unsupported", section.Encoding)
 		}
 		switch section.Compression {
 		case CompressionNone:
@@ -2714,8 +2801,29 @@ func validateImageSectionCompression(section ColumnPartImageSection) error {
 			if section.RawBytes <= 0 {
 				return fmt.Errorf("typedcolumn: section %s compressed raw bytes=%d is invalid", section.Kind, section.RawBytes)
 			}
-			if section.RawBytes > maxRawBytes {
-				return fmt.Errorf("typedcolumn: section %s raw bytes=%d exceeds max=%d", section.Kind, section.RawBytes, maxRawBytes)
+			if section.RawBytes > maxCompressedDictionarySectionRawBytes {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d exceeds max=%d", section.Kind, section.RawBytes, maxCompressedDictionarySectionRawBytes)
+			}
+			return nil
+		default:
+			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported", section.Kind, section.Compression)
+		}
+	case ColumnPartImageSectionPruningMetadata:
+		if section.Encoding != 0 {
+			return fmt.Errorf("typedcolumn: pruning metadata encoding=%s is unsupported", section.Encoding)
+		}
+		switch section.Compression {
+		case CompressionNone:
+			if section.RawBytes != 0 && section.RawBytes != section.Length {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d length=%d for uncompressed section", section.Kind, section.RawBytes, section.Length)
+			}
+			return nil
+		case CompressionSnappy, CompressionLZ4:
+			if section.RawBytes <= 0 {
+				return fmt.Errorf("typedcolumn: section %s compressed raw bytes=%d is invalid", section.Kind, section.RawBytes)
+			}
+			if section.RawBytes > maxCompressedPruningMetadataSectionRawBytes {
+				return fmt.Errorf("typedcolumn: section %s raw bytes=%d exceeds max=%d", section.Kind, section.RawBytes, maxCompressedPruningMetadataSectionRawBytes)
 			}
 			return nil
 		default:

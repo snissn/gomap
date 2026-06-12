@@ -427,6 +427,114 @@ func TestTypedColumnTransplantDictionaryAggregateDescriptorsRoundTrip(t *testing
 	}
 }
 
+func TestTypedColumnTransplantDenseDictionaryEncoding2396(t *testing.T) {
+	dictionary := map[string]map[string]int64{
+		"kind_code": {"user": 0, "reply": 1, "system": 2},
+	}
+	part := mustTransplantPart(t, 2396, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: dictionary})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	section := mustValidationSection(t, image, ColumnPartImageSectionDictionaries)
+	if section.Encoding != EncodingDictionaryDense {
+		t.Fatalf("dictionary section encoding=%s want %s", section.Encoding, EncodingDictionaryDense)
+	}
+	rawData, compactData, compactOK := encodeDictionarySectionPayloads(dictionary)
+	if !compactOK || len(compactData) >= len(rawData) {
+		t.Fatalf("compact dictionary sizing raw=%d compact=%d ok=%v", len(rawData), len(compactData), compactOK)
+	}
+	if section.Length != len(compactData) || section.RawBytes != len(compactData) {
+		t.Fatalf("dictionary section length/raw=%d/%d want compact bytes=%d", section.Length, section.RawBytes, len(compactData))
+	}
+	accounting := image.SectionByteAccounting()
+	foundAccounting := false
+	for _, row := range accounting {
+		if row.Kind == ColumnPartImageSectionDictionaries {
+			foundAccounting = true
+			if row.Bytes != len(compactData) || row.RawBytes != len(compactData) || row.StoredBytes != len(compactData) {
+				t.Fatalf("dictionary accounting=%+v want compact bytes=%d", row, len(compactData))
+			}
+		}
+	}
+	if !foundAccounting {
+		t.Fatalf("dictionary section missing from accounting: %+v", accounting)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	dictionaries, err := parsed.Dictionaries()
+	if err != nil {
+		t.Fatalf("Dictionaries: %v", err)
+	}
+	if dictionaries["kind_code"]["reply"] != 1 || dictionaries["kind_code"]["system"] != 2 {
+		t.Fatalf("dense dictionary round trip: %+v", dictionaries)
+	}
+	if _, err := ColumnPartFromImage(parsed); err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	tcs1, _, err := EncodeTCS1ColumnPartImage(parsed)
+	if err != nil {
+		t.Fatalf("EncodeTCS1ColumnPartImage: %v", err)
+	}
+	decoded, _, err := DecodeTCS1ColumnPartImage(tcs1)
+	if err != nil {
+		t.Fatalf("DecodeTCS1ColumnPartImage: %v", err)
+	}
+	decodedSection := mustValidationSection(t, decoded, ColumnPartImageSectionDictionaries)
+	if decodedSection.Encoding != EncodingDictionaryDense {
+		t.Fatalf("decoded TCS1 dictionary encoding=%s want %s", decodedSection.Encoding, EncodingDictionaryDense)
+	}
+}
+
+func TestTypedColumnTransplantDictionaryRawFallbackForSparseCodes2396(t *testing.T) {
+	part := mustTransplantPart(t, 2396, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: map[string]map[string]int64{
+		"kind_code": {"user": 0, "reply": 1, "system": 3},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	section := mustValidationSection(t, image, ColumnPartImageSectionDictionaries)
+	if section.Encoding != 0 {
+		t.Fatalf("dictionary section encoding=%s want legacy raw fallback", section.Encoding)
+	}
+	if _, err := image.Dictionaries(); err == nil || !strings.Contains(err.Error(), "outside cardinality") {
+		t.Fatalf("Dictionaries sparse err=%v want descriptor validation failure after raw fallback", err)
+	}
+}
+
+func TestTypedColumnTransplantDenseDictionaryCorruptionFailsClosed2396(t *testing.T) {
+	part := mustTransplantPart(t, 2396, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	image := mustTransplantImage(t, part)
+	section := mustValidationSection(t, image, ColumnPartImageSectionDictionaries)
+	if section.Encoding != EncodingDictionaryDense {
+		t.Fatalf("dictionary section encoding=%s want %s", section.Encoding, EncodingDictionaryDense)
+	}
+
+	t.Run("bad_magic", func(t *testing.T) {
+		corrupt := image
+		corrupt.Bytes = append([]byte(nil), image.Bytes...)
+		corrupt.Bytes[section.Offset] ^= 0xff
+		_, err := corrupt.Dictionaries()
+		requireTypedColumnErrContains(t, err, "invalid dense dictionary magic")
+	})
+
+	t.Run("unsupported_encoding", func(t *testing.T) {
+		corrupt := image
+		corrupt.Sections = append([]ColumnPartImageSection(nil), image.Sections...)
+		for i := range corrupt.Sections {
+			if corrupt.Sections[i].Kind == ColumnPartImageSectionDictionaries {
+				corrupt.Sections[i].Encoding = Encoding(250)
+				break
+			}
+		}
+		_, err := corrupt.Dictionaries()
+		requireTypedColumnErrContains(t, err, "dictionaries encoding=encoding_250 is unsupported")
+	})
+}
+
 func TestTypedColumnTransplantAggregateMetadataByNameReturnsDeepCopy(t *testing.T) {
 	opts := transplantTestOptions([]SortKeyColumn{{Column: "id"}})
 	opts.AggregateMetadata = []AggregateMetadataDefinition{transplantAggregateMetadataDefinition()}

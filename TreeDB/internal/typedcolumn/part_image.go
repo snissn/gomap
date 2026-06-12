@@ -19,6 +19,8 @@ const (
 	rowLocatorContiguousMagic        uint32 = 0x54434c52 // "RLCT", little-endian on disk.
 	rowLocatorContiguousVersion      uint16 = 1
 	rowLocatorContiguousPayloadBytes        = 32
+	dictionaryDenseMagic             uint32 = 0x54434944 // "DICT", little-endian on disk.
+	dictionaryDenseVersion           uint16 = 1
 )
 
 type ColumnPartImageSectionKind string
@@ -880,15 +882,48 @@ func (b *columnPartImageBuilder) addDictionarySection() error {
 	if len(b.opts.Dictionaries) == 0 {
 		return nil
 	}
-	var enc columnPartImageEncoder
-	names := make([]string, 0, len(b.opts.Dictionaries))
-	for name := range b.opts.Dictionaries {
+	rawData, compactData, compactOK := encodeDictionarySectionPayloads(b.opts.Dictionaries)
+	section := ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionDictionaries,
+		Category: ColumnPartImageCategoryDictionaries,
+		Name:     "part_dictionaries",
+	}
+	rawSection, err := selectImageSectionPayload(section, rawData, b.opts.SectionCompression)
+	if err != nil {
+		return err
+	}
+	selected := rawSection
+	if compactOK {
+		compactSection := section
+		compactSection.Encoding = EncodingDictionaryDense
+		compactSelection, err := selectImageSectionPayload(compactSection, compactData, b.opts.SectionCompression)
+		if err != nil {
+			return err
+		}
+		if len(compactSelection.data) < len(selected.data) {
+			selected = compactSelection
+		}
+	}
+	b.sections = append(b.sections, selected)
+	return nil
+}
+
+func encodeDictionarySectionPayloads(dictionaries map[string]map[string]int64) ([]byte, []byte, bool) {
+	var rawEnc columnPartImageEncoder
+	var compactEnc columnPartImageEncoder
+	names := make([]string, 0, len(dictionaries))
+	for name := range dictionaries {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	enc.u32(uint32(len(names)))
+	rawEnc.u32(uint32(len(names)))
+	compactEnc.u32(dictionaryDenseMagic)
+	compactEnc.u16(dictionaryDenseVersion)
+	compactEnc.u16(0)
+	compactEnc.u32(uint32(len(names)))
+	compactOK := true
 	for _, name := range names {
-		values := b.opts.Dictionaries[name]
+		values := dictionaries[name]
 		entries := make([]dictionaryImageEntry, 0, len(values))
 		for value, code := range values {
 			entries = append(entries, dictionaryImageEntry{Value: value, Code: code})
@@ -899,18 +934,20 @@ func (b *columnPartImageBuilder) addDictionarySection() error {
 			}
 			return entries[i].Value < entries[j].Value
 		})
-		enc.str(name)
-		enc.u32(uint32(len(entries)))
-		for _, entry := range entries {
-			enc.i64(entry.Code)
-			enc.str(entry.Value)
+		rawEnc.str(name)
+		rawEnc.u32(uint32(len(entries)))
+		compactEnc.str(name)
+		compactEnc.u32(uint32(len(entries)))
+		for idx, entry := range entries {
+			rawEnc.i64(entry.Code)
+			rawEnc.str(entry.Value)
+			if entry.Code != int64(idx) {
+				compactOK = false
+			}
+			compactEnc.str(entry.Value)
 		}
 	}
-	return b.appendSectionWithOptionalCompression(ColumnPartImageSection{
-		Kind:     ColumnPartImageSectionDictionaries,
-		Category: ColumnPartImageCategoryDictionaries,
-		Name:     "part_dictionaries",
-	}, enc.bytes(), b.opts.SectionCompression)
+	return rawEnc.bytes(), compactEnc.bytes(), compactOK && len(compactEnc.bytes()) < len(rawEnc.bytes())
 }
 
 func (b *columnPartImageBuilder) addColumnDataSections() error {
@@ -1141,18 +1178,30 @@ func (b *columnPartImageBuilder) appendSection(section ColumnPartImageSection, d
 }
 
 func (b *columnPartImageBuilder) appendSectionWithOptionalCompression(section ColumnPartImageSection, data []byte, compression Compression) error {
+	selected, err := selectImageSectionPayload(section, data, compression)
+	if err != nil {
+		return err
+	}
+	b.sections = append(b.sections, selected)
+	return nil
+}
+
+func selectImageSectionPayload(section ColumnPartImageSection, data []byte, compression Compression) (columnPartImageSectionData, error) {
 	if !canCompressImageSection(section, len(data), compression) {
-		b.appendSection(section, data)
-		return nil
+		section.Length = len(data)
+		if section.RawBytes == 0 && (section.Compression == CompressionNone || section.Kind != ColumnPartImageSectionColumnData) {
+			section.RawBytes = len(data)
+		}
+		return columnPartImageSectionData{section: section, data: data}, nil
 	}
 	selection, err := admitCompressionInto(nil, data, 0, compression)
 	if err != nil {
-		return fmt.Errorf("typedcolumn: compress section %s/%s: %w", section.Kind, section.Name, err)
+		return columnPartImageSectionData{}, fmt.Errorf("typedcolumn: compress section %s/%s: %w", section.Kind, section.Name, err)
 	}
 	section.Compression = selection.Actual
 	section.RawBytes = len(data)
-	b.appendSection(section, selection.Payload)
-	return nil
+	section.Length = len(selection.Payload)
+	return columnPartImageSectionData{section: section, data: selection.Payload}, nil
 }
 
 func canCompressImageSection(section ColumnPartImageSection, rawBytes int, compression Compression) bool {

@@ -320,7 +320,12 @@ func TestTypedColumnTransplantDictionaryCorruptionFailsClosed(t *testing.T) {
 	part := mustTransplantPart(t, 801, opts, transplantTestBatch())
 
 	t.Run("duplicate_code", func(t *testing.T) {
-		image := mustTransplantImage(t, part)
+		image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: map[string]map[string]int64{
+			"kind_code": {"user": 0, "reply": 1, "system": 3},
+		}})
+		if err != nil {
+			t.Fatalf("BuildColumnPartImage: %v", err)
+		}
 		parsed, err := ParseColumnPartImage(image.Bytes)
 		if err != nil {
 			t.Fatalf("ParseColumnPartImage: %v", err)
@@ -362,7 +367,7 @@ func TestTypedColumnTransplantDictionaryCorruptionFailsClosed(t *testing.T) {
 
 	t.Run("duplicate_value", func(t *testing.T) {
 		image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: map[string]map[string]int64{
-			"kind_code": {"aa": 0, "bb": 1, "cc": 2},
+			"kind_code": {"aa": 0, "bb": 1, "cc": 3},
 		}})
 		if err != nil {
 			t.Fatalf("BuildColumnPartImage: %v", err)
@@ -588,6 +593,9 @@ func walkDictionaryEntries(t *testing.T, image ColumnPartImage, data []byte, vis
 	section, err := image.singleSection(ColumnPartImageSectionDictionaries)
 	if err != nil {
 		t.Fatalf("dictionary section: %v", err)
+	}
+	if section.Encoding != 0 {
+		t.Fatalf("dictionary section encoding=%s does not expose legacy raw code offsets", section.Encoding)
 	}
 	off := section.Offset
 	count := int(binary.LittleEndian.Uint32(data[off:]))

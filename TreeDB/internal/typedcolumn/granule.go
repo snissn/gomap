@@ -72,6 +72,9 @@ const (
 	// Section-level row locator encoding for contiguous primary IDs. This is
 	// not a column granule codec.
 	EncodingRowLocatorContiguous
+	// Section-level dictionary encoding for dense 0..n-1 dictionary codes. This
+	// is not a column granule codec.
+	EncodingDictionaryDense
 )
 
 func (e Encoding) String() string {
@@ -150,6 +153,8 @@ func (e Encoding) String() string {
 		return "raw_packed_uint4_vector"
 	case EncodingRowLocatorContiguous:
 		return "row_locator_contiguous"
+	case EncodingDictionaryDense:
+		return "dictionary_dense"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}
