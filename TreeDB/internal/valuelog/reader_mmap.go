@@ -580,6 +580,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 
 	payload := data[start+HeaderSize : end]
 	if verifyCRC {
+		f.noteRecordCRCCheck()
 		sum := crc.ChecksumParts(header[4:], payload)
 		if sum != crcVal {
 			return nil, ErrCorrupt, true
@@ -884,6 +885,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 
 	payload := data[start+HeaderSize : end]
 	if verifyCRC {
+		f.noteRecordCRCCheck()
 		sum := crc.ChecksumParts(header[4:], payload)
 		if sum != crcVal {
 			return nil, false, ErrCorrupt, true
@@ -1122,6 +1124,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 
 	payload := data[start+HeaderSize : end]
 	if verifyCRC {
+		f.noteRecordCRCCheck()
 		sum := crc.ChecksumParts(header[4:], payload)
 		if sum != crcVal {
 			return nil, ErrCorrupt, true

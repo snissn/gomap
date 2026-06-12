@@ -113,6 +113,8 @@ type File struct {
 	mmapReadMissDeadMappingCap atomic.Uint64
 	// mmapReadFallbackReadAt counts reads that ultimately fall back to ReadAt.
 	mmapReadFallbackReadAt atomic.Uint64
+	// readRecordCRCChecks counts value-log record checksum computations on read paths.
+	readRecordCRCChecks atomic.Uint64
 }
 
 func (f *File) allowsCompactLeafPayload() bool {
@@ -512,7 +514,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		}
 	}
 	f.mmapReadFallbackReadAt.Add(1)
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	return f.readAtWithDict(ptr, verifyCRC)
 }
 
 func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -548,7 +550,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 			}
 		}
 		f.mmapReadFallbackReadAt.Add(1)
-		return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		return f.readAtWithDict(ptr, verifyCRC)
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
@@ -570,7 +572,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		f.mmapReadMissDeadMappingCap.Add(1)
 	}
 	f.mmapReadFallbackReadAt.Add(1)
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	return f.readAtWithDict(ptr, verifyCRC)
 }
 
 // ReadUnsafeTo is like ReadUnsafe, but it may return a slice backed by dst
@@ -630,7 +632,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 				return val, usedDst, nil
 			}
 		}
-		return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+		return f.readAtWithDictTo(ptr, verifyCRC, dst)
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
@@ -670,7 +672,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 			return val, usedDst, nil
 		}
 	}
-	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+	return f.readAtWithDictTo(ptr, verifyCRC, dst)
 }
 
 // readGroupedCompressedFromFileTo handles grouped+compressed reads on the
@@ -981,6 +983,20 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	return f.appendDecodedRecordTo(ptr, verifyCRC, dst)
 }
 
+func (f *File) readAtWithDict(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
+	if verifyCRC {
+		f.noteRecordCRCCheck()
+	}
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+}
+
+func (f *File) readAtWithDictTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error) {
+	if verifyCRC {
+		f.noteRecordCRCCheck()
+	}
+	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+}
+
 func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
@@ -990,7 +1006,7 @@ func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []by
 	if oldLen <= cap(dst) {
 		tail = dst[oldLen:cap(dst)]
 	}
-	val, usedDst, err := ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, tail[:0])
+	val, usedDst, err := f.readAtWithDictTo(ptr, verifyCRC, tail[:0])
 	if err != nil {
 		return nil, err
 	}

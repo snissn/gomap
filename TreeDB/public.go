@@ -149,6 +149,7 @@ type DB struct {
 	bgErrMu                         sync.Mutex
 	bgErr                           error
 	durabilityMode                  string
+	valueLogReadIntegrity           string
 	dir                             string
 	maintenance                     maintenanceCoordinator
 }
@@ -651,7 +652,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	if opts.ReadOnly {
-		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
+		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
 	}
 
 	normalizeBackpressureDefaults(&opts)
@@ -755,7 +756,7 @@ func Open(opts Options) (*DB, error) {
 
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
+	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	if out.commandWALCached {
 		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
@@ -1078,6 +1079,15 @@ func applyEnvIndexFormatOverrides(opts *Options) {
 	}
 	if v, ok := envBoolSet(envIndexAdaptiveLeafEncoding); ok {
 		opts.IndexAdaptiveLeafEncoding = v
+	}
+}
+
+func valueLogReadIntegrityLabel(opts Options) string {
+	switch opts.ValueLog.ReadIntegrity {
+	case db.IntegritySkipChecksums:
+		return "unsafe-skip-checksums"
+	default:
+		return "verify"
 	}
 }
 
@@ -1775,6 +1785,7 @@ func (db *DB) Stats() map[string]string {
 		writePathStatsInto(stats, db.writePath)
 		db.publicCommandWALLiveStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
+		stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
 		maintenanceStatsInto(stats, &db.maintenance)
 		return stats
@@ -1785,6 +1796,7 @@ func (db *DB) Stats() map[string]string {
 	}
 	writePathStatsInto(stats, db.writePath)
 	stats["treedb.durability_mode"] = db.durabilityMode
+	stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	maintenanceStatsInto(stats, &db.maintenance)
 	return stats

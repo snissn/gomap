@@ -20,6 +20,9 @@ Environment overrides:
   VALUE_SHAPES          Comma list. Default: geth-mixed
   VALUE_SIZES           Comma list. Default: 128,512
   BATCH_TARGET_BYTES    Comma list. Default: 102400,1048576
+  TREEDB_READ_INTEGRITIES Comma list of TreeDB modes. Default: verify
+                         Values: verify, unsafe-skip-checksums (unsafe benchmark ceiling)
+  ITERATION_MODES       Comma list. Default: value. Values: value,key-only
   DELETE_RANGE_WIDTH    DeleteRange width. Default: 100
   DELETE_RANGES_PER_BATCH Batch DeleteRange calls per batch.Write. Default: 100
   PROFILE_DIR           Optional pprof output root; profiles only PROFILE_ENGINES.
@@ -38,6 +41,12 @@ Examples:
   # TreeDB profile after selecting a representative shape:
   GETH_REPO=/path/to/go-ethereum ENGINES=treedb KEY_SHAPES=geth-mixed \
     VALUE_SIZES=128 BATCH_TARGET_BYTES=102400 PROFILE_DIR=/tmp/geth_hotkv_profiles \
+    scripts/treedb_geth_hot_kv_matrix.sh
+
+  # TreeDB checksum ceiling and key-only split:
+  GETH_REPO=/path/to/go-ethereum ENGINES=treedb KEY_SHAPES=geth-mixed \
+    VALUE_SIZES=128 BATCH_TARGET_BYTES=102400 \
+    TREEDB_READ_INTEGRITIES=verify,unsafe-skip-checksums ITERATION_MODES=value,key-only \
     scripts/treedb_geth_hot_kv_matrix.sh
 USAGE
 }
@@ -118,6 +127,8 @@ key_shapes=${KEY_SHAPES:-geth-mixed,single-prefix}
 value_shapes=${VALUE_SHAPES:-geth-mixed}
 value_sizes=${VALUE_SIZES:-128,512}
 batch_targets=${BATCH_TARGET_BYTES:-102400,1048576}
+treedb_read_integrities=${TREEDB_READ_INTEGRITIES:-verify}
+iteration_modes=${ITERATION_MODES:-value}
 delete_range_width=${DELETE_RANGE_WIDTH:-100}
 delete_ranges_per_batch=${DELETE_RANGES_PER_BATCH:-100}
 profile_engines=${PROFILE_ENGINES:-treedb}
@@ -127,56 +138,62 @@ IFS=, read -r -a key_shape_arr <<< "$key_shapes"
 IFS=, read -r -a value_shape_arr <<< "$value_shapes"
 IFS=, read -r -a value_size_arr <<< "$value_sizes"
 IFS=, read -r -a batch_target_arr <<< "$batch_targets"
+IFS=, read -r -a read_integrity_arr <<< "$treedb_read_integrities"
+IFS=, read -r -a iteration_mode_arr <<< "$iteration_modes"
 
 summary_tsv="$run_dir/matrix_results.tsv"
 summary_md="$run_dir/matrix_results.md"
 : > "$summary_tsv"
-printf 'key_shape\tvalue_shape\tvalue_size\tbatch_target_bytes\tengine\twrite_ops_sec\tread_ops_sec\titerate_keys_sec\tdelete_range_keys_sec\tsize_bytes\tpost_delete_size_bytes\tjson\n' >> "$summary_tsv"
+printf 'key_shape\tvalue_shape\tvalue_size\tbatch_target_bytes\ttreedb_read_integrity\titeration_mode\tengine\tread_integrity\twrite_ops_sec\tread_ops_sec\titerate_keys_sec\tdelete_range_keys_sec\tsize_bytes\tpost_delete_size_bytes\tjson\n' >> "$summary_tsv"
 
 run_index=0
 for key_shape in "${key_shape_arr[@]}"; do
   for value_shape in "${value_shape_arr[@]}"; do
     for value_size in "${value_size_arr[@]}"; do
       for batch_target in "${batch_target_arr[@]}"; do
-        run_index=$((run_index + 1))
-        label="$(printf '%02d' "$run_index")_${key_shape}_${value_shape}_v${value_size}_b${batch_target}"
-        label=${label//[^A-Za-z0-9_.-]/_}
-        case_dir="$run_dir/$label"
-        mkdir -p "$case_dir"
-        json_out="$case_dir/results.json"
-        stdout_log="$case_dir/stdout.md"
-        stderr_log="$case_dir/stderr.log"
-        workdir="$case_dir/db"
-        args=(
-          "$harness"
-          -n "$keys"
-          -reads "$reads"
-          -engines "$engines"
-          -key-shape "$key_shape"
-          -value-shape "$value_shape"
-          -value-size "$value_size"
-          -batch-target-bytes "$batch_target"
-          -delete-range-width "$delete_range_width"
-          -delete-ranges-per-batch "$delete_ranges_per_batch"
-          -workdir "$workdir"
-          -out "$json_out"
-        )
-        if [[ "$keep" == "true" ]]; then
-          args+=( -keep )
-        fi
-        if [[ -n "$profile_dir" ]]; then
-          case_profile_dir="$profile_dir/$label"
-          mkdir -p "$case_profile_dir"
-          args+=( -profile-dir "$case_profile_dir" -profile-engines "$profile_engines" )
-        fi
-        echo "[matrix] $label" | tee -a "$run_dir/matrix.log"
-        (
-          cd "$geth_repo"
-          go run "${args[@]}"
-        ) > "$stdout_log" 2> "$stderr_log"
-        python3 - "$json_out" "$summary_tsv" "$key_shape" "$value_shape" "$value_size" "$batch_target" <<'PY'
+        for read_integrity in "${read_integrity_arr[@]}"; do
+          for iteration_mode in "${iteration_mode_arr[@]}"; do
+            run_index=$((run_index + 1))
+            label="$(printf '%02d' "$run_index")_${key_shape}_${value_shape}_v${value_size}_b${batch_target}_${read_integrity}_${iteration_mode}"
+            label=${label//[^A-Za-z0-9_.-]/_}
+            case_dir="$run_dir/$label"
+            mkdir -p "$case_dir"
+            json_out="$case_dir/results.json"
+            stdout_log="$case_dir/stdout.md"
+            stderr_log="$case_dir/stderr.log"
+            workdir="$case_dir/db"
+            args=(
+              "$harness"
+              -n "$keys"
+              -reads "$reads"
+              -engines "$engines"
+              -key-shape "$key_shape"
+              -value-shape "$value_shape"
+              -value-size "$value_size"
+              -batch-target-bytes "$batch_target"
+              -treedb-read-integrity "$read_integrity"
+              -iteration-mode "$iteration_mode"
+              -delete-range-width "$delete_range_width"
+              -delete-ranges-per-batch "$delete_ranges_per_batch"
+              -workdir "$workdir"
+              -out "$json_out"
+            )
+            if [[ "$keep" == "true" ]]; then
+              args+=( -keep )
+            fi
+            if [[ -n "$profile_dir" ]]; then
+              case_profile_dir="$profile_dir/$label"
+              mkdir -p "$case_profile_dir"
+              args+=( -profile-dir "$case_profile_dir" -profile-engines "$profile_engines" )
+            fi
+            echo "[matrix] $label" | tee -a "$run_dir/matrix.log"
+            (
+              cd "$geth_repo"
+              go run "${args[@]}"
+            ) > "$stdout_log" 2> "$stderr_log"
+            python3 - "$json_out" "$summary_tsv" "$key_shape" "$value_shape" "$value_size" "$batch_target" "$read_integrity" "$iteration_mode" <<'PY'
 import json, sys
-json_path, tsv_path, key_shape, value_shape, value_size, batch_target = sys.argv[1:]
+json_path, tsv_path, key_shape, value_shape, value_size, batch_target, treedb_read_integrity, iteration_mode = sys.argv[1:]
 with open(json_path) as f:
     doc = json.load(f)
 with open(tsv_path, 'a') as out:
@@ -186,7 +203,10 @@ with open(tsv_path, 'a') as out:
             value_shape,
             value_size,
             batch_target,
+            treedb_read_integrity,
+            iteration_mode,
             run['engine'],
+            run.get('read_integrity', 'n/a'),
             f"{run['write_ops_sec']:.0f}",
             f"{run['read_ops_sec']:.0f}",
             f"{run['iterate_keys_sec']:.0f}",
@@ -196,9 +216,11 @@ with open(tsv_path, 'a') as out:
             json_path,
         ]) + '\n')
 PY
-        if [[ "$keep" != "true" ]]; then
-          rm -rf "$workdir"
-        fi
+            if [[ "$keep" != "true" ]]; then
+              rm -rf "$workdir"
+            fi
+          done
+        done
       done
     done
   done
@@ -219,22 +241,23 @@ def fmt(n):
 
 with open(md, 'w') as out:
     out.write('# geth/Nitro hot KV matrix\n\n')
-    out.write('Integrated node.OpenDatabase / ethdb benchmark. DeleteRange keys/sec counts affected keys/sec, not range calls/sec. Size bytes is loaded DB size before destructive DeleteRange; post-delete bytes is measured after close/reopen verification.\n\n')
-    out.write('| key shape | value shape | value size | batch target bytes | engine | write ops/sec | read ops/sec | iterate keys/sec | DeleteRange keys/sec | size bytes | post-delete bytes |\n')
-    out.write('|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|\n')
+    out.write('Integrated node.OpenDatabase / ethdb benchmark. DeleteRange keys/sec counts affected keys/sec, not range calls/sec. Size bytes is loaded DB size before destructive DeleteRange; post-delete bytes is measured after close/reopen verification. TreeDB read-integrity labels identify checksum-verified runs and the explicitly unsafe checksum-disabled ceiling. Iteration mode labels distinguish value materialization from key-only traversal.\n\n')
+    out.write('| key shape | value shape | value size | batch target bytes | TreeDB read-integrity | iteration mode | engine | run read-integrity | write ops/sec | read ops/sec | iterate keys/sec | DeleteRange keys/sec | size bytes | post-delete bytes |\n')
+    out.write('|---|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|\n')
     for r in rows:
-        out.write('| {key_shape} | {value_shape} | {value_size} | {batch_target_bytes} | {engine} | {write} | {read} | {iterate} | {delete} | {size} | {post_delete} |\n'.format(
+        out.write('| {key_shape} | {value_shape} | {value_size} | {batch_target_bytes} | {treedb_read_integrity} | {iteration_mode} | {engine} | {read_integrity} | {write} | {read} | {iterate} | {delete} | {size} | {post_delete} |\n'.format(
             key_shape=r['key_shape'], value_shape=r['value_shape'], value_size=fmt(r['value_size']),
-            batch_target_bytes=fmt(r['batch_target_bytes']), engine=r['engine'], write=fmt(r['write_ops_sec']),
+            batch_target_bytes=fmt(r['batch_target_bytes']), treedb_read_integrity=r['treedb_read_integrity'],
+            iteration_mode=r['iteration_mode'], engine=r['engine'], read_integrity=r['read_integrity'], write=fmt(r['write_ops_sec']),
             read=fmt(r['read_ops_sec']), iterate=fmt(r['iterate_keys_sec']), delete=fmt(r['delete_range_keys_sec']),
             size=fmt(r['size_bytes']), post_delete=fmt(r['post_delete_size_bytes'])))
     out.write('\n## TreeDB ratios versus Pebble\n\n')
     groups = defaultdict(dict)
     for r in rows:
-        key = (r['key_shape'], r['value_shape'], r['value_size'], r['batch_target_bytes'])
+        key = (r['key_shape'], r['value_shape'], r['value_size'], r['batch_target_bytes'], r['treedb_read_integrity'], r['iteration_mode'])
         groups[key][r['engine']] = r
-    out.write('| key shape | value shape | value size | batch target bytes | write ratio | read ratio | iterate ratio | DeleteRange ratio | size ratio |\n')
-    out.write('|---|---|---:|---:|---:|---:|---:|---:|---:|\n')
+    out.write('| key shape | value shape | value size | batch target bytes | TreeDB read-integrity | iteration mode | write ratio | read ratio | iterate ratio | DeleteRange ratio | size ratio |\n')
+    out.write('|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|\n')
     for key in sorted(groups):
         g = groups[key]
         if 'treedb' not in g or 'pebble' not in g:
@@ -246,8 +269,8 @@ with open(md, 'w') as out:
             if pv == 0:
                 return 'n/a'
             return f"{tv/pv:.3f}x"
-        out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
-            key[0], key[1], fmt(key[2]), fmt(key[3]), ratio('write_ops_sec'), ratio('read_ops_sec'),
+        out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
+            key[0], key[1], fmt(key[2]), fmt(key[3]), key[4], key[5], ratio('write_ops_sec'), ratio('read_ops_sec'),
             ratio('iterate_keys_sec'), ratio('delete_range_keys_sec'), ratio('size_bytes')))
 PY
 

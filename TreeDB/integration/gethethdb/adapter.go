@@ -50,7 +50,16 @@ type OpenOptions struct {
 	MemtableMode string
 }
 
-const defaultGethCommandWALMaxSegmentBytes int64 = 256 << 20
+const (
+	defaultGethCommandWALMaxSegmentBytes int64 = 256 << 20
+
+	// EnvReadIntegrity selects value-log read checksum verification for the geth
+	// TreeDB adapter. Empty preserves the selected profile/default. Use
+	// "unsafe-skip-checksums" only for explicitly labeled benchmark ceilings.
+	EnvReadIntegrity = "TREEDB_GETH_READ_INTEGRITY"
+	// EnvReadIntegrityFallback is a generic alias honored when EnvReadIntegrity is unset.
+	EnvReadIntegrityFallback = "TREEDB_READ_INTEGRITY"
+)
 
 // DefaultOpenOptions returns the production-oriented adapter defaults.
 func DefaultOpenOptions() OpenOptions {
@@ -87,6 +96,9 @@ func Open(path string, options *OpenOptions) (*Database, error) {
 // uses the larger cap.
 func OpenWithOptions(opts treedb.Options) (*Database, error) {
 	applyGethCommandWALDefaults(&opts)
+	if err := applyReadIntegrityEnv(&opts); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(opts.Dir) == "" {
 		return nil, errors.New("gethethdb: TreeDB options Dir must be non-empty")
 	}
@@ -129,6 +141,9 @@ func resolveTreeDBOptions(path string, options *OpenOptions) (treedb.Options, er
 			opts.MemtableMode = strings.ToLower(mode)
 		}
 	}
+	if err := applyReadIntegrityEnv(&opts); err != nil {
+		return treedb.Options{}, err
+	}
 	if strings.TrimSpace(opts.Dir) == "" {
 		return treedb.Options{}, errors.New("gethethdb: TreeDB options Dir must be non-empty")
 	}
@@ -137,6 +152,40 @@ func resolveTreeDBOptions(path string, options *OpenOptions) (treedb.Options, er
 	}
 	applyGethCommandWALDefaults(&opts)
 	return opts, nil
+}
+
+func applyReadIntegrityEnv(opts *treedb.Options) error {
+	if opts == nil {
+		return nil
+	}
+	raw, source := readIntegrityEnvValue()
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	mode, err := parseReadIntegrity(raw)
+	if err != nil {
+		return fmt.Errorf("gethethdb: invalid %s=%q: %w", source, raw, err)
+	}
+	opts.ValueLog.ReadIntegrity = mode
+	return nil
+}
+
+func readIntegrityEnvValue() (raw string, source string) {
+	if raw := os.Getenv(EnvReadIntegrity); strings.TrimSpace(raw) != "" {
+		return raw, EnvReadIntegrity
+	}
+	return os.Getenv(EnvReadIntegrityFallback), EnvReadIntegrityFallback
+}
+
+func parseReadIntegrity(raw string) (treedb.IntegrityMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "verify", "verified", "checksum-verify", "checksum-verified", "checksums", "on", "true", "1":
+		return treedb.IntegrityVerify, nil
+	case "unsafe-skip-checksums", "skip-checksums", "skip", "no-checksums", "none", "off", "false", "0":
+		return treedb.IntegritySkipChecksums, nil
+	default:
+		return treedb.IntegrityVerify, fmt.Errorf("use verify or unsafe-skip-checksums")
+	}
 }
 
 func applyGethCommandWALDefaults(opts *treedb.Options) {
