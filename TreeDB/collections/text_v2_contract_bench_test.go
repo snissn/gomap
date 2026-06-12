@@ -478,9 +478,7 @@ func BenchmarkTextV2ScoreSearchScale2627(b *testing.B) {
 					if err != nil {
 						b.Fatalf("warm v2 search: %v", err)
 					}
-					if warm.Stats.DocumentsFetched != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.FailClosed != 0 || warm.Stats.TextStateLookups != 0 || warm.Stats.TextMatchDetailsBuilt != 0 {
-						b.Fatalf("warm v2 stats=%+v want score-only zero-doc/no-state/no-match search", warm.Stats)
-					}
+					textV2ContractAssertV2SearchModeCounters2629(b, "warm", tc, warm)
 					textV2ContractAssertSearchHit2627(b, "warm", warm)
 					b.ReportAllocs()
 					b.ResetTimer()
@@ -490,9 +488,7 @@ func BenchmarkTextV2ScoreSearchScale2627(b *testing.B) {
 						if err != nil {
 							b.Fatalf("v2 SearchText: %v", err)
 						}
-						if got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 || got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
-							b.Fatalf("v2 stats=%+v want score-only zero-doc/no-state/no-match search", got.Stats)
-						}
+						textV2ContractAssertV2SearchModeCounters2629(b, "timed", tc, got)
 						textV2ContractAssertSearchHit2627(b, "timed", got)
 						sink = got
 					}
@@ -504,6 +500,22 @@ func BenchmarkTextV2ScoreSearchScale2627(b *testing.B) {
 				})
 			}
 		})
+	}
+}
+
+func textV2ContractAssertV2SearchModeCounters2629(tb testing.TB, label string, tc textV2ContractSearchCase2623, got TextSearchResponse) {
+	tb.Helper()
+	if got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 || got.Stats.TextStateLookups != 0 {
+		tb.Fatalf("%s v2 stats=%+v want zero-doc/no-state/no-fail search", label, got.Stats)
+	}
+	if tc.resultMode == textSearchResultScoreOnly {
+		if got.Stats.TextMatchDetailsBuilt != 0 {
+			tb.Fatalf("%s v2 stats=%+v want score-only no-match search", label, got.Stats)
+		}
+		return
+	}
+	if got.Stats.TextMatchDetailsBuilt != uint64(len(got.Results)) {
+		tb.Fatalf("%s v2 stats=%+v results=%d want lazy match details bounded to returned results", label, got.Stats, len(got.Results))
 	}
 }
 

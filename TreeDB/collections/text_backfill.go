@@ -47,20 +47,24 @@ type TextIndexStorageStats struct {
 	StatsEntries   uint64
 	EncodedBytes   uint64
 
-	Version           TextIndexVersion
-	V2DocIDEntries    uint64
-	V2DocMapBlocks    uint64
-	V2PostingBlocks   uint64
-	V2NormBlocks      uint64
-	V2PositionEntries uint64
-	V2TermStats       uint64
-	V2FormatRecords   uint64
-	V2StatusRecords   uint64
-	V2NextOrdinal     uint64
-	V2LiveDocuments   uint64
-	V2DeletedDocs     uint64
-	V2RootGeneration  uint64
-	V2StatsGeneration uint64
+	Version               TextIndexVersion
+	V2DocIDEntries        uint64
+	V2DocMapBlocks        uint64
+	V2PostingBlocks       uint64
+	V2NormBlocks          uint64
+	V2PositionEntries     uint64
+	V2TermStats           uint64
+	V2FormatRecords       uint64
+	V2StatusRecords       uint64
+	V2NextOrdinal         uint64
+	V2LiveDocuments       uint64
+	V2DeletedDocs         uint64
+	V2RootGeneration      uint64
+	V2StatsGeneration     uint64
+	V2SealedPostingBlocks uint64
+	V2DeltaPostingBlocks  uint64
+	V2MicroPostingBlocks  uint64
+	V2RewriteMergeState   string
 }
 
 type createTextIndexBackfillPlan struct {
@@ -1089,6 +1093,7 @@ func inspectTextV2IndexStorage(snap *backenddb.Snapshot, catalog *collectionCata
 			return stats, err
 		}
 	}
+	stats.V2RewriteMergeState = textV2RewriteMergeStateFromStats(stats)
 	return stats, nil
 }
 
@@ -1226,6 +1231,14 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 				if entry.Ordinal >= status.NextOrdinal || entry.Generation > status.RootGeneration {
 					return errMalformedTextStorage("text-v2 posting block entry outside status snapshot")
 				}
+			}
+			switch block.Kind {
+			case textV2PostingBlockKindSealed:
+				stats.V2SealedPostingBlocks++
+			case textV2PostingBlockKindDelta:
+				stats.V2DeltaPostingBlocks++
+			case textV2PostingBlockKindMicro:
+				stats.V2MicroPostingBlocks++
 			}
 			stats.V2PostingBlocks++
 		case family == textV2RootFamilyTerms:

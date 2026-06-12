@@ -345,6 +345,45 @@ Counters include `p50_ns/search`, `p95_ns/search`, `p99_ns/search`,
 `mixed_write_snapshot_churn` where the row exposes it. The M5 row must also show
 non-zero `posting_blocks_skipped/search` in the warm stats or fail the benchmark.
 
+## M7 rewrite/merge lifecycle row
+
+Benchmark name: `BenchmarkTextV2RewriteMerge2630`.
+
+This row creates an explicit v2 text index, applies updates and deletes to create
+micro blocks, stale generations, and deleted-document tombstones, then measures
+only `Collection.RewriteTextIndex`. Setup, primary writes, index creation,
+updates, and deletes are outside the timed boundary. The row reports rewrite
+maintenance counters so PR evidence can show logical compaction overhead and
+block/tombstone reclamation candidates before normal TreeDB physical
+maintenance.
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_REWRITE_DOCS=512 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2RewriteMerge2630$' \
+  -benchmem \
+  -benchtime=5x \
+  -count=3 \
+  | tee "$OUT/text_v2_rewrite_merge.txt"
+```
+
+Report:
+
+- `posting_blocks_read/op`, `posting_blocks_written/op`, and
+  `posting_blocks_deleted/op`;
+- `stale_postings_purged/op` and `tombstones_purged/op`;
+- post-rewrite search rows proving no hidden latency/allocation regression;
+- storage maintenance evidence showing live posting/norm/docmap/positions values
+  survive `ValueLogGC`/`CompactStorage`, while old root payloads are unreachable
+  after snapshots release.
+
+Default selection after #2630 remains explicit v2 opt-in unless the final matrix
+and rollout/default-bootstrap work are accepted in the same PR. If v1 remains the
+default, PR evidence must state that the old per-`(term,documentID)` path is the
+compatibility/default path and link the default-switch follow-up.
+
 ## Profiles for current v1 hot spots and M5 block-max path
 
 Search CPU/alloc profile:
