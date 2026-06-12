@@ -1,4 +1,4 @@
-# Collection Text Search Contract (M0-M4)
+# Collection Text Search Contract (M0-M6)
 
 Status: PR4 ranked SearchText slice for issue #1764. TreeDB collections are
 pre-alpha; these text-search storage formats are versioned and may change before
@@ -27,13 +27,13 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   and explicit v2 doc ordinal/docmap/term-stat/norm/status roots.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
 - Insert, delete, update, and batch write paths maintain v1 postings/text-state
-  and stats for v1 text indexes. For explicit v2 indexes, M1 maintains only the
-  root-state shell: ordinals/generations, tombstones, docmap/norm blocks, and
-  stats metadata. Full compressed-posting writes remain a later milestone.
+  and stats for v1 text indexes. For explicit v2 indexes, current milestones
+  maintain ordinals/generations, tombstones, docmap/norm blocks, stats metadata,
+  compressed scoring posting blocks, and optional lazy position/detail payloads.
 - `SearchText(TextSearchOptions)` executes bounded postings range scans, applies
   simple term `AND`/`OR` semantics, scores candidates with BM25F-style field
-  weighting from persisted stats/text-state, and fetches documents only for final
-  top-K results when requested.
+  weighting from persisted stats/text-state or v2 norm blocks, and fetches
+  documents only for final top-K results when requested.
 
 Not implemented yet:
 
@@ -192,6 +192,7 @@ type TextSearchOptions struct {
     TopK                 int
     CandidateLimit       int // optional candidate budget before scoring
     MaxPostingsScanned   int // optional postings scan budget
+    ResultMode          TextSearchResultMode // "", "detailed", "compact", "score_only"
     IncludeDocuments     bool
     DocumentFetchOptions DocumentFetchOptions
 }
@@ -210,9 +211,13 @@ than returning silently incomplete rankings. Empty analyzed queries return an
 empty result set.
 
 Results expose response-owned document IDs, source index name, one-based lexical
-rank, higher-is-better BM25F score, score kind `bm25f`, matched terms/fields, and
-optional final documents. Documents are fetched only after top-K ranking, so
-`DocumentsFetched <= TopK` for successful searches.
+rank, higher-is-better BM25F score, score kind `bm25f`, optional matched
+terms/fields, and optional final documents. `ResultMode=""`/`"detailed"` keeps
+historical API behavior for `SearchText`: match summaries are built only for
+returned final results. `ResultMode="compact"` returns `TextMatches` without the
+legacy `MatchedTerms`/`MatchedFields` lists. `ResultMode="score_only"` returns
+IDs/ranks/scores without match summaries. Documents are fetched only after top-K
+ranking, so `DocumentsFetched <= TopK` for successful searches.
 
 `TextSearchStats` exposes text/hybrid-compatible counters. The required
 benchmark/status vocabulary is `postings_scanned`, `posting_blocks_visited`,
@@ -245,10 +250,12 @@ maintained text roots.
 
 ## Follow-up execution plan
 
-The #2503 hybrid seam now exposes
+The #2503/#2629 hybrid seam exposes
 `Collection.SearchHybridTextCandidates(HybridTextQuery)` as a candidate-only
 adapter over `SearchText`; it requests no full documents and reuses the shared
-hybrid candidate/stat vocabulary.
+hybrid candidate/stat vocabulary. Its default text path is score-only and does
+not allocate `TextMatches`; callers that explicitly need compact field/term
+attribution set `HybridTextQuery.IncludeTextMatches=true`.
 
 Later text-search milestones will:
 

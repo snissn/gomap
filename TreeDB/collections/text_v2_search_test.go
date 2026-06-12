@@ -85,7 +85,7 @@ func TestTextV2HybridTextCandidatesNoDocCounters2627(t *testing.T) {
 	}
 }
 
-func TestTextV2SearchIncludeDocumentsFetchesOnlyTopK2627(t *testing.T) {
+func TestTextV2SearchIncludeDocumentsFetchesOnlyTopKAndDetailsLazy2627(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
 	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title", Weight: 4}, {Field: "body"}}}, [][]byte{[]byte("d1"), []byte("d2"), []byte("d3")}, [][]byte{
@@ -104,15 +104,170 @@ func TestTextV2SearchIncludeDocumentsFetchesOnlyTopK2627(t *testing.T) {
 	if !bytes.Contains(got.Results[0].Document, []byte("refund")) {
 		t.Fatalf("document=%s want fetched refund document", got.Results[0].Document)
 	}
-	if len(got.Results[0].TextMatches) != 0 || len(got.Results[0].MatchedTerms) != 0 || len(got.Results[0].MatchedFields) != 0 {
-		t.Fatalf("result=%+v want v2 M4 score-only match details", got.Results[0])
+	if len(got.Results[0].TextMatches) == 0 || !slicesEqualStrings(got.Results[0].MatchedTerms, []string{"refund"}) {
+		t.Fatalf("result=%+v want v2 lazy detailed match summary", got.Results[0])
 	}
 	if got.Stats.DocumentsFetched == 0 || got.Stats.DocumentsFetched > uint64(len(got.Results)) || got.Stats.DocumentsFetched > 1 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 {
 		t.Fatalf("stats=%+v want bounded topK document fetch only", got.Stats)
 	}
-	if got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
-		t.Fatalf("stats=%+v want score-only v2 search despite final fetch", got.Stats)
+	if got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != uint64(len(got.Results)) || got.Stats.TextMatchDetailsBuilt > 1 {
+		t.Fatalf("stats=%+v want topK-bounded lazy detail materialization and no text-state lookup", got.Stats)
 	}
+}
+
+func TestTextV2SearchResultModesAndTopKLazyDetails2629(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title", Weight: 4}, {Field: "body"}}}, [][]byte{[]byte("d1"), []byte("d2"), []byte("d3")}, [][]byte{
+		[]byte(`{"title":"refund","body":"refund refund policy"}`),
+		[]byte(`{"title":"plain","body":"refund policy"}`),
+		[]byte(`{"title":"shipping","body":"refund"}`),
+	})
+
+	scoreOnly, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 1, CandidateLimit: 8, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("SearchText score-only: %v", err)
+	}
+	if len(scoreOnly.Results) != 1 || len(scoreOnly.Results[0].TextMatches) != 0 || len(scoreOnly.Results[0].MatchedTerms) != 0 || scoreOnly.Stats.TextMatchDetailsBuilt != 0 {
+		t.Fatalf("score-only response=%+v want no match details", scoreOnly)
+	}
+
+	detailed, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 1, CandidateLimit: 8})
+	if err != nil {
+		t.Fatalf("SearchText detailed: %v", err)
+	}
+	if len(detailed.Results) != 1 || !bytes.Equal(detailed.Results[0].DocumentID, scoreOnly.Results[0].DocumentID) {
+		t.Fatalf("detailed results=%+v scoreOnly=%+v want same top result", detailed.Results, scoreOnly.Results)
+	}
+	if detailed.Stats.TextCandidatesScored <= detailed.Stats.TextMatchDetailsBuilt || detailed.Stats.TextMatchDetailsBuilt != uint64(len(detailed.Results)) {
+		t.Fatalf("detailed stats=%+v want details bounded to returned topK, not all scored candidates", detailed.Stats)
+	}
+	if len(detailed.Results[0].TextMatches) == 0 || !slicesEqualStrings(detailed.Results[0].MatchedTerms, []string{"refund"}) || len(detailed.Results[0].MatchedFields) == 0 {
+		t.Fatalf("detailed result=%+v want field/term attribution", detailed.Results[0])
+	}
+
+	compact, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 1, CandidateLimit: 8, ResultMode: TextSearchResultModeCompact})
+	if err != nil {
+		t.Fatalf("SearchText compact: %v", err)
+	}
+	if len(compact.Results) != 1 || len(compact.Results[0].TextMatches) == 0 || len(compact.Results[0].MatchedTerms) != 0 || len(compact.Results[0].MatchedFields) != 0 {
+		t.Fatalf("compact result=%+v want TextMatches without legacy matched lists", compact.Results)
+	}
+	if compact.Stats.TextMatchDetailsBuilt != uint64(len(compact.Results)) || compact.Stats.DocumentsFetched != 0 || compact.Stats.TextStateLookups != 0 {
+		t.Fatalf("compact stats=%+v want topK detail build, no docs, no text-state", compact.Stats)
+	}
+}
+
+func TestTextV2PositionsLaneCorruptionFailsClosedOnlyForDetailedMode2629(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, StoreOffsets: true, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1"), []byte("d2")}, [][]byte{
+		[]byte(`{"body":"unique2629 refund"}`),
+		[]byte(`{"body":"other refund"}`),
+	})
+
+	before, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "unique2629", TopK: 1})
+	if err != nil {
+		t.Fatalf("SearchText before corruption: %v", err)
+	}
+	if len(before.Results) != 1 || string(before.Results[0].DocumentID) != "d1" || before.Stats.TextMatchDetailsBuilt != 1 {
+		t.Fatalf("before response=%+v want detailed d1", before)
+	}
+
+	var positionKey []byte
+	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		doc, ok, err := readTextV2DocIDAtRoot(snap, catalog, collectionTextV2DocIDRootName("docs", "lexical"), []byte("d1"))
+		if err != nil || !ok {
+			t.Fatalf("read docid ok=%v err=%v", ok, err)
+		}
+		positionKey = encodeTextV2PositionKey(doc.Ordinal, "unique2629")
+	})
+	raw := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2PositionsRootName("docs", "lexical"), positionKey)
+	position, err := decodeTextV2PositionValue(raw)
+	if err != nil {
+		t.Fatalf("decode position value before corruption: %v", err)
+	}
+	position.Fields[0].Frequency++
+	position.Fields[0].Positions = append(position.Fields[0].Positions, position.Fields[0].Positions[len(position.Fields[0].Positions)-1]+1)
+	position.Fields[0].Offsets = append(position.Fields[0].Offsets, textTokenOffset{Start: 0, End: 1})
+	corruptTextRootValue(t, d, "docs", collectionTextV2PositionsRootName("docs", "lexical"), positionKey, encodeTextV2PositionValue(position))
+	if _, err := col.TextIndexStorageStats("lexical"); !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("TextIndexStorageStats after position/scoring mismatch err=%v want storage corrupt", err)
+	}
+
+	scoreOnly, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "unique2629", TopK: 1, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(scoreOnly.Results) != 1 || scoreOnly.Stats.TextMatchDetailsBuilt != 0 || scoreOnly.Stats.DocumentsFetched != 0 {
+		t.Fatalf("score-only after corruption response=%+v err=%v want no position-lane read", scoreOnly, err)
+	}
+	detailed, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "unique2629", TopK: 1, IncludeDocuments: true})
+	if !errors.Is(err, ErrTextIndexUnavailable) || !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("detailed after corruption err=%v want text index storage corrupt", err)
+	}
+	if detailed.Stats.FailClosed != 1 || detailed.Stats.FailClosedReason != textSearchFailClosedStorageCorrupt || detailed.Stats.DocumentsFetched != 0 || detailed.Stats.TextMatchDetailsBuilt != 0 {
+		t.Fatalf("detailed stats=%+v want fail-closed before document fetch/detail count", detailed.Stats)
+	}
+}
+
+func TestTextV2PositionsLaneUpdateDeleteRemovesStaleEntries2629(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"oldtoken2629 keep"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	oldKey := textV2PositionKeyForDocumentTerm2629(t, d, "docs", "lexical", []byte("d1"), "oldtoken2629")
+	if raw := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2PositionsRootName("docs", "lexical"), oldKey); len(raw) == 0 {
+		t.Fatalf("old position entry missing before update")
+	}
+	if _, _, err := col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"body":"newtoken2629 keep"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		if _, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionTextV2PositionsRootName("docs", "lexical"), oldKey, nil); err != nil || ok {
+			t.Fatalf("old position entry after update ok=%v err=%v want deleted", ok, err)
+		}
+	})
+	newKey := textV2PositionKeyForDocumentTerm2629(t, d, "docs", "lexical", []byte("d1"), "newtoken2629")
+	if raw := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2PositionsRootName("docs", "lexical"), newKey); len(raw) == 0 {
+		t.Fatalf("new position entry missing after update")
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("d1")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		if _, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionTextV2PositionsRootName("docs", "lexical"), newKey, nil); err != nil || ok {
+			t.Fatalf("new position entry after delete ok=%v err=%v want deleted", ok, err)
+		}
+	})
+	if _, err := col.TextIndexStorageStats("lexical"); err != nil {
+		t.Fatalf("TextIndexStorageStats after update/delete cleanup: %v", err)
+	}
+}
+
+func textV2PositionKeyForDocumentTerm2629(t *testing.T, d *backenddb.DB, collection, index string, documentID []byte, term string) []byte {
+	t.Helper()
+	var key []byte
+	withTextCatalog(t, d, collection, func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		doc, ok, err := readTextV2DocIDAtRoot(snap, catalog, collectionTextV2DocIDRootName(collection, index), documentID)
+		if err != nil || !ok {
+			t.Fatalf("read docid %q ok=%v err=%v", string(documentID), ok, err)
+		}
+		key = encodeTextV2PositionKey(doc.Ordinal, term)
+	})
+	return key
 }
 
 func TestTextV2SearchSkipsStaleGenerationsAndTombstones2627(t *testing.T) {

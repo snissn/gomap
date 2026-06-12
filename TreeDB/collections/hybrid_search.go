@@ -97,6 +97,10 @@ type HybridTextQuery struct {
 	IndexName      string `json:"index_name"`
 	Query          string `json:"query"`
 	CandidateLimit int    `json:"candidate_limit,omitempty"`
+	// IncludeTextMatches opts into compact field/term attribution on text-source
+	// candidates. The default hybrid candidate path is score-only so candidate
+	// generation does not allocate match details for non-final candidates.
+	IncludeTextMatches bool `json:"include_text_matches,omitempty"`
 }
 
 // HybridVectorQuery configures the vector candidate source. It intentionally

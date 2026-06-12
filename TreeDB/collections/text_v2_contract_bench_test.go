@@ -555,6 +555,61 @@ func BenchmarkTextV2BlockMaxCommonTerm2628(b *testing.B) {
 	}
 }
 
+func BenchmarkTextV2LazyDetails2629(b *testing.B) {
+	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_LAZY_DETAILS_DOCS", 10_000)
+	if docs < int(textV2PostingBlockTargetPostings)*3 {
+		docs = int(textV2PostingBlockTargetPostings) * 3
+	}
+	d, col := openTextV2BlockMaxBenchFixture2628(b, docs)
+	defer func() { _ = d.Close() }()
+	opts := TextSearchOptions{IndexName: textV2ContractIndexName2623, Query: "refund", TopK: 10, CandidateLimit: docs, MaxPostingsScanned: docs * 2}
+	cases := []struct {
+		name string
+		mode textSearchResultMode
+	}{
+		{name: "score_only", mode: textSearchResultScoreOnly},
+		{name: "detailed_topk", mode: textSearchResultFull},
+	}
+	for _, tc := range cases {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			warm, err := col.searchText(opts, tc.mode)
+			if err != nil {
+				b.Fatalf("warm search: %v", err)
+			}
+			if len(warm.Results) == 0 || warm.Stats.DocumentsFetched != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.FailClosed != 0 || warm.Stats.TextStateLookups != 0 {
+				b.Fatalf("warm response=%+v want no-doc v2 search", warm)
+			}
+			if tc.mode == textSearchResultScoreOnly && warm.Stats.TextMatchDetailsBuilt != 0 {
+				b.Fatalf("warm stats=%+v want score-only details=0", warm.Stats)
+			}
+			if tc.mode != textSearchResultScoreOnly && warm.Stats.TextMatchDetailsBuilt != uint64(len(warm.Results)) {
+				b.Fatalf("warm stats=%+v results=%d want details bounded to returned topK", warm.Stats, len(warm.Results))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			var sink TextSearchResponse
+			for i := 0; i < b.N; i++ {
+				got, err := col.searchText(opts, tc.mode)
+				if err != nil {
+					b.Fatalf("search: %v", err)
+				}
+				if tc.mode == textSearchResultScoreOnly && got.Stats.TextMatchDetailsBuilt != 0 {
+					b.Fatalf("stats=%+v want score-only details=0", got.Stats)
+				}
+				if tc.mode != textSearchResultScoreOnly && got.Stats.TextMatchDetailsBuilt != uint64(len(got.Results)) {
+					b.Fatalf("stats=%+v results=%d want topK-bounded details", got.Stats, len(got.Results))
+				}
+				sink = got
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(docs), "docs_fixture")
+			b.ReportMetric(float64(opts.TopK), "topk/search")
+			textV2ContractReportTextStats2623(b, sink)
+		})
+	}
+}
+
 func BenchmarkTextV2BlockMaxConcurrentServing2628(b *testing.B) {
 	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_BLOCKMAX_CONCURRENT_DOCS", 10_000)
 	readers := textV2ContractEnvInt2623("TREEDB_TEXT_V2_BLOCKMAX_CONCURRENT_READERS", 4)
@@ -833,8 +888,8 @@ func textV2ContractIndexDefinition2623() TextIndexDefinition {
 func textV2ContractV2IndexDefinition2626() TextIndexDefinition {
 	def := textV2ContractIndexDefinition2623()
 	def.Version = TextIndexVersionV2
-	// M3 writes scoring postings/norms/docmaps only; lazy positions are owned by
-	// #2629, so the v2 write-path benchmark excludes v1 position payload work.
+	// The canonical v2 hot-path benchmark excludes optional position payload work;
+	// #2629 covers lazy positions with focused detail/positions tests and rows.
 	def.StorePositions = false
 	def.StoreOffsets = false
 	return def
@@ -871,7 +926,7 @@ func textV2ContractStorageStats2623(tb testing.TB, col *Collection) TextIndexSto
 func textV2ContractReportBackfillStats2623(b *testing.B, docs int, stats TextIndexBackfillStats) {
 	b.Helper()
 	entries := uint64(stats.PostingEntries + stats.StateEntries + stats.StatsEntries)
-	v2Entries := uint64(stats.V2DocIDEntries + stats.V2DocMapBlocks + stats.V2PostingBlocks + stats.V2NormBlocks + stats.V2TermStats + stats.V2FormatRecords + stats.V2StatusRecords)
+	v2Entries := uint64(stats.V2DocIDEntries + stats.V2DocMapBlocks + stats.V2PostingBlocks + stats.V2NormBlocks + stats.V2PositionEntries + stats.V2TermStats + stats.V2FormatRecords + stats.V2StatusRecords)
 	if v2Entries > 0 {
 		entries = v2Entries
 	}
@@ -884,6 +939,7 @@ func textV2ContractReportBackfillStats2623(b *testing.B, docs int, stats TextInd
 	b.ReportMetric(float64(stats.V2DocMapBlocks), "v2_docmap_blocks/op")
 	b.ReportMetric(float64(stats.V2PostingBlocks), "v2_posting_blocks/op")
 	b.ReportMetric(float64(stats.V2NormBlocks), "v2_norm_blocks/op")
+	b.ReportMetric(float64(stats.V2PositionEntries), "v2_position_entries/op")
 	b.ReportMetric(float64(stats.V2TermStats), "v2_term_stats/op")
 	b.ReportMetric(float64(stats.V2PostingBlocks)/docsDivisor, "posting_blocks/doc")
 	b.ReportMetric(0, "rewritten_blocks/doc")
@@ -903,6 +959,7 @@ func textV2ContractReportWriteStats2623(b *testing.B, docs int, stats TextIndexS
 	b.ReportMetric(float64(stats.V2DocMapBlocks), "v2_docmap_blocks/op")
 	b.ReportMetric(float64(stats.V2PostingBlocks), "v2_posting_blocks/op")
 	b.ReportMetric(float64(stats.V2NormBlocks), "v2_norm_blocks/op")
+	b.ReportMetric(float64(stats.V2PositionEntries), "v2_position_entries/op")
 	b.ReportMetric(float64(stats.V2TermStats), "v2_term_stats/op")
 	b.ReportMetric(float64(stats.V2PostingBlocks)/docsDivisor, "posting_blocks/doc")
 	b.ReportMetric(0, "rewritten_blocks/doc")
@@ -986,7 +1043,7 @@ func textV2ContractV2MutationRootDeltaEntries2626(docs int, before, after TextIn
 
 func textV2ContractStorageEntryCount2623(stats TextIndexStorageStats) uint64 {
 	if stats.Version == TextIndexVersionV2 || stats.V2FormatRecords > 0 {
-		return stats.V2DocIDEntries + stats.V2DocMapBlocks + stats.V2PostingBlocks + stats.V2NormBlocks + stats.V2TermStats + stats.V2FormatRecords + stats.V2StatusRecords
+		return stats.V2DocIDEntries + stats.V2DocMapBlocks + stats.V2PostingBlocks + stats.V2NormBlocks + stats.V2PositionEntries + stats.V2TermStats + stats.V2FormatRecords + stats.V2StatusRecords
 	}
 	return stats.PostingEntries + stats.StateEntries + stats.StatsEntries
 }
