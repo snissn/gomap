@@ -89,6 +89,23 @@ Single-source text-only and vector-only user flows should continue to use their
 own APIs and benchmark rows. Candidate adapters from #2503 may still use
 `HybridSearchCandidate` as a shared internal shape.
 
+## Bounded budget defaults
+
+`HybridTextQuery.CandidateLimit` is the returned lexical source budget. The text
+adapter may use a larger internal postings/scoring guardrail so modest common
+terms can still produce an exact top-N candidate list without fetching documents.
+That internal guardrail remains finite and fail-closed: if postings or unique
+candidate work exceeds the implementation's safe budget, the query returns an
+unavailable/unsupported diagnostic rather than a partial ranking or primary scan.
+
+Scalar filters likewise build finite indexed allow-sets. The default scalar
+lookup budget is large enough for the 10k guarded rare-tenant shapes, while truly
+broad filters that exceed the bound still fail closed with
+`scalar_filter_unbounded`. v2 text search consumes scalar allow-sets during
+posting-block scans so scalar-filtered candidate generation can score only
+allowed documents while preserving the single-snapshot, zero-document-fetch
+contract.
+
 ## Candidate and result shape
 
 Every `HybridSearchCandidate` MUST carry:

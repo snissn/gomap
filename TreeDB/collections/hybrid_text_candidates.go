@@ -5,6 +5,12 @@ import (
 	"fmt"
 )
 
+// hybridTextCandidateDefaultScanCandidateLimit is the finite internal
+// postings/scoring guardrail used to produce exact top-N hybrid text candidates
+// for modest common-term corpora without changing the public returned-candidate
+// budget.
+const hybridTextCandidateDefaultScanCandidateLimit = 8 * 1024
+
 // SearchHybridTextCandidates adapts collection-native ranked text search into
 // the shared hybrid candidate shape. It is candidate-only: it requests no
 // documents from SearchText, reuses response-owned result IDs for response-owned
@@ -39,6 +45,7 @@ func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet 
 		IndexName:                query.IndexName,
 		Query:                    query.Query,
 		TopK:                     requested,
+		CandidateLimit:           hybridTextCandidateScanCandidateLimit(requested),
 		IncludeDocuments:         false,
 		textV2AllowedDocumentIDs: allowSet,
 	}, resultMode)
@@ -57,6 +64,22 @@ func validateHybridTextCandidateQuery(query HybridTextQuery) error {
 		return fmt.Errorf("%w: text candidate limit must be positive", ErrHybridSearchUnsupported)
 	}
 	return nil
+}
+
+func hybridTextCandidateScanCandidateLimit(requested int) int {
+	if requested <= 0 {
+		return 0
+	}
+	limit := textSearchDefaultMinCandidateLimit
+	if requested > maxCollectionInt/64 {
+		limit = maxCollectionInt
+	} else if scaled := requested * 64; scaled > limit {
+		limit = scaled
+	}
+	if limit < hybridTextCandidateDefaultScanCandidateLimit {
+		limit = hybridTextCandidateDefaultScanCandidateLimit
+	}
+	return limit
 }
 
 func hybridTextCandidatesFromSearchResponse(requested int, textIndexName string, textResponse TextSearchResponse) (HybridCandidateResponse, error) {
