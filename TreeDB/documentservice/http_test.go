@@ -220,6 +220,24 @@ func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
 		"query_embedding_f32_le_b64": base64.StdEncoding.EncodeToString([]byte{1, 2}),
 		"top_k":                      1,
 	}, http.StatusBadRequest, nil)
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "unknown field", body: `{"query_embedding_f32_le_b64":"` + encodeFloat32LEBase64ForTest([]float32{1, 0}) + `","top_k":1,"unexpected":true}`},
+		{name: "multiple JSON values", body: `{"query_embedding_f32_le_b64":"` + encodeFloat32LEBase64ForTest([]float32{1, 0}) + `","top_k":1} {}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/indexes/bench_b64/search/vector-index", bytes.NewBufferString(tc.body))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			assertHTTPErrorCode(t, rr.Body.Bytes(), CodeMalformedJSON)
+		})
+	}
 }
 
 func encodeFloat32LEBase64ForTest(values []float32) string {

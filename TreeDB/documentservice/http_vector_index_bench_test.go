@@ -1,10 +1,8 @@
 package documentservice
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +25,7 @@ func BenchmarkBenchmarkVectorSearchDecode(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(jsonPayload)))
 		for i := 0; i < b.N; i++ {
-			req, err := decodeBenchmarkVectorSearchJSONForBenchmark(jsonPayload)
+			req, err := decodeBenchmarkVectorSearchJSONGeneric(jsonPayload)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -42,7 +40,15 @@ func BenchmarkBenchmarkVectorSearchDecode(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if err := normalizeBenchmarkVectorQueryEmbedding(&req); err != nil {
+			benchmarkVectorDecodeSink = req
+		}
+	})
+	b.Run("f32_le_base64_request_generic", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(b64Payload)))
+		for i := 0; i < b.N; i++ {
+			req, err := decodeBenchmarkVectorSearchJSONGenericForBenchmark(b64Payload)
+			if err != nil {
 				b.Fatal(err)
 			}
 			benchmarkVectorDecodeSink = req
@@ -112,17 +118,15 @@ func BenchmarkBenchmarkVectorSearchResponseEncode(b *testing.B) {
 }
 
 func decodeBenchmarkVectorSearchJSONForBenchmark(raw []byte) (BenchmarkVectorSearchRequest, error) {
-	var req BenchmarkVectorSearchRequest
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	return decodeBenchmarkVectorSearchJSON(raw)
+}
+
+func decodeBenchmarkVectorSearchJSONGenericForBenchmark(raw []byte) (BenchmarkVectorSearchRequest, error) {
+	req, err := decodeBenchmarkVectorSearchJSONGeneric(raw)
+	if err != nil {
 		return BenchmarkVectorSearchRequest{}, err
 	}
-	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		if err == nil {
-			err = fmt.Errorf("multiple JSON values in request body")
-		}
+	if err := normalizeBenchmarkVectorQueryEmbedding(&req); err != nil {
 		return BenchmarkVectorSearchRequest{}, err
 	}
 	return req, nil

@@ -482,7 +482,7 @@ def _add_optional_non_empty_string(request: dict[str, Any], key: str, value: Opt
 
 def _add_query_embedding(request: dict[str, Any], query_embedding: Sequence[float], encoding: str) -> None:
     if encoding == "json":
-        request["query_embedding"] = [float(value) for value in query_embedding]
+        request["query_embedding"] = _coerce_query_embedding_floats(query_embedding)
         return
     if encoding == "f32_le_b64":
         request["query_embedding_f32_le_b64"] = _encode_f32_le_base64(query_embedding)
@@ -490,13 +490,17 @@ def _add_query_embedding(request: dict[str, Any], query_embedding: Sequence[floa
     raise InvalidRequestError("invalid_request", "query_embedding_encoding must be 'json' or 'f32_le_b64'")
 
 
-def _encode_f32_le_base64(values: Sequence[float]) -> str:
+def _coerce_query_embedding_floats(values: Sequence[float]) -> list[float]:
     if isinstance(values, (str, bytes, bytearray)):
         raise InvalidRequestError("invalid_request", "query_embedding must be a sequence of floats")
     try:
-        floats = [float(value) for value in values]
+        return [float(value) for value in values]
     except (TypeError, ValueError) as exc:
         raise InvalidRequestError("invalid_request", "query_embedding must be a sequence of floats") from exc
+
+
+def _encode_f32_le_base64(values: Sequence[float]) -> str:
+    floats = _coerce_query_embedding_floats(values)
     payload = struct.pack(f"<{len(floats)}f", *floats) if floats else b""
     return base64.b64encode(payload).decode("ascii")
 
