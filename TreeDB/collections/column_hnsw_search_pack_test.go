@@ -862,6 +862,60 @@ func TestColumnHNSWPreparedScalarU8RouteUsesTypedRowIDScorePlane2653(t *testing.
 	}
 }
 
+func TestColumnHNSWPreparedScalarU8RerankUsesPackNativeRowIDExactScorer2657(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-exact", vector: []float32{0.40633525, -0.06700023, -0.027197814}},
+		{id: "doc-quantized", vector: []float32{-0.22174846, 0.8332732, 0.28568664}},
+	}
+	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	if searcher.reader == nil || searcher.reader.hnswSearchPack == nil {
+		t.Fatal("searcher missing hnsw_search_pack_v1 prepared view")
+	}
+
+	query := []float32{-0.23968919, -0.60389674, 0.9352316}
+	quantizedTop := scalarU8QuantizedTopKForTest1926(t, rows, query, 1)
+	exactTop := exactColumnGraphTopKForTest(t, rows, query, 1)
+	if string(quantizedTop[0].ID) != "doc-quantized" || string(exactTop[0].ID) != "doc-exact" {
+		t.Fatalf("fixture quantized=%q exact=%q want differing top candidates", quantizedTop[0].ID, exactTop[0].ID)
+	}
+
+	opts := columnVectorGraphNativeSearchOptions{
+		TopK:                      1,
+		EfSearch:                  len(rows),
+		QueryMode:                 columnVectorGraphNativeSearchQueryModeQuantizedRerank,
+		QuantizedIndexName:        def.QuantizedIndexes[0].Name,
+		QuantizedRerankCandidates: len(rows),
+		StatsMode:                 columnVectorGraphNativeSearchStatsModeFullDiagnostics,
+	}
+	var routeScratch columnVectorGraphNativeSearchScratch
+	results, stats, err := searcher.reader.SearchCosineScalarU8PreparedTraversal(searcher.reader.hnswSearchPack, query, opts, &routeScratch)
+	if err != nil {
+		t.Fatalf("SearchCosineScalarU8PreparedTraversal quantized_rerank: %v", err)
+	}
+	assertColumnHNSWPreparedTraversalResultsMatch2585(t, results, exactTop)
+	if stats.QuantizedRerankCandidates != uint64(len(rows)) || stats.QuantizedRerankExactScoreCalls != uint64(len(rows)) {
+		t.Fatalf("scalar_u8 prepared rerank stats=%+v want shortlist=%d", stats, len(rows))
+	}
+	if stats.PreparedScoreCalls != uint64(len(rows)) || stats.VectorBytesRead != uint64(len(rows)*def.Dimensions*4) || stats.NormBytesRead != 0 {
+		t.Fatalf("scalar_u8 prepared rerank stats=%+v want pack-native exact row-ID vector reads and no norm reads", stats)
+	}
+	if routeScratch.searchPlan.reader != nil || routeScratch.searchPlan.physicalReader != nil || routeScratch.searchPlan.preparedSearch != nil || routeScratch.searchPlan.quantizedScorer.kind != columnVectorGraphQuantizedScorerKindNone {
+		t.Fatalf("scalar_u8 prepared rerank populated generic native search plan: %+v", routeScratch.searchPlan)
+	}
+	if routeScratch.preparedQuantizedPlane.scorer != nil {
+		t.Fatalf("scalar_u8 prepared rerank populated generic prepared quantized plane: %p", routeScratch.preparedQuantizedPlane.scorer)
+	}
+}
+
 func TestColumnHNSWPreparedTraversalOmitReturnsRetainedShortlist2585(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

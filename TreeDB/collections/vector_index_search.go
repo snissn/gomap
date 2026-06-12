@@ -162,7 +162,7 @@ type VectorIndexSearchStats struct {
 	QuantizedCodeBytesRead uint64 `json:"quantized_code_bytes_read,omitempty"`
 	// QuantizedRerankCandidates counts quantized shortlist candidates submitted to exact rerank.
 	QuantizedRerankCandidates uint64 `json:"quantized_rerank_candidates,omitempty"`
-	// QuantizedRerankExactScoreCalls counts exact float32/norm score calls used by quantized_rerank.
+	// QuantizedRerankExactScoreCalls counts exact FP32 score calls used by quantized_rerank.
 	QuantizedRerankExactScoreCalls uint64 `json:"quantized_rerank_exact_score_calls,omitempty"`
 	// QuantizedScorerActive reports that a validated quantized scorer served this search.
 	QuantizedScorerActive uint64 `json:"quantized_scorer_active,omitempty"`
@@ -1224,7 +1224,14 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		}
 		response, err = prepared.SearchQuantizedWithBuffer(opts, buffer)
 		acquireStats.apply(&response.Stats)
-		healthyQuantizedRoute := vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(response.Stats, queryMode, opts, prepared.dimensions)
+		var healthyQuantizedRoute bool
+		// Keep quantized_only on its narrow hot-path guardrail; quantized_rerank
+		// validates pack-native exact counters separately below.
+		if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedOnly {
+			healthyQuantizedRoute = vectorIndexSearchStatsAreBufferedNoDocumentQuantizedOnlyRoute(response.Stats, opts)
+		} else {
+			healthyQuantizedRoute = vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(response.Stats, queryMode, opts, prepared.dimensions)
+		}
 		if err == nil && healthyQuantizedRoute {
 			return response, nil
 		}
@@ -1386,8 +1393,57 @@ func vectorIndexSearchStatsAreBufferedNoDocumentPackRoute(stats VectorIndexSearc
 		stats.VectorScratchDecodes == 0
 }
 
+func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedOnlyRoute(stats VectorIndexSearchStats, opts VectorIndexSearchOptions) bool {
+	columnGraphRoute := stats.SearchRouteHNSWSearchPack == 0 &&
+		stats.HNSWSearchPackActive == 0 &&
+		stats.HNSWSearchPackMissing == 0 &&
+		stats.HNSWSearchPackInvalid == 0 &&
+		stats.HNSWSearchPackStale == 0 &&
+		stats.HNSWSearchPackClosed == 0 &&
+		stats.HNSWSearchPackFallbacks == 0 &&
+		stats.SearchRouteColumnGraphPrepared+stats.SearchRouteColumnGraphFallback == 1
+	packRoute := stats.SearchRouteHNSWSearchPack == 1 &&
+		stats.HNSWSearchPackActive == 1 &&
+		stats.HNSWSearchPackMissing == 0 &&
+		stats.HNSWSearchPackInvalid == 0 &&
+		stats.HNSWSearchPackStale == 0 &&
+		stats.HNSWSearchPackClosed == 0 &&
+		stats.HNSWSearchPackFallbacks == 0 &&
+		stats.SearchRouteColumnGraphPrepared == 0 &&
+		stats.SearchRouteColumnGraphFallback == 0
+	if !columnGraphRoute && !packRoute {
+		return false
+	}
+	emptySearch := opts.TopK == 0 || stats.CandidateRows == 0
+	if !emptySearch && stats.QuantizedScorerActive != 1 {
+		return false
+	}
+	if stats.QuantizedAssetUnavailable != 0 || stats.QuantizedAssetMissing != 0 || stats.QuantizedAssetInvalid != 0 || stats.QuantizedAssetStale != 0 || stats.QuantizedAssetClosed != 0 {
+		return false
+	}
+	if stats.QuantizedAssetHeapCopy+stats.QuantizedAssetMmapDirect != 1 || stats.QuantizedAssetHeapCopyBytes+stats.QuantizedAssetMappedBytes == 0 {
+		return false
+	}
+	if stats.DocumentsFetched != 0 || stats.DocumentBytes != 0 || stats.DocumentOutputBytes != 0 || stats.GraphRowFallbacks != 0 || stats.TypedColumnFallbacks != 0 || stats.VectorScratchDecodes != 0 {
+		return false
+	}
+	if !emptySearch && (stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead == 0) {
+		return false
+	}
+	return stats.SearchRouteQuantizedOnly == 1 &&
+		stats.SearchRouteQuantizedRerank == 0 &&
+		stats.PreparedScoreCalls == 0 &&
+		stats.QuantizedRerankCandidates == 0 &&
+		stats.QuantizedRerankExactScoreCalls == 0 &&
+		stats.VectorBytesRead == 0 &&
+		stats.NormBytesRead == 0
+}
+
 func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats VectorIndexSearchStats, queryMode columnVectorGraphNativeSearchQueryMode, opts VectorIndexSearchOptions, dimensions int) bool {
-	if !queryMode.quantized() {
+	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedOnly {
+		return vectorIndexSearchStatsAreBufferedNoDocumentQuantizedOnlyRoute(stats, opts)
+	}
+	if queryMode != columnVectorGraphNativeSearchQueryModeQuantizedRerank {
 		return false
 	}
 	columnGraphRoute := stats.SearchRouteHNSWSearchPack == 0 &&
@@ -1426,44 +1482,35 @@ func vectorIndexSearchStatsAreBufferedNoDocumentQuantizedRoute(stats VectorIndex
 	if !emptySearch && (stats.QuantizedScoreCalls == 0 || stats.QuantizedCodeBytesRead == 0) {
 		return false
 	}
-	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedOnly {
-		return stats.SearchRouteQuantizedOnly == 1 &&
-			stats.SearchRouteQuantizedRerank == 0 &&
-			stats.PreparedScoreCalls == 0 &&
-			stats.QuantizedRerankCandidates == 0 &&
-			stats.QuantizedRerankExactScoreCalls == 0 &&
-			stats.VectorBytesRead == 0 &&
-			stats.NormBytesRead == 0
+	if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 {
+		return false
 	}
-	if queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank {
-		if stats.SearchRouteQuantizedOnly != 0 || stats.SearchRouteQuantizedRerank != 1 {
-			return false
-		}
-		if emptySearch {
-			return stats.PreparedScoreCalls == 0 && stats.QuantizedRerankCandidates == 0 && stats.QuantizedRerankExactScoreCalls == 0 && stats.VectorBytesRead == 0 && stats.NormBytesRead == 0
-		}
-		if stats.QuantizedRerankCandidates == 0 || stats.QuantizedRerankExactScoreCalls != stats.QuantizedRerankCandidates {
-			return false
-		}
-		if opts.QuantizedRerankCandidates > 0 && stats.QuantizedRerankCandidates > uint64(opts.QuantizedRerankCandidates) {
-			return false
-		}
-		if stats.VectorBytesRead == 0 {
-			return false
-		}
-		if stats.NormBytesRead == 0 && stats.SearchRouteHNSWSearchPack == 0 {
-			return false
-		}
-		if dimensions > 0 {
-			maxVectorBytes := stats.QuantizedRerankCandidates * uint64(dimensions) * 4
-			maxNormBytes := stats.QuantizedRerankCandidates * 4
-			if stats.VectorBytesRead > maxVectorBytes || stats.NormBytesRead > maxNormBytes {
-				return false
-			}
-		}
-		return true
+	if emptySearch {
+		return stats.PreparedScoreCalls == 0 && stats.QuantizedRerankCandidates == 0 && stats.QuantizedRerankExactScoreCalls == 0 && stats.VectorBytesRead == 0 && stats.NormBytesRead == 0
 	}
-	return false
+	if stats.QuantizedRerankCandidates == 0 || stats.QuantizedRerankExactScoreCalls != stats.QuantizedRerankCandidates {
+		return false
+	}
+	if opts.QuantizedRerankCandidates > 0 && stats.QuantizedRerankCandidates > uint64(opts.QuantizedRerankCandidates) {
+		return false
+	}
+	if stats.VectorBytesRead == 0 {
+		return false
+	}
+	packNativeExactRerank := stats.PreparedScoreCalls == stats.QuantizedRerankExactScoreCalls &&
+		stats.VectorPreparedDirectViews == stats.QuantizedRerankExactScoreCalls &&
+		stats.NormPreparedDirectViews == 0
+	if stats.NormBytesRead == 0 && stats.SearchRouteHNSWSearchPack == 0 && !packNativeExactRerank {
+		return false
+	}
+	if dimensions > 0 {
+		maxVectorBytes := stats.QuantizedRerankCandidates * uint64(dimensions) * 4
+		maxNormBytes := stats.QuantizedRerankCandidates * 4
+		if stats.VectorBytesRead > maxVectorBytes || stats.NormBytesRead > maxNormBytes {
+			return false
+		}
+	}
+	return true
 }
 
 // OpenVectorIndexSearcher opens a reusable search handle for steady-state
