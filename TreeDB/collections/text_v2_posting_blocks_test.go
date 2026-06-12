@@ -117,15 +117,15 @@ func TestTextV2PostingBlockIteratorOrderAcrossTerms2625(t *testing.T) {
 	col := createTextV2PostingBlockCollection2625(t, d, 4, RootStorageFast)
 	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
 	refundEntries := []textV2PostingBlockEntry{
-		{Ordinal: 1, Generation: 1, TermFrequency: 2, FieldFrequencies: []uint32{2}},
-		{Ordinal: 2, Generation: 1, TermFrequency: 1, FieldFrequencies: []uint32{1}},
-		{Ordinal: 4, Generation: 1, TermFrequency: 3, FieldFrequencies: []uint32{3}},
+		{Ordinal: 1, Generation: 1, TermFrequency: 2, FieldFrequencies: []uint32{2, 0}},
+		{Ordinal: 2, Generation: 1, TermFrequency: 1, FieldFrequencies: []uint32{1, 0}},
+		{Ordinal: 4, Generation: 1, TermFrequency: 3, FieldFrequencies: []uint32{3, 0}},
 	}
-	refundBlocks, err := buildTextV2PostingBlockKVs("refund", refundEntries, 1, textV2PostingBlockBuildOptions{TargetPostings: 1})
+	refundBlocks, err := buildTextV2PostingBlockKVs("refund", refundEntries, 2, textV2PostingBlockBuildOptions{TargetPostings: 1})
 	if err != nil {
 		t.Fatalf("build refund blocks: %v", err)
 	}
-	shippingBlocks, err := buildTextV2PostingBlockKVs("shipping", []textV2PostingBlockEntry{{Ordinal: 3, Generation: 1, TermFrequency: 1, FieldFrequencies: []uint32{1}}}, 1, textV2PostingBlockBuildOptions{})
+	shippingBlocks, err := buildTextV2PostingBlockKVs("shipping", []textV2PostingBlockEntry{{Ordinal: 3, Generation: 1, TermFrequency: 1, FieldFrequencies: []uint32{1, 0}}}, 2, textV2PostingBlockBuildOptions{})
 	if err != nil {
 		t.Fatalf("build shipping blocks: %v", err)
 	}
@@ -272,12 +272,58 @@ func TestTextV2PostingBlocksReachValueLogMaintenance2625(t *testing.T) {
 	}
 }
 
-func TestTextV2PostingBlockStorageFailsClosedOnCorruption2625(t *testing.T) {
+func TestTextV2PostingBlocksNotEmittedByBackfillOrMutationsBeforeM32625(t *testing.T) {
+	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextV2PostingBlockCollection2625(t, d, 2, RootStorageFast)
+	stats, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats after backfill: %v", err)
+	}
+	if stats.V2PostingBlocks != 0 {
+		t.Fatalf("v2 posting blocks after M2 backfill=%d want 0 until M3", stats.V2PostingBlocks)
+	}
+	if _, _, err := col.Update([]byte("doc-000001"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"body":"refund updated","title":"updated"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("doc-000002")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	if _, err := col.Insert([]byte("doc-000003"), []byte(`{"body":"refund new","title":"new"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	stats, err = col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats after mutations: %v", err)
+	}
+	if stats.V2PostingBlocks != 0 {
+		t.Fatalf("v2 posting blocks after M2 mutations=%d want 0 until M3", stats.V2PostingBlocks)
+	}
+}
+
+func TestTextV2PostingBlockStorageFailsClosedOnFieldLaneMismatch2625(t *testing.T) {
 	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
 	col := createTextV2PostingBlockCollection2625(t, d, 2, RootStorageFast)
 	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
 	block, err := newTextV2PostingBlockValue(textV2PostingBlockKindSealed, []textV2PostingBlockEntry{{Ordinal: 1, Generation: 1, TermFrequency: 1, FieldFrequencies: []uint32{1}}}, 1, 1)
+	if err != nil {
+		t.Fatalf("new block: %v", err)
+	}
+	corruptTextRootValue(t, d, "docs", rootName, encodeTextV2PostingBlockKey("refund", block.BlockStart, block.BlockID), encodeTextV2PostingBlockValue(block))
+	if _, err := col.TextIndexStorageStats("lexical"); !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("field-lane mismatch stats err=%v want ErrTextIndexStorageCorrupt", err)
+	}
+}
+
+func TestTextV2PostingBlockStorageFailsClosedOnCorruption2625(t *testing.T) {
+	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextV2PostingBlockCollection2625(t, d, 2, RootStorageFast)
+	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
+	block, err := newTextV2PostingBlockValue(textV2PostingBlockKindSealed, []textV2PostingBlockEntry{{Ordinal: 1, Generation: 1, TermFrequency: 1, FieldFrequencies: []uint32{1, 0}}}, 2, 1)
 	if err != nil {
 		t.Fatalf("new block: %v", err)
 	}

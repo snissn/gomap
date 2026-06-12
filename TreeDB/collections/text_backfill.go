@@ -1093,6 +1093,9 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			if block.BlockStart != postingKey.BlockStart || block.BlockID != postingKey.BlockID {
 				return errMalformedTextStorage("text-v2 posting block key/value mismatch")
 			}
+			if len(block.Summary.MaxFieldTermFrequencies) != len(def.Fields) {
+				return errMalformedTextStorage("text-v2 posting block field lanes mismatch")
+			}
 			for _, entry := range block.Entries {
 				if entry.Ordinal >= status.NextOrdinal || entry.Generation > status.RootGeneration {
 					return errMalformedTextStorage("text-v2 posting block entry outside status snapshot")
