@@ -302,6 +302,37 @@ func TestTextV2PostingBlocksEmittedByBackfillAndMutations2626(t *testing.T) {
 	}
 }
 
+func TestTextV2WritePathLiteralBackslashUnindexedRootKeyDoesNotAbort2626(t *testing.T) {
+	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("backfill"), []byte(`{"a\\q":"ignored","body":"refund backfill"}`)); err != nil {
+		t.Fatalf("Insert before backfill: %v", err)
+	}
+	if _, backfill, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex with literal-backslash unindexed key: %v", err)
+	} else if backfill.DocumentsScanned != 1 || backfill.V2PostingBlocks == 0 {
+		t.Fatalf("backfill=%+v want one scanned document and v2 posting blocks", backfill)
+	}
+	if _, err := col.Insert([]byte("write"), []byte(`{"a\\q":"ignored","body":"refund write"}`)); err != nil {
+		t.Fatalf("Insert after v2 index with literal-backslash unindexed key: %v", err)
+	}
+	stats, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats: %v", err)
+	}
+	if stats.Documents != 2 || stats.V2PostingBlocks == 0 {
+		t.Fatalf("stats=%+v want two indexed documents and v2 posting blocks", stats)
+	}
+}
+
 func TestTextV2WritePathBackfillPostingParity2626(t *testing.T) {
 	d := openTextV2PostingBlockDB2625(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()

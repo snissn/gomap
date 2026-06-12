@@ -547,19 +547,12 @@ func analyzeTextIndexDocumentJSONRootFastPath(def TextIndexDefinition, jsonDocum
 	} else {
 		values = values[:len(def.Fields)]
 	}
-	var keyScratch []byte
 	if err := jsonparser.ObjectEach(jsonDocument, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
-		matchKey := key
-		if bytes.IndexByte(key, '\\') >= 0 {
-			unescaped, err := jsonparser.Unescape(key, keyScratch[:0])
-			if err != nil {
-				return err
-			}
-			matchKey = unescaped
-			keyScratch = unescaped[:0]
-		}
+		// jsonparser.ObjectEach already returns decoded object keys. Unescaping here
+		// would treat literal backslashes as JSON escapes (for example `a\\q` ->
+		// `a\q` -> invalid `\q`) and could reject unrelated top-level fields.
 		for i, fieldDef := range def.Fields {
-			if textBytesEqualString(matchKey, fieldDef.Field) {
+			if textBytesEqualString(key, fieldDef.Field) {
 				values[i] = jsonParserIndexValue{raw: value, valueType: dataType}
 			}
 		}

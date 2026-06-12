@@ -159,6 +159,17 @@ func TestTextIndexAnalysisJSONFastPathAndNestedFallbackM2589(t *testing.T) {
 	if got := requireAnalyzedTermM2589(t, requireAnalyzedFieldM2589(t, escapedRoot, "body"), "escaped").Frequency; got != 1 {
 		t.Fatalf("escaped-key body frequency=%d want 1", got)
 	}
+	if _, err := analyzeTextIndexDocument(rootDef, []byte(`{"a\\q":"ignored","body":"Backslash Safe"}`)); err != nil {
+		t.Fatalf("analyze root with unrelated literal-backslash key: %v", err)
+	}
+	backslashDef := TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "a\\q"}}}
+	backslashRoot, err := analyzeTextIndexDocument(backslashDef, []byte(`{"a\\q":"Backslash Field"}`))
+	if err != nil {
+		t.Fatalf("analyze literal-backslash root key: %v", err)
+	}
+	if got := requireAnalyzedTermM2589(t, requireAnalyzedFieldM2589(t, backslashRoot, "a\\q"), "backslash").Frequency; got != 1 {
+		t.Fatalf("literal-backslash key frequency=%d want 1", got)
+	}
 
 	nestedDef := TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "nested.body"}}, StorePositions: true}
 	nested, err := analyzeTextIndexDocument(nestedDef, []byte(`{"nested":{"body":["Deep","Refund"]},"nested.body":"literal should not win"}`))
