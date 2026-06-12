@@ -1532,7 +1532,14 @@ func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.Chil
 func (z *Zipper) cachePersistedLeafPage(ptr page.LeafLogPtr, leafPage []byte) {
 	z.leafRefCacheMu.Lock()
 	if z.leafRefCache != nil {
-		z.leafRefCache[ptr] = leafPage
+		// Persist paths often hand us builder/scratch buffers that are reused later
+		// in the same Apply call (for example when split leaves are batched before
+		// parent internals are built). The in-flight leaf-ref cache must own the
+		// bytes it serves; otherwise a later scratch reuse can turn a cached leaf
+		// into an internal page and make maintenance rewrites fail validation.
+		owned := make([]byte, len(leafPage))
+		copy(owned, leafPage)
+		z.leafRefCache[ptr] = owned
 	}
 	z.leafRefCacheMu.Unlock()
 }

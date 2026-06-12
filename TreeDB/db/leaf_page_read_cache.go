@@ -135,6 +135,11 @@ type leafPageReadCache struct {
 	buckets []leafPageReadCacheBucket
 	ways    int
 
+	// disabled temporarily bypasses all cache reads and writes during storage
+	// maintenance/compaction so stale leaf-log pages are not served while value-log
+	// rewrite/GC and leaf-generation pack/GC mutate underlying storage.
+	disabled atomic.Bool
+
 	hits      atomic.Uint64
 	misses    atomic.Uint64
 	stores    atomic.Uint64
@@ -206,7 +211,7 @@ func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 }
 
 func (c *leafPageReadCache) storeWithRecordChecksumState(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) {
-	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
 		return
 	}
 	key := newLeafPageReadCacheKey(ptr)
@@ -226,7 +231,7 @@ func (c *leafPageReadCache) storeWithRecordChecksumState(ptr page.LeafLogPtr, le
 // evicting recently-written leaves that are likely to be reused during
 // publish/apply.
 func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) bool {
-	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
 		return false
 	}
 	key := newLeafPageReadCacheKey(ptr)
@@ -576,7 +581,7 @@ func (c *leafPageReadCache) recordReadMissAdmissionLockSkip() {
 }
 
 func (c *leafPageReadCache) get(ptr page.LeafLogPtr) ([]byte, bool) {
-	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
@@ -615,7 +620,7 @@ type leafPageReadCacheState struct {
 }
 
 func (c *leafPageReadCache) getToWithState(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, leafPageReadCacheState, bool) {
-	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, false, leafPageReadCacheState{}, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
@@ -656,7 +661,7 @@ func (c *leafPageReadCache) getViewLocked(ptr page.LeafLogPtr) ([]byte, *leafPag
 }
 
 func (c *leafPageReadCache) getViewLockedWithState(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, leafPageReadCacheState, bool) {
-	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, nil, leafPageReadCacheState{}, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
@@ -690,7 +695,7 @@ func (c *leafPageReadCache) recordHitState(state leafPageReadCacheState) {
 }
 
 func (c *leafPageReadCache) markPageChecksumVerified(ptr page.LeafLogPtr) bool {
-	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return false
 	}
 	key := newLeafPageReadCacheKey(ptr)
@@ -829,6 +834,16 @@ func (db *DB) leafPageReader(fallback zipper.LeafPageReader) zipper.LeafPageRead
 		return newCachedLeafPageReader(db.leafPageReadCache, fallback)
 	}
 	return fallback
+}
+
+func (db *DB) disableLeafPageReadCacheForMaintenance() func() {
+	if db == nil || db.leafPageReadCache == nil {
+		return func() {}
+	}
+	prev := db.leafPageReadCache.disabled.Swap(true)
+	return func() {
+		db.leafPageReadCache.disabled.Store(prev)
+	}
 }
 
 func (r *cachedLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {

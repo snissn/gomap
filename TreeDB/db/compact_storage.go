@@ -212,6 +212,8 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		db.maintenanceMu.Lock()
 		maintenanceLocked = true
 		defer db.maintenanceMu.Unlock()
+		restoreLeafPageReadCache := db.disableLeafPageReadCacheForMaintenance()
+		defer restoreLeafPageReadCache()
 	}
 
 	before, err := compactStorageUsage(db.dir)

@@ -99,6 +99,36 @@ func TestCachedLeafPageReaderHitAvoidsFallback(t *testing.T) {
 	}
 }
 
+func TestCachedLeafPageReaderDisabledBypassesCache(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	cachedLeaf := bytes.Repeat([]byte{0x42}, page.PageSize)
+	fallbackLeaf := bytes.Repeat([]byte{0x24}, page.PageSize)
+	cache.store(ptr, cachedLeaf)
+	cache.disabled.Store(true)
+
+	fallback := &leafPageCacheTestFallback{data: fallbackLeaf}
+	reader := newCachedLeafPageReader(cache, fallback)
+
+	dst := make([]byte, 0, page.PageSize)
+	got, usedDst, cacheHit, err := reader.ReadUnsafeToWithCacheHit(ptr.ValuePtr(), dst)
+	if err != nil {
+		t.Fatalf("ReadUnsafeToWithCacheHit: %v", err)
+	}
+	if cacheHit {
+		t.Fatal("cacheHit=true, want disabled cache bypass")
+	}
+	if !usedDst {
+		t.Fatalf("expected fallback to copy into caller dst")
+	}
+	if !bytes.Equal(got, fallbackLeaf) {
+		t.Fatalf("got cached data while cache disabled")
+	}
+	if fallback.readUnsafeToCalls != 1 {
+		t.Fatalf("fallback ReadUnsafeTo calls=%d want 1", fallback.readUnsafeToCalls)
+	}
+}
+
 func TestCachedLeafPageReaderReadUnsafeToWithCacheHitReportsHit(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}

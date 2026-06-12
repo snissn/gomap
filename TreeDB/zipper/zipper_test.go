@@ -328,6 +328,59 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	}
 }
 
+func TestZipperLeafRefCacheOwnsPersistedLeafBytes(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageLog(&stubLeafPageLog{})
+	z.SetLeafPageReader(&countingLeafPageReader{})
+	z.leafRefCache = make(map[page.LeafLogPtr][]byte)
+
+	data := make([]byte, page.PageSize)
+	b := node.NewBuilder(data, page.PageTypeLeaf)
+	b.SetPageID(0)
+	if err := b.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
+	}
+	b.FinishNoNode()
+
+	leafID, err := z.persistLeafPage(b)
+	if err != nil {
+		t.Fatalf("persistLeafPage: %v", err)
+	}
+
+	// Simulate the scratch/builder backing buffer being reused for a non-leaf
+	// page after the leaf is persisted. loadNodeRef must still see the original
+	// cached leaf bytes, not the mutated caller buffer.
+	mutated := node.NewNode(data)
+	mutated.SetType(page.PageTypeInternal)
+	mutated.UpdateChecksum()
+
+	loaded, fromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(leafID, nil)
+	if err != nil {
+		t.Fatalf("loadNodeRef after caller buffer reuse: %v", err)
+	}
+	if leafScratchRef {
+		putLeafPageScratch(leafScratch)
+	}
+	if fromPager {
+		t.Fatalf("fromPager=%t want false", fromPager)
+	}
+	if loadSource != zipperNodeLoadLeafLogCache {
+		t.Fatalf("loadSource=%d want leaf-log cache", loadSource)
+	}
+	if got := loaded.Type(); got != page.PageTypeLeaf {
+		t.Fatalf("loaded.Type()=%d want %d", got, page.PageTypeLeaf)
+	}
+}
+
 func TestZipperLoadNodeRefAttributesLeafPageReaderCacheHit(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
