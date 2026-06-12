@@ -399,6 +399,12 @@ type CollectionRootOverlayCompactionStats struct {
 	OverlayRoots int
 }
 
+type collectionRootOverlayCompactionResult struct {
+	stats        CollectionRootOverlayCompactionStats
+	rootIDs      []uint64
+	systemRootID uint64
+}
+
 // StoredDocumentJSONMaterializer reuses any resources needed to materialize
 // stored collection documents as JSON.
 type StoredDocumentJSONMaterializer struct {
@@ -3692,11 +3698,17 @@ func (c *Collection) Flush() error {
 // architecture: hot writes may publish durable overlays quickly, then maintenance
 // can restore the simple one-root read shape.
 func (c *Collection) CompactRootOverlays(ctx context.Context) (CollectionRootOverlayCompactionStats, error) {
+	result, err := c.compactRootOverlays(ctx)
+	return result.stats, err
+}
+
+func (c *Collection) compactRootOverlays(ctx context.Context) (collectionRootOverlayCompactionResult, error) {
+	var result collectionRootOverlayCompactionResult
 	if c == nil {
-		return CollectionRootOverlayCompactionStats{}, errCollectionNil
+		return result, errCollectionNil
 	}
 	if c.db == nil {
-		return CollectionRootOverlayCompactionStats{}, errCollectionDBNil
+		return result, errCollectionDBNil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -3709,32 +3721,32 @@ func (c *Collection) CompactRootOverlays(ctx context.Context) (CollectionRootOve
 	return c.compactRootOverlaysLocked(ctx)
 }
 
-func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionRootOverlayCompactionStats, error) {
-	var stats CollectionRootOverlayCompactionStats
+func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (collectionRootOverlayCompactionResult, error) {
+	var result collectionRootOverlayCompactionResult
 	if err := ctx.Err(); err != nil {
-		return stats, err
+		return result, err
 	}
 	if err := c.flushBufferedWrites(); err != nil {
-		return stats, err
+		return result, err
 	}
 	if err := ctx.Err(); err != nil {
-		return stats, err
+		return result, err
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return stats, backenddb.ErrClosed
+		return result, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
-		return stats, err
+		return result, err
 	}
 	if catalog == nil {
-		return stats, errCollectionNotFound
+		return result, errCollectionNotFound
 	}
 	rootNames := catalog.overlayRootNames()
 	if len(rootNames) == 0 {
-		return stats, nil
+		return result, nil
 	}
 	baseRootIDs := make(map[string]uint64, len(rootNames))
 	rootOverlays := make(map[string][]uint64, len(rootNames))
@@ -3749,7 +3761,7 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionR
 	for _, rootName := range rootNames {
 		if err := ctx.Err(); err != nil {
 			cleanupIters()
-			return stats, err
+			return result, err
 		}
 		overlays := append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 		if len(overlays) == 0 {
@@ -3758,12 +3770,12 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionR
 		policy, err := collectionRootStoragePolicyForDB(c.db, catalog.meta, rootName)
 		if err != nil {
 			cleanupIters()
-			return stats, err
+			return result, err
 		}
 		it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 		if err != nil {
 			cleanupIters()
-			return stats, err
+			return result, err
 		}
 		if it == nil {
 			it = &systemTargetIterator{}
@@ -3775,11 +3787,11 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionR
 			Iter:          it,
 			StoragePolicy: policy,
 		})
-		stats.Roots++
-		stats.OverlayRoots += len(overlays)
+		result.stats.Roots++
+		result.stats.OverlayRoots += len(overlays)
 	}
 	if len(ordered) == 0 {
-		return stats, nil
+		return result, nil
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
@@ -3788,16 +3800,18 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionR
 	})
 	cleanupIters()
 	if err != nil {
-		return stats, err
+		return result, err
 	}
 	if len(rootIDs) != len(rootNames) {
-		return stats, unexpectedOrderedRootCountError(catalog.meta.Name, len(rootNames), len(rootIDs))
+		return result, unexpectedOrderedRootCountError(catalog.meta.Name, len(rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, rootNames, rootIDs)
 	c.meta = catalog.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	return stats, nil
+	result.rootIDs = appendCollectionCompactStorageProtectedRootIDs(result.rootIDs, rootIDs)
+	result.systemRootID = newSystemRoot
+	return result, nil
 }
 
 func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, error) {
