@@ -654,6 +654,9 @@ func (it *Iterator) Next() bool {
 		it.started = true
 		return it.inner.Valid()
 	}
+	if !it.inner.Valid() {
+		return false
+	}
 	it.inner.Next()
 	return it.inner.Valid()
 }
