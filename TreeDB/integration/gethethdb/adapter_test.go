@@ -360,6 +360,35 @@ func TestIteratorPrefixStart(t *testing.T) {
 	}
 }
 
+func TestIteratorNextAfterExhaustionIsIdempotent(t *testing.T) {
+	db := openTestDB(t)
+	for _, key := range []string{"a", "b", "c"} {
+		if err := db.Put([]byte(key), []byte("v-"+key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	it := db.NewIterator(nil, nil)
+	got := collectIteratorKeys(it)
+	if want := []string{"a", "b", "c"}; !slices.Equal(got, want) {
+		t.Fatalf("iterator keys=%v want %v", got, want)
+	}
+	for i := 0; i < 3; i++ {
+		if it.Next() {
+			t.Fatalf("exhausted iterator Next #%d returned true", i+1)
+		}
+		if key := it.Key(); key != nil {
+			t.Fatalf("exhausted iterator Key #%d=%q want nil", i+1, key)
+		}
+		if value := it.Value(); value != nil {
+			t.Fatalf("exhausted iterator Value #%d=%q want nil", i+1, value)
+		}
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("exhausted iterator err=%v", err)
+	}
+	it.Release()
+}
+
 func TestOperationsAfterClose(t *testing.T) {
 	db := openTestDB(t)
 	if err := db.Put([]byte("key"), []byte("value")); err != nil {
