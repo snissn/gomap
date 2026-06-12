@@ -157,5 +157,5 @@ When updating this benchmark or publishing a new row, include:
 - fixture shape and timing boundary;
 - `ns/op`, `ops/sec`, `B/op`, `allocs/op`;
 - insertion metrics (`docs/op`, derived docs/sec, `insert_batch_ns/doc`, `flush_ns/doc`, `vector_rebuild_ns/doc`);
-- search metrics (`text_candidates/search`, `text_postings/search`, `text_blocks_visited/search`, `text_blocks_skipped/search`, `text_state_lookups/search`, `text_norm_lookups/search`, `text_match_details/search`, `vector_candidates/search`, `candidates_fused/search`, `docs_fetched/search`, scalar counters, fallback/fail/truncation counters);
+- search metrics (`text_candidates/search`, `text_postings/search`, `posting_blocks_visited/search`, `posting_blocks_skipped/search`, `text_state_lookups/search`, `text_norm_lookups/search`, `text_match_details/search`, `vector_candidates/search`, `candidates_fused/search`, `docs_fetched/search`, scalar counters, fallback/fail/truncation counters);
 - caveats for local/context-only runs.

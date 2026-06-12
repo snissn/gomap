@@ -384,6 +384,7 @@ Docs lint treats this list as a manifest:
 - `TreeDB/docs/spec/GOMAP_TREEDB_COLUMN_STORE_RFC.md`
 - `TreeDB/docs/spec/COMPRESSION_TECHNOLOGY_SPEC.md`
 - `TreeDB/docs/spec/collection-wal-durability-plan.md`
+- `TreeDB/docs/spec/collection-text-v2-contract.md`
 - `TreeDB/docs/spec/storage-format.md`
 - `TreeDB/docs/spec/write-path-and-durability.md`
 - `TreeDB/docs/spec/recovery.md`

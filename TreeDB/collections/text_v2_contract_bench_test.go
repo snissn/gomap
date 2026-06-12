@@ -42,10 +42,30 @@ func TestTextV2ContractBenchmarkMatrix2623(t *testing.T) {
 			t.Fatalf("search cases=%v missing %q", textV2ContractSearchCaseNames2623(cases), want)
 		}
 	}
-	counters := TextIndexV2RequiredCounterNames()
-	for _, want := range []string{"posting_blocks_visited", "posting_blocks_skipped", "state_lookups", "norm_lookups", "docs_fetched", "match_details_built", "write_amplification", "index_bytes_per_doc"} {
-		if !textV2ContractContainsString2623(counters, want) {
-			t.Fatalf("required counters=%v missing %q", counters, want)
+	gotCounters := append([]string(nil), TextIndexV2RequiredCounterNames()...)
+	wantCounters := []string{
+		"postings_scanned",
+		"posting_blocks_visited",
+		"posting_blocks_skipped",
+		"candidates_scored",
+		"state_lookups",
+		"norm_lookups",
+		"docs_fetched",
+		"match_details_built",
+		"scalar_filter_selectivity",
+		"fail_closed",
+		"write_amplification",
+		"index_bytes_per_doc",
+		"rewrite_merge_state",
+	}
+	sort.Strings(gotCounters)
+	sort.Strings(wantCounters)
+	if len(gotCounters) != len(wantCounters) {
+		t.Fatalf("required counters=%v want %v", gotCounters, wantCounters)
+	}
+	for i := range wantCounters {
+		if gotCounters[i] != wantCounters[i] {
+			t.Fatalf("required counters=%v want %v", gotCounters, wantCounters)
 		}
 	}
 }

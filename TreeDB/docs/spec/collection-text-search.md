@@ -204,14 +204,16 @@ rank, higher-is-better BM25F score, score kind `bm25f`, matched terms/fields, an
 optional final documents. Documents are fetched only after top-K ranking, so
 `DocumentsFetched <= TopK` for successful searches.
 
-`TextSearchStats` includes text/hybrid-compatible counters:
-`text_candidates_requested`, `text_candidates_returned`,
-`text_postings_scanned`, `text_posting_blocks_visited`,
-`text_posting_blocks_skipped`, `text_candidates_scored`, `text_state_lookups`,
-`text_norm_lookups`, `text_match_details_built`, `documents_fetched`,
-`documents_missing`, `full_document_scan_fallbacks`, `truncated`, `fail_closed`,
-and `fail_closed_reason`, plus text-only aliases and scan/score/fetch timing
-fields. v1 reports posting-block counters as zero; v2 PRs must populate them.
+`TextSearchStats` exposes text/hybrid-compatible counters. The required
+benchmark/status vocabulary is `postings_scanned`, `posting_blocks_visited`,
+`posting_blocks_skipped`, `candidates_scored`, `state_lookups`, `norm_lookups`,
+`docs_fetched`, `match_details_built`, `scalar_filter_selectivity`,
+`fail_closed`, `write_amplification`, `index_bytes_per_doc`, and
+`rewrite_merge_state`; v1 reports posting-block counters as zero and v2 PRs must
+populate them. Additional runtime diagnostics include `documents_missing`,
+`full_document_scan_fallbacks`, `truncated`, and `fail_closed_reason`. The Go
+stats struct also carries text-source fields for hybrid adapters, plus text-only
+aliases and scan/score/fetch timing fields.
 `TextCandidatesScored` counts the full bounded scored candidate set;
 `TextCandidatesReturned` counts ranked results/candidates actually returned after
 TopK truncation.
