@@ -7,11 +7,7 @@ import (
 )
 
 func TestHarnessPreservesIntegratedGethWorkloadShape(t *testing.T) {
-	blob, err := os.ReadFile("testdata/treedb_nitro_soak.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(blob)
+	src := readHarnessSource(t)
 	for _, want := range []string{
 		"OpenDatabase(\"chaindata\"",
 		"DBEngine: engine",
@@ -32,4 +28,46 @@ func TestHarnessPreservesIntegratedGethWorkloadShape(t *testing.T) {
 			t.Fatalf("harness missing %q", want)
 		}
 	}
+}
+
+func TestHarnessExposesReadIntegrityIterationAndCounterLabels(t *testing.T) {
+	src := readHarnessSource(t)
+	for _, want := range []string{
+		`"treedb-read-integrity"`,
+		`"unsafe-skip-checksums"`,
+		`"iteration-mode"`,
+		`json:"treedb_read_integrity"`,
+		`json:"read_integrity"`,
+		`json:"iteration_mode"`,
+		`json:"stat_delta,omitempty"`,
+		"TreeDB read-integrity",
+		"iteration mode",
+		"treedb.vlog.read.crc32_checks_total",
+		"treedb.cache.vlog_read.crc32_checks_total",
+		"treedb.vlog.grouped_frame_cache.hits",
+		"treedb.cache.vlog_grouped_frame_cache.hits",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("harness missing instrumentation label %q", want)
+		}
+	}
+}
+
+func TestHarnessKeyOnlyIterationDoesNotMaterializeValues(t *testing.T) {
+	src := readHarnessSource(t)
+	if !strings.Contains(src, "if mode == iterationModeValue {\n\t\t\t_ = it.Value()\n\t\t}") {
+		t.Fatalf("iterateData must guard Iterator.Value() behind value iteration mode")
+	}
+	if got := strings.Count(src, ".Value()"); got != 1 {
+		t.Fatalf("harness has %d Iterator.Value() calls, want exactly the guarded iterateData call", got)
+	}
+}
+
+func readHarnessSource(t *testing.T) string {
+	t.Helper()
+	blob, err := os.ReadFile("testdata/treedb_nitro_soak.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(blob)
 }

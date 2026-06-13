@@ -828,6 +828,9 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.vlog.mmap_read.hit_ratio"] = fmt.Sprintf("%.6f", float64(mmapHits)/float64(total))
 		}
 
+		readStats := db.valueLogManager.ReadStats()
+		stats["treedb.vlog.read.crc32_checks_total"] = fmt.Sprintf("%d", readStats.RecordCRCChecks)
+
 		gStats := db.valueLogManager.GroupedFrameCacheDetailedStats()
 		stats["treedb.vlog.grouped_frame_cache.hits"] = fmt.Sprintf("%d", gStats.Hits)
 		stats["treedb.vlog.grouped_frame_cache.misses"] = fmt.Sprintf("%d", gStats.Misses)

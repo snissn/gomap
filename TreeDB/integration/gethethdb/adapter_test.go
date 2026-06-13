@@ -46,6 +46,73 @@ func TestOpenDefaultsToCommandWALDurable(t *testing.T) {
 	}
 }
 
+func TestResolveTreeDBOptionsReadIntegrityEnv(t *testing.T) {
+	clearReadIntegrityEnv(t)
+	dir := filepath.Join(t.TempDir(), "treedb")
+	opts, err := resolveTreeDBOptions(dir, nil)
+	if err != nil {
+		t.Fatalf("resolve default options: %v", err)
+	}
+	if got := opts.ValueLog.ReadIntegrity; got != treedb.IntegrityVerify {
+		t.Fatalf("default read integrity=%d want verify", got)
+	}
+
+	t.Setenv(EnvReadIntegrity, "unsafe-skip-checksums")
+	opts, err = resolveTreeDBOptions(dir, nil)
+	if err != nil {
+		t.Fatalf("resolve skip-checksum options: %v", err)
+	}
+	if got := opts.ValueLog.ReadIntegrity; got != treedb.IntegritySkipChecksums {
+		t.Fatalf("env read integrity=%d want skip-checksums", got)
+	}
+
+	t.Setenv(EnvReadIntegrity, "verify")
+	relaxed := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+	opts, err = resolveTreeDBOptions(dir, &OpenOptions{Options: &relaxed})
+	if err != nil {
+		t.Fatalf("resolve verify override options: %v", err)
+	}
+	if got := opts.ValueLog.ReadIntegrity; got != treedb.IntegrityVerify {
+		t.Fatalf("env verify override read integrity=%d want verify", got)
+	}
+}
+
+func TestResolveTreeDBOptionsReadIntegrityFallbackEnv(t *testing.T) {
+	clearReadIntegrityEnv(t)
+	t.Setenv(EnvReadIntegrityFallback, "unsafe-skip-checksums")
+	opts, err := resolveTreeDBOptions(filepath.Join(t.TempDir(), "treedb"), nil)
+	if err != nil {
+		t.Fatalf("resolve fallback read integrity: %v", err)
+	}
+	if got := opts.ValueLog.ReadIntegrity; got != treedb.IntegritySkipChecksums {
+		t.Fatalf("fallback env read integrity=%d want skip-checksums", got)
+	}
+
+	t.Setenv(EnvReadIntegrity, "verify")
+	opts, err = resolveTreeDBOptions(filepath.Join(t.TempDir(), "treedb"), nil)
+	if err != nil {
+		t.Fatalf("resolve specific read integrity: %v", err)
+	}
+	if got := opts.ValueLog.ReadIntegrity; got != treedb.IntegrityVerify {
+		t.Fatalf("specific env read integrity=%d want verify", got)
+	}
+}
+
+func TestResolveTreeDBOptionsReadIntegrityEnvRejectsInvalid(t *testing.T) {
+	clearReadIntegrityEnv(t)
+	t.Setenv(EnvReadIntegrity, "fast-but-maybe-safe")
+	_, err := resolveTreeDBOptions(filepath.Join(t.TempDir(), "treedb"), nil)
+	if err == nil || !strings.Contains(err.Error(), EnvReadIntegrity) {
+		t.Fatalf("resolve invalid read integrity err=%v, want %s error", err, EnvReadIntegrity)
+	}
+}
+
+func clearReadIntegrityEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(EnvReadIntegrity, "")
+	t.Setenv(EnvReadIntegrityFallback, "")
+}
+
 func TestOpenDefaultsUseGethSizedCommandWALSegments(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "treedb")
 	opts, err := resolveTreeDBOptions(dir, nil)

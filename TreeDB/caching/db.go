@@ -28099,6 +28099,27 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.cache.vlog_mmap.read.hit_ratio"] = fmt.Sprintf("%.6f", float64(mmapHits)/float64(total))
 		}
 
+		readStats := db.valueLogReader.ReadStats()
+		stats["treedb.cache.vlog_read.crc32_checks_total"] = fmt.Sprintf("%d", readStats.RecordCRCChecks)
+
+		gStats := db.valueLogReader.GroupedFrameCacheDetailedStats()
+		stats["treedb.cache.vlog_grouped_frame_cache.hits"] = fmt.Sprintf("%d", gStats.Hits)
+		stats["treedb.cache.vlog_grouped_frame_cache.misses"] = fmt.Sprintf("%d", gStats.Misses)
+		stats["treedb.cache.vlog_grouped_frame_cache.stores"] = fmt.Sprintf("%d", gStats.Stores)
+		stats["treedb.cache.vlog_grouped_frame_cache.evictions"] = fmt.Sprintf("%d", gStats.Evictions)
+		stats["treedb.cache.vlog_grouped_frame_cache.releases"] = fmt.Sprintf("%d", gStats.Releases)
+		stats["treedb.cache.vlog_grouped_frame_cache.retained_bytes"] = fmt.Sprintf("%d", gStats.RetainedBytes)
+		stats["treedb.cache.vlog_grouped_frame_cache.budget_bytes"] = fmt.Sprintf("%d", gStats.BudgetBytes)
+		stats["treedb.cache.vlog_grouped_frame_cache.skipped_disabled"] = fmt.Sprintf("%d", gStats.SkippedDisabled)
+		stats["treedb.cache.vlog_grouped_frame_cache.skipped_oversize"] = fmt.Sprintf("%d", gStats.SkippedOversize)
+		stats["treedb.cache.vlog_grouped_frame_cache.skipped_budget"] = fmt.Sprintf("%d", gStats.SkippedBudget)
+		stats["treedb.cache.vlog_grouped_frame_cache.skipped_contention"] = fmt.Sprintf("%d", gStats.SkippedContention)
+		stats["treedb.cache.vlog_grouped_frame_cache.entries"] = fmt.Sprintf("%d", gStats.Entries)
+		stats["treedb.cache.vlog_grouped_frame_cache.capacity"] = fmt.Sprintf("%d", gStats.Capacity)
+		if total := gStats.Hits + gStats.Misses; total > 0 {
+			stats["treedb.cache.vlog_grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gStats.Hits)/float64(total))
+		}
+
 		hits, misses, entries, capacity := db.valueLogReader.TemplateDefCacheStats()
 		stats["treedb.cache.vlog_template_def_cache.hits"] = fmt.Sprintf("%d", hits)
 		stats["treedb.cache.vlog_template_def_cache.misses"] = fmt.Sprintf("%d", misses)

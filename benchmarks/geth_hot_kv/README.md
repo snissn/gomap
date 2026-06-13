@@ -23,6 +23,11 @@ Workload shape:
    iterate keys/sec, DeleteRange affected-keys/sec, and on-disk size bytes.
    `size bytes` is measured before the destructive DeleteRange phase; the JSON
    and matrix also include `post_delete_size_bytes` after close/reopen.
+8. Label TreeDB value-log read integrity (`verify` or the explicitly unsafe
+   `unsafe-skip-checksums` ceiling) and iteration mode (`value` or `key-only`).
+9. For TreeDB runs, include per-phase stat deltas for value-log CRC checks,
+   grouped-frame cache activity, mmap hits, and ReadAt fallbacks where the
+   adapter exposes `Stat()`.
 
 The exact original `/tmp/treedb_nitro_soak.go` was not recovered, so the matrix
 script intentionally sweeps the uncertain knobs that may affect directionality:
@@ -42,6 +47,30 @@ go run /path/to/gomap/benchmarks/geth_hot_kv/testdata/treedb_nitro_soak.go \
   -out /tmp/treedb_soak_results.json
 ```
 
+TreeDB checksum verification is the default. The unsafe checksum-disabled mode
+is benchmark-only and must be selected explicitly:
+
+```sh
+go run /path/to/gomap/benchmarks/geth_hot_kv/testdata/treedb_nitro_soak.go \
+  -n 30000 \
+  -reads 12000 \
+  -engines treedb \
+  -treedb-read-integrity unsafe-skip-checksums \
+  -out /tmp/treedb_soak_skip_checksums.json
+```
+
+Use `-iteration-mode key-only` to measure ordered traversal without calling
+`Iterator.Value()` or materializing value-log payloads during the iterate phase:
+
+```sh
+go run /path/to/gomap/benchmarks/geth_hot_kv/testdata/treedb_nitro_soak.go \
+  -n 30000 \
+  -reads 12000 \
+  -engines treedb \
+  -iteration-mode key-only \
+  -out /tmp/treedb_soak_key_only.json
+```
+
 ## Matrix run
 
 ```sh
@@ -57,6 +86,20 @@ KEYS=1000 READS=300 \
 KEY_SHAPES=geth-mixed \
 VALUE_SIZES=128 \
 BATCH_TARGET_BYTES=102400 \
+  scripts/treedb_geth_hot_kv_matrix.sh
+```
+
+Checksum verify vs unsafe ceiling and value vs key-only split:
+
+```sh
+GETH_REPO=/path/to/go-ethereum \
+ENGINES=treedb \
+KEYS=30000 READS=12000 \
+KEY_SHAPES=geth-mixed \
+VALUE_SIZES=128 \
+BATCH_TARGET_BYTES=102400 \
+TREEDB_READ_INTEGRITIES=verify,unsafe-skip-checksums \
+ITERATION_MODES=value,key-only \
   scripts/treedb_geth_hot_kv_matrix.sh
 ```
 

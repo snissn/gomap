@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,12 @@ const (
 	phaseIterate     = "iterate"
 	phaseDeleteRange = "delete_range"
 	phaseReopen      = "reopen_verify"
+
+	iterationModeValue   = "value"
+	iterationModeKeyOnly = "key-only"
+
+	readIntegrityVerify     = "verify"
+	readIntegrityUnsafeSkip = "unsafe-skip-checksums"
 )
 
 type config struct {
@@ -51,6 +58,8 @@ type config struct {
 	BatchTargetBytes     int      `json:"batch_target_bytes"`
 	DeleteRangeWidth     int      `json:"delete_range_width"`
 	DeleteRangesPerBatch int      `json:"delete_ranges_per_batch"`
+	TreeDBReadIntegrity  string   `json:"treedb_read_integrity"`
+	IterationMode        string   `json:"iteration_mode"`
 	Seed                 int64    `json:"seed"`
 	WorkDir              string   `json:"workdir"`
 	Keep                 bool     `json:"keep"`
@@ -61,9 +70,10 @@ type config struct {
 }
 
 type phaseResult struct {
-	DurationMillis int64   `json:"duration_millis"`
-	Ops            int     `json:"ops"`
-	OpsPerSec      float64 `json:"ops_per_sec"`
+	DurationMillis int64            `json:"duration_millis"`
+	Ops            int              `json:"ops"`
+	OpsPerSec      float64          `json:"ops_per_sec"`
+	StatDelta      map[string]int64 `json:"stat_delta,omitempty"`
 }
 
 type memStatsDelta struct {
@@ -83,6 +93,8 @@ type memStatsDelta struct {
 type runResult struct {
 	Engine                string                 `json:"engine"`
 	DBPath                string                 `json:"db_path"`
+	ReadIntegrity         string                 `json:"read_integrity"`
+	IterationMode         string                 `json:"iteration_mode"`
 	WriteOpsPerSec        float64                `json:"write_ops_sec"`
 	ReadOpsPerSec         float64                `json:"read_ops_sec"`
 	IterateKeysPerSec     float64                `json:"iterate_keys_sec"`
@@ -127,6 +139,8 @@ func main() {
 	flag.IntVar(&cfg.BatchTargetBytes, "batch-target-bytes", ethdb.IdealBatchSize, "flush write batches after this queued value size; <=0 writes one final batch")
 	flag.IntVar(&cfg.DeleteRangeWidth, "delete-range-width", 100, "keys covered by each DeleteRange call")
 	flag.IntVar(&cfg.DeleteRangesPerBatch, "delete-ranges-per-batch", 100, "batch DeleteRange calls per batch.Write")
+	flag.StringVar(&cfg.TreeDBReadIntegrity, "treedb-read-integrity", readIntegrityVerify, "TreeDB value-log read integrity: verify|unsafe-skip-checksums (unsafe mode is benchmark-only)")
+	flag.StringVar(&cfg.IterationMode, "iteration-mode", iterationModeValue, "iteration mode: value|key-only")
 	flag.Int64Var(&cfg.Seed, "seed", 1, "deterministic seed")
 	flag.StringVar(&cfg.WorkDir, "workdir", "", "base workdir; defaults to os.MkdirTemp")
 	flag.BoolVar(&cfg.Keep, "keep", false, "keep the workdir after completion")
@@ -140,6 +154,16 @@ func main() {
 	var err error
 	cfg.Engines = splitCSV(enginesCSV)
 	cfg.ProfileEngines = splitCSV(profileEnginesCSV)
+	if normalized, err := normalizeReadIntegrity(cfg.TreeDBReadIntegrity); err != nil {
+		fatalf("%v", err)
+	} else {
+		cfg.TreeDBReadIntegrity = normalized
+	}
+	if normalized, err := normalizeIterationMode(cfg.IterationMode); err != nil {
+		fatalf("%v", err)
+	} else {
+		cfg.IterationMode = normalized
+	}
 	if cfg.N <= 0 || cfg.Reads < 0 || cfg.ValueSize <= 0 || cfg.DeleteRangeWidth <= 0 || cfg.DeleteRangesPerBatch <= 0 {
 		fatalf("invalid non-positive benchmark parameter")
 	}
@@ -214,15 +238,17 @@ func runEngine(cfg config, engine string, data benchmarkData) (runResult, error)
 	defer opened.close()
 
 	run := runResult{
-		Engine:      engine,
-		DBPath:      filepath.Join(dbRoot, "geth", "chaindata"),
-		KeysWritten: len(data.Keys),
-		Reads:       cfg.Reads,
-		Phases:      make(map[string]phaseResult),
+		Engine:        engine,
+		DBPath:        filepath.Join(dbRoot, "geth", "chaindata"),
+		ReadIntegrity: readIntegrityForRun(cfg, engine),
+		IterationMode: cfg.IterationMode,
+		KeysWritten:   len(data.Keys),
+		Reads:         cfg.Reads,
+		Phases:        make(map[string]phaseResult),
 	}
 	profiler := phaseProfiler{cfg: cfg, engine: engine}
 
-	writePhase, err := profiler.time(phaseWrite, func() (int, error) {
+	writePhase, err := timeDBPhase(profiler, opened.db, phaseWrite, func() (int, error) {
 		return writeData(opened.db, cfg, data)
 	})
 	if err != nil {
@@ -231,7 +257,7 @@ func runEngine(cfg config, engine string, data benchmarkData) (runResult, error)
 	run.Phases[phaseWrite] = writePhase
 	run.WriteOpsPerSec = writePhase.OpsPerSec
 
-	readPhase, err := profiler.time(phaseRead, func() (int, error) {
+	readPhase, err := timeDBPhase(profiler, opened.db, phaseRead, func() (int, error) {
 		return readData(opened.db, cfg, data)
 	})
 	if err != nil {
@@ -240,8 +266,8 @@ func runEngine(cfg config, engine string, data benchmarkData) (runResult, error)
 	run.Phases[phaseRead] = readPhase
 	run.ReadOpsPerSec = readPhase.OpsPerSec
 
-	iteratePhase, err := profiler.time(phaseIterate, func() (int, error) {
-		return iterateData(opened.db, len(data.Keys))
+	iteratePhase, err := timeDBPhase(profiler, opened.db, phaseIterate, func() (int, error) {
+		return iterateData(opened.db, len(data.Keys), cfg.IterationMode)
 	})
 	if err != nil {
 		return runResult{}, err
@@ -255,7 +281,7 @@ func runEngine(cfg config, engine string, data benchmarkData) (runResult, error)
 	}
 	run.SizeBytes = loadedSize
 
-	deletePhase, err := profiler.time(phaseDeleteRange, func() (int, error) {
+	deletePhase, err := timeDBPhase(profiler, opened.db, phaseDeleteRange, func() (int, error) {
 		return deleteRanges(opened.db, cfg, data)
 	})
 	if err != nil {
@@ -269,7 +295,7 @@ func runEngine(cfg config, engine string, data benchmarkData) (runResult, error)
 		return runResult{}, err
 	}
 
-	reopenPhase, err := profiler.time(phaseReopen, func() (int, error) {
+	reopenPhase, err := timeDBPhase(profiler, nil, phaseReopen, func() (int, error) {
 		reopened, err := openEngine(dbRoot, engine, false, cfg)
 		if err != nil {
 			return 0, err
@@ -290,7 +316,57 @@ func runEngine(cfg config, engine string, data benchmarkData) (runResult, error)
 	return run, nil
 }
 
+func readIntegrityForRun(cfg config, engine string) string {
+	if !isTreeDBEngine(engine) {
+		return "n/a"
+	}
+	return cfg.TreeDBReadIntegrity
+}
+
+func isTreeDBEngine(engine string) bool {
+	return strings.EqualFold(strings.TrimSpace(engine), "treedb")
+}
+
+func applyTreeDBReadIntegrityEnv(engine, mode string) func() {
+	if !isTreeDBEngine(engine) {
+		return func() {}
+	}
+	return withEnv(map[string]string{
+		"TREEDB_GETH_READ_INTEGRITY": mode,
+		"TREEDB_READ_INTEGRITY":      mode,
+	})
+}
+
+func withEnv(values map[string]string) func() {
+	type prior struct {
+		value string
+		ok    bool
+	}
+	old := make(map[string]prior, len(values))
+	for key, value := range values {
+		prev, ok := os.LookupEnv(key)
+		old[key] = prior{value: prev, ok: ok}
+		if value == "" {
+			_ = os.Unsetenv(key)
+		} else {
+			_ = os.Setenv(key, value)
+		}
+	}
+	return func() {
+		for key, prev := range old {
+			if prev.ok {
+				_ = os.Setenv(key, prev.value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}
+}
+
 func openEngine(root, engine string, readonly bool, cfg config) (*openedDB, error) {
+	restoreEnv := applyTreeDBReadIntegrityEnv(engine, cfg.TreeDBReadIntegrity)
+	defer restoreEnv()
+
 	stack, err := node.New(&node.Config{
 		DataDir:  root,
 		Name:     "geth",
@@ -372,14 +448,16 @@ func readData(db ethdb.Database, cfg config, data benchmarkData) (int, error) {
 	return read, nil
 }
 
-func iterateData(db ethdb.Database, want int) (int, error) {
+func iterateData(db ethdb.Database, want int, mode string) (int, error) {
 	it := db.NewIterator(nil, nil)
 	defer it.Release()
 	count := 0
 	for it.Next() {
 		count++
 		_ = it.Key()
-		_ = it.Value()
+		if mode == iterationModeValue {
+			_ = it.Value()
+		}
 	}
 	if err := it.Error(); err != nil {
 		return count, err
@@ -648,6 +726,28 @@ func splitCSV(s string) []string {
 	return out
 }
 
+func normalizeReadIntegrity(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", readIntegrityVerify, "verified", "checksum-verify", "checksum-verified", "checksums", "on", "true", "1":
+		return readIntegrityVerify, nil
+	case readIntegrityUnsafeSkip, "skip-checksums", "skip", "no-checksums", "none", "off", "false", "0":
+		return readIntegrityUnsafeSkip, nil
+	default:
+		return "", fmt.Errorf("unknown -treedb-read-integrity %q (use verify or unsafe-skip-checksums)", raw)
+	}
+}
+
+func normalizeIterationMode(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", iterationModeValue, "values", "value-materialized", "value-iteration":
+		return iterationModeValue, nil
+	case iterationModeKeyOnly, "keys", "key":
+		return iterationModeKeyOnly, nil
+	default:
+		return "", fmt.Errorf("unknown -iteration-mode %q (use value or key-only)", raw)
+	}
+}
+
 func dirSize(root string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -665,6 +765,86 @@ func dirSize(root string) (int64, error) {
 		return nil
 	})
 	return total, err
+}
+
+type dbStatter interface {
+	Stat() (string, error)
+}
+
+var interestingStatKeys = []string{
+	"treedb.vlog.read.crc32_checks_total",
+	"treedb.cache.vlog_read.crc32_checks_total",
+	"treedb.vlog.grouped_frame_cache.hits",
+	"treedb.vlog.grouped_frame_cache.misses",
+	"treedb.vlog.grouped_frame_cache.stores",
+	"treedb.cache.vlog_grouped_frame_cache.hits",
+	"treedb.cache.vlog_grouped_frame_cache.misses",
+	"treedb.cache.vlog_grouped_frame_cache.stores",
+	"treedb.vlog.mmap_read.hits",
+	"treedb.vlog.mmap_read.fallback_readat",
+	"treedb.cache.vlog_mmap.read.hits",
+	"treedb.cache.vlog_mmap.read.fallback_readat",
+}
+
+func timeDBPhase(profiler phaseProfiler, db ethdb.Database, phase string, fn func() (int, error)) (phaseResult, error) {
+	before := statSnapshot(db)
+	result, err := profiler.time(phase, fn)
+	after := statSnapshot(db)
+	result.StatDelta = statDelta(before, after)
+	return result, err
+}
+
+func statSnapshot(db ethdb.Database) map[string]int64 {
+	statter, ok := db.(dbStatter)
+	if !ok || statter == nil {
+		return nil
+	}
+	raw, err := statter.Stat()
+	if err != nil || raw == "" {
+		return nil
+	}
+	parsed := parseKeyValueStats(raw)
+	out := make(map[string]int64, len(interestingStatKeys))
+	for _, key := range interestingStatKeys {
+		if value, ok := parsed[key]; ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func parseKeyValueStats(raw string) map[string]int64 {
+	out := make(map[string]int64)
+	for _, line := range strings.Split(raw, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		if n, err := strconv.ParseInt(value, 10, 64); err == nil {
+			out[key] = n
+		}
+	}
+	return out
+}
+
+func statDelta(before, after map[string]int64) map[string]int64 {
+	if len(after) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(after))
+	for _, key := range interestingStatKeys {
+		post, ok := after[key]
+		if !ok {
+			continue
+		}
+		out[key] = post - before[key]
+	}
+	return out
 }
 
 type phaseProfiler struct {
@@ -765,14 +945,67 @@ func renderSummary(out output) string {
 	fmt.Fprintf(&sb, "- value-size: %d\n", out.Config.ValueSize)
 	fmt.Fprintf(&sb, "- batch-target-bytes: %d\n", out.Config.BatchTargetBytes)
 	fmt.Fprintf(&sb, "- delete-range-width: %d\n", out.Config.DeleteRangeWidth)
+	fmt.Fprintf(&sb, "- TreeDB read-integrity: %s\n", out.Config.TreeDBReadIntegrity)
+	fmt.Fprintf(&sb, "- iteration-mode: %s\n", out.Config.IterationMode)
 	fmt.Fprintf(&sb, "- workdir: %s\n\n", out.Config.WorkDir)
 	sb.WriteString("`size bytes` is measured after write/read/iterate and before the destructive DeleteRange phase; `post-delete bytes` is measured after close/reopen verification.\n\n")
-	sb.WriteString("| engine | write ops/sec | read ops/sec | iterate keys/sec | DeleteRange keys/sec | size bytes | post-delete bytes |\n")
-	sb.WriteString("|---|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("| engine | read integrity | iteration mode | write ops/sec | read ops/sec | iterate keys/sec | DeleteRange keys/sec | size bytes | post-delete bytes |\n")
+	sb.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|\n")
 	for _, run := range out.Runs {
-		fmt.Fprintf(&sb, "| %s | %.0f | %.0f | %.0f | %.0f | %d | %d |\n", run.Engine, run.WriteOpsPerSec, run.ReadOpsPerSec, run.IterateKeysPerSec, run.DeleteRangeKeysPerSec, run.SizeBytes, run.PostDeleteSizeBytes)
+		fmt.Fprintf(&sb, "| %s | %s | %s | %.0f | %.0f | %.0f | %.0f | %d | %d |\n", run.Engine, run.ReadIntegrity, run.IterationMode, run.WriteOpsPerSec, run.ReadOpsPerSec, run.IterateKeysPerSec, run.DeleteRangeKeysPerSec, run.SizeBytes, run.PostDeleteSizeBytes)
 	}
+	writeStatDeltaSummary(&sb, out.Runs)
 	return sb.String()
+}
+
+func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
+	if !hasStatDeltas(runs) {
+		return
+	}
+	sb.WriteString("\n## TreeDB value-log read counters\n\n")
+	sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678.\n\n")
+	sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap ReadAt fallbacks |\n")
+	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|\n")
+	for _, run := range runs {
+		for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
+			result, ok := run.Phases[phase]
+			if !ok || len(result.StatDelta) == 0 {
+				continue
+			}
+			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d |\n",
+				run.Engine,
+				run.ReadIntegrity,
+				run.IterationMode,
+				phase,
+				statDeltaValue(result.StatDelta, "treedb.vlog.read.crc32_checks_total", "treedb.cache.vlog_read.crc32_checks_total"),
+				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits"),
+				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses"),
+				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores"),
+				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits"),
+				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat"),
+			)
+		}
+	}
+}
+
+func hasStatDeltas(runs []runResult) bool {
+	for _, run := range runs {
+		for _, phase := range run.Phases {
+			if len(phase.StatDelta) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func statDeltaValue(delta map[string]int64, keys ...string) int64 {
+	for _, key := range keys {
+		if value, ok := delta[key]; ok {
+			return value
+		}
+	}
+	return 0
 }
 
 func perSec(ops int, d time.Duration) float64 {
