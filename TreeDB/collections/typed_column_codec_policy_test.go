@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
@@ -540,6 +541,25 @@ func TestTypedColumnAdapterDictionarySectionCompressionRawLengthMismatchFailsClo
 	_, err = image.Dictionaries()
 	if err == nil || !strings.Contains(err.Error(), "dictionaries") || !strings.Contains(err.Error(), "decoded length") {
 		t.Fatalf("Dictionaries compressed section err=%v want fail-closed decoded-length diagnostic", err)
+	}
+}
+
+func TestTypedColumnAdapterDictionarySectionZSTDCapsDeclaredRawBytes1952(t *testing.T) {
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd encoder: %v", err)
+	}
+	defer enc.Close()
+	stored := enc.EncodeAll([]byte(strings.Repeat("dictionary-zstd-cap-", 512)), nil)
+	section := typedcolumn.ColumnPartImageSection{
+		Kind:        typedcolumn.ColumnPartImageSectionDictionaries,
+		Compression: typedcolumn.CompressionZSTD,
+		RawBytes:    16,
+	}
+
+	_, err = decodeTypedColumnPreparedDictionarySectionBytes(section, stored)
+	if err == nil || !strings.Contains(err.Error(), "zstd decode") {
+		t.Fatalf("decode prepared dictionary zstd err=%v want capped zstd decode failure", err)
 	}
 }
 

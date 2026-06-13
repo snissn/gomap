@@ -819,7 +819,6 @@ type CompressionSelection struct {
 
 var (
 	zstdEncoderPool sync.Pool
-	zstdDecoderPool sync.Pool
 )
 
 func getZstdEncoder() (*zstd.Encoder, error) {
@@ -843,33 +842,43 @@ func putZstdEncoder(enc *zstd.Encoder) {
 	zstdEncoderPool.Put(enc)
 }
 
-func getZstdDecoder() (*zstd.Decoder, error) {
-	if v := zstdDecoderPool.Get(); v != nil {
-		if dec, ok := v.(*zstd.Decoder); ok && dec != nil {
-			return dec, nil
-		}
+func getZstdDecoder(rawBytes int) (*zstd.Decoder, error) {
+	maxDecodedBytes := rawBytes
+	if maxDecodedBytes < 1<<20 {
+		maxDecodedBytes = 1 << 20
 	}
-	return zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+	return zstd.NewReader(nil,
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxMemory(uint64(maxDecodedBytes)),
+		zstd.WithDecodeAllCapLimit(true),
+	)
 }
 
 func putZstdDecoder(dec *zstd.Decoder) {
 	if dec == nil {
 		return
 	}
-	_ = dec.Reset(nil)
-	zstdDecoderPool.Put(dec)
+	dec.Close()
 }
 
 func decodeZstdPayload(label string, payload []byte, rawBytes int, dst []byte) ([]byte, error) {
 	if rawBytes < 0 {
 		return nil, fmt.Errorf("typedcolumn: %s zstd raw bytes=%d is invalid", label, rawBytes)
 	}
-	dec, err := getZstdDecoder()
+	dec, err := getZstdDecoder(rawBytes)
 	if err != nil {
 		return nil, fmt.Errorf("typedcolumn: %s zstd decoder: %w", label, err)
 	}
 	defer putZstdDecoder(dec)
-	out, err := dec.DecodeAll(payload, dst[:0])
+	decodeDst := dst[:0]
+	if rawBytes >= 0 {
+		if cap(decodeDst) >= rawBytes {
+			decodeDst = decodeDst[:0:rawBytes]
+		} else {
+			decodeDst = make([]byte, 0, rawBytes)
+		}
+	}
+	out, err := dec.DecodeAll(payload, decodeDst)
 	if err != nil {
 		return nil, fmt.Errorf("typedcolumn: %s zstd decode: %w", label, err)
 	}

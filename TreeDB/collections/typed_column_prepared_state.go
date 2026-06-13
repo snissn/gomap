@@ -1043,7 +1043,15 @@ func decodeTypedColumnPreparedDictionarySectionBytes(section typedcolumn.ColumnP
 		if rawBytes > maxTypedColumnPreparedCompressedDictionarySectionRawBytes {
 			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d exceeds max=%d", rawBytes, maxTypedColumnPreparedCompressedDictionarySectionRawBytes)
 		}
-		dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+		maxDecodedBytes := rawBytes
+		if maxDecodedBytes < 1<<20 {
+			maxDecodedBytes = 1 << 20
+		}
+		dec, err := zstd.NewReader(nil,
+			zstd.WithDecoderConcurrency(1),
+			zstd.WithDecoderMaxMemory(uint64(maxDecodedBytes)),
+			zstd.WithDecodeAllCapLimit(true),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("collections: typed-column prepared dictionaries zstd decoder: %w", err)
 		}

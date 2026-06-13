@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/snissn/compress/zstd"
 )
 
 const typedColumnCodecRows = 8192
@@ -40,6 +42,20 @@ func TestTypedColumnCodecRoundTripRepresentativeLayouts(t *testing.T) {
 				layout.assertRoundTrip(t, &reader, granule)
 			})
 		}
+	}
+}
+
+func TestTypedColumnZstdDecodeCapsDeclaredRawBytes1952(t *testing.T) {
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd encoder: %v", err)
+	}
+	defer enc.Close()
+	stored := enc.EncodeAll([]byte(strings.Repeat("jsonbench-zstd-cap-", 512)), nil)
+
+	_, err = decodeZstdPayload("test", stored, 16, make([]byte, 0, 16))
+	if err == nil || !strings.Contains(err.Error(), "zstd decode") {
+		t.Fatalf("decodeZstdPayload err=%v want capped zstd decode failure", err)
 	}
 }
 
