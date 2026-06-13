@@ -52,6 +52,13 @@ func (p *columnHNSWPreparedScalarU8ScorePlane) scoreRowIDsPrevalidated(rowIDs []
 	return p.scorer.scoreRowIDsPrevalidated(rowIDs, dst, scratch, stats)
 }
 
+func (p *columnHNSWPreparedScalarU8ScorePlane) scoreGreedyBestRowIDsPrevalidated(rowIDs []uint32, best int, bestScore float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, float64, bool, error) {
+	if p == nil || !p.ready {
+		return best, bestScore, false, errColumnHNSWPreparedTraversalScorePlaneUnavailable
+	}
+	return p.scorer.scoreGreedyBestRowIDsPrevalidated(rowIDs, best, bestScore, scratch, stats)
+}
+
 func (p *columnHNSWPreparedScalarU8ScorePlane) scoreRawDotOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int64, error) {
 	if p == nil || !p.ready {
 		return 0, errColumnHNSWPreparedTraversalScorePlaneUnavailable
