@@ -406,7 +406,13 @@ func rowsFromGoBench(input namedPath) ([]scoreboardRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse go bench %s: %w", input.Path, err)
 	}
+	if len(samples) == 0 {
+		return nil, fmt.Errorf("parse go bench %s: no benchmark rows found", input.Path)
+	}
 	aggs := aggregateGoBenchSamples(samples)
+	if len(aggs) == 0 {
+		return nil, fmt.Errorf("parse go bench %s: no benchmark aggregates found", input.Path)
+	}
 	rows := make([]scoreboardRow, 0, len(aggs))
 	for _, agg := range aggs {
 		row := classifyGoBenchmark(input, agg)

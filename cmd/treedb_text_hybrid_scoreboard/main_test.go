@@ -64,6 +64,18 @@ func TestCounterValidationFailsClosedForZeroDocRows(t *testing.T) {
 	}
 }
 
+func TestRowsFromGoBenchRejectsEmptyArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty_bench.txt")
+	if err := os.WriteFile(path, []byte("PASS\nok\tgithub.com/snissn/gomap/TreeDB/collections\t0.01s\n"), 0o644); err != nil {
+		t.Fatalf("write empty bench: %v", err)
+	}
+	_, err := rowsFromGoBench(namedPath{Name: "empty", Path: path})
+	if err == nil || !strings.Contains(err.Error(), "no benchmark rows found") {
+		t.Fatalf("rowsFromGoBench err=%v want no benchmark rows found", err)
+	}
+}
+
 func TestBuildReportParsesExternalAndRendersUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	goBench := filepath.Join(dir, "go.txt")
