@@ -262,6 +262,7 @@ stat_key_groups = {
     'delete_range_materialized_keys': ['treedb.cache.delete_range.materialized_keys_total'],
     'delete_range_materialized_key_bytes': ['treedb.cache.delete_range.materialized_key_bytes_total'],
     'delete_range_fast_path_clears': ['treedb.cache.delete_range.fast_path_clears_total'],
+    'delete_range_backend_direct_batches': ['treedb.cache.delete_range.backend_direct_batches_total'],
     'delete_range_backend_direct_keys': ['treedb.cache.delete_range.backend_direct_keys_total'],
 }
 
@@ -276,7 +277,7 @@ delete_range_stat_names = [
     'delete_range_iterators', 'delete_range_backend_iterators', 'delete_range_memtable_iterators',
     'delete_range_queue_iterators', 'delete_range_visited_keys', 'delete_range_tombstone_keys',
     'delete_range_materialized_keys', 'delete_range_materialized_key_bytes',
-    'delete_range_fast_path_clears', 'delete_range_backend_direct_keys',
+    'delete_range_fast_path_clears', 'delete_range_backend_direct_batches', 'delete_range_backend_direct_keys',
 ]
 
 def fmt(n):
@@ -411,10 +412,10 @@ with open(md, 'w') as out:
     if delete_phase_rows:
         out.write('\n## TreeDB DeleteRange counters\n\n')
         out.write('Per-phase DeleteRange counters from TreeDB `Stat()`. Input ranges are submitted non-empty ranges; effective ranges are exact adjacent/overlap-coalesced write-plan ranges; materialized keys are copied into point tombstones by the cached fallback. Full machine-readable counters are in `phase_counters.tsv`.\n\n')
-        out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | backend iters | memtable iters | queue iters | fast clears | backend direct keys |\n')
-        out.write('|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n')
+        out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys |\n')
+        out.write('|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n')
         for r, phase, vals in delete_phase_rows:
-            out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
+            out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
                 r['key_shape'], fmt(r['value_size']), fmt(r['batch_target_bytes']), r['read_integrity'],
                 r['iteration_mode'], r['engine'], phase,
                 fmt(vals['delete_range_calls']), fmt(vals['delete_range_batch_calls']), fmt(vals['delete_range_batch_writes']),
@@ -423,7 +424,8 @@ with open(md, 'w') as out:
                 fmt(vals['delete_range_materialized_key_bytes']), fmt(vals['delete_range_tombstone_keys']),
                 fmt(vals['delete_range_iterators']), fmt(vals['delete_range_backend_iterators']),
                 fmt(vals['delete_range_memtable_iterators']), fmt(vals['delete_range_queue_iterators']),
-                fmt(vals['delete_range_fast_path_clears']), fmt(vals['delete_range_backend_direct_keys'])))
+                fmt(vals['delete_range_fast_path_clears']), fmt(vals['delete_range_backend_direct_batches']),
+                fmt(vals['delete_range_backend_direct_keys'])))
 PY
 
 echo "geth hot KV matrix complete"

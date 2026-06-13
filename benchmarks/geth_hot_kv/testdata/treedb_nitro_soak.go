@@ -996,6 +996,18 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 			if !ok || len(result.StatDelta) == 0 {
 				continue
 			}
+			if !hasAnyStatDeltaValue(result.StatDelta,
+				"treedb.vlog.read.crc32_checks_total", "treedb.cache.vlog_read.crc32_checks_total",
+				"treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits",
+				"treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses",
+				"treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores",
+				"treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits",
+				"treedb.vlog.mmap_read.miss_out_of_range", "treedb.cache.vlog_mmap.read.miss_out_of_range",
+				"treedb.vlog.mmap_read.miss_no_mapping", "treedb.cache.vlog_mmap.read.miss_no_mapping",
+				"treedb.vlog.mmap_read.miss_dead_mapping_cap", "treedb.cache.vlog_mmap.read.miss_dead_mapping_cap",
+				"treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat") {
+				continue
+			}
 			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				run.Engine,
 				run.ReadIntegrity,
@@ -1016,8 +1028,8 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 
 	sb.WriteString("\n## TreeDB DeleteRange counters\n\n")
 	sb.WriteString("Per-phase DeleteRange deltas from TreeDB `Stat()` output. `input ranges` counts submitted non-empty ranges; `effective ranges` counts ranges after exact adjacent/overlap coalescing in the write plan; materialized keys are copied into point tombstones by the cached fallback.\n\n")
-	sb.WriteString("| engine | read integrity | iteration mode | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | backend iters | memtable iters | queue iters | fast clears | backend direct keys |\n")
-	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("| engine | read integrity | iteration mode | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys |\n")
+	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, run := range runs {
 		for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
 			result, ok := run.Phases[phase]
@@ -1036,7 +1048,7 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 				"treedb.cache.delete_range.tombstone_keys_total") {
 				continue
 			}
-			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				run.Engine,
 				run.ReadIntegrity,
 				run.IterationMode,
@@ -1056,6 +1068,7 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.memtable_iterators_total"),
 				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.queue_iterators_total"),
 				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.fast_path_clears_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.backend_direct_batches_total"),
 				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.backend_direct_keys_total"),
 			)
 		}

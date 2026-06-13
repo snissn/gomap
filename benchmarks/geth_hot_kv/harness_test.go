@@ -53,6 +53,7 @@ func TestHarnessExposesReadIntegrityIterationAndCounterLabels(t *testing.T) {
 		"treedb.cache.delete_range.batch_calls_total",
 		"treedb.cache.delete_range.coalesced_ranges_total",
 		"treedb.cache.delete_range.materialized_keys_total",
+		"treedb.cache.delete_range.backend_direct_batches_total",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("harness missing instrumentation label %q", want)
