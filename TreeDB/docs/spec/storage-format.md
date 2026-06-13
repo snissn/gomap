@@ -141,6 +141,81 @@ Collection document payload encodings are defined separately in
 template-v1 collections store compact `TD1D` primary documents and persist the
 template ID map in the collection-local `<collection>/templates` ordered root.
 
+Column-store collections using the non-column retained-payload policy default to
+`semantic-stream-v1`. Insert-batch publication stores compact semantic-stream
+locators in the primary collection root and writes retained scalar streams into
+the collection-local retained semantic-stream side root. Explicit
+`retained_payload_encoding: "template-v1"` remains a supported compatibility
+encoding for non-column retained payloads.
+
+Semantic-stream-v1 retained payload bytes are durable ordered-root values. All
+integer varints below use Go `binary.PutUvarint` encodings.
+
+Primary collection root value:
+
+```text
+bytes[9]   Magic = "crss1loc\0"
+bytes[32]  BlockKey = SHA-256 of the stored side-root block value bytes
+uvarint    Row = zero-based row ordinal inside that block
+```
+
+Retained semantic-stream side root:
+
+```text
+Root name: <collection>/retained/semantic-stream-v1
+Key:       BlockKey
+Value:     StoredBlock
+```
+
+The side-root block key is the SHA-256 digest of the exact stored block value,
+not necessarily the decoded raw block. Blocks contain at most 4096 retained
+documents; single-row insert/update batches still produce one side-root block
+and one primary locator per retained document.
+
+Raw side-root block value:
+
+```text
+bytes[9]  Magic = "crss1blk\0"
+uvarint   RowCount
+uvarint   PathCount
+
+repeated PathCount times:
+  uvarint   SegmentCount
+  repeated SegmentCount times:
+    uvarint   SegmentByteLength
+    bytes     UTF-8 JSON object path segment
+  uvarint   EntryCount
+  repeated EntryCount times:
+    uvarint   RowDelta
+    uvarint   ValueByteLength
+    bytes     Raw retained JSON scalar/object/array bytes for that path row
+```
+
+Paths are sorted by their dot-joined path key. Entries within each path are
+sorted by row; the first `RowDelta` is the absolute row and subsequent
+`RowDelta` values are deltas from the previous row. Retained root documents must
+be JSON objects after declared column paths are removed.
+
+Stored side-root block value:
+
+```text
+bytes[9]  Magic = "crss1blk\0"
+...       Raw block body above
+```
+
+or, when compression is smaller and the raw block is within the implementation
+compression limit:
+
+```text
+bytes[9]  Magic = "crss1zst\0"
+uvarint   DecodedRawBlockByteLength
+bytes     zstd frame for the complete raw "crss1blk\0" block
+```
+
+Decoders must accept both raw `crss1blk\0` blocks and compressed `crss1zst\0`
+wrappers. A `crss1zst\0` wrapper decodes to one complete raw block, and the
+decoded byte length must exactly match `DecodedRawBlockByteLength`.
+
 ## 3.3 Collection Text Index Root Payloads
 
 Collection text-index roots are ordinary ordered roots whose keys and values are

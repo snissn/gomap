@@ -3,6 +3,8 @@ package db
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"reflect"
 	"strconv"
@@ -3279,6 +3281,509 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AcceptsLargeDeltaValueLog
 	}
 	if !bytes.Equal(entry.Value, largeValue) {
 		t.Fatalf("large value mismatch: got %d bytes want %d", len(entry.Value), len(largeValue))
+	}
+}
+
+type orderedRootMixedKeyFamily struct {
+	prefix string
+	count  int
+}
+
+var orderedRootMixedKeyFamilies = []orderedRootMixedKeyFamily{
+	{"like-", 9_000},
+	{"post-", 2_000},
+	{"graph-", 9_000},
+	{"identity-", 1_000},
+}
+
+func newOrderedRootMixedKeyFamilyTable(tb testing.TB) (memtable.Table, []byte) {
+	tb.Helper()
+	total := orderedRootMixedKeyFamilyRowCount()
+	table, values := newOrderedRootMixedKeyFamilyTableRange(tb, 0, total)
+	identityZeroValue := values["identity-0"]
+	if identityZeroValue == nil {
+		tb.Fatal("test fixture did not create identity-0")
+	}
+	return table, identityZeroValue
+}
+
+func orderedRootMixedKeyFamilyRowCount() int {
+	total := 0
+	for _, family := range orderedRootMixedKeyFamilies {
+		total += family.count
+	}
+	return total
+}
+
+func orderedRootMixedKeyFamilyRowKey(row int) string {
+	for _, family := range orderedRootMixedKeyFamilies {
+		if row < family.count {
+			return family.prefix + strconv.Itoa(row)
+		}
+		row -= family.count
+	}
+	return ""
+}
+
+func newOrderedRootMixedKeyFamilyTableRange(tb testing.TB, start, end int) (memtable.Table, map[string][]byte) {
+	tb.Helper()
+	total := orderedRootMixedKeyFamilyRowCount()
+	if start < 0 || end < start || end > total {
+		tb.Fatalf("invalid row range [%d,%d) total=%d", start, end, total)
+	}
+	table := memtable.NewAppendOnlyWithEntryCapacity(total)
+	values := make(map[string][]byte)
+	for row := start; row < end; row++ {
+		key := orderedRootMixedKeyFamilyRowKey(row)
+		if key == "" {
+			tb.Fatalf("missing key for row %d", row)
+		}
+		value := orderedRootSemanticStreamLocatorValueForTest(row)
+		if key == "identity-0" {
+			values[key] = append([]byte(nil), value...)
+		}
+		table.Set([]byte(key), value)
+	}
+	table.Freeze()
+	return table, values
+}
+
+func orderedRootSemanticStreamLocatorValueForTest(row int) []byte {
+	blockKey := sha256.Sum256([]byte("block-" + strconv.Itoa(row/4096)))
+	out := make([]byte, 0, len("crss1loc\x00")+sha256.Size+binary.MaxVarintLen64)
+	out = append(out, []byte("crss1loc\x00")...)
+	out = append(out, blockKey[:]...)
+	out = binary.AppendUvarint(out, uint64(row%4096))
+	return out
+}
+
+func TestPublishOrderedRootValueLogLeavesColdBuildSeekMixedKeyFamilies(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	table, value := newOrderedRootMixedKeyFamilyTable(t)
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          table.NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}})
+	if err != nil {
+		t.Fatalf("publish value-log root: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("identity-0"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(identity-0): %v", err)
+	}
+	if !bytes.Equal(entry.Value, value) {
+		t.Fatalf("identity-0 value len=%d want %d", len(entry.Value), len(value))
+	}
+
+	it, err := snap.IteratorAtRoot(rootIDs[0], []byte("identity-0"), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot(identity-0): %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatalf("seek identity-0 invalid: %v", it.Error())
+	}
+	if got := string(it.UnsafeKey()); got != "identity-0" {
+		t.Fatalf("seek identity-0 landed on %q", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupValueLogLeavesColdBuildSeekMixedKeyFamilies(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	table, value := newOrderedRootMixedKeyFamilyTable(t)
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot:      0,
+		Iter:          table.NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish value-log root: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("identity-0"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(identity-0): %v", err)
+	}
+	if !bytes.Equal(entry.Value, value) {
+		t.Fatalf("identity-0 value len=%d want %d", len(entry.Value), len(value))
+	}
+
+	it, err := snap.IteratorAtRoot(rootIDs[0], []byte("identity-0"), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot(identity-0): %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatalf("seek identity-0 invalid: %v", it.Error())
+	}
+	if got := string(it.UnsafeKey()); got != "identity-0" {
+		t.Fatalf("seek identity-0 landed on %q", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupCommandWALContextValueLogLeavesColdBuildSeekMixedKeyFamilies(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if !db.HasValueLogAppender() {
+		t.Fatal("command-WAL DB did not install value-log appender")
+	}
+
+	table, value := newOrderedRootMixedKeyFamilyTable(t)
+
+	var seenContext bool
+	_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:      0,
+			Iter:          table.NewIterator(nil, nil),
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		}},
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/root-initial", "1"),
+		func(ctx CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error) {
+			seenContext = ctx.AppliedCommandLSN != 0
+			return nil, nil
+		},
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in system builder")
+			}
+			return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("publish value-log root: %v", err)
+	}
+	if !seenContext {
+		t.Fatal("context root builder did not observe command WAL context")
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("identity-0"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(identity-0): %v", err)
+	}
+	if !bytes.Equal(entry.Value, value) {
+		t.Fatalf("identity-0 value len=%d want %d", len(entry.Value), len(value))
+	}
+
+	it, err := snap.IteratorAtRoot(rootIDs[0], []byte("identity-0"), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot(identity-0): %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatalf("seek identity-0 invalid: %v", it.Error())
+	}
+	if got := string(it.UnsafeKey()); got != "identity-0" {
+		t.Fatalf("seek identity-0 landed on %q", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupCommandWALContextValueLogLeavesSplitSeekMixedKeyFamilies(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if !db.HasValueLogAppender() {
+		t.Fatal("command-WAL DB did not install value-log appender")
+	}
+
+	total := orderedRootMixedKeyFamilyRowCount()
+	mid := total / 2
+	first, _ := newOrderedRootMixedKeyFamilyTableRange(t, 0, mid)
+	second, values := newOrderedRootMixedKeyFamilyTableRange(t, mid, total)
+	value := values["identity-0"]
+	if value == nil {
+		t.Fatal("second split did not contain identity-0")
+	}
+
+	publish := func(baseRoot uint64, table memtable.Table, label string) uint64 {
+		t.Helper()
+		var seenContext bool
+		_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
+			[]OrderedRootDeltaPublishInput{{
+				BaseRoot:      baseRoot,
+				Iter:          table.NewIterator(nil, nil),
+				StoragePolicy: OrderedRootStorageValueLogLeaves,
+			}},
+			nil,
+			mustRawKVCommandWALIntent(t, db, "cmd/"+label, "1"),
+			func(ctx CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error) {
+				seenContext = ctx.AppliedCommandLSN != 0
+				return nil, nil
+			},
+			func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				if ctx.AppliedCommandLSN == 0 {
+					t.Fatalf("AppliedCommandLSN=0 in system builder")
+				}
+				return mustFrozenSystemMemtable(t, "sys/"+label, strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("publish %s: %v", label, err)
+		}
+		if !seenContext {
+			t.Fatalf("%s context root builder did not observe command WAL context", label)
+		}
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			t.Fatalf("%s rootIDs=%v want one non-zero root", label, rootIDs)
+		}
+		return rootIDs[0]
+	}
+
+	rootID := publish(0, first, "split-first")
+	rootID = publish(rootID, second, "split-second")
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	entry, err := snap.GetEntryAtRoot(rootID, []byte("identity-0"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(identity-0): %v", err)
+	}
+	if !bytes.Equal(entry.Value, value) {
+		t.Fatalf("identity-0 value len=%d want %d", len(entry.Value), len(value))
+	}
+
+	it, err := snap.IteratorAtRoot(rootID, []byte("identity-0"), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot(identity-0): %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatalf("seek identity-0 invalid: %v", it.Error())
+	}
+	if got := string(it.UnsafeKey()); got != "identity-0" {
+		t.Fatalf("seek identity-0 landed on %q", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchValueLogLeavesColdBuildSeekMixedKeyFamilies(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	table, value := newOrderedRootMixedKeyFamilyTable(t)
+
+	iter := table.NewIterator(nil, nil)
+	delta, err := OrderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:      0,
+		Delta:         delta,
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish value-log root: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("identity-0"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(identity-0): %v", err)
+	}
+	if !bytes.Equal(entry.Value, value) {
+		t.Fatalf("identity-0 value len=%d want %d", len(entry.Value), len(value))
+	}
+
+	it, err := snap.IteratorAtRoot(rootIDs[0], []byte("identity-0"), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot(identity-0): %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatalf("seek identity-0 invalid: %v", it.Error())
+	}
+	if got := string(it.UnsafeKey()); got != "identity-0" {
+		t.Fatalf("seek identity-0 landed on %q", got)
+	}
+}
+
+func TestPublishOrderedRootCommandWALValueLogLeavesSeekAfterMixedKeyMutations(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if !db.HasValueLogAppender() {
+		t.Fatal("command-WAL DB did not install value-log appender")
+	}
+
+	table, value := newOrderedRootMixedKeyFamilyTable(t)
+
+	iter := table.NewIterator(nil, nil)
+	initialDelta, err := OrderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator(initial): %v", err)
+	}
+	defer func() { _ = initialDelta.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:      0,
+		Delta:         initialDelta,
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, mustRawKVCommandWALIntent(t, db, "cmd/root-initial", "1"), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish value-log root: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+	}
+	rootID := rootIDs[0]
+
+	publishSet := func(key string, suffix byte) {
+		t.Helper()
+		deltaTable, err := memtable.NewWithCapacityMode(1, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new delta table: %v", err)
+		}
+		updated := bytes.Repeat([]byte{suffix}, 43)
+		deltaTable.Set([]byte(key), updated)
+		deltaTable.Freeze()
+		iter := deltaTable.NewIterator(nil, nil)
+		delta, err := OrderedRootDeltaBatchFromIterator(iter)
+		_ = iter.Close()
+		if err != nil {
+			t.Fatalf("OrderedRootDeltaBatchFromIterator(%s): %v", key, err)
+		}
+		defer func() { _ = delta.Close() }()
+
+		_, updatedRoots, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot:      rootID,
+			Delta:         delta,
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		}}, mustRawKVCommandWALIntent(t, db, "cmd/"+key, "1"), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		})
+		if err != nil {
+			t.Fatalf("publish delta %s: %v", key, err)
+		}
+		if len(updatedRoots) != 1 || updatedRoots[0] == 0 {
+			t.Fatalf("updatedRoots=%v want one non-zero root", updatedRoots)
+		}
+		rootID = updatedRoots[0]
+	}
+
+	publishSet("post-0", 'p')
+	publishSet("post-1", 'q')
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	entry, err := snap.GetEntryAtRoot(rootID, []byte("identity-0"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(identity-0): %v", err)
+	}
+	if !bytes.Equal(entry.Value, value) {
+		t.Fatalf("identity-0 value len=%d want %d", len(entry.Value), len(value))
+	}
+
+	it, err := snap.IteratorAtRoot(rootID, []byte("identity-0"), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot(identity-0): %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatalf("seek identity-0 invalid: %v", it.Error())
+	}
+	if got := string(it.UnsafeKey()); got != "identity-0" {
+		t.Fatalf("seek identity-0 landed on %q", got)
 	}
 }
 

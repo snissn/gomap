@@ -2093,6 +2093,15 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		keyArena = append(keyArena, src...)
 		return keyArena[start : start+len(src)]
 	}
+	childLowKeyForOps := func(lowKey []byte, childOps []batch.Entry) []byte {
+		if len(lowKey) == 0 || len(childOps) == 0 {
+			return lowKey
+		}
+		if bytes.Compare(childOps[0].Key, lowKey) < 0 {
+			return childOps[0].Key
+		}
+		return lowKey
+	}
 
 	target := builder
 	appendInternalMaybeCopied := func(sourceIndex uint16, key []byte, childRef page.ChildRef, first bool, copySourceLeafLog bool) error {
@@ -2187,12 +2196,13 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				break
 			}
 			childOps := ops[startOpIdx:opIdx]
-			childRanges := deleteRangesForSpan(ranges, lowKey, childHigh)
+			childLowKey := childLowKeyForOps(lowKey, childOps)
+			childRanges := deleteRangesForSpan(ranges, childLowKey, childHigh)
 
 			newChildRef := curChild
 			var childSplits []Split
 			if len(childOps) > 0 || len(childRanges) > 0 {
-				newChildRef, childSplits, err = z.writeRecursive(curChild, childOps, childRanges, maintenance, budget, metrics, lowKey, childHigh, retired, scratch, false)
+				newChildRef, childSplits, err = z.writeRecursive(curChild, childOps, childRanges, maintenance, budget, metrics, childLowKey, childHigh, retired, scratch, false)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
@@ -2203,7 +2213,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 					return page.ChildRef{}, nil, err
 				}
 			} else {
-				if err := appendInternal(lowKey, newChildRef, firstEntry); err != nil {
+				if err := appendInternal(childLowKey, newChildRef, firstEntry); err != nil {
 					return page.ChildRef{}, nil, err
 				}
 			}
@@ -2266,6 +2276,10 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			break
 		}
 		children[i].ops = ops[startOpIdx:opIdx]
+		if len(children[i].ops) > 0 {
+			children[i].low = childLowKeyForOps(children[i].low, children[i].ops)
+			children[i].key = children[i].low
+		}
 	}
 
 	activeChildren := 0

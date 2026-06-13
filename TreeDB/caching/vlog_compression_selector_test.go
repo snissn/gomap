@@ -1005,6 +1005,10 @@ func TestValueLogPayloadLooksRetainedLikeSemanticStreamBlock(t *testing.T) {
 	if !valueLogPayloadLooksRetainedJSONLike(block) {
 		t.Fatalf("semantic-stream-v1 block was not classified as retained-like")
 	}
+	zstdBlock := append([]byte("crss1zst\x00"), bytes.Repeat([]byte{0x7f}, 1024)...)
+	if !valueLogPayloadLooksRetainedJSONLike(zstdBlock) {
+		t.Fatalf("semantic-stream-v1 zstd block was not classified as retained-like")
+	}
 
 	locator := append([]byte("crss1loc\x00"), bytes.Repeat([]byte{0x7f}, 40)...)
 	if valueLogPayloadLooksRetainedJSONLike(locator) {
@@ -1019,6 +1023,12 @@ func TestRetainedStorageFirstValueLogAutoDetectsSemanticStreamBlocks(t *testing.
 
 	if !db.retainedStorageFirstValueLogAuto(0, 0, records) {
 		t.Fatalf("semantic-stream-v1 block did not select retained storage-first value-log compression")
+	}
+
+	zstdBlock := append([]byte("crss1zst\x00"), bytes.Repeat([]byte{0x42}, 1024)...)
+	zstdRecords := []valuelog.Record{{Value: zstdBlock}}
+	if !db.retainedStorageFirstValueLogAuto(0, 0, zstdRecords) {
+		t.Fatalf("semantic-stream-v1 zstd block did not select retained storage-first value-log compression")
 	}
 }
 

@@ -359,11 +359,12 @@ CPU/allocation profiles. Omit it, or pass `all`, for the default full
 q1-q5/q5_metadata suite. Duplicate query names are rejected so benchprof
 tables and artifact labels stay unambiguous.
 
-Use `-column-store-retained-payload-encoding semantic-stream-v1`, or set
-`TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING=semantic-stream-v1`, to run the
-opt-in retained-payload semantic stream candidate for storage-parity evidence.
-The default remains `template-v1`, and `b_tree_index_baseline` still keeps full
-retained JSON so that index-baseline comparisons remain unchanged.
+Column-store non-column retained payloads default to `semantic-stream-v1` so the
+production storage-parity path uses retained semantic-stream side-root blocks.
+Use `-column-store-retained-payload-encoding template-v1`, or set
+`TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING=template-v1`, to run the legacy
+template-v1 retained-payload path for comparison. `b_tree_index_baseline` still
+keeps full retained JSON so that index-baseline comparisons remain unchanged.
 
 The suite writes:
 
