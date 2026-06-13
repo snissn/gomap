@@ -348,6 +348,13 @@ class StorageAuditTest(unittest.TestCase):
                     "db_dir": str(Path(tmp) / "db"),
                     "retained_payload_audit_cmd": str(script),
                     "retained_payload_audit_limit": 0,
+                    "retained_payload_shape_stats": True,
+                    "retained_payload_shape_max_depth": 9,
+                    "retained_payload_shape_max_paths": 17,
+                    "retained_payload_value_family_stats": True,
+                    "retained_payload_value_family_max_depth": 7,
+                    "retained_payload_value_family_max_paths": 19,
+                    "retained_payload_value_family_max_unique": 23,
                     "skip_retained_payload_audit": False,
                 },
             )()
@@ -361,6 +368,13 @@ class StorageAuditTest(unittest.TestCase):
         self.assertIn("-paths", retained["command"])
         db_dir_index = retained["command"].index("-db-dir") + 1
         self.assertEqual(retained["command"][db_dir_index], str(main.resolve()))
+        self.assertIn("-shape-stats", retained["command"])
+        self.assertIn("-value-family-stats", retained["command"])
+        self.assertEqual(retained["command"][retained["command"].index("-shape-max-depth") + 1], "9")
+        self.assertEqual(retained["command"][retained["command"].index("-shape-max-paths") + 1], "17")
+        self.assertEqual(retained["command"][retained["command"].index("-value-family-max-depth") + 1], "7")
+        self.assertEqual(retained["command"][retained["command"].index("-value-family-max-paths") + 1], "19")
+        self.assertEqual(retained["command"][retained["command"].index("-value-family-max-unique") + 1], "23")
 
     def test_retained_payload_audit_runs_without_collection_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

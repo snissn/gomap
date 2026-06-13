@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -224,6 +225,103 @@ func TestAuditCollectionRetainedPayloadShapeStatsTemplateV12662(t *testing.T) {
 	}
 }
 
+func TestAuditCollectionRetainedPayloadValueFamilyStats2662(t *testing.T) {
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, jsonbenchRetainedPayloadAuditConfig2382(true), [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"subject":{"uri":"at://did:plc:alice/app.bsky.feed.post/3aaa"}}},"payload":"same","empty":""}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"subject":{"uri":"at://did:plc:bob/app.bsky.feed.post/3bbb"}}},"payload":"same","empty":""}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeValueFamilyStats: true,
+		ValueFamilyMaxDepth:     8,
+		ValueFamilyMaxUnique:    10,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent value family stats: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || audit.CheckedRows != 2 {
+		t.Fatalf("audit=%+v want passed two rows", audit)
+	}
+	if len(audit.RetainedPayloadValueFamilies) == 0 || audit.RetainedPayloadValueFamiliesTruncated {
+		t.Fatalf("value families=%+v truncated=%v", audit.RetainedPayloadValueFamilies, audit.RetainedPayloadValueFamiliesTruncated)
+	}
+	rkey, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "commit.rkey")
+	if !ok {
+		t.Fatalf("missing commit.rkey value-family stat: %+v", audit.RetainedPayloadValueFamilies)
+	}
+	if rkey.Occurrences != 2 || rkey.Documents != 2 || rkey.StringBytes != int64(len("r-0001")+len("r-0002")) {
+		t.Fatalf("commit.rkey stat=%+v", rkey)
+	}
+	if rkey.JSONBytes <= rkey.StringBytes || rkey.OracleInputBytes != rkey.JSONBytes+rkey.Occurrences {
+		t.Fatalf("commit.rkey encoded byte counters=%+v", rkey)
+	}
+	if rkey.MinLength != 6 || rkey.MaxLength != 6 || rkey.MeanLength != 6 {
+		t.Fatalf("commit.rkey lengths=%+v", rkey)
+	}
+	if rkey.TrackedUniqueValues != 2 || rkey.UniqueValuesTruncated || rkey.RepeatedValues != 0 {
+		t.Fatalf("commit.rkey unique counters=%+v", rkey)
+	}
+	if rkey.CommonPrefix != "r-000" || rkey.CommonPrefixBytes != len("r-000") {
+		t.Fatalf("commit.rkey common prefix=%q/%d", rkey.CommonPrefix, rkey.CommonPrefixBytes)
+	}
+	if retainedPayloadValueFamilyBucketCount2662(rkey.LengthBuckets, "le_8") != 2 {
+		t.Fatalf("commit.rkey length buckets=%+v", rkey.LengthBuckets)
+	}
+	if rkey.GzipBytes <= 0 || rkey.GzipToInputRatio <= 0 || rkey.ZSTDBytes <= 0 || rkey.ZSTDToInputRatio <= 0 {
+		t.Fatalf("commit.rkey compression oracle counters=%+v", rkey)
+	}
+
+	payload, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "payload")
+	if !ok || payload.TrackedUniqueValues != 1 || payload.RepeatedValues != 1 || payload.CommonPrefix != "same" || payload.CommonSuffix != "same" {
+		t.Fatalf("payload repeated-family stat=%+v ok=%v", payload, ok)
+	}
+	subjectURI, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "commit.record.subject.uri")
+	if !ok || subjectURI.CommonPrefix != "at://did:plc:" || subjectURI.CommonPrefixBytes != len("at://did:plc:") {
+		t.Fatalf("subject uri family stat=%+v ok=%v", subjectURI, ok)
+	}
+	empty, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "empty")
+	if !ok || empty.MinLength != 0 || empty.MaxLength != 0 || empty.MeanLength != 0 || empty.StringBytes != 0 {
+		t.Fatalf("empty string family stat=%+v ok=%v", empty, ok)
+	}
+	emptyJSON, err := json.Marshal(empty)
+	if err != nil {
+		t.Fatalf("marshal empty string family stat: %v", err)
+	}
+	if !strings.Contains(string(emptyJSON), `"min_length":0`) || !strings.Contains(string(emptyJSON), `"max_length":0`) || !strings.Contains(string(emptyJSON), `"mean_length":0`) {
+		t.Fatalf("empty string family JSON omitted zero length fields: %s", emptyJSON)
+	}
+	if _, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "kind"); ok {
+		t.Fatalf("declared kind path leaked into value-family stats: %+v", audit.RetainedPayloadValueFamilies)
+	}
+	if _, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "commit.operation"); ok {
+		t.Fatalf("declared commit.operation path leaked into value-family stats: %+v", audit.RetainedPayloadValueFamilies)
+	}
+
+	uniqueLimited, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeValueFamilyStats: true,
+		ValueFamilyMaxUnique:    1,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent unique-limited value families: %v audit=%+v", err, uniqueLimited)
+	}
+	rkeyLimited, ok := retainedPayloadValueFamilyStat2662(uniqueLimited.RetainedPayloadValueFamilies, "commit.rkey")
+	if !ok || rkeyLimited.TrackedUniqueValues != 1 || !rkeyLimited.UniqueValuesTruncated {
+		t.Fatalf("unique-limited commit.rkey stat=%+v ok=%v", rkeyLimited, ok)
+	}
+
+	pathLimited, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeValueFamilyStats: true,
+		ValueFamilyMaxPaths:     1,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent path-limited value families: %v audit=%+v", err, pathLimited)
+	}
+	if !pathLimited.RetainedPayloadValueFamiliesTruncated || len(pathLimited.RetainedPayloadValueFamilies) != 1 {
+		t.Fatalf("path-limited value families=%+v truncated=%v want one truncated row", pathLimited.RetainedPayloadValueFamilies, pathLimited.RetainedPayloadValueFamiliesTruncated)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentFailsClosed2382(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(false)
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
@@ -337,6 +435,24 @@ func retainedPayloadShapeStat2382(stats []ColumnRetainedPayloadShapePathStat, pa
 		}
 	}
 	return ColumnRetainedPayloadShapePathStat{}, false
+}
+
+func retainedPayloadValueFamilyStat2662(stats []ColumnRetainedPayloadValueFamilyStat, path string) (ColumnRetainedPayloadValueFamilyStat, bool) {
+	for _, stat := range stats {
+		if stat.Path == path {
+			return stat, true
+		}
+	}
+	return ColumnRetainedPayloadValueFamilyStat{}, false
+}
+
+func retainedPayloadValueFamilyBucketCount2662(buckets []ColumnRetainedPayloadLengthBucket, name string) int64 {
+	for _, bucket := range buckets {
+		if bucket.Bucket == name {
+			return bucket.Count
+		}
+	}
+	return 0
 }
 
 func jsonbenchRetainedPayloadAuditConfig2382(includeOperation bool) *ColumnStoreConfig {
