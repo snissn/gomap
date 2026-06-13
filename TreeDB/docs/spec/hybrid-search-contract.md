@@ -77,7 +77,9 @@ depend on a scan-all-documents fallback.
 - `Fusion`: deterministic fusion options. Supported methods are reciprocal-rank
   fusion (`rrf`), weighted reciprocal-rank fusion (`weighted_rrf`), and exact
   per-source min/max normalized score fusion (`normalized_score`). `RRFK=0`
-  means the implementation default of `60`; zero source weights default to `1`.
+  means the implementation default of `60`; source weights are ignored by plain
+  `rrf` and apply only to `weighted_rrf`/`normalized_score`, where zero weights
+  default to `1`.
 - `ResultMode`: `score_only`, `compact`, or `full`. The zero value preserves the
   legacy behavior: `compact` unless `IncludeDocuments=true`, which selects
   `full`.
@@ -109,9 +111,14 @@ broad filters that exceed the bound still fail closed with
 posting-block scans so scalar-filtered candidate generation can score only
 allowed documents while preserving the single-snapshot, zero-document-fetch
 contract. Vector candidate generation consumes selective bounded allow-sets on a
-no-document exact score route when the allow-set cardinality is no larger than
-the configured vector candidate budget; broader allow-sets stay on the existing
-vector candidate route plus bounded ID filtering rather than fetching documents.
+no-document exact score route only when both the allow-set cardinality is no
+larger than the configured vector candidate budget and the vector index row count
+is within the implementation's exact allow-set scan budget. Broader allow-sets or
+larger vector indexes stay on the existing global vector candidate route plus
+bounded ID filtering rather than fetching documents. In that fallback route,
+scalar-allowed vector hits outside the global vector candidate budget may be
+omitted; callers that need stricter scalar-filtered vector recall must choose a
+larger vector candidate budget or wait for an ID-to-vector-ordinal lookup route.
 
 ## Candidate and result shape
 
@@ -161,14 +168,19 @@ attribution, debugging, reranking seams, and future fusion methods.
 The default fusion method is reciprocal-rank fusion:
 
 ```text
-rrf_contribution = source_weight / (RRFK + SourceRank)
+rrf_contribution = 1 / (RRFK + SourceRank)
 fused_score = sum(rrf_contribution for every contributing source)
 ```
 
+Plain `rrf` ignores `TextWeight` and `VectorWeight`. `weighted_rrf` uses the
+same denominator with explicit source weights:
+
+```text
+weighted_rrf_contribution = source_weight / (RRFK + SourceRank)
+```
+
 Source weights are `1.0` for text and `1.0` for vector when their option fields
-are zero. `weighted_rrf` uses the same RRF formula with explicit source weights;
-`rrf` remains the baseline/default spelling and also honors non-zero weights for
-callers that set them directly.
+are zero for weighted methods.
 
 `normalized_score` is exact over the supplied bounded candidate lists. It builds
 one finite min/max native-score range per source, normalizes each source score as
