@@ -615,6 +615,31 @@ func TestColumnRetainedSemanticStreamV1StoredBlockZSTDWrapper2662(t *testing.T) 
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1StoredBlockZSTDRawLimitFallback2662(t *testing.T) {
+	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock([][]byte{
+		[]byte(`{"payload":"same","commit":{"record":{"text":"same retained body"}}}`),
+		[]byte(`{"payload":"same","commit":{"record":{"text":"same retained body"}}}`),
+	})
+	if err != nil {
+		t.Fatalf("encode raw semantic-stream-v1 block: %v", err)
+	}
+
+	stored, err := encodeColumnRetainedSemanticStreamV1StoredBlockWithRawLimit(raw, len(raw)-1)
+	if err != nil {
+		t.Fatalf("encode stored semantic-stream-v1 block: %v", err)
+	}
+	if !bytes.Equal(stored, raw) {
+		t.Fatalf("stored block len=%d raw=%d want raw fallback when decoded length exceeds wrapper limit", len(stored), len(raw))
+	}
+	decoded, err := decodeColumnRetainedSemanticStreamV1StoredBlock(stored)
+	if err != nil {
+		t.Fatalf("decode raw fallback semantic-stream-v1 block: %v", err)
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Fatalf("decoded raw fallback mismatch len=%d raw=%d", len(decoded), len(raw))
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1StoredBlockZSTDFailsClosed2662(t *testing.T) {
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock([][]byte{[]byte(`{"payload":"same"}`), []byte(`{"payload":"same"}`)})
 	if err != nil {

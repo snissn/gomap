@@ -25,6 +25,10 @@ const defaultColumnRetainedSemanticStreamV1DecodeCacheBlocks = 16
 const minColumnRetainedSemanticStreamV1DecodeCacheRows = 64
 
 var (
+	// Side-root retained blocks are stored either as a decoded semantic-stream
+	// block (`crss1blk\0`) or as a zstd stored-block wrapper (`crss1zst\0`).
+	// The wrapper payload is: magic, uvarint decoded crss1blk byte length, and
+	// a zstd frame containing that complete raw crss1blk block.
 	columnRetainedSemanticStreamV1BlockMagic     = []byte("crss1blk\x00")
 	columnRetainedSemanticStreamV1BlockZSTDMagic = []byte("crss1zst\x00")
 	columnRetainedSemanticStreamV1LocatorMagic   = []byte("crss1loc\x00")
@@ -692,8 +696,15 @@ func encodeColumnRetainedSemanticStreamV1RawBlock(documents [][]byte) ([]byte, e
 }
 
 func encodeColumnRetainedSemanticStreamV1StoredBlock(raw []byte) ([]byte, error) {
+	return encodeColumnRetainedSemanticStreamV1StoredBlockWithRawLimit(raw, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes)
+}
+
+func encodeColumnRetainedSemanticStreamV1StoredBlockWithRawLimit(raw []byte, compressedRawLimit int) ([]byte, error) {
 	if !bytes.HasPrefix(raw, columnRetainedSemanticStreamV1BlockMagic) {
 		return nil, errors.New("collections: retained block is not semantic-stream-v1 encoded")
+	}
+	if compressedRawLimit > 0 && len(raw) > compressedRawLimit {
+		return raw, nil
 	}
 	enc, err := zstd.NewWriter(nil,
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
