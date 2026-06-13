@@ -2387,7 +2387,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		GraphTraversalNanos:                   searchStats.GraphTraversalNanos,
 	}
 	if searchStats.WorkAccountingSearches != 0 {
-		stats.FP32ScoreCalls = searchStats.PreparedScoreCalls
+		stats.FP32ScoreCalls = searchStats.FP32ScoreCalls
 		stats.ExactRerankScoreCalls = searchStats.QuantizedRerankExactScoreCalls
 		stats.HeapPushes = searchStats.FrontierPushes
 		stats.HeapPops = searchStats.FrontierPops

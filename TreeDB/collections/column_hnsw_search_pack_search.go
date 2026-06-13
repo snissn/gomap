@@ -383,6 +383,7 @@ func (v *columnHNSWSearchPackPreparedView) recordScoreStats(stats *columnVectorG
 	}
 	count64 := uint64(count)
 	stats.PreparedScoreCalls += count64
+	stats.FP32ScoreCalls += count64
 	stats.VisitedNodes += count64
 	stats.CandidateFetches += count64
 	stats.VectorBytesRead += count64 * uint64(v.Header.Dimensions) * 4

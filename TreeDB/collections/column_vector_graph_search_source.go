@@ -200,6 +200,7 @@ func (s *columnVectorGraphSearchSource) scoreOrdinal(plan *columnVectorGraphSear
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
 		stats.VisitedNodes++
+		stats.FP32ScoreCalls++
 		stats.BlockViewHits = plan.hits
 		stats.BlockViewMisses = plan.misses
 		stats.BlockViewBuilds = plan.builds
@@ -218,7 +219,9 @@ func (s *columnVectorGraphSearchSource) scoreOrdinal(plan *columnVectorGraphSear
 		stats.VectorBytesRead += uint64(len(vector)) * 4
 		stats.NormBytesRead += 4
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, vector, invNorm)
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	if err != nil {
 		return 0, err
 	}
@@ -311,7 +314,9 @@ func (s *columnVectorGraphSearchSource) scoreOrdinalsIndexed(plan *columnVectorG
 			rowIDs[i] = uint32(loc.rowIndex)
 		}
 		dots := scratch.scoreTileDots[:runLen]
+		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 		status := vectorops.DotFloat32Indexed(dots, part.values, query, rowIDs, s.dims)
+		columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 		if status.Invalid || status.Rows != runLen {
 			return dst, false, nil
 		}
@@ -344,6 +349,7 @@ func (s *columnVectorGraphSearchSource) scoreOrdinalsIndexed(plan *columnVectorG
 		stats.ScoreBatchOptimizedCalls += optimizedCalls
 		stats.ScoreBatchScalarFallbackCalls += scalarFallbackCalls
 		stats.VisitedNodes += uint64(len(ordinals))
+		stats.FP32ScoreCalls += uint64(len(ordinals))
 		stats.CandidateFetches += uint64(len(ordinals))
 		stats.VectorBytesRead += uint64(len(ordinals) * s.dims * 4)
 		stats.NormBytesRead += uint64(len(ordinals) * 4)

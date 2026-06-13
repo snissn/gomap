@@ -371,6 +371,7 @@ type columnVectorGraphNativeSearchStats struct {
 	ScoreBatchOptimizedCalls             uint64
 	ScoreBatchScalarFallbackCalls        uint64
 	PreparedScoreCalls                   uint64
+	FP32ScoreCalls                       uint64
 	QuantizedScoreCalls                  uint64
 	QuantizedCodeBytesRead               uint64
 	QuantizedRerankCandidates            uint64
@@ -1003,6 +1004,7 @@ func (c *columnVectorGraphPreparedMinimalSearchCounters) publish(stats *columnVe
 	stats.ScoreBatchOptimizedCalls += c.ScoreBatchOptimizedCalls
 	stats.ScoreBatchScalarFallbackCalls += c.ScoreBatchScalarFallbackCalls
 	stats.PreparedScoreCalls += c.PreparedScoreCalls
+	stats.FP32ScoreCalls += c.PreparedScoreCalls
 	stats.VisitedNodes += c.PreparedScoreCalls
 	stats.VectorBytesRead += c.PreparedScoreCalls * uint64(c.dims) * 4
 	stats.NormBytesRead += c.PreparedScoreCalls * 4
@@ -2414,6 +2416,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVect
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
 		stats.VisitedNodes++
+		stats.FP32ScoreCalls++
 		stats.BlockViewHits = plan.hits
 		stats.BlockViewMisses = plan.misses
 		stats.BlockViewBuilds = plan.builds
@@ -2456,7 +2459,9 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVect
 		stats.VectorBytesRead += uint64(len(vector)) * 4
 		stats.NormBytesRead += 4
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, vector, invNorm)
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	if err != nil {
 		return 0, err
 	}
