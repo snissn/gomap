@@ -863,6 +863,12 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 
 	foundCount := 0
 	var retainedArena []byte
+	var cfg ColumnStoreConfig
+	resolveRetained := false
+	if v.catalog != nil && v.catalog.meta.Options.ColumnStore != nil {
+		cfg = v.catalog.meta.Options.ColumnStore.copy()
+		resolveRetained = columnStoreRetainedPayloadUsesSemanticStreamV1(&cfg)
+	}
 	err := collectionGetManyViewAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), ids, func(i int, _ []byte, value []byte, found bool) error {
 		if i < 0 || i >= len(ids) {
 			return fmt.Errorf("collections: GetManyView callback index %d outside %d ids", i, len(ids))
@@ -872,6 +878,13 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 			return nil
 		}
 		response.Results[i].Found = true
+		if resolveRetained {
+			resolved, err := resolveColumnRetainedPayloadAtSnapshot(v.snapshot, v.catalog, cfg, value)
+			if err != nil {
+				return err
+			}
+			value = resolved
+		}
 		if len(value) == 0 {
 			retained[i] = []byte{}
 		} else {

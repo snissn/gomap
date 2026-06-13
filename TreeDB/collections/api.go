@@ -5090,13 +5090,12 @@ func pointerizeCollectionRunTableValuesForRoot(db *backenddb.DB, meta Collection
 }
 
 func collectionValueLogInlineThresholdResolverForRoot(db *backenddb.DB, meta CollectionMeta, rootName string) func([]byte) int {
-	if db == nil || !collectionRootStoresRetainedPayloadBodies(meta, rootName) {
+	if db == nil || (!collectionRootStoresRetainedPayloadBodies(meta, rootName) && !collectionRootStoresRetainedSemanticStreamBlocks(meta, rootName)) {
 		return nil
 	}
 	return func([]byte) int {
-		// Retained payload bodies are the residual/original document bytes for this
-		// primary root. Keep them out of leaf pages regardless of document-body
-		// representation; empty retained bodies still remain inline.
+		// Retained payload bodies and semantic stream blocks are persistent value-log
+		// payloads. Keep them out of leaf pages; empty values still remain inline.
 		return 0
 	}
 }
@@ -5107,6 +5106,9 @@ func collectionRootStoresRetainedPayloadBodies(meta CollectionMeta, rootName str
 	}
 	cfg := meta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled {
+		return false
+	}
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(cfg) {
 		return false
 	}
 	switch columnRetainedPayloadAuditPolicy(cfg) {
@@ -5120,6 +5122,12 @@ func collectionRootStoresRetainedPayloadBodies(meta CollectionMeta, rootName str
 		// out of leaf pages rather than silently inlining it.
 		return true
 	}
+}
+
+func collectionRootStoresRetainedSemanticStreamBlocks(meta CollectionMeta, rootName string) bool {
+	return rootName != "" &&
+		rootName == collectionRetainedSemanticStreamRootName(meta.Name) &&
+		columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore)
 }
 
 func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memtable.Table, opts collectionPointerizeOptions) (memtable.Table, bool, error) {
@@ -5336,10 +5344,14 @@ func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, meta CollectionMeta, pl
 }
 
 func collectionDataRootNameSet(meta CollectionMeta) map[string]struct{} {
-	return map[string]struct{}{
+	out := map[string]struct{}{
 		collectionPrimaryRootName(meta.Name):  {},
 		collectionTemplateRootName(meta.Name): {},
 	}
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+		out[collectionRetainedSemanticStreamRootName(meta.Name)] = struct{}{}
+	}
+	return out
 }
 
 func pointerizeCollectionDataRootDeltaTables(db *backenddb.DB, meta CollectionMeta, rootNames []string, tables []memtable.Table) ([]memtable.Table, func(), error) {
@@ -10288,17 +10300,19 @@ func (c *Collection) insertBatchNoIndex(
 
 	var retainedDocuments [][]byte
 	var retainedTemplateRecords []templateV1Record
+	var retainedSemanticStreamBlocks memtable.Table
 	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
 		fullDocuments := make([][]byte, len(entries))
 		for i := range entries {
 			fullDocuments[i] = entries[i].document
 		}
-		prepared, err := prepareColumnRetainedPayloadStorageDocuments(*c.meta.Options.ColumnStore, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(*c.meta.Options.ColumnStore, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
 		if err != nil {
 			return nil, err
 		}
 		retainedDocuments = prepared.documents
 		retainedTemplateRecords = prepared.templateRecords
+		retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
 	}
 
 	phaseStart = time.Now()
@@ -10365,6 +10379,38 @@ func (c *Collection) insertBatchNoIndex(
 				StoragePolicy: run.storagePolicy,
 			})
 		}
+	}
+	var retainedSemanticStreamTables []memtable.Table
+	var retainedSemanticStreamIters []iterator.UnsafeIterator
+	defer func() {
+		for _, it := range retainedSemanticStreamIters {
+			_ = it.Close()
+		}
+		resetCollectionTables(retainedSemanticStreamTables)
+	}()
+	if retainedSemanticStreamBlocks != nil && retainedSemanticStreamBlocks.Len() > 0 {
+		streamRootName := collectionRetainedSemanticStreamRootName(c.meta.Name)
+		streamPolicy, err := collectionRootStoragePolicyForDB(c.db, c.meta, streamRootName)
+		if err != nil {
+			return nil, err
+		}
+		streamPublishTable := retainedSemanticStreamBlocks
+		retainedSemanticStreamTables = append(retainedSemanticStreamTables, retainedSemanticStreamBlocks)
+		if pointerizedStreamTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, streamRootName, retainedSemanticStreamBlocks); err != nil {
+			return nil, err
+		} else if pointerized {
+			streamPublishTable = pointerizedStreamTable
+			retainedSemanticStreamTables = append(retainedSemanticStreamTables, pointerizedStreamTable)
+		}
+		streamIter := streamPublishTable.NewIterator(nil, nil)
+		retainedSemanticStreamIters = append(retainedSemanticStreamIters, streamIter)
+		rootNames = append(rootNames, streamRootName)
+		baseRootIDs[streamRootName] = catalog.rootID(streamRootName)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      catalog.rootID(streamRootName),
+			Iter:          streamIter,
+			StoragePolicy: streamPolicy,
+		})
 	}
 	var textTables []memtable.Table
 	var textIters []iterator.UnsafeIterator
@@ -19750,7 +19796,11 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		if err != nil {
 			return false, err
 		}
-		_, reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(nil, columnStoreConfig, record.Document, visibleRows[visiblePos], fullValues, nil, nil, retainedTemplateResolver)
+		retainedDocument, err := resolveColumnRetainedPayloadAtSnapshot(snap, catalog, columnStoreConfig, record.Document)
+		if err != nil {
+			return false, err
+		}
+		_, reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(nil, columnStoreConfig, retainedDocument, visibleRows[visiblePos], fullValues, nil, nil, retainedTemplateResolver)
 		if err != nil {
 			return false, err
 		}
@@ -19922,6 +19972,10 @@ func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, roo
 	case collectionColumnManifestRootName(meta.Name):
 		if meta.Options.ColumnStore != nil {
 			return backendRootStoragePolicy(meta.Options.ColumnStore.ControlRootStoragePolicy)
+		}
+	case collectionRetainedSemanticStreamRootName(meta.Name):
+		if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+			return backendCollectionDataRootStoragePolicy(db, meta.Options.DataRootStoragePolicy)
 		}
 	}
 	for _, idx := range meta.Indexes {
@@ -20993,6 +21047,9 @@ func collectionRootNames(meta CollectionMeta) []string {
 	if meta.Options.ColumnStore != nil && meta.Options.ColumnStore.Enabled {
 		out = append(out, collectionColumnManifestRootName(meta.Name))
 	}
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+		out = append(out, collectionRetainedSemanticStreamRootName(meta.Name))
+	}
 	for _, idx := range meta.Indexes {
 		out = append(out, collectionSecondaryRootName(meta.Name, idx.Name))
 	}
@@ -21019,6 +21076,10 @@ func collectionIndexStateRootName(collection string) string {
 
 func collectionColumnManifestRootName(collection string) string {
 	return collection + "/column/manifest"
+}
+
+func collectionRetainedSemanticStreamRootName(collection string) string {
+	return collection + "/retained/semantic-stream-v1"
 }
 
 func collectionSecondaryRootName(collection, indexName string) string {

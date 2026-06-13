@@ -335,6 +335,126 @@ func TestColumnRetainedPayloadTemplateV1PackedAppendMismatchFailsClosed(t *testi
 	}
 }
 
+func TestColumnRetainedPayloadSemanticStreamV1InsertBatchRoundTripReopen(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids, docs := retainedSemanticStreamDocuments(96)
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	blockKey, row, ptr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[17])
+	if len(blockKey) == 0 || row != 17 {
+		t.Fatalf("semantic locator block_key_len=%d row=%d want row 17", len(blockKey), row)
+	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		t.Fatalf("semantic stream block pointer file id=%d is not value-log backed", ptr.FileID)
+	}
+	if got, err := col.Get(ids[17]); err != nil {
+		t.Fatalf("Get semantic stream doc: %v", err)
+	} else {
+		assertRetainedSemanticStreamDocument(t, got, 17)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	response, err := view.FetchDocumentsByID([][]byte{ids[17], ids[42]}, DocumentFetchOptions{})
+	closeErr := view.Close()
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID: %v", err)
+	}
+	if closeErr != nil {
+		t.Fatalf("Close read view: %v", closeErr)
+	}
+	if len(response.Results) != 2 || !response.Results[0].Found || !response.Results[1].Found {
+		t.Fatalf("FetchDocumentsByID results=%+v", response.Results)
+	}
+	assertRetainedSemanticStreamDocument(t, response.Results[0].Document, 17)
+	assertRetainedSemanticStreamDocument(t, response.Results[1].Document, 42)
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = reopen.Close() }()
+	reopenedCol := openColumnRetainedPlacementCollection(t, reopen, "events")
+	if got, err := reopenedCol.Get(ids[17]); err != nil {
+		t.Fatalf("Get semantic stream doc after reopen: %v", err)
+	} else {
+		assertRetainedSemanticStreamDocument(t, got, 17)
+	}
+	_, reopenedRow, reopenedPtr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, reopen, "events", ids[17])
+	if reopenedRow != row || reopenedPtr != ptr {
+		t.Fatalf("semantic stream locator changed after reopen: row/ptr got %d/%+v want %d/%+v", reopenedRow, reopenedPtr, row, ptr)
+	}
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1SideRootRewrite(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids, docs := retainedSemanticStreamDocuments(64)
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch first block: %v", err)
+	}
+	_, _, ptr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[8])
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close after first block: %v", err)
+	}
+
+	d = openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	col = openColumnRetainedPlacementCollection(t, d, "events")
+	moreIDs, moreDocs := retainedSemanticStreamDocumentsFrom(64, 8)
+	if _, err := col.InsertBatch(moreIDs, moreDocs); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch second block: %v", err)
+	}
+	rewriteStats, err := d.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptr.FileID},
+		BatchSize:     1,
+	})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if rewriteStats.RecordsCopied == 0 {
+		_ = d.Close()
+		t.Fatalf("ValueLogRewriteOnline copied no semantic stream records: %+v", rewriteStats)
+	}
+	_, _, rewrittenPtr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[8])
+	if rewrittenPtr.FileID == ptr.FileID {
+		_ = d.Close()
+		t.Fatalf("semantic stream block pointer still references rewrite source segment %d", ptr.FileID)
+	}
+	if got, err := col.Get(ids[8]); err != nil {
+		_ = d.Close()
+		t.Fatalf("Get semantic stream doc after rewrite: %v", err)
+	} else {
+		assertRetainedSemanticStreamDocument(t, got, 8)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close after rewrite: %v", err)
+	}
+
+	reopen := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = reopen.Close() }()
+	reopenedCol := openColumnRetainedPlacementCollection(t, reopen, "events")
+	if got, err := reopenedCol.Get(ids[8]); err != nil {
+		t.Fatalf("Get semantic stream doc after rewrite reopen: %v", err)
+	} else {
+		assertRetainedSemanticStreamDocument(t, got, 8)
+	}
+	_, _, reopenedPtr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, reopen, "events", ids[8])
+	if reopenedPtr != rewrittenPtr {
+		t.Fatalf("rewritten semantic stream pointer changed after reopen: got=%+v want=%+v", reopenedPtr, rewrittenPtr)
+	}
+}
+
 func enableColumnRetainedPlacementCommandWAL(t testing.TB, dir string) {
 	t.Helper()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -371,6 +491,25 @@ func createColumnRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name
 	return openColumnRetainedPlacementCollection(t, d, name)
 }
 
+func createColumnRetainedSemanticStreamCollection(t testing.TB, d *backenddb.DB, name string) *Collection {
+	t.Helper()
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: name, Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	return openColumnRetainedPlacementCollection(t, d, name)
+}
+
 func openColumnRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name string) *Collection {
 	t.Helper()
 	col, err := NewCollectionManager(d).OpenCollection(name)
@@ -382,6 +521,55 @@ func openColumnRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name s
 
 func retainedPlacementDocument(payload string, rowID int) []byte {
 	return []byte(fmt.Sprintf(`{"row_id":%d,"kind":"kind-%d","payload":"%s"}`, rowID, rowID, strings.Repeat(payload, 10)))
+}
+
+func retainedSemanticStreamDocuments(count int) ([][]byte, [][]byte) {
+	return retainedSemanticStreamDocumentsFrom(0, count)
+}
+
+func retainedSemanticStreamDocumentsFrom(start, count int) ([][]byte, [][]byte) {
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		row := start + i
+		ids[i] = []byte(fmt.Sprintf("doc-%06d", row))
+		docs[i] = []byte(fmt.Sprintf(
+			`{"row_id":%d,"kind":"kind-%d","payload":"payload-%03d","commit":{"cid":"bafy-test-%06d","rev":"3l-%06d","record":{"$type":"app.bsky.feed.post","createdAt":"2026-06-13T12:%02d:00Z","subject":{"uri":"at://did:plc:%06d/app.bsky.feed.post/%06d","cid":"bafy-subject-%06d"},"text":"semantic stream retained payload %03d"}}}`,
+			row,
+			row%7,
+			row%11,
+			row,
+			row,
+			row%60,
+			row%19,
+			row,
+			row,
+			row,
+		))
+	}
+	return ids, docs
+}
+
+func assertRetainedSemanticStreamDocument(t testing.TB, document []byte, row int) {
+	t.Helper()
+	assertJSONMapEqual1875(t, document, map[string]any{
+		"row_id":  float64(row),
+		"kind":    fmt.Sprintf("kind-%d", row%7),
+		"payload": fmt.Sprintf("payload-%03d", row%11),
+		"commit": map[string]any{
+			"cid": fmt.Sprintf("bafy-test-%06d", row),
+			"rev": fmt.Sprintf("3l-%06d", row),
+			"record": map[string]any{
+				"$type":     "app.bsky.feed.post",
+				"createdAt": fmt.Sprintf("2026-06-13T12:%02d:00Z", row%60),
+				"subject": map[string]any{
+					"uri": fmt.Sprintf("at://did:plc:%06d/app.bsky.feed.post/%06d", row%19, row),
+					"cid": fmt.Sprintf("bafy-subject-%06d", row),
+				},
+				"text": fmt.Sprintf("semantic stream retained payload %03d", row),
+			},
+		},
+	})
 }
 
 func requireColumnRetainedPlacementPointer(t testing.TB, d *backenddb.DB, collection string, documentID []byte) page.ValuePtr {
@@ -412,6 +600,47 @@ func requireColumnRetainedPlacementPointer(t testing.TB, d *backenddb.DB, collec
 		t.Fatalf("collection primary entry %q pointer file id=%d is not a value-log file", string(documentID), entry.ValuePtr.FileID)
 	}
 	return entry.ValuePtr
+}
+
+func requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t testing.TB, d *backenddb.DB, collection string, documentID []byte) ([]byte, uint64, page.ValuePtr) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collection)
+	if err != nil {
+		t.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("collection catalog %q missing", collection)
+	}
+	entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, collectionPrimaryRootName(collection), documentID)
+	if err != nil {
+		t.Fatalf("collection primary entry %q: %v", string(documentID), err)
+	}
+	if entry.Flags&node.FlagPointer != 0 {
+		t.Fatalf("semantic stream primary entry %q flags=%#x want inline locator", string(documentID), entry.Flags)
+	}
+	blockKey, row, ok, err := parseColumnRetainedSemanticStreamV1Locator(entry.Value)
+	if err != nil {
+		t.Fatalf("parse semantic stream locator: %v", err)
+	}
+	if !ok {
+		t.Fatalf("primary entry %q value %x is not a semantic stream locator", string(documentID), entry.Value)
+	}
+	blockEntry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, collectionRetainedSemanticStreamRootName(collection), blockKey)
+	if err != nil {
+		t.Fatalf("semantic stream block entry: %v", err)
+	}
+	if blockEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("semantic stream block flags=%#x value_len=%d want value-log pointer", blockEntry.Flags, len(blockEntry.Value))
+	}
+	if !page.IsValueLogFileID(blockEntry.ValuePtr.FileID) {
+		t.Fatalf("semantic stream block pointer file id=%d is not a value-log file", blockEntry.ValuePtr.FileID)
+	}
+	return blockKey, row, blockEntry.ValuePtr
 }
 
 func valueLogPathForFileID(t testing.TB, dir string, fileID uint32) string {
