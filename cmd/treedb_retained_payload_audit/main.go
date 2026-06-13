@@ -28,6 +28,9 @@ func run() (code int) {
 	var valueFamilyMaxDepth int
 	var valueFamilyMaxPaths int
 	var valueFamilyMaxUnique int
+	var semanticStreamStats bool
+	var semanticStreamMaxDepth int
+	var semanticStreamMaxPaths int
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			code = writeFailure(collectionName, fmt.Errorf("retained payload audit panic: %v", recovered))
@@ -44,6 +47,9 @@ func run() (code int) {
 	flag.IntVar(&valueFamilyMaxDepth, "value-family-max-depth", 8, "Maximum retained-payload value-family traversal depth; zero means unlimited")
 	flag.IntVar(&valueFamilyMaxPaths, "value-family-max-paths", 64, "Maximum retained-payload value-family rows to emit; zero means unlimited")
 	flag.IntVar(&valueFamilyMaxUnique, "value-family-max-unique", 200000, "Maximum unique strings tracked per path; zero means unlimited")
+	flag.BoolVar(&semanticStreamStats, "semantic-stream-stats", false, "Include decoded retained-payload scalar semantic stream oracle stats")
+	flag.IntVar(&semanticStreamMaxDepth, "semantic-stream-max-depth", 8, "Maximum retained-payload semantic stream traversal depth; zero means unlimited")
+	flag.IntVar(&semanticStreamMaxPaths, "semantic-stream-max-paths", 128, "Maximum retained-payload semantic stream path/kind rows to emit; zero means unlimited")
 	flag.Parse()
 
 	if strings.TrimSpace(dbDir) == "" {
@@ -88,6 +94,9 @@ func run() (code int) {
 		ValueFamilyMaxDepth:     valueFamilyMaxDepth,
 		ValueFamilyMaxPaths:     valueFamilyMaxPaths,
 		ValueFamilyMaxUnique:    valueFamilyMaxUnique,
+		IncludeSemanticStreams:  semanticStreamStats,
+		SemanticStreamMaxDepth:  semanticStreamMaxDepth,
+		SemanticStreamMaxPaths:  semanticStreamMaxPaths,
 	})
 	if err != nil {
 		writeResult(result)

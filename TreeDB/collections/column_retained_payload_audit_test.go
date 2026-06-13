@@ -322,6 +322,81 @@ func TestAuditCollectionRetainedPayloadValueFamilyStats2662(t *testing.T) {
 	}
 }
 
+func TestAuditCollectionRetainedPayloadSemanticStreamStats2662(t *testing.T) {
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, jsonbenchRetainedPayloadAuditConfig2382(true), [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"subject":{"uri":"at://did:plc:alice/app.bsky.feed.post/3aaa"},"likeCount":7,"repost":false}},"tags":["alpha","beta"],"empty":null}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"subject":{"uri":"at://did:plc:bob/app.bsky.feed.post/3bbb"},"likeCount":8,"repost":true}},"tags":["alpha"],"empty":null}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreams: true,
+		SemanticStreamMaxDepth: 8,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent semantic streams: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || audit.CheckedRows != 2 {
+		t.Fatalf("audit=%+v want passed two rows", audit)
+	}
+	if len(audit.RetainedPayloadSemanticStreams) == 0 || audit.RetainedPayloadSemanticStreamsTruncated {
+		t.Fatalf("semantic streams=%+v truncated=%v", audit.RetainedPayloadSemanticStreams, audit.RetainedPayloadSemanticStreamsTruncated)
+	}
+	if audit.RetainedPayloadSemanticStreamInputBytes <= 0 || audit.RetainedPayloadSemanticStreamZSTDBytes <= 0 {
+		t.Fatalf("semantic stream total bytes missing: input=%d zstd=%d audit=%+v", audit.RetainedPayloadSemanticStreamInputBytes, audit.RetainedPayloadSemanticStreamZSTDBytes, audit)
+	}
+
+	rkey, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "commit.rkey", "string")
+	if !ok {
+		t.Fatalf("missing commit.rkey semantic stream: %+v", audit.RetainedPayloadSemanticStreams)
+	}
+	if rkey.Occurrences != 2 || rkey.Documents != 2 || rkey.StringBytes != int64(len("r-0001")+len("r-0002")) {
+		t.Fatalf("commit.rkey semantic stream=%+v", rkey)
+	}
+	if rkey.JSONBytes != 16 || rkey.StreamInputBytes != 18 || rkey.MinStreamBytes != 9 || rkey.MaxStreamBytes != 9 {
+		t.Fatalf("commit.rkey semantic stream byte counters=%+v", rkey)
+	}
+	if rkey.ZSTDBytes <= 0 || rkey.ZSTDToInputRatio <= 0 {
+		t.Fatalf("commit.rkey semantic stream zstd counters=%+v", rkey)
+	}
+	tags, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "tags[]", "string")
+	if !ok || tags.Occurrences != 3 || tags.Documents != 2 || tags.StringBytes != int64(len("alpha")+len("beta")+len("alpha")) {
+		t.Fatalf("tags semantic stream=%+v ok=%v", tags, ok)
+	}
+	likes, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "commit.record.likeCount", "number")
+	if !ok || likes.Occurrences != 2 || likes.Documents != 2 || likes.JSONBytes != 2 || likes.StreamInputBytes != 4 {
+		t.Fatalf("likeCount semantic stream=%+v ok=%v", likes, ok)
+	}
+	repost, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "commit.record.repost", "bool")
+	if !ok || repost.Occurrences != 2 || repost.Documents != 2 || repost.JSONBytes != 9 || repost.StreamInputBytes != 11 {
+		t.Fatalf("repost semantic stream=%+v ok=%v", repost, ok)
+	}
+	empty, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "empty", "null")
+	if !ok || empty.Occurrences != 2 || empty.Documents != 2 || empty.JSONBytes != 8 || empty.StreamInputBytes != 10 {
+		t.Fatalf("empty null semantic stream=%+v ok=%v", empty, ok)
+	}
+	if _, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "kind", "string"); ok {
+		t.Fatalf("declared kind path leaked into semantic streams: %+v", audit.RetainedPayloadSemanticStreams)
+	}
+	if _, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "commit.operation", "string"); ok {
+		t.Fatalf("declared commit.operation path leaked into semantic streams: %+v", audit.RetainedPayloadSemanticStreams)
+	}
+
+	limited, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreams: true,
+		SemanticStreamMaxPaths: 1,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent path-limited semantic streams: %v audit=%+v", err, limited)
+	}
+	if !limited.RetainedPayloadSemanticStreamsTruncated || len(limited.RetainedPayloadSemanticStreams) != 1 {
+		t.Fatalf("path-limited semantic streams=%+v truncated=%v want one truncated row", limited.RetainedPayloadSemanticStreams, limited.RetainedPayloadSemanticStreamsTruncated)
+	}
+	if limited.RetainedPayloadSemanticStreamInputBytes != audit.RetainedPayloadSemanticStreamInputBytes {
+		t.Fatalf("limited semantic input bytes=%d want full total %d", limited.RetainedPayloadSemanticStreamInputBytes, audit.RetainedPayloadSemanticStreamInputBytes)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentFailsClosed2382(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(false)
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
@@ -444,6 +519,15 @@ func retainedPayloadValueFamilyStat2662(stats []ColumnRetainedPayloadValueFamily
 		}
 	}
 	return ColumnRetainedPayloadValueFamilyStat{}, false
+}
+
+func retainedPayloadSemanticStreamStat2662(stats []ColumnRetainedPayloadSemanticStreamStat, path, kind string) (ColumnRetainedPayloadSemanticStreamStat, bool) {
+	for _, stat := range stats {
+		if stat.Path == path && stat.ValueKind == kind {
+			return stat, true
+		}
+	}
+	return ColumnRetainedPayloadSemanticStreamStat{}, false
 }
 
 func retainedPayloadValueFamilyBucketCount2662(buckets []ColumnRetainedPayloadLengthBucket, name string) int64 {

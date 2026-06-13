@@ -1079,6 +1079,10 @@ def run_retained_payload_audit(
         command.extend(["-value-family-max-depth", str(int(getattr(args, "retained_payload_value_family_max_depth", 8) or 0))])
         command.extend(["-value-family-max-paths", str(int(getattr(args, "retained_payload_value_family_max_paths", 64) or 0))])
         command.extend(["-value-family-max-unique", str(int(getattr(args, "retained_payload_value_family_max_unique", 200000) or 0))])
+    if getattr(args, "retained_payload_semantic_stream_stats", False):
+        command.append("-semantic-stream-stats")
+        command.extend(["-semantic-stream-max-depth", str(int(getattr(args, "retained_payload_semantic_stream_max_depth", 8) or 0))])
+        command.extend(["-semantic-stream-max-paths", str(int(getattr(args, "retained_payload_semantic_stream_max_paths", 128) or 0))])
 
     try:
         completed = subprocess.run(command, cwd=cwd, check=False, text=True, capture_output=True)
@@ -1331,6 +1335,9 @@ def main() -> int:
     parser.add_argument("--retained-payload-value-family-max-depth", type=int, default=8, help="Maximum retained-payload value-family traversal depth; zero means unlimited")
     parser.add_argument("--retained-payload-value-family-max-paths", type=int, default=64, help="Maximum retained-payload value-family rows to emit; zero means unlimited")
     parser.add_argument("--retained-payload-value-family-max-unique", type=int, default=200000, help="Maximum unique strings tracked per path; zero means unlimited")
+    parser.add_argument("--retained-payload-semantic-stream-stats", action="store_true", help="Include decoded retained-payload scalar semantic stream oracle stats")
+    parser.add_argument("--retained-payload-semantic-stream-max-depth", type=int, default=8, help="Maximum retained-payload semantic stream traversal depth; zero means unlimited")
+    parser.add_argument("--retained-payload-semantic-stream-max-paths", type=int, default=128, help="Maximum retained-payload semantic stream path/kind rows to emit; zero means unlimited")
     parser.add_argument("--skip-retained-payload-audit", action="store_true", help="Skip the path-aware retained-payload audit")
     args = parser.parse_args()
 

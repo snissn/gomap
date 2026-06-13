@@ -355,6 +355,9 @@ class StorageAuditTest(unittest.TestCase):
                     "retained_payload_value_family_max_depth": 7,
                     "retained_payload_value_family_max_paths": 19,
                     "retained_payload_value_family_max_unique": 23,
+                    "retained_payload_semantic_stream_stats": True,
+                    "retained_payload_semantic_stream_max_depth": 6,
+                    "retained_payload_semantic_stream_max_paths": 29,
                     "skip_retained_payload_audit": False,
                 },
             )()
@@ -370,11 +373,14 @@ class StorageAuditTest(unittest.TestCase):
         self.assertEqual(retained["command"][db_dir_index], str(main.resolve()))
         self.assertIn("-shape-stats", retained["command"])
         self.assertIn("-value-family-stats", retained["command"])
+        self.assertIn("-semantic-stream-stats", retained["command"])
         self.assertEqual(retained["command"][retained["command"].index("-shape-max-depth") + 1], "9")
         self.assertEqual(retained["command"][retained["command"].index("-shape-max-paths") + 1], "17")
         self.assertEqual(retained["command"][retained["command"].index("-value-family-max-depth") + 1], "7")
         self.assertEqual(retained["command"][retained["command"].index("-value-family-max-paths") + 1], "19")
         self.assertEqual(retained["command"][retained["command"].index("-value-family-max-unique") + 1], "23")
+        self.assertEqual(retained["command"][retained["command"].index("-semantic-stream-max-depth") + 1], "6")
+        self.assertEqual(retained["command"][retained["command"].index("-semantic-stream-max-paths") + 1], "29")
 
     def test_retained_payload_audit_runs_without_collection_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
