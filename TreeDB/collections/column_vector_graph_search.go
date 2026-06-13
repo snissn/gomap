@@ -584,7 +584,7 @@ func columnVectorGraphNativeSearchFinishDistanceKernel(stats *columnVectorGraphN
 	if stats == nil || start.IsZero() {
 		return
 	}
-	stats.DistanceKernelNanos += uint64(time.Since(start))
+	stats.DistanceKernelNanos += columnVectorGraphNativeSearchElapsedNanos(start)
 }
 
 func columnVectorGraphNativeSearchStartGraphTraversal(stats *columnVectorGraphNativeSearchStats) (time.Time, uint64) {
@@ -598,14 +598,24 @@ func columnVectorGraphNativeSearchFinishGraphTraversal(stats *columnVectorGraphN
 	if stats == nil || start.IsZero() {
 		return
 	}
-	elapsed := uint64(time.Since(start))
+	elapsed := columnVectorGraphNativeSearchElapsedNanos(start)
 	distance := uint64(0)
 	if stats.DistanceKernelNanos > distanceBefore {
 		distance = stats.DistanceKernelNanos - distanceBefore
 	}
 	if elapsed > distance {
 		stats.GraphTraversalNanos += elapsed - distance
+		return
 	}
+	stats.GraphTraversalNanos++
+}
+
+func columnVectorGraphNativeSearchElapsedNanos(start time.Time) uint64 {
+	elapsed := uint64(time.Since(start))
+	if elapsed == 0 {
+		return 1
+	}
+	return elapsed
 }
 
 func (c *columnVectorGraphNativeSearchLoopCounters) publish(stats *columnVectorGraphNativeSearchStats, candidates uint64) {

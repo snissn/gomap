@@ -598,6 +598,9 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	stats := search.Stats
 	if !responseStart.IsZero() {
 		stats.ServiceResponseNanos = uint64(time.Since(responseStart))
+		if stats.ServiceResponseNanos == 0 {
+			stats.ServiceResponseNanos = 1
+		}
 	}
 	return BenchmarkVectorSearchResponse{
 		Index:                     info,
