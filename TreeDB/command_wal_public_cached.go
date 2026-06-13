@@ -318,6 +318,13 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews boo
 	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
+	if retainReplayViews && commandWALPublicAllZeroBytes(value) {
+		// The raw-KV payload builder tracks the first zero value by backing-array
+		// identity so repeated immutable zero buffers can avoid rescanning. Adapter
+		// replay-byte callers may reuse and mutate their value buffer between Put
+		// calls, so keep that compact-zero identity tied to an immutable copy.
+		value = append([]byte(nil), value...)
+	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, valueView, err = b.payload.AppendSet(key, value)
 	if err != nil {
@@ -502,6 +509,15 @@ func (b *commandWALPublicBatch) Reset() {
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = false
+}
+
+func commandWALPublicAllZeroBytes(p []byte) bool {
+	for _, b := range p {
+		if b != 0 {
+			return false
+		}
+	}
+	return len(p) > 0
 }
 
 func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {

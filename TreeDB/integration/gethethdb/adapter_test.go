@@ -540,6 +540,34 @@ func TestBatchReplayBeforeWriteUsesCommandWALOwnedBytes(t *testing.T) {
 	}
 }
 
+func TestBatchBorrowedReplayBytesHandleReusedZeroValueBuffer(t *testing.T) {
+	db := openTestDB(t)
+	batch := db.NewBatch().(*Batch)
+	value := make([]byte, len("value-b"))
+	if err := batch.Put([]byte("key-a"), value); err != nil {
+		t.Fatalf("Put zero value: %v", err)
+	}
+	if !batch.hasBorrowedOps {
+		t.Skip("local TreeDB command-WAL replay-byte optimization unavailable without a gomap module replace")
+	}
+	copy(value, "value-b")
+	if err := batch.Put([]byte("key-b"), value); err != nil {
+		t.Fatalf("Put reused nonzero value: %v", err)
+	}
+	var rec replayRecorder
+	if err := batch.Replay(&rec); err != nil {
+		t.Fatalf("Replay before Write: %v", err)
+	}
+	if want := []string{"put:key-a=\x00\x00\x00\x00\x00\x00\x00", "put:key-b=value-b"}; !slices.Equal(rec.ops, want) {
+		t.Fatalf("replay ops=%q want %q", rec.ops, want)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	assertValue(t, db, []byte("key-a"), make([]byte, len("value-b")))
+	assertValue(t, db, []byte("key-b"), []byte("value-b"))
+}
+
 func TestBatchRepeatedWriteDetachesCommandWALBorrowedReplayBytes(t *testing.T) {
 	db := openTestDB(t)
 	batch := db.NewBatch().(*Batch)
