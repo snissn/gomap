@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pierrec/lz4/v4"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -460,6 +463,311 @@ func TestAuditCollectionRetainedPayloadSemanticStreamStats2662(t *testing.T) {
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1BlockLayoutAudit2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	docs := [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	}
+	accounting, err := ColumnRetainedSemanticStreamV1StorageAccountingFromJSONDocuments(*cfg, docs)
+	if err != nil {
+		t.Fatalf("ColumnRetainedSemanticStreamV1StorageAccountingFromJSONDocuments: %v", err)
+	}
+	audit, err := ColumnRetainedSemanticStreamV1BlockLayoutAuditFromJSONDocuments(*cfg, docs, 0)
+	if err != nil {
+		t.Fatalf("ColumnRetainedSemanticStreamV1BlockLayoutAuditFromJSONDocuments: %v", err)
+	}
+	if audit.Rows != len(docs) || audit.BlockRows != columnRetainedSemanticStreamV1BlockRows || audit.BlockCount != 1 {
+		t.Fatalf("unexpected block layout row/block counters: %+v", audit)
+	}
+	if audit.PrimaryLocatorBytes != accounting.PrimaryLocatorBytes || audit.RawBlockBytes != accounting.BlockBytes {
+		t.Fatalf("audit/accounting mismatch audit=%+v accounting=%+v", audit, accounting)
+	}
+	if audit.RawBlockBytes != audit.BlockHeaderBytes+audit.PathMetadataBytes+audit.EntryMetadataBytes+audit.ScalarValueBytes {
+		t.Fatalf("block byte attribution mismatch: %+v", audit)
+	}
+	if audit.PathStreamCount < 3 || audit.ValueCount < 6 || audit.PathZSTDInputBytes <= 0 || audit.PathZSTDEncodedBytes <= 0 {
+		t.Fatalf("missing stream counters: %+v", audit)
+	}
+	rkey, ok := retainedSemanticStreamV1PathLayoutStat2662(audit.Paths, "commit.rkey")
+	if !ok {
+		t.Fatalf("missing commit.rkey block path stat: %+v", audit.Paths)
+	}
+	if rkey.Occurrences != 2 || rkey.Blocks != 1 {
+		t.Fatalf("commit.rkey occurrence counters=%+v", rkey)
+	}
+	if got, want := rkey.ScalarValueBytes, int64(len(`"r-0001"`)+len(`"r-0002"`)); got != want {
+		t.Fatalf("commit.rkey scalar bytes=%d want %d stat=%+v", got, want, rkey)
+	}
+	if rkey.TotalBytes != rkey.PathMetadataBytes+rkey.EntryMetadataBytes+rkey.ScalarValueBytes || rkey.ZSTDBytes <= 0 || rkey.ZSTDToTotalRatio <= 0 {
+		t.Fatalf("commit.rkey byte accounting=%+v", rkey)
+	}
+	for _, codec := range []string{"snappy", "lz4", "zstd"} {
+		stat, ok := retainedSemanticStreamV1CodecStat2662(audit.BlockCodecStats, codec)
+		if !ok {
+			t.Fatalf("missing %s block codec stat: %+v", codec, audit.BlockCodecStats)
+		}
+		if stat.Blocks != 1 || stat.RawBytes != audit.RawBlockBytes || stat.StoredBytes <= 0 || stat.StoredToRawRatio <= 0 {
+			t.Fatalf("%s codec stat=%+v audit=%+v", codec, stat, audit)
+		}
+	}
+
+	limited, err := ColumnRetainedSemanticStreamV1BlockLayoutAuditFromJSONDocuments(*cfg, docs, 1)
+	if err != nil {
+		t.Fatalf("limited block layout audit: %v", err)
+	}
+	if !limited.PathsTruncated || len(limited.Paths) != 1 || limited.RawBlockBytes != audit.RawBlockBytes {
+		t.Fatalf("limited paths=%+v truncated=%v raw=%d want truncated one raw %d", limited.Paths, limited.PathsTruncated, limited.RawBlockBytes, audit.RawBlockBytes)
+	}
+}
+
+func TestColumnRetainedSemanticStreamV1BlockCodecLZ4RawFallback2662(t *testing.T) {
+	collector, err := newColumnRetainedSemanticStreamV1BlockLayoutCollector()
+	if err != nil {
+		t.Fatalf("new block layout collector: %v", err)
+	}
+	defer collector.close()
+
+	raw := incompressibleLZ4Fixture2662(t)
+	encodedBytes, ok := collector.encodeBlockCodec("lz4", raw)
+	if !ok || encodedBytes != 0 {
+		t.Fatalf("lz4 fixture encodedBytes=%d ok=%v want valid raw fallback", encodedBytes, ok)
+	}
+	collector.observeBlockCodec("lz4", raw)
+
+	stat := collector.codecs["lz4"]
+	if stat == nil {
+		t.Fatal("missing lz4 codec stat")
+	}
+	if stat.Blocks != 1 || stat.RawBytes != int64(len(raw)) || stat.EncodedBytes != 0 || stat.StoredBytes != int64(len(raw)) || stat.RawFallbackBlocks != 1 || stat.KeptBlocks != 0 || stat.EncodeErrors != 0 {
+		t.Fatalf("lz4 raw fallback stat=%+v raw=%d", stat, len(raw))
+	}
+}
+
+func incompressibleLZ4Fixture2662(t *testing.T) []byte {
+	t.Helper()
+	for seed := uint64(1); seed <= 64; seed++ {
+		raw := make([]byte, 64*1024)
+		var counter uint64
+		for off := 0; off < len(raw); {
+			var input [16]byte
+			binary.LittleEndian.PutUint64(input[:8], seed)
+			binary.LittleEndian.PutUint64(input[8:], counter)
+			sum := sha256.Sum256(input[:])
+			off += copy(raw[off:], sum[:])
+			counter++
+		}
+		dst := make([]byte, len(raw))
+		n, err := lz4.CompressBlock(raw, dst, nil)
+		if err != nil {
+			t.Fatalf("lz4 fixture probe seed=%d: %v", seed, err)
+		}
+		if n == 0 {
+			return raw
+		}
+	}
+	t.Fatal("could not build deterministic incompressible lz4 fixture")
+	return nil
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayout2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreamBlockLayout: true,
+		SemanticStreamBlockMaxPaths:      1,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent semantic-stream-v1 block layout: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || audit.CheckedRows != 2 {
+		t.Fatalf("audit=%+v want passed two rows", audit)
+	}
+	if audit.RetainedPayloadSemanticStreamBlockLayout == nil {
+		t.Fatalf("missing semantic stream block layout: %+v", audit)
+	}
+	layout := audit.RetainedPayloadSemanticStreamBlockLayout
+	if layout.BlockCount != 1 || layout.RawBlockBytes <= 0 || len(layout.BlockCodecStats) == 0 || len(layout.Paths) != 1 || !layout.PathsTruncated {
+		t.Fatalf("unexpected block layout: %+v", layout)
+	}
+	if _, ok := retainedSemanticStreamV1PathLayoutStat2662(layout.Paths, "kind"); ok {
+		t.Fatalf("declared kind leaked into block layout paths: %+v", layout.Paths)
+	}
+
+	limited, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreamBlockLayout: true,
+		MaxDocuments:                     1,
+	})
+	if err != nil {
+		t.Fatalf("limited semantic-stream-v1 block layout audit: %v audit=%+v", err, limited)
+	}
+	if !limited.Truncated || limited.CheckedRows != 1 || limited.RetainedPayloadSemanticStreamBlockLayout != nil {
+		t.Fatalf("limited audit=%+v want truncated one row without mixed full-block layout", limited)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutSampledFailsClosed2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		Paths:                            []string{"payload"},
+		IncludeSemanticStreamBlockLayout: true,
+		MaxDocuments:                     1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "payload") {
+		t.Fatalf("sampled semantic-stream-v1 block layout err=%v audit=%+v want payload violation", err, audit)
+	}
+	if audit.Status != "failed" || !audit.Truncated || audit.CheckedRows != 1 || audit.RetainedPayloadSemanticStreamBlockLayout != nil {
+		t.Fatalf("sampled semantic-stream-v1 block layout audit=%+v want failed truncated one row without emitted layout", audit)
+	}
+	if len(audit.Violations) != 1 || audit.Violations[0].DocumentID != "semantic-stream-v1-sampled-blocks" || audit.Violations[0].Path != "payload" {
+		t.Fatalf("sampled semantic-stream-v1 block layout violations=%+v want sampled-block payload", audit.Violations)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutSampledDecodedStatsFailsClosed2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}}}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		Paths:                            []string{"payload"},
+		IncludeShapeStats:                true,
+		IncludeSemanticStreamBlockLayout: true,
+		MaxDocuments:                     1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "payload") {
+		t.Fatalf("sampled semantic-stream-v1 decoded stats block layout err=%v audit=%+v want payload violation", err, audit)
+	}
+	if audit.Status != "failed" || !audit.Truncated || audit.CheckedRows != 1 || audit.RetainedPayloadSemanticStreamBlockLayout != nil {
+		t.Fatalf("sampled semantic-stream-v1 decoded stats audit=%+v want failed truncated one row without emitted layout", audit)
+	}
+	if len(audit.Violations) != 1 || audit.Violations[0].DocumentID != "semantic-stream-v1-sampled-blocks" || audit.Violations[0].Path != "payload" {
+		t.Fatalf("sampled semantic-stream-v1 decoded stats violations=%+v want sampled-block payload", audit.Violations)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutAllowsInlineRows2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreamBlockLayout: true,
+	})
+	if err != nil {
+		t.Fatalf("inline semantic-stream-v1 block layout audit: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || audit.CheckedRows != 1 {
+		t.Fatalf("audit=%+v want passed one inline row", audit)
+	}
+	layout := audit.RetainedPayloadSemanticStreamBlockLayout
+	if layout == nil || layout.BlockCount != 0 || layout.RawBlockBytes != 0 || layout.PrimaryLocatorBytes != 0 || audit.RetainedPayloadBytes <= 0 {
+		t.Fatalf("inline block layout=%+v audit=%+v", layout, audit)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutLiteralDottedKey2662(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled:                 true,
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+		Columns: []ColumnStoreColumn{
+			{Name: "nested", Path: "a.b", ValueType: ColumnStoreValueString, Nullable: true},
+		},
+	}
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"a.b":"literal-one","other":1}`),
+		[]byte(`{"a.b":"literal-two","other":2}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreamBlockLayout: true,
+	})
+	if err != nil {
+		t.Fatalf("literal dotted key block layout audit: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || len(audit.Violations) != 0 {
+		t.Fatalf("literal dotted key audit=%+v want passed without nested a.b violation", audit)
+	}
+	layout := audit.RetainedPayloadSemanticStreamBlockLayout
+	if layout == nil {
+		t.Fatalf("literal dotted key missing block layout: %+v", audit)
+	}
+	if _, ok := retainedSemanticStreamV1PathLayoutStat2662(layout.Paths, "a.b"); !ok {
+		t.Fatalf("literal dotted key path missing from layout paths: %+v", layout.Paths)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutValidatesLocators2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	snap := col.db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	retained, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), []byte("doc-000000"), nil)
+	if err != nil || !found {
+		t.Fatalf("collectionGetAppendAtCatalogRoot primary: found=%v err=%v", found, err)
+	}
+	blockKey, row, ok, err := parseColumnRetainedSemanticStreamV1Locator(retained)
+	if err != nil || !ok {
+		t.Fatalf("parse semantic-stream locator ok=%v err=%v retained=%x", ok, err, retained)
+	}
+	rowCache := make(map[string]uint64)
+	if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, retained, rowCache); !ok || err != nil {
+		t.Fatalf("validate live locator ok=%v err=%v", ok, err)
+	}
+	if len(rowCache) != 1 {
+		t.Fatalf("row cache entries=%d want one", len(rowCache))
+	}
+
+	missingKey := append([]byte(nil), blockKey...)
+	missingKey[0] ^= 0xff
+	missingLocator := encodeColumnRetainedSemanticStreamV1Locator(missingKey, row)
+	if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, missingLocator, nil); !ok || err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing locator ok=%v err=%v want missing-block failure", ok, err)
+	}
+
+	outOfRangeLocator := encodeColumnRetainedSemanticStreamV1Locator(blockKey, 2)
+	if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, outOfRangeLocator, nil); !ok || err == nil || !strings.Contains(err.Error(), "outside block rows") {
+		t.Fatalf("out-of-range locator ok=%v err=%v want row-range failure", ok, err)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentFailsClosed2382(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(false)
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
@@ -591,6 +899,24 @@ func retainedPayloadSemanticStreamStat2662(stats []ColumnRetainedPayloadSemantic
 		}
 	}
 	return ColumnRetainedPayloadSemanticStreamStat{}, false
+}
+
+func retainedSemanticStreamV1PathLayoutStat2662(stats []ColumnRetainedSemanticStreamV1PathLayoutStat, path string) (ColumnRetainedSemanticStreamV1PathLayoutStat, bool) {
+	for _, stat := range stats {
+		if stat.Path == path {
+			return stat, true
+		}
+	}
+	return ColumnRetainedSemanticStreamV1PathLayoutStat{}, false
+}
+
+func retainedSemanticStreamV1CodecStat2662(stats []ColumnRetainedSemanticStreamV1CodecStat, codec string) (ColumnRetainedSemanticStreamV1CodecStat, bool) {
+	for _, stat := range stats {
+		if stat.Codec == codec {
+			return stat, true
+		}
+	}
+	return ColumnRetainedSemanticStreamV1CodecStat{}, false
 }
 
 func retainedPayloadValueFamilyBucketCount2662(buckets []ColumnRetainedPayloadLengthBucket, name string) int64 {

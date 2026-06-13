@@ -92,6 +92,10 @@ type ColumnRetainedPayloadCollectionAuditOptions struct {
 	IncludeSemanticStreams  bool
 	SemanticStreamMaxDepth  int
 	SemanticStreamMaxPaths  int
+	// IncludeSemanticStreamBlockLayout parses semantic-stream-v1 side-root
+	// blocks directly. It is only valid for semantic-stream-v1 collections.
+	IncludeSemanticStreamBlockLayout bool
+	SemanticStreamBlockMaxPaths      int
 }
 
 type ColumnRetainedPayloadCollectionPathViolation struct {
@@ -166,28 +170,29 @@ type ColumnRetainedPayloadSemanticStreamStat struct {
 }
 
 type ColumnRetainedPayloadCollectionAuditResult struct {
-	Collection                              string                                         `json:"collection"`
-	Status                                  string                                         `json:"status"`
-	RetainedPayloadPolicy                   ColumnRetainedPayloadPolicy                    `json:"retained_payload_policy"`
-	RetainedPayloadEncoding                 string                                         `json:"retained_payload_encoding"`
-	RetainedPayloadEncodingStatus           string                                         `json:"retained_payload_encoding_status"`
-	RetainedPayloadCompression              string                                         `json:"retained_payload_compression"`
-	RetainedPayloadCompressionPolicy        string                                         `json:"retained_payload_compression_policy"`
-	RetainedPayloadCompressionStatus        string                                         `json:"retained_payload_compression_status"`
-	DeclaredPaths                           []string                                       `json:"declared_paths"`
-	CheckedRows                             int                                            `json:"checked_rows"`
-	RetainedPayloadBytes                    int64                                          `json:"retained_payload_bytes"`
-	RetainedPayloadShape                    []ColumnRetainedPayloadShapePathStat           `json:"retained_payload_shape,omitempty"`
-	RetainedPayloadShapeTruncated           bool                                           `json:"retained_payload_shape_truncated,omitempty"`
-	RetainedPayloadValueFamilies            []ColumnRetainedPayloadValueFamilyStat         `json:"retained_payload_value_families,omitempty"`
-	RetainedPayloadValueFamiliesTruncated   bool                                           `json:"retained_payload_value_families_truncated,omitempty"`
-	RetainedPayloadSemanticStreams          []ColumnRetainedPayloadSemanticStreamStat      `json:"retained_payload_semantic_streams,omitempty"`
-	RetainedPayloadSemanticStreamsTruncated bool                                           `json:"retained_payload_semantic_streams_truncated,omitempty"`
-	RetainedPayloadSemanticStreamInputBytes int64                                          `json:"retained_payload_semantic_stream_input_bytes,omitempty"`
-	RetainedPayloadSemanticStreamZSTDBytes  int64                                          `json:"retained_payload_semantic_stream_zstd_bytes,omitempty"`
-	Truncated                               bool                                           `json:"truncated,omitempty"`
-	Violations                              []ColumnRetainedPayloadCollectionPathViolation `json:"violations,omitempty"`
-	Errors                                  []string                                       `json:"errors,omitempty"`
+	Collection                               string                                          `json:"collection"`
+	Status                                   string                                          `json:"status"`
+	RetainedPayloadPolicy                    ColumnRetainedPayloadPolicy                     `json:"retained_payload_policy"`
+	RetainedPayloadEncoding                  string                                          `json:"retained_payload_encoding"`
+	RetainedPayloadEncodingStatus            string                                          `json:"retained_payload_encoding_status"`
+	RetainedPayloadCompression               string                                          `json:"retained_payload_compression"`
+	RetainedPayloadCompressionPolicy         string                                          `json:"retained_payload_compression_policy"`
+	RetainedPayloadCompressionStatus         string                                          `json:"retained_payload_compression_status"`
+	DeclaredPaths                            []string                                        `json:"declared_paths"`
+	CheckedRows                              int                                             `json:"checked_rows"`
+	RetainedPayloadBytes                     int64                                           `json:"retained_payload_bytes"`
+	RetainedPayloadShape                     []ColumnRetainedPayloadShapePathStat            `json:"retained_payload_shape,omitempty"`
+	RetainedPayloadShapeTruncated            bool                                            `json:"retained_payload_shape_truncated,omitempty"`
+	RetainedPayloadValueFamilies             []ColumnRetainedPayloadValueFamilyStat          `json:"retained_payload_value_families,omitempty"`
+	RetainedPayloadValueFamiliesTruncated    bool                                            `json:"retained_payload_value_families_truncated,omitempty"`
+	RetainedPayloadSemanticStreams           []ColumnRetainedPayloadSemanticStreamStat       `json:"retained_payload_semantic_streams,omitempty"`
+	RetainedPayloadSemanticStreamsTruncated  bool                                            `json:"retained_payload_semantic_streams_truncated,omitempty"`
+	RetainedPayloadSemanticStreamInputBytes  int64                                           `json:"retained_payload_semantic_stream_input_bytes,omitempty"`
+	RetainedPayloadSemanticStreamZSTDBytes   int64                                           `json:"retained_payload_semantic_stream_zstd_bytes,omitempty"`
+	RetainedPayloadSemanticStreamBlockLayout *ColumnRetainedSemanticStreamV1BlockLayoutAudit `json:"retained_payload_semantic_stream_block_layout,omitempty"`
+	Truncated                                bool                                            `json:"truncated,omitempty"`
+	Violations                               []ColumnRetainedPayloadCollectionPathViolation  `json:"violations,omitempty"`
+	Errors                                   []string                                        `json:"errors,omitempty"`
 }
 
 // AuditColumnRetainedPayloadPathsAbsent verifies that declared typed JSON paths
@@ -275,9 +280,12 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		result.Status = "inactive_no_retained_payload"
 		return result, nil
 	}
-	if len(result.DeclaredPaths) == 0 {
+	if len(result.DeclaredPaths) == 0 && !opts.IncludeSemanticStreamBlockLayout {
 		result.Status = "no_declared_paths"
 		return result, nil
+	}
+	if opts.IncludeSemanticStreamBlockLayout && !columnStoreRetainedPayloadUsesSemanticStreamV1(&cfg) {
+		return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: semantic-stream-v1 block layout audit requires retained encoding %q", ColumnRetainedPayloadEncodingSemanticStreamV1))
 	}
 
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
@@ -292,6 +300,9 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 
 	resolver := columnRetainedPayloadTemplateResolver(snap, catalog)
 	includeDecodedStats := opts.IncludeShapeStats || opts.IncludeValueFamilyStats || opts.IncludeSemanticStreams
+	semanticBlockLayoutOnly := opts.IncludeSemanticStreamBlockLayout &&
+		columnStoreRetainedPayloadUsesSemanticStreamV1(&cfg) &&
+		!includeDecodedStats
 	var shape *columnRetainedPayloadShapeCollector
 	if opts.IncludeShapeStats {
 		shape = newColumnRetainedPayloadShapeCollector(opts.ShapeMaxDepth)
@@ -303,6 +314,11 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	var semanticStreams *columnRetainedPayloadSemanticStreamCollector
 	if opts.IncludeSemanticStreams {
 		semanticStreams = newColumnRetainedPayloadSemanticStreamCollector(opts.SemanticStreamMaxDepth)
+	}
+	var semanticBlockLayoutLocatorRows map[string]uint64
+	var semanticBlockLayoutPrimaryLocatorBytes int64
+	if opts.IncludeSemanticStreamBlockLayout {
+		semanticBlockLayoutLocatorRows = make(map[string]uint64)
 	}
 	for it.Valid() {
 		if opts.MaxDocuments > 0 && result.CheckedRows >= opts.MaxDocuments {
@@ -323,6 +339,31 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		}
 		result.CheckedRows++
 		result.RetainedPayloadBytes += int64(len(retained))
+		semanticBlockLayoutLocator := false
+		if opts.IncludeSemanticStreamBlockLayout {
+			if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, retained, semanticBlockLayoutLocatorRows); err != nil {
+				return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit %q: %w", documentID, err))
+			} else if ok {
+				semanticBlockLayoutLocator = true
+				semanticBlockLayoutPrimaryLocatorBytes += int64(len(retained))
+			}
+		}
+		if semanticBlockLayoutOnly {
+			if !semanticBlockLayoutLocator {
+				payloadAudit, auditErr := auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)
+				if auditErr != nil {
+					for _, path := range payloadAudit.Violations {
+						result.Violations = append(result.Violations, ColumnRetainedPayloadCollectionPathViolation{
+							DocumentID: documentID,
+							Path:       path,
+						})
+					}
+					return retainedPayloadCollectionAuditError(result, auditErr)
+				}
+			}
+			it.Next()
+			continue
+		}
 		decodedRetained, err := resolveColumnRetainedPayloadAtSnapshot(snap, catalog, cfg, retained)
 		if err != nil {
 			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit %q: %w", documentID, err))
@@ -370,6 +411,29 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	if err := it.Error(); err != nil {
 		return retainedPayloadCollectionAuditError(result, err)
 	}
+	if opts.IncludeSemanticStreamBlockLayout && result.Truncated {
+		blockPaths, err := c.auditRetainedSemanticStreamV1BlockLayoutPathsAtSnapshot(snap, catalog, semanticBlockLayoutLocatorRows)
+		if err != nil {
+			return retainedPayloadCollectionAuditError(result, err)
+		}
+		violatedPaths := appendColumnRetainedPayloadBlockLayoutViolations(&result, "semantic-stream-v1-sampled-blocks", blockPaths)
+		if len(violatedPaths) > 0 {
+			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained semantic-stream-v1 sampled blocks contain declared typed paths: %s", strings.Join(violatedPaths, ", ")))
+		}
+	}
+	if opts.IncludeSemanticStreamBlockLayout && !result.Truncated {
+		blockLayout, blockPaths, err := c.auditRetainedSemanticStreamV1BlockLayoutAtSnapshot(snap, catalog, opts.SemanticStreamBlockMaxPaths)
+		if err != nil {
+			return retainedPayloadCollectionAuditError(result, err)
+		}
+		blockLayout.Rows = result.CheckedRows
+		blockLayout.PrimaryLocatorBytes = semanticBlockLayoutPrimaryLocatorBytes
+		result.RetainedPayloadSemanticStreamBlockLayout = &blockLayout
+		violatedPaths := appendColumnRetainedPayloadBlockLayoutViolations(&result, "semantic-stream-v1-blocks", blockPaths)
+		if len(violatedPaths) > 0 {
+			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained semantic-stream-v1 blocks contain declared typed paths: %s", strings.Join(violatedPaths, ", ")))
+		}
+	}
 	if opts.IncludeShapeStats {
 		result.RetainedPayloadShape, result.RetainedPayloadShapeTruncated = shape.result(opts.ShapeMaxPaths)
 	}
@@ -397,6 +461,24 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		result.Status = "passed"
 	}
 	return result, nil
+}
+
+func appendColumnRetainedPayloadBlockLayoutViolations(result *ColumnRetainedPayloadCollectionAuditResult, source string, blockPaths map[string]struct{}) []string {
+	if result == nil || len(blockPaths) == 0 {
+		return nil
+	}
+	violatedPaths := make([]string, 0)
+	for _, path := range result.DeclaredPaths {
+		pathKey := columnRetainedSemanticStreamPathKey(strings.Split(path, "."))
+		if _, ok := blockPaths[pathKey]; ok {
+			result.Violations = append(result.Violations, ColumnRetainedPayloadCollectionPathViolation{
+				DocumentID: source,
+				Path:       path,
+			})
+			violatedPaths = append(violatedPaths, path)
+		}
+	}
+	return violatedPaths
 }
 
 func retainedPayloadCollectionAuditError(result ColumnRetainedPayloadCollectionAuditResult, err error) (ColumnRetainedPayloadCollectionAuditResult, error) {
