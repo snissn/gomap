@@ -352,6 +352,15 @@ func TestTextV2RewriteStorageMaintenanceAndValueLogGC2630(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("old snapshot micro ok=%v len=%d err=%v want pinned old payload", ok, len(raw), err)
 	}
+	pinnedLeafGC, err := d.LeafGenerationGC(context.Background(), backenddb.LeafGenerationGCOptions{})
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("LeafGenerationGC while text-v2 snapshot pinned: %v", err)
+	}
+	if pinnedLeafGC.GenerationsDeleted != 0 || pinnedLeafGC.BytesDeleted != 0 {
+		_ = snap.Close()
+		t.Fatalf("LeafGenerationGC deleted pinned text-v2 roots: %+v", pinnedLeafGC)
+	}
 	if err := snap.Close(); err != nil {
 		t.Fatalf("snapshot close: %v", err)
 	}
@@ -361,8 +370,15 @@ func TestTextV2RewriteStorageMaintenanceAndValueLogGC2630(t *testing.T) {
 	if _, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{}); err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
-	if _, err := d.CompactStorage(context.Background(), backenddb.CompactStorageOptions{}); err != nil {
+	compactStats, err := d.CompactStorage(context.Background(), backenddb.CompactStorageOptions{
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	if err != nil {
 		t.Fatalf("CompactStorage: %v", err)
+	}
+	if !compactStats.FullyCompacted {
+		t.Fatalf("CompactStorage left text-v2 maintenance debt after snapshot release: leaf_gc=%+v remaining=%+v", compactStats.LeafGenerationGC, compactStats.RemainingDebt)
 	}
 	if got, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "updated", TopK: 10, ResultMode: TextSearchResultModeScoreOnly}); err != nil || len(got.Results) != 8 {
 		t.Fatalf("post-maintenance updated response=%+v err=%v want 8", got, err)

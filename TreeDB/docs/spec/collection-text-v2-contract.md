@@ -367,6 +367,38 @@ roots:
 sealed/delta/micro posting-block counts, and fail-closes on malformed v2 storage
 instead of declaring the inspected state ready.
 
+## Default-rollout write and maintenance budget guidance (#2689)
+
+The default-rollout maintenance contract is budgeted through the normal text-v2
+counters rather than a private text GC. Operators and benchmark PRs SHOULD use
+`TextIndexStorageStats` as the offline/maintenance inspection tool, not as a
+per-request health check: it scans the durable v2 roots to validate counts,
+`V2RewriteMergeState`, `V2SealedPostingBlocks`, `V2DeltaPostingBlocks`,
+`V2MicroPostingBlocks`, `V2DeletedDocs`, and `EncodedBytes`. Lightweight serving
+status remains `TextIndexStatus`.
+
+`RewriteTextIndex` SHOULD be scheduled when `TextIndexStorageStats` reports
+`rewrite_merge_pending`, especially when micro/delta posting blocks materially
+exceed the sealed-block baseline for the workload, deleted/tombstoned ordinals
+accumulate, or `posting_blocks/doc` / `write_amp_entries/doc` grows far beyond a
+fresh backfill row. The production default `TargetPostingsPerBlock=0` uses the
+text-v2 block target (currently 128 postings, cache-local encoded values);
+smaller targets are primarily for tests, tiny fixtures, or intentionally more
+frequent block splitting. A rewrite is logical maintenance only: it publishes new
+ordinary collection roots, removes stale posting keys and tombstones from the
+live root set, and reports `posting_blocks_read`, `posting_blocks_written`,
+`posting_blocks_deleted`, `stale_postings_purged`, and tombstones purged so the
+next physical maintenance pass has auditable work.
+
+Physical cleanup MUST remain on TreeDB maintenance paths. After a rewrite (and
+after old snapshots have released), callers SHOULD use the usual sequence for
+their deployment: checkpoint, `ValueLogGC`, value-log rewrite when the value-log
+rewrite plan shows stale source bytes, leaf-generation pack/GC or
+`CompactStorage`, and index vacuum. Live v2 roots must remain reachable through
+collection root descriptors throughout this sequence; stale roots become normal
+unreferenced root/value-log/leaf payloads and must not require a standalone
+text-block GC.
+
 Default-selection decision for #2630: v2 remains an explicit opt-in
 (`TextIndexVersionV2`) while the production default stays v1. The reason is not a
 storage blocker—v2 roots now have rewrite/merge lifecycle tooling and normal

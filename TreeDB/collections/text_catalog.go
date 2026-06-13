@@ -194,8 +194,9 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 }
 
 // TextIndexStorageStats validates and summarizes persistent text roots for a
-// declared text index. It is a storage/accounting helper for the roots that
-// SearchText also validates while scanning and scoring.
+// declared text index. It scans durable text roots and is intended for
+// maintenance/accounting/benchmark use; serving health paths should prefer the
+// lightweight TextIndexStatus.
 func (c *Collection) TextIndexStorageStats(indexName string) (TextIndexStorageStats, error) {
 	var stats TextIndexStorageStats
 	if err := ValidateIndexName(indexName); err != nil {

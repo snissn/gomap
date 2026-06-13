@@ -92,7 +92,6 @@ type textV2PostingBlockValue struct {
 type textV2PostingBlockKV struct {
 	Key   []byte
 	Value []byte
-	Block textV2PostingBlockValue
 }
 
 type textV2PostingBlockBuildOptions struct {
@@ -161,6 +160,10 @@ func encodeTextV2PostingBlockValue(value textV2PostingBlockValue) []byte {
 	slices.SortFunc(entries, func(a, b textV2PostingBlockEntry) int {
 		return compareUint64(a.Ordinal, b.Ordinal)
 	})
+	return encodeTextV2PostingBlockValueFromSorted(value, entries)
+}
+
+func encodeTextV2PostingBlockValueFromSorted(value textV2PostingBlockValue, entries []textV2PostingBlockEntry) []byte {
 	fieldCount := uint32(len(value.Summary.MaxFieldTermFrequencies))
 	out := make([]byte, 0, estimateTextV2PostingBlockValueLen(value, entries, fieldCount))
 	out = append(out, textV2PostingBlockValueVersion)
@@ -252,7 +255,7 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 	if blockID == 0 {
 		blockID = 1
 	}
-	sorted := cloneTextV2PostingBlockEntries(entries)
+	sorted := cloneTextV2PostingBlockEntryHeaders(entries)
 	slices.SortFunc(sorted, func(a, b textV2PostingBlockEntry) int { return compareUint64(a.Ordinal, b.Ordinal) })
 	if err := validateTextV2PostingBlockBuilderEntries(sorted, fieldCount); err != nil {
 		return nil, err
@@ -263,11 +266,11 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 		var block textV2PostingBlockValue
 		var encoded []byte
 		for {
-			candidate, err := newTextV2PostingBlockValue(kind, sorted[start:start+chunkLen], fieldCount, blockID)
+			candidate, err := newTextV2PostingBlockValueFromSorted(kind, sorted[start:start+chunkLen], fieldCount, blockID)
 			if err != nil {
 				return nil, err
 			}
-			encoded = encodeTextV2PostingBlockValue(candidate)
+			encoded = encodeTextV2PostingBlockValueFromSorted(candidate, candidate.Entries)
 			if len(encoded) <= textV2PostingBlockMaxValueBytes && (len(encoded) <= inlineTarget || chunkLen == 1) {
 				block = candidate
 				break
@@ -280,7 +283,6 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 		out = append(out, textV2PostingBlockKV{
 			Key:   encodeTextV2PostingBlockKey(term, block.BlockStart, block.BlockID),
 			Value: encoded,
-			Block: block,
 		})
 		start += chunkLen
 		if !opts.FixedBlockID {
@@ -670,6 +672,16 @@ func validateTextV2PostingBlockBuilderEntries(entries []textV2PostingBlockEntry,
 }
 
 func newTextV2PostingBlockValue(kind textV2PostingBlockKind, entries []textV2PostingBlockEntry, fieldCount uint32, blockID uint64) (textV2PostingBlockValue, error) {
+	cloned := cloneTextV2PostingBlockEntries(entries)
+	slices.SortFunc(cloned, func(a, b textV2PostingBlockEntry) int { return compareUint64(a.Ordinal, b.Ordinal) })
+	return newTextV2PostingBlockValueFromSorted(kind, cloned, fieldCount, blockID)
+}
+
+// newTextV2PostingBlockValueFromSorted builds metadata around caller-owned
+// entries that are already sorted by ordinal. Callers that retain the returned
+// block must pass owned entries; encoding-only callers can pass a transient
+// shallow copy to avoid per-entry field-frequency clones.
+func newTextV2PostingBlockValueFromSorted(kind textV2PostingBlockKind, entries []textV2PostingBlockEntry, fieldCount uint32, blockID uint64) (textV2PostingBlockValue, error) {
 	if len(entries) == 0 {
 		return textV2PostingBlockValue{}, errMalformedTextStorage("text-v2 posting block cannot be empty")
 	}
@@ -685,17 +697,15 @@ func newTextV2PostingBlockValue(kind textV2PostingBlockKind, entries []textV2Pos
 	if !isSupportedTextV2PostingBlockKind(kind) {
 		return textV2PostingBlockValue{}, errMalformedTextStorage("text-v2 posting block unsupported kind %d", byte(kind))
 	}
-	cloned := cloneTextV2PostingBlockEntries(entries)
-	slices.SortFunc(cloned, func(a, b textV2PostingBlockEntry) int { return compareUint64(a.Ordinal, b.Ordinal) })
 	summary := textV2PostingBlockSummary{
-		FirstOrdinal:            cloned[0].Ordinal,
-		LastOrdinal:             cloned[len(cloned)-1].Ordinal,
-		DocCount:                uint32(len(cloned)),
+		FirstOrdinal:            entries[0].Ordinal,
+		LastOrdinal:             entries[len(entries)-1].Ordinal,
+		DocCount:                uint32(len(entries)),
 		MaxFieldTermFrequencies: make([]uint32, fieldCount),
 		UpperBoundKind:          textV2PostingUpperBoundKindBM25FLaneMax,
 	}
 	var prev uint64
-	for i, entry := range cloned {
+	for i, entry := range entries {
 		if entry.Ordinal == 0 || entry.Generation == 0 || entry.TermFrequency == 0 {
 			return textV2PostingBlockValue{}, errMalformedTextStorage("text-v2 posting block entry[%d] invalid ordinal/generation/frequency", i)
 		}
@@ -729,7 +739,7 @@ func newTextV2PostingBlockValue(kind textV2PostingBlockKind, entries []textV2Pos
 		BlockStart:    summary.FirstOrdinal,
 		BlockID:       blockID,
 		Summary:       summary,
-		Entries:       cloned,
+		Entries:       entries,
 	}, nil
 }
 
@@ -748,6 +758,12 @@ func estimateTextV2PostingBlockValueLen(value textV2PostingBlockValue, entries [
 		n += 3*binary.MaxVarintLen64 + 1 + len(entry.FieldFrequencies)*binary.MaxVarintLen64
 	}
 	return n + len(value.Summary.MaxFieldTermFrequencies) + textV2PostingBlockChecksumBytes
+}
+
+func cloneTextV2PostingBlockEntryHeaders(entries []textV2PostingBlockEntry) []textV2PostingBlockEntry {
+	// Used by block builders that only need to sort and encode immediately; the
+	// field-frequency slices remain read-only and are not retained in output KVs.
+	return append([]textV2PostingBlockEntry(nil), entries...)
 }
 
 func cloneTextV2PostingBlockEntries(entries []textV2PostingBlockEntry) []textV2PostingBlockEntry {
