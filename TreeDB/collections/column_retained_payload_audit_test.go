@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/compress/zstd"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -481,8 +483,11 @@ func TestColumnRetainedSemanticStreamV1BlockLayoutAudit2662(t *testing.T) {
 	if audit.Rows != len(docs) || audit.BlockRows != columnRetainedSemanticStreamV1BlockRows || audit.BlockCount != 1 {
 		t.Fatalf("unexpected block layout row/block counters: %+v", audit)
 	}
-	if audit.PrimaryLocatorBytes != accounting.PrimaryLocatorBytes || audit.RawBlockBytes != accounting.BlockBytes {
+	if audit.PrimaryLocatorBytes != accounting.PrimaryLocatorBytes || audit.StoredBlockBytes != accounting.BlockBytes {
 		t.Fatalf("audit/accounting mismatch audit=%+v accounting=%+v", audit, accounting)
+	}
+	if audit.RawBlockBytes < audit.StoredBlockBytes || audit.StoredBlockBytes <= 0 {
+		t.Fatalf("unexpected stored/raw block bytes audit=%+v accounting=%+v", audit, accounting)
 	}
 	if audit.RawBlockBytes != audit.BlockHeaderBytes+audit.PathMetadataBytes+audit.EntryMetadataBytes+audit.ScalarValueBytes {
 		t.Fatalf("block byte attribution mismatch: %+v", audit)
@@ -520,6 +525,163 @@ func TestColumnRetainedSemanticStreamV1BlockLayoutAudit2662(t *testing.T) {
 	if !limited.PathsTruncated || len(limited.Paths) != 1 || limited.RawBlockBytes != audit.RawBlockBytes {
 		t.Fatalf("limited paths=%+v truncated=%v raw=%d want truncated one raw %d", limited.Paths, limited.PathsTruncated, limited.RawBlockBytes, audit.RawBlockBytes)
 	}
+}
+
+func TestColumnRetainedSemanticStreamV1StoredBlockZSTDWrapper2662(t *testing.T) {
+	const rows = 512
+	documents := make([][]byte, rows)
+	for row := range documents {
+		documents[row] = []byte(fmt.Sprintf(
+			`{"payload":"%s","commit":{"cid":"bafy-test-%06d","record":{"$type":"app.bsky.feed.post","text":"%s"}}}`,
+			strings.Repeat("same-retained-payload-", 8),
+			row,
+			strings.Repeat("semantic stream retained zstd body ", 12),
+		))
+	}
+
+	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock(documents)
+	if err != nil {
+		t.Fatalf("encode raw semantic-stream-v1 block: %v", err)
+	}
+	stored, err := encodeColumnRetainedSemanticStreamV1Block(documents)
+	if err != nil {
+		t.Fatalf("encode stored semantic-stream-v1 block: %v", err)
+	}
+	if !bytes.HasPrefix(stored, columnRetainedSemanticStreamV1BlockZSTDMagic) {
+		t.Fatalf("stored block magic=%q len=%d raw=%d want zstd wrapper", stored[:len(columnRetainedSemanticStreamV1BlockMagic)], len(stored), len(raw))
+	}
+	if len(stored) >= len(raw) {
+		t.Fatalf("stored block len=%d want below raw len=%d", len(stored), len(raw))
+	}
+	decoded, err := decodeColumnRetainedSemanticStreamV1StoredBlock(stored)
+	if err != nil {
+		t.Fatalf("decode stored semantic-stream-v1 block: %v", err)
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Fatalf("decoded stored block mismatch len=%d raw=%d", len(decoded), len(raw))
+	}
+	if legacyDecoded, err := decodeColumnRetainedSemanticStreamV1StoredBlock(raw); err != nil || !bytes.Equal(legacyDecoded, raw) {
+		t.Fatalf("decode legacy raw semantic-stream-v1 block err=%v decoded_len=%d raw=%d", err, len(legacyDecoded), len(raw))
+	}
+	rowCount, err := columnRetainedSemanticStreamV1BlockRowCount(stored)
+	if err != nil || rowCount != rows {
+		t.Fatalf("row count=%d err=%v want %d", rowCount, err, rows)
+	}
+	allRows, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(stored)
+	if err != nil {
+		t.Fatalf("decode all stored semantic-stream-v1 rows: %v", err)
+	}
+	if len(allRows) != rows {
+		t.Fatalf("decoded rows=%d want %d", len(allRows), rows)
+	}
+	for _, row := range []int{0, 37, rows - 1} {
+		single, err := decodeColumnRetainedSemanticStreamV1BlockRowJSON(stored, uint64(row))
+		if err != nil {
+			t.Fatalf("decode single stored semantic-stream-v1 row %d: %v", row, err)
+		}
+		if !bytes.Equal(allRows[row], single) {
+			t.Fatalf("decoded row %d mismatch batch=%s single=%s", row, allRows[row], single)
+		}
+	}
+	got, err := decodeColumnRetainedSemanticStreamV1BlockRowJSON(stored, 37)
+	if err != nil {
+		t.Fatalf("decode stored semantic-stream-v1 row: %v", err)
+	}
+	assertJSONMapEqual1875(t, got, map[string]any{
+		"payload": strings.Repeat("same-retained-payload-", 8),
+		"commit": map[string]any{
+			"cid": "bafy-test-000037",
+			"record": map[string]any{
+				"$type": "app.bsky.feed.post",
+				"text":  strings.Repeat("semantic stream retained zstd body ", 12),
+			},
+		},
+	})
+
+	collector, err := newColumnRetainedSemanticStreamV1BlockLayoutCollector()
+	if err != nil {
+		t.Fatalf("new block layout collector: %v", err)
+	}
+	defer collector.close()
+	if err := collector.addBlock(stored); err != nil {
+		t.Fatalf("collector.addBlock stored wrapper: %v", err)
+	}
+	audit, err := collector.result(rows, 0)
+	if err != nil {
+		t.Fatalf("collector.result: %v", err)
+	}
+	if audit.StoredBlockBytes != int64(len(stored)) || audit.RawBlockBytes != int64(len(raw)) {
+		t.Fatalf("audit stored/raw bytes=%d/%d want %d/%d audit=%+v", audit.StoredBlockBytes, audit.RawBlockBytes, len(stored), len(raw), audit)
+	}
+}
+
+func TestColumnRetainedSemanticStreamV1StoredBlockZSTDFailsClosed2662(t *testing.T) {
+	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock([][]byte{[]byte(`{"payload":"same"}`), []byte(`{"payload":"same"}`)})
+	if err != nil {
+		t.Fatalf("encode raw semantic-stream-v1 block: %v", err)
+	}
+	compressed := semanticStreamZSTDCompress2662(t, raw)
+
+	cases := []struct {
+		name string
+		raw  []byte
+		want string
+	}{
+		{
+			name: "invalid zstd",
+			raw:  semanticStreamZSTDStoredBlockWithRawLength2662(uint64(len(raw)), []byte("not-zstd")),
+			want: "decode semantic-stream-v1 retained block zstd payload",
+		},
+		{
+			name: "wrong decoded length",
+			raw:  semanticStreamZSTDStoredBlockWithRawLength2662(uint64(len(raw)+1), compressed),
+			want: "decoded length",
+		},
+		{
+			name: "decoded invalid magic",
+			raw:  semanticStreamZSTDStoredBlock2662(t, []byte("not-a-raw-semantic-block")),
+			want: "decoded to invalid block",
+		},
+		{
+			name: "oversized raw length",
+			raw:  semanticStreamZSTDStoredBlockWithRawLength2662(maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes+1, []byte("x")),
+			want: "exceeds max",
+		},
+	}
+	for _, tc := range cases {
+		if _, err := decodeColumnRetainedSemanticStreamV1StoredBlock(tc.raw); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s err=%v want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+func semanticStreamZSTDStoredBlock2662(t testing.TB, raw []byte) []byte {
+	t.Helper()
+	compressed := semanticStreamZSTDCompress2662(t, raw)
+	return semanticStreamZSTDStoredBlockWithRawLength2662(uint64(len(raw)), compressed)
+}
+
+func semanticStreamZSTDCompress2662(t testing.TB, raw []byte) []byte {
+	t.Helper()
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedFastest),
+		zstd.WithEncoderCRC(false),
+		zstd.WithEncoderConcurrency(1),
+	)
+	if err != nil {
+		t.Fatalf("zstd writer: %v", err)
+	}
+	compressed := enc.EncodeAll(raw, nil)
+	enc.Close()
+	return compressed
+}
+
+func semanticStreamZSTDStoredBlockWithRawLength2662(rawLen uint64, compressed []byte) []byte {
+	out := make([]byte, 0, len(columnRetainedSemanticStreamV1BlockZSTDMagic)+binary.MaxVarintLen64+len(compressed))
+	out = append(out, columnRetainedSemanticStreamV1BlockZSTDMagic...)
+	out = binary.AppendUvarint(out, rawLen)
+	out = append(out, compressed...)
+	return out
 }
 
 func TestColumnRetainedSemanticStreamV1BlockCodecLZ4RawFallback2662(t *testing.T) {

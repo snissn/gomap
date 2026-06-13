@@ -359,6 +359,14 @@ func TestColumnRetainedPayloadSemanticStreamV1InsertBatchRoundTripReopen(t *test
 	if !page.IsValueLogFileID(ptr.FileID) {
 		t.Fatalf("semantic stream block pointer file id=%d is not value-log backed", ptr.FileID)
 	}
+	storedBlock := requireColumnRetainedSemanticStreamStoredBlock(t, d, "events", blockKey)
+	rawBlock, err := decodeColumnRetainedSemanticStreamV1StoredBlock(storedBlock)
+	if err != nil {
+		t.Fatalf("decode stored semantic stream block: %v", err)
+	}
+	if !bytes.HasPrefix(storedBlock, columnRetainedSemanticStreamV1BlockZSTDMagic) || len(storedBlock) >= len(rawBlock) {
+		t.Fatalf("semantic stream block stored_len=%d raw_len=%d magic=%q want compressed zstd wrapper", len(storedBlock), len(rawBlock), storedBlock[:len(columnRetainedSemanticStreamV1BlockMagic)])
+	}
 	if got, err := col.Get(ids[17]); err != nil {
 		t.Fatalf("Get semantic stream doc: %v", err)
 	} else {
@@ -824,6 +832,30 @@ func requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t testing.TB, d *
 		t.Fatalf("semantic stream block pointer file id=%d is not a value-log file", blockEntry.ValuePtr.FileID)
 	}
 	return blockKey, row, blockEntry.ValuePtr
+}
+
+func requireColumnRetainedSemanticStreamStoredBlock(t testing.TB, d *backenddb.DB, collection string, blockKey []byte) []byte {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collection)
+	if err != nil {
+		t.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("collection catalog %q missing", collection)
+	}
+	block, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionRetainedSemanticStreamRootName(collection), blockKey, nil)
+	if err != nil {
+		t.Fatalf("semantic stream block read: %v", err)
+	}
+	if !found {
+		t.Fatalf("semantic stream block %x missing", blockKey)
+	}
+	return block
 }
 
 func requireColumnRetainedSemanticStreamBlockDeleted(t testing.TB, d *backenddb.DB, collection string, blockKey []byte) {

@@ -19977,6 +19977,10 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 	if columnStoreHasTypedColumnPartOwners(columnStoreConfig) {
 		typedColumnCache = &typedColumnPartReconstructionCache{Parts: make(map[uint64]typedColumnPartDecodedValues)}
 	}
+	var retainedSemanticCache *columnRetainedSemanticStreamV1DecodeCache
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(&columnStoreConfig) {
+		retainedSemanticCache = newColumnRetainedSemanticStreamV1DecodeCache()
+	}
 	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(columnStoreConfig)))
 	mergeScratch := make([]columnDeclaredValue, 0, len(columnStoreConfig.Columns))
@@ -19996,7 +20000,7 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		if err != nil {
 			return false, err
 		}
-		retainedDocument, err := resolveColumnRetainedPayloadAtSnapshot(snap, catalog, columnStoreConfig, record.Document)
+		retainedDocument, err := resolveColumnRetainedPayloadAtSnapshotWithCache(snap, catalog, columnStoreConfig, record.Document, retainedSemanticCache)
 		if err != nil {
 			return false, err
 		}

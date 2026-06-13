@@ -872,6 +872,10 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 		cfg = v.catalog.meta.Options.ColumnStore.copy()
 		resolveRetained = columnStoreRetainedPayloadUsesSemanticStreamV1(&cfg)
 	}
+	var retainedSemanticCache *columnRetainedSemanticStreamV1DecodeCache
+	if resolveRetained {
+		retainedSemanticCache = newColumnRetainedSemanticStreamV1DecodeCache()
+	}
 	err := collectionGetManyViewAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), ids, func(i int, _ []byte, value []byte, found bool) error {
 		if i < 0 || i >= len(ids) {
 			return fmt.Errorf("collections: GetManyView callback index %d outside %d ids", i, len(ids))
@@ -882,7 +886,7 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 		}
 		response.Results[i].Found = true
 		if resolveRetained {
-			resolved, err := resolveColumnRetainedPayloadAtSnapshot(v.snapshot, v.catalog, cfg, value)
+			resolved, err := resolveColumnRetainedPayloadAtSnapshotWithCache(v.snapshot, v.catalog, cfg, value, retainedSemanticCache)
 			if err != nil {
 				return err
 			}

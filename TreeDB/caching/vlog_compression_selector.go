@@ -79,7 +79,10 @@ var (
 	vlogSelectorBlockCodecs    = [...]valuelog.BlockCodec{valuelog.BlockCodecSnappy, valuelog.BlockCodecLZ4, valuelog.BlockCodecZSTD}
 )
 
-var valueLogRetainedSemanticStreamV1BlockMagic = []byte("crss1blk\x00")
+var (
+	valueLogRetainedSemanticStreamV1BlockMagic     = []byte("crss1blk\x00")
+	valueLogRetainedSemanticStreamV1BlockZSTDMagic = []byte("crss1zst\x00")
+)
 
 const (
 	defaultVlogHoldBytes      = 64 << 20
@@ -1840,7 +1843,8 @@ func valueLogPayloadLooksRetainedJSONLike(value []byte) bool {
 				(value[i+1] == 'D' && value[i+2] == '1') &&
 				(value[i+3] == 'D' || value[i+3] == 'I' || value[i+3] == 'H')
 		case 'c':
-			return bytes.HasPrefix(value[i:], valueLogRetainedSemanticStreamV1BlockMagic)
+			return bytes.HasPrefix(value[i:], valueLogRetainedSemanticStreamV1BlockMagic) ||
+				bytes.HasPrefix(value[i:], valueLogRetainedSemanticStreamV1BlockZSTDMagic)
 		default:
 			return false
 		}
