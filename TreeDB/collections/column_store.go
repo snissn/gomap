@@ -197,6 +197,7 @@ const (
 	ColumnStoreTypedColumnCompressionNone    ColumnStoreTypedColumnCompression = "none"
 	ColumnStoreTypedColumnCompressionSnappy  ColumnStoreTypedColumnCompression = "snappy"
 	ColumnStoreTypedColumnCompressionLZ4     ColumnStoreTypedColumnCompression = "lz4"
+	ColumnStoreTypedColumnCompressionZSTD    ColumnStoreTypedColumnCompression = "zstd"
 )
 
 // ColumnAssetReadIntegrity controls hot physical column asset read validation.
@@ -506,13 +507,18 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 	if out.ProfileSupport == "" {
 		out.ProfileSupport = ColumnStoreProfileDurableOnly
 	}
+	typedColumnCompressionDefault := isDefaultColumnStoreTypedColumnCompression(out.TypedColumnCompression)
 	typedColumnCompression, err := canonicalColumnStoreTypedColumnCompression("typed_column_compression", out.TypedColumnCompression)
 	if err != nil {
 		return nil, err
 	}
 	out.TypedColumnCompression = typedColumnCompression
-	if out.TypedColumnSectionCompression == ColumnStoreTypedColumnCompressionDefault {
-		out.TypedColumnSectionCompression = out.TypedColumnCompression
+	if isDefaultColumnStoreTypedColumnCompression(out.TypedColumnSectionCompression) {
+		if typedColumnCompressionDefault {
+			out.TypedColumnSectionCompression = ColumnStoreTypedColumnCompressionZSTD
+		} else {
+			out.TypedColumnSectionCompression = out.TypedColumnCompression
+		}
 	} else {
 		typedColumnSectionCompression, err := canonicalColumnStoreTypedColumnCompression("typed_column_section_compression", out.TypedColumnSectionCompression)
 		if err != nil {

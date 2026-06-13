@@ -1351,9 +1351,10 @@ control-plane state, not a sidecar hint. Current normalized fields are:
   Current production default is `lz4`; `none` is an explicit isolation policy,
   and unsupported codecs fail closed during metadata normalization.
 - `typed_column_section_compression`: whole-image section compression policy for
-  eligible `tcs1_typed_column_part` sections. Empty/default follows
-  `typed_column_compression`. Current production default is `lz4`; unsupported
-  section codecs fail closed.
+  eligible `tcs1_typed_column_part` sections. Empty/default selects `zstd` when
+  `typed_column_compression` is also defaulted; otherwise it follows the
+  explicit typed-column compression policy. Current production default is
+  `zstd`; unsupported section codecs fail closed.
 - `locator`: current default strategy is `side-index`.
 - `schema_hash`: normalized hash of stable column schema/config fields used for
   cache identity invalidation. Manifest generation and recovery LSN are not
@@ -1369,19 +1370,19 @@ handoff facts are recorded in `typed-storage-closeout-1758.md`.
 
 As of issue `#2297`, normalized column-store metadata records production
 typed-column compression policy. The default policy requests `lz4` for
-supported typed-column block families and for eligible typed-column image
-sections whose raw length can be validated from existing metadata. Compression is
-kept only when it is a strict stored-size win; unsupported field/layout families
-remain uncompressed unless a benchmark override explicitly forces them, in which
-case writers fail closed. `none` disables the production policy for isolation and
-is part of the schema hash.
-Plain zstd (`zstd`) is a decode-supported typed-column codec for internal
-benchmark-relaxed storage experiments and may appear in benchmark-produced
-typed-column blocks or image sections only when those benchmark overrides are
-active. Public production metadata still rejects `typed_column_compression=zstd`
-and `typed_column_section_compression=zstd`; production-default writers continue
-to choose `lz4` unless configured otherwise with supported production values.
-Zstd dictionary mode (`zstd_dict`) is deferred and unsupported for typed-column
+supported typed-column block families and `zstd` for eligible typed-column image
+sections whose raw length can be validated from existing metadata, including
+dictionary and pruning metadata sections. Compression is kept only when it is a
+strict stored-size win; unsupported field/layout families remain uncompressed
+unless a benchmark override explicitly forces them, in which case writers fail
+closed. `none` disables the production policy for isolation when set on both the
+block and section policies and is part of the schema hash.
+Plain zstd (`zstd`) is a production-supported whole-image section codec and a
+decode-supported typed-column block codec for internal benchmark-relaxed storage
+experiments. Public production metadata still rejects
+`typed_column_compression=zstd`; production-default block writers continue to
+choose `lz4` unless configured otherwise with supported production values. Zstd
+dictionary mode (`zstd_dict`) is deferred and unsupported for typed-column
 blocks, image sections, and public metadata.
 
 Readers must fail closed for a column-enabled collection when:

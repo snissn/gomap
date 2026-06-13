@@ -195,8 +195,8 @@ func TestTypedColumnProductionCompressionPolicyDefaultsDurable2297(t *testing.T)
 	if got := col.Meta().Options.ColumnStore.TypedColumnCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
 		t.Fatalf("typed_column_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
 	}
-	if got := col.Meta().Options.ColumnStore.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
-		t.Fatalf("typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
+	if got := col.Meta().Options.ColumnStore.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionZSTD {
+		t.Fatalf("typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionZSTD)
 	}
 	values := make([]int64, 4096)
 	for i := range values {
@@ -242,8 +242,8 @@ func TestTypedColumnProductionCompressionPolicyDefaultsDurable2297(t *testing.T)
 			if section.Kind != string(typedcolumn.ColumnPartImageSectionRowLocators) {
 				if section.Kind == string(typedcolumn.ColumnPartImageSectionPruningMetadata) {
 					foundPruningSection = true
-					if section.Compression != string(ColumnStoreTypedColumnCompressionLZ4) || section.RawBytes <= section.StoredBytes || section.StoredBytes != section.Bytes {
-						t.Fatalf("pruning metadata section=%+v want kept LZ4 section compression", section)
+					if section.Compression != string(ColumnStoreTypedColumnCompressionZSTD) || section.RawBytes <= section.StoredBytes || section.StoredBytes != section.Bytes {
+						t.Fatalf("pruning metadata section=%+v want kept zstd section compression", section)
 					}
 				}
 				continue

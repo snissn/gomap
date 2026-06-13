@@ -168,11 +168,23 @@ func canonicalColumnStoreTypedColumnCompression(name string, raw ColumnStoreType
 	case "lz4":
 		return ColumnStoreTypedColumnCompressionLZ4, nil
 	case "zstd":
+		if name == "typed_column_section_compression" {
+			return ColumnStoreTypedColumnCompressionZSTD, nil
+		}
 		return "", fmt.Errorf("%w: unsupported %s zstd (zstd is currently benchmark-relaxed/internal only)", errTypedColumnProductionLayoutUnsupported, name)
 	case "zstd_dict", "zstd-dict":
 		return "", fmt.Errorf("%w: unsupported %s zstd_dict (production zstd dictionary encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
 	default:
 		return "", fmt.Errorf("%w: unknown %s %q", errTypedColumnProductionLayoutUnsupported, name, raw)
+	}
+}
+
+func isDefaultColumnStoreTypedColumnCompression(raw ColumnStoreTypedColumnCompression) bool {
+	switch strings.ToLower(strings.TrimSpace(string(raw))) {
+	case "", "default":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -188,6 +200,8 @@ func parseColumnStoreTypedColumnCompression(name string, raw ColumnStoreTypedCol
 		return typedcolumn.CompressionSnappy, nil
 	case ColumnStoreTypedColumnCompressionLZ4:
 		return typedcolumn.CompressionLZ4, nil
+	case ColumnStoreTypedColumnCompressionZSTD:
+		return typedcolumn.CompressionZSTD, nil
 	default:
 		return 0, fmt.Errorf("%w: unknown %s %q", errTypedColumnProductionLayoutUnsupported, name, raw)
 	}
