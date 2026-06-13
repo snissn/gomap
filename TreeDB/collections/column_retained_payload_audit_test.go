@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -226,8 +227,8 @@ func TestAuditCollectionRetainedPayloadShapeStatsTemplateV12662(t *testing.T) {
 
 func TestAuditCollectionRetainedPayloadValueFamilyStats2662(t *testing.T) {
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, jsonbenchRetainedPayloadAuditConfig2382(true), [][]byte{
-		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"subject":{"uri":"at://did:plc:alice/app.bsky.feed.post/3aaa"}}},"payload":"same"}`),
-		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"subject":{"uri":"at://did:plc:bob/app.bsky.feed.post/3bbb"}}},"payload":"same"}`),
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"subject":{"uri":"at://did:plc:alice/app.bsky.feed.post/3aaa"}}},"payload":"same","empty":""}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"subject":{"uri":"at://did:plc:bob/app.bsky.feed.post/3bbb"}}},"payload":"same","empty":""}`),
 	})
 	defer closeDB()
 
@@ -278,6 +279,17 @@ func TestAuditCollectionRetainedPayloadValueFamilyStats2662(t *testing.T) {
 	subjectURI, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "commit.record.subject.uri")
 	if !ok || subjectURI.CommonPrefix != "at://did:plc:" || subjectURI.CommonPrefixBytes != len("at://did:plc:") {
 		t.Fatalf("subject uri family stat=%+v ok=%v", subjectURI, ok)
+	}
+	empty, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "empty")
+	if !ok || empty.MinLength != 0 || empty.MaxLength != 0 || empty.MeanLength != 0 || empty.StringBytes != 0 {
+		t.Fatalf("empty string family stat=%+v ok=%v", empty, ok)
+	}
+	emptyJSON, err := json.Marshal(empty)
+	if err != nil {
+		t.Fatalf("marshal empty string family stat: %v", err)
+	}
+	if !strings.Contains(string(emptyJSON), `"min_length":0`) || !strings.Contains(string(emptyJSON), `"max_length":0`) || !strings.Contains(string(emptyJSON), `"mean_length":0`) {
+		t.Fatalf("empty string family JSON omitted zero length fields: %s", emptyJSON)
 	}
 	if _, ok := retainedPayloadValueFamilyStat2662(audit.RetainedPayloadValueFamilies, "kind"); ok {
 		t.Fatalf("declared kind path leaked into value-family stats: %+v", audit.RetainedPayloadValueFamilies)

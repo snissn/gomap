@@ -120,9 +120,9 @@ type ColumnRetainedPayloadValueFamilyStat struct {
 	JSONBytes             int64                               `json:"json_bytes"`
 	StringBytes           int64                               `json:"string_bytes"`
 	OracleInputBytes      int64                               `json:"oracle_input_bytes"`
-	MinLength             int                                 `json:"min_length,omitempty"`
-	MaxLength             int                                 `json:"max_length,omitempty"`
-	MeanLength            float64                             `json:"mean_length,omitempty"`
+	MinLength             int                                 `json:"min_length"`
+	MaxLength             int                                 `json:"max_length"`
+	MeanLength            float64                             `json:"mean_length"`
 	TrackedUniqueValues   int64                               `json:"tracked_unique_values"`
 	UniqueValuesTruncated bool                                `json:"unique_values_truncated,omitempty"`
 	RepeatedValues        int64                               `json:"repeated_values,omitempty"`
