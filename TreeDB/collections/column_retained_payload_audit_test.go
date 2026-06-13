@@ -996,7 +996,7 @@ func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutSampledDecodedSt
 	}
 }
 
-func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutAllowsInlineRows2662(t *testing.T) {
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutRecordsSingleRowBlock2662(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
 	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
@@ -1011,11 +1011,11 @@ func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutAllowsInlineRows
 		t.Fatalf("inline semantic-stream-v1 block layout audit: %v audit=%+v", err, audit)
 	}
 	if audit.Status != "passed" || audit.CheckedRows != 1 {
-		t.Fatalf("audit=%+v want passed one inline row", audit)
+		t.Fatalf("audit=%+v want passed one semantic block row", audit)
 	}
 	layout := audit.RetainedPayloadSemanticStreamBlockLayout
-	if layout == nil || layout.BlockCount != 0 || layout.RawBlockBytes != 0 || layout.PrimaryLocatorBytes != 0 || audit.RetainedPayloadBytes <= 0 {
-		t.Fatalf("inline block layout=%+v audit=%+v", layout, audit)
+	if layout == nil || layout.BlockCount != 1 || layout.RawBlockBytes <= 0 || layout.StoredBlockBytes <= 0 || layout.PrimaryLocatorBytes <= 0 {
+		t.Fatalf("single-row block layout=%+v audit=%+v", layout, audit)
 	}
 }
 

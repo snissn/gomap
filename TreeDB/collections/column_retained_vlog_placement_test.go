@@ -600,6 +600,16 @@ func TestColumnRetainedPayloadSemanticStreamV1ReclaimsSideBlockAfterUpdateBatch(
 		}
 	}
 	requireColumnRetainedSemanticStreamBlockDeleted(t, d, "events", blockKey)
+	replacementBlockKey, replacementRow, replacementPtr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[8])
+	if bytes.Equal(replacementBlockKey, blockKey) {
+		t.Fatalf("updated row still references reclaimed block %x", blockKey)
+	}
+	if replacementRow != 8 {
+		t.Fatalf("updated semantic locator row=%d want 8", replacementRow)
+	}
+	if !page.IsValueLogFileID(replacementPtr.FileID) {
+		t.Fatalf("updated semantic stream block pointer file id=%d is not value-log backed", replacementPtr.FileID)
+	}
 	if got, err := col.Get(ids[8]); err != nil {
 		t.Fatalf("Get updated semantic row: %v", err)
 	} else {
@@ -609,6 +619,104 @@ func TestColumnRetainedPayloadSemanticStreamV1ReclaimsSideBlockAfterUpdateBatch(
 			"payload": "updated-payload-008",
 			"commit": map[string]any{
 				"cid": "updated-cid-008",
+			},
+		})
+	}
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1UpdateWritesReplacementBlock(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids, docs := retainedSemanticStreamDocuments(1)
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	blockKey, _, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[0])
+
+	matched, modified, err := col.Update(ids[0], func(current []byte) ([]byte, bool, error) {
+		assertRetainedSemanticStreamDocument(t, current, 0)
+		return retainedSemanticStreamUpdatedDocument(0), true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("Update matched=%v modified=%v want true,true", matched, modified)
+	}
+	requireColumnRetainedSemanticStreamBlockDeleted(t, d, "events", blockKey)
+	replacementBlockKey, replacementRow, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[0])
+	if bytes.Equal(replacementBlockKey, blockKey) {
+		t.Fatalf("updated row still references reclaimed block %x", blockKey)
+	}
+	if replacementRow != 0 {
+		t.Fatalf("updated semantic locator row=%d want 0", replacementRow)
+	}
+	if got, err := col.Get(ids[0]); err != nil {
+		t.Fatalf("Get updated semantic row: %v", err)
+	} else {
+		assertJSONMapEqual1875(t, got, map[string]any{
+			"row_id":  float64(0),
+			"kind":    "updated-kind-0",
+			"payload": "updated-payload-000",
+			"commit": map[string]any{
+				"cid": "updated-cid-000",
+			},
+		})
+	}
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1DefaultUpdateBatchWritesReplacementBlock(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamDefaultCollection(t, d, "events")
+	ids, docs := retainedSemanticStreamDocuments(4)
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	blockKey, _, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[1])
+
+	items := make([]UpdateBatchItem, len(ids))
+	for i := range ids {
+		row := i
+		replacement := retainedSemanticStreamUpdatedDocument(row)
+		items[i] = UpdateBatchItem{
+			DocumentID: ids[i],
+			Update: func(current []byte) ([]byte, bool, error) {
+				return replacement, true, nil
+			},
+		}
+	}
+	results, err := col.UpdateBatch(items)
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != len(ids) {
+		t.Fatalf("UpdateBatch results=%d want %d", len(results), len(ids))
+	}
+	requireColumnRetainedSemanticStreamBlockDeleted(t, d, "events", blockKey)
+	replacementBlockKey, replacementRow, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[1])
+	if bytes.Equal(replacementBlockKey, blockKey) {
+		t.Fatalf("updated default row still references reclaimed block %x", blockKey)
+	}
+	if replacementRow != 1 {
+		t.Fatalf("updated default semantic locator row=%d want 1", replacementRow)
+	}
+	if got, err := col.Get(ids[1]); err != nil {
+		t.Fatalf("Get updated default semantic row: %v", err)
+	} else {
+		assertJSONMapEqual1875(t, got, map[string]any{
+			"row_id":  float64(1),
+			"kind":    "updated-kind-1",
+			"payload": "updated-payload-001",
+			"commit": map[string]any{
+				"cid": "updated-cid-001",
 			},
 		})
 	}
@@ -662,6 +770,24 @@ func createColumnRetainedSemanticStreamCollection(t testing.TB, d *backenddb.DB,
 		RetainedPayload:         ColumnRetainedPayloadNonColumn,
 		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
 		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: name, Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	return openColumnRetainedPlacementCollection(t, d, name)
+}
+
+func createColumnRetainedSemanticStreamDefaultCollection(t testing.TB, d *backenddb.DB, name string) *Collection {
+	t.Helper()
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload: ColumnRetainedPayloadNonColumn,
+		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
 	}
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: name, Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {

@@ -8353,6 +8353,115 @@ func buildRootDeltaBatchPublishInputsFromTables(collectionName string, rootNames
 	return ordered, cleanup, nil
 }
 
+func coalesceCollectionRootDeltaTables(collectionName string, rootNames []string, tables []memtable.Table, policies []backenddb.OrderedRootStoragePolicy) ([]string, []memtable.Table, []backenddb.OrderedRootStoragePolicy, func(), error) {
+	if len(rootNames) != len(tables) || len(rootNames) != len(policies) {
+		return nil, nil, nil, func() {}, fmt.Errorf("collections: collection %q invalid delta lengths roots=%d tables=%d policies=%d", collectionName, len(rootNames), len(tables), len(policies))
+	}
+	if len(rootNames) < 2 {
+		return rootNames, tables, policies, func() {}, nil
+	}
+	firstByRoot := make(map[string]int, len(rootNames))
+	duplicate := false
+	for i, rootName := range rootNames {
+		if first, ok := firstByRoot[rootName]; ok {
+			if policies[i] != policies[first] {
+				return nil, nil, nil, func() {}, fmt.Errorf("collections: collection %q root %q has mismatched delta policies %d and %d", collectionName, rootName, policies[first], policies[i])
+			}
+			duplicate = true
+			continue
+		}
+		firstByRoot[rootName] = i
+	}
+	if !duplicate {
+		return rootNames, tables, policies, func() {}, nil
+	}
+
+	type rootDeltaGroup struct {
+		name    string
+		policy  backenddb.OrderedRootStoragePolicy
+		indexes []int
+	}
+	groups := make([]rootDeltaGroup, 0, len(firstByRoot))
+	groupByRoot := make(map[string]int, len(firstByRoot))
+	for i, rootName := range rootNames {
+		if groupIdx, ok := groupByRoot[rootName]; ok {
+			groups[groupIdx].indexes = append(groups[groupIdx].indexes, i)
+			continue
+		}
+		groupByRoot[rootName] = len(groups)
+		groups = append(groups, rootDeltaGroup{
+			name:    rootName,
+			policy:  policies[i],
+			indexes: []int{i},
+		})
+	}
+
+	outNames := make([]string, 0, len(groups))
+	outTables := make([]memtable.Table, 0, len(groups))
+	outPolicies := make([]backenddb.OrderedRootStoragePolicy, 0, len(groups))
+	var coalesced []memtable.Table
+	cleanup := func() {
+		resetCollectionTables(coalesced)
+	}
+	for _, group := range groups {
+		outNames = append(outNames, group.name)
+		outPolicies = append(outPolicies, group.policy)
+		if len(group.indexes) == 1 {
+			outTables = append(outTables, tables[group.indexes[0]])
+			continue
+		}
+		groupTables := make([]memtable.Table, 0, len(group.indexes))
+		for _, idx := range group.indexes {
+			groupTables = append(groupTables, tables[idx])
+		}
+		merged, err := mergeCollectionRootDeltaTables(groupTables)
+		if err != nil {
+			cleanup()
+			return nil, nil, nil, func() {}, err
+		}
+		coalesced = append(coalesced, merged)
+		outTables = append(outTables, merged)
+	}
+	return outNames, outTables, outPolicies, cleanup, nil
+}
+
+func mergeCollectionRootDeltaTables(tables []memtable.Table) (memtable.Table, error) {
+	total := 0
+	for _, table := range tables {
+		if table != nil {
+			total += table.Len()
+		}
+	}
+	merged := newCollectionRunTable(total)
+	for _, table := range tables {
+		if table == nil || table.Len() == 0 {
+			continue
+		}
+		iter := table.NewIterator(nil, nil)
+		for iter.Valid() {
+			key := bytes.Clone(iter.UnsafeKey())
+			value, ptr, flags := iter.UnsafeEntry()
+			if flags&node.FlagTombstone != 0 {
+				merged.DeleteSteal(key)
+			} else {
+				merged.SetEntrySteal(key, bytes.Clone(value), ptr, flags)
+			}
+			iter.Next()
+		}
+		if err := iter.Error(); err != nil {
+			_ = iter.Close()
+			resetCollectionRunTable(merged)
+			return nil, err
+		}
+		if err := iter.Close(); err != nil {
+			resetCollectionRunTable(merged)
+			return nil, err
+		}
+	}
+	merged.Freeze()
+	return merged, nil
+}
+
 func collectionRootDeltaPlanStatsFromOrdered(collectionName string, rootNames []string, ordered []backenddb.OrderedRootDeltaBatchPublishInput) collectionRootDeltaPlanStats {
 	var stats collectionRootDeltaPlanStats
 	for i, rootName := range rootNames {
@@ -13799,8 +13908,9 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		plannerOptions.templateResolver = templateResolver
 	}
 	var retainedPrimaryDocument []byte
+	var retainedSemanticStreamBlocks memtable.Table
 	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
-		prepared, err := prepareColumnRetainedPayloadStorageDocuments(*c.meta.Options.ColumnStore, [][]byte{document}, columnRetainedPayloadTemplateResolver(snap, catalog))
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(*c.meta.Options.ColumnStore, [][]byte{document}, columnRetainedPayloadTemplateResolver(snap, catalog))
 		if err != nil {
 			_ = snap.Close()
 			return false, false, err
@@ -13810,6 +13920,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 			return false, false, errors.New("collections: update retained payload prepared unexpected document count")
 		}
 		retainedPrimaryDocument = prepared.documents[0]
+		retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
 		templateRecords = append(templateRecords, prepared.templateRecords...)
 	}
 
@@ -13910,6 +14021,13 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	} else {
 		deltaTables = append(deltaTables, primaryTable)
 	}
+	if err := appendColumnRetainedSemanticStreamV1BlockDeltas(c.db, catalog, c.meta, retainedSemanticStreamBlocks, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+		_ = snap.Close()
+		resetCollectionRunTable(retainedSemanticStreamBlocks)
+		resetCollectionTables(deltaTables)
+		return false, false, err
+	}
+	retainedSemanticStreamBlocks = nil
 	if err := appendColumnRetainedSemanticStreamV1ReclaimDeltas(c.db, snap, catalog, c.meta, [][]byte{documentID}, [][]byte{semanticReclaimValue}, [][]byte{primaryDocument}, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
 		_ = snap.Close()
 		resetCollectionTables(deltaTables)
@@ -14016,13 +14134,23 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	defer func() {
 		resetCollectionTables(deltaTables)
 	}()
-	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, deltaTables, baseRootIDs, policies)
+	coalescedRootNames, publishDeltaTables, publishPolicies, cleanupCoalesced, err := coalesceCollectionRootDeltaTables(c.meta.Name, rootNames, deltaTables, policies)
+	if err != nil {
+		return false, false, err
+	}
+	defer cleanupCoalesced()
+	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionDataRootDeltaTables(c.db, c.meta, coalescedRootNames, publishDeltaTables)
+	if err != nil {
+		return false, false, err
+	}
+	defer cleanupPointerized()
+	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, coalescedRootNames, publishDeltaTables, baseRootIDs, publishPolicies)
 	if err != nil {
 		return false, false, err
 	}
 	var deltaStats collectionRootDeltaPlanStats
 	if c.writeDomain != nil {
-		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, coalescedRootNames, ordered)
 	}
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
@@ -14052,7 +14180,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 				catalog:           catalog,
 				baseCommitSeq:     baseCommitSeq,
 				baseSystemRoot:    baseSystemRoot,
-				rootNames:         cloneColumnPublishRootNames(rootNames),
+				rootNames:         cloneColumnPublishRootNames(coalescedRootNames),
 				baseRootIDs:       cloneColumnPublishBaseRootIDs(baseRootIDs),
 				commandWALIntent:  commandWALIntent,
 				operation:         ColumnPublishOperationUpdate,
@@ -14064,9 +14192,9 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		})
 	} else {
 		publishMeta = c.meta
-		publishRootNames = rootNames
+		publishRootNames = coalescedRootNames
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, coalescedRootNames, baseRootIDs, rootIDs)
 		})
 	}
 	stats.Publish += updateBatchStatsSince(detailedStats, phaseStart)
@@ -14088,7 +14216,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		}
 	}
 	stats.Modified = 1
-	stats.Runs = len(rootNames)
+	stats.Runs = len(publishRootNames)
 	c.setLastUpdateStats(stats)
 	return true, true, nil
 }
@@ -15910,8 +16038,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		templateV1CommandWALDocuments = collectionDocumentsFromBatchUpdateDocuments(changed, changedDocuments)
 	}
 	var retainedPrimaryDocuments [][]byte
+	var retainedSemanticStreamBlocks memtable.Table
 	if columnStoreNeedsRetainedPayloadTransform(meta) {
-		prepared, err := prepareColumnRetainedPayloadStorageDocuments(*meta.Options.ColumnStore, changedDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(*meta.Options.ColumnStore, changedDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
@@ -15921,6 +16050,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			return nil, errors.New("collections: update batch retained payload prepared unexpected document count")
 		}
 		retainedPrimaryDocuments = prepared.documents
+		retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
 		templateRecords = append(templateRecords, prepared.templateRecords...)
 	}
 	for i := range changed {
@@ -16026,7 +16156,8 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, secondaryIndexChanges, changed, updateBatchItemsAllHaveBSONSet(items))
+	hasRetainedSemanticStreamBlocks := retainedSemanticStreamBlocks != nil && retainedSemanticStreamBlocks.Len() > 0
+	canBufferDirectUpdateBatch := !hasRetainedSemanticStreamBlocks && c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, secondaryIndexChanges, changed, updateBatchItemsAllHaveBSONSet(items))
 	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
@@ -16154,6 +16285,11 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		}
 		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 	}
+
+	if err := appendColumnRetainedSemanticStreamV1BlockDeltas(c.db, catalog, meta, retainedSemanticStreamBlocks, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+		return nil, err
+	}
+	retainedSemanticStreamBlocks = nil
 
 	rootNames = append(rootNames, primaryRootName)
 	uniqueSecondary = append(uniqueSecondary, -1)
@@ -16355,18 +16491,23 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		return nil, fmt.Errorf("collections: UpdateBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", plan.meta.Name, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
 	}
 
-	publishTables, cleanupPointerized, err := pointerizeCollectionDataRootDeltaTables(c.db, plan.meta, plan.rootNames, plan.deltaTables)
+	coalescedRootNames, publishTables, publishPolicies, cleanupCoalesced, err := coalesceCollectionRootDeltaTables(plan.meta.Name, plan.rootNames, plan.deltaTables, plan.policies)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupCoalesced()
+	publishTables, cleanupPointerized, err := pointerizeCollectionDataRootDeltaTables(c.db, plan.meta, coalescedRootNames, publishTables)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanupPointerized()
-	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(plan.meta.Name, plan.rootNames, publishTables, plan.baseRootIDs, plan.policies)
+	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(plan.meta.Name, coalescedRootNames, publishTables, plan.baseRootIDs, publishPolicies)
 	if err != nil {
 		return nil, err
 	}
 	var deltaStats collectionRootDeltaPlanStats
 	if c.writeDomain != nil {
-		deltaStats = collectionRootDeltaPlanStatsFromOrdered(plan.meta.Name, plan.rootNames, ordered)
+		deltaStats = collectionRootDeltaPlanStatsFromOrdered(plan.meta.Name, coalescedRootNames, ordered)
 	}
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
@@ -16384,7 +16525,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 				catalog:           plan.catalog,
 				baseCommitSeq:     plan.baseCommitSeq,
 				baseSystemRoot:    plan.baseSystemRoot,
-				rootNames:         cloneColumnPublishRootNames(plan.rootNames),
+				rootNames:         cloneColumnPublishRootNames(coalescedRootNames),
 				baseRootIDs:       cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
 				commandWALIntent:  commandWALIntent,
 				operation:         ColumnPublishOperationUpdate,
@@ -16416,13 +16557,13 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	} else if commandWALIntent != nil {
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
+				return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, coalescedRootNames, plan.baseRootIDs, rootIDs)
 			})
 			return err
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
+			return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, coalescedRootNames, plan.baseRootIDs, rootIDs)
 		})
 	}
 	cleanupDeltas()
@@ -16430,10 +16571,10 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	if err != nil {
 		return nil, err
 	}
-	if len(rootIDs) != len(plan.rootNames) {
-		return nil, unexpectedOrderedRootCountError(plan.meta.Name, len(plan.rootNames), len(rootIDs))
+	if len(rootIDs) != len(coalescedRootNames) {
+		return nil, unexpectedOrderedRootCountError(plan.meta.Name, len(coalescedRootNames), len(rootIDs))
 	}
-	nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, plan.meta, plan.rootNames, rootIDs)
+	nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, plan.meta, coalescedRootNames, rootIDs)
 	c.meta = plan.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)

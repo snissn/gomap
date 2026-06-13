@@ -1941,9 +1941,13 @@ func readRawRetainedPayloadJSONForTestM13C(t *testing.T, d *backenddb.DB, collec
 		t.Fatalf("collection %q not found", collection)
 	}
 	cfg := catalog.meta.Options.ColumnStore.copy()
-	obj, err := decodeColumnRetainedPayloadObject(cfg, raw, columnRetainedPayloadTemplateResolver(snap, catalog))
+	resolved, err := resolveColumnRetainedPayloadAtSnapshot(snap, catalog, cfg, raw)
 	if err != nil {
-		t.Fatalf("decode raw retained payload: %v raw=%q", err, raw)
+		t.Fatalf("resolve raw retained payload: %v raw=%q", err, raw)
+	}
+	obj, err := decodeColumnRetainedPayloadObject(cfg, resolved, columnRetainedPayloadTemplateResolver(snap, catalog))
+	if err != nil {
+		t.Fatalf("decode raw retained payload: %v raw=%q resolved=%q", err, raw, resolved)
 	}
 	out, err := json.Marshal(obj)
 	if err != nil {

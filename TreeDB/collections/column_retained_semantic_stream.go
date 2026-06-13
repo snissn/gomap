@@ -270,8 +270,7 @@ func (c *Collection) auditRetainedSemanticStreamV1BlockLayoutPathsAtSnapshot(sna
 
 func prepareColumnRetainedPayloadInsertBatchStorageDocuments(cfg ColumnStoreConfig, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {
 	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn &&
-		columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 &&
-		len(documents) > 1 {
+		columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 {
 		return prepareColumnRetainedSemanticStreamV1StorageDocuments(cfg, documents)
 	}
 	return prepareColumnRetainedPayloadStorageDocuments(cfg, documents, fallback)
@@ -353,38 +352,9 @@ func appendColumnRetainedSemanticStreamV1ReclaimDeltas(
 	policies *[]backenddb.OrderedRootStoragePolicy,
 	deltaTables *[]memtable.Table,
 ) error {
-	if !columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) ||
-		len(removedDocumentIDs) == 0 ||
-		len(removedPrimaryValues) == 0 ||
-		rootNames == nil ||
-		baseRootIDs == nil ||
-		policies == nil ||
-		deltaTables == nil {
-		return nil
-	}
-	candidates, err := columnRetainedSemanticStreamV1BlockKeysFromValues(removedPrimaryValues)
-	if err != nil || len(candidates) == 0 {
+	deleteKeys, err := columnRetainedSemanticStreamV1ReclaimDeleteKeys(snap, catalog, meta, removedDocumentIDs, removedPrimaryValues, replacementPrimaryValues)
+	if err != nil || len(deleteKeys) == 0 {
 		return err
-	}
-	replacementLive, err := columnRetainedSemanticStreamV1BlockKeysFromValues(replacementPrimaryValues)
-	if err != nil {
-		return err
-	}
-	for key := range replacementLive {
-		delete(candidates, key)
-	}
-	if len(candidates) == 0 {
-		return nil
-	}
-	live, err := columnRetainedSemanticStreamV1LiveCandidateBlocks(snap, catalog, meta, candidates, removedDocumentIDs)
-	if err != nil {
-		return err
-	}
-	for key := range live {
-		delete(candidates, key)
-	}
-	if len(candidates) == 0 {
-		return nil
 	}
 	rootName := collectionRetainedSemanticStreamRootName(meta.Name)
 	baseRootID := catalog.rootID(rootName)
@@ -395,6 +365,80 @@ func appendColumnRetainedSemanticStreamV1ReclaimDeltas(
 	if err != nil {
 		return err
 	}
+	*rootNames = append(*rootNames, rootName)
+	baseRootIDs[rootName] = baseRootID
+	*policies = append(*policies, policy)
+	*deltaTables = append(*deltaTables, buildDeleteRootDeltaTable(deleteKeys))
+	return nil
+}
+
+func appendColumnRetainedSemanticStreamV1BlockDeltas(
+	db *backenddb.DB,
+	catalog *collectionCatalog,
+	meta CollectionMeta,
+	blockTable memtable.Table,
+	rootNames *[]string,
+	baseRootIDs map[string]uint64,
+	policies *[]backenddb.OrderedRootStoragePolicy,
+	deltaTables *[]memtable.Table,
+) error {
+	if blockTable == nil ||
+		blockTable.Len() == 0 ||
+		rootNames == nil ||
+		baseRootIDs == nil ||
+		policies == nil ||
+		deltaTables == nil {
+		return nil
+	}
+	rootName := collectionRetainedSemanticStreamRootName(meta.Name)
+	policy, err := collectionRootStoragePolicyForDB(db, meta, rootName)
+	if err != nil {
+		return err
+	}
+	*rootNames = append(*rootNames, rootName)
+	baseRootIDs[rootName] = catalog.rootID(rootName)
+	*policies = append(*policies, policy)
+	*deltaTables = append(*deltaTables, blockTable)
+	return nil
+}
+
+func columnRetainedSemanticStreamV1ReclaimDeleteKeys(
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	meta CollectionMeta,
+	removedDocumentIDs [][]byte,
+	removedPrimaryValues [][]byte,
+	replacementPrimaryValues [][]byte,
+) ([][]byte, error) {
+	if !columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) ||
+		len(removedDocumentIDs) == 0 ||
+		len(removedPrimaryValues) == 0 {
+		return nil, nil
+	}
+	candidates, err := columnRetainedSemanticStreamV1BlockKeysFromValues(removedPrimaryValues)
+	if err != nil || len(candidates) == 0 {
+		return nil, err
+	}
+	replacementLive, err := columnRetainedSemanticStreamV1BlockKeysFromValues(replacementPrimaryValues)
+	if err != nil {
+		return nil, err
+	}
+	for key := range replacementLive {
+		delete(candidates, key)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	live, err := columnRetainedSemanticStreamV1LiveCandidateBlocks(snap, catalog, meta, candidates, removedDocumentIDs)
+	if err != nil {
+		return nil, err
+	}
+	for key := range live {
+		delete(candidates, key)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
 	deleteKeys := make([][]byte, 0, len(candidates))
 	for _, key := range candidates {
 		deleteKeys = append(deleteKeys, key)
@@ -402,11 +446,7 @@ func appendColumnRetainedSemanticStreamV1ReclaimDeltas(
 	sort.Slice(deleteKeys, func(i, j int) bool {
 		return bytes.Compare(deleteKeys[i], deleteKeys[j]) < 0
 	})
-	*rootNames = append(*rootNames, rootName)
-	baseRootIDs[rootName] = baseRootID
-	*policies = append(*policies, policy)
-	*deltaTables = append(*deltaTables, buildDeleteRootDeltaTable(deleteKeys))
-	return nil
+	return deleteKeys, nil
 }
 
 func columnRetainedSemanticStreamV1BlockKeysFromValues(values [][]byte) (map[string][]byte, error) {
