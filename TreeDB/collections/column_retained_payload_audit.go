@@ -323,11 +323,15 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		}
 		result.CheckedRows++
 		result.RetainedPayloadBytes += int64(len(retained))
+		decodedRetained, err := resolveColumnRetainedPayloadAtSnapshot(snap, catalog, cfg, retained)
+		if err != nil {
+			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit %q: %w", documentID, err))
+		}
 		var payloadAudit ColumnRetainedPayloadPathAudit
 		var auditErr error
 		if includeDecodedStats {
 			var obj map[string]any
-			obj, auditErr = decodeColumnRetainedPayloadObject(cfg, retained, resolver)
+			obj, auditErr = decodeColumnRetainedPayloadObject(cfg, decodedRetained, resolver)
 			if auditErr == nil {
 				payloadAudit = ColumnRetainedPayloadPathAudit{
 					RetainedPayloadPolicy:         result.RetainedPayloadPolicy,
@@ -350,7 +354,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 				auditErr = fmt.Errorf("collections: retained payload audit %q: %w", documentID, auditErr)
 			}
 		} else {
-			payloadAudit, auditErr = auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)
+			payloadAudit, auditErr = auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, decodedRetained, result.DeclaredPaths, resolver)
 		}
 		if auditErr != nil {
 			for _, path := range payloadAudit.Violations {
