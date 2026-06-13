@@ -50,9 +50,13 @@ func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion Hybri
 	if err != nil {
 		return nil, HybridSearchStats{}, err
 	}
-	weights, err := normalizeHybridFusionSourceWeights(fusion)
-	if err != nil {
-		return nil, HybridSearchStats{}, err
+	weights := hybridFusionSourceWeights{text: 1, vector: 1}
+	if method == HybridFusionMethodWeightedRRF || method == HybridFusionMethodNormalizedScore {
+		var err error
+		weights, err = normalizeHybridFusionSourceWeights(fusion)
+		if err != nil {
+			return nil, HybridSearchStats{}, err
+		}
 	}
 	scoreRanges, err := hybridFusionScoreRanges(candidates, method, sourceOrder)
 	if err != nil {
@@ -248,18 +252,28 @@ func hybridSourceContributionFromCandidate(candidate HybridSearchCandidate, meth
 }
 
 func hybridFusionContributionScore(candidate HybridSearchCandidate, method HybridFusionMethod, rrfK int, weights hybridFusionSourceWeights, ranges hybridFusionScoreRangesBySource) (float64, error) {
-	weight, err := weights.weight(candidate.Source)
-	if err != nil {
-		return 0, err
-	}
 	switch method {
-	case HybridFusionMethodRRF, HybridFusionMethodWeightedRRF:
+	case HybridFusionMethodRRF:
+		denominator := rrfK + candidate.SourceRank
+		if denominator <= 0 {
+			return 0, fmt.Errorf("%w: hybrid fusion rrf denominator overflow", ErrHybridSearchUnsupported)
+		}
+		return 1 / float64(denominator), nil
+	case HybridFusionMethodWeightedRRF:
+		weight, err := weights.weight(candidate.Source)
+		if err != nil {
+			return 0, err
+		}
 		denominator := rrfK + candidate.SourceRank
 		if denominator <= 0 {
 			return 0, fmt.Errorf("%w: hybrid fusion rrf denominator overflow", ErrHybridSearchUnsupported)
 		}
 		return weight / float64(denominator), nil
 	case HybridFusionMethodNormalizedScore:
+		weight, err := weights.weight(candidate.Source)
+		if err != nil {
+			return 0, err
+		}
 		if math.IsNaN(candidate.Score) || math.IsInf(candidate.Score, 0) {
 			return 0, fmt.Errorf("%w: hybrid normalized-score fusion requires finite source scores", ErrHybridSearchUnsupported)
 		}

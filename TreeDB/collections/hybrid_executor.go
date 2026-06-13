@@ -188,6 +188,9 @@ func normalizeHybridResultMode(mode HybridResultMode, includeDocuments bool, fet
 		if includeDocuments {
 			return HybridResultModeFull, nil
 		}
+		if vectorIndexDocumentFetchOptionsNonZero(fetchOptions) {
+			return "", fmt.Errorf("%w: hybrid result mode %q cannot set document_fetch_options", ErrHybridSearchUnsupported, HybridResultModeCompact)
+		}
 		return HybridResultModeCompact, nil
 	}
 	switch mode {

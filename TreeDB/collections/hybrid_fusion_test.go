@@ -73,6 +73,28 @@ func TestHybridRRFFusionVectorOnlyUsesRanks(t *testing.T) {
 	}
 }
 
+func TestHybridRRFIgnoresWeights2729(t *testing.T) {
+	candidates := []HybridSearchCandidate{
+		hybridFusionCandidate("text", HybridCandidateSourceText, 1, 10, HybridScoreKindBM25),
+		hybridFusionCandidate("vector", HybridCandidateSourceVector, 1, 0.9, HybridScoreKindVectorSimilarity),
+	}
+
+	results, _, err := FuseHybridSearchCandidates(candidates, HybridFusionOptions{Method: HybridFusionMethodRRF, TextWeight: 0.01, VectorWeight: 99}, 2)
+	if err != nil {
+		t.Fatalf("RRF with weights: %v", err)
+	}
+	if len(results) != 2 || string(results[0].ID) != "text" || string(results[1].ID) != "vector" {
+		t.Fatalf("RRF weighted-input results=%+v want source-order tie, not vector-weighted ordering", results)
+	}
+	wantScore := 1.0 / float64(HybridFusionDefaultRRFK+1)
+	if !hybridFloatClose(results[0].FusedScore, wantScore) || !hybridFloatClose(results[1].FusedScore, wantScore) {
+		t.Fatalf("RRF scores=%g/%g want unweighted %g", results[0].FusedScore, results[1].FusedScore, wantScore)
+	}
+	if _, _, err := FuseHybridSearchCandidates(candidates, HybridFusionOptions{Method: HybridFusionMethodRRF, TextWeight: math.NaN()}, 1); err != nil {
+		t.Fatalf("RRF should ignore invalid weight fields: %v", err)
+	}
+}
+
 func TestHybridFusionWeightedAndNormalizedScores(t *testing.T) {
 	candidates := []HybridSearchCandidate{
 		hybridFusionCandidate("text-1", HybridCandidateSourceText, 1, 10, HybridScoreKindBM25),

@@ -84,6 +84,7 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 
 	noDocsOpts := opts
 	noDocsOpts.IncludeDocuments = false
+	noDocsOpts.DocumentFetchOptions = DocumentFetchOptions{}
 	noDocsOpts.Debug.IncludeCandidates = false
 	noDocs, err := col.SearchHybrid(noDocsOpts)
 	if err != nil {
@@ -221,6 +222,13 @@ func TestSearchHybridResultModes2505(t *testing.T) {
 	failed, err = col.SearchHybrid(projectionWithoutFull)
 	if !errors.Is(err, ErrHybridSearchUnsupported) || failed.Stats.FailClosed == 0 {
 		t.Fatalf("compact projection response=%+v err=%v want fail-closed unsupported", failed, err)
+	}
+
+	implicitCompactProjection := base
+	implicitCompactProjection.DocumentFetchOptions = DocumentFetchOptions{ExcludePaths: []string{"embedding"}}
+	failed, err = col.SearchHybrid(implicitCompactProjection)
+	if !errors.Is(err, ErrHybridSearchUnsupported) || failed.Stats.FailClosed == 0 {
+		t.Fatalf("implicit compact projection response=%+v err=%v want fail-closed unsupported", failed, err)
 	}
 }
 
