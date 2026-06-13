@@ -739,8 +739,9 @@ descriptors must use `raw_bytes_offsets`, `fixed_width_elements=0`, and
 uncompressed split offsets/value sections whose values bytes are exact opaque
 payload bytes rather than text. Primitive scalar descriptors must use their
 matching `raw_*` encoding and `fixed_width_elements=0`; their `column_data`
-sections may request Snappy or LZ4 compression while individual codec blocks
-record the actual kept compression, including raw keep-if-smaller fallback.
+sections may request Snappy, LZ4, or plain Zstandard compression while
+individual codec blocks record the actual kept compression, including raw
+keep-if-smaller fallback.
 Dense numeric vector descriptors added
 by #1930 must use their matching raw vector encoding (`raw_uint8_vector`,
 `raw_int8_vector`, `raw_uint16_vector`, `raw_int16_vector`,
@@ -759,10 +760,15 @@ the final byte of each row, and uncompressed row-major payload sections
 (`rows * ceil(elements_per_row * bits_per_element / 8)` bytes). Readers must
 fail closed on unknown type codes rather than guessing a payload shape.
 Current typed-column image version 4 directory entries carry per-section
-`raw_bytes` metadata for compressed sections. Row-locator, dictionary, and
-pruning-metadata sections may use Snappy or LZ4 when the raw length is within
-the decoder cap; readers validate the raw byte count before decompression and
-fail closed on unsupported section compression.
+`raw_bytes` metadata for compressed sections. Durable section compression codes
+are `0` = none, `1` = Snappy, `2` = LZ4, and `3` = plain Zstandard. The
+`zstd_dict` code (`4`) is not a supported durable section codec and readers must
+fail closed when it appears. Row-locator, dictionary, and pruning-metadata
+sections may use Snappy, LZ4, or plain Zstandard when the raw length is within
+the section-specific decoder cap. Readers validate the declared raw byte count
+before decompression; zstd decoders are additionally configured with a maximum
+decoded-size/cap tied to that declared `raw_bytes` value so corrupt frames fail
+closed before unbounded growth.
 
 The `row_locator_contiguous` physical encoding value (`37`) and
 `dictionary_dense` physical encoding value (`38`) are durable TCIM section
@@ -1341,6 +1347,14 @@ kept only when it is a strict stored-size win; unsupported field/layout families
 remain uncompressed unless a benchmark override explicitly forces them, in which
 case writers fail closed. `none` disables the production policy for isolation and
 is part of the schema hash.
+Plain zstd (`zstd`) is a decode-supported typed-column codec for internal
+benchmark-relaxed storage experiments and may appear in benchmark-produced
+typed-column blocks or image sections only when those benchmark overrides are
+active. Public production metadata still rejects `typed_column_compression=zstd`
+and `typed_column_section_compression=zstd`; production-default writers continue
+to choose `lz4` unless configured otherwise with supported production values.
+Zstd dictionary mode (`zstd_dict`) is deferred and unsupported for typed-column
+blocks, image sections, and public metadata.
 
 Readers must fail closed for a column-enabled collection when:
 
