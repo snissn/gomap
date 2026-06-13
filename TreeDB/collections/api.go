@@ -5090,13 +5090,12 @@ func pointerizeCollectionRunTableValuesForRoot(db *backenddb.DB, meta Collection
 }
 
 func collectionValueLogInlineThresholdResolverForRoot(db *backenddb.DB, meta CollectionMeta, rootName string) func([]byte) int {
-	if db == nil || !collectionRootStoresRetainedPayloadBodies(meta, rootName) {
+	if db == nil || (!collectionRootStoresRetainedPayloadBodies(meta, rootName) && !collectionRootStoresRetainedSemanticStreamBlocks(meta, rootName)) {
 		return nil
 	}
 	return func([]byte) int {
-		// Retained payload bodies are the residual/original document bytes for this
-		// primary root. Keep them out of leaf pages regardless of document-body
-		// representation; empty retained bodies still remain inline.
+		// Retained payload bodies and semantic stream blocks are persistent value-log
+		// payloads. Keep them out of leaf pages; empty values still remain inline.
 		return 0
 	}
 }
@@ -5107,6 +5106,9 @@ func collectionRootStoresRetainedPayloadBodies(meta CollectionMeta, rootName str
 	}
 	cfg := meta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled {
+		return false
+	}
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(cfg) {
 		return false
 	}
 	switch columnRetainedPayloadAuditPolicy(cfg) {
@@ -5120,6 +5122,12 @@ func collectionRootStoresRetainedPayloadBodies(meta CollectionMeta, rootName str
 		// out of leaf pages rather than silently inlining it.
 		return true
 	}
+}
+
+func collectionRootStoresRetainedSemanticStreamBlocks(meta CollectionMeta, rootName string) bool {
+	return rootName != "" &&
+		rootName == collectionRetainedSemanticStreamRootName(meta.Name) &&
+		columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore)
 }
 
 func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memtable.Table, opts collectionPointerizeOptions) (memtable.Table, bool, error) {
@@ -5336,10 +5344,14 @@ func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, meta CollectionMeta, pl
 }
 
 func collectionDataRootNameSet(meta CollectionMeta) map[string]struct{} {
-	return map[string]struct{}{
+	out := map[string]struct{}{
 		collectionPrimaryRootName(meta.Name):  {},
 		collectionTemplateRootName(meta.Name): {},
 	}
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+		out[collectionRetainedSemanticStreamRootName(meta.Name)] = struct{}{}
+	}
+	return out
 }
 
 func pointerizeCollectionDataRootDeltaTables(db *backenddb.DB, meta CollectionMeta, rootNames []string, tables []memtable.Table) ([]memtable.Table, func(), error) {
@@ -10288,17 +10300,19 @@ func (c *Collection) insertBatchNoIndex(
 
 	var retainedDocuments [][]byte
 	var retainedTemplateRecords []templateV1Record
+	var retainedSemanticStreamBlocks memtable.Table
 	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
 		fullDocuments := make([][]byte, len(entries))
 		for i := range entries {
 			fullDocuments[i] = entries[i].document
 		}
-		prepared, err := prepareColumnRetainedPayloadStorageDocuments(*c.meta.Options.ColumnStore, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(*c.meta.Options.ColumnStore, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
 		if err != nil {
 			return nil, err
 		}
 		retainedDocuments = prepared.documents
 		retainedTemplateRecords = prepared.templateRecords
+		retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
 	}
 
 	phaseStart = time.Now()
@@ -10365,6 +10379,38 @@ func (c *Collection) insertBatchNoIndex(
 				StoragePolicy: run.storagePolicy,
 			})
 		}
+	}
+	var retainedSemanticStreamTables []memtable.Table
+	var retainedSemanticStreamIters []iterator.UnsafeIterator
+	defer func() {
+		for _, it := range retainedSemanticStreamIters {
+			_ = it.Close()
+		}
+		resetCollectionTables(retainedSemanticStreamTables)
+	}()
+	if retainedSemanticStreamBlocks != nil && retainedSemanticStreamBlocks.Len() > 0 {
+		streamRootName := collectionRetainedSemanticStreamRootName(c.meta.Name)
+		streamPolicy, err := collectionRootStoragePolicyForDB(c.db, c.meta, streamRootName)
+		if err != nil {
+			return nil, err
+		}
+		streamPublishTable := retainedSemanticStreamBlocks
+		retainedSemanticStreamTables = append(retainedSemanticStreamTables, retainedSemanticStreamBlocks)
+		if pointerizedStreamTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, streamRootName, retainedSemanticStreamBlocks); err != nil {
+			return nil, err
+		} else if pointerized {
+			streamPublishTable = pointerizedStreamTable
+			retainedSemanticStreamTables = append(retainedSemanticStreamTables, pointerizedStreamTable)
+		}
+		streamIter := streamPublishTable.NewIterator(nil, nil)
+		retainedSemanticStreamIters = append(retainedSemanticStreamIters, streamIter)
+		rootNames = append(rootNames, streamRootName)
+		baseRootIDs[streamRootName] = catalog.rootID(streamRootName)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      catalog.rootID(streamRootName),
+			Iter:          streamIter,
+			StoragePolicy: streamPolicy,
+		})
 	}
 	var textTables []memtable.Table
 	var textIters []iterator.UnsafeIterator
@@ -10660,9 +10706,10 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	}
 
 	type existingDelete struct {
-		id       []byte
-		state    documentIndexState
-		document []byte
+		id           []byte
+		state        documentIndexState
+		document     []byte
+		primaryValue []byte
 	}
 	existing := make([]existingDelete, 0, len(documentIDs))
 	for _, documentID := range documentIDs {
@@ -10686,6 +10733,16 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 			continue
 		}
 		item := existingDelete{id: documentID}
+		if columnStoreRetainedPayloadUsesSemanticStreamV1(c.meta.Options.ColumnStore) {
+			primaryValue, ok, err := columnRetainedSemanticStreamV1PrimaryValueForReclaim(snap, catalog, primaryRootName, documentID, entry)
+			if err != nil {
+				_ = snap.Close()
+				return 0, err
+			}
+			if ok {
+				item.primaryValue = primaryValue
+			}
+		}
 		if len(c.meta.TextIndexes) > 0 {
 			item.document = bytes.Clone(entry.Value)
 		}
@@ -10772,6 +10829,17 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 			resetCollectionTables(deltaTables)
 			return 0, err
 		}
+	}
+	var semanticReclaimValues [][]byte
+	for _, item := range existing {
+		if len(item.primaryValue) != 0 {
+			semanticReclaimValues = append(semanticReclaimValues, item.primaryValue)
+		}
+	}
+	if err := appendColumnRetainedSemanticStreamV1ReclaimDeltas(c.db, snap, catalog, c.meta, deleteIDs, semanticReclaimValues, nil, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+		_ = snap.Close()
+		resetCollectionTables(deltaTables)
+		return 0, err
 	}
 
 	if !commandWALActive && len(c.meta.TextIndexes) == 0 {
@@ -10942,6 +11010,17 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		}
 		return false, nil
 	}
+	var semanticReclaimValue []byte
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(c.meta.Options.ColumnStore) {
+		primaryValue, ok, err := columnRetainedSemanticStreamV1PrimaryValueForReclaim(snap, catalog, primaryRootName, documentID, entry)
+		if err != nil {
+			_ = snap.Close()
+			return false, err
+		}
+		if ok {
+			semanticReclaimValue = primaryValue
+		}
+	}
 	runtimes, err := catalog.cachedIndexRuntimes()
 	if err != nil {
 		_ = snap.Close()
@@ -11006,6 +11085,11 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 			resetCollectionTables(deltaTables)
 			return false, err
 		}
+	}
+	if err := appendColumnRetainedSemanticStreamV1ReclaimDeltas(c.db, snap, catalog, c.meta, [][]byte{documentID}, [][]byte{semanticReclaimValue}, nil, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+		_ = snap.Close()
+		resetCollectionTables(deltaTables)
+		return false, err
 	}
 	if !commandWALActive && len(c.meta.TextIndexes) == 0 {
 		if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, 1); buffered || err != nil {
@@ -13502,6 +13586,15 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, nil
 	}
 	stats.Matched = 1
+	var semanticReclaimValue []byte
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(c.meta.Options.ColumnStore) {
+		if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(currentValue); err != nil {
+			_ = snap.Close()
+			return false, false, err
+		} else if ok {
+			semanticReclaimValue = bytes.Clone(currentValue)
+		}
+	}
 	if columnStoreCanReconstructDocument(c.meta) {
 		currentValue, err = c.reconstructColumnDocumentAtSnapshot(snap, catalog, documentID, currentValue)
 		if err != nil {
@@ -13696,6 +13789,11 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	} else {
 		deltaTables = append(deltaTables, primaryTable)
 	}
+	if err := appendColumnRetainedSemanticStreamV1ReclaimDeltas(c.db, snap, catalog, c.meta, [][]byte{documentID}, [][]byte{semanticReclaimValue}, [][]byte{primaryDocument}, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+		_ = snap.Close()
+		resetCollectionTables(deltaTables)
+		return false, false, err
+	}
 	stats.PrimaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 	if indexStateChanged {
@@ -13879,6 +13977,7 @@ type preparedBatchUpdate struct {
 	documentID               []byte
 	document                 []byte
 	primaryDocument          []byte
+	oldPrimaryValue          []byte
 	hasPrimaryDocument       bool
 	oldState                 orderedDocumentIndexState
 	newState                 orderedDocumentIndexState
@@ -15535,6 +15634,18 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		if !current.found {
 			continue
 		}
+		prepared := preparedBatchUpdate{
+			itemIndex:  i,
+			documentID: item.DocumentID,
+		}
+		if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+			if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(current.value); err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			} else if ok {
+				prepared.oldPrimaryValue = appendUpdateBatchPlanScratchDocument(scratch, current.value)
+			}
+		}
 		if columnStoreCanReconstructDocument(meta) {
 			current.value, err = c.reconstructColumnDocumentAtSnapshot(snap, catalog, item.DocumentID, current.value)
 			if err != nil {
@@ -15544,10 +15655,6 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			current.buffered = false
 		}
 		results[i].Matched = true
-		prepared := preparedBatchUpdate{
-			itemIndex:  i,
-			documentID: item.DocumentID,
-		}
 		var currentID bsonIDSnapshot
 		var document []byte
 		var changedOne bool
@@ -15940,6 +16047,24 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	}
 	primaryTable.Freeze()
 	deltaTables = append(deltaTables, primaryTable)
+	var semanticReclaimIDs [][]byte
+	var semanticReclaimValues [][]byte
+	var semanticReplacementValues [][]byte
+	for _, item := range changed {
+		if len(item.oldPrimaryValue) == 0 {
+			continue
+		}
+		semanticReclaimIDs = append(semanticReclaimIDs, item.documentID)
+		semanticReclaimValues = append(semanticReclaimValues, item.oldPrimaryValue)
+		semanticReplacementValues = append(semanticReplacementValues, preparedBatchUpdatePrimaryDocument(item))
+	}
+	if err := appendColumnRetainedSemanticStreamV1ReclaimDeltas(c.db, snap, catalog, meta, semanticReclaimIDs, semanticReclaimValues, semanticReplacementValues, &rootNames, baseRootIDs, &policies, &deltaTables); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	for len(uniqueSecondary) < len(rootNames) {
+		uniqueSecondary = append(uniqueSecondary, -1)
+	}
 	stats.PrimaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 	if len(runtimes) > 0 {
@@ -19750,7 +19875,11 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		if err != nil {
 			return false, err
 		}
-		_, reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(nil, columnStoreConfig, record.Document, visibleRows[visiblePos], fullValues, nil, nil, retainedTemplateResolver)
+		retainedDocument, err := resolveColumnRetainedPayloadAtSnapshot(snap, catalog, columnStoreConfig, record.Document)
+		if err != nil {
+			return false, err
+		}
+		_, reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(nil, columnStoreConfig, retainedDocument, visibleRows[visiblePos], fullValues, nil, nil, retainedTemplateResolver)
 		if err != nil {
 			return false, err
 		}
@@ -19922,6 +20051,10 @@ func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, roo
 	case collectionColumnManifestRootName(meta.Name):
 		if meta.Options.ColumnStore != nil {
 			return backendRootStoragePolicy(meta.Options.ColumnStore.ControlRootStoragePolicy)
+		}
+	case collectionRetainedSemanticStreamRootName(meta.Name):
+		if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+			return backendCollectionDataRootStoragePolicy(db, meta.Options.DataRootStoragePolicy)
 		}
 	}
 	for _, idx := range meta.Indexes {
@@ -20993,6 +21126,9 @@ func collectionRootNames(meta CollectionMeta) []string {
 	if meta.Options.ColumnStore != nil && meta.Options.ColumnStore.Enabled {
 		out = append(out, collectionColumnManifestRootName(meta.Name))
 	}
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
+		out = append(out, collectionRetainedSemanticStreamRootName(meta.Name))
+	}
 	for _, idx := range meta.Indexes {
 		out = append(out, collectionSecondaryRootName(meta.Name, idx.Name))
 	}
@@ -21019,6 +21155,10 @@ func collectionIndexStateRootName(collection string) string {
 
 func collectionColumnManifestRootName(collection string) string {
 	return collection + "/column/manifest"
+}
+
+func collectionRetainedSemanticStreamRootName(collection string) string {
+	return collection + "/retained/semantic-stream-v1"
 }
 
 func collectionSecondaryRootName(collection, indexName string) string {

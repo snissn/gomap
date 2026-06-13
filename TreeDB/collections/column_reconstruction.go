@@ -13,6 +13,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func columnStoreNeedsRetainedPayloadTransform(meta CollectionMeta) bool {
@@ -79,8 +80,9 @@ func columnRetainedPayloadFromJSONDocument(cfg ColumnStoreConfig, document []byt
 }
 
 type columnRetainedPayloadStorageDocuments struct {
-	documents       [][]byte
-	templateRecords []templateV1Record
+	documents            [][]byte
+	templateRecords      []templateV1Record
+	semanticStreamBlocks memtable.Table
 }
 
 func prepareColumnRetainedPayloadStorageDocuments(cfg ColumnStoreConfig, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {
@@ -150,6 +152,11 @@ func (c *Collection) reconstructColumnDocumentAtSnapshotWithDiagnostics(snap *ba
 	if cfg.RetainedPayload == ColumnRetainedPayloadFull {
 		return bytes.Clone(retained), diag, nil
 	}
+	resolvedRetained, err := resolveColumnRetainedPayloadAtSnapshot(snap, catalog, cfg, retained)
+	if err != nil {
+		return nil, diag, err
+	}
+	retained = resolvedRetained
 	if cfg.Reconstruction != ColumnReconstructionRetainedPayloadAndColumns {
 		return nil, diag, fmt.Errorf("collections: unsupported column reconstruction policy %q", cfg.Reconstruction)
 	}
@@ -283,6 +290,25 @@ func mergeColumnReconstructionValuesProjectedInto(cfg ColumnStoreConfig, rowValu
 }
 
 func decodeColumnRetainedPayloadObject(cfg ColumnStoreConfig, retained []byte, resolver templateV1Resolver) (map[string]any, error) {
+	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 {
+		if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(retained); err != nil {
+			return nil, err
+		} else if ok {
+			return nil, errors.New("collections: unresolved semantic-stream-v1 retained payload locator")
+		}
+		trimmed := bytes.TrimSpace(retained)
+		if len(trimmed) == 0 {
+			return make(map[string]any), nil
+		}
+		if hasTemplateV1Magic(trimmed, templateV1StoredMagic) || hasTemplateV1Magic(trimmed, templateV1InputMagic) || hasTemplateV1Magic(trimmed, templateV1InsertDocumentMagic) {
+			obj, err := decodeTemplateV1RetainedPayloadObject(trimmed, resolver)
+			if err != nil {
+				return nil, fmt.Errorf("collections: decode template-v1 retained payload: %w", err)
+			}
+			return obj, nil
+		}
+		return decodeColumnJSONObject(trimmed)
+	}
 	trimmed := bytes.TrimSpace(retained)
 	if len(trimmed) == 0 {
 		return make(map[string]any), nil

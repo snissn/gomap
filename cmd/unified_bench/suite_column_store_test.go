@@ -54,6 +54,40 @@ func TestColumnStoreSuiteRetainedPayloadRejectsTrailingJSONM13C(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteRetainedPayloadEncodingOverrideSelectsSemanticStreamV1(t *testing.T) {
+	withColumnStoreRetainedPayloadEncodingFlag(t, "semantic-stream-v1")
+	cfg := columnStoreSuiteConfig()
+	if got, want := cfg.RetainedPayloadEncoding, collections.ColumnRetainedPayloadEncoding(collections.ColumnRetainedPayloadEncodingSemanticStreamV1); got != want {
+		t.Fatalf("retained payload encoding=%q want %q", got, want)
+	}
+
+	btreeCfg := columnStoreSuiteConfigForPath(columnStorePathBTreeIndexBaseline)
+	if got, want := btreeCfg.RetainedPayload, collections.ColumnRetainedPayloadFull; got != want {
+		t.Fatalf("btree retained payload=%q want %q", got, want)
+	}
+	if got, want := btreeCfg.RetainedPayloadEncoding, collections.ColumnRetainedPayloadEncoding(collections.ColumnRetainedPayloadEncodingJSON); got != want {
+		t.Fatalf("btree retained payload encoding=%q want %q", got, want)
+	}
+}
+
+func TestColumnStoreSuiteRetainedPayloadAccountingUsesSemanticStreamV1Blocks(t *testing.T) {
+	withColumnStoreRetainedPayloadEncodingFlag(t, "semantic-stream-v1")
+	events, _ := buildColumnStoreSyntheticFixture(32, 1)
+	cfg := columnStoreSuiteConfig()
+	got, note, err := columnStoreSuiteRetainedPayloadAccounting(events, cfg, columnStorePathSerialColumnScan)
+	if err != nil {
+		t.Fatalf("columnStoreSuiteRetainedPayloadAccounting: %v", err)
+	}
+	if got <= 0 {
+		t.Fatalf("semantic-stream-v1 accounting bytes=%d want positive", got)
+	}
+	for _, want := range []string{"semantic-stream-v1", "primary locator bytes", "side-root block bytes"} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("semantic-stream-v1 accounting note %q missing %q", note, want)
+		}
+	}
+}
+
 func TestRunColumnStoreSuiteRejectsRelaxedAssetReadIntegrityWithoutUnsafeM1634(t *testing.T) {
 	for _, mode := range []string{
 		string(collections.ColumnAssetReadIntegrityCachedVerify),
@@ -2853,6 +2887,22 @@ func withColumnStoreTypedBenchmarkPolicyFlags(t *testing.T, compression, int64En
 		*columnStoreSuiteTypedAdaptiveTargetBytesArg = prevAdaptiveTargetBytes
 		*columnStoreSuiteTypedAdaptiveMinRowsArg = prevAdaptiveMinRows
 		*columnStoreSuiteTypedAdaptiveMaxRowsArg = prevAdaptiveMaxRows
+	})
+}
+
+func withColumnStoreRetainedPayloadEncodingFlag(t *testing.T, encoding string) {
+	t.Helper()
+	prevFlag := *columnStoreSuiteRetainedPayloadEncodingArg
+	prevEnv, envOK := os.LookupEnv("TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING")
+	*columnStoreSuiteRetainedPayloadEncodingArg = encoding
+	_ = os.Unsetenv("TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING")
+	t.Cleanup(func() {
+		*columnStoreSuiteRetainedPayloadEncodingArg = prevFlag
+		if envOK {
+			_ = os.Setenv("TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING", prevEnv)
+		} else {
+			_ = os.Unsetenv("TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING")
+		}
 	})
 }
 

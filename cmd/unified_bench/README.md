@@ -359,6 +359,12 @@ CPU/allocation profiles. Omit it, or pass `all`, for the default full
 q1-q5/q5_metadata suite. Duplicate query names are rejected so benchprof
 tables and artifact labels stay unambiguous.
 
+Use `-column-store-retained-payload-encoding semantic-stream-v1`, or set
+`TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING=semantic-stream-v1`, to run the
+opt-in retained-payload semantic stream candidate for storage-parity evidence.
+The default remains `template-v1`, and `b_tree_index_baseline` still keeps full
+retained JSON so that index-baseline comparisons remain unchanged.
+
 The suite writes:
 
 - `column_store_results.json`, `column_store_results.md`, `column_store_results.html`
@@ -400,7 +406,9 @@ named `wal/commit-l<lane>-<seq>.log` (numeric lane, non-zero sequence) from
 assets, and manifest/control bytes remain included. `retained_payload_bytes`
 reports the row/remainder payload for the selected path; physical paths that
 strip declared columns into column assets should report less retained payload
-than the source JSONBench document bytes.
+than the source JSONBench document bytes. With `semantic-stream-v1`,
+`retained_payload_bytes` includes primary locator bytes plus the retained
+semantic-stream side-root block bytes.
 
 For post-V1 production-vs-experiment attribution, use the slope harness:
 

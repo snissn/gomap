@@ -113,6 +113,7 @@ var (
 	columnStoreSuiteTypedAdaptiveTargetBytesArg = flag.Int("column-store-typed-adaptive-target-bytes", 0, "Benchmark-only typed_column_part adaptive target raw bytes per mark/granule (0 uses typedcolumn default when adaptive is enabled)")
 	columnStoreSuiteTypedAdaptiveMinRowsArg     = flag.Int("column-store-typed-adaptive-min-rows", 0, "Benchmark-only typed_column_part adaptive minimum rows (0 uses typedcolumn default when adaptive is enabled)")
 	columnStoreSuiteTypedAdaptiveMaxRowsArg     = flag.Int("column-store-typed-adaptive-max-rows", 0, "Benchmark-only typed_column_part adaptive maximum rows (0 uses rows-per-granule/default when adaptive is enabled)")
+	columnStoreSuiteRetainedPayloadEncodingArg  = flag.String("column-store-retained-payload-encoding", "", "Retained-payload encoding override for -suite column_store non-column retained payloads (default/template-v1,json,semantic-stream-v1). Can also be set with TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING; b_tree_index_baseline remains full-retained JSON.")
 
 	columnStoreSuiteAcceptedForcedPaths = []string{
 		columnStorePathRowStoreBaseline,
@@ -1004,12 +1005,34 @@ func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
 		Reconstruction:  collections.ColumnReconstructionRetainedPayloadAndColumns,
 		ProfileSupport:  profileSupport,
 	}
+	if encoding, ok := columnStoreSuiteRetainedPayloadEncodingOverride(); ok {
+		cfg.RetainedPayloadEncoding = encoding
+	}
 	if typedBenchmarkPolicyActive {
 		for i := range cfg.Columns {
 			cfg.Columns[i].Owner = collections.TypedStorageOwnerColumnPart
 		}
 	}
 	return cfg
+}
+
+func columnStoreSuiteRetainedPayloadEncodingOverride() (collections.ColumnRetainedPayloadEncoding, bool) {
+	value := strings.TrimSpace(*columnStoreSuiteRetainedPayloadEncodingArg)
+	if value == "" {
+		value = strings.TrimSpace(os.Getenv("TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING"))
+	}
+	switch strings.ToLower(value) {
+	case "", "default":
+		return "", false
+	case "json":
+		return collections.ColumnRetainedPayloadEncodingJSON, true
+	case "template-v1", "template_v1", "templatev1":
+		return collections.ColumnRetainedPayloadEncodingTemplateV1, true
+	case "semantic-stream-v1", "semantic_stream_v1", "semanticstreamv1":
+		return collections.ColumnRetainedPayloadEncodingSemanticStreamV1, true
+	default:
+		return collections.ColumnRetainedPayloadEncoding(value), true
+	}
 }
 
 func columnStoreSuiteTypedBenchmarkPolicyFlagsActive() bool {
@@ -1121,6 +1144,7 @@ func columnStoreSuiteConfigForPath(path string) *collections.ColumnStoreConfig {
 		// Keep this explicit comparison baseline full-retained until that
 		// production shape is supported.
 		cfg.RetainedPayload = collections.ColumnRetainedPayloadFull
+		cfg.RetainedPayloadEncoding = collections.ColumnRetainedPayloadEncodingJSON
 	}
 	return cfg
 }
@@ -2119,6 +2143,21 @@ func columnStoreSuiteRetainedPayloadAccounting(events []columnStoreFixtureEvent,
 			return bytesTotal, "M13C b_tree_index_baseline keeps full row payload because retained-payload indexed writes remain fail-closed until secondary-index reconstruction is wired", nil
 		}
 		return bytesTotal, "full row payload retained", nil
+	}
+	if cfg.RetainedPayload == collections.ColumnRetainedPayloadNonColumn &&
+		cfg.RetainedPayloadEncoding == collections.ColumnRetainedPayloadEncodingSemanticStreamV1 &&
+		len(events) > 1 {
+		documents := make([][]byte, len(events))
+		for i := range events {
+			documents[i] = events[i].Doc
+		}
+		accounting, err := collections.ColumnRetainedSemanticStreamV1StorageAccountingFromJSONDocuments(*cfg, documents)
+		if err != nil {
+			return 0, "", err
+		}
+		return accounting.TotalBytes,
+			fmt.Sprintf("semantic-stream-v1 retained payload accounting includes %d primary locator bytes plus %d side-root block bytes across %d blocks; declared columns are reconstructed from physical column assets", accounting.PrimaryLocatorBytes, accounting.BlockBytes, accounting.BlockCount),
+			nil
 	}
 	var bytesTotal int64
 	for _, event := range events {

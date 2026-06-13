@@ -30,6 +30,8 @@ func ColumnRetainedPayloadEncodingStatus(cfg *ColumnStoreConfig) (encoding, stat
 			return string(ColumnRetainedPayloadEncodingTemplateV1), "active_template_v1_non_column_retained_payload"
 		case ColumnRetainedPayloadEncodingJSON:
 			return string(ColumnRetainedPayloadEncodingJSON), "active_legacy_json_non_column_retained_payload"
+		case ColumnRetainedPayloadEncodingSemanticStreamV1:
+			return string(ColumnRetainedPayloadEncodingSemanticStreamV1), "active_semantic_stream_v1_non_column_retained_payload"
 		default:
 			return string(ColumnRetainedPayloadEncodingUnavailable), fmt.Sprintf("unavailable_unsupported_retained_payload_encoding_%s", cfg.RetainedPayloadEncoding)
 		}
@@ -52,6 +54,9 @@ func ColumnRetainedPayloadCompressionStatus(cfg *ColumnStoreConfig) (compression
 	case ColumnRetainedPayloadFull, "":
 		return "value_log_grouped_frame", "default_value_log_auto", "active_value_log_auto_grouped_frame_full_retained_payload"
 	case ColumnRetainedPayloadNonColumn:
+		if cfg.RetainedPayloadEncoding == ColumnRetainedPayloadEncodingSemanticStreamV1 {
+			return "semantic_stream_v1_blocks", "retained_semantic_stream_v1_side_root", "active_semantic_stream_v1_non_column_retained_payload"
+		}
 		return "value_log_grouped_frame", "default_value_log_auto_storage_first", "active_value_log_auto_grouped_frame_non_column_retained_payload"
 	default:
 		return "unavailable", "unavailable", fmt.Sprintf("unknown_retained_payload_policy_%s", policyValue)
@@ -318,11 +323,15 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		}
 		result.CheckedRows++
 		result.RetainedPayloadBytes += int64(len(retained))
+		decodedRetained, err := resolveColumnRetainedPayloadAtSnapshot(snap, catalog, cfg, retained)
+		if err != nil {
+			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit %q: %w", documentID, err))
+		}
 		var payloadAudit ColumnRetainedPayloadPathAudit
 		var auditErr error
 		if includeDecodedStats {
 			var obj map[string]any
-			obj, auditErr = decodeColumnRetainedPayloadObject(cfg, retained, resolver)
+			obj, auditErr = decodeColumnRetainedPayloadObject(cfg, decodedRetained, resolver)
 			if auditErr == nil {
 				payloadAudit = ColumnRetainedPayloadPathAudit{
 					RetainedPayloadPolicy:         result.RetainedPayloadPolicy,
@@ -345,7 +354,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 				auditErr = fmt.Errorf("collections: retained payload audit %q: %w", documentID, auditErr)
 			}
 		} else {
-			payloadAudit, auditErr = auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)
+			payloadAudit, auditErr = auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, decodedRetained, result.DeclaredPaths, resolver)
 		}
 		if auditErr != nil {
 			for _, path := range payloadAudit.Violations {

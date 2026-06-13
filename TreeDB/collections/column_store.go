@@ -136,6 +136,9 @@ const (
 	// ColumnRetainedPayloadEncodingTemplateV1 records retained payload bodies
 	// stored as Template-v1 documents with templates in the collection template root.
 	ColumnRetainedPayloadEncodingTemplateV1 = "template-v1"
+	// ColumnRetainedPayloadEncodingSemanticStreamV1 records multi-row retained
+	// payload bodies as semantic path streams in a dedicated collection root.
+	ColumnRetainedPayloadEncodingSemanticStreamV1 = "semantic-stream-v1"
 	// ColumnRetainedPayloadEncodingNone records that no retained body is active.
 	ColumnRetainedPayloadEncodingNone = "none"
 	// ColumnRetainedPayloadEncodingUnavailable is a reporting sentinel for
@@ -565,7 +568,7 @@ func validateColumnRetainedPayloadEncoding(policy ColumnRetainedPayloadPolicy, e
 		return fmt.Errorf("collections: retained payload policy %q requires encoding %q, got %q", policy, ColumnRetainedPayloadEncodingJSON, encoding)
 	case ColumnRetainedPayloadNonColumn:
 		switch encoding {
-		case ColumnRetainedPayloadEncodingJSON, ColumnRetainedPayloadEncodingTemplateV1:
+		case ColumnRetainedPayloadEncodingJSON, ColumnRetainedPayloadEncodingTemplateV1, ColumnRetainedPayloadEncodingSemanticStreamV1:
 			return nil
 		default:
 			return fmt.Errorf("collections: retained payload policy %q does not support encoding %q", policy, encoding)
@@ -587,6 +590,10 @@ func columnRetainedPayloadEffectiveEncoding(cfg *ColumnStoreConfig) ColumnRetain
 
 func columnStoreRetainedPayloadUsesTemplateV1(cfg *ColumnStoreConfig) bool {
 	return cfg != nil && cfg.Enabled && cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingTemplateV1
+}
+
+func columnStoreRetainedPayloadUsesSemanticStreamV1(cfg *ColumnStoreConfig) bool {
+	return cfg != nil && cfg.Enabled && cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1
 }
 
 func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {

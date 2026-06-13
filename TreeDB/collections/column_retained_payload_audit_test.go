@@ -171,6 +171,48 @@ func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentTemplateV12382(t *test
 	}
 }
 
+func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentSemanticStreamV12662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r1"},"payload":"kept"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r2"},"payload":"also kept"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent semantic-stream-v1: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || audit.CheckedRows != 2 {
+		t.Fatalf("audit=%+v want passed two rows", audit)
+	}
+	if audit.RetainedPayloadEncoding != string(ColumnRetainedPayloadEncodingSemanticStreamV1) || audit.RetainedPayloadEncodingStatus != "active_semantic_stream_v1_non_column_retained_payload" {
+		t.Fatalf("unexpected retained encoding audit=%+v", audit)
+	}
+	if audit.RetainedPayloadCompression != "semantic_stream_v1_blocks" || audit.RetainedPayloadCompressionStatus != "active_semantic_stream_v1_non_column_retained_payload" {
+		t.Fatalf("unexpected retained compression audit=%+v", audit)
+	}
+
+	statsAudit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeShapeStats:      true,
+		IncludeSemanticStreams: true,
+		SemanticStreamMaxDepth: 8,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent semantic-stream-v1 stats: %v audit=%+v", err, statsAudit)
+	}
+	if statsAudit.Status != "passed" || len(statsAudit.RetainedPayloadShape) == 0 || len(statsAudit.RetainedPayloadSemanticStreams) == 0 {
+		t.Fatalf("stats audit missing decoded retained data: %+v", statsAudit)
+	}
+	if _, ok := retainedPayloadShapeStat2382(statsAudit.RetainedPayloadShape, "payload", "string"); !ok {
+		t.Fatalf("semantic-stream-v1 retained payload shape missing payload: %+v", statsAudit.RetainedPayloadShape)
+	}
+	if _, ok := retainedPayloadSemanticStreamStat2662(statsAudit.RetainedPayloadSemanticStreams, "payload", "string"); !ok {
+		t.Fatalf("semantic-stream-v1 retained semantic stream missing payload: %+v", statsAudit.RetainedPayloadSemanticStreams)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadShapeStatsTemplateV12662(t *testing.T) {
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, jsonbenchRetainedPayloadAuditConfig2382(true), [][]byte{
 		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r1"},"payload":"kept","nested":{"also":"kept","count":3}}`),
