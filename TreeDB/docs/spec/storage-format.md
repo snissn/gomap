@@ -705,6 +705,18 @@ parts are all live rows; delete/tombstone parts are all deleted rows. Assets wit
 row-owned columns, mixed-width row ids, or legacy payloads continue to use the
 generic row payload.
 
+Version 8 extends that zero-row-owned-column case for dense 8-byte big-endian
+unsigned document id ranges:
+
+```text
+string   RowEncoding = "dense_id_range"
+u64      BaseRowID
+```
+
+The row id for row index `i` is synthesized as `BaseRowID + i` encoded as
+8-byte big-endian `uint64`. V8 stores no per-row id bytes and derives deleted
+state from the asset operation, matching the V7 live/delete all-rows contract.
+
 Latest-visible readers resolve document identity from the typed-row
 row/tombstone assets first, then read the typed-column part for the winning
 non-deleted generation+row. Readers validate namespace, generation, part id,
