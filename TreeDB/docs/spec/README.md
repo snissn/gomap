@@ -182,6 +182,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ## Design Proposals (Non-Normative)
 
+- `TreeDB/docs/spec/delete-range-spans-design-2711.md`
+  - issue #2711 design gate for cached TreeDB `DeleteRange` range spans,
+    covering point reads, iteration, snapshots, command-WAL replay,
+    checkpoint publication, value-log reachability, and benchmark gates.
 - `TreeDB/docs/spec/collections-native-fastpath-proposal.md`
   - draft target architecture for rewriting the cached collections execution
     path around native root domains, vectorized probes, and native grouped
