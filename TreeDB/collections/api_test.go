@@ -4789,7 +4789,7 @@ func TestCollectionCompactRootOverlaysFoldsIntoBaseRoots(t *testing.T) {
 	}
 }
 
-func TestCollectionCompactStorageProtectsFoldedRootIDs(t *testing.T) {
+func TestCollectionCompactStorageFoldedRootsUseCurrentDescriptorScan(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -4839,57 +4839,17 @@ func TestCollectionCompactStorageProtectsFoldedRootIDs(t *testing.T) {
 		t.Fatalf("compact result stats=%+v want nonzero roots and overlays", result.stats)
 	}
 	if len(result.rootIDs) == 0 {
-		t.Fatal("compact result rootIDs=0 want folded roots protected")
+		t.Fatal("compact result rootIDs=0 want folded roots")
 	}
 	if result.systemRootID == 0 {
-		t.Fatal("compact result systemRootID=0 want published system root protected")
+		t.Fatal("compact result systemRootID=0 want published system root")
 	}
-
-	opts := compactStorageOptionsWithCollectionRootProtection(CompactStorageOptions{}, result)
-	for _, rootID := range result.rootIDs {
-		if got := countCompactStorageProtectedRootID(opts.LeafGenerationProtectedRootIDs, rootID); got != 0 {
-			t.Fatalf("direct protected root id %d occurrences=%d in %v want 0", rootID, got, opts.LeafGenerationProtectedRootIDs)
-		}
+	if err := checkpointCollectionCompactStorageFoldedRoots(db, result); err != nil {
+		t.Fatalf("checkpoint folded roots: %v", err)
 	}
-	if got := countCompactStorageProtectedRootID(opts.LeafGenerationProtectedSystemRootIDs, result.systemRootID); got != 1 {
-		t.Fatalf("protected system root id %d occurrences=%d in %v want 1", result.systemRootID, got, opts.LeafGenerationProtectedSystemRootIDs)
+	if _, err := db.CompactStoragePlan(context.Background(), backenddb.CompactStorageOptions{}); err != nil {
+		t.Fatalf("CompactStoragePlan with current descriptor scan: %v", err)
 	}
-	if _, err := db.CompactStoragePlan(context.Background(), backenddb.CompactStorageOptions(opts)); err != nil {
-		t.Fatalf("CompactStoragePlan with folded-root protection: %v", err)
-	}
-}
-
-func TestCompactStorageOptionsWithCollectionRootProtectionMergesDistinctRoots(t *testing.T) {
-	opts := compactStorageOptionsWithCollectionRootProtection(CompactStorageOptions{
-		LeafGenerationProtectedRootIDs:       []uint64{1, 2},
-		LeafGenerationProtectedSystemRootIDs: []uint64{10},
-	},
-		collectionRootOverlayCompactionResult{
-			rootIDs:      []uint64{0, 2, 3},
-			systemRootID: 10,
-		},
-		collectionRootOverlayCompactionResult{
-			rootIDs:      []uint64{3, 4},
-			systemRootID: 11,
-		},
-		collectionRootOverlayCompactionResult{},
-	)
-	if want := []uint64{1, 2}; !reflect.DeepEqual(opts.LeafGenerationProtectedRootIDs, want) {
-		t.Fatalf("protected root ids=%v want %v", opts.LeafGenerationProtectedRootIDs, want)
-	}
-	if want := []uint64{10, 11}; !reflect.DeepEqual(opts.LeafGenerationProtectedSystemRootIDs, want) {
-		t.Fatalf("protected system root ids=%v want %v", opts.LeafGenerationProtectedSystemRootIDs, want)
-	}
-}
-
-func countCompactStorageProtectedRootID(ids []uint64, want uint64) int {
-	var count int
-	for _, id := range ids {
-		if id == want {
-			count++
-		}
-	}
-	return count
 }
 
 func TestCollectionCompactStorageFoldsRootsAndCleansStorage(t *testing.T) {

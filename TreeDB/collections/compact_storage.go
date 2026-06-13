@@ -48,7 +48,9 @@ func (c *Collection) CompactStorage(ctx context.Context, opts CompactStorageOpti
 	stats.RootOverlays = map[string]CollectionRootOverlayCompactionStats{
 		c.meta.Name: rootResult.stats,
 	}
-	opts = compactStorageOptionsWithCollectionRootProtection(opts, rootResult)
+	if err := checkpointCollectionCompactStorageFoldedRoots(c.db, rootResult); err != nil {
+		return stats, err
+	}
 	storage, err := c.db.CompactStorage(ctx, backenddb.CompactStorageOptions(opts))
 	if err != nil {
 		return stats, err
@@ -103,7 +105,9 @@ func (m *CollectionManager) CompactStorage(ctx context.Context, opts CompactStor
 		stats.RootOverlays[meta.Name] = rootResult.stats
 		rootResults = append(rootResults, rootResult)
 	}
-	opts = compactStorageOptionsWithCollectionRootProtection(opts, rootResults...)
+	if err := checkpointCollectionCompactStorageFoldedRoots(m.db, rootResults...); err != nil {
+		return stats, err
+	}
 	storage, err := m.db.CompactStorage(ctx, backenddb.CompactStorageOptions(opts))
 	if err != nil {
 		return stats, err
@@ -112,16 +116,19 @@ func (m *CollectionManager) CompactStorage(ctx context.Context, opts CompactStor
 	return stats, nil
 }
 
-func compactStorageOptionsWithCollectionRootProtection(opts CompactStorageOptions, results ...collectionRootOverlayCompactionResult) CompactStorageOptions {
+func checkpointCollectionCompactStorageFoldedRoots(db *backenddb.DB, results ...collectionRootOverlayCompactionResult) error {
+	if db == nil {
+		return errCollectionDBNil
+	}
 	for _, result := range results {
 		if result.systemRootID != 0 {
-			opts.LeafGenerationProtectedSystemRootIDs = appendCollectionCompactStorageProtectedRootIDs(
-				opts.LeafGenerationProtectedSystemRootIDs,
-				[]uint64{result.systemRootID},
-			)
+			// Backend storage compaction protects collection roots by scanning
+			// the current system-root descriptors; make the folded descriptors
+			// durable before rewrite/pack/GC phases refresh their snapshots.
+			return db.Checkpoint()
 		}
 	}
-	return opts
+	return nil
 }
 
 func appendCollectionCompactStorageProtectedRootIDs(dst []uint64, src []uint64) []uint64 {
