@@ -337,6 +337,79 @@ func TestCachingDB_CommandWALRangeSpanPreservesPublishedRootMiss(t *testing.T) {
 	}
 }
 
+func TestCachingDB_CommandWALRangeSpanIteratorPreservesPublishedRoot(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("backend Open: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+	if err := backend.SetSync([]byte("root-a-only"), []byte("root-a")); err != nil {
+		t.Fatalf("seed root A: %v", err)
+	}
+	rootA := uint64(0)
+	if state := backend.State(); state != nil {
+		rootA = state.RootPageID
+	}
+	if rootA == 0 {
+		t.Fatalf("root A id is zero")
+	}
+	if err := backend.SetSync([]byte("m"), []byte("default-m")); err != nil {
+		t.Fatalf("seed default root: %v", err)
+	}
+
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.mu.Lock()
+	if ok := db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 1,
+		iterator: publishedRootRef{
+			rootID: rootA,
+		},
+	}); !ok {
+		db.mu.Unlock()
+		t.Fatalf("installPublishedRootSetLocked returned false")
+	}
+	db.mu.Unlock()
+	if err := db.DeleteRangeAfterCommandWALAppend([]byte("x"), []byte("z"), func() error { return nil }); err != nil {
+		t.Fatalf("DeleteRangeAfterCommandWALAppend: %v", err)
+	}
+
+	liveIt, err := db.Iterator([]byte("m"), []byte("n"))
+	if err != nil {
+		t.Fatalf("live Iterator: %v", err)
+	}
+	if got := collectIteratorKeysForDeleteRangeTest(t, liveIt); len(got) != 0 {
+		t.Fatalf("live root-bound iterator keys=%v want empty", got)
+	}
+	if got, err := db.HasPrefixes([][]byte{[]byte("m")}); err != nil || len(got) != 1 || got[0] {
+		t.Fatalf("live HasPrefixes(m)=(%v,%v), want [false],nil", got, err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	snapIt, err := snap.Iterator([]byte("m"), []byte("n"))
+	if err != nil {
+		t.Fatalf("snapshot Iterator: %v", err)
+	}
+	if got := collectIteratorKeysForDeleteRangeTest(t, snapIt); len(got) != 0 {
+		t.Fatalf("snapshot root-bound iterator keys=%v want empty", got)
+	}
+	if got, err := snap.HasPrefixes([][]byte{[]byte("m")}); err != nil || len(got) != 1 || got[0] {
+		t.Fatalf("snapshot HasPrefixes(m)=(%v,%v), want [false],nil", got, err)
+	}
+}
+
 func TestCachingBatch_CommandWALRangeOnlyUsesSpanLayer(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,

@@ -1243,6 +1243,21 @@ func rootDomainSnapshotNeedsPublish(s rootDomainSnapshot) bool {
 	return s.mutable != nil || len(s.immutables) > 0
 }
 
+func rootDomainPublishedIterator(s rootDomainSnapshot, start, end []byte) (iterator.UnsafeIterator, bool, error) {
+	if s.published == nil {
+		return nil, false, nil
+	}
+	switch published := s.published.(type) {
+	case rootDomainUnsafeIteratorFactory:
+		return published.NewIterator(start, end), true, nil
+	case rootDomainIteratorFactory:
+		iter, err := published.Iterator(start, end)
+		return iter, true, err
+	default:
+		return nil, true, nil
+	}
+}
+
 func (s rootDomainSnapshot) iteratorSources(start, end []byte) ([]merging.IteratorSource, error) {
 	sources := make([]merging.IteratorSource, 0, 1+len(s.immutables)+1)
 	prio := 0

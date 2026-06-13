@@ -505,7 +505,8 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	if s == nil || s.backend == nil {
 		return nil, backenddb.ErrClosed
 	}
-	queue := s.rootIterator.immutables
+	rootSnap := rootDomainIteratorSnapshotFromCachedSnapshot(s)
+	queue := rootSnap.immutables
 	var queueRangeSpans [][]batch.DeleteRange
 	if s.view != nil && len(s.view.queueRangeSpans) == len(queue) {
 		queueRangeSpans = s.view.queueRangeSpans
@@ -531,11 +532,17 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	var (
 		diskIter iterator.UnsafeIterator
 		err      error
+		ok       bool
 	)
 	if reverse {
 		diskIter, err = s.backend.ReverseIterator(start, end)
+		ok = true
 	} else {
-		diskIter, err = s.backend.Iterator(start, end)
+		diskIter, ok, err = rootDomainPublishedIterator(rootSnap, start, end)
+		if !ok {
+			diskIter, err = s.backend.Iterator(start, end)
+			ok = true
+		}
 	}
 	if err != nil {
 		for i := range sources {
@@ -545,8 +552,10 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 		}
 		return nil, err
 	}
-	diskIter = newRangeSpanFilteringIterator(diskIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, -1), s.db)
-	sources = append(sources, merging.IteratorSource{Iter: diskIter, Priority: prio})
+	if ok && diskIter != nil {
+		diskIter = newRangeSpanFilteringIterator(diskIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, -1), s.db)
+		sources = append(sources, merging.IteratorSource{Iter: diskIter, Priority: prio})
+	}
 	return sources, nil
 }
 
