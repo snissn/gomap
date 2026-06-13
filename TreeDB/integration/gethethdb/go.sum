@@ -18,6 +18,8 @@ github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a h1:uqSq50AAT36
 github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a/go.mod h1:PDwKLbWpRDAN2IPbK9PxIgSx0YdwQaSOLWObRawQJ58=
 github.com/snissn/gomap v0.0.0-20260605130228-58f3398da631 h1:O7x3b+ndZz/saU7VWloGvdVCol1SwmVWLUs9GtdYmTU=
 github.com/snissn/gomap v0.0.0-20260605130228-58f3398da631/go.mod h1:QSwxtipoA9YdqEDYTU2UE6ZU4R2odrOdeLdtz6jzqtI=
+github.com/snissn/gomap v0.0.0-20260613184912-397cae481914 h1:LwTsNJWCQyi1MAMOjp2ATwxXxE2lT2atfSEGsDjHuaU=
+github.com/snissn/gomap v0.0.0-20260613184912-397cae481914/go.mod h1:WSaOg+m8hiLvRpKSqn3ylr0H4ZMKOHghhJqIg1/RO/4=
 github.com/tidwall/btree v1.8.1 h1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=
 github.com/tidwall/btree v1.8.1/go.mod h1:jBbTdUWhSZClZWoDg54VnvV7/54modSOzDN7VXftj1A=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=

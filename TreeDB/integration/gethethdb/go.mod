@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/ethereum/go-ethereum v1.16.9
-	github.com/snissn/gomap v0.0.0-20260605130228-58f3398da631
+	github.com/snissn/gomap v0.0.0-20260613184912-397cae481914
 )
 
 require (
