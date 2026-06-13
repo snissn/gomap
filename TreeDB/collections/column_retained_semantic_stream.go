@@ -699,6 +699,20 @@ func validateColumnRetainedSemanticStreamV1BlockRows(rows uint64) error {
 	return nil
 }
 
+func columnRetainedSemanticStreamV1EntryRow(last, delta, entryOrdinal, rows uint64) (uint64, error) {
+	entryRow := delta
+	if entryOrdinal != 0 {
+		if delta > ^uint64(0)-last {
+			return 0, errors.New("collections: malformed semantic-stream-v1 retained block row delta overflow")
+		}
+		entryRow = last + delta
+	}
+	if entryRow >= rows {
+		return 0, fmt.Errorf("collections: semantic-stream-v1 entry row %d outside block rows %d", entryRow, rows)
+	}
+	return entryRow, nil
+}
+
 func encodeColumnRetainedSemanticStreamV1Block(documents [][]byte) ([]byte, error) {
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock(documents)
 	if err != nil {
@@ -948,12 +962,9 @@ func decodeColumnRetainedSemanticStreamV1BlockRowsJSON(block []byte) ([][]byte, 
 			if err != nil {
 				return nil, errors.New("collections: malformed semantic-stream-v1 retained block row delta")
 			}
-			entryRow := delta
-			if entryOrdinal != 0 {
-				entryRow = last + delta
-				if entryRow < last {
-					return nil, errors.New("collections: malformed semantic-stream-v1 retained block row delta overflow")
-				}
+			entryRow, err := columnRetainedSemanticStreamV1EntryRow(last, delta, entryOrdinal, rows)
+			if err != nil {
+				return nil, err
 			}
 			last = entryRow
 			valueLen, err := binary.ReadUvarint(reader)
@@ -966,9 +977,6 @@ func decodeColumnRetainedSemanticStreamV1BlockRowsJSON(block []byte) ([][]byte, 
 			value := make([]byte, int(valueLen))
 			if _, err := reader.Read(value); err != nil {
 				return nil, err
-			}
-			if entryRow >= rows {
-				return nil, fmt.Errorf("collections: semantic-stream-v1 entry row %d outside block rows %d", entryRow, rows)
 			}
 			decoded := json.RawMessage(value)
 			if !json.Valid(decoded) {
@@ -1037,9 +1045,9 @@ func decodeColumnRetainedSemanticStreamV1BlockRowObject(block []byte, row uint64
 			if err != nil {
 				return nil, errors.New("collections: malformed semantic-stream-v1 retained block row delta")
 			}
-			entryRow := delta
-			if entryOrdinal != 0 {
-				entryRow = last + delta
+			entryRow, err := columnRetainedSemanticStreamV1EntryRow(last, delta, entryOrdinal, rows)
+			if err != nil {
+				return nil, err
 			}
 			last = entryRow
 			valueLen, err := binary.ReadUvarint(reader)
@@ -1200,8 +1208,8 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) addBlock(block []by
 		return err
 	}
 	off += n
-	if rows == 0 {
-		return errors.New("collections: malformed semantic-stream-v1 retained block zero rows")
+	if err := validateColumnRetainedSemanticStreamV1BlockRows(rows); err != nil {
+		return err
 	}
 	pathCount, n, err := readColumnRetainedSemanticStreamV1Uvarint(raw, off, "path count")
 	if err != nil {
@@ -1256,12 +1264,19 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) addBlock(block []by
 		entryMetadataBytes := n
 		var scalarValueBytes int64
 		var maxScalarValueBytes int
+		var last uint64
 		for entryOrdinal := uint64(0); entryOrdinal < entryCount; entryOrdinal++ {
-			if _, n, err = readColumnRetainedSemanticStreamV1Uvarint(raw, off, "row delta"); err != nil {
+			var delta uint64
+			if delta, n, err = readColumnRetainedSemanticStreamV1Uvarint(raw, off, "row delta"); err != nil {
 				return err
 			}
 			off += n
 			entryMetadataBytes += n
+			entryRow, err := columnRetainedSemanticStreamV1EntryRow(last, delta, entryOrdinal, rows)
+			if err != nil {
+				return err
+			}
+			last = entryRow
 			valueLen, n, err := readColumnRetainedSemanticStreamV1Uvarint(raw, off, "value length")
 			if err != nil {
 				return err

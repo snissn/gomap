@@ -2197,7 +2197,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			}
 			childOps := ops[startOpIdx:opIdx]
 			childLowKey := childLowKeyForOps(lowKey, childOps)
-			childRanges := deleteRangesForSpan(ranges, lowKey, childHigh)
+			childRanges := deleteRangesForSpan(ranges, childLowKey, childHigh)
 
 			newChildRef := curChild
 			var childSplits []Split

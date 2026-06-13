@@ -705,6 +705,86 @@ func TestColumnRetainedSemanticStreamV1RejectsOversizedRowCount2662(t *testing.T
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1RejectsOutOfRangeEntryRows2662(t *testing.T) {
+	raw := append([]byte(nil), columnRetainedSemanticStreamV1BlockMagic...)
+	raw = binary.AppendUvarint(raw, 1) // block rows
+	raw = binary.AppendUvarint(raw, 1) // path count
+	raw = binary.AppendUvarint(raw, 1) // path segment count
+	raw = binary.AppendUvarint(raw, uint64(len("payload")))
+	raw = append(raw, "payload"...)
+	raw = binary.AppendUvarint(raw, 1) // entry count
+	raw = binary.AppendUvarint(raw, 1) // row delta, outside the one-row block
+	raw = binary.AppendUvarint(raw, uint64(len(`"same"`)))
+	raw = append(raw, `"same"`...)
+
+	if _, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(raw); err == nil || !strings.Contains(err.Error(), "outside block rows") {
+		t.Fatalf("decode all rows err=%v want outside block rows", err)
+	}
+	if _, err := decodeColumnRetainedSemanticStreamV1BlockRowJSON(raw, 0); err == nil || !strings.Contains(err.Error(), "outside block rows") {
+		t.Fatalf("decode single row err=%v want outside block rows", err)
+	}
+	collector, err := newColumnRetainedSemanticStreamV1BlockLayoutCollector()
+	if err != nil {
+		t.Fatalf("new block layout collector: %v", err)
+	}
+	defer collector.close()
+	if err := collector.addBlock(raw); err == nil || !strings.Contains(err.Error(), "outside block rows") {
+		t.Fatalf("collector.addBlock err=%v want outside block rows", err)
+	}
+}
+
+func TestColumnRetainedSemanticStreamV1RejectsEntryRowDeltaOverflow2662(t *testing.T) {
+	raw := append([]byte(nil), columnRetainedSemanticStreamV1BlockMagic...)
+	raw = binary.AppendUvarint(raw, columnRetainedSemanticStreamV1BlockRows)
+	raw = binary.AppendUvarint(raw, 1) // path count
+	raw = binary.AppendUvarint(raw, 1) // path segment count
+	raw = binary.AppendUvarint(raw, uint64(len("payload")))
+	raw = append(raw, "payload"...)
+	raw = binary.AppendUvarint(raw, 2) // entry count
+	raw = binary.AppendUvarint(raw, ^uint64(0))
+	raw = binary.AppendUvarint(raw, uint64(len(`"first"`)))
+	raw = append(raw, `"first"`...)
+	raw = binary.AppendUvarint(raw, 1)
+	raw = binary.AppendUvarint(raw, uint64(len(`"second"`)))
+	raw = append(raw, `"second"`...)
+
+	if _, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(raw); err == nil || !strings.Contains(err.Error(), "outside block rows") {
+		t.Fatalf("decode all first invalid row err=%v want outside block rows", err)
+	}
+	if _, err := decodeColumnRetainedSemanticStreamV1BlockRowJSON(raw, 0); err == nil || !strings.Contains(err.Error(), "outside block rows") {
+		t.Fatalf("decode single first invalid row err=%v want outside block rows", err)
+	}
+
+	raw = append([]byte(nil), columnRetainedSemanticStreamV1BlockMagic...)
+	raw = binary.AppendUvarint(raw, columnRetainedSemanticStreamV1BlockRows)
+	raw = binary.AppendUvarint(raw, 1) // path count
+	raw = binary.AppendUvarint(raw, 1) // path segment count
+	raw = binary.AppendUvarint(raw, uint64(len("payload")))
+	raw = append(raw, "payload"...)
+	raw = binary.AppendUvarint(raw, 2) // entry count
+	raw = binary.AppendUvarint(raw, columnRetainedSemanticStreamV1BlockRows-1)
+	raw = binary.AppendUvarint(raw, uint64(len(`"first"`)))
+	raw = append(raw, `"first"`...)
+	raw = binary.AppendUvarint(raw, ^uint64(0))
+	raw = binary.AppendUvarint(raw, uint64(len(`"second"`)))
+	raw = append(raw, `"second"`...)
+
+	if _, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(raw); err == nil || !strings.Contains(err.Error(), "row delta overflow") {
+		t.Fatalf("decode all overflow err=%v want row delta overflow", err)
+	}
+	if _, err := decodeColumnRetainedSemanticStreamV1BlockRowJSON(raw, 0); err == nil || !strings.Contains(err.Error(), "row delta overflow") {
+		t.Fatalf("decode single overflow err=%v want row delta overflow", err)
+	}
+	collector, err := newColumnRetainedSemanticStreamV1BlockLayoutCollector()
+	if err != nil {
+		t.Fatalf("new block layout collector: %v", err)
+	}
+	defer collector.close()
+	if err := collector.addBlock(raw); err == nil || !strings.Contains(err.Error(), "row delta overflow") {
+		t.Fatalf("collector.addBlock err=%v want row delta overflow", err)
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1StoredBlockZSTDFailsClosed2662(t *testing.T) {
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock([][]byte{[]byte(`{"payload":"same"}`), []byte(`{"payload":"same"}`)})
 	if err != nil {
