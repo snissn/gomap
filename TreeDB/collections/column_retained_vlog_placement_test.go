@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestColumnRetainedPayloadValueLogPlacementReopen(t *testing.T) {
@@ -512,6 +514,97 @@ func TestColumnRetainedPayloadSemanticStreamV1SideRootRewrite(t *testing.T) {
 	}
 }
 
+func TestColumnRetainedPayloadSemanticStreamV1ReclaimsSideBlockAfterDelete(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids, docs := retainedSemanticStreamDocuments(64)
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	blockKey, _, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[0])
+
+	deleted, err := col.DeleteBatch(ids[:63])
+	if err != nil {
+		t.Fatalf("DeleteBatch partial block: %v", err)
+	}
+	if deleted != 63 {
+		t.Fatalf("DeleteBatch deleted=%d want 63", deleted)
+	}
+	liveBlockKey, _, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[63])
+	if !bytes.Equal(liveBlockKey, blockKey) {
+		t.Fatalf("live row moved to block %x want original %x", liveBlockKey, blockKey)
+	}
+	if got, err := col.Get(ids[63]); err != nil {
+		t.Fatalf("Get remaining semantic row: %v", err)
+	} else {
+		assertRetainedSemanticStreamDocument(t, got, 63)
+	}
+
+	deletedOne, err := col.DeleteDocument(ids[63])
+	if err != nil {
+		t.Fatalf("DeleteDocument final row: %v", err)
+	}
+	if !deletedOne {
+		t.Fatal("DeleteDocument final row reported deleted=false")
+	}
+	requireColumnRetainedSemanticStreamBlockDeleted(t, d, "events", blockKey)
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1ReclaimsSideBlockAfterUpdateBatch(t *testing.T) {
+	dir := t.TempDir()
+	enableColumnRetainedPlacementCommandWAL(t, dir)
+
+	d := openColumnRetainedPlacementDB(t, dir, backenddb.Options{})
+	defer func() { _ = d.Close() }()
+	col := createColumnRetainedSemanticStreamCollection(t, d, "events")
+	ids, docs := retainedSemanticStreamDocuments(64)
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	blockKey, _, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[8])
+
+	items := make([]UpdateBatchItem, len(ids))
+	for i := range ids {
+		row := i
+		replacement := retainedSemanticStreamUpdatedDocument(row)
+		items[i] = UpdateBatchItem{
+			DocumentID: ids[i],
+			Update: func(current []byte) ([]byte, bool, error) {
+				return replacement, true, nil
+			},
+		}
+	}
+	results, err := col.UpdateBatch(items)
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != len(ids) {
+		t.Fatalf("UpdateBatch results=%d want %d", len(results), len(ids))
+	}
+	for i, result := range results {
+		if !result.Matched || !result.Modified {
+			t.Fatalf("UpdateBatch result[%d]=%+v want matched+modified", i, result)
+		}
+	}
+	requireColumnRetainedSemanticStreamBlockDeleted(t, d, "events", blockKey)
+	if got, err := col.Get(ids[8]); err != nil {
+		t.Fatalf("Get updated semantic row: %v", err)
+	} else {
+		assertJSONMapEqual1875(t, got, map[string]any{
+			"row_id":  float64(8),
+			"kind":    "updated-kind-8",
+			"payload": "updated-payload-008",
+			"commit": map[string]any{
+				"cid": "updated-cid-008",
+			},
+		})
+	}
+}
+
 func enableColumnRetainedPlacementCommandWAL(t testing.TB, dir string) {
 	t.Helper()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -605,6 +698,10 @@ func retainedSemanticStreamDocumentsFrom(start, count int) ([][]byte, [][]byte) 
 		))
 	}
 	return ids, docs
+}
+
+func retainedSemanticStreamUpdatedDocument(row int) []byte {
+	return []byte(fmt.Sprintf(`{"row_id":%d,"kind":"updated-kind-%d","payload":"updated-payload-%03d","commit":{"cid":"updated-cid-%03d"}}`, row, row, row, row))
 }
 
 func assertRetainedSemanticStreamDocument(t testing.TB, document []byte, row int) {
@@ -727,6 +824,32 @@ func requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t testing.TB, d *
 		t.Fatalf("semantic stream block pointer file id=%d is not a value-log file", blockEntry.ValuePtr.FileID)
 	}
 	return blockKey, row, blockEntry.ValuePtr
+}
+
+func requireColumnRetainedSemanticStreamBlockDeleted(t testing.TB, d *backenddb.DB, collection string, blockKey []byte) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collection)
+	if err != nil {
+		t.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("collection catalog %q missing", collection)
+	}
+	entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, collectionRetainedSemanticStreamRootName(collection), blockKey)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("semantic stream block entry after reclaim: %v", err)
+	}
+	if entry.Flags&node.FlagTombstone == 0 {
+		t.Fatalf("semantic stream block %x flags=%#x value_len=%d want tombstone or missing", blockKey, entry.Flags, len(entry.Value))
+	}
 }
 
 func valueLogPathForFileID(t testing.TB, dir string, fileID uint32) string {

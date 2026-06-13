@@ -11,6 +11,8 @@ import (
 	"strconv"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 const columnRetainedSemanticStreamV1BlockRows = 4096
@@ -145,6 +147,168 @@ func parseColumnRetainedSemanticStreamV1Locator(raw []byte) ([]byte, uint64, boo
 		return nil, 0, true, errors.New("collections: malformed semantic-stream-v1 retained locator row")
 	}
 	return blockKey, row, true, nil
+}
+
+func appendColumnRetainedSemanticStreamV1ReclaimDeltas(
+	db *backenddb.DB,
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	meta CollectionMeta,
+	removedDocumentIDs [][]byte,
+	removedPrimaryValues [][]byte,
+	replacementPrimaryValues [][]byte,
+	rootNames *[]string,
+	baseRootIDs map[string]uint64,
+	policies *[]backenddb.OrderedRootStoragePolicy,
+	deltaTables *[]memtable.Table,
+) error {
+	if !columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) ||
+		len(removedDocumentIDs) == 0 ||
+		len(removedPrimaryValues) == 0 ||
+		rootNames == nil ||
+		baseRootIDs == nil ||
+		policies == nil ||
+		deltaTables == nil {
+		return nil
+	}
+	candidates, err := columnRetainedSemanticStreamV1BlockKeysFromValues(removedPrimaryValues)
+	if err != nil || len(candidates) == 0 {
+		return err
+	}
+	replacementLive, err := columnRetainedSemanticStreamV1BlockKeysFromValues(replacementPrimaryValues)
+	if err != nil {
+		return err
+	}
+	for key := range replacementLive {
+		delete(candidates, key)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	live, err := columnRetainedSemanticStreamV1LiveCandidateBlocks(snap, catalog, meta, candidates, removedDocumentIDs)
+	if err != nil {
+		return err
+	}
+	for key := range live {
+		delete(candidates, key)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	rootName := collectionRetainedSemanticStreamRootName(meta.Name)
+	baseRootID := catalog.rootID(rootName)
+	if baseRootID == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
+		return nil
+	}
+	policy, err := collectionRootStoragePolicyForDB(db, meta, rootName)
+	if err != nil {
+		return err
+	}
+	deleteKeys := make([][]byte, 0, len(candidates))
+	for _, key := range candidates {
+		deleteKeys = append(deleteKeys, key)
+	}
+	sort.Slice(deleteKeys, func(i, j int) bool {
+		return bytes.Compare(deleteKeys[i], deleteKeys[j]) < 0
+	})
+	*rootNames = append(*rootNames, rootName)
+	baseRootIDs[rootName] = baseRootID
+	*policies = append(*policies, policy)
+	*deltaTables = append(*deltaTables, buildDeleteRootDeltaTable(deleteKeys))
+	return nil
+}
+
+func columnRetainedSemanticStreamV1BlockKeysFromValues(values [][]byte) (map[string][]byte, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make(map[string][]byte)
+	for _, value := range values {
+		blockKey, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(value)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		out[string(blockKey)] = blockKey
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func columnRetainedSemanticStreamV1LiveCandidateBlocks(snap *backenddb.Snapshot, catalog *collectionCatalog, meta CollectionMeta, candidates map[string][]byte, removedDocumentIDs [][]byte) (map[string]struct{}, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	removed := make(map[string]struct{}, len(removedDocumentIDs))
+	for _, id := range removedDocumentIDs {
+		removed[string(id)] = struct{}{}
+	}
+	primaryRootName := collectionPrimaryRootName(meta.Name)
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, primaryRootName, nil, nil, false)
+	if err != nil || it == nil {
+		return nil, err
+	}
+	defer func() { _ = it.Close() }()
+	live := make(map[string]struct{})
+	for ; it.Valid(); it.Next() {
+		key := it.UnsafeKey()
+		if _, skip := removed[string(key)]; skip {
+			continue
+		}
+		value, _, flags := it.UnsafeEntry()
+		if flags&node.FlagTombstone != 0 {
+			continue
+		}
+		if flags&node.FlagPointer != 0 {
+			resolved, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, key, nil)
+			if err != nil {
+				return nil, err
+			}
+			if !found {
+				continue
+			}
+			value = resolved
+		}
+		blockKey, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(value)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if _, candidate := candidates[string(blockKey)]; candidate {
+			live[string(blockKey)] = struct{}{}
+			if len(live) == len(candidates) {
+				break
+			}
+		}
+	}
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+	if len(live) == 0 {
+		return nil, nil
+	}
+	return live, nil
+}
+
+func columnRetainedSemanticStreamV1PrimaryValueForReclaim(snap *backenddb.Snapshot, catalog *collectionCatalog, primaryRootName string, documentID []byte, entry node.LeafEntry) ([]byte, bool, error) {
+	value := entry.Value
+	if entry.Flags&node.FlagPointer != 0 {
+		resolved, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, documentID, nil)
+		if err != nil || !found {
+			return nil, false, err
+		}
+		value = resolved
+	}
+	if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(value); err != nil || !ok {
+		return nil, ok, err
+	}
+	return bytes.Clone(value), true, nil
 }
 
 func resolveColumnRetainedPayloadAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, retained []byte) ([]byte, error) {
