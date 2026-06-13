@@ -206,13 +206,17 @@ func decodeTextV2PostingBlockValue(raw []byte) (textV2PostingBlockValue, error) 
 	}
 	value := scanner.block
 	value.Entries = make([]textV2PostingBlockEntry, 0, scanner.block.Summary.DocCount)
+	fieldCount := len(scanner.block.Summary.MaxFieldTermFrequencies)
+	fieldArena := make([]uint32, 0, int(scanner.block.Summary.DocCount)*fieldCount)
 	var entry textV2PostingBlockEntry
 	for scanner.Next(&entry) {
+		fieldOffset := len(fieldArena)
+		fieldArena = append(fieldArena, entry.FieldFrequencies...)
 		value.Entries = append(value.Entries, textV2PostingBlockEntry{
 			Ordinal:          entry.Ordinal,
 			Generation:       entry.Generation,
 			TermFrequency:    entry.TermFrequency,
-			FieldFrequencies: append([]uint32(nil), entry.FieldFrequencies...),
+			FieldFrequencies: fieldArena[fieldOffset:len(fieldArena):len(fieldArena)],
 			Flags:            entry.Flags,
 		})
 	}
@@ -401,7 +405,10 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 	if uint64(fieldCount) != fieldCountRaw || fieldCount == 0 || fieldCount > textV2PostingBlockMaxFieldCount {
 		return nil, errMalformedTextStorage("text-v2 posting block field count invalid")
 	}
-	maxFieldTF := make([]uint32, 0, fieldCount)
+	fieldCountInt := int(fieldCount)
+	fieldMetadata := make([]uint32, fieldCountInt*2)
+	maxFieldTF := fieldMetadata[:fieldCountInt:fieldCountInt]
+	computedFieldTF := fieldMetadata[fieldCountInt : fieldCountInt*2 : fieldCountInt*2]
 	for i := uint32(0); i < fieldCount; i++ {
 		fieldTF, err := cur.readUvarint()
 		if err != nil {
@@ -410,7 +417,7 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 		if uint64(checkedTextUint32(fieldTF)) != fieldTF {
 			return nil, errMalformedTextStorage("text-v2 posting block max field frequency[%d] overflows uint32", i)
 		}
-		maxFieldTF = append(maxFieldTF, uint32(fieldTF))
+		maxFieldTF[i] = uint32(fieldTF)
 	}
 	if cur.remaining() == 0 {
 		return nil, errMalformedTextStorage("text-v2 posting block missing upper-bound kind")
@@ -430,8 +437,12 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 	if entryCount > uint64(cur.remaining()+1) {
 		return nil, errMalformedTextStorage("text-v2 posting block entry count too large")
 	}
-	if cap(scratch) < int(fieldCount) {
-		scratch = make([]uint32, fieldCount)
+	minEntryBytes := uint64(fieldCount) + 4 // ordinal delta, generation, flags, term frequency, and one byte per field lane.
+	if entryCount > uint64(cur.remaining())/minEntryBytes {
+		return nil, errMalformedTextStorage("text-v2 posting block entry payload too short")
+	}
+	if cap(scratch) < fieldCountInt {
+		scratch = make([]uint32, fieldCountInt)
 	}
 	return &textV2PostingBlockEntryScanner{
 		block: textV2PostingBlockValue{
@@ -452,8 +463,8 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 		cur:              cur,
 		remaining:        docCount,
 		prevOrdinal:      blockStart - 1,
-		fieldScratch:     scratch[:fieldCount],
-		computedFieldTF:  make([]uint32, fieldCount),
+		fieldScratch:     scratch[:fieldCountInt],
+		computedFieldTF:  computedFieldTF,
 		checksumVerified: checksumVerified,
 	}, nil
 }
@@ -592,7 +603,7 @@ func (s *textV2PostingBlockEntryScanner) finish() {
 		return
 	}
 	s.computed.UpperBoundKind = s.block.Summary.UpperBoundKind
-	s.computed.MaxFieldTermFrequencies = append([]uint32(nil), s.computedFieldTF...)
+	s.computed.MaxFieldTermFrequencies = s.computedFieldTF
 	if !textV2PostingBlockSummaryEqual(s.computed, s.block.Summary) {
 		s.err = errMalformedTextStorage("text-v2 posting block summary/upper-bound metadata mismatch")
 	}

@@ -84,6 +84,33 @@ func TestTextV2BlockMaxMultiTermANDExactParitySkipsAndLazyDetails2688(t *testing
 	}
 }
 
+func TestTextV2BlockMaxSingleTermOverlappingMutationFallsBackExact2728(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	ids, docs := textV2BlockMaxFixtureDocs2628(256, 8)
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title", Weight: 5}, {Field: "body"}}}, ids, docs)
+	if _, _, err := col.Update([]byte("doc-000042"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"title":"refund refund refund","body":"refund refund"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	opts := TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 5, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 4}
+	exhaustiveOpts := opts
+	exhaustiveOpts.textV2DisableBlockMax = true
+	exhaustive, err := col.searchText(exhaustiveOpts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("exhaustive update search: %v", err)
+	}
+	got, err := col.searchText(opts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("block-max update search: %v", err)
+	}
+	assertTextSearchParity2627(t, got, exhaustive)
+	if got.Stats.TextBlockMaxFallbacks == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.TextStateLookups != 0 || got.Stats.FailClosed != 0 {
+		t.Fatalf("stats=%+v want exact fallback for overlapping single-term mutation blocks without docs/state/fail", got.Stats)
+	}
+}
+
 func TestTextV2BlockMaxMultiTermANDOverlappingMutationFallsBackExact2688(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()

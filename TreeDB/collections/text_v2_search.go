@@ -559,12 +559,21 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 	defer func() { _ = it.Close() }()
 
 	baseStats := response.Stats
+	fallbackToExactScan := func() (TextSearchResponse, error) {
+		fallback := response
+		fallback.Stats = baseStats
+		fallback.Stats.TextBlockMaxFallbacks++
+		fallbackOpts := opts
+		fallbackOpts.textV2DisableBlockMax = true
+		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, fallbackOpts, []string{term}, TextSearchOperatorOR, candidateLimit, maxPostingsScanned, resultMode, fallback)
+	}
 	cache := textV2SearchBlockCache{}
 	top := textV2SearchTopK{limit: opts.TopK, candidates: make([]textV2SearchTopCandidate, 0, opts.TopK)}
-	seenCurrent := make(map[uint64]uint64)
 	fieldCount := len(ctx.fieldNames)
 	var scratch []uint32
 	var blocksSeen uint64
+	var lastBlockLast uint64
+	var hasLastBlock bool
 	scanStart := time.Now()
 	for it.Valid() {
 		keyBytes := it.UnsafeKey()
@@ -589,14 +598,11 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 		if len(scanner.block.Summary.MaxFieldTermFrequencies) != fieldCount {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 posting block field count %d want %d", len(scanner.block.Summary.MaxFieldTermFrequencies), fieldCount))
 		}
-		if !scanner.ChecksumVerified() {
-			fallback := response
-			fallback.Stats = baseStats
-			fallback.Stats.TextBlockMaxFallbacks++
-			fallbackOpts := opts
-			fallbackOpts.textV2DisableBlockMax = true
-			return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, fallbackOpts, []string{term}, TextSearchOperatorOR, candidateLimit, maxPostingsScanned, resultMode, fallback)
+		if !scanner.ChecksumVerified() || scanner.block.Kind != textV2PostingBlockKindSealed || (hasLastBlock && scanner.block.Summary.FirstOrdinal <= lastBlockLast) {
+			return fallbackToExactScan()
 		}
+		hasLastBlock = true
+		lastBlockLast = scanner.block.Summary.LastOrdinal
 		blocksSeen++
 		if allowSet != nil && !allowSet.intersects(scanner.block.Summary.FirstOrdinal, scanner.block.Summary.LastOrdinal) {
 			response.Stats.TextPostingBlocksSkipped++
@@ -651,10 +657,6 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 			if docMap.tombstoned() {
 				continue
 			}
-			if prevGeneration, seen := seenCurrent[entry.Ordinal]; seen && prevGeneration == entry.Generation {
-				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("duplicate text-v2 posting for term %q ordinal %d generation %d", term, entry.Ordinal, entry.Generation))
-			}
-			seenCurrent[entry.Ordinal] = entry.Generation
 			if candidateLimit > 0 && response.Stats.TextCandidatesScored >= uint64(candidateLimit) {
 				response.Stats.Truncated = true
 				response.Stats.FailClosedReason = textSearchFailClosedCandidateLimit
