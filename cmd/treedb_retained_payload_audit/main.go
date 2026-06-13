@@ -31,6 +31,8 @@ func run() (code int) {
 	var semanticStreamStats bool
 	var semanticStreamMaxDepth int
 	var semanticStreamMaxPaths int
+	var semanticStreamBlockLayout bool
+	var semanticStreamBlockMaxPaths int
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			code = writeFailure(collectionName, fmt.Errorf("retained payload audit panic: %v", recovered))
@@ -50,6 +52,8 @@ func run() (code int) {
 	flag.BoolVar(&semanticStreamStats, "semantic-stream-stats", false, "Include decoded retained-payload scalar semantic stream oracle stats")
 	flag.IntVar(&semanticStreamMaxDepth, "semantic-stream-max-depth", 8, "Maximum retained-payload semantic stream traversal depth; zero means unlimited")
 	flag.IntVar(&semanticStreamMaxPaths, "semantic-stream-max-paths", 128, "Maximum retained-payload semantic stream path/kind rows to emit; zero means unlimited")
+	flag.BoolVar(&semanticStreamBlockLayout, "semantic-stream-block-layout", false, "Include semantic-stream-v1 side-root block layout and codec audit; avoids row reconstruction when used without decoded stats")
+	flag.IntVar(&semanticStreamBlockMaxPaths, "semantic-stream-block-max-paths", 128, "Maximum semantic-stream-v1 block path rows to emit; zero means unlimited")
 	flag.Parse()
 
 	if strings.TrimSpace(dbDir) == "" {
@@ -85,18 +89,20 @@ func run() (code int) {
 		return writeFailure(collectionName, fmt.Errorf("open collection: %w", err))
 	}
 	result, err := col.AuditRetainedPayloadDeclaredPathsAbsent(collections.ColumnRetainedPayloadCollectionAuditOptions{
-		Paths:                   splitCSV(pathsCSV),
-		MaxDocuments:            maxDocuments,
-		IncludeShapeStats:       shapeStats,
-		ShapeMaxDepth:           shapeMaxDepth,
-		ShapeMaxPaths:           shapeMaxPaths,
-		IncludeValueFamilyStats: valueFamilyStats,
-		ValueFamilyMaxDepth:     valueFamilyMaxDepth,
-		ValueFamilyMaxPaths:     valueFamilyMaxPaths,
-		ValueFamilyMaxUnique:    valueFamilyMaxUnique,
-		IncludeSemanticStreams:  semanticStreamStats,
-		SemanticStreamMaxDepth:  semanticStreamMaxDepth,
-		SemanticStreamMaxPaths:  semanticStreamMaxPaths,
+		Paths:                            splitCSV(pathsCSV),
+		MaxDocuments:                     maxDocuments,
+		IncludeShapeStats:                shapeStats,
+		ShapeMaxDepth:                    shapeMaxDepth,
+		ShapeMaxPaths:                    shapeMaxPaths,
+		IncludeValueFamilyStats:          valueFamilyStats,
+		ValueFamilyMaxDepth:              valueFamilyMaxDepth,
+		ValueFamilyMaxPaths:              valueFamilyMaxPaths,
+		ValueFamilyMaxUnique:             valueFamilyMaxUnique,
+		IncludeSemanticStreams:           semanticStreamStats,
+		SemanticStreamMaxDepth:           semanticStreamMaxDepth,
+		SemanticStreamMaxPaths:           semanticStreamMaxPaths,
+		IncludeSemanticStreamBlockLayout: semanticStreamBlockLayout,
+		SemanticStreamBlockMaxPaths:      semanticStreamBlockMaxPaths,
 	})
 	if err != nil {
 		writeResult(result)

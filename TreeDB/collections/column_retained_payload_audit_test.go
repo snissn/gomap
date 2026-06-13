@@ -460,6 +460,96 @@ func TestAuditCollectionRetainedPayloadSemanticStreamStats2662(t *testing.T) {
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1BlockLayoutAudit2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	docs := [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	}
+	accounting, err := ColumnRetainedSemanticStreamV1StorageAccountingFromJSONDocuments(*cfg, docs)
+	if err != nil {
+		t.Fatalf("ColumnRetainedSemanticStreamV1StorageAccountingFromJSONDocuments: %v", err)
+	}
+	audit, err := ColumnRetainedSemanticStreamV1BlockLayoutAuditFromJSONDocuments(*cfg, docs, 0)
+	if err != nil {
+		t.Fatalf("ColumnRetainedSemanticStreamV1BlockLayoutAuditFromJSONDocuments: %v", err)
+	}
+	if audit.Rows != len(docs) || audit.BlockRows != columnRetainedSemanticStreamV1BlockRows || audit.BlockCount != 1 {
+		t.Fatalf("unexpected block layout row/block counters: %+v", audit)
+	}
+	if audit.PrimaryLocatorBytes != accounting.PrimaryLocatorBytes || audit.RawBlockBytes != accounting.BlockBytes {
+		t.Fatalf("audit/accounting mismatch audit=%+v accounting=%+v", audit, accounting)
+	}
+	if audit.RawBlockBytes != audit.BlockHeaderBytes+audit.PathMetadataBytes+audit.EntryMetadataBytes+audit.ScalarValueBytes {
+		t.Fatalf("block byte attribution mismatch: %+v", audit)
+	}
+	if audit.PathStreamCount < 3 || audit.ValueCount < 6 || audit.PathZSTDInputBytes <= 0 || audit.PathZSTDEncodedBytes <= 0 {
+		t.Fatalf("missing stream counters: %+v", audit)
+	}
+	rkey, ok := retainedSemanticStreamV1PathLayoutStat2662(audit.Paths, "commit.rkey")
+	if !ok {
+		t.Fatalf("missing commit.rkey block path stat: %+v", audit.Paths)
+	}
+	if rkey.Occurrences != 2 || rkey.Blocks != 1 {
+		t.Fatalf("commit.rkey occurrence counters=%+v", rkey)
+	}
+	if got, want := rkey.ScalarValueBytes, int64(len(`"r-0001"`)+len(`"r-0002"`)); got != want {
+		t.Fatalf("commit.rkey scalar bytes=%d want %d stat=%+v", got, want, rkey)
+	}
+	if rkey.TotalBytes != rkey.PathMetadataBytes+rkey.EntryMetadataBytes+rkey.ScalarValueBytes || rkey.ZSTDBytes <= 0 || rkey.ZSTDToTotalRatio <= 0 {
+		t.Fatalf("commit.rkey byte accounting=%+v", rkey)
+	}
+	for _, codec := range []string{"snappy", "lz4", "zstd"} {
+		stat, ok := retainedSemanticStreamV1CodecStat2662(audit.BlockCodecStats, codec)
+		if !ok {
+			t.Fatalf("missing %s block codec stat: %+v", codec, audit.BlockCodecStats)
+		}
+		if stat.Blocks != 1 || stat.RawBytes != audit.RawBlockBytes || stat.StoredBytes <= 0 || stat.StoredToRawRatio <= 0 {
+			t.Fatalf("%s codec stat=%+v audit=%+v", codec, stat, audit)
+		}
+	}
+
+	limited, err := ColumnRetainedSemanticStreamV1BlockLayoutAuditFromJSONDocuments(*cfg, docs, 1)
+	if err != nil {
+		t.Fatalf("limited block layout audit: %v", err)
+	}
+	if !limited.PathsTruncated || len(limited.Paths) != 1 || limited.RawBlockBytes != audit.RawBlockBytes {
+		t.Fatalf("limited paths=%+v truncated=%v raw=%d want truncated one raw %d", limited.Paths, limited.PathsTruncated, limited.RawBlockBytes, audit.RawBlockBytes)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayout2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreamBlockLayout: true,
+		SemanticStreamBlockMaxPaths:      1,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent semantic-stream-v1 block layout: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || audit.CheckedRows != 2 {
+		t.Fatalf("audit=%+v want passed two rows", audit)
+	}
+	if audit.RetainedPayloadSemanticStreamBlockLayout == nil {
+		t.Fatalf("missing semantic stream block layout: %+v", audit)
+	}
+	layout := audit.RetainedPayloadSemanticStreamBlockLayout
+	if layout.BlockCount != 1 || layout.RawBlockBytes <= 0 || len(layout.BlockCodecStats) == 0 || len(layout.Paths) != 1 || !layout.PathsTruncated {
+		t.Fatalf("unexpected block layout: %+v", layout)
+	}
+	if _, ok := retainedSemanticStreamV1PathLayoutStat2662(layout.Paths, "kind"); ok {
+		t.Fatalf("declared kind leaked into block layout paths: %+v", layout.Paths)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentFailsClosed2382(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(false)
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
@@ -591,6 +681,24 @@ func retainedPayloadSemanticStreamStat2662(stats []ColumnRetainedPayloadSemantic
 		}
 	}
 	return ColumnRetainedPayloadSemanticStreamStat{}, false
+}
+
+func retainedSemanticStreamV1PathLayoutStat2662(stats []ColumnRetainedSemanticStreamV1PathLayoutStat, path string) (ColumnRetainedSemanticStreamV1PathLayoutStat, bool) {
+	for _, stat := range stats {
+		if stat.Path == path {
+			return stat, true
+		}
+	}
+	return ColumnRetainedSemanticStreamV1PathLayoutStat{}, false
+}
+
+func retainedSemanticStreamV1CodecStat2662(stats []ColumnRetainedSemanticStreamV1CodecStat, codec string) (ColumnRetainedSemanticStreamV1CodecStat, bool) {
+	for _, stat := range stats {
+		if stat.Codec == codec {
+			return stat, true
+		}
+	}
+	return ColumnRetainedSemanticStreamV1CodecStat{}, false
 }
 
 func retainedPayloadValueFamilyBucketCount2662(buckets []ColumnRetainedPayloadLengthBucket, name string) int64 {
