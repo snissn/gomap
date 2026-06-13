@@ -151,7 +151,7 @@ func resolveColumnRetainedPayloadAtSnapshot(snap *backenddb.Snapshot, catalog *c
 	if !columnStoreRetainedPayloadUsesSemanticStreamV1(&cfg) {
 		return retained, nil
 	}
-	blockKey, row, ok, err := parseColumnRetainedSemanticStreamV1Locator(bytes.TrimSpace(retained))
+	blockKey, row, ok, err := parseColumnRetainedSemanticStreamV1Locator(retained)
 	if err != nil || !ok {
 		return retained, err
 	}
@@ -342,9 +342,9 @@ func decodeColumnRetainedSemanticStreamV1BlockRowObject(block []byte, row uint64
 			if entryRow != row {
 				continue
 			}
-			var decoded any
-			if err := json.Unmarshal(value, &decoded); err != nil {
-				return nil, fmt.Errorf("collections: decode semantic-stream-v1 retained value: %w", err)
+			decoded := json.RawMessage(append([]byte(nil), value...))
+			if !json.Valid(decoded) {
+				return nil, errors.New("collections: decode semantic-stream-v1 retained value: invalid JSON")
 			}
 			if err := setColumnRetainedSemanticStreamPathValue(obj, path, decoded); err != nil {
 				return nil, err

@@ -290,15 +290,15 @@ func mergeColumnReconstructionValuesProjectedInto(cfg ColumnStoreConfig, rowValu
 }
 
 func decodeColumnRetainedPayloadObject(cfg ColumnStoreConfig, retained []byte, resolver templateV1Resolver) (map[string]any, error) {
-	trimmed := bytes.TrimSpace(retained)
-	if len(trimmed) == 0 {
-		return make(map[string]any), nil
-	}
 	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 {
-		if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(trimmed); err != nil {
+		if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(retained); err != nil {
 			return nil, err
 		} else if ok {
 			return nil, errors.New("collections: unresolved semantic-stream-v1 retained payload locator")
+		}
+		trimmed := bytes.TrimSpace(retained)
+		if len(trimmed) == 0 {
+			return make(map[string]any), nil
 		}
 		if hasTemplateV1Magic(trimmed, templateV1StoredMagic) || hasTemplateV1Magic(trimmed, templateV1InputMagic) || hasTemplateV1Magic(trimmed, templateV1InsertDocumentMagic) {
 			obj, err := decodeTemplateV1RetainedPayloadObject(trimmed, resolver)
@@ -308,6 +308,10 @@ func decodeColumnRetainedPayloadObject(cfg ColumnStoreConfig, retained []byte, r
 			return obj, nil
 		}
 		return decodeColumnJSONObject(trimmed)
+	}
+	trimmed := bytes.TrimSpace(retained)
+	if len(trimmed) == 0 {
+		return make(map[string]any), nil
 	}
 	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingTemplateV1 {
 		obj, err := decodeTemplateV1RetainedPayloadObject(trimmed, resolver)
