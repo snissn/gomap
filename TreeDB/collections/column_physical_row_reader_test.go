@@ -175,6 +175,61 @@ func TestColumnPhysicalRowReaderBatchFetchReusesCachedBlockV1(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalRowReaderFetchesV7FixedIDRows(t *testing.T) {
+	cfg := testColumnPhysicalRowReaderFixedIDConfigV7(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	rows := []columnDeclaredRow{
+		{ID: []byte("doc-0000")},
+		{ID: []byte("doc-0001")},
+		{ID: []byte("doc-0002")},
+		{ID: []byte("doc-0003")},
+	}
+	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, cfg, 19, 1, rows)
+	raw, err := readColumnPhysicalAssetFromManager(root, ref)
+	if err != nil {
+		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	if _, version, _, err := parseColumnPhysicalAssetScanHeader(raw, ref, "events", cfg, ColumnPublishOperationInsert); err != nil {
+		t.Fatalf("parseColumnPhysicalAssetScanHeader: %v", err)
+	} else if version != columnPhysicalAssetVersionV7 {
+		t.Fatalf("asset version=%d want V7", version)
+	}
+
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, cfg, ref), columnPhysicalRowReaderOptions{
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if got, want := reader.RowCount(), len(rows); got != want {
+		t.Fatalf("RowCount=%d want %d", got, want)
+	}
+
+	var scratch columnPhysicalRowReaderScratch
+	row, err := reader.FetchRow(2, &scratch)
+	if err != nil {
+		t.Fatalf("FetchRow(2): %v", err)
+	}
+	if string(row.ID) != "doc-0002" || row.Ordinal != 2 || row.RowIndex != 2 || row.Deleted || len(row.Values) != 0 {
+		t.Fatalf("row=%+v id=%q want fixed-id doc-0002 without values", row, string(row.ID))
+	}
+
+	var got []string
+	if err := reader.FetchBatch([]int{3, 1}, &scratch, func(row columnPhysicalRowReaderRow) error {
+		got = append(got, string(row.ID))
+		if row.Deleted || len(row.Values) != 0 {
+			return fmt.Errorf("row=%+v want non-deleted fixed-id row without values", row)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("FetchBatch: %v", err)
+	}
+	if fmt.Sprint(got) != "[doc-0003 doc-0001]" {
+		t.Fatalf("batch ids=%v", got)
+	}
+}
+
 func TestColumnPhysicalRowReaderCachedBlocksOwnRawBytesV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
@@ -837,6 +892,28 @@ func testColumnPhysicalRowReaderConfigForBenchV1(t testing.TB, dims int) *Column
 	cfg.RecoveryAuthoritativeManifest = &ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 1}
 	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
 	return cfg
+}
+
+func testColumnPhysicalRowReaderFixedIDConfigV7(t testing.TB) *ColumnStoreConfig {
+	t.Helper()
+	cfg, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		ProfileSupport: ColumnStoreProfileBenchmarkRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	cfg.ActiveManifest = &ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 1}
+	cfg.RecoveryAuthoritativeManifest = &ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 1}
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+	rowAssetConfig := columnStoreRowAssetConfig(*cfg)
+	if len(rowAssetConfig.Columns) != 0 {
+		t.Fatalf("row asset columns=%d want zero", len(rowAssetConfig.Columns))
+	}
+	return &rowAssetConfig
 }
 
 func testColumnPhysicalRowReaderRowsV1(start, count int, cfg *ColumnStoreConfig) []columnDeclaredRow {
