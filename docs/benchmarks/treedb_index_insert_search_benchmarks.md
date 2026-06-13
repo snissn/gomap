@@ -14,10 +14,12 @@ The benchmark has two timing boundaries:
 
 1. `indexed_insert_batch_flush_vector_rebuild` times `InsertBatch`, `Flush`, and `RebuildVectorIndex` for one prepared batch. It excludes database/collection creation and JSON fixture generation. This row is a lifecycle/index-readiness row, not only an append/write row.
 2. Search rows build and index the fixture before `ResetTimer`, then time only the search API call:
-   - `search_text_candidates_no_docs` uses `SearchHybridTextCandidates`;
+   - `search_text_candidates_no_docs` uses the explicit v1 compatibility text index;
+   - `search_text_v2_candidates_no_docs` uses the v2/default text index;
    - `search_vector_candidates_no_docs` uses `SearchHybridVectorCandidates`;
-   - `search_hybrid_no_docs_scalar_filter` uses `SearchHybrid` without final document fetch;
-   - `search_hybrid_fetch_topk_scalar_filter` uses `SearchHybrid` with bounded final fetch and `embedding` excluded from returned documents.
+   - `search_hybrid_no_docs_scalar_filter` uses the explicit v1 compatibility text index plus vector/scalar filtering without final document fetch;
+   - `search_hybrid_v2_no_docs_scalar_filter` uses the v2/default text index plus vector/scalar filtering without final document fetch;
+   - `search_hybrid_fetch_topk_scalar_filter` uses bounded final fetch and excludes `embedding` from returned documents.
 
 Candidate-generation rows must keep `docs_fetched/search=0` and `full_doc_fallbacks/search=0`. The final-fetch hybrid row must keep `docs_fetched/search <= topk/search`.
 
@@ -31,7 +33,7 @@ Default fixture knobs:
 | vector dimensions | 16 | `TREEDB_INDEX_BENCH_DIMS` |
 | vector graph `M` | 8 | `TREEDB_INDEX_BENCH_M` |
 | scalar indexes | `tenant`, `region` | code change only |
-| text index | `lexical` over `title` (weight 3) and `body` | code change only |
+| text index | v2/default `lexical` over `title` (weight 3) and `body`; explicit v1 rows use the same fields | code change only |
 | vector route | exact cosine column graph | code change only |
 | search query | text `refund policy`; vector query near refund docs | code change only |
 | scalar filter | `tenant-rare-06pct` (~6.25% at default shape) | code change only |
@@ -157,5 +159,5 @@ When updating this benchmark or publishing a new row, include:
 - fixture shape and timing boundary;
 - `ns/op`, `ops/sec`, `B/op`, `allocs/op`;
 - insertion metrics (`docs/op`, derived docs/sec, `insert_batch_ns/doc`, `flush_ns/doc`, `vector_rebuild_ns/doc`);
-- search metrics (`text_candidates/search`, `text_postings/search`, `posting_blocks_visited/search`, `posting_blocks_skipped/search`, `text_state_lookups/search`, `text_norm_lookups/search`, `text_match_details/search`, `vector_candidates/search`, `candidates_fused/search`, `docs_fetched/search`, scalar counters, fallback/fail/truncation counters);
+- search metrics for both explicit-v1 and default/v2 rows (`text_candidates/search`, `text_postings/search`, `posting_blocks_visited/search`, `posting_blocks_skipped/search`, `blockmax_fallbacks/search`, `text_state_lookups/search`, `text_norm_lookups/search`, `text_match_details/search`, `vector_candidates/search`, `candidates_fused/search`, `docs_fetched/search`, scalar counters, fallback/fail/truncation counters);
 - caveats for local/context-only runs.

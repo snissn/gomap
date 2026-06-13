@@ -23,10 +23,11 @@ const (
 	TextAnalyzerSimple TextAnalyzer = "simple"
 )
 
-// TextIndexVersion selects the physical text-index contract. The zero value
-// normalizes to TextIndexVersionV1. TextIndexVersionV2 is an explicit opt-in to
-// the B-tree-native root format; unsupported v2 read/rollout behavior fails
-// closed rather than silently falling back to v1.
+// TextIndexVersion selects the physical text-index contract. For new text
+// index declarations, the zero value normalizes to TextIndexVersionV2. Existing
+// persisted v1 metadata remains v1, and callers that need the legacy root format
+// can still set TextIndexVersionV1 explicitly. Unsupported versions fail closed
+// rather than silently falling back to another format.
 type TextIndexVersion string
 
 const (
@@ -83,10 +84,10 @@ func normalizeTextAnalyzer(analyzer TextAnalyzer) (TextAnalyzer, error) {
 
 func normalizeTextIndexVersion(version TextIndexVersion) (TextIndexVersion, error) {
 	switch version {
-	case TextIndexVersionDefault, TextIndexVersionV1:
-		return TextIndexVersionV1, nil
-	case TextIndexVersionV2:
+	case TextIndexVersionDefault, TextIndexVersionV2:
 		return TextIndexVersionV2, nil
+	case TextIndexVersionV1:
+		return TextIndexVersionV1, nil
 	default:
 		return "", fmt.Errorf("unsupported text index version %q", version)
 	}
@@ -198,15 +199,6 @@ func findTextIndex(indexes []TextIndexDefinition, name string) (TextIndexDefinit
 	return TextIndexDefinition{}, false
 }
 
-func rejectCreateCollectionTextV2Indexes(meta CollectionMeta) error {
-	for _, idx := range meta.TextIndexes {
-		if idx.Version == TextIndexVersionV2 {
-			return fmt.Errorf("%w: CreateCollection with text index version %q requires CreateTextIndex so v2 root descriptors and status records are published atomically", ErrTextIndexUnavailable, idx.Version)
-		}
-	}
-	return nil
-}
-
 func collectionTextIndexRootName(collection, indexName string) string {
 	return collection + "/text-index/" + indexName
 }
@@ -230,7 +222,7 @@ func collectionTextRootNames(collection, indexName string) []string {
 func collectionTextRootNamesForDefinition(collection string, def TextIndexDefinition) []string {
 	version := def.Version
 	if version == TextIndexVersionDefault {
-		version = TextIndexVersionV1
+		version = TextIndexVersionV2
 	}
 	if version == TextIndexVersionV2 {
 		return collectionTextV2RootNames(collection, def.Name)
@@ -340,7 +332,7 @@ func (c *Collection) TextIndexStatus(indexName string) (TextIndexStatus, error) 
 func textIndexStatusForDefinition(collection string, def TextIndexDefinition) TextIndexStatus {
 	version := def.Version
 	if version == TextIndexVersionDefault {
-		version = TextIndexVersionV1
+		version = TextIndexVersionV2
 	}
 	rollout := def.Rollout
 	if rollout == TextIndexRolloutDefault {
