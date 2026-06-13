@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -541,10 +540,19 @@ type columnRetainedPayloadValueFamilyPath struct {
 	commonSuffix string
 	initialized  bool
 	buckets      [7]int64
-	gzipBuf      bytes.Buffer
+	gzipCounter  columnRetainedPayloadCountingWriter
 	gzipWriter   *gzip.Writer
-	zstdBuf      bytes.Buffer
+	zstdCounter  columnRetainedPayloadCountingWriter
 	zstdWriter   *zstd.Encoder
+}
+
+type columnRetainedPayloadCountingWriter struct {
+	n int64
+}
+
+func (w *columnRetainedPayloadCountingWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	return len(p), nil
 }
 
 func newColumnRetainedPayloadValueFamilyCollector(maxDepth, maxUnique int) *columnRetainedPayloadValueFamilyCollector {
@@ -615,8 +623,8 @@ func (c *columnRetainedPayloadValueFamilyCollector) addString(path, value string
 		stat = &columnRetainedPayloadValueFamilyPath{
 			stat: ColumnRetainedPayloadValueFamilyStat{Path: path},
 		}
-		stat.gzipWriter = gzip.NewWriter(&stat.gzipBuf)
-		zstdWriter, err := zstd.NewWriter(&stat.zstdBuf,
+		stat.gzipWriter = gzip.NewWriter(&stat.gzipCounter)
+		zstdWriter, err := zstd.NewWriter(&stat.zstdCounter,
 			zstd.WithEncoderLevel(zstd.SpeedFastest),
 			zstd.WithEncoderCRC(false),
 			zstd.WithEncoderConcurrency(1),
@@ -708,9 +716,9 @@ func (c *columnRetainedPayloadValueFamilyCollector) result(maxPaths int) ([]Colu
 		stat.CommonSuffixBytes = len(internal.commonSuffix)
 		stat.CommonSuffix, stat.CommonSuffixTruncated = columnRetainedPayloadAuditClipString(internal.commonSuffix, 128)
 		stat.LengthBuckets = columnRetainedPayloadLengthBuckets(internal.buckets)
-		stat.GzipBytes = int64(internal.gzipBuf.Len())
+		stat.GzipBytes = internal.gzipCounter.n
 		stat.GzipToInputRatio = columnRetainedPayloadAuditRatio(stat.GzipBytes, stat.OracleInputBytes)
-		stat.ZSTDBytes = int64(internal.zstdBuf.Len())
+		stat.ZSTDBytes = internal.zstdCounter.n
 		stat.ZSTDToInputRatio = columnRetainedPayloadAuditRatio(stat.ZSTDBytes, stat.OracleInputBytes)
 		out = append(out, stat)
 	}
