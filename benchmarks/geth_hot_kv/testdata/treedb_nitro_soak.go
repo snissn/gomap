@@ -781,8 +781,14 @@ var interestingStatKeys = []string{
 	"treedb.cache.vlog_grouped_frame_cache.misses",
 	"treedb.cache.vlog_grouped_frame_cache.stores",
 	"treedb.vlog.mmap_read.hits",
+	"treedb.vlog.mmap_read.miss_out_of_range",
+	"treedb.vlog.mmap_read.miss_no_mapping",
+	"treedb.vlog.mmap_read.miss_dead_mapping_cap",
 	"treedb.vlog.mmap_read.fallback_readat",
 	"treedb.cache.vlog_mmap.read.hits",
+	"treedb.cache.vlog_mmap.read.miss_out_of_range",
+	"treedb.cache.vlog_mmap.read.miss_no_mapping",
+	"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap",
 	"treedb.cache.vlog_mmap.read.fallback_readat",
 }
 
@@ -964,15 +970,15 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 	}
 	sb.WriteString("\n## TreeDB value-log read counters\n\n")
 	sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678.\n\n")
-	sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap ReadAt fallbacks |\n")
-	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss out-of-range | mmap miss no mapping | mmap miss dead cap | mmap ReadAt fallbacks |\n")
+	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, run := range runs {
 		for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
 			result, ok := run.Phases[phase]
 			if !ok || len(result.StatDelta) == 0 {
 				continue
 			}
-			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d |\n",
+			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				run.Engine,
 				run.ReadIntegrity,
 				run.IterationMode,
@@ -982,6 +988,9 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses"),
 				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores"),
 				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits"),
+				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_out_of_range", "treedb.cache.vlog_mmap.read.miss_out_of_range"),
+				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_no_mapping", "treedb.cache.vlog_mmap.read.miss_no_mapping"),
+				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_dead_mapping_cap", "treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"),
 				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat"),
 			)
 		}

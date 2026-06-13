@@ -46,6 +46,9 @@ func TestHarnessExposesReadIntegrityIterationAndCounterLabels(t *testing.T) {
 		"treedb.cache.vlog_read.crc32_checks_total",
 		"treedb.vlog.grouped_frame_cache.hits",
 		"treedb.cache.vlog_grouped_frame_cache.hits",
+		"treedb.vlog.mmap_read.miss_out_of_range",
+		"treedb.vlog.mmap_read.miss_no_mapping",
+		"treedb.vlog.mmap_read.miss_dead_mapping_cap",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("harness missing instrumentation label %q", want)
