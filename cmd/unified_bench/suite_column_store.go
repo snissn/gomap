@@ -2145,8 +2145,7 @@ func columnStoreSuiteRetainedPayloadAccounting(events []columnStoreFixtureEvent,
 		return bytesTotal, "full row payload retained", nil
 	}
 	if cfg.RetainedPayload == collections.ColumnRetainedPayloadNonColumn &&
-		columnStoreSuiteEffectiveRetainedPayloadEncoding(cfg) == collections.ColumnRetainedPayloadEncodingSemanticStreamV1 &&
-		len(events) > 1 {
+		columnStoreSuiteEffectiveRetainedPayloadEncoding(cfg) == collections.ColumnRetainedPayloadEncodingSemanticStreamV1 {
 		documents := make([][]byte, len(events))
 		for i := range events {
 			documents[i] = events[i].Doc
