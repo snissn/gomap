@@ -416,7 +416,7 @@ with open(md, 'w') as out:
                 metric_ratio(key_only, value, 'iterate_keys_sec'), metric_ratio(key_only, value, 'delete_range_keys_sec'),
                 fmt(value_crc), fmt(key_crc), fmt(key_crc - value_crc)))
 
-    if phase_rows:
+    if any(any(vals[name] for name in vlog_stat_names) for _, _, vals in phase_rows):
         out.write('\n## TreeDB value-log read counters\n\n')
         out.write('Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations; grouped counters reflect grouped-frame cache activity; mmap columns split hits, misses, and ReadAt fallback reads. Full machine-readable read counters are in `phase_counters.tsv`; all nonzero parseable TreeDB stat deltas are in `phase_stat_deltas.tsv`.\n\n')
         out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss OOR | mmap miss no-map | mmap miss dead-cap | mmap ReadAt fallback |\n')
