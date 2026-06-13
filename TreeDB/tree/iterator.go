@@ -1225,6 +1225,7 @@ func (it *Iterator) prefetchPointerRun() bool {
 	it.prefetchPtrs = it.prefetchPtrs[:0]
 	it.prefetchKeys = it.prefetchKeys[:0]
 	needsKeys := it.slabKeyBatcher != nil || it.slabKeyAppender != nil || it.slabKeyReader != nil
+	needsBoundsKey := (!it.reverse && it.end != nil) || (it.reverse && it.start != nil)
 
 	limit := iteratorPointerBatchMax
 	var firstPtr page.ValuePtr
@@ -1238,7 +1239,7 @@ func (it *Iterator) prefetchPointerRun() bool {
 			flags byte
 			err   error
 		)
-		if needsKeys {
+		if needsKeys || needsBoundsKey {
 			key, _, ptr, flags, err = top.Node.GetLeafEntryView(uint16(idx))
 		} else {
 			_, ptr, flags, err = top.Node.GetLeafValueView(uint16(idx))
@@ -1248,6 +1249,20 @@ func (it *Iterator) prefetchPointerRun() bool {
 			it.valid = false
 			it.resetPointerPrefetch()
 			return false
+		}
+		if needsBoundsKey {
+			if !it.reverse && it.end != nil && compareTreeKey(key, it.end) >= 0 {
+				if len(it.prefetchPtrs) == 0 {
+					return false
+				}
+				break
+			}
+			if it.reverse && it.start != nil && compareTreeKey(key, it.start) < 0 {
+				if len(it.prefetchPtrs) == 0 {
+					return false
+				}
+				break
+			}
 		}
 		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
 			if len(it.prefetchPtrs) == 0 {

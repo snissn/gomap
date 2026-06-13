@@ -1121,6 +1121,68 @@ func TestIterator_GroupedRecordPointerPrefetch_ExtendsSameRecordRun(t *testing.T
 	}
 }
 
+func TestIterator_GroupedRecordPrefetchStopsAtIteratorEndBound(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1)
+	data, _ := p.Get(0)
+	n := node.NewNode(data)
+	n.SetPageID(0)
+	n.SetType(page.PageTypeLeaf)
+
+	reader := newCountingBatchValueReader()
+	const groupedRecordLen = 4096
+	inRangePtr := page.ValuePtr{
+		FileID: page.ValueLogFileID(1),
+		Offset: 2048,
+		Length: page.ValuePtrMarkGrouped(groupedRecordLen, 0),
+	}
+	outOfRangeMissingPtr := page.ValuePtr{
+		FileID: page.ValueLogFileID(2),
+		Offset: 4096,
+		Length: page.ValuePtrMarkGrouped(groupedRecordLen, 0),
+	}
+	reader.addPtr(inRangePtr, "in-range")
+	if err := n.AddLeafEntry([]byte("k00"), nil, node.FlagPointer, inRangePtr); err != nil {
+		t.Fatalf("AddLeafEntry(k00): %v", err)
+	}
+	if err := n.AddLeafEntry([]byte("k01"), nil, node.FlagPointer, outOfRangeMissingPtr); err != nil {
+		t.Fatalf("AddLeafEntry(k01): %v", err)
+	}
+	n.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator(nil, []byte("k01"))
+	defer it.Close()
+	if !it.Valid() {
+		t.Fatalf("iterator invalid before value read: %v", it.Error())
+	}
+	if got := string(it.ValueCopy(nil)); got != "in-range" {
+		t.Fatalf("value=%q want in-range", got)
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error after bounded value read: %v", err)
+	}
+	it.Next()
+	if it.Valid() {
+		t.Fatalf("iterator should stop before end-exclusive k01")
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error after end bound: %v", err)
+	}
+	if reader.batchCalls != 0 {
+		t.Fatalf("batchCalls=%d want 0; out-of-range missing pointer must not be prefetched", reader.batchCalls)
+	}
+	if reader.singleCalls != 1 {
+		t.Fatalf("singleCalls=%d want 1", reader.singleCalls)
+	}
+}
+
 func TestIterator_KeysOnlyDoesNotReadPointerValues(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
