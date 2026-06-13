@@ -170,6 +170,60 @@ func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentTemplateV12382(t *test
 	}
 }
 
+func TestAuditCollectionRetainedPayloadShapeStatsTemplateV12662(t *testing.T) {
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, jsonbenchRetainedPayloadAuditConfig2382(true), [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r1"},"payload":"kept","nested":{"also":"kept","count":3}}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r2"},"payload":"second","nested":{"also":"two","flag":true}}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeShapeStats: true,
+		ShapeMaxDepth:     8,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent shape stats: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || audit.CheckedRows != 2 {
+		t.Fatalf("audit=%+v want passed two rows", audit)
+	}
+	if len(audit.RetainedPayloadShape) == 0 || audit.RetainedPayloadShapeTruncated {
+		t.Fatalf("shape stats=%+v truncated=%v", audit.RetainedPayloadShape, audit.RetainedPayloadShapeTruncated)
+	}
+	payload, ok := retainedPayloadShapeStat2382(audit.RetainedPayloadShape, "payload", "string")
+	if !ok {
+		t.Fatalf("missing payload string stat: %+v", audit.RetainedPayloadShape)
+	}
+	if payload.Occurrences != 2 || payload.Documents != 2 || payload.StringBytes != int64(len("kept")+len("second")) || payload.JSONBytes <= payload.StringBytes {
+		t.Fatalf("payload stat=%+v", payload)
+	}
+	rkey, ok := retainedPayloadShapeStat2382(audit.RetainedPayloadShape, "commit.rkey", "string")
+	if !ok || rkey.Occurrences != 2 || rkey.Documents != 2 {
+		t.Fatalf("commit.rkey stat=%+v ok=%v shape=%+v", rkey, ok, audit.RetainedPayloadShape)
+	}
+	nested, ok := retainedPayloadShapeStat2382(audit.RetainedPayloadShape, "nested", "object")
+	if !ok || nested.Occurrences != 2 || nested.Documents != 2 {
+		t.Fatalf("nested object stat=%+v ok=%v shape=%+v", nested, ok, audit.RetainedPayloadShape)
+	}
+	if _, ok := retainedPayloadShapeStat2382(audit.RetainedPayloadShape, "kind", "string"); ok {
+		t.Fatalf("declared kind path leaked into shape stats: %+v", audit.RetainedPayloadShape)
+	}
+	if _, ok := retainedPayloadShapeStat2382(audit.RetainedPayloadShape, "commit.operation", "string"); ok {
+		t.Fatalf("declared commit.operation path leaked into shape stats: %+v", audit.RetainedPayloadShape)
+	}
+
+	limited, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeShapeStats: true,
+		ShapeMaxPaths:     1,
+	})
+	if err != nil {
+		t.Fatalf("AuditRetainedPayloadDeclaredPathsAbsent limited shape stats: %v audit=%+v", err, limited)
+	}
+	if !limited.RetainedPayloadShapeTruncated || len(limited.RetainedPayloadShape) != 1 {
+		t.Fatalf("limited shape=%+v truncated=%v want one truncated row", limited.RetainedPayloadShape, limited.RetainedPayloadShapeTruncated)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentFailsClosed2382(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(false)
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
@@ -274,6 +328,15 @@ func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentValueReadErrorFailsClo
 	if strings.Contains(strings.ToLower(audit.Errors[0]), "panic") {
 		t.Fatalf("audit error still reports panic: %+v", audit)
 	}
+}
+
+func retainedPayloadShapeStat2382(stats []ColumnRetainedPayloadShapePathStat, path, kind string) (ColumnRetainedPayloadShapePathStat, bool) {
+	for _, stat := range stats {
+		if stat.Path == path && stat.ValueKind == kind {
+			return stat, true
+		}
+	}
+	return ColumnRetainedPayloadShapePathStat{}, false
 }
 
 func jsonbenchRetainedPayloadAuditConfig2382(includeOperation bool) *ColumnStoreConfig {

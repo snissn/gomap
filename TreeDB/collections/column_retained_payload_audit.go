@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -71,13 +72,29 @@ type ColumnRetainedPayloadPath struct {
 // ColumnRetainedPayloadCollectionAuditOptions controls the retained-payload
 // path audit over the collection's persisted primary rows.
 type ColumnRetainedPayloadCollectionAuditOptions struct {
-	Paths        []string
-	MaxDocuments int
+	Paths             []string
+	MaxDocuments      int
+	IncludeShapeStats bool
+	ShapeMaxDepth     int
+	ShapeMaxPaths     int
 }
 
 type ColumnRetainedPayloadCollectionPathViolation struct {
 	DocumentID string `json:"document_id"`
 	Path       string `json:"path"`
+}
+
+// ColumnRetainedPayloadShapePathStat summarizes decoded retained-payload JSON
+// values by path and kind. JSONBytes is per-path encoded value size and is not
+// additive across parent and child paths.
+type ColumnRetainedPayloadShapePathStat struct {
+	Path         string `json:"path"`
+	ValueKind    string `json:"value_kind"`
+	Occurrences  int64  `json:"occurrences"`
+	Documents    int64  `json:"documents"`
+	JSONBytes    int64  `json:"json_bytes"`
+	StringBytes  int64  `json:"string_bytes,omitempty"`
+	MaxJSONBytes int    `json:"max_json_bytes,omitempty"`
 }
 
 type ColumnRetainedPayloadCollectionAuditResult struct {
@@ -92,6 +109,8 @@ type ColumnRetainedPayloadCollectionAuditResult struct {
 	DeclaredPaths                    []string                                       `json:"declared_paths"`
 	CheckedRows                      int                                            `json:"checked_rows"`
 	RetainedPayloadBytes             int64                                          `json:"retained_payload_bytes"`
+	RetainedPayloadShape             []ColumnRetainedPayloadShapePathStat           `json:"retained_payload_shape,omitempty"`
+	RetainedPayloadShapeTruncated    bool                                           `json:"retained_payload_shape_truncated,omitempty"`
 	Truncated                        bool                                           `json:"truncated,omitempty"`
 	Violations                       []ColumnRetainedPayloadCollectionPathViolation `json:"violations,omitempty"`
 	Errors                           []string                                       `json:"errors,omitempty"`
@@ -113,12 +132,14 @@ func auditColumnRetainedPayloadPathsAbsentWithResolver(cfg ColumnStoreConfig, re
 		RetainedPayloadEncodingStatus: status,
 		RetainedPayloadBytes:          len(retained),
 	}
-
 	obj, err := decodeColumnRetainedPayloadObject(cfg, retained, resolver)
 	if err != nil {
 		return audit, fmt.Errorf("collections: retained payload path audit: %w", err)
 	}
+	return auditColumnRetainedPayloadObjectPathsAbsent(audit, obj, paths)
+}
 
+func auditColumnRetainedPayloadObjectPathsAbsent(audit ColumnRetainedPayloadPathAudit, obj map[string]any, paths []string) (ColumnRetainedPayloadPathAudit, error) {
 	checked := normalizeColumnRetainedPayloadAuditPaths(paths)
 	for _, path := range checked {
 		present := columnJSONPathExists(obj, path)
@@ -196,6 +217,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	defer func() { _ = it.Close() }()
 
 	resolver := columnRetainedPayloadTemplateResolver(snap, catalog)
+	shape := newColumnRetainedPayloadShapeCollector(opts.ShapeMaxDepth)
 	for it.Valid() {
 		if opts.MaxDocuments > 0 && result.CheckedRows >= opts.MaxDocuments {
 			result.Truncated = true
@@ -215,7 +237,29 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		}
 		result.CheckedRows++
 		result.RetainedPayloadBytes += int64(len(retained))
-		payloadAudit, auditErr := auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)
+		var payloadAudit ColumnRetainedPayloadPathAudit
+		var auditErr error
+		if opts.IncludeShapeStats {
+			var obj map[string]any
+			obj, auditErr = decodeColumnRetainedPayloadObject(cfg, retained, resolver)
+			if auditErr == nil {
+				payloadAudit = ColumnRetainedPayloadPathAudit{
+					RetainedPayloadPolicy:         result.RetainedPayloadPolicy,
+					RetainedPayloadEncoding:       result.RetainedPayloadEncoding,
+					RetainedPayloadEncodingStatus: result.RetainedPayloadEncodingStatus,
+					RetainedPayloadBytes:          len(retained),
+				}
+				payloadAudit, auditErr = auditColumnRetainedPayloadObjectPathsAbsent(payloadAudit, obj, result.DeclaredPaths)
+			}
+			if auditErr == nil {
+				auditErr = shape.addDocumentObject(obj)
+			}
+			if auditErr != nil {
+				auditErr = fmt.Errorf("collections: retained payload audit %q: %w", documentID, auditErr)
+			}
+		} else {
+			payloadAudit, auditErr = auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)
+		}
 		if auditErr != nil {
 			for _, path := range payloadAudit.Violations {
 				result.Violations = append(result.Violations, ColumnRetainedPayloadCollectionPathViolation{
@@ -229,6 +273,9 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	}
 	if err := it.Error(); err != nil {
 		return retainedPayloadCollectionAuditError(result, err)
+	}
+	if opts.IncludeShapeStats {
+		result.RetainedPayloadShape, result.RetainedPayloadShapeTruncated = shape.result(opts.ShapeMaxPaths)
 	}
 	if result.Truncated {
 		result.Status = "passed_sampled"
@@ -303,4 +350,136 @@ func columnJSONPathExists(obj map[string]any, path string) bool {
 		current = next
 	}
 	return false
+}
+
+type columnRetainedPayloadShapeKey struct {
+	path string
+	kind string
+}
+
+type columnRetainedPayloadShapeCollector struct {
+	byKey    map[columnRetainedPayloadShapeKey]*ColumnRetainedPayloadShapePathStat
+	maxDepth int
+}
+
+func newColumnRetainedPayloadShapeCollector(maxDepth int) *columnRetainedPayloadShapeCollector {
+	return &columnRetainedPayloadShapeCollector{
+		byKey:    make(map[columnRetainedPayloadShapeKey]*ColumnRetainedPayloadShapePathStat),
+		maxDepth: maxDepth,
+	}
+}
+
+func (c *columnRetainedPayloadShapeCollector) addDocumentObject(obj map[string]any) error {
+	if c == nil || obj == nil {
+		return nil
+	}
+	seen := make(map[columnRetainedPayloadShapeKey]struct{})
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := c.addValue(key, obj[key], 1, seen); err != nil {
+			return err
+		}
+	}
+	for key := range seen {
+		c.byKey[key].Documents++
+	}
+	return nil
+}
+
+func (c *columnRetainedPayloadShapeCollector) addValue(path string, value any, depth int, seen map[columnRetainedPayloadShapeKey]struct{}) error {
+	kind := columnRetainedPayloadShapeValueKind(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal path %q %s value: %w", path, kind, err)
+	}
+	key := columnRetainedPayloadShapeKey{path: path, kind: kind}
+	stat := c.byKey[key]
+	if stat == nil {
+		stat = &ColumnRetainedPayloadShapePathStat{Path: path, ValueKind: kind}
+		c.byKey[key] = stat
+	}
+	jsonBytes := len(encoded)
+	stat.Occurrences++
+	stat.JSONBytes += int64(jsonBytes)
+	if jsonBytes > stat.MaxJSONBytes {
+		stat.MaxJSONBytes = jsonBytes
+	}
+	if s, ok := value.(string); ok {
+		stat.StringBytes += int64(len(s))
+	}
+	seen[key] = struct{}{}
+
+	if c.maxDepth > 0 && depth >= c.maxDepth {
+		return nil
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if err := c.addValue(path+"."+key, typed[key], depth+1, seen); err != nil {
+				return err
+			}
+		}
+	case []any:
+		childPath := path + "[]"
+		for _, child := range typed {
+			if err := c.addValue(childPath, child, depth+1, seen); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *columnRetainedPayloadShapeCollector) result(maxPaths int) ([]ColumnRetainedPayloadShapePathStat, bool) {
+	if c == nil || len(c.byKey) == 0 {
+		return nil, false
+	}
+	out := make([]ColumnRetainedPayloadShapePathStat, 0, len(c.byKey))
+	for _, stat := range c.byKey {
+		out = append(out, *stat)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].JSONBytes != out[j].JSONBytes {
+			return out[i].JSONBytes > out[j].JSONBytes
+		}
+		if out[i].Occurrences != out[j].Occurrences {
+			return out[i].Occurrences > out[j].Occurrences
+		}
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].ValueKind < out[j].ValueKind
+	})
+	if maxPaths > 0 && len(out) > maxPaths {
+		return out[:maxPaths], true
+	}
+	return out, false
+}
+
+func columnRetainedPayloadShapeValueKind(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "bool"
+	case string:
+		return "string"
+	case float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, json.Number:
+		return "number"
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	default:
+		return "unknown"
+	}
 }
