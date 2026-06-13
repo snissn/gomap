@@ -286,10 +286,7 @@ func buildReport(cfg config) (report, error) {
 			GoBenchmarks: []namedPath(cfg.goBenches),
 			ExternalJSON: []namedPath(cfg.externals),
 		},
-		Caveats: append([]string(nil), cfg.caveats...),
-	}
-	if len(rep.Caveats) == 0 {
-		rep.Caveats = defaultCaveats()
+		Caveats: append(defaultCaveats(), cfg.caveats...),
 	}
 
 	for _, input := range cfg.goBenches {

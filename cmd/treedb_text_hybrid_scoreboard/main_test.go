@@ -76,6 +76,27 @@ func TestRowsFromGoBenchRejectsEmptyArtifacts(t *testing.T) {
 	}
 }
 
+func TestBuildReportAppendsCustomCaveatsToDefaults(t *testing.T) {
+	rep, err := buildReport(config{
+		outDir:      t.TempDir(),
+		unavailable: namedValues{{Name: "Lucene", Value: "not run in unit test"}},
+		caveats:     multiValues{"custom 100k smoke caveat"},
+	})
+	if err != nil {
+		t.Fatalf("buildReport: %v", err)
+	}
+	md := renderMarkdown(rep)
+	for _, want := range []string{
+		"TreeDB rows are same-host local benchmark rows",
+		"No-document candidate rows must keep docs_fetched/search=0",
+		"custom 100k smoke caveat",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("caveats missing %q: %#v\n%s", want, rep.Caveats, md)
+		}
+	}
+}
+
 func TestHybridCloseoutOverrideLabelDrivesDatasetDocs(t *testing.T) {
 	dir := t.TempDir()
 	goBench := filepath.Join(dir, "hybrid.txt")
