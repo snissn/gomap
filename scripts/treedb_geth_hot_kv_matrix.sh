@@ -285,6 +285,7 @@ stat_key_groups = {
     'range_span_range_only_queued_units': ['treedb.cache.range_span.range_only_queued_units_total'],
     'range_span_range_only_flushed': ['treedb.cache.range_span.range_only_flushed_total'],
     'range_span_spans_flushed': ['treedb.cache.range_span.spans_flushed_total'],
+    'range_span_flush_batches': ['treedb.cache.range_span.flush_batches_total'],
 }
 
 vlog_stat_names = [
@@ -305,6 +306,7 @@ delete_range_stat_names = [
     'range_span_input', 'range_span_effective', 'range_span_keys_materialized',
     'range_span_iterator_probes', 'range_span_iterator_skips',
     'range_span_range_only_queued_units', 'range_span_range_only_flushed', 'range_span_spans_flushed',
+    'range_span_flush_batches',
 ]
 
 def fmt(n):
@@ -462,8 +464,8 @@ with open(md, 'w') as out:
     if delete_phase_rows:
         out.write('\n## TreeDB DeleteRange counters\n\n')
         out.write('Per-phase DeleteRange counters from TreeDB `Stat()`. Input ranges are submitted non-empty ranges; effective ranges are exact adjacent/overlap-coalesced write-plan ranges; materialized keys are copied into point tombstones by the cached fallback. Span columns report command-WAL range-span overlay activity. Full machine-readable counters are in `phase_counters.tsv`; all nonzero parseable TreeDB stat deltas are in `phase_stat_deltas.tsv`.\n\n')
-        out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | snapshot iters | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys | span layers | span active | span input | span effective | span materialized keys | span iter probes | span iter skips | span queued units | span flushed | spans flushed |\n')
-        out.write('|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n')
+        out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | snapshot iters | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys | span layers | span active | span input | span effective | span materialized keys | span iter probes | span iter skips | span queued units | span flushed | spans flushed | span flush batches |\n')
+        out.write('|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n')
         for r, phase, vals in delete_phase_rows:
             cells = [
                 r['key_shape'], fmt(r['value_size']), fmt(r['batch_target_bytes']), r['read_integrity'],
@@ -482,6 +484,7 @@ with open(md, 'w') as out:
                 fmt(vals['range_span_keys_materialized']), fmt(vals['range_span_iterator_probes']),
                 fmt(vals['range_span_iterator_skips']), fmt(vals['range_span_range_only_queued_units']),
                 fmt(vals['range_span_range_only_flushed']), fmt(vals['range_span_spans_flushed']),
+                fmt(vals['range_span_flush_batches']),
             ]
             out.write('| ' + ' | '.join(cells) + ' |\n')
 

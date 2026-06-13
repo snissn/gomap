@@ -7791,6 +7791,7 @@ type DB struct {
 	rangeSpanRangeOnlyQueuedUnits                     atomic.Uint64
 	rangeSpanRangeOnlyFlushed                         atomic.Uint64
 	rangeSpanSpansFlushed                             atomic.Uint64
+	rangeSpanFlushBatches                             atomic.Uint64
 	memtableAdaptive                                  bool
 	memtableAdaptiveObserve                           atomic.Bool
 	memtableAdaptiveBTreeMinIters                     uint64
@@ -24000,6 +24001,12 @@ const (
 	flushCombineTargetBytes    int64 = 64 * 1024 * 1024  // 64MiB
 	flushCombineTargetBytesMax       = 256 * 1024 * 1024 // 256MiB
 	flushCombineMaxMemtables         = 32
+	// Range-only command-WAL span layers are tiny, commute with each other, and
+	// otherwise force one backend sync per DeleteRange during checkpoint. Combine
+	// consecutive span-only units aggressively while still not crossing point-write
+	// units, which preserves the existing ordering boundary between points and
+	// ranges.
+	flushRangeSpanCombineMaxUnits = 1024
 	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
@@ -24037,22 +24044,35 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 	ids := make([]uint64, 0, maxMemtables)
 	var totalBytes int64
 	var totalLen int
-	for i := 0; i < queueLen && len(units) < maxMemtables; i++ {
+	spanOnly := false
+	for i := 0; i < queueLen; i++ {
+		unitLimit := maxMemtables
+		if spanOnly {
+			unitLimit = flushRangeSpanCombineMaxUnits
+		}
+		if len(units) >= unitLimit {
+			break
+		}
 		if laneID >= 0 {
 			unitLaneID := 0
 			if i < len(db.queueLaneIDs) {
 				unitLaneID = int(db.queueLaneIDs[i])
 			}
 			if unitLaneID != laneID {
+				if spanOnly {
+					break
+				}
 				continue
 			}
-		} else if i >= maxMemtables {
+		} else if !spanOnly && i >= maxMemtables {
+			break
+		} else if spanOnly && i >= flushRangeSpanCombineMaxUnits {
 			break
 		}
 		mem := db.queue[i]
 		memBytes := mem.Size()
 		memLen := mem.Len()
-		if len(units) > 0 && targetBytes > 0 && totalBytes >= targetBytes {
+		if !spanOnly && len(units) > 0 && targetBytes > 0 && totalBytes >= targetBytes {
 			break
 		}
 		var walPaths []string
@@ -24067,7 +24087,12 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		if i < len(db.queueRangeSpans) {
 			spans = db.queueRangeSpans[i]
 		}
-		if len(spans) > 0 && len(units) > 0 {
+		hasSpans := len(spans) > 0
+		if hasSpans {
+			if len(units) > 0 && !spanOnly {
+				break
+			}
+		} else if spanOnly {
 			break
 		}
 		var id uint64
@@ -24091,8 +24116,8 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		ids = append(ids, id)
 		totalBytes += memBytes
 		totalLen += memLen
-		if len(spans) > 0 {
-			break
+		if hasSpans {
+			spanOnly = true
 		}
 	}
 	return units, ids, totalBytes, totalLen
@@ -24255,6 +24280,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				_ = backendBatch.Close()
 				return false
 			}
+			db.rangeSpanFlushBatches.Add(1)
 			db.backendWriteBatchesTotal.Add(1)
 			var err error
 			if sync {
@@ -26883,6 +26909,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.range_span.range_only_queued_units_total"] = fmt.Sprintf("%d", db.rangeSpanRangeOnlyQueuedUnits.Load())
 	stats["treedb.cache.range_span.range_only_flushed_total"] = fmt.Sprintf("%d", db.rangeSpanRangeOnlyFlushed.Load())
 	stats["treedb.cache.range_span.spans_flushed_total"] = fmt.Sprintf("%d", db.rangeSpanSpansFlushed.Load())
+	stats["treedb.cache.range_span.flush_batches_total"] = fmt.Sprintf("%d", db.rangeSpanFlushBatches.Load())
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
 	stats["treedb.cache.mutable_flush_threshold_base_bytes"] = fmt.Sprintf("%d", mutableThresholdBase)

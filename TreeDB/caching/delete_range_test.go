@@ -260,6 +260,51 @@ func TestCachingBatch_CommandWALRangeOnlyUsesSpanLayer(t *testing.T) {
 	}
 }
 
+func TestCachingDB_CommandWALRangeSpanCheckpointCombinesFlushUnits(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const ranges = 40
+	for i := 0; i < ranges; i++ {
+		start := []byte{byte(i + 1)}
+		end := []byte{byte(i + 2)}
+		if err := db.DeleteRangeAfterCommandWALAppend(start, end, func() error { return nil }); err != nil {
+			t.Fatalf("DeleteRangeAfterCommandWALAppend(%d): %v", i, err)
+		}
+	}
+	before := db.Stats()
+	if got := deleteRangeStatUint64(t, before, "treedb.cache.range_span.active_layers"); got != ranges {
+		t.Fatalf("active_layers before checkpoint=%d want %d", got, ranges)
+	}
+	beforeBatches := deleteRangeStatUint64(t, before, "treedb.cache.stats.backend_write_batches_total")
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	after := db.Stats()
+	if got := deleteRangeStatUint64(t, after, "treedb.cache.range_span.active_layers"); got != 0 {
+		t.Fatalf("active_layers after checkpoint=%d want 0", got)
+	}
+	if got := deleteRangeStatUint64(t, after, "treedb.cache.range_span.spans_flushed_total"); got != ranges {
+		t.Fatalf("spans_flushed_total=%d want %d", got, ranges)
+	}
+	if got := deleteRangeStatUint64(t, after, "treedb.cache.range_span.range_only_flushed_total"); got != ranges {
+		t.Fatalf("range_only_flushed_total=%d want %d", got, ranges)
+	}
+	if got := deleteRangeStatUint64(t, after, "treedb.cache.range_span.flush_batches_total"); got != 1 {
+		t.Fatalf("range_span flush_batches_total=%d want 1", got)
+	}
+	if got := deleteRangeStatUint64(t, after, "treedb.cache.stats.backend_write_batches_total") - beforeBatches; got != 1 {
+		t.Fatalf("backend write batches for range spans=%d want 1", got)
+	}
+}
+
 func TestCachingDB_CommandWALRangeSpanBounds(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,

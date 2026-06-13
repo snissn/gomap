@@ -827,6 +827,7 @@ var interestingStatKeys = []string{
 	"treedb.cache.range_span.range_only_queued_units_total",
 	"treedb.cache.range_span.range_only_flushed_total",
 	"treedb.cache.range_span.spans_flushed_total",
+	"treedb.cache.range_span.flush_batches_total",
 }
 
 var interestingStatPrefixes = []string{
@@ -1086,8 +1087,8 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 	}
 	sb.WriteString("\n## TreeDB DeleteRange counters\n\n")
 	sb.WriteString("Per-phase DeleteRange deltas from TreeDB `Stat()` output. `input ranges` counts submitted non-empty ranges; `effective ranges` counts ranges after exact adjacent/overlap coalescing in the write plan; materialized keys are copied into point tombstones by the cached fallback. Span columns report command-WAL range-span overlay activity.\n\n")
-	sb.WriteString("| engine | read integrity | iteration mode | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | snapshot iters | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys | span layers | span active | span input | span effective | span materialized keys | span iter probes | span iter skips | span queued units | span flushed | spans flushed |\n")
-	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("| engine | read integrity | iteration mode | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | snapshot iters | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys | span layers | span active | span input | span effective | span materialized keys | span iter probes | span iter skips | span queued units | span flushed | spans flushed | span flush batches |\n")
+	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, run := range runs {
 		for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
 			result, ok := run.Phases[phase]
@@ -1097,7 +1098,7 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 			if !hasAnyStatDeltaValue(result.StatDelta, deleteRangeCounterKeys...) {
 				continue
 			}
-			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				run.Engine,
 				run.ReadIntegrity,
 				run.IterationMode,
@@ -1130,6 +1131,7 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 				statDeltaValue(result.StatDelta, "treedb.cache.range_span.range_only_queued_units_total"),
 				statDeltaValue(result.StatDelta, "treedb.cache.range_span.range_only_flushed_total"),
 				statDeltaValue(result.StatDelta, "treedb.cache.range_span.spans_flushed_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.flush_batches_total"),
 			)
 		}
 	}
@@ -1193,6 +1195,7 @@ var deleteRangeCounterKeys = []string{
 	"treedb.cache.range_span.range_only_queued_units_total",
 	"treedb.cache.range_span.range_only_flushed_total",
 	"treedb.cache.range_span.spans_flushed_total",
+	"treedb.cache.range_span.flush_batches_total",
 }
 
 func hasDeleteRangeCounterDeltas(runs []runResult) bool {

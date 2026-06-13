@@ -62,6 +62,7 @@ func TestHarnessExposesReadIntegrityIterationAndCounterLabels(t *testing.T) {
 		"treedb.cache.delete_range.backend_direct_batches_total",
 		"treedb.cache.range_span.layers_total",
 		"treedb.cache.range_span.iterator_skips_total",
+		"treedb.cache.range_span.flush_batches_total",
 		"if hasReadCounterDeltas(runs) {",
 		"if !hasDeleteRangeCounterDeltas(runs) {",
 	} {
