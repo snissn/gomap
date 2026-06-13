@@ -89,6 +89,11 @@ func TestTextIndexDefaultCreateCollectionNoopDoesNotReplaceRacedV2Roots2690(t *t
 		t.Fatalf("SearchText before releasing first create: %v", err)
 	}
 	assertSearchIDs2690(t, before, []string{"d1"})
+	stateBeforeRelease := d.State()
+	if stateBeforeRelease == nil {
+		t.Fatal("db state before releasing first create is nil")
+	}
+	commitSeqBeforeRelease := stateBeforeRelease.CommitSeq
 
 	close(release)
 	select {
@@ -105,6 +110,13 @@ func TestTextIndexDefaultCreateCollectionNoopDoesNotReplaceRacedV2Roots2690(t *t
 	}
 	assertSearchIDs2690(t, after, []string{"d1"})
 	assertZeroDocV2SearchStats2690(t, after.Stats)
+	stateAfterRelease := d.State()
+	if stateAfterRelease == nil {
+		t.Fatal("db state after releasing first create is nil")
+	}
+	if stateAfterRelease.CommitSeq != commitSeqBeforeRelease {
+		t.Fatalf("raced no-op CreateCollection advanced commit seq from %d to %d; want no orphan root publish", commitSeqBeforeRelease, stateAfterRelease.CommitSeq)
+	}
 	status, err := col.TextIndexStatus("lexical")
 	if err != nil {
 		t.Fatalf("TextIndexStatus after raced no-op create: %v", err)

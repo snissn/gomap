@@ -110,6 +110,7 @@ var (
 	errUpdateBatchHasSecondaryUniqueIndex      = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex  = errors.New("collections: update batch changes secondary unique index")
 	errIndexedFlushLostOwnership               = errors.New("collections: async indexed publish lost ownership of in-flight flush units")
+	errCreateCollectionNoopExistingSchema      = errors.New("collections: create collection no-op existing schema")
 	errUpdateCombinerStopped                   = errors.New("collections: update combiner stopped before DB update completed; callback may have been invoked")
 	indexedAsyncFlushPprofLabels               = pprof.Labels(
 		collectionPprofComponentKey, collectionPprofIndexedAsyncFlush,
@@ -2952,7 +2953,7 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			if !sameCollectionMeta(existing.meta, normalized) {
 				return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 			}
-			return buildSystemDeltaIterator(nil)
+			return nil, errCreateCollectionNoopExistingSchema
 		}
 		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 	}
@@ -2965,6 +2966,14 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			_, _, err = m.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, intent, buildSystemDelta)
 			return err
 		})
+		if errors.Is(err, errCreateCollectionNoopExistingSchema) {
+			if intent != nil {
+				if noopErr := m.publishCommandWALNoop(intent, false); noopErr != nil {
+					return nil, noopErr
+				}
+			}
+			return normalized.copy(), nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2985,7 +2994,7 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 				if !sameCollectionMeta(existing.meta, normalized) {
 					return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 				}
-				return buildSystemTargetIterator(current, nil)
+				return nil, errCreateCollectionNoopExistingSchema
 			}
 			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, nil, nil))
 		})
@@ -3007,10 +3016,13 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 				if !sameCollectionMeta(existing.meta, normalized) {
 					return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 				}
-				return buildSystemTargetIterator(current, nil)
+				return nil, errCreateCollectionNoopExistingSchema
 			}
 			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 		})
+	}
+	if errors.Is(err, errCreateCollectionNoopExistingSchema) {
+		return normalized.copy(), nil
 	}
 	if err != nil {
 		return nil, err
