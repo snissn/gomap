@@ -5,7 +5,12 @@ import (
 	"fmt"
 )
 
-const hybridVectorScalarPrefilterExactMax = 4 * 1024
+const (
+	hybridVectorScalarPrefilterExactMax         = 4 * 1024
+	hybridVectorScalarPrefilterExactMaxScanRows = 4 * 1024
+)
+
+var errHybridVectorAllowSetScanBudgetExceeded = errors.New("collections: hybrid vector scalar allow-set exact scan budget exceeded")
 
 // SearchHybridVectorCandidates adapts an existing collection vector-index
 // search into the shared hybrid candidate shape.
@@ -37,7 +42,10 @@ func (c *Collection) searchHybridVectorCandidates(query HybridVectorQuery, allow
 		return HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}, nil
 	}
 	if hybridVectorCandidateUseExactAllowSet(query, allowSet) {
-		return c.searchHybridVectorCandidatesAllowSet(query, allowSet)
+		response, err := c.searchHybridVectorCandidatesAllowSet(query, allowSet)
+		if !errors.Is(err, errHybridVectorAllowSetScanBudgetExceeded) {
+			return response, err
+		}
 	}
 
 	opts := hybridVectorSearchOptions(query)
@@ -127,6 +135,9 @@ func (c *Collection) searchHybridVectorCandidatesAllowSet(query HybridVectorQuer
 		}
 		vectorResponse, err = prepared.searchHybridVectorAllowSetNoDocuments(opts, statsMode, allowSet)
 		acquireStats.apply(&vectorResponse.Stats)
+		if errors.Is(err, errHybridVectorAllowSetScanBudgetExceeded) {
+			return HybridCandidateResponse{}, err
+		}
 		if err == nil && hybridVectorAllowSetNoDocumentGuardrailsOK(vectorResponse) {
 			response, err := hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
 			if err != nil {
@@ -228,6 +239,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32,
 	if topK == 0 || rowCount == 0 || len(allowSet) == 0 {
 		return nil, stats, nil
 	}
+	if !hybridVectorAllowSetExactScanEligible(rowCount) {
+		return nil, stats, errHybridVectorAllowSetScanBudgetExceeded
+	}
 	if topK > len(allowSet) {
 		topK = len(allowSet)
 	}
@@ -287,6 +301,10 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32,
 		return nil, stats, err
 	}
 	return scratch.results, stats, nil
+}
+
+func hybridVectorAllowSetExactScanEligible(rowCount int) bool {
+	return rowCount >= 0 && rowCount <= hybridVectorScalarPrefilterExactMaxScanRows
 }
 
 func hybridVectorAllowSetNoDocumentGuardrailsOK(response VectorIndexSearchResponse) bool {
