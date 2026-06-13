@@ -226,18 +226,89 @@ PY
   done
 done
 
-python3 - "$summary_tsv" "$summary_md" <<'PY'
-import csv, sys
+phase_counters_tsv="$run_dir/phase_counters.tsv"
+
+python3 - "$summary_tsv" "$summary_md" "$phase_counters_tsv" <<'PY'
+import csv, json, sys
 from collections import defaultdict
 
-tsv, md = sys.argv[1:]
+tsv, md, phase_tsv = sys.argv[1:]
 rows = list(csv.DictReader(open(tsv), delimiter='\t'))
+json_cache = {}
+phases = ['write', 'read', 'iterate', 'delete_range', 'reopen_verify']
+
+stat_key_groups = {
+    'crc32_checks': ['treedb.vlog.read.crc32_checks_total', 'treedb.cache.vlog_read.crc32_checks_total'],
+    'grouped_hits': ['treedb.vlog.grouped_frame_cache.hits', 'treedb.cache.vlog_grouped_frame_cache.hits'],
+    'grouped_misses': ['treedb.vlog.grouped_frame_cache.misses', 'treedb.cache.vlog_grouped_frame_cache.misses'],
+    'grouped_stores': ['treedb.vlog.grouped_frame_cache.stores', 'treedb.cache.vlog_grouped_frame_cache.stores'],
+    'mmap_hits': ['treedb.vlog.mmap_read.hits', 'treedb.cache.vlog_mmap.read.hits'],
+    'mmap_miss_out_of_range': ['treedb.vlog.mmap_read.miss_out_of_range', 'treedb.cache.vlog_mmap.read.miss_out_of_range'],
+    'mmap_miss_no_mapping': ['treedb.vlog.mmap_read.miss_no_mapping', 'treedb.cache.vlog_mmap.read.miss_no_mapping'],
+    'mmap_miss_dead_mapping_cap': ['treedb.vlog.mmap_read.miss_dead_mapping_cap', 'treedb.cache.vlog_mmap.read.miss_dead_mapping_cap'],
+    'mmap_fallback_readat': ['treedb.vlog.mmap_read.fallback_readat', 'treedb.cache.vlog_mmap.read.fallback_readat'],
+}
 
 def fmt(n):
     try:
         return f"{int(float(n)):,}"
     except Exception:
         return n
+
+def load_doc(path):
+    if path not in json_cache:
+        with open(path) as f:
+            json_cache[path] = json.load(f)
+    return json_cache[path]
+
+def run_for_row(r):
+    doc = load_doc(r['json'])
+    for run in doc.get('runs', []):
+        if run.get('engine') == r['engine']:
+            return run
+    return None
+
+def stat_value(delta, name):
+    for key in stat_key_groups[name]:
+        if key in delta:
+            return int(delta[key])
+    return 0
+
+def phase_delta(r, phase):
+    run = run_for_row(r)
+    if not run:
+        return {}
+    return run.get('phases', {}).get(phase, {}).get('stat_delta') or {}
+
+def metric_ratio(a, b, metric):
+    denom = float(b[metric])
+    if denom == 0:
+        return 'n/a'
+    return f"{float(a[metric]) / denom:.3f}x"
+
+phase_rows = []
+for r in rows:
+    for phase in phases:
+        delta = phase_delta(r, phase)
+        if not delta:
+            continue
+        vals = {name: stat_value(delta, name) for name in stat_key_groups}
+        if not any(vals.values()):
+            continue
+        phase_rows.append((r, phase, vals))
+
+with open(phase_tsv, 'w', newline='') as f:
+    writer = csv.writer(f, delimiter='\t')
+    writer.writerow([
+        'key_shape', 'value_shape', 'value_size', 'batch_target_bytes', 'treedb_read_integrity',
+        'iteration_mode', 'engine', 'run_read_integrity', 'phase', *stat_key_groups.keys(), 'json'
+    ])
+    for r, phase, vals in phase_rows:
+        writer.writerow([
+            r['key_shape'], r['value_shape'], r['value_size'], r['batch_target_bytes'], r['treedb_read_integrity'],
+            r['iteration_mode'], r['engine'], r['read_integrity'], phase,
+            *(vals[name] for name in stat_key_groups), r['json'],
+        ])
 
 with open(md, 'w') as out:
     out.write('# geth/Nitro hot KV matrix\n\n')
@@ -251,6 +322,7 @@ with open(md, 'w') as out:
             iteration_mode=r['iteration_mode'], engine=r['engine'], read_integrity=r['read_integrity'], write=fmt(r['write_ops_sec']),
             read=fmt(r['read_ops_sec']), iterate=fmt(r['iterate_keys_sec']), delete=fmt(r['delete_range_keys_sec']),
             size=fmt(r['size_bytes']), post_delete=fmt(r['post_delete_size_bytes'])))
+
     out.write('\n## TreeDB ratios versus Pebble\n\n')
     groups = defaultdict(dict)
     for r in rows:
@@ -263,18 +335,49 @@ with open(md, 'w') as out:
         if 'treedb' not in g or 'pebble' not in g:
             continue
         t, p = g['treedb'], g['pebble']
-        def ratio(metric):
-            pv = float(p[metric])
-            tv = float(t[metric])
-            if pv == 0:
-                return 'n/a'
-            return f"{tv/pv:.3f}x"
         out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
-            key[0], key[1], fmt(key[2]), fmt(key[3]), key[4], key[5], ratio('write_ops_sec'), ratio('read_ops_sec'),
-            ratio('iterate_keys_sec'), ratio('delete_range_keys_sec'), ratio('size_bytes')))
+            key[0], key[1], fmt(key[2]), fmt(key[3]), key[4], key[5], metric_ratio(t, p, 'write_ops_sec'), metric_ratio(t, p, 'read_ops_sec'),
+            metric_ratio(t, p, 'iterate_keys_sec'), metric_ratio(t, p, 'delete_range_keys_sec'), metric_ratio(t, p, 'size_bytes')))
+
+    iter_groups = defaultdict(dict)
+    for r in rows:
+        if r['engine'] != 'treedb':
+            continue
+        key = (r['key_shape'], r['value_shape'], r['value_size'], r['batch_target_bytes'], r['treedb_read_integrity'], r['engine'])
+        iter_groups[key][r['iteration_mode']] = r
+    comparable = [(key, g) for key, g in sorted(iter_groups.items()) if 'value' in g and 'key-only' in g]
+    if comparable:
+        out.write('\n## TreeDB key-only vs value iteration deltas\n\n')
+        out.write('Ratios are `key-only / value` for otherwise identical TreeDB runs. Iterate CRC counters come from the per-phase TreeDB stat deltas.\n\n')
+        out.write('| key shape | value shape | value size | batch target bytes | read-integrity | write ratio | read ratio | iterate ratio | DeleteRange ratio | value iterate CRC | key-only iterate CRC | CRC delta |\n')
+        out.write('|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|\n')
+        for key, g in comparable:
+            value = g['value']
+            key_only = g['key-only']
+            value_crc = stat_value(phase_delta(value, 'iterate'), 'crc32_checks')
+            key_crc = stat_value(phase_delta(key_only, 'iterate'), 'crc32_checks')
+            out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
+                key[0], key[1], fmt(key[2]), fmt(key[3]), key[4],
+                metric_ratio(key_only, value, 'write_ops_sec'), metric_ratio(key_only, value, 'read_ops_sec'),
+                metric_ratio(key_only, value, 'iterate_keys_sec'), metric_ratio(key_only, value, 'delete_range_keys_sec'),
+                fmt(value_crc), fmt(key_crc), fmt(key_crc - value_crc)))
+
+    if phase_rows:
+        out.write('\n## TreeDB value-log read counters\n\n')
+        out.write('Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations; grouped counters reflect grouped-frame cache activity; mmap columns split hits, misses, and ReadAt fallback reads. Full machine-readable counters are in `phase_counters.tsv`.\n\n')
+        out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss OOR | mmap miss no-map | mmap miss dead-cap | mmap ReadAt fallback |\n')
+        out.write('|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n')
+        for r, phase, vals in phase_rows:
+            out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
+                r['key_shape'], fmt(r['value_size']), fmt(r['batch_target_bytes']), r['read_integrity'],
+                r['iteration_mode'], r['engine'], phase,
+                fmt(vals['crc32_checks']), fmt(vals['grouped_hits']), fmt(vals['grouped_misses']), fmt(vals['grouped_stores']),
+                fmt(vals['mmap_hits']), fmt(vals['mmap_miss_out_of_range']), fmt(vals['mmap_miss_no_mapping']),
+                fmt(vals['mmap_miss_dead_mapping_cap']), fmt(vals['mmap_fallback_readat'])))
 PY
 
 echo "geth hot KV matrix complete"
-echo "  run dir: $run_dir"
-echo "  tsv:     $summary_tsv"
-echo "  report:  $summary_md"
+echo "  run dir:         $run_dir"
+echo "  tsv:             $summary_tsv"
+echo "  phase counters:  $phase_counters_tsv"
+echo "  report:          $summary_md"
