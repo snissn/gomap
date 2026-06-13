@@ -84,6 +84,9 @@ type ColumnRetainedPayloadCollectionAuditOptions struct {
 	ValueFamilyMaxDepth     int
 	ValueFamilyMaxPaths     int
 	ValueFamilyMaxUnique    int
+	IncludeSemanticStreams  bool
+	SemanticStreamMaxDepth  int
+	SemanticStreamMaxPaths  int
 }
 
 type ColumnRetainedPayloadCollectionPathViolation struct {
@@ -138,25 +141,48 @@ type ColumnRetainedPayloadValueFamilyStat struct {
 	ZSTDToInputRatio      float64                             `json:"zstd_to_input_ratio,omitempty"`
 }
 
+// ColumnRetainedPayloadSemanticStreamStat estimates the scalar stream bytes a
+// ClickHouse-like semantic retained payload layout would need by path and kind.
+// It is an oracle over decoded values, not a claim about the current on-disk
+// format: object shape/presence metadata and reconstruction layout are separate
+// format choices.
+type ColumnRetainedPayloadSemanticStreamStat struct {
+	Path             string  `json:"path"`
+	ValueKind        string  `json:"value_kind"`
+	Occurrences      int64   `json:"occurrences"`
+	Documents        int64   `json:"documents"`
+	JSONBytes        int64   `json:"json_bytes"`
+	StringBytes      int64   `json:"string_bytes,omitempty"`
+	StreamInputBytes int64   `json:"stream_input_bytes"`
+	MinStreamBytes   int     `json:"min_stream_bytes"`
+	MaxStreamBytes   int     `json:"max_stream_bytes"`
+	ZSTDBytes        int64   `json:"zstd_bytes,omitempty"`
+	ZSTDToInputRatio float64 `json:"zstd_to_input_ratio,omitempty"`
+}
+
 type ColumnRetainedPayloadCollectionAuditResult struct {
-	Collection                            string                                         `json:"collection"`
-	Status                                string                                         `json:"status"`
-	RetainedPayloadPolicy                 ColumnRetainedPayloadPolicy                    `json:"retained_payload_policy"`
-	RetainedPayloadEncoding               string                                         `json:"retained_payload_encoding"`
-	RetainedPayloadEncodingStatus         string                                         `json:"retained_payload_encoding_status"`
-	RetainedPayloadCompression            string                                         `json:"retained_payload_compression"`
-	RetainedPayloadCompressionPolicy      string                                         `json:"retained_payload_compression_policy"`
-	RetainedPayloadCompressionStatus      string                                         `json:"retained_payload_compression_status"`
-	DeclaredPaths                         []string                                       `json:"declared_paths"`
-	CheckedRows                           int                                            `json:"checked_rows"`
-	RetainedPayloadBytes                  int64                                          `json:"retained_payload_bytes"`
-	RetainedPayloadShape                  []ColumnRetainedPayloadShapePathStat           `json:"retained_payload_shape,omitempty"`
-	RetainedPayloadShapeTruncated         bool                                           `json:"retained_payload_shape_truncated,omitempty"`
-	RetainedPayloadValueFamilies          []ColumnRetainedPayloadValueFamilyStat         `json:"retained_payload_value_families,omitempty"`
-	RetainedPayloadValueFamiliesTruncated bool                                           `json:"retained_payload_value_families_truncated,omitempty"`
-	Truncated                             bool                                           `json:"truncated,omitempty"`
-	Violations                            []ColumnRetainedPayloadCollectionPathViolation `json:"violations,omitempty"`
-	Errors                                []string                                       `json:"errors,omitempty"`
+	Collection                              string                                         `json:"collection"`
+	Status                                  string                                         `json:"status"`
+	RetainedPayloadPolicy                   ColumnRetainedPayloadPolicy                    `json:"retained_payload_policy"`
+	RetainedPayloadEncoding                 string                                         `json:"retained_payload_encoding"`
+	RetainedPayloadEncodingStatus           string                                         `json:"retained_payload_encoding_status"`
+	RetainedPayloadCompression              string                                         `json:"retained_payload_compression"`
+	RetainedPayloadCompressionPolicy        string                                         `json:"retained_payload_compression_policy"`
+	RetainedPayloadCompressionStatus        string                                         `json:"retained_payload_compression_status"`
+	DeclaredPaths                           []string                                       `json:"declared_paths"`
+	CheckedRows                             int                                            `json:"checked_rows"`
+	RetainedPayloadBytes                    int64                                          `json:"retained_payload_bytes"`
+	RetainedPayloadShape                    []ColumnRetainedPayloadShapePathStat           `json:"retained_payload_shape,omitempty"`
+	RetainedPayloadShapeTruncated           bool                                           `json:"retained_payload_shape_truncated,omitempty"`
+	RetainedPayloadValueFamilies            []ColumnRetainedPayloadValueFamilyStat         `json:"retained_payload_value_families,omitempty"`
+	RetainedPayloadValueFamiliesTruncated   bool                                           `json:"retained_payload_value_families_truncated,omitempty"`
+	RetainedPayloadSemanticStreams          []ColumnRetainedPayloadSemanticStreamStat      `json:"retained_payload_semantic_streams,omitempty"`
+	RetainedPayloadSemanticStreamsTruncated bool                                           `json:"retained_payload_semantic_streams_truncated,omitempty"`
+	RetainedPayloadSemanticStreamInputBytes int64                                          `json:"retained_payload_semantic_stream_input_bytes,omitempty"`
+	RetainedPayloadSemanticStreamZSTDBytes  int64                                          `json:"retained_payload_semantic_stream_zstd_bytes,omitempty"`
+	Truncated                               bool                                           `json:"truncated,omitempty"`
+	Violations                              []ColumnRetainedPayloadCollectionPathViolation `json:"violations,omitempty"`
+	Errors                                  []string                                       `json:"errors,omitempty"`
 }
 
 // AuditColumnRetainedPayloadPathsAbsent verifies that declared typed JSON paths
@@ -260,7 +286,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	defer func() { _ = it.Close() }()
 
 	resolver := columnRetainedPayloadTemplateResolver(snap, catalog)
-	includeDecodedStats := opts.IncludeShapeStats || opts.IncludeValueFamilyStats
+	includeDecodedStats := opts.IncludeShapeStats || opts.IncludeValueFamilyStats || opts.IncludeSemanticStreams
 	var shape *columnRetainedPayloadShapeCollector
 	if opts.IncludeShapeStats {
 		shape = newColumnRetainedPayloadShapeCollector(opts.ShapeMaxDepth)
@@ -268,6 +294,10 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	var valueFamilies *columnRetainedPayloadValueFamilyCollector
 	if opts.IncludeValueFamilyStats {
 		valueFamilies = newColumnRetainedPayloadValueFamilyCollector(opts.ValueFamilyMaxDepth, opts.ValueFamilyMaxUnique)
+	}
+	var semanticStreams *columnRetainedPayloadSemanticStreamCollector
+	if opts.IncludeSemanticStreams {
+		semanticStreams = newColumnRetainedPayloadSemanticStreamCollector(opts.SemanticStreamMaxDepth)
 	}
 	for it.Valid() {
 		if opts.MaxDocuments > 0 && result.CheckedRows >= opts.MaxDocuments {
@@ -308,6 +338,9 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 			if auditErr == nil && valueFamilies != nil {
 				auditErr = valueFamilies.addDocumentObject(obj)
 			}
+			if auditErr == nil && semanticStreams != nil {
+				auditErr = semanticStreams.addDocumentObject(obj)
+			}
 			if auditErr != nil {
 				auditErr = fmt.Errorf("collections: retained payload audit %q: %w", documentID, auditErr)
 			}
@@ -338,6 +371,16 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		}
 		result.RetainedPayloadValueFamilies = valueFamilyStats
 		result.RetainedPayloadValueFamiliesTruncated = truncated
+	}
+	if opts.IncludeSemanticStreams {
+		semanticStreamStats, truncated, inputBytes, zstdBytes, err := semanticStreams.result(opts.SemanticStreamMaxPaths)
+		if err != nil {
+			return retainedPayloadCollectionAuditError(result, err)
+		}
+		result.RetainedPayloadSemanticStreams = semanticStreamStats
+		result.RetainedPayloadSemanticStreamsTruncated = truncated
+		result.RetainedPayloadSemanticStreamInputBytes = inputBytes
+		result.RetainedPayloadSemanticStreamZSTDBytes = zstdBytes
 	}
 	if result.Truncated {
 		result.Status = "passed_sampled"
@@ -525,6 +568,167 @@ func (c *columnRetainedPayloadShapeCollector) result(maxPaths int) ([]ColumnReta
 		return out[:maxPaths], true
 	}
 	return out, false
+}
+
+type columnRetainedPayloadSemanticStreamKey struct {
+	path string
+	kind string
+}
+
+type columnRetainedPayloadSemanticStreamCollector struct {
+	byKey    map[columnRetainedPayloadSemanticStreamKey]*columnRetainedPayloadSemanticStreamPath
+	maxDepth int
+}
+
+type columnRetainedPayloadSemanticStreamPath struct {
+	stat        ColumnRetainedPayloadSemanticStreamStat
+	zstdCounter columnRetainedPayloadCountingWriter
+	zstdWriter  *zstd.Encoder
+}
+
+func newColumnRetainedPayloadSemanticStreamCollector(maxDepth int) *columnRetainedPayloadSemanticStreamCollector {
+	return &columnRetainedPayloadSemanticStreamCollector{
+		byKey:    make(map[columnRetainedPayloadSemanticStreamKey]*columnRetainedPayloadSemanticStreamPath),
+		maxDepth: maxDepth,
+	}
+}
+
+func (c *columnRetainedPayloadSemanticStreamCollector) addDocumentObject(obj map[string]any) error {
+	if c == nil || obj == nil {
+		return nil
+	}
+	seen := make(map[columnRetainedPayloadSemanticStreamKey]struct{})
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := c.addValue(key, obj[key], 1, seen); err != nil {
+			return err
+		}
+	}
+	for key := range seen {
+		c.byKey[key].stat.Documents++
+	}
+	return nil
+}
+
+func (c *columnRetainedPayloadSemanticStreamCollector) addValue(path string, value any, depth int, seen map[columnRetainedPayloadSemanticStreamKey]struct{}) error {
+	if kind, ok := columnRetainedPayloadScalarStreamValueKind(value); ok {
+		if err := c.addScalar(path, kind, value); err != nil {
+			return err
+		}
+		seen[columnRetainedPayloadSemanticStreamKey{path: path, kind: kind}] = struct{}{}
+	}
+	if c.maxDepth > 0 && depth >= c.maxDepth {
+		return nil
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if err := c.addValue(path+"."+key, typed[key], depth+1, seen); err != nil {
+				return err
+			}
+		}
+	case []any:
+		childPath := path + "[]"
+		for _, child := range typed {
+			if err := c.addValue(childPath, child, depth+1, seen); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *columnRetainedPayloadSemanticStreamCollector) addScalar(path, kind string, value any) error {
+	key := columnRetainedPayloadSemanticStreamKey{path: path, kind: kind}
+	stream := c.byKey[key]
+	if stream == nil {
+		stream = &columnRetainedPayloadSemanticStreamPath{
+			stat: ColumnRetainedPayloadSemanticStreamStat{Path: path, ValueKind: kind},
+		}
+		zstdWriter, err := zstd.NewWriter(&stream.zstdCounter,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderCRC(false),
+			zstd.WithEncoderConcurrency(1),
+		)
+		if err != nil {
+			return fmt.Errorf("create semantic-stream zstd oracle for path %q kind %q: %w", path, kind, err)
+		}
+		stream.zstdWriter = zstdWriter
+		c.byKey[key] = stream
+	}
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal semantic-stream path %q kind %q: %w", path, kind, err)
+	}
+	streamBytes := len(encoded) + 1
+	stream.stat.Occurrences++
+	stream.stat.JSONBytes += int64(len(encoded))
+	stream.stat.StreamInputBytes += int64(streamBytes)
+	if stream.stat.Occurrences == 1 || streamBytes < stream.stat.MinStreamBytes {
+		stream.stat.MinStreamBytes = streamBytes
+	}
+	if streamBytes > stream.stat.MaxStreamBytes {
+		stream.stat.MaxStreamBytes = streamBytes
+	}
+	if s, ok := value.(string); ok {
+		stream.stat.StringBytes += int64(len(s))
+	}
+	if _, err := stream.zstdWriter.Write(encoded); err != nil {
+		return fmt.Errorf("write semantic-stream zstd oracle for path %q kind %q: %w", path, kind, err)
+	}
+	if _, err := stream.zstdWriter.Write([]byte{'\n'}); err != nil {
+		return fmt.Errorf("write semantic-stream zstd oracle separator for path %q kind %q: %w", path, kind, err)
+	}
+	return nil
+}
+
+func (c *columnRetainedPayloadSemanticStreamCollector) result(maxPaths int) ([]ColumnRetainedPayloadSemanticStreamStat, bool, int64, int64, error) {
+	if c == nil || len(c.byKey) == 0 {
+		return nil, false, 0, 0, nil
+	}
+	out := make([]ColumnRetainedPayloadSemanticStreamStat, 0, len(c.byKey))
+	var totalInputBytes int64
+	var totalZSTDBytes int64
+	for key, stream := range c.byKey {
+		if stream.zstdWriter != nil {
+			if err := stream.zstdWriter.Close(); err != nil {
+				return nil, false, 0, 0, fmt.Errorf("close semantic-stream zstd oracle for path %q kind %q: %w", key.path, key.kind, err)
+			}
+			stream.zstdWriter = nil
+		}
+		stat := stream.stat
+		stat.ZSTDBytes = stream.zstdCounter.n
+		stat.ZSTDToInputRatio = columnRetainedPayloadAuditRatio(stat.ZSTDBytes, stat.StreamInputBytes)
+		totalInputBytes += stat.StreamInputBytes
+		totalZSTDBytes += stat.ZSTDBytes
+		out = append(out, stat)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].StreamInputBytes != out[j].StreamInputBytes {
+			return out[i].StreamInputBytes > out[j].StreamInputBytes
+		}
+		if out[i].Occurrences != out[j].Occurrences {
+			return out[i].Occurrences > out[j].Occurrences
+		}
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].ValueKind < out[j].ValueKind
+	})
+	if maxPaths > 0 && len(out) > maxPaths {
+		return out[:maxPaths], true, totalInputBytes, totalZSTDBytes, nil
+	}
+	return out, false, totalInputBytes, totalZSTDBytes, nil
 }
 
 type columnRetainedPayloadValueFamilyCollector struct {
@@ -832,5 +1036,20 @@ func columnRetainedPayloadShapeValueKind(value any) string {
 		return "array"
 	default:
 		return "unknown"
+	}
+}
+
+func columnRetainedPayloadScalarStreamValueKind(value any) (string, bool) {
+	switch value.(type) {
+	case nil:
+		return "null", true
+	case bool:
+		return "bool", true
+	case string:
+		return "string", true
+	case float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, json.Number:
+		return "number", true
+	default:
+		return "", false
 	}
 }
