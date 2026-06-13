@@ -785,6 +785,11 @@ var interestingStatKeys = []string{
 	"treedb.vlog.mmap_read.miss_no_mapping",
 	"treedb.vlog.mmap_read.miss_dead_mapping_cap",
 	"treedb.vlog.mmap_read.fallback_readat",
+	"treedb.process.read_path.outer_leaf.loads_total",
+	"treedb.process.read_path.outer_leaf.point_loads_total",
+	"treedb.process.read_path.outer_leaf.iterator_loads_total",
+	"treedb.process.read_path.outer_leaf.checksum.verifications_total",
+	"treedb.process.read_path.outer_leaf.checksum.skips_total",
 	"treedb.cache.vlog_mmap.read.hits",
 	"treedb.cache.vlog_mmap.read.miss_out_of_range",
 	"treedb.cache.vlog_mmap.read.miss_no_mapping",
@@ -1024,9 +1029,9 @@ func renderSummary(out output) string {
 func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 	if hasReadCounterDeltas(runs) {
 		sb.WriteString("\n## TreeDB value-log read counters\n\n")
-		sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678. Broader write-path stat deltas remain available in the JSON output and matrix `phase_stat_deltas.tsv`.\n\n")
-		sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss out-of-range | mmap miss no mapping | mmap miss dead cap | mmap ReadAt fallbacks |\n")
-		sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+		sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678. Outer-leaf counters identify B-tree leaf pages read from the value-log-backed leaf log. Broader write-path stat deltas remain available in the JSON output and matrix `phase_stat_deltas.tsv`.\n\n")
+		sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss out-of-range | mmap miss no mapping | mmap miss dead cap | mmap ReadAt fallbacks | outer leaf loads | outer leaf point loads | outer leaf iterator loads | outer leaf checksum verifies | outer leaf checksum skips |\n")
+		sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 		for _, run := range runs {
 			for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
 				result, ok := run.Phases[phase]
@@ -1037,7 +1042,7 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 				if !ok {
 					continue
 				}
-				fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+				fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 					run.Engine,
 					run.ReadIntegrity,
 					run.IterationMode,
@@ -1051,6 +1056,11 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 					counters.mmapMissNoMapping,
 					counters.mmapMissDeadCap,
 					counters.mmapFallbackReadAt,
+					counters.outerLeafLoads,
+					counters.outerLeafPointLoads,
+					counters.outerLeafIteratorLoads,
+					counters.outerLeafChecksumVerifications,
+					counters.outerLeafChecksumSkips,
 				)
 			}
 		}
@@ -1101,15 +1111,20 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 }
 
 type readCounters struct {
-	crc32Checks        int64
-	groupedHits        int64
-	groupedMisses      int64
-	groupedStores      int64
-	mmapHits           int64
-	mmapMissOutOfRange int64
-	mmapMissNoMapping  int64
-	mmapMissDeadCap    int64
-	mmapFallbackReadAt int64
+	crc32Checks                    int64
+	groupedHits                    int64
+	groupedMisses                  int64
+	groupedStores                  int64
+	mmapHits                       int64
+	mmapMissOutOfRange             int64
+	mmapMissNoMapping              int64
+	mmapMissDeadCap                int64
+	mmapFallbackReadAt             int64
+	outerLeafLoads                 int64
+	outerLeafPointLoads            int64
+	outerLeafIteratorLoads         int64
+	outerLeafChecksumVerifications int64
+	outerLeafChecksumSkips         int64
 }
 
 func hasReadCounterDeltas(runs []runResult) bool {
@@ -1157,15 +1172,20 @@ func hasDeleteRangeCounterDeltas(runs []runResult) bool {
 
 func readCounterDeltas(delta map[string]int64) (readCounters, bool) {
 	counters := readCounters{
-		crc32Checks:        statDeltaValue(delta, "treedb.vlog.read.crc32_checks_total", "treedb.cache.vlog_read.crc32_checks_total"),
-		groupedHits:        statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits"),
-		groupedMisses:      statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses"),
-		groupedStores:      statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores"),
-		mmapHits:           statDeltaValue(delta, "treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits"),
-		mmapMissOutOfRange: statDeltaValue(delta, "treedb.vlog.mmap_read.miss_out_of_range", "treedb.cache.vlog_mmap.read.miss_out_of_range"),
-		mmapMissNoMapping:  statDeltaValue(delta, "treedb.vlog.mmap_read.miss_no_mapping", "treedb.cache.vlog_mmap.read.miss_no_mapping"),
-		mmapMissDeadCap:    statDeltaValue(delta, "treedb.vlog.mmap_read.miss_dead_mapping_cap", "treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"),
-		mmapFallbackReadAt: statDeltaValue(delta, "treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat"),
+		crc32Checks:                    statDeltaValue(delta, "treedb.vlog.read.crc32_checks_total", "treedb.cache.vlog_read.crc32_checks_total"),
+		groupedHits:                    statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits"),
+		groupedMisses:                  statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses"),
+		groupedStores:                  statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores"),
+		mmapHits:                       statDeltaValue(delta, "treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits"),
+		mmapMissOutOfRange:             statDeltaValue(delta, "treedb.vlog.mmap_read.miss_out_of_range", "treedb.cache.vlog_mmap.read.miss_out_of_range"),
+		mmapMissNoMapping:              statDeltaValue(delta, "treedb.vlog.mmap_read.miss_no_mapping", "treedb.cache.vlog_mmap.read.miss_no_mapping"),
+		mmapMissDeadCap:                statDeltaValue(delta, "treedb.vlog.mmap_read.miss_dead_mapping_cap", "treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"),
+		mmapFallbackReadAt:             statDeltaValue(delta, "treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat"),
+		outerLeafLoads:                 statDeltaValue(delta, "treedb.process.read_path.outer_leaf.loads_total"),
+		outerLeafPointLoads:            statDeltaValue(delta, "treedb.process.read_path.outer_leaf.point_loads_total"),
+		outerLeafIteratorLoads:         statDeltaValue(delta, "treedb.process.read_path.outer_leaf.iterator_loads_total"),
+		outerLeafChecksumVerifications: statDeltaValue(delta, "treedb.process.read_path.outer_leaf.checksum.verifications_total"),
+		outerLeafChecksumSkips:         statDeltaValue(delta, "treedb.process.read_path.outer_leaf.checksum.skips_total"),
 	}
 	return counters, counters != (readCounters{})
 }
