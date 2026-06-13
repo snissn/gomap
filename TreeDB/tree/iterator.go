@@ -386,7 +386,33 @@ type Iterator struct {
 	verifyAlways      bool
 }
 
-const iteratorPointerBatchMax = 2
+const (
+	iteratorPointerBatchMax = 2
+	// When iteration reaches a grouped value-log record, prefetch a larger
+	// same-record run so checksum-verified scans validate the record once for the
+	// operation-local batch instead of once per small pair. Non-grouped or large
+	// records stay on the conservative two-value lookahead path to avoid broad
+	// read-ahead memory growth for callers that may stop early.
+	iteratorGroupedRecordBatchMax        = 16
+	iteratorGroupedRecordPrefetchMaxHint = 1 << 20 // 1 MiB record-length hint
+)
+
+func iteratorGroupedRecordPrefetchEligible(ptr page.ValuePtr) bool {
+	if !page.ValuePtrIsGrouped(ptr) {
+		return false
+	}
+	recordLen := page.ValuePtrRecordLength(ptr)
+	return recordLen > 0 && recordLen <= iteratorGroupedRecordPrefetchMaxHint
+}
+
+func iteratorSamePrefetchGroupedRecord(first, ptr page.ValuePtr) bool {
+	if !iteratorGroupedRecordPrefetchEligible(first) || !page.ValuePtrIsGrouped(ptr) {
+		return false
+	}
+	return ptr.FileID == first.FileID &&
+		ptr.Offset == first.Offset &&
+		page.ValuePtrRecordLength(ptr) == page.ValuePtrRecordLength(first)
+}
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 	return t.IteratorWithOptions(start, end, IteratorOptions{})
@@ -887,8 +913,13 @@ func (it *Iterator) UnsafeValue() []byte {
 		if it.tryUsePrefetchedPointerValue() {
 			return it.currVal
 		}
-		if it.prefetchArmed && it.prefetchPointerRun() && it.tryUsePrefetchedPointerValue() {
-			return it.currVal
+		if it.prefetchArmed {
+			if it.prefetchPointerRun() && it.tryUsePrefetchedPointerValue() {
+				return it.currVal
+			}
+			if it.err != nil || !it.valid {
+				return nil
+			}
 		}
 		if !it.ensurePointerLoaded() {
 			return nil
@@ -1195,7 +1226,12 @@ func (it *Iterator) prefetchPointerRun() bool {
 	it.prefetchKeys = it.prefetchKeys[:0]
 	needsKeys := it.slabKeyBatcher != nil || it.slabKeyAppender != nil || it.slabKeyReader != nil
 
-	for idx := top.Index; idx >= 0 && idx < count && len(it.prefetchPtrs) < iteratorPointerBatchMax; idx += step {
+	limit := iteratorPointerBatchMax
+	var firstPtr page.ValuePtr
+	for idx := top.Index; idx >= 0 && idx < count; idx += step {
+		if len(it.prefetchPtrs) >= limit {
+			break
+		}
 		var (
 			key   []byte
 			ptr   page.ValuePtr
@@ -1217,6 +1253,14 @@ func (it *Iterator) prefetchPointerRun() bool {
 			if len(it.prefetchPtrs) == 0 {
 				return false
 			}
+			break
+		}
+		if len(it.prefetchPtrs) == 0 {
+			firstPtr = ptr
+			if iteratorGroupedRecordPrefetchEligible(firstPtr) {
+				limit = iteratorGroupedRecordBatchMax
+			}
+		} else if len(it.prefetchPtrs) >= iteratorPointerBatchMax && !iteratorSamePrefetchGroupedRecord(firstPtr, ptr) {
 			break
 		}
 		it.prefetchPtrs = append(it.prefetchPtrs, ptr)
