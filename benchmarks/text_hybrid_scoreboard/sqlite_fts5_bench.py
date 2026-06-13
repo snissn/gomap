@@ -102,6 +102,8 @@ def main() -> int:
         raise SystemExit("--docs, --queries, and --top-k must be positive")
 
     db_path = Path(args.db) if args.db else out.with_suffix(".sqlite3")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists():
         db_path.unlink()
     for suffix in ("-wal", "-shm"):
