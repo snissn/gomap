@@ -42,6 +42,145 @@ func TestTextV2BlockMaxSingleTermExactParityAndSkips2628(t *testing.T) {
 	}
 }
 
+func TestTextV2BlockMaxMultiTermANDExactParitySkipsAndLazyDetails2688(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	ids, docs := textV2BlockMaxMultiTermDocs2688(512, 24)
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{
+		Name:    "lexical",
+		Version: TextIndexVersionV2,
+		Fields:  []TextIndexField{{Field: "title", Weight: 5}, {Field: "body"}},
+	}, ids, docs)
+
+	opts := TextSearchOptions{IndexName: "lexical", Query: "refund AND policy", Operator: TextSearchOperatorAND, TopK: 8, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 4}
+	exhaustiveOpts := opts
+	exhaustiveOpts.textV2DisableBlockMax = true
+	exhaustive, err := col.searchText(exhaustiveOpts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("exhaustive v2 AND search: %v", err)
+	}
+	got, err := col.searchText(opts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("block-max v2 AND search: %v", err)
+	}
+	assertTextSearchParity2627(t, got, exhaustive)
+	if got.Stats.TextBlockMaxFallbacks != 0 || got.Stats.TextPostingBlocksSkipped == 0 || got.Stats.TextBlockMaxThresholds == 0 {
+		t.Fatalf("stats=%+v want native multi-term block-max skips without fallback", got.Stats)
+	}
+	if got.Stats.TextPostingsScanned >= exhaustive.Stats.TextPostingsScanned || got.Stats.TextCandidatesScored >= exhaustive.Stats.TextCandidatesScored {
+		t.Fatalf("block-max stats=%+v exhaustive=%+v want less multi-term decode/scoring work", got.Stats, exhaustive.Stats)
+	}
+	if got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 || got.Stats.DocumentsFetched != 0 {
+		t.Fatalf("stats=%+v want score-only zero-doc/no-state path", got.Stats)
+	}
+
+	detailed, err := col.searchText(opts, textSearchResultFull)
+	if err != nil {
+		t.Fatalf("detailed block-max v2 AND search: %v", err)
+	}
+	assertTextSearchParity2627(t, detailed, exhaustive)
+	if detailed.Stats.TextMatchDetailsBuilt != uint64(len(detailed.Results)) || detailed.Stats.TextStateLookups != 0 || detailed.Stats.DocumentsFetched != 0 {
+		t.Fatalf("detailed stats=%+v results=%d want lazy topK-bounded details", detailed.Stats, len(detailed.Results))
+	}
+}
+
+func TestTextV2BlockMaxMultiTermANDOverlappingMutationFallsBackExact2688(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	ids, docs := textV2BlockMaxFixtureDocs2628(256, 8)
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title", Weight: 5}, {Field: "body"}}}, ids, docs)
+	if _, _, err := col.Update([]byte("doc-000042"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"title":"refund policy","body":"refund policy"}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	opts := TextSearchOptions{IndexName: "lexical", Query: "refund AND policy", Operator: TextSearchOperatorAND, TopK: 5, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 4}
+	exhaustiveOpts := opts
+	exhaustiveOpts.textV2DisableBlockMax = true
+	exhaustive, err := col.searchText(exhaustiveOpts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("exhaustive update search: %v", err)
+	}
+	got, err := col.searchText(opts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("block-max update search: %v", err)
+	}
+	assertTextSearchParity2627(t, got, exhaustive)
+	if len(got.Results) == 0 || string(got.Results[0].DocumentID) != "doc-000042" {
+		t.Fatalf("results=%+v want updated AND match", got.Results)
+	}
+	if got.Stats.TextBlockMaxFallbacks == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.TextStateLookups != 0 {
+		t.Fatalf("stats=%+v want exact fallback for overlapping mutation blocks without docs/state", got.Stats)
+	}
+}
+
+func TestTextV2BlockMaxMultiTermANDTieBreak2688(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	ids := [][]byte{[]byte("doc-c"), []byte("doc-a"), []byte("doc-b"), []byte("doc-d")}
+	docs := [][]byte{
+		[]byte(`{"title":"refund policy","body":"refund policy"}`),
+		[]byte(`{"title":"refund policy","body":"refund policy"}`),
+		[]byte(`{"title":"refund policy","body":"refund policy"}`),
+		[]byte(`{"title":"refund policy","body":"refund policy"}`),
+	}
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title"}, {Field: "body"}}}, ids, docs)
+	opts := TextSearchOptions{IndexName: "lexical", Query: "refund AND policy", Operator: TextSearchOperatorAND, TopK: 3, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 4}
+	exhaustiveOpts := opts
+	exhaustiveOpts.textV2DisableBlockMax = true
+	exhaustive, err := col.searchText(exhaustiveOpts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("exhaustive tie search: %v", err)
+	}
+	got, err := col.searchText(opts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("block-max tie search: %v", err)
+	}
+	assertTextSearchParity2627(t, got, exhaustive)
+	want := []string{"doc-a", "doc-b", "doc-c"}
+	for i, id := range want {
+		if string(got.Results[i].DocumentID) != id {
+			t.Fatalf("results=%+v want lexical tie order %v", got.Results, want)
+		}
+	}
+}
+
+func TestTextV2BlockMaxMultiTermANDScalarPrefilter2688(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Indexes: []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	ids, docs := textV2BlockMaxMultiTermScalarDocs2688(384)
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title", Weight: 5}, {Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+
+	got, err := col.SearchHybrid(HybridSearchOptions{TopK: 5, Text: &HybridTextQuery{IndexName: "lexical", Query: "refund AND policy", CandidateLimit: len(ids)}, ScalarFilter: &HybridScalarFilter{IndexName: "tenant", Value: "tenant-rare"}})
+	if err != nil {
+		t.Fatalf("SearchHybrid scalar AND: %v", err)
+	}
+	if len(got.Results) != 5 || got.Stats.FailClosed != 0 || got.Stats.TextBlockMaxFallbacks != 0 || got.Stats.DocumentsFetched != 0 || got.Stats.TextStateLookups != 0 {
+		t.Fatalf("response=%+v want scalar-prefiltered native multi-term results", got)
+	}
+	if got.Stats.ScalarPrefilterIDs != 8 || got.Stats.TextCandidatesScored == 0 || got.Stats.TextCandidatesScored > got.Stats.ScalarPrefilterIDs {
+		t.Fatalf("stats=%+v want scoring bounded by scalar allow-set", got.Stats)
+	}
+	for _, result := range got.Results {
+		if string(result.ID) < "doc-000000" || string(result.ID) > "doc-000007" {
+			t.Fatalf("result id=%q outside rare tenant allow-set", result.ID)
+		}
+	}
+}
+
 func TestTextV2BlockMaxRandomizedExactnessAndFallbacks2628(t *testing.T) {
 	for seed := int64(1); seed <= 5; seed++ {
 		seed := seed
@@ -72,7 +211,7 @@ func TestTextV2BlockMaxRandomizedExactnessAndFallbacks2628(t *testing.T) {
 			}{
 				{name: "single_top1", opts: TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 1, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 4}},
 				{name: "single_top7_rare_filter", opts: TextSearchOptions{IndexName: "lexical", Query: "policy", TopK: 7, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 4, textV2AllowedDocumentIDs: rareIDs}},
-				{name: "and_fallback", opts: TextSearchOptions{IndexName: "lexical", Query: "refund AND policy", Operator: TextSearchOperatorAND, TopK: 10, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 8}, wantFall: true},
+				{name: "and_blockmax", opts: TextSearchOptions{IndexName: "lexical", Query: "refund AND policy", Operator: TextSearchOperatorAND, TopK: 10, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 8}},
 				{name: "or_fallback_filtered", opts: TextSearchOptions{IndexName: "lexical", Query: "refund OR shipping", TopK: 10, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 8, textV2AllowedDocumentIDs: rareIDs}, wantFall: true},
 			}
 			for _, tc := range cases {
@@ -236,7 +375,7 @@ func TestTextV2HybridUnionFusionPreservesUnfilteredTextRanks2628(t *testing.T) {
 func TestTextV2BlockMaxCorruptMetadataFailsClosed2628(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
-	ids, docs := textV2BlockMaxFixtureDocs2628(160, 8)
+	ids, docs := textV2BlockMaxMultiTermDocs2688(160, 8)
 	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "title", Weight: 5}, {Field: "body"}}}, ids, docs)
 	rootName := collectionTextV2PostingBlocksRootName("docs", "lexical")
 	blockKey := firstTextV2PostingBlockKeyForTerm2626(t, d, "docs", rootName, "refund")
@@ -248,12 +387,14 @@ func TestTextV2BlockMaxCorruptMetadataFailsClosed2628(t *testing.T) {
 	corrupt[len(corrupt)-1] ^= 0x7f
 	corruptTextRootValue(t, d, "docs", rootName, blockKey, corrupt)
 
-	got, err := col.searchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 5, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 2}, textSearchResultScoreOnly)
-	if !errors.Is(err, ErrTextIndexUnavailable) || !errors.Is(err, ErrTextIndexStorageCorrupt) {
-		t.Fatalf("SearchText err=%v want unavailable/storage corrupt", err)
-	}
-	if got.Stats.FailClosed != 1 || got.Stats.FailClosedReason != textSearchFailClosedStorageCorrupt || got.Stats.DocumentsFetched != 0 {
-		t.Fatalf("stats=%+v want metadata fail-closed without docs", got.Stats)
+	for _, query := range []string{"refund", "refund AND policy"} {
+		got, err := col.searchText(TextSearchOptions{IndexName: "lexical", Query: query, TopK: 5, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 2}, textSearchResultScoreOnly)
+		if !errors.Is(err, ErrTextIndexUnavailable) || !errors.Is(err, ErrTextIndexStorageCorrupt) {
+			t.Fatalf("SearchText %q err=%v want unavailable/storage corrupt", query, err)
+		}
+		if got.Stats.FailClosed != 1 || got.Stats.FailClosedReason != textSearchFailClosedStorageCorrupt || got.Stats.DocumentsFetched != 0 {
+			t.Fatalf("query %q stats=%+v want metadata fail-closed without docs", query, got.Stats)
+		}
 	}
 }
 
@@ -269,6 +410,42 @@ func textV2BlockMaxFixtureDocs2628(count, highDocs int) ([][]byte, [][]byte) {
 			body = strings.Repeat("refund ", 160)
 		}
 		docs[i] = []byte(fmt.Sprintf(`{"title":"%s","body":"%s","tenant":"tenant-broad"}`, strings.TrimSpace(title), strings.TrimSpace(body)))
+	}
+	return ids, docs
+}
+
+func textV2BlockMaxMultiTermDocs2688(count, highDocs int) ([][]byte, [][]byte) {
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		ids[i] = []byte(fmt.Sprintf("doc-%06d", i))
+		title := "refund policy"
+		body := "refund policy"
+		if i < highDocs {
+			title = strings.TrimSpace(strings.Repeat("refund policy ", 80))
+			body = strings.TrimSpace(strings.Repeat("refund policy ", 160))
+		}
+		docs[i] = []byte(fmt.Sprintf(`{"title":%q,"body":%q,"tenant":"tenant-broad"}`, title, body))
+	}
+	return ids, docs
+}
+
+func textV2BlockMaxMultiTermScalarDocs2688(count int) ([][]byte, [][]byte) {
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		ids[i] = []byte(fmt.Sprintf("doc-%06d", i))
+		tenant := "tenant-broad"
+		if i < 8 {
+			tenant = "tenant-rare"
+		}
+		title := "refund policy"
+		body := "refund policy support"
+		if i < 8 {
+			title = strings.TrimSpace(strings.Repeat("refund policy ", 40))
+			body = strings.TrimSpace(strings.Repeat("refund policy ", 80))
+		}
+		docs[i] = []byte(fmt.Sprintf(`{"title":%q,"body":%q,"tenant":%q}`, title, body, tenant))
 	}
 	return ids, docs
 }
