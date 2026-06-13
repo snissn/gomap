@@ -1,11 +1,15 @@
 package collections
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/snissn/compress/zstd"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -72,11 +76,15 @@ type ColumnRetainedPayloadPath struct {
 // ColumnRetainedPayloadCollectionAuditOptions controls the retained-payload
 // path audit over the collection's persisted primary rows.
 type ColumnRetainedPayloadCollectionAuditOptions struct {
-	Paths             []string
-	MaxDocuments      int
-	IncludeShapeStats bool
-	ShapeMaxDepth     int
-	ShapeMaxPaths     int
+	Paths                   []string
+	MaxDocuments            int
+	IncludeShapeStats       bool
+	ShapeMaxDepth           int
+	ShapeMaxPaths           int
+	IncludeValueFamilyStats bool
+	ValueFamilyMaxDepth     int
+	ValueFamilyMaxPaths     int
+	ValueFamilyMaxUnique    int
 }
 
 type ColumnRetainedPayloadCollectionPathViolation struct {
@@ -97,23 +105,59 @@ type ColumnRetainedPayloadShapePathStat struct {
 	MaxJSONBytes int    `json:"max_json_bytes,omitempty"`
 }
 
+type ColumnRetainedPayloadLengthBucket struct {
+	Bucket string `json:"bucket"`
+	Count  int64  `json:"count"`
+}
+
+// ColumnRetainedPayloadValueFamilyStat summarizes decoded retained-payload
+// string leaves by path. Compression oracles encode one JSON string per line,
+// so OracleInputBytes includes one separator byte per occurrence.
+type ColumnRetainedPayloadValueFamilyStat struct {
+	Path                  string                              `json:"path"`
+	Occurrences           int64                               `json:"occurrences"`
+	Documents             int64                               `json:"documents"`
+	JSONBytes             int64                               `json:"json_bytes"`
+	StringBytes           int64                               `json:"string_bytes"`
+	OracleInputBytes      int64                               `json:"oracle_input_bytes"`
+	MinLength             int                                 `json:"min_length,omitempty"`
+	MaxLength             int                                 `json:"max_length,omitempty"`
+	MeanLength            float64                             `json:"mean_length,omitempty"`
+	TrackedUniqueValues   int64                               `json:"tracked_unique_values"`
+	UniqueValuesTruncated bool                                `json:"unique_values_truncated,omitempty"`
+	RepeatedValues        int64                               `json:"repeated_values,omitempty"`
+	CommonPrefix          string                              `json:"common_prefix,omitempty"`
+	CommonPrefixBytes     int                                 `json:"common_prefix_bytes,omitempty"`
+	CommonPrefixTruncated bool                                `json:"common_prefix_truncated,omitempty"`
+	CommonSuffix          string                              `json:"common_suffix,omitempty"`
+	CommonSuffixBytes     int                                 `json:"common_suffix_bytes,omitempty"`
+	CommonSuffixTruncated bool                                `json:"common_suffix_truncated,omitempty"`
+	LengthBuckets         []ColumnRetainedPayloadLengthBucket `json:"length_buckets,omitempty"`
+	GzipBytes             int64                               `json:"gzip_bytes,omitempty"`
+	GzipToInputRatio      float64                             `json:"gzip_to_input_ratio,omitempty"`
+	ZSTDBytes             int64                               `json:"zstd_bytes,omitempty"`
+	ZSTDToInputRatio      float64                             `json:"zstd_to_input_ratio,omitempty"`
+}
+
 type ColumnRetainedPayloadCollectionAuditResult struct {
-	Collection                       string                                         `json:"collection"`
-	Status                           string                                         `json:"status"`
-	RetainedPayloadPolicy            ColumnRetainedPayloadPolicy                    `json:"retained_payload_policy"`
-	RetainedPayloadEncoding          string                                         `json:"retained_payload_encoding"`
-	RetainedPayloadEncodingStatus    string                                         `json:"retained_payload_encoding_status"`
-	RetainedPayloadCompression       string                                         `json:"retained_payload_compression"`
-	RetainedPayloadCompressionPolicy string                                         `json:"retained_payload_compression_policy"`
-	RetainedPayloadCompressionStatus string                                         `json:"retained_payload_compression_status"`
-	DeclaredPaths                    []string                                       `json:"declared_paths"`
-	CheckedRows                      int                                            `json:"checked_rows"`
-	RetainedPayloadBytes             int64                                          `json:"retained_payload_bytes"`
-	RetainedPayloadShape             []ColumnRetainedPayloadShapePathStat           `json:"retained_payload_shape,omitempty"`
-	RetainedPayloadShapeTruncated    bool                                           `json:"retained_payload_shape_truncated,omitempty"`
-	Truncated                        bool                                           `json:"truncated,omitempty"`
-	Violations                       []ColumnRetainedPayloadCollectionPathViolation `json:"violations,omitempty"`
-	Errors                           []string                                       `json:"errors,omitempty"`
+	Collection                            string                                         `json:"collection"`
+	Status                                string                                         `json:"status"`
+	RetainedPayloadPolicy                 ColumnRetainedPayloadPolicy                    `json:"retained_payload_policy"`
+	RetainedPayloadEncoding               string                                         `json:"retained_payload_encoding"`
+	RetainedPayloadEncodingStatus         string                                         `json:"retained_payload_encoding_status"`
+	RetainedPayloadCompression            string                                         `json:"retained_payload_compression"`
+	RetainedPayloadCompressionPolicy      string                                         `json:"retained_payload_compression_policy"`
+	RetainedPayloadCompressionStatus      string                                         `json:"retained_payload_compression_status"`
+	DeclaredPaths                         []string                                       `json:"declared_paths"`
+	CheckedRows                           int                                            `json:"checked_rows"`
+	RetainedPayloadBytes                  int64                                          `json:"retained_payload_bytes"`
+	RetainedPayloadShape                  []ColumnRetainedPayloadShapePathStat           `json:"retained_payload_shape,omitempty"`
+	RetainedPayloadShapeTruncated         bool                                           `json:"retained_payload_shape_truncated,omitempty"`
+	RetainedPayloadValueFamilies          []ColumnRetainedPayloadValueFamilyStat         `json:"retained_payload_value_families,omitempty"`
+	RetainedPayloadValueFamiliesTruncated bool                                           `json:"retained_payload_value_families_truncated,omitempty"`
+	Truncated                             bool                                           `json:"truncated,omitempty"`
+	Violations                            []ColumnRetainedPayloadCollectionPathViolation `json:"violations,omitempty"`
+	Errors                                []string                                       `json:"errors,omitempty"`
 }
 
 // AuditColumnRetainedPayloadPathsAbsent verifies that declared typed JSON paths
@@ -217,7 +261,15 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	defer func() { _ = it.Close() }()
 
 	resolver := columnRetainedPayloadTemplateResolver(snap, catalog)
-	shape := newColumnRetainedPayloadShapeCollector(opts.ShapeMaxDepth)
+	includeDecodedStats := opts.IncludeShapeStats || opts.IncludeValueFamilyStats
+	var shape *columnRetainedPayloadShapeCollector
+	if opts.IncludeShapeStats {
+		shape = newColumnRetainedPayloadShapeCollector(opts.ShapeMaxDepth)
+	}
+	var valueFamilies *columnRetainedPayloadValueFamilyCollector
+	if opts.IncludeValueFamilyStats {
+		valueFamilies = newColumnRetainedPayloadValueFamilyCollector(opts.ValueFamilyMaxDepth, opts.ValueFamilyMaxUnique)
+	}
 	for it.Valid() {
 		if opts.MaxDocuments > 0 && result.CheckedRows >= opts.MaxDocuments {
 			result.Truncated = true
@@ -239,7 +291,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		result.RetainedPayloadBytes += int64(len(retained))
 		var payloadAudit ColumnRetainedPayloadPathAudit
 		var auditErr error
-		if opts.IncludeShapeStats {
+		if includeDecodedStats {
 			var obj map[string]any
 			obj, auditErr = decodeColumnRetainedPayloadObject(cfg, retained, resolver)
 			if auditErr == nil {
@@ -251,8 +303,11 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 				}
 				payloadAudit, auditErr = auditColumnRetainedPayloadObjectPathsAbsent(payloadAudit, obj, result.DeclaredPaths)
 			}
-			if auditErr == nil {
+			if auditErr == nil && shape != nil {
 				auditErr = shape.addDocumentObject(obj)
+			}
+			if auditErr == nil && valueFamilies != nil {
+				auditErr = valueFamilies.addDocumentObject(obj)
 			}
 			if auditErr != nil {
 				auditErr = fmt.Errorf("collections: retained payload audit %q: %w", documentID, auditErr)
@@ -276,6 +331,14 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	}
 	if opts.IncludeShapeStats {
 		result.RetainedPayloadShape, result.RetainedPayloadShapeTruncated = shape.result(opts.ShapeMaxPaths)
+	}
+	if opts.IncludeValueFamilyStats {
+		valueFamilyStats, truncated, err := valueFamilies.result(opts.ValueFamilyMaxPaths)
+		if err != nil {
+			return retainedPayloadCollectionAuditError(result, err)
+		}
+		result.RetainedPayloadValueFamilies = valueFamilyStats
+		result.RetainedPayloadValueFamiliesTruncated = truncated
 	}
 	if result.Truncated {
 		result.Status = "passed_sampled"
@@ -463,6 +526,286 @@ func (c *columnRetainedPayloadShapeCollector) result(maxPaths int) ([]ColumnReta
 		return out[:maxPaths], true
 	}
 	return out, false
+}
+
+type columnRetainedPayloadValueFamilyCollector struct {
+	byPath    map[string]*columnRetainedPayloadValueFamilyPath
+	maxDepth  int
+	maxUnique int
+}
+
+type columnRetainedPayloadValueFamilyPath struct {
+	stat         ColumnRetainedPayloadValueFamilyStat
+	unique       map[string]struct{}
+	commonPrefix string
+	commonSuffix string
+	initialized  bool
+	buckets      [7]int64
+	gzipBuf      bytes.Buffer
+	gzipWriter   *gzip.Writer
+	zstdBuf      bytes.Buffer
+	zstdWriter   *zstd.Encoder
+}
+
+func newColumnRetainedPayloadValueFamilyCollector(maxDepth, maxUnique int) *columnRetainedPayloadValueFamilyCollector {
+	return &columnRetainedPayloadValueFamilyCollector{
+		byPath:    make(map[string]*columnRetainedPayloadValueFamilyPath),
+		maxDepth:  maxDepth,
+		maxUnique: maxUnique,
+	}
+}
+
+func (c *columnRetainedPayloadValueFamilyCollector) addDocumentObject(obj map[string]any) error {
+	if c == nil || obj == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := c.addValue(key, obj[key], 1, seen); err != nil {
+			return err
+		}
+	}
+	for path := range seen {
+		c.byPath[path].stat.Documents++
+	}
+	return nil
+}
+
+func (c *columnRetainedPayloadValueFamilyCollector) addValue(path string, value any, depth int, seen map[string]struct{}) error {
+	if s, ok := value.(string); ok {
+		if err := c.addString(path, s); err != nil {
+			return err
+		}
+		seen[path] = struct{}{}
+	}
+	if c.maxDepth > 0 && depth >= c.maxDepth {
+		return nil
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if err := c.addValue(path+"."+key, typed[key], depth+1, seen); err != nil {
+				return err
+			}
+		}
+	case []any:
+		childPath := path + "[]"
+		for _, child := range typed {
+			if err := c.addValue(childPath, child, depth+1, seen); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *columnRetainedPayloadValueFamilyCollector) addString(path, value string) error {
+	stat := c.byPath[path]
+	if stat == nil {
+		stat = &columnRetainedPayloadValueFamilyPath{
+			stat: ColumnRetainedPayloadValueFamilyStat{Path: path},
+		}
+		stat.gzipWriter = gzip.NewWriter(&stat.gzipBuf)
+		zstdWriter, err := zstd.NewWriter(&stat.zstdBuf,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderCRC(false),
+			zstd.WithEncoderConcurrency(1),
+		)
+		if err != nil {
+			return fmt.Errorf("create zstd oracle for path %q: %w", path, err)
+		}
+		stat.zstdWriter = zstdWriter
+		stat.unique = make(map[string]struct{})
+		c.byPath[path] = stat
+	}
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal string path %q: %w", path, err)
+	}
+	stat.stat.Occurrences++
+	stat.stat.JSONBytes += int64(len(encoded))
+	stat.stat.StringBytes += int64(len(value))
+	stat.stat.OracleInputBytes += int64(len(encoded) + 1)
+	length := len(value)
+	if stat.stat.Occurrences == 1 || length < stat.stat.MinLength {
+		stat.stat.MinLength = length
+	}
+	if length > stat.stat.MaxLength {
+		stat.stat.MaxLength = length
+	}
+	stat.buckets[columnRetainedPayloadLengthBucketIndex(length)]++
+
+	if _, ok := stat.unique[value]; !ok && !stat.stat.UniqueValuesTruncated {
+		if c.maxUnique <= 0 || len(stat.unique) < c.maxUnique {
+			stat.unique[value] = struct{}{}
+		} else {
+			stat.stat.UniqueValuesTruncated = true
+		}
+	}
+	if !stat.initialized {
+		stat.commonPrefix = value
+		stat.commonSuffix = value
+		stat.initialized = true
+	} else {
+		stat.commonPrefix = columnRetainedPayloadCommonPrefix(stat.commonPrefix, value)
+		stat.commonSuffix = columnRetainedPayloadCommonSuffix(stat.commonSuffix, value)
+	}
+
+	if _, err := stat.gzipWriter.Write(encoded); err != nil {
+		return fmt.Errorf("write gzip oracle for path %q: %w", path, err)
+	}
+	if _, err := stat.gzipWriter.Write([]byte{'\n'}); err != nil {
+		return fmt.Errorf("write gzip oracle separator for path %q: %w", path, err)
+	}
+	if _, err := stat.zstdWriter.Write(encoded); err != nil {
+		return fmt.Errorf("write zstd oracle for path %q: %w", path, err)
+	}
+	if _, err := stat.zstdWriter.Write([]byte{'\n'}); err != nil {
+		return fmt.Errorf("write zstd oracle separator for path %q: %w", path, err)
+	}
+	return nil
+}
+
+func (c *columnRetainedPayloadValueFamilyCollector) result(maxPaths int) ([]ColumnRetainedPayloadValueFamilyStat, bool, error) {
+	if c == nil || len(c.byPath) == 0 {
+		return nil, false, nil
+	}
+	out := make([]ColumnRetainedPayloadValueFamilyStat, 0, len(c.byPath))
+	for path, internal := range c.byPath {
+		if internal.gzipWriter != nil {
+			if err := internal.gzipWriter.Close(); err != nil {
+				return nil, false, fmt.Errorf("close gzip oracle for path %q: %w", path, err)
+			}
+			internal.gzipWriter = nil
+		}
+		if internal.zstdWriter != nil {
+			if err := internal.zstdWriter.Close(); err != nil {
+				return nil, false, fmt.Errorf("close zstd oracle for path %q: %w", path, err)
+			}
+			internal.zstdWriter = nil
+		}
+		stat := internal.stat
+		if stat.Occurrences > 0 {
+			stat.MeanLength = float64(stat.StringBytes) / float64(stat.Occurrences)
+		}
+		stat.TrackedUniqueValues = int64(len(internal.unique))
+		if !stat.UniqueValuesTruncated {
+			stat.RepeatedValues = stat.Occurrences - stat.TrackedUniqueValues
+		}
+		stat.CommonPrefixBytes = len(internal.commonPrefix)
+		stat.CommonPrefix, stat.CommonPrefixTruncated = columnRetainedPayloadAuditClipString(internal.commonPrefix, 128)
+		stat.CommonSuffixBytes = len(internal.commonSuffix)
+		stat.CommonSuffix, stat.CommonSuffixTruncated = columnRetainedPayloadAuditClipString(internal.commonSuffix, 128)
+		stat.LengthBuckets = columnRetainedPayloadLengthBuckets(internal.buckets)
+		stat.GzipBytes = int64(internal.gzipBuf.Len())
+		stat.GzipToInputRatio = columnRetainedPayloadAuditRatio(stat.GzipBytes, stat.OracleInputBytes)
+		stat.ZSTDBytes = int64(internal.zstdBuf.Len())
+		stat.ZSTDToInputRatio = columnRetainedPayloadAuditRatio(stat.ZSTDBytes, stat.OracleInputBytes)
+		out = append(out, stat)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].JSONBytes != out[j].JSONBytes {
+			return out[i].JSONBytes > out[j].JSONBytes
+		}
+		if out[i].Occurrences != out[j].Occurrences {
+			return out[i].Occurrences > out[j].Occurrences
+		}
+		return out[i].Path < out[j].Path
+	})
+	if maxPaths > 0 && len(out) > maxPaths {
+		return out[:maxPaths], true, nil
+	}
+	return out, false, nil
+}
+
+func columnRetainedPayloadLengthBucketIndex(length int) int {
+	switch {
+	case length <= 8:
+		return 0
+	case length <= 16:
+		return 1
+	case length <= 32:
+		return 2
+	case length <= 64:
+		return 3
+	case length <= 128:
+		return 4
+	case length <= 256:
+		return 5
+	default:
+		return 6
+	}
+}
+
+func columnRetainedPayloadLengthBuckets(counts [7]int64) []ColumnRetainedPayloadLengthBucket {
+	names := [...]string{"le_8", "le_16", "le_32", "le_64", "le_128", "le_256", "gt_256"}
+	out := make([]ColumnRetainedPayloadLengthBucket, 0, len(counts))
+	for i, count := range counts {
+		if count == 0 {
+			continue
+		}
+		out = append(out, ColumnRetainedPayloadLengthBucket{Bucket: names[i], Count: count})
+	}
+	return out
+}
+
+func columnRetainedPayloadCommonPrefix(a, b string) string {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return a[:i]
+}
+
+func columnRetainedPayloadCommonSuffix(a, b string) string {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[len(a)-1-i] == b[len(b)-1-i] {
+		i++
+	}
+	return a[len(a)-i:]
+}
+
+func columnRetainedPayloadAuditClipString(value string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 {
+		return value, false
+	}
+	limit := len(value)
+	truncated := false
+	if limit > maxBytes {
+		limit = maxBytes
+		truncated = true
+	}
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+		truncated = true
+	}
+	return value[:limit], truncated
+}
+
+func columnRetainedPayloadAuditRatio(num, denom int64) float64 {
+	if denom <= 0 {
+		return 0
+	}
+	return float64(num) / float64(denom)
 }
 
 func columnRetainedPayloadShapeValueKind(value any) string {

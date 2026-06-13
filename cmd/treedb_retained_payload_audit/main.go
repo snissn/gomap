@@ -24,6 +24,10 @@ func run() (code int) {
 	var shapeStats bool
 	var shapeMaxDepth int
 	var shapeMaxPaths int
+	var valueFamilyStats bool
+	var valueFamilyMaxDepth int
+	var valueFamilyMaxPaths int
+	var valueFamilyMaxUnique int
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			code = writeFailure(collectionName, fmt.Errorf("retained payload audit panic: %v", recovered))
@@ -36,6 +40,10 @@ func run() (code int) {
 	flag.BoolVar(&shapeStats, "shape-stats", false, "Include decoded retained-payload path/value shape stats")
 	flag.IntVar(&shapeMaxDepth, "shape-max-depth", 8, "Maximum retained-payload shape traversal depth; zero means unlimited")
 	flag.IntVar(&shapeMaxPaths, "shape-max-paths", 128, "Maximum retained-payload shape path/kind rows to emit; zero means unlimited")
+	flag.BoolVar(&valueFamilyStats, "value-family-stats", false, "Include decoded retained-payload string value-family stats")
+	flag.IntVar(&valueFamilyMaxDepth, "value-family-max-depth", 8, "Maximum retained-payload value-family traversal depth; zero means unlimited")
+	flag.IntVar(&valueFamilyMaxPaths, "value-family-max-paths", 64, "Maximum retained-payload value-family rows to emit; zero means unlimited")
+	flag.IntVar(&valueFamilyMaxUnique, "value-family-max-unique", 200000, "Maximum unique strings tracked per path; zero means unlimited")
 	flag.Parse()
 
 	if strings.TrimSpace(dbDir) == "" {
@@ -71,11 +79,15 @@ func run() (code int) {
 		return writeFailure(collectionName, fmt.Errorf("open collection: %w", err))
 	}
 	result, err := col.AuditRetainedPayloadDeclaredPathsAbsent(collections.ColumnRetainedPayloadCollectionAuditOptions{
-		Paths:             splitCSV(pathsCSV),
-		MaxDocuments:      maxDocuments,
-		IncludeShapeStats: shapeStats,
-		ShapeMaxDepth:     shapeMaxDepth,
-		ShapeMaxPaths:     shapeMaxPaths,
+		Paths:                   splitCSV(pathsCSV),
+		MaxDocuments:            maxDocuments,
+		IncludeShapeStats:       shapeStats,
+		ShapeMaxDepth:           shapeMaxDepth,
+		ShapeMaxPaths:           shapeMaxPaths,
+		IncludeValueFamilyStats: valueFamilyStats,
+		ValueFamilyMaxDepth:     valueFamilyMaxDepth,
+		ValueFamilyMaxPaths:     valueFamilyMaxPaths,
+		ValueFamilyMaxUnique:    valueFamilyMaxUnique,
 	})
 	if err != nil {
 		writeResult(result)

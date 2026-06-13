@@ -1070,6 +1070,15 @@ def run_retained_payload_audit(
     limit = int(getattr(args, "retained_payload_audit_limit", 0) or 0)
     if limit > 0:
         command.extend(["-max-documents", str(limit)])
+    if getattr(args, "retained_payload_shape_stats", False):
+        command.append("-shape-stats")
+        command.extend(["-shape-max-depth", str(int(getattr(args, "retained_payload_shape_max_depth", 8) or 0))])
+        command.extend(["-shape-max-paths", str(int(getattr(args, "retained_payload_shape_max_paths", 128) or 0))])
+    if getattr(args, "retained_payload_value_family_stats", False):
+        command.append("-value-family-stats")
+        command.extend(["-value-family-max-depth", str(int(getattr(args, "retained_payload_value_family_max_depth", 8) or 0))])
+        command.extend(["-value-family-max-paths", str(int(getattr(args, "retained_payload_value_family_max_paths", 64) or 0))])
+        command.extend(["-value-family-max-unique", str(int(getattr(args, "retained_payload_value_family_max_unique", 200000) or 0))])
 
     try:
         completed = subprocess.run(command, cwd=cwd, check=False, text=True, capture_output=True)
@@ -1315,6 +1324,13 @@ def main() -> int:
     parser.add_argument("--skip-column-section-audit", action="store_true", help="Skip section-aware column-store audit and report filesystem gzip headroom only")
     parser.add_argument("--retained-payload-audit-cmd", help="Command used to run the retained-payload audit; defaults to go run ./cmd/treedb_retained_payload_audit")
     parser.add_argument("--retained-payload-audit-limit", type=int, default=0, help="Maximum retained rows to audit; zero audits all rows")
+    parser.add_argument("--retained-payload-shape-stats", action="store_true", help="Include decoded retained-payload shape stats")
+    parser.add_argument("--retained-payload-shape-max-depth", type=int, default=8, help="Maximum retained-payload shape traversal depth; zero means unlimited")
+    parser.add_argument("--retained-payload-shape-max-paths", type=int, default=128, help="Maximum retained-payload shape path/kind rows to emit; zero means unlimited")
+    parser.add_argument("--retained-payload-value-family-stats", action="store_true", help="Include decoded retained-payload string value-family stats")
+    parser.add_argument("--retained-payload-value-family-max-depth", type=int, default=8, help="Maximum retained-payload value-family traversal depth; zero means unlimited")
+    parser.add_argument("--retained-payload-value-family-max-paths", type=int, default=64, help="Maximum retained-payload value-family rows to emit; zero means unlimited")
+    parser.add_argument("--retained-payload-value-family-max-unique", type=int, default=200000, help="Maximum unique strings tracked per path; zero means unlimited")
     parser.add_argument("--skip-retained-payload-audit", action="store_true", help="Skip the path-aware retained-payload audit")
     args = parser.parse_args()
 
