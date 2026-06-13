@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -39,6 +40,7 @@ type ColumnStorePhysicalAccounting struct {
 	GraphAssetRefs             int                                      `json:"graph_asset_refs,omitempty"`
 	Totals                     ColumnStorePhysicalAccountingTotals      `json:"totals"`
 	AssetKinds                 []ColumnStorePhysicalAssetKindAccounting `json:"asset_kinds,omitempty"`
+	RowAssets                  []ColumnStoreRowAssetAccounting          `json:"row_assets,omitempty"`
 	TypedColumnParts           []ColumnStoreTypedColumnPartAccounting   `json:"typed_column_parts,omitempty"`
 	SidecarAssets              []ColumnStorePhysicalAssetAccounting     `json:"sidecar_assets,omitempty"`
 	GraphAssets                []ColumnStorePhysicalAssetRefAccounting  `json:"graph_assets,omitempty"`
@@ -55,6 +57,7 @@ type ColumnStorePhysicalAccountingTotals struct {
 	DictionaryCodeBytes    int64                                    `json:"dictionary_code_bytes,omitempty"`
 	Int64ValueBytes        int64                                    `json:"int64_value_bytes,omitempty"`
 	GraphAssetBytes        int64                                    `json:"graph_asset_bytes,omitempty"`
+	RowAssetSections       ColumnStoreRowAssetByteAccounting        `json:"row_asset_sections"`
 	TypedColumnSections    ColumnStoreTypedColumnPartByteAccounting `json:"typed_column_sections"`
 }
 
@@ -89,6 +92,51 @@ type ColumnStorePhysicalAssetAccounting struct {
 	Reason ColumnPublishOperation                `json:"reason,omitempty"`
 	Column string                                `json:"column,omitempty"`
 	Name   string                                `json:"name,omitempty"`
+}
+
+// ColumnStoreRowAssetAccounting reports one physical row asset and its
+// serialized payload byte breakdown.
+type ColumnStoreRowAssetAccounting struct {
+	Asset   ColumnStorePhysicalAssetAccounting `json:"asset"`
+	Payload ColumnStoreRowAssetByteAccounting  `json:"payload"`
+}
+
+// ColumnStoreRowAssetByteAccounting breaks down the legacy TCPA row asset
+// envelope. RowIDStoredBytes includes the per-row length prefix; RowIDValueBytes
+// is only the document ID payload. RowValueHeaderBytes covers repeated per-value
+// type/null/present metadata, while RowValuePayloadBytes covers the encoded
+// value bodies.
+type ColumnStoreRowAssetByteAccounting struct {
+	Rows                   int                                   `json:"rows,omitempty"`
+	DeletedRows            int                                   `json:"deleted_rows,omitempty"`
+	Columns                int                                   `json:"columns,omitempty"`
+	Operation              ColumnPublishOperation                `json:"operation,omitempty"`
+	SerializedAssetBytes   int64                                 `json:"serialized_asset_bytes,omitempty"`
+	FormatHeaderBytes      int64                                 `json:"format_header_bytes,omitempty"`
+	ColumnMetadataBytes    int64                                 `json:"column_metadata_bytes,omitempty"`
+	RowEncodingHeaderBytes int64                                 `json:"row_encoding_header_bytes,omitempty"`
+	RowIDStoredBytes       int64                                 `json:"row_id_stored_bytes,omitempty"`
+	RowIDValueBytes        int64                                 `json:"row_id_value_bytes,omitempty"`
+	RowDeletedFlagBytes    int64                                 `json:"row_deleted_flag_bytes,omitempty"`
+	RowValueHeaderBytes    int64                                 `json:"row_value_header_bytes,omitempty"`
+	RowValuePayloadBytes   int64                                 `json:"row_value_payload_bytes,omitempty"`
+	TotalStoredBytes       int64                                 `json:"total_stored_bytes,omitempty"`
+	BytesPerRow            float64                               `json:"bytes_per_row,omitempty"`
+	ColumnsDetail          []ColumnStoreRowAssetColumnAccounting `json:"columns_detail,omitempty"`
+	columnNames            []string                              `json:"-"`
+}
+
+// ColumnStoreRowAssetColumnAccounting reports row-asset bytes for one row-owned
+// column.
+type ColumnStoreRowAssetColumnAccounting struct {
+	Column            string `json:"column"`
+	Type              string `json:"type"`
+	Rows              int    `json:"rows"`
+	PresentRows       int    `json:"present_rows"`
+	NullRows          int    `json:"null_rows"`
+	ValueHeaderBytes  int64  `json:"value_header_bytes"`
+	ValuePayloadBytes int64  `json:"value_payload_bytes"`
+	StoredBytes       int64  `json:"stored_bytes"`
 }
 
 // ColumnStoreTypedColumnPartAccounting reports one typed-column part image and
@@ -228,6 +276,7 @@ func physicalAccountingFromScanView(ctx context.Context, view columnPhysicalScan
 		DictionaryCodeRefs:         len(view.DictionaryCodes),
 		Int64ValueRefs:             len(view.Int64Values),
 		GraphAssetRefs:             len(view.GraphAssetRefs),
+		RowAssets:                  make([]ColumnStoreRowAssetAccounting, 0, len(view.AssetRefs)),
 		TypedColumnParts:           make([]ColumnStoreTypedColumnPartAccounting, 0, len(view.TypedColumnPartRefs)),
 	}
 	seen := make(map[ColumnAssetRef]struct{})
@@ -261,7 +310,16 @@ func physicalAccountingFromScanView(ctx context.Context, view columnPhysicalScan
 	}
 
 	for _, asset := range view.AssetRefs {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		addKind(asset.Ref, asset.Rows, &out.Totals.RowAssetBytes)
+		rowAsset, err := columnStoreRowAssetAccountingFromRef(view.ColumnAssetRootDir, view.CollectionName, view.Config, asset, opts)
+		if err != nil {
+			return out, err
+		}
+		out.RowAssets = append(out.RowAssets, rowAsset)
+		addColumnStoreRowAssetByteAccounting(&out.Totals.RowAssetSections, rowAsset.Payload)
 	}
 	for _, asset := range view.TypedColumnPartRefs {
 		if err := ctx.Err(); err != nil {
@@ -307,6 +365,358 @@ func physicalAccountingFromScanView(ctx context.Context, view columnPhysicalScan
 	out.AssetKinds = columnStorePhysicalAccountingKindTotals(kinds)
 	out.Complete = true
 	return out, nil
+}
+
+func columnStoreRowAssetAccountingFromRef(rootDir string, expectedCollection string, cfg ColumnStoreConfig, asset columnManifestAssetRefForScan, opts ColumnStorePhysicalAccountingOptions) (ColumnStoreRowAssetAccounting, error) {
+	raw, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(rootDir, asset.Ref, nil, opts.ReadIntegrity)
+	if err != nil {
+		return ColumnStoreRowAssetAccounting{}, err
+	}
+	payload, err := columnStoreRowAssetPayloadAccounting(raw, asset.Ref, expectedCollection, cfg, asset.Reason, opts.DetailedSections)
+	if err != nil {
+		return ColumnStoreRowAssetAccounting{}, fmt.Errorf("collections: parse row asset generation=%d part=%d: %w", asset.Ref.Generation, asset.Ref.PartID, err)
+	}
+	if payload.Rows != asset.Rows {
+		return ColumnStoreRowAssetAccounting{}, fmt.Errorf("collections: row asset rows=%d does not match asset rows=%d", payload.Rows, asset.Rows)
+	}
+	return ColumnStoreRowAssetAccounting{
+		Asset: ColumnStorePhysicalAssetAccounting{
+			Ref:    columnStorePhysicalAssetRefAccounting(asset.Ref),
+			Rows:   asset.Rows,
+			Bytes:  positiveColumnStorePhysicalAccountingBytes(asset.Ref.Length),
+			Role:   asset.Role,
+			Reason: asset.Reason,
+		},
+		Payload: payload,
+	}, nil
+}
+
+func columnStoreRowAssetPayloadAccounting(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg ColumnStoreConfig, expectedOperation ColumnPublishOperation, detailed bool) (ColumnStoreRowAssetByteAccounting, error) {
+	if ref.Kind != ColumnAssetKindTCS1PartImage {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("row asset kind=%q want %q", ref.Kind, ColumnAssetKindTCS1PartImage)
+	}
+	if int64(len(raw)) != ref.Length {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("row asset bytes=%d does not match ref length=%d", len(raw), ref.Length)
+	}
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
+	}
+	version := cur.u16()
+	if !isSupportedColumnPhysicalAssetVersion(version) {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("unsupported column physical asset version=%d", version)
+	}
+	collection := cur.stringBytes()
+	namespace := cur.stringBytes()
+	generation := cur.u64()
+	partID := cur.u64()
+	appliedCommandLSN := cur.u64()
+	operationBytes := cur.stringBytes()
+	operation, operationOK := columnPhysicalScanOperationFromBytes(operationBytes)
+	schemaHash := cur.u64()
+	columnCount := cur.u64()
+	rowCount := cur.u64()
+	if err := cur.err; err != nil {
+		return ColumnStoreRowAssetByteAccounting{}, err
+	}
+	if columnCount > uint64(maxCollectionInt) {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset column_count=%d overflows int max=%d", columnCount, maxCollectionInt)
+	}
+	if rowCount > uint64(maxCollectionInt) {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset row_count=%d overflows int max=%d", rowCount, maxCollectionInt)
+	}
+	header := columnPhysicalAssetScanHeader{
+		Collection:        collection,
+		Namespace:         namespace,
+		Generation:        generation,
+		PartID:            partID,
+		AppliedCommandLSN: appliedCommandLSN,
+		Operation:         operation,
+		SchemaHash:        schemaHash,
+		ColumnCount:       int(columnCount),
+		RowCount:          int(rowCount),
+	}
+	if !operationOK {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("unsupported column physical asset operation %q", operationBytes)
+	}
+	if version == columnPhysicalAssetVersionV1 && header.Operation == ColumnPublishOperationDelete {
+		return ColumnStoreRowAssetByteAccounting{}, errors.New("legacy v1 column physical asset delete operation unsupported")
+	}
+	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, &cfg); err != nil {
+		return ColumnStoreRowAssetByteAccounting{}, err
+	}
+	if expectedOperation != "" && header.Operation != expectedOperation {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("%w: manifest reason=%q asset operation=%q", errColumnPhysicalAssetManifestOperationMismatch, expectedOperation, header.Operation)
+	}
+	if header.ColumnCount != len(cfg.Columns) {
+		return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset columns=%d want %d", header.ColumnCount, len(cfg.Columns))
+	}
+
+	out := ColumnStoreRowAssetByteAccounting{
+		Rows:                 header.RowCount,
+		Columns:              header.ColumnCount,
+		Operation:            header.Operation,
+		SerializedAssetBytes: int64(len(raw)),
+		FormatHeaderBytes:    int64(cur.pos),
+		TotalStoredBytes:     int64(len(raw)),
+		columnNames:          make([]string, 0, header.ColumnCount),
+	}
+	columns := make([]ColumnStoreColumn, header.ColumnCount)
+	columnStart := cur.pos
+	for colIdx := 0; colIdx < header.ColumnCount; colIdx++ {
+		name := cur.stringBytes()
+		path := cur.stringBytes()
+		valueTypeBytes := cur.stringBytes()
+		nullable := cur.bool()
+		dictionary := cur.bool()
+		vectorDims := 0
+		if version >= columnPhysicalAssetVersionV4 {
+			rawVectorDims := cur.u64()
+			if rawVectorDims > uint64(maxCollectionInt) {
+				return ColumnStoreRowAssetByteAccounting{}, errors.New("column physical asset vector_dims overflows int")
+			}
+			vectorDims = int(rawVectorDims)
+		}
+		elementsPerRow := 0
+		if version >= columnPhysicalAssetVersionV6 {
+			rawElementsPerRow := cur.u64()
+			if rawElementsPerRow > uint64(maxCollectionInt) {
+				return ColumnStoreRowAssetByteAccounting{}, errors.New("column physical asset elements_per_row overflows int")
+			}
+			elementsPerRow = int(rawElementsPerRow)
+		}
+		fixedWidthEncoding := ColumnFixedWidthEncodingDefault
+		if version >= columnPhysicalAssetVersionV5 {
+			fixedWidthEncoding = ColumnFixedWidthEncoding(string(cur.stringBytes()))
+			if _, err := normalizeColumnFixedWidthEncoding(fixedWidthEncoding); err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset column[%d] fixed_width_encoding: %w", colIdx, err)
+			}
+			if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(ColumnStoreValueType(string(valueTypeBytes))) {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", colIdx, string(valueTypeBytes))
+			}
+			if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && columnStoreValueTypeHasScalarFixedWidthPayload(ColumnStoreValueType(string(valueTypeBytes))) {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset column[%d] scalar fixed_width_encoding unsupported for value_type %q", colIdx, string(valueTypeBytes))
+			}
+		}
+		if cur.err != nil {
+			return ColumnStoreRowAssetByteAccounting{}, cur.err
+		}
+		got := ColumnStoreColumn{
+			Name:               string(name),
+			Path:               string(path),
+			ValueType:          ColumnStoreValueType(string(valueTypeBytes)),
+			Nullable:           nullable,
+			Dictionary:         dictionary,
+			VectorDims:         vectorDims,
+			ElementsPerRow:     elementsPerRow,
+			FixedWidthEncoding: fixedWidthEncoding,
+		}
+		want := cfg.Columns[colIdx]
+		geometryMatches := got.VectorDims == want.VectorDims && got.ElementsPerRow == want.ElementsPerRow
+		if got.ValueType == ColumnStoreValueFloat32Vector && want.ValueType == ColumnStoreValueFloat32Vector {
+			gotWidth := columnStoreFloat32VectorElementsPerRow(got)
+			geometryMatches = gotWidth == columnStoreFloat32VectorElementsPerRow(want)
+		}
+		if got.Name != want.Name ||
+			got.Path != want.Path ||
+			got.ValueType != want.ValueType ||
+			got.Nullable != want.Nullable ||
+			got.Dictionary != want.Dictionary ||
+			!geometryMatches ||
+			got.FixedWidthEncoding != want.FixedWidthEncoding {
+			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset column[%d]=%+v want %+v", colIdx, got, want)
+		}
+		columns[colIdx] = got
+		out.columnNames = append(out.columnNames, got.Name)
+	}
+	out.ColumnMetadataBytes = int64(cur.pos - columnStart)
+
+	columnDetails := make([]ColumnStoreRowAssetColumnAccounting, header.ColumnCount)
+	for i, col := range columns {
+		columnDetails[i] = ColumnStoreRowAssetColumnAccounting{
+			Column: col.Name,
+			Type:   string(col.ValueType),
+		}
+	}
+	if version >= columnPhysicalAssetVersionV7 {
+		rowEncodingHeaderStart := cur.pos
+		rowEncoding := cur.string()
+		if rowEncoding != columnPhysicalAssetRowEncodingFixedID {
+			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("unsupported column physical asset row encoding %q", rowEncoding)
+		}
+		if header.ColumnCount != 0 {
+			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset row encoding %q requires zero columns", rowEncoding)
+		}
+		idWidth := cur.u64()
+		if cur.err != nil {
+			return ColumnStoreRowAssetByteAccounting{}, cur.err
+		}
+		if idWidth == 0 || idWidth > uint64(maxCollectionInt) {
+			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset fixed id width=%d invalid", idWidth)
+		}
+		out.RowEncodingHeaderBytes = int64(cur.pos - rowEncodingHeaderStart)
+		deleted := header.Operation == ColumnPublishOperationDelete
+		if header.Operation != ColumnPublishOperationInsert && header.Operation != ColumnPublishOperationUpdate && header.Operation != ColumnPublishOperationDelete {
+			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("unsupported column physical asset operation %q", header.Operation)
+		}
+		for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
+			if uint64(len(raw)-cur.pos) < idWidth {
+				return ColumnStoreRowAssetByteAccounting{}, errors.New("short column physical asset fixed row id block")
+			}
+			cur.pos += int(idWidth)
+			out.RowIDStoredBytes = addColumnStorePhysicalAccountingBytes(out.RowIDStoredBytes, int64(idWidth))
+			out.RowIDValueBytes = addColumnStorePhysicalAccountingBytes(out.RowIDValueBytes, int64(idWidth))
+			if deleted {
+				out.DeletedRows++
+			}
+		}
+		if cur.err != nil {
+			return ColumnStoreRowAssetByteAccounting{}, cur.err
+		}
+		if cur.pos != len(raw) {
+			return ColumnStoreRowAssetByteAccounting{}, errors.New("trailing bytes in column physical asset")
+		}
+		if out.Rows > 0 {
+			out.BytesPerRow = float64(out.TotalStoredBytes) / float64(out.Rows)
+		}
+		return out, nil
+	}
+	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
+		idStart := cur.pos
+		id := cur.bytesView()
+		if cur.err != nil {
+			return ColumnStoreRowAssetByteAccounting{}, cur.err
+		}
+		out.RowIDStoredBytes = addColumnStorePhysicalAccountingBytes(out.RowIDStoredBytes, int64(cur.pos-idStart))
+		out.RowIDValueBytes = addColumnStorePhysicalAccountingBytes(out.RowIDValueBytes, int64(len(id)))
+		deleted := false
+		if version >= columnPhysicalAssetVersionV2 {
+			deletedStart := cur.pos
+			deleted = cur.bool()
+			if cur.err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, cur.err
+			}
+			out.RowDeletedFlagBytes = addColumnStorePhysicalAccountingBytes(out.RowDeletedFlagBytes, int64(cur.pos-deletedStart))
+		}
+		if deleted {
+			if header.Operation != ColumnPublishOperationDelete {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset %s row[%d] is marked deleted", header.Operation, rowIdx)
+			}
+			out.DeletedRows++
+			continue
+		}
+		if header.Operation == ColumnPublishOperationDelete {
+			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset delete row[%d] is not marked deleted", rowIdx)
+		}
+		for colIdx, col := range columns {
+			valueHeaderStart := cur.pos
+			typeBytes := cur.stringBytes()
+			if cur.err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, cur.err
+			}
+			if !columnPhysicalBytesEqualString(typeBytes, string(col.ValueType)) {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("row[%d] column[%d] type=%q want %q", rowIdx, colIdx, string(typeBytes), col.ValueType)
+			}
+			null := cur.bool()
+			if cur.err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, cur.err
+			}
+			present := true
+			if version >= columnPhysicalAssetVersionV3 {
+				present = cur.bool()
+				if cur.err != nil {
+					return ColumnStoreRowAssetByteAccounting{}, cur.err
+				}
+			}
+			valueHeaderBytes := int64(cur.pos - valueHeaderStart)
+			out.RowValueHeaderBytes = addColumnStorePhysicalAccountingBytes(out.RowValueHeaderBytes, valueHeaderBytes)
+			columnDetails[colIdx].Rows++
+			columnDetails[colIdx].ValueHeaderBytes = addColumnStorePhysicalAccountingBytes(columnDetails[colIdx].ValueHeaderBytes, valueHeaderBytes)
+			if !present {
+				if !null {
+					return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("row[%d] column[%d] absent value is not null", rowIdx, colIdx)
+				}
+				if !col.Nullable {
+					return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("row[%d] column[%d] is absent but column is not nullable", rowIdx, colIdx)
+				}
+				columnDetails[colIdx].NullRows++
+				continue
+			}
+			columnDetails[colIdx].PresentRows++
+			if null {
+				if !col.Nullable {
+					return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("row[%d] column[%d] is null but column is not nullable", rowIdx, colIdx)
+				}
+				columnDetails[colIdx].NullRows++
+				continue
+			}
+			valuePayloadStart := cur.pos
+			if err := skipColumnStoreRowAssetValuePayload(&cur, col); err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("row[%d] column[%d]: %w", rowIdx, colIdx, err)
+			}
+			valuePayloadBytes := int64(cur.pos - valuePayloadStart)
+			out.RowValuePayloadBytes = addColumnStorePhysicalAccountingBytes(out.RowValuePayloadBytes, valuePayloadBytes)
+			columnDetails[colIdx].ValuePayloadBytes = addColumnStorePhysicalAccountingBytes(columnDetails[colIdx].ValuePayloadBytes, valuePayloadBytes)
+		}
+	}
+	if cur.err != nil {
+		return ColumnStoreRowAssetByteAccounting{}, cur.err
+	}
+	if cur.pos != len(raw) {
+		return ColumnStoreRowAssetByteAccounting{}, errors.New("trailing bytes in column physical asset")
+	}
+	if out.Rows > 0 {
+		out.BytesPerRow = float64(out.TotalStoredBytes) / float64(out.Rows)
+	}
+	if detailed && len(columnDetails) != 0 {
+		for i := range columnDetails {
+			columnDetails[i].StoredBytes = addColumnStorePhysicalAccountingBytes(columnDetails[i].ValueHeaderBytes, columnDetails[i].ValuePayloadBytes)
+		}
+		out.ColumnsDetail = columnDetails
+	}
+	return out, nil
+}
+
+func skipColumnStoreRowAssetValuePayload(cur *manifestCursor, col ColumnStoreColumn) error {
+	switch col.ValueType {
+	case ColumnStoreValueBool:
+		_ = cur.bool()
+	case ColumnStoreValueInt64:
+		_ = cur.u64()
+	case ColumnStoreValueFloat32:
+		_ = cur.u32()
+	case ColumnStoreValueDouble:
+		_ = cur.u64()
+	case ColumnStoreValueString:
+		_ = cur.stringBytes()
+	case ColumnStoreValueInt8:
+		_ = cur.u8()
+	case ColumnStoreValueUint8:
+		_ = cur.u8()
+	case ColumnStoreValueInt16:
+		_ = cur.u16()
+	case ColumnStoreValueUint16:
+		_ = cur.u16()
+	case ColumnStoreValueInt32:
+		_ = cur.u32()
+	case ColumnStoreValueUint32:
+		_ = cur.u32()
+	case ColumnStoreValueUint64:
+		_ = cur.u64()
+	case ColumnStoreValueFloat16:
+		_ = cur.u16()
+	case ColumnStoreValueBFloat16:
+		_ = cur.u16()
+	case ColumnStoreValueFloat32Vector:
+		cur.skipFloat32SliceWithExpectedLength(columnStoreFloat32VectorElementsPerRow(col))
+	case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
+		cur.skipDenseNumericVectorBytesWithExpectedLength(col)
+	case ColumnStoreValueUint32List, ColumnStoreValueAdjacencyList:
+		cur.skipUint32Slice()
+	default:
+		return fmt.Errorf("unsupported column physical value type %q", col.ValueType)
+	}
+	return cur.err
 }
 
 func columnStoreTypedColumnPartAccountingFromRef(rootDir string, asset columnManifestAssetRefForScan, opts ColumnStorePhysicalAccountingOptions) (ColumnStoreTypedColumnPartAccounting, error) {
@@ -513,6 +923,69 @@ func columnStoreTypedColumnPartImageColumnNames(image typedcolumn.ColumnPartImag
 	}
 	sort.Strings(out)
 	return out
+}
+
+func addColumnStoreRowAssetByteAccounting(dst *ColumnStoreRowAssetByteAccounting, src ColumnStoreRowAssetByteAccounting) {
+	if dst == nil {
+		return
+	}
+	dst.Rows = addColumnStorePhysicalAccountingRows(dst.Rows, src.Rows)
+	dst.DeletedRows = addColumnStorePhysicalAccountingRows(dst.DeletedRows, src.DeletedRows)
+	addColumnStoreRowAssetByteAccountingColumns(dst, src)
+	if dst.Operation == "" {
+		dst.Operation = src.Operation
+	} else if src.Operation != "" && dst.Operation != src.Operation {
+		dst.Operation = ""
+	}
+	dst.SerializedAssetBytes = addColumnStorePhysicalAccountingBytes(dst.SerializedAssetBytes, src.SerializedAssetBytes)
+	dst.FormatHeaderBytes = addColumnStorePhysicalAccountingBytes(dst.FormatHeaderBytes, src.FormatHeaderBytes)
+	dst.ColumnMetadataBytes = addColumnStorePhysicalAccountingBytes(dst.ColumnMetadataBytes, src.ColumnMetadataBytes)
+	dst.RowEncodingHeaderBytes = addColumnStorePhysicalAccountingBytes(dst.RowEncodingHeaderBytes, src.RowEncodingHeaderBytes)
+	dst.RowIDStoredBytes = addColumnStorePhysicalAccountingBytes(dst.RowIDStoredBytes, src.RowIDStoredBytes)
+	dst.RowIDValueBytes = addColumnStorePhysicalAccountingBytes(dst.RowIDValueBytes, src.RowIDValueBytes)
+	dst.RowDeletedFlagBytes = addColumnStorePhysicalAccountingBytes(dst.RowDeletedFlagBytes, src.RowDeletedFlagBytes)
+	dst.RowValueHeaderBytes = addColumnStorePhysicalAccountingBytes(dst.RowValueHeaderBytes, src.RowValueHeaderBytes)
+	dst.RowValuePayloadBytes = addColumnStorePhysicalAccountingBytes(dst.RowValuePayloadBytes, src.RowValuePayloadBytes)
+	dst.TotalStoredBytes = addColumnStorePhysicalAccountingBytes(dst.TotalStoredBytes, src.TotalStoredBytes)
+	if dst.Rows > 0 {
+		dst.BytesPerRow = float64(dst.TotalStoredBytes) / float64(dst.Rows)
+	}
+}
+
+func addColumnStoreRowAssetByteAccountingColumns(dst *ColumnStoreRowAssetByteAccounting, src ColumnStoreRowAssetByteAccounting) {
+	if dst == nil {
+		return
+	}
+	if len(src.columnNames) == 0 {
+		if src.Columns > dst.Columns {
+			dst.Columns = src.Columns
+		}
+		return
+	}
+	if len(dst.columnNames) == 0 && dst.Columns == 0 {
+		dst.columnNames = append(dst.columnNames[:0], src.columnNames...)
+		dst.Columns = len(dst.columnNames)
+		return
+	}
+	if len(dst.columnNames) == 0 && dst.Columns > 0 {
+		if src.Columns > dst.Columns {
+			dst.Columns = src.Columns
+		}
+		return
+	}
+	seen := make(map[string]struct{}, len(dst.columnNames)+len(src.columnNames))
+	for _, column := range dst.columnNames {
+		seen[column] = struct{}{}
+	}
+	for _, column := range src.columnNames {
+		seen[column] = struct{}{}
+	}
+	dst.columnNames = dst.columnNames[:0]
+	for column := range seen {
+		dst.columnNames = append(dst.columnNames, column)
+	}
+	sort.Strings(dst.columnNames)
+	dst.Columns = len(dst.columnNames)
 }
 
 func addColumnStoreTypedColumnPartByteAccounting(dst *ColumnStoreTypedColumnPartByteAccounting, src ColumnStoreTypedColumnPartByteAccounting) {

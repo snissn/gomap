@@ -24,8 +24,11 @@ const (
 	columnPhysicalAssetVersionV4 = uint16(4)
 	columnPhysicalAssetVersionV5 = uint16(5)
 	columnPhysicalAssetVersionV6 = uint16(6)
+	columnPhysicalAssetVersionV7 = uint16(7)
 	columnPhysicalAssetVersion   = columnPhysicalAssetVersionV4
 )
+
+const columnPhysicalAssetRowEncodingFixedID = "fixed_id"
 
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
 
@@ -623,9 +626,13 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		}
 	}
 	var b bytes.Buffer
+	fixedIDWidth, useFixedIDRows := columnPhysicalAssetFixedIDRowEncodingWidth(input)
 	version, err := columnPhysicalAssetVersionForColumns(input.Columns)
 	if err != nil {
 		return nil, columnPhysicalAssetSummary{}, err
+	}
+	if useFixedIDRows {
+		version = columnPhysicalAssetVersionV7
 	}
 	writeManifestUint32(&b, columnPhysicalAssetMagic)
 	writeManifestUint16(&b, version)
@@ -651,6 +658,19 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		if version >= columnPhysicalAssetVersionV5 {
 			writeManifestString(&b, string(col.FixedWidthEncoding))
 		}
+	}
+	if useFixedIDRows {
+		writeManifestString(&b, columnPhysicalAssetRowEncodingFixedID)
+		writeManifestUint64(&b, uint64(fixedIDWidth))
+		for _, row := range input.Rows {
+			_, _ = b.Write(row.ID)
+		}
+		payload := b.Bytes()
+		return payload, columnPhysicalAssetSummary{
+			RowCount:     len(input.Rows),
+			ColumnCount:  len(input.Columns),
+			PayloadBytes: int64(len(payload)),
+		}, nil
 	}
 	for _, row := range input.Rows {
 		writeManifestBytes(&b, row.ID)
@@ -792,6 +812,41 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset column[%d] scalar fixed_width_encoding for value_type %q is typed_column_part-only", i, asset.Columns[i].ValueType)
 			}
 		}
+	}
+	if version >= columnPhysicalAssetVersionV7 {
+		rowEncoding := cur.string()
+		if rowEncoding != columnPhysicalAssetRowEncodingFixedID {
+			return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical asset row encoding %q", rowEncoding)
+		}
+		if len(asset.Columns) != 0 {
+			return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset row encoding %q requires zero columns", rowEncoding)
+		}
+		idWidth := cur.u64()
+		if idWidth == 0 || idWidth > uint64(maxCollectionInt) {
+			return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset fixed id width=%d invalid", idWidth)
+		}
+		deleted := asset.Header.Operation == ColumnPublishOperationDelete
+		if asset.Header.Operation != ColumnPublishOperationInsert && asset.Header.Operation != ColumnPublishOperationUpdate && asset.Header.Operation != ColumnPublishOperationDelete {
+			return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical asset operation %q", asset.Header.Operation)
+		}
+		for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
+			if uint64(len(raw)-cur.pos) < idWidth {
+				return columnPhysicalAsset{}, errors.New("collections: short column physical asset fixed row id block")
+			}
+			row := columnDeclaredRow{
+				ID:      bytes.Clone(raw[cur.pos : cur.pos+int(idWidth)]),
+				Deleted: deleted,
+			}
+			cur.pos += int(idWidth)
+			asset.Rows = append(asset.Rows, row)
+		}
+		if cur.err != nil {
+			return columnPhysicalAsset{}, cur.err
+		}
+		if cur.pos != len(raw) {
+			return columnPhysicalAsset{}, errors.New("collections: trailing bytes in column physical asset")
+		}
+		return asset, nil
 	}
 	for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
 		row := columnDeclaredRow{
@@ -993,11 +1048,31 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 
 func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 	switch version {
-	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6:
+	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6, columnPhysicalAssetVersionV7:
 		return true
 	default:
 		return false
 	}
+}
+
+func columnPhysicalAssetFixedIDRowEncodingWidth(input columnPhysicalAssetEncodeInput) (int, bool) {
+	if len(input.Columns) != 0 || len(input.Rows) == 0 {
+		return 0, false
+	}
+	if !isSupportedColumnPhysicalAssetOperation(input.Operation) {
+		return 0, false
+	}
+	deleted := input.Operation == ColumnPublishOperationDelete
+	width := len(input.Rows[0].ID)
+	if width == 0 || input.Rows[0].Deleted != deleted {
+		return 0, false
+	}
+	for _, row := range input.Rows[1:] {
+		if len(row.ID) != width || row.Deleted != deleted {
+			return 0, false
+		}
+	}
+	return width, true
 }
 
 func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, error) {

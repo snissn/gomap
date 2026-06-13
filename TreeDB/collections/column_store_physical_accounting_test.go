@@ -33,8 +33,60 @@ func TestColumnStorePhysicalAccountingReportsTypedColumnSections2118(t *testing.
 	if got, want := accounting.TypedColumnPartRefs, 1; got != want {
 		t.Fatalf("typed part refs=%d want %d", got, want)
 	}
+	if got, want := accounting.RowAssetRefs, 1; got != want {
+		t.Fatalf("row asset refs=%d want %d", got, want)
+	}
+	if got, want := len(accounting.RowAssets), 1; got != want {
+		t.Fatalf("row assets=%d want %d", got, want)
+	}
 	if got, want := len(accounting.TypedColumnParts), 1; got != want {
 		t.Fatalf("typed parts=%d want %d", got, want)
+	}
+
+	rowAsset := accounting.RowAssets[0]
+	if rowAsset.Asset.Ref.Kind != ColumnAssetKindTCS1PartImage {
+		t.Fatalf("row asset kind=%q want %q", rowAsset.Asset.Ref.Kind, ColumnAssetKindTCS1PartImage)
+	}
+	if got, want := rowAsset.Asset.Rows, len(events); got != want {
+		t.Fatalf("row asset rows=%d want %d", got, want)
+	}
+	if rowAsset.Payload.TotalStoredBytes != rowAsset.Asset.Bytes || rowAsset.Payload.SerializedAssetBytes != rowAsset.Asset.Bytes {
+		t.Fatalf("row payload bytes=%d serialized=%d asset=%d", rowAsset.Payload.TotalStoredBytes, rowAsset.Payload.SerializedAssetBytes, rowAsset.Asset.Bytes)
+	}
+	if got, want := rowAsset.Payload.Columns, 0; got != want {
+		t.Fatalf("row asset columns=%d want %d for all-typed-column fixture", got, want)
+	}
+	if got, want := rowAsset.Payload.Rows, len(events); got != want {
+		t.Fatalf("row payload rows=%d want %d", got, want)
+	}
+	if rowAsset.Payload.FormatHeaderBytes == 0 || rowAsset.Payload.RowEncodingHeaderBytes == 0 || rowAsset.Payload.RowIDStoredBytes == 0 {
+		t.Fatalf("row payload accounting missing header/encoding/id bytes: %+v", rowAsset.Payload)
+	}
+	var wantIDValueBytes int64
+	for _, event := range events {
+		wantIDValueBytes += int64(len(event.ID))
+	}
+	if got := rowAsset.Payload.RowIDValueBytes; got != wantIDValueBytes {
+		t.Fatalf("row id value bytes=%d want %d", got, wantIDValueBytes)
+	}
+	if got, want := rowAsset.Payload.RowIDStoredBytes, wantIDValueBytes; got != want {
+		t.Fatalf("row id stored bytes=%d want %d", got, want)
+	}
+	if got, want := rowAsset.Payload.RowDeletedFlagBytes, int64(0); got != want {
+		t.Fatalf("row deleted flag bytes=%d want %d", got, want)
+	}
+	if rowAsset.Payload.RowValueHeaderBytes != 0 || rowAsset.Payload.RowValuePayloadBytes != 0 || len(rowAsset.Payload.ColumnsDetail) != 0 {
+		t.Fatalf("row value bytes/detail should be empty for zero row-owned columns: %+v", rowAsset.Payload)
+	}
+	rowCategoryBytes := rowAsset.Payload.FormatHeaderBytes +
+		rowAsset.Payload.ColumnMetadataBytes +
+		rowAsset.Payload.RowEncodingHeaderBytes +
+		rowAsset.Payload.RowIDStoredBytes +
+		rowAsset.Payload.RowDeletedFlagBytes +
+		rowAsset.Payload.RowValueHeaderBytes +
+		rowAsset.Payload.RowValuePayloadBytes
+	if rowCategoryBytes != rowAsset.Payload.TotalStoredBytes {
+		t.Fatalf("row category bytes=%d want total stored bytes %d", rowCategoryBytes, rowAsset.Payload.TotalStoredBytes)
 	}
 
 	part := accounting.TypedColumnParts[0]
@@ -92,6 +144,12 @@ func TestColumnStorePhysicalAccountingReportsTypedColumnSections2118(t *testing.
 
 	if got, want := accounting.Totals.TypedColumnPartBytes, typedRefs[0].Length; got != want {
 		t.Fatalf("typed column part total=%d want %d", got, want)
+	}
+	if got, want := accounting.Totals.RowAssetSections.TotalStoredBytes, accounting.Totals.RowAssetBytes; got != want {
+		t.Fatalf("row section total=%d want row asset bytes %d", got, want)
+	}
+	if got, want := accounting.Totals.RowAssetSections.RowIDValueBytes, wantIDValueBytes; got != want {
+		t.Fatalf("total row id value bytes=%d want %d", got, want)
 	}
 	if got, want := accounting.Totals.TypedColumnSections.TotalStoredBytes, accounting.Totals.TypedColumnPartBytes; got != want {
 		t.Fatalf("typed section total=%d want typed part bytes %d", got, want)

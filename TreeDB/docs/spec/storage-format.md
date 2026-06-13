@@ -689,6 +689,22 @@ row-owned fields; the matching `tcs1_typed_column_part` for the same non-delete
 generation contains authoritative scalar, fixed-dimension `float32_vector`,
 Issue #1930 dense numeric vector, and non-null variable-width `uint32_list`
 typed-column values keyed by row index.
+
+Version 7 has a compact row-locator encoding for the common
+`typed_column_part` case where the row asset has zero row-owned columns and all
+row ids in the part have the same byte width:
+
+```text
+string   RowEncoding = "fixed_id"
+u64      RowIDWidth
+bytes    RowID[RowCount]    // contiguous fixed-width row ids
+```
+
+V7 stores no per-row length prefixes and no per-row deleted flags. Insert/update
+parts are all live rows; delete/tombstone parts are all deleted rows. Assets with
+row-owned columns, mixed-width row ids, or legacy payloads continue to use the
+generic row payload.
+
 Latest-visible readers resolve document identity from the typed-row
 row/tombstone assets first, then read the typed-column part for the winning
 non-deleted generation+row. Readers validate namespace, generation, part id,

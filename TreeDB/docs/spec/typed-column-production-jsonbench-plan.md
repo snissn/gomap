@@ -108,6 +108,9 @@ Rows:
 Size:
 
 - variable header plus variable row/document/value payloads
+- zero-row-column parts with fixed-width document ids can use the TCPA V7
+  `fixed_id` row encoding, which stores contiguous ids and derives deleted
+  state from the asset operation
 - `ColumnPreparedAsset.Bytes` and `ColumnAssetRef.Length` are the authoritative
   stored byte counts
 

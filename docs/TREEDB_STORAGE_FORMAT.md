@@ -73,11 +73,11 @@ row-locator `TCPA` asset and row count, while delete/tombstone generations have
 only the row-locator/tombstone part. GC/rewrite must enumerate those refs from
 manifest/control roots, not by scanning row documents.
 
-The typed-row physical part payload uses the `TCPA` envelope, version 3:
+The typed-row physical part payload uses the versioned `TCPA` envelope:
 
 ```text
 u32      Magic = "TCPA"
-u16      Version = 3
+u16      Version
 string   Collection
 string   Namespace
 u64      Generation
@@ -91,11 +91,20 @@ columns  declared column descriptors
 rows     row id + deleted flag + optional declared column values
 ```
 
-Insert and update rows must have `deleted=false` and one declared value per
-`typed_row_asset` column in the row asset. Each declared value stores its type,
-null bit, and present bit; the present bit distinguishes an omitted nullable JSON
-path from an explicit JSON `null` so retained-payload reconstruction remains
-lossless. Delete/tombstone rows must have `deleted=true` and no column values.
+Generic row payload versions store each row as length-prefixed row id bytes,
+deleted flag, and optional declared values. Insert and update rows must have
+`deleted=false` and one declared value per `typed_row_asset` column in the row
+asset. Each declared value stores its type, null bit, and present bit; the
+present bit distinguishes an omitted nullable JSON path from an explicit JSON
+`null` so retained-payload reconstruction remains lossless. Delete/tombstone
+rows must have `deleted=true` and no column values.
+
+Version 7 may be used when the row asset has zero row-owned columns and all row
+ids in the part have the same byte width. After the column descriptors it stores
+a fixed-id row encoding marker, the id width, then contiguous row id bytes.
+The deleted/tombstone state is derived from the asset operation, so insert/update
+parts are all live rows and delete parts are all tombstones.
+
 For layouts with `typed_column_part` owners, a `TCPA` row asset is still
 published for row IDs/tombstones and row-owned fields; the matching
 `tcs1_typed_column_part` for the same generation contains authoritative scalar
