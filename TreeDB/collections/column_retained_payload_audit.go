@@ -338,7 +338,16 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 			if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(retained); err != nil {
 				return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit %q: %w", documentID, err))
 			} else if !ok {
-				return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit %q: semantic-stream-v1 primary value is not a locator", documentID))
+				payloadAudit, auditErr := auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)
+				if auditErr != nil {
+					for _, path := range payloadAudit.Violations {
+						result.Violations = append(result.Violations, ColumnRetainedPayloadCollectionPathViolation{
+							DocumentID: documentID,
+							Path:       path,
+						})
+					}
+					return retainedPayloadCollectionAuditError(result, auditErr)
+				}
 			}
 			it.Next()
 			continue
@@ -390,7 +399,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	if err := it.Error(); err != nil {
 		return retainedPayloadCollectionAuditError(result, err)
 	}
-	if opts.IncludeSemanticStreamBlockLayout {
+	if opts.IncludeSemanticStreamBlockLayout && !result.Truncated {
 		blockLayout, blockPaths, err := c.auditRetainedSemanticStreamV1BlockLayoutAtSnapshot(snap, catalog, opts.SemanticStreamBlockMaxPaths)
 		if err != nil {
 			return retainedPayloadCollectionAuditError(result, err)

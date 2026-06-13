@@ -548,6 +548,40 @@ func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayout2662(t *testing.
 	if _, ok := retainedSemanticStreamV1PathLayoutStat2662(layout.Paths, "kind"); ok {
 		t.Fatalf("declared kind leaked into block layout paths: %+v", layout.Paths)
 	}
+
+	limited, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreamBlockLayout: true,
+		MaxDocuments:                     1,
+	})
+	if err != nil {
+		t.Fatalf("limited semantic-stream-v1 block layout audit: %v audit=%+v", err, limited)
+	}
+	if !limited.Truncated || limited.CheckedRows != 1 || limited.RetainedPayloadSemanticStreamBlockLayout != nil {
+		t.Fatalf("limited audit=%+v want truncated one row without mixed full-block layout", limited)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutAllowsInlineRows2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreamBlockLayout: true,
+	})
+	if err != nil {
+		t.Fatalf("inline semantic-stream-v1 block layout audit: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || audit.CheckedRows != 1 {
+		t.Fatalf("audit=%+v want passed one inline row", audit)
+	}
+	layout := audit.RetainedPayloadSemanticStreamBlockLayout
+	if layout == nil || layout.BlockCount != 0 || layout.RawBlockBytes != 0 || layout.PrimaryLocatorBytes != audit.RetainedPayloadBytes {
+		t.Fatalf("inline block layout=%+v audit=%+v", layout, audit)
+	}
 }
 
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentFailsClosed2382(t *testing.T) {
