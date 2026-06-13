@@ -403,6 +403,16 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	if err := it.Error(); err != nil {
 		return retainedPayloadCollectionAuditError(result, err)
 	}
+	if opts.IncludeSemanticStreamBlockLayout && result.Truncated && semanticBlockLayoutOnly {
+		blockPaths, err := c.auditRetainedSemanticStreamV1BlockLayoutPathsAtSnapshot(snap, catalog, semanticBlockLayoutLocatorRows)
+		if err != nil {
+			return retainedPayloadCollectionAuditError(result, err)
+		}
+		violatedPaths := appendColumnRetainedPayloadBlockLayoutViolations(&result, "semantic-stream-v1-sampled-blocks", blockPaths)
+		if len(violatedPaths) > 0 {
+			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained semantic-stream-v1 sampled blocks contain declared typed paths: %s", strings.Join(violatedPaths, ", ")))
+		}
+	}
 	if opts.IncludeSemanticStreamBlockLayout && !result.Truncated {
 		blockLayout, blockPaths, err := c.auditRetainedSemanticStreamV1BlockLayoutAtSnapshot(snap, catalog, opts.SemanticStreamBlockMaxPaths)
 		if err != nil {
@@ -411,17 +421,8 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		blockLayout.Rows = result.CheckedRows
 		blockLayout.PrimaryLocatorBytes = result.RetainedPayloadBytes
 		result.RetainedPayloadSemanticStreamBlockLayout = &blockLayout
-		violatedPaths := make([]string, 0)
-		for _, path := range result.DeclaredPaths {
-			if _, ok := blockPaths[path]; ok {
-				result.Violations = append(result.Violations, ColumnRetainedPayloadCollectionPathViolation{
-					DocumentID: "semantic-stream-v1-blocks",
-					Path:       path,
-				})
-				violatedPaths = append(violatedPaths, path)
-			}
-		}
-		if len(result.Violations) > 0 {
+		violatedPaths := appendColumnRetainedPayloadBlockLayoutViolations(&result, "semantic-stream-v1-blocks", blockPaths)
+		if len(violatedPaths) > 0 {
 			return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained semantic-stream-v1 blocks contain declared typed paths: %s", strings.Join(violatedPaths, ", ")))
 		}
 	}
@@ -452,6 +453,23 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		result.Status = "passed"
 	}
 	return result, nil
+}
+
+func appendColumnRetainedPayloadBlockLayoutViolations(result *ColumnRetainedPayloadCollectionAuditResult, source string, blockPaths map[string]struct{}) []string {
+	if result == nil || len(blockPaths) == 0 {
+		return nil
+	}
+	violatedPaths := make([]string, 0)
+	for _, path := range result.DeclaredPaths {
+		if _, ok := blockPaths[path]; ok {
+			result.Violations = append(result.Violations, ColumnRetainedPayloadCollectionPathViolation{
+				DocumentID: source,
+				Path:       path,
+			})
+			violatedPaths = append(violatedPaths, path)
+		}
+	}
+	return violatedPaths
 }
 
 func retainedPayloadCollectionAuditError(result ColumnRetainedPayloadCollectionAuditResult, err error) (ColumnRetainedPayloadCollectionAuditResult, error) {

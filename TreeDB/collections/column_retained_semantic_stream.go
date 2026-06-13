@@ -210,6 +210,38 @@ func (c *Collection) auditRetainedSemanticStreamV1BlockLayoutAtSnapshot(snap *ba
 	return out, paths, nil
 }
 
+func (c *Collection) auditRetainedSemanticStreamV1BlockLayoutPathsAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, blockRows map[string]uint64) (map[string]struct{}, error) {
+	collector, err := newColumnRetainedSemanticStreamV1BlockLayoutCollector()
+	if err != nil {
+		return nil, err
+	}
+	defer collector.close()
+	rootName := collectionRetainedSemanticStreamRootName(catalog.meta.Name)
+	keys := make([]string, 0, len(blockRows))
+	for key := range blockRows {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		blockKey := []byte(key)
+		block, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, blockKey, nil)
+		if err != nil {
+			return nil, fmt.Errorf("collections: semantic-stream-v1 sampled block layout audit read %x: %w", blockKey, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("collections: semantic-stream-v1 retained block %x missing", blockKey)
+		}
+		if err := collector.addBlock(block); err != nil {
+			return nil, fmt.Errorf("collections: semantic-stream-v1 sampled block layout audit %x: %w", blockKey, err)
+		}
+	}
+	paths := make(map[string]struct{}, len(collector.paths))
+	for path := range collector.paths {
+		paths[path] = struct{}{}
+	}
+	return paths, nil
+}
+
 func prepareColumnRetainedPayloadInsertBatchStorageDocuments(cfg ColumnStoreConfig, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {
 	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn &&
 		columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 &&

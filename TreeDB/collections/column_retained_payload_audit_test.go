@@ -561,6 +561,31 @@ func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayout2662(t *testing.
 	}
 }
 
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutSampledFailsClosed2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		Paths:                            []string{"payload"},
+		IncludeSemanticStreamBlockLayout: true,
+		MaxDocuments:                     1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "payload") {
+		t.Fatalf("sampled semantic-stream-v1 block layout err=%v audit=%+v want payload violation", err, audit)
+	}
+	if audit.Status != "failed" || !audit.Truncated || audit.CheckedRows != 1 || audit.RetainedPayloadSemanticStreamBlockLayout != nil {
+		t.Fatalf("sampled semantic-stream-v1 block layout audit=%+v want failed truncated one row without emitted layout", audit)
+	}
+	if len(audit.Violations) != 1 || audit.Violations[0].DocumentID != "semantic-stream-v1-sampled-blocks" || audit.Violations[0].Path != "payload" {
+		t.Fatalf("sampled semantic-stream-v1 block layout violations=%+v want sampled-block payload", audit.Violations)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutAllowsInlineRows2662(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
 	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
