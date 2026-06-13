@@ -36,6 +36,29 @@ JSONBENCH_DECLARED_PATHS = [
     "commit.operation",
     "commit.collection",
 ]
+CLICKHOUSE_JSONBENCH_REFERENCE = {
+    "source": "ClickHouse JSONBench 1M part audit from issue #2680",
+    "engine": "ClickHouse MergeTree JSON v3, ZSTD(1), index_granularity=8192",
+    "version": "26.4.3.1",
+    "rows": 1_000_000,
+    "bytes_on_disk": 101_786_238,
+    "data_compressed_bytes": 101_761_540,
+    "marks_bytes": 21_565,
+    "primary_key_size": 2_994,
+    "declared_subpath_bytes": 8_705_117,
+    "shared_json_remainder_bytes": 93_077_485,
+    "note": "Reference is semantic JSON storage, not proof of exact source-byte JSON retention.",
+}
+STORAGE_PARITY_TARGETS = {
+    "#2662": {
+        "name": "retained value_vlog reduction",
+        "target_bytes": 65_000_000,
+    },
+    "#2663": {
+        "name": "column asset reduction",
+        "target_bytes": 25_000_000,
+    },
+}
 
 
 def resolve_main_dir(db_dir: Path) -> Path:
@@ -342,6 +365,265 @@ def summarize_column_sections(physical: dict[str, Any]) -> dict[str, Any]:
         "by_category": summarize_section_rows(rows, "category"),
         "by_kind": summarize_section_rows(rows, "kind"),
         "by_compression": summarize_section_rows(rows, "compression"),
+    }
+
+
+def int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def gzip_subtree_raw_bytes(gzip_report: dict[str, Any], subtree: str) -> int:
+    for row in gzip_report.get("subtrees") or []:
+        if isinstance(row, dict) and row.get("subtree") == subtree:
+            return int_or_zero(row.get("raw_bytes"))
+    return 0
+
+
+def column_section_category_map(column: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = ((column.get("section_summary") or {}).get("by_category") or []) if isinstance(column, dict) else []
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        category = str(row.get("category") or "")
+        out[category] = row
+    return out
+
+
+def sum_section_categories(category_rows: dict[str, dict[str, Any]], categories: list[str]) -> dict[str, Any]:
+    out = {
+        "categories": categories,
+        "sections": 0,
+        "bytes": 0,
+        "raw_bytes": 0,
+        "stored_bytes": 0,
+    }
+    for category in categories:
+        row = category_rows.get(category) or {}
+        out["sections"] += int_or_zero(row.get("sections"))
+        out["bytes"] += int_or_zero(row.get("bytes"))
+        out["raw_bytes"] += int_or_zero(row.get("raw_bytes"))
+        out["stored_bytes"] += int_or_zero(row.get("stored_bytes"))
+    return out
+
+
+def class_row(
+    name: str,
+    owner_issue: str,
+    bytes_value: int,
+    byte_basis: str,
+    clickhouse_hint: str,
+    parity_action: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    row = {
+        "class": name,
+        "owner_issue": owner_issue,
+        "bytes": bytes_value,
+        "byte_basis": byte_basis,
+        "clickhouse_hint": clickhouse_hint,
+        "parity_action": parity_action,
+    }
+    row.update(extra)
+    return row
+
+
+def storage_parity_class_map(
+    gzip_report: dict[str, Any],
+    frame_report: dict[str, Any],
+    column: dict[str, Any],
+    retained: dict[str, Any],
+) -> dict[str, Any]:
+    """Group TreeDB bytes into ClickHouse-comparable storage classes.
+
+    The class map is an evidence layer for the JSONBench parity tickets. It does
+    not change the storage basis: durable bytes exclude command WAL only and
+    still include value_vlog, leaf_vlog, index.db, column assets, and root
+    control files.
+    """
+
+    main_bytes = gzip_subtree_raw_bytes(gzip_report, ".")
+    wal_bytes = gzip_subtree_raw_bytes(gzip_report, "wal")
+    value_vlog_bytes = gzip_subtree_raw_bytes(gzip_report, "value_vlog")
+    leaf_vlog_bytes = gzip_subtree_raw_bytes(gzip_report, "leaf_vlog")
+    column_asset_bytes = gzip_subtree_raw_bytes(gzip_report, "column_assets")
+    index_db_bytes = gzip_subtree_raw_bytes(gzip_report, "index.db")
+    durable_wal_excluded = max(main_bytes - wal_bytes, 0)
+    known_subtree_bytes = value_vlog_bytes + leaf_vlog_bytes + column_asset_bytes + index_db_bytes + wal_bytes
+    root_misc_bytes = max(main_bytes - known_subtree_bytes, 0)
+
+    value_frame = frame_report.get("value_vlog") if isinstance(frame_report.get("value_vlog"), dict) else {}
+    leaf_frame = frame_report.get("leaf_vlog") if isinstance(frame_report.get("leaf_vlog"), dict) else {}
+    physical = column.get("physical_accounting") if isinstance(column.get("physical_accounting"), dict) else {}
+    physical_totals = physical.get("totals") if isinstance(physical.get("totals"), dict) else {}
+    category_rows = column_section_category_map(column)
+
+    declared = sum_section_categories(category_rows, ["declared_columns"])
+    dictionaries = sum_section_categories(category_rows, ["dictionaries"])
+    pruning_marks = sum_section_categories(
+        category_rows,
+        ["pruning_metadata", "marks", "sort_key_metadata", "column_stats"],
+    )
+    descriptors = sum_section_categories(category_rows, ["layout_contract", "descriptor", "manifest", "padding"])
+    locators = sum_section_categories(category_rows, ["locators"])
+
+    typed_column_part_bytes = int_or_zero(
+        column.get("active_typed_column_part_bytes") or physical_totals.get("typed_column_part_bytes")
+    )
+    referenced_asset_bytes = int_or_zero(
+        column.get("active_referenced_asset_bytes") or physical_totals.get("referenced_asset_bytes")
+    )
+    row_asset_bytes = int_or_zero(physical_totals.get("row_asset_bytes"))
+    if row_asset_bytes == 0 and referenced_asset_bytes and typed_column_part_bytes:
+        row_asset_bytes = max(referenced_asset_bytes - typed_column_part_bytes, 0)
+
+    classes = [
+        class_row(
+            "retained_semantic_json_payload_store",
+            "#2662",
+            value_vlog_bytes,
+            "value_vlog filesystem bytes",
+            "ClickHouse stores most non-declared JSON in JSON v3 shared-data bucket streams.",
+            "Decide semantic reconstruction vs exact source-byte retention, then remove duplicated declared path bytes and improve retained remainder encoding.",
+            logical_payload_bytes=int_or_zero(retained.get("retained_payload_bytes")),
+            raw_payload_bytes=int_or_zero(value_frame.get("raw_payload_bytes")),
+            stored_payload_bytes=int_or_zero(value_frame.get("stored_payload_bytes")),
+            file_overhead_bytes=value_vlog_bytes - int_or_zero(value_frame.get("stored_payload_bytes")),
+            audit_status=retained.get("status"),
+        ),
+        class_row(
+            "leaf_vlog_btree_leaf_pages",
+            "#2359",
+            leaf_vlog_bytes,
+            "leaf_vlog filesystem bytes",
+            "ClickHouse has sparse marks and primary index files instead of TreeDB leaf pages.",
+            "Keep separate from retained payload parity so leaf/index costs do not hide retained-format progress.",
+            raw_payload_bytes=int_or_zero(leaf_frame.get("raw_payload_bytes")),
+            stored_payload_bytes=int_or_zero(leaf_frame.get("stored_payload_bytes")),
+        ),
+        class_row(
+            "declared_scalar_column_values",
+            "#2663",
+            int_or_zero(declared["bytes"]),
+            "typed-column serialized section bytes",
+            "Comparable to ClickHouse declared q1-q5 subpath value/offset streams.",
+            "Compress and pack declared scalar streams until q1-q5 columns approach ClickHouse declared-subpath density.",
+            raw_bytes=int_or_zero(declared["raw_bytes"]),
+            stored_bytes=int_or_zero(declared["stored_bytes"]),
+            sections=int_or_zero(declared["sections"]),
+            categories=declared["categories"],
+        ),
+        class_row(
+            "typed_string_dictionaries",
+            "#2663",
+            int_or_zero(dictionaries["bytes"]),
+            "typed-column serialized section bytes",
+            "ClickHouse only pays small LowCardinality dictionaries/codes for the low-cardinality declared paths.",
+            "Eliminate oversized per-part dictionaries or replace them with compact/global dictionaries where they are still needed.",
+            raw_bytes=int_or_zero(dictionaries["raw_bytes"]),
+            stored_bytes=int_or_zero(dictionaries["stored_bytes"]),
+            sections=int_or_zero(dictionaries["sections"]),
+            categories=dictionaries["categories"],
+        ),
+        class_row(
+            "pruning_mark_and_stats_metadata",
+            "#2663",
+            int_or_zero(pruning_marks["bytes"]),
+            "typed-column serialized section bytes",
+            "ClickHouse reference pays about 24.6 KB total for marks plus sparse primary key.",
+            "Quantize, coarsen, or lazily materialize pruning/mark metadata so it is not multi-MB at 1M rows.",
+            raw_bytes=int_or_zero(pruning_marks["raw_bytes"]),
+            stored_bytes=int_or_zero(pruning_marks["stored_bytes"]),
+            sections=int_or_zero(pruning_marks["sections"]),
+            categories=pruning_marks["categories"],
+        ),
+        class_row(
+            "column_format_descriptor_metadata",
+            "#2663",
+            int_or_zero(descriptors["bytes"]),
+            "typed-column serialized section bytes",
+            "ClickHouse part metadata exists but is tiny relative to data streams.",
+            "Fold repeated per-part descriptors/contracts or move invariant layout data out of every part.",
+            raw_bytes=int_or_zero(descriptors["raw_bytes"]),
+            stored_bytes=int_or_zero(descriptors["stored_bytes"]),
+            sections=int_or_zero(descriptors["sections"]),
+            categories=descriptors["categories"],
+        ),
+        class_row(
+            "column_row_compat_assets",
+            "#2663",
+            row_asset_bytes,
+            "active manifest referenced asset bytes outside typed-column parts",
+            "ClickHouse JSON parts do not carry a second row-compat column-asset copy for this benchmark.",
+            "Remove or compact row compatibility assets once retained payload and typed columns prove reconstruction coverage.",
+            referenced_asset_bytes=referenced_asset_bytes,
+            typed_column_part_bytes=typed_column_part_bytes,
+        ),
+        class_row(
+            "column_locators",
+            "#2663",
+            int_or_zero(locators["bytes"]),
+            "typed-column serialized section bytes",
+            "Closest ClickHouse analogue is marks/offset addressing, already very small in the reference.",
+            "Keep the current compact locator representation and watch for regressions.",
+            raw_bytes=int_or_zero(locators["raw_bytes"]),
+            stored_bytes=int_or_zero(locators["stored_bytes"]),
+            sections=int_or_zero(locators["sections"]),
+            categories=locators["categories"],
+        ),
+        class_row(
+            "primary_btree_index_file",
+            "#2359",
+            index_db_bytes,
+            "index.db filesystem bytes",
+            "ClickHouse primary.cidx is only 2,994 bytes for the audited 1M part.",
+            "Report separately from #2662/#2663 so B-tree overhead is visible in the final parity claim.",
+        ),
+        class_row(
+            "maindb_root_misc_control",
+            "#2359",
+            root_misc_bytes,
+            "maindb root bytes not attributed to known subtrees",
+            "ClickHouse count/serialization metadata is tiny but explicitly counted.",
+            "Keep as reconciliation overhead; investigate only if it grows beyond metadata noise.",
+        ),
+    ]
+
+    issue_targets = {
+        "#2662": {
+            **STORAGE_PARITY_TARGETS["#2662"],
+            "current_bytes": value_vlog_bytes,
+            "reduction_needed_bytes": max(value_vlog_bytes - STORAGE_PARITY_TARGETS["#2662"]["target_bytes"], 0),
+        },
+        "#2663": {
+            **STORAGE_PARITY_TARGETS["#2663"],
+            "current_bytes": column_asset_bytes,
+            "reduction_needed_bytes": max(column_asset_bytes - STORAGE_PARITY_TARGETS["#2663"]["target_bytes"], 0),
+        },
+    }
+
+    return {
+        "schema": "treedb_jsonbench_storage_parity_class_map_v1",
+        "basis": "TreeDB durable bytes excluding command WAL; class bytes are filesystem bytes unless marked as typed-column serialized section bytes.",
+        "clickhouse_reference": CLICKHOUSE_JSONBENCH_REFERENCE,
+        "totals": {
+            "maindb_bytes": main_bytes,
+            "durable_bytes_wal_excluded": durable_wal_excluded,
+            "wal_bytes": wal_bytes,
+            "value_vlog_bytes": value_vlog_bytes,
+            "leaf_vlog_bytes": leaf_vlog_bytes,
+            "column_asset_bytes": column_asset_bytes,
+            "index_db_bytes": index_db_bytes,
+            "maindb_root_misc_bytes": root_misc_bytes,
+            "column_active_referenced_asset_bytes": referenced_asset_bytes,
+            "column_typed_column_part_bytes": typed_column_part_bytes,
+            "column_row_compat_asset_bytes": row_asset_bytes,
+        },
+        "issue_targets": issue_targets,
+        "classes": classes,
     }
 
 
@@ -850,6 +1132,10 @@ def write_md(path: Path, report: dict[str, Any]) -> None:
     column = report["column_section_audit"]
     retained = report["retained_payload_audit"]
     retained_status = report["retained_payload_status_audit"]
+    parity_classes = report.get("storage_parity_class_map") or {}
+    parity_totals = parity_classes.get("totals") or {}
+    parity_targets = parity_classes.get("issue_targets") or {}
+    clickhouse_ref = parity_classes.get("clickhouse_reference") or {}
     lines = [
         "# TreeDB JSONBench Storage Compression Audit",
         "",
@@ -881,6 +1167,43 @@ def write_md(path: Path, report: dict[str, Any]) -> None:
         lines.append(
             f"| `{name}` | {row['records']} | {row['raw_payload_bytes']} | {row['stored_payload_bytes']} | {row['raw_mode_payload_bytes']} | {ratio_text(row['raw_mode_payload_fraction'])} | {ratio_text(row['stored_to_raw_ratio'])} |"
         )
+
+    if parity_classes:
+        lines.extend(
+            [
+                "",
+                "## storage parity class map",
+                "",
+                f"- basis: {parity_classes.get('basis', 'n/a')}",
+                f"- durable bytes excluding WAL: `{parity_totals.get('durable_bytes_wal_excluded', 'n/a')}`",
+                f"- ClickHouse reference bytes on disk: `{clickhouse_ref.get('bytes_on_disk', 'n/a')}`",
+                f"- ClickHouse reference note: {clickhouse_ref.get('note', 'n/a')}",
+                "",
+                "### parity issue targets",
+                "",
+                "| issue | target | current bytes | target bytes | reduction needed |",
+                "|---|---|---:|---:|---:|",
+            ]
+        )
+        for issue, target in sorted(parity_targets.items()):
+            lines.append(
+                f"| `{issue}` | {target.get('name', '')} | {target.get('current_bytes', 0)} | {target.get('target_bytes', 0)} | {target.get('reduction_needed_bytes', 0)} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### ClickHouse-comparable classes",
+                "",
+                "| class | owner | bytes | basis | ClickHouse hint | next action |",
+                "|---|---|---:|---|---|---|",
+            ]
+        )
+        for row in parity_classes.get("classes") or []:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"| `{row.get('class', '')}` | `{row.get('owner_issue', '')}` | {row.get('bytes', 0)} | {row.get('byte_basis', '')} | {row.get('clickhouse_hint', '')} | {row.get('parity_action', '')} |"
+            )
 
     for name in ("leaf_vlog", "value_vlog"):
         row = frame[name]
@@ -961,16 +1284,21 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     retained_audit = run_retained_payload_audit(args, result_data, retained_status, main_dir)
     retained_status = enrich_retained_status_from_audit(retained_status, retained_audit)
     retained_audit["report_status"] = retained_status
+    gzip_report = gzip_oracle(main_dir, args.gzip_level)
+    frame_report = vlog_frame_audit(main_dir)
+    column_audit = column_section_audit(args, result_data, main_dir, args.gzip_level)
+    parity_class_map = storage_parity_class_map(gzip_report, frame_report, column_audit, retained_audit)
     return {
         "schema": "treedb_jsonbench_storage_audit_v1",
         "db_dir": str(Path(args.db_dir).expanduser().resolve()),
         "main_dir": str(main_dir),
         "generated_at_unix": int(time.time()),
-        "gzip_oracle": gzip_oracle(main_dir, args.gzip_level),
-        "vlog_frame_audit": vlog_frame_audit(main_dir),
-        "column_section_audit": column_section_audit(args, result_data, main_dir, args.gzip_level),
+        "gzip_oracle": gzip_report,
+        "vlog_frame_audit": frame_report,
+        "column_section_audit": column_audit,
         "retained_payload_status_audit": retained_status,
         "retained_payload_audit": retained_audit,
+        "storage_parity_class_map": parity_class_map,
         "result_compression_summary": load_result_compression_summary(result_json, result_data),
     }
 
@@ -1004,6 +1332,7 @@ def main() -> int:
     write_json(out_dir / "column_section_audit.json", report["column_section_audit"])
     write_json(out_dir / "retained_payload_status_audit.json", report["retained_payload_status_audit"])
     write_json(out_dir / "retained_payload_audit.json", report["retained_payload_audit"])
+    write_json(out_dir / "storage_parity_class_map.json", report["storage_parity_class_map"])
     print(out_dir / "compression_audit.json")
     return 0
 

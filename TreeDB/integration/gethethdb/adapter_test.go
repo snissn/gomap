@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/dbtest"
 	treedb "github.com/snissn/gomap/TreeDB"
+	treebatch "github.com/snissn/gomap/TreeDB/batch"
 )
 
 func openTestDB(t testing.TB) *Database {
@@ -47,6 +48,7 @@ func TestOpenDefaultsToCommandWALDurable(t *testing.T) {
 }
 
 func TestResolveTreeDBOptionsReadIntegrityEnv(t *testing.T) {
+	clearReadIntegrityEnv(t)
 	dir := filepath.Join(t.TempDir(), "treedb")
 	opts, err := resolveTreeDBOptions(dir, nil)
 	if err != nil {
@@ -77,6 +79,7 @@ func TestResolveTreeDBOptionsReadIntegrityEnv(t *testing.T) {
 }
 
 func TestResolveTreeDBOptionsReadIntegrityFallbackEnv(t *testing.T) {
+	clearReadIntegrityEnv(t)
 	t.Setenv(EnvReadIntegrityFallback, "unsafe-skip-checksums")
 	opts, err := resolveTreeDBOptions(filepath.Join(t.TempDir(), "treedb"), nil)
 	if err != nil {
@@ -97,11 +100,18 @@ func TestResolveTreeDBOptionsReadIntegrityFallbackEnv(t *testing.T) {
 }
 
 func TestResolveTreeDBOptionsReadIntegrityEnvRejectsInvalid(t *testing.T) {
+	clearReadIntegrityEnv(t)
 	t.Setenv(EnvReadIntegrity, "fast-but-maybe-safe")
 	_, err := resolveTreeDBOptions(filepath.Join(t.TempDir(), "treedb"), nil)
 	if err == nil || !strings.Contains(err.Error(), EnvReadIntegrity) {
 		t.Fatalf("resolve invalid read integrity err=%v, want %s error", err, EnvReadIntegrity)
 	}
+}
+
+func clearReadIntegrityEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(EnvReadIntegrity, "")
+	t.Setenv(EnvReadIntegrityFallback, "")
 }
 
 func TestOpenDefaultsUseGethSizedCommandWALSegments(t *testing.T) {
@@ -401,6 +411,223 @@ func TestBatchWriteWithoutResetPreservesContents(t *testing.T) {
 	assertMissing(t, db, []byte("b"))
 }
 
+func TestBatchWriteThenImmediateResetSkipsLazyRebuild(t *testing.T) {
+	inner := &countingTreeBatch{}
+	batch := &Batch{db: &Database{}, inner: inner}
+	if err := batch.Put([]byte("a"), []byte("1")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got := inner.applyCalls(); got != 1 {
+		t.Fatalf("inner apply calls before Write=%d want 1", got)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !batch.needsRebuild {
+		t.Fatal("batch should mark inner rebuild as lazy after Write")
+	}
+	batch.Reset()
+	if batch.needsRebuild {
+		t.Fatal("Reset should discard lazy rebuild requirement")
+	}
+	if got := batch.ValueSize(); got != 0 {
+		t.Fatalf("ValueSize after Reset=%d want 0", got)
+	}
+	if got := len(batch.ops); got != 0 {
+		t.Fatalf("ops after Reset len=%d want 0", got)
+	}
+	if got := inner.applyCalls(); got != 1 {
+		t.Fatalf("inner apply calls after Write+Reset=%d want 1 (no rebuild)", got)
+	}
+	if inner.writeCalls != 1 {
+		t.Fatalf("inner Write calls=%d want 1", inner.writeCalls)
+	}
+	if inner.resetCalls != 1 {
+		t.Fatalf("inner Reset calls=%d want 1", inner.resetCalls)
+	}
+}
+
+func TestBatchWriteThenReplayPreservesOperations(t *testing.T) {
+	db := openTestDB(t)
+	batch := db.NewBatch()
+	if err := batch.Put([]byte("b"), []byte("1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Delete([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.DeleteRange([]byte("m"), []byte("z")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	var rec replayRecorder
+	if err := batch.Replay(&rec); err != nil {
+		t.Fatalf("Replay after Write: %v", err)
+	}
+	want := []string{"put:b=1", "delete:a", "delete-range:m..z"}
+	if !slices.Equal(rec.ops, want) {
+		t.Fatalf("replay after Write ops=%v want %v", rec.ops, want)
+	}
+}
+
+func TestBatchClonesCallerBuffersForWriteReplayAndReuse(t *testing.T) {
+	db := openTestDB(t)
+	batch := db.NewBatch()
+	key := []byte("key-a")
+	value := []byte("value-a")
+	if err := batch.Put(key, value); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	copy(key, "key-b")
+	copy(value, "value-b")
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	assertValue(t, db, []byte("key-a"), []byte("value-a"))
+	assertMissing(t, db, []byte("key-b"))
+
+	var rec replayRecorder
+	if err := batch.Replay(&rec); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if want := []string{"put:key-a=value-a"}; !slices.Equal(rec.ops, want) {
+		t.Fatalf("replay ops=%v want %v", rec.ops, want)
+	}
+
+	if err := db.Delete([]byte("key-a")); err != nil {
+		t.Fatalf("external Delete: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("repeated Write: %v", err)
+	}
+	assertValue(t, db, []byte("key-a"), []byte("value-a"))
+}
+
+func TestBatchDeleteAndDeleteRangeCloneCallerBuffersForReplayAndReuse(t *testing.T) {
+	db := openTestDB(t)
+	for _, key := range []string{"aa", "bb", "bc", "za", "zb"} {
+		if err := db.Put([]byte(key), []byte("v-"+key)); err != nil {
+			t.Fatalf("Put %s: %v", key, err)
+		}
+	}
+	batch := db.NewBatch()
+	deleteKey := []byte("aa")
+	rangeStart := []byte("bb")
+	rangeEnd := []byte("bd")
+	if err := batch.Delete(deleteKey); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := batch.DeleteRange(rangeStart, rangeEnd); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	copy(deleteKey, "za")
+	copy(rangeStart, "za")
+	copy(rangeEnd, "zz")
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	for _, key := range [][]byte{[]byte("aa"), []byte("bb"), []byte("bc")} {
+		assertMissing(t, db, key)
+	}
+	for _, key := range [][]byte{[]byte("za"), []byte("zb")} {
+		assertValue(t, db, key, append([]byte("v-"), key...))
+	}
+
+	var rec replayRecorder
+	if err := batch.Replay(&rec); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	want := []string{"delete:aa", "delete-range:bb..bd"}
+	if !slices.Equal(rec.ops, want) {
+		t.Fatalf("replay ops=%v want %v", rec.ops, want)
+	}
+
+	for _, key := range []string{"aa", "bb", "bc"} {
+		if err := db.Put([]byte(key), []byte("again-"+key)); err != nil {
+			t.Fatalf("restore %s: %v", key, err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("repeated Write: %v", err)
+	}
+	for _, key := range [][]byte{[]byte("aa"), []byte("bb"), []byte("bc")} {
+		assertMissing(t, db, key)
+	}
+	for _, key := range [][]byte{[]byte("za"), []byte("zb")} {
+		assertValue(t, db, key, append([]byte("v-"), key...))
+	}
+}
+
+func TestBatchCloseKeepsClosedMutationCompatibility(t *testing.T) {
+	db := openTestDB(t)
+	batch := db.NewBatch()
+	if err := batch.Put([]byte("before-close"), []byte("v")); err != nil {
+		t.Fatalf("Put before close: %v", err)
+	}
+	closer, ok := batch.(interface{ Close() })
+	if !ok {
+		t.Fatal("batch does not expose Close")
+	}
+	closer.Close()
+	if err := batch.Put([]byte("after-close"), []byte("v")); err != nil {
+		t.Fatalf("Put after batch Close err=%v, want nil", err)
+	}
+	if err := batch.DeleteRange([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("DeleteRange after batch Close err=%v, want nil", err)
+	}
+	if got := batch.ValueSize(); got == 0 {
+		t.Fatal("closed batch ValueSize=0 after queued ops")
+	}
+	if err := batch.Write(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed batch Write err=%v want ErrClosed", err)
+	}
+	batch.Reset()
+	if got := batch.ValueSize(); got != 0 {
+		t.Fatalf("closed batch ValueSize after Reset=%d want 0", got)
+	}
+	var rec replayRecorder
+	if err := batch.Replay(&rec); err != nil {
+		t.Fatalf("Replay after Reset: %v", err)
+	}
+	if len(rec.ops) != 0 {
+		t.Fatalf("Replay after Reset ops=%v want none", rec.ops)
+	}
+}
+
+func TestAdapterBatchOpReserveHint(t *testing.T) {
+	for _, tc := range []struct {
+		size int
+		want int
+	}{
+		{size: -1, want: 0},
+		{size: 0, want: 0},
+		{size: 16, want: 16},
+		{size: 8 * 1024, want: 8 * 1024},
+		{size: 102400, want: 400},
+	} {
+		if got := adapterBatchOpReserveHint(tc.size); got != tc.want {
+			t.Fatalf("adapterBatchOpReserveHint(%d)=%d want %d", tc.size, got, tc.want)
+		}
+	}
+}
+
+func TestNewBatchWithSizePreallocatesAdapterOpLogConservatively(t *testing.T) {
+	db := openTestDB(t)
+	small, ok := db.NewBatchWithSize(16).(*Batch)
+	if !ok {
+		t.Fatalf("NewBatchWithSize type=%T want *Batch", db.NewBatchWithSize(16))
+	}
+	if got := cap(small.ops); got < 16 {
+		t.Fatalf("small op log cap=%d want at least 16", got)
+	}
+	large := db.NewBatchWithSize(102400).(*Batch)
+	if got, want := cap(large.ops), adapterBatchOpReserveHint(102400); got != want {
+		t.Fatalf("large byte-hint op log cap=%d want %d", got, want)
+	}
+}
+
 func TestIteratorPrefixStart(t *testing.T) {
 	db := openTestDB(t)
 	for _, key := range []string{"ka1", "ka2", "ka3", "ka4", "ka5", "kb1"} {
@@ -540,6 +767,74 @@ func TestDBLevelDeleteRangeCallsPublicTreeDBDeleteRangeDirectly(t *testing.T) {
 	if strings.Contains(method, "NewBatch") {
 		t.Fatalf("Database.DeleteRange contains adapter-side batch path; body:\n%s", method)
 	}
+}
+
+type countingTreeBatch struct {
+	setCalls         int
+	setViewCalls     int
+	deleteCalls      int
+	deleteViewCalls  int
+	deleteRangeCalls int
+	writeCalls       int
+	writeSyncCalls   int
+	resetCalls       int
+	closeCalls       int
+}
+
+func (b *countingTreeBatch) applyCalls() int {
+	return b.setCalls + b.setViewCalls + b.deleteCalls + b.deleteViewCalls + b.deleteRangeCalls
+}
+
+func (b *countingTreeBatch) Set(_, _ []byte) error {
+	b.setCalls++
+	return nil
+}
+
+func (b *countingTreeBatch) SetView(_, _ []byte) error {
+	b.setViewCalls++
+	return nil
+}
+
+func (b *countingTreeBatch) Delete(_ []byte) error {
+	b.deleteCalls++
+	return nil
+}
+
+func (b *countingTreeBatch) DeleteView(_ []byte) error {
+	b.deleteViewCalls++
+	return nil
+}
+
+func (b *countingTreeBatch) DeleteRange(_, _ []byte) error {
+	b.deleteRangeCalls++
+	return nil
+}
+
+func (b *countingTreeBatch) Write() error {
+	b.writeCalls++
+	return nil
+}
+
+func (b *countingTreeBatch) WriteSync() error {
+	b.writeSyncCalls++
+	return nil
+}
+
+func (b *countingTreeBatch) Close() error {
+	b.closeCalls++
+	return nil
+}
+
+func (b *countingTreeBatch) Reset() {
+	b.resetCalls++
+}
+
+func (b *countingTreeBatch) Replay(func(treebatch.Entry) error) error {
+	return nil
+}
+
+func (b *countingTreeBatch) GetByteSize() (int, error) {
+	return 0, nil
 }
 
 type replayRecorder struct {

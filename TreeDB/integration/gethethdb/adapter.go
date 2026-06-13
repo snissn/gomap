@@ -372,7 +372,11 @@ func (d *Database) newBatch(size int) ethdb.Batch {
 	if inner == nil {
 		return newClosedBatch(ErrClosed)
 	}
-	return &Batch{db: d, inner: inner}
+	var ops []batchOp
+	if reserve := adapterBatchOpReserveHint(size); reserve > 0 {
+		ops = make([]batchOp, 0, reserve)
+	}
+	return &Batch{db: d, inner: inner, ops: ops}
 }
 
 // NewIterator creates a binary-alphabetical iterator over keys with prefix,
@@ -442,11 +446,12 @@ func prefixUpperBound(prefix []byte) []byte {
 
 // Batch implements ethdb.Batch.
 type Batch struct {
-	db     *Database
-	inner  treedb.Batch
-	size   int
-	closed error
-	ops    []batchOp
+	db           *Database
+	inner        treedb.Batch
+	size         int
+	closed       error
+	ops          []batchOp
+	needsRebuild bool
 }
 
 var _ ethdb.Batch = (*Batch)(nil)
@@ -465,8 +470,62 @@ type batchOp struct {
 	value []byte
 }
 
+// Keep adapter op-log reserves bounded because geth-style NewBatchWithSize
+// callers often pass byte budgets, not exact operation counts.
+const (
+	adapterBatchOpHintExactEntryReserveMax = 8 * 1024
+	adapterBatchOpHintApproxBytesPerEntry  = 256
+	adapterBatchOpHintNormalizedEntryCap   = adapterBatchOpHintExactEntryReserveMax
+)
+
+func adapterBatchOpReserveHint(size int) int {
+	if size <= 0 {
+		return 0
+	}
+	if size <= adapterBatchOpHintExactEntryReserveMax {
+		return size
+	}
+	entries := size / adapterBatchOpHintApproxBytesPerEntry
+	if size%adapterBatchOpHintApproxBytesPerEntry != 0 {
+		entries++
+	}
+	if entries < 1 {
+		return 1
+	}
+	if entries > adapterBatchOpHintNormalizedEntryCap {
+		return adapterBatchOpHintNormalizedEntryCap
+	}
+	return entries
+}
+
+type batchSetViewer interface {
+	SetView(key, value []byte) error
+}
+
+type batchDeleteViewer interface {
+	DeleteView(key []byte) error
+}
+
 func (b *Batch) recordOp(op batchOp) {
 	b.ops = append(b.ops, op)
+}
+
+func (b *Batch) clearOps() {
+	if len(b.ops) == 0 {
+		return
+	}
+	clear(b.ops)
+	b.ops = b.ops[:0]
+}
+
+func (b *Batch) ensureInnerReady() error {
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	if !b.needsRebuild {
+		return nil
+	}
+	return b.rebuildInnerFromOps()
 }
 
 func (b *Batch) applyOpToInner(op batchOp) error {
@@ -475,8 +534,14 @@ func (b *Batch) applyOpToInner(op batchOp) error {
 	}
 	switch op.kind {
 	case batchOpPut:
+		if setter, ok := b.inner.(batchSetViewer); ok {
+			return setter.SetView(op.key, op.value)
+		}
 		return b.inner.Set(op.key, op.value)
 	case batchOpDelete:
+		if deleter, ok := b.inner.(batchDeleteViewer); ok {
+			return deleter.DeleteView(op.key)
+		}
 		return b.inner.Delete(op.key)
 	case batchOpDeleteRange:
 		return b.inner.DeleteRange(op.key, op.value)
@@ -502,10 +567,14 @@ func (b *Batch) Put(key []byte, value []byte) error {
 		b.size += len(key) + len(value)
 		return nil
 	}
-	if err := b.inner.Set(key, value); err != nil {
+	if err := b.ensureInnerReady(); err != nil {
 		return err
 	}
-	b.recordOp(batchOp{kind: batchOpPut, key: cloneBytes(key), value: cloneBytes(value)})
+	op := batchOp{kind: batchOpPut, key: cloneBytes(key), value: cloneBytes(value)}
+	if err := b.applyOpToInner(op); err != nil {
+		return err
+	}
+	b.recordOp(op)
 	b.size += len(key) + len(value)
 	return nil
 }
@@ -520,10 +589,14 @@ func (b *Batch) Delete(key []byte) error {
 		b.size += len(key)
 		return nil
 	}
-	if err := b.inner.Delete(key); err != nil {
+	if err := b.ensureInnerReady(); err != nil {
 		return err
 	}
-	b.recordOp(batchOp{kind: batchOpDelete, key: cloneBytes(key)})
+	op := batchOp{kind: batchOpDelete, key: cloneBytes(key)}
+	if err := b.applyOpToInner(op); err != nil {
+		return err
+	}
+	b.recordOp(op)
 	b.size += len(key)
 	return nil
 }
@@ -538,10 +611,14 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 		b.size += len(start) + len(end)
 		return nil
 	}
-	if err := b.inner.DeleteRange(start, end); err != nil {
+	if err := b.ensureInnerReady(); err != nil {
 		return err
 	}
-	b.recordOp(batchOp{kind: batchOpDeleteRange, key: cloneBytes(start), value: cloneBytes(end)})
+	op := batchOp{kind: batchOpDeleteRange, key: cloneBytes(start), value: cloneBytes(end)}
+	if err := b.applyOpToInner(op); err != nil {
+		return err
+	}
+	b.recordOp(op)
 	b.size += len(start) + len(end)
 	return nil
 }
@@ -566,10 +643,19 @@ func (b *Batch) Write() error {
 	if b.db == nil || b.db.closed.Load() {
 		return ErrClosed
 	}
+	if err := b.ensureInnerReady(); err != nil {
+		return err
+	}
 	if err := b.inner.Write(); err != nil {
 		return err
 	}
-	return b.rebuildInnerFromOps()
+	// TreeDB command-WAL batches reset their inner state after Write. Keep the
+	// adapter's ethdb-visible operation log, but rebuild the inner batch only if
+	// a later Write or mutation actually reuses it. The common Write+Reset path
+	// can then discard the op log without paying for a rebuild that Reset would
+	// immediately throw away.
+	b.needsRebuild = len(b.ops) > 0
+	return nil
 }
 
 func (b *Batch) rebuildInnerFromOps() error {
@@ -599,6 +685,7 @@ func (b *Batch) rebuildInnerFromOps() error {
 			return err
 		}
 	}
+	b.needsRebuild = false
 	return nil
 }
 
@@ -608,24 +695,24 @@ func (b *Batch) Reset() {
 		return
 	}
 	b.size = 0
-	b.ops = b.ops[:0]
-	if b.inner == nil {
-		return
+	b.needsRebuild = false
+	if b.inner != nil {
+		if resetter, ok := b.inner.(interface{ Reset() }); ok {
+			resetter.Reset()
+		} else {
+			_ = b.inner.Close()
+			b.inner = nil
+			if b.db == nil || b.db.closed.Load() || b.db.db == nil {
+				b.closed = ErrClosed
+			} else {
+				b.inner = b.db.db.NewBatch()
+				if b.inner == nil {
+					b.closed = ErrClosed
+				}
+			}
+		}
 	}
-	if resetter, ok := b.inner.(interface{ Reset() }); ok {
-		resetter.Reset()
-		return
-	}
-	_ = b.inner.Close()
-	b.inner = nil
-	if b.db == nil || b.db.closed.Load() || b.db.db == nil {
-		b.closed = ErrClosed
-		return
-	}
-	b.inner = b.db.db.NewBatch()
-	if b.inner == nil {
-		b.closed = ErrClosed
-	}
+	b.clearOps()
 }
 
 // Replay replays the batch contents in submitted order. TreeDB's internal
@@ -674,6 +761,7 @@ func (b *Batch) Close() {
 	}
 	_ = b.inner.Close()
 	b.inner = nil
+	b.needsRebuild = false
 	b.closed = ErrClosed
 }
 
