@@ -19,17 +19,16 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
     uses `CollectionOptions.IndexStateStoragePolicy`.
 - `simple` analyzer: Unicode lowercase tokenization over letters, digits, and
   `_` so code-ish identifiers such as `HTTP_500` remain searchable.
-- `CreateTextIndex` backfills persistent v1 postings/text-state/text-stats roots
-  or explicit v2 doc ordinal/docmap/term-stat/norm/status roots over existing
-  documents and publishes roots plus metadata atomically.
+- `CreateTextIndex` backfills persistent v2 doc ordinal/docmap/term-stat/norm/status roots by default, or v1 postings/text-state/text-stats roots when callers explicitly set `TextIndexVersionV1`; roots plus metadata are published atomically.
+- `CreateCollection` with text indexes now bootstraps empty default-v2 root descriptors, format records, and status records in the same catalog publish. Explicit v1 collection text indexes remain metadata-compatible and create/maintain v1 roots on writes.
 - `DropTextIndex` removes metadata and clears all v1 and v2 text root
   descriptors for that index, including v1 postings/text-state/text-stats roots
-  and explicit v2 doc ordinal/docmap/term-stat/norm/status roots.
+  and v2 doc ordinal/docmap/term-stat/norm/status roots.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
-- Insert, delete, update, and batch write paths maintain v1 postings/text-state
-  and stats for v1 text indexes. For explicit v2 indexes, current milestones
-  maintain ordinals/generations, tombstones, docmap/norm blocks, stats metadata,
-  compressed scoring posting blocks, and optional lazy position/detail payloads.
+- Insert, delete, update, and batch write paths maintain ordinals/generations,
+  tombstones, docmap/norm blocks, stats metadata, compressed scoring posting
+  blocks, and optional lazy position/detail payloads for default-v2 text indexes.
+  Explicit v1 indexes continue to maintain v1 postings/text-state and stats.
 - `SearchText(TextSearchOptions)` executes bounded postings range scans, applies
   simple term `AND`/`OR` semantics, scores candidates with BM25F-style field
   weighting from persisted stats/text-state or v2 norm blocks, and fetches
@@ -71,13 +70,7 @@ Validation rules:
   non-negative.
 - Analyzer `""` normalizes to `"simple"`; other analyzers fail closed until
   implemented.
-- Version `""` normalizes to `"v1"`; `"v2"` explicitly selects the #2624
-  B-tree-native root format. V2 root state is created with `CreateTextIndex`;
-  declaring v2 text indexes directly in `CreateCollection` is rejected to avoid
-  metadata without root descriptors/status records. V2 root state can be
-  maintained, but `TextIndexStatus` remains non-readable/non-writable for the
-  full v2 path and v2 search remains fail-closed until the later executor/write
-  pipeline milestones.
+- Version `""` normalizes to `"v2"` for new declarations. `"v2"` is the default B-tree-native root format and is readable/writable for BM25F serving, scalar-pruned hybrid candidates, lazy match details, rewrite/merge, and normal TreeDB physical maintenance. `"v1"` remains an explicit compatibility/opt-out path for callers that need the legacy per-`(term, documentID)` roots or existing v1 on-disk indexes.
 - Rollout `""` normalizes to `"primary"`; `"shadow"`, `"dual_write"`, and
   `"disabled"` are reserved and currently fail closed until the matching v2
   rollout implementation lands.
@@ -169,18 +162,19 @@ Values use `u8 value_version=1` followed by:
 `CreateTextIndex` is a schema barrier: pending writes from all registered
 collection managers/write domains for the collection are drained before the
 backfill snapshot is taken, new document writes wait behind the barrier, the
-primary root is scanned, analyzed text is encoded into the three text roots,
-and root IDs plus metadata are published in one commit. It rejects command-WAL
-catalog mutation mode until text-index catalog commands are added.
+primary root is scanned, analyzed text is encoded into v2 roots by default (or
+three v1 roots when `TextIndexVersionV1` is explicit), and root IDs plus metadata
+are published in one commit. It rejects command-WAL catalog mutation mode until
+text-index catalog commands are added.
 
 Backfill extracts string fields and arrays of strings from JSON-materialized
 documents. Non-string text fields are skipped. Collections with retained column
 payloads that omit requested text fields are rejected for now rather than
 backfilling incomplete text.
 
-`DropTextIndex` removes the text index metadata and clears all three text root
-descriptors. It does not delete historical root pages immediately; normal TreeDB
-root reachability/GC handles unreachable pages.
+`DropTextIndex` removes the text index metadata and clears both the legacy v1
+and v2 text root descriptors for that index. It does not delete historical root
+pages immediately; normal TreeDB root reachability/GC handles unreachable pages.
 
 ## Query shape
 
@@ -202,13 +196,14 @@ The parser accepts whitespace-separated terms and optional explicit `AND` or
 `OR` separators. Mixed `AND`/`OR`, phrases, and grouped syntax fail closed. Query
 terms are analyzed with the declared index analyzer.
 
-`SearchText` normalizes duplicate analyzed terms, range-scans the postings root
-by encoded term prefix, builds a bounded unique-document candidate set, and
-scores candidates from postings + text-state + text-stats. It does not scan or
-rank all collection documents. If candidate or postings budgets are exceeded, it
-returns `ErrTextIndexUnavailable` with truncation/fail-closed counters rather
-than returning silently incomplete rankings. Empty analyzed queries return an
-empty result set.
+`SearchText` normalizes duplicate analyzed terms and serves the declared index
+version. Default/v2 indexes range-scan posting blocks, score from packed norms
+and term/field stats, and materialize document IDs from docmap blocks; explicit
+v1 indexes range-scan the legacy postings root and score from postings +
+text-state + text-stats. Neither path scans or ranks all collection documents.
+If candidate or postings budgets are exceeded, it returns `ErrTextIndexUnavailable`
+with truncation/fail-closed counters rather than returning silently incomplete
+rankings. Empty analyzed queries return an empty result set.
 
 Results expose response-owned document IDs, source index name, one-based lexical
 rank, higher-is-better BM25F score, score kind `bm25f`, optional matched
@@ -224,8 +219,8 @@ benchmark/status vocabulary is `postings_scanned`, `posting_blocks_visited`,
 `posting_blocks_skipped`, `candidates_scored`, `state_lookups`, `norm_lookups`,
 `docs_fetched`, `match_details_built`, `scalar_filter_selectivity`,
 `fail_closed`, `write_amplification`, `index_bytes_per_doc`, and
-`rewrite_merge_state`; v1 reports posting-block counters as zero and v2 PRs must
-populate them. Additional runtime diagnostics include `documents_missing`,
+`rewrite_merge_state`; explicit v1 reports posting-block counters as zero and
+v2/default rows populate them. Additional runtime diagnostics include `documents_missing`,
 `full_document_scan_fallbacks`, `truncated`, and `fail_closed_reason`. The Go
 stats struct also carries text-source fields for hybrid adapters, plus text-only
 aliases and scan/score/fetch timing fields.
@@ -235,13 +230,13 @@ TopK truncation.
 
 ## Mutation maintenance
 
-Text-indexed insert paths analyze the stored document, set one text-state entry,
-set one posting per `(term, documentID)`, and increment corpus/term/field stats.
-Delete paths load the text-state entry, delete the document's postings and
-state, and decrement stats. Update paths load old text-state, analyze the new
-stored document, replace postings/state, and apply a stats delta. Stats entries
-whose counts drop to zero are deleted; the corpus stats entry remains with the
-current document count.
+Default/v2 text-indexed insert paths analyze the stored document, assign or
+reuse ordinals/generations, update docID/docmap/norm blocks, write compressed
+posting blocks, optional position/detail payloads, and corpus/term/field stats.
+Deletes tombstone current docID/docmap/norm generations and update live stats;
+updates keep the ordinal, advance generation, write fresh current state, and
+leave stale posting blocks for rewrite/merge. Explicit v1 insert/delete/update
+paths keep the legacy text-state/postings/stats behavior.
 
 M3 keeps text-indexed writes on immediate root-publish paths rather than staging
 new text deltas in buffered write domains. Existing buffered writes are drained

@@ -8,10 +8,11 @@ import (
 )
 
 // CreateTextIndex adds a collection-native text index and backfills persistent
-// roots from the current documents. V1 indexes backfill postings, text-state,
-// and text-stats roots. Explicit v2 indexes backfill document ordinals, docmap,
-// term/stat shells, posting blocks, packed norms, optional positions, and
-// status/format roots for v2 BM25F serving.
+// roots from the current documents. Explicit v1 indexes backfill postings,
+// text-state, and text-stats roots. V2 indexes (the default for new text index
+// declarations) backfill document ordinals, docmap, term/stat shells, posting
+// blocks, packed norms, optional positions, and status/format roots for v2 BM25F
+// serving.
 func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, TextIndexBackfillStats, error) {
 	var emptyStats TextIndexBackfillStats
 	if c == nil {

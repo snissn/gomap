@@ -327,7 +327,8 @@ func openIndexInsertSearchInsertedFixture2564(tb testing.TB, docs, dims, m int) 
 func openIndexInsertSearchEmptyFixture2564(tb testing.TB, dir string, docs, dims, m int) indexInsertSearchFixture2564 {
 	tb.Helper()
 	textDef := TextIndexDefinition{
-		Name: hybridCloseoutTextIndexName2506,
+		Name:    hybridCloseoutTextIndexName2506,
+		Version: TextIndexVersionV1,
 		Fields: []TextIndexField{
 			{Field: "title", Weight: 3},
 			{Field: "body"},

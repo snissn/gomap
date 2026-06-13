@@ -128,8 +128,10 @@ Final `HybridSearchResult` values carry:
   true and only after top-k fusion.
 
 Candidate-generation paths MUST produce response-owned/caller-safe document IDs
-at the API boundary. They MUST NOT require fetching full documents to discover
-IDs during normal candidate generation.
+at the API boundary. Newly-created collection text indexes use the text-v2
+candidate path by default, while explicit v1 indexes remain supported for
+compatibility. Neither path may require fetching full documents to discover IDs
+during normal candidate generation.
 
 ## Score orientation and rank semantics
 

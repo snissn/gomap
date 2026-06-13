@@ -25,10 +25,7 @@ vector typed-column placement is covered by
 | Vector-only (`SearchVectorIndex` / `SearchHybrid` with only `Vector`) | Semantic nearest-neighbor recall is the main signal. | Keep vector route choices (`exact`, `quantized_only`, `quantized_rerank`) and their recall/storage caveats separate from hybrid claims. |
 | Hybrid (`SearchHybrid` with `Text` + `Vector`) | You need both lexical precision and semantic candidates, usually with a metadata/scalar filter and final materialized documents. | Default fusion is rank-based RRF, not learned relevance. Caller/future layers own reranking/cross-encoder/LLM scoring. |
 
-Hybrid candidate generation must not fetch full documents. Text candidates are
-score-only by default; set `HybridTextQuery.IncludeTextMatches=true` only when a
-bounded compact field/term summary is needed. Documents are fetched only after
-fusion/filtering and are bounded by final `TopK` when `IncludeDocuments` is true.
+Hybrid candidate generation must not fetch full documents. Newly-created text indexes use text-v2 by default; set `TextIndexDefinition.Version: TextIndexVersionV1` only for the legacy compatibility path. Text candidates are score-only by default; set `HybridTextQuery.IncludeTextMatches=true` only when a bounded compact field/term summary is needed. Documents are fetched only after fusion/filtering and are bounded by final `TopK` when `IncludeDocuments` is true.
 
 ## Index creation sketch
 
