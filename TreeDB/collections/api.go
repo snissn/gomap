@@ -2868,9 +2868,6 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectCreateCollectionTextV2Indexes(normalized); err != nil {
-		return nil, err
-	}
 	return m.createCollectionWithCommandWALIntent(normalized, nil)
 }
 
@@ -2905,7 +2902,31 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 	if err != nil {
 		return nil, err
 	}
-	buildSystemDelta := func([]uint64) (iterator.UnsafeIterator, error) {
+	plan, err := m.buildCreateCollectionInitialTextV2Plan(normalized)
+	if err != nil {
+		return nil, err
+	}
+	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
+	defer func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+		resetCollectionTables(plan.tables)
+	}()
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
+	for i, rootName := range plan.rootNames {
+		iter := plan.tables[i].NewIterator(nil, nil)
+		iterators = append(iterators, iter)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      plan.baseRootIDs[rootName],
+			Iter:          iter,
+			StoragePolicy: plan.policies[i],
+		})
+	}
+	buildSystemDelta := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != len(plan.rootNames) {
+			return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
+		}
 		current := m.db.AcquireSnapshot()
 		if current == nil {
 			return nil, backenddb.ErrClosed
@@ -2918,13 +2939,7 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
 			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 		}
-		iter, err := buildSystemDeltaIterator(map[string][]byte{
-			systemCollectionMetaKey(normalized.Name): encoded,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return iter, nil
+		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 	}
 	if m.db.CommandWALEnabled() || commandWALIntent != nil {
 		intent, err := m.newCatalogCreateCollectionCommandWALIntent(normalized, commandWALIntent)
@@ -2932,7 +2947,7 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			return nil, err
 		}
 		err = m.withCommandWALPublishCoordinator(func() error {
-			_, _, err = m.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(nil, intent, buildSystemDelta)
+			_, _, err = m.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, intent, buildSystemDelta)
 			return err
 		})
 		if err != nil {
@@ -2940,31 +2955,101 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		}
 		return normalized.copy(), nil
 	}
-	_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
-		current := m.db.AcquireSnapshot()
-		if current == nil {
-			return nil, backenddb.ErrClosed
-		}
-		defer func() { _ = current.Close() }()
-		existing, err := loadCollectionCatalog(current, normalized.Name)
-		if err != nil {
-			return nil, err
-		}
-		if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
-			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
-		}
-		iter, err := buildSystemTargetIterator(current, map[string][]byte{
-			systemCollectionMetaKey(normalized.Name): encoded,
+	if len(ordered) == 0 {
+		_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+			current := m.db.AcquireSnapshot()
+			if current == nil {
+				return nil, backenddb.ErrClosed
+			}
+			defer func() { _ = current.Close() }()
+			existing, err := loadCollectionCatalog(current, normalized.Name)
+			if err != nil {
+				return nil, err
+			}
+			if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
+				return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+			}
+			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, nil, nil))
 		})
-		if err != nil {
-			return nil, err
-		}
-		return iter, nil
-	})
+	} else {
+		_, _, err = m.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if len(rootIDs) != len(plan.rootNames) {
+				return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
+			}
+			current := m.db.AcquireSnapshot()
+			if current == nil {
+				return nil, backenddb.ErrClosed
+			}
+			defer func() { _ = current.Close() }()
+			existing, err := loadCollectionCatalog(current, normalized.Name)
+			if err != nil {
+				return nil, err
+			}
+			if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
+				return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+			}
+			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
 	return normalized.copy(), nil
+}
+
+func (m *CollectionManager) buildCreateCollectionInitialTextV2Plan(meta CollectionMeta) (*createTextIndexBackfillPlan, error) {
+	plan := &createTextIndexBackfillPlan{baseRootIDs: make(map[string]uint64)}
+	if len(meta.TextIndexes) == 0 {
+		return plan, nil
+	}
+	hasV2 := false
+	for _, idx := range meta.TextIndexes {
+		if idx.Version == TextIndexVersionV2 {
+			hasV2 = true
+			break
+		}
+	}
+	if !hasV2 {
+		return plan, nil
+	}
+	snap := m.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	opts, err := collectionPlannerOptionsForDB(m.db, meta)
+	if err != nil {
+		return nil, err
+	}
+	catalog := &collectionCatalog{meta: meta, roots: map[string]uint64{}}
+	for _, idx := range meta.TextIndexes {
+		if idx.Version != TextIndexVersionV2 {
+			continue
+		}
+		idxPlan, err := buildCreateTextV2IndexBackfillPlan(snap, catalog, idx, opts)
+		if err != nil {
+			resetCollectionTables(plan.tables)
+			return nil, err
+		}
+		for rootName, baseRootID := range idxPlan.baseRootIDs {
+			if _, ok := plan.baseRootIDs[rootName]; !ok {
+				plan.baseRootIDs[rootName] = baseRootID
+			}
+		}
+		plan.rootNames = append(plan.rootNames, idxPlan.rootNames...)
+		plan.tables = append(plan.tables, idxPlan.tables...)
+		plan.policies = append(plan.policies, idxPlan.policies...)
+	}
+	return plan, nil
+}
+
+func createCollectionSystemUpdates(collection string, encodedMeta []byte, rootNames []string, rootIDs []uint64) map[string][]byte {
+	updates := make(map[string][]byte, 1+len(rootNames))
+	updates[systemCollectionMetaKey(collection)] = encodedMeta
+	for i, rootName := range rootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+	}
+	return updates
 }
 
 func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
@@ -20549,13 +20634,22 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 	if disk.Version != collectionMetaVersion {
 		return CollectionMeta{}, fmt.Errorf("collections: unsupported collection metadata version %d", disk.Version)
 	}
-	return normalizeCollectionMeta(CollectionMeta{
+	meta := CollectionMeta{
 		Name:          disk.Name,
 		Options:       disk.Options,
 		Indexes:       disk.Indexes,
 		VectorIndexes: disk.VectorIndexes,
 		TextIndexes:   disk.TextIndexes,
-	})
+	}
+	// Metadata written before the text-index version field may omit `version`
+	// while still owning v1 roots. Preserve those existing on-disk indexes as v1;
+	// only new API declarations use the current default (v2).
+	for i := range meta.TextIndexes {
+		if meta.TextIndexes[i].Version == TextIndexVersionDefault {
+			meta.TextIndexes[i].Version = TextIndexVersionV1
+		}
+	}
+	return normalizeCollectionMeta(meta)
 }
 
 func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {

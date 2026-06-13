@@ -492,7 +492,7 @@ func openHybridScalarSearchExecutorFixture2505(tb testing.TB, rows []hybridSearc
 		_ = d.Close()
 		tb.Fatalf("CreateIndex score: %v", err)
 	}
-	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}, StorePositions: true}); err != nil {
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}, StorePositions: true}); err != nil {
 		_ = d.Close()
 		tb.Fatalf("CreateTextIndex: %v", err)
 	}

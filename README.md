@@ -175,7 +175,8 @@ Source:
 
 The #2589 optimized context rows use the #2564 fixture on an active Apple M3 laptop:
 `256` JSON documents, scalar indexes on `tenant`/`region`, a `lexical`
-title/body text index, and an exact cosine column graph (`dims=16`, `M=8`). The
+title/body text index (new text indexes default to text-v2; v1 is explicit
+compatibility), and an exact cosine column graph (`dims=16`, `M=8`). The
 insert row times `InsertBatch` + `Flush` + `RebuildVectorIndex`; search rows
 build/index the fixture before timing and then time the search API call only.
 Original #2564 rows remain in the linked runbook for context; treat these as

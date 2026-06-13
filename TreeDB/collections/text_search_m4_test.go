@@ -279,7 +279,7 @@ func BenchmarkSearchTextM4(b *testing.B) {
 	if err != nil {
 		b.Fatalf("OpenCollection: %v", err)
 	}
-	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}, StorePositions: true}); err != nil {
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}, StorePositions: true}); err != nil {
 		b.Fatalf("CreateTextIndex: %v", err)
 	}
 	ids := make([][]byte, docCount)
@@ -362,7 +362,7 @@ func createTextSearchM4Collection(t *testing.T, d *backenddb.DB, fields []TextIn
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: fields, StorePositions: true}); err != nil {
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: fields, StorePositions: true}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
 	return col
