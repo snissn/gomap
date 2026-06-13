@@ -947,14 +947,14 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) observeBlockCodec(c
 	stat.Blocks++
 	stat.RawBytes += int64(len(raw))
 	encodedBytes, ok := c.encodeBlockCodec(codec, raw)
-	if !ok || encodedBytes <= 0 {
+	if !ok {
 		stat.EncodeErrors++
 		stat.StoredBytes += int64(len(raw))
 		stat.RawFallbackBlocks++
 		return
 	}
 	stat.EncodedBytes += int64(encodedBytes)
-	if encodedBytes < len(raw) {
+	if encodedBytes > 0 && encodedBytes < len(raw) {
 		stat.StoredBytes += int64(encodedBytes)
 		stat.KeptBlocks++
 	} else {
@@ -968,9 +968,9 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) encodeBlockCodec(co
 	case "snappy":
 		return len(snappy.Encode(nil, raw)), true
 	case "lz4":
-		dst := make([]byte, lz4.CompressBlockBound(len(raw)))
+		dst := make([]byte, len(raw))
 		n, err := lz4.CompressBlock(raw, dst, nil)
-		if err != nil || n <= 0 {
+		if err != nil {
 			return 0, false
 		}
 		return n, true

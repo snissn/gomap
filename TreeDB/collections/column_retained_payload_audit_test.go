@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pierrec/lz4/v4"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -517,6 +520,55 @@ func TestColumnRetainedSemanticStreamV1BlockLayoutAudit2662(t *testing.T) {
 	if !limited.PathsTruncated || len(limited.Paths) != 1 || limited.RawBlockBytes != audit.RawBlockBytes {
 		t.Fatalf("limited paths=%+v truncated=%v raw=%d want truncated one raw %d", limited.Paths, limited.PathsTruncated, limited.RawBlockBytes, audit.RawBlockBytes)
 	}
+}
+
+func TestColumnRetainedSemanticStreamV1BlockCodecLZ4RawFallback2662(t *testing.T) {
+	collector, err := newColumnRetainedSemanticStreamV1BlockLayoutCollector()
+	if err != nil {
+		t.Fatalf("new block layout collector: %v", err)
+	}
+	defer collector.close()
+
+	raw := incompressibleLZ4Fixture2662(t)
+	encodedBytes, ok := collector.encodeBlockCodec("lz4", raw)
+	if !ok || encodedBytes != 0 {
+		t.Fatalf("lz4 fixture encodedBytes=%d ok=%v want valid raw fallback", encodedBytes, ok)
+	}
+	collector.observeBlockCodec("lz4", raw)
+
+	stat := collector.codecs["lz4"]
+	if stat == nil {
+		t.Fatal("missing lz4 codec stat")
+	}
+	if stat.Blocks != 1 || stat.RawBytes != int64(len(raw)) || stat.EncodedBytes != 0 || stat.StoredBytes != int64(len(raw)) || stat.RawFallbackBlocks != 1 || stat.KeptBlocks != 0 || stat.EncodeErrors != 0 {
+		t.Fatalf("lz4 raw fallback stat=%+v raw=%d", stat, len(raw))
+	}
+}
+
+func incompressibleLZ4Fixture2662(t *testing.T) []byte {
+	t.Helper()
+	for seed := uint64(1); seed <= 64; seed++ {
+		raw := make([]byte, 64*1024)
+		var counter uint64
+		for off := 0; off < len(raw); {
+			var input [16]byte
+			binary.LittleEndian.PutUint64(input[:8], seed)
+			binary.LittleEndian.PutUint64(input[8:], counter)
+			sum := sha256.Sum256(input[:])
+			off += copy(raw[off:], sum[:])
+			counter++
+		}
+		dst := make([]byte, len(raw))
+		n, err := lz4.CompressBlock(raw, dst, nil)
+		if err != nil {
+			t.Fatalf("lz4 fixture probe seed=%d: %v", seed, err)
+		}
+		if n == 0 {
+			return raw
+		}
+	}
+	t.Fatal("could not build deterministic incompressible lz4 fixture")
+	return nil
 }
 
 func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayout2662(t *testing.T) {
