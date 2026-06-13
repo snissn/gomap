@@ -85,6 +85,43 @@ func TestTextV2HybridTextCandidatesNoDocCounters2627(t *testing.T) {
 	}
 }
 
+func TestTextV2DefaultSafe10KCandidateAndScalarBudgets2687(t *testing.T) {
+	fixture := openIndexInsertSearchInsertedTextV2Fixture2564(t, 10000, 16, 8)
+	defer func() { _ = fixture.db.Close() }()
+
+	text, err := fixture.col.SearchHybridTextCandidates(HybridTextQuery{IndexName: hybridCloseoutTextIndexName2506, Query: "refund policy", CandidateLimit: 64})
+	if err != nil {
+		t.Fatalf("SearchHybridTextCandidates 10k v2: %v", err)
+	}
+	if len(text.Candidates) != 64 {
+		t.Fatalf("text candidates=%d want 64", len(text.Candidates))
+	}
+	if text.Stats.FailClosed != 0 || text.Stats.DocumentsFetched != 0 || text.Stats.FullDocumentScanFallbacks != 0 || text.Stats.TextStateLookups != 0 || text.Stats.TextMatchDetailsBuilt != 0 {
+		t.Fatalf("text stats=%+v want default-safe score-only no-doc path", text.Stats)
+	}
+	if text.Stats.TextCandidatesScored == 0 || text.Stats.TextCandidatesScored > hybridTextCandidateDefaultScanCandidateLimit || text.Stats.TextPostingsScanned == 0 || text.Stats.TextPostingsScanned > 10000 || text.Stats.TextBlockMaxFallbacks > 1 {
+		t.Fatalf("text stats=%+v want bounded 10k multi-term work under safe budget", text.Stats)
+	}
+
+	hybrid, err := fixture.col.SearchHybrid(HybridSearchOptions{
+		TopK:         10,
+		Text:         &HybridTextQuery{IndexName: hybridCloseoutTextIndexName2506, Query: "refund policy", CandidateLimit: 64},
+		ScalarFilter: &HybridScalarFilter{IndexName: hybridCloseoutTenantIndexName2506, Value: "tenant-rare-06pct"},
+	})
+	if err != nil {
+		t.Fatalf("SearchHybrid 10k v2 scalar: %v", err)
+	}
+	if len(hybrid.Results) != 10 {
+		t.Fatalf("hybrid results=%d want 10", len(hybrid.Results))
+	}
+	if hybrid.Stats.FailClosed != 0 || hybrid.Stats.DocumentsFetched != 0 || hybrid.Stats.FullDocumentScanFallbacks != 0 || hybrid.Stats.TextStateLookups != 0 || hybrid.Stats.TextMatchDetailsBuilt != 0 {
+		t.Fatalf("hybrid stats=%+v want no-doc score-only fail-closed-free path", hybrid.Stats)
+	}
+	if hybrid.Stats.ScalarPrefilterIDs != 625 || hybrid.Stats.TextCandidatesReturned != 64 || hybrid.Stats.TextCandidatesScored == 0 || hybrid.Stats.TextCandidatesScored > hybrid.Stats.ScalarPrefilterIDs || hybrid.Stats.TextPostingsScanned == 0 || hybrid.Stats.TextPostingsScanned > 10000 || hybrid.Stats.TextBlockMaxFallbacks > 1 {
+		t.Fatalf("hybrid stats=%+v want scalar-pruned v2 scoring under safe budgets", hybrid.Stats)
+	}
+}
+
 func TestTextV2SearchIncludeDocumentsFetchesOnlyTopKAndDetailsLazy2627(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()

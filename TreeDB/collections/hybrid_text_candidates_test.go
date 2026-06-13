@@ -116,7 +116,7 @@ func TestSearchHybridTextCandidatesBudgetAndStorageFailClosed2503(t *testing.T) 
 		d := openTextTestDB(t)
 		defer func() { _ = d.Close() }()
 		col := createTextSearchM4Collection(t, d, []TextIndexField{{Field: "body"}})
-		ids := make([][]byte, textSearchDefaultMinCandidateLimit+1)
+		ids := make([][]byte, hybridTextCandidateDefaultScanCandidateLimit+1)
 		docs := make([][]byte, len(ids))
 		for i := range ids {
 			ids[i] = []byte(fmt.Sprintf("doc-%04d", i))

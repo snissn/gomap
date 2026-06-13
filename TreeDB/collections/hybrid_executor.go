@@ -8,7 +8,13 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-const hybridDefaultCandidateLimitMultiplier = 4
+const (
+	hybridDefaultCandidateLimitMultiplier = 4
+	// hybridScalarDefaultLookupLimit is the finite indexed allow-set guardrail
+	// for default scalar prefilters. Broader filters still fail closed as
+	// scalar_filter_unbounded instead of falling back to document scans.
+	hybridScalarDefaultLookupLimit = 4 * 1024
+)
 
 type hybridSearchExecutionPlan struct {
 	public HybridSearchPlan
@@ -229,7 +235,10 @@ func hybridScalarLookupLimit(plan hybridSearchExecutionPlan) int {
 		limit += plan.vector.CandidateLimit
 	}
 	if limit <= 0 {
-		return plan.topK
+		limit = plan.topK
+	}
+	if limit < hybridScalarDefaultLookupLimit {
+		limit = hybridScalarDefaultLookupLimit
 	}
 	return limit
 }

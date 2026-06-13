@@ -200,11 +200,25 @@ func TestSearchHybridScalarFilterRangeAndFailClosed2505(t *testing.T) {
 		Text:         &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 1},
 		ScalarFilter: &HybridScalarFilter{IndexName: "city", Value: "sea"},
 	})
-	if !errors.Is(err, ErrHybridSearchIndexUnavailable) {
-		t.Fatalf("broad scalar err=%v want ErrHybridSearchIndexUnavailable", err)
+	if err != nil {
+		t.Fatalf("SearchHybrid bounded broad scalar: %v", err)
 	}
-	if broad.Stats.FailClosed != 1 || broad.Stats.FailClosedReason != HybridFailClosedReasonScalarFilterUnbounded || broad.Stats.Truncated == 0 || broad.Stats.TextCandidatesReturned != 0 {
-		t.Fatalf("broad response=%+v want scalar unbounded before candidate generation", broad)
+	if len(broad.Results) != 1 || broad.Stats.FailClosed != 0 || broad.Stats.ScalarPrefilterIDs != 4 || broad.Stats.TextCandidatesReturned != 1 {
+		t.Fatalf("broad response=%+v want small bounded scalar allow-set to serve", broad)
+	}
+
+	forcedPlan := hybridSearchExecutionPlan{
+		topK:                 1,
+		scalarFilter:         &HybridScalarFilter{IndexName: "city", Value: "sea"},
+		scalarFilterStrategy: HybridScalarFilterStrategyPrefilter,
+		scalarLookupLimit:    1,
+	}
+	_, forcedStats, err := col.hybridScalarAllowSet(forcedPlan)
+	if !errors.Is(err, ErrHybridSearchIndexUnavailable) {
+		t.Fatalf("forced tight scalar err=%v want ErrHybridSearchIndexUnavailable", err)
+	}
+	if forcedStats.Truncated == 0 {
+		t.Fatalf("forced tight scalar stats=%+v want truncation", forcedStats)
 	}
 
 	missing, err := col.SearchHybrid(HybridSearchOptions{
@@ -217,6 +231,36 @@ func TestSearchHybridScalarFilterRangeAndFailClosed2505(t *testing.T) {
 	}
 	if missing.Stats.FailClosed != 1 || missing.Stats.FailClosedReason != HybridFailClosedReasonScalarFilterUnbounded || missing.Stats.FullDocumentScanFallbacks != 0 {
 		t.Fatalf("missing scalar response=%+v want fail-closed scalar reason and no fallback", missing)
+	}
+}
+
+func TestHybridScalarFilterDefaultLookupBudgetFailClosed2687(t *testing.T) {
+	rows := make([]hybridSearchExecutorFixtureRow2505, hybridScalarDefaultLookupLimit+1)
+	for i := range rows {
+		rows[i] = hybridSearchExecutorFixtureRow2505{
+			id:    fmt.Sprintf("doc-%05d", i),
+			title: "refund",
+			body:  "refund",
+			city:  "sea",
+			score: int64(i),
+		}
+	}
+	_, d, col := openHybridScalarSearchExecutorFixture2505(t, rows)
+	defer func() { _ = d.Close() }()
+
+	got, err := col.SearchHybrid(HybridSearchOptions{
+		TopK:         1,
+		Text:         &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 1},
+		ScalarFilter: &HybridScalarFilter{IndexName: "city", Value: "sea"},
+	})
+	if !errors.Is(err, ErrHybridSearchIndexUnavailable) {
+		t.Fatalf("SearchHybrid over-budget scalar err=%v want ErrHybridSearchIndexUnavailable", err)
+	}
+	if got.Stats.FailClosed != 1 || got.Stats.FailClosedReason != HybridFailClosedReasonScalarFilterUnbounded || got.Stats.Truncated == 0 || got.Stats.TextCandidatesReturned != 0 {
+		t.Fatalf("response=%+v want scalar unbounded before candidate generation", got)
+	}
+	if got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 {
+		t.Fatalf("stats=%+v want no document fetch/fallback on scalar fail-closed", got.Stats)
 	}
 }
 
