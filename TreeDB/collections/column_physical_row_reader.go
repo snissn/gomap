@@ -473,6 +473,9 @@ func cloneColumnPhysicalAssetScanHeader(header columnPhysicalAssetScanHeader) co
 }
 
 func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowReaderBlock, ordinal, rowIndex int, scratch *columnPhysicalRowReaderScratch) (columnPhysicalRowReaderRow, error) {
+	if block.version >= columnPhysicalAssetVersionV7 {
+		return r.decodeFixedIDRowFromBlock(block, ordinal, rowIndex, scratch)
+	}
 	cur := manifestCursor{raw: block.raw, pos: block.rowOffsets[rowIndex]}
 	id := cur.bytesView()
 	deleted := false
@@ -520,9 +523,44 @@ func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowRea
 	}, nil
 }
 
+func (r *columnPhysicalRowReader) decodeFixedIDRowFromBlock(block *columnPhysicalRowReaderBlock, ordinal, rowIndex int, scratch *columnPhysicalRowReaderScratch) (columnPhysicalRowReaderRow, error) {
+	if block.header.Operation != ColumnPublishOperationInsert && block.header.Operation != ColumnPublishOperationUpdate && block.header.Operation != ColumnPublishOperationDelete {
+		return columnPhysicalRowReaderRow{}, fmt.Errorf("unsupported column physical asset operation %q", block.header.Operation)
+	}
+	if block.header.ColumnCount != 0 {
+		return columnPhysicalRowReaderRow{}, fmt.Errorf("column physical asset row encoding %q requires zero columns", columnPhysicalAssetRowEncodingFixedID)
+	}
+	start := block.rowOffsets[rowIndex]
+	end := len(block.raw)
+	if next := rowIndex + 1; next < len(block.rowOffsets) {
+		end = block.rowOffsets[next]
+	}
+	if start < 0 || start > end || end > len(block.raw) {
+		return columnPhysicalRowReaderRow{}, fmt.Errorf("column physical asset fixed row[%d] offset range [%d,%d) outside len=%d", rowIndex, start, end, len(block.raw))
+	}
+	scratch.Values = scratch.Values[:0]
+	scratch.Float32Values = scratch.Float32Values[:0]
+	scratch.Uint32Values = scratch.Uint32Values[:0]
+	scratch.Bytes = scratch.Bytes[:0]
+	return columnPhysicalRowReaderRow{
+		Generation:        block.header.Generation,
+		PartID:            block.header.PartID,
+		AppliedCommandLSN: block.header.AppliedCommandLSN,
+		Operation:         block.header.Operation,
+		Ordinal:           ordinal,
+		RowIndex:          rowIndex,
+		ID:                block.raw[start:end],
+		Values:            scratch.Values,
+		Deleted:           block.header.Operation == ColumnPublishOperationDelete,
+	}, nil
+}
+
 func indexColumnPhysicalAssetReaderRows(raw []byte, version uint16, rowsOffset int, header columnPhysicalAssetScanHeader, cfg *ColumnStoreConfig) ([]int, error) {
 	if rowsOffset < 0 || rowsOffset > len(raw) {
 		return nil, fmt.Errorf("column physical asset invalid rows offset=%d len=%d", rowsOffset, len(raw))
+	}
+	if version >= columnPhysicalAssetVersionV7 {
+		return indexColumnPhysicalAssetReaderFixedIDRows(raw, rowsOffset, header)
 	}
 	offsets := make([]int, header.RowCount)
 	cur := manifestCursor{raw: raw, pos: rowsOffset}
@@ -548,6 +586,43 @@ func indexColumnPhysicalAssetReaderRows(raw []byte, version uint16, rowsOffset i
 		if err := skipColumnPhysicalRowValues(&cur, version, cfg); err != nil {
 			return nil, fmt.Errorf("row[%d]: %w", rowIdx, err)
 		}
+	}
+	if cur.err != nil {
+		return nil, cur.err
+	}
+	if cur.pos != len(raw) {
+		return nil, errors.New("trailing bytes in column physical asset")
+	}
+	return offsets, nil
+}
+
+func indexColumnPhysicalAssetReaderFixedIDRows(raw []byte, rowsOffset int, header columnPhysicalAssetScanHeader) ([]int, error) {
+	cur := manifestCursor{raw: raw, pos: rowsOffset}
+	rowEncoding := cur.string()
+	if rowEncoding != columnPhysicalAssetRowEncodingFixedID {
+		return nil, fmt.Errorf("unsupported column physical asset row encoding %q", rowEncoding)
+	}
+	if header.ColumnCount != 0 {
+		return nil, fmt.Errorf("column physical asset row encoding %q requires zero columns", rowEncoding)
+	}
+	idWidth64 := cur.u64()
+	if cur.err != nil {
+		return nil, cur.err
+	}
+	if idWidth64 == 0 || idWidth64 > uint64(maxCollectionInt) {
+		return nil, fmt.Errorf("column physical asset fixed id width=%d invalid", idWidth64)
+	}
+	if header.Operation != ColumnPublishOperationInsert && header.Operation != ColumnPublishOperationUpdate && header.Operation != ColumnPublishOperationDelete {
+		return nil, fmt.Errorf("unsupported column physical asset operation %q", header.Operation)
+	}
+	idWidth := int(idWidth64)
+	offsets := make([]int, header.RowCount)
+	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
+		if cur.pos > len(raw) || len(raw)-cur.pos < idWidth {
+			return nil, errors.New("short column physical asset fixed row id block")
+		}
+		offsets[rowIdx] = cur.pos
+		cur.pos += idWidth
 	}
 	if cur.err != nil {
 		return nil, cur.err

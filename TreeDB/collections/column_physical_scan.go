@@ -2190,6 +2190,9 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		return columnPhysicalAssetScanSummary{}, err
 	}
 	cur := manifestCursor{raw: raw, pos: rowsOffset}
+	if version >= columnPhysicalAssetVersionV7 {
+		return scanColumnPhysicalAssetFixedIDRows(&cur, raw, header, visitor)
+	}
 	valuesBuf := projection.values
 	var summary columnPhysicalAssetScanSummary
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
@@ -2229,6 +2232,59 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 				ID:                id,
 				Deleted:           deleted,
 				Values:            rowValues,
+			}); err != nil {
+				return columnPhysicalAssetScanSummary{}, err
+			}
+		}
+	}
+	if cur.err != nil {
+		return columnPhysicalAssetScanSummary{}, cur.err
+	}
+	if cur.pos != len(raw) {
+		return columnPhysicalAssetScanSummary{}, errors.New("trailing bytes in column physical asset")
+	}
+	return summary, nil
+}
+
+func scanColumnPhysicalAssetFixedIDRows(cur *manifestCursor, raw []byte, header columnPhysicalAssetScanHeader, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
+	rowEncoding := cur.string()
+	if rowEncoding != columnPhysicalAssetRowEncodingFixedID {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset row encoding %q", rowEncoding)
+	}
+	if header.ColumnCount != 0 {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset row encoding %q requires zero columns", rowEncoding)
+	}
+	idWidth := cur.u64()
+	if cur.err != nil {
+		return columnPhysicalAssetScanSummary{}, cur.err
+	}
+	if idWidth == 0 || idWidth > uint64(maxCollectionInt) {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset fixed id width=%d invalid", idWidth)
+	}
+	deleted := header.Operation == ColumnPublishOperationDelete
+	if header.Operation != ColumnPublishOperationInsert && header.Operation != ColumnPublishOperationUpdate && header.Operation != ColumnPublishOperationDelete {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", header.Operation)
+	}
+	var summary columnPhysicalAssetScanSummary
+	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
+		if uint64(len(raw)-cur.pos) < idWidth {
+			return columnPhysicalAssetScanSummary{}, errors.New("short column physical asset fixed row id block")
+		}
+		id := raw[cur.pos : cur.pos+int(idWidth)]
+		cur.pos += int(idWidth)
+		summary.rows++
+		if deleted {
+			summary.deleted++
+		}
+		if visitor != nil {
+			if err := visitor(columnPhysicalScanRowView{
+				Generation:        header.Generation,
+				PartID:            header.PartID,
+				AppliedCommandLSN: header.AppliedCommandLSN,
+				Operation:         header.Operation,
+				RowIndex:          rowIdx,
+				ID:                id,
+				Deleted:           deleted,
 			}); err != nil {
 				return columnPhysicalAssetScanSummary{}, err
 			}
