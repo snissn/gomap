@@ -674,6 +674,22 @@ func TestColumnRetainedSemanticStreamV1DecodeCacheDenseBlockGate2662(t *testing.
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1RejectsOversizedRowCount2662(t *testing.T) {
+	raw := append([]byte(nil), columnRetainedSemanticStreamV1BlockMagic...)
+	raw = binary.AppendUvarint(raw, columnRetainedSemanticStreamV1BlockRows+1)
+	raw = binary.AppendUvarint(raw, 0)
+
+	if _, err := columnRetainedSemanticStreamV1BlockRowCount(raw); err == nil || !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("row count err=%v want exceeds max", err)
+	}
+	if _, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(raw); err == nil || !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("decode all rows err=%v want exceeds max", err)
+	}
+	if _, err := decodeColumnRetainedSemanticStreamV1BlockRowJSON(raw, 0); err == nil || !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("decode single row err=%v want exceeds max", err)
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1StoredBlockZSTDFailsClosed2662(t *testing.T) {
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock([][]byte{[]byte(`{"payload":"same"}`), []byte(`{"payload":"same"}`)})
 	if err != nil {

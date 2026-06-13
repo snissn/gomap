@@ -683,10 +683,20 @@ func columnRetainedSemanticStreamV1BlockRowCount(block []byte) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if rows == 0 {
-		return 0, errors.New("collections: malformed semantic-stream-v1 retained block zero rows")
+	if err := validateColumnRetainedSemanticStreamV1BlockRows(rows); err != nil {
+		return 0, err
 	}
 	return rows, nil
+}
+
+func validateColumnRetainedSemanticStreamV1BlockRows(rows uint64) error {
+	if rows == 0 {
+		return errors.New("collections: malformed semantic-stream-v1 retained block zero rows")
+	}
+	if rows > columnRetainedSemanticStreamV1BlockRows {
+		return fmt.Errorf("collections: semantic-stream-v1 retained block row count %d exceeds max %d", rows, columnRetainedSemanticStreamV1BlockRows)
+	}
+	return nil
 }
 
 func encodeColumnRetainedSemanticStreamV1Block(documents [][]byte) ([]byte, error) {
@@ -915,6 +925,9 @@ func decodeColumnRetainedSemanticStreamV1BlockRowsJSON(block []byte) ([][]byte, 
 	if rows > uint64(int(^uint(0)>>1)) {
 		return nil, errors.New("collections: semantic-stream-v1 retained block row count too large")
 	}
+	if err := validateColumnRetainedSemanticStreamV1BlockRows(rows); err != nil {
+		return nil, err
+	}
 	pathCount, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return nil, errors.New("collections: malformed semantic-stream-v1 retained block path count")
@@ -997,6 +1010,9 @@ func decodeColumnRetainedSemanticStreamV1BlockRowObject(block []byte, row uint64
 	rows, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return nil, errors.New("collections: malformed semantic-stream-v1 retained block row count")
+	}
+	if err := validateColumnRetainedSemanticStreamV1BlockRows(rows); err != nil {
+		return nil, err
 	}
 	if row >= rows {
 		return nil, fmt.Errorf("collections: semantic-stream-v1 row %d outside block rows %d", row, rows)
