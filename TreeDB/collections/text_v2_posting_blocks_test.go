@@ -3,8 +3,10 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"math"
 	"slices"
 	"strings"
@@ -88,6 +90,7 @@ func TestTextV2PostingBlockCodecRoundTripAndFailClosed2625(t *testing.T) {
 			return b
 		}())},
 		{name: "unsupported upper bound", raw: encodeTextV2PostingBlockValue(func() textV2PostingBlockValue { b := block; b.Summary.UpperBoundKind = 99; return b }())},
+		{name: "entry payload too short", raw: encodeTextV2PostingBlockHeaderWithoutEntries2728()},
 		{name: "entry flags", raw: encodeTextV2PostingBlockValue(func() textV2PostingBlockValue {
 			b := block
 			b.Entries = cloneTextV2PostingBlockEntries(block.Entries)
@@ -999,6 +1002,26 @@ func BenchmarkTextV2PostingBlockEncodeUpdate2625(b *testing.B) {
 			textV2PostingBlockBenchSink2625 += uint64(len(blocks[0].Value))
 		}
 	})
+}
+
+func encodeTextV2PostingBlockHeaderWithoutEntries2728() []byte {
+	out := []byte{textV2PostingBlockValueVersion}
+	out = appendTextUvarint(out, uint64(textV2FormatVersion))
+	out = append(out, byte(textV2PostingBlockKindSealed), 0)
+	out = appendTextUvarint(out, 1) // block start
+	out = appendTextUvarint(out, 1) // block id
+	out = appendTextUvarint(out, 1) // first ordinal
+	out = appendTextUvarint(out, 1) // last ordinal
+	out = appendTextUvarint(out, 1) // doc count
+	out = appendTextUvarint(out, 1) // max term frequency
+	out = appendTextUvarint(out, 2) // field count
+	out = appendTextUvarint(out, 1) // max field frequency[0]
+	out = appendTextUvarint(out, 0) // max field frequency[1]
+	out = append(out, textV2PostingUpperBoundKindBM25FLaneMax)
+	out = appendTextUvarint(out, 1) // entry count, intentionally no entry payload follows.
+	var checksum [textV2PostingBlockChecksumBytes]byte
+	binary.BigEndian.PutUint32(checksum[:], crc32.ChecksumIEEE(out))
+	return append(out, checksum[:]...)
 }
 
 func mutatePostingBlockRaw2625(raw []byte, offset int, value byte) []byte {
