@@ -16,13 +16,13 @@ github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721 h1:2XY
 github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
 github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a h1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=
 github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a/go.mod h1:PDwKLbWpRDAN2IPbK9PxIgSx0YdwQaSOLWObRawQJ58=
-github.com/snissn/gomap v0.0.0-20260605130228-58f3398da631 h1:O7x3b+ndZz/saU7VWloGvdVCol1SwmVWLUs9GtdYmTU=
-github.com/snissn/gomap v0.0.0-20260605130228-58f3398da631/go.mod h1:QSwxtipoA9YdqEDYTU2UE6ZU4R2odrOdeLdtz6jzqtI=
+github.com/snissn/gomap v0.0.0-20260613195517-98e19772e489 h1:Mh7rm7Pgt+D4QlmmEBSuqpxiIRUs7BbTAr1ZRMaZLsw=
+github.com/snissn/gomap v0.0.0-20260613195517-98e19772e489/go.mod h1:WSaOg+m8hiLvRpKSqn3ylr0H4ZMKOHghhJqIg1/RO/4=
 github.com/tidwall/btree v1.8.1 h1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=
 github.com/tidwall/btree v1.8.1/go.mod h1:jBbTdUWhSZClZWoDg54VnvV7/54modSOzDN7VXftj1A=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=
 github.com/zeebo/assert v1.3.0/go.mod h1:Pq9JiuJQpG8JLJdtkwrJESF0Foym2/D9XMU5ciN/wJ0=
 github.com/zeebo/xxh3 v1.1.0 h1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=
 github.com/zeebo/xxh3 v1.1.0/go.mod h1:IisAie1LELR4xhVinxWS5+zf1lA4p0MW4T+w+W07F5s=
-golang.org/x/sys v0.40.0 h1:DBZZqJ2Rkml6QMQsZywtnjnnGvHza6BTfYFWY9kjEWQ=
-golang.org/x/sys v0.40.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
+golang.org/x/sys v0.41.0 h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
+golang.org/x/sys v0.41.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=

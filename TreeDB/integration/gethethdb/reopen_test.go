@@ -21,6 +21,40 @@ func openAtPath(t testing.TB, dir string) *Database {
 	return db
 }
 
+func TestCommandWALReopenPersistsBorrowedBatchPut(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "treedb")
+	db := openAtPath(t, dir)
+
+	batch, ok := db.NewBatch().(*Batch)
+	if !ok {
+		t.Fatalf("NewBatch type=%T want *Batch", db.NewBatch())
+	}
+	key := []byte("borrowed-key")
+	value := []byte("borrowed-value")
+	if err := batch.Put(key, value); err != nil {
+		t.Fatalf("batch Put: %v", err)
+	}
+	if !batch.hasBorrowedOps {
+		t.Skip("local TreeDB command-WAL replay-byte optimization unavailable without a gomap module replace")
+	}
+	copy(key, "mutated-key-")
+	copy(value, "mutated-value-")
+	if err := batch.Write(); err != nil {
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := db.SyncKeyValue(); err != nil {
+		t.Fatalf("SyncKeyValue: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openAtPath(t, dir)
+	defer reopened.Close()
+	assertValue(t, reopened, []byte("borrowed-key"), []byte("borrowed-value"))
+	assertMissing(t, reopened, []byte("mutated-key-"))
+}
+
 func TestCommandWALReopenPersistsAdapterOperations(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "treedb")
 	db := openAtPath(t, dir)

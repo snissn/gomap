@@ -202,7 +202,12 @@ type commandWALPublicBatch struct {
 	payloadByteHint   int
 	opCount           int
 	dirty             bool
-	closed            bool
+	// retainPayloadAfterWrite is set by adapter-only replay-view helpers. It
+	// keeps payload-owned key/value views valid after a successful Write until
+	// Reset/Close or the next mutation. Ordinary public Batch callers do not use
+	// those helpers and keep the previous reset-after-write behavior.
+	retainPayloadAfterWrite bool
+	closed                  bool
 }
 
 // Seed command payload capacity for moderately sized values. The op hint is
@@ -229,6 +234,20 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
 		return
 	}
 	_ = b.payload.ResetWithHint(b.payloadOpHint, b.payloadByteHint)
+}
+
+func (b *commandWALPublicBatch) preparePayloadForAppend() {
+	if b == nil || !b.retainPayloadAfterWrite || b.dirty {
+		return
+	}
+	// A previous adapter replay-view Write kept payload bytes alive for external
+	// Replay/rebuild semantics. If the inner batch is reused directly without an
+	// explicit Reset, drop those retained bytes before appending a fresh command
+	// payload. The geth adapter detaches borrowed replay views before taking this
+	// path after Write.
+	b.resetPayloadWithHint()
+	b.opCount = 0
+	b.retainPayloadAfterWrite = false
 }
 
 func (b *commandWALPublicBatch) rebindInnerViewers() {
@@ -270,81 +289,98 @@ func (b *commandWALPublicBatch) disableInnerStreamingBypass() {
 }
 
 func (b *commandWALPublicBatch) Set(key, value []byte) error {
-	if b == nil || b.inner == nil {
-		return ErrClosed
-	}
-	key = normalizeRawKVPointKey(key)
-	value = normalizeRawKVValue(value)
-	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	keyView, valueView, err := b.payload.AppendSet(key, value)
-	if err != nil {
-		return err
-	}
-	if err := b.innerSetView(keyView, valueView); err != nil {
-		b.payload.Truncate(oldLen, oldCount)
-		return err
-	}
-	b.opCount++
-	b.dirty = true
-	return nil
+	_, _, err := b.setView(key, value, false)
+	return err
 }
 
 func (b *commandWALPublicBatch) SetView(key, value []byte) error {
+	_, _, err := b.setView(key, value, false)
+	return err
+}
+
+// SetViewWithReplayBytes records a Put and returns payload-owned immutable
+// key/value views for higher-level adapters that must preserve replay order
+// without making their own hot-path byte clone. The returned views remain valid
+// until this batch is Reset or Closed, or until a subsequent mutation after
+// Write reuses the payload. If the adapter needs to rebuild/reuse the batch
+// after Write, it must copy the views before causing Reset or append reuse on
+// the inner batch.
+//
+// This method is intentionally not part of the public Batch interface.
+func (b *commandWALPublicBatch) SetViewWithReplayBytes(key, value []byte) (keyView, valueView []byte, err error) {
+	return b.setView(key, value, true)
+}
+
+func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews bool) (keyView, valueView []byte, err error) {
 	if b == nil || b.inner == nil {
-		return ErrClosed
+		return nil, nil, ErrClosed
 	}
+	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
+	if retainReplayViews && commandWALPublicAllZeroBytes(value) {
+		// The raw-KV payload builder tracks the first zero value by backing-array
+		// identity so repeated immutable zero buffers can avoid rescanning. Adapter
+		// replay-byte callers may reuse and mutate their value buffer between Put
+		// calls, so keep that compact-zero identity tied to an immutable copy.
+		value = append([]byte(nil), value...)
+	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	keyView, valueView, err := b.payload.AppendSet(key, value)
+	keyView, valueView, err = b.payload.AppendSet(key, value)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := b.innerSetView(keyView, valueView); err != nil {
 		b.payload.Truncate(oldLen, oldCount)
-		return err
+		return nil, nil, err
 	}
 	b.opCount++
 	b.dirty = true
-	return nil
+	if retainReplayViews {
+		b.retainPayloadAfterWrite = true
+	}
+	return keyView, valueView, nil
 }
 
 func (b *commandWALPublicBatch) Delete(key []byte) error {
-	if b == nil || b.inner == nil {
-		return ErrClosed
-	}
-	key = normalizeRawKVPointKey(key)
-	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	keyView, err := b.payload.AppendDelete(key)
-	if err != nil {
-		return err
-	}
-	if err := b.innerDeleteView(keyView); err != nil {
-		b.payload.Truncate(oldLen, oldCount)
-		return err
-	}
-	b.opCount++
-	b.dirty = true
-	return nil
+	_, err := b.deleteView(key, false)
+	return err
 }
 
 func (b *commandWALPublicBatch) DeleteView(key []byte) error {
+	_, err := b.deleteView(key, false)
+	return err
+}
+
+// DeleteViewWithReplayBytes records a Delete and returns a payload-owned key
+// view for adapter replay logs. See SetViewWithReplayBytes for lifetime rules.
+//
+// This method is intentionally not part of the public Batch interface.
+func (b *commandWALPublicBatch) DeleteViewWithReplayBytes(key []byte) (keyView []byte, err error) {
+	return b.deleteView(key, true)
+}
+
+func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews bool) (keyView []byte, err error) {
 	if b == nil || b.inner == nil {
-		return ErrClosed
+		return nil, ErrClosed
 	}
+	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	keyView, err := b.payload.AppendDelete(key)
+	keyView, err = b.payload.AppendDelete(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := b.innerDeleteView(keyView); err != nil {
 		b.payload.Truncate(oldLen, oldCount)
-		return err
+		return nil, err
 	}
 	b.opCount++
 	b.dirty = true
-	return nil
+	if retainReplayViews {
+		b.retainPayloadAfterWrite = true
+	}
+	return keyView, nil
 }
 
 func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
@@ -354,6 +390,7 @@ func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
 	if batch.IsDeleteRangeNoop(start, end) {
 		return nil
 	}
+	b.preparePayloadForAppend()
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	if _, err := b.payload.AppendDeleteRange(start, end); err != nil {
 		return err
@@ -406,7 +443,9 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 			return err
 		}
 		b.disableInnerStreamingBypass()
-		b.resetPayloadWithHint()
+		if !b.retainPayloadAfterWrite {
+			b.resetPayloadWithHint()
+		}
 		b.opCount = 0
 		b.dirty = false
 		return nil
@@ -421,7 +460,9 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		}
 	}
 	b.disableInnerStreamingBypass()
-	b.resetPayloadWithHint()
+	if !b.retainPayloadAfterWrite {
+		b.resetPayloadWithHint()
+	}
 	b.opCount = 0
 	b.dirty = false
 	return nil
@@ -439,7 +480,9 @@ func (b *commandWALPublicBatch) Close() error {
 	b.innerSetViewFn = nil
 	b.innerDeleteViewFn = nil
 	b.resetPayloadWithHint()
+	b.opCount = 0
 	b.dirty = false
+	b.retainPayloadAfterWrite = false
 	b.closed = true
 	return err
 }
@@ -454,6 +497,7 @@ func (b *commandWALPublicBatch) Reset() {
 		b.resetPayloadWithHint()
 		b.opCount = 0
 		b.dirty = false
+		b.retainPayloadAfterWrite = false
 		b.closed = false
 		return
 	}
@@ -463,7 +507,17 @@ func (b *commandWALPublicBatch) Reset() {
 	b.resetPayloadWithHint()
 	b.opCount = 0
 	b.dirty = false
+	b.retainPayloadAfterWrite = false
 	b.closed = false
+}
+
+func commandWALPublicAllZeroBytes(p []byte) bool {
+	for _, b := range p {
+		if b != 0 {
+			return false
+		}
+	}
+	return len(p) > 0
 }
 
 func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
