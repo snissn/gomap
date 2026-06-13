@@ -708,7 +708,7 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 		return nil, fmt.Errorf("collections: document row point fetch header generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
 	}
 	header = cloneColumnPhysicalAssetScanHeader(header)
-	rowOffsets, err := indexColumnPhysicalAssetReaderRows(raw, version, rowsOffset, header, &view.Config)
+	rowIndex, err := indexColumnPhysicalAssetReaderRows(raw, version, rowsOffset, header, &view.Config)
 	if err != nil {
 		return nil, fmt.Errorf("collections: document row point fetch index generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
 	}
@@ -717,7 +717,10 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 		raw:           raw,
 		version:       version,
 		header:        header,
-		rowOffsets:    rowOffsets,
+		rowOffsets:    rowIndex.offsets,
+		rowEncoding:   rowIndex.rowEncoding,
+		fixedIDWidth:  rowIndex.fixedIDWidth,
+		denseIDBase:   rowIndex.denseIDBase,
 		residentBytes: int64(len(raw)),
 	}
 	if v.pointRowBlocks == nil {

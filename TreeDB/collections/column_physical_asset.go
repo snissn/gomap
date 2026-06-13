@@ -25,10 +25,14 @@ const (
 	columnPhysicalAssetVersionV5 = uint16(5)
 	columnPhysicalAssetVersionV6 = uint16(6)
 	columnPhysicalAssetVersionV7 = uint16(7)
+	columnPhysicalAssetVersionV8 = uint16(8)
 	columnPhysicalAssetVersion   = columnPhysicalAssetVersionV4
 )
 
-const columnPhysicalAssetRowEncodingFixedID = "fixed_id"
+const (
+	columnPhysicalAssetRowEncodingFixedID      = "fixed_id"
+	columnPhysicalAssetRowEncodingDenseIDRange = "dense_id_range"
+)
 
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
 
@@ -626,12 +630,15 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		}
 	}
 	var b bytes.Buffer
+	denseIDBase, useDenseIDRows := columnPhysicalAssetDenseBigEndianUint64RangeBase(input)
 	fixedIDWidth, useFixedIDRows := columnPhysicalAssetFixedIDRowEncodingWidth(input)
 	version, err := columnPhysicalAssetVersionForColumns(input.Columns)
 	if err != nil {
 		return nil, columnPhysicalAssetSummary{}, err
 	}
-	if useFixedIDRows {
+	if useDenseIDRows {
+		version = columnPhysicalAssetVersionV8
+	} else if useFixedIDRows {
 		version = columnPhysicalAssetVersionV7
 	}
 	writeManifestUint32(&b, columnPhysicalAssetMagic)
@@ -658,6 +665,16 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		if version >= columnPhysicalAssetVersionV5 {
 			writeManifestString(&b, string(col.FixedWidthEncoding))
 		}
+	}
+	if useDenseIDRows {
+		writeManifestString(&b, columnPhysicalAssetRowEncodingDenseIDRange)
+		writeManifestUint64(&b, denseIDBase)
+		payload := b.Bytes()
+		return payload, columnPhysicalAssetSummary{
+			RowCount:     len(input.Rows),
+			ColumnCount:  len(input.Columns),
+			PayloadBytes: int64(len(payload)),
+		}, nil
 	}
 	if useFixedIDRows {
 		writeManifestString(&b, columnPhysicalAssetRowEncodingFixedID)
@@ -815,30 +832,48 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 	}
 	if version >= columnPhysicalAssetVersionV7 {
 		rowEncoding := cur.string()
-		if rowEncoding != columnPhysicalAssetRowEncodingFixedID {
+		if rowEncoding != columnPhysicalAssetRowEncodingFixedID && rowEncoding != columnPhysicalAssetRowEncodingDenseIDRange {
 			return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical asset row encoding %q", rowEncoding)
 		}
 		if len(asset.Columns) != 0 {
 			return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset row encoding %q requires zero columns", rowEncoding)
 		}
-		idWidth := cur.u64()
-		if idWidth == 0 || idWidth > uint64(maxCollectionInt) {
-			return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset fixed id width=%d invalid", idWidth)
-		}
 		deleted := asset.Header.Operation == ColumnPublishOperationDelete
 		if asset.Header.Operation != ColumnPublishOperationInsert && asset.Header.Operation != ColumnPublishOperationUpdate && asset.Header.Operation != ColumnPublishOperationDelete {
 			return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical asset operation %q", asset.Header.Operation)
 		}
-		for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
-			if uint64(len(raw)-cur.pos) < idWidth {
-				return columnPhysicalAsset{}, errors.New("collections: short column physical asset fixed row id block")
+		switch rowEncoding {
+		case columnPhysicalAssetRowEncodingFixedID:
+			idWidth := cur.u64()
+			if idWidth == 0 || idWidth > uint64(maxCollectionInt) {
+				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset fixed id width=%d invalid", idWidth)
 			}
-			row := columnDeclaredRow{
-				ID:      bytes.Clone(raw[cur.pos : cur.pos+int(idWidth)]),
-				Deleted: deleted,
+			for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
+				if uint64(len(raw)-cur.pos) < idWidth {
+					return columnPhysicalAsset{}, errors.New("collections: short column physical asset fixed row id block")
+				}
+				row := columnDeclaredRow{
+					ID:      bytes.Clone(raw[cur.pos : cur.pos+int(idWidth)]),
+					Deleted: deleted,
+				}
+				cur.pos += int(idWidth)
+				asset.Rows = append(asset.Rows, row)
 			}
-			cur.pos += int(idWidth)
-			asset.Rows = append(asset.Rows, row)
+		case columnPhysicalAssetRowEncodingDenseIDRange:
+			if version < columnPhysicalAssetVersionV8 {
+				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset row encoding %q requires version >= %d", rowEncoding, columnPhysicalAssetVersionV8)
+			}
+			baseID := cur.u64()
+			if rowCount > 0 && baseID > ^uint64(0)-uint64(rowCount-1) {
+				return columnPhysicalAsset{}, errors.New("collections: column physical asset dense id range overflows uint64")
+			}
+			for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
+				row := columnDeclaredRow{
+					ID:      columnPhysicalAssetBigEndianUint64ID(baseID + uint64(rowIdx)),
+					Deleted: deleted,
+				}
+				asset.Rows = append(asset.Rows, row)
+			}
 		}
 		if cur.err != nil {
 			return columnPhysicalAsset{}, cur.err
@@ -1048,7 +1083,7 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 
 func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 	switch version {
-	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6, columnPhysicalAssetVersionV7:
+	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6, columnPhysicalAssetVersionV7, columnPhysicalAssetVersionV8:
 		return true
 	default:
 		return false
@@ -1073,6 +1108,43 @@ func columnPhysicalAssetFixedIDRowEncodingWidth(input columnPhysicalAssetEncodeI
 		}
 	}
 	return width, true
+}
+
+func columnPhysicalAssetDenseBigEndianUint64RangeBase(input columnPhysicalAssetEncodeInput) (uint64, bool) {
+	if len(input.Columns) != 0 || len(input.Rows) == 0 {
+		return 0, false
+	}
+	if !isSupportedColumnPhysicalAssetOperation(input.Operation) {
+		return 0, false
+	}
+	deleted := input.Operation == ColumnPublishOperationDelete
+	base, ok := columnPhysicalAssetParseBigEndianUint64ID(input.Rows[0].ID)
+	if !ok || input.Rows[0].Deleted != deleted {
+		return 0, false
+	}
+	if len(input.Rows) > 1 && base > ^uint64(0)-uint64(len(input.Rows)-1) {
+		return 0, false
+	}
+	for i, row := range input.Rows[1:] {
+		value, ok := columnPhysicalAssetParseBigEndianUint64ID(row.ID)
+		if !ok || row.Deleted != deleted || value != base+uint64(i+1) {
+			return 0, false
+		}
+	}
+	return base, true
+}
+
+func columnPhysicalAssetParseBigEndianUint64ID(id []byte) (uint64, bool) {
+	if len(id) != 8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(id), true
+}
+
+func columnPhysicalAssetBigEndianUint64ID(value uint64) []byte {
+	id := make([]byte, 8)
+	binary.BigEndian.PutUint64(id, value)
+	return id
 }
 
 func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, error) {

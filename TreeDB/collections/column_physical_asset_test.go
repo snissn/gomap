@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -218,6 +219,126 @@ func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
 	ref.Namespace = normalized.AssetManager.Namespace
 	if err := validateColumnPhysicalAssetForManifest(corrupt, ref, *normalized); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("validate corrupt asset err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnPhysicalAssetDenseIDRangeEncoding2663(t *testing.T) {
+	cfg := testColumnPhysicalRowReaderFixedIDConfigV7(t)
+	rows := []columnDeclaredRow{
+		{ID: columnPhysicalAssetBigEndianUint64ID(42)},
+		{ID: columnPhysicalAssetBigEndianUint64ID(43)},
+		{ID: columnPhysicalAssetBigEndianUint64ID(44)},
+	}
+	encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         cfg.AssetManager.Namespace,
+		Generation:        7,
+		PartID:            3,
+		AppliedCommandLSN: 101,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        cfg.SchemaHash,
+		Columns:           cfg.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset dense ids: %v", err)
+	}
+	if len(encoded) == 0 || summary.RowCount != len(rows) || summary.ColumnCount != 0 || summary.PayloadBytes != int64(len(encoded)) {
+		t.Fatalf("unexpected dense asset summary=%+v len=%d", summary, len(encoded))
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  cfg.AssetManager.Namespace,
+		Generation: 7,
+		PartID:     3,
+		FileID:     1,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	header, version, _, err := parseColumnPhysicalAssetScanHeader(encoded, ref, "events", cfg, ColumnPublishOperationInsert)
+	if err != nil {
+		t.Fatalf("parseColumnPhysicalAssetScanHeader dense ids: %v", err)
+	}
+	if version != columnPhysicalAssetVersionV8 || header.RowCount != len(rows) || header.ColumnCount != 0 {
+		t.Fatalf("header=%+v version=%d want V8 zero-column dense rows", header, version)
+	}
+
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset dense ids: %v", err)
+	}
+	for i, row := range decoded.Rows {
+		if got, want := binary.BigEndian.Uint64(row.ID), uint64(42+i); got != want || row.Deleted || len(row.Values) != 0 {
+			t.Fatalf("decoded row[%d]=%+v id=%d want dense id %d without values", i, row, got, want)
+		}
+	}
+
+	projection, err := newColumnPhysicalScanProjection(*cfg, nil)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	var scanned []uint64
+	scanSummary, err := scanColumnPhysicalAssetRows(encoded, ref, "events", cfg, projection, func(row columnPhysicalScanRowView) error {
+		scanned = append(scanned, binary.BigEndian.Uint64(row.ID))
+		if row.Deleted || len(row.Values) != 0 {
+			return fmt.Errorf("row=%+v want non-deleted dense-id row without values", row)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalAssetRows dense ids: %v", err)
+	}
+	if scanSummary.rows != len(rows) || scanSummary.deleted != 0 || fmt.Sprint(scanned) != "[42 43 44]" {
+		t.Fatalf("scan summary=%+v scanned=%v", scanSummary, scanned)
+	}
+
+	accounting, err := columnStoreRowAssetPayloadAccounting(encoded, ref, "events", *cfg, ColumnPublishOperationInsert, false)
+	if err != nil {
+		t.Fatalf("columnStoreRowAssetPayloadAccounting dense ids: %v", err)
+	}
+	if accounting.RowIDStoredBytes != 0 || accounting.RowIDValueBytes != int64(len(rows))*8 || accounting.RowEncodingHeaderBytes == 0 {
+		t.Fatalf("dense row-id accounting=%+v", accounting)
+	}
+	categoryBytes := accounting.FormatHeaderBytes +
+		accounting.ColumnMetadataBytes +
+		accounting.RowEncodingHeaderBytes +
+		accounting.RowIDStoredBytes +
+		accounting.RowDeletedFlagBytes +
+		accounting.RowValueHeaderBytes +
+		accounting.RowValuePayloadBytes
+	if categoryBytes != accounting.TotalStoredBytes || accounting.TotalStoredBytes != int64(len(encoded)) {
+		t.Fatalf("dense category bytes=%d accounting=%+v len=%d", categoryBytes, accounting, len(encoded))
+	}
+
+	gappedRows := []columnDeclaredRow{
+		{ID: columnPhysicalAssetBigEndianUint64ID(42)},
+		{ID: columnPhysicalAssetBigEndianUint64ID(44)},
+		{ID: columnPhysicalAssetBigEndianUint64ID(45)},
+	}
+	gapped, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         cfg.AssetManager.Namespace,
+		Generation:        7,
+		PartID:            4,
+		AppliedCommandLSN: 102,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        cfg.SchemaHash,
+		Columns:           cfg.Columns,
+		Rows:              gappedRows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset gapped ids: %v", err)
+	}
+	gappedRef := ref
+	gappedRef.PartID = 4
+	gappedRef.Length = int64(len(gapped))
+	gappedRef.Checksum = page.Checksum(gapped)
+	_, gappedVersion, _, err := parseColumnPhysicalAssetScanHeader(gapped, gappedRef, "events", cfg, ColumnPublishOperationInsert)
+	if err != nil {
+		t.Fatalf("parseColumnPhysicalAssetScanHeader gapped ids: %v", err)
+	}
+	if gappedVersion != columnPhysicalAssetVersionV7 || len(gapped) <= len(encoded) {
+		t.Fatalf("gapped version=%d len=%d dense len=%d want V7 fallback larger than dense V8", gappedVersion, len(gapped), len(encoded))
 	}
 }
 
