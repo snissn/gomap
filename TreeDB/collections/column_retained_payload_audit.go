@@ -315,6 +315,10 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	if opts.IncludeSemanticStreams {
 		semanticStreams = newColumnRetainedPayloadSemanticStreamCollector(opts.SemanticStreamMaxDepth)
 	}
+	var semanticBlockLayoutLocatorRows map[string]uint64
+	if semanticBlockLayoutOnly {
+		semanticBlockLayoutLocatorRows = make(map[string]uint64)
+	}
 	for it.Valid() {
 		if opts.MaxDocuments > 0 && result.CheckedRows >= opts.MaxDocuments {
 			result.Truncated = true
@@ -335,7 +339,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		result.CheckedRows++
 		result.RetainedPayloadBytes += int64(len(retained))
 		if semanticBlockLayoutOnly {
-			if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(retained); err != nil {
+			if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, retained, semanticBlockLayoutLocatorRows); err != nil {
 				return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit %q: %w", documentID, err))
 			} else if !ok {
 				payloadAudit, auditErr := auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)

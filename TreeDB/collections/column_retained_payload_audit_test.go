@@ -584,6 +584,53 @@ func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutAllowsInlineRows
 	}
 }
 
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutValidatesLocators2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}},"payload":"same"}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	snap := col.db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	retained, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), []byte("doc-000000"), nil)
+	if err != nil || !found {
+		t.Fatalf("collectionGetAppendAtCatalogRoot primary: found=%v err=%v", found, err)
+	}
+	blockKey, row, ok, err := parseColumnRetainedSemanticStreamV1Locator(retained)
+	if err != nil || !ok {
+		t.Fatalf("parse semantic-stream locator ok=%v err=%v retained=%x", ok, err, retained)
+	}
+	rowCache := make(map[string]uint64)
+	if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, retained, rowCache); !ok || err != nil {
+		t.Fatalf("validate live locator ok=%v err=%v", ok, err)
+	}
+	if len(rowCache) != 1 {
+		t.Fatalf("row cache entries=%d want one", len(rowCache))
+	}
+
+	missingKey := append([]byte(nil), blockKey...)
+	missingKey[0] ^= 0xff
+	missingLocator := encodeColumnRetainedSemanticStreamV1Locator(missingKey, row)
+	if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, missingLocator, nil); !ok || err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing locator ok=%v err=%v want missing-block failure", ok, err)
+	}
+
+	outOfRangeLocator := encodeColumnRetainedSemanticStreamV1Locator(blockKey, 2)
+	if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, outOfRangeLocator, nil); !ok || err == nil || !strings.Contains(err.Error(), "outside block rows") {
+		t.Fatalf("out-of-range locator ok=%v err=%v want row-range failure", ok, err)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentFailsClosed2382(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(false)
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{

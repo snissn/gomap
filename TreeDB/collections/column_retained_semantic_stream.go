@@ -465,6 +465,53 @@ func resolveColumnRetainedPayloadAtSnapshot(snap *backenddb.Snapshot, catalog *c
 	return decodeColumnRetainedSemanticStreamV1BlockRowJSON(block, row)
 }
 
+func validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, retained []byte, blockRows map[string]uint64) (bool, error) {
+	blockKey, row, ok, err := parseColumnRetainedSemanticStreamV1Locator(retained)
+	if err != nil || !ok {
+		return ok, err
+	}
+	if snap == nil || catalog == nil {
+		return true, errors.New("collections: semantic-stream-v1 retained payload requires snapshot catalog")
+	}
+	cacheKey := string(blockKey)
+	rows, cached := blockRows[cacheKey]
+	if !cached {
+		block, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionRetainedSemanticStreamRootName(catalog.meta.Name), blockKey, nil)
+		if err != nil {
+			return true, err
+		}
+		if !found {
+			return true, fmt.Errorf("collections: semantic-stream-v1 retained block %x missing", blockKey)
+		}
+		rows, err = columnRetainedSemanticStreamV1BlockRowCount(block)
+		if err != nil {
+			return true, err
+		}
+		if blockRows != nil {
+			blockRows[cacheKey] = rows
+		}
+	}
+	if row >= rows {
+		return true, fmt.Errorf("collections: semantic-stream-v1 row %d outside block rows %d", row, rows)
+	}
+	return true, nil
+}
+
+func columnRetainedSemanticStreamV1BlockRowCount(block []byte) (uint64, error) {
+	if !bytes.HasPrefix(block, columnRetainedSemanticStreamV1BlockMagic) {
+		return 0, errors.New("collections: retained block is not semantic-stream-v1 encoded")
+	}
+	off := len(columnRetainedSemanticStreamV1BlockMagic)
+	rows, _, err := readColumnRetainedSemanticStreamV1Uvarint(block, off, "row count")
+	if err != nil {
+		return 0, err
+	}
+	if rows == 0 {
+		return 0, errors.New("collections: malformed semantic-stream-v1 retained block zero rows")
+	}
+	return rows, nil
+}
+
 func encodeColumnRetainedSemanticStreamV1Block(documents [][]byte) ([]byte, error) {
 	streams := make(map[string]*columnRetainedSemanticStreamPath)
 	for row, document := range documents {
