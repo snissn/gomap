@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"math"
 	"strconv"
 	"sync"
@@ -77,6 +78,8 @@ var (
 	vlogAutoCandidatesWithDict = [...]vlogAutoCandidate{vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateBlockZSTD, vlogAutoCandidateDict}
 	vlogSelectorBlockCodecs    = [...]valuelog.BlockCodec{valuelog.BlockCodecSnappy, valuelog.BlockCodecLZ4, valuelog.BlockCodecZSTD}
 )
+
+var valueLogRetainedSemanticStreamV1BlockMagic = []byte("crss1blk\x00")
 
 const (
 	defaultVlogHoldBytes      = 64 << 20
@@ -1836,6 +1839,8 @@ func valueLogPayloadLooksRetainedJSONLike(value []byte) bool {
 			return len(value)-i >= 4 &&
 				(value[i+1] == 'D' && value[i+2] == '1') &&
 				(value[i+3] == 'D' || value[i+3] == 'I' || value[i+3] == 'H')
+		case 'c':
+			return bytes.HasPrefix(value[i:], valueLogRetainedSemanticStreamV1BlockMagic)
 		default:
 			return false
 		}

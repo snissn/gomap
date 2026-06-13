@@ -1000,6 +1000,28 @@ func TestChooseRetainedStorageFirstBlockCodec_DefaultBootstrapsZSTD(t *testing.T
 	}
 }
 
+func TestValueLogPayloadLooksRetainedLikeSemanticStreamBlock(t *testing.T) {
+	block := append([]byte("crss1blk\x00"), bytes.Repeat([]byte{0x7f}, 1024)...)
+	if !valueLogPayloadLooksRetainedJSONLike(block) {
+		t.Fatalf("semantic-stream-v1 block was not classified as retained-like")
+	}
+
+	locator := append([]byte("crss1loc\x00"), bytes.Repeat([]byte{0x7f}, 40)...)
+	if valueLogPayloadLooksRetainedJSONLike(locator) {
+		t.Fatalf("semantic-stream-v1 locator classified as retained-like; only side-root blocks should force retained storage-first compression")
+	}
+}
+
+func TestRetainedStorageFirstValueLogAutoDetectsSemanticStreamBlocks(t *testing.T) {
+	db := &DB{valueLogCompressionMode: uint8(vlogCompressionAuto)}
+	block := append([]byte("crss1blk\x00"), bytes.Repeat([]byte{0x42}, 1024)...)
+	records := []valuelog.Record{{Value: block}}
+
+	if !db.retainedStorageFirstValueLogAuto(0, 0, records) {
+		t.Fatalf("semantic-stream-v1 block did not select retained storage-first value-log compression")
+	}
+}
+
 func TestChooseRetainedStorageFirstBlockCodec_SingleConfiguredCodecHistoryKeepsZSTDBootstrap(t *testing.T) {
 	l := &lane{}
 	for i := 0; i < largePayloadBlockCodecMinSamples; i++ {
