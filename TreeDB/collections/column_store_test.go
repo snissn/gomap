@@ -794,8 +794,8 @@ func TestColumnStoreTypedColumnCompressionPolicyNormalizes2297(t *testing.T) {
 	if got := defaultCfg.TypedColumnCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
 		t.Fatalf("typed_column_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
 	}
-	if got := defaultCfg.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
-		t.Fatalf("typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
+	if got := defaultCfg.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionZSTD {
+		t.Fatalf("typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionZSTD)
 	}
 
 	defaultAlias := testColumnStoreConfig(nil)
@@ -808,8 +808,8 @@ func TestColumnStoreTypedColumnCompressionPolicyNormalizes2297(t *testing.T) {
 	if got := defaultAliasMeta.Options.ColumnStore.TypedColumnCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
 		t.Fatalf("alias typed_column_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
 	}
-	if got := defaultAliasMeta.Options.ColumnStore.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
-		t.Fatalf("alias typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionLZ4)
+	if got := defaultAliasMeta.Options.ColumnStore.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionZSTD {
+		t.Fatalf("alias typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionZSTD)
 	}
 	if defaultAliasMeta.Options.ColumnStore.SchemaHash != defaultCfg.SchemaHash {
 		t.Fatalf("schema hash should canonicalize default alias: alias=%x default=%x", defaultAliasMeta.Options.ColumnStore.SchemaHash, defaultCfg.SchemaHash)
@@ -861,8 +861,12 @@ func TestColumnStoreTypedColumnCompressionPolicyNormalizes2297(t *testing.T) {
 
 	zstdSection := testColumnStoreConfig(nil)
 	zstdSection.TypedColumnSectionCompression = ColumnStoreTypedColumnCompression("zstd")
-	if _, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: zstdSection}}); !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "typed_column_section_compression zstd") {
-		t.Fatalf("normalizeCollectionMeta zstd section err=%v want benchmark-only unsupported typed_column_section_compression", err)
+	zstdSectionMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: zstdSection}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta zstd section: %v", err)
+	}
+	if got := zstdSectionMeta.Options.ColumnStore.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionZSTD {
+		t.Fatalf("zstd typed_column_section_compression=%q want %q", got, ColumnStoreTypedColumnCompressionZSTD)
 	}
 
 	invalid := testColumnStoreConfig(nil)
@@ -1260,7 +1264,7 @@ func assertNormalizedColumnStoreMeta(t *testing.T, meta CollectionMeta) {
 	if got := cfg.TypedColumnCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
 		t.Fatalf("unexpected typed_column_compression: %q", got)
 	}
-	if got := cfg.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionLZ4 {
+	if got := cfg.TypedColumnSectionCompression; got != ColumnStoreTypedColumnCompressionZSTD {
 		t.Fatalf("unexpected typed_column_section_compression: %q", got)
 	}
 }
