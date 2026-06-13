@@ -792,6 +792,29 @@ var interestingStatKeys = []string{
 	"treedb.cache.vlog_mmap.read.fallback_readat",
 }
 
+var interestingStatPrefixes = []string{
+	"treedb.command_wal.",
+	"treedb.cache.command_wal.",
+	"treedb.cache.checkpoint.",
+	"treedb.cache.vlog_auto.",
+	"treedb.cache.vlog_block.",
+	"treedb.cache.vlog_outer_leaf_codec.",
+	"treedb.cache.vlog_payload_kind.",
+	"treedb.cache.vlog_payload_split.",
+	"treedb.cache.vlog_queue.",
+	"treedb.cache.vlog_shape.",
+	"treedb.cache.vlog_write_mode.",
+	"treedb.cache.batch_arena.",
+	"treedb.cache.memtable_adaptive.",
+	"treedb.cache.memtable_stats.",
+	"treedb.cache.memtable_view.",
+	"treedb.freelist.",
+	"treedb.graveyard.",
+	"treedb.pages.",
+	"treedb.publish.ordered_root_delta_group.",
+	"treedb.vlog.decode_buffer_grow.",
+}
+
 func timeDBPhase(profiler phaseProfiler, db ethdb.Database, phase string, fn func() (int, error)) (phaseResult, error) {
 	before := statSnapshot(db)
 	result, err := profiler.time(phase, fn)
@@ -816,7 +839,21 @@ func statSnapshot(db ethdb.Database) map[string]int64 {
 			out[key] = value
 		}
 	}
+	for key, value := range parsed {
+		if interestingStatKey(key) {
+			out[key] = value
+		}
+	}
 	return out
+}
+
+func interestingStatKey(key string) bool {
+	for _, prefix := range interestingStatPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseKeyValueStats(raw string) map[string]int64 {
@@ -843,11 +880,7 @@ func statDelta(before, after map[string]int64) map[string]int64 {
 		return nil
 	}
 	out := make(map[string]int64, len(after))
-	for _, key := range interestingStatKeys {
-		post, ok := after[key]
-		if !ok {
-			continue
-		}
+	for key, post := range after {
 		out[key] = post - before[key]
 	}
 	return out
