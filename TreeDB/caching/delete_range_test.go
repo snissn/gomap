@@ -200,6 +200,85 @@ func TestCachingDB_CommandWALRangeSpanVisibilitySnapshotsAndCheckpoint(t *testin
 	}
 }
 
+func TestCachingDB_CommandWALRangeSpanFiltersPublishedRoot(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("backend Open: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	published := newRootDomainTestTable(t,
+		rootDomainTestOp{key: "b", value: "root-b"},
+		rootDomainTestOp{key: "c", value: "root-c"},
+		rootDomainTestOp{key: "z", value: "root-z"},
+	)
+	db.mu.Lock()
+	if ok := db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{{
+			lookup: published,
+			rootID: 1,
+		}},
+	}); !ok {
+		db.mu.Unlock()
+		t.Fatalf("installPublishedRootSetLocked returned false")
+	}
+	db.mu.Unlock()
+
+	if err := db.DeleteRangeAfterCommandWALAppend([]byte("b"), []byte("d"), func() error { return nil }); err != nil {
+		t.Fatalf("DeleteRangeAfterCommandWALAppend: %v", err)
+	}
+
+	if val, err := db.Get([]byte("z")); err != nil || string(val) != "root-z" {
+		t.Fatalf("active span outside-root z=(%q,%v), want root-z,nil", val, err)
+	}
+	if out, err := db.GetAppend([]byte("z"), []byte("prefix:")); err != nil || string(out) != "prefix:root-z" {
+		t.Fatalf("active span outside-root GetAppend(z)=(%q,%v), want prefix:root-z,nil", out, err)
+	}
+	if val, err := db.Get([]byte("c")); err != nil || val != nil {
+		t.Fatalf("active span inside-root c=(%q,%v), want missing", val, err)
+	}
+	if _, err := db.GetAppend([]byte("c"), nil); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("active span inside-root GetAppend(c) err=%v want ErrKeyNotFound", err)
+	}
+	if ok, err := db.Has([]byte("c")); err != nil || ok {
+		t.Fatalf("active span Has(c)=(%t,%v), want false,nil", ok, err)
+	}
+	if err := db.Set([]byte("b"), []byte("new-b")); err != nil {
+		t.Fatalf("Set override: %v", err)
+	}
+	if val, err := db.Get([]byte("b")); err != nil || string(val) != "new-b" {
+		t.Fatalf("active span newer override b=(%q,%v), want new-b,nil", val, err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	if val, err := snap.Get([]byte("z")); err != nil || string(val) != "root-z" {
+		t.Fatalf("snapshot active span outside-root z=(%q,%v), want root-z,nil", val, err)
+	}
+	if out, err := snap.GetAppend([]byte("z"), []byte("prefix:")); err != nil || string(out) != "prefix:root-z" {
+		t.Fatalf("snapshot active span outside-root GetAppend(z)=(%q,%v), want prefix:root-z,nil", out, err)
+	}
+	if _, err := snap.Get([]byte("c")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("snapshot active span inside-root c err=%v want ErrKeyNotFound", err)
+	}
+	if val, err := snap.Get([]byte("b")); err != nil || string(val) != "new-b" {
+		t.Fatalf("snapshot active span newer override b=(%q,%v), want new-b,nil", val, err)
+	}
+}
+
 func TestCachingBatch_CommandWALRangeOnlyUsesSpanLayer(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,

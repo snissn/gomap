@@ -163,8 +163,19 @@ func memtableViewHasRangeSpans(view *memtableView) bool {
 }
 
 func (db *DB) lookupViewEntryWithRangeSpans(view *memtableView, key []byte, includeMutable bool) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	rootSnap, haveRootSnap := livePointRootDomainSnapshot(view, db, key)
+	val, ptr, flags, found, _ = db.lookupViewEntryWithRangeSpansAndRootSource(view, key, includeMutable, rootSnap, haveRootSnap)
+	return val, ptr, flags, found
+}
+
+func (db *DB) lookupViewEntryWithRangeSpansAndRoot(view *memtableView, key []byte, includeMutable bool, rootSnap rootDomainSnapshot, haveRootSnap bool) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, found, _ = db.lookupViewEntryWithRangeSpansAndRootSource(view, key, includeMutable, rootSnap, haveRootSnap)
+	return val, ptr, flags, found
+}
+
+func (db *DB) lookupViewEntryWithRangeSpansAndRootSource(view *memtableView, key []byte, includeMutable bool, rootSnap rootDomainSnapshot, haveRootSnap bool) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
 	if db == nil || view == nil {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 	}
 	shardIdx := 0
 	if len(db.mutableShards) > 1 {
@@ -177,7 +188,7 @@ func (db *DB) lookupViewEntryWithRangeSpans(view *memtableView, key []byte, incl
 					db.rangeSpanPointProbes.Add(1)
 					db.rangeSpanPointHits.Add(1)
 				}
-				return val, ptr, flags, true
+				return val, ptr, flags, true, rootDomainEntrySourceCached
 			}
 		}
 	}
@@ -192,22 +203,39 @@ func (db *DB) lookupViewEntryWithRangeSpans(view *memtableView, key []byte, incl
 					if db != nil {
 						db.rangeSpanPointHits.Add(1)
 					}
-					return val, ptr, flags, true
+					return val, ptr, flags, true, rootDomainEntrySourceCached
 				}
 			}
 		}
 		if idx < len(view.queueRangeSpans) && rangeSpansContainKey(view.queueRangeSpans[idx], key) {
-			return nil, page.ValuePtr{}, node.FlagTombstone, true
+			return nil, page.ValuePtr{}, node.FlagTombstone, true, rootDomainEntrySourceCached
 		}
 	}
-	return nil, page.ValuePtr{}, 0, false
+	if haveRootSnap && rootSnap.published != nil {
+		if db != nil {
+			db.rangeSpanPointProbes.Add(1)
+		}
+		if val, ptr, flags, found = rootSnap.published.GetEntry(key); found {
+			if db != nil {
+				db.rangeSpanPointHits.Add(1)
+			}
+			return val, ptr, flags, true, rootDomainEntrySourcePublished
+		}
+	}
+	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 }
 
 func (s *Snapshot) lookupEntryWithRangeSpans(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, found, _ = s.lookupEntryWithRangeSpansSource(key)
+	return val, ptr, flags, found
+}
+
+func (s *Snapshot) lookupEntryWithRangeSpansSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
 	if s == nil || s.view == nil || s.db == nil {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 	}
-	return s.db.lookupViewEntryWithRangeSpans(s.view, key, false)
+	rootSnap := rootDomainSnapshotFromCachedSnapshot(s, key)
+	return s.db.lookupViewEntryWithRangeSpansAndRootSource(s.view, key, false, rootSnap, true)
 }
 
 func rangeSpanPrefixEnd(prefix []byte) []byte {

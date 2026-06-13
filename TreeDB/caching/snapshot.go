@@ -350,11 +350,12 @@ func (s *Snapshot) lookupRootDomainSnapshotEntry(key []byte) (snap rootDomainSna
 		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 	}
 	if memtableViewHasRangeSpans(s.view) {
-		val, ptr, flags, found = s.lookupEntryWithRangeSpans(key)
+		snap = rootDomainSnapshotFromCachedSnapshot(s, key)
+		val, ptr, flags, found, source = s.db.lookupViewEntryWithRangeSpansAndRootSource(s.view, key, false, snap, true)
 		if found {
-			return rootDomainSnapshot{}, val, ptr, flags, true, rootDomainEntrySourceCached
+			return snap, val, ptr, flags, true, source
 		}
-		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+		return snap, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 	}
 	snap = rootDomainSnapshotFromCachedSnapshot(s, key)
 	val, ptr, flags, found, source = snap.getEntryWithSource(key)
