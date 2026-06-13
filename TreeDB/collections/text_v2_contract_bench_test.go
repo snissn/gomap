@@ -37,7 +37,7 @@ func TestTextV2ContractBenchmarkMatrix2623(t *testing.T) {
 		}
 	}
 	cases := textV2ContractSearchCases2623(256)
-	for _, want := range []string{"score_only_common_no_docs", "detailed_common_no_docs", "rare_no_docs", "multi_term_and_no_docs"} {
+	for _, want := range []string{"score_only_common_no_docs", "detailed_common_no_docs", "rare_no_docs", "multi_term_and_no_docs", "multi_term_or_common_rare_no_docs"} {
 		if !textV2ContractContainsSearchCase2623(cases, want) {
 			t.Fatalf("search cases=%v missing %q", textV2ContractSearchCaseNames2623(cases), want)
 		}
@@ -833,6 +833,7 @@ func textV2ContractSearchCases2623(docs int) []textV2ContractSearchCase2623 {
 		{name: "detailed_common_no_docs", query: "refund", resultMode: textSearchResultFull, candidateLimit: candidateLimit, maxPostings: maxPostings},
 		{name: "rare_no_docs", query: textV2ContractRareTerm2623, resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
 		{name: "multi_term_and_no_docs", query: "refund AND policy", operator: TextSearchOperatorAND, resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
+		{name: "multi_term_or_common_rare_no_docs", query: "refund OR " + textV2ContractRareTerm2623, operator: TextSearchOperatorOR, resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
 	}
 }
 
