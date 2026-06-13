@@ -813,6 +813,20 @@ var interestingStatKeys = []string{
 	"treedb.cache.delete_range.fast_path_clears_total",
 	"treedb.cache.delete_range.backend_direct_batches_total",
 	"treedb.cache.delete_range.backend_direct_keys_total",
+	"treedb.cache.range_span.layers_total",
+	"treedb.cache.range_span.active_layers",
+	"treedb.cache.range_span.active_spans",
+	"treedb.cache.range_span.input_total",
+	"treedb.cache.range_span.effective_total",
+	"treedb.cache.range_span.keys_materialized_total",
+	"treedb.cache.range_span.point_overrides_total",
+	"treedb.cache.range_span.point_probes_total",
+	"treedb.cache.range_span.point_hits_total",
+	"treedb.cache.range_span.iterator_probes_total",
+	"treedb.cache.range_span.iterator_skips_total",
+	"treedb.cache.range_span.range_only_queued_units_total",
+	"treedb.cache.range_span.range_only_flushed_total",
+	"treedb.cache.range_span.spans_flushed_total",
 }
 
 var interestingStatPrefixes = []string{
@@ -831,6 +845,7 @@ var interestingStatPrefixes = []string{
 	"treedb.cache.memtable_adaptive.",
 	"treedb.cache.memtable_stats.",
 	"treedb.cache.memtable_view.",
+	"treedb.cache.range_span.",
 	"treedb.freelist.",
 	"treedb.graveyard.",
 	"treedb.pages.",
@@ -1070,9 +1085,9 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 		return
 	}
 	sb.WriteString("\n## TreeDB DeleteRange counters\n\n")
-	sb.WriteString("Per-phase DeleteRange deltas from TreeDB `Stat()` output. `input ranges` counts submitted non-empty ranges; `effective ranges` counts ranges after exact adjacent/overlap coalescing in the write plan; materialized keys are copied into point tombstones by the cached fallback.\n\n")
-	sb.WriteString("| engine | read integrity | iteration mode | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | snapshot iters | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys |\n")
-	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("Per-phase DeleteRange deltas from TreeDB `Stat()` output. `input ranges` counts submitted non-empty ranges; `effective ranges` counts ranges after exact adjacent/overlap coalescing in the write plan; materialized keys are copied into point tombstones by the cached fallback. Span columns report command-WAL range-span overlay activity.\n\n")
+	sb.WriteString("| engine | read integrity | iteration mode | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | snapshot iters | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys | span layers | span active | span input | span effective | span materialized keys | span iter probes | span iter skips | span queued units | span flushed | spans flushed |\n")
+	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, run := range runs {
 		for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
 			result, ok := run.Phases[phase]
@@ -1082,7 +1097,7 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 			if !hasAnyStatDeltaValue(result.StatDelta, deleteRangeCounterKeys...) {
 				continue
 			}
-			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				run.Engine,
 				run.ReadIntegrity,
 				run.IterationMode,
@@ -1105,6 +1120,16 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.fast_path_clears_total"),
 				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.backend_direct_batches_total"),
 				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.backend_direct_keys_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.layers_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.active_spans"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.input_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.effective_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.keys_materialized_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.iterator_probes_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.iterator_skips_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.range_only_queued_units_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.range_only_flushed_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.range_span.spans_flushed_total"),
 			)
 		}
 	}
@@ -1157,6 +1182,17 @@ var deleteRangeCounterKeys = []string{
 	"treedb.cache.delete_range.fast_path_clears_total",
 	"treedb.cache.delete_range.backend_direct_batches_total",
 	"treedb.cache.delete_range.backend_direct_keys_total",
+	"treedb.cache.range_span.layers_total",
+	"treedb.cache.range_span.active_layers",
+	"treedb.cache.range_span.active_spans",
+	"treedb.cache.range_span.input_total",
+	"treedb.cache.range_span.effective_total",
+	"treedb.cache.range_span.keys_materialized_total",
+	"treedb.cache.range_span.iterator_probes_total",
+	"treedb.cache.range_span.iterator_skips_total",
+	"treedb.cache.range_span.range_only_queued_units_total",
+	"treedb.cache.range_span.range_only_flushed_total",
+	"treedb.cache.range_span.spans_flushed_total",
 }
 
 func hasDeleteRangeCounterDeltas(runs []runResult) bool {

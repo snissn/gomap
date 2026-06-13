@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
@@ -348,6 +349,13 @@ func (s *Snapshot) lookupRootDomainSnapshotEntry(key []byte) (snap rootDomainSna
 	if s == nil {
 		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 	}
+	if memtableViewHasRangeSpans(s.view) {
+		val, ptr, flags, found = s.lookupEntryWithRangeSpans(key)
+		if found {
+			return rootDomainSnapshot{}, val, ptr, flags, true, rootDomainEntrySourceCached
+		}
+		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+	}
 	snap = rootDomainSnapshotFromCachedSnapshot(s, key)
 	val, ptr, flags, found, source = snap.getEntryWithSource(key)
 	return snap, val, ptr, flags, found, source
@@ -359,7 +367,13 @@ func (s *Snapshot) lookupRootDomainEntry(key []byte) (val []byte, ptr page.Value
 }
 
 func (s *Snapshot) lookupCachedRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
-	if s == nil || len(s.rootPointShards) == 0 {
+	if s == nil {
+		return nil, page.ValuePtr{}, 0, false
+	}
+	if memtableViewHasRangeSpans(s.view) {
+		return s.lookupEntryWithRangeSpans(key)
+	}
+	if len(s.rootPointShards) == 0 {
 		return nil, page.ValuePtr{}, 0, false
 	}
 	shardIdx := 0
@@ -491,6 +505,10 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 		return nil, backenddb.ErrClosed
 	}
 	queue := s.rootIterator.immutables
+	var queueRangeSpans [][]batch.DeleteRange
+	if s.view != nil && len(s.view.queueRangeSpans) == len(queue) {
+		queueRangeSpans = s.view.queueRangeSpans
+	}
 	sources := make([]merging.IteratorSource, 0, len(queue)+1)
 	prio := 0
 	for idx := len(queue) - 1; idx >= 0; idx-- {
@@ -505,6 +523,7 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 				return s.db.readValueLog(key, ptr)
 			})
 		}
+		qIter = newRangeSpanFilteringIterator(qIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, idx), s.db)
 		sources = append(sources, merging.IteratorSource{Iter: qIter, Priority: prio})
 		prio++
 	}
@@ -525,6 +544,7 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 		}
 		return nil, err
 	}
+	diskIter = newRangeSpanFilteringIterator(diskIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, -1), s.db)
 	sources = append(sources, merging.IteratorSource{Iter: diskIter, Priority: prio})
 	return sources, nil
 }
@@ -593,6 +613,15 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		}
 		recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, len(val))
 		return append(dst, val...), nil
+	}
+	if memtableViewHasRangeSpans(s.view) {
+		if s.backend == nil || s.db == nil {
+			return dst, tree.ErrKeyNotFound
+		}
+		if err := s.db.flushValueLogForBackendRead(); err != nil {
+			return dst, err
+		}
+		return s.backend.GetAppend(key, dst)
 	}
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	// backendSnapshotLookup (used when a published ref falls back to backend
@@ -840,6 +869,16 @@ func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
 	if s == nil || s.backend == nil {
 		return nil, backenddb.ErrClosed
 	}
+	if memtableViewHasRangeSpans(s.view) {
+		for i, key := range keys {
+			ok, err := s.Has(key)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = ok
+		}
+		return out, nil
+	}
 
 	refs := make([]getManyProbeRef, len(keys))
 	shardCount := len(s.rootPointShards)
@@ -938,6 +977,23 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 	}
 	if s == nil || s.backend == nil {
 		return nil, backenddb.ErrClosed
+	}
+	if memtableViewHasRangeSpans(s.view) {
+		for i, prefix := range prefixes {
+			it, err := s.Iterator(prefix, rangeSpanPrefixEnd(prefix))
+			if err != nil {
+				return nil, err
+			}
+			out[i] = it.Valid()
+			if err := it.Error(); err != nil {
+				_ = it.Close()
+				return nil, err
+			}
+			if err := it.Close(); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
 	}
 
 	refs := make([]prefixProbeRef, len(prefixes))

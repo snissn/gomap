@@ -7606,6 +7606,7 @@ type DB struct {
 	memtableViewTelemetry         memtableViewLifecycleTelemetry
 	retainedArenaTrimLastUnixNano atomic.Int64
 	queueRanges                   []keyRange
+	queueRangeSpans               [][]batch.DeleteRange
 	queueWALPaths                 [][]string
 	queueValueLogPaths            [][]string
 	backendRange                  keyRange
@@ -7778,6 +7779,18 @@ type DB struct {
 	deleteRangeFastPathClears                         atomic.Uint64
 	deleteRangeBackendDirectBatches                   atomic.Uint64
 	deleteRangeBackendDirectKeys                      atomic.Uint64
+	rangeSpanLayersTotal                              atomic.Uint64
+	rangeSpanInputTotal                               atomic.Uint64
+	rangeSpanEffectiveTotal                           atomic.Uint64
+	rangeSpanKeysMaterializedTotal                    atomic.Uint64
+	rangeSpanPointOverridesTotal                      atomic.Uint64
+	rangeSpanPointProbes                              atomic.Uint64
+	rangeSpanPointHits                                atomic.Uint64
+	rangeSpanIteratorProbes                           atomic.Uint64
+	rangeSpanIteratorSkips                            atomic.Uint64
+	rangeSpanRangeOnlyQueuedUnits                     atomic.Uint64
+	rangeSpanRangeOnlyFlushed                         atomic.Uint64
+	rangeSpanSpansFlushed                             atomic.Uint64
 	memtableAdaptive                                  bool
 	memtableAdaptiveObserve                           atomic.Bool
 	memtableAdaptiveBTreeMinIters                     uint64
@@ -8551,6 +8564,7 @@ type memtableView struct {
 	queue                    []memtable.Table
 	queueShardIDs            []uint16
 	queueRanges              []keyRange
+	queueRangeSpans          [][]batch.DeleteRange
 	rootVersion              uint64
 	rootPointShards          []rootDomainSnapshot
 	rootSnapshotShards       []rootDomainSnapshot
@@ -9513,6 +9527,9 @@ func (db *DB) publishMemtablesLocked() {
 		qr := make([]keyRange, len(db.queueRanges))
 		copy(qr, db.queueRanges)
 		view.queueRanges = qr
+	}
+	if len(db.queueRangeSpans) > 0 {
+		view.queueRangeSpans = cloneRangeSpanLayers(db.queueRangeSpans)
 	}
 	view.rootVersion = db.rootDomainVersion.Add(1)
 	db.publishRootDomainSnapshotsLocked(view)
@@ -22174,6 +22191,83 @@ func (db *DB) recordDeleteRangeKeys(visitedKeys, tombstoneKeys, materializedKeys
 	}
 }
 
+func (db *DB) enqueueRangeSpanLayerLocked(spans []batch.DeleteRange) error {
+	if db == nil || len(spans) == 0 {
+		return nil
+	}
+	cloned := cloneRangeSpans(spans)
+	if len(cloned) == 0 {
+		return nil
+	}
+	mt, err := db.newMutableMemtableWithCapacityMode(0, db.currentMemtableMode())
+	if err != nil {
+		return err
+	}
+	mt.Freeze()
+	queueLaneID := 0
+	db.queue = append(db.queue, mt)
+	db.queueShardIDs = append(db.queueShardIDs, 0)
+	db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
+	db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+	db.queueEnqueueNS = append(db.queueEnqueueNS, time.Now().UnixNano())
+	db.queueRanges = append(db.queueRanges, keyRange{})
+	db.queueRangeSpans = append(db.queueRangeSpans, cloned)
+	db.queueWALPaths = append(db.queueWALPaths, nil)
+	db.queueValueLogPaths = append(db.queueValueLogPaths, nil)
+	db.resyncRootDomainQueuedRunsLocked()
+	db.rangeSpanLayersTotal.Add(1)
+	db.rangeSpanInputTotal.Add(uint64(len(spans)))
+	db.rangeSpanEffectiveTotal.Add(uint64(len(cloned)))
+	db.rangeSpanRangeOnlyQueuedUnits.Add(1)
+	return nil
+}
+
+func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand func() error) error {
+	if db == nil {
+		return nil
+	}
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	db.mu.Lock()
+	rotate := db.mutableBytes.Load() > 0
+	if !rotate {
+		for i := range db.mutableShards {
+			mt := db.mutableShards[i].mem
+			if mt != nil && mt.Len() != 0 {
+				rotate = true
+				break
+			}
+		}
+	}
+	if rotate {
+		if err := db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
+			db.mu.Unlock()
+			return err
+		}
+	}
+	if err := appendCommand(); err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	spans := []batch.DeleteRange{{Start: start, End: end}}
+	if err := db.enqueueRangeSpanLayerLocked(spans); err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
+
+	db.noteWrite()
+	db.maybeAssistFlush()
+	return nil
+}
+
 func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err error) {
 	if db == nil {
 		return nil
@@ -22203,6 +22297,10 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			db.reportError(fmt.Errorf("cachingdb: post-command-wal delete range failed: %w", err))
 		}
 	}()
+
+	if appendCommand != nil && db.disableJournal {
+		return db.publishCommandWALRangeSpanLayer(start, end, appendCommandBeforeVisibility)
+	}
 
 	// Journal-enabled mode: do a snapshot scan and apply per-key deletes directly.
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
@@ -22465,6 +22563,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			db.queueIDs = nil
 			db.queueEnqueueNS = nil
 			db.queueRanges = nil
+			db.queueRangeSpans = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
 			db.queueBacklogBytes.Store(0)
@@ -22535,6 +22634,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			db.queueIDs = nil
 			db.queueEnqueueNS = nil
 			db.queueRanges = nil
+			db.queueRangeSpans = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
 			db.queueBacklogBytes.Store(0)
@@ -22614,6 +22714,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			dstIDs := db.queueIDs[:0]
 			dstEnqueueNS := db.queueEnqueueNS[:0]
 			dstRanges := db.queueRanges[:0]
+			dstRangeSpans := db.queueRangeSpans[:0]
 			dstWALPaths := db.queueWALPaths[:0]
 			dstValueLogPaths := db.queueValueLogPaths[:0]
 			for i, mem := range db.queue {
@@ -22648,6 +22749,11 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 					dstEnqueueNS = append(dstEnqueueNS, 0)
 				}
 				dstRanges = append(dstRanges, r)
+				if i < len(db.queueRangeSpans) {
+					dstRangeSpans = append(dstRangeSpans, db.queueRangeSpans[i])
+				} else {
+					dstRangeSpans = append(dstRangeSpans, nil)
+				}
 				if i < len(db.queueWALPaths) {
 					dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
 				} else {
@@ -22665,6 +22771,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			db.queueIDs = dstIDs
 			db.queueEnqueueNS = dstEnqueueNS
 			db.queueRanges = dstRanges
+			db.queueRangeSpans = dstRangeSpans
 			db.queueWALPaths = dstWALPaths
 			db.queueValueLogPaths = dstValueLogPaths
 			db.resyncRootDomainQueuedRunsLocked()
@@ -23071,6 +23178,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
 			db.queueBacklogBytes.Add(memBytes)
 			db.queueRanges = append(db.queueRanges, shard.rng)
+			db.queueRangeSpans = append(db.queueRangeSpans, nil)
 			db.queueWALPaths = append(db.queueWALPaths, walPaths)
 			db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
 		} else {
@@ -23276,6 +23384,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
 			db.queueBacklogBytes.Add(memBytes)
 			db.queueRanges = append(db.queueRanges, shard.rng)
+			db.queueRangeSpans = append(db.queueRangeSpans, nil)
 			db.queueWALPaths = append(db.queueWALPaths, walPaths)
 			db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
 		} else {
@@ -23910,6 +24019,7 @@ type flushUnit struct {
 	memBytes int64
 	memLen   int
 	memRange keyRange
+	spans    []batch.DeleteRange
 	walPaths []string
 	id       uint64
 	laneID   int
@@ -23953,6 +24063,13 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		if i < len(db.queueRanges) {
 			rng = db.queueRanges[i]
 		}
+		var spans []batch.DeleteRange
+		if i < len(db.queueRangeSpans) {
+			spans = db.queueRangeSpans[i]
+		}
+		if len(spans) > 0 && len(units) > 0 {
+			break
+		}
 		var id uint64
 		if i < len(db.queueIDs) {
 			id = db.queueIDs[i]
@@ -23966,6 +24083,7 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 			memBytes: memBytes,
 			memLen:   memLen,
 			memRange: rng,
+			spans:    spans,
 			walPaths: walPaths,
 			id:       id,
 			laneID:   unitLaneID,
@@ -23973,13 +24091,29 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		ids = append(ids, id)
 		totalBytes += memBytes
 		totalLen += memLen
+		if len(spans) > 0 {
+			break
+		}
 	}
 	return units, ids, totalBytes, totalLen
 }
 
+func flushUnitSpanCount(units []flushUnit) int {
+	total := 0
+	for _, unit := range units {
+		total += len(unit.spans)
+	}
+	return total
+}
+
 func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flushUnit, totalBytes int64) {
 	for _, unit := range units {
-		if unit.memRange.valid {
+		if len(unit.spans) > 0 {
+			// Range deletes can shrink or clear the backend key range; force a later
+			// recompute instead of widening with stale min/max hints.
+			db.backendRangeKnown = false
+			db.backendRange = keyRange{}
+		} else if unit.memRange.valid {
 			db.backendRange.add(unit.memRange.min)
 			db.backendRange.add(unit.memRange.max)
 		}
@@ -23992,6 +24126,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	dstIDs := db.queueIDs[:0]
 	dstEnqueueNS := db.queueEnqueueNS[:0]
 	dstRanges := db.queueRanges[:0]
+	dstRangeSpans := db.queueRangeSpans[:0]
 	dstWALPaths := db.queueWALPaths[:0]
 	dstValueLogPaths := db.queueValueLogPaths[:0]
 
@@ -24024,6 +24159,9 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 		if i < len(db.queueRanges) {
 			dstRanges = append(dstRanges, db.queueRanges[i])
 		}
+		if i < len(db.queueRangeSpans) {
+			dstRangeSpans = append(dstRangeSpans, db.queueRangeSpans[i])
+		}
 		if i < len(db.queueWALPaths) {
 			dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
 		}
@@ -24038,6 +24176,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	db.queueIDs = dstIDs
 	db.queueEnqueueNS = dstEnqueueNS
 	db.queueRanges = dstRanges
+	db.queueRangeSpans = dstRangeSpans
 	db.queueWALPaths = dstWALPaths
 	db.queueValueLogPaths = dstValueLogPaths
 	db.resyncRootDomainQueuedRunsLocked()
@@ -24081,8 +24220,67 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 	if len(units) == 0 {
 		return false
 	}
+	totalSpans := flushUnitSpanCount(units)
 
-	if totalLen == 0 {
+	if totalLen == 0 && totalSpans == 0 {
+		db.mu.Lock()
+		removeIDs := make(map[uint64]struct{}, len(ids))
+		for _, id := range ids {
+			removeIDs[id] = struct{}{}
+		}
+		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
+		db.mu.Unlock()
+		return true
+	}
+	if totalLen == 0 && totalSpans > 0 {
+		backendBatch := db.newBackendBatchWithSize(totalSpans)
+		reserveBackendBatchOps(backendBatch, totalSpans)
+		pending := 0
+		for _, unit := range units {
+			for _, span := range unit.spans {
+				if err := backendBatch.DeleteRange(span.Start, span.End); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (range span): %w", err))
+					_ = backendBatch.Close()
+					return false
+				}
+				pending++
+			}
+		}
+		commandPublishAttached := false
+		if pending > 0 {
+			var attachErr error
+			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+			if attachErr != nil {
+				db.reportError(attachErr)
+				_ = backendBatch.Close()
+				return false
+			}
+			db.backendWriteBatchesTotal.Add(1)
+			var err error
+			if sync {
+				err = backendBatch.WriteSync()
+			} else {
+				err = backendBatch.Write()
+			}
+			cerr := backendBatch.Close()
+			if err == nil {
+				err = cerr
+			}
+			if err != nil {
+				db.reportError(err)
+				return false
+			}
+			if commandPublishAttached {
+				commandPublish.consumed = true
+				db.commandWALCheckpointPublishPiggybacked.Add(1)
+			}
+		} else if err := backendBatch.Close(); err != nil {
+			db.reportError(err)
+			return false
+		}
+
+		db.rangeSpanRangeOnlyFlushed.Add(uint64(len(units)))
+		db.rangeSpanSpansFlushed.Add(uint64(pending))
 		db.mu.Lock()
 		removeIDs := make(map[uint64]struct{}, len(ids))
 		for _, id := range ids {
@@ -24093,9 +24291,10 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		return true
 	}
 
-	backendEntriesCap := db.flushBackendEntriesCap(totalLen, sync)
+	backendEntriesCap := db.flushBackendEntriesCap(totalLen+totalSpans, sync)
 
-	useParallel := db.flushBuildConcurrency > 1 &&
+	useParallel := totalSpans == 0 &&
+		db.flushBuildConcurrency > 1 &&
 		totalLen >= db.flushBuildMinEntries &&
 		len(units) >= db.flushBuildMinUnits &&
 		runtime.GOMAXPROCS(0) > 1
@@ -25263,7 +25462,7 @@ func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
 }
 
 func (db *DB) canBypassMemtableReadWithSnapshot(view *memtableView, key []byte, snap rootDomainSnapshot, haveSnapshot bool) bool {
-	if view == nil || db.mutableBytes.Load() != 0 {
+	if view == nil || db.mutableBytes.Load() != 0 || memtableViewHasRangeSpans(view) {
 		return false
 	}
 	if haveSnapshot {
@@ -25293,7 +25492,7 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	if len(keys) == 0 {
 		return true
 	}
-	if view == nil || db.mutableBytes.Load() != 0 {
+	if view == nil || db.mutableBytes.Load() != 0 || memtableViewHasRangeSpans(view) {
 		return false
 	}
 	if len(view.rootPointShards) > 0 {
@@ -25638,6 +25837,29 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
+		if memtableViewHasRangeSpans(view) {
+			val, ptr, flags, found := db.lookupViewEntryWithRangeSpans(view, key, true)
+			if found {
+				if flags&node.FlagTombstone != 0 {
+					return nil, true, nil
+				}
+				if flags&node.FlagPointer != 0 {
+					if val == nil {
+						readVal, err := db.readValueLog(key, ptr)
+						if err != nil {
+							return nil, true, err
+						}
+						return readVal, true, nil
+					}
+					return val, true, nil
+				}
+				if val == nil {
+					return []byte{}, true, nil
+				}
+				return val, true, nil
+			}
+			return nil, false, nil
+		}
 		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
 		if db.canBypassMemtableReadWithSnapshot(view, key, snap, haveSnapshot) {
 			return nil, false, nil
@@ -25693,6 +25915,29 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
+		if memtableViewHasRangeSpans(view) {
+			val, ptr, flags, found := db.lookupViewEntryWithRangeSpans(view, key, true)
+			if found {
+				if flags&node.FlagTombstone != 0 {
+					return dst, true, tree.ErrKeyNotFound
+				}
+				if flags&node.FlagPointer != 0 {
+					if val == nil {
+						out, err := db.readValueLogAppend(key, ptr, dst)
+						if err != nil {
+							return dst, true, err
+						}
+						return out, true, nil
+					}
+					return append(dst, val...), true, nil
+				}
+				if val == nil {
+					return dst, true, nil
+				}
+				return append(dst, val...), true, nil
+			}
+			return dst, false, nil
+		}
 		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
 		if db.canBypassMemtableReadWithSnapshot(view, key, snap, haveSnapshot) {
 			return dst, false, nil
@@ -25905,7 +26150,7 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	if view != nil {
 		defer db.releaseMemtableView(view)
 	}
-	if view != nil && len(view.rootPointShards) > 0 {
+	if view != nil && len(view.rootPointShards) > 0 && !memtableViewHasRangeSpans(view) {
 		return db.getManyFromPublishedRootPointShards(view, keys)
 	}
 	db.noteRootDomainGetManyFallback(len(keys))
@@ -26008,7 +26253,7 @@ func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 	if view != nil {
 		defer db.releaseMemtableView(view)
 	}
-	if view != nil && len(view.rootPointShards) > 0 {
+	if view != nil && len(view.rootPointShards) > 0 && !memtableViewHasRangeSpans(view) {
 		return db.getManyViewFromPublishedRootPointShards(view, keys, fn)
 	}
 	db.noteRootDomainGetManyFallback(len(keys))
@@ -26079,6 +26324,13 @@ func (db *DB) Has(key []byte) (bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
+		if memtableViewHasRangeSpans(view) {
+			_, _, flags, found := db.lookupViewEntryWithRangeSpans(view, key, true)
+			if found {
+				return flags&node.FlagTombstone == 0, nil
+			}
+			return db.backend.Has(key)
+		}
 		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
 		if haveSnapshot {
 			_, _, flags, found := snap.getEntry(key)
@@ -26115,6 +26367,16 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
+		if memtableViewHasRangeSpans(view) {
+			for i, key := range keys {
+				exists, err := db.Has(key)
+				if err != nil {
+					return nil, err
+				}
+				out[i] = exists
+			}
+			return out, nil
+		}
 	}
 	backendSnap := provider.AcquireSnapshot()
 	if backendSnap == nil {
@@ -26418,9 +26680,12 @@ func (db *DB) Stats() map[string]string {
 	db.mu.RUnlock()
 	var mutableTables []memtable.Table
 	var queueTables []memtable.Table
+	rangeSpanActiveLayers := 0
+	rangeSpanActiveSpans := 0
 	if view := db.retainMemtableViewUntracked(); view != nil {
 		mutableTables = append(mutableTables, view.mutables...)
 		queueTables = append(queueTables, view.queue...)
+		rangeSpanActiveLayers, rangeSpanActiveSpans = rangeSpanLayerCounts(view.queueRangeSpans)
 		db.releaseUntrackedMemtableView(view)
 	} else {
 		db.mu.RLock()
@@ -26431,6 +26696,7 @@ func (db *DB) Stats() map[string]string {
 			}
 		}
 		queueTables = append(queueTables, db.queue...)
+		rangeSpanActiveLayers, rangeSpanActiveSpans = rangeSpanLayerCounts(db.queueRangeSpans)
 		db.mu.RUnlock()
 	}
 	mutableResidency := summarizeMemtableResidency(mutableTables)
@@ -26603,6 +26869,20 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.delete_range.fast_path_clears_total"] = fmt.Sprintf("%d", db.deleteRangeFastPathClears.Load())
 	stats["treedb.cache.delete_range.backend_direct_batches_total"] = fmt.Sprintf("%d", db.deleteRangeBackendDirectBatches.Load())
 	stats["treedb.cache.delete_range.backend_direct_keys_total"] = fmt.Sprintf("%d", db.deleteRangeBackendDirectKeys.Load())
+	stats["treedb.cache.range_span.layers_total"] = fmt.Sprintf("%d", db.rangeSpanLayersTotal.Load())
+	stats["treedb.cache.range_span.active_layers"] = fmt.Sprintf("%d", rangeSpanActiveLayers)
+	stats["treedb.cache.range_span.active_spans"] = fmt.Sprintf("%d", rangeSpanActiveSpans)
+	stats["treedb.cache.range_span.input_total"] = fmt.Sprintf("%d", db.rangeSpanInputTotal.Load())
+	stats["treedb.cache.range_span.effective_total"] = fmt.Sprintf("%d", db.rangeSpanEffectiveTotal.Load())
+	stats["treedb.cache.range_span.keys_materialized_total"] = fmt.Sprintf("%d", db.rangeSpanKeysMaterializedTotal.Load())
+	stats["treedb.cache.range_span.point_overrides_total"] = fmt.Sprintf("%d", db.rangeSpanPointOverridesTotal.Load())
+	stats["treedb.cache.range_span.point_probes_total"] = fmt.Sprintf("%d", db.rangeSpanPointProbes.Load())
+	stats["treedb.cache.range_span.point_hits_total"] = fmt.Sprintf("%d", db.rangeSpanPointHits.Load())
+	stats["treedb.cache.range_span.iterator_probes_total"] = fmt.Sprintf("%d", db.rangeSpanIteratorProbes.Load())
+	stats["treedb.cache.range_span.iterator_skips_total"] = fmt.Sprintf("%d", db.rangeSpanIteratorSkips.Load())
+	stats["treedb.cache.range_span.range_only_queued_units_total"] = fmt.Sprintf("%d", db.rangeSpanRangeOnlyQueuedUnits.Load())
+	stats["treedb.cache.range_span.range_only_flushed_total"] = fmt.Sprintf("%d", db.rangeSpanRangeOnlyFlushed.Load())
+	stats["treedb.cache.range_span.spans_flushed_total"] = fmt.Sprintf("%d", db.rangeSpanSpansFlushed.Load())
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
 	stats["treedb.cache.mutable_flush_threshold_base_bytes"] = fmt.Sprintf("%d", mutableThresholdBase)
@@ -28674,11 +28954,15 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	}()
 	var queue []memtable.Table
 	var queueRanges []keyRange
+	var queueRangeSpans [][]batch.DeleteRange
 	if view != nil {
 		if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
 			queue = snap.immutables
 			if len(view.rootIteratorRanges) == len(queue) {
 				queueRanges = view.rootIteratorRanges
+			}
+			if len(view.queueRangeSpans) == len(queue) {
+				queueRangeSpans = view.queueRangeSpans
 			}
 		}
 	} else {
@@ -28731,7 +29015,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// Note: We skip mutable shards because we just rotated them (so they're empty) or they were already empty.
 	prio := 0
 	for i := len(queue) - 1; i >= 0; i-- {
-		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+		spanOverlap := i < len(queueRangeSpans) && rangeSpansOverlapQuery(queueRangeSpans[i], start, end)
+		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) && !spanOverlap {
 			prio++
 			continue
 		}
@@ -28741,6 +29026,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 				return db.readValueLog(key, ptr)
 			})
 		}
+		qIter = newRangeSpanFilteringIterator(qIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, i), db)
 		sources = append(sources, merging.IteratorSource{
 			Iter:     qIter,
 			Priority: prio,
@@ -28762,6 +29048,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			return nil, err
 		}
 
+		diskIter = newRangeSpanFilteringIterator(diskIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, -1), db)
 		sources = append(sources, merging.IteratorSource{
 			Iter:     diskIter,
 			Priority: prio,
@@ -29041,11 +29328,15 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	}()
 	var queue []memtable.Table
 	var queueRanges []keyRange
+	var queueRangeSpans [][]batch.DeleteRange
 	if view != nil {
 		if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
 			queue = snap.immutables
 			if len(view.rootIteratorRanges) == len(queue) {
 				queueRanges = view.rootIteratorRanges
+			}
+			if len(view.queueRangeSpans) == len(queue) {
+				queueRangeSpans = view.queueRangeSpans
 			}
 		}
 	} else {
@@ -29083,7 +29374,8 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Priority 0..N: Queue (Newest first)
 	prio := 0
 	for i := len(queue) - 1; i >= 0; i-- {
-		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+		spanOverlap := i < len(queueRangeSpans) && rangeSpansOverlapQuery(queueRangeSpans[i], start, end)
+		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) && !spanOverlap {
 			prio++
 			continue
 		}
@@ -29093,6 +29385,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 				return db.readValueLog(key, ptr)
 			})
 		}
+		qIter = newRangeSpanFilteringIterator(qIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, i), db)
 		sources = append(sources, merging.IteratorSource{
 			Iter:     qIter,
 			Priority: prio,
@@ -29113,6 +29406,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			return nil, err
 		}
 
+		diskIter = newRangeSpanFilteringIterator(diskIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, -1), db)
 		sources = append(sources, merging.IteratorSource{
 			Iter:     diskIter,
 			Priority: prio,
@@ -30631,6 +30925,9 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 		b.Reset()
 		return nil
 	}
+	if b.commandWALAppend != nil && b.db.disableJournal && len(points) == 0 && len(ranges) > 0 {
+		return b.writeRangeSpanBatch(sync, ranges)
+	}
 
 	// Hold the writer gate across snapshot enumeration and publish. Without this,
 	// a concurrent cached write can slip between the scan and the materialized
@@ -30704,6 +31001,68 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 		b.hasViewOps = origHasViewOps
 	}
 	return err
+}
+
+func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err error) {
+	_ = sync
+	if b == nil || b.db == nil {
+		return backenddb.ErrClosed
+	}
+	if len(ranges) == 0 {
+		b.updateBatchEntryHint()
+		b.updateBatchCopyHint()
+		b.Reset()
+		return nil
+	}
+	commandWALAppended := false
+	defer func() {
+		if err != nil && commandWALAppended {
+			b.db.reportError(fmt.Errorf("cachingdb: post-command-wal range batch failed: %w", err))
+		}
+	}()
+
+	b.db.flushMu.Lock()
+	defer b.db.flushMu.Unlock()
+	b.db.writeMu.Lock()
+	defer b.db.writeMu.Unlock()
+
+	b.db.mu.Lock()
+	rotate := b.db.mutableBytes.Load() > 0
+	if !rotate {
+		for i := range b.db.mutableShards {
+			mt := b.db.mutableShards[i].mem
+			if mt != nil && mt.Len() != 0 {
+				rotate = true
+				break
+			}
+		}
+	}
+	if rotate {
+		if err := b.db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
+			b.db.mu.Unlock()
+			return err
+		}
+	}
+	if b.commandWALAppend != nil {
+		if err := b.commandWALAppend(); err != nil {
+			b.db.mu.Unlock()
+			return err
+		}
+		commandWALAppended = true
+	}
+	if err := b.db.enqueueRangeSpanLayerLocked(ranges); err != nil {
+		b.db.mu.Unlock()
+		return err
+	}
+	b.db.publishMemtablesLocked()
+	b.db.mu.Unlock()
+
+	b.db.noteWrite()
+	b.db.maybeAssistFlush()
+	b.updateBatchEntryHint()
+	b.updateBatchCopyHint()
+	b.Reset()
+	return nil
 }
 
 func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
