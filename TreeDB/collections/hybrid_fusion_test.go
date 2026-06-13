@@ -73,6 +73,68 @@ func TestHybridRRFFusionVectorOnlyUsesRanks(t *testing.T) {
 	}
 }
 
+func TestHybridFusionWeightedAndNormalizedScores(t *testing.T) {
+	candidates := []HybridSearchCandidate{
+		hybridFusionCandidate("text-1", HybridCandidateSourceText, 1, 10, HybridScoreKindBM25),
+		hybridFusionCandidate("text-2", HybridCandidateSourceText, 2, 5, HybridScoreKindBM25),
+		hybridFusionCandidate("vector-1", HybridCandidateSourceVector, 1, 0.7, HybridScoreKindVectorSimilarity),
+		hybridFusionCandidate("shared", HybridCandidateSourceText, 3, 1, HybridScoreKindBM25),
+		hybridFusionCandidate("shared", HybridCandidateSourceVector, 2, 0.9, HybridScoreKindVectorSimilarity),
+	}
+
+	weighted, _, err := FuseHybridSearchCandidates(candidates, HybridFusionOptions{Method: HybridFusionMethodWeightedRRF, TextWeight: 0.5, VectorWeight: 2}, 10)
+	if err != nil {
+		t.Fatalf("weighted FuseHybridSearchCandidates: %v", err)
+	}
+	if got := string(weighted[0].ID); got != "shared" {
+		t.Fatalf("weighted top=%q want shared overlap from weighted text+vector contributions; results=%+v", got, weighted)
+	}
+	if got, want := weighted[0].FusedScore, 0.5/63.0+2.0/62.0; !hybridFloatClose(got, want) {
+		t.Fatalf("weighted score=%g want %g", got, want)
+	}
+
+	normalized, _, err := FuseHybridSearchCandidates(candidates, HybridFusionOptions{Method: HybridFusionMethodNormalizedScore, TextWeight: 1, VectorWeight: 1}, 10)
+	if err != nil {
+		t.Fatalf("normalized FuseHybridSearchCandidates: %v", err)
+	}
+	if got := string(normalized[0].ID); got != "text-1" {
+		t.Fatalf("normalized top=%q want text-1; results=%+v", got, normalized)
+	}
+	var shared HybridSearchResult
+	for _, result := range normalized {
+		if string(result.ID) == "shared" {
+			shared = result
+			break
+		}
+	}
+	if len(shared.Sources) != 2 {
+		t.Fatalf("normalized shared sources=%+v want text+vector", shared.Sources)
+	}
+	if got, want := shared.FusedScore, 1.0; !hybridFloatClose(got, want) {
+		t.Fatalf("normalized shared fused=%g want vector max contribution 1 and text min contribution 0", got)
+	}
+
+	_, _, err = FuseHybridSearchCandidates([]HybridSearchCandidate{hybridFusionCandidate("bad", HybridCandidateSourceText, 1, math.NaN(), HybridScoreKindBM25)}, HybridFusionOptions{Method: HybridFusionMethodNormalizedScore}, 1)
+	if !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Fatalf("normalized NaN err=%v want ErrHybridSearchUnsupported", err)
+	}
+	equalScores, _, err := FuseHybridSearchCandidates([]HybridSearchCandidate{
+		hybridFusionCandidate("a", HybridCandidateSourceText, 2, 5, HybridScoreKindBM25),
+		hybridFusionCandidate("b", HybridCandidateSourceText, 1, 5, HybridScoreKindBM25),
+	}, HybridFusionOptions{Method: HybridFusionMethodNormalizedScore}, 10)
+	if err != nil {
+		t.Fatalf("normalized equal-score FuseHybridSearchCandidates: %v", err)
+	}
+	if len(equalScores) != 2 || string(equalScores[0].ID) != "b" || !hybridFloatClose(equalScores[0].FusedScore, 1) || !hybridFloatClose(equalScores[1].FusedScore, 1) {
+		t.Fatalf("equal-score normalized results=%+v want span-zero contributions of 1 ordered by source rank", equalScores)
+	}
+
+	_, _, err = FuseHybridSearchCandidates(candidates, HybridFusionOptions{Method: HybridFusionMethodWeightedRRF, TextWeight: math.Inf(1)}, 1)
+	if !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Fatalf("bad weight err=%v want ErrHybridSearchUnsupported", err)
+	}
+}
+
 func TestHybridRRFFusionDeduplicatesExactIDsAndPreservesAttribution(t *testing.T) {
 	candidates := []HybridSearchCandidate{
 		{

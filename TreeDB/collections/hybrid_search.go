@@ -40,7 +40,9 @@ const (
 type HybridFusionMethod string
 
 const (
-	HybridFusionMethodRRF HybridFusionMethod = "rrf"
+	HybridFusionMethodRRF             HybridFusionMethod = "rrf"
+	HybridFusionMethodWeightedRRF     HybridFusionMethod = "weighted_rrf"
+	HybridFusionMethodNormalizedScore HybridFusionMethod = "normalized_score"
 )
 
 // HybridFusionTiePolicy names the deterministic total-order policy applied
@@ -128,10 +130,12 @@ type HybridScalarFilter struct {
 // HybridFusionOptions configures deterministic rank fusion. For RRF, RRFK=0
 // means the implementation default (documented as 60 by the contract spec).
 type HybridFusionOptions struct {
-	Method      HybridFusionMethod      `json:"method,omitempty"`
-	RRFK        int                     `json:"rrf_k,omitempty"`
-	TiePolicy   HybridFusionTiePolicy   `json:"tie_policy,omitempty"`
-	SourceOrder []HybridCandidateSource `json:"source_order,omitempty"`
+	Method       HybridFusionMethod      `json:"method,omitempty"`
+	RRFK         int                     `json:"rrf_k,omitempty"`
+	TiePolicy    HybridFusionTiePolicy   `json:"tie_policy,omitempty"`
+	SourceOrder  []HybridCandidateSource `json:"source_order,omitempty"`
+	TextWeight   float64                 `json:"text_weight,omitempty"`
+	VectorWeight float64                 `json:"vector_weight,omitempty"`
 }
 
 // HybridConsistencyOptions describes the snapshot binding requested by the
@@ -147,6 +151,17 @@ type HybridSearchDebugOptions struct {
 	IncludeCandidates bool `json:"include_candidates,omitempty"`
 }
 
+// HybridResultMode controls how much final result payload SearchHybrid returns.
+// Score-only and compact modes do not fetch final documents; full mode fetches
+// bounded top-k documents after fusion.
+type HybridResultMode string
+
+const (
+	HybridResultModeCompact   HybridResultMode = "compact"
+	HybridResultModeScoreOnly HybridResultMode = "score_only"
+	HybridResultModeFull      HybridResultMode = "full"
+)
+
 // HybridSearchOptions is the collection-level combined retrieval contract for
 // scalar filters, lexical candidates, vector candidates, deterministic fusion,
 // and bounded final document fetch.
@@ -157,6 +172,7 @@ type HybridSearchOptions struct {
 	ScalarFilter         *HybridScalarFilter        `json:"scalar_filter,omitempty"`
 	ScalarFilterStrategy HybridScalarFilterStrategy `json:"scalar_filter_strategy,omitempty"`
 	Fusion               HybridFusionOptions        `json:"fusion,omitempty"`
+	ResultMode           HybridResultMode           `json:"result_mode,omitempty"`
 	IncludeDocuments     bool                       `json:"include_documents,omitempty"`
 	DocumentFetchOptions DocumentFetchOptions       `json:"document_fetch_options,omitempty"`
 	Consistency          HybridConsistencyOptions   `json:"consistency,omitempty"`
@@ -196,8 +212,9 @@ type HybridSourceContribution struct {
 }
 
 // HybridSearchResult is one fused final result. Rank is one-based in the final
-// fused order. FusedScore is higher-is-better. Document is populated only when
-// IncludeDocuments is true and only after bounded top-k selection.
+// fused order. FusedScore is higher-is-better. Document is populated only in
+// full result mode (or legacy IncludeDocuments=true) and only after bounded
+// top-k selection.
 type HybridSearchResult struct {
 	ID            []byte                     `json:"id"`
 	Rank          int                        `json:"rank"`
@@ -213,6 +230,7 @@ type HybridSearchPlan struct {
 	ScalarFilterStrategy HybridScalarFilterStrategy `json:"scalar_filter_strategy,omitempty"`
 	FusionMethod         HybridFusionMethod         `json:"fusion_method,omitempty"`
 	FusionTiePolicy      HybridFusionTiePolicy      `json:"fusion_tie_policy,omitempty"`
+	ResultMode           HybridResultMode           `json:"result_mode,omitempty"`
 	TextCandidateLimit   int                        `json:"text_candidate_limit,omitempty"`
 	VectorCandidateLimit int                        `json:"vector_candidate_limit,omitempty"`
 	FinalTopK            int                        `json:"final_top_k,omitempty"`

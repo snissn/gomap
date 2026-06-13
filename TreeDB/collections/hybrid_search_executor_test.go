@@ -137,6 +137,93 @@ func TestSearchHybridExecutorTextOnlyAndVectorOnly2505(t *testing.T) {
 	}
 }
 
+func TestSearchHybridScalarPrefilterPushesIntoVectorCandidates2729(t *testing.T) {
+	_, d, col, def := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
+		{id: "doc-unallowed-best", title: "shipping", body: "shipping", city: "sfo", score: 10, vector: []float32{1, 0, 0}},
+		{id: "doc-allowed-best", title: "shipping", body: "shipping", city: "sea", score: 20, vector: []float32{0.8, 0.2, 0}},
+		{id: "doc-unallowed-worse", title: "shipping", body: "shipping", city: "sfo", score: 30, vector: []float32{0.2, 0.8, 0}},
+	})
+	defer func() { _ = d.Close() }()
+
+	got, err := col.SearchHybrid(HybridSearchOptions{
+		TopK:         1,
+		Vector:       &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 1, EfSearch: 1, QueryMode: VectorIndexQueryModeExact},
+		ScalarFilter: &HybridScalarFilter{IndexName: "city", Value: "sea"},
+	})
+	if err != nil {
+		t.Fatalf("SearchHybrid vector scalar prefilter: %v", err)
+	}
+	if gotIDs := hybridResultIDs2505(got.Results); !slicesEqualStrings(gotIDs, []string{"doc-allowed-best"}) {
+		t.Fatalf("ids=%v response=%+v want best allowed vector result despite unallowed global top-1", gotIDs, got)
+	}
+	if got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.VectorCandidatesReturned != 1 || got.Stats.VectorCandidatesExamined != 1 || got.Stats.Truncated != 0 {
+		t.Fatalf("stats=%+v want no-doc vector allow-set candidate generation", got.Stats)
+	}
+	if got.Stats.ScalarPrefilterIDs != 1 || got.Stats.ScalarPostfilterChecks != 1 || got.Stats.ScalarFilterMatched != 1 || got.Stats.ScalarFilterRejected != 2 {
+		t.Fatalf("stats=%+v want exact vector allow-set matched/rejected counters", got.Stats)
+	}
+}
+
+func TestSearchHybridResultModes2505(t *testing.T) {
+	_, d, col, def := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
+		{id: "doc-a", title: "refund", body: "refund", city: "sea", score: 10, vector: []float32{1, 0, 0}},
+		{id: "doc-b", title: "refund", body: "policy", city: "sea", score: 20, vector: []float32{0.9, 0.1, 0}},
+	})
+	defer func() { _ = d.Close() }()
+
+	base := HybridSearchOptions{
+		TopK:   1,
+		Text:   &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 2},
+		Vector: &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 2, EfSearch: 2, QueryMode: VectorIndexQueryModeExact},
+	}
+	scoreOnly := base
+	scoreOnly.ResultMode = HybridResultModeScoreOnly
+	got, err := col.SearchHybrid(scoreOnly)
+	if err != nil {
+		t.Fatalf("SearchHybrid score-only: %v", err)
+	}
+	if got.Plan.ResultMode != HybridResultModeScoreOnly || len(got.Results) != 1 || len(got.Results[0].Sources) != 0 || got.Stats.DocumentsFetched != 0 {
+		t.Fatalf("score-only response=%+v stats=%+v want no sources and no docs", got, got.Stats)
+	}
+
+	compact := base
+	compact.ResultMode = HybridResultModeCompact
+	got, err = col.SearchHybrid(compact)
+	if err != nil {
+		t.Fatalf("SearchHybrid compact: %v", err)
+	}
+	if got.Plan.ResultMode != HybridResultModeCompact || len(got.Results) != 1 || len(got.Results[0].Sources) == 0 || len(got.Results[0].Document) != 0 || got.Stats.DocumentsFetched != 0 {
+		t.Fatalf("compact response=%+v stats=%+v want sources and no docs", got, got.Stats)
+	}
+
+	full := base
+	full.ResultMode = HybridResultModeFull
+	full.DocumentFetchOptions = DocumentFetchOptions{ExcludePaths: []string{"embedding"}}
+	got, err = col.SearchHybrid(full)
+	if err != nil {
+		t.Fatalf("SearchHybrid full: %v", err)
+	}
+	if got.Plan.ResultMode != HybridResultModeFull || len(got.Results) != 1 || !got.Results[0].DocumentFound || got.Stats.DocumentsFetched != 1 {
+		t.Fatalf("full response=%+v stats=%+v want bounded final doc", got, got.Stats)
+	}
+
+	conflict := base
+	conflict.ResultMode = HybridResultModeScoreOnly
+	conflict.IncludeDocuments = true
+	failed, err := col.SearchHybrid(conflict)
+	if !errors.Is(err, ErrHybridSearchUnsupported) || failed.Stats.FailClosed == 0 {
+		t.Fatalf("conflicting mode response=%+v err=%v want fail-closed unsupported", failed, err)
+	}
+
+	projectionWithoutFull := base
+	projectionWithoutFull.ResultMode = HybridResultModeCompact
+	projectionWithoutFull.DocumentFetchOptions = DocumentFetchOptions{ExcludePaths: []string{"embedding"}}
+	failed, err = col.SearchHybrid(projectionWithoutFull)
+	if !errors.Is(err, ErrHybridSearchUnsupported) || failed.Stats.FailClosed == 0 {
+		t.Fatalf("compact projection response=%+v err=%v want fail-closed unsupported", failed, err)
+	}
+}
+
 func TestSearchHybridScalarFilterRangeAndFailClosed2505(t *testing.T) {
 	_, d, col := openHybridScalarSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
 		{id: "doc-10", title: "refund", body: "refund", city: "sea", score: 10, vector: []float32{1, 0, 0}},

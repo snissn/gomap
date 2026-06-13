@@ -25,7 +25,7 @@ vector typed-column placement is covered by
 | Vector-only (`SearchVectorIndex` / `SearchHybrid` with only `Vector`) | Semantic nearest-neighbor recall is the main signal. | Keep vector route choices (`exact`, `quantized_only`, `quantized_rerank`) and their recall/storage caveats separate from hybrid claims. |
 | Hybrid (`SearchHybrid` with `Text` + `Vector`) | You need both lexical precision and semantic candidates, usually with a metadata/scalar filter and final materialized documents. | Default fusion is rank-based RRF, not learned relevance. Caller/future layers own reranking/cross-encoder/LLM scoring. |
 
-Hybrid candidate generation must not fetch full documents. Newly-created text indexes use text-v2 by default; set `TextIndexDefinition.Version: TextIndexVersionV1` only for the legacy compatibility path. Text candidates are score-only by default; set `HybridTextQuery.IncludeTextMatches=true` only when a bounded compact field/term summary is needed. Documents are fetched only after fusion/filtering and are bounded by final `TopK` when `IncludeDocuments` is true.
+Hybrid candidate generation must not fetch full documents. Newly-created text indexes use text-v2 by default; set `TextIndexDefinition.Version: TextIndexVersionV1` only for the legacy compatibility path. Text candidates are score-only by default; set `HybridTextQuery.IncludeTextMatches=true` only when a bounded compact field/term summary is needed. Use `ResultMode` to choose `score_only`, `compact`, or `full`; documents are fetched only in full mode (or legacy `IncludeDocuments=true`) after fusion/filtering and are bounded by final `TopK`.
 
 ## Index creation sketch
 
@@ -100,8 +100,12 @@ resp, err := col.SearchHybrid(collections.HybridSearchOptions{
     Fusion: collections.HybridFusionOptions{
         Method: collections.HybridFusionMethodRRF,
         RRFK: 60,
+        // Optional alternatives:
+        // Method: collections.HybridFusionMethodWeightedRRF,
+        // TextWeight: 1.2, VectorWeight: 0.8,
+        // Method: collections.HybridFusionMethodNormalizedScore,
     },
-    IncludeDocuments: true,
+    ResultMode: collections.HybridResultModeFull,
     DocumentFetchOptions: collections.DocumentFetchOptions{
         ExcludePaths: []string{"embedding"},
     },
@@ -114,8 +118,10 @@ fail-closed reason, fallback count, and truncation signal.
 
 ## Caveats and evidence links
 
-- Score fusion is deterministic reciprocal-rank fusion. It does not normalize or
-  learn across BM25F/vector score scales.
+- Default score fusion is deterministic reciprocal-rank fusion. Weighted RRF and
+  exact per-source normalized-score fusion are available, but TreeDB does not
+  learn relevance weights or estimate scores for candidates outside the requested
+  source budgets.
 - Text analyzer/query limits come from #1764: current `simple` analyzer,
   whitespace terms plus `AND`/`OR`; no phrase/proximity/fuzzy/trigram support.
 - Vector route evidence remains separate. #2490/#2492/#2493/#2494 provide

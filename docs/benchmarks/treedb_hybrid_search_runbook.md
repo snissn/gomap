@@ -16,9 +16,9 @@ Parent tracker: <https://github.com/snissn/gomap/issues/2501>. Closeout issue:
   Dedicated `SearchText` and vector-only hot-path benchmarks remain their own
   evidence lanes.
 - Candidate generation must fetch zero full documents. The benchmark reports
-  `docs_fetched/search`; no-document rows must stay at `0`. The
-  `hybrid_fetch_topk` row enables final document fetch and must remain
-  `<= topK/search`.
+  `docs_fetched/search`; no-document rows must stay at `0`. Compact/score-only
+  result modes must also stay at `0`. The `hybrid_fetch_topk` row enables full
+  final document fetch and must remain `<= topK/search`.
 - The fixture is small enough for local closeout/profile smoke. Treat the rows as
   same-host context unless a later quiet-host campaign reruns the same command
   contract.
@@ -113,7 +113,9 @@ Every accepted table should include:
 - vector counters: `vector_requested/search`, `vector_candidates/search`,
   `vector_examined/search`, `vector_edges/search`;
 - scalar/fusion/fetch counters: `scalar_prefilter_ids/search`,
-  `scalar_matched/search`, `scalar_rejected/search`,
+  `scalar_matched/search`, `scalar_rejected/search` (`scalar_rejected/search`
+  includes vector rows pruned by a selective scalar allow-set when that pushdown
+  route is active),
   `candidates_fused/search`, `candidates_after_filter/search`,
   `fusion_text_only/search`, `fusion_vector_only/search`,
   `fusion_both/search`, `docs_fetched/search`;
