@@ -43,8 +43,18 @@ run_go_bench() {
   "$@" | tee "$outfile"
 }
 
+scoreboard_doc_label() {
+  local docs="$1"
+  case "$docs" in
+    10000) printf '10k' ;;
+    100000) printf '100k' ;;
+    1000000) printf '1m' ;;
+    *) printf 'docs_%s' "$docs" ;;
+  esac
+}
+
 INDEX_10K="$RUN_DIR/treedb_index_insert_search_10k.txt"
-run_go_bench "TreeDB 10k text-v2/vector/hybrid+scalar candidates" "$INDEX_10K" \
+run_go_bench "TreeDB $DOCS_10K-doc text-v2/vector/hybrid+scalar candidates" "$INDEX_10K" \
   env GOWORK=off \
     TREEDB_INDEX_BENCH_DOCS="$DOCS_10K" \
     TREEDB_INDEX_BENCH_DIMS="$DIMS" \
@@ -56,8 +66,9 @@ run_go_bench "TreeDB 10k text-v2/vector/hybrid+scalar candidates" "$INDEX_10K" \
       -benchtime="$BENCHTIME" \
       -count="$COUNT"
 
-HYBRID_10K="$RUN_DIR/treedb_hybrid_closeout_10k.txt"
-run_go_bench "TreeDB 10k text-only/vector-only/hybrid/hybrid+scalar executor rows" "$HYBRID_10K" \
+HYBRID_10K_LABEL="treedb_hybrid_closeout_$(scoreboard_doc_label "$DOCS_10K")"
+HYBRID_10K="$RUN_DIR/$HYBRID_10K_LABEL.txt"
+run_go_bench "TreeDB $DOCS_10K-doc text-only/vector-only/hybrid/hybrid+scalar executor rows" "$HYBRID_10K" \
   env GOWORK=off \
     TREEDB_HYBRID_BENCH_DOCS="$DOCS_10K" \
     TREEDB_HYBRID_BENCH_DIMS="$DIMS" \
@@ -70,7 +81,7 @@ run_go_bench "TreeDB 10k text-only/vector-only/hybrid/hybrid+scalar executor row
       -count="$COUNT"
 
 TEXT_BLOCKMAX_10K="$RUN_DIR/treedb_text_blockmax_10k.txt"
-run_go_bench "TreeDB 10k text-v2 blockmax/exhaustive common-term rows" "$TEXT_BLOCKMAX_10K" \
+run_go_bench "TreeDB $DOCS_10K-doc text-v2 blockmax/exhaustive common-term rows" "$TEXT_BLOCKMAX_10K" \
   env GOWORK=off \
     TREEDB_TEXT_V2_BLOCKMAX_DOCS="$DOCS_10K" \
     "$GO_BIN" test ./TreeDB/collections \
@@ -86,10 +97,10 @@ SCOREBOARD_ARGS=(
   -base-ref "origin/main"
   -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)"
   -go-bench "treedb_index_insert_search_10k=$INDEX_10K"
-  -go-bench "treedb_hybrid_closeout_10k=$HYBRID_10K"
+  -go-bench "$HYBRID_10K_LABEL=$HYBRID_10K"
   -go-bench "treedb_text_blockmax_10k=$TEXT_BLOCKMAX_10K"
   -command "treedb_index_insert_search_10k=GOWORK=off TREEDB_INDEX_BENCH_DOCS=$DOCS_10K TREEDB_INDEX_BENCH_DIMS=$DIMS TREEDB_INDEX_BENCH_M=$M $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkIndexInsertSearch2564/(search_text_v2_candidates_no_docs|search_vector_candidates_no_docs|search_hybrid_v2_no_docs_scalar_filter|indexed_insert_batch_flush_vector_rebuild)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
-  -command "treedb_hybrid_closeout_10k=GOWORK=off TREEDB_HYBRID_BENCH_DOCS=$DOCS_10K TREEDB_HYBRID_BENCH_DIMS=$DIMS TREEDB_HYBRID_BENCH_M=$M $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
+  -command "$HYBRID_10K_LABEL=GOWORK=off TREEDB_HYBRID_BENCH_DOCS=$DOCS_10K TREEDB_HYBRID_BENCH_DIMS=$DIMS TREEDB_HYBRID_BENCH_M=$M $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
   -command "treedb_text_blockmax_10k=GOWORK=off TREEDB_TEXT_V2_BLOCKMAX_DOCS=$DOCS_10K $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
 )
 
@@ -145,9 +156,9 @@ Primary artifacts:
 - scoreboard: \`$RUN_DIR/scoreboard.md\`
 - scoreboard JSON: \`$RUN_DIR/scoreboard.json\`
 - context: \`$RUN_DIR/context.txt\`
-- TreeDB 10k index/search raw: \`$INDEX_10K\`
-- TreeDB 10k hybrid executor raw: \`$HYBRID_10K\`
-- TreeDB 10k text blockmax raw: \`$TEXT_BLOCKMAX_10K\`
+- TreeDB $DOCS_10K-doc index/search raw: \`$INDEX_10K\`
+- TreeDB $DOCS_10K-doc hybrid executor raw: \`$HYBRID_10K\`
+- TreeDB $DOCS_10K-doc text blockmax raw: \`$TEXT_BLOCKMAX_10K\`
 
 Set \`RUN_100K=true\` for the heavier 100k text blockmax rows. Set
 \`RUN_SQLITE_FTS5=false\` to skip the local SQLite FTS5 embedded text baseline.

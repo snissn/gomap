@@ -35,6 +35,11 @@ go run ./cmd/treedb_text_hybrid_scoreboard \
   -external "sqlite_fts5_10k=$RUN_DIR/sqlite_fts5_10k.json"
 ```
 
+When `DOCS_10K` is overridden for smoke or scaled-down runs, the script uses an
+exact-doc hybrid source label such as `treedb_hybrid_closeout_docs_64` so the
+report dataset metadata reflects the actual fixture size rather than the default
+10k label.
+
 The generator fails closed by default when a TreeDB no-document candidate row has
 non-zero `docs_fetched/search`, `full_doc_fallbacks/search`, `fail_closed/search`,
 or text-v2 state/match-detail counters where score-only rows require zero. Use

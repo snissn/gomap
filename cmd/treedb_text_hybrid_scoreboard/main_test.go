@@ -76,6 +76,33 @@ func TestRowsFromGoBenchRejectsEmptyArtifacts(t *testing.T) {
 	}
 }
 
+func TestHybridCloseoutOverrideLabelDrivesDatasetDocs(t *testing.T) {
+	dir := t.TempDir()
+	goBench := filepath.Join(dir, "hybrid.txt")
+	if err := os.WriteFile(goBench, []byte(`BenchmarkSearchHybridCloseout2506/mode_hybrid_no_docs/topK_10/candidates_64/filter_none_100pct-8 1 1000 ns/op 10 B/op 1 allocs/op 0 docs_fetched/search 0 full_doc_fallbacks/search 0 fail_closed/search 0 text_state_lookups/search 0 text_match_details/search
+`), 0o644); err != nil {
+		t.Fatalf("write go bench: %v", err)
+	}
+	rep, err := buildReport(config{
+		outDir:    dir,
+		goBenches: namedPaths{{Name: "treedb_hybrid_closeout_docs_64", Path: goBench}},
+	})
+	if err != nil {
+		t.Fatalf("buildReport: %v", err)
+	}
+	if got, want := len(rep.Rows), 1; got != want {
+		t.Fatalf("rows=%d want %d", got, want)
+	}
+	row := rep.Rows[0]
+	if !strings.Contains(row.Dataset, "docs=64") || strings.Contains(row.Dataset, "docs=10000") {
+		t.Fatalf("dataset=%q want docs=64 from source label override", row.Dataset)
+	}
+	md := renderMarkdown(rep)
+	if !strings.Contains(md, "docs=64") || strings.Contains(md, "docs=10000") {
+		t.Fatalf("markdown dataset did not use override docs:\n%s", md)
+	}
+}
+
 func TestBuildReportParsesExternalAndRendersUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	goBench := filepath.Join(dir, "go.txt")

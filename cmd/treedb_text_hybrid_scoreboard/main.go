@@ -193,7 +193,10 @@ type goBenchAggregate struct {
 	MetricSamples map[string]int
 }
 
-var benchmarkNameRE = regexp.MustCompile(`^(Benchmark\S+)-\d+$`)
+var (
+	benchmarkNameRE   = regexp.MustCompile(`^(Benchmark\S+)-\d+$`)
+	docsSourceLabelRE = regexp.MustCompile(`(?:^|[_-])docs[_-]([0-9]+)(?:$|[_-])`)
+)
 
 func main() {
 	cfg, err := parseFlags(os.Args[1:])
@@ -714,6 +717,11 @@ func docsFromBenchmarkName(name string) int {
 
 func docsFromSourceLabel(label string) int {
 	lower := strings.ToLower(label)
+	if match := docsSourceLabelRE.FindStringSubmatch(lower); match != nil {
+		if docs, err := strconv.Atoi(match[1]); err == nil {
+			return docs
+		}
+	}
 	if strings.Contains(lower, "100k") {
 		return 100_000
 	}
