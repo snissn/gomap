@@ -1243,6 +1243,9 @@ func assertNormalizedColumnStoreMeta(t *testing.T, meta CollectionMeta) {
 	if got := cfg.RetainedPayload; got != ColumnRetainedPayloadNonColumn {
 		t.Fatalf("retained payload=%q want %q", got, ColumnRetainedPayloadNonColumn)
 	}
+	if got := cfg.RetainedPayloadEncoding; got != ColumnRetainedPayloadEncodingSemanticStreamV1 {
+		t.Fatalf("retained payload encoding=%q want %q", got, ColumnRetainedPayloadEncodingSemanticStreamV1)
+	}
 	if got := cfg.Reconstruction; got != ColumnReconstructionRetainedPayloadAndColumns {
 		t.Fatalf("reconstruction=%q want %q", got, ColumnReconstructionRetainedPayloadAndColumns)
 	}

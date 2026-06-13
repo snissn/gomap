@@ -665,11 +665,11 @@ func typedColumnEventDocument1953(event columnPhysicalJSONBenchParityEventP0) []
 
 func updateTypedColumnEvent1953(tb testing.TB, col *Collection, event columnPhysicalJSONBenchParityEventP0) {
 	tb.Helper()
-	_, modified, err := col.Update([]byte(event.ID), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.Update([]byte(event.ID), func([]byte) ([]byte, bool, error) {
 		return typedColumnEventDocument1953(event), true, nil
 	})
 	if err != nil || !modified {
-		tb.Fatalf("Update %s modified=%t err=%v", event.ID, modified, err)
+		tb.Fatalf("Update %s matched=%t modified=%t err=%v stats=%+v", event.ID, matched, modified, err, col.LastUpdateStats())
 	}
 }
 

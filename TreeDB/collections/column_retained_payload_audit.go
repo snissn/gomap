@@ -25,15 +25,15 @@ func ColumnRetainedPayloadEncodingStatus(cfg *ColumnStoreConfig) (encoding, stat
 	case ColumnRetainedPayloadFull, "":
 		return string(ColumnRetainedPayloadEncodingJSON), "active_json_full_retained_payload"
 	case ColumnRetainedPayloadNonColumn:
-		switch cfg.RetainedPayloadEncoding {
-		case ColumnRetainedPayloadEncodingTemplateV1, "":
+		switch encoding := columnRetainedPayloadEffectiveEncoding(cfg); encoding {
+		case ColumnRetainedPayloadEncodingTemplateV1:
 			return string(ColumnRetainedPayloadEncodingTemplateV1), "active_template_v1_non_column_retained_payload"
 		case ColumnRetainedPayloadEncodingJSON:
 			return string(ColumnRetainedPayloadEncodingJSON), "active_legacy_json_non_column_retained_payload"
 		case ColumnRetainedPayloadEncodingSemanticStreamV1:
 			return string(ColumnRetainedPayloadEncodingSemanticStreamV1), "active_semantic_stream_v1_non_column_retained_payload"
 		default:
-			return string(ColumnRetainedPayloadEncodingUnavailable), fmt.Sprintf("unavailable_unsupported_retained_payload_encoding_%s", cfg.RetainedPayloadEncoding)
+			return string(ColumnRetainedPayloadEncodingUnavailable), fmt.Sprintf("unavailable_unsupported_retained_payload_encoding_%s", encoding)
 		}
 	default:
 		return string(ColumnRetainedPayloadEncodingUnavailable), fmt.Sprintf("unknown_retained_payload_policy_%s", cfg.RetainedPayload)
@@ -54,7 +54,7 @@ func ColumnRetainedPayloadCompressionStatus(cfg *ColumnStoreConfig) (compression
 	case ColumnRetainedPayloadFull, "":
 		return "value_log_grouped_frame", "default_value_log_auto", "active_value_log_auto_grouped_frame_full_retained_payload"
 	case ColumnRetainedPayloadNonColumn:
-		if cfg.RetainedPayloadEncoding == ColumnRetainedPayloadEncodingSemanticStreamV1 {
+		if columnRetainedPayloadEffectiveEncoding(cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 {
 			return "semantic_stream_v1_blocks", "retained_semantic_stream_v1_side_root", "active_semantic_stream_v1_non_column_retained_payload"
 		}
 		return "value_log_grouped_frame", "default_value_log_auto_storage_first", "active_value_log_auto_grouped_frame_non_column_retained_payload"

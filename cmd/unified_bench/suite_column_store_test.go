@@ -72,19 +72,34 @@ func TestColumnStoreSuiteRetainedPayloadEncodingOverrideSelectsSemanticStreamV1(
 
 func TestColumnStoreSuiteRetainedPayloadAccountingUsesSemanticStreamV1Blocks(t *testing.T) {
 	withColumnStoreRetainedPayloadEncodingFlag(t, "semantic-stream-v1")
-	events, _ := buildColumnStoreSyntheticFixture(32, 1)
-	cfg := columnStoreSuiteConfig()
-	got, note, err := columnStoreSuiteRetainedPayloadAccounting(events, cfg, columnStorePathSerialColumnScan)
-	if err != nil {
-		t.Fatalf("columnStoreSuiteRetainedPayloadAccounting: %v", err)
-	}
-	if got <= 0 {
-		t.Fatalf("semantic-stream-v1 accounting bytes=%d want positive", got)
-	}
-	for _, want := range []string{"semantic-stream-v1", "primary locator bytes", "side-root block bytes"} {
-		if !strings.Contains(note, want) {
-			t.Fatalf("semantic-stream-v1 accounting note %q missing %q", note, want)
-		}
+	for _, rows := range []int{1, 32} {
+		t.Run(fmt.Sprintf("rows_%d", rows), func(t *testing.T) {
+			events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+			cfg := columnStoreSuiteConfig()
+			got, note, err := columnStoreSuiteRetainedPayloadAccounting(events, cfg, columnStorePathSerialColumnScan)
+			if err != nil {
+				t.Fatalf("columnStoreSuiteRetainedPayloadAccounting: %v", err)
+			}
+			documents := make([][]byte, len(events))
+			for i := range events {
+				documents[i] = events[i].Doc
+			}
+			accounting, err := collections.ColumnRetainedSemanticStreamV1StorageAccountingFromJSONDocuments(*cfg, documents)
+			if err != nil {
+				t.Fatalf("ColumnRetainedSemanticStreamV1StorageAccountingFromJSONDocuments: %v", err)
+			}
+			if got != accounting.TotalBytes {
+				t.Fatalf("semantic-stream-v1 accounting bytes=%d want production accounting total %d", got, accounting.TotalBytes)
+			}
+			if accounting.PrimaryLocatorBytes <= 0 || accounting.BlockBytes <= 0 || accounting.BlockCount <= 0 {
+				t.Fatalf("semantic-stream-v1 accounting=%+v want locator and side block bytes", accounting)
+			}
+			for _, want := range []string{"semantic-stream-v1", "primary locator bytes", "side-root block bytes"} {
+				if !strings.Contains(note, want) {
+					t.Fatalf("semantic-stream-v1 accounting note %q missing %q", note, want)
+				}
+			}
+		})
 	}
 }
 

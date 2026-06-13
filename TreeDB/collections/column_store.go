@@ -138,6 +138,8 @@ const (
 	ColumnRetainedPayloadEncodingTemplateV1 = "template-v1"
 	// ColumnRetainedPayloadEncodingSemanticStreamV1 records multi-row retained
 	// payload bodies as semantic path streams in a dedicated collection root.
+	// Side-root blocks may be legacy raw crss1blk blocks or crss1zst blocks
+	// containing a zstd-compressed crss1blk payload.
 	ColumnRetainedPayloadEncodingSemanticStreamV1 = "semantic-stream-v1"
 	// ColumnRetainedPayloadEncodingNone records that no retained body is active.
 	ColumnRetainedPayloadEncodingNone = "none"
@@ -554,7 +556,7 @@ func defaultColumnRetainedPayloadEncoding(policy ColumnRetainedPayloadPolicy) Co
 	case ColumnRetainedPayloadFull:
 		return ColumnRetainedPayloadEncodingJSON
 	case ColumnRetainedPayloadNonColumn:
-		return ColumnRetainedPayloadEncodingTemplateV1
+		return ColumnRetainedPayloadEncodingSemanticStreamV1
 	default:
 		return ColumnRetainedPayloadEncodingUnavailable
 	}

@@ -113,7 +113,7 @@ var (
 	columnStoreSuiteTypedAdaptiveTargetBytesArg = flag.Int("column-store-typed-adaptive-target-bytes", 0, "Benchmark-only typed_column_part adaptive target raw bytes per mark/granule (0 uses typedcolumn default when adaptive is enabled)")
 	columnStoreSuiteTypedAdaptiveMinRowsArg     = flag.Int("column-store-typed-adaptive-min-rows", 0, "Benchmark-only typed_column_part adaptive minimum rows (0 uses typedcolumn default when adaptive is enabled)")
 	columnStoreSuiteTypedAdaptiveMaxRowsArg     = flag.Int("column-store-typed-adaptive-max-rows", 0, "Benchmark-only typed_column_part adaptive maximum rows (0 uses rows-per-granule/default when adaptive is enabled)")
-	columnStoreSuiteRetainedPayloadEncodingArg  = flag.String("column-store-retained-payload-encoding", "", "Retained-payload encoding override for -suite column_store non-column retained payloads (default/template-v1,json,semantic-stream-v1). Can also be set with TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING; b_tree_index_baseline remains full-retained JSON.")
+	columnStoreSuiteRetainedPayloadEncodingArg  = flag.String("column-store-retained-payload-encoding", "", "Retained-payload encoding override for -suite column_store non-column retained payloads (default/semantic-stream-v1,template-v1,json). Can also be set with TREEDB_COLUMN_STORE_RETAINED_PAYLOAD_ENCODING; b_tree_index_baseline remains full-retained JSON.")
 
 	columnStoreSuiteAcceptedForcedPaths = []string{
 		columnStorePathRowStoreBaseline,
@@ -2145,8 +2145,7 @@ func columnStoreSuiteRetainedPayloadAccounting(events []columnStoreFixtureEvent,
 		return bytesTotal, "full row payload retained", nil
 	}
 	if cfg.RetainedPayload == collections.ColumnRetainedPayloadNonColumn &&
-		cfg.RetainedPayloadEncoding == collections.ColumnRetainedPayloadEncodingSemanticStreamV1 &&
-		len(events) > 1 {
+		columnStoreSuiteEffectiveRetainedPayloadEncoding(cfg) == collections.ColumnRetainedPayloadEncodingSemanticStreamV1 {
 		documents := make([][]byte, len(events))
 		for i := range events {
 			documents[i] = events[i].Doc
@@ -2174,6 +2173,25 @@ func columnStoreSuiteRetainedPayloadAccounting(events []columnStoreFixtureEvent,
 		return bytesTotal, "M13C stores no row payload beyond an empty JSON object; declared columns are reconstructed from physical column assets", nil
 	default:
 		return 0, "", fmt.Errorf("unsupported retained-payload policy %q", cfg.RetainedPayload)
+	}
+}
+
+func columnStoreSuiteEffectiveRetainedPayloadEncoding(cfg *collections.ColumnStoreConfig) collections.ColumnRetainedPayloadEncoding {
+	if cfg == nil {
+		return collections.ColumnRetainedPayloadEncodingNone
+	}
+	if cfg.RetainedPayloadEncoding != "" {
+		return cfg.RetainedPayloadEncoding
+	}
+	switch cfg.RetainedPayload {
+	case collections.ColumnRetainedPayloadNone:
+		return collections.ColumnRetainedPayloadEncodingNone
+	case collections.ColumnRetainedPayloadFull:
+		return collections.ColumnRetainedPayloadEncodingJSON
+	case collections.ColumnRetainedPayloadNonColumn:
+		return collections.ColumnRetainedPayloadEncodingSemanticStreamV1
+	default:
+		return collections.ColumnRetainedPayloadEncodingUnavailable
 	}
 }
 
