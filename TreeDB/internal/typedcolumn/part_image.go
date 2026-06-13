@@ -69,7 +69,13 @@ type ColumnPartImageOptions struct {
 	// SectionCompression compresses eligible whole-image sections. It is
 	// intentionally limited to sections whose raw length can be recovered from
 	// existing manifest fields without a TCIM/TCS1 format change.
-	SectionCompression Compression
+	SectionCompression                   Compression
+	RowLocatorSectionCompression         Compression
+	RowLocatorSectionCompressionSet      bool
+	DictionarySectionCompression         Compression
+	DictionarySectionCompressionSet      bool
+	PruningMetadataSectionCompression    Compression
+	PruningMetadataSectionCompressionSet bool
 }
 
 type ColumnPartImage struct {
@@ -739,7 +745,7 @@ func (b *columnPartImageBuilder) addRowLocatorsSection() error {
 		return err
 	} else if ok {
 		section.Encoding = EncodingRowLocatorContiguous
-		return b.appendSectionWithOptionalCompression(section, compact, b.opts.SectionCompression)
+		return b.appendSectionWithOptionalCompression(section, compact, b.sectionCompression(section.Kind))
 	}
 	enc := columnPartImageEncoder{buf: make([]byte, 0, payloadBytes)}
 	enc.u32(uint32(len(primaryIDs)))
@@ -752,7 +758,7 @@ func (b *columnPartImageBuilder) addRowLocatorsSection() error {
 		enc.u32(uint32(locator.RowInGranule))
 		enc.u32(0)
 	}
-	return b.appendSectionWithOptionalCompression(section, enc.bytes(), b.opts.SectionCompression)
+	return b.appendSectionWithOptionalCompression(section, enc.bytes(), b.sectionCompression(section.Kind))
 }
 
 func encodeContiguousRowLocatorSection(desc ColumnPartDescriptor, locators map[int64]RowLocator, rawPayloadBytes int) ([]byte, bool, error) {
@@ -868,14 +874,15 @@ func (b *columnPartImageBuilder) addPruningMetadataSection() error {
 	if len(data) == 0 {
 		return nil
 	}
-	return b.appendSectionWithOptionalCompression(ColumnPartImageSection{
+	section := ColumnPartImageSection{
 		Kind:     ColumnPartImageSectionPruningMetadata,
 		Category: ColumnPartImageCategoryPruningMetadata,
 		Name:     "column_pruning",
 		Rows:     b.part.Descriptor.RowCount,
 		Granules: len(b.part.Descriptor.Granules),
 		Blocks:   countColumnBlocks(b.part.Descriptor),
-	}, data, b.opts.SectionCompression)
+	}
+	return b.appendSectionWithOptionalCompression(section, data, b.sectionCompression(section.Kind))
 }
 
 func (b *columnPartImageBuilder) addDictionarySection() error {
@@ -888,7 +895,8 @@ func (b *columnPartImageBuilder) addDictionarySection() error {
 		Category: ColumnPartImageCategoryDictionaries,
 		Name:     "part_dictionaries",
 	}
-	rawSection, err := selectImageSectionPayload(section, rawData, b.opts.SectionCompression)
+	compression := b.sectionCompression(section.Kind)
+	rawSection, err := selectImageSectionPayload(section, rawData, compression)
 	if err != nil {
 		return err
 	}
@@ -896,7 +904,7 @@ func (b *columnPartImageBuilder) addDictionarySection() error {
 	if compactOK {
 		compactSection := section
 		compactSection.Encoding = EncodingDictionaryDense
-		compactSelection, err := selectImageSectionPayload(compactSection, compactData, b.opts.SectionCompression)
+		compactSelection, err := selectImageSectionPayload(compactSection, compactData, compression)
 		if err != nil {
 			return err
 		}
@@ -1186,6 +1194,24 @@ func (b *columnPartImageBuilder) appendSectionWithOptionalCompression(section Co
 	return nil
 }
 
+func (b *columnPartImageBuilder) sectionCompression(kind ColumnPartImageSectionKind) Compression {
+	switch kind {
+	case ColumnPartImageSectionRowLocators:
+		if b.opts.RowLocatorSectionCompressionSet {
+			return b.opts.RowLocatorSectionCompression
+		}
+	case ColumnPartImageSectionDictionaries:
+		if b.opts.DictionarySectionCompressionSet {
+			return b.opts.DictionarySectionCompression
+		}
+	case ColumnPartImageSectionPruningMetadata:
+		if b.opts.PruningMetadataSectionCompressionSet {
+			return b.opts.PruningMetadataSectionCompression
+		}
+	}
+	return b.opts.SectionCompression
+}
+
 func selectImageSectionPayload(section ColumnPartImageSection, data []byte, compression Compression) (columnPartImageSectionData, error) {
 	if !canCompressImageSection(section, len(data), compression) {
 		section.Length = len(data)
@@ -1206,7 +1232,7 @@ func selectImageSectionPayload(section ColumnPartImageSection, data []byte, comp
 
 func canCompressImageSection(section ColumnPartImageSection, rawBytes int, compression Compression) bool {
 	switch compression {
-	case CompressionSnappy, CompressionLZ4:
+	case CompressionSnappy, CompressionLZ4, CompressionZSTD:
 		if rawBytes > maxCompressedImageSectionRawBytes {
 			return false
 		}

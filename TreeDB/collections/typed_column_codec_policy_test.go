@@ -7,11 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 func TestTypedColumnAdapterOptInCompressionRoundTrip1952(t *testing.T) {
-	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
+	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4, typedcolumn.CompressionZSTD} {
 		t.Run(compression.String(), func(t *testing.T) {
 			fields := []TypedStorageField{
 				typedColumnAdapterField("count", ColumnStoreValueInt64),
@@ -353,7 +354,7 @@ func TestTypedColumnProductionCompressionPolicySkipsUnsupportedFields2297(t *tes
 }
 
 func TestTypedColumnAdapterOptInLocatorSectionCompression1952(t *testing.T) {
-	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
+	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4, typedcolumn.CompressionZSTD} {
 		t.Run(compression.String(), func(t *testing.T) {
 			field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 			rows := make([]typedColumnAdapterRow, 4096)
@@ -461,7 +462,7 @@ func TestTypedColumnAdapterOptInDictionarySectionCompression2300(t *testing.T) {
 }
 
 func TestTypedColumnAdapterCompressedLocatorCorruptionFailsClosed1952(t *testing.T) {
-	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
+	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4, typedcolumn.CompressionZSTD} {
 		t.Run(compression.String(), func(t *testing.T) {
 			field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 			rows := make([]typedColumnAdapterRow, 1024)
@@ -543,6 +544,25 @@ func TestTypedColumnAdapterDictionarySectionCompressionRawLengthMismatchFailsClo
 	}
 }
 
+func TestTypedColumnAdapterDictionarySectionZSTDCapsDeclaredRawBytes1952(t *testing.T) {
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd encoder: %v", err)
+	}
+	defer enc.Close()
+	stored := enc.EncodeAll([]byte(strings.Repeat("dictionary-zstd-cap-", 512)), nil)
+	section := typedcolumn.ColumnPartImageSection{
+		Kind:        typedcolumn.ColumnPartImageSectionDictionaries,
+		Compression: typedcolumn.CompressionZSTD,
+		RawBytes:    16,
+	}
+
+	_, err = decodeTypedColumnPreparedDictionarySectionBytes(section, stored)
+	if err == nil || !strings.Contains(err.Error(), "zstd decode") {
+		t.Fatalf("decode prepared dictionary zstd err=%v want capped zstd decode failure", err)
+	}
+}
+
 func typedColumnImageSectionByKind(image typedcolumn.ColumnPartImage, kind typedcolumn.ColumnPartImageSectionKind) (typedcolumn.ColumnPartImageSection, bool) {
 	for _, section := range image.Sections {
 		if section.Kind == kind {
@@ -552,11 +572,11 @@ func typedColumnImageSectionByKind(image typedcolumn.ColumnPartImage, kind typed
 	return typedcolumn.ColumnPartImageSection{}, false
 }
 
-func TestTypedColumnAdapterOptInCompressionRejectsZSTD1952(t *testing.T) {
+func TestTypedColumnAdapterOptInCompressionRejectsZSTDDict1952(t *testing.T) {
 	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
-	_, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 8, Fields: []TypedStorageField{field}, DefaultCompression: typedcolumn.CompressionZSTD, DefaultCompressionSet: true}, []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 1}}}})
-	if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "unsupported compression zstd") {
-		t.Fatalf("err=%v want explicit zstd rejection", err)
+	_, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1952, RowsPerGranule: 8, Fields: []TypedStorageField{field}, DefaultCompression: typedcolumn.CompressionZSTDDict, DefaultCompressionSet: true}, []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 1}}}})
+	if !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "unsupported compression zstd_dict") {
+		t.Fatalf("err=%v want explicit zstd_dict rejection", err)
 	}
 }
 
@@ -590,6 +610,10 @@ func TestTypedColumnAdapterAdaptiveRowsPerGranule1952(t *testing.T) {
 
 func TestTypedColumnBenchmarkPolicyEnvRequiresBenchmarkProfile1952(t *testing.T) {
 	t.Setenv(typedColumnBenchmarkCompressionEnv, "snappy")
+	t.Setenv(typedColumnBenchmarkSectionCompressionEnv, "zstd")
+	t.Setenv(typedColumnBenchmarkLocatorCompressionEnv, "lz4")
+	t.Setenv(typedColumnBenchmarkDictionaryCompressionEnv, "zstd")
+	t.Setenv(typedColumnBenchmarkPruningCompressionEnv, "none")
 	cfg := ColumnStoreConfig{ProfileSupport: ColumnStoreProfileDurableOnly}
 	var opts typedColumnAdapterOptions
 	if err := applyTypedColumnBenchmarkPolicyFromEnv(cfg, &opts); err == nil || !strings.Contains(err.Error(), string(ColumnStoreProfileBenchmarkRelaxed)) {
@@ -602,18 +626,63 @@ func TestTypedColumnBenchmarkPolicyEnvRequiresBenchmarkProfile1952(t *testing.T)
 	if !opts.DefaultCompressionSet || opts.DefaultCompression != typedcolumn.CompressionSnappy {
 		t.Fatalf("opts=%+v want snappy", opts)
 	}
+	if !opts.SectionCompressionSet || opts.SectionCompression != typedcolumn.CompressionZSTD {
+		t.Fatalf("opts=%+v want zstd section compression", opts)
+	}
+	if !opts.LocatorSectionCompressionSet || opts.LocatorSectionCompression != typedcolumn.CompressionLZ4 {
+		t.Fatalf("opts=%+v want lz4 locator compression", opts)
+	}
+	if !opts.DictionarySectionCompressionSet || opts.DictionarySectionCompression != typedcolumn.CompressionZSTD {
+		t.Fatalf("opts=%+v want zstd dictionary compression", opts)
+	}
+	if !opts.PruningSectionCompressionSet || opts.PruningSectionCompression != typedcolumn.CompressionNone {
+		t.Fatalf("opts=%+v want none pruning compression", opts)
+	}
 }
 
-func TestTypedColumnBenchmarkPolicyEnvRejectsZSTD1952(t *testing.T) {
+func TestTypedColumnBenchmarkPolicyEnvAcceptsZSTD1952(t *testing.T) {
 	t.Setenv(typedColumnBenchmarkCompressionEnv, "zstd")
+	t.Setenv(typedColumnBenchmarkSectionCompressionEnv, "zstd")
 	var opts typedColumnAdapterOptions
-	if err := applyTypedColumnBenchmarkPolicyFromEnv(ColumnStoreConfig{ProfileSupport: ColumnStoreProfileBenchmarkRelaxed}, &opts); !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "unsupported compression zstd") {
-		t.Fatalf("err=%v want zstd rejection", err)
+	if err := applyTypedColumnBenchmarkPolicyFromEnv(ColumnStoreConfig{ProfileSupport: ColumnStoreProfileBenchmarkRelaxed}, &opts); err != nil {
+		t.Fatalf("zstd env policy: %v", err)
+	}
+	if !opts.DefaultCompressionSet || opts.DefaultCompression != typedcolumn.CompressionZSTD {
+		t.Fatalf("opts=%+v want zstd", opts)
+	}
+	if !opts.SectionCompressionSet || opts.SectionCompression != typedcolumn.CompressionZSTD {
+		t.Fatalf("opts=%+v want zstd section compression", opts)
+	}
+}
+
+func TestTypedColumnBenchmarkPolicyEnvAcceptsPerSectionCompression1952(t *testing.T) {
+	t.Setenv(typedColumnBenchmarkCompressionEnv, "lz4")
+	t.Setenv(typedColumnBenchmarkLocatorCompressionEnv, "none")
+	t.Setenv(typedColumnBenchmarkDictionaryCompressionEnv, "zstd")
+	t.Setenv(typedColumnBenchmarkPruningCompressionEnv, "lz4")
+	var opts typedColumnAdapterOptions
+	if err := applyTypedColumnBenchmarkPolicyFromEnv(ColumnStoreConfig{ProfileSupport: ColumnStoreProfileBenchmarkRelaxed}, &opts); err != nil {
+		t.Fatalf("per-section env policy: %v", err)
+	}
+	if !opts.DefaultCompressionSet || opts.DefaultCompression != typedcolumn.CompressionLZ4 {
+		t.Fatalf("opts=%+v want lz4 default compression", opts)
+	}
+	if !opts.SectionCompressionSet || opts.SectionCompression != typedcolumn.CompressionLZ4 {
+		t.Fatalf("opts=%+v want lz4 section compression inherited from combined env", opts)
+	}
+	if !opts.LocatorSectionCompressionSet || opts.LocatorSectionCompression != typedcolumn.CompressionNone {
+		t.Fatalf("opts=%+v want none locator compression", opts)
+	}
+	if !opts.DictionarySectionCompressionSet || opts.DictionarySectionCompression != typedcolumn.CompressionZSTD {
+		t.Fatalf("opts=%+v want zstd dictionary compression", opts)
+	}
+	if !opts.PruningSectionCompressionSet || opts.PruningSectionCompression != typedcolumn.CompressionLZ4 {
+		t.Fatalf("opts=%+v want lz4 pruning compression", opts)
 	}
 }
 
 func TestTypedColumnBenchmarkPolicyEnvEmptyDoesNotRequireProfile1952(t *testing.T) {
-	for _, name := range []string{typedColumnBenchmarkCompressionEnv, typedColumnBenchmarkInt64EncodingEnv, typedColumnBenchmarkRowsPerGranuleEnv, typedColumnBenchmarkAdaptiveEnabledEnv, typedColumnBenchmarkAdaptiveTargetBytesEnv, typedColumnBenchmarkAdaptiveMinRowsEnv, typedColumnBenchmarkAdaptiveMaxRowsEnv} {
+	for _, name := range []string{typedColumnBenchmarkCompressionEnv, typedColumnBenchmarkSectionCompressionEnv, typedColumnBenchmarkLocatorCompressionEnv, typedColumnBenchmarkDictionaryCompressionEnv, typedColumnBenchmarkPruningCompressionEnv, typedColumnBenchmarkInt64EncodingEnv, typedColumnBenchmarkRowsPerGranuleEnv, typedColumnBenchmarkAdaptiveEnabledEnv, typedColumnBenchmarkAdaptiveTargetBytesEnv, typedColumnBenchmarkAdaptiveMinRowsEnv, typedColumnBenchmarkAdaptiveMaxRowsEnv} {
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatalf("unset %s: %v", name, err)
 		}

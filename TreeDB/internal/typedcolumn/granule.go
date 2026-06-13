@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/compress/zstd"
 )
 
 const (
@@ -815,6 +817,77 @@ type CompressionSelection struct {
 	Report  CodecReport
 }
 
+var (
+	zstdEncoderPool sync.Pool
+)
+
+func getZstdEncoder() (*zstd.Encoder, error) {
+	if v := zstdEncoderPool.Get(); v != nil {
+		if enc, ok := v.(*zstd.Encoder); ok && enc != nil {
+			return enc, nil
+		}
+	}
+	return zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedFastest),
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderCRC(false),
+	)
+}
+
+func putZstdEncoder(enc *zstd.Encoder) {
+	if enc == nil {
+		return
+	}
+	enc.Reset(nil)
+	zstdEncoderPool.Put(enc)
+}
+
+func getZstdDecoder(rawBytes int) (*zstd.Decoder, error) {
+	maxDecodedBytes := rawBytes
+	if maxDecodedBytes < 1<<20 {
+		maxDecodedBytes = 1 << 20
+	}
+	return zstd.NewReader(nil,
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxMemory(uint64(maxDecodedBytes)),
+		zstd.WithDecodeAllCapLimit(true),
+	)
+}
+
+func putZstdDecoder(dec *zstd.Decoder) {
+	if dec == nil {
+		return
+	}
+	dec.Close()
+}
+
+func decodeZstdPayload(label string, payload []byte, rawBytes int, dst []byte) ([]byte, error) {
+	if rawBytes < 0 {
+		return nil, fmt.Errorf("typedcolumn: %s zstd raw bytes=%d is invalid", label, rawBytes)
+	}
+	dec, err := getZstdDecoder(rawBytes)
+	if err != nil {
+		return nil, fmt.Errorf("typedcolumn: %s zstd decoder: %w", label, err)
+	}
+	defer putZstdDecoder(dec)
+	decodeDst := dst[:0]
+	if rawBytes >= 0 {
+		if cap(decodeDst) >= rawBytes {
+			decodeDst = decodeDst[:0:rawBytes]
+		} else {
+			decodeDst = make([]byte, 0, rawBytes)
+		}
+	}
+	out, err := dec.DecodeAll(payload, decodeDst)
+	if err != nil {
+		return nil, fmt.Errorf("typedcolumn: %s zstd decode: %w", label, err)
+	}
+	if len(out) != rawBytes {
+		return nil, fmt.Errorf("typedcolumn: %s zstd decoded length=%d want=%d", label, len(out), rawBytes)
+	}
+	return out, nil
+}
+
 func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression Compression) (CompressionSelection, error) {
 	report := CodecReport{
 		Encoding:             encoding,
@@ -874,6 +947,26 @@ func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression
 		report.CompressionKept = true
 		report.StoredBytes = len(out)
 		return CompressionSelection{Payload: out, Actual: CompressionLZ4, Scratch: out, Report: report}, nil
+	case CompressionZSTD:
+		enc, err := getZstdEncoder()
+		if err != nil {
+			return CompressionSelection{}, err
+		}
+		defer putZstdEncoder(enc)
+		start := time.Now()
+		out := enc.EncodeAll(raw, dst[:0])
+		report.CompressionNanos = time.Since(start).Nanoseconds()
+		report.CompressionAttempted = true
+		if len(out) >= len(raw) {
+			report.ActualCompression = CompressionNone
+			report.CompressionFallbackReason = "not_smaller"
+			report.StoredBytes = len(raw)
+			return CompressionSelection{Payload: raw, Actual: CompressionNone, Scratch: out[:0], Report: report}, nil
+		}
+		report.ActualCompression = CompressionZSTD
+		report.CompressionKept = true
+		report.StoredBytes = len(out)
+		return CompressionSelection{Payload: out, Actual: CompressionZSTD, Scratch: out, Report: report}, nil
 	default:
 		return CompressionSelection{}, fmt.Errorf("typedcolumn: unsupported compression %s", compression)
 	}
@@ -941,6 +1034,18 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 		if n != g.RawBytes {
 			return nil, fmt.Errorf("typedcolumn: lz4 decoded length=%d want=%d", n, g.RawBytes)
 		}
+		return out, nil
+	case CompressionZSTD:
+		if cap(r.raw) < g.RawBytes {
+			r.raw = make([]byte, 0, g.RawBytes)
+		} else {
+			r.raw = r.raw[:0]
+		}
+		out, err := decodeZstdPayload("granule", g.Payload, g.RawBytes, r.raw)
+		if err != nil {
+			return nil, err
+		}
+		r.raw = out
 		return out, nil
 	default:
 		return nil, fmt.Errorf("typedcolumn: unsupported compression %s", g.Compression)
@@ -1058,6 +1163,8 @@ func maxGranuleStoredPayloadBytes(compression Compression, maxRaw int) (int, err
 		return snappy.MaxEncodedLen(maxRaw), nil
 	case CompressionLZ4:
 		return lz4.CompressBlockBound(maxRaw), nil
+	case CompressionZSTD:
+		return maxRaw, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported compression %s", compression)
 	}

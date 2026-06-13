@@ -1048,7 +1048,7 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 
 func validateCompression(compression Compression) error {
 	switch compression {
-	case CompressionNone, CompressionSnappy, CompressionLZ4:
+	case CompressionNone, CompressionSnappy, CompressionLZ4, CompressionZSTD:
 		return nil
 	default:
 		return fmt.Errorf("typedcolumn: unsupported compression %s", compression)

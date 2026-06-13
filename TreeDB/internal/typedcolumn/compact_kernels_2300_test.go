@@ -268,9 +268,9 @@ func TestColumnPartImageRejectsUnsupportedScalarBlockCompression2300(t *testing.
 	}
 	corrupt := cloneColumnPartImageBytes(image)
 	compressionOffset := mustColumnPartDescriptorBlockCompressionOffset2300(t, corrupt, "u32", 0)
-	binary.LittleEndian.PutUint16(corrupt.Bytes[compressionOffset:compressionOffset+2], uint16(CompressionZSTD))
+	binary.LittleEndian.PutUint16(corrupt.Bytes[compressionOffset:compressionOffset+2], uint16(CompressionZSTDDict))
 
-	if _, err := ColumnPartFromImage(corrupt); err == nil || !strings.Contains(err.Error(), "compression=zstd is unsupported") {
+	if _, err := ColumnPartFromImage(corrupt); err == nil || !strings.Contains(err.Error(), "compression=zstd_dict is unsupported") {
 		t.Fatalf("ColumnPartFromImage unsupported scalar block compression err=%v want fail-closed unsupported compression", err)
 	}
 }

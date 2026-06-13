@@ -5,11 +5,15 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/snissn/compress/zstd"
 )
 
 const typedColumnCodecRows = 8192
 
 var typedColumnCodecBenchmarkSink uint64
+
+var typedColumnCodecCompressions = []Compression{CompressionNone, CompressionSnappy, CompressionLZ4, CompressionZSTD}
 
 type typedColumnCodecLayout struct {
 	name            string
@@ -22,7 +26,7 @@ type typedColumnCodecLayout struct {
 
 func TestTypedColumnCodecRoundTripRepresentativeLayouts(t *testing.T) {
 	for _, layout := range typedColumnCodecLayouts() {
-		for _, compression := range []Compression{CompressionNone, CompressionSnappy, CompressionLZ4} {
+		for _, compression := range typedColumnCodecCompressions {
 			t.Run(layout.name+"/"+compression.String(), func(t *testing.T) {
 				builder := NewGranuleBuilder(Config{})
 				granule := layout.encode(t, builder, compression)
@@ -41,9 +45,23 @@ func TestTypedColumnCodecRoundTripRepresentativeLayouts(t *testing.T) {
 	}
 }
 
+func TestTypedColumnZstdDecodeCapsDeclaredRawBytes1952(t *testing.T) {
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd encoder: %v", err)
+	}
+	defer enc.Close()
+	stored := enc.EncodeAll([]byte(strings.Repeat("jsonbench-zstd-cap-", 512)), nil)
+
+	_, err = decodeZstdPayload("test", stored, 16, make([]byte, 0, 16))
+	if err == nil || !strings.Contains(err.Error(), "zstd decode") {
+		t.Fatalf("decodeZstdPayload err=%v want capped zstd decode failure", err)
+	}
+}
+
 func TestTypedColumnCompressionKeepIfSmallerFallback(t *testing.T) {
 	values := []int64{0x1122334455667788}
-	for _, compression := range []Compression{CompressionSnappy, CompressionLZ4} {
+	for _, compression := range []Compression{CompressionSnappy, CompressionLZ4, CompressionZSTD} {
 		t.Run(compression.String(), func(t *testing.T) {
 			builder := NewGranuleBuilder(Config{Encoding: EncodingRawInt64, Compression: compression})
 			granule, err := builder.BuildInt64(values)
@@ -78,7 +96,7 @@ func TestTypedColumnCompressionKeepIfSmallerFallback(t *testing.T) {
 }
 
 func TestTypedColumnCompressionCorruptionFailsClosed(t *testing.T) {
-	for _, compression := range []Compression{CompressionSnappy, CompressionLZ4} {
+	for _, compression := range []Compression{CompressionSnappy, CompressionLZ4, CompressionZSTD} {
 		t.Run(compression.String(), func(t *testing.T) {
 			base := mustBuildKeptCompressedDeltaGranule(t, compression)
 			cases := []struct {
@@ -134,7 +152,7 @@ func TestTypedColumnUnsupportedCodecIDsFailClosed(t *testing.T) {
 	}
 	base = cloneTypedColumnGranule(base)
 
-	for _, compression := range []Compression{CompressionZSTD, CompressionZSTDDict, Compression(250)} {
+	for _, compression := range []Compression{CompressionZSTDDict, Compression(250)} {
 		t.Run("decode_compression_"+compression.String(), func(t *testing.T) {
 			bad := cloneTypedColumnGranule(base)
 			bad.Compression = compression
@@ -168,7 +186,7 @@ func TestTypedColumnUnsupportedCodecIDsFailClosed(t *testing.T) {
 
 func BenchmarkTypedColumnCodecVariants(b *testing.B) {
 	for _, layout := range typedColumnCodecLayouts() {
-		for _, compression := range []Compression{CompressionNone, CompressionSnappy, CompressionLZ4} {
+		for _, compression := range typedColumnCodecCompressions {
 			name := layout.name + "/" + compression.String()
 			b.Run(name+"/encode", func(b *testing.B) {
 				builder := NewGranuleBuilder(Config{})
