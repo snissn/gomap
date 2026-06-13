@@ -2946,40 +2946,23 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		if len(rootIDs) != len(plan.rootNames) {
 			return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
 		}
-		current := m.db.AcquireSnapshot()
-		if current == nil {
-			return nil, backenddb.ErrClosed
-		}
-		defer func() { _ = current.Close() }()
-		existing, err := loadCollectionCatalog(current, normalized.Name)
-		if err != nil {
-			return nil, err
-		}
-		if existing != nil {
-			if !sameCollectionMeta(existing.meta, normalized) {
-				return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
-			}
-			return nil, errCreateCollectionNoopExistingSchema
-		}
 		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 	}
+	preflight := m.createCollectionExistingSchemaPreflight(normalized)
 	if m.db.CommandWALEnabled() || commandWALIntent != nil {
 		intent, err := m.newCatalogCreateCollectionCommandWALIntent(normalized, commandWALIntent)
 		if err != nil {
 			return nil, err
 		}
 		err = m.withCommandWALPublishCoordinator(func() error {
-			_, _, err = m.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, intent, buildSystemDelta)
-			return err
-		})
-		if errors.Is(err, errCreateCollectionNoopExistingSchema) {
-			if intent != nil {
-				if noopErr := m.publishCommandWALNoop(intent, false); noopErr != nil {
-					return nil, noopErr
-				}
+			_, _, publishErr := m.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return buildSystemDelta(rootIDs)
+			})
+			if errors.Is(publishErr, errCreateCollectionNoopExistingSchema) {
+				return m.db.PublishCommandWALNoop(intent, false)
 			}
-			return normalized.copy(), nil
-		}
+			return publishErr
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -3005,7 +2988,7 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, nil, nil))
 		})
 	} else {
-		_, _, err = m.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		_, _, err = m.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			if len(rootIDs) != len(plan.rootNames) {
 				return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
 			}
@@ -3014,16 +2997,6 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 				return nil, backenddb.ErrClosed
 			}
 			defer func() { _ = current.Close() }()
-			existing, err := loadCollectionCatalog(current, normalized.Name)
-			if err != nil {
-				return nil, err
-			}
-			if existing != nil {
-				if !sameCollectionMeta(existing.meta, normalized) {
-					return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
-				}
-				return nil, errCreateCollectionNoopExistingSchema
-			}
 			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 		})
 	}
@@ -3034,6 +3007,30 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		return nil, err
 	}
 	return normalized.copy(), nil
+}
+
+func (m *CollectionManager) createCollectionExistingSchemaPreflight(normalized CollectionMeta) backenddb.OrderedRootGroupPreflight {
+	return func() error {
+		if m == nil || m.db == nil {
+			return errCollectionDBNil
+		}
+		current := m.db.AcquireSnapshot()
+		if current == nil {
+			return backenddb.ErrClosed
+		}
+		defer func() { _ = current.Close() }()
+		existing, err := loadCollectionCatalog(current, normalized.Name)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return nil
+		}
+		if !sameCollectionMeta(existing.meta, normalized) {
+			return fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+		}
+		return errCreateCollectionNoopExistingSchema
+	}
 }
 
 func (m *CollectionManager) buildCreateCollectionInitialTextV2Plan(meta CollectionMeta) (*createTextIndexBackfillPlan, error) {

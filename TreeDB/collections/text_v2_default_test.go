@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,6 +138,70 @@ func TestTextIndexDefaultCreateCollectionNoopDoesNotReplaceRacedV2Roots2690(t *t
 	if status.Version != TextIndexVersionV2 || !slicesEqualStrings(status.ActiveRootNames, collectionTextV2RootNames("docs", "lexical")) {
 		t.Fatalf("status after raced no-op create=%+v want default-v2 roots preserved", status)
 	}
+}
+
+func TestTextIndexDefaultCreateCollectionPreflightSkipsStaleV2Plan2690(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	meta := CollectionMeta{
+		Name: "docs",
+		TextIndexes: []TextIndexDefinition{{
+			Name:   "lexical",
+			Fields: []TextIndexField{{Field: "body"}},
+		}},
+	}
+	normalized, err := mgr.CreateCollection(&meta)
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"refund policy"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	stateBefore := d.State()
+	if stateBefore == nil {
+		t.Fatal("db state before stale preflight publish is nil")
+	}
+
+	plan, err := mgr.buildCreateCollectionInitialTextV2Plan(*normalized)
+	if err != nil {
+		t.Fatalf("buildCreateCollectionInitialTextV2Plan: %v", err)
+	}
+	defer resetCollectionTables(plan.tables)
+	if len(plan.rootNames) == 0 {
+		t.Fatal("stale default-v2 create plan has no roots")
+	}
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
+	for i, rootName := range plan.rootNames {
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      plan.baseRootIDs[rootName],
+			Iter:          plan.tables[i].NewIterator(nil, nil),
+			StoragePolicy: plan.policies[i],
+		})
+	}
+	_, _, err = d.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, mgr.createCollectionExistingSchemaPreflight(*normalized), func([]uint64) (iterator.UnsafeIterator, error) {
+		t.Fatal("system builder called after no-op create preflight")
+		return nil, nil
+	})
+	if !errors.Is(err, errCreateCollectionNoopExistingSchema) {
+		t.Fatalf("stale preflight publish err=%v want errCreateCollectionNoopExistingSchema", err)
+	}
+	stateAfter := d.State()
+	if stateAfter == nil {
+		t.Fatal("db state after stale preflight publish is nil")
+	}
+	if stateAfter.CommitSeq != stateBefore.CommitSeq {
+		t.Fatalf("stale preflight publish advanced commit seq from %d to %d; want no root apply/finalize", stateBefore.CommitSeq, stateAfter.CommitSeq)
+	}
+	got, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("SearchText after stale preflight publish: %v", err)
+	}
+	assertSearchIDs2690(t, got, []string{"d1"})
 }
 
 func TestTextIndexDefaultCreateTextIndexBackfillUpdateDeleteReopenSearch2690(t *testing.T) {
