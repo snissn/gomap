@@ -33,6 +33,8 @@ const (
 // Production/minimal mode is the steady-state low-overhead mode: it keeps
 // source-health, admission, result, and fallback counters while avoiding
 // per-edge/per-candidate diagnostic counters on the healthy prepared path.
+// Work-accounting mode is an explicit diagnostic mode for explaining per-query
+// search cost; do not mix it into low-overhead production throughput evidence.
 type VectorIndexSearchStatsMode string
 
 const (
@@ -40,6 +42,7 @@ const (
 	VectorIndexSearchStatsModeMinimal         VectorIndexSearchStatsMode = "minimal"
 	VectorIndexSearchStatsModeProduction      VectorIndexSearchStatsMode = "production"
 	VectorIndexSearchStatsModeFullDiagnostics VectorIndexSearchStatsMode = "full_diagnostics"
+	VectorIndexSearchStatsModeWorkAccounting  VectorIndexSearchStatsMode = "work_accounting"
 	VectorIndexSearchStatsModeBenchmarkDebug  VectorIndexSearchStatsMode = "benchmark_debug"
 )
 
@@ -49,6 +52,8 @@ func columnVectorGraphNativeSearchStatsModeFromPublic(mode VectorIndexSearchStat
 		return columnVectorGraphNativeSearchStatsModeFullDiagnostics, nil
 	case VectorIndexSearchStatsModeMinimal, VectorIndexSearchStatsModeProduction:
 		return columnVectorGraphNativeSearchStatsModeMinimal, nil
+	case VectorIndexSearchStatsModeWorkAccounting:
+		return columnVectorGraphNativeSearchStatsModeWorkAccounting, nil
 	case VectorIndexSearchStatsModeBenchmarkDebug:
 		return columnVectorGraphNativeSearchStatsModeBenchmarkDebug, nil
 	default:
@@ -156,6 +161,8 @@ type VectorIndexSearchStats struct {
 	ScoreBatchScalarFallbackCalls uint64 `json:"score_batch_fallback,omitempty"`
 	// PreparedScoreCalls counts candidate scores produced by the prepared vector/norm scoring view.
 	PreparedScoreCalls uint64 `json:"prepared_score_calls,omitempty"`
+	// FP32ScoreCalls aliases exact float32 candidate score calls for work-accounting consumers.
+	FP32ScoreCalls uint64 `json:"fp32_score_calls,omitempty"`
 	// QuantizedScoreCalls counts candidate scores produced by a quantized score-plane scorer.
 	QuantizedScoreCalls uint64 `json:"quantized_score_calls,omitempty"`
 	// QuantizedCodeBytesRead is the logical quantized code-row byte count read while scoring candidates.
@@ -164,6 +171,8 @@ type VectorIndexSearchStats struct {
 	QuantizedRerankCandidates uint64 `json:"quantized_rerank_candidates,omitempty"`
 	// QuantizedRerankExactScoreCalls counts exact FP32 score calls used by quantized_rerank.
 	QuantizedRerankExactScoreCalls uint64 `json:"quantized_rerank_exact_score_calls,omitempty"`
+	// ExactRerankScoreCalls aliases exact rerank score calls for work-accounting consumers.
+	ExactRerankScoreCalls uint64 `json:"exact_rerank_score_calls,omitempty"`
 	// QuantizedScorerActive reports that a validated quantized scorer served this search.
 	QuantizedScorerActive uint64 `json:"quantized_scorer_active,omitempty"`
 	// QuantizedAssetMissing reports that the selected quantized score-plane asset was absent.
@@ -537,6 +546,8 @@ type VectorIndexSearchStats struct {
 	TopKComparisons                       uint64 `json:"top_k_comparisons,omitempty"`
 	FrontierPushes                        uint64 `json:"frontier_pushes,omitempty"`
 	FrontierPops                          uint64 `json:"frontier_pops,omitempty"`
+	HeapPushes                            uint64 `json:"heap_pushes,omitempty"`
+	HeapPops                              uint64 `json:"heap_pops,omitempty"`
 	FrontierPopMisses                     uint64 `json:"frontier_pop_misses,omitempty"`
 	FrontierSiftUpCalls                   uint64 `json:"frontier_sift_up_calls,omitempty"`
 	FrontierSiftDownCalls                 uint64 `json:"frontier_sift_down_calls,omitempty"`
@@ -559,6 +570,14 @@ type VectorIndexSearchStats struct {
 	ExactCandidateOrderNonAdjacentForward uint64 `json:"exact_candidate_order_non_adjacent_forward,omitempty"`
 	ExactCandidateOrderBackwardJumps      uint64 `json:"exact_candidate_order_backward_jumps,omitempty"`
 	ExactCandidateOrderMaxForwardRun      uint64 `json:"exact_candidate_order_max_forward_run,omitempty"`
+	// WorkAccountingSearches reports that this search collected explicit work-accounting counters/timers.
+	WorkAccountingSearches uint64 `json:"work_accounting_searches,omitempty"`
+	// DistanceKernelNanos attributes query-local candidate scoring time to exact/quantized distance kernels.
+	DistanceKernelNanos uint64 `json:"distance_kernel_nanos,omitempty"`
+	// GraphTraversalNanos attributes HNSW traversal wall time excluding recorded distance-kernel time.
+	GraphTraversalNanos uint64 `json:"graph_traversal_nanos,omitempty"`
+	// ServiceResponseNanos attributes document-service response construction after collection search.
+	ServiceResponseNanos uint64 `json:"service_response_nanos,omitempty"`
 	// DocumentRowRefStateFetches counts post-top-k document fetches served with vector-index row-ref state.
 	DocumentRowRefStateFetches uint64 `json:"document_row_ref_state_fetches,omitempty"`
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
@@ -2174,7 +2193,7 @@ func deltaInt64(before, after int64) int64 {
 }
 
 func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearchStats, readerStats columnPhysicalRowReaderStats) VectorIndexSearchStats {
-	return VectorIndexSearchStats{
+	stats := VectorIndexSearchStats{
 		GraphRows:                             uint64(readerStats.Rows),
 		CandidateRows:                         searchStats.CandidateRows,
 		Candidates:                            searchStats.Candidates,
@@ -2363,5 +2382,15 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		ExactCandidateOrderNonAdjacentForward: searchStats.ExactCandidateOrderNonAdjacentForward,
 		ExactCandidateOrderBackwardJumps:      searchStats.ExactCandidateOrderBackwardJumps,
 		ExactCandidateOrderMaxForwardRun:      searchStats.ExactCandidateOrderMaxForwardRun,
+		WorkAccountingSearches:                searchStats.WorkAccountingSearches,
+		DistanceKernelNanos:                   searchStats.DistanceKernelNanos,
+		GraphTraversalNanos:                   searchStats.GraphTraversalNanos,
 	}
+	if searchStats.WorkAccountingSearches != 0 {
+		stats.FP32ScoreCalls = searchStats.FP32ScoreCalls
+		stats.ExactRerankScoreCalls = searchStats.QuantizedRerankExactScoreCalls
+		stats.HeapPushes = searchStats.FrontierPushes
+		stats.HeapPops = searchStats.FrontierPops
+	}
+	return stats
 }

@@ -45,6 +45,13 @@ func (s *columnVectorGraphNativeSearchScratch) pushRawDotFrontier(candidate colu
 	s.rawDotFrontierSiftUp(len(raw.frontier)-1, candidate)
 }
 
+func (s *columnVectorGraphNativeSearchScratch) pushRawDotFrontierAccounting(candidate columnVectorGraphRawDotSearchCandidate, stats *columnVectorGraphNativeSearchStats) {
+	if columnVectorGraphNativeSearchWorkAccountingEnabled(stats) {
+		stats.FrontierPushes++
+	}
+	s.pushRawDotFrontier(candidate)
+}
+
 func (s *columnVectorGraphNativeSearchScratch) popRawDotFrontier() (columnVectorGraphRawDotSearchCandidate, bool) {
 	raw := s.rawDot
 	if raw == nil || len(raw.frontier) == 0 {
@@ -58,6 +65,14 @@ func (s *columnVectorGraphNativeSearchScratch) popRawDotFrontier() (columnVector
 		s.rawDotFrontierSiftDown(0, last)
 	}
 	return best, true
+}
+
+func (s *columnVectorGraphNativeSearchScratch) popRawDotFrontierAccounting(stats *columnVectorGraphNativeSearchStats) (columnVectorGraphRawDotSearchCandidate, bool) {
+	candidate, ok := s.popRawDotFrontier()
+	if ok && columnVectorGraphNativeSearchWorkAccountingEnabled(stats) {
+		stats.FrontierPops++
+	}
+	return candidate, ok
 }
 
 func (s *columnVectorGraphNativeSearchScratch) rawDotFrontierSiftUp(idx int, candidate columnVectorGraphRawDotSearchCandidate) {

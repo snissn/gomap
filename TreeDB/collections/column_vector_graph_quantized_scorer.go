@@ -319,7 +319,9 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRawDotRowIDsPrepared(row
 	} else {
 		dst = dst[:len(rowIDs)]
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	status := vectorops.DotScalarU8CenteredIndexedPrevalidated(dst, s.codePayload, s.centeredQuery, rowIDs, s.dims)
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	if status.Invalid || status.Rows != len(rowIDs) {
 		return dst[:0], fmt.Errorf("%w: column_graph quantized index %q scalar_u8 batch score invalid status=%+v rows=%d want %d", ErrVectorIndexSearchUnavailable, s.indexName, status, status.Rows, len(rowIDs))
 	}
@@ -373,7 +375,7 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreAndPushFrontierVisitedRo
 	for i, rowID := range rowIDs {
 		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scalarU8QuantizedCosineScoreFromDot(dots[i])}
 		if scratch.insertTop(topK, candidate) {
-			scratch.pushFrontier(candidate)
+			scratch.pushFrontierAccounting(candidate, stats)
 		}
 	}
 	return len(rowIDs), nil
@@ -394,7 +396,7 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreAndPushRawDotFrontierVis
 	for i, rowID := range rowIDs {
 		candidate := columnVectorGraphRawDotSearchCandidate{ordinal: int(rowID), dot: dots[i]}
 		if scratch.insertRawDotTop(topK, candidate) {
-			scratch.pushRawDotFrontier(candidate)
+			scratch.pushRawDotFrontierAccounting(candidate, stats)
 		}
 	}
 	return len(rowIDs), nil
@@ -509,7 +511,9 @@ func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinal(ordinal int, scrat
 	if scratch == nil {
 		return 0, fmt.Errorf("collections: column_graph quantized rabitq_1bit scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	score, err := s.scoreOrdinalUnchecked(ordinal)
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	if err != nil {
 		return 0, err
 	}
@@ -535,13 +539,16 @@ func (s *columnVectorGraphRabitQQuantizedScorer) scoreOrdinals(ordinals []int, d
 	if scratch == nil {
 		return dst[:0], fmt.Errorf("collections: column_graph quantized rabitq_1bit scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	for i, ordinal := range ordinals {
 		score, err := s.scoreOrdinalUnchecked(ordinal)
 		if err != nil {
+			columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 			return dst[:i], err
 		}
 		dst[i] = score
 	}
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
 		s.recordScoreStats(stats, len(ordinals))
@@ -686,7 +693,9 @@ func (s *columnVectorGraphBRQQuantizedScorer) scoreOrdinal(ordinal int, scratch 
 	if scratch == nil {
 		return 0, fmt.Errorf("collections: column_graph quantized brq_1bit scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	score, err := s.scoreOrdinalUnchecked(ordinal)
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	if err != nil {
 		return 0, err
 	}
@@ -712,13 +721,16 @@ func (s *columnVectorGraphBRQQuantizedScorer) scoreOrdinals(ordinals []int, dst 
 	if scratch == nil {
 		return dst[:0], fmt.Errorf("collections: column_graph quantized brq_1bit scorer: %w", errColumnVectorGraphNativeSearchScratchRequired)
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	for i, ordinal := range ordinals {
 		score, err := s.scoreOrdinalUnchecked(ordinal)
 		if err != nil {
+			columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 			return dst[:i], err
 		}
 		dst[i] = score
 	}
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, len(ordinals), false, true)
 		s.recordScoreStats(stats, len(ordinals))

@@ -342,6 +342,53 @@ func TestColumnHNSWSearchPackReopenPreservesManifestIdentity2313(t *testing.T) {
 	assertColumnHNSWSearchPackMatchesColumnGraphRoute2315(t, searcher, fullOpts, fullResponse)
 }
 
+func TestColumnHNSWSearchPackWorkAccountingStats(t *testing.T) {
+	const dims = 16
+	rows := make([]columnGraphRebuildInputRowV2A, 32)
+	for i := range rows {
+		vec := make([]float32, dims)
+		for j := range vec {
+			vec[j] = float32(((i+1)*(j+3))%17) + 1
+		}
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("doc-%02d", i), vector: vec}
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, dims, 4, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	query := make([]float32, dims)
+	for i := range query {
+		query[i] = float32(i%5) + 1
+	}
+	var buf VectorIndexSearchBuffer
+	response, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, TopK: 5, EfSearch: 16, StatsMode: VectorIndexSearchStatsModeWorkAccounting}, &buf)
+	if err != nil {
+		t.Fatalf("SearchWithBuffer work accounting: %v", err)
+	}
+	stats := response.Stats
+	if stats.RouteKind() != VectorIndexSearchRouteExactHNSWSearchPackV1 || stats.WorkAccountingSearches != 1 {
+		t.Fatalf("work-accounting route/stats=%+v", stats)
+	}
+	if stats.VisitedNodes == 0 || stats.VisitedEdges == 0 || stats.PreparedScoreCalls == 0 || stats.FP32ScoreCalls != stats.PreparedScoreCalls {
+		t.Fatalf("work-accounting score/visit stats=%+v", stats)
+	}
+	if stats.QuantizedScoreCalls != 0 || stats.ExactRerankScoreCalls != 0 {
+		t.Fatalf("exact route reported quantized/rerank work stats=%+v", stats)
+	}
+	if stats.FrontierPushes == 0 || stats.FrontierPops == 0 || stats.HeapPushes != stats.FrontierPushes || stats.HeapPops != stats.FrontierPops {
+		t.Fatalf("work-accounting heap stats=%+v", stats)
+	}
+	if stats.DistanceKernelNanos == 0 || stats.GraphTraversalNanos == 0 {
+		t.Fatalf("work-accounting timers missing stats=%+v", stats)
+	}
+}
+
 func TestColumnHNSWSearchPackEmptyAndSingleRowFixtures2313(t *testing.T) {
 	for _, tc := range []struct {
 		name string

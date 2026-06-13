@@ -404,6 +404,7 @@ func (v *columnVectorGraphPreparedSearchView) checkScalarScoreInputs(query []flo
 }
 
 func columnVectorGraphPreparedCosineScore(query []float32, queryInvNorm float32, ordinal int, vector []float32, invNorm float32, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	dot := float64(vectorDotProductFloat32(query, vector))
 	if math.IsInf(dot, 0) || math.IsNaN(dot) {
 		if stats != nil {
@@ -411,6 +412,7 @@ func columnVectorGraphPreparedCosineScore(query []float32, queryInvNorm float32,
 		}
 		dot = columnVectorGraphNativeDotProductFloat64(query, vector)
 	}
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	score := dot * float64(queryInvNorm) * float64(invNorm)
 	if math.IsNaN(score) || math.IsInf(score, 0) {
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d cosine score is not finite", ordinal)
@@ -598,7 +600,9 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexed(plan *columnV
 			rowIDs[i] = uint32(row)
 		}
 		dots := scratch.scoreTileDots[:runLen]
+		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 		status := vectorops.DotFloat32Indexed(dots, part.values, query, rowIDs, v.dims)
+		columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 		if status.Invalid || status.Rows != runLen {
 			return dst, false, nil
 		}
@@ -670,7 +674,10 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 				}
 				start := ordinal * dims
 				vector := values[start : start+dims]
-				score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, float64(vectorDotProductFloat32(query, vector)), vector, stats)
+				scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
+				dot := float64(vectorDotProductFloat32(query, vector))
+				columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
+				score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, dot, vector, stats)
 				if err != nil {
 					return dst, true, err
 				}
@@ -688,7 +695,10 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 				row := int(rowID)
 				start := row * dims
 				vector := values[start : start+dims]
-				score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, float64(vectorDotProductFloat32(query, vector)), vector, stats)
+				scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
+				dot := float64(vectorDotProductFloat32(query, vector))
+				columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
+				score, err := v.scorePreparedDot(query, queryInvNorm, ordinal, dot, vector, stats)
 				if err != nil {
 					return dst, true, err
 				}
@@ -726,7 +736,9 @@ func (v *columnVectorGraphPreparedSearchView) scoreOrdinalsIndexedSinglePart(pla
 	}
 	scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(ordinals))
 	dots := scratch.scoreTileDots[:len(ordinals)]
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	status := vectorops.DotFloat32Indexed(dots, values, query, rowIDs, dims)
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	if status.Invalid || status.Rows != len(ordinals) {
 		return dst, false, nil
 	}
@@ -772,6 +784,7 @@ func (v *columnVectorGraphPreparedSearchView) recordScoreStats(stats *columnVect
 		return
 	}
 	stats.PreparedScoreCalls += uint64(count)
+	stats.FP32ScoreCalls += uint64(count)
 	stats.VisitedNodes += uint64(count)
 	stats.CandidateFetches += uint64(count)
 	stats.VectorBytesRead += uint64(count * v.dims * 4)

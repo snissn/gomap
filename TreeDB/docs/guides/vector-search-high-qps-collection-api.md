@@ -26,7 +26,8 @@ For the collection-level serving path:
    generation, and keep rebuild/setup outside the timed request loop.
 2. Use the exact/zero query mode with `IncludeDocuments=false`; leave document
    fetch options, filters, projections, legacy fallback controls, and
-   `benchmark_debug` stats out of the high-QPS request shape.
+   diagnostic stats modes (`benchmark_debug` and `work_accounting`) out of the
+   high-QPS request shape.
 3. Allocate one `VectorIndexSearchBuffer` per goroutine/worker. A buffer is not
    concurrency-safe, and returned `Results`/ID byte slices alias that buffer
    until it is reused or reset.
@@ -44,6 +45,10 @@ opts := collections.VectorIndexSearchOptions{
     EfSearch:  128,
     StatsMode: collections.VectorIndexSearchStatsModeProduction,
 }
+
+// Use VectorIndexSearchStatsModeWorkAccounting only for diagnostic attribution
+// runs. It adds explicit visited-node/edge, score-call, heap, and timer counters
+// and should not be mixed into production-QPS evidence rows.
 
 // Warm the collection-owned prepared search state outside the timed loop.
 if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {

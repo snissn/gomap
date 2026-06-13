@@ -239,6 +239,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
 		return nil, *stats, errColumnHNSWSearchPackSearchUnsupportedMode
 	}
+	columnVectorGraphNativeSearchStartWorkAccounting(stats, statsMode)
 	rowCount := v.Header.Rows
 	topK := opts.TopK
 	if topK < 0 {
@@ -306,6 +307,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	if err != nil {
 		return nil, *stats, err
 	}
+	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(stats)
 	for layer := maxLayer; layer > 0; layer-- {
 		entryOrdinal, err = v.greedyNearestAtLayerPreparedScorePlane(scorePlane, rowIDScorePlane, entryOrdinal, layer, scratch, stats, countLoopEdges, &loopEdgeVisits)
 		if err != nil {
@@ -321,7 +323,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 	nextSeed := 0
 	rowCount64 := uint64(rowCount)
 	for {
-		candidate, ok := scratch.popFrontier()
+		candidate, ok := scratch.popFrontierAccounting(stats)
 		if !ok {
 			if len(scratch.top) >= retainedCandidateLimit {
 				break
@@ -397,6 +399,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 		stats.VisitedEdges = loopEdgeVisits
 		stats.Candidates = visitedCandidates
 	}
+	columnVectorGraphNativeSearchFinishGraphTraversal(stats, traversalStart, traversalDistanceBefore)
 	if len(scratch.top) == 0 {
 		return scratch.results, *stats, nil
 	}
@@ -510,7 +513,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedPreparedSc
 	}
 	candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}
 	if scratch.insertTop(topK, candidate) {
-		scratch.pushFrontier(candidate)
+		scratch.pushFrontierAccounting(candidate, stats)
 	}
 	return nil
 }
@@ -531,7 +534,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTilePrepar
 	for i, ordinal := range ordinals {
 		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: scores[i]}
 		if scratch.insertTop(topK, candidate) {
-			scratch.pushFrontier(candidate)
+			scratch.pushFrontierAccounting(candidate, stats)
 		}
 	}
 	return nil

@@ -254,6 +254,7 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
 		stats.PreparedScoreCalls++
+		stats.FP32ScoreCalls++
 		stats.VisitedNodes++
 		stats.CandidateFetches++
 		stats.VectorBytesRead += uint64(vectorView.dims) * 4
@@ -275,6 +276,7 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 			stats.BlockViewBuilds = plan.builds
 		}
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	dot := float64(vectorDotProductFloat32(query, vector))
 	if math.IsInf(dot, 0) || math.IsNaN(dot) {
 		if stats != nil {
@@ -282,6 +284,7 @@ func (s *columnVectorGraphSearchSource) scorePreparedOrdinal(plan *columnVectorG
 		}
 		dot = columnVectorGraphNativeDotProductFloat64(query, vector)
 	}
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	score := dot * float64(queryInvNorm) * float64(invNorm)
 	if math.IsNaN(score) || math.IsInf(score, 0) {
 		return 0, true, fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", s.reader.def.Name, ordinal)

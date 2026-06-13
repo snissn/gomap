@@ -415,7 +415,12 @@ dense `/search/vector` route.
 
 Supported JSON `query_mode` values are `exact`, `quantized_only`, and
 `quantized_rerank`. Quantized modes require a declared quantized index name and
-fail closed when assets are missing, invalid, stale, or unavailable. Responses
+fail closed when assets are missing, invalid, stale, or unavailable. Supported
+`stats_mode` values are `minimal`/`production`, `full_diagnostics`, and
+`work_accounting`; `work_accounting` adds per-query work counters and timers such
+as visited nodes/edges, FP32/quantized/exact-rerank score calls, heap pushes/pops,
+`distance_kernel_nanos`, `graph_traversal_nanos`, and
+`service_response_nanos`, and should be kept out of headline QPS rows. Responses
 include result IDs/scores plus TreeDB stats/diagnostics so benchmark adapters can
 assert no-document guardrails: no documents fetched, no exact fallback for
 quantized modes, quantized scorer active, and rerank exact reads bounded by the
