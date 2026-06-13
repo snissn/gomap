@@ -23,6 +23,7 @@ const columnRetainedSemanticStreamV1BlockRows = 4096
 const maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes = 512 << 20
 const defaultColumnRetainedSemanticStreamV1DecodeCacheBlocks = 16
 const minColumnRetainedSemanticStreamV1DecodeCacheRows = 64
+const minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock = 512
 
 var (
 	// Side-root retained blocks are stored either as a decoded semantic-stream
@@ -49,9 +50,10 @@ type columnRetainedSemanticStreamV1DecodedBlock struct {
 }
 
 type columnRetainedSemanticStreamV1DecodeCache struct {
-	blocks    map[string]*columnRetainedSemanticStreamV1DecodedBlock
-	order     []string
-	maxBlocks int
+	blocks        map[string]*columnRetainedSemanticStreamV1DecodedBlock
+	order         []string
+	maxBlocks     int
+	allowedBlocks map[string]struct{}
 }
 
 // ColumnRetainedSemanticStreamV1StorageAccounting reports the retained-payload
@@ -542,11 +544,47 @@ func newColumnRetainedSemanticStreamV1DecodeCacheWithMaxBlocks(maxBlocks int) *c
 	}
 }
 
+func newColumnRetainedSemanticStreamV1DecodeCacheForDocumentRecords(cfg *ColumnStoreConfig, records []DocumentRecord) *columnRetainedSemanticStreamV1DecodeCache {
+	if !columnStoreRetainedPayloadUsesSemanticStreamV1(cfg) || len(records) < minColumnRetainedSemanticStreamV1DecodeCacheRows {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, record := range records {
+		blockKey, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(record.Document)
+		if err != nil || !ok {
+			continue
+		}
+		counts[string(blockKey)]++
+	}
+	allowed := make(map[string]struct{})
+	for blockKey, count := range counts {
+		if count >= minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock {
+			allowed[blockKey] = struct{}{}
+		}
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	cache := newColumnRetainedSemanticStreamV1DecodeCache()
+	cache.allowedBlocks = allowed
+	return cache
+}
+
 func (c *columnRetainedSemanticStreamV1DecodeCache) rowJSONAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, blockKey []byte, row uint64) ([]byte, error) {
 	if c == nil {
 		return nil, errors.New("collections: semantic-stream-v1 retained decode cache is nil")
 	}
 	cacheKey := string(blockKey)
+	if !c.shouldCacheBlock(cacheKey) {
+		block, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionRetainedSemanticStreamRootName(catalog.meta.Name), blockKey, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("collections: semantic-stream-v1 retained block %x missing", blockKey)
+		}
+		return decodeColumnRetainedSemanticStreamV1BlockRowJSON(block, row)
+	}
 	decoded := c.blocks[cacheKey]
 	if decoded == nil {
 		block, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionRetainedSemanticStreamRootName(catalog.meta.Name), blockKey, nil)
@@ -564,6 +602,17 @@ func (c *columnRetainedSemanticStreamV1DecodeCache) rowJSONAtSnapshot(snap *back
 		c.store(cacheKey, decoded)
 	}
 	return decoded.rowJSON(row)
+}
+
+func (c *columnRetainedSemanticStreamV1DecodeCache) shouldCacheBlock(cacheKey string) bool {
+	if c == nil {
+		return false
+	}
+	if len(c.allowedBlocks) == 0 {
+		return true
+	}
+	_, ok := c.allowedBlocks[cacheKey]
+	return ok
 }
 
 func (c *columnRetainedSemanticStreamV1DecodeCache) store(cacheKey string, decoded *columnRetainedSemanticStreamV1DecodedBlock) {

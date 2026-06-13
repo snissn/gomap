@@ -640,6 +640,40 @@ func TestColumnRetainedSemanticStreamV1StoredBlockZSTDRawLimitFallback2662(t *te
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1DecodeCacheDenseBlockGate2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+
+	sparse := make([]DocumentRecord, 0, minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock)
+	for i := 0; i < minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock; i++ {
+		var blockKey [sha256.Size]byte
+		binary.BigEndian.PutUint64(blockKey[sha256.Size-8:], uint64(i+1))
+		sparse = append(sparse, DocumentRecord{Document: encodeColumnRetainedSemanticStreamV1Locator(blockKey[:], 0)})
+	}
+	if cache := newColumnRetainedSemanticStreamV1DecodeCacheForDocumentRecords(cfg, sparse); cache != nil {
+		t.Fatalf("sparse records unexpectedly enabled full-block decode cache: %+v", cache)
+	}
+
+	var denseBlockKey [sha256.Size]byte
+	denseBlockKey[0] = 0x7b
+	dense := make([]DocumentRecord, 0, minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock)
+	for i := 0; i < minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock; i++ {
+		dense = append(dense, DocumentRecord{Document: encodeColumnRetainedSemanticStreamV1Locator(denseBlockKey[:], uint64(i))})
+	}
+	cache := newColumnRetainedSemanticStreamV1DecodeCacheForDocumentRecords(cfg, dense)
+	if cache == nil {
+		t.Fatal("dense records did not enable full-block decode cache")
+	}
+	if !cache.shouldCacheBlock(string(denseBlockKey[:])) {
+		t.Fatal("dense block was not allowed in decode cache")
+	}
+	var otherBlockKey [sha256.Size]byte
+	otherBlockKey[0] = 0x8c
+	if cache.shouldCacheBlock(string(otherBlockKey[:])) {
+		t.Fatal("unobserved block should not be allowed in decode cache")
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1StoredBlockZSTDFailsClosed2662(t *testing.T) {
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock([][]byte{[]byte(`{"payload":"same"}`), []byte(`{"payload":"same"}`)})
 	if err != nil {
