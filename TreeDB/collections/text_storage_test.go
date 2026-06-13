@@ -240,6 +240,7 @@ func TestCollectionCreateTextIndexBackfillsReopensAndReportsStorage(t *testing.T
 
 	meta, backfill, err := col.CreateTextIndex(TextIndexDefinition{
 		Name:           "lexical",
+		Version:        TextIndexVersionV1,
 		Fields:         []TextIndexField{{Field: "body"}, {Field: "title", Weight: 2}, {Field: "tags"}},
 		StorePositions: true,
 		StoreOffsets:   true,
@@ -325,7 +326,7 @@ func TestCollectionDropTextIndexClearsMetadataRootsAndWriteGuard(t *testing.T) {
 	if _, err := col.InsertBatch([][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)}); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
 	}
-	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
 	staleMgr := NewCollectionManager(d)
@@ -384,7 +385,7 @@ func TestCreateTextIndexFlushesBufferedWritesFromOtherManagers(t *testing.T) {
 		t.Fatalf("setup write was already published; expected buffered write from separate manager, got %q", got)
 	}
 
-	_, backfill, err := creator.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}})
+	_, backfill, err := creator.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}})
 	if err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
@@ -436,7 +437,7 @@ func TestCreateTextIndexMaintainsWritesFromStaleHandles(t *testing.T) {
 	if _, err := stale.Insert([]byte("d1"), []byte(`{"body":"before text"}`)); err != nil {
 		t.Fatalf("stale setup Insert: %v", err)
 	}
-	if _, _, err := fresh.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+	if _, _, err := fresh.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
 	if _, err := stale.Insert([]byte("d2"), []byte(`{"body":"maintained stale handle"}`)); err != nil {
@@ -465,7 +466,7 @@ func TestTextIndexStorageStatsFailsClosedOnMalformedRoot(t *testing.T) {
 	if _, err := col.InsertBatch([][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)}); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
 	}
-	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
 	corruptTextRootValue(t, d, "docs", collectionTextStatsRootName("docs", "lexical"), encodeTextStatsCorpusKey(), []byte{99})
@@ -498,7 +499,7 @@ func BenchmarkCreateTextIndexBackfill(b *testing.B) {
 			b.Fatalf("InsertBatch setup: %v", err)
 		}
 		b.StartTimer()
-		_, stats, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "title"}, {Field: "body"}}, StorePositions: true})
+		_, stats, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "title"}, {Field: "body"}}, StorePositions: true})
 		b.StopTimer()
 		if err != nil {
 			b.Fatalf("CreateTextIndex: %v", err)

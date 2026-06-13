@@ -148,11 +148,11 @@ stored inline in B-tree leaves or, when the root storage policy selects it, as
 existing value-log/split-leaf-log pointer-backed leaf values. Text roots do not
 own a separate physical file class or GC domain.
 
-The v1 text root payload contract is documented in
-`collection-text-search.md`. The v2 production contract and rollout boundaries
-are documented in `collection-text-v2-contract.md`; this section records the
-canonical durable key/value bytes that have landed for the M2 posting-block
-family. All integer varints below are Go `binary.PutUvarint` encodings unless
+The explicit-v1 text root payload contract is documented in
+`collection-text-search.md`. The default-v2 production contract, v1 compatibility
+boundary, and rollout rules are documented in `collection-text-v2-contract.md`;
+this section records the canonical durable key/value bytes that have landed for
+the M2 posting-block family. All integer varints below are Go `binary.PutUvarint` encodings unless
 noted otherwise.
 
 Text-v2 posting-block root name:

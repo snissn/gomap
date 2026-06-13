@@ -414,8 +414,8 @@ func TestTextV2CoexistenceAndDefaultSelection2630(t *testing.T) {
 	if _, err := col.InsertBatch([][]byte{[]byte("d1"), []byte("d2")}, [][]byte{[]byte(`{"body":"refund policy"}`), []byte(`{"body":"shipping policy"}`)}); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
 	}
-	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical_v1", Fields: []TextIndexField{{Field: "body"}}}); err != nil {
-		t.Fatalf("CreateTextIndex v1 default: %v", err)
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical_v1", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex explicit v1: %v", err)
 	}
 	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical_v2", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
 		t.Fatalf("CreateTextIndex explicit v2: %v", err)
@@ -429,7 +429,7 @@ func TestTextV2CoexistenceAndDefaultSelection2630(t *testing.T) {
 		t.Fatalf("TextIndexStatus v2: %v", err)
 	}
 	if v1Status.Version != TextIndexVersionV1 || !v1Status.Ready || !slicesEqualStrings(v1Status.ActiveRootNames, collectionTextRootNames("docs", "lexical_v1")) {
-		t.Fatalf("v1 status=%+v want default v1 roots", v1Status)
+		t.Fatalf("v1 status=%+v want explicit v1 roots", v1Status)
 	}
 	if v2Status.Version != TextIndexVersionV2 || !v2Status.Ready || v2Status.RewriteMergeState != TextIndexRewriteMergeStateReady || !slicesEqualStrings(v2Status.ActiveRootNames, collectionTextV2RootNames("docs", "lexical_v2")) {
 		t.Fatalf("v2 status=%+v want explicit v2 roots", v2Status)
