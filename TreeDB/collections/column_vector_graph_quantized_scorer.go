@@ -330,6 +330,34 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRawDotRowIDsPrepared(row
 	return dst, nil
 }
 
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreGreedyBestRowIDsPrevalidated(rowIDs []uint32, best int, bestScore float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, float64, bool, error) {
+	if len(rowIDs) == 0 {
+		return best, bestScore, false, nil
+	}
+	var dotScratch []int64
+	if scratch != nil {
+		dotScratch = scratch.scoreTileQuantizedDots
+	}
+	dots, err := s.scoreRawDotRowIDsPrevalidated(rowIDs, dotScratch, scratch, stats)
+	if err != nil {
+		return best, bestScore, false, err
+	}
+	changed := false
+	for i, rowID := range rowIDs {
+		neighborOrdinal := int(rowID)
+		score := scalarU8QuantizedCosineScoreFromDot(dots[i])
+		// Preserve the prepared traversal's public float64 score formula and
+		// exact lower-ordinal tie behavior while avoiding the intermediate
+		// float64 score tile used by the generic row-ID score seam.
+		if score > bestScore || (score == bestScore && neighborOrdinal < best) {
+			best = neighborOrdinal
+			bestScore = score
+			changed = true
+		}
+	}
+	return best, bestScore, changed, nil
+}
+
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
 	if len(rowIDs) == 0 {
 		return 0, nil

@@ -72,6 +72,17 @@ type columnHNSWPreparedTraversalRowIDScorePlane interface {
 	scoreAndPushFrontierVisitedRowIDsPrevalidated(rowIDs []uint32, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error)
 }
 
+// columnHNSWPreparedTraversalRowIDGreedyScorePlane is the scalar_u8 prepared
+// traversal fusion seam for upper layers. It scores already-validated adjacency
+// row IDs and updates the greedy best directly, preserving the float64 score
+// formula and lower-ordinal tie behavior without staging a float64 score slice
+// followed by a second generic compare loop. It intentionally fuses the default
+// float64 prepared traversal because the raw-dot scalar_u8 traversal remains
+// default-off/no-promote until it is separately proven neutral or faster.
+type columnHNSWPreparedTraversalRowIDGreedyScorePlane interface {
+	scoreGreedyBestRowIDsPrevalidated(rowIDs []uint32, best int, bestScore float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (newBest int, newBestScore float64, changed bool, err error)
+}
+
 // columnHNSWPreparedTraversalRawDotScorePlane is the scalar_u8-only ordering
 // seam for prepared traversal. It keeps raw centered dot products in the
 // frontier/top-k queues and converts to public float64 scores only when leaving
@@ -411,6 +422,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 }
 
 func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlane(scorePlane columnHNSWPreparedTraversalScorePlane, rowIDScorePlane columnHNSWPreparedTraversalRowIDScorePlane, entryOrdinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64) (int, error) {
+	greedyScorePlane, _ := rowIDScorePlane.(columnHNSWPreparedTraversalRowIDGreedyScorePlane)
 	best := entryOrdinal
 	bestScore, err := scorePlane.scoreOrdinal(best, scratch, stats)
 	if err != nil {
@@ -433,6 +445,18 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerPreparedScorePlan
 			if uint64(neighbor) >= uint64(v.Header.Rows) {
 				return 0, fmt.Errorf("collections: hnsw_search_pack_v1 prepared traversal ordinal=%d layer=%d adjacency[%d]=%d outside row_count=%d: %w", best, layer, i, neighbor, v.Header.Rows, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
+		}
+		if greedyScorePlane != nil {
+			newBest, newBestScore, greedyChanged, err := greedyScorePlane.scoreGreedyBestRowIDsPrevalidated(adjacency, best, bestScore, scratch, stats)
+			if err != nil {
+				return 0, err
+			}
+			if greedyChanged {
+				best = newBest
+				bestScore = newBestScore
+				changed = true
+			}
+			continue
 		}
 		if rowIDScorePlane != nil {
 			scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(adjacency))
