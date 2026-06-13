@@ -404,6 +404,7 @@ func (v *columnVectorGraphPreparedSearchView) checkScalarScoreInputs(query []flo
 }
 
 func columnVectorGraphPreparedCosineScore(query []float32, queryInvNorm float32, ordinal int, vector []float32, invNorm float32, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	dot := float64(vectorDotProductFloat32(query, vector))
 	if math.IsInf(dot, 0) || math.IsNaN(dot) {
 		if stats != nil {
@@ -411,6 +412,7 @@ func columnVectorGraphPreparedCosineScore(query []float32, queryInvNorm float32,
 		}
 		dot = columnVectorGraphNativeDotProductFloat64(query, vector)
 	}
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	score := dot * float64(queryInvNorm) * float64(invNorm)
 	if math.IsNaN(score) || math.IsInf(score, 0) {
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d cosine score is not finite", ordinal)

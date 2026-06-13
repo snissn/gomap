@@ -48,6 +48,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	if !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
 		return nil, stats, errColumnHNSWSearchPackSearchUnsupportedMode
 	}
+	columnVectorGraphNativeSearchStartWorkAccounting(&stats, statsMode)
 	rowCount := v.Header.Rows
 	topK := opts.TopK
 	if topK < 0 {
@@ -105,6 +106,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	if err != nil {
 		return nil, stats, err
 	}
+	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(&stats)
 	for layer := maxLayer; layer > 0; layer-- {
 		entryOrdinal, err = v.greedyNearestAtLayer(normalizedQuery, entryOrdinal, layer, opts.ScoreBatchMode, scratch, &stats, countLoopEdges, &loopEdgeVisits)
 		if err != nil {
@@ -120,7 +122,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 	nextSeed := 0
 	rowCount64 := uint64(rowCount)
 	for {
-		candidate, ok := scratch.popFrontier()
+		candidate, ok := scratch.popFrontierAccounting(&stats)
 		if !ok {
 			if len(scratch.top) >= efSearch {
 				break
@@ -173,6 +175,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 		stats.VisitedEdges = loopEdgeVisits
 		stats.Candidates = visitedCandidates
 	}
+	columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
@@ -263,7 +266,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisited(normalize
 	}
 	candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}
 	if scratch.insertTop(topK, candidate) {
-		scratch.pushFrontier(candidate)
+		scratch.pushFrontierAccounting(candidate, stats)
 	}
 	return nil
 }
@@ -275,7 +278,9 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride {
 		scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
 		dots := scratch.scoreTileDots[:len(rowIDs)]
+		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 		status := vectorops.DotFloat32IndexedPrevalidated(dots, v.NormalizedVectors, normalizedQuery[:v.Header.VectorStride], rowIDs, v.Header.VectorStride)
+		columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 		if !status.Invalid && status.Rows == len(rowIDs) {
 			recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), status.Optimized, status.Fallback)
 			v.recordScoreStats(stats, len(rowIDs))
@@ -285,7 +290,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 			for i, rowID := range rowIDs {
 				candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: float64(dots[i])}
 				if scratch.insertTop(topK, candidate) {
-					scratch.pushFrontier(candidate)
+					scratch.pushFrontierAccounting(candidate, stats)
 				}
 			}
 			return nil
@@ -302,7 +307,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 	for i, rowID := range rowIDs {
 		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scores[i]}
 		if scratch.insertTop(topK, candidate) {
-			scratch.pushFrontier(candidate)
+			scratch.pushFrontierAccounting(candidate, stats)
 		}
 	}
 	return nil
@@ -318,7 +323,9 @@ func (v *columnHNSWSearchPackPreparedView) scoreOrdinal(normalizedQuery []float3
 		return 0, fmt.Errorf("collections: hnsw_search_pack_v1 vector ordinal=%d shape mismatch", ordinal)
 	}
 	vector := v.NormalizedVectors[start:end]
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	score := float64(vectorDotProductFloat32(normalizedQuery[:v.Header.Dimensions], vector))
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	optimized := scoreBatchMode != columnVectorGraphScoreBatchModeScalar && vectorops.DotFloat32OptimizedEligible(v.Header.Dimensions)
 	recordColumnHNSWSearchPackScoreBatchStats(stats, 1, optimized, !optimized)
 	v.recordScoreStats(stats, 1)
@@ -338,7 +345,9 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 	if scoreBatchMode != columnVectorGraphScoreBatchModeScalar && len(rowIDs) > 1 && scratch != nil && len(normalizedQuery) >= v.Header.VectorStride {
 		scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, len(rowIDs))
 		dots := scratch.scoreTileDots[:len(rowIDs)]
+		scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 		status := vectorops.DotFloat32IndexedPrevalidated(dots, v.NormalizedVectors, normalizedQuery[:v.Header.VectorStride], rowIDs, v.Header.VectorStride)
+		columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 		if !status.Invalid && status.Rows == len(rowIDs) {
 			for i := range rowIDs {
 				dst[i] = float64(dots[i])
@@ -348,13 +357,16 @@ func (v *columnHNSWSearchPackPreparedView) scoreRowIDs(normalizedQuery []float32
 			return dst, nil
 		}
 	}
+	scoreStart := columnVectorGraphNativeSearchStartDistanceKernel(stats)
 	for i, rowID := range rowIDs {
 		score, err := v.scoreOrdinal(normalizedQuery, int(rowID), scoreBatchMode, scratch, nil)
 		if err != nil {
+			columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 			return dst[:i], err
 		}
 		dst[i] = score
 	}
+	columnVectorGraphNativeSearchFinishDistanceKernel(stats, scoreStart)
 	optimized := len(rowIDs) == 1 && scoreBatchMode != columnVectorGraphScoreBatchModeScalar && vectorops.DotFloat32OptimizedEligible(v.Header.Dimensions)
 	recordColumnHNSWSearchPackScoreBatchStats(stats, len(rowIDs), optimized, !optimized)
 	v.recordScoreStats(stats, len(rowIDs))

@@ -33,6 +33,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedRawDotTraversal(q
 	if !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
 		return nil, *stats, errColumnHNSWSearchPackSearchUnsupportedMode
 	}
+	columnVectorGraphNativeSearchStartWorkAccounting(stats, statsMode)
 	rowCount := v.Header.Rows
 	topK := opts.TopK
 	if topK < 0 {
@@ -107,6 +108,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedRawDotScorePlane(
 	if err != nil {
 		return nil, *stats, err
 	}
+	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(stats)
 	for layer := maxLayer; layer > 0; layer-- {
 		entryOrdinal, err = v.greedyNearestAtLayerPreparedRawDotScorePlane(rawDotScorePlane, entryOrdinal, layer, scratch, stats, countLoopEdges, &loopEdgeVisits)
 		if err != nil {
@@ -122,7 +124,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedRawDotScorePlane(
 	nextSeed := 0
 	rowCount64 := uint64(rowCount)
 	for {
-		candidate, ok := scratch.popRawDotFrontier()
+		candidate, ok := scratch.popRawDotFrontierAccounting(stats)
 		if !ok {
 			if len(scratch.rawDot.top) >= retainedCandidateLimit {
 				break
@@ -177,6 +179,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedRawDotScorePlane(
 		stats.VisitedEdges = loopEdgeVisits
 		stats.Candidates = visitedCandidates
 	}
+	columnVectorGraphNativeSearchFinishGraphTraversal(stats, traversalStart, traversalDistanceBefore)
 	return v.finishPreparedRawDotScorePlaneResults(topK, retainedCandidateLimit, opts, scratch, stats)
 }
 
@@ -234,7 +237,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushRawDotFrontierVisitedPrep
 	}
 	candidate := columnVectorGraphRawDotSearchCandidate{ordinal: ordinal, dot: dot}
 	if scratch.insertRawDotTop(topK, candidate) {
-		scratch.pushRawDotFrontier(candidate)
+		scratch.pushRawDotFrontierAccounting(candidate, stats)
 	}
 	return nil
 }

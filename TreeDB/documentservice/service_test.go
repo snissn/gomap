@@ -752,6 +752,13 @@ func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
 	if _, err := svc.OptimizeIndex(ctx, "bench", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex bench: %v", err)
 	}
+	work, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 4, StatsMode: collections.VectorIndexSearchStatsModeWorkAccounting})
+	if err != nil {
+		t.Fatalf("SearchBenchmarkVector work accounting: %v", err)
+	}
+	if !work.NoDocuments || work.Stats.WorkAccountingSearches != 1 || work.Stats.FP32ScoreCalls == 0 || work.Stats.DistanceKernelNanos == 0 || work.Stats.ServiceResponseNanos == 0 {
+		t.Fatalf("work-accounting benchmark response=%+v", work)
+	}
 	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, QueryMode: BenchmarkVectorQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.missing", QuantizedRerankCandidates: 32}); ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("unsupported/missing quantized err=%v code=%s", err, ErrorCodeOf(err))
 	}

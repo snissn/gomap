@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/brq"
 	"github.com/snissn/gomap/TreeDB/internal/rabitq"
@@ -73,6 +74,7 @@ const (
 	columnVectorGraphNativeSearchStatsModeDefault columnVectorGraphNativeSearchStatsMode = iota
 	columnVectorGraphNativeSearchStatsModeMinimal
 	columnVectorGraphNativeSearchStatsModeFullDiagnostics
+	columnVectorGraphNativeSearchStatsModeWorkAccounting
 	columnVectorGraphNativeSearchStatsModeBenchmarkDebug
 )
 
@@ -164,7 +166,7 @@ func (p *columnVectorGraphSearchPlan) preparedIndexedScoringDefaultEligible() bo
 
 func (m columnVectorGraphNativeSearchStatsMode) normalized() columnVectorGraphNativeSearchStatsMode {
 	switch m {
-	case columnVectorGraphNativeSearchStatsModeMinimal, columnVectorGraphNativeSearchStatsModeFullDiagnostics, columnVectorGraphNativeSearchStatsModeBenchmarkDebug:
+	case columnVectorGraphNativeSearchStatsModeMinimal, columnVectorGraphNativeSearchStatsModeFullDiagnostics, columnVectorGraphNativeSearchStatsModeWorkAccounting, columnVectorGraphNativeSearchStatsModeBenchmarkDebug:
 		return m
 	default:
 		return columnVectorGraphNativeSearchStatsModeFullDiagnostics
@@ -175,10 +177,16 @@ func (m columnVectorGraphNativeSearchStatsMode) minimal() bool {
 	return m.normalized() == columnVectorGraphNativeSearchStatsModeMinimal
 }
 
+func (m columnVectorGraphNativeSearchStatsMode) workAccounting() bool {
+	return m.normalized() == columnVectorGraphNativeSearchStatsModeWorkAccounting
+}
+
 func (m columnVectorGraphNativeSearchStatsMode) String() string {
 	switch m.normalized() {
 	case columnVectorGraphNativeSearchStatsModeMinimal:
 		return "minimal"
+	case columnVectorGraphNativeSearchStatsModeWorkAccounting:
+		return "work_accounting"
 	case columnVectorGraphNativeSearchStatsModeBenchmarkDebug:
 		return "benchmark_debug"
 	default:
@@ -543,11 +551,61 @@ type columnVectorGraphNativeSearchStats struct {
 	ExactCandidateOrderNonAdjacentForward uint64
 	ExactCandidateOrderBackwardJumps      uint64
 	ExactCandidateOrderMaxForwardRun      uint64
+
+	WorkAccountingSearches uint64
+	DistanceKernelNanos    uint64
+	GraphTraversalNanos    uint64
 }
 
 type columnVectorGraphNativeSearchLoopCounters struct {
 	Edges        uint64
 	VisitedEdges uint64
+}
+
+func columnVectorGraphNativeSearchStartWorkAccounting(stats *columnVectorGraphNativeSearchStats, mode columnVectorGraphNativeSearchStatsMode) {
+	if stats == nil || !mode.workAccounting() {
+		return
+	}
+	stats.WorkAccountingSearches = 1
+}
+
+func columnVectorGraphNativeSearchWorkAccountingEnabled(stats *columnVectorGraphNativeSearchStats) bool {
+	return stats != nil && stats.WorkAccountingSearches != 0
+}
+
+func columnVectorGraphNativeSearchStartDistanceKernel(stats *columnVectorGraphNativeSearchStats) time.Time {
+	if !columnVectorGraphNativeSearchWorkAccountingEnabled(stats) {
+		return time.Time{}
+	}
+	return time.Now()
+}
+
+func columnVectorGraphNativeSearchFinishDistanceKernel(stats *columnVectorGraphNativeSearchStats, start time.Time) {
+	if stats == nil || start.IsZero() {
+		return
+	}
+	stats.DistanceKernelNanos += uint64(time.Since(start))
+}
+
+func columnVectorGraphNativeSearchStartGraphTraversal(stats *columnVectorGraphNativeSearchStats) (time.Time, uint64) {
+	if !columnVectorGraphNativeSearchWorkAccountingEnabled(stats) {
+		return time.Time{}, 0
+	}
+	return time.Now(), stats.DistanceKernelNanos
+}
+
+func columnVectorGraphNativeSearchFinishGraphTraversal(stats *columnVectorGraphNativeSearchStats, start time.Time, distanceBefore uint64) {
+	if stats == nil || start.IsZero() {
+		return
+	}
+	elapsed := uint64(time.Since(start))
+	distance := uint64(0)
+	if stats.DistanceKernelNanos > distanceBefore {
+		distance = stats.DistanceKernelNanos - distanceBefore
+	}
+	if elapsed > distance {
+		stats.GraphTraversalNanos += elapsed - distance
+	}
 }
 
 func (c *columnVectorGraphNativeSearchLoopCounters) publish(stats *columnVectorGraphNativeSearchStats, candidates uint64) {
@@ -1413,6 +1471,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		scoreTileCapacity = retainedCandidateLimit
 	}
 	statsMode := opts.StatsMode.normalized()
+	columnVectorGraphNativeSearchStartWorkAccounting(&stats, statsMode)
 	visitEpochBeforePrepare := uint64(0)
 	if statsMode == columnVectorGraphNativeSearchStatsModeBenchmarkDebug {
 		visitEpochBeforePrepare = scratch.visitEpoch
@@ -1515,6 +1574,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if err != nil {
 		return nil, stats, err
 	}
+	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(&stats)
 	for layer := maxLayer; layer > 0; layer-- {
 		entryOrdinal, err = r.greedyNearestAtLayer(plan, singleBlockView, query, queryInvNorm, entryOrdinal, layer, candidateRows, hasCandidateRows, scratch, hotStats, countLoopEdges, &loopEdgeVisits, preparedMinimalCounters, debugCounters)
 		if err != nil {
@@ -1540,7 +1600,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			if debugCounters != nil {
 				candidate, ok = scratch.popFrontierDebug(debugCounters)
 			} else {
-				candidate, ok = scratch.popFrontier()
+				candidate, ok = scratch.popFrontierAccounting(hotStats)
 			}
 			if !ok {
 				if len(scratch.top) >= retainedCandidateLimit {
@@ -1708,6 +1768,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		}
 	}
 
+	columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
@@ -1800,7 +1861,7 @@ func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnV
 			if debugCounters != nil {
 				candidate, ok = scratch.popFrontierDebug(debugCounters)
 			} else {
-				candidate, ok = scratch.popFrontier()
+				candidate, ok = scratch.popFrontierAccounting(stats)
 			}
 			if !ok {
 				if len(wave) > 0 || len(scratch.top) >= retainedCandidateLimit {
@@ -2266,7 +2327,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 			scratch.pushFrontierDebug(candidate, debugCounters)
 		}
 	} else if scratch.insertTop(topK, candidate) {
-		scratch.pushFrontier(candidate)
+		scratch.pushFrontierAccounting(candidate, stats)
 	}
 	return nil
 }
@@ -2294,7 +2355,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 				scratch.pushFrontierDebug(candidate, debugCounters)
 			}
 		} else if scratch.insertTop(topK, candidate) {
-			scratch.pushFrontier(candidate)
+			scratch.pushFrontierAccounting(candidate, stats)
 		}
 	}
 	return nil
@@ -2677,6 +2738,13 @@ func (s *columnVectorGraphNativeSearchScratch) pushFrontier(candidate columnVect
 	s.frontierSiftUp(len(s.frontier)-1, candidate)
 }
 
+func (s *columnVectorGraphNativeSearchScratch) pushFrontierAccounting(candidate columnVectorGraphSearchCandidate, stats *columnVectorGraphNativeSearchStats) {
+	if columnVectorGraphNativeSearchWorkAccountingEnabled(stats) {
+		stats.FrontierPushes++
+	}
+	s.pushFrontier(candidate)
+}
+
 func (s *columnVectorGraphNativeSearchScratch) pushFrontierDebug(candidate columnVectorGraphSearchCandidate, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
 	debugCounters.stats.FrontierPushes++
 	s.frontier = append(s.frontier, columnVectorGraphSearchCandidate{})
@@ -2695,6 +2763,14 @@ func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphS
 		s.frontierSiftDown(0, last)
 	}
 	return best, true
+}
+
+func (s *columnVectorGraphNativeSearchScratch) popFrontierAccounting(stats *columnVectorGraphNativeSearchStats) (columnVectorGraphSearchCandidate, bool) {
+	candidate, ok := s.popFrontier()
+	if ok && columnVectorGraphNativeSearchWorkAccountingEnabled(stats) {
+		stats.FrontierPops++
+	}
+	return candidate, ok
 }
 
 func (s *columnVectorGraphNativeSearchScratch) popFrontierDebug(debugCounters *columnVectorGraphNativeSearchDebugCounters) (columnVectorGraphSearchCandidate, bool) {

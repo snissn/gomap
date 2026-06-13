@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -586,9 +587,17 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	if err := validateBenchmarkVectorSearchRoute(queryMode, req, search); err != nil {
 		return BenchmarkVectorSearchResponse{}, err
 	}
+	responseStart := time.Time{}
+	if search.Stats.WorkAccountingSearches != 0 {
+		responseStart = time.Now()
+	}
 	results := benchmarkVectorSearchResults(search.Results)
 	if results == nil {
 		results = []BenchmarkVectorSearchResult{}
+	}
+	stats := search.Stats
+	if !responseStart.IsZero() {
+		stats.ServiceResponseNanos = uint64(time.Since(responseStart))
 	}
 	return BenchmarkVectorSearchResponse{
 		Index:                     info,
@@ -599,8 +608,8 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 		QuantizedIndexName:        req.QuantizedIndexName,
 		QuantizedRerankCandidates: req.QuantizedRerankCandidates,
 		NoDocuments:               true,
-		Stats:                     search.Stats,
-		Diagnostics:               search.Diagnostics(),
+		Stats:                     stats,
+		Diagnostics:               stats.Diagnostics(),
 	}, nil
 }
 
@@ -1324,7 +1333,8 @@ func validateBenchmarkVectorStatsMode(mode collections.VectorIndexSearchStatsMod
 	case collections.VectorIndexSearchStatsModeDefault,
 		collections.VectorIndexSearchStatsModeMinimal,
 		collections.VectorIndexSearchStatsModeProduction,
-		collections.VectorIndexSearchStatsModeFullDiagnostics:
+		collections.VectorIndexSearchStatsModeFullDiagnostics,
+		collections.VectorIndexSearchStatsModeWorkAccounting:
 		return nil
 	case collections.VectorIndexSearchStatsModeBenchmarkDebug:
 		return serviceError(CodeInvalidRequest, "benchmark vector search does not support benchmark_debug stats_mode")
