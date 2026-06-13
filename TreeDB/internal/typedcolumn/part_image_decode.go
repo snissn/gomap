@@ -1960,7 +1960,7 @@ func restoreColumnDefinitionCompressionFromImageSections(image ColumnPartImage, 
 				if block.Descriptor.Compression != CompressionNone {
 					return fmt.Errorf("typedcolumn: image column %s block %d compression=%s section=%s", name, i, block.Descriptor.Compression, section.Compression)
 				}
-			case CompressionSnappy, CompressionLZ4:
+			case CompressionSnappy, CompressionLZ4, CompressionZSTD:
 				if block.Descriptor.Compression != section.Compression && block.Descriptor.Compression != CompressionNone {
 					return fmt.Errorf("typedcolumn: image column %s block %d compression=%s section requested=%s", name, i, block.Descriptor.Compression, section.Compression)
 				}
@@ -2713,6 +2713,14 @@ func sectionPayloadBytesWithKnownRawLength(section ColumnPartImageSection, paylo
 			return nil, fmt.Errorf("typedcolumn: %s lz4 decoded length=%d want=%d", label, n, rawBytes)
 		}
 		return out, nil
+	case CompressionZSTD:
+		if rawBytes <= 0 {
+			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d is invalid", label, rawBytes)
+		}
+		if rawBytes > maxRawBytes {
+			return nil, fmt.Errorf("typedcolumn: %s compressed raw bytes=%d exceeds max=%d", label, rawBytes, maxRawBytes)
+		}
+		return decodeZstdPayload(label+" section", payload, rawBytes, make([]byte, 0, rawBytes))
 	default:
 		return nil, fmt.Errorf("typedcolumn: %s section compression=%s is unsupported", label, section.Compression)
 	}
@@ -2758,7 +2766,7 @@ func validateImageSectionCompression(section ColumnPartImageSection) error {
 	switch section.Kind {
 	case ColumnPartImageSectionColumnData:
 		switch section.Compression {
-		case CompressionNone, CompressionSnappy, CompressionLZ4:
+		case CompressionNone, CompressionSnappy, CompressionLZ4, CompressionZSTD:
 			return nil
 		default:
 			return fmt.Errorf("typedcolumn: section %s compression=%s is unsupported", section.Kind, section.Compression)
@@ -2774,7 +2782,7 @@ func validateImageSectionCompression(section ColumnPartImageSection) error {
 				return fmt.Errorf("typedcolumn: section %s raw bytes=%d length=%d for uncompressed section", section.Kind, section.RawBytes, section.Length)
 			}
 			return nil
-		case CompressionSnappy, CompressionLZ4:
+		case CompressionSnappy, CompressionLZ4, CompressionZSTD:
 			if section.RawBytes != rawBytes {
 				return fmt.Errorf("typedcolumn: section %s raw bytes=%d want %d", section.Kind, section.RawBytes, rawBytes)
 			}
@@ -2797,7 +2805,7 @@ func validateImageSectionCompression(section ColumnPartImageSection) error {
 				return fmt.Errorf("typedcolumn: section %s raw bytes=%d length=%d for uncompressed section", section.Kind, section.RawBytes, section.Length)
 			}
 			return nil
-		case CompressionSnappy, CompressionLZ4:
+		case CompressionSnappy, CompressionLZ4, CompressionZSTD:
 			if section.RawBytes <= 0 {
 				return fmt.Errorf("typedcolumn: section %s compressed raw bytes=%d is invalid", section.Kind, section.RawBytes)
 			}
@@ -2818,7 +2826,7 @@ func validateImageSectionCompression(section ColumnPartImageSection) error {
 				return fmt.Errorf("typedcolumn: section %s raw bytes=%d length=%d for uncompressed section", section.Kind, section.RawBytes, section.Length)
 			}
 			return nil
-		case CompressionSnappy, CompressionLZ4:
+		case CompressionSnappy, CompressionLZ4, CompressionZSTD:
 			if section.RawBytes <= 0 {
 				return fmt.Errorf("typedcolumn: section %s compressed raw bytes=%d is invalid", section.Kind, section.RawBytes)
 			}

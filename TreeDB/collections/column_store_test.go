@@ -853,12 +853,19 @@ func TestColumnStoreTypedColumnCompressionPolicyNormalizes2297(t *testing.T) {
 		t.Fatalf("schema hash should canonicalize none aliases: off=%x none=%x", offMeta.Options.ColumnStore.SchemaHash, noneMeta.Options.ColumnStore.SchemaHash)
 	}
 
-	invalid := testColumnStoreConfig(nil)
-	invalid.TypedColumnCompression = ColumnStoreTypedColumnCompression("zstd")
-	if _, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: invalid}}); !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "typed_column_compression") {
-		t.Fatalf("normalizeCollectionMeta invalid compression err=%v want typed_column_compression unsupported", err)
+	zstd := testColumnStoreConfig(nil)
+	zstd.TypedColumnCompression = ColumnStoreTypedColumnCompression("zstd")
+	if _, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: zstd}}); !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "typed_column_compression zstd") {
+		t.Fatalf("normalizeCollectionMeta zstd err=%v want benchmark-only unsupported typed_column_compression", err)
 	}
-	invalid = testColumnStoreConfig(nil)
+
+	zstdSection := testColumnStoreConfig(nil)
+	zstdSection.TypedColumnSectionCompression = ColumnStoreTypedColumnCompression("zstd")
+	if _, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: zstdSection}}); !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "typed_column_section_compression zstd") {
+		t.Fatalf("normalizeCollectionMeta zstd section err=%v want benchmark-only unsupported typed_column_section_compression", err)
+	}
+
+	invalid := testColumnStoreConfig(nil)
 	invalid.TypedColumnSectionCompression = ColumnStoreTypedColumnCompression("zstd_dict")
 	if _, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: invalid}}); !errors.Is(err, errTypedColumnProductionLayoutUnsupported) || !strings.Contains(err.Error(), "typed_column_section_compression") {
 		t.Fatalf("normalizeCollectionMeta invalid section compression err=%v want typed_column_section_compression unsupported", err)

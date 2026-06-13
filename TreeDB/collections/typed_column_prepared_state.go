@@ -7,6 +7,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -1033,6 +1034,26 @@ func decodeTypedColumnPreparedDictionarySectionBytes(section typedcolumn.ColumnP
 		}
 		if n != rawBytes {
 			return nil, fmt.Errorf("collections: typed-column prepared dictionaries lz4 decoded length=%d want=%d", n, rawBytes)
+		}
+		return out, nil
+	case typedcolumn.CompressionZSTD:
+		if rawBytes <= 0 {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d is invalid", rawBytes)
+		}
+		if rawBytes > maxTypedColumnPreparedCompressedDictionarySectionRawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries compressed raw bytes=%d exceeds max=%d", rawBytes, maxTypedColumnPreparedCompressedDictionarySectionRawBytes)
+		}
+		dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries zstd decoder: %w", err)
+		}
+		out, err := dec.DecodeAll(stored, make([]byte, 0, rawBytes))
+		dec.Close()
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries zstd decode: %w", err)
+		}
+		if len(out) != rawBytes {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionaries zstd decoded length=%d want=%d", len(out), rawBytes)
 		}
 		return out, nil
 	default:

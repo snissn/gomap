@@ -530,9 +530,9 @@ func typedColumnProductionEncodingMismatch(field TypedStorageField, def typedcol
 
 func validateTypedColumnProductionCompression(compression typedcolumn.Compression) error {
 	switch compression {
-	case typedcolumn.CompressionNone, typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4:
+	case typedcolumn.CompressionNone, typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4, typedcolumn.CompressionZSTD:
 		return nil
-	case typedcolumn.CompressionZSTD, typedcolumn.CompressionZSTDDict:
+	case typedcolumn.CompressionZSTDDict:
 		return fmt.Errorf("%w: unsupported compression %s", errTypedColumnProductionLayoutUnsupported, compression)
 	default:
 		return fmt.Errorf("%w: unknown compression %s", errTypedColumnProductionLayoutUnsupported, compression)

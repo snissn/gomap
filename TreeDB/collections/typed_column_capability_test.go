@@ -68,7 +68,7 @@ func TestTypedColumnProductionCapabilityRejectsUnsupportedCodecCompression(t *te
 		t.Fatalf("base definition: %v", err)
 	}
 
-	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4} {
+	for _, compression := range []typedcolumn.Compression{typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4, typedcolumn.CompressionZSTD} {
 		t.Run("scalar-supported-"+compression.String(), func(t *testing.T) {
 			def := base
 			def.Compression = compression
@@ -93,7 +93,6 @@ func TestTypedColumnProductionCapabilityRejectsUnsupportedCodecCompression(t *te
 		compression typedcolumn.Compression
 		want        string
 	}{
-		{name: "zstd-unsupported", compression: typedcolumn.CompressionZSTD, want: "unsupported compression zstd"},
 		{name: "zstd-dict-unsupported", compression: typedcolumn.CompressionZSTDDict, want: "unsupported compression zstd_dict"},
 		{name: "unknown", compression: typedcolumn.Compression(250), want: "unknown compression compression_250"},
 	}

@@ -10,13 +10,17 @@ import (
 )
 
 const (
-	typedColumnBenchmarkCompressionEnv         = "TREEDB_COLUMN_STORE_TYPED_COMPRESSION"
-	typedColumnBenchmarkInt64EncodingEnv       = "TREEDB_COLUMN_STORE_TYPED_INT64_ENCODING"
-	typedColumnBenchmarkRowsPerGranuleEnv      = "TREEDB_COLUMN_STORE_TYPED_ROWS_PER_GRANULE"
-	typedColumnBenchmarkAdaptiveEnabledEnv     = "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_ENABLED"
-	typedColumnBenchmarkAdaptiveTargetBytesEnv = "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_TARGET_BYTES"
-	typedColumnBenchmarkAdaptiveMinRowsEnv     = "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MIN_ROWS"
-	typedColumnBenchmarkAdaptiveMaxRowsEnv     = "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MAX_ROWS"
+	typedColumnBenchmarkCompressionEnv           = "TREEDB_COLUMN_STORE_TYPED_COMPRESSION"
+	typedColumnBenchmarkSectionCompressionEnv    = "TREEDB_COLUMN_STORE_TYPED_SECTION_COMPRESSION"
+	typedColumnBenchmarkLocatorCompressionEnv    = "TREEDB_COLUMN_STORE_TYPED_LOCATOR_COMPRESSION"
+	typedColumnBenchmarkDictionaryCompressionEnv = "TREEDB_COLUMN_STORE_TYPED_DICTIONARY_COMPRESSION"
+	typedColumnBenchmarkPruningCompressionEnv    = "TREEDB_COLUMN_STORE_TYPED_PRUNING_COMPRESSION"
+	typedColumnBenchmarkInt64EncodingEnv         = "TREEDB_COLUMN_STORE_TYPED_INT64_ENCODING"
+	typedColumnBenchmarkRowsPerGranuleEnv        = "TREEDB_COLUMN_STORE_TYPED_ROWS_PER_GRANULE"
+	typedColumnBenchmarkAdaptiveEnabledEnv       = "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_ENABLED"
+	typedColumnBenchmarkAdaptiveTargetBytesEnv   = "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_TARGET_BYTES"
+	typedColumnBenchmarkAdaptiveMinRowsEnv       = "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MIN_ROWS"
+	typedColumnBenchmarkAdaptiveMaxRowsEnv       = "TREEDB_COLUMN_STORE_TYPED_ADAPTIVE_MAX_ROWS"
 )
 
 func typedColumnPublicationAdapterOptionsFromConfig(cfg ColumnStoreConfig, partID uint64, fields []TypedStorageField, sortKey []ColumnSortKey) (typedColumnAdapterOptions, error) {
@@ -76,6 +80,50 @@ func applyTypedColumnBenchmarkPolicyFromEnv(cfg ColumnStoreConfig, opts *typedCo
 			active = true
 		}
 	}
+	if raw, ok := os.LookupEnv(typedColumnBenchmarkSectionCompressionEnv); ok {
+		compression, set, err := parseTypedColumnBenchmarkCompression(raw)
+		if err != nil {
+			return err
+		}
+		if set {
+			opts.SectionCompression = compression
+			opts.SectionCompressionSet = true
+			active = true
+		}
+	}
+	if raw, ok := os.LookupEnv(typedColumnBenchmarkLocatorCompressionEnv); ok {
+		compression, set, err := parseTypedColumnBenchmarkCompression(raw)
+		if err != nil {
+			return err
+		}
+		if set {
+			opts.LocatorSectionCompression = compression
+			opts.LocatorSectionCompressionSet = true
+			active = true
+		}
+	}
+	if raw, ok := os.LookupEnv(typedColumnBenchmarkDictionaryCompressionEnv); ok {
+		compression, set, err := parseTypedColumnBenchmarkCompression(raw)
+		if err != nil {
+			return err
+		}
+		if set {
+			opts.DictionarySectionCompression = compression
+			opts.DictionarySectionCompressionSet = true
+			active = true
+		}
+	}
+	if raw, ok := os.LookupEnv(typedColumnBenchmarkPruningCompressionEnv); ok {
+		compression, set, err := parseTypedColumnBenchmarkCompression(raw)
+		if err != nil {
+			return err
+		}
+		if set {
+			opts.PruningSectionCompression = compression
+			opts.PruningSectionCompressionSet = true
+			active = true
+		}
+	}
 	if raw, ok := os.LookupEnv(typedColumnBenchmarkInt64EncodingEnv); ok {
 		encoding, set, err := parseTypedColumnBenchmarkInt64Encoding(raw)
 		if err != nil {
@@ -120,7 +168,7 @@ func canonicalColumnStoreTypedColumnCompression(name string, raw ColumnStoreType
 	case "lz4":
 		return ColumnStoreTypedColumnCompressionLZ4, nil
 	case "zstd":
-		return "", fmt.Errorf("%w: unsupported %s zstd (production zstd encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
+		return "", fmt.Errorf("%w: unsupported %s zstd (zstd is currently benchmark-relaxed/internal only)", errTypedColumnProductionLayoutUnsupported, name)
 	case "zstd_dict", "zstd-dict":
 		return "", fmt.Errorf("%w: unsupported %s zstd_dict (production zstd dictionary encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported, name)
 	default:
@@ -156,7 +204,7 @@ func parseTypedColumnBenchmarkCompression(raw string) (typedcolumn.Compression, 
 	case "lz4":
 		return typedcolumn.CompressionLZ4, true, nil
 	case "zstd":
-		return 0, false, fmt.Errorf("%w: unsupported compression zstd (production zstd encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported)
+		return typedcolumn.CompressionZSTD, true, nil
 	case "zstd_dict", "zstd-dict":
 		return 0, false, fmt.Errorf("%w: unsupported compression zstd_dict (production zstd dictionary encode/decode is deferred)", errTypedColumnProductionLayoutUnsupported)
 	default:

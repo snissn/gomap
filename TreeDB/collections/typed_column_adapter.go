@@ -156,6 +156,12 @@ type typedColumnAdapterOptions struct {
 	DefaultCompressionOnlySupported bool
 	SectionCompression              typedcolumn.Compression
 	SectionCompressionSet           bool
+	LocatorSectionCompression       typedcolumn.Compression
+	LocatorSectionCompressionSet    bool
+	DictionarySectionCompression    typedcolumn.Compression
+	DictionarySectionCompressionSet bool
+	PruningSectionCompression       typedcolumn.Compression
+	PruningSectionCompressionSet    bool
 	Int64Encoding                   typedcolumn.Encoding
 	Int64EncodingSet                bool
 	AdaptiveMarkSizing              typedcolumn.ColumnAdaptiveMarkSizing
@@ -1044,6 +1050,18 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 	imageOpts := typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary, LayoutLogicalTypes: logicalTypes}
 	if p.Options.SectionCompressionSet {
 		imageOpts.SectionCompression = p.Options.SectionCompression
+	}
+	if p.Options.LocatorSectionCompressionSet {
+		imageOpts.RowLocatorSectionCompression = p.Options.LocatorSectionCompression
+		imageOpts.RowLocatorSectionCompressionSet = true
+	}
+	if p.Options.DictionarySectionCompressionSet {
+		imageOpts.DictionarySectionCompression = p.Options.DictionarySectionCompression
+		imageOpts.DictionarySectionCompressionSet = true
+	}
+	if p.Options.PruningSectionCompressionSet {
+		imageOpts.PruningMetadataSectionCompression = p.Options.PruningSectionCompression
+		imageOpts.PruningMetadataSectionCompressionSet = true
 	}
 	return typedcolumn.BuildColumnPartImage(p.Part, imageOpts)
 }

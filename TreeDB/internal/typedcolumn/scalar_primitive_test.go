@@ -292,7 +292,7 @@ func TestPrimitiveScalarValidationFailsClosed1929(t *testing.T) {
 	if _, err := NewColumnPartBuilder(Options{Columns: []ColumnDefinition{{Name: "id", Type: ColumnTypeInt64}, {Name: "bad", Type: ColumnTypeUint16, Encoding: EncodingRawUint16, FixedWidthElements: 1}}, LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}}}); err == nil || !strings.Contains(err.Error(), "fixed_width_elements=0") {
 		t.Fatalf("uint16 fixed_width_elements err=%v", err)
 	}
-	if _, err := NewColumnPartBuilder(Options{Columns: []ColumnDefinition{{Name: "id", Type: ColumnTypeInt64}, {Name: "bad", Type: ColumnTypeFloat16, Encoding: EncodingRawFloat16, Compression: CompressionZSTD, CompressionSet: true}}, LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}}}); err == nil || !strings.Contains(err.Error(), "unsupported compression") {
+	if _, err := NewColumnPartBuilder(Options{Columns: []ColumnDefinition{{Name: "id", Type: ColumnTypeInt64}, {Name: "bad", Type: ColumnTypeFloat16, Encoding: EncodingRawFloat16, Compression: CompressionZSTDDict, CompressionSet: true}}, LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}}}); err == nil || !strings.Contains(err.Error(), "unsupported compression") {
 		t.Fatalf("float16 unsupported compression err=%v", err)
 	}
 	var builder GranuleBuilder
