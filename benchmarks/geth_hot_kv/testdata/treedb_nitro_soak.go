@@ -815,6 +815,14 @@ var interestingStatPrefixes = []string{
 	"treedb.vlog.decode_buffer_grow.",
 }
 
+var interestingStatKeySet = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(interestingStatKeys))
+	for _, key := range interestingStatKeys {
+		out[key] = struct{}{}
+	}
+	return out
+}()
+
 func timeDBPhase(profiler phaseProfiler, db ethdb.Database, phase string, fn func() (int, error)) (phaseResult, error) {
 	before := statSnapshot(db)
 	result, err := profiler.time(phase, fn)
@@ -833,12 +841,7 @@ func statSnapshot(db ethdb.Database) map[string]int64 {
 		return nil
 	}
 	parsed := parseKeyValueStats(raw)
-	out := make(map[string]int64, len(interestingStatKeys))
-	for _, key := range interestingStatKeys {
-		if value, ok := parsed[key]; ok {
-			out[key] = value
-		}
-	}
+	out := make(map[string]int64, len(parsed))
 	for key, value := range parsed {
 		if interestingStatKey(key) {
 			out[key] = value
@@ -848,6 +851,9 @@ func statSnapshot(db ethdb.Database) map[string]int64 {
 }
 
 func interestingStatKey(key string) bool {
+	if _, ok := interestingStatKeySet[key]; ok {
+		return true
+	}
 	for _, prefix := range interestingStatPrefixes {
 		if strings.HasPrefix(key, prefix) {
 			return true
@@ -998,11 +1004,11 @@ func renderSummary(out output) string {
 }
 
 func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
-	if !hasStatDeltas(runs) {
+	if !hasReadCounterDeltas(runs) {
 		return
 	}
 	sb.WriteString("\n## TreeDB value-log read counters\n\n")
-	sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678.\n\n")
+	sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678. Broader write-path stat deltas remain available in the JSON output and matrix `phase_stat_deltas.tsv`.\n\n")
 	sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss out-of-range | mmap miss no mapping | mmap miss dead cap | mmap ReadAt fallbacks |\n")
 	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, run := range runs {
@@ -1011,34 +1017,65 @@ func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
 			if !ok || len(result.StatDelta) == 0 {
 				continue
 			}
+			counters, ok := readCounterDeltas(result.StatDelta)
+			if !ok {
+				continue
+			}
 			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				run.Engine,
 				run.ReadIntegrity,
 				run.IterationMode,
 				phase,
-				statDeltaValue(result.StatDelta, "treedb.vlog.read.crc32_checks_total", "treedb.cache.vlog_read.crc32_checks_total"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_out_of_range", "treedb.cache.vlog_mmap.read.miss_out_of_range"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_no_mapping", "treedb.cache.vlog_mmap.read.miss_no_mapping"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_dead_mapping_cap", "treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat"),
+				counters.crc32Checks,
+				counters.groupedHits,
+				counters.groupedMisses,
+				counters.groupedStores,
+				counters.mmapHits,
+				counters.mmapMissOutOfRange,
+				counters.mmapMissNoMapping,
+				counters.mmapMissDeadCap,
+				counters.mmapFallbackReadAt,
 			)
 		}
 	}
 }
 
-func hasStatDeltas(runs []runResult) bool {
+type readCounters struct {
+	crc32Checks        int64
+	groupedHits        int64
+	groupedMisses      int64
+	groupedStores      int64
+	mmapHits           int64
+	mmapMissOutOfRange int64
+	mmapMissNoMapping  int64
+	mmapMissDeadCap    int64
+	mmapFallbackReadAt int64
+}
+
+func hasReadCounterDeltas(runs []runResult) bool {
 	for _, run := range runs {
 		for _, phase := range run.Phases {
-			if len(phase.StatDelta) > 0 {
+			if _, ok := readCounterDeltas(phase.StatDelta); ok {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func readCounterDeltas(delta map[string]int64) (readCounters, bool) {
+	counters := readCounters{
+		crc32Checks:        statDeltaValue(delta, "treedb.vlog.read.crc32_checks_total", "treedb.cache.vlog_read.crc32_checks_total"),
+		groupedHits:        statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits"),
+		groupedMisses:      statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses"),
+		groupedStores:      statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores"),
+		mmapHits:           statDeltaValue(delta, "treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits"),
+		mmapMissOutOfRange: statDeltaValue(delta, "treedb.vlog.mmap_read.miss_out_of_range", "treedb.cache.vlog_mmap.read.miss_out_of_range"),
+		mmapMissNoMapping:  statDeltaValue(delta, "treedb.vlog.mmap_read.miss_no_mapping", "treedb.cache.vlog_mmap.read.miss_no_mapping"),
+		mmapMissDeadCap:    statDeltaValue(delta, "treedb.vlog.mmap_read.miss_dead_mapping_cap", "treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"),
+		mmapFallbackReadAt: statDeltaValue(delta, "treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat"),
+	}
+	return counters, counters != (readCounters{})
 }
 
 func statDeltaValue(delta map[string]int64, keys ...string) int64 {
