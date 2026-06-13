@@ -349,7 +349,10 @@ func buildContext(cfg config) reportContext {
 			contextText = strings.TrimSpace(string(raw))
 		}
 	}
-	goVersion := strings.TrimSpace(runCmd("go", "version"))
+	goVersion := goVersionFromContextText(contextText)
+	if goVersion == "" {
+		goVersion = runtimeGoVersion()
+	}
 	host, _ := os.Hostname()
 	return reportContext{
 		RepoRoot:    repoRoot,
@@ -378,12 +381,19 @@ func runGit(repoRoot string, args ...string) string {
 	return string(out)
 }
 
-func runCmd(name string, args ...string) string {
-	out, err := exec.Command(name, args...).Output()
-	if err != nil {
-		return ""
+func goVersionFromContextText(contextText string) string {
+	for _, line := range strings.Split(contextText, "\n") {
+		line = strings.TrimSpace(line)
+		value, ok := strings.CutPrefix(line, "go=")
+		if ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
 	}
-	return string(out)
+	return ""
+}
+
+func runtimeGoVersion() string {
+	return fmt.Sprintf("go version %s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 }
 
 func runtimeGOOS() string   { return runtime.GOOS }

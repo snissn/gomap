@@ -76,6 +76,26 @@ func TestRowsFromGoBenchRejectsEmptyArtifacts(t *testing.T) {
 	}
 }
 
+func TestBuildReportUsesCapturedGoVersionFromContext(t *testing.T) {
+	dir := t.TempDir()
+	contextPath := filepath.Join(dir, "context.txt")
+	wantGo := "go version go9.99.0 custom/arch"
+	if err := os.WriteFile(contextPath, []byte("timestamp=unit-test\ngo="+wantGo+"\npython=Python 3.x\n"), 0o644); err != nil {
+		t.Fatalf("write context: %v", err)
+	}
+	rep, err := buildReport(config{
+		outDir:      dir,
+		repoRoot:    dir,
+		contextPath: contextPath,
+	})
+	if err != nil {
+		t.Fatalf("buildReport: %v", err)
+	}
+	if got := rep.Context.GoVersion; got != wantGo {
+		t.Fatalf("go version=%q want captured context version %q", got, wantGo)
+	}
+}
+
 func TestBuildReportAppendsCustomCaveatsToDefaults(t *testing.T) {
 	rep, err := buildReport(config{
 		outDir:      t.TempDir(),
