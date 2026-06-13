@@ -148,6 +148,7 @@ func ColumnRetainedSemanticStreamV1BlockLayoutAuditFromJSONDocuments(cfg ColumnS
 	if err != nil {
 		return ColumnRetainedSemanticStreamV1BlockLayoutAudit{}, err
 	}
+	defer collector.close()
 	for _, document := range prepared.documents {
 		collector.primaryLocatorBytes += int64(len(document))
 	}
@@ -171,6 +172,7 @@ func (c *Collection) auditRetainedSemanticStreamV1BlockLayoutAtSnapshot(snap *ba
 	if err != nil {
 		return ColumnRetainedSemanticStreamV1BlockLayoutAudit{}, nil, err
 	}
+	defer collector.close()
 	rootName := collectionRetainedSemanticStreamRootName(catalog.meta.Name)
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil {
@@ -740,6 +742,22 @@ func newColumnRetainedSemanticStreamV1BlockLayoutCollector() (*columnRetainedSem
 		paths:       make(map[string]*columnRetainedSemanticStreamV1PathLayoutCollector),
 		zstdEncoder: enc,
 	}, nil
+}
+
+func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) close() {
+	if c == nil {
+		return
+	}
+	if c.zstdEncoder != nil {
+		c.zstdEncoder.Close()
+		c.zstdEncoder = nil
+	}
+	for _, stream := range c.paths {
+		if stream.zstdWriter != nil {
+			_ = stream.zstdWriter.Close()
+			stream.zstdWriter = nil
+		}
+	}
 }
 
 func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) addBlock(block []byte) error {
