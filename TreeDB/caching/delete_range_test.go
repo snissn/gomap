@@ -279,6 +279,64 @@ func TestCachingDB_CommandWALRangeSpanFiltersPublishedRoot(t *testing.T) {
 	}
 }
 
+func TestCachingDB_CommandWALRangeSpanPreservesPublishedRootMiss(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("backend Open: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+	if err := backend.SetSync([]byte("root-a-only"), []byte("root-a")); err != nil {
+		t.Fatalf("seed root A: %v", err)
+	}
+	rootA := uint64(0)
+	if state := backend.State(); state != nil {
+		rootA = state.RootPageID
+	}
+	if rootA == 0 {
+		t.Fatalf("root A id is zero")
+	}
+	if err := backend.SetSync([]byte("m"), []byte("default-m")); err != nil {
+		t.Fatalf("seed default root: %v", err)
+	}
+
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.mu.Lock()
+	if ok := db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{{
+			rootID: rootA,
+		}},
+	}); !ok {
+		db.mu.Unlock()
+		t.Fatalf("installPublishedRootSetLocked returned false")
+	}
+	db.mu.Unlock()
+	if err := db.DeleteRangeAfterCommandWALAppend([]byte("x"), []byte("z"), func() error { return nil }); err != nil {
+		t.Fatalf("DeleteRangeAfterCommandWALAppend: %v", err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	if _, err := snap.Get([]byte("m")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("snapshot root-bound miss Get(m) err=%v want ErrKeyNotFound", err)
+	}
+	if out, err := snap.GetAppend([]byte("m"), []byte("prefix:")); !errors.Is(err, tree.ErrKeyNotFound) || string(out) != "prefix:" {
+		t.Fatalf("snapshot root-bound miss GetAppend(m)=(%q,%v), want prefix:,ErrKeyNotFound", out, err)
+	}
+}
+
 func TestCachingBatch_CommandWALRangeOnlyUsesSpanLayer(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,

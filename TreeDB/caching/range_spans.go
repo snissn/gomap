@@ -221,6 +221,10 @@ func (db *DB) lookupViewEntryWithRangeSpansAndRootSource(view *memtableView, key
 			}
 			return val, ptr, flags, true, rootDomainEntrySourcePublished
 		}
+		// The applicable published root is authoritative for this view/snapshot.
+		// Treat its miss as a terminal not-found marker so active-span paths do not
+		// fall through to the default backend root and cross root domains.
+		return nil, page.ValuePtr{}, node.FlagTombstone, true, rootDomainEntrySourcePublished
 	}
 	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
 }
