@@ -19,6 +19,15 @@ from pathlib import Path
 from typing import Any
 
 
+ALLOWED_TOKENIZER_DDL = {
+    "ascii": "CREATE VIRTUAL TABLE docs_fts USING fts5(title, body, tokenize='ascii')",
+    "porter": "CREATE VIRTUAL TABLE docs_fts USING fts5(title, body, tokenize='porter')",
+    "unicode61": (
+        "CREATE VIRTUAL TABLE docs_fts USING fts5(title, body, tokenize='unicode61')"
+    ),
+}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a deterministic SQLite FTS5 text baseline")
     parser.add_argument("--docs", type=int, default=10_000)
@@ -37,7 +46,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def unavailable(args: argparse.Namespace, reason: str) -> dict[str, Any]:
+def unavailable(reason: str) -> dict[str, Any]:
     return {
         "schema_version": "treedb_text_hybrid_external/v1",
         "status": "unavailable",
@@ -100,6 +109,11 @@ def main() -> int:
     out = Path(args.out)
     if args.docs <= 0 or args.queries <= 0 or args.top_k <= 0:
         raise SystemExit("--docs, --queries, and --top-k must be positive")
+    try:
+        tokenizer_ddl = ALLOWED_TOKENIZER_DDL[args.tokenize]
+    except KeyError as exc:
+        allowed = ", ".join(sorted(ALLOWED_TOKENIZER_DDL))
+        raise SystemExit(f"--tokenize must be one of: {allowed}") from exc
 
     db_path = Path(args.db) if args.db else out.with_suffix(".sqlite3")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -114,9 +128,9 @@ def main() -> int:
     try:
         conn = sqlite3.connect(str(db_path))
         configure(conn)
-        conn.execute(f"CREATE VIRTUAL TABLE docs_fts USING fts5(title, body, tokenize='{args.tokenize}')")
+        conn.execute(tokenizer_ddl)
     except sqlite3.Error as exc:
-        write_json(out, unavailable(args, f"Python sqlite3/SQLite does not provide usable FTS5: {exc}"))
+        write_json(out, unavailable(f"Python sqlite3/SQLite does not provide usable FTS5: {exc}"))
         return 0
 
     build_start = time.perf_counter()
@@ -134,7 +148,7 @@ def main() -> int:
     durations: list[int] = []
     total_results = 0
     search_start = time.perf_counter_ns()
-    for i in range(args.queries):
+    for _ in range(args.queries):
         start = time.perf_counter_ns()
         rows = list(conn.execute(sql, (args.query, args.top_k)))
         durations.append(time.perf_counter_ns() - start)

@@ -162,7 +162,14 @@ func TestBuildReportParsesExternalAndRendersUnavailable(t *testing.T) {
 
 func TestRunRejectsMissingInputsEvenWhenCounterFailuresAllowed(t *testing.T) {
 	dir := t.TempDir()
-	err := run(config{outDir: filepath.Join(dir, "out"), allowCounterFailures: true, goBenches: namedPaths{{Name: "missing", Path: filepath.Join(dir, "missing.txt")}}})
+	err := run(config{
+		outDir:               filepath.Join(dir, "out"),
+		allowCounterFailures: true,
+		goBenches: namedPaths{{
+			Name: "missing",
+			Path: filepath.Join(dir, "missing.txt"),
+		}},
+	})
 	if err == nil || !strings.Contains(err.Error(), "read go bench") {
 		t.Fatalf("run err=%v want missing input error", err)
 	}
