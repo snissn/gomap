@@ -135,6 +135,15 @@ type testInsertBatchPlanningHook struct {
 	fn func()
 }
 
+var testBeforeCreateCollectionPublishHook struct {
+	installMu sync.Mutex
+	ptr       atomic.Pointer[testCreateCollectionPublishHook]
+}
+
+type testCreateCollectionPublishHook struct {
+	fn func(CollectionMeta)
+}
+
 // CommitAmbiguousError reports that a collection mutation reached its logical
 // commit point before a later visibility, flush, checkpoint, response, or
 // bookkeeping step failed. The operation may already be visible or recoverable;
@@ -2923,6 +2932,9 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			StoragePolicy: plan.policies[i],
 		})
 	}
+	if hook := testBeforeCreateCollectionPublishHook.ptr.Load(); hook != nil && hook.fn != nil {
+		hook.fn(normalized)
+	}
 	buildSystemDelta := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if len(rootIDs) != len(plan.rootNames) {
 			return nil, unexpectedOrderedRootCountError(normalized.Name, len(plan.rootNames), len(rootIDs))
@@ -2936,8 +2948,11 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		if err != nil {
 			return nil, err
 		}
-		if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
-			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+		if existing != nil {
+			if !sameCollectionMeta(existing.meta, normalized) {
+				return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+			}
+			return buildSystemDeltaIterator(nil)
 		}
 		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 	}
@@ -2966,8 +2981,11 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			if err != nil {
 				return nil, err
 			}
-			if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
-				return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+			if existing != nil {
+				if !sameCollectionMeta(existing.meta, normalized) {
+					return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+				}
+				return buildSystemTargetIterator(current, nil)
 			}
 			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, nil, nil))
 		})
@@ -2985,8 +3003,11 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			if err != nil {
 				return nil, err
 			}
-			if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
-				return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+			if existing != nil {
+				if !sameCollectionMeta(existing.meta, normalized) {
+					return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+				}
+				return buildSystemTargetIterator(current, nil)
 			}
 			return buildSystemTargetIterator(current, createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 		})

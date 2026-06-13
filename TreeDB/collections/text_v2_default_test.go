@@ -3,7 +3,9 @@ package collections
 import (
 	"bytes"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -32,6 +34,84 @@ func TestTextIndexDefaultCreateCollectionPublishesV2RootsStatus2690(t *testing.T
 		t.Fatalf("OpenCollection: %v", err)
 	}
 	assertDefaultV2StatusAndEmptyRoots2690(t, d, col, "lexical")
+}
+
+func TestTextIndexDefaultCreateCollectionNoopDoesNotReplaceRacedV2Roots2690(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	meta := &CollectionMeta{
+		Name: "docs",
+		TextIndexes: []TextIndexDefinition{{
+			Name:   "lexical",
+			Fields: []TextIndexField{{Field: "body"}},
+		}},
+	}
+
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var blockedOnce atomic.Bool
+	testBeforeCreateCollectionPublishHook.installMu.Lock()
+	testBeforeCreateCollectionPublishHook.ptr.Store(&testCreateCollectionPublishHook{fn: func(got CollectionMeta) {
+		if got.Name != "docs" || !blockedOnce.CompareAndSwap(false, true) {
+			return
+		}
+		close(blocked)
+		<-release
+	}})
+	defer func() {
+		testBeforeCreateCollectionPublishHook.ptr.Store(nil)
+		testBeforeCreateCollectionPublishHook.installMu.Unlock()
+	}()
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := NewCollectionManager(d).CreateCollection(meta)
+		firstErr <- err
+	}()
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first CreateCollection to block before publish")
+	}
+
+	if _, err := NewCollectionManager(d).CreateCollection(meta); err != nil {
+		t.Fatalf("second CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection after second create: %v", err)
+	}
+	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"refund policy"}`)); err != nil {
+		t.Fatalf("Insert after second create: %v", err)
+	}
+	before, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("SearchText before releasing first create: %v", err)
+	}
+	assertSearchIDs2690(t, before, []string{"d1"})
+
+	close(release)
+	select {
+	case err := <-firstErr:
+		if err != nil {
+			t.Fatalf("first CreateCollection: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first CreateCollection to finish")
+	}
+	after, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("SearchText after raced no-op create: %v", err)
+	}
+	assertSearchIDs2690(t, after, []string{"d1"})
+	assertZeroDocV2SearchStats2690(t, after.Stats)
+	status, err := col.TextIndexStatus("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStatus after raced no-op create: %v", err)
+	}
+	if status.Version != TextIndexVersionV2 || !slicesEqualStrings(status.ActiveRootNames, collectionTextV2RootNames("docs", "lexical")) {
+		t.Fatalf("status after raced no-op create=%+v want default-v2 roots preserved", status)
+	}
 }
 
 func TestTextIndexDefaultCreateTextIndexBackfillUpdateDeleteReopenSearch2690(t *testing.T) {
