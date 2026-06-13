@@ -52,6 +52,14 @@ func TestHarnessExposesReadIntegrityIterationAndCounterLabels(t *testing.T) {
 		"treedb.process.read_path.outer_leaf.loads_total",
 		"treedb.process.read_path.outer_leaf.iterator_loads_total",
 		"treedb.process.read_path.outer_leaf.checksum.verifications_total",
+		"treedb.cache.delete_range.calls_total",
+		"treedb.cache.delete_range.batch_calls_total",
+		"treedb.cache.delete_range.coalesced_ranges_total",
+		"treedb.cache.delete_range.snapshot_iterators_total",
+		"treedb.cache.delete_range.materialized_keys_total",
+		"treedb.cache.delete_range.backend_direct_batches_total",
+		"if hasReadCounterDeltas(runs) {",
+		"if !hasDeleteRangeCounterDeltas(runs) {",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("harness missing instrumentation label %q", want)

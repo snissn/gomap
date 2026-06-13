@@ -253,7 +253,41 @@ stat_key_groups = {
     'outer_leaf_iterator_loads': ['treedb.process.read_path.outer_leaf.iterator_loads_total'],
     'outer_leaf_checksum_verifications': ['treedb.process.read_path.outer_leaf.checksum.verifications_total'],
     'outer_leaf_checksum_skips': ['treedb.process.read_path.outer_leaf.checksum.skips_total'],
+    'delete_range_calls': ['treedb.cache.delete_range.calls_total'],
+    'delete_range_batch_calls': ['treedb.cache.delete_range.batch_calls_total'],
+    'delete_range_batch_writes': ['treedb.cache.delete_range.batch_writes_total'],
+    'delete_range_input_ranges': ['treedb.cache.delete_range.input_ranges_total'],
+    'delete_range_effective_ranges': ['treedb.cache.delete_range.effective_ranges_total'],
+    'delete_range_coalesced_ranges': ['treedb.cache.delete_range.coalesced_ranges_total'],
+    'delete_range_iterators': ['treedb.cache.delete_range.iterators_total'],
+    'delete_range_snapshot_iterators': ['treedb.cache.delete_range.snapshot_iterators_total'],
+    'delete_range_backend_iterators': ['treedb.cache.delete_range.backend_iterators_total'],
+    'delete_range_memtable_iterators': ['treedb.cache.delete_range.memtable_iterators_total'],
+    'delete_range_queue_iterators': ['treedb.cache.delete_range.queue_iterators_total'],
+    'delete_range_visited_keys': ['treedb.cache.delete_range.visited_keys_total'],
+    'delete_range_tombstone_keys': ['treedb.cache.delete_range.tombstone_keys_total'],
+    'delete_range_materialized_keys': ['treedb.cache.delete_range.materialized_keys_total'],
+    'delete_range_materialized_key_bytes': ['treedb.cache.delete_range.materialized_key_bytes_total'],
+    'delete_range_fast_path_clears': ['treedb.cache.delete_range.fast_path_clears_total'],
+    'delete_range_backend_direct_batches': ['treedb.cache.delete_range.backend_direct_batches_total'],
+    'delete_range_backend_direct_keys': ['treedb.cache.delete_range.backend_direct_keys_total'],
 }
+
+vlog_stat_names = [
+    'crc32_checks', 'grouped_hits', 'grouped_misses', 'grouped_stores',
+    'mmap_hits', 'mmap_miss_out_of_range', 'mmap_miss_no_mapping',
+    'mmap_miss_dead_mapping_cap', 'mmap_fallback_readat',
+    'outer_leaf_loads', 'outer_leaf_point_loads', 'outer_leaf_iterator_loads',
+    'outer_leaf_checksum_verifications', 'outer_leaf_checksum_skips',
+]
+delete_range_stat_names = [
+    'delete_range_calls', 'delete_range_batch_calls', 'delete_range_batch_writes',
+    'delete_range_input_ranges', 'delete_range_effective_ranges', 'delete_range_coalesced_ranges',
+    'delete_range_iterators', 'delete_range_snapshot_iterators', 'delete_range_backend_iterators',
+    'delete_range_memtable_iterators', 'delete_range_queue_iterators', 'delete_range_visited_keys', 'delete_range_tombstone_keys',
+    'delete_range_materialized_keys', 'delete_range_materialized_key_bytes',
+    'delete_range_fast_path_clears', 'delete_range_backend_direct_batches', 'delete_range_backend_direct_keys',
+]
 
 def fmt(n):
     try:
@@ -389,12 +423,14 @@ with open(md, 'w') as out:
                 metric_ratio(key_only, value, 'iterate_keys_sec'), metric_ratio(key_only, value, 'delete_range_keys_sec'),
                 fmt(value_crc), fmt(key_crc), fmt(key_crc - value_crc)))
 
-    if phase_rows:
+    if any(any(vals[name] for name in vlog_stat_names) for _, _, vals in phase_rows):
         out.write('\n## TreeDB value-log read counters\n\n')
         out.write('Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations; grouped counters reflect grouped-frame cache activity; mmap columns split hits, misses, and ReadAt fallback reads. Outer-leaf columns identify B-tree leaf pages read from the value-log-backed leaf log. Full machine-readable read counters are in `phase_counters.tsv`; all nonzero parseable TreeDB stat deltas are in `phase_stat_deltas.tsv`.\n\n')
         out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss OOR | mmap miss no-map | mmap miss dead-cap | mmap ReadAt fallback | outer leaf loads | outer leaf point loads | outer leaf iterator loads | outer leaf cksum verifies | outer leaf cksum skips |\n')
         out.write('|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n')
         for r, phase, vals in phase_rows:
+            if not any(vals[name] for name in vlog_stat_names):
+                continue
             out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
                 r['key_shape'], fmt(r['value_size']), fmt(r['batch_target_bytes']), r['read_integrity'],
                 r['iteration_mode'], r['engine'], phase,
@@ -403,6 +439,27 @@ with open(md, 'w') as out:
                 fmt(vals['mmap_miss_dead_mapping_cap']), fmt(vals['mmap_fallback_readat']),
                 fmt(vals['outer_leaf_loads']), fmt(vals['outer_leaf_point_loads']), fmt(vals['outer_leaf_iterator_loads']),
                 fmt(vals['outer_leaf_checksum_verifications']), fmt(vals['outer_leaf_checksum_skips'])))
+
+    delete_phase_rows = [(r, phase, vals) for r, phase, vals in phase_rows if any(vals[name] for name in delete_range_stat_names)]
+    if delete_phase_rows:
+        out.write('\n## TreeDB DeleteRange counters\n\n')
+        out.write('Per-phase DeleteRange counters from TreeDB `Stat()`. Input ranges are submitted non-empty ranges; effective ranges are exact adjacent/overlap-coalesced write-plan ranges; materialized keys are copied into point tombstones by the cached fallback. Full machine-readable counters are in `phase_counters.tsv`; all nonzero parseable TreeDB stat deltas are in `phase_stat_deltas.tsv`.\n\n')
+        out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | snapshot iters | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys |\n')
+        out.write('|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n')
+        for r, phase, vals in delete_phase_rows:
+            out.write('| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n'.format(
+                r['key_shape'], fmt(r['value_size']), fmt(r['batch_target_bytes']), r['read_integrity'],
+                r['iteration_mode'], r['engine'], phase,
+                fmt(vals['delete_range_calls']), fmt(vals['delete_range_batch_calls']), fmt(vals['delete_range_batch_writes']),
+                fmt(vals['delete_range_input_ranges']), fmt(vals['delete_range_effective_ranges']), fmt(vals['delete_range_coalesced_ranges']),
+                fmt(vals['delete_range_visited_keys']), fmt(vals['delete_range_materialized_keys']),
+                fmt(vals['delete_range_materialized_key_bytes']), fmt(vals['delete_range_tombstone_keys']),
+                fmt(vals['delete_range_iterators']), fmt(vals['delete_range_snapshot_iterators']),
+                fmt(vals['delete_range_backend_iterators']), fmt(vals['delete_range_memtable_iterators']),
+                fmt(vals['delete_range_queue_iterators']),
+                fmt(vals['delete_range_fast_path_clears']), fmt(vals['delete_range_backend_direct_batches']),
+                fmt(vals['delete_range_backend_direct_keys'])))
+
 PY
 
 echo "geth hot KV matrix complete"

@@ -7761,6 +7761,23 @@ type DB struct {
 	memtableMode                                      atomic.Uint32
 	memtableStats                                     memtableStats
 	rootDomainProbeStats                              rootDomainProbeStats
+	deleteRangeCalls                                  atomic.Uint64
+	deleteRangeBatchCalls                             atomic.Uint64
+	deleteRangeBatchWrites                            atomic.Uint64
+	deleteRangeInputRanges                            atomic.Uint64
+	deleteRangeEffectiveRanges                        atomic.Uint64
+	deleteRangeCoalescedRanges                        atomic.Uint64
+	deleteRangeIterators                              atomic.Uint64
+	deleteRangeBackendIterators                       atomic.Uint64
+	deleteRangeMemtableIterators                      atomic.Uint64
+	deleteRangeQueueIterators                         atomic.Uint64
+	deleteRangeVisitedKeys                            atomic.Uint64
+	deleteRangeTombstoneKeys                          atomic.Uint64
+	deleteRangeMaterializedKeys                       atomic.Uint64
+	deleteRangeMaterializedKeyBytes                   atomic.Uint64
+	deleteRangeFastPathClears                         atomic.Uint64
+	deleteRangeBackendDirectBatches                   atomic.Uint64
+	deleteRangeBackendDirectKeys                      atomic.Uint64
 	memtableAdaptive                                  bool
 	memtableAdaptiveObserve                           atomic.Bool
 	memtableAdaptiveBTreeMinIters                     uint64
@@ -22126,6 +22143,37 @@ func (db *DB) DeleteRangeAfterCommandWALAppend(start, end []byte, appendCommand 
 	return db.deleteRange(start, end, appendCommand)
 }
 
+func (db *DB) recordDeleteRangePlan(inputRanges, effectiveRanges int) {
+	if db == nil || inputRanges <= 0 {
+		return
+	}
+	db.deleteRangeInputRanges.Add(uint64(inputRanges))
+	if effectiveRanges > 0 {
+		db.deleteRangeEffectiveRanges.Add(uint64(effectiveRanges))
+	}
+	if inputRanges > effectiveRanges {
+		db.deleteRangeCoalescedRanges.Add(uint64(inputRanges - effectiveRanges))
+	}
+}
+
+func (db *DB) recordDeleteRangeKeys(visitedKeys, tombstoneKeys, materializedKeys, materializedKeyBytes uint64) {
+	if db == nil {
+		return
+	}
+	if visitedKeys > 0 {
+		db.deleteRangeVisitedKeys.Add(visitedKeys)
+	}
+	if tombstoneKeys > 0 {
+		db.deleteRangeTombstoneKeys.Add(tombstoneKeys)
+	}
+	if materializedKeys > 0 {
+		db.deleteRangeMaterializedKeys.Add(materializedKeys)
+	}
+	if materializedKeyBytes > 0 {
+		db.deleteRangeMaterializedKeyBytes.Add(materializedKeyBytes)
+	}
+}
+
 func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err error) {
 	if db == nil {
 		return nil
@@ -22133,6 +22181,8 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 	if batch.IsDeleteRangeNoop(start, end) {
 		return nil
 	}
+	db.deleteRangeCalls.Add(1)
+	db.recordDeleteRangePlan(1, 1)
 	if appendCommand != nil && !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal range deletes require disabled cached redo log")
 	}
@@ -22166,6 +22216,8 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			return err
 		}
 		defer func() { _ = it.Close() }()
+		db.deleteRangeIterators.Add(1)
+		var visitedKeys, tombstoneKeys uint64
 
 		applyDelete := func(key []byte) error {
 			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
@@ -22269,6 +22321,8 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			if err := applyDelete(key); err != nil {
 				return poisonApply(err)
 			}
+			visitedKeys++
+			tombstoneKeys++
 			deletedAny = true
 			it.Next()
 		}
@@ -22283,6 +22337,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			}
 		}
 
+		db.recordDeleteRangeKeys(visitedKeys, tombstoneKeys, 0, 0)
 		db.noteWrite()
 		db.maybeAssistFlush()
 		return nil
@@ -22310,6 +22365,9 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				return err
 			}
 			defer func() { _ = it.Close() }()
+			db.deleteRangeBackendIterators.Add(1)
+			db.deleteRangeBackendDirectBatches.Add(1)
+			var backendKeys uint64
 
 			b := db.backend.NewBatch()
 			defer func() { _ = b.Close() }()
@@ -22317,6 +22375,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				if err := b.Delete(it.Key()); err != nil {
 					return err
 				}
+				backendKeys++
 				it.Next()
 			}
 			if err := it.Error(); err != nil {
@@ -22324,6 +22383,10 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			}
 			if err := b.Write(); err != nil {
 				return err
+			}
+			db.recordDeleteRangeKeys(backendKeys, backendKeys, 0, 0)
+			if backendKeys > 0 {
+				db.deleteRangeBackendDirectKeys.Add(backendKeys)
 			}
 			// Best-effort: backend range can shrink; force recompute later.
 			db.mu.Lock()
@@ -22412,6 +22475,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				return err
 			}
 
+			db.deleteRangeFastPathClears.Add(1)
 			db.mu.Unlock()
 			db.flushMu.Unlock()
 			return nil
@@ -22486,6 +22550,10 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				return err
 			}
 			defer func() { _ = it.Close() }()
+			db.deleteRangeFastPathClears.Add(1)
+			db.deleteRangeBackendIterators.Add(1)
+			db.deleteRangeBackendDirectBatches.Add(1)
+			var backendKeys uint64
 
 			b := db.backend.NewBatch()
 			defer func() { _ = b.Close() }()
@@ -22494,6 +22562,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				if err := b.Delete(it.Key()); err != nil {
 					return err
 				}
+				backendKeys++
 				it.Next()
 			}
 			if err := it.Error(); err != nil {
@@ -22501,6 +22570,10 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			}
 			if err := b.Write(); err != nil {
 				return err
+			}
+			db.recordDeleteRangeKeys(backendKeys, backendKeys, 0, 0)
+			if backendKeys > 0 {
+				db.deleteRangeBackendDirectKeys.Add(backendKeys)
 			}
 
 			// Best-effort: backend range can shrink; force recompute later.
@@ -22617,9 +22690,11 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		db.mu.Unlock()
 
 		var (
-			backendIter  iterator.UnsafeIterator
-			queueIters   []iterator.UnsafeIterator
-			mutableIters []iterator.UnsafeIterator
+			backendIter   iterator.UnsafeIterator
+			queueIters    []iterator.UnsafeIterator
+			mutableIters  []iterator.UnsafeIterator
+			visitedKeys   uint64
+			tombstoneKeys uint64
 		)
 
 		if overlapsQuery(start, end, backendRange) {
@@ -22628,6 +22703,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				return err
 			}
 			backendIter = it
+			db.deleteRangeBackendIterators.Add(1)
 			defer func() { _ = backendIter.Close() }()
 		}
 
@@ -22642,6 +22718,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				it := mem.NewIterator(start, end)
 				it.Seek(start)
 				mutableIters = append(mutableIters, it)
+				db.deleteRangeMemtableIterators.Add(1)
 				defer func(it iterator.UnsafeIterator) { _ = it.Close() }(it)
 			}
 		}
@@ -22653,6 +22730,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			it := mem.NewIterator(start, end)
 			it.Seek(start)
 			queueIters = append(queueIters, it)
+			db.deleteRangeQueueIterators.Add(1)
 			defer func(it iterator.UnsafeIterator) { _ = it.Close() }(it)
 		}
 
@@ -22686,6 +22764,8 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 						db.mu.Unlock()
 						return err
 					}
+					visitedKeys++
+					tombstoneKeys++
 				}
 				it.Next()
 			}
@@ -22701,6 +22781,8 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 					db.mu.Unlock()
 					return err
 				}
+				visitedKeys++
+				tombstoneKeys++
 				backendIter.Next()
 			}
 			if err := backendIter.Error(); err != nil {
@@ -22716,6 +22798,8 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 						db.mu.Unlock()
 						return err
 					}
+					visitedKeys++
+					tombstoneKeys++
 				}
 				it.Next()
 			}
@@ -22724,6 +22808,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				return err
 			}
 		}
+		db.recordDeleteRangeKeys(visitedKeys, tombstoneKeys, 0, 0)
 		db.mu.Unlock()
 
 		db.noteWrite()
@@ -22737,6 +22822,8 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		return err
 	}
 	defer func() { _ = it.Close() }()
+	db.deleteRangeIterators.Add(1)
+	var visitedKeys, tombstoneKeys uint64
 
 	b := db.NewBatch()
 	defer b.Close()
@@ -22744,11 +22831,14 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		if err := b.Delete(it.Key()); err != nil {
 			return err
 		}
+		visitedKeys++
+		tombstoneKeys++
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
 		return err
 	}
+	db.recordDeleteRangeKeys(visitedKeys, tombstoneKeys, 0, 0)
 	return b.Write()
 }
 
@@ -26491,6 +26581,28 @@ func (db *DB) Stats() map[string]string {
 	}
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
+	deleteRangeSnapshotIterators := db.deleteRangeIterators.Load()
+	deleteRangeBackendIterators := db.deleteRangeBackendIterators.Load()
+	deleteRangeMemtableIterators := db.deleteRangeMemtableIterators.Load()
+	deleteRangeQueueIterators := db.deleteRangeQueueIterators.Load()
+	stats["treedb.cache.delete_range.calls_total"] = fmt.Sprintf("%d", db.deleteRangeCalls.Load())
+	stats["treedb.cache.delete_range.batch_calls_total"] = fmt.Sprintf("%d", db.deleteRangeBatchCalls.Load())
+	stats["treedb.cache.delete_range.batch_writes_total"] = fmt.Sprintf("%d", db.deleteRangeBatchWrites.Load())
+	stats["treedb.cache.delete_range.input_ranges_total"] = fmt.Sprintf("%d", db.deleteRangeInputRanges.Load())
+	stats["treedb.cache.delete_range.effective_ranges_total"] = fmt.Sprintf("%d", db.deleteRangeEffectiveRanges.Load())
+	stats["treedb.cache.delete_range.coalesced_ranges_total"] = fmt.Sprintf("%d", db.deleteRangeCoalescedRanges.Load())
+	stats["treedb.cache.delete_range.iterators_total"] = fmt.Sprintf("%d", deleteRangeSnapshotIterators+deleteRangeBackendIterators+deleteRangeMemtableIterators+deleteRangeQueueIterators)
+	stats["treedb.cache.delete_range.snapshot_iterators_total"] = fmt.Sprintf("%d", deleteRangeSnapshotIterators)
+	stats["treedb.cache.delete_range.backend_iterators_total"] = fmt.Sprintf("%d", deleteRangeBackendIterators)
+	stats["treedb.cache.delete_range.memtable_iterators_total"] = fmt.Sprintf("%d", deleteRangeMemtableIterators)
+	stats["treedb.cache.delete_range.queue_iterators_total"] = fmt.Sprintf("%d", deleteRangeQueueIterators)
+	stats["treedb.cache.delete_range.visited_keys_total"] = fmt.Sprintf("%d", db.deleteRangeVisitedKeys.Load())
+	stats["treedb.cache.delete_range.tombstone_keys_total"] = fmt.Sprintf("%d", db.deleteRangeTombstoneKeys.Load())
+	stats["treedb.cache.delete_range.materialized_keys_total"] = fmt.Sprintf("%d", db.deleteRangeMaterializedKeys.Load())
+	stats["treedb.cache.delete_range.materialized_key_bytes_total"] = fmt.Sprintf("%d", db.deleteRangeMaterializedKeyBytes.Load())
+	stats["treedb.cache.delete_range.fast_path_clears_total"] = fmt.Sprintf("%d", db.deleteRangeFastPathClears.Load())
+	stats["treedb.cache.delete_range.backend_direct_batches_total"] = fmt.Sprintf("%d", db.deleteRangeBackendDirectBatches.Load())
+	stats["treedb.cache.delete_range.backend_direct_keys_total"] = fmt.Sprintf("%d", db.deleteRangeBackendDirectKeys.Load())
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
 	stats["treedb.cache.mutable_flush_threshold_base_bytes"] = fmt.Sprintf("%d", mutableThresholdBase)
@@ -30103,6 +30215,9 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 	if batch.IsDeleteRangeNoop(start, end) {
 		return nil
 	}
+	if b.db != nil {
+		b.db.deleteRangeBatchCalls.Add(1)
+	}
 	var startCopy, endCopy []byte
 	if start != nil {
 		startCopy = b.cloneKey(start)
@@ -30114,6 +30229,9 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 		single := [1]batch.Entry{{Type: batch.OpDeleteRange, Key: startCopy, Value: endCopy}}
 		if err := b.backend.SetOps(single[:]); err != nil {
 			return err
+		}
+		if b.db != nil {
+			b.db.recordDeleteRangePlan(1, 1)
 		}
 		b.size += len(startCopy) + len(endCopy)
 		return nil
@@ -30498,7 +30616,15 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	if !b.hasDeleteRanges {
 		return b.write(sync)
 	}
+	inputRanges := 0
+	for _, entry := range b.entries {
+		if entry.Type == batch.OpDeleteRange && !batch.IsDeleteRangeNoop(entry.Key, entry.Value) {
+			inputRanges++
+		}
+	}
 	points, ranges := batch.BuildApplyPlanFromEntries(b.entries, true)
+	b.db.deleteRangeBatchWrites.Add(1)
+	b.db.recordDeleteRangePlan(inputRanges, len(ranges))
 	if len(points) == 0 && len(ranges) == 0 {
 		b.updateBatchEntryHint()
 		b.updateBatchCopyHint()
@@ -30522,6 +30648,10 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 
 	materialized := make([]batch.Entry, 0, len(points))
 	deleteKeyBytes := 0
+	var visitedKeys, materializedKeys, materializedKeyBytes uint64
+	if len(ranges) > 0 {
+		b.db.deleteRangeIterators.Add(uint64(len(ranges)))
+	}
 	for _, r := range ranges {
 		it, err := b.db.Iterator(r.Start, r.End)
 		if err != nil {
@@ -30529,6 +30659,7 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 		}
 		for it.Valid() {
 			key := it.Key()
+			visitedKeys++
 			if cachedBatchDeleteRangeMaterializeMaxEntries >= 0 && len(materialized) >= cachedBatchDeleteRangeMaterializeMaxEntries {
 				_ = it.Close()
 				return fmt.Errorf("%w: keys=%d limit=%d", ErrBatchDeleteRangeTooLarge, len(materialized)+1, cachedBatchDeleteRangeMaterializeMaxEntries)
@@ -30539,6 +30670,8 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 				return fmt.Errorf("%w: key_bytes=%d limit=%d", ErrBatchDeleteRangeTooLarge, deleteKeyBytes, cachedBatchDeleteRangeMaterializeMaxKeyBytes)
 			}
 			materialized = append(materialized, batch.Entry{Type: batch.OpDelete, Key: append([]byte(nil), key...)})
+			materializedKeys++
+			materializedKeyBytes += uint64(len(key))
 			it.Next()
 		}
 		if err := it.Error(); err != nil {
@@ -30549,6 +30682,7 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 			return err
 		}
 	}
+	b.db.recordDeleteRangeKeys(visitedKeys, materializedKeys, materializedKeys, materializedKeyBytes)
 	materialized = append(materialized, points...)
 
 	origEntries := b.entries

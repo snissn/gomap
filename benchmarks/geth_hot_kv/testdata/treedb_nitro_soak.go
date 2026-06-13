@@ -795,6 +795,24 @@ var interestingStatKeys = []string{
 	"treedb.cache.vlog_mmap.read.miss_no_mapping",
 	"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap",
 	"treedb.cache.vlog_mmap.read.fallback_readat",
+	"treedb.cache.delete_range.calls_total",
+	"treedb.cache.delete_range.batch_calls_total",
+	"treedb.cache.delete_range.batch_writes_total",
+	"treedb.cache.delete_range.input_ranges_total",
+	"treedb.cache.delete_range.effective_ranges_total",
+	"treedb.cache.delete_range.coalesced_ranges_total",
+	"treedb.cache.delete_range.iterators_total",
+	"treedb.cache.delete_range.snapshot_iterators_total",
+	"treedb.cache.delete_range.backend_iterators_total",
+	"treedb.cache.delete_range.memtable_iterators_total",
+	"treedb.cache.delete_range.queue_iterators_total",
+	"treedb.cache.delete_range.visited_keys_total",
+	"treedb.cache.delete_range.tombstone_keys_total",
+	"treedb.cache.delete_range.materialized_keys_total",
+	"treedb.cache.delete_range.materialized_key_bytes_total",
+	"treedb.cache.delete_range.fast_path_clears_total",
+	"treedb.cache.delete_range.backend_direct_batches_total",
+	"treedb.cache.delete_range.backend_direct_keys_total",
 }
 
 var interestingStatPrefixes = []string{
@@ -1009,42 +1027,84 @@ func renderSummary(out output) string {
 }
 
 func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
-	if !hasReadCounterDeltas(runs) {
+	if hasReadCounterDeltas(runs) {
+		sb.WriteString("\n## TreeDB value-log read counters\n\n")
+		sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678. Outer-leaf counters identify B-tree leaf pages read from the value-log-backed leaf log. Broader write-path stat deltas remain available in the JSON output and matrix `phase_stat_deltas.tsv`.\n\n")
+		sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss out-of-range | mmap miss no mapping | mmap miss dead cap | mmap ReadAt fallbacks | outer leaf loads | outer leaf point loads | outer leaf iterator loads | outer leaf checksum verifies | outer leaf checksum skips |\n")
+		sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+		for _, run := range runs {
+			for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
+				result, ok := run.Phases[phase]
+				if !ok || len(result.StatDelta) == 0 {
+					continue
+				}
+				counters, ok := readCounterDeltas(result.StatDelta)
+				if !ok {
+					continue
+				}
+				fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+					run.Engine,
+					run.ReadIntegrity,
+					run.IterationMode,
+					phase,
+					counters.crc32Checks,
+					counters.groupedHits,
+					counters.groupedMisses,
+					counters.groupedStores,
+					counters.mmapHits,
+					counters.mmapMissOutOfRange,
+					counters.mmapMissNoMapping,
+					counters.mmapMissDeadCap,
+					counters.mmapFallbackReadAt,
+					counters.outerLeafLoads,
+					counters.outerLeafPointLoads,
+					counters.outerLeafIteratorLoads,
+					counters.outerLeafChecksumVerifications,
+					counters.outerLeafChecksumSkips,
+				)
+			}
+		}
+	}
+
+	if !hasDeleteRangeCounterDeltas(runs) {
 		return
 	}
-	sb.WriteString("\n## TreeDB value-log read counters\n\n")
-	sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678. Outer-leaf counters identify B-tree leaf pages read from the value-log-backed leaf log. Broader write-path stat deltas remain available in the JSON output and matrix `phase_stat_deltas.tsv`.\n\n")
-	sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss out-of-range | mmap miss no mapping | mmap miss dead cap | mmap ReadAt fallbacks | outer leaf loads | outer leaf point loads | outer leaf iterator loads | outer leaf checksum verifies | outer leaf checksum skips |\n")
-	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("\n## TreeDB DeleteRange counters\n\n")
+	sb.WriteString("Per-phase DeleteRange deltas from TreeDB `Stat()` output. `input ranges` counts submitted non-empty ranges; `effective ranges` counts ranges after exact adjacent/overlap coalescing in the write plan; materialized keys are copied into point tombstones by the cached fallback.\n\n")
+	sb.WriteString("| engine | read integrity | iteration mode | phase | db calls | batch calls | batch writes | input ranges | effective ranges | coalesced ranges | visited keys | materialized keys | materialized key bytes | tombstone keys | iterators | snapshot iters | backend iters | memtable iters | queue iters | fast clears | backend direct batches | backend direct keys |\n")
+	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, run := range runs {
 		for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
 			result, ok := run.Phases[phase]
 			if !ok || len(result.StatDelta) == 0 {
 				continue
 			}
-			counters, ok := readCounterDeltas(result.StatDelta)
-			if !ok {
+			if !hasAnyStatDeltaValue(result.StatDelta, deleteRangeCounterKeys...) {
 				continue
 			}
-			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				run.Engine,
 				run.ReadIntegrity,
 				run.IterationMode,
 				phase,
-				counters.crc32Checks,
-				counters.groupedHits,
-				counters.groupedMisses,
-				counters.groupedStores,
-				counters.mmapHits,
-				counters.mmapMissOutOfRange,
-				counters.mmapMissNoMapping,
-				counters.mmapMissDeadCap,
-				counters.mmapFallbackReadAt,
-				counters.outerLeafLoads,
-				counters.outerLeafPointLoads,
-				counters.outerLeafIteratorLoads,
-				counters.outerLeafChecksumVerifications,
-				counters.outerLeafChecksumSkips,
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.calls_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.batch_calls_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.batch_writes_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.input_ranges_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.effective_ranges_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.coalesced_ranges_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.visited_keys_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.materialized_keys_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.materialized_key_bytes_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.tombstone_keys_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.iterators_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.snapshot_iterators_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.backend_iterators_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.memtable_iterators_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.queue_iterators_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.fast_path_clears_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.backend_direct_batches_total"),
+				statDeltaValue(result.StatDelta, "treedb.cache.delete_range.backend_direct_keys_total"),
 			)
 		}
 	}
@@ -1071,6 +1131,38 @@ func hasReadCounterDeltas(runs []runResult) bool {
 	for _, run := range runs {
 		for _, phase := range run.Phases {
 			if _, ok := readCounterDeltas(phase.StatDelta); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var deleteRangeCounterKeys = []string{
+	"treedb.cache.delete_range.calls_total",
+	"treedb.cache.delete_range.batch_calls_total",
+	"treedb.cache.delete_range.batch_writes_total",
+	"treedb.cache.delete_range.input_ranges_total",
+	"treedb.cache.delete_range.effective_ranges_total",
+	"treedb.cache.delete_range.coalesced_ranges_total",
+	"treedb.cache.delete_range.iterators_total",
+	"treedb.cache.delete_range.snapshot_iterators_total",
+	"treedb.cache.delete_range.backend_iterators_total",
+	"treedb.cache.delete_range.memtable_iterators_total",
+	"treedb.cache.delete_range.queue_iterators_total",
+	"treedb.cache.delete_range.visited_keys_total",
+	"treedb.cache.delete_range.tombstone_keys_total",
+	"treedb.cache.delete_range.materialized_keys_total",
+	"treedb.cache.delete_range.materialized_key_bytes_total",
+	"treedb.cache.delete_range.fast_path_clears_total",
+	"treedb.cache.delete_range.backend_direct_batches_total",
+	"treedb.cache.delete_range.backend_direct_keys_total",
+}
+
+func hasDeleteRangeCounterDeltas(runs []runResult) bool {
+	for _, run := range runs {
+		for _, phase := range run.Phases {
+			if hasAnyStatDeltaValue(phase.StatDelta, deleteRangeCounterKeys...) {
 				return true
 			}
 		}
@@ -1105,6 +1197,15 @@ func statDeltaValue(delta map[string]int64, keys ...string) int64 {
 		}
 	}
 	return 0
+}
+
+func hasAnyStatDeltaValue(delta map[string]int64, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := delta[key]; ok && value != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func perSec(ops int, d time.Duration) float64 {
