@@ -2888,6 +2888,12 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			return nil, err
 		}
 	}
+	unlockSchema := func() {}
+	if coord := collectionSchemaCoordinatorForDBCollection(m.db, normalized.Name); coord != nil {
+		coord.schemaMu.Lock()
+		unlockSchema = coord.schemaMu.Unlock
+	}
+	defer unlockSchema()
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed

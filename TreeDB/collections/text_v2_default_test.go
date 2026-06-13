@@ -74,26 +74,16 @@ func TestTextIndexDefaultCreateCollectionNoopDoesNotReplaceRacedV2Roots2690(t *t
 		t.Fatal("timed out waiting for first CreateCollection to block before publish")
 	}
 
-	if _, err := NewCollectionManager(d).CreateCollection(meta); err != nil {
-		t.Fatalf("second CreateCollection: %v", err)
+	secondErr := make(chan error, 1)
+	go func() {
+		_, err := NewCollectionManager(d).CreateCollection(meta)
+		secondErr <- err
+	}()
+	select {
+	case err := <-secondErr:
+		t.Fatalf("second CreateCollection completed before first publish err=%v; want schema serialization", err)
+	case <-time.After(50 * time.Millisecond):
 	}
-	col, err := NewCollectionManager(d).OpenCollection("docs")
-	if err != nil {
-		t.Fatalf("OpenCollection after second create: %v", err)
-	}
-	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"refund policy"}`)); err != nil {
-		t.Fatalf("Insert after second create: %v", err)
-	}
-	before, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
-	if err != nil {
-		t.Fatalf("SearchText before releasing first create: %v", err)
-	}
-	assertSearchIDs2690(t, before, []string{"d1"})
-	stateBeforeRelease := d.State()
-	if stateBeforeRelease == nil {
-		t.Fatal("db state before releasing first create is nil")
-	}
-	commitSeqBeforeRelease := stateBeforeRelease.CommitSeq
 
 	close(release)
 	select {
@@ -104,19 +94,42 @@ func TestTextIndexDefaultCreateCollectionNoopDoesNotReplaceRacedV2Roots2690(t *t
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for first CreateCollection to finish")
 	}
+	select {
+	case err := <-secondErr:
+		if err != nil {
+			t.Fatalf("second CreateCollection: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for second CreateCollection to finish")
+	}
+
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection after raced creates: %v", err)
+	}
+	stateBeforeIdempotent := d.State()
+	if stateBeforeIdempotent == nil {
+		t.Fatal("db state before idempotent create is nil")
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(meta); err != nil {
+		t.Fatalf("idempotent CreateCollection after raced creates: %v", err)
+	}
+	stateAfterIdempotent := d.State()
+	if stateAfterIdempotent == nil {
+		t.Fatal("db state after idempotent create is nil")
+	}
+	if stateAfterIdempotent.CommitSeq != stateBeforeIdempotent.CommitSeq {
+		t.Fatalf("idempotent CreateCollection advanced commit seq from %d to %d; want no orphan root publish", stateBeforeIdempotent.CommitSeq, stateAfterIdempotent.CommitSeq)
+	}
+	if _, err := col.Insert([]byte("d1"), []byte(`{"body":"refund policy"}`)); err != nil {
+		t.Fatalf("Insert after raced creates: %v", err)
+	}
 	after, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10, ResultMode: TextSearchResultModeScoreOnly})
 	if err != nil {
 		t.Fatalf("SearchText after raced no-op create: %v", err)
 	}
 	assertSearchIDs2690(t, after, []string{"d1"})
 	assertZeroDocV2SearchStats2690(t, after.Stats)
-	stateAfterRelease := d.State()
-	if stateAfterRelease == nil {
-		t.Fatal("db state after releasing first create is nil")
-	}
-	if stateAfterRelease.CommitSeq != commitSeqBeforeRelease {
-		t.Fatalf("raced no-op CreateCollection advanced commit seq from %d to %d; want no orphan root publish", commitSeqBeforeRelease, stateAfterRelease.CommitSeq)
-	}
 	status, err := col.TextIndexStatus("lexical")
 	if err != nil {
 		t.Fatalf("TextIndexStatus after raced no-op create: %v", err)
