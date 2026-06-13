@@ -897,6 +897,41 @@ func TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchReplayBytesSurviveWriteUntilReset(t *testing.T) {
+	inner := &commandWALHookBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 2)
+	key := []byte("alpha")
+	value := []byte("value")
+	keyView, valueView, err := wrapped.SetViewWithReplayBytes(key, value)
+	if err != nil {
+		t.Fatalf("SetViewWithReplayBytes: %v", err)
+	}
+	copy(key, "omega")
+	copy(value, "xxxxx")
+	if string(keyView) != "alpha" || string(valueView) != "value" {
+		t.Fatalf("replay views changed before Write: key=%q value=%q", keyView, valueView)
+	}
+	if err := wrapped.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if inner.writeAfterCalls != 1 {
+		t.Fatalf("WriteAfterCommandWALAppend calls=%d want 1", inner.writeAfterCalls)
+	}
+	if !wrapped.retainPayloadAfterWrite {
+		t.Fatal("Write did not retain replay-view payload")
+	}
+	if wrapped.dirty || wrapped.opCount != 0 {
+		t.Fatalf("post-Write dirty=%t opCount=%d, want clean", wrapped.dirty, wrapped.opCount)
+	}
+	if string(keyView) != "alpha" || string(valueView) != "value" {
+		t.Fatalf("replay views changed after Write: key=%q value=%q", keyView, valueView)
+	}
+	wrapped.Reset()
+	if wrapped.retainPayloadAfterWrite {
+		t.Fatal("Reset left replay-view payload retained")
+	}
+}
+
 func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T) {
 	wrapped := newCommandWALPublicBatch(nil, &commandWALResetBatch{}, 8000)
 	zeroValue := make([]byte, 128)
@@ -958,6 +993,20 @@ type commandWALNoResetBatch struct {
 
 type commandWALResetBatch struct {
 	commandWALNoResetBatch
+}
+
+type commandWALHookBatch struct {
+	commandWALResetBatch
+	writeAfterCalls int
+}
+
+func (b *commandWALHookBatch) WriteAfterCommandWALAppend(_ bool, appendCommand func() error) error {
+	if err := appendCommand(); err != nil {
+		return err
+	}
+	b.writeAfterCalls++
+	b.Reset()
+	return nil
 }
 
 func (b *commandWALResetBatch) Reset() {

@@ -446,12 +446,13 @@ func prefixUpperBound(prefix []byte) []byte {
 
 // Batch implements ethdb.Batch.
 type Batch struct {
-	db           *Database
-	inner        treedb.Batch
-	size         int
-	closed       error
-	ops          []batchOp
-	needsRebuild bool
+	db             *Database
+	inner          treedb.Batch
+	size           int
+	closed         error
+	ops            []batchOp
+	hasBorrowedOps bool
+	needsRebuild   bool
 }
 
 var _ ethdb.Batch = (*Batch)(nil)
@@ -465,9 +466,10 @@ const (
 )
 
 type batchOp struct {
-	kind  batchOpKind
-	key   []byte
-	value []byte
+	kind     batchOpKind
+	key      []byte
+	value    []byte
+	borrowed bool
 }
 
 // Keep adapter op-log reserves bounded because geth-style NewBatchWithSize
@@ -506,16 +508,46 @@ type batchDeleteViewer interface {
 	DeleteView(key []byte) error
 }
 
+type batchReplayBytesSetter interface {
+	SetViewWithReplayBytes(key, value []byte) (keyView, valueView []byte, err error)
+}
+
+type batchReplayBytesDeleter interface {
+	DeleteViewWithReplayBytes(key []byte) (keyView []byte, err error)
+}
+
 func (b *Batch) recordOp(op batchOp) {
 	b.ops = append(b.ops, op)
+	if op.borrowed {
+		b.hasBorrowedOps = true
+	}
 }
 
 func (b *Batch) clearOps() {
+	b.hasBorrowedOps = false
 	if len(b.ops) == 0 {
 		return
 	}
 	clear(b.ops)
 	b.ops = b.ops[:0]
+}
+
+func (b *Batch) detachBorrowedOps() {
+	if b == nil || !b.hasBorrowedOps {
+		return
+	}
+	for i := range b.ops {
+		op := &b.ops[i]
+		if !op.borrowed {
+			continue
+		}
+		op.key = cloneBytes(op.key)
+		if op.kind == batchOpPut || op.kind == batchOpDeleteRange {
+			op.value = cloneBytes(op.value)
+		}
+		op.borrowed = false
+	}
+	b.hasBorrowedOps = false
 }
 
 func (b *Batch) ensureInnerReady() error {
@@ -570,6 +602,15 @@ func (b *Batch) Put(key []byte, value []byte) error {
 	if err := b.ensureInnerReady(); err != nil {
 		return err
 	}
+	if setter, ok := b.inner.(batchReplayBytesSetter); ok {
+		keyView, valueView, err := setter.SetViewWithReplayBytes(key, value)
+		if err != nil {
+			return err
+		}
+		b.recordOp(batchOp{kind: batchOpPut, key: keyView, value: valueView, borrowed: true})
+		b.size += len(key) + len(value)
+		return nil
+	}
 	op := batchOp{kind: batchOpPut, key: cloneBytes(key), value: cloneBytes(value)}
 	if err := b.applyOpToInner(op); err != nil {
 		return err
@@ -591,6 +632,15 @@ func (b *Batch) Delete(key []byte) error {
 	}
 	if err := b.ensureInnerReady(); err != nil {
 		return err
+	}
+	if deleter, ok := b.inner.(batchReplayBytesDeleter); ok {
+		keyView, err := deleter.DeleteViewWithReplayBytes(key)
+		if err != nil {
+			return err
+		}
+		b.recordOp(batchOp{kind: batchOpDelete, key: keyView, borrowed: true})
+		b.size += len(key)
+		return nil
 	}
 	op := batchOp{kind: batchOpDelete, key: cloneBytes(key)}
 	if err := b.applyOpToInner(op); err != nil {
@@ -666,6 +716,9 @@ func (b *Batch) rebuildInnerFromOps() error {
 		b.closed = ErrClosed
 		return ErrClosed
 	}
+	// Borrowed operation-log slices point into the current inner command-WAL
+	// payload. Rebuilding resets that inner payload, so detach before Reset.
+	b.detachBorrowedOps()
 	if b.inner != nil {
 		if resetter, ok := b.inner.(interface{ Reset() }); ok {
 			resetter.Reset()
@@ -759,6 +812,10 @@ func (b *Batch) Close() {
 	if b == nil || b.inner == nil {
 		return
 	}
+	// Keep ethdb Replay semantics for already queued operations even after Close:
+	// borrowed replay views must outlive the inner command-WAL payload being
+	// closed/reset here.
+	b.detachBorrowedOps()
 	_ = b.inner.Close()
 	b.inner = nil
 	b.needsRebuild = false

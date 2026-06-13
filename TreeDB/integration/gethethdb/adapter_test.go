@@ -505,6 +505,94 @@ func TestBatchClonesCallerBuffersForWriteReplayAndReuse(t *testing.T) {
 	assertValue(t, db, []byte("key-a"), []byte("value-a"))
 }
 
+func TestBatchReplayBeforeWriteUsesCommandWALOwnedBytes(t *testing.T) {
+	db := openTestDB(t)
+	batch, ok := db.NewBatch().(*Batch)
+	if !ok {
+		t.Fatalf("NewBatch type=%T want *Batch", db.NewBatch())
+	}
+	key := []byte("key-a")
+	value := []byte("value-a")
+	if err := batch.Put(key, value); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if !batch.hasBorrowedOps {
+		t.Skip("local TreeDB command-WAL replay-byte optimization unavailable without a gomap module replace")
+	}
+	copy(key, "key-b")
+	copy(value, "value-b")
+	var rec replayRecorder
+	if err := batch.Replay(&rec); err != nil {
+		t.Fatalf("Replay before Write: %v", err)
+	}
+	if want := []string{"put:key-a=value-a"}; !slices.Equal(rec.ops, want) {
+		t.Fatalf("replay before Write ops=%v want %v", rec.ops, want)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !batch.hasBorrowedOps {
+		t.Fatal("Write+pending replay should retain borrowed op-log bytes until Reset/rebuild")
+	}
+	batch.Reset()
+	if batch.hasBorrowedOps || len(batch.ops) != 0 {
+		t.Fatalf("Reset left borrowed=%t ops=%d", batch.hasBorrowedOps, len(batch.ops))
+	}
+}
+
+func TestBatchRepeatedWriteDetachesCommandWALBorrowedReplayBytes(t *testing.T) {
+	db := openTestDB(t)
+	batch := db.NewBatch().(*Batch)
+	if err := batch.Put([]byte("key-a"), []byte("value-a")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("first Write: %v", err)
+	}
+	if !batch.hasBorrowedOps {
+		t.Skip("local TreeDB command-WAL replay-byte optimization unavailable without a gomap module replace")
+	}
+	if err := db.Delete([]byte("key-a")); err != nil {
+		t.Fatalf("external Delete: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("second Write: %v", err)
+	}
+	if batch.hasBorrowedOps {
+		t.Fatal("repeated Write should detach borrowed replay bytes before rebuilding")
+	}
+	assertValue(t, db, []byte("key-a"), []byte("value-a"))
+}
+
+func TestBatchReplayAfterCloseDetachesCommandWALBorrowedReplayBytes(t *testing.T) {
+	db := openTestDB(t)
+	batch := db.NewBatch().(*Batch)
+	if err := batch.Put([]byte("key-a"), []byte("value-a")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !batch.hasBorrowedOps {
+		t.Skip("local TreeDB command-WAL replay-byte optimization unavailable without a gomap module replace")
+	}
+	closer, ok := any(batch).(interface{ Close() })
+	if !ok {
+		t.Fatal("batch does not expose Close")
+	}
+	closer.Close()
+	if batch.hasBorrowedOps {
+		t.Fatal("Close should detach borrowed replay bytes")
+	}
+	var rec replayRecorder
+	if err := batch.Replay(&rec); err != nil {
+		t.Fatalf("Replay after Close: %v", err)
+	}
+	if want := []string{"put:key-a=value-a"}; !slices.Equal(rec.ops, want) {
+		t.Fatalf("replay after Close ops=%v want %v", rec.ops, want)
+	}
+}
+
 func TestBatchDeleteAndDeleteRangeCloneCallerBuffersForReplayAndReuse(t *testing.T) {
 	db := openTestDB(t)
 	for _, key := range []string{"aa", "bb", "bc", "za", "zb"} {
