@@ -177,7 +177,7 @@ func TestTextIndexMaintenanceBufferedCreateFlushCheckpointReopen(t *testing.T) {
 	} else if got != nil {
 		t.Fatalf("expected setup insert to remain buffered before CreateTextIndex, got %q", got)
 	}
-	if _, _, err := creator.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}, StorePositions: true}); err != nil {
+	if _, _, err := creator.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}, StorePositions: true}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
 	if _, err := writer.Insert([]byte("after"), []byte(`{"body":"after create durable"}`)); err != nil {
@@ -356,7 +356,7 @@ func createTextMaintenanceBenchCollection(b *testing.B, d *backenddb.DB) *Collec
 	if err != nil {
 		b.Fatalf("OpenCollection: %v", err)
 	}
-	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "title"}, {Field: "body"}}, StorePositions: true}); err != nil {
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "title"}, {Field: "body"}}, StorePositions: true}); err != nil {
 		b.Fatalf("CreateTextIndex: %v", err)
 	}
 	return col
@@ -372,7 +372,7 @@ func createTextMaintenanceCollection(t *testing.T, d *backenddb.DB) *Collection 
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}, StorePositions: true}); err != nil {
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}, StorePositions: true}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
 	}
 	return col

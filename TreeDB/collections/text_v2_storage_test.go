@@ -145,10 +145,11 @@ func TestTextV2StorageCodecsRoundTripAndFailClosed2624(t *testing.T) {
 	}
 }
 
-func TestCreateCollectionRejectsInlineTextV2MetadataWithoutRootState2624(t *testing.T) {
+func TestCreateCollectionInlineTextV2PublishesRootState2624(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
-	_, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "docs",
 		TextIndexes: []TextIndexDefinition{{
 			Name:    "lexical",
@@ -156,9 +157,17 @@ func TestCreateCollectionRejectsInlineTextV2MetadataWithoutRootState2624(t *test
 			Fields:  []TextIndexField{{Field: "body"}},
 		}},
 	})
-	if !errors.Is(err, ErrTextIndexUnavailable) {
-		t.Fatalf("CreateCollection v2 metadata err=%v want ErrTextIndexUnavailable", err)
+	if err != nil {
+		t.Fatalf("CreateCollection v2 metadata: %v", err)
 	}
+	if len(meta.TextIndexes) != 1 || meta.TextIndexes[0].Version != TextIndexVersionV2 {
+		t.Fatalf("metadata text indexes=%+v want v2", meta.TextIndexes)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	assertDefaultV2StatusAndEmptyRoots2690(t, d, col, "lexical")
 }
 
 func TestCollectionCreateTextV2IndexBackfillsOrdinalsNormsStatsAndReopens2624(t *testing.T) {

@@ -888,7 +888,8 @@ func createTextV2ContractCollection2623(tb testing.TB, d *backenddb.DB, withText
 
 func textV2ContractIndexDefinition2623() TextIndexDefinition {
 	return TextIndexDefinition{
-		Name: textV2ContractIndexName2623,
+		Name:    textV2ContractIndexName2623,
+		Version: TextIndexVersionV1,
 		Fields: []TextIndexField{
 			{Field: "title", Weight: 3},
 			{Field: "body"},

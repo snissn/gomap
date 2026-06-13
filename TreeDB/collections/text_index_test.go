@@ -56,7 +56,8 @@ func TestCollectionTextIndexMetadataValidateAndReopen(t *testing.T) {
 	meta, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "docs",
 		TextIndexes: []TextIndexDefinition{{
-			Name: "lexical",
+			Name:    "lexical",
+			Version: TextIndexVersionV1,
 			Fields: []TextIndexField{
 				{Field: "body"},
 				{Field: "title", Weight: 2.5},
@@ -198,8 +199,9 @@ func TestCollectionTextRootNames(t *testing.T) {
 	meta, err := normalizeCollectionMeta(CollectionMeta{
 		Name: "docs",
 		TextIndexes: []TextIndexDefinition{{
-			Name:   "lexical",
-			Fields: []TextIndexField{{Field: "body"}},
+			Name:    "lexical",
+			Version: TextIndexVersionV1,
+			Fields:  []TextIndexField{{Field: "body"}},
 		}},
 	})
 	if err != nil {
@@ -225,8 +227,9 @@ func TestCollectionTextV2RootNamesAndStatusContract2623(t *testing.T) {
 	meta, err := normalizeCollectionMeta(CollectionMeta{
 		Name: "docs",
 		TextIndexes: []TextIndexDefinition{{
-			Name:   "lexical",
-			Fields: []TextIndexField{{Field: "body"}},
+			Name:    "lexical",
+			Version: TextIndexVersionV1,
+			Fields:  []TextIndexField{{Field: "body"}},
 		}},
 	})
 	if err != nil {
@@ -275,7 +278,7 @@ func TestCollectionTextIndexStatusAPI2623(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:        "docs",
-		TextIndexes: []TextIndexDefinition{{Name: "lexical", Fields: []TextIndexField{{Field: "body"}}}},
+		TextIndexes: []TextIndexDefinition{{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}}},
 	}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -323,8 +326,8 @@ func TestCollectionTextIndexStatusUsesCurrentCatalog2623(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stale handle TextIndexStatus after create: %v", err)
 	}
-	if !status.Ready || status.Name != "lexical" || len(status.ActiveRootNames) != 3 {
-		t.Fatalf("status after create=%+v want current ready index", status)
+	if !status.Ready || status.Name != "lexical" || status.Version != TextIndexVersionV2 || len(status.ActiveRootNames) != len(collectionTextV2RootNames("docs", "lexical")) {
+		t.Fatalf("status after create=%+v want current ready default-v2 index", status)
 	}
 	if _, err := freshCol.DropTextIndex("lexical"); err != nil {
 		t.Fatalf("DropTextIndex: %v", err)
@@ -342,6 +345,7 @@ func TestCollectionTextRootStoragePolicies(t *testing.T) {
 		},
 		TextIndexes: []TextIndexDefinition{{
 			Name:          "lexical",
+			Version:       TextIndexVersionV1,
 			Fields:        []TextIndexField{{Field: "body"}},
 			StoragePolicy: RootStorageCompressed,
 		}},
@@ -436,8 +440,9 @@ func TestCollectionTextIndexedWritesMaintainStorageAndSearchRanks(t *testing.T) 
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "docs",
 		TextIndexes: []TextIndexDefinition{{
-			Name:   "lexical",
-			Fields: []TextIndexField{{Field: "body"}},
+			Name:    "lexical",
+			Version: TextIndexVersionV1,
+			Fields:  []TextIndexField{{Field: "body"}},
 		}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)

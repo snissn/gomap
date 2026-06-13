@@ -39,7 +39,7 @@ type TextIndexDefinition struct {
     Name    string
     Fields  []TextIndexField
     Analyzer TextAnalyzer
-    Version TextIndexVersion     // "v1" default today, explicit "v2" supports v2 BM25F reads
+    Version TextIndexVersion     // "v2" default for new indexes; explicit "v1" is compatibility/opt-out
     Rollout TextIndexRolloutMode // "primary" default today
     // existing position/offset/storage/schema fields...
 }
@@ -47,23 +47,12 @@ type TextIndexDefinition struct {
 
 `TextIndexVersion` values:
 
-- `""` / `"v1"`: current per-`(term, documentID)` text index.
-- `"v2"`: explicit v2 physical contract. M1-M3 root-state creation and
-  writable posting/norm/docmap maintenance are supported. As of M4/M5, explicit
-  v2 indexes are readable for score-only BM25F serving over posting blocks and
-  packed norms with exact single-term block-max skipping. As of M6 (#2629),
-  `SearchText` can lazily materialize compact/detailed field-term summaries for
-  returned final results without v1 text-state lookups or full-document fetch.
-  Unsupported future rollout modes still fail closed and v2 must not silently
-  fall back to v1.
+- `""` / `"v2"`: default B-tree-native v2 physical contract for newly-created text indexes. Root-state creation, writable posting/norm/docmap maintenance, exact BM25F serving over posting blocks, scalar-pruned hybrid candidates, block-max skipping, lazy compact/detailed field-term summaries, rewrite/merge, and normal TreeDB physical maintenance are supported.
+- `"v1"`: explicit compatibility/opt-out path for the legacy per-`(term, documentID)` text index and existing v1 on-disk indexes. V1 remains readable/writable, but new default-sensitive callers must request it explicitly.
 
 `TextIndexRolloutMode` values:
 
-- `""` / `"primary"`: active production read/write path. V1 remains the default
-  readable/searchable path. Explicit v2 indexes are writable as of M3 and
-  readable as of M4/M5 for BM25F serving over v2 posting/norm/docmap roots.
-  M6 adds lazy compact/detailed field-term summaries for final results and an
-  optional positions/offset payload lane for `StorePositions` indexes.
+- `""` / `"primary"`: active production read/write path. V2 is the default readable/searchable path for newly-created text indexes. Explicit v1 indexes remain readable/writable for compatibility. V2 serves BM25F from posting/norm/docmap roots, supports scalar-pruned hybrid candidate generation, and builds lazy compact/detailed field-term summaries for final results with an optional positions/offset payload lane for `StorePositions` indexes.
 - `"shadow"`: future v2 build/validate without serving reads.
 - `"dual_write"`: future v1+v2 mutation maintenance with explicit read choice.
 - `"disabled"`: future metadata-present but non-serving/non-writing state.
@@ -77,9 +66,9 @@ status, benchmark, and downgrade/fail-closed tests.
 - version and rollout mode;
 - ready/readable/writable booleans;
 - fail-closed reason when unavailable;
-- active v1 roots and reserved v2 roots;
+- active root names (v2 by default, v1 for explicit compatibility indexes) and reserved v2 roots;
 - required counter names;
-- lightweight rewrite/merge readiness (`ready` for explicit v2) and TreeDB
+- lightweight rewrite/merge readiness (`ready` for v2) and TreeDB
   physical reclamation path. Full storage validation and detailed
   `rewrite_merge_pending`/`compacted` state are reported by
   `TextIndexStorageStats` so health/status calls do not scan large roots.
@@ -105,17 +94,18 @@ text asset store.
 ## M1 root/key/value format (#2624)
 
 M1 assigns the first concrete v2 root format. Every v2 root contains a versioned
-format record. Explicit `TextIndexVersionV2` creation through `CreateTextIndex`
+format record. Default `TextIndexVersionV2` creation through `CreateTextIndex`
 publishes all seven v2 root descriptors through the normal collection-root
-system records. Declaring a v2 text index directly in `CreateCollection` is
-rejected because it would create metadata without the required root status
-records. After M3, explicit v2 indexes maintain durable v2 roots and posting
-blocks for create/backfill/insert/update/delete. As of M4, `TextIndexStatus`
-reports `readable=true` and `writable=true` for explicit v2 indexes: query
-routing serves BM25F from v2 posting blocks, packed norm blocks, and docmap
-blocks. As of M6, score-only result mode still carries only document ID, rank,
-score, and score kind; compact/detailed modes build field-term summaries only
-for returned final results. There is no fallback to v1 for requested v2.
+system records. `CreateCollection` with default-v2 text indexes bootstraps empty
+v2 root descriptors, format records, corpus/field-stat shells, and the status
+record atomically with collection metadata, so a newly-declared text index is not
+left as metadata without roots. V2 indexes maintain durable v2 roots and posting
+blocks for create/backfill/insert/update/delete. `TextIndexStatus` reports
+`readable=true` and `writable=true` for v2 indexes: query routing serves BM25F
+from v2 posting blocks, packed norm blocks, and docmap blocks. Score-only result
+mode carries only document ID, rank, score, and score kind; compact/detailed
+modes build field-term summaries only for returned final results. There is no
+fallback to v1 for requested/default v2.
 
 Stable M1 ordinal semantics:
 
@@ -229,7 +219,7 @@ root values and continue to use existing value-log/leaf maintenance paths.
 
 ## M4 score-only search executor (#2627)
 
-M4 enables explicit v2 indexes for exhaustive score-only BM25F serving. The
+M4 enabled v2 indexes for exhaustive score-only BM25F serving. The
 executor analyzes query terms through the streaming analyzer sink, de-duplicates
 and deterministically orders v2 terms, opens posting-block iterators for every
 query term under one TreeDB snapshot, scans posting-block entries, and scores
@@ -331,7 +321,7 @@ field/term summaries for the bounded requested text candidate set; default hybri
 candidate generation emits no `TextMatches` and keeps `docs_fetched=0`,
 `state_lookups=0`, and `match_details_built=0`.
 
-## M7 rewrite/merge hardening and rollout decision (#2630)
+## M7 rewrite/merge hardening and default switch (#2630/#2690)
 
 M7 adds explicit logical rewrite/merge maintenance for text-v2 indexes through
 `Collection.RewriteTextIndex(indexName, TextIndexRewriteOptions)`. The rewrite
@@ -399,20 +389,11 @@ collection root descriptors throughout this sequence; stale roots become normal
 unreferenced root/value-log/leaf payloads and must not require a standalone
 text-block GC.
 
-Default-selection decision for #2630: v2 remains an explicit opt-in
-(`TextIndexVersionV2`) while the production default stays v1. The reason is not a
-storage blocker—v2 roots now have rewrite/merge lifecycle tooling and normal
-TreeDB reclamation participation—but rollout still lacks an atomic
-`CreateCollection` inline-v2 bootstrap/default-switch path and final full-matrix
-acceptance under coordinator policy. The old per-`(term,documentID)` v1 path is
-therefore retained as the compatibility/default path; explicit v2 indexes are the
-B-tree-native production candidate path. A future default-switch PR must update
-`normalizeTextIndexVersion`, `CreateCollection` root bootstrap, docs, and the
-benchmark matrix together.
+Default-selection decision for #2690: v2 is now the production default for newly-created TreeDB collection text indexes. The switch includes `normalizeTextIndexVersion`, `CreateCollection` empty-v2 root/status bootstrap, explicit v1 compatibility tests, v1/v2 coexistence tests, and the final clean-load matrix. The old per-`(term,documentID)` v1 path is retained as an explicit compatibility/opt-out path and existing v1 on-disk indexes remain readable/usable.
 
-## Current v1 path inventory
+## Explicit v1 compatibility path inventory
 
-Current write/backfill hot path:
+Explicit v1 write/backfill hot path:
 
 - metadata/backfill: `CreateTextIndex`, `buildCreateTextIndexBackfillPlan`,
   `analyzeTextIndexDocument`, `analyzeTextIndexField`, `addTextPostingsForDocument`,
@@ -423,7 +404,7 @@ Current write/backfill hot path:
 - storage/codecs: `encodeTextPostingKey`, `encodeTextPostingValue`,
   `encodeTextDocumentStateValue`, `encodeTextStats*`.
 
-Current search/hybrid hot path:
+Explicit v1 search/hybrid hot path:
 
 - `SearchHybridTextCandidates` adapts `SearchText` into hybrid candidates;
 - `SearchText` / `executeTextSearchAtSnapshot` reads stats, range-scans postings,
@@ -444,8 +425,7 @@ Related issues that v2 should absorb or supersede with production evidence:
 ## Required counters
 
 Every text-v2 performance PR must expose and benchmark these counters where the
-row applies. Current v1 rows now report compatible zero/legacy values so later
-PRs can compare one vocabulary.
+row applies. Explicit v1 rows report compatible zero/legacy values so v1/v2 comparisons use one vocabulary.
 
 | Counter | Required meaning |
 | --- | --- |
@@ -489,7 +469,7 @@ Required query and serving shapes:
   rows; M6 detailed-match rows must prove `match_details_built` is bounded by
   returned top-K/requested final results while score-only rows keep it zero;
 - isolated text write, backfill, update, and delete rows with `-benchmem`;
-- current #2589 indexed insert/search guardrail matrix on the latest base;
+- current #2589/#2564 indexed insert/search guardrail matrix on the latest base, including v1, v2, vector, and hybrid rows;
 - M6 lazy detail rows comparing score-only versus detailed top-K materialization;
 - concurrent serving/load row with reader concurrency, p50/p95/p99 latency,
   steady-state memory, cache warm/cold boundary, and optional mixed write or
@@ -522,6 +502,6 @@ coordinator explicitly accepts them with profile-backed rationale.
   document fetch remains a separate post-ranking phase.
 - M5 block skipping must be exact: upper bounds are admissible and results match
   exhaustive scoring. Approximate ranking requires a separate mode/tracker.
-- M7 default-switch or old-path retirement must include v1/v2 coexistence,
+- Any future old-path retirement must include v1/v2 coexistence,
   downgrade/fail-closed behavior, rewrite/merge state, vacuum/GC/rewrite, and
   `CompactStorage` evidence.

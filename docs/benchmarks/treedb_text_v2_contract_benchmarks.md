@@ -57,10 +57,7 @@ GOWORK=off go test ./TreeDB/collections \
   | tee "$OUT/index_insert_search_guardrail.txt"
 ```
 
-M4 also exposes explicit-v2 #2564-shape score-only rows. The v2 text rows use the
-same synthetic #2564 documents and scalar distribution but create the v2 text
-index after insert, because inline v2 metadata is intentionally rejected; the
-existing command-WAL/vector guardrail rows remain the vector no-regression lane.
+The #2564 matrix also exposes v2/default-v2 score-only rows. The v2 text rows use the same synthetic #2564 documents and scalar distribution and create the v2 text index after insert so v1/v2 guardrails remain directly comparable; the existing command-WAL/vector guardrail rows remain the vector no-regression lane.
 
 ```sh
 GOWORK=off go test ./TreeDB/collections \
@@ -94,19 +91,19 @@ Measured boundaries:
   indexes; setup excludes DB/collection creation.
 - `insert_batch_text_indexed`: v1 `InsertBatch` with a declared text index;
   setup excludes DB/collection creation.
-- `insert_batch_text_v2_indexed`: explicit v2 `InsertBatch` after empty-index
+- `insert_batch_text_v2_indexed`: v2/default-v2 `InsertBatch` after empty-index
   `CreateTextIndex` setup; setup excludes DB/collection/index creation.
 - `create_text_index_backfill`: v1 `CreateTextIndex` over already inserted
   primary documents; setup excludes primary insert.
-- `create_text_v2_index_backfill`: explicit v2 `CreateTextIndex` over already
+- `create_text_v2_index_backfill`: v2/default-v2 `CreateTextIndex` over already
   inserted primary documents; setup excludes primary insert.
 - `update_batch_text_indexed`: v1 `UpdateBatch` replacements with maintained
   text roots; setup excludes initial insert.
-- `update_batch_text_v2_indexed`: explicit v2 `UpdateBatch` replacements with
+- `update_batch_text_v2_indexed`: v2/default-v2 `UpdateBatch` replacements with
   maintained micro-block/docmap/norm roots; setup excludes initial insert.
 - `delete_batch_text_indexed`: v1 `DeleteBatch` with maintained text roots;
   setup excludes initial insert.
-- `delete_batch_text_v2_indexed`: explicit v2 `DeleteBatch` with generation and
+- `delete_batch_text_v2_indexed`: v2/default-v2 `DeleteBatch` with generation and
   tombstone maintenance; setup excludes initial insert.
 
 Small/default command:
@@ -203,7 +200,7 @@ Report text search counters:
 - `match_details/search`;
 - `docs_fetched/search`, `full_doc_fallbacks/search`, `fail_closed/search`.
 
-M4 (#2627) adds an explicit v2 score-only search benchmark with the same corpus
+M4 (#2627) adds a v2 score-only search benchmark with the same corpus
 and query cases. It creates a v2 index with `CreateTextIndex`, scans compressed
 posting blocks under one snapshot, scores from norm/docmap blocks, and asserts
 `state_lookups=0`, `match_details=0`, and `docs_fetched=0`. As of M5 (#2628),
@@ -239,7 +236,7 @@ go test ./TreeDB/collections \
 
 Benchmark name: `BenchmarkTextV2BlockMaxCommonTerm2628`.
 
-This row runs the M5 exact single-term common top-K path against the explicit v2
+This row runs the M5 exact single-term common top-K path against the v2
 fixture and includes an in-process `exhaustive_common_topk` comparison with
 block-max disabled. The measured boundary is `SearchText` score-only candidate
 generation: no full documents, no v1 text-state lookups, and no match-detail
@@ -363,7 +360,7 @@ non-zero `posting_blocks_skipped/search` in the warm stats or fail the benchmark
 
 Benchmark name: `BenchmarkTextV2RewriteMerge2630`.
 
-This row creates an explicit v2 text index, applies updates and deletes to create
+This row creates a v2 text index, applies updates and deletes to create
 micro blocks, stale generations, and deleted-document tombstones, then measures
 only `Collection.RewriteTextIndex`. Setup, primary writes, index creation,
 updates, and deletes are outside the timed boundary. The row reports rewrite
@@ -410,10 +407,7 @@ Maintenance-budget interpretation for default-readiness PRs:
   `ValueLogGC`, value-log rewrite when the rewrite plan shows stale source
   bytes, leaf maintenance/index vacuum, or `CompactStorage`.
 
-Default selection after #2630 remains explicit v2 opt-in unless the final matrix
-and rollout/default-bootstrap work are accepted in the same PR. If v1 remains the
-default, PR evidence must state that the old per-`(term,documentID)` path is the
-compatibility/default path and link the default-switch follow-up.
+Default selection after #2690 is v2 for newly-created TreeDB collection text indexes. PR evidence should state when a row uses the explicit v1 compatibility path versus the default/v2 path, and should preserve v1/v2/vector/hybrid guardrails when changing this runbook or benchmark harness.
 
 ## Profiles for current v1 hot spots and M5 block-max path
 
