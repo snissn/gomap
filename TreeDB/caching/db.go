@@ -23911,61 +23911,74 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 		lanes = 1
 	}
 
-	// Only spawn flush workers for lanes that actually have queued memtables.
-	// Otherwise each lane does an O(queueLen) scan in collectFlushUnitsLocked to
-	// discover there's nothing to do, which can be extremely expensive when the
-	// queue is large and lanes > 1.
-	active := make([]bool, lanes)
-	db.mu.RLock()
-	queueLen := len(db.queue)
-	for i := 0; i < queueLen; i++ {
-		laneID := 0
-		if i < len(db.queueLaneIDs) {
-			laneID = int(db.queueLaneIDs[i])
+	for {
+		// Only spawn flush workers for lanes that actually have queued memtables.
+		// Otherwise each lane does an O(queueLen) scan in collectFlushUnitsLocked to
+		// discover there's nothing to do, which can be extremely expensive when the
+		// queue is large and lanes > 1.
+		active := make([]bool, lanes)
+		db.mu.RLock()
+		queueLen := len(db.queue)
+		for i := 0; i < queueLen; i++ {
+			laneID := 0
+			if i < len(db.queueLaneIDs) {
+				laneID = int(db.queueLaneIDs[i])
+			}
+			if laneID < 0 || laneID >= lanes {
+				laneID = 0
+			}
+			active[laneID] = true
 		}
-		if laneID < 0 || laneID >= lanes {
-			laneID = 0
-		}
-		active[laneID] = true
-	}
-	db.mu.RUnlock()
+		db.mu.RUnlock()
 
-	activeCount := 0
-	for i := range active {
-		if active[i] {
-			activeCount++
-		}
-	}
-	if activeCount == 0 {
-		return
-	}
-	if activeCount != 1 {
-		commandPublish = nil
-	}
-	var wg sync.WaitGroup
-	wg.Add(activeCount)
-	for i := 0; i < lanes; i++ {
-		laneID := i
-		if !active[laneID] {
-			continue
-		}
-		go func() {
-			if laneID < len(db.flushLaneMu) {
-				db.flushLaneMu[laneID].Lock()
-				defer db.flushLaneMu[laneID].Unlock()
+		activeCount := 0
+		for i := range active {
+			if active[i] {
+				activeCount++
 			}
-			for db.flushLaneOnceWithCommandPublish(syncFlag, laneID, commandPublish) {
+		}
+		if activeCount == 0 {
+			return
+		}
+		passCommandPublish := commandPublish
+		if activeCount != 1 {
+			// Preserve the previous behavior: command-WAL checkpoint publication is
+			// only piggybacked when a single lane owns the whole flush pass.
+			commandPublish = nil
+			passCommandPublish = nil
+		}
+		var wg sync.WaitGroup
+		var progress atomic.Bool
+		wg.Add(activeCount)
+		for i := 0; i < lanes; i++ {
+			laneID := i
+			if !active[laneID] {
+				continue
 			}
-			wg.Done()
-		}()
-	}
-	wg.Wait()
-	if !db.checkpointing.Load() {
+			go func() {
+				if laneID < len(db.flushLaneMu) {
+					db.flushLaneMu[laneID].Lock()
+					defer db.flushLaneMu[laneID].Unlock()
+				}
+				for db.flushLaneOnceWithCommandPublish(syncFlag, laneID, passCommandPublish) {
+					progress.Store(true)
+				}
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+
 		db.mu.RLock()
 		queueEmpty := len(db.queue) == 0
 		db.mu.RUnlock()
 		if queueEmpty {
-			db.trimRetainedArenasAfterFlush(false)
+			if !db.checkpointing.Load() {
+				db.trimRetainedArenasAfterFlush(false)
+			}
+			return
+		}
+		if !progress.Load() {
+			return
 		}
 	}
 }
@@ -24053,13 +24066,33 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		if len(units) >= unitLimit {
 			break
 		}
-		if laneID >= 0 {
-			unitLaneID := 0
-			if i < len(db.queueLaneIDs) {
-				unitLaneID = int(db.queueLaneIDs[i])
+		var spans []batch.DeleteRange
+		if i < len(db.queueRangeSpans) {
+			spans = db.queueRangeSpans[i]
+		}
+		hasSpans := len(spans) > 0
+		if hasSpans {
+			// Range-span units are global ordering barriers: older point units from
+			// any lane must be flushed before the span, and newer point units from
+			// any lane must not pass it. Therefore a span can only be collected when
+			// it is at the global queue head (or immediately after another collected
+			// span-only barrier unit).
+			if !spanOnly && i != 0 {
+				break
 			}
+			if len(units) > 0 && !spanOnly {
+				break
+			}
+		} else if spanOnly {
+			break
+		}
+		unitLaneID := 0
+		if i < len(db.queueLaneIDs) {
+			unitLaneID = int(db.queueLaneIDs[i])
+		}
+		if laneID >= 0 {
 			if unitLaneID != laneID {
-				if spanOnly {
+				if hasSpans || spanOnly {
 					break
 				}
 				continue
@@ -24083,25 +24116,9 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		if i < len(db.queueRanges) {
 			rng = db.queueRanges[i]
 		}
-		var spans []batch.DeleteRange
-		if i < len(db.queueRangeSpans) {
-			spans = db.queueRangeSpans[i]
-		}
-		hasSpans := len(spans) > 0
-		if hasSpans {
-			if len(units) > 0 && !spanOnly {
-				break
-			}
-		} else if spanOnly {
-			break
-		}
 		var id uint64
 		if i < len(db.queueIDs) {
 			id = db.queueIDs[i]
-		}
-		unitLaneID := 0
-		if i < len(db.queueLaneIDs) {
-			unitLaneID = int(db.queueLaneIDs[i])
 		}
 		units = append(units, flushUnit{
 			mem:      mem,

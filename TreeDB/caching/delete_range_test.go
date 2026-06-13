@@ -260,6 +260,110 @@ func TestCachingBatch_CommandWALRangeOnlyUsesSpanLayer(t *testing.T) {
 	}
 }
 
+func rangeSpanTestKeyForLane(t *testing.T, db *DB, wantLane int) []byte {
+	t.Helper()
+	for i := byte(1); i < 250; i++ {
+		key := []byte{i}
+		if gotLane := db.laneForShardIndex(db.shardIndex(key)); gotLane == wantLane {
+			return key
+		}
+	}
+	t.Fatalf("no test key found for lane %d", wantLane)
+	return nil
+}
+
+func rangeSpanTestEnd(key []byte) []byte {
+	if len(key) == 0 || key[0] == 0xff {
+		return nil
+	}
+	return []byte{key[0] + 1}
+}
+
+func TestCachingDB_CommandWALRangeSpanFlushCollectionRespectsLaneBarriers(t *testing.T) {
+	newDB := func(t *testing.T) *DB {
+		t.Helper()
+		db, err := Open(t.TempDir(), NewMockBackend(), Options{
+			DisableWAL:     true,
+			AllowUnsafe:    true,
+			JournalLanes:   2,
+			MemtableShards: 2,
+			FlushThreshold: 1 << 20,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		return db
+	}
+
+	t.Run("span waits for older point from another lane", func(t *testing.T) {
+		db := newDB(t)
+		defer func() { _ = db.Close() }()
+		key := rangeSpanTestKeyForLane(t, db, 1)
+		if err := db.Set(key, []byte("old")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if err := db.DeleteRangeAfterCommandWALAppend(key, rangeSpanTestEnd(key), func() error { return nil }); err != nil {
+			t.Fatalf("DeleteRangeAfterCommandWALAppend: %v", err)
+		}
+
+		db.mu.Lock()
+		if len(db.queue) < 2 {
+			db.mu.Unlock()
+			t.Fatalf("queue len=%d want point+span", len(db.queue))
+		}
+		spanUnits, _, _, _ := db.collectFlushUnitsLocked(0, flushCombineMaxMemtables, flushCombineTargetBytes)
+		if len(spanUnits) != 0 {
+			db.mu.Unlock()
+			t.Fatalf("lane 0 collected %d units before older lane-1 point flushed; want barrier", len(spanUnits))
+		}
+		pointUnits, _, _, _ := db.collectFlushUnitsLocked(1, flushCombineMaxMemtables, flushCombineTargetBytes)
+		if len(pointUnits) == 0 || len(pointUnits[0].spans) != 0 {
+			db.mu.Unlock()
+			t.Fatalf("lane 1 units=%+v, want older point unit before span", pointUnits)
+		}
+		db.mu.Unlock()
+
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		if got := deleteRangeStatUint64(t, db.Stats(), "treedb.cache.range_span.active_layers"); got != 0 {
+			t.Fatalf("active range layers after checkpoint=%d want 0", got)
+		}
+		if val, err := db.Get(key); err != nil || val != nil {
+			t.Fatalf("Get after checkpoint=(%q,%v), want missing", val, err)
+		}
+	})
+
+	t.Run("newer point waits behind older span from another lane", func(t *testing.T) {
+		db := newDB(t)
+		defer func() { _ = db.Close() }()
+		key := rangeSpanTestKeyForLane(t, db, 1)
+		if err := db.DeleteRangeAfterCommandWALAppend(key, rangeSpanTestEnd(key), func() error { return nil }); err != nil {
+			t.Fatalf("DeleteRangeAfterCommandWALAppend: %v", err)
+		}
+		if err := db.Set(key, []byte("new")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		db.mu.Lock()
+		if err := db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMutableShardsLocked: %v", err)
+		}
+		defer db.mu.Unlock()
+		if len(db.queue) < 2 {
+			t.Fatalf("queue len=%d want span+point", len(db.queue))
+		}
+		pointUnits, _, _, _ := db.collectFlushUnitsLocked(1, flushCombineMaxMemtables, flushCombineTargetBytes)
+		if len(pointUnits) != 0 {
+			t.Fatalf("lane 1 collected %d point units before older span flushed; want barrier", len(pointUnits))
+		}
+		spanUnits, _, _, _ := db.collectFlushUnitsLocked(0, flushCombineMaxMemtables, flushCombineTargetBytes)
+		if len(spanUnits) == 0 || len(spanUnits[0].spans) == 0 {
+			t.Fatalf("lane 0 units=%+v, want span barrier at queue head", spanUnits)
+		}
+	})
+}
+
 func TestCachingDB_CommandWALRangeSpanCheckpointCombinesFlushUnits(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,
