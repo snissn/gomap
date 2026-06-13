@@ -97,6 +97,24 @@ This adds the 100k text-v2 blockmax/common-term rows. 100k hybrid/vector rows
 remain opt-in and should be planned explicitly before long local or service
 runs.
 
+### Focused multi-term OR/WAND rows (#2730)
+
+For exact multi-term text-v2 serving evidence outside the default scoreboard
+smoke, run the focused OR/WAND benchmark with both native block-max and exact
+exhaustive modes:
+
+```sh
+GOWORK=off TREEDB_TEXT_V2_OR_WAND_DOCS=10000 \
+  go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkTextV2BlockMaxMultiTerm2730/(or_common|and_common|or_common_rare|or_high_frequency)_(blockmax|exhaustive)$' \
+  -benchmem -benchtime=3x -count=1
+```
+
+Use `TREEDB_TEXT_V2_OR_WAND_DOCS=100000` (or a 100k-specific `benchtime`/`count`)
+for the heavier row. Report the same zero-doc counters as the default
+scoreboard rows, plus `posting_blocks_skipped/search`,
+`blockmax_fallbacks/search`, and `threshold_updates/search`.
+
 ## External baselines
 
 ### SQLite FTS5 embedded text baseline
