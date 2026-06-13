@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$ROOT"
+
+RUN_DIR="${RUN_DIR:-/tmp/gomap_text_hybrid_scoreboard_$(date +%Y%m%d_%H%M%S)}"
+GO_BIN="${GO_BIN:-go}"
+PYTHON="${PYTHON:-python3}"
+BENCHTIME="${BENCHTIME:-3x}"
+COUNT="${COUNT:-1}"
+DOCS_10K="${DOCS_10K:-10000}"
+DIMS="${DIMS:-16}"
+M="${M:-8}"
+RUN_100K="${RUN_100K:-false}"
+RUN_SQLITE_FTS5="${RUN_SQLITE_FTS5:-true}"
+SQLITE_FTS5_QUERIES="${SQLITE_FTS5_QUERIES:-1000}"
+SQLITE_FTS5_DOCS="${SQLITE_FTS5_DOCS:-$DOCS_10K}"
+TEXT_100K_BENCHTIME="${TEXT_100K_BENCHTIME:-1x}"
+TEXT_100K_COUNT="${TEXT_100K_COUNT:-1}"
+
+mkdir -p "$RUN_DIR"
+
+{
+  echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "repo=$ROOT"
+  echo "branch=$(git branch --show-current 2>/dev/null || true)"
+  echo "commit=$(git rev-parse HEAD 2>/dev/null || true)"
+  echo "go=$($GO_BIN version 2>/dev/null || true)"
+  echo "python=$($PYTHON --version 2>&1 || true)"
+  echo "uname=$(uname -a 2>/dev/null || true)"
+  echo "cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
+  echo "ncpu=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || true)"
+  echo "uptime=$(uptime 2>/dev/null || true)"
+} | tee "$RUN_DIR/context.txt"
+
+run_go_bench() {
+  local label="$1"
+  local outfile="$2"
+  shift 2
+  echo "==> $label"
+  set -o pipefail
+  "$@" | tee "$outfile"
+}
+
+INDEX_10K="$RUN_DIR/treedb_index_insert_search_10k.txt"
+run_go_bench "TreeDB 10k text-v2/vector/hybrid+scalar candidates" "$INDEX_10K" \
+  env GOWORK=off \
+    TREEDB_INDEX_BENCH_DOCS="$DOCS_10K" \
+    TREEDB_INDEX_BENCH_DIMS="$DIMS" \
+    TREEDB_INDEX_BENCH_M="$M" \
+    "$GO_BIN" test ./TreeDB/collections \
+      -run '^$' \
+      -bench '^BenchmarkIndexInsertSearch2564/(search_text_v2_candidates_no_docs|search_vector_candidates_no_docs|search_hybrid_v2_no_docs_scalar_filter|indexed_insert_batch_flush_vector_rebuild)$' \
+      -benchmem \
+      -benchtime="$BENCHTIME" \
+      -count="$COUNT"
+
+HYBRID_10K="$RUN_DIR/treedb_hybrid_closeout_10k.txt"
+run_go_bench "TreeDB 10k text-only/vector-only/hybrid/hybrid+scalar executor rows" "$HYBRID_10K" \
+  env GOWORK=off \
+    TREEDB_HYBRID_BENCH_DOCS="$DOCS_10K" \
+    TREEDB_HYBRID_BENCH_DIMS="$DIMS" \
+    TREEDB_HYBRID_BENCH_M="$M" \
+    "$GO_BIN" test ./TreeDB/collections \
+      -run '^$' \
+      -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' \
+      -benchmem \
+      -benchtime="$BENCHTIME" \
+      -count="$COUNT"
+
+TEXT_BLOCKMAX_10K="$RUN_DIR/treedb_text_blockmax_10k.txt"
+run_go_bench "TreeDB 10k text-v2 blockmax/exhaustive common-term rows" "$TEXT_BLOCKMAX_10K" \
+  env GOWORK=off \
+    TREEDB_TEXT_V2_BLOCKMAX_DOCS="$DOCS_10K" \
+    "$GO_BIN" test ./TreeDB/collections \
+      -run '^$' \
+      -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' \
+      -benchmem \
+      -benchtime="$BENCHTIME" \
+      -count="$COUNT"
+
+SCOREBOARD_ARGS=(
+  -out-dir "$RUN_DIR"
+  -context "$RUN_DIR/context.txt"
+  -base-ref "origin/main"
+  -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)"
+  -go-bench "treedb_index_insert_search_10k=$INDEX_10K"
+  -go-bench "treedb_hybrid_closeout_10k=$HYBRID_10K"
+  -go-bench "treedb_text_blockmax_10k=$TEXT_BLOCKMAX_10K"
+  -command "treedb_index_insert_search_10k=GOWORK=off TREEDB_INDEX_BENCH_DOCS=$DOCS_10K TREEDB_INDEX_BENCH_DIMS=$DIMS TREEDB_INDEX_BENCH_M=$M $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkIndexInsertSearch2564/(search_text_v2_candidates_no_docs|search_vector_candidates_no_docs|search_hybrid_v2_no_docs_scalar_filter|indexed_insert_batch_flush_vector_rebuild)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
+  -command "treedb_hybrid_closeout_10k=GOWORK=off TREEDB_HYBRID_BENCH_DOCS=$DOCS_10K TREEDB_HYBRID_BENCH_DIMS=$DIMS TREEDB_HYBRID_BENCH_M=$M $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
+  -command "treedb_text_blockmax_10k=GOWORK=off TREEDB_TEXT_V2_BLOCKMAX_DOCS=$DOCS_10K $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
+)
+
+if [[ "$RUN_SQLITE_FTS5" == "true" || "$RUN_SQLITE_FTS5" == "1" || "$RUN_SQLITE_FTS5" == "yes" ]]; then
+  SQLITE_JSON="$RUN_DIR/sqlite_fts5_10k.json"
+  echo "==> SQLite FTS5 text baseline"
+  "$PYTHON" benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py \
+    --docs "$SQLITE_FTS5_DOCS" \
+    --queries "$SQLITE_FTS5_QUERIES" \
+    --top-k 10 \
+    --out "$SQLITE_JSON"
+  SCOREBOARD_ARGS+=(
+    -external "sqlite_fts5_10k=$SQLITE_JSON"
+    -command "sqlite_fts5_10k=$PYTHON benchmarks/text_hybrid_scoreboard/sqlite_fts5_bench.py --docs $SQLITE_FTS5_DOCS --queries $SQLITE_FTS5_QUERIES --top-k 10 --out $SQLITE_JSON"
+  )
+fi
+
+if [[ "$RUN_100K" == "true" || "$RUN_100K" == "1" || "$RUN_100K" == "yes" ]]; then
+  TEXT_BLOCKMAX_100K="$RUN_DIR/treedb_text_blockmax_100k.txt"
+  run_go_bench "TreeDB 100k text-v2 blockmax/exhaustive common-term rows" "$TEXT_BLOCKMAX_100K" \
+    env GOWORK=off \
+      TREEDB_TEXT_V2_BLOCKMAX_DOCS=100000 \
+      "$GO_BIN" test ./TreeDB/collections \
+        -run '^$' \
+        -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' \
+        -benchmem \
+        -benchtime="$TEXT_100K_BENCHTIME" \
+        -count="$TEXT_100K_COUNT"
+  SCOREBOARD_ARGS+=(
+    -go-bench "treedb_text_blockmax_100k=$TEXT_BLOCKMAX_100K"
+    -command "treedb_text_blockmax_100k=GOWORK=off TREEDB_TEXT_V2_BLOCKMAX_DOCS=100000 $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' -benchmem -benchtime=$TEXT_100K_BENCHTIME -count=$TEXT_100K_COUNT"
+  )
+else
+  SCOREBOARD_ARGS+=(
+    -caveat "100k text-v2 blockmax rows are available with RUN_100K=true; the default smoke matrix keeps them off to avoid surprise long local runs."
+  )
+fi
+
+SCOREBOARD_ARGS+=(
+  -unavailable "Lucene=not run by the default local harness; use a pinned Lucene/JMH or OpenSearch run with the same corpus/query contract before making Lucene parity claims"
+  -unavailable "Tantivy=not run by the default local harness; requires a Rust/Tantivy harness pinned to this corpus and query set"
+  -unavailable "Bleve=not run by the default local harness; requires adding or invoking a Bleve-specific runner outside TreeDB production code"
+  -unavailable "Qdrant/Weaviate/Milvus/OpenSearch hybrid=not run by the default smoke harness; use service-specific durable deployments or documented local proxies before citing industry hybrid parity"
+)
+
+"$GO_BIN" run ./cmd/treedb_text_hybrid_scoreboard "${SCOREBOARD_ARGS[@]}"
+
+cat > "$RUN_DIR/README.md" <<EOF_README
+# TreeDB text/hybrid scoreboard run
+
+Primary artifacts:
+
+- scoreboard: \`$RUN_DIR/scoreboard.md\`
+- scoreboard JSON: \`$RUN_DIR/scoreboard.json\`
+- context: \`$RUN_DIR/context.txt\`
+- TreeDB 10k index/search raw: \`$INDEX_10K\`
+- TreeDB 10k hybrid executor raw: \`$HYBRID_10K\`
+- TreeDB 10k text blockmax raw: \`$TEXT_BLOCKMAX_10K\`
+
+Set \`RUN_100K=true\` for the heavier 100k text blockmax rows. Set
+\`RUN_SQLITE_FTS5=false\` to skip the local SQLite FTS5 embedded text baseline.
+EOF_README
+
+echo "scoreboard: $RUN_DIR/scoreboard.md"
