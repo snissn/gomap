@@ -797,6 +797,37 @@ var interestingStatKeys = []string{
 	"treedb.cache.vlog_mmap.read.fallback_readat",
 }
 
+var interestingStatPrefixes = []string{
+	"treedb.command_wal.",
+	"treedb.cache.command_wal.",
+	"treedb.cache.checkpoint.",
+	"treedb.cache.vlog_auto.",
+	"treedb.cache.vlog_block.",
+	"treedb.cache.vlog_outer_leaf_codec.",
+	"treedb.cache.vlog_payload_kind.",
+	"treedb.cache.vlog_payload_split.",
+	"treedb.cache.vlog_queue.",
+	"treedb.cache.vlog_shape.",
+	"treedb.cache.vlog_write_mode.",
+	"treedb.cache.batch_arena.",
+	"treedb.cache.memtable_adaptive.",
+	"treedb.cache.memtable_stats.",
+	"treedb.cache.memtable_view.",
+	"treedb.freelist.",
+	"treedb.graveyard.",
+	"treedb.pages.",
+	"treedb.publish.ordered_root_delta_group.",
+	"treedb.vlog.decode_buffer_grow.",
+}
+
+var interestingStatKeySet = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(interestingStatKeys))
+	for _, key := range interestingStatKeys {
+		out[key] = struct{}{}
+	}
+	return out
+}()
+
 func timeDBPhase(profiler phaseProfiler, db ethdb.Database, phase string, fn func() (int, error)) (phaseResult, error) {
 	before := statSnapshot(db)
 	result, err := profiler.time(phase, fn)
@@ -815,13 +846,25 @@ func statSnapshot(db ethdb.Database) map[string]int64 {
 		return nil
 	}
 	parsed := parseKeyValueStats(raw)
-	out := make(map[string]int64, len(interestingStatKeys))
-	for _, key := range interestingStatKeys {
-		if value, ok := parsed[key]; ok {
+	out := make(map[string]int64, len(parsed))
+	for key, value := range parsed {
+		if interestingStatKey(key) {
 			out[key] = value
 		}
 	}
 	return out
+}
+
+func interestingStatKey(key string) bool {
+	if _, ok := interestingStatKeySet[key]; ok {
+		return true
+	}
+	for _, prefix := range interestingStatPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseKeyValueStats(raw string) map[string]int64 {
@@ -848,11 +891,7 @@ func statDelta(before, after map[string]int64) map[string]int64 {
 		return nil
 	}
 	out := make(map[string]int64, len(after))
-	for _, key := range interestingStatKeys {
-		post, ok := after[key]
-		if !ok {
-			continue
-		}
+	for key, post := range after {
 		out[key] = post - before[key]
 	}
 	return out
@@ -970,51 +1009,93 @@ func renderSummary(out output) string {
 }
 
 func writeStatDeltaSummary(sb *strings.Builder, runs []runResult) {
-	if !hasStatDeltas(runs) {
+	if !hasReadCounterDeltas(runs) {
 		return
 	}
 	sb.WriteString("\n## TreeDB value-log read counters\n\n")
-	sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678. Outer-leaf counters identify B-tree leaf pages read from the value-log-backed leaf log.\n\n")
-	sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss out-of-range | mmap miss no mapping | mmap miss dead cap | mmap ReadAt fallbacks | outer leaf loads | outer leaf iterator loads | outer leaf checksum verifies | outer leaf checksum skips |\n")
-	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations performed by the read path; grouped-frame counters report the current grouped-frame cache behavior used by follow-up #2678. Outer-leaf counters identify B-tree leaf pages read from the value-log-backed leaf log. Broader write-path stat deltas remain available in the JSON output and matrix `phase_stat_deltas.tsv`.\n\n")
+	sb.WriteString("| engine | read integrity | iteration mode | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss out-of-range | mmap miss no mapping | mmap miss dead cap | mmap ReadAt fallbacks | outer leaf loads | outer leaf point loads | outer leaf iterator loads | outer leaf checksum verifies | outer leaf checksum skips |\n")
+	sb.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, run := range runs {
 		for _, phase := range []string{phaseWrite, phaseRead, phaseIterate, phaseDeleteRange, phaseReopen} {
 			result, ok := run.Phases[phase]
 			if !ok || len(result.StatDelta) == 0 {
 				continue
 			}
-			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			counters, ok := readCounterDeltas(result.StatDelta)
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(sb, "| %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				run.Engine,
 				run.ReadIntegrity,
 				run.IterationMode,
 				phase,
-				statDeltaValue(result.StatDelta, "treedb.vlog.read.crc32_checks_total", "treedb.cache.vlog_read.crc32_checks_total"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_out_of_range", "treedb.cache.vlog_mmap.read.miss_out_of_range"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_no_mapping", "treedb.cache.vlog_mmap.read.miss_no_mapping"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.miss_dead_mapping_cap", "treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"),
-				statDeltaValue(result.StatDelta, "treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat"),
-				statDeltaValue(result.StatDelta, "treedb.process.read_path.outer_leaf.loads_total"),
-				statDeltaValue(result.StatDelta, "treedb.process.read_path.outer_leaf.iterator_loads_total"),
-				statDeltaValue(result.StatDelta, "treedb.process.read_path.outer_leaf.checksum.verifications_total"),
-				statDeltaValue(result.StatDelta, "treedb.process.read_path.outer_leaf.checksum.skips_total"),
+				counters.crc32Checks,
+				counters.groupedHits,
+				counters.groupedMisses,
+				counters.groupedStores,
+				counters.mmapHits,
+				counters.mmapMissOutOfRange,
+				counters.mmapMissNoMapping,
+				counters.mmapMissDeadCap,
+				counters.mmapFallbackReadAt,
+				counters.outerLeafLoads,
+				counters.outerLeafPointLoads,
+				counters.outerLeafIteratorLoads,
+				counters.outerLeafChecksumVerifications,
+				counters.outerLeafChecksumSkips,
 			)
 		}
 	}
 }
 
-func hasStatDeltas(runs []runResult) bool {
+type readCounters struct {
+	crc32Checks                    int64
+	groupedHits                    int64
+	groupedMisses                  int64
+	groupedStores                  int64
+	mmapHits                       int64
+	mmapMissOutOfRange             int64
+	mmapMissNoMapping              int64
+	mmapMissDeadCap                int64
+	mmapFallbackReadAt             int64
+	outerLeafLoads                 int64
+	outerLeafPointLoads            int64
+	outerLeafIteratorLoads         int64
+	outerLeafChecksumVerifications int64
+	outerLeafChecksumSkips         int64
+}
+
+func hasReadCounterDeltas(runs []runResult) bool {
 	for _, run := range runs {
 		for _, phase := range run.Phases {
-			if len(phase.StatDelta) > 0 {
+			if _, ok := readCounterDeltas(phase.StatDelta); ok {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func readCounterDeltas(delta map[string]int64) (readCounters, bool) {
+	counters := readCounters{
+		crc32Checks:                    statDeltaValue(delta, "treedb.vlog.read.crc32_checks_total", "treedb.cache.vlog_read.crc32_checks_total"),
+		groupedHits:                    statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits"),
+		groupedMisses:                  statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.misses", "treedb.cache.vlog_grouped_frame_cache.misses"),
+		groupedStores:                  statDeltaValue(delta, "treedb.vlog.grouped_frame_cache.stores", "treedb.cache.vlog_grouped_frame_cache.stores"),
+		mmapHits:                       statDeltaValue(delta, "treedb.vlog.mmap_read.hits", "treedb.cache.vlog_mmap.read.hits"),
+		mmapMissOutOfRange:             statDeltaValue(delta, "treedb.vlog.mmap_read.miss_out_of_range", "treedb.cache.vlog_mmap.read.miss_out_of_range"),
+		mmapMissNoMapping:              statDeltaValue(delta, "treedb.vlog.mmap_read.miss_no_mapping", "treedb.cache.vlog_mmap.read.miss_no_mapping"),
+		mmapMissDeadCap:                statDeltaValue(delta, "treedb.vlog.mmap_read.miss_dead_mapping_cap", "treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"),
+		mmapFallbackReadAt:             statDeltaValue(delta, "treedb.vlog.mmap_read.fallback_readat", "treedb.cache.vlog_mmap.read.fallback_readat"),
+		outerLeafLoads:                 statDeltaValue(delta, "treedb.process.read_path.outer_leaf.loads_total"),
+		outerLeafPointLoads:            statDeltaValue(delta, "treedb.process.read_path.outer_leaf.point_loads_total"),
+		outerLeafIteratorLoads:         statDeltaValue(delta, "treedb.process.read_path.outer_leaf.iterator_loads_total"),
+		outerLeafChecksumVerifications: statDeltaValue(delta, "treedb.process.read_path.outer_leaf.checksum.verifications_total"),
+		outerLeafChecksumSkips:         statDeltaValue(delta, "treedb.process.read_path.outer_leaf.checksum.skips_total"),
+	}
+	return counters, counters != (readCounters{})
 }
 
 func statDeltaValue(delta map[string]int64, keys ...string) int64 {

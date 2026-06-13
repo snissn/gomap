@@ -26,8 +26,9 @@ Workload shape:
 8. Label TreeDB value-log read integrity (`verify` or the explicitly unsafe
    `unsafe-skip-checksums` ceiling) and iteration mode (`value` or `key-only`).
 9. For TreeDB runs, include per-phase stat deltas for value-log CRC checks,
-   grouped-frame cache activity, mmap hits/ReadAt fallbacks, and outer-leaf
-   value-log-backed B-tree page loads where the adapter exposes `Stat()`.
+   grouped-frame cache activity, mmap hits/ReadAt fallbacks, outer-leaf
+   value-log-backed B-tree page loads, and focused write-path counters where
+   the adapter exposes `Stat()`.
 
 The exact original `/tmp/treedb_nitro_soak.go` was not recovered, so the matrix
 script intentionally sweeps the uncertain knobs that may affect directionality:
@@ -118,5 +119,8 @@ PROFILE_DIR=/tmp/geth_hotkv_profiles \
 Profile artifacts are written per phase, for example
 `cpu_write_treedb.pprof`, `memstats_read_treedb.json`,
 `allocs_cumulative_read_treedb.pprof`, `block.pprof`, and `mutex.pprof`.
-Allocation pprof files are explicitly labeled cumulative; use the `memstats_*`
-JSON files for phase-local allocation deltas.
+Matrix output also includes `phase_counters.tsv` for the headline read counters
+and `phase_stat_deltas.tsv` for all nonzero parseable TreeDB stat deltas,
+including focused write-path counters. Allocation pprof files are explicitly
+labeled cumulative; use the `memstats_*` JSON files for phase-local allocation
+deltas.

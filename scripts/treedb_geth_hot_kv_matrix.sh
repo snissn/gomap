@@ -227,12 +227,13 @@ PY
 done
 
 phase_counters_tsv="$run_dir/phase_counters.tsv"
+phase_stat_deltas_tsv="$run_dir/phase_stat_deltas.tsv"
 
-python3 - "$summary_tsv" "$summary_md" "$phase_counters_tsv" <<'PY'
+python3 - "$summary_tsv" "$summary_md" "$phase_counters_tsv" "$phase_stat_deltas_tsv" <<'PY'
 import csv, json, sys
 from collections import defaultdict
 
-tsv, md, phase_tsv = sys.argv[1:]
+tsv, md, phase_tsv, phase_stat_tsv = sys.argv[1:]
 rows = list(csv.DictReader(open(tsv), delimiter='\t'))
 json_cache = {}
 phases = ['write', 'read', 'iterate', 'delete_range', 'reopen_verify']
@@ -315,6 +316,27 @@ with open(phase_tsv, 'w', newline='') as f:
             *(vals[name] for name in stat_key_groups), r['json'],
         ])
 
+with open(phase_stat_tsv, 'w', newline='') as f:
+    writer = csv.writer(f, delimiter='\t')
+    writer.writerow([
+        'key_shape', 'value_shape', 'value_size', 'batch_target_bytes', 'treedb_read_integrity',
+        'iteration_mode', 'engine', 'run_read_integrity', 'phase', 'stat_key', 'delta', 'json'
+    ])
+    for r in rows:
+        run = run_for_row(r)
+        if not run:
+            continue
+        for phase in phases:
+            delta = (run.get('phases', {}).get(phase, {}).get('stat_delta') or {})
+            for key in sorted(delta):
+                value = delta[key]
+                if not value:
+                    continue
+                writer.writerow([
+                    r['key_shape'], r['value_shape'], r['value_size'], r['batch_target_bytes'], r['treedb_read_integrity'],
+                    r['iteration_mode'], r['engine'], r['read_integrity'], phase, key, value, r['json'],
+                ])
+
 with open(md, 'w') as out:
     out.write('# geth/Nitro hot KV matrix\n\n')
     out.write('Integrated node.OpenDatabase / ethdb benchmark. DeleteRange keys/sec counts affected keys/sec, not range calls/sec. Size bytes is loaded DB size before destructive DeleteRange; post-delete bytes is measured after close/reopen verification. TreeDB read-integrity labels identify checksum-verified runs and the explicitly unsafe checksum-disabled ceiling. Iteration mode labels distinguish value materialization from key-only traversal.\n\n')
@@ -369,7 +391,7 @@ with open(md, 'w') as out:
 
     if phase_rows:
         out.write('\n## TreeDB value-log read counters\n\n')
-        out.write('Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations; grouped counters reflect grouped-frame cache activity; mmap columns split hits, misses, and ReadAt fallback reads. Outer-leaf columns identify B-tree leaf pages read from the value-log-backed leaf log. Full machine-readable counters are in `phase_counters.tsv`.\n\n')
+        out.write('Per-phase deltas from TreeDB `Stat()` output. CRC counts are value-log record CRC32 computations; grouped counters reflect grouped-frame cache activity; mmap columns split hits, misses, and ReadAt fallback reads. Outer-leaf columns identify B-tree leaf pages read from the value-log-backed leaf log. Full machine-readable read counters are in `phase_counters.tsv`; all nonzero parseable TreeDB stat deltas are in `phase_stat_deltas.tsv`.\n\n')
         out.write('| key shape | value size | batch target bytes | read-integrity | iteration mode | engine | phase | crc32 checks | grouped hits | grouped misses | grouped stores | mmap hits | mmap miss OOR | mmap miss no-map | mmap miss dead-cap | mmap ReadAt fallback | outer leaf loads | outer leaf point loads | outer leaf iterator loads | outer leaf cksum verifies | outer leaf cksum skips |\n')
         out.write('|---|---:|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n')
         for r, phase, vals in phase_rows:
@@ -387,4 +409,5 @@ echo "geth hot KV matrix complete"
 echo "  run dir:         $run_dir"
 echo "  tsv:             $summary_tsv"
 echo "  phase counters:  $phase_counters_tsv"
+echo "  stat deltas:     $phase_stat_deltas_tsv"
 echo "  report:          $summary_md"
