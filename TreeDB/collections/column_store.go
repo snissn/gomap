@@ -550,7 +550,7 @@ func defaultColumnRetainedPayloadEncoding(policy ColumnRetainedPayloadPolicy) Co
 	case ColumnRetainedPayloadFull:
 		return ColumnRetainedPayloadEncodingJSON
 	case ColumnRetainedPayloadNonColumn:
-		return ColumnRetainedPayloadEncodingTemplateV1
+		return ColumnRetainedPayloadEncodingSemanticStreamV1
 	default:
 		return ColumnRetainedPayloadEncodingUnavailable
 	}

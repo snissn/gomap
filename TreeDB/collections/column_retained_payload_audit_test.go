@@ -42,7 +42,7 @@ func TestAuditColumnRetainedPayloadPathsAbsentJSONBenchPaths2354(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuditColumnRetainedPayloadPathsAbsent: %v audit=%+v retained=%s", err, audit, retained)
 	}
-	if audit.RetainedPayloadEncoding != string(ColumnRetainedPayloadEncodingTemplateV1) || audit.RetainedPayloadEncodingStatus == "" {
+	if audit.RetainedPayloadEncoding != string(ColumnRetainedPayloadEncodingSemanticStreamV1) || audit.RetainedPayloadEncodingStatus != "active_semantic_stream_v1_non_column_retained_payload" {
 		t.Fatalf("unexpected encoding status: %+v", audit)
 	}
 	if len(audit.Paths) != 5 {
@@ -125,10 +125,21 @@ func TestColumnRetainedPayloadCompressionStatus2356(t *testing.T) {
 			wantStatus:      "active_value_log_auto_grouped_frame_full_retained_payload",
 		},
 		{
-			name: "non_column",
+			name: "non_column_default_semantic_stream",
 			cfg: &ColumnStoreConfig{
 				Enabled:         true,
 				RetainedPayload: ColumnRetainedPayloadNonColumn,
+			},
+			wantCompression: "semantic_stream_v1_blocks",
+			wantPolicy:      "retained_semantic_stream_v1_side_root",
+			wantStatus:      "active_semantic_stream_v1_non_column_retained_payload",
+		},
+		{
+			name: "non_column_explicit_template_v1",
+			cfg: &ColumnStoreConfig{
+				Enabled:                 true,
+				RetainedPayload:         ColumnRetainedPayloadNonColumn,
+				RetainedPayloadEncoding: ColumnRetainedPayloadEncodingTemplateV1,
 			},
 			wantCompression: "value_log_grouped_frame",
 			wantPolicy:      "default_value_log_auto_storage_first",
@@ -146,7 +157,9 @@ func TestColumnRetainedPayloadCompressionStatus2356(t *testing.T) {
 }
 
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentTemplateV12382(t *testing.T) {
-	col, closeDB := openRetainedPayloadAuditCollection2382(t, jsonbenchRetainedPayloadAuditConfig2382(true), [][]byte{
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingTemplateV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
 		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r1"},"payload":"kept"}`),
 		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r2"},"nested":{"also":"kept"}}`),
 	})
@@ -219,7 +232,9 @@ func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentSemanticStreamV12662(t
 }
 
 func TestAuditCollectionRetainedPayloadShapeStatsTemplateV12662(t *testing.T) {
-	col, closeDB := openRetainedPayloadAuditCollection2382(t, jsonbenchRetainedPayloadAuditConfig2382(true), [][]byte{
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingTemplateV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
 		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r1"},"payload":"kept","nested":{"also":"kept","count":3}}`),
 		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r2"},"payload":"second","nested":{"also":"two","flag":true}}`),
 	})

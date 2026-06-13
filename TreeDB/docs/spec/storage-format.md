@@ -141,6 +141,13 @@ Collection document payload encodings are defined separately in
 template-v1 collections store compact `TD1D` primary documents and persist the
 template ID map in the collection-local `<collection>/templates` ordered root.
 
+Column-store collections using the non-column retained-payload policy default to
+`semantic-stream-v1`. Insert-batch publication stores compact semantic-stream
+locators in the primary collection root and writes retained scalar streams into
+the collection-local retained semantic-stream side root. Explicit
+`retained_payload_encoding: "template-v1"` remains a supported compatibility
+encoding for non-column retained payloads.
+
 ## 3.3 Collection Text Index Root Payloads
 
 Collection text-index roots are ordinary ordered roots whose keys and values are

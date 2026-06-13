@@ -190,8 +190,9 @@ func TestColumnRetainedPayloadLeafLogSyntheticShrink(t *testing.T) {
 			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
 			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
 		},
-		RetainedPayload: ColumnRetainedPayloadNonColumn,
-		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingTemplateV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
 	}
 	retainedLeafBytes := writeRetainedPlacementSynthetic(t, retainedDir, "retained_docs", retainedCfg, docs, marker)
 	if filesUnderDirContain(t, backenddb.LeafLogDirPath(retainedDir), []byte(marker)) {
@@ -639,8 +640,9 @@ func createColumnRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name
 			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
 			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
 		},
-		RetainedPayload: ColumnRetainedPayloadNonColumn,
-		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingTemplateV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
 	}
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: name, Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
