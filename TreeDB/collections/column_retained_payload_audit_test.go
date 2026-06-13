@@ -323,9 +323,10 @@ func TestAuditCollectionRetainedPayloadValueFamilyStats2662(t *testing.T) {
 }
 
 func TestAuditCollectionRetainedPayloadSemanticStreamStats2662(t *testing.T) {
+	compressibleBody := strings.Repeat("semantic-stream-compressible-", 32)
 	col, closeDB := openRetainedPayloadAuditCollection2382(t, jsonbenchRetainedPayloadAuditConfig2382(true), [][]byte{
-		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"subject":{"uri":"at://did:plc:alice/app.bsky.feed.post/3aaa"},"likeCount":7,"repost":false}},"tags":["alpha","beta"],"empty":null}`),
-		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"subject":{"uri":"at://did:plc:bob/app.bsky.feed.post/3bbb"},"likeCount":8,"repost":true}},"tags":["alpha"],"empty":null}`),
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"subject":{"uri":"at://did:plc:alice/app.bsky.feed.post/3aaa"},"likeCount":7,"repost":false,"body":"` + compressibleBody + `"}},"tags":["alpha","beta"],"empty":null}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"subject":{"uri":"at://did:plc:bob/app.bsky.feed.post/3bbb"},"likeCount":8,"repost":true,"body":"` + compressibleBody + `"}},"tags":["alpha"],"empty":null}`),
 	})
 	defer closeDB()
 
@@ -345,6 +346,9 @@ func TestAuditCollectionRetainedPayloadSemanticStreamStats2662(t *testing.T) {
 	if audit.RetainedPayloadSemanticStreamInputBytes <= 0 || audit.RetainedPayloadSemanticStreamZSTDBytes <= 0 {
 		t.Fatalf("semantic stream total bytes missing: input=%d zstd=%d audit=%+v", audit.RetainedPayloadSemanticStreamInputBytes, audit.RetainedPayloadSemanticStreamZSTDBytes, audit)
 	}
+	if audit.RetainedPayloadSemanticStreamInputBytes > 512 && audit.RetainedPayloadSemanticStreamZSTDBytes >= audit.RetainedPayloadSemanticStreamInputBytes {
+		t.Fatalf("semantic stream zstd oracle did not reduce compressible aggregate input: input=%d zstd=%d", audit.RetainedPayloadSemanticStreamInputBytes, audit.RetainedPayloadSemanticStreamZSTDBytes)
+	}
 
 	rkey, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "commit.rkey", "string")
 	if !ok {
@@ -353,7 +357,12 @@ func TestAuditCollectionRetainedPayloadSemanticStreamStats2662(t *testing.T) {
 	if rkey.Occurrences != 2 || rkey.Documents != 2 || rkey.StringBytes != int64(len("r-0001")+len("r-0002")) {
 		t.Fatalf("commit.rkey semantic stream=%+v", rkey)
 	}
-	if rkey.JSONBytes != 16 || rkey.StreamInputBytes != 18 || rkey.MinStreamBytes != 9 || rkey.MaxStreamBytes != 9 {
+	const (
+		rkeyJSONBytes      = 16 // `"r-0001"` and `"r-0002"` are 8 JSON bytes each.
+		rkeyStreamBytes    = 18 // Each 8-byte JSON token gets one newline separator.
+		rkeyEntryByteWidth = 9
+	)
+	if rkey.JSONBytes != rkeyJSONBytes || rkey.StreamInputBytes != rkeyStreamBytes || rkey.MinStreamBytes != rkeyEntryByteWidth || rkey.MaxStreamBytes != rkeyEntryByteWidth {
 		t.Fatalf("commit.rkey semantic stream byte counters=%+v", rkey)
 	}
 	if rkey.ZSTDBytes <= 0 || rkey.ZSTDToInputRatio <= 0 {
@@ -364,15 +373,27 @@ func TestAuditCollectionRetainedPayloadSemanticStreamStats2662(t *testing.T) {
 		t.Fatalf("tags semantic stream=%+v ok=%v", tags, ok)
 	}
 	likes, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "commit.record.likeCount", "number")
-	if !ok || likes.Occurrences != 2 || likes.Documents != 2 || likes.JSONBytes != 2 || likes.StreamInputBytes != 4 {
+	const (
+		likeJSONBytes   = 2 // `7` and `8`.
+		likeStreamBytes = 4 // Two one-byte numbers plus two newline separators.
+	)
+	if !ok || likes.Occurrences != 2 || likes.Documents != 2 || likes.JSONBytes != likeJSONBytes || likes.StreamInputBytes != likeStreamBytes {
 		t.Fatalf("likeCount semantic stream=%+v ok=%v", likes, ok)
 	}
 	repost, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "commit.record.repost", "bool")
-	if !ok || repost.Occurrences != 2 || repost.Documents != 2 || repost.JSONBytes != 9 || repost.StreamInputBytes != 11 {
+	const (
+		repostJSONBytes   = 9  // `false` plus `true`.
+		repostStreamBytes = 11 // The two boolean tokens plus two newline separators.
+	)
+	if !ok || repost.Occurrences != 2 || repost.Documents != 2 || repost.JSONBytes != repostJSONBytes || repost.StreamInputBytes != repostStreamBytes {
 		t.Fatalf("repost semantic stream=%+v ok=%v", repost, ok)
 	}
 	empty, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "empty", "null")
-	if !ok || empty.Occurrences != 2 || empty.Documents != 2 || empty.JSONBytes != 8 || empty.StreamInputBytes != 10 {
+	const (
+		nullJSONBytes   = 8  // Two `null` tokens.
+		nullStreamBytes = 10 // Two `null` tokens plus two newline separators.
+	)
+	if !ok || empty.Occurrences != 2 || empty.Documents != 2 || empty.JSONBytes != nullJSONBytes || empty.StreamInputBytes != nullStreamBytes {
 		t.Fatalf("empty null semantic stream=%+v ok=%v", empty, ok)
 	}
 	if _, ok := retainedPayloadSemanticStreamStat2662(audit.RetainedPayloadSemanticStreams, "kind", "string"); ok {
