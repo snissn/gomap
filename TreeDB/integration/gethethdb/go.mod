@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/ethereum/go-ethereum v1.16.9
-	github.com/snissn/gomap v0.0.0-20260613184912-397cae481914
+	github.com/snissn/gomap v0.0.0-20260613195517-98e19772e489
 )
 
 require (
