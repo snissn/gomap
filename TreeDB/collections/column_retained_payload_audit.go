@@ -316,7 +316,8 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		semanticStreams = newColumnRetainedPayloadSemanticStreamCollector(opts.SemanticStreamMaxDepth)
 	}
 	var semanticBlockLayoutLocatorRows map[string]uint64
-	if semanticBlockLayoutOnly {
+	var semanticBlockLayoutPrimaryLocatorBytes int64
+	if opts.IncludeSemanticStreamBlockLayout {
 		semanticBlockLayoutLocatorRows = make(map[string]uint64)
 	}
 	for it.Valid() {
@@ -338,10 +339,17 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 		}
 		result.CheckedRows++
 		result.RetainedPayloadBytes += int64(len(retained))
-		if semanticBlockLayoutOnly {
+		semanticBlockLayoutLocator := false
+		if opts.IncludeSemanticStreamBlockLayout {
 			if ok, err := validateColumnRetainedSemanticStreamV1LocatorAtSnapshot(snap, catalog, retained, semanticBlockLayoutLocatorRows); err != nil {
 				return retainedPayloadCollectionAuditError(result, fmt.Errorf("collections: retained payload audit %q: %w", documentID, err))
-			} else if !ok {
+			} else if ok {
+				semanticBlockLayoutLocator = true
+				semanticBlockLayoutPrimaryLocatorBytes += int64(len(retained))
+			}
+		}
+		if semanticBlockLayoutOnly {
+			if !semanticBlockLayoutLocator {
 				payloadAudit, auditErr := auditColumnRetainedPayloadPathsAbsentWithResolver(cfg, retained, result.DeclaredPaths, resolver)
 				if auditErr != nil {
 					for _, path := range payloadAudit.Violations {
@@ -403,7 +411,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 	if err := it.Error(); err != nil {
 		return retainedPayloadCollectionAuditError(result, err)
 	}
-	if opts.IncludeSemanticStreamBlockLayout && result.Truncated && semanticBlockLayoutOnly {
+	if opts.IncludeSemanticStreamBlockLayout && result.Truncated {
 		blockPaths, err := c.auditRetainedSemanticStreamV1BlockLayoutPathsAtSnapshot(snap, catalog, semanticBlockLayoutLocatorRows)
 		if err != nil {
 			return retainedPayloadCollectionAuditError(result, err)
@@ -419,7 +427,7 @@ func (c *Collection) AuditRetainedPayloadDeclaredPathsAbsent(opts ColumnRetained
 			return retainedPayloadCollectionAuditError(result, err)
 		}
 		blockLayout.Rows = result.CheckedRows
-		blockLayout.PrimaryLocatorBytes = result.RetainedPayloadBytes
+		blockLayout.PrimaryLocatorBytes = semanticBlockLayoutPrimaryLocatorBytes
 		result.RetainedPayloadSemanticStreamBlockLayout = &blockLayout
 		violatedPaths := appendColumnRetainedPayloadBlockLayoutViolations(&result, "semantic-stream-v1-blocks", blockPaths)
 		if len(violatedPaths) > 0 {
@@ -461,7 +469,8 @@ func appendColumnRetainedPayloadBlockLayoutViolations(result *ColumnRetainedPayl
 	}
 	violatedPaths := make([]string, 0)
 	for _, path := range result.DeclaredPaths {
-		if _, ok := blockPaths[path]; ok {
+		pathKey := columnRetainedSemanticStreamPathKey(strings.Split(path, "."))
+		if _, ok := blockPaths[pathKey]; ok {
 			result.Violations = append(result.Violations, ColumnRetainedPayloadCollectionPathViolation{
 				DocumentID: source,
 				Path:       path,

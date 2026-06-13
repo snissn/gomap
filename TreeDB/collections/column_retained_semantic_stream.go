@@ -112,7 +112,11 @@ func ColumnRetainedSemanticStreamV1StorageAccountingFromJSONDocuments(cfg Column
 	var out ColumnRetainedSemanticStreamV1StorageAccounting
 	out.Rows = len(documents)
 	for _, document := range prepared.documents {
-		out.PrimaryLocatorBytes += int64(len(document))
+		if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(document); err != nil {
+			return ColumnRetainedSemanticStreamV1StorageAccounting{}, err
+		} else if ok {
+			out.PrimaryLocatorBytes += int64(len(document))
+		}
 	}
 	if prepared.semanticStreamBlocks != nil {
 		iter := prepared.semanticStreamBlocks.NewIterator(nil, nil)
@@ -150,7 +154,11 @@ func ColumnRetainedSemanticStreamV1BlockLayoutAuditFromJSONDocuments(cfg ColumnS
 	}
 	defer collector.close()
 	for _, document := range prepared.documents {
-		collector.primaryLocatorBytes += int64(len(document))
+		if _, _, ok, err := parseColumnRetainedSemanticStreamV1Locator(document); err != nil {
+			return ColumnRetainedSemanticStreamV1BlockLayoutAudit{}, err
+		} else if ok {
+			collector.primaryLocatorBytes += int64(len(document))
+		}
 	}
 	if prepared.semanticStreamBlocks != nil {
 		iter := prepared.semanticStreamBlocks.NewIterator(nil, nil)
@@ -211,10 +219,7 @@ func (c *Collection) auditRetainedSemanticStreamV1BlockLayoutAtSnapshot(snap *ba
 }
 
 func (c *Collection) auditRetainedSemanticStreamV1BlockLayoutPathsAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, blockRows map[string]uint64) (map[string]struct{}, error) {
-	collector, err := newColumnRetainedSemanticStreamV1BlockLayoutCollector()
-	if err != nil {
-		return nil, err
-	}
+	collector := newColumnRetainedSemanticStreamV1PathCollector()
 	defer collector.close()
 	rootName := collectionRetainedSemanticStreamRootName(catalog.meta.Name)
 	keys := make([]string, 0, len(blockRows))
@@ -236,8 +241,8 @@ func (c *Collection) auditRetainedSemanticStreamV1BlockLayoutPathsAtSnapshot(sna
 		}
 	}
 	paths := make(map[string]struct{}, len(collector.paths))
-	for path := range collector.paths {
-		paths[path] = struct{}{}
+	for pathKey := range collector.paths {
+		paths[pathKey] = struct{}{}
 	}
 	return paths, nil
 }
@@ -795,6 +800,7 @@ type columnRetainedSemanticStreamV1BlockLayoutCollector struct {
 	codecs              map[string]*ColumnRetainedSemanticStreamV1CodecStat
 	paths               map[string]*columnRetainedSemanticStreamV1PathLayoutCollector
 	zstdEncoder         *zstd.Encoder
+	pathOnly            bool
 }
 
 type columnRetainedSemanticStreamV1PathLayoutCollector struct {
@@ -821,6 +827,13 @@ func newColumnRetainedSemanticStreamV1BlockLayoutCollector() (*columnRetainedSem
 		paths:       make(map[string]*columnRetainedSemanticStreamV1PathLayoutCollector),
 		zstdEncoder: enc,
 	}, nil
+}
+
+func newColumnRetainedSemanticStreamV1PathCollector() *columnRetainedSemanticStreamV1BlockLayoutCollector {
+	return &columnRetainedSemanticStreamV1BlockLayoutCollector{
+		paths:    make(map[string]*columnRetainedSemanticStreamV1PathLayoutCollector),
+		pathOnly: true,
+	}
 }
 
 func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) close() {
@@ -862,12 +875,14 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) addBlock(block []by
 	off += n
 	blockHeaderBytes := off
 
-	c.blockCount++
-	c.rawBlockBytes += int64(len(block))
-	c.blockHeaderBytes += int64(blockHeaderBytes)
-	c.observeBlockCodec("snappy", block)
-	c.observeBlockCodec("lz4", block)
-	c.observeBlockCodec("zstd", block)
+	if !c.pathOnly {
+		c.blockCount++
+		c.rawBlockBytes += int64(len(block))
+		c.blockHeaderBytes += int64(blockHeaderBytes)
+		c.observeBlockCodec("snappy", block)
+		c.observeBlockCodec("lz4", block)
+		c.observeBlockCodec("zstd", block)
+	}
 
 	for pathOrdinal := uint64(0); pathOrdinal < pathCount; pathOrdinal++ {
 		pathStart := off
@@ -928,7 +943,8 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) addBlock(block []by
 		}
 		pathRaw := block[pathStart:off]
 		path := strings.Join(segments, ".")
-		if err := c.observePath(path, int64(pathMetadataBytes), int64(entryMetadataBytes), scalarValueBytes, int64(entryCount), maxScalarValueBytes, pathRaw); err != nil {
+		pathKey := columnRetainedSemanticStreamPathKey(segments)
+		if err := c.observePath(pathKey, path, int64(pathMetadataBytes), int64(entryMetadataBytes), scalarValueBytes, int64(entryCount), maxScalarValueBytes, pathRaw); err != nil {
 			return err
 		}
 	}
@@ -984,22 +1000,27 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) encodeBlockCodec(co
 	}
 }
 
-func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) observePath(path string, pathMetadataBytes, entryMetadataBytes, scalarValueBytes, occurrences int64, maxScalarValueBytes int, raw []byte) error {
-	stream := c.paths[path]
+func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) observePath(pathKey, path string, pathMetadataBytes, entryMetadataBytes, scalarValueBytes, occurrences int64, maxScalarValueBytes int, raw []byte) error {
+	stream := c.paths[pathKey]
 	if stream == nil {
 		stream = &columnRetainedSemanticStreamV1PathLayoutCollector{
 			stat: ColumnRetainedSemanticStreamV1PathLayoutStat{Path: path},
 		}
-		zstdWriter, err := zstd.NewWriter(&stream.zstdCounter,
-			zstd.WithEncoderLevel(zstd.SpeedFastest),
-			zstd.WithEncoderCRC(false),
-			zstd.WithEncoderConcurrency(1),
-		)
-		if err != nil {
-			return fmt.Errorf("collections: create semantic-stream-v1 path zstd oracle for path %q: %w", path, err)
+		if !c.pathOnly {
+			zstdWriter, err := zstd.NewWriter(&stream.zstdCounter,
+				zstd.WithEncoderLevel(zstd.SpeedFastest),
+				zstd.WithEncoderCRC(false),
+				zstd.WithEncoderConcurrency(1),
+			)
+			if err != nil {
+				return fmt.Errorf("collections: create semantic-stream-v1 path zstd oracle for path %q: %w", path, err)
+			}
+			stream.zstdWriter = zstdWriter
 		}
-		stream.zstdWriter = zstdWriter
-		c.paths[path] = stream
+		c.paths[pathKey] = stream
+	}
+	if c.pathOnly {
+		return nil
 	}
 	stream.stat.Blocks++
 	stream.stat.Occurrences += occurrences
@@ -1045,11 +1066,15 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) result(rows, maxPat
 		stat.StoredToRawRatio = columnRetainedPayloadAuditRatio(stat.StoredBytes, stat.RawBytes)
 		out.BlockCodecStats = append(out.BlockCodecStats, *stat)
 	}
-	paths := make([]ColumnRetainedSemanticStreamV1PathLayoutStat, 0, len(c.paths))
-	for path, stream := range c.paths {
+	type pathLayoutResult struct {
+		key  string
+		stat ColumnRetainedSemanticStreamV1PathLayoutStat
+	}
+	paths := make([]pathLayoutResult, 0, len(c.paths))
+	for pathKey, stream := range c.paths {
 		if stream.zstdWriter != nil {
 			if err := stream.zstdWriter.Close(); err != nil {
-				return ColumnRetainedSemanticStreamV1BlockLayoutAudit{}, fmt.Errorf("collections: close semantic-stream-v1 path zstd oracle for path %q: %w", path, err)
+				return ColumnRetainedSemanticStreamV1BlockLayoutAudit{}, fmt.Errorf("collections: close semantic-stream-v1 path zstd oracle for path %q: %w", stream.stat.Path, err)
 			}
 			stream.zstdWriter = nil
 		}
@@ -1058,22 +1083,29 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) result(rows, maxPat
 		stat.ZSTDToTotalRatio = columnRetainedPayloadAuditRatio(stat.ZSTDBytes, stat.TotalBytes)
 		out.PathZSTDInputBytes += stat.TotalBytes
 		out.PathZSTDEncodedBytes += stat.ZSTDBytes
-		paths = append(paths, stat)
+		paths = append(paths, pathLayoutResult{key: pathKey, stat: stat})
 	}
 	sort.Slice(paths, func(i, j int) bool {
-		if paths[i].TotalBytes != paths[j].TotalBytes {
-			return paths[i].TotalBytes > paths[j].TotalBytes
+		if paths[i].stat.TotalBytes != paths[j].stat.TotalBytes {
+			return paths[i].stat.TotalBytes > paths[j].stat.TotalBytes
 		}
-		if paths[i].Occurrences != paths[j].Occurrences {
-			return paths[i].Occurrences > paths[j].Occurrences
+		if paths[i].stat.Occurrences != paths[j].stat.Occurrences {
+			return paths[i].stat.Occurrences > paths[j].stat.Occurrences
 		}
-		return paths[i].Path < paths[j].Path
+		if paths[i].stat.Path != paths[j].stat.Path {
+			return paths[i].stat.Path < paths[j].stat.Path
+		}
+		return paths[i].key < paths[j].key
 	})
+	outPaths := make([]ColumnRetainedSemanticStreamV1PathLayoutStat, 0, len(paths))
+	for _, path := range paths {
+		outPaths = append(outPaths, path.stat)
+	}
 	if maxPaths > 0 && len(paths) > maxPaths {
-		out.Paths = paths[:maxPaths]
+		out.Paths = outPaths[:maxPaths]
 		out.PathsTruncated = true
 	} else {
-		out.Paths = paths
+		out.Paths = outPaths
 	}
 	if c.zstdEncoder != nil {
 		c.zstdEncoder.Close()

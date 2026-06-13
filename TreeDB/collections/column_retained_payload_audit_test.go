@@ -638,6 +638,32 @@ func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutSampledFailsClos
 	}
 }
 
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutSampledDecodedStatsFailsClosed2662(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"text":"hello"}}}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"text":"world"}},"payload":"same"}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		Paths:                            []string{"payload"},
+		IncludeShapeStats:                true,
+		IncludeSemanticStreamBlockLayout: true,
+		MaxDocuments:                     1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "payload") {
+		t.Fatalf("sampled semantic-stream-v1 decoded stats block layout err=%v audit=%+v want payload violation", err, audit)
+	}
+	if audit.Status != "failed" || !audit.Truncated || audit.CheckedRows != 1 || audit.RetainedPayloadSemanticStreamBlockLayout != nil {
+		t.Fatalf("sampled semantic-stream-v1 decoded stats audit=%+v want failed truncated one row without emitted layout", audit)
+	}
+	if len(audit.Violations) != 1 || audit.Violations[0].DocumentID != "semantic-stream-v1-sampled-blocks" || audit.Violations[0].Path != "payload" {
+		t.Fatalf("sampled semantic-stream-v1 decoded stats violations=%+v want sampled-block payload", audit.Violations)
+	}
+}
+
 func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutAllowsInlineRows2662(t *testing.T) {
 	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
 	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
@@ -656,8 +682,42 @@ func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutAllowsInlineRows
 		t.Fatalf("audit=%+v want passed one inline row", audit)
 	}
 	layout := audit.RetainedPayloadSemanticStreamBlockLayout
-	if layout == nil || layout.BlockCount != 0 || layout.RawBlockBytes != 0 || layout.PrimaryLocatorBytes != audit.RetainedPayloadBytes {
+	if layout == nil || layout.BlockCount != 0 || layout.RawBlockBytes != 0 || layout.PrimaryLocatorBytes != 0 || audit.RetainedPayloadBytes <= 0 {
 		t.Fatalf("inline block layout=%+v audit=%+v", layout, audit)
+	}
+}
+
+func TestAuditCollectionRetainedPayloadSemanticStreamBlockLayoutLiteralDottedKey2662(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled:                 true,
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+		Columns: []ColumnStoreColumn{
+			{Name: "nested", Path: "a.b", ValueType: ColumnStoreValueString, Nullable: true},
+		},
+	}
+	col, closeDB := openRetainedPayloadAuditCollection2382(t, cfg, [][]byte{
+		[]byte(`{"a.b":"literal-one","other":1}`),
+		[]byte(`{"a.b":"literal-two","other":2}`),
+	})
+	defer closeDB()
+
+	audit, err := col.AuditRetainedPayloadDeclaredPathsAbsent(ColumnRetainedPayloadCollectionAuditOptions{
+		IncludeSemanticStreamBlockLayout: true,
+	})
+	if err != nil {
+		t.Fatalf("literal dotted key block layout audit: %v audit=%+v", err, audit)
+	}
+	if audit.Status != "passed" || len(audit.Violations) != 0 {
+		t.Fatalf("literal dotted key audit=%+v want passed without nested a.b violation", audit)
+	}
+	layout := audit.RetainedPayloadSemanticStreamBlockLayout
+	if layout == nil {
+		t.Fatalf("literal dotted key missing block layout: %+v", audit)
+	}
+	if _, ok := retainedSemanticStreamV1PathLayoutStat2662(layout.Paths, "a.b"); !ok {
+		t.Fatalf("literal dotted key path missing from layout paths: %+v", layout.Paths)
 	}
 }
 
