@@ -19978,7 +19978,7 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		typedColumnCache = &typedColumnPartReconstructionCache{Parts: make(map[uint64]typedColumnPartDecodedValues)}
 	}
 	var retainedSemanticCache *columnRetainedSemanticStreamV1DecodeCache
-	if columnStoreRetainedPayloadUsesSemanticStreamV1(&columnStoreConfig) {
+	if columnStoreRetainedPayloadUsesSemanticStreamV1(&columnStoreConfig) && len(records) >= minColumnRetainedSemanticStreamV1DecodeCacheRows {
 		retainedSemanticCache = newColumnRetainedSemanticStreamV1DecodeCache()
 	}
 	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))

@@ -22,6 +22,7 @@ import (
 const columnRetainedSemanticStreamV1BlockRows = 4096
 const maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes = 512 << 20
 const defaultColumnRetainedSemanticStreamV1DecodeCacheBlocks = 16
+const minColumnRetainedSemanticStreamV1DecodeCacheRows = 64
 
 var (
 	columnRetainedSemanticStreamV1BlockMagic     = []byte("crss1blk\x00")

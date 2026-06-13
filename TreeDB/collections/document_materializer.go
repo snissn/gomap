@@ -873,7 +873,7 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 		resolveRetained = columnStoreRetainedPayloadUsesSemanticStreamV1(&cfg)
 	}
 	var retainedSemanticCache *columnRetainedSemanticStreamV1DecodeCache
-	if resolveRetained {
+	if resolveRetained && len(ids) >= minColumnRetainedSemanticStreamV1DecodeCacheRows {
 		retainedSemanticCache = newColumnRetainedSemanticStreamV1DecodeCache()
 	}
 	err := collectionGetManyViewAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), ids, func(i int, _ []byte, value []byte, found bool) error {
