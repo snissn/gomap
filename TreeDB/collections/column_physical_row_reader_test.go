@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -180,9 +181,9 @@ func TestColumnPhysicalRowReaderFetchesV7FixedIDRows(t *testing.T) {
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
 	rows := []columnDeclaredRow{
 		{ID: []byte("doc-0000")},
-		{ID: []byte("doc-0001")},
 		{ID: []byte("doc-0002")},
-		{ID: []byte("doc-0003")},
+		{ID: []byte("doc-0004")},
+		{ID: []byte("doc-0006")},
 	}
 	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, cfg, 19, 1, rows)
 	raw, err := readColumnPhysicalAssetFromManager(root, ref)
@@ -211,8 +212,8 @@ func TestColumnPhysicalRowReaderFetchesV7FixedIDRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchRow(2): %v", err)
 	}
-	if string(row.ID) != "doc-0002" || row.Ordinal != 2 || row.RowIndex != 2 || row.Deleted || len(row.Values) != 0 {
-		t.Fatalf("row=%+v id=%q want fixed-id doc-0002 without values", row, string(row.ID))
+	if string(row.ID) != "doc-0004" || row.Ordinal != 2 || row.RowIndex != 2 || row.Deleted || len(row.Values) != 0 {
+		t.Fatalf("row=%+v id=%q want fixed-id doc-0004 without values", row, string(row.ID))
 	}
 
 	var got []string
@@ -225,7 +226,59 @@ func TestColumnPhysicalRowReaderFetchesV7FixedIDRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("FetchBatch: %v", err)
 	}
-	if fmt.Sprint(got) != "[doc-0003 doc-0001]" {
+	if fmt.Sprint(got) != "[doc-0006 doc-0002]" {
+		t.Fatalf("batch ids=%v", got)
+	}
+}
+
+func TestColumnPhysicalRowReaderFetchesV8DenseIDRangeRows(t *testing.T) {
+	cfg := testColumnPhysicalRowReaderFixedIDConfigV7(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	rows := []columnDeclaredRow{
+		{ID: columnPhysicalAssetBigEndianUint64ID(900)},
+		{ID: columnPhysicalAssetBigEndianUint64ID(901)},
+		{ID: columnPhysicalAssetBigEndianUint64ID(902)},
+		{ID: columnPhysicalAssetBigEndianUint64ID(903)},
+	}
+	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, cfg, 19, 1, rows)
+	raw, err := readColumnPhysicalAssetFromManager(root, ref)
+	if err != nil {
+		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	if _, version, _, err := parseColumnPhysicalAssetScanHeader(raw, ref, "events", cfg, ColumnPublishOperationInsert); err != nil {
+		t.Fatalf("parseColumnPhysicalAssetScanHeader: %v", err)
+	} else if version != columnPhysicalAssetVersionV8 {
+		t.Fatalf("asset version=%d want V8", version)
+	}
+
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, cfg, ref), columnPhysicalRowReaderOptions{
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	var scratch columnPhysicalRowReaderScratch
+	row, err := reader.FetchRow(2, &scratch)
+	if err != nil {
+		t.Fatalf("FetchRow(2): %v", err)
+	}
+	if got := binary.BigEndian.Uint64(row.ID); got != 902 || row.Ordinal != 2 || row.RowIndex != 2 || row.Deleted || len(row.Values) != 0 {
+		t.Fatalf("row=%+v id=%d want dense id 902 without values", row, got)
+	}
+
+	var got []uint64
+	if err := reader.FetchBatch([]int{3, 1}, &scratch, func(row columnPhysicalRowReaderRow) error {
+		got = append(got, binary.BigEndian.Uint64(row.ID))
+		if row.Deleted || len(row.Values) != 0 {
+			return fmt.Errorf("row=%+v want non-deleted dense-id row without values", row)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("FetchBatch: %v", err)
+	}
+	if fmt.Sprint(got) != "[903 901]" {
 		t.Fatalf("batch ids=%v", got)
 	}
 }

@@ -541,34 +541,52 @@ func columnStoreRowAssetPayloadAccounting(raw []byte, ref ColumnAssetRef, expect
 	if version >= columnPhysicalAssetVersionV7 {
 		rowEncodingHeaderStart := cur.pos
 		rowEncoding := cur.string()
-		if rowEncoding != columnPhysicalAssetRowEncodingFixedID {
-			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("unsupported column physical asset row encoding %q", rowEncoding)
-		}
 		if header.ColumnCount != 0 {
 			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset row encoding %q requires zero columns", rowEncoding)
 		}
-		idWidth := cur.u64()
-		if cur.err != nil {
-			return ColumnStoreRowAssetByteAccounting{}, cur.err
-		}
-		if idWidth == 0 || idWidth > uint64(maxCollectionInt) {
-			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset fixed id width=%d invalid", idWidth)
-		}
-		out.RowEncodingHeaderBytes = int64(cur.pos - rowEncodingHeaderStart)
 		deleted := header.Operation == ColumnPublishOperationDelete
 		if header.Operation != ColumnPublishOperationInsert && header.Operation != ColumnPublishOperationUpdate && header.Operation != ColumnPublishOperationDelete {
 			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("unsupported column physical asset operation %q", header.Operation)
 		}
-		for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
-			if uint64(len(raw)-cur.pos) < idWidth {
-				return ColumnStoreRowAssetByteAccounting{}, errors.New("short column physical asset fixed row id block")
+		switch rowEncoding {
+		case columnPhysicalAssetRowEncodingFixedID:
+			idWidth := cur.u64()
+			if cur.err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, cur.err
 			}
-			cur.pos += int(idWidth)
-			out.RowIDStoredBytes = addColumnStorePhysicalAccountingBytes(out.RowIDStoredBytes, int64(idWidth))
-			out.RowIDValueBytes = addColumnStorePhysicalAccountingBytes(out.RowIDValueBytes, int64(idWidth))
+			if idWidth == 0 || idWidth > uint64(maxCollectionInt) {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset fixed id width=%d invalid", idWidth)
+			}
+			out.RowEncodingHeaderBytes = int64(cur.pos - rowEncodingHeaderStart)
+			for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
+				if uint64(len(raw)-cur.pos) < idWidth {
+					return ColumnStoreRowAssetByteAccounting{}, errors.New("short column physical asset fixed row id block")
+				}
+				cur.pos += int(idWidth)
+				out.RowIDStoredBytes = addColumnStorePhysicalAccountingBytes(out.RowIDStoredBytes, int64(idWidth))
+				out.RowIDValueBytes = addColumnStorePhysicalAccountingBytes(out.RowIDValueBytes, int64(idWidth))
+				if deleted {
+					out.DeletedRows++
+				}
+			}
+		case columnPhysicalAssetRowEncodingDenseIDRange:
+			if version < columnPhysicalAssetVersionV8 {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset row encoding %q requires version >= %d", rowEncoding, columnPhysicalAssetVersionV8)
+			}
+			baseID := cur.u64()
+			if cur.err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, cur.err
+			}
+			if header.RowCount > 0 && baseID > ^uint64(0)-uint64(header.RowCount-1) {
+				return ColumnStoreRowAssetByteAccounting{}, errors.New("column physical asset dense id range overflows uint64")
+			}
+			out.RowEncodingHeaderBytes = int64(cur.pos - rowEncodingHeaderStart)
+			out.RowIDValueBytes = addColumnStorePhysicalAccountingBytes(out.RowIDValueBytes, int64(header.RowCount)*8)
 			if deleted {
-				out.DeletedRows++
+				out.DeletedRows = header.RowCount
 			}
+		default:
+			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("unsupported column physical asset row encoding %q", rowEncoding)
 		}
 		if cur.err != nil {
 			return ColumnStoreRowAssetByteAccounting{}, cur.err
