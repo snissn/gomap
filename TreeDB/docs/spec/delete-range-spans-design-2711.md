@@ -73,9 +73,14 @@ Range spans MUST use the existing public DeleteRange semantics:
 - `nil` end means unbounded upper.
 - concrete empty key `[]byte{}` is the minimum valid key and is distinct from
   `nil`.
-- No-op ranges:
+- API/overlay no-op ranges:
   - non-nil `start >= end`;
   - `start == nil && end != nil && len(end) == 0`.
+- Cached overlay and public batch paths MUST normalize/drop those no-op ranges
+  before command-WAL encoding. A command-WAL frame containing
+  `start == nil && end == []byte{}` or a concrete reversed/equal bounded range is
+  non-canonical and MUST fail closed as corrupt during command-frame validation
+  and replay.
 - `DeleteRange([]byte{}, []byte("a"))` includes the empty concrete key.
 - `DeleteRange(nil, nil)` covers the full keyspace.
 - Adjacent and overlapping ranges MAY be merged exactly; ranges separated by a
@@ -189,10 +194,11 @@ Requirements:
 
 R1 target path:
 
-- DB-level `DeleteRange` appends `RawKVBatch(DeleteRange)` before publishing a
-  range layer.
-- Batch `DeleteRange` appends the original canonical command payload before
-  publishing the corresponding range layer and point survivors.
+- DB-level `DeleteRange` first drops API no-op ranges, then appends
+  `RawKVBatch(DeleteRange)` before publishing a range layer.
+- Batch `DeleteRange` first canonicalizes/drops API no-op ranges, then appends
+  the original canonical command payload before publishing the corresponding
+  range layer and point survivors.
 - If command WAL append succeeds but layer publication/apply fails, the handle
   MUST be poisoned with recovery-required state, matching current
   `MarkCommandWALRecoveryRequired` behavior.
@@ -352,7 +358,10 @@ Minimum test matrix:
 
 1. Bound semantics:
    - no-op reversed/equal ranges;
-   - `DeleteRange(nil, []byte{})` no-op;
+   - API/cache overlay treats `DeleteRange(nil, []byte{})` as no-op and never
+     emits that non-canonical command-WAL frame;
+   - command-WAL validation/replay rejects `nil` start plus concrete empty end
+     if such a frame is encountered;
    - `DeleteRange([]byte{}, []byte("a"))` deletes the empty concrete key;
    - `DeleteRange(nil, nil)` full keyspace;
    - adjacent/overlap/duplicate ranges.
@@ -393,7 +402,8 @@ Implementation PRs must run the issue-prescribed shape from the latest head and
 compare against an identical baseline:
 
 ```sh
-GETH_REPO=/Users/michaelseiler/dev/snissn/go-ethereum \
+# Set GETH_REPO to a local go-ethereum checkout.
+GETH_REPO=/path/to/go-ethereum \
 ENGINES=treedb \
 KEYS=30000 READS=12000 \
 KEY_SHAPES=geth-mixed VALUE_SHAPES=geth-mixed VALUE_SIZES=128 \
