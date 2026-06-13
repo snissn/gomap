@@ -1316,6 +1316,9 @@ func corruptGroupedFramePayloadByte(t *testing.T, path string, ptr page.ValuePtr
 		t.Fatalf("OpenFile: %v", err)
 	}
 	defer func() { _ = fh.Close() }()
+	// ValuePtr.Offset points just after the record CRC prefix. Step back to the
+	// record start, then skip the value-log record header and grouped-frame
+	// header so the flipped byte lands inside the checksummed grouped payload.
 	corruptOff := int64(ptr.Offset-4) + valuelog.HeaderSize + valuelog.FrameHeaderSize
 	var b [1]byte
 	if _, err := fh.ReadAt(b[:], corruptOff); err != nil {
