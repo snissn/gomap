@@ -24,6 +24,10 @@ func BenchmarkAdapterVsDirect(b *testing.B) {
 		b.Run("adapter", benchAdapterBatchWrite)
 		b.Run("direct", benchDirectBatchWrite)
 	})
+	b.Run("BatchWriteReset", func(b *testing.B) {
+		b.Run("adapter", benchAdapterBatchWriteReset)
+		b.Run("direct", benchDirectBatchWriteReset)
+	})
 	b.Run("Iterator", func(b *testing.B) {
 		b.Run("adapter", benchAdapterIterator)
 		b.Run("direct", benchDirectIterator)
@@ -123,6 +127,50 @@ func benchDirectBatchWrite(b *testing.B) {
 		if err := batch.Write(); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func benchAdapterBatchWriteReset(b *testing.B) {
+	db := openBenchAdapter(b)
+	defer db.Close()
+	batch := db.NewBatchWithSize(16)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		base := i * 16
+		for j := 0; j < 16; j++ {
+			if err := batch.Put(benchKey(base+j), benchValue); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := batch.Write(); err != nil {
+			b.Fatal(err)
+		}
+		batch.Reset()
+	}
+}
+
+func benchDirectBatchWriteReset(b *testing.B) {
+	db := openBenchTreeDB(b)
+	defer db.Close()
+	batch := db.NewBatchWithSize(16)
+	resetter, ok := batch.(interface{ Reset() })
+	if !ok {
+		b.Fatal("direct TreeDB batch does not support Reset")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		base := i * 16
+		for j := 0; j < 16; j++ {
+			if err := batch.Set(benchKey(base+j), benchValue); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := batch.Write(); err != nil {
+			b.Fatal(err)
+		}
+		resetter.Reset()
 	}
 }
 
