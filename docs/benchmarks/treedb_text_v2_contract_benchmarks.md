@@ -109,7 +109,7 @@ Measured boundaries:
 - `delete_batch_text_v2_indexed`: explicit v2 `DeleteBatch` with generation and
   tombstone maintenance; setup excludes initial insert.
 
-Command:
+Small/default command:
 
 ```sh
 GOWORK=off \
@@ -121,6 +121,20 @@ go test ./TreeDB/collections \
   -benchtime=5x \
   -count=3 \
   | tee "$OUT/text_v2_write_paths.txt"
+```
+
+Larger local write-budget row for default-readiness PRs:
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_WRITE_DOCS=1024 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2ContractWritePaths2623/(insert_batch_text_v2_indexed|create_text_v2_index_backfill|update_batch_text_v2_indexed|delete_batch_text_v2_indexed)$' \
+  -benchmem \
+  -benchtime=3x \
+  -count=3 \
+  | tee "$OUT/text_v2_write_paths_1024_v2.txt"
 ```
 
 Report text write counters:
@@ -375,9 +389,26 @@ Report:
   `posting_blocks_deleted/op`;
 - `stale_postings_purged/op` and `tombstones_purged/op`;
 - post-rewrite search rows proving no hidden latency/allocation regression;
+- `TextIndexStorageStats` before/after state: `rewrite_merge_pending` should
+  become `compacted`, with micro/delta blocks and deleted-document tombstones
+  purged from the live root set;
 - storage maintenance evidence showing live posting/norm/docmap/positions values
   survive `ValueLogGC`/`CompactStorage`, while old root payloads are unreachable
   after snapshots release.
+
+Maintenance-budget interpretation for default-readiness PRs:
+
+- `TextIndexStorageStats` is a scanning validation/audit tool. Use it in
+  maintenance, tests, and benchmark setup/teardown; do not place it in serving
+  health paths.
+- Treat `rewrite_merge_pending` as logical maintenance debt. Schedule
+  `RewriteTextIndex` when micro/delta posting blocks, deleted ordinals,
+  `posting_blocks/doc`, or `write_amp_entries/doc` materially drift above the
+  fresh backfill/write rows for the workload.
+- `RewriteTextIndex` is logical root maintenance only. Physical reclamation must
+  remain a normal TreeDB sequence after old snapshots release: checkpoint,
+  `ValueLogGC`, value-log rewrite when the rewrite plan shows stale source
+  bytes, leaf maintenance/index vacuum, or `CompactStorage`.
 
 Default selection after #2630 remains explicit v2 opt-in unless the final matrix
 and rollout/default-bootstrap work are accepted in the same PR. If v1 remains the

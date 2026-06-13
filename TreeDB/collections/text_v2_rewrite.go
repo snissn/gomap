@@ -375,13 +375,7 @@ func (p *textV2RewritePlan) processRewriteTerm(
 	p.stats.StalePostingsPurged += term.stale
 	live := make([]textV2PostingBlockEntry, 0, len(term.liveByOrd))
 	for _, entry := range term.liveByOrd {
-		live = append(live, textV2PostingBlockEntry{
-			Ordinal:          entry.Ordinal,
-			Generation:       entry.Generation,
-			TermFrequency:    entry.TermFrequency,
-			FieldFrequencies: append([]uint32(nil), entry.FieldFrequencies...),
-			Flags:            entry.Flags,
-		})
+		live = append(live, entry)
 	}
 	sort.Slice(live, func(i, j int) bool { return live[i].Ordinal < live[j].Ordinal })
 	p.stats.LivePostingsRetained += uint64(len(live))
