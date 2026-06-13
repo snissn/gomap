@@ -16,16 +16,17 @@ const HybridFusionDefaultRRFK = 60
 // documents; callers must pass the already-bounded candidate lists they want to
 // fuse.
 //
-// The zero-value fusion method and tie policy use the #2502 contract defaults:
-// reciprocal-rank fusion and fused_score_best_rank_source_order_id. For RRF,
-// RRFK=0 means HybridFusionDefaultRRFK. topK bounds only the returned result
-// slice; counters still describe the full supplied candidate set.
+// The zero-value fusion method and tie policy use the #2502/#2729 contract
+// defaults: reciprocal-rank fusion and fused_score_best_rank_source_order_id.
+// For RRF methods, RRFK=0 means HybridFusionDefaultRRFK. Normalized-score fusion
+// is exact over the supplied candidates only. topK bounds only the returned
+// result slice; counters still describe the full supplied candidate set.
 func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion HybridFusionOptions, topK int) ([]HybridSearchResult, HybridSearchStats, error) {
 	method := fusion.Method
 	if method == "" {
 		method = HybridFusionMethodRRF
 	}
-	if method != HybridFusionMethodRRF {
+	if method != HybridFusionMethodRRF && method != HybridFusionMethodWeightedRRF && method != HybridFusionMethodNormalizedScore {
 		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid fusion method %q", ErrHybridSearchUnsupported, method)
 	}
 
@@ -49,6 +50,18 @@ func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion Hybri
 	if err != nil {
 		return nil, HybridSearchStats{}, err
 	}
+	weights := hybridFusionSourceWeights{text: 1, vector: 1}
+	if method == HybridFusionMethodWeightedRRF || method == HybridFusionMethodNormalizedScore {
+		var err error
+		weights, err = normalizeHybridFusionSourceWeights(fusion)
+		if err != nil {
+			return nil, HybridSearchStats{}, err
+		}
+	}
+	scoreRanges, err := hybridFusionScoreRanges(candidates, method, sourceOrder)
+	if err != nil {
+		return nil, HybridSearchStats{}, err
+	}
 
 	stats := HybridSearchStats{CandidatesFused: uint64(len(candidates))}
 	if len(candidates) == 0 {
@@ -61,12 +74,11 @@ func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion Hybri
 		if candidate.SourceRank <= 0 {
 			return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid candidate source_rank must be one-based", ErrHybridSearchUnsupported)
 		}
-		denominator := rrfK + candidate.SourceRank
-		if denominator <= 0 {
-			return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid fusion rrf denominator overflow", ErrHybridSearchUnsupported)
-		}
-
 		if _, err := hybridFusionSourceRank(candidate.Source, sourceOrder); err != nil {
+			return nil, HybridSearchStats{}, err
+		}
+		contribution, err := hybridSourceContributionFromCandidate(candidate, method, rrfK, weights, scoreRanges)
+		if err != nil {
 			return nil, HybridSearchStats{}, err
 		}
 
@@ -78,7 +90,7 @@ func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion Hybri
 			accumulators = append(accumulators, hybridFusionAccumulator{idKey: idKey})
 		}
 
-		if accumulators[idx].add(candidate, denominator) {
+		if accumulators[idx].add(contribution) {
 			stats.FusionDuplicateCandidates++
 		}
 	}
@@ -145,9 +157,8 @@ type hybridFusionAccumulator struct {
 // add returns true when the candidate was a duplicate for the same exact
 // document ID and source. Same-source duplicates keep the best source-rank
 // contribution and never double-count RRF score.
-func (acc *hybridFusionAccumulator) add(candidate HybridSearchCandidate, denominator int) bool {
-	contribution := hybridSourceContributionFromCandidate(candidate, denominator)
-	switch candidate.Source {
+func (acc *hybridFusionAccumulator) add(contribution HybridSourceContribution) bool {
+	switch contribution.Source {
 	case HybridCandidateSourceText:
 		if acc.hasText {
 			if hybridSourceContributionPreferred(contribution, acc.text) {
@@ -224,15 +235,55 @@ func (acc hybridFusionAccumulator) sources(sourceOrder hybridFusionSourceOrder) 
 	return []HybridSourceContribution{cloneHybridSourceContribution(acc.vector)}
 }
 
-func hybridSourceContributionFromCandidate(candidate HybridSearchCandidate, denominator int) HybridSourceContribution {
+func hybridSourceContributionFromCandidate(candidate HybridSearchCandidate, method HybridFusionMethod, rrfK int, weights hybridFusionSourceWeights, ranges hybridFusionScoreRangesBySource) (HybridSourceContribution, error) {
+	fusionScore, err := hybridFusionContributionScore(candidate, method, rrfK, weights, ranges)
+	if err != nil {
+		return HybridSourceContribution{}, err
+	}
 	return HybridSourceContribution{
 		Source:      candidate.Source,
 		IndexName:   candidate.IndexName,
 		SourceRank:  candidate.SourceRank,
 		Score:       candidate.Score,
 		ScoreKind:   candidate.ScoreKind,
-		FusionScore: 1.0 / float64(denominator),
+		FusionScore: fusionScore,
 		TextMatches: candidate.TextMatches,
+	}, nil
+}
+
+func hybridFusionContributionScore(candidate HybridSearchCandidate, method HybridFusionMethod, rrfK int, weights hybridFusionSourceWeights, ranges hybridFusionScoreRangesBySource) (float64, error) {
+	switch method {
+	case HybridFusionMethodRRF:
+		denominator := rrfK + candidate.SourceRank
+		if denominator <= 0 {
+			return 0, fmt.Errorf("%w: hybrid fusion rrf denominator overflow", ErrHybridSearchUnsupported)
+		}
+		return 1 / float64(denominator), nil
+	case HybridFusionMethodWeightedRRF:
+		weight, err := weights.weight(candidate.Source)
+		if err != nil {
+			return 0, err
+		}
+		denominator := rrfK + candidate.SourceRank
+		if denominator <= 0 {
+			return 0, fmt.Errorf("%w: hybrid fusion rrf denominator overflow", ErrHybridSearchUnsupported)
+		}
+		return weight / float64(denominator), nil
+	case HybridFusionMethodNormalizedScore:
+		weight, err := weights.weight(candidate.Source)
+		if err != nil {
+			return 0, err
+		}
+		if math.IsNaN(candidate.Score) || math.IsInf(candidate.Score, 0) {
+			return 0, fmt.Errorf("%w: hybrid normalized-score fusion requires finite source scores", ErrHybridSearchUnsupported)
+		}
+		normalized, err := ranges.normalized(candidate.Source, candidate.Score)
+		if err != nil {
+			return 0, err
+		}
+		return weight * normalized, nil
+	default:
+		return 0, fmt.Errorf("%w: hybrid fusion method %q", ErrHybridSearchUnsupported, method)
 	}
 }
 
@@ -323,6 +374,121 @@ func hybridFusionSourceRank(source HybridCandidateSource, sourceOrder hybridFusi
 	default:
 		return 0, fmt.Errorf("%w: hybrid candidate source %q", ErrHybridSearchUnsupported, source)
 	}
+}
+
+type hybridFusionSourceWeights struct {
+	text   float64
+	vector float64
+}
+
+func normalizeHybridFusionSourceWeights(fusion HybridFusionOptions) (hybridFusionSourceWeights, error) {
+	weights := hybridFusionSourceWeights{text: fusion.TextWeight, vector: fusion.VectorWeight}
+	if weights.text == 0 {
+		weights.text = 1
+	}
+	if weights.vector == 0 {
+		weights.vector = 1
+	}
+	if !hybridFusionWeightOK(weights.text) || !hybridFusionWeightOK(weights.vector) {
+		return hybridFusionSourceWeights{}, fmt.Errorf("%w: hybrid fusion source weights must be finite and non-negative", ErrHybridSearchUnsupported)
+	}
+	return weights, nil
+}
+
+func hybridFusionWeightOK(weight float64) bool {
+	return weight >= 0 && !math.IsNaN(weight) && !math.IsInf(weight, 0)
+}
+
+func (w hybridFusionSourceWeights) weight(source HybridCandidateSource) (float64, error) {
+	switch source {
+	case HybridCandidateSourceText:
+		return w.text, nil
+	case HybridCandidateSourceVector:
+		return w.vector, nil
+	default:
+		return 0, fmt.Errorf("%w: hybrid candidate source %q", ErrHybridSearchUnsupported, source)
+	}
+}
+
+type hybridFusionScoreRange struct {
+	min  float64
+	max  float64
+	seen bool
+}
+
+type hybridFusionScoreRangesBySource struct {
+	text   hybridFusionScoreRange
+	vector hybridFusionScoreRange
+}
+
+func hybridFusionScoreRanges(candidates []HybridSearchCandidate, method HybridFusionMethod, sourceOrder hybridFusionSourceOrder) (hybridFusionScoreRangesBySource, error) {
+	var ranges hybridFusionScoreRangesBySource
+	for _, candidate := range candidates {
+		if candidate.SourceRank <= 0 {
+			return ranges, fmt.Errorf("%w: hybrid candidate source_rank must be one-based", ErrHybridSearchUnsupported)
+		}
+		if _, err := hybridFusionSourceRank(candidate.Source, sourceOrder); err != nil {
+			return ranges, err
+		}
+		if method != HybridFusionMethodNormalizedScore {
+			continue
+		}
+		if math.IsNaN(candidate.Score) || math.IsInf(candidate.Score, 0) {
+			return ranges, fmt.Errorf("%w: hybrid normalized-score fusion requires finite source scores", ErrHybridSearchUnsupported)
+		}
+		rangeForSource := ranges.rangeForSource(candidate.Source)
+		if rangeForSource == nil {
+			return ranges, fmt.Errorf("%w: hybrid candidate source %q", ErrHybridSearchUnsupported, candidate.Source)
+		}
+		rangeForSource.include(candidate.Score)
+	}
+	return ranges, nil
+}
+
+func (r *hybridFusionScoreRangesBySource) rangeForSource(source HybridCandidateSource) *hybridFusionScoreRange {
+	switch source {
+	case HybridCandidateSourceText:
+		return &r.text
+	case HybridCandidateSourceVector:
+		return &r.vector
+	default:
+		return nil
+	}
+}
+
+func (r *hybridFusionScoreRange) include(score float64) {
+	if !r.seen {
+		r.min = score
+		r.max = score
+		r.seen = true
+		return
+	}
+	if score < r.min {
+		r.min = score
+	}
+	if score > r.max {
+		r.max = score
+	}
+}
+
+func (r hybridFusionScoreRangesBySource) normalized(source HybridCandidateSource, score float64) (float64, error) {
+	var scoreRange hybridFusionScoreRange
+	switch source {
+	case HybridCandidateSourceText:
+		scoreRange = r.text
+	case HybridCandidateSourceVector:
+		scoreRange = r.vector
+	default:
+		return 0, fmt.Errorf("%w: hybrid candidate source %q", ErrHybridSearchUnsupported, source)
+	}
+	if !scoreRange.seen {
+		return 0, fmt.Errorf("%w: hybrid normalized-score fusion missing source range for %q", ErrHybridSearchUnsupported, source)
+	}
+	span := scoreRange.max - scoreRange.min
+	if span == 0 {
+		return 1, nil
+	}
+	return (score - scoreRange.min) / span, nil
 }
 
 func cloneHybridSourceContribution(in HybridSourceContribution) HybridSourceContribution {

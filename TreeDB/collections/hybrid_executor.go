@@ -24,6 +24,7 @@ type hybridSearchExecutionPlan struct {
 	scalarFilter         *HybridScalarFilter
 	scalarFilterStrategy HybridScalarFilterStrategy
 	fusion               HybridFusionOptions
+	resultMode           HybridResultMode
 	topK                 int
 	scalarLookupLimit    int
 }
@@ -85,12 +86,15 @@ func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchRespons
 	} else if response.Stats.CandidatesAfterFilter == 0 {
 		response.Stats.CandidatesAfterFilter = uint64(len(results))
 	}
+	if plan.resultMode == HybridResultModeScoreOnly {
+		hybridStripResultSources(results)
+	}
 	response.Results = results
 
 	if err := hybridSearchCheckCurrentSnapshot(c.db.State(), baseState); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
-	if opts.IncludeDocuments {
+	if plan.resultMode == HybridResultModeFull {
 		if err := c.hybridFetchResultDocuments(&response, opts.DocumentFetchOptions, baseState); err != nil {
 			reason := HybridFailClosedReasonDocumentFetchUnavailable
 			if errors.Is(err, ErrHybridSearchStaleIndex) {
@@ -119,9 +123,16 @@ func planHybridSearch(opts HybridSearchOptions) (hybridSearchExecutionPlan, erro
 		return plan, fmt.Errorf("%w: hybrid search requires at least one text or vector source", ErrHybridSearchUnsupported)
 	}
 
+	resultMode, err := normalizeHybridResultMode(opts.ResultMode, opts.IncludeDocuments, opts.DocumentFetchOptions)
+	if err != nil {
+		return plan, err
+	}
+
 	plan.topK = opts.TopK
 	plan.fusion = opts.Fusion
+	plan.resultMode = resultMode
 	plan.public.FinalTopK = opts.TopK
+	plan.public.ResultMode = resultMode
 	plan.public.FusionMethod = opts.Fusion.Method
 	if plan.public.FusionMethod == "" {
 		plan.public.FusionMethod = HybridFusionMethodRRF
@@ -170,6 +181,32 @@ func planHybridSearch(opts HybridSearchOptions) (hybridSearchExecutionPlan, erro
 		plan.scalarLookupLimit = hybridScalarLookupLimit(plan)
 	}
 	return plan, nil
+}
+
+func normalizeHybridResultMode(mode HybridResultMode, includeDocuments bool, fetchOptions DocumentFetchOptions) (HybridResultMode, error) {
+	if mode == "" {
+		if includeDocuments {
+			return HybridResultModeFull, nil
+		}
+		if vectorIndexDocumentFetchOptionsNonZero(fetchOptions) {
+			return "", fmt.Errorf("%w: hybrid result mode %q cannot set document_fetch_options", ErrHybridSearchUnsupported, HybridResultModeCompact)
+		}
+		return HybridResultModeCompact, nil
+	}
+	switch mode {
+	case HybridResultModeCompact, HybridResultModeScoreOnly:
+		if includeDocuments {
+			return "", fmt.Errorf("%w: hybrid result mode %q conflicts with include_documents=true", ErrHybridSearchUnsupported, mode)
+		}
+		if vectorIndexDocumentFetchOptionsNonZero(fetchOptions) {
+			return "", fmt.Errorf("%w: hybrid result mode %q cannot set document_fetch_options", ErrHybridSearchUnsupported, mode)
+		}
+		return mode, nil
+	case HybridResultModeFull:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("%w: hybrid result mode %q", ErrHybridSearchUnsupported, mode)
+	}
 }
 
 func hybridDefaultCandidateLimit(topK int) int {
@@ -337,7 +374,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 		if plan.vector == nil {
 			return nil
 		}
-		response, err := c.SearchHybridVectorCandidates(*plan.vector)
+		response, err := c.searchHybridVectorCandidates(*plan.vector, allowSet)
 		hybridMergeStats(&stats, response.Stats)
 		if err != nil {
 			return hybridCandidateSourceError{source: HybridCandidateSourceVector, err: err}
@@ -619,6 +656,12 @@ func hybridCandidateErrorFailClosedReason(err error) HybridFailClosedReason {
 		return HybridFailClosedReasonVectorIndexUnavailable
 	default:
 		return HybridFailClosedReasonUnsupported
+	}
+}
+
+func hybridStripResultSources(results []HybridSearchResult) {
+	for i := range results {
+		results[i].Sources = nil
 	}
 }
 

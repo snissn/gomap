@@ -74,11 +74,17 @@ depend on a scan-all-documents fallback.
   bounded lookup truncates or the index is absent.
 - `ScalarFilterStrategy`: one of `prefilter`, `postfilter`, `text_first`,
   `vector_first`, or `union_fusion`.
-- `Fusion`: deterministic fusion options. The first supported method is
-  reciprocal-rank fusion (`rrf`). `RRFK=0` means the implementation default of
-  `60`.
-- `IncludeDocuments` and `DocumentFetchOptions`: apply only after final top-k
-  fusion.
+- `Fusion`: deterministic fusion options. Supported methods are reciprocal-rank
+  fusion (`rrf`), weighted reciprocal-rank fusion (`weighted_rrf`), and exact
+  per-source min/max normalized score fusion (`normalized_score`). `RRFK=0`
+  means the implementation default of `60`; source weights are ignored by plain
+  `rrf` and apply only to `weighted_rrf`/`normalized_score`, where zero weights
+  default to `1`.
+- `ResultMode`: `score_only`, `compact`, or `full`. The zero value preserves the
+  legacy behavior: `compact` unless `IncludeDocuments=true`, which selects
+  `full`.
+- `IncludeDocuments` and `DocumentFetchOptions`: legacy/full-mode controls that
+  apply only after final top-k fusion.
 - `Consistency`: snapshot binding mode. The zero value means
   `current_snapshot`.
 - `Debug.IncludeCandidates`: optional candidate echo. Counters must remain
@@ -104,7 +110,15 @@ broad filters that exceed the bound still fail closed with
 `scalar_filter_unbounded`. v2 text search consumes scalar allow-sets during
 posting-block scans so scalar-filtered candidate generation can score only
 allowed documents while preserving the single-snapshot, zero-document-fetch
-contract.
+contract. Vector candidate generation consumes selective bounded allow-sets on a
+no-document exact score route only when both the allow-set cardinality is no
+larger than the configured vector candidate budget and the vector index row count
+is within the implementation's exact allow-set scan budget. Broader allow-sets or
+larger vector indexes stay on the existing global vector candidate route plus
+bounded ID filtering rather than fetching documents. In that fallback route,
+scalar-allowed vector hits outside the global vector candidate budget may be
+omitted; callers that need stricter scalar-filtered vector recall must choose a
+larger vector candidate budget or wait for an ID-to-vector-ordinal lookup route.
 
 ## Candidate and result shape
 
@@ -123,9 +137,10 @@ Every `HybridSearchCandidate` MUST carry:
 Final `HybridSearchResult` values carry:
 
 - `ID`, final one-based `Rank`, and higher-is-better `FusedScore`;
-- one `HybridSourceContribution` per source that contributed to the document;
-- optional `Document`/`DocumentFound`, populated only when `IncludeDocuments` is
-  true and only after top-k fusion.
+- one `HybridSourceContribution` per source in `compact` and `full` result
+  modes; `score_only` omits source payloads after fusion;
+- optional `Document`/`DocumentFound`, populated only in `full` mode (or legacy
+  `IncludeDocuments=true`) and only after top-k fusion.
 
 Candidate-generation paths MUST produce response-owned/caller-safe document IDs
 at the API boundary. Newly-created collection text indexes use the text-v2
@@ -150,16 +165,29 @@ attribution, debugging, reranking seams, and future fusion methods.
 
 ## Fusion contract
 
-The first default fusion method is reciprocal-rank fusion:
+The default fusion method is reciprocal-rank fusion:
 
 ```text
-rrf_contribution = source_weight / (RRFK + SourceRank)
+rrf_contribution = 1 / (RRFK + SourceRank)
 fused_score = sum(rrf_contribution for every contributing source)
 ```
 
-Initial source weights are `1.0` for text and `1.0` for vector unless a later
-PR extends `HybridFusionOptions` with explicit weighting. `RRFK=0` in options
-means use `60`.
+Plain `rrf` ignores `TextWeight` and `VectorWeight`. `weighted_rrf` uses the
+same denominator with explicit source weights:
+
+```text
+weighted_rrf_contribution = source_weight / (RRFK + SourceRank)
+```
+
+Source weights are `1.0` for text and `1.0` for vector when their option fields
+are zero for weighted methods.
+
+`normalized_score` is exact over the supplied bounded candidate lists. It builds
+one finite min/max native-score range per source, normalizes each source score as
+`(score-min)/(max-min)`, uses `1` when all scores for that source are equal, and
+sums weighted normalized contributions. It does not estimate unseen candidates or
+fetch documents to expand a source list; callers must choose candidate budgets
+that cover their desired recall boundary.
 
 `HybridFusionTiePolicyScoreBestRankSourceID`
 (`fused_score_best_rank_source_order_id`) is the deterministic total order for
@@ -196,7 +224,11 @@ appears in both sources has one final result with two source contributions.
 The planner records the actual chosen strategy in `HybridSearchPlan` and uses
 `HybridSearchStats` counters such as `scalar_prefilter_ids`,
 `scalar_postfilter_checks`, `scalar_filter_matched`, and
-`scalar_filter_rejected`.
+`scalar_filter_rejected`. When a selective allow-set is pushed into the vector
+candidate adapter, `scalar_filter_rejected` also includes vector rows pruned
+before vector scoring; matched/check counters for returned candidates are still
+recorded once by the executor's bounded ID filter. No primary-document predicate
+scan is implied.
 
 ## Snapshot and epoch consistency
 

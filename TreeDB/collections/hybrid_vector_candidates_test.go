@@ -56,6 +56,20 @@ func TestSearchHybridVectorCandidatesNoDocumentsStableIDs2503(t *testing.T) {
 	}
 }
 
+func TestHybridVectorAllowSetExactScanBudget2729(t *testing.T) {
+	allowSet := hybridScalarAllowSet{"doc-a": {}}
+	query := HybridVectorQuery{CandidateLimit: 1, Query: []float32{1, 0, 0}}
+	if !hybridVectorCandidateUseExactAllowSet(query, allowSet) {
+		t.Fatalf("expected small allow-set to be eligible before row-count budget")
+	}
+	if !hybridVectorAllowSetExactScanEligible(hybridVectorScalarPrefilterExactMaxScanRows) {
+		t.Fatalf("row count at scan budget should be eligible")
+	}
+	if hybridVectorAllowSetExactScanEligible(hybridVectorScalarPrefilterExactMaxScanRows + 1) {
+		t.Fatalf("row count above scan budget should not use exact allow-set scan")
+	}
+}
+
 func TestSearchHybridVectorCandidatesUnsupportedShapesFailClosed2503(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}}
 	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
