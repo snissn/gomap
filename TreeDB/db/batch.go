@@ -301,7 +301,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		newRoot, retired, metrics, err = z.Apply(rootID, b.batch)
 	}
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
+	b.db.observeFlushApplyPreparedOutput(metrics, len(retired))
 	if err != nil {
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
 		if freeErr != nil {
@@ -315,6 +317,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	entries, ranges := b.batch.ApplyPlan()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
 	if err != nil {
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
 		if freeErr != nil {
@@ -337,6 +340,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	b.db.mu.RUnlock()
 	if currentRoot != rootID {
 		b.db.observeFlushApplyMismatch()
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 		b.db.commitMu.Unlock()
 		freeErr := tracker.FreeAll()
@@ -352,6 +356,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 			b.db.commitMu.Unlock()
 			freeErr := tracker.FreeAll()
@@ -372,9 +377,11 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 	b.db.commitMu.Unlock()
 	if err != nil {
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
+	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
 	vlogRefDelta = nil
 	b.db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	b.db.finalizeCommitPostWork(post)
@@ -425,12 +432,15 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 		newRoot, retired, metrics, err = idx.zipper.Apply(rootID, b.batch)
 	}
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
+	b.db.observeFlushApplyPreparedOutput(metrics, len(retired))
 	if err != nil {
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
 	}
 	entries, ranges := b.batch.ApplyPlan()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
 	if err != nil {
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
 	}
 	defer func() {
@@ -443,6 +453,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	if b.db.meta.UserRootPageID != rootID {
 		// This should not happen if writeMu is held and we are the only writer.
 		b.db.observeFlushApplyMismatch()
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		b.db.mu.Unlock()
 		return fmt.Errorf("concurrent modification detected during batch write")
 	}
@@ -457,6 +468,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 			return err
 		}
@@ -464,11 +476,13 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 	if err != nil {
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		if intent != nil {
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 		return err
 	}
+	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
 	vlogRefDelta = nil
 	b.db.finalizeCommitPostWork(post)
 	b.db.clearLeafGenerationReachabilityCaches()
