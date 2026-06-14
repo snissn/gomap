@@ -46,8 +46,8 @@ func TestTextV2MaintenancePolicyTriggerSkipAndStats2732(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaintainTextIndex apply: %v", err)
 	}
-	if applied.IndexesRewritten != 1 || len(applied.Indexes) != 1 || !applied.Indexes[0].Triggered || !applied.Indexes[0].Applied || applied.Indexes[0].TriggerReason != TextIndexMaintenanceTriggerReasonDeletedDocs {
-		t.Fatalf("apply stats=%+v want triggered applied rewrite", applied)
+	if applied.IndexesRewritten != 1 || len(applied.Indexes) != 1 || !applied.Indexes[0].Triggered || !applied.Indexes[0].Applied || applied.Indexes[0].TriggerReason != TextIndexMaintenanceTriggerReasonDeletedDocs || applied.Indexes[0].SkippedReason != "" {
+		t.Fatalf("apply stats=%+v want triggered applied rewrite without skipped reason", applied)
 	}
 	idx := applied.Indexes[0]
 	if idx.Debt.DeletedDocuments == 0 || idx.Debt.MicroPostingBlocks == 0 || idx.Debt.StalePostings == 0 || idx.Rewrite.StalePostingsPurged == 0 {

@@ -435,7 +435,7 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	stats := plan.stats
 	stats.RootGenerationAfter = plan.nextStatus.RootGeneration
-	return stats, beforeStats, "applied", nil
+	return stats, beforeStats, "", nil
 }
 
 func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, opts TextIndexRewriteOptions, budget *textV2RewriteBudget) (*textV2RewritePlan, error) {
