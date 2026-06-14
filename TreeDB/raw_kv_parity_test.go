@@ -7,6 +7,24 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
+func requireRawKVMissing(t *testing.T, db *DB, key []byte) {
+	t.Helper()
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", key, err)
+	}
+	if got != nil {
+		t.Fatalf("Get(%q)=%q want missing", key, got)
+	}
+	has, err := db.Has(key)
+	if err != nil {
+		t.Fatalf("Has(%q): %v", key, err)
+	}
+	if has {
+		t.Fatalf("Has(%q)=true, want false", key)
+	}
+}
+
 func requireRawKVValue(t *testing.T, db *DB, key []byte, want []byte) {
 	t.Helper()
 	got, err := db.Get(key)
@@ -267,6 +285,53 @@ func TestReopenEmptyKeyNilValueValueLogPointer(t *testing.T) {
 	requireRawKVValue(t, reopen, []byte{}, []byte("pointer-value"))
 	requireRawKVValue(t, reopen, nil, []byte("pointer-value"))
 	requireRawKVValue(t, reopen, []byte("zero"), []byte{})
+}
+
+func TestCommandWALRawKVDeleteRangeSpanReopen(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	for _, kv := range []struct{ k, v string }{{"a", "va"}, {"b", "vb"}, {"z", "vz"}} {
+		if err := db.Set([]byte(kv.k), []byte(kv.v)); err != nil {
+			_ = db.Close()
+			t.Fatalf("Set(%s): %v", kv.k, err)
+		}
+	}
+	if err := db.DeleteRange([]byte("a"), []byte("c")); err != nil {
+		_ = db.Close()
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	requireRawKVMissing(t, db, []byte("a"))
+	requireRawKVMissing(t, db, []byte("b"))
+	requireRawKVValue(t, db, []byte("z"), []byte("vz"))
+	stats := db.Stats()
+	if got := stats["treedb.cache.delete_range.materialized_keys_total"]; got != "0" {
+		_ = db.Close()
+		t.Fatalf("materialized_keys_total=%s want 0", got)
+	}
+	if got := stats["treedb.cache.range_span.active_spans"]; got != "1" {
+		_ = db.Close()
+		t.Fatalf("active_spans=%s want 1", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true})
+	if err != nil {
+		t.Fatalf("Reopen command WAL: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	requireRawKVMissing(t, reopen, []byte("a"))
+	requireRawKVMissing(t, reopen, []byte("b"))
+	requireRawKVValue(t, reopen, []byte("z"), []byte("vz"))
 }
 
 func TestCommandWALRawKVParityEmptyKeyNilValueReopen(t *testing.T) {
