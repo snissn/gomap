@@ -79,6 +79,139 @@ func (db *DB) observeForegroundFlushAssist(wait time.Duration, flushed int) {
 	}
 }
 
+const flushCoordinatorProgressWait = 10 * time.Millisecond
+
+func (db *DB) beginFlushCoordinatorPass() {
+	if db == nil {
+		return
+	}
+	db.flushCoordinatorActive.Add(1)
+	db.signalFlushCoordinatorWaiters()
+}
+
+func (db *DB) endFlushCoordinatorPass() {
+	if db == nil {
+		return
+	}
+	if active := db.flushCoordinatorActive.Add(-1); active < 0 {
+		db.flushCoordinatorActive.Store(0)
+	}
+	db.signalFlushCoordinatorWaiters()
+}
+
+func (db *DB) beginFlushCoordinatorWork(bytes int64) {
+	if db == nil {
+		return
+	}
+	if bytes > 0 {
+		db.flushCoordinatorInFlightBytes.Add(bytes)
+	}
+	db.signalFlushCoordinatorWaiters()
+}
+
+func (db *DB) finishFlushCoordinatorWork(bytes int64, success bool) {
+	if db == nil {
+		return
+	}
+	if bytes > 0 {
+		if inFlight := db.flushCoordinatorInFlightBytes.Add(-bytes); inFlight < 0 {
+			db.flushCoordinatorInFlightBytes.Store(0)
+		}
+	}
+	if !success {
+		db.flushCoordinatorErrors.Add(1)
+	}
+	db.signalFlushCoordinatorWaiters()
+}
+
+func (db *DB) recordFlushCoordinatorProgress() {
+	if db == nil {
+		return
+	}
+	db.flushCoordinatorProgress.Add(1)
+	db.signalFlushCoordinatorWaiters()
+}
+
+func (db *DB) signalFlushCoordinatorWaiters() {
+	if db == nil {
+		return
+	}
+	db.flushCoordinatorWaitMu.Lock()
+	if db.flushCoordinatorWaitCh == nil {
+		db.flushCoordinatorWaitCh = make(chan struct{})
+	}
+	close(db.flushCoordinatorWaitCh)
+	db.flushCoordinatorWaitCh = make(chan struct{})
+	db.flushCoordinatorWaitMu.Unlock()
+}
+
+func (db *DB) flushCoordinatorWaitSnapshot() (uint64, <-chan struct{}) {
+	if db == nil {
+		return 0, nil
+	}
+	db.flushCoordinatorWaitMu.Lock()
+	if db.flushCoordinatorWaitCh == nil {
+		db.flushCoordinatorWaitCh = make(chan struct{})
+	}
+	progress := db.flushCoordinatorProgress.Load()
+	ch := db.flushCoordinatorWaitCh
+	db.flushCoordinatorWaitMu.Unlock()
+	return progress, ch
+}
+
+func (db *DB) waitForActiveFlushProgress(beforeBacklog, targetBacklog int64, timeout time.Duration) bool {
+	if db == nil || db.flushCoordinatorActive.Load() <= 0 || db.flushCoordinatorInFlightBytes.Load() <= 0 {
+		return false
+	}
+	if timeout <= 0 {
+		timeout = flushCoordinatorProgressWait
+	}
+	progress, ch := db.flushCoordinatorWaitSnapshot()
+	if ch == nil {
+		return false
+	}
+	start := time.Now()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-ch:
+		db.flushApplyCoordinatorProgressWaits.Add(1)
+		addCacheDurationNs(&db.flushApplyCoordinatorProgressWaitNs, time.Since(start))
+		nowBacklog := db.queueBacklogBytes.Load()
+		return nowBacklog < targetBacklog || nowBacklog < beforeBacklog || db.flushCoordinatorProgress.Load() != progress
+	case <-timer.C:
+		db.flushApplyCoordinatorProgressWaits.Add(1)
+		addCacheDurationNs(&db.flushApplyCoordinatorProgressWaitNs, time.Since(start))
+		db.flushApplyCoordinatorStallWaits.Add(1)
+		return false
+	}
+}
+
+func (db *DB) flushCoordinatorForegroundYieldEnabled() bool {
+	return db != nil && db.flushApplyConcurrency > 1
+}
+
+func (db *DB) foregroundAssistYieldToActiveFlush(backlog, stopBytes int64) bool {
+	if db == nil || !db.flushCoordinatorForegroundYieldEnabled() || stopBytes <= 0 || backlog < stopBytes || db.flushCoordinatorActive.Load() <= 0 {
+		return false
+	}
+	inFlight := db.flushCoordinatorInFlightBytes.Load()
+	if inFlight <= 0 {
+		return false
+	}
+	effectiveBacklog := backlog - inFlight
+	if effectiveBacklog < 0 {
+		effectiveBacklog = 0
+	}
+	if effectiveBacklog >= stopBytes {
+		db.flushApplyCoordinatorHardOverloadYields.Add(1)
+		return true
+	}
+	db.flushApplyCoordinatorActiveAssistSkips.Add(1)
+	return true
+}
+
 func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	if db == nil || stats == nil {
 		return
@@ -99,4 +232,14 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	stats["treedb.cache.flush_apply.foreground_assist_calls_total"] = fmt.Sprintf("%d", db.flushApplyForegroundAssistCalls.Load())
 	stats["treedb.cache.flush_apply.foreground_assist_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyForegroundAssistWaitNs.Load())
 	stats["treedb.cache.flush_apply.foreground_assist_flushes_total"] = fmt.Sprintf("%d", db.flushApplyForegroundAssistFlushes.Load())
+	stats["treedb.cache.flush_apply.coordinator.active"] = fmt.Sprintf("%d", db.flushCoordinatorActive.Load())
+	stats["treedb.cache.flush_apply.coordinator.in_flight_bytes"] = fmt.Sprintf("%d", db.flushCoordinatorInFlightBytes.Load())
+	stats["treedb.cache.flush_apply.coordinator.progress_total"] = fmt.Sprintf("%d", db.flushCoordinatorProgress.Load())
+	stats["treedb.cache.flush_apply.coordinator.errors_total"] = fmt.Sprintf("%d", db.flushCoordinatorErrors.Load())
+	stats["treedb.cache.flush_apply.coordinator.active_assist_skips_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorActiveAssistSkips.Load())
+	stats["treedb.cache.flush_apply.coordinator.progress_waits_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorProgressWaits.Load())
+	stats["treedb.cache.flush_apply.coordinator.progress_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorProgressWaitNs.Load())
+	stats["treedb.cache.flush_apply.coordinator.stall_waits_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorStallWaits.Load())
+	stats["treedb.cache.flush_apply.coordinator.blocking_fallbacks_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorBlockingFallbacks.Load())
+	stats["treedb.cache.flush_apply.coordinator.hard_overload_yields_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorHardOverloadYields.Load())
 }

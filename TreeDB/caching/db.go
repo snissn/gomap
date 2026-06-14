@@ -7890,6 +7890,18 @@ type DB struct {
 	flushApplyForegroundAssistCalls                              atomic.Uint64
 	flushApplyForegroundAssistWaitNs                             atomic.Uint64
 	flushApplyForegroundAssistFlushes                            atomic.Uint64
+	flushCoordinatorActive                                       atomic.Int64
+	flushCoordinatorInFlightBytes                                atomic.Int64
+	flushCoordinatorProgress                                     atomic.Uint64
+	flushCoordinatorErrors                                       atomic.Uint64
+	flushCoordinatorWaitMu                                       sync.Mutex
+	flushCoordinatorWaitCh                                       chan struct{}
+	flushApplyCoordinatorActiveAssistSkips                       atomic.Uint64
+	flushApplyCoordinatorProgressWaits                           atomic.Uint64
+	flushApplyCoordinatorProgressWaitNs                          atomic.Uint64
+	flushApplyCoordinatorStallWaits                              atomic.Uint64
+	flushApplyCoordinatorBlockingFallbacks                       atomic.Uint64
+	flushApplyCoordinatorHardOverloadYields                      atomic.Uint64
 	lastForegroundWriteUnixNano                                  atomic.Int64
 	lastForegroundReadUnixNano                                   atomic.Int64
 	foregroundReadStampCounter                                   atomic.Uint32
@@ -10782,6 +10794,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		hashSortedIndexer:                    indexer,
 		closeCh:                              make(chan struct{}),
 		flushCh:                              make(chan struct{}, 1),
+		flushCoordinatorWaitCh:               make(chan struct{}),
 		autoCheckpointOnceCh:                 make(chan struct{}, 1),
 		autoCheckpointWriteCh:                make(chan struct{}, 1),
 		lanes:                                lanes,
@@ -21417,6 +21430,13 @@ func (db *DB) waitForStop() {
 		}
 		stalls := 0
 		for db.queueBacklogBytes.Load() >= target {
+			before := db.queueBacklogBytes.Load()
+			if db.waitForActiveFlushProgress(before, target, flushCoordinatorProgressWait) {
+				if after := db.queueBacklogBytes.Load(); after < target || after < before {
+					stalls = 0
+					continue
+				}
+			}
 			maxMemtables := db.writerFlushMaxMemtables
 			if maxMemtables <= 0 {
 				maxMemtables = 1
@@ -21429,7 +21449,7 @@ func (db *DB) waitForStop() {
 				maxMemtables = flushCombineMaxMemtables
 			}
 
-			before := db.queueBacklogBytes.Load()
+			db.flushApplyCoordinatorBlockingFallbacks.Add(1)
 			assistStart := time.Now()
 			flushed := db.flushSomeBlocking(false, maxMemtables, db.writerFlushMaxDuration)
 			db.observeForegroundFlushAssist(time.Since(assistStart), flushed)
@@ -21500,6 +21520,10 @@ func (db *DB) maybeAssistFlush() {
 
 		backlog = db.queueBacklogBytes.Load()
 		if stopBytes > 0 && backlog >= stopBytes {
+			db.TriggerFlush()
+			if db.foregroundAssistYieldToActiveFlush(backlog, stopBytes) {
+				return
+			}
 			assistStart := time.Now()
 			flushed := db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			db.observeForegroundFlushAssist(time.Since(assistStart), flushed)
@@ -21528,8 +21552,16 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	if maxMemtables <= 0 && maxDuration <= 0 {
 		return 0
 	}
-	db.flushMu.Lock()
+	if db.flushCoordinatorForegroundYieldEnabled() {
+		if !db.flushMu.TryLock() {
+			return 0
+		}
+	} else {
+		db.flushMu.Lock()
+	}
 	defer db.flushMu.Unlock()
+	db.beginFlushCoordinatorPass()
+	defer db.endFlushCoordinatorPass()
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
@@ -21576,6 +21608,8 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 	}
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
+	db.beginFlushCoordinatorPass()
+	defer db.endFlushCoordinatorPass()
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
@@ -24102,6 +24136,8 @@ func (db *DB) flushAll(reqSync bool) {
 }
 
 func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALPublish) {
+	db.beginFlushCoordinatorPass()
+	defer db.endFlushCoordinatorPass()
 	origSync := reqSync
 	syncFlag := db.flushSyncRequested(reqSync)
 	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
@@ -24196,6 +24232,8 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 func (db *DB) flushOne() bool {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
+	db.beginFlushCoordinatorPass()
+	defer db.endFlushCoordinatorPass()
 
 	if attempted, ok := db.attemptDirtyRootPublish(); attempted {
 		return ok
@@ -24437,6 +24475,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 	}
 	db.publishMemtablesLocked()
+	db.recordFlushCoordinatorProgress()
 }
 
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
@@ -24474,6 +24513,11 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 	if len(units) == 0 {
 		return false
 	}
+	db.beginFlushCoordinatorWork(totalBytes)
+	flushSuccess := false
+	defer func() {
+		db.finishFlushCoordinatorWork(totalBytes, flushSuccess)
+	}()
 	totalSpans := flushUnitSpanCount(units)
 	db.observeFlushApplyPlan(len(units), totalLen+totalSpans, totalBytes, planningDur)
 
@@ -24485,6 +24529,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		}
 		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
 		db.mu.Unlock()
+		flushSuccess = true
 		return true
 	}
 	if totalLen == 0 && totalSpans > 0 {
@@ -24548,6 +24593,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		}
 		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
 		db.mu.Unlock()
+		flushSuccess = true
 		return true
 	}
 
@@ -24973,6 +25019,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			db.bpCond.Broadcast()
 			db.bpMu.Unlock()
 		}
+		flushSuccess = true
 		return true
 	}
 
@@ -25314,6 +25361,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		db.bpCond.Broadcast()
 		db.bpMu.Unlock()
 	}
+	flushSuccess = true
 	return true
 }
 
