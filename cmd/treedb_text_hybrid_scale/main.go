@@ -942,6 +942,24 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 			return reopenReport{}, fixture, fmt.Errorf("reopen vector status: %w", err)
 		}
 		vectorStatus = &status
+		if status.State != collections.VectorIndexStateColumnGraphLoaded || !status.Loaded || status.RebuildNeeded {
+			_ = db.Close()
+			return reopenReport{}, fixture, fmt.Errorf("reopen vector status not serveable: state=%s loaded=%v rebuild_needed=%v", status.State, status.Loaded, status.RebuildNeeded)
+		}
+		vectorProbe, err := col.SearchHybrid(collections.HybridSearchOptions{
+			TopK:       cfg.topK,
+			ResultMode: collections.HybridResultModeScoreOnly,
+			Text:       &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit},
+			Vector:     &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact},
+		})
+		if err != nil {
+			_ = db.Close()
+			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector probe: %w", err)
+		}
+		if len(vectorProbe.Results) == 0 || !hybridGuardrail("reopen_hybrid_vector_probe", vectorProbe.Stats).OK {
+			_ = db.Close()
+			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector probe failed guardrail stats=%+v results=%d", vectorProbe.Stats, len(vectorProbe.Results))
+		}
 	}
 	bytes, err := dirSize(fixture.dir)
 	if err != nil {
@@ -1296,27 +1314,29 @@ func percentile(sorted []int64, pct int) int64 {
 
 func rankBottlenecks(rep report) []bottleneckRow {
 	type candidate struct {
-		name     string
-		metric   string
-		value    float64
-		unit     string
-		followUp string
+		name      string
+		metric    string
+		value     float64
+		unit      string
+		sortValue float64
+		followUp  string
 	}
 	var candidates []candidate
-	candidates = append(candidates, candidate{"fixture_load", "total_seconds", rep.Load.TotalSeconds, "s", "Investigate write/index build batching, text-v2 append block density, and vector rebuild split if load dominates scale runs."})
+	candidates = append(candidates, candidate{name: "fixture_load", metric: "total_seconds", value: rep.Load.TotalSeconds, unit: "s", sortValue: rep.Load.TotalSeconds, followUp: "Investigate write/index build batching, text-v2 append block density, and vector rebuild split if load dominates scale runs."})
 	if rep.Load.VectorRebuildSeconds > 0 {
-		candidates = append(candidates, candidate{"vector_rebuild", "seconds", rep.Load.VectorRebuildSeconds, "s", "If vector rebuild dominates, isolate column_graph rebuild scheduling from text-v2 scale evidence."})
+		candidates = append(candidates, candidate{name: "vector_rebuild", metric: "seconds", value: rep.Load.VectorRebuildSeconds, unit: "s", sortValue: rep.Load.VectorRebuildSeconds, followUp: "If vector rebuild dominates, isolate column_graph rebuild scheduling from text-v2 scale evidence."})
 	}
 	if rep.Backfill != nil {
-		candidates = append(candidates, candidate{"text_backfill", "seconds", rep.Backfill.BackfillSeconds, "s", "Feed #2732 maintenance policy with backfill/rewrite budget evidence."})
+		candidates = append(candidates, candidate{name: "text_backfill", metric: "seconds", value: rep.Backfill.BackfillSeconds, unit: "s", sortValue: rep.Backfill.BackfillSeconds, followUp: "Feed #2732 maintenance policy with backfill/rewrite budget evidence."})
 	}
 	if rep.Maintenance != nil {
-		candidates = append(candidates, candidate{"text_rewrite", "seconds", rep.Maintenance.RewriteSeconds, "s", "Use rewrite cost and stale purge counts to size #2732 bounded maintenance triggers."})
+		candidates = append(candidates, candidate{name: "text_rewrite", metric: "seconds", value: rep.Maintenance.RewriteSeconds, unit: "s", sortValue: rep.Maintenance.RewriteSeconds, followUp: "Use rewrite cost and stale purge counts to size #2732 bounded maintenance triggers."})
 	}
 	for _, row := range rep.Queries {
-		candidates = append(candidates, candidate{row.Name, "p95_ns", float64(row.Latency.P95NS), "ns", "Profile this retrieval row first if it is on the target production query mix."})
+		p95Seconds := float64(row.Latency.P95NS) / float64(time.Second)
+		candidates = append(candidates, candidate{name: row.Name, metric: "p95_ns", value: float64(row.Latency.P95NS), unit: "ns", sortValue: p95Seconds, followUp: "Profile this retrieval row first if it is on the target production query mix."})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].value > candidates[j].value })
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].sortValue > candidates[j].sortValue })
 	limit := minInt(5, len(candidates))
 	out := make([]bottleneckRow, 0, limit)
 	for i := 0; i < limit; i++ {

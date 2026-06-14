@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestScaleCommandSmokeReport2731(t *testing.T) {
@@ -77,6 +78,27 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	}
 	if _, err := os.Stat(rep.Artifacts.DBDir); !os.IsNotExist(err) {
 		t.Fatalf("primary db dir kept unexpectedly err=%v", err)
+	}
+}
+
+func TestRankBottlenecksNormalizesUnits2731(t *testing.T) {
+	rep := report{
+		Load: loadReport{TotalSeconds: 100, VectorRebuildSeconds: 50},
+		Queries: []queryReport{
+			{Name: "fast_query", Latency: latencySummary{P95NS: int64(time.Millisecond)}},
+			{Name: "slow_query", Latency: latencySummary{P95NS: int64(200 * time.Second)}},
+		},
+		Maintenance: &maintenanceReport{RewriteSeconds: 75},
+	}
+	got := rankBottlenecks(rep)
+	if len(got) < 4 {
+		t.Fatalf("rankBottlenecks returned %d rows", len(got))
+	}
+	if got[0].Name != "slow_query" {
+		t.Fatalf("first bottleneck=%q want slow_query", got[0].Name)
+	}
+	if got[1].Name != "fixture_load" || got[2].Name != "text_rewrite" || got[3].Name != "vector_rebuild" {
+		t.Fatalf("unexpected normalized order: %+v", got[:4])
 	}
 }
 
