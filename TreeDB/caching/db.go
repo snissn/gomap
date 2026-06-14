@@ -24534,6 +24534,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			return false
 		}
 		db.observeFlushApplyBuild(time.Since(buildStart))
+		buildStart = time.Now()
 
 		// Adaptive micro-batching: delete-heavy flushes are expensive to apply in
 		// many intermediate commits (each commit re-writes leaf pages, copying
@@ -24572,6 +24573,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				return false
 			}
 			vlogFlushed = true
+			buildStart = time.Now()
 		}
 
 		flushBackendChunk := func() error {
@@ -24583,9 +24585,11 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			// If sync==true, we only need a single durability boundary at the end of
 			// the flush. Write the intermediate chunks without fsync to avoid
 			// repeated pager sync work.
+			db.observeFlushApplyBuild(time.Since(buildStart))
 			writeStart := time.Now()
 			err := backendBatch.Write()
 			db.observeFlushApplyBackendWrite(time.Since(writeStart))
+			buildStart = time.Now()
 			cerr := backendBatch.Close()
 			if err == nil {
 				err = cerr
@@ -24700,6 +24704,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
 			flushMergeParallelAppliedOpsTotal.Add(uint64(appliedOps))
 		}
+		db.observeFlushApplyBuild(time.Since(buildStart))
 
 		if db.valueLogEnabled() {
 			if !vlogFlushed {
