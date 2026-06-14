@@ -344,7 +344,7 @@ func TestTextV2PhrasePositionsReopenAndSnapshotBinding2733(t *testing.T) {
 	oldResponse := TextSearchResponse{IndexName: "lexical"}
 	oldResponse.Stats.QueryTerms = 3
 	oldResponse.Stats.TextCandidatesRequested = 8
-	old, err := executeTextV2PhraseSearchAtSnapshot(col, snap, catalog, idx, TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "alpha beta gamma"}, TopK: 10}, []string{"alpha", "beta", "gamma"}, 0, 8, 64, textSearchResultScoreOnly, oldResponse)
+	old, err := executeTextV2PhraseSearchAtSnapshot(col, snap, catalog, idx, TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "alpha beta gamma"}, TopK: 10}, textSearchParsedPhrase{terms: []string{"alpha", "beta", "gamma"}, gaps: []int{0, 0}}, 0, 8, 64, textSearchResultScoreOnly, oldResponse)
 	if closeErr := snap.Close(); closeErr != nil {
 		t.Fatalf("snapshot close: %v", closeErr)
 	}
@@ -413,6 +413,46 @@ func TestTextV2PhraseAnalyzerStopwordsAndScalarAllowSet2733(t *testing.T) {
 	}
 	if scalar.Stats.DocumentsFetched != 0 || scalar.Stats.TextStateLookups != 0 || scalar.Stats.FailClosed != 0 || scalar.Stats.TextPhraseCandidatesMatched != 1 {
 		t.Fatalf("scalar stats=%+v want no-doc scalar-pruned phrase path", scalar.Stats)
+	}
+}
+
+func TestTextV2PhraseInternalStopwordPositionGaps2733(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	def := TextIndexDefinition{
+		Name:            "lexical",
+		Version:         TextIndexVersionV2,
+		StorePositions:  true,
+		AnalyzerOptions: &TextAnalyzerOptions{StopWords: []string{"the"}},
+		Fields:          []TextIndexField{{Field: "body"}},
+	}
+	col := createTextSearchCollection2627(t, d, "docs", def, [][]byte{[]byte("d1"), []byte("d2"), []byte("d3"), []byte("d4")}, [][]byte{
+		[]byte(`{"body":"quick the brown refund policy"}`),
+		[]byte(`{"body":"quick brown refund policy"}`),
+		[]byte(`{"body":"quick very the brown refund policy"}`),
+		[]byte(`{"body":"brown the quick refund policy"}`),
+	})
+
+	exact, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "quick the brown"}, TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("internal-stopword exact phrase: %v", err)
+	}
+	if got := textSearchResultIDs2733(exact); !slicesEqualStrings(got, []string{"d1"}) {
+		t.Fatalf("internal-stopword exact ids=%v stats=%+v want d1 only", got, exact.Stats)
+	}
+	if exact.Stats.DocumentsFetched != 0 || exact.Stats.TextStateLookups != 0 || exact.Stats.TextMatchDetailsBuilt != 0 || exact.Stats.FullDocumentScanFallbacks != 0 || exact.Stats.FailClosed != 0 || exact.Stats.TextPhraseCandidatesMatched != 1 {
+		t.Fatalf("internal-stopword exact stats=%+v want no-doc phrase path and one match", exact.Stats)
+	}
+
+	near, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "quick the brown", Slop: 1}, TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("internal-stopword proximity phrase: %v", err)
+	}
+	if got := textSearchResultIDs2733(near); !textSearchResultIDSetEqual2733(got, []string{"d1", "d3"}) {
+		t.Fatalf("internal-stopword proximity ids=%v stats=%+v want d1,d3", got, near.Stats)
+	}
+	if near.Stats.DocumentsFetched != 0 || near.Stats.TextStateLookups != 0 || near.Stats.TextMatchDetailsBuilt != 0 || near.Stats.FullDocumentScanFallbacks != 0 || near.Stats.FailClosed != 0 || near.Stats.TextPhraseCandidatesMatched != 2 {
+		t.Fatalf("internal-stopword proximity stats=%+v want no-doc phrase path and two matches", near.Stats)
 	}
 }
 

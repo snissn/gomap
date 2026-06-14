@@ -56,8 +56,10 @@ const (
 )
 
 // TextSearchPhraseQuery requests bounded ordered phrase/proximity semantics
-// over text-v2 position lanes. Slop is the maximum total number of intervening
-// tokens allowed across the ordered phrase; zero means exact adjacent phrase.
+// over text-v2 position lanes. Matching uses analyzed token positions, so
+// stopword-filtered tokens still contribute expected gaps. Slop is the maximum
+// total number of extra intervening tokens allowed beyond those expected gaps;
+// zero means exact analyzed positions.
 type TextSearchPhraseQuery struct {
 	Query string
 	Slop  int
@@ -298,20 +300,20 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	response.IndexName = idx.Name
 
 	if opts.Phrase != nil {
-		terms, err := parseTextSearchPhraseQuery(idx, *opts.Phrase)
+		phrase, err := parseTextSearchPhraseQuery(idx, *opts.Phrase)
 		if err != nil {
 			if errors.Is(err, ErrTextIndexUnavailable) {
 				return textSearchFailClosed(response, textSearchFailClosedUnsupported, err)
 			}
 			return response, err
 		}
-		response.Stats.QueryTerms = len(terms)
-		if len(terms) == 0 {
+		response.Stats.QueryTerms = len(phrase.terms)
+		if len(phrase.terms) == 0 {
 			response.Results = []TextSearchResult{}
 			return response, nil
 		}
 		candidateLimit := normalizeTextSearchCandidateLimit(opts.TopK, opts.CandidateLimit)
-		maxPostingsScanned := normalizeTextSearchMaxPostingsScanned(candidateLimit, len(uniqueTextSearchTerms(terms)), opts.MaxPostingsScanned)
+		maxPostingsScanned := normalizeTextSearchMaxPostingsScanned(candidateLimit, len(uniqueTextSearchTerms(phrase.terms)), opts.MaxPostingsScanned)
 		response.Stats.TextCandidatesRequested = uint64(candidateLimit)
 		if idx.Version != TextIndexVersionV2 {
 			return textSearchFailClosed(response, textSearchFailClosedUnsupported, fmt.Errorf("%w: phrase/proximity search requires text-v2 index", ErrTextIndexUnavailable))
@@ -319,7 +321,7 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 		if !idx.StorePositions {
 			return textSearchFailClosed(response, textSearchFailClosedUnsupported, fmt.Errorf("%w: phrase/proximity search requires store_positions", ErrTextIndexUnavailable))
 		}
-		return executeTextV2PhraseSearchAtSnapshot(c, snap, catalog, idx, opts, terms, opts.Phrase.Slop, candidateLimit, maxPostingsScanned, resultMode, response)
+		return executeTextV2PhraseSearchAtSnapshot(c, snap, catalog, idx, opts, phrase, opts.Phrase.Slop, candidateLimit, maxPostingsScanned, resultMode, response)
 	}
 
 	terms, operator, err := parseTextSearchQueryWithOptions(idx.Analyzer, idx.AnalyzerOptions, opts.Query, opts.Operator)
@@ -981,16 +983,35 @@ func parseTextSearchQueryWithOptions(analyzer TextAnalyzer, options *TextAnalyze
 	return terms, operator, nil
 }
 
-func parseTextSearchPhraseQuery(idx TextIndexDefinition, phrase TextSearchPhraseQuery) ([]string, error) {
-	terms := make([]string, 0, 4)
+type textSearchParsedPhrase struct {
+	terms []string
+	gaps  []int
+}
+
+func parseTextSearchPhraseQuery(idx TextIndexDefinition, phrase TextSearchPhraseQuery) (textSearchParsedPhrase, error) {
+	parsed := textSearchParsedPhrase{terms: make([]string, 0, 4), gaps: make([]int, 0, 3)}
+	previousPosition := 0
+	hasPrevious := false
 	if err := AnalyzeTextToSinkWithOptions(idx.Analyzer, idx.AnalyzerOptions, phrase.Query, TextTokenSinkFunc(func(token TextToken) error {
-		terms = append(terms, token.Term)
-		if len(terms) > textSearchMaxPhraseTerms {
+		if token.Position < 0 {
+			return fmt.Errorf("%w: text phrase analyzer emitted negative token position", ErrTextIndexUnavailable)
+		}
+		if hasPrevious {
+			gap := token.Position - previousPosition - 1
+			if gap < 0 {
+				return fmt.Errorf("%w: text phrase analyzer emitted non-monotonic token positions", ErrTextIndexUnavailable)
+			}
+			parsed.gaps = append(parsed.gaps, gap)
+		}
+		parsed.terms = append(parsed.terms, token.Term)
+		if len(parsed.terms) > textSearchMaxPhraseTerms {
 			return fmt.Errorf("%w: text phrase term count exceeds bounded maximum %d", ErrTextIndexUnavailable, textSearchMaxPhraseTerms)
 		}
+		previousPosition = token.Position
+		hasPrevious = true
 		return nil
 	})); err != nil {
-		return nil, err
+		return textSearchParsedPhrase{}, err
 	}
-	return terms, nil
+	return parsed, nil
 }

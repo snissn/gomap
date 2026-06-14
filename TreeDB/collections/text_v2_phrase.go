@@ -15,13 +15,13 @@ func executeTextV2PhraseSearchAtSnapshot(
 	catalog *collectionCatalog,
 	idx TextIndexDefinition,
 	opts TextSearchOptions,
-	phraseTerms []string,
+	phrase textSearchParsedPhrase,
 	slop int,
 	candidateLimit, maxPostingsScanned int,
 	resultMode textSearchResultMode,
 	response TextSearchResponse,
 ) (TextSearchResponse, error) {
-	uniqueTerms := uniqueSortedTextSearchTerms(append([]string(nil), phraseTerms...))
+	uniqueTerms := uniqueSortedTextSearchTerms(append([]string(nil), phrase.terms...))
 	ctx, err := newTextV2SearchContext(snap, catalog, idx, uniqueTerms)
 	if err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
@@ -42,10 +42,10 @@ func executeTextV2PhraseSearchAtSnapshot(
 		response.Results = []TextSearchResult{}
 		return response, nil
 	}
-	if len(uniqueTerms) == 1 && len(phraseTerms) == 1 {
+	if len(uniqueTerms) == 1 && len(phrase.terms) == 1 {
 		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, opts, uniqueTerms, TextSearchOperatorOR, candidateLimit, maxPostingsScanned, resultMode, response)
 	}
-	phraseTermIndexes := textV2PhraseTermIndexes(phraseTerms, uniqueTerms)
+	phraseTermIndexes := textV2PhraseTermIndexes(phrase.terms, uniqueTerms)
 
 	candidates := make(map[uint64]*textV2SearchCandidate)
 	cache := textV2SearchBlockCache{}
@@ -101,7 +101,7 @@ func executeTextV2PhraseSearchAtSnapshot(
 			continue
 		}
 		response.Stats.TextPhraseCandidatesChecked++
-		matched, err := textV2CandidateMatchesPhraseAtSnapshot(snap, catalog, ctx, idx, candidate, uniqueTerms, phraseTermIndexes, positionScratch, slop, norm.Generation, &response.Stats)
+		matched, err := textV2CandidateMatchesPhraseAtSnapshot(snap, catalog, ctx, idx, candidate, uniqueTerms, phraseTermIndexes, phrase.gaps, positionScratch, slop, norm.Generation, &response.Stats)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -165,6 +165,7 @@ func textV2CandidateMatchesPhraseAtSnapshot(
 	candidate *textV2SearchCandidate,
 	uniqueTerms []string,
 	phraseTermIndexes []int,
+	phraseGaps []int,
 	positions []textV2PositionValue,
 	slop int,
 	generation uint64,
@@ -184,7 +185,7 @@ func textV2CandidateMatchesPhraseAtSnapshot(
 		}
 		positions[i] = value
 	}
-	return textV2PhrasePositionValuesMatch(phraseTermIndexes, positions, slop), nil
+	return textV2PhrasePositionValuesMatch(phraseTermIndexes, phraseGaps, positions, slop), nil
 }
 
 func readTextV2PhrasePositionValueAtSnapshot(
@@ -234,8 +235,8 @@ func textV2PhraseTermIndexes(phraseTerms, uniqueTerms []string) []int {
 	return indexes
 }
 
-func textV2PhrasePositionValuesMatch(phraseTermIndexes []int, values []textV2PositionValue, slop int) bool {
-	if len(phraseTermIndexes) == 0 || phraseTermIndexes[0] < 0 || phraseTermIndexes[0] >= len(values) {
+func textV2PhrasePositionValuesMatch(phraseTermIndexes []int, phraseGaps []int, values []textV2PositionValue, slop int) bool {
+	if len(phraseTermIndexes) == 0 || len(phraseGaps) != len(phraseTermIndexes)-1 || phraseTermIndexes[0] < 0 || phraseTermIndexes[0] >= len(values) {
 		return false
 	}
 	first := values[phraseTermIndexes[0]]
@@ -253,7 +254,7 @@ func textV2PhrasePositionValuesMatch(phraseTermIndexes []int, values []textV2Pos
 			}
 			lists = append(lists, positions)
 		}
-		if len(lists) == len(phraseTermIndexes) && textV2OrderedPositionsMatchSlop(lists, slop) {
+		if len(lists) == len(phraseTermIndexes) && textV2OrderedPositionsMatchSlop(lists, phraseGaps, slop) {
 			return true
 		}
 	}
@@ -269,34 +270,42 @@ func textV2PositionFieldPositions(value textV2PositionValue, fieldIndex uint32) 
 	return nil, false
 }
 
-func textV2OrderedPositionsMatchSlop(lists [][]uint32, slop int) bool {
+func textV2OrderedPositionsMatchSlop(lists [][]uint32, expectedGaps []int, slop int) bool {
 	if len(lists) == 0 || len(lists[0]) == 0 {
+		return false
+	}
+	if len(expectedGaps) != len(lists)-1 {
 		return false
 	}
 	if len(lists) == 1 {
 		return true
 	}
 	for _, start := range lists[0] {
-		if textV2OrderedPositionsMatchFrom(lists, 1, start, 0, slop) {
+		if textV2OrderedPositionsMatchFrom(lists, expectedGaps, 1, start, 0, slop) {
 			return true
 		}
 	}
 	return false
 }
 
-func textV2OrderedPositionsMatchFrom(lists [][]uint32, index int, previous uint32, usedSlop, maxSlop int) bool {
+func textV2OrderedPositionsMatchFrom(lists [][]uint32, expectedGaps []int, index int, previous uint32, usedSlop, maxSlop int) bool {
 	if index >= len(lists) {
 		return true
 	}
+	expectedGap := expectedGaps[index-1]
 	for _, pos := range lists[index] {
 		if pos <= previous {
 			continue
 		}
-		gap := int(pos - previous - 1)
-		if usedSlop+gap > maxSlop {
+		documentGap := int(pos - previous - 1)
+		if documentGap < expectedGap {
+			continue
+		}
+		gapSlop := documentGap - expectedGap
+		if usedSlop+gapSlop > maxSlop {
 			break
 		}
-		if textV2OrderedPositionsMatchFrom(lists, index+1, pos, usedSlop+gap, maxSlop) {
+		if textV2OrderedPositionsMatchFrom(lists, expectedGaps, index+1, pos, usedSlop+gapSlop, maxSlop) {
 			return true
 		}
 	}
