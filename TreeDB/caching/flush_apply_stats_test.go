@@ -73,6 +73,7 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.flush_apply.apply_calls_total",
 		"treedb.flush_apply.old_leaf_read_decode.node_loads_total",
 		"treedb.flush_apply.merge_build.leaf_merges_total",
+		"treedb.flush_apply.prepared_output.leaf_log_pages_installed_total",
 		"treedb.flush_apply.guarded_publish.calls_total",
 	} {
 		if got := requireStatUint64(t, stats, key); got == 0 {

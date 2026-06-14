@@ -113,11 +113,39 @@ func (db *DB) observeFlushApplyMetrics(metrics adaptive.Metrics, applyWall time.
 	addIntMetric(&db.flushApplyLeafPageBytesWritten, metrics.ZipperLeafPageBytesWritten)
 	addIntMetric(&db.flushApplyPagerLeafPageBytesWritten, metrics.ZipperPagerLeafPageBytesWritten)
 	addIntMetric(&db.flushApplyLeafLogPageBytesWritten, metrics.ZipperLeafLogPageBytesWritten)
+	addIntMetric(&db.flushApplyLeafLogRecordHintBytesWritten, metrics.ZipperLeafLogRecordHintBytesWritten)
 	addIntMetric(&db.flushApplyInternalPagesWritten, metrics.ZipperInternalPagesWritten)
 	addIntMetric(&db.flushApplyInternalPageBytesWritten, metrics.ZipperInternalPageBytesWritten)
 	addIntMetric(&db.flushApplyInternalChildRefs, metrics.ZipperInternalChildRefs)
 	addIntMetric(&db.flushApplyRootSplitLevels, metrics.ZipperRootSplitLevels)
 	addInt64Metric(&db.flushApplyRootReduceNs, metrics.ZipperRootReduceNs)
+}
+
+func (db *DB) observeFlushApplyPreparedOutput(metrics adaptive.Metrics, retiredPages int) {
+	if db == nil {
+		return
+	}
+	addIntMetric(&db.flushApplyPreparedOutputLeafLogPagesPrepared, metrics.ZipperLeafLogPagesWritten)
+	addIntMetric(&db.flushApplyPreparedOutputLeafLogBytesPrepared, metrics.ZipperLeafLogPageBytesWritten)
+	addIntMetric(&db.flushApplyPreparedOutputRetiredPagesPrepared, retiredPages)
+}
+
+func (db *DB) observeFlushApplyInstalledOutput(metrics adaptive.Metrics, retiredPages int) {
+	if db == nil {
+		return
+	}
+	addIntMetric(&db.flushApplyPreparedOutputLeafLogPagesInstalled, metrics.ZipperLeafLogPagesWritten)
+	addIntMetric(&db.flushApplyPreparedOutputLeafLogBytesInstalled, metrics.ZipperLeafLogPageBytesWritten)
+	addIntMetric(&db.flushApplyPreparedOutputRetiredPagesInstalled, retiredPages)
+}
+
+func (db *DB) observeFlushApplyAbandonedOutput(metrics adaptive.Metrics, retiredPages int) {
+	if db == nil {
+		return
+	}
+	addIntMetric(&db.flushApplyPreparedOutputLeafLogPagesAbandoned, metrics.ZipperLeafLogPagesWritten)
+	addIntMetric(&db.flushApplyPreparedOutputLeafLogBytesAbandoned, metrics.ZipperLeafLogPageBytesWritten)
+	addIntMetric(&db.flushApplyPreparedOutputRetiredPagesAbandoned, retiredPages)
 }
 
 func (db *DB) observeFlushApplyCommitWait(wait time.Duration) {
@@ -182,6 +210,16 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.merge_build.leaf_page_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyLeafPageBytesWritten.Load())
 	stats["treedb.flush_apply.merge_build.pager_leaf_page_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyPagerLeafPageBytesWritten.Load())
 	stats["treedb.flush_apply.merge_build.leaf_log_page_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogPageBytesWritten.Load())
+	stats["treedb.flush_apply.merge_build.leaf_log_record_hint_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogRecordHintBytesWritten.Load())
+	stats["treedb.flush_apply.prepared_output.leaf_log_pages_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesPrepared.Load())
+	stats["treedb.flush_apply.prepared_output.leaf_log_bytes_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogBytesPrepared.Load())
+	stats["treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesInstalled.Load())
+	stats["treedb.flush_apply.prepared_output.leaf_log_bytes_installed_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogBytesInstalled.Load())
+	stats["treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesAbandoned.Load())
+	stats["treedb.flush_apply.prepared_output.leaf_log_bytes_abandoned_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogBytesAbandoned.Load())
+	stats["treedb.flush_apply.prepared_output.retired_pages_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputRetiredPagesPrepared.Load())
+	stats["treedb.flush_apply.prepared_output.retired_pages_installed_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputRetiredPagesInstalled.Load())
+	stats["treedb.flush_apply.prepared_output.retired_pages_abandoned_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputRetiredPagesAbandoned.Load())
 	stats["treedb.flush_apply.merge_build.internal_pages_written_total"] = fmt.Sprintf("%d", db.flushApplyInternalPagesWritten.Load())
 	stats["treedb.flush_apply.merge_build.internal_page_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyInternalPageBytesWritten.Load())
 	stats["treedb.flush_apply.merge_build.internal_child_refs_total"] = fmt.Sprintf("%d", db.flushApplyInternalChildRefs.Load())

@@ -323,6 +323,61 @@ func TestReopenVerify_WALOn_Checkpoint_LeafPagesInValueLog(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+func TestReopenVerify_ParallelFlushLeafLogOutput(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, hash := buildVerifyDataset(6000)
+
+	opts := treedb.Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+		FlushThreshold:             64 * 1024,
+		FlushApplyConcurrency:      4,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+			Compression:      treedb.ValueLogCompressionBlock,
+			BlockCodec:       treedb.ValueLogBlockLZ4,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	writeDatasetOneBatch(t, db, keys, values)
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.flush_apply.read_only_prepare.calls_total"]; got == "" || got == "0" {
+		_ = db.Close()
+		t.Fatalf("read-only prepare calls stat=%q want >0", got)
+	}
+	if got := stats["treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"]; got == "" || got == "0" {
+		_ = db.Close()
+		t.Fatalf("installed leaf-log output stat=%q want >0", got)
+	}
+	if _, err := db.LeafGenerationGC(context.Background(), treedb.LeafGenerationGCOptions{DryRun: true}); err != nil {
+		_ = db.Close()
+		t.Fatalf("LeafGenerationGC dry-run: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	checkGets(t, reopen, keys, values, false)
+	scanAndCheck(t, reopen, values, false, hash)
+}
+
 func TestReopenVerify_LeafPageLogGroupedFrameCRCIntegrityModes(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, _ := buildVerifyDataset(2000)

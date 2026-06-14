@@ -12026,17 +12026,19 @@ const (
 )
 
 type vlogDictPrepareTask struct {
-	fi             int
-	dictID         uint64
-	dict           []byte
-	records        []valuelog.Record
-	level          zstd.EncoderLevel
-	enableEntropy  bool
-	ioNsPerStored  float64
-	encodeNsPerRaw float64
-	safetyMargin   float64
-	measureEncode  bool
-	out            chan<- vlogDictPrepareResult
+	fi               int
+	dictID           uint64
+	dict             []byte
+	records          []valuelog.Record
+	blockCodec       valuelog.BlockCodec
+	blockCompression bool
+	level            zstd.EncoderLevel
+	enableEntropy    bool
+	ioNsPerStored    float64
+	encodeNsPerRaw   float64
+	safetyMargin     float64
+	measureEncode    bool
+	out              chan<- vlogDictPrepareResult
 }
 
 type vlogDictPrepareResult struct {
@@ -13080,6 +13082,7 @@ func (db *DB) vlogDictPrepareLoop(l *lane) {
 	preparer := valuelog.NewFramePreparer()
 	processTask := func(task vlogDictPrepareTask) {
 		preparer.SetDictFrameEncoderOptions(task.level, task.enableEntropy)
+		preparer.SetBlockCompression(task.blockCodec, task.blockCompression)
 		preparer.SetKeepPolicy(task.ioNsPerStored, task.encodeNsPerRaw, task.safetyMargin)
 		if task.measureEncode {
 			preparer.SetEncodeSampleStride(1)
@@ -13719,13 +13722,15 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			keepIoNs = 0
 			keepEncodeNs = 0
 		}
-		prepared, _, prepErr := db.prepareAppendDictFrames(
+		prepared, _, prepErr := db.prepareAppendFrames(
 			l,
 			plan.dictID,
 			plan.dict,
 			records[plan.start:plan.end],
 			plan.k,
 			plan.rawBytes,
+			plan.writeMode,
+			plan.blockCodec,
 			keepIoNs,
 			keepEncodeNs,
 			safetyMargin,
@@ -14578,19 +14583,26 @@ func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durab
 	return false
 }
 
-func (db *DB) prepareAppendDictFrames(
+func (db *DB) prepareAppendFrames(
 	l *lane,
 	dictID uint64,
 	dict []byte,
 	records []valuelog.Record,
 	k int,
 	rawPayloadBytes int,
+	writeMode vlogCompressionWriteMode,
+	blockCodec valuelog.BlockCodec,
 	ioNsPerStoredByte float64,
 	encodeNsPerRawByte float64,
 	safetyMargin float64,
 	wallStart time.Time,
 ) ([]preparedDictFrame, int64, error) {
-	if dictID == 0 || len(dict) == 0 || len(records) == 0 {
+	if len(records) == 0 {
+		return nil, 0, nil
+	}
+	dictCompression := writeMode == vlogWriteDict && dictID != 0 && len(dict) > 0
+	blockCompression := writeMode == vlogWriteBlock && dictID == 0
+	if !dictCompression && !blockCompression {
 		return nil, 0, nil
 	}
 	if k <= 0 {
@@ -14605,10 +14617,12 @@ func (db *DB) prepareAppendDictFrames(
 	prepared := getVlogPreparedFrames(frameCount)
 	clear(prepared)
 	if !useWorkers {
-		// Keep dict frame encode work out of vlogMu even when worker threads are
-		// unavailable. This reduces lock hold time on small and medium batches.
+		// Keep frame encode/compress work out of vlogMu even when worker threads are
+		// unavailable. This reduces leaf-log/value-log lock hold time on small and
+		// medium batches while preserving one serialized persistent append stream.
 		preparer := valuelog.NewFramePreparer()
 		preparer.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
+		preparer.SetBlockCompression(blockCodec, blockCompression)
 		preparer.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)
 		preparer.SetEncodeSampleStride(0)
 		for fi := 0; fi < frameCount; fi++ {
@@ -14654,17 +14668,19 @@ func (db *DB) prepareAppendDictFrames(
 			end = len(records)
 		}
 		task := vlogDictPrepareTask{
-			fi:             fi,
-			dictID:         dictID,
-			dict:           dict,
-			records:        records[start:end],
-			level:          db.valueLogDictFrameEncodeLevel,
-			enableEntropy:  db.valueLogDictFrameEnableEntropy,
-			ioNsPerStored:  ioNsPerStoredByte,
-			encodeNsPerRaw: encodeNsPerRawByte,
-			safetyMargin:   safetyMargin,
-			measureEncode:  measureEncode,
-			out:            results,
+			fi:               fi,
+			dictID:           dictID,
+			dict:             dict,
+			records:          records[start:end],
+			blockCodec:       blockCodec,
+			blockCompression: blockCompression,
+			level:            db.valueLogDictFrameEncodeLevel,
+			enableEntropy:    db.valueLogDictFrameEnableEntropy,
+			ioNsPerStored:    ioNsPerStoredByte,
+			encodeNsPerRaw:   encodeNsPerRawByte,
+			safetyMargin:     safetyMargin,
+			measureEncode:    measureEncode,
+			out:              results,
 		}
 		select {
 		case l.vlogPrepCh <- task:
@@ -14936,27 +14952,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		ioNsPerStored = 0
 		encodeNsPerRaw = 0
 	}
-	preparedDictFrames, prepEncodeWallNs, prepareErr := db.prepareAppendDictFrames(
-		l,
-		dictID,
-		dict,
-		records,
-		k,
-		rawPayloadBytes,
-		ioNsPerStored,
-		encodeNsPerRaw,
-		safetyMargin,
-		wallStart,
-	)
-	if prepareErr != nil {
-		return nil, prepareErr
-	}
-	if len(preparedDictFrames) > 0 {
-		defer func() {
-			releasePreparedDictFrames(preparedDictFrames)
-			putVlogPreparedFrames(preparedDictFrames)
-		}()
-	}
 
 	finalWriteMode := vlogWriteOff
 	switch {
@@ -14987,6 +14982,41 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	resetBlockCompressionHints := finalWriteMode == vlogWriteBlock &&
 		(probeCompression || retainedStorageFirstBlockAttempt)
+
+	prepareWriteMode := finalWriteMode
+	if prepareWriteMode == vlogWriteBlock && (!leafLogAppend || db.flushApplyConcurrency <= 1) {
+		// Keep the ordinary value-log block path and non-parallel leaf-log path on the
+		// writer so existing generation accounting and rewrite heuristics remain
+		// unchanged. M3 only moves block frame preparation out of the append mutex for
+		// opt-in parallel flush/apply leaf-log output.
+		prepareWriteMode = vlogWriteOff
+	}
+	preparedDictFrames, prepEncodeWallNs, prepareErr := db.prepareAppendFrames(
+		l,
+		dictID,
+		dict,
+		records,
+		k,
+		rawPayloadBytes,
+		prepareWriteMode,
+		finalBlockCodec,
+		ioNsPerStoredForWriter,
+		encodeNsPerRawForWriter,
+		safetyMargin,
+		wallStart,
+	)
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	if prepEncodeWallNs > 0 && leafLogAppend {
+		db.observeFlushApplyLeafLogEncodeCompress(time.Duration(prepEncodeWallNs))
+	}
+	if len(preparedDictFrames) > 0 {
+		defer func() {
+			releasePreparedDictFrames(preparedDictFrames)
+			putVlogPreparedFrames(preparedDictFrames)
+		}()
+	}
 
 	lockWaitStart := time.Time{}
 	if leafLogAppend {
@@ -15051,13 +15081,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	hasInto := statsWriterInto != nil
 	hasRawInto := rawWriterInto != nil
 	hasRawBufferedInto := rawBufferedInto != nil
-	usePreparedDictFrames := dictID != 0 && len(dict) > 0 && preparedAppender != nil && len(preparedDictFrames) > 0
+	usePreparedFrames := preparedAppender != nil && len(preparedDictFrames) > 0 &&
+		(finalWriteMode == vlogWriteDict || finalWriteMode == vlogWriteBlock)
 	segmentStartSize := w.Size()
 
-	if policySetter != nil && !usePreparedDictFrames {
+	if policySetter != nil && !usePreparedFrames {
 		policySetter.SetKeepPolicy(ioNsPerStoredForWriter, encodeNsPerRawForWriter, safetyMargin)
 	}
-	if resetBlockCompressionHints && compressionResetter != nil && !usePreparedDictFrames {
+	if resetBlockCompressionHints && compressionResetter != nil && !usePreparedFrames {
 		compressionResetter.ResetCompressionHints()
 	}
 
@@ -15112,11 +15143,37 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			}
 		}
 	}
-	if usePreparedDictFrames {
+	if usePreparedFrames {
 		rawBatchUsed = true
 		ptrs = getValueLogPtrs(len(records))
 		for fi := range preparedDictFrames {
 			pf := &preparedDictFrames[fi]
+			if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 && len(pf.body) > 0 && w.Size() > maxBytes-int64(len(pf.body)) {
+				if delta := w.Size() - segmentStartSize; delta > 0 {
+					bytesWrittenTotal += delta
+				}
+				if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+					err = rotateErr
+					break
+				}
+				noteRotatePath(l.vlogPath)
+				w = l.vlog
+				if w == nil {
+					err = errWALUnavailable
+					break
+				}
+				if l.vlogCaps.writer != w {
+					l.vlogCaps = computeVlogWriterCaps(w)
+				}
+				caps = l.vlogCaps
+				db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+				preparedAppender = caps.prepared
+				if preparedAppender == nil {
+					err = errors.New("treedb: value-log writer lost prepared-frame append support after rotation")
+					break
+				}
+				segmentStartSize = w.Size()
+			}
 			dst := ptrs[pf.start:pf.end]
 			if _, frameErr := preparedAppender.AppendEncodedFrameInto(pf.body, pf.stats.Records, dst); frameErr != nil {
 				err = frameErr
@@ -15420,7 +15477,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		l.vlogLiveBytes.Add(bytesWrittenLive)
 		db.vlogGenerationChurnBytes.Add(uint64(bytesWrittenLive))
 	}
-	if usePreparedDictFrames && prepEncodeWallNs > 0 && rawFrameBytes > 0 && encodeRawBytes == 0 {
+	if usePreparedFrames && prepEncodeWallNs > 0 && rawFrameBytes > 0 && encodeRawBytes == 0 {
 		// Prepared frames are encoded before taking vlogMu; account prep wall-time
 		// once per batch so autotune keep-policy sees non-zero encode cost.
 		encodeEstimateNs := prepEncodeWallNs
@@ -15650,6 +15707,46 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 	}
 
+	var preparedOneFrames []preparedDictFrame
+	var preparedOnePrepNs int64
+	if leafLogAppend && finalWriteMode == vlogWriteBlock && db.flushApplyConcurrency > 1 {
+		var rec [1]valuelog.Record
+		rec[0] = valuelog.Record{RID: rid, Value: value}
+		keepIoNs, keepEncodeNs, keepSafety := db.valueLogKeepPolicy()
+		if forceBlockCompressionAttempt {
+			keepIoNs = 0
+			keepEncodeNs = 0
+		}
+		prepared, prepNs, prepErr := db.prepareAppendFrames(
+			l,
+			0,
+			nil,
+			rec[:],
+			1,
+			len(value),
+			finalWriteMode,
+			finalBlockCodec,
+			keepIoNs,
+			keepEncodeNs,
+			keepSafety,
+			wallStart,
+		)
+		if prepErr != nil {
+			return page.ValuePtr{}, "", prepErr
+		}
+		preparedOnePrepNs = prepNs
+		if prepNs > 0 {
+			db.observeFlushApplyLeafLogEncodeCompress(time.Duration(prepNs))
+		}
+		if len(prepared) > 0 {
+			preparedOneFrames = prepared
+			defer func() {
+				releasePreparedDictFrames(preparedOneFrames)
+				putVlogPreparedFrames(preparedOneFrames)
+			}()
+		}
+	}
+
 	if allowQueue && db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			if err := db.ensureValueLogWriterMuHeld(l); err != nil {
@@ -15859,14 +15956,30 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	startSize := w.Size()
 	flushedBoundary := false
 	syncedBoundary := false
+	usePreparedOneFrame := len(preparedOneFrames) == 1 && caps.prepared != nil
 
-	applyValueLogOneKeepPolicy(policySetter)
-	if resetBlockCompressionHints && compressionResetter != nil {
+	if !usePreparedOneFrame {
+		applyValueLogOneKeepPolicy(policySetter)
+	}
+	if resetBlockCompressionHints && compressionResetter != nil && !usePreparedOneFrame {
 		compressionResetter.ResetCompressionHints()
 	}
 
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
-	if finalWriteMode == vlogWriteBlock {
+	if usePreparedOneFrame {
+		pf := &preparedOneFrames[0]
+		stats = pf.stats
+		var ptrScratch [1]page.ValuePtr
+		ptrs, frameErr := caps.prepared.AppendEncodedFrameInto(pf.body, pf.stats.Records, ptrScratch[:])
+		if frameErr != nil {
+			err = frameErr
+		} else if len(ptrs) != 1 {
+			err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 prepared record", len(ptrs))
+		} else {
+			ptr = ptrs[0]
+		}
+		releasePreparedDictFrame(pf)
+	} else if finalWriteMode == vlogWriteBlock {
 		if concrete, ok := w.(*valuelog.Writer); ok {
 			ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
 		} else {
@@ -16006,6 +16119,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	encodeRawBytes := 0
 	if stats.EncodeNs > 0 && stats.RawPayloadBytes > 0 {
 		encodeNsTotal = stats.EncodeNs
+		encodeRawBytes = stats.RawPayloadBytes
+	} else if usePreparedOneFrame && preparedOnePrepNs > 0 && stats.RawPayloadBytes > 0 {
+		encodeNsTotal = preparedOnePrepNs
 		encodeRawBytes = stats.RawPayloadBytes
 	}
 	if leafLogAppend {

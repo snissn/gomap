@@ -2,11 +2,75 @@ package db
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type lockedRewriteLeafPageLog struct {
+	mu    sync.Mutex
+	inner *rewriteWriter
+}
+
+func (l *lockedRewriteLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inner.AppendLeafPage(leafPage)
+}
+
+func (l *lockedRewriteLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inner.AppendLeafPages(leafPages)
+}
+
+func (l *lockedRewriteLeafPageLog) Flush() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inner.Flush()
+}
+
+func (l *lockedRewriteLeafPageLog) Sync() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inner.Sync()
+}
+
+func (l *lockedRewriteLeafPageLog) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inner.Close()
+}
+
+func (l *lockedRewriteLeafPageLog) LastLeafPageRecordLength() uint32 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inner.LastLeafPageRecordLength()
+}
+
+func (l *lockedRewriteLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inner.CreatedLeafPageLogSegmentsSnapshot()
+}
+
+func (l *lockedRewriteLeafPageLog) MarkLeafPageLogSegmentsRegistered(segments []LeafPageLogSegment) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.inner.MarkLeafPageLogSegmentsRegistered(segments)
+}
+
+func (l *lockedRewriteLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inner.CurrentValueLogSegment()
+}
 
 func openFlushApplyTestDB(t *testing.T, concurrency int) *DB {
 	t.Helper()
@@ -23,6 +87,47 @@ func openFlushApplyTestDB(t *testing.T, concurrency int) *DB {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
+}
+
+func openFlushApplyLeafLogTestDB(t *testing.T, concurrency int) *DB {
+	t.Helper()
+	d, err := Open(Options{
+		Dir:                        t.TempDir(),
+		ChunkSize:                  64 * 1024,
+		IndexOuterLeavesInValueLog: true,
+		FlushApplyConcurrency:      concurrency,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockLZ4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open leaf-log(concurrency=%d): %v", concurrency, err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(d.dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(ValueLogDirPath(d.dir), rewriteLeafLogLaneID, 0)
+	lockedLeafLog := &lockedRewriteLeafPageLog{inner: leafLog}
+	d.SetLeafPageLog(lockedLeafLog)
+	t.Cleanup(func() { closeNoErr(t, lockedLeafLog) })
+	t.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+func requireDBStatUint64(t *testing.T, d *DB, key string) uint64 {
+	t.Helper()
+	stats := d.Stats()
+	raw, ok := stats[key]
+	if !ok {
+		t.Fatalf("missing stat %s", key)
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("parse stat %s=%q: %v", key, raw, err)
+	}
+	return v
 }
 
 func putBatch(t *testing.T, d *DB, start, count int, valuePrefix string) {
@@ -180,6 +285,86 @@ func TestFlushApplyRootMismatchRetriesWithoutPublishingAbandonedWork(t *testing.
 	}
 	if got := stats["treedb.flush_apply.retry_total"]; got == "" || got == "0" {
 		t.Fatalf("retry stat=%q want >0", got)
+	}
+}
+
+func TestFlushApplyRootMismatchTracksAbandonedLeafLogOutput(t *testing.T) {
+	d := openFlushApplyLeafLogTestDB(t, 4)
+	putBatch(t, d, 0, 9000, "base")
+
+	var fired atomic.Bool
+	d.testAfterOptimisticApplyHook = func() {
+		if !fired.CompareAndSwap(false, true) {
+			return
+		}
+		other := d.NewBatch()
+		if err := other.Set([]byte("key-concurrent"), []byte("concurrent")); err != nil {
+			t.Fatalf("concurrent Set: %v", err)
+		}
+		if err := other.Write(); err != nil {
+			t.Fatalf("concurrent Write: %v", err)
+		}
+	}
+	defer func() { d.testAfterOptimisticApplyHook = nil }()
+
+	b := d.NewBatch()
+	for i := 0; i < 7000; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("retry-%06d", i))); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write with retry: %v", err)
+	}
+	if got, err := d.Get([]byte("key-concurrent")); err != nil || string(got) != "concurrent" {
+		t.Fatalf("concurrent value got=%q err=%v", got, err)
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "retry-000123" {
+		t.Fatalf("retried value got=%q err=%v", got, err)
+	}
+
+	prepared := requireDBStatUint64(t, d, "treedb.flush_apply.prepared_output.leaf_log_pages_prepared_total")
+	installed := requireDBStatUint64(t, d, "treedb.flush_apply.prepared_output.leaf_log_pages_installed_total")
+	abandoned := requireDBStatUint64(t, d, "treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total")
+	if abandoned == 0 {
+		t.Fatalf("abandoned leaf-log output = 0, want retry orphan output counted")
+	}
+	if installed == 0 {
+		t.Fatalf("installed leaf-log output = 0, want published output counted")
+	}
+	if prepared < installed+abandoned {
+		t.Fatalf("prepared leaf-log output=%d < installed+abandoned=%d+%d", prepared, installed, abandoned)
+	}
+}
+
+func TestFlushApplyFinalizeFailureTracksAbandonedLeafLogOutput(t *testing.T) {
+	d := openFlushApplyLeafLogTestDB(t, 4)
+	d.testFailFinalizeCommit.Store(true)
+	err := func() error {
+		b := d.NewBatch()
+		defer b.Close()
+		for i := 0; i < 7000; i++ {
+			key := []byte(fmt.Sprintf("key-%06d", i))
+			if err := b.Set(key, []byte(fmt.Sprintf("fail-%06d", i))); err != nil {
+				return err
+			}
+		}
+		return b.Write()
+	}()
+	d.testFailFinalizeCommit.Store(false)
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("Write failpoint err=%v, want %v", err, errTestFinalizeCommitFailpoint)
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || got != nil {
+		t.Fatalf("failed publish exposed key: got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total"); got == 0 {
+		t.Fatalf("abandoned leaf-log output = 0, want finalize-failure output counted")
+	}
+	putBatch(t, d, 0, 256, "ok")
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "ok-000123" {
+		t.Fatalf("post-failure write got=%q err=%v", got, err)
 	}
 }
 
