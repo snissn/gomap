@@ -10,6 +10,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -1181,8 +1182,11 @@ func validateLoadedLeafLogNodeFrom(source string, data []byte) (node.Node, error
 
 // Apply applies the batch to the tree rooted at rootID.
 // Returns the new root page ID, list of retired pages, and commit metrics.
-func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
-	var metrics adaptive.Metrics
+func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (newRootID uint64, retiredPages []uint64, metrics adaptive.Metrics, err error) {
+	applyStart := time.Now()
+	defer func() {
+		metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
+	}()
 	var ops []batch.Entry
 	var ranges []batch.DeleteRange
 	if b != nil && b.HasDeleteRanges() {
@@ -1231,6 +1235,11 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	if err != nil {
 		return 0, nil, metrics, err
 	}
+
+	rootReduceStart := time.Now()
+	defer func() {
+		metrics.ZipperRootReduceNs += time.Since(rootReduceStart).Nanoseconds()
+	}()
 
 	if len(splits) > 0 {
 		// Root split!
@@ -2528,6 +2537,8 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperInternalLeafLogRefs += src.ZipperInternalLeafLogRefs
 	dst.ZipperInternalLeafLogRefCopies += src.ZipperInternalLeafLogRefCopies
 	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
+	dst.ZipperApplyWallNs += src.ZipperApplyWallNs
+	dst.ZipperRootReduceNs += src.ZipperRootReduceNs
 
 	if src.SlabWriteBytesByFile != nil {
 		if dst.SlabWriteBytesByFile == nil {

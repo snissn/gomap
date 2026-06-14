@@ -3036,8 +3036,9 @@ func TestRenderMarkdownSweep_IncludesTreeDBPerfAndStatsSections(t *testing.T) {
 			},
 			TreeDBStats: map[string]map[string]string{
 				"TreeDB": {
-					"treedb.cache.vlog_mmap.read.hits":          "7",
-					"treedb.leaf_generation.generations.pinned": formatInt(int(pinned)),
+					"treedb.cache.vlog_mmap.read.hits":           "7",
+					"treedb.cache.flush_apply.planning_ns_total": formatInt(100 + int(pinned)),
+					"treedb.leaf_generation.generations.pinned":  formatInt(int(pinned)),
 				},
 			},
 		}
@@ -3061,6 +3062,9 @@ func TestRenderMarkdownSweep_IncludesTreeDBPerfAndStatsSections(t *testing.T) {
 	}
 	if !strings.Contains(md, "leaf_generation.generations.pinned: 1") || !strings.Contains(md, "leaf_generation.generations.pinned: 2") {
 		t.Fatalf("expected sweep selected stats details, got:\n%s", md)
+	}
+	if !strings.Contains(md, "flush_apply.cache.planning_ns_total: 101") || !strings.Contains(md, "flush_apply.cache.planning_ns_total: 102") {
+		t.Fatalf("expected flush/apply selected stats details, got:\n%s", md)
 	}
 }
 
@@ -3110,6 +3114,8 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 					"treedb.cache.vlog_mmap.read.hits":                               "10",
 					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":            "8589934592",
 					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "512",
+					"treedb.cache.flush_apply.planning_ns_total":                     "11",
+					"treedb.flush_apply.old_leaf_read_decode.bytes_total":            "22",
 					"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
 					"treedb.cache.vlog_auto.frames.block_lz4":                        "5",
 					"treedb.cache.vlog_block.k.bucket.lz4.le_1":                      "5",
@@ -3168,6 +3174,12 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.vlog.mmap_max_mapped_leaf_sealed_segments"]; got != "512" {
 		t.Fatalf("unexpected backend leaf mmap budget stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_apply.planning_ns_total"]; got != "11" {
+		t.Fatalf("unexpected cache flush planning stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.flush_apply.old_leaf_read_decode.bytes_total"]; got != "22" {
+		t.Fatalf("unexpected backend flush old-leaf stat=%q", got)
 	}
 	for key, want := range map[string]string{
 		"treedb.cache.vlog_auto.frames.block_lz4":       "5",

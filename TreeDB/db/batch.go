@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -249,6 +250,7 @@ func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchInte
 		if committed {
 			return nil
 		}
+		b.db.observeFlushApplyRetry()
 	}
 	return b.writeSerialized(sync, intent)
 }
@@ -276,6 +278,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
 	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
+	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -299,12 +302,17 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 	}()
+	commitWaitStart := time.Now()
 	b.db.commitMu.Lock()
+	b.db.observeFlushApplyCommitWait(time.Since(commitWaitStart))
+	guardedPublishStart := time.Now()
 	b.db.mu.RLock()
 	currentRoot := b.db.meta.UserRootPageID
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.RUnlock()
 	if currentRoot != rootID {
+		b.db.observeFlushApplyMismatch()
+		b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 		b.db.commitMu.Unlock()
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -319,6 +327,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 			b.db.commitMu.Unlock()
 			freeErr := tracker.FreeAll()
 			b.db.writeMu.RUnlock()
@@ -335,6 +344,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 	}
+	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -353,7 +363,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
+	commitWaitStart := time.Now()
 	b.db.writeMu.Lock()
+	b.db.observeFlushApplyCommitWait(time.Since(commitWaitStart))
 	defer b.db.writeMu.Unlock()
 
 	idx := b.db.idx.Load()
@@ -370,6 +382,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	defer idx.registry.Unregister(regID)
 
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
+	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	if err != nil {
 		return err
 	}
@@ -387,12 +400,14 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {
 		// This should not happen if writeMu is held and we are the only writer.
+		b.db.observeFlushApplyMismatch()
 		b.db.mu.Unlock()
 		return fmt.Errorf("concurrent modification detected during batch write")
 	}
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
+	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
 		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
@@ -404,6 +419,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 		}
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
 	}
+	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 	if err != nil {
 		if intent != nil {
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)

@@ -235,6 +235,41 @@ type DB struct {
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
 
+	// Cached-flush/root-apply M0 counters. These are coarse per-apply counters
+	// used by benchmark artifacts; avoid per-node timing in zipper recursion.
+	flushApplyCalls                         atomic.Uint64
+	flushApplyErrors                        atomic.Uint64
+	flushApplyOps                           atomic.Uint64
+	flushApplyNs                            atomic.Uint64
+	flushApplyOldNodeLoads                  atomic.Uint64
+	flushApplyOldPagerNodeLoads             atomic.Uint64
+	flushApplyOldLeafLogNodeLoads           atomic.Uint64
+	flushApplyOldLeafLogCacheHits           atomic.Uint64
+	flushApplyOldLeafLogReaderCalls         atomic.Uint64
+	flushApplyOldLeafLogViewReads           atomic.Uint64
+	flushApplyOldLeafLogScratchReads        atomic.Uint64
+	flushApplyOldPagerNodeBytesRead         atomic.Uint64
+	flushApplyOldLeafLogNodeBytesRead       atomic.Uint64
+	flushApplyOldLeafLogRecordHintBytesRead atomic.Uint64
+	flushApplyLeafMerges                    atomic.Uint64
+	flushApplyInternalMerges                atomic.Uint64
+	flushApplyLeafPagesWritten              atomic.Uint64
+	flushApplyPagerLeafPagesWritten         atomic.Uint64
+	flushApplyLeafLogPagesWritten           atomic.Uint64
+	flushApplyLeafPageBytesWritten          atomic.Uint64
+	flushApplyPagerLeafPageBytesWritten     atomic.Uint64
+	flushApplyLeafLogPageBytesWritten       atomic.Uint64
+	flushApplyInternalPagesWritten          atomic.Uint64
+	flushApplyInternalPageBytesWritten      atomic.Uint64
+	flushApplyInternalChildRefs             atomic.Uint64
+	flushApplyRootSplitLevels               atomic.Uint64
+	flushApplyRootReduceNs                  atomic.Uint64
+	flushApplyCommitWaitNs                  atomic.Uint64
+	flushApplyGuardedPublishCalls           atomic.Uint64
+	flushApplyGuardedPublishNs              atomic.Uint64
+	flushApplyRetries                       atomic.Uint64
+	flushApplyMismatches                    atomic.Uint64
+
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
 	systemRootWarmPublishAttempts         atomic.Uint64
