@@ -2,6 +2,7 @@ package caching
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,6 +18,22 @@ func addCacheInt64(dst interface{ Add(uint64) uint64 }, v int64) {
 		return
 	}
 	dst.Add(uint64(v))
+}
+
+func addAtomicInt64FloorZero(dst *atomic.Int64, delta int64) {
+	if dst == nil || delta == 0 {
+		return
+	}
+	for {
+		cur := dst.Load()
+		next := cur + delta
+		if next < 0 {
+			next = 0
+		}
+		if dst.CompareAndSwap(cur, next) {
+			return
+		}
+	}
 }
 
 func (db *DB) observeFlushApplyPlan(units, entries int, bytes int64, planning time.Duration) {
@@ -93,9 +110,7 @@ func (db *DB) endFlushCoordinatorPass() {
 	if db == nil {
 		return
 	}
-	if active := db.flushCoordinatorActive.Add(-1); active < 0 {
-		db.flushCoordinatorActive.Store(0)
-	}
+	addAtomicInt64FloorZero(&db.flushCoordinatorActive, -1)
 	db.signalFlushCoordinatorWaiters()
 }
 
@@ -114,9 +129,7 @@ func (db *DB) finishFlushCoordinatorWork(bytes int64, success bool) {
 		return
 	}
 	if bytes > 0 {
-		if inFlight := db.flushCoordinatorInFlightBytes.Add(-bytes); inFlight < 0 {
-			db.flushCoordinatorInFlightBytes.Store(0)
-		}
+		addAtomicInt64FloorZero(&db.flushCoordinatorInFlightBytes, -bytes)
 	}
 	if !success {
 		db.flushCoordinatorErrors.Add(1)

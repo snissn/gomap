@@ -185,7 +185,9 @@ Active-flush coordination:
   (`FlushApplyConcurrency > 1`);
 - stop-backpressure foreground assists may yield when an active flush has already
   claimed enough bounded in-flight bytes to bring non-claimed backlog below the
-  stop threshold;
+  stop threshold. Here non-claimed backlog means
+  `max(queue_backlog_bytes - active_flush_in_flight_bytes, 0)`, and the yield is
+  currently gated by `FlushApplyConcurrency > 1`;
 - hard overload beyond active credits is counted as an explicit active-flush
   yield in the foreground path; blocking fallback is reserved for stalled
   `waitForStop` progress, while checkpoint/close continue to drain via
