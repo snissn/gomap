@@ -1068,6 +1068,10 @@ func inspectTextStatsRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, 
 }
 
 func inspectTextV2IndexStorage(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition) (TextIndexStorageStats, error) {
+	return inspectTextV2IndexStorageWithBudget(snap, catalog, def, nil)
+}
+
+func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, checkBudget func() error) (TextIndexStorageStats, error) {
 	stats := TextIndexStorageStats{Version: TextIndexVersionV2}
 	generationsRootName := collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name)
 	status, ok, err := readTextV2StatusAtRoot(snap, catalog, generationsRootName)
@@ -1083,13 +1087,18 @@ func inspectTextV2IndexStorage(snap *backenddb.Snapshot, catalog *collectionCata
 	stats.V2DeletedDocs = status.DeletedDocuments
 	stats.V2RootGeneration = status.RootGeneration
 	stats.V2StatsGeneration = status.StatsGeneration
+	if checkBudget != nil {
+		if err := checkBudget(); err != nil {
+			return stats, err
+		}
+	}
 
 	for _, rootName := range collectionTextV2RootNames(catalog.meta.Name, def.Name) {
 		family, ok := textV2RootFamilyForName(catalog.meta.Name, def.Name, rootName)
 		if !ok {
 			return stats, errMalformedTextStorage("unknown text-v2 root %q", rootName)
 		}
-		if err := inspectTextV2Root(snap, catalog, def, rootName, family, status, &stats); err != nil {
+		if err := inspectTextV2Root(snap, catalog, def, rootName, family, status, &stats, checkBudget); err != nil {
 			return stats, err
 		}
 	}
@@ -1106,7 +1115,7 @@ func readTextV2StatusAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog
 	return status, true, err
 }
 
-func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, rootName string, family textV2RootFamily, status textV2IndexStatusValue, stats *TextIndexStorageStats) error {
+func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, rootName string, family textV2RootFamily, status textV2IndexStatusValue, stats *TextIndexStorageStats, checkBudget func() error) error {
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return errMalformedTextStorage("missing text-v2 root %q", rootName)
@@ -1128,6 +1137,11 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 		fieldSet[field] = struct{}{}
 	}
 	for it.Valid() {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		if it.IsDeleted() {
 			it.Next()
 			continue

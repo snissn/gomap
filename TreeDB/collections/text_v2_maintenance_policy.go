@@ -248,18 +248,18 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB
 	meta := c.Meta()
 	for _, def := range meta.TextIndexes {
-		if opts.MaxIndexes > 0 && int(stats.IndexesScanned) >= opts.MaxIndexes {
-			stats.BudgetExhausted = true
-			stats.BudgetExhaustedReason = TextIndexMaintenanceSkipReasonMaxIndexes
-			stats.IndexesSkipped++
-			break
-		}
 		version := def.Version
 		if version == TextIndexVersionDefault {
 			version = TextIndexVersionV2
 		}
 		if version != TextIndexVersionV2 {
 			continue
+		}
+		if opts.MaxIndexes > 0 && int(stats.IndexesScanned) >= opts.MaxIndexes {
+			stats.BudgetExhausted = true
+			stats.BudgetExhaustedReason = TextIndexMaintenanceSkipReasonMaxIndexes
+			stats.IndexesSkipped++
+			break
 		}
 		idx, err := c.maintainTextIndex(ctx, def.Name, opts)
 		if err != nil {

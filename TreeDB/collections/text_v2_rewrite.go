@@ -54,8 +54,8 @@ type TextIndexRewriteOptions struct {
 	// The bound is checked at term boundaries so one term is the accounting unit.
 	MaxPostings uint64
 	// MaxDuration bounds wall-clock planning time. Zero is unlimited. The bound is
-	// checked between posting blocks and term rewrites; exhaustion leaves storage
-	// unchanged.
+	// checked during storage-stat inspection, term-stat planning, posting-block
+	// scanning, and term rewrites; exhaustion leaves storage unchanged.
 	MaxDuration time.Duration
 }
 
@@ -182,35 +182,49 @@ func (b *textV2RewriteBudget) check() error {
 	return nil
 }
 
-func (b *textV2RewriteBudget) reserveTerm(term *textV2PostingRewriteTerm) error {
+func (b *textV2RewriteBudget) reserveTerm() error {
 	if err := b.check(); err != nil {
 		return err
 	}
-	if b == nil || !b.enabled || term == nil {
+	if b == nil || !b.enabled {
 		return nil
 	}
 	if b.maxTerms > 0 && b.terms+1 > b.maxTerms {
 		b.exhaust(TextIndexRewriteBudgetReasonMaxTerms)
 		return errTextV2RewriteBudgetExhausted
 	}
-	if b.maxPostingBlocks > 0 && b.postingBlocks+term.oldBlocks > b.maxPostingBlocks {
-		b.exhaust(TextIndexRewriteBudgetReasonMaxPostingBlocks)
-		return errTextV2RewriteBudgetExhausted
-	}
-	if b.maxPostings > 0 && b.postings+term.postings > b.maxPostings {
-		b.exhaust(TextIndexRewriteBudgetReasonMaxPostings)
-		return errTextV2RewriteBudgetExhausted
-	}
+	b.terms++
 	return nil
 }
 
-func (b *textV2RewriteBudget) finishTerm(term *textV2PostingRewriteTerm) {
-	if b == nil || !b.enabled || term == nil {
-		return
+func (b *textV2RewriteBudget) reservePostingBlock() error {
+	if err := b.check(); err != nil {
+		return err
 	}
-	b.terms++
-	b.postingBlocks += term.oldBlocks
-	b.postings += term.postings
+	if b == nil || !b.enabled {
+		return nil
+	}
+	if b.maxPostingBlocks > 0 && b.postingBlocks+1 > b.maxPostingBlocks {
+		b.exhaust(TextIndexRewriteBudgetReasonMaxPostingBlocks)
+		return errTextV2RewriteBudgetExhausted
+	}
+	b.postingBlocks++
+	return nil
+}
+
+func (b *textV2RewriteBudget) reservePostings(count uint64) error {
+	if err := b.check(); err != nil {
+		return err
+	}
+	if b == nil || !b.enabled {
+		return nil
+	}
+	if b.maxPostings > 0 && b.postings+count > b.maxPostings {
+		b.exhaust(TextIndexRewriteBudgetReasonMaxPostings)
+		return errTextV2RewriteBudgetExhausted
+	}
+	b.postings += count
+	return nil
 }
 
 func (b *textV2RewriteBudget) exhaust(reason string) {
@@ -229,6 +243,18 @@ func (b *textV2RewriteBudget) exhaust(reason string) {
 func (c *Collection) RewriteTextIndex(indexName string, opts TextIndexRewriteOptions) (TextIndexRewriteStats, error) {
 	stats, _, _, err := c.rewriteTextIndexInternal(context.Background(), indexName, textV2RewriteRunOptions{Rewrite: opts})
 	return stats, err
+}
+
+func textV2BudgetExhaustedRewriteStats(indexName string, before TextIndexStorageStats, reason string) TextIndexRewriteStats {
+	return TextIndexRewriteStats{
+		IndexName:             indexName,
+		Version:               TextIndexVersionV2,
+		RootGenerationBefore:  before.V2RootGeneration,
+		RootGenerationAfter:   before.V2RootGeneration,
+		Noop:                  true,
+		BudgetExhausted:       true,
+		BudgetExhaustedReason: reason,
+	}
 }
 
 func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName string, run textV2RewriteRunOptions) (TextIndexRewriteStats, TextIndexStorageStats, string, error) {
@@ -284,15 +310,19 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 		return empty, emptyStorage, "", fmt.Errorf("%w: text index %q is %q; rewrite/merge is only available for explicit text index v2", ErrTextIndexUnavailable, indexName, def.Version)
 	}
 
+	budget := newTextV2RewriteBudget(ctx, opts)
 	var beforeStats TextIndexStorageStats
 	if run.NeedStorageStats || run.Decide != nil {
-		beforeStats, err = inspectTextV2IndexStorage(snap, catalog, def)
+		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, budget.check)
 		if err != nil {
+			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+				return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason), beforeStats, budget.reason, nil
+			}
 			return empty, emptyStorage, "", err
 		}
 	}
 
-	plan, err := buildTextV2RewritePlan(ctx, snap, catalog, def, opts)
+	plan, err := buildTextV2RewritePlan(ctx, snap, catalog, def, opts, budget)
 	if err != nil {
 		return empty, emptyStorage, "", err
 	}
@@ -398,7 +428,7 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	return stats, beforeStats, "applied", nil
 }
 
-func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, opts TextIndexRewriteOptions) (*textV2RewritePlan, error) {
+func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, opts TextIndexRewriteOptions, budget *textV2RewriteBudget) (*textV2RewritePlan, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -440,7 +470,9 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 	plan.stats.Version = TextIndexVersionV2
 	plan.stats.RootGenerationBefore = status.RootGeneration
 	plan.stats.RootGenerationAfter = status.RootGeneration
-	budget := newTextV2RewriteBudget(ctx, opts)
+	if budget == nil {
+		budget = newTextV2RewriteBudget(ctx, opts)
+	}
 	markBudgetExhausted := func() (*textV2RewritePlan, error) {
 		plan.stats.BudgetExhausted = true
 		plan.stats.BudgetExhaustedReason = budget.reason
@@ -471,15 +503,11 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 		return nil, err
 	}
 	cache := textV2SearchBlockCache{}
-	scanErr := scanTextV2PostingRewriteTerms(snap, catalog, postingRootName, budget.check, func(term *textV2PostingRewriteTerm) error {
-		if err := budget.reserveTerm(term); err != nil {
-			return err
-		}
+	scanErr := scanTextV2PostingRewriteTerms(snap, catalog, postingRootName, budget, func(term *textV2PostingRewriteTerm) error {
 		processedTerms[term.term] = struct{}{}
 		if err := plan.processRewriteTerm(snap, catalog, def, searchCtx, status, &cache, term, termStats[term.term], target, opts.Force); err != nil {
 			return err
 		}
-		budget.finishTerm(term)
 		return budget.check()
 	})
 	if scanErr != nil {
@@ -688,7 +716,7 @@ func (term *textV2PostingRewriteTerm) filterCurrentEntries(snap *backenddb.Snaps
 	return nil
 }
 
-func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, checkBudget func() error, fn func(*textV2PostingRewriteTerm) error) error {
+func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, budget *textV2RewriteBudget, fn func(*textV2PostingRewriteTerm) error) error {
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil {
 		if err == tree.ErrKeyNotFound {
@@ -709,8 +737,8 @@ func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collection
 	}
 	var scratch []uint32
 	for it.Valid() {
-		if checkBudget != nil {
-			if err := checkBudget(); err != nil {
+		if budget != nil {
+			if err := budget.check(); err != nil {
 				return err
 			}
 		}
@@ -731,7 +759,17 @@ func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collection
 			if err := flush(); err != nil {
 				return err
 			}
+			if budget != nil {
+				if err := budget.reserveTerm(); err != nil {
+					return err
+				}
+			}
 			current = &textV2PostingRewriteTerm{term: key.Term, liveByOrd: make(map[uint64]textV2PostingBlockEntry)}
+		}
+		if budget != nil {
+			if err := budget.reservePostingBlock(); err != nil {
+				return err
+			}
 		}
 		raw := it.ValueCopy(nil)
 		scanner, err := newTextV2PostingBlockEntryScanner(raw, scratch)
@@ -740,6 +778,11 @@ func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collection
 		}
 		if scanner.block.BlockStart != key.BlockStart || scanner.block.BlockID != key.BlockID {
 			return errMalformedTextStorage("text-v2 posting block key/value identity mismatch")
+		}
+		if budget != nil {
+			if err := budget.reservePostings(uint64(scanner.block.Summary.DocCount)); err != nil {
+				return err
+			}
 		}
 		current.oldKeys = append(current.oldKeys, append([]byte(nil), keyBytes...))
 		current.oldBlocks++

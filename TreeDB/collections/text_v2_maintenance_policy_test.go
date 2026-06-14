@@ -85,6 +85,17 @@ func TestTextV2MaintenancePolicyBudgetAndTimeout2732(t *testing.T) {
 		t.Fatalf("after budget stats=%+v want pending debt preserved", afterBudget)
 	}
 
+	timed, err := col.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{
+		Policy:      TextIndexMaintenancePolicy{MinDeletedDocuments: 1},
+		MaxDuration: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatalf("MaintainTextIndex timed budget: %v", err)
+	}
+	if !timed.BudgetExhausted || len(timed.Indexes) != 1 || timed.Indexes[0].BudgetExhaustedReason != TextIndexRewriteBudgetReasonMaxDuration {
+		t.Fatalf("timed stats=%+v want max-duration budget exhaustion", timed)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := col.MaintainTextIndex(ctx, "lexical", TextIndexMaintenanceOptions{Policy: TextIndexMaintenancePolicy{MinDeletedDocuments: 1}}); !errors.Is(err, context.Canceled) {
@@ -163,6 +174,26 @@ func TestTextV2MaintenancePolicyConcurrentSearch2732(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent search: %v", err)
 		}
+	}
+}
+
+func TestTextV2MaintenancePolicyMaxIndexesIgnoresTrailingV1Indexes2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col, _ := createTextV2MaintenancePolicyFixture2732(t, d, 24)
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "legacy", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex v1: %v", err)
+	}
+
+	stats, err := col.MaintainTextIndexes(context.Background(), TextIndexMaintenanceOptions{
+		Policy:     TextIndexMaintenancePolicy{MinDeletedDocuments: 1_000},
+		MaxIndexes: 1,
+	})
+	if err != nil {
+		t.Fatalf("MaintainTextIndexes: %v", err)
+	}
+	if stats.BudgetExhausted || stats.BudgetExhaustedReason != "" || stats.IndexesScanned != 1 {
+		t.Fatalf("stats=%+v want single v2 index processed without max-index exhaustion from trailing v1", stats)
 	}
 }
 
