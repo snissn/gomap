@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestScaleCommandSmokeReport2731(t *testing.T) {
@@ -78,6 +81,20 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	}
 	if _, err := os.Stat(rep.Artifacts.DBDir); !os.IsNotExist(err) {
 		t.Fatalf("primary db dir kept unexpectedly err=%v", err)
+	}
+}
+
+func TestHybridFailureRowsPreserveFailClosedStats2731(t *testing.T) {
+	resp := collections.HybridSearchResponse{Stats: collections.HybridSearchStats{FailClosed: 1, FailClosedReason: collections.HybridFailClosedReasonTextIndexUnavailable}}
+	row := failedHybridQueryRow(config{rows: 1_000_000, topK: 10, candidateLimit: 64}, "hybrid_common", "common", resp, errors.New("bounded generation failed"))
+	if row.GuardrailOK || row.GuardrailFailure == "" {
+		t.Fatalf("row guardrail=%v failure=%q", row.GuardrailOK, row.GuardrailFailure)
+	}
+	if row.HybridStats == nil || row.HybridStats.FailClosed != 1 || row.HybridStats.FailClosedReason != collections.HybridFailClosedReasonTextIndexUnavailable {
+		t.Fatalf("row stats=%+v want fail-closed stats preserved", row.HybridStats)
+	}
+	if row.Samples != 0 || row.Results != 0 || row.Rows != 1_000_000 || row.CandidateBudget != 64 {
+		t.Fatalf("row metadata=%+v", row)
 	}
 }
 

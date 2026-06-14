@@ -49,7 +49,7 @@ func TestTextHybridScaleLargeFixtureSmoke2731(t *testing.T) {
 }
 
 func TestTextHybridScaleReopenDurability2731(t *testing.T) {
-	dir, d, col := openTextHybridScaleTextOnlyFixture2731(t, 256)
+	dir, d, _ := openTextHybridScaleTextOnlyFixture2731(t, 256)
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -81,7 +81,6 @@ func TestTextHybridScaleReopenDurability2731(t *testing.T) {
 	if len(got.Results) == 0 {
 		t.Fatal("reopened text returned no results")
 	}
-	_ = col
 }
 
 func TestTextHybridScaleConcurrentSearchWriteSanity2731(t *testing.T) {
@@ -217,15 +216,23 @@ func assertTextScaleZeroDocStats2731(t *testing.T, label string, stats TextSearc
 }
 
 func textScaleGuard2731(stats TextSearchStats) string {
-	if stats.DocumentsFetched != 0 || stats.FullDocumentScanFallbacks != 0 || stats.FailClosed != 0 || stats.TextStateLookups != 0 || stats.TextMatchDetailsBuilt != 0 {
-		return fmt.Sprintf("docs=%d fallbacks=%d fail=%d state=%d details=%d", stats.DocumentsFetched, stats.FullDocumentScanFallbacks, stats.FailClosed, stats.TextStateLookups, stats.TextMatchDetailsBuilt)
+	return scaleZeroDocGuard2731(stats.DocumentsFetched, stats.FullDocumentScanFallbacks, stats.FailClosed, stats.TextStateLookups, stats.TextMatchDetailsBuilt)
+}
+
+func hybridScaleGuard2731(stats HybridSearchStats) string {
+	return scaleZeroDocGuard2731(stats.DocumentsFetched, stats.FullDocumentScanFallbacks, stats.FailClosed, stats.TextStateLookups, stats.TextMatchDetailsBuilt)
+}
+
+func scaleZeroDocGuard2731(docs, fallbacks, fail, state, details uint64) string {
+	if docs != 0 || fallbacks != 0 || fail != 0 || state != 0 || details != 0 {
+		return fmt.Sprintf("docs=%d fallbacks=%d fail=%d state=%d details=%d", docs, fallbacks, fail, state, details)
 	}
 	return ""
 }
 
 func assertHybridScaleZeroDocStats2731(t *testing.T, label string, stats HybridSearchStats) {
 	t.Helper()
-	if stats.DocumentsFetched != 0 || stats.FullDocumentScanFallbacks != 0 || stats.FailClosed != 0 || stats.TextStateLookups != 0 || stats.TextMatchDetailsBuilt != 0 {
-		t.Fatalf("%s stats=%+v want no-doc/no-fallback/no-state/no-details", label, stats)
+	if guard := hybridScaleGuard2731(stats); guard != "" {
+		t.Fatalf("%s stats=%+v guard=%s", label, stats, guard)
 	}
 }

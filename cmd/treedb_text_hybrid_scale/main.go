@@ -412,6 +412,9 @@ func run(cfg config) (report, error) {
 
 	fixture, load, err := loadPrimaryFixture(cfg)
 	if err != nil {
+		if !cfg.keepDB {
+			_ = os.RemoveAll(dbDir)
+		}
 		return report{}, err
 	}
 	defer func() {
@@ -749,13 +752,8 @@ func scaleDocument(i, dims int, label string) []byte {
 }
 
 func appendJSONStringContent(dst []byte, s string) []byte {
-	// Inputs are controlled fixture tokens without quotes/backslashes. Keep this
-	// tiny helper so future shape edits do not accidentally write raw JSON quotes.
-	if strings.ContainsAny(s, "\\\"") {
-		quoted, _ := json.Marshal(s)
-		return append(dst, string(quoted[1:len(quoted)-1])...)
-	}
-	return append(dst, s...)
+	quoted := strconv.AppendQuote(nil, s)
+	return append(dst, quoted[1:len(quoted)-1]...)
 }
 
 func scaleVector(dims, i int, topic string) []float32 {
@@ -894,21 +892,35 @@ func runTextQueryRow(col *collections.Collection, cfg config, name, query string
 func runHybridQueryRow(col *collections.Collection, cfg config, name, shape string, opts collections.HybridSearchOptions) (queryReport, guardrailResult, error) {
 	warm, err := col.SearchHybrid(opts)
 	if err != nil {
+		if cfg.allowGuardrailFails {
+			return failedHybridQueryRow(cfg, name, shape, warm, fmt.Errorf("warm %s: %w", name, err)), hybridFailureGuard(name, warm.Stats, err), nil
+		}
 		return queryReport{}, guardrailResult{}, fmt.Errorf("warm %s: %w", name, err)
 	}
 	if len(warm.Results) == 0 {
-		return queryReport{}, guardrailResult{}, fmt.Errorf("warm %s returned no results", name)
+		err := fmt.Errorf("warm %s returned no results", name)
+		if cfg.allowGuardrailFails {
+			return failedHybridQueryRow(cfg, name, shape, warm, err), guardrailResult{Name: name, OK: false, Failure: err.Error()}, nil
+		}
+		return queryReport{}, guardrailResult{}, err
 	}
 	guard := hybridGuardrail(name, warm.Stats)
-	durations := make([]int64, cfg.queries)
+	durations := make([]int64, 0, cfg.queries)
 	var last collections.HybridSearchResponse
 	for i := 0; i < cfg.queries; i++ {
 		start := time.Now()
 		got, err := col.SearchHybrid(opts)
-		durations[i] = time.Since(start).Nanoseconds()
+		elapsed := time.Since(start).Nanoseconds()
 		if err != nil {
+			if cfg.allowGuardrailFails {
+				lat := summarizeLatency(durations)
+				stats := got.Stats
+				guard = hybridFailureGuard(name, got.Stats, err)
+				return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(got.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}, guard, nil
+			}
 			return queryReport{}, guardrailResult{}, fmt.Errorf("%s query %d: %w", name, i, err)
 		}
+		durations = append(durations, elapsed)
 		last = got
 		if g := hybridGuardrail(name, got.Stats); !g.OK {
 			guard = g
@@ -918,9 +930,26 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	stats := last.Stats
 	return queryReport{
 		Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows,
-		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: cfg.queries, Results: len(last.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS),
+		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS),
 		HybridStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
 	}, guard, nil
+}
+
+func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, err error) queryReport {
+	stats := response.Stats
+	guard := hybridFailureGuard(name, response.Stats, err)
+	return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: 0, Results: len(response.Results), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}
+}
+
+func hybridFailureGuard(name string, stats collections.HybridSearchStats, err error) guardrailResult {
+	guard := hybridGuardrail(name, stats)
+	if guard.OK {
+		return guardrailResult{Name: name, OK: false, Failure: err.Error()}
+	}
+	if err != nil && !strings.Contains(guard.Failure, err.Error()) {
+		guard.Failure = guard.Failure + "; error=" + err.Error()
+	}
+	return guard
 }
 
 func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixture, error) {
@@ -999,7 +1028,7 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 
 func runConcurrentProbe(col *collections.Collection, cfg config) (concurrentReport, guardrailResult, error) {
 	totalQueries := maxInt(cfg.queries, cfg.readers)
-	durations := make([]int64, totalQueries)
+	durationCh := make(chan int64, totalQueries)
 	errCh := make(chan error, cfg.readers+1)
 	statsCh := make(chan collections.TextSearchStats, totalQueries)
 	start := time.Now()
@@ -1021,7 +1050,7 @@ func runConcurrentProbe(col *collections.Collection, cfg config) (concurrentRepo
 				}
 				qStart := time.Now()
 				got, err := col.SearchText(opts)
-				durations[idx] = time.Since(qStart).Nanoseconds()
+				elapsed := time.Since(qStart).Nanoseconds()
 				if err != nil {
 					errCh <- err
 					return
@@ -1034,6 +1063,7 @@ func runConcurrentProbe(col *collections.Collection, cfg config) (concurrentRepo
 					errCh <- errors.New(g.Failure)
 					return
 				}
+				durationCh <- elapsed
 				statsCh <- got.Stats
 			}
 		}()
@@ -1046,6 +1076,7 @@ func runConcurrentProbe(col *collections.Collection, cfg config) (concurrentRepo
 		errCh <- fmt.Errorf("concurrent writer InsertBatch: %w", writeErr)
 	}
 	wg.Wait()
+	close(durationCh)
 	close(statsCh)
 	close(errCh)
 	var errs []string
@@ -1053,6 +1084,10 @@ func runConcurrentProbe(col *collections.Collection, cfg config) (concurrentRepo
 		if err != nil {
 			errs = append(errs, err.Error())
 		}
+	}
+	var durations []int64
+	for duration := range durationCh {
+		durations = append(durations, duration)
 	}
 	var lastStats *collections.TextSearchStats
 	for st := range statsCh {
