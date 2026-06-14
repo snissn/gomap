@@ -1411,7 +1411,7 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 			continue
 		}
 
-		truncated, err := visitTextV2ORBlockMaxCandidate(snap, catalog, ctx, active, &cache, allowSet, candidateLimit, maxPostingsScanned, target, &top, &response.Stats)
+		truncated, err := visitTextV2ORBlockMaxCandidate(snap, catalog, ctx, states, active, &cache, allowSet, candidateLimit, maxPostingsScanned, target, &top, &response.Stats)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -1618,7 +1618,8 @@ func visitTextV2ORBlockMaxCandidate(
 	snap *backenddb.Snapshot,
 	catalog *collectionCatalog,
 	ctx *textV2SearchContext,
-	states []*textV2ANDBlockMaxTermState,
+	scoreStates []*textV2ANDBlockMaxTermState,
+	advanceStates []*textV2ANDBlockMaxTermState,
 	cache *textV2SearchBlockCache,
 	allowSet *textV2SearchOrdinalAllowSet,
 	candidateLimit, maxPostingsScanned int,
@@ -1628,7 +1629,7 @@ func visitTextV2ORBlockMaxCandidate(
 ) (bool, error) {
 	fieldCount := len(ctx.fieldNames)
 	if allowSet != nil && !allowSet.contains(target) {
-		return advanceTextV2ORBlockMaxStatesPastTarget(ctx, states, fieldCount, maxPostingsScanned, target, stats)
+		return advanceTextV2ORBlockMaxStatesPastTarget(ctx, advanceStates, fieldCount, maxPostingsScanned, target, stats)
 	}
 	norm, ok, err := cache.normEntry(snap, catalog, ctx, target, stats)
 	if err != nil {
@@ -1658,7 +1659,10 @@ func visitTextV2ORBlockMaxCandidate(
 			stats.FailClosedReason = textSearchFailClosedCandidateLimit
 			return true, nil
 		}
-		for _, state := range states {
+		// Accumulate in canonical query-term order (scoreStates), not the
+		// WAND-active order (advanceStates), so floating-point ties match the
+		// exhaustive scorer's deterministic ordering exactly.
+		for _, state := range scoreStates {
 			if state == nil || state.exhausted || state.currentFirst() != target {
 				continue
 			}
@@ -1692,7 +1696,7 @@ func visitTextV2ORBlockMaxCandidate(
 			}
 		}
 	}
-	return advanceTextV2ORBlockMaxStatesPastTarget(ctx, states, fieldCount, maxPostingsScanned, target, stats)
+	return advanceTextV2ORBlockMaxStatesPastTarget(ctx, advanceStates, fieldCount, maxPostingsScanned, target, stats)
 }
 
 func advanceTextV2ORBlockMaxStatesPastTarget(ctx *textV2SearchContext, states []*textV2ANDBlockMaxTermState, fieldCount, maxPostingsScanned int, target uint64, stats *TextSearchStats) (bool, error) {
