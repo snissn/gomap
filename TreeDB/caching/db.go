@@ -30860,8 +30860,14 @@ func (b *Batch) maybeSwitchToStreaming() {
 	}
 
 	// Only attempt streaming if the batch is strictly increasing and starts beyond
-	// the maximum key present in the in-memory layers.
+	// the maximum key present in the in-memory layers. Active range spans are
+	// barriers for later point writes, so direct-to-backend streaming must stay off
+	// while any span-only queued unit is visible.
 	b.db.mu.RLock()
+	if rangeSpanLayerHasSpans(b.db.queueRangeSpans) {
+		b.db.mu.RUnlock()
+		return
+	}
 	queueRanges := append([]keyRange(nil), b.db.queueRanges...)
 	b.db.mu.RUnlock()
 
@@ -31186,11 +31192,17 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	}
 
 	// Only attempt streaming if the batch is strictly increasing and starts beyond
-	// the maximum key present in the in-memory layers.
+	// the maximum key present in the in-memory layers. Active range spans are
+	// barriers for later point writes, so direct-to-backend streaming must stay off
+	// while any span-only queued unit is visible.
 	b.db.mu.RLock()
+	hasRangeSpans := rangeSpanLayerHasSpans(b.db.queueRangeSpans)
 	queueRanges := append([]keyRange(nil), b.db.queueRanges...)
 	queueLen := len(b.db.queue)
 	b.db.mu.RUnlock()
+	if hasRangeSpans {
+		return false, nil
+	}
 	if queueLen > 0 && len(queueRanges) == 0 {
 		// Cannot reason about overlap without queue range tracking.
 		return false, nil
@@ -32304,10 +32316,15 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 	)
 	view := b.db.retainMemtableView()
 	if view != nil {
+		if memtableViewHasRangeSpans(view) {
+			b.db.releaseMemtableView(view)
+			return b.writeRegular(sync)
+		}
 		defer b.db.releaseMemtableView(view)
 	}
 
 	b.db.mu.RLock()
+	hasRangeSpans := view == nil && rangeSpanLayerHasSpans(b.db.queueRangeSpans)
 	overlaps = rangesOverlap(batchRange, mutableRange)
 	if view != nil {
 		mutables = view.mutables
@@ -32334,6 +32351,9 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 		}
 	}
 	b.db.mu.RUnlock()
+	if hasRangeSpans {
+		return b.writeRegular(sync)
+	}
 
 	if !overlaps {
 		if len(queueRanges) == 0 && len(queue) > 0 {

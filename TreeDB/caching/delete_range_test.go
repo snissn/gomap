@@ -449,6 +449,50 @@ func TestCachingDB_CommandWALRangeSpanIteratorPreservesPublishedRoot(t *testing.
 	}
 }
 
+func TestCachingDB_CommandWALRangeSpanBlocksLaterWriteSyncBypass(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendCalls := 0
+	if err := db.DeleteRangeAfterCommandWALAppend([]byte("a"), []byte("c"), func() error {
+		appendCalls++
+		return nil
+	}); err != nil {
+		t.Fatalf("DeleteRangeAfterCommandWALAppend: %v", err)
+	}
+	if appendCalls != 1 {
+		t.Fatalf("append calls=%d want 1", appendCalls)
+	}
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("b"), []byte("new")); err != nil {
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	if val, err := db.Get([]byte("b")); err != nil || string(val) != "new" {
+		t.Fatalf("newer point after active span b=(%q,%v), want new,nil", val, err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if val, err := db.Get([]byte("b")); err != nil || string(val) != "new" {
+		t.Fatalf("newer point after span checkpoint b=(%q,%v), want new,nil", val, err)
+	}
+}
+
 func TestCachingBatch_CommandWALRangeOnlyUsesSpanLayer(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,
