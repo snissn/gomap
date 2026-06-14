@@ -89,8 +89,9 @@ Outputs:
 - `$OUT/insights.html`
 
 This includes section-wise CPU hotspots, allocation hotspots
-(`alloc_space`/`alloc_objects`), contention hotspots, and investigation targets
-with source references when resolvable.
+(`alloc_space`/`alloc_objects`), contention hotspots, selected TreeDB stats
+(including `treedb.cache.flush_apply.*` / `treedb.flush_apply.*` when emitted),
+and investigation targets with source references when resolvable.
 
 ### Force-pointers perf matrix (script)
 

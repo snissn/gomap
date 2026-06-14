@@ -7859,6 +7859,22 @@ type DB struct {
 	checkpointAutoVacuumLastPages                                atomic.Uint64
 	checkpointAutoVacuumLastInternalP50                          atomic.Uint64
 	checkpointAutoVacuumLastInternalAvg                          atomic.Uint64
+	flushApplyBatches                                            atomic.Uint64
+	flushApplyUnits                                              atomic.Uint64
+	flushApplyEntries                                            atomic.Uint64
+	flushApplyBytes                                              atomic.Uint64
+	flushApplyPlanningNs                                         atomic.Uint64
+	flushApplyBuildNs                                            atomic.Uint64
+	flushApplyBackendWriteNs                                     atomic.Uint64
+	flushApplyLeafLogEncodeCompressNs                            atomic.Uint64
+	flushApplyLeafLogAppendWaitNs                                atomic.Uint64
+	flushApplyLeafLogAppendNs                                    atomic.Uint64
+	flushApplyLeafLogAppendBytes                                 atomic.Uint64
+	flushApplyLeafLogAppendFrames                                atomic.Uint64
+	flushApplyLeafLogAppendRecords                               atomic.Uint64
+	flushApplyForegroundAssistCalls                              atomic.Uint64
+	flushApplyForegroundAssistWaitNs                             atomic.Uint64
+	flushApplyForegroundAssistFlushes                            atomic.Uint64
 	lastForegroundWriteUnixNano                                  atomic.Int64
 	lastForegroundReadUnixNano                                   atomic.Int64
 	foregroundReadStampCounter                                   atomic.Uint32
@@ -14702,6 +14718,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		wallStart = db.valueLogAutotuneMetrics.now()
 	}
 	selectorStart := time.Now()
+	leafLogAppend := db != nil && l == &db.leafLog
+	appendWallStart := time.Time{}
+	appendWait := time.Duration(0)
+	if leafLogAppend {
+		appendWallStart = time.Now()
+	}
 
 	var (
 		bytesWrittenTotal int64
@@ -14947,7 +14969,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	resetBlockCompressionHints := finalWriteMode == vlogWriteBlock &&
 		(probeCompression || retainedStorageFirstBlockAttempt)
 
+	lockWaitStart := time.Time{}
+	if leafLogAppend {
+		lockWaitStart = time.Now()
+	}
 	l.vlogMu.Lock()
+	if leafLogAppend {
+		appendWait += time.Since(lockWaitStart)
+	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 		l.vlogMu.Unlock()
 		return nil, err
@@ -15128,7 +15157,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			if i > 0 && i%4096 == 0 {
 				l.vlogMu.Unlock()
 				runtime.Gosched()
+				relockWaitStart := time.Time{}
+				if leafLogAppend {
+					relockWaitStart = time.Now()
+				}
 				l.vlogMu.Lock()
+				if leafLogAppend {
+					appendWait += time.Since(relockWaitStart)
+				}
 				w = l.vlog
 				if w == nil {
 					l.vlogMu.Unlock()
@@ -15399,6 +15435,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			encodeRawBytes += rawFrameBytes
 		}
 	}
+	if leafLogAppend {
+		db.observeFlushApplyLeafLogAppend(appendWait, time.Since(appendWallStart), bytesWrittenTotal, framesTotal, len(records))
+	}
 	if !wallStart.IsZero() {
 		storedForMetrics := storedPayloadBytes
 		if storedForMetrics == 0 && bytesWrittenTotal > 0 {
@@ -15434,6 +15473,12 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		wallStart = db.valueLogAutotuneMetrics.now()
 	}
 	selectorStart := time.Now()
+	leafLogAppend := db != nil && l == &db.leafLog
+	appendWallStart := time.Time{}
+	appendWait := time.Duration(0)
+	if leafLogAppend {
+		appendWallStart = time.Now()
+	}
 
 	var (
 		totalBytes int64
@@ -15685,6 +15730,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			if err != nil {
 				return page.ValuePtr{}, "", err
 			}
+			if leafLogAppend {
+				db.observeFlushApplyLeafLogAppend(0, time.Since(appendWallStart), totalBytes, 1, 1)
+			}
 			db.valueLogDictFrames.total.Add(1)
 			if stats.Attempted {
 				db.valueLogDictFrames.attempted.Add(1)
@@ -15753,7 +15801,14 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		return ptr, retainPath, err
 	}
 
+	lockWaitStart := time.Time{}
+	if leafLogAppend {
+		lockWaitStart = time.Now()
+	}
 	l.vlogMu.Lock()
+	if leafLogAppend {
+		appendWait += time.Since(lockWaitStart)
+	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 		l.vlogMu.Unlock()
 		return page.ValuePtr{}, "", err
@@ -15933,6 +15988,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	if stats.EncodeNs > 0 && stats.RawPayloadBytes > 0 {
 		encodeNsTotal = stats.EncodeNs
 		encodeRawBytes = stats.RawPayloadBytes
+	}
+	if leafLogAppend {
+		db.observeFlushApplyLeafLogAppend(appendWait, time.Since(appendWallStart), totalBytes, 1, 1)
 	}
 	if !wallStart.IsZero() {
 		storedForMetrics := stats.StoredPayloadBytes
@@ -21237,7 +21295,9 @@ func (db *DB) waitForStop() {
 			}
 
 			before := db.queueBacklogBytes.Load()
-			db.flushSomeBlocking(false, maxMemtables, db.writerFlushMaxDuration)
+			assistStart := time.Now()
+			flushed := db.flushSomeBlocking(false, maxMemtables, db.writerFlushMaxDuration)
+			db.observeForegroundFlushAssist(time.Since(assistStart), flushed)
 			after := db.queueBacklogBytes.Load()
 			if after < target {
 				break
@@ -21305,7 +21365,9 @@ func (db *DB) maybeAssistFlush() {
 
 		backlog = db.queueBacklogBytes.Load()
 		if stopBytes > 0 && backlog >= stopBytes {
-			_ = db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			assistStart := time.Now()
+			flushed := db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			db.observeForegroundFlushAssist(time.Since(assistStart), flushed)
 			return
 		}
 		if slowdownBytes > 0 && backlog > slowdownBytes {
@@ -21373,9 +21435,9 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 
 // flushSomeBlocking is like flushSome, but it blocks on lane locks. This is used
 // by stop-backpressure to guarantee forward progress instead of spinning.
-func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Duration) {
+func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Duration) int {
 	if maxMemtables <= 0 && maxDuration <= 0 {
-		return
+		return 0
 	}
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
@@ -21385,25 +21447,25 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 	flushed := 0
 	for {
 		if maxMemtables > 0 && flushed >= maxMemtables {
-			return
+			return flushed
 		}
 		if maxDuration > 0 && time.Since(start) >= maxDuration {
-			return
+			return flushed
 		}
 		if attempted, ok := db.attemptDirtyRootPublish(); attempted {
 			if !ok {
-				return
+				return flushed
 			}
 			flushed++
 			continue
 		}
 		laneID, ok := db.pickFlushLane()
 		if !ok {
-			return
+			return flushed
 		}
 		okFlush := db.flushLaneOnce(sync, laneID)
 		if !okFlush {
-			return
+			return flushed
 		}
 		flushed++
 	}
@@ -24270,12 +24332,15 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			targetBytes = desired
 		}
 	}
+	planStart := time.Now()
 	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
+	planningDur := time.Since(planStart)
 	db.mu.Unlock()
 	if len(units) == 0 {
 		return false
 	}
 	totalSpans := flushUnitSpanCount(units)
+	db.observeFlushApplyPlan(len(units), totalLen+totalSpans, totalBytes, planningDur)
 
 	if totalLen == 0 && totalSpans == 0 {
 		db.mu.Lock()
@@ -24288,6 +24353,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		return true
 	}
 	if totalLen == 0 && totalSpans > 0 {
+		buildStart := time.Now()
 		backendBatch := db.newBackendBatchWithSize(totalSpans)
 		reserveBackendBatchOps(backendBatch, totalSpans)
 		pending := 0
@@ -24301,6 +24367,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				pending++
 			}
 		}
+		db.observeFlushApplyBuild(time.Since(buildStart))
 		commandPublishAttached := false
 		if pending > 0 {
 			var attachErr error
@@ -24313,11 +24380,13 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			db.rangeSpanFlushBatches.Add(1)
 			db.backendWriteBatchesTotal.Add(1)
 			var err error
+			writeStart := time.Now()
 			if sync {
 				err = backendBatch.WriteSync()
 			} else {
 				err = backendBatch.Write()
 			}
+			db.observeFlushApplyBackendWrite(time.Since(writeStart))
 			cerr := backendBatch.Close()
 			if err == nil {
 				err = cerr
@@ -24356,6 +24425,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		runtime.GOMAXPROCS(0) > 1
 
 	if useParallel && !db.deferredValueLogEnabled() {
+		buildStart := time.Now()
 		chunkCap := db.flushBuildChunkCap
 		if chunkCap < 0 {
 			chunkCap = 8192
@@ -24463,6 +24533,8 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		if failed {
 			return false
 		}
+		db.observeFlushApplyBuild(time.Since(buildStart))
+		buildStart = time.Now()
 
 		// Adaptive micro-batching: delete-heavy flushes are expensive to apply in
 		// many intermediate commits (each commit re-writes leaf pages, copying
@@ -24501,6 +24573,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				return false
 			}
 			vlogFlushed = true
+			buildStart = time.Now()
 		}
 
 		flushBackendChunk := func() error {
@@ -24512,7 +24585,11 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			// If sync==true, we only need a single durability boundary at the end of
 			// the flush. Write the intermediate chunks without fsync to avoid
 			// repeated pager sync work.
+			db.observeFlushApplyBuild(time.Since(buildStart))
+			writeStart := time.Now()
 			err := backendBatch.Write()
+			db.observeFlushApplyBackendWrite(time.Since(writeStart))
+			buildStart = time.Now()
 			cerr := backendBatch.Close()
 			if err == nil {
 				err = cerr
@@ -24627,6 +24704,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
 			flushMergeParallelAppliedOpsTotal.Add(uint64(appliedOps))
 		}
+		db.observeFlushApplyBuild(time.Since(buildStart))
 
 		if db.valueLogEnabled() {
 			if !vlogFlushed {
@@ -24657,11 +24735,13 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				return false
 			}
 			db.backendWriteBatchesTotal.Add(1)
+			writeStart := time.Now()
 			if sync {
 				err = backendBatch.WriteSync()
 			} else {
 				err = backendBatch.Write()
 			}
+			db.observeFlushApplyBackendWrite(time.Since(writeStart))
 		} else if sync && emittedChunk {
 			var attachErr error
 			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
@@ -24673,7 +24753,9 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			// If we emitted intermediate chunks and happened to land exactly on a
 			// chunk boundary, force a single durability boundary at the end.
 			db.backendWriteBatchesTotal.Add(1)
+			writeStart := time.Now()
 			err = backendBatch.WriteSync()
+			db.observeFlushApplyBackendWrite(time.Since(writeStart))
 		}
 		cerr := backendBatch.Close()
 		if err == nil {
@@ -24767,6 +24849,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 	backendBatch := db.newBackendBatchWithSize(sizeHint)
 	reserveBackendBatchOps(backendBatch, reserveChunkOps)
 	flushStart := time.Now()
+	buildStart := time.Now()
 	vlogFlushed := false
 	backendPendingOps := 0
 	// When flushing a large combined batch, commit intermediate backend batches
@@ -24802,6 +24885,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				return false
 			}
 			vlogFlushed = true
+			buildStart = time.Now()
 		}
 
 		flushBackendChunk := func() error {
@@ -24814,7 +24898,11 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			// If sync==true, we only need a single durability boundary at the end of
 			// the flush. Write the intermediate chunks without fsync to avoid
 			// repeated pager sync work.
+			db.observeFlushApplyBuild(time.Since(buildStart))
+			writeStart := time.Now()
 			err := backendBatch.Write()
+			db.observeFlushApplyBackendWrite(time.Since(writeStart))
+			buildStart = time.Now()
 			cerr := backendBatch.Close()
 			if err == nil {
 				err = cerr
@@ -24937,6 +25025,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			}
 		}
 	}
+	db.observeFlushApplyBuild(time.Since(buildStart))
 
 	if db.valueLogEnabled() {
 		if !vlogFlushed {
@@ -24967,11 +25056,13 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			return false
 		}
 		db.backendWriteBatchesTotal.Add(1)
+		writeStart := time.Now()
 		if sync {
 			err = backendBatch.WriteSync()
 		} else {
 			err = backendBatch.Write()
 		}
+		db.observeFlushApplyBackendWrite(time.Since(writeStart))
 		cerr := backendBatch.Close()
 		if err == nil {
 			err = cerr
@@ -24996,7 +25087,9 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		// final batch provides the single sync boundary for the prior chunks and
 		// can carry the command-WAL AppliedCommandLSN publication.
 		db.backendWriteBatchesTotal.Add(1)
+		writeStart := time.Now()
 		err = backendBatch.WriteSync()
+		db.observeFlushApplyBackendWrite(time.Since(writeStart))
 		cerr := backendBatch.Close()
 		if err == nil {
 			err = cerr
@@ -26952,6 +27045,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
 	stats["treedb.cache.command_wal.checkpoint_publish.piggybacked"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishPiggybacked.Load())
 	stats["treedb.cache.command_wal.checkpoint_publish.separate"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishSeparate.Load())
+	db.appendCacheFlushApplyStats(stats)
 	stats["treedb.cache.checkpoint.auto_vacuum_runs"] = fmt.Sprintf("%d", db.checkpointAutoVacuumRuns.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_last_pages"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastPages.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_last_internal_fill_p50_ppm"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastInternalP50.Load())

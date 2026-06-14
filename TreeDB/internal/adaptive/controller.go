@@ -51,6 +51,8 @@ type Metrics struct {
 	ZipperInternalLeafLogRefs           int
 	ZipperInternalLeafLogRefCopies      int
 	ZipperRootSplitLevels               int
+	ZipperApplyWallNs                   int64
+	ZipperRootReduceNs                  int64
 
 	// SlabWriteBytesByFile tracks bytes appended to each slab file during this
 	// commit (keyed by FileID).
