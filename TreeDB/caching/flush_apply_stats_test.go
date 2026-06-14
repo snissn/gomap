@@ -60,6 +60,7 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.cache.flush_apply.planning_ns_total",
 		"treedb.cache.flush_apply.build_ns_total",
 		"treedb.cache.flush_apply.leaf_log_encode_compress_ns_total",
+		"treedb.flush_apply.apply_ns_total",
 	} {
 		// Tiny stage timers can round to zero on low-resolution platforms; the
 		// plumbing requirement is that these counters are present in DB.Stats().
@@ -70,7 +71,6 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.cache.flush_apply.bytes_total",
 		"treedb.cache.flush_apply.backend_write_ns_total",
 		"treedb.flush_apply.apply_calls_total",
-		"treedb.flush_apply.apply_ns_total",
 		"treedb.flush_apply.old_leaf_read_decode.node_loads_total",
 		"treedb.flush_apply.merge_build.leaf_merges_total",
 		"treedb.flush_apply.guarded_publish.calls_total",

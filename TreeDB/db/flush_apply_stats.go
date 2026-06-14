@@ -2,9 +2,11 @@ package db
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 func addDurationNs(dst interface{ Add(uint64) uint64 }, d time.Duration) {
@@ -26,6 +28,57 @@ func addInt64Metric(dst interface{ Add(uint64) uint64 }, v int64) {
 		return
 	}
 	dst.Add(uint64(v))
+}
+
+func storeUint64Max(dst *atomic.Uint64, value uint64) {
+	if dst == nil || value == 0 {
+		return
+	}
+	for {
+		cur := dst.Load()
+		if value <= cur || dst.CompareAndSwap(cur, value) {
+			return
+		}
+	}
+}
+
+func (db *DB) observeFlushApplyReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSummary, workerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary, prepareNs uint64, err error, validationFailure bool) {
+	if db == nil {
+		return
+	}
+	db.flushApplyReadOnlyPrepareCalls.Add(1)
+	if err != nil {
+		db.flushApplyReadOnlyPrepareErrors.Add(1)
+	}
+	if validationFailure {
+		db.flushApplyReadOnlyPrepareValidationFail.Add(1)
+	}
+	db.flushApplyReadOnlyPrepareNs.Add(prepareNs)
+	if workerSummary.TargetWorkers > 0 {
+		requested := uint64(workerSummary.TargetWorkers)
+		db.flushApplyReadOnlyPrepareRequested.Add(requested)
+		storeUint64Max(&db.flushApplyReadOnlyPrepareRequestedMax, requested)
+	}
+	if summary.Spans > 0 {
+		spans := uint64(summary.Spans)
+		db.flushApplyReadOnlyPrepareSpans.Add(spans)
+		storeUint64Max(&db.flushApplyReadOnlyPrepareSpansMax, spans)
+	}
+	if summary.SpanOps > 0 {
+		spanOps := uint64(summary.SpanOps)
+		db.flushApplyReadOnlyPrepareSpanOps.Add(spanOps)
+		storeUint64Max(&db.flushApplyReadOnlyPrepareSpanOpsMax, spanOps)
+	}
+	if summary.SpanBytes > 0 {
+		spanBytes := uint64(summary.SpanBytes)
+		db.flushApplyReadOnlyPrepareSpanBytes.Add(spanBytes)
+		storeUint64Max(&db.flushApplyReadOnlyPrepareSpanBytesMax, spanBytes)
+	}
+	if workerSummary.Ranges > 0 {
+		ranges := uint64(workerSummary.Ranges)
+		db.flushApplyReadOnlyPrepareWorkerRanges.Add(ranges)
+		storeUint64Max(&db.flushApplyReadOnlyPrepareWorkerRangesMax, ranges)
+	}
 }
 
 func (db *DB) observeFlushApplyMetrics(metrics adaptive.Metrics, applyWall time.Duration, err error) {
@@ -126,6 +179,20 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.merge_build.internal_child_refs_total"] = fmt.Sprintf("%d", db.flushApplyInternalChildRefs.Load())
 	stats["treedb.flush_apply.root_reduce.ns_total"] = fmt.Sprintf("%d", db.flushApplyRootReduceNs.Load())
 	stats["treedb.flush_apply.root_reduce.split_levels_total"] = fmt.Sprintf("%d", db.flushApplyRootSplitLevels.Load())
+	stats["treedb.flush_apply.read_only_prepare.calls_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareCalls.Load())
+	stats["treedb.flush_apply.read_only_prepare.errors_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareErrors.Load())
+	stats["treedb.flush_apply.read_only_prepare.validation_failures_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareValidationFail.Load())
+	stats["treedb.flush_apply.read_only_prepare.ns_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareNs.Load())
+	stats["treedb.flush_apply.read_only_prepare.requested_workers_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareRequested.Load())
+	stats["treedb.flush_apply.read_only_prepare.requested_workers_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareRequestedMax.Load())
+	stats["treedb.flush_apply.read_only_prepare.spans_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpans.Load())
+	stats["treedb.flush_apply.read_only_prepare.spans_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpansMax.Load())
+	stats["treedb.flush_apply.read_only_prepare.span_ops_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpanOps.Load())
+	stats["treedb.flush_apply.read_only_prepare.span_ops_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpanOpsMax.Load())
+	stats["treedb.flush_apply.read_only_prepare.span_bytes_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpanBytes.Load())
+	stats["treedb.flush_apply.read_only_prepare.span_bytes_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpanBytesMax.Load())
+	stats["treedb.flush_apply.read_only_prepare.worker_ranges_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareWorkerRanges.Load())
+	stats["treedb.flush_apply.read_only_prepare.worker_ranges_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareWorkerRangesMax.Load())
 	stats["treedb.flush_apply.commit_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyCommitWaitNs.Load())
 	stats["treedb.flush_apply.guarded_publish.calls_total"] = fmt.Sprintf("%d", db.flushApplyGuardedPublishCalls.Load())
 	stats["treedb.flush_apply.guarded_publish.ns_total"] = fmt.Sprintf("%d", db.flushApplyGuardedPublishNs.Load())
