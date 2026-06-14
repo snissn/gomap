@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -29,7 +30,10 @@ func readOnlyPrepareDirSize(tb testing.TB, path string) int64 {
 	})
 	if err != nil {
 		// Missing dirs are equivalent to zero bytes for this side-effect check.
-		return 0
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0
+		}
+		tb.Fatalf("walk dir %q: %v", path, err)
 	}
 	return total
 }

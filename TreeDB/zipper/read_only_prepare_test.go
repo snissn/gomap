@@ -384,7 +384,6 @@ func benchmarkZipperPrepareReadOnlyRandom(b *testing.B, keyCount, batchSize int)
 	}
 	requireValidReadOnlyPrepare(b, first)
 	summary := first.LeafSpanSummary()
-	workerSummary := first.LeafSpanWorkerRangeSummary(4)
 	if summary.Spans == 0 || summary.SpanOps == 0 {
 		b.Fatalf("initial prepare spans/ops=%d/%d want non-zero", summary.Spans, summary.SpanOps)
 	}
@@ -409,7 +408,6 @@ func benchmarkZipperPrepareReadOnlyRandom(b *testing.B, keyCount, batchSize int)
 	b.ReportMetric(float64(lastSummary.SpanBytes), "span_bytes/op")
 	b.ReportMetric(float64(lastWorkerSummary.Ranges), "worker_ranges/op")
 	b.ReportMetric(float64(lastWorkerSummary.MaxRangeOps), "max_worker_ops/op")
-	_ = workerSummary
 }
 
 func BenchmarkZipperApplyWarmRandomManyLeaf(b *testing.B) {

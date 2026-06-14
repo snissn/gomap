@@ -221,44 +221,10 @@ func (r ReadOnlyPrepareResult) LeafSpanSummary() ReadOnlyLeafSpanSummary {
 // preparation steps that still need serial output append and assembly order.
 // No-op inputs return dst unchanged.
 func (r ReadOnlyPrepareResult) AppendLeafSpanWorkerRanges(dst []ReadOnlyLeafSpanWorkerRange, workers int) []ReadOnlyLeafSpanWorkerRange {
-	if workers <= 0 || len(r.LeafSpans) == 0 {
-		return dst
-	}
-	if workers > len(r.LeafSpans) {
-		workers = len(r.LeafSpans)
-	}
-	totalOps := int64(r.LeafSpanSummary().SpanOps)
-	if totalOps <= 0 {
-		totalOps = int64(r.Ops)
-	}
-
-	spanIdx := 0
-	cumulativeOps := int64(0)
-	for rangeIdx := 0; rangeIdx < workers && spanIdx < len(r.LeafSpans); rangeIdx++ {
-		firstSpan := spanIdx
-		rangeOps := 0
-		rangeBytes := 0
-		remainingRanges := workers - rangeIdx - 1
-		lastAllowedSpan := len(r.LeafSpans) - remainingRanges
-		targetCumulativeOps := readOnlyPrepareCeilDiv64(totalOps*int64(rangeIdx+1), int64(workers))
-
-		for spanIdx < lastAllowedSpan {
-			spanOps := r.LeafSpans[spanIdx].OpCount
-			rangeOps += spanOps
-			rangeBytes += r.LeafSpans[spanIdx].ByteCount
-			cumulativeOps += int64(spanOps)
-			spanIdx++
-			if remainingRanges > 0 && cumulativeOps >= targetCumulativeOps {
-				break
-			}
-		}
-		dst = append(dst, ReadOnlyLeafSpanWorkerRange{
-			FirstSpan: firstSpan,
-			SpanCount: spanIdx - firstSpan,
-			Ops:       rangeOps,
-			Bytes:     rangeBytes,
-		})
-	}
+	leafSummary := r.LeafSpanSummary()
+	r.forEachLeafSpanWorkerRange(workers, leafSummary, func(workerRange ReadOnlyLeafSpanWorkerRange) {
+		dst = append(dst, workerRange)
+	})
 	return dst
 }
 
@@ -266,15 +232,37 @@ func (r ReadOnlyPrepareResult) AppendLeafSpanWorkerRanges(dst []ReadOnlyLeafSpan
 // ranges for workers without retaining the ranges themselves.
 func (r ReadOnlyPrepareResult) LeafSpanWorkerRangeSummary(workers int) ReadOnlyLeafSpanWorkerRangeSummary {
 	summary := ReadOnlyLeafSpanWorkerRangeSummary{TargetWorkers: workers}
-	if workers <= 0 || len(r.LeafSpans) == 0 {
-		return summary
+	leafSummary := r.LeafSpanSummary()
+	summary.Ops = leafSummary.SpanOps
+	summary.Bytes = leafSummary.SpanBytes
+	r.forEachLeafSpanWorkerRange(workers, leafSummary, func(workerRange ReadOnlyLeafSpanWorkerRange) {
+		summary.Ranges++
+		if summary.Ranges == 1 || workerRange.Ops < summary.MinRangeOps {
+			summary.MinRangeOps = workerRange.Ops
+		}
+		if summary.Ranges == 1 || workerRange.Ops > summary.MaxRangeOps {
+			summary.MaxRangeOps = workerRange.Ops
+		}
+		if summary.Ranges == 1 || workerRange.Bytes < summary.MinRangeBytes {
+			summary.MinRangeBytes = workerRange.Bytes
+		}
+		if summary.Ranges == 1 || workerRange.Bytes > summary.MaxRangeBytes {
+			summary.MaxRangeBytes = workerRange.Bytes
+		}
+		if workerRange.SpanCount == 1 {
+			summary.SingleSpanRanges++
+		}
+	})
+	return summary
+}
+
+func (r ReadOnlyPrepareResult) forEachLeafSpanWorkerRange(workers int, leafSummary ReadOnlyLeafSpanSummary, fn func(ReadOnlyLeafSpanWorkerRange)) {
+	if fn == nil || workers <= 0 || len(r.LeafSpans) == 0 {
+		return
 	}
 	if workers > len(r.LeafSpans) {
 		workers = len(r.LeafSpans)
 	}
-	leafSummary := r.LeafSpanSummary()
-	summary.Ops = leafSummary.SpanOps
-	summary.Bytes = leafSummary.SpanBytes
 	totalOps := int64(leafSummary.SpanOps)
 	if totalOps <= 0 {
 		totalOps = int64(r.Ops)
@@ -300,24 +288,13 @@ func (r ReadOnlyPrepareResult) LeafSpanWorkerRangeSummary(workers int) ReadOnlyL
 				break
 			}
 		}
-		summary.Ranges++
-		if summary.Ranges == 1 || rangeOps < summary.MinRangeOps {
-			summary.MinRangeOps = rangeOps
-		}
-		if summary.Ranges == 1 || rangeOps > summary.MaxRangeOps {
-			summary.MaxRangeOps = rangeOps
-		}
-		if summary.Ranges == 1 || rangeBytes < summary.MinRangeBytes {
-			summary.MinRangeBytes = rangeBytes
-		}
-		if summary.Ranges == 1 || rangeBytes > summary.MaxRangeBytes {
-			summary.MaxRangeBytes = rangeBytes
-		}
-		if spanIdx-firstSpan == 1 {
-			summary.SingleSpanRanges++
-		}
+		fn(ReadOnlyLeafSpanWorkerRange{
+			FirstSpan: firstSpan,
+			SpanCount: spanIdx - firstSpan,
+			Ops:       rangeOps,
+			Bytes:     rangeBytes,
+		})
 	}
-	return summary
 }
 
 func readOnlyPrepareCeilDiv64(n, d int64) int64 {

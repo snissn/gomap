@@ -125,6 +125,7 @@ type orderedRootDeltaBatchGroupApplyResult struct {
 	readOnlyPrepareNs               uint64
 	readOnlyPrepareAttempted        bool
 	readOnlyPrepareValidationFailed bool
+	readOnlyPrepareErr              error
 	err                             error
 }
 
@@ -2167,6 +2168,7 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 			result.readOnlyPrepareWorkerSummary = workerSummary
 			result.readOnlyPrepareNs = prepareNs
 			result.readOnlyPrepareValidationFailed = validationFailed
+			result.readOnlyPrepareErr = err
 			db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, validationFailed)
 			if err != nil {
 				result.err = err
@@ -2312,7 +2314,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	for orderedIdx := range rootApplyResults {
 		result := rootApplyResults[orderedIdx]
 		if result.readOnlyPrepareAttempted {
-			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, result.readOnlyPrepareSummary, result.readOnlyPrepareWorkerSummary, result.readOnlyPrepareNs, result.err, result.readOnlyPrepareValidationFailed)
+			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, result.readOnlyPrepareSummary, result.readOnlyPrepareWorkerSummary, result.readOnlyPrepareNs, result.readOnlyPrepareErr, result.readOnlyPrepareValidationFailed)
 		}
 		if result.err != nil {
 			return 0, nil, false, result.err
