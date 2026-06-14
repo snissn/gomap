@@ -173,6 +173,12 @@ func TestCachingDB_CommandWALRangeSpanVisibilitySnapshotsAndCheckpoint(t *testin
 	if val, err := snapAfter.Get([]byte("b")); err != nil || string(val) != "new" {
 		t.Fatalf("snapshot after range b=(%q,%v), want new,nil", val, err)
 	}
+	if out, err := snapAfter.GetAppend([]byte("b"), nil); err != nil || string(out) != "new" {
+		t.Fatalf("snapshot after range GetAppend(b)=(%q,%v), want new,nil", out, err)
+	}
+	if _, err := snapAfter.GetAppend([]byte("a"), nil); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("snapshot after range GetAppend(a) err=%v, want ErrKeyNotFound", err)
+	}
 
 	stats := db.Stats()
 	if got := deleteRangeStatUint64(t, stats, "treedb.cache.delete_range.materialized_keys_total"); got != 0 {
@@ -324,6 +330,25 @@ func TestCachingDB_CommandWALRangeSpanPreservesPublishedRootMiss(t *testing.T) {
 		t.Fatalf("DeleteRangeAfterCommandWALAppend: %v", err)
 	}
 
+	if val, err := db.Get([]byte("root-a-only")); err != nil || string(val) != "root-a" {
+		t.Fatalf("live root-id active span Get(root-a-only)=(%q,%v), want root-a,nil", val, err)
+	}
+	if out, err := db.GetAppend([]byte("root-a-only"), []byte("prefix:")); err != nil || string(out) != "prefix:root-a" {
+		t.Fatalf("live root-id active span GetAppend(root-a-only)=(%q,%v), want prefix:root-a,nil", out, err)
+	}
+	if ok, err := db.Has([]byte("root-a-only")); err != nil || !ok {
+		t.Fatalf("live root-id active span Has(root-a-only)=(%t,%v), want true,nil", ok, err)
+	}
+	if val, err := db.Get([]byte("m")); err != nil || val != nil {
+		t.Fatalf("live root-bound miss Get(m)=(%q,%v), want missing", val, err)
+	}
+	if out, err := db.GetAppend([]byte("m"), []byte("prefix:")); !errors.Is(err, tree.ErrKeyNotFound) || string(out) != "prefix:" {
+		t.Fatalf("live root-bound miss GetAppend(m)=(%q,%v), want prefix:,ErrKeyNotFound", out, err)
+	}
+	if ok, err := db.Has([]byte("m")); err != nil || ok {
+		t.Fatalf("live root-bound miss Has(m)=(%t,%v), want false,nil", ok, err)
+	}
+
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		t.Fatalf("AcquireSnapshot returned nil")
@@ -389,6 +414,13 @@ func TestCachingDB_CommandWALRangeSpanIteratorPreservesPublishedRoot(t *testing.
 	if got := collectIteratorKeysForDeleteRangeTest(t, liveIt); len(got) != 0 {
 		t.Fatalf("live root-bound iterator keys=%v want empty", got)
 	}
+	liveRIt, err := db.ReverseIterator([]byte("m"), []byte("n"))
+	if err != nil {
+		t.Fatalf("live ReverseIterator: %v", err)
+	}
+	if got := collectIteratorKeysForDeleteRangeTest(t, liveRIt); len(got) != 0 {
+		t.Fatalf("live root-bound reverse iterator keys=%v want empty", got)
+	}
 	if got, err := db.HasPrefixes([][]byte{[]byte("m")}); err != nil || len(got) != 1 || got[0] {
 		t.Fatalf("live HasPrefixes(m)=(%v,%v), want [false],nil", got, err)
 	}
@@ -404,6 +436,13 @@ func TestCachingDB_CommandWALRangeSpanIteratorPreservesPublishedRoot(t *testing.
 	}
 	if got := collectIteratorKeysForDeleteRangeTest(t, snapIt); len(got) != 0 {
 		t.Fatalf("snapshot root-bound iterator keys=%v want empty", got)
+	}
+	snapRIt, err := snap.ReverseIterator([]byte("m"), []byte("n"))
+	if err != nil {
+		t.Fatalf("snapshot ReverseIterator: %v", err)
+	}
+	if got := collectIteratorKeysForDeleteRangeTest(t, snapRIt); len(got) != 0 {
+		t.Fatalf("snapshot root-bound reverse iterator keys=%v want empty", got)
 	}
 	if got, err := snap.HasPrefixes([][]byte{[]byte("m")}); err != nil || len(got) != 1 || got[0] {
 		t.Fatalf("snapshot HasPrefixes(m)=(%v,%v), want [false],nil", got, err)

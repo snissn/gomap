@@ -28974,6 +28974,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			}
 			return db.wrapForegroundIterator(it)
 		}
+		if rootDomainSnapshotHasPublishedState(iteratorSnap) {
+			diskIter, ok, err := db.livePublishedRootIterator(iteratorSnap, start, end, false)
+			if err != nil {
+				return nil, err
+			}
+			if !ok || diskIter == nil {
+				out := merging.Iterator(&emptyIterator{start: start, end: end})
+				return decorate(out, 0), nil
+			}
+			return decorate(diskIter, 1), nil
+		}
 		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
 			out := merging.Iterator(&emptyIterator{start: start, end: end})
 			return decorate(out, 0), nil
@@ -29095,7 +29106,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			ok       bool
 		)
 		if usePublishedRoot {
-			diskIter, ok, err = rootDomainPublishedIterator(iteratorSnap, start, end)
+			diskIter, ok, err = db.livePublishedRootIterator(iteratorSnap, start, end, false)
 		} else {
 			diskIter, err = db.backend.Iterator(start, end)
 			ok = true
@@ -29336,7 +29347,9 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 
 	view = db.retainMemtableView()
 	queueLenLocked := 0
+	var iteratorSnap rootDomainSnapshot
 	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+		iteratorSnap = snap
 		queueLenLocked = len(snap.immutables)
 	} else if view == nil {
 		queueLenLocked = len(db.queue)
@@ -29363,6 +29376,17 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
 			}
 			return db.wrapForegroundIterator(it)
+		}
+		if rootDomainSnapshotHasPublishedState(iteratorSnap) {
+			diskIter, ok, err := db.livePublishedRootIterator(iteratorSnap, start, end, true)
+			if err != nil {
+				return nil, err
+			}
+			if !ok || diskIter == nil {
+				out := merging.Iterator(&emptyIterator{start: start, end: end})
+				return decorate(out, 0), nil
+			}
+			return decorate(diskIter, 1), nil
 		}
 		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
 			out := merging.Iterator(&emptyIterator{start: start, end: end})
@@ -29393,6 +29417,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	var queueRangeSpans [][]batch.DeleteRange
 	if view != nil {
 		if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+			iteratorSnap = snap
 			queue = snap.immutables
 			if len(view.rootIteratorRanges) == len(queue) {
 				queueRanges = view.rootIteratorRanges
@@ -29403,6 +29428,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		}
 	} else {
 		rawSnap, rawRanges := db.rawIteratorRootDomainSnapshot()
+		iteratorSnap = rawSnap
 		queue = rawSnap.immutables
 		queueRanges = rawRanges
 	}
@@ -29456,9 +29482,21 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		prio++
 	}
 
-	// Disk Iterator
-	if !backendRangeKnown || overlapsQuery(start, end, backendRange) {
-		diskIter, err := db.backend.ReverseIterator(start, end)
+	// Disk/published-root iterator. If the view pins an iterator root, iterate
+	// from that published root instead of crossing to the backend default root.
+	usePublishedRoot := rootDomainSnapshotHasPublishedState(iteratorSnap)
+	if usePublishedRoot || !backendRangeKnown || overlapsQuery(start, end, backendRange) {
+		var (
+			diskIter iterator.UnsafeIterator
+			err      error
+			ok       bool
+		)
+		if usePublishedRoot {
+			diskIter, ok, err = db.livePublishedRootIterator(iteratorSnap, start, end, true)
+		} else {
+			diskIter, err = db.backend.ReverseIterator(start, end)
+			ok = true
+		}
 		if err != nil {
 			for i := range sources {
 				if sources[i].Iter != nil {
@@ -29468,11 +29506,13 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			return nil, err
 		}
 
-		diskIter = newRangeSpanFilteringIterator(diskIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, -1), db)
-		sources = append(sources, merging.IteratorSource{
-			Iter:     diskIter,
-			Priority: prio,
-		})
+		if ok && diskIter != nil {
+			diskIter = newRangeSpanFilteringIterator(diskIter, appendNewerRangeSpansForSource(nil, queueRangeSpans, -1), db)
+			sources = append(sources, merging.IteratorSource{
+				Iter:     diskIter,
+				Priority: prio,
+			})
+		}
 	}
 
 	if len(sources) == 0 {

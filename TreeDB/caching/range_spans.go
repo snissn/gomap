@@ -211,19 +211,26 @@ func (db *DB) lookupViewEntryWithRangeSpansAndRootSource(view *memtableView, key
 			return nil, page.ValuePtr{}, node.FlagTombstone, true, rootDomainEntrySourceCached
 		}
 	}
-	if haveRootSnap && rootSnap.published != nil {
-		if db != nil {
-			db.rangeSpanPointProbes.Add(1)
+	if haveRootSnap && rootDomainSnapshotHasPublishedState(rootSnap) {
+		resolvedSnap, release := db.resolveLivePublishedRootSnapshot(rootSnap)
+		if release != nil {
+			defer release()
 		}
-		if val, ptr, flags, found = rootSnap.published.GetEntry(key); found {
+		if resolvedSnap.published != nil {
 			if db != nil {
-				db.rangeSpanPointHits.Add(1)
+				db.rangeSpanPointProbes.Add(1)
 			}
-			return val, ptr, flags, true, rootDomainEntrySourcePublished
+			if val, ptr, flags, found = resolvedSnap.published.GetEntry(key); found {
+				if db != nil {
+					db.rangeSpanPointHits.Add(1)
+				}
+				return val, ptr, flags, true, rootDomainEntrySourcePublished
+			}
 		}
 		// The applicable published root is authoritative for this view/snapshot.
-		// Treat its miss as a terminal not-found marker so active-span paths do not
-		// fall through to the default backend root and cross root domains.
+		// Treat its miss (or an unresolvable root ID) as a terminal not-found marker
+		// so active-span paths do not fall through to the default backend root and
+		// cross root domains.
 		return nil, page.ValuePtr{}, node.FlagTombstone, true, rootDomainEntrySourcePublished
 	}
 	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone

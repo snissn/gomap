@@ -535,8 +535,11 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 		ok       bool
 	)
 	if reverse {
-		diskIter, err = s.backend.ReverseIterator(start, end)
-		ok = true
+		diskIter, ok, err = rootDomainPublishedReverseIterator(rootSnap, start, end)
+		if !ok {
+			diskIter, err = s.backend.ReverseIterator(start, end)
+			ok = true
+		}
 	} else {
 		diskIter, ok, err = rootDomainPublishedIterator(rootSnap, start, end)
 		if !ok {

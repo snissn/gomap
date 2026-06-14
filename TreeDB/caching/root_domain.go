@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -23,8 +24,16 @@ type rootDomainIteratorFactory interface {
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 }
 
+type rootDomainReverseIteratorFactory interface {
+	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error)
+}
+
 type rootDomainUnsafeIteratorFactory interface {
 	NewIterator(start, end []byte) iterator.UnsafeIterator
+}
+
+type rootDomainUnsafeReverseIteratorFactory interface {
+	NewReverseIterator(start, end []byte) iterator.UnsafeIterator
 }
 
 // rootDomainState is the native cached state shape for one logical root-domain.
@@ -766,6 +775,21 @@ func (l backendSnapshotLookup) Iterator(start, end []byte) (iterator.UnsafeItera
 	return l.snapshot.Iterator(start, end)
 }
 
+func (l backendSnapshotLookup) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	if l.snapshot == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if l.db != nil {
+		if err := l.db.flushValueLogForBackendRead(); err != nil {
+			return nil, err
+		}
+	}
+	if l.rootID != 0 {
+		return l.snapshot.ReverseIteratorAtRoot(l.rootID, start, end)
+	}
+	return l.snapshot.ReverseIterator(start, end)
+}
+
 func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includeMutable bool) rootDomainSnapshot {
 	if view == nil {
 		return rootDomainSnapshot{}
@@ -1017,7 +1041,7 @@ func liveIteratorRootDomainSnapshot(view *memtableView) (rootDomainSnapshot, boo
 	if view == nil {
 		return rootDomainSnapshot{}, false
 	}
-	if rootDomainSnapshotHasInMemoryState(view.rootIterator) {
+	if rootDomainSnapshotHasInMemoryState(view.rootIterator) || rootDomainSnapshotHasPublishedState(view.rootIterator) {
 		return view.rootIterator, true
 	}
 	return rootDomainSnapshot{}, false
@@ -1245,7 +1269,7 @@ func rootDomainSnapshotNeedsPublish(s rootDomainSnapshot) bool {
 
 func rootDomainPublishedIterator(s rootDomainSnapshot, start, end []byte) (iterator.UnsafeIterator, bool, error) {
 	if s.published == nil {
-		return nil, false, nil
+		return nil, s.publishedRootID != 0, nil
 	}
 	switch published := s.published.(type) {
 	case rootDomainUnsafeIteratorFactory:
@@ -1256,6 +1280,83 @@ func rootDomainPublishedIterator(s rootDomainSnapshot, start, end []byte) (itera
 	default:
 		return nil, true, nil
 	}
+}
+
+func rootDomainPublishedReverseIterator(s rootDomainSnapshot, start, end []byte) (iterator.UnsafeIterator, bool, error) {
+	if s.published == nil {
+		return nil, s.publishedRootID != 0, nil
+	}
+	switch published := s.published.(type) {
+	case rootDomainUnsafeReverseIteratorFactory:
+		return published.NewReverseIterator(start, end), true, nil
+	case rootDomainReverseIteratorFactory:
+		iter, err := published.ReverseIterator(start, end)
+		return iter, true, err
+	default:
+		return nil, true, nil
+	}
+}
+
+type leasedUnsafeIterator struct {
+	iterator.UnsafeIterator
+	closeOnce sync.Once
+	closeErr  error
+	release   func()
+}
+
+func (it *leasedUnsafeIterator) Close() error {
+	if it == nil {
+		return nil
+	}
+	it.closeOnce.Do(func() {
+		if it.UnsafeIterator != nil {
+			it.closeErr = it.UnsafeIterator.Close()
+		}
+		if it.release != nil {
+			it.release()
+		}
+	})
+	return it.closeErr
+}
+
+func (db *DB) resolveLivePublishedRootSnapshot(s rootDomainSnapshot) (rootDomainSnapshot, func()) {
+	if db == nil || s.published != nil || s.publishedRootID == 0 {
+		return s, nil
+	}
+	provider, ok := db.backend.(backendSnapshotProvider)
+	if !ok {
+		return s, nil
+	}
+	snap := provider.AcquireSnapshot()
+	if snap == nil {
+		return s, nil
+	}
+	s.published = backendSnapshotLookup{db: db, snapshot: snap, rootID: s.publishedRootID}
+	return s, func() { _ = snap.Close() }
+}
+
+func (db *DB) livePublishedRootIterator(s rootDomainSnapshot, start, end []byte, reverse bool) (iterator.UnsafeIterator, bool, error) {
+	s, release := db.resolveLivePublishedRootSnapshot(s)
+	var (
+		it  iterator.UnsafeIterator
+		ok  bool
+		err error
+	)
+	if reverse {
+		it, ok, err = rootDomainPublishedReverseIterator(s, start, end)
+	} else {
+		it, ok, err = rootDomainPublishedIterator(s, start, end)
+	}
+	if err != nil || !ok || it == nil {
+		if release != nil {
+			release()
+		}
+		return it, ok, err
+	}
+	if release != nil {
+		it = &leasedUnsafeIterator{UnsafeIterator: it, release: release}
+	}
+	return it, ok, nil
 }
 
 func (s rootDomainSnapshot) iteratorSources(start, end []byte) ([]merging.IteratorSource, error) {
