@@ -17,6 +17,7 @@ SEARCH_CONCURRENCY="${SEARCH_CONCURRENCY:-2,4,8,16,32,64,128}"
 M="${M:-16}"
 EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
+EF_SEARCH_VALUES="${EF_SEARCH_VALUES:-}"
 TREEDB_COLUMN_GRAPH_EF_SEARCH="${TREEDB_COLUMN_GRAPH_EF_SEARCH:-}"
 TREEDB_QUANTIZED_CODEC="${TREEDB_QUANTIZED_CODEC:-scalar_u8}"
 TREEDB_QUANTIZED_INDEX_NAME="${TREEDB_QUANTIZED_INDEX_NAME:-embedding.scalar_u8.fast}"
@@ -227,6 +228,11 @@ treedb_profile_args_for_backend() {
 		treedb_profile_args=(-search-profile-dir "$TREEDB_SEARCH_PROFILE_DIR/$backend")
 	fi
 }
+
+treedb_ef_search_args=()
+if [[ -n "$EF_SEARCH_VALUES" ]]; then
+	treedb_ef_search_args=(-ef-search-values "$EF_SEARCH_VALUES")
+fi
 mkdir -p "$RUN_DIR"
 
 cat >"$RUN_DIR/README.md" <<EOF
@@ -244,6 +250,7 @@ cat >"$RUN_DIR/README.md" <<EOF
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
+- efSearch values: \`${EF_SEARCH_VALUES:-<unset>}\`
 - TreeDB column_graph efSearch: \`$TREEDB_COLUMN_GRAPH_EF_SEARCH\`
 - minimum recall: \`$MIN_RECALL\`
 - TreeDB legacy quantized codec/index/rerank candidates: \`$TREEDB_QUANTIZED_CODEC / $TREEDB_QUANTIZED_INDEX_NAME / $TREEDB_QUANTIZED_RERANK_CANDIDATES\`
@@ -336,6 +343,7 @@ if contains_backend treedb; then
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
 		-ef-search "$EF_SEARCH" \
+		${treedb_ef_search_args[@]+"${treedb_ef_search_args[@]}"} \
 		-min-recall "$MIN_RECALL" \
 		-json >"$RUN_DIR/treedb.json"
 	result_args+=(--result "$RUN_DIR/treedb.json")
@@ -361,6 +369,7 @@ if contains_backend treedb_column_graph; then
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
 		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
+		${treedb_ef_search_args[@]+"${treedb_ef_search_args[@]}"} \
 		-min-recall "$MIN_RECALL" \
 		-json >"$RUN_DIR/treedb_column_graph.json"
 	result_args+=(--result "$RUN_DIR/treedb_column_graph.json")
@@ -398,6 +407,7 @@ run_treedb_column_graph_quantized() {
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
 		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
+		${treedb_ef_search_args[@]+"${treedb_ef_search_args[@]}"} \
 		-min-recall "$min_recall" \
 		-json >"$RUN_DIR/$output_name.json"
 	result_args+=(--result "$RUN_DIR/$output_name.json")
@@ -504,6 +514,9 @@ if contains_backend pgvector; then
 		--ef-search "$EF_SEARCH"
 		--min-recall "$MIN_RECALL"
 	)
+	if [[ -n "$EF_SEARCH_VALUES" ]]; then
+		pgvector_args+=(--ef-search-values "$EF_SEARCH_VALUES")
+	fi
 	if [[ "$PGVECTOR_DROP_SCHEMA_AFTER" == "true" ]]; then
 		pgvector_args+=(--drop-schema-after)
 	fi

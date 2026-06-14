@@ -216,14 +216,15 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("")
     lines.append("## Search")
     lines.append("")
-    lines.append("| Backend | Search mode | Concurrency | Avg | P50 | P95 | P99 | Ops/sec |")
-    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| Backend | Search mode | ef | Concurrency | Avg | P50 | P95 | P99 | Ops/sec |")
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for result in results:
         for row in result["search_benchmarks"]:
             lines.append(
-                "| {backend} | {mode} | {concurrency} | {avg} | {p50} | {p95} | {p99} | {ops:.1f} |".format(
+                "| {backend} | {mode} | {ef} | {concurrency} | {avg} | {p50} | {p95} | {p99} | {ops:.1f} |".format(
                     backend=backend_name(result),
                     mode=search_row_mode(result, row),
+                    ef=int(row.get("ef_search") or result.get("ef_search") or 0),
                     concurrency=row["concurrency"],
                     avg=micros(float(row["avg_micros"])),
                     p50=micros(float(row["p50_nanos"]) / 1000),

@@ -72,6 +72,7 @@ type config struct {
 	m                     int
 	efConstruction        int
 	efSearch              int
+	efSearchValues        []int
 	valuePointerThreshold int
 	leafGenerationTarget  int64
 	minRecall             float64
@@ -117,6 +118,7 @@ type result struct {
 	M                         int                               `json:"m"`
 	EfConstruction            int                               `json:"ef_construction"`
 	EfSearch                  int                               `json:"ef_search"`
+	EfSearchValues            []int                             `json:"ef_search_values,omitempty"`
 	ValuePointerThreshold     int                               `json:"value_pointer_threshold"`
 	LeafGenerationTarget      int64                             `json:"leaf_generation_segment_target"`
 	MinRecall                 float64                           `json:"min_recall"`
@@ -185,6 +187,8 @@ type validationResult struct {
 type searchBenchmarkResult struct {
 	Concurrency                       int                              `json:"concurrency"`
 	Queries                           int                              `json:"queries"`
+	EfSearch                          int                              `json:"ef_search"`
+	Recall                            float64                          `json:"recall,omitempty"`
 	QueryMode                         collections.VectorIndexQueryMode `json:"query_mode"`
 	QuantizedCodec                    string                           `json:"quantized_codec"`
 	QuantizedIndexName                string                           `json:"quantized_index_name"`
@@ -362,6 +366,7 @@ func parseConfig(args []string) (config, error) {
 	vectorQueryModeRaw := string(cfg.vectorQueryMode)
 	validationExactSourceRaw := string(cfg.validationExactSource)
 	searchConcurrencyRaw := defaultSearchConcurrency
+	efSearchValuesRaw := ""
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory; explicit directories are kept")
@@ -386,6 +391,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.m, "m", cfg.m, "HNSW max neighbor parameter")
 	fs.IntVar(&cfg.efConstruction, "ef-construction", cfg.efConstruction, "HNSW efConstruction")
 	fs.IntVar(&cfg.efSearch, "ef-search", cfg.efSearch, "HNSW efSearch for ANN queries")
+	fs.StringVar(&efSearchValuesRaw, "ef-search-values", "", "Comma-separated HNSW efSearch values for a search-only curve after one build; empty uses -ef-search")
 	fs.IntVar(&cfg.valuePointerThreshold, "value-pointer-threshold", cfg.valuePointerThreshold, "Value-log pointer threshold for the demo DB in bytes; 0 uses the selected TreeDB profile default")
 	fs.Int64Var(&cfg.leafGenerationTarget, "leaf-generation-segment-target", cfg.leafGenerationTarget, "Leaf value-log generation segment target for the demo DB in bytes; a positive value opts the demo into leaf generation rolling, 0 uses the selected TreeDB profile default")
 	fs.Float64Var(&cfg.minRecall, "min-recall", cfg.minRecall, "Minimum validation recall@topK")
@@ -457,6 +463,13 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.efSearch <= 0 {
 		return config{}, errors.New("-ef-search must be positive")
+	}
+	if strings.TrimSpace(efSearchValuesRaw) != "" {
+		efSearchValues, err := parsePositiveIntList(efSearchValuesRaw, "-ef-search-values")
+		if err != nil {
+			return config{}, err
+		}
+		cfg.efSearchValues = efSearchValues
 	}
 	if cfg.valuePointerThreshold < 0 {
 		return config{}, errors.New("-value-pointer-threshold cannot be negative")
@@ -651,6 +664,41 @@ func parseSearchConcurrency(raw string) ([]int, error) {
 		return nil, errors.New("-search-concurrency must include at least one value greater than 1")
 	}
 	return out, nil
+}
+
+func parsePositiveIntList(raw, flagName string) ([]int, error) {
+	parts := strings.Split(raw, ",")
+	out := make([]int, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s value %q", flagName, part)
+		}
+		if value <= 0 {
+			return nil, fmt.Errorf("%s values must be positive: %d", flagName, value)
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s must include at least one positive value", flagName)
+	}
+	return out, nil
+}
+
+func effectiveEfSearchValues(cfg config) []int {
+	if len(cfg.efSearchValues) == 0 {
+		return []int{cfg.efSearch}
+	}
+	return append([]int(nil), cfg.efSearchValues...)
 }
 
 func applySearchBenchmarkDefaults(cfg *config) error {
@@ -966,6 +1014,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		M:                         cfg.m,
 		EfConstruction:            cfg.efConstruction,
 		EfSearch:                  cfg.efSearch,
+		EfSearchValues:            effectiveEfSearchValues(cfg),
 		ValuePointerThreshold:     cfg.valuePointerThreshold,
 		LeafGenerationTarget:      cfg.leafGenerationTarget,
 		MinRecall:                 cfg.minRecall,
@@ -1205,27 +1254,45 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 
 	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
-		validation, err := validateCompactedColumnGraphData(col, def.Name, cfg, work)
-		if err != nil {
-			return result{}, err
+		for i, efSearch := range effectiveEfSearchValues(cfg) {
+			searchCfg := cfg
+			searchCfg.efSearch = efSearch
+			validation, err := validateCompactedColumnGraphData(col, def.Name, searchCfg, work)
+			if err != nil {
+				return result{}, err
+			}
+			if i == 0 {
+				res.Validation = validation
+			}
+			searchBenchmarks, err := benchmarkColumnGraphSearchMatrix(col, def.Name, searchCfg, work)
+			if err != nil {
+				return result{}, err
+			}
+			for j := range searchBenchmarks {
+				searchBenchmarks[j].Recall = validation.Recall
+			}
+			res.SearchBenchmarks = append(res.SearchBenchmarks, searchBenchmarks...)
 		}
-		res.Validation = validation
-		searchBenchmarks, err := benchmarkColumnGraphSearchMatrix(col, def.Name, cfg, work)
-		if err != nil {
-			return result{}, err
-		}
-		res.SearchBenchmarks = searchBenchmarks
 	} else {
-		validation, err := validateCompactedData(col, loaded, cfg, work)
-		if err != nil {
-			return result{}, err
+		for i, efSearch := range effectiveEfSearchValues(cfg) {
+			searchCfg := cfg
+			searchCfg.efSearch = efSearch
+			validation, err := validateCompactedData(col, loaded, searchCfg, work)
+			if err != nil {
+				return result{}, err
+			}
+			if i == 0 {
+				res.Validation = validation
+			}
+			searchBenchmarks, err := benchmarkSearchMatrix(loaded, searchCfg, work)
+			if err != nil {
+				return result{}, err
+			}
+			for j := range searchBenchmarks {
+				searchBenchmarks[j].Recall = validation.Recall
+			}
+			res.SearchBenchmarks = append(res.SearchBenchmarks, searchBenchmarks...)
 		}
-		res.Validation = validation
-		searchBenchmarks, err := benchmarkSearchMatrix(loaded, cfg, work)
-		if err != nil {
-			return result{}, err
-		}
-		res.SearchBenchmarks = searchBenchmarks
 	}
 	if len(res.SearchBenchmarks) > 0 {
 		res.Search = res.SearchBenchmarks[0]
@@ -2139,6 +2206,7 @@ func benchmarkSearchLoadedConcurrent(idx *collections.VectorIndex, cfg config, q
 	return searchBenchmarkResult{
 		Concurrency:          concurrency,
 		Queries:              len(queries),
+		EfSearch:             cfg.efSearch,
 		QueryMode:            collections.VectorIndexQueryModeExact,
 		TotalDurationNanos:   total.Nanoseconds(),
 		AvgNanos:             avg,
@@ -2343,6 +2411,7 @@ func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, ind
 	return searchBenchmarkResult{
 		Concurrency:                       concurrency,
 		Queries:                           len(queries),
+		EfSearch:                          cfg.efSearch,
 		QueryMode:                         normalizedVectorQueryMode(cfg.vectorQueryMode),
 		QuantizedCodec:                    effectiveQuantizedCodec(cfg),
 		QuantizedIndexName:                effectiveQuantizedIndexName(cfg),
@@ -2862,9 +2931,11 @@ func resultQueryMode(res result) collections.VectorIndexQueryMode {
 
 func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
 	for _, bench := range benchmarks {
-		fmt.Fprintf(w, "search concurrency=%d queries=%d query_mode=%s quantized_codec=%s avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d avg_candidates=%.1f avg_quantized_score_calls=%.1f avg_quantized_code_bytes=%.1f avg_quantized_rerank_candidates=%.1f avg_quantized_rerank_exact_score_calls=%.1f avg_vector_bytes=%.1f avg_norm_bytes=%.1f",
+		fmt.Fprintf(w, "search ef_search=%d concurrency=%d queries=%d recall=%.4f query_mode=%s quantized_codec=%s avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d avg_candidates=%.1f avg_quantized_score_calls=%.1f avg_quantized_code_bytes=%.1f avg_quantized_rerank_candidates=%.1f avg_quantized_rerank_exact_score_calls=%.1f avg_vector_bytes=%.1f avg_norm_bytes=%.1f",
+			bench.EfSearch,
 			bench.Concurrency,
 			bench.Queries,
+			bench.Recall,
 			bench.QueryMode,
 			bench.QuantizedCodec,
 			bench.AvgMicros,

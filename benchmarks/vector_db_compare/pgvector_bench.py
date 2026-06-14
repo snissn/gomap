@@ -246,6 +246,7 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
         return {
             "concurrency": concurrency,
             "queries": 0,
+            "ef_search": args.ef_search,
             "total_duration_nanos": 0,
             "avg_nanos": 0,
             "avg_micros": 0,
@@ -301,6 +302,7 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
     return {
         "concurrency": concurrency,
         "queries": len(query_literals),
+        "ef_search": args.ef_search,
         "total_duration_nanos": int(total * 1_000_000_000),
         "avg_nanos": avg,
         "avg_micros": avg / 1000,
@@ -349,6 +351,7 @@ def main() -> None:
     parser.add_argument("--m", type=int, default=16)
     parser.add_argument("--ef-construction", type=int, default=128)
     parser.add_argument("--ef-search", type=int, default=128)
+    parser.add_argument("--ef-search-values", default="", help="Comma-separated HNSW ef_search values to benchmark after one build; empty uses --ef-search.")
     parser.add_argument("--min-recall", type=float, default=0.95)
     args = parser.parse_args()
     args.created_schema = False
@@ -366,16 +369,27 @@ def main() -> None:
         queries = all_queries[: min(args.queries, len(all_queries))]
         query_literals = [vector_literal(query) for query in queries]
         concurrency = parse_ints(args.search_concurrency)
+        ef_search_values = parse_ints(args.ef_search_values) if args.ef_search_values.strip() else [args.ef_search]
 
         phases, postgres_info = build_database(args, manifest, docs)
         conn, reopen = reopen_database(args)
+        args.ef_search = ef_search_values[0]
         search_plan = verify_hnsw_search_plan(conn, args, query_literals[0]) if query_literals else {"verified_hnsw_index": False, "reason": "no queries"}
-        validation = validate_recall(conn, args, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
         storage = storage_usage(conn, args, manifest["docs"])
-        conn.close()
 
         levels = sorted({1, *concurrency})
-        search_benchmarks = [benchmark_search(args, query_literals, level) for level in levels]
+        validation = None
+        search_benchmarks = []
+        for ef_search in ef_search_values:
+            args.ef_search = ef_search
+            ef_validation = validate_recall(conn, args, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
+            if validation is None:
+                validation = ef_validation
+            for level in levels:
+                row = benchmark_search(args, query_literals, level)
+                row["recall"] = ef_validation["recall"]
+                search_benchmarks.append(row)
+        conn.close()
 
         result = {
             "backend": "pgvector",
@@ -392,13 +406,14 @@ def main() -> None:
             "top_k": args.top_k,
             "m": args.m,
             "ef_construction": args.ef_construction,
-            "ef_search": args.ef_search,
+            "ef_search": ef_search_values[0],
+            "ef_search_values": ef_search_values,
             "insert": phases["insert"],
             "build": phases["build"],
             "create_total": phases["create_total"],
             "reopen_load": reopen,
             "search_plan": search_plan,
-            "validation": validation,
+            "validation": validation or {},
             "search": search_benchmarks[0],
             "search_benchmarks": search_benchmarks,
             "storage_after_build": storage,

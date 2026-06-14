@@ -25,6 +25,23 @@ Run:
 scripts/bench_vector_db_compare.sh
 ```
 
+EF-curve run:
+
+```sh
+RUN_DIR=/tmp/vector_ef_curve \
+EF_VALUES=8,12,16,24,32,48,64,96,128 \
+BACKENDS=treedb_column_graph,treedb_column_graph_scalar_u8_quantized_rerank,pgvector \
+SEARCH_CONCURRENCY=32 \
+MIN_RECALL=0 \
+scripts/bench_vector_ef_curve.sh
+```
+
+The curve runner builds each selected backend once, runs the requested
+`ef_search` values during the search phase, then renders `curve.csv` and
+`curve.md`. Use `ef_search` to generate the curve, but compare engines by
+matched recall buckets, typically plotting `ops_per_second` against `recall`
+grouped by backend/search mode.
+
 The default backend set is `treedb,vectorlite`. Add `treedb_column_graph`, the
 TreeDB scalar_u8/RaBitQ quantized aliases, `pgvector`, or `mongodb` to
 `BACKENDS` when those paths or external services are needed.
@@ -120,6 +137,8 @@ Configuration:
   rows and defaults to `16`.
 - `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
 - `M`, `EF_CONSTRUCTION`, `EF_SEARCH`: HNSW parameters.
+- `EF_SEARCH_VALUES`: optional comma-separated search-time efSearch curve. When
+  set, supported backends build once and report one search row per ef value.
 - `MIN_RECALL`: recall gate for full-vector rows such as TreeDB exact/default,
   Vectorlite, pgvector, and MongoDB. Defaults to `0.95`.
 - `TREEDB_COLUMN_GRAPH_EF_SEARCH`: optional efSearch override for TreeDB
@@ -201,6 +220,8 @@ The runner writes:
 - `pgvector.json`: PostgreSQL+pgvector full-vector HNSW benchmark result when enabled
 - `mongodb.json`: MongoDB Vector Search benchmark result when enabled
 - `comparison.md`: normalized comparison table
+- `curve.csv` / `curve.md`: normalized EF curve files when using
+  `scripts/bench_vector_ef_curve.sh`
 - TreeDB column_graph search profiles under backend-specific subdirectories of
   `TREEDB_SEARCH_PROFILE_DIR`, when set
 
