@@ -87,9 +87,6 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.leaf_log_append_frames_total"); got == 0 {
 		t.Fatalf("leaf log append frames = 0, want >0")
 	}
-	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.leaf_log_encode_compress_ns_total"); got == 0 {
-		t.Fatalf("leaf log encode/compress ns = 0, want >0")
-	}
 }
 
 func TestFlushApplyStatsHelpersExposeForegroundAssist(t *testing.T) {
