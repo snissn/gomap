@@ -7261,6 +7261,17 @@ type Options struct {
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
 
+	// FlushApplyConcurrency enables backend M2 opt-in COW apply workers. The
+	// backend owns execution; cached mode carries this knob for config/reporting
+	// symmetry with FlushBuildConcurrency. Values <=1 keep the M2 path off.
+	FlushApplyConcurrency int
+	// FlushApplyMinEntries gates backend opt-in parallel apply by planned ops.
+	FlushApplyMinEntries int
+	// FlushApplyMinSpans gates backend opt-in parallel apply by planned leaf spans.
+	FlushApplyMinSpans int
+	// FlushApplyMinBytes gates backend opt-in parallel apply by planned bytes.
+	FlushApplyMinBytes int
+
 	// FlushBackendMaxEntries caps how many operations are buffered into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
@@ -7829,6 +7840,10 @@ type DB struct {
 	flushBuildChunkMinBytes                           int
 	flushBuildChunkMaxBytes                           int
 	flushBuildPrefetchUnits                           int
+	flushApplyConcurrency                             int
+	flushApplyMinEntries                              int
+	flushApplyMinSpans                                int
+	flushApplyMinBytes                                int
 	flushBackendMaxEntries                            int
 	flushBackendInitEntries                           int
 	flushBackendMaxBatches                            int
@@ -10695,6 +10710,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBuildChunkMinBytes:              opts.FlushBuildChunkMinBytes,
 		flushBuildChunkMaxBytes:              opts.FlushBuildChunkMaxBytes,
 		flushBuildPrefetchUnits:              opts.FlushBuildPrefetchUnits,
+		flushApplyConcurrency:                opts.FlushApplyConcurrency,
+		flushApplyMinEntries:                 opts.FlushApplyMinEntries,
+		flushApplyMinSpans:                   opts.FlushApplyMinSpans,
+		flushApplyMinBytes:                   opts.FlushApplyMinBytes,
 		flushBackendMaxEntries:               opts.FlushBackendMaxEntries,
 		flushBackendInitEntries:              flushBackendInitEntries,
 		flushBackendMaxBatches:               opts.FlushBackendMaxBatches,

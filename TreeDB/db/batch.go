@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -218,6 +219,9 @@ func (b *Batch) write(sync bool) error {
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
+	if b.db.closing.Load() {
+		return ErrClosed
+	}
 	if sync && b.batch != nil && b.batch.Len() == 0 && b.commandWALPublishIntent == nil {
 		return b.db.Checkpoint()
 	}
@@ -277,7 +281,21 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
-	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
+	applyOpts := b.db.flushApplyOptions()
+	var newRoot uint64
+	var retired []uint64
+	var metrics adaptive.Metrics
+	var err error
+	if applyOpts.ParallelApplyConcurrency > 1 {
+		result, applyErr := z.ApplyWithOptions(rootID, b.batch, applyOpts)
+		b.db.observeFlushApplyPrepareResult(result, applyErr)
+		newRoot = result.RootID
+		retired = result.PendingRetiredPages
+		metrics = result.Metrics
+		err = applyErr
+	} else {
+		newRoot, retired, metrics, err = z.Apply(rootID, b.batch)
+	}
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	if err != nil {
 		freeErr := tracker.FreeAll()
@@ -286,6 +304,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 			return false, freeErr
 		}
 		return false, err
+	}
+	if hook := b.db.testAfterOptimisticApplyHook; hook != nil {
+		hook()
 	}
 	entries, ranges := b.batch.ApplyPlan()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
@@ -381,7 +402,21 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 
 	defer idx.registry.Unregister(regID)
 
-	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
+	applyOpts := b.db.flushApplyOptions()
+	var newRoot uint64
+	var retired []uint64
+	var metrics adaptive.Metrics
+	var err error
+	if applyOpts.ParallelApplyConcurrency > 1 {
+		result, applyErr := idx.zipper.ApplyWithOptions(rootID, b.batch, applyOpts)
+		b.db.observeFlushApplyPrepareResult(result, applyErr)
+		newRoot = result.RootID
+		retired = result.PendingRetiredPages
+		metrics = result.Metrics
+		err = applyErr
+	} else {
+		newRoot, retired, metrics, err = idx.zipper.Apply(rootID, b.batch)
+	}
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	if err != nil {
 		return err

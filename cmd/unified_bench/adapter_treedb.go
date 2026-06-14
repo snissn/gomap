@@ -32,6 +32,10 @@ var (
 	treedbFlushBuildChunkMinBytes         = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
 	treedbFlushBuildChunkMaxBytes         = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
 	treedbFlushBuildPrefetchUnits         = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
+	treedbFlushApplyConcurrency           = flag.Int("treedb-flush-apply-concurrency", 0, "TreeDB: opt-in flush/apply COW worker-pool concurrency (0/1=disabled)")
+	treedbFlushApplyMinEntries            = flag.Int("treedb-flush-apply-min-entries", 0, "TreeDB: minimum planned span ops to enable opt-in parallel apply (0=default)")
+	treedbFlushApplyMinSpans              = flag.Int("treedb-flush-apply-min-spans", 0, "TreeDB: minimum planned leaf spans to enable opt-in parallel apply (0=default)")
+	treedbFlushApplyMinBytes              = flag.Int("treedb-flush-apply-min-bytes", 0, "TreeDB: minimum planned span bytes to enable opt-in parallel apply (0=default)")
 	treedbFlushBackendMaxEntries          = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
 	treedbFlushBackendMaxBatches          = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
 	treedbPagerSyncConcurrency            = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
@@ -351,6 +355,10 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("outer_leaf_read_cache_entries=%s", formatTreeDBLeafPageReadCacheEntries(r.opts.LeafPageReadCacheEntries)))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
+	lines = append(lines, fmt.Sprintf("flush_apply_concurrency=%d", r.opts.FlushApplyConcurrency))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_entries=%d", r.opts.FlushApplyMinEntries))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_spans=%d", r.opts.FlushApplyMinSpans))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_bytes=%d", r.opts.FlushApplyMinBytes))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
 	threshold := r.opts.ValueLog.PointerThreshold
@@ -667,6 +675,10 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		FlushBuildChunkMinBytes:    *treedbFlushBuildChunkMinBytes,
 		FlushBuildChunkMaxBytes:    *treedbFlushBuildChunkMaxBytes,
 		FlushBuildPrefetchUnits:    *treedbFlushBuildPrefetchUnits,
+		FlushApplyConcurrency:      *treedbFlushApplyConcurrency,
+		FlushApplyMinEntries:       *treedbFlushApplyMinEntries,
+		FlushApplyMinSpans:         *treedbFlushApplyMinSpans,
+		FlushApplyMinBytes:         *treedbFlushApplyMinBytes,
 		FlushBackendMaxEntries:     *treedbFlushBackendMaxEntries,
 		FlushBackendMaxBatches:     *treedbFlushBackendMaxBatches,
 

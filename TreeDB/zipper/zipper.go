@@ -1161,6 +1161,22 @@ func recordZipperInternalLeafLogRefCopy(metrics *adaptive.Metrics) {
 	metrics.ZipperInternalLeafLogRefCopies++
 }
 
+func recordZipperInternalParallelMerge(metrics *adaptive.Metrics, activeChildren, workers, ops int) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperInternalParallelMerges++
+	if activeChildren > 0 {
+		metrics.ZipperInternalParallelChildren += activeChildren
+	}
+	if workers > 0 {
+		metrics.ZipperInternalParallelWorkers += workers
+	}
+	if ops > 0 {
+		metrics.ZipperInternalParallelOps += ops
+	}
+}
+
 func validateLoadedLeafLogNode(data []byte) (node.Node, error) {
 	if len(data) != page.PageSize {
 		return node.Node{}, errors.New("zipper: leaf page has invalid size")
@@ -1180,9 +1196,18 @@ func validateLoadedLeafLogNodeFrom(source string, data []byte) (node.Node, error
 	return n, nil
 }
 
+type applyRunConfig struct {
+	maxParallelWorkers int
+	workerPool         *ApplyWorkerPool
+}
+
 // Apply applies the batch to the tree rooted at rootID.
 // Returns the new root page ID, list of retired pages, and commit metrics.
 func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (newRootID uint64, retiredPages []uint64, metrics adaptive.Metrics, err error) {
+	return z.applyWithConfig(rootID, b, applyRunConfig{})
+}
+
+func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConfig) (newRootID uint64, retiredPages []uint64, metrics adaptive.Metrics, err error) {
 	applyStart := time.Now()
 	defer func() {
 		metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
@@ -1231,7 +1256,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (newRootID uint64, retired
 	}
 
 	var retired []uint64
-	newRootRef, splits, err := z.writeRecursive(page.PageChildRef(rootID), ops, ranges, maintenance, budget, &metrics, nil, nil, &retired, scratch, true)
+	newRootRef, splits, err := z.writeRecursive(page.PageChildRef(rootID), ops, ranges, maintenance, budget, &metrics, nil, nil, &retired, scratch, true, cfg)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -1585,7 +1610,7 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive
 
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, error.
-func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []batch.DeleteRange, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64, scratch *mergeScratch, isRoot bool) (page.ChildRef, []Split, error) {
+func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []batch.DeleteRange, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64, scratch *mergeScratch, isRoot bool, cfg applyRunConfig) (page.ChildRef, []Split, error) {
 	oldNode, oldFromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
 	if err != nil {
 		return page.ChildRef{}, nil, err
@@ -1654,7 +1679,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
 		builder.SetInternalFenceBounds(low, high)
-		nr, splits, err := z.mergeInternal(&oldNode, builder, ops, ranges, maintenance, budget, metrics, retired, low, high, scratch)
+		nr, splits, err := z.mergeInternal(&oldNode, builder, ops, ranges, maintenance, budget, metrics, retired, low, high, scratch, cfg)
 		if err != nil {
 			return page.ChildRef{}, nil, err
 		}
@@ -2060,7 +2085,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	return rootNodeRef, splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, retired *[]uint64, low, high []byte, scratch *mergeScratch) (page.ChildRef, []Split, error) {
+func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, retired *[]uint64, low, high []byte, scratch *mergeScratch, cfg applyRunConfig) (page.ChildRef, []Split, error) {
 	if metrics != nil {
 		metrics.ZipperInternalMerges++
 	}
@@ -2074,6 +2099,13 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	gomaxprocs := runtime.GOMAXPROCS(0)
 	useParallel := len(ranges) == 0 && shouldUseParallelInternalMerge(int(count), len(ops), gomaxprocs, maintenance, ParallelMergePressureNormal)
+	if !useParallel && cfg.maxParallelWorkers > 1 && len(ranges) == 0 && !maintenance && gomaxprocs > 1 && count >= 2 {
+		// The M2 opt-in path is already gated by the read-only leaf-span plan at
+		// the DB boundary. Allow smaller internal fan-out than the legacy auto path
+		// so planned spans can use the reusable worker pool without changing the
+		// default apply behavior.
+		useParallel = true
+	}
 	if useParallel && !maintenance {
 		pressure := z.parallelMergePressureLevel()
 		if pressure != ParallelMergePressureNormal {
@@ -2211,7 +2243,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			newChildRef := curChild
 			var childSplits []Split
 			if len(childOps) > 0 || len(childRanges) > 0 {
-				newChildRef, childSplits, err = z.writeRecursive(curChild, childOps, childRanges, maintenance, budget, metrics, childLowKey, childHigh, retired, scratch, false)
+				newChildRef, childSplits, err = z.writeRecursive(curChild, childOps, childRanges, maintenance, budget, metrics, childLowKey, childHigh, retired, scratch, false, cfg)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
@@ -2297,11 +2329,15 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			activeChildren++
 		}
 	}
+	if cfg.maxParallelWorkers == 1 {
+		useParallel = false
+	}
 	if useParallel {
-		const (
-			minParallelActiveChildren = 2
-			minParallelOpsPerChild    = 256
-		)
+		const minParallelActiveChildren = 2
+		minParallelOpsPerChild := 256
+		if cfg.maxParallelWorkers > 1 {
+			minParallelOpsPerChild = 4
+		}
 		if activeChildren < minParallelActiveChildren || len(ops)/activeChildren < minParallelOpsPerChild {
 			useParallel = false
 		}
@@ -2323,49 +2359,70 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	if useParallel {
 		maxParallel := gomaxprocs
+		if cfg.maxParallelWorkers > 1 && maxParallel > cfg.maxParallelWorkers {
+			maxParallel = cfg.maxParallelWorkers
+		}
 		if activeChildren > 0 && maxParallel > activeChildren {
 			maxParallel = activeChildren
 		}
 		if maxParallel < 1 {
 			maxParallel = 1
 		}
+		recordZipperInternalParallelMerge(metrics, activeChildren, maxParallel, len(ops))
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				children[i].newChild = children[i].child
 			}
 		}
-		var nextJob int64 = -1
-		var wg sync.WaitGroup
 		var firstErr error
 		var errOnce sync.Once
-		worker := func() {
-			defer wg.Done()
-			for {
-				i := int(atomic.AddInt64(&nextJob, 1))
-				if i >= len(children) {
-					return
-				}
-				if len(children[i].ops) == 0 {
-					continue
-				}
-				var childMetrics adaptive.Metrics
-				childRet := children[i].retired[:0]
-				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch, false)
-				if err != nil {
-					errOnce.Do(func() { firstErr = err })
-					continue
-				}
-				children[i].newChild = ncID
-				children[i].splits = cs
-				children[i].retired = childRet
-				children[i].childStat = childMetrics
+		childCfg := cfg
+		if childCfg.workerPool != nil {
+			// Avoid recursive worker-pool waits from a pool worker. Child subtrees are
+			// independent and deterministic, but nested use of the same bounded pool can
+			// deadlock when all workers are occupied by the parent run.
+			childCfg.workerPool = nil
+			childCfg.maxParallelWorkers = 1
+		}
+		runChild := func(i int) {
+			if len(children[i].ops) == 0 {
+				return
 			}
+			var childMetrics adaptive.Metrics
+			childRet := children[i].retired[:0]
+			ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch, false, childCfg)
+			if err != nil {
+				errOnce.Do(func() { firstErr = err })
+				return
+			}
+			children[i].newChild = ncID
+			children[i].splits = cs
+			children[i].retired = childRet
+			children[i].childStat = childMetrics
 		}
-		for i := 0; i < maxParallel; i++ {
-			wg.Add(1)
-			go worker()
+		if cfg.workerPool != nil {
+			if err := cfg.workerPool.Run(maxParallel, len(children), func(_ int, i int) { runChild(i) }); err != nil {
+				return page.ChildRef{}, nil, err
+			}
+		} else {
+			var nextJob int64 = -1
+			var wg sync.WaitGroup
+			worker := func() {
+				defer wg.Done()
+				for {
+					i := int(atomic.AddInt64(&nextJob, 1))
+					if i >= len(children) {
+						return
+					}
+					runChild(i)
+				}
+			}
+			for i := 0; i < maxParallel; i++ {
+				wg.Add(1)
+				go worker()
+			}
+			wg.Wait()
 		}
-		wg.Wait()
 		if firstErr != nil {
 			return page.ChildRef{}, nil, firstErr
 		}
@@ -2381,7 +2438,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	} else {
 		for i := range children {
 			if len(children[i].ops) > 0 {
-				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, metrics, children[i].low, children[i].high, retired, scratch, false)
+				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, metrics, children[i].low, children[i].high, retired, scratch, false, cfg)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
@@ -2523,6 +2580,10 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperLeafLogRecordHintBytesRead += src.ZipperLeafLogRecordHintBytesRead
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	dst.ZipperInternalParallelMerges += src.ZipperInternalParallelMerges
+	dst.ZipperInternalParallelChildren += src.ZipperInternalParallelChildren
+	dst.ZipperInternalParallelWorkers += src.ZipperInternalParallelWorkers
+	dst.ZipperInternalParallelOps += src.ZipperInternalParallelOps
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
