@@ -2,8 +2,11 @@ package collections
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -15,7 +18,14 @@ const (
 	TextIndexRewriteMergeStateReady     = "ready"
 	TextIndexRewriteMergeStatePending   = "rewrite_merge_pending"
 	TextIndexRewriteMergeStateCompacted = "compacted"
+
+	TextIndexRewriteBudgetReasonMaxTerms         = "max_terms"
+	TextIndexRewriteBudgetReasonMaxPostingBlocks = "max_posting_blocks"
+	TextIndexRewriteBudgetReasonMaxPostings      = "max_postings"
+	TextIndexRewriteBudgetReasonMaxDuration      = "max_duration"
 )
+
+var errTextV2RewriteBudgetExhausted = errors.New("collections: text-v2 rewrite budget exhausted")
 
 // TextIndexRewriteOptions controls logical text-v2 rewrite/merge maintenance.
 // The rewrite is a normal ordered-root mutation: it publishes replacement
@@ -32,6 +42,21 @@ type TextIndexRewriteOptions struct {
 	// DisableTombstonePurge keeps deleted docID/docmap/norm tombstones after
 	// stale posting blocks are removed. The default purges tombstones.
 	DisableTombstonePurge bool
+	// MaxTerms bounds how many posting terms may be planned. Zero is unlimited.
+	// If the bound is exhausted, no rewrite is published and stats report the
+	// exhausted budget reason.
+	MaxTerms uint64
+	// MaxPostingBlocks bounds posting blocks read while planning. Zero is
+	// unlimited. The bound is checked at term boundaries so one term is the
+	// accounting unit.
+	MaxPostingBlocks uint64
+	// MaxPostings bounds posting entries read while planning. Zero is unlimited.
+	// The bound is checked at term boundaries so one term is the accounting unit.
+	MaxPostings uint64
+	// MaxDuration bounds wall-clock planning time. Zero is unlimited. The bound is
+	// checked between posting blocks and term rewrites; exhaustion leaves storage
+	// unchanged.
+	MaxDuration time.Duration
 }
 
 // TextIndexRewriteStats reports logical text-v2 rewrite/merge maintenance work.
@@ -60,6 +85,9 @@ type TextIndexRewriteStats struct {
 
 	PostingBlocksBefore uint64 `json:"posting_blocks_before"`
 	PostingBlocksAfter  uint64 `json:"posting_blocks_after"`
+
+	BudgetExhausted       bool   `json:"budget_exhausted,omitempty"`
+	BudgetExhaustedReason string `json:"budget_exhausted_reason,omitempty"`
 }
 
 type textV2PostingRewriteTerm struct {
@@ -91,6 +119,106 @@ type textV2RewritePlan struct {
 	nextStatus textV2IndexStatusValue
 }
 
+type textV2RewriteBudget struct {
+	ctx              context.Context
+	started          time.Time
+	enabled          bool
+	maxTerms         uint64
+	maxPostingBlocks uint64
+	maxPostings      uint64
+	maxDuration      time.Duration
+
+	terms         uint64
+	postingBlocks uint64
+	postings      uint64
+	reason        string
+}
+
+type textV2RewriteDecision struct {
+	Apply         bool
+	SkippedReason string
+}
+
+type textV2RewriteRunOptions struct {
+	Rewrite          TextIndexRewriteOptions
+	DryRun           bool
+	NeedStorageStats bool
+	Decide           func(before TextIndexStorageStats, plan TextIndexRewriteStats) textV2RewriteDecision
+}
+
+func newTextV2RewriteBudget(ctx context.Context, opts TextIndexRewriteOptions) *textV2RewriteBudget {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	budget := &textV2RewriteBudget{
+		ctx:              ctx,
+		enabled:          ctx.Done() != nil || opts.MaxTerms != 0 || opts.MaxPostingBlocks != 0 || opts.MaxPostings != 0 || opts.MaxDuration != 0,
+		maxTerms:         opts.MaxTerms,
+		maxPostingBlocks: opts.MaxPostingBlocks,
+		maxPostings:      opts.MaxPostings,
+		maxDuration:      opts.MaxDuration,
+	}
+	if opts.MaxDuration > 0 {
+		budget.started = time.Now()
+	}
+	return budget
+}
+
+func (b *textV2RewriteBudget) check() error {
+	if b == nil || !b.enabled {
+		return nil
+	}
+	if b.ctx != nil {
+		select {
+		case <-b.ctx.Done():
+			return b.ctx.Err()
+		default:
+		}
+	}
+	if b.maxDuration > 0 && !b.started.IsZero() && time.Since(b.started) >= b.maxDuration {
+		b.exhaust(TextIndexRewriteBudgetReasonMaxDuration)
+		return errTextV2RewriteBudgetExhausted
+	}
+	return nil
+}
+
+func (b *textV2RewriteBudget) reserveTerm(term *textV2PostingRewriteTerm) error {
+	if err := b.check(); err != nil {
+		return err
+	}
+	if b == nil || !b.enabled || term == nil {
+		return nil
+	}
+	if b.maxTerms > 0 && b.terms+1 > b.maxTerms {
+		b.exhaust(TextIndexRewriteBudgetReasonMaxTerms)
+		return errTextV2RewriteBudgetExhausted
+	}
+	if b.maxPostingBlocks > 0 && b.postingBlocks+term.oldBlocks > b.maxPostingBlocks {
+		b.exhaust(TextIndexRewriteBudgetReasonMaxPostingBlocks)
+		return errTextV2RewriteBudgetExhausted
+	}
+	if b.maxPostings > 0 && b.postings+term.postings > b.maxPostings {
+		b.exhaust(TextIndexRewriteBudgetReasonMaxPostings)
+		return errTextV2RewriteBudgetExhausted
+	}
+	return nil
+}
+
+func (b *textV2RewriteBudget) finishTerm(term *textV2PostingRewriteTerm) {
+	if b == nil || !b.enabled || term == nil {
+		return
+	}
+	b.terms++
+	b.postingBlocks += term.oldBlocks
+	b.postings += term.postings
+}
+
+func (b *textV2RewriteBudget) exhaust(reason string) {
+	if b != nil && b.reason == "" {
+		b.reason = reason
+	}
+}
+
 // RewriteTextIndex performs text-v2 logical rewrite/merge maintenance for one
 // explicit v2 text index. It coalesces micro/delta blocks into sealed blocks,
 // removes stale generations and deleted-document postings, optionally purges
@@ -99,65 +227,100 @@ type textV2RewritePlan struct {
 // GC; callers can run ValueLogGC, value-log rewrite, or CompactStorage after old
 // snapshots release to reclaim obsolete pointer-backed payloads.
 func (c *Collection) RewriteTextIndex(indexName string, opts TextIndexRewriteOptions) (TextIndexRewriteStats, error) {
+	stats, _, _, err := c.rewriteTextIndexInternal(context.Background(), indexName, textV2RewriteRunOptions{Rewrite: opts})
+	return stats, err
+}
+
+func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName string, run textV2RewriteRunOptions) (TextIndexRewriteStats, TextIndexStorageStats, string, error) {
 	var empty TextIndexRewriteStats
+	var emptyStorage TextIndexStorageStats
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opts := run.Rewrite
 	if err := ValidateIndexName(indexName); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if c == nil {
-		return empty, errCollectionNil
+		return empty, emptyStorage, "", errCollectionNil
 	}
 	if c.db == nil {
-		return empty, errCollectionDBNil
+		return empty, emptyStorage, "", errCollectionDBNil
 	}
 	if c.db.CommandWALEnabled() {
-		return empty, fmt.Errorf("%w: text-v2 rewrite is rejected under command_wal_v1 until collection text maintenance commands are supported", backenddb.ErrCommandWALRejected)
+		return empty, emptyStorage, "", fmt.Errorf("%w: text-v2 rewrite is rejected under command_wal_v1 until collection text maintenance commands are supported", backenddb.ErrCommandWALRejected)
 	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
 	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return empty, backenddb.ErrClosed
+		return empty, emptyStorage, "", backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
 	if err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if catalog == nil {
-		return empty, errCollectionNotFound
+		return empty, emptyStorage, "", errCollectionNotFound
 	}
 	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	baseMeta := catalog.meta
 	c.meta = baseMeta
 	def, ok := findTextIndex(baseMeta.TextIndexes, indexName)
 	if !ok {
-		return empty, ErrIndexNotFound
+		return empty, emptyStorage, "", ErrIndexNotFound
 	}
 	if def.Version != TextIndexVersionV2 {
-		return empty, fmt.Errorf("%w: text index %q is %q; rewrite/merge is only available for explicit text index v2", ErrTextIndexUnavailable, indexName, def.Version)
+		return empty, emptyStorage, "", fmt.Errorf("%w: text index %q is %q; rewrite/merge is only available for explicit text index v2", ErrTextIndexUnavailable, indexName, def.Version)
 	}
 
-	plan, err := buildTextV2RewritePlan(snap, catalog, def, opts)
+	var beforeStats TextIndexStorageStats
+	if run.NeedStorageStats || run.Decide != nil {
+		beforeStats, err = inspectTextV2IndexStorage(snap, catalog, def)
+		if err != nil {
+			return empty, emptyStorage, "", err
+		}
+	}
+
+	plan, err := buildTextV2RewritePlan(ctx, snap, catalog, def, opts)
 	if err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	defer resetTextV2RewritePlanTables(plan)
-	if plan == nil || (!plan.postingChanged && !plan.termsChanged && !plan.tombChanged && !plan.statusChanged) {
+	if plan == nil || plan.stats.BudgetExhausted || (!plan.postingChanged && !plan.termsChanged && !plan.tombChanged && !plan.statusChanged) {
 		stats := TextIndexRewriteStats{IndexName: indexName, Version: TextIndexVersionV2, Noop: true}
+		reason := "no_debt"
 		if plan != nil {
 			stats = plan.stats
 			stats.Noop = true
+			if stats.BudgetExhausted {
+				reason = stats.BudgetExhaustedReason
+			}
 		}
-		return stats, nil
+		return stats, beforeStats, reason, nil
+	}
+	if run.Decide != nil {
+		decision := run.Decide(beforeStats, plan.stats)
+		if !decision.Apply {
+			stats := plan.stats
+			stats.Noop = true
+			return stats, beforeStats, decision.SkippedReason, nil
+		}
+	}
+	if run.DryRun {
+		stats := plan.stats
+		stats.Noop = true
+		return stats, beforeStats, "dry_run", nil
 	}
 
 	rootNames := make([]string, 0, 6)
@@ -181,27 +344,27 @@ func (c *Collection) RewriteTextIndex(indexName string, opts TextIndexRewriteOpt
 	}
 
 	if err := appendRoot(collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name), plan.postingBlocksTable); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if err := appendRoot(collectionTextV2TermsRootName(catalog.meta.Name, def.Name), plan.termsTable); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if err := appendRoot(collectionTextV2DocIDRootName(catalog.meta.Name, def.Name), plan.docIDTable); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if err := appendRoot(collectionTextV2DocMapRootName(catalog.meta.Name, def.Name), plan.docMapTable); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if err := appendRoot(collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name), plan.normTable); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if err := appendRoot(collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name), plan.generationsTable); err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if len(rootNames) == 0 {
 		stats := plan.stats
 		stats.Noop = true
-		return stats, nil
+		return stats, beforeStats, "no_delta_roots", nil
 	}
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
@@ -222,20 +385,23 @@ func (c *Collection) RewriteTextIndex(indexName string, opts TextIndexRewriteOpt
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
 	if err != nil {
-		return empty, err
+		return empty, emptyStorage, "", err
 	}
 	if len(rootIDs) != len(rootNames) {
-		return empty, unexpectedOrderedRootCountError(catalog.meta.Name, len(rootNames), len(rootIDs))
+		return empty, emptyStorage, "", unexpectedOrderedRootCountError(catalog.meta.Name, len(rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	stats := plan.stats
 	stats.RootGenerationAfter = plan.nextStatus.RootGeneration
-	return stats, nil
+	return stats, beforeStats, "applied", nil
 }
 
-func buildTextV2RewritePlan(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, opts TextIndexRewriteOptions) (*textV2RewritePlan, error) {
+func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, opts TextIndexRewriteOptions) (*textV2RewritePlan, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -282,18 +448,35 @@ func buildTextV2RewritePlan(snap *backenddb.Snapshot, catalog *collectionCatalog
 
 	processedTerms := make(map[string]struct{}, len(termStats))
 	postingRootName := collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name)
-	ctx, err := newTextV2SearchContext(snap, catalog, def, nil)
+	searchCtx, err := newTextV2SearchContext(snap, catalog, def, nil)
 	if err != nil {
 		resetTextV2RewritePlanTables(plan)
 		return nil, err
 	}
+	budget := newTextV2RewriteBudget(ctx, opts)
+	markBudgetExhausted := func() (*textV2RewritePlan, error) {
+		plan.stats.BudgetExhausted = true
+		plan.stats.BudgetExhaustedReason = budget.reason
+		return plan, nil
+	}
 	cache := textV2SearchBlockCache{}
-	if err := scanTextV2PostingRewriteTerms(snap, catalog, postingRootName, func(term *textV2PostingRewriteTerm) error {
+	scanErr := scanTextV2PostingRewriteTerms(snap, catalog, postingRootName, budget.check, func(term *textV2PostingRewriteTerm) error {
+		if err := budget.reserveTerm(term); err != nil {
+			return err
+		}
 		processedTerms[term.term] = struct{}{}
-		return plan.processRewriteTerm(snap, catalog, def, ctx, status, &cache, term, termStats[term.term], target, opts.Force)
-	}); err != nil {
+		if err := plan.processRewriteTerm(snap, catalog, def, searchCtx, status, &cache, term, termStats[term.term], target, opts.Force); err != nil {
+			return err
+		}
+		budget.finishTerm(term)
+		return budget.check()
+	})
+	if scanErr != nil {
+		if errors.Is(scanErr, errTextV2RewriteBudgetExhausted) {
+			return markBudgetExhausted()
+		}
 		resetTextV2RewritePlanTables(plan)
-		return nil, err
+		return nil, scanErr
 	}
 
 	terms := make([]string, 0, len(termStats))
@@ -304,6 +487,13 @@ func buildTextV2RewritePlan(snap *backenddb.Snapshot, catalog *collectionCatalog
 	}
 	sort.Strings(terms)
 	for _, term := range terms {
+		if err := budget.check(); err != nil {
+			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+				return markBudgetExhausted()
+			}
+			resetTextV2RewritePlanTables(plan)
+			return nil, err
+		}
 		stats := termStats[term]
 		plan.stats.TermsScanned++
 		if stats.DocumentFrequency != 0 || stats.TotalTermFrequency != 0 {
@@ -317,8 +507,11 @@ func buildTextV2RewritePlan(snap *backenddb.Snapshot, catalog *collectionCatalog
 	}
 
 	if !opts.DisableTombstonePurge && status.DeletedDocuments != 0 {
-		purged, err := plan.purgeTextV2Tombstones(snap, catalog, def, status)
+		purged, err := plan.purgeTextV2Tombstones(snap, catalog, def, status, budget.check)
 		if err != nil {
+			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+				return markBudgetExhausted()
+			}
 			resetTextV2RewritePlanTables(plan)
 			return nil, err
 		}
@@ -484,7 +677,7 @@ func (term *textV2PostingRewriteTerm) filterCurrentEntries(snap *backenddb.Snaps
 	return nil
 }
 
-func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, fn func(*textV2PostingRewriteTerm) error) error {
+func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, checkBudget func() error, fn func(*textV2PostingRewriteTerm) error) error {
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil {
 		if err == tree.ErrKeyNotFound {
@@ -505,6 +698,11 @@ func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collection
 	}
 	var scratch []uint32
 	for it.Valid() {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		if it.IsDeleted() {
 			it.Next()
 			continue
@@ -560,8 +758,8 @@ func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collection
 	return flush()
 }
 
-func (p *textV2RewritePlan) purgeTextV2Tombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue) (bool, error) {
-	purgedOrdinals, err := p.purgeTextV2DocIDTombstones(snap, catalog, def, status)
+func (p *textV2RewritePlan) purgeTextV2Tombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue, checkBudget func() error) (bool, error) {
+	purgedOrdinals, err := p.purgeTextV2DocIDTombstones(snap, catalog, def, status, checkBudget)
 	if err != nil {
 		return false, err
 	}
@@ -569,25 +767,25 @@ func (p *textV2RewritePlan) purgeTextV2Tombstones(snap *backenddb.Snapshot, cata
 	// docID tombstone with the new live ordinal. The old ordinal is still
 	// tombstoned in docmap/norm blocks and still contributes to DeletedDocuments,
 	// so tombstone discovery must include those ordinal-keyed sidecars too.
-	if err := collectTextV2DocMapTombstoneOrdinals(snap, catalog, def, status, purgedOrdinals); err != nil {
+	if err := collectTextV2DocMapTombstoneOrdinals(snap, catalog, def, status, purgedOrdinals, checkBudget); err != nil {
 		return false, err
 	}
-	if err := collectTextV2NormTombstoneOrdinals(snap, catalog, def, status, purgedOrdinals); err != nil {
+	if err := collectTextV2NormTombstoneOrdinals(snap, catalog, def, status, purgedOrdinals, checkBudget); err != nil {
 		return false, err
 	}
 	if len(purgedOrdinals) == 0 {
 		return false, nil
 	}
-	if err := p.purgeTextV2DocMapTombstones(snap, catalog, def, purgedOrdinals); err != nil {
+	if err := p.purgeTextV2DocMapTombstones(snap, catalog, def, purgedOrdinals, checkBudget); err != nil {
 		return false, err
 	}
-	if err := p.purgeTextV2NormTombstones(snap, catalog, def, purgedOrdinals); err != nil {
+	if err := p.purgeTextV2NormTombstones(snap, catalog, def, purgedOrdinals, checkBudget); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (p *textV2RewritePlan) purgeTextV2DocIDTombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue) (map[uint64]struct{}, error) {
+func (p *textV2RewritePlan) purgeTextV2DocIDTombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue, checkBudget func() error) (map[uint64]struct{}, error) {
 	rootName := collectionTextV2DocIDRootName(catalog.meta.Name, def.Name)
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil || it == nil {
@@ -596,6 +794,11 @@ func (p *textV2RewritePlan) purgeTextV2DocIDTombstones(snap *backenddb.Snapshot,
 	defer func() { _ = it.Close() }()
 	purged := make(map[uint64]struct{})
 	for it.Valid() {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return nil, err
+			}
+		}
 		if it.IsDeleted() {
 			it.Next()
 			continue
@@ -625,7 +828,7 @@ func (p *textV2RewritePlan) purgeTextV2DocIDTombstones(snap *backenddb.Snapshot,
 	return purged, it.Error()
 }
 
-func collectTextV2DocMapTombstoneOrdinals(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue, out map[uint64]struct{}) error {
+func collectTextV2DocMapTombstoneOrdinals(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue, out map[uint64]struct{}, checkBudget func() error) error {
 	rootName := collectionTextV2DocMapRootName(catalog.meta.Name, def.Name)
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil || it == nil {
@@ -633,6 +836,11 @@ func collectTextV2DocMapTombstoneOrdinals(snap *backenddb.Snapshot, catalog *col
 	}
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		if it.IsDeleted() {
 			it.Next()
 			continue
@@ -666,7 +874,7 @@ func collectTextV2DocMapTombstoneOrdinals(snap *backenddb.Snapshot, catalog *col
 	return it.Error()
 }
 
-func collectTextV2NormTombstoneOrdinals(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue, out map[uint64]struct{}) error {
+func collectTextV2NormTombstoneOrdinals(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, status textV2IndexStatusValue, out map[uint64]struct{}, checkBudget func() error) error {
 	rootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil || it == nil {
@@ -674,6 +882,11 @@ func collectTextV2NormTombstoneOrdinals(snap *backenddb.Snapshot, catalog *colle
 	}
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		if it.IsDeleted() {
 			it.Next()
 			continue
@@ -707,7 +920,7 @@ func collectTextV2NormTombstoneOrdinals(snap *backenddb.Snapshot, catalog *colle
 	return it.Error()
 }
 
-func (p *textV2RewritePlan) purgeTextV2DocMapTombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, purged map[uint64]struct{}) error {
+func (p *textV2RewritePlan) purgeTextV2DocMapTombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, purged map[uint64]struct{}, checkBudget func() error) error {
 	rootName := collectionTextV2DocMapRootName(catalog.meta.Name, def.Name)
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil || it == nil {
@@ -715,6 +928,11 @@ func (p *textV2RewritePlan) purgeTextV2DocMapTombstones(snap *backenddb.Snapshot
 	}
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		if it.IsDeleted() {
 			it.Next()
 			continue
@@ -758,7 +976,7 @@ func (p *textV2RewritePlan) purgeTextV2DocMapTombstones(snap *backenddb.Snapshot
 	return it.Error()
 }
 
-func (p *textV2RewritePlan) purgeTextV2NormTombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, purged map[uint64]struct{}) error {
+func (p *textV2RewritePlan) purgeTextV2NormTombstones(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, purged map[uint64]struct{}, checkBudget func() error) error {
 	rootName := collectionTextV2NormBlocksRootName(catalog.meta.Name, def.Name)
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil || it == nil {
@@ -766,6 +984,11 @@ func (p *textV2RewritePlan) purgeTextV2NormTombstones(snap *backenddb.Snapshot, 
 	}
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		if it.IsDeleted() {
 			it.Next()
 			continue
