@@ -194,6 +194,37 @@ func TestTextV2MaintenancePolicyMaxIndexesIgnoresTrailingV1Indexes2732(t *testin
 	}
 }
 
+func TestTextV2MaintenancePolicyManagerMaxIndexesIgnoresCollectionsWithoutV22732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	createTextV2MaintenancePolicyNamedFixture2732(t, d, "docs_v2", 24)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "legacy_only"}); err != nil {
+		t.Fatalf("CreateCollection legacy_only: %v", err)
+	}
+	legacy, err := mgr.OpenCollection("legacy_only")
+	if err != nil {
+		t.Fatalf("OpenCollection legacy_only: %v", err)
+	}
+	if _, err := legacy.InsertBatch([][]byte{[]byte("doc-1")}, [][]byte{[]byte(`{"body":"legacy text"}`)}); err != nil {
+		t.Fatalf("InsertBatch legacy_only: %v", err)
+	}
+	if _, _, err := legacy.CreateTextIndex(TextIndexDefinition{Name: "legacy", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex legacy_only: %v", err)
+	}
+
+	stats, err := mgr.MaintainTextIndexes(context.Background(), TextIndexMaintenanceOptions{
+		Policy:     TextIndexMaintenancePolicy{MinDeletedDocuments: 1_000},
+		MaxIndexes: 1,
+	})
+	if err != nil {
+		t.Fatalf("manager MaintainTextIndexes: %v", err)
+	}
+	if stats.BudgetExhausted || stats.BudgetExhaustedReason != "" || stats.IndexesScanned != 1 {
+		t.Fatalf("manager stats=%+v want no max-index exhaustion from trailing non-v2 collection", stats)
+	}
+}
+
 func TestTextV2MaintenancePolicyManagerMaxIndexes2732(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()

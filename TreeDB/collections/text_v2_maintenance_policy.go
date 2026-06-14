@@ -170,6 +170,9 @@ func (m *CollectionManager) MaintainTextIndexes(ctx context.Context, opts TextIn
 	logicalOpts := opts
 	logicalOpts.RunStorageCompaction = false
 	for _, meta := range metas {
+		if !collectionMetaHasTextV2MaintenanceIndexes(meta) {
+			continue
+		}
 		if opts.MaxIndexes > 0 {
 			remaining := opts.MaxIndexes - int(stats.IndexesScanned)
 			if remaining <= 0 {
@@ -248,11 +251,7 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB
 	meta := c.Meta()
 	for _, def := range meta.TextIndexes {
-		version := def.Version
-		if version == TextIndexVersionDefault {
-			version = TextIndexVersionV2
-		}
-		if version != TextIndexVersionV2 {
+		if !textIndexDefinitionIsTextV2MaintenanceCandidate(def) {
 			continue
 		}
 		if opts.MaxIndexes > 0 && int(stats.IndexesScanned) >= opts.MaxIndexes {
@@ -278,6 +277,23 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 		stats.StorageCompaction = &compact
 	}
 	return stats, nil
+}
+
+func collectionMetaHasTextV2MaintenanceIndexes(meta CollectionMeta) bool {
+	for _, def := range meta.TextIndexes {
+		if textIndexDefinitionIsTextV2MaintenanceCandidate(def) {
+			return true
+		}
+	}
+	return false
+}
+
+func textIndexDefinitionIsTextV2MaintenanceCandidate(def TextIndexDefinition) bool {
+	version := def.Version
+	if version == TextIndexVersionDefault {
+		version = TextIndexVersionV2
+	}
+	return version == TextIndexVersionV2
 }
 
 func (c *Collection) maintainTextIndex(ctx context.Context, indexName string, opts TextIndexMaintenanceOptions) (TextIndexMaintenanceIndexStats, error) {

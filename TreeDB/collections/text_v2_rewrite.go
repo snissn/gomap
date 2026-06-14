@@ -182,16 +182,26 @@ func (b *textV2RewriteBudget) check() error {
 	return nil
 }
 
-func (b *textV2RewriteBudget) reserveTerm() error {
+func (b *textV2RewriteBudget) checkTermCount(next uint64) error {
 	if err := b.check(); err != nil {
 		return err
 	}
 	if b == nil || !b.enabled {
 		return nil
 	}
-	if b.maxTerms > 0 && b.terms+1 > b.maxTerms {
+	if b.maxTerms > 0 && next > b.maxTerms {
 		b.exhaust(TextIndexRewriteBudgetReasonMaxTerms)
 		return errTextV2RewriteBudgetExhausted
+	}
+	return nil
+}
+
+func (b *textV2RewriteBudget) reserveTerm() error {
+	if err := b.checkTermCount(b.terms + 1); err != nil {
+		return err
+	}
+	if b == nil || !b.enabled {
+		return nil
 	}
 	b.terms++
 	return nil
@@ -313,7 +323,7 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	budget := newTextV2RewriteBudget(ctx, opts)
 	var beforeStats TextIndexStorageStats
 	if run.NeedStorageStats || run.Decide != nil {
-		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, budget.check)
+		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, budget)
 		if err != nil {
 			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
 				return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason), beforeStats, budget.reason, nil
@@ -486,7 +496,7 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 		return nil, err
 	}
 	termsRootName := collectionTextV2TermsRootName(catalog.meta.Name, def.Name)
-	termStats, err := readTextV2RewriteTermStats(snap, catalog, termsRootName, budget.check)
+	termStats, err := readTextV2RewriteTermStats(snap, catalog, termsRootName, budget)
 	if err != nil {
 		if errors.Is(err, errTextV2RewriteBudgetExhausted) {
 			return markBudgetExhausted()
@@ -1086,16 +1096,17 @@ func (p *textV2RewritePlan) purgeTextV2NormTombstones(snap *backenddb.Snapshot, 
 	return it.Error()
 }
 
-func readTextV2RewriteTermStats(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, checkBudget func() error) (map[string]textV2TermStatsValue, error) {
+func readTextV2RewriteTermStats(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, budget *textV2RewriteBudget) (map[string]textV2TermStatsValue, error) {
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil || it == nil {
 		return nil, err
 	}
 	defer func() { _ = it.Close() }()
 	out := make(map[string]textV2TermStatsValue)
+	var termStatsScanned uint64
 	for it.Valid() {
-		if checkBudget != nil {
-			if err := checkBudget(); err != nil {
+		if budget != nil {
+			if err := budget.check(); err != nil {
 				return nil, err
 			}
 		}
@@ -1115,6 +1126,12 @@ func readTextV2RewriteTermStats(snap *backenddb.Snapshot, catalog *collectionCat
 		if statsKey.Kind != textV2KeyKindTermStats {
 			it.Next()
 			continue
+		}
+		termStatsScanned++
+		if budget != nil {
+			if err := budget.checkTermCount(termStatsScanned); err != nil {
+				return nil, err
+			}
 		}
 		stats, err := decodeTextV2TermStatsValue(it.ValueCopy(nil))
 		if err != nil {

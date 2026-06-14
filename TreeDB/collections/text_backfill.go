@@ -1071,7 +1071,7 @@ func inspectTextV2IndexStorage(snap *backenddb.Snapshot, catalog *collectionCata
 	return inspectTextV2IndexStorageWithBudget(snap, catalog, def, nil)
 }
 
-func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, checkBudget func() error) (TextIndexStorageStats, error) {
+func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, budget *textV2RewriteBudget) (TextIndexStorageStats, error) {
 	stats := TextIndexStorageStats{Version: TextIndexVersionV2}
 	generationsRootName := collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name)
 	status, ok, err := readTextV2StatusAtRoot(snap, catalog, generationsRootName)
@@ -1087,8 +1087,8 @@ func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *coll
 	stats.V2DeletedDocs = status.DeletedDocuments
 	stats.V2RootGeneration = status.RootGeneration
 	stats.V2StatsGeneration = status.StatsGeneration
-	if checkBudget != nil {
-		if err := checkBudget(); err != nil {
+	if budget != nil {
+		if err := budget.check(); err != nil {
 			return stats, err
 		}
 	}
@@ -1098,7 +1098,7 @@ func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *coll
 		if !ok {
 			return stats, errMalformedTextStorage("unknown text-v2 root %q", rootName)
 		}
-		if err := inspectTextV2Root(snap, catalog, def, rootName, family, status, &stats, checkBudget); err != nil {
+		if err := inspectTextV2Root(snap, catalog, def, rootName, family, status, &stats, budget); err != nil {
 			return stats, err
 		}
 	}
@@ -1115,7 +1115,7 @@ func readTextV2StatusAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog
 	return status, true, err
 }
 
-func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, rootName string, family textV2RootFamily, status textV2IndexStatusValue, stats *TextIndexStorageStats, checkBudget func() error) error {
+func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, rootName string, family textV2RootFamily, status textV2IndexStatusValue, stats *TextIndexStorageStats, budget *textV2RewriteBudget) error {
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return errMalformedTextStorage("missing text-v2 root %q", rootName)
@@ -1136,9 +1136,10 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 	for _, field := range fieldNames {
 		fieldSet[field] = struct{}{}
 	}
+	var termStatsScanned uint64
 	for it.Valid() {
-		if checkBudget != nil {
-			if err := checkBudget(); err != nil {
+		if budget != nil {
+			if err := budget.check(); err != nil {
 				return err
 			}
 		}
@@ -1147,6 +1148,29 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			continue
 		}
 		key := it.UnsafeKey()
+		if budget != nil {
+			switch family {
+			case textV2RootFamilyTerms:
+				if !bytes.Equal(key, encodeTextV2FormatKey()) {
+					statsKey, err := decodeTextV2StatsKey(key)
+					if err != nil {
+						return err
+					}
+					if statsKey.Kind == textV2KeyKindTermStats {
+						termStatsScanned++
+						if err := budget.checkTermCount(termStatsScanned); err != nil {
+							return err
+						}
+					}
+				}
+			case textV2RootFamilyPostingBlocks:
+				if !bytes.Equal(key, encodeTextV2FormatKey()) {
+					if err := budget.reservePostingBlock(); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		value := it.ValueCopy(nil)
 		switch {
 		case bytes.Equal(key, encodeTextV2FormatKey()):
@@ -1240,6 +1264,11 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			}
 			if len(block.Summary.MaxFieldTermFrequencies) != len(def.Fields) {
 				return errMalformedTextStorage("text-v2 posting block field lanes mismatch")
+			}
+			if budget != nil {
+				if err := budget.reservePostings(uint64(block.Summary.DocCount)); err != nil {
+					return err
+				}
 			}
 			for _, entry := range block.Entries {
 				if entry.Ordinal >= status.NextOrdinal || entry.Generation > status.RootGeneration {
