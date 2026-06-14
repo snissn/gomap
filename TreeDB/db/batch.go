@@ -263,6 +263,10 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.RLock()
+	if b.db.closing.Load() {
+		b.db.writeMu.RUnlock()
+		return false, ErrClosed
+	}
 	idx := b.db.idx.Load()
 	if idx == nil {
 		b.db.writeMu.RUnlock()
@@ -388,6 +392,9 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	b.db.writeMu.Lock()
 	b.db.observeFlushApplyCommitWait(time.Since(commitWaitStart))
 	defer b.db.writeMu.Unlock()
+	if b.db.closing.Load() {
+		return ErrClosed
+	}
 
 	idx := b.db.idx.Load()
 	if idx == nil {

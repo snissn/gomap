@@ -356,9 +356,9 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
 	lines = append(lines, fmt.Sprintf("flush_apply_concurrency=%d", r.opts.FlushApplyConcurrency))
-	lines = append(lines, fmt.Sprintf("flush_apply_min_entries=%d", r.opts.FlushApplyMinEntries))
-	lines = append(lines, fmt.Sprintf("flush_apply_min_spans=%d", r.opts.FlushApplyMinSpans))
-	lines = append(lines, fmt.Sprintf("flush_apply_min_bytes=%d", r.opts.FlushApplyMinBytes))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_entries_configured=%d", r.opts.FlushApplyMinEntries))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_spans_configured=%d", r.opts.FlushApplyMinSpans))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_bytes_configured=%d", r.opts.FlushApplyMinBytes))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
 	threshold := r.opts.ValueLog.PointerThreshold
