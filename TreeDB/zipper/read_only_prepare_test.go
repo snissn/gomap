@@ -185,6 +185,39 @@ func TestZipperPrepareReadOnlyManyLeafSplitBoundaryDeterministic(t *testing.T) {
 	}
 }
 
+func TestZipperPrepareReadOnlyAllowsEmptyPointKey(t *testing.T) {
+	cold := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = cold.Close() }()
+	if err := cold.Set([]byte{}, []byte("empty")); err != nil {
+		t.Fatalf("cold Set empty key: %v", err)
+	}
+	var nilZ Zipper
+	prepared, err := nilZ.PrepareReadOnly(0, cold, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("cold PrepareReadOnly empty key: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+	if len(prepared.LeafSpans) != 1 || prepared.LeafSpans[0].FirstOpKey == nil || len(prepared.LeafSpans[0].FirstOpKey) != 0 {
+		t.Fatalf("cold empty-key span=%+v", prepared.LeafSpans)
+	}
+
+	_, z := newReadOnlyPrepareZipper(t)
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 16)
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	if err := delta.Set([]byte{}, []byte("empty")); err != nil {
+		t.Fatalf("warm Set empty key: %v", err)
+	}
+	prepared, err = z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("warm PrepareReadOnly empty key: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+	if len(prepared.LeafSpans) != 1 || prepared.LeafSpans[0].FirstOpKey == nil || len(prepared.LeafSpans[0].FirstOpKey) != 0 {
+		t.Fatalf("warm empty-key span=%+v", prepared.LeafSpans)
+	}
+}
+
 func TestZipperPrepareReadOnlyDeleteRangeSpans(t *testing.T) {
 	_, z := newReadOnlyPrepareZipper(t)
 	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 512)
@@ -285,6 +318,11 @@ func TestReadOnlyPrepareResultValidateLeafSpansContracts(t *testing.T) {
 	if strings.Contains(msg, string(longKey)) || !strings.Contains(msg, "len=16") || !strings.Contains(msg, "hex_prefix=3031323334353637") {
 		t.Fatalf("unsafe or incomplete key formatting: %s", msg)
 	}
+}
+
+func TestReadOnlyPrepareResultValidateAllowsEmptyPointKey(t *testing.T) {
+	prepared := ReadOnlyPrepareResult{Ops: 1, PointOps: 1, ExactLeafSpans: true, LeafSpans: []ReadOnlyLeafSpan{{FirstOpKey: []byte{}, LastOpKey: []byte{}, OpCount: 1, PointOpCount: 1, PointOpStart: 0, PointOpEnd: 1, ByteCount: 1}}}
+	requireValidReadOnlyPrepare(t, prepared)
 }
 
 func TestReadOnlyPrepareResultWorkerRanges(t *testing.T) {

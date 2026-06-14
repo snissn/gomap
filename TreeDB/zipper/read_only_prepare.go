@@ -374,19 +374,20 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 		pointCount := span.PointOpCount
 		rangeCount := span.DeleteRangeCount
 		// Preserve compatibility with hand-built point-only test plans that set
-		// OpCount and op key bounds but not the derived point counters.
-		if pointCount == 0 && rangeCount == 0 && len(span.FirstOpKey) > 0 && len(span.LastOpKey) > 0 {
+		// OpCount and op key bounds but not the derived point counters. Empty keys
+		// are valid point keys, so presence is represented by a non-nil slice.
+		if pointCount == 0 && rangeCount == 0 && span.FirstOpKey != nil && span.LastOpKey != nil {
 			pointCount = span.OpCount
 		}
 		if pointCount+rangeCount != span.OpCount {
 			return readOnlyPrepareSpanError(i, "op count %d does not match point/range counts %d/%d", span.OpCount, span.PointOpCount, span.DeleteRangeCount)
 		}
 		if pointCount > 0 {
-			if len(span.FirstOpKey) == 0 {
-				return readOnlyPrepareSpanError(i, "has empty first op key")
+			if span.FirstOpKey == nil {
+				return readOnlyPrepareSpanError(i, "has nil first op key")
 			}
-			if len(span.LastOpKey) == 0 {
-				return readOnlyPrepareSpanError(i, "has empty last op key")
+			if span.LastOpKey == nil {
+				return readOnlyPrepareSpanError(i, "has nil last op key")
 			}
 			if bytes.Compare(span.FirstOpKey, span.LastOpKey) > 0 {
 				return readOnlyPrepareSpanError(i, "first op key %s is after last op key %s", readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(span.LastOpKey))
