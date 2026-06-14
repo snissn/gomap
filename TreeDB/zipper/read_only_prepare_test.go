@@ -252,6 +252,39 @@ func TestZipperPrepareReadOnlyDeleteRangeSpans(t *testing.T) {
 	}
 }
 
+func TestZipperPrepareReadOnlyInternalBaseDeltaRangeSpans(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	z.SetIndexInternalBaseDelta(true)
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 2048)
+	rootData, err := z.pager.Get(rootID)
+	if err != nil {
+		t.Fatalf("get root: %v", err)
+	}
+	rootNode := node.NewNode(rootData)
+	if rootNode.Type() != page.PageTypeInternal || !rootNode.InternalBaseDeltaEnabled() {
+		t.Fatalf("root type/base-delta=%v/%v want internal base-delta", rootNode.Type(), rootNode.InternalBaseDeltaEnabled())
+	}
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	if err := delta.DeleteRange([]byte("key-000500"), []byte("key-000700")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+	if len(prepared.LeafSpans) == 0 {
+		t.Fatal("base-delta range prepare produced no touched spans")
+	}
+	for _, span := range prepared.LeafSpans {
+		if span.DeleteRangeCount != 1 {
+			t.Fatalf("base-delta span missing delete range: %+v", span)
+		}
+	}
+}
+
 func TestZipperPrepareReadOnlyDoesNotAppendOuterLeafOutput(t *testing.T) {
 	p, z := newReadOnlyPrepareZipper(t)
 	z.SetOuterLeavesInValueLog(true)

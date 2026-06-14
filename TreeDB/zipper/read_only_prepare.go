@@ -628,7 +628,13 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			if key == nil {
 				key = []byte{}
 			}
-			useInheritedLow := len(key) == 0
+			childLow := low
+			if len(key) != 0 {
+				// Base-delta internal pages may return key views backed by shared
+				// node scratch. Clone the current separator before fetching the
+				// next entry, which can overwrite the view.
+				childLow = result.cloneKey(key)
+			}
 
 			var endKey []byte
 			if i+1 < count {
@@ -651,13 +657,9 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 				break
 			}
 
-			childLow := low
 			childHigh := high
 			if endKey != nil {
 				childHigh = result.cloneKey(endKey)
-			}
-			if !useInheritedLow {
-				childLow = result.cloneKey(key)
 			}
 			childOps := ops[startOpIdx:opIdx]
 			if len(childOps) > 0 && childLow != nil && bytes.Compare(childOps[0].Key, childLow) < 0 {
