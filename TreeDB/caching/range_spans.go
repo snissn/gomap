@@ -70,6 +70,41 @@ func rangeSpansOverlapQuery(spans []batch.DeleteRange, start, end []byte) bool {
 	return false
 }
 
+func queryCoversRangeSpan(start, end []byte, span batch.DeleteRange) bool {
+	if batch.IsDeleteRangeNoop(span.Start, span.End) {
+		return true
+	}
+	if start != nil {
+		if span.Start == nil || bytes.Compare(start, span.Start) > 0 {
+			return false
+		}
+	}
+	if end != nil {
+		if span.End == nil || bytes.Compare(end, span.End) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func queryCoversRangeSpans(start, end []byte, spans []batch.DeleteRange) bool {
+	for _, span := range spans {
+		if !queryCoversRangeSpan(start, end, span) {
+			return false
+		}
+	}
+	return true
+}
+
+func queryCoversRangeSpanLayers(start, end []byte, layers [][]batch.DeleteRange) bool {
+	for _, spans := range layers {
+		if !queryCoversRangeSpans(start, end, spans) {
+			return false
+		}
+	}
+	return true
+}
+
 func rangeSpanLayerHasSpans(layers [][]batch.DeleteRange) bool {
 	for _, spans := range layers {
 		if len(spans) > 0 {

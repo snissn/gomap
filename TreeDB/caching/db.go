@@ -22544,6 +22544,9 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			// end is exclusive; to cover maxKey it must be strictly greater.
 			coversAll = false
 		}
+		if coversAll && !queryCoversRangeSpanLayers(start, end, db.queueRangeSpans) {
+			coversAll = false
+		}
 
 		// Fast path: if the backend is empty and the delete range covers all keys we
 		// currently have buffered in memory, just drop the in-memory state. This
@@ -22608,8 +22611,17 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		}
 		mutableRange := db.snapshotMutableRange()
 		coversInMemory := queryCoversRange(start, end, mutableRange)
-		for _, r := range db.queueRanges {
-			if !queryCoversRange(start, end, r) {
+		for i, mem := range db.queue {
+			r := keyRange{}
+			rangeKnown := i < len(db.queueRanges)
+			if rangeKnown {
+				r = db.queueRanges[i]
+			}
+			var spans []batch.DeleteRange
+			if i < len(db.queueRangeSpans) {
+				spans = db.queueRangeSpans[i]
+			}
+			if (!rangeKnown && mem != nil && mem.Len() != 0) || !queryCoversRange(start, end, r) || !queryCoversRangeSpans(start, end, spans) {
 				coversInMemory = false
 				break
 			}
@@ -22720,10 +22732,15 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			dstValueLogPaths := db.queueValueLogPaths[:0]
 			for i, mem := range db.queue {
 				r := keyRange{}
-				if i < len(db.queueRanges) {
+				rangeKnown := i < len(db.queueRanges)
+				if rangeKnown {
 					r = db.queueRanges[i]
 				}
-				if queryCoversRange(start, end, r) {
+				var spans []batch.DeleteRange
+				if i < len(db.queueRangeSpans) {
+					spans = db.queueRangeSpans[i]
+				}
+				if (rangeKnown || mem == nil || mem.Len() == 0) && queryCoversRange(start, end, r) && queryCoversRangeSpans(start, end, spans) {
 					db.queueRetiredMemtableLocked(mem)
 					db.queueBacklogBytes.Add(-mem.Size())
 					continue
@@ -22750,11 +22767,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 					dstEnqueueNS = append(dstEnqueueNS, 0)
 				}
 				dstRanges = append(dstRanges, r)
-				if i < len(db.queueRangeSpans) {
-					dstRangeSpans = append(dstRangeSpans, db.queueRangeSpans[i])
-				} else {
-					dstRangeSpans = append(dstRangeSpans, nil)
-				}
+				dstRangeSpans = append(dstRangeSpans, spans)
 				if i < len(db.queueWALPaths) {
 					dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
 				} else {

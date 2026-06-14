@@ -449,6 +449,45 @@ func TestCachingDB_CommandWALRangeSpanIteratorPreservesPublishedRoot(t *testing.
 	}
 }
 
+func TestCachingDB_CommandWALRangeSpanSurvivesDisjointOrdinaryDeleteRange(t *testing.T) {
+	backend := NewMockBackend()
+	backend.Set([]byte("b"), []byte("old"))
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.DeleteRangeAfterCommandWALAppend([]byte("a"), []byte("c"), func() error { return nil }); err != nil {
+		t.Fatalf("DeleteRangeAfterCommandWALAppend: %v", err)
+	}
+	if val, err := db.Get([]byte("b")); err != nil || val != nil {
+		t.Fatalf("b after active span=(%q,%v), want missing", val, err)
+	}
+
+	if err := db.DeleteRange([]byte("x"), []byte("z")); err != nil {
+		t.Fatalf("ordinary DeleteRange: %v", err)
+	}
+	if val, err := db.Get([]byte("b")); err != nil || val != nil {
+		t.Fatalf("b after disjoint ordinary DeleteRange=(%q,%v), want missing", val, err)
+	}
+	stats := db.Stats()
+	if got := deleteRangeStatUint64(t, stats, "treedb.cache.range_span.active_spans"); got != 1 {
+		t.Fatalf("active range spans after ordinary DeleteRange=%d want 1", got)
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if val, err := db.Get([]byte("b")); err != nil || val != nil {
+		t.Fatalf("b after checkpoint=(%q,%v), want missing", val, err)
+	}
+}
+
 func TestCachingDB_CommandWALRangeSpanBlocksLaterWriteSyncBypass(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,
