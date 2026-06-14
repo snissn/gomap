@@ -173,6 +173,9 @@ func (m *CollectionManager) MaintainTextIndexes(ctx context.Context, opts TextIn
 		if opts.MaxIndexes > 0 {
 			remaining := opts.MaxIndexes - int(stats.IndexesScanned)
 			if remaining <= 0 {
+				stats.BudgetExhausted = true
+				stats.BudgetExhaustedReason = TextIndexMaintenanceSkipReasonMaxIndexes
+				stats.IndexesSkipped++
 				break
 			}
 			logicalOpts.MaxIndexes = remaining
@@ -246,6 +249,8 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 	meta := c.Meta()
 	for _, def := range meta.TextIndexes {
 		if opts.MaxIndexes > 0 && int(stats.IndexesScanned) >= opts.MaxIndexes {
+			stats.BudgetExhausted = true
+			stats.BudgetExhaustedReason = TextIndexMaintenanceSkipReasonMaxIndexes
 			stats.IndexesSkipped++
 			break
 		}

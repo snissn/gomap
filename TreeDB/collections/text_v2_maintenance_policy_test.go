@@ -166,6 +166,24 @@ func TestTextV2MaintenancePolicyConcurrentSearch2732(t *testing.T) {
 	}
 }
 
+func TestTextV2MaintenancePolicyManagerMaxIndexes2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	createTextV2MaintenancePolicyNamedFixture2732(t, d, "docs_a", 24)
+	createTextV2MaintenancePolicyNamedFixture2732(t, d, "docs_b", 24)
+
+	stats, err := NewCollectionManager(d).MaintainTextIndexes(context.Background(), TextIndexMaintenanceOptions{
+		Policy:     TextIndexMaintenancePolicy{MinDeletedDocuments: 1},
+		MaxIndexes: 1,
+	})
+	if err != nil {
+		t.Fatalf("manager MaintainTextIndexes: %v", err)
+	}
+	if !stats.BudgetExhausted || stats.BudgetExhaustedReason != TextIndexMaintenanceSkipReasonMaxIndexes || stats.IndexesScanned != 1 || stats.IndexesSkipped == 0 {
+		t.Fatalf("manager stats=%+v want max-index budget exhaustion after one index", stats)
+	}
+}
+
 func TestTextV2MaintenancePolicyStorageComposition2732(t *testing.T) {
 	dir := t.TempDir()
 	d, closeDB := openTextV2MaintenanceCompressedDB2732(t, dir)
@@ -411,11 +429,16 @@ func openTextV2MaintenanceCompressedDB2732(t testing.TB, dir string) (*backenddb
 
 func createTextV2MaintenancePolicyFixture2732(t testing.TB, d *backenddb.DB, docsN int) (*Collection, int) {
 	t.Helper()
+	return createTextV2MaintenancePolicyNamedFixture2732(t, d, "docs", docsN)
+}
+
+func createTextV2MaintenancePolicyNamedFixture2732(t testing.TB, d *backenddb.DB, name string, docsN int) (*Collection, int) {
+	t.Helper()
 	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: name}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	col, err := mgr.OpenCollection("docs")
+	col, err := mgr.OpenCollection(name)
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}

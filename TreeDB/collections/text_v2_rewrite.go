@@ -416,11 +416,6 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 	if !ok {
 		return nil, errMalformedTextStorage("missing text-v2 status for collection %q index %q", catalog.meta.Name, def.Name)
 	}
-	termsRootName := collectionTextV2TermsRootName(catalog.meta.Name, def.Name)
-	termStats, err := readTextV2RewriteTermStats(snap, catalog, termsRootName)
-	if err != nil {
-		return nil, err
-	}
 	target := opts.TargetPostingsPerBlock
 	if target == 0 {
 		target = textV2PostingBlockTargetPostings
@@ -445,6 +440,28 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 	plan.stats.Version = TextIndexVersionV2
 	plan.stats.RootGenerationBefore = status.RootGeneration
 	plan.stats.RootGenerationAfter = status.RootGeneration
+	budget := newTextV2RewriteBudget(ctx, opts)
+	markBudgetExhausted := func() (*textV2RewritePlan, error) {
+		plan.stats.BudgetExhausted = true
+		plan.stats.BudgetExhaustedReason = budget.reason
+		return plan, nil
+	}
+	if err := budget.check(); err != nil {
+		if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+			return markBudgetExhausted()
+		}
+		resetTextV2RewritePlanTables(plan)
+		return nil, err
+	}
+	termsRootName := collectionTextV2TermsRootName(catalog.meta.Name, def.Name)
+	termStats, err := readTextV2RewriteTermStats(snap, catalog, termsRootName, budget.check)
+	if err != nil {
+		if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+			return markBudgetExhausted()
+		}
+		resetTextV2RewritePlanTables(plan)
+		return nil, err
+	}
 
 	processedTerms := make(map[string]struct{}, len(termStats))
 	postingRootName := collectionTextV2PostingBlocksRootName(catalog.meta.Name, def.Name)
@@ -452,12 +469,6 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 	if err != nil {
 		resetTextV2RewritePlanTables(plan)
 		return nil, err
-	}
-	budget := newTextV2RewriteBudget(ctx, opts)
-	markBudgetExhausted := func() (*textV2RewritePlan, error) {
-		plan.stats.BudgetExhausted = true
-		plan.stats.BudgetExhaustedReason = budget.reason
-		return plan, nil
 	}
 	cache := textV2SearchBlockCache{}
 	scanErr := scanTextV2PostingRewriteTerms(snap, catalog, postingRootName, budget.check, func(term *textV2PostingRewriteTerm) error {
@@ -1032,7 +1043,7 @@ func (p *textV2RewritePlan) purgeTextV2NormTombstones(snap *backenddb.Snapshot, 
 	return it.Error()
 }
 
-func readTextV2RewriteTermStats(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string) (map[string]textV2TermStatsValue, error) {
+func readTextV2RewriteTermStats(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, checkBudget func() error) (map[string]textV2TermStatsValue, error) {
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
 	if err != nil || it == nil {
 		return nil, err
@@ -1040,6 +1051,11 @@ func readTextV2RewriteTermStats(snap *backenddb.Snapshot, catalog *collectionCat
 	defer func() { _ = it.Close() }()
 	out := make(map[string]textV2TermStatsValue)
 	for it.Valid() {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return nil, err
+			}
+		}
 		if it.IsDeleted() {
 			it.Next()
 			continue
