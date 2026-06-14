@@ -205,17 +205,28 @@ func (db *DB) flushCoordinatorForegroundYieldEnabled() bool {
 	return db != nil && db.flushApplyConcurrency > 1
 }
 
-func (db *DB) foregroundAssistYieldToActiveFlush(backlog, stopBytes int64) bool {
-	if db == nil || !db.flushCoordinatorForegroundYieldEnabled() || stopBytes <= 0 || backlog < stopBytes || db.flushCoordinatorActive.Load() <= 0 {
-		return false
+func (db *DB) activeFlushEffectiveBacklog(backlog int64) (int64, bool) {
+	if db == nil || !db.flushCoordinatorForegroundYieldEnabled() || db.flushCoordinatorActive.Load() <= 0 {
+		return backlog, false
 	}
 	inFlight := db.flushCoordinatorInFlightBytes.Load()
 	if inFlight <= 0 {
-		return false
+		return backlog, false
 	}
 	effectiveBacklog := backlog - inFlight
 	if effectiveBacklog < 0 {
 		effectiveBacklog = 0
+	}
+	return effectiveBacklog, true
+}
+
+func (db *DB) foregroundAssistYieldToActiveFlush(backlog, stopBytes int64) bool {
+	if db == nil || stopBytes <= 0 || backlog < stopBytes {
+		return false
+	}
+	effectiveBacklog, ok := db.activeFlushEffectiveBacklog(backlog)
+	if !ok {
+		return false
 	}
 	if effectiveBacklog >= stopBytes {
 		db.flushApplyCoordinatorHardOverloadFallbacks.Add(1)

@@ -21431,10 +21431,16 @@ func (db *DB) waitForStop() {
 		stalls := 0
 		for db.queueBacklogBytes.Load() >= target {
 			before := db.queueBacklogBytes.Load()
-			if db.waitForActiveFlushProgress(before, target, flushCoordinatorProgressWait) {
-				if after := db.queueBacklogBytes.Load(); after < target || after < before {
-					stalls = 0
-					continue
+			if effectiveBacklog, ok := db.activeFlushEffectiveBacklog(before); ok {
+				if effectiveBacklog < target {
+					if db.waitForActiveFlushProgress(before, target, flushCoordinatorProgressWait) {
+						if after := db.queueBacklogBytes.Load(); after < target || after < before {
+							stalls = 0
+							continue
+						}
+					}
+				} else {
+					db.flushApplyCoordinatorHardOverloadFallbacks.Add(1)
 				}
 			}
 			maxMemtables := db.writerFlushMaxMemtables

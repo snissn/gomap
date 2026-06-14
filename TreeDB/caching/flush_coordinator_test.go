@@ -55,6 +55,25 @@ func TestFlushCoordinatorHardOverloadFallsBackToForegroundAssist(t *testing.T) {
 	}
 }
 
+func TestFlushCoordinatorStopBackpressureHardOverloadSkipsProgressWait(t *testing.T) {
+	db := newTestFlushCoordinatorDB(1500, 200, 1000)
+
+	db.waitForStop()
+
+	if got := db.flushApplyCoordinatorHardOverloadFallbacks.Load(); got == 0 {
+		t.Fatalf("hard overload fallbacks=%d want >0", got)
+	}
+	if got := db.flushApplyCoordinatorProgressWaits.Load(); got != 0 {
+		t.Fatalf("progress waits=%d want 0 when active credits cannot cover stop backlog", got)
+	}
+	if got := db.flushApplyCoordinatorBlockingFallbacks.Load(); got == 0 {
+		t.Fatalf("blocking fallbacks=%d want >0", got)
+	}
+	if got := db.flushApplyForegroundAssistCalls.Load(); got == 0 {
+		t.Fatalf("foreground assist calls=%d want >0", got)
+	}
+}
+
 func TestFlushCoordinatorFlushErrorRemovesActiveCredit(t *testing.T) {
 	db := newTestFlushCoordinatorDB(1500, 0, 1000)
 	db.beginFlushCoordinatorWork(800)
