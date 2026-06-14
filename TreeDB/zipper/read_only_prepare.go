@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -21,8 +22,32 @@ type ApplyOptions struct {
 	PrepareReadOnly bool
 
 	// ReadOnlyPrepare reuses buffers for the optional read-only preparation
-	// pass. It is ignored unless PrepareReadOnly is true.
+	// pass. It is ignored unless PrepareReadOnly is true or ParallelApplyConcurrency
+	// requests opt-in parallel apply gating.
 	ReadOnlyPrepare ReadOnlyPrepareOptions
+
+	// ReadOnlyPrepareWorkers requests deterministic leaf-span worker ranges for
+	// reporting. Values <=0 use ParallelApplyConcurrency when opt-in parallel
+	// apply is requested.
+	ReadOnlyPrepareWorkers int
+
+	// ParallelApplyConcurrency enables the M2 opt-in COW apply worker-pool path.
+	// Values <=1 leave the existing apply path unchanged. The effective worker
+	// count is also bounded by GOMAXPROCS, planned leaf spans, span bytes, and the
+	// minimum work thresholds below.
+	ParallelApplyConcurrency int
+	// ParallelApplyWorkerPool supplies reusable workers for opt-in parallel apply.
+	// If nil, ApplyWithOptions falls back to the existing per-call worker path.
+	ParallelApplyWorkerPool *ApplyWorkerPool
+	// ParallelApplyMinSpans gates opt-in worker-pool apply by planned leaf spans.
+	// Values <=0 disable the span-count gate.
+	ParallelApplyMinSpans int
+	// ParallelApplyMinSpanOps gates opt-in worker-pool apply by span-local work.
+	// Values <=0 disable the op-count gate.
+	ParallelApplyMinSpanOps int
+	// ParallelApplyMinSpanBytes gates opt-in worker-pool apply by estimated bytes.
+	// Values <=0 disable the byte-count gate.
+	ParallelApplyMinSpanBytes int
 }
 
 // ApplyResult is the complete in-memory result of a root apply attempt. The
@@ -34,11 +59,25 @@ type ApplyResult struct {
 	Metrics             adaptive.Metrics
 
 	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
-	// true. It is planning metadata only; it owns no pager or leaf-log output.
+	// true or opt-in parallel apply needs the M1 span plan for gating. It is
+	// planning metadata only; it owns no pager or leaf-log output.
 	ReadOnlyPrepare ReadOnlyPrepareResult
 	// ReadOnlyPrepareNs is the time spent in the optional read-only preparation
-	// pass. It is zero when ApplyOptions.PrepareReadOnly is false.
+	// pass. It is zero when no read-only preparation ran.
 	ReadOnlyPrepareNs uint64
+	// ReadOnlyPrepareRequested reports that read-only preparation was requested
+	// explicitly or by the opt-in parallel apply gate.
+	ReadOnlyPrepareRequested bool
+	// ReadOnlyPrepareValidationFailed distinguishes validation failures from
+	// read/decode failures for stats.
+	ReadOnlyPrepareValidationFailed bool
+	// ReadOnlyPrepareWorkerSummary is the deterministic worker-range aggregate for
+	// the requested read-only worker target.
+	ReadOnlyPrepareWorkerSummary ReadOnlyLeafSpanWorkerRangeSummary
+	// ParallelApplyWorkers is the effective opt-in worker count selected after
+	// applying all gates. ParallelApplyUsed is true when that count was >1.
+	ParallelApplyWorkers int
+	ParallelApplyUsed    bool
 }
 
 // ReadOnlyPrepareOptions configures a read-only root preparation pass. The zero
@@ -528,34 +567,95 @@ func elapsedNsSince(start time.Time) uint64 {
 	return uint64(elapsed.Nanoseconds())
 }
 
+func resolveParallelApplyWorkers(opts ApplyOptions, summary ReadOnlyLeafSpanSummary) int {
+	workers := opts.ParallelApplyConcurrency
+	if workers <= 1 {
+		return 0
+	}
+	if gomax := runtime.GOMAXPROCS(0); gomax > 0 && workers > gomax {
+		workers = gomax
+	}
+	if summary.Spans <= 1 {
+		return 0
+	}
+	if workers > summary.Spans {
+		workers = summary.Spans
+	}
+	if opts.ParallelApplyMinSpans > 0 && summary.Spans < opts.ParallelApplyMinSpans {
+		return 0
+	}
+	if opts.ParallelApplyMinSpanOps > 0 && summary.SpanOps < opts.ParallelApplyMinSpanOps {
+		return 0
+	}
+	if opts.ParallelApplyMinSpanBytes > 0 && summary.SpanBytes < opts.ParallelApplyMinSpanBytes {
+		return 0
+	}
+	if workers <= 1 {
+		return 0
+	}
+	return workers
+}
+
+func readOnlyWorkerTarget(opts ApplyOptions) int {
+	if opts.ReadOnlyPrepareWorkers > 0 {
+		return opts.ReadOnlyPrepareWorkers
+	}
+	if opts.ParallelApplyConcurrency > 0 {
+		return opts.ParallelApplyConcurrency
+	}
+	return 0
+}
+
 // ApplyWithOptions applies the batch to the tree rooted at rootID and returns a
 // result object suitable for guarded install paths. When opts.PrepareReadOnly is
-// true, it first runs PrepareReadOnly and validates the plan before applying the
-// delta. If read-only preparation or validation fails, no root apply runs and no
-// durable output ownership is produced.
+// true, or when opt-in parallel apply needs span gating, it first runs
+// PrepareReadOnly and validates the plan before applying the delta. If read-only
+// preparation or validation fails, no root apply runs and no durable output
+// ownership is produced.
 func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptions) (ApplyResult, error) {
 	var prepared ReadOnlyPrepareResult
 	var preparedNs uint64
-	if opts.PrepareReadOnly {
+	result := ApplyResult{}
+	prepareRequested := opts.PrepareReadOnly || opts.ParallelApplyConcurrency > 1
+	if prepareRequested {
+		result.ReadOnlyPrepareRequested = true
 		var err error
 		prepareStart := time.Now()
 		prepared, err = z.PrepareReadOnly(rootID, b, opts.ReadOnlyPrepare)
 		preparedNs = elapsedNsSince(prepareStart)
+		result.ReadOnlyPrepare = prepared
+		result.ReadOnlyPrepareNs = preparedNs
+		workerTarget := readOnlyWorkerTarget(opts)
+		result.ReadOnlyPrepareWorkerSummary = prepared.LeafSpanWorkerRangeSummary(workerTarget)
 		if err != nil {
-			return ApplyResult{ReadOnlyPrepare: prepared, ReadOnlyPrepareNs: preparedNs}, err
+			return result, err
 		}
 		if err := prepared.ValidateLeafSpans(); err != nil {
-			return ApplyResult{ReadOnlyPrepare: prepared, ReadOnlyPrepareNs: preparedNs}, fmt.Errorf("zipper: invalid read-only prepare plan: %w", err)
+			result.ReadOnlyPrepareValidationFailed = true
+			return result, fmt.Errorf("zipper: invalid read-only prepare plan: %w", err)
 		}
 	}
-	newRoot, retired, metrics, err := z.Apply(rootID, b)
-	return ApplyResult{
-		RootID:              newRoot,
-		PendingRetiredPages: retired,
-		Metrics:             metrics,
-		ReadOnlyPrepare:     prepared,
-		ReadOnlyPrepareNs:   preparedNs,
-	}, err
+
+	applyCfg := applyRunConfig{}
+	if opts.ParallelApplyConcurrency > 1 && prepared.DeleteRanges == 0 {
+		workers := resolveParallelApplyWorkers(opts, prepared.LeafSpanSummary())
+		if workers > 1 {
+			applyCfg.maxParallelWorkers = workers
+			applyCfg.workerPool = opts.ParallelApplyWorkerPool
+			result.ParallelApplyWorkers = workers
+			result.ParallelApplyUsed = true
+		}
+	}
+	newRoot, retired, metrics, err := z.applyWithConfig(rootID, b, applyCfg)
+	result.RootID = newRoot
+	result.PendingRetiredPages = retired
+	result.Metrics = metrics
+	result.ReadOnlyPrepare = prepared
+	result.ReadOnlyPrepareNs = preparedNs
+	if result.ReadOnlyPrepareWorkerSummary.TargetWorkers == 0 && prepareRequested {
+		result.ReadOnlyPrepareWorkerSummary = prepared.LeafSpanWorkerRangeSummary(readOnlyWorkerTarget(opts))
+	}
+	return result, err
 }
 
 // PrepareReadOnly discovers the existing leaf spans touched by b without

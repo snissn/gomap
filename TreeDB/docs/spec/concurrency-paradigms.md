@@ -362,6 +362,10 @@ Note:
 | `Options.FlushBuildChunkMinBytes` | Adaptive chunk lower bound. |
 | `Options.FlushBuildChunkMaxBytes` | Adaptive chunk upper bound. |
 | `Options.FlushBuildPrefetchUnits` | Build prefetch depth for flush pipeline. |
+| `Options.FlushApplyConcurrency` | Experimental/default-off COW apply worker-pool cap (`<=1` disables the M2 opt-in path). |
+| `Options.FlushApplyMinEntries` | Planned span-op gate before enabling opt-in parallel apply. |
+| `Options.FlushApplyMinSpans` | Planned leaf-span gate before enabling opt-in parallel apply. |
+| `Options.FlushApplyMinBytes` | Planned span-byte gate before enabling opt-in parallel apply. |
 | `Options.FlushBackendMaxEntries` | Backend commit chunk size during flush. |
 | `Options.FlushBackendMaxBatches` | Max intermediate backend commits per flush. |
 
@@ -369,6 +373,7 @@ Notes:
 - `FlushBuildConcurrency <= 0` defaults to `GOMAXPROCS`.
 - `FlushBuildMinEntries <= 0` defaults to `16k`.
 - `FlushBuildMinUnits <= 0` defaults to `2`.
+- `FlushApplyConcurrency` is not enabled by default; when set, workers are still capped by `GOMAXPROCS` and read-only leaf-span planning.
 
 ### 6.4 Lane/log controls
 

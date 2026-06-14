@@ -90,6 +90,10 @@ optionally build the `SetOps` batch in parallel:
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
 
+### `Options.FlushApplyConcurrency` (opt-in/default-off)
+
+`FlushApplyConcurrency > 1` enables the experimental M2 bounded worker-pool path for B-tree COW apply. It is separate from `FlushBuildConcurrency` and remains default-off. The effective worker count is capped by `GOMAXPROCS`, planned leaf-span count, and the `FlushApplyMinEntries`, `FlushApplyMinSpans`, and `FlushApplyMinBytes` gates. Leaf/value-log output remains persistent storage; failed or abandoned apply attempts do not publish roots.
+
 ### Read latency under flush debt (cached mode)
 
 TreeDB cached mode absorbs bursts by buffering writes in memtables and flushing

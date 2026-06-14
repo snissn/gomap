@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,10 @@ const (
 	MetaPage1ID = 1
 	KeepRecent  = 1
 
+	defaultFlushApplyMinEntries = 4096
+	defaultFlushApplyMinSpans   = 2
+	defaultFlushApplyMinBytes   = 64 * 1024
+
 	closeSnapshotDrainTimeout = 10 * time.Second
 	closeSnapshotDrainSleep   = 500 * time.Microsecond
 
@@ -40,6 +45,23 @@ const (
 	snapshotAcquireShardMask  = snapshotAcquireShardCount - 1
 	snapshotRootTreeRetainMax = 16
 )
+
+func normalizeFlushApplyConcurrency(workers int) int {
+	if workers <= 1 {
+		return 0
+	}
+	gomax := runtime.GOMAXPROCS(0)
+	if gomax < 1 {
+		gomax = 1
+	}
+	if workers > gomax {
+		workers = gomax
+	}
+	if workers <= 1 {
+		return 0
+	}
+	return workers
+}
 
 type DBState struct {
 	CommitSeq                  uint64
@@ -213,6 +235,10 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyLeafLogRecordHintBytesRead    atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafMerges                    atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalMerges                atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelMerges        atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelChildren      atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelWorkers       atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelOps           atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafPagesWritten              atomic.Uint64
 	orderedRootDeltaGroupRootApplyPagerLeafPagesWritten         atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafLogPagesWritten           atomic.Uint64
@@ -263,6 +289,10 @@ type DB struct {
 	flushApplyOldLeafLogRecordHintBytesRead  atomic.Uint64
 	flushApplyLeafMerges                     atomic.Uint64
 	flushApplyInternalMerges                 atomic.Uint64
+	flushApplyInternalParallelMerges         atomic.Uint64
+	flushApplyInternalParallelChildren       atomic.Uint64
+	flushApplyInternalParallelWorkers        atomic.Uint64
+	flushApplyInternalParallelOps            atomic.Uint64
 	flushApplyLeafPagesWritten               atomic.Uint64
 	flushApplyPagerLeafPagesWritten          atomic.Uint64
 	flushApplyLeafLogPagesWritten            atomic.Uint64
@@ -294,6 +324,12 @@ type DB struct {
 	flushApplyRetries                        atomic.Uint64
 	flushApplyMismatches                     atomic.Uint64
 
+	flushApplyConcurrency int
+	flushApplyMinEntries  int
+	flushApplyMinSpans    int
+	flushApplyMinBytes    int
+	flushApplyWorkerPool  *zipper.ApplyWorkerPool
+
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
 	systemRootWarmPublishAttempts         atomic.Uint64
@@ -317,6 +353,7 @@ type DB struct {
 	// page so tests can exercise pre-publish cleanup paths.
 	testFailWriteMeta                  atomic.Bool
 	testFailCommandWALFlush            atomic.Bool
+	testAfterOptimisticApplyHook       func()
 	testCommandWALRecoveryFailAfterLSN atomic.Uint64
 	commandWALReplayLSN                atomic.Uint64
 	commandWALReplayToken              atomic.Uint64
@@ -917,6 +954,20 @@ type Options struct {
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
 
+	// FlushApplyConcurrency enables opt-in M2 parallel COW apply for backend
+	// flush/write batches using a bounded reusable worker pool. It is separate
+	// from FlushBuildConcurrency; values <=1 keep the M2 worker-pool path off.
+	FlushApplyConcurrency int
+	// FlushApplyMinEntries gates opt-in parallel apply by planned span-local ops.
+	// Values <=0 use the internal default.
+	FlushApplyMinEntries int
+	// FlushApplyMinSpans gates opt-in parallel apply by planned leaf span count.
+	// Values <=0 use the internal default.
+	FlushApplyMinSpans int
+	// FlushApplyMinBytes gates opt-in parallel apply by planned span bytes.
+	// Values <=0 use the internal default.
+	FlushApplyMinBytes int
+
 	// FlushBackendMaxEntries caps how many operations are buffered into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
@@ -1265,6 +1316,15 @@ func Open(opts Options) (*DB, error) {
 	if opts.PruneMaxDuration == 0 {
 		opts.PruneMaxDuration = 25 * time.Millisecond
 	}
+	if opts.FlushApplyMinEntries <= 0 {
+		opts.FlushApplyMinEntries = defaultFlushApplyMinEntries
+	}
+	if opts.FlushApplyMinSpans <= 0 {
+		opts.FlushApplyMinSpans = defaultFlushApplyMinSpans
+	}
+	if opts.FlushApplyMinBytes <= 0 {
+		opts.FlushApplyMinBytes = defaultFlushApplyMinBytes
+	}
 	if opts.FreelistRegionRadius < 0 {
 		opts.FreelistRegionPages = 0
 		opts.FreelistRegionRadius = 0
@@ -1485,6 +1545,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen := newIndexGen(1, p, alloc, z)
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
+	flushApplyConcurrency := normalizeFlushApplyConcurrency(opts.FlushApplyConcurrency)
+	var flushApplyWorkerPool *zipper.ApplyWorkerPool
+	if flushApplyConcurrency > 1 {
+		flushApplyWorkerPool = zipper.NewApplyWorkerPool(flushApplyConcurrency)
+	}
 
 	db := &DB{
 		valueLogManager:                vm,
@@ -1512,6 +1577,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
 		piggybackCompaction:            !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
+		flushApplyConcurrency:          flushApplyConcurrency,
+		flushApplyMinEntries:           opts.FlushApplyMinEntries,
+		flushApplyMinSpans:             opts.FlushApplyMinSpans,
+		flushApplyMinBytes:             opts.FlushApplyMinBytes,
+		flushApplyWorkerPool:           flushApplyWorkerPool,
 		dir:                            opts.Dir,
 		columnAssetRootDir:             layout.columnAssetDir,
 		chunkSize:                      opts.ChunkSize,
@@ -1862,6 +1932,14 @@ func (db *DB) Close() error {
 		errs = append(errs, err)
 	}
 	db.closing.Store(true)
+	// Wait for active apply attempts before closing the reusable flush/apply
+	// worker pool and tearing down index resources.
+	db.writeMu.Lock()
+	if db.flushApplyWorkerPool != nil {
+		db.flushApplyWorkerPool.Close()
+		db.flushApplyWorkerPool = nil
+	}
+	db.writeMu.Unlock()
 	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.valueLogRefTracker != nil {
