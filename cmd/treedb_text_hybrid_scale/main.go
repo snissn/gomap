@@ -339,6 +339,12 @@ func parseFlags(args []string) (config, error) {
 	if cfg.readers <= 0 {
 		return config{}, fmt.Errorf("-readers must be positive")
 	}
+	if cfg.backfillRows < 0 {
+		return config{}, fmt.Errorf("-backfill-rows cannot be negative")
+	}
+	if cfg.concurrentWrites < 0 || cfg.maintenanceUpdates < 0 || cfg.maintenanceDeletes < 0 {
+		return config{}, fmt.Errorf("write/update/delete counts cannot be negative")
+	}
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows
 	}
@@ -350,9 +356,6 @@ func parseFlags(args []string) (config, error) {
 	}
 	if cfg.maintenanceDeletes <= 0 {
 		cfg.maintenanceDeletes = minInt(maxInt(cfg.rows/200, 1), 5_000)
-	}
-	if cfg.concurrentWrites < 0 || cfg.maintenanceUpdates < 0 || cfg.maintenanceDeletes < 0 {
-		return config{}, fmt.Errorf("write/update/delete counts cannot be negative")
 	}
 	return cfg, nil
 }

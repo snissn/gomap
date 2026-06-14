@@ -132,6 +132,11 @@ func TestScaleCommandFlagValidation2731(t *testing.T) {
 	if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "0"}); err == nil {
 		t.Fatal("parseFlags accepted zero rows")
 	}
+	for _, flagName := range []string{"-backfill-rows", "-concurrent-writes", "-maintenance-updates", "-maintenance-deletes"} {
+		if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "10", flagName, "-1"}); err == nil {
+			t.Fatalf("parseFlags accepted negative %s", flagName)
+		}
+	}
 	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "10", "-include-vector=false", "-run-backfill=false", "-run-rewrite=false", "-run-concurrent=false", "-run-reopen=false"})
 	if err != nil {
 		t.Fatalf("parseFlags valid args: %v", err)
