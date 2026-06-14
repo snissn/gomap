@@ -116,11 +116,16 @@ type orderedRootPublishOptions struct {
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
-	idx     int
-	rootID  uint64
-	retired []uint64
-	metrics adaptive.Metrics
-	err     error
+	idx                             int
+	rootID                          uint64
+	retired                         []uint64
+	metrics                         adaptive.Metrics
+	readOnlyPrepareSummary          zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareWorkerSummary    zipper.ReadOnlyLeafSpanWorkerRangeSummary
+	readOnlyPrepareNs               uint64
+	readOnlyPrepareAttempted        bool
+	readOnlyPrepareValidationFailed bool
+	err                             error
 }
 
 // OrderedRootStoragePolicy selects the physical storage policy for a published
@@ -181,6 +186,14 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// Callers should opt in only when root deltas are already materialized and
 	// benchmarked as large enough to amortize goroutine and shared backend costs.
 	ParallelApply bool
+	// PrepareReadOnly runs the side-effect-free leaf-span planning pass before
+	// warm root apply and records planning stats. It is observability/planning
+	// only; it does not change publish output or enable parallel leaf execution.
+	PrepareReadOnly bool
+	// ReadOnlyPrepareWorkers is the requested future worker count used to build
+	// deterministic contiguous leaf-span ranges when PrepareReadOnly is true.
+	// Values <=0 skip worker-range construction while still validating spans.
+	ReadOnlyPrepareWorkers int
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -2079,6 +2092,60 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 	return parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
+func runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, workers int) (zipper.ReadOnlyPrepareResult, zipper.ReadOnlyLeafSpanSummary, zipper.ReadOnlyLeafSpanWorkerRangeSummary, uint64, bool, error) {
+	var prepared zipper.ReadOnlyPrepareResult
+	var summary zipper.ReadOnlyLeafSpanSummary
+	var workerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary
+	if rootZipper == nil {
+		return prepared, summary, workerSummary, 0, false, errors.New("missing ordered root zipper")
+	}
+	prepareStart := time.Now()
+	prepared, err := rootZipper.PrepareReadOnly(baseRoot, delta, zipper.ReadOnlyPrepareOptions{})
+	prepareNs := orderedRootDeltaGroupPhaseDurationNs(prepareStart)
+	summary = prepared.LeafSpanSummary()
+	workerSummary = prepared.LeafSpanWorkerRangeSummary(workers)
+	if err != nil {
+		return prepared, summary, workerSummary, prepareNs, false, err
+	}
+	if validationErr := prepared.ValidateLeafSpans(); validationErr != nil {
+		return prepared, summary, workerSummary, prepareNs, true, fmt.Errorf("treedb: invalid ordered-root read-only apply plan: %w", validationErr)
+	}
+	return prepared, summary, workerSummary, prepareNs, false, nil
+}
+
+func addOrderedRootReadOnlyPreparePhaseStats(phases *orderedRootDeltaGroupPublishPhaseStats, summary zipper.ReadOnlyLeafSpanSummary, workerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary, prepareNs uint64, err error, validationFailed bool) {
+	if phases == nil {
+		return
+	}
+	phases.rootApplyReadOnlyPrepareNs += prepareNs
+	phases.rootApplyReadOnlyPrepareCalls++
+	if err != nil {
+		phases.rootApplyReadOnlyPrepareErrors++
+	}
+	if validationFailed {
+		phases.rootApplyReadOnlyPrepareValidationFail++
+	}
+	if workerSummary.TargetWorkers > 0 {
+		requested := uint64(workerSummary.TargetWorkers)
+		phases.rootApplyReadOnlyPrepareRequested += requested
+		if requested > phases.rootApplyReadOnlyPrepareRequestedMax {
+			phases.rootApplyReadOnlyPrepareRequestedMax = requested
+		}
+	}
+	if summary.Spans > 0 {
+		phases.rootApplyReadOnlyPrepareSpans += uint64(summary.Spans)
+	}
+	if summary.SpanOps > 0 {
+		phases.rootApplyReadOnlyPrepareSpanOps += uint64(summary.SpanOps)
+	}
+	if summary.SpanBytes > 0 {
+		phases.rootApplyReadOnlyPrepareSpanBytes += uint64(summary.SpanBytes)
+	}
+	if workerSummary.Ranges > 0 {
+		phases.rootApplyReadOnlyPrepareWorkerRanges += uint64(workerSummary.Ranges)
+	}
+}
+
 func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
@@ -2087,6 +2154,24 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		if err != nil {
 			result.err = err
 			return result
+		}
+		if ordered[orderedIdx].PrepareReadOnly {
+			result.readOnlyPrepareAttempted = true
+			rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
+			if err != nil {
+				result.err = err
+				return result
+			}
+			_, summary, workerSummary, prepareNs, validationFailed, err := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers)
+			result.readOnlyPrepareSummary = summary
+			result.readOnlyPrepareWorkerSummary = workerSummary
+			result.readOnlyPrepareNs = prepareNs
+			result.readOnlyPrepareValidationFailed = validationFailed
+			db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, validationFailed)
+			if err != nil {
+				result.err = err
+				return result
+			}
 		}
 		rootID, retired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild)
 		result.rootID = rootID
@@ -2226,6 +2311,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	}
 	for orderedIdx := range rootApplyResults {
 		result := rootApplyResults[orderedIdx]
+		if result.readOnlyPrepareAttempted {
+			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, result.readOnlyPrepareSummary, result.readOnlyPrepareWorkerSummary, result.readOnlyPrepareNs, result.err, result.readOnlyPrepareValidationFailed)
+		}
 		if result.err != nil {
 			return 0, nil, false, result.err
 		}
@@ -2399,6 +2487,18 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
 		if err != nil {
 			return 0, nil, err
+		}
+		if ordered[idx].PrepareReadOnly {
+			rootZipper, prepErr := db.orderedRootZipperForOptionsWithAllocator(idxGen, opts, idxGen.allocator)
+			if prepErr != nil {
+				return 0, nil, prepErr
+			}
+			_, summary, workerSummary, prepareNs, validationFailed, prepErr := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[idx].BaseRoot, ordered[idx].Delta, ordered[idx].ReadOnlyPrepareWorkers)
+			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, summary, workerSummary, prepareNs, prepErr, validationFailed)
+			db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, prepErr, validationFailed)
+			if prepErr != nil {
+				return 0, nil, prepErr
+			}
 		}
 		phaseStart := time.Now()
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, ordered[idx].BaseRoot, ordered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, ordered[idx].IncludeDeletedOnColdBuild)
@@ -2577,6 +2677,18 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		opts, err := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
 		if err != nil {
 			return 0, nil, err
+		}
+		if allOrdered[idx].PrepareReadOnly {
+			rootZipper, prepErr := db.orderedRootZipperForOptionsWithAllocator(idxGen, opts, idxGen.allocator)
+			if prepErr != nil {
+				return 0, nil, prepErr
+			}
+			_, summary, workerSummary, prepareNs, validationFailed, prepErr := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, allOrdered[idx].BaseRoot, allOrdered[idx].Delta, allOrdered[idx].ReadOnlyPrepareWorkers)
+			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, summary, workerSummary, prepareNs, prepErr, validationFailed)
+			db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, prepErr, validationFailed)
+			if prepErr != nil {
+				return 0, nil, prepErr
+			}
 		}
 		phaseStart := time.Now()
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, allOrdered[idx].BaseRoot, allOrdered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, allOrdered[idx].IncludeDeletedOnColdBuild)

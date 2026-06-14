@@ -227,6 +227,16 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyInternalLeafLogRefs           atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalLeafLogRefCopies      atomic.Uint64
 	orderedRootDeltaGroupRootApplyRootSplitLevels               atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareNs             atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls          atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareErrors         atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareValidationFail atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareRequested      atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareRequestedMax   atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareSpans          atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareSpanOps        atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareSpanBytes      atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareWorkerRanges   atomic.Uint64
 	orderedRootDeltaGroupSystemBuildNs                          atomic.Uint64
 	orderedRootDeltaGroupSystemApplyNs                          atomic.Uint64
 	orderedRootDeltaGroupSystemApplyCalls                       atomic.Uint64
@@ -237,38 +247,52 @@ type DB struct {
 
 	// Cached-flush/root-apply M0 counters. These are coarse per-apply counters
 	// used by benchmark artifacts; avoid per-node timing in zipper recursion.
-	flushApplyCalls                         atomic.Uint64
-	flushApplyErrors                        atomic.Uint64
-	flushApplyOps                           atomic.Uint64
-	flushApplyNs                            atomic.Uint64
-	flushApplyOldNodeLoads                  atomic.Uint64
-	flushApplyOldPagerNodeLoads             atomic.Uint64
-	flushApplyOldLeafLogNodeLoads           atomic.Uint64
-	flushApplyOldLeafLogCacheHits           atomic.Uint64
-	flushApplyOldLeafLogReaderCalls         atomic.Uint64
-	flushApplyOldLeafLogViewReads           atomic.Uint64
-	flushApplyOldLeafLogScratchReads        atomic.Uint64
-	flushApplyOldPagerNodeBytesRead         atomic.Uint64
-	flushApplyOldLeafLogNodeBytesRead       atomic.Uint64
-	flushApplyOldLeafLogRecordHintBytesRead atomic.Uint64
-	flushApplyLeafMerges                    atomic.Uint64
-	flushApplyInternalMerges                atomic.Uint64
-	flushApplyLeafPagesWritten              atomic.Uint64
-	flushApplyPagerLeafPagesWritten         atomic.Uint64
-	flushApplyLeafLogPagesWritten           atomic.Uint64
-	flushApplyLeafPageBytesWritten          atomic.Uint64
-	flushApplyPagerLeafPageBytesWritten     atomic.Uint64
-	flushApplyLeafLogPageBytesWritten       atomic.Uint64
-	flushApplyInternalPagesWritten          atomic.Uint64
-	flushApplyInternalPageBytesWritten      atomic.Uint64
-	flushApplyInternalChildRefs             atomic.Uint64
-	flushApplyRootSplitLevels               atomic.Uint64
-	flushApplyRootReduceNs                  atomic.Uint64
-	flushApplyCommitWaitNs                  atomic.Uint64
-	flushApplyGuardedPublishCalls           atomic.Uint64
-	flushApplyGuardedPublishNs              atomic.Uint64
-	flushApplyRetries                       atomic.Uint64
-	flushApplyMismatches                    atomic.Uint64
+	flushApplyCalls                          atomic.Uint64
+	flushApplyErrors                         atomic.Uint64
+	flushApplyOps                            atomic.Uint64
+	flushApplyNs                             atomic.Uint64
+	flushApplyOldNodeLoads                   atomic.Uint64
+	flushApplyOldPagerNodeLoads              atomic.Uint64
+	flushApplyOldLeafLogNodeLoads            atomic.Uint64
+	flushApplyOldLeafLogCacheHits            atomic.Uint64
+	flushApplyOldLeafLogReaderCalls          atomic.Uint64
+	flushApplyOldLeafLogViewReads            atomic.Uint64
+	flushApplyOldLeafLogScratchReads         atomic.Uint64
+	flushApplyOldPagerNodeBytesRead          atomic.Uint64
+	flushApplyOldLeafLogNodeBytesRead        atomic.Uint64
+	flushApplyOldLeafLogRecordHintBytesRead  atomic.Uint64
+	flushApplyLeafMerges                     atomic.Uint64
+	flushApplyInternalMerges                 atomic.Uint64
+	flushApplyLeafPagesWritten               atomic.Uint64
+	flushApplyPagerLeafPagesWritten          atomic.Uint64
+	flushApplyLeafLogPagesWritten            atomic.Uint64
+	flushApplyLeafPageBytesWritten           atomic.Uint64
+	flushApplyPagerLeafPageBytesWritten      atomic.Uint64
+	flushApplyLeafLogPageBytesWritten        atomic.Uint64
+	flushApplyInternalPagesWritten           atomic.Uint64
+	flushApplyInternalPageBytesWritten       atomic.Uint64
+	flushApplyInternalChildRefs              atomic.Uint64
+	flushApplyRootSplitLevels                atomic.Uint64
+	flushApplyRootReduceNs                   atomic.Uint64
+	flushApplyReadOnlyPrepareCalls           atomic.Uint64
+	flushApplyReadOnlyPrepareErrors          atomic.Uint64
+	flushApplyReadOnlyPrepareValidationFail  atomic.Uint64
+	flushApplyReadOnlyPrepareNs              atomic.Uint64
+	flushApplyReadOnlyPrepareRequested       atomic.Uint64
+	flushApplyReadOnlyPrepareRequestedMax    atomic.Uint64
+	flushApplyReadOnlyPrepareSpans           atomic.Uint64
+	flushApplyReadOnlyPrepareSpansMax        atomic.Uint64
+	flushApplyReadOnlyPrepareSpanOps         atomic.Uint64
+	flushApplyReadOnlyPrepareSpanOpsMax      atomic.Uint64
+	flushApplyReadOnlyPrepareSpanBytes       atomic.Uint64
+	flushApplyReadOnlyPrepareSpanBytesMax    atomic.Uint64
+	flushApplyReadOnlyPrepareWorkerRanges    atomic.Uint64
+	flushApplyReadOnlyPrepareWorkerRangesMax atomic.Uint64
+	flushApplyCommitWaitNs                   atomic.Uint64
+	flushApplyGuardedPublishCalls            atomic.Uint64
+	flushApplyGuardedPublishNs               atomic.Uint64
+	flushApplyRetries                        atomic.Uint64
+	flushApplyMismatches                     atomic.Uint64
 
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
