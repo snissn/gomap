@@ -30,6 +30,12 @@ const (
 	textSearchFailClosedStorageCorrupt = "text_index_storage_corrupt"
 	textSearchFailClosedDocumentFetch  = "document_fetch_unavailable"
 	textSearchFailClosedV2Unavailable  = "text_v2_search_unavailable"
+	textSearchFailClosedUnsupported    = "unsupported_text_query"
+)
+
+const (
+	textSearchMaxPhraseSlop  = 16
+	textSearchMaxPhraseTerms = 16
 )
 
 const (
@@ -49,12 +55,23 @@ const (
 	TextSearchResultModeScoreOnly TextSearchResultMode = "score_only"
 )
 
+// TextSearchPhraseQuery requests bounded ordered phrase/proximity semantics
+// over text-v2 position lanes. Slop is the maximum total number of intervening
+// tokens allowed across the ordered phrase; zero means exact adjacent phrase.
+type TextSearchPhraseQuery struct {
+	Query string
+	Slop  int
+}
+
 // TextSearchOptions configures collection-native lexical search.
 type TextSearchOptions struct {
 	IndexName string
 	Query     string
-	Operator  TextSearchOperator
-	TopK      int
+	// Phrase is a structured phrase/proximity query. It is intentionally separate
+	// from Query to avoid introducing a broad text query DSL.
+	Phrase   *TextSearchPhraseQuery
+	Operator TextSearchOperator
+	TopK     int
 	// ResultMode controls optional match-detail materialization. The zero value
 	// is detailed for API compatibility. Score-only returns IDs/ranks/scores
 	// without match summaries; compact returns TextMatches only; detailed returns
@@ -105,31 +122,34 @@ type TextSearchResult struct {
 // text-only results without inventing new counter names. The shorter aliases are
 // retained for text-only callers.
 type TextSearchStats struct {
-	QueryTerms                int
-	TextCandidatesRequested   uint64
-	TextCandidatesReturned    uint64
-	TextPostingsScanned       uint64
-	TextPostingBlocksVisited  uint64
-	TextPostingBlocksSkipped  uint64
-	TextBlockMaxFallbacks     uint64
-	TextBlockMaxThresholds    uint64
-	TextCandidatesScored      uint64
-	TextStateLookups          uint64
-	TextNormLookups           uint64
-	TextMatchDetailsBuilt     uint64
-	PostingsScanned           uint64
-	CandidatesScored          uint64
-	DocumentsFetched          uint64
-	DocumentsMissing          uint64
-	FullDocumentScanFallbacks uint64
-	PostingsScanNanos         uint64
-	CandidateScoreNanos       uint64
-	DocumentFetchNanos        uint64
-	Truncated                 bool
-	FailClosed                uint64
-	FailClosedReason          string
-	Unavailable               bool
-	UnavailableReason         string
+	QueryTerms                  int
+	TextCandidatesRequested     uint64
+	TextCandidatesReturned      uint64
+	TextPostingsScanned         uint64
+	TextPostingBlocksVisited    uint64
+	TextPostingBlocksSkipped    uint64
+	TextBlockMaxFallbacks       uint64
+	TextBlockMaxThresholds      uint64
+	TextCandidatesScored        uint64
+	TextStateLookups            uint64
+	TextNormLookups             uint64
+	TextMatchDetailsBuilt       uint64
+	TextPositionLookups         uint64
+	TextPhraseCandidatesChecked uint64
+	TextPhraseCandidatesMatched uint64
+	PostingsScanned             uint64
+	CandidatesScored            uint64
+	DocumentsFetched            uint64
+	DocumentsMissing            uint64
+	FullDocumentScanFallbacks   uint64
+	PostingsScanNanos           uint64
+	CandidateScoreNanos         uint64
+	DocumentFetchNanos          uint64
+	Truncated                   bool
+	FailClosed                  uint64
+	FailClosedReason            string
+	Unavailable                 bool
+	UnavailableReason           string
 }
 
 // TextSearchResponse contains ranked text results and diagnostics.
@@ -249,6 +269,9 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	if opts.MaxPostingsScanned < 0 {
 		return response, errors.New("collections: text search MaxPostingsScanned must be non-negative")
 	}
+	if err := validateTextSearchPhraseOptions(opts); err != nil {
+		return response, err
+	}
 	if _, err := normalizeTextSearchOperator(opts.Operator); err != nil {
 		return response, err
 	}
@@ -274,7 +297,32 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	}
 	response.IndexName = idx.Name
 
-	terms, operator, err := parseTextSearchQuery(idx.Analyzer, opts.Query, opts.Operator)
+	if opts.Phrase != nil {
+		terms, err := parseTextSearchPhraseQuery(idx, *opts.Phrase)
+		if err != nil {
+			if errors.Is(err, ErrTextIndexUnavailable) {
+				return textSearchFailClosed(response, textSearchFailClosedUnsupported, err)
+			}
+			return response, err
+		}
+		response.Stats.QueryTerms = len(terms)
+		if len(terms) == 0 {
+			response.Results = []TextSearchResult{}
+			return response, nil
+		}
+		candidateLimit := normalizeTextSearchCandidateLimit(opts.TopK, opts.CandidateLimit)
+		maxPostingsScanned := normalizeTextSearchMaxPostingsScanned(candidateLimit, len(uniqueTextSearchTerms(terms)), opts.MaxPostingsScanned)
+		response.Stats.TextCandidatesRequested = uint64(candidateLimit)
+		if idx.Version != TextIndexVersionV2 {
+			return textSearchFailClosed(response, textSearchFailClosedUnsupported, fmt.Errorf("%w: phrase/proximity search requires text-v2 index", ErrTextIndexUnavailable))
+		}
+		if !idx.StorePositions {
+			return textSearchFailClosed(response, textSearchFailClosedUnsupported, fmt.Errorf("%w: phrase/proximity search requires store_positions", ErrTextIndexUnavailable))
+		}
+		return executeTextV2PhraseSearchAtSnapshot(c, snap, catalog, idx, opts, terms, opts.Phrase.Slop, candidateLimit, maxPostingsScanned, resultMode, response)
+	}
+
+	terms, operator, err := parseTextSearchQueryWithOptions(idx.Analyzer, idx.AnalyzerOptions, opts.Query, opts.Operator)
 	if err != nil {
 		return response, err
 	}
@@ -848,9 +896,35 @@ func normalizeTextSearchOperator(op TextSearchOperator) (TextSearchOperator, err
 	}
 }
 
+func validateTextSearchPhraseOptions(opts TextSearchOptions) error {
+	if opts.Phrase == nil {
+		return nil
+	}
+	if strings.TrimSpace(opts.Phrase.Query) == "" {
+		return errors.New("collections: text phrase query must be non-empty")
+	}
+	if opts.Query != "" {
+		return errors.New("collections: text phrase query is mutually exclusive with Query")
+	}
+	if opts.Operator != "" {
+		return errors.New("collections: text phrase query does not support Operator; use Phrase.Slop for bounded proximity")
+	}
+	if opts.Phrase.Slop < 0 {
+		return errors.New("collections: text phrase slop must be non-negative")
+	}
+	if opts.Phrase.Slop > textSearchMaxPhraseSlop {
+		return fmt.Errorf("%w: text phrase slop %d exceeds bounded maximum %d", ErrTextIndexUnavailable, opts.Phrase.Slop, textSearchMaxPhraseSlop)
+	}
+	return nil
+}
+
 func parseTextSearchQuery(analyzer TextAnalyzer, query string, requested TextSearchOperator) ([]string, TextSearchOperator, error) {
+	return parseTextSearchQueryWithOptions(analyzer, nil, query, requested)
+}
+
+func parseTextSearchQueryWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOptions, query string, requested TextSearchOperator) ([]string, TextSearchOperator, error) {
 	if strings.ContainsAny(query, "\"()") {
-		return nil, "", errors.New("collections: unsupported text query syntax: phrase and grouped queries are not implemented")
+		return nil, "", errors.New("collections: unsupported text query syntax: use TextSearchOptions.Phrase for bounded phrase/proximity search")
 	}
 	operator := requested
 	var explicit TextSearchOperator
@@ -881,7 +955,7 @@ func parseTextSearchQuery(analyzer TextAnalyzer, query string, requested TextSea
 			continue
 		}
 		before := len(terms)
-		if err := AnalyzeTextToSink(analyzer, part, TextTokenSinkFunc(func(token TextToken) error {
+		if err := AnalyzeTextToSinkWithOptions(analyzer, options, part, TextTokenSinkFunc(func(token TextToken) error {
 			terms = append(terms, token.Term)
 			return nil
 		})); err != nil {
@@ -905,4 +979,18 @@ func parseTextSearchQuery(analyzer TextAnalyzer, query string, requested TextSea
 		operator = TextSearchOperatorOR
 	}
 	return terms, operator, nil
+}
+
+func parseTextSearchPhraseQuery(idx TextIndexDefinition, phrase TextSearchPhraseQuery) ([]string, error) {
+	terms := make([]string, 0, 4)
+	if err := AnalyzeTextToSinkWithOptions(idx.Analyzer, idx.AnalyzerOptions, phrase.Query, TextTokenSinkFunc(func(token TextToken) error {
+		terms = append(terms, token.Term)
+		if len(terms) > textSearchMaxPhraseTerms {
+			return fmt.Errorf("%w: text phrase term count exceeds bounded maximum %d", ErrTextIndexUnavailable, textSearchMaxPhraseTerms)
+		}
+		return nil
+	})); err != nil {
+		return nil, err
+	}
+	return terms, nil
 }

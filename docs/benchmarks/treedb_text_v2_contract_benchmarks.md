@@ -19,9 +19,9 @@ Include all of the following in PR bodies/issues:
 - `ns/op`, derived `ops/sec`, `B/op`, `allocs/op`, and before/after delta;
 - domain counters: postings scanned, posting blocks visited/skipped,
   block-max fallbacks, threshold updates, candidates scored, state/norm lookups,
-  docs fetched, match details built, scalar filter selectivity, fail-closed
-  count/reason, write amplification, index bytes/doc, and rewrite/merge state
-  when applicable.
+  position lookups, phrase candidates checked/matched, docs fetched, match
+  details built, scalar filter selectivity, fail-closed count/reason, write
+  amplification, index bytes/doc, and rewrite/merge state when applicable.
 
 Candidate-generation rows must keep `docs_fetched/search=0` and
 `full_doc_fallbacks/search=0`. Final-fetch rows must keep
@@ -198,6 +198,8 @@ Report text search counters:
 - `candidates_scored/search`;
 - `state_lookups/search` and `norm_lookups/search`;
 - `match_details/search`;
+- `position_lookups/search`, `phrase_candidates_checked/search`, and
+  `phrase_candidates_matched/search` for phrase/proximity rows;
 - `docs_fetched/search`, `full_doc_fallbacks/search`, `fail_closed/search`.
 
 M4 (#2627) adds a v2 score-only search benchmark with the same corpus
@@ -217,6 +219,63 @@ go test ./TreeDB/collections \
   -count=3 \
   | tee "$OUT/text_v2_score_search_scale_256_10k.txt"
 ```
+
+## Bounded phrase/proximity and analyzer rows (#2733)
+
+Phrase/proximity uses structured `TextSearchOptions.Phrase` over v2
+`StorePositions` indexes. The measured boundary is `SearchText` score-only
+serving after the fixture/index is built; candidate generation must keep
+`docs_fetched/search=0`, `state_lookups/search=0`, `match_details/search=0`, and
+`full_doc_fallbacks/search=0`. Position-lane work is reported separately.
+
+Default 10k local command:
+
+```sh
+GOWORK=off \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2PhraseProximity2733/' \
+  -benchmem \
+  -benchtime=3x \
+  -count=3 \
+  | tee "$OUT/text_v2_phrase_proximity_10k.txt"
+```
+
+Required feasible 100k artifact command:
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_RUN_100K=1 \
+TREEDB_TEXT_V2_PHRASE_DOCS=100000 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2PhraseProximity2733/' \
+  -benchmem \
+  -benchtime=1x \
+  -count=1 \
+  | tee "$OUT/text_v2_phrase_proximity_100k.txt"
+```
+
+Analyzer-option write overhead uses the same insert boundary as the write-path
+rows, comparing the simple analyzer with and without persisted stopwords:
+
+```sh
+GOWORK=off \
+TREEDB_TEXT_V2_ANALYZER_DOCS=256 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkTextV2AnalyzerStopwordsWrite2733/' \
+  -benchmem \
+  -benchtime=5x \
+  -count=3 \
+  | tee "$OUT/text_v2_analyzer_stopwords_write.txt"
+```
+
+Report `position_lookups/search`, `phrase_candidates_checked/search`,
+`phrase_candidates_matched/search`, `v2_position_entries`, `index_bytes/doc`,
+and the standard runtime/allocation counters. Stemming and synonym options are
+reserved extension seams and must fail closed until a future ticket defines their
+indexing/query expansion semantics and rebuild compatibility.
 
 >=100k local artifact:
 

@@ -38,8 +38,15 @@ func (f TextTokenSinkFunc) AddTextToken(token TextToken) error {
 // digits, and '_' as token characters so code-ish identifiers such as
 // "HTTP_500" remain searchable without stemming.
 func AnalyzeText(analyzer TextAnalyzer, text string) ([]TextToken, error) {
+	return AnalyzeTextWithOptions(analyzer, nil, text)
+}
+
+// AnalyzeTextWithOptions runs a named collection text analyzer with persisted
+// analyzer options. It is intended for callers that need the same token stream
+// used by text-index write and search paths.
+func AnalyzeTextWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOptions, text string) ([]TextToken, error) {
 	var tokens []TextToken
-	if err := AnalyzeTextToSink(analyzer, text, TextTokenSinkFunc(func(token TextToken) error {
+	if err := AnalyzeTextToSinkWithOptions(analyzer, options, text, TextTokenSinkFunc(func(token TextToken) error {
 		tokens = append(tokens, token)
 		return nil
 	})); err != nil {
@@ -55,6 +62,13 @@ func AnalyzeText(analyzer TextAnalyzer, text string) ([]TextToken, error) {
 // avoids allocating the intermediate []TextToken used by AnalyzeText and is the
 // preferred API for write-path collectors.
 func AnalyzeTextToSink(analyzer TextAnalyzer, text string, sink TextTokenSink) error {
+	return AnalyzeTextToSinkWithOptions(analyzer, nil, text, sink)
+}
+
+// AnalyzeTextToSinkWithOptions streams tokens using persisted analyzer options.
+// Stopword filtering preserves original token positions so phrase/proximity
+// matching can still account for gaps introduced by removed terms.
+func AnalyzeTextToSinkWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOptions, text string, sink TextTokenSink) error {
 	if sink == nil {
 		return errors.New("collections: text analyzer sink is nil")
 	}
@@ -62,12 +76,31 @@ func AnalyzeTextToSink(analyzer TextAnalyzer, text string, sink TextTokenSink) e
 	if err != nil {
 		return err
 	}
+	normalizedOptions, err := normalizeTextAnalyzerOptions(normalized, options)
+	if err != nil {
+		return err
+	}
+	if stopWords := textAnalyzerStopWordSet(normalizedOptions); len(stopWords) != 0 {
+		sink = textStopWordFilterSink{sink: sink, stopWords: stopWords}
+	}
 	switch normalized {
 	case TextAnalyzerSimple:
 		return analyzeSimpleTextToSink(text, sink)
 	default:
 		return fmt.Errorf("unsupported analyzer %q", normalized)
 	}
+}
+
+type textStopWordFilterSink struct {
+	sink      TextTokenSink
+	stopWords map[string]struct{}
+}
+
+func (s textStopWordFilterSink) AddTextToken(token TextToken) error {
+	if _, skip := s.stopWords[token.Term]; skip {
+		return nil
+	}
+	return s.sink.AddTextToken(token)
 }
 
 func analyzeSimpleTextToSink(text string, sink TextTokenSink) error {

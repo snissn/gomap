@@ -253,6 +253,231 @@ func TestTextV2PositionsLaneCorruptionFailsClosedOnlyForDetailedMode2629(t *test
 	}
 }
 
+func TestTextV2PhraseProximityCorrectnessAndNoDocCounters2733(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1"), []byte("d2"), []byte("d3"), []byte("d4")}, [][]byte{
+		[]byte(`{"body":"quick brown fox refund policy"}`),
+		[]byte(`{"body":"quick clever brown fox refund shipping policy"}`),
+		[]byte(`{"body":"brown quick fox refund policy"}`),
+		[]byte(`{"body":"quick fox agile brown refund"}`),
+	})
+
+	exact, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "quick brown"}, TopK: 10, CandidateLimit: 16, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("exact phrase search: %v", err)
+	}
+	if got := textSearchResultIDs2733(exact); !slicesEqualStrings(got, []string{"d1"}) {
+		t.Fatalf("exact phrase ids=%v stats=%+v want d1", got, exact.Stats)
+	}
+	if exact.Stats.DocumentsFetched != 0 || exact.Stats.FullDocumentScanFallbacks != 0 || exact.Stats.TextStateLookups != 0 || exact.Stats.TextMatchDetailsBuilt != 0 || exact.Stats.FailClosed != 0 {
+		t.Fatalf("exact stats=%+v want score-only no-doc/no-state path", exact.Stats)
+	}
+	if exact.Stats.TextPositionLookups == 0 || exact.Stats.TextPhraseCandidatesChecked == 0 || exact.Stats.TextPhraseCandidatesMatched != 1 {
+		t.Fatalf("exact stats=%+v want phrase position counters", exact.Stats)
+	}
+
+	near, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "quick brown", Slop: 1}, TopK: 10, CandidateLimit: 16, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("proximity phrase search: %v", err)
+	}
+	if got := textSearchResultIDs2733(near); !slicesEqualStrings(got, []string{"d1", "d2"}) {
+		t.Fatalf("sloppy phrase ids=%v stats=%+v want d1,d2", got, near.Stats)
+	}
+
+	refundExact, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "refund policy"}, TopK: 10, CandidateLimit: 16, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("refund phrase search: %v", err)
+	}
+	if got := textSearchResultIDs2733(refundExact); !textSearchResultIDSetEqual2733(got, []string{"d1", "d3"}) {
+		t.Fatalf("refund exact ids=%v stats=%+v want d1,d3", got, refundExact.Stats)
+	}
+}
+
+func TestTextV2PhrasePositionsReopenAndSnapshotBinding2733(t *testing.T) {
+	dir := t.TempDir()
+	d := openTextV2TestDB(t, dir, false)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("d1"), []byte("d2")}, [][]byte{[]byte(`{"body":"alpha beta gamma"}`), []byte(`{"body":"alpha beta delta"}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	before, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "alpha beta gamma"}, TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(before.Results) != 1 || string(before.Results[0].DocumentID) != "d1" {
+		t.Fatalf("before phrase response=%+v err=%v want d1", before, err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot nil")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("catalog: %v", err)
+	}
+	idx, ok := findTextIndex(catalog.meta.TextIndexes, "lexical")
+	if !ok {
+		_ = snap.Close()
+		t.Fatal("missing lexical index")
+	}
+	if _, _, err := col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"body":"alpha changed gamma"}`), true, nil
+	}); err != nil {
+		_ = snap.Close()
+		t.Fatalf("Update: %v", err)
+	}
+	current, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "alpha beta gamma"}, TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(current.Results) != 0 {
+		_ = snap.Close()
+		t.Fatalf("current phrase response=%+v err=%v want no d1", current, err)
+	}
+	oldResponse := TextSearchResponse{IndexName: "lexical"}
+	oldResponse.Stats.QueryTerms = 3
+	oldResponse.Stats.TextCandidatesRequested = 8
+	old, err := executeTextV2PhraseSearchAtSnapshot(col, snap, catalog, idx, TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "alpha beta gamma"}, TopK: 10}, []string{"alpha", "beta", "gamma"}, 0, 8, 64, textSearchResultScoreOnly, oldResponse)
+	if closeErr := snap.Close(); closeErr != nil {
+		t.Fatalf("snapshot close: %v", closeErr)
+	}
+	if err != nil || len(old.Results) != 1 || string(old.Results[0].DocumentID) != "d1" {
+		t.Fatalf("old snapshot phrase response=%+v err=%v want original d1", old, err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened := openTextV2TestDB(t, dir, false)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	after, err := reopenedCol.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "alpha beta delta"}, TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(after.Results) != 1 || string(after.Results[0].DocumentID) != "d2" || after.Stats.TextPositionLookups == 0 {
+		t.Fatalf("after reopen phrase response=%+v err=%v want d2 with position lookups", after, err)
+	}
+}
+
+func TestTextV2PhraseAnalyzerStopwordsAndScalarAllowSet2733(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	def := TextIndexDefinition{
+		Name:            "lexical",
+		Version:         TextIndexVersionV2,
+		StorePositions:  true,
+		AnalyzerOptions: &TextAnalyzerOptions{StopWords: []string{"the", "a"}},
+		Fields:          []TextIndexField{{Field: "body"}},
+	}
+	col := createTextSearchCollection2627(t, d, "docs", def, [][]byte{[]byte("d1"), []byte("d2"), []byte("d3")}, [][]byte{
+		[]byte(`{"body":"the quick brown refund policy"}`),
+		[]byte(`{"body":"quick the brown refund delayed policy"}`),
+		[]byte(`{"body":"the quick fox refund policy"}`),
+	})
+
+	exact, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "the quick brown"}, TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("stopword exact phrase: %v", err)
+	}
+	if got := textSearchResultIDs2733(exact); !slicesEqualStrings(got, []string{"d1"}) {
+		t.Fatalf("stopword exact ids=%v stats=%+v want d1", got, exact.Stats)
+	}
+	sloppy, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "the quick brown", Slop: 1}, TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("stopword sloppy phrase: %v", err)
+	}
+	if got := textSearchResultIDs2733(sloppy); !slicesEqualStrings(got, []string{"d1", "d2"}) {
+		t.Fatalf("stopword sloppy ids=%v stats=%+v want d1,d2", got, sloppy.Stats)
+	}
+	stopOnly, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "the a", TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(stopOnly.Results) != 0 {
+		t.Fatalf("stopword-only query response=%+v err=%v want empty", stopOnly, err)
+	}
+
+	scalar, err := col.searchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "refund policy", Slop: 1}, TopK: 10, CandidateLimit: 8, MaxPostingsScanned: 64, ResultMode: TextSearchResultModeScoreOnly, textV2AllowedDocumentIDs: hybridScalarAllowSet{"d2": struct{}{}}}, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("scalar phrase search: %v", err)
+	}
+	if got := textSearchResultIDs2733(scalar); !slicesEqualStrings(got, []string{"d2"}) {
+		t.Fatalf("scalar phrase ids=%v stats=%+v want only allowed d2", got, scalar.Stats)
+	}
+	if scalar.Stats.DocumentsFetched != 0 || scalar.Stats.TextStateLookups != 0 || scalar.Stats.FailClosed != 0 || scalar.Stats.TextPhraseCandidatesMatched != 1 {
+		t.Fatalf("scalar stats=%+v want no-doc scalar-pruned phrase path", scalar.Stats)
+	}
+}
+
+func TestTextV2PhraseUnsupportedShapesFailClosed2733(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	v2NoPositions := createTextSearchCollection2627(t, d, "docs_v2", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)})
+	missingPositions, err := v2NoPositions.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "refund policy"}, TopK: 1})
+	if !errors.Is(err, ErrTextIndexUnavailable) || missingPositions.Stats.FailClosed != 1 || missingPositions.Stats.FailClosedReason != textSearchFailClosedUnsupported || missingPositions.Stats.DocumentsFetched != 0 {
+		t.Fatalf("missing positions response=%+v err=%v want fail-closed unavailable without docs", missingPositions, err)
+	}
+
+	v1 := createTextSearchCollection2627(t, d, "docs_v1", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)})
+	legacy, err := v1.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "refund policy"}, TopK: 1})
+	if !errors.Is(err, ErrTextIndexUnavailable) || legacy.Stats.FailClosed != 1 || legacy.Stats.FailClosedReason != textSearchFailClosedUnsupported || legacy.Stats.DocumentsFetched != 0 {
+		t.Fatalf("v1 phrase response=%+v err=%v want fail-closed unavailable without docs", legacy, err)
+	}
+
+	tooManyTerms := "t00 t01 t02 t03 t04 t05 t06 t07 t08 t09 t10 t11 t12 t13 t14 t15 t16"
+	tooMany, err := v2NoPositions.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: tooManyTerms}, TopK: 1})
+	if !errors.Is(err, ErrTextIndexUnavailable) || tooMany.Stats.FailClosed != 1 || tooMany.Stats.FailClosedReason != textSearchFailClosedUnsupported || tooMany.Stats.DocumentsFetched != 0 {
+		t.Fatalf("too many phrase terms response=%+v err=%v want fail-closed unavailable without docs", tooMany, err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "bad_analyzer"}); err != nil {
+		t.Fatalf("CreateCollection bad_analyzer: %v", err)
+	}
+	bad, err := mgr.OpenCollection("bad_analyzer")
+	if err != nil {
+		t.Fatalf("OpenCollection bad_analyzer: %v", err)
+	}
+	if _, _, err := bad.CreateTextIndex(TextIndexDefinition{Name: "stem", Version: TextIndexVersionV2, AnalyzerOptions: &TextAnalyzerOptions{Stemmer: "porter"}, Fields: []TextIndexField{{Field: "body"}}}); !errors.Is(err, ErrTextIndexUnavailable) {
+		t.Fatalf("CreateTextIndex stemmer err=%v want ErrTextIndexUnavailable", err)
+	}
+	if _, _, err := bad.CreateTextIndex(TextIndexDefinition{Name: "syn", Version: TextIndexVersionV2, AnalyzerOptions: &TextAnalyzerOptions{Synonyms: map[string][]string{"quick": {"fast"}}}, Fields: []TextIndexField{{Field: "body"}}}); !errors.Is(err, ErrTextIndexUnavailable) {
+		t.Fatalf("CreateTextIndex synonyms err=%v want ErrTextIndexUnavailable", err)
+	}
+}
+
+func textSearchResultIDs2733(response TextSearchResponse) []string {
+	ids := make([]string, len(response.Results))
+	for i := range response.Results {
+		ids[i] = string(response.Results[i].DocumentID)
+	}
+	return ids
+}
+
+func textSearchResultIDSetEqual2733(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := make(map[string]int, len(got))
+	for _, id := range got {
+		seen[id]++
+	}
+	for _, id := range want {
+		if seen[id] == 0 {
+			return false
+		}
+		seen[id]--
+	}
+	return true
+}
+
 func TestTextV2PositionsLaneUpdateDeleteRemovesStaleEntries2629(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()

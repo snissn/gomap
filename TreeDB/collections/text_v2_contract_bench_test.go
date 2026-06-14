@@ -54,6 +54,9 @@ func TestTextV2ContractBenchmarkMatrix2623(t *testing.T) {
 		"norm_lookups",
 		"docs_fetched",
 		"match_details_built",
+		"position_lookups",
+		"phrase_candidates_checked",
+		"phrase_candidates_matched",
 		"scalar_filter_selectivity",
 		"fail_closed",
 		"write_amplification",
@@ -626,6 +629,104 @@ func BenchmarkTextV2BlockMaxMultiTerm2730(b *testing.B) {
 	}
 }
 
+func BenchmarkTextV2PhraseProximity2733(b *testing.B) {
+	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_PHRASE_DOCS", 10_000)
+	if docs < int(textV2PostingBlockTargetPostings)*3 {
+		docs = int(textV2PostingBlockTargetPostings) * 3
+	}
+	if docs >= 100_000 && !textV2ContractLargeCorpusEnabled2623() && os.Getenv("TREEDB_TEXT_V2_PHRASE_DOCS") == "" {
+		b.Skip("set TREEDB_TEXT_V2_RUN_100K=1 or TREEDB_TEXT_V2_PHRASE_DOCS to run the >=100k phrase/proximity artifact row")
+	}
+	d, col, stats := openTextV2PhraseBenchFixture2733(b, docs, nil)
+	defer func() { _ = d.Close() }()
+	maxPostings := docs * 8
+	cases := []struct {
+		name   string
+		phrase TextSearchPhraseQuery
+	}{
+		{name: "exact_refund_policy", phrase: TextSearchPhraseQuery{Query: "refund policy"}},
+		{name: "proximity_refund_support_slop1", phrase: TextSearchPhraseQuery{Query: "refund support", Slop: 1}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			opts := TextSearchOptions{IndexName: textV2ContractIndexName2623, Phrase: &tc.phrase, TopK: 10, CandidateLimit: docs, MaxPostingsScanned: maxPostings, ResultMode: TextSearchResultModeScoreOnly}
+			warm, err := col.SearchText(opts)
+			if err != nil {
+				b.Fatalf("warm phrase search: %v", err)
+			}
+			if len(warm.Results) == 0 || warm.Stats.DocumentsFetched != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.FailClosed != 0 || warm.Stats.TextStateLookups != 0 || warm.Stats.TextMatchDetailsBuilt != 0 || warm.Stats.TextPositionLookups == 0 {
+				b.Fatalf("warm response=%+v want score-only zero-doc phrase search", warm)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			var sink TextSearchResponse
+			for i := 0; i < b.N; i++ {
+				got, err := col.SearchText(opts)
+				if err != nil {
+					b.Fatalf("phrase search: %v", err)
+				}
+				if len(got.Results) == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 || got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 || got.Stats.TextPositionLookups == 0 {
+					b.Fatalf("response=%+v want score-only zero-doc phrase search", got)
+				}
+				sink = got
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(docs), "docs_fixture")
+			b.ReportMetric(float64(opts.TopK), "topk/search")
+			b.ReportMetric(float64(maxPostings), "max_postings/search")
+			b.ReportMetric(float64(stats.V2PositionEntries), "v2_position_entries")
+			b.ReportMetric(float64(stats.EncodedBytes)/float64(maxTextV2ContractInt2623(docs, 1)), "index_bytes/doc")
+			textV2ContractReportTextStats2623(b, sink)
+		})
+	}
+}
+
+func BenchmarkTextV2AnalyzerStopwordsWrite2733(b *testing.B) {
+	docsPerBatch := textV2ContractEnvInt2623("TREEDB_TEXT_V2_ANALYZER_DOCS", 256)
+	if docsPerBatch < 1 {
+		docsPerBatch = 1
+	}
+	ids, docs := textV2ContractDocuments2623(docsPerBatch, "analyzer")
+	cases := []struct {
+		name    string
+		options *TextAnalyzerOptions
+	}{
+		{name: "simple_no_stopwords"},
+		{name: "simple_stopwords", options: &TextAnalyzerOptions{StopWords: []string{"the", "a", "term"}}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			var lastStats TextIndexStorageStats
+			b.ReportAllocs()
+			b.ReportMetric(float64(docsPerBatch), "docs/op")
+			b.ResetTimer()
+			b.StopTimer()
+			for i := 0; i < b.N; i++ {
+				d := openTextV2ContractDB2623(b)
+				col := createTextV2ContractCollection2623(b, d, false)
+				def := textV2ContractV2IndexDefinition2626()
+				def.AnalyzerOptions = tc.options
+				if _, _, err := col.CreateTextIndex(def); err != nil {
+					b.Fatalf("CreateTextIndex v2 setup: %v", err)
+				}
+				batchIDs := textV2ContractCloneIDsWithIteration2623(ids, i)
+				b.StartTimer()
+				_, err := col.InsertBatch(batchIDs, docs)
+				b.StopTimer()
+				if err != nil {
+					b.Fatalf("InsertBatch analyzer: %v", err)
+				}
+				lastStats = textV2ContractStorageStats2623(b, col)
+				_ = d.Close()
+			}
+			b.ReportMetric(float64(docsPerBatch), "docs/op")
+			textV2ContractReportWriteStats2623(b, docsPerBatch, lastStats, textV2ContractStorageEntryCount2623(lastStats))
+		})
+	}
+}
+
 func BenchmarkTextV2LazyDetails2629(b *testing.B) {
 	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_LAZY_DETAILS_DOCS", 10_000)
 	if docs < int(textV2PostingBlockTargetPostings)*3 {
@@ -755,6 +856,38 @@ func BenchmarkTextV2BlockMaxConcurrentServing2628(b *testing.B) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	b.ReportMetric(float64(ms.HeapAlloc), "steady_heap_bytes")
+}
+
+func openTextV2PhraseBenchFixture2733(tb testing.TB, docs int, options *TextAnalyzerOptions) (*backenddb.DB, *Collection, TextIndexBackfillStats) {
+	tb.Helper()
+	d := openTextV2ContractDB2623(tb)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	ids, rawDocs := textV2ORWANDBenchDocuments2730(docs, minTextV2ContractInt2623(16, docs))
+	if _, err := col.InsertBatch(ids, rawDocs); err != nil {
+		_ = d.Close()
+		tb.Fatalf("InsertBatch fixture: %v", err)
+	}
+	def := textV2ContractV2IndexDefinition2626()
+	def.StorePositions = true
+	def.AnalyzerOptions = options
+	if len(def.Fields) > 0 {
+		def.Fields[0].Weight = 5
+	}
+	_, stats, err := col.CreateTextIndex(def)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateTextIndex v2 fixture: %v", err)
+	}
+	return d, col, stats
 }
 
 func openTextV2ORWANDBenchFixture2730(tb testing.TB, docs int) (*backenddb.DB, *Collection) {
@@ -1188,6 +1321,9 @@ func textV2ContractReportTextStats2623(b *testing.B, response TextSearchResponse
 	b.ReportMetric(float64(stats.TextStateLookups), "state_lookups/search")
 	b.ReportMetric(float64(stats.TextNormLookups), "norm_lookups/search")
 	b.ReportMetric(float64(stats.TextMatchDetailsBuilt), "match_details/search")
+	b.ReportMetric(float64(stats.TextPositionLookups), "position_lookups/search")
+	b.ReportMetric(float64(stats.TextPhraseCandidatesChecked), "phrase_candidates_checked/search")
+	b.ReportMetric(float64(stats.TextPhraseCandidatesMatched), "phrase_candidates_matched/search")
 	b.ReportMetric(float64(stats.DocumentsFetched), "docs_fetched/search")
 	b.ReportMetric(float64(stats.FullDocumentScanFallbacks), "full_doc_fallbacks/search")
 	if stats.Truncated {

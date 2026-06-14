@@ -660,25 +660,15 @@ func textJSONParserStringBytes(raw []byte, scratch *[]byte) ([]byte, error) {
 
 func analyzeTextIndexField(def TextIndexDefinition, fieldName, text string) (textAnalyzedField, bool, error) {
 	acc := newTextTermAccumulator(def.StorePositions, def.StoreOffsets)
-	if err := analyzeTextToTermAccumulator(def.Analyzer, text, &acc); err != nil {
+	if err := analyzeTextToTermAccumulator(def.Analyzer, def.AnalyzerOptions, text, &acc); err != nil {
 		return textAnalyzedField{}, false, err
 	}
 	field := textAnalyzedField{Field: fieldName, Length: acc.length, Terms: acc.termsMap()}
 	return field, true, nil
 }
 
-func analyzeTextToTermAccumulator(analyzer TextAnalyzer, text string, acc *textTermAccumulator) error {
-	normalized, err := normalizeTextAnalyzer(analyzer)
-	if err != nil {
-		return err
-	}
-	switch normalized {
-	case TextAnalyzerSimple:
-		analyzeSimpleTextToTermAccumulator(text, acc)
-		return nil
-	default:
-		return fmt.Errorf("unsupported analyzer %q", normalized)
-	}
+func analyzeTextToTermAccumulator(analyzer TextAnalyzer, options *TextAnalyzerOptions, text string, acc *textTermAccumulator) error {
+	return AnalyzeTextToSinkWithOptions(analyzer, options, text, acc)
 }
 
 func analyzeSimpleTextToTermAccumulator(text string, acc *textTermAccumulator) {
