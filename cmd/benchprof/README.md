@@ -18,7 +18,7 @@ make benchprof
 
 ## Typical flow
 
-1. Run `unified-bench` with profile outputs into one directory. `-profile-dir` requires an explicit execution path such as `-path-label native-fastpath` or `-path-label oracle`.
+1. Run `unified-bench` with profile outputs into one directory. `-profile-dir` defaults artifact metadata to `-path-label native-fastpath`; pass `-path-label oracle` only for explicit oracle/comparator captures.
 2. `unified-bench` auto-runs `benchprof` in-process when `-profile-dir` is enabled. You can still run `benchprof` manually if needed.
 
 Example:

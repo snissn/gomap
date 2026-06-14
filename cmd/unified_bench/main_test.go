@@ -3329,7 +3329,7 @@ func TestWriteBenchprofArtifacts_InvalidExecutionPathListsAllowedValues(t *testi
 	}
 }
 
-func TestWriteBenchprofArtifacts_RequiresExecutionPath(t *testing.T) {
+func TestWriteBenchprofArtifacts_DefaultsExecutionPath(t *testing.T) {
 	dir := t.TempDir()
 	runs := []BenchRun{{
 		Config: BenchConfig{Keys: 1, Profile: "fast"},
@@ -3338,10 +3338,22 @@ func TestWriteBenchprofArtifacts_RequiresExecutionPath(t *testing.T) {
 		},
 	}}
 
-	if err := writeBenchprofArtifacts(dir, "", runs); err == nil {
-		t.Fatal("expected missing execution path to fail")
-	} else if !strings.Contains(err.Error(), "execution path is required") {
-		t.Fatalf("unexpected error: %v", err)
+	if err := writeBenchprofArtifacts(dir, "", runs); err != nil {
+		t.Fatalf("missing execution path should default to native-fastpath: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof results: %v", err)
+	}
+	var parsed benchprofExport
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse benchprof results: %v", err)
+	}
+	if len(parsed.Runs) != 1 {
+		t.Fatalf("expected one run, got %d", len(parsed.Runs))
+	}
+	if got, want := parsed.Runs[0].ExecutionPath, "native-fastpath"; got != want {
+		t.Fatalf("unexpected execution path: got %q want %q", got, want)
 	}
 }
 
