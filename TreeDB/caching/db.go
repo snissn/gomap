@@ -15148,6 +15148,32 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		ptrs = getValueLogPtrs(len(records))
 		for fi := range preparedDictFrames {
 			pf := &preparedDictFrames[fi]
+			if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 && len(pf.body) > 0 && w.Size() > maxBytes-int64(len(pf.body)) {
+				if delta := w.Size() - segmentStartSize; delta > 0 {
+					bytesWrittenTotal += delta
+				}
+				if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+					err = rotateErr
+					break
+				}
+				noteRotatePath(l.vlogPath)
+				w = l.vlog
+				if w == nil {
+					err = errWALUnavailable
+					break
+				}
+				if l.vlogCaps.writer != w {
+					l.vlogCaps = computeVlogWriterCaps(w)
+				}
+				caps = l.vlogCaps
+				db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+				preparedAppender = caps.prepared
+				if preparedAppender == nil {
+					err = errors.New("treedb: value-log writer lost prepared-frame append support after rotation")
+					break
+				}
+				segmentStartSize = w.Size()
+			}
 			dst := ptrs[pf.start:pf.end]
 			if _, frameErr := preparedAppender.AppendEncodedFrameInto(pf.body, pf.stats.Records, dst); frameErr != nil {
 				err = frameErr
