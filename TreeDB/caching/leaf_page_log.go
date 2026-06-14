@@ -189,11 +189,19 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 		putCompactLeafLogPayloadScratchPtrRef(scratchRef, scratches)
 	}()
 	encodeStart := time.Now()
+	encodeObserved := false
+	observeEncode := func() {
+		if !encodeObserved {
+			l.db.observeFlushApplyLeafLogEncodeCompress(time.Since(encodeStart))
+			encodeObserved = true
+		}
+	}
 	for i, leafPage := range leafPages {
 		scratch := getCompactLeafLogPayloadScratch()
 		encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
 		if err != nil {
 			putCompactLeafLogPayloadScratch(scratch)
+			observeEncode()
 			return nil, err
 		}
 		if compacted {
@@ -211,7 +219,7 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 			Value: encodedLeafPage,
 		}
 	}
-	l.db.observeFlushApplyLeafLogEncodeCompress(time.Since(encodeStart))
+	observeEncode()
 
 	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
 	if err != nil {
