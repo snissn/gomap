@@ -81,6 +81,32 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	}
 }
 
+func TestDBDirContainingOutDirRejected2731(t *testing.T) {
+	root := t.TempDir()
+	cases := []struct {
+		name string
+		db   string
+		out  string
+		want bool
+	}{
+		{name: "same", db: root, out: root, want: true},
+		{name: "db_parent", db: root, out: filepath.Join(root, "reports"), want: true},
+		{name: "db_child_allowed", db: filepath.Join(root, "reports", "primary_db"), out: filepath.Join(root, "reports"), want: false},
+		{name: "sibling_allowed", db: filepath.Join(root, "db"), out: filepath.Join(root, "reports"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := dbDirContainsOutDir(tc.db, tc.out)
+			if err != nil {
+				t.Fatalf("dbDirContainsOutDir: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("dbDirContainsOutDir(%q,%q)=%v want %v", tc.db, tc.out, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRankBottlenecksNormalizesUnits2731(t *testing.T) {
 	rep := report{
 		Load: loadReport{TotalSeconds: 100, VectorRebuildSeconds: 50},

@@ -365,6 +365,13 @@ func run(cfg config) (report, error) {
 	if dbDir == "" {
 		dbDir = filepath.Join(cfg.outDir, "primary_db")
 	}
+	dbContainsOut, err := dbDirContainsOutDir(dbDir, cfg.outDir)
+	if err != nil {
+		return report{}, err
+	}
+	if dbContainsOut {
+		return report{}, fmt.Errorf("-db-dir %q must not be the same as or a parent of -out-dir %q", dbDir, cfg.outDir)
+	}
 	if err := prepareEmptyDir(dbDir); err != nil {
 		return report{}, err
 	}
@@ -503,6 +510,22 @@ func prepareEmptyDir(dir string) error {
 		return fmt.Errorf("stat %q: %w", dir, err)
 	}
 	return os.MkdirAll(dir, 0o755)
+}
+
+func dbDirContainsOutDir(dbDir, outDir string) (bool, error) {
+	dbAbs, err := filepath.Abs(dbDir)
+	if err != nil {
+		return false, fmt.Errorf("resolve db dir %q: %w", dbDir, err)
+	}
+	outAbs, err := filepath.Abs(outDir)
+	if err != nil {
+		return false, fmt.Errorf("resolve out dir %q: %w", outDir, err)
+	}
+	rel, err := filepath.Rel(filepath.Clean(dbAbs), filepath.Clean(outAbs))
+	if err != nil {
+		return false, fmt.Errorf("compare db dir %q and out dir %q: %w", dbDir, outDir, err)
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))), nil
 }
 
 func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
@@ -928,7 +951,6 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		_ = db.Close()
 		return reopenReport{}, fixture, fmt.Errorf("reopen text probe failed guardrail stats=%+v results=%d", resp.Stats, len(resp.Results))
 	}
-	probeSeconds := secondsSince(probeStart)
 	stats, err := col.TextIndexStorageStats(textIndexName)
 	if err != nil {
 		_ = db.Close()
@@ -961,6 +983,7 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector probe failed guardrail stats=%+v results=%d", vectorProbe.Stats, len(vectorProbe.Results))
 		}
 	}
+	probeSeconds := secondsSince(probeStart)
 	bytes, err := dirSize(fixture.dir)
 	if err != nil {
 		_ = db.Close()
