@@ -15,6 +15,9 @@ EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
 TOP_K="${TOP_K:-10}"
 CANDIDATE_LIMIT="${CANDIDATE_LIMIT:-64}"
+SMOKE_CANDIDATE_LIMIT="${SMOKE_CANDIDATE_LIMIT:-$CANDIDATE_LIMIT}"
+ONE_M_CANDIDATE_LIMIT="${ONE_M_CANDIDATE_LIMIT:-65536}"
+TEN_M_CANDIDATE_LIMIT="${TEN_M_CANDIDATE_LIMIT:-655360}"
 READERS="${READERS:-4}"
 RUN_SMOKE="${RUN_SMOKE:-true}"
 RUN_1M="${RUN_1M:-false}"
@@ -61,13 +64,17 @@ write_10m_plan() {
 
 Full 10M runs are intentionally not started by default. They can take multiple
 hours and tens of GB depending on storage profile, vector rebuild, backfill, and
-rewrite settings. Run only after explicit coordinator approval.
+rewrite settings. Run only after explicit coordinator approval. This command keeps
+strict guardrails; if current bounded text/hybrid candidate generation fails
+closed on common-term rows, treat that as scale evidence and a follow-up input,
+not as a passing latency row.
 
 Primary selected 10M text/hybrid/load/reopen/concurrent row:
 
 \`\`\`sh
 RUN_DIR=$RUN_DIR RUN_10M=true APPROVE_10M=true \\
 TEN_M_ROWS=$TEN_M_ROWS TEN_M_QUERIES=$TEN_M_QUERIES TEN_M_BATCH_SIZE=$TEN_M_BATCH_SIZE \\
+TEN_M_CANDIDATE_LIMIT=$TEN_M_CANDIDATE_LIMIT \\
 TEN_M_BACKFILL_ROWS=$TEN_M_BACKFILL_ROWS TEN_M_MAINTENANCE_UPDATES=$TEN_M_MAINTENANCE_UPDATES TEN_M_MAINTENANCE_DELETES=$TEN_M_MAINTENANCE_DELETES \\
 scripts/bench_text_hybrid_scale.sh
 \`\`\`
@@ -79,7 +86,7 @@ GOWORK=off $GO_BIN run ./cmd/treedb_text_hybrid_scale \\
   -out-dir "$RUN_DIR/scale_10m_selected" \\
   -rows $TEN_M_ROWS -batch-size $TEN_M_BATCH_SIZE -dims $DIMS -m $M \\
   -ef-construction $EF_CONSTRUCTION -ef-search $EF_SEARCH \\
-  -top-k $TOP_K -candidate-limit $CANDIDATE_LIMIT -queries $TEN_M_QUERIES \\
+  -top-k $TOP_K -candidate-limit $TEN_M_CANDIDATE_LIMIT -queries $TEN_M_QUERIES \\
   -readers $READERS -backfill-rows $TEN_M_BACKFILL_ROWS \\
   -maintenance-updates $TEN_M_MAINTENANCE_UPDATES -maintenance-deletes $TEN_M_MAINTENANCE_DELETES \\
   -keep-db=$KEEP_DB -base-ref origin/main -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)"
@@ -103,6 +110,7 @@ run_scale() {
   local backfill_rows="$5"
   local maintenance_updates="$6"
   local maintenance_deletes="$7"
+  local candidate_limit="$8"
   local out="$RUN_DIR/$label"
   mkdir -p "$out"
   local cmd=(env GOWORK=off "$GO_BIN" run ./cmd/treedb_text_hybrid_scale
@@ -114,7 +122,7 @@ run_scale() {
     -ef-construction "$EF_CONSTRUCTION"
     -ef-search "$EF_SEARCH"
     -top-k "$TOP_K"
-    -candidate-limit "$CANDIDATE_LIMIT"
+    -candidate-limit "$candidate_limit"
     -queries "$queries"
     -readers "$READERS"
     -backfill-rows "$backfill_rows"
@@ -125,7 +133,7 @@ run_scale() {
     -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)")
   printf '%q ' "${cmd[@]}" > "$out/command.txt"
   echo >> "$out/command.txt"
-  echo "==> scale $label rows=$rows queries=$queries"
+  echo "==> scale $label rows=$rows queries=$queries candidate_limit=$candidate_limit"
   "${cmd[@]}" 2>&1 | tee "$out/run.log"
 }
 
@@ -151,11 +159,11 @@ run_go_benchmarks() {
 write_10m_plan
 
 if [[ "$RUN_SMOKE" == "true" || "$RUN_SMOKE" == "1" || "$RUN_SMOKE" == "yes" ]]; then
-  run_scale "scale_smoke_${SMOKE_ROWS}" "$SMOKE_ROWS" "$SMOKE_QUERIES" "$SMOKE_BATCH_SIZE" "$SMOKE_ROWS" "$(( SMOKE_ROWS / 100 > 0 ? SMOKE_ROWS / 100 : 1 ))" "$(( SMOKE_ROWS / 200 > 0 ? SMOKE_ROWS / 200 : 1 ))"
+  run_scale "scale_smoke_${SMOKE_ROWS}" "$SMOKE_ROWS" "$SMOKE_QUERIES" "$SMOKE_BATCH_SIZE" "$SMOKE_ROWS" "$(( SMOKE_ROWS / 100 > 0 ? SMOKE_ROWS / 100 : 1 ))" "$(( SMOKE_ROWS / 200 > 0 ? SMOKE_ROWS / 200 : 1 ))" "$SMOKE_CANDIDATE_LIMIT"
 fi
 
 if [[ "$RUN_1M" == "true" || "$RUN_1M" == "1" || "$RUN_1M" == "yes" ]]; then
-  run_scale "scale_1m" "$ONE_M_ROWS" "$ONE_M_QUERIES" "$ONE_M_BATCH_SIZE" "$ONE_M_BACKFILL_ROWS" "$ONE_M_MAINTENANCE_UPDATES" "$ONE_M_MAINTENANCE_DELETES"
+  run_scale "scale_1m" "$ONE_M_ROWS" "$ONE_M_QUERIES" "$ONE_M_BATCH_SIZE" "$ONE_M_BACKFILL_ROWS" "$ONE_M_MAINTENANCE_UPDATES" "$ONE_M_MAINTENANCE_DELETES" "$ONE_M_CANDIDATE_LIMIT"
 fi
 
 if [[ "$RUN_10M" == "true" || "$RUN_10M" == "1" || "$RUN_10M" == "yes" ]]; then
@@ -168,7 +176,7 @@ surprise multi-hour/tens-of-GB local jobs. See 10m_selected_matrix_commands.md.
 EOF_SKIP
     echo "10M run skipped: set APPROVE_10M=true only after coordinator approval."
   else
-    run_scale "scale_10m_selected" "$TEN_M_ROWS" "$TEN_M_QUERIES" "$TEN_M_BATCH_SIZE" "$TEN_M_BACKFILL_ROWS" "$TEN_M_MAINTENANCE_UPDATES" "$TEN_M_MAINTENANCE_DELETES"
+    run_scale "scale_10m_selected" "$TEN_M_ROWS" "$TEN_M_QUERIES" "$TEN_M_BATCH_SIZE" "$TEN_M_BACKFILL_ROWS" "$TEN_M_MAINTENANCE_UPDATES" "$TEN_M_MAINTENANCE_DELETES" "$TEN_M_CANDIDATE_LIMIT"
   fi
 fi
 
