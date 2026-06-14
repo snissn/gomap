@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -1472,16 +1473,22 @@ func textV2ORBlockMaxActiveStates(states, scratch []*textV2ANDBlockMaxTermState)
 }
 
 func textV2ORBlockMaxSortStates(states []*textV2ANDBlockMaxTermState) {
-	sort.Slice(states, func(i, j int) bool {
-		leftFirst := states[i].currentFirst()
-		rightFirst := states[j].currentFirst()
-		if leftFirst != rightFirst {
-			return leftFirst < rightFirst
+	slices.SortFunc(states, func(left, right *textV2ANDBlockMaxTermState) int {
+		leftFirst := left.currentFirst()
+		rightFirst := right.currentFirst()
+		if leftFirst < rightFirst {
+			return -1
 		}
-		if states[i].upperBound != states[j].upperBound {
-			return states[i].upperBound > states[j].upperBound
+		if leftFirst > rightFirst {
+			return 1
 		}
-		return states[i].term < states[j].term
+		if left.upperBound > right.upperBound {
+			return -1
+		}
+		if left.upperBound < right.upperBound {
+			return 1
+		}
+		return strings.Compare(left.term, right.term)
 	})
 }
 
@@ -1643,34 +1650,38 @@ func visitTextV2ORBlockMaxCandidate(
 		}
 	}
 
-	var inline [8]textV2SearchCandidatePosting
-	postings := inline[:0]
-	for _, state := range states {
-		if state == nil || state.exhausted || state.currentFirst() != target {
-			continue
-		}
-		truncated, err := state.ensureDecoded(ctx, fieldCount, maxPostingsScanned, stats)
-		if truncated || err != nil {
-			return truncated, err
-		}
-		if state.entryIdx >= len(state.entries) || state.entries[state.entryIdx].ordinal != target {
-			continue
-		}
-		posting := state.entries[state.entryIdx].value
-		if ok && posting.generation == norm.Generation {
-			postings = append(postings, textV2SearchCandidatePosting{term: state.term, value: posting})
-		}
-	}
-	if ok && len(postings) > 0 {
+	score := 0.0
+	matched := false
+	if ok {
 		if candidateLimit > 0 && stats != nil && stats.TextCandidatesScored >= uint64(candidateLimit) {
 			stats.Truncated = true
 			stats.FailClosedReason = textSearchFailClosedCandidateLimit
 			return true, nil
 		}
-		score, err := scoreTextV2ORBlockMaxCandidate(postings, ctx, norm)
-		if err != nil {
-			return false, err
+		for _, state := range states {
+			if state == nil || state.exhausted || state.currentFirst() != target {
+				continue
+			}
+			truncated, err := state.ensureDecoded(ctx, fieldCount, maxPostingsScanned, stats)
+			if truncated || err != nil {
+				return truncated, err
+			}
+			if state.entryIdx >= len(state.entries) || state.entries[state.entryIdx].ordinal != target {
+				continue
+			}
+			posting := state.entries[state.entryIdx].value
+			if posting.generation != norm.Generation {
+				continue
+			}
+			termScore, err := scoreTextV2SearchPostingValue(state.term, posting, ctx, norm)
+			if err != nil {
+				return false, err
+			}
+			score += termScore
+			matched = true
 		}
+	}
+	if matched {
 		beforeThreshold, beforeReady := top.threshold()
 		top.add(textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score})
 		if stats != nil {
@@ -1695,18 +1706,6 @@ func advanceTextV2ORBlockMaxStatesPastTarget(ctx *textV2SearchContext, states []
 		}
 	}
 	return false, nil
-}
-
-func scoreTextV2ORBlockMaxCandidate(postings []textV2SearchCandidatePosting, ctx *textV2SearchContext, norm textV2SearchNormEntry) (float64, error) {
-	var score float64
-	for _, posting := range postings {
-		termScore, err := scoreTextV2SearchPostingValue(posting.term, posting.value, ctx, norm)
-		if err != nil {
-			return 0, err
-		}
-		score += termScore
-	}
-	return score, nil
 }
 
 func scoreTextV2ANDBlockMaxCandidate(states []*textV2ANDBlockMaxTermState, ctx *textV2SearchContext, norm textV2SearchNormEntry) (float64, error) {
