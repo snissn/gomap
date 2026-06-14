@@ -460,7 +460,7 @@ Key stats for concurrency/throughput diagnosis:
   - `treedb.cache.flush_apply.coordinator.active_assist_skips_total`,
   - `treedb.cache.flush_apply.coordinator.stall_waits_total`,
   - `treedb.cache.flush_apply.coordinator.blocking_fallbacks_total`,
-  - `treedb.cache.flush_apply.coordinator.hard_overload_yields_total`.
+  - `treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total`.
 - backend prune:
   - `treedb.prune.*`.
 - background vacuum:

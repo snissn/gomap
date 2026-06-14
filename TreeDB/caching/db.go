@@ -7901,7 +7901,7 @@ type DB struct {
 	flushApplyCoordinatorProgressWaitNs                          atomic.Uint64
 	flushApplyCoordinatorStallWaits                              atomic.Uint64
 	flushApplyCoordinatorBlockingFallbacks                       atomic.Uint64
-	flushApplyCoordinatorHardOverloadYields                      atomic.Uint64
+	flushApplyCoordinatorHardOverloadFallbacks                   atomic.Uint64
 	lastForegroundWriteUnixNano                                  atomic.Int64
 	lastForegroundReadUnixNano                                   atomic.Int64
 	foregroundReadStampCounter                                   atomic.Uint32

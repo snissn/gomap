@@ -218,8 +218,8 @@ func (db *DB) foregroundAssistYieldToActiveFlush(backlog, stopBytes int64) bool 
 		effectiveBacklog = 0
 	}
 	if effectiveBacklog >= stopBytes {
-		db.flushApplyCoordinatorHardOverloadYields.Add(1)
-		return true
+		db.flushApplyCoordinatorHardOverloadFallbacks.Add(1)
+		return false
 	}
 	db.flushApplyCoordinatorActiveAssistSkips.Add(1)
 	return true
@@ -254,5 +254,5 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	stats["treedb.cache.flush_apply.coordinator.progress_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorProgressWaitNs.Load())
 	stats["treedb.cache.flush_apply.coordinator.stall_waits_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorStallWaits.Load())
 	stats["treedb.cache.flush_apply.coordinator.blocking_fallbacks_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorBlockingFallbacks.Load())
-	stats["treedb.cache.flush_apply.coordinator.hard_overload_yields_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorHardOverloadYields.Load())
+	stats["treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total"] = fmt.Sprintf("%d", db.flushApplyCoordinatorHardOverloadFallbacks.Load())
 }

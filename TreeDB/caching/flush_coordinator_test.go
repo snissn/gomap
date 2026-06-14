@@ -39,19 +39,19 @@ func TestFlushCoordinatorActiveFlushCreditsSkipForegroundAssist(t *testing.T) {
 	}
 }
 
-func TestFlushCoordinatorHardOverloadYieldsToActiveFlush(t *testing.T) {
+func TestFlushCoordinatorHardOverloadFallsBackToForegroundAssist(t *testing.T) {
 	db := newTestFlushCoordinatorDB(1500, 200, 1000)
 
 	db.maybeAssistFlush()
 
-	if got := db.flushApplyCoordinatorHardOverloadYields.Load(); got != 1 {
-		t.Fatalf("hard overload yields=%d want 1", got)
+	if got := db.flushApplyCoordinatorHardOverloadFallbacks.Load(); got != 1 {
+		t.Fatalf("hard overload fallbacks=%d want 1", got)
 	}
 	if got := db.flushApplyCoordinatorBlockingFallbacks.Load(); got != 0 {
-		t.Fatalf("blocking fallbacks=%d want 0 for active hard-overload yield", got)
+		t.Fatalf("blocking fallbacks=%d want 0 for direct hard-overload assist", got)
 	}
-	if got := db.flushApplyForegroundAssistCalls.Load(); got != 0 {
-		t.Fatalf("foreground assist calls=%d want 0", got)
+	if got := db.flushApplyForegroundAssistCalls.Load(); got != 1 {
+		t.Fatalf("foreground assist calls=%d want 1", got)
 	}
 }
 
