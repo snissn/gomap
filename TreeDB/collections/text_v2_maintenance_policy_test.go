@@ -85,21 +85,18 @@ func TestTextV2MaintenancePolicyBudgetAndTimeout2732(t *testing.T) {
 		t.Fatalf("after budget stats=%+v want pending debt preserved", afterBudget)
 	}
 
-	timed, err := col.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{
-		Policy:      TextIndexMaintenancePolicy{MinDeletedDocuments: 1},
-		MaxDuration: time.Nanosecond,
-	})
-	if err != nil {
-		t.Fatalf("MaintainTextIndex timed budget: %v", err)
-	}
-	if !timed.BudgetExhausted || len(timed.Indexes) != 1 || timed.Indexes[0].BudgetExhaustedReason != TextIndexRewriteBudgetReasonMaxDuration {
-		t.Fatalf("timed stats=%+v want max-duration budget exhaustion", timed)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := col.MaintainTextIndex(ctx, "lexical", TextIndexMaintenanceOptions{Policy: TextIndexMaintenancePolicy{MinDeletedDocuments: 1}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("MaintainTextIndex canceled err=%v want context.Canceled", err)
+	}
+}
+
+func TestTextV2RewriteBudgetMaxDurationCheck2732(t *testing.T) {
+	budget := newTextV2RewriteBudget(context.Background(), TextIndexRewriteOptions{MaxDuration: time.Hour})
+	budget.started = time.Now().Add(-2 * time.Hour)
+	if err := budget.check(); !errors.Is(err, errTextV2RewriteBudgetExhausted) || budget.reason != TextIndexRewriteBudgetReasonMaxDuration {
+		t.Fatalf("budget err=%v reason=%q want max-duration exhaustion", err, budget.reason)
 	}
 }
 
