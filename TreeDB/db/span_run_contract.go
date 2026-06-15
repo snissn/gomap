@@ -254,6 +254,9 @@ func ValidateFlushSpanRunMetadata(meta FlushSpanRunMetadata) error {
 	if meta.SourcePointOps != meta.PlannedPointOps+meta.ShadowedPointOps {
 		return fmt.Errorf("source point ops=%d must equal planned point ops=%d plus shadowed point ops=%d", meta.SourcePointOps, meta.PlannedPointOps, meta.ShadowedPointOps)
 	}
+	if meta.PlannedPointOps > 0 && len(meta.TargetLeafSpans) == 0 {
+		return fmt.Errorf("planned point ops=%d require target leaf spans", meta.PlannedPointOps)
+	}
 	prevEnd := 0
 	for i := range meta.TargetLeafSpans {
 		span := meta.TargetLeafSpans[i]

@@ -76,6 +76,12 @@ func TestValidateFlushSpanRunMetadataCoversShadowingAndBarriers(t *testing.T) {
 		t.Fatalf("metadata with planned ops but zero source ops passed validation")
 	}
 
+	badMissingSpans := meta
+	badMissingSpans.TargetLeafSpans = nil
+	if err := ValidateFlushSpanRunMetadata(badMissingSpans); err == nil {
+		t.Fatalf("metadata with planned ops but no target leaf spans passed validation")
+	}
+
 	badSpan := meta
 	badSpan.TargetLeafSpans = append([]FlushSpanRunTargetLeafSpan(nil), meta.TargetLeafSpans...)
 	badSpan.TargetLeafSpans[1].PointOpStart = 1
