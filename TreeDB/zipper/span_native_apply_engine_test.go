@@ -51,6 +51,29 @@ func TestSpanNativeApplySingleLeafSplitReducerParity(t *testing.T) {
 	}
 }
 
+func TestSpanNativeApplyWholeRootMultiLeafReducerParity(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	_, native := newReadOnlyPrepareZipper(t)
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 200)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 200)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < 200; i++ {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte(fmt.Sprintf("multi-%06d", i))); err != nil {
+			t.Fatalf("Set update: %v", err)
+		}
+	}
+
+	result := assertSpanNativeParity(t, serial, native, serialRoot, nativeRoot, delta)
+	if result.Metrics.ZipperLeafMerges < 2 {
+		t.Fatalf("leaf merges=%d want multi-leaf", result.Metrics.ZipperLeafMerges)
+	}
+	if result.Metrics.ZipperRootSplitLevels == 0 {
+		t.Fatalf("root split levels=%d want reducer to build internal root", result.Metrics.ZipperRootSplitLevels)
+	}
+}
+
 func assertSpanNativeParity(t *testing.T, serial, native *Zipper, serialRoot, nativeRoot uint64, delta *batch.Batch) ApplyResult {
 	t.Helper()
 	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
@@ -64,8 +87,8 @@ func assertSpanNativeParity(t *testing.T, serial, native *Zipper, serialRoot, na
 	if !result.SpanNativeEligible || !result.SpanNativeUsed {
 		t.Fatalf("span-native flags eligible/used=%v/%v", result.SpanNativeEligible, result.SpanNativeUsed)
 	}
-	if result.Metrics.ZipperLeafMerges != 1 {
-		t.Fatalf("leaf merges=%d want 1", result.Metrics.ZipperLeafMerges)
+	if result.Metrics.ZipperLeafMerges < 1 {
+		t.Fatalf("leaf merges=%d want at least 1", result.Metrics.ZipperLeafMerges)
 	}
 	serialPairs := collectRootLeafPairs(t, serial, serialNewRoot)
 	nativePairs := collectRootLeafPairs(t, native, result.RootID)

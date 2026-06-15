@@ -10,11 +10,12 @@ import (
 )
 
 func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult) (ApplyResult, bool, error) {
-	if prepared.DeleteRanges != 0 || prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans || len(prepared.LeafSpans) != 1 {
+	if prepared.DeleteRanges != 0 || prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans || len(prepared.LeafSpans) == 0 {
 		return ApplyResult{}, false, nil
 	}
-	span := prepared.LeafSpans[0]
-	if span.DeleteRangeStart != span.DeleteRangeEnd || span.PointOpStart < 0 || span.PointOpEnd > len(ops) || span.PointOpEnd <= span.PointOpStart {
+	if len(prepared.LeafSpans) > 1 && !spanNativeCoversWholeRoot(prepared.LeafSpans) {
+		// Partial multi-leaf replacement needs parent-context stitching. Keep that
+		// out of the first opt-in reducer and fall back before preparing output.
 		return ApplyResult{}, false, nil
 	}
 
@@ -25,17 +26,39 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	defer z.releaseApplyScratch(scratch)
 
 	var retired []uint64
-	newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &metrics, span.LowKey, span.HighKey, &retired, scratch, false, applyRunConfig{})
-	if err != nil {
-		metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
-		return ApplyResult{Metrics: metrics}, true, err
+	spanOutputs := make([]Split, 0, len(prepared.LeafSpans))
+	for i := range prepared.LeafSpans {
+		span := prepared.LeafSpans[i]
+		if span.DeleteRangeStart != span.DeleteRangeEnd || span.PointOpStart < 0 || span.PointOpEnd > len(ops) || span.PointOpEnd <= span.PointOpStart {
+			return ApplyResult{}, false, nil
+		}
+		if i > 0 && span.PointOpStart != prepared.LeafSpans[i-1].PointOpEnd {
+			return ApplyResult{}, false, nil
+		}
+		newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &metrics, span.LowKey, span.HighKey, &retired, scratch, false, applyRunConfig{})
+		if err != nil {
+			metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
+			return ApplyResult{Metrics: metrics}, true, err
+		}
+		spanKey := span.LowKey
+		if spanKey == nil {
+			spanKey = []byte{}
+		}
+		spanOutputs = append(spanOutputs, Split{Key: spanKey, Ref: newRef})
+		spanOutputs = append(spanOutputs, splits...)
 	}
-	if rootID != 0 && !(span.Ref.Kind == page.ChildRefPage && span.Ref.Page == rootID) {
+	if len(prepared.LeafSpans) > 0 && prepared.LeafSpans[0].PointOpStart != 0 {
+		return ApplyResult{}, false, nil
+	}
+	if len(prepared.LeafSpans) > 0 && prepared.LeafSpans[len(prepared.LeafSpans)-1].PointOpEnd != len(ops) {
+		return ApplyResult{}, false, nil
+	}
+	if rootID != 0 && (len(prepared.LeafSpans) > 1 || !(prepared.LeafSpans[0].Ref.Kind == page.ChildRefPage && prepared.LeafSpans[0].Ref.Page == rootID)) {
 		retired = append(retired, rootID)
 	}
 
 	rootReduceStart := time.Now()
-	newRootID, err := z.reduceSpanNativeSingleLeafRoot(newRef, splits, &metrics)
+	newRootID, err := z.reduceSpanNativeRoot(spanOutputs, &metrics)
 	metrics.ZipperRootReduceNs += time.Since(rootReduceStart).Nanoseconds()
 	metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 	if err != nil {
@@ -51,13 +74,14 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	}, true, nil
 }
 
-func (z *Zipper) reduceSpanNativeSingleLeafRoot(newRef page.ChildRef, splits []Split, metrics *adaptive.Metrics) (uint64, error) {
-	if len(splits) == 0 {
-		return z.ensureRootPage([]byte{}, newRef, metrics)
+func spanNativeCoversWholeRoot(spans []ReadOnlyLeafSpan) bool {
+	return len(spans) > 0 && spans[0].LowKey == nil && spans[len(spans)-1].HighKey == nil
+}
+
+func (z *Zipper) reduceSpanNativeRoot(currentLevelNodes []Split, metrics *adaptive.Metrics) (uint64, error) {
+	if len(currentLevelNodes) == 0 {
+		return 0, page.ErrInvalidPageType
 	}
-	currentLevelNodes := make([]Split, 0, len(splits)+1)
-	currentLevelNodes = append(currentLevelNodes, Split{Key: []byte{}, Ref: newRef})
-	currentLevelNodes = append(currentLevelNodes, splits...)
 	for {
 		if len(currentLevelNodes) == 1 {
 			return z.ensureRootPage(currentLevelNodes[0].Key, currentLevelNodes[0].Ref, metrics)
