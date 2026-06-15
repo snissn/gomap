@@ -47,8 +47,8 @@ func TestFlushCoordinatorHardOverloadFallsBackToForegroundAssist(t *testing.T) {
 	if got := db.flushApplyCoordinatorHardOverloadFallbacks.Load(); got != 1 {
 		t.Fatalf("hard overload fallbacks=%d want 1", got)
 	}
-	if got := db.flushApplyCoordinatorBlockingFallbacks.Load(); got != 0 {
-		t.Fatalf("blocking fallbacks=%d want 0 for direct hard-overload assist", got)
+	if got := db.flushApplyCoordinatorBlockingFallbacks.Load(); got != 1 {
+		t.Fatalf("blocking fallbacks=%d want 1 for direct hard-overload assist", got)
 	}
 	if got := db.flushApplyForegroundAssistCalls.Load(); got != 1 {
 		t.Fatalf("foreground assist calls=%d want 1", got)
@@ -74,6 +74,31 @@ func TestFlushCoordinatorStopBackpressureHardOverloadSkipsProgressWait(t *testin
 	}
 }
 
+func TestFlushCoordinatorStopAssistBlocksWhenFlushMuHeld(t *testing.T) {
+	db := newTestFlushCoordinatorDB(1500, 200, 1000)
+	db.flushMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		db.maybeAssistFlush()
+		close(done)
+	}()
+	select {
+	case <-done:
+		db.flushMu.Unlock()
+		t.Fatal("maybeAssistFlush returned while stop-backpressure assist flushMu was held")
+	case <-time.After(20 * time.Millisecond):
+	}
+	db.flushMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("maybeAssistFlush did not complete after flushMu was released")
+	}
+	if got := db.flushApplyCoordinatorBlockingFallbacks.Load(); got != 1 {
+		t.Fatalf("blocking fallbacks=%d want 1", got)
+	}
+}
+
 func TestFlushCoordinatorFlushErrorRemovesActiveCredit(t *testing.T) {
 	db := newTestFlushCoordinatorDB(1500, 0, 1000)
 	db.beginFlushCoordinatorWork(800)
@@ -92,6 +117,9 @@ func TestFlushCoordinatorFlushErrorRemovesActiveCredit(t *testing.T) {
 	}
 	if got := db.flushApplyForegroundAssistCalls.Load(); got != 1 {
 		t.Fatalf("foreground assist calls=%d want 1", got)
+	}
+	if got := db.flushApplyCoordinatorBlockingFallbacks.Load(); got != 1 {
+		t.Fatalf("blocking fallbacks=%d want 1", got)
 	}
 }
 

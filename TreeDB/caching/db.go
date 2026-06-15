@@ -21530,8 +21530,9 @@ func (db *DB) maybeAssistFlush() {
 			if db.foregroundAssistYieldToActiveFlush(backlog, stopBytes) {
 				return
 			}
+			db.flushApplyCoordinatorBlockingFallbacks.Add(1)
 			assistStart := time.Now()
-			flushed := db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			flushed := db.flushSomeBlocking(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			db.observeForegroundFlushAssist(time.Since(assistStart), flushed)
 			return
 		}
