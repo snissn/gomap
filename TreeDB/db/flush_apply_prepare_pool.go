@@ -28,6 +28,16 @@ func (db *DB) acquireFlushApplyReadOnlyPrepareBuffer(opts zipper.ApplyOptions) *
 	return &flushApplyReadOnlyPrepareBuffer{}
 }
 
+func (db *DB) clearFlushApplyReadOnlyPrepareBuffers() {
+	if db == nil {
+		return
+	}
+	db.flushApplyReadOnlyPrepareMu.Lock()
+	clear(db.flushApplyReadOnlyPrepareFree)
+	db.flushApplyReadOnlyPrepareFree = nil
+	db.flushApplyReadOnlyPrepareMu.Unlock()
+}
+
 func (db *DB) releaseFlushApplyReadOnlyPrepareBuffer(buf *flushApplyReadOnlyPrepareBuffer, result *zipper.ApplyResult) {
 	if db == nil || buf == nil {
 		return

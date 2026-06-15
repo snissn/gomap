@@ -1952,6 +1952,7 @@ func (db *DB) Close() error {
 		db.flushApplyWorkerPool.Close()
 		db.flushApplyWorkerPool = nil
 	}
+	db.clearFlushApplyReadOnlyPrepareBuffers()
 	db.writeMu.Unlock()
 	db.stopCommitCombiner()
 	db.pruner.Stop()
