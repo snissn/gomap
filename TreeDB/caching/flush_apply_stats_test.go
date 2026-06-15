@@ -61,17 +61,27 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.cache.flush_apply.build_ns_total",
 		"treedb.cache.flush_apply.leaf_log_encode_compress_ns_total",
 		"treedb.flush_apply.apply_ns_total",
+		"treedb.cache.checkpoint.active_background_flush_wait_ns_total",
 		"treedb.cache.checkpoint.stage.command_wal_publish.samples",
 		"treedb.cache.checkpoint.stage.backend_boundary.samples",
+		"treedb.cache.checkpoint.stage.leaf_value_log_sync.samples",
+		"treedb.cache.checkpoint.stage.reducer_publish.samples",
 	} {
 		// Tiny stage timers can round to zero on low-resolution platforms; the
 		// plumbing requirement is that these counters are present in DB.Stats().
 		_ = requireStatUint64(t, stats, key)
 	}
+	if got := stats["treedb.cache.flush_apply.leaf_log_append_frames_per_op"]; got == "" {
+		t.Fatalf("missing leaf_log_append_frames_per_op")
+	}
 	for _, key := range []string{
 		"treedb.cache.flush_apply.batches_total",
 		"treedb.cache.flush_apply.bytes_total",
 		"treedb.cache.flush_apply.backend_write_ns_total",
+		"treedb.cache.flush_span_run.runs_total",
+		"treedb.cache.flush_span_run.planned_ops_total",
+		"treedb.cache.flush_span_run.source_memtables_total",
+		"treedb.cache.flush_span_run.backend_chunks_total",
 		"treedb.flush_apply.apply_calls_total",
 		"treedb.flush_apply.old_leaf_read_decode.node_loads_total",
 		"treedb.flush_apply.merge_build.leaf_merges_total",

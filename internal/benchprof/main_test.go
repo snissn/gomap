@@ -326,12 +326,14 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 				Keys: 800000,
 				TreeDBStats: map[string]map[string]string{
 					"TreeDB": {
-						"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
-						"treedb.publish.ordered_root_delta_group.root_apply_ns_total":    "1200",
-						"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "512",
-						"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                  "8589934592",
-						"treedb.cache.vlog_auto.frames.block_lz4":                        "9",
-						"treedb.cache.vlog_block.k.bucket.lz4.le_1":                      "9",
+						"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "4",
+						"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                          "1200",
+						"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":                                     "512",
+						"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                                        "8589934592",
+						"treedb.cache.vlog_auto.frames.block_lz4":                                              "9",
+						"treedb.cache.vlog_block.k.bucket.lz4.le_1":                                            "9",
+						"treedb.cache.flush_span_run.target_leaves_split_across_chunks_total":                  "1",
+						"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
 					},
 				},
 			},
@@ -371,7 +373,9 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 		!strings.Contains(md, "treedb.publish.ordered_root_delta_group.root_apply_calls_total") ||
 		!strings.Contains(md, "treedb.vlog.mmap_max_mapped_leaf_sealed_bytes") ||
 		!strings.Contains(md, "treedb.cache.vlog_auto.frames.block_lz4") ||
-		!strings.Contains(md, "treedb.cache.vlog_block.k.bucket.lz4.le_1") {
+		!strings.Contains(md, "treedb.cache.vlog_block.k.bucket.lz4.le_1") ||
+		!strings.Contains(md, "treedb.cache.flush_span_run.target_leaves_split_across_chunks_total") ||
+		!strings.Contains(md, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total") {
 		t.Fatalf("markdown missing TreeDB stats metadata:\n%s", md)
 	}
 }

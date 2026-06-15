@@ -242,6 +242,28 @@ func TestFlushApplyConcurrencyUsesBoundedWorkerPoolForPointSpans(t *testing.T) {
 	if got := stats["treedb.flush_apply.merge_build.internal_parallel_workers_total"]; got == "" || got == "0" {
 		t.Fatalf("internal parallel workers stat=%q want >0", got)
 	}
+	for _, key := range []string{
+		"treedb.flush_apply.old_leaf_read_decode.bytes_per_op",
+		"treedb.flush_apply.merge_build.leaf_merges_per_op",
+		"treedb.flush_apply.merge_build.replacement_leaf_pages_per_op",
+		"treedb.flush_apply.root_reduce.ns_per_op",
+		"treedb.flush_apply.guarded_publish.ns_per_op",
+		"treedb.flush_apply.span_run.target_leaf_spans_total",
+		"treedb.flush_apply.span_run.span_ops_total",
+		"treedb.flush_apply.span_run.ops_per_span",
+		"treedb.flush_apply.span_native.candidate_ops_total",
+		"treedb.flush_apply.span_native.ineligible_ops_total",
+	} {
+		if got := stats[key]; got == "" {
+			t.Fatalf("missing proof counter %s", key)
+		}
+	}
+	if got := stats["treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"]; got == "" || got == "0" {
+		t.Fatalf("span-native not-implemented fallback ops=%q want >0", got)
+	}
+	if got := stats["treedb.flush_apply.span_native.eligible_ops_total"]; got != "0" {
+		t.Fatalf("span-native eligible ops=%q want 0 before M10", got)
+	}
 }
 
 func TestFlushApplyRootMismatchRetriesWithoutPublishingAbandonedWork(t *testing.T) {

@@ -1,0 +1,117 @@
+package db
+
+import "testing"
+
+func TestFlushSpanRunFallbackReasonStringsAreStable(t *testing.T) {
+	want := map[FlushSpanRunFallbackReason]string{
+		FlushSpanRunFallbackUnknown:                  "unknown",
+		FlushSpanRunFallbackDisabled:                 "disabled",
+		FlushSpanRunFallbackBelowThreshold:           "below_threshold",
+		FlushSpanRunFallbackSpanNativeNotImplemented: "span_native_not_implemented",
+		FlushSpanRunFallbackPrepareError:             "prepare_error",
+		FlushSpanRunFallbackValidationFailed:         "validation_failed",
+		FlushSpanRunFallbackRootMismatch:             "root_mismatch",
+		FlushSpanRunFallbackRangeDeleteBarrier:       "range_delete_barrier",
+		FlushSpanRunFallbackLaneBarrier:              "lane_barrier",
+		FlushSpanRunFallbackCommandWALBarrier:        "command_wal_barrier",
+		FlushSpanRunFallbackInexactLeafSpans:         "inexact_leaf_spans",
+		FlushSpanRunFallbackColdBuild:                "cold_build",
+		FlushSpanRunFallbackMaintenance:              "maintenance",
+		FlushSpanRunFallbackBackendChunkSplit:        "backend_chunk_split",
+		FlushSpanRunFallbackCloseOrCheckpoint:        "close_or_checkpoint",
+	}
+	if got := len(FlushSpanRunFallbackReasons()); got != len(want) {
+		t.Fatalf("fallback reason count=%d want %d", got, len(want))
+	}
+	for reason, name := range want {
+		if got := reason.String(); got != name {
+			t.Fatalf("reason %d string=%q want %q", reason, got, name)
+		}
+		parsed, ok := ParseFlushSpanRunFallbackReason(name)
+		if !ok || parsed != reason {
+			t.Fatalf("parse %q=(%v,%v), want %v,true", name, parsed, ok, reason)
+		}
+	}
+	if _, ok := ParseFlushSpanRunFallbackReason("does_not_exist"); ok {
+		t.Fatalf("unknown fallback reason parsed successfully")
+	}
+}
+
+func TestValidateFlushSpanRunMetadataCoversShadowingAndBarriers(t *testing.T) {
+	meta := FlushSpanRunMetadata{
+		RunID:            7,
+		BaseRoot:         FlushSpanRunBaseRootValidation{CapturedRootID: 100, CurrentRootID: 100, Matched: true},
+		SourceMemtables:  3,
+		SourcePointOps:   6,
+		PlannedPointOps:  4,
+		ShadowedPointOps: 2,
+		RangeBarriers:    1,
+		LaneBarriers:     1,
+		TargetLeafSpans: []FlushSpanRunTargetLeafSpan{
+			{PointOpStart: 0, PointOpEnd: 2, OpCount: 2, ByteCount: 200},
+			{SpanIndex: 1, PointOpStart: 2, PointOpEnd: 4, OpCount: 2, ByteCount: 160},
+		},
+		BackendChunks: []FlushSpanRunBackendChunk{
+			{PointOpStart: 0, PointOpEnd: 3, ByteCount: 256},
+			{ChunkIndex: 1, PointOpStart: 3, PointOpEnd: 4, ByteCount: 64},
+		},
+	}
+	if err := ValidateFlushSpanRunMetadata(meta); err != nil {
+		t.Fatalf("valid metadata rejected: %v", err)
+	}
+
+	badShadow := meta
+	badShadow.ShadowedPointOps = 3
+	if err := ValidateFlushSpanRunMetadata(badShadow); err == nil {
+		t.Fatalf("metadata with inconsistent shadow count passed validation")
+	}
+
+	badSpan := meta
+	badSpan.TargetLeafSpans = append([]FlushSpanRunTargetLeafSpan(nil), meta.TargetLeafSpans...)
+	badSpan.TargetLeafSpans[1].PointOpStart = 1
+	if err := ValidateFlushSpanRunMetadata(badSpan); err == nil {
+		t.Fatalf("metadata with overlapping target leaf spans passed validation")
+	}
+
+	badChunk := meta
+	badChunk.BackendChunks = append([]FlushSpanRunBackendChunk(nil), meta.BackendChunks...)
+	badChunk.BackendChunks[1].PointOpStart = 2
+	if err := ValidateFlushSpanRunMetadata(badChunk); err == nil {
+		t.Fatalf("metadata with overlapping backend chunks passed validation")
+	}
+}
+
+func TestFlushSpanRunChunkSplitFixtureEntryChunksSplitTargetLeaf(t *testing.T) {
+	// This deterministic fixture is the M8 proof case: entry-count chunking at
+	// four entries would split the first target leaf's ten point ops across three
+	// backend chunks. A later leaf-aware chunker should make this counter zero.
+	spans := []FlushSpanRunTargetLeafSpan{
+		{PointOpStart: 0, PointOpEnd: 10, OpCount: 10, ByteCount: 1000},
+		{SpanIndex: 1, PointOpStart: 10, PointOpEnd: 14, OpCount: 4, ByteCount: 400},
+	}
+	entryCountChunks := []FlushSpanRunBackendChunk{
+		{PointOpStart: 0, PointOpEnd: 4},
+		{ChunkIndex: 1, PointOpStart: 4, PointOpEnd: 8},
+		{ChunkIndex: 2, PointOpStart: 8, PointOpEnd: 12},
+		{ChunkIndex: 3, PointOpStart: 12, PointOpEnd: 14},
+	}
+	summary := SummarizeFlushSpanRunChunkSplits(spans, entryCountChunks)
+	if summary.BackendChunks != 4 || summary.TargetLeafSpans != 2 {
+		t.Fatalf("summary identity mismatch: %+v", summary)
+	}
+	if got, want := summary.TargetLeavesSplitAcrossChunks, 2; got != want {
+		t.Fatalf("split target leaves=%d want %d (summary=%+v)", got, want, summary)
+	}
+	if got, want := summary.MaxChunksPerTargetLeaf, 3; got != want {
+		t.Fatalf("max chunks per target leaf=%d want %d", got, want)
+	}
+
+	leafAwareChunks := []FlushSpanRunBackendChunk{
+		{PointOpStart: 0, PointOpEnd: 10},
+		{ChunkIndex: 1, PointOpStart: 10, PointOpEnd: 14},
+	}
+	leafAware := SummarizeFlushSpanRunChunkSplits(spans, leafAwareChunks)
+	if leafAware.TargetLeavesSplitAcrossChunks != 0 {
+		t.Fatalf("leaf-aware chunking split target leaves: %+v", leafAware)
+	}
+}
