@@ -218,6 +218,15 @@ func TestReadOnlyPrepareResultEnsureInitialCapacityPresizesBoundedBuffers(t *tes
 		t.Fatalf("key arena cap=%d want %d", cap(r.keyArena), len(ops)*32)
 	}
 
+	r = ReadOnlyPrepareResult{OmitKeys: true}
+	r.ensureInitialCapacity(ops, nil)
+	if cap(r.LeafSpans) != len(ops) {
+		t.Fatalf("omit-keys leaf span cap=%d want %d", cap(r.LeafSpans), len(ops))
+	}
+	if cap(r.keyArena) != 0 {
+		t.Fatalf("omit-keys key arena cap=%d want 0", cap(r.keyArena))
+	}
+
 	ops = make([]batch.Entry, readOnlyPrepareResultReuseLeafSpanKeepCap+100)
 	r = ReadOnlyPrepareResult{}
 	r.ensureInitialCapacity(ops, nil)
@@ -310,6 +319,59 @@ func TestZipperPrepareReadOnlyManyLeafSplitBoundaryDeterministic(t *testing.T) {
 	}
 }
 
+func TestZipperPrepareReadOnlyOmitKeysSkipsSpanKeyCopies(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 768)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for _, idx := range []int{0, 127, 128, 255, 256, 511, 767} {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", idx)), []byte("new")); err != nil {
+			t.Fatalf("Set delta: %v", err)
+		}
+	}
+
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{OmitKeys: true})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+	if !prepared.OmitKeys {
+		t.Fatalf("prepared OmitKeys=%v want true", prepared.OmitKeys)
+	}
+	if len(prepared.LeafSpans) < 2 {
+		t.Fatalf("omit-keys prepare spans=%d want multiple", len(prepared.LeafSpans))
+	}
+	if len(prepared.keyArena) != 0 || cap(prepared.keyArena) != 0 {
+		t.Fatalf("omit-keys key arena len/cap=%d/%d want 0/0", len(prepared.keyArena), cap(prepared.keyArena))
+	}
+	pointEnd := 0
+	for i, span := range prepared.LeafSpans {
+		if span.LowKey != nil || span.HighKey != nil || span.FirstOpKey != nil || span.LastOpKey != nil {
+			t.Fatalf("span %d retained key bytes under OmitKeys: %+v", i, span)
+		}
+		if span.PointOpCount <= 0 || span.DeleteRangeCount != 0 {
+			t.Fatalf("span %d counts=%d/%d want point-only", i, span.PointOpCount, span.DeleteRangeCount)
+		}
+		if span.PointOpStart != pointEnd || span.PointOpEnd <= span.PointOpStart {
+			t.Fatalf("span %d point range=[%d,%d) after end %d", i, span.PointOpStart, span.PointOpEnd, pointEnd)
+		}
+		pointEnd = span.PointOpEnd
+	}
+	if pointEnd != prepared.PointOps {
+		t.Fatalf("omit-keys spans cover %d point ops, want %d", pointEnd, prepared.PointOps)
+	}
+
+	reused, err := z.PrepareReadOnly(rootID, delta, prepared.ReuseOptions())
+	if err != nil {
+		t.Fatalf("PrepareReadOnly with reuse options: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, reused)
+	if !reused.OmitKeys || len(reused.keyArena) != 0 || cap(reused.keyArena) != 0 {
+		t.Fatalf("reused omit-keys result OmitKeys=%v keyArena len/cap=%d/%d", reused.OmitKeys, len(reused.keyArena), cap(reused.keyArena))
+	}
+}
+
 func TestZipperPrepareReadOnlyAllowsEmptyPointKey(t *testing.T) {
 	cold := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = cold.Close() }()
@@ -374,6 +436,18 @@ func TestZipperPrepareReadOnlyDeleteRangeSpans(t *testing.T) {
 	summary := prepared.LeafSpanSummary()
 	if summary.SpanOps != len(prepared.LeafSpans) || summary.SpanBytes == 0 {
 		t.Fatalf("range summary spanOps/spanBytes=%d/%d want one op per span and bytes", summary.SpanOps, summary.SpanBytes)
+	}
+
+	withOmitKeys, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{OmitKeys: true})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly with OmitKeys: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, withOmitKeys)
+	if withOmitKeys.OmitKeys {
+		t.Fatalf("delete-range prepare kept OmitKeys=true; range planning needs span bounds")
+	}
+	if got, want := readOnlySpanSignature(withOmitKeys), readOnlySpanSignature(prepared); !reflect.DeepEqual(got, want) {
+		t.Fatalf("delete-range omit-keys signature mismatch\n got=%v\nwant=%v", got, want)
 	}
 }
 

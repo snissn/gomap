@@ -179,6 +179,19 @@ func TestPlanFlushSpanRunCapturesTargetLeafMetadata(t *testing.T) {
 	if err := ValidateFlushSpanRunMetadata(meta); err != nil {
 		t.Fatalf("metadata validation: %v", err)
 	}
+	sawPointSpan := false
+	for _, span := range meta.TargetLeafSpans {
+		if span.PointOpEnd <= span.PointOpStart {
+			continue
+		}
+		sawPointSpan = true
+		if len(span.FirstOpKey) == 0 || len(span.LastOpKey) == 0 {
+			t.Fatalf("exact PlanFlushSpanRun omitted point key bounds: %+v", span)
+		}
+	}
+	if !sawPointSpan {
+		t.Fatalf("PlanFlushSpanRun produced no point spans: %+v", meta.TargetLeafSpans)
+	}
 
 	chunkPlan, err := d.PlanFlushSpanRunChunks(FlushSpanRunPlanRequest{
 		SourceMemtables:  2,

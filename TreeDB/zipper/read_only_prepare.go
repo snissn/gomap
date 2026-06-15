@@ -84,6 +84,13 @@ type ApplyResult struct {
 // value is the normal caller-constructed form. Non-zero buffer reuse options are
 // produced by ReadOnlyPrepareResult.ReuseOptions.
 type ReadOnlyPrepareOptions struct {
+	// OmitKeys skips copying span boundary and first/last op key bytes for
+	// point-only plans. It is for hot-path aggregate/chunk planning that only
+	// needs op indexes/counts; callers that consume exact span bounds for future
+	// execution should leave it false. Plans containing delete ranges retain keys
+	// because range-overlap planning needs exact span bounds.
+	OmitKeys bool
+
 	leafSpans []ReadOnlyLeafSpan
 	keyArena  []byte
 }
@@ -194,6 +201,7 @@ type ReadOnlyPrepareResult struct {
 	DeleteRanges int
 	ColdBuild    bool
 	Maintenance  bool
+	OmitKeys     bool
 
 	// ExactLeafSpans is true when LeafSpans fully describe the existing leaves
 	// touched by the delta. Delete-containing maintenance can merge/rebalance
@@ -347,6 +355,7 @@ func readOnlyPrepareCeilDiv64(n, d int64) int64 {
 // The returned options must not be used while r's LeafSpans are still needed.
 func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
 	return ReadOnlyPrepareOptions{
+		OmitKeys:  r.OmitKeys,
 		leafSpans: clearReadOnlyLeafSpanBuffer(r.LeafSpans),
 		keyArena:  r.keyArena[:0],
 	}
@@ -432,7 +441,7 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 		if pointCount+rangeCount != span.OpCount {
 			return readOnlyPrepareSpanError(i, "op count %d does not match point/range counts %d/%d", span.OpCount, span.PointOpCount, span.DeleteRangeCount)
 		}
-		if pointCount > 0 {
+		if pointCount > 0 && !r.OmitKeys {
 			if span.FirstOpKey == nil {
 				return readOnlyPrepareSpanError(i, "has nil first op key")
 			}
@@ -446,23 +455,25 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 				return readOnlyPrepareSpanError(i, "first op key %s is not after previous last op key %s", readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(prevLastOp))
 			}
 		}
-		if span.LowKey != nil && span.HighKey != nil && bytes.Compare(span.LowKey, span.HighKey) >= 0 {
-			return readOnlyPrepareSpanError(i, "low key %s is not before high key %s", readOnlyPrepareKeyForError(span.LowKey), readOnlyPrepareKeyForError(span.HighKey))
-		}
-		if i > 0 && span.LowKey == nil {
-			return readOnlyPrepareSpanError(i, "has open low key after earlier span")
-		}
-		if i > 0 && prevHigh == nil {
-			return readOnlyPrepareSpanError(i, "follows previous span with open high key")
-		}
-		if i > 0 && bytes.Compare(span.LowKey, prevHigh) < 0 {
-			return readOnlyPrepareSpanError(i, "low key %s is before previous high key %s", readOnlyPrepareKeyForError(span.LowKey), readOnlyPrepareKeyForError(prevHigh))
-		}
-		if pointCount > 0 && span.LowKey != nil && bytes.Compare(span.FirstOpKey, span.LowKey) < 0 {
-			return readOnlyPrepareSpanError(i, "first op key %s is before low key %s", readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(span.LowKey))
-		}
-		if pointCount > 0 && span.HighKey != nil && bytes.Compare(span.LastOpKey, span.HighKey) >= 0 {
-			return readOnlyPrepareSpanError(i, "last op key %s is not before high key %s", readOnlyPrepareKeyForError(span.LastOpKey), readOnlyPrepareKeyForError(span.HighKey))
+		if !r.OmitKeys {
+			if span.LowKey != nil && span.HighKey != nil && bytes.Compare(span.LowKey, span.HighKey) >= 0 {
+				return readOnlyPrepareSpanError(i, "low key %s is not before high key %s", readOnlyPrepareKeyForError(span.LowKey), readOnlyPrepareKeyForError(span.HighKey))
+			}
+			if i > 0 && span.LowKey == nil {
+				return readOnlyPrepareSpanError(i, "has open low key after earlier span")
+			}
+			if i > 0 && prevHigh == nil {
+				return readOnlyPrepareSpanError(i, "follows previous span with open high key")
+			}
+			if i > 0 && bytes.Compare(span.LowKey, prevHigh) < 0 {
+				return readOnlyPrepareSpanError(i, "low key %s is before previous high key %s", readOnlyPrepareKeyForError(span.LowKey), readOnlyPrepareKeyForError(prevHigh))
+			}
+			if pointCount > 0 && span.LowKey != nil && bytes.Compare(span.FirstOpKey, span.LowKey) < 0 {
+				return readOnlyPrepareSpanError(i, "first op key %s is before low key %s", readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(span.LowKey))
+			}
+			if pointCount > 0 && span.HighKey != nil && bytes.Compare(span.LastOpKey, span.HighKey) >= 0 {
+				return readOnlyPrepareSpanError(i, "last op key %s is not before high key %s", readOnlyPrepareKeyForError(span.LastOpKey), readOnlyPrepareKeyForError(span.HighKey))
+			}
 		}
 		if pointCount > 0 && span.PointOpEnd-span.PointOpStart > 0 && span.PointOpEnd-span.PointOpStart != pointCount {
 			return readOnlyPrepareSpanError(i, "point index range [%d,%d) does not match point count %d", span.PointOpStart, span.PointOpEnd, pointCount)
@@ -481,10 +492,12 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 		}
 		totalPointOps += pointCount
 		totalSpanOps += span.OpCount
-		if pointCount > 0 {
-			prevLastOp = span.LastOpKey
+		if !r.OmitKeys {
+			if pointCount > 0 {
+				prevLastOp = span.LastOpKey
+			}
+			prevHigh = span.HighKey
 		}
-		prevHigh = span.HighKey
 	}
 	if r.PointOps > 0 {
 		if totalPointOps != r.PointOps {
@@ -516,6 +529,9 @@ func readOnlyPrepareKeyForError(key []byte) string {
 }
 
 func (r *ReadOnlyPrepareResult) cloneKey(src []byte) []byte {
+	if r != nil && r.OmitKeys {
+		return nil
+	}
 	if src == nil {
 		return nil
 	}
@@ -552,17 +568,19 @@ func (r *ReadOnlyPrepareResult) ensureInitialCapacity(ops []batch.Entry, ranges 
 	if spanHint > 0 && cap(r.LeafSpans) < spanHint {
 		r.LeafSpans = make([]ReadOnlyLeafSpan, 0, spanHint)
 	}
-	keyHintUnits := len(ops) + len(ranges)
-	keyHint := 0
-	if keyHintUnits > 0 {
-		if keyHintUnits > readOnlyPrepareResultReuseKeyArenaKeepCap/32 {
-			keyHint = readOnlyPrepareResultReuseKeyArenaKeepCap
-		} else {
-			keyHint = keyHintUnits * 32
+	if !r.OmitKeys {
+		keyHintUnits := len(ops) + len(ranges)
+		keyHint := 0
+		if keyHintUnits > 0 {
+			if keyHintUnits > readOnlyPrepareResultReuseKeyArenaKeepCap/32 {
+				keyHint = readOnlyPrepareResultReuseKeyArenaKeepCap
+			} else {
+				keyHint = keyHintUnits * 32
+			}
 		}
-	}
-	if keyHint > 0 && cap(r.keyArena) < keyHint {
-		r.keyArena = make([]byte, 0, keyHint)
+		if keyHint > 0 && cap(r.keyArena) < keyHint {
+			r.keyArena = make([]byte, 0, keyHint)
+		}
 	}
 }
 
@@ -699,6 +717,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 // that future prepared-output paths can run before the final install section.
 func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPrepareOptions) (ReadOnlyPrepareResult, error) {
 	result := ReadOnlyPrepareResult{
+		OmitKeys:  opts.OmitKeys,
 		LeafSpans: opts.leafSpans[:0],
 		keyArena:  opts.keyArena[:0],
 	}
@@ -707,7 +726,12 @@ func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPre
 	}
 	var ops []batch.Entry
 	var ranges []batch.DeleteRange
-	if b.HasDeleteRanges() {
+	hasDeleteRanges := b.HasDeleteRanges()
+	if hasDeleteRanges {
+		// OmitKeys is only safe for point-only planning. Delete-range overlap
+		// partitioning relies on exact leaf span bounds, so retain keys and report
+		// the effective mode in the result.
+		result.OmitKeys = false
 		ops, ranges = b.ApplyPlan()
 	} else {
 		ops = b.SortedEntries()
