@@ -2,7 +2,6 @@ package caching
 
 import (
 	"fmt"
-	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -44,23 +43,18 @@ func saturatingSubUint64(after, before uint64) uint64 {
 	return after - before
 }
 
-func parseCacheStatsUint64(stats map[string]string, key string) uint64 {
-	if len(stats) == 0 || key == "" {
-		return 0
-	}
-	v, err := strconv.ParseUint(stats[key], 10, 64)
-	if err != nil {
-		return 0
-	}
-	return v
+type backendFlushApplyReducerPublishNser interface {
+	FlushApplyReducerPublishNs() uint64
 }
 
 func (db *DB) backendFlushApplyReducerPublishNs() uint64 {
 	if db == nil || db.backend == nil {
 		return 0
 	}
-	stats := db.backend.Stats()
-	return parseCacheStatsUint64(stats, "treedb.flush_apply.root_reduce.ns_total") + parseCacheStatsUint64(stats, "treedb.flush_apply.guarded_publish.ns_total")
+	if provider, ok := db.backend.(backendFlushApplyReducerPublishNser); ok {
+		return provider.FlushApplyReducerPublishNs()
+	}
+	return 0
 }
 
 func (db *DB) observeFlushApplyPlan(units, entries int, bytes int64, planning time.Duration) {

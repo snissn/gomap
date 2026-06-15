@@ -212,6 +212,15 @@ func (db *DB) observeFlushApplyGuardedPublish(hold time.Duration) {
 	addDurationNs(&db.flushApplyGuardedPublishNs, hold)
 }
 
+// FlushApplyReducerPublishNs returns the cumulative root-reduce plus guarded
+// publish time without constructing the full Stats map.
+func (db *DB) FlushApplyReducerPublishNs() uint64 {
+	if db == nil {
+		return 0
+	}
+	return db.flushApplyRootReduceNs.Load() + db.flushApplyGuardedPublishNs.Load()
+}
+
 func (db *DB) observeFlushApplyRetry() {
 	if db == nil {
 		return

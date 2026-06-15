@@ -24,6 +24,32 @@ func requireStatUint64(t *testing.T, stats map[string]string, key string) uint64
 	return v
 }
 
+type reducerPublishStatsBackend struct {
+	*MockBackend
+	statsCalls       int
+	reducerPublishNs uint64
+}
+
+func (b *reducerPublishStatsBackend) Stats() map[string]string {
+	b.statsCalls++
+	return nil
+}
+
+func (b *reducerPublishStatsBackend) FlushApplyReducerPublishNs() uint64 {
+	return b.reducerPublishNs
+}
+
+func TestBackendFlushApplyReducerPublishNsUsesLightweightAccessor(t *testing.T) {
+	backend := &reducerPublishStatsBackend{MockBackend: NewMockBackend(), reducerPublishNs: 42}
+	db := &DB{backend: backend}
+	if got := db.backendFlushApplyReducerPublishNs(); got != 42 {
+		t.Fatalf("reducer/publish ns=%d want 42", got)
+	}
+	if backend.statsCalls != 0 {
+		t.Fatalf("Stats calls=%d want 0", backend.statsCalls)
+	}
+}
+
 func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{
@@ -184,6 +210,82 @@ func TestFlushSpanRunStatsCombinedFlushCountsPostShadowPlannedOps(t *testing.T) 
 	}
 	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_ops_total"); got != 2 {
 		t.Fatalf("planned ops=%d want 2", got)
+	}
+}
+
+func TestFlushSpanRunBackendChunksExcludeEmptySyncBoundary(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	for _, tc := range []struct {
+		name     string
+		parallel bool
+	}{
+		{name: "parallel", parallel: true},
+		{name: "sequential", parallel: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := NewMockBackend()
+			opts := Options{
+				FlushThreshold:         1 << 60,
+				FlushBackendMaxEntries: 2,
+				FlushBackendMaxBatches: -1,
+				MemtableShards:         1,
+				JournalLanes:           1,
+			}
+			if tc.parallel {
+				opts.FlushBuildConcurrency = 2
+				opts.FlushBuildMinEntries = 1
+				opts.FlushBuildMinUnits = 2
+			} else {
+				opts.FlushBuildConcurrency = 1
+			}
+			db, err := Open(t.TempDir(), backend, opts)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			if tc.parallel {
+				for unit := 0; unit < 2; unit++ {
+					for i := 0; i < 2; i++ {
+						setMutable(db, []byte(fmt.Sprintf("k%d%d", unit, i)), []byte("v"))
+					}
+					db.mu.Lock()
+					if err := db.rotateMemtableLocked(false); err != nil {
+						db.mu.Unlock()
+						t.Fatalf("rotate memtable %d: %v", unit, err)
+					}
+					db.mu.Unlock()
+				}
+			} else {
+				for i := 0; i < 4; i++ {
+					setMutable(db, []byte(fmt.Sprintf("k%d", i)), []byte("v"))
+				}
+				db.mu.Lock()
+				if err := db.rotateMemtableLocked(false); err != nil {
+					db.mu.Unlock()
+					t.Fatalf("rotate memtable: %v", err)
+				}
+				db.mu.Unlock()
+			}
+
+			if !db.flushLaneOnce(true, 0) {
+				t.Fatal("flushLaneOnce returned false")
+			}
+
+			stats := db.Stats()
+			if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.backend_chunks_total"); got != 2 {
+				t.Fatalf("backend chunks=%d want 2", got)
+			}
+			backend.mu.RLock()
+			writeCalls := backend.writeCalls
+			writeSyncs := backend.writeSyncs
+			backend.mu.RUnlock()
+			if writeCalls != 3 || writeSyncs != 1 {
+				t.Fatalf("backend writeCalls/writeSyncs=%d/%d want 3/1", writeCalls, writeSyncs)
+			}
+		})
 	}
 }
 

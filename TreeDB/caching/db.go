@@ -25077,7 +25077,6 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			// If we emitted intermediate chunks and happened to land exactly on a
 			// chunk boundary, force a single durability boundary at the end.
 			db.backendWriteBatchesTotal.Add(1)
-			db.observeFlushSpanRunBackendChunks(1)
 			writeStart := time.Now()
 			err = backendBatch.WriteSync()
 			db.observeFlushApplyBackendWrite(time.Since(writeStart))
@@ -25417,7 +25416,6 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		// final batch provides the single sync boundary for the prior chunks and
 		// can carry the command-WAL AppliedCommandLSN publication.
 		db.backendWriteBatchesTotal.Add(1)
-		db.observeFlushSpanRunBackendChunks(1)
 		writeStart := time.Now()
 		err = backendBatch.WriteSync()
 		db.observeFlushApplyBackendWrite(time.Since(writeStart))
