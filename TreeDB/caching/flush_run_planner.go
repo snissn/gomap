@@ -15,6 +15,10 @@ type backendFlushSpanRunPlanner interface {
 	PlanFlushSpanRun(backenddb.FlushSpanRunPlanRequest) (backenddb.FlushSpanRunMetadata, error)
 }
 
+type backendFlushSpanRunChunkPlanner interface {
+	PlanFlushSpanRunChunks(backenddb.FlushSpanRunPlanRequest, int) (backenddb.FlushSpanRunChunkPlan, error)
+}
+
 type canonicalFlushRun struct {
 	pointOps []batch.Entry
 
@@ -482,7 +486,15 @@ func buildLeafAwareFlushSpanRunChunks(ops []batch.Entry, spans []backenddb.Flush
 	return chunks, true
 }
 
-func (db *DB) planCanonicalFlushRunMetadata(run *canonicalFlushRun, backendEntriesCap int) (backenddb.FlushSpanRunMetadata, []backenddb.FlushSpanRunBackendChunk, backenddb.FlushSpanRunChunkSplitSummary) {
+type canonicalFlushRunSpanStats struct {
+	targetLeafSpans int
+	singleOpSpans   int
+	spanOps         int
+	spanBytes       int
+	splitSummary    backenddb.FlushSpanRunChunkSplitSummary
+}
+
+func (db *DB) planCanonicalFlushRunMetadata(run *canonicalFlushRun, backendEntriesCap int) (backenddb.FlushSpanRunMetadata, []backenddb.FlushSpanRunBackendChunk, canonicalFlushRunSpanStats) {
 	meta := backenddb.FlushSpanRunMetadata{
 		SourceMemtables:  run.sourceMemtables,
 		SourcePointOps:   run.sourcePointOps,
@@ -491,21 +503,41 @@ func (db *DB) planCanonicalFlushRunMetadata(run *canonicalFlushRun, backendEntri
 		RangeBarriers:    run.rangeBarriers,
 		LaneBarriers:     run.laneBarriers,
 	}
+	var spanStats canonicalFlushRunSpanStats
 	if db == nil || run == nil || len(run.pointOps) == 0 {
-		return meta, nil, backenddb.FlushSpanRunChunkSplitSummary{}
+		return meta, nil, spanStats
 	}
 	needTargetPlan := run.sourceMemtables > 1 || len(run.pointOps) > backendEntriesCap
 	if needTargetPlan {
-		if planner, ok := db.backend.(backendFlushSpanRunPlanner); ok {
-			planned, err := planner.PlanFlushSpanRun(backenddb.FlushSpanRunPlanRequest{
-				SourceMemtables:  run.sourceMemtables,
-				SourcePointOps:   run.sourcePointOps,
-				PlannedPointOps:  run.plannedPointOps,
-				ShadowedPointOps: run.shadowedPointOps,
-				RangeBarriers:    run.rangeBarriers,
-				LaneBarriers:     run.laneBarriers,
-				PointOps:         run.pointOps,
-			})
+		req := backenddb.FlushSpanRunPlanRequest{
+			SourceMemtables:  run.sourceMemtables,
+			SourcePointOps:   run.sourcePointOps,
+			PlannedPointOps:  run.plannedPointOps,
+			ShadowedPointOps: run.shadowedPointOps,
+			RangeBarriers:    run.rangeBarriers,
+			LaneBarriers:     run.laneBarriers,
+			PointOps:         run.pointOps,
+		}
+		if planner, ok := db.backend.(backendFlushSpanRunChunkPlanner); ok {
+			planned, err := planner.PlanFlushSpanRunChunks(req, backendEntriesCap)
+			if err == nil {
+				meta = planned.Metadata
+				chunks := planned.BackendChunks
+				if len(chunks) == 0 {
+					chunks = buildEntryCountFlushSpanRunChunks(run.pointOps, backendEntriesCap)
+					meta.BackendChunks = chunks
+				}
+				spanStats = canonicalFlushRunSpanStats{
+					targetLeafSpans: planned.TargetLeafSpans,
+					singleOpSpans:   planned.SingleOpSpans,
+					spanOps:         planned.SpanOps,
+					spanBytes:       planned.SpanBytes,
+					splitSummary:    planned.SplitSummary,
+				}
+				return meta, chunks, spanStats
+			}
+		} else if planner, ok := db.backend.(backendFlushSpanRunPlanner); ok {
+			planned, err := planner.PlanFlushSpanRun(req)
 			if err == nil {
 				meta = planned
 			}
@@ -517,8 +549,18 @@ func (db *DB) planCanonicalFlushRunMetadata(run *canonicalFlushRun, backendEntri
 		chunks = buildEntryCountFlushSpanRunChunks(run.pointOps, backendEntriesCap)
 		meta.BackendChunks = chunks
 	}
-	summary := backenddb.SummarizeFlushSpanRunChunkSplits(meta.TargetLeafSpans, chunks)
-	return meta, chunks, summary
+	splitSummary := backenddb.SummarizeFlushSpanRunChunkSplits(meta.TargetLeafSpans, chunks)
+	spanStats = canonicalFlushRunSpanStats{splitSummary: splitSummary}
+	for i := range meta.TargetLeafSpans {
+		span := meta.TargetLeafSpans[i]
+		spanStats.targetLeafSpans++
+		spanStats.spanOps += span.OpCount
+		spanStats.spanBytes += span.ByteCount
+		if span.OpCount == 1 {
+			spanStats.singleOpSpans++
+		}
+	}
+	return meta, chunks, spanStats
 }
 
 func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, ops []batch.Entry) error {
@@ -721,8 +763,8 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 	}
 
 	backendEntriesCap := db.flushBackendEntriesCapForOps(run.plannedPointOps, run.deletePointOps, syncFlush)
-	meta, chunks, splitSummary := db.planCanonicalFlushRunMetadata(run, backendEntriesCap)
-	db.observeFlushSpanRunTargetLeafSpans(meta.TargetLeafSpans, splitSummary)
+	_, chunks, spanStats := db.planCanonicalFlushRunMetadata(run, backendEntriesCap)
+	db.observeFlushSpanRunTargetLeafSpanSummary(spanStats.targetLeafSpans, spanStats.singleOpSpans, spanStats.spanOps, spanStats.spanBytes, spanStats.splitSummary)
 	db.observeFlushSpanRunPlannedOps(run.plannedPointOps, totalSpans)
 
 	if db.valueLogEnabled() {

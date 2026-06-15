@@ -180,6 +180,23 @@ type FlushSpanRunPlanRequest struct {
 	DeleteRanges []batch.DeleteRange
 }
 
+// FlushSpanRunChunkPlan is the cache-layer M9 planning result used to pack a
+// canonical point run into backend chunks without materializing a second copy of
+// every target leaf span. Full TargetLeafSpans remain available through
+// PlanFlushSpanRun for tests and future span-native consumers; this compact
+// result is the hot-path chunking/observability form.
+type FlushSpanRunChunkPlan struct {
+	Metadata FlushSpanRunMetadata
+
+	TargetLeafSpans int
+	SingleOpSpans   int
+	SpanOps         int
+	SpanBytes       int
+
+	BackendChunks []FlushSpanRunBackendChunk
+	SplitSummary  FlushSpanRunChunkSplitSummary
+}
+
 // FlushSpanRunPreparedOutputOwnership describes prepared durable output owned by
 // a span job. Prepared leaf/value-log output is persistent storage: on retry or
 // root mismatch it becomes durable-but-unreachable and is accounted as abandoned;

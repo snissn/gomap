@@ -168,20 +168,36 @@ func (db *DB) observeFlushSpanRunTargetLeafSpans(spans []backenddb.FlushSpanRunT
 	if db == nil {
 		return
 	}
-	if len(spans) > 0 {
-		db.flushSpanRunTargetLeafSpans.Add(uint64(len(spans)))
-	}
+	targetLeafSpans := len(spans)
+	singleOpSpans := 0
+	spanOps := 0
+	spanBytes := 0
 	for i := range spans {
 		span := spans[i]
-		if span.OpCount > 0 {
-			db.flushSpanRunSpanOps.Add(uint64(span.OpCount))
-		}
-		if span.ByteCount > 0 {
-			db.flushSpanRunSpanBytes.Add(uint64(span.ByteCount))
-		}
+		spanOps += span.OpCount
+		spanBytes += span.ByteCount
 		if span.OpCount == 1 {
-			db.flushSpanRunSingleOpSpans.Add(1)
+			singleOpSpans++
 		}
+	}
+	db.observeFlushSpanRunTargetLeafSpanSummary(targetLeafSpans, singleOpSpans, spanOps, spanBytes, splitSummary)
+}
+
+func (db *DB) observeFlushSpanRunTargetLeafSpanSummary(targetLeafSpans, singleOpSpans, spanOps, spanBytes int, splitSummary backenddb.FlushSpanRunChunkSplitSummary) {
+	if db == nil {
+		return
+	}
+	if targetLeafSpans > 0 {
+		db.flushSpanRunTargetLeafSpans.Add(uint64(targetLeafSpans))
+	}
+	if singleOpSpans > 0 {
+		db.flushSpanRunSingleOpSpans.Add(uint64(singleOpSpans))
+	}
+	if spanOps > 0 {
+		db.flushSpanRunSpanOps.Add(uint64(spanOps))
+	}
+	if spanBytes > 0 {
+		db.flushSpanRunSpanBytes.Add(uint64(spanBytes))
 	}
 	if splitSummary.TargetLeavesSplitAcrossChunks > 0 {
 		db.flushSpanRunTargetLeavesSplitAcrossChunks.Add(uint64(splitSummary.TargetLeavesSplitAcrossChunks))

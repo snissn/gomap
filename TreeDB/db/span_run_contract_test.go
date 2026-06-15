@@ -179,6 +179,20 @@ func TestPlanFlushSpanRunCapturesTargetLeafMetadata(t *testing.T) {
 	if err := ValidateFlushSpanRunMetadata(meta); err != nil {
 		t.Fatalf("metadata validation: %v", err)
 	}
+
+	chunkPlan, err := d.PlanFlushSpanRunChunks(FlushSpanRunPlanRequest{
+		SourceMemtables:  2,
+		SourcePointOps:   3,
+		PlannedPointOps:  len(ops),
+		ShadowedPointOps: 1,
+		PointOps:         ops,
+	}, 1)
+	if err != nil {
+		t.Fatalf("PlanFlushSpanRunChunks: %v", err)
+	}
+	if chunkPlan.TargetLeafSpans == 0 || chunkPlan.SpanOps == 0 || len(chunkPlan.BackendChunks) == 0 {
+		t.Fatalf("empty chunk plan: %+v", chunkPlan)
+	}
 }
 
 func TestFlushSpanRunChunkSplitFixtureEntryChunksSplitTargetLeaf(t *testing.T) {
