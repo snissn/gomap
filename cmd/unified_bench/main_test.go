@@ -2928,8 +2928,9 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 	instances := []*DBInstance{{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}}}
 	stats := map[string]map[string]string{
 		"TreeDB": {
+			"treedb.cache.flush_span_run.source_point_ops_total":                                   "11",
+			"treedb.cache.flush_span_run.planned_point_ops_total":                                  "10",
 			"treedb.cache.flush_span_run.backend_chunks_total":                                     "3",
-			"treedb.cache.flush_span_run.target_leaves_split_across_chunks_total":                  "1",
 			"treedb.cache.checkpoint.stage.reducer_publish.total_ns":                               "44",
 			"treedb.flush_apply.old_leaf_read_decode.bytes_per_op":                                 "2.200000",
 			"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
@@ -2938,8 +2939,9 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 
 	got := renderTreeDBSelectedStatsString(instances, stats)
 	for _, want := range []string{
+		"flush_span_run.source_point_ops_total: 11",
+		"flush_span_run.planned_point_ops_total: 10",
 		"flush_span_run.backend_chunks_total: 3",
-		"flush_span_run.target_leaves_split_across_chunks_total: 1",
 		"checkpoint.stage.reducer_publish.total_ns: 44",
 		"flush_apply.old_leaf_read_decode.bytes_per_op: 2.200000",
 		"flush_apply.span_native.fallback.not_implemented_ops_total: 10",
@@ -3141,8 +3143,9 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":                                  "8589934592",
 					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":                                     "512",
 					"treedb.cache.flush_apply.planning_ns_total":                                           "11",
+					"treedb.cache.flush_span_run.source_point_ops_total":                                   "11",
+					"treedb.cache.flush_span_run.planned_point_ops_total":                                  "10",
 					"treedb.cache.flush_span_run.backend_chunks_total":                                     "3",
-					"treedb.cache.flush_span_run.target_leaves_split_across_chunks_total":                  "1",
 					"treedb.cache.checkpoint.stage.reducer_publish.total_ns":                               "44",
 					"treedb.flush_apply.old_leaf_read_decode.bytes_total":                                  "22",
 					"treedb.flush_apply.old_leaf_read_decode.bytes_per_op":                                 "2.200000",
@@ -3208,11 +3211,14 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_apply.planning_ns_total"]; got != "11" {
 		t.Fatalf("unexpected cache flush planning stat=%q", got)
 	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.source_point_ops_total"]; got != "11" {
+		t.Fatalf("unexpected source point ops stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.planned_point_ops_total"]; got != "10" {
+		t.Fatalf("unexpected planned point ops stat=%q", got)
+	}
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.backend_chunks_total"]; got != "3" {
 		t.Fatalf("unexpected span-run chunk stat=%q", got)
-	}
-	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.target_leaves_split_across_chunks_total"]; got != "1" {
-		t.Fatalf("unexpected split target leaf stat=%q", got)
 	}
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.checkpoint.stage.reducer_publish.total_ns"]; got != "44" {
 		t.Fatalf("unexpected checkpoint reducer/publish stat=%q", got)

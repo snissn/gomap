@@ -7923,6 +7923,7 @@ type DB struct {
 	flushApplyForegroundAssistWaitNs                             atomic.Uint64
 	flushApplyForegroundAssistFlushes                            atomic.Uint64
 	flushSpanRunRuns                                             atomic.Uint64
+	flushSpanRunSourcePointOps                                   atomic.Uint64
 	flushSpanRunPlannedOps                                       atomic.Uint64
 	flushSpanRunPlannedPointOps                                  atomic.Uint64
 	flushSpanRunSourceMemtables                                  atomic.Uint64
@@ -7931,7 +7932,6 @@ type DB struct {
 	flushSpanRunRangeBarriers                                    atomic.Uint64
 	flushSpanRunRangeDeleteOps                                   atomic.Uint64
 	flushSpanRunBackendChunks                                    atomic.Uint64
-	flushSpanRunTargetLeavesSplitAcrossChunks                    atomic.Uint64
 	flushCoordinatorActive                                       atomic.Int64
 	flushCoordinatorInFlightBytes                                atomic.Int64
 	flushCoordinatorProgress                                     atomic.Uint64
@@ -24656,7 +24656,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 	totalSpans := flushUnitSpanCount(units)
 	rangeBarriers := flushUnitRangeBarrierCount(units)
 	db.observeFlushApplyPlan(len(units), totalLen+totalSpans, totalBytes, planningDur)
-	db.observeFlushSpanRunPlan(len(units), totalLen, totalSpans, rangeBarriers)
+	db.observeFlushSpanRunSource(len(units), totalLen, totalSpans, rangeBarriers)
 
 	if totalLen == 0 && totalSpans == 0 {
 		db.mu.Lock()
@@ -24722,6 +24722,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			return false
 		}
 
+		db.observeFlushSpanRunPlannedOps(0, pending)
 		db.rangeSpanRangeOnlyFlushed.Add(uint64(len(units)))
 		db.rangeSpanSpansFlushed.Add(uint64(pending))
 		db.mu.Lock()
@@ -25025,6 +25026,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
 			flushMergeParallelAppliedOpsTotal.Add(uint64(appliedOps))
 		}
+		db.observeFlushSpanRunPlannedOps(appliedOps, totalSpans)
 		db.observeFlushApplyBuild(time.Since(buildStart))
 
 		if db.valueLogEnabled() {
@@ -25191,6 +25193,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			return false
 		}
 		backendPendingOps = pendingOps
+		db.observeFlushSpanRunPlannedOps(pendingOps, totalSpans)
 	} else {
 		sv, _ := backendBatch.(backendBatchSetViewer)
 		dv, _ := backendBatch.(backendBatchDeleteViewer)
@@ -25349,6 +25352,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				return false
 			}
 		}
+		db.observeFlushSpanRunPlannedOps(totalLen, totalSpans)
 	}
 	db.observeFlushApplyBuild(time.Since(buildStart))
 

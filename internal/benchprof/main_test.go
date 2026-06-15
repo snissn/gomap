@@ -332,7 +332,8 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 						"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                                        "8589934592",
 						"treedb.cache.vlog_auto.frames.block_lz4":                                              "9",
 						"treedb.cache.vlog_block.k.bucket.lz4.le_1":                                            "9",
-						"treedb.cache.flush_span_run.target_leaves_split_across_chunks_total":                  "1",
+						"treedb.cache.flush_span_run.source_point_ops_total":                                   "11",
+						"treedb.cache.flush_span_run.planned_point_ops_total":                                  "10",
 						"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
 					},
 				},
@@ -374,7 +375,8 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 		!strings.Contains(md, "treedb.vlog.mmap_max_mapped_leaf_sealed_bytes") ||
 		!strings.Contains(md, "treedb.cache.vlog_auto.frames.block_lz4") ||
 		!strings.Contains(md, "treedb.cache.vlog_block.k.bucket.lz4.le_1") ||
-		!strings.Contains(md, "treedb.cache.flush_span_run.target_leaves_split_across_chunks_total") ||
+		!strings.Contains(md, "treedb.cache.flush_span_run.source_point_ops_total") ||
+		!strings.Contains(md, "treedb.cache.flush_span_run.planned_point_ops_total") ||
 		!strings.Contains(md, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total") {
 		t.Fatalf("markdown missing TreeDB stats metadata:\n%s", md)
 	}

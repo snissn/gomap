@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -79,7 +80,9 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.cache.flush_apply.bytes_total",
 		"treedb.cache.flush_apply.backend_write_ns_total",
 		"treedb.cache.flush_span_run.runs_total",
+		"treedb.cache.flush_span_run.source_point_ops_total",
 		"treedb.cache.flush_span_run.planned_ops_total",
+		"treedb.cache.flush_span_run.planned_point_ops_total",
 		"treedb.cache.flush_span_run.source_memtables_total",
 		"treedb.cache.flush_span_run.backend_chunks_total",
 		"treedb.flush_apply.apply_calls_total",
@@ -106,6 +109,81 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 	}
 	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.leaf_log_append_frames_total"); got == 0 {
 		t.Fatalf("leaf log append frames = 0, want >0")
+	}
+}
+
+func TestFlushSpanRunStatsSeparateSourceShadowedAndPlannedOps(t *testing.T) {
+	db := &DB{}
+	db.observeFlushSpanRunSource(2, 3, 0, 0)
+	db.observeFlushSpanRunShadowedOps(1)
+	db.observeFlushSpanRunPlannedOps(2, 0)
+	stats := map[string]string{}
+	db.appendCacheFlushApplyStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.source_point_ops_total"); got != 3 {
+		t.Fatalf("source point ops=%d want 3", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.shadowed_ops_total"); got != 1 {
+		t.Fatalf("shadowed ops=%d want 1", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_point_ops_total"); got != 2 {
+		t.Fatalf("planned point ops=%d want 2", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_ops_total"); got != 2 {
+		t.Fatalf("planned ops=%d want 2", got)
+	}
+}
+
+func TestFlushSpanRunStatsCombinedFlushCountsPostShadowPlannedOps(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:        1 << 60,
+		FlushBuildConcurrency: 2,
+		FlushBuildMinEntries:  1,
+		FlushBuildMinUnits:    2,
+		MemtableShards:        1,
+		JournalLanes:          1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.mu.Lock()
+	setMutable(db, []byte("k"), []byte("old"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate old memtable: %v", err)
+	}
+	setMutable(db, []byte("k"), []byte("new"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate new memtable: %v", err)
+	}
+	setMutable(db, []byte("other"), []byte("kept"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate other memtable: %v", err)
+	}
+	db.mu.Unlock()
+
+	db.flushAll(false)
+
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.source_point_ops_total"); got != 3 {
+		t.Fatalf("source point ops=%d want 3", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.shadowed_ops_total"); got != 1 {
+		t.Fatalf("shadowed ops=%d want 1", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_point_ops_total"); got != 2 {
+		t.Fatalf("planned point ops=%d want 2", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_ops_total"); got != 2 {
+		t.Fatalf("planned ops=%d want 2", got)
 	}
 }
 

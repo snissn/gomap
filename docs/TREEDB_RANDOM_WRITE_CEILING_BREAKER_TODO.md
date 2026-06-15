@@ -110,16 +110,22 @@ additive counters.
 ### Cache/run-level counters
 
 - `treedb.cache.flush_span_run.runs_total`
-- `treedb.cache.flush_span_run.planned_ops_total`
-- `treedb.cache.flush_span_run.planned_point_ops_total`
+- `treedb.cache.flush_span_run.source_point_ops_total` (pre-shadow point ops)
+- `treedb.cache.flush_span_run.planned_ops_total` (post-shadow planned point ops plus range barriers)
+- `treedb.cache.flush_span_run.planned_point_ops_total` (post-shadow point ops)
 - `treedb.cache.flush_span_run.source_memtables_total`
 - `treedb.cache.flush_span_run.source_memtables_max`
 - `treedb.cache.flush_span_run.shadowed_ops_total`
 - `treedb.cache.flush_span_run.range_barriers_total`
 - `treedb.cache.flush_span_run.range_delete_ops_total`
 - `treedb.cache.flush_span_run.backend_chunks_total`
-- `treedb.cache.flush_span_run.target_leaves_split_across_chunks_total`
 - `treedb.cache.flush_span_run.ops_per_run`
+
+M8 includes the deterministic `SummarizeFlushSpanRunChunkSplits` fixture for
+entry-count chunks that split target leaves. Runtime target-leaf split emission
+requires M9 canonical target-leaf metadata before cache-layer backend chunking;
+M8 therefore does not expose a production `target_leaves_split_across_chunks`
+stat that would falsely remain zero.
 
 ### Target span and span-native fallback counters
 

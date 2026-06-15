@@ -123,25 +123,34 @@ func (db *DB) observeForegroundFlushAssist(wait time.Duration, flushed int) {
 	}
 }
 
-func (db *DB) observeFlushSpanRunPlan(sourceMemtables, pointOps, rangeDeleteOps int, rangeBarriers int) {
+func (db *DB) observeFlushSpanRunSource(sourceMemtables, sourcePointOps, rangeDeleteOps int, rangeBarriers int) {
 	if db == nil || sourceMemtables <= 0 {
 		return
 	}
 	db.flushSpanRunRuns.Add(1)
 	db.flushSpanRunSourceMemtables.Add(uint64(sourceMemtables))
 	updateAtomicMaxUint64(&db.flushSpanRunSourceMemtablesMax, uint64(sourceMemtables))
-	plannedOps := pointOps + rangeDeleteOps
-	if plannedOps > 0 {
-		db.flushSpanRunPlannedOps.Add(uint64(plannedOps))
-	}
-	if pointOps > 0 {
-		db.flushSpanRunPlannedPointOps.Add(uint64(pointOps))
+	if sourcePointOps > 0 {
+		db.flushSpanRunSourcePointOps.Add(uint64(sourcePointOps))
 	}
 	if rangeDeleteOps > 0 {
 		db.flushSpanRunRangeDeleteOps.Add(uint64(rangeDeleteOps))
 	}
 	if rangeBarriers > 0 {
 		db.flushSpanRunRangeBarriers.Add(uint64(rangeBarriers))
+	}
+}
+
+func (db *DB) observeFlushSpanRunPlannedOps(plannedPointOps, rangeDeleteOps int) {
+	if db == nil {
+		return
+	}
+	plannedOps := plannedPointOps + rangeDeleteOps
+	if plannedOps > 0 {
+		db.flushSpanRunPlannedOps.Add(uint64(plannedOps))
+	}
+	if plannedPointOps > 0 {
+		db.flushSpanRunPlannedPointOps.Add(uint64(plannedPointOps))
 	}
 }
 
@@ -157,13 +166,6 @@ func (db *DB) observeFlushSpanRunBackendChunks(chunks int) {
 		return
 	}
 	db.flushSpanRunBackendChunks.Add(uint64(chunks))
-}
-
-func (db *DB) observeFlushSpanRunTargetLeavesSplitAcrossChunks(splitLeaves int) {
-	if db == nil || splitLeaves <= 0 {
-		return
-	}
-	db.flushSpanRunTargetLeavesSplitAcrossChunks.Add(uint64(splitLeaves))
 }
 
 func (db *DB) observeCheckpointActiveBackgroundFlushWait(wait time.Duration) {
@@ -341,6 +343,7 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	stats["treedb.cache.flush_apply.foreground_assist_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyForegroundAssistWaitNs.Load())
 	stats["treedb.cache.flush_apply.foreground_assist_flushes_total"] = fmt.Sprintf("%d", db.flushApplyForegroundAssistFlushes.Load())
 	stats["treedb.cache.flush_span_run.runs_total"] = fmt.Sprintf("%d", db.flushSpanRunRuns.Load())
+	stats["treedb.cache.flush_span_run.source_point_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunSourcePointOps.Load())
 	stats["treedb.cache.flush_span_run.planned_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunPlannedOps.Load())
 	stats["treedb.cache.flush_span_run.planned_point_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunPlannedPointOps.Load())
 	stats["treedb.cache.flush_span_run.source_memtables_total"] = fmt.Sprintf("%d", db.flushSpanRunSourceMemtables.Load())
@@ -349,7 +352,6 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	stats["treedb.cache.flush_span_run.range_barriers_total"] = fmt.Sprintf("%d", db.flushSpanRunRangeBarriers.Load())
 	stats["treedb.cache.flush_span_run.range_delete_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunRangeDeleteOps.Load())
 	stats["treedb.cache.flush_span_run.backend_chunks_total"] = fmt.Sprintf("%d", db.flushSpanRunBackendChunks.Load())
-	stats["treedb.cache.flush_span_run.target_leaves_split_across_chunks_total"] = fmt.Sprintf("%d", db.flushSpanRunTargetLeavesSplitAcrossChunks.Load())
 	if runs := db.flushSpanRunRuns.Load(); runs > 0 {
 		stats["treedb.cache.flush_span_run.ops_per_run"] = fmt.Sprintf("%.6f", float64(db.flushSpanRunPlannedOps.Load())/float64(runs))
 	}
