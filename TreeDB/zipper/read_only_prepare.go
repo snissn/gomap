@@ -347,9 +347,20 @@ func readOnlyPrepareCeilDiv64(n, d int64) int64 {
 // The returned options must not be used while r's LeafSpans are still needed.
 func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
 	return ReadOnlyPrepareOptions{
-		leafSpans: r.LeafSpans[:0],
+		leafSpans: clearReadOnlyLeafSpanBuffer(r.LeafSpans),
 		keyArena:  r.keyArena[:0],
 	}
+}
+
+func clearReadOnlyLeafSpanBuffer(spans []ReadOnlyLeafSpan) []ReadOnlyLeafSpan {
+	if cap(spans) == 0 {
+		return nil
+	}
+	// ReadOnlyLeafSpan contains key slices into keyArena. Clear the full backing
+	// array before pooling so stale slice headers beyond len(spans) cannot keep an
+	// oversized/dropped key arena live across later flushes.
+	clear(spans[:cap(spans)])
+	return spans[:0]
 }
 
 // ResetForReuse clears result metadata while retaining bounded reusable
@@ -364,7 +375,7 @@ func (r *ReadOnlyPrepareResult) ResetForReuse() {
 	keyArena := r.keyArena
 	*r = ReadOnlyPrepareResult{}
 	if cap(leafSpans) <= readOnlyPrepareResultReuseLeafSpanKeepCap {
-		r.LeafSpans = leafSpans[:0]
+		r.LeafSpans = clearReadOnlyLeafSpanBuffer(leafSpans)
 	}
 	if cap(keyArena) <= readOnlyPrepareResultReuseKeyArenaKeepCap {
 		r.keyArena = keyArena[:0]
