@@ -21284,7 +21284,6 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 
-	walCleanupStart := time.Now()
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
 		filtered := segments[:0]
@@ -21332,6 +21331,7 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 
+	walCleanupStart := time.Now()
 	currentWALs := make(map[string]struct{})
 	for _, path := range db.currentWALPaths() {
 		currentWALs[path] = struct{}{}
