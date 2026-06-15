@@ -349,6 +349,7 @@ type DB struct {
 	flushApplyMinEntries  int
 	flushApplyMinSpans    int
 	flushApplyMinBytes    int
+	flushApplySpanNative  bool
 	flushApplyWorkerPool  *zipper.ApplyWorkerPool
 
 	flushApplyReadOnlyPrepareMu   sync.Mutex
@@ -991,6 +992,10 @@ type Options struct {
 	// FlushApplyMinBytes gates opt-in parallel apply by planned span bytes.
 	// Values <=0 use the internal default.
 	FlushApplyMinBytes int
+	// FlushApplySpanNative enables the M10 opt-in span-native apply candidate
+	// path. It is default-off and initially restricted to exact point spans; all
+	// unsupported runs fall back to recursive apply.
+	FlushApplySpanNative bool
 
 	// FlushBackendMaxEntries caps how many operations are buffered into a single
 	// backend batch before committing it and continuing with a fresh batch.
@@ -1611,6 +1616,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		flushApplyMinEntries:           opts.FlushApplyMinEntries,
 		flushApplyMinSpans:             opts.FlushApplyMinSpans,
 		flushApplyMinBytes:             opts.FlushApplyMinBytes,
+		flushApplySpanNative:           opts.FlushApplySpanNative,
 		flushApplyWorkerPool:           flushApplyWorkerPool,
 		dir:                            opts.Dir,
 		columnAssetRootDir:             layout.columnAssetDir,

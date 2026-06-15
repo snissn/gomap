@@ -5,17 +5,21 @@ import (
 )
 
 func (db *DB) flushApplyOptions() zipper.ApplyOptions {
-	if db == nil || db.flushApplyConcurrency <= 1 {
+	if db == nil {
+		return zipper.ApplyOptions{}
+	}
+	if db.flushApplyConcurrency <= 1 && !db.flushApplySpanNative {
 		return zipper.ApplyOptions{}
 	}
 	return zipper.ApplyOptions{
-		PrepareReadOnly:           true,
+		PrepareReadOnly:           db.flushApplyConcurrency > 1 || db.flushApplySpanNative,
 		ReadOnlyPrepareWorkers:    db.flushApplyConcurrency,
 		ParallelApplyConcurrency:  db.flushApplyConcurrency,
 		ParallelApplyWorkerPool:   db.flushApplyWorkerPool,
 		ParallelApplyMinSpans:     db.flushApplyMinSpans,
 		ParallelApplyMinSpanOps:   db.flushApplyMinEntries,
 		ParallelApplyMinSpanBytes: db.flushApplyMinBytes,
+		SpanNativeApply:           db.flushApplySpanNative,
 	}
 }
 
@@ -29,5 +33,12 @@ func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err erro
 		workerSummary = result.ReadOnlyPrepare.LeafSpanWorkerRangeSummary(db.flushApplyConcurrency)
 	}
 	db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, result.ReadOnlyPrepareNs, err, result.ReadOnlyPrepareValidationFailed)
+	if result.SpanNativeEligible {
+		db.observeFlushApplySpanNativeEligible(summary)
+		if !result.SpanNativeUsed {
+			db.observeFlushApplySpanNativeFallbackAfterCandidate(summary, FlushSpanRunFallbackSpanNativeNotImplemented, false)
+		}
+		return
+	}
 	db.observeFlushApplySpanNativeFallback(summary, classifyFlushApplySpanNativeFallback(summary, err, result.ReadOnlyPrepareValidationFailed))
 }

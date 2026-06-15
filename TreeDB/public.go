@@ -693,6 +693,7 @@ func Open(opts Options) (*DB, error) {
 		FlushApplyMinEntries:                     opts.FlushApplyMinEntries,
 		FlushApplyMinSpans:                       opts.FlushApplyMinSpans,
 		FlushApplyMinBytes:                       opts.FlushApplyMinBytes,
+		FlushApplySpanNative:                     opts.FlushApplySpanNative,
 		FlushBackendMaxEntries:                   opts.FlushBackendMaxEntries,
 		FlushBackendMaxBatches:                   opts.FlushBackendMaxBatches,
 		FlushSpanRunTargetPlanning:               opts.FlushSpanRunTargetPlanning,

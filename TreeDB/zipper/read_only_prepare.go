@@ -48,6 +48,12 @@ type ApplyOptions struct {
 	// ParallelApplyMinSpanBytes gates opt-in worker-pool apply by estimated bytes.
 	// Values <=0 disable the byte-count gate.
 	ParallelApplyMinSpanBytes int
+
+	// SpanNativeApply enables the M10 opt-in span-native apply candidate path.
+	// The initial gate is deliberately narrower than M2 parallel COW apply: exact
+	// point-only leaf spans, no cold build, no maintenance rewrite, and bounded
+	// workers. Unsupported runs fail closed to the recursive apply fallback.
+	SpanNativeApply bool
 }
 
 // ApplyResult is the complete in-memory result of a root apply attempt. The
@@ -78,6 +84,14 @@ type ApplyResult struct {
 	// applying all gates. ParallelApplyUsed is true when that count was >1.
 	ParallelApplyWorkers int
 	ParallelApplyUsed    bool
+
+	// SpanNativeEligible reports that the M10 opt-in span-native gate accepted the
+	// read-only plan. SpanNativeWorkers is the bounded worker count selected for
+	// future span jobs. SpanNativeUsed remains false until the real span-native
+	// execution engine replaces recursive fallback for eligible runs.
+	SpanNativeEligible bool
+	SpanNativeWorkers  int
+	SpanNativeUsed     bool
 }
 
 // ReadOnlyPrepareOptions configures a read-only root preparation pass. The zero
@@ -706,12 +720,67 @@ func resolveParallelApplyWorkers(opts ApplyOptions, summary ReadOnlyLeafSpanSumm
 	return workers
 }
 
+func resolveSpanNativeApplyWorkers(opts ApplyOptions, summary ReadOnlyLeafSpanSummary) int {
+	if !opts.SpanNativeApply {
+		return 0
+	}
+	workers := opts.ParallelApplyConcurrency
+	if workers <= 0 {
+		workers = 1
+	}
+	if gomax := runtime.GOMAXPROCS(0); gomax > 0 && workers > gomax {
+		workers = gomax
+	}
+	if summary.Spans > 0 && workers > summary.Spans {
+		workers = summary.Spans
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	return workers
+}
+
+func spanNativeApplyFallbackReason(opts ApplyOptions, summary ReadOnlyLeafSpanSummary, err error, validationFailure bool) (int, string) {
+	if !opts.SpanNativeApply {
+		return 0, "disabled"
+	}
+	if validationFailure {
+		return 0, "validation_failed"
+	}
+	if err != nil {
+		return 0, "prepare_error"
+	}
+	if summary.ColdBuild {
+		return 0, "cold_build"
+	}
+	if summary.Maintenance {
+		return 0, "maintenance"
+	}
+	if summary.DeleteRanges > 0 {
+		return 0, "range_delete_barrier"
+	}
+	if !summary.ExactLeafSpans {
+		return 0, "inexact_leaf_spans"
+	}
+	if summary.PointOps <= 0 || summary.Spans <= 0 {
+		return 0, "below_threshold"
+	}
+	workers := resolveSpanNativeApplyWorkers(opts, summary)
+	if workers <= 0 {
+		return 0, "below_threshold"
+	}
+	return workers, ""
+}
+
 func readOnlyWorkerTarget(opts ApplyOptions) int {
 	if opts.ReadOnlyPrepareWorkers > 0 {
 		return opts.ReadOnlyPrepareWorkers
 	}
 	if opts.ParallelApplyConcurrency > 0 {
 		return opts.ParallelApplyConcurrency
+	}
+	if opts.SpanNativeApply {
+		return 1
 	}
 	return 0
 }
@@ -726,7 +795,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	var prepared ReadOnlyPrepareResult
 	var preparedNs uint64
 	result := ApplyResult{}
-	prepareRequested := opts.PrepareReadOnly || opts.ParallelApplyConcurrency > 1
+	prepareRequested := opts.PrepareReadOnly || opts.ParallelApplyConcurrency > 1 || opts.SpanNativeApply
 	if prepareRequested {
 		result.ReadOnlyPrepareRequested = true
 		var err error
@@ -743,6 +812,27 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 		if err := prepared.ValidateLeafSpans(); err != nil {
 			result.ReadOnlyPrepareValidationFailed = true
 			return result, fmt.Errorf("zipper: invalid read-only prepare plan: %w", err)
+		}
+	}
+
+	if workers, reason := spanNativeApplyFallbackReason(opts, prepared.LeafSpanSummary(), nil, false); reason == "" {
+		result.SpanNativeEligible = true
+		result.SpanNativeWorkers = workers
+		var spanOps []batch.Entry
+		if b != nil && b.HasDeleteRanges() {
+			spanOps, _ = b.ApplyPlan()
+		} else if b != nil {
+			spanOps = b.SortedEntries()
+		}
+		spanResult, used, spanErr := z.applySpanNativeWithPrepared(rootID, spanOps, prepared)
+		if used {
+			spanResult.ReadOnlyPrepare = prepared
+			spanResult.ReadOnlyPrepareNs = preparedNs
+			spanResult.ReadOnlyPrepareRequested = result.ReadOnlyPrepareRequested
+			spanResult.ReadOnlyPrepareWorkerSummary = result.ReadOnlyPrepareWorkerSummary
+			spanResult.SpanNativeEligible = true
+			spanResult.SpanNativeWorkers = workers
+			return spanResult, spanErr
 		}
 	}
 

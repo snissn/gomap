@@ -86,29 +86,64 @@ func (db *DB) observeFlushApplyReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSu
 	}
 }
 
-func (db *DB) observeFlushApplySpanNativeFallback(summary zipper.ReadOnlyLeafSpanSummary, reason FlushSpanRunFallbackReason) {
+func flushApplySpanNativeOpsAndSpans(summary zipper.ReadOnlyLeafSpanSummary) (int, int) {
+	ops := summary.Ops
+	if ops <= 0 {
+		ops = summary.SpanOps
+	}
+	return ops, summary.Spans
+}
+
+func (db *DB) observeFlushApplySpanNativeCandidate(summary zipper.ReadOnlyLeafSpanSummary) (int, int) {
+	if db == nil {
+		return 0, 0
+	}
+	ops, spans := flushApplySpanNativeOpsAndSpans(summary)
+	if ops > 0 {
+		db.flushApplySpanNativeCandidateOps.Add(uint64(ops))
+	}
+	if spans > 0 {
+		db.flushApplySpanNativeCandidateSpans.Add(uint64(spans))
+	}
+	return ops, spans
+}
+
+func (db *DB) observeFlushApplySpanNativeEligible(summary zipper.ReadOnlyLeafSpanSummary) {
+	ops, spans := db.observeFlushApplySpanNativeCandidate(summary)
+	if ops > 0 {
+		db.flushApplySpanNativeEligibleOps.Add(uint64(ops))
+	}
+	if spans > 0 {
+		db.flushApplySpanNativeEligibleSpans.Add(uint64(spans))
+	}
+}
+
+func (db *DB) observeFlushApplySpanNativeFallbackAfterCandidate(summary zipper.ReadOnlyLeafSpanSummary, reason FlushSpanRunFallbackReason, countIneligible bool) {
 	if db == nil {
 		return
 	}
 	if !reason.Valid() {
 		reason = FlushSpanRunFallbackUnknown
 	}
-	ops := summary.Ops
-	if ops <= 0 {
-		ops = summary.SpanOps
-	}
-	spans := summary.Spans
+	ops, spans := flushApplySpanNativeOpsAndSpans(summary)
 	if ops > 0 {
-		db.flushApplySpanNativeCandidateOps.Add(uint64(ops))
-		db.flushApplySpanNativeIneligibleOps.Add(uint64(ops))
+		if countIneligible {
+			db.flushApplySpanNativeIneligibleOps.Add(uint64(ops))
+		}
 		db.flushApplySpanNativeFallbackOps[reason].Add(uint64(ops))
 	}
 	if spans > 0 {
-		db.flushApplySpanNativeCandidateSpans.Add(uint64(spans))
-		db.flushApplySpanNativeIneligibleSpans.Add(uint64(spans))
+		if countIneligible {
+			db.flushApplySpanNativeIneligibleSpans.Add(uint64(spans))
+		}
 		db.flushApplySpanNativeFallbackSpans[reason].Add(uint64(spans))
 	}
 	db.flushApplySpanNativeFallbacks.Add(1)
+}
+
+func (db *DB) observeFlushApplySpanNativeFallback(summary zipper.ReadOnlyLeafSpanSummary, reason FlushSpanRunFallbackReason) {
+	db.observeFlushApplySpanNativeCandidate(summary)
+	db.observeFlushApplySpanNativeFallbackAfterCandidate(summary, reason, true)
 }
 
 func classifyFlushApplySpanNativeFallback(summary zipper.ReadOnlyLeafSpanSummary, err error, validationFailure bool) FlushSpanRunFallbackReason {
