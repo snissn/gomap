@@ -64,6 +64,57 @@ This file is the sprint source of truth:
 
 ## Results / follow-ups
 
+### M5 production gate and default decision (2026-06-14)
+
+M5 consumes the merged M0-M4 parallel flush/apply stack and records the rollout decision. It does **not** ship the broad checkpoint allocation/memcopy optimization work; that work is split to M6 (#2757). The M5 decision is therefore conservative: `Options.FlushApplyConcurrency` remains opt-in/default-off and is not production-default-ready until the checkpoint gate is resolved.
+
+Predecessor state consumed by M5:
+
+| milestone | issue / PR | merge SHA | production-gate relevance |
+| --- | --- | --- | --- |
+| M0 observability | #2744 / #2750 | `1d80580679c50f7f4f60141804a39f7ce74ee2a1` | Flush/apply counters and benchprof metadata. |
+| M1 span planning | #2745 / #2751 | `7e4e5eac8df60980bf64c42808ac85a3815d5a46` | Side-effect-free read-only leaf span planning. |
+| M2 worker pool | #2746 / #2753 | `a699ada6b360358139f7a00d2a09eb52932cf07c` | Bounded opt-in COW apply worker pool; default remains off. |
+| M3 leaf-log ownership | #2747 / #2754 | `41052a22ca50a2a3597f8903a0935df41e11968a` | Prepared leaf-log output outside append lock with persistent-pointer accounting. |
+| M4 coordinator/backpressure | #2748 / #2755 | `f6a5292bacd6191a848374a38ad141fce06d9f24` | Foreground assist/yield coordination for the opt-in path. |
+
+M4 closeout evidence showed the opt-in path can remove the active-flush wait bottleneck under the parent 10M command, but this is not enough for a default-on decision:
+
+| Metric | M3 baseline | M4 opt-in | Notes |
+| --- | ---: | ---: | --- |
+| `sequential_write` | 2,724,512 ops/s | 2,594,436 ops/s | isolated M4 rerun was 2,683,525 ops/s; treat full-run cell as noisy guardrail. |
+| `batch_random` | 299,948 ops/s | 2,350,647 ops/s | active parallel flush/backpressure improvement. |
+| `random_write` | 177,997 ops/s | 1,685,212 ops/s | active parallel flush/backpressure improvement. |
+| `batch_random` block samples | 667.49s | 89.43s | bottleneck moved substantially. |
+| `batch_random` mutex samples | 49.93s | 0.68s | foreground lock contention removed on the opt-in path. |
+
+Serial/default guardrail from the same M4 evidence stayed stable because the new path is disabled unless `FlushApplyConcurrency > 1`:
+
+| Metric | M3 serial | M4 serial |
+| --- | ---: | ---: |
+| `sequential_write` | 2,620,851 ops/s | 2,728,865 ops/s |
+| `batch_random` | 390,129 ops/s | 390,717 ops/s |
+| `random_write` | 145,739 ops/s | 158,573 ops/s |
+
+Checkpoint gate status: unresolved and assigned to M6 (#2757). User checkpoint-between-tests evidence on a parallel candidate (`FlushApplyConcurrency=16`, 10M keys, `sequential_write,batch_random`, min gates all `1`, `journal-lanes=1`) reported:
+
+| Metric | Result |
+| --- | ---: |
+| `sequential_write` | 1,715,358 ops/s |
+| `batch_random` | 196,609 ops/s |
+| checkpoint before `sequential_write` | 201.53ms |
+| checkpoint before `batch_random` | 707.53ms |
+| post-run checkpoint | 48.91s |
+| final `leaf_vlog` | 1.3GiB across 80 files |
+
+M5 interpretation:
+
+- Default decision: keep `FlushApplyConcurrency <= 1` as the default serial path.
+- Production status: the parallel path is experimental/workload-specific opt-in, not a production default.
+- Rollout: before enabling, run a workload-specific matrix such as `FlushApplyConcurrency=1,2,4,8` (or hardware-appropriate values) with `-checkpoint-between-tests`, CPU/alloc/block/mutex profiles, stage counters, and final `index.db`/`leaf_vlog` footprint.
+- Rollback: set `FlushApplyConcurrency <= 1`; no data migration is required because the knob changes only in-memory apply strategy and durable leaf/value-log output remains persistent storage.
+- Blocking follow-up: M6 (#2757) owns aggressive checkpoint allocation, memcopy, memclr, and drain/merge optimization. Parent production-default readiness should not be claimed until M6 reduces or explains the post-run checkpoint cost.
+
 ### Perf server results (B560 / i5-11400F, 2026-01-27)
 
 Hardware:

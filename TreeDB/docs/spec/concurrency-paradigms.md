@@ -389,6 +389,8 @@ Notes:
 - `FlushBuildMinEntries <= 0` defaults to `16k`.
 - `FlushBuildMinUnits <= 0` defaults to `2`.
 - `FlushApplyConcurrency` is not enabled by default; when set, workers are still capped by `GOMAXPROCS` and read-only leaf-span planning.
+- M5 keeps this path opt-in/default-off. Default-on production readiness is
+  blocked on the M6 checkpoint allocation/memcopy work tracked in #2757.
 - With value-log-backed outer leaves, workers may prepare block/dict
   grouped-frame bodies outside the leaf-log append mutex, but the durable append
   stream remains serialized per leaf-log lane. Published roots install leaf-log

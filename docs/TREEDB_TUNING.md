@@ -92,7 +92,16 @@ optionally build the `SetOps` batch in parallel:
 
 ### `Options.FlushApplyConcurrency` (opt-in/default-off)
 
-`FlushApplyConcurrency > 1` enables the experimental M2 bounded worker-pool path for B-tree COW apply. It is separate from `FlushBuildConcurrency` and remains default-off. The effective worker count is capped by `GOMAXPROCS`, planned leaf-span count, and the `FlushApplyMinEntries`, `FlushApplyMinSpans`, and `FlushApplyMinBytes` gates. Leaf/value-log output remains persistent storage; failed or abandoned apply attempts do not publish roots.
+`FlushApplyConcurrency > 1` enables the experimental bounded worker-pool path for B-tree COW apply. It is separate from `FlushBuildConcurrency` and remains default-off. The effective worker count is capped by `GOMAXPROCS`, planned leaf-span count, and the `FlushApplyMinEntries`, `FlushApplyMinSpans`, and `FlushApplyMinBytes` gates. Leaf/value-log output remains persistent storage; failed or abandoned apply attempts do not publish roots, and unreachable prepared output is reclaimed only by reachability-based maintenance.
+
+Rollout guidance:
+
+- Leave the default serial path in place unless checkpoint/drain evidence for the workload justifies an opt-in value.
+- Benchmark `1,2,4,8` (or a smaller hardware-appropriate matrix) with `-checkpoint-between-tests`, allocation profiles, and storage footprint before enabling in production.
+- Roll back by setting `FlushApplyConcurrency <= 1`; no data migration is required because the option changes only the in-memory apply strategy.
+- Watch `treedb.flush_apply.*`, `treedb.cache.flush_apply.*`, `prepared_output.*`, checkpoint wall times, allocation profiles, and final `index.db`/`leaf_vlog` footprint. Regressions in write throughput, checkpoint time, allocation volume, or footprint should keep the option disabled.
+
+Known blocker: default-on production readiness is deferred to #2757, which owns checkpoint allocation, memcopy, and memclr optimization. Until that gate is resolved, treat `FlushApplyConcurrency > 1` as workload-specific and experimental.
 
 ### Read latency under flush debt (cached mode)
 
