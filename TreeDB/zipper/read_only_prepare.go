@@ -502,8 +502,12 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 				if pointWidth != pointCount {
 					return readOnlyPrepareSpanError(i, "point index range [%d,%d) does not match point count %d", span.PointOpStart, span.PointOpEnd, pointCount)
 				}
-				if prevPointEnd >= 0 && span.PointOpStart < prevPointEnd {
-					return readOnlyPrepareSpanError(i, "point index range [%d,%d) overlaps previous point end %d", span.PointOpStart, span.PointOpEnd, prevPointEnd)
+				expectedStart := 0
+				if prevPointEnd >= 0 {
+					expectedStart = prevPointEnd
+				}
+				if span.PointOpStart != expectedStart {
+					return readOnlyPrepareSpanError(i, "point index range [%d,%d) starts at %d, want %d under omit-keys planning", span.PointOpStart, span.PointOpEnd, span.PointOpStart, expectedStart)
 				}
 				prevPointEnd = span.PointOpEnd
 			} else if pointWidth > 0 {
@@ -536,6 +540,9 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 			}
 			prevHigh = span.HighKey
 		}
+	}
+	if r.OmitKeys && totalPointOps > 0 && prevPointEnd != r.PointOps {
+		return fmt.Errorf("zipper: read-only omit-keys leaf spans end at point op %d, want %d", prevPointEnd, r.PointOps)
 	}
 	if r.PointOps > 0 {
 		if totalPointOps != r.PointOps {
