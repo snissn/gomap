@@ -173,10 +173,25 @@ Where:
 Mechanisms:
 - legacy queue-length thresholds,
 - adaptive backlog-bytes thresholds based on flush throughput EWMA,
-- writer-assisted bounded flush work.
+- writer-assisted bounded flush work,
+- coordinator credits for bytes already claimed by an active flush/apply pass.
 
 Where:
 - `TreeDB/caching/db.go` (`waitForStop`, `maybeAssistFlush`, `flushSome`, `flushSomeBlocking`).
+
+Active-flush coordination:
+- flush passes publish active/in-flight/progress/error state for writer admission;
+- foreground yielding is currently scoped to the opt-in parallel apply path
+  (`FlushApplyConcurrency > 1`);
+- stop-backpressure foreground assists may yield when an active flush has already
+  claimed enough bounded in-flight bytes to bring non-claimed backlog below the
+  stop threshold. Here non-claimed backlog means
+  `max(queue_backlog_bytes - active_flush_in_flight_bytes, 0)`, and the yield is
+  currently gated by `FlushApplyConcurrency > 1`;
+- hard overload beyond active credits is counted as an explicit active-flush
+  yield in the foreground path; blocking fallback is reserved for stalled
+  `waitForStop` progress, while checkpoint/close continue to drain via
+  `flushAllLocked`.
 
 ### 3.10 Background maintenance loops
 
@@ -438,6 +453,14 @@ Key stats for concurrency/throughput diagnosis:
   - `treedb.cache.auto_checkpoint.*`.
 - flush batching:
   - `treedb.cache.stats.backend_write_batches_total`.
+- flush coordinator/backpressure:
+  - `treedb.cache.flush_apply.coordinator.active`,
+  - `treedb.cache.flush_apply.coordinator.in_flight_bytes`,
+  - `treedb.cache.flush_apply.coordinator.progress_total`,
+  - `treedb.cache.flush_apply.coordinator.active_assist_skips_total`,
+  - `treedb.cache.flush_apply.coordinator.stall_waits_total`,
+  - `treedb.cache.flush_apply.coordinator.blocking_fallbacks_total`,
+  - `treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total`.
 - backend prune:
   - `treedb.prune.*`.
 - background vacuum:
