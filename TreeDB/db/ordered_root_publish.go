@@ -2087,7 +2087,7 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 	return parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
-func runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, workers int) (zipper.ReadOnlyPrepareResult, zipper.ReadOnlyLeafSpanSummary, zipper.ReadOnlyLeafSpanWorkerRangeSummary, uint64, bool, error) {
+func runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, workers int, prepareOpts zipper.ReadOnlyPrepareOptions) (zipper.ReadOnlyPrepareResult, zipper.ReadOnlyLeafSpanSummary, zipper.ReadOnlyLeafSpanWorkerRangeSummary, uint64, bool, error) {
 	var prepared zipper.ReadOnlyPrepareResult
 	var summary zipper.ReadOnlyLeafSpanSummary
 	var workerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary
@@ -2095,7 +2095,7 @@ func runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot
 		return prepared, summary, workerSummary, 0, false, errors.New("missing ordered root zipper")
 	}
 	prepareStart := time.Now()
-	prepared, err := rootZipper.PrepareReadOnly(baseRoot, delta, zipper.ReadOnlyPrepareOptions{})
+	prepared, err := rootZipper.PrepareReadOnly(baseRoot, delta, prepareOpts)
 	prepareNs := orderedRootDeltaGroupPhaseDurationNs(prepareStart)
 	summary = prepared.LeafSpanSummary()
 	workerSummary = prepared.LeafSpanWorkerRangeSummary(workers)
@@ -2106,6 +2106,20 @@ func runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot
 		return prepared, summary, workerSummary, prepareNs, true, fmt.Errorf("treedb: invalid ordered-root read-only apply plan: %w", validationErr)
 	}
 	return prepared, summary, workerSummary, prepareNs, false, nil
+}
+
+func (db *DB) runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, workers int) (zipper.ReadOnlyLeafSpanSummary, zipper.ReadOnlyLeafSpanWorkerRangeSummary, uint64, bool, error) {
+	applyOpts := zipper.ApplyOptions{PrepareReadOnly: true, ReadOnlyPrepareWorkers: workers}
+	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
+	if prepareBuf != nil {
+		applyOpts.ReadOnlyPrepare = prepareBuf.opts
+	}
+	prepared, summary, workerSummary, prepareNs, validationFailed, err := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, baseRoot, delta, workers, applyOpts.ReadOnlyPrepare)
+	if prepareBuf != nil {
+		result := zipper.ApplyResult{ReadOnlyPrepare: prepared}
+		db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
+	}
+	return summary, workerSummary, prepareNs, validationFailed, err
 }
 
 func addOrderedRootReadOnlyPreparePhaseStats(phases *orderedRootDeltaGroupPublishPhaseStats, summary zipper.ReadOnlyLeafSpanSummary, workerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary, prepareNs uint64, err error, validationFailed bool) {
@@ -2154,7 +2168,7 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		if err != nil {
 			return err
 		}
-		_, summary, workerSummary, prepareNs, validationFailed, err := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers)
+		summary, workerSummary, prepareNs, validationFailed, err := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers)
 		addOrderedRootReadOnlyPreparePhaseStats(phaseStats, summary, workerSummary, prepareNs, err, validationFailed)
 		db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, validationFailed)
 		if err != nil {
@@ -2493,7 +2507,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			if prepErr != nil {
 				return 0, nil, prepErr
 			}
-			_, summary, workerSummary, prepareNs, validationFailed, prepErr := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[idx].BaseRoot, ordered[idx].Delta, ordered[idx].ReadOnlyPrepareWorkers)
+			summary, workerSummary, prepareNs, validationFailed, prepErr := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[idx].BaseRoot, ordered[idx].Delta, ordered[idx].ReadOnlyPrepareWorkers)
 			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, summary, workerSummary, prepareNs, prepErr, validationFailed)
 			db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, prepErr, validationFailed)
 			if prepErr != nil {
@@ -2683,7 +2697,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			if prepErr != nil {
 				return 0, nil, prepErr
 			}
-			_, summary, workerSummary, prepareNs, validationFailed, prepErr := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, allOrdered[idx].BaseRoot, allOrdered[idx].Delta, allOrdered[idx].ReadOnlyPrepareWorkers)
+			summary, workerSummary, prepareNs, validationFailed, prepErr := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, allOrdered[idx].BaseRoot, allOrdered[idx].Delta, allOrdered[idx].ReadOnlyPrepareWorkers)
 			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, summary, workerSummary, prepareNs, prepErr, validationFailed)
 			db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, prepErr, validationFailed)
 			if prepErr != nil {

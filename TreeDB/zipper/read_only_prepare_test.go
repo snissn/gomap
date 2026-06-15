@@ -101,6 +101,48 @@ func TestZipperPrepareReadOnlyEmptyBatchDoesNotTraverse(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPrepareResultResetForReuseKeepsBoundedBuffers(t *testing.T) {
+	bounded := ReadOnlyPrepareResult{
+		LeafSpans: make([]ReadOnlyLeafSpan, 3, readOnlyPrepareResultReuseLeafSpanKeepCap),
+		keyArena:  make([]byte, 7, readOnlyPrepareResultReuseKeyArenaKeepCap),
+	}
+	bounded.ResetForReuse()
+	if len(bounded.LeafSpans) != 0 || cap(bounded.LeafSpans) != readOnlyPrepareResultReuseLeafSpanKeepCap {
+		t.Fatalf("bounded leaf spans len/cap=%d/%d", len(bounded.LeafSpans), cap(bounded.LeafSpans))
+	}
+	if len(bounded.keyArena) != 0 || cap(bounded.keyArena) != readOnlyPrepareResultReuseKeyArenaKeepCap {
+		t.Fatalf("bounded key arena len/cap=%d/%d", len(bounded.keyArena), cap(bounded.keyArena))
+	}
+
+	oversized := ReadOnlyPrepareResult{
+		LeafSpans: make([]ReadOnlyLeafSpan, 1, readOnlyPrepareResultReuseLeafSpanKeepCap+1),
+		keyArena:  make([]byte, 1, readOnlyPrepareResultReuseKeyArenaKeepCap+1),
+	}
+	oversized.ResetForReuse()
+	if oversized.LeafSpans != nil || oversized.keyArena != nil {
+		t.Fatalf("oversized buffers retained: leaf cap=%d key cap=%d", cap(oversized.LeafSpans), cap(oversized.keyArena))
+	}
+}
+
+func TestReadOnlyPrepareResultEnsureInitialCapacityPresizesBoundedBuffers(t *testing.T) {
+	ops := make([]batch.Entry, 128)
+	var r ReadOnlyPrepareResult
+	r.ensureInitialCapacity(ops, nil)
+	if cap(r.LeafSpans) != len(ops) {
+		t.Fatalf("leaf span cap=%d want %d", cap(r.LeafSpans), len(ops))
+	}
+	if cap(r.keyArena) != len(ops)*32 {
+		t.Fatalf("key arena cap=%d want %d", cap(r.keyArena), len(ops)*32)
+	}
+
+	ops = make([]batch.Entry, readOnlyPrepareResultReuseLeafSpanKeepCap+100)
+	r = ReadOnlyPrepareResult{}
+	r.ensureInitialCapacity(ops, nil)
+	if cap(r.LeafSpans) != readOnlyPrepareResultReuseLeafSpanKeepCap {
+		t.Fatalf("capped leaf span cap=%d want %d", cap(r.LeafSpans), readOnlyPrepareResultReuseLeafSpanKeepCap)
+	}
+}
+
 func TestZipperPrepareReadOnlyColdAndSingleLeafPlans(t *testing.T) {
 	cold := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = cold.Close() }()

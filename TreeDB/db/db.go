@@ -340,6 +340,9 @@ type DB struct {
 	flushApplyMinBytes    int
 	flushApplyWorkerPool  *zipper.ApplyWorkerPool
 
+	flushApplyReadOnlyPrepareMu   sync.Mutex
+	flushApplyReadOnlyPrepareFree []*flushApplyReadOnlyPrepareBuffer
+
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
 	systemRootWarmPublishAttempts         atomic.Uint64
