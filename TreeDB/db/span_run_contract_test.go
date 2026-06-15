@@ -1,6 +1,11 @@
 package db
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/batch"
+)
 
 func TestFlushSpanRunFallbackReasonStringsAreStable(t *testing.T) {
 	want := map[FlushSpanRunFallbackReason]string{
@@ -129,6 +134,77 @@ func TestValidateFlushSpanRunMetadataCoversShadowingAndBarriers(t *testing.T) {
 	badChunkIndex.BackendChunks[1].ChunkIndex = 0
 	if err := ValidateFlushSpanRunMetadata(badChunkIndex); err == nil {
 		t.Fatalf("metadata with duplicate chunk index passed validation")
+	}
+}
+
+func TestPlanFlushSpanRunCapturesTargetLeafMetadata(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	seed := d.NewBatch()
+	for i := 0; i < 512; i++ {
+		if err := seed.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte("seed")); err != nil {
+			t.Fatalf("seed set %d: %v", i, err)
+		}
+	}
+	if err := seed.WriteSync(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("seed close: %v", err)
+	}
+
+	ops := []batch.Entry{
+		{Type: batch.OpPut, Key: []byte("key-000010"), Value: []byte("new")},
+		{Type: batch.OpDelete, Key: []byte("key-000300")},
+	}
+	meta, err := d.PlanFlushSpanRun(FlushSpanRunPlanRequest{
+		SourceMemtables:  2,
+		SourcePointOps:   3,
+		PlannedPointOps:  len(ops),
+		ShadowedPointOps: 1,
+		PointOps:         ops,
+	})
+	if err != nil {
+		t.Fatalf("PlanFlushSpanRun: %v", err)
+	}
+	if meta.BaseRoot.CapturedRootID == 0 || !meta.BaseRoot.Matched {
+		t.Fatalf("base root not captured: %+v", meta.BaseRoot)
+	}
+	if got := len(meta.TargetLeafSpans); got == 0 {
+		t.Fatalf("target leaf spans empty: %+v", meta)
+	}
+	if err := ValidateFlushSpanRunMetadata(meta); err != nil {
+		t.Fatalf("metadata validation: %v", err)
+	}
+	sawPointSpan := false
+	for _, span := range meta.TargetLeafSpans {
+		if span.PointOpEnd <= span.PointOpStart {
+			continue
+		}
+		sawPointSpan = true
+		if len(span.FirstOpKey) == 0 || len(span.LastOpKey) == 0 {
+			t.Fatalf("exact PlanFlushSpanRun omitted point key bounds: %+v", span)
+		}
+	}
+	if !sawPointSpan {
+		t.Fatalf("PlanFlushSpanRun produced no point spans: %+v", meta.TargetLeafSpans)
+	}
+
+	chunkPlan, err := d.PlanFlushSpanRunChunks(FlushSpanRunPlanRequest{
+		SourceMemtables:  2,
+		SourcePointOps:   3,
+		PlannedPointOps:  len(ops),
+		ShadowedPointOps: 1,
+		PointOps:         ops,
+	}, 1)
+	if err != nil {
+		t.Fatalf("PlanFlushSpanRunChunks: %v", err)
+	}
+	if chunkPlan.TargetLeafSpans == 0 || chunkPlan.SpanOps == 0 || len(chunkPlan.BackendChunks) == 0 {
+		t.Fatalf("empty chunk plan: %+v", chunkPlan)
 	}
 }
 

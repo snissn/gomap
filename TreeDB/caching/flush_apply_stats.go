@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func addCacheDurationNs(dst interface{ Add(uint64) uint64 }, d time.Duration) {
@@ -160,6 +162,49 @@ func (db *DB) observeFlushSpanRunBackendChunks(chunks int) {
 		return
 	}
 	db.flushSpanRunBackendChunks.Add(uint64(chunks))
+}
+
+func (db *DB) observeFlushSpanRunTargetLeafSpans(spans []backenddb.FlushSpanRunTargetLeafSpan, splitSummary backenddb.FlushSpanRunChunkSplitSummary) {
+	if db == nil {
+		return
+	}
+	targetLeafSpans := len(spans)
+	singleOpSpans := 0
+	spanOps := 0
+	spanBytes := 0
+	for i := range spans {
+		span := spans[i]
+		spanOps += span.OpCount
+		spanBytes += span.ByteCount
+		if span.OpCount == 1 {
+			singleOpSpans++
+		}
+	}
+	db.observeFlushSpanRunTargetLeafSpanSummary(targetLeafSpans, singleOpSpans, spanOps, spanBytes, splitSummary)
+}
+
+func (db *DB) observeFlushSpanRunTargetLeafSpanSummary(targetLeafSpans, singleOpSpans, spanOps, spanBytes int, splitSummary backenddb.FlushSpanRunChunkSplitSummary) {
+	if db == nil {
+		return
+	}
+	if targetLeafSpans > 0 {
+		db.flushSpanRunTargetLeafSpans.Add(uint64(targetLeafSpans))
+	}
+	if singleOpSpans > 0 {
+		db.flushSpanRunSingleOpSpans.Add(uint64(singleOpSpans))
+	}
+	if spanOps > 0 {
+		db.flushSpanRunSpanOps.Add(uint64(spanOps))
+	}
+	if spanBytes > 0 {
+		db.flushSpanRunSpanBytes.Add(uint64(spanBytes))
+	}
+	if splitSummary.TargetLeavesSplitAcrossChunks > 0 {
+		db.flushSpanRunTargetLeavesSplitAcrossChunks.Add(uint64(splitSummary.TargetLeavesSplitAcrossChunks))
+	}
+	if splitSummary.MaxChunksPerTargetLeaf > 0 {
+		updateAtomicMaxUint64(&db.flushSpanRunMaxChunksPerTargetLeaf, uint64(splitSummary.MaxChunksPerTargetLeaf))
+	}
 }
 
 func (db *DB) observeCheckpointActiveBackgroundFlushWait(wait time.Duration) {
@@ -346,6 +391,21 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	stats["treedb.cache.flush_span_run.range_barriers_total"] = fmt.Sprintf("%d", db.flushSpanRunRangeBarriers.Load())
 	stats["treedb.cache.flush_span_run.range_delete_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunRangeDeleteOps.Load())
 	stats["treedb.cache.flush_span_run.backend_chunks_total"] = fmt.Sprintf("%d", db.flushSpanRunBackendChunks.Load())
+	targetLeafSpans := db.flushSpanRunTargetLeafSpans.Load()
+	singleOpSpans := db.flushSpanRunSingleOpSpans.Load()
+	spanOps := db.flushSpanRunSpanOps.Load()
+	spanBytes := db.flushSpanRunSpanBytes.Load()
+	stats["treedb.cache.flush_span_run.target_leaf_spans_total"] = fmt.Sprintf("%d", targetLeafSpans)
+	stats["treedb.cache.flush_span_run.single_op_spans_total"] = fmt.Sprintf("%d", singleOpSpans)
+	stats["treedb.cache.flush_span_run.span_ops_total"] = fmt.Sprintf("%d", spanOps)
+	stats["treedb.cache.flush_span_run.span_bytes_total"] = fmt.Sprintf("%d", spanBytes)
+	stats["treedb.cache.flush_span_run.target_leaves_split_across_chunks_total"] = fmt.Sprintf("%d", db.flushSpanRunTargetLeavesSplitAcrossChunks.Load())
+	stats["treedb.cache.flush_span_run.max_chunks_per_target_leaf"] = fmt.Sprintf("%d", db.flushSpanRunMaxChunksPerTargetLeaf.Load())
+	if targetLeafSpans > 0 {
+		stats["treedb.cache.flush_span_run.ops_per_span"] = fmt.Sprintf("%.6f", float64(spanOps)/float64(targetLeafSpans))
+		stats["treedb.cache.flush_span_run.bytes_per_span"] = fmt.Sprintf("%.6f", float64(spanBytes)/float64(targetLeafSpans))
+		stats["treedb.cache.flush_span_run.single_op_span_ratio"] = fmt.Sprintf("%.6f", float64(singleOpSpans)/float64(targetLeafSpans))
+	}
 	if runs := db.flushSpanRunRuns.Load(); runs > 0 {
 		stats["treedb.cache.flush_span_run.ops_per_run"] = fmt.Sprintf("%.6f", float64(db.flushSpanRunPlannedOps.Load())/float64(runs))
 	}

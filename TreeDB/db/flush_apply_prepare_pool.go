@@ -39,19 +39,28 @@ func (db *DB) clearFlushApplyReadOnlyPrepareBuffers() {
 }
 
 func (db *DB) releaseFlushApplyReadOnlyPrepareBuffer(buf *flushApplyReadOnlyPrepareBuffer, result *zipper.ApplyResult) {
+	if result == nil {
+		db.releaseFlushApplyReadOnlyPreparePlanBuffer(buf, nil)
+		return
+	}
+	prepared := result.ReadOnlyPrepare
+	db.releaseFlushApplyReadOnlyPreparePlanBuffer(buf, &prepared)
+	// Drop the caller's reference to buffers that may now be reused by a later
+	// apply attempt. Callers must observe any read-only prepare stats before
+	// returning the buffer.
+	result.ReadOnlyPrepare = zipper.ReadOnlyPrepareResult{}
+}
+
+func (db *DB) releaseFlushApplyReadOnlyPreparePlanBuffer(buf *flushApplyReadOnlyPrepareBuffer, prepared *zipper.ReadOnlyPrepareResult) {
 	if db == nil || buf == nil {
 		return
 	}
-	if result == nil {
+	if prepared == nil {
 		buf.opts = zipper.ReadOnlyPrepareOptions{}
 	} else {
-		prepared := result.ReadOnlyPrepare
 		prepared.ResetForReuse()
 		buf.opts = prepared.ReuseOptions()
-		// Drop the caller's reference to buffers that may now be reused by a later
-		// apply attempt. Callers must observe any read-only prepare stats before
-		// returning the buffer.
-		result.ReadOnlyPrepare = zipper.ReadOnlyPrepareResult{}
+		*prepared = zipper.ReadOnlyPrepareResult{}
 	}
 	db.flushApplyReadOnlyPrepareMu.Lock()
 	if len(db.flushApplyReadOnlyPrepareFree) < flushApplyReadOnlyPrepareBufferKeep {

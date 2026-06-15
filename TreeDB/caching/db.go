@@ -7308,6 +7308,12 @@ type Options struct {
 	// 0 uses the internal default. Negative disables the cap.
 	FlushBackendMaxBatches int
 
+	// FlushSpanRunTargetPlanning enables diagnostic read-only target-leaf planning
+	// for canonical flush runs. It is default-off because the extra root traversal
+	// is not part of the M9 default write path; M10+ can use the same backend
+	// planner when span-native execution consumes target spans.
+	FlushSpanRunTargetPlanning bool
+
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
 	// JournalLanes controls the number of active commit/value log lanes
@@ -7866,6 +7872,7 @@ type DB struct {
 	flushBackendMaxEntries                            int
 	flushBackendInitEntries                           int
 	flushBackendMaxBatches                            int
+	flushSpanRunTargetPlanning                        bool
 	walMaxSegmentBytes                                int64
 	valueLogMaxSegmentBytes                           int64
 	journalCompression                                bool
@@ -7932,6 +7939,12 @@ type DB struct {
 	flushSpanRunRangeBarriers                                    atomic.Uint64
 	flushSpanRunRangeDeleteOps                                   atomic.Uint64
 	flushSpanRunBackendChunks                                    atomic.Uint64
+	flushSpanRunTargetLeafSpans                                  atomic.Uint64
+	flushSpanRunSingleOpSpans                                    atomic.Uint64
+	flushSpanRunSpanOps                                          atomic.Uint64
+	flushSpanRunSpanBytes                                        atomic.Uint64
+	flushSpanRunTargetLeavesSplitAcrossChunks                    atomic.Uint64
+	flushSpanRunMaxChunksPerTargetLeaf                           atomic.Uint64
 	flushCoordinatorActive                                       atomic.Int64
 	flushCoordinatorInFlightBytes                                atomic.Int64
 	flushCoordinatorProgress                                     atomic.Uint64
@@ -10771,6 +10784,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBackendMaxEntries:               opts.FlushBackendMaxEntries,
 		flushBackendInitEntries:              flushBackendInitEntries,
 		flushBackendMaxBatches:               opts.FlushBackendMaxBatches,
+		flushSpanRunTargetPlanning:           opts.FlushSpanRunTargetPlanning,
 		walMaxSegmentBytes:                   opts.WALMaxSegmentBytes,
 		valueLogMaxSegmentBytes:              valueLogMaxSegmentBytes,
 		journalCompression:                   opts.JournalCompression,
@@ -24231,27 +24245,15 @@ func (db *DB) pickFlushLane() (int, bool) {
 	if laneCount == 0 {
 		laneCount = 1
 	}
-	counts := make([]int, laneCount)
-	for i := range db.queue {
-		laneID := 0
-		if i < len(db.queueLaneIDs) {
-			laneID = int(db.queueLaneIDs[i])
-		}
-		if laneID < 0 || laneID >= laneCount {
-			laneID = 0
-		}
-		counts[laneID]++
+	laneID := 0
+	if len(db.queueLaneIDs) > 0 {
+		laneID = int(db.queueLaneIDs[0])
 	}
-	bestLane := 0
-	bestCount := 0
-	for laneID, count := range counts {
-		if count > bestCount {
-			bestCount = count
-			bestLane = laneID
-		}
+	if laneID < 0 || laneID >= laneCount {
+		laneID = 0
 	}
 	db.mu.RUnlock()
-	return bestLane, true
+	return laneID, true
 }
 
 func (db *DB) flushAll(reqSync bool) {
@@ -24465,10 +24467,10 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		}
 		if laneID >= 0 {
 			if unitLaneID != laneID {
-				if hasSpans || spanOnly {
-					break
-				}
-				continue
+				// Lane IDs are ordering barriers for canonical M9 flush runs. Do not
+				// skip over a queued unit from another lane to collect newer same-lane
+				// work; the next flush pass can collect once the global prefix drains.
+				break
 			}
 		} else if !spanOnly && i >= maxMemtables {
 			break
@@ -24687,12 +24689,14 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		db.observeFlushApplyBuild(time.Since(buildStart))
 		commandPublishAttached := false
 		if pending > 0 {
-			var attachErr error
-			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
-			if attachErr != nil {
-				db.reportError(attachErr)
-				_ = backendBatch.Close()
-				return false
+			if commandPublish != nil {
+				var attachErr error
+				commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+				if attachErr != nil {
+					db.reportError(attachErr)
+					_ = backendBatch.Close()
+					return false
+				}
 			}
 			db.rangeSpanFlushBatches.Add(1)
 			db.backendWriteBatchesTotal.Add(1)
@@ -24736,780 +24740,11 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		return true
 	}
 
-	backendEntriesCap := db.flushBackendEntriesCap(totalLen+totalSpans, sync)
-
-	useParallel := totalSpans == 0 &&
-		db.flushBuildConcurrency > 1 &&
-		totalLen >= db.flushBuildMinEntries &&
-		len(units) >= db.flushBuildMinUnits &&
-		runtime.GOMAXPROCS(0) > 1
-
-	if useParallel && !db.deferredValueLogEnabled() {
-		buildStart := time.Now()
-		chunkCap := db.flushBuildChunkCap
-		if chunkCap < 0 {
-			chunkCap = 8192
-		}
-
-		type buildResult struct {
-			idx       int
-			runs      [][]batch.Entry
-			deleteOps int
-			err       error
-		}
-
-		jobs := make(chan int, len(units))
-		results := make(chan buildResult, len(units))
-		closeCh := db.closeCh
-
-		for i := range units {
-			jobs <- i
-		}
-		close(jobs)
-
-		workers := db.flushBuildConcurrency
-		if workers <= 0 {
-			workers = 1
-		}
-		if db.flushBuildAutoConcurrency && totalLen > 0 {
-			// Small inline-heavy entries are typically memory-copy bound; high
-			// worker counts can over-parallelize and add scheduler overhead.
-			// Keep wider concurrency for larger entries where per-entry work is
-			// heavier (pointer/value encoding and compression).
-			bytesPerEntry := totalBytes / int64(totalLen)
-			switch {
-			case bytesPerEntry <= 64:
-				if workers > 4 {
-					workers = 4
-				}
-			case bytesPerEntry <= 256:
-				if workers > 6 {
-					workers = 6
-				}
-			}
-		}
-		if workers > len(units) {
-			workers = len(units)
-		}
-
-		done := make(chan struct{}, workers)
-		for w := 0; w < workers; w++ {
-			go func() {
-				defer func() { done <- struct{}{} }()
-				for idx := range jobs {
-					select {
-					case <-closeCh:
-						results <- buildResult{idx: idx, err: errDBClosing}
-						continue
-					default:
-					}
-					runs, deleteOps, err := buildOpRuns(units[idx].mem, chunkCap)
-					results <- buildResult{idx: idx, runs: runs, deleteOps: deleteOps, err: err}
-				}
-			}()
-		}
-
-		go func() {
-			for i := 0; i < workers; i++ {
-				<-done
-			}
-			close(results)
-		}()
-
-		unitRuns := getUnitRuns(len(units))
-		defer func() {
-			for i := range unitRuns {
-				for _, run := range unitRuns[i] {
-					putEntrySlice(run)
-				}
-				putEntryRuns(unitRuns[i])
-			}
-			putUnitRuns(unitRuns)
-		}()
-		unitDeleteOps := make([]int, len(units))
-		failed := false
-		for res := range results {
-			if res.err != nil {
-				if !failed {
-					db.reportError(fmt.Errorf("cachingdb: flush build failed: %w", res.err))
-				}
-				failed = true
-				for _, run := range res.runs {
-					putEntrySlice(run)
-				}
-				putEntryRuns(res.runs)
-				continue
-			}
-			if failed {
-				for _, run := range res.runs {
-					putEntrySlice(run)
-				}
-				putEntryRuns(res.runs)
-				continue
-			}
-			unitRuns[res.idx] = res.runs
-			unitDeleteOps[res.idx] = res.deleteOps
-		}
-		if failed {
-			return false
-		}
-		db.observeFlushApplyBuild(time.Since(buildStart))
-		buildStart = time.Now()
-
-		// Adaptive micro-batching: delete-heavy flushes are expensive to apply in
-		// many intermediate commits (each commit re-writes leaf pages, copying
-		// surviving values). Count deletes and tighten the commit cap in that case.
-		deleteOps := 0
-		for _, n := range unitDeleteOps {
-			deleteOps += n
-		}
-		backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
-
-		reserveChunkOps := totalLen
-		if reserveChunkOps > backendEntriesCap {
-			reserveChunkOps = backendEntriesCap
-		}
-		sizeHint := reserveChunkOps
-		backendBatch := db.newBackendBatchWithSize(sizeHint)
-		reserveBackendBatchOps(backendBatch, reserveChunkOps)
-		flushStart := time.Now()
-		vlogFlushed := false
-		backendPendingOps := 0
-		chunkBackend := totalLen > backendEntriesCap
-		emittedChunk := false
-
-		sv, _ := backendBatch.(backendBatchSetViewer)
-		dv, _ := backendBatch.(backendBatchDeleteViewer)
-		psv, _ := backendBatch.(backendBatchPointerSetterView)
-		ps, _ := backendBatch.(backendBatchPointerSetter)
-		var single [1]batch.Entry
-
-		// Best-effort: ensure value-log bytes are flushed before we start committing
-		// pointers into the index when we expect to emit multiple backend commits.
-		if chunkBackend && db.valueLogEnabled() && !vlogFlushed {
-			if err := db.flushValueLog(laneID); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
-				_ = backendBatch.Close()
-				return false
-			}
-			vlogFlushed = true
-			buildStart = time.Now()
-		}
-
-		flushBackendChunk := func() error {
-			if !chunkBackend || backendPendingOps < backendEntriesCap {
-				return nil
-			}
-			emittedChunk = true
-			db.backendWriteBatchesTotal.Add(1)
-			db.observeFlushSpanRunBackendChunks(1)
-			// If sync==true, we only need a single durability boundary at the end of
-			// the flush. Write the intermediate chunks without fsync to avoid
-			// repeated pager sync work.
-			db.observeFlushApplyBuild(time.Since(buildStart))
-			writeStart := time.Now()
-			err := backendBatch.Write()
-			db.observeFlushApplyBackendWrite(time.Since(writeStart))
-			buildStart = time.Now()
-			cerr := backendBatch.Close()
-			if err == nil {
-				err = cerr
-			}
-			if err != nil {
-				return err
-			}
-			backendBatch = db.newBackendBatchWithSize(sizeHint)
-			reserveBackendBatchOps(backendBatch, reserveChunkOps)
-			sv, _ = backendBatch.(backendBatchSetViewer)
-			dv, _ = backendBatch.(backendBatchDeleteViewer)
-			psv, _ = backendBatch.(backendBatchPointerSetterView)
-			ps, _ = backendBatch.(backendBatchPointerSetter)
-			backendPendingOps = 0
-			return nil
-		}
-
-		heap := getOpMergeHeap(len(unitRuns))
-		defer func() { putOpMergeHeap(heap) }()
-		for i := range unitRuns {
-			if len(unitRuns[i]) == 0 {
-				continue
-			}
-			it := newOpRunIter(unitRuns[i])
-			if it.Valid() {
-				priority := len(unitRuns) - 1 - i
-				heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
-			}
-		}
-		for i := len(heap)/2 - 1; i >= 0; i-- {
-			(&heap).down(i, len(heap))
-		}
-
-		shadowedOps := 0
-		appliedOps := 0
-		for len(heap) > 0 {
-			top := heap.pop()
-			currentKey := top.key
-
-			for len(heap) > 0 {
-				next := heap.peek()
-				if next != nil && bytes.Equal(next.key, currentKey) {
-					shadowed := heap.pop()
-					shadowedOps++
-					shadowed.iter.Next()
-					if shadowed.iter.Valid() {
-						shadowed.key = shadowed.iter.Key()
-						heap.push(shadowed)
-					}
-					continue
-				}
-				break
-			}
-
-			entry := top.iter.Entry()
-			var (
-				err     error
-				applied bool
-			)
-			switch {
-			case entry.Type == batch.OpDelete:
-				if dv != nil {
-					err = dv.DeleteView(entry.Key)
-				} else {
-					err = backendBatch.Delete(entry.Key)
-				}
-				applied = true
-			case entry.IsPtr:
-				if psv != nil {
-					err = psv.SetPointerView(entry.Key, entry.ValuePtr)
-				} else if ps != nil {
-					err = ps.SetPointer(entry.Key, entry.ValuePtr)
-				} else {
-					single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: entry.ValuePtr, IsPtr: true}
-					err = backendBatch.SetOps(single[:])
-				}
-				applied = true
-			default:
-				if sv != nil {
-					err = sv.SetView(entry.Key, entry.Value)
-				} else {
-					err = backendBatch.Set(entry.Key, entry.Value)
-				}
-				applied = true
-			}
-			if err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-				_ = backendBatch.Close()
-				return false
-			}
-			if applied {
-				backendPendingOps++
-				appliedOps++
-				if err := flushBackendChunk(); err != nil {
-					db.reportError(err)
-					_ = backendBatch.Close()
-					return false
-				}
-			}
-
-			top.iter.Next()
-			if top.iter.Valid() {
-				top.key = top.iter.Key()
-				heap.push(top)
-			}
-		}
-		if shadowedOps > 0 {
-			flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
-			flushMergeParallelShadowedOpsTotal.Add(uint64(shadowedOps))
-			db.observeFlushSpanRunShadowedOps(shadowedOps)
-		}
-		if appliedOps > 0 {
-			flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
-			flushMergeParallelAppliedOpsTotal.Add(uint64(appliedOps))
-		}
-		db.observeFlushSpanRunPlannedOps(appliedOps, totalSpans)
-		db.observeFlushApplyBuild(time.Since(buildStart))
-
-		if db.valueLogEnabled() {
-			if !vlogFlushed {
-				if err := db.flushValueLog(laneID); err != nil {
-					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
-					_ = backendBatch.Close()
-					return false
-				}
-				vlogFlushed = true
-			}
-			if sync && !db.relaxedSync {
-				if err := db.syncValueLog(laneID); err != nil {
-					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
-					_ = backendBatch.Close()
-					return false
-				}
-			}
-		}
-
-		var err error
-		commandPublishAttached := false
-		if backendPendingOps > 0 {
-			var attachErr error
-			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
-			if attachErr != nil {
-				db.reportError(attachErr)
-				_ = backendBatch.Close()
-				return false
-			}
-			db.backendWriteBatchesTotal.Add(1)
-			db.observeFlushSpanRunBackendChunks(1)
-			writeStart := time.Now()
-			if sync {
-				err = backendBatch.WriteSync()
-			} else {
-				err = backendBatch.Write()
-			}
-			db.observeFlushApplyBackendWrite(time.Since(writeStart))
-		} else if sync && emittedChunk {
-			var attachErr error
-			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
-			if attachErr != nil {
-				db.reportError(attachErr)
-				_ = backendBatch.Close()
-				return false
-			}
-			// If we emitted intermediate chunks and happened to land exactly on a
-			// chunk boundary, force a single durability boundary at the end.
-			db.backendWriteBatchesTotal.Add(1)
-			writeStart := time.Now()
-			err = backendBatch.WriteSync()
-			db.observeFlushApplyBackendWrite(time.Since(writeStart))
-		}
-		cerr := backendBatch.Close()
-		if err == nil {
-			err = cerr
-		}
-		if err != nil {
-			db.reportError(err)
-			return false
-		}
-		if commandPublishAttached {
-			commandPublish.consumed = true
-			db.commandWALCheckpointPublishPiggybacked.Add(1)
-		}
-
-		db.mu.Lock()
-		removeIDs := make(map[uint64]struct{}, len(ids))
-		for _, id := range ids {
-			removeIDs[id] = struct{}{}
-		}
-		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
-
-		deletable := make([]string, 0, len(units))
-		if sync {
-			inUse := make(map[string]struct{})
-			for _, path := range db.currentWALPaths() {
-				inUse[path] = struct{}{}
-			}
-			for _, paths := range db.queueWALPaths {
-				for _, path := range paths {
-					inUse[path] = struct{}{}
-				}
-			}
-			seen := make(map[string]struct{})
-			for _, unit := range units {
-				for _, walPath := range unit.walPaths {
-					if walPath == "" {
-						continue
-					}
-					if _, ok := inUse[walPath]; ok {
-						continue
-					}
-					if _, ok := seen[walPath]; ok {
-						continue
-					}
-					if db.valueLogRetained(walPath) {
-						continue
-					}
-					seen[walPath] = struct{}{}
-					deletable = append(deletable, walPath)
-				}
-			}
-		}
-		db.mu.Unlock()
-		removed := false
-		for _, walPath := range deletable {
-			db.dropValueLogSegment(walPath)
-			if err := db.removeFileRetry(walPath); err != nil {
-				continue
-			}
-			removed = true
-			db.mu.Lock()
-			db.untrackWALSegmentLocked(walPath)
-			db.mu.Unlock()
-			db.forgetValueLogRetain(walPath)
-		}
-		if removed {
-			db.syncDirBestEffort(db.dir)
-		}
-		db.checkValueLogRetention()
-
-		flushDur := time.Since(flushStart)
-		if flushDur > 0 && totalBytes > 0 {
-			sample := float64(totalBytes) / flushDur.Seconds()
-			db.bpMu.Lock()
-			if db.flushBpsEWMA <= 0 {
-				db.flushBpsEWMA = sample
-			} else {
-				db.flushBpsEWMA = 0.9*db.flushBpsEWMA + 0.1*sample
-			}
-			db.bpCond.Broadcast()
-			db.bpMu.Unlock()
-		}
+	pointFlushed := db.flushCanonicalPointUnits(sync, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans)
+	if pointFlushed {
 		flushSuccess = true
-		return true
 	}
-
-	reserveChunkOps := totalLen
-	if reserveChunkOps > backendEntriesCap {
-		reserveChunkOps = backendEntriesCap
-	}
-	sizeHint := reserveChunkOps
-	backendBatch := db.newBackendBatchWithSize(sizeHint)
-	reserveBackendBatchOps(backendBatch, reserveChunkOps)
-	flushStart := time.Now()
-	buildStart := time.Now()
-	vlogFlushed := false
-	backendPendingOps := 0
-	// When flushing a large combined batch, commit intermediate backend batches
-	// to reduce peak allocator demand (and thus index.db high-watermark growth)
-	// under small KeepRecent windows.
-	chunkBackend := totalLen > backendEntriesCap
-	emittedChunk := false
-
-	// backendBatch := db.backend.NewBatch() // Original line, now replaced
-	if db.deferredValueLogEnabled() {
-		pendingOps, err := db.flushDeferredValueLogUnits(units, backendBatch, sync, laneID)
-		if err != nil {
-			db.reportError(err)
-			_ = backendBatch.Close()
-			return false
-		}
-		backendPendingOps = pendingOps
-		db.observeFlushSpanRunPlannedOps(pendingOps, totalSpans)
-	} else {
-		sv, _ := backendBatch.(backendBatchSetViewer)
-		dv, _ := backendBatch.(backendBatchDeleteViewer)
-		psv, _ := backendBatch.(backendBatchPointerSetterView)
-		ps, _ := backendBatch.(backendBatchPointerSetter)
-		var single [1]batch.Entry
-
-		// Best-effort: ensure value-log bytes are flushed before we start committing
-		// pointers into the index when we expect to emit multiple backend commits.
-		// This preserves the relative ordering while still allowing us to amortize
-		// the durability boundary to the final commit when sync==true.
-		if chunkBackend && db.valueLogEnabled() && !vlogFlushed {
-			if err := db.flushValueLog(laneID); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
-				_ = backendBatch.Close()
-				return false
-			}
-			vlogFlushed = true
-			buildStart = time.Now()
-		}
-
-		flushBackendChunk := func() error {
-			if !chunkBackend || backendPendingOps < backendEntriesCap {
-				return nil
-			}
-
-			emittedChunk = true
-			db.backendWriteBatchesTotal.Add(1)
-			db.observeFlushSpanRunBackendChunks(1)
-			// If sync==true, we only need a single durability boundary at the end of
-			// the flush. Write the intermediate chunks without fsync to avoid
-			// repeated pager sync work.
-			db.observeFlushApplyBuild(time.Since(buildStart))
-			writeStart := time.Now()
-			err := backendBatch.Write()
-			db.observeFlushApplyBackendWrite(time.Since(writeStart))
-			buildStart = time.Now()
-			cerr := backendBatch.Close()
-			if err == nil {
-				err = cerr
-			}
-			if err != nil {
-				return err
-			}
-			backendBatch = db.newBackendBatchWithSize(sizeHint)
-			reserveBackendBatchOps(backendBatch, reserveChunkOps)
-			sv, _ = backendBatch.(backendBatchSetViewer)
-			dv, _ = backendBatch.(backendBatchDeleteViewer)
-			psv, _ = backendBatch.(backendBatchPointerSetterView)
-			ps, _ = backendBatch.(backendBatchPointerSetter)
-			backendPendingOps = 0
-			return nil
-		}
-		for _, unit := range units {
-			stableUnsafe := stableUnsafeIteratorSlices(unit.mem)
-			iter := unit.mem.NewIterator(nil, nil)
-			for iter.Valid() {
-				key := iter.UnsafeKey()
-				val, ptr, flags := iter.UnsafeEntry()
-				if flags&node.FlagTombstone != 0 {
-					var err error
-					if stableUnsafe && dv != nil {
-						err = dv.DeleteView(key)
-					} else {
-						err = backendBatch.Delete(key)
-					}
-					if err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
-					backendPendingOps++
-					if err := flushBackendChunk(); err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
-				} else if flags&node.FlagPointer != 0 {
-					if stableUnsafe && psv != nil {
-						if err := psv.SetPointerView(key, ptr); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-					} else if ps != nil {
-						if err := ps.SetPointer(key, ptr); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-					} else {
-						if psl, ok := backendBatch.(backendBatchPointerSetter); ok {
-							if err := psl.SetPointer(key, ptr); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
-							}
-						} else {
-							entryKey := key
-							if !stableUnsafe {
-								entryKey = append([]byte(nil), key...)
-							}
-							single[0] = batch.Entry{Type: batch.OpPut, Key: entryKey, ValuePtr: ptr, IsPtr: true}
-							if err := backendBatch.SetOps(single[:]); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
-							}
-						}
-					}
-					backendPendingOps++
-					if err := flushBackendChunk(); err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
-				} else {
-					var err error
-					if stableUnsafe && sv != nil {
-						err = sv.SetView(key, val)
-					} else {
-						err = backendBatch.Set(key, val)
-					}
-					if err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
-					backendPendingOps++
-					if err := flushBackendChunk(); err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
-				}
-				iter.Next()
-			}
-			if err := iter.Error(); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
-				_ = iter.Close()
-				_ = backendBatch.Close()
-				return false
-			}
-			if err := iter.Close(); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
-				_ = backendBatch.Close()
-				return false
-			}
-		}
-		db.observeFlushSpanRunPlannedOps(totalLen, totalSpans)
-	}
-	db.observeFlushApplyBuild(time.Since(buildStart))
-
-	if db.valueLogEnabled() {
-		if !vlogFlushed {
-			if err := db.flushValueLog(laneID); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
-				_ = backendBatch.Close()
-				return false
-			}
-			vlogFlushed = true
-		}
-		if sync && !db.relaxedSync {
-			if err := db.syncValueLog(laneID); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
-				_ = backendBatch.Close()
-				return false
-			}
-		}
-	}
-
-	var err error
-	commandPublishAttached := false
-	if backendPendingOps > 0 {
-		var attachErr error
-		commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
-		if attachErr != nil {
-			db.reportError(attachErr)
-			_ = backendBatch.Close()
-			return false
-		}
-		db.backendWriteBatchesTotal.Add(1)
-		db.observeFlushSpanRunBackendChunks(1)
-		writeStart := time.Now()
-		if sync {
-			err = backendBatch.WriteSync()
-		} else {
-			err = backendBatch.Write()
-		}
-		db.observeFlushApplyBackendWrite(time.Since(writeStart))
-		cerr := backendBatch.Close()
-		if err == nil {
-			err = cerr
-		}
-		if err != nil {
-			db.reportError(err)
-			return false
-		}
-		if commandPublishAttached {
-			commandPublish.consumed = true
-			db.commandWALCheckpointPublishPiggybacked.Add(1)
-		}
-	} else if sync && emittedChunk {
-		var attachErr error
-		commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
-		if attachErr != nil {
-			db.reportError(attachErr)
-			_ = backendBatch.Close()
-			return false
-		}
-		// If the sequential path landed exactly on a chunk boundary, this empty
-		// final batch provides the single sync boundary for the prior chunks and
-		// can carry the command-WAL AppliedCommandLSN publication.
-		db.backendWriteBatchesTotal.Add(1)
-		writeStart := time.Now()
-		err = backendBatch.WriteSync()
-		db.observeFlushApplyBackendWrite(time.Since(writeStart))
-		cerr := backendBatch.Close()
-		if err == nil {
-			err = cerr
-		}
-		if err != nil {
-			db.reportError(err)
-			return false
-		}
-		if commandPublishAttached {
-			commandPublish.consumed = true
-			db.commandWALCheckpointPublishPiggybacked.Add(1)
-		}
-	} else {
-		if err := backendBatch.Close(); err != nil {
-			db.reportError(err)
-			return false
-		}
-	}
-
-	// Remove from queue and delete old WAL segments.
-	db.mu.Lock()
-	removeIDs := make(map[uint64]struct{}, len(ids))
-	for _, id := range ids {
-		removeIDs[id] = struct{}{}
-	}
-	db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
-
-	deletable := make([]string, 0, len(units))
-	if sync {
-		inUse := make(map[string]struct{})
-		for _, path := range db.currentWALPaths() {
-			inUse[path] = struct{}{}
-		}
-		for _, paths := range db.queueWALPaths {
-			for _, path := range paths {
-				inUse[path] = struct{}{}
-			}
-		}
-		seen := make(map[string]struct{})
-		for _, unit := range units {
-			for _, walPath := range unit.walPaths {
-				if walPath == "" {
-					continue
-				}
-				if _, ok := inUse[walPath]; ok {
-					continue
-				}
-				if _, ok := seen[walPath]; ok {
-					continue
-				}
-				if db.valueLogRetained(walPath) {
-					continue
-				}
-				seen[walPath] = struct{}{}
-				deletable = append(deletable, walPath)
-			}
-		}
-	}
-	db.mu.Unlock()
-	removed := false
-	for _, walPath := range deletable {
-		db.dropValueLogSegment(walPath)
-		if err := db.removeFileRetry(walPath); err != nil {
-			// Best effort cleanup
-			continue
-		}
-		removed = true
-		db.mu.Lock()
-		db.untrackWALSegmentLocked(walPath)
-		db.mu.Unlock()
-		db.forgetValueLogRetain(walPath)
-	}
-	if removed {
-		db.syncDirBestEffort(db.dir)
-	}
-	db.checkValueLogRetention()
-
-	flushDur := time.Since(flushStart)
-	if flushDur > 0 && totalBytes > 0 {
-		sample := float64(totalBytes) / flushDur.Seconds()
-		db.bpMu.Lock()
-		if db.flushBpsEWMA <= 0 {
-			db.flushBpsEWMA = sample
-		} else {
-			db.flushBpsEWMA = 0.9*db.flushBpsEWMA + 0.1*sample
-		}
-		db.bpCond.Broadcast()
-		db.bpMu.Unlock()
-	}
-	flushSuccess = true
-	return true
+	return pointFlushed
 }
 
 func (db *DB) allowAutoDictSampling(l *lane, writeMode vlogCompressionWriteMode, unitPayloadBytes int) bool {

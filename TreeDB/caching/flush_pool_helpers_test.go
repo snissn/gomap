@@ -859,9 +859,9 @@ func TestFlushLaneOnce_UsesViewMethodsForInlineEntries_SerialAndParallel(t *test
 	})
 }
 
-func TestFlushLaneOnce_FallsBackFromViewMethodsForUnstableIterators(t *testing.T) {
-	t.Run("serial-direct-iterator", func(t *testing.T) {
-		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, false, false)
+func TestFlushLaneOnce_UsesViewMethodsForCanonicalizedUnstableIterators(t *testing.T) {
+	t.Run("serial-canonical-run", func(t *testing.T) {
+		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, false, false, true)
 	})
 	t.Run("parallel-copied-runs", func(t *testing.T) {
 		testFlushLaneOnceUsesViewMethodsForInlineEntries(t, true, false, true)
@@ -958,7 +958,7 @@ func testFlushLaneOnceUsesViewMethodsForInlineEntries(t *testing.T, forceParalle
 	}
 }
 
-func TestFlushLaneOnce_FallsBackFromPointerViewForUnstableIterators(t *testing.T) {
+func TestFlushLaneOnce_UsesPointerViewForCanonicalizedUnstableIterators(t *testing.T) {
 	dir := t.TempDir()
 	backend := &viewCountingBackend{MockBackend: NewMockBackend()}
 	db, err := Open(dir, backend, Options{
@@ -988,11 +988,11 @@ func TestFlushLaneOnce_FallsBackFromPointerViewForUnstableIterators(t *testing.T
 	}
 
 	setPointerCalls, setPointerViewCalls := backend.pointerTotals()
-	if setPointerViewCalls != 0 {
-		t.Fatalf("backend SetPointerView calls=%d, want 0", setPointerViewCalls)
+	if setPointerViewCalls != 1 {
+		t.Fatalf("backend SetPointerView calls=%d, want 1", setPointerViewCalls)
 	}
-	if setPointerCalls != 1 {
-		t.Fatalf("backend SetPointer calls=%d, want 1", setPointerCalls)
+	if setPointerCalls != 0 {
+		t.Fatalf("backend SetPointer calls=%d, want 0", setPointerCalls)
 	}
 }
 

@@ -159,6 +159,44 @@ type FlushSpanRunMetadata struct {
 	BackendChunks   []FlushSpanRunBackendChunk
 }
 
+// FlushSpanRunPlanRequest asks a backend to plan exact target leaf spans for a
+// canonical point-op run. PointOps must already be globally sorted and
+// shadowed; DeleteRanges are explicit range barriers/ranges that the caller did
+// not cross while selecting source memtables.
+//
+// The request owns no durable output. Slices only need to remain stable for the
+// duration of the call.
+type FlushSpanRunPlanRequest struct {
+	RunID uint64
+
+	SourceMemtables  int
+	SourcePointOps   int
+	PlannedPointOps  int
+	ShadowedPointOps int
+	RangeBarriers    int
+	LaneBarriers     int
+
+	PointOps     []batch.Entry
+	DeleteRanges []batch.DeleteRange
+}
+
+// FlushSpanRunChunkPlan is the cache-layer M9 planning result used to pack a
+// canonical point run into backend chunks without materializing a second copy of
+// every target leaf span. Full TargetLeafSpans remain available through
+// PlanFlushSpanRun for tests and future span-native consumers; this compact
+// result is the hot-path chunking/observability form.
+type FlushSpanRunChunkPlan struct {
+	Metadata FlushSpanRunMetadata
+
+	TargetLeafSpans int
+	SingleOpSpans   int
+	SpanOps         int
+	SpanBytes       int
+
+	BackendChunks []FlushSpanRunBackendChunk
+	SplitSummary  FlushSpanRunChunkSplitSummary
+}
+
 // FlushSpanRunPreparedOutputOwnership describes prepared durable output owned by
 // a span job. Prepared leaf/value-log output is persistent storage: on retry or
 // root mismatch it becomes durable-but-unreachable and is accounted as abandoned;
