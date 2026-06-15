@@ -471,6 +471,42 @@ func buildEntryCountFlushSpanRunChunks(ops []batch.Entry, capEntries int) []back
 	return chunks
 }
 
+func validateFlushSpanRunBackendChunksCover(chunks []backenddb.FlushSpanRunBackendChunk, plannedOps int) error {
+	if plannedOps < 0 {
+		return fmt.Errorf("negative planned ops %d", plannedOps)
+	}
+	if plannedOps == 0 {
+		if len(chunks) != 0 {
+			return fmt.Errorf("%d backend chunks for empty point run", len(chunks))
+		}
+		return nil
+	}
+	if len(chunks) == 0 {
+		return fmt.Errorf("missing backend chunks for %d planned ops", plannedOps)
+	}
+	expectedStart := 0
+	for i := range chunks {
+		chunk := chunks[i]
+		if chunk.ChunkIndex != i {
+			return fmt.Errorf("backend chunk %d has chunk index %d", i, chunk.ChunkIndex)
+		}
+		if chunk.PointOpStart != expectedStart {
+			return fmt.Errorf("backend chunk %d starts at %d, want %d", i, chunk.PointOpStart, expectedStart)
+		}
+		if chunk.PointOpEnd <= chunk.PointOpStart || chunk.PointOpEnd > plannedOps {
+			return fmt.Errorf("backend chunk %d point op range [%d,%d) out of planned bounds %d", i, chunk.PointOpStart, chunk.PointOpEnd, plannedOps)
+		}
+		if chunk.ByteCount < 0 {
+			return fmt.Errorf("backend chunk %d has negative byte count", i)
+		}
+		expectedStart = chunk.PointOpEnd
+	}
+	if expectedStart != plannedOps {
+		return fmt.Errorf("backend chunks cover point ops through %d, want %d", expectedStart, plannedOps)
+	}
+	return nil
+}
+
 func buildLeafAwareFlushSpanRunChunks(ops []batch.Entry, spans []backenddb.FlushSpanRunTargetLeafSpan, capEntries int) ([]backenddb.FlushSpanRunBackendChunk, bool) {
 	if len(ops) == 0 {
 		return nil, true
@@ -593,16 +629,18 @@ func (db *DB) planCanonicalFlushRunMetadata(run *canonicalFlushRun, backendEntri
 			if err == nil {
 				meta = planned.Metadata
 				chunks := planned.BackendChunks
-				if len(chunks) == 0 {
+				splitSummary := planned.SplitSummary
+				if err := validateFlushSpanRunBackendChunksCover(chunks, len(run.pointOps)); err != nil {
 					chunks = buildEntryCountFlushSpanRunChunks(run.pointOps, backendEntriesCap)
-					meta.BackendChunks = chunks
+					splitSummary = backenddb.SummarizeFlushSpanRunChunkSplits(meta.TargetLeafSpans, chunks)
 				}
+				meta.BackendChunks = chunks
 				spanStats = canonicalFlushRunSpanStats{
 					targetLeafSpans: planned.TargetLeafSpans,
 					singleOpSpans:   planned.SingleOpSpans,
 					spanOps:         planned.SpanOps,
 					spanBytes:       planned.SpanBytes,
-					splitSummary:    planned.SplitSummary,
+					splitSummary:    splitSummary,
 				}
 				return meta, chunks, spanStats
 			}

@@ -396,6 +396,68 @@ func TestFlushSpanRunRuntimeTargetLeafPlanningDefaultOff(t *testing.T) {
 	}
 }
 
+type malformedChunkPlannerBackend struct {
+	*MockBackend
+	chunks []backenddb.FlushSpanRunBackendChunk
+}
+
+func (b *malformedChunkPlannerBackend) PlanFlushSpanRunChunks(req backenddb.FlushSpanRunPlanRequest, maxPointOpsPerChunk int) (backenddb.FlushSpanRunChunkPlan, error) {
+	meta := backenddb.FlushSpanRunMetadata{
+		SourceMemtables:  req.SourceMemtables,
+		SourcePointOps:   req.SourcePointOps,
+		PlannedPointOps:  req.PlannedPointOps,
+		ShadowedPointOps: req.ShadowedPointOps,
+		RangeBarriers:    req.RangeBarriers,
+		LaneBarriers:     req.LaneBarriers,
+	}
+	chunks := append([]backenddb.FlushSpanRunBackendChunk(nil), b.chunks...)
+	meta.BackendChunks = chunks
+	return backenddb.FlushSpanRunChunkPlan{Metadata: meta, BackendChunks: chunks}, nil
+}
+
+func TestFlushSpanRunPlannedBackendChunksFallbackOnInvalidCoverage(t *testing.T) {
+	ops := []batch.Entry{
+		{Key: []byte("k0"), Value: []byte("v")},
+		{Key: []byte("k1"), Value: []byte("v")},
+		{Key: []byte("k2"), Value: []byte("v")},
+		{Key: []byte("k3"), Value: []byte("v")},
+	}
+	for _, tc := range []struct {
+		name   string
+		chunks []backenddb.FlushSpanRunBackendChunk
+	}{
+		{
+			name: "gapped",
+			chunks: []backenddb.FlushSpanRunBackendChunk{
+				{ChunkIndex: 0, PointOpStart: 0, PointOpEnd: 1, ByteCount: 1},
+				{ChunkIndex: 1, PointOpStart: 2, PointOpEnd: 4, ByteCount: 2},
+			},
+		},
+		{
+			name:   "tail-truncated",
+			chunks: []backenddb.FlushSpanRunBackendChunk{{ChunkIndex: 0, PointOpStart: 0, PointOpEnd: 2, ByteCount: 2}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &malformedChunkPlannerBackend{MockBackend: NewMockBackend(), chunks: tc.chunks}
+			db := &DB{backend: backend, flushSpanRunTargetPlanning: true}
+			run := &canonicalFlushRun{sourceMemtables: 2, sourcePointOps: len(ops), plannedPointOps: len(ops), pointOps: ops}
+
+			meta, chunks, _ := db.planCanonicalFlushRunMetadata(run, 2)
+			want := []backenddb.FlushSpanRunBackendChunk{
+				{ChunkIndex: 0, PointOpStart: 0, PointOpEnd: 2, ByteCount: 6},
+				{ChunkIndex: 1, PointOpStart: 2, PointOpEnd: 4, ByteCount: 6},
+			}
+			if !reflect.DeepEqual(chunks, want) {
+				t.Fatalf("chunks=%+v want fallback %+v", chunks, want)
+			}
+			if !reflect.DeepEqual(meta.BackendChunks, want) {
+				t.Fatalf("metadata chunks=%+v want fallback %+v", meta.BackendChunks, want)
+			}
+		})
+	}
+}
+
 func TestFlushSpanRunRuntimeTargetLeafSplitCounterOptIn(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
