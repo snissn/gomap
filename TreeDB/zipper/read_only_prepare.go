@@ -91,6 +91,12 @@ type ReadOnlyPrepareOptions struct {
 	// because range-overlap planning needs exact span bounds.
 	OmitKeys bool
 
+	// DiscardLeafSpans streams spans to LeafSpanCallback without retaining them in
+	// the result. It is only for aggregate/chunk planning callers that do not need
+	// ValidateLeafSpans or exact span ownership after PrepareReadOnlyPlan returns.
+	DiscardLeafSpans bool
+	LeafSpanCallback func(ReadOnlyLeafSpan)
+
 	leafSpans []ReadOnlyLeafSpan
 	keyArena  []byte
 }
@@ -214,7 +220,9 @@ type ReadOnlyPrepareResult struct {
 	LeafSpans []ReadOnlyLeafSpan
 	Metrics   adaptive.Metrics
 
-	keyArena []byte
+	keyArena         []byte
+	discardLeafSpans bool
+	leafSpanCallback func(ReadOnlyLeafSpan)
 }
 
 const (
@@ -567,16 +575,18 @@ func (r *ReadOnlyPrepareResult) ensureInitialCapacity(ops []batch.Entry, ranges 
 	if r == nil {
 		return
 	}
-	spanHint := len(ops) + len(ranges)
-	leafSpanKeepCap := readOnlyPrepareResultReuseLeafSpanKeepCap
-	if r.OmitKeys {
-		leafSpanKeepCap = readOnlyPrepareResultReuseOmitKeysLeafSpanKeepCap
-	}
-	if spanHint > leafSpanKeepCap {
-		spanHint = leafSpanKeepCap
-	}
-	if spanHint > 0 && cap(r.LeafSpans) < spanHint {
-		r.LeafSpans = make([]ReadOnlyLeafSpan, 0, spanHint)
+	if !r.discardLeafSpans {
+		spanHint := len(ops) + len(ranges)
+		leafSpanKeepCap := readOnlyPrepareResultReuseLeafSpanKeepCap
+		if r.OmitKeys {
+			leafSpanKeepCap = readOnlyPrepareResultReuseOmitKeysLeafSpanKeepCap
+		}
+		if spanHint > leafSpanKeepCap {
+			spanHint = leafSpanKeepCap
+		}
+		if spanHint > 0 && cap(r.LeafSpans) < spanHint {
+			r.LeafSpans = make([]ReadOnlyLeafSpan, 0, spanHint)
+		}
 	}
 	if !r.OmitKeys {
 		keyHintUnits := len(ops) + len(ranges)
@@ -620,7 +630,12 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 	for i := range ranges {
 		span.ByteCount += readOnlyPrepareRangeBytes(ranges[i])
 	}
-	r.LeafSpans = append(r.LeafSpans, span)
+	if r.leafSpanCallback != nil {
+		r.leafSpanCallback(span)
+	}
+	if !r.discardLeafSpans {
+		r.LeafSpans = append(r.LeafSpans, span)
+	}
 }
 
 func elapsedNsSince(start time.Time) uint64 {
@@ -747,9 +762,11 @@ func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPre
 // op slices.
 func (z *Zipper) PrepareReadOnlyPlan(rootID uint64, ops []batch.Entry, ranges []batch.DeleteRange, opts ReadOnlyPrepareOptions) (ReadOnlyPrepareResult, error) {
 	result := ReadOnlyPrepareResult{
-		OmitKeys:  opts.OmitKeys,
-		LeafSpans: opts.leafSpans[:0],
-		keyArena:  opts.keyArena[:0],
+		OmitKeys:         opts.OmitKeys,
+		LeafSpans:        opts.leafSpans[:0],
+		keyArena:         opts.keyArena[:0],
+		discardLeafSpans: opts.DiscardLeafSpans,
+		leafSpanCallback: opts.LeafSpanCallback,
 	}
 	if len(ranges) > 0 {
 		// OmitKeys is only safe for point-only planning. Delete-range overlap

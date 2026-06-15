@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -29,6 +30,9 @@ func (db *DB) PlanFlushSpanRun(req FlushSpanRunPlanRequest) (FlushSpanRunMetadat
 // same side-effect-free read-only prepare pass and emits aggregate target-span
 // counters plus split evidence.
 func (db *DB) PlanFlushSpanRunChunks(req FlushSpanRunPlanRequest, maxPointOpsPerChunk int) (FlushSpanRunChunkPlan, error) {
+	if len(req.DeleteRanges) == 0 {
+		return db.planFlushSpanRunPointChunks(req, maxPointOpsPerChunk)
+	}
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(zipper.ApplyOptions{PrepareReadOnly: true})
 	meta, prepared, err := db.prepareFlushSpanRun(req, true, prepareBuf)
 	defer db.releaseFlushApplyReadOnlyPreparePlanBuffer(prepareBuf, &prepared)
@@ -45,6 +49,72 @@ func (db *DB) PlanFlushSpanRunChunks(req FlushSpanRunPlanRequest, maxPointOpsPer
 	out.BackendChunks = chunks
 	out.Metadata.BackendChunks = chunks
 	out.SplitSummary = summarizeReadOnlyFlushSpanRunChunkSplits(prepared.LeafSpans, chunks)
+	return out, nil
+}
+
+func (db *DB) planFlushSpanRunPointChunks(req FlushSpanRunPlanRequest, maxPointOpsPerChunk int) (FlushSpanRunChunkPlan, error) {
+	meta := FlushSpanRunMetadata{
+		RunID:            req.RunID,
+		SourceMemtables:  req.SourceMemtables,
+		SourcePointOps:   req.SourcePointOps,
+		PlannedPointOps:  req.PlannedPointOps,
+		ShadowedPointOps: req.ShadowedPointOps,
+		RangeBarriers:    req.RangeBarriers,
+		LaneBarriers:     req.LaneBarriers,
+	}
+	out := FlushSpanRunChunkPlan{Metadata: meta}
+	if db == nil {
+		return out, ErrClosed
+	}
+	if req.PlannedPointOps != len(req.PointOps) {
+		return out, fmt.Errorf("treedb: flush span run planned point ops=%d but point slice has %d", req.PlannedPointOps, len(req.PointOps))
+	}
+	if req.SourcePointOps != req.PlannedPointOps+req.ShadowedPointOps {
+		return out, fmt.Errorf("treedb: flush span run source point ops=%d must equal planned=%d plus shadowed=%d", req.SourcePointOps, req.PlannedPointOps, req.ShadowedPointOps)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return out, ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+
+	builder := newReadOnlyFlushSpanRunChunkBuilder(req.PointOps, maxPointOpsPerChunk)
+	prepareStart := time.Now()
+	prepared, err := snap.idx.zipper.PrepareReadOnlyPlan(snap.state.RootPageID, req.PointOps, nil, zipper.ReadOnlyPrepareOptions{
+		OmitKeys:         true,
+		DiscardLeafSpans: true,
+		LeafSpanCallback: builder.AddSpan,
+	})
+	prepareNs := elapsedReadOnlyPrepareNs(prepareStart)
+	if prepared.RootID != 0 {
+		out.Metadata.BaseRoot.CapturedRootID = prepared.RootID
+		out.Metadata.BaseRoot.CurrentRootID = prepared.RootID
+		out.Metadata.BaseRoot.Matched = true
+	}
+	summary := builder.LeafSpanSummary(prepared)
+	var workerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary
+	if err != nil {
+		db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, false)
+		return out, err
+	}
+	if validationErr := builder.Validate(prepared); validationErr != nil {
+		err = fmt.Errorf("treedb: invalid flush span run chunk plan: %w", validationErr)
+		db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, true)
+		return out, err
+	}
+	db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, nil, false)
+
+	out.TargetLeafSpans = builder.targetLeafSpans
+	out.SingleOpSpans = builder.singleOpSpans
+	out.SpanOps = builder.spanOps
+	out.SpanBytes = builder.spanBytes
+	out.BackendChunks = builder.chunks
+	out.Metadata.BackendChunks = builder.chunks
+	out.SplitSummary = builder.splitSummary
 	return out, nil
 }
 
@@ -114,6 +184,166 @@ func (db *DB) prepareFlushSpanRun(req FlushSpanRunPlanRequest, omitKeys bool, pr
 		return meta, prepared, err
 	}
 	return meta, prepared, nil
+}
+
+type readOnlyFlushSpanRunChunkBuilder struct {
+	ops        []batch.Entry
+	capEntries int
+
+	chunks     []FlushSpanRunBackendChunk
+	chunkStart int
+	chunkEnd   int
+	chunkBytes int
+
+	targetLeafSpans int
+	singleOpSpans   int
+	spanOps         int
+	spanBytes       int
+	splitSummary    FlushSpanRunChunkSplitSummary
+	err             error
+}
+
+func newReadOnlyFlushSpanRunChunkBuilder(ops []batch.Entry, capEntries int) *readOnlyFlushSpanRunChunkBuilder {
+	if capEntries <= 0 {
+		capEntries = len(ops)
+	}
+	chunkHint := 0
+	if len(ops) > 0 && capEntries > 0 {
+		chunkHint = (len(ops) + capEntries - 1) / capEntries
+		if chunkHint < 1 {
+			chunkHint = 1
+		}
+	}
+	return &readOnlyFlushSpanRunChunkBuilder{
+		ops:        ops,
+		capEntries: capEntries,
+		chunks:     make([]FlushSpanRunBackendChunk, 0, chunkHint),
+	}
+}
+
+func (b *readOnlyFlushSpanRunChunkBuilder) AddSpan(span zipper.ReadOnlyLeafSpan) {
+	if b == nil || b.err != nil {
+		return
+	}
+	b.targetLeafSpans++
+	b.spanOps += span.OpCount
+	b.spanBytes += span.ByteCount
+	if span.OpCount == 1 {
+		b.singleOpSpans++
+	}
+	spanOps := span.PointOpEnd - span.PointOpStart
+	if spanOps <= 0 {
+		return
+	}
+	if span.PointOpStart != b.chunkEnd {
+		b.err = fmt.Errorf("span point range starts at %d after chunk end %d", span.PointOpStart, b.chunkEnd)
+		return
+	}
+	spanBytes := span.ByteCount
+	if spanBytes <= 0 {
+		for j := span.PointOpStart; j < span.PointOpEnd; j++ {
+			spanBytes += flushSpanRunEntryByteCount(b.ops[j])
+		}
+	}
+	if spanOps > b.capEntries {
+		b.emit()
+		overlaps := 0
+		for start := span.PointOpStart; start < span.PointOpEnd; {
+			end := start + b.capEntries
+			if end > span.PointOpEnd {
+				end = span.PointOpEnd
+			}
+			byteCount := 0
+			for j := start; j < end; j++ {
+				byteCount += flushSpanRunEntryByteCount(b.ops[j])
+			}
+			b.chunks = append(b.chunks, FlushSpanRunBackendChunk{ChunkIndex: len(b.chunks), PointOpStart: start, PointOpEnd: end, ByteCount: byteCount})
+			overlaps++
+			start = end
+		}
+		if overlaps > b.splitSummary.MaxChunksPerTargetLeaf {
+			b.splitSummary.MaxChunksPerTargetLeaf = overlaps
+		}
+		if overlaps > 1 {
+			b.splitSummary.TargetLeavesSplitAcrossChunks++
+		}
+		b.chunkStart = span.PointOpEnd
+		b.chunkEnd = span.PointOpEnd
+		b.chunkBytes = 0
+		return
+	}
+	if b.chunkEnd > b.chunkStart && (b.chunkEnd-b.chunkStart)+spanOps > b.capEntries {
+		b.emit()
+	}
+	if b.chunkEnd == b.chunkStart {
+		b.chunkStart = span.PointOpStart
+	}
+	b.chunkEnd = span.PointOpEnd
+	b.chunkBytes += spanBytes
+	if b.splitSummary.MaxChunksPerTargetLeaf < 1 {
+		b.splitSummary.MaxChunksPerTargetLeaf = 1
+	}
+}
+
+func (b *readOnlyFlushSpanRunChunkBuilder) emit() {
+	if b == nil || b.chunkEnd <= b.chunkStart {
+		return
+	}
+	b.chunks = append(b.chunks, FlushSpanRunBackendChunk{ChunkIndex: len(b.chunks), PointOpStart: b.chunkStart, PointOpEnd: b.chunkEnd, ByteCount: b.chunkBytes})
+	b.chunkStart = b.chunkEnd
+	b.chunkBytes = 0
+}
+
+func (b *readOnlyFlushSpanRunChunkBuilder) Validate(prepared zipper.ReadOnlyPrepareResult) error {
+	if b == nil {
+		return fmt.Errorf("missing chunk builder")
+	}
+	if b.err != nil {
+		return b.err
+	}
+	if prepared.DeleteRanges != 0 {
+		return fmt.Errorf("point chunk planner saw %d delete ranges", prepared.DeleteRanges)
+	}
+	if prepared.PointOps != len(b.ops) || prepared.Ops != len(b.ops) {
+		return fmt.Errorf("prepared ops=%d point=%d want %d", prepared.Ops, prepared.PointOps, len(b.ops))
+	}
+	if len(b.ops) == 0 {
+		if b.targetLeafSpans != 0 || len(b.chunks) != 0 {
+			return fmt.Errorf("zero-op plan produced spans=%d chunks=%d", b.targetLeafSpans, len(b.chunks))
+		}
+		return nil
+	}
+	if b.chunkEnd != len(b.ops) {
+		return fmt.Errorf("chunks cover point ops through %d, want %d", b.chunkEnd, len(b.ops))
+	}
+	if b.spanOps != prepared.PointOps {
+		return fmt.Errorf("span ops=%d want point ops=%d", b.spanOps, prepared.PointOps)
+	}
+	b.emit()
+	for i := range b.chunks {
+		b.chunks[i].ChunkIndex = i
+	}
+	b.splitSummary.BackendChunks = len(b.chunks)
+	b.splitSummary.TargetLeafSpans = b.targetLeafSpans
+	return nil
+}
+
+func (b *readOnlyFlushSpanRunChunkBuilder) LeafSpanSummary(prepared zipper.ReadOnlyPrepareResult) zipper.ReadOnlyLeafSpanSummary {
+	if b == nil {
+		return prepared.LeafSpanSummary()
+	}
+	return zipper.ReadOnlyLeafSpanSummary{
+		Ops:            prepared.Ops,
+		PointOps:       prepared.PointOps,
+		DeleteRanges:   prepared.DeleteRanges,
+		SpanOps:        b.spanOps,
+		SpanBytes:      b.spanBytes,
+		Spans:          b.targetLeafSpans,
+		ExactLeafSpans: prepared.ExactLeafSpans,
+		ColdBuild:      prepared.ColdBuild,
+		Maintenance:    prepared.Maintenance,
+		SingleOpSpans:  b.singleOpSpans,
+	}
 }
 
 func appendFlushSpanRunTargetLeafSpans(dst []FlushSpanRunTargetLeafSpan, spans []zipper.ReadOnlyLeafSpan) []FlushSpanRunTargetLeafSpan {

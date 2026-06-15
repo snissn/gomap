@@ -399,6 +399,40 @@ func TestZipperPrepareReadOnlyOmitKeysSkipsSpanKeyCopies(t *testing.T) {
 	}
 }
 
+func TestZipperPrepareReadOnlyPlanCallbackCanDiscardSpans(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 256)
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for _, idx := range []int{0, 128, 255} {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", idx)), []byte("new")); err != nil {
+			t.Fatalf("Set delta: %v", err)
+		}
+	}
+	callbacks := 0
+	spanOps := 0
+	prepared, err := z.PrepareReadOnlyPlan(rootID, delta.SortedEntries(), nil, ReadOnlyPrepareOptions{
+		OmitKeys:         true,
+		DiscardLeafSpans: true,
+		LeafSpanCallback: func(span ReadOnlyLeafSpan) {
+			callbacks++
+			spanOps += span.OpCount
+			if span.FirstOpKey != nil || span.LastOpKey != nil || span.LowKey != nil || span.HighKey != nil {
+				t.Fatalf("discard callback received copied keys: %+v", span)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareReadOnlyPlan: %v", err)
+	}
+	if !prepared.OmitKeys || len(prepared.LeafSpans) != 0 || cap(prepared.LeafSpans) != 0 {
+		t.Fatalf("discard result OmitKeys=%v spans len/cap=%d/%d", prepared.OmitKeys, len(prepared.LeafSpans), cap(prepared.LeafSpans))
+	}
+	if callbacks == 0 || spanOps != prepared.PointOps {
+		t.Fatalf("callback spans=%d ops=%d want point ops %d", callbacks, spanOps, prepared.PointOps)
+	}
+}
+
 func TestZipperPrepareReadOnlyAllowsEmptyPointKey(t *testing.T) {
 	cold := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = cold.Close() }()
