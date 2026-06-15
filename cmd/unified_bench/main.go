@@ -6305,6 +6305,9 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "flush_apply.cache.leaf_log_append_frames_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_frames_total"}},
 		{label: "flush_apply.cache.leaf_log_append_frames_per_op", alts: []string{"treedb.cache.flush_apply.leaf_log_append_frames_per_op"}},
 		{label: "flush_apply.cache.leaf_log_append_records_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_records_total"}},
+		// M8 intentionally does not select target_leaves_split_across_chunks_total:
+		// production cache flushes cannot honestly emit it until M9 provides canonical
+		// target-leaf metadata before backend chunking.
 		{label: "flush_span_run.source_point_ops_total", alts: []string{"treedb.cache.flush_span_run.source_point_ops_total"}},
 		{label: "flush_span_run.planned_ops_total", alts: []string{"treedb.cache.flush_span_run.planned_ops_total"}},
 		{label: "flush_span_run.planned_point_ops_total", alts: []string{"treedb.cache.flush_span_run.planned_point_ops_total"}},

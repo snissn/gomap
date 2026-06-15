@@ -266,13 +266,16 @@ func ValidateFlushSpanRunMetadata(meta FlushSpanRunMetadata) error {
 		if span.DeleteRangeStart < 0 || span.DeleteRangeEnd < span.DeleteRangeStart || span.DeleteRangeEnd > meta.RangeBarriers {
 			return fmt.Errorf("target span %d delete range indexes [%d,%d) invalid for range barriers %d", i, span.DeleteRangeStart, span.DeleteRangeEnd, meta.RangeBarriers)
 		}
-		if i > 0 && span.PointOpStart < prevEnd {
-			return fmt.Errorf("target span %d overlaps prior point op range: start=%d prior_end=%d", i, span.PointOpStart, prevEnd)
+		if span.PointOpStart != prevEnd {
+			return fmt.Errorf("target span %d point op range starts at %d, want prior end %d", i, span.PointOpStart, prevEnd)
 		}
 		if span.OpCount < 0 || span.ByteCount < 0 {
 			return fmt.Errorf("target span %d has negative op/byte count", i)
 		}
 		prevEnd = span.PointOpEnd
+	}
+	if len(meta.TargetLeafSpans) > 0 && prevEnd != meta.PlannedPointOps {
+		return fmt.Errorf("target spans cover point ops through %d, want planned point ops %d", prevEnd, meta.PlannedPointOps)
 	}
 	prevEnd = 0
 	for i := range meta.BackendChunks {

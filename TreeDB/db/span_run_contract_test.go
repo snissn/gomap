@@ -83,6 +83,19 @@ func TestValidateFlushSpanRunMetadataCoversShadowingAndBarriers(t *testing.T) {
 		t.Fatalf("metadata with overlapping target leaf spans passed validation")
 	}
 
+	badSpanGap := meta
+	badSpanGap.TargetLeafSpans = append([]FlushSpanRunTargetLeafSpan(nil), meta.TargetLeafSpans...)
+	badSpanGap.TargetLeafSpans[1].PointOpStart = 3
+	if err := ValidateFlushSpanRunMetadata(badSpanGap); err == nil {
+		t.Fatalf("metadata with gap between target leaf spans passed validation")
+	}
+
+	badSpanTailGap := meta
+	badSpanTailGap.TargetLeafSpans = append([]FlushSpanRunTargetLeafSpan(nil), meta.TargetLeafSpans[:1]...)
+	if err := ValidateFlushSpanRunMetadata(badSpanTailGap); err == nil {
+		t.Fatalf("metadata with uncovered planned point ops passed validation")
+	}
+
 	badDeleteRange := meta
 	badDeleteRange.TargetLeafSpans = append([]FlushSpanRunTargetLeafSpan(nil), meta.TargetLeafSpans...)
 	badDeleteRange.TargetLeafSpans[0].DeleteRangeStart = 0

@@ -122,10 +122,12 @@ additive counters.
 - `treedb.cache.flush_span_run.ops_per_run`
 
 M8 includes the deterministic `SummarizeFlushSpanRunChunkSplits` fixture for
-entry-count chunks that split target leaves. Runtime target-leaf split emission
-requires M9 canonical target-leaf metadata before cache-layer backend chunking;
-M8 therefore does not expose a production `target_leaves_split_across_chunks`
-stat that would falsely remain zero.
+entry-count chunks that split target leaves. The #2768 target-leaf split evidence
+field is intentionally contract/fixture-only in M8: runtime target-leaf split
+emission requires M9 canonical target-leaf metadata before cache-layer backend
+chunking. M8 therefore does not expose a production
+`target_leaves_split_across_chunks` stat, and unified-bench selected stats do not
+list one, because a runtime zero would be false proof rather than evidence.
 
 ### Target span and span-native fallback counters
 
