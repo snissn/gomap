@@ -3541,6 +3541,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	if shadowedOps > 0 {
 		flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
 		flushMergeDeferredShadowedOpsTotal.Add(uint64(shadowedOps))
+		db.observeFlushSpanRunShadowedOps(shadowedOps)
 	}
 	if appliedOps > 0 {
 		flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
@@ -7888,9 +7889,14 @@ type DB struct {
 	checkpointStageValueLogFlush                                 checkpointStageStats
 	checkpointStageCommandWALPublish                             checkpointStageStats
 	checkpointStageFlushAll                                      checkpointStageStats
+	checkpointStageLeafValueLogSync                              checkpointStageStats
+	checkpointStageReducerPublish                                checkpointStageStats
 	checkpointStageBackendBoundary                               checkpointStageStats
 	checkpointStageWALCleanup                                    checkpointStageStats
 	checkpointStagePostMaintenance                               checkpointStageStats
+	checkpointActiveBackgroundFlushWaitNs                        atomic.Uint64
+	checkpointActiveBackgroundFlushWaitMaxNs                     atomic.Uint64
+	checkpointActiveBackgroundFlushWaitSamples                   atomic.Uint64
 	commandWALCheckpointPublishPiggybacked                       atomic.Uint64
 	commandWALCheckpointPublishSeparate                          atomic.Uint64
 	checkpointFlushMuWaitNs                                      atomic.Uint64
@@ -7916,6 +7922,16 @@ type DB struct {
 	flushApplyForegroundAssistCalls                              atomic.Uint64
 	flushApplyForegroundAssistWaitNs                             atomic.Uint64
 	flushApplyForegroundAssistFlushes                            atomic.Uint64
+	flushSpanRunRuns                                             atomic.Uint64
+	flushSpanRunSourcePointOps                                   atomic.Uint64
+	flushSpanRunPlannedOps                                       atomic.Uint64
+	flushSpanRunPlannedPointOps                                  atomic.Uint64
+	flushSpanRunSourceMemtables                                  atomic.Uint64
+	flushSpanRunSourceMemtablesMax                               atomic.Uint64
+	flushSpanRunShadowedOps                                      atomic.Uint64
+	flushSpanRunRangeBarriers                                    atomic.Uint64
+	flushSpanRunRangeDeleteOps                                   atomic.Uint64
+	flushSpanRunBackendChunks                                    atomic.Uint64
 	flushCoordinatorActive                                       atomic.Int64
 	flushCoordinatorInFlightBytes                                atomic.Int64
 	flushCoordinatorProgress                                     atomic.Uint64
@@ -21106,11 +21122,16 @@ func (db *DB) Checkpoint() error {
 	}()
 	// Note: Any code path that takes both flushMu and checkpointMu must acquire
 	// flushMu first to avoid deadlocks.
+	activeBackgroundFlushBeforeWait := db.flushCoordinatorActive.Load() > 0 && db.flushCoordinatorInFlightBytes.Load() > 0
 	flushMuWaitStart := time.Now()
 	db.flushMu.Lock()
-	flushMuWait := uint64(time.Since(flushMuWaitStart))
+	flushMuWaitDur := time.Since(flushMuWaitStart)
+	flushMuWait := uint64(flushMuWaitDur)
 	db.checkpointFlushMuWaitNs.Add(flushMuWait)
 	updateAtomicMaxUint64(&db.checkpointFlushMuWaitMaxNs, flushMuWait)
+	if activeBackgroundFlushBeforeWait {
+		db.observeCheckpointActiveBackgroundFlushWait(flushMuWaitDur)
+	}
 	defer db.flushMu.Unlock() // Ensure it's released
 
 	db.checkpointMu.Lock()
@@ -21241,7 +21262,8 @@ func (db *DB) Checkpoint() error {
 		recordCheckpointStageSince(&db.checkpointStageValueLogFlush, valueLogFlushStart)
 		return err
 	}
-	recordCheckpointStageSince(&db.checkpointStageValueLogFlush, valueLogFlushStart)
+	valueLogFlushDur := time.Since(valueLogFlushStart)
+	db.checkpointStageValueLogFlush.record(valueLogFlushDur)
 
 	var (
 		commandWALAppliedLSN       uint64
@@ -21266,9 +21288,17 @@ func (db *DB) Checkpoint() error {
 
 	// Flush all queued memtables with backend sync.
 	bgErrBefore := db.backgroundError()
+	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
+	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
 	flushAllStart := time.Now()
 	db.flushAllLocked(true, commandWALPublishPiggyback)
 	recordCheckpointStageSince(&db.checkpointStageFlushAll, flushAllStart)
+	leafLogAppendWaitAfter := db.flushApplyLeafLogAppendWaitNs.Load()
+	leafValueLogSyncNs := uint64(valueLogFlushDur.Nanoseconds()) + saturatingSubUint64(leafLogAppendWaitAfter, leafLogAppendWaitBefore)
+	db.checkpointStageLeafValueLogSync.record(time.Duration(leafValueLogSyncNs))
+	if reducerPublishAfter := db.backendFlushApplyReducerPublishNs(); reducerPublishAfter > reducerPublishBefore {
+		db.checkpointStageReducerPublish.record(time.Duration(reducerPublishAfter - reducerPublishBefore))
+	}
 	if bgErr := db.backgroundError(); bgErr != nil && bgErrBefore == nil {
 		return bgErr
 	}
@@ -24491,6 +24521,16 @@ func flushUnitSpanCount(units []flushUnit) int {
 	return total
 }
 
+func flushUnitRangeBarrierCount(units []flushUnit) int {
+	total := 0
+	for _, unit := range units {
+		if len(unit.spans) > 0 {
+			total++
+		}
+	}
+	return total
+}
+
 func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flushUnit, totalBytes int64) {
 	for _, unit := range units {
 		if len(unit.spans) > 0 {
@@ -24614,7 +24654,9 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		db.finishFlushCoordinatorWork(totalBytes, flushSuccess)
 	}()
 	totalSpans := flushUnitSpanCount(units)
+	rangeBarriers := flushUnitRangeBarrierCount(units)
 	db.observeFlushApplyPlan(len(units), totalLen+totalSpans, totalBytes, planningDur)
+	db.observeFlushSpanRunSource(len(units), totalLen, totalSpans, rangeBarriers)
 
 	if totalLen == 0 && totalSpans == 0 {
 		db.mu.Lock()
@@ -24654,6 +24696,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			}
 			db.rangeSpanFlushBatches.Add(1)
 			db.backendWriteBatchesTotal.Add(1)
+			db.observeFlushSpanRunBackendChunks(1)
 			var err error
 			writeStart := time.Now()
 			if sync {
@@ -24679,6 +24722,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			return false
 		}
 
+		db.observeFlushSpanRunPlannedOps(0, pending)
 		db.rangeSpanRangeOnlyFlushed.Add(uint64(len(units)))
 		db.rangeSpanSpansFlushed.Add(uint64(pending))
 		db.mu.Lock()
@@ -24858,6 +24902,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			}
 			emittedChunk = true
 			db.backendWriteBatchesTotal.Add(1)
+			db.observeFlushSpanRunBackendChunks(1)
 			// If sync==true, we only need a single durability boundary at the end of
 			// the flush. Write the intermediate chunks without fsync to avoid
 			// repeated pager sync work.
@@ -24975,11 +25020,13 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		if shadowedOps > 0 {
 			flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
 			flushMergeParallelShadowedOpsTotal.Add(uint64(shadowedOps))
+			db.observeFlushSpanRunShadowedOps(shadowedOps)
 		}
 		if appliedOps > 0 {
 			flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
 			flushMergeParallelAppliedOpsTotal.Add(uint64(appliedOps))
 		}
+		db.observeFlushSpanRunPlannedOps(appliedOps, totalSpans)
 		db.observeFlushApplyBuild(time.Since(buildStart))
 
 		if db.valueLogEnabled() {
@@ -25011,6 +25058,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				return false
 			}
 			db.backendWriteBatchesTotal.Add(1)
+			db.observeFlushSpanRunBackendChunks(1)
 			writeStart := time.Now()
 			if sync {
 				err = backendBatch.WriteSync()
@@ -25144,6 +25192,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			return false
 		}
 		backendPendingOps = pendingOps
+		db.observeFlushSpanRunPlannedOps(pendingOps, totalSpans)
 	} else {
 		sv, _ := backendBatch.(backendBatchSetViewer)
 		dv, _ := backendBatch.(backendBatchDeleteViewer)
@@ -25172,6 +25221,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 
 			emittedChunk = true
 			db.backendWriteBatchesTotal.Add(1)
+			db.observeFlushSpanRunBackendChunks(1)
 			// If sync==true, we only need a single durability boundary at the end of
 			// the flush. Write the intermediate chunks without fsync to avoid
 			// repeated pager sync work.
@@ -25301,6 +25351,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				return false
 			}
 		}
+		db.observeFlushSpanRunPlannedOps(totalLen, totalSpans)
 	}
 	db.observeFlushApplyBuild(time.Since(buildStart))
 
@@ -25333,6 +25384,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 			return false
 		}
 		db.backendWriteBatchesTotal.Add(1)
+		db.observeFlushSpanRunBackendChunks(1)
 		writeStart := time.Now()
 		if sync {
 			err = backendBatch.WriteSync()
@@ -25597,6 +25649,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				// of the flush. Write intermediate chunks without fsync to avoid
 				// repeated pager sync work.
 				db.backendWriteBatchesTotal.Add(1)
+				db.observeFlushSpanRunBackendChunks(1)
 				err := backendBatch.Write()
 				cerr := backendBatch.Close()
 				if err == nil {
@@ -27320,12 +27373,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointMaxNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.flushmu_wait_total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.flushmu_wait_max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitMaxNs.Load())/float64(time.Millisecond))
+	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_total"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitNs.Load())
+	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_max"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitMaxNs.Load())
+	stats["treedb.cache.checkpoint.active_background_flush_wait_samples"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitSamples.Load())
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
 	appendCheckpointStageStats(stats, "cutover", &db.checkpointStageCutover)
 	appendCheckpointStageStats(stats, "wal_rotate", &db.checkpointStageWALRotate)
 	appendCheckpointStageStats(stats, "value_log_flush", &db.checkpointStageValueLogFlush)
 	appendCheckpointStageStats(stats, "command_wal_publish", &db.checkpointStageCommandWALPublish)
 	appendCheckpointStageStats(stats, "flush_all", &db.checkpointStageFlushAll)
+	appendCheckpointStageStats(stats, "leaf_value_log_sync", &db.checkpointStageLeafValueLogSync)
+	appendCheckpointStageStats(stats, "reducer_publish", &db.checkpointStageReducerPublish)
 	appendCheckpointStageStats(stats, "backend_boundary", &db.checkpointStageBackendBoundary)
 	appendCheckpointStageStats(stats, "wal_cleanup", &db.checkpointStageWALCleanup)
 	appendCheckpointStageStats(stats, "post_maintenance", &db.checkpointStagePostMaintenance)

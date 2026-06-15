@@ -36,6 +36,27 @@ func addAtomicInt64FloorZero(dst *atomic.Int64, delta int64) {
 	}
 }
 
+func saturatingSubUint64(after, before uint64) uint64 {
+	if after <= before {
+		return 0
+	}
+	return after - before
+}
+
+type backendFlushApplyReducerPublishNser interface {
+	FlushApplyReducerPublishNs() uint64
+}
+
+func (db *DB) backendFlushApplyReducerPublishNs() uint64 {
+	if db == nil || db.backend == nil {
+		return 0
+	}
+	if provider, ok := db.backend.(backendFlushApplyReducerPublishNser); ok {
+		return provider.FlushApplyReducerPublishNs()
+	}
+	return 0
+}
+
 func (db *DB) observeFlushApplyPlan(units, entries int, bytes int64, planning time.Duration) {
 	if db == nil || units <= 0 {
 		return
@@ -94,6 +115,61 @@ func (db *DB) observeForegroundFlushAssist(wait time.Duration, flushed int) {
 	if flushed > 0 {
 		db.flushApplyForegroundAssistFlushes.Add(uint64(flushed))
 	}
+}
+
+func (db *DB) observeFlushSpanRunSource(sourceMemtables, sourcePointOps, rangeDeleteOps int, rangeBarriers int) {
+	if db == nil || sourceMemtables <= 0 {
+		return
+	}
+	db.flushSpanRunRuns.Add(1)
+	db.flushSpanRunSourceMemtables.Add(uint64(sourceMemtables))
+	updateAtomicMaxUint64(&db.flushSpanRunSourceMemtablesMax, uint64(sourceMemtables))
+	if sourcePointOps > 0 {
+		db.flushSpanRunSourcePointOps.Add(uint64(sourcePointOps))
+	}
+	if rangeDeleteOps > 0 {
+		db.flushSpanRunRangeDeleteOps.Add(uint64(rangeDeleteOps))
+	}
+	if rangeBarriers > 0 {
+		db.flushSpanRunRangeBarriers.Add(uint64(rangeBarriers))
+	}
+}
+
+func (db *DB) observeFlushSpanRunPlannedOps(plannedPointOps, rangeDeleteOps int) {
+	if db == nil {
+		return
+	}
+	plannedOps := plannedPointOps + rangeDeleteOps
+	if plannedOps > 0 {
+		db.flushSpanRunPlannedOps.Add(uint64(plannedOps))
+	}
+	if plannedPointOps > 0 {
+		db.flushSpanRunPlannedPointOps.Add(uint64(plannedPointOps))
+	}
+}
+
+func (db *DB) observeFlushSpanRunShadowedOps(shadowedOps int) {
+	if db == nil || shadowedOps <= 0 {
+		return
+	}
+	db.flushSpanRunShadowedOps.Add(uint64(shadowedOps))
+}
+
+func (db *DB) observeFlushSpanRunBackendChunks(chunks int) {
+	if db == nil || chunks <= 0 {
+		return
+	}
+	db.flushSpanRunBackendChunks.Add(uint64(chunks))
+}
+
+func (db *DB) observeCheckpointActiveBackgroundFlushWait(wait time.Duration) {
+	if db == nil || wait <= 0 {
+		return
+	}
+	ns := uint64(wait.Nanoseconds())
+	db.checkpointActiveBackgroundFlushWaitNs.Add(ns)
+	db.checkpointActiveBackgroundFlushWaitSamples.Add(1)
+	updateAtomicMaxUint64(&db.checkpointActiveBackgroundFlushWaitMaxNs, ns)
 }
 
 const flushCoordinatorProgressWait = 10 * time.Millisecond
@@ -251,11 +327,28 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	stats["treedb.cache.flush_apply.leaf_log_append_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogAppendWaitNs.Load())
 	stats["treedb.cache.flush_apply.leaf_log_append_ns_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogAppendNs.Load())
 	stats["treedb.cache.flush_apply.leaf_log_append_bytes_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogAppendBytes.Load())
-	stats["treedb.cache.flush_apply.leaf_log_append_frames_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogAppendFrames.Load())
+	leafLogAppendFrames := db.flushApplyLeafLogAppendFrames.Load()
+	stats["treedb.cache.flush_apply.leaf_log_append_frames_total"] = fmt.Sprintf("%d", leafLogAppendFrames)
 	stats["treedb.cache.flush_apply.leaf_log_append_records_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogAppendRecords.Load())
+	if entries := db.flushApplyEntries.Load(); entries > 0 {
+		stats["treedb.cache.flush_apply.leaf_log_append_frames_per_op"] = fmt.Sprintf("%.6f", float64(leafLogAppendFrames)/float64(entries))
+	}
 	stats["treedb.cache.flush_apply.foreground_assist_calls_total"] = fmt.Sprintf("%d", db.flushApplyForegroundAssistCalls.Load())
 	stats["treedb.cache.flush_apply.foreground_assist_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyForegroundAssistWaitNs.Load())
 	stats["treedb.cache.flush_apply.foreground_assist_flushes_total"] = fmt.Sprintf("%d", db.flushApplyForegroundAssistFlushes.Load())
+	stats["treedb.cache.flush_span_run.runs_total"] = fmt.Sprintf("%d", db.flushSpanRunRuns.Load())
+	stats["treedb.cache.flush_span_run.source_point_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunSourcePointOps.Load())
+	stats["treedb.cache.flush_span_run.planned_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunPlannedOps.Load())
+	stats["treedb.cache.flush_span_run.planned_point_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunPlannedPointOps.Load())
+	stats["treedb.cache.flush_span_run.source_memtables_total"] = fmt.Sprintf("%d", db.flushSpanRunSourceMemtables.Load())
+	stats["treedb.cache.flush_span_run.source_memtables_max"] = fmt.Sprintf("%d", db.flushSpanRunSourceMemtablesMax.Load())
+	stats["treedb.cache.flush_span_run.shadowed_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunShadowedOps.Load())
+	stats["treedb.cache.flush_span_run.range_barriers_total"] = fmt.Sprintf("%d", db.flushSpanRunRangeBarriers.Load())
+	stats["treedb.cache.flush_span_run.range_delete_ops_total"] = fmt.Sprintf("%d", db.flushSpanRunRangeDeleteOps.Load())
+	stats["treedb.cache.flush_span_run.backend_chunks_total"] = fmt.Sprintf("%d", db.flushSpanRunBackendChunks.Load())
+	if runs := db.flushSpanRunRuns.Load(); runs > 0 {
+		stats["treedb.cache.flush_span_run.ops_per_run"] = fmt.Sprintf("%.6f", float64(db.flushSpanRunPlannedOps.Load())/float64(runs))
+	}
 	stats["treedb.cache.flush_apply.coordinator.active"] = fmt.Sprintf("%d", db.flushCoordinatorActive.Load())
 	stats["treedb.cache.flush_apply.coordinator.in_flight_bytes"] = fmt.Sprintf("%d", db.flushCoordinatorInFlightBytes.Load())
 	stats["treedb.cache.flush_apply.coordinator.progress_total"] = fmt.Sprintf("%d", db.flushCoordinatorProgress.Load())

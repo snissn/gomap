@@ -326,8 +326,19 @@ type DB struct {
 	flushApplyReadOnlyPrepareSpanOpsMax           atomic.Uint64
 	flushApplyReadOnlyPrepareSpanBytes            atomic.Uint64
 	flushApplyReadOnlyPrepareSpanBytesMax         atomic.Uint64
+	flushApplyReadOnlyPrepareSingleOpSpans        atomic.Uint64
+	flushApplyReadOnlyPrepareSingleOpSpansMax     atomic.Uint64
 	flushApplyReadOnlyPrepareWorkerRanges         atomic.Uint64
 	flushApplyReadOnlyPrepareWorkerRangesMax      atomic.Uint64
+	flushApplySpanNativeCandidateOps              atomic.Uint64
+	flushApplySpanNativeCandidateSpans            atomic.Uint64
+	flushApplySpanNativeEligibleOps               atomic.Uint64
+	flushApplySpanNativeEligibleSpans             atomic.Uint64
+	flushApplySpanNativeIneligibleOps             atomic.Uint64
+	flushApplySpanNativeIneligibleSpans           atomic.Uint64
+	flushApplySpanNativeFallbacks                 atomic.Uint64
+	flushApplySpanNativeFallbackOps               [FlushSpanRunFallbackReasonCount]atomic.Uint64
+	flushApplySpanNativeFallbackSpans             [FlushSpanRunFallbackReasonCount]atomic.Uint64
 	flushApplyCommitWaitNs                        atomic.Uint64
 	flushApplyGuardedPublishCalls                 atomic.Uint64
 	flushApplyGuardedPublishNs                    atomic.Uint64

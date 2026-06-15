@@ -2924,6 +2924,34 @@ func TestRenderTreeDBSelectedStatsString_SkipsDBsWithoutSelectedKeys(t *testing.
 	}
 }
 
+func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing.T) {
+	instances := []*DBInstance{{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}}}
+	stats := map[string]map[string]string{
+		"TreeDB": {
+			"treedb.cache.flush_span_run.source_point_ops_total":                                   "11",
+			"treedb.cache.flush_span_run.planned_point_ops_total":                                  "10",
+			"treedb.cache.flush_span_run.backend_chunks_total":                                     "3",
+			"treedb.cache.checkpoint.stage.reducer_publish.total_ns":                               "44",
+			"treedb.flush_apply.old_leaf_read_decode.bytes_per_op":                                 "2.200000",
+			"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
+		},
+	}
+
+	got := renderTreeDBSelectedStatsString(instances, stats)
+	for _, want := range []string{
+		"flush_span_run.source_point_ops_total: 11",
+		"flush_span_run.planned_point_ops_total: 10",
+		"flush_span_run.backend_chunks_total: 3",
+		"checkpoint.stage.reducer_publish.total_ns: 44",
+		"flush_apply.old_leaf_read_decode.bytes_per_op: 2.200000",
+		"flush_apply.span_native.fallback.not_implemented_ops_total: 10",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in selected stats, got:\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderTreeDBSelectedStatsString_PrefersBackendMmapReadFamily(t *testing.T) {
 	instances := []*DBInstance{
 		{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}},
@@ -3111,16 +3139,22 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 			},
 			TreeDBStats: map[string]map[string]string{
 				"TreeDB": {
-					"treedb.cache.vlog_mmap.read.hits":                               "10",
-					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":            "8589934592",
-					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "512",
-					"treedb.cache.flush_apply.planning_ns_total":                     "11",
-					"treedb.flush_apply.old_leaf_read_decode.bytes_total":            "22",
-					"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
-					"treedb.cache.vlog_auto.frames.block_lz4":                        "5",
-					"treedb.cache.vlog_block.k.bucket.lz4.le_1":                      "5",
-					"treedb.cache.vlog_outer_leaf_codec.frames.lz4":                  "5",
-					"treedb.unselected":                                              "drop",
+					"treedb.cache.vlog_mmap.read.hits":                                                     "10",
+					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":                                  "8589934592",
+					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":                                     "512",
+					"treedb.cache.flush_apply.planning_ns_total":                                           "11",
+					"treedb.cache.flush_span_run.source_point_ops_total":                                   "11",
+					"treedb.cache.flush_span_run.planned_point_ops_total":                                  "10",
+					"treedb.cache.flush_span_run.backend_chunks_total":                                     "3",
+					"treedb.cache.checkpoint.stage.reducer_publish.total_ns":                               "44",
+					"treedb.flush_apply.old_leaf_read_decode.bytes_total":                                  "22",
+					"treedb.flush_apply.old_leaf_read_decode.bytes_per_op":                                 "2.200000",
+					"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
+					"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "4",
+					"treedb.cache.vlog_auto.frames.block_lz4":                                              "5",
+					"treedb.cache.vlog_block.k.bucket.lz4.le_1":                                            "5",
+					"treedb.cache.vlog_outer_leaf_codec.frames.lz4":                                        "5",
+					"treedb.unselected": "drop",
 				},
 			},
 		},
@@ -3145,7 +3179,6 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if !strings.Contains(string(mdData), "- execution path: `native-fastpath`") {
 		t.Fatalf("markdown missing execution path label:\n%s", string(mdData))
 	}
-
 	var parsed benchprofExport
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
@@ -3178,8 +3211,26 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_apply.planning_ns_total"]; got != "11" {
 		t.Fatalf("unexpected cache flush planning stat=%q", got)
 	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.source_point_ops_total"]; got != "11" {
+		t.Fatalf("unexpected source point ops stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.planned_point_ops_total"]; got != "10" {
+		t.Fatalf("unexpected planned point ops stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.backend_chunks_total"]; got != "3" {
+		t.Fatalf("unexpected span-run chunk stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.checkpoint.stage.reducer_publish.total_ns"]; got != "44" {
+		t.Fatalf("unexpected checkpoint reducer/publish stat=%q", got)
+	}
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.flush_apply.old_leaf_read_decode.bytes_total"]; got != "22" {
 		t.Fatalf("unexpected backend flush old-leaf stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.flush_apply.old_leaf_read_decode.bytes_per_op"]; got != "2.200000" {
+		t.Fatalf("unexpected old-leaf bytes/op stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"]; got != "10" {
+		t.Fatalf("unexpected span-native fallback stat=%q", got)
 	}
 	for key, want := range map[string]string{
 		"treedb.cache.vlog_auto.frames.block_lz4":       "5",
@@ -3321,11 +3372,38 @@ func TestWriteBenchprofArtifacts_InvalidExecutionPathListsAllowedValues(t *testi
 	if err == nil {
 		t.Fatal("expected invalid execution path to fail")
 	}
-	if !strings.Contains(err.Error(), "expected one of oracle|native-fastpath") {
+	if !strings.Contains(err.Error(), "expected one of oracle|native-fastpath|m8-m14-10mm-gate") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Contains(err.Error(), "mixed-path labels are forbidden") {
 		t.Fatalf("non-mixed invalid label reported as mixed: %v", err)
+	}
+}
+
+func TestWriteBenchprofArtifacts_AcceptsM8M14GateExecutionPath(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{{
+		Config: BenchConfig{Keys: 1, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"full_scan": {"TreeDB": 1},
+		},
+	}}
+	if err := writeBenchprofArtifacts(dir, "m8-m14-10mm-gate", runs); err != nil {
+		t.Fatalf("m8-m14 gate execution path should be accepted: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof results: %v", err)
+	}
+	var parsed benchprofExport
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse benchprof results: %v", err)
+	}
+	if len(parsed.Runs) != 1 {
+		t.Fatalf("benchprof runs=%d want 1", len(parsed.Runs))
+	}
+	if got := parsed.Runs[0].ExecutionPath; got != "m8-m14-10mm-gate" {
+		t.Fatalf("execution_path=%q want m8-m14-10mm-gate", got)
 	}
 }
 

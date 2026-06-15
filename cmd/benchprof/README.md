@@ -18,7 +18,7 @@ make benchprof
 
 ## Typical flow
 
-1. Run `unified-bench` with profile outputs into one directory. `-profile-dir` defaults artifact metadata to `-path-label native-fastpath`; pass `-path-label oracle` only for explicit oracle/comparator captures.
+1. Run `unified-bench` with profile outputs into one directory. `-profile-dir` defaults artifact metadata to `-path-label native-fastpath`; pass `-path-label oracle` for explicit oracle/comparator captures or `-path-label m8-m14-10mm-gate` for the #2768+ mandatory span-run gate shape.
 2. `unified-bench` auto-runs `benchprof` in-process when `-profile-dir` is enabled. You can still run `benchprof` manually if needed.
 
 Example:
@@ -73,11 +73,14 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
   value-log mmap reads, unified-bench selected displays prefer backend
   `treedb.vlog.mmap_read.*` counters over cache-prefixed aliases, and the
   metadata includes generic plus leaf-specific sealed mmap budget caps when
-  TreeDB exposes them. Parallel-flush M0 artifacts preserve
-  `treedb.cache.flush_apply.*` and `treedb.flush_apply.*` counters so planning,
-  build, old-leaf read/decode, leaf-log append, guarded publish, commit-wait,
-  retry, and foreground-assist stages appear beside CPU/allocation/contention
-  profiles. Value-log codec policy artifacts also preserve
+  TreeDB exposes them. Parallel-flush M0/M8 artifacts preserve
+  `treedb.cache.flush_apply.*`, `treedb.cache.flush_span_run.*`,
+  `treedb.flush_apply.*`, `treedb.flush_apply.span_run.*`, and
+  `treedb.flush_apply.span_native.*` counters so planning, canonical run shape,
+  old-leaf read/decode bytes/op, leaf merges/op, replacement pages/op,
+  append frames/op, guarded publish, reducer/publish, checkpoint wait splits,
+  fallback reasons, retry, and foreground-assist stages appear beside
+  CPU/allocation/contention profiles. Value-log codec policy artifacts also preserve
   `treedb.cache.vlog_auto.*`, `treedb.cache.vlog_write_mode.*`,
   `treedb.cache.vlog_payload_kind.*`, `treedb.cache.vlog_payload_split.*`,
   `treedb.cache.vlog_outer_leaf_codec.*`, and `treedb.cache.vlog_block.*`

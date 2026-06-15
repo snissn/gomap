@@ -72,7 +72,7 @@ var (
 	cpuProfile                = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg        = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 	profileDir                = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
-	pathLabel                 = flag.String("path-label", "", "Benchmark execution-path label for -profile-dir artifacts (oracle|native-fastpath; default native-fastpath)")
+	pathLabel                 = flag.String("path-label", "", "Benchmark execution-path label for -profile-dir artifacts (oracle|native-fastpath|m8-m14-10mm-gate; default native-fastpath)")
 	allocsProfile             = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
 	allocsProfileTests        = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
 	allocsProfileRate         = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
@@ -1449,13 +1449,13 @@ func normalizeBenchprofExecutionPath(executionPath string) (string, error) {
 	if executionPath == "" {
 		return "native-fastpath", nil
 	}
-	if executionPath == "oracle" || executionPath == "native-fastpath" {
+	if executionPath == "oracle" || executionPath == "native-fastpath" || executionPath == "m8-m14-10mm-gate" {
 		return executionPath, nil
 	}
 	if strings.ContainsAny(executionPath, ",+") {
-		return "", fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden; expected one of oracle|native-fastpath", executionPath)
+		return "", fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden; expected one of oracle|native-fastpath|m8-m14-10mm-gate", executionPath)
 	}
-	return "", fmt.Errorf("invalid execution path %q: expected one of oracle|native-fastpath", executionPath)
+	return "", fmt.Errorf("invalid execution path %q: expected one of oracle|native-fastpath|m8-m14-10mm-gate", executionPath)
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
@@ -6303,7 +6303,18 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "flush_apply.cache.leaf_log_append_ns_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_ns_total"}},
 		{label: "flush_apply.cache.leaf_log_append_bytes_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_bytes_total"}},
 		{label: "flush_apply.cache.leaf_log_append_frames_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_frames_total"}},
+		{label: "flush_apply.cache.leaf_log_append_frames_per_op", alts: []string{"treedb.cache.flush_apply.leaf_log_append_frames_per_op"}},
 		{label: "flush_apply.cache.leaf_log_append_records_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_records_total"}},
+		// M8 intentionally does not select target_leaves_split_across_chunks_total:
+		// production cache flushes cannot honestly emit it until M9 provides canonical
+		// target-leaf metadata before backend chunking.
+		{label: "flush_span_run.source_point_ops_total", alts: []string{"treedb.cache.flush_span_run.source_point_ops_total"}},
+		{label: "flush_span_run.planned_ops_total", alts: []string{"treedb.cache.flush_span_run.planned_ops_total"}},
+		{label: "flush_span_run.planned_point_ops_total", alts: []string{"treedb.cache.flush_span_run.planned_point_ops_total"}},
+		{label: "flush_span_run.source_memtables_total", alts: []string{"treedb.cache.flush_span_run.source_memtables_total"}},
+		{label: "flush_span_run.shadowed_ops_total", alts: []string{"treedb.cache.flush_span_run.shadowed_ops_total"}},
+		{label: "flush_span_run.range_barriers_total", alts: []string{"treedb.cache.flush_span_run.range_barriers_total"}},
+		{label: "flush_span_run.backend_chunks_total", alts: []string{"treedb.cache.flush_span_run.backend_chunks_total"}},
 		{label: "flush_apply.prepared_output.leaf_log_pages_prepared_total", alts: []string{"treedb.flush_apply.prepared_output.leaf_log_pages_prepared_total"}},
 		{label: "flush_apply.prepared_output.leaf_log_pages_installed_total", alts: []string{"treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"}},
 		{label: "flush_apply.prepared_output.leaf_log_pages_abandoned_total", alts: []string{"treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total"}},
@@ -6313,9 +6324,23 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "flush_apply.cache.coordinator.stall_waits_total", alts: []string{"treedb.cache.flush_apply.coordinator.stall_waits_total"}},
 		{label: "flush_apply.cache.coordinator.blocking_fallbacks_total", alts: []string{"treedb.cache.flush_apply.coordinator.blocking_fallbacks_total"}},
 		{label: "flush_apply.cache.coordinator.hard_overload_fallbacks_total", alts: []string{"treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total"}},
+		{label: "checkpoint.active_background_flush_wait_ns_total", alts: []string{"treedb.cache.checkpoint.active_background_flush_wait_ns_total"}},
+		{label: "checkpoint.stage.leaf_value_log_sync.total_ns", alts: []string{"treedb.cache.checkpoint.stage.leaf_value_log_sync.total_ns"}},
+		{label: "checkpoint.stage.reducer_publish.total_ns", alts: []string{"treedb.cache.checkpoint.stage.reducer_publish.total_ns"}},
 		{label: "flush_apply.apply_ns_total", alts: []string{"treedb.flush_apply.apply_ns_total"}},
 		{label: "flush_apply.old_leaf_read_decode.bytes_total", alts: []string{"treedb.flush_apply.old_leaf_read_decode.bytes_total"}},
+		{label: "flush_apply.old_leaf_read_decode.bytes_per_op", alts: []string{"treedb.flush_apply.old_leaf_read_decode.bytes_per_op"}},
 		{label: "flush_apply.merge_build.leaf_merges_total", alts: []string{"treedb.flush_apply.merge_build.leaf_merges_total"}},
+		{label: "flush_apply.merge_build.leaf_merges_per_op", alts: []string{"treedb.flush_apply.merge_build.leaf_merges_per_op"}},
+		{label: "flush_apply.merge_build.replacement_leaf_pages_per_op", alts: []string{"treedb.flush_apply.merge_build.replacement_leaf_pages_per_op"}},
+		{label: "flush_apply.span_run.target_leaf_spans_total", alts: []string{"treedb.flush_apply.span_run.target_leaf_spans_total"}},
+		{label: "flush_apply.span_run.single_op_spans_total", alts: []string{"treedb.flush_apply.span_run.single_op_spans_total"}},
+		{label: "flush_apply.span_run.ops_per_span", alts: []string{"treedb.flush_apply.span_run.ops_per_span"}},
+		{label: "flush_apply.span_run.bytes_per_span", alts: []string{"treedb.flush_apply.span_run.bytes_per_span"}},
+		{label: "flush_apply.span_native.candidate_ops_total", alts: []string{"treedb.flush_apply.span_native.candidate_ops_total"}},
+		{label: "flush_apply.span_native.eligible_ops_total", alts: []string{"treedb.flush_apply.span_native.eligible_ops_total"}},
+		{label: "flush_apply.span_native.ineligible_ops_total", alts: []string{"treedb.flush_apply.span_native.ineligible_ops_total"}},
+		{label: "flush_apply.span_native.fallback.not_implemented_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"}},
 		{label: "flush_apply.root_reduce.ns_total", alts: []string{"treedb.flush_apply.root_reduce.ns_total"}},
 		{label: "flush_apply.commit_wait_ns_total", alts: []string{"treedb.flush_apply.commit_wait_ns_total"}},
 		{label: "flush_apply.guarded_publish.ns_total", alts: []string{"treedb.flush_apply.guarded_publish.ns_total"}},

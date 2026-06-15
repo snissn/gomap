@@ -74,10 +74,59 @@ func (db *DB) observeFlushApplyReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSu
 		db.flushApplyReadOnlyPrepareSpanBytes.Add(spanBytes)
 		storeUint64Max(&db.flushApplyReadOnlyPrepareSpanBytesMax, spanBytes)
 	}
+	if summary.SingleOpSpans > 0 {
+		singleOpSpans := uint64(summary.SingleOpSpans)
+		db.flushApplyReadOnlyPrepareSingleOpSpans.Add(singleOpSpans)
+		storeUint64Max(&db.flushApplyReadOnlyPrepareSingleOpSpansMax, singleOpSpans)
+	}
 	if workerSummary.Ranges > 0 {
 		ranges := uint64(workerSummary.Ranges)
 		db.flushApplyReadOnlyPrepareWorkerRanges.Add(ranges)
 		storeUint64Max(&db.flushApplyReadOnlyPrepareWorkerRangesMax, ranges)
+	}
+}
+
+func (db *DB) observeFlushApplySpanNativeFallback(summary zipper.ReadOnlyLeafSpanSummary, reason FlushSpanRunFallbackReason) {
+	if db == nil {
+		return
+	}
+	if !reason.Valid() {
+		reason = FlushSpanRunFallbackUnknown
+	}
+	ops := summary.Ops
+	if ops <= 0 {
+		ops = summary.SpanOps
+	}
+	spans := summary.Spans
+	if ops > 0 {
+		db.flushApplySpanNativeCandidateOps.Add(uint64(ops))
+		db.flushApplySpanNativeIneligibleOps.Add(uint64(ops))
+		db.flushApplySpanNativeFallbackOps[reason].Add(uint64(ops))
+	}
+	if spans > 0 {
+		db.flushApplySpanNativeCandidateSpans.Add(uint64(spans))
+		db.flushApplySpanNativeIneligibleSpans.Add(uint64(spans))
+		db.flushApplySpanNativeFallbackSpans[reason].Add(uint64(spans))
+	}
+	db.flushApplySpanNativeFallbacks.Add(1)
+}
+
+func classifyFlushApplySpanNativeFallback(summary zipper.ReadOnlyLeafSpanSummary, err error, validationFailure bool) FlushSpanRunFallbackReason {
+	switch {
+	case validationFailure:
+		return FlushSpanRunFallbackValidationFailed
+	case err != nil:
+		return FlushSpanRunFallbackPrepareError
+	case summary.ColdBuild:
+		return FlushSpanRunFallbackColdBuild
+	case summary.Maintenance:
+		return FlushSpanRunFallbackMaintenance
+	case summary.DeleteRanges > 0:
+		return FlushSpanRunFallbackRangeDeleteBarrier
+	case !summary.ExactLeafSpans:
+		return FlushSpanRunFallbackInexactLeafSpans
+	default:
+		return FlushSpanRunFallbackSpanNativeNotImplemented
 	}
 }
 
@@ -163,6 +212,15 @@ func (db *DB) observeFlushApplyGuardedPublish(hold time.Duration) {
 	addDurationNs(&db.flushApplyGuardedPublishNs, hold)
 }
 
+// FlushApplyReducerPublishNs returns the cumulative root-reduce plus guarded
+// publish time without constructing the full Stats map.
+func (db *DB) FlushApplyReducerPublishNs() uint64 {
+	if db == nil {
+		return 0
+	}
+	return db.flushApplyRootReduceNs.Load() + db.flushApplyGuardedPublishNs.Load()
+}
+
 func (db *DB) observeFlushApplyRetry() {
 	if db == nil {
 		return
@@ -181,9 +239,10 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	if db == nil || stats == nil {
 		return
 	}
+	applyOps := db.flushApplyOps.Load()
 	stats["treedb.flush_apply.apply_calls_total"] = fmt.Sprintf("%d", db.flushApplyCalls.Load())
 	stats["treedb.flush_apply.apply_errors_total"] = fmt.Sprintf("%d", db.flushApplyErrors.Load())
-	stats["treedb.flush_apply.apply_ops_total"] = fmt.Sprintf("%d", db.flushApplyOps.Load())
+	stats["treedb.flush_apply.apply_ops_total"] = fmt.Sprintf("%d", applyOps)
 	stats["treedb.flush_apply.apply_ns_total"] = fmt.Sprintf("%d", db.flushApplyNs.Load())
 	stats["treedb.flush_apply.old_leaf_read_decode.node_loads_total"] = fmt.Sprintf("%d", db.flushApplyOldNodeLoads.Load())
 	stats["treedb.flush_apply.old_leaf_read_decode.pager_node_loads_total"] = fmt.Sprintf("%d", db.flushApplyOldPagerNodeLoads.Load())
@@ -194,17 +253,30 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.old_leaf_read_decode.leaf_log_scratch_reads_total"] = fmt.Sprintf("%d", db.flushApplyOldLeafLogScratchReads.Load())
 	pagerBytes := db.flushApplyOldPagerNodeBytesRead.Load()
 	leafLogBytes := db.flushApplyOldLeafLogNodeBytesRead.Load()
-	stats["treedb.flush_apply.old_leaf_read_decode.bytes_total"] = fmt.Sprintf("%d", pagerBytes+leafLogBytes)
+	oldLeafDecodeBytes := pagerBytes + leafLogBytes
+	stats["treedb.flush_apply.old_leaf_read_decode.bytes_total"] = fmt.Sprintf("%d", oldLeafDecodeBytes)
+	if applyOps > 0 {
+		stats["treedb.flush_apply.old_leaf_read_decode.bytes_per_op"] = fmt.Sprintf("%.6f", float64(oldLeafDecodeBytes)/float64(applyOps))
+	}
 	stats["treedb.flush_apply.old_leaf_read_decode.pager_bytes_total"] = fmt.Sprintf("%d", pagerBytes)
 	stats["treedb.flush_apply.old_leaf_read_decode.leaf_log_bytes_total"] = fmt.Sprintf("%d", leafLogBytes)
 	stats["treedb.flush_apply.old_leaf_read_decode.leaf_log_record_hint_bytes_total"] = fmt.Sprintf("%d", db.flushApplyOldLeafLogRecordHintBytesRead.Load())
-	stats["treedb.flush_apply.merge_build.leaf_merges_total"] = fmt.Sprintf("%d", db.flushApplyLeafMerges.Load())
+	leafMerges := db.flushApplyLeafMerges.Load()
+	stats["treedb.flush_apply.merge_build.leaf_merges_total"] = fmt.Sprintf("%d", leafMerges)
+	if applyOps > 0 {
+		stats["treedb.flush_apply.merge_build.leaf_merges_per_op"] = fmt.Sprintf("%.6f", float64(leafMerges)/float64(applyOps))
+	}
 	stats["treedb.flush_apply.merge_build.internal_merges_total"] = fmt.Sprintf("%d", db.flushApplyInternalMerges.Load())
 	stats["treedb.flush_apply.merge_build.internal_parallel_merges_total"] = fmt.Sprintf("%d", db.flushApplyInternalParallelMerges.Load())
 	stats["treedb.flush_apply.merge_build.internal_parallel_children_total"] = fmt.Sprintf("%d", db.flushApplyInternalParallelChildren.Load())
 	stats["treedb.flush_apply.merge_build.internal_parallel_workers_total"] = fmt.Sprintf("%d", db.flushApplyInternalParallelWorkers.Load())
 	stats["treedb.flush_apply.merge_build.internal_parallel_ops_total"] = fmt.Sprintf("%d", db.flushApplyInternalParallelOps.Load())
-	stats["treedb.flush_apply.merge_build.leaf_pages_written_total"] = fmt.Sprintf("%d", db.flushApplyLeafPagesWritten.Load())
+	replacementLeafPages := db.flushApplyLeafPagesWritten.Load()
+	stats["treedb.flush_apply.merge_build.leaf_pages_written_total"] = fmt.Sprintf("%d", replacementLeafPages)
+	stats["treedb.flush_apply.merge_build.replacement_leaf_pages_total"] = fmt.Sprintf("%d", replacementLeafPages)
+	if applyOps > 0 {
+		stats["treedb.flush_apply.merge_build.replacement_leaf_pages_per_op"] = fmt.Sprintf("%.6f", float64(replacementLeafPages)/float64(applyOps))
+	}
 	stats["treedb.flush_apply.merge_build.pager_leaf_pages_written_total"] = fmt.Sprintf("%d", db.flushApplyPagerLeafPagesWritten.Load())
 	stats["treedb.flush_apply.merge_build.leaf_log_pages_written_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogPagesWritten.Load())
 	stats["treedb.flush_apply.merge_build.leaf_page_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyLeafPageBytesWritten.Load())
@@ -223,7 +295,11 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.merge_build.internal_pages_written_total"] = fmt.Sprintf("%d", db.flushApplyInternalPagesWritten.Load())
 	stats["treedb.flush_apply.merge_build.internal_page_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyInternalPageBytesWritten.Load())
 	stats["treedb.flush_apply.merge_build.internal_child_refs_total"] = fmt.Sprintf("%d", db.flushApplyInternalChildRefs.Load())
-	stats["treedb.flush_apply.root_reduce.ns_total"] = fmt.Sprintf("%d", db.flushApplyRootReduceNs.Load())
+	rootReduceNs := db.flushApplyRootReduceNs.Load()
+	stats["treedb.flush_apply.root_reduce.ns_total"] = fmt.Sprintf("%d", rootReduceNs)
+	if applyOps > 0 {
+		stats["treedb.flush_apply.root_reduce.ns_per_op"] = fmt.Sprintf("%.6f", float64(rootReduceNs)/float64(applyOps))
+	}
 	stats["treedb.flush_apply.root_reduce.split_levels_total"] = fmt.Sprintf("%d", db.flushApplyRootSplitLevels.Load())
 	stats["treedb.flush_apply.read_only_prepare.calls_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareCalls.Load())
 	stats["treedb.flush_apply.read_only_prepare.errors_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareErrors.Load())
@@ -235,13 +311,42 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.read_only_prepare.spans_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpansMax.Load())
 	stats["treedb.flush_apply.read_only_prepare.span_ops_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpanOps.Load())
 	stats["treedb.flush_apply.read_only_prepare.span_ops_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpanOpsMax.Load())
-	stats["treedb.flush_apply.read_only_prepare.span_bytes_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpanBytes.Load())
+	readOnlySpans := db.flushApplyReadOnlyPrepareSpans.Load()
+	readOnlySpanOps := db.flushApplyReadOnlyPrepareSpanOps.Load()
+	readOnlySpanBytes := db.flushApplyReadOnlyPrepareSpanBytes.Load()
+	stats["treedb.flush_apply.read_only_prepare.span_bytes_total"] = fmt.Sprintf("%d", readOnlySpanBytes)
 	stats["treedb.flush_apply.read_only_prepare.span_bytes_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSpanBytesMax.Load())
+	stats["treedb.flush_apply.read_only_prepare.single_op_spans_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSingleOpSpans.Load())
+	stats["treedb.flush_apply.read_only_prepare.single_op_spans_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSingleOpSpansMax.Load())
+	stats["treedb.flush_apply.span_run.target_leaf_spans_total"] = fmt.Sprintf("%d", readOnlySpans)
+	stats["treedb.flush_apply.span_run.single_op_spans_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareSingleOpSpans.Load())
+	stats["treedb.flush_apply.span_run.span_ops_total"] = fmt.Sprintf("%d", readOnlySpanOps)
+	stats["treedb.flush_apply.span_run.span_bytes_total"] = fmt.Sprintf("%d", readOnlySpanBytes)
+	if readOnlySpans > 0 {
+		stats["treedb.flush_apply.span_run.ops_per_span"] = fmt.Sprintf("%.6f", float64(readOnlySpanOps)/float64(readOnlySpans))
+		stats["treedb.flush_apply.span_run.bytes_per_span"] = fmt.Sprintf("%.6f", float64(readOnlySpanBytes)/float64(readOnlySpans))
+	}
 	stats["treedb.flush_apply.read_only_prepare.worker_ranges_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareWorkerRanges.Load())
 	stats["treedb.flush_apply.read_only_prepare.worker_ranges_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareWorkerRangesMax.Load())
 	stats["treedb.flush_apply.commit_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyCommitWaitNs.Load())
 	stats["treedb.flush_apply.guarded_publish.calls_total"] = fmt.Sprintf("%d", db.flushApplyGuardedPublishCalls.Load())
-	stats["treedb.flush_apply.guarded_publish.ns_total"] = fmt.Sprintf("%d", db.flushApplyGuardedPublishNs.Load())
+	guardedPublishNs := db.flushApplyGuardedPublishNs.Load()
+	stats["treedb.flush_apply.guarded_publish.ns_total"] = fmt.Sprintf("%d", guardedPublishNs)
+	if applyOps > 0 {
+		stats["treedb.flush_apply.guarded_publish.ns_per_op"] = fmt.Sprintf("%.6f", float64(guardedPublishNs)/float64(applyOps))
+	}
+	stats["treedb.flush_apply.span_native.candidate_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeCandidateOps.Load())
+	stats["treedb.flush_apply.span_native.candidate_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeCandidateSpans.Load())
+	stats["treedb.flush_apply.span_native.eligible_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeEligibleOps.Load())
+	stats["treedb.flush_apply.span_native.eligible_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeEligibleSpans.Load())
+	stats["treedb.flush_apply.span_native.ineligible_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeIneligibleOps.Load())
+	stats["treedb.flush_apply.span_native.ineligible_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeIneligibleSpans.Load())
+	stats["treedb.flush_apply.span_native.fallbacks_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeFallbacks.Load())
+	for _, reason := range FlushSpanRunFallbackReasons() {
+		name := reason.String()
+		stats["treedb.flush_apply.span_native.fallback.reason."+name+".ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeFallbackOps[reason].Load())
+		stats["treedb.flush_apply.span_native.fallback.reason."+name+".spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeFallbackSpans[reason].Load())
+	}
 	stats["treedb.flush_apply.retry_total"] = fmt.Sprintf("%d", db.flushApplyRetries.Load())
 	stats["treedb.flush_apply.mismatch_total"] = fmt.Sprintf("%d", db.flushApplyMismatches.Load())
 }

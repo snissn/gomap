@@ -29,4 +29,5 @@ func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err erro
 		workerSummary = result.ReadOnlyPrepare.LeafSpanWorkerRangeSummary(db.flushApplyConcurrency)
 	}
 	db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, result.ReadOnlyPrepareNs, err, result.ReadOnlyPrepareValidationFailed)
+	db.observeFlushApplySpanNativeFallback(summary, classifyFlushApplySpanNativeFallback(summary, err, result.ReadOnlyPrepareValidationFailed))
 }
