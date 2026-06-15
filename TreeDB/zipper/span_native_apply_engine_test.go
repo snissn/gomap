@@ -24,6 +24,35 @@ func TestSpanNativeApplySingleLeafParity(t *testing.T) {
 		}
 	}
 
+	assertSpanNativeParity(t, serial, native, serialRoot, nativeRoot, delta)
+}
+
+func TestSpanNativeApplySingleLeafSplitReducerParity(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	_, native := newReadOnlyPrepareZipper(t)
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 1)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 1)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	value := bytes.Repeat([]byte("v"), 200)
+	for i := 1; i < 140; i++ {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), value); err != nil {
+			t.Fatalf("Set update: %v", err)
+		}
+	}
+
+	result := assertSpanNativeParity(t, serial, native, serialRoot, nativeRoot, delta)
+	if result.Metrics.Splits == 0 {
+		t.Fatalf("span-native split reducer test did not produce splits; metrics=%+v", result.Metrics)
+	}
+	if result.Metrics.ZipperRootSplitLevels == 0 {
+		t.Fatalf("root split levels=%d want >0", result.Metrics.ZipperRootSplitLevels)
+	}
+}
+
+func assertSpanNativeParity(t *testing.T, serial, native *Zipper, serialRoot, nativeRoot uint64, delta *batch.Batch) ApplyResult {
+	t.Helper()
 	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
 	if err != nil {
 		t.Fatalf("serial Apply: %v", err)
@@ -43,45 +72,50 @@ func TestSpanNativeApplySingleLeafParity(t *testing.T) {
 	if !bytes.Equal(serialPairs, nativePairs) {
 		t.Fatalf("span-native output mismatch\nserial=%q\nnative=%q", serialPairs, nativePairs)
 	}
+	return result
 }
 
 func collectRootLeafPairs(t *testing.T, z *Zipper, rootID uint64) []byte {
 	t.Helper()
-	data, err := z.pager.Get(rootID)
+	return collectChildRefLeafPairs(t, z, page.PageChildRef(rootID))
+}
+
+func collectChildRefLeafPairs(t *testing.T, z *Zipper, ref page.ChildRef) []byte {
+	t.Helper()
+	if ref.Kind != page.ChildRefPage {
+		t.Fatalf("child kind=%d want page", ref.Kind)
+	}
+	data, err := z.pager.Get(ref.Page)
 	if err != nil {
-		t.Fatalf("get root %d: %v", rootID, err)
+		t.Fatalf("get page %d: %v", ref.Page, err)
 	}
 	n := node.NewNode(data)
-	if n.Type() == page.PageTypeInternal {
-		if n.Count() != 1 {
-			t.Fatalf("internal root count=%d want 1 for test helper", n.Count())
+	switch n.Type() {
+	case page.PageTypeLeaf, 0:
+		var out []byte
+		for i := uint16(0); i < n.Count(); i++ {
+			entry, err := n.GetLeafEntry(i)
+			if err != nil {
+				t.Fatalf("leaf entry %d: %v", i, err)
+			}
+			out = append(out, entry.Key...)
+			out = append(out, '=')
+			out = append(out, entry.Value...)
+			out = append(out, '\n')
 		}
-		ref, err := n.GetInternalChildRef(0)
-		if err != nil {
-			t.Fatalf("get root child: %v", err)
+		return out
+	case page.PageTypeInternal:
+		var out []byte
+		for i := uint16(0); i < n.Count(); i++ {
+			child, err := n.GetInternalChildRef(i)
+			if err != nil {
+				t.Fatalf("internal child %d: %v", i, err)
+			}
+			out = append(out, collectChildRefLeafPairs(t, z, child)...)
 		}
-		if ref.Kind != page.ChildRefPage {
-			t.Fatalf("root child kind=%d want page", ref.Kind)
-		}
-		data, err = z.pager.Get(ref.Page)
-		if err != nil {
-			t.Fatalf("get child %d: %v", ref.Page, err)
-		}
-		n = node.NewNode(data)
+		return out
+	default:
+		t.Fatalf("node type=%d want leaf/internal", n.Type())
+		return nil
 	}
-	if n.Type() != page.PageTypeLeaf {
-		t.Fatalf("node type=%d want leaf", n.Type())
-	}
-	var out []byte
-	for i := uint16(0); i < n.Count(); i++ {
-		entry, err := n.GetLeafEntry(i)
-		if err != nil {
-			t.Fatalf("leaf entry %d: %v", i, err)
-		}
-		out = append(out, entry.Key...)
-		out = append(out, '=')
-		out = append(out, entry.Value...)
-		out = append(out, '\n')
-	}
-	return out
 }
