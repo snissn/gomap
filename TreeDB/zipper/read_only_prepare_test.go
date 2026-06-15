@@ -592,6 +592,9 @@ func TestReadOnlyPrepareResultValidateLeafSpansContracts(t *testing.T) {
 		{name: "out of order bounds", in: ReadOnlyPrepareResult{Ops: 2, LeafSpans: []ReadOnlyLeafSpan{{HighKey: []byte("m"), FirstOpKey: []byte("a"), LastOpKey: []byte("b"), OpCount: 1}, {LowKey: []byte("c"), FirstOpKey: []byte("d"), LastOpKey: []byte("d"), OpCount: 1}}}},
 		{name: "op before low", in: ReadOnlyPrepareResult{Ops: 1, LeafSpans: []ReadOnlyLeafSpan{{LowKey: []byte("c"), FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 1}}}},
 		{name: "op at high", in: ReadOnlyPrepareResult{Ops: 1, LeafSpans: []ReadOnlyLeafSpan{{HighKey: []byte("b"), FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 1}}}},
+		{name: "omit keys empty point range", in: ReadOnlyPrepareResult{Ops: 1, PointOps: 1, OmitKeys: true, LeafSpans: []ReadOnlyLeafSpan{{OpCount: 1, PointOpCount: 1, PointOpStart: 0, PointOpEnd: 0}}}},
+		{name: "omit keys point range mismatch", in: ReadOnlyPrepareResult{Ops: 1, PointOps: 1, OmitKeys: true, LeafSpans: []ReadOnlyLeafSpan{{OpCount: 1, PointOpCount: 1, PointOpStart: 0, PointOpEnd: 2}}}},
+		{name: "omit keys overlapping point ranges", in: ReadOnlyPrepareResult{Ops: 2, PointOps: 2, OmitKeys: true, LeafSpans: []ReadOnlyLeafSpan{{OpCount: 1, PointOpCount: 1, PointOpStart: 0, PointOpEnd: 1}, {OpCount: 1, PointOpCount: 1, PointOpStart: 0, PointOpEnd: 1}}}},
 		{name: "range index mismatch", in: ReadOnlyPrepareResult{Ops: 1, DeleteRanges: 1, LeafSpans: []ReadOnlyLeafSpan{{OpCount: 1, DeleteRangeCount: 1, DeleteRangeStart: 2, DeleteRangeEnd: 2}}}},
 	}
 	for _, tc := range tests {

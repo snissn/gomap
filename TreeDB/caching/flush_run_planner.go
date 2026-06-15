@@ -692,7 +692,7 @@ func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, 
 		return err
 	}
 	commandPublishAttached := false
-	if last {
+	if last && commandPublish != nil {
 		attached, attachErr := commandPublish.attach(backendBatch)
 		if attachErr != nil {
 			_ = backendBatch.Close()

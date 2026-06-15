@@ -436,6 +436,7 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 	totalSpanOps := 0
 	var prevLastOp []byte
 	var prevHigh []byte
+	prevPointEnd := -1
 	prevRangeStart := -1
 	for i, span := range r.LeafSpans {
 		if span.OpCount <= 0 {
@@ -489,8 +490,31 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 				return readOnlyPrepareSpanError(i, "last op key %s is not before high key %s", readOnlyPrepareKeyForError(span.LastOpKey), readOnlyPrepareKeyForError(span.HighKey))
 			}
 		}
-		if pointCount > 0 && span.PointOpEnd-span.PointOpStart > 0 && span.PointOpEnd-span.PointOpStart != pointCount {
-			return readOnlyPrepareSpanError(i, "point index range [%d,%d) does not match point count %d", span.PointOpStart, span.PointOpEnd, pointCount)
+		if pointCount > 0 {
+			pointWidth := span.PointOpEnd - span.PointOpStart
+			if r.OmitKeys {
+				if span.PointOpStart < 0 || span.PointOpEnd < 0 {
+					return readOnlyPrepareSpanError(i, "point index range [%d,%d) has negative bound", span.PointOpStart, span.PointOpEnd)
+				}
+				if pointWidth <= 0 {
+					return readOnlyPrepareSpanError(i, "point index range [%d,%d) is empty under omit-keys planning", span.PointOpStart, span.PointOpEnd)
+				}
+				if pointWidth != pointCount {
+					return readOnlyPrepareSpanError(i, "point index range [%d,%d) does not match point count %d", span.PointOpStart, span.PointOpEnd, pointCount)
+				}
+				if prevPointEnd >= 0 && span.PointOpStart < prevPointEnd {
+					return readOnlyPrepareSpanError(i, "point index range [%d,%d) overlaps previous point end %d", span.PointOpStart, span.PointOpEnd, prevPointEnd)
+				}
+				prevPointEnd = span.PointOpEnd
+			} else if pointWidth > 0 {
+				if pointWidth != pointCount {
+					return readOnlyPrepareSpanError(i, "point index range [%d,%d) does not match point count %d", span.PointOpStart, span.PointOpEnd, pointCount)
+				}
+				if prevPointEnd >= 0 && span.PointOpStart < prevPointEnd {
+					return readOnlyPrepareSpanError(i, "point index range [%d,%d) overlaps previous point end %d", span.PointOpStart, span.PointOpEnd, prevPointEnd)
+				}
+				prevPointEnd = span.PointOpEnd
+			}
 		}
 		if rangeCount > 0 {
 			if span.DeleteRangeEnd <= span.DeleteRangeStart {

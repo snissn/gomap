@@ -24689,12 +24689,14 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		db.observeFlushApplyBuild(time.Since(buildStart))
 		commandPublishAttached := false
 		if pending > 0 {
-			var attachErr error
-			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
-			if attachErr != nil {
-				db.reportError(attachErr)
-				_ = backendBatch.Close()
-				return false
+			if commandPublish != nil {
+				var attachErr error
+				commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+				if attachErr != nil {
+					db.reportError(attachErr)
+					_ = backendBatch.Close()
+					return false
+				}
 			}
 			db.rangeSpanFlushBatches.Add(1)
 			db.backendWriteBatchesTotal.Add(1)
