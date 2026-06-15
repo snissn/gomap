@@ -226,16 +226,6 @@ func (db *DB) observeFlushApplyMismatch() {
 	db.flushApplyMismatches.Add(1)
 }
 
-// FlushApplyReducerPublishNs returns the cumulative reducer plus guarded-publish
-// nanoseconds. Cached checkpoint code uses this cheap snapshot to split
-// checkpoint wait without calling the full Stats path while flushMu is held.
-func (db *DB) FlushApplyReducerPublishNs() uint64 {
-	if db == nil {
-		return 0
-	}
-	return db.flushApplyRootReduceNs.Load() + db.flushApplyGuardedPublishNs.Load()
-}
-
 func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	if db == nil || stats == nil {
 		return

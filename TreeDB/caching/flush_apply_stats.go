@@ -55,16 +55,9 @@ func parseCacheStatsUint64(stats map[string]string, key string) uint64 {
 	return v
 }
 
-type backendFlushApplyReducerPublishSnapshotter interface {
-	FlushApplyReducerPublishNs() uint64
-}
-
 func (db *DB) backendFlushApplyReducerPublishNs() uint64 {
 	if db == nil || db.backend == nil {
 		return 0
-	}
-	if snap, ok := db.backend.(backendFlushApplyReducerPublishSnapshotter); ok {
-		return snap.FlushApplyReducerPublishNs()
 	}
 	stats := db.backend.Stats()
 	return parseCacheStatsUint64(stats, "treedb.flush_apply.root_reduce.ns_total") + parseCacheStatsUint64(stats, "treedb.flush_apply.guarded_publish.ns_total")
