@@ -251,20 +251,20 @@ func ValidateFlushSpanRunMetadata(meta FlushSpanRunMetadata) error {
 	if meta.SourceMemtables < 0 || meta.SourcePointOps < 0 || meta.PlannedPointOps < 0 || meta.ShadowedPointOps < 0 || meta.RangeBarriers < 0 || meta.LaneBarriers < 0 {
 		return fmt.Errorf("negative span-run metadata count")
 	}
-	if meta.SourcePointOps > 0 && meta.SourcePointOps != meta.PlannedPointOps+meta.ShadowedPointOps {
+	if meta.SourcePointOps != meta.PlannedPointOps+meta.ShadowedPointOps {
 		return fmt.Errorf("source point ops=%d must equal planned point ops=%d plus shadowed point ops=%d", meta.SourcePointOps, meta.PlannedPointOps, meta.ShadowedPointOps)
 	}
 	prevEnd := 0
 	for i := range meta.TargetLeafSpans {
 		span := meta.TargetLeafSpans[i]
-		if span.SpanIndex != 0 && span.SpanIndex != i {
+		if span.SpanIndex != i {
 			return fmt.Errorf("target span %d has span index %d", i, span.SpanIndex)
 		}
 		if span.PointOpStart < 0 || span.PointOpEnd < span.PointOpStart || span.PointOpEnd > meta.PlannedPointOps {
 			return fmt.Errorf("target span %d point op range [%d,%d) out of planned bounds %d", i, span.PointOpStart, span.PointOpEnd, meta.PlannedPointOps)
 		}
-		if span.DeleteRangeStart < 0 || span.DeleteRangeEnd < span.DeleteRangeStart {
-			return fmt.Errorf("target span %d delete range indexes [%d,%d) invalid", i, span.DeleteRangeStart, span.DeleteRangeEnd)
+		if span.DeleteRangeStart < 0 || span.DeleteRangeEnd < span.DeleteRangeStart || span.DeleteRangeEnd > meta.RangeBarriers {
+			return fmt.Errorf("target span %d delete range indexes [%d,%d) invalid for range barriers %d", i, span.DeleteRangeStart, span.DeleteRangeEnd, meta.RangeBarriers)
 		}
 		if i > 0 && span.PointOpStart < prevEnd {
 			return fmt.Errorf("target span %d overlaps prior point op range: start=%d prior_end=%d", i, span.PointOpStart, prevEnd)
@@ -277,7 +277,7 @@ func ValidateFlushSpanRunMetadata(meta FlushSpanRunMetadata) error {
 	prevEnd = 0
 	for i := range meta.BackendChunks {
 		chunk := meta.BackendChunks[i]
-		if chunk.ChunkIndex != 0 && chunk.ChunkIndex != i {
+		if chunk.ChunkIndex != i {
 			return fmt.Errorf("backend chunk %d has chunk index %d", i, chunk.ChunkIndex)
 		}
 		if chunk.PointOpStart < 0 || chunk.PointOpEnd < chunk.PointOpStart || chunk.PointOpEnd > meta.PlannedPointOps {

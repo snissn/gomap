@@ -121,10 +121,10 @@ func classifyFlushApplySpanNativeFallback(summary zipper.ReadOnlyLeafSpanSummary
 		return FlushSpanRunFallbackColdBuild
 	case summary.Maintenance:
 		return FlushSpanRunFallbackMaintenance
-	case !summary.ExactLeafSpans:
-		return FlushSpanRunFallbackInexactLeafSpans
 	case summary.DeleteRanges > 0:
 		return FlushSpanRunFallbackRangeDeleteBarrier
+	case !summary.ExactLeafSpans:
+		return FlushSpanRunFallbackInexactLeafSpans
 	default:
 		return FlushSpanRunFallbackSpanNativeNotImplemented
 	}

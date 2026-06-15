@@ -66,6 +66,16 @@ func TestValidateFlushSpanRunMetadataCoversShadowingAndBarriers(t *testing.T) {
 		t.Fatalf("metadata with inconsistent shadow count passed validation")
 	}
 
+	badZeroSource := meta
+	badZeroSource.SourcePointOps = 0
+	badZeroSource.PlannedPointOps = 1
+	badZeroSource.ShadowedPointOps = 0
+	badZeroSource.TargetLeafSpans = nil
+	badZeroSource.BackendChunks = nil
+	if err := ValidateFlushSpanRunMetadata(badZeroSource); err == nil {
+		t.Fatalf("metadata with planned ops but zero source ops passed validation")
+	}
+
 	badSpan := meta
 	badSpan.TargetLeafSpans = append([]FlushSpanRunTargetLeafSpan(nil), meta.TargetLeafSpans...)
 	badSpan.TargetLeafSpans[1].PointOpStart = 1
@@ -73,11 +83,33 @@ func TestValidateFlushSpanRunMetadataCoversShadowingAndBarriers(t *testing.T) {
 		t.Fatalf("metadata with overlapping target leaf spans passed validation")
 	}
 
+	badDeleteRange := meta
+	badDeleteRange.TargetLeafSpans = append([]FlushSpanRunTargetLeafSpan(nil), meta.TargetLeafSpans...)
+	badDeleteRange.TargetLeafSpans[0].DeleteRangeStart = 0
+	badDeleteRange.TargetLeafSpans[0].DeleteRangeEnd = 2
+	if err := ValidateFlushSpanRunMetadata(badDeleteRange); err == nil {
+		t.Fatalf("metadata with out-of-bounds delete range indexes passed validation")
+	}
+
+	badSpanIndex := meta
+	badSpanIndex.TargetLeafSpans = append([]FlushSpanRunTargetLeafSpan(nil), meta.TargetLeafSpans...)
+	badSpanIndex.TargetLeafSpans[1].SpanIndex = 0
+	if err := ValidateFlushSpanRunMetadata(badSpanIndex); err == nil {
+		t.Fatalf("metadata with duplicate span index passed validation")
+	}
+
 	badChunk := meta
 	badChunk.BackendChunks = append([]FlushSpanRunBackendChunk(nil), meta.BackendChunks...)
 	badChunk.BackendChunks[1].PointOpStart = 2
 	if err := ValidateFlushSpanRunMetadata(badChunk); err == nil {
 		t.Fatalf("metadata with overlapping backend chunks passed validation")
+	}
+
+	badChunkIndex := meta
+	badChunkIndex.BackendChunks = append([]FlushSpanRunBackendChunk(nil), meta.BackendChunks...)
+	badChunkIndex.BackendChunks[1].ChunkIndex = 0
+	if err := ValidateFlushSpanRunMetadata(badChunkIndex); err == nil {
+		t.Fatalf("metadata with duplicate chunk index passed validation")
 	}
 }
 

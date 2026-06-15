@@ -3385,6 +3385,20 @@ func TestWriteBenchprofArtifacts_AcceptsM8M14GateExecutionPath(t *testing.T) {
 	if err := writeBenchprofArtifacts(dir, "m8-m14-10mm-gate", runs); err != nil {
 		t.Fatalf("m8-m14 gate execution path should be accepted: %v", err)
 	}
+	data, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof results: %v", err)
+	}
+	var parsed benchprofExport
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse benchprof results: %v", err)
+	}
+	if len(parsed.Runs) != 1 {
+		t.Fatalf("benchprof runs=%d want 1", len(parsed.Runs))
+	}
+	if got := parsed.Runs[0].ExecutionPath; got != "m8-m14-10mm-gate" {
+		t.Fatalf("execution_path=%q want m8-m14-10mm-gate", got)
+	}
 }
 
 func TestWriteBenchprofArtifacts_DefaultsExecutionPath(t *testing.T) {
