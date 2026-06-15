@@ -219,7 +219,7 @@ type ReadOnlyPrepareResult struct {
 
 const (
 	readOnlyPrepareResultReuseLeafSpanKeepCap         = 65536
-	readOnlyPrepareResultReuseOmitKeysLeafSpanKeepCap = 512 << 10
+	readOnlyPrepareResultReuseOmitKeysLeafSpanKeepCap = 1 << 20
 	readOnlyPrepareResultReuseKeyArenaKeepCap         = 16 << 20
 )
 

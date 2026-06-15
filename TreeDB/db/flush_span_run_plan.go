@@ -192,7 +192,14 @@ func buildReadOnlyLeafAwareFlushSpanRunChunks(ops []batch.Entry, spans []zipper.
 	if spans[0].PointOpStart != 0 || spans[len(spans)-1].PointOpEnd != len(ops) {
 		return buildReadOnlyEntryCountFlushSpanRunChunks(ops, capEntries), false
 	}
-	chunks := make([]FlushSpanRunBackendChunk, 0, len(spans))
+	chunkHint := (len(ops) + capEntries - 1) / capEntries
+	if chunkHint < 1 {
+		chunkHint = 1
+	}
+	if chunkHint > len(spans) {
+		chunkHint = len(spans)
+	}
+	chunks := make([]FlushSpanRunBackendChunk, 0, chunkHint)
 	chunkStart := 0
 	chunkEnd := 0
 	chunkBytes := 0
