@@ -286,6 +286,10 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
 	applyOpts := b.db.flushApplyOptions()
+	prepareBuf := b.db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
+	if prepareBuf != nil {
+		applyOpts.ReadOnlyPrepare = prepareBuf.opts
+	}
 	var newRoot uint64
 	var retired []uint64
 	var metrics adaptive.Metrics
@@ -293,6 +297,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	if applyOpts.ParallelApplyConcurrency > 1 {
 		result, applyErr := z.ApplyWithOptions(rootID, b.batch, applyOpts)
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
+		b.db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
 		newRoot = result.RootID
 		retired = result.PendingRetiredPages
 		metrics = result.Metrics
@@ -417,6 +422,10 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	defer idx.registry.Unregister(regID)
 
 	applyOpts := b.db.flushApplyOptions()
+	prepareBuf := b.db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
+	if prepareBuf != nil {
+		applyOpts.ReadOnlyPrepare = prepareBuf.opts
+	}
 	var newRoot uint64
 	var retired []uint64
 	var metrics adaptive.Metrics
@@ -424,6 +433,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	if applyOpts.ParallelApplyConcurrency > 1 {
 		result, applyErr := idx.zipper.ApplyWithOptions(rootID, b.batch, applyOpts)
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
+		b.db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
 		newRoot = result.RootID
 		retired = result.PendingRetiredPages
 		metrics = result.Metrics

@@ -210,8 +210,8 @@ type ReadOnlyPrepareResult struct {
 }
 
 const (
-	readOnlyPrepareResultReuseLeafSpanKeepCap = 4096
-	readOnlyPrepareResultReuseKeyArenaKeepCap = 1 << 20
+	readOnlyPrepareResultReuseLeafSpanKeepCap = 65536
+	readOnlyPrepareResultReuseKeyArenaKeepCap = 16 << 20
 )
 
 // LeafSpanSummary returns an allocation-free aggregate view of r's leaf spans.
@@ -347,9 +347,20 @@ func readOnlyPrepareCeilDiv64(n, d int64) int64 {
 // The returned options must not be used while r's LeafSpans are still needed.
 func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
 	return ReadOnlyPrepareOptions{
-		leafSpans: r.LeafSpans[:0],
+		leafSpans: clearReadOnlyLeafSpanBuffer(r.LeafSpans),
 		keyArena:  r.keyArena[:0],
 	}
+}
+
+func clearReadOnlyLeafSpanBuffer(spans []ReadOnlyLeafSpan) []ReadOnlyLeafSpan {
+	if cap(spans) == 0 {
+		return nil
+	}
+	// ReadOnlyLeafSpan contains key slices into keyArena. Clear the full backing
+	// array before pooling so stale slice headers beyond len(spans) cannot keep an
+	// oversized/dropped key arena live across later flushes.
+	clear(spans[:cap(spans)])
+	return spans[:0]
 }
 
 // ResetForReuse clears result metadata while retaining bounded reusable
@@ -364,7 +375,7 @@ func (r *ReadOnlyPrepareResult) ResetForReuse() {
 	keyArena := r.keyArena
 	*r = ReadOnlyPrepareResult{}
 	if cap(leafSpans) <= readOnlyPrepareResultReuseLeafSpanKeepCap {
-		r.LeafSpans = leafSpans[:0]
+		r.LeafSpans = clearReadOnlyLeafSpanBuffer(leafSpans)
 	}
 	if cap(keyArena) <= readOnlyPrepareResultReuseKeyArenaKeepCap {
 		r.keyArena = keyArena[:0]
@@ -530,6 +541,31 @@ func readOnlyPrepareRangeBytes(r batch.DeleteRange) int {
 	return len(r.Start) + len(r.End)
 }
 
+func (r *ReadOnlyPrepareResult) ensureInitialCapacity(ops []batch.Entry, ranges []batch.DeleteRange) {
+	if r == nil {
+		return
+	}
+	spanHint := len(ops) + len(ranges)
+	if spanHint > readOnlyPrepareResultReuseLeafSpanKeepCap {
+		spanHint = readOnlyPrepareResultReuseLeafSpanKeepCap
+	}
+	if spanHint > 0 && cap(r.LeafSpans) < spanHint {
+		r.LeafSpans = make([]ReadOnlyLeafSpan, 0, spanHint)
+	}
+	keyHintUnits := len(ops) + len(ranges)
+	keyHint := 0
+	if keyHintUnits > 0 {
+		if keyHintUnits > readOnlyPrepareResultReuseKeyArenaKeepCap/32 {
+			keyHint = readOnlyPrepareResultReuseKeyArenaKeepCap
+		} else {
+			keyHint = keyHintUnits * 32
+		}
+	}
+	if keyHint > 0 && cap(r.keyArena) < keyHint {
+		r.keyArena = make([]byte, 0, keyHint)
+	}
+}
+
 func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte, ops []batch.Entry, opBase int, ranges []batch.DeleteRange, rangeBase int) {
 	if len(ops) == 0 && len(ranges) == 0 {
 		return
@@ -684,6 +720,7 @@ func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPre
 		result.ExactLeafSpans = true
 		return result, nil
 	}
+	result.ensureInitialCapacity(ops, ranges)
 	maintenance, _ := z.shouldRunMaintenance(ops)
 	if len(ranges) > 0 {
 		maintenance = false

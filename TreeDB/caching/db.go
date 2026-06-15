@@ -75,6 +75,7 @@ var outerLeafEncoderPool sync.Pool // stores *outerleaf.Encoder
 var valueLogPreparedBodyPool sync.Pool
 var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
+var valueLogFramePreparerPool sync.Pool      // stores *valuelog.FramePreparer
 var valueLogKeyLeaseMu sync.Mutex
 var valueLogKeyLeases [][][]byte
 var backendValueLogReadBarrierRegistryMu sync.Mutex
@@ -2014,6 +2015,23 @@ func putVlogPreparedFrames(frames []preparedDictFrame) {
 		return
 	}
 	valueLogPreparedFramesPool.Put(frames[:0])
+}
+
+func getVlogFramePreparer() *valuelog.FramePreparer {
+	if v := valueLogFramePreparerPool.Get(); v != nil {
+		if preparer, ok := v.(*valuelog.FramePreparer); ok && preparer != nil {
+			return preparer
+		}
+	}
+	return valuelog.NewFramePreparer()
+}
+
+func putVlogFramePreparer(preparer *valuelog.FramePreparer) {
+	if preparer == nil {
+		return
+	}
+	preparer.ResetForReuse()
+	valueLogFramePreparerPool.Put(preparer)
 }
 
 func getVlogDictPrepareResults(capacity int) chan vlogDictPrepareResult {
@@ -14633,7 +14651,8 @@ func (db *DB) prepareAppendFrames(
 		// Keep frame encode/compress work out of vlogMu even when worker threads are
 		// unavailable. This reduces leaf-log/value-log lock hold time on small and
 		// medium batches while preserving one serialized persistent append stream.
-		preparer := valuelog.NewFramePreparer()
+		preparer := getVlogFramePreparer()
+		defer putVlogFramePreparer(preparer)
 		preparer.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
 		preparer.SetBlockCompression(blockCodec, blockCompression)
 		preparer.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)

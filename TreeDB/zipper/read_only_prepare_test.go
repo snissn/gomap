@@ -101,6 +101,95 @@ func TestZipperPrepareReadOnlyEmptyBatchDoesNotTraverse(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPrepareResultResetForReuseKeepsBoundedBuffers(t *testing.T) {
+	bounded := ReadOnlyPrepareResult{
+		LeafSpans: make([]ReadOnlyLeafSpan, 3, readOnlyPrepareResultReuseLeafSpanKeepCap),
+		keyArena:  make([]byte, 7, readOnlyPrepareResultReuseKeyArenaKeepCap),
+	}
+	bounded.ResetForReuse()
+	if len(bounded.LeafSpans) != 0 || cap(bounded.LeafSpans) != readOnlyPrepareResultReuseLeafSpanKeepCap {
+		t.Fatalf("bounded leaf spans len/cap=%d/%d", len(bounded.LeafSpans), cap(bounded.LeafSpans))
+	}
+	if len(bounded.keyArena) != 0 || cap(bounded.keyArena) != readOnlyPrepareResultReuseKeyArenaKeepCap {
+		t.Fatalf("bounded key arena len/cap=%d/%d", len(bounded.keyArena), cap(bounded.keyArena))
+	}
+
+	oversized := ReadOnlyPrepareResult{
+		LeafSpans: make([]ReadOnlyLeafSpan, 1, readOnlyPrepareResultReuseLeafSpanKeepCap+1),
+		keyArena:  make([]byte, 1, readOnlyPrepareResultReuseKeyArenaKeepCap+1),
+	}
+	oversized.ResetForReuse()
+	if oversized.LeafSpans != nil || oversized.keyArena != nil {
+		t.Fatalf("oversized buffers retained: leaf cap=%d key cap=%d", cap(oversized.LeafSpans), cap(oversized.keyArena))
+	}
+}
+
+func TestReadOnlyPrepareResultResetForReuseClearsLeafSpanReferences(t *testing.T) {
+	arena := []byte("oversized-key-arena")
+	spans := make([]ReadOnlyLeafSpan, 1, 4)
+	spans[0].LowKey = arena[:4]
+	spans = spans[:cap(spans)]
+	spans[3].HighKey = arena[4:]
+	spans = spans[:1]
+
+	r := ReadOnlyPrepareResult{
+		LeafSpans: spans,
+		keyArena:  make([]byte, 1, readOnlyPrepareResultReuseKeyArenaKeepCap+1),
+	}
+	r.ResetForReuse()
+	if len(r.LeafSpans) != 0 || cap(r.LeafSpans) != cap(spans) {
+		t.Fatalf("leaf spans len/cap after reset=%d/%d", len(r.LeafSpans), cap(r.LeafSpans))
+	}
+	cleared := r.LeafSpans[:cap(r.LeafSpans)]
+	for i, span := range cleared {
+		if span.LowKey != nil || span.HighKey != nil || span.FirstOpKey != nil || span.LastOpKey != nil {
+			t.Fatalf("span %d retained key refs after reset: %+v", i, span)
+		}
+	}
+	if r.keyArena != nil {
+		t.Fatalf("oversized key arena retained after reset: cap=%d", cap(r.keyArena))
+	}
+}
+
+func TestReadOnlyPrepareResultReuseOptionsClearsFullLeafSpanCapacity(t *testing.T) {
+	arena := []byte("previous-key-arena")
+	spans := make([]ReadOnlyLeafSpan, 1, 3)
+	spans[0].FirstOpKey = arena[:4]
+	spans = spans[:cap(spans)]
+	spans[2].LastOpKey = arena[4:]
+	spans = spans[:1]
+
+	opts := (ReadOnlyPrepareResult{LeafSpans: spans}).ReuseOptions()
+	if len(opts.leafSpans) != 0 || cap(opts.leafSpans) != cap(spans) {
+		t.Fatalf("reuse leaf spans len/cap=%d/%d", len(opts.leafSpans), cap(opts.leafSpans))
+	}
+	cleared := opts.leafSpans[:cap(opts.leafSpans)]
+	for i, span := range cleared {
+		if span.LowKey != nil || span.HighKey != nil || span.FirstOpKey != nil || span.LastOpKey != nil {
+			t.Fatalf("span %d retained key refs after reuse options: %+v", i, span)
+		}
+	}
+}
+
+func TestReadOnlyPrepareResultEnsureInitialCapacityPresizesBoundedBuffers(t *testing.T) {
+	ops := make([]batch.Entry, 128)
+	var r ReadOnlyPrepareResult
+	r.ensureInitialCapacity(ops, nil)
+	if cap(r.LeafSpans) != len(ops) {
+		t.Fatalf("leaf span cap=%d want %d", cap(r.LeafSpans), len(ops))
+	}
+	if cap(r.keyArena) != len(ops)*32 {
+		t.Fatalf("key arena cap=%d want %d", cap(r.keyArena), len(ops)*32)
+	}
+
+	ops = make([]batch.Entry, readOnlyPrepareResultReuseLeafSpanKeepCap+100)
+	r = ReadOnlyPrepareResult{}
+	r.ensureInitialCapacity(ops, nil)
+	if cap(r.LeafSpans) != readOnlyPrepareResultReuseLeafSpanKeepCap {
+		t.Fatalf("capped leaf span cap=%d want %d", cap(r.LeafSpans), readOnlyPrepareResultReuseLeafSpanKeepCap)
+	}
+}
+
 func TestZipperPrepareReadOnlyColdAndSingleLeafPlans(t *testing.T) {
 	cold := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = cold.Close() }()
