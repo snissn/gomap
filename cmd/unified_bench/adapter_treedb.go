@@ -38,6 +38,7 @@ var (
 	treedbFlushApplyMinBytes              = flag.Int("treedb-flush-apply-min-bytes", 0, "TreeDB: minimum planned span bytes to enable opt-in parallel apply (0=default)")
 	treedbFlushBackendMaxEntries          = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
 	treedbFlushBackendMaxBatches          = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
+	treedbFlushSpanRunTargetPlanning      = flag.Bool("treedb-flush-span-run-target-planning", false, "TreeDB (cached): diagnostic opt-in read-only target-leaf planning for canonical flush runs")
 	treedbPagerSyncConcurrency            = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
 	treedbPagerMmapPopulate               = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
 	treedbPagerPrefetchOnRead             = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
@@ -359,6 +360,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("flush_apply_min_entries_configured=%d", r.opts.FlushApplyMinEntries))
 	lines = append(lines, fmt.Sprintf("flush_apply_min_spans_configured=%d", r.opts.FlushApplyMinSpans))
 	lines = append(lines, fmt.Sprintf("flush_apply_min_bytes_configured=%d", r.opts.FlushApplyMinBytes))
+	lines = append(lines, fmt.Sprintf("flush_span_run_target_planning=%t", r.opts.FlushSpanRunTargetPlanning))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
 	threshold := r.opts.ValueLog.PointerThreshold
@@ -681,6 +683,7 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		FlushApplyMinBytes:         *treedbFlushApplyMinBytes,
 		FlushBackendMaxEntries:     *treedbFlushBackendMaxEntries,
 		FlushBackendMaxBatches:     *treedbFlushBackendMaxBatches,
+		FlushSpanRunTargetPlanning: *treedbFlushSpanRunTargetPlanning,
 
 		JournalLanes:               *treedbJournalLanes,
 		JournalCompression:         *treedbJournalCompress,

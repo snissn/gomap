@@ -1006,6 +1006,12 @@ type Options struct {
 	// flush may emit (0=default, <0=disable cap).
 	FlushBackendMaxBatches int
 
+	// FlushSpanRunTargetPlanning enables diagnostic read-only target-leaf planning
+	// for canonical cached flush runs. It is default-off; M9's default write path
+	// builds canonical multi-memtable runs but does not pay the extra target-span
+	// traversal unless this diagnostic knob is explicitly enabled.
+	FlushSpanRunTargetPlanning bool
+
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int

@@ -514,7 +514,7 @@ func (db *DB) planCanonicalFlushRunMetadata(run *canonicalFlushRun, backendEntri
 	if db == nil || run == nil || len(run.pointOps) == 0 {
 		return meta, nil, spanStats
 	}
-	needTargetPlan := run.sourceMemtables > 1 || len(run.pointOps) > backendEntriesCap
+	needTargetPlan := db.flushSpanRunTargetPlanning && (run.sourceMemtables > 1 || len(run.pointOps) > backendEntriesCap)
 	if needTargetPlan {
 		req := backenddb.FlushSpanRunPlanRequest{
 			SourceMemtables:  run.sourceMemtables,

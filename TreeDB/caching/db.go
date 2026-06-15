@@ -7308,6 +7308,12 @@ type Options struct {
 	// 0 uses the internal default. Negative disables the cap.
 	FlushBackendMaxBatches int
 
+	// FlushSpanRunTargetPlanning enables diagnostic read-only target-leaf planning
+	// for canonical flush runs. It is default-off because the extra root traversal
+	// is not part of the M9 default write path; M10+ can use the same backend
+	// planner when span-native execution consumes target spans.
+	FlushSpanRunTargetPlanning bool
+
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
 	// JournalLanes controls the number of active commit/value log lanes
@@ -7866,6 +7872,7 @@ type DB struct {
 	flushBackendMaxEntries                            int
 	flushBackendInitEntries                           int
 	flushBackendMaxBatches                            int
+	flushSpanRunTargetPlanning                        bool
 	walMaxSegmentBytes                                int64
 	valueLogMaxSegmentBytes                           int64
 	journalCompression                                bool
@@ -10777,6 +10784,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBackendMaxEntries:               opts.FlushBackendMaxEntries,
 		flushBackendInitEntries:              flushBackendInitEntries,
 		flushBackendMaxBatches:               opts.FlushBackendMaxBatches,
+		flushSpanRunTargetPlanning:           opts.FlushSpanRunTargetPlanning,
 		walMaxSegmentBytes:                   opts.WALMaxSegmentBytes,
 		valueLogMaxSegmentBytes:              valueLogMaxSegmentBytes,
 		journalCompression:                   opts.JournalCompression,

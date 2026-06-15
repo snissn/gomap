@@ -38,8 +38,9 @@ memtables that are eligible to flush together:
 5. Preserve range deletes as explicit barriers/ranges. A range that overlaps
    multiple target leaves is represented in each touched target span for future
    workers, but it remains a barrier for run selection/coalescing.
-6. Plan exact target leaf spans against the captured base root. Each span owns a
-   half-open point-op slice and range slice, not durable output.
+6. Target-leaf span planning is a side-effect-free diagnostic/supporting path in
+   M9, not part of default writes. M10+ owns making exact spans the default input
+   to span-native execution once the extra traversal is paid by real reducer work.
 
 The Go contract types live in `TreeDB/db/span_run_contract.go`:
 
@@ -131,12 +132,12 @@ additive counters.
 - `treedb.cache.flush_span_run.ops_per_run`
 
 M8 included the deterministic `SummarizeFlushSpanRunChunkSplits` fixture for
-entry-count chunks that split target leaves. M9 promotes this to runtime cache
-flush evidence: canonical point runs are shadowed before target-leaf planning,
-leaf-aware backend chunks keep normal target leaves intact, and any emergency
-single-leaf split is reported by
-`treedb.cache.flush_span_run.target_leaves_split_across_chunks_total` rather than
-hidden as a false zero.
+entry-count chunks that split target leaves. M9 keeps default writes on canonical
+multi-memtable runs with entry-count backend chunks, and keeps read-only
+target-leaf planning/leaf-aware chunk proof behind the diagnostic
+`FlushSpanRunTargetPlanning` / `-treedb-flush-span-run-target-planning` opt-in.
+Those target-span counters therefore remain zero in default evidence and are
+supporting proof for M10+, not a default M9 hot-path cost.
 
 ### Target span and span-native fallback counters
 

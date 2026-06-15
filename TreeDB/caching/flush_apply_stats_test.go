@@ -360,7 +360,7 @@ func TestFlushSpanRunLeafAwareChunksExposeEmergencySplit(t *testing.T) {
 	}
 }
 
-func TestFlushSpanRunRuntimeTargetLeafSplitCounter(t *testing.T) {
+func TestFlushSpanRunRuntimeTargetLeafPlanningDefaultOff(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
@@ -380,21 +380,44 @@ func TestFlushSpanRunRuntimeTargetLeafSplitCounter(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	db.mu.Lock()
-	setMutable(db, []byte("k0"), []byte("v0"))
-	setMutable(db, []byte("k1"), []byte("v1"))
-	if err := db.rotateMemtableLocked(false); err != nil {
-		db.mu.Unlock()
-		t.Fatalf("rotate first: %v", err)
+	queueTwoPointMemtables(t, db)
+	if !db.flushLaneOnce(true, 0) {
+		t.Fatal("flushLaneOnce returned false")
 	}
-	setMutable(db, []byte("k2"), []byte("v2"))
-	setMutable(db, []byte("k3"), []byte("v3"))
-	if err := db.rotateMemtableLocked(false); err != nil {
-		db.mu.Unlock()
-		t.Fatalf("rotate second: %v", err)
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.target_leaf_spans_total"); got != 0 {
+		t.Fatalf("default target leaf spans=%d want 0", got)
 	}
-	db.mu.Unlock()
+	if got := requireStatUint64(t, stats, "treedb.flush_apply.read_only_prepare.calls_total"); got != 0 {
+		t.Fatalf("default read-only prepare calls=%d want 0", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.backend_chunks_total"); got != 2 {
+		t.Fatalf("backend chunks=%d want entry-count chunks", got)
+	}
+}
 
+func TestFlushSpanRunRuntimeTargetLeafSplitCounterOptIn(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(t.TempDir(), backend, Options{
+		FlushThreshold:             1 << 60,
+		FlushBuildConcurrency:      2,
+		FlushBuildMinEntries:       1,
+		FlushBuildMinUnits:         2,
+		FlushBackendMaxEntries:     2,
+		FlushBackendMaxBatches:     -1,
+		FlushSpanRunTargetPlanning: true,
+		MemtableShards:             1,
+		JournalLanes:               1,
+	})
+	if err != nil {
+		t.Fatalf("Open cache: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	queueTwoPointMemtables(t, db)
 	if !db.flushLaneOnce(true, 0) {
 		t.Fatal("flushLaneOnce returned false")
 	}
@@ -404,6 +427,25 @@ func TestFlushSpanRunRuntimeTargetLeafSplitCounter(t *testing.T) {
 	}
 	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.target_leaves_split_across_chunks_total"); got == 0 {
 		t.Fatalf("target leaf split counter = 0, want emergency split evidence")
+	}
+	if got := requireStatUint64(t, stats, "treedb.flush_apply.read_only_prepare.calls_total"); got == 0 {
+		t.Fatalf("read-only prepare calls = 0, want opt-in planning")
+	}
+}
+
+func queueTwoPointMemtables(t *testing.T, db *DB) {
+	t.Helper()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	setMutable(db, []byte("k0"), []byte("v0"))
+	setMutable(db, []byte("k1"), []byte("v1"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		t.Fatalf("rotate first: %v", err)
+	}
+	setMutable(db, []byte("k2"), []byte("v2"))
+	setMutable(db, []byte("k3"), []byte("v3"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		t.Fatalf("rotate second: %v", err)
 	}
 }
 
