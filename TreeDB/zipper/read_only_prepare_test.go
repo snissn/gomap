@@ -101,6 +101,42 @@ func TestZipperPrepareReadOnlyEmptyBatchDoesNotTraverse(t *testing.T) {
 	}
 }
 
+func TestZipperPrepareReadOnlyLeafLogRefDoesNotReadLeafBody(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	store := newBatchMemoryLeafPageStore()
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID := buildOuterLeafInternalRoot(t, z)
+	if store.readCalls != 0 {
+		t.Fatalf("seed apply leaf-log reads=%d want 0", store.readCalls)
+	}
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	if err := delta.Set([]byte("key-099"), []byte("new")); err != nil {
+		t.Fatalf("Set delta: %v", err)
+	}
+
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+	if len(prepared.LeafSpans) == 0 {
+		t.Fatalf("expected leaf-log span")
+	}
+	for i, span := range prepared.LeafSpans {
+		if span.Ref.Kind != page.ChildRefLeafLog {
+			t.Fatalf("span %d ref kind=%d want leaf-log", i, span.Ref.Kind)
+		}
+	}
+	if store.readCalls != 0 {
+		t.Fatalf("PrepareReadOnly leaf-log reads=%d want 0", store.readCalls)
+	}
+}
+
 func TestReadOnlyPrepareResultResetForReuseKeepsBoundedBuffers(t *testing.T) {
 	bounded := ReadOnlyPrepareResult{
 		LeafSpans: make([]ReadOnlyLeafSpan, 3, readOnlyPrepareResultReuseLeafSpanKeepCap),

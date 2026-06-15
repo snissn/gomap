@@ -61,6 +61,8 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.cache.flush_apply.build_ns_total",
 		"treedb.cache.flush_apply.leaf_log_encode_compress_ns_total",
 		"treedb.flush_apply.apply_ns_total",
+		"treedb.cache.checkpoint.stage.command_wal_publish.samples",
+		"treedb.cache.checkpoint.stage.backend_boundary.samples",
 	} {
 		// Tiny stage timers can round to zero on low-resolution platforms; the
 		// plumbing requirement is that these counters are present in DB.Stats().
@@ -75,6 +77,13 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.flush_apply.merge_build.leaf_merges_total",
 		"treedb.flush_apply.prepared_output.leaf_log_pages_installed_total",
 		"treedb.flush_apply.guarded_publish.calls_total",
+		"treedb.cache.checkpoint.stage.cutover.samples",
+		"treedb.cache.checkpoint.stage.wal_rotate.samples",
+		"treedb.cache.checkpoint.stage.value_log_flush.samples",
+		"treedb.cache.checkpoint.stage.flush_all.samples",
+		"treedb.cache.checkpoint.stage.flush_all.total_ns",
+		"treedb.cache.checkpoint.stage.wal_cleanup.samples",
+		"treedb.cache.checkpoint.stage.post_maintenance.samples",
 	} {
 		if got := requireStatUint64(t, stats, key); got == 0 {
 			t.Fatalf("%s=%d want >0", key, got)

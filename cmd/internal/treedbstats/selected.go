@@ -67,6 +67,8 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.cache.flush_apply."):
 		return true
+	case strings.HasPrefix(key, "treedb.cache.checkpoint."):
+		return true
 	case strings.HasPrefix(key, "treedb.flush_apply."):
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_retained_prune."):

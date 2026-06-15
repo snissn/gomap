@@ -7883,6 +7883,14 @@ type DB struct {
 	checkpointTotalNs                                            atomic.Uint64
 	checkpointMaxNs                                              atomic.Uint64
 	checkpointNoopSkips                                          atomic.Uint64
+	checkpointStageCutover                                       checkpointStageStats
+	checkpointStageWALRotate                                     checkpointStageStats
+	checkpointStageValueLogFlush                                 checkpointStageStats
+	checkpointStageCommandWALPublish                             checkpointStageStats
+	checkpointStageFlushAll                                      checkpointStageStats
+	checkpointStageBackendBoundary                               checkpointStageStats
+	checkpointStageWALCleanup                                    checkpointStageStats
+	checkpointStagePostMaintenance                               checkpointStageStats
 	commandWALCheckpointPublishPiggybacked                       atomic.Uint64
 	commandWALCheckpointPublishSeparate                          atomic.Uint64
 	checkpointFlushMuWaitNs                                      atomic.Uint64
@@ -20884,6 +20892,45 @@ func (db *DB) recordCheckpointCutover(d time.Duration) {
 	}
 }
 
+type checkpointStageStats struct {
+	lastNs  atomic.Uint64
+	totalNs atomic.Uint64
+	maxNs   atomic.Uint64
+	samples atomic.Uint64
+}
+
+func (s *checkpointStageStats) record(d time.Duration) {
+	if s == nil {
+		return
+	}
+	if d < 0 {
+		d = 0
+	}
+	ns := uint64(d.Nanoseconds())
+	s.lastNs.Store(ns)
+	s.totalNs.Add(ns)
+	s.samples.Add(1)
+	updateAtomicMaxUint64(&s.maxNs, ns)
+}
+
+func recordCheckpointStageSince(s *checkpointStageStats, start time.Time) {
+	if s == nil || start.IsZero() {
+		return
+	}
+	s.record(time.Since(start))
+}
+
+func appendCheckpointStageStats(stats map[string]string, name string, s *checkpointStageStats) {
+	if stats == nil || s == nil || name == "" {
+		return
+	}
+	prefix := "treedb.cache.checkpoint.stage." + name
+	stats[prefix+".samples"] = fmt.Sprintf("%d", s.samples.Load())
+	stats[prefix+".last_ns"] = fmt.Sprintf("%d", s.lastNs.Load())
+	stats[prefix+".total_ns"] = fmt.Sprintf("%d", s.totalNs.Load())
+	stats[prefix+".max_ns"] = fmt.Sprintf("%d", s.maxNs.Load())
+}
+
 const (
 	checkpointSparseIndexCheckEveryNoops       = 8
 	checkpointSparseIndexMinPages              = 128
@@ -21083,8 +21130,10 @@ func (db *DB) Checkpoint() error {
 	db.writeMu.Lock()
 	cutoverStart := time.Now()
 	releaseWriteMu := func() {
+		d := time.Since(cutoverStart)
 		db.writeMu.Unlock()
-		db.recordCheckpointCutover(time.Since(cutoverStart))
+		db.recordCheckpointCutover(d)
+		db.checkpointStageCutover.record(d)
 	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
@@ -21165,6 +21214,7 @@ func (db *DB) Checkpoint() error {
 	}
 	releaseWriteMu()
 
+	walRotateStart := time.Now()
 	errCh := make(chan error, len(rotateLaneIDs))
 	var rotateWG sync.WaitGroup
 	for _, laneID := range rotateLaneIDs {
@@ -21180,13 +21230,18 @@ func (db *DB) Checkpoint() error {
 	close(errCh)
 	for err := range errCh {
 		if err != nil {
+			recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
 			return err
 		}
 	}
+	recordCheckpointStageSince(&db.checkpointStageWALRotate, walRotateStart)
 	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
+	valueLogFlushStart := time.Now()
 	if err := db.checkpointFlushValueLogLanes(); err != nil {
+		recordCheckpointStageSince(&db.checkpointStageValueLogFlush, valueLogFlushStart)
 		return err
 	}
+	recordCheckpointStageSince(&db.checkpointStageValueLogFlush, valueLogFlushStart)
 
 	var (
 		commandWALAppliedLSN       uint64
@@ -21195,7 +21250,9 @@ func (db *DB) Checkpoint() error {
 	)
 	if db.commandWALCheckpointPublish != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
 		var err error
+		commandWALPublishStart := time.Now()
 		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
+		recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 		if err != nil {
 			return err
 		}
@@ -21209,7 +21266,9 @@ func (db *DB) Checkpoint() error {
 
 	// Flush all queued memtables with backend sync.
 	bgErrBefore := db.backgroundError()
+	flushAllStart := time.Now()
 	db.flushAllLocked(true, commandWALPublishPiggyback)
+	recordCheckpointStageSince(&db.checkpointStageFlushAll, flushAllStart)
 	if bgErr := db.backgroundError(); bgErr != nil && bgErrBefore == nil {
 		return bgErr
 	}
@@ -21217,12 +21276,15 @@ func (db *DB) Checkpoint() error {
 	commandWALPublishCovered := commandWALPublishPiggyback != nil && commandWALPublishPiggyback.consumed
 	if !commandWALPublishCovered && db.commandWALCheckpointPublish != nil {
 		var err error
+		commandWALPublishStart := time.Now()
 		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
+		recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 		if err != nil {
 			return err
 		}
 	}
 
+	walCleanupStart := time.Now()
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
 		filtered := segments[:0]
@@ -21245,6 +21307,7 @@ func (db *DB) Checkpoint() error {
 	needsCommandWALPublish := commandWALAppliedLSN != 0 && !commandWALPublishCovered
 	var commitErr error
 	if nonEmptyBytes > 0 || needsCommandWALPublish {
+		backendBoundaryStart := time.Now()
 		if needsCommandWALPublish {
 			// This backend batch is also the checkpoint durability boundary for any
 			// non-command WAL segments observed above, so command-LSN publication and
@@ -21263,6 +21326,7 @@ func (db *DB) Checkpoint() error {
 			// an artificial same-root commit.
 			commitErr = backendSyncBoundary(db.backend)
 		}
+		recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
 		if commitErr != nil {
 			return commitErr
 		}
@@ -21308,13 +21372,18 @@ func (db *DB) Checkpoint() error {
 	if removed && !db.relaxedSync {
 		db.syncDirBestEffort(db.dir)
 	}
+	recordCheckpointStageSince(&db.checkpointStageWALCleanup, walCleanupStart)
+
+	postMaintenanceStart := time.Now()
 	if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+		recordCheckpointStageSince(&db.checkpointStagePostMaintenance, postMaintenanceStart)
 		return err
 	}
 	db.checkValueLogRetention()
 	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
 	db.scheduleRetainedValueLogPrune()
 	db.trimRetainedArenasAfterFlush(true)
+	recordCheckpointStageSince(&db.checkpointStagePostMaintenance, postMaintenanceStart)
 
 	return nil
 }
@@ -27252,6 +27321,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.flushmu_wait_total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.flushmu_wait_max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitMaxNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
+	appendCheckpointStageStats(stats, "cutover", &db.checkpointStageCutover)
+	appendCheckpointStageStats(stats, "wal_rotate", &db.checkpointStageWALRotate)
+	appendCheckpointStageStats(stats, "value_log_flush", &db.checkpointStageValueLogFlush)
+	appendCheckpointStageStats(stats, "command_wal_publish", &db.checkpointStageCommandWALPublish)
+	appendCheckpointStageStats(stats, "flush_all", &db.checkpointStageFlushAll)
+	appendCheckpointStageStats(stats, "backend_boundary", &db.checkpointStageBackendBoundary)
+	appendCheckpointStageStats(stats, "wal_cleanup", &db.checkpointStageWALCleanup)
+	appendCheckpointStageStats(stats, "post_maintenance", &db.checkpointStagePostMaintenance)
 	stats["treedb.cache.command_wal.checkpoint_publish.piggybacked"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishPiggybacked.Load())
 	stats["treedb.cache.command_wal.checkpoint_publish.separate"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishSeparate.Load())
 	db.appendCacheFlushApplyStats(stats)

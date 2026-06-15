@@ -741,6 +741,15 @@ func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPre
 }
 
 func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, opBase int, ranges []batch.DeleteRange, rangeBase int, low, high []byte, result *ReadOnlyPrepareResult, scratch *mergeScratch) error {
+	if ref.Kind == page.ChildRefLeafLog {
+		// Leaf-log child refs are only emitted for outer leaf pages. The read-only
+		// prepare pass needs the leaf boundary carried by the parent internal page,
+		// not the leaf body itself, so avoid decompressing the persistent leaf-log
+		// record here. The subsequent apply pass still validates and reads the leaf
+		// before producing durable output.
+		result.addLeafSpan(ref, low, high, ops, opBase, ranges, rangeBase)
+		return nil
+	}
 	oldNode, _, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
 	if err != nil {
 		return err
