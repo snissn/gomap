@@ -313,7 +313,15 @@ func TestZipperPrepareReadOnlyManyLeafSplitBoundaryDeterministic(t *testing.T) {
 	if first.Maintenance || !first.ExactLeafSpans || len(first.LeafSpans) < 2 {
 		t.Fatalf("many leaf flags/spans maintenance=%v exact=%v spans=%d", first.Maintenance, first.ExactLeafSpans, len(first.LeafSpans))
 	}
+	direct, err := z.PrepareReadOnlyPlan(rootID, delta.SortedEntries(), nil, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnlyPlan: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, direct)
 	wantSig := readOnlySpanSignature(first)
+	if gotSig := readOnlySpanSignature(direct); !reflect.DeepEqual(gotSig, wantSig) {
+		t.Fatalf("direct prepare signature mismatch\n got=%v\nwant=%v", gotSig, wantSig)
+	}
 	for i := 0; i < 5; i++ {
 		prepared, err := z.PrepareReadOnly(rootID, delta, first.ReuseOptions())
 		if err != nil {

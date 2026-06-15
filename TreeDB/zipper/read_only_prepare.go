@@ -726,25 +726,36 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 // allocating or writing pager/leaf-log output. It is the safe preparation phase
 // that future prepared-output paths can run before the final install section.
 func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPrepareOptions) (ReadOnlyPrepareResult, error) {
+	if b == nil {
+		return ReadOnlyPrepareResult{OmitKeys: opts.OmitKeys, LeafSpans: opts.leafSpans[:0], keyArena: opts.keyArena[:0]}, errors.New("zipper: nil batch")
+	}
+	var ops []batch.Entry
+	var ranges []batch.DeleteRange
+	if b.HasDeleteRanges() {
+		ops, ranges = b.ApplyPlan()
+	} else {
+		ops = b.SortedEntries()
+	}
+	return z.PrepareReadOnlyPlan(rootID, ops, ranges, opts)
+}
+
+// PrepareReadOnlyPlan discovers the existing leaf spans touched by an already
+// canonical sorted apply plan without first materializing a batch. Point ops must
+// be sorted in apply order, and ranges must be the canonical merged range slice
+// that batch.ApplyPlan would have produced. It is side-effect-free like
+// PrepareReadOnly and exists for hot planning paths that already own canonical
+// op slices.
+func (z *Zipper) PrepareReadOnlyPlan(rootID uint64, ops []batch.Entry, ranges []batch.DeleteRange, opts ReadOnlyPrepareOptions) (ReadOnlyPrepareResult, error) {
 	result := ReadOnlyPrepareResult{
 		OmitKeys:  opts.OmitKeys,
 		LeafSpans: opts.leafSpans[:0],
 		keyArena:  opts.keyArena[:0],
 	}
-	if b == nil {
-		return result, errors.New("zipper: nil batch")
-	}
-	var ops []batch.Entry
-	var ranges []batch.DeleteRange
-	hasDeleteRanges := b.HasDeleteRanges()
-	if hasDeleteRanges {
+	if len(ranges) > 0 {
 		// OmitKeys is only safe for point-only planning. Delete-range overlap
 		// partitioning relies on exact leaf span bounds, so retain keys and report
 		// the effective mode in the result.
 		result.OmitKeys = false
-		ops, ranges = b.ApplyPlan()
-	} else {
-		ops = b.SortedEntries()
 	}
 	result.RootID = rootID
 	result.PointOps = len(ops)

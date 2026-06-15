@@ -69,35 +69,41 @@ func (db *DB) prepareFlushSpanRun(req FlushSpanRunPlanRequest, omitKeys bool, pr
 		return meta, prepared, fmt.Errorf("treedb: flush span run source point ops=%d must equal planned=%d plus shadowed=%d", req.SourcePointOps, req.PlannedPointOps, req.ShadowedPointOps)
 	}
 
-	reserve := len(req.PointOps) + len(req.DeleteRanges)
-	bif := db.newBatchWithReserveHint(reserve)
-	b, ok := bif.(*Batch)
-	if !ok || b == nil || b.batch == nil {
-		if bif != nil {
-			_ = bif.Close()
-		}
-		return meta, prepared, fmt.Errorf("treedb: flush span run planner could not create backend batch")
-	}
-	defer func() { _ = b.Close() }()
-
-	if len(req.PointOps) > 0 {
-		if err := b.batch.SetOps(req.PointOps); err != nil {
-			return meta, prepared, err
-		}
-	}
-	for i := range req.DeleteRanges {
-		r := req.DeleteRanges[i]
-		if err := b.batch.DeleteRange(r.Start, r.End); err != nil {
-			return meta, prepared, err
-		}
-	}
-
 	planOpts := ReadOnlyApplyPlanOptions{Workers: db.flushApplyConcurrency}
 	if prepareBuf != nil {
 		planOpts.Zipper = prepareBuf.opts
 	}
 	planOpts.Zipper.OmitKeys = omitKeys
-	plan, err := db.PrepareReadOnlyApplyPlan(b, planOpts)
+
+	var plan ReadOnlyApplyPlan
+	var err error
+	if len(req.DeleteRanges) == 0 {
+		plan, err = db.prepareReadOnlyApplyPlanFromOps(req.PointOps, nil, planOpts)
+	} else {
+		reserve := len(req.PointOps) + len(req.DeleteRanges)
+		bif := db.newBatchWithReserveHint(reserve)
+		b, ok := bif.(*Batch)
+		if !ok || b == nil || b.batch == nil {
+			if bif != nil {
+				_ = bif.Close()
+			}
+			return meta, prepared, fmt.Errorf("treedb: flush span run planner could not create backend batch")
+		}
+		defer func() { _ = b.Close() }()
+
+		if len(req.PointOps) > 0 {
+			if err := b.batch.SetOps(req.PointOps); err != nil {
+				return meta, prepared, err
+			}
+		}
+		for i := range req.DeleteRanges {
+			r := req.DeleteRanges[i]
+			if err := b.batch.DeleteRange(r.Start, r.End); err != nil {
+				return meta, prepared, err
+			}
+		}
+		plan, err = db.PrepareReadOnlyApplyPlan(b, planOpts)
+	}
 	prepared = plan.Prepare
 	if prepared.RootID != 0 {
 		meta.BaseRoot.CapturedRootID = prepared.RootID

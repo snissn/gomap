@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
@@ -52,6 +53,18 @@ func (db *DB) PrepareReadOnlyApplyPlan(b *Batch, opts ReadOnlyApplyPlanOptions) 
 	if b == nil || b.batch == nil {
 		return out, fmt.Errorf("treedb: nil read-only apply batch")
 	}
+	var ops []batch.Entry
+	var ranges []batch.DeleteRange
+	if b.batch.HasDeleteRanges() {
+		ops, ranges = b.batch.ApplyPlan()
+	} else {
+		ops = b.batch.SortedEntries()
+	}
+	return db.prepareReadOnlyApplyPlanFromOps(ops, ranges, opts)
+}
+
+func (db *DB) prepareReadOnlyApplyPlanFromOps(ops []batch.Entry, ranges []batch.DeleteRange, opts ReadOnlyApplyPlanOptions) (ReadOnlyApplyPlan, error) {
+	var out ReadOnlyApplyPlan
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {
 		if snap != nil {
@@ -62,7 +75,7 @@ func (db *DB) PrepareReadOnlyApplyPlan(b *Batch, opts ReadOnlyApplyPlanOptions) 
 	defer func() { _ = snap.Close() }()
 
 	prepareStart := time.Now()
-	prepared, err := snap.idx.zipper.PrepareReadOnly(snap.state.RootPageID, b.batch, opts.Zipper)
+	prepared, err := snap.idx.zipper.PrepareReadOnlyPlan(snap.state.RootPageID, ops, ranges, opts.Zipper)
 	out.PrepareNs = elapsedReadOnlyPrepareNs(prepareStart)
 	out.Prepare = prepared
 	summary := prepared.LeafSpanSummary()
