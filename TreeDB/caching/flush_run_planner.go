@@ -816,12 +816,19 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 			backendEntriesCap = 1
 		}
 	}
+	chunkEntriesCap := backendEntriesCap
+	if build.sourcePointOps > 0 && chunkEntriesCap > build.sourcePointOps {
+		chunkEntriesCap = build.sourcePointOps
+	}
+	if chunkEntriesCap <= 0 {
+		chunkEntriesCap = 1
+	}
 
 	var emptySplitSummary backenddb.FlushSpanRunChunkSplitSummary
 	db.observeFlushSpanRunTargetLeafSpanSummary(0, 0, 0, 0, emptySplitSummary)
 
 	writeStart := time.Now()
-	ops := getEntrySlice(backendEntriesCap)
+	ops := getEntrySlice(chunkEntriesCap)
 	defer func() { putEntrySlice(ops) }()
 	valueLogNeedsFlush := db.valueLogEnabled()
 	flushValueLogIfNeeded := func() error {
@@ -859,19 +866,19 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		putEntrySlice(ops)
 		ops = nil
 		if !last {
-			ops = getEntrySlice(backendEntriesCap)
+			ops = getEntrySlice(chunkEntriesCap)
 		}
 		return nil
 	}
 
 	err = mergeCanonicalUnitRuns(build.unitRuns, runStats, func(entry batch.Entry) error {
-		if len(ops) >= backendEntriesCap {
+		if len(ops) >= chunkEntriesCap {
 			if err := emitChunk(false); err != nil {
 				return err
 			}
 		}
 		if ops == nil {
-			ops = getEntrySlice(backendEntriesCap)
+			ops = getEntrySlice(chunkEntriesCap)
 		}
 		ops = append(ops, entry)
 		return nil

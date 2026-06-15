@@ -458,6 +458,31 @@ func TestFlushSpanRunPlannedBackendChunksFallbackOnInvalidCoverage(t *testing.T)
 	}
 }
 
+func TestFlushCanonicalStreamedDisabledChunkingUsesRunSizedBuffer(t *testing.T) {
+	backend := NewMockBackend()
+	db, err := Open(t.TempDir(), backend, Options{
+		FlushThreshold:         1 << 60,
+		FlushBuildConcurrency:  2,
+		FlushBuildMinEntries:   1,
+		FlushBuildMinUnits:     2,
+		FlushBackendMaxEntries: -1,
+		MemtableShards:         1,
+		JournalLanes:           1,
+	})
+	if err != nil {
+		t.Fatalf("Open cache: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	queueTwoPointMemtables(t, db)
+	if !db.flushLaneOnce(true, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+	if got := requireStatUint64(t, db.Stats(), "treedb.cache.flush_span_run.backend_chunks_total"); got != 1 {
+		t.Fatalf("backend chunks=%d want one unchunked write", got)
+	}
+}
+
 func TestFlushSpanRunRuntimeTargetLeafSplitCounterOptIn(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
