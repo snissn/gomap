@@ -95,8 +95,9 @@ func appendFlushSpanRunTargetLeafSpans(dst []FlushSpanRunTargetLeafSpan, spans [
 }
 
 func cloneFlushSpanRunKey(key []byte) []byte {
-	if key == nil {
-		return nil
-	}
-	return append([]byte(nil), key...)
+	// ReadOnlyPrepareResult already owns stable key-arena bytes for span bounds
+	// and first/last op keys. Returning those views keeps the arena live through
+	// FlushSpanRunMetadata without adding a second per-span key copy on the flush
+	// hot path.
+	return key
 }
