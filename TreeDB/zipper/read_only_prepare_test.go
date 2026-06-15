@@ -158,6 +158,25 @@ func TestReadOnlyPrepareResultResetForReuseKeepsBoundedBuffers(t *testing.T) {
 	if oversized.LeafSpans != nil || oversized.keyArena != nil {
 		t.Fatalf("oversized buffers retained: leaf cap=%d key cap=%d", cap(oversized.LeafSpans), cap(oversized.keyArena))
 	}
+
+	omitKeys := ReadOnlyPrepareResult{
+		OmitKeys:  true,
+		LeafSpans: make([]ReadOnlyLeafSpan, 1, readOnlyPrepareResultReuseLeafSpanKeepCap+1),
+		keyArena:  make([]byte, 1, 32),
+	}
+	omitKeys.ResetForReuse()
+	if !omitKeys.OmitKeys {
+		t.Fatalf("omit-keys reset did not preserve OmitKeys")
+	}
+	if len(omitKeys.LeafSpans) != 0 || cap(omitKeys.LeafSpans) != readOnlyPrepareResultReuseLeafSpanKeepCap+1 {
+		t.Fatalf("omit-keys reset leaf spans len/cap=%d/%d", len(omitKeys.LeafSpans), cap(omitKeys.LeafSpans))
+	}
+	if omitKeys.keyArena != nil {
+		t.Fatalf("omit-keys reset retained key arena cap=%d", cap(omitKeys.keyArena))
+	}
+	if opts := omitKeys.ReuseOptions(); !opts.OmitKeys || cap(opts.leafSpans) != readOnlyPrepareResultReuseLeafSpanKeepCap+1 {
+		t.Fatalf("omit-keys reuse options OmitKeys=%v leaf cap=%d", opts.OmitKeys, cap(opts.leafSpans))
+	}
 }
 
 func TestReadOnlyPrepareResultResetForReuseClearsLeafSpanReferences(t *testing.T) {

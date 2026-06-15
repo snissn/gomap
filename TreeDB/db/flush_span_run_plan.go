@@ -12,7 +12,7 @@ import (
 // prepare pass against the supplied point/range operations, and returns M8/M9
 // span-run metadata for cache-layer chunk planning and future span-native jobs.
 func (db *DB) PlanFlushSpanRun(req FlushSpanRunPlanRequest) (FlushSpanRunMetadata, error) {
-	meta, prepared, err := db.prepareFlushSpanRun(req, false)
+	meta, prepared, err := db.prepareFlushSpanRun(req, false, nil)
 	if err != nil {
 		return meta, err
 	}
@@ -29,7 +29,9 @@ func (db *DB) PlanFlushSpanRun(req FlushSpanRunPlanRequest) (FlushSpanRunMetadat
 // same side-effect-free read-only prepare pass and emits aggregate target-span
 // counters plus split evidence.
 func (db *DB) PlanFlushSpanRunChunks(req FlushSpanRunPlanRequest, maxPointOpsPerChunk int) (FlushSpanRunChunkPlan, error) {
-	meta, prepared, err := db.prepareFlushSpanRun(req, true)
+	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(zipper.ApplyOptions{PrepareReadOnly: true})
+	meta, prepared, err := db.prepareFlushSpanRun(req, true, prepareBuf)
+	defer db.releaseFlushApplyReadOnlyPreparePlanBuffer(prepareBuf, &prepared)
 	out := FlushSpanRunChunkPlan{Metadata: meta}
 	if err != nil {
 		return out, err
@@ -46,7 +48,7 @@ func (db *DB) PlanFlushSpanRunChunks(req FlushSpanRunPlanRequest, maxPointOpsPer
 	return out, nil
 }
 
-func (db *DB) prepareFlushSpanRun(req FlushSpanRunPlanRequest, omitKeys bool) (FlushSpanRunMetadata, zipper.ReadOnlyPrepareResult, error) {
+func (db *DB) prepareFlushSpanRun(req FlushSpanRunPlanRequest, omitKeys bool, prepareBuf *flushApplyReadOnlyPrepareBuffer) (FlushSpanRunMetadata, zipper.ReadOnlyPrepareResult, error) {
 	meta := FlushSpanRunMetadata{
 		RunID:            req.RunID,
 		SourceMemtables:  req.SourceMemtables,
@@ -91,6 +93,9 @@ func (db *DB) prepareFlushSpanRun(req FlushSpanRunPlanRequest, omitKeys bool) (F
 	}
 
 	planOpts := ReadOnlyApplyPlanOptions{Workers: db.flushApplyConcurrency}
+	if prepareBuf != nil {
+		planOpts.Zipper = prepareBuf.opts
+	}
 	planOpts.Zipper.OmitKeys = omitKeys
 	plan, err := db.PrepareReadOnlyApplyPlan(b, planOpts)
 	prepared = plan.Prepare

@@ -218,8 +218,9 @@ type ReadOnlyPrepareResult struct {
 }
 
 const (
-	readOnlyPrepareResultReuseLeafSpanKeepCap = 65536
-	readOnlyPrepareResultReuseKeyArenaKeepCap = 16 << 20
+	readOnlyPrepareResultReuseLeafSpanKeepCap         = 65536
+	readOnlyPrepareResultReuseOmitKeysLeafSpanKeepCap = 512 << 10
+	readOnlyPrepareResultReuseKeyArenaKeepCap         = 16 << 20
 )
 
 // LeafSpanSummary returns an allocation-free aggregate view of r's leaf spans.
@@ -380,13 +381,18 @@ func (r *ReadOnlyPrepareResult) ResetForReuse() {
 	if r == nil {
 		return
 	}
+	omitKeys := r.OmitKeys
 	leafSpans := r.LeafSpans
 	keyArena := r.keyArena
-	*r = ReadOnlyPrepareResult{}
-	if cap(leafSpans) <= readOnlyPrepareResultReuseLeafSpanKeepCap {
+	*r = ReadOnlyPrepareResult{OmitKeys: omitKeys}
+	leafSpanKeepCap := readOnlyPrepareResultReuseLeafSpanKeepCap
+	if omitKeys {
+		leafSpanKeepCap = readOnlyPrepareResultReuseOmitKeysLeafSpanKeepCap
+	}
+	if cap(leafSpans) <= leafSpanKeepCap {
 		r.LeafSpans = clearReadOnlyLeafSpanBuffer(leafSpans)
 	}
-	if cap(keyArena) <= readOnlyPrepareResultReuseKeyArenaKeepCap {
+	if !omitKeys && cap(keyArena) <= readOnlyPrepareResultReuseKeyArenaKeepCap {
 		r.keyArena = keyArena[:0]
 	}
 }
@@ -562,8 +568,12 @@ func (r *ReadOnlyPrepareResult) ensureInitialCapacity(ops []batch.Entry, ranges 
 		return
 	}
 	spanHint := len(ops) + len(ranges)
-	if spanHint > readOnlyPrepareResultReuseLeafSpanKeepCap {
-		spanHint = readOnlyPrepareResultReuseLeafSpanKeepCap
+	leafSpanKeepCap := readOnlyPrepareResultReuseLeafSpanKeepCap
+	if r.OmitKeys {
+		leafSpanKeepCap = readOnlyPrepareResultReuseOmitKeysLeafSpanKeepCap
+	}
+	if spanHint > leafSpanKeepCap {
+		spanHint = leafSpanKeepCap
 	}
 	if spanHint > 0 && cap(r.LeafSpans) < spanHint {
 		r.LeafSpans = make([]ReadOnlyLeafSpan, 0, spanHint)
