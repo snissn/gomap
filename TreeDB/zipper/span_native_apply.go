@@ -35,7 +35,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		workerRanges = append(workerRanges, ReadOnlyLeafSpanWorkerRange{FirstSpan: 0, SpanCount: spanCount, Ops: len(ops)})
 	}
 	workers = len(workerRanges)
-	outputs := make([]spanNativeLeafOutput, spanCount)
+	outputs := scratch.acquireSpanNativeLeafOutputs(spanCount)
 	rangeMetrics := make([]adaptive.Metrics, len(workerRanges))
 	rangeRetired := make([][]uint64, len(workerRanges))
 	var firstErr error
@@ -126,6 +126,22 @@ func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareR
 type spanNativeLeafOutput struct {
 	ref    page.ChildRef
 	splits []Split
+}
+
+func (s *mergeScratch) acquireSpanNativeLeafOutputs(count int) []spanNativeLeafOutput {
+	if count <= 0 {
+		return nil
+	}
+	if s == nil {
+		return make([]spanNativeLeafOutput, count)
+	}
+	if cap(s.spanNativeOutputScratch) < count {
+		s.spanNativeOutputScratch = make([]spanNativeLeafOutput, count)
+		return s.spanNativeOutputScratch
+	}
+	s.spanNativeOutputScratch = s.spanNativeOutputScratch[:count]
+	clear(s.spanNativeOutputScratch)
+	return s.spanNativeOutputScratch
 }
 
 type spanNativeLeafReplacements struct {

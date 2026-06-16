@@ -158,6 +158,7 @@ const (
 	mergeChildRefBatchInit        = 8
 	mergeChildRefBatchKeep        = 64
 	mergeChildRefBatchMaxCap      = 512
+	mergeSpanNativeOutputKeepCap  = 1 << 20
 
 	mergeInternalMinParallelChildren         = 8
 	mergeInternalMinParallelOps              = 4096
@@ -176,6 +177,7 @@ type mergeScratch struct {
 	pendingLeafPersistScratch [][]pendingLeafPagePersist
 	leafPageBatchScratch      [][][]byte
 	childRefBatchScratch      [][]page.ChildRef
+	spanNativeOutputScratch   []spanNativeLeafOutput
 }
 
 func newMergeScratch() *mergeScratch {
@@ -254,6 +256,12 @@ func (s *mergeScratch) reset() {
 			extra[i] = nil
 		}
 		s.childRefBatchScratch = s.childRefBatchScratch[:mergeChildRefBatchKeep]
+	}
+	clear(s.spanNativeOutputScratch)
+	if cap(s.spanNativeOutputScratch) > mergeSpanNativeOutputKeepCap {
+		s.spanNativeOutputScratch = nil
+	} else {
+		s.spanNativeOutputScratch = s.spanNativeOutputScratch[:0]
 	}
 }
 
