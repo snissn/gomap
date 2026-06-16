@@ -7,13 +7,27 @@
 #
 # The script runs 10M-key TreeDB write profiles and then invokes
 # scripts/treedb_m14_matrix_summary.py to produce m14_matrix_summary.{md,json}.
+# `unified-bench -profile-dir` auto-runs benchprof; set
+# RUN_MANUAL_BENCHPROF=true to also run the explicit second pass used by older
+# runbooks.
 set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+SUMMARY_SCRIPT_SRC=$SCRIPT_DIR/treedb_m14_matrix_summary.py
+if [[ ! -f "$SUMMARY_SCRIPT_SRC" ]]; then
+  echo "missing summary parser: $SUMMARY_SCRIPT_SRC" >&2
+  exit 2
+fi
+PRESERVED_SUMMARY_SCRIPT=$(mktemp)
+trap 'rm -f "$PRESERVED_SUMMARY_SCRIPT"' EXIT
+cp "$SUMMARY_SCRIPT_SRC" "$PRESERVED_SUMMARY_SCRIPT"
 
 ROOT=${ROOT:-/mnt/fast4tb/gomap-profiles}
 REPO=${REPO:-$(pwd)}
 COMMIT=${COMMIT:-$(git -C "$REPO" rev-parse HEAD)}
 STAMP=${STAMP:-$(date -u +%Y%m%d_%H%M%S)}
 RUN_ROOT=${RUN_ROOT:-$ROOT/2774_m14_matrix_${STAMP}}
+RUN_MANUAL_BENCHPROF=${RUN_MANUAL_BENCHPROF:-false}
 LOG=$RUN_ROOT/gate.log
 
 mkdir -p "$RUN_ROOT"
@@ -27,6 +41,8 @@ printf "git=%s\n" "$(git --version)"
 printf "nproc=%s\n" "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 printf "kernel=%s\n" "$(uname -a)"
 printf "repo=%s\n" "$REPO"
+printf "run_manual_benchprof=%s\n" "$RUN_MANUAL_BENCHPROF"
+cp "$PRESERVED_SUMMARY_SCRIPT" "$RUN_ROOT/treedb_m14_matrix_summary.py"
 
 cd "$REPO"
 git checkout --force "$COMMIT"
@@ -102,7 +118,9 @@ run_one() {
   printf "\n" >> "$out/command.sh"
   chmod +x "$out/command.sh"
   /usr/bin/time -v ./bin/unified-bench "${args[@]}" > "$out/unified_bench.stdout.md" 2> "$out/unified_bench.stderr.log"
-  /usr/bin/time -v ./bin/benchprof -profiles-dir "$out" > "$out/benchprof_manual.log" 2>&1
+  if [[ "$RUN_MANUAL_BENCHPROF" == "true" ]]; then
+    /usr/bin/time -v ./bin/benchprof -profiles-dir "$out" > "$out/benchprof_manual.log" 2>&1
+  fi
   printf "completed %s\n" "$label"
 }
 
@@ -125,7 +143,5 @@ run_one span_native_c4_no_backlog 4 true false default \
 run_one span_native_c4_cache_disabled 4 true true disabled \
   "span-native plus backlog coalescing; outer leaf read cache disabled"
 
-if [[ -x scripts/treedb_m14_matrix_summary.py ]]; then
-  python3 scripts/treedb_m14_matrix_summary.py "$RUN_ROOT" --baseline-label default_unconfigured
-fi
+python3 "$RUN_ROOT/treedb_m14_matrix_summary.py" "$RUN_ROOT" --baseline-label default_unconfigured
 printf "M14 matrix done %s\nRUN_ROOT=%s\nLOG=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ROOT" "$LOG"
