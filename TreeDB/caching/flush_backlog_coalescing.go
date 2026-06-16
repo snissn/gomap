@@ -10,12 +10,12 @@ import (
 const (
 	flushBacklogCoalescingPPM = uint64(1_000_000)
 
-	flushBacklogCoalescingDefaultSingleOpSpanRatioPPM = uint64(800_000)
-	flushBacklogCoalescingDefaultMaxOpsPerSpanPPM     = uint64(1_500_000)
+	flushBacklogCoalescingDefaultSingleOpSpanRatioPPM = uint64(500_000)
+	flushBacklogCoalescingDefaultMaxOpsPerSpanPPM     = uint64(4_000_000)
 	flushBacklogCoalescingDefaultMaxMemtables         = 64
 	flushBacklogCoalescingHardMaxMemtables            = 128
 	flushBacklogCoalescingDefaultMaxBytes             = int64(512 << 20)
-	flushBacklogCoalescingDefaultMaxOps               = 1 << 20
+	flushBacklogCoalescingDefaultMaxOps               = 2 << 20
 )
 
 type flushBacklogCoalescingSkipReason uint8

@@ -104,6 +104,25 @@ func TestFlushBacklogCoalescingAdmitsUnderSingleOpPressure(t *testing.T) {
 	}
 }
 
+func TestFlushBacklogCoalescingDefaultPressureGatesAdmitObservedRandomShape(t *testing.T) {
+	db, _ := newCoalescingTestDB(t, Options{
+		FlushBacklogCoalescing: true,
+	}, backenddb.FlushApplyPressureSnapshot{
+		ApplyOps:                     100,
+		ReadOnlyPrepareSpans:         100,
+		ReadOnlyPrepareSingleOpSpans: 61,
+		ReadOnlyPrepareSpanOps:       341,
+		OldLeafReadDecodeBytes:       140_000,
+	})
+	enqueuePointMemtables(t, db, 4, "defaultpressure")
+
+	db.flushAll(false)
+
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.admitted_runs_total"); got == 0 {
+		t.Fatalf("admitted_runs_total=%d want >0 for observed random-write pressure shape", got)
+	}
+}
+
 func TestFlushBacklogCoalescingSkipsWithoutPressure(t *testing.T) {
 	db, _ := newCoalescingTestDB(t, Options{
 		FlushBacklogCoalescing:                  true,
