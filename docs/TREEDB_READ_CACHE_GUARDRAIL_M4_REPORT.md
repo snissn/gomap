@@ -162,7 +162,7 @@ COMMON_FLAGS="\
   -keys 10000000 \
   -valsize 128 \
   -batchsize 8000 \
-  -path-label default-readiness-final-gate \
+  -path-label m8-m14-10mm-gate \
   -treedb-journal-lanes=1 \
   -progress=false"
 
