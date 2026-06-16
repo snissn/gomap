@@ -21387,6 +21387,7 @@ func (db *DB) Checkpoint() error {
 			}
 		}
 	}
+	preDrainNeedsBoundary := preDrainFlushes > 0
 	if hasMutable {
 		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
@@ -21395,7 +21396,7 @@ func (db *DB) Checkpoint() error {
 		}
 		hasQueue = len(db.queue) > 0
 		hasLiveWAL = hasLiveWAL || !db.disableJournal
-	} else if !hasQueue && !hasDirtyVLog && !hasLiveWAL && db.commandWALCheckpointPublish == nil {
+	} else if !hasQueue && !hasDirtyVLog && !hasLiveWAL && !preDrainNeedsBoundary && db.commandWALCheckpointPublish == nil {
 		db.mu.Unlock()
 		releaseWriteMu()
 		db.checkpointNoopSkips.Add(1)
@@ -21405,7 +21406,7 @@ func (db *DB) Checkpoint() error {
 		db.checkValueLogRetention()
 		db.scheduleRetainedValueLogPrune()
 		return nil
-	} else if db.disableJournal && !hasQueue && !hasDirtyVLog {
+	} else if db.disableJournal && !hasQueue && !hasDirtyVLog && !preDrainNeedsBoundary {
 		// Checkpoint-kick retries may need to rotate current value-log segments
 		// even when there is no new foreground dirtiness, so observed-source GC
 		// can re-check recently rewritten active sources.
@@ -21550,7 +21551,7 @@ func (db *DB) Checkpoint() error {
 	// New logic: perform sync write only if not relaxedSync
 	needsCommandWALPublish := commandWALAppliedLSN != 0 && !commandWALPublishCovered
 	var commitErr error
-	if nonEmptyBytes > 0 || needsCommandWALPublish {
+	if nonEmptyBytes > 0 || needsCommandWALPublish || preDrainNeedsBoundary {
 		backendBoundaryStart := time.Now()
 		if needsCommandWALPublish {
 			// This backend batch is also the checkpoint durability boundary for any
