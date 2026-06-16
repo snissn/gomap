@@ -799,6 +799,12 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	if prepareRequested {
 		result.ReadOnlyPrepareRequested = true
 		var err error
+		if opts.SpanNativeApply {
+			// Span-native apply consumes exact leaf span boundaries to distinguish
+			// whole-root from sparse/partial replacement sets. OmitKeys plans use nil
+			// bounds for point-only spans and are planning-only, not execution-safe.
+			opts.ReadOnlyPrepare.OmitKeys = false
+		}
 		prepareStart := time.Now()
 		prepared, err = z.PrepareReadOnly(rootID, b, opts.ReadOnlyPrepare)
 		preparedNs = elapsedNsSince(prepareStart)

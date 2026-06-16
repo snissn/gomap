@@ -81,6 +81,42 @@ func TestSpanNativeApplyPartialMultiLeafParentStitchParity(t *testing.T) {
 	}
 }
 
+func TestSpanNativeApplyOmitKeysOptionKeepsBoundariesForPartialSpan(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	_, native := newReadOnlyPrepareZipper(t)
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 4096)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 1800; i < 1820; i++ {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte(fmt.Sprintf("omit-%06d", i))); err != nil {
+			t.Fatalf("Set omit-keys update %d: %v", i, err)
+		}
+	}
+
+	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
+	if err != nil {
+		t.Fatalf("serial Apply: %v", err)
+	}
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{
+		SpanNativeApply: true,
+		ReadOnlyPrepare: ReadOnlyPrepareOptions{OmitKeys: true},
+	})
+	if err != nil {
+		t.Fatalf("span-native ApplyWithOptions: %v", err)
+	}
+	if result.ReadOnlyPrepare.OmitKeys {
+		t.Fatalf("span-native prepare kept OmitKeys=true; execution needs exact boundaries")
+	}
+	if !result.SpanNativeEligible || !result.SpanNativeUsed {
+		t.Fatalf("span-native flags eligible/used=%v/%v", result.SpanNativeEligible, result.SpanNativeUsed)
+	}
+	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
+		t.Fatalf("span-native omit-keys partial output mismatch")
+	}
+}
+
 func TestSpanNativeApplyInternalBaseDeltaPartialStitchCopiesSeparatorKeys(t *testing.T) {
 	_, serial := newReadOnlyPrepareZipper(t)
 	_, native := newReadOnlyPrepareZipper(t)
@@ -243,6 +279,23 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	}
 	if got := p.PageCount(); got != beforePages {
 		t.Fatalf("invalid prepared plan allocated pages: got %d want %d", got, beforePages)
+	}
+
+	bad = prepared
+	bad.OmitKeys = true
+	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
+	if validateSpanNativePreparedPlan(ops, bad) {
+		t.Fatalf("validateSpanNativePreparedPlan accepted OmitKeys plan")
+	}
+	_, used, err = z.applySpanNativeWithPrepared(rootID, ops, bad, 1, nil)
+	if err != nil {
+		t.Fatalf("applySpanNativeWithPrepared OmitKeys err=%v", err)
+	}
+	if used {
+		t.Fatalf("OmitKeys plan used span-native output path")
+	}
+	if got := p.PageCount(); got != beforePages {
+		t.Fatalf("OmitKeys plan allocated pages: got %d want %d", got, beforePages)
 	}
 
 	bad = prepared
