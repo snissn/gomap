@@ -125,6 +125,7 @@ These are mainly for experiments and should usually be left at engine defaults:
 - `-treedb-vlog-rewrite-*`
 - `-treedb-flush-build-*`
 - `-treedb-flush-apply-concurrency` and `-treedb-flush-apply-min-*` (opt-in/default-off TreeDB COW apply workers)
+- `-treedb-flush-apply-span-native` (M10 opt-in/default-off span-native apply/reducer for eligible exact point spans)
 - `-treedb-flush-span-run-target-planning` (diagnostic/default-off read-only target-leaf planning for canonical flush runs)
 - `-treedb-max-queued-memtables`, `-treedb-slowdown-backlog-seconds`, `-treedb-stop-backlog-seconds`
 

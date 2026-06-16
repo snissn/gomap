@@ -36,6 +36,7 @@ var (
 	treedbFlushApplyMinEntries            = flag.Int("treedb-flush-apply-min-entries", 0, "TreeDB: minimum planned span ops to enable opt-in parallel apply (0=default)")
 	treedbFlushApplyMinSpans              = flag.Int("treedb-flush-apply-min-spans", 0, "TreeDB: minimum planned leaf spans to enable opt-in parallel apply (0=default)")
 	treedbFlushApplyMinBytes              = flag.Int("treedb-flush-apply-min-bytes", 0, "TreeDB: minimum planned span bytes to enable opt-in parallel apply (0=default)")
+	treedbFlushApplySpanNative            = flag.Bool("treedb-flush-apply-span-native", false, "TreeDB: opt-in M10 span-native apply/reducer for eligible exact point spans (default off)")
 	treedbFlushBackendMaxEntries          = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
 	treedbFlushBackendMaxBatches          = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
 	treedbFlushSpanRunTargetPlanning      = flag.Bool("treedb-flush-span-run-target-planning", false, "TreeDB (cached): diagnostic opt-in read-only target-leaf planning for canonical flush runs")
@@ -360,6 +361,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("flush_apply_min_entries_configured=%d", r.opts.FlushApplyMinEntries))
 	lines = append(lines, fmt.Sprintf("flush_apply_min_spans_configured=%d", r.opts.FlushApplyMinSpans))
 	lines = append(lines, fmt.Sprintf("flush_apply_min_bytes_configured=%d", r.opts.FlushApplyMinBytes))
+	lines = append(lines, fmt.Sprintf("flush_apply_span_native=%t", r.opts.FlushApplySpanNative))
 	lines = append(lines, fmt.Sprintf("flush_span_run_target_planning=%t", r.opts.FlushSpanRunTargetPlanning))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
@@ -681,6 +683,7 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		FlushApplyMinEntries:       *treedbFlushApplyMinEntries,
 		FlushApplyMinSpans:         *treedbFlushApplyMinSpans,
 		FlushApplyMinBytes:         *treedbFlushApplyMinBytes,
+		FlushApplySpanNative:       *treedbFlushApplySpanNative,
 		FlushBackendMaxEntries:     *treedbFlushBackendMaxEntries,
 		FlushBackendMaxBatches:     *treedbFlushBackendMaxBatches,
 		FlushSpanRunTargetPlanning: *treedbFlushSpanRunTargetPlanning,
