@@ -32,6 +32,10 @@ type MaintenancePhase = caching.MaintenancePhase
 
 type LeafPageReadCacheWriteAdmissionPolicy = db.LeafPageReadCacheWriteAdmissionPolicy
 
+type FlushAdmissionPolicy = db.FlushAdmissionPolicy
+
+type FlushAdmissionDecision = db.FlushAdmissionDecision
+
 const (
 	MaintenancePhaseSteady  = caching.MaintenancePhaseSteady
 	MaintenancePhaseRestore = caching.MaintenancePhaseRestore
@@ -39,6 +43,10 @@ const (
 
 	LeafPageReadCacheWriteAdmissionImmediate = db.LeafPageReadCacheWriteAdmissionImmediate
 	LeafPageReadCacheWriteAdmissionAdaptive  = db.LeafPageReadCacheWriteAdmissionAdaptive
+
+	FlushAdmissionPolicyExplicit = db.FlushAdmissionPolicyExplicit
+	FlushAdmissionPolicyOff      = db.FlushAdmissionPolicyOff
+	FlushAdmissionPolicyAuto     = db.FlushAdmissionPolicyAuto
 )
 
 var errVacuumUnsupported = db.ErrVacuumUnsupported
@@ -465,6 +473,7 @@ func Open(opts Options) (*DB, error) {
 
 	// Keep opts.DisableSideStores consistent with the resolved layout.
 	opts.DisableSideStores = layout.disableSideStores
+	db.NormalizeFlushAdmissionOptions(&opts)
 
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {

@@ -347,6 +347,8 @@ type DB struct {
 	flushApplyRetries                             atomic.Uint64
 	flushApplyMismatches                          atomic.Uint64
 
+	flushAdmission FlushAdmissionDecision
+
 	flushApplyConcurrency int
 	flushApplyMinEntries  int
 	flushApplyMinSpans    int
@@ -987,6 +989,14 @@ type Options struct {
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
 
+	// FlushAdmissionPolicy selects how TreeDB admits the span-native/backlog
+	// flush/apply candidate path. The zero value (explicit) preserves current
+	// defaults: span-native/backlog/concurrency stay off unless existing explicit
+	// knobs request them. Off force-disables the candidate path. Auto is the
+	// future-default selector and currently fails closed for low concurrency and
+	// unresolved checkpoint debt.
+	FlushAdmissionPolicy FlushAdmissionPolicy
+
 	// FlushApplyConcurrency enables opt-in M2 parallel COW apply for backend
 	// flush/write batches using a bounded reusable worker pool. It is separate
 	// from FlushBuildConcurrency; values <=1 keep the M2 worker-pool path off.
@@ -1059,6 +1069,9 @@ type Options struct {
 	// FlushBacklogCoalescingMinOldLeafBytesPerOp optionally requires observed
 	// old-leaf decode bytes/op before coalescing (0=disabled).
 	FlushBacklogCoalescingMinOldLeafBytesPerOp float64
+
+	flushAdmissionDecision   FlushAdmissionDecision
+	flushAdmissionNormalized bool
 
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
@@ -1394,6 +1407,7 @@ func Open(opts Options) (*DB, error) {
 	if opts.PruneMaxDuration == 0 {
 		opts.PruneMaxDuration = 25 * time.Millisecond
 	}
+	NormalizeFlushAdmissionOptions(&opts)
 	if opts.FlushApplyMinEntries <= 0 {
 		opts.FlushApplyMinEntries = defaultFlushApplyMinEntries
 	}
@@ -1464,6 +1478,9 @@ func validateOptions(opts Options) error {
 	case LeafPageReadCacheWriteAdmissionImmediate, LeafPageReadCacheWriteAdmissionAdaptive:
 	default:
 		return fmt.Errorf("treedb: invalid leaf page read cache write admission policy %d", opts.LeafPageReadCacheWriteAdmission)
+	}
+	if !opts.FlushAdmissionPolicy.Valid() {
+		return fmt.Errorf("treedb: invalid flush admission policy %d", opts.FlushAdmissionPolicy)
 	}
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
@@ -1660,6 +1677,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
 		piggybackCompaction:            !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
+		flushAdmission:                 FlushAdmissionDecisionForOptions(opts),
 		flushApplyConcurrency:          flushApplyConcurrency,
 		flushApplyMinEntries:           opts.FlushApplyMinEntries,
 		flushApplyMinSpans:             opts.FlushApplyMinSpans,
