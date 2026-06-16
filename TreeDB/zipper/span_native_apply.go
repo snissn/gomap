@@ -43,23 +43,29 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		workers = spanCount
 	}
 
-	workerRanges := prepared.AppendLeafSpanWorkerRanges(nil, workers)
+	workerRanges := coordinatorScratch.acquireSpanWorkerRanges(workers)
+	workerRanges = prepared.AppendLeafSpanWorkerRanges(workerRanges, workers)
 	if len(workerRanges) == 0 {
 		workerRanges = append(workerRanges, ReadOnlyLeafSpanWorkerRange{FirstSpan: 0, SpanCount: spanCount, Ops: len(ops)})
 	}
+	defer coordinatorScratch.releaseSpanWorkerRanges(workerRanges)
 	workers = len(workerRanges)
 	outputs := coordinatorScratch.acquireSpanNativeLeafOutputs(spanCount, z.outerLeavesInValueLog)
 	defer outputs.release()
-	workerScratches := make([]*mergeScratch, len(workerRanges))
+	workerScratches := coordinatorScratch.acquireSpanWorkerScratchSlots(len(workerRanges))
 	defer func() {
 		for i := range workerScratches {
 			z.releaseApplyScratch(workerScratches[i])
 			workerScratches[i] = nil
 		}
+		coordinatorScratch.releaseSpanWorkerScratchSlots(workerScratches)
 	}()
-	rangeMetrics := make([]adaptive.Metrics, len(workerRanges))
-	rangeRetired := make([][]uint64, len(workerRanges))
-	rangeSplits := make([]spanNativeLeafSplitRange, len(workerRanges))
+	rangeMetrics := coordinatorScratch.acquireSpanRangeMetrics(len(workerRanges))
+	defer coordinatorScratch.releaseSpanRangeMetrics(rangeMetrics)
+	rangeRetired := coordinatorScratch.acquireSpanRangeRetired(len(workerRanges))
+	defer coordinatorScratch.releaseSpanRangeRetired(rangeRetired)
+	rangeSplits := coordinatorScratch.acquireSpanRangeSplits(len(workerRanges))
+	defer coordinatorScratch.releaseSpanRangeSplits(rangeSplits)
 	var firstErr error
 	var errOnce sync.Once
 	runRange := func(_ int, job int) {
@@ -457,7 +463,20 @@ func (z *Zipper) reduceSpanNativeRootWithContext(rootID uint64, replacements spa
 		if err := z.retireSpanNativeWholeRootInternalPages(rootID, replacements, retired, scratch); err != nil {
 			return 0, err
 		}
-		var refs []Split
+		if replacements.len() == 1 {
+			out := replacements.output(0)
+			if len(out.splits) == 0 {
+				var one [1]Split
+				one[0] = spanNativeReplacementHeadSplit(replacements.spans[0], out)
+				return z.reduceSpanNativeRoot(one[:], metrics)
+			}
+		}
+		refCap := replacements.len()
+		for i := 0; i < replacements.len(); i++ {
+			refCap += len(replacements.output(i).splits)
+		}
+		refs := scratch.acquireSpanRootRefs(refCap)
+		defer scratch.releaseSpanRootRefs(refs)
 		for i := 0; i < replacements.len(); i++ {
 			out := replacements.output(i)
 			refs = append(refs, spanNativeReplacementHeadSplit(replacements.spans[i], out))
@@ -472,7 +491,13 @@ func (z *Zipper) reduceSpanNativeRootWithContext(rootID uint64, replacements spa
 	if !changed {
 		return 0, fmt.Errorf("%w: no replacement changed root", ErrSpanNativeReducerValidation)
 	}
-	refs := make([]Split, 0, len(splits)+1)
+	if len(splits) == 0 {
+		var one [1]Split
+		one[0] = Split{Key: []byte{}, Ref: ref}
+		return z.reduceSpanNativeRoot(one[:], metrics)
+	}
+	refs := scratch.acquireSpanRootRefs(len(splits) + 1)
+	defer scratch.releaseSpanRootRefs(refs)
 	refs = append(refs, Split{Key: []byte{}, Ref: ref})
 	refs = append(refs, splits...)
 	return z.reduceSpanNativeRoot(refs, metrics)

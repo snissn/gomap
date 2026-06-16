@@ -159,6 +159,8 @@ const (
 	mergeChildRefBatchInit            = 8
 	mergeChildRefBatchKeep            = 64
 	mergeChildRefBatchMaxCap          = 512
+	mergeSpanNativeRangeScratchMaxCap = 4096
+	mergeSpanNativeRootRefMaxCap      = 4096
 	mergeSpanNativeOutputKeepCap      = 1 << 20
 	mergeSpanNativeOutputLogKeepBytes = mergeSpanNativeOutputKeepCap * page.LogRecordRefSize
 	mergeSpanNativeOutputPageKeepCap  = mergeSpanNativeOutputKeepCap
@@ -181,6 +183,12 @@ type mergeScratch struct {
 	pendingLeafPersistScratch [][]pendingLeafPagePersist
 	leafPageBatchScratch      [][][]byte
 	childRefBatchScratch      [][]page.ChildRef
+	spanWorkerRangeScratch    []ReadOnlyLeafSpanWorkerRange
+	spanWorkerScratchScratch  []*mergeScratch
+	spanRangeMetricsScratch   []adaptive.Metrics
+	spanRangeRetiredScratch   [][]uint64
+	spanRangeSplitsScratch    []spanNativeLeafSplitRange
+	spanRootRefsScratch       []Split
 }
 
 func newMergeScratch() *mergeScratch {
@@ -259,6 +267,41 @@ func (s *mergeScratch) reset() {
 			extra[i] = nil
 		}
 		s.childRefBatchScratch = s.childRefBatchScratch[:mergeChildRefBatchKeep]
+	}
+	if cap(s.spanWorkerRangeScratch) > mergeSpanNativeRangeScratchMaxCap {
+		s.spanWorkerRangeScratch = nil
+	} else {
+		s.spanWorkerRangeScratch = s.spanWorkerRangeScratch[:0]
+	}
+	if cap(s.spanWorkerScratchScratch) > mergeSpanNativeRangeScratchMaxCap {
+		s.spanWorkerScratchScratch = nil
+	} else {
+		clear(s.spanWorkerScratchScratch)
+		s.spanWorkerScratchScratch = s.spanWorkerScratchScratch[:0]
+	}
+	if cap(s.spanRangeMetricsScratch) > mergeSpanNativeRangeScratchMaxCap {
+		s.spanRangeMetricsScratch = nil
+	} else {
+		clear(s.spanRangeMetricsScratch)
+		s.spanRangeMetricsScratch = s.spanRangeMetricsScratch[:0]
+	}
+	if cap(s.spanRangeRetiredScratch) > mergeSpanNativeRangeScratchMaxCap {
+		s.spanRangeRetiredScratch = nil
+	} else {
+		clear(s.spanRangeRetiredScratch)
+		s.spanRangeRetiredScratch = s.spanRangeRetiredScratch[:0]
+	}
+	if cap(s.spanRangeSplitsScratch) > mergeSpanNativeRangeScratchMaxCap {
+		s.spanRangeSplitsScratch = nil
+	} else {
+		clear(s.spanRangeSplitsScratch)
+		s.spanRangeSplitsScratch = s.spanRangeSplitsScratch[:0]
+	}
+	if cap(s.spanRootRefsScratch) > mergeSpanNativeRootRefMaxCap {
+		s.spanRootRefsScratch = nil
+	} else {
+		clear(s.spanRootRefsScratch)
+		s.spanRootRefsScratch = s.spanRootRefsScratch[:0]
 	}
 }
 
@@ -478,17 +521,189 @@ func (s *mergeScratch) releaseChildRefBatch(buf []page.ChildRef) {
 	if buf == nil {
 		return
 	}
-	full := buf[:cap(buf)]
-	clear(full)
 	if s == nil || cap(buf) > mergeChildRefBatchMaxCap {
 		return
 	}
 	s.mu.Lock()
 	if len(s.childRefBatchScratch) < mergeChildRefBatchKeep {
-		s.childRefBatchScratch = append(s.childRefBatchScratch, full[:0])
+		s.childRefBatchScratch = append(s.childRefBatchScratch, buf[:0])
 		s.mu.Unlock()
 		return
 	}
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquireSpanWorkerRanges(capacity int) []ReadOnlyLeafSpanWorkerRange {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([]ReadOnlyLeafSpanWorkerRange, 0, capacity)
+	}
+	s.mu.Lock()
+	buf := s.spanWorkerRangeScratch
+	s.spanWorkerRangeScratch = nil
+	s.mu.Unlock()
+	if cap(buf) >= capacity {
+		return buf[:0]
+	}
+	return make([]ReadOnlyLeafSpanWorkerRange, 0, capacity)
+}
+
+func (s *mergeScratch) releaseSpanWorkerRanges(buf []ReadOnlyLeafSpanWorkerRange) {
+	if s == nil || cap(buf) == 0 || cap(buf) > mergeSpanNativeRangeScratchMaxCap {
+		return
+	}
+	s.mu.Lock()
+	s.spanWorkerRangeScratch = buf[:0]
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquireSpanWorkerScratchSlots(capacity int) []*mergeScratch {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([]*mergeScratch, capacity)
+	}
+	s.mu.Lock()
+	buf := s.spanWorkerScratchScratch
+	s.spanWorkerScratchScratch = nil
+	s.mu.Unlock()
+	if cap(buf) >= capacity {
+		buf = buf[:capacity]
+		clear(buf)
+		return buf
+	}
+	return make([]*mergeScratch, capacity)
+}
+
+func (s *mergeScratch) releaseSpanWorkerScratchSlots(buf []*mergeScratch) {
+	if s == nil || cap(buf) == 0 || cap(buf) > mergeSpanNativeRangeScratchMaxCap {
+		return
+	}
+	full := buf[:cap(buf)]
+	clear(full)
+	s.mu.Lock()
+	s.spanWorkerScratchScratch = full[:0]
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquireSpanRangeMetrics(capacity int) []adaptive.Metrics {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([]adaptive.Metrics, capacity)
+	}
+	s.mu.Lock()
+	buf := s.spanRangeMetricsScratch
+	s.spanRangeMetricsScratch = nil
+	s.mu.Unlock()
+	if cap(buf) >= capacity {
+		buf = buf[:capacity]
+		clear(buf)
+		return buf
+	}
+	return make([]adaptive.Metrics, capacity)
+}
+
+func (s *mergeScratch) releaseSpanRangeMetrics(buf []adaptive.Metrics) {
+	if s == nil || cap(buf) == 0 || cap(buf) > mergeSpanNativeRangeScratchMaxCap {
+		return
+	}
+	full := buf[:cap(buf)]
+	clear(full)
+	s.mu.Lock()
+	s.spanRangeMetricsScratch = full[:0]
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquireSpanRangeRetired(capacity int) [][]uint64 {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([][]uint64, capacity)
+	}
+	s.mu.Lock()
+	buf := s.spanRangeRetiredScratch
+	s.spanRangeRetiredScratch = nil
+	s.mu.Unlock()
+	if cap(buf) >= capacity {
+		buf = buf[:capacity]
+		clear(buf)
+		return buf
+	}
+	return make([][]uint64, capacity)
+}
+
+func (s *mergeScratch) releaseSpanRangeRetired(buf [][]uint64) {
+	if s == nil || cap(buf) == 0 || cap(buf) > mergeSpanNativeRangeScratchMaxCap {
+		return
+	}
+	full := buf[:cap(buf)]
+	clear(full)
+	s.mu.Lock()
+	s.spanRangeRetiredScratch = full[:0]
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquireSpanRangeSplits(capacity int) []spanNativeLeafSplitRange {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([]spanNativeLeafSplitRange, capacity)
+	}
+	s.mu.Lock()
+	buf := s.spanRangeSplitsScratch
+	s.spanRangeSplitsScratch = nil
+	s.mu.Unlock()
+	if cap(buf) >= capacity {
+		buf = buf[:capacity]
+		clear(buf)
+		return buf
+	}
+	return make([]spanNativeLeafSplitRange, capacity)
+}
+
+func (s *mergeScratch) releaseSpanRangeSplits(buf []spanNativeLeafSplitRange) {
+	if s == nil || cap(buf) == 0 || cap(buf) > mergeSpanNativeRangeScratchMaxCap {
+		return
+	}
+	full := buf[:cap(buf)]
+	clear(full)
+	s.mu.Lock()
+	s.spanRangeSplitsScratch = full[:0]
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) acquireSpanRootRefs(capacity int) []Split {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s == nil {
+		return make([]Split, 0, capacity)
+	}
+	s.mu.Lock()
+	buf := s.spanRootRefsScratch
+	s.spanRootRefsScratch = nil
+	s.mu.Unlock()
+	if cap(buf) >= capacity {
+		return buf[:0]
+	}
+	return make([]Split, 0, capacity)
+}
+
+func (s *mergeScratch) releaseSpanRootRefs(buf []Split) {
+	if s == nil || cap(buf) == 0 || cap(buf) > mergeSpanNativeRootRefMaxCap {
+		return
+	}
+	full := buf[:cap(buf)]
+	clear(full)
+	s.mu.Lock()
+	s.spanRootRefsScratch = full[:0]
 	s.mu.Unlock()
 }
 

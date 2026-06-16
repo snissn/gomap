@@ -55,6 +55,31 @@ func (p *FramePreparer) ResetForReuse() {
 	if p == nil {
 		return
 	}
+	p.TrimScratchForReuse()
+	p.skipDictID = 0
+	p.codecs = nil
+	p.noBenefit = 0
+	p.skipRemain = 0
+	p.dictFrameEncodeLevel = zstd.SpeedFastest
+	p.dictFrameEnableEntropy = false
+	p.blockCodec = BlockCodecSnappy
+	p.blockCompression = false
+	p.clock = RealClock{}
+	p.encodeCostModel = nil
+	p.encodeSampleStride = 0
+	p.encodeSampleCount = 0
+	p.keepIoNsPerStoredByte = 0
+	p.keepEncodeNsPerRawByte = 0
+	p.keepSafetyMargin = DefaultKeepSafetyMargin
+}
+
+// TrimScratchForReuse drops oversized temporary buffers while preserving codec
+// and compression-hint state. Long-lived prepare workers call this between
+// tasks so an occasional large frame does not pin unbounded scratch memory.
+func (p *FramePreparer) TrimScratchForReuse() {
+	if p == nil {
+		return
+	}
 	if cap(p.rawScratch) > framePreparerScratchKeepCap {
 		p.rawScratch = nil
 	} else {
@@ -71,21 +96,6 @@ func (p *FramePreparer) ResetForReuse() {
 		p.blockScratch = p.blockScratch[:0]
 	}
 	p.encLimiter = limitedSliceWriter{}
-	p.skipDictID = 0
-	p.codecs = nil
-	p.noBenefit = 0
-	p.skipRemain = 0
-	p.dictFrameEncodeLevel = zstd.SpeedFastest
-	p.dictFrameEnableEntropy = false
-	p.blockCodec = BlockCodecSnappy
-	p.blockCompression = false
-	p.clock = RealClock{}
-	p.encodeCostModel = nil
-	p.encodeSampleStride = 0
-	p.encodeSampleCount = 0
-	p.keepIoNsPerStoredByte = 0
-	p.keepEncodeNsPerRawByte = 0
-	p.keepSafetyMargin = DefaultKeepSafetyMargin
 }
 
 func (p *FramePreparer) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool) {
