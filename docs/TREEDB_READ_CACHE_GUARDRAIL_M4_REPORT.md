@@ -237,6 +237,29 @@ For each of these row families, run at least:
 Add c1 only if #2788 needs to prove a runtime selector declines low-concurrency
 span-native; otherwise the write row is enough to preserve the M14 c1 guardrail.
 
+Use these row-flag expansions for `<ROW_FLAGS>` and the matching `<row>` path
+component in the commands below:
+
+```sh
+# <row>=default_unconfigured
+ROW_FLAGS=""
+
+# <row>=span_native_c4_immediate
+ROW_FLAGS="$SPAN_FLAGS \
+  -treedb-flush-apply-concurrency=4 \
+  -treedb-leaf-page-read-cache-write-admission=immediate"
+
+# <row>=span_native_c4_adaptive
+ROW_FLAGS="$SPAN_FLAGS \
+  -treedb-flush-apply-concurrency=4 \
+  -treedb-leaf-page-read-cache-write-admission=adaptive"
+
+# <row>=span_native_c4_cache_disabled
+ROW_FLAGS="$SPAN_FLAGS \
+  -treedb-flush-apply-concurrency=4 \
+  -treedb-leaf-page-read-cache-entries=-1"
+```
+
 ### Settled point-read after write/checkpoint/reopen
 
 ```sh
