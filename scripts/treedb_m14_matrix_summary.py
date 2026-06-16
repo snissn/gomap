@@ -25,6 +25,17 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 TESTS = ("sequential_write", "batch_random", "random_write")
+ROW_ORDER = (
+    "default_unconfigured",
+    "legacy_parallel_c4",
+    "span_native_c1",
+    "span_native_c2",
+    "span_native_c4",
+    "span_native_c8",
+    "span_native_c16",
+    "span_native_c4_no_backlog",
+    "span_native_c4_cache_disabled",
+)
 CHECKPOINT_LABELS = ("Sequential Write", "Batch Random", "Random Write", "After Run")
 DISK_KEYS = ("maindb/index.db", "maindb/wal", "maindb/value_vlog", "maindb/leaf_vlog")
 COUNTER_KEYS = (
@@ -274,6 +285,8 @@ def load_matrix(root: Path) -> List[MatrixRow]:
     for child in sorted(root.iterdir()):
         if child.is_dir() and (child / "benchprof_results.json").exists():
             rows.append(load_row(child))
+    order = {label: i for i, label in enumerate(ROW_ORDER)}
+    rows.sort(key=lambda row: (order.get(row.label, len(order)), row.label))
     return rows
 
 
