@@ -195,12 +195,21 @@ func TestBuildTreeDBOptions_FlushAdmissionAutoDeclinesLowConcurrencyAndCheckpoin
 		"flush_admission_policy=auto",
 		"flush_admission_admitted=false",
 		"flush_admission_reason=low_concurrency,checkpoint_debt_unresolved",
-		"flush_admission_policy=auto declined: low_concurrency,checkpoint_debt_unresolved",
+		"  - flush_admission_policy=auto declined: low_concurrency,checkpoint_debt_unresolved",
 	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("resolved options missing %q: %q", want, text)
+		if !treeDBReportHasLine(text, want) {
+			t.Fatalf("resolved options missing line %q: %q", want, text)
 		}
 	}
+}
+
+func treeDBReportHasLine(text, want string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if line == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildTreeDBOptions_FlushAdmissionRejectsInvalidPolicy(t *testing.T) {

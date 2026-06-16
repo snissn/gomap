@@ -126,27 +126,13 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 	}
 
 	if !policy.Valid() {
-		opts.FlushApplyConcurrency = 0
-		opts.FlushApplySpanNative = false
-		opts.FlushBacklogCoalescing = false
-		decision.Admitted = false
-		decision.Reason = FlushAdmissionReasonInvalidPolicy
-		decision.FlushApplyConcurrency = 0
-		decision.FlushApplySpanNative = false
-		decision.FlushBacklogCoalescing = false
+		decision.disableAll(opts, FlushAdmissionReasonInvalidPolicy)
 		return decision
 	}
 
 	switch policy {
 	case FlushAdmissionPolicyOff:
-		opts.FlushApplyConcurrency = 0
-		opts.FlushApplySpanNative = false
-		opts.FlushBacklogCoalescing = false
-		decision.Admitted = false
-		decision.Reason = FlushAdmissionReasonPolicyOff
-		decision.FlushApplyConcurrency = 0
-		decision.FlushApplySpanNative = false
-		decision.FlushBacklogCoalescing = false
+		decision.disableAll(opts, FlushAdmissionReasonPolicyOff)
 		return decision
 	case FlushAdmissionPolicyExplicit:
 		if opts.FlushApplySpanNative || opts.FlushBacklogCoalescing || effectiveConcurrency > 1 {
@@ -166,14 +152,7 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 			reasons = append(reasons, FlushAdmissionReasonCheckpointDebt)
 		}
 		if len(reasons) > 0 {
-			opts.FlushApplyConcurrency = 0
-			opts.FlushApplySpanNative = false
-			opts.FlushBacklogCoalescing = false
-			decision.Admitted = false
-			decision.Reason = strings.Join(reasons, ",")
-			decision.FlushApplyConcurrency = 0
-			decision.FlushApplySpanNative = false
-			decision.FlushBacklogCoalescing = false
+			decision.disableAll(opts, strings.Join(reasons, ","))
 			return decision
 		}
 
@@ -192,16 +171,22 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 		return decision
 	default:
 		// Defensive fallback; policy.Valid handled this above.
+		decision.disableAll(opts, FlushAdmissionReasonInvalidPolicy)
+		return decision
+	}
+}
+
+func (d *FlushAdmissionDecision) disableAll(opts *Options, reason string) {
+	if opts != nil {
 		opts.FlushApplyConcurrency = 0
 		opts.FlushApplySpanNative = false
 		opts.FlushBacklogCoalescing = false
-		decision.Admitted = false
-		decision.Reason = FlushAdmissionReasonInvalidPolicy
-		decision.FlushApplyConcurrency = 0
-		decision.FlushApplySpanNative = false
-		decision.FlushBacklogCoalescing = false
-		return decision
 	}
+	d.Admitted = false
+	d.Reason = reason
+	d.FlushApplyConcurrency = 0
+	d.FlushApplySpanNative = false
+	d.FlushBacklogCoalescing = false
 }
 
 func (d FlushAdmissionDecision) withStatsDefaults() FlushAdmissionDecision {
