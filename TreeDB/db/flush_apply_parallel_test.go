@@ -73,6 +73,10 @@ func (l *lockedRewriteLeafPageLog) CurrentValueLogSegment() (string, uint32, boo
 }
 
 func openFlushApplyTestDB(t *testing.T, concurrency int) *DB {
+	return openFlushApplyTestDBWithSpanNative(t, concurrency, false)
+}
+
+func openFlushApplyTestDBWithSpanNative(t *testing.T, concurrency int, spanNative bool) *DB {
 	t.Helper()
 	d, err := Open(Options{
 		Dir:                   t.TempDir(),
@@ -81,9 +85,10 @@ func openFlushApplyTestDB(t *testing.T, concurrency int) *DB {
 		FlushApplyMinEntries:  1,
 		FlushApplyMinSpans:    1,
 		FlushApplyMinBytes:    1,
+		FlushApplySpanNative:  spanNative,
 	})
 	if err != nil {
-		t.Fatalf("Open(concurrency=%d): %v", concurrency, err)
+		t.Fatalf("Open(concurrency=%d spanNative=%v): %v", concurrency, spanNative, err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
@@ -362,6 +367,42 @@ func TestFlushApplyRootMismatchTracksAbandonedLeafLogOutput(t *testing.T) {
 	}
 	if prepared < installed+abandoned {
 		t.Fatalf("prepared leaf-log output=%d < installed+abandoned=%d+%d", prepared, installed, abandoned)
+	}
+}
+
+func TestFlushApplySpanNativePartialMultiLeafFallsBackWithStats(t *testing.T) {
+	d := openFlushApplyTestDBWithSpanNative(t, 4, true)
+	putBatch(t, d, 0, 9000, "base")
+	usedBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total")
+	fallbackBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total")
+
+	b := d.NewBatch()
+	for i := 2000; i < 7000; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("partial-%06d", i))); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("partial Write: %v", err)
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "base-000123" {
+		t.Fatalf("untouched left key got=%q err=%v", got, err)
+	}
+	if got, err := d.Get([]byte("key-003456")); err != nil || string(got) != "partial-003456" {
+		t.Fatalf("updated key got=%q err=%v", got, err)
+	}
+	if got, err := d.Get([]byte("key-008000")); err != nil || string(got) != "base-008000" {
+		t.Fatalf("untouched right key got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.eligible_ops_total"); got == 0 {
+		t.Fatalf("span-native eligible ops = 0, want partial run classified before fallback")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got != usedBefore {
+		t.Fatalf("span-native used ops delta=%d want 0 for partial parent-stitch fallback", got-usedBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got <= fallbackBefore {
+		t.Fatalf("span-native not-implemented fallback ops delta=%d want >0", got-fallbackBefore)
 	}
 }
 
