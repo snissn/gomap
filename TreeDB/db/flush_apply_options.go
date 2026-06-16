@@ -35,7 +35,9 @@ func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err erro
 	db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, result.ReadOnlyPrepareNs, err, result.ReadOnlyPrepareValidationFailed)
 	if result.SpanNativeEligible {
 		db.observeFlushApplySpanNativeEligible(summary)
-		if !result.SpanNativeUsed {
+		if result.SpanNativeUsed {
+			db.observeFlushApplySpanNativeUsed(summary)
+		} else {
 			db.observeFlushApplySpanNativeFallbackAfterCandidate(summary, FlushSpanRunFallbackSpanNativeNotImplemented, false)
 		}
 		return

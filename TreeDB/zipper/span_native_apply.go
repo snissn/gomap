@@ -14,9 +14,9 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	if prepared.DeleteRanges != 0 || prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans || len(prepared.LeafSpans) == 0 {
 		return ApplyResult{}, false, nil
 	}
-	if len(prepared.LeafSpans) > 1 && !spanNativeCoversWholeRoot(prepared.LeafSpans) {
-		// Partial multi-leaf replacement needs parent-context stitching. Keep that
-		// out of the first opt-in reducer and fall back before preparing output.
+	if !spanNativeCoversWholeRoot(prepared.LeafSpans) {
+		// Partial leaf replacement needs parent-context stitching. Keep that out of
+		// the first opt-in reducer and fall back before preparing output.
 		return ApplyResult{}, false, nil
 	}
 

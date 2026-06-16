@@ -334,6 +334,8 @@ type DB struct {
 	flushApplySpanNativeCandidateSpans            atomic.Uint64
 	flushApplySpanNativeEligibleOps               atomic.Uint64
 	flushApplySpanNativeEligibleSpans             atomic.Uint64
+	flushApplySpanNativeUsedOps                   atomic.Uint64
+	flushApplySpanNativeUsedSpans                 atomic.Uint64
 	flushApplySpanNativeIneligibleOps             atomic.Uint64
 	flushApplySpanNativeIneligibleSpans           atomic.Uint64
 	flushApplySpanNativeFallbacks                 atomic.Uint64

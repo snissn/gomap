@@ -108,13 +108,24 @@ func (db *DB) observeFlushApplySpanNativeCandidate(summary zipper.ReadOnlyLeafSp
 	return ops, spans
 }
 
-func (db *DB) observeFlushApplySpanNativeEligible(summary zipper.ReadOnlyLeafSpanSummary) {
+func (db *DB) observeFlushApplySpanNativeEligible(summary zipper.ReadOnlyLeafSpanSummary) (int, int) {
 	ops, spans := db.observeFlushApplySpanNativeCandidate(summary)
 	if ops > 0 {
 		db.flushApplySpanNativeEligibleOps.Add(uint64(ops))
 	}
 	if spans > 0 {
 		db.flushApplySpanNativeEligibleSpans.Add(uint64(spans))
+	}
+	return ops, spans
+}
+
+func (db *DB) observeFlushApplySpanNativeUsed(summary zipper.ReadOnlyLeafSpanSummary) {
+	ops, spans := flushApplySpanNativeOpsAndSpans(summary)
+	if ops > 0 {
+		db.flushApplySpanNativeUsedOps.Add(uint64(ops))
+	}
+	if spans > 0 {
+		db.flushApplySpanNativeUsedSpans.Add(uint64(spans))
 	}
 }
 
@@ -374,6 +385,8 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.span_native.candidate_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeCandidateSpans.Load())
 	stats["treedb.flush_apply.span_native.eligible_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeEligibleOps.Load())
 	stats["treedb.flush_apply.span_native.eligible_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeEligibleSpans.Load())
+	stats["treedb.flush_apply.span_native.used_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeUsedOps.Load())
+	stats["treedb.flush_apply.span_native.used_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeUsedSpans.Load())
 	stats["treedb.flush_apply.span_native.ineligible_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeIneligibleOps.Load())
 	stats["treedb.flush_apply.span_native.ineligible_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeIneligibleSpans.Load())
 	stats["treedb.flush_apply.span_native.fallbacks_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeFallbacks.Load())

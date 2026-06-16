@@ -37,8 +37,37 @@ func TestFlushApplySpanNativeEligibleCountersDoNotMarkIneligible(t *testing.T) {
 	if got := db.flushApplySpanNativeIneligibleOps.Load(); got != 0 {
 		t.Fatalf("ineligible ops=%d want 0", got)
 	}
+	if got := db.flushApplySpanNativeUsedOps.Load(); got != 0 {
+		t.Fatalf("used ops=%d want 0 for eligible fallback scaffold", got)
+	}
 	if got := db.flushApplySpanNativeFallbackOps[FlushSpanRunFallbackSpanNativeNotImplemented].Load(); got != 4 {
 		t.Fatalf("not-implemented fallback ops=%d want 4", got)
+	}
+}
+
+func TestFlushApplySpanNativeUsedCounters(t *testing.T) {
+	db := &DB{flushApplyConcurrency: 4, flushApplySpanNative: true}
+	result := zipper.ApplyResult{
+		ReadOnlyPrepareRequested: true,
+		ReadOnlyPrepare: zipper.ReadOnlyPrepareResult{
+			Ops:            4,
+			PointOps:       4,
+			ExactLeafSpans: true,
+			LeafSpans:      make([]zipper.ReadOnlyLeafSpan, 2),
+		},
+		SpanNativeEligible: true,
+		SpanNativeWorkers:  2,
+		SpanNativeUsed:     true,
+	}
+	db.observeFlushApplyPrepareResult(result, nil)
+	if got := db.flushApplySpanNativeUsedOps.Load(); got != 4 {
+		t.Fatalf("used ops=%d want 4", got)
+	}
+	if got := db.flushApplySpanNativeUsedSpans.Load(); got != 2 {
+		t.Fatalf("used spans=%d want 2", got)
+	}
+	if got := db.flushApplySpanNativeFallbacks.Load(); got != 0 {
+		t.Fatalf("fallbacks=%d want 0", got)
 	}
 }
 
