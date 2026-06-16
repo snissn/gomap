@@ -97,6 +97,9 @@ Fallback reasons are stable stat strings and should be appended, not renamed:
 | `maintenance` | maintenance/rebalance path prevents span-native apply |
 | `backend_chunk_split` | entry-count backend chunks split target leaves |
 | `close_or_checkpoint` | close/checkpoint drain requires serial safe fallback |
+| `memory_or_emergency_cap` | memory pressure or an emergency cap forces serial safe fallback |
+| `output_ownership_failure` | value-log/leaf-log prepared output could not be owned/installed safely and is abandoned durable-but-unreachable output |
+| `reducer_validation_failed` | span-native reducer validation failed before publishing a reconstructed root |
 | `unknown` | fail-closed catch-all; should trend to zero |
 
 M8 intentionally records current exact point-span opportunities as
@@ -130,6 +133,14 @@ additive counters.
 - `treedb.cache.flush_span_run.target_leaves_split_across_chunks_total`
 - `treedb.cache.flush_span_run.max_chunks_per_target_leaf`
 - `treedb.cache.flush_span_run.ops_per_run`
+
+M12 hardening keeps span-native default-off and makes unsupported or unsafe
+candidate paths fail closed with explicit fallback reasons. Checkpoint and close
+drains force `close_or_checkpoint` before durable span-native output is produced;
+post-apply guarded-publish mismatches report `root_mismatch`; reducer and output
+ownership failures report `reducer_validation_failed` or
+`output_ownership_failure` while retaining abandoned durable-but-unreachable
+output accounting.
 
 M11 adds opt-in bounded backlog coalescing counters. These are cache-layer
 admission decisions only; they do not create a durable overlay or make queued

@@ -2,6 +2,8 @@ package zipper
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,6 +12,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+)
+
+var (
+	// ErrSpanNativeOutputOwnership marks failures where a span-native worker
+	// produced durable output whose child-ref kind/ownership cannot be accepted by
+	// the reducer for the configured output mode.
+	ErrSpanNativeOutputOwnership = errors.New("zipper: span-native output ownership failure")
+	// ErrSpanNativeReducerValidation marks fail-closed reducer validation failures
+	// before publishing a reconstructed root.
+	ErrSpanNativeReducerValidation = errors.New("zipper: span-native reducer validation failed")
 )
 
 func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult, workers int, workerPool *ApplyWorkerPool) (ApplyResult, bool, error) {
@@ -74,7 +86,9 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 			}
 			if err := outputs.setRef(i, newRef); err != nil {
 				releaseLocalSplits()
-				errOnce.Do(func() { firstErr = err })
+				errOnce.Do(func() {
+					firstErr = fmt.Errorf("%w: span %d ref kind %d: %v", ErrSpanNativeOutputOwnership, i, newRef.Kind, err)
+				})
 				return
 			}
 			if len(splits) > 0 {
@@ -456,7 +470,7 @@ func (z *Zipper) reduceSpanNativeRootWithContext(rootID uint64, replacements spa
 		return 0, err
 	}
 	if !changed {
-		return 0, page.ErrInvalidPageType
+		return 0, fmt.Errorf("%w: no replacement changed root", ErrSpanNativeReducerValidation)
 	}
 	refs := make([]Split, 0, len(splits)+1)
 	refs = append(refs, Split{Key: []byte{}, Ref: ref})
@@ -518,7 +532,7 @@ func (z *Zipper) retireSpanNativeWholeRootInternalPages(rootID uint64, replaceme
 		return err
 	}
 	if spanIdx != replacements.len() {
-		return page.ErrInvalidPageType
+		return fmt.Errorf("%w: whole-root replacement coverage mismatch", ErrSpanNativeReducerValidation)
 	}
 	return nil
 }
@@ -626,7 +640,7 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 				return page.ChildRef{}, nil, false, err
 			}
 			if !childChanged {
-				return page.ChildRef{}, nil, false, page.ErrInvalidPageType
+				return page.ChildRef{}, nil, false, fmt.Errorf("%w: replacement span did not match child range", ErrSpanNativeReducerValidation)
 			}
 			changed = true
 			if err := writer.append(Split{Key: key, Ref: newRef}); err != nil {
@@ -649,7 +663,7 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 			return page.ChildRef{}, nil, false, err
 		}
 		if len(refs) == 0 {
-			return page.ChildRef{}, nil, false, page.ErrInvalidPageType
+			return page.ChildRef{}, nil, false, fmt.Errorf("%w: empty stitched split level", ErrSpanNativeReducerValidation)
 		}
 		return refs[0].Ref, refs[1:], true, nil
 	default:
@@ -770,7 +784,7 @@ func spanNativeReplacementOverlapsRange(span ReadOnlyLeafSpan, low, high []byte)
 
 func (z *Zipper) reduceSpanNativeRoot(currentLevelNodes []Split, metrics *adaptive.Metrics) (uint64, error) {
 	if err := validateSpanNativeReducerRefs(currentLevelNodes); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%w: %v", ErrSpanNativeReducerValidation, err)
 	}
 	for {
 		if len(currentLevelNodes) == 1 {

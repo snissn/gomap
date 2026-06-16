@@ -84,6 +84,28 @@ type backendFlushApplyPressureSnapshotter interface {
 	FlushApplyPressureSnapshot() backenddb.FlushApplyPressureSnapshot
 }
 
+type backendBatchSpanNativeFallbackSetter interface {
+	SetFlushApplySpanNativeFallback(backenddb.FlushSpanRunFallbackReason)
+}
+
+func flushSpanNativeFallbackReasonForCollectionMode(mode flushCollectionMode) backenddb.FlushSpanRunFallbackReason {
+	switch mode {
+	case flushCollectionCheckpoint, flushCollectionClose:
+		return backenddb.FlushSpanRunFallbackCloseOrCheckpoint
+	default:
+		return backenddb.FlushSpanRunFallbackUnknown
+	}
+}
+
+func setBackendBatchSpanNativeFallback(backendBatch batch.Interface, reason backenddb.FlushSpanRunFallbackReason) {
+	if backendBatch == nil || !reason.Valid() || reason == backenddb.FlushSpanRunFallbackUnknown {
+		return
+	}
+	if setter, ok := backendBatch.(backendBatchSpanNativeFallbackSetter); ok {
+		setter.SetFlushApplySpanNativeFallback(reason)
+	}
+}
+
 type flushBacklogPressure struct {
 	spans              uint64
 	singleOpSpans      uint64

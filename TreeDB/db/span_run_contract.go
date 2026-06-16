@@ -30,6 +30,9 @@ const (
 	FlushSpanRunFallbackMaintenance
 	FlushSpanRunFallbackBackendChunkSplit
 	FlushSpanRunFallbackCloseOrCheckpoint
+	FlushSpanRunFallbackMemoryEmergencyCap
+	FlushSpanRunFallbackOutputOwnershipFailure
+	FlushSpanRunFallbackReducerValidationFailed
 
 	flushSpanRunFallbackReasonCount
 )
@@ -55,6 +58,9 @@ var flushSpanRunFallbackReasonNames = [...]string{
 	FlushSpanRunFallbackMaintenance:              "maintenance",
 	FlushSpanRunFallbackBackendChunkSplit:        "backend_chunk_split",
 	FlushSpanRunFallbackCloseOrCheckpoint:        "close_or_checkpoint",
+	FlushSpanRunFallbackMemoryEmergencyCap:       "memory_or_emergency_cap",
+	FlushSpanRunFallbackOutputOwnershipFailure:   "output_ownership_failure",
+	FlushSpanRunFallbackReducerValidationFailed:  "reducer_validation_failed",
 }
 
 func (r FlushSpanRunFallbackReason) String() string {

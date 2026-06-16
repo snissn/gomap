@@ -719,11 +719,12 @@ func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, op
 	return nil
 }
 
-func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, last bool) error {
+func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, last bool, spanNativeFallbackReason backenddb.FlushSpanRunFallbackReason) error {
 	if db == nil || len(ops) == 0 {
 		return nil
 	}
 	backendBatch := db.newBackendBatchWithSize(len(ops))
+	setBackendBatchSpanNativeFallback(backendBatch, spanNativeFallbackReason)
 	reserveBackendBatchOps(backendBatch, len(ops))
 	if err := appendCanonicalFlushRunChunkToBackendBatch(backendBatch, ops); err != nil {
 		_ = backendBatch.Close()
@@ -760,7 +761,7 @@ func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, 
 	return nil
 }
 
-func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []backenddb.FlushSpanRunBackendChunk, syncFlush bool, commandPublish *checkpointCommandWALPublish) (int, error) {
+func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []backenddb.FlushSpanRunBackendChunk, syncFlush bool, commandPublish *checkpointCommandWALPublish, spanNativeFallbackReason backenddb.FlushSpanRunFallbackReason) (int, error) {
 	if db == nil || run == nil || len(run.pointOps) == 0 {
 		return 0, nil
 	}
@@ -783,7 +784,7 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 				break
 			}
 		}
-		if err := db.writeCanonicalFlushRunOpsChunk(run.pointOps[chunk.PointOpStart:chunk.PointOpEnd], syncFlush, commandPublish, last); err != nil {
+		if err := db.writeCanonicalFlushRunOpsChunk(run.pointOps[chunk.PointOpStart:chunk.PointOpEnd], syncFlush, commandPublish, last, spanNativeFallbackReason); err != nil {
 			return emitted, err
 		}
 		emitted++
@@ -791,8 +792,9 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 	return emitted, nil
 }
 
-func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, totalSpans int) bool {
+func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, totalSpans int, mode flushCollectionMode) bool {
 	flushStart := time.Now()
+	spanNativeFallbackReason := flushSpanNativeFallbackReasonForCollectionMode(mode)
 	buildStart := flushStart
 	build, err := db.buildCanonicalUnitRuns(units, totalLen, totalSpans)
 	if err != nil {
@@ -860,7 +862,7 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
-		if err := db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last); err != nil {
+		if err := db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, spanNativeFallbackReason); err != nil {
 			return err
 		}
 		putEntrySlice(ops)
@@ -983,11 +985,12 @@ func (db *DB) finishFlushedCanonicalUnits(syncFlush bool, units []flushUnit, ids
 	db.checkValueLogRetention()
 }
 
-func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, totalSpans int) bool {
+func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, totalSpans int, mode flushCollectionMode) bool {
 	if !db.flushSpanRunTargetPlanning {
-		return db.flushCanonicalPointUnitsStreamed(syncFlush, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans)
+		return db.flushCanonicalPointUnitsStreamed(syncFlush, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans, mode)
 	}
 	flushStart := time.Now()
+	spanNativeFallbackReason := flushSpanNativeFallbackReasonForCollectionMode(mode)
 	buildStart := flushStart
 	run, err := db.buildCanonicalFlushRun(units, totalLen, totalSpans)
 	if err != nil {
@@ -1035,7 +1038,7 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 	}
 
 	writeStart := time.Now()
-	if _, err := db.writeCanonicalFlushRunChunks(run, chunks, syncFlush, commandPublish); err != nil {
+	if _, err := db.writeCanonicalFlushRunChunks(run, chunks, syncFlush, commandPublish, spanNativeFallbackReason); err != nil {
 		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 		return false
 	}

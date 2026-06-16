@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -68,6 +69,74 @@ func TestFlushApplySpanNativeUsedCounters(t *testing.T) {
 	}
 	if got := db.flushApplySpanNativeFallbacks.Load(); got != 0 {
 		t.Fatalf("fallbacks=%d want 0", got)
+	}
+}
+
+func TestFlushApplySpanNativeExplicitFallbackReasonCounters(t *testing.T) {
+	summary := zipper.ReadOnlyPrepareResult{
+		Ops:            8,
+		PointOps:       8,
+		ExactLeafSpans: true,
+		LeafSpans:      make([]zipper.ReadOnlyLeafSpan, 2),
+	}
+	cases := []struct {
+		name   string
+		reason FlushSpanRunFallbackReason
+		result zipper.ApplyResult
+	}{
+		{
+			name:   "forced memory cap before output",
+			reason: FlushSpanRunFallbackMemoryEmergencyCap,
+			result: zipper.ApplyResult{ReadOnlyPrepareRequested: true, ReadOnlyPrepare: summary, SpanNativeFallbackReason: FlushSpanRunFallbackMemoryEmergencyCap.String()},
+		},
+		{
+			name:   "close checkpoint drain override before output",
+			reason: FlushSpanRunFallbackCloseOrCheckpoint,
+			result: zipper.ApplyResult{ReadOnlyPrepareRequested: true, ReadOnlyPrepare: summary, SpanNativeFallbackReason: FlushSpanRunFallbackCloseOrCheckpoint.String()},
+		},
+		{
+			name:   "reducer validation after candidate",
+			reason: FlushSpanRunFallbackReducerValidationFailed,
+			result: zipper.ApplyResult{ReadOnlyPrepareRequested: true, ReadOnlyPrepare: summary, SpanNativeEligible: true, SpanNativeFallbackReason: FlushSpanRunFallbackReducerValidationFailed.String()},
+		},
+		{
+			name:   "output ownership after candidate",
+			reason: FlushSpanRunFallbackOutputOwnershipFailure,
+			result: zipper.ApplyResult{ReadOnlyPrepareRequested: true, ReadOnlyPrepare: summary, SpanNativeEligible: true, SpanNativeFallbackReason: FlushSpanRunFallbackOutputOwnershipFailure.String()},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{flushApplySpanNative: true}
+			db.observeFlushApplyPrepareResult(tc.result, nil)
+			if got := db.flushApplySpanNativeFallbackOps[tc.reason].Load(); got != 8 {
+				t.Fatalf("fallback ops for %s=%d want 8", tc.reason, got)
+			}
+			if got := db.flushApplySpanNativeFallbackSpans[tc.reason].Load(); got != 2 {
+				t.Fatalf("fallback spans for %s=%d want 2", tc.reason, got)
+			}
+			if got := db.flushApplySpanNativeFallbacks.Load(); got != 1 {
+				t.Fatalf("fallbacks=%d want 1", got)
+			}
+		})
+	}
+}
+
+func TestFlushApplySpanNativeValidationFailureCounter(t *testing.T) {
+	db := &DB{flushApplySpanNative: true}
+	result := zipper.ApplyResult{
+		ReadOnlyPrepareRequested:        true,
+		ReadOnlyPrepareValidationFailed: true,
+		ReadOnlyPrepare: zipper.ReadOnlyPrepareResult{
+			Ops:            3,
+			PointOps:       3,
+			ExactLeafSpans: true,
+			LeafSpans:      make([]zipper.ReadOnlyLeafSpan, 1),
+		},
+	}
+	db.observeFlushApplyPrepareResult(result, errors.New("invalid plan"))
+	if got := db.flushApplySpanNativeFallbackOps[FlushSpanRunFallbackValidationFailed].Load(); got != 3 {
+		t.Fatalf("validation fallback ops=%d want 3", got)
 	}
 }
 
