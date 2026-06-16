@@ -2,6 +2,8 @@
 
 Issue: #2768 (M8). Parent tracker: #2743.
 
+M14 final-gate report: `docs/TREEDB_RANDOM_WRITE_CEILING_BREAKER_M14_REPORT.md`.
+
 This document is the post-M7 contract for the M9-M14 span-run / span-native
 flush/apply stack. M8 is intentionally an architecture and observability PR:
 it does **not** implement span-native apply, adaptive backlog coalescing, a
