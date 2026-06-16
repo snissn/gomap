@@ -101,7 +101,7 @@ Rollout guidance:
 - Roll back by setting `FlushApplyConcurrency <= 1`; no data migration is required because the option changes only the in-memory apply strategy.
 - Watch `treedb.flush_apply.*`, `treedb.cache.flush_apply.*`, `prepared_output.*`, checkpoint wall times, allocation profiles, and final `index.db`/`leaf_vlog` footprint. Regressions in write throughput, checkpoint time, allocation volume, or footprint should keep the option disabled.
 
-Known blocker: default-on production readiness is deferred to #2757, which owns checkpoint allocation, memcopy, and memclr optimization. Until that gate is resolved, treat `FlushApplyConcurrency > 1` as workload-specific and experimental.
+Known blocker: #2786/M3 records a default-off decision for span-native/backlog admission because #2785/M2 left checkpoint-inclusive latency debt unresolved. Until that debt is fixed and #2787/#2788 read/cache/final gates pass, treat `FlushApplyConcurrency > 1`, `FlushApplySpanNative`, and `FlushBacklogCoalescing` as workload-specific experimental opt-ins.
 
 ### Read latency under flush debt (cached mode)
 
