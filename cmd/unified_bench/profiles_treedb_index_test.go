@@ -74,6 +74,42 @@ func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultReportsEffective(t *t
 	}
 }
 
+func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmission(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbLeafPageReadCacheWriteAdmission = "adaptive"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions leaf page write admission: %v", err)
+	}
+	if got := opts.LeafPageReadCacheWriteAdmission; got != treedb.LeafPageReadCacheWriteAdmissionAdaptive {
+		t.Fatalf("LeafPageReadCacheWriteAdmission=%v want adaptive", got)
+	}
+	text := rep.formatText("")
+	if !strings.Contains(text, "outer_leaf_read_cache_write_admission=adaptive") {
+		t.Fatalf("resolved options missing adaptive write admission: %q", text)
+	}
+}
+
+func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmissionRejectsInvalid(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbLeafPageReadCacheWriteAdmission = "bad-policy"
+
+	_, _, err := buildTreeDBOptions("")
+	if err == nil {
+		t.Fatal("buildTreeDBOptions unexpectedly accepted invalid write admission policy")
+	}
+	if !strings.Contains(err.Error(), "leaf page read cache write admission") {
+		t.Fatalf("buildTreeDBOptions error=%q, want write admission context", err)
+	}
+}
+
 func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultRejectsOutOfRangeEnv(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
@@ -222,6 +258,7 @@ type savedTreeDBFlagState struct {
 	packedValuePtr          bool
 	internalBaseDelta       bool
 	leafPageReadCache       int
+	leafPageWriteAdmission  string
 	chunkSize               int64
 	vlogCompression         string
 	vlogBlockCodec          string
@@ -263,6 +300,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		packedValuePtr:          *treedbIndexPackedValuePtr,
 		internalBaseDelta:       *treedbIndexInternalBaseDelta,
 		leafPageReadCache:       *treedbLeafPageReadCacheEntries,
+		leafPageWriteAdmission:  *treedbLeafPageReadCacheWriteAdmission,
 		chunkSize:               *treedbChunkSize,
 		vlogCompression:         *treedbVlogCompression,
 		vlogBlockCodec:          *treedbVlogBlockCodec,
@@ -300,6 +338,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbLeafPageReadCacheEntries = s.leafPageReadCache
+	*treedbLeafPageReadCacheWriteAdmission = s.leafPageWriteAdmission
 	*treedbChunkSize = s.chunkSize
 	*treedbVlogCompression = s.vlogCompression
 	*treedbVlogBlockCodec = s.vlogBlockCodec
@@ -336,6 +375,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexColumnarLeaves = false
 	*treedbIndexPackedValuePtr = false
 	*treedbIndexInternalBaseDelta = false
+	*treedbLeafPageReadCacheWriteAdmission = "immediate"
 	*treedbChunkSize = defaultTreeDBChunkSizeBytes
 	*treedbVlogCompression = "default"
 	*treedbVlogBlockCodec = "snappy"
