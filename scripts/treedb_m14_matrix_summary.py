@@ -67,9 +67,7 @@ COUNTER_KEYS = (
     "treedb.cache.flush_apply.coordinator.blocking_fallbacks_total",
     "treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total",
     "treedb.cache.checkpoint.active_background_flush_wait_ns_total",
-    "treedb.cache.checkpoint.background_flush_yields_total",
     "treedb.cache.checkpoint.stage.value_log_flush.total_ns",
-    "treedb.cache.checkpoint.stage.flush_all.total_ns",
     "treedb.cache.checkpoint.stage.leaf_value_log_sync.total_ns",
     "treedb.cache.checkpoint.stage.reducer_publish.total_ns",
     "treedb.cache.flush_backlog_coalescing.admitted_runs_total",
@@ -392,10 +390,6 @@ def render_markdown(root: Path, rows: List[MatrixRow], baseline_label: str = "")
         ("active assist skips", "treedb.cache.flush_apply.coordinator.active_assist_skips_total"),
         ("stall waits", "treedb.cache.flush_apply.coordinator.stall_waits_total"),
         ("checkpoint bg wait ns", "treedb.cache.checkpoint.active_background_flush_wait_ns_total"),
-        ("checkpoint bg yields", "treedb.cache.checkpoint.background_flush_yields_total"),
-        ("checkpoint flush_all ns", "treedb.cache.checkpoint.stage.flush_all.total_ns"),
-        ("checkpoint leaf sync ns", "treedb.cache.checkpoint.stage.leaf_value_log_sync.total_ns"),
-        ("checkpoint reducer ns", "treedb.cache.checkpoint.stage.reducer_publish.total_ns"),
         ("coalesced extra ops", "treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total"),
     ]
     lines.append("| Row | " + " | ".join(c[0] for c in counter_cols) + " |")

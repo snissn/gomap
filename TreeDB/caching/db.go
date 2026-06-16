@@ -7587,12 +7587,11 @@ type DB struct {
 	// Commit workers removed; backend commits are synchronous.
 	journalOwner *commitlog.JournalOwner
 
-	checkpointMu       sync.Mutex
-	checkpointCond     *sync.Cond
-	checkpointing      atomic.Bool
-	checkpointRequests atomic.Int64
-	maintenanceActive  atomic.Bool
-	maintenancePhase   atomic.Uint32
+	checkpointMu      sync.Mutex
+	checkpointCond    *sync.Cond
+	checkpointing     atomic.Bool
+	maintenanceActive atomic.Bool
+	maintenancePhase  atomic.Uint32
 
 	// Level 0 (Memory)
 	mutableShards                 []memShard
@@ -7946,7 +7945,6 @@ type DB struct {
 	checkpointActiveBackgroundFlushWaitNs                        atomic.Uint64
 	checkpointActiveBackgroundFlushWaitMaxNs                     atomic.Uint64
 	checkpointActiveBackgroundFlushWaitSamples                   atomic.Uint64
-	checkpointBackgroundFlushYields                              atomic.Uint64
 	commandWALCheckpointPublishPiggybacked                       atomic.Uint64
 	commandWALCheckpointPublishSeparate                          atomic.Uint64
 	checkpointFlushMuWaitNs                                      atomic.Uint64
@@ -20973,10 +20971,6 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
-func (db *DB) checkpointRequested() bool {
-	return db != nil && db.checkpointRequests.Load() > 0
-}
-
 func (db *DB) recordCheckpointCutover(d time.Duration) {
 	if db == nil {
 		return
@@ -21209,8 +21203,6 @@ func (db *DB) Checkpoint() error {
 		db.checkpointTotalNs.Add(dur)
 		updateAtomicMaxUint64(&db.checkpointMaxNs, dur)
 	}()
-	db.checkpointRequests.Add(1)
-	defer db.checkpointRequests.Add(-1)
 	// Note: Any code path that takes both flushMu and checkpointMu must acquire
 	// flushMu first to avoid deadlocks.
 	activeBackgroundFlushBeforeWait := db.flushCoordinatorActive.Load() > 0 && db.flushCoordinatorInFlightBytes.Load() > 0
@@ -21382,7 +21374,7 @@ func (db *DB) Checkpoint() error {
 	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
 	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
 	flushAllStart := time.Now()
-	db.flushAllLocked(true, commandWALPublishPiggyback, false)
+	db.flushAllLocked(true, commandWALPublishPiggyback)
 	recordCheckpointStageSince(&db.checkpointStageFlushAll, flushAllStart)
 	leafLogAppendWaitAfter := db.flushApplyLeafLogAppendWaitNs.Load()
 	leafValueLogSyncNs := uint64(valueLogFlushDur.Nanoseconds()) + saturatingSubUint64(leafLogAppendWaitAfter, leafLogAppendWaitBefore)
@@ -21903,7 +21895,7 @@ func (db *DB) Close() error {
 	// This avoids dropping pending memtables on close.
 	if hadMemtables {
 		// flushMu is already held by Close.
-		db.flushAllLocked(true, nil, false)
+		db.flushAllLocked(true, nil)
 	}
 
 	close(db.closeCh)
@@ -22216,7 +22208,7 @@ func (db *DB) flushAllMemtablesForSync(sync bool) error {
 	db.writeMu.Unlock()
 
 	db.flushMu.Lock()
-	db.flushAllLocked(sync, nil, false)
+	db.flushAllLocked(sync, nil)
 	db.flushMu.Unlock()
 	return db.backgroundError()
 }
@@ -24302,10 +24294,8 @@ func (db *DB) flushLoop() {
 			return
 		case <-db.flushCh:
 			// Background flush is async when WAL is enabled. Without a WAL, we
-			// upgrade to a synced flush unless RelaxedSync is set. If a durability
-			// checkpoint is already waiting, yield the async drain so checkpoint can
-			// own the boundary instead of waiting behind a full background pass.
-			db.flushAllBackground(false)
+			// upgrade to a synced flush unless RelaxedSync is set.
+			db.flushAll(false)
 		}
 	}
 }
@@ -24336,20 +24326,12 @@ func (db *DB) pickFlushLane() (int, bool) {
 }
 
 func (db *DB) flushAll(reqSync bool) {
-	db.flushAllWithCheckpointYield(reqSync, false)
-}
-
-func (db *DB) flushAllBackground(reqSync bool) {
-	db.flushAllWithCheckpointYield(reqSync, true)
-}
-
-func (db *DB) flushAllWithCheckpointYield(reqSync bool, yieldToCheckpoint bool) {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.flushAllLocked(reqSync, nil, yieldToCheckpoint)
+	db.flushAllLocked(reqSync, nil)
 }
 
-func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALPublish, yieldToCheckpoint bool) {
+func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALPublish) {
 	db.beginFlushCoordinatorPass()
 	defer db.endFlushCoordinatorPass()
 	origSync := reqSync
@@ -24400,11 +24382,6 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 		if activeCount == 0 {
 			return
 		}
-		if yieldToCheckpoint && db.checkpointRequested() {
-			db.checkpointBackgroundFlushYields.Add(1)
-			return
-		}
-		var yieldedToCheckpoint atomic.Bool
 		passCommandPublish := commandPublish
 		if activeCount != 1 {
 			// Preserve the previous behavior: command-WAL checkpoint publication is
@@ -24421,32 +24398,17 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 				continue
 			}
 			go func() {
-				defer wg.Done()
 				if laneID < len(db.flushLaneMu) {
 					db.flushLaneMu[laneID].Lock()
 					defer db.flushLaneMu[laneID].Unlock()
 				}
-				for {
-					if yieldToCheckpoint && db.checkpointRequested() {
-						yieldedToCheckpoint.Store(true)
-						return
-					}
-					if !db.flushLaneOnceWithCommandPublish(syncFlag, laneID, passCommandPublish) {
-						return
-					}
+				for db.flushLaneOnceWithCommandPublish(syncFlag, laneID, passCommandPublish) {
 					progress.Store(true)
-					if yieldToCheckpoint && db.checkpointRequested() {
-						yieldedToCheckpoint.Store(true)
-						return
-					}
 				}
+				wg.Done()
 			}()
 		}
 		wg.Wait()
-		if yieldedToCheckpoint.Load() {
-			db.checkpointBackgroundFlushYields.Add(1)
-			return
-		}
 
 		db.mu.RLock()
 		queueEmpty := len(db.queue) == 0
@@ -24458,10 +24420,6 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 			return
 		}
 		if !progress.Load() {
-			return
-		}
-		if yieldToCheckpoint && db.checkpointRequested() {
-			db.checkpointBackgroundFlushYields.Add(1)
 			return
 		}
 	}
@@ -26722,7 +26680,6 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_total"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitNs.Load())
 	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_max"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitMaxNs.Load())
 	stats["treedb.cache.checkpoint.active_background_flush_wait_samples"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitSamples.Load())
-	stats["treedb.cache.checkpoint.background_flush_yields_total"] = fmt.Sprintf("%d", db.checkpointBackgroundFlushYields.Load())
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
 	appendCheckpointStageStats(stats, "cutover", &db.checkpointStageCutover)
 	appendCheckpointStageStats(stats, "wal_rotate", &db.checkpointStageWALRotate)
