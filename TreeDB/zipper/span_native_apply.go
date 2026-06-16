@@ -3,6 +3,7 @@ package zipper
 import (
 	"bytes"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -89,9 +90,33 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 			rangeSplits[job] = spanNativeLeafSplitRange{start: workerRange.FirstSpan, splits: localSplits}
 		}
 	}
-	if err := workerPool.Run(workers, len(workerRanges), runRange); err != nil {
-		metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
-		return ApplyResult{Metrics: metrics}, true, err
+	if workerPool != nil {
+		if err := workerPool.Run(workers, len(workerRanges), runRange); err != nil {
+			metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
+			return ApplyResult{Metrics: metrics}, true, err
+		}
+	} else if workers <= 1 {
+		for job := range workerRanges {
+			runRange(0, job)
+		}
+	} else {
+		var nextJob int64 = -1
+		var wg sync.WaitGroup
+		worker := func(workerID int) {
+			defer wg.Done()
+			for {
+				job := int(atomic.AddInt64(&nextJob, 1))
+				if job >= len(workerRanges) {
+					return
+				}
+				runRange(workerID, job)
+			}
+		}
+		for workerID := 0; workerID < workers; workerID++ {
+			wg.Add(1)
+			go worker(workerID)
+		}
+		wg.Wait()
 	}
 
 	var retired []uint64
