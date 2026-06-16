@@ -2,9 +2,15 @@
 
 Issue: #2787. Parent tracker: #2782.
 
+This is a **preflight / matrix-contract** report for #2787. It does not close
+#2787 by itself. After the coordinator no-go review, #2794 and #2795 were
+inserted before the actual M4 guardrail run; #2787 remains open until those
+blockers are resolved and the read/scan/reopen matrix is executed or explicitly
+waived by an opt-in-only/default-off decision.
+
 ## Scope and outcome
 
-M4 is a **guardrail report / matrix definition** pass. It does not change
+This preflight PR is a **guardrail report / matrix definition** pass. It does not change
 TreeDB runtime behavior, benchmark semantics, public defaults, hot-path code, or
 on-disk formats.
 
@@ -13,14 +19,17 @@ The downstream decision remains conservative:
 - span-native apply and backlog coalescing remain **default-off / opt-in-only**;
 - adaptive outer-leaf read-cache write admission remains **opt-in**;
 - no default-on claim is made from write-only or point-read-only evidence;
-- #2788 must run the final same-host gate before any default-readiness decision.
+- #2794 must resolve checkpoint debt, #2795 must resolve low-concurrency admission,
+  #2787 must run/record the actual read/cache guardrails, and #2788 must run the
+  final same-host gate before any default-readiness decision.
 
 This report is intentionally not a new 10MM runtime run. M3 already recorded a
 default-off decision because M2 left checkpoint-inclusive latency debt
 unresolved. Running a partial M4 matrix now would not remove that blocker and
-would risk over-claiming from incomplete read/scan/reopen evidence. Instead, M4
-makes the read/cache guardrail contract explicit and identifies exactly what
-#2788 must run.
+would risk over-claiming from incomplete read/scan/reopen evidence. Instead,
+this preflight report makes the read/cache guardrail contract explicit and
+identifies exactly what #2787 must run after #2794/#2795, plus what #2788 must
+consume or rerun before any final decision.
 
 ## Inputs consumed
 
@@ -116,7 +125,7 @@ these existing tests.
 
 ## What is not proven yet
 
-The following guardrails are still missing from same-host final evidence:
+The following guardrails are still missing from same-host M4/final evidence:
 
 - settled point-read results after a checkpoint/reopen boundary for all candidate
   cache/span rows;
@@ -129,11 +138,12 @@ The following guardrails are still missing from same-host final evidence:
 - checksum/read-integrity behavior on the final candidate head if any cache
   policy changes beyond M1's opt-in adaptive policy are introduced.
 
-Therefore M4's dependency-ready conclusion is: **#2788 can consume the M1 point
-read/cache evidence and this matrix contract, but it cannot claim default-on
-until it runs the missing read/scan/reopen/checkpoint guardrails.**
+Therefore this preflight dependency-ready conclusion is: **#2787 can consume the
+M1 point-read/cache evidence and this matrix contract, but #2788 cannot claim
+default-on until #2794/#2795 are resolved and #2787 runs or explicitly waives
+the missing read/scan/reopen/checkpoint guardrails.**
 
-## Required #2788 artifact root and setup
+## Required #2787/#2788 artifact root and setup
 
 Use the remote 4TB host for final gates, and avoid overlap with other large
 runs:
@@ -174,9 +184,9 @@ SPAN_FLAGS="\
   -treedb-flush-backlog-coalescing"
 ```
 
-## Required #2788 write/checkpoint rows
+## Required #2787/#2788 write/checkpoint rows
 
-Run the write subset first so #2788 can compare with M14/M1/M2:
+Run the write subset first so #2787/#2788 can compare with M14/M1/M2:
 
 ```sh
 ./bin/unified-bench $COMMON_FLAGS \
@@ -221,11 +231,11 @@ Run the write subset first so #2788 can compare with M14/M1/M2:
   -profile-dir "$RUN_ROOT/span_native_c4_cache_disabled_write"
 ```
 
-If #2788 considers c8/c16 as anything more than throughput-ceiling opt-ins, it
+If #2787/#2788 considers c8/c16 as anything more than throughput-ceiling opt-ins, it
 must add equivalent c8/c16 rows and treat the M2 checkpoint debt as blocking
 unless fixed or explicitly accepted.
 
-## Required #2788 read/scan/mixed rows
+## Required #2787/#2788 read/scan/mixed rows
 
 For each of these row families, run at least:
 
@@ -306,13 +316,13 @@ profiles, and final disk usage.
 ```
 
 This intentionally omits settle/checkpoint boundaries before the read phase so
-#2788 can see whether a candidate merely moves write work into subsequent reads
+#2787/#2788 can see whether a candidate merely moves write work into subsequent reads
 or scans. Any material read/scan regression here is blocking unless explicitly
 accepted as opt-in-only.
 
-## Required #2788 focused tests
+## Required #2787/#2788 focused tests
 
-Minimum local validation on the final #2788 head:
+Minimum local validation on the final #2787/#2788 candidate head:
 
 ```sh
 git diff --check
@@ -323,12 +333,12 @@ go test -race ./TreeDB/db -run 'TestLeafPageReadCache(AdaptiveWriteAdmissionSkip
 python3 scripts/treedb_m14_matrix_summary.py --self-test
 ```
 
-If #2788 changes runtime behavior, adds a selector, changes cache admission, or
+If #2787/#2788 changes runtime behavior, adds a selector, changes cache admission, or
 changes benchmark semantics, add and run tests that exercise that exact behavior
 under the candidate options. Docs-only final decisions can waive new runtime
 tests with an explicit rationale.
 
-## Metrics #2788 must report
+## Metrics #2787/#2788 must report
 
 For every row, include at least:
 
@@ -347,7 +357,8 @@ For every row, include at least:
 
 ## M4 handoff
 
-#2788 can rely on:
+#2787 can rely on this preflight contract after #2794/#2795 resolve. #2788 can
+consume the resulting #2787 evidence and rely on:
 
 - M1's opt-in adaptive cache-admission option, flag, and counters;
 - M1's same-host point-read guardrail showing no material point-read regression
@@ -357,7 +368,8 @@ For every row, include at least:
 - this report's row definitions and required metrics for final read/scan/reopen
   guardrails.
 
-#2788 must still run:
+#2787 must still run after #2794/#2795, and #2788 must consume or rerun before
+any final decision:
 
 - same-host write/checkpoint rows for default, forced-off, c1, c4 immediate,
   c4 adaptive, and cache-disabled;
@@ -367,5 +379,6 @@ For every row, include at least:
 - focused reopen/read-integrity/cache tests on the final candidate head.
 
 Until those rows pass without unaccepted read/scan/cache/checkpoint regressions,
-TreeDB span-native/backlog/cache-admission changes remain workload-specific
-opt-ins and must not become defaults.
+and until #2794/#2795 resolve the checkpoint and admission no-gos, TreeDB
+span-native/backlog/cache-admission changes remain workload-specific opt-ins and
+must not become defaults.
