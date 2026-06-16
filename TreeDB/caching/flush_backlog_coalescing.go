@@ -84,6 +84,28 @@ type backendFlushApplyPressureSnapshotter interface {
 	FlushApplyPressureSnapshot() backenddb.FlushApplyPressureSnapshot
 }
 
+type backendBatchSpanNativeFallbackSetter interface {
+	SetFlushApplySpanNativeFallback(backenddb.FlushSpanRunFallbackReason)
+}
+
+func flushSpanNativeFallbackReasonForCollectionMode(mode flushCollectionMode) backenddb.FlushSpanRunFallbackReason {
+	switch mode {
+	case flushCollectionCheckpoint, flushCollectionClose:
+		return backenddb.FlushSpanRunFallbackCloseOrCheckpoint
+	default:
+		return backenddb.FlushSpanRunFallbackUnknown
+	}
+}
+
+func setBackendBatchSpanNativeFallback(backendBatch batch.Interface, reason backenddb.FlushSpanRunFallbackReason) {
+	if backendBatch == nil || !reason.Valid() || reason == backenddb.FlushSpanRunFallbackUnknown {
+		return
+	}
+	if setter, ok := backendBatch.(backendBatchSpanNativeFallbackSetter); ok {
+		setter.SetFlushApplySpanNativeFallback(reason)
+	}
+}
+
 type flushBacklogPressure struct {
 	spans              uint64
 	singleOpSpans      uint64
@@ -381,10 +403,11 @@ func coalescingSkipReasonForCollectStop(stop flushCollectStopReason) flushBacklo
 func (db *DB) selectFlushUnitBudgetLocked(laneID int, mode flushCollectionMode) (maxMemtables int, targetBytes int64, maxOps int) {
 	baseMaxMemtables, baseTargetBytes := db.baseFlushUnitBudget()
 	maxMemtables, targetBytes = baseMaxMemtables, baseTargetBytes
-	mode = db.flushCollectionMode(mode)
 	if db == nil {
 		return maxMemtables, targetBytes, 0
 	}
+	// mode is normalized by flushLaneOnceWithCollectionMode so budget decisions
+	// and backend fallback annotations observe the same drain state.
 	if !db.flushBacklogCoalescing {
 		db.observeFlushBacklogCoalescingSkip(flushBacklogCoalescingSkipDisabled)
 		return maxMemtables, targetBytes, 0

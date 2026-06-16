@@ -37,14 +37,42 @@ func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err erro
 		workerSummary = result.ReadOnlyPrepare.LeafSpanWorkerRangeSummary(db.flushApplyConcurrency)
 	}
 	db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, result.ReadOnlyPrepareNs, err, result.ReadOnlyPrepareValidationFailed)
+	explicitReason, hasExplicitReason := parseFlushApplySpanNativeFallbackReason(result.SpanNativeFallbackReason)
 	if result.SpanNativeEligible {
 		db.observeFlushApplySpanNativeEligible(summary)
 		if result.SpanNativeUsed {
 			db.observeFlushApplySpanNativeUsed(summary)
-		} else {
+		}
+		if hasExplicitReason {
+			db.observeFlushApplySpanNativeFallbackAfterCandidate(summary, explicitReason, false)
+		} else if !result.SpanNativeUsed {
 			db.observeFlushApplySpanNativeFallbackAfterCandidate(summary, FlushSpanRunFallbackSpanNativeNotImplemented, false)
 		}
 		return
 	}
+	if hasExplicitReason {
+		db.observeFlushApplySpanNativeFallback(summary, explicitReason)
+		return
+	}
 	db.observeFlushApplySpanNativeFallback(summary, classifyFlushApplySpanNativeFallback(summary, err, result.ReadOnlyPrepareValidationFailed))
+}
+
+func parseFlushApplySpanNativeFallbackReason(raw string) (FlushSpanRunFallbackReason, bool) {
+	if raw == "" {
+		return FlushSpanRunFallbackUnknown, false
+	}
+	if reason, ok := ParseFlushSpanRunFallbackReason(raw); ok {
+		return reason, true
+	}
+	return FlushSpanRunFallbackUnknown, true
+}
+
+func (db *DB) observeFlushApplySpanNativePublishFallback(result zipper.ApplyResult, reason FlushSpanRunFallbackReason) {
+	if db == nil || !reason.Valid() || reason == FlushSpanRunFallbackUnknown {
+		return
+	}
+	if !result.ReadOnlyPrepareRequested || (!result.SpanNativeEligible && !result.SpanNativeUsed) {
+		return
+	}
+	db.observeFlushApplySpanNativeFallbackAfterCandidate(result.ReadOnlyPrepare.LeafSpanSummary(), reason, false)
 }

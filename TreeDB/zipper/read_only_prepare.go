@@ -54,6 +54,11 @@ type ApplyOptions struct {
 	// point-only leaf spans, no cold build, no maintenance rewrite, and bounded
 	// workers. Unsupported runs fail closed to the recursive apply fallback.
 	SpanNativeApply bool
+	// SpanNativeForceFallbackReason forces a prepared span-native candidate to use
+	// the safe recursive/parallel fallback and report this stable reason string.
+	// It is used by checkpoint/close drains and emergency gates that must not
+	// produce span-native durable output.
+	SpanNativeForceFallbackReason string
 }
 
 // ApplyResult is the complete in-memory result of a root apply attempt. The
@@ -92,6 +97,10 @@ type ApplyResult struct {
 	SpanNativeEligible bool
 	SpanNativeWorkers  int
 	SpanNativeUsed     bool
+	// SpanNativeFallbackReason is a stable fallback reason string when the
+	// span-native candidate failed closed before, during, or after execution. DB
+	// callers map it onto their append-only fallback reason enum for stats.
+	SpanNativeFallbackReason string
 }
 
 // ReadOnlyPrepareOptions configures a read-only root preparation pass. The zero
@@ -744,6 +753,9 @@ func spanNativeApplyFallbackReason(opts ApplyOptions, summary ReadOnlyLeafSpanSu
 	if !opts.SpanNativeApply {
 		return 0, "disabled"
 	}
+	if opts.SpanNativeForceFallbackReason != "" {
+		return 0, opts.SpanNativeForceFallbackReason
+	}
 	if validationFailure {
 		return 0, "validation_failed"
 	}
@@ -770,6 +782,16 @@ func spanNativeApplyFallbackReason(opts ApplyOptions, summary ReadOnlyLeafSpanSu
 		return 0, "below_threshold"
 	}
 	return workers, ""
+}
+
+func spanNativeApplyExecutionFallbackReason(err error) string {
+	if errors.Is(err, ErrSpanNativeOutputOwnership) {
+		return "output_ownership_failure"
+	}
+	if errors.Is(err, ErrSpanNativeReducerValidation) {
+		return "reducer_validation_failed"
+	}
+	return "unknown"
 }
 
 func readOnlyWorkerTarget(opts ApplyOptions) int {
@@ -838,8 +860,13 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 			spanResult.ReadOnlyPrepareWorkerSummary = result.ReadOnlyPrepareWorkerSummary
 			spanResult.SpanNativeEligible = true
 			spanResult.SpanNativeWorkers = workers
+			if spanErr != nil && spanResult.SpanNativeFallbackReason == "" {
+				spanResult.SpanNativeFallbackReason = spanNativeApplyExecutionFallbackReason(spanErr)
+			}
 			return spanResult, spanErr
 		}
+	} else if opts.SpanNativeApply {
+		result.SpanNativeFallbackReason = reason
 	}
 
 	applyCfg := applyRunConfig{}

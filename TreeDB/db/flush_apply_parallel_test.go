@@ -513,6 +513,9 @@ func TestFlushApplySpanNativeRootMismatchTracksAbandonedLeafLogOutput(t *testing
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.mismatch_total"); got == 0 {
 		t.Fatalf("mismatch stat=0 want >0")
 	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.root_mismatch.ops_total"); got == 0 {
+		t.Fatalf("span-native root_mismatch fallback ops=0 want >0")
+	}
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.retry_total"); got == 0 {
 		t.Fatalf("retry stat=0 want >0")
 	}
@@ -551,6 +554,32 @@ func TestFlushApplyFinalizeFailureTracksAbandonedLeafLogOutput(t *testing.T) {
 	putBatch(t, d, 0, 256, "ok")
 	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "ok-000123" {
 		t.Fatalf("post-failure write got=%q err=%v", got, err)
+	}
+}
+
+func TestFlushApplySpanNativeFinalizeFailureTracksOutputOwnershipFallback(t *testing.T) {
+	d := openFlushApplyLeafLogTestDBWithSpanNative(t, 4, true)
+	d.testFailFinalizeCommit.Store(true)
+	err := func() error {
+		b := d.NewBatch()
+		defer b.Close()
+		for i := 0; i < 7000; i++ {
+			key := []byte(fmt.Sprintf("key-%06d", i))
+			if err := b.Set(key, []byte(fmt.Sprintf("span-fail-%06d", i))); err != nil {
+				return err
+			}
+		}
+		return b.Write()
+	}()
+	d.testFailFinalizeCommit.Store(false)
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("Write failpoint err=%v, want %v", err, errTestFinalizeCommitFailpoint)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.output_ownership_failure.ops_total"); got == 0 {
+		t.Fatalf("span-native output_ownership_failure fallback ops=0 want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total"); got == 0 {
+		t.Fatalf("abandoned leaf-log output = 0, want span-native finalize-failure output counted")
 	}
 }
 

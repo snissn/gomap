@@ -2975,6 +2975,10 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 			"treedb.cache.checkpoint.stage.reducer_publish.total_ns":                               "44",
 			"treedb.flush_apply.old_leaf_read_decode.bytes_per_op":                                 "2.200000",
 			"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
+			"treedb.flush_apply.span_native.fallback.reason.root_mismatch.ops_total":               "1",
+			"treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total":         "2",
+			"treedb.flush_apply.span_native.fallback.reason.output_ownership_failure.ops_total":    "3",
+			"treedb.flush_apply.span_native.fallback.reason.reducer_validation_failed.ops_total":   "4",
 		},
 	}
 
@@ -2992,6 +2996,10 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 		"checkpoint.stage.reducer_publish.total_ns: 44",
 		"flush_apply.old_leaf_read_decode.bytes_per_op: 2.200000",
 		"flush_apply.span_native.fallback.not_implemented_ops_total: 10",
+		"flush_apply.span_native.fallback.root_mismatch_ops_total: 1",
+		"flush_apply.span_native.fallback.close_or_checkpoint_ops_total: 2",
+		"flush_apply.span_native.fallback.output_ownership_failure_ops_total: 3",
+		"flush_apply.span_native.fallback.reducer_validation_failed_ops_total: 4",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in selected stats, got:\n%s", want, got)

@@ -30,6 +30,8 @@ func TestSpanNativeApplyEligibilityFallbackReasons(t *testing.T) {
 	}{
 		{name: "disabled", opts: ApplyOptions{}, summary: base, want: "disabled"},
 		{name: "validation", opts: ApplyOptions{SpanNativeApply: true}, summary: base, validationFailure: true, want: "validation_failed"},
+		{name: "forced-memory", opts: ApplyOptions{SpanNativeApply: true, SpanNativeForceFallbackReason: "memory_or_emergency_cap"}, summary: base, want: "memory_or_emergency_cap"},
+		{name: "forced-close", opts: ApplyOptions{SpanNativeApply: true, SpanNativeForceFallbackReason: "close_or_checkpoint"}, summary: base, want: "close_or_checkpoint"},
 		{name: "cold", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.ColdBuild = true }), want: "cold_build"},
 		{name: "maintenance", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.Maintenance = true }), want: "maintenance"},
 		{name: "range", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.DeleteRanges = 1 }), want: "range_delete_barrier"},

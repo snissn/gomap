@@ -24712,6 +24712,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 
 func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode) bool {
 	db.mu.Lock()
+	mode = db.flushCollectionMode(mode)
 	queueLen := len(db.queue)
 	if queueLen == 0 {
 		db.mu.Unlock()
@@ -24749,6 +24750,7 @@ func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPubl
 	if totalLen == 0 && totalSpans > 0 {
 		buildStart := time.Now()
 		backendBatch := db.newBackendBatchWithSize(totalSpans)
+		setBackendBatchSpanNativeFallback(backendBatch, flushSpanNativeFallbackReasonForCollectionMode(mode))
 		reserveBackendBatchOps(backendBatch, totalSpans)
 		pending := 0
 		for _, unit := range units {
@@ -24815,7 +24817,7 @@ func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPubl
 		return true
 	}
 
-	pointFlushed := db.flushCanonicalPointUnits(sync, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans)
+	pointFlushed := db.flushCanonicalPointUnits(sync, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans, mode)
 	if pointFlushed {
 		flushSuccess = true
 	}
