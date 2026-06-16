@@ -51,6 +51,51 @@ func TestSpanNativeApplySingleLeafSplitReducerParity(t *testing.T) {
 	}
 }
 
+func TestSpanNativeApplyPartialMultiLeafFallsBackBeforeSpanOutput(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	_, native := newReadOnlyPrepareZipper(t)
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 1000)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 1000)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 200; i < 700; i++ {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte(fmt.Sprintf("partial-%06d", i))); err != nil {
+			t.Fatalf("Set update: %v", err)
+		}
+	}
+
+	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
+	if err != nil {
+		t.Fatalf("serial Apply: %v", err)
+	}
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 2})
+	if err != nil {
+		t.Fatalf("span-native ApplyWithOptions: %v", err)
+	}
+	if !result.SpanNativeEligible {
+		t.Fatalf("SpanNativeEligible=false want candidate eligible before parent-stitch fallback")
+	}
+	if result.SpanNativeUsed {
+		t.Fatalf("SpanNativeUsed=true want fallback before partial multi-leaf prepared output")
+	}
+	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
+		t.Fatalf("partial fallback output mismatch")
+	}
+}
+
+func TestSpanNativeReducerRejectsNondeterministicRefOrder(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	_, err := z.reduceSpanNativeRoot([]Split{
+		{Key: []byte{}, Ref: page.PageChildRef(1)},
+		{Key: []byte("b"), Ref: page.PageChildRef(2)},
+		{Key: []byte("a"), Ref: page.PageChildRef(3)},
+	}, nil)
+	if err == nil {
+		t.Fatalf("reduceSpanNativeRoot accepted out-of-order refs")
+	}
+}
+
 func TestSpanNativeApplyWholeRootMultiLeafReducerParity(t *testing.T) {
 	_, serial := newReadOnlyPrepareZipper(t)
 	_, native := newReadOnlyPrepareZipper(t)

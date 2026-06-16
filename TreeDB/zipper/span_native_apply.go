@@ -1,6 +1,7 @@
 package zipper
 
 import (
+	"bytes"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -79,8 +80,8 @@ func spanNativeCoversWholeRoot(spans []ReadOnlyLeafSpan) bool {
 }
 
 func (z *Zipper) reduceSpanNativeRoot(currentLevelNodes []Split, metrics *adaptive.Metrics) (uint64, error) {
-	if len(currentLevelNodes) == 0 {
-		return 0, page.ErrInvalidPageType
+	if err := validateSpanNativeReducerRefs(currentLevelNodes); err != nil {
+		return 0, err
 	}
 	for {
 		if len(currentLevelNodes) == 1 {
@@ -93,6 +94,23 @@ func (z *Zipper) reduceSpanNativeRoot(currentLevelNodes []Split, metrics *adapti
 		}
 		currentLevelNodes = nextLevelNodes
 	}
+}
+
+func validateSpanNativeReducerRefs(refs []Split) error {
+	if len(refs) == 0 {
+		return page.ErrInvalidPageType
+	}
+	if len(refs[0].Key) != 0 {
+		return page.ErrInvalidPageType
+	}
+	prev := refs[0].Key
+	for i := 1; i < len(refs); i++ {
+		if len(refs[i].Key) == 0 || bytes.Compare(refs[i].Key, prev) <= 0 {
+			return page.ErrInvalidPageType
+		}
+		prev = refs[i].Key
+	}
+	return nil
 }
 
 func (z *Zipper) reduceSpanNativeSplitLevel(currentLevelNodes []Split, metrics *adaptive.Metrics) ([]Split, error) {
