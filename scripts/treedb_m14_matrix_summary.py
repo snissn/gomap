@@ -166,7 +166,11 @@ def _parse_selected_stats(md: str) -> Dict[str, str]:
         if not line or line == "TreeDB:" or ":" not in line:
             continue
         key, value = line.split(":", 1)
-        stats[key.strip()] = value.strip()
+        key = key.strip()
+        value = value.strip()
+        stats[key] = value
+        if key.startswith("flush_backlog_coalescing."):
+            stats[f"treedb.cache.{key}"] = value
     return stats
 
 
@@ -386,7 +390,7 @@ def render_markdown(root: Path, rows: List[MatrixRow], baseline_label: str = "")
         ("active assist skips", "treedb.cache.flush_apply.coordinator.active_assist_skips_total"),
         ("stall waits", "treedb.cache.flush_apply.coordinator.stall_waits_total"),
         ("checkpoint bg wait ns", "treedb.cache.checkpoint.active_background_flush_wait_ns_total"),
-        ("coalesced extra ops", "flush_backlog_coalescing.admitted_extra_ops_total"),
+        ("coalesced extra ops", "treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total"),
     ]
     lines.append("| Row | " + " | ".join(c[0] for c in counter_cols) + " |")
     lines.append("|---|" + "|".join("---:" for _ in counter_cols) + "|")
@@ -503,7 +507,7 @@ TreeDB:
 
 ```text
 TreeDB:
-  flush_backlog_coalescing.admitted_extra_ops_total: 42
+  treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total: 42
 ```
 """,
             encoding="utf-8",
@@ -540,7 +544,7 @@ TreeDB:
         assert got.ops_per_sec["random_write"] == 30.0
         assert got.checkpoints["After Run"] == "4.00s", got.checkpoints
         assert got.disk_usage["maindb/leaf_vlog"].startswith("total=2 MiB")
-        assert got.counters["flush_backlog_coalescing.admitted_extra_ops_total"] == "42"
+        assert got.counters["treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total"] == "42"
         md = render_markdown(root, rows, "span_native_c4")
         assert "TreeDB M14 final-gate matrix summary" in md
         assert "span_native_c4" in md
