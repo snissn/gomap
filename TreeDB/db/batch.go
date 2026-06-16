@@ -294,7 +294,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	var retired []uint64
 	var metrics adaptive.Metrics
 	var err error
-	if applyOpts.ParallelApplyConcurrency > 1 {
+	if flushApplyUseOptions(applyOpts) {
 		result, applyErr := z.ApplyWithOptions(rootID, b.batch, applyOpts)
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
 		b.db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
@@ -430,7 +430,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	var retired []uint64
 	var metrics adaptive.Metrics
 	var err error
-	if applyOpts.ParallelApplyConcurrency > 1 {
+	if flushApplyUseOptions(applyOpts) {
 		result, applyErr := idx.zipper.ApplyWithOptions(rootID, b.batch, applyOpts)
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
 		b.db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)

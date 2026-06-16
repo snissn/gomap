@@ -73,6 +73,10 @@ func (l *lockedRewriteLeafPageLog) CurrentValueLogSegment() (string, uint32, boo
 }
 
 func openFlushApplyTestDB(t *testing.T, concurrency int) *DB {
+	return openFlushApplyTestDBWithSpanNative(t, concurrency, false)
+}
+
+func openFlushApplyTestDBWithSpanNative(t *testing.T, concurrency int, spanNative bool) *DB {
 	t.Helper()
 	d, err := Open(Options{
 		Dir:                   t.TempDir(),
@@ -81,15 +85,20 @@ func openFlushApplyTestDB(t *testing.T, concurrency int) *DB {
 		FlushApplyMinEntries:  1,
 		FlushApplyMinSpans:    1,
 		FlushApplyMinBytes:    1,
+		FlushApplySpanNative:  spanNative,
 	})
 	if err != nil {
-		t.Fatalf("Open(concurrency=%d): %v", concurrency, err)
+		t.Fatalf("Open(concurrency=%d spanNative=%v): %v", concurrency, spanNative, err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
 func openFlushApplyLeafLogTestDB(t *testing.T, concurrency int) *DB {
+	return openFlushApplyLeafLogTestDBWithSpanNative(t, concurrency, false)
+}
+
+func openFlushApplyLeafLogTestDBWithSpanNative(t *testing.T, concurrency int, spanNative bool) *DB {
 	t.Helper()
 	d, err := Open(Options{
 		Dir:                        t.TempDir(),
@@ -99,6 +108,7 @@ func openFlushApplyLeafLogTestDB(t *testing.T, concurrency int) *DB {
 		FlushApplyMinEntries:       1,
 		FlushApplyMinSpans:         1,
 		FlushApplyMinBytes:         1,
+		FlushApplySpanNative:       spanNative,
 		ValueLog: ValueLogOptions{
 			Compression: ValueLogCompressionBlock,
 			BlockCodec:  ValueLogBlockLZ4,
@@ -357,6 +367,160 @@ func TestFlushApplyRootMismatchTracksAbandonedLeafLogOutput(t *testing.T) {
 	}
 	if prepared < installed+abandoned {
 		t.Fatalf("prepared leaf-log output=%d < installed+abandoned=%d+%d", prepared, installed, abandoned)
+	}
+}
+
+func TestFlushApplySpanNativePartialMultiLeafParentStitchWithStats(t *testing.T) {
+	d := openFlushApplyTestDBWithSpanNative(t, 4, true)
+	putBatch(t, d, 0, 9000, "base")
+	usedBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total")
+	fallbackBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total")
+
+	b := d.NewBatch()
+	for i := 2000; i < 7000; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("partial-%06d", i))); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("partial Write: %v", err)
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "base-000123" {
+		t.Fatalf("untouched left key got=%q err=%v", got, err)
+	}
+	if got, err := d.Get([]byte("key-003456")); err != nil || string(got) != "partial-003456" {
+		t.Fatalf("updated key got=%q err=%v", got, err)
+	}
+	if got, err := d.Get([]byte("key-008000")); err != nil || string(got) != "base-008000" {
+		t.Fatalf("untouched right key got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.eligible_ops_total"); got == 0 {
+		t.Fatalf("span-native eligible ops = 0, want partial run classified before fallback")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got <= usedBefore {
+		t.Fatalf("span-native used ops delta=%d want >0 for partial parent-stitch path", got-usedBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got != fallbackBefore {
+		t.Fatalf("span-native not-implemented fallback ops delta=%d want 0 for partial parent-stitch path", got-fallbackBefore)
+	}
+}
+
+func TestFlushApplySpanNativeSparsePointSpansWithStats(t *testing.T) {
+	d := openFlushApplyTestDBWithSpanNative(t, 4, true)
+	putBatch(t, d, 0, 12000, "base")
+	usedBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total")
+	fallbackBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total")
+
+	b := d.NewBatch()
+	updated := []int{17, 997, 2049, 4097, 6143, 8191, 11003}
+	for _, i := range updated {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("sparse-%06d", i))); err != nil {
+			t.Fatalf("Set sparse %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("sparse Write: %v", err)
+	}
+	for _, i := range updated {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		want := fmt.Sprintf("sparse-%06d", i)
+		if got, err := d.Get(key); err != nil || string(got) != want {
+			t.Fatalf("updated key %q got=%q err=%v want %q", key, got, err, want)
+		}
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "base-000123" {
+		t.Fatalf("untouched key got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got <= usedBefore {
+		t.Fatalf("span-native used ops delta=%d want >0 for sparse point spans", got-usedBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got != fallbackBefore {
+		t.Fatalf("span-native not-implemented fallback ops delta=%d want 0 for sparse point spans", got-fallbackBefore)
+	}
+}
+
+func TestFlushApplySpanNativeSingleWorkerUsesApplyWithOptionsStats(t *testing.T) {
+	d := openFlushApplyTestDBWithSpanNative(t, 1, true)
+	putBatch(t, d, 0, 4096, "base")
+	prepareBefore := requireDBStatUint64(t, d, "treedb.flush_apply.read_only_prepare.calls_total")
+	usedBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total")
+	fallbackBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total")
+
+	b := d.NewBatch()
+	for i := 0; i < 4096; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("single-%06d", i))); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("single-worker span-native Write: %v", err)
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "single-000123" {
+		t.Fatalf("updated key got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.read_only_prepare.calls_total"); got <= prepareBefore {
+		t.Fatalf("read-only prepare calls delta=%d want >0 for span-native single-worker path", got-prepareBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got <= usedBefore {
+		t.Fatalf("span-native used ops delta=%d want >0 with FlushApplySpanNative and concurrency=1", got-usedBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got != fallbackBefore {
+		t.Fatalf("span-native not-implemented fallback ops delta=%d want 0 for single-worker path", got-fallbackBefore)
+	}
+}
+
+func TestFlushApplySpanNativeRootMismatchTracksAbandonedLeafLogOutput(t *testing.T) {
+	d := openFlushApplyLeafLogTestDBWithSpanNative(t, 4, true)
+	putBatch(t, d, 0, 9000, "base")
+
+	var fired atomic.Bool
+	d.testAfterOptimisticApplyHook = func() {
+		if !fired.CompareAndSwap(false, true) {
+			return
+		}
+		other := d.NewBatch()
+		if err := other.Set([]byte("key-concurrent"), []byte("concurrent")); err != nil {
+			t.Fatalf("concurrent Set: %v", err)
+		}
+		if err := other.Write(); err != nil {
+			t.Fatalf("concurrent Write: %v", err)
+		}
+	}
+	defer func() { d.testAfterOptimisticApplyHook = nil }()
+
+	b := d.NewBatch()
+	for i := 0; i < 9000; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("span-retry-%06d", i))); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write with retry: %v", err)
+	}
+	if got, err := d.Get([]byte("key-concurrent")); err != nil || string(got) != "concurrent" {
+		t.Fatalf("concurrent value got=%q err=%v", got, err)
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "span-retry-000123" {
+		t.Fatalf("retried value got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got == 0 {
+		t.Fatalf("span-native used ops = 0, want first optimistic attempt to run span-native")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.mismatch_total"); got == 0 {
+		t.Fatalf("mismatch stat=0 want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.retry_total"); got == 0 {
+		t.Fatalf("retry stat=0 want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total"); got == 0 {
+		t.Fatalf("abandoned leaf-log output = 0, want span-native retry output counted")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"); got == 0 {
+		t.Fatalf("installed leaf-log output = 0, want final retry output counted")
 	}
 }
 

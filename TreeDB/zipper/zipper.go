@@ -113,8 +113,9 @@ type Zipper struct {
 	maintenanceOpsPerCoalesce int
 	parallelMergePressure     ParallelMergePressureSource
 
-	scratchMu    sync.Mutex
-	applyScratch *mergeScratch
+	scratchMu        sync.Mutex
+	applyScratch     *mergeScratch
+	applyScratchFree []*mergeScratch
 }
 
 type ParallelMergePressureLevel uint8
@@ -140,24 +141,28 @@ type pendingLeafPagePersist struct {
 }
 
 const (
-	mergeSplitKeyArenaInitCap     = page.PageSize
-	mergeSplitKeyArenaKeepCap     = 1 << 20
-	mergeOuterLeafPageInitCap     = 16
-	mergeOuterLeafPageKeepCap     = 128
-	mergeLeafPageScratchInit      = 16
-	mergeLeafPageScratchKeep      = 128
-	mergeNodeKeyScratchInit       = 16
-	mergeNodeKeyScratchKeep       = 128
-	mergeNodeKeyScratchMaxCap     = 1 << 20
-	mergePendingLeafPersistInit   = 8
-	mergePendingLeafPersistKeep   = 64
-	mergePendingLeafPersistMaxCap = 512
-	mergeLeafPageBatchInit        = 8
-	mergeLeafPageBatchKeep        = 64
-	mergeLeafPageBatchMaxCap      = 512
-	mergeChildRefBatchInit        = 8
-	mergeChildRefBatchKeep        = 64
-	mergeChildRefBatchMaxCap      = 512
+	mergeSplitKeyArenaInitCap         = page.PageSize
+	mergeSplitKeyArenaKeepCap         = 1 << 20
+	mergeOuterLeafPageInitCap         = 16
+	mergeOuterLeafPageKeepCap         = 128
+	mergeLeafPageScratchInit          = 16
+	mergeLeafPageScratchKeep          = 128
+	mergeNodeKeyScratchInit           = 16
+	mergeNodeKeyScratchKeep           = 128
+	mergeNodeKeyScratchMaxCap         = 1 << 20
+	mergePendingLeafPersistInit       = 8
+	mergePendingLeafPersistKeep       = 64
+	mergePendingLeafPersistMaxCap     = 512
+	mergeLeafPageBatchInit            = 8
+	mergeLeafPageBatchKeep            = 64
+	mergeLeafPageBatchMaxCap          = 512
+	mergeChildRefBatchInit            = 8
+	mergeChildRefBatchKeep            = 64
+	mergeChildRefBatchMaxCap          = 512
+	mergeSpanNativeOutputKeepCap      = 1 << 20
+	mergeSpanNativeOutputLogKeepBytes = mergeSpanNativeOutputKeepCap * page.LogRecordRefSize
+	mergeSpanNativeOutputPageKeepCap  = mergeSpanNativeOutputKeepCap
+	applyScratchKeep                  = 8
 
 	mergeInternalMinParallelChildren         = 8
 	mergeInternalMinParallelOps              = 4096
@@ -778,8 +783,15 @@ func (z *Zipper) acquireApplyScratch() *mergeScratch {
 		return newMergeScratch()
 	}
 	z.scratchMu.Lock()
-	s := z.applyScratch
-	z.applyScratch = nil
+	var s *mergeScratch
+	if n := len(z.applyScratchFree); n > 0 {
+		s = z.applyScratchFree[n-1]
+		z.applyScratchFree[n-1] = nil
+		z.applyScratchFree = z.applyScratchFree[:n-1]
+	} else {
+		s = z.applyScratch
+		z.applyScratch = nil
+	}
 	z.scratchMu.Unlock()
 	if s == nil {
 		s = newMergeScratch()
@@ -794,6 +806,11 @@ func (z *Zipper) releaseApplyScratch(s *mergeScratch) {
 	}
 	s.reset()
 	z.scratchMu.Lock()
+	if len(z.applyScratchFree) < applyScratchKeep {
+		z.applyScratchFree = append(z.applyScratchFree, s)
+		z.scratchMu.Unlock()
+		return
+	}
 	if z.applyScratch == nil {
 		z.applyScratch = s
 		z.scratchMu.Unlock()

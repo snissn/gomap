@@ -7290,6 +7290,10 @@ type Options struct {
 	FlushApplyMinSpans int
 	// FlushApplyMinBytes gates backend opt-in parallel apply by planned bytes.
 	FlushApplyMinBytes int
+	// FlushApplySpanNative enables backend M10 opt-in span-native apply. The
+	// backend owns execution; cached mode carries this knob for config/reporting
+	// symmetry and keeps the path default-off.
+	FlushApplySpanNative bool
 
 	// FlushBackendMaxEntries caps how many operations are buffered into a single
 	// backend batch before committing it and continuing with a fresh batch.
@@ -7869,6 +7873,7 @@ type DB struct {
 	flushApplyMinEntries                              int
 	flushApplyMinSpans                                int
 	flushApplyMinBytes                                int
+	flushApplySpanNative                              bool
 	flushBackendMaxEntries                            int
 	flushBackendInitEntries                           int
 	flushBackendMaxBatches                            int
@@ -10781,6 +10786,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushApplyMinEntries:                 opts.FlushApplyMinEntries,
 		flushApplyMinSpans:                   opts.FlushApplyMinSpans,
 		flushApplyMinBytes:                   opts.FlushApplyMinBytes,
+		flushApplySpanNative:                 opts.FlushApplySpanNative,
 		flushBackendMaxEntries:               opts.FlushBackendMaxEntries,
 		flushBackendInitEntries:              flushBackendInitEntries,
 		flushBackendMaxBatches:               opts.FlushBackendMaxBatches,
