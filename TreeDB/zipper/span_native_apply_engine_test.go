@@ -254,6 +254,40 @@ func TestSpanNativeApplyWholeRootMultiLeafReducerParity(t *testing.T) {
 	}
 }
 
+func TestSpanNativeApplyWholeRootMultiLeafRetiresInternalPages(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 1024)
+	oldInternalPages := collectSpanNativeTestInternalPageIDs(t, z, rootID)
+	if len(oldInternalPages) == 0 {
+		t.Fatalf("old root has no internal pages; test requires whole-root multi-leaf rewrite")
+	}
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < 1024; i++ {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte(fmt.Sprintf("retire-%06d", i))); err != nil {
+			t.Fatalf("Set update: %v", err)
+		}
+	}
+
+	result, err := z.ApplyWithOptions(rootID, delta, ApplyOptions{SpanNativeApply: true})
+	if err != nil {
+		t.Fatalf("span-native ApplyWithOptions: %v", err)
+	}
+	if !result.SpanNativeEligible || !result.SpanNativeUsed {
+		t.Fatalf("span-native flags eligible/used=%v/%v", result.SpanNativeEligible, result.SpanNativeUsed)
+	}
+	retired := make(map[uint64]struct{}, len(result.PendingRetiredPages))
+	for _, pageID := range result.PendingRetiredPages {
+		retired[pageID] = struct{}{}
+	}
+	for _, pageID := range oldInternalPages {
+		if _, ok := retired[pageID]; !ok {
+			t.Fatalf("old internal page %d missing from pending retired pages %v", pageID, result.PendingRetiredPages)
+		}
+	}
+}
+
 func assertSpanNativeParity(t *testing.T, serial, native *Zipper, serialRoot, nativeRoot uint64, delta *batch.Batch) ApplyResult {
 	t.Helper()
 	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
@@ -281,6 +315,35 @@ func assertSpanNativeParity(t *testing.T, serial, native *Zipper, serialRoot, na
 func collectRootLeafPairs(t *testing.T, z *Zipper, rootID uint64) []byte {
 	t.Helper()
 	return collectChildRefLeafPairs(t, z, page.PageChildRef(rootID))
+}
+
+func collectSpanNativeTestInternalPageIDs(t *testing.T, z *Zipper, rootID uint64) []uint64 {
+	t.Helper()
+	return collectSpanNativeTestInternalPageIDsRef(t, z, page.PageChildRef(rootID))
+}
+
+func collectSpanNativeTestInternalPageIDsRef(t *testing.T, z *Zipper, ref page.ChildRef) []uint64 {
+	t.Helper()
+	if ref.Kind != page.ChildRefPage {
+		return nil
+	}
+	data, err := z.pager.Get(ref.Page)
+	if err != nil {
+		t.Fatalf("get page %d: %v", ref.Page, err)
+	}
+	n := node.NewNode(data)
+	if n.Type() != page.PageTypeInternal {
+		return nil
+	}
+	out := []uint64{ref.Page}
+	for i := uint16(0); i < n.Count(); i++ {
+		child, err := n.GetInternalChildRef(i)
+		if err != nil {
+			t.Fatalf("internal child %d: %v", i, err)
+		}
+		out = append(out, collectSpanNativeTestInternalPageIDsRef(t, z, child)...)
+	}
+	return out
 }
 
 func collectChildRefLeafPairs(t *testing.T, z *Zipper, ref page.ChildRef) []byte {

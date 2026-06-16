@@ -415,6 +415,9 @@ func (z *Zipper) reduceSpanNativeRootWithContext(rootID uint64, replacements spa
 		return 0, page.ErrInvalidPageType
 	}
 	if spanNativeReplacementsCoverWholeRoot(replacements) {
+		if err := z.retireSpanNativeWholeRootInternalPages(rootID, replacements, retired, scratch); err != nil {
+			return 0, err
+		}
 		var refs []Split
 		for i := 0; i < replacements.len(); i++ {
 			out := replacements.output(i)
@@ -442,6 +445,57 @@ func spanNativeReplacementHeadSplit(span ReadOnlyLeafSpan, output spanNativeLeaf
 		spanKey = []byte{}
 	}
 	return Split{Key: spanKey, Ref: output.ref}
+}
+
+func (z *Zipper) retireSpanNativeWholeRootInternalPages(rootID uint64, replacements spanNativeLeafReplacements, retired *[]uint64, scratch *mergeScratch) error {
+	if retired == nil || replacements.len() == 0 {
+		return nil
+	}
+	spanIdx := 0
+	var walk func(page.ChildRef) error
+	walk = func(ref page.ChildRef) error {
+		if spanIdx < replacements.len() && replacements.spans[spanIdx].Ref == ref {
+			spanIdx++
+			return nil
+		}
+		if ref.Kind != page.ChildRefPage {
+			return nil
+		}
+		oldNode, oldFromPager, leafScratch, leafScratchRef, _, err := z.loadNodeRef(ref, scratch)
+		if err != nil {
+			return err
+		}
+		if leafScratchRef {
+			defer releaseLeafPageScratch(scratch, leafScratch)
+		}
+		switch oldNode.Type() {
+		case page.PageTypeLeaf, 0:
+			return nil
+		case page.PageTypeInternal:
+			if oldFromPager && ref.Page != 0 {
+				*retired = append(*retired, ref.Page)
+			}
+			for i := uint16(0); i < oldNode.Count(); i++ {
+				childRef, err := oldNode.GetInternalChildRef(i)
+				if err != nil {
+					return err
+				}
+				if err := walk(childRef); err != nil {
+					return err
+				}
+			}
+			return nil
+		default:
+			return page.ErrInvalidPageType
+		}
+	}
+	if err := walk(page.PageChildRef(rootID)); err != nil {
+		return err
+	}
+	if spanIdx != replacements.len() {
+		return page.ErrInvalidPageType
+	}
+	return nil
 }
 
 func spanNativeReplacementsCoverWholeRoot(replacements spanNativeLeafReplacements) bool {

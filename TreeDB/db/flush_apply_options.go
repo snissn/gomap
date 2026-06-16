@@ -23,6 +23,10 @@ func (db *DB) flushApplyOptions() zipper.ApplyOptions {
 	}
 }
 
+func flushApplyUseOptions(opts zipper.ApplyOptions) bool {
+	return opts.ParallelApplyConcurrency > 1 || opts.SpanNativeApply || opts.PrepareReadOnly
+}
+
 func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err error) {
 	if db == nil || !result.ReadOnlyPrepareRequested {
 		return

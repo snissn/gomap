@@ -441,6 +441,37 @@ func TestFlushApplySpanNativeSparsePointSpansWithStats(t *testing.T) {
 	}
 }
 
+func TestFlushApplySpanNativeSingleWorkerUsesApplyWithOptionsStats(t *testing.T) {
+	d := openFlushApplyTestDBWithSpanNative(t, 1, true)
+	putBatch(t, d, 0, 4096, "base")
+	prepareBefore := requireDBStatUint64(t, d, "treedb.flush_apply.read_only_prepare.calls_total")
+	usedBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total")
+	fallbackBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total")
+
+	b := d.NewBatch()
+	for i := 0; i < 4096; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("single-%06d", i))); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("single-worker span-native Write: %v", err)
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "single-000123" {
+		t.Fatalf("updated key got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.read_only_prepare.calls_total"); got <= prepareBefore {
+		t.Fatalf("read-only prepare calls delta=%d want >0 for span-native single-worker path", got-prepareBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got <= usedBefore {
+		t.Fatalf("span-native used ops delta=%d want >0 with FlushApplySpanNative and concurrency=1", got-usedBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got != fallbackBefore {
+		t.Fatalf("span-native not-implemented fallback ops delta=%d want 0 for single-worker path", got-fallbackBefore)
+	}
+}
+
 func TestFlushApplySpanNativeRootMismatchTracksAbandonedLeafLogOutput(t *testing.T) {
 	d := openFlushApplyLeafLogTestDBWithSpanNative(t, 4, true)
 	putBatch(t, d, 0, 9000, "base")
