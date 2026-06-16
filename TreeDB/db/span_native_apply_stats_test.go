@@ -72,6 +72,64 @@ func TestFlushApplySpanNativeUsedCounters(t *testing.T) {
 	}
 }
 
+func TestFlushApplySpanNativeUnsupportedFallbackReasonCounters(t *testing.T) {
+	base := zipper.ReadOnlyPrepareResult{
+		Ops:            4,
+		PointOps:       4,
+		ExactLeafSpans: true,
+		LeafSpans:      make([]zipper.ReadOnlyLeafSpan, 2),
+	}
+	cases := []struct {
+		name   string
+		mutate func(*zipper.ReadOnlyPrepareResult)
+		want   FlushSpanRunFallbackReason
+	}{
+		{
+			name: "range delete barrier",
+			mutate: func(r *zipper.ReadOnlyPrepareResult) {
+				r.DeleteRanges = 1
+				r.Ops = r.PointOps + r.DeleteRanges
+				r.ExactLeafSpans = false
+			},
+			want: FlushSpanRunFallbackRangeDeleteBarrier,
+		},
+		{
+			name: "maintenance rewrite",
+			mutate: func(r *zipper.ReadOnlyPrepareResult) {
+				r.Maintenance = true
+				r.ExactLeafSpans = false
+			},
+			want: FlushSpanRunFallbackMaintenance,
+		},
+		{
+			name: "inexact leaf spans",
+			mutate: func(r *zipper.ReadOnlyPrepareResult) {
+				r.ExactLeafSpans = false
+			},
+			want: FlushSpanRunFallbackInexactLeafSpans,
+		},
+		{
+			name: "cold build",
+			mutate: func(r *zipper.ReadOnlyPrepareResult) {
+				r.ColdBuild = true
+			},
+			want: FlushSpanRunFallbackColdBuild,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared := base
+			prepared.LeafSpans = append([]zipper.ReadOnlyLeafSpan(nil), base.LeafSpans...)
+			tc.mutate(&prepared)
+			db := &DB{flushApplySpanNative: true}
+			db.observeFlushApplyPrepareResult(zipper.ApplyResult{ReadOnlyPrepareRequested: true, ReadOnlyPrepare: prepared}, nil)
+			if got := db.flushApplySpanNativeFallbackOps[tc.want].Load(); got != uint64(prepared.Ops) {
+				t.Fatalf("fallback ops for %s=%d want %d", tc.want, got, prepared.Ops)
+			}
+		})
+	}
+}
+
 func TestFlushApplySpanNativeExplicitFallbackReasonCounters(t *testing.T) {
 	summary := zipper.ReadOnlyPrepareResult{
 		Ops:            8,
