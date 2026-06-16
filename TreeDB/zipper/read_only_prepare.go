@@ -824,7 +824,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 		} else if b != nil {
 			spanOps = b.SortedEntries()
 		}
-		spanResult, used, spanErr := z.applySpanNativeWithPrepared(rootID, spanOps, prepared)
+		spanResult, used, spanErr := z.applySpanNativeWithPrepared(rootID, spanOps, prepared, workers, opts.ParallelApplyWorkerPool)
 		if used {
 			spanResult.ReadOnlyPrepare = prepared
 			spanResult.ReadOnlyPrepareNs = preparedNs

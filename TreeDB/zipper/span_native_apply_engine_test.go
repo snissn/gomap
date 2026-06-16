@@ -81,6 +81,47 @@ func TestSpanNativeApplyPartialMultiLeafParentStitchParity(t *testing.T) {
 	}
 }
 
+func TestSpanNativeApplySparseMultiLeafParentStitchParity(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	_, native := newReadOnlyPrepareZipper(t)
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 4096)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for _, i := range []int{17, 511, 1029, 2053, 3079, 4095} {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte(fmt.Sprintf("sparse-%06d", i))); err != nil {
+			t.Fatalf("Set sparse %d: %v", i, err)
+		}
+	}
+
+	prepared, err := native.PrepareReadOnly(nativeRoot, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if len(prepared.LeafSpans) < 2 {
+		t.Fatalf("prepared spans=%d want sparse multi-leaf", len(prepared.LeafSpans))
+	}
+	sawGap := false
+	for i := 1; i < len(prepared.LeafSpans); i++ {
+		if !bytes.Equal(prepared.LeafSpans[i].LowKey, prepared.LeafSpans[i-1].HighKey) {
+			sawGap = true
+			break
+		}
+	}
+	if !sawGap {
+		t.Fatalf("prepared spans were contiguous; want sparse parent-stitch coverage")
+	}
+	if !validateSpanNativePreparedPlan(delta.SortedEntries(), prepared) {
+		t.Fatalf("sparse prepared plan rejected by span-native validator")
+	}
+
+	result := assertSpanNativeParity(t, serial, native, serialRoot, nativeRoot, delta)
+	if result.Metrics.ZipperInternalPagesWritten == 0 {
+		t.Fatalf("internal pages written=%d want sparse parent stitch", result.Metrics.ZipperInternalPagesWritten)
+	}
+}
+
 func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	p, z := newReadOnlyPrepareZipper(t)
 	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 40)
@@ -107,7 +148,7 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
 	bad.LeafSpans[0].PointOpStart = 1
 	beforePages := p.PageCount()
-	_, used, err := z.applySpanNativeWithPrepared(rootID, ops, bad)
+	_, used, err := z.applySpanNativeWithPrepared(rootID, ops, bad, 1, nil)
 	if err != nil {
 		t.Fatalf("applySpanNativeWithPrepared invalid plan err=%v", err)
 	}
@@ -157,8 +198,8 @@ func TestSpanNativeApplyWholeRootMultiLeafReducerParity(t *testing.T) {
 	if result.Metrics.ZipperLeafMerges < 2 {
 		t.Fatalf("leaf merges=%d want multi-leaf", result.Metrics.ZipperLeafMerges)
 	}
-	if result.Metrics.ZipperRootSplitLevels == 0 {
-		t.Fatalf("root split levels=%d want reducer to build internal root", result.Metrics.ZipperRootSplitLevels)
+	if result.Metrics.ZipperInternalPagesWritten == 0 {
+		t.Fatalf("internal pages written=%d want context reducer to rebuild parent/root pages", result.Metrics.ZipperInternalPagesWritten)
 	}
 }
 

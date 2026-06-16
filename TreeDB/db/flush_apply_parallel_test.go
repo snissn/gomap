@@ -406,6 +406,41 @@ func TestFlushApplySpanNativePartialMultiLeafParentStitchWithStats(t *testing.T)
 	}
 }
 
+func TestFlushApplySpanNativeSparsePointSpansWithStats(t *testing.T) {
+	d := openFlushApplyTestDBWithSpanNative(t, 4, true)
+	putBatch(t, d, 0, 12000, "base")
+	usedBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total")
+	fallbackBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total")
+
+	b := d.NewBatch()
+	updated := []int{17, 997, 2049, 4097, 6143, 8191, 11003}
+	for _, i := range updated {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("sparse-%06d", i))); err != nil {
+			t.Fatalf("Set sparse %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("sparse Write: %v", err)
+	}
+	for _, i := range updated {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		want := fmt.Sprintf("sparse-%06d", i)
+		if got, err := d.Get(key); err != nil || string(got) != want {
+			t.Fatalf("updated key %q got=%q err=%v want %q", key, got, err, want)
+		}
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "base-000123" {
+		t.Fatalf("untouched key got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got <= usedBefore {
+		t.Fatalf("span-native used ops delta=%d want >0 for sparse point spans", got-usedBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got != fallbackBefore {
+		t.Fatalf("span-native not-implemented fallback ops delta=%d want 0 for sparse point spans", got-fallbackBefore)
+	}
+}
+
 func TestFlushApplySpanNativeRootMismatchTracksAbandonedLeafLogOutput(t *testing.T) {
 	d := openFlushApplyLeafLogTestDBWithSpanNative(t, 4, true)
 	putBatch(t, d, 0, 9000, "base")
