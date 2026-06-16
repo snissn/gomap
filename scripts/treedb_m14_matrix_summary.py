@@ -158,6 +158,18 @@ def _parse_disk_usage(md: str) -> Dict[str, str]:
     return disks
 
 
+def _parse_selected_stats(md: str) -> Dict[str, str]:
+    section = _extract_fenced_section(md, "## TreeDB Selected Stats")
+    stats: Dict[str, str] = {}
+    for raw in section.splitlines():
+        line = raw.strip()
+        if not line or line == "TreeDB:" or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        stats[key.strip()] = value.strip()
+    return stats
+
+
 def _to_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -253,6 +265,7 @@ def load_row(path: Path) -> MatrixRow:
         test_results = results.get(test, {}) or {}
         ops[test] = _to_float(test_results.get("TreeDB"))
     counters = {k: str(stats.get(k, "")) for k in COUNTER_KEYS if k in stats}
+    counters.update(_parse_selected_stats(md))
     single_op_spans = _to_float(counters.get("treedb.flush_apply.span_run.single_op_spans_total"))
     target_spans = _to_float(counters.get("treedb.flush_apply.span_run.target_leaf_spans_total"))
     if single_op_spans is not None and target_spans not in (None, 0):
@@ -373,7 +386,7 @@ def render_markdown(root: Path, rows: List[MatrixRow], baseline_label: str = "")
         ("active assist skips", "treedb.cache.flush_apply.coordinator.active_assist_skips_total"),
         ("stall waits", "treedb.cache.flush_apply.coordinator.stall_waits_total"),
         ("checkpoint bg wait ns", "treedb.cache.checkpoint.active_background_flush_wait_ns_total"),
-        ("coalesced extra ops", "treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total"),
+        ("coalesced extra ops", "flush_backlog_coalescing.admitted_extra_ops_total"),
     ]
     lines.append("| Row | " + " | ".join(c[0] for c in counter_cols) + " |")
     lines.append("|---|" + "|".join("---:" for _ in counter_cols) + "|")
@@ -485,6 +498,13 @@ TreeDB:
   maindb/value_vlog: total=0 B files=1
   maindb/leaf_vlog: total=2 MiB files=1 value=2 MiB
 ```
+
+## TreeDB Selected Stats (End of Run)
+
+```text
+TreeDB:
+  flush_backlog_coalescing.admitted_extra_ops_total: 42
+```
 """,
             encoding="utf-8",
         )
@@ -520,6 +540,7 @@ TreeDB:
         assert got.ops_per_sec["random_write"] == 30.0
         assert got.checkpoints["After Run"] == "4.00s", got.checkpoints
         assert got.disk_usage["maindb/leaf_vlog"].startswith("total=2 MiB")
+        assert got.counters["flush_backlog_coalescing.admitted_extra_ops_total"] == "42"
         md = render_markdown(root, rows, "span_native_c4")
         assert "TreeDB M14 final-gate matrix summary" in md
         assert "span_native_c4" in md
