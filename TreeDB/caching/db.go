@@ -7318,6 +7318,42 @@ type Options struct {
 	// planner when span-native execution consumes target spans.
 	FlushSpanRunTargetPlanning bool
 
+	// FlushBacklogCoalescing enables the M11 bounded adaptive cached-flush
+	// coalescing controller. It is default-off; when enabled the coordinator may
+	// include additional already-sealed eligible memtables before canonical run
+	// planning under observed cumulative single-op-span pressure and explicit
+	// budgets.
+	FlushBacklogCoalescing bool
+	// FlushBacklogCoalescingMaxMemtables bounds memtables per coalesced point run
+	// after preserving the pre-existing base collector minimum (0=default, capped
+	// internally).
+	FlushBacklogCoalescingMaxMemtables int
+	// FlushBacklogCoalescingMaxBytes is a soft queued-byte budget per coalesced
+	// point run. It is checked before adding the next memtable after at least one
+	// unit, so a selected run can exceed this value by one whole memtable and the
+	// budget never tightens the pre-existing base collector (0=default).
+	FlushBacklogCoalescingMaxBytes int64
+	// FlushBacklogCoalescingMaxOps is a soft queued point-op budget per coalesced
+	// point run. It is checked before adding the next memtable after at least one
+	// unit, so a selected run can exceed this value by one whole memtable and the
+	// budget never tightens the pre-existing base collector (0=default).
+	FlushBacklogCoalescingMaxOps int
+	// FlushBacklogCoalescingMinAge requires the oldest queued memtable to be at
+	// least this old before adaptive coalescing admits extra work (0=no age floor).
+	FlushBacklogCoalescingMinAge time.Duration
+	// FlushBacklogCoalescingSingleOpSpanRatio is the observed single-op span ratio
+	// that triggers coalescing (0=default). Pressure gates use cumulative apply/span
+	// counters; after workload-shape changes, eligibility may decay only as
+	// cumulative ratios change, while each admitted run remains bounded by the
+	// explicit budgets above.
+	FlushBacklogCoalescingSingleOpSpanRatio float64
+	// FlushBacklogCoalescingMaxOpsPerSpan is the observed ops/span ceiling that
+	// still counts as single-op pressure (0=default).
+	FlushBacklogCoalescingMaxOpsPerSpan float64
+	// FlushBacklogCoalescingMinOldLeafBytesPerOp optionally requires observed
+	// old-leaf decode bytes/op before coalescing (0=disabled).
+	FlushBacklogCoalescingMinOldLeafBytesPerOp float64
+
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
 	// JournalLanes controls the number of active commit/value log lanes
@@ -7878,6 +7914,14 @@ type DB struct {
 	flushBackendInitEntries                           int
 	flushBackendMaxBatches                            int
 	flushSpanRunTargetPlanning                        bool
+	flushBacklogCoalescing                            bool
+	flushBacklogCoalescingMaxMemtables                int
+	flushBacklogCoalescingMaxBytes                    int64
+	flushBacklogCoalescingMaxOps                      int
+	flushBacklogCoalescingMinAge                      time.Duration
+	flushBacklogCoalescingSingleOpSpanRatioPPM        uint64
+	flushBacklogCoalescingMaxOpsPerSpanPPM            uint64
+	flushBacklogCoalescingMinOldLeafBytesPerOp        float64
 	walMaxSegmentBytes                                int64
 	valueLogMaxSegmentBytes                           int64
 	journalCompression                                bool
@@ -7950,6 +7994,24 @@ type DB struct {
 	flushSpanRunSpanBytes                                        atomic.Uint64
 	flushSpanRunTargetLeavesSplitAcrossChunks                    atomic.Uint64
 	flushSpanRunMaxChunksPerTargetLeaf                           atomic.Uint64
+	flushBacklogCoalescingDecisions                              atomic.Uint64
+	flushBacklogCoalescingAdmittedRuns                           atomic.Uint64
+	flushBacklogCoalescingAdmittedExtraMemtables                 atomic.Uint64
+	flushBacklogCoalescingAdmittedExtraBytes                     atomic.Uint64
+	flushBacklogCoalescingAdmittedExtraOps                       atomic.Uint64
+	flushBacklogCoalescingSelectedMemtables                      atomic.Uint64
+	flushBacklogCoalescingSelectedMemtablesMax                   atomic.Uint64
+	flushBacklogCoalescingSelectedBytes                          atomic.Uint64
+	flushBacklogCoalescingSelectedBytesMax                       atomic.Uint64
+	flushBacklogCoalescingSelectedOps                            atomic.Uint64
+	flushBacklogCoalescingSelectedOpsMax                         atomic.Uint64
+	flushBacklogCoalescingQueuedMemtablesMax                     atomic.Uint64
+	flushBacklogCoalescingQueuedBytesMax                         atomic.Uint64
+	flushBacklogCoalescingQueuedAgeNsMax                         atomic.Uint64
+	flushBacklogCoalescingLastSingleOpSpanRatioPPM               atomic.Uint64
+	flushBacklogCoalescingLastOpsPerSpanPPM                      atomic.Uint64
+	flushBacklogCoalescingLastOldLeafBytesPerOpPPM               atomic.Uint64
+	flushBacklogCoalescingSkipReasons                            [flushBacklogCoalescingSkipReasonCount]atomic.Uint64
 	flushCoordinatorActive                                       atomic.Int64
 	flushCoordinatorInFlightBytes                                atomic.Int64
 	flushCoordinatorProgress                                     atomic.Uint64
@@ -10308,6 +10370,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			opts.FlushBackendMaxBatches = 16
 		}
 	}
+	normalizeFlushBacklogCoalescingOptions(&opts)
 	flushBackendInitEntries := flushBackendBatchInitEntries
 	if flushBackendInitEntries > opts.FlushBackendMaxEntries {
 		flushBackendInitEntries = opts.FlushBackendMaxEntries
@@ -10755,112 +10818,120 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[2].vlogGenerationClass = vlogGenerationClassCold
 	}
 	db := &DB{
-		dir:                                  walDir,
-		valueLogDir:                          valueLogDir,
-		leafLogDir:                           leafLogDir,
-		backend:                              backend,
-		flushThreshold:                       opts.FlushThreshold,
-		memtableCap:                          memCap,
-		memtableAdaptive:                     adaptive,
-		memtableAdaptiveBTreeMinIters:        adaptiveBTreeMinIters,
-		memtableWarmupActive:                 adaptive && warmupThreshold < opts.FlushThreshold,
-		memtableWarmupThreshold:              warmupThreshold,
-		domainIngressWorkers:                 domainIngressWorkers,
-		domainIngressQueueSize:               domainIngressQueueSize,
-		maxQueuedMemtables:                   opts.MaxQueuedMemtables,
-		slowdownBacklogSeconds:               opts.SlowdownBacklogSeconds,
-		stopBacklogSeconds:                   opts.StopBacklogSeconds,
-		maxBacklogBytes:                      opts.MaxBacklogBytes,
-		writerFlushMaxMemtables:              opts.WriterFlushMaxMemtables,
-		writerFlushMaxDuration:               opts.WriterFlushMaxDuration,
-		flushBuildConcurrency:                opts.FlushBuildConcurrency,
-		flushBuildAutoConcurrency:            flushBuildAutoConcurrency,
-		flushBuildMinEntries:                 opts.FlushBuildMinEntries,
-		flushBuildMinUnits:                   opts.FlushBuildMinUnits,
-		flushBuildChunkCap:                   opts.FlushBuildChunkCap,
-		flushBuildChunkTarget:                opts.FlushBuildChunkTargetBytes,
-		flushBuildChunkMinBytes:              opts.FlushBuildChunkMinBytes,
-		flushBuildChunkMaxBytes:              opts.FlushBuildChunkMaxBytes,
-		flushBuildPrefetchUnits:              opts.FlushBuildPrefetchUnits,
-		flushApplyConcurrency:                opts.FlushApplyConcurrency,
-		flushApplyMinEntries:                 opts.FlushApplyMinEntries,
-		flushApplyMinSpans:                   opts.FlushApplyMinSpans,
-		flushApplyMinBytes:                   opts.FlushApplyMinBytes,
-		flushApplySpanNative:                 opts.FlushApplySpanNative,
-		flushBackendMaxEntries:               opts.FlushBackendMaxEntries,
-		flushBackendInitEntries:              flushBackendInitEntries,
-		flushBackendMaxBatches:               opts.FlushBackendMaxBatches,
-		flushSpanRunTargetPlanning:           opts.FlushSpanRunTargetPlanning,
-		walMaxSegmentBytes:                   opts.WALMaxSegmentBytes,
-		valueLogMaxSegmentBytes:              valueLogMaxSegmentBytes,
-		journalCompression:                   opts.JournalCompression,
-		disableJournal:                       disableJournal,
-		disableValueLog:                      false,
-		splitValueLog:                        true,
-		relaxedSync:                          opts.RelaxedSync,
-		notifyError:                          opts.NotifyError,
-		inlineThreshold:                      inlineThreshold,
-		valueLogThreshold:                    valueLogThreshold,
-		valueLogDomainThresholds:             valueLogDomainThresholds,
-		forceValueLogPointers:                opts.ForceValueLogPointers,
-		valueLogRawWritevMinAvgBytes:         valueLogRawWritevMinAvgBytes,
-		valueLogRawWritevMinRecords:          valueLogRawWritevMinRecords,
-		valueLogCompressionMode:              uint8(valueLogCompressionMode),
-		valueLogBlockCodec:                   valueLogBlockCodec,
-		valueLogBlockTargetBytes:             valueLogBlockTargetBytes,
-		valueLogIncompressibleHold:           uint64(valueLogIncompressibleHold),
-		valueLogIncompressibleProbe:          uint64(valueLogIncompressibleProbe),
-		valueLogAutoPolicy:                   uint8(valueLogAutoPolicy),
-		valueLogGenerationPolicy:             valueLogGenerationPolicyUint8,
-		valueLogGenerationLeafTarget:         valueLogGenerationLeafTarget,
-		valueLogGenerationHotTarget:          valueLogGenerationHotTarget,
-		valueLogGenerationWarmTarget:         valueLogGenerationWarmTarget,
-		valueLogGenerationColdTarget:         valueLogGenerationColdTarget,
-		valueLogRewriteBudgetBytes:           valueLogRewriteBudgetBytes,
-		valueLogRewriteBudgetRecords:         valueLogRewriteBudgetRecords,
-		valueLogRewriteTriggerRatioPPM:       valueLogRewriteTriggerRatioPPM,
-		valueLogRewriteTriggerBytes:          valueLogRewriteTriggerBytes,
-		valueLogRewriteTriggerChurn:          valueLogRewriteTriggerChurn,
-		valueLogRewriteMinSegmentAge:         valueLogRewriteMinSegmentAge,
-		memtableValueLogPointers:             true,
-		indexOuterLeavesInValueLog:           opts.IndexOuterLeavesInValueLog,
-		valueLogReader:                       valueLogReader,
-		valueLogRetain:                       retained,
-		debugFlushPointers:                   debugFlushPointers,
-		debugFlushTiming:                     debugFlushTiming,
-		maxValueLogRetainedBytes:             opts.MaxValueLogRetainedBytes,
-		maxValueLogRetainedBytesHard:         opts.MaxValueLogRetainedBytesHard,
-		valueLogDictTrain:                    valueLogDictTrain,
-		valueLogDictMaxK:                     valueLogDictMaxK,
-		valueLogDictClassMode:                uint8(valueLogDictClassMode),
-		valueLogDictFrameEncodeLevel:         valueLogDictFrameEncodeLevel,
-		valueLogDictFrameEnableEntropy:       valueLogDictFrameEnableEntropy,
-		valueLogDictAdaptiveRatio:            valueLogDictAdaptiveRatio,
-		valueLogDictMinPayloadSavings:        minPayloadSavings,
-		valueLogDictMetricsWindow:            valueLogDictMetricsWindow,
-		valueLogDictMetricsMinRecords:        valueLogDictMetricsMinRecords,
-		valueLogDictMetricsPauseBytes:        valueLogDictMetricsPauseBytes,
-		valueLogDictProbeBytes:               uint64(probeBytes),
-		valueLogDictIncompressibleHoldBytes:  uint64(incompressibleHoldBytes),
-		valueLogDictIncompressibleProbeBytes: uint64(incompressibleProbeBytes),
-		valueLogDictPausedSampleStride:       pausedSampleStride,
-		valueLogAutotuneOptions:              valueLogAutotune,
-		valueLogAutotuneCandidateKSet:        valueLogAutotuneCandidateKSet,
-		valueLogTemplateEnabled:              valueLogTemplateEnabled,
-		valueLogTemplateMode:                 valueLogTemplateMode,
-		valueLogTemplateReadStrict:           false,
-		valueLogTemplateDecodeOpts:           valueLogTemplateDecodeOpts,
-		valueLogTemplateEngine:               nil,
-		mutableShards:                        mutableShards,
-		mutableShardMask:                     uint64(shardCount - 1),
-		hashSortedIndexer:                    indexer,
-		closeCh:                              make(chan struct{}),
-		flushCh:                              make(chan struct{}, 1),
-		flushCoordinatorWaitCh:               make(chan struct{}),
-		autoCheckpointOnceCh:                 make(chan struct{}, 1),
-		autoCheckpointWriteCh:                make(chan struct{}, 1),
-		lanes:                                lanes,
-		flushLaneMu:                          make([]sync.Mutex, len(lanes)),
+		dir:                                        walDir,
+		valueLogDir:                                valueLogDir,
+		leafLogDir:                                 leafLogDir,
+		backend:                                    backend,
+		flushThreshold:                             opts.FlushThreshold,
+		memtableCap:                                memCap,
+		memtableAdaptive:                           adaptive,
+		memtableAdaptiveBTreeMinIters:              adaptiveBTreeMinIters,
+		memtableWarmupActive:                       adaptive && warmupThreshold < opts.FlushThreshold,
+		memtableWarmupThreshold:                    warmupThreshold,
+		domainIngressWorkers:                       domainIngressWorkers,
+		domainIngressQueueSize:                     domainIngressQueueSize,
+		maxQueuedMemtables:                         opts.MaxQueuedMemtables,
+		slowdownBacklogSeconds:                     opts.SlowdownBacklogSeconds,
+		stopBacklogSeconds:                         opts.StopBacklogSeconds,
+		maxBacklogBytes:                            opts.MaxBacklogBytes,
+		writerFlushMaxMemtables:                    opts.WriterFlushMaxMemtables,
+		writerFlushMaxDuration:                     opts.WriterFlushMaxDuration,
+		flushBuildConcurrency:                      opts.FlushBuildConcurrency,
+		flushBuildAutoConcurrency:                  flushBuildAutoConcurrency,
+		flushBuildMinEntries:                       opts.FlushBuildMinEntries,
+		flushBuildMinUnits:                         opts.FlushBuildMinUnits,
+		flushBuildChunkCap:                         opts.FlushBuildChunkCap,
+		flushBuildChunkTarget:                      opts.FlushBuildChunkTargetBytes,
+		flushBuildChunkMinBytes:                    opts.FlushBuildChunkMinBytes,
+		flushBuildChunkMaxBytes:                    opts.FlushBuildChunkMaxBytes,
+		flushBuildPrefetchUnits:                    opts.FlushBuildPrefetchUnits,
+		flushApplyConcurrency:                      opts.FlushApplyConcurrency,
+		flushApplyMinEntries:                       opts.FlushApplyMinEntries,
+		flushApplyMinSpans:                         opts.FlushApplyMinSpans,
+		flushApplyMinBytes:                         opts.FlushApplyMinBytes,
+		flushApplySpanNative:                       opts.FlushApplySpanNative,
+		flushBackendMaxEntries:                     opts.FlushBackendMaxEntries,
+		flushBackendInitEntries:                    flushBackendInitEntries,
+		flushBackendMaxBatches:                     opts.FlushBackendMaxBatches,
+		flushSpanRunTargetPlanning:                 opts.FlushSpanRunTargetPlanning,
+		flushBacklogCoalescing:                     opts.FlushBacklogCoalescing,
+		flushBacklogCoalescingMaxMemtables:         opts.FlushBacklogCoalescingMaxMemtables,
+		flushBacklogCoalescingMaxBytes:             opts.FlushBacklogCoalescingMaxBytes,
+		flushBacklogCoalescingMaxOps:               opts.FlushBacklogCoalescingMaxOps,
+		flushBacklogCoalescingMinAge:               opts.FlushBacklogCoalescingMinAge,
+		flushBacklogCoalescingSingleOpSpanRatioPPM: ratioToPPM(opts.FlushBacklogCoalescingSingleOpSpanRatio, flushBacklogCoalescingDefaultSingleOpSpanRatioPPM),
+		flushBacklogCoalescingMaxOpsPerSpanPPM:     opsPerSpanToPPM(opts.FlushBacklogCoalescingMaxOpsPerSpan, flushBacklogCoalescingDefaultMaxOpsPerSpanPPM),
+		flushBacklogCoalescingMinOldLeafBytesPerOp: opts.FlushBacklogCoalescingMinOldLeafBytesPerOp,
+		walMaxSegmentBytes:                         opts.WALMaxSegmentBytes,
+		valueLogMaxSegmentBytes:                    valueLogMaxSegmentBytes,
+		journalCompression:                         opts.JournalCompression,
+		disableJournal:                             disableJournal,
+		disableValueLog:                            false,
+		splitValueLog:                              true,
+		relaxedSync:                                opts.RelaxedSync,
+		notifyError:                                opts.NotifyError,
+		inlineThreshold:                            inlineThreshold,
+		valueLogThreshold:                          valueLogThreshold,
+		valueLogDomainThresholds:                   valueLogDomainThresholds,
+		forceValueLogPointers:                      opts.ForceValueLogPointers,
+		valueLogRawWritevMinAvgBytes:               valueLogRawWritevMinAvgBytes,
+		valueLogRawWritevMinRecords:                valueLogRawWritevMinRecords,
+		valueLogCompressionMode:                    uint8(valueLogCompressionMode),
+		valueLogBlockCodec:                         valueLogBlockCodec,
+		valueLogBlockTargetBytes:                   valueLogBlockTargetBytes,
+		valueLogIncompressibleHold:                 uint64(valueLogIncompressibleHold),
+		valueLogIncompressibleProbe:                uint64(valueLogIncompressibleProbe),
+		valueLogAutoPolicy:                         uint8(valueLogAutoPolicy),
+		valueLogGenerationPolicy:                   valueLogGenerationPolicyUint8,
+		valueLogGenerationLeafTarget:               valueLogGenerationLeafTarget,
+		valueLogGenerationHotTarget:                valueLogGenerationHotTarget,
+		valueLogGenerationWarmTarget:               valueLogGenerationWarmTarget,
+		valueLogGenerationColdTarget:               valueLogGenerationColdTarget,
+		valueLogRewriteBudgetBytes:                 valueLogRewriteBudgetBytes,
+		valueLogRewriteBudgetRecords:               valueLogRewriteBudgetRecords,
+		valueLogRewriteTriggerRatioPPM:             valueLogRewriteTriggerRatioPPM,
+		valueLogRewriteTriggerBytes:                valueLogRewriteTriggerBytes,
+		valueLogRewriteTriggerChurn:                valueLogRewriteTriggerChurn,
+		valueLogRewriteMinSegmentAge:               valueLogRewriteMinSegmentAge,
+		memtableValueLogPointers:                   true,
+		indexOuterLeavesInValueLog:                 opts.IndexOuterLeavesInValueLog,
+		valueLogReader:                             valueLogReader,
+		valueLogRetain:                             retained,
+		debugFlushPointers:                         debugFlushPointers,
+		debugFlushTiming:                           debugFlushTiming,
+		maxValueLogRetainedBytes:                   opts.MaxValueLogRetainedBytes,
+		maxValueLogRetainedBytesHard:               opts.MaxValueLogRetainedBytesHard,
+		valueLogDictTrain:                          valueLogDictTrain,
+		valueLogDictMaxK:                           valueLogDictMaxK,
+		valueLogDictClassMode:                      uint8(valueLogDictClassMode),
+		valueLogDictFrameEncodeLevel:               valueLogDictFrameEncodeLevel,
+		valueLogDictFrameEnableEntropy:             valueLogDictFrameEnableEntropy,
+		valueLogDictAdaptiveRatio:                  valueLogDictAdaptiveRatio,
+		valueLogDictMinPayloadSavings:              minPayloadSavings,
+		valueLogDictMetricsWindow:                  valueLogDictMetricsWindow,
+		valueLogDictMetricsMinRecords:              valueLogDictMetricsMinRecords,
+		valueLogDictMetricsPauseBytes:              valueLogDictMetricsPauseBytes,
+		valueLogDictProbeBytes:                     uint64(probeBytes),
+		valueLogDictIncompressibleHoldBytes:        uint64(incompressibleHoldBytes),
+		valueLogDictIncompressibleProbeBytes:       uint64(incompressibleProbeBytes),
+		valueLogDictPausedSampleStride:             pausedSampleStride,
+		valueLogAutotuneOptions:                    valueLogAutotune,
+		valueLogAutotuneCandidateKSet:              valueLogAutotuneCandidateKSet,
+		valueLogTemplateEnabled:                    valueLogTemplateEnabled,
+		valueLogTemplateMode:                       valueLogTemplateMode,
+		valueLogTemplateReadStrict:                 false,
+		valueLogTemplateDecodeOpts:                 valueLogTemplateDecodeOpts,
+		valueLogTemplateEngine:                     nil,
+		mutableShards:                              mutableShards,
+		mutableShardMask:                           uint64(shardCount - 1),
+		hashSortedIndexer:                          indexer,
+		closeCh:                                    make(chan struct{}),
+		flushCh:                                    make(chan struct{}, 1),
+		flushCoordinatorWaitCh:                     make(chan struct{}),
+		autoCheckpointOnceCh:                       make(chan struct{}, 1),
+		autoCheckpointWriteCh:                      make(chan struct{}, 1),
+		lanes:                                      lanes,
+		flushLaneMu:                                make([]sync.Mutex, len(lanes)),
 	}
 	db.storeMemtableMode(mode)
 	if opts.IndexOuterLeavesInValueLog {
@@ -21734,7 +21805,7 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 				return flushed
 			}
 		}
-		okFlush := db.flushLaneOnce(sync, laneID)
+		okFlush := db.flushLaneOnceWithCollectionMode(sync, laneID, nil, flushCollectionForeground)
 		if laneID < len(db.flushLaneMu) {
 			db.flushLaneMu[laneID].Unlock()
 		}
@@ -21777,7 +21848,7 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 		if !ok {
 			return flushed
 		}
-		okFlush := db.flushLaneOnce(sync, laneID)
+		okFlush := db.flushLaneOnceWithCollectionMode(sync, laneID, nil, flushCollectionStop)
 		if !okFlush {
 			return flushed
 		}
@@ -24427,12 +24498,19 @@ type flushUnit struct {
 }
 
 func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes int64) ([]flushUnit, []uint64, int64, int) {
+	return db.collectFlushUnitsWithOpsLocked(laneID, maxMemtables, targetBytes, 0)
+}
+
+func (db *DB) collectFlushUnitsWithOpsLocked(laneID int, maxMemtables int, targetBytes int64, maxOps int) ([]flushUnit, []uint64, int64, int) {
 	queueLen := len(db.queue)
 	if queueLen == 0 {
 		return nil, nil, 0, 0
 	}
-	if maxMemtables <= 0 || maxMemtables > flushCombineMaxMemtables {
+	if maxMemtables <= 0 {
 		maxMemtables = flushCombineMaxMemtables
+	}
+	if maxMemtables > flushBacklogCoalescingHardMaxMemtables {
+		maxMemtables = flushBacklogCoalescingHardMaxMemtables
 	}
 	units := make([]flushUnit, 0, maxMemtables)
 	ids := make([]uint64, 0, maxMemtables)
@@ -24487,6 +24565,9 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		memBytes := mem.Size()
 		memLen := mem.Len()
 		if !spanOnly && len(units) > 0 && targetBytes > 0 && totalBytes >= targetBytes {
+			break
+		}
+		if !spanOnly && len(units) > 0 && maxOps > 0 && totalLen >= maxOps {
 			break
 		}
 		var walPaths []string
@@ -24626,31 +24707,19 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 }
 
 func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPublish *checkpointCommandWALPublish) bool {
+	return db.flushLaneOnceWithCollectionMode(sync, laneID, commandPublish, flushCollectionBackground)
+}
+
+func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode) bool {
 	db.mu.Lock()
 	queueLen := len(db.queue)
 	if queueLen == 0 {
 		db.mu.Unlock()
 		return false
 	}
-	maxMemtables := 1
-	targetBytes := int64(0)
-	if db.flushBuildConcurrency > 1 || db.deferredValueLogEnabled() {
-		maxMemtables = flushCombineMaxMemtables
-		targetBytes = flushCombineTargetBytes
-		// When FlushThreshold ~= flushCombineTargetBytes (the common default),
-		// combining is effectively disabled and large churny workloads are forced
-		// through multiple full apply passes. Allow combining several memtables per
-		// flush (bounded) to reduce repeated rewrite work.
-		desired := db.flushThreshold * 4
-		if desired > flushCombineTargetBytesMax {
-			desired = flushCombineTargetBytesMax
-		}
-		if desired > targetBytes {
-			targetBytes = desired
-		}
-	}
+	maxMemtables, targetBytes, maxOps := db.selectFlushUnitBudgetLocked(laneID, mode)
 	planStart := time.Now()
-	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
+	units, ids, totalBytes, totalLen := db.collectFlushUnitsWithOpsLocked(laneID, maxMemtables, targetBytes, maxOps)
 	planningDur := time.Since(planStart)
 	db.mu.Unlock()
 	if len(units) == 0 {

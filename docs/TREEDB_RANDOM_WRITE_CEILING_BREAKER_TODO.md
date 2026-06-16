@@ -131,6 +131,41 @@ additive counters.
 - `treedb.cache.flush_span_run.max_chunks_per_target_leaf`
 - `treedb.cache.flush_span_run.ops_per_run`
 
+M11 adds opt-in bounded backlog coalescing counters. These are cache-layer
+admission decisions only; they do not create a durable overlay or make queued
+work read-visible before canonical flush/apply publishes the backend root.
+
+Budget semantics are deliberately bounded but not byte/op-exact: max bytes and
+max ops are soft pre-next-memtable budgets, so the first eligible memtable is
+always flushable and a selected coalesced run can exceed those values by one
+whole memtable. Coalescing budgets also never tighten the pre-existing base
+flush collector. Pressure gates currently use cumulative M8/M10 apply/span
+counters; after a workload-shape change, eligibility decays as cumulative ratios
+move, with each admitted run still constrained by same-lane/range barriers and
+the explicit budgets.
+
+Counters:
+
+- `treedb.cache.flush_backlog_coalescing.enabled`
+- `treedb.cache.flush_backlog_coalescing.decisions_total`
+- `treedb.cache.flush_backlog_coalescing.admitted_runs_total`
+- `treedb.cache.flush_backlog_coalescing.admitted_extra_memtables_total`
+- `treedb.cache.flush_backlog_coalescing.admitted_extra_bytes_total`
+- `treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total`
+- `treedb.cache.flush_backlog_coalescing.selected_memtables_max`
+- `treedb.cache.flush_backlog_coalescing.selected_bytes_max`
+- `treedb.cache.flush_backlog_coalescing.selected_ops_max`
+- `treedb.cache.flush_backlog_coalescing.queued_memtables_max`
+- `treedb.cache.flush_backlog_coalescing.queued_bytes_max`
+- `treedb.cache.flush_backlog_coalescing.queued_age_ns_max`
+- `treedb.cache.flush_backlog_coalescing.last_single_op_span_ratio`
+- `treedb.cache.flush_backlog_coalescing.last_ops_per_span`
+- `treedb.cache.flush_backlog_coalescing.last_old_leaf_bytes_per_op`
+- `treedb.cache.flush_backlog_coalescing.skip.reason.<reason>_total` for
+  `disabled`, `no_pressure`, `queue_depth`, `queue_age`, `memory_budget`,
+  `ops_budget`, `memtable_budget`, `range_barrier`, `lane_barrier`,
+  `writer_stall_budget`, `checkpoint`, `close`, and `stop_pressure`.
+
 M8 included the deterministic `SummarizeFlushSpanRunChunkSplits` fixture for
 entry-count chunks that split target leaves. M9 keeps default writes on canonical
 multi-memtable runs with entry-count backend chunks, and keeps read-only

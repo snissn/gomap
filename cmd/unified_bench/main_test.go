@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
 )
 
@@ -2901,6 +2902,40 @@ func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
 	}
 }
 
+func TestTreeDBOptionsReportFlushBacklogCoalescingEffectiveDefaults(t *testing.T) {
+	rep := treeDBOptionsReport{opts: treedb.Options{FlushBacklogCoalescing: true}}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_backlog_coalescing=true",
+		"flush_backlog_coalescing_max_memtables=default (effective=64)",
+		"flush_backlog_coalescing_max_bytes=default (effective=536870912)",
+		"flush_backlog_coalescing_max_ops=default (effective=2097152)",
+		"flush_backlog_coalescing_single_op_ratio=default (effective=0.500000)",
+		"flush_backlog_coalescing_max_ops_per_span=default (effective=4.000000)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in resolved options, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestTreeDBOptionsReportFlushBacklogCoalescingEffectiveCaps(t *testing.T) {
+	rep := treeDBOptionsReport{opts: treedb.Options{
+		FlushBacklogCoalescing:                  true,
+		FlushBacklogCoalescingMaxMemtables:      256,
+		FlushBacklogCoalescingSingleOpSpanRatio: 2,
+	}}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_backlog_coalescing_max_memtables=256 (effective=128 cap)",
+		"flush_backlog_coalescing_single_op_ratio=2.000000 (effective=1.000000 cap)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in resolved options, got:\n%s", want, text)
+		}
+	}
+}
+
 func TestRenderTreeDBSelectedStatsString_SkipsDBsWithoutSelectedKeys(t *testing.T) {
 	instances := []*DBInstance{
 		{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}},
@@ -2934,6 +2969,9 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 			"treedb.cache.flush_span_run.target_leaf_spans_total":                                  "4",
 			"treedb.cache.flush_span_run.target_leaves_split_across_chunks_total":                  "1",
 			"treedb.cache.flush_span_run.single_op_span_ratio":                                     "0.250000",
+			"treedb.cache.flush_backlog_coalescing.admitted_runs_total":                            "2",
+			"treedb.cache.flush_backlog_coalescing.selected_memtables_max":                         "8",
+			"treedb.cache.flush_backlog_coalescing.skip.reason.memory_budget_total":                "1",
 			"treedb.cache.checkpoint.stage.reducer_publish.total_ns":                               "44",
 			"treedb.flush_apply.old_leaf_read_decode.bytes_per_op":                                 "2.200000",
 			"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
@@ -2948,6 +2986,9 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 		"flush_span_run.target_leaf_spans_total: 4",
 		"flush_span_run.target_leaves_split_across_chunks_total: 1",
 		"flush_span_run.single_op_span_ratio: 0.250000",
+		"flush_backlog_coalescing.admitted_runs_total: 2",
+		"flush_backlog_coalescing.selected_memtables_max: 8",
+		"flush_backlog_coalescing.skip.memory_budget_total: 1",
 		"checkpoint.stage.reducer_publish.total_ns: 44",
 		"flush_apply.old_leaf_read_decode.bytes_per_op: 2.200000",
 		"flush_apply.span_native.fallback.not_implemented_ops_total: 10",
