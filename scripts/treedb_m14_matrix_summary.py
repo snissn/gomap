@@ -68,6 +68,7 @@ COUNTER_KEYS = (
     "treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total",
     "treedb.cache.checkpoint.active_background_flush_wait_ns_total",
     "treedb.cache.checkpoint.stage.value_log_flush.total_ns",
+    "treedb.cache.checkpoint.stage.flush_all.total_ns",
     "treedb.cache.checkpoint.stage.leaf_value_log_sync.total_ns",
     "treedb.cache.checkpoint.stage.reducer_publish.total_ns",
     "treedb.cache.flush_backlog_coalescing.admitted_runs_total",
@@ -390,6 +391,9 @@ def render_markdown(root: Path, rows: List[MatrixRow], baseline_label: str = "")
         ("active assist skips", "treedb.cache.flush_apply.coordinator.active_assist_skips_total"),
         ("stall waits", "treedb.cache.flush_apply.coordinator.stall_waits_total"),
         ("checkpoint bg wait ns", "treedb.cache.checkpoint.active_background_flush_wait_ns_total"),
+        ("checkpoint flush_all ns", "treedb.cache.checkpoint.stage.flush_all.total_ns"),
+        ("checkpoint leaf sync ns", "treedb.cache.checkpoint.stage.leaf_value_log_sync.total_ns"),
+        ("checkpoint reducer ns", "treedb.cache.checkpoint.stage.reducer_publish.total_ns"),
         ("coalesced extra ops", "treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total"),
     ]
     lines.append("| Row | " + " | ".join(c[0] for c in counter_cols) + " |")
@@ -464,6 +468,7 @@ def _self_test() -> None:
                                     "treedb.cache.flush_apply.leaf_log_append_frames_per_op": "0.25",
                                     "treedb.flush_apply.span_native.used_ops_total": "100",
                                     "treedb.flush_apply.span_native.fallbacks_total": "0",
+                                    "treedb.cache.checkpoint.stage.flush_all.total_ns": "303",
                                 }
                             },
                         }
@@ -545,9 +550,11 @@ TreeDB:
         assert got.checkpoints["After Run"] == "4.00s", got.checkpoints
         assert got.disk_usage["maindb/leaf_vlog"].startswith("total=2 MiB")
         assert got.counters["treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total"] == "42"
+        assert got.counters["treedb.cache.checkpoint.stage.flush_all.total_ns"] == "303"
         md = render_markdown(root, rows, "span_native_c4")
         assert "TreeDB M14 final-gate matrix summary" in md
         assert "span_native_c4" in md
+        assert "checkpoint flush_all ns" in md
         write_outputs(root, rows, "span_native_c4")
         assert (root / "m14_matrix_summary.json").exists()
         assert (root / "m14_matrix_summary.md").exists()
