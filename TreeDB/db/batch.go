@@ -69,6 +69,10 @@ func (db *DB) NewPhysicalBatchWithSize(size int) batch.Interface {
 	return b
 }
 
+// SetFlushApplySpanNativeFallback forces this internal batch's span-native
+// candidate path to use fallback accounting with reason. It is used by cached
+// checkpoint/close drains and tests; callers outside TreeDB internals should not
+// rely on it as a stable public API.
 func (b *Batch) SetFlushApplySpanNativeFallback(reason FlushSpanRunFallbackReason) {
 	if b == nil {
 		return
