@@ -1099,12 +1099,12 @@ func TestZipperMergeScratch_TrimsPendingLeafPageScratchCaches(t *testing.T) {
 	for i := 0; i < mergeChildRefBatchKeep+16; i++ {
 		s.releaseChildRefBatch(make([]page.ChildRef, 0, 1))
 	}
-	s.releaseSpanWorkerRanges(make([]ReadOnlyLeafSpanWorkerRange, 0, mergeSpanNativeRangeScratchMaxCap+1))
-	s.releaseSpanWorkerScratchSlots(make([]*mergeScratch, 0, mergeSpanNativeRangeScratchMaxCap+1))
-	s.releaseSpanRangeMetrics(make([]adaptive.Metrics, 0, mergeSpanNativeRangeScratchMaxCap+1))
-	s.releaseSpanRangeRetired(make([][]uint64, 0, mergeSpanNativeRangeScratchMaxCap+1))
-	s.releaseSpanRangeSplits(make([]spanNativeLeafSplitRange, 0, mergeSpanNativeRangeScratchMaxCap+1))
-	s.releaseSpanRootRefs(make([]Split, 0, mergeSpanNativeRootRefMaxCap+1))
+	s.spanWorkerRangeScratch = make([]ReadOnlyLeafSpanWorkerRange, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanWorkerScratchScratch = make([]*mergeScratch, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanRangeMetricsScratch = make([]adaptive.Metrics, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanRangeRetiredScratch = make([][]uint64, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanRangeSplitsScratch = make([]spanNativeLeafSplitRange, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanRootRefsScratch = make([]Split, 0, mergeSpanNativeRootRefMaxCap+1)
 	z.releaseApplyScratch(s)
 
 	reused := z.acquireApplyScratch()
