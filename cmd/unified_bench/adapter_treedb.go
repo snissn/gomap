@@ -40,6 +40,14 @@ var (
 	treedbFlushBackendMaxEntries          = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
 	treedbFlushBackendMaxBatches          = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
 	treedbFlushSpanRunTargetPlanning      = flag.Bool("treedb-flush-span-run-target-planning", false, "TreeDB (cached): diagnostic opt-in read-only target-leaf planning for canonical flush runs")
+	treedbFlushBacklogCoalescing          = flag.Bool("treedb-flush-backlog-coalescing", false, "TreeDB (cached): opt-in M11 bounded adaptive backlog coalescing controller")
+	treedbFlushBacklogCoalescingMaxMems   = flag.Int("treedb-flush-backlog-coalescing-max-memtables", 0, "TreeDB (cached): M11 coalescing max memtables per run (0=default)")
+	treedbFlushBacklogCoalescingMaxBytes  = flag.Int64("treedb-flush-backlog-coalescing-max-bytes", 0, "TreeDB (cached): M11 coalescing max queued bytes per run (0=default)")
+	treedbFlushBacklogCoalescingMaxOps    = flag.Int("treedb-flush-backlog-coalescing-max-ops", 0, "TreeDB (cached): M11 coalescing max point ops per run (0=default)")
+	treedbFlushBacklogCoalescingMinAgeMS  = flag.Int("treedb-flush-backlog-coalescing-min-age-ms", 0, "TreeDB (cached): M11 coalescing oldest queued memtable age floor in ms (0=none)")
+	treedbFlushBacklogCoalescingRatio     = flag.Float64("treedb-flush-backlog-coalescing-single-op-ratio", 0, "TreeDB (cached): M11 coalescing single-op span ratio trigger (0=default)")
+	treedbFlushBacklogCoalescingOpsSpan   = flag.Float64("treedb-flush-backlog-coalescing-max-ops-per-span", 0, "TreeDB (cached): M11 coalescing max observed ops/span trigger (0=default)")
+	treedbFlushBacklogCoalescingOldLeafB  = flag.Float64("treedb-flush-backlog-coalescing-min-old-leaf-bytes-per-op", 0, "TreeDB (cached): M11 coalescing min old-leaf decode bytes/op trigger (0=disabled)")
 	treedbPagerSyncConcurrency            = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
 	treedbPagerMmapPopulate               = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
 	treedbPagerPrefetchOnRead             = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
@@ -363,6 +371,14 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("flush_apply_min_bytes_configured=%d", r.opts.FlushApplyMinBytes))
 	lines = append(lines, fmt.Sprintf("flush_apply_span_native=%t", r.opts.FlushApplySpanNative))
 	lines = append(lines, fmt.Sprintf("flush_span_run_target_planning=%t", r.opts.FlushSpanRunTargetPlanning))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing=%t", r.opts.FlushBacklogCoalescing))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_memtables=%d", r.opts.FlushBacklogCoalescingMaxMemtables))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_bytes=%d", r.opts.FlushBacklogCoalescingMaxBytes))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops=%d", r.opts.FlushBacklogCoalescingMaxOps))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_min_age_ms=%d", r.opts.FlushBacklogCoalescingMinAge/time.Millisecond))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_single_op_ratio=%.6f", r.opts.FlushBacklogCoalescingSingleOpSpanRatio))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops_per_span=%.6f", r.opts.FlushBacklogCoalescingMaxOpsPerSpan))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_min_old_leaf_bytes_per_op=%.6f", r.opts.FlushBacklogCoalescingMinOldLeafBytesPerOp))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
 	threshold := r.opts.ValueLog.PointerThreshold
@@ -662,31 +678,39 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		IndexInternalBaseDelta:     internalBaseDeltaEffective,
 		IndexOuterLeavesInValueLog: *treedbIndexOuterLeavesInVlog,
 
-		MemtableMode:               *treedbMemtableMode,
-		DomainIngressWorkers:       *treedbDomainIngressWorkers,
-		DomainIngressQueueSize:     *treedbDomainIngressQueueSize,
-		FlushThreshold:             *treedbFlushThreshold,
-		MaxQueuedMemtables:         *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds:     *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:         *treedbStopBacklogSeconds,
-		MaxBacklogBytes:            *treedbMaxBacklogBytes,
-		WriterFlushMaxMemtables:    *treedbWriterFlushMaxMems,
-		FlushBuildConcurrency:      *treedbFlushBuildConcurrency,
-		FlushBuildMinEntries:       *treedbFlushBuildMinEntries,
-		FlushBuildMinUnits:         *treedbFlushBuildMinUnits,
-		FlushBuildChunkCap:         *treedbFlushBuildChunkCap,
-		FlushBuildChunkTargetBytes: *treedbFlushBuildChunkTarget,
-		FlushBuildChunkMinBytes:    *treedbFlushBuildChunkMinBytes,
-		FlushBuildChunkMaxBytes:    *treedbFlushBuildChunkMaxBytes,
-		FlushBuildPrefetchUnits:    *treedbFlushBuildPrefetchUnits,
-		FlushApplyConcurrency:      *treedbFlushApplyConcurrency,
-		FlushApplyMinEntries:       *treedbFlushApplyMinEntries,
-		FlushApplyMinSpans:         *treedbFlushApplyMinSpans,
-		FlushApplyMinBytes:         *treedbFlushApplyMinBytes,
-		FlushApplySpanNative:       *treedbFlushApplySpanNative,
-		FlushBackendMaxEntries:     *treedbFlushBackendMaxEntries,
-		FlushBackendMaxBatches:     *treedbFlushBackendMaxBatches,
-		FlushSpanRunTargetPlanning: *treedbFlushSpanRunTargetPlanning,
+		MemtableMode:                               *treedbMemtableMode,
+		DomainIngressWorkers:                       *treedbDomainIngressWorkers,
+		DomainIngressQueueSize:                     *treedbDomainIngressQueueSize,
+		FlushThreshold:                             *treedbFlushThreshold,
+		MaxQueuedMemtables:                         *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:                     *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:                         *treedbStopBacklogSeconds,
+		MaxBacklogBytes:                            *treedbMaxBacklogBytes,
+		WriterFlushMaxMemtables:                    *treedbWriterFlushMaxMems,
+		FlushBuildConcurrency:                      *treedbFlushBuildConcurrency,
+		FlushBuildMinEntries:                       *treedbFlushBuildMinEntries,
+		FlushBuildMinUnits:                         *treedbFlushBuildMinUnits,
+		FlushBuildChunkCap:                         *treedbFlushBuildChunkCap,
+		FlushBuildChunkTargetBytes:                 *treedbFlushBuildChunkTarget,
+		FlushBuildChunkMinBytes:                    *treedbFlushBuildChunkMinBytes,
+		FlushBuildChunkMaxBytes:                    *treedbFlushBuildChunkMaxBytes,
+		FlushBuildPrefetchUnits:                    *treedbFlushBuildPrefetchUnits,
+		FlushApplyConcurrency:                      *treedbFlushApplyConcurrency,
+		FlushApplyMinEntries:                       *treedbFlushApplyMinEntries,
+		FlushApplyMinSpans:                         *treedbFlushApplyMinSpans,
+		FlushApplyMinBytes:                         *treedbFlushApplyMinBytes,
+		FlushApplySpanNative:                       *treedbFlushApplySpanNative,
+		FlushBackendMaxEntries:                     *treedbFlushBackendMaxEntries,
+		FlushBackendMaxBatches:                     *treedbFlushBackendMaxBatches,
+		FlushSpanRunTargetPlanning:                 *treedbFlushSpanRunTargetPlanning,
+		FlushBacklogCoalescing:                     *treedbFlushBacklogCoalescing,
+		FlushBacklogCoalescingMaxMemtables:         *treedbFlushBacklogCoalescingMaxMems,
+		FlushBacklogCoalescingMaxBytes:             *treedbFlushBacklogCoalescingMaxBytes,
+		FlushBacklogCoalescingMaxOps:               *treedbFlushBacklogCoalescingMaxOps,
+		FlushBacklogCoalescingMinAge:               time.Duration(*treedbFlushBacklogCoalescingMinAgeMS) * time.Millisecond,
+		FlushBacklogCoalescingSingleOpSpanRatio:    *treedbFlushBacklogCoalescingRatio,
+		FlushBacklogCoalescingMaxOpsPerSpan:        *treedbFlushBacklogCoalescingOpsSpan,
+		FlushBacklogCoalescingMinOldLeafBytesPerOp: *treedbFlushBacklogCoalescingOldLeafB,
 
 		JournalLanes:               *treedbJournalLanes,
 		JournalCompression:         *treedbJournalCompress,

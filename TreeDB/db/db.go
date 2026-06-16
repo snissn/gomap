@@ -1019,6 +1019,33 @@ type Options struct {
 	// traversal unless this diagnostic knob is explicitly enabled.
 	FlushSpanRunTargetPlanning bool
 
+	// FlushBacklogCoalescing enables the M11 bounded adaptive cached-flush
+	// coalescing controller. It is default-off; when enabled the cache layer may
+	// include additional already-sealed eligible memtables in one canonical flush
+	// run under observed single-op-span pressure and explicit budgets.
+	FlushBacklogCoalescing bool
+	// FlushBacklogCoalescingMaxMemtables bounds memtables per coalesced point run
+	// (0=default, capped internally).
+	FlushBacklogCoalescingMaxMemtables int
+	// FlushBacklogCoalescingMaxBytes bounds queued bytes per coalesced point run
+	// (0=default).
+	FlushBacklogCoalescingMaxBytes int64
+	// FlushBacklogCoalescingMaxOps bounds queued point ops per coalesced point run
+	// (0=default).
+	FlushBacklogCoalescingMaxOps int
+	// FlushBacklogCoalescingMinAge requires the oldest queued memtable to be at
+	// least this old before adaptive coalescing admits extra work (0=no age floor).
+	FlushBacklogCoalescingMinAge time.Duration
+	// FlushBacklogCoalescingSingleOpSpanRatio is the observed single-op span ratio
+	// that triggers coalescing (0=default).
+	FlushBacklogCoalescingSingleOpSpanRatio float64
+	// FlushBacklogCoalescingMaxOpsPerSpan is the observed ops/span ceiling that
+	// still counts as single-op pressure (0=default).
+	FlushBacklogCoalescingMaxOpsPerSpan float64
+	// FlushBacklogCoalescingMinOldLeafBytesPerOp optionally requires observed
+	// old-leaf decode bytes/op before coalescing (0=disabled).
+	FlushBacklogCoalescingMinOldLeafBytesPerOp float64
+
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int

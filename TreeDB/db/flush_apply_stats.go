@@ -267,6 +267,37 @@ func (db *DB) FlushApplyReducerPublishNs() uint64 {
 	return db.flushApplyRootReduceNs.Load() + db.flushApplyGuardedPublishNs.Load()
 }
 
+// FlushApplyPressureSnapshot is a cheap cumulative snapshot of the M8/M10
+// apply pressure counters used by the cached flush backlog coalescing policy.
+// It intentionally mirrors existing Stats() counters without requiring a map
+// allocation on the flush hot path.
+type FlushApplyPressureSnapshot struct {
+	ApplyOps                     uint64
+	ReadOnlyPrepareSpans         uint64
+	ReadOnlyPrepareSingleOpSpans uint64
+	ReadOnlyPrepareSpanOps       uint64
+	ReadOnlyPrepareSpanBytes     uint64
+	OldLeafReadDecodeBytes       uint64
+}
+
+// FlushApplyPressureSnapshot returns cumulative span/old-leaf pressure counters
+// without constructing the full Stats map.
+func (db *DB) FlushApplyPressureSnapshot() FlushApplyPressureSnapshot {
+	if db == nil {
+		return FlushApplyPressureSnapshot{}
+	}
+	pagerBytes := db.flushApplyOldPagerNodeBytesRead.Load()
+	leafLogBytes := db.flushApplyOldLeafLogNodeBytesRead.Load()
+	return FlushApplyPressureSnapshot{
+		ApplyOps:                     db.flushApplyOps.Load(),
+		ReadOnlyPrepareSpans:         db.flushApplyReadOnlyPrepareSpans.Load(),
+		ReadOnlyPrepareSingleOpSpans: db.flushApplyReadOnlyPrepareSingleOpSpans.Load(),
+		ReadOnlyPrepareSpanOps:       db.flushApplyReadOnlyPrepareSpanOps.Load(),
+		ReadOnlyPrepareSpanBytes:     db.flushApplyReadOnlyPrepareSpanBytes.Load(),
+		OldLeafReadDecodeBytes:       pagerBytes + leafLogBytes,
+	}
+}
+
 func (db *DB) observeFlushApplyRetry() {
 	if db == nil {
 		return
