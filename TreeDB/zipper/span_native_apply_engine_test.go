@@ -122,6 +122,57 @@ func TestSpanNativeApplySparseMultiLeafParentStitchParity(t *testing.T) {
 	}
 }
 
+func TestSpanNativeApplyConcurrentWorkerLocalScratchSplitParity(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	_, native := newReadOnlyPrepareZipper(t)
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 4096)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	value := bytes.Repeat([]byte("v"), 180)
+	for _, anchor := range []int{17, 1029, 2053, 3079} {
+		for j := 0; j < 48; j++ {
+			key := []byte(fmt.Sprintf("key-%06d-%03d", anchor, j))
+			if err := delta.Set(key, value); err != nil {
+				t.Fatalf("Set anchor=%d j=%d: %v", anchor, j, err)
+			}
+		}
+	}
+
+	prepared, err := native.PrepareReadOnly(nativeRoot, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if len(prepared.LeafSpans) < 4 {
+		t.Fatalf("prepared spans=%d want at least 4 worker ranges", len(prepared.LeafSpans))
+	}
+	pool := NewApplyWorkerPool(4)
+	defer pool.Close()
+
+	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
+	if err != nil {
+		t.Fatalf("serial Apply: %v", err)
+	}
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{
+		SpanNativeApply:          true,
+		ParallelApplyConcurrency: 4,
+		ParallelApplyWorkerPool:  pool,
+	})
+	if err != nil {
+		t.Fatalf("span-native ApplyWithOptions: %v", err)
+	}
+	if !result.SpanNativeEligible || !result.SpanNativeUsed || result.SpanNativeWorkers < 2 {
+		t.Fatalf("span-native flags eligible/used/workers=%v/%v/%d", result.SpanNativeEligible, result.SpanNativeUsed, result.SpanNativeWorkers)
+	}
+	if result.Metrics.Splits == 0 {
+		t.Fatalf("splits=%d want split outputs from worker-local scratch", result.Metrics.Splits)
+	}
+	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
+		t.Fatalf("concurrent span-native output mismatch")
+	}
+}
+
 func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	p, z := newReadOnlyPrepareZipper(t)
 	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 40)

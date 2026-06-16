@@ -19,8 +19,8 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	applyStart := time.Now()
 	var metrics adaptive.Metrics
 	metrics.ZipperApplyOps = len(ops)
-	scratch := z.acquireApplyScratch()
-	defer z.releaseApplyScratch(scratch)
+	coordinatorScratch := z.acquireApplyScratch()
+	defer z.releaseApplyScratch(coordinatorScratch)
 
 	spanCount := len(prepared.LeafSpans)
 	if workers <= 0 {
@@ -35,14 +35,23 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		workerRanges = append(workerRanges, ReadOnlyLeafSpanWorkerRange{FirstSpan: 0, SpanCount: spanCount, Ops: len(ops)})
 	}
 	workers = len(workerRanges)
-	outputs := scratch.acquireSpanNativeLeafOutputs(spanCount, z.outerLeavesInValueLog)
+	outputs := coordinatorScratch.acquireSpanNativeLeafOutputs(spanCount, z.outerLeavesInValueLog)
 	defer outputs.release()
+	workerScratches := make([]*mergeScratch, len(workerRanges))
+	defer func() {
+		for i := range workerScratches {
+			z.releaseApplyScratch(workerScratches[i])
+			workerScratches[i] = nil
+		}
+	}()
 	rangeMetrics := make([]adaptive.Metrics, len(workerRanges))
 	rangeRetired := make([][]uint64, len(workerRanges))
 	rangeSplits := make([]spanNativeLeafSplitRange, len(workerRanges))
 	var firstErr error
 	var errOnce sync.Once
 	runRange := func(_ int, job int) {
+		workerScratch := z.acquireApplyScratch()
+		workerScratches[job] = workerScratch
 		workerRange := workerRanges[job]
 		end := workerRange.FirstSpan + workerRange.SpanCount
 		var localMetrics adaptive.Metrics
@@ -56,7 +65,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		}
 		for i := workerRange.FirstSpan; i < end; i++ {
 			span := prepared.LeafSpans[i]
-			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, scratch, false, applyRunConfig{maxParallelWorkers: 1})
+			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, workerScratch, false, applyRunConfig{maxParallelWorkers: 1})
 			if err != nil {
 				releaseLocalSplits()
 				errOnce.Do(func() { firstErr = err })
@@ -101,7 +110,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	}
 
 	rootReduceStart := time.Now()
-	newRootID, err := z.reduceSpanNativeRootWithContext(rootID, spanNativeLeafReplacements{spans: prepared.LeafSpans, outputs: &outputs}, &metrics, &retired, scratch)
+	newRootID, err := z.reduceSpanNativeRootWithContext(rootID, spanNativeLeafReplacements{spans: prepared.LeafSpans, outputs: &outputs}, &metrics, &retired, coordinatorScratch)
 	metrics.ZipperRootReduceNs += time.Since(rootReduceStart).Nanoseconds()
 	metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 	if err != nil {
