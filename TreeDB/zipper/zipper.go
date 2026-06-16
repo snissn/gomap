@@ -159,7 +159,6 @@ const (
 	mergeChildRefBatchKeep            = 64
 	mergeChildRefBatchMaxCap          = 512
 	mergeSpanNativeOutputKeepCap      = 1 << 20
-	mergeSpanNativeOutputSplitKeepCap = 1024
 	mergeSpanNativeOutputLogKeepBytes = mergeSpanNativeOutputKeepCap * page.LogRecordRefSize
 	mergeSpanNativeOutputPageKeepCap  = mergeSpanNativeOutputKeepCap
 
@@ -172,17 +171,16 @@ const (
 )
 
 type mergeScratch struct {
-	mu                           sync.Mutex
-	splitKeyArena                []byte
-	outerLeafBuildPages          []*outerLeafBuildPage
-	leafPageScratch              [][]byte
-	nodeKeyScratch               [][]byte
-	pendingLeafPersistScratch    [][]pendingLeafPagePersist
-	leafPageBatchScratch         [][][]byte
-	childRefBatchScratch         [][]page.ChildRef
-	spanNativeOutputLogScratch   []byte
-	spanNativeOutputPageScratch  []uint64
-	spanNativeOutputSplitScratch []spanNativeLeafSplitOutput
+	mu                          sync.Mutex
+	splitKeyArena               []byte
+	outerLeafBuildPages         []*outerLeafBuildPage
+	leafPageScratch             [][]byte
+	nodeKeyScratch              [][]byte
+	pendingLeafPersistScratch   [][]pendingLeafPagePersist
+	leafPageBatchScratch        [][][]byte
+	childRefBatchScratch        [][]page.ChildRef
+	spanNativeOutputLogScratch  []byte
+	spanNativeOutputPageScratch []uint64
 }
 
 func newMergeScratch() *mergeScratch {
@@ -271,14 +269,6 @@ func (s *mergeScratch) reset() {
 		s.spanNativeOutputPageScratch = nil
 	} else {
 		s.spanNativeOutputPageScratch = s.spanNativeOutputPageScratch[:0]
-	}
-	if cap(s.spanNativeOutputSplitScratch) > 0 {
-		clear(s.spanNativeOutputSplitScratch[:cap(s.spanNativeOutputSplitScratch)])
-	}
-	if cap(s.spanNativeOutputSplitScratch) > mergeSpanNativeOutputSplitKeepCap {
-		s.spanNativeOutputSplitScratch = nil
-	} else {
-		s.spanNativeOutputSplitScratch = s.spanNativeOutputSplitScratch[:0]
 	}
 }
 

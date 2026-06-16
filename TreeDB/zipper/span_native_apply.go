@@ -2,7 +2,6 @@ package zipper
 
 import (
 	"bytes"
-	"sort"
 	"sync"
 	"time"
 
@@ -39,7 +38,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	outputs := scratch.acquireSpanNativeLeafOutputs(spanCount, z.outerLeavesInValueLog)
 	rangeMetrics := make([]adaptive.Metrics, len(workerRanges))
 	rangeRetired := make([][]uint64, len(workerRanges))
-	rangeSplits := make([][]spanNativeLeafSplitOutput, len(workerRanges))
+	rangeSplits := make([]spanNativeLeafSplitRange, len(workerRanges))
 	var firstErr error
 	var errOnce sync.Once
 	runRange := func(_ int, job int) {
@@ -47,7 +46,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		end := workerRange.FirstSpan + workerRange.SpanCount
 		var localMetrics adaptive.Metrics
 		var localRetired []uint64
-		var localSplits []spanNativeLeafSplitOutput
+		var localSplits [][]Split
 		for i := workerRange.FirstSpan; i < end; i++ {
 			span := prepared.LeafSpans[i]
 			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, scratch, false, applyRunConfig{maxParallelWorkers: 1})
@@ -60,12 +59,17 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 				return
 			}
 			if len(splits) > 0 {
-				localSplits = append(localSplits, spanNativeLeafSplitOutput{index: i, splits: splits})
+				if localSplits == nil {
+					localSplits = make([][]Split, workerRange.SpanCount)
+				}
+				localSplits[i-workerRange.FirstSpan] = splits
 			}
 		}
 		rangeMetrics[job] = localMetrics
 		rangeRetired[job] = localRetired
-		rangeSplits[job] = localSplits
+		if localSplits != nil {
+			rangeSplits[job] = spanNativeLeafSplitRange{start: workerRange.FirstSpan, splits: localSplits}
+		}
 	}
 	if err := workerPool.Run(workers, len(workerRanges), runRange); err != nil {
 		metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
@@ -78,8 +82,8 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		if len(rangeRetired[i]) > 0 {
 			retired = append(retired, rangeRetired[i]...)
 		}
-		if len(rangeSplits[i]) > 0 {
-			outputs.splitOutputs = append(outputs.splitOutputs, rangeSplits[i]...)
+		if len(rangeSplits[i].splits) > 0 {
+			outputs.splitRanges = append(outputs.splitRanges, rangeSplits[i])
 		}
 	}
 	if firstErr != nil {
@@ -148,16 +152,16 @@ const (
 	spanNativeLeafOutputLeafLogs
 )
 
-type spanNativeLeafSplitOutput struct {
-	index  int
-	splits []Split
+type spanNativeLeafSplitRange struct {
+	start  int
+	splits [][]Split
 }
 
 type spanNativeLeafOutputs struct {
-	mode         spanNativeLeafOutputMode
-	pageIDs      []uint64
-	leafLogRefs  []byte
-	splitOutputs []spanNativeLeafSplitOutput
+	mode        spanNativeLeafOutputMode
+	pageIDs     []uint64
+	leafLogRefs []byte
+	splitRanges []spanNativeLeafSplitRange
 }
 
 func (s *mergeScratch) acquireSpanNativeLeafOutputs(count int, leafLogs bool) spanNativeLeafOutputs {
@@ -176,7 +180,7 @@ func (s *mergeScratch) acquireSpanNativeLeafOutputs(count int, leafLogs bool) sp
 			s.spanNativeOutputLogScratch = s.spanNativeOutputLogScratch[:bytesNeeded]
 			refs = s.spanNativeOutputLogScratch
 		}
-		return spanNativeLeafOutputs{mode: spanNativeLeafOutputLeafLogs, leafLogRefs: refs, splitOutputs: s.acquireSpanNativeLeafSplitOutputs()}
+		return spanNativeLeafOutputs{mode: spanNativeLeafOutputLeafLogs, leafLogRefs: refs}
 	}
 	var pageIDs []uint64
 	if s == nil || cap(s.spanNativeOutputPageScratch) < count {
@@ -188,15 +192,7 @@ func (s *mergeScratch) acquireSpanNativeLeafOutputs(count int, leafLogs bool) sp
 		s.spanNativeOutputPageScratch = s.spanNativeOutputPageScratch[:count]
 		pageIDs = s.spanNativeOutputPageScratch
 	}
-	return spanNativeLeafOutputs{mode: spanNativeLeafOutputPages, pageIDs: pageIDs, splitOutputs: s.acquireSpanNativeLeafSplitOutputs()}
-}
-
-func (s *mergeScratch) acquireSpanNativeLeafSplitOutputs() []spanNativeLeafSplitOutput {
-	if s == nil || cap(s.spanNativeOutputSplitScratch) == 0 {
-		return nil
-	}
-	s.spanNativeOutputSplitScratch = s.spanNativeOutputSplitScratch[:0]
-	return s.spanNativeOutputSplitScratch
+	return spanNativeLeafOutputs{mode: spanNativeLeafOutputPages, pageIDs: pageIDs}
 }
 
 func (o *spanNativeLeafOutputs) setRef(index int, ref page.ChildRef) error {
@@ -245,12 +241,18 @@ func (o *spanNativeLeafOutputs) output(index int) spanNativeLeafOutput {
 }
 
 func (o *spanNativeLeafOutputs) splits(index int) []Split {
-	if o == nil || len(o.splitOutputs) == 0 {
+	if o == nil || len(o.splitRanges) == 0 {
 		return nil
 	}
-	i := sort.Search(len(o.splitOutputs), func(i int) bool { return o.splitOutputs[i].index >= index })
-	if i < len(o.splitOutputs) && o.splitOutputs[i].index == index {
-		return o.splitOutputs[i].splits
+	for i := range o.splitRanges {
+		r := &o.splitRanges[i]
+		if index < r.start {
+			return nil
+		}
+		local := index - r.start
+		if local >= 0 && local < len(r.splits) {
+			return r.splits[local]
+		}
 	}
 	return nil
 }
