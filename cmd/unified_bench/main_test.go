@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
 )
 
@@ -2898,6 +2899,40 @@ func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
 	}
 	if !strings.Contains(md, "FakeDB: /tmp/bench-fake-100") || !strings.Contains(md, "FakeDB: /tmp/bench-fake-200") {
 		t.Fatalf("expected kept directory rows, got:\n%s", md)
+	}
+}
+
+func TestTreeDBOptionsReportFlushBacklogCoalescingEffectiveDefaults(t *testing.T) {
+	rep := treeDBOptionsReport{opts: treedb.Options{FlushBacklogCoalescing: true}}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_backlog_coalescing=true",
+		"flush_backlog_coalescing_max_memtables=default (effective=64)",
+		"flush_backlog_coalescing_max_bytes=default (effective=536870912)",
+		"flush_backlog_coalescing_max_ops=default (effective=2097152)",
+		"flush_backlog_coalescing_single_op_ratio=default (effective=0.500000)",
+		"flush_backlog_coalescing_max_ops_per_span=default (effective=4.000000)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in resolved options, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestTreeDBOptionsReportFlushBacklogCoalescingEffectiveCaps(t *testing.T) {
+	rep := treeDBOptionsReport{opts: treedb.Options{
+		FlushBacklogCoalescing:                  true,
+		FlushBacklogCoalescingMaxMemtables:      256,
+		FlushBacklogCoalescingSingleOpSpanRatio: 2,
+	}}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_backlog_coalescing_max_memtables=256 (effective=128 cap)",
+		"flush_backlog_coalescing_single_op_ratio=2.000000 (effective=1.000000 cap)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in resolved options, got:\n%s", want, text)
+		}
 	}
 }
 

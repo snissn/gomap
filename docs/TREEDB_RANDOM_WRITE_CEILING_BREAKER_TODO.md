@@ -133,7 +133,18 @@ additive counters.
 
 M11 adds opt-in bounded backlog coalescing counters. These are cache-layer
 admission decisions only; they do not create a durable overlay or make queued
-work read-visible before canonical flush/apply publishes the backend root:
+work read-visible before canonical flush/apply publishes the backend root.
+
+Budget semantics are deliberately bounded but not byte/op-exact: max bytes and
+max ops are soft pre-next-memtable budgets, so the first eligible memtable is
+always flushable and a selected coalesced run can exceed those values by one
+whole memtable. Coalescing budgets also never tighten the pre-existing base
+flush collector. Pressure gates currently use cumulative M8/M10 apply/span
+counters; after a workload-shape change, eligibility decays as cumulative ratios
+move, with each admitted run still constrained by same-lane/range barriers and
+the explicit budgets.
+
+Counters:
 
 - `treedb.cache.flush_backlog_coalescing.enabled`
 - `treedb.cache.flush_backlog_coalescing.decisions_total`

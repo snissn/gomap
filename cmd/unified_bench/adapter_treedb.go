@@ -20,6 +20,13 @@ import (
 
 const (
 	defaultTreeDBChunkSizeBytes int64 = 256 * 1024
+
+	defaultTreeDBFlushBacklogCoalescingMaxMemtables           = 64
+	defaultTreeDBFlushBacklogCoalescingHardMaxMemtables       = 128
+	defaultTreeDBFlushBacklogCoalescingMaxBytes         int64 = 512 << 20
+	defaultTreeDBFlushBacklogCoalescingMaxOps                 = 2 << 20
+	defaultTreeDBFlushBacklogCoalescingSingleOpRatio          = 0.5
+	defaultTreeDBFlushBacklogCoalescingMaxOpsPerSpan          = 4.0
 )
 
 var (
@@ -42,8 +49,8 @@ var (
 	treedbFlushSpanRunTargetPlanning      = flag.Bool("treedb-flush-span-run-target-planning", false, "TreeDB (cached): diagnostic opt-in read-only target-leaf planning for canonical flush runs")
 	treedbFlushBacklogCoalescing          = flag.Bool("treedb-flush-backlog-coalescing", false, "TreeDB (cached): opt-in M11 bounded adaptive backlog coalescing controller")
 	treedbFlushBacklogCoalescingMaxMems   = flag.Int("treedb-flush-backlog-coalescing-max-memtables", 0, "TreeDB (cached): M11 coalescing max memtables per run (0=default)")
-	treedbFlushBacklogCoalescingMaxBytes  = flag.Int64("treedb-flush-backlog-coalescing-max-bytes", 0, "TreeDB (cached): M11 coalescing max queued bytes per run (0=default)")
-	treedbFlushBacklogCoalescingMaxOps    = flag.Int("treedb-flush-backlog-coalescing-max-ops", 0, "TreeDB (cached): M11 coalescing max point ops per run (0=default)")
+	treedbFlushBacklogCoalescingMaxBytes  = flag.Int64("treedb-flush-backlog-coalescing-max-bytes", 0, "TreeDB (cached): M11 coalescing soft max queued bytes per run; first included memtable may exceed (0=default)")
+	treedbFlushBacklogCoalescingMaxOps    = flag.Int("treedb-flush-backlog-coalescing-max-ops", 0, "TreeDB (cached): M11 coalescing soft max point ops per run; first included memtable may exceed (0=default)")
 	treedbFlushBacklogCoalescingMinAgeMS  = flag.Int("treedb-flush-backlog-coalescing-min-age-ms", 0, "TreeDB (cached): M11 coalescing oldest queued memtable age floor in ms (0=none)")
 	treedbFlushBacklogCoalescingRatio     = flag.Float64("treedb-flush-backlog-coalescing-single-op-ratio", 0, "TreeDB (cached): M11 coalescing single-op span ratio trigger (0=default)")
 	treedbFlushBacklogCoalescingOpsSpan   = flag.Float64("treedb-flush-backlog-coalescing-max-ops-per-span", 0, "TreeDB (cached): M11 coalescing max observed ops/span trigger (0=default)")
@@ -331,6 +338,47 @@ func normalizeTreeDBMaintenanceMode(s string) (string, error) {
 	}
 }
 
+func formatTreeDBDefaultedInt(v, effective int) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%d)", effective)
+	}
+	return fmt.Sprintf("%d", v)
+}
+
+func formatTreeDBDefaultedInt64(v, effective int64) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%d)", effective)
+	}
+	return fmt.Sprintf("%d", v)
+}
+
+func formatTreeDBDefaultedFloat(v, effective float64) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%.6f)", effective)
+	}
+	return fmt.Sprintf("%.6f", v)
+}
+
+func formatTreeDBFlushBacklogCoalescingMaxMemtables(v int) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%d)", defaultTreeDBFlushBacklogCoalescingMaxMemtables)
+	}
+	if v > defaultTreeDBFlushBacklogCoalescingHardMaxMemtables {
+		return fmt.Sprintf("%d (effective=%d cap)", v, defaultTreeDBFlushBacklogCoalescingHardMaxMemtables)
+	}
+	return fmt.Sprintf("%d", v)
+}
+
+func formatTreeDBFlushBacklogCoalescingSingleOpRatio(v float64) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%.6f)", defaultTreeDBFlushBacklogCoalescingSingleOpRatio)
+	}
+	if v > 1 {
+		return fmt.Sprintf("%.6f (effective=1.000000 cap)", v)
+	}
+	return fmt.Sprintf("%.6f", v)
+}
+
 type treeDBOptionsReport struct {
 	opts            treedb.Options
 	maintenanceMode string
@@ -372,12 +420,12 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("flush_apply_span_native=%t", r.opts.FlushApplySpanNative))
 	lines = append(lines, fmt.Sprintf("flush_span_run_target_planning=%t", r.opts.FlushSpanRunTargetPlanning))
 	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing=%t", r.opts.FlushBacklogCoalescing))
-	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_memtables=%d", r.opts.FlushBacklogCoalescingMaxMemtables))
-	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_bytes=%d", r.opts.FlushBacklogCoalescingMaxBytes))
-	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops=%d", r.opts.FlushBacklogCoalescingMaxOps))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_memtables=%s", formatTreeDBFlushBacklogCoalescingMaxMemtables(r.opts.FlushBacklogCoalescingMaxMemtables)))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_bytes=%s", formatTreeDBDefaultedInt64(r.opts.FlushBacklogCoalescingMaxBytes, defaultTreeDBFlushBacklogCoalescingMaxBytes)))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops=%s", formatTreeDBDefaultedInt(r.opts.FlushBacklogCoalescingMaxOps, defaultTreeDBFlushBacklogCoalescingMaxOps)))
 	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_min_age_ms=%d", r.opts.FlushBacklogCoalescingMinAge/time.Millisecond))
-	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_single_op_ratio=%.6f", r.opts.FlushBacklogCoalescingSingleOpSpanRatio))
-	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops_per_span=%.6f", r.opts.FlushBacklogCoalescingMaxOpsPerSpan))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_single_op_ratio=%s", formatTreeDBFlushBacklogCoalescingSingleOpRatio(r.opts.FlushBacklogCoalescingSingleOpSpanRatio)))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops_per_span=%s", formatTreeDBDefaultedFloat(r.opts.FlushBacklogCoalescingMaxOpsPerSpan, defaultTreeDBFlushBacklogCoalescingMaxOpsPerSpan)))
 	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_min_old_leaf_bytes_per_op=%.6f", r.opts.FlushBacklogCoalescingMinOldLeafBytesPerOp))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 

@@ -53,12 +53,27 @@ func highSingleOpCoalescingSnapshot() backenddb.FlushApplyPressureSnapshot {
 
 func enqueuePointMemtables(t *testing.T, db *DB, n int, keyPrefix string) {
 	t.Helper()
+	enqueuePointMemtablesWithOps(t, db, repeatInt(n, 1), keyPrefix)
+}
+
+func repeatInt(n, value int) []int {
+	out := make([]int, n)
+	for i := range out {
+		out[i] = value
+	}
+	return out
+}
+
+func enqueuePointMemtablesWithOps(t *testing.T, db *DB, opsPerMemtable []int, keyPrefix string) {
+	t.Helper()
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	for i := 0; i < n; i++ {
-		setMutable(db, []byte(fmt.Sprintf("%s-%03d", keyPrefix, i)), []byte("value"))
+	for memIndex, ops := range opsPerMemtable {
+		for opIndex := 0; opIndex < ops; opIndex++ {
+			setMutable(db, []byte(fmt.Sprintf("%s-%03d-%03d", keyPrefix, memIndex, opIndex)), []byte("value"))
+		}
 		if err := db.rotateMemtableLocked(false); err != nil {
-			t.Fatalf("rotate %d: %v", i, err)
+			t.Fatalf("rotate %d: %v", memIndex, err)
 		}
 	}
 }
@@ -188,6 +203,26 @@ func TestFlushBacklogCoalescingBudgetSkipCounters(t *testing.T) {
 			t.Fatalf("memory budget skip=%d want >0", got)
 		}
 	})
+}
+
+func TestFlushBacklogCoalescingOpsBudgetAllowsOneWholeMemtableOvershoot(t *testing.T) {
+	db, _ := newCoalescingTestDB(t, Options{
+		FlushBacklogCoalescing:                  true,
+		FlushBacklogCoalescingMaxMemtables:      8,
+		FlushBacklogCoalescingMaxOps:            2,
+		FlushBacklogCoalescingSingleOpSpanRatio: 0.5,
+		FlushBacklogCoalescingMaxOpsPerSpan:     2,
+	}, highSingleOpCoalescingSnapshot())
+	enqueuePointMemtablesWithOps(t, db, []int{1, 3, 1}, "opsoft")
+
+	db.flushAll(false)
+
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.selected_ops_max"); got != 4 {
+		t.Fatalf("selected_ops_max=%d want 4; max-ops is a soft pre-next-memtable budget", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.skip.reason.ops_budget_total"); got == 0 {
+		t.Fatalf("ops budget skip=%d want >0", got)
+	}
 }
 
 func TestFlushBacklogCoalescingPreservesLaneAndRangeBarriers(t *testing.T) {

@@ -1022,22 +1022,30 @@ type Options struct {
 	// FlushBacklogCoalescing enables the M11 bounded adaptive cached-flush
 	// coalescing controller. It is default-off; when enabled the cache layer may
 	// include additional already-sealed eligible memtables in one canonical flush
-	// run under observed single-op-span pressure and explicit budgets.
+	// run under observed cumulative single-op-span pressure and explicit budgets.
 	FlushBacklogCoalescing bool
 	// FlushBacklogCoalescingMaxMemtables bounds memtables per coalesced point run
-	// (0=default, capped internally).
+	// after preserving the pre-existing base collector minimum (0=default, capped
+	// internally).
 	FlushBacklogCoalescingMaxMemtables int
-	// FlushBacklogCoalescingMaxBytes bounds queued bytes per coalesced point run
-	// (0=default).
+	// FlushBacklogCoalescingMaxBytes is a soft queued-byte budget per coalesced
+	// point run. It is checked before adding the next memtable after at least one
+	// unit, so a selected run can exceed this value by one whole memtable and the
+	// budget never tightens the pre-existing base collector (0=default).
 	FlushBacklogCoalescingMaxBytes int64
-	// FlushBacklogCoalescingMaxOps bounds queued point ops per coalesced point run
-	// (0=default).
+	// FlushBacklogCoalescingMaxOps is a soft queued point-op budget per coalesced
+	// point run. It is checked before adding the next memtable after at least one
+	// unit, so a selected run can exceed this value by one whole memtable and the
+	// budget never tightens the pre-existing base collector (0=default).
 	FlushBacklogCoalescingMaxOps int
 	// FlushBacklogCoalescingMinAge requires the oldest queued memtable to be at
 	// least this old before adaptive coalescing admits extra work (0=no age floor).
 	FlushBacklogCoalescingMinAge time.Duration
 	// FlushBacklogCoalescingSingleOpSpanRatio is the observed single-op span ratio
-	// that triggers coalescing (0=default).
+	// that triggers coalescing (0=default). Pressure gates use cumulative apply/span
+	// counters; after workload-shape changes, eligibility may decay only as
+	// cumulative ratios change, while each admitted run remains bounded by the
+	// explicit budgets above.
 	FlushBacklogCoalescingSingleOpSpanRatio float64
 	// FlushBacklogCoalescingMaxOpsPerSpan is the observed ops/span ceiling that
 	// still counts as single-op pressure (0=default).
