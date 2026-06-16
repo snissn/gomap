@@ -253,6 +253,10 @@ def load_row(path: Path) -> MatrixRow:
         test_results = results.get(test, {}) or {}
         ops[test] = _to_float(test_results.get("TreeDB"))
     counters = {k: str(stats.get(k, "")) for k in COUNTER_KEYS if k in stats}
+    single_op_spans = _to_float(counters.get("treedb.flush_apply.span_run.single_op_spans_total"))
+    target_spans = _to_float(counters.get("treedb.flush_apply.span_run.target_leaf_spans_total"))
+    if single_op_spans is not None and target_spans not in (None, 0):
+        counters["derived.flush_apply.span_run.single_op_span_ratio"] = f"{single_op_spans / target_spans:.6f}"
     profiles = {
         "cpu_random_write": _profile_top(insights, "cpu_profiles", "random_write"),
         "cpu_batch_random": _profile_top(insights, "cpu_profiles", "batch_random"),
@@ -357,8 +361,8 @@ def render_markdown(root: Path, rows: List[MatrixRow], baseline_label: str = "")
         ("old leaf B/op", "treedb.flush_apply.old_leaf_read_decode.bytes_per_op"),
         ("leaf merges/op", "treedb.flush_apply.merge_build.leaf_merges_per_op"),
         ("append frames/op", "treedb.cache.flush_apply.leaf_log_append_frames_per_op"),
-        ("cache ops/span", "treedb.cache.flush_span_run.ops_per_span"),
-        ("cache single-op ratio", "treedb.cache.flush_span_run.single_op_span_ratio"),
+        ("apply ops/span", "treedb.flush_apply.span_run.ops_per_span"),
+        ("single-op span ratio", "derived.flush_apply.span_run.single_op_span_ratio"),
         ("target split leaves", "treedb.cache.flush_span_run.target_leaves_split_across_chunks_total"),
         ("span-native used ops", "treedb.flush_apply.span_native.used_ops_total"),
         ("fallbacks", "treedb.flush_apply.span_native.fallbacks_total"),
