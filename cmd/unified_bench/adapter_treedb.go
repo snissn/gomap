@@ -39,6 +39,7 @@ var (
 	treedbFlushBuildChunkMinBytes         = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
 	treedbFlushBuildChunkMaxBytes         = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
 	treedbFlushBuildPrefetchUnits         = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
+	treedbFlushAdmissionPolicy            = flag.String("treedb-flush-admission-policy", "explicit", "TreeDB: span-native/backlog/concurrency admission policy (explicit|off|auto; default explicit preserves existing opt-in flags)")
 	treedbFlushApplyConcurrency           = flag.Int("treedb-flush-apply-concurrency", 0, "TreeDB: opt-in flush/apply COW worker-pool concurrency (0/1=disabled)")
 	treedbFlushApplyMinEntries            = flag.Int("treedb-flush-apply-min-entries", 0, "TreeDB: minimum planned span ops to enable opt-in parallel apply (0=default)")
 	treedbFlushApplyMinSpans              = flag.Int("treedb-flush-apply-min-spans", 0, "TreeDB: minimum planned leaf spans to enable opt-in parallel apply (0=default)")
@@ -380,6 +381,14 @@ func formatTreeDBFlushBacklogCoalescingSingleOpRatio(v float64) string {
 	return fmt.Sprintf("%.6f", v)
 }
 
+func parseTreeDBFlushAdmissionPolicy(raw string) (treedb.FlushAdmissionPolicy, error) {
+	policy, err := treedbdb.ParseFlushAdmissionPolicy(raw)
+	if err != nil {
+		return policy, fmt.Errorf("TreeDB: %w", err)
+	}
+	return policy, nil
+}
+
 type treeDBOptionsReport struct {
 	opts            treedb.Options
 	maintenanceMode string
@@ -415,6 +424,11 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("outer_leaf_read_cache_write_admission=%s", r.opts.LeafPageReadCacheWriteAdmission.String()))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
+	admission := treedbdb.FlushAdmissionDecisionForOptions(r.opts)
+	lines = append(lines, fmt.Sprintf("flush_admission_policy=%s", admission.Policy.String()))
+	lines = append(lines, fmt.Sprintf("flush_admission_admitted=%t", admission.Admitted))
+	lines = append(lines, fmt.Sprintf("flush_admission_reason=%s", admission.Reason))
+	lines = append(lines, fmt.Sprintf("flush_admission_effective_concurrency=%d", admission.FlushApplyConcurrency))
 	lines = append(lines, fmt.Sprintf("flush_apply_concurrency=%d", r.opts.FlushApplyConcurrency))
 	lines = append(lines, fmt.Sprintf("flush_apply_min_entries_configured=%d", r.opts.FlushApplyMinEntries))
 	lines = append(lines, fmt.Sprintf("flush_apply_min_spans_configured=%d", r.opts.FlushApplyMinSpans))
@@ -717,6 +731,10 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
+	flushAdmissionPolicy, err := parseTreeDBFlushAdmissionPolicy(*treedbFlushAdmissionPolicy)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
 	if writeAdmissionPolicy == treedb.LeafPageReadCacheWriteAdmissionAdaptive {
 		notes = append(notes, "outer_leaf_read_cache_write_admission=adaptive is opt-in; skipped writes remain durable and read misses can still admit")
 	}
@@ -761,6 +779,7 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		FlushBuildChunkMinBytes:                    *treedbFlushBuildChunkMinBytes,
 		FlushBuildChunkMaxBytes:                    *treedbFlushBuildChunkMaxBytes,
 		FlushBuildPrefetchUnits:                    *treedbFlushBuildPrefetchUnits,
+		FlushAdmissionPolicy:                       flushAdmissionPolicy,
 		FlushApplyConcurrency:                      *treedbFlushApplyConcurrency,
 		FlushApplyMinEntries:                       *treedbFlushApplyMinEntries,
 		FlushApplyMinSpans:                         *treedbFlushApplyMinSpans,
@@ -946,6 +965,12 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 	}
 	if _, err := treedbdb.ResolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	admission := treedbdb.NormalizeFlushAdmissionOptions(&opts)
+	if admission.Policy == treedb.FlushAdmissionPolicyOff {
+		notes = append(notes, "flush_admission_policy=off force-disables span-native, backlog coalescing, and flush-apply concurrency")
+	} else if admission.Policy == treedb.FlushAdmissionPolicyAuto && !admission.Admitted {
+		notes = append(notes, "flush_admission_policy=auto declined: "+admission.Reason)
 	}
 
 	rep := treeDBOptionsReport{opts: opts, maintenanceMode: maintenanceMode, notes: notes, warnings: warnings}

@@ -17,6 +17,7 @@ func openReadOnly(opts Options) (*DB, error) {
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
+	NormalizeFlushAdmissionOptions(&opts)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -80,6 +81,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		valueLogManager:                vm,
 		lock:                           lock,
 		adaptive:                       adaptiveCtrl,
+		flushAdmission:                 FlushAdmissionDecisionForOptions(opts),
 		keepRecent:                     opts.KeepRecent,
 		valueLogCompression:            opts.ValueLog.Compression,
 		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
@@ -169,6 +171,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
+	NormalizeFlushAdmissionOptions(&opts)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -218,6 +221,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		durability:                     opts.Durability,
 		valueLogManager:                vm,
 		adaptive:                       adaptiveCtrl,
+		flushAdmission:                 FlushAdmissionDecisionForOptions(opts),
 		keepRecent:                     opts.KeepRecent,
 		valueLogCompression:            opts.ValueLog.Compression,
 		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
