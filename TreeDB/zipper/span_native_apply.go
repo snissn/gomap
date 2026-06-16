@@ -135,7 +135,7 @@ func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareR
 	var prevHigh []byte
 	for i := range spans {
 		span := spans[i]
-		if span.DeleteRangeStart != span.DeleteRangeEnd || span.PointOpStart != expectedPointStart || span.PointOpEnd > len(ops) || span.PointOpEnd <= span.PointOpStart {
+		if span.DeleteRangeStart != span.DeleteRangeEnd || span.PointOpStart < 0 || span.PointOpEnd < 0 || span.PointOpStart != expectedPointStart || span.PointOpEnd > len(ops) || span.PointOpEnd <= span.PointOpStart {
 			return false
 		}
 		if span.LowKey != nil && span.HighKey != nil && bytes.Compare(span.LowKey, span.HighKey) >= 0 {
@@ -545,13 +545,12 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 			}
 			if key == nil {
 				key = []byte{}
+			} else if copyKeys {
+				key = append([]byte(nil), key...)
 			}
 			childLow := low
 			if len(key) != 0 {
 				childLow = key
-				if copyKeys {
-					childLow = append([]byte(nil), key...)
-				}
 			}
 			childHigh := high
 			if i+1 < count {
@@ -561,11 +560,10 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 				}
 				if nextKey == nil {
 					nextKey = []byte{}
+				} else if copyKeys {
+					nextKey = append([]byte(nil), nextKey...)
 				}
 				childHigh = nextKey
-				if copyKeys {
-					childHigh = append([]byte(nil), nextKey...)
-				}
 			}
 
 			for replacementIdx < replacements.len() && spanNativeReplacementBeforeRange(replacements.spans[replacementIdx], childLow) {

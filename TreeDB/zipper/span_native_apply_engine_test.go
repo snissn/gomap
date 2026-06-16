@@ -81,6 +81,41 @@ func TestSpanNativeApplyPartialMultiLeafParentStitchParity(t *testing.T) {
 	}
 }
 
+func TestSpanNativeApplyInternalBaseDeltaPartialStitchCopiesSeparatorKeys(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	_, native := newReadOnlyPrepareZipper(t)
+	serial.SetIndexInternalBaseDelta(true)
+	native.SetIndexInternalBaseDelta(true)
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 4096)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
+	if got := collectSpanNativeTestInternalPageIDs(t, native, nativeRoot); len(got) == 0 {
+		t.Fatalf("native root has no base-delta internal pages; test requires partial internal stitching")
+	}
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 900; i < 3200; i++ {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte(fmt.Sprintf("bd-%06d", i))); err != nil {
+			t.Fatalf("Set base-delta update %d: %v", i, err)
+		}
+	}
+
+	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
+	if err != nil {
+		t.Fatalf("serial Apply: %v", err)
+	}
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 2})
+	if err != nil {
+		t.Fatalf("span-native ApplyWithOptions: %v", err)
+	}
+	if !result.SpanNativeEligible || !result.SpanNativeUsed {
+		t.Fatalf("span-native flags eligible/used=%v/%v", result.SpanNativeEligible, result.SpanNativeUsed)
+	}
+	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
+		t.Fatalf("base-delta partial stitch output mismatch")
+	}
+}
+
 func TestSpanNativeApplySparseMultiLeafParentStitchParity(t *testing.T) {
 	_, serial := newReadOnlyPrepareZipper(t)
 	_, native := newReadOnlyPrepareZipper(t)
@@ -208,6 +243,30 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	}
 	if got := p.PageCount(); got != beforePages {
 		t.Fatalf("invalid prepared plan allocated pages: got %d want %d", got, beforePages)
+	}
+
+	bad = prepared
+	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
+	bad.LeafSpans[0].PointOpStart = -1
+	if validateSpanNativePreparedPlan(ops, bad) {
+		t.Fatalf("validateSpanNativePreparedPlan accepted negative PointOpStart")
+	}
+	_, used, err = z.applySpanNativeWithPrepared(rootID, ops, bad, 1, nil)
+	if err != nil {
+		t.Fatalf("applySpanNativeWithPrepared negative PointOpStart err=%v", err)
+	}
+	if used {
+		t.Fatalf("negative PointOpStart used span-native output path")
+	}
+	if got := p.PageCount(); got != beforePages {
+		t.Fatalf("negative PointOpStart allocated pages: got %d want %d", got, beforePages)
+	}
+
+	bad = prepared
+	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
+	bad.LeafSpans[0].PointOpEnd = -1
+	if validateSpanNativePreparedPlan(ops, bad) {
+		t.Fatalf("validateSpanNativePreparedPlan accepted negative PointOpEnd")
 	}
 
 	bad = prepared

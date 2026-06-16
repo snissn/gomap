@@ -83,6 +83,22 @@ func (l *failingBatchLeafPageLog) AppendLeafPages([][]byte) ([]page.LeafLogPtr, 
 	return nil, l.err
 }
 
+func TestApplyWorkerPoolNilRunFallsBackSerial(t *testing.T) {
+	var p *ApplyWorkerPool
+	var jobs []int
+	if err := p.Run(4, 3, func(workerID, job int) {
+		if workerID != 0 {
+			t.Fatalf("workerID=%d want serial fallback worker 0", workerID)
+		}
+		jobs = append(jobs, job)
+	}); err != nil {
+		t.Fatalf("nil Run: %v", err)
+	}
+	if got, want := fmt.Sprint(jobs), "[0 1 2]"; got != want {
+		t.Fatalf("jobs=%s want %s", got, want)
+	}
+}
+
 func newParallelApplyTestZipper(t *testing.T) (*pager.Pager, *Zipper) {
 	t.Helper()
 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
