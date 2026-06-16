@@ -1901,15 +1901,7 @@ func getValueLogPtrsCap(capacity int) []page.ValuePtr {
 }
 
 func putValueLogPtrs(s []page.ValuePtr) {
-	if s == nil {
-		return
-	}
-	clear(s)
-	// Avoid retaining huge slices in the pool.
-	if cap(s) > 1<<20 {
-		return
-	}
-	valueLogPtrPool.Put(s[:0])
+	putValueLogPtrsNoClear(s)
 }
 
 func putValueLogPtrsNoClear(s []page.ValuePtr) {
@@ -13237,6 +13229,7 @@ func (db *DB) vlogDictPrepareLoop(l *lane) {
 		}
 		bodyBuf := getVlogPreparedFrameBody()
 		body, stats, err := preparer.PrepareFrameInto(bodyBuf.buf[:0], task.dictID, task.dict, task.records)
+		preparer.TrimScratchForReuse()
 		if err != nil {
 			putVlogPreparedFrameBody(bodyBuf)
 			db.publishVlogDictPrepareResult(task, vlogDictPrepareResult{
@@ -14761,7 +14754,6 @@ func (db *DB) prepareAppendFrames(
 	useWorkers := db.shouldUseVlogDictPrepWorkers(l, frameCount, rawPayloadBytes)
 	prepStart := time.Now()
 	prepared := getVlogPreparedFrames(frameCount)
-	clear(prepared)
 	if !useWorkers {
 		// Keep frame encode/compress work out of vlogMu even when worker threads are
 		// unavailable. This reduces leaf-log/value-log lock hold time on small and

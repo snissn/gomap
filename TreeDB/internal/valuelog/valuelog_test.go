@@ -1598,6 +1598,32 @@ func TestFramePreparer_ResetForReuseRestoresDefaultsAndKeepsBoundedScratch(t *te
 	}
 }
 
+func TestFramePreparer_TrimScratchForReuseKeepsPolicyAndBoundsBuffers(t *testing.T) {
+	prep := NewFramePreparer()
+	prep.SetKeepPolicy(11, 13, 0.25)
+	prep.SetBlockCompression(BlockCodecLZ4, true)
+	prep.rawScratch = make([]byte, framePreparerScratchKeepCap+1)
+	prep.encScratch = make([]byte, 0, framePreparerScratchKeepCap+1)
+	prep.blockScratch = make([]byte, 0, framePreparerScratchKeepCap)
+	prep.encLimiter.buf = []byte("retained")
+	prep.TrimScratchForReuse()
+	if prep.rawScratch != nil || prep.encScratch != nil {
+		t.Fatalf("oversized scratch retained: raw=%d enc=%d", cap(prep.rawScratch), cap(prep.encScratch))
+	}
+	if cap(prep.blockScratch) != framePreparerScratchKeepCap || len(prep.blockScratch) != 0 {
+		t.Fatalf("bounded block scratch not retained/reset: len=%d cap=%d", len(prep.blockScratch), cap(prep.blockScratch))
+	}
+	if prep.encLimiter.buf != nil || prep.encLimiter.limit != 0 {
+		t.Fatalf("enc limiter retained state: %+v", prep.encLimiter)
+	}
+	if prep.keepIoNsPerStoredByte != 11 || prep.keepEncodeNsPerRawByte != 13 || prep.keepSafetyMargin != 0.25 {
+		t.Fatalf("trim reset keep policy: got io=%v encode=%v safety=%v", prep.keepIoNsPerStoredByte, prep.keepEncodeNsPerRawByte, prep.keepSafetyMargin)
+	}
+	if prep.blockCodec != BlockCodecLZ4 || !prep.blockCompression {
+		t.Fatalf("trim reset block compression state")
+	}
+}
+
 func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
 	records := []Record{
 		{RID: 1, Value: bytes.Repeat([]byte("alpha-001|"), 32)},
