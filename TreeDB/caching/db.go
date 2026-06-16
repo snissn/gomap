@@ -7936,6 +7936,7 @@ type DB struct {
 	checkpointStageWALRotate                                     checkpointStageStats
 	checkpointStageValueLogFlush                                 checkpointStageStats
 	checkpointStageCommandWALPublish                             checkpointStageStats
+	checkpointStagePreDrain                                      checkpointStageStats
 	checkpointStageFlushAll                                      checkpointStageStats
 	checkpointStageLeafValueLogSync                              checkpointStageStats
 	checkpointStageReducerPublish                                checkpointStageStats
@@ -7947,6 +7948,7 @@ type DB struct {
 	checkpointActiveBackgroundFlushWaitSamples                   atomic.Uint64
 	commandWALCheckpointPublishPiggybacked                       atomic.Uint64
 	commandWALCheckpointPublishSeparate                          atomic.Uint64
+	checkpointPreDrainFlushes                                    atomic.Uint64
 	checkpointFlushMuWaitNs                                      atomic.Uint64
 	checkpointFlushMuWaitMaxNs                                   atomic.Uint64
 	checkpointAutoVacuumRuns                                     atomic.Uint64
@@ -21180,6 +21182,123 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 	return float64(backlogBytes-prevBacklog) / dt
 }
 
+func (db *DB) checkpointPreDrainEligible() bool {
+	return db != nil &&
+		db.flushApplySpanNative &&
+		db.flushBacklogCoalescing &&
+		db.flushApplyConcurrency > 1 &&
+		!db.disableJournal &&
+		db.commandWALCheckpointPublish == nil &&
+		!db.closing.Load()
+}
+
+func (db *DB) checkpointPreDrainSnapshot() (maxQueueID uint64, queueLen int) {
+	if db == nil {
+		return 0, 0
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	queueLen = len(db.queue)
+	for i := 0; i < queueLen && i < len(db.queueIDs); i++ {
+		if id := db.queueIDs[i]; id > maxQueueID {
+			maxQueueID = id
+		}
+	}
+	return maxQueueID, queueLen
+}
+
+func (db *DB) pickCheckpointPreDrainLane(maxQueueID uint64) (int, bool) {
+	if db == nil {
+		return 0, false
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if len(db.queue) == 0 {
+		return 0, false
+	}
+	if maxQueueID > 0 && len(db.queueIDs) > 0 && db.queueIDs[0] > maxQueueID {
+		return 0, false
+	}
+	laneCount := len(db.lanes)
+	if laneCount == 0 {
+		laneCount = 1
+	}
+	laneID := 0
+	if len(db.queueLaneIDs) > 0 {
+		laneID = int(db.queueLaneIDs[0])
+	}
+	if laneID < 0 || laneID >= laneCount {
+		laneID = 0
+	}
+	return laneID, true
+}
+
+// checkpointPreDrainLocked opportunistically pays already-queued opt-in
+// span-native/backlog work before Checkpoint flips into fail-closed drain mode.
+// The caller must hold flushMu. This intentionally does not interrupt or yield
+// an active background flush; it only runs once Checkpoint already owns flushMu.
+func (db *DB) checkpointPreDrainLocked() (int, error) {
+	if !db.checkpointPreDrainEligible() {
+		return 0, nil
+	}
+
+	// Seal the current mutable state before checkpointing flips the drain mode to
+	// close_or_checkpoint fallback. Writes after this brief cutover land in a
+	// fresh mutable shard and are handled by the normal fail-closed checkpoint
+	// drain below.
+	db.writeMu.Lock()
+	db.mu.Lock()
+	if db.mutableBytes.Load() > 0 {
+		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
+			db.mu.Unlock()
+			db.writeMu.Unlock()
+			return 0, err
+		}
+	}
+	db.mu.Unlock()
+	db.writeMu.Unlock()
+
+	maxQueueID, initialQueueLen := db.checkpointPreDrainSnapshot()
+	if initialQueueLen == 0 {
+		return 0, nil
+	}
+	db.beginFlushCoordinatorPass()
+	defer db.endFlushCoordinatorPass()
+
+	flushed := 0
+	for flushed < initialQueueLen {
+		if attempted, ok := db.attemptDirtyRootPublish(); attempted {
+			if !ok {
+				if bgErr := db.backgroundError(); bgErr != nil {
+					return flushed, bgErr
+				}
+				return flushed, nil
+			}
+			flushed++
+			continue
+		}
+		laneID, ok := db.pickCheckpointPreDrainLane(maxQueueID)
+		if !ok {
+			return flushed, nil
+		}
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Lock()
+		}
+		okFlush := db.flushLaneOnceWithCollectionMode(false, laneID, nil, flushCollectionBackground)
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Unlock()
+		}
+		if !okFlush {
+			if bgErr := db.backgroundError(); bgErr != nil {
+				return flushed, bgErr
+			}
+			return flushed, nil
+		}
+		flushed++
+	}
+	return flushed, nil
+}
+
 // Checkpoint forces a durable backend boundary and trims the WAL so long-running
 // cached-mode runs do not accumulate unbounded `wal/` growth.
 //
@@ -21216,6 +21335,19 @@ func (db *DB) Checkpoint() error {
 		db.observeCheckpointActiveBackgroundFlushWait(flushMuWaitDur)
 	}
 	defer db.flushMu.Unlock() // Ensure it's released
+
+	preDrainStart := time.Now()
+	preDrainFlushes, err := db.checkpointPreDrainLocked()
+	if err != nil {
+		return err
+	}
+	if preDrainFlushes > 0 {
+		db.checkpointPreDrainFlushes.Add(uint64(preDrainFlushes))
+		recordCheckpointStageSince(&db.checkpointStagePreDrain, preDrainStart)
+		if bgErr := db.backgroundError(); bgErr != nil {
+			return bgErr
+		}
+	}
 
 	db.checkpointMu.Lock()
 	for db.checkpointing.Load() {
@@ -26681,10 +26813,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_max"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitMaxNs.Load())
 	stats["treedb.cache.checkpoint.active_background_flush_wait_samples"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitSamples.Load())
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
+	stats["treedb.cache.checkpoint.pre_drain_flushes_total"] = fmt.Sprintf("%d", db.checkpointPreDrainFlushes.Load())
 	appendCheckpointStageStats(stats, "cutover", &db.checkpointStageCutover)
 	appendCheckpointStageStats(stats, "wal_rotate", &db.checkpointStageWALRotate)
 	appendCheckpointStageStats(stats, "value_log_flush", &db.checkpointStageValueLogFlush)
 	appendCheckpointStageStats(stats, "command_wal_publish", &db.checkpointStageCommandWALPublish)
+	appendCheckpointStageStats(stats, "pre_drain", &db.checkpointStagePreDrain)
 	appendCheckpointStageStats(stats, "flush_all", &db.checkpointStageFlushAll)
 	appendCheckpointStageStats(stats, "leaf_value_log_sync", &db.checkpointStageLeafValueLogSync)
 	appendCheckpointStageStats(stats, "reducer_publish", &db.checkpointStageReducerPublish)
