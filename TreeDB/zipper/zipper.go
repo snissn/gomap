@@ -140,25 +140,28 @@ type pendingLeafPagePersist struct {
 }
 
 const (
-	mergeSplitKeyArenaInitCap     = page.PageSize
-	mergeSplitKeyArenaKeepCap     = 1 << 20
-	mergeOuterLeafPageInitCap     = 16
-	mergeOuterLeafPageKeepCap     = 128
-	mergeLeafPageScratchInit      = 16
-	mergeLeafPageScratchKeep      = 128
-	mergeNodeKeyScratchInit       = 16
-	mergeNodeKeyScratchKeep       = 128
-	mergeNodeKeyScratchMaxCap     = 1 << 20
-	mergePendingLeafPersistInit   = 8
-	mergePendingLeafPersistKeep   = 64
-	mergePendingLeafPersistMaxCap = 512
-	mergeLeafPageBatchInit        = 8
-	mergeLeafPageBatchKeep        = 64
-	mergeLeafPageBatchMaxCap      = 512
-	mergeChildRefBatchInit        = 8
-	mergeChildRefBatchKeep        = 64
-	mergeChildRefBatchMaxCap      = 512
-	mergeSpanNativeOutputKeepCap  = 1 << 20
+	mergeSplitKeyArenaInitCap         = page.PageSize
+	mergeSplitKeyArenaKeepCap         = 1 << 20
+	mergeOuterLeafPageInitCap         = 16
+	mergeOuterLeafPageKeepCap         = 128
+	mergeLeafPageScratchInit          = 16
+	mergeLeafPageScratchKeep          = 128
+	mergeNodeKeyScratchInit           = 16
+	mergeNodeKeyScratchKeep           = 128
+	mergeNodeKeyScratchMaxCap         = 1 << 20
+	mergePendingLeafPersistInit       = 8
+	mergePendingLeafPersistKeep       = 64
+	mergePendingLeafPersistMaxCap     = 512
+	mergeLeafPageBatchInit            = 8
+	mergeLeafPageBatchKeep            = 64
+	mergeLeafPageBatchMaxCap          = 512
+	mergeChildRefBatchInit            = 8
+	mergeChildRefBatchKeep            = 64
+	mergeChildRefBatchMaxCap          = 512
+	mergeSpanNativeOutputKeepCap      = 1 << 20
+	mergeSpanNativeOutputSplitKeepCap = 1024
+	mergeSpanNativeOutputLogKeepBytes = mergeSpanNativeOutputKeepCap * page.LogRecordRefSize
+	mergeSpanNativeOutputPageKeepCap  = mergeSpanNativeOutputKeepCap
 
 	mergeInternalMinParallelChildren         = 8
 	mergeInternalMinParallelOps              = 4096
@@ -169,15 +172,17 @@ const (
 )
 
 type mergeScratch struct {
-	mu                        sync.Mutex
-	splitKeyArena             []byte
-	outerLeafBuildPages       []*outerLeafBuildPage
-	leafPageScratch           [][]byte
-	nodeKeyScratch            [][]byte
-	pendingLeafPersistScratch [][]pendingLeafPagePersist
-	leafPageBatchScratch      [][][]byte
-	childRefBatchScratch      [][]page.ChildRef
-	spanNativeOutputScratch   []spanNativeLeafOutput
+	mu                           sync.Mutex
+	splitKeyArena                []byte
+	outerLeafBuildPages          []*outerLeafBuildPage
+	leafPageScratch              [][]byte
+	nodeKeyScratch               [][]byte
+	pendingLeafPersistScratch    [][]pendingLeafPagePersist
+	leafPageBatchScratch         [][][]byte
+	childRefBatchScratch         [][]page.ChildRef
+	spanNativeOutputLogScratch   []byte
+	spanNativeOutputPageScratch  []uint64
+	spanNativeOutputSplitScratch []spanNativeLeafSplitOutput
 }
 
 func newMergeScratch() *mergeScratch {
@@ -257,11 +262,23 @@ func (s *mergeScratch) reset() {
 		}
 		s.childRefBatchScratch = s.childRefBatchScratch[:mergeChildRefBatchKeep]
 	}
-	clear(s.spanNativeOutputScratch)
-	if cap(s.spanNativeOutputScratch) > mergeSpanNativeOutputKeepCap {
-		s.spanNativeOutputScratch = nil
+	if cap(s.spanNativeOutputLogScratch) > mergeSpanNativeOutputLogKeepBytes {
+		s.spanNativeOutputLogScratch = nil
 	} else {
-		s.spanNativeOutputScratch = s.spanNativeOutputScratch[:0]
+		s.spanNativeOutputLogScratch = s.spanNativeOutputLogScratch[:0]
+	}
+	if cap(s.spanNativeOutputPageScratch) > mergeSpanNativeOutputPageKeepCap {
+		s.spanNativeOutputPageScratch = nil
+	} else {
+		s.spanNativeOutputPageScratch = s.spanNativeOutputPageScratch[:0]
+	}
+	if cap(s.spanNativeOutputSplitScratch) > 0 {
+		clear(s.spanNativeOutputSplitScratch[:cap(s.spanNativeOutputSplitScratch)])
+	}
+	if cap(s.spanNativeOutputSplitScratch) > mergeSpanNativeOutputSplitKeepCap {
+		s.spanNativeOutputSplitScratch = nil
+	} else {
+		s.spanNativeOutputSplitScratch = s.spanNativeOutputSplitScratch[:0]
 	}
 }
 
