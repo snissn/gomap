@@ -36,6 +36,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	}
 	workers = len(workerRanges)
 	outputs := scratch.acquireSpanNativeLeafOutputs(spanCount, z.outerLeavesInValueLog)
+	defer outputs.release()
 	rangeMetrics := make([]adaptive.Metrics, len(workerRanges))
 	rangeRetired := make([][]uint64, len(workerRanges))
 	rangeSplits := make([]spanNativeLeafSplitRange, len(workerRanges))
@@ -47,20 +48,28 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		var localMetrics adaptive.Metrics
 		var localRetired []uint64
 		var localSplits [][]Split
+		releaseLocalSplits := func() {
+			if localSplits != nil {
+				releaseSpanNativeSplitSlices(localSplits)
+				localSplits = nil
+			}
+		}
 		for i := workerRange.FirstSpan; i < end; i++ {
 			span := prepared.LeafSpans[i]
 			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, scratch, false, applyRunConfig{maxParallelWorkers: 1})
 			if err != nil {
+				releaseLocalSplits()
 				errOnce.Do(func() { firstErr = err })
 				return
 			}
 			if err := outputs.setRef(i, newRef); err != nil {
+				releaseLocalSplits()
 				errOnce.Do(func() { firstErr = err })
 				return
 			}
 			if len(splits) > 0 {
 				if localSplits == nil {
-					localSplits = make([][]Split, workerRange.SpanCount)
+					localSplits = acquireSpanNativeSplitSlices(workerRange.SpanCount)
 				}
 				localSplits[i-workerRange.FirstSpan] = splits
 			}
@@ -164,35 +173,149 @@ type spanNativeLeafOutputs struct {
 	splitRanges []spanNativeLeafSplitRange
 }
 
+const spanNativeOutputPoolKeep = 8
+
+var (
+	spanNativeLogRefPool     spanNativeByteSlicePool
+	spanNativePageIDPool     spanNativeUint64SlicePool
+	spanNativeSplitSlicePool spanNativeSplitSlicePoolType
+)
+
+type spanNativeByteSlicePool struct {
+	mu   sync.Mutex
+	bufs [][]byte
+}
+
+func (p *spanNativeByteSlicePool) get(size int) []byte {
+	if size <= 0 {
+		return nil
+	}
+	p.mu.Lock()
+	for i := len(p.bufs) - 1; i >= 0; i-- {
+		buf := p.bufs[i]
+		if cap(buf) >= size {
+			last := len(p.bufs) - 1
+			p.bufs[i] = p.bufs[last]
+			p.bufs[last] = nil
+			p.bufs = p.bufs[:last]
+			p.mu.Unlock()
+			return buf[:size]
+		}
+	}
+	p.mu.Unlock()
+	return make([]byte, size)
+}
+
+func (p *spanNativeByteSlicePool) put(buf []byte, maxCap int) {
+	if cap(buf) == 0 || cap(buf) > maxCap {
+		return
+	}
+	p.mu.Lock()
+	if len(p.bufs) < spanNativeOutputPoolKeep {
+		p.bufs = append(p.bufs, buf[:0])
+	}
+	p.mu.Unlock()
+}
+
+type spanNativeUint64SlicePool struct {
+	mu   sync.Mutex
+	bufs [][]uint64
+}
+
+func (p *spanNativeUint64SlicePool) get(size int) []uint64 {
+	if size <= 0 {
+		return nil
+	}
+	p.mu.Lock()
+	for i := len(p.bufs) - 1; i >= 0; i-- {
+		buf := p.bufs[i]
+		if cap(buf) >= size {
+			last := len(p.bufs) - 1
+			p.bufs[i] = p.bufs[last]
+			p.bufs[last] = nil
+			p.bufs = p.bufs[:last]
+			p.mu.Unlock()
+			return buf[:size]
+		}
+	}
+	p.mu.Unlock()
+	return make([]uint64, size)
+}
+
+func (p *spanNativeUint64SlicePool) put(buf []uint64, maxCap int) {
+	if cap(buf) == 0 || cap(buf) > maxCap {
+		return
+	}
+	p.mu.Lock()
+	if len(p.bufs) < spanNativeOutputPoolKeep {
+		p.bufs = append(p.bufs, buf[:0])
+	}
+	p.mu.Unlock()
+}
+
+type spanNativeSplitSlicePoolType struct {
+	mu   sync.Mutex
+	bufs [][][]Split
+}
+
+func acquireSpanNativeSplitSlices(size int) [][]Split {
+	if size <= 0 {
+		return nil
+	}
+	spanNativeSplitSlicePool.mu.Lock()
+	for i := len(spanNativeSplitSlicePool.bufs) - 1; i >= 0; i-- {
+		buf := spanNativeSplitSlicePool.bufs[i]
+		if cap(buf) >= size {
+			last := len(spanNativeSplitSlicePool.bufs) - 1
+			spanNativeSplitSlicePool.bufs[i] = spanNativeSplitSlicePool.bufs[last]
+			spanNativeSplitSlicePool.bufs[last] = nil
+			spanNativeSplitSlicePool.bufs = spanNativeSplitSlicePool.bufs[:last]
+			spanNativeSplitSlicePool.mu.Unlock()
+			return buf[:size]
+		}
+	}
+	spanNativeSplitSlicePool.mu.Unlock()
+	return make([][]Split, size)
+}
+
+func releaseSpanNativeSplitSlices(buf [][]Split) {
+	if cap(buf) == 0 || cap(buf) > mergeSpanNativeOutputKeepCap {
+		return
+	}
+	clear(buf)
+	spanNativeSplitSlicePool.mu.Lock()
+	if len(spanNativeSplitSlicePool.bufs) < spanNativeOutputPoolKeep {
+		spanNativeSplitSlicePool.bufs = append(spanNativeSplitSlicePool.bufs, buf[:0])
+	}
+	spanNativeSplitSlicePool.mu.Unlock()
+}
+
 func (s *mergeScratch) acquireSpanNativeLeafOutputs(count int, leafLogs bool) spanNativeLeafOutputs {
 	if count <= 0 {
 		return spanNativeLeafOutputs{}
 	}
 	if leafLogs {
 		bytesNeeded := count * page.LogRecordRefSize
-		var refs []byte
-		if s == nil || cap(s.spanNativeOutputLogScratch) < bytesNeeded {
-			refs = make([]byte, bytesNeeded)
-			if s != nil {
-				s.spanNativeOutputLogScratch = refs
-			}
-		} else {
-			s.spanNativeOutputLogScratch = s.spanNativeOutputLogScratch[:bytesNeeded]
-			refs = s.spanNativeOutputLogScratch
-		}
-		return spanNativeLeafOutputs{mode: spanNativeLeafOutputLeafLogs, leafLogRefs: refs}
+		return spanNativeLeafOutputs{mode: spanNativeLeafOutputLeafLogs, leafLogRefs: spanNativeLogRefPool.get(bytesNeeded)}
 	}
-	var pageIDs []uint64
-	if s == nil || cap(s.spanNativeOutputPageScratch) < count {
-		pageIDs = make([]uint64, count)
-		if s != nil {
-			s.spanNativeOutputPageScratch = pageIDs
-		}
-	} else {
-		s.spanNativeOutputPageScratch = s.spanNativeOutputPageScratch[:count]
-		pageIDs = s.spanNativeOutputPageScratch
+	return spanNativeLeafOutputs{mode: spanNativeLeafOutputPages, pageIDs: spanNativePageIDPool.get(count)}
+}
+
+func (o *spanNativeLeafOutputs) release() {
+	if o == nil {
+		return
 	}
-	return spanNativeLeafOutputs{mode: spanNativeLeafOutputPages, pageIDs: pageIDs}
+	switch o.mode {
+	case spanNativeLeafOutputLeafLogs:
+		spanNativeLogRefPool.put(o.leafLogRefs, mergeSpanNativeOutputLogKeepBytes)
+	case spanNativeLeafOutputPages:
+		spanNativePageIDPool.put(o.pageIDs, mergeSpanNativeOutputPageKeepCap)
+	}
+	for i := range o.splitRanges {
+		releaseSpanNativeSplitSlices(o.splitRanges[i].splits)
+		o.splitRanges[i] = spanNativeLeafSplitRange{}
+	}
+	*o = spanNativeLeafOutputs{}
 }
 
 func (o *spanNativeLeafOutputs) setRef(index int, ref page.ChildRef) error {
@@ -349,6 +472,7 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 		count := oldNode.Count()
 		copyKeys := oldNode.InternalBaseDeltaEnabled()
 		writer := spanNativeSplitLevelWriter{z: z, metrics: metrics}
+		defer writer.abort()
 		changed := false
 		replacementIdx := 0
 		for i := uint16(0); i < count; i++ {
@@ -469,7 +593,7 @@ func (w *spanNativeSplitLevelWriter) append(child Split) error {
 		if err != nil {
 			return err
 		}
-		w.currentBuilder = w.z.newBuilderForType(data, page.PageTypeInternal, nil)
+		w.currentBuilder = w.z.newPooledBuilderForType(data, page.PageTypeInternal, nil)
 		w.currentBuilder.SetPageID(pid)
 		w.currentStartKey = child.Key
 		w.currentBuilder.SetInternalFenceBounds(w.currentStartKey, nil)
@@ -495,9 +619,9 @@ func (w *spanNativeSplitLevelWriter) append(child Split) error {
 		}
 	}
 	if err == node.ErrNodeFull {
-		w.finishCurrent()
+		finishedPageID := w.finishCurrent()
 
-		pid, allocErr := w.z.allocator.Alloc(w.currentBuilder.PageID())
+		pid, allocErr := w.z.allocator.Alloc(finishedPageID)
 		if allocErr != nil {
 			return allocErr
 		}
@@ -505,7 +629,7 @@ func (w *spanNativeSplitLevelWriter) append(child Split) error {
 		if getErr != nil {
 			return getErr
 		}
-		w.currentBuilder = w.z.newBuilderForType(data, page.PageTypeInternal, nil)
+		w.currentBuilder = w.z.newPooledBuilderForType(data, page.PageTypeInternal, nil)
 		w.currentBuilder.SetPageID(pid)
 		w.currentStartKey = child.Key
 		w.currentBuilder.SetInternalFenceBounds(w.currentStartKey, nil)
@@ -520,18 +644,28 @@ func (w *spanNativeSplitLevelWriter) append(child Split) error {
 	return nil
 }
 
-func (w *spanNativeSplitLevelWriter) finishCurrent() {
+func (w *spanNativeSplitLevelWriter) finishCurrent() uint64 {
+	pageID := w.currentBuilder.PageID()
 	w.currentBuilder.FinishNoNode()
 	recordZipperInternalPageWrite(w.metrics)
-	w.nextLevelNodes = append(w.nextLevelNodes, Split{Key: w.currentStartKey, Ref: page.PageChildRef(w.currentBuilder.PageID())})
+	w.nextLevelNodes = append(w.nextLevelNodes, Split{Key: w.currentStartKey, Ref: page.PageChildRef(pageID)})
+	releasePooledBuilder(w.currentBuilder)
+	w.currentBuilder = nil
+	return pageID
 }
 
 func (w *spanNativeSplitLevelWriter) finish() ([]Split, error) {
 	if w.currentBuilder != nil {
 		w.finishCurrent()
-		w.currentBuilder = nil
 	}
 	return w.nextLevelNodes, nil
+}
+
+func (w *spanNativeSplitLevelWriter) abort() {
+	if w.currentBuilder != nil {
+		releasePooledBuilder(w.currentBuilder)
+		w.currentBuilder = nil
+	}
 }
 
 func spanNativeReplacementBeforeRange(span ReadOnlyLeafSpan, low []byte) bool {

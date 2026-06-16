@@ -171,16 +171,14 @@ const (
 )
 
 type mergeScratch struct {
-	mu                          sync.Mutex
-	splitKeyArena               []byte
-	outerLeafBuildPages         []*outerLeafBuildPage
-	leafPageScratch             [][]byte
-	nodeKeyScratch              [][]byte
-	pendingLeafPersistScratch   [][]pendingLeafPagePersist
-	leafPageBatchScratch        [][][]byte
-	childRefBatchScratch        [][]page.ChildRef
-	spanNativeOutputLogScratch  []byte
-	spanNativeOutputPageScratch []uint64
+	mu                        sync.Mutex
+	splitKeyArena             []byte
+	outerLeafBuildPages       []*outerLeafBuildPage
+	leafPageScratch           [][]byte
+	nodeKeyScratch            [][]byte
+	pendingLeafPersistScratch [][]pendingLeafPagePersist
+	leafPageBatchScratch      [][][]byte
+	childRefBatchScratch      [][]page.ChildRef
 }
 
 func newMergeScratch() *mergeScratch {
@@ -259,16 +257,6 @@ func (s *mergeScratch) reset() {
 			extra[i] = nil
 		}
 		s.childRefBatchScratch = s.childRefBatchScratch[:mergeChildRefBatchKeep]
-	}
-	if cap(s.spanNativeOutputLogScratch) > mergeSpanNativeOutputLogKeepBytes {
-		s.spanNativeOutputLogScratch = nil
-	} else {
-		s.spanNativeOutputLogScratch = s.spanNativeOutputLogScratch[:0]
-	}
-	if cap(s.spanNativeOutputPageScratch) > mergeSpanNativeOutputPageKeepCap {
-		s.spanNativeOutputPageScratch = nil
-	} else {
-		s.spanNativeOutputPageScratch = s.spanNativeOutputPageScratch[:0]
 	}
 }
 
