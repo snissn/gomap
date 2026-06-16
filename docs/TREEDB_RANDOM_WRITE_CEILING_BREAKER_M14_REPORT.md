@@ -59,7 +59,7 @@ Recommended rollout posture:
 
 Remote host and artifact root:
 
-- host: `mikers@100.78.120.42` (`mikers-B560-DS3H-AC-Y1`)
+- host: redacted remote 4TB benchmark host (`mikers-B560-DS3H-AC-Y1`)
 - kernel: Linux 6.8.0-124-generic x86_64
 - Go: `go1.25.0 linux/amd64`
 - CPU workers visible: `nproc=12`
