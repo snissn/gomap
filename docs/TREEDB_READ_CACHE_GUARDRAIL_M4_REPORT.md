@@ -139,7 +139,7 @@ Use the remote 4TB host for final gates, and avoid overlap with other large
 runs:
 
 ```sh
-ssh mikers@100.78.120.42
+ssh <remote-4tb-benchmark-host>
 cd /mnt/fast4tb/gomap-worktrees/<2788-worktree>
 git fetch origin
 # checkout the final #2788 candidate head here
