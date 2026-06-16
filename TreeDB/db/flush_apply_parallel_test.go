@@ -370,7 +370,7 @@ func TestFlushApplyRootMismatchTracksAbandonedLeafLogOutput(t *testing.T) {
 	}
 }
 
-func TestFlushApplySpanNativePartialMultiLeafFallsBackWithStats(t *testing.T) {
+func TestFlushApplySpanNativePartialMultiLeafParentStitchWithStats(t *testing.T) {
 	d := openFlushApplyTestDBWithSpanNative(t, 4, true)
 	putBatch(t, d, 0, 9000, "base")
 	usedBefore := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total")
@@ -398,11 +398,11 @@ func TestFlushApplySpanNativePartialMultiLeafFallsBackWithStats(t *testing.T) {
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.eligible_ops_total"); got == 0 {
 		t.Fatalf("span-native eligible ops = 0, want partial run classified before fallback")
 	}
-	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got != usedBefore {
-		t.Fatalf("span-native used ops delta=%d want 0 for partial parent-stitch fallback", got-usedBefore)
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got <= usedBefore {
+		t.Fatalf("span-native used ops delta=%d want >0 for partial parent-stitch path", got-usedBefore)
 	}
-	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got <= fallbackBefore {
-		t.Fatalf("span-native not-implemented fallback ops delta=%d want >0", got-fallbackBefore)
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got != fallbackBefore {
+		t.Fatalf("span-native not-implemented fallback ops delta=%d want 0 for partial parent-stitch path", got-fallbackBefore)
 	}
 }
 

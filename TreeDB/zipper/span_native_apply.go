@@ -22,7 +22,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	defer z.releaseApplyScratch(scratch)
 
 	var retired []uint64
-	spanOutputs := make([]Split, 0, len(prepared.LeafSpans))
+	replacements := make([]spanNativeLeafReplacement, 0, len(prepared.LeafSpans))
 	for i := range prepared.LeafSpans {
 		span := prepared.LeafSpans[i]
 		newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &metrics, span.LowKey, span.HighKey, &retired, scratch, false, applyRunConfig{})
@@ -34,15 +34,14 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		if spanKey == nil {
 			spanKey = []byte{}
 		}
-		spanOutputs = append(spanOutputs, Split{Key: spanKey, Ref: newRef})
-		spanOutputs = append(spanOutputs, splits...)
-	}
-	if rootID != 0 && (len(prepared.LeafSpans) > 1 || !(prepared.LeafSpans[0].Ref.Kind == page.ChildRefPage && prepared.LeafSpans[0].Ref.Page == rootID)) {
-		retired = append(retired, rootID)
+		refs := make([]Split, 0, len(splits)+1)
+		refs = append(refs, Split{Key: spanKey, Ref: newRef})
+		refs = append(refs, splits...)
+		replacements = append(replacements, spanNativeLeafReplacement{span: span, refs: refs})
 	}
 
 	rootReduceStart := time.Now()
-	newRootID, err := z.reduceSpanNativeRoot(spanOutputs, &metrics)
+	newRootID, err := z.reduceSpanNativeRootWithContext(rootID, replacements, &metrics, &retired, scratch)
 	metrics.ZipperRootReduceNs += time.Since(rootReduceStart).Nanoseconds()
 	metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 	if err != nil {
@@ -63,11 +62,6 @@ func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareR
 		return false
 	}
 	spans := prepared.LeafSpans
-	if !spanNativeCoversWholeRoot(spans) {
-		// Partial leaf replacement needs parent-context stitching. Keep that out of
-		// the first opt-in reducer and fall back before preparing output.
-		return false
-	}
 	expectedPointStart := 0
 	var prevHigh []byte
 	for i := range spans {
@@ -75,11 +69,7 @@ func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareR
 		if span.DeleteRangeStart != span.DeleteRangeEnd || span.PointOpStart != expectedPointStart || span.PointOpEnd > len(ops) || span.PointOpEnd <= span.PointOpStart {
 			return false
 		}
-		if i == 0 {
-			if span.LowKey != nil {
-				return false
-			}
-		} else if !bytes.Equal(span.LowKey, prevHigh) {
+		if i > 0 && !bytes.Equal(span.LowKey, prevHigh) {
 			return false
 		}
 		if span.LowKey != nil && span.HighKey != nil && bytes.Compare(span.LowKey, span.HighKey) >= 0 {
@@ -88,11 +78,151 @@ func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareR
 		prevHigh = span.HighKey
 		expectedPointStart = span.PointOpEnd
 	}
-	return expectedPointStart == len(ops) && spans[len(spans)-1].HighKey == nil
+	return expectedPointStart == len(ops)
+}
+
+type spanNativeLeafReplacement struct {
+	span ReadOnlyLeafSpan
+	refs []Split
 }
 
 func spanNativeCoversWholeRoot(spans []ReadOnlyLeafSpan) bool {
 	return len(spans) > 0 && spans[0].LowKey == nil && spans[len(spans)-1].HighKey == nil
+}
+
+func (z *Zipper) reduceSpanNativeRootWithContext(rootID uint64, replacements []spanNativeLeafReplacement, metrics *adaptive.Metrics, retired *[]uint64, scratch *mergeScratch) (uint64, error) {
+	if len(replacements) == 0 {
+		return 0, page.ErrInvalidPageType
+	}
+	if spanNativeCoversWholeRoot(replacementSpans(replacements)) {
+		var refs []Split
+		for i := range replacements {
+			refs = append(refs, replacements[i].refs...)
+		}
+		return z.reduceSpanNativeRoot(refs, metrics)
+	}
+	ref, splits, changed, err := z.stitchSpanNativeRecursive(page.PageChildRef(rootID), nil, nil, replacements, metrics, retired, scratch)
+	if err != nil {
+		return 0, err
+	}
+	if !changed {
+		return 0, page.ErrInvalidPageType
+	}
+	refs := make([]Split, 0, len(splits)+1)
+	refs = append(refs, Split{Key: []byte{}, Ref: ref})
+	refs = append(refs, splits...)
+	return z.reduceSpanNativeRoot(refs, metrics)
+}
+
+func replacementSpans(replacements []spanNativeLeafReplacement) []ReadOnlyLeafSpan {
+	spans := make([]ReadOnlyLeafSpan, len(replacements))
+	for i := range replacements {
+		spans[i] = replacements[i].span
+	}
+	return spans
+}
+
+func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, replacements []spanNativeLeafReplacement, metrics *adaptive.Metrics, retired *[]uint64, scratch *mergeScratch) (page.ChildRef, []Split, bool, error) {
+	oldNode, oldFromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
+	if err != nil {
+		return page.ChildRef{}, nil, false, err
+	}
+	recordZipperNodeLoad(metrics, ref, oldNode, loadSource)
+	if leafScratchRef {
+		defer releaseLeafPageScratch(scratch, leafScratch)
+	}
+
+	switch oldNode.Type() {
+	case page.PageTypeLeaf, 0:
+		for i := range replacements {
+			if replacements[i].span.Ref == ref {
+				refs := append([]Split(nil), replacements[i].refs...)
+				if len(refs) == 0 {
+					return page.ChildRef{}, nil, false, page.ErrInvalidPageType
+				}
+				if low == nil {
+					refs[0].Key = []byte{}
+				} else {
+					refs[0].Key = low
+				}
+				return refs[0].Ref, refs[1:], true, nil
+			}
+		}
+		return ref, nil, false, nil
+	case page.PageTypeInternal:
+		count := oldNode.Count()
+		children := make([]Split, 0, count)
+		changed := false
+		for i := uint16(0); i < count; i++ {
+			key, childRef, err := oldNode.GetInternalEntryRefView(i)
+			if err != nil {
+				return page.ChildRef{}, nil, false, err
+			}
+			if key == nil {
+				key = []byte{}
+			}
+			childLow := low
+			if len(key) != 0 {
+				childLow = append([]byte(nil), key...)
+			}
+			childHigh := high
+			if i+1 < count {
+				nextKey, _, err := oldNode.GetInternalEntryRefView(i + 1)
+				if err != nil {
+					return page.ChildRef{}, nil, false, err
+				}
+				if nextKey == nil {
+					nextKey = []byte{}
+				}
+				childHigh = append([]byte(nil), nextKey...)
+			}
+			if !spanNativeReplacementsOverlap(replacements, childLow, childHigh) {
+				children = append(children, Split{Key: key, Ref: childRef})
+				continue
+			}
+			newRef, childSplits, childChanged, err := z.stitchSpanNativeRecursive(childRef, childLow, childHigh, replacements, metrics, retired, scratch)
+			if err != nil {
+				return page.ChildRef{}, nil, false, err
+			}
+			if childChanged {
+				changed = true
+				children = append(children, Split{Key: key, Ref: newRef})
+				children = append(children, childSplits...)
+			} else {
+				children = append(children, Split{Key: key, Ref: childRef})
+			}
+		}
+		if !changed {
+			return ref, nil, false, nil
+		}
+		if oldFromPager && retired != nil && ref.Kind == page.ChildRefPage && ref.Page != 0 {
+			*retired = append(*retired, ref.Page)
+		}
+		refs, err := z.reduceSpanNativeSplitLevel(children, metrics)
+		if err != nil {
+			return page.ChildRef{}, nil, false, err
+		}
+		if len(refs) == 0 {
+			return page.ChildRef{}, nil, false, page.ErrInvalidPageType
+		}
+		return refs[0].Ref, refs[1:], true, nil
+	default:
+		return page.ChildRef{}, nil, false, page.ErrInvalidPageType
+	}
+}
+
+func spanNativeReplacementsOverlap(replacements []spanNativeLeafReplacement, low, high []byte) bool {
+	for i := range replacements {
+		span := replacements[i].span
+		if span.HighKey != nil && low != nil && bytes.Compare(span.HighKey, low) <= 0 {
+			continue
+		}
+		if high != nil && span.LowKey != nil && bytes.Compare(span.LowKey, high) >= 0 {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (z *Zipper) reduceSpanNativeRoot(currentLevelNodes []Split, metrics *adaptive.Metrics) (uint64, error) {

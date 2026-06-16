@@ -51,7 +51,7 @@ func TestSpanNativeApplySingleLeafSplitReducerParity(t *testing.T) {
 	}
 }
 
-func TestSpanNativeApplyPartialMultiLeafFallsBackBeforeSpanOutput(t *testing.T) {
+func TestSpanNativeApplyPartialMultiLeafParentStitchParity(t *testing.T) {
 	_, serial := newReadOnlyPrepareZipper(t)
 	_, native := newReadOnlyPrepareZipper(t)
 	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 1000)
@@ -73,11 +73,8 @@ func TestSpanNativeApplyPartialMultiLeafFallsBackBeforeSpanOutput(t *testing.T) 
 	if err != nil {
 		t.Fatalf("span-native ApplyWithOptions: %v", err)
 	}
-	if !result.SpanNativeEligible {
-		t.Fatalf("SpanNativeEligible=false want candidate eligible before parent-stitch fallback")
-	}
-	if result.SpanNativeUsed {
-		t.Fatalf("SpanNativeUsed=true want fallback before partial multi-leaf prepared output")
+	if !result.SpanNativeEligible || !result.SpanNativeUsed {
+		t.Fatalf("span-native flags eligible/used=%v/%v want parent-stitch path", result.SpanNativeEligible, result.SpanNativeUsed)
 	}
 	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
 		t.Fatalf("partial fallback output mismatch")
@@ -123,9 +120,10 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 
 	bad = prepared
 	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
-	bad.LeafSpans[0].LowKey = []byte("not-root-min")
+	bad.LeafSpans[0].LowKey = []byte("z")
+	bad.LeafSpans[0].HighKey = []byte("a")
 	if validateSpanNativePreparedPlan(ops, bad) {
-		t.Fatalf("validateSpanNativePreparedPlan accepted non-root-min first span")
+		t.Fatalf("validateSpanNativePreparedPlan accepted non-monotonic span bounds")
 	}
 }
 
