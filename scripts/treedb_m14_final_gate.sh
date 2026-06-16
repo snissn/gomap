@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the TreeDB M14 final-gate unified-bench matrix into a profile artifact root.
+# Run the TreeDB M14 final-gate unified-bench matrix into an out-of-repo profile artifact root.
 #
 # Intended remote usage for #2774:
 #   ROOT=/mnt/fast4tb/gomap-profiles COMMIT=$(git rev-parse HEAD) \
@@ -31,6 +31,14 @@ RUN_MANUAL_BENCHPROF=${RUN_MANUAL_BENCHPROF:-false}
 LOG=$RUN_ROOT/gate.log
 
 mkdir -p "$RUN_ROOT"
+REPO_ABS=$(cd "$REPO" && pwd -P)
+RUN_ROOT_ABS=$(cd "$RUN_ROOT" && pwd -P)
+case "$RUN_ROOT_ABS/" in
+  "$REPO_ABS"/*)
+    echo "RUN_ROOT must be outside the repository because the script runs git clean -fdx: $RUN_ROOT_ABS" >&2
+    exit 2
+    ;;
+esac
 exec > >(tee -a "$LOG") 2>&1
 
 printf "run_root=%s\n" "$RUN_ROOT"
