@@ -110,6 +110,124 @@ func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmissionRejectsInvalid(t *tes
 	}
 }
 
+func TestBuildTreeDBOptions_FlushAdmissionExplicitPreservesOptInFlags(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "explicit"
+	*treedbFlushApplyConcurrency = 4
+	*treedbFlushApplySpanNative = true
+	*treedbFlushBacklogCoalescing = true
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions flush admission explicit: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyExplicit || opts.FlushApplyConcurrency != 4 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("explicit opt-in not preserved: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=explicit",
+		"flush_admission_admitted=true",
+		"flush_admission_reason=explicit_opt_in",
+		"flush_apply_span_native=true",
+		"flush_backlog_coalescing=true",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("resolved options missing %q: %q", want, text)
+		}
+	}
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionOffForcesOff(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "off"
+	*treedbFlushApplyConcurrency = 4
+	*treedbFlushApplySpanNative = true
+	*treedbFlushBacklogCoalescing = true
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions flush admission off: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyOff || opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
+		t.Fatalf("off policy not forced off: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=off",
+		"flush_admission_admitted=false",
+		"flush_admission_reason=policy_off",
+		"flush_apply_concurrency=0",
+		"flush_apply_span_native=false",
+		"flush_backlog_coalescing=false",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("resolved options missing %q: %q", want, text)
+		}
+	}
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionAutoDeclinesLowConcurrencyAndCheckpointDebt(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "auto"
+	*treedbFlushApplyConcurrency = 1
+	*treedbFlushApplySpanNative = true
+	*treedbFlushBacklogCoalescing = true
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions flush admission auto: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
+		t.Fatalf("auto decline not forced off: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=auto",
+		"flush_admission_admitted=false",
+		"flush_admission_reason=low_concurrency,checkpoint_debt_unresolved",
+		"  - flush_admission_policy=auto declined: low_concurrency,checkpoint_debt_unresolved",
+	} {
+		if !treeDBReportHasLine(text, want) {
+			t.Fatalf("resolved options missing line %q: %q", want, text)
+		}
+	}
+}
+
+func treeDBReportHasLine(text, want string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionRejectsInvalidPolicy(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "bad-policy"
+
+	_, _, err := buildTreeDBOptions("")
+	if err == nil {
+		t.Fatal("buildTreeDBOptions unexpectedly accepted invalid flush admission policy")
+	}
+	if !strings.Contains(err.Error(), "flush admission policy") {
+		t.Fatalf("buildTreeDBOptions error=%q, want flush admission context", err)
+	}
+}
+
 func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultRejectsOutOfRangeEnv(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
@@ -282,6 +400,10 @@ type savedTreeDBFlagState struct {
 	allowUnsafe             bool
 	maintenanceMode         string
 	flushThreshold          int64
+	flushAdmissionPolicy    string
+	flushApplyConcurrency   int
+	flushApplySpanNative    bool
+	flushBacklogCoalescing  bool
 	explicitFlags           map[string]bool
 }
 
@@ -324,6 +446,10 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		allowUnsafe:             *treedbAllowUnsafe,
 		maintenanceMode:         *treedbMaintenanceMode,
 		flushThreshold:          *treedbFlushThreshold,
+		flushAdmissionPolicy:    *treedbFlushAdmissionPolicy,
+		flushApplyConcurrency:   *treedbFlushApplyConcurrency,
+		flushApplySpanNative:    *treedbFlushApplySpanNative,
+		flushBacklogCoalescing:  *treedbFlushBacklogCoalescing,
 		explicitFlags:           copyMap,
 	}
 }
@@ -362,6 +488,10 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbAllowUnsafe = s.allowUnsafe
 	*treedbMaintenanceMode = s.maintenanceMode
 	*treedbFlushThreshold = s.flushThreshold
+	*treedbFlushAdmissionPolicy = s.flushAdmissionPolicy
+	*treedbFlushApplyConcurrency = s.flushApplyConcurrency
+	*treedbFlushApplySpanNative = s.flushApplySpanNative
+	*treedbFlushBacklogCoalescing = s.flushBacklogCoalescing
 	explicitFlags = s.explicitFlags
 }
 
@@ -399,6 +529,10 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbAllowUnsafe = false
 	*treedbMaintenanceMode = "bench"
 	*treedbFlushThreshold = 64 * 1024 * 1024
+	*treedbFlushAdmissionPolicy = "explicit"
+	*treedbFlushApplyConcurrency = 0
+	*treedbFlushApplySpanNative = false
+	*treedbFlushBacklogCoalescing = false
 	explicitFlags = map[string]bool{}
 }
 

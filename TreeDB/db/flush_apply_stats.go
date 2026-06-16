@@ -316,6 +316,14 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	if db == nil || stats == nil {
 		return
 	}
+	admission := db.flushAdmission.withStatsDefaults()
+	stats["treedb.flush_admission.policy"] = admission.Policy.String()
+	stats["treedb.flush_admission.admitted"] = fmt.Sprintf("%t", admission.Admitted)
+	stats["treedb.flush_admission.reason"] = admission.Reason
+	stats["treedb.flush_admission.flush_apply_concurrency"] = fmt.Sprintf("%d", admission.FlushApplyConcurrency)
+	stats["treedb.flush_admission.flush_apply_span_native"] = fmt.Sprintf("%t", admission.FlushApplySpanNative)
+	stats["treedb.flush_admission.flush_backlog_coalescing"] = fmt.Sprintf("%t", admission.FlushBacklogCoalescing)
+
 	applyOps := db.flushApplyOps.Load()
 	stats["treedb.flush_apply.apply_calls_total"] = fmt.Sprintf("%d", db.flushApplyCalls.Load())
 	stats["treedb.flush_apply.apply_errors_total"] = fmt.Sprintf("%d", db.flushApplyErrors.Load())
