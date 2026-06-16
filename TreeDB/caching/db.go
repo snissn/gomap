@@ -24711,8 +24711,8 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 }
 
 func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode) bool {
-	mode = db.flushCollectionMode(mode)
 	db.mu.Lock()
+	mode = db.flushCollectionMode(mode)
 	queueLen := len(db.queue)
 	if queueLen == 0 {
 		db.mu.Unlock()
