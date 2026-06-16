@@ -276,11 +276,11 @@ Useful stats:
 - `treedb.process.read_path.outer_leaf.cache.entries`
 - `treedb.process.read_path.outer_leaf.cache.capacity`
 - `treedb.process.read_path.outer_leaf.cache.bytes`
-+- `treedb.process.read_path.outer_leaf.cache.write_admission_policy`
-+- `treedb.process.read_path.outer_leaf.cache.write_admission_attempts`
-+- `treedb.process.read_path.outer_leaf.cache.write_admission_stores`
-+- `treedb.process.read_path.outer_leaf.cache.write_admission_skips`
-+- `treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_policy`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_attempts`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_stores`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_skips`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips`
 
 ### Leaf key compression (`Options.LeafPrefixCompression`)
 
