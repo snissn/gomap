@@ -11,12 +11,7 @@ import (
 )
 
 func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult) (ApplyResult, bool, error) {
-	if prepared.DeleteRanges != 0 || prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans || len(prepared.LeafSpans) == 0 {
-		return ApplyResult{}, false, nil
-	}
-	if !spanNativeCoversWholeRoot(prepared.LeafSpans) {
-		// Partial leaf replacement needs parent-context stitching. Keep that out of
-		// the first opt-in reducer and fall back before preparing output.
+	if !validateSpanNativePreparedPlan(ops, prepared) {
 		return ApplyResult{}, false, nil
 	}
 
@@ -30,12 +25,6 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	spanOutputs := make([]Split, 0, len(prepared.LeafSpans))
 	for i := range prepared.LeafSpans {
 		span := prepared.LeafSpans[i]
-		if span.DeleteRangeStart != span.DeleteRangeEnd || span.PointOpStart < 0 || span.PointOpEnd > len(ops) || span.PointOpEnd <= span.PointOpStart {
-			return ApplyResult{}, false, nil
-		}
-		if i > 0 && span.PointOpStart != prepared.LeafSpans[i-1].PointOpEnd {
-			return ApplyResult{}, false, nil
-		}
 		newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &metrics, span.LowKey, span.HighKey, &retired, scratch, false, applyRunConfig{})
 		if err != nil {
 			metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
@@ -47,12 +36,6 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		}
 		spanOutputs = append(spanOutputs, Split{Key: spanKey, Ref: newRef})
 		spanOutputs = append(spanOutputs, splits...)
-	}
-	if len(prepared.LeafSpans) > 0 && prepared.LeafSpans[0].PointOpStart != 0 {
-		return ApplyResult{}, false, nil
-	}
-	if len(prepared.LeafSpans) > 0 && prepared.LeafSpans[len(prepared.LeafSpans)-1].PointOpEnd != len(ops) {
-		return ApplyResult{}, false, nil
 	}
 	if rootID != 0 && (len(prepared.LeafSpans) > 1 || !(prepared.LeafSpans[0].Ref.Kind == page.ChildRefPage && prepared.LeafSpans[0].Ref.Page == rootID)) {
 		retired = append(retired, rootID)
@@ -73,6 +56,39 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		SpanNativeWorkers:   1,
 		SpanNativeUsed:      true,
 	}, true, nil
+}
+
+func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareResult) bool {
+	if prepared.DeleteRanges != 0 || prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans || len(prepared.LeafSpans) == 0 {
+		return false
+	}
+	spans := prepared.LeafSpans
+	if !spanNativeCoversWholeRoot(spans) {
+		// Partial leaf replacement needs parent-context stitching. Keep that out of
+		// the first opt-in reducer and fall back before preparing output.
+		return false
+	}
+	expectedPointStart := 0
+	var prevHigh []byte
+	for i := range spans {
+		span := spans[i]
+		if span.DeleteRangeStart != span.DeleteRangeEnd || span.PointOpStart != expectedPointStart || span.PointOpEnd > len(ops) || span.PointOpEnd <= span.PointOpStart {
+			return false
+		}
+		if i == 0 {
+			if span.LowKey != nil {
+				return false
+			}
+		} else if !bytes.Equal(span.LowKey, prevHigh) {
+			return false
+		}
+		if span.LowKey != nil && span.HighKey != nil && bytes.Compare(span.LowKey, span.HighKey) >= 0 {
+			return false
+		}
+		prevHigh = span.HighKey
+		expectedPointStart = span.PointOpEnd
+	}
+	return expectedPointStart == len(ops) && spans[len(spans)-1].HighKey == nil
 }
 
 func spanNativeCoversWholeRoot(spans []ReadOnlyLeafSpan) bool {

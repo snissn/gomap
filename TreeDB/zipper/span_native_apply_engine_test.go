@@ -84,6 +84,51 @@ func TestSpanNativeApplyPartialMultiLeafFallsBackBeforeSpanOutput(t *testing.T) 
 	}
 }
 
+func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
+	p, z := newReadOnlyPrepareZipper(t)
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 40)
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < 40; i++ {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte(fmt.Sprintf("guard-%06d", i))); err != nil {
+			t.Fatalf("Set update: %v", err)
+		}
+	}
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if len(prepared.LeafSpans) == 0 {
+		t.Fatalf("expected prepared spans")
+	}
+	ops := delta.SortedEntries()
+	if !validateSpanNativePreparedPlan(ops, prepared) {
+		t.Fatalf("fresh whole-root plan unexpectedly ineligible")
+	}
+
+	bad := prepared
+	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
+	bad.LeafSpans[0].PointOpStart = 1
+	beforePages := p.PageCount()
+	_, used, err := z.applySpanNativeWithPrepared(rootID, ops, bad)
+	if err != nil {
+		t.Fatalf("applySpanNativeWithPrepared invalid plan err=%v", err)
+	}
+	if used {
+		t.Fatalf("invalid prepared plan used span-native output path")
+	}
+	if got := p.PageCount(); got != beforePages {
+		t.Fatalf("invalid prepared plan allocated pages: got %d want %d", got, beforePages)
+	}
+
+	bad = prepared
+	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
+	bad.LeafSpans[0].LowKey = []byte("not-root-min")
+	if validateSpanNativePreparedPlan(ops, bad) {
+		t.Fatalf("validateSpanNativePreparedPlan accepted non-root-min first span")
+	}
+}
+
 func TestSpanNativeReducerRejectsNondeterministicRefOrder(t *testing.T) {
 	_, z := newReadOnlyPrepareZipper(t)
 	_, err := z.reduceSpanNativeRoot([]Split{
