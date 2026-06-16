@@ -11,14 +11,20 @@ import (
 
 func openCheckpointPreDrainTestDB(t *testing.T, enablePreDrain bool) *DB {
 	t.Helper()
+	return openCheckpointPreDrainTestDBWithOptions(t, enablePreDrain, 4, backenddb.LeafPageReadCacheWriteAdmissionImmediate)
+}
+
+func openCheckpointPreDrainTestDBWithOptions(t *testing.T, enablePreDrain bool, concurrency int, admission backenddb.LeafPageReadCacheWriteAdmissionPolicy) *DB {
+	t.Helper()
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{
-		Dir:                   dir,
-		FlushApplyConcurrency: 4,
-		FlushApplyMinEntries:  1,
-		FlushApplyMinSpans:    1,
-		FlushApplyMinBytes:    1,
-		FlushApplySpanNative:  true,
+		Dir:                             dir,
+		FlushApplyConcurrency:           concurrency,
+		FlushApplyMinEntries:            1,
+		FlushApplyMinSpans:              1,
+		FlushApplyMinBytes:              1,
+		FlushApplySpanNative:            true,
+		LeafPageReadCacheWriteAdmission: admission,
 	})
 	if err != nil {
 		t.Fatalf("backend Open: %v", err)
@@ -27,7 +33,7 @@ func openCheckpointPreDrainTestDB(t *testing.T, enablePreDrain bool) *DB {
 		FlushThreshold:           64 << 20,
 		MemtableShards:           1,
 		JournalLanes:             1,
-		FlushApplyConcurrency:    4,
+		FlushApplyConcurrency:    concurrency,
 		FlushApplyMinEntries:     1,
 		FlushApplyMinSpans:       1,
 		FlushApplyMinBytes:       1,
@@ -125,6 +131,52 @@ func TestCheckpointPreDrainDisabledWithoutBacklogOptInKeepsCheckpointFallback(t 
 	}
 	if got := requireStatUint64(t, stats, "treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total"); got == 0 {
 		t.Fatalf("close_or_checkpoint fallback ops=%d want >0 when pre-drain is disabled", got)
+	}
+}
+
+func TestCheckpointPreDrainCoversAdaptiveAdmissionAndHighConcurrency(t *testing.T) {
+	cases := []struct {
+		name        string
+		concurrency int
+		admission   backenddb.LeafPageReadCacheWriteAdmissionPolicy
+	}{
+		{name: "adaptive_admission", concurrency: 4, admission: backenddb.LeafPageReadCacheWriteAdmissionAdaptive},
+		{name: "c16_immediate", concurrency: 16, admission: backenddb.LeafPageReadCacheWriteAdmissionImmediate},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openCheckpointPreDrainTestDBWithOptions(t, true, tc.concurrency, tc.admission)
+			enqueueCheckpointPreDrainMemtable(t, db, "cover"+tc.name)
+
+			if err := db.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			stats := db.Stats()
+			if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.pre_drain_flushes_total"); got == 0 {
+				t.Fatalf("pre_drain_flushes_total=%d want >0", got)
+			}
+			if got := requireStatUint64(t, stats, "treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total"); got != 0 {
+				t.Fatalf("close_or_checkpoint fallback ops=%d want 0", got)
+			}
+		})
+	}
+}
+
+func TestCheckpointPreDrainSkipsAutoCheckpoint(t *testing.T) {
+	db := openCheckpointPreDrainTestDB(t, true)
+	enqueueCheckpointPreDrainMemtable(t, db, "auto")
+	db.autoCheckpointInProgress.Store(1)
+	defer db.autoCheckpointInProgress.Store(0)
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.pre_drain_flushes_total"); got != 0 {
+		t.Fatalf("pre_drain_flushes_total=%d want 0 for auto checkpoint", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total"); got == 0 {
+		t.Fatalf("close_or_checkpoint fallback ops=%d want >0 for auto checkpoint", got)
 	}
 }
 

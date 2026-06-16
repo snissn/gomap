@@ -8451,9 +8451,10 @@ type DB struct {
 	wg                         sync.WaitGroup
 	releasePoolPressureSampler func()
 
-	autoCheckpointOnceCh  chan struct{}
-	autoCheckpointWriteCh chan struct{}
-	autoCheckpointOn      atomic.Bool
+	autoCheckpointOnceCh     chan struct{}
+	autoCheckpointWriteCh    chan struct{}
+	autoCheckpointOn         atomic.Bool
+	autoCheckpointInProgress atomic.Int64
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
 	// It is disarmed after the first size-triggered checkpoint and re-armed only
 	// after reclaimable WAL bytes fall below maxWALBytes/2.
@@ -16546,7 +16547,9 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	before := effectiveBytes
 	beforeReclaimable := reclaimableBytes
 	start := time.Now()
+	db.autoCheckpointInProgress.Add(1)
 	err := db.Checkpoint()
+	addAtomicInt64FloorZero(&db.autoCheckpointInProgress, -1)
 	dur := time.Since(start)
 	after := db.effectiveWALBytes()
 	afterReclaimable := db.reclaimableWALBytes()
@@ -21189,6 +21192,7 @@ func (db *DB) checkpointPreDrainEligible() bool {
 		db.flushApplyConcurrency > 1 &&
 		!db.disableJournal &&
 		db.commandWALCheckpointPublish == nil &&
+		db.autoCheckpointInProgress.Load() == 0 &&
 		!db.closing.Load()
 }
 
