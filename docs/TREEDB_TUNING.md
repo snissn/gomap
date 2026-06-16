@@ -242,23 +242,31 @@ Useful stats:
 ### Outer-leaf read cache
 
 When outer leaf pages are stored in `leaf_vlog`, TreeDB keeps a bounded
-process-local cache of recently appended decoded leaf pages. This avoids
-rereading freshly written leaves from mmap or `ReadAt` during follow-up publish,
-update, and maintenance work.
+process-local set-associative cache of decoded leaf pages. This avoids rereading
+freshly written or repeatedly read leaves from mmap or `ReadAt` during follow-up
+publish, update, read, and maintenance work.
 
-- `Options.LeafPageReadCacheEntries` sets the direct-mapped cache slot count per
-  DB. `0` uses the process default/env override, `<0` disables the cache, and
-  `>0` sets an explicit slot count.
-- `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the process default slot count when the
+- `Options.LeafPageReadCacheEntries` sets the cache entry count per DB. `0` uses
+  the process default/env override, `<0` disables the cache, and `>0` sets an
+  explicit entry count.
+- `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the process default entry count when the
   option is left at `0`. The default is 32768 entries, or about 128 MiB of
   leaf-page payloads. Set the env var to `0` to disable the cache for DBs that
   do not set `Options.LeafPageReadCacheEntries`.
 - Explicit and env-derived cache sizes are capped at 262144 entries to fail
   early with a clear configuration error instead of risking an accidental huge
   cache.
-- `unified-bench` exposes this as `-treedb-leaf-page-read-cache-entries` so
-  read/publish cache-capacity experiments are captured in the reproduced command
-  instead of relying on ambient environment.
+- `Options.LeafPageReadCacheWriteAdmission` controls write-side population of
+  this read cache. The default/zero policy is `immediate`, preserving historical
+  behavior. `LeafPageReadCacheWriteAdmissionAdaptive` is opt-in: it warms the
+  bounded cache, samples cold write streams, re-admits when read hits prove the
+  cache is hot, and skips rather than blocking on cache locks. Skipping affects
+  only in-memory cache population; leaf-log/value-log records and pointers stay
+  persistent, and read-miss admission can still populate the cache later.
+- `unified-bench` exposes these as `-treedb-leaf-page-read-cache-entries` and
+  `-treedb-leaf-page-read-cache-write-admission` so cache-capacity/admission
+  experiments are captured in the reproduced command instead of relying on
+  ambient environment.
 
 Useful stats:
 - `treedb.process.read_path.outer_leaf.cache.hits`
@@ -268,6 +276,11 @@ Useful stats:
 - `treedb.process.read_path.outer_leaf.cache.entries`
 - `treedb.process.read_path.outer_leaf.cache.capacity`
 - `treedb.process.read_path.outer_leaf.cache.bytes`
++- `treedb.process.read_path.outer_leaf.cache.write_admission_policy`
++- `treedb.process.read_path.outer_leaf.cache.write_admission_attempts`
++- `treedb.process.read_path.outer_leaf.cache.write_admission_stores`
++- `treedb.process.read_path.outer_leaf.cache.write_admission_skips`
++- `treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips`
 
 ### Leaf key compression (`Options.LeafPrefixCompression`)
 

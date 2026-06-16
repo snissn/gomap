@@ -27,9 +27,53 @@ const (
 	maxReadMissOddEpochSpins    = 64
 	maxReadMissStableEpochSpins = 256
 	maxReadMissTotalSpins       = 1024
+
+	leafPageReadCacheWriteAdmissionSampleMask      = 63
+	leafPageReadCacheWriteAdmissionMinReadCount    = 1024
+	leafPageReadCacheWriteAdmissionHitMissRatioDiv = 32
 )
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
+
+// LeafPageReadCacheWriteAdmissionPolicy controls whether write-side outer-leaf
+// appends immediately populate the in-memory read cache or use an opt-in,
+// best-effort admission policy. It affects only cache population; leaf-log and
+// value-log records remain persistent regardless of cache admission.
+type LeafPageReadCacheWriteAdmissionPolicy uint8
+
+const (
+	// LeafPageReadCacheWriteAdmissionImmediate preserves the historical behavior:
+	// every valid write-side outer-leaf append is copied into the read cache.
+	LeafPageReadCacheWriteAdmissionImmediate LeafPageReadCacheWriteAdmissionPolicy = iota
+	// LeafPageReadCacheWriteAdmissionAdaptive is an opt-in write-heavy policy that
+	// warms the cache, samples cold write streams, re-admits when reads prove the
+	// cache is hot, and skips rather than blocking on cache locks.
+	LeafPageReadCacheWriteAdmissionAdaptive
+)
+
+// ParseLeafPageReadCacheWriteAdmissionPolicy parses public/user-facing policy
+// strings. Empty/default keep the historical immediate behavior.
+func ParseLeafPageReadCacheWriteAdmissionPolicy(raw string) (LeafPageReadCacheWriteAdmissionPolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "default", "immediate", "always":
+		return LeafPageReadCacheWriteAdmissionImmediate, nil
+	case "adaptive", "guarded", "sampled":
+		return LeafPageReadCacheWriteAdmissionAdaptive, nil
+	default:
+		return LeafPageReadCacheWriteAdmissionImmediate, fmt.Errorf("treedb: invalid leaf page read cache write admission policy %q", raw)
+	}
+}
+
+func (p LeafPageReadCacheWriteAdmissionPolicy) String() string {
+	switch p {
+	case LeafPageReadCacheWriteAdmissionImmediate:
+		return "immediate"
+	case LeafPageReadCacheWriteAdmissionAdaptive:
+		return "adaptive"
+	default:
+		return fmt.Sprintf("policy_%d", p)
+	}
+}
 
 // ResolveLeafPageReadCacheEntries returns the effective cache size for an
 // Options.LeafPageReadCacheEntries value after applying process/env defaults.
@@ -135,6 +179,8 @@ type leafPageReadCache struct {
 	buckets []leafPageReadCacheBucket
 	ways    int
 
+	writeAdmissionPolicy LeafPageReadCacheWriteAdmissionPolicy
+
 	// disabled temporarily bypasses all cache reads and writes during storage
 	// maintenance/compaction so stale leaf-log pages are not served while value-log
 	// rewrite/GC and leaf-generation pack/GC mutate underlying storage.
@@ -153,6 +199,11 @@ type leafPageReadCache struct {
 	readMissAdmissionCandidateSkips atomic.Uint64
 	readMissAdmissionLockSkips      atomic.Uint64
 	readMissAdmissionStores         atomic.Uint64
+
+	writeAdmissionAttempts  atomic.Uint64
+	writeAdmissionStores    atomic.Uint64
+	writeAdmissionSkips     atomic.Uint64
+	writeAdmissionLockSkips atomic.Uint64
 
 	recordChecksumVerifiedStores atomic.Uint64
 	pageChecksumVerifiedMarks    atomic.Uint64
@@ -178,6 +229,10 @@ type leafPageReadCacheStats struct {
 	ReadMissAdmissionCandidateSkips uint64
 	ReadMissAdmissionLockSkips      uint64
 	ReadMissAdmissionStores         uint64
+	WriteAdmissionAttempts          uint64
+	WriteAdmissionStores            uint64
+	WriteAdmissionSkips             uint64
+	WriteAdmissionLockSkips         uint64
 	RecordChecksumVerifiedStores    uint64
 	PageChecksumVerifiedMarks       uint64
 	PageChecksumVerifiedHits        uint64
@@ -187,8 +242,15 @@ type leafPageReadCacheStats struct {
 }
 
 func newLeafPageReadCache(entries int) *leafPageReadCache {
+	return newLeafPageReadCacheWithWriteAdmission(entries, LeafPageReadCacheWriteAdmissionImmediate)
+}
+
+func newLeafPageReadCacheWithWriteAdmission(entries int, writeAdmission LeafPageReadCacheWriteAdmissionPolicy) *leafPageReadCache {
 	if entries <= 0 {
 		return nil
+	}
+	if writeAdmission != LeafPageReadCacheWriteAdmissionAdaptive {
+		writeAdmission = LeafPageReadCacheWriteAdmissionImmediate
 	}
 	ways := leafPageReadCacheWays
 	if entries < ways {
@@ -196,9 +258,10 @@ func newLeafPageReadCache(entries int) *leafPageReadCache {
 	}
 	bucketCount := (entries + ways - 1) / ways
 	c := &leafPageReadCache{
-		slots:   make([]leafPageReadCacheSlot, entries),
-		buckets: make([]leafPageReadCacheBucket, bucketCount),
-		ways:    ways,
+		slots:                make([]leafPageReadCacheSlot, entries),
+		buckets:              make([]leafPageReadCacheBucket, bucketCount),
+		ways:                 ways,
+		writeAdmissionPolicy: writeAdmission,
 	}
 	for i := range c.slots {
 		c.slots[i].owner = c
@@ -208,6 +271,10 @@ func newLeafPageReadCache(entries int) *leafPageReadCache {
 
 func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 	c.storeWithRecordChecksumState(ptr, leafPage, false)
+}
+
+func (c *leafPageReadCache) storeWrite(ptr page.LeafLogPtr, leafPage []byte) {
+	c.storeWriteWithRecordChecksumState(ptr, leafPage, false)
 }
 
 func (c *leafPageReadCache) storeWithRecordChecksumState(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) {
@@ -224,12 +291,70 @@ func (c *leafPageReadCache) storeWithRecordChecksumState(ptr page.LeafLogPtr, le
 	c.recordStore(result, key, recordChecksumVerified)
 }
 
+func (c *leafPageReadCache) storeWriteWithRecordChecksumState(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) {
+	if c == nil {
+		return
+	}
+	if c.writeAdmissionPolicy != LeafPageReadCacheWriteAdmissionAdaptive {
+		c.storeWithRecordChecksumState(ptr, leafPage, recordChecksumVerified)
+		return
+	}
+	c.storeWriteAdaptiveWithRecordChecksumState(ptr, leafPage, recordChecksumVerified)
+}
+
+func (c *leafPageReadCache) storeWriteAdaptiveWithRecordChecksumState(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
+		return
+	}
+	if !c.shouldAdmitWriteStoreAdaptive() {
+		c.writeAdmissionSkips.Add(1)
+		return
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	bucketIndex := c.bucketIndex(key)
+	bucket := &c.buckets[bucketIndex]
+	if !bucket.mu.TryLock() {
+		c.recordWriteAdmissionLockSkip()
+		return
+	}
+	result, ok := c.storeInBucketLocked(bucketIndex, key, leafPage, recordChecksumVerified, true)
+	if ok {
+		c.resetReadMissCandidatesForStoreLocked(bucketIndex, key, result)
+	}
+	bucket.mu.Unlock()
+	if !ok {
+		c.recordWriteAdmissionLockSkip()
+		return
+	}
+	c.writeAdmissionStores.Add(1)
+	c.recordStore(result, key, recordChecksumVerified)
+}
+
+func (c *leafPageReadCache) shouldAdmitWriteStoreAdaptive() bool {
+	attempt := c.writeAdmissionAttempts.Add(1)
+	capacity := uint64(len(c.slots))
+	if capacity == 0 {
+		return false
+	}
+	if attempt <= capacity {
+		return true
+	}
+	hits := c.pageChecksumVerifiedHits.Load() + c.pageChecksumUnverifiedHits.Load()
+	misses := c.misses.Load()
+	reads := hits + misses
+	if reads >= leafPageReadCacheWriteAdmissionMinReadCount && hits > 0 {
+		if misses == 0 || hits >= (misses+leafPageReadCacheWriteAdmissionHitMissRatioDiv-1)/leafPageReadCacheWriteAdmissionHitMissRatioDiv {
+			return true
+		}
+	}
+	return attempt&leafPageReadCacheWriteAdmissionSampleMask == 0
+}
+
 // storeReadMiss admits read-miss pages only after a repeated miss in the same
 // set-associative bucket with a matching fingerprint token in the same admission
-// epoch (probabilistic under collisions). Write-side stores remain immediate;
-// this keeps one-off sparse reads from copying 4KiB pages into the cache and
-// evicting recently-written leaves that are likely to be reused during
-// publish/apply.
+// epoch (probabilistic under collisions). This keeps one-off sparse reads from
+// copying 4KiB pages into the cache and evicting leaves that are likely to be
+// reused during publish/apply.
 func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) bool {
 	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
 		return false
@@ -580,6 +705,11 @@ func (c *leafPageReadCache) recordReadMissAdmissionLockSkip() {
 	c.readMissAdmissionLockSkips.Add(1)
 }
 
+func (c *leafPageReadCache) recordWriteAdmissionLockSkip() {
+	c.writeAdmissionSkips.Add(1)
+	c.writeAdmissionLockSkips.Add(1)
+}
+
 func (c *leafPageReadCache) get(ptr page.LeafLogPtr) ([]byte, bool) {
 	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, false
@@ -749,6 +879,10 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		ReadMissAdmissionCandidateSkips: c.readMissAdmissionCandidateSkips.Load(),
 		ReadMissAdmissionLockSkips:      c.readMissAdmissionLockSkips.Load(),
 		ReadMissAdmissionStores:         c.readMissAdmissionStores.Load(),
+		WriteAdmissionAttempts:          c.writeAdmissionAttempts.Load(),
+		WriteAdmissionStores:            c.writeAdmissionStores.Load(),
+		WriteAdmissionSkips:             c.writeAdmissionSkips.Load(),
+		WriteAdmissionLockSkips:         c.writeAdmissionLockSkips.Load(),
 		RecordChecksumVerifiedStores:    c.recordChecksumVerifiedStores.Load(),
 		PageChecksumVerifiedMarks:       c.pageChecksumVerifiedMarks.Load(),
 		PageChecksumVerifiedHits:        verifiedHits,
@@ -891,9 +1025,16 @@ func cloneLeafPageReadCacheData(data []byte) []byte {
 	return owned
 }
 
+func (c *leafPageReadCache) writeAdmissionPolicyName() string {
+	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
+		return "disabled"
+	}
+	return c.writeAdmissionPolicy.String()
+}
+
 func (db *DB) storeLeafPageReadCache(ptr page.LeafLogPtr, leafPage []byte) {
 	if db == nil {
 		return
 	}
-	db.leafPageReadCache.store(ptr, leafPage)
+	db.leafPageReadCache.storeWrite(ptr, leafPage)
 }

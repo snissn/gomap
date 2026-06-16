@@ -950,6 +950,175 @@ func TestValueReaderLeafLogPageUnsafeToOneOffReadMissDoesNotEvictStoredLeaf(t *t
 	}
 }
 
+func TestLeafPageReadCacheWriteAdmissionImmediatePreservesDefaultStoreBehavior(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	leafA := bytes.Repeat([]byte{0x77}, page.PageSize)
+	leafB := bytes.Repeat([]byte{0x88}, page.PageSize)
+	ptrA := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	ptrB := page.LeafLogPtr{FileID: 7, Offset: 256, RecordLengthHint: 4096}
+
+	cache.storeWrite(ptrA, leafA)
+	cache.storeWrite(ptrB, leafB)
+
+	stats := cache.stats()
+	if stats.Stores != 2 || stats.Evictions != 1 || stats.WriteAdmissionAttempts != 0 || stats.WriteAdmissionSkips != 0 {
+		t.Fatalf("stats=%+v, want immediate stores with no adaptive admission counters", stats)
+	}
+	got, ok := cache.get(ptrB)
+	if !ok || !bytes.Equal(got, leafB) {
+		t.Fatalf("latest immediate write was not cached")
+	}
+}
+
+func TestLeafPageReadCacheAdaptiveWriteAdmissionSkipsColdStreamAfterWarmup(t *testing.T) {
+	cache := newLeafPageReadCacheWithWriteAdmission(2, LeafPageReadCacheWriteAdmissionAdaptive)
+	leaf := bytes.Repeat([]byte{0x77}, page.PageSize)
+
+	cache.storeWrite(page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}, leaf)
+	cache.storeWrite(page.LeafLogPtr{FileID: 7, Offset: 256, RecordLengthHint: 4096}, leaf)
+	for i := 0; i < 10; i++ {
+		cache.storeWrite(page.LeafLogPtr{FileID: 7, Offset: uint64(384 + i*128), RecordLengthHint: 4096}, leaf)
+	}
+
+	stats := cache.stats()
+	if stats.WriteAdmissionAttempts != 12 {
+		t.Fatalf("write admission attempts=%d, want 12; stats=%+v", stats.WriteAdmissionAttempts, stats)
+	}
+	if stats.WriteAdmissionStores != 2 || stats.Stores != 2 || stats.Entries != 2 {
+		t.Fatalf("stats=%+v, want only warm-up write stores retained", stats)
+	}
+	if stats.WriteAdmissionSkips != 10 {
+		t.Fatalf("write admission skips=%d, want 10; stats=%+v", stats.WriteAdmissionSkips, stats)
+	}
+}
+
+func TestLeafPageReadCacheAdaptiveWriteAdmissionAdmitsAfterHotReads(t *testing.T) {
+	cache := newLeafPageReadCacheWithWriteAdmission(2, LeafPageReadCacheWriteAdmissionAdaptive)
+	hotPtr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	otherPtr := page.LeafLogPtr{FileID: 7, Offset: 256, RecordLengthHint: 4096}
+	newPtr := page.LeafLogPtr{FileID: 7, Offset: 384, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x88}, page.PageSize)
+
+	cache.storeWrite(hotPtr, leaf)
+	cache.storeWrite(otherPtr, leaf)
+	for i := 0; i < leafPageReadCacheWriteAdmissionMinReadCount; i++ {
+		if _, ok := cache.get(hotPtr); !ok {
+			t.Fatalf("hot cache read %d missed", i)
+		}
+	}
+	cache.storeWrite(newPtr, leaf)
+
+	stats := cache.stats()
+	if stats.Hits != leafPageReadCacheWriteAdmissionMinReadCount {
+		t.Fatalf("cache hits=%d, want %d; stats=%+v", stats.Hits, leafPageReadCacheWriteAdmissionMinReadCount, stats)
+	}
+	if stats.WriteAdmissionStores != 3 || stats.Stores != 3 {
+		t.Fatalf("stores=%d write stores=%d, want hot-read admission to store third page; stats=%+v", stats.Stores, stats.WriteAdmissionStores, stats)
+	}
+	if stats.WriteAdmissionSkips != 0 {
+		t.Fatalf("write admission skips=%d, want 0 after hot reads; stats=%+v", stats.WriteAdmissionSkips, stats)
+	}
+}
+
+func TestLeafPageReadCacheAdaptiveWriteAdmissionSmallCapacitySkipsColdWrites(t *testing.T) {
+	cache := newLeafPageReadCacheWithWriteAdmission(1, LeafPageReadCacheWriteAdmissionAdaptive)
+	leaf := bytes.Repeat([]byte{0x99}, page.PageSize)
+	ptrA := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	ptrB := page.LeafLogPtr{FileID: 7, Offset: 256, RecordLengthHint: 4096}
+
+	cache.storeWrite(ptrA, leaf)
+	cache.storeWrite(ptrB, leaf)
+
+	stats := cache.stats()
+	if stats.WriteAdmissionAttempts != 2 || stats.WriteAdmissionStores != 1 || stats.WriteAdmissionSkips != 1 || stats.Stores != 1 {
+		t.Fatalf("stats=%+v, want one warm-up store and one cold skip", stats)
+	}
+	if _, ok := cache.get(ptrA); !ok {
+		t.Fatalf("warm-up write should remain cached")
+	}
+	if _, ok := cache.get(ptrB); ok {
+		t.Fatalf("cold skipped write should not be cached")
+	}
+}
+
+func TestLeafPageReadCacheAdaptiveWriteAdmissionInvalidPageSizeIsNoop(t *testing.T) {
+	cache := newLeafPageReadCacheWithWriteAdmission(2, LeafPageReadCacheWriteAdmissionAdaptive)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+
+	cache.storeWrite(ptr, []byte{0x01})
+
+	stats := cache.stats()
+	if stats.WriteAdmissionAttempts != 0 || stats.WriteAdmissionSkips != 0 || stats.Stores != 0 || stats.Entries != 0 {
+		t.Fatalf("stats=%+v, want invalid page size to bypass cache admission", stats)
+	}
+}
+
+func TestLeafPageReadCacheAdaptiveWriteAdmissionDisabledCacheIsNoop(t *testing.T) {
+	var cache *leafPageReadCache
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0xaa}, page.PageSize)
+
+	cache.storeWrite(ptr, leaf)
+	if stats := cache.stats(); stats != (leafPageReadCacheStats{}) {
+		t.Fatalf("nil cache stats=%+v, want stable zero values", stats)
+	}
+
+	db := &DB{}
+	db.storeLeafPageReadCache(ptr, leaf)
+}
+
+func TestLeafPageReadCacheAdaptiveWriteAdmissionSkipsWhenSlotLockContended(t *testing.T) {
+	cache := newLeafPageReadCacheWithWriteAdmission(1, LeafPageReadCacheWriteAdmissionAdaptive)
+	ptr := page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x66}, page.PageSize)
+	key := newLeafPageReadCacheKey(ptr)
+	// With a one-entry cache there is only one victim slot; holding it ensures the
+	// adaptive write path records a non-blocking lock skip instead of waiting.
+	slot := &cache.slots[leafPageReadCacheDirectSlotIndex(cache, key)]
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		cache.storeWrite(ptr, leaf)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("storeWrite blocked on contended slot lock; expected non-blocking skip")
+	}
+
+	stats := cache.stats()
+	if stats.WriteAdmissionAttempts != 1 || stats.WriteAdmissionSkips != 1 || stats.WriteAdmissionLockSkips != 1 || stats.WriteAdmissionStores != 0 || stats.Stores != 0 {
+		t.Fatalf("stats=%+v, want one adaptive lock skip and no stores", stats)
+	}
+}
+
+func TestLeafPageReadCacheAdaptiveWriteAdmissionPreservesChecksumState(t *testing.T) {
+	cache := newLeafPageReadCacheWithWriteAdmission(2, LeafPageReadCacheWriteAdmissionAdaptive)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0xbb}, page.PageSize)
+	dst := make([]byte, 0, page.PageSize)
+
+	cache.storeWriteWithRecordChecksumState(ptr, leaf, true)
+	got, _, state, ok := cache.getToWithState(ptr, dst)
+	if !ok || !bytes.Equal(got, leaf) {
+		t.Fatalf("expected checksum-verified adaptive write store to be cached")
+	}
+	if !state.RecordChecksumVerified || state.PageChecksumVerified {
+		t.Fatalf("initial checksum state=%+v, want record verified and page not yet marked", state)
+	}
+	if !cache.markPageChecksumVerified(ptr) {
+		t.Fatalf("markPageChecksumVerified returned false")
+	}
+	_, _, state, ok = cache.getToWithState(ptr, dst[:0])
+	if !ok || !state.RecordChecksumVerified || !state.PageChecksumVerified {
+		t.Fatalf("post-mark checksum state=%+v ok=%v, want record+page verified", state, ok)
+	}
+}
+
 func TestLeafPageReadCacheStoreReadMissSkipsWhenSlotLockContended(t *testing.T) {
 	cache := newLeafPageReadCache(1)
 	ptr := page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096}
@@ -1051,6 +1220,33 @@ func TestValidateOptionsRejectsHugeLeafPageReadCacheEntriesFromEnv(t *testing.T)
 	err := validateOptions(Options{})
 	if err == nil {
 		t.Fatal("validateOptions unexpectedly accepted huge env leaf page read cache")
+	}
+}
+
+func TestParseLeafPageReadCacheWriteAdmissionPolicy(t *testing.T) {
+	got, err := ParseLeafPageReadCacheWriteAdmissionPolicy("adaptive")
+	if err != nil {
+		t.Fatalf("parse adaptive: %v", err)
+	}
+	if got != LeafPageReadCacheWriteAdmissionAdaptive {
+		t.Fatalf("policy=%v want adaptive", got)
+	}
+	got, err = ParseLeafPageReadCacheWriteAdmissionPolicy("default")
+	if err != nil {
+		t.Fatalf("parse default: %v", err)
+	}
+	if got != LeafPageReadCacheWriteAdmissionImmediate {
+		t.Fatalf("policy=%v want immediate", got)
+	}
+	if _, err := ParseLeafPageReadCacheWriteAdmissionPolicy("invalid"); err == nil {
+		t.Fatalf("expected invalid write admission policy error")
+	}
+}
+
+func TestValidateOptionsRejectsInvalidLeafPageReadCacheWriteAdmission(t *testing.T) {
+	err := validateOptions(Options{LeafPageReadCacheWriteAdmission: LeafPageReadCacheWriteAdmissionPolicy(99)})
+	if err == nil {
+		t.Fatal("validateOptions unexpectedly accepted invalid write admission policy")
 	}
 }
 

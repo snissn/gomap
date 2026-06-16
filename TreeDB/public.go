@@ -30,10 +30,15 @@ type Options = db.Options
 
 type MaintenancePhase = caching.MaintenancePhase
 
+type LeafPageReadCacheWriteAdmissionPolicy = db.LeafPageReadCacheWriteAdmissionPolicy
+
 const (
 	MaintenancePhaseSteady  = caching.MaintenancePhaseSteady
 	MaintenancePhaseRestore = caching.MaintenancePhaseRestore
 	MaintenancePhaseCatchUp = caching.MaintenancePhaseCatchUp
+
+	LeafPageReadCacheWriteAdmissionImmediate = db.LeafPageReadCacheWriteAdmissionImmediate
+	LeafPageReadCacheWriteAdmissionAdaptive  = db.LeafPageReadCacheWriteAdmissionAdaptive
 )
 
 var errVacuumUnsupported = db.ErrVacuumUnsupported

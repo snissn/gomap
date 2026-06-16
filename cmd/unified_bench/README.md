@@ -108,6 +108,8 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-memtable-mode` TreeDB memtable implementation override
 - `-treedb-index-optimizations` TreeDB profile-style index optimization bundle
 - `-treedb-index-outer-leaves-in-vlog` TreeDB: store outer leaves in `leaf_vlog`
+- `-treedb-leaf-page-read-cache-entries` TreeDB: outer-leaf read cache entries for leaf pages stored in the value log (`0`=default/env, `<0`=disable)
+- `-treedb-leaf-page-read-cache-write-admission` TreeDB: write-side outer-leaf read-cache admission policy (`immediate|adaptive`; default preserves immediate admission)
 - `-treedb-prefer-append-alloc` TreeDB: prefer append allocation over freelist reuse
 - `-treedb-force-value-pointers` TreeDB: force all values into the value log
 - `-treedb-value-log-threshold` TreeDB: inline-vs-pointer threshold

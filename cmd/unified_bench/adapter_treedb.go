@@ -59,6 +59,7 @@ var (
 	treedbPagerMmapPopulate               = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
 	treedbPagerPrefetchOnRead             = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
 	treedbLeafPageReadCacheEntries        = flag.Int("treedb-leaf-page-read-cache-entries", 0, "TreeDB: outer-leaf read cache entries for leaf pages stored in the value log (0=default/env, <0=disable)")
+	treedbLeafPageReadCacheWriteAdmission = flag.String("treedb-leaf-page-read-cache-write-admission", "immediate", "TreeDB: write-side outer-leaf read-cache admission policy (immediate|adaptive)")
 	treedbChunkSize                       = flag.Int64("treedb-chunk-size", defaultTreeDBChunkSizeBytes, "TreeDB: pager chunk size in bytes (default 256KiB)")
 	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=auto)")
 	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
@@ -411,6 +412,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
 	lines = append(lines, fmt.Sprintf("index_outer_leaves_in_vlog=%t", r.opts.IndexOuterLeavesInValueLog))
 	lines = append(lines, fmt.Sprintf("outer_leaf_read_cache_entries=%s", formatTreeDBLeafPageReadCacheEntries(r.opts.LeafPageReadCacheEntries)))
+	lines = append(lines, fmt.Sprintf("outer_leaf_read_cache_write_admission=%s", r.opts.LeafPageReadCacheWriteAdmission.String()))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
 	lines = append(lines, fmt.Sprintf("flush_apply_concurrency=%d", r.opts.FlushApplyConcurrency))
@@ -539,6 +541,14 @@ func formatTreeDBLeafPageReadCacheEntries(entries int) string {
 	default:
 		return fmt.Sprintf("%d", entries)
 	}
+}
+
+func parseTreeDBLeafPageReadCacheWriteAdmission(raw string) (treedb.LeafPageReadCacheWriteAdmissionPolicy, error) {
+	policy, err := treedbdb.ParseLeafPageReadCacheWriteAdmissionPolicy(raw)
+	if err != nil {
+		return policy, fmt.Errorf("TreeDB: %w", err)
+	}
+	return policy, nil
 }
 
 func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {
@@ -703,22 +713,30 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		internalBaseDeltaEffective = false
 		notes = append(notes, "index_internal_base_delta disabled: leaf-log child pages use explicit LogRecordRef entries")
 	}
+	writeAdmissionPolicy, err := parseTreeDBLeafPageReadCacheWriteAdmission(*treedbLeafPageReadCacheWriteAdmission)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	if writeAdmissionPolicy == treedb.LeafPageReadCacheWriteAdmissionAdaptive {
+		notes = append(notes, "outer_leaf_read_cache_write_admission=adaptive is opt-in; skipped writes remain durable and read misses can still admit")
+	}
 
 	opts := treedb.Options{
-		Dir:                       dir,
-		KeepRecent:                *treedbKeepRecent,
-		Durability:                durability,
-		ChunkSize:                 *treedbChunkSize,
-		PagerSyncConcurrency:      *treedbPagerSyncConcurrency,
-		PagerMmapPopulate:         *treedbPagerMmapPopulate,
-		PagerPrefetchOnRead:       *treedbPagerPrefetchOnRead,
-		LeafPageReadCacheEntries:  *treedbLeafPageReadCacheEntries,
-		PreferAppendAlloc:         *treedbPreferAppendAlloc,
-		FreelistRegionPages:       *treedbFreelistRegionPages,
-		FreelistRegionRadius:      *treedbFreelistRegionRadius,
-		LeafFillTargetPPM:         uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM:     uint32(clampPPM(*treedbInternalFillPPM)),
-		MaintenanceOpsPerCoalesce: *treedbMaintenanceOpsPerCoalesce,
+		Dir:                             dir,
+		KeepRecent:                      *treedbKeepRecent,
+		Durability:                      durability,
+		ChunkSize:                       *treedbChunkSize,
+		PagerSyncConcurrency:            *treedbPagerSyncConcurrency,
+		PagerMmapPopulate:               *treedbPagerMmapPopulate,
+		PagerPrefetchOnRead:             *treedbPagerPrefetchOnRead,
+		LeafPageReadCacheEntries:        *treedbLeafPageReadCacheEntries,
+		LeafPageReadCacheWriteAdmission: writeAdmissionPolicy,
+		PreferAppendAlloc:               *treedbPreferAppendAlloc,
+		FreelistRegionPages:             *treedbFreelistRegionPages,
+		FreelistRegionRadius:            *treedbFreelistRegionRadius,
+		LeafFillTargetPPM:               uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:           uint32(clampPPM(*treedbInternalFillPPM)),
+		MaintenanceOpsPerCoalesce:       *treedbMaintenanceOpsPerCoalesce,
 
 		LeafPrefixCompression:      leafPrefixEffective,
 		IndexColumnarLeaves:        columnarLeavesEffective,

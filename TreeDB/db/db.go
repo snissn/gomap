@@ -854,6 +854,12 @@ type Options struct {
 	//   - <0 disables the cache for this DB.
 	//   - >0 sets the exact number of set-associative cache entries.
 	LeafPageReadCacheEntries int
+	// LeafPageReadCacheWriteAdmission controls write-side cache population for
+	// outer-leaf pages stored in the value log. The zero value preserves the
+	// historical immediate admission behavior. Adaptive admission is opt-in and
+	// only changes in-memory cache population, not persistent leaf-log/value-log
+	// writes or pointer validity.
+	LeafPageReadCacheWriteAdmission LeafPageReadCacheWriteAdmissionPolicy
 
 	// Durability configures cached-mode durability semantics.
 	//
@@ -1454,6 +1460,11 @@ func validateOptions(opts Options) error {
 	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return err
 	}
+	switch opts.LeafPageReadCacheWriteAdmission {
+	case LeafPageReadCacheWriteAdmissionImmediate, LeafPageReadCacheWriteAdmissionAdaptive:
+	default:
+		return fmt.Errorf("treedb: invalid leaf page read cache write admission policy %d", opts.LeafPageReadCacheWriteAdmission)
+	}
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
 		// not apply.
@@ -1690,7 +1701,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
-	db.leafPageReadCache = newLeafPageReadCache(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries))
+	db.leafPageReadCache = newLeafPageReadCacheWithWriteAdmission(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries), opts.LeafPageReadCacheWriteAdmission)
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
