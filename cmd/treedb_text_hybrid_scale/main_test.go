@@ -1,0 +1,164 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+)
+
+func TestScaleCommandSmokeReport2731(t *testing.T) {
+	outDir := t.TempDir()
+	cfg := config{
+		outDir:             outDir,
+		rows:               96,
+		batchSize:          48,
+		dims:               4,
+		m:                  4,
+		efConstruction:     32,
+		efSearch:           32,
+		topK:               5,
+		candidateLimit:     16,
+		queries:            2,
+		readers:            2,
+		includeVector:      true,
+		runBackfill:        true,
+		backfillRows:       48,
+		runReopen:          true,
+		runConcurrent:      true,
+		concurrentWrites:   4,
+		runRewrite:         true,
+		maintenanceUpdates: 4,
+		maintenanceDeletes: 2,
+		baseRef:            "origin/main",
+	}
+	rep, err := run(cfg)
+	if err != nil {
+		t.Fatalf("run scale command smoke: %v", err)
+	}
+	if rep.SchemaVersion != scaleSchemaVersion {
+		t.Fatalf("schema=%q want %q", rep.SchemaVersion, scaleSchemaVersion)
+	}
+	if rep.Load.Rows != cfg.rows || rep.Load.TextStorage.V2LiveDocuments != uint64(cfg.rows) {
+		t.Fatalf("load=%+v want %d live docs", rep.Load, cfg.rows)
+	}
+	if rep.Backfill == nil || rep.Backfill.Rows != cfg.backfillRows {
+		t.Fatalf("backfill=%+v want rows=%d", rep.Backfill, cfg.backfillRows)
+	}
+	if rep.Reopen == nil || rep.Concurrent == nil || rep.Maintenance == nil {
+		t.Fatalf("missing reopen/concurrent/maintenance: reopen=%v concurrent=%v maintenance=%v", rep.Reopen != nil, rep.Concurrent != nil, rep.Maintenance != nil)
+	}
+	if len(rep.Queries) == 0 {
+		t.Fatal("no query rows")
+	}
+	for _, guard := range rep.Guardrails {
+		if !guard.OK {
+			t.Fatalf("guardrail failed: %+v", guard)
+		}
+	}
+	jsonPath := filepath.Join(outDir, "scale_report.json")
+	markdownPath := filepath.Join(outDir, "scale_report.md")
+	if _, err := os.Stat(jsonPath); err != nil {
+		t.Fatalf("missing json report: %v", err)
+	}
+	if _, err := os.Stat(markdownPath); err != nil {
+		t.Fatalf("missing markdown report: %v", err)
+	}
+	payload, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read json report: %v", err)
+	}
+	var decoded report
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal json report: %v", err)
+	}
+	if decoded.SchemaVersion != scaleSchemaVersion || len(decoded.Queries) != len(rep.Queries) {
+		t.Fatalf("decoded schema/queries mismatch: %q/%d", decoded.SchemaVersion, len(decoded.Queries))
+	}
+	if _, err := os.Stat(rep.Artifacts.DBDir); !os.IsNotExist(err) {
+		t.Fatalf("primary db dir kept unexpectedly err=%v", err)
+	}
+}
+
+func TestHybridFailureRowsPreserveFailClosedStats2731(t *testing.T) {
+	resp := collections.HybridSearchResponse{Stats: collections.HybridSearchStats{FailClosed: 1, FailClosedReason: collections.HybridFailClosedReasonTextIndexUnavailable}}
+	row := failedHybridQueryRow(config{rows: 1_000_000, topK: 10, candidateLimit: 64}, "hybrid_common", "common", resp, errors.New("bounded generation failed"))
+	if row.GuardrailOK || row.GuardrailFailure == "" {
+		t.Fatalf("row guardrail=%v failure=%q", row.GuardrailOK, row.GuardrailFailure)
+	}
+	if row.HybridStats == nil || row.HybridStats.FailClosed != 1 || row.HybridStats.FailClosedReason != collections.HybridFailClosedReasonTextIndexUnavailable {
+		t.Fatalf("row stats=%+v want fail-closed stats preserved", row.HybridStats)
+	}
+	if row.Samples != 0 || row.Results != 0 || row.Rows != 1_000_000 || row.CandidateBudget != 64 {
+		t.Fatalf("row metadata=%+v", row)
+	}
+}
+
+func TestDBDirContainingOutDirRejected2731(t *testing.T) {
+	root := t.TempDir()
+	cases := []struct {
+		name string
+		db   string
+		out  string
+		want bool
+	}{
+		{name: "same", db: root, out: root, want: true},
+		{name: "db_parent", db: root, out: filepath.Join(root, "reports"), want: true},
+		{name: "db_child_allowed", db: filepath.Join(root, "reports", "primary_db"), out: filepath.Join(root, "reports"), want: false},
+		{name: "sibling_allowed", db: filepath.Join(root, "db"), out: filepath.Join(root, "reports"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := dbDirContainsOutDir(tc.db, tc.out)
+			if err != nil {
+				t.Fatalf("dbDirContainsOutDir: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("dbDirContainsOutDir(%q,%q)=%v want %v", tc.db, tc.out, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRankBottlenecksNormalizesUnits2731(t *testing.T) {
+	rep := report{
+		Load: loadReport{TotalSeconds: 100, VectorRebuildSeconds: 50},
+		Queries: []queryReport{
+			{Name: "fast_query", Latency: latencySummary{P95NS: int64(time.Millisecond)}},
+			{Name: "slow_query", Latency: latencySummary{P95NS: int64(200 * time.Second)}},
+		},
+		Maintenance: &maintenanceReport{RewriteSeconds: 75},
+	}
+	got := rankBottlenecks(rep)
+	if len(got) < 4 {
+		t.Fatalf("rankBottlenecks returned %d rows", len(got))
+	}
+	if got[0].Name != "slow_query" {
+		t.Fatalf("first bottleneck=%q want slow_query", got[0].Name)
+	}
+	if got[1].Name != "fixture_load" || got[2].Name != "text_rewrite" || got[3].Name != "vector_rebuild" {
+		t.Fatalf("unexpected normalized order: %+v", got[:4])
+	}
+}
+
+func TestScaleCommandFlagValidation2731(t *testing.T) {
+	if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "0"}); err == nil {
+		t.Fatal("parseFlags accepted zero rows")
+	}
+	for _, flagName := range []string{"-backfill-rows", "-concurrent-writes", "-maintenance-updates", "-maintenance-deletes"} {
+		if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "10", flagName, "-1"}); err == nil {
+			t.Fatalf("parseFlags accepted negative %s", flagName)
+		}
+	}
+	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "10", "-include-vector=false", "-run-backfill=false", "-run-rewrite=false", "-run-concurrent=false", "-run-reopen=false"})
+	if err != nil {
+		t.Fatalf("parseFlags valid args: %v", err)
+	}
+	if cfg.includeVector || cfg.runBackfill || cfg.runRewrite || cfg.runConcurrent || cfg.runReopen {
+		t.Fatalf("bool flags not parsed: %+v", cfg)
+	}
+}
