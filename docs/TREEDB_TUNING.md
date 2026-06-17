@@ -90,18 +90,49 @@ optionally build the `SetOps` batch in parallel:
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
 
-### `Options.FlushApplyConcurrency` (opt-in/default-off)
+### Span-native flush admission (default auto)
 
-`FlushApplyConcurrency > 1` enables the experimental bounded worker-pool path for B-tree COW apply. It is separate from `FlushBuildConcurrency` and remains default-off. The effective worker count is capped by `GOMAXPROCS`, planned leaf-span count, and the `FlushApplyMinEntries`, `FlushApplyMinSpans`, and `FlushApplyMinBytes` gates. Leaf/value-log output remains persistent storage; failed or abandoned apply attempts do not publish roots, and unreachable prepared output is reclaimed only by reachability-based maintenance.
+`Options.FlushAdmissionPolicy` selects how TreeDB admits the span-native
+flush/apply + backlog coalescing path:
+
+- `FlushAdmissionPolicyAuto` is the default/unconfigured policy. It admits the
+  measured conservative c4 span-native + backlog candidate with adaptive
+  write-side outer-leaf cache admission when the low-concurrency and durability
+  guardrails pass.
+- `FlushAdmissionPolicyOff` is the immediate rollback policy. It force-disables
+  span-native apply, backlog coalescing, and flush-apply concurrency.
+- `FlushAdmissionPolicyExplicit` preserves caller-supplied knobs for experiments
+  and explicit c4/c16/cache-disabled comparisons.
+
+`FlushApplyConcurrency`, `FlushApplySpanNative`, and `FlushBacklogCoalescing`
+remain available as explicit knobs. Under the default `auto` policy, TreeDB
+normalizes the admitted candidate to c4 with `FlushApplyMinEntries=1`,
+`FlushApplyMinSpans=1`, `FlushApplyMinBytes=1`, span-native enabled, backlog
+coalescing enabled, and adaptive write-side cache admission. The policy declines
+low-concurrency/c1-shaped configurations and WAL-off unsafe durability. Leaf and
+value-log output remain persistent storage; failed or abandoned apply attempts do
+not publish roots, and unreachable prepared output is reclaimed only by
+reachability-based maintenance.
 
 Rollout guidance:
 
-- Leave the default serial path in place unless checkpoint/drain evidence for the workload justifies an opt-in value.
-- Benchmark `1,2,4,8` (or a smaller hardware-appropriate matrix) with `-checkpoint-between-tests`, allocation profiles, and storage footprint before enabling in production.
-- Roll back by setting `FlushApplyConcurrency <= 1`; no data migration is required because the option changes only the in-memory apply strategy.
-- Watch `treedb.flush_apply.*`, `treedb.cache.flush_apply.*`, `prepared_output.*`, checkpoint wall times, allocation profiles, and final `index.db`/`leaf_vlog` footprint. Regressions in write throughput, checkpoint time, allocation volume, or footprint should keep the option disabled.
+- Use the default auto policy for normal durable cached-mode workloads.
+- Roll back immediately with `FlushAdmissionPolicyOff` or
+  `-treedb-flush-admission-policy=off`; no data migration is required because
+  the option changes only in-memory apply/cache policy.
+- Use `FlushAdmissionPolicyExplicit` for non-default experiments such as c16,
+  immediate cache admission, or cache-disabled diagnostic rows.
+- Watch `treedb.flush_admission.*`, `treedb.flush_apply.*`,
+  `treedb.cache.flush_apply.*`, `prepared_output.*`, checkpoint wall times,
+  allocation profiles, cache hit/store/eviction counters, and final
+  `index.db`/`leaf_vlog` footprint. Reproducible regressions in read/scan
+  throughput, checkpoint time, allocation volume, or footprint should trigger
+  rollback or a narrower explicit policy.
 
-Known blockers: #2786/M3 records a default-off decision for span-native/backlog admission because #2785/M2 left checkpoint-inclusive latency debt unresolved. #2794 must resolve that checkpoint debt, #2795 must resolve fail-closed default admission for the M14 c1 regression, #2787 must run the read/cache guardrail matrix, and #2788 must run the final gate before any default-on claim. Until those pass, treat `FlushApplyConcurrency > 1`, `FlushApplySpanNative`, and `FlushBacklogCoalescing` as workload-specific experimental opt-ins.
+M5/#2788 evidence is recorded in
+`docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. Checkpoint pauses remain
+multi-second and are an accepted bounded model tradeoff, not a claim that
+checkpoint debt disappeared.
 
 ### Read latency under flush debt (cached mode)
 

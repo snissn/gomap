@@ -180,6 +180,24 @@ func TestNormalizeFlushAdmission_AutoCapsConfiguredConcurrencyToC4Candidate(t *t
 	}
 }
 
+func TestNormalizeFlushAdmission_AutoDeclinesWALOffUnsafeDurability(t *testing.T) {
+	oldGOMAXPROCS := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
+
+	opts := Options{Durability: DurabilityWALOffRelaxed}
+	decision := NormalizeFlushAdmissionOptions(&opts)
+
+	if decision.Admitted {
+		t.Fatalf("admitted=true want false")
+	}
+	if decision.Reason != FlushAdmissionReasonUnsafeDurability {
+		t.Fatalf("reason=%q want %q", decision.Reason, FlushAdmissionReasonUnsafeDurability)
+	}
+	if opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
+		t.Fatalf("auto unsafe-durability decline did not force off: concurrency=%d span=%t backlog=%t", opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+}
+
 func TestFlushAdmissionStatsExposePolicyReasonAndCandidate(t *testing.T) {
 	oldGOMAXPROCS := runtime.GOMAXPROCS(4)
 	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
