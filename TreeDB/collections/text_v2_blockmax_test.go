@@ -521,8 +521,12 @@ func TestTextV2BlockMaxRandomizedExactnessAndFallbacks2628(t *testing.T) {
 						t.Fatalf("block-max/fallback: %v", err)
 					}
 					assertTextSearchParity2627(t, got, exhaustive)
-					if tc.wantFall && got.Stats.TextBlockMaxFallbacks == 0 {
-						t.Fatalf("stats=%+v want exact exhaustive fallback counter", got.Stats)
+					if tc.wantFall {
+						if got.Stats.TextBlockMaxFallbacks == 0 {
+							t.Fatalf("stats=%+v want exact exhaustive fallback counter", got.Stats)
+						}
+					} else if got.Stats.TextBlockMaxFallbacks != 0 {
+						t.Fatalf("stats=%+v want no exact exhaustive fallback counter", got.Stats)
 					}
 				})
 			}
