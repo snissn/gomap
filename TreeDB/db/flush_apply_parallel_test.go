@@ -105,6 +105,7 @@ func openFlushApplyLeafLogTestDBWithSpanNative(t *testing.T, concurrency int, sp
 		Dir:                        t.TempDir(),
 		ChunkSize:                  64 * 1024,
 		IndexOuterLeavesInValueLog: true,
+		FlushAdmissionPolicy:       FlushAdmissionPolicyExplicit,
 		FlushApplyConcurrency:      concurrency,
 		FlushApplyMinEntries:       1,
 		FlushApplyMinSpans:         1,
