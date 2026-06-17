@@ -331,6 +331,47 @@ func TestTextV2BlockMaxMultiTermOROverlappingMutationFallsBackExact2730(t *testi
 	}
 }
 
+func TestTextV2BlockMaxMultiTermORCandidateLimitIgnoresStaleGeneration2730(t *testing.T) {
+	target := uint64(2)
+	blockStart := textV2OrdinalBlockStart(target, textV2DefaultNormBlockSize)
+	ctx := &textV2SearchContext{
+		status:       textV2IndexStatusValue{RootGeneration: 2, NormGeneration: 2, DocMapGeneration: 2, NextOrdinal: 3},
+		corpus:       textV2CorpusStatsValue{DocumentCount: 2},
+		termStats:    map[string]textV2TermStatsValue{"refund": {DocumentFrequency: 1}, "policy": {DocumentFrequency: 1}},
+		fieldStats:   []textV2FieldStatsValue{{DocumentCount: 2, TotalTokenCount: 4}},
+		fieldNames:   []string{"body"},
+		fieldWeights: []float64{1},
+	}
+	stalePosting := textV2SearchPostingValue{generation: 1, termFrequency: 1, fieldCount: 1, inlineFields: [4]uint32{1}}
+	block := textV2PostingBlockValue{Summary: textV2PostingBlockSummary{FirstOrdinal: target, LastOrdinal: target}}
+	states := []*textV2ANDBlockMaxTermState{
+		{term: "refund", decoded: true, scanner: &textV2PostingBlockEntryScanner{}, block: block, entries: []textV2ANDBlockMaxPostingEntry{{ordinal: target, value: stalePosting}}},
+		{term: "policy", decoded: true, scanner: &textV2PostingBlockEntryScanner{}, block: block, entries: []textV2ANDBlockMaxPostingEntry{{ordinal: target, value: stalePosting}}},
+	}
+	cache := &textV2SearchBlockCache{
+		normBlocks: map[uint64]textV2SearchNormBlock{
+			blockStart: {BlockStart: blockStart, BlockSize: textV2DefaultNormBlockSize, FieldCount: 1, Entries: []textV2SearchNormEntry{{Ordinal: target, Generation: 2, FieldLengths: []uint32{2}}}},
+		},
+		docMapBlocks: map[uint64]textV2SearchDocMapBlock{
+			blockStart: {BlockStart: blockStart, BlockSize: textV2DefaultDocMapBlockSize, Entries: []textV2SearchDocMapEntry{{Ordinal: target, Generation: 2, DocumentID: []byte("d2")}}},
+		},
+	}
+	stats := &TextSearchStats{TextCandidatesScored: 1}
+	top := &textV2SearchTopK{limit: 1, candidates: []textV2SearchTopCandidate{{ordinal: 1, generation: 1, documentID: []byte("d1"), score: 1}}}
+
+	// Advancement is covered by end-to-end block-max tests; this fixture isolates scoring-limit ordering.
+	truncated, err := visitTextV2ORBlockMaxCandidate(nil, nil, ctx, states, nil, cache, nil, 1, 64, target, top, stats)
+	if err != nil {
+		t.Fatalf("visit OR candidate with stale generation: %v", err)
+	}
+	if truncated || stats.Truncated || stats.FailClosedReason != "" {
+		t.Fatalf("truncated=%v stats=%+v want stale generation skipped without candidate-limit fail-closed", truncated, stats)
+	}
+	if stats.TextCandidatesScored != 1 || len(top.candidates) != 1 || string(top.candidates[0].documentID) != "d1" {
+		t.Fatalf("top=%+v stats=%+v want existing candidate retained without scoring stale target", top.candidates, stats)
+	}
+}
+
 func TestTextV2BlockMaxMultiTermANDTieBreak2688(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()

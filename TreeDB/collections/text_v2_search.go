@@ -1654,11 +1654,6 @@ func visitTextV2ORBlockMaxCandidate(
 	score := 0.0
 	matched := false
 	if ok {
-		if candidateLimit > 0 && stats != nil && stats.TextCandidatesScored >= uint64(candidateLimit) {
-			stats.Truncated = true
-			stats.FailClosedReason = textSearchFailClosedCandidateLimit
-			return true, nil
-		}
 		// Accumulate in canonical query-term order (scoreStates), not the
 		// WAND-active order (advanceStates), so floating-point ties match the
 		// exhaustive scorer's deterministic ordering exactly.
@@ -1677,12 +1672,19 @@ func visitTextV2ORBlockMaxCandidate(
 			if posting.generation != norm.Generation {
 				continue
 			}
+			if !matched {
+				if candidateLimit > 0 && stats != nil && stats.TextCandidatesScored >= uint64(candidateLimit) {
+					stats.Truncated = true
+					stats.FailClosedReason = textSearchFailClosedCandidateLimit
+					return true, nil
+				}
+				matched = true
+			}
 			termScore, err := scoreTextV2SearchPostingValue(state.term, posting, ctx, norm)
 			if err != nil {
 				return false, err
 			}
 			score += termScore
-			matched = true
 		}
 	}
 	if matched {
