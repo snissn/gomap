@@ -45,7 +45,7 @@ TreeDB maintenance can prove old roots/value-log records unreachable.
 
 ## Safety boundaries
 
-- No external IR engine, sidecar, slab path, or standalone text-block GC.
+- No external IR engine, sidecar, private value-log rewrite path, or standalone text-block GC.
 - No full-document fetch is introduced in candidate generation.
 - Budget exhaustion is fail-closed: storage remains unchanged.
 - Snapshot-bound readers can continue searching while maintenance publishes new

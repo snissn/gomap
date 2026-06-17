@@ -100,6 +100,22 @@ func TestTextV2RewriteBudgetMaxDurationCheck2732(t *testing.T) {
 	}
 }
 
+func TestTextV2RewriteBudgetCapacityChecks2732(t *testing.T) {
+	maxUint64 := ^uint64(0)
+
+	blockBudget := newTextV2RewriteBudget(context.Background(), TextIndexRewriteOptions{MaxPostingBlocks: maxUint64})
+	blockBudget.postingBlocks = maxUint64
+	if err := blockBudget.reservePostingBlock(); !errors.Is(err, errTextV2RewriteBudgetExhausted) || blockBudget.reason != TextIndexRewriteBudgetReasonMaxPostingBlocks {
+		t.Fatalf("block budget err=%v reason=%q want posting-block exhaustion", err, blockBudget.reason)
+	}
+
+	postingBudget := newTextV2RewriteBudget(context.Background(), TextIndexRewriteOptions{MaxPostings: maxUint64})
+	postingBudget.postings = maxUint64 - 1
+	if err := postingBudget.reservePostings(2); !errors.Is(err, errTextV2RewriteBudgetExhausted) || postingBudget.reason != TextIndexRewriteBudgetReasonMaxPostings {
+		t.Fatalf("posting budget err=%v reason=%q want postings exhaustion", err, postingBudget.reason)
+	}
+}
+
 func TestTextV2MaintenancePolicyReopenAfterMaintenance2732(t *testing.T) {
 	dir := t.TempDir()
 	d := openTextV2TestDB(t, dir, false)
@@ -240,6 +256,24 @@ func TestTextV2MaintenancePolicyManagerMaxIndexes2732(t *testing.T) {
 	}
 	if !stats.BudgetExhausted || stats.BudgetExhaustedReason != TextIndexMaintenanceSkipReasonMaxIndexes || stats.IndexesScanned != 1 || stats.IndexesSkipped == 0 {
 		t.Fatalf("manager stats=%+v want max-index budget exhaustion after one index", stats)
+	}
+}
+
+func TestTextV2MaintenancePolicyRejectsNegativeMaxIndexes2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col, _ := createTextV2MaintenancePolicyFixture2732(t, d, 24)
+
+	opts := TextIndexMaintenanceOptions{MaxIndexes: -1}
+	const want = "collections: text index maintenance MaxIndexes must be non-negative"
+	if _, err := col.MaintainTextIndex(context.Background(), "lexical", opts); err == nil || err.Error() != want {
+		t.Fatalf("MaintainTextIndex err=%v want %q", err, want)
+	}
+	if _, err := col.MaintainTextIndexes(context.Background(), opts); err == nil || err.Error() != want {
+		t.Fatalf("MaintainTextIndexes err=%v want %q", err, want)
+	}
+	if _, err := NewCollectionManager(d).MaintainTextIndexes(context.Background(), opts); err == nil || err.Error() != want {
+		t.Fatalf("manager MaintainTextIndexes err=%v want %q", err, want)
 	}
 }
 
