@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
+	"strings"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -22,6 +24,16 @@ type TextAnalyzer string
 const (
 	TextAnalyzerSimple TextAnalyzer = "simple"
 )
+
+// TextAnalyzerOptions configures the built-in text analyzer in ways that are
+// safe to persist in collection metadata. StopWords are supported for the
+// simple analyzer. Stemmer and Synonyms reserve bounded extension seams and are
+// rejected until their indexing/query expansion semantics are implemented.
+type TextAnalyzerOptions struct {
+	StopWords []string            `json:"stop_words,omitempty"`
+	Stemmer   string              `json:"stemmer,omitempty"`
+	Synonyms  map[string][]string `json:"synonyms,omitempty"`
+}
 
 // TextIndexVersion selects the physical text-index contract. For new text
 // index declarations, the zero value normalizes to TextIndexVersionV2. Existing
@@ -58,6 +70,7 @@ type TextIndexDefinition struct {
 	Name             string               `json:"name"`
 	Fields           []TextIndexField     `json:"fields"`
 	Analyzer         TextAnalyzer         `json:"analyzer,omitempty"`
+	AnalyzerOptions  *TextAnalyzerOptions `json:"analyzer_options,omitempty"`
 	Version          TextIndexVersion     `json:"version,omitempty"`
 	Rollout          TextIndexRolloutMode `json:"rollout,omitempty"`
 	StorePositions   bool                 `json:"store_positions,omitempty"`
@@ -80,6 +93,116 @@ func normalizeTextAnalyzer(analyzer TextAnalyzer) (TextAnalyzer, error) {
 	default:
 		return "", fmt.Errorf("unsupported analyzer %q", analyzer)
 	}
+}
+
+func normalizeTextAnalyzerOptions(analyzer TextAnalyzer, options *TextAnalyzerOptions) (*TextAnalyzerOptions, error) {
+	if options == nil {
+		return nil, nil
+	}
+	if _, err := normalizeTextAnalyzer(analyzer); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(options.Stemmer) != "" {
+		return nil, fmt.Errorf("%w: text analyzer stemmer %q is not implemented", ErrTextIndexUnavailable, options.Stemmer)
+	}
+	if len(options.Synonyms) != 0 {
+		return nil, fmt.Errorf("%w: text analyzer synonyms are not implemented", ErrTextIndexUnavailable)
+	}
+	stopWords, err := normalizeTextAnalyzerStopWords(options.StopWords)
+	if err != nil {
+		return nil, err
+	}
+	if len(stopWords) == 0 {
+		return nil, nil
+	}
+	return &TextAnalyzerOptions{StopWords: stopWords}, nil
+}
+
+func normalizeTextAnalyzerStopWords(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	for i, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		var terms []string
+		if err := analyzeSimpleTextToSink(raw, TextTokenSinkFunc(func(token TextToken) error {
+			terms = append(terms, token.Term)
+			return nil
+		})); err != nil {
+			return nil, fmt.Errorf("text analyzer stop_words[%d]: %w", i, err)
+		}
+		if len(terms) != 1 {
+			return nil, fmt.Errorf("text analyzer stop_words[%d] %q must analyze to exactly one simple token", i, raw)
+		}
+		seen[terms[0]] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(seen))
+	for term := range seen {
+		out = append(out, term)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func textAnalyzerStopWordSet(options *TextAnalyzerOptions) map[string]struct{} {
+	if options == nil || len(options.StopWords) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(options.StopWords))
+	for _, term := range options.StopWords {
+		set[term] = struct{}{}
+	}
+	return set
+}
+
+func cloneTextAnalyzerOptions(options *TextAnalyzerOptions) *TextAnalyzerOptions {
+	if options == nil {
+		return nil
+	}
+	out := &TextAnalyzerOptions{
+		StopWords: append([]string(nil), options.StopWords...),
+		Stemmer:   options.Stemmer,
+	}
+	if len(options.Synonyms) != 0 {
+		out.Synonyms = make(map[string][]string, len(options.Synonyms))
+		for term, expansions := range options.Synonyms {
+			out.Synonyms[term] = append([]string(nil), expansions...)
+		}
+	}
+	return out
+}
+
+func textAnalyzerOptionsEqual(a, b *TextAnalyzerOptions) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.Stemmer != b.Stemmer || len(a.StopWords) != len(b.StopWords) || len(a.Synonyms) != len(b.Synonyms) {
+		return false
+	}
+	for i := range a.StopWords {
+		if a.StopWords[i] != b.StopWords[i] {
+			return false
+		}
+	}
+	for term, left := range a.Synonyms {
+		right, ok := b.Synonyms[term]
+		if !ok || len(left) != len(right) {
+			return false
+		}
+		for i := range left {
+			if left[i] != right[i] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func normalizeTextIndexVersion(version TextIndexVersion) (TextIndexVersion, error) {
@@ -116,6 +239,11 @@ func normalizeTextIndexDefinition(def TextIndexDefinition) (TextIndexDefinition,
 		return TextIndexDefinition{}, err
 	}
 	def.Analyzer = analyzer
+	analyzerOptions, err := normalizeTextAnalyzerOptions(analyzer, def.AnalyzerOptions)
+	if err != nil {
+		return TextIndexDefinition{}, err
+	}
+	def.AnalyzerOptions = analyzerOptions
 	version, err := normalizeTextIndexVersion(def.Version)
 	if err != nil {
 		return TextIndexDefinition{}, err
@@ -166,6 +294,7 @@ func copyTextIndexDefinitions(in []TextIndexDefinition) []TextIndexDefinition {
 	out := append([]TextIndexDefinition(nil), in...)
 	for i := range out {
 		out[i].Fields = append([]TextIndexField(nil), out[i].Fields...)
+		out[i].AnalyzerOptions = cloneTextAnalyzerOptions(out[i].AnalyzerOptions)
 	}
 	return out
 }
@@ -173,6 +302,7 @@ func copyTextIndexDefinitions(in []TextIndexDefinition) []TextIndexDefinition {
 func textIndexDefinitionValuesEqual(a, b TextIndexDefinition) bool {
 	if a.Name != b.Name ||
 		a.Analyzer != b.Analyzer ||
+		!textAnalyzerOptionsEqual(a.AnalyzerOptions, b.AnalyzerOptions) ||
 		a.Version != b.Version ||
 		a.Rollout != b.Rollout ||
 		a.StorePositions != b.StorePositions ||
@@ -384,6 +514,9 @@ func TextIndexV2RequiredCounterNames() []string {
 		"norm_lookups",
 		"docs_fetched",
 		"match_details_built",
+		"position_lookups",
+		"phrase_candidates_checked",
+		"phrase_candidates_matched",
 		"scalar_filter_selectivity",
 		"fail_closed",
 		"write_amplification",
