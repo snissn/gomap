@@ -993,8 +993,9 @@ type Options struct {
 	// FlushAdmissionPolicy selects how TreeDB admits the span-native/backlog
 	// flush/apply candidate path. The zero value (auto) admits the measured
 	// conservative c4/adaptive candidate on sufficiently parallel hosts and fails
-	// closed on low-concurrency hosts. Explicit preserves caller-supplied knobs;
-	// Off force-disables span-native/backlog/concurrency as a rollback policy.
+	// closed on low-concurrency hosts or DurabilityWALOffRelaxed unsafe-durability
+	// opens. Explicit preserves caller-supplied knobs; Off force-disables
+	// span-native/backlog/concurrency as a rollback policy.
 	FlushAdmissionPolicy FlushAdmissionPolicy
 
 	// FlushApplyConcurrency enables M2 parallel COW apply for backend flush/write
