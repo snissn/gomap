@@ -103,6 +103,12 @@ func TestTextV2RewriteBudgetMaxDurationCheck2732(t *testing.T) {
 func TestTextV2RewriteBudgetCapacityChecks2732(t *testing.T) {
 	maxUint64 := ^uint64(0)
 
+	termBudget := newTextV2RewriteBudget(context.Background(), TextIndexRewriteOptions{MaxTerms: maxUint64})
+	termBudget.terms = maxUint64
+	if err := termBudget.reserveTerm(); !errors.Is(err, errTextV2RewriteBudgetExhausted) || termBudget.reason != TextIndexRewriteBudgetReasonMaxTerms {
+		t.Fatalf("term budget err=%v reason=%q want max-terms exhaustion", err, termBudget.reason)
+	}
+
 	blockBudget := newTextV2RewriteBudget(context.Background(), TextIndexRewriteOptions{MaxPostingBlocks: maxUint64})
 	blockBudget.postingBlocks = maxUint64
 	if err := blockBudget.reservePostingBlock(); !errors.Is(err, errTextV2RewriteBudgetExhausted) || blockBudget.reason != TextIndexRewriteBudgetReasonMaxPostingBlocks {

@@ -197,11 +197,15 @@ func (b *textV2RewriteBudget) checkTermCount(next uint64) error {
 }
 
 func (b *textV2RewriteBudget) reserveTerm() error {
-	if err := b.checkTermCount(b.terms + 1); err != nil {
+	if err := b.check(); err != nil {
 		return err
 	}
 	if b == nil || !b.enabled {
 		return nil
+	}
+	if b.maxTerms > 0 && b.terms >= b.maxTerms {
+		b.exhaust(TextIndexRewriteBudgetReasonMaxTerms)
+		return errTextV2RewriteBudgetExhausted
 	}
 	b.terms++
 	return nil
