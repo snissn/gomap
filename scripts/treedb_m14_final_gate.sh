@@ -7,6 +7,10 @@
 #
 # The script runs 10M-key TreeDB write profiles and then invokes
 # scripts/treedb_m14_matrix_summary.py to produce m14_matrix_summary.{md,json}.
+# Since #2788 changed unified-bench's default flush-admission policy to auto,
+# all non-default explicit comparison rows below pass
+# -treedb-flush-admission-policy=explicit so they are not normalized to the
+# current default candidate shape.
 # `unified-bench -profile-dir` auto-runs benchprof; set
 # RUN_MANUAL_BENCHPROF=true to also run the explicit second pass used by older
 # runbooks.
@@ -77,7 +81,7 @@ APPLY_ARGS_BASE=(
 )
 
 write_meta() {
-  local out=$1 label=$2 concurrency=$3 span_native=$4 backlog=$5 cache_mode=$6 note=$7
+  local out=$1 label=$2 concurrency=$3 span_native=$4 backlog=$5 cache_mode=$6 admission_policy=$7 note=$8
   cat > "$out/variant.env" <<EOF_META
 label=$label
 commit=$COMMIT
@@ -85,6 +89,7 @@ concurrency=$concurrency
 span_native=$span_native
 backlog_coalescing=$backlog
 cache_mode=$cache_mode
+flush_admission_policy=$admission_policy
 note=$note
 EOF_META
 }
@@ -102,9 +107,16 @@ run_one() {
     "$label" "$concurrency" "$span_native" "$backlog" "$cache_mode" "$out"
   git rev-parse HEAD > "$out/COMMIT"
   git status --short --branch > "$out/git_status.txt"
-  write_meta "$out" "$label" "$concurrency" "$span_native" "$backlog" "$cache_mode" "$note"
+  local admission_policy=auto_default
+  if [[ "$label" != "default_unconfigured" ]]; then
+    admission_policy=explicit
+  fi
+  write_meta "$out" "$label" "$concurrency" "$span_native" "$backlog" "$cache_mode" "$admission_policy" "$note"
 
   local args=("${COMMON_ARGS[@]}" -profile-dir "$out")
+  if [[ "$admission_policy" == "explicit" ]]; then
+    args+=(-treedb-flush-admission-policy=explicit)
+  fi
   if [[ "$concurrency" != "default" ]]; then
     args+=("${APPLY_ARGS_BASE[@]}" -treedb-flush-apply-concurrency="$concurrency")
   fi

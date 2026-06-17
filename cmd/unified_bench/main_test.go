@@ -2963,6 +2963,11 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 	instances := []*DBInstance{{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}}}
 	stats := map[string]map[string]string{
 		"TreeDB": {
+			"treedb.flush_admission.policy":                                                        "auto",
+			"treedb.flush_admission.admitted":                                                      "true",
+			"treedb.flush_admission.reason":                                                        "auto_admitted_c4_adaptive",
+			"treedb.flush_admission.flush_apply_concurrency":                                       "4",
+			"treedb.flush_admission.leaf_page_read_cache_write_admission":                          "adaptive",
 			"treedb.cache.flush_span_run.source_point_ops_total":                                   "11",
 			"treedb.cache.flush_span_run.planned_point_ops_total":                                  "10",
 			"treedb.cache.flush_span_run.backend_chunks_total":                                     "3",
@@ -2987,6 +2992,11 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 
 	got := renderTreeDBSelectedStatsString(instances, stats)
 	for _, want := range []string{
+		"flush_admission.policy: auto",
+		"flush_admission.admitted: true",
+		"flush_admission.reason: auto_admitted_c4_adaptive",
+		"flush_admission.flush_apply_concurrency: 4",
+		"flush_admission.leaf_page_read_cache_write_admission: adaptive",
 		"flush_span_run.source_point_ops_total: 11",
 		"flush_span_run.planned_point_ops_total: 10",
 		"flush_span_run.backend_chunks_total: 3",

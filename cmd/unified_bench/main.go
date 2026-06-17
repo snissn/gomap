@@ -6285,6 +6285,13 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 	}{
 		{label: "write_path.mode", alts: []string{"treedb.write_path.mode"}},
 		{label: "write_path.redo_log", alts: []string{"treedb.write_path.redo_log"}},
+		{label: "flush_admission.policy", alts: []string{"treedb.flush_admission.policy"}},
+		{label: "flush_admission.admitted", alts: []string{"treedb.flush_admission.admitted"}},
+		{label: "flush_admission.reason", alts: []string{"treedb.flush_admission.reason"}},
+		{label: "flush_admission.flush_apply_concurrency", alts: []string{"treedb.flush_admission.flush_apply_concurrency"}},
+		{label: "flush_admission.flush_apply_span_native", alts: []string{"treedb.flush_admission.flush_apply_span_native"}},
+		{label: "flush_admission.flush_backlog_coalescing", alts: []string{"treedb.flush_admission.flush_backlog_coalescing"}},
+		{label: "flush_admission.leaf_page_read_cache_write_admission", alts: []string{"treedb.flush_admission.leaf_page_read_cache_write_admission"}},
 		{label: "vlog_mmap.current_writable_map_target_bytes", alts: []string{"treedb.vlog.mmap_current_writable_map_target_bytes", "treedb.cache.vlog_mmap.current_writable_map_target_bytes"}},
 		{label: "vlog_mmap.max_mapped_sealed_segments", alts: []string{"treedb.vlog.mmap_max_mapped_sealed_segments", "treedb.cache.vlog_mmap.max_mapped_sealed_segments"}},
 		{label: "vlog_mmap.max_mapped_sealed_bytes", alts: []string{"treedb.vlog.mmap_max_mapped_sealed_bytes", "treedb.cache.vlog_mmap.max_mapped_sealed_bytes"}},

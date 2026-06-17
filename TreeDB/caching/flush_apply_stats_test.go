@@ -361,7 +361,7 @@ func TestFlushSpanRunLeafAwareChunksExposeEmergencySplit(t *testing.T) {
 }
 
 func TestFlushSpanRunRuntimeTargetLeafPlanningDefaultOff(t *testing.T) {
-	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), FlushAdmissionPolicy: backenddb.FlushAdmissionPolicyExplicit})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}

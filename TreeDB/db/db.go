@@ -857,10 +857,11 @@ type Options struct {
 	//   - >0 sets the exact number of set-associative cache entries.
 	LeafPageReadCacheEntries int
 	// LeafPageReadCacheWriteAdmission controls write-side cache population for
-	// outer-leaf pages stored in the value log. The zero value preserves the
-	// historical immediate admission behavior. Adaptive admission is opt-in and
-	// only changes in-memory cache population, not persistent leaf-log/value-log
-	// writes or pointer validity.
+	// outer-leaf pages stored in the value log. The field's zero value is the
+	// historical immediate admission behavior for explicit/off policies; the
+	// default auto flush-admission policy upgrades it to the measured adaptive
+	// write-admission candidate. Adaptive admission only changes in-memory cache
+	// population, not persistent leaf-log/value-log writes or pointer validity.
 	LeafPageReadCacheWriteAdmission LeafPageReadCacheWriteAdmissionPolicy
 
 	// Durability configures cached-mode durability semantics.
@@ -990,16 +991,17 @@ type Options struct {
 	FlushBuildPrefetchUnits int
 
 	// FlushAdmissionPolicy selects how TreeDB admits the span-native/backlog
-	// flush/apply candidate path. The zero value (explicit) preserves current
-	// defaults: span-native/backlog/concurrency stay off unless existing explicit
-	// knobs request them. Off force-disables the candidate path. Auto is the
-	// future-default selector and currently fails closed for low concurrency and
-	// unresolved checkpoint debt.
+	// flush/apply candidate path. The zero value (auto) admits the measured
+	// conservative c4/adaptive candidate on sufficiently parallel hosts and fails
+	// closed on low-concurrency hosts. Explicit preserves caller-supplied knobs;
+	// Off force-disables span-native/backlog/concurrency as a rollback policy.
 	FlushAdmissionPolicy FlushAdmissionPolicy
 
-	// FlushApplyConcurrency enables opt-in M2 parallel COW apply for backend
-	// flush/write batches using a bounded reusable worker pool. It is separate
-	// from FlushBuildConcurrency; values <=1 keep the M2 worker-pool path off.
+	// FlushApplyConcurrency enables M2 parallel COW apply for backend flush/write
+	// batches using a bounded reusable worker pool. It is separate from
+	// FlushBuildConcurrency. Values <=1 keep the worker-pool path off for
+	// explicit policy; the default auto admission policy chooses a conservative
+	// c4 candidate when the low-concurrency guardrail passes.
 	FlushApplyConcurrency int
 	// FlushApplyMinEntries gates opt-in parallel apply by planned span-local ops.
 	// Values <=0 use the internal default.
@@ -1010,9 +1012,10 @@ type Options struct {
 	// FlushApplyMinBytes gates opt-in parallel apply by planned span bytes.
 	// Values <=0 use the internal default.
 	FlushApplyMinBytes int
-	// FlushApplySpanNative enables the M10 opt-in span-native apply candidate
-	// path. It is default-off and initially restricted to exact point spans; all
-	// unsupported runs fall back to recursive apply.
+	// FlushApplySpanNative enables the M10 span-native apply candidate path. The
+	// default auto admission policy enables it only for the measured conservative
+	// c4 candidate; explicit policy preserves caller-provided values. Unsupported
+	// runs fall back to recursive apply.
 	FlushApplySpanNative bool
 
 	// FlushBackendMaxEntries caps how many operations are buffered into a single
@@ -1036,7 +1039,8 @@ type Options struct {
 	FlushSpanRunTargetPlanning bool
 
 	// FlushBacklogCoalescing enables the M11 bounded adaptive cached-flush
-	// coalescing controller. It is default-off; when enabled the cache layer may
+	// coalescing controller. The default auto admission policy enables it for the
+	// measured conservative c4 candidate; when enabled the cache layer may
 	// include additional already-sealed eligible memtables in one canonical flush
 	// run under observed cumulative single-op-span pressure and explicit budgets.
 	FlushBacklogCoalescing bool

@@ -2,53 +2,64 @@ package db
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 )
 
+const (
+	defaultFlushAdmissionAutoConcurrency = 4
+	defaultFlushAdmissionAutoMinEntries  = 1
+	defaultFlushAdmissionAutoMinSpans    = 1
+	defaultFlushAdmissionAutoMinBytes    = 1
+)
+
 // FlushAdmissionPolicy controls how TreeDB admits the span-native/backlog
-// flush/apply candidate path. The zero value preserves the pre-existing
-// explicit-opt-in behavior: defaults remain off, and callers that set the
-// existing FlushApply*/FlushBacklog* knobs keep their requested behavior.
+// flush/apply candidate path. The zero value is the default auto selector: it
+// admits the measured conservative c4/adaptive candidate on sufficiently
+// parallel hosts, declines low-concurrency shapes, and leaves rollback and
+// explicit opt-in policies available.
 type FlushAdmissionPolicy uint8
 
 const (
-	// FlushAdmissionPolicyExplicit preserves existing explicit knobs. This is the
-	// default policy and does not infer or enable span-native/backlog behavior.
-	FlushAdmissionPolicyExplicit FlushAdmissionPolicy = iota
+	// FlushAdmissionPolicyAuto is the default selector. It admits the measured
+	// c4 span-native/backlog/adaptive-cache candidate only when the low-concurrency
+	// guardrail passes; otherwise it fails closed to the serial path.
+	FlushAdmissionPolicyAuto FlushAdmissionPolicy = iota
+	// FlushAdmissionPolicyExplicit preserves existing explicit knobs. Use this to
+	// opt in to a non-default span-native/backlog/concurrency/cache shape.
+	FlushAdmissionPolicyExplicit
 	// FlushAdmissionPolicyOff force-disables span-native, backlog coalescing, and
 	// flush-apply worker-pool concurrency as a rollback/fail-closed policy.
 	FlushAdmissionPolicyOff
-	// FlushAdmissionPolicyAuto is the future-default selector path. It currently
-	// fails closed while checkpoint debt remains unresolved and when configured
-	// concurrency is too low to avoid the known c1 regression shape.
-	FlushAdmissionPolicyAuto
 )
 
 const (
-	FlushAdmissionReasonNoExplicitOptIn = "no_explicit_opt_in"
-	FlushAdmissionReasonExplicitOptIn   = "explicit_opt_in"
-	FlushAdmissionReasonPolicyOff       = "policy_off"
-	FlushAdmissionReasonAutoAdmitted    = "auto_admitted"
-	FlushAdmissionReasonLowConcurrency  = "low_concurrency"
-	FlushAdmissionReasonCheckpointDebt  = "checkpoint_debt_unresolved"
-	FlushAdmissionReasonInvalidPolicy   = "invalid_policy"
+	FlushAdmissionReasonNoExplicitOptIn     = "no_explicit_opt_in"
+	FlushAdmissionReasonExplicitOptIn       = "explicit_opt_in"
+	FlushAdmissionReasonPolicyOff           = "policy_off"
+	FlushAdmissionReasonAutoAdmitted        = "auto_admitted"
+	FlushAdmissionReasonAutoAdmittedC4Adapt = "auto_admitted_c4_adaptive"
+	FlushAdmissionReasonLowConcurrency      = "low_concurrency"
+	FlushAdmissionReasonUnsafeDurability    = "unsafe_durability"
+	FlushAdmissionReasonCheckpointDebt      = "checkpoint_debt_unresolved"
+	FlushAdmissionReasonInvalidPolicy       = "invalid_policy"
 )
 
-// Keep the unresolved #2794/B1 checkpoint debt represented in code, not only in
-// benchmark notes. A future checkpoint-debt mitigation can flip this seam (or
-// replace it with a measured runtime signal) and the auto path will still keep
-// the low-concurrency guardrail below.
-const flushAdmissionCheckpointDebtResolved = false
+// #2794/B1 checkpoint debt is accepted for this cycle as a bounded analytics
+// model tradeoff, not as a mandatory runtime-mitigation blocker. Keep this seam
+// explicit so a future gate can fail closed again without changing callers.
+const flushAdmissionCheckpointDebtAccepted = true
 
 // FlushAdmissionDecision is the normalized admission result reported through
 // DB.Stats and benchmark option reports.
 type FlushAdmissionDecision struct {
-	Policy                 FlushAdmissionPolicy
-	Admitted               bool
-	Reason                 string
-	FlushApplyConcurrency  int
-	FlushApplySpanNative   bool
-	FlushBacklogCoalescing bool
+	Policy                          FlushAdmissionPolicy
+	Admitted                        bool
+	Reason                          string
+	FlushApplyConcurrency           int
+	FlushApplySpanNative            bool
+	FlushBacklogCoalescing          bool
+	LeafPageReadCacheWriteAdmission LeafPageReadCacheWriteAdmissionPolicy
 }
 
 func (p FlushAdmissionPolicy) String() string {
@@ -74,17 +85,17 @@ func (p FlushAdmissionPolicy) Valid() bool {
 }
 
 // ParseFlushAdmissionPolicy parses off|explicit|auto policy values. Empty and
-// "default" preserve the current explicit-opt-in default.
+// "default" use the current default auto selector.
 func ParseFlushAdmissionPolicy(raw string) (FlushAdmissionPolicy, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "default", "unset", "explicit":
+	case "", "default", "unset", "auto", "adaptive":
+		return FlushAdmissionPolicyAuto, nil
+	case "explicit", "manual":
 		return FlushAdmissionPolicyExplicit, nil
 	case "off", "false", "0", "disabled", "disable":
 		return FlushAdmissionPolicyOff, nil
-	case "auto", "adaptive":
-		return FlushAdmissionPolicyAuto, nil
 	default:
-		return FlushAdmissionPolicyExplicit, fmt.Errorf("unsupported flush admission policy %q (expected off|explicit|auto)", raw)
+		return FlushAdmissionPolicyAuto, fmt.Errorf("unsupported flush admission policy %q (expected off|explicit|auto)", raw)
 	}
 }
 
@@ -94,7 +105,7 @@ func ParseFlushAdmissionPolicy(raw string) (FlushAdmissionPolicy, error) {
 // losing the original decline reason.
 func NormalizeFlushAdmissionOptions(opts *Options) FlushAdmissionDecision {
 	if opts == nil {
-		return FlushAdmissionDecision{Policy: FlushAdmissionPolicyExplicit, Reason: FlushAdmissionReasonNoExplicitOptIn}
+		return FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto, Reason: FlushAdmissionReasonLowConcurrency}
 	}
 	if opts.flushAdmissionNormalized {
 		return opts.flushAdmissionDecision.withStatsDefaults()
@@ -119,10 +130,11 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 	policy := opts.FlushAdmissionPolicy
 	effectiveConcurrency := normalizeFlushApplyConcurrency(opts.FlushApplyConcurrency)
 	decision := FlushAdmissionDecision{
-		Policy:                 policy,
-		FlushApplyConcurrency:  effectiveConcurrency,
-		FlushApplySpanNative:   opts.FlushApplySpanNative,
-		FlushBacklogCoalescing: opts.FlushBacklogCoalescing,
+		Policy:                          policy,
+		FlushApplyConcurrency:           effectiveConcurrency,
+		FlushApplySpanNative:            opts.FlushApplySpanNative,
+		FlushBacklogCoalescing:          opts.FlushBacklogCoalescing,
+		LeafPageReadCacheWriteAdmission: opts.LeafPageReadCacheWriteAdmission,
 	}
 
 	if !policy.Valid() {
@@ -145,10 +157,14 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 		return decision
 	case FlushAdmissionPolicyAuto:
 		reasons := make([]string, 0, 2)
-		if effectiveConcurrency <= 1 {
+		candidateConcurrency := autoFlushApplyConcurrency(opts.FlushApplyConcurrency)
+		if candidateConcurrency < defaultFlushAdmissionAutoConcurrency {
 			reasons = append(reasons, FlushAdmissionReasonLowConcurrency)
 		}
-		if !flushAdmissionCheckpointDebtResolved {
+		if opts.Durability == DurabilityWALOffRelaxed {
+			reasons = append(reasons, FlushAdmissionReasonUnsafeDurability)
+		}
+		if !flushAdmissionCheckpointDebtAccepted {
 			reasons = append(reasons, FlushAdmissionReasonCheckpointDebt)
 		}
 		if len(reasons) > 0 {
@@ -156,24 +172,40 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 			return decision
 		}
 
-		// Unreachable while checkpoint debt remains unresolved. Keep the admission
-		// side explicit for #2794/#2788: if the debt gate is resolved later, auto
-		// chooses the measured span-native/backlog candidate only with safe
-		// configured concurrency.
-		opts.FlushApplyConcurrency = effectiveConcurrency
+		opts.FlushApplyConcurrency = defaultFlushAdmissionAutoConcurrency
+		opts.FlushApplyMinEntries = defaultFlushAdmissionAutoMinEntries
+		opts.FlushApplyMinSpans = defaultFlushAdmissionAutoMinSpans
+		opts.FlushApplyMinBytes = defaultFlushAdmissionAutoMinBytes
 		opts.FlushApplySpanNative = true
 		opts.FlushBacklogCoalescing = true
+		if opts.LeafPageReadCacheWriteAdmission == LeafPageReadCacheWriteAdmissionImmediate || opts.LeafPageReadCacheWriteAdmission == LeafPageReadCacheWriteAdmissionAdaptive {
+			opts.LeafPageReadCacheWriteAdmission = LeafPageReadCacheWriteAdmissionAdaptive
+		}
+
 		decision.Admitted = true
-		decision.Reason = FlushAdmissionReasonAutoAdmitted
-		decision.FlushApplyConcurrency = effectiveConcurrency
+		decision.Reason = FlushAdmissionReasonAutoAdmittedC4Adapt
+		decision.FlushApplyConcurrency = defaultFlushAdmissionAutoConcurrency
 		decision.FlushApplySpanNative = true
 		decision.FlushBacklogCoalescing = true
+		decision.LeafPageReadCacheWriteAdmission = opts.LeafPageReadCacheWriteAdmission
 		return decision
 	default:
 		// Defensive fallback; policy.Valid handled this above.
 		decision.disableAll(opts, FlushAdmissionReasonInvalidPolicy)
 		return decision
 	}
+}
+
+func autoFlushApplyConcurrency(configured int) int {
+	if configured > 0 {
+		return normalizeFlushApplyConcurrency(configured)
+	}
+	workers := defaultFlushAdmissionAutoConcurrency
+	gomax := runtime.GOMAXPROCS(0)
+	if gomax < workers {
+		workers = gomax
+	}
+	return normalizeFlushApplyConcurrency(workers)
 }
 
 func (d *FlushAdmissionDecision) disableAll(opts *Options, reason string) {
@@ -187,6 +219,9 @@ func (d *FlushAdmissionDecision) disableAll(opts *Options, reason string) {
 	d.FlushApplyConcurrency = 0
 	d.FlushApplySpanNative = false
 	d.FlushBacklogCoalescing = false
+	if opts != nil {
+		d.LeafPageReadCacheWriteAdmission = opts.LeafPageReadCacheWriteAdmission
+	}
 }
 
 func (d FlushAdmissionDecision) withStatsDefaults() FlushAdmissionDecision {
@@ -198,9 +233,16 @@ func (d FlushAdmissionDecision) withStatsDefaults() FlushAdmissionDecision {
 	}
 	if d.Reason == "" {
 		if d.Admitted {
-			d.Reason = FlushAdmissionReasonExplicitOptIn
-		} else {
+			switch d.Policy {
+			case FlushAdmissionPolicyAuto:
+				d.Reason = FlushAdmissionReasonAutoAdmitted
+			default:
+				d.Reason = FlushAdmissionReasonExplicitOptIn
+			}
+		} else if d.Policy == FlushAdmissionPolicyExplicit {
 			d.Reason = FlushAdmissionReasonNoExplicitOptIn
+		} else {
+			d.Reason = FlushAdmissionReasonLowConcurrency
 		}
 	}
 	return d

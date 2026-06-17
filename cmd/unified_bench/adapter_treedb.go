@@ -39,16 +39,16 @@ var (
 	treedbFlushBuildChunkMinBytes         = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
 	treedbFlushBuildChunkMaxBytes         = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
 	treedbFlushBuildPrefetchUnits         = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
-	treedbFlushAdmissionPolicy            = flag.String("treedb-flush-admission-policy", "explicit", "TreeDB: span-native/backlog/concurrency admission policy (explicit|off|auto; default explicit preserves existing opt-in flags)")
-	treedbFlushApplyConcurrency           = flag.Int("treedb-flush-apply-concurrency", 0, "TreeDB: opt-in flush/apply COW worker-pool concurrency (0/1=disabled)")
-	treedbFlushApplyMinEntries            = flag.Int("treedb-flush-apply-min-entries", 0, "TreeDB: minimum planned span ops to enable opt-in parallel apply (0=default)")
-	treedbFlushApplyMinSpans              = flag.Int("treedb-flush-apply-min-spans", 0, "TreeDB: minimum planned leaf spans to enable opt-in parallel apply (0=default)")
-	treedbFlushApplyMinBytes              = flag.Int("treedb-flush-apply-min-bytes", 0, "TreeDB: minimum planned span bytes to enable opt-in parallel apply (0=default)")
-	treedbFlushApplySpanNative            = flag.Bool("treedb-flush-apply-span-native", false, "TreeDB: opt-in M10 span-native apply/reducer for eligible exact point spans (default off)")
+	treedbFlushAdmissionPolicy            = flag.String("treedb-flush-admission-policy", "auto", "TreeDB: span-native/backlog/concurrency admission policy (auto|explicit|off; default auto selects conservative c4/adaptive when admitted)")
+	treedbFlushApplyConcurrency           = flag.Int("treedb-flush-apply-concurrency", 0, "TreeDB: flush/apply COW worker-pool concurrency override (auto default chooses c4 when admitted; 0/1 disables under explicit)")
+	treedbFlushApplyMinEntries            = flag.Int("treedb-flush-apply-min-entries", 0, "TreeDB: minimum planned span ops to enable parallel apply (0=policy default)")
+	treedbFlushApplyMinSpans              = flag.Int("treedb-flush-apply-min-spans", 0, "TreeDB: minimum planned leaf spans to enable parallel apply (0=policy default)")
+	treedbFlushApplyMinBytes              = flag.Int("treedb-flush-apply-min-bytes", 0, "TreeDB: minimum planned span bytes to enable parallel apply (0=policy default)")
+	treedbFlushApplySpanNative            = flag.Bool("treedb-flush-apply-span-native", false, "TreeDB: M10 span-native apply/reducer override for eligible exact point spans (auto enables when admitted)")
 	treedbFlushBackendMaxEntries          = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
 	treedbFlushBackendMaxBatches          = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
 	treedbFlushSpanRunTargetPlanning      = flag.Bool("treedb-flush-span-run-target-planning", false, "TreeDB (cached): diagnostic opt-in read-only target-leaf planning for canonical flush runs")
-	treedbFlushBacklogCoalescing          = flag.Bool("treedb-flush-backlog-coalescing", false, "TreeDB (cached): opt-in M11 bounded adaptive backlog coalescing controller")
+	treedbFlushBacklogCoalescing          = flag.Bool("treedb-flush-backlog-coalescing", false, "TreeDB (cached): M11 bounded adaptive backlog coalescing override (auto enables when admitted)")
 	treedbFlushBacklogCoalescingMaxMems   = flag.Int("treedb-flush-backlog-coalescing-max-memtables", 0, "TreeDB (cached): M11 coalescing max memtables per run (0=default)")
 	treedbFlushBacklogCoalescingMaxBytes  = flag.Int64("treedb-flush-backlog-coalescing-max-bytes", 0, "TreeDB (cached): M11 coalescing soft max queued bytes per run; first included memtable may exceed (0=default)")
 	treedbFlushBacklogCoalescingMaxOps    = flag.Int("treedb-flush-backlog-coalescing-max-ops", 0, "TreeDB (cached): M11 coalescing soft max point ops per run; first included memtable may exceed (0=default)")
@@ -969,6 +969,8 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 	admission := treedbdb.NormalizeFlushAdmissionOptions(&opts)
 	if admission.Policy == treedb.FlushAdmissionPolicyOff {
 		notes = append(notes, "flush_admission_policy=off force-disables span-native, backlog coalescing, and flush-apply concurrency")
+	} else if admission.Policy == treedb.FlushAdmissionPolicyAuto && admission.Admitted {
+		notes = append(notes, "flush_admission_policy=auto admitted: "+admission.Reason)
 	} else if admission.Policy == treedb.FlushAdmissionPolicyAuto && !admission.Admitted {
 		notes = append(notes, "flush_admission_policy=auto declined: "+admission.Reason)
 	}

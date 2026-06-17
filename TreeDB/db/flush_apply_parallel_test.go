@@ -81,6 +81,7 @@ func openFlushApplyTestDBWithSpanNative(t *testing.T, concurrency int, spanNativ
 	d, err := Open(Options{
 		Dir:                   t.TempDir(),
 		ChunkSize:             64 * 1024,
+		FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
 		FlushApplyConcurrency: concurrency,
 		FlushApplyMinEntries:  1,
 		FlushApplyMinSpans:    1,
