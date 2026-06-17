@@ -20,6 +20,13 @@ import (
 
 const (
 	defaultTreeDBChunkSizeBytes int64 = 256 * 1024
+
+	defaultTreeDBFlushBacklogCoalescingMaxMemtables           = 64
+	defaultTreeDBFlushBacklogCoalescingHardMaxMemtables       = 128
+	defaultTreeDBFlushBacklogCoalescingMaxBytes         int64 = 512 << 20
+	defaultTreeDBFlushBacklogCoalescingMaxOps                 = 2 << 20
+	defaultTreeDBFlushBacklogCoalescingSingleOpRatio          = 0.5
+	defaultTreeDBFlushBacklogCoalescingMaxOpsPerSpan          = 4.0
 )
 
 var (
@@ -32,12 +39,28 @@ var (
 	treedbFlushBuildChunkMinBytes         = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
 	treedbFlushBuildChunkMaxBytes         = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
 	treedbFlushBuildPrefetchUnits         = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
+	treedbFlushAdmissionPolicy            = flag.String("treedb-flush-admission-policy", "auto", "TreeDB: span-native/backlog/concurrency admission policy (auto|explicit|off; default auto selects conservative c4/adaptive when admitted)")
+	treedbFlushApplyConcurrency           = flag.Int("treedb-flush-apply-concurrency", 0, "TreeDB: flush/apply COW worker-pool concurrency override (auto default chooses c4 when admitted; 0/1 disables under explicit)")
+	treedbFlushApplyMinEntries            = flag.Int("treedb-flush-apply-min-entries", 0, "TreeDB: minimum planned span ops to enable parallel apply (0=policy default)")
+	treedbFlushApplyMinSpans              = flag.Int("treedb-flush-apply-min-spans", 0, "TreeDB: minimum planned leaf spans to enable parallel apply (0=policy default)")
+	treedbFlushApplyMinBytes              = flag.Int("treedb-flush-apply-min-bytes", 0, "TreeDB: minimum planned span bytes to enable parallel apply (0=policy default)")
+	treedbFlushApplySpanNative            = flag.Bool("treedb-flush-apply-span-native", false, "TreeDB: M10 span-native apply/reducer override for eligible exact point spans (auto enables when admitted)")
 	treedbFlushBackendMaxEntries          = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
 	treedbFlushBackendMaxBatches          = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
+	treedbFlushSpanRunTargetPlanning      = flag.Bool("treedb-flush-span-run-target-planning", false, "TreeDB (cached): diagnostic opt-in read-only target-leaf planning for canonical flush runs")
+	treedbFlushBacklogCoalescing          = flag.Bool("treedb-flush-backlog-coalescing", false, "TreeDB (cached): M11 bounded adaptive backlog coalescing override (auto enables when admitted)")
+	treedbFlushBacklogCoalescingMaxMems   = flag.Int("treedb-flush-backlog-coalescing-max-memtables", 0, "TreeDB (cached): M11 coalescing max memtables per run (0=default)")
+	treedbFlushBacklogCoalescingMaxBytes  = flag.Int64("treedb-flush-backlog-coalescing-max-bytes", 0, "TreeDB (cached): M11 coalescing soft max queued bytes per run; first included memtable may exceed (0=default)")
+	treedbFlushBacklogCoalescingMaxOps    = flag.Int("treedb-flush-backlog-coalescing-max-ops", 0, "TreeDB (cached): M11 coalescing soft max point ops per run; first included memtable may exceed (0=default)")
+	treedbFlushBacklogCoalescingMinAgeMS  = flag.Int("treedb-flush-backlog-coalescing-min-age-ms", 0, "TreeDB (cached): M11 coalescing oldest queued memtable age floor in ms (0=none)")
+	treedbFlushBacklogCoalescingRatio     = flag.Float64("treedb-flush-backlog-coalescing-single-op-ratio", 0, "TreeDB (cached): M11 coalescing single-op span ratio trigger (0=default)")
+	treedbFlushBacklogCoalescingOpsSpan   = flag.Float64("treedb-flush-backlog-coalescing-max-ops-per-span", 0, "TreeDB (cached): M11 coalescing max observed ops/span trigger (0=default)")
+	treedbFlushBacklogCoalescingOldLeafB  = flag.Float64("treedb-flush-backlog-coalescing-min-old-leaf-bytes-per-op", 0, "TreeDB (cached): M11 coalescing min old-leaf decode bytes/op trigger (0=disabled)")
 	treedbPagerSyncConcurrency            = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
 	treedbPagerMmapPopulate               = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
 	treedbPagerPrefetchOnRead             = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
 	treedbLeafPageReadCacheEntries        = flag.Int("treedb-leaf-page-read-cache-entries", 0, "TreeDB: outer-leaf read cache entries for leaf pages stored in the value log (0=default/env, <0=disable)")
+	treedbLeafPageReadCacheWriteAdmission = flag.String("treedb-leaf-page-read-cache-write-admission", "immediate", "TreeDB: write-side outer-leaf read-cache admission policy (immediate|adaptive)")
 	treedbChunkSize                       = flag.Int64("treedb-chunk-size", defaultTreeDBChunkSizeBytes, "TreeDB: pager chunk size in bytes (default 256KiB)")
 	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=auto)")
 	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
@@ -317,6 +340,55 @@ func normalizeTreeDBMaintenanceMode(s string) (string, error) {
 	}
 }
 
+func formatTreeDBDefaultedInt(v, effective int) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%d)", effective)
+	}
+	return fmt.Sprintf("%d", v)
+}
+
+func formatTreeDBDefaultedInt64(v, effective int64) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%d)", effective)
+	}
+	return fmt.Sprintf("%d", v)
+}
+
+func formatTreeDBDefaultedFloat(v, effective float64) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%.6f)", effective)
+	}
+	return fmt.Sprintf("%.6f", v)
+}
+
+func formatTreeDBFlushBacklogCoalescingMaxMemtables(v int) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%d)", defaultTreeDBFlushBacklogCoalescingMaxMemtables)
+	}
+	if v > defaultTreeDBFlushBacklogCoalescingHardMaxMemtables {
+		return fmt.Sprintf("%d (effective=%d cap)", v, defaultTreeDBFlushBacklogCoalescingHardMaxMemtables)
+	}
+	return fmt.Sprintf("%d", v)
+}
+
+func formatTreeDBFlushBacklogCoalescingSingleOpRatio(v float64) string {
+	if v <= 0 {
+		return fmt.Sprintf("default (effective=%.6f)", defaultTreeDBFlushBacklogCoalescingSingleOpRatio)
+	}
+	if v > 1 {
+		return fmt.Sprintf("%.6f (effective=1.000000 cap)", v)
+	}
+	return fmt.Sprintf("%.6f", v)
+}
+
+func parseTreeDBFlushAdmissionPolicy(raw string) (treedb.FlushAdmissionPolicy, error) {
+	policy, err := treedbdb.ParseFlushAdmissionPolicy(raw)
+	if err != nil {
+		return policy, fmt.Errorf("TreeDB: %w", err)
+	}
+	return policy, nil
+}
+
 type treeDBOptionsReport struct {
 	opts            treedb.Options
 	maintenanceMode string
@@ -349,8 +421,28 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
 	lines = append(lines, fmt.Sprintf("index_outer_leaves_in_vlog=%t", r.opts.IndexOuterLeavesInValueLog))
 	lines = append(lines, fmt.Sprintf("outer_leaf_read_cache_entries=%s", formatTreeDBLeafPageReadCacheEntries(r.opts.LeafPageReadCacheEntries)))
+	lines = append(lines, fmt.Sprintf("outer_leaf_read_cache_write_admission=%s", r.opts.LeafPageReadCacheWriteAdmission.String()))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
+	admission := treedbdb.FlushAdmissionDecisionForOptions(r.opts)
+	lines = append(lines, fmt.Sprintf("flush_admission_policy=%s", admission.Policy.String()))
+	lines = append(lines, fmt.Sprintf("flush_admission_admitted=%t", admission.Admitted))
+	lines = append(lines, fmt.Sprintf("flush_admission_reason=%s", admission.Reason))
+	lines = append(lines, fmt.Sprintf("flush_admission_effective_concurrency=%d", admission.FlushApplyConcurrency))
+	lines = append(lines, fmt.Sprintf("flush_apply_concurrency=%d", r.opts.FlushApplyConcurrency))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_entries_configured=%d", r.opts.FlushApplyMinEntries))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_spans_configured=%d", r.opts.FlushApplyMinSpans))
+	lines = append(lines, fmt.Sprintf("flush_apply_min_bytes_configured=%d", r.opts.FlushApplyMinBytes))
+	lines = append(lines, fmt.Sprintf("flush_apply_span_native=%t", r.opts.FlushApplySpanNative))
+	lines = append(lines, fmt.Sprintf("flush_span_run_target_planning=%t", r.opts.FlushSpanRunTargetPlanning))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing=%t", r.opts.FlushBacklogCoalescing))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_memtables=%s", formatTreeDBFlushBacklogCoalescingMaxMemtables(r.opts.FlushBacklogCoalescingMaxMemtables)))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_bytes=%s", formatTreeDBDefaultedInt64(r.opts.FlushBacklogCoalescingMaxBytes, defaultTreeDBFlushBacklogCoalescingMaxBytes)))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops=%s", formatTreeDBDefaultedInt(r.opts.FlushBacklogCoalescingMaxOps, defaultTreeDBFlushBacklogCoalescingMaxOps)))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_min_age_ms=%d", r.opts.FlushBacklogCoalescingMinAge/time.Millisecond))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_single_op_ratio=%s", formatTreeDBFlushBacklogCoalescingSingleOpRatio(r.opts.FlushBacklogCoalescingSingleOpSpanRatio)))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops_per_span=%s", formatTreeDBDefaultedFloat(r.opts.FlushBacklogCoalescingMaxOpsPerSpan, defaultTreeDBFlushBacklogCoalescingMaxOpsPerSpan)))
+	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_min_old_leaf_bytes_per_op=%.6f", r.opts.FlushBacklogCoalescingMinOldLeafBytesPerOp))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
 	threshold := r.opts.ValueLog.PointerThreshold
@@ -463,6 +555,14 @@ func formatTreeDBLeafPageReadCacheEntries(entries int) string {
 	default:
 		return fmt.Sprintf("%d", entries)
 	}
+}
+
+func parseTreeDBLeafPageReadCacheWriteAdmission(raw string) (treedb.LeafPageReadCacheWriteAdmissionPolicy, error) {
+	policy, err := treedbdb.ParseLeafPageReadCacheWriteAdmissionPolicy(raw)
+	if err != nil {
+		return policy, fmt.Errorf("TreeDB: %w", err)
+	}
+	return policy, nil
 }
 
 func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {
@@ -627,22 +727,34 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		internalBaseDeltaEffective = false
 		notes = append(notes, "index_internal_base_delta disabled: leaf-log child pages use explicit LogRecordRef entries")
 	}
+	writeAdmissionPolicy, err := parseTreeDBLeafPageReadCacheWriteAdmission(*treedbLeafPageReadCacheWriteAdmission)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	flushAdmissionPolicy, err := parseTreeDBFlushAdmissionPolicy(*treedbFlushAdmissionPolicy)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	if writeAdmissionPolicy == treedb.LeafPageReadCacheWriteAdmissionAdaptive {
+		notes = append(notes, "outer_leaf_read_cache_write_admission=adaptive is opt-in; skipped writes remain durable and read misses can still admit")
+	}
 
 	opts := treedb.Options{
-		Dir:                       dir,
-		KeepRecent:                *treedbKeepRecent,
-		Durability:                durability,
-		ChunkSize:                 *treedbChunkSize,
-		PagerSyncConcurrency:      *treedbPagerSyncConcurrency,
-		PagerMmapPopulate:         *treedbPagerMmapPopulate,
-		PagerPrefetchOnRead:       *treedbPagerPrefetchOnRead,
-		LeafPageReadCacheEntries:  *treedbLeafPageReadCacheEntries,
-		PreferAppendAlloc:         *treedbPreferAppendAlloc,
-		FreelistRegionPages:       *treedbFreelistRegionPages,
-		FreelistRegionRadius:      *treedbFreelistRegionRadius,
-		LeafFillTargetPPM:         uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM:     uint32(clampPPM(*treedbInternalFillPPM)),
-		MaintenanceOpsPerCoalesce: *treedbMaintenanceOpsPerCoalesce,
+		Dir:                             dir,
+		KeepRecent:                      *treedbKeepRecent,
+		Durability:                      durability,
+		ChunkSize:                       *treedbChunkSize,
+		PagerSyncConcurrency:            *treedbPagerSyncConcurrency,
+		PagerMmapPopulate:               *treedbPagerMmapPopulate,
+		PagerPrefetchOnRead:             *treedbPagerPrefetchOnRead,
+		LeafPageReadCacheEntries:        *treedbLeafPageReadCacheEntries,
+		LeafPageReadCacheWriteAdmission: writeAdmissionPolicy,
+		PreferAppendAlloc:               *treedbPreferAppendAlloc,
+		FreelistRegionPages:             *treedbFreelistRegionPages,
+		FreelistRegionRadius:            *treedbFreelistRegionRadius,
+		LeafFillTargetPPM:               uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:           uint32(clampPPM(*treedbInternalFillPPM)),
+		MaintenanceOpsPerCoalesce:       *treedbMaintenanceOpsPerCoalesce,
 
 		LeafPrefixCompression:      leafPrefixEffective,
 		IndexColumnarLeaves:        columnarLeavesEffective,
@@ -650,25 +762,40 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		IndexInternalBaseDelta:     internalBaseDeltaEffective,
 		IndexOuterLeavesInValueLog: *treedbIndexOuterLeavesInVlog,
 
-		MemtableMode:               *treedbMemtableMode,
-		DomainIngressWorkers:       *treedbDomainIngressWorkers,
-		DomainIngressQueueSize:     *treedbDomainIngressQueueSize,
-		FlushThreshold:             *treedbFlushThreshold,
-		MaxQueuedMemtables:         *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds:     *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:         *treedbStopBacklogSeconds,
-		MaxBacklogBytes:            *treedbMaxBacklogBytes,
-		WriterFlushMaxMemtables:    *treedbWriterFlushMaxMems,
-		FlushBuildConcurrency:      *treedbFlushBuildConcurrency,
-		FlushBuildMinEntries:       *treedbFlushBuildMinEntries,
-		FlushBuildMinUnits:         *treedbFlushBuildMinUnits,
-		FlushBuildChunkCap:         *treedbFlushBuildChunkCap,
-		FlushBuildChunkTargetBytes: *treedbFlushBuildChunkTarget,
-		FlushBuildChunkMinBytes:    *treedbFlushBuildChunkMinBytes,
-		FlushBuildChunkMaxBytes:    *treedbFlushBuildChunkMaxBytes,
-		FlushBuildPrefetchUnits:    *treedbFlushBuildPrefetchUnits,
-		FlushBackendMaxEntries:     *treedbFlushBackendMaxEntries,
-		FlushBackendMaxBatches:     *treedbFlushBackendMaxBatches,
+		MemtableMode:                               *treedbMemtableMode,
+		DomainIngressWorkers:                       *treedbDomainIngressWorkers,
+		DomainIngressQueueSize:                     *treedbDomainIngressQueueSize,
+		FlushThreshold:                             *treedbFlushThreshold,
+		MaxQueuedMemtables:                         *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:                     *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:                         *treedbStopBacklogSeconds,
+		MaxBacklogBytes:                            *treedbMaxBacklogBytes,
+		WriterFlushMaxMemtables:                    *treedbWriterFlushMaxMems,
+		FlushBuildConcurrency:                      *treedbFlushBuildConcurrency,
+		FlushBuildMinEntries:                       *treedbFlushBuildMinEntries,
+		FlushBuildMinUnits:                         *treedbFlushBuildMinUnits,
+		FlushBuildChunkCap:                         *treedbFlushBuildChunkCap,
+		FlushBuildChunkTargetBytes:                 *treedbFlushBuildChunkTarget,
+		FlushBuildChunkMinBytes:                    *treedbFlushBuildChunkMinBytes,
+		FlushBuildChunkMaxBytes:                    *treedbFlushBuildChunkMaxBytes,
+		FlushBuildPrefetchUnits:                    *treedbFlushBuildPrefetchUnits,
+		FlushAdmissionPolicy:                       flushAdmissionPolicy,
+		FlushApplyConcurrency:                      *treedbFlushApplyConcurrency,
+		FlushApplyMinEntries:                       *treedbFlushApplyMinEntries,
+		FlushApplyMinSpans:                         *treedbFlushApplyMinSpans,
+		FlushApplyMinBytes:                         *treedbFlushApplyMinBytes,
+		FlushApplySpanNative:                       *treedbFlushApplySpanNative,
+		FlushBackendMaxEntries:                     *treedbFlushBackendMaxEntries,
+		FlushBackendMaxBatches:                     *treedbFlushBackendMaxBatches,
+		FlushSpanRunTargetPlanning:                 *treedbFlushSpanRunTargetPlanning,
+		FlushBacklogCoalescing:                     *treedbFlushBacklogCoalescing,
+		FlushBacklogCoalescingMaxMemtables:         *treedbFlushBacklogCoalescingMaxMems,
+		FlushBacklogCoalescingMaxBytes:             *treedbFlushBacklogCoalescingMaxBytes,
+		FlushBacklogCoalescingMaxOps:               *treedbFlushBacklogCoalescingMaxOps,
+		FlushBacklogCoalescingMinAge:               time.Duration(*treedbFlushBacklogCoalescingMinAgeMS) * time.Millisecond,
+		FlushBacklogCoalescingSingleOpSpanRatio:    *treedbFlushBacklogCoalescingRatio,
+		FlushBacklogCoalescingMaxOpsPerSpan:        *treedbFlushBacklogCoalescingOpsSpan,
+		FlushBacklogCoalescingMinOldLeafBytesPerOp: *treedbFlushBacklogCoalescingOldLeafB,
 
 		JournalLanes:               *treedbJournalLanes,
 		JournalCompression:         *treedbJournalCompress,
@@ -838,6 +965,14 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 	}
 	if _, err := treedbdb.ResolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	admission := treedbdb.NormalizeFlushAdmissionOptions(&opts)
+	if admission.Policy == treedb.FlushAdmissionPolicyOff {
+		notes = append(notes, "flush_admission_policy=off force-disables span-native, backlog coalescing, and flush-apply concurrency")
+	} else if admission.Policy == treedb.FlushAdmissionPolicyAuto && admission.Admitted {
+		notes = append(notes, "flush_admission_policy=auto admitted: "+admission.Reason)
+	} else if admission.Policy == treedb.FlushAdmissionPolicyAuto && !admission.Admitted {
+		notes = append(notes, "flush_admission_policy=auto declined: "+admission.Reason)
 	}
 
 	rep := treeDBOptionsReport{opts: opts, maintenanceMode: maintenanceMode, notes: notes, warnings: warnings}

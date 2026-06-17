@@ -112,6 +112,18 @@ func (s *Snapshot) IteratorAtRootWithOptions(rootID uint64, start, end []byte, o
 	return tr.IteratorWithOptions(start, end, opts), nil
 }
 
+func (s *Snapshot) ReverseIteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
+	return s.ReverseIteratorAtRootWithOptions(rootID, start, end, IteratorOptions{})
+}
+
+func (s *Snapshot) ReverseIteratorAtRootWithOptions(rootID uint64, start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
+	tr, err := s.treeAtRoot(rootID)
+	if err != nil {
+		return nil, err
+	}
+	return tr.ReverseIteratorWithOptions(start, end, opts), nil
+}
+
 func (s *Snapshot) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
 	out := make([]bool, len(keys))
 	if len(keys) == 0 {

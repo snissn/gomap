@@ -72,7 +72,7 @@ var (
 	cpuProfile                = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg        = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 	profileDir                = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
-	pathLabel                 = flag.String("path-label", "", "Benchmark execution-path label required with -profile-dir (oracle|native-fastpath)")
+	pathLabel                 = flag.String("path-label", "", "Benchmark execution-path label for -profile-dir artifacts (oracle|native-fastpath|m8-m14-10mm-gate; default native-fastpath)")
 	allocsProfile             = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
 	allocsProfileTests        = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
 	allocsProfileRate         = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
@@ -473,9 +473,11 @@ func main() {
 		log.Fatalf("profile-dir: %v", err)
 	}
 	if strings.TrimSpace(*profileDir) != "" {
-		if err := validateBenchprofExecutionPath(*pathLabel); err != nil {
+		executionPath, err := normalizeBenchprofExecutionPath(*pathLabel)
+		if err != nil {
 			log.Fatalf("profile-dir: %v", err)
 		}
+		*pathLabel = executionPath
 	}
 
 	seedUsed := *seed
@@ -1299,7 +1301,12 @@ func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) bool {
 	if dir == "" || len(runs) == 0 {
 		return false
 	}
-	if err := writeBenchprofArtifacts(dir, strings.TrimSpace(*pathLabel), runs); err != nil {
+	executionPath, err := normalizeBenchprofExecutionPath(*pathLabel)
+	if err != nil {
+		log.Printf("benchprof artifacts: %v", err)
+		return false
+	}
+	if err := writeBenchprofArtifacts(dir, executionPath, runs); err != nil {
 		log.Printf("benchprof artifacts: %v", err)
 		return false
 	}
@@ -1368,9 +1375,11 @@ func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string
 	if err := os.MkdirAll(filepath.Dir(markdownPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir %q: %w", filepath.Dir(markdownPath), err)
 	}
-	if err := validateBenchprofExecutionPath(executionPath); err != nil {
+	normalizedExecutionPath, err := normalizeBenchprofExecutionPath(executionPath)
+	if err != nil {
 		return err
 	}
+	executionPath = normalizedExecutionPath
 
 	out := benchprofExport{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
@@ -1431,16 +1440,22 @@ func selectedBenchprofTreeDBStats(stats map[string]map[string]string) map[string
 }
 
 func validateBenchprofExecutionPath(executionPath string) error {
+	_, err := normalizeBenchprofExecutionPath(executionPath)
+	return err
+}
+
+func normalizeBenchprofExecutionPath(executionPath string) (string, error) {
+	executionPath = strings.TrimSpace(executionPath)
 	if executionPath == "" {
-		return fmt.Errorf("execution path is required for profile-dir artifacts; hidden or implied path labels are forbidden")
+		return "native-fastpath", nil
 	}
-	if executionPath == "oracle" || executionPath == "native-fastpath" {
-		return nil
+	if executionPath == "oracle" || executionPath == "native-fastpath" || executionPath == "m8-m14-10mm-gate" {
+		return executionPath, nil
 	}
 	if strings.ContainsAny(executionPath, ",+") {
-		return fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden; expected one of oracle|native-fastpath", executionPath)
+		return "", fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden; expected one of oracle|native-fastpath|m8-m14-10mm-gate", executionPath)
 	}
-	return fmt.Errorf("invalid execution path %q: expected one of oracle|native-fastpath", executionPath)
+	return "", fmt.Errorf("invalid execution path %q: expected one of oracle|native-fastpath|m8-m14-10mm-gate", executionPath)
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
@@ -1703,10 +1718,15 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.process.read_path.outer_leaf.cache.capacity",
 		"treedb.process.read_path.outer_leaf.cache.buckets",
 		"treedb.process.read_path.outer_leaf.cache.ways",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_policy",
 		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips",
 		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_candidate_skips",
 		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_lock_skips",
 		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_attempts",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_stores",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_skips",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips",
 		"treedb.vlog.decode_buffer_grow.calls_total",
 		"treedb.vlog.decode_buffer_grow.realloc_calls_total",
 		"treedb.vlog.decode_buffer_grow.realloc_rate",
@@ -1873,6 +1893,11 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_generation.remap.successes",
 		"treedb.cache.vlog_generation.remap.failures",
 		"treedb.process.read_path.outer_leaf.cache.bytes",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_policy",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_attempts",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_stores",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_skips",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips",
 		"treedb.process.read_path.outer_leaf.cache.record_checksum_verified_stores",
 		"treedb.process.read_path.outer_leaf.cache.page_checksum_verified_marks",
 		"treedb.process.read_path.outer_leaf.cache.page_checksum_verified_hits",
@@ -6260,6 +6285,13 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 	}{
 		{label: "write_path.mode", alts: []string{"treedb.write_path.mode"}},
 		{label: "write_path.redo_log", alts: []string{"treedb.write_path.redo_log"}},
+		{label: "flush_admission.policy", alts: []string{"treedb.flush_admission.policy"}},
+		{label: "flush_admission.admitted", alts: []string{"treedb.flush_admission.admitted"}},
+		{label: "flush_admission.reason", alts: []string{"treedb.flush_admission.reason"}},
+		{label: "flush_admission.flush_apply_concurrency", alts: []string{"treedb.flush_admission.flush_apply_concurrency"}},
+		{label: "flush_admission.flush_apply_span_native", alts: []string{"treedb.flush_admission.flush_apply_span_native"}},
+		{label: "flush_admission.flush_backlog_coalescing", alts: []string{"treedb.flush_admission.flush_backlog_coalescing"}},
+		{label: "flush_admission.leaf_page_read_cache_write_admission", alts: []string{"treedb.flush_admission.leaf_page_read_cache_write_admission"}},
 		{label: "vlog_mmap.current_writable_map_target_bytes", alts: []string{"treedb.vlog.mmap_current_writable_map_target_bytes", "treedb.cache.vlog_mmap.current_writable_map_target_bytes"}},
 		{label: "vlog_mmap.max_mapped_sealed_segments", alts: []string{"treedb.vlog.mmap_max_mapped_sealed_segments", "treedb.cache.vlog_mmap.max_mapped_sealed_segments"}},
 		{label: "vlog_mmap.max_mapped_sealed_bytes", alts: []string{"treedb.vlog.mmap_max_mapped_sealed_bytes", "treedb.cache.vlog_mmap.max_mapped_sealed_bytes"}},
@@ -6280,6 +6312,82 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "command_wal.max_lsn", alts: []string{"treedb.command_wal.max_lsn"}},
 		{label: "leaf_generation.generations.pinned", alts: []string{"treedb.leaf_generation.generations.pinned"}},
 		{label: "leaf_generation.pins.total", alts: []string{"treedb.leaf_generation.pins.total"}},
+		{label: "flush_apply.cache.batches_total", alts: []string{"treedb.cache.flush_apply.batches_total"}},
+		{label: "flush_apply.cache.planning_ns_total", alts: []string{"treedb.cache.flush_apply.planning_ns_total"}},
+		{label: "flush_apply.cache.build_ns_total", alts: []string{"treedb.cache.flush_apply.build_ns_total"}},
+		{label: "flush_apply.cache.backend_write_ns_total", alts: []string{"treedb.cache.flush_apply.backend_write_ns_total"}},
+		{label: "flush_apply.cache.leaf_log_append_wait_ns_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_wait_ns_total"}},
+		{label: "flush_apply.cache.leaf_log_append_ns_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_ns_total"}},
+		{label: "flush_apply.cache.leaf_log_append_bytes_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_bytes_total"}},
+		{label: "flush_apply.cache.leaf_log_append_frames_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_frames_total"}},
+		{label: "flush_apply.cache.leaf_log_append_frames_per_op", alts: []string{"treedb.cache.flush_apply.leaf_log_append_frames_per_op"}},
+		{label: "flush_apply.cache.leaf_log_append_records_total", alts: []string{"treedb.cache.flush_apply.leaf_log_append_records_total"}},
+		{label: "flush_span_run.target_leaves_split_across_chunks_total", alts: []string{"treedb.cache.flush_span_run.target_leaves_split_across_chunks_total"}},
+		{label: "flush_span_run.target_leaf_spans_total", alts: []string{"treedb.cache.flush_span_run.target_leaf_spans_total"}},
+		{label: "flush_span_run.single_op_spans_total", alts: []string{"treedb.cache.flush_span_run.single_op_spans_total"}},
+		{label: "flush_span_run.ops_per_span", alts: []string{"treedb.cache.flush_span_run.ops_per_span"}},
+		{label: "flush_span_run.single_op_span_ratio", alts: []string{"treedb.cache.flush_span_run.single_op_span_ratio"}},
+		{label: "flush_span_run.source_point_ops_total", alts: []string{"treedb.cache.flush_span_run.source_point_ops_total"}},
+		{label: "flush_span_run.planned_ops_total", alts: []string{"treedb.cache.flush_span_run.planned_ops_total"}},
+		{label: "flush_span_run.planned_point_ops_total", alts: []string{"treedb.cache.flush_span_run.planned_point_ops_total"}},
+		{label: "flush_span_run.source_memtables_total", alts: []string{"treedb.cache.flush_span_run.source_memtables_total"}},
+		{label: "flush_span_run.shadowed_ops_total", alts: []string{"treedb.cache.flush_span_run.shadowed_ops_total"}},
+		{label: "flush_span_run.range_barriers_total", alts: []string{"treedb.cache.flush_span_run.range_barriers_total"}},
+		{label: "flush_span_run.backend_chunks_total", alts: []string{"treedb.cache.flush_span_run.backend_chunks_total"}},
+		{label: "flush_backlog_coalescing.admitted_runs_total", alts: []string{"treedb.cache.flush_backlog_coalescing.admitted_runs_total"}},
+		{label: "flush_backlog_coalescing.admitted_extra_memtables_total", alts: []string{"treedb.cache.flush_backlog_coalescing.admitted_extra_memtables_total"}},
+		{label: "flush_backlog_coalescing.admitted_extra_ops_total", alts: []string{"treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total"}},
+		{label: "flush_backlog_coalescing.selected_memtables_max", alts: []string{"treedb.cache.flush_backlog_coalescing.selected_memtables_max"}},
+		{label: "flush_backlog_coalescing.selected_ops_max", alts: []string{"treedb.cache.flush_backlog_coalescing.selected_ops_max"}},
+		{label: "flush_backlog_coalescing.last_single_op_span_ratio", alts: []string{"treedb.cache.flush_backlog_coalescing.last_single_op_span_ratio"}},
+		{label: "flush_backlog_coalescing.last_ops_per_span", alts: []string{"treedb.cache.flush_backlog_coalescing.last_ops_per_span"}},
+		{label: "flush_backlog_coalescing.skip.memory_budget_total", alts: []string{"treedb.cache.flush_backlog_coalescing.skip.reason.memory_budget_total"}},
+		{label: "flush_backlog_coalescing.skip.ops_budget_total", alts: []string{"treedb.cache.flush_backlog_coalescing.skip.reason.ops_budget_total"}},
+		{label: "flush_backlog_coalescing.skip.range_barrier_total", alts: []string{"treedb.cache.flush_backlog_coalescing.skip.reason.range_barrier_total"}},
+		{label: "flush_backlog_coalescing.skip.lane_barrier_total", alts: []string{"treedb.cache.flush_backlog_coalescing.skip.reason.lane_barrier_total"}},
+		{label: "flush_backlog_coalescing.skip.stop_pressure_total", alts: []string{"treedb.cache.flush_backlog_coalescing.skip.reason.stop_pressure_total"}},
+		{label: "flush_apply.prepared_output.leaf_log_pages_prepared_total", alts: []string{"treedb.flush_apply.prepared_output.leaf_log_pages_prepared_total"}},
+		{label: "flush_apply.prepared_output.leaf_log_pages_installed_total", alts: []string{"treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"}},
+		{label: "flush_apply.prepared_output.leaf_log_pages_abandoned_total", alts: []string{"treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total"}},
+		{label: "flush_apply.cache.foreground_assist_wait_ns_total", alts: []string{"treedb.cache.flush_apply.foreground_assist_wait_ns_total"}},
+		{label: "flush_apply.cache.coordinator.active_assist_skips_total", alts: []string{"treedb.cache.flush_apply.coordinator.active_assist_skips_total"}},
+		{label: "flush_apply.cache.coordinator.progress_wait_ns_total", alts: []string{"treedb.cache.flush_apply.coordinator.progress_wait_ns_total"}},
+		{label: "flush_apply.cache.coordinator.stall_waits_total", alts: []string{"treedb.cache.flush_apply.coordinator.stall_waits_total"}},
+		{label: "flush_apply.cache.coordinator.blocking_fallbacks_total", alts: []string{"treedb.cache.flush_apply.coordinator.blocking_fallbacks_total"}},
+		{label: "flush_apply.cache.coordinator.hard_overload_fallbacks_total", alts: []string{"treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total"}},
+		{label: "checkpoint.flushmu_wait_total_ms", alts: []string{"treedb.cache.checkpoint.flushmu_wait_total_ms"}},
+		{label: "checkpoint.active_background_flush_wait_ns_total", alts: []string{"treedb.cache.checkpoint.active_background_flush_wait_ns_total"}},
+		{label: "checkpoint.stage.value_log_flush.total_ns", alts: []string{"treedb.cache.checkpoint.stage.value_log_flush.total_ns"}},
+		{label: "checkpoint.stage.flush_all.total_ns", alts: []string{"treedb.cache.checkpoint.stage.flush_all.total_ns"}},
+		{label: "checkpoint.stage.leaf_value_log_sync.total_ns", alts: []string{"treedb.cache.checkpoint.stage.leaf_value_log_sync.total_ns"}},
+		{label: "checkpoint.stage.reducer_publish.total_ns", alts: []string{"treedb.cache.checkpoint.stage.reducer_publish.total_ns"}},
+		{label: "flush_apply.apply_ns_total", alts: []string{"treedb.flush_apply.apply_ns_total"}},
+		{label: "flush_apply.old_leaf_read_decode.bytes_total", alts: []string{"treedb.flush_apply.old_leaf_read_decode.bytes_total"}},
+		{label: "flush_apply.old_leaf_read_decode.bytes_per_op", alts: []string{"treedb.flush_apply.old_leaf_read_decode.bytes_per_op"}},
+		{label: "flush_apply.merge_build.leaf_merges_total", alts: []string{"treedb.flush_apply.merge_build.leaf_merges_total"}},
+		{label: "flush_apply.merge_build.leaf_merges_per_op", alts: []string{"treedb.flush_apply.merge_build.leaf_merges_per_op"}},
+		{label: "flush_apply.merge_build.replacement_leaf_pages_per_op", alts: []string{"treedb.flush_apply.merge_build.replacement_leaf_pages_per_op"}},
+		{label: "flush_apply.span_run.target_leaf_spans_total", alts: []string{"treedb.flush_apply.span_run.target_leaf_spans_total"}},
+		{label: "flush_apply.span_run.single_op_spans_total", alts: []string{"treedb.flush_apply.span_run.single_op_spans_total"}},
+		{label: "flush_apply.span_run.ops_per_span", alts: []string{"treedb.flush_apply.span_run.ops_per_span"}},
+		{label: "flush_apply.span_run.bytes_per_span", alts: []string{"treedb.flush_apply.span_run.bytes_per_span"}},
+		{label: "flush_apply.span_native.candidate_ops_total", alts: []string{"treedb.flush_apply.span_native.candidate_ops_total"}},
+		{label: "flush_apply.span_native.eligible_ops_total", alts: []string{"treedb.flush_apply.span_native.eligible_ops_total"}},
+		{label: "flush_apply.span_native.ineligible_ops_total", alts: []string{"treedb.flush_apply.span_native.ineligible_ops_total"}},
+		{label: "flush_apply.span_native.fallback.not_implemented_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"}},
+		{label: "flush_apply.span_native.fallback.root_mismatch_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.root_mismatch.ops_total"}},
+		{label: "flush_apply.span_native.fallback.range_delete_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.range_delete_barrier.ops_total"}},
+		{label: "flush_apply.span_native.fallback.maintenance_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.maintenance.ops_total"}},
+		{label: "flush_apply.span_native.fallback.inexact_leaf_spans_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.inexact_leaf_spans.ops_total"}},
+		{label: "flush_apply.span_native.fallback.close_or_checkpoint_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total"}},
+		{label: "flush_apply.span_native.fallback.memory_or_emergency_cap_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.memory_or_emergency_cap.ops_total"}},
+		{label: "flush_apply.span_native.fallback.output_ownership_failure_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.output_ownership_failure.ops_total"}},
+		{label: "flush_apply.span_native.fallback.reducer_validation_failed_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.reducer_validation_failed.ops_total"}},
+		{label: "flush_apply.root_reduce.ns_total", alts: []string{"treedb.flush_apply.root_reduce.ns_total"}},
+		{label: "flush_apply.commit_wait_ns_total", alts: []string{"treedb.flush_apply.commit_wait_ns_total"}},
+		{label: "flush_apply.guarded_publish.ns_total", alts: []string{"treedb.flush_apply.guarded_publish.ns_total"}},
+		{label: "flush_apply.retry_total", alts: []string{"treedb.flush_apply.retry_total"}},
+		{label: "flush_apply.mismatch_total", alts: []string{"treedb.flush_apply.mismatch_total"}},
 		{label: "publish.ordered_root_delta_group.calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.calls_total"}},
 		{label: "publish.ordered_root_delta_group.roots_total", alts: []string{"treedb.publish.ordered_root_delta_group.roots_total"}},
 		{label: "publish.ordered_root_delta_group.avg_roots_per_call", alts: []string{"treedb.publish.ordered_root_delta_group.avg_roots_per_call"}},

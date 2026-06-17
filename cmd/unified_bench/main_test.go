@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
 )
 
@@ -2901,6 +2902,40 @@ func TestRenderMarkdownSweep_KeepDirIncludesKeptSection(t *testing.T) {
 	}
 }
 
+func TestTreeDBOptionsReportFlushBacklogCoalescingEffectiveDefaults(t *testing.T) {
+	rep := treeDBOptionsReport{opts: treedb.Options{FlushBacklogCoalescing: true}}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_backlog_coalescing=true",
+		"flush_backlog_coalescing_max_memtables=default (effective=64)",
+		"flush_backlog_coalescing_max_bytes=default (effective=536870912)",
+		"flush_backlog_coalescing_max_ops=default (effective=2097152)",
+		"flush_backlog_coalescing_single_op_ratio=default (effective=0.500000)",
+		"flush_backlog_coalescing_max_ops_per_span=default (effective=4.000000)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in resolved options, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestTreeDBOptionsReportFlushBacklogCoalescingEffectiveCaps(t *testing.T) {
+	rep := treeDBOptionsReport{opts: treedb.Options{
+		FlushBacklogCoalescing:                  true,
+		FlushBacklogCoalescingMaxMemtables:      256,
+		FlushBacklogCoalescingSingleOpSpanRatio: 2,
+	}}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_backlog_coalescing_max_memtables=256 (effective=128 cap)",
+		"flush_backlog_coalescing_single_op_ratio=2.000000 (effective=1.000000 cap)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in resolved options, got:\n%s", want, text)
+		}
+	}
+}
+
 func TestRenderTreeDBSelectedStatsString_SkipsDBsWithoutSelectedKeys(t *testing.T) {
 	instances := []*DBInstance{
 		{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}},
@@ -2921,6 +2956,70 @@ func TestRenderTreeDBSelectedStatsString_SkipsDBsWithoutSelectedKeys(t *testing.
 	}
 	if strings.Contains(got, "OtherDB:\n") {
 		t.Fatalf("expected OtherDB to be omitted, got:\n%s", got)
+	}
+}
+
+func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing.T) {
+	instances := []*DBInstance{{Name: "tree", Wrapper: &fixedNameDB{name: "TreeDB"}}}
+	stats := map[string]map[string]string{
+		"TreeDB": {
+			"treedb.flush_admission.policy":                                                        "auto",
+			"treedb.flush_admission.admitted":                                                      "true",
+			"treedb.flush_admission.reason":                                                        "auto_admitted_c4_adaptive",
+			"treedb.flush_admission.flush_apply_concurrency":                                       "4",
+			"treedb.flush_admission.leaf_page_read_cache_write_admission":                          "adaptive",
+			"treedb.cache.flush_span_run.source_point_ops_total":                                   "11",
+			"treedb.cache.flush_span_run.planned_point_ops_total":                                  "10",
+			"treedb.cache.flush_span_run.backend_chunks_total":                                     "3",
+			"treedb.cache.flush_span_run.target_leaf_spans_total":                                  "4",
+			"treedb.cache.flush_span_run.target_leaves_split_across_chunks_total":                  "1",
+			"treedb.cache.flush_span_run.single_op_span_ratio":                                     "0.250000",
+			"treedb.cache.flush_backlog_coalescing.admitted_runs_total":                            "2",
+			"treedb.cache.flush_backlog_coalescing.selected_memtables_max":                         "8",
+			"treedb.cache.flush_backlog_coalescing.skip.reason.memory_budget_total":                "1",
+			"treedb.cache.checkpoint.flushmu_wait_total_ms":                                        "1.250",
+			"treedb.cache.checkpoint.stage.value_log_flush.total_ns":                               "22",
+			"treedb.cache.checkpoint.stage.flush_all.total_ns":                                     "33",
+			"treedb.cache.checkpoint.stage.reducer_publish.total_ns":                               "44",
+			"treedb.flush_apply.old_leaf_read_decode.bytes_per_op":                                 "2.200000",
+			"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
+			"treedb.flush_apply.span_native.fallback.reason.root_mismatch.ops_total":               "1",
+			"treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total":         "2",
+			"treedb.flush_apply.span_native.fallback.reason.output_ownership_failure.ops_total":    "3",
+			"treedb.flush_apply.span_native.fallback.reason.reducer_validation_failed.ops_total":   "4",
+		},
+	}
+
+	got := renderTreeDBSelectedStatsString(instances, stats)
+	for _, want := range []string{
+		"flush_admission.policy: auto",
+		"flush_admission.admitted: true",
+		"flush_admission.reason: auto_admitted_c4_adaptive",
+		"flush_admission.flush_apply_concurrency: 4",
+		"flush_admission.leaf_page_read_cache_write_admission: adaptive",
+		"flush_span_run.source_point_ops_total: 11",
+		"flush_span_run.planned_point_ops_total: 10",
+		"flush_span_run.backend_chunks_total: 3",
+		"flush_span_run.target_leaf_spans_total: 4",
+		"flush_span_run.target_leaves_split_across_chunks_total: 1",
+		"flush_span_run.single_op_span_ratio: 0.250000",
+		"flush_backlog_coalescing.admitted_runs_total: 2",
+		"flush_backlog_coalescing.selected_memtables_max: 8",
+		"flush_backlog_coalescing.skip.memory_budget_total: 1",
+		"checkpoint.flushmu_wait_total_ms: 1.250",
+		"checkpoint.stage.value_log_flush.total_ns: 22",
+		"checkpoint.stage.flush_all.total_ns: 33",
+		"checkpoint.stage.reducer_publish.total_ns: 44",
+		"flush_apply.old_leaf_read_decode.bytes_per_op: 2.200000",
+		"flush_apply.span_native.fallback.not_implemented_ops_total: 10",
+		"flush_apply.span_native.fallback.root_mismatch_ops_total: 1",
+		"flush_apply.span_native.fallback.close_or_checkpoint_ops_total: 2",
+		"flush_apply.span_native.fallback.output_ownership_failure_ops_total: 3",
+		"flush_apply.span_native.fallback.reducer_validation_failed_ops_total: 4",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in selected stats, got:\n%s", want, got)
+		}
 	}
 }
 
@@ -3036,8 +3135,9 @@ func TestRenderMarkdownSweep_IncludesTreeDBPerfAndStatsSections(t *testing.T) {
 			},
 			TreeDBStats: map[string]map[string]string{
 				"TreeDB": {
-					"treedb.cache.vlog_mmap.read.hits":          "7",
-					"treedb.leaf_generation.generations.pinned": formatInt(int(pinned)),
+					"treedb.cache.vlog_mmap.read.hits":           "7",
+					"treedb.cache.flush_apply.planning_ns_total": formatInt(100 + int(pinned)),
+					"treedb.leaf_generation.generations.pinned":  formatInt(int(pinned)),
 				},
 			},
 		}
@@ -3061,6 +3161,9 @@ func TestRenderMarkdownSweep_IncludesTreeDBPerfAndStatsSections(t *testing.T) {
 	}
 	if !strings.Contains(md, "leaf_generation.generations.pinned: 1") || !strings.Contains(md, "leaf_generation.generations.pinned: 2") {
 		t.Fatalf("expected sweep selected stats details, got:\n%s", md)
+	}
+	if !strings.Contains(md, "flush_apply.cache.planning_ns_total: 101") || !strings.Contains(md, "flush_apply.cache.planning_ns_total: 102") {
+		t.Fatalf("expected flush/apply selected stats details, got:\n%s", md)
 	}
 }
 
@@ -3107,14 +3210,22 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 			},
 			TreeDBStats: map[string]map[string]string{
 				"TreeDB": {
-					"treedb.cache.vlog_mmap.read.hits":                               "10",
-					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":            "8589934592",
-					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":               "512",
-					"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
-					"treedb.cache.vlog_auto.frames.block_lz4":                        "5",
-					"treedb.cache.vlog_block.k.bucket.lz4.le_1":                      "5",
-					"treedb.cache.vlog_outer_leaf_codec.frames.lz4":                  "5",
-					"treedb.unselected":                                              "drop",
+					"treedb.cache.vlog_mmap.read.hits":                                                     "10",
+					"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes":                                  "8589934592",
+					"treedb.vlog.mmap_max_mapped_leaf_sealed_segments":                                     "512",
+					"treedb.cache.flush_apply.planning_ns_total":                                           "11",
+					"treedb.cache.flush_span_run.source_point_ops_total":                                   "11",
+					"treedb.cache.flush_span_run.planned_point_ops_total":                                  "10",
+					"treedb.cache.flush_span_run.backend_chunks_total":                                     "3",
+					"treedb.cache.checkpoint.stage.reducer_publish.total_ns":                               "44",
+					"treedb.flush_apply.old_leaf_read_decode.bytes_total":                                  "22",
+					"treedb.flush_apply.old_leaf_read_decode.bytes_per_op":                                 "2.200000",
+					"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
+					"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "4",
+					"treedb.cache.vlog_auto.frames.block_lz4":                                              "5",
+					"treedb.cache.vlog_block.k.bucket.lz4.le_1":                                            "5",
+					"treedb.cache.vlog_outer_leaf_codec.frames.lz4":                                        "5",
+					"treedb.unselected": "drop",
 				},
 			},
 		},
@@ -3139,7 +3250,6 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if !strings.Contains(string(mdData), "- execution path: `native-fastpath`") {
 		t.Fatalf("markdown missing execution path label:\n%s", string(mdData))
 	}
-
 	var parsed benchprofExport
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
@@ -3168,6 +3278,30 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.vlog.mmap_max_mapped_leaf_sealed_segments"]; got != "512" {
 		t.Fatalf("unexpected backend leaf mmap budget stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_apply.planning_ns_total"]; got != "11" {
+		t.Fatalf("unexpected cache flush planning stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.source_point_ops_total"]; got != "11" {
+		t.Fatalf("unexpected source point ops stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.planned_point_ops_total"]; got != "10" {
+		t.Fatalf("unexpected planned point ops stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.flush_span_run.backend_chunks_total"]; got != "3" {
+		t.Fatalf("unexpected span-run chunk stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.checkpoint.stage.reducer_publish.total_ns"]; got != "44" {
+		t.Fatalf("unexpected checkpoint reducer/publish stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.flush_apply.old_leaf_read_decode.bytes_total"]; got != "22" {
+		t.Fatalf("unexpected backend flush old-leaf stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.flush_apply.old_leaf_read_decode.bytes_per_op"]; got != "2.200000" {
+		t.Fatalf("unexpected old-leaf bytes/op stat=%q", got)
+	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"]; got != "10" {
+		t.Fatalf("unexpected span-native fallback stat=%q", got)
 	}
 	for key, want := range map[string]string{
 		"treedb.cache.vlog_auto.frames.block_lz4":       "5",
@@ -3309,7 +3443,7 @@ func TestWriteBenchprofArtifacts_InvalidExecutionPathListsAllowedValues(t *testi
 	if err == nil {
 		t.Fatal("expected invalid execution path to fail")
 	}
-	if !strings.Contains(err.Error(), "expected one of oracle|native-fastpath") {
+	if !strings.Contains(err.Error(), "expected one of oracle|native-fastpath|m8-m14-10mm-gate") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Contains(err.Error(), "mixed-path labels are forbidden") {
@@ -3317,7 +3451,34 @@ func TestWriteBenchprofArtifacts_InvalidExecutionPathListsAllowedValues(t *testi
 	}
 }
 
-func TestWriteBenchprofArtifacts_RequiresExecutionPath(t *testing.T) {
+func TestWriteBenchprofArtifacts_AcceptsM8M14GateExecutionPath(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{{
+		Config: BenchConfig{Keys: 1, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"full_scan": {"TreeDB": 1},
+		},
+	}}
+	if err := writeBenchprofArtifacts(dir, "m8-m14-10mm-gate", runs); err != nil {
+		t.Fatalf("m8-m14 gate execution path should be accepted: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof results: %v", err)
+	}
+	var parsed benchprofExport
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse benchprof results: %v", err)
+	}
+	if len(parsed.Runs) != 1 {
+		t.Fatalf("benchprof runs=%d want 1", len(parsed.Runs))
+	}
+	if got := parsed.Runs[0].ExecutionPath; got != "m8-m14-10mm-gate" {
+		t.Fatalf("execution_path=%q want m8-m14-10mm-gate", got)
+	}
+}
+
+func TestWriteBenchprofArtifacts_DefaultsExecutionPath(t *testing.T) {
 	dir := t.TempDir()
 	runs := []BenchRun{{
 		Config: BenchConfig{Keys: 1, Profile: "fast"},
@@ -3326,10 +3487,22 @@ func TestWriteBenchprofArtifacts_RequiresExecutionPath(t *testing.T) {
 		},
 	}}
 
-	if err := writeBenchprofArtifacts(dir, "", runs); err == nil {
-		t.Fatal("expected missing execution path to fail")
-	} else if !strings.Contains(err.Error(), "execution path is required") {
-		t.Fatalf("unexpected error: %v", err)
+	if err := writeBenchprofArtifacts(dir, "", runs); err != nil {
+		t.Fatalf("missing execution path should default to native-fastpath: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof results: %v", err)
+	}
+	var parsed benchprofExport
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse benchprof results: %v", err)
+	}
+	if len(parsed.Runs) != 1 {
+		t.Fatalf("expected one run, got %d", len(parsed.Runs))
+	}
+	if got, want := parsed.Runs[0].ExecutionPath, "native-fastpath"; got != want {
+		t.Fatalf("unexpected execution path: got %q want %q", got, want)
 	}
 }
 

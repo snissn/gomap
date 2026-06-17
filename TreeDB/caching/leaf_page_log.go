@@ -3,6 +3,7 @@ package caching
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -130,7 +131,9 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	}
 	scratch := getCompactLeafLogPayloadScratch()
 	defer putCompactLeafLogPayloadScratch(scratch)
+	encodeStart := time.Now()
 	encodedLeafPage, _, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
+	l.db.observeFlushApplyLeafLogEncodeCompress(time.Since(encodeStart))
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
@@ -185,11 +188,20 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 		}
 		putCompactLeafLogPayloadScratchPtrRef(scratchRef, scratches)
 	}()
+	encodeStart := time.Now()
+	encodeObserved := false
+	observeEncode := func() {
+		if !encodeObserved {
+			l.db.observeFlushApplyLeafLogEncodeCompress(time.Since(encodeStart))
+			encodeObserved = true
+		}
+	}
 	for i, leafPage := range leafPages {
 		scratch := getCompactLeafLogPayloadScratch()
 		encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
 		if err != nil {
 			putCompactLeafLogPayloadScratch(scratch)
+			observeEncode()
 			return nil, err
 		}
 		if compacted {
@@ -207,6 +219,7 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 			Value: encodedLeafPage,
 		}
 	}
+	observeEncode()
 
 	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
 	if err != nil {

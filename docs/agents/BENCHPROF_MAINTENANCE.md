@@ -34,6 +34,9 @@ Expected artifacts in `$OUT`:
 - `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
 - `block.pprof`, `mutex.pprof`, `trace.out`
 - `insights.md`, `insights.json`, `insights.html`
+- selected TreeDB metadata in `benchprof_results.json`, including current
+  `treedb.cache.flush_apply.*` / `treedb.flush_apply.*` stage counters when
+  TreeDB emits them.
 
 ## Maintenance Contract
 

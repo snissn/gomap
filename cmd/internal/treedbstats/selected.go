@@ -65,6 +65,14 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_generation."):
 		return true
+	case strings.HasPrefix(key, "treedb.cache.flush_apply."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.flush_span_run."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.checkpoint."):
+		return true
+	case strings.HasPrefix(key, "treedb.flush_apply."):
+		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_retained_prune."):
 		return true
 	case strings.HasPrefix(key, "treedb.publish.ordered_root_delta_group."):

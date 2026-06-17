@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -1454,6 +1455,15 @@ func TestPublicCommandWALDeleteRangeValueLogPointersReopen(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.range_span.spans_flushed_total"]; got != "1" {
+		_ = db.Close()
+		t.Fatalf("range spans flushed=%s want 1", got)
+	}
+	if got, want := stats["treedb.command_wal.live_covered_max_lsn"], stats["treedb.command_wal.live_accepted_max_lsn"]; got != want {
+		_ = db.Close()
+		t.Fatalf("covered command WAL LSN=%s want accepted max %s", got, want)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -1463,6 +1473,11 @@ func TestPublicCommandWALDeleteRangeValueLogPointersReopen(t *testing.T) {
 		t.Fatalf("Reopen: %v", err)
 	}
 	defer reopen.Close()
+	requireRawKVValue(t, reopen, []byte("a"), []byte("left-pointer-value"))
+	requireRawKVValue(t, reopen, []byte("c"), []byte("right-pointer-value"))
+	if _, err := reopen.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC after range checkpoint: %v", err)
+	}
 	requireRawKVValue(t, reopen, []byte("a"), []byte("left-pointer-value"))
 	requireRawKVValue(t, reopen, []byte("c"), []byte("right-pointer-value"))
 	has, err := reopen.Has([]byte("b"))

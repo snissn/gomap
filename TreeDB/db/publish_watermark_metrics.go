@@ -160,6 +160,10 @@ type orderedRootDeltaGroupPublishStats struct {
 	rootApplyLeafLogRecordHintBytesRead    uint64
 	rootApplyLeafMerges                    uint64
 	rootApplyInternalMerges                uint64
+	rootApplyInternalParallelMerges        uint64
+	rootApplyInternalParallelChildren      uint64
+	rootApplyInternalParallelWorkers       uint64
+	rootApplyInternalParallelOps           uint64
 	rootApplyLeafPagesWritten              uint64
 	rootApplyPagerLeafPagesWritten         uint64
 	rootApplyLeafLogPagesWritten           uint64
@@ -174,6 +178,16 @@ type orderedRootDeltaGroupPublishStats struct {
 	rootApplyInternalLeafLogRefs           uint64
 	rootApplyInternalLeafLogRefCopies      uint64
 	rootApplyRootSplitLevels               uint64
+	rootApplyReadOnlyPrepareNs             uint64
+	rootApplyReadOnlyPrepareCalls          uint64
+	rootApplyReadOnlyPrepareErrors         uint64
+	rootApplyReadOnlyPrepareValidationFail uint64
+	rootApplyReadOnlyPrepareRequested      uint64
+	rootApplyReadOnlyPrepareRequestedMax   uint64
+	rootApplyReadOnlyPrepareSpans          uint64
+	rootApplyReadOnlyPrepareSpanOps        uint64
+	rootApplyReadOnlyPrepareSpanBytes      uint64
+	rootApplyReadOnlyPrepareWorkerRanges   uint64
 	systemBuildNs                          uint64
 	systemApplyNs                          uint64
 	systemApplyCalls                       uint64
@@ -188,18 +202,28 @@ type orderedRootDeltaGroupPublishStats struct {
 }
 
 type orderedRootDeltaGroupPublishPhaseStats struct {
-	preflightNs             uint64
-	rootApplyNs             uint64
-	rootApplyCalls          uint64
-	rootApplyParallelGroups uint64
-	rootApplyParallelRoots  uint64
-	rootApplyMetrics        orderedRootDeltaGroupZipperStats
-	systemBuildNs           uint64
-	systemApplyNs           uint64
-	systemApplyCalls        uint64
-	systemApplyMetrics      orderedRootDeltaGroupZipperStats
-	finalizeNs              uint64
-	finalizeCalls           uint64
+	preflightNs                            uint64
+	rootApplyNs                            uint64
+	rootApplyCalls                         uint64
+	rootApplyParallelGroups                uint64
+	rootApplyParallelRoots                 uint64
+	rootApplyMetrics                       orderedRootDeltaGroupZipperStats
+	rootApplyReadOnlyPrepareNs             uint64
+	rootApplyReadOnlyPrepareCalls          uint64
+	rootApplyReadOnlyPrepareErrors         uint64
+	rootApplyReadOnlyPrepareValidationFail uint64
+	rootApplyReadOnlyPrepareRequested      uint64
+	rootApplyReadOnlyPrepareRequestedMax   uint64
+	rootApplyReadOnlyPrepareSpans          uint64
+	rootApplyReadOnlyPrepareSpanOps        uint64
+	rootApplyReadOnlyPrepareSpanBytes      uint64
+	rootApplyReadOnlyPrepareWorkerRanges   uint64
+	systemBuildNs                          uint64
+	systemApplyNs                          uint64
+	systemApplyCalls                       uint64
+	systemApplyMetrics                     orderedRootDeltaGroupZipperStats
+	finalizeNs                             uint64
+	finalizeCalls                          uint64
 }
 
 type orderedRootDeltaGroupZipperStats struct {
@@ -216,6 +240,10 @@ type orderedRootDeltaGroupZipperStats struct {
 	ZipperLeafLogRecordHintBytesRead    int
 	ZipperLeafMerges                    int
 	ZipperInternalMerges                int
+	ZipperInternalParallelMerges        int
+	ZipperInternalParallelChildren      int
+	ZipperInternalParallelWorkers       int
+	ZipperInternalParallelOps           int
 	ZipperLeafPagesWritten              int
 	ZipperPagerLeafPagesWritten         int
 	ZipperLeafLogPagesWritten           int
@@ -249,6 +277,10 @@ func (dst *orderedRootDeltaGroupZipperStats) add(src adaptive.Metrics) {
 	dst.ZipperLeafLogRecordHintBytesRead += src.ZipperLeafLogRecordHintBytesRead
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	dst.ZipperInternalParallelMerges += src.ZipperInternalParallelMerges
+	dst.ZipperInternalParallelChildren += src.ZipperInternalParallelChildren
+	dst.ZipperInternalParallelWorkers += src.ZipperInternalParallelWorkers
+	dst.ZipperInternalParallelOps += src.ZipperInternalParallelOps
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
@@ -328,6 +360,10 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupRootApplyLeafLogRecordHintBytesRead.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperLeafLogRecordHintBytesRead))
 	db.orderedRootDeltaGroupRootApplyLeafMerges.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperLeafMerges))
 	db.orderedRootDeltaGroupRootApplyInternalMerges.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalMerges))
+	db.orderedRootDeltaGroupRootApplyInternalParallelMerges.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalParallelMerges))
+	db.orderedRootDeltaGroupRootApplyInternalParallelChildren.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalParallelChildren))
+	db.orderedRootDeltaGroupRootApplyInternalParallelWorkers.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalParallelWorkers))
+	db.orderedRootDeltaGroupRootApplyInternalParallelOps.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalParallelOps))
 	db.orderedRootDeltaGroupRootApplyLeafPagesWritten.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperLeafPagesWritten))
 	db.orderedRootDeltaGroupRootApplyPagerLeafPagesWritten.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperPagerLeafPagesWritten))
 	db.orderedRootDeltaGroupRootApplyLeafLogPagesWritten.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperLeafLogPagesWritten))
@@ -342,6 +378,16 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupRootApplyInternalLeafLogRefs.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalLeafLogRefs))
 	db.orderedRootDeltaGroupRootApplyInternalLeafLogRefCopies.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalLeafLogRefCopies))
 	db.orderedRootDeltaGroupRootApplyRootSplitLevels.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperRootSplitLevels))
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareNs.Add(phases.rootApplyReadOnlyPrepareNs)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls.Add(phases.rootApplyReadOnlyPrepareCalls)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareErrors.Add(phases.rootApplyReadOnlyPrepareErrors)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareValidationFail.Add(phases.rootApplyReadOnlyPrepareValidationFail)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareRequested.Add(phases.rootApplyReadOnlyPrepareRequested)
+	storeUint64Max(&db.orderedRootDeltaGroupRootApplyReadOnlyPrepareRequestedMax, phases.rootApplyReadOnlyPrepareRequestedMax)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareSpans.Add(phases.rootApplyReadOnlyPrepareSpans)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareSpanOps.Add(phases.rootApplyReadOnlyPrepareSpanOps)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareSpanBytes.Add(phases.rootApplyReadOnlyPrepareSpanBytes)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorkerRanges.Add(phases.rootApplyReadOnlyPrepareWorkerRanges)
 	db.orderedRootDeltaGroupSystemBuildNs.Add(phases.systemBuildNs)
 	db.orderedRootDeltaGroupSystemApplyNs.Add(phases.systemApplyNs)
 	db.orderedRootDeltaGroupSystemApplyCalls.Add(phases.systemApplyCalls)
@@ -392,6 +438,10 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		rootApplyLeafLogRecordHintBytesRead:    db.orderedRootDeltaGroupRootApplyLeafLogRecordHintBytesRead.Load(),
 		rootApplyLeafMerges:                    db.orderedRootDeltaGroupRootApplyLeafMerges.Load(),
 		rootApplyInternalMerges:                db.orderedRootDeltaGroupRootApplyInternalMerges.Load(),
+		rootApplyInternalParallelMerges:        db.orderedRootDeltaGroupRootApplyInternalParallelMerges.Load(),
+		rootApplyInternalParallelChildren:      db.orderedRootDeltaGroupRootApplyInternalParallelChildren.Load(),
+		rootApplyInternalParallelWorkers:       db.orderedRootDeltaGroupRootApplyInternalParallelWorkers.Load(),
+		rootApplyInternalParallelOps:           db.orderedRootDeltaGroupRootApplyInternalParallelOps.Load(),
 		rootApplyLeafPagesWritten:              db.orderedRootDeltaGroupRootApplyLeafPagesWritten.Load(),
 		rootApplyPagerLeafPagesWritten:         db.orderedRootDeltaGroupRootApplyPagerLeafPagesWritten.Load(),
 		rootApplyLeafLogPagesWritten:           db.orderedRootDeltaGroupRootApplyLeafLogPagesWritten.Load(),
@@ -406,6 +456,16 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		rootApplyInternalLeafLogRefs:           db.orderedRootDeltaGroupRootApplyInternalLeafLogRefs.Load(),
 		rootApplyInternalLeafLogRefCopies:      db.orderedRootDeltaGroupRootApplyInternalLeafLogRefCopies.Load(),
 		rootApplyRootSplitLevels:               db.orderedRootDeltaGroupRootApplyRootSplitLevels.Load(),
+		rootApplyReadOnlyPrepareNs:             db.orderedRootDeltaGroupRootApplyReadOnlyPrepareNs.Load(),
+		rootApplyReadOnlyPrepareCalls:          db.orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls.Load(),
+		rootApplyReadOnlyPrepareErrors:         db.orderedRootDeltaGroupRootApplyReadOnlyPrepareErrors.Load(),
+		rootApplyReadOnlyPrepareValidationFail: db.orderedRootDeltaGroupRootApplyReadOnlyPrepareValidationFail.Load(),
+		rootApplyReadOnlyPrepareRequested:      db.orderedRootDeltaGroupRootApplyReadOnlyPrepareRequested.Load(),
+		rootApplyReadOnlyPrepareRequestedMax:   db.orderedRootDeltaGroupRootApplyReadOnlyPrepareRequestedMax.Load(),
+		rootApplyReadOnlyPrepareSpans:          db.orderedRootDeltaGroupRootApplyReadOnlyPrepareSpans.Load(),
+		rootApplyReadOnlyPrepareSpanOps:        db.orderedRootDeltaGroupRootApplyReadOnlyPrepareSpanOps.Load(),
+		rootApplyReadOnlyPrepareSpanBytes:      db.orderedRootDeltaGroupRootApplyReadOnlyPrepareSpanBytes.Load(),
+		rootApplyReadOnlyPrepareWorkerRanges:   db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorkerRanges.Load(),
 		systemBuildNs:                          db.orderedRootDeltaGroupSystemBuildNs.Load(),
 		systemApplyNs:                          db.orderedRootDeltaGroupSystemApplyNs.Load(),
 		systemApplyCalls:                       db.orderedRootDeltaGroupSystemApplyCalls.Load(),

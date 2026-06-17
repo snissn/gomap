@@ -1068,21 +1068,22 @@ func TestZipperMergeScratch_ReusesAndClearsLeafPageBatchScratch(t *testing.T) {
 	s.releaseLeafPageBatch(reused)
 }
 
-func TestZipperMergeScratch_ReusesAndClearsChildRefBatchScratch(t *testing.T) {
+func TestZipperMergeScratch_ReusesChildRefBatchScratchWithoutClearing(t *testing.T) {
 	s := newMergeScratch()
 	buf := s.acquireChildRefBatch(2)
 	buf = append(buf, page.PageChildRef(1), page.PageChildRef(2))
 	s.releaseChildRefBatch(buf)
 
 	reused := s.acquireChildRefBatch(2)
+	if len(reused) != 0 {
+		t.Fatalf("reused len=%d want 0", len(reused))
+	}
 	if cap(reused) < 2 {
 		t.Fatalf("reused cap=%d want >=2", cap(reused))
 	}
-	for i, ref := range reused[:cap(reused)] {
-		if ref != (page.ChildRef{}) {
-			t.Fatalf("child ref batch scratch retained ref %d: %+v", i, ref)
-		}
-	}
+	// page.ChildRef contains no heap pointers; release intentionally avoids a
+	// full-cap clear so hot batch persistence does not pay avoidable memclr cost.
+	reused = append(reused, page.PageChildRef(3), page.PageChildRef(4))
 	s.releaseChildRefBatch(reused)
 }
 
@@ -1098,6 +1099,12 @@ func TestZipperMergeScratch_TrimsPendingLeafPageScratchCaches(t *testing.T) {
 	for i := 0; i < mergeChildRefBatchKeep+16; i++ {
 		s.releaseChildRefBatch(make([]page.ChildRef, 0, 1))
 	}
+	s.spanWorkerRangeScratch = make([]ReadOnlyLeafSpanWorkerRange, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanWorkerScratchScratch = make([]*mergeScratch, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanRangeMetricsScratch = make([]adaptive.Metrics, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanRangeRetiredScratch = make([][]uint64, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanRangeSplitsScratch = make([]spanNativeLeafSplitRange, 0, mergeSpanNativeRangeScratchMaxCap+1)
+	s.spanRootRefsScratch = make([]Split, 0, mergeSpanNativeRootRefMaxCap+1)
 	z.releaseApplyScratch(s)
 
 	reused := z.acquireApplyScratch()
@@ -1109,6 +1116,24 @@ func TestZipperMergeScratch_TrimsPendingLeafPageScratchCaches(t *testing.T) {
 	}
 	if len(reused.childRefBatchScratch) > mergeChildRefBatchKeep {
 		t.Fatalf("child ref batch scratch len=%d exceeds keep %d", len(reused.childRefBatchScratch), mergeChildRefBatchKeep)
+	}
+	if cap(reused.spanWorkerRangeScratch) > mergeSpanNativeRangeScratchMaxCap {
+		t.Fatalf("span worker range scratch cap=%d exceeds max %d", cap(reused.spanWorkerRangeScratch), mergeSpanNativeRangeScratchMaxCap)
+	}
+	if cap(reused.spanWorkerScratchScratch) > mergeSpanNativeRangeScratchMaxCap {
+		t.Fatalf("span worker scratch slots cap=%d exceeds max %d", cap(reused.spanWorkerScratchScratch), mergeSpanNativeRangeScratchMaxCap)
+	}
+	if cap(reused.spanRangeMetricsScratch) > mergeSpanNativeRangeScratchMaxCap {
+		t.Fatalf("span range metrics cap=%d exceeds max %d", cap(reused.spanRangeMetricsScratch), mergeSpanNativeRangeScratchMaxCap)
+	}
+	if cap(reused.spanRangeRetiredScratch) > mergeSpanNativeRangeScratchMaxCap {
+		t.Fatalf("span range retired cap=%d exceeds max %d", cap(reused.spanRangeRetiredScratch), mergeSpanNativeRangeScratchMaxCap)
+	}
+	if cap(reused.spanRangeSplitsScratch) > mergeSpanNativeRangeScratchMaxCap {
+		t.Fatalf("span range splits cap=%d exceeds max %d", cap(reused.spanRangeSplitsScratch), mergeSpanNativeRangeScratchMaxCap)
+	}
+	if cap(reused.spanRootRefsScratch) > mergeSpanNativeRootRefMaxCap {
+		t.Fatalf("span root refs cap=%d exceeds max %d", cap(reused.spanRootRefsScratch), mergeSpanNativeRootRefMaxCap)
 	}
 	z.releaseApplyScratch(reused)
 }
