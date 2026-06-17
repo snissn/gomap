@@ -173,10 +173,25 @@ Where:
 Mechanisms:
 - legacy queue-length thresholds,
 - adaptive backlog-bytes thresholds based on flush throughput EWMA,
-- writer-assisted bounded flush work.
+- writer-assisted bounded flush work,
+- coordinator credits for bytes already claimed by an active flush/apply pass.
 
 Where:
 - `TreeDB/caching/db.go` (`waitForStop`, `maybeAssistFlush`, `flushSome`, `flushSomeBlocking`).
+
+Active-flush coordination:
+- flush passes publish active/in-flight/progress/error state for writer admission;
+- foreground yielding is currently scoped to the opt-in parallel apply path
+  (`FlushApplyConcurrency > 1`);
+- stop-backpressure foreground assists may yield when an active flush has already
+  claimed enough bounded in-flight bytes to bring non-claimed backlog below the
+  stop threshold. Here non-claimed backlog means
+  `max(queue_backlog_bytes - active_flush_in_flight_bytes, 0)`, and the yield is
+  currently gated by `FlushApplyConcurrency > 1`;
+- hard overload beyond active credits is counted as an explicit active-flush
+  yield in the foreground path; blocking fallback is reserved for stalled
+  `waitForStop` progress, while checkpoint/close continue to drain via
+  `flushAllLocked`.
 
 ### 3.10 Background maintenance loops
 
@@ -362,6 +377,10 @@ Note:
 | `Options.FlushBuildChunkMinBytes` | Adaptive chunk lower bound. |
 | `Options.FlushBuildChunkMaxBytes` | Adaptive chunk upper bound. |
 | `Options.FlushBuildPrefetchUnits` | Build prefetch depth for flush pipeline. |
+| `Options.FlushApplyConcurrency` | Experimental/default-off COW apply worker-pool cap (`<=1` disables the M2 opt-in path). |
+| `Options.FlushApplyMinEntries` | Planned span-op gate before enabling opt-in parallel apply. |
+| `Options.FlushApplyMinSpans` | Planned leaf-span gate before enabling opt-in parallel apply. |
+| `Options.FlushApplyMinBytes` | Planned span-byte gate before enabling opt-in parallel apply. |
 | `Options.FlushBackendMaxEntries` | Backend commit chunk size during flush. |
 | `Options.FlushBackendMaxBatches` | Max intermediate backend commits per flush. |
 
@@ -369,6 +388,16 @@ Notes:
 - `FlushBuildConcurrency <= 0` defaults to `GOMAXPROCS`.
 - `FlushBuildMinEntries <= 0` defaults to `16k`.
 - `FlushBuildMinUnits <= 0` defaults to `2`.
+- `FlushApplyConcurrency` is not enabled by default; when set, workers are still capped by `GOMAXPROCS` and read-only leaf-span planning.
+- M5 keeps this path opt-in/default-off. Default-on production readiness is
+  blocked on the M6 checkpoint allocation/memcopy work tracked in #2757.
+- With value-log-backed outer leaves, workers may prepare block/dict
+  grouped-frame bodies outside the leaf-log append mutex, but the durable append
+  stream remains serialized per leaf-log lane. Published roots install leaf-log
+  pointers only after guarded commit; failed/retried applies leave
+  durable-but-unreachable output that is accounted as prepared/abandoned output
+  and remains subject to reachability-based leaf-generation GC/rewrite. Segments
+  must not be deleted by age.
 
 ### 6.4 Lane/log controls
 
@@ -426,6 +455,14 @@ Key stats for concurrency/throughput diagnosis:
   - `treedb.cache.auto_checkpoint.*`.
 - flush batching:
   - `treedb.cache.stats.backend_write_batches_total`.
+- flush coordinator/backpressure:
+  - `treedb.cache.flush_apply.coordinator.active`,
+  - `treedb.cache.flush_apply.coordinator.in_flight_bytes`,
+  - `treedb.cache.flush_apply.coordinator.progress_total`,
+  - `treedb.cache.flush_apply.coordinator.active_assist_skips_total`,
+  - `treedb.cache.flush_apply.coordinator.stall_waits_total`,
+  - `treedb.cache.flush_apply.coordinator.blocking_fallbacks_total`,
+  - `treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total`.
 - backend prune:
   - `treedb.prune.*`.
 - background vacuum:

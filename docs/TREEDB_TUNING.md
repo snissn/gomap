@@ -90,6 +90,50 @@ optionally build the `SetOps` batch in parallel:
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
 
+### Span-native flush admission (default auto)
+
+`Options.FlushAdmissionPolicy` selects how TreeDB admits the span-native
+flush/apply + backlog coalescing path:
+
+- `FlushAdmissionPolicyAuto` is the default/unconfigured policy. It admits the
+  measured conservative c4 span-native + backlog candidate with adaptive
+  write-side outer-leaf cache admission when the low-concurrency and durability
+  guardrails pass.
+- `FlushAdmissionPolicyOff` is the immediate rollback policy. It force-disables
+  span-native apply, backlog coalescing, and flush-apply concurrency.
+- `FlushAdmissionPolicyExplicit` preserves caller-supplied knobs for experiments
+  and explicit c4/c16/cache-disabled comparisons.
+
+`FlushApplyConcurrency`, `FlushApplySpanNative`, and `FlushBacklogCoalescing`
+remain available as explicit knobs. Under the default `auto` policy, TreeDB
+normalizes the admitted candidate to c4 with `FlushApplyMinEntries=1`,
+`FlushApplyMinSpans=1`, `FlushApplyMinBytes=1`, span-native enabled, backlog
+coalescing enabled, and adaptive write-side cache admission. The policy declines
+low-concurrency/c1-shaped configurations and WAL-off unsafe durability. Leaf and
+value-log output remain persistent storage; failed or abandoned apply attempts do
+not publish roots, and unreachable prepared output is reclaimed only by
+reachability-based maintenance.
+
+Rollout guidance:
+
+- Use the default auto policy for normal durable cached-mode workloads.
+- Roll back immediately with `FlushAdmissionPolicyOff` or
+  `-treedb-flush-admission-policy=off`; no data migration is required because
+  the option changes only in-memory apply/cache policy.
+- Use `FlushAdmissionPolicyExplicit` for non-default experiments such as c16,
+  immediate cache admission, or cache-disabled diagnostic rows.
+- Watch `treedb.flush_admission.*`, `treedb.flush_apply.*`,
+  `treedb.cache.flush_apply.*`, `prepared_output.*`, checkpoint wall times,
+  allocation profiles, cache hit/store/eviction counters, and final
+  `index.db`/`leaf_vlog` footprint. Reproducible regressions in read/scan
+  throughput, checkpoint time, allocation volume, or footprint should trigger
+  rollback or a narrower explicit policy.
+
+M5/#2788 evidence is recorded in
+`docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. Checkpoint pauses remain
+multi-second and are an accepted bounded model tradeoff, not a claim that
+checkpoint debt disappeared.
+
 ### Read latency under flush debt (cached mode)
 
 TreeDB cached mode absorbs bursts by buffering writes in memtables and flushing
@@ -229,23 +273,31 @@ Useful stats:
 ### Outer-leaf read cache
 
 When outer leaf pages are stored in `leaf_vlog`, TreeDB keeps a bounded
-process-local cache of recently appended decoded leaf pages. This avoids
-rereading freshly written leaves from mmap or `ReadAt` during follow-up publish,
-update, and maintenance work.
+process-local set-associative cache of decoded leaf pages. This avoids rereading
+freshly written or repeatedly read leaves from mmap or `ReadAt` during follow-up
+publish, update, read, and maintenance work.
 
-- `Options.LeafPageReadCacheEntries` sets the direct-mapped cache slot count per
-  DB. `0` uses the process default/env override, `<0` disables the cache, and
-  `>0` sets an explicit slot count.
-- `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the process default slot count when the
+- `Options.LeafPageReadCacheEntries` sets the cache entry count per DB. `0` uses
+  the process default/env override, `<0` disables the cache, and `>0` sets an
+  explicit entry count.
+- `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the process default entry count when the
   option is left at `0`. The default is 32768 entries, or about 128 MiB of
   leaf-page payloads. Set the env var to `0` to disable the cache for DBs that
   do not set `Options.LeafPageReadCacheEntries`.
 - Explicit and env-derived cache sizes are capped at 262144 entries to fail
   early with a clear configuration error instead of risking an accidental huge
   cache.
-- `unified-bench` exposes this as `-treedb-leaf-page-read-cache-entries` so
-  read/publish cache-capacity experiments are captured in the reproduced command
-  instead of relying on ambient environment.
+- `Options.LeafPageReadCacheWriteAdmission` controls write-side population of
+  this read cache. The default/zero policy is `immediate`, preserving historical
+  behavior. `LeafPageReadCacheWriteAdmissionAdaptive` is opt-in: it warms the
+  bounded cache, samples cold write streams, re-admits when read hits prove the
+  cache is hot, and skips rather than blocking on cache locks. Skipping affects
+  only in-memory cache population; leaf-log/value-log records and pointers stay
+  persistent, and read-miss admission can still populate the cache later.
+- `unified-bench` exposes these as `-treedb-leaf-page-read-cache-entries` and
+  `-treedb-leaf-page-read-cache-write-admission` so cache-capacity/admission
+  experiments are captured in the reproduced command instead of relying on
+  ambient environment.
 
 Useful stats:
 - `treedb.process.read_path.outer_leaf.cache.hits`
@@ -255,6 +307,11 @@ Useful stats:
 - `treedb.process.read_path.outer_leaf.cache.entries`
 - `treedb.process.read_path.outer_leaf.cache.capacity`
 - `treedb.process.read_path.outer_leaf.cache.bytes`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_policy`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_attempts`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_stores`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_skips`
+- `treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips`
 
 ### Leaf key compression (`Options.LeafPrefixCompression`)
 
