@@ -419,6 +419,15 @@ Required publish/checkpoint ordering:
 6. delete or mark clean WAL segments whose max LSN <= AppliedLSN
 ```
 
+Runtime command-WAL segment growth is bounded by rotating the active segment
+before an append would exceed `CommandWALSegmentTargetBytes`. That target is
+separate from `WALMaxSegmentBytes`, which remains a per-frame safety cap. A
+checkpoint boundary should rotate a non-empty active command-WAL segment before
+publishing `AppliedLSN`, then clean only segments whose max LSN is covered by
+the durable checkpointed state. In cached command-WAL mode, `MaxWALBytes`
+participates in the same auto-checkpoint pressure loop using command-WAL active
+bytes instead of the disabled legacy cached redo journal.
+
 The V1 implementation target is an in-page-marked meta-page field named
 `AppliedCommandLSN`. It must be selected by the same meta-page choice as the
 roots, and the same selected page body must contain the command-WAL V1 marker

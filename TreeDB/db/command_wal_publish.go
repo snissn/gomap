@@ -160,6 +160,7 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 
 type commandWALSegmentCleanupDecision struct {
 	Path    string
+	Size    int64
 	MaxLSN  uint64
 	Active  bool
 	Covered bool
@@ -391,6 +392,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		}
 		decision := commandWALSegmentCleanupDecision{
 			Path:    seg.path,
+			Size:    seg.size,
 			MaxLSN:  scan.maxLSN,
 			Active:  active,
 			Covered: scan.maxLSN <= appliedLSN,

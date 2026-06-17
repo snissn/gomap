@@ -172,6 +172,11 @@ type CommandJournalOptions struct {
 	// MaxSegmentSize caps individual command frame payloads; zero uses the
 	// commitlog default.
 	MaxSegmentSize int64
+	// SegmentTargetBytes is the active command-WAL segment file-size target.
+	// When >0, appends that would make a non-empty active segment exceed this
+	// target rotate to the next lane segment before reserving an LSN. The target
+	// is independent from MaxSegmentSize, which remains a per-frame safety cap.
+	SegmentTargetBytes int64
 	// BufferSize controls this command journal's buffered writer size. Zero
 	// uses the commitlog default.
 	BufferSize int
@@ -187,10 +192,14 @@ type CommandJournalOptions struct {
 }
 
 type CommandJournal struct {
-	mu     sync.Mutex
-	owner  *JournalOwner
-	writer *Writer
-	path   string
+	mu                 sync.Mutex
+	owner              *JournalOwner
+	writer             *Writer
+	walDir             string
+	path               string
+	lane               int
+	segmentSeq         uint64
+	segmentTargetBytes int64
 }
 
 func CommandSegmentName(lane int, seq uint64) string {
@@ -251,9 +260,13 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		return nil, err
 	}
 	return &CommandJournal{
-		owner:  owner,
-		writer: writer,
-		path:   path,
+		owner:              owner,
+		writer:             writer,
+		walDir:             walDir,
+		path:               path,
+		lane:               opts.Lane,
+		segmentSeq:         opts.SegmentSeq,
+		segmentTargetBytes: opts.SegmentTargetBytes,
 	}, nil
 }
 
@@ -456,6 +469,67 @@ func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
 	return first, err
 }
 
+func (j *CommandJournal) maybeRotateForFrameLocked(frameSize int, syncCurrent bool) error {
+	if j == nil || j.writer == nil || j.segmentTargetBytes <= 0 || frameSize <= 0 {
+		return nil
+	}
+	total := int64(segmentHeaderSize + frameSize)
+	activeBytes := j.writer.ActiveBytes()
+	if activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes {
+		return nil
+	}
+	return j.rotateActiveSegmentLocked(syncCurrent)
+}
+
+func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
+	if j == nil || j.writer == nil {
+		return errors.New("commitlog: command journal is closed")
+	}
+	if j.segmentSeq == ^uint64(0) {
+		return ErrCommandWALSegmentSeqExhausted
+	}
+	nextSeq := j.segmentSeq + 1
+	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
+	if err := j.writer.RotateToWithSync(nextPath, syncCurrent); err != nil {
+		return err
+	}
+	j.segmentSeq = nextSeq
+	j.path = nextPath
+	return nil
+}
+
+// RotateActiveSegment rotates the command WAL to the next segment. It is safe to
+// call at checkpoint boundaries; appends are serialized by the journal mutex.
+func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.rotateActiveSegmentLocked(syncCurrent)
+}
+
+func (j *CommandJournal) ActiveBytes() int64 {
+	if j == nil {
+		return 0
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil {
+		return 0
+	}
+	return j.writer.ActiveBytes()
+}
+
+func (j *CommandJournal) NextLSN() uint64 {
+	if j == nil || j.owner == nil {
+		return 0
+	}
+	j.owner.mu.Lock()
+	defer j.owner.mu.Unlock()
+	return j.owner.nextLSN
+}
+
 // AppendCommand validates a complete command frame, assigns the next journal
 // LSN, and appends it through this lane's single writer while holding the
 // journal mutex. This intentionally optimizes for deterministic frame order and
@@ -504,6 +578,9 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
+	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
@@ -547,6 +624,9 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	}
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
@@ -592,6 +672,9 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
+	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
@@ -625,6 +708,19 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	size, err := commandFrameEncodedSizeFromLengths(len(payload), 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
@@ -669,6 +765,9 @@ func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope Com
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
+	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
@@ -695,6 +794,19 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedAndFlush(baseAppli
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	size, err := commandFrameEncodedSizeFromLengths(len(payload), 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, sync); err != nil {
+		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {

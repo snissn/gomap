@@ -17,6 +17,8 @@ type commandWALStatsSummary struct {
 	Frames         uint64
 	MaxLSN         uint64
 	Bytes          int64
+	ActiveBytes    int64
+	ActiveName     string
 }
 
 func writeCommandWALStats(stats map[string]string, db *DB) {
@@ -34,6 +36,7 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 		stats["treedb.command_wal.required_feature_error"] = db.commandWALRequiredErr
 	}
 	writeCommandWALLiveStats(stats, db)
+	writeCommandWALLifecycleStats(stats, db)
 	if !db.commandWALStatsScan {
 		stats["treedb.command_wal.stats_scan"] = "false"
 		return
@@ -46,6 +49,11 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 		stats["treedb.command_wal.frames"] = fmt.Sprintf("%d", summary.Frames)
 		stats["treedb.command_wal.max_lsn"] = fmt.Sprintf("%d", summary.MaxLSN)
 		stats["treedb.command_wal.bytes"] = fmt.Sprintf("%d", summary.Bytes)
+		stats["treedb.command_wal.segments.total"] = fmt.Sprintf("%d", summary.SegmentFiles)
+		stats["treedb.command_wal.segments.active"] = fmt.Sprintf("%d", summary.ActiveSegments)
+		stats["treedb.command_wal.bytes.total"] = fmt.Sprintf("%d", summary.Bytes)
+		stats["treedb.command_wal.bytes.active"] = fmt.Sprintf("%d", summary.ActiveBytes)
+		stats["treedb.command_wal.active_segment.name"] = summary.ActiveName
 	} else {
 		stats["treedb.command_wal.stats_error"] = err.Error()
 	}
@@ -68,10 +76,20 @@ func writeCommandWALStatsZeroCounters(stats map[string]string) {
 	stats["treedb.command_wal.frames"] = "0"
 	stats["treedb.command_wal.max_lsn"] = "0"
 	stats["treedb.command_wal.bytes"] = "0"
+	stats["treedb.command_wal.segments.total"] = "0"
+	stats["treedb.command_wal.segments.active"] = "0"
+	stats["treedb.command_wal.bytes.total"] = "0"
+	stats["treedb.command_wal.bytes.active"] = "0"
+	stats["treedb.command_wal.active_segment.name"] = ""
+	stats["treedb.command_wal.applied_lsn"] = "0"
+	stats["treedb.command_wal.next_lsn"] = "0"
 	stats["treedb.command_wal.live_accepted_frames"] = "0"
 	stats["treedb.command_wal.live_accepted_max_lsn"] = "0"
 	stats["treedb.command_wal.live_covered_frames"] = "0"
 	stats["treedb.command_wal.live_covered_max_lsn"] = "0"
+	stats["treedb.command_wal.cleanup.scans"] = "0"
+	stats["treedb.command_wal.cleanup.removed_segments"] = "0"
+	stats["treedb.command_wal.cleanup.removed_bytes"] = "0"
 }
 
 func writeCommandWALLiveStats(stats map[string]string, db *DB) {
@@ -79,6 +97,19 @@ func writeCommandWALLiveStats(stats map[string]string, db *DB) {
 	stats["treedb.command_wal.live_accepted_max_lsn"] = fmt.Sprintf("%d", db.commandWALLiveAcceptedMax.Load())
 	stats["treedb.command_wal.live_covered_frames"] = fmt.Sprintf("%d", db.commandWALLiveCovered.Load())
 	stats["treedb.command_wal.live_covered_max_lsn"] = fmt.Sprintf("%d", db.commandWALLiveCoveredMax.Load())
+}
+
+func writeCommandWALLifecycleStats(stats map[string]string, db *DB) {
+	appliedLSN := uint64(0)
+	if state := db.state.Load(); state != nil {
+		appliedLSN = state.AppliedCommandLSN
+	}
+	stats["treedb.command_wal.applied_lsn"] = fmt.Sprintf("%d", appliedLSN)
+	stats["treedb.command_wal.next_lsn"] = fmt.Sprintf("%d", db.CommandWALNextLSN())
+	stats["treedb.command_wal.bytes.active"] = fmt.Sprintf("%d", db.CommandWALActiveBytes())
+	stats["treedb.command_wal.cleanup.scans"] = fmt.Sprintf("%d", db.commandWALCleanupScans.Load())
+	stats["treedb.command_wal.cleanup.removed_segments"] = fmt.Sprintf("%d", db.commandWALCleanupRemoved.Load())
+	stats["treedb.command_wal.cleanup.removed_bytes"] = fmt.Sprintf("%d", db.commandWALCleanupBytes.Load())
 }
 
 func (db *DB) observeCommandWALAccepted(lsn uint64) {
@@ -139,7 +170,7 @@ func summarizeCommandWALStats(dir string, maxSegmentBytes int64) (commandWALStat
 	activeByLane := commandWALActiveSeqByLane(segments)
 	var summary commandWALStatsSummary
 	for _, seg := range segments {
-		if seg.valueLog || seg.size == 0 || !isCommandWALLaneSegment(seg) {
+		if seg.valueLog || !isCommandWALLaneSegment(seg) {
 			continue
 		}
 		summary.SegmentFiles++
@@ -147,6 +178,16 @@ func summarizeCommandWALStats(dir string, maxSegmentBytes int64) (commandWALStat
 		active := seg.seq == activeByLane[seg.lane]
 		if active {
 			summary.ActiveSegments++
+			summary.ActiveBytes += seg.size
+			name := filepath.Base(seg.path)
+			if summary.ActiveName == "" {
+				summary.ActiveName = name
+			} else {
+				summary.ActiveName += "," + name
+			}
+		}
+		if seg.size == 0 {
+			continue
 		}
 		typed, frames, maxLSN, err := summarizeCommandWALSegment(seg.path, maxSegmentBytes, active)
 		if err != nil {

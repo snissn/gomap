@@ -219,6 +219,59 @@ func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
 	}
 }
 
+func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+
+	lsn1, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		_ = j.Close()
+		t.Fatalf("AppendCommand first: %v", err)
+	}
+	lsn2, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		_ = j.Close()
+		t.Fatalf("AppendCommand second: %v", err)
+	}
+	if lsn1 != 1 || lsn2 != 2 {
+		_ = j.Close()
+		t.Fatalf("LSNs=(%d,%d), want (1,2)", lsn1, lsn2)
+	}
+	if got := filepath.Base(j.Path()); got != CommandSegmentName(0, 2) {
+		_ = j.Close()
+		t.Fatalf("active segment=%s, want %s", got, CommandSegmentName(0, 2))
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	seg1, err := ScanCommandFrames(filepath.Join(dir, CommandSegmentName(0, 1)), Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames segment 1: %v", err)
+	}
+	if len(seg1) != 1 || seg1[0].LSN != 1 {
+		t.Fatalf("segment 1 frames=%+v, want only LSN 1", seg1)
+	}
+	seg2, err := ScanCommandFrames(filepath.Join(dir, CommandSegmentName(0, 2)), Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames segment 2: %v", err)
+	}
+	if len(seg2) != 1 || seg2[0].LSN != 2 {
+		t.Fatalf("segment 2 frames=%+v, want only LSN 2", seg2)
+	}
+}
+
 func TestCommandJournalAppendsToPreexistingZeroByteSegment(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, CommandSegmentName(0, 1))

@@ -123,15 +123,29 @@ func TestOpenDefaultsUseGethSizedCommandWALSegments(t *testing.T) {
 	if got := opts.WALMaxSegmentBytes; got != defaultGethCommandWALMaxSegmentBytes {
 		t.Fatalf("default WALMaxSegmentBytes=%d want %d", got, defaultGethCommandWALMaxSegmentBytes)
 	}
+	if got, ok := int64OptionField(opts, "CommandWALSegmentTargetBytes"); ok && got != defaultGethCommandWALSegmentTargetBytes {
+		t.Fatalf("default CommandWALSegmentTargetBytes=%d want %d", got, defaultGethCommandWALSegmentTargetBytes)
+	}
+	if got := opts.MaxWALBytes; got != defaultGethCommandWALCheckpointMaxWALBytes {
+		t.Fatalf("default MaxWALBytes=%d want %d", got, defaultGethCommandWALCheckpointMaxWALBytes)
+	}
 
 	custom := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
 	custom.WALMaxSegmentBytes = 1024
+	_ = setInt64OptionFieldDefault(&custom, "CommandWALSegmentTargetBytes", 2048)
+	custom.MaxWALBytes = 4096
 	opts, err = resolveTreeDBOptions(dir, &OpenOptions{Options: &custom})
 	if err != nil {
 		t.Fatalf("resolve custom options: %v", err)
 	}
 	if got := opts.WALMaxSegmentBytes; got != 1024 {
 		t.Fatalf("explicit WALMaxSegmentBytes=%d want preserved 1024", got)
+	}
+	if got, ok := int64OptionField(opts, "CommandWALSegmentTargetBytes"); ok && got != 2048 {
+		t.Fatalf("explicit CommandWALSegmentTargetBytes=%d want preserved 2048", got)
+	}
+	if got := opts.MaxWALBytes; got != 4096 {
+		t.Fatalf("explicit MaxWALBytes=%d want preserved 4096", got)
 	}
 }
 
@@ -145,6 +159,13 @@ func TestOpenWithOptionsAppliesGethSizedCommandWALSegments(t *testing.T) {
 	defer db.Close()
 	if got := db.walMaxSegmentBytes; got != defaultGethCommandWALMaxSegmentBytes {
 		t.Fatalf("OpenWithOptions WALMaxSegmentBytes=%d want %d", got, defaultGethCommandWALMaxSegmentBytes)
+	}
+	if _, ok := int64OptionField(treedb.Options{}, "CommandWALSegmentTargetBytes"); ok && db.commandWALSegmentTargetBytes != defaultGethCommandWALSegmentTargetBytes {
+		got := db.commandWALSegmentTargetBytes
+		t.Fatalf("OpenWithOptions CommandWALSegmentTargetBytes=%d want %d", got, defaultGethCommandWALSegmentTargetBytes)
+	}
+	if got := db.maxWALBytes; got != defaultGethCommandWALCheckpointMaxWALBytes {
+		t.Fatalf("OpenWithOptions MaxWALBytes=%d want %d", got, defaultGethCommandWALCheckpointMaxWALBytes)
 	}
 }
 
@@ -165,6 +186,10 @@ func TestOpenWithOptionsAppliesGethSizedWALSegmentsBeforeReadOnlyFormatActivatio
 	defer readOnly.Close()
 	if got := readOnly.walMaxSegmentBytes; got != defaultGethCommandWALMaxSegmentBytes {
 		t.Fatalf("read-only WALMaxSegmentBytes=%d want %d", got, defaultGethCommandWALMaxSegmentBytes)
+	}
+	if _, ok := int64OptionField(treedb.Options{}, "CommandWALSegmentTargetBytes"); ok && readOnly.commandWALSegmentTargetBytes != defaultGethCommandWALSegmentTargetBytes {
+		got := readOnly.commandWALSegmentTargetBytes
+		t.Fatalf("read-only CommandWALSegmentTargetBytes=%d want %d", got, defaultGethCommandWALSegmentTargetBytes)
 	}
 }
 

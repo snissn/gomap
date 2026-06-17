@@ -156,6 +156,7 @@ type DB struct {
 	commandWALFirst                 atomic.Uint64
 	commandWALLast                  atomic.Uint64
 	commandWALCheckpointCutoverLast atomic.Uint64
+	commandWALCheckpointCutoverErr  error
 	commandWALLiveFrames            atomic.Uint64
 	bgVac                           bgIndexVacuumWorker
 	notifyError                     func(error)
@@ -788,6 +789,8 @@ func Open(opts Options) (*DB, error) {
 	if out.commandWALCached {
 		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
+		cached.SetCommandWALCheckpointCleanupHook(out.cleanupPublicCommandWALCheckpoint)
+		cached.SetAutoCheckpointWALBytesHook(out.publicCommandWALAutoCheckpointBytes)
 	}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
@@ -814,9 +817,9 @@ func Open(opts Options) (*DB, error) {
 	if idleInterval < 0 {
 		idleInterval = 0
 	}
-	// Auto checkpointing only manages cached-mode journal segments. If WAL is
-	// disabled, skip starting the background loop to avoid unnecessary work.
-	if !disableWAL && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
+	// Auto checkpointing manages cached redo WAL bytes, and in command-WAL mode
+	// uses the command-WAL active segment byte hook installed above.
+	if (!disableWAL || out.commandWALCached) && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
@@ -1891,6 +1894,11 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 	}
 	if err := db.cached.Checkpoint(); err != nil {
 		return err
+	}
+	if db.commandWALCached && db.backend != nil {
+		if err := db.backend.CleanupCommandWALCoveredSegments(publicCommandWALPublishSync(db.durabilityMode, true)); err != nil {
+			return err
+		}
 	}
 	if testAfterCachedCheckpoint != nil {
 		testAfterCachedCheckpoint()

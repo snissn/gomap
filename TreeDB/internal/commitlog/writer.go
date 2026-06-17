@@ -86,6 +86,18 @@ type Writer struct {
 	syncFn           func(*os.File) error
 }
 
+func (w *Writer) ActiveBytes() int64 {
+	if w == nil {
+		return 0
+	}
+	buffered := int64(0)
+	buffered += int64(len(w.commandBuf))
+	if w.pendingBatchRecs != 0 {
+		buffered += int64(segmentHeaderSize + len(w.pendingBatch))
+	}
+	return w.size + buffered
+}
+
 func NewWriter(path string) (*Writer, error) {
 	return NewWriterWithOptions(path, Options{})
 }

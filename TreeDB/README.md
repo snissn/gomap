@@ -348,6 +348,10 @@ after the collection WAL gate, not current behavior.
 - `Options.FlushThreshold` + `Options.MaxQueuedMemtables` (throughput vs. backlog/memory)
 - Adaptive backpressure: `SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`
 - Cached-mode auto checkpointing: `BackgroundCheckpointInterval`, `BackgroundCheckpointIdleDuration`
+- Command-WAL bounded growth: `CommandWALSegmentTargetBytes` rotates active
+  command-WAL segments independently from `WALMaxSegmentBytes`, which remains a
+  per-frame safety cap; `MaxWALBytes` triggers command-WAL-aware auto
+  checkpoints in command-WAL cached mode.
 - Background pruning: `PruneInterval`, `PruneMaxPages`, `PruneMaxDuration`
 - Optional flush build parallelism: `FlushBuildConcurrency`
 - Experimental/default-off flush apply workers: `FlushApplyConcurrency`

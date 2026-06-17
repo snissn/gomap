@@ -39,6 +39,7 @@ var (
 	ErrCommandWALUnsupportedCriticalFlag = errors.New("commitlog: command wal unsupported critical flag")
 	ErrCommandWALDuplicateLSN            = errors.New("commitlog: command wal duplicate lsn")
 	ErrCommandWALStaleSegment            = errors.New("commitlog: command wal stale segment")
+	ErrCommandWALSegmentSeqExhausted     = errors.New("commitlog: command wal segment sequence exhausted")
 	ErrJournalOwnerExists                = errors.New("commitlog: journal owner already exists")
 )
 

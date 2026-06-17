@@ -100,6 +100,74 @@ func (db *DB) CheckCommandWALPublishReady() error {
 	return db.commandWALPoisonedError()
 }
 
+// CommandWALActiveBytes reports the active command-WAL segment bytes accepted by
+// the open writer, including command frames buffered for batch flush.
+func (db *DB) CommandWALActiveBytes() int64 {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return 0
+	}
+	return db.commandJournal.ActiveBytes()
+}
+
+// CommandWALNextLSN reports the next LSN this handle would reserve.
+func (db *DB) CommandWALNextLSN() uint64 {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return 0
+	}
+	return db.commandJournal.NextLSN()
+}
+
+// RotateCommandWALActiveSegment rotates the active command-WAL segment to a
+// fresh file. Checkpoint cutovers use this to make covered frames non-active so
+// cleanup can reclaim them.
+func (db *DB) RotateCommandWALActiveSegment(sync bool) error {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return nil
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if sync && db.durability == DurabilityWALOnRelaxed {
+		sync = false
+	}
+	return db.commandJournal.RotateActiveSegment(sync)
+}
+
+// CleanupCommandWALCoveredSegments removes command-WAL segments whose max LSN is
+// covered by the current durable AppliedCommandLSN and that are not active.
+func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
+	if db == nil || !db.commandWAL {
+		return nil
+	}
+	state := db.state.Load()
+	if state == nil || state.AppliedCommandLSN == 0 {
+		return nil
+	}
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
+	db.commandWALCleanupScans.Add(1)
+	removed := uint64(0)
+	removedBytes := uint64(0)
+	for _, decision := range decisions {
+		if !decision.Removed {
+			continue
+		}
+		removed++
+		if decision.Size > 0 {
+			removedBytes += uint64(decision.Size)
+		}
+	}
+	if removed > 0 {
+		db.commandWALCleanupRemoved.Add(removed)
+		db.commandWALCleanupBytes.Add(removedBytes)
+		if sync && db.durability != DurabilityWALOnRelaxed {
+			if syncErr := syncDirFn(WALDirPath(db.dir)); err == nil {
+				err = syncErr
+			}
+		}
+	}
+	return err
+}
+
 func (db *DB) rejectUnloggedCommandWALRootPublish() error {
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err

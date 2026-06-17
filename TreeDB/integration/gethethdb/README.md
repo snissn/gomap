@@ -19,9 +19,12 @@ Primary APIs:
 `Open(nil options)` defaults to `treedb.ProfileCommandWALDurable`. Writable
 opens reject non-command-WAL TreeDB options; this adapter is intended for geth
 persistent hot-KV durability/recovery through TreeDB command WAL. When callers
-leave `WALMaxSegmentBytes` at zero, the adapter uses a 256 MiB command-WAL frame
-cap so geth's large beacon skeleton-header batches fit in one durable frame,
-including read-only inspection of an existing command-WAL directory.
+leave command-WAL growth knobs at zero, the adapter uses a 256 MiB command-WAL
+frame cap, a 256 MiB active-segment rotation target, and a 512 MiB
+auto-checkpoint byte trigger. The frame cap lets geth's large beacon
+skeleton-header batches fit in one durable frame; the separate rotation and
+checkpoint knobs keep active command-WAL growth bounded, including read-only
+inspection of an existing command-WAL directory.
 
 ## Semantics
 

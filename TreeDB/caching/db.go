@@ -3627,6 +3627,15 @@ func (db *DB) SetCommandWALCheckpointCutoverHook(h func()) {
 	db.commandWALCheckpointCutover = h
 }
 
+// SetCommandWALCheckpointCleanupHook installs an optional hook called after a
+// cached checkpoint has published command-WAL coverage.
+func (db *DB) SetCommandWALCheckpointCleanupHook(h func(sync bool) error) {
+	if db == nil {
+		return
+	}
+	db.commandWALCheckpointCleanup = h
+}
+
 // SetTemplateStore installs the template store used for template compression.
 func (db *DB) SetTemplateStore(store template.Store) {
 	if db == nil {
@@ -7645,6 +7654,7 @@ type DB struct {
 	rootPublishHook                  func(*rootPublishGroup) error
 	commandWALCheckpointPublish      func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)
 	commandWALCheckpointCutover      func()
+	commandWALCheckpointCleanup      func(sync bool) error
 	dirtyRootPublishGroupID          uint64
 	dirtyRootPublishGroupPending     bool
 	rootPublishRetryPending          bool
@@ -8452,6 +8462,7 @@ type DB struct {
 	autoCheckpointOnceCh  chan struct{}
 	autoCheckpointWriteCh chan struct{}
 	autoCheckpointOn      atomic.Bool
+	autoCheckpointBytesFn func() int64
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
 	// It is disarmed after the first size-triggered checkpoint and re-armed only
 	// after reclaimable WAL bytes fall below maxWALBytes/2.
@@ -11355,6 +11366,15 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 	go db.autoCheckpointLoop(interval, maxWALBytes, idleInterval)
 }
 
+// SetAutoCheckpointWALBytesHook supplies external WAL pressure bytes for modes
+// that use cached checkpointing while disabling the cached redo journal.
+func (db *DB) SetAutoCheckpointWALBytesHook(fn func() int64) {
+	if db == nil {
+		return
+	}
+	db.autoCheckpointBytesFn = fn
+}
+
 // TriggerAutoCheckpoint schedules a best-effort immediate auto-checkpoint pass.
 func (db *DB) TriggerAutoCheckpoint() {
 	if db == nil || !db.autoCheckpointOn.Load() {
@@ -11737,7 +11757,7 @@ func (db *DB) noteWrite() {
 	if !db.autoCheckpointOn.Load() {
 		return
 	}
-	if db.disableJournal {
+	if db.disableJournal && db.autoCheckpointBytesFn == nil {
 		return
 	}
 	const autoCheckpointWriteEveryBytes int64 = 1 << 20
@@ -12021,6 +12041,11 @@ func (db *DB) effectiveWALBytes() int64 {
 		l := &db.lanes[i]
 		total += l.walClosedBytes.Load() + l.walLiveBytes.Load()
 	}
+	if db.autoCheckpointBytesFn != nil {
+		if external := db.autoCheckpointBytesFn(); external > 0 {
+			total += external
+		}
+	}
 	return total
 }
 
@@ -12028,18 +12053,28 @@ func (db *DB) reclaimableWALBytes() int64 {
 	if db == nil {
 		return 0
 	}
-	total := db.effectiveWALBytes()
+	external := int64(0)
+	if db.autoCheckpointBytesFn != nil {
+		if v := db.autoCheckpointBytesFn(); v > 0 {
+			external = v
+		}
+	}
+	total := int64(0)
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		total += l.walClosedBytes.Load() + l.walLiveBytes.Load()
+	}
 	if total <= 0 {
-		return 0
+		return external
 	}
 	if !db.walUsesValueLog() {
-		return total
+		return total + external
 	}
 	_, retained := db.valueLogRetainedStats()
 	if retained >= total {
-		return 0
+		return external
 	}
-	return total - retained
+	return total - retained + external
 }
 
 func (db *DB) minIdleCheckpointWALBytes() int64 {
@@ -21290,6 +21325,9 @@ func (db *DB) Checkpoint() error {
 				if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
 					return err
 				}
+				if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+					return err
+				}
 			}
 			db.checkpointNoopSkips.Add(1)
 			if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
@@ -21443,6 +21481,11 @@ func (db *DB) Checkpoint() error {
 			return commitErr
 		}
 	}
+	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
+		if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+			return err
+		}
+	}
 
 	walCleanupStart := time.Now()
 	currentWALs := make(map[string]struct{})
@@ -21536,6 +21579,13 @@ func (db *DB) snapshotCommandWALCheckpointCutover() {
 		return
 	}
 	db.commandWALCheckpointCutover()
+}
+
+func (db *DB) cleanupCommandWALCheckpoint(sync bool) error {
+	if db == nil || db.commandWALCheckpointCleanup == nil {
+		return nil
+	}
+	return db.commandWALCheckpointCleanup(sync)
 }
 
 func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
