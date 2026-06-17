@@ -51,7 +51,7 @@ func readOnlyPrepareRootSeq(d *DB) (root, seq uint64) {
 
 func TestDBPrepareReadOnlyApplyPlanSideEffectFreeAndStats(t *testing.T) {
 	dir := t.TempDir()
-	d, err := Open(Options{Dir: dir})
+	d, err := Open(Options{Dir: dir, FlushAdmissionPolicy: FlushAdmissionPolicyExplicit})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestDBPrepareReadOnlyApplyPlanSideEffectFreeAndStats(t *testing.T) {
 
 func TestOrderedRootDeltaBatchPrepareReadOnlyStats(t *testing.T) {
 	dir := t.TempDir()
-	d, err := Open(Options{Dir: dir})
+	d, err := Open(Options{Dir: dir, FlushAdmissionPolicy: FlushAdmissionPolicyExplicit})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

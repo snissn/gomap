@@ -331,6 +331,7 @@ func TestReopenVerify_ParallelFlushLeafLogOutput(t *testing.T) {
 		Dir:                        dir,
 		IndexOuterLeavesInValueLog: true,
 		FlushThreshold:             64 * 1024,
+		FlushAdmissionPolicy:       treedb.FlushAdmissionPolicyExplicit,
 		FlushApplyConcurrency:      4,
 		FlushApplyMinEntries:       1,
 		FlushApplyMinSpans:         1,

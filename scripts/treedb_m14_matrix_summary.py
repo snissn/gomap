@@ -132,6 +132,14 @@ def _parse_options(md: str) -> Dict[str, str]:
     return opts
 
 
+def _effective_option(env: Mapping[str, str], opts: Mapping[str, str], env_key: str, option_key: str) -> str:
+    """Return resolved option metadata when present, otherwise variant.env."""
+    value = opts.get(option_key, "")
+    if value != "":
+        return value
+    return env.get(env_key, "")
+
+
 def _parse_checkpoint_table(md: str) -> Dict[str, str]:
     section = _extract_fenced_section(md, "## Checkpoint Time")
     checkpoints: Dict[str, str] = {}
@@ -269,6 +277,7 @@ def load_row(path: Path) -> MatrixRow:
     for test in TESTS:
         test_results = results.get(test, {}) or {}
         ops[test] = _to_float(test_results.get("TreeDB"))
+    options = _parse_options(md)
     counters = {k: str(stats.get(k, "")) for k in COUNTER_KEYS if k in stats}
     counters.update(_parse_selected_stats(md))
     single_op_spans = _to_float(counters.get("treedb.flush_apply.span_run.single_op_spans_total"))
@@ -288,12 +297,12 @@ def load_row(path: Path) -> MatrixRow:
         label=label,
         path=str(path),
         commit=commit,
-        concurrency=env.get("concurrency", ""),
-        span_native=env.get("span_native", ""),
-        backlog_coalescing=env.get("backlog_coalescing", ""),
+        concurrency=_effective_option(env, options, "concurrency", "flush_apply_concurrency"),
+        span_native=_effective_option(env, options, "span_native", "flush_apply_span_native"),
+        backlog_coalescing=_effective_option(env, options, "backlog_coalescing", "flush_backlog_coalescing"),
         cache_mode=env.get("cache_mode", ""),
         note=env.get("note", ""),
-        options=_parse_options(md),
+        options=options,
         ops_per_sec=ops,
         checkpoints=_parse_checkpoint_table(md),
         disk_usage=_parse_disk_usage(md),
@@ -444,10 +453,10 @@ def write_outputs(root: Path, rows: List[MatrixRow], baseline_label: str) -> Non
 def _self_test() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        row = root / "span_native_c4"
+        row = root / "default_unconfigured"
         row.mkdir()
         (row / "variant.env").write_text(
-            "label=span_native_c4\ncommit=abc123\nconcurrency=4\nspan_native=true\nbacklog_coalescing=true\ncache_mode=default\nnote=test row\n",
+            "label=default_unconfigured\ncommit=abc123\nconcurrency=default\nspan_native=false\nbacklog_coalescing=false\ncache_mode=default\nnote=test row\n",
             encoding="utf-8",
         )
         (row / "COMMIT").write_text("abc123\n", encoding="utf-8")
@@ -545,17 +554,21 @@ TreeDB:
         rows = load_matrix(root)
         assert len(rows) == 1, rows
         got = rows[0]
-        assert got.label == "span_native_c4"
+        assert got.label == "default_unconfigured"
+        assert got.concurrency == "4", got
+        assert got.span_native == "true", got
+        assert got.backlog_coalescing == "true", got
         assert got.ops_per_sec["random_write"] == 30.0
         assert got.checkpoints["After Run"] == "4.00s", got.checkpoints
         assert got.disk_usage["maindb/leaf_vlog"].startswith("total=2 MiB")
         assert got.counters["treedb.cache.flush_backlog_coalescing.admitted_extra_ops_total"] == "42"
         assert got.counters["treedb.cache.checkpoint.stage.flush_all.total_ns"] == "303"
-        md = render_markdown(root, rows, "span_native_c4")
+        md = render_markdown(root, rows, "default_unconfigured")
         assert "TreeDB M14 final-gate matrix summary" in md
-        assert "span_native_c4" in md
+        assert "default_unconfigured" in md
+        assert "| `default_unconfigured` | 4 | true | true |" in md
         assert "checkpoint flush_all ns" in md
-        write_outputs(root, rows, "span_native_c4")
+        write_outputs(root, rows, "default_unconfigured")
         assert (root / "m14_matrix_summary.json").exists()
         assert (root / "m14_matrix_summary.md").exists()
 

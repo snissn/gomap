@@ -466,6 +466,11 @@ jobs:
             auto_log="vlog_auto_incompressible_auto_attempt${attempt}.txt"
             echo "incompressible gate attempt ${attempt}/${max_attempts}"
 
+            # Keep this value-log compression gate independent of the
+            # unconfigured flush-admission default under test in #2788. Force
+            # admission off for both rows so the strict auto/off comparison stays
+            # on the old serial/default-off flush boundary and measures value-log
+            # auto behavior rather than span-native admission changes.
             if ! go run ./cmd/unified_bench \
               -keys 1000000 \
               -valsize 512 \
@@ -480,6 +485,7 @@ jobs:
               -treedb-force-value-pointers=true \
               -treedb-value-log-threshold=1 \
               -treedb-vlog-dict-train-bytes=-1 \
+              -treedb-flush-admission-policy=off \
               > "${off_log}" 2>&1; then
               echo "treedb_vlog_off benchmark failed on attempt ${attempt}"
               tail -n 80 "${off_log}" || true
@@ -500,6 +506,7 @@ jobs:
               -treedb-force-value-pointers=true \
               -treedb-value-log-threshold=1 \
               -treedb-vlog-dict-train-bytes=-1 \
+              -treedb-flush-admission-policy=off \
               > "${auto_log}" 2>&1; then
               echo "treedb_vlog_auto benchmark failed on attempt ${attempt}"
               tail -n 80 "${auto_log}" || true

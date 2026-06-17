@@ -81,6 +81,7 @@ func openFlushApplyTestDBWithSpanNative(t *testing.T, concurrency int, spanNativ
 	d, err := Open(Options{
 		Dir:                   t.TempDir(),
 		ChunkSize:             64 * 1024,
+		FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
 		FlushApplyConcurrency: concurrency,
 		FlushApplyMinEntries:  1,
 		FlushApplyMinSpans:    1,
@@ -104,6 +105,7 @@ func openFlushApplyLeafLogTestDBWithSpanNative(t *testing.T, concurrency int, sp
 		Dir:                        t.TempDir(),
 		ChunkSize:                  64 * 1024,
 		IndexOuterLeavesInValueLog: true,
+		FlushAdmissionPolicy:       FlushAdmissionPolicyExplicit,
 		FlushApplyConcurrency:      concurrency,
 		FlushApplyMinEntries:       1,
 		FlushApplyMinSpans:         1,

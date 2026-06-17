@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -110,6 +111,48 @@ func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmissionRejectsInvalid(t *tes
 	}
 }
 
+func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC4Adaptive(t *testing.T) {
+	oldGOMAXPROCS := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions default auto: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency != 4 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("default auto candidate not selected: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	if opts.FlushApplyMinEntries != 1 || opts.FlushApplyMinSpans != 1 || opts.FlushApplyMinBytes != 1 {
+		t.Fatalf("default auto min gates not selected: entries=%d spans=%d bytes=%d", opts.FlushApplyMinEntries, opts.FlushApplyMinSpans, opts.FlushApplyMinBytes)
+	}
+	if opts.LeafPageReadCacheWriteAdmission != treedb.LeafPageReadCacheWriteAdmissionAdaptive {
+		t.Fatalf("default auto cache admission=%s want adaptive", opts.LeafPageReadCacheWriteAdmission)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=auto",
+		"flush_admission_admitted=true",
+		"flush_admission_reason=auto_admitted_c4_adaptive",
+		"flush_admission_effective_concurrency=4",
+		"flush_apply_concurrency=4",
+		"flush_apply_min_entries_configured=1",
+		"flush_apply_min_spans_configured=1",
+		"flush_apply_min_bytes_configured=1",
+		"flush_apply_span_native=true",
+		"flush_backlog_coalescing=true",
+		"outer_leaf_read_cache_write_admission=adaptive",
+		"  - flush_admission_policy=auto admitted: auto_admitted_c4_adaptive",
+	} {
+		if !treeDBReportHasLine(text, want) {
+			t.Fatalf("resolved options missing line %q: %q", want, text)
+		}
+	}
+}
+
 func TestBuildTreeDBOptions_FlushAdmissionExplicitPreservesOptInFlags(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
@@ -173,7 +216,7 @@ func TestBuildTreeDBOptions_FlushAdmissionOffForcesOff(t *testing.T) {
 	}
 }
 
-func TestBuildTreeDBOptions_FlushAdmissionAutoDeclinesLowConcurrencyAndCheckpointDebt(t *testing.T) {
+func TestBuildTreeDBOptions_FlushAdmissionAutoDeclinesLowConcurrency(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
 
@@ -194,8 +237,8 @@ func TestBuildTreeDBOptions_FlushAdmissionAutoDeclinesLowConcurrencyAndCheckpoin
 	for _, want := range []string{
 		"flush_admission_policy=auto",
 		"flush_admission_admitted=false",
-		"flush_admission_reason=low_concurrency,checkpoint_debt_unresolved",
-		"  - flush_admission_policy=auto declined: low_concurrency,checkpoint_debt_unresolved",
+		"flush_admission_reason=low_concurrency",
+		"  - flush_admission_policy=auto declined: low_concurrency",
 	} {
 		if !treeDBReportHasLine(text, want) {
 			t.Fatalf("resolved options missing line %q: %q", want, text)
@@ -529,7 +572,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbAllowUnsafe = false
 	*treedbMaintenanceMode = "bench"
 	*treedbFlushThreshold = 64 * 1024 * 1024
-	*treedbFlushAdmissionPolicy = "explicit"
+	*treedbFlushAdmissionPolicy = "auto"
 	*treedbFlushApplyConcurrency = 0
 	*treedbFlushApplySpanNative = false
 	*treedbFlushBacklogCoalescing = false

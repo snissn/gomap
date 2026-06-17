@@ -323,6 +323,7 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_admission.flush_apply_concurrency"] = fmt.Sprintf("%d", admission.FlushApplyConcurrency)
 	stats["treedb.flush_admission.flush_apply_span_native"] = fmt.Sprintf("%t", admission.FlushApplySpanNative)
 	stats["treedb.flush_admission.flush_backlog_coalescing"] = fmt.Sprintf("%t", admission.FlushBacklogCoalescing)
+	stats["treedb.flush_admission.leaf_page_read_cache_write_admission"] = admission.LeafPageReadCacheWriteAdmission.String()
 
 	applyOps := db.flushApplyOps.Load()
 	stats["treedb.flush_apply.apply_calls_total"] = fmt.Sprintf("%d", db.flushApplyCalls.Load())
