@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,10 @@ const (
 	MetaPage1ID = 1
 	KeepRecent  = 1
 
+	defaultFlushApplyMinEntries = 4096
+	defaultFlushApplyMinSpans   = 2
+	defaultFlushApplyMinBytes   = 64 * 1024
+
 	closeSnapshotDrainTimeout = 10 * time.Second
 	closeSnapshotDrainSleep   = 500 * time.Microsecond
 
@@ -40,6 +45,23 @@ const (
 	snapshotAcquireShardMask  = snapshotAcquireShardCount - 1
 	snapshotRootTreeRetainMax = 16
 )
+
+func normalizeFlushApplyConcurrency(workers int) int {
+	if workers <= 1 {
+		return 0
+	}
+	gomax := runtime.GOMAXPROCS(0)
+	if gomax < 1 {
+		gomax = 1
+	}
+	if workers > gomax {
+		workers = gomax
+	}
+	if workers <= 1 {
+		return 0
+	}
+	return workers
+}
 
 type DBState struct {
 	CommitSeq                  uint64
@@ -213,6 +235,10 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyLeafLogRecordHintBytesRead    atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafMerges                    atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalMerges                atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelMerges        atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelChildren      atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelWorkers       atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelOps           atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafPagesWritten              atomic.Uint64
 	orderedRootDeltaGroupRootApplyPagerLeafPagesWritten         atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafLogPagesWritten           atomic.Uint64
@@ -227,6 +253,16 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyInternalLeafLogRefs           atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalLeafLogRefCopies      atomic.Uint64
 	orderedRootDeltaGroupRootApplyRootSplitLevels               atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareNs             atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls          atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareErrors         atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareValidationFail atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareRequested      atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareRequestedMax   atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareSpans          atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareSpanOps        atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareSpanBytes      atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareWorkerRanges   atomic.Uint64
 	orderedRootDeltaGroupSystemBuildNs                          atomic.Uint64
 	orderedRootDeltaGroupSystemApplyNs                          atomic.Uint64
 	orderedRootDeltaGroupSystemApplyCalls                       atomic.Uint64
@@ -234,6 +270,94 @@ type DB struct {
 	orderedRootDeltaGroupSystemApplyNodeLoads                   atomic.Uint64
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
+
+	// Cached-flush/root-apply M0 counters. These are coarse per-apply counters
+	// used by benchmark artifacts; avoid per-node timing in zipper recursion.
+	flushApplyCalls                               atomic.Uint64
+	flushApplyErrors                              atomic.Uint64
+	flushApplyOps                                 atomic.Uint64
+	flushApplyNs                                  atomic.Uint64
+	flushApplyOldNodeLoads                        atomic.Uint64
+	flushApplyOldPagerNodeLoads                   atomic.Uint64
+	flushApplyOldLeafLogNodeLoads                 atomic.Uint64
+	flushApplyOldLeafLogCacheHits                 atomic.Uint64
+	flushApplyOldLeafLogReaderCalls               atomic.Uint64
+	flushApplyOldLeafLogViewReads                 atomic.Uint64
+	flushApplyOldLeafLogScratchReads              atomic.Uint64
+	flushApplyOldPagerNodeBytesRead               atomic.Uint64
+	flushApplyOldLeafLogNodeBytesRead             atomic.Uint64
+	flushApplyOldLeafLogRecordHintBytesRead       atomic.Uint64
+	flushApplyLeafMerges                          atomic.Uint64
+	flushApplyInternalMerges                      atomic.Uint64
+	flushApplyInternalParallelMerges              atomic.Uint64
+	flushApplyInternalParallelChildren            atomic.Uint64
+	flushApplyInternalParallelWorkers             atomic.Uint64
+	flushApplyInternalParallelOps                 atomic.Uint64
+	flushApplyLeafPagesWritten                    atomic.Uint64
+	flushApplyPagerLeafPagesWritten               atomic.Uint64
+	flushApplyLeafLogPagesWritten                 atomic.Uint64
+	flushApplyLeafPageBytesWritten                atomic.Uint64
+	flushApplyPagerLeafPageBytesWritten           atomic.Uint64
+	flushApplyLeafLogPageBytesWritten             atomic.Uint64
+	flushApplyLeafLogRecordHintBytesWritten       atomic.Uint64
+	flushApplyPreparedOutputLeafLogPagesPrepared  atomic.Uint64
+	flushApplyPreparedOutputLeafLogBytesPrepared  atomic.Uint64
+	flushApplyPreparedOutputLeafLogPagesInstalled atomic.Uint64
+	flushApplyPreparedOutputLeafLogBytesInstalled atomic.Uint64
+	flushApplyPreparedOutputLeafLogPagesAbandoned atomic.Uint64
+	flushApplyPreparedOutputLeafLogBytesAbandoned atomic.Uint64
+	flushApplyPreparedOutputRetiredPagesPrepared  atomic.Uint64
+	flushApplyPreparedOutputRetiredPagesInstalled atomic.Uint64
+	flushApplyPreparedOutputRetiredPagesAbandoned atomic.Uint64
+	flushApplyInternalPagesWritten                atomic.Uint64
+	flushApplyInternalPageBytesWritten            atomic.Uint64
+	flushApplyInternalChildRefs                   atomic.Uint64
+	flushApplyRootSplitLevels                     atomic.Uint64
+	flushApplyRootReduceNs                        atomic.Uint64
+	flushApplyReadOnlyPrepareCalls                atomic.Uint64
+	flushApplyReadOnlyPrepareErrors               atomic.Uint64
+	flushApplyReadOnlyPrepareValidationFail       atomic.Uint64
+	flushApplyReadOnlyPrepareNs                   atomic.Uint64
+	flushApplyReadOnlyPrepareRequested            atomic.Uint64
+	flushApplyReadOnlyPrepareRequestedMax         atomic.Uint64
+	flushApplyReadOnlyPrepareSpans                atomic.Uint64
+	flushApplyReadOnlyPrepareSpansMax             atomic.Uint64
+	flushApplyReadOnlyPrepareSpanOps              atomic.Uint64
+	flushApplyReadOnlyPrepareSpanOpsMax           atomic.Uint64
+	flushApplyReadOnlyPrepareSpanBytes            atomic.Uint64
+	flushApplyReadOnlyPrepareSpanBytesMax         atomic.Uint64
+	flushApplyReadOnlyPrepareSingleOpSpans        atomic.Uint64
+	flushApplyReadOnlyPrepareSingleOpSpansMax     atomic.Uint64
+	flushApplyReadOnlyPrepareWorkerRanges         atomic.Uint64
+	flushApplyReadOnlyPrepareWorkerRangesMax      atomic.Uint64
+	flushApplySpanNativeCandidateOps              atomic.Uint64
+	flushApplySpanNativeCandidateSpans            atomic.Uint64
+	flushApplySpanNativeEligibleOps               atomic.Uint64
+	flushApplySpanNativeEligibleSpans             atomic.Uint64
+	flushApplySpanNativeUsedOps                   atomic.Uint64
+	flushApplySpanNativeUsedSpans                 atomic.Uint64
+	flushApplySpanNativeIneligibleOps             atomic.Uint64
+	flushApplySpanNativeIneligibleSpans           atomic.Uint64
+	flushApplySpanNativeFallbacks                 atomic.Uint64
+	flushApplySpanNativeFallbackOps               [FlushSpanRunFallbackReasonCount]atomic.Uint64
+	flushApplySpanNativeFallbackSpans             [FlushSpanRunFallbackReasonCount]atomic.Uint64
+	flushApplyCommitWaitNs                        atomic.Uint64
+	flushApplyGuardedPublishCalls                 atomic.Uint64
+	flushApplyGuardedPublishNs                    atomic.Uint64
+	flushApplyRetries                             atomic.Uint64
+	flushApplyMismatches                          atomic.Uint64
+
+	flushAdmission FlushAdmissionDecision
+
+	flushApplyConcurrency int
+	flushApplyMinEntries  int
+	flushApplyMinSpans    int
+	flushApplyMinBytes    int
+	flushApplySpanNative  bool
+	flushApplyWorkerPool  *zipper.ApplyWorkerPool
+
+	flushApplyReadOnlyPrepareMu   sync.Mutex
+	flushApplyReadOnlyPrepareFree []*flushApplyReadOnlyPrepareBuffer
 
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
@@ -258,6 +382,7 @@ type DB struct {
 	// page so tests can exercise pre-publish cleanup paths.
 	testFailWriteMeta                  atomic.Bool
 	testFailCommandWALFlush            atomic.Bool
+	testAfterOptimisticApplyHook       func()
 	testCommandWALRecoveryFailAfterLSN atomic.Uint64
 	commandWALReplayLSN                atomic.Uint64
 	commandWALReplayToken              atomic.Uint64
@@ -731,6 +856,13 @@ type Options struct {
 	//   - <0 disables the cache for this DB.
 	//   - >0 sets the exact number of set-associative cache entries.
 	LeafPageReadCacheEntries int
+	// LeafPageReadCacheWriteAdmission controls write-side cache population for
+	// outer-leaf pages stored in the value log. The field's zero value is the
+	// historical immediate admission behavior for explicit/off policies; the
+	// default auto flush-admission policy upgrades it to the measured adaptive
+	// write-admission candidate. Adaptive admission only changes in-memory cache
+	// population, not persistent leaf-log/value-log writes or pointer validity.
+	LeafPageReadCacheWriteAdmission LeafPageReadCacheWriteAdmissionPolicy
 
 	// Durability configures cached-mode durability semantics.
 	//
@@ -858,6 +990,35 @@ type Options struct {
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
 
+	// FlushAdmissionPolicy selects how TreeDB admits the span-native/backlog
+	// flush/apply candidate path. The zero value (auto) admits the measured
+	// conservative c4/adaptive candidate on sufficiently parallel hosts and fails
+	// closed on low-concurrency hosts or DurabilityWALOffRelaxed unsafe-durability
+	// opens. Explicit preserves caller-supplied knobs; Off force-disables
+	// span-native/backlog/concurrency as a rollback policy.
+	FlushAdmissionPolicy FlushAdmissionPolicy
+
+	// FlushApplyConcurrency enables M2 parallel COW apply for backend flush/write
+	// batches using a bounded reusable worker pool. It is separate from
+	// FlushBuildConcurrency. Values <=1 keep the worker-pool path off for
+	// explicit policy; the default auto admission policy chooses a conservative
+	// c4 candidate when the low-concurrency guardrail passes.
+	FlushApplyConcurrency int
+	// FlushApplyMinEntries gates opt-in parallel apply by planned span-local ops.
+	// Values <=0 use the internal default.
+	FlushApplyMinEntries int
+	// FlushApplyMinSpans gates opt-in parallel apply by planned leaf span count.
+	// Values <=0 use the internal default.
+	FlushApplyMinSpans int
+	// FlushApplyMinBytes gates opt-in parallel apply by planned span bytes.
+	// Values <=0 use the internal default.
+	FlushApplyMinBytes int
+	// FlushApplySpanNative enables the M10 span-native apply candidate path. The
+	// default auto admission policy enables it only for the measured conservative
+	// c4 candidate; explicit policy preserves caller-provided values. Unsupported
+	// runs fall back to recursive apply.
+	FlushApplySpanNative bool
+
 	// FlushBackendMaxEntries caps how many operations are buffered into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
@@ -871,6 +1032,51 @@ type Options struct {
 	// FlushBackendMaxBatches caps how many intermediate backend commits a single
 	// flush may emit (0=default, <0=disable cap).
 	FlushBackendMaxBatches int
+
+	// FlushSpanRunTargetPlanning enables diagnostic read-only target-leaf planning
+	// for canonical cached flush runs. It is default-off; M9's default write path
+	// builds canonical multi-memtable runs but does not pay the extra target-span
+	// traversal unless this diagnostic knob is explicitly enabled.
+	FlushSpanRunTargetPlanning bool
+
+	// FlushBacklogCoalescing enables the M11 bounded adaptive cached-flush
+	// coalescing controller. The default auto admission policy enables it for the
+	// measured conservative c4 candidate; when enabled the cache layer may
+	// include additional already-sealed eligible memtables in one canonical flush
+	// run under observed cumulative single-op-span pressure and explicit budgets.
+	FlushBacklogCoalescing bool
+	// FlushBacklogCoalescingMaxMemtables bounds memtables per coalesced point run
+	// after preserving the pre-existing base collector minimum (0=default, capped
+	// internally).
+	FlushBacklogCoalescingMaxMemtables int
+	// FlushBacklogCoalescingMaxBytes is a soft queued-byte budget per coalesced
+	// point run. It is checked before adding the next memtable after at least one
+	// unit, so a selected run can exceed this value by one whole memtable and the
+	// budget never tightens the pre-existing base collector (0=default).
+	FlushBacklogCoalescingMaxBytes int64
+	// FlushBacklogCoalescingMaxOps is a soft queued point-op budget per coalesced
+	// point run. It is checked before adding the next memtable after at least one
+	// unit, so a selected run can exceed this value by one whole memtable and the
+	// budget never tightens the pre-existing base collector (0=default).
+	FlushBacklogCoalescingMaxOps int
+	// FlushBacklogCoalescingMinAge requires the oldest queued memtable to be at
+	// least this old before adaptive coalescing admits extra work (0=no age floor).
+	FlushBacklogCoalescingMinAge time.Duration
+	// FlushBacklogCoalescingSingleOpSpanRatio is the observed single-op span ratio
+	// that triggers coalescing (0=default). Pressure gates use cumulative apply/span
+	// counters; after workload-shape changes, eligibility may decay only as
+	// cumulative ratios change, while each admitted run remains bounded by the
+	// explicit budgets above.
+	FlushBacklogCoalescingSingleOpSpanRatio float64
+	// FlushBacklogCoalescingMaxOpsPerSpan is the observed ops/span ceiling that
+	// still counts as single-op pressure (0=default).
+	FlushBacklogCoalescingMaxOpsPerSpan float64
+	// FlushBacklogCoalescingMinOldLeafBytesPerOp optionally requires observed
+	// old-leaf decode bytes/op before coalescing (0=disabled).
+	FlushBacklogCoalescingMinOldLeafBytesPerOp float64
+
+	flushAdmissionDecision   FlushAdmissionDecision
+	flushAdmissionNormalized bool
 
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
@@ -1206,6 +1412,16 @@ func Open(opts Options) (*DB, error) {
 	if opts.PruneMaxDuration == 0 {
 		opts.PruneMaxDuration = 25 * time.Millisecond
 	}
+	NormalizeFlushAdmissionOptions(&opts)
+	if opts.FlushApplyMinEntries <= 0 {
+		opts.FlushApplyMinEntries = defaultFlushApplyMinEntries
+	}
+	if opts.FlushApplyMinSpans <= 0 {
+		opts.FlushApplyMinSpans = defaultFlushApplyMinSpans
+	}
+	if opts.FlushApplyMinBytes <= 0 {
+		opts.FlushApplyMinBytes = defaultFlushApplyMinBytes
+	}
 	if opts.FreelistRegionRadius < 0 {
 		opts.FreelistRegionPages = 0
 		opts.FreelistRegionRadius = 0
@@ -1262,6 +1478,14 @@ func Open(opts Options) (*DB, error) {
 func validateOptions(opts Options) error {
 	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return err
+	}
+	switch opts.LeafPageReadCacheWriteAdmission {
+	case LeafPageReadCacheWriteAdmissionImmediate, LeafPageReadCacheWriteAdmissionAdaptive:
+	default:
+		return fmt.Errorf("treedb: invalid leaf page read cache write admission policy %d", opts.LeafPageReadCacheWriteAdmission)
+	}
+	if !opts.FlushAdmissionPolicy.Valid() {
+		return fmt.Errorf("treedb: invalid flush admission policy %d", opts.FlushAdmissionPolicy)
 	}
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
@@ -1426,6 +1650,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen := newIndexGen(1, p, alloc, z)
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
+	flushApplyConcurrency := normalizeFlushApplyConcurrency(opts.FlushApplyConcurrency)
+	var flushApplyWorkerPool *zipper.ApplyWorkerPool
+	if flushApplyConcurrency > 1 {
+		flushApplyWorkerPool = zipper.NewApplyWorkerPool(flushApplyConcurrency)
+	}
 
 	db := &DB{
 		valueLogManager:                vm,
@@ -1453,6 +1682,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
 		piggybackCompaction:            !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
+		flushAdmission:                 FlushAdmissionDecisionForOptions(opts),
+		flushApplyConcurrency:          flushApplyConcurrency,
+		flushApplyMinEntries:           opts.FlushApplyMinEntries,
+		flushApplyMinSpans:             opts.FlushApplyMinSpans,
+		flushApplyMinBytes:             opts.FlushApplyMinBytes,
+		flushApplySpanNative:           opts.FlushApplySpanNative,
+		flushApplyWorkerPool:           flushApplyWorkerPool,
 		dir:                            opts.Dir,
 		columnAssetRootDir:             layout.columnAssetDir,
 		chunkSize:                      opts.ChunkSize,
@@ -1488,7 +1724,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
-	db.leafPageReadCache = newLeafPageReadCache(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries))
+	db.leafPageReadCache = newLeafPageReadCacheWithWriteAdmission(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries), opts.LeafPageReadCacheWriteAdmission)
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
@@ -1803,6 +2039,15 @@ func (db *DB) Close() error {
 		errs = append(errs, err)
 	}
 	db.closing.Store(true)
+	// Wait for active apply attempts before closing the reusable flush/apply
+	// worker pool and tearing down index resources.
+	db.writeMu.Lock()
+	if db.flushApplyWorkerPool != nil {
+		db.flushApplyWorkerPool.Close()
+		db.flushApplyWorkerPool = nil
+	}
+	db.clearFlushApplyReadOnlyPrepareBuffers()
+	db.writeMu.Unlock()
 	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.valueLogRefTracker != nil {

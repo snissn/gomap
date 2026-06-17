@@ -40,12 +40,62 @@ type FramePreparer struct {
 }
 
 func NewFramePreparer() *FramePreparer {
-	return &FramePreparer{
-		dictFrameEncodeLevel: zstd.SpeedFastest,
-		blockCodec:           BlockCodecSnappy,
-		clock:                RealClock{},
-		keepSafetyMargin:     DefaultKeepSafetyMargin,
+	p := &FramePreparer{}
+	p.ResetForReuse()
+	return p
+}
+
+const framePreparerScratchKeepCap = 8 << 20
+
+// ResetForReuse restores the default policy/hint state while retaining bounded
+// scratch buffers. It is intended for callers that pool FramePreparers between
+// independent append batches without changing compression semantics from a
+// freshly-created preparer.
+func (p *FramePreparer) ResetForReuse() {
+	if p == nil {
+		return
 	}
+	p.TrimScratchForReuse()
+	p.skipDictID = 0
+	p.codecs = nil
+	p.noBenefit = 0
+	p.skipRemain = 0
+	p.dictFrameEncodeLevel = zstd.SpeedFastest
+	p.dictFrameEnableEntropy = false
+	p.blockCodec = BlockCodecSnappy
+	p.blockCompression = false
+	p.clock = RealClock{}
+	p.encodeCostModel = nil
+	p.encodeSampleStride = 0
+	p.encodeSampleCount = 0
+	p.keepIoNsPerStoredByte = 0
+	p.keepEncodeNsPerRawByte = 0
+	p.keepSafetyMargin = DefaultKeepSafetyMargin
+}
+
+// TrimScratchForReuse drops oversized temporary buffers while preserving codec
+// and compression-hint state. Long-lived prepare workers call this between
+// tasks so an occasional large frame does not pin unbounded scratch memory.
+func (p *FramePreparer) TrimScratchForReuse() {
+	if p == nil {
+		return
+	}
+	if cap(p.rawScratch) > framePreparerScratchKeepCap {
+		p.rawScratch = nil
+	} else {
+		p.rawScratch = p.rawScratch[:0]
+	}
+	if cap(p.encScratch) > framePreparerScratchKeepCap {
+		p.encScratch = nil
+	} else {
+		p.encScratch = p.encScratch[:0]
+	}
+	if cap(p.blockScratch) > framePreparerScratchKeepCap {
+		p.blockScratch = nil
+	} else {
+		p.blockScratch = p.blockScratch[:0]
+	}
+	p.encLimiter = limitedSliceWriter{}
 }
 
 func (p *FramePreparer) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool) {

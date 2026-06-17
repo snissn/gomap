@@ -515,6 +515,13 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err := validateColumnStoreSuiteExecutionPath(opts.ProfileDir, opts.ExecutionPath); err != nil {
 		return "", err
 	}
+	executionPath := strings.TrimSpace(opts.ExecutionPath)
+	if strings.TrimSpace(opts.ProfileDir) != "" {
+		executionPath, err = normalizeBenchprofExecutionPath(executionPath)
+		if err != nil {
+			return "", err
+		}
+	}
 	finishRuntimeProfiles, err := startColumnStoreSuiteRuntimeProfiles(baseCfg)
 	if err != nil {
 		return "", err
@@ -703,7 +710,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		Suite:                 "column_store",
 		Profile:               profile,
 		Fixture:               fixture,
-		PathLabel:             strings.TrimSpace(opts.ExecutionPath),
+		PathLabel:             executionPath,
 		ForcedPath:            forcedPath,
 		QueryNames:            cloneStringSlice(queryNames),
 		Rows:                  rows,
@@ -771,7 +778,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg, opts.RunBenchprof)
 		report.Artifacts = columnStoreSuitePruneMissingRuntimeDeltaArtifacts(report.Artifacts)
 		md = renderColumnStoreSuiteMarkdown(report)
-		if err := writeColumnStoreSuiteArtifacts(opts.ProfileDir, opts.ExecutionPath, report, md, run); err != nil {
+		if err := writeColumnStoreSuiteArtifacts(opts.ProfileDir, executionPath, report, md, run); err != nil {
 			return "", err
 		}
 		if opts.RunBenchprof {
@@ -854,11 +861,12 @@ func validateColumnStoreSuiteExecutionPath(profileDir, executionPath string) err
 	if strings.TrimSpace(profileDir) == "" && executionPath == "" {
 		return nil
 	}
-	if err := validateBenchprofExecutionPath(executionPath); err != nil {
+	normalizedExecutionPath, err := normalizeBenchprofExecutionPath(executionPath)
+	if err != nil {
 		return err
 	}
-	if executionPath != "native-fastpath" {
-		return fmt.Errorf("column_store: native suite requires -path-label native-fastpath; got %q", executionPath)
+	if normalizedExecutionPath != "native-fastpath" {
+		return fmt.Errorf("column_store: native suite requires -path-label native-fastpath; got %q", normalizedExecutionPath)
 	}
 	return nil
 }

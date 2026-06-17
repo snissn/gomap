@@ -569,7 +569,7 @@ it a ceiling and keep verified/cached-verify evidence nearby.
 | `blocks_pruned/op` is zero on random data | Min/max pruning is ineffective when every block overlaps the predicate. | Report distribution; do not optimize only for clustered/selective data. |
 | `allocs/op` remains high | Current metadata/decode/read lifecycle still allocates. | Capture allocation profile and identify whether decode, metadata, or materialization dominates. |
 | Benchmark output has no typed-column rows | Regex may be matching the pre-#1808 sub-benchmark path or the branch may be stale. | Use `path_typed_column_part` in the regex and run `rg BenchmarkTypedColumnInt64PredicateAggregate TreeDB/collections`. |
-| Profile files are missing from unified-bench | `-profile-dir` requires `-path-label`; explicit profile flags can override defaults. | Use the exact unified-bench workflow above. |
+| Profile files are missing from unified-bench | `-profile-dir` defaults to `-path-label native-fastpath`; explicit profile flags can override profile output defaults. | Use the exact unified-bench workflow above. |
 
 ## Glossary
 

@@ -1,0 +1,629 @@
+package caching
+
+import (
+	"bytes"
+	"fmt"
+	"reflect"
+	"runtime"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/batch"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
+
+func requireStatUint64(t *testing.T, stats map[string]string, key string) uint64 {
+	t.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		t.Fatalf("missing stat %s", key)
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("parse stat %s=%q: %v", key, raw, err)
+	}
+	return v
+}
+
+type reducerPublishStatsBackend struct {
+	*MockBackend
+	statsCalls       int
+	reducerPublishNs uint64
+}
+
+func (b *reducerPublishStatsBackend) Stats() map[string]string {
+	b.statsCalls++
+	return nil
+}
+
+func (b *reducerPublishStatsBackend) FlushApplyReducerPublishNs() uint64 {
+	return b.reducerPublishNs
+}
+
+func TestBackendFlushApplyReducerPublishNsUsesLightweightAccessor(t *testing.T) {
+	backend := &reducerPublishStatsBackend{MockBackend: NewMockBackend(), reducerPublishNs: 42}
+	db := &DB{backend: backend}
+	if got := db.backendFlushApplyReducerPublishNs(); got != 42 {
+		t.Fatalf("reducer/publish ns=%d want 42", got)
+	}
+	if backend.statsCalls != 0 {
+		t.Fatalf("Stats calls=%d want 0", backend.statsCalls)
+	}
+}
+
+func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:             1 << 20,
+		MemtableShards:             1,
+		IndexOuterLeavesInValueLog: true,
+		RelaxedSync:                true,
+		AllowUnsafe:                true,
+	})
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	value := bytes.Repeat([]byte("v"), 96)
+	for i := 0; i < 512; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := db.Set(key, value); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	stats := db.Stats()
+	for _, key := range []string{
+		"treedb.cache.flush_apply.planning_ns_total",
+		"treedb.cache.flush_apply.build_ns_total",
+		"treedb.cache.flush_apply.leaf_log_encode_compress_ns_total",
+		"treedb.flush_apply.apply_ns_total",
+		"treedb.cache.checkpoint.active_background_flush_wait_ns_total",
+		"treedb.cache.checkpoint.stage.command_wal_publish.samples",
+		"treedb.cache.checkpoint.stage.backend_boundary.samples",
+		"treedb.cache.checkpoint.stage.leaf_value_log_sync.samples",
+		"treedb.cache.checkpoint.stage.reducer_publish.samples",
+	} {
+		// Tiny stage timers can round to zero on low-resolution platforms; the
+		// plumbing requirement is that these counters are present in DB.Stats().
+		_ = requireStatUint64(t, stats, key)
+	}
+	if got := stats["treedb.cache.flush_apply.leaf_log_append_frames_per_op"]; got == "" {
+		t.Fatalf("missing leaf_log_append_frames_per_op")
+	}
+	for _, key := range []string{
+		"treedb.cache.flush_apply.batches_total",
+		"treedb.cache.flush_apply.bytes_total",
+		"treedb.cache.flush_apply.backend_write_ns_total",
+		"treedb.cache.flush_span_run.runs_total",
+		"treedb.cache.flush_span_run.source_point_ops_total",
+		"treedb.cache.flush_span_run.planned_ops_total",
+		"treedb.cache.flush_span_run.planned_point_ops_total",
+		"treedb.cache.flush_span_run.source_memtables_total",
+		"treedb.cache.flush_span_run.backend_chunks_total",
+		"treedb.flush_apply.apply_calls_total",
+		"treedb.flush_apply.old_leaf_read_decode.node_loads_total",
+		"treedb.flush_apply.merge_build.leaf_merges_total",
+		"treedb.flush_apply.prepared_output.leaf_log_pages_installed_total",
+		"treedb.flush_apply.guarded_publish.calls_total",
+		"treedb.cache.checkpoint.stage.cutover.samples",
+		"treedb.cache.checkpoint.stage.wal_rotate.samples",
+		"treedb.cache.checkpoint.stage.value_log_flush.samples",
+		"treedb.cache.checkpoint.stage.flush_all.samples",
+		"treedb.cache.checkpoint.stage.flush_all.total_ns",
+		"treedb.cache.checkpoint.stage.wal_cleanup.samples",
+		"treedb.cache.checkpoint.stage.post_maintenance.samples",
+	} {
+		if got := requireStatUint64(t, stats, key); got == 0 {
+			t.Fatalf("%s=%d want >0", key, got)
+		}
+	}
+	// Outer leaves are persisted through the persistent leaf log when enabled;
+	// the M0 counters expose that append path separately from backend apply.
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.leaf_log_append_records_total"); got == 0 {
+		t.Fatalf("leaf log append records = 0, want >0")
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.leaf_log_append_frames_total"); got == 0 {
+		t.Fatalf("leaf log append frames = 0, want >0")
+	}
+}
+
+func TestFlushSpanRunStatsSeparateSourceShadowedAndPlannedOps(t *testing.T) {
+	db := &DB{}
+	db.observeFlushSpanRunSource(2, 3, 0, 0)
+	db.observeFlushSpanRunShadowedOps(1)
+	db.observeFlushSpanRunPlannedOps(2, 0)
+	stats := map[string]string{}
+	db.appendCacheFlushApplyStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.source_point_ops_total"); got != 3 {
+		t.Fatalf("source point ops=%d want 3", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.shadowed_ops_total"); got != 1 {
+		t.Fatalf("shadowed ops=%d want 1", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_point_ops_total"); got != 2 {
+		t.Fatalf("planned point ops=%d want 2", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_ops_total"); got != 2 {
+		t.Fatalf("planned ops=%d want 2", got)
+	}
+}
+
+func TestFlushSpanRunStatsCombinedFlushCountsPostShadowPlannedOps(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:        1 << 60,
+		FlushBuildConcurrency: 2,
+		FlushBuildMinEntries:  1,
+		FlushBuildMinUnits:    2,
+		MemtableShards:        1,
+		JournalLanes:          1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.mu.Lock()
+	setMutable(db, []byte("k"), []byte("old"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate old memtable: %v", err)
+	}
+	setMutable(db, []byte("k"), []byte("new"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate new memtable: %v", err)
+	}
+	setMutable(db, []byte("other"), []byte("kept"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate other memtable: %v", err)
+	}
+	db.mu.Unlock()
+
+	db.flushAll(false)
+
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.source_point_ops_total"); got != 3 {
+		t.Fatalf("source point ops=%d want 3", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.shadowed_ops_total"); got != 1 {
+		t.Fatalf("shadowed ops=%d want 1", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_point_ops_total"); got != 2 {
+		t.Fatalf("planned point ops=%d want 2", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.planned_ops_total"); got != 2 {
+		t.Fatalf("planned ops=%d want 2", got)
+	}
+}
+
+func TestCanonicalFlushRunShadowsOlderOverlappingMemtables(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		FlushThreshold:        1 << 60,
+		FlushBuildConcurrency: 2,
+		FlushBuildMinEntries:  1,
+		FlushBuildMinUnits:    2,
+		MemtableShards:        1,
+		JournalLanes:          1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.mu.Lock()
+	setMutable(db, []byte("dup"), []byte("old"))
+	setMutable(db, []byte("old-only"), []byte("kept-old"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate old: %v", err)
+	}
+	setMutable(db, []byte("dup"), []byte("new"))
+	setMutable(db, []byte("new-only"), []byte("kept-new"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate new: %v", err)
+	}
+	units, _, _, totalLen := db.collectFlushUnitsLocked(0, flushCombineMaxMemtables, 0)
+	db.mu.Unlock()
+
+	run, err := db.buildCanonicalFlushRun(units, totalLen, 0)
+	if err != nil {
+		t.Fatalf("buildCanonicalFlushRun: %v", err)
+	}
+	defer run.release()
+	if got, want := run.sourcePointOps, 4; got != want {
+		t.Fatalf("source point ops=%d want %d", got, want)
+	}
+	if got, want := run.shadowedPointOps, 1; got != want {
+		t.Fatalf("shadowed point ops=%d want %d", got, want)
+	}
+	if got, want := run.plannedPointOps, 3; got != want {
+		t.Fatalf("planned point ops=%d want %d", got, want)
+	}
+	got := map[string]string{}
+	for _, op := range run.pointOps {
+		got[string(op.Key)] = string(op.Value)
+	}
+	want := map[string]string{"dup": "new", "new-only": "kept-new", "old-only": "kept-old"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonical point ops=%v want %v", got, want)
+	}
+}
+
+func TestCollectFlushUnitsStopsAtLaneBarrier(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		FlushThreshold: 1 << 60,
+		MemtableShards: 2,
+		JournalLanes:   2,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	keyForLane := func(lane int) []byte {
+		t.Helper()
+		for i := 0; i < 10000; i++ {
+			key := []byte(fmt.Sprintf("lane-%d-key-%d", lane, i))
+			if db.laneForShardIndex(db.shardIndex(key)) == lane {
+				return key
+			}
+		}
+		t.Fatalf("no key for lane %d", lane)
+		return nil
+	}
+	lane0Key := keyForLane(0)
+	lane1Key := keyForLane(1)
+
+	db.mu.Lock()
+	setMutable(db, lane0Key, []byte("l0-old"))
+	setMutable(db, lane1Key, []byte("l1"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate first: %v", err)
+	}
+	setMutable(db, lane0Key, []byte("l0-new"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate second: %v", err)
+	}
+	units, ids, _, _ := db.collectFlushUnitsLocked(0, flushCombineMaxMemtables, 0)
+	db.mu.Unlock()
+
+	if got, want := len(units), 1; got != want {
+		t.Fatalf("collected units=%d want %d (ids=%v)", got, want, ids)
+	}
+	if got := units[0].laneID; got != 0 {
+		t.Fatalf("collected lane=%d want 0", got)
+	}
+}
+
+func TestFlushSpanRunLeafAwareChunksDoNotSplitTargetLeaves(t *testing.T) {
+	ops := make([]batch.Entry, 6)
+	for i := range ops {
+		ops[i] = batch.Entry{Type: batch.OpPut, Key: []byte(fmt.Sprintf("k%d", i)), Value: []byte("v")}
+	}
+	spans := []backenddb.FlushSpanRunTargetLeafSpan{
+		{SpanIndex: 0, PointOpStart: 0, PointOpEnd: 3, OpCount: 3, ByteCount: 30},
+		{SpanIndex: 1, PointOpStart: 3, PointOpEnd: 6, OpCount: 3, ByteCount: 30},
+	}
+	entryChunks := buildEntryCountFlushSpanRunChunks(ops, 4)
+	if got := backenddb.SummarizeFlushSpanRunChunkSplits(spans, entryChunks).TargetLeavesSplitAcrossChunks; got == 0 {
+		t.Fatalf("entry-count chunks did not split fixture target leaves")
+	}
+	leafChunks, exact := buildLeafAwareFlushSpanRunChunks(ops, spans, 4)
+	if !exact {
+		t.Fatalf("leaf-aware chunks reported inexact")
+	}
+	if got := backenddb.SummarizeFlushSpanRunChunkSplits(spans, leafChunks).TargetLeavesSplitAcrossChunks; got != 0 {
+		t.Fatalf("leaf-aware split target leaves=%d want 0 (chunks=%+v)", got, leafChunks)
+	}
+}
+
+func TestFlushSpanRunLeafAwareChunksExposeEmergencySplit(t *testing.T) {
+	ops := make([]batch.Entry, 10)
+	for i := range ops {
+		ops[i] = batch.Entry{Type: batch.OpPut, Key: []byte(fmt.Sprintf("k%d", i)), Value: []byte("v")}
+	}
+	spans := []backenddb.FlushSpanRunTargetLeafSpan{
+		{SpanIndex: 0, PointOpStart: 0, PointOpEnd: 10, OpCount: 10, ByteCount: 100},
+	}
+	chunks, exact := buildLeafAwareFlushSpanRunChunks(ops, spans, 4)
+	if !exact {
+		t.Fatalf("leaf-aware chunks reported inexact")
+	}
+	summary := backenddb.SummarizeFlushSpanRunChunkSplits(spans, chunks)
+	if got := summary.TargetLeavesSplitAcrossChunks; got != 1 {
+		t.Fatalf("emergency split target leaves=%d want 1 (summary=%+v chunks=%+v)", got, summary, chunks)
+	}
+}
+
+func TestFlushSpanRunRuntimeTargetLeafPlanningDefaultOff(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), FlushAdmissionPolicy: backenddb.FlushAdmissionPolicyExplicit})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(t.TempDir(), backend, Options{
+		FlushThreshold:         1 << 60,
+		FlushBuildConcurrency:  2,
+		FlushBuildMinEntries:   1,
+		FlushBuildMinUnits:     2,
+		FlushBackendMaxEntries: 2,
+		FlushBackendMaxBatches: -1,
+		MemtableShards:         1,
+		JournalLanes:           1,
+	})
+	if err != nil {
+		t.Fatalf("Open cache: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	queueTwoPointMemtables(t, db)
+	if !db.flushLaneOnce(true, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.target_leaf_spans_total"); got != 0 {
+		t.Fatalf("default target leaf spans=%d want 0", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.flush_apply.read_only_prepare.calls_total"); got != 0 {
+		t.Fatalf("default read-only prepare calls=%d want 0", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.backend_chunks_total"); got != 2 {
+		t.Fatalf("backend chunks=%d want entry-count chunks", got)
+	}
+}
+
+type malformedChunkPlannerBackend struct {
+	*MockBackend
+	chunks []backenddb.FlushSpanRunBackendChunk
+}
+
+func (b *malformedChunkPlannerBackend) PlanFlushSpanRunChunks(req backenddb.FlushSpanRunPlanRequest, maxPointOpsPerChunk int) (backenddb.FlushSpanRunChunkPlan, error) {
+	meta := backenddb.FlushSpanRunMetadata{
+		SourceMemtables:  req.SourceMemtables,
+		SourcePointOps:   req.SourcePointOps,
+		PlannedPointOps:  req.PlannedPointOps,
+		ShadowedPointOps: req.ShadowedPointOps,
+		RangeBarriers:    req.RangeBarriers,
+		LaneBarriers:     req.LaneBarriers,
+	}
+	chunks := append([]backenddb.FlushSpanRunBackendChunk(nil), b.chunks...)
+	meta.BackendChunks = chunks
+	return backenddb.FlushSpanRunChunkPlan{Metadata: meta, BackendChunks: chunks}, nil
+}
+
+func TestFlushSpanRunPlannedBackendChunksFallbackOnInvalidCoverage(t *testing.T) {
+	ops := []batch.Entry{
+		{Key: []byte("k0"), Value: []byte("v")},
+		{Key: []byte("k1"), Value: []byte("v")},
+		{Key: []byte("k2"), Value: []byte("v")},
+		{Key: []byte("k3"), Value: []byte("v")},
+	}
+	for _, tc := range []struct {
+		name   string
+		chunks []backenddb.FlushSpanRunBackendChunk
+	}{
+		{
+			name: "gapped",
+			chunks: []backenddb.FlushSpanRunBackendChunk{
+				{ChunkIndex: 0, PointOpStart: 0, PointOpEnd: 1, ByteCount: 1},
+				{ChunkIndex: 1, PointOpStart: 2, PointOpEnd: 4, ByteCount: 2},
+			},
+		},
+		{
+			name:   "tail-truncated",
+			chunks: []backenddb.FlushSpanRunBackendChunk{{ChunkIndex: 0, PointOpStart: 0, PointOpEnd: 2, ByteCount: 2}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &malformedChunkPlannerBackend{MockBackend: NewMockBackend(), chunks: tc.chunks}
+			db := &DB{backend: backend, flushSpanRunTargetPlanning: true}
+			run := &canonicalFlushRun{sourceMemtables: 2, sourcePointOps: len(ops), plannedPointOps: len(ops), pointOps: ops}
+
+			meta, chunks, _ := db.planCanonicalFlushRunMetadata(run, 2)
+			want := []backenddb.FlushSpanRunBackendChunk{
+				{ChunkIndex: 0, PointOpStart: 0, PointOpEnd: 2, ByteCount: 6},
+				{ChunkIndex: 1, PointOpStart: 2, PointOpEnd: 4, ByteCount: 6},
+			}
+			if !reflect.DeepEqual(chunks, want) {
+				t.Fatalf("chunks=%+v want fallback %+v", chunks, want)
+			}
+			if !reflect.DeepEqual(meta.BackendChunks, want) {
+				t.Fatalf("metadata chunks=%+v want fallback %+v", meta.BackendChunks, want)
+			}
+		})
+	}
+}
+
+func TestFlushCanonicalStreamedDisabledChunkingUsesRunSizedBuffer(t *testing.T) {
+	backend := NewMockBackend()
+	db, err := Open(t.TempDir(), backend, Options{
+		FlushThreshold:         1 << 60,
+		FlushBuildConcurrency:  2,
+		FlushBuildMinEntries:   1,
+		FlushBuildMinUnits:     2,
+		FlushBackendMaxEntries: -1,
+		MemtableShards:         1,
+		JournalLanes:           1,
+	})
+	if err != nil {
+		t.Fatalf("Open cache: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	queueTwoPointMemtables(t, db)
+	if !db.flushLaneOnce(true, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+	if got := requireStatUint64(t, db.Stats(), "treedb.cache.flush_span_run.backend_chunks_total"); got != 1 {
+		t.Fatalf("backend chunks=%d want one unchunked write", got)
+	}
+}
+
+func TestFlushSpanRunRuntimeTargetLeafSplitCounterOptIn(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(t.TempDir(), backend, Options{
+		FlushThreshold:             1 << 60,
+		FlushBuildConcurrency:      2,
+		FlushBuildMinEntries:       1,
+		FlushBuildMinUnits:         2,
+		FlushBackendMaxEntries:     2,
+		FlushBackendMaxBatches:     -1,
+		FlushSpanRunTargetPlanning: true,
+		MemtableShards:             1,
+		JournalLanes:               1,
+	})
+	if err != nil {
+		t.Fatalf("Open cache: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	queueTwoPointMemtables(t, db)
+	if !db.flushLaneOnce(true, 0) {
+		t.Fatal("flushLaneOnce returned false")
+	}
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.target_leaf_spans_total"); got == 0 {
+		t.Fatalf("target leaf spans = 0, want runtime metadata")
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.target_leaves_split_across_chunks_total"); got == 0 {
+		t.Fatalf("target leaf split counter = 0, want emergency split evidence")
+	}
+	if got := requireStatUint64(t, stats, "treedb.flush_apply.read_only_prepare.calls_total"); got == 0 {
+		t.Fatalf("read-only prepare calls = 0, want opt-in planning")
+	}
+}
+
+func queueTwoPointMemtables(t *testing.T, db *DB) {
+	t.Helper()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	setMutable(db, []byte("k0"), []byte("v0"))
+	setMutable(db, []byte("k1"), []byte("v1"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		t.Fatalf("rotate first: %v", err)
+	}
+	setMutable(db, []byte("k2"), []byte("v2"))
+	setMutable(db, []byte("k3"), []byte("v3"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		t.Fatalf("rotate second: %v", err)
+	}
+}
+
+func TestFlushSpanRunBackendChunksExcludeEmptySyncBoundary(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	for _, tc := range []struct {
+		name     string
+		parallel bool
+	}{
+		{name: "parallel", parallel: true},
+		{name: "sequential", parallel: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := NewMockBackend()
+			opts := Options{
+				FlushThreshold:         1 << 60,
+				FlushBackendMaxEntries: 2,
+				FlushBackendMaxBatches: -1,
+				MemtableShards:         1,
+				JournalLanes:           1,
+			}
+			if tc.parallel {
+				opts.FlushBuildConcurrency = 2
+				opts.FlushBuildMinEntries = 1
+				opts.FlushBuildMinUnits = 2
+			} else {
+				opts.FlushBuildConcurrency = 1
+			}
+			db, err := Open(t.TempDir(), backend, opts)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			if tc.parallel {
+				for unit := 0; unit < 2; unit++ {
+					for i := 0; i < 2; i++ {
+						setMutable(db, []byte(fmt.Sprintf("k%d%d", unit, i)), []byte("v"))
+					}
+					db.mu.Lock()
+					if err := db.rotateMemtableLocked(false); err != nil {
+						db.mu.Unlock()
+						t.Fatalf("rotate memtable %d: %v", unit, err)
+					}
+					db.mu.Unlock()
+				}
+			} else {
+				for i := 0; i < 4; i++ {
+					setMutable(db, []byte(fmt.Sprintf("k%d", i)), []byte("v"))
+				}
+				db.mu.Lock()
+				if err := db.rotateMemtableLocked(false); err != nil {
+					db.mu.Unlock()
+					t.Fatalf("rotate memtable: %v", err)
+				}
+				db.mu.Unlock()
+			}
+
+			if !db.flushLaneOnce(true, 0) {
+				t.Fatal("flushLaneOnce returned false")
+			}
+
+			stats := db.Stats()
+			if got := requireStatUint64(t, stats, "treedb.cache.flush_span_run.backend_chunks_total"); got != 2 {
+				t.Fatalf("backend chunks=%d want 2", got)
+			}
+			backend.mu.RLock()
+			writeCalls := backend.writeCalls
+			writeSyncs := backend.writeSyncs
+			backend.mu.RUnlock()
+			if writeCalls != 2 || writeSyncs != 1 {
+				t.Fatalf("backend writeCalls/writeSyncs=%d/%d want 2/1", writeCalls, writeSyncs)
+			}
+		})
+	}
+}
+
+func TestFlushApplyStatsHelpersExposeForegroundAssist(t *testing.T) {
+	db := &DB{}
+	db.observeForegroundFlushAssist(2*time.Millisecond, 3)
+	stats := map[string]string{}
+	db.appendCacheFlushApplyStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.foreground_assist_calls_total"); got != 1 {
+		t.Fatalf("foreground assist calls=%d want 1", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.foreground_assist_flushes_total"); got != 3 {
+		t.Fatalf("foreground assist flushes=%d want 3", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.foreground_assist_wait_ns_total"); got == 0 {
+		t.Fatalf("foreground assist wait ns=%d want >0", got)
+	}
+}

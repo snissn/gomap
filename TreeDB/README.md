@@ -350,6 +350,7 @@ after the collection WAL gate, not current behavior.
 - Cached-mode auto checkpointing: `BackgroundCheckpointInterval`, `BackgroundCheckpointIdleDuration`
 - Background pruning: `PruneInterval`, `PruneMaxPages`, `PruneMaxDuration`
 - Optional flush build parallelism: `FlushBuildConcurrency`
+- Experimental/default-off flush apply workers: `FlushApplyConcurrency`
 - Optional piggyback compaction toggle: `DisablePiggybackCompaction`
 - Value-log retention guardrails: `ValueLog.MaxRetainedBytes`, `ValueLog.MaxRetainedBytesHard`
 - Value-log compression mode: `ValueLog.Compression` (`off|block|dict|auto`) and `ValueLog.BlockCodec` (`snappy|lz4|zstd`)

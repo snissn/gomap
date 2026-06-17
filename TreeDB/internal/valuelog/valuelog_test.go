@@ -1562,6 +1562,68 @@ func TestFramePreparer_PrepareFrameInto_ReusesBuffer(t *testing.T) {
 	}
 }
 
+func TestFramePreparer_ResetForReuseRestoresDefaultsAndKeepsBoundedScratch(t *testing.T) {
+	records := []Record{
+		{RID: 1, Value: bytes.Repeat([]byte("alpha-001|"), 256)},
+		{RID: 2, Value: bytes.Repeat([]byte("bravo-002|"), 256)},
+	}
+	prep := NewFramePreparer()
+	prep.SetBlockCompression(BlockCodecLZ4, true)
+	prep.SetKeepPolicy(1e9, 0, 1)
+	if _, stats, err := prep.PrepareFrameInto(nil, 0, nil, records); err != nil {
+		t.Fatalf("PrepareFrameInto block: %v", err)
+	} else if !stats.Attempted {
+		t.Fatalf("expected block compression attempt")
+	}
+	rawCap := cap(prep.rawScratch)
+	blockCap := cap(prep.blockScratch)
+	if blockCap == 0 {
+		t.Fatalf("expected block scratch allocation, rawCap=%d blockCap=%d", rawCap, blockCap)
+	}
+	prep.skipDictID = 99
+	prep.noBenefit = 7
+	prep.skipRemain = 13
+	prep.encodeSampleStride = 5
+	prep.encodeSampleCount = 11
+
+	prep.ResetForReuse()
+	if cap(prep.rawScratch) != rawCap || cap(prep.blockScratch) != blockCap {
+		t.Fatalf("scratch caps after reset raw=%d/%d block=%d/%d", cap(prep.rawScratch), rawCap, cap(prep.blockScratch), blockCap)
+	}
+	if prep.blockCodec != BlockCodecSnappy || prep.blockCompression || prep.dictFrameEncodeLevel != zstd.SpeedFastest || prep.keepSafetyMargin != DefaultKeepSafetyMargin {
+		t.Fatalf("defaults not restored: codec=%v block=%v level=%v margin=%v", prep.blockCodec, prep.blockCompression, prep.dictFrameEncodeLevel, prep.keepSafetyMargin)
+	}
+	if prep.skipDictID != 0 || prep.noBenefit != 0 || prep.skipRemain != 0 || prep.encodeSampleStride != 0 || prep.encodeSampleCount != 0 {
+		t.Fatalf("hints/sampling not reset: skipDictID=%d noBenefit=%d skipRemain=%d stride=%d count=%d", prep.skipDictID, prep.noBenefit, prep.skipRemain, prep.encodeSampleStride, prep.encodeSampleCount)
+	}
+}
+
+func TestFramePreparer_TrimScratchForReuseKeepsPolicyAndBoundsBuffers(t *testing.T) {
+	prep := NewFramePreparer()
+	prep.SetKeepPolicy(11, 13, 0.25)
+	prep.SetBlockCompression(BlockCodecLZ4, true)
+	prep.rawScratch = make([]byte, framePreparerScratchKeepCap+1)
+	prep.encScratch = make([]byte, 0, framePreparerScratchKeepCap+1)
+	prep.blockScratch = make([]byte, 0, framePreparerScratchKeepCap)
+	prep.encLimiter.buf = []byte("retained")
+	prep.TrimScratchForReuse()
+	if prep.rawScratch != nil || prep.encScratch != nil {
+		t.Fatalf("oversized scratch retained: raw=%d enc=%d", cap(prep.rawScratch), cap(prep.encScratch))
+	}
+	if cap(prep.blockScratch) != framePreparerScratchKeepCap || len(prep.blockScratch) != 0 {
+		t.Fatalf("bounded block scratch not retained/reset: len=%d cap=%d", len(prep.blockScratch), cap(prep.blockScratch))
+	}
+	if prep.encLimiter.buf != nil || prep.encLimiter.limit != 0 {
+		t.Fatalf("enc limiter retained state: %+v", prep.encLimiter)
+	}
+	if prep.keepIoNsPerStoredByte != 11 || prep.keepEncodeNsPerRawByte != 13 || prep.keepSafetyMargin != 0.25 {
+		t.Fatalf("trim reset keep policy: got io=%v encode=%v safety=%v", prep.keepIoNsPerStoredByte, prep.keepEncodeNsPerRawByte, prep.keepSafetyMargin)
+	}
+	if prep.blockCodec != BlockCodecLZ4 || !prep.blockCompression {
+		t.Fatalf("trim reset block compression state")
+	}
+}
+
 func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
 	records := []Record{
 		{RID: 1, Value: bytes.Repeat([]byte("alpha-001|"), 32)},

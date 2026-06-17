@@ -37,6 +37,10 @@ type Metrics struct {
 	ZipperLeafLogRecordHintBytesRead    int
 	ZipperLeafMerges                    int
 	ZipperInternalMerges                int
+	ZipperInternalParallelMerges        int
+	ZipperInternalParallelChildren      int
+	ZipperInternalParallelWorkers       int
+	ZipperInternalParallelOps           int
 	ZipperLeafPagesWritten              int
 	ZipperPagerLeafPagesWritten         int
 	ZipperLeafLogPagesWritten           int
@@ -51,6 +55,8 @@ type Metrics struct {
 	ZipperInternalLeafLogRefs           int
 	ZipperInternalLeafLogRefCopies      int
 	ZipperRootSplitLevels               int
+	ZipperApplyWallNs                   int64
+	ZipperRootReduceNs                  int64
 
 	// SlabWriteBytesByFile tracks bytes appended to each slab file during this
 	// commit (keyed by FileID).

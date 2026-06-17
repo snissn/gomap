@@ -108,6 +108,8 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-memtable-mode` TreeDB memtable implementation override
 - `-treedb-index-optimizations` TreeDB profile-style index optimization bundle
 - `-treedb-index-outer-leaves-in-vlog` TreeDB: store outer leaves in `leaf_vlog`
+- `-treedb-leaf-page-read-cache-entries` TreeDB: outer-leaf read cache entries for leaf pages stored in the value log (`0`=default/env, `<0`=disable)
+- `-treedb-leaf-page-read-cache-write-admission` TreeDB: write-side outer-leaf read-cache admission policy (`immediate|adaptive`; default preserves immediate admission)
 - `-treedb-prefer-append-alloc` TreeDB: prefer append allocation over freelist reuse
 - `-treedb-force-value-pointers` TreeDB: force all values into the value log
 - `-treedb-value-log-threshold` TreeDB: inline-vs-pointer threshold
@@ -124,6 +126,10 @@ These are mainly for experiments and should usually be left at engine defaults:
 - `-treedb-vlog-dict-*`
 - `-treedb-vlog-rewrite-*`
 - `-treedb-flush-build-*`
+- `-treedb-flush-apply-concurrency` and `-treedb-flush-apply-min-*` (opt-in/default-off TreeDB COW apply workers)
+- `-treedb-flush-apply-span-native` (M10 opt-in/default-off span-native apply/reducer for eligible exact point spans)
+- `-treedb-flush-span-run-target-planning` (diagnostic/default-off read-only target-leaf planning for canonical flush runs)
+- `-treedb-flush-backlog-coalescing*` (M11 opt-in/default-off bounded adaptive backlog coalescing controller; byte/op budgets are soft pre-next-memtable limits)
 - `-treedb-max-queued-memtables`, `-treedb-slowdown-backlog-seconds`, `-treedb-stop-backlog-seconds`
 
 Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
@@ -178,7 +184,7 @@ explicitly deferred.
 - `-allocsprofilerate` allocation sampling rate in bytes for `runtime.MemProfileRate` (default `524288`)
 - `-checkpoint-cpuprofile` write per-checkpoint CPU profiles to `<prefix>_checkpoint_<test>_<db>.pprof`
 - `-checkpoint-cpuprofile-tests` restrict checkpoint CPU profiling to a CSV list of tests
-- `-profile-dir` write all profile outputs into one directory (auto-sets defaults for `-cpuprofile`, `-allocsprofile`, `-checkpoint-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace`; explicit flags still win). Also emits `benchprof_results.json` and `benchprof_results.md`, then automatically runs `benchprof` in-process. Requires `-path-label native-fastpath` or `-path-label oracle`. For TreeDB, the markdown includes a value-log codec summary with actual auto/write-mode/outer-leaf codec selection and block frame-K counters.
+- `-profile-dir` write all profile outputs into one directory (auto-sets defaults for `-cpuprofile`, `-allocsprofile`, `-checkpoint-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace`; explicit flags still win). Also emits `benchprof_results.json` and `benchprof_results.md`, then automatically runs `benchprof` in-process. Profile artifacts default to `-path-label native-fastpath`; pass `-path-label oracle` for explicit oracle/comparator captures or `-path-label m8-m14-10mm-gate` for the #2768+ mandatory span-run gate shape. For TreeDB, the markdown includes selected flush/apply stage counters (`treedb.cache.flush_apply.*`, `treedb.flush_apply.*`), M8 span-run proof counters (`treedb.cache.flush_span_run.*`, `treedb.flush_apply.span_run.*`, `treedb.flush_apply.span_native.*`), checkpoint split counters, and a value-log codec summary with actual auto/write-mode/outer-leaf codec selection and block frame-K counters.
 - `-treedb-cache-stats-before-reads` print select `treedb.cache.*` stats before read/scan tests (treedb only)
 - `-blockprofile`, `-mutexprofile` write global profiling artifacts to files and also emit per-test contention delta profiles in the same directory (`block_<test>_<db>.pprof`, `mutex_<test>_<db>.pprof`) when the computed delta is non-empty
 - `-trace` write runtime execution trace to file
