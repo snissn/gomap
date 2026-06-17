@@ -29,6 +29,7 @@ func TestSpanNativeCheckpointDrainFallbackReopenRewriteAndGC(t *testing.T) {
 	opts := treedb.Options{
 		Dir:                   dir,
 		FlushThreshold:        64 << 20,
+		FlushAdmissionPolicy:  treedb.FlushAdmissionPolicyExplicit,
 		FlushApplyConcurrency: 4,
 		FlushApplyMinEntries:  1,
 		FlushApplyMinSpans:    1,
