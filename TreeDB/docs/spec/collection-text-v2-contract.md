@@ -1,7 +1,7 @@
 # Collection Text Index v2 Contract (M0 / #2623)
 
-Status: M0 design gate plus M1-M6 landed behavior for #2622 and the bounded
-#2733 phrase/proximity/analyzer extension. This document fixes production
+Status: M0 design gate plus M1-M6 landed behavior for `#2622` and the bounded
+`#2733` phrase/proximity/analyzer extension. This document fixes production
 contract, rollout vocabulary, storage boundaries, counters, and benchmark gates
 that later text-v2 implementation PRs must satisfy before they can claim
 readiness.

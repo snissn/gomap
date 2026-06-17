@@ -272,7 +272,7 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 		return response, errors.New("collections: text search MaxPostingsScanned must be non-negative")
 	}
 	if err := validateTextSearchPhraseOptions(opts); err != nil {
-		return response, err
+		return textSearchFailClosed(response, textSearchFailClosedUnsupported, err)
 	}
 	if _, err := normalizeTextSearchOperator(opts.Operator); err != nil {
 		return response, err
