@@ -214,7 +214,7 @@ func (b *textV2RewriteBudget) reservePostingBlock() error {
 	if b == nil || !b.enabled {
 		return nil
 	}
-	if b.maxPostingBlocks > 0 && b.postingBlocks+1 > b.maxPostingBlocks {
+	if b.maxPostingBlocks > 0 && b.postingBlocks >= b.maxPostingBlocks {
 		b.exhaust(TextIndexRewriteBudgetReasonMaxPostingBlocks)
 		return errTextV2RewriteBudgetExhausted
 	}
@@ -229,7 +229,7 @@ func (b *textV2RewriteBudget) reservePostings(count uint64) error {
 	if b == nil || !b.enabled {
 		return nil
 	}
-	if b.maxPostings > 0 && b.postings+count > b.maxPostings {
+	if b.maxPostings > 0 && (b.postings > b.maxPostings || b.maxPostings-b.postings < count) {
 		b.exhaust(TextIndexRewriteBudgetReasonMaxPostings)
 		return errTextV2RewriteBudgetExhausted
 	}
@@ -323,10 +323,11 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	budget := newTextV2RewriteBudget(ctx, opts)
 	var beforeStats TextIndexStorageStats
 	if run.NeedStorageStats || run.Decide != nil {
-		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, budget)
+		inspectBudget := newTextV2RewriteBudget(ctx, opts)
+		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, inspectBudget)
 		if err != nil {
 			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
-				return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason), beforeStats, budget.reason, nil
+				return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, inspectBudget.reason), beforeStats, inspectBudget.reason, nil
 			}
 			return empty, emptyStorage, "", err
 		}

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"math"
 	"time"
 )
@@ -151,6 +152,13 @@ type TextIndexMaintenanceManagerStats struct {
 	Collections             []TextIndexMaintenanceStats `json:"collections,omitempty"`
 }
 
+func validateTextIndexMaintenanceOptions(opts TextIndexMaintenanceOptions) error {
+	if opts.MaxIndexes < 0 {
+		return errors.New("collections: text index maintenance MaxIndexes must be non-negative")
+	}
+	return nil
+}
+
 // MaintainTextIndexes runs the bounded text-v2 rewrite policy across all
 // collections known to the manager. It performs logical rewrites first and, when
 // requested, runs one manager-level CompactStorage pass afterward.
@@ -161,6 +169,9 @@ func (m *CollectionManager) MaintainTextIndexes(ctx context.Context, opts TextIn
 	}
 	if m.db == nil {
 		return stats, errCollectionDBNil
+	}
+	if err := validateTextIndexMaintenanceOptions(opts); err != nil {
+		return stats, err
 	}
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB
 	metas, err := m.ListCollections()
@@ -220,6 +231,9 @@ func (c *Collection) MaintainTextIndex(ctx context.Context, indexName string, op
 	if c == nil {
 		return stats, errCollectionNil
 	}
+	if err := validateTextIndexMaintenanceOptions(opts); err != nil {
+		return stats, err
+	}
 	stats.CollectionName = c.collectionName()
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB
 	idx, err := c.maintainTextIndex(ctx, indexName, opts)
@@ -246,6 +260,9 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 	var stats TextIndexMaintenanceStats
 	if c == nil {
 		return stats, errCollectionNil
+	}
+	if err := validateTextIndexMaintenanceOptions(opts); err != nil {
+		return stats, err
 	}
 	stats.CollectionName = c.collectionName()
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB
