@@ -48,6 +48,25 @@ func TestDecodeScratchPool_ReusesLargeBuffer(t *testing.T) {
 	}
 }
 
+func TestFileDecodeScratch_RetainsParallelSmallBuffers(t *testing.T) {
+	f := &File{}
+	first := make([]byte, 0, 32<<10)
+	second := make([]byte, 0, 64<<10)
+	f.releaseDecodeScratch(first)
+	f.releaseDecodeScratch(second)
+
+	gotA := f.takeDecodeScratch(64 << 10)
+	if cap(gotA) < 64<<10 {
+		t.Fatalf("first take cap=%d want >=64KiB", cap(gotA))
+	}
+	gotB := f.takeDecodeScratch(32 << 10)
+	if cap(gotB) < 32<<10 {
+		t.Fatalf("second take cap=%d want >=32KiB", cap(gotB))
+	}
+	f.releaseDecodeScratch(gotA)
+	f.releaseDecodeScratch(gotB)
+}
+
 func TestFileDecodeScratch_ReusesLargeBuffer(t *testing.T) {
 	minCap := maxDecodeScratchKeep + (64 << 10) // 320KiB
 	if minCap > maxLargeDecodeScratchKeep {

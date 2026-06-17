@@ -356,6 +356,13 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 	if err := validateCollectionStorageExecutionPath(opts.ProfileDir, opts.ExecutionPath); err != nil {
 		return "", err
 	}
+	executionPath := strings.TrimSpace(opts.ExecutionPath)
+	if strings.TrimSpace(opts.ProfileDir) != "" {
+		executionPath, err = normalizeBenchprofExecutionPath(executionPath)
+		if err != nil {
+			return "", err
+		}
+	}
 	modes, err := collectionStorageEffectiveModes(opts.ModesArg)
 	if err != nil {
 		return "", err
@@ -610,7 +617,7 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 		CheckpointReopen:         checkpointReopen,
 		ColumnAssetReadIntegrity: string(assetReadIntegrity),
 		BenchmarkOnlyRelaxed:     collectionStorageAssetReadIntegrityBenchmarkRelaxed(assetReadIntegrity),
-		PathLabel:                strings.TrimSpace(opts.ExecutionPath),
+		PathLabel:                executionPath,
 		Semantics:                collectionStorageReportSemantics(rows, queryRange, includeFinalFetch, vectorFinalFetchShape, checkpointReopen, assetReadIntegrity),
 		ModeSemantics:            modeSemantics,
 		Stages:                   stages,
@@ -628,7 +635,7 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 	if strings.TrimSpace(opts.ProfileDir) != "" {
 		report.Artifacts = collectionStorageArtifactPathsForProfileDir(opts.ProfileDir, baseCfg, opts.RunBenchprof)
 		md = renderCollectionStorageSuiteMarkdown(report)
-		if err := writeCollectionStorageSuiteArtifacts(opts.ProfileDir, opts.ExecutionPath, report, md, run); err != nil {
+		if err := writeCollectionStorageSuiteArtifacts(opts.ProfileDir, executionPath, report, md, run); err != nil {
 			return "", err
 		}
 		if opts.RunBenchprof {

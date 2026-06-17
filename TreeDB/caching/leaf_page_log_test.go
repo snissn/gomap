@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -25,6 +28,68 @@ func TestCachingLeafPageLog_AppendLeafPageReturnsAppendError(t *testing.T) {
 	_, err := leafLog.AppendLeafPage([]byte("leaf"))
 	if !errors.Is(err, errWALClosed) {
 		t.Fatalf("AppendLeafPage error=%v want %v", err, errWALClosed)
+	}
+}
+
+func TestCachingLeafPageLog_CloseWaitsForInProgressAppend(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		IndexOuterLeavesInValueLog: true,
+		FlushApplyConcurrency:      2,
+		RelaxedSync:                true,
+		AllowUnsafe:                true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cache: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var fired atomic.Bool
+	db.testBeforeVlogUnlock = func(laneID int) {
+		if laneID != leafLogLaneID || !fired.CompareAndSwap(false, true) {
+			return
+		}
+		close(entered)
+		<-release
+	}
+
+	appendDone := make(chan error, 1)
+	go func() {
+		leafLog := newCachingLeafPageLog(db, &db.leafLog)
+		_, err := leafLog.AppendLeafPage(bytes.Repeat([]byte("x"), page.PageSize))
+		appendDone <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		_ = db.Close()
+		t.Fatal("append did not reach pre-unlock hook")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- db.Close() }()
+	select {
+	case err := <-closeDone:
+		close(release)
+		t.Fatalf("Close returned before append left leaf-log mutex: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-appendDone; err != nil {
+		t.Fatalf("append during close: %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close after append release: %v", err)
 	}
 }
 

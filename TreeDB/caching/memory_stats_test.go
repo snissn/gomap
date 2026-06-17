@@ -113,6 +113,10 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hits_total",
 		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips",
 		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_attempts",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_stores",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_skips",
+		"treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips",
 		"treedb.process.batch.set.calls_total",
 		"treedb.process.batch.set.bytes_total",
 		"treedb.process.batch.set_view.calls_total",
@@ -134,6 +138,9 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		if got := mustStatInt64(t, stats, key); got < 0 {
 			t.Fatalf("%s=%d want >=0", key, got)
 		}
+	}
+	if got := stats["treedb.process.read_path.outer_leaf.cache.write_admission_policy"]; got == "" {
+		t.Fatalf("missing non-empty write admission policy stat")
 	}
 
 	if got := mustStatInt64(t, stats, "treedb.process.memory.queue_backlog_bytes"); got != mustStatInt64(t, stats, "treedb.cache.queue_backlog_bytes") {

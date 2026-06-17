@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -71,6 +72,202 @@ func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultReportsEffective(t *t
 	}
 	if got := rep.formatText(""); !strings.Contains(got, "outer_leaf_read_cache_entries=default/env (effective=32768)") {
 		t.Fatalf("resolved options missing effective default cache entries: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmission(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbLeafPageReadCacheWriteAdmission = "adaptive"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions leaf page write admission: %v", err)
+	}
+	if got := opts.LeafPageReadCacheWriteAdmission; got != treedb.LeafPageReadCacheWriteAdmissionAdaptive {
+		t.Fatalf("LeafPageReadCacheWriteAdmission=%v want adaptive", got)
+	}
+	text := rep.formatText("")
+	if !strings.Contains(text, "outer_leaf_read_cache_write_admission=adaptive") {
+		t.Fatalf("resolved options missing adaptive write admission: %q", text)
+	}
+}
+
+func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmissionRejectsInvalid(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbLeafPageReadCacheWriteAdmission = "bad-policy"
+
+	_, _, err := buildTreeDBOptions("")
+	if err == nil {
+		t.Fatal("buildTreeDBOptions unexpectedly accepted invalid write admission policy")
+	}
+	if !strings.Contains(err.Error(), "leaf page read cache write admission") {
+		t.Fatalf("buildTreeDBOptions error=%q, want write admission context", err)
+	}
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC4Adaptive(t *testing.T) {
+	oldGOMAXPROCS := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions default auto: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency != 4 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("default auto candidate not selected: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	if opts.FlushApplyMinEntries != 1 || opts.FlushApplyMinSpans != 1 || opts.FlushApplyMinBytes != 1 {
+		t.Fatalf("default auto min gates not selected: entries=%d spans=%d bytes=%d", opts.FlushApplyMinEntries, opts.FlushApplyMinSpans, opts.FlushApplyMinBytes)
+	}
+	if opts.LeafPageReadCacheWriteAdmission != treedb.LeafPageReadCacheWriteAdmissionAdaptive {
+		t.Fatalf("default auto cache admission=%s want adaptive", opts.LeafPageReadCacheWriteAdmission)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=auto",
+		"flush_admission_admitted=true",
+		"flush_admission_reason=auto_admitted_c4_adaptive",
+		"flush_admission_effective_concurrency=4",
+		"flush_apply_concurrency=4",
+		"flush_apply_min_entries_configured=1",
+		"flush_apply_min_spans_configured=1",
+		"flush_apply_min_bytes_configured=1",
+		"flush_apply_span_native=true",
+		"flush_backlog_coalescing=true",
+		"outer_leaf_read_cache_write_admission=adaptive",
+		"  - flush_admission_policy=auto admitted: auto_admitted_c4_adaptive",
+	} {
+		if !treeDBReportHasLine(text, want) {
+			t.Fatalf("resolved options missing line %q: %q", want, text)
+		}
+	}
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionExplicitPreservesOptInFlags(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "explicit"
+	*treedbFlushApplyConcurrency = 4
+	*treedbFlushApplySpanNative = true
+	*treedbFlushBacklogCoalescing = true
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions flush admission explicit: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyExplicit || opts.FlushApplyConcurrency != 4 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("explicit opt-in not preserved: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=explicit",
+		"flush_admission_admitted=true",
+		"flush_admission_reason=explicit_opt_in",
+		"flush_apply_span_native=true",
+		"flush_backlog_coalescing=true",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("resolved options missing %q: %q", want, text)
+		}
+	}
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionOffForcesOff(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "off"
+	*treedbFlushApplyConcurrency = 4
+	*treedbFlushApplySpanNative = true
+	*treedbFlushBacklogCoalescing = true
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions flush admission off: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyOff || opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
+		t.Fatalf("off policy not forced off: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=off",
+		"flush_admission_admitted=false",
+		"flush_admission_reason=policy_off",
+		"flush_apply_concurrency=0",
+		"flush_apply_span_native=false",
+		"flush_backlog_coalescing=false",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("resolved options missing %q: %q", want, text)
+		}
+	}
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionAutoDeclinesLowConcurrency(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "auto"
+	*treedbFlushApplyConcurrency = 1
+	*treedbFlushApplySpanNative = true
+	*treedbFlushBacklogCoalescing = true
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions flush admission auto: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
+		t.Fatalf("auto decline not forced off: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=auto",
+		"flush_admission_admitted=false",
+		"flush_admission_reason=low_concurrency",
+		"  - flush_admission_policy=auto declined: low_concurrency",
+	} {
+		if !treeDBReportHasLine(text, want) {
+			t.Fatalf("resolved options missing line %q: %q", want, text)
+		}
+	}
+}
+
+func treeDBReportHasLine(text, want string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionRejectsInvalidPolicy(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "bad-policy"
+
+	_, _, err := buildTreeDBOptions("")
+	if err == nil {
+		t.Fatal("buildTreeDBOptions unexpectedly accepted invalid flush admission policy")
+	}
+	if !strings.Contains(err.Error(), "flush admission policy") {
+		t.Fatalf("buildTreeDBOptions error=%q, want flush admission context", err)
 	}
 }
 
@@ -222,6 +419,7 @@ type savedTreeDBFlagState struct {
 	packedValuePtr          bool
 	internalBaseDelta       bool
 	leafPageReadCache       int
+	leafPageWriteAdmission  string
 	chunkSize               int64
 	vlogCompression         string
 	vlogBlockCodec          string
@@ -245,6 +443,10 @@ type savedTreeDBFlagState struct {
 	allowUnsafe             bool
 	maintenanceMode         string
 	flushThreshold          int64
+	flushAdmissionPolicy    string
+	flushApplyConcurrency   int
+	flushApplySpanNative    bool
+	flushBacklogCoalescing  bool
 	explicitFlags           map[string]bool
 }
 
@@ -263,6 +465,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		packedValuePtr:          *treedbIndexPackedValuePtr,
 		internalBaseDelta:       *treedbIndexInternalBaseDelta,
 		leafPageReadCache:       *treedbLeafPageReadCacheEntries,
+		leafPageWriteAdmission:  *treedbLeafPageReadCacheWriteAdmission,
 		chunkSize:               *treedbChunkSize,
 		vlogCompression:         *treedbVlogCompression,
 		vlogBlockCodec:          *treedbVlogBlockCodec,
@@ -286,6 +489,10 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		allowUnsafe:             *treedbAllowUnsafe,
 		maintenanceMode:         *treedbMaintenanceMode,
 		flushThreshold:          *treedbFlushThreshold,
+		flushAdmissionPolicy:    *treedbFlushAdmissionPolicy,
+		flushApplyConcurrency:   *treedbFlushApplyConcurrency,
+		flushApplySpanNative:    *treedbFlushApplySpanNative,
+		flushBacklogCoalescing:  *treedbFlushBacklogCoalescing,
 		explicitFlags:           copyMap,
 	}
 }
@@ -300,6 +507,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbLeafPageReadCacheEntries = s.leafPageReadCache
+	*treedbLeafPageReadCacheWriteAdmission = s.leafPageWriteAdmission
 	*treedbChunkSize = s.chunkSize
 	*treedbVlogCompression = s.vlogCompression
 	*treedbVlogBlockCodec = s.vlogBlockCodec
@@ -323,6 +531,10 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbAllowUnsafe = s.allowUnsafe
 	*treedbMaintenanceMode = s.maintenanceMode
 	*treedbFlushThreshold = s.flushThreshold
+	*treedbFlushAdmissionPolicy = s.flushAdmissionPolicy
+	*treedbFlushApplyConcurrency = s.flushApplyConcurrency
+	*treedbFlushApplySpanNative = s.flushApplySpanNative
+	*treedbFlushBacklogCoalescing = s.flushBacklogCoalescing
 	explicitFlags = s.explicitFlags
 }
 
@@ -336,6 +548,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexColumnarLeaves = false
 	*treedbIndexPackedValuePtr = false
 	*treedbIndexInternalBaseDelta = false
+	*treedbLeafPageReadCacheWriteAdmission = "immediate"
 	*treedbChunkSize = defaultTreeDBChunkSizeBytes
 	*treedbVlogCompression = "default"
 	*treedbVlogBlockCodec = "snappy"
@@ -359,6 +572,10 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbAllowUnsafe = false
 	*treedbMaintenanceMode = "bench"
 	*treedbFlushThreshold = 64 * 1024 * 1024
+	*treedbFlushAdmissionPolicy = "auto"
+	*treedbFlushApplyConcurrency = 0
+	*treedbFlushApplySpanNative = false
+	*treedbFlushBacklogCoalescing = false
 	explicitFlags = map[string]bool{}
 }
 

@@ -69,9 +69,10 @@ type File struct {
 	cacheLen   int
 	cacheOffs  [MaxFrameK + 1]uint32
 	cacheRaw   []byte
-	// decodeScratch retains one reusable decode buffer for compressed grouped
-	// reads, reducing sync.Pool churn across adjacent frame misses.
-	decodeScratch []byte
+	// decodeScratch retains reusable decode buffers for compressed grouped reads,
+	// reducing sync.Pool churn across adjacent and parallel frame misses.
+	decodeScratch      []byte
+	decodeScratchSpare [][]byte
 	// cacheRawPooled tracks whether cacheRaw currently owns a pooled decode
 	// scratch buffer that must be returned on eviction.
 	cacheRawPooled bool
@@ -213,6 +214,8 @@ func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 	f.cacheRawPooled = pooled
 }
 
+const fileDecodeScratchSpareKeep = 8
+
 func (f *File) stashDecodeScratch(buf []byte) {
 	if cap(buf) == 0 {
 		return
@@ -223,7 +226,13 @@ func (f *File) stashDecodeScratch(buf []byte) {
 	}
 	f.scratchMu.Lock()
 	defer f.scratchMu.Unlock()
-	buf = buf[:0]
+	f.stashDecodeScratchLocked(buf[:0])
+}
+
+func (f *File) stashDecodeScratchLocked(buf []byte) {
+	if cap(buf) == 0 {
+		return
+	}
 	if cap(f.decodeScratch) == 0 {
 		f.decodeScratch = buf
 		return
@@ -231,7 +240,10 @@ func (f *File) stashDecodeScratch(buf []byte) {
 	if cap(buf) > cap(f.decodeScratch) {
 		old := f.decodeScratch
 		f.decodeScratch = buf
-		putDecodeScratch(old)
+		buf = old
+	}
+	if len(f.decodeScratchSpare) < fileDecodeScratchSpareKeep {
+		f.decodeScratchSpare = append(f.decodeScratchSpare, buf[:0])
 		return
 	}
 	putDecodeScratch(buf)
@@ -242,15 +254,25 @@ func (f *File) takeDecodeScratch(minCap int) []byte {
 		return nil
 	}
 	f.scratchMu.Lock()
-	scratch := f.decodeScratch
-	f.decodeScratch = nil
-	f.scratchMu.Unlock()
-	if cap(scratch) >= minCap {
+	if cap(f.decodeScratch) >= minCap {
+		scratch := f.decodeScratch
+		f.decodeScratch = nil
+		f.scratchMu.Unlock()
 		return scratch[:0]
 	}
-	if scratch != nil {
-		putDecodeScratch(scratch)
+	for i := len(f.decodeScratchSpare) - 1; i >= 0; i-- {
+		if cap(f.decodeScratchSpare[i]) < minCap {
+			continue
+		}
+		scratch := f.decodeScratchSpare[i]
+		last := len(f.decodeScratchSpare) - 1
+		f.decodeScratchSpare[i] = f.decodeScratchSpare[last]
+		f.decodeScratchSpare[last] = nil
+		f.decodeScratchSpare = f.decodeScratchSpare[:last]
+		f.scratchMu.Unlock()
+		return scratch[:0]
 	}
+	f.scratchMu.Unlock()
 	return getDecodeScratch(minCap)
 }
 
@@ -264,20 +286,8 @@ func (f *File) releaseDecodeScratch(buf []byte) {
 	}
 	buf = buf[:0]
 	f.scratchMu.Lock()
-	if cap(f.decodeScratch) == 0 {
-		f.decodeScratch = buf
-		f.scratchMu.Unlock()
-		return
-	}
-	if cap(buf) > cap(f.decodeScratch) {
-		old := f.decodeScratch
-		f.decodeScratch = buf
-		f.scratchMu.Unlock()
-		putDecodeScratch(old)
-		return
-	}
+	f.stashDecodeScratchLocked(buf)
 	f.scratchMu.Unlock()
-	putDecodeScratch(buf)
 }
 
 func (f *File) resetGroupedFrameCacheLocked() {
@@ -449,6 +459,8 @@ func (f *File) Close() error {
 	f.scratchMu.Lock()
 	scratch = f.decodeScratch
 	f.decodeScratch = nil
+	scratchSpare := f.decodeScratchSpare
+	f.decodeScratchSpare = nil
 	f.scratchMu.Unlock()
 	f.groupedMu.Lock()
 	cache := f.groupedFrameCache.Load()
@@ -459,6 +471,9 @@ func (f *File) Close() error {
 	}
 	if scratch != nil {
 		putDecodeScratch(scratch)
+	}
+	for _, buf := range scratchSpare {
+		putDecodeScratch(buf)
 	}
 
 	f.remapMu.Lock()
