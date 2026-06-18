@@ -306,8 +306,12 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return empty, emptyStorage, "", err
 	}
+	runCollectionSchemaMutationBeforeLockHookForTest()
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
+	if err := ctx.Err(); err != nil {
+		return empty, emptyStorage, "", err
+	}
 	if !run.DryRun {
 		if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
 			return empty, emptyStorage, "", err
