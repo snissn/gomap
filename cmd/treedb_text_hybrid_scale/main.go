@@ -442,7 +442,14 @@ func run(cfg config) (report, error) {
 	if cfg.runReopen {
 		reopen, reopenedFixture, err := runReopenProbe(fixture, cfg)
 		if err != nil {
-			return report{}, err
+			recordReopenProbeFailure(&rep, err)
+			if writeErr := writeReports(rep); writeErr != nil {
+				return rep, writeErr
+			}
+			if cfg.allowGuardrailFails {
+				return rep, nil
+			}
+			return rep, err
 		}
 		fixture = reopenedFixture
 		rep.Reopen = &reopen
@@ -494,6 +501,15 @@ func run(cfg config) (report, error) {
 		return rep, err
 	}
 	return rep, nil
+}
+
+func recordReopenProbeFailure(rep *report, err error) {
+	if rep == nil || err == nil {
+		return
+	}
+	rep.Guardrails = append(rep.Guardrails, guardrailResult{Name: "reopen_probe", OK: false, Failure: err.Error()})
+	rep.Caveats = append(rep.Caveats, "Reopen probe failed; later probes were skipped after writing the partial report.")
+	rep.Bottlenecks = rankBottlenecks(*rep)
 }
 
 func prepareEmptyDir(dir string) error {
