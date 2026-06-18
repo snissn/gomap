@@ -887,6 +887,13 @@ func TestCommandWALOpenFailsClosedOnNonActivePartialFirstFrameTail(t *testing.T)
 	}
 }
 
+func TestCommandWALCleanupCoveredSegmentsRejectsReadOnlyHandle(t *testing.T) {
+	db := &DB{commandWAL: true, readOnly: true}
+	if err := db.CleanupCommandWALCoveredSegments(false); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("CleanupCommandWALCoveredSegments read-only error=%v want ErrReadOnly", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)

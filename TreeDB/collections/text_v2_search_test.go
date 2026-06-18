@@ -465,7 +465,8 @@ func TestTextV2PhraseUnsupportedShapesFailClosed2733(t *testing.T) {
 		t.Fatalf("missing positions response=%+v err=%v want fail-closed unavailable without docs", missingPositions, err)
 	}
 
-	invalidPhrase, err := v2NoPositions.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "refund", Slop: textSearchMaxPhraseSlop + 1}, TopK: 1})
+	v2Positions := createTextSearchCollection2627(t, d, "docs_v2_positions", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)})
+	invalidPhrase, err := v2Positions.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "refund", Slop: textSearchMaxPhraseSlop + 1}, TopK: 1})
 	if !errors.Is(err, ErrTextIndexUnavailable) || invalidPhrase.Stats.FailClosed != 1 || invalidPhrase.Stats.FailClosedReason != textSearchFailClosedUnsupported || invalidPhrase.Stats.DocumentsFetched != 0 {
 		t.Fatalf("invalid phrase response=%+v err=%v want fail-closed unavailable without docs", invalidPhrase, err)
 	}
@@ -476,9 +477,14 @@ func TestTextV2PhraseUnsupportedShapesFailClosed2733(t *testing.T) {
 		t.Fatalf("v1 phrase response=%+v err=%v want fail-closed unavailable without docs", legacy, err)
 	}
 
-	v2Positions := createTextSearchCollection2627(t, d, "docs_v2_positions", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)})
-	tooManyTerms := "t00 t01 t02 t03 t04 t05 t06 t07 t08 t09 t10 t11 t12 t13 t14 t15 t16"
-	tooMany, err := v2Positions.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: tooManyTerms}, TopK: 1})
+	var tooManyTerms bytes.Buffer
+	for i := 0; i <= textSearchMaxPhraseTerms; i++ {
+		if i > 0 {
+			tooManyTerms.WriteByte(' ')
+		}
+		tooManyTerms.WriteString("term")
+	}
+	tooMany, err := v2Positions.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: tooManyTerms.String()}, TopK: 1})
 	if !errors.Is(err, ErrTextIndexUnavailable) || tooMany.Stats.FailClosed != 1 || tooMany.Stats.FailClosedReason != textSearchFailClosedUnsupported || tooMany.Stats.DocumentsFetched != 0 {
 		t.Fatalf("too many phrase terms response=%+v err=%v want fail-closed unavailable without docs", tooMany, err)
 	}
@@ -496,6 +502,18 @@ func TestTextV2PhraseUnsupportedShapesFailClosed2733(t *testing.T) {
 	}
 	if _, _, err := bad.CreateTextIndex(TextIndexDefinition{Name: "syn", Version: TextIndexVersionV2, AnalyzerOptions: &TextAnalyzerOptions{Synonyms: map[string][]string{"quick": {"fast"}}}, Fields: []TextIndexField{{Field: "body"}}}); !errors.Is(err, ErrTextIndexUnavailable) {
 		t.Fatalf("CreateTextIndex synonyms err=%v want ErrTextIndexUnavailable", err)
+	}
+}
+
+func TestTextV2PhrasePositionValidationBudgetFailsClosed2733(t *testing.T) {
+	starts := make([]uint32, textV2PhrasePositionMatchBudget+1)
+	for i := range starts {
+		starts[i] = uint32(i + 1)
+	}
+	budget := textV2PhrasePositionMatchBudget
+	matched, err := textV2OrderedPositionsMatchSlop([][]uint32{starts, []uint32{0}}, []int{0}, 0, &budget)
+	if matched || !errors.Is(err, ErrTextIndexUnavailable) {
+		t.Fatalf("matched=%v err=%v want bounded phrase-position failure", matched, err)
 	}
 }
 

@@ -31,6 +31,7 @@ const (
 	textSearchFailClosedDocumentFetch  = "document_fetch_unavailable"
 	textSearchFailClosedV2Unavailable  = "text_v2_search_unavailable"
 	textSearchFailClosedUnsupported    = "unsupported_text_query"
+	textSearchFailClosedPhrasePosition = "phrase_position_match_limit_exceeded"
 )
 
 const (

@@ -2,12 +2,17 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+// textV2PhrasePositionMatchBudget bounds recursive per-candidate phrase
+// position validation for high-frequency terms that do not form a span.
+const textV2PhrasePositionMatchBudget = 4096
 
 func executeTextV2PhraseSearchAtSnapshot(
 	c *Collection,
@@ -103,6 +108,13 @@ func executeTextV2PhraseSearchAtSnapshot(
 		response.Stats.TextPhraseCandidatesChecked++
 		matched, err := textV2CandidateMatchesPhraseAtSnapshot(snap, catalog, ctx, idx, candidate, uniqueTerms, phraseTermIndexes, phrase.gaps, positionScratch, slop, norm.Generation, &response.Stats)
 		if err != nil {
+			if errors.Is(err, ErrTextIndexUnavailable) {
+				reason := response.Stats.FailClosedReason
+				if reason == "" {
+					reason = textSearchFailClosedUnsupported
+				}
+				return textSearchFailClosed(response, reason, err)
+			}
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
 		if !matched {
@@ -185,7 +197,11 @@ func textV2CandidateMatchesPhraseAtSnapshot(
 		}
 		positions[i] = value
 	}
-	return textV2PhrasePositionValuesMatch(phraseTermIndexes, phraseGaps, positions, slop), nil
+	matched, err := textV2PhrasePositionValuesMatch(phraseTermIndexes, phraseGaps, positions, slop)
+	if err != nil && errors.Is(err, ErrTextIndexUnavailable) && stats != nil {
+		stats.FailClosedReason = textSearchFailClosedPhrasePosition
+	}
+	return matched, err
 }
 
 func readTextV2PhrasePositionValueAtSnapshot(
@@ -235,17 +251,18 @@ func textV2PhraseTermIndexes(phraseTerms, uniqueTerms []string) []int {
 	return indexes
 }
 
-func textV2PhrasePositionValuesMatch(phraseTermIndexes []int, phraseGaps []int, values []textV2PositionValue, slop int) bool {
+func textV2PhrasePositionValuesMatch(phraseTermIndexes []int, phraseGaps []int, values []textV2PositionValue, slop int) (bool, error) {
 	if len(phraseTermIndexes) == 0 || len(phraseGaps) != len(phraseTermIndexes)-1 || phraseTermIndexes[0] < 0 || phraseTermIndexes[0] >= len(values) {
-		return false
+		return false, nil
 	}
 	first := values[phraseTermIndexes[0]]
+	budget := textV2PhrasePositionMatchBudget
 	for _, field := range first.Fields {
 		var inline [textSearchMaxPhraseTerms][]uint32
 		lists := inline[:0]
 		for _, valueIdx := range phraseTermIndexes {
 			if valueIdx < 0 || valueIdx >= len(values) {
-				return false
+				return false, nil
 			}
 			positions, ok := textV2PositionFieldPositions(values[valueIdx], field.FieldIndex)
 			if !ok || len(positions) == 0 {
@@ -254,11 +271,14 @@ func textV2PhrasePositionValuesMatch(phraseTermIndexes []int, phraseGaps []int, 
 			}
 			lists = append(lists, positions)
 		}
-		if len(lists) == len(phraseTermIndexes) && textV2OrderedPositionsMatchSlop(lists, phraseGaps, slop) {
-			return true
+		if len(lists) == len(phraseTermIndexes) {
+			matched, err := textV2OrderedPositionsMatchSlop(lists, phraseGaps, slop, &budget)
+			if err != nil || matched {
+				return matched, err
+			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 func textV2PositionFieldPositions(value textV2PositionValue, fieldIndex uint32) ([]uint32, bool) {
@@ -270,30 +290,37 @@ func textV2PositionFieldPositions(value textV2PositionValue, fieldIndex uint32) 
 	return nil, false
 }
 
-func textV2OrderedPositionsMatchSlop(lists [][]uint32, expectedGaps []int, slop int) bool {
+func textV2OrderedPositionsMatchSlop(lists [][]uint32, expectedGaps []int, slop int, budget *int) (bool, error) {
 	if len(lists) == 0 || len(lists[0]) == 0 {
-		return false
+		return false, nil
 	}
 	if len(expectedGaps) != len(lists)-1 {
-		return false
+		return false, nil
 	}
 	if len(lists) == 1 {
-		return true
+		return true, nil
 	}
 	for _, start := range lists[0] {
-		if textV2OrderedPositionsMatchFrom(lists, expectedGaps, 1, start, 0, slop) {
-			return true
+		if !spendTextV2PhrasePositionMatchBudget(budget) {
+			return false, fmt.Errorf("%w: text phrase position matching exceeded bounded work limit", ErrTextIndexUnavailable)
+		}
+		matched, err := textV2OrderedPositionsMatchFrom(lists, expectedGaps, 1, start, 0, slop, budget)
+		if err != nil || matched {
+			return matched, err
 		}
 	}
-	return false
+	return false, nil
 }
 
-func textV2OrderedPositionsMatchFrom(lists [][]uint32, expectedGaps []int, index int, previous uint32, usedSlop, maxSlop int) bool {
+func textV2OrderedPositionsMatchFrom(lists [][]uint32, expectedGaps []int, index int, previous uint32, usedSlop, maxSlop int, budget *int) (bool, error) {
 	if index >= len(lists) {
-		return true
+		return true, nil
 	}
 	expectedGap := expectedGaps[index-1]
 	for _, pos := range lists[index] {
+		if !spendTextV2PhrasePositionMatchBudget(budget) {
+			return false, fmt.Errorf("%w: text phrase position matching exceeded bounded work limit", ErrTextIndexUnavailable)
+		}
 		if pos <= previous {
 			continue
 		}
@@ -303,11 +330,25 @@ func textV2OrderedPositionsMatchFrom(lists [][]uint32, expectedGaps []int, index
 		}
 		gapSlop := documentGap - expectedGap
 		if usedSlop+gapSlop > maxSlop {
+			// Positions are sorted ascending, so later positions can only
+			// increase the gap and cannot fit the remaining slop budget.
 			break
 		}
-		if textV2OrderedPositionsMatchFrom(lists, expectedGaps, index+1, pos, usedSlop+gapSlop, maxSlop) {
-			return true
+		matched, err := textV2OrderedPositionsMatchFrom(lists, expectedGaps, index+1, pos, usedSlop+gapSlop, maxSlop, budget)
+		if err != nil || matched {
+			return matched, err
 		}
 	}
-	return false
+	return false, nil
+}
+
+func spendTextV2PhrasePositionMatchBudget(budget *int) bool {
+	if budget == nil {
+		return true
+	}
+	if *budget <= 0 {
+		return false
+	}
+	*budget--
+	return true
 }

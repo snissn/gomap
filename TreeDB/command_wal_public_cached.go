@@ -145,7 +145,19 @@ func (tdb *DB) snapshotPublicCommandWALCheckpointCutover() {
 	}
 	tdb.commandWALPendingMu.Lock()
 	defer tdb.commandWALPendingMu.Unlock()
-	tdb.commandWALCheckpointCutoverLast.Store(tdb.commandWALLast.Load())
+	last := tdb.commandWALLast.Load()
+	tdb.commandWALCheckpointCutoverLast.Store(last)
+	tdb.commandWALCheckpointCutoverErr = nil
+	if last == 0 {
+		return
+	}
+	if tdb.backend == nil {
+		tdb.commandWALCheckpointCutoverErr = ErrClosed
+		return
+	}
+	if tdb.backend.CommandWALActiveBytes() > 0 {
+		tdb.commandWALCheckpointCutoverErr = tdb.backend.RotateCommandWALActiveSegment(publicCommandWALPublishSync(tdb.durabilityMode, true))
+	}
 }
 
 func (tdb *DB) preparePublicCommandWALPendingPublish(sync bool) (uint64, []db.CommandWALLSNRange, error) {
@@ -156,6 +168,12 @@ func (tdb *DB) preparePublicCommandWALPendingPublish(sync bool) (uint64, []db.Co
 		return 0, nil, ErrClosed
 	}
 	first, last := tdb.publicCommandWALPendingRange()
+	tdb.commandWALPendingMu.Lock()
+	cutoverErr := tdb.commandWALCheckpointCutoverErr
+	tdb.commandWALPendingMu.Unlock()
+	if cutoverErr != nil {
+		return 0, nil, cutoverErr
+	}
 	if first == 0 || last == 0 {
 		return 0, nil, nil
 	}
@@ -186,6 +204,20 @@ func (tdb *DB) preparePublicCommandWALPendingPublish(sync bool) (uint64, []db.Co
 		return 0, nil, err
 	}
 	return last, []db.CommandWALLSNRange{{First: current + 1, Last: last}}, nil
+}
+
+func (tdb *DB) publicCommandWALAutoCheckpointBytes() int64 {
+	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
+		return 0
+	}
+	return tdb.backend.CommandWALBytes()
+}
+
+func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {
+	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
+		return nil
+	}
+	return tdb.backend.CleanupCommandWALCoveredSegments(publicCommandWALPublishSync(tdb.durabilityMode, sync))
 }
 
 func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
