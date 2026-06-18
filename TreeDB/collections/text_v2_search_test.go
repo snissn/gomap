@@ -505,6 +505,18 @@ func TestTextV2PhraseUnsupportedShapesFailClosed2733(t *testing.T) {
 	}
 }
 
+func TestTextV2PhrasePositionValidationBudgetFailsClosed2733(t *testing.T) {
+	starts := make([]uint32, textV2PhrasePositionMatchBudget+1)
+	for i := range starts {
+		starts[i] = uint32(i + 1)
+	}
+	budget := textV2PhrasePositionMatchBudget
+	matched, err := textV2OrderedPositionsMatchSlop([][]uint32{starts, []uint32{0}}, []int{0}, 0, &budget)
+	if matched || !errors.Is(err, ErrTextIndexUnavailable) {
+		t.Fatalf("matched=%v err=%v want bounded phrase-position failure", matched, err)
+	}
+}
+
 func textSearchResultIDs2733(response TextSearchResponse) []string {
 	ids := make([]string, len(response.Results))
 	for i := range response.Results {
