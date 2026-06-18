@@ -300,6 +300,9 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	if c.db.CommandWALEnabled() {
 		return empty, emptyStorage, "", fmt.Errorf("%w: text-v2 rewrite is rejected under command_wal_v1 until collection text maintenance commands are supported", backenddb.ErrCommandWALRejected)
 	}
+	if err := ctx.Err(); err != nil {
+		return empty, emptyStorage, "", err
+	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return empty, emptyStorage, "", err
 	}
