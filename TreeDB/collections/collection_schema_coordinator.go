@@ -19,6 +19,32 @@ type collectionDBSchemaCoordinators struct {
 
 var collectionSchemaCoordinators sync.Map
 
+var collectionSchemaMutationFlushHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func setCollectionSchemaMutationFlushHookForTest(fn func()) func() {
+	collectionSchemaMutationFlushHook.mu.Lock()
+	prev := collectionSchemaMutationFlushHook.fn
+	collectionSchemaMutationFlushHook.fn = fn
+	collectionSchemaMutationFlushHook.mu.Unlock()
+	return func() {
+		collectionSchemaMutationFlushHook.mu.Lock()
+		collectionSchemaMutationFlushHook.fn = prev
+		collectionSchemaMutationFlushHook.mu.Unlock()
+	}
+}
+
+func runCollectionSchemaMutationFlushHookForTest() {
+	collectionSchemaMutationFlushHook.mu.Lock()
+	fn := collectionSchemaMutationFlushHook.fn
+	collectionSchemaMutationFlushHook.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 func collectionSchemaCoordinatorForDBCollection(db *backenddb.DB, collection string) *collectionSchemaCoordinator {
 	if db == nil || collection == "" {
 		return nil
@@ -125,6 +151,7 @@ func (c *Collection) flushCollectionWriteDomainsForSchemaMutation() error {
 	if c == nil || c.db == nil {
 		return nil
 	}
+	runCollectionSchemaMutationFlushHookForTest()
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil {
 		return c.flushBufferedWrites()

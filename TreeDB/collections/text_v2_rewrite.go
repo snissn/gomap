@@ -295,8 +295,10 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	}
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
-	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
-		return empty, emptyStorage, "", err
+	if !run.DryRun {
+		if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+			return empty, emptyStorage, "", err
+		}
 	}
 
 	snap := c.db.AcquireSnapshot()
@@ -520,7 +522,7 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 	cache := textV2SearchBlockCache{}
 	scanErr := scanTextV2PostingRewriteTerms(snap, catalog, postingRootName, budget, func(term *textV2PostingRewriteTerm) error {
 		processedTerms[term.term] = struct{}{}
-		if err := plan.processRewriteTerm(snap, catalog, def, searchCtx, status, &cache, term, termStats[term.term], target, opts.Force); err != nil {
+		if err := plan.processRewriteTerm(snap, catalog, def, searchCtx, status, &cache, term, termStats[term.term], target, opts.Force, budget.check); err != nil {
 			return err
 		}
 		return budget.check()
@@ -607,21 +609,32 @@ func (p *textV2RewritePlan) processRewriteTerm(
 	termStats textV2TermStatsValue,
 	target uint32,
 	force bool,
+	checkBudget func() error,
 ) error {
 	if p == nil || term == nil {
 		return nil
+	}
+	if checkBudget != nil {
+		if err := checkBudget(); err != nil {
+			return err
+		}
 	}
 	p.stats.TermsScanned++
 	p.stats.PostingBlocksRead += term.oldBlocks
 	p.stats.PostingBlocksBefore += term.oldBlocks
 	p.stats.PostingsRead += term.postings
 
-	if err := term.filterCurrentEntries(snap, catalog, ctx, cache); err != nil {
+	if err := term.filterCurrentEntries(snap, catalog, ctx, cache, checkBudget); err != nil {
 		return err
 	}
 	p.stats.StalePostingsPurged += term.stale
 	live := make([]textV2PostingBlockEntry, 0, len(term.liveByOrd))
 	for _, entry := range term.liveByOrd {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		live = append(live, entry)
 	}
 	sort.Slice(live, func(i, j int) bool { return live[i].Ordinal < live[j].Ordinal })
@@ -629,6 +642,11 @@ func (p *textV2RewritePlan) processRewriteTerm(
 
 	var liveTF uint64
 	for _, entry := range live {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		liveTF += uint64(entry.TermFrequency)
 	}
 	if len(live) == 0 {
@@ -636,6 +654,11 @@ func (p *textV2RewritePlan) processRewriteTerm(
 			return errMalformedTextStorage("text-v2 term %q has live stats df=%d tf=%d but no current postings", term.term, termStats.DocumentFrequency, termStats.TotalTermFrequency)
 		}
 		for _, oldKey := range term.oldKeys {
+			if checkBudget != nil {
+				if err := checkBudget(); err != nil {
+					return err
+				}
+			}
 			p.postingBlocksTable.DeleteSteal(append([]byte(nil), oldKey...))
 		}
 		if termStats.PostingBlockCount != 0 {
@@ -654,6 +677,11 @@ func (p *textV2RewritePlan) processRewriteTerm(
 		return errMalformedTextStorage("text-v2 term %q stats df/tf=%d/%d do not match current postings %d/%d", term.term, termStats.DocumentFrequency, termStats.TotalTermFrequency, len(live), liveTF)
 	}
 
+	if checkBudget != nil {
+		if err := checkBudget(); err != nil {
+			return err
+		}
+	}
 	newBlocks, err := buildTextV2PostingBlockKVs(term.term, live, uint32(len(def.Fields)), textV2PostingBlockBuildOptions{Kind: textV2PostingBlockKindSealed, TargetPostings: target, BlockIDStart: 1})
 	if err != nil {
 		return err
@@ -666,10 +694,20 @@ func (p *textV2RewritePlan) processRewriteTerm(
 	p.stats.PostingBlocksAfter += uint64(len(newBlocks))
 	newKeySet := make(map[string]struct{}, len(newBlocks))
 	for _, block := range newBlocks {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		newKeySet[string(block.Key)] = struct{}{}
 		p.postingBlocksTable.SetSteal(append([]byte(nil), block.Key...), append([]byte(nil), block.Value...))
 	}
 	for _, oldKey := range term.oldKeys {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		if _, ok := newKeySet[string(oldKey)]; ok {
 			continue
 		}
@@ -695,7 +733,7 @@ func (p *textV2RewritePlan) processRewriteTerm(
 	return nil
 }
 
-func (term *textV2PostingRewriteTerm) filterCurrentEntries(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, cache *textV2SearchBlockCache) error {
+func (term *textV2PostingRewriteTerm) filterCurrentEntries(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, cache *textV2SearchBlockCache, checkBudget func() error) error {
 	if term == nil {
 		return nil
 	}
@@ -704,6 +742,11 @@ func (term *textV2PostingRewriteTerm) filterCurrentEntries(snap *backenddb.Snaps
 	}
 	var lookupStats TextSearchStats
 	for _, entry := range term.entries {
+		if checkBudget != nil {
+			if err := checkBudget(); err != nil {
+				return err
+			}
+		}
 		if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.RootGeneration {
 			return errMalformedTextStorage("text-v2 posting entry outside status snapshot")
 		}
