@@ -375,6 +375,8 @@ func (c *Collection) maintainTextIndex(ctx context.Context, indexName string, op
 		Debt:                  plannedDebt,
 		Rewrite:               rewrite,
 	}
+	// Budget exhaustion is stronger than a policy skip reason because bounded
+	// maintenance stopped before it could publish a complete rewrite.
 	if rewrite.BudgetExhausted {
 		idx.SkippedReason = rewrite.BudgetExhaustedReason
 	}
@@ -386,6 +388,8 @@ func (c *Collection) maintainTextIndex(ctx context.Context, indexName string, op
 		}
 		idx.StorageAfter = after
 	}
+	// The no-debt fallback is intentionally last so policy skips and budget
+	// exhaustion keep their more specific reasons.
 	if idx.SkippedReason == "" && !idx.Applied {
 		idx.SkippedReason = TextIndexMaintenanceSkipReasonNoDebt
 	}

@@ -124,6 +124,36 @@ func TestTextV2RewriteSharesBudgetAcrossInspectionAndPlanning2732(t *testing.T) 
 	}
 }
 
+func TestTextV2RewriteCanceledAfterDecisionSkipsPublish2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col, _ := createTextV2MaintenancePolicyFixture2732(t, d, 48)
+
+	before, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats before: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_, _, _, err = col.rewriteTextIndexInternal(ctx, "lexical", textV2RewriteRunOptions{
+		Rewrite:          TextIndexRewriteOptions{Force: true},
+		NeedStorageStats: true,
+		Decide: func(TextIndexStorageStats, TextIndexRewriteStats) textV2RewriteDecision {
+			cancel()
+			return textV2RewriteDecision{Apply: true}
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("rewriteTextIndexInternal err=%v want context.Canceled", err)
+	}
+	after, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats after: %v", err)
+	}
+	if after.V2RootGeneration != before.V2RootGeneration || after.V2RewriteMergeState != before.V2RewriteMergeState {
+		t.Fatalf("after stats=%+v before=%+v want publish skipped", after, before)
+	}
+}
+
 func TestTextV2RewriteBudgetMaxDurationCheck2732(t *testing.T) {
 	budget := newTextV2RewriteBudget(context.Background(), TextIndexRewriteOptions{MaxDuration: time.Hour})
 	budget.started = time.Now().Add(-2 * time.Hour)

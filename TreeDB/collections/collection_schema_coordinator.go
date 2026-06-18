@@ -29,6 +29,8 @@ var collectionSchemaMutationBeforeLockHook struct {
 	fn func()
 }
 
+// setCollectionSchemaMutationFlushHookForTest temporarily replaces the flush
+// hook and returns a closure that restores the previous hook.
 func setCollectionSchemaMutationFlushHookForTest(fn func()) func() {
 	collectionSchemaMutationFlushHook.mu.Lock()
 	prev := collectionSchemaMutationFlushHook.fn
@@ -50,6 +52,8 @@ func runCollectionSchemaMutationFlushHookForTest() {
 	}
 }
 
+// setCollectionSchemaMutationBeforeLockHookForTest temporarily replaces the
+// pre-lock hook and returns a closure that restores the previous hook.
 func setCollectionSchemaMutationBeforeLockHookForTest(fn func()) func() {
 	collectionSchemaMutationBeforeLockHook.mu.Lock()
 	prev := collectionSchemaMutationBeforeLockHook.fn
