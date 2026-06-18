@@ -406,6 +406,7 @@ type DB struct {
 	commandWALCleanupScans     atomic.Uint64
 	commandWALCleanupRemoved   atomic.Uint64
 	commandWALCleanupBytes     atomic.Uint64
+	commandWALClosedBytes      atomic.Int64
 	commandWALRawPublishMu     sync.RWMutex
 	commandWALRawBarrierMu     sync.Mutex
 	commandWALRawBarrierNextID uint64
@@ -1814,6 +1815,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			BufferSize:                commandWALWriterBufferSize,
 			DeferredCommandBufferSize: commandWALDeferredPointBufferSize,
 			Compress:                  opts.JournalCompression,
+			OnSegmentRotated:          db.observeCommandWALSegmentRotated,
 			InitialLSN:                db.meta.AppliedCommandLSN,
 			SegmentSeq:                commandSegmentSeq,
 		})
@@ -1822,6 +1824,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 		db.commandJournal = journal
+		db.refreshCommandWALClosedBytes()
 		db.cacheCommandWALRequiredFeatureStats()
 	} else {
 		// If a directory requires command replay but this open is not command-WAL

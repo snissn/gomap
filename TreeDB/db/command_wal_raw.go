@@ -104,10 +104,15 @@ func (db *DB) CheckCommandWALPublishReady() error {
 // CommandWALActiveBytes reports the active command-WAL segment bytes accepted by
 // the open writer, including command frames buffered for batch flush.
 func (db *DB) CommandWALActiveBytes() int64 {
+	_, active := db.commandWALActiveSegmentSnapshot()
+	return active
+}
+
+func (db *DB) commandWALActiveSegmentSnapshot() (path string, bytes int64) {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
-		return 0
+		return "", 0
 	}
-	return db.commandJournal.ActiveBytes()
+	return db.commandJournal.ActiveSegmentSnapshot()
 }
 
 // CommandWALBytes reports command-WAL bytes currently present on disk, plus any
@@ -119,35 +124,41 @@ func (db *DB) CommandWALBytes() int64 {
 	if db == nil || !db.commandWAL {
 		return 0
 	}
-	active := db.CommandWALActiveBytes()
+	_, active := db.commandWALActiveSegmentSnapshot()
+	closed := db.commandWALClosedBytes.Load()
+	if closed < 0 {
+		closed = 0
+	}
+	return closed + active
+}
+
+func (db *DB) observeCommandWALSegmentRotated(closedBytes int64) {
+	if db == nil || closedBytes <= 0 {
+		return
+	}
+	db.commandWALClosedBytes.Add(closedBytes)
+}
+
+func (db *DB) refreshCommandWALClosedBytes() {
+	if db == nil || !db.commandWAL {
+		return
+	}
+	activePath, _ := db.commandWALActiveSegmentSnapshot()
 	segments, err := listWALSegments(db.dir)
 	if err != nil {
-		return active
+		return
 	}
-	var total int64
-	activePath := ""
-	if db.commandJournal != nil {
-		activePath = db.commandJournal.Path()
-	}
+	var closed int64
 	for _, seg := range segments {
-		if seg.valueLog || !isCommandWALLaneSegment(seg) {
+		if seg.valueLog || !isCommandWALLaneSegment(seg) || seg.size <= 0 {
 			continue
 		}
 		if activePath != "" && samePath(seg.path, activePath) {
-			// ActiveBytes includes buffered command frames that are not reflected in
-			// the file size yet, so use it for the active writer segment even when the
-			// newly-created active file is still zero bytes on disk.
-			total += active
 			continue
 		}
-		if seg.size > 0 {
-			total += seg.size
-		}
+		closed += seg.size
 	}
-	if total < active {
-		return active
-	}
-	return total
+	db.commandWALClosedBytes.Store(closed)
 }
 
 func samePath(a, b string) bool {
@@ -192,6 +203,9 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	if db == nil || !db.commandWAL {
 		return nil
 	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
 	state := db.state.Load()
 	if state == nil || state.AppliedCommandLSN == 0 {
 		return nil
@@ -212,6 +226,9 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	if removed > 0 {
 		db.commandWALCleanupRemoved.Add(removed)
 		db.commandWALCleanupBytes.Add(removedBytes)
+		if removedBytes > 0 {
+			db.commandWALClosedBytes.Add(-int64(removedBytes))
+		}
 		if sync && db.durability != DurabilityWALOnRelaxed {
 			if syncErr := syncDirFn(WALDirPath(db.dir)); err == nil {
 				err = syncErr

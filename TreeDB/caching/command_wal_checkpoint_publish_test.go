@@ -9,9 +9,6 @@ import (
 
 func TestCanPiggybackCommandWALCheckpointPublishSingleLaneCombinedQueue(t *testing.T) {
 	db := &DB{
-		commandWALCheckpointPublish: func(bool) (uint64, []backenddb.CommandWALLSNRange, error) {
-			return 2, []backenddb.CommandWALLSNRange{{First: 1, Last: 2}}, nil
-		},
 		flushBuildConcurrency:  2,
 		flushThreshold:         1 << 20,
 		flushBackendMaxEntries: 1024,
@@ -21,6 +18,9 @@ func TestCanPiggybackCommandWALCheckpointPublishSingleLaneCombinedQueue(t *testi
 		},
 		queueLaneIDs: []uint16{0, 0},
 	}
+	db.SetCommandWALCheckpointPublishHook(func(bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		return 2, []backenddb.CommandWALLSNRange{{First: 1, Last: 2}}, nil
+	})
 
 	if !db.canPiggybackCommandWALCheckpointPublish(true) {
 		t.Fatal("expected single-lane combined checkpoint queue to piggyback command WAL publish")

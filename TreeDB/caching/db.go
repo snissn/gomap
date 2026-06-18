@@ -46,6 +46,22 @@ import (
 
 var errDBClosing = errors.New("cachingdb: db closing")
 
+type commandWALCheckpointPublishHookBox struct {
+	fn func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)
+}
+
+type commandWALCheckpointCutoverHookBox struct {
+	fn func()
+}
+
+type commandWALCheckpointCleanupHookBox struct {
+	fn func(sync bool) error
+}
+
+type autoCheckpointBytesHookBox struct {
+	fn func() int64
+}
+
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
@@ -3614,7 +3630,11 @@ func (db *DB) SetCommandWALCheckpointPublishHook(h func(sync bool) (uint64, []ba
 	if db == nil {
 		return
 	}
-	db.commandWALCheckpointPublish = h
+	if h == nil {
+		db.commandWALCheckpointPublish.Store(nil)
+		return
+	}
+	db.commandWALCheckpointPublish.Store(&commandWALCheckpointPublishHookBox{fn: h})
 }
 
 // SetCommandWALCheckpointCutoverHook installs an optional hook called while
@@ -3624,7 +3644,11 @@ func (db *DB) SetCommandWALCheckpointCutoverHook(h func()) {
 	if db == nil {
 		return
 	}
-	db.commandWALCheckpointCutover = h
+	if h == nil {
+		db.commandWALCheckpointCutover.Store(nil)
+		return
+	}
+	db.commandWALCheckpointCutover.Store(&commandWALCheckpointCutoverHookBox{fn: h})
 }
 
 // SetCommandWALCheckpointCleanupHook installs an optional hook called after a
@@ -3633,7 +3657,11 @@ func (db *DB) SetCommandWALCheckpointCleanupHook(h func(sync bool) error) {
 	if db == nil {
 		return
 	}
-	db.commandWALCheckpointCleanup = h
+	if h == nil {
+		db.commandWALCheckpointCleanup.Store(nil)
+		return
+	}
+	db.commandWALCheckpointCleanup.Store(&commandWALCheckpointCleanupHookBox{fn: h})
 }
 
 // SetTemplateStore installs the template store used for template compression.
@@ -7652,9 +7680,9 @@ type DB struct {
 	rootPublishedSet                 *publishedRootSet
 	rootPublishStats                 rootDomainPublishTelemetry
 	rootPublishHook                  func(*rootPublishGroup) error
-	commandWALCheckpointPublish      func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)
-	commandWALCheckpointCutover      func()
-	commandWALCheckpointCleanup      func(sync bool) error
+	commandWALCheckpointPublish      atomic.Pointer[commandWALCheckpointPublishHookBox]
+	commandWALCheckpointCutover      atomic.Pointer[commandWALCheckpointCutoverHookBox]
+	commandWALCheckpointCleanup      atomic.Pointer[commandWALCheckpointCleanupHookBox]
 	dirtyRootPublishGroupID          uint64
 	dirtyRootPublishGroupPending     bool
 	rootPublishRetryPending          bool
@@ -8462,7 +8490,7 @@ type DB struct {
 	autoCheckpointOnceCh  chan struct{}
 	autoCheckpointWriteCh chan struct{}
 	autoCheckpointOn      atomic.Bool
-	autoCheckpointBytesFn func() int64
+	autoCheckpointBytesFn atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
 	// It is disarmed after the first size-triggered checkpoint and re-armed only
 	// after reclaimable WAL bytes fall below maxWALBytes/2.
@@ -11374,7 +11402,11 @@ func (db *DB) SetAutoCheckpointWALBytesHook(fn func() int64) {
 	if db == nil {
 		return
 	}
-	db.autoCheckpointBytesFn = fn
+	if fn == nil {
+		db.autoCheckpointBytesFn.Store(nil)
+		return
+	}
+	db.autoCheckpointBytesFn.Store(&autoCheckpointBytesHookBox{fn: fn})
 }
 
 // TriggerAutoCheckpoint schedules a best-effort immediate auto-checkpoint pass.
@@ -11759,7 +11791,7 @@ func (db *DB) noteWrite() {
 	if !db.autoCheckpointOn.Load() {
 		return
 	}
-	if db.disableJournal && db.autoCheckpointBytesFn == nil {
+	if db.disableJournal && db.loadAutoCheckpointBytesHook() == nil {
 		return
 	}
 	const autoCheckpointWriteEveryBytes int64 = 1 << 20
@@ -12043,8 +12075,8 @@ func (db *DB) effectiveWALBytes() int64 {
 		l := &db.lanes[i]
 		total += l.walClosedBytes.Load() + l.walLiveBytes.Load()
 	}
-	if db.autoCheckpointBytesFn != nil {
-		if external := db.autoCheckpointBytesFn(); external > 0 {
+	if fn := db.loadAutoCheckpointBytesHook(); fn != nil {
+		if external := fn(); external > 0 {
 			total += external
 		}
 	}
@@ -12056,8 +12088,8 @@ func (db *DB) reclaimableWALBytes() int64 {
 		return 0
 	}
 	external := int64(0)
-	if db.autoCheckpointBytesFn != nil {
-		if v := db.autoCheckpointBytesFn(); v > 0 {
+	if fn := db.loadAutoCheckpointBytesHook(); fn != nil {
+		if v := fn(); v > 0 {
 			external = v
 		}
 	}
@@ -21300,7 +21332,7 @@ func (db *DB) Checkpoint() error {
 		}
 		hasQueue = len(db.queue) > 0
 		hasLiveWAL = hasLiveWAL || !db.disableJournal
-	} else if !hasQueue && !hasDirtyVLog && !hasLiveWAL && db.commandWALCheckpointPublish == nil {
+	} else if !hasQueue && !hasDirtyVLog && !hasLiveWAL && db.loadCommandWALCheckpointPublishHook() == nil {
 		db.mu.Unlock()
 		releaseWriteMu()
 		db.checkpointNoopSkips.Add(1)
@@ -21319,8 +21351,8 @@ func (db *DB) Checkpoint() error {
 			db.snapshotCommandWALCheckpointCutover()
 			db.mu.Unlock()
 			releaseWriteMu()
-			if db.commandWALCheckpointPublish != nil {
-				commandWALAppliedLSN, commandWALRanges, err := db.commandWALCheckpointPublish(!db.relaxedSync)
+			if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
+				commandWALAppliedLSN, commandWALRanges, err := publishHook(!db.relaxedSync)
 				if err != nil {
 					return err
 				}
@@ -21393,10 +21425,10 @@ func (db *DB) Checkpoint() error {
 		commandWALRanges           []backenddb.CommandWALLSNRange
 		commandWALPublishPiggyback *checkpointCommandWALPublish
 	)
-	if db.commandWALCheckpointPublish != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
+	if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
 		var err error
 		commandWALPublishStart := time.Now()
-		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
+		commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
 		recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 		if err != nil {
 			return err
@@ -21427,13 +21459,15 @@ func (db *DB) Checkpoint() error {
 	}
 
 	commandWALPublishCovered := commandWALPublishPiggyback != nil && commandWALPublishPiggyback.consumed
-	if !commandWALPublishCovered && db.commandWALCheckpointPublish != nil {
-		var err error
-		commandWALPublishStart := time.Now()
-		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
-		recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
-		if err != nil {
-			return err
+	if !commandWALPublishCovered {
+		if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
+			var err error
+			commandWALPublishStart := time.Now()
+			commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+			recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -21445,7 +21479,7 @@ func (db *DB) Checkpoint() error {
 			if seg.valueLog != db.walUsesValueLog() {
 				continue
 			}
-			if db.commandWALCheckpointPublish != nil && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
+			if db.loadCommandWALCheckpointPublishHook() != nil && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
 				continue
 			}
 			filtered = append(filtered, seg)
@@ -21576,22 +21610,68 @@ func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []bac
 	return true, err
 }
 
+func (db *DB) loadCommandWALCheckpointPublishHook() func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+	if db == nil {
+		return nil
+	}
+	box := db.commandWALCheckpointPublish.Load()
+	if box == nil {
+		return nil
+	}
+	return box.fn
+}
+
+func (db *DB) loadCommandWALCheckpointCutoverHook() func() {
+	if db == nil {
+		return nil
+	}
+	box := db.commandWALCheckpointCutover.Load()
+	if box == nil {
+		return nil
+	}
+	return box.fn
+}
+
+func (db *DB) loadCommandWALCheckpointCleanupHook() func(sync bool) error {
+	if db == nil {
+		return nil
+	}
+	box := db.commandWALCheckpointCleanup.Load()
+	if box == nil {
+		return nil
+	}
+	return box.fn
+}
+
+func (db *DB) loadAutoCheckpointBytesHook() func() int64 {
+	if db == nil {
+		return nil
+	}
+	box := db.autoCheckpointBytesFn.Load()
+	if box == nil {
+		return nil
+	}
+	return box.fn
+}
+
 func (db *DB) snapshotCommandWALCheckpointCutover() {
-	if db == nil || db.commandWALCheckpointCutover == nil {
+	cutoverHook := db.loadCommandWALCheckpointCutoverHook()
+	if cutoverHook == nil {
 		return
 	}
-	db.commandWALCheckpointCutover()
+	cutoverHook()
 }
 
 func (db *DB) cleanupCommandWALCheckpoint(sync bool) error {
-	if db == nil || db.commandWALCheckpointCleanup == nil {
+	cleanupHook := db.loadCommandWALCheckpointCleanupHook()
+	if cleanupHook == nil {
 		return nil
 	}
-	return db.commandWALCheckpointCleanup(sync)
+	return cleanupHook(sync)
 }
 
 func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
-	if db == nil || db.commandWALCheckpointPublish == nil {
+	if db == nil || db.loadCommandWALCheckpointPublishHook() == nil {
 		return false
 	}
 	db.mu.RLock()

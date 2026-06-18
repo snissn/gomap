@@ -185,6 +185,11 @@ type CommandJournalOptions struct {
 	DeferredCommandBufferSize int
 	// Compress enables commitlog frame compression.
 	Compress bool
+	// OnSegmentRotated is called after a successful active segment rotation with
+	// the closed segment bytes, including writer-buffered command frames flushed
+	// by the rotation. The callback runs while the journal mutex is held and must
+	// not re-enter the journal.
+	OnSegmentRotated func(closedBytes int64)
 	// InitialLSN is the highest already-applied/durable command LSN. CommandJournal
 	// scans existing frames while holding the owner lock and advances reservation
 	// to max(InitialLSN, observed frame LSN)+1.
@@ -200,6 +205,7 @@ type CommandJournal struct {
 	lane               int
 	segmentSeq         uint64
 	segmentTargetBytes int64
+	onSegmentRotated   func(closedBytes int64)
 }
 
 func CommandSegmentName(lane int, seq uint64) string {
@@ -267,6 +273,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		lane:               opts.Lane,
 		segmentSeq:         opts.SegmentSeq,
 		segmentTargetBytes: opts.SegmentTargetBytes,
+		onSegmentRotated:   opts.OnSegmentRotated,
 	}, nil
 }
 
@@ -490,8 +497,12 @@ func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
 	}
 	nextSeq := j.segmentSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
+	closedBytes := j.writer.ActiveBytes()
 	if err := j.writer.RotateToWithSync(nextPath, syncCurrent); err != nil {
 		return err
+	}
+	if closedBytes > 0 && j.onSegmentRotated != nil {
+		j.onSegmentRotated(closedBytes)
 	}
 	j.segmentSeq = nextSeq
 	j.path = nextPath
@@ -510,15 +521,22 @@ func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
 }
 
 func (j *CommandJournal) ActiveBytes() int64 {
+	_, bytes := j.ActiveSegmentSnapshot()
+	return bytes
+}
+
+// ActiveSegmentSnapshot reports the active segment path and accepted bytes under
+// one journal lock acquisition.
+func (j *CommandJournal) ActiveSegmentSnapshot() (path string, bytes int64) {
 	if j == nil {
-		return 0
+		return "", 0
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.writer == nil {
-		return 0
+		return j.path, 0
 	}
-	return j.writer.ActiveBytes()
+	return j.path, j.writer.ActiveBytes()
 }
 
 func (j *CommandJournal) NextLSN() uint64 {
