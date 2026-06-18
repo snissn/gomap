@@ -156,6 +156,9 @@ func validateTextIndexMaintenanceOptions(opts TextIndexMaintenanceOptions) error
 	if opts.MaxIndexes < 0 {
 		return errors.New("collections: text index maintenance MaxIndexes must be non-negative")
 	}
+	if opts.MaxDuration < 0 {
+		return errors.New("collections: text index maintenance MaxDuration must be non-negative")
+	}
 	return nil
 }
 
@@ -213,6 +216,7 @@ func (m *CollectionManager) MaintainTextIndexes(ctx context.Context, opts TextIn
 			if stats.BudgetExhaustedReason == "" {
 				stats.BudgetExhaustedReason = collectionStats.BudgetExhaustedReason
 			}
+			break
 		}
 	}
 	if opts.RunStorageCompaction && stats.IndexesRewritten != 0 && !opts.DryRun {

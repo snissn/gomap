@@ -259,6 +259,13 @@ func (c *Collection) RewriteTextIndex(indexName string, opts TextIndexRewriteOpt
 	return stats, err
 }
 
+func validateTextIndexRewriteOptions(opts TextIndexRewriteOptions) error {
+	if opts.MaxDuration < 0 {
+		return errors.New("collections: text-v2 rewrite MaxDuration must be non-negative")
+	}
+	return nil
+}
+
 func textV2BudgetExhaustedRewriteStats(indexName string, before TextIndexStorageStats, reason string) TextIndexRewriteStats {
 	return TextIndexRewriteStats{
 		IndexName:             indexName,
@@ -278,6 +285,9 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 		ctx = context.Background()
 	}
 	opts := run.Rewrite
+	if err := validateTextIndexRewriteOptions(opts); err != nil {
+		return empty, emptyStorage, "", err
+	}
 	if err := ValidateIndexName(indexName); err != nil {
 		return empty, emptyStorage, "", err
 	}

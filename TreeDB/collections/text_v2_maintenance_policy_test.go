@@ -318,6 +318,27 @@ func TestTextV2MaintenancePolicyManagerMaxIndexes2732(t *testing.T) {
 	}
 }
 
+func TestTextV2MaintenancePolicyManagerStopsAfterCollectionBudget2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	createTextV2MaintenancePolicyNamedFixture2732(t, d, "docs_a", 48)
+	createTextV2MaintenancePolicyNamedFixture2732(t, d, "docs_b", 48)
+
+	stats, err := NewCollectionManager(d).MaintainTextIndexes(context.Background(), TextIndexMaintenanceOptions{
+		Policy:   TextIndexMaintenancePolicy{MinDeletedDocuments: 1},
+		MaxTerms: 1,
+	})
+	if err != nil {
+		t.Fatalf("manager MaintainTextIndexes: %v", err)
+	}
+	if !stats.BudgetExhausted || stats.BudgetExhaustedReason != TextIndexRewriteBudgetReasonMaxTerms {
+		t.Fatalf("manager stats=%+v want max-terms budget exhaustion", stats)
+	}
+	if stats.CollectionsScanned != 1 || stats.IndexesScanned != 1 || len(stats.Collections) != 1 {
+		t.Fatalf("manager stats=%+v want stop after first exhausted collection", stats)
+	}
+}
+
 func TestTextV2MaintenancePolicyRejectsNegativeMaxIndexes2732(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
@@ -333,6 +354,30 @@ func TestTextV2MaintenancePolicyRejectsNegativeMaxIndexes2732(t *testing.T) {
 	}
 	if _, err := NewCollectionManager(d).MaintainTextIndexes(context.Background(), opts); err == nil || err.Error() != want {
 		t.Fatalf("manager MaintainTextIndexes err=%v want %q", err, want)
+	}
+}
+
+func TestTextV2MaintenancePolicyRejectsNegativeMaxDuration2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col, _ := createTextV2MaintenancePolicyFixture2732(t, d, 24)
+
+	rewriteOpts := TextIndexRewriteOptions{MaxDuration: -time.Nanosecond}
+	const wantRewrite = "collections: text-v2 rewrite MaxDuration must be non-negative"
+	if _, err := col.RewriteTextIndex("lexical", rewriteOpts); err == nil || err.Error() != wantRewrite {
+		t.Fatalf("RewriteTextIndex err=%v want %q", err, wantRewrite)
+	}
+
+	maintenanceOpts := TextIndexMaintenanceOptions{MaxDuration: -time.Nanosecond}
+	const wantMaintenance = "collections: text index maintenance MaxDuration must be non-negative"
+	if _, err := col.MaintainTextIndex(context.Background(), "lexical", maintenanceOpts); err == nil || err.Error() != wantMaintenance {
+		t.Fatalf("MaintainTextIndex err=%v want %q", err, wantMaintenance)
+	}
+	if _, err := col.MaintainTextIndexes(context.Background(), maintenanceOpts); err == nil || err.Error() != wantMaintenance {
+		t.Fatalf("MaintainTextIndexes err=%v want %q", err, wantMaintenance)
+	}
+	if _, err := NewCollectionManager(d).MaintainTextIndexes(context.Background(), maintenanceOpts); err == nil || err.Error() != wantMaintenance {
+		t.Fatalf("manager MaintainTextIndexes err=%v want %q", err, wantMaintenance)
 	}
 }
 
