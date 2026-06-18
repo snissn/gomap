@@ -47,6 +47,9 @@ TreeDB maintenance can prove old roots/value-log records unreachable.
 
 - No external IR engine, sidecar, private value-log rewrite path, or standalone text-block GC.
 - No full-document fetch is introduced in candidate generation.
-- Budget exhaustion is fail-closed: storage remains unchanged.
+- Budget exhaustion is fail-closed for the index rewrite attempt that exhausts
+  its budget: that attempt publishes no storage changes. Earlier indexes in the
+  same bounded maintenance call may already have published successful rewrites
+  before a later budget or `MaxIndexes` limit stops the run.
 - Snapshot-bound readers can continue searching while maintenance publishes new
   roots; old snapshots retain old roots until normal storage maintenance is safe.
