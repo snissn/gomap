@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -98,6 +99,143 @@ func (db *DB) commandWALPoisonedError() error {
 // checkpoint publish path uses this for relaxed AppliedCommandLSN publication.
 func (db *DB) CheckCommandWALPublishReady() error {
 	return db.commandWALPoisonedError()
+}
+
+// CommandWALActiveBytes reports the active command-WAL segment bytes accepted by
+// the open writer, including command frames buffered for batch flush.
+func (db *DB) CommandWALActiveBytes() int64 {
+	_, active := db.commandWALActiveSegmentSnapshot()
+	return active
+}
+
+func (db *DB) commandWALActiveSegmentSnapshot() (path string, bytes int64) {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return "", 0
+	}
+	return db.commandJournal.ActiveSegmentSnapshot()
+}
+
+// CommandWALBytes reports command-WAL bytes currently present on disk, plus any
+// active command frames buffered by the open writer. It intentionally counts
+// covered non-active segments until cleanup removes them so byte-pressure
+// checkpointing can bound total command-WAL growth rather than only the active
+// file.
+func (db *DB) CommandWALBytes() int64 {
+	if db == nil || !db.commandWAL {
+		return 0
+	}
+	_, active := db.commandWALActiveSegmentSnapshot()
+	closed := db.commandWALClosedBytes.Load()
+	if closed < 0 {
+		closed = 0
+	}
+	return closed + active
+}
+
+func (db *DB) observeCommandWALSegmentRotated(closedBytes int64) {
+	if db == nil || closedBytes <= 0 {
+		return
+	}
+	db.commandWALClosedBytes.Add(closedBytes)
+}
+
+func (db *DB) refreshCommandWALClosedBytes() {
+	if db == nil || !db.commandWAL {
+		return
+	}
+	activePath, _ := db.commandWALActiveSegmentSnapshot()
+	segments, err := listWALSegments(db.dir)
+	if err != nil {
+		return
+	}
+	var closed int64
+	for _, seg := range segments {
+		if seg.valueLog || !isCommandWALLaneSegment(seg) || seg.size <= 0 {
+			continue
+		}
+		if activePath != "" && samePath(seg.path, activePath) {
+			continue
+		}
+		closed += seg.size
+	}
+	db.commandWALClosedBytes.Store(closed)
+}
+
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA == nil && errB == nil {
+		return absA == absB
+	}
+	return a == b
+}
+
+// CommandWALNextLSN reports the next LSN this handle would reserve.
+func (db *DB) CommandWALNextLSN() uint64 {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return 0
+	}
+	return db.commandJournal.NextLSN()
+}
+
+// RotateCommandWALActiveSegment rotates the active command-WAL segment to a
+// fresh file. Checkpoint cutovers use this to make covered frames non-active so
+// cleanup can reclaim them.
+func (db *DB) RotateCommandWALActiveSegment(sync bool) error {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return nil
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if sync && db.durability == DurabilityWALOnRelaxed {
+		sync = false
+	}
+	return db.commandJournal.RotateActiveSegment(sync)
+}
+
+// CleanupCommandWALCoveredSegments removes command-WAL segments whose max LSN is
+// covered by the current durable AppliedCommandLSN and that are not active.
+func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
+	if db == nil || !db.commandWAL {
+		return nil
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	state := db.state.Load()
+	if state == nil || state.AppliedCommandLSN == 0 {
+		return nil
+	}
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
+	db.commandWALCleanupScans.Add(1)
+	removed := uint64(0)
+	removedBytes := uint64(0)
+	for _, decision := range decisions {
+		if !decision.Removed {
+			continue
+		}
+		removed++
+		if decision.Size > 0 {
+			removedBytes += uint64(decision.Size)
+		}
+	}
+	if removed > 0 {
+		db.commandWALCleanupRemoved.Add(removed)
+		db.commandWALCleanupBytes.Add(removedBytes)
+		if removedBytes > 0 {
+			db.commandWALClosedBytes.Add(-int64(removedBytes))
+		}
+		if sync && db.durability != DurabilityWALOnRelaxed {
+			if syncErr := syncDirFn(WALDirPath(db.dir)); err == nil {
+				err = syncErr
+			}
+		}
+	}
+	return err
 }
 
 func (db *DB) rejectUnloggedCommandWALRootPublish() error {
@@ -448,10 +586,10 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 }
 
 // AppendRawKVSingleCommandWAL appends a one-operation RawKVBatch command frame.
-// It delegates post-append flushing to FlushCommandWAL(sync); relaxed durability
-// flushes without fsync rather than forcing strict-sync semantics. If that
-// post-append flush fails, the returned LSN is still the allocated LSN; callers
-// must record the command as pending and treat subsequent command-WAL appends as
+// It flushes while holding the command-journal lock; relaxed durability flushes
+// without fsync rather than forcing strict-sync semantics. If that post-append
+// flush fails, the returned LSN is still the allocated LSN; callers must record
+// the command as pending and treat subsequent command-WAL appends as
 // recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
@@ -478,11 +616,15 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	lsn, err := db.commandJournal.AppendRawKVSingleCommand(baseAppliedLSN, op)
-	if err != nil {
-		return 0, err
+	flushSync := sync && db.durability != DurabilityWALOnRelaxed
+	lsn, err := db.commandJournal.AppendRawKVSingleCommandAndFlush(baseAppliedLSN, op, flushSync)
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
 	}
-	if err := db.FlushCommandWAL(sync); err != nil {
+	if err != nil {
+		if lsn != 0 {
+			db.commandWALFlushPoisoned.Store(true)
+		}
 		return lsn, err
 	}
 	db.observeCommandWALAccepted(lsn)
@@ -492,10 +634,10 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 // AppendRawKVPointCommandWALTrusted appends a caller-validated public raw KV
 // point Set/Delete command. It is intended for public cached command-WAL writes
 // after cached preflight has validated the user input and before visibility.
-// It delegates post-append flushing to FlushCommandWAL(sync); relaxed durability
-// flushes without fsync rather than forcing strict-sync semantics. If that
-// post-append flush fails, the returned LSN is still the allocated LSN; callers
-// must record the command as pending and treat subsequent command-WAL appends as
+// It flushes while holding the command-journal lock; relaxed durability flushes
+// without fsync rather than forcing strict-sync semantics. If that post-append
+// flush fails, the returned LSN is still the allocated LSN; callers must record
+// the command as pending and treat subsequent command-WAL appends as
 // recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value []byte, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
@@ -519,11 +661,15 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	lsn, err := db.commandJournal.AppendRawKVPointCommandTrusted(baseAppliedLSN, op, key, value)
-	if err != nil {
-		return 0, err
+	flushSync := sync && db.durability != DurabilityWALOnRelaxed
+	lsn, err := db.commandJournal.AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN, op, key, value, flushSync)
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
 	}
-	if err := db.FlushCommandWAL(sync); err != nil {
+	if err != nil {
+		if lsn != 0 {
+			db.commandWALFlushPoisoned.Store(true)
+		}
 		return lsn, err
 	}
 	db.observeCommandWALAccepted(lsn)

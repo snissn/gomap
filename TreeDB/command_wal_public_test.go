@@ -626,13 +626,14 @@ func TestPublicCommandWALCheckpointPublishCapsAtCutoverLSN(t *testing.T) {
 	db.clearPublicCommandWALPendingThrough(2)
 }
 
-func TestPublicCommandWALCheckpointRetainsCommandJournalSegment(t *testing.T) {
+func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{
-		Dir:               dir,
-		Durability:        DurabilityWALOnRelaxed,
-		CommandWAL:        true,
-		DisableSideStores: true,
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -650,14 +651,110 @@ func TestPublicCommandWALCheckpointRetainsCommandJournalSegment(t *testing.T) {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 	after := publicCommandWALSegmentNames(t, dir)
-	afterSet := make(map[string]struct{}, len(after))
-	for _, name := range after {
-		afterSet[name] = struct{}{}
-	}
+	beforeSet := make(map[string]struct{}, len(before))
 	for _, name := range before {
-		if _, ok := afterSet[name]; !ok {
-			t.Fatalf("checkpoint removed active command WAL segment %s; before=%v after=%v", name, before, after)
+		beforeSet[name] = struct{}{}
+	}
+	for _, name := range after {
+		if _, ok := beforeSet[name]; ok {
+			t.Fatalf("checkpoint retained covered command WAL segment %s; before=%v after=%v", name, before, after)
 		}
+	}
+	if len(after) == 0 {
+		t.Fatalf("checkpoint removed all command WAL segments; before=%v after=%v", before, after)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.cleanup.removed_segments"]; got != "1" {
+		t.Fatalf("cleanup.removed_segments=%q, want 1 (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.segments.active"]; got != "1" {
+		t.Fatalf("segments.active=%q, want 1 (stats=%#v)", got, stats)
+	}
+}
+
+func TestPublicCommandWALAutoCheckpointUsesCommandWALBytes(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                              dir,
+		Durability:                       DurabilityWALOnRelaxed,
+		CommandWAL:                       true,
+		CommandWALStatsScan:              true,
+		CommandWALSegmentTargetBytes:     1,
+		MaxWALBytes:                      1,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
+		DisableSideStores:                true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	value := make([]byte, 8<<10)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	if err := db.Set([]byte("auto-checkpoint"), value); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		stats := db.cached.Stats()
+		count, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+		if err != nil {
+			t.Fatalf("parse auto_checkpoint.count=%q: %v", stats["treedb.cache.auto_checkpoint.count"], err)
+		}
+		applied := uint64(0)
+		if db.backend != nil {
+			applied = db.backend.State().AppliedCommandLSN
+		}
+		if count > 0 && stats["treedb.cache.auto_checkpoint.last_reason"] == "size" && applied >= 1 {
+			commandStats := db.Stats()
+			if got := commandStats["treedb.command_wal.cleanup.removed_segments"]; got != "1" {
+				t.Fatalf("cleanup.removed_segments=%q, want 1 after size auto-checkpoint (stats=%#v)", got, commandStats)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for size auto-checkpoint: cache=%#v command=%#v applied=%d", stats, db.Stats(), applied)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestPublicCommandWALAutoCheckpointBytesIncludesRotatedSegments(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                              dir,
+		Durability:                       DurabilityWALOnRelaxed,
+		CommandWAL:                       true,
+		CommandWALSegmentTargetBytes:     1,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
+		DisableSideStores:                true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("pressure-a"), []byte("a")); err != nil {
+		t.Fatalf("Set a: %v", err)
+	}
+	if err := db.Set([]byte("pressure-b"), []byte("b")); err != nil {
+		t.Fatalf("Set b: %v", err)
+	}
+	if got := publicCommandWALSegmentNames(t, dir); len(got) < 2 {
+		t.Fatalf("segments=%v, want rotation before pressure accounting check", got)
+	}
+	active := db.backend.CommandWALActiveBytes()
+	pressure := db.publicCommandWALAutoCheckpointBytes()
+	if active <= 0 {
+		t.Fatalf("active command WAL bytes=%d, want >0", active)
+	}
+	if pressure <= active {
+		t.Fatalf("auto-checkpoint pressure bytes=%d, active bytes=%d; want pressure to include rotated non-active bytes", pressure, active)
 	}
 }
 
