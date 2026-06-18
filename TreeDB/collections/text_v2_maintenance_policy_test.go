@@ -92,6 +92,38 @@ func TestTextV2MaintenancePolicyBudgetAndTimeout2732(t *testing.T) {
 	}
 }
 
+func TestTextV2RewriteSharesBudgetAcrossInspectionAndPlanning2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col, _ := createTextV2MaintenancePolicyFixture2732(t, d, 48)
+
+	before, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats before: %v", err)
+	}
+	if before.V2PostingBlocks == 0 || before.V2RewriteMergeState != TextIndexRewriteMergeStatePending {
+		t.Fatalf("before stats=%+v want pending posting-block rewrite debt", before)
+	}
+
+	stats, err := col.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{
+		Policy:           TextIndexMaintenancePolicy{MinDeletedDocuments: 1},
+		MaxPostingBlocks: before.V2PostingBlocks,
+	})
+	if err != nil {
+		t.Fatalf("MaintainTextIndex shared budget: %v", err)
+	}
+	if !stats.BudgetExhausted || len(stats.Indexes) != 1 || stats.Indexes[0].Applied || stats.Indexes[0].BudgetExhaustedReason != TextIndexRewriteBudgetReasonMaxPostingBlocks {
+		t.Fatalf("stats=%+v want shared max-posting-block budget exhaustion before apply", stats)
+	}
+	after, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("TextIndexStorageStats after: %v", err)
+	}
+	if after.V2RootGeneration != before.V2RootGeneration || after.V2RewriteMergeState != TextIndexRewriteMergeStatePending {
+		t.Fatalf("after stats=%+v before=%+v want storage unchanged", after, before)
+	}
+}
+
 func TestTextV2RewriteBudgetMaxDurationCheck2732(t *testing.T) {
 	budget := newTextV2RewriteBudget(context.Background(), TextIndexRewriteOptions{MaxDuration: time.Hour})
 	budget.started = time.Now().Add(-2 * time.Hour)
