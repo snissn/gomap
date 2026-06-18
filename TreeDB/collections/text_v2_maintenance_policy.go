@@ -219,7 +219,7 @@ func (m *CollectionManager) MaintainTextIndexes(ctx context.Context, opts TextIn
 			break
 		}
 	}
-	if opts.RunStorageCompaction && stats.IndexesRewritten != 0 && !opts.DryRun {
+	if opts.RunStorageCompaction && stats.IndexesRewritten != 0 && !stats.BudgetExhausted && !opts.DryRun {
 		compact, err := m.CompactStorage(ctx, opts.StorageCompactionOptions)
 		if err != nil {
 			return stats, err
@@ -247,7 +247,7 @@ func (c *Collection) MaintainTextIndex(ctx context.Context, indexName string, op
 	stats.IndexesScanned = 1
 	stats.Indexes = append(stats.Indexes, idx)
 	accumulateTextIndexMaintenanceStats(&stats, idx)
-	if opts.RunStorageCompaction && stats.IndexesRewritten != 0 && !opts.DryRun {
+	if opts.RunStorageCompaction && stats.IndexesRewritten != 0 && !stats.BudgetExhausted && !opts.DryRun {
 		compact, err := c.CompactStorage(ctx, opts.StorageCompactionOptions)
 		if err != nil {
 			return stats, err
@@ -292,7 +292,7 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 			break
 		}
 	}
-	if opts.RunStorageCompaction && stats.IndexesRewritten != 0 && !opts.DryRun {
+	if opts.RunStorageCompaction && stats.IndexesRewritten != 0 && !stats.BudgetExhausted && !opts.DryRun {
 		compact, err := c.CompactStorage(ctx, opts.StorageCompactionOptions)
 		if err != nil {
 			return stats, err
