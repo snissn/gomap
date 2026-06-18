@@ -303,6 +303,8 @@ func textV2OrderedPositionsMatchFrom(lists [][]uint32, expectedGaps []int, index
 		}
 		gapSlop := documentGap - expectedGap
 		if usedSlop+gapSlop > maxSlop {
+			// Positions are sorted ascending, so later positions can only
+			// increase the gap and cannot fit the remaining slop budget.
 			break
 		}
 		if textV2OrderedPositionsMatchFrom(lists, expectedGaps, index+1, pos, usedSlop+gapSlop, maxSlop) {
