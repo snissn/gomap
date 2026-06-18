@@ -288,6 +288,9 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 		stats.IndexesScanned++
 		stats.Indexes = append(stats.Indexes, idx)
 		accumulateTextIndexMaintenanceStats(&stats, idx)
+		if stats.BudgetExhausted {
+			break
+		}
 	}
 	if opts.RunStorageCompaction && stats.IndexesRewritten != 0 && !opts.DryRun {
 		compact, err := c.CompactStorage(ctx, opts.StorageCompactionOptions)

@@ -371,6 +371,29 @@ func TestTextV2MaintenancePolicyManagerStopsAfterCollectionBudget2732(t *testing
 	}
 }
 
+func TestTextV2MaintenancePolicyStopsAfterIndexBudget2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col, _ := createTextV2MaintenancePolicyFixture2732(t, d, 48)
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical_extra", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex lexical_extra: %v", err)
+	}
+
+	stats, err := col.MaintainTextIndexes(context.Background(), TextIndexMaintenanceOptions{
+		Policy:   TextIndexMaintenancePolicy{MinDeletedDocuments: 1},
+		MaxTerms: 1,
+	})
+	if err != nil {
+		t.Fatalf("MaintainTextIndexes: %v", err)
+	}
+	if !stats.BudgetExhausted || stats.BudgetExhaustedReason != TextIndexRewriteBudgetReasonMaxTerms {
+		t.Fatalf("stats=%+v want max-terms budget exhaustion", stats)
+	}
+	if stats.IndexesScanned != 1 || len(stats.Indexes) != 1 || stats.Indexes[0].IndexName != "lexical" {
+		t.Fatalf("stats=%+v want stop after first exhausted index", stats)
+	}
+}
+
 func TestTextV2MaintenancePolicyRejectsNegativeMaxIndexes2732(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
