@@ -24,6 +24,11 @@ var collectionSchemaMutationFlushHook struct {
 	fn func()
 }
 
+var collectionSchemaMutationBeforeLockHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
 func setCollectionSchemaMutationFlushHookForTest(fn func()) func() {
 	collectionSchemaMutationFlushHook.mu.Lock()
 	prev := collectionSchemaMutationFlushHook.fn
@@ -40,6 +45,27 @@ func runCollectionSchemaMutationFlushHookForTest() {
 	collectionSchemaMutationFlushHook.mu.Lock()
 	fn := collectionSchemaMutationFlushHook.fn
 	collectionSchemaMutationFlushHook.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+func setCollectionSchemaMutationBeforeLockHookForTest(fn func()) func() {
+	collectionSchemaMutationBeforeLockHook.mu.Lock()
+	prev := collectionSchemaMutationBeforeLockHook.fn
+	collectionSchemaMutationBeforeLockHook.fn = fn
+	collectionSchemaMutationBeforeLockHook.mu.Unlock()
+	return func() {
+		collectionSchemaMutationBeforeLockHook.mu.Lock()
+		collectionSchemaMutationBeforeLockHook.fn = prev
+		collectionSchemaMutationBeforeLockHook.mu.Unlock()
+	}
+}
+
+func runCollectionSchemaMutationBeforeLockHookForTest() {
+	collectionSchemaMutationBeforeLockHook.mu.Lock()
+	fn := collectionSchemaMutationBeforeLockHook.fn
+	collectionSchemaMutationBeforeLockHook.mu.Unlock()
 	if fn != nil {
 		fn()
 	}
