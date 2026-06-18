@@ -122,6 +122,59 @@ func TestTextV2RewriteBudgetCapacityChecks2732(t *testing.T) {
 	}
 }
 
+func TestTextV2MaintenanceDryRunSkipsSchemaMutationFlush2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)})
+
+	flushCalls := 0
+	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() {
+		flushCalls++
+	})
+	defer restoreFlushHook()
+
+	stats, err := col.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{DryRun: true, Force: true})
+	if err != nil {
+		t.Fatalf("MaintainTextIndex dry run: %v", err)
+	}
+	if len(stats.Indexes) != 1 || !stats.Indexes[0].DryRun || stats.Indexes[0].Applied {
+		t.Fatalf("dry run stats=%+v want dry-run no apply", stats)
+	}
+	if flushCalls != 0 {
+		t.Fatalf("dry run invoked schema flush %d times", flushCalls)
+	}
+
+	if _, err := col.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{Force: true}); err != nil {
+		t.Fatalf("MaintainTextIndex apply: %v", err)
+	}
+	if flushCalls == 0 {
+		t.Fatal("non-dry-run maintenance did not invoke schema flush")
+	}
+}
+
+func TestTextV2RewriteProcessTermChecksBudgetBeforeWork2732(t *testing.T) {
+	plan := &textV2RewritePlan{}
+	term := &textV2PostingRewriteTerm{term: "refund", oldBlocks: 1, postings: 1}
+	err := plan.processRewriteTerm(nil, nil, TextIndexDefinition{}, nil, textV2IndexStatusValue{}, nil, term, textV2TermStatsValue{}, textV2PostingBlockTargetPostings, false, func() error {
+		return errTextV2RewriteBudgetExhausted
+	})
+	if !errors.Is(err, errTextV2RewriteBudgetExhausted) {
+		t.Fatalf("processRewriteTerm err=%v want budget exhaustion", err)
+	}
+}
+
+func TestTextV2RewriteFilterCurrentEntriesChecksBudgetPerEntry2732(t *testing.T) {
+	term := &textV2PostingRewriteTerm{term: "refund", entries: []textV2PostingBlockEntry{{Ordinal: 1}}}
+	checks := 0
+	err := term.filterCurrentEntries(nil, nil, nil, nil, func() error {
+		checks++
+		return errTextV2RewriteBudgetExhausted
+	})
+	if !errors.Is(err, errTextV2RewriteBudgetExhausted) || checks != 1 {
+		t.Fatalf("filterCurrentEntries err=%v checks=%d want one budget exhaustion", err, checks)
+	}
+}
+
 func TestTextV2MaintenancePolicyReopenAfterMaintenance2732(t *testing.T) {
 	dir := t.TempDir()
 	d := openTextV2TestDB(t, dir, false)
