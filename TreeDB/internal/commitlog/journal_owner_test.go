@@ -272,6 +272,62 @@ func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
 	}
 }
 
+func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	if _, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("k1"), []byte("v1"), false); err != nil {
+		t.Fatalf("AppendRawKVPointCommandTrustedAndFlush first: %v", err)
+	}
+
+	syncCalls := 0
+	j.mu.Lock()
+	j.writer.syncFn = func(*os.File) error {
+		syncCalls++
+		return nil
+	}
+	j.mu.Unlock()
+
+	if _, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("k2"), []byte("v2"), true); err != nil {
+		t.Fatalf("AppendRawKVPointCommandTrustedAndFlush second: %v", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("rotated-segment sync calls=%d, want 1", syncCalls)
+	}
+}
+
+func TestCommandJournalSingleAppendAndFlushSyncsRotatedSegment(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	if _, err := j.AppendRawKVSingleCommandAndFlush(0, RawKVOperation{Op: RawKVOpSet, Key: []byte("k1"), Value: []byte("v1")}, false); err != nil {
+		t.Fatalf("AppendRawKVSingleCommandAndFlush first: %v", err)
+	}
+
+	syncCalls := 0
+	j.mu.Lock()
+	j.writer.syncFn = func(*os.File) error {
+		syncCalls++
+		return nil
+	}
+	j.mu.Unlock()
+
+	if _, err := j.AppendRawKVSingleCommandAndFlush(0, RawKVOperation{Op: RawKVOpSet, Key: []byte("k2"), Value: []byte("v2")}, true); err != nil {
+		t.Fatalf("AppendRawKVSingleCommandAndFlush second: %v", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("rotated-segment sync calls=%d, want 1", syncCalls)
+	}
+}
+
 func TestCommandJournalAppendsToPreexistingZeroByteSegment(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, CommandSegmentName(0, 1))

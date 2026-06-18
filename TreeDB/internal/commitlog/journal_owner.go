@@ -619,6 +619,31 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, false)
+}
+
+// AppendRawKVSingleCommandAndFlush appends a one-operation RawKVBatch command
+// and flushes/syncs the writer while holding the journal lock. When sync is
+// true, any segment rotated before the append is also synced before the new
+// frame is written, preserving durable command-WAL prefix ordering for sync
+// point writes.
+func (j *CommandJournal) AppendRawKVSingleCommandAndFlush(baseAppliedLSN uint64, op RawKVOperation, sync bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	lsn, err := j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, sync)
+	if err != nil {
+		return 0, err
+	}
+	if err := j.flushLocked(sync); err != nil {
+		return lsn, err
+	}
+	return lsn, nil
+}
+
+func (j *CommandJournal) appendRawKVSingleCommandLocked(baseAppliedLSN uint64, op RawKVOperation, syncCurrent bool) (uint64, error) {
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -643,7 +668,7 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+	if err := j.maybeRotateForFrameLocked(size, syncCurrent); err != nil {
 		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
@@ -669,6 +694,31 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, false)
+}
+
+// AppendRawKVPointCommandTrustedAndFlush appends a caller-validated public raw
+// KV point command and flushes/syncs the writer while holding the journal lock.
+// When sync is true, any segment rotated before the append is also synced before
+// the new frame is written, preserving durable command-WAL prefix ordering for
+// sync point writes.
+func (j *CommandJournal) AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN uint64, op RawKVOp, key, value []byte, sync bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	lsn, err := j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, sync)
+	if err != nil {
+		return 0, err
+	}
+	if err := j.flushLocked(sync); err != nil {
+		return lsn, err
+	}
+	return lsn, nil
+}
+
+func (j *CommandJournal) appendRawKVPointCommandTrustedLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, syncCurrent bool) (uint64, error) {
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -690,7 +740,7 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+	if err := j.maybeRotateForFrameLocked(size, syncCurrent); err != nil {
 		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
@@ -799,6 +849,16 @@ func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope Com
 	return lsn, nil
 }
 
+func (j *CommandJournal) flushLocked(sync bool) error {
+	if j == nil || j.writer == nil {
+		return errors.New("commitlog: command journal is closed")
+	}
+	if sync {
+		return j.writer.Sync()
+	}
+	return j.writer.Flush()
+}
+
 // AppendRawKVBatchPayloadCommandTrustedAndFlush appends a caller-validated
 // RawKVBatch payload and flushes/syncs the writer while holding the journal
 // lock. If the append succeeds but the flush fails, the allocated LSN is
@@ -836,11 +896,7 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedAndFlush(baseAppli
 		}
 		return 0, err
 	}
-	if sync {
-		err = j.writer.Sync()
-	} else {
-		err = j.writer.Flush()
-	}
+	err = j.flushLocked(sync)
 	if err != nil {
 		return lsn, err
 	}

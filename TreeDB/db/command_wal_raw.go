@@ -586,10 +586,10 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 }
 
 // AppendRawKVSingleCommandWAL appends a one-operation RawKVBatch command frame.
-// It delegates post-append flushing to FlushCommandWAL(sync); relaxed durability
-// flushes without fsync rather than forcing strict-sync semantics. If that
-// post-append flush fails, the returned LSN is still the allocated LSN; callers
-// must record the command as pending and treat subsequent command-WAL appends as
+// It flushes while holding the command-journal lock; relaxed durability flushes
+// without fsync rather than forcing strict-sync semantics. If that post-append
+// flush fails, the returned LSN is still the allocated LSN; callers must record
+// the command as pending and treat subsequent command-WAL appends as
 // recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
@@ -616,11 +616,15 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	lsn, err := db.commandJournal.AppendRawKVSingleCommand(baseAppliedLSN, op)
-	if err != nil {
-		return 0, err
+	flushSync := sync && db.durability != DurabilityWALOnRelaxed
+	lsn, err := db.commandJournal.AppendRawKVSingleCommandAndFlush(baseAppliedLSN, op, flushSync)
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
 	}
-	if err := db.FlushCommandWAL(sync); err != nil {
+	if err != nil {
+		if lsn != 0 {
+			db.commandWALFlushPoisoned.Store(true)
+		}
 		return lsn, err
 	}
 	db.observeCommandWALAccepted(lsn)
@@ -630,10 +634,10 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 // AppendRawKVPointCommandWALTrusted appends a caller-validated public raw KV
 // point Set/Delete command. It is intended for public cached command-WAL writes
 // after cached preflight has validated the user input and before visibility.
-// It delegates post-append flushing to FlushCommandWAL(sync); relaxed durability
-// flushes without fsync rather than forcing strict-sync semantics. If that
-// post-append flush fails, the returned LSN is still the allocated LSN; callers
-// must record the command as pending and treat subsequent command-WAL appends as
+// It flushes while holding the command-journal lock; relaxed durability flushes
+// without fsync rather than forcing strict-sync semantics. If that post-append
+// flush fails, the returned LSN is still the allocated LSN; callers must record
+// the command as pending and treat subsequent command-WAL appends as
 // recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value []byte, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
@@ -657,11 +661,15 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	lsn, err := db.commandJournal.AppendRawKVPointCommandTrusted(baseAppliedLSN, op, key, value)
-	if err != nil {
-		return 0, err
+	flushSync := sync && db.durability != DurabilityWALOnRelaxed
+	lsn, err := db.commandJournal.AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN, op, key, value, flushSync)
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
 	}
-	if err := db.FlushCommandWAL(sync); err != nil {
+	if err != nil {
+		if lsn != 0 {
+			db.commandWALFlushPoisoned.Store(true)
+		}
 		return lsn, err
 	}
 	db.observeCommandWALAccepted(lsn)
