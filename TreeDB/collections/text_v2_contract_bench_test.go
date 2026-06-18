@@ -37,7 +37,7 @@ func TestTextV2ContractBenchmarkMatrix2623(t *testing.T) {
 		}
 	}
 	cases := textV2ContractSearchCases2623(256)
-	for _, want := range []string{"score_only_common_no_docs", "detailed_common_no_docs", "rare_no_docs", "multi_term_and_no_docs"} {
+	for _, want := range []string{"score_only_common_no_docs", "detailed_common_no_docs", "rare_no_docs", "multi_term_or_no_docs", "multi_term_and_no_docs", "common_rare_or_no_docs", "high_frequency_disjunction_no_docs"} {
 		if !textV2ContractContainsSearchCase2623(cases, want) {
 			t.Fatalf("search cases=%v missing %q", textV2ContractSearchCaseNames2623(cases), want)
 		}
@@ -567,6 +567,65 @@ func BenchmarkTextV2BlockMaxCommonTerm2628(b *testing.B) {
 	}
 }
 
+func BenchmarkTextV2BlockMaxMultiTerm2730(b *testing.B) {
+	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_OR_WAND_DOCS", 10_000)
+	if docs < int(textV2PostingBlockTargetPostings)*3 {
+		docs = int(textV2PostingBlockTargetPostings) * 3
+	}
+	if docs >= 100_000 && !textV2ContractLargeCorpusEnabled2623() && os.Getenv("TREEDB_TEXT_V2_OR_WAND_DOCS") == "" {
+		b.Skip("set TREEDB_TEXT_V2_RUN_100K=1 or TREEDB_TEXT_V2_OR_WAND_DOCS to run the >=100k local artifact row")
+	}
+	d, col := openTextV2ORWANDBenchFixture2730(b, docs)
+	defer func() { _ = d.Close() }()
+	maxPostings := docs * 8
+	cases := []struct {
+		name       string
+		query      string
+		operator   TextSearchOperator
+		disableBMW bool
+	}{
+		{name: "or_common_blockmax", query: "refund OR policy", operator: TextSearchOperatorOR},
+		{name: "or_common_exhaustive", query: "refund OR policy", operator: TextSearchOperatorOR, disableBMW: true},
+		{name: "and_common_blockmax", query: "refund AND policy", operator: TextSearchOperatorAND},
+		{name: "and_common_exhaustive", query: "refund AND policy", operator: TextSearchOperatorAND, disableBMW: true},
+		{name: "or_common_rare_blockmax", query: "refund OR " + textV2ContractRareTerm2623, operator: TextSearchOperatorOR},
+		{name: "or_common_rare_exhaustive", query: "refund OR " + textV2ContractRareTerm2623, operator: TextSearchOperatorOR, disableBMW: true},
+		{name: "or_high_frequency_blockmax", query: "refund OR policy OR support OR common", operator: TextSearchOperatorOR},
+		{name: "or_high_frequency_exhaustive", query: "refund OR policy OR support OR common", operator: TextSearchOperatorOR, disableBMW: true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			opts := TextSearchOptions{IndexName: textV2ContractIndexName2623, Query: tc.query, Operator: tc.operator, TopK: 10, CandidateLimit: docs, MaxPostingsScanned: maxPostings, textV2DisableBlockMax: tc.disableBMW}
+			warm, err := col.searchText(opts, textSearchResultScoreOnly)
+			if err != nil {
+				b.Fatalf("warm search: %v", err)
+			}
+			if len(warm.Results) == 0 || warm.Stats.DocumentsFetched != 0 || warm.Stats.FullDocumentScanFallbacks != 0 || warm.Stats.FailClosed != 0 || warm.Stats.TextStateLookups != 0 || warm.Stats.TextMatchDetailsBuilt != 0 {
+				b.Fatalf("warm response=%+v want score-only zero-doc multi-term search", warm)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			var sink TextSearchResponse
+			for i := 0; i < b.N; i++ {
+				got, err := col.searchText(opts, textSearchResultScoreOnly)
+				if err != nil {
+					b.Fatalf("SearchText: %v", err)
+				}
+				if len(got.Results) == 0 || got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 || got.Stats.TextStateLookups != 0 || got.Stats.TextMatchDetailsBuilt != 0 {
+					b.Fatalf("response=%+v want score-only zero-doc multi-term search", got)
+				}
+				sink = got
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(docs), "docs_fixture")
+			b.ReportMetric(float64(opts.TopK), "topk/search")
+			b.ReportMetric(float64(maxPostings), "max_postings/search")
+			textV2ContractReportTextStats2623(b, sink)
+		})
+	}
+}
+
 func BenchmarkTextV2LazyDetails2629(b *testing.B) {
 	docs := textV2ContractEnvInt2623("TREEDB_TEXT_V2_LAZY_DETAILS_DOCS", 10_000)
 	if docs < int(textV2PostingBlockTargetPostings)*3 {
@@ -696,6 +755,55 @@ func BenchmarkTextV2BlockMaxConcurrentServing2628(b *testing.B) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	b.ReportMetric(float64(ms.HeapAlloc), "steady_heap_bytes")
+}
+
+func openTextV2ORWANDBenchFixture2730(tb testing.TB, docs int) (*backenddb.DB, *Collection) {
+	tb.Helper()
+	d := openTextV2ContractDB2623(tb)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	ids, rawDocs := textV2ORWANDBenchDocuments2730(docs, minTextV2ContractInt2623(16, docs))
+	if _, err := col.InsertBatch(ids, rawDocs); err != nil {
+		_ = d.Close()
+		tb.Fatalf("InsertBatch fixture: %v", err)
+	}
+	def := textV2ContractV2IndexDefinition2626()
+	if len(def.Fields) > 0 {
+		def.Fields[0].Weight = 5
+	}
+	if _, _, err := col.CreateTextIndex(def); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateTextIndex v2 fixture: %v", err)
+	}
+	return d, col
+}
+
+func textV2ORWANDBenchDocuments2730(count, highDocs int) ([][]byte, [][]byte) {
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		ids[i] = []byte(fmt.Sprintf("doc-or-wand-%06d", i))
+		title := "refund policy"
+		body := "refund policy support common"
+		if i < highDocs {
+			title = strings.TrimSpace(strings.Repeat("refund policy ", 64))
+			body = strings.TrimSpace(strings.Repeat("refund policy ", 128))
+		}
+		rare := ""
+		if i%97 == 0 {
+			rare = " " + textV2ContractRareTerm2623
+		}
+		docs[i] = []byte(fmt.Sprintf(`{"title":%q,"body":%q,"tenant":"tenant-broad"}`, title+rare, body+rare))
+	}
+	return ids, docs
 }
 
 func openTextV2BlockMaxBenchFixture2628(tb testing.TB, docs int) (*backenddb.DB, *Collection) {
@@ -832,7 +940,10 @@ func textV2ContractSearchCases2623(docs int) []textV2ContractSearchCase2623 {
 		{name: "score_only_common_no_docs", query: "refund", resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
 		{name: "detailed_common_no_docs", query: "refund", resultMode: textSearchResultFull, candidateLimit: candidateLimit, maxPostings: maxPostings},
 		{name: "rare_no_docs", query: textV2ContractRareTerm2623, resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
+		{name: "multi_term_or_no_docs", query: "refund OR policy", operator: TextSearchOperatorOR, resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
 		{name: "multi_term_and_no_docs", query: "refund AND policy", operator: TextSearchOperatorAND, resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
+		{name: "common_rare_or_no_docs", query: "refund OR " + textV2ContractRareTerm2623, operator: TextSearchOperatorOR, resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
+		{name: "high_frequency_disjunction_no_docs", query: "refund OR policy OR support OR common", operator: TextSearchOperatorOR, resultMode: textSearchResultScoreOnly, candidateLimit: candidateLimit, maxPostings: maxPostings},
 	}
 }
 
