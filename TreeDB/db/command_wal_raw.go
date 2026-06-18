@@ -130,16 +130,19 @@ func (db *DB) CommandWALBytes() int64 {
 		activePath = db.commandJournal.Path()
 	}
 	for _, seg := range segments {
-		if seg.valueLog || !isCommandWALLaneSegment(seg) || seg.size <= 0 {
+		if seg.valueLog || !isCommandWALLaneSegment(seg) {
 			continue
 		}
 		if activePath != "" && samePath(seg.path, activePath) {
 			// ActiveBytes includes buffered command frames that are not reflected in
-			// the file size yet, so use it for the active writer segment.
+			// the file size yet, so use it for the active writer segment even when the
+			// newly-created active file is still zero bytes on disk.
 			total += active
 			continue
 		}
-		total += seg.size
+		if seg.size > 0 {
+			total += seg.size
+		}
 	}
 	if total < active {
 		return active
