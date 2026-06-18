@@ -1,9 +1,10 @@
 # Collection Text Index v2 Contract (M0 / #2623)
 
-Status: M0 design gate plus M1-M6 landed behavior for #2622. This document fixes
-production contract, rollout vocabulary, storage boundaries, counters, and
-benchmark gates that later text-v2 implementation PRs must satisfy before they
-can claim readiness.
+Status: M0 design gate plus M1-M6 landed behavior for `#2622` and the bounded
+`#2733` phrase/proximity/analyzer extension. This document fixes production
+contract, rollout vocabulary, storage boundaries, counters, and benchmark gates
+that later text-v2 implementation PRs must satisfy before they can claim
+readiness.
 
 TreeDB remains pre-alpha, so on-disk formats may change, but unsupported or
 corrupt text-v2 formats must fail closed. Later milestones may refine binary
@@ -321,6 +322,36 @@ field/term summaries for the bounded requested text candidate set; default hybri
 candidate generation emits no `TextMatches` and keeps `docs_fetched=0`,
 `state_lookups=0`, and `match_details_built=0`.
 
+## Bounded phrase/proximity and analyzer options (#2733)
+
+Phrase/proximity search is exposed as structured `TextSearchOptions.Phrase`, not
+as a Lucene-compatible query DSL. It is supported only for text-v2 indexes built
+with `StorePositions=true`; v1 indexes, v2 indexes without positions, mixed
+`Query`/`Phrase` requests, unsupported grouped/quoted DSL in `Query`, excessive
+phrase term counts, and phrase slop above the bounded implementation maximum
+fail closed instead of scanning documents.
+
+Phrase semantics are ordered and position-lane based. The analyzer tokenizes the
+phrase query with the same persisted analyzer configuration used at index build
+time. Exact phrase uses `Slop=0`; positive slop permits that many total
+intervening tokens across the ordered phrase within a single indexed field. The
+serving path generates candidates from existing posting blocks, validates
+`text-v2-positions` entries for candidate ordinals under the same TreeDB
+snapshot, then scores matching candidates with the unchanged BM25F/BM25F term
+statistics. Score-only phrase/proximity candidate generation still keeps
+`docs_fetched=0`, `state_lookups=0`, and `match_details_built=0`; document fetch
+is only the existing explicit final top-K fetch.
+
+Analyzer options are persisted in `TextIndexDefinition.AnalyzerOptions`. The
+simple analyzer supports normalized stopword filtering. Stopword filtering
+preserves original token positions, so phrase/proximity slop can account for
+removed-token gaps. Stemming and synonym configuration fields are reserved as
+extension seams and currently fail closed during index-definition normalization;
+they are not silently accepted because they would change indexed terms and
+positions. Changing analyzer options changes the physical term/position contract
+and requires rebuilding the text index; TreeDB is pre-alpha and does not provide
+an in-place migration scaffold for analyzer-option changes.
+
 ## M7 rewrite/merge hardening and default switch (#2630/#2690)
 
 M7 adds explicit logical rewrite/merge maintenance for text-v2 indexes through
@@ -439,6 +470,9 @@ row applies. Explicit v1 rows report compatible zero/legacy values so v1/v2 comp
 | `norm_lookups` | field-length/norm lookups or block reads |
 | `docs_fetched` | full documents fetched after final top-K only |
 | `match_details_built` | result/candidate match-detail materializations |
+| `position_lookups` | position-lane root lookups used by phrase/proximity or detailed validation |
+| `phrase_candidates_checked` | candidates whose positions were tested for phrase/proximity semantics |
+| `phrase_candidates_matched` | checked candidates that satisfied phrase/proximity semantics |
 | `scalar_filter_selectivity` | matched/(matched+rejected), reported as pct or ppm |
 | `fail_closed` | fail-closed count and reason |
 | `write_amplification` | text-root entries or bytes emitted per document |
@@ -465,9 +499,10 @@ Required fixture scales:
 
 Required query and serving shapes:
 
-- common-term, rare-term, multi-term AND/OR, scalar-filtered, and score-only
-  rows; M6 detailed-match rows must prove `match_details_built` is bounded by
-  returned top-K/requested final results while score-only rows keep it zero;
+- common-term, rare-term, multi-term AND/OR, scalar-filtered, phrase/proximity,
+  analyzer-option, and score-only rows; M6 detailed-match rows must prove
+  `match_details_built` is bounded by returned top-K/requested final results
+  while score-only rows keep it zero;
 - isolated text write, backfill, update, and delete rows with `-benchmem`;
 - current #2589/#2564 indexed insert/search guardrail matrix on the latest base, including v1, v2, vector, and hybrid rows;
 - M6 lazy detail rows comparing score-only versus detailed top-K materialization;
