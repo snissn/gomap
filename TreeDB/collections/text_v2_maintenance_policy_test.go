@@ -184,6 +184,27 @@ func TestTextV2MaintenanceDryRunSkipsSchemaMutationFlush2732(t *testing.T) {
 	}
 }
 
+func TestTextV2MaintenanceCanceledContextSkipsSchemaMutationFlush2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}, [][]byte{[]byte("d1")}, [][]byte{[]byte(`{"body":"refund policy"}`)})
+
+	flushCalls := 0
+	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() {
+		flushCalls++
+	})
+	defer restoreFlushHook()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := col.MaintainTextIndex(ctx, "lexical", TextIndexMaintenanceOptions{Force: true}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("MaintainTextIndex canceled err=%v want context.Canceled", err)
+	}
+	if flushCalls != 0 {
+		t.Fatalf("canceled maintenance invoked schema flush %d times", flushCalls)
+	}
+}
+
 func TestTextV2RewriteProcessTermChecksBudgetBeforeWork2732(t *testing.T) {
 	plan := &textV2RewritePlan{}
 	term := &textV2PostingRewriteTerm{term: "refund", oldBlocks: 1, postings: 1}
