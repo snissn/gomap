@@ -98,6 +98,20 @@ func TestHybridFailureRowsPreserveFailClosedStats2731(t *testing.T) {
 	}
 }
 
+func TestRecordReopenProbeFailurePreservesReport2731(t *testing.T) {
+	rep := report{Load: loadReport{TotalSeconds: 2}}
+	recordReopenProbeFailure(&rep, errors.New("reopen hybrid vector probe: fail closed"))
+	if len(rep.Guardrails) != 1 || rep.Guardrails[0].Name != "reopen_probe" || rep.Guardrails[0].OK || rep.Guardrails[0].Failure == "" {
+		t.Fatalf("guardrails=%+v want failed reopen_probe", rep.Guardrails)
+	}
+	if len(rep.Caveats) == 0 {
+		t.Fatal("missing caveat for skipped probes")
+	}
+	if len(rep.Bottlenecks) == 0 {
+		t.Fatal("missing bottlenecks for partial report")
+	}
+}
+
 func TestDBDirContainingOutDirRejected2731(t *testing.T) {
 	root := t.TempDir()
 	cases := []struct {

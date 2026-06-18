@@ -442,7 +442,14 @@ func run(cfg config) (report, error) {
 	if cfg.runReopen {
 		reopen, reopenedFixture, err := runReopenProbe(fixture, cfg)
 		if err != nil {
-			return report{}, err
+			recordReopenProbeFailure(&rep, err)
+			if writeErr := writeReports(rep); writeErr != nil {
+				return rep, writeErr
+			}
+			if cfg.allowGuardrailFails {
+				return rep, nil
+			}
+			return rep, err
 		}
 		fixture = reopenedFixture
 		rep.Reopen = &reopen
@@ -494,6 +501,15 @@ func run(cfg config) (report, error) {
 		return rep, err
 	}
 	return rep, nil
+}
+
+func recordReopenProbeFailure(rep *report, err error) {
+	if rep == nil || err == nil {
+		return
+	}
+	rep.Guardrails = append(rep.Guardrails, guardrailResult{Name: "reopen_probe", OK: false, Failure: err.Error()})
+	rep.Caveats = append(rep.Caveats, "Reopen probe failed; later probes were skipped after writing the partial report.")
+	rep.Bottlenecks = rankBottlenecks(*rep)
 }
 
 func prepareEmptyDir(dir string) error {
@@ -1008,11 +1024,11 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		})
 		if err != nil {
 			_ = db.Close()
-			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector probe: %w", err)
+			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector guardrail probe: %w", err)
 		}
 		if len(vectorProbe.Results) == 0 || !hybridGuardrail("reopen_hybrid_vector_probe", vectorProbe.Stats).OK {
 			_ = db.Close()
-			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector probe failed guardrail stats=%+v results=%d", vectorProbe.Stats, len(vectorProbe.Results))
+			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector guardrail failed stats=%+v results=%d", vectorProbe.Stats, len(vectorProbe.Results))
 		}
 	}
 	probeSeconds := secondsSince(probeStart)
