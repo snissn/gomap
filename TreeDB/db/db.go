@@ -126,6 +126,7 @@ type DB struct {
 	commandWAL                     bool
 	commandWALStatsScan            bool
 	walMaxSegmentBytes             int64
+	commandWALSegmentTargetBytes   int64
 	keepRecent                     uint64
 	policy                         WritePolicy
 	valueLogCompression            ValueLogCompressionMode
@@ -402,6 +403,10 @@ type DB struct {
 	commandWALLiveAcceptedMax  atomic.Uint64
 	commandWALLiveCovered      atomic.Uint64
 	commandWALLiveCoveredMax   atomic.Uint64
+	commandWALCleanupScans     atomic.Uint64
+	commandWALCleanupRemoved   atomic.Uint64
+	commandWALCleanupBytes     atomic.Uint64
+	commandWALClosedBytes      atomic.Int64
 	commandWALRawPublishMu     sync.RWMutex
 	commandWALRawBarrierMu     sync.Mutex
 	commandWALRawBarrierNextID uint64
@@ -1084,6 +1089,12 @@ type Options struct {
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64
+	// CommandWALSegmentTargetBytes bounds command-WAL active segment growth by
+	// rotating to a fresh command-WAL segment before an append would make a
+	// non-empty active segment exceed the target. It is separate from
+	// WALMaxSegmentBytes, which remains a per-frame payload cap. 0 disables
+	// runtime command-WAL rotation.
+	CommandWALSegmentTargetBytes int64
 	// JournalCompression enables best-effort zstd compression for cached-mode
 	// journal/commitlog segments (metadata only).
 	//
@@ -1699,6 +1710,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		commandWAL:                     opts.CommandWAL,
 		commandWALStatsScan:            opts.CommandWALStatsScan,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
+		commandWALSegmentTargetBytes:   opts.CommandWALSegmentTargetBytes,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -1799,9 +1811,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
 			MaxSegmentSize:            opts.WALMaxSegmentBytes,
+			SegmentTargetBytes:        opts.CommandWALSegmentTargetBytes,
 			BufferSize:                commandWALWriterBufferSize,
 			DeferredCommandBufferSize: commandWALDeferredPointBufferSize,
 			Compress:                  opts.JournalCompression,
+			OnSegmentRotated:          db.observeCommandWALSegmentRotated,
 			InitialLSN:                db.meta.AppliedCommandLSN,
 			SegmentSeq:                commandSegmentSeq,
 		})
@@ -1810,6 +1824,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 		db.commandJournal = journal
+		db.refreshCommandWALClosedBytes()
 		db.cacheCommandWALRequiredFeatureStats()
 	} else {
 		// If a directory requires command replay but this open is not command-WAL
@@ -2773,6 +2788,13 @@ func (db *DB) Checkpoint() error {
 			return err
 		}
 	}
+	rotatedCommandWAL := false
+	if db.commandWAL && db.commandJournal != nil && db.CommandWALActiveBytes() > 0 {
+		if err := db.RotateCommandWALActiveSegment(true); err != nil {
+			return err
+		}
+		rotatedCommandWAL = true
+	}
 	if debugTiming {
 		t1 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
@@ -2787,6 +2809,11 @@ func (db *DB) Checkpoint() error {
 		)
 	} else if err := idx.pager.Sync(); err != nil {
 		return err
+	}
+	if rotatedCommandWAL {
+		if err := db.CleanupCommandWALCoveredSegments(true); err != nil {
+			return err
+		}
 	}
 	return nil
 }

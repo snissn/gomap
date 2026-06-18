@@ -172,6 +172,11 @@ type CommandJournalOptions struct {
 	// MaxSegmentSize caps individual command frame payloads; zero uses the
 	// commitlog default.
 	MaxSegmentSize int64
+	// SegmentTargetBytes is the active command-WAL segment file-size target.
+	// When >0, appends that would make a non-empty active segment exceed this
+	// target rotate to the next lane segment before reserving an LSN. The target
+	// is independent from MaxSegmentSize, which remains a per-frame safety cap.
+	SegmentTargetBytes int64
 	// BufferSize controls this command journal's buffered writer size. Zero
 	// uses the commitlog default.
 	BufferSize int
@@ -180,6 +185,11 @@ type CommandJournalOptions struct {
 	DeferredCommandBufferSize int
 	// Compress enables commitlog frame compression.
 	Compress bool
+	// OnSegmentRotated is called after a successful active segment rotation with
+	// the closed segment bytes, including writer-buffered command frames flushed
+	// by the rotation. The callback runs while the journal mutex is held and must
+	// not re-enter the journal.
+	OnSegmentRotated func(closedBytes int64)
 	// InitialLSN is the highest already-applied/durable command LSN. CommandJournal
 	// scans existing frames while holding the owner lock and advances reservation
 	// to max(InitialLSN, observed frame LSN)+1.
@@ -187,10 +197,15 @@ type CommandJournalOptions struct {
 }
 
 type CommandJournal struct {
-	mu     sync.Mutex
-	owner  *JournalOwner
-	writer *Writer
-	path   string
+	mu                 sync.Mutex
+	owner              *JournalOwner
+	writer             *Writer
+	walDir             string
+	path               string
+	lane               int
+	segmentSeq         uint64
+	segmentTargetBytes int64
+	onSegmentRotated   func(closedBytes int64)
 }
 
 func CommandSegmentName(lane int, seq uint64) string {
@@ -251,9 +266,14 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		return nil, err
 	}
 	return &CommandJournal{
-		owner:  owner,
-		writer: writer,
-		path:   path,
+		owner:              owner,
+		writer:             writer,
+		walDir:             walDir,
+		path:               path,
+		lane:               opts.Lane,
+		segmentSeq:         opts.SegmentSeq,
+		segmentTargetBytes: opts.SegmentTargetBytes,
+		onSegmentRotated:   opts.OnSegmentRotated,
 	}, nil
 }
 
@@ -456,6 +476,78 @@ func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
 	return first, err
 }
 
+func (j *CommandJournal) maybeRotateForFrameLocked(frameSize int, syncCurrent bool) error {
+	if j == nil || j.writer == nil || j.segmentTargetBytes <= 0 || frameSize <= 0 {
+		return nil
+	}
+	total := int64(segmentHeaderSize + frameSize)
+	activeBytes := j.writer.ActiveBytes()
+	if activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes {
+		return nil
+	}
+	return j.rotateActiveSegmentLocked(syncCurrent)
+}
+
+func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
+	if j == nil || j.writer == nil {
+		return errors.New("commitlog: command journal is closed")
+	}
+	if j.segmentSeq == ^uint64(0) {
+		return ErrCommandWALSegmentSeqExhausted
+	}
+	nextSeq := j.segmentSeq + 1
+	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
+	closedBytes := j.writer.ActiveBytes()
+	if err := j.writer.RotateToWithSync(nextPath, syncCurrent); err != nil {
+		return err
+	}
+	if closedBytes > 0 && j.onSegmentRotated != nil {
+		j.onSegmentRotated(closedBytes)
+	}
+	j.segmentSeq = nextSeq
+	j.path = nextPath
+	return nil
+}
+
+// RotateActiveSegment rotates the command WAL to the next segment. It is safe to
+// call at checkpoint boundaries; appends are serialized by the journal mutex.
+func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.rotateActiveSegmentLocked(syncCurrent)
+}
+
+func (j *CommandJournal) ActiveBytes() int64 {
+	_, bytes := j.ActiveSegmentSnapshot()
+	return bytes
+}
+
+// ActiveSegmentSnapshot reports the active segment path and accepted bytes under
+// one journal lock acquisition.
+func (j *CommandJournal) ActiveSegmentSnapshot() (path string, bytes int64) {
+	if j == nil {
+		return "", 0
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil {
+		return j.path, 0
+	}
+	return j.path, j.writer.ActiveBytes()
+}
+
+func (j *CommandJournal) NextLSN() uint64 {
+	if j == nil || j.owner == nil {
+		return 0
+	}
+	j.owner.mu.Lock()
+	defer j.owner.mu.Unlock()
+	return j.owner.nextLSN
+}
+
 // AppendCommand validates a complete command frame, assigns the next journal
 // LSN, and appends it through this lane's single writer while holding the
 // journal mutex. This intentionally optimizes for deterministic frame order and
@@ -496,13 +588,16 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 		return 0, err
 	}
 	// maxSegmentSize is the per-frame safety cap used by Writer.AppendCommand;
-	// segment-file rotation is caller-owned and not based on remaining bytes in
-	// the current file.
+	// segmentTargetBytes is the separate active file rotation target checked
+	// before LSN reservation.
 	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
 		return 0, ErrRecordTooLarge
 	}
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
@@ -524,6 +619,31 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, false)
+}
+
+// AppendRawKVSingleCommandAndFlush appends a one-operation RawKVBatch command
+// and flushes/syncs the writer while holding the journal lock. When sync is
+// true, any segment rotated before the append is also synced before the new
+// frame is written, preserving durable command-WAL prefix ordering for sync
+// point writes.
+func (j *CommandJournal) AppendRawKVSingleCommandAndFlush(baseAppliedLSN uint64, op RawKVOperation, sync bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	lsn, err := j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, sync)
+	if err != nil {
+		return 0, err
+	}
+	if err := j.flushLocked(sync); err != nil {
+		return lsn, err
+	}
+	return lsn, nil
+}
+
+func (j *CommandJournal) appendRawKVSingleCommandLocked(baseAppliedLSN uint64, op RawKVOperation, syncCurrent bool) (uint64, error) {
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -548,6 +668,9 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
+	if err := j.maybeRotateForFrameLocked(size, syncCurrent); err != nil {
+		return 0, err
+	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
@@ -571,6 +694,31 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, false)
+}
+
+// AppendRawKVPointCommandTrustedAndFlush appends a caller-validated public raw
+// KV point command and flushes/syncs the writer while holding the journal lock.
+// When sync is true, any segment rotated before the append is also synced before
+// the new frame is written, preserving durable command-WAL prefix ordering for
+// sync point writes.
+func (j *CommandJournal) AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN uint64, op RawKVOp, key, value []byte, sync bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	lsn, err := j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, sync)
+	if err != nil {
+		return 0, err
+	}
+	if err := j.flushLocked(sync); err != nil {
+		return lsn, err
+	}
+	return lsn, nil
+}
+
+func (j *CommandJournal) appendRawKVPointCommandTrustedLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, syncCurrent bool) (uint64, error) {
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -591,6 +739,9 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	}
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, syncCurrent); err != nil {
+		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
@@ -625,6 +776,19 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	size, err := commandFrameEncodedSizeFromLengths(len(payload), 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
@@ -669,6 +833,9 @@ func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope Com
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
+	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
@@ -680,6 +847,16 @@ func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope Com
 		return 0, err
 	}
 	return lsn, nil
+}
+
+func (j *CommandJournal) flushLocked(sync bool) error {
+	if j == nil || j.writer == nil {
+		return errors.New("commitlog: command journal is closed")
+	}
+	if sync {
+		return j.writer.Sync()
+	}
+	return j.writer.Flush()
 }
 
 // AppendRawKVBatchPayloadCommandTrustedAndFlush appends a caller-validated
@@ -696,6 +873,19 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedAndFlush(baseAppli
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
+	size, err := commandFrameEncodedSizeFromLengths(len(payload), 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, sync); err != nil {
+		return 0, err
+	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
@@ -706,11 +896,7 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedAndFlush(baseAppli
 		}
 		return 0, err
 	}
-	if sync {
-		err = j.writer.Sync()
-	} else {
-		err = j.writer.Flush()
-	}
+	err = j.flushLocked(sync)
 	if err != nil {
 		return lsn, err
 	}

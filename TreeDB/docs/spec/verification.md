@@ -322,6 +322,7 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandJournalUnsupportedVersionDoesNotConsumeLSN`;
 - `TestCommandJournalAppendFailureRollsBackLSN`;
 - `TestCommandJournalOversizedFrameDoesNotConsumeLSN`;
+- `TestCommandJournalSegmentTargetRotatesBeforeLSNReservation`;
 - `TestCommandJournalDeterministicStressReopenAcrossLanesAndTails`;
 - `FuzzCommandWALDecodeFrame`;
 - `FuzzCommandWALRawKVBatchPayload`;
@@ -794,6 +795,14 @@ diagnostic WAL segment scans. It is intentionally narrower than the future
 cached typed-frame path: while this gate is active,
 `treedb.write_path.mode=command_wal_cached` is the expected proof that public
 command-WAL writes did not use the cached legacy redo journal.
+
+Bounded-growth command-WAL evidence includes
+`TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment`, which proves
+checkpoint rotation and covered-segment cleanup, and
+`TestPublicCommandWALAutoCheckpointUsesCommandWALBytes`, which proves
+command-WAL cached mode feeds total command-WAL segment bytes into the
+size-triggered auto-checkpoint loop while the legacy cached redo journal is
+disabled.
 
 ## 12. Collections Document Formats
 

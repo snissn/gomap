@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -51,7 +52,9 @@ type OpenOptions struct {
 }
 
 const (
-	defaultGethCommandWALMaxSegmentBytes int64 = 256 << 20
+	defaultGethCommandWALMaxSegmentBytes       int64 = 256 << 20
+	defaultGethCommandWALSegmentTargetBytes    int64 = 256 << 20
+	defaultGethCommandWALCheckpointMaxWALBytes int64 = 512 << 20
 
 	// EnvReadIntegrity selects value-log read checksum verification for the geth
 	// TreeDB adapter. Empty preserves the selected profile/default. Use
@@ -91,9 +94,9 @@ func Open(path string, options *OpenOptions) (*Database, error) {
 
 // OpenWithOptions opens TreeDB with caller-supplied options and wraps it as an
 // ethdb.KeyValueStore. Writable options must enable TreeDB command WAL. When
-// WALMaxSegmentBytes is left at zero, the adapter applies a geth-sized WAL frame
-// cap before open so command-WAL activation from persisted format config also
-// uses the larger cap.
+// WALMaxSegmentBytes and command-WAL growth knobs are left at zero, the adapter
+// applies geth-sized defaults before open so command-WAL activation from
+// persisted format config also uses the larger cap.
 func OpenWithOptions(opts treedb.Options) (*Database, error) {
 	applyGethCommandWALDefaults(&opts)
 	if err := applyReadIntegrityEnv(&opts); err != nil {
@@ -189,7 +192,7 @@ func parseReadIntegrity(raw string) (treedb.IntegrityMode, error) {
 }
 
 func applyGethCommandWALDefaults(opts *treedb.Options) {
-	if opts == nil || opts.WALMaxSegmentBytes != 0 {
+	if opts == nil {
 		return
 	}
 	// Geth beacon skeleton sync can commit the whole 131,072-header scratch
@@ -198,7 +201,35 @@ func applyGethCommandWALDefaults(opts *treedb.Options) {
 	// with enough headroom while preserving explicit caller overrides. Apply this
 	// before open even when CommandWAL is false because an existing DB can activate
 	// command WAL from its persisted format config during read-only inspection.
-	opts.WALMaxSegmentBytes = defaultGethCommandWALMaxSegmentBytes
+	if opts.WALMaxSegmentBytes == 0 {
+		opts.WALMaxSegmentBytes = defaultGethCommandWALMaxSegmentBytes
+	}
+	setInt64OptionFieldDefault(opts, "CommandWALSegmentTargetBytes", defaultGethCommandWALSegmentTargetBytes)
+	if opts.MaxWALBytes == 0 {
+		opts.MaxWALBytes = defaultGethCommandWALCheckpointMaxWALBytes
+	}
+}
+
+func setInt64OptionFieldDefault(opts *treedb.Options, name string, value int64) bool {
+	if opts == nil {
+		return false
+	}
+	field := reflect.ValueOf(opts).Elem().FieldByName(name)
+	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Int64 {
+		return false
+	}
+	if field.Int() == 0 {
+		field.SetInt(value)
+	}
+	return true
+}
+
+func int64OptionField(opts treedb.Options, name string) (int64, bool) {
+	field := reflect.ValueOf(opts).FieldByName(name)
+	if !field.IsValid() || field.Kind() != reflect.Int64 {
+		return 0, false
+	}
+	return field.Int(), true
 }
 
 type compactStorageFunc func(context.Context, *treedb.DB) error
@@ -217,6 +248,10 @@ func Wrap(db *treedb.DB) *Database {
 func wrapWithOptions(db *treedb.DB, opts treedb.Options) *Database {
 	wrapped := Wrap(db)
 	wrapped.walMaxSegmentBytes = opts.WALMaxSegmentBytes
+	if segmentTargetBytes, ok := int64OptionField(opts, "CommandWALSegmentTargetBytes"); ok {
+		wrapped.commandWALSegmentTargetBytes = segmentTargetBytes
+	}
+	wrapped.maxWALBytes = opts.MaxWALBytes
 	return wrapped
 }
 
@@ -226,8 +261,10 @@ type Database struct {
 	compactStorage compactStorageFunc
 	// walMaxSegmentBytes records the effective adapter WAL cap for tests and
 	// future diagnostics. Wrap cannot infer this for already-open handles.
-	walMaxSegmentBytes int64
-	closed             atomic.Bool
+	walMaxSegmentBytes           int64
+	commandWALSegmentTargetBytes int64
+	maxWALBytes                  int64
+	closed                       atomic.Bool
 }
 
 var _ ethdb.KeyValueStore = (*Database)(nil)
