@@ -385,6 +385,12 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 		stats.Noop = true
 		return stats, beforeStats, "dry_run", nil
 	}
+	if err := budget.check(); err != nil {
+		if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+			return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason), beforeStats, budget.reason, nil
+		}
+		return empty, emptyStorage, "", err
+	}
 
 	rootNames := make([]string, 0, 6)
 	baseRootIDs := make(map[string]uint64, 6)
