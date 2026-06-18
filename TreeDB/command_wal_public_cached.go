@@ -210,7 +210,7 @@ func (tdb *DB) publicCommandWALAutoCheckpointBytes() int64 {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return 0
 	}
-	return tdb.backend.CommandWALActiveBytes()
+	return tdb.backend.CommandWALBytes()
 }
 
 func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {

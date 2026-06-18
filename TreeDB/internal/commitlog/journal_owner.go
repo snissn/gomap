@@ -570,8 +570,8 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 		return 0, err
 	}
 	// maxSegmentSize is the per-frame safety cap used by Writer.AppendCommand;
-	// segment-file rotation is caller-owned and not based on remaining bytes in
-	// the current file.
+	// segmentTargetBytes is the separate active file rotation target checked
+	// before LSN reservation.
 	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
 		return 0, ErrRecordTooLarge
 	}

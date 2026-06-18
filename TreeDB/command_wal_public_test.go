@@ -723,6 +723,41 @@ func TestPublicCommandWALAutoCheckpointUsesCommandWALBytes(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALAutoCheckpointBytesIncludesRotatedSegments(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                              dir,
+		Durability:                       DurabilityWALOnRelaxed,
+		CommandWAL:                       true,
+		CommandWALSegmentTargetBytes:     1,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
+		DisableSideStores:                true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("pressure-a"), []byte("a")); err != nil {
+		t.Fatalf("Set a: %v", err)
+	}
+	if err := db.Set([]byte("pressure-b"), []byte("b")); err != nil {
+		t.Fatalf("Set b: %v", err)
+	}
+	if got := publicCommandWALSegmentNames(t, dir); len(got) < 2 {
+		t.Fatalf("segments=%v, want rotation before pressure accounting check", got)
+	}
+	active := db.backend.CommandWALActiveBytes()
+	pressure := db.publicCommandWALAutoCheckpointBytes()
+	if active <= 0 {
+		t.Fatalf("active command WAL bytes=%d, want >0", active)
+	}
+	if pressure <= active {
+		t.Fatalf("auto-checkpoint pressure bytes=%d, active bytes=%d; want pressure to include rotated non-active bytes", pressure, active)
+	}
+}
+
 func TestPublicCommandWALCheckpointPiggybacksAppliedLSN(t *testing.T) {
 	db, err := Open(Options{
 		Dir:               t.TempDir(),

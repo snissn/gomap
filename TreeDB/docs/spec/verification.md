@@ -800,8 +800,9 @@ Bounded-growth command-WAL evidence includes
 `TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment`, which proves
 checkpoint rotation and covered-segment cleanup, and
 `TestPublicCommandWALAutoCheckpointUsesCommandWALBytes`, which proves
-command-WAL cached mode feeds command-WAL active bytes into the size-triggered
-auto-checkpoint loop while the legacy cached redo journal is disabled.
+command-WAL cached mode feeds total command-WAL segment bytes into the
+size-triggered auto-checkpoint loop while the legacy cached redo journal is
+disabled.
 
 ## 12. Collections Document Formats
 

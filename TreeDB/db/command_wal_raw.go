@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -107,6 +108,55 @@ func (db *DB) CommandWALActiveBytes() int64 {
 		return 0
 	}
 	return db.commandJournal.ActiveBytes()
+}
+
+// CommandWALBytes reports command-WAL bytes currently present on disk, plus any
+// active command frames buffered by the open writer. It intentionally counts
+// covered non-active segments until cleanup removes them so byte-pressure
+// checkpointing can bound total command-WAL growth rather than only the active
+// file.
+func (db *DB) CommandWALBytes() int64 {
+	if db == nil || !db.commandWAL {
+		return 0
+	}
+	active := db.CommandWALActiveBytes()
+	segments, err := listWALSegments(db.dir)
+	if err != nil {
+		return active
+	}
+	var total int64
+	activePath := ""
+	if db.commandJournal != nil {
+		activePath = db.commandJournal.Path()
+	}
+	for _, seg := range segments {
+		if seg.valueLog || !isCommandWALLaneSegment(seg) || seg.size <= 0 {
+			continue
+		}
+		if activePath != "" && samePath(seg.path, activePath) {
+			// ActiveBytes includes buffered command frames that are not reflected in
+			// the file size yet, so use it for the active writer segment.
+			total += active
+			continue
+		}
+		total += seg.size
+	}
+	if total < active {
+		return active
+	}
+	return total
+}
+
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA == nil && errB == nil {
+		return absA == absB
+	}
+	return a == b
 }
 
 // CommandWALNextLSN reports the next LSN this handle would reserve.

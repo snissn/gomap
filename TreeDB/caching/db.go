@@ -11367,7 +11367,9 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 }
 
 // SetAutoCheckpointWALBytesHook supplies external WAL pressure bytes for modes
-// that use cached checkpointing while disabling the cached redo journal.
+// that use cached checkpointing while disabling the cached redo journal. The
+// value should include reclaimable non-active bytes, not only active-writer
+// bytes, so size-triggered checkpoints can bound total WAL growth.
 func (db *DB) SetAutoCheckpointWALBytesHook(fn func() int64) {
 	if db == nil {
 		return
