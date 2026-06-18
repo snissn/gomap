@@ -484,6 +484,52 @@ func TestTextV2MaintenancePolicyStopsAfterIndexBudget2732(t *testing.T) {
 	}
 }
 
+func TestTextV2MaintenancePolicySkipsCompactionAfterBudgetExhaustion2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	col, _ := createTextV2MaintenancePolicyFixture2732(t, d, 48)
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical_extra", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex lexical_extra: %v", err)
+	}
+
+	stats, err := col.MaintainTextIndexes(context.Background(), TextIndexMaintenanceOptions{
+		Policy:               TextIndexMaintenancePolicy{MinDeletedDocuments: 1},
+		MaxIndexes:           1,
+		RunStorageCompaction: true,
+	})
+	if err != nil {
+		t.Fatalf("MaintainTextIndexes: %v", err)
+	}
+	if !stats.BudgetExhausted || stats.BudgetExhaustedReason != TextIndexMaintenanceSkipReasonMaxIndexes || stats.IndexesRewritten != 1 {
+		t.Fatalf("stats=%+v want one rewrite followed by max-index exhaustion", stats)
+	}
+	if stats.StorageCompacted || stats.StorageCompaction != nil {
+		t.Fatalf("stats=%+v want storage compaction skipped after budget exhaustion", stats)
+	}
+}
+
+func TestTextV2MaintenancePolicyManagerSkipsCompactionAfterBudgetExhaustion2732(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	createTextV2MaintenancePolicyNamedFixture2732(t, d, "docs_a", 48)
+	createTextV2MaintenancePolicyNamedFixture2732(t, d, "docs_b", 48)
+
+	stats, err := NewCollectionManager(d).MaintainTextIndexes(context.Background(), TextIndexMaintenanceOptions{
+		Policy:               TextIndexMaintenancePolicy{MinDeletedDocuments: 1},
+		MaxIndexes:           1,
+		RunStorageCompaction: true,
+	})
+	if err != nil {
+		t.Fatalf("manager MaintainTextIndexes: %v", err)
+	}
+	if !stats.BudgetExhausted || stats.BudgetExhaustedReason != TextIndexMaintenanceSkipReasonMaxIndexes || stats.IndexesRewritten != 1 {
+		t.Fatalf("manager stats=%+v want one rewrite followed by max-index exhaustion", stats)
+	}
+	if stats.StorageCompacted || stats.StorageCompaction != nil {
+		t.Fatalf("manager stats=%+v want storage compaction skipped after budget exhaustion", stats)
+	}
+}
+
 func TestTextV2MaintenancePolicyRejectsNegativeMaxIndexes2732(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
