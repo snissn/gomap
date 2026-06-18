@@ -1024,11 +1024,11 @@ func runReopenProbe(fixture scaleFixture, cfg config) (reopenReport, scaleFixtur
 		})
 		if err != nil {
 			_ = db.Close()
-			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector probe: %w", err)
+			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector guardrail probe: %w", err)
 		}
 		if len(vectorProbe.Results) == 0 || !hybridGuardrail("reopen_hybrid_vector_probe", vectorProbe.Stats).OK {
 			_ = db.Close()
-			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector probe failed guardrail stats=%+v results=%d", vectorProbe.Stats, len(vectorProbe.Results))
+			return reopenReport{}, fixture, fmt.Errorf("reopen hybrid vector guardrail failed stats=%+v results=%d", vectorProbe.Stats, len(vectorProbe.Results))
 		}
 	}
 	probeSeconds := secondsSince(probeStart)
