@@ -339,11 +339,10 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	budget := newTextV2RewriteBudget(ctx, opts)
 	var beforeStats TextIndexStorageStats
 	if run.NeedStorageStats || run.Decide != nil {
-		inspectBudget := newTextV2RewriteBudget(ctx, opts)
-		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, inspectBudget)
+		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, budget)
 		if err != nil {
 			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
-				return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, inspectBudget.reason), beforeStats, inspectBudget.reason, nil
+				return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason), beforeStats, budget.reason, nil
 			}
 			return empty, emptyStorage, "", err
 		}
