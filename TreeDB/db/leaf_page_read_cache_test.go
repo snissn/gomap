@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pierrec/lz4/v4"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -338,6 +339,67 @@ func TestCachedLeafPageReaderReadMissAdmissionUnknownChecksumStaysUnverified(t *
 	}
 	if cache.markPageChecksumVerified(ptr) {
 		t.Fatal("unknown-checksum read-miss admission should not accept page checksum mark")
+	}
+}
+
+var cachedLeafPageReaderLZ4BenchSink byte
+
+type leafPageCacheLZ4BenchFallback struct {
+	encoded []byte
+	calls   int
+}
+
+func (f *leafPageCacheLZ4BenchFallback) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	f.calls++
+	out := make([]byte, page.PageSize)
+	if _, err := lz4.UncompressBlock(f.encoded, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (f *leafPageCacheLZ4BenchFallback) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	f.calls++
+	if cap(dst) < page.PageSize {
+		dst = make([]byte, page.PageSize)
+	} else {
+		dst = dst[:page.PageSize]
+	}
+	n, err := lz4.UncompressBlock(f.encoded, dst)
+	if err != nil {
+		return nil, false, err
+	}
+	return dst[:n], true, nil
+}
+
+func (f *leafPageCacheLZ4BenchFallback) ReadChecksumEnabled() bool { return true }
+
+func BenchmarkCachedLeafPageReaderRepeatedLZ4ReadMissAdmission(b *testing.B) {
+	leaf := bytes.Repeat([]byte("leaf-page|"), (page.PageSize/10)+1)
+	leaf = leaf[:page.PageSize]
+	encoded := make([]byte, lz4.CompressBlockBound(len(leaf)))
+	n, err := lz4.CompressBlock(leaf, encoded, nil)
+	if err != nil || n <= 0 {
+		b.Fatalf("compress: n=%d err=%v", n, err)
+	}
+	fallback := &leafPageCacheLZ4BenchFallback{encoded: encoded[:n]}
+	cache := newLeafPageReadCache(64)
+	reader := newCachedLeafPageReader(cache, fallback)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: uint32(n)}
+	dst := make([]byte, 0, page.PageSize)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, _, _, err := reader.ReadUnsafeToWithCacheHit(ptr.ValuePtr(), dst[:0])
+		if err != nil {
+			b.Fatalf("read: %v", err)
+		}
+		cachedLeafPageReaderLZ4BenchSink ^= got[0]
+	}
+	b.StopTimer()
+	if b.N > 0 {
+		b.ReportMetric(float64(fallback.calls)/float64(b.N), "fallback_calls/op")
 	}
 }
 
