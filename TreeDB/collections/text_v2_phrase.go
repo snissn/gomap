@@ -25,12 +25,17 @@ func executeTextV2PhraseSearchAtSnapshot(
 	candidateLimit, maxPostingsScanned int,
 	resultMode textSearchResultMode,
 	response TextSearchResponse,
-) (TextSearchResponse, error) {
+) (ret TextSearchResponse, err error) {
+	if response.Explain != nil {
+		defer func() { textSearchExplainFinish(ret.Explain, ret.Stats) }()
+	}
 	uniqueTerms := uniqueSortedTextSearchTerms(append([]string(nil), phrase.terms...))
 	ctx, err := newTextV2SearchContext(snap, catalog, idx, uniqueTerms)
 	if err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 	}
+	textSearchExplainBindV2Context(response.Explain, ctx, uniqueTerms, nil)
+	textSearchExplainSetServingPath(response.Explain, TextSearchExplainPathPhrase, false)
 	if ctx.corpus.DocumentCount == 0 {
 		response.Results = []TextSearchResult{}
 		return response, nil
@@ -38,6 +43,10 @@ func executeTextV2PhraseSearchAtSnapshot(
 	allowSet, err := newTextV2SearchOrdinalAllowSet(snap, catalog, ctx, opts.textV2AllowedDocumentIDs)
 	if err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+	}
+	textSearchExplainBindV2Context(response.Explain, ctx, uniqueTerms, allowSet)
+	if allowSet != nil {
+		response.Stats.TextScalarPrefilterIDs = uint64(len(allowSet.sorted))
 	}
 	if allowSet.empty() {
 		response.Results = []TextSearchResult{}
@@ -158,6 +167,15 @@ func executeTextV2PhraseSearchAtSnapshot(
 		}
 		if err := populateTextV2SearchResultMatchesFromCandidate(snap, catalog, ctx, idx, candidate, resultMode, &result, &response.Stats); err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+		}
+		if response.Explain != nil {
+			norm, ok, err := cache.normEntry(snap, catalog, ctx, candidate.ordinal, &response.Stats)
+			if err != nil || !ok {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			if err := textSearchExplainAppendV2CandidateScore(response.Explain, result, candidate, uniqueTerms, ctx, norm); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
 		}
 		response.Results[i] = result
 	}

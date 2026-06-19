@@ -98,7 +98,8 @@ and query semantics.
    scalar-aware pruning counters and broad/rare scalar selectivity rows.
 4. **#2838 explain/observability**: make every gap row explainable, including
    terms, blocks visited/skipped, scalar pruning, fail-closed reasons, and score
-   components.
+   components. See `docs/benchmarks/treedb_text_v2_query_explain.md` for the
+   query-explain runbook and benchmark gate.
 5. **#2837 scale refresh**: refresh 1M/10M, reopen, maintenance, and tail rows
    after footprint/scalar-pruning changes land.
 6. **#2839 analyzer/relevance expansion**: keep phrase/analyzer features

@@ -49,6 +49,10 @@ func TestTextV2ContractBenchmarkMatrix2623(t *testing.T) {
 		"posting_blocks_skipped",
 		"blockmax_fallbacks",
 		"threshold_updates",
+		"wand_pivots",
+		"scalar_prefilter_ids",
+		"scalar_posting_blocks_skipped",
+		"scalar_postings_rejected",
 		"candidates_scored",
 		"state_lookups",
 		"norm_lookups",
@@ -1317,6 +1321,10 @@ func textV2ContractReportTextStats2623(b *testing.B, response TextSearchResponse
 	b.ReportMetric(float64(stats.TextPostingBlocksSkipped), "posting_blocks_skipped/search")
 	b.ReportMetric(float64(stats.TextBlockMaxFallbacks), "blockmax_fallbacks/search")
 	b.ReportMetric(float64(stats.TextBlockMaxThresholds), "threshold_updates/search")
+	b.ReportMetric(float64(stats.TextWANDPivots), "wand_pivots/search")
+	b.ReportMetric(float64(stats.TextScalarPrefilterIDs), "scalar_prefilter_ids/search")
+	b.ReportMetric(float64(stats.TextScalarPostingBlocksSkipped), "scalar_posting_blocks_skipped/search")
+	b.ReportMetric(float64(stats.TextScalarPostingsRejected), "scalar_postings_rejected/search")
 	b.ReportMetric(float64(stats.TextCandidatesScored), "candidates_scored/search")
 	b.ReportMetric(float64(stats.TextStateLookups), "state_lookups/search")
 	b.ReportMetric(float64(stats.TextNormLookups), "norm_lookups/search")
