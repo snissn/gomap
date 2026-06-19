@@ -125,6 +125,12 @@ func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	}
 }
 
+func (l *cachingLeafPageLog) ConcurrentLeafPageAppends() bool { return true }
+
+func (l *cachingLeafPageLog) PreparedLeafPageAppends() bool { return true }
+
+func (l *cachingLeafPageLog) PreparedLeafPageBatchAppends() bool { return true }
+
 func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if l == nil || l.db == nil || l.lane == nil {
 		return page.LeafLogPtr{}, errWALUnavailable
@@ -228,6 +234,87 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 	defer putValueLogPtrs(valuePtrs)
 	if len(valuePtrs) != len(leafPages) {
 		return nil, fmt.Errorf("cachingdb: leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
+	}
+	leafPtrs := make([]page.LeafLogPtr, len(valuePtrs))
+	for i, ptr := range valuePtrs {
+		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+		if convErr != nil {
+			return nil, convErr
+		}
+		leafPtrs[i] = leafPtr
+		l.db.noteLeafGenerationRecordLength(ptr)
+	}
+	return leafPtrs, nil
+}
+
+func (l *cachingLeafPageLog) AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error) {
+	if l == nil || l.db == nil || l.lane == nil {
+		return page.LeafLogPtr{}, errWALUnavailable
+	}
+	if len(leafPage) != page.PageSize {
+		return page.LeafLogPtr{}, fmt.Errorf("cachingdb: prepared leaf page has invalid size: got=%dB want=%dB", len(leafPage), page.PageSize)
+	}
+	rid := l.db.nextRID.Add(1)
+	ptr, retainPath, err := l.db.appendValueLogOneInternal(l.lane, 0, nil, rid, preparedPayload, journalDurabilityNone, false)
+	if retainPath != "" {
+		l.db.markValueLogRetain(retainPath)
+	}
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+	if convErr != nil {
+		return page.LeafLogPtr{}, convErr
+	}
+	l.db.noteLeafGenerationRecordLength(ptr)
+	return leafPtr, nil
+}
+
+func (l *cachingLeafPageLog) AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error) {
+	if l == nil || l.db == nil || l.lane == nil {
+		return nil, errWALUnavailable
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	if len(preparedPayloads) != len(leafPages) {
+		return nil, fmt.Errorf("cachingdb: prepared leaf page batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
+	}
+	if len(leafPages) == 1 {
+		ptr, err := l.AppendPreparedLeafPage(leafPages[0], preparedPayloads[0])
+		if err != nil {
+			return nil, err
+		}
+		return []page.LeafLogPtr{ptr}, nil
+	}
+	startRID, err := l.db.ReserveValueLogRIDs(len(leafPages))
+	if err != nil {
+		return nil, err
+	}
+	records := getValueLogRecordsCap(len(leafPages))
+	records = records[:len(leafPages)]
+	defer func() {
+		for i := range records {
+			records[i] = valuelog.Record{}
+		}
+		putValueLogRecordsNoClear(records)
+	}()
+	for i := range leafPages {
+		if len(leafPages[i]) != page.PageSize {
+			return nil, fmt.Errorf("cachingdb: prepared leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPages[i]), page.PageSize)
+		}
+		records[i] = valuelog.Record{
+			RID:   startRID + uint64(i),
+			Value: preparedPayloads[i],
+		}
+	}
+	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
+	if err != nil {
+		return nil, err
+	}
+	defer putValueLogPtrs(valuePtrs)
+	if len(valuePtrs) != len(leafPages) {
+		return nil, fmt.Errorf("cachingdb: prepared leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
 	}
 	leafPtrs := make([]page.LeafLogPtr, len(valuePtrs))
 	for i, ptr := range valuePtrs {

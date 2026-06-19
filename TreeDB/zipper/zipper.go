@@ -31,6 +31,26 @@ type LeafPageBatchLog interface {
 	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
 }
 
+type LeafPagePreparedLog interface {
+	AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error)
+}
+
+type LeafPagePreparedAppendLog interface {
+	PreparedLeafPageAppends() bool
+}
+
+type LeafPagePreparedBatchAppendLog interface {
+	PreparedLeafPageBatchAppends() bool
+}
+
+type LeafPageConcurrentAppendLog interface {
+	ConcurrentLeafPageAppends() bool
+}
+
+type LeafPagePreparedBatchLog interface {
+	AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error)
+}
+
 type LeafPageReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
@@ -1443,9 +1463,15 @@ func validateLoadedLeafLogNodeFrom(source string, data []byte) (node.Node, error
 	return n, nil
 }
 
+type leafPagePersistSink interface {
+	persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error)
+	persistLeafPageBatchDataTo(z *Zipper, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error)
+}
+
 type applyRunConfig struct {
 	maxParallelWorkers int
 	workerPool         *ApplyWorkerPool
+	leafPagePersister  leafPagePersistSink
 }
 
 // Apply applies the batch to the tree rooted at rootID.
@@ -1735,13 +1761,24 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 }
 
 func (z *Zipper) persistLeafPage(b *node.Builder, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	return z.persistLeafPageWithConfig(b, metrics, applyRunConfig{})
+}
+
+func (z *Zipper) persistLeafPageWithConfig(b *node.Builder, metrics *adaptive.Metrics, cfg applyRunConfig) (page.ChildRef, error) {
 	if b == nil {
 		return page.ChildRef{}, errors.New("zipper: nil leaf builder")
 	}
 	if !z.outerLeavesInValueLog {
 		return page.PageChildRef(b.PageID()), nil
 	}
-	return z.persistLeafPageData(b.Data(), metrics)
+	return z.persistLeafPageDataWithConfig(b.Data(), metrics, cfg)
+}
+
+func (z *Zipper) persistLeafPageDataWithConfig(leafPage []byte, metrics *adaptive.Metrics, cfg applyRunConfig) (page.ChildRef, error) {
+	if cfg.leafPagePersister != nil {
+		return cfg.leafPagePersister.persistLeafPageData(z, leafPage, metrics)
+	}
+	return z.persistLeafPageData(leafPage, metrics)
 }
 
 func (z *Zipper) persistLeafPageData(leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
@@ -1763,9 +1800,97 @@ func (z *Zipper) persistLeafPageBatchData(leafPages [][]byte, metrics *adaptive.
 }
 
 func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	return z.persistLeafPageBatchDataToWithConfig(leafPages, refs, metrics, applyRunConfig{})
+}
+
+func (z *Zipper) persistPreparedLeafPageDataTo(leafPage []byte, preparedPayload []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	if prepared, ok := z.leafPageLog.(LeafPagePreparedLog); ok {
+		appendStart := time.Now()
+		ptr, err := prepared.AppendPreparedLeafPage(leafPage, preparedPayload)
+		appendWait := time.Since(appendStart)
+		if err != nil {
+			recordZipperLeafLogOutputAppend(metrics, appendWait, 1, false)
+			return page.ChildRef{}, err
+		}
+		recordZipperLeafLogOutputAppend(metrics, appendWait, 1, true)
+		z.cachePersistedLeafPage(ptr, leafPage)
+		return page.LeafLogChildRef(ptr), nil
+	}
+	var onePage [1][]byte
+	var onePayload [1][]byte
+	onePage[0] = leafPage
+	onePayload[0] = preparedPayload
+	refs, err := z.persistPreparedLeafPageBatchDataTo(onePage[:], onePayload[:], nil, metrics)
+	if err != nil {
+		return page.ChildRef{}, err
+	}
+	if len(refs) != 1 {
+		return page.ChildRef{}, fmt.Errorf("zipper: prepared leaf page returned %d refs for one page", len(refs))
+	}
+	return refs[0], nil
+}
+
+func (z *Zipper) persistPreparedLeafPageBatchDataTo(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	refs = refs[:0]
 	if len(leafPages) == 0 {
 		return refs, nil
+	}
+	if len(preparedPayloads) != len(leafPages) {
+		return nil, fmt.Errorf("zipper: prepared leaf payload count %d for %d pages", len(preparedPayloads), len(leafPages))
+	}
+	preparedBatcher, ok := z.leafPageLog.(LeafPagePreparedBatchLog)
+	if !ok {
+		return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
+	}
+	appendStart := time.Now()
+	ptrs, err := preparedBatcher.AppendPreparedLeafPages(leafPages, preparedPayloads)
+	appendWait := time.Since(appendStart)
+	if err != nil {
+		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
+		return nil, err
+	}
+	if len(ptrs) != len(leafPages) {
+		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
+		return nil, fmt.Errorf("zipper: prepared leaf page batch returned %d ptrs for %d pages", len(ptrs), len(leafPages))
+	}
+	recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), true)
+	if cap(refs) < len(ptrs) {
+		refs = make([]page.ChildRef, len(ptrs))
+	} else {
+		refs = refs[:len(ptrs)]
+	}
+	for i, ptr := range ptrs {
+		z.cachePersistedLeafPage(ptr, leafPages[i])
+		refs[i] = page.LeafLogChildRef(ptr)
+	}
+	return refs, nil
+}
+
+func (z *Zipper) leafPageLogConsumesPreparedPayloads(batch bool) bool {
+	if z == nil || z.leafPageLog == nil {
+		return false
+	}
+	if batch {
+		if prepared, ok := z.leafPageLog.(LeafPagePreparedBatchAppendLog); ok {
+			return prepared.PreparedLeafPageBatchAppends()
+		}
+		_, ok := z.leafPageLog.(LeafPagePreparedBatchLog)
+		return ok
+	}
+	if prepared, ok := z.leafPageLog.(LeafPagePreparedAppendLog); ok {
+		return prepared.PreparedLeafPageAppends()
+	}
+	_, ok := z.leafPageLog.(LeafPagePreparedLog)
+	return ok
+}
+
+func (z *Zipper) persistLeafPageBatchDataToWithConfig(leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics, cfg applyRunConfig) ([]page.ChildRef, error) {
+	refs = refs[:0]
+	if len(leafPages) == 0 {
+		return refs, nil
+	}
+	if cfg.leafPagePersister != nil {
+		return cfg.leafPagePersister.persistLeafPageBatchDataTo(z, leafPages, refs, metrics)
 	}
 	if len(leafPages) == 1 {
 		ref, err := z.persistLeafPageData(leafPages[0], metrics)
@@ -1902,7 +2027,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 				}
 			}()
 			builder.SetPageID(0)
-			return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, reuseOuterLeafPages)
+			return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, reuseOuterLeafPages, cfg)
 		}
 
 		// Pager-backed leaf.
@@ -1917,7 +2042,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 		builder := z.newPooledLeafBuilder(newData, ops)
 		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
-		return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, false)
+		return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, false, cfg)
 
 	case page.PageTypeInternal:
 		// Internal merge is always pager-backed.
@@ -1961,7 +2086,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 	return page.ChildRef{}, nil, page.ErrInvalidPageType
 }
 
-func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool) (page.ChildRef, []Split, error) {
+func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool, cfg applyRunConfig) (page.ChildRef, []Split, error) {
 	if metrics != nil {
 		metrics.ZipperLeafMerges++
 	}
@@ -2043,7 +2168,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			return page.ChildRef{}, nil
 		}
 
-		nodeRef, err := z.persistLeafPage(target, metrics)
+		nodeRef, err := z.persistLeafPageWithConfig(target, metrics, cfg)
 		if err != nil {
 			return page.ChildRef{}, err
 		}
@@ -2279,7 +2404,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 	if len(pendingLeafPagePersists) == 1 {
 		pending := pendingLeafPagePersists[0]
-		ref, err := z.persistLeafPageData(pending.data, metrics)
+		ref, err := z.persistLeafPageDataWithConfig(pending.data, metrics, cfg)
 		if err != nil {
 			return page.ChildRef{}, nil, err
 		}
@@ -2304,7 +2429,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		if scratch != nil {
 			refScratch = scratch.acquireChildRefBatch(len(pendingLeafPagePersists))
 		}
-		refs, err := z.persistLeafPageBatchDataTo(leafPages, refScratch, metrics)
+		refs, err := z.persistLeafPageBatchDataToWithConfig(leafPages, refScratch, metrics, cfg)
 		if scratch != nil {
 			scratch.releaseLeafPageBatch(leafPages)
 		}
@@ -2854,6 +2979,7 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 	dst.ZipperApplyWallNs += src.ZipperApplyWallNs
 	dst.ZipperRootReduceNs += src.ZipperRootReduceNs
+	dst.ZipperLeafLogOutputReservationWaitNs += src.ZipperLeafLogOutputReservationWaitNs
 	dst.ZipperLeafLogOutputAppendWaitNs += src.ZipperLeafLogOutputAppendWaitNs
 	dst.ZipperLeafLogOutputAppendCalls += src.ZipperLeafLogOutputAppendCalls
 	dst.ZipperLeafLogOutputAppendPages += src.ZipperLeafLogOutputAppendPages
