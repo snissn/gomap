@@ -10,6 +10,11 @@ import (
 
 const (
 	hybridDefaultCandidateLimitMultiplier = 4
+	// hybridCandidatePreallocLimit caps speculative combined text+vector
+	// candidate preallocation. Candidate limits are caller-controlled; keep the
+	// optimization bounded and let appends grow proportionally to actual source
+	// results for unusually large requests.
+	hybridCandidatePreallocLimit = 4 * 1024
 	// hybridScalarDefaultLookupLimit is the finite indexed allow-set guardrail
 	// for default scalar prefilters. Broader filters still fail closed as
 	// scalar_filter_unbounded instead of falling back to document scans.
@@ -357,6 +362,9 @@ func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
 
 func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
+	if capHint := hybridSearchCandidatePreallocHint(plan); capHint > 0 {
+		out = make([]HybridSearchCandidate, 0, capHint)
+	}
 	var stats HybridSearchStats
 	runText := func() error {
 		if plan.text == nil {
@@ -367,7 +375,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 		if err != nil {
 			return hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
 		}
-		out = append(out, response.Candidates...)
+		out = appendHybridSearchCandidates(out, response.Candidates)
 		return nil
 	}
 	runVector := func() error {
@@ -379,7 +387,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 		if err != nil {
 			return hybridCandidateSourceError{source: HybridCandidateSourceVector, err: err}
 		}
-		out = append(out, response.Candidates...)
+		out = appendHybridSearchCandidates(out, response.Candidates)
 		return nil
 	}
 
@@ -402,11 +410,41 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	return out, stats, nil
 }
 
+func hybridSearchCandidatePreallocHint(plan hybridSearchExecutionPlan) int {
+	if plan.text == nil || plan.vector == nil {
+		return 0
+	}
+	hint := 0
+	if plan.text.CandidateLimit > 0 {
+		hint = plan.text.CandidateLimit
+		if hint >= hybridCandidatePreallocLimit {
+			return hybridCandidatePreallocLimit
+		}
+	}
+	if plan.vector.CandidateLimit > 0 {
+		if plan.vector.CandidateLimit >= hybridCandidatePreallocLimit-hint {
+			return hybridCandidatePreallocLimit
+		}
+		hint += plan.vector.CandidateLimit
+	}
+	return hint
+}
+
+func appendHybridSearchCandidates(dst, src []HybridSearchCandidate) []HybridSearchCandidate {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		return src
+	}
+	return append(dst, src...)
+}
+
 func hybridFilterCandidatesByScalarAllowSet(candidates []HybridSearchCandidate, allowSet hybridScalarAllowSet, stats *HybridSearchStats) []HybridSearchCandidate {
 	if allowSet == nil {
 		return candidates
 	}
-	out := make([]HybridSearchCandidate, 0, len(candidates))
+	out := candidates[:0]
 	for _, candidate := range candidates {
 		if stats != nil {
 			stats.ScalarPostfilterChecks++
@@ -435,7 +473,7 @@ func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet 
 	if allowSet == nil {
 		return results
 	}
-	filtered := make([]HybridSearchResult, 0, len(results))
+	filtered := results[:0]
 	for _, result := range results {
 		if stats != nil {
 			stats.ScalarPostfilterChecks++

@@ -883,7 +883,7 @@ func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collection
 		if err := scanner.Err(); err != nil {
 			return err
 		}
-		scratch = scanner.fieldScratch
+		scratch = scanner.scratch
 		it.Next()
 	}
 	if err := it.Error(); err != nil {

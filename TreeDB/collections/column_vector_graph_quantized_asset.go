@@ -1225,14 +1225,17 @@ func columnVectorGraphScalarU8Code(value float32) byte {
 	if math.IsNaN(float64(value)) {
 		return 0
 	}
-	scaled := math.Round((float64(value) + 1.0) * 127.5)
-	if scaled < 0 {
+	scaled := (float64(value) + 1.0) * 127.5
+	if scaled <= 0 {
 		return 0
 	}
-	if scaled > 255 {
+	if scaled >= 255 {
 		return 255
 	}
-	return byte(scaled)
+	// For the non-negative unclamped range, math.Round(scaled) is exactly
+	// floor(scaled+0.5). Avoid the generic math.Round call in query-prep hot
+	// loops while preserving the scalar_u8 v1 byte mapping.
+	return byte(scaled + 0.5)
 }
 
 func columnVectorGraphQuantizedAssetStateType(q QuantizedVectorIndexDefinition) (logicalType, physicalEncoding string) {

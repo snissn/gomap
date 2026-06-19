@@ -592,6 +592,83 @@ func TestColumnGraphScalarU8AlphaScorerAdjustsRankingAndTies2844(t *testing.T) {
 	if stats.QuantizedScoreCalls != uint64(len(ordinals)) || stats.QuantizedScoreCodecScalarU8Alpha != 1 || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 {
 		t.Fatalf("alpha scorer stats=%+v", stats)
 	}
+	legacyScorer := scorer
+	legacyScorer.alphaLookup = nil
+	legacyScorer.alphaScoreScales = nil
+	var legacyScratch columnVectorGraphNativeSearchScratch
+	var legacyStats columnVectorGraphNativeSearchStats
+	if _, err := legacyScorer.scoreOrdinals(ordinals, scores[:0], &legacyScratch, &legacyStats); err != nil {
+		t.Fatalf("legacy scoreOrdinals: %v", err)
+	}
+	if legacyStats.QuantizedScoreCalls != uint64(len(ordinals)) || legacyStats.QuantizedScoreCodecScalarU8Alpha != 0 {
+		t.Fatalf("legacy scorer stats=%+v want no scalar_u8 alpha counter", legacyStats)
+	}
+}
+
+func TestColumnGraphScalarU8AlphaLookupUniformGranuleEdges2866(t *testing.T) {
+	rowsPerGranule := typedColumnDefaultRowsPerGranule()
+	if rowsPerGranule < 2 {
+		t.Fatalf("rows_per_granule=%d want >=2", rowsPerGranule)
+	}
+	const dims = 1
+	codes := bytes.Repeat([]byte{128}, rowsPerGranule*2*dims)
+	_, q, _, lookup, _ := prepareScalarU8AlphaPreparedForTest2844(t, dims, codes, []float32{0.5, 0.25}, []uint32{uint32(rowsPerGranule), uint32(rowsPerGranule)})
+	if lookup.uniformGranuleRows != rowsPerGranule {
+		t.Fatalf("uniformGranuleRows=%d want %d", lookup.uniformGranuleRows, rowsPerGranule)
+	}
+	for _, tc := range []struct {
+		row       int
+		want      int
+		wantOK    bool
+		wantAlpha float32
+	}{
+		{row: -1, wantOK: false},
+		{row: 0, want: 0, wantOK: true, wantAlpha: 0.5},
+		{row: rowsPerGranule - 1, want: 0, wantOK: true, wantAlpha: 0.5},
+		{row: rowsPerGranule, want: 1, wantOK: true, wantAlpha: 0.25},
+		{row: rowsPerGranule*2 - 1, want: 1, wantOK: true, wantAlpha: 0.25},
+		{row: rowsPerGranule * 2, wantOK: false},
+	} {
+		alpha, granule, ok := lookup.AlphaForRow(tc.row)
+		if ok != tc.wantOK || granule != tc.want || (ok && alpha != tc.wantAlpha) {
+			t.Fatalf("AlphaForRow(%d)=(alpha=%v granule=%d ok=%v) want (alpha=%v granule=%d ok=%v)", tc.row, alpha, granule, ok, tc.wantAlpha, tc.want, tc.wantOK)
+		}
+	}
+	var scales [2]float64
+	if !prepareColumnVectorGraphScalarU8AlphaScoreScales(scales[:], lookup, 0.75) {
+		t.Fatal("prepare alpha score scales failed")
+	}
+	if got, want := scales[0], float64(0.75*0.5)/columnVectorGraphScalarU8CodeScale; got != want {
+		t.Fatalf("scale[0]=%v want %v", got, want)
+	}
+	if got, want := scales[1], float64(0.75*0.25)/columnVectorGraphScalarU8CodeScale; got != want {
+		t.Fatalf("scale[1]=%v want %v", got, want)
+	}
+	_ = q
+}
+
+func TestColumnGraphScalarU8AlphaLookupTailGranuleEdges2866(t *testing.T) {
+	rowsPerGranule := typedColumnDefaultRowsPerGranule()
+	if rowsPerGranule < 2 {
+		t.Fatalf("rows_per_granule=%d want >=2", rowsPerGranule)
+	}
+	const dims = 1
+	tailRows := 1
+	rowCount := rowsPerGranule + tailRows
+	codes := bytes.Repeat([]byte{128}, rowCount*dims)
+	_, _, _, lookup, _ := prepareScalarU8AlphaPreparedForTest2844(t, dims, codes, []float32{0.5, 1}, []uint32{uint32(rowsPerGranule), uint32(tailRows)})
+	if lookup.uniformGranuleRows != rowsPerGranule {
+		t.Fatalf("uniformGranuleRows=%d want first full granule size %d", lookup.uniformGranuleRows, rowsPerGranule)
+	}
+	if granule, ok := lookup.granuleForRow(rowsPerGranule - 1); !ok || granule != 0 {
+		t.Fatalf("last full row granule=%d ok=%v want granule 0", granule, ok)
+	}
+	if granule, ok := lookup.granuleForRow(rowsPerGranule); !ok || granule != 1 {
+		t.Fatalf("tail row granule=%d ok=%v want granule 1", granule, ok)
+	}
+	if _, ok := lookup.granuleForRow(rowCount); ok {
+		t.Fatalf("row %d unexpectedly resolved", rowCount)
+	}
 }
 
 func TestColumnGraphScalarU8AlphaPreparedTraversalQuantizedOnlyAndRerankUseAlpha2844(t *testing.T) {
