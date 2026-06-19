@@ -20,9 +20,9 @@ type Metrics struct {
 	SlabWriteBytes  int
 	SlabDeadBytes   int
 
-	// ZipperApply* fields are structural counters gathered while applying a
-	// batch to a B+Tree. They are intentionally simple counters, not timers, so
-	// callers can use them in benchmark reports without adding clock-read
+	// ZipperApply* fields are coarse counters/timers gathered while applying a
+	// batch to a B+Tree. Keep timings at scheduling/output boundaries rather than
+	// in per-node recursion so benchmark reports do not add avoidable clock-read
 	// overhead to the core apply path.
 	ZipperApplyOps                      int
 	ZipperNodeLoads                     int
@@ -57,6 +57,18 @@ type Metrics struct {
 	ZipperRootSplitLevels               int
 	ZipperApplyWallNs                   int64
 	ZipperRootReduceNs                  int64
+	ZipperLeafLogOutputAppendWaitNs     int64
+	ZipperLeafLogOutputAppendCalls      int
+	ZipperLeafLogOutputAppendPages      int
+	ZipperSpanNativeWorkerBusyNs        int64
+	ZipperSpanNativeWorkerIdleNs        int64
+	ZipperSpanNativeWorkerWaitNs        int64
+	ZipperSpanNativeReadyTasks          int
+	ZipperSpanNativeDispatchedTasks     int
+	ZipperSpanNativeCompletedTasks      int
+	ZipperSpanNativeQueueDepthMax       int
+	ZipperSpanNativeScheduledWorkers    int
+	ZipperSpanNativeScheduledWorkersMax int
 
 	// SlabWriteBytesByFile tracks bytes appended to each slab file during this
 	// commit (keyed by FileID).

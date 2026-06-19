@@ -345,6 +345,18 @@ type DB struct {
 	flushApplyCommitWaitNs                        atomic.Uint64
 	flushApplyGuardedPublishCalls                 atomic.Uint64
 	flushApplyGuardedPublishNs                    atomic.Uint64
+	flushApplyLeafLogOutputAppendWaitNs           atomic.Uint64
+	flushApplyLeafLogOutputAppendCalls            atomic.Uint64
+	flushApplyLeafLogOutputAppendPages            atomic.Uint64
+	flushApplySpanNativeWorkerBusyNs              atomic.Uint64
+	flushApplySpanNativeWorkerIdleNs              atomic.Uint64
+	flushApplySpanNativeWorkerWaitNs              atomic.Uint64
+	flushApplySpanNativeReadyTasks                atomic.Uint64
+	flushApplySpanNativeDispatchedTasks           atomic.Uint64
+	flushApplySpanNativeCompletedTasks            atomic.Uint64
+	flushApplySpanNativeQueueDepthMax             atomic.Uint64
+	flushApplySpanNativeScheduledWorkers          atomic.Uint64
+	flushApplySpanNativeScheduledWorkersMax       atomic.Uint64
 	flushApplyRetries                             atomic.Uint64
 	flushApplyMismatches                          atomic.Uint64
 

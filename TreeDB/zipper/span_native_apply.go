@@ -68,7 +68,16 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	defer coordinatorScratch.releaseSpanRangeSplits(rangeSplits)
 	var firstErr error
 	var errOnce sync.Once
+	var workerBusyNs atomic.Int64
+	var dispatchedTasks atomic.Uint64
+	var completedTasks atomic.Uint64
 	runRange := func(_ int, job int) {
+		dispatchedTasks.Add(1)
+		busyStart := time.Now()
+		defer func() {
+			workerBusyNs.Add(int64(elapsedNsSince(busyStart)))
+			completedTasks.Add(1)
+		}()
 		workerScratch := z.acquireApplyScratch()
 		workerScratches[job] = workerScratch
 		workerRange := workerRanges[job]
@@ -110,8 +119,31 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 			rangeSplits[job] = spanNativeLeafSplitRange{start: workerRange.FirstSpan, splits: localSplits}
 		}
 	}
+	scheduleStart := time.Now()
+	finishScheduleStats := func() {
+		waitNs := int64(elapsedNsSince(scheduleStart))
+		busyNs := workerBusyNs.Load()
+		idleNs := waitNs*int64(workers) - busyNs
+		if idleNs < 0 {
+			idleNs = 0
+		}
+		metrics.ZipperSpanNativeWorkerBusyNs += busyNs
+		metrics.ZipperSpanNativeWorkerIdleNs += idleNs
+		metrics.ZipperSpanNativeWorkerWaitNs += waitNs
+		metrics.ZipperSpanNativeReadyTasks += len(workerRanges)
+		metrics.ZipperSpanNativeDispatchedTasks += int(dispatchedTasks.Load())
+		metrics.ZipperSpanNativeCompletedTasks += int(completedTasks.Load())
+		if len(workerRanges) > metrics.ZipperSpanNativeQueueDepthMax {
+			metrics.ZipperSpanNativeQueueDepthMax = len(workerRanges)
+		}
+		metrics.ZipperSpanNativeScheduledWorkers += workers
+		if workers > metrics.ZipperSpanNativeScheduledWorkersMax {
+			metrics.ZipperSpanNativeScheduledWorkersMax = workers
+		}
+	}
 	if workerPool != nil {
 		if err := workerPool.Run(workers, len(workerRanges), runRange); err != nil {
+			finishScheduleStats()
 			metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 			return ApplyResult{Metrics: metrics}, true, err
 		}
@@ -138,6 +170,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		}
 		wg.Wait()
 	}
+	finishScheduleStats()
 
 	var retired []uint64
 	for i := range rangeMetrics {

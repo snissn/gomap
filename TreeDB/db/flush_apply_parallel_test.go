@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -440,6 +441,91 @@ func TestFlushApplySpanNativeSparsePointSpansWithStats(t *testing.T) {
 	}
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total"); got != fallbackBefore {
 		t.Fatalf("span-native not-implemented fallback ops delta=%d want 0 for sparse point spans", got-fallbackBefore)
+	}
+}
+
+func TestFlushApplySpanNativeSchedulerWorkerStats(t *testing.T) {
+	// This test asserts multi-worker scheduler telemetry; force enough runnable
+	// workers even when the test process is launched with GOMAXPROCS=1.
+	prevProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
+
+	d := openFlushApplyTestDBWithSpanNative(t, 4, true)
+	putBatch(t, d, 0, 12000, "base")
+
+	beforeBusy := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.worker_busy_ns_total")
+	beforeIdle := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.worker_idle_ns_total")
+	beforeWait := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.worker_wait_ns_total")
+	beforeReady := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.ready_tasks_total")
+	beforeDispatched := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.dispatched_tasks_total")
+	beforeCompleted := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.completed_tasks_total")
+
+	b := d.NewBatch()
+	for _, i := range []int{17, 997, 2049, 4097, 6143, 8191, 11003} {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("sched-%06d", i))); err != nil {
+			t.Fatalf("Set scheduler %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("scheduler Write: %v", err)
+	}
+
+	busy := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.worker_busy_ns_total") - beforeBusy
+	idle := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.worker_idle_ns_total") - beforeIdle
+	wait := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.worker_wait_ns_total") - beforeWait
+	ready := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.ready_tasks_total") - beforeReady
+	dispatched := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.dispatched_tasks_total") - beforeDispatched
+	completed := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.completed_tasks_total") - beforeCompleted
+	if busy == 0 {
+		t.Fatalf("span-native worker busy ns delta=0, want >0")
+	}
+	if idle > wait*4 {
+		t.Fatalf("span-native worker idle ns delta=%d exceeds plausible test capacity wait=%d", idle, wait)
+	}
+	if wait == 0 {
+		t.Fatalf("span-native worker wait ns delta=0, want >0")
+	}
+	if ready == 0 {
+		t.Fatalf("span-native ready tasks delta=0, want >0")
+	}
+	if dispatched != ready || completed != dispatched {
+		t.Fatalf("span-native scheduler ready/dispatched/completed=%d/%d/%d, want all equal", ready, dispatched, completed)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.queue_depth_max"); got == 0 {
+		t.Fatalf("span-native queue_depth_max=0, want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.scheduled_workers_max"); got < 2 {
+		t.Fatalf("span-native scheduled_workers_max=%d, want >=2", got)
+	}
+}
+
+func TestFlushApplyLeafLogOutputAppendWaitStats(t *testing.T) {
+	d := openFlushApplyLeafLogTestDBWithSpanNative(t, 4, true)
+	putBatch(t, d, 0, 9000, "base")
+
+	beforeWait := requireDBStatUint64(t, d, "treedb.flush_apply.leaf_log_output.append_wait_ns_total")
+	beforeCalls := requireDBStatUint64(t, d, "treedb.flush_apply.leaf_log_output.append_calls_total")
+	beforePages := requireDBStatUint64(t, d, "treedb.flush_apply.leaf_log_output.append_pages_total")
+
+	b := d.NewBatch()
+	for i := 2000; i < 7000; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("leaflog-%06d", i))); err != nil {
+			t.Fatalf("Set leaf-log %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("leaf-log Write: %v", err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.leaf_log_output.append_wait_ns_total"); got <= beforeWait {
+		t.Fatalf("leaf-log append wait ns delta=%d, want >0", got-beforeWait)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.leaf_log_output.append_calls_total"); got <= beforeCalls {
+		t.Fatalf("leaf-log append calls delta=%d, want >0", got-beforeCalls)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.leaf_log_output.append_pages_total"); got <= beforePages {
+		t.Fatalf("leaf-log append pages delta=%d, want >0", got-beforePages)
 	}
 }
 

@@ -214,6 +214,18 @@ func (db *DB) observeFlushApplyMetrics(metrics adaptive.Metrics, applyWall time.
 	addIntMetric(&db.flushApplyInternalChildRefs, metrics.ZipperInternalChildRefs)
 	addIntMetric(&db.flushApplyRootSplitLevels, metrics.ZipperRootSplitLevels)
 	addInt64Metric(&db.flushApplyRootReduceNs, metrics.ZipperRootReduceNs)
+	addInt64Metric(&db.flushApplyLeafLogOutputAppendWaitNs, metrics.ZipperLeafLogOutputAppendWaitNs)
+	addIntMetric(&db.flushApplyLeafLogOutputAppendCalls, metrics.ZipperLeafLogOutputAppendCalls)
+	addIntMetric(&db.flushApplyLeafLogOutputAppendPages, metrics.ZipperLeafLogOutputAppendPages)
+	addInt64Metric(&db.flushApplySpanNativeWorkerBusyNs, metrics.ZipperSpanNativeWorkerBusyNs)
+	addInt64Metric(&db.flushApplySpanNativeWorkerIdleNs, metrics.ZipperSpanNativeWorkerIdleNs)
+	addInt64Metric(&db.flushApplySpanNativeWorkerWaitNs, metrics.ZipperSpanNativeWorkerWaitNs)
+	addIntMetric(&db.flushApplySpanNativeReadyTasks, metrics.ZipperSpanNativeReadyTasks)
+	addIntMetric(&db.flushApplySpanNativeDispatchedTasks, metrics.ZipperSpanNativeDispatchedTasks)
+	addIntMetric(&db.flushApplySpanNativeCompletedTasks, metrics.ZipperSpanNativeCompletedTasks)
+	storeUint64Max(&db.flushApplySpanNativeQueueDepthMax, uint64(metrics.ZipperSpanNativeQueueDepthMax))
+	addIntMetric(&db.flushApplySpanNativeScheduledWorkers, metrics.ZipperSpanNativeScheduledWorkers)
+	storeUint64Max(&db.flushApplySpanNativeScheduledWorkersMax, uint64(metrics.ZipperSpanNativeScheduledWorkersMax))
 }
 
 func (db *DB) observeFlushApplyPreparedOutput(metrics adaptive.Metrics, retiredPages int) {
@@ -369,6 +381,9 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.merge_build.pager_leaf_page_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyPagerLeafPageBytesWritten.Load())
 	stats["treedb.flush_apply.merge_build.leaf_log_page_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogPageBytesWritten.Load())
 	stats["treedb.flush_apply.merge_build.leaf_log_record_hint_bytes_written_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogRecordHintBytesWritten.Load())
+	stats["treedb.flush_apply.leaf_log_output.append_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogOutputAppendWaitNs.Load())
+	stats["treedb.flush_apply.leaf_log_output.append_calls_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogOutputAppendCalls.Load())
+	stats["treedb.flush_apply.leaf_log_output.append_pages_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogOutputAppendPages.Load())
 	stats["treedb.flush_apply.prepared_output.leaf_log_pages_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesPrepared.Load())
 	stats["treedb.flush_apply.prepared_output.leaf_log_bytes_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogBytesPrepared.Load())
 	stats["treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesInstalled.Load())
@@ -418,8 +433,11 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.guarded_publish.calls_total"] = fmt.Sprintf("%d", db.flushApplyGuardedPublishCalls.Load())
 	guardedPublishNs := db.flushApplyGuardedPublishNs.Load()
 	stats["treedb.flush_apply.guarded_publish.ns_total"] = fmt.Sprintf("%d", guardedPublishNs)
+	reducerPublishNs := rootReduceNs + guardedPublishNs
+	stats["treedb.flush_apply.reducer_publish.ns_total"] = fmt.Sprintf("%d", reducerPublishNs)
 	if applyOps > 0 {
 		stats["treedb.flush_apply.guarded_publish.ns_per_op"] = fmt.Sprintf("%.6f", float64(guardedPublishNs)/float64(applyOps))
+		stats["treedb.flush_apply.reducer_publish.ns_per_op"] = fmt.Sprintf("%.6f", float64(reducerPublishNs)/float64(applyOps))
 	}
 	stats["treedb.flush_apply.span_native.candidate_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeCandidateOps.Load())
 	stats["treedb.flush_apply.span_native.candidate_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeCandidateSpans.Load())
@@ -429,6 +447,15 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.span_native.used_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeUsedSpans.Load())
 	stats["treedb.flush_apply.span_native.ineligible_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeIneligibleOps.Load())
 	stats["treedb.flush_apply.span_native.ineligible_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeIneligibleSpans.Load())
+	stats["treedb.flush_apply.span_native.scheduler.worker_busy_ns_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeWorkerBusyNs.Load())
+	stats["treedb.flush_apply.span_native.scheduler.worker_idle_ns_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeWorkerIdleNs.Load())
+	stats["treedb.flush_apply.span_native.scheduler.worker_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeWorkerWaitNs.Load())
+	stats["treedb.flush_apply.span_native.scheduler.ready_tasks_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeReadyTasks.Load())
+	stats["treedb.flush_apply.span_native.scheduler.dispatched_tasks_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeDispatchedTasks.Load())
+	stats["treedb.flush_apply.span_native.scheduler.completed_tasks_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeCompletedTasks.Load())
+	stats["treedb.flush_apply.span_native.scheduler.queue_depth_max"] = fmt.Sprintf("%d", db.flushApplySpanNativeQueueDepthMax.Load())
+	stats["treedb.flush_apply.span_native.scheduler.scheduled_workers_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeScheduledWorkers.Load())
+	stats["treedb.flush_apply.span_native.scheduler.scheduled_workers_max"] = fmt.Sprintf("%d", db.flushApplySpanNativeScheduledWorkersMax.Load())
 	stats["treedb.flush_apply.span_native.fallbacks_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeFallbacks.Load())
 	for _, reason := range FlushSpanRunFallbackReasons() {
 		name := reason.String()

@@ -695,9 +695,12 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 func elapsedNsSince(start time.Time) uint64 {
 	elapsed := time.Since(start)
 	if elapsed <= 0 {
-		return 0
+		return 1
 	}
-	return uint64(elapsed.Nanoseconds())
+	if ns := elapsed.Nanoseconds(); ns > 0 {
+		return uint64(ns)
+	}
+	return 1
 }
 
 func resolveParallelApplyWorkers(opts ApplyOptions, summary ReadOnlyLeafSpanSummary) int {
