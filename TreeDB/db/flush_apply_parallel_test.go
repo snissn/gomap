@@ -459,6 +459,9 @@ func TestFlushApplySpanNativeSchedulerWorkerStats(t *testing.T) {
 	beforeReady := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.ready_tasks_total")
 	beforeDispatched := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.dispatched_tasks_total")
 	beforeCompleted := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.completed_tasks_total")
+	beforeTaskSpans := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.task_spans_total")
+	beforeTaskOps := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.task_ops_total")
+	beforeSingleSpanTasks := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.single_span_tasks_total")
 
 	b := d.NewBatch()
 	for _, i := range []int{17, 997, 2049, 4097, 6143, 8191, 11003} {
@@ -497,6 +500,47 @@ func TestFlushApplySpanNativeSchedulerWorkerStats(t *testing.T) {
 	}
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.scheduled_workers_max"); got < 2 {
 		t.Fatalf("span-native scheduled_workers_max=%d, want >=2", got)
+	}
+	taskSpans := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.task_spans_total") - beforeTaskSpans
+	taskOps := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.task_ops_total") - beforeTaskOps
+	singleSpanTasks := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.single_span_tasks_total") - beforeSingleSpanTasks
+	if taskSpans < ready || taskOps == 0 {
+		t.Fatalf("span-native task distribution spans/ops=%d/%d ready=%d, want populated work-unit sizes", taskSpans, taskOps, ready)
+	}
+	if singleSpanTasks > ready {
+		t.Fatalf("span-native single-span tasks=%d exceeds ready tasks=%d", singleSpanTasks, ready)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.task_spans_max"); got == 0 {
+		t.Fatalf("span-native task_spans_max=0, want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.task_ops_max"); got == 0 {
+		t.Fatalf("span-native task_ops_max=0, want >0")
+	}
+}
+
+func TestFlushApplySpanNativeRangeDeleteBarrierDoesNotScheduleWorkUnits(t *testing.T) {
+	d := openFlushApplyTestDBWithSpanNative(t, 4, true)
+	putBatch(t, d, 0, 2048, "base")
+
+	beforeReady := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.ready_tasks_total")
+	beforeTaskSpans := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.task_spans_total")
+	beforeFallback := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.range_delete_barrier.ops_total")
+
+	b := d.NewBatch()
+	if err := b.DeleteRange([]byte("key-000100"), []byte("key-000300")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("range barrier Write: %v", err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.range_delete_barrier.ops_total"); got <= beforeFallback {
+		t.Fatalf("range_delete_barrier fallback delta=%d want >0", got-beforeFallback)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.ready_tasks_total"); got != beforeReady {
+		t.Fatalf("span-native scheduler ready tasks changed on range fallback: before=%d after=%d", beforeReady, got)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.scheduler.task_spans_total"); got != beforeTaskSpans {
+		t.Fatalf("span-native task spans changed on range fallback: before=%d after=%d", beforeTaskSpans, got)
 	}
 }
 

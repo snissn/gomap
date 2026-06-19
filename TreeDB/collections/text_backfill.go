@@ -37,6 +37,14 @@ type TextIndexBackfillStats struct {
 	V2StatusRecords   int
 	V2NextOrdinal     uint64
 	V2RootGeneration  uint64
+
+	V2DocIDBytes        uint64
+	V2DocMapBytes       uint64
+	V2PostingBlockBytes uint64
+	V2NormBlockBytes    uint64
+	V2PositionBytes     uint64
+	V2TermStatsBytes    uint64
+	V2StatusFormatBytes uint64
 }
 
 // TextIndexStorageStats reports durable text-root contents after validation.
@@ -65,6 +73,14 @@ type TextIndexStorageStats struct {
 	V2DeltaPostingBlocks  uint64
 	V2MicroPostingBlocks  uint64
 	V2RewriteMergeState   string
+
+	V2DocIDBytes        uint64
+	V2DocMapBytes       uint64
+	V2PostingBlockBytes uint64
+	V2NormBlockBytes    uint64
+	V2PositionBytes     uint64
+	V2TermStatsBytes    uint64
+	V2StatusFormatBytes uint64
 }
 
 type createTextIndexBackfillPlan struct {
@@ -323,8 +339,10 @@ func buildCreateTextV2IndexBackfillPlan(
 			Fields:          fieldNames,
 		})
 		tables[rootName].SetSteal(key, value)
+		bytesWritten := uint64(len(key) + len(value))
 		plan.stats.V2FormatRecords++
-		plan.stats.EncodedBytes += uint64(len(key) + len(value))
+		plan.stats.EncodedBytes += bytesWritten
+		plan.stats.V2StatusFormatBytes += bytesWritten
 	}
 
 	docIDRootName := collectionTextV2DocIDRootName(catalog.meta.Name, def.Name)
@@ -376,8 +394,10 @@ func buildCreateTextV2IndexBackfillPlan(
 				docIDKey := encodeTextV2DocIDKey(documentID)
 				docIDValue := encodeTextV2DocIDValue(textV2DocIDValue{Ordinal: ordinal, Generation: generation})
 				tables[docIDRootName].SetSteal(docIDKey, docIDValue)
+				docIDBytes := uint64(len(docIDKey) + len(docIDValue))
 				plan.stats.V2DocIDEntries++
-				plan.stats.EncodedBytes += uint64(len(docIDKey) + len(docIDValue))
+				plan.stats.EncodedBytes += docIDBytes
+				plan.stats.V2DocIDBytes += docIDBytes
 
 				docBlockStart := textV2OrdinalBlockStart(ordinal, textV2DefaultDocMapBlockSize)
 				docBlock := docMapBlocks[docBlockStart]
@@ -407,6 +427,7 @@ func buildCreateTextV2IndexBackfillPlan(
 				}
 				plan.stats.V2PositionEntries += positionEntries
 				plan.stats.EncodedBytes += positionBytes
+				plan.stats.V2PositionBytes += positionBytes
 				acc.addDocument(analysis)
 				plan.stats.DocumentsScanned++
 				it.Next()
@@ -422,15 +443,19 @@ func buildCreateTextV2IndexBackfillPlan(
 		key := encodeTextV2BlockKey(blockStart)
 		value := encodeTextV2DocMapBlockValue(*docMapBlocks[blockStart])
 		tables[docMapRootName].SetSteal(key, value)
+		docMapBytes := uint64(len(key) + len(value))
 		plan.stats.V2DocMapBlocks++
-		plan.stats.EncodedBytes += uint64(len(key) + len(value))
+		plan.stats.EncodedBytes += docMapBytes
+		plan.stats.V2DocMapBytes += docMapBytes
 	}
 	for _, blockStart := range sortedTextV2BlockStarts(normBlocks) {
 		key := encodeTextV2BlockKey(blockStart)
 		value := encodeTextV2NormBlockValue(*normBlocks[blockStart])
 		tables[normRootName].SetSteal(key, value)
+		normBytes := uint64(len(key) + len(value))
 		plan.stats.V2NormBlocks++
-		plan.stats.EncodedBytes += uint64(len(key) + len(value))
+		plan.stats.EncodedBytes += normBytes
+		plan.stats.V2NormBlockBytes += normBytes
 	}
 
 	postingBlocks, postingBytes, postingBlockCounts, err := buildTextV2PostingBatchTable(tables[postingBlocksRootName], &postingBuilder, textV2PostingBlockKindSealed, textV2PostingBlockTargetPostings, 1)
@@ -440,11 +465,13 @@ func buildCreateTextV2IndexBackfillPlan(
 	}
 	plan.stats.V2PostingBlocks = postingBlocks
 	plan.stats.EncodedBytes += postingBytes
+	plan.stats.V2PostingBlockBytes += postingBytes
 
 	statsEntries, statsBytes := addTextV2StatsEntries(tables[termsRootName], acc, def, 1, postingBlockCounts)
 	plan.stats.V2TermStats = statsEntries
 	plan.stats.StatsEntries = statsEntries
 	plan.stats.EncodedBytes += statsBytes
+	plan.stats.V2TermStatsBytes += statsBytes
 
 	statusKey := encodeTextV2StatusKey()
 	statusValue := encodeTextV2IndexStatusValue(textV2IndexStatusValue{
@@ -459,10 +486,12 @@ func buildCreateTextV2IndexBackfillPlan(
 		DeletedDocuments: 0,
 	})
 	tables[generationsRootName].SetSteal(statusKey, statusValue)
+	statusBytes := uint64(len(statusKey) + len(statusValue))
 	plan.stats.V2StatusRecords = 1
 	plan.stats.V2NextOrdinal = nextOrdinal
 	plan.stats.V2RootGeneration = 1
-	plan.stats.EncodedBytes += uint64(len(statusKey) + len(statusValue))
+	plan.stats.EncodedBytes += statusBytes
+	plan.stats.V2StatusFormatBytes += statusBytes
 
 	for _, rootName := range rootNames {
 		table := tables[rootName]
@@ -1096,6 +1125,36 @@ func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *coll
 	return stats, nil
 }
 
+func addTextV2StorageLaneBytes(stats *TextIndexStorageStats, family textV2RootFamily, key, value []byte) {
+	if stats == nil {
+		return
+	}
+	bytesWritten := uint64(len(key) + len(value))
+	stats.EncodedBytes += bytesWritten
+	if textV2KeyIsKind(key, textV2KeyKindFormat) || textV2KeyIsKind(key, textV2KeyKindStatus) {
+		stats.V2StatusFormatBytes += bytesWritten
+		return
+	}
+	switch family {
+	case textV2RootFamilyDocID:
+		stats.V2DocIDBytes += bytesWritten
+	case textV2RootFamilyDocMap:
+		stats.V2DocMapBytes += bytesWritten
+	case textV2RootFamilyTerms:
+		stats.V2TermStatsBytes += bytesWritten
+	case textV2RootFamilyPostingBlocks:
+		stats.V2PostingBlockBytes += bytesWritten
+	case textV2RootFamilyNormBlocks:
+		stats.V2NormBlockBytes += bytesWritten
+	case textV2RootFamilyPositions:
+		stats.V2PositionBytes += bytesWritten
+	}
+}
+
+func textV2KeyIsKind(key []byte, kind byte) bool {
+	return len(key) == 2 && key[0] == textV2KeyVersion && key[1] == kind
+}
+
 func readTextV2StatusAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string) (textV2IndexStatusValue, bool, error) {
 	raw, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, encodeTextV2StatusKey(), nil)
 	if err != nil || !ok {
@@ -1321,7 +1380,11 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 			stats.V2TermStats++
 			stats.StatsEntries++
 		case family == textV2RootFamilyPositions:
-			position, err := decodeTextV2PositionValue(value)
+			_, term, err := decodeTextV2PositionKey(key)
+			if err != nil {
+				return err
+			}
+			position, err := decodeTextV2PositionValueForTerm(value, term)
 			if err != nil {
 				return err
 			}
@@ -1334,7 +1397,7 @@ func inspectTextV2Root(snap *backenddb.Snapshot, catalog *collectionCatalog, def
 		default:
 			return errMalformedTextStorage("unsupported text-v2 root %q family %s", rootName, family)
 		}
-		stats.EncodedBytes += uint64(len(key) + len(value))
+		addTextV2StorageLaneBytes(stats, family, key, value)
 		it.Next()
 	}
 	if err := it.Error(); err != nil {

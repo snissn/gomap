@@ -42,6 +42,18 @@ func storeUint64Max(dst *atomic.Uint64, value uint64) {
 	}
 }
 
+func storeUint64Min(dst *atomic.Uint64, value uint64) {
+	if dst == nil || value == 0 {
+		return
+	}
+	for {
+		cur := dst.Load()
+		if (cur != 0 && value >= cur) || dst.CompareAndSwap(cur, value) {
+			return
+		}
+	}
+}
+
 func (db *DB) observeFlushApplyReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSummary, workerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary, prepareNs uint64, err error, validationFailure bool) {
 	if db == nil {
 		return
@@ -226,6 +238,16 @@ func (db *DB) observeFlushApplyMetrics(metrics adaptive.Metrics, applyWall time.
 	storeUint64Max(&db.flushApplySpanNativeQueueDepthMax, uint64(metrics.ZipperSpanNativeQueueDepthMax))
 	addIntMetric(&db.flushApplySpanNativeScheduledWorkers, metrics.ZipperSpanNativeScheduledWorkers)
 	storeUint64Max(&db.flushApplySpanNativeScheduledWorkersMax, uint64(metrics.ZipperSpanNativeScheduledWorkersMax))
+	addIntMetric(&db.flushApplySpanNativeTaskSpansTotal, metrics.ZipperSpanNativeTaskSpansTotal)
+	storeUint64Min(&db.flushApplySpanNativeTaskSpansMin, uint64(metrics.ZipperSpanNativeTaskSpansMin))
+	storeUint64Max(&db.flushApplySpanNativeTaskSpansMax, uint64(metrics.ZipperSpanNativeTaskSpansMax))
+	addIntMetric(&db.flushApplySpanNativeTaskOpsTotal, metrics.ZipperSpanNativeTaskOpsTotal)
+	storeUint64Min(&db.flushApplySpanNativeTaskOpsMin, uint64(metrics.ZipperSpanNativeTaskOpsMin))
+	storeUint64Max(&db.flushApplySpanNativeTaskOpsMax, uint64(metrics.ZipperSpanNativeTaskOpsMax))
+	addIntMetric(&db.flushApplySpanNativeTaskBytesTotal, metrics.ZipperSpanNativeTaskBytesTotal)
+	storeUint64Min(&db.flushApplySpanNativeTaskBytesMin, uint64(metrics.ZipperSpanNativeTaskBytesMin))
+	storeUint64Max(&db.flushApplySpanNativeTaskBytesMax, uint64(metrics.ZipperSpanNativeTaskBytesMax))
+	addIntMetric(&db.flushApplySpanNativeSingleSpanTasks, metrics.ZipperSpanNativeSingleSpanTasks)
 }
 
 func (db *DB) observeFlushApplyPreparedOutput(metrics adaptive.Metrics, retiredPages int) {
@@ -456,6 +478,25 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.span_native.scheduler.queue_depth_max"] = fmt.Sprintf("%d", db.flushApplySpanNativeQueueDepthMax.Load())
 	stats["treedb.flush_apply.span_native.scheduler.scheduled_workers_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeScheduledWorkers.Load())
 	stats["treedb.flush_apply.span_native.scheduler.scheduled_workers_max"] = fmt.Sprintf("%d", db.flushApplySpanNativeScheduledWorkersMax.Load())
+	taskCount := db.flushApplySpanNativeReadyTasks.Load()
+	taskSpans := db.flushApplySpanNativeTaskSpansTotal.Load()
+	taskOps := db.flushApplySpanNativeTaskOpsTotal.Load()
+	taskBytes := db.flushApplySpanNativeTaskBytesTotal.Load()
+	stats["treedb.flush_apply.span_native.scheduler.task_spans_total"] = fmt.Sprintf("%d", taskSpans)
+	stats["treedb.flush_apply.span_native.scheduler.task_spans_min"] = fmt.Sprintf("%d", db.flushApplySpanNativeTaskSpansMin.Load())
+	stats["treedb.flush_apply.span_native.scheduler.task_spans_max"] = fmt.Sprintf("%d", db.flushApplySpanNativeTaskSpansMax.Load())
+	stats["treedb.flush_apply.span_native.scheduler.task_ops_total"] = fmt.Sprintf("%d", taskOps)
+	stats["treedb.flush_apply.span_native.scheduler.task_ops_min"] = fmt.Sprintf("%d", db.flushApplySpanNativeTaskOpsMin.Load())
+	stats["treedb.flush_apply.span_native.scheduler.task_ops_max"] = fmt.Sprintf("%d", db.flushApplySpanNativeTaskOpsMax.Load())
+	stats["treedb.flush_apply.span_native.scheduler.task_bytes_total"] = fmt.Sprintf("%d", taskBytes)
+	stats["treedb.flush_apply.span_native.scheduler.task_bytes_min"] = fmt.Sprintf("%d", db.flushApplySpanNativeTaskBytesMin.Load())
+	stats["treedb.flush_apply.span_native.scheduler.task_bytes_max"] = fmt.Sprintf("%d", db.flushApplySpanNativeTaskBytesMax.Load())
+	stats["treedb.flush_apply.span_native.scheduler.single_span_tasks_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeSingleSpanTasks.Load())
+	if taskCount > 0 {
+		stats["treedb.flush_apply.span_native.scheduler.task_spans_per_task"] = fmt.Sprintf("%.6f", float64(taskSpans)/float64(taskCount))
+		stats["treedb.flush_apply.span_native.scheduler.task_ops_per_task"] = fmt.Sprintf("%.6f", float64(taskOps)/float64(taskCount))
+		stats["treedb.flush_apply.span_native.scheduler.task_bytes_per_task"] = fmt.Sprintf("%.6f", float64(taskBytes)/float64(taskCount))
+	}
 	stats["treedb.flush_apply.span_native.fallbacks_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeFallbacks.Load())
 	for _, reason := range FlushSpanRunFallbackReasons() {
 		name := reason.String()
