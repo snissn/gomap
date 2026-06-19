@@ -105,6 +105,7 @@ func BenchmarkZipperApplyOuterLeafCompressedRandomOverwrite(b *testing.B) {
 	defer updateBatch.Close()
 
 	var leafMerges, leafLogLoads, leafLogWrites, leafBytesRead, leafBytesWritten int64
+	var leafRecordBytesRead, leafRecordBytesWritten, leafCacheHits, leafReaderCalls, leafScratchReads, leafViewReads int64
 	b.ReportAllocs()
 	b.SetBytes(int64(batchSize * (8 + valueSize)))
 	b.ResetTimer()
@@ -118,6 +119,12 @@ func BenchmarkZipperApplyOuterLeafCompressedRandomOverwrite(b *testing.B) {
 		leafLogWrites += int64(metrics.ZipperLeafLogPagesWritten)
 		leafBytesRead += int64(metrics.ZipperLeafLogNodeBytesRead)
 		leafBytesWritten += int64(metrics.ZipperLeafLogPageBytesWritten)
+		leafRecordBytesRead += int64(metrics.ZipperLeafLogRecordHintBytesRead)
+		leafRecordBytesWritten += int64(metrics.ZipperLeafLogRecordHintBytesWritten)
+		leafCacheHits += int64(metrics.ZipperLeafLogCacheHits)
+		leafReaderCalls += int64(metrics.ZipperLeafLogReaderCalls)
+		leafScratchReads += int64(metrics.ZipperLeafLogScratchReads)
+		leafViewReads += int64(metrics.ZipperLeafLogViewReads)
 	}
 	b.StopTimer()
 
@@ -129,5 +136,11 @@ func BenchmarkZipperApplyOuterLeafCompressedRandomOverwrite(b *testing.B) {
 		b.ReportMetric(float64(leafLogWrites)/n, "leaflog_writes/op")
 		b.ReportMetric(float64(leafBytesRead)/n, "leaflog_read_B/op")
 		b.ReportMetric(float64(leafBytesWritten)/n, "leaflog_write_B/op")
+		b.ReportMetric(float64(leafRecordBytesRead)/n, "leaflog_record_read_B/op")
+		b.ReportMetric(float64(leafRecordBytesWritten)/n, "leaflog_record_write_B/op")
+		b.ReportMetric(float64(leafCacheHits)/n, "leaflog_cache_hits/op")
+		b.ReportMetric(float64(leafReaderCalls)/n, "leaflog_reader_calls/op")
+		b.ReportMetric(float64(leafScratchReads)/n, "leaflog_scratch_reads/op")
+		b.ReportMetric(float64(leafViewReads)/n, "leaflog_view_reads/op")
 	}
 }
