@@ -2,6 +2,7 @@ package collections
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"math/bits"
@@ -101,6 +102,9 @@ type columnVectorGraphScalarU8QuantizedScorer struct {
 	codePayload []byte
 	// centeredQuery aliases caller-owned search scratch.
 	centeredQuery vectorops.ScalarU8CenteredQuery
+	// alphaLookup is non-nil only for scalar_u8 per_granule_alpha scoring.
+	alphaLookup *columnVectorGraphScalarU8AlphaLookup
+	queryAlpha  float32
 }
 
 func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode columnVectorGraphNativeSearchQueryMode, indexName string, query []float32, queryInvNorm float32, scratch *columnVectorGraphNativeSearchScratch) (columnVectorGraphScalarU8QuantizedScorer, error) {
@@ -126,9 +130,6 @@ func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode
 	}
 	if qdef.Codec != QuantizedVectorCodecScalarU8 || qdef.Version != 1 {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q codec/version=(%q,%d) is not scalar_u8 v1", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, qdef.Codec, qdef.Version)
-	}
-	if !scalarU8CalibrationIsLegacy(qdef) {
-		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q scalar_u8 calibration mode %q is not implemented", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, scalarU8CalibrationMode(qdef))
 	}
 	if r.def.Metric != VectorMetricCosine {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q metric %q is unsupported for scalar_u8 scorer", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, r.def.Metric)
@@ -160,10 +161,27 @@ func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode
 	if !ok || len(codePayload) != r.RowCount()*r.def.Dimensions {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q code row payload bytes=%d ok=%v want %d", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, len(codePayload), ok, r.RowCount()*r.def.Dimensions)
 	}
+	queryAlpha := float32(1)
+	var alphaLookup *columnVectorGraphScalarU8AlphaLookup
+	if !scalarU8CalibrationIsLegacy(qdef) {
+		alphaLookup = status.ScalarU8Alpha
+		if err := alphaLookup.validateForScoring(r.RowCount()); err != nil {
+			return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q query_mode=%s quantized index %q scalar_u8 alpha metadata unavailable: %w", ErrVectorIndexSearchUnavailable, r.def.Name, mode.String(), indexName, err)
+		}
+		var alphaErr error
+		queryAlpha, alphaErr = columnVectorGraphScalarU8QueryAlpha(qdef, query, queryInvNorm, scratch)
+		if alphaErr != nil {
+			return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q scalar_u8 query alpha: %v", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName, alphaErr)
+		}
+	}
 	centeredScratch := resizeColumnVectorGraphNativeScalarU8CenteredScratch(scratch.quantizedQueryCentered, r.def.Dimensions)[:r.def.Dimensions]
 	var centeredSum int64
 	for i, value := range query {
-		code := columnVectorGraphScalarU8Code(value * queryInvNorm)
+		codeValue := value * queryInvNorm
+		if alphaLookup != nil {
+			codeValue /= queryAlpha
+		}
+		code := columnVectorGraphScalarU8Code(codeValue)
 		centered := vectorops.ScalarU8CenteredValue(code)
 		centeredScratch[i] = centered
 		centeredSum += int64(centered)
@@ -173,7 +191,7 @@ func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q centered scalar_u8 query unavailable", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, mode.String(), indexName)
 	}
 	scratch.quantizedQueryCentered = centeredScratch
-	return columnVectorGraphScalarU8QuantizedScorer{indexName: indexName, dims: r.def.Dimensions, codeRows: codeRows, codePayload: codePayload, centeredQuery: centeredQuery}, nil
+	return columnVectorGraphScalarU8QuantizedScorer{indexName: indexName, dims: r.def.Dimensions, codeRows: codeRows, codePayload: codePayload, centeredQuery: centeredQuery, alphaLookup: alphaLookup, queryAlpha: queryAlpha}, nil
 }
 
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
@@ -218,6 +236,11 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) validatePrepared() error {
 	if s == nil || !s.codeRows.Valid() || s.dims <= 0 || len(s.codePayload) != s.codeRows.Rows()*s.dims || !s.centeredQuery.ValidForDims(s.dims) {
 		return fmt.Errorf("%w: column_graph quantized scalar_u8 scorer is unavailable", ErrVectorIndexSearchUnavailable)
 	}
+	if s.alphaLookup != nil {
+		if !validColumnVectorGraphScalarU8Alpha(s.queryAlpha) || !s.alphaLookup.validShapeForRows(s.codeRows.Rows()) {
+			return fmt.Errorf("%w: column_graph quantized scalar_u8 alpha scorer is unavailable", ErrVectorIndexSearchUnavailable)
+		}
+	}
 	return nil
 }
 
@@ -233,7 +256,11 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDPrepared(rowID uint
 	if err != nil {
 		return 0, err
 	}
-	return scalarU8QuantizedCosineScoreFromDot(dot), nil
+	score, ok := s.scoreFromDotRowID(dot, rowID)
+	if !ok {
+		return 0, fmt.Errorf("%w: column_graph quantized index %q scalar_u8 alpha row_id=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, rowID)
+	}
+	return score, nil
 }
 
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDsPrevalidated(rowIDs []uint32, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
@@ -261,9 +288,134 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDsPrepared(rowIDs []
 		return dst[:0], err
 	}
 	for i, dot := range dots {
-		dst[i] = scalarU8QuantizedCosineScoreFromDot(dot)
+		score, ok := s.scoreFromDotRowID(dot, rowIDs[i])
+		if !ok {
+			return dst[:0], fmt.Errorf("%w: column_graph quantized index %q scalar_u8 alpha row_id=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, rowIDs[i])
+		}
+		dst[i] = score
 	}
 	return dst, nil
+}
+
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreFromDotRowID(dot int64, rowID uint32) (float64, bool) {
+	score := scalarU8QuantizedCosineScoreFromDot(dot)
+	if s == nil || s.alphaLookup == nil {
+		return score, true
+	}
+	alpha, _, ok := s.alphaLookup.AlphaForRow(int(rowID))
+	if !ok {
+		return 0, false
+	}
+	return score * float64(s.queryAlpha) * float64(alpha), true
+}
+
+func columnVectorGraphScalarU8QueryAlpha(q QuantizedVectorIndexDefinition, query []float32, queryInvNorm float32, scratch *columnVectorGraphNativeSearchScratch) (float32, error) {
+	if q.Codec != QuantizedVectorCodecScalarU8 || q.Version != 1 || scalarU8CalibrationIsLegacy(q) {
+		return 1, nil
+	}
+	cfg := q.ScalarU8Calibration
+	if cfg == nil || cfg.Mode != ScalarU8CalibrationModePerGranuleAlpha {
+		return 0, fmt.Errorf("mode %q is not per_granule_alpha", scalarU8CalibrationMode(q))
+	}
+	if len(query) == 0 || queryInvNorm <= 0 || math.IsNaN(float64(queryInvNorm)) || math.IsInf(float64(queryInvNorm), 0) {
+		return 0, errors.New("query norm is invalid")
+	}
+	policy := cfg.AlphaPolicy
+	switch policy.Name {
+	case "", ScalarU8AlphaPolicyMaxAbs:
+		alpha := columnVectorGraphScalarU8MaxAbsQueryAlpha(query, queryInvNorm)
+		if !validColumnVectorGraphScalarU8Alpha(alpha) {
+			return 0, fmt.Errorf("computed query alpha=%v is not positive finite", alpha)
+		}
+		return alpha, nil
+	case ScalarU8AlphaPolicyAbsQuantile:
+		if policy.QuantilePPM != ScalarU8AlphaPolicyAbsQuantilePPM999 {
+			return 0, fmt.Errorf("abs_quantile quantile_ppm=%d is unsupported", policy.QuantilePPM)
+		}
+		if scratch == nil {
+			return 0, errColumnVectorGraphNativeSearchScratchRequired
+		}
+		alpha := columnVectorGraphScalarU8AbsQuantileQueryAlpha(query, queryInvNorm, policy.QuantilePPM, scratch)
+		if !validColumnVectorGraphScalarU8Alpha(alpha) {
+			return 0, fmt.Errorf("computed query alpha=%v is not positive finite", alpha)
+		}
+		return alpha, nil
+	default:
+		return 0, fmt.Errorf("alpha_policy name %q is unsupported", policy.Name)
+	}
+}
+
+func columnVectorGraphScalarU8MaxAbsQueryAlpha(query []float32, queryInvNorm float32) float32 {
+	maxAbs := float32(0)
+	for _, value := range query {
+		normalized := value * queryInvNorm
+		if normalized < 0 {
+			normalized = -normalized
+		}
+		if normalized > maxAbs {
+			maxAbs = normalized
+		}
+	}
+	return maxAbs
+}
+
+func columnVectorGraphScalarU8AbsQuantileQueryAlpha(query []float32, queryInvNorm float32, quantilePPM uint32, scratch *columnVectorGraphNativeSearchScratch) float32 {
+	if len(query) == 0 || scratch == nil {
+		return 0
+	}
+	values := scratch.scoreScratch.Float32Values
+	if cap(values) < len(query) {
+		values = ensureColumnVectorGraphNativeFloat32Scratch(values, len(query))
+	}
+	values = values[:len(query)]
+	for i, value := range query {
+		normalized := value * queryInvNorm
+		if normalized < 0 {
+			normalized = -normalized
+		}
+		values[i] = normalized
+	}
+	scratch.scoreScratch.Float32Values = values
+	idx := int((uint64(len(values))*uint64(quantilePPM) + 999999) / 1000000)
+	if idx <= 0 {
+		idx = 1
+	}
+	if idx > len(values) {
+		idx = len(values)
+	}
+	return columnVectorGraphSelectKthFloat32(values, idx-1)
+}
+
+func columnVectorGraphSelectKthFloat32(values []float32, k int) float32 {
+	if len(values) == 0 || k < 0 || k >= len(values) {
+		return 0
+	}
+	left, right := 0, len(values)-1
+	for left < right {
+		pivot := values[(left+right)>>1]
+		i, j := left, right
+		for i <= j {
+			for values[i] < pivot {
+				i++
+			}
+			for values[j] > pivot {
+				j--
+			}
+			if i <= j {
+				values[i], values[j] = values[j], values[i]
+				i++
+				j--
+			}
+		}
+		if k <= j {
+			right = j
+		} else if k >= i {
+			left = i
+		} else {
+			return values[k]
+		}
+	}
+	return values[left]
 }
 
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRawDotOrdinal(ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int64, error) {
@@ -350,7 +502,10 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreGreedyBestRowIDsPrevalid
 	changed := false
 	for i, rowID := range rowIDs {
 		neighborOrdinal := int(rowID)
-		score := scalarU8QuantizedCosineScoreFromDot(dots[i])
+		score, ok := s.scoreFromDotRowID(dots[i], rowID)
+		if !ok {
+			return best, bestScore, false, fmt.Errorf("%w: column_graph quantized index %q scalar_u8 alpha row_id=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, rowID)
+		}
 		// Preserve the prepared traversal's public float64 score formula and
 		// exact lower-ordinal tie behavior while avoiding the intermediate
 		// float64 score tile used by the generic row-ID score seam.
@@ -376,7 +531,11 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreAndPushFrontierVisitedRo
 		return 0, err
 	}
 	for i, rowID := range rowIDs {
-		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scalarU8QuantizedCosineScoreFromDot(dots[i])}
+		score, ok := s.scoreFromDotRowID(dots[i], rowID)
+		if !ok {
+			return 0, fmt.Errorf("%w: column_graph quantized index %q scalar_u8 alpha row_id=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, rowID)
+		}
+		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: score}
 		if scratch.insertTop(topK, candidate) {
 			scratch.pushFrontierAccounting(candidate, stats)
 		}
@@ -414,6 +573,9 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) recordScoreStats(stats *colum
 	stats.CandidateFetches += count64
 	stats.QuantizedScoreCalls += count64
 	stats.QuantizedCodeBytesRead += count64 * uint64(s.dims)
+	if s.alphaLookup != nil {
+		stats.QuantizedScoreCodecScalarU8Alpha = 1
+	}
 }
 
 type columnVectorGraphRabitQQuantizedScorer struct {

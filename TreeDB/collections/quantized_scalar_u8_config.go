@@ -18,8 +18,8 @@ const (
 	ScalarU8CalibrationModeLegacy ScalarU8CalibrationMode = "legacy"
 	// ScalarU8CalibrationModePerGranuleAlpha opts into the scalar_u8 v1
 	// per-existing-storage-granule scalar alpha contract. Rebuild persists alpha
-	// metadata and encodes rows with their granule alpha; search scoring remains
-	// fail-closed until a scorer explicitly consumes the alpha state.
+	// metadata and encodes rows with their granule alpha; search scoring consumes
+	// the matching prepared alpha state and fails closed when it is unavailable.
 	ScalarU8CalibrationModePerGranuleAlpha ScalarU8CalibrationMode = "per_granule_alpha"
 )
 
