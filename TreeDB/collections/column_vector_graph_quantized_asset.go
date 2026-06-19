@@ -241,18 +241,30 @@ func (l *columnVectorGraphScalarU8AlphaLookup) validShapeForRows(rows int) bool 
 var columnVectorGraphQuantizedAssetForceReadAtFallbackForTest atomic.Bool
 
 func columnVectorGraphQuantizedAssetID(q QuantizedVectorIndexDefinition) string {
+	assetID, err := columnVectorGraphQuantizedAssetIDChecked(q)
+	if err != nil {
+		return "quantized/" + q.Name + "/scalar_u8/invalid_calibration/codes"
+	}
+	return assetID
+}
+
+func columnVectorGraphQuantizedAssetIDChecked(q QuantizedVectorIndexDefinition) (string, error) {
 	switch q.Codec {
 	case brq.CodecName:
-		return "quantized/" + q.Name + "/brq_1bit/packed_codes"
+		return "quantized/" + q.Name + "/brq_1bit/packed_codes", nil
 	case rabitq.CodecName:
-		return "quantized/" + q.Name + "/packed_codes"
-	case QuantizedVectorCodecScalarU8:
-		if cfgHash := scalarU8CalibrationConfigHashForAssetID(q); cfgHash != 0 {
-			return fmt.Sprintf("quantized/%s/scalar_u8/%016x/codes", q.Name, cfgHash)
+		return "quantized/" + q.Name + "/packed_codes", nil
+	case "", QuantizedVectorCodecScalarU8:
+		cfgHash, err := scalarU8CalibrationConfigHashForAssetID(q)
+		if err != nil {
+			return "", err
 		}
-		return "quantized/" + q.Name + "/codes"
+		if cfgHash != 0 {
+			return fmt.Sprintf("quantized/%s/scalar_u8/%016x/codes", q.Name, cfgHash), nil
+		}
+		return "quantized/" + q.Name + "/codes", nil
 	default:
-		return "quantized/" + q.Name + "/codes"
+		return "quantized/" + q.Name + "/codes", nil
 	}
 }
 
@@ -261,13 +273,25 @@ func columnVectorGraphQuantizedCodesAssetID(q QuantizedVectorIndexDefinition) st
 }
 
 func columnVectorGraphScalarU8AlphaAssetID(q QuantizedVectorIndexDefinition) string {
-	if q.Codec != QuantizedVectorCodecScalarU8 || scalarU8CalibrationIsLegacy(q) {
+	assetID, err := columnVectorGraphScalarU8AlphaAssetIDChecked(q)
+	if err != nil {
 		return ""
 	}
-	if cfgHash := scalarU8CalibrationConfigHashForAssetID(q); cfgHash != 0 {
-		return fmt.Sprintf("quantized/%s/scalar_u8/%016x/alpha", q.Name, cfgHash)
+	return assetID
+}
+
+func columnVectorGraphScalarU8AlphaAssetIDChecked(q QuantizedVectorIndexDefinition) (string, error) {
+	if q.Codec != QuantizedVectorCodecScalarU8 || scalarU8CalibrationIsLegacy(q) {
+		return "", nil
 	}
-	return ""
+	cfgHash, err := scalarU8CalibrationConfigHashForAssetID(q)
+	if err != nil {
+		return "", err
+	}
+	if cfgHash != 0 {
+		return fmt.Sprintf("quantized/%s/scalar_u8/%016x/alpha", q.Name, cfgHash), nil
+	}
+	return "", nil
 }
 
 func columnVectorIndexStateAssetIsQuantized(asset columnVectorIndexStateAssetSnapshot) bool {
@@ -308,7 +332,11 @@ func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, bas
 	if err != nil {
 		return nil, err
 	}
-	prepared, err := appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir, sourceCfg, q, columnVectorIndexStateAssetRoleQuantizedCodes, columnVectorGraphQuantizedAssetID(q), generation, partID, len(rows), payload)
+	codesAssetID, err := columnVectorGraphQuantizedAssetIDChecked(q)
+	if err != nil {
+		return nil, fmt.Errorf("collections: column_graph quantized index %q asset identity: %w", q.Name, err)
+	}
+	prepared, err := appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir, sourceCfg, q, columnVectorIndexStateAssetRoleQuantizedCodes, codesAssetID, generation, partID, len(rows), payload)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +351,11 @@ func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, bas
 		if err != nil {
 			return nil, err
 		}
-		alphaPrepared, err := appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir, alphaCfg, q, columnVectorIndexStateAssetRoleQuantizedAlpha, columnVectorGraphScalarU8AlphaAssetID(q), generation, alphaPartID, len(metadata.Alphas), alphaPayload)
+		alphaAssetID, err := columnVectorGraphScalarU8AlphaAssetIDChecked(q)
+		if err != nil {
+			return nil, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 alpha asset identity: %w", q.Name, err)
+		}
+		alphaPrepared, err := appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir, alphaCfg, q, columnVectorIndexStateAssetRoleQuantizedAlpha, alphaAssetID, generation, alphaPartID, len(metadata.Alphas), alphaPayload)
 		if err != nil {
 			return nil, err
 		}
@@ -783,7 +815,11 @@ func columnVectorGraphQuantizedCodesColumnStoreConfig(collection string, base Co
 			return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q "+columnVectorGraphQuantizedScalarU8UnsupportedVersionText, q.Name, q.Version)
 		}
 		path := def.Field + "_quantized_codes"
-		if cfgHash := scalarU8CalibrationConfigHashForAssetID(q); cfgHash != 0 {
+		cfgHash, err := scalarU8CalibrationConfigHashForAssetID(q)
+		if err != nil {
+			return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 calibration identity: %w", q.Name, err)
+		}
+		if cfgHash != 0 {
 			path = fmt.Sprintf("%s_quantized_scalar_u8_%016x_%s", def.Field, cfgHash, columnVectorGraphQuantizedCodesColumnName)
 		}
 		columns = []ColumnStoreColumn{{
@@ -891,7 +927,10 @@ func columnVectorGraphScalarU8AlphaColumnStoreConfig(collection string, base Col
 	if base.AssetManager == nil {
 		return ColumnStoreConfig{}, errors.New("collections: column_graph scalar_u8 alpha asset requires base asset manager")
 	}
-	cfgHash := scalarU8CalibrationConfigHashForAssetID(q)
+	cfgHash, err := scalarU8CalibrationConfigHashForAssetID(q)
+	if err != nil {
+		return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 alpha calibration identity: %w", q.Name, err)
+	}
 	if cfgHash == 0 {
 		return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 alpha asset requires non-zero config hash", q.Name)
 	}

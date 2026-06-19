@@ -15,6 +15,7 @@ import (
 type CollectionHandle uint64
 
 const (
+	collectionMetaWireVersion          = 5
 	maxCollectionMetaIndexDefinitions  = 1 << 16
 	minEncodedIndexDefinitionLen       = 6
 	minEncodedVectorIndexDefinitionLen = 7
@@ -51,7 +52,7 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
-	dst := binary.AppendUvarint(nil, 4)
+	dst := binary.AppendUvarint(nil, collectionMetaWireVersion)
 	dst = appendString(dst, meta.Name)
 	dst = binary.AppendUvarint(dst, uint64(encodeDocumentFormat(meta.Options.DocumentFormat)))
 	dst = binary.AppendUvarint(dst, uint64(encodeRootStorage(meta.Options.DataRootStoragePolicy)))
@@ -71,7 +72,7 @@ func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
 	}
 	dst = binary.AppendUvarint(dst, uint64(len(meta.VectorIndexes)))
 	for _, def := range meta.VectorIndexes {
-		dst = appendVectorIndexDefinitionForCollectionMeta(dst, def, 4)
+		dst = appendVectorIndexDefinitionForCollectionMeta(dst, def, collectionMetaWireVersion)
 	}
 	return dst
 }
@@ -81,7 +82,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	if version != 1 && version != 2 && version != 3 && version != 4 {
+	if version < 1 || version > collectionMetaWireVersion {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	name, err := readString(src, &off)
@@ -506,12 +507,20 @@ func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectio
 				}
 			}
 		}
-		quantized = append(quantized, collections.QuantizedVectorIndexDefinition{
+		q := collections.QuantizedVectorIndexDefinition{
 			Name:                name,
 			Codec:               codec,
 			Version:             uint32(codecVersion),
 			ScalarU8Calibration: scalarU8Calibration,
-		})
+		}
+		if q.ScalarU8Calibration != nil {
+			normalizedCalibration, err := collections.NormalizeScalarU8CalibrationConfig(def.Name, int(i), q)
+			if err != nil {
+				return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrInvalidCommand, "%v", err)
+			}
+			q.ScalarU8Calibration = normalizedCalibration
+		}
+		quantized = append(quantized, q)
 	}
 	def.Strategy = decodedStrategy
 	def.QuantizedIndexes = quantized
