@@ -117,8 +117,8 @@ func TestTextV2DefaultSafe10KCandidateAndScalarBudgets2687(t *testing.T) {
 	if hybrid.Stats.FailClosed != 0 || hybrid.Stats.DocumentsFetched != 0 || hybrid.Stats.FullDocumentScanFallbacks != 0 || hybrid.Stats.TextStateLookups != 0 || hybrid.Stats.TextMatchDetailsBuilt != 0 {
 		t.Fatalf("hybrid stats=%+v want no-doc score-only fail-closed-free path", hybrid.Stats)
 	}
-	if hybrid.Stats.ScalarPrefilterIDs != 625 || hybrid.Stats.TextCandidatesReturned != 64 || hybrid.Stats.TextCandidatesScored == 0 || hybrid.Stats.TextCandidatesScored > hybrid.Stats.ScalarPrefilterIDs || hybrid.Stats.TextPostingsScanned == 0 || hybrid.Stats.TextPostingsScanned > 10000 || hybrid.Stats.TextBlockMaxFallbacks > 1 {
-		t.Fatalf("hybrid stats=%+v want scalar-pruned v2 scoring under safe budgets", hybrid.Stats)
+	if hybrid.Stats.ScalarPrefilterIDs != 625 || hybrid.Stats.TextCandidatesRequested != 64 || hybrid.Stats.TextCandidateBudgetEffective != 64 || hybrid.Stats.TextCandidatesReturned != 64 || hybrid.Stats.TextCandidatesScored == 0 || hybrid.Stats.TextCandidatesScored > hybrid.Stats.ScalarPrefilterIDs || hybrid.Stats.TextPostingsScanned == 0 || hybrid.Stats.TextPostingsScanned > 10000 || hybrid.Stats.TextBlockMaxFallbacks > 1 {
+		t.Fatalf("hybrid stats=%+v want scalar-pruned v2 scoring under fixed fallback safe budgets", hybrid.Stats)
 	}
 }
 

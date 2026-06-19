@@ -276,7 +276,7 @@ func TestSearchHybridScalarFilterRangeAndFailClosed2505(t *testing.T) {
 	if gotIDs := hybridResultIDs2505(ranged.Results); !slicesEqualStrings(gotIDs, []string{"doc-10", "doc-20"}) {
 		t.Fatalf("range result ids=%v want doc-10/doc-20 response=%+v", gotIDs, ranged)
 	}
-	if ranged.Stats.ScalarPrefilterIDs != 2 || ranged.Stats.ScalarFilterRejected != 2 || ranged.Stats.FailClosed != 0 {
+	if ranged.Stats.ScalarPrefilterIDs != 2 || ranged.Stats.ScalarFilterMatched != 2 || ranged.Stats.ScalarFilterRejected != 2 || ranged.Stats.FailClosed != 0 {
 		t.Fatalf("range stats=%+v want bounded scalar include/exclude", ranged.Stats)
 	}
 
@@ -307,8 +307,8 @@ func TestSearchHybridScalarFilterRangeAndFailClosed2505(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchHybrid empty scalar match: %v", err)
 	}
-	if len(empty.Results) != 0 || empty.Stats.FailClosed != 0 || empty.Stats.FailClosedReason != "" || empty.Stats.ScalarPrefilterIDs != 0 || empty.Stats.ScalarFilterMatched != 0 || empty.Stats.ScalarFilterRejected != 4 {
-		t.Fatalf("empty scalar response=%+v want no results without fail-closed", empty)
+	if len(empty.Results) != 0 || empty.Stats.FailClosed != 0 || empty.Stats.FailClosedReason != "" || empty.Stats.ScalarPrefilterIDs != 0 || empty.Stats.ScalarFilterMatched != 0 || empty.Stats.ScalarFilterRejected != 0 || empty.Stats.TextPostingsScanned != 0 {
+		t.Fatalf("empty scalar response=%+v want no results without fail-closed or source traversal", empty)
 	}
 
 	broad, err := col.SearchHybrid(HybridSearchOptions{

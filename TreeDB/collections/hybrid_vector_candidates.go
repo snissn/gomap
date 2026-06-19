@@ -370,8 +370,9 @@ func hybridVectorCandidateStatsFromSearch(requested int, vectorStats VectorIndex
 	}
 	returned64 := uint64(returned)
 	stats := HybridSearchStats{
-		VectorCandidatesRequested: requested64,
-		VectorCandidatesReturned:  returned64,
+		VectorCandidatesRequested:      requested64,
+		VectorCandidateBudgetEffective: requested64,
+		VectorCandidatesReturned:       returned64,
 		VectorCandidatesExamined: hybridMaxUint64(
 			vectorStats.Candidates,
 			vectorStats.VisitedNodes,

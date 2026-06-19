@@ -35,6 +35,10 @@ type hybridSearchExecutionPlan struct {
 }
 
 func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchResponse, error) {
+	return c.searchHybridWithCandidateBudgetPolicy(opts, hybridCandidateBudgetPolicyDefault)
+}
+
+func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOptions, budgetPolicy hybridCandidateBudgetPolicyMode) (HybridSearchResponse, error) {
 	plan, err := planHybridSearch(opts)
 	response := HybridSearchResponse{Plan: plan.public}
 	if err != nil {
@@ -63,7 +67,7 @@ func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchRespons
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
 		candidateAllowSet = allowSet
 	}
-	candidates, candidateStats, err := c.hybridSearchCandidates(plan, candidateAllowSet)
+	candidates, candidateStats, err := c.hybridSearchCandidatesWithBudgetPolicy(plan, candidateAllowSet, allowSet, budgetPolicy)
 	hybridMergeStats(&response.Stats, candidateStats)
 	if err != nil {
 		return hybridSearchFailClosed(response, hybridStatsFailClosedReason(candidateStats, hybridCandidateErrorFailClosedReason(err)), err)
@@ -567,6 +571,7 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 		return
 	}
 	dst.TextCandidatesRequested += src.TextCandidatesRequested
+	dst.TextCandidateBudgetEffective += src.TextCandidateBudgetEffective
 	dst.TextCandidatesReturned += src.TextCandidatesReturned
 	dst.TextPostingsScanned += src.TextPostingsScanned
 	dst.TextPostingBlocksVisited += src.TextPostingBlocksVisited
@@ -581,7 +586,11 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.TextStateLookups += src.TextStateLookups
 	dst.TextNormLookups += src.TextNormLookups
 	dst.TextMatchDetailsBuilt += src.TextMatchDetailsBuilt
+	dst.TextPositionLookups += src.TextPositionLookups
+	dst.TextPhraseCandidatesChecked += src.TextPhraseCandidatesChecked
+	dst.TextPhraseCandidatesMatched += src.TextPhraseCandidatesMatched
 	dst.VectorCandidatesRequested += src.VectorCandidatesRequested
+	dst.VectorCandidateBudgetEffective += src.VectorCandidateBudgetEffective
 	dst.VectorCandidatesReturned += src.VectorCandidatesReturned
 	dst.VectorCandidatesExamined += src.VectorCandidatesExamined
 	dst.VectorEdgesVisited += src.VectorEdgesVisited
@@ -603,6 +612,17 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.DocumentsMissing += src.DocumentsMissing
 	dst.FullDocumentScanFallbacks += src.FullDocumentScanFallbacks
 	dst.Truncated += src.Truncated
+	if dst.CandidateBudgetPolicy == "" {
+		dst.CandidateBudgetPolicy = src.CandidateBudgetPolicy
+	}
+	if dst.CandidateBudgetStopReason == "" || dst.CandidateBudgetStopReason == HybridCandidateBudgetStopReasonNone {
+		dst.CandidateBudgetStopReason = src.CandidateBudgetStopReason
+	}
+	dst.CandidateBudgetFallbacks += src.CandidateBudgetFallbacks
+	if dst.CandidateBudgetFallbackReason == "" || dst.CandidateBudgetFallbackReason == HybridCandidateBudgetStopReasonNone {
+		dst.CandidateBudgetFallbackReason = src.CandidateBudgetFallbackReason
+	}
+	dst.CandidateBudgetIterations += src.CandidateBudgetIterations
 	dst.FailClosed += src.FailClosed
 	if dst.FailClosedReason == "" || dst.FailClosedReason == HybridFailClosedReasonNone {
 		dst.FailClosedReason = src.FailClosedReason

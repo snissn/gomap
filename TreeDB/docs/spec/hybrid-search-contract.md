@@ -266,12 +266,22 @@ counter families:
 - fusion/finalization: `candidates_fused`, `candidates_after_fusion`,
   `fusion_text_only`, `fusion_vector_only`, `fusion_both`,
   `fusion_duplicate_candidates`, `candidates_after_filter`, `truncated`;
+- candidate-budget policy: `text_candidate_budget_effective`,
+  `vector_candidate_budget_effective`, `candidate_budget_policy`,
+  `candidate_budget_stop_reason`, `candidate_budget_fallbacks`,
+  `candidate_budget_fallback_reason`, and `candidate_budget_iterations`;
 - final fetch: `documents_fetched`, `documents_missing`;
 - guardrails: `full_document_scan_fallbacks`, `fail_closed`, and
   `fail_closed_reason`.
 
 For normal hybrid queries, `full_document_scan_fallbacks` MUST remain zero and
-`documents_fetched` MUST be bounded by final `TopK`. Missing or unsupported
+`documents_fetched` MUST be bounded by final `TopK`. Adaptive candidate budgets
+are exact-only: RRF/weighted-RRF queries may request smaller effective source
+budgets only when source exhaustion, scalar allow-set emptiness, or strict RRF
+upper bounds prove the same final top-k scores/sources as the fixed requested
+budgets. Unsupported fusion methods, postfilter scalar shapes, unresolved ties,
+or insufficient bounds keep fixed-budget behavior and set the budget fallback
+counters instead of dropping hidden candidates. Missing or unsupported
 source paths report fail-closed reasons such as `text_index_unavailable`,
 `vector_index_unavailable`, `text_index_stale`, `vector_index_stale`,
 `scalar_filter_unbounded`, `snapshot_mismatch`,

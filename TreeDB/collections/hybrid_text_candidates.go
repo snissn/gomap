@@ -129,6 +129,7 @@ func hybridTextCandidateStatsFromSearch(requested int, textStats TextSearchStats
 	textCandidatesScored := hybridMaxUint64(textStats.TextCandidatesScored, textStats.CandidatesScored)
 	stats := HybridSearchStats{
 		TextCandidatesRequested:        requested64,
+		TextCandidateBudgetEffective:   requested64,
 		TextCandidatesReturned:         returned64,
 		TextPostingsScanned:            hybridMaxUint64(textStats.TextPostingsScanned, textStats.PostingsScanned),
 		TextPostingBlocksVisited:       textStats.TextPostingBlocksVisited,

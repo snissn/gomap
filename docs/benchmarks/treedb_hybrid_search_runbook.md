@@ -119,6 +119,9 @@ Every accepted table should include:
   `candidates_fused/search`, `candidates_after_filter/search`,
   `fusion_text_only/search`, `fusion_vector_only/search`,
   `fusion_both/search`, `docs_fetched/search`;
+- adaptive budget counters: `text_effective_budget/search`,
+  `vector_effective_budget/search`, `adaptive_budget/search`,
+  `budget_iterations/search`, and `budget_fallbacks/search`;
 - guardrails: `full_doc_fallbacks/search`, `fail_closed/search`,
   `truncated/search`, `docs_missing/search`;
 - profile top summaries for at least one representative hybrid+fetch cell.
@@ -134,6 +137,9 @@ does not already show it.
   embedding excluded. Keep it separate from no-document rows.
 - `truncated/search` is expected when a source scores more candidates than the
   requested returned candidate budget. It is not a scan-all-documents fallback.
+- `adaptive_budget/search=1` means the row stopped on an exact RRF/top-k proof;
+  `budget_fallbacks/search>0` means the executor kept fixed requested budgets
+  because exact bounds were unsupported or insufficient.
 - `full_doc_fallbacks/search` and `fail_closed/search` must remain zero for
   successful benchmark rows.
 - Do not compare these small hybrid rows as product speedups against #2490
