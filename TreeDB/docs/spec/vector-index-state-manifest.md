@@ -86,11 +86,13 @@ requires a sibling `quantized_alpha` asset with one `float32` alpha and one
 `uint32` row count per storage-layout granule; row counts must sum to the graph
 row count. Legacy #1926 scalar_u8 slices use prepared code state for explicit
 `quantized_only` scoring and for `quantized_rerank` candidate collection before
-exact reranking the validated shortlist by graph ordinal. Calibrated alpha assets
-are built and prepared but search scoring remains fail-closed until an
-alpha-aware scorer lands. `quantized_rerank` traverses the normalized
-`ef_search` candidate pool, then trims to `QuantizedRerankCandidates` before
-reading authoritative vectors/norms for exact scores. Missing, stale,
+exact reranking the validated shortlist by graph ordinal. Explicit calibrated
+per-granule-alpha scalar_u8 declarations use the matching prepared code and alpha
+state for `quantized_only` scoring and `quantized_rerank` candidate collection;
+omitted `scalar_u8_calibration` still selects legacy scalar_u8 by default after
+#2845. `quantized_rerank` traverses the normalized `ef_search` candidate pool,
+then trims to `QuantizedRerankCandidates` before reading authoritative
+vectors/norms for exact scores. Missing, stale,
 mismatched, or unprepared quantized assets still fail closed; quantized modes
 must not silently fall back to exact candidate collection. Legacy graph row ID
 bytes remain compatibility or

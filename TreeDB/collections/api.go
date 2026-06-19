@@ -908,7 +908,8 @@ type VectorIndexDefinition struct {
 // QuantizedVectorIndexDefinition declares a named derived score plane attached
 // to a column_graph vector index. Query modes must still select these indexes
 // explicitly, and search must fail closed until matching prepared assets are
-// loaded and scored.
+// loaded and scored. For scalar_u8, an omitted ScalarU8Calibration preserves the
+// legacy v1 default; calibrated per-granule alpha remains explicit opt-in.
 type QuantizedVectorIndexDefinition struct {
 	Name                string                     `json:"name"`
 	Codec               string                     `json:"codec"`

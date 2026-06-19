@@ -15,6 +15,10 @@ byte-table scorer, no-promote decisions, and later Sublane B outcome is in
 The #2584/#2588 prepared HNSW fast-path closeout for `scalar_u8` and
 `rabitq_1bit` route promotion, exact FP32 guardrails, and 10k x 768 evidence is
 in [`quantized-prepared-hnsw-closeout-2588.md`](quantized-prepared-hnsw-closeout-2588.md).
+The #2845 per-granule-alpha scalar_u8 default gate is recorded in
+[`scalar-u8-alpha-default-gate-2845.md`](scalar-u8-alpha-default-gate-2845.md);
+it kept per-granule alpha explicit/opt-in and did not promote it as the default
+for new `scalar_u8` declarations.
 
 ## User-visible query modes
 
@@ -25,10 +29,11 @@ to `codec="scalar_u8"` and `version=1`; they also accept explicit
 declarations.
 
 `scalar_u8` declarations may also carry `scalar_u8_calibration`. Omitted config
-preserves the legacy scalar_u8 v1 contract. Explicit legacy config is
-`{"mode":"legacy"}` and is behaviorally identical to omission. Persisted
+preserves the legacy scalar_u8 v1 contract and remains the default for new
+`scalar_u8` declarations after the #2845 no-promote gate. Explicit legacy config
+is `{"mode":"legacy"}` and is behaviorally identical to omission. Persisted
 collection metadata for these semantics uses collection metadata version `5`.
-The config-only per-existing-granule alpha contract is:
+The explicit per-existing-granule alpha opt-in contract is:
 
 ```json
 {
@@ -183,19 +188,23 @@ deterministic fixtures and separately reports rebuild/storage overhead:
 ```sh
 GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^(BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926|BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450|BenchmarkColumnGraphBRQQuantizedRebuildStorage2481)$' \
+  -bench '^(BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedAlphaSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8QuantizedAlpha2415|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926|BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450|BenchmarkColumnGraphBRQQuantizedRebuildStorage2481)$' \
   -benchmem -benchtime=100x -count=3
 ```
 
 `BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926` emits exact and scalar_u8
 per-query rows; `BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414`
-emits explicit lower-level buffered scalar_u8 rows;
+emits explicit lower-level buffered legacy scalar_u8 rows;
+`BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedAlphaSearchWithBuffer2414`
+emits explicit lower-level buffered per-granule-alpha scalar_u8 rows;
 `BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451`
 emits explicit lower-level buffered RaBitQ rows;
 `BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481`
 emits prototype lower-level buffered BRQ rows;
 `BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415`
-emits collection-level buffered scalar_u8 rows;
+emits collection-level buffered legacy scalar_u8 rows;
+`BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8QuantizedAlpha2415`
+emits collection-level buffered per-granule-alpha scalar_u8 rows;
 `BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452`
 emits collection-level buffered RaBitQ rows; and rebuild/storage rows are emitted
 by `BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926`,
@@ -211,11 +220,12 @@ fixture, `search_route_quantized_only/search`,
 `quantized_asset_unavailable/search`, `candidates/search`,
 `quantized_rerank_candidates/search`,
 `quantized_rerank_exact_score_calls/search`, `quantized_code_B/search`,
-`vector_B/search`, `norm_B/search`, logical code bytes/vector, and actual
-`quantized_asset_B/vector`. The rebuild rows report build throughput, allocation
-cost, total graph/vector-index-state storage, quantized asset bytes, quantized
-asset bytes/vector, and for per-granule-alpha scalar_u8 definitions the alpha
-metadata asset bytes separately from dense u8 code bytes.
+`vector_B/search`, `norm_B/search`, `quantized_score_codec_scalar_u8_alpha/search`,
+logical code bytes/vector, and actual `quantized_asset_B/vector`. The rebuild
+rows report build throughput, allocation cost, total graph/vector-index-state
+storage, quantized asset bytes, quantized asset bytes/vector, and for
+per-granule-alpha scalar_u8 definitions the alpha metadata asset bytes,
+alpha min/mean/max, and code-boundary rate separately from dense u8 code bytes.
 
 Representative #2454/#2482/#2487 evidence on Apple M3 / darwin arm64 / Go
 `go1.26.0` is recorded in `rabitq-closeout-2454.md`,
@@ -234,6 +244,13 @@ Representative #2507 BRQ prototype evidence is in
 `quantized_rerank` rows with `0 B/op`, `0 allocs/op`, expected BRQ counters,
 16 logical code B/vector, and about 74.47 quantized asset B/vector in its rebuild
 shape. This is prototype evidence, not a promotion or crossover claim.
+
+The #2845 per-granule-alpha scalar_u8 gate recorded a latest-main count=10 10k x 768
+matrix in `scalar-u8-alpha-default-gate-2845.md`. Alpha improved the production
+gate collection recall from 81.25% to 100% on that fixture and kept hot rows at
+`0 B/op`, `0 allocs/op`, but collection buffered runtime regressed on several
+rows. Therefore omitted `scalar_u8_calibration` remains legacy, and
+per-granule-alpha remains explicit opt-in.
 
 ## Acceleration and future work boundaries
 
