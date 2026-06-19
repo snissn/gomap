@@ -60,8 +60,8 @@ func TestTextV2ScalarAwareWANDPruningContract2836(t *testing.T) {
 			allow[fmt.Sprintf("doc-%06d", i)] = struct{}{}
 		}
 		got, _ := run(t, TextSearchOptions{IndexName: "lexical", Query: "refund AND policy", Operator: TextSearchOperatorAND, TopK: 8, CandidateLimit: docsN, MaxPostingsScanned: docsN * 8, textV2AllowedDocumentIDs: allow})
-		if got.Stats.TextScalarPrefilterIDs != uint64(len(allow)) || got.Stats.TextScalarPostingsRejected == 0 {
-			t.Fatalf("stats=%+v want moderate-selectivity allow-set to reject disallowed postings", got.Stats)
+		if got.Stats.TextScalarPrefilterIDs != uint64(len(allow)) || got.Stats.TextScalarPostingBlocksSkipped != 0 || got.Stats.TextScalarPostingsRejected == 0 {
+			t.Fatalf("stats=%+v want moderate-selectivity allow-set to reject postings without skipping intersecting blocks", got.Stats)
 		}
 		if got.Stats.TextCandidatesScored == 0 || got.Stats.TextCandidatesScored > uint64(len(allow)) {
 			t.Fatalf("stats=%+v want scored candidates bounded by allow-set size %d", got.Stats, len(allow))

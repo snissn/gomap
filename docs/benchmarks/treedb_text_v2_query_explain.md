@@ -94,7 +94,7 @@ candidate generation. The explain contract exposes:
 - `Stats.TextScalarPrefilterIDs` / `HybridSearchStats.TextScalarPrefilterIDs`;
 - scalar-pruned posting blocks and rejected postings.
 
-#2836 can extend these counters with scalar-aware WAND decisions without
+Issue `#2836` can extend these counters with scalar-aware WAND decisions without
 changing the public query DSL or ranking semantics.
 
 ## Analyzer/relevance contract for #2839
